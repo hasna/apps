@@ -1,12 +1,17 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import type { Loop, LoopRun } from "../types.js";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import type { Loop, LoopRun, LoopStatus } from "../types.js";
+import type { DaemonStatus } from "../daemon/control.js";
+import type { DoctorCheck, DoctorReport } from "./doctor.js";
 import { redact } from "./format.js";
+import { dataDir } from "./paths.js";
 import type { Store } from "./store.js";
 
 export type RunFailureClassification =
   | "rate_limit"
   | "auth"
+  | "provider_unavailable"
   | "model_not_found"
   | "context_length"
   | "schema_response_format"
@@ -23,6 +28,7 @@ export interface RunFailureSignal {
   classification: RunFailureClassification;
   fingerprint: string;
   evidence: {
+    summary?: string;
     error?: string;
     stdout?: string;
     stderr?: string;
@@ -49,7 +55,7 @@ export interface RecommendedTaskUpsert {
 }
 
 export interface LoopExpectationResult {
-  loop: Pick<Loop, "id" | "name" | "status" | "nextRunAt">;
+  loop: Pick<Loop, "id" | "name" | "status" | "nextRunAt" | "retryScheduledFor">;
   ok: boolean;
   check: {
     id: "latest-run-succeeded" | "route-functional-health";
@@ -82,11 +88,94 @@ export interface LoopsHealthReport {
   expectations: LoopExpectationResult[];
 }
 
+export type HealthScanStatus = "ok" | "degraded" | "critical";
+export type HealthScanFindingKind = "daemon" | "doctor" | "preflight" | "latest-run" | "stale-running";
+export type HealthScanFindingSeverity = "critical" | "high" | "medium" | "low";
+
+export interface HealthScanSelfHealAction {
+  kind: "daemon-start";
+  attempted: boolean;
+  ok?: boolean;
+  reason: string;
+  result?: Record<string, unknown>;
+}
+
+export interface HealthScanFinding {
+  kind: HealthScanFindingKind;
+  severity: HealthScanFindingSeverity;
+  fingerprint: string;
+  title: string;
+  message: string;
+  loop?: Pick<Loop, "id" | "name" | "status" | "nextRunAt"> & { leaseMs?: number };
+  run?: LoopRun;
+  route?: LoopExpectationResult["route"];
+  ageMs?: number;
+  staleThresholdMs?: number;
+  classification?: RunFailureClassification;
+  doctorCheck?: DoctorCheck;
+  recommendedTask?: RecommendedTaskUpsert;
+}
+
+export interface LoopsHealthScan {
+  ok: boolean;
+  status: HealthScanStatus;
+  generatedAt: string;
+  includedStatuses: LoopStatus[];
+  counts: {
+    loops: number;
+    active: number;
+    paused: number;
+    stopped: number;
+    expired: number;
+    latestRunFindings: number;
+    staleRunning: number;
+    daemonFindings: number;
+    doctorFindings: number;
+    preflightFindings: number;
+    findings: number;
+    reportedFindings: number;
+    truncatedFindings: number;
+  };
+  daemon?: Pick<DaemonStatus, "running" | "stale" | "pid" | "host" | "loops" | "runs" | "logPath">;
+  doctor?: DoctorReport;
+  health: LoopsHealthReport;
+  selfHeals: HealthScanSelfHealAction[];
+  findings: HealthScanFinding[];
+  reports?: {
+    dir: string;
+    json: string;
+    markdown: string;
+  };
+  todos?: Record<string, unknown>;
+}
+
+export interface BuildHealthScanOptions {
+  includeStatuses?: LoopStatus[];
+  includeArchived?: boolean;
+  limit?: number;
+  latestRun?: boolean;
+  doctor?: DoctorReport;
+  daemon?: DaemonStatus;
+  selfHeals?: HealthScanSelfHealAction[];
+  maxFindings?: number;
+  staleRunningMs?: number;
+  now?: Date;
+}
+
+export interface WriteHealthScanReportsOptions {
+  reportDir?: string;
+}
+
 const EVIDENCE_CHARS = 2_000;
 const FINGERPRINT_EVIDENCE_CHARS = 120;
+const DEFAULT_SCAN_LIMIT = 200;
+const DEFAULT_SCAN_STATUSES: LoopStatus[] = ["active", "paused"];
+const DEFAULT_MAX_FINDINGS = 100;
+const MIN_STALE_RUNNING_MS = 10 * 60_000;
 const CLASSIFICATIONS: RunFailureClassification[] = [
   "rate_limit",
   "auth",
+  "provider_unavailable",
   "model_not_found",
   "context_length",
   "schema_response_format",
@@ -111,7 +200,7 @@ function redactedEvidence(value: string | undefined): string | undefined {
 }
 
 function searchableText(run: LoopRun): string {
-  return [run.error, run.stderr, run.stdout].filter(Boolean).join("\n").toLowerCase();
+  return [run.error, run.stderr, run.stdout].filter(Boolean).join("\n");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -138,13 +227,38 @@ function stableFingerprint(parts: string[]): string {
   return createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, 16);
 }
 
-function stableFailureFingerprint(run: LoopRun, classification: RunFailureClassification): string {
+function stableScanFingerprint(parts: string[]): string {
+  return `openloops:health-scan:${stableFingerprint(parts)}`;
+}
+
+function safeHost(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  let host = value.trim().replace(/^[a-z]+:\/\//i, "").split(/[/:?#\s)"'\\]+/)[0] ?? "";
+  host = host.replace(/^\[|\]$/g, "");
+  return /^[a-z0-9.-]+$/i.test(host) ? host.toLowerCase() : undefined;
+}
+
+function isCursorHost(host: string | undefined): boolean {
+  return host === "cursor.sh" || Boolean(host?.endsWith(".cursor.sh"));
+}
+
+function providerUnavailableSummary(rawText: string): string | undefined {
+  const dns = /\bgetaddrinfo\s+(EAI_AGAIN|ENOTFOUND)\s+([a-z0-9.-]+)/i.exec(rawText);
+  if (dns) {
+    const host = safeHost(dns[2]);
+    if (isCursorHost(host)) return `provider DNS lookup failed: ${dns[1]} ${host}`;
+  }
+  return undefined;
+}
+
+function stableFailureFingerprint(run: LoopRun, classification: RunFailureClassification, summary?: string): string {
+  const evidence = summary ?? (classification === "provider_unavailable" ? providerUnavailableSummary(searchableText(run)) : undefined) ?? run.error ?? run.stderr ?? run.stdout ?? "";
   return stableFingerprint([
     run.loopId,
     classification,
     String(run.status),
     String(run.exitCode ?? ""),
-    (run.error ?? run.stderr ?? run.stdout ?? "").replace(/\d{4}-\d{2}-\d{2}T\S+/g, "<timestamp>").slice(0, FINGERPRINT_EVIDENCE_CHARS),
+    evidence.replace(/\d{4}-\d{2}-\d{2}T\S+/g, "<timestamp>").slice(0, FINGERPRINT_EVIDENCE_CHARS),
   ]);
 }
 
@@ -165,16 +279,288 @@ function healthRun(run: LoopRun): LoopRun {
   };
 }
 
+function compactText(value: string | undefined, limit = 500): string | undefined {
+  const text = redact(bounded(value, limit));
+  return text?.replace(/\s+/g, " ").trim();
+}
+
+function publicDoctorCheck(check: DoctorCheck): DoctorCheck {
+  return {
+    id: check.id,
+    status: check.status,
+    message: redact(bounded(check.message, 500)) ?? "",
+    detail: redact(bounded(check.detail, 800)),
+  };
+}
+
+function publicDoctorReport(report: DoctorReport): DoctorReport {
+  return {
+    ok: report.ok,
+    checks: report.checks.map(publicDoctorCheck),
+  };
+}
+
+function includedStatusSet(statuses: LoopStatus[] | undefined): Set<LoopStatus> {
+  const values = statuses?.length ? statuses : DEFAULT_SCAN_STATUSES;
+  return new Set(values);
+}
+
+function statusCounts(loops: Loop[]): Pick<LoopsHealthScan["counts"], "loops" | "active" | "paused" | "stopped" | "expired"> {
+  return {
+    loops: loops.length,
+    active: loops.filter((loop) => loop.status === "active").length,
+    paused: loops.filter((loop) => loop.status === "paused").length,
+    stopped: loops.filter((loop) => loop.status === "stopped").length,
+    expired: loops.filter((loop) => loop.status === "expired").length,
+  };
+}
+
+function compareLoopsForScan(left: Loop, right: Loop): number {
+  const statusOrder = left.status.localeCompare(right.status);
+  if (statusOrder !== 0) return statusOrder;
+  return (left.nextRunAt ?? "").localeCompare(right.nextRunAt ?? "");
+}
+
+function scanLoops(store: Store, statuses: LoopStatus[], opts: Pick<BuildHealthScanOptions, "includeArchived" | "limit">): Loop[] {
+  const limit = opts.limit ?? DEFAULT_SCAN_LIMIT;
+  return statuses
+    .flatMap((status) => store.listLoops({ includeArchived: opts.includeArchived, status, limit }))
+    .sort(compareLoopsForScan)
+    .slice(0, limit);
+}
+
+function healthReportForLoops(store: Store, loops: Loop[], generatedAt: string): LoopsHealthReport {
+  const expectations = loops.map((loop) => expectationForLoop(store, loop));
+  const classifications = Object.fromEntries(CLASSIFICATIONS.map((key) => [key, 0])) as Record<RunFailureClassification, number>;
+  for (const expectation of expectations) {
+    if (expectation.failure) classifications[expectation.failure.classification] += 1;
+  }
+  const unhealthy = expectations.filter((expectation) => !expectation.ok).length;
+  const warnings = expectations.filter((expectation) => expectation.check.status === "warn").length;
+  return {
+    ok: unhealthy === 0,
+    generatedAt,
+    summary: {
+      loops: expectations.length,
+      healthy: expectations.length - unhealthy,
+      unhealthy,
+      warnings,
+    },
+    classifications,
+    expectations,
+  };
+}
+
+function ageMs(run: LoopRun, now: Date): number {
+  const stamp = run.startedAt ?? run.createdAt ?? run.scheduledFor;
+  const time = Date.parse(stamp);
+  return Number.isFinite(time) ? Math.max(0, now.getTime() - time) : 0;
+}
+
+function shortLoop(loop: Loop): HealthScanFinding["loop"] {
+  return {
+    id: loop.id,
+    name: loop.name,
+    status: loop.status,
+    nextRunAt: loop.nextRunAt,
+    leaseMs: loop.leaseMs,
+  };
+}
+
+function priorityForSeverity(severity: HealthScanFindingSeverity): RecommendedTaskUpsert["priority"] {
+  if (severity === "critical") return "critical";
+  if (severity === "high") return "high";
+  if (severity === "low") return "low";
+  return "medium";
+}
+
+function recommendedFindingTask(finding: Omit<HealthScanFinding, "recommendedTask">, route: LoopExpectationResult["route"] | undefined): RecommendedTaskUpsert {
+  const tags = ["bug", "openloops", "loops", "loop-health", finding.kind];
+  if (finding.classification) tags.push(finding.classification);
+  const description = [
+    `OpenLoops health scan found a ${finding.kind} issue.`,
+    finding.loop ? `Loop: ${finding.loop.name} (${finding.loop.id})` : undefined,
+    finding.run ? `Run: ${finding.run.id}` : undefined,
+    finding.classification ? `Classification: ${finding.classification}` : undefined,
+    finding.ageMs !== undefined ? `AgeMs: ${finding.ageMs}` : undefined,
+    finding.staleThresholdMs !== undefined ? `StaleThresholdMs: ${finding.staleThresholdMs}` : undefined,
+    `Fingerprint: ${finding.fingerprint}`,
+    `Severity: ${finding.severity}`,
+    `No-tmux routing: Do not dispatch or paste prompts into tmux panes; use task-triggered headless worker/verifier workflows only.`,
+    route?.cwd ? `Route cwd: ${route.cwd}` : undefined,
+    route?.provider ? `Provider: ${route.provider}` : undefined,
+    "",
+    finding.message,
+    finding.run?.error ? `Error:\n${finding.run.error}` : undefined,
+    finding.run?.stderr ? `Stderr:\n${finding.run.stderr}` : undefined,
+  ].filter(Boolean).join("\n\n");
+  return {
+    title: finding.title,
+    description,
+    priority: priorityForSeverity(finding.severity),
+    tags,
+    dedupeKey: finding.fingerprint,
+    search: { query: finding.fingerprint },
+    compatibilityFallback: {
+      search: ["todos", "search", finding.fingerprint, "--json"],
+      add: ["todos", "add", finding.title, "--description", description, "--tag", tags.join(","), "--priority", priorityForSeverity(finding.severity)],
+      comment: ["todos", "comment", "<task-id>", description],
+    },
+    futureNativeUpsert: {
+      command: "todos task upsert",
+      fields: {
+        title: finding.title,
+        description,
+        priority: priorityForSeverity(finding.severity),
+        tags,
+        dedupeKey: finding.fingerprint,
+        routeSource: route?.source ?? "openloops",
+        routeKind: route?.kind ?? "health_scan",
+        routeLoopId: finding.loop?.id ?? "",
+        routeLoopName: finding.loop?.name ?? "",
+      },
+    },
+  };
+}
+
+function daemonFinding(daemon: DaemonStatus): HealthScanFinding | undefined {
+  if (daemon.running && !daemon.stale) return undefined;
+  const reason = daemon.stale ? "daemon pid file is stale" : "daemon is not running";
+  const severity: HealthScanFindingSeverity = "critical";
+  const finding: Omit<HealthScanFinding, "recommendedTask"> = {
+    kind: "daemon",
+    severity,
+    fingerprint: `openloops:health-scan:daemon:${daemon.stale ? "stale" : "not-running"}`,
+    title: "OpenLoops daemon health issue",
+    message: reason,
+  };
+  return {
+    ...finding,
+    recommendedTask: recommendedFindingTask(finding, undefined),
+  };
+}
+
+function doctorSeverity(check: DoctorCheck): HealthScanFindingSeverity {
+  if (check.status === "fail" && check.id === "data-dir") return "critical";
+  if (check.status === "fail") return "high";
+  return "medium";
+}
+
+function doctorFinding(check: DoctorCheck, loop: Loop | undefined, route: LoopExpectationResult["route"] | undefined): HealthScanFinding | undefined {
+  if (check.status === "ok" || check.id === "loop-runs") return undefined;
+  const kind: HealthScanFindingKind = check.id.startsWith("loop:") && check.id.endsWith(":preflight") ? "preflight" : "doctor";
+  const severity = kind === "preflight" && check.status === "fail" ? "high" : doctorSeverity(check);
+  const fingerprint = stableScanFingerprint(["doctor", check.id, check.status, check.message, check.detail ?? ""]);
+  const finding: Omit<HealthScanFinding, "recommendedTask"> = {
+    kind,
+    severity,
+    fingerprint,
+    title: kind === "preflight" && loop ? `OpenLoops preflight issue - ${loop.name}` : `OpenLoops doctor issue - ${check.id}`,
+    message: [check.status, check.message, check.detail].filter(Boolean).join(" "),
+    loop: loop ? shortLoop(loop) : undefined,
+    route,
+    doctorCheck: publicDoctorCheck(check),
+  };
+  return {
+    ...finding,
+    recommendedTask: recommendedFindingTask(finding, route),
+  };
+}
+
+function latestRunFinding(expectation: LoopExpectationResult): HealthScanFinding | undefined {
+  if (expectation.ok || !expectation.latestRun || expectation.latestRun.status === "running") return undefined;
+  const failure = expectation.failure;
+  if (!failure) return undefined;
+  const severity: HealthScanFindingSeverity = expectation.loop.status === "active" ? "high" : "medium";
+  return {
+    kind: "latest-run",
+    severity,
+    fingerprint: expectation.recommendedTask?.dedupeKey ?? `openloops:${expectation.loop.id}:${failure.fingerprint}`,
+    title: expectation.recommendedTask?.title ?? `OpenLoops latest run failed - ${expectation.loop.name}`,
+    message: expectation.check.message,
+    loop: expectation.loop,
+    run: expectation.latestRun,
+    route: expectation.route,
+    classification: failure.classification,
+    doctorCheck: undefined,
+    recommendedTask: expectation.recommendedTask,
+  };
+}
+
+function staleRunningFinding(loop: Loop, expectation: LoopExpectationResult, now: Date, staleRunningMs: number): HealthScanFinding | undefined {
+  const run = expectation.latestRun;
+  if (loop.status !== "active" || run?.status !== "running") return undefined;
+  const threshold = Math.max(loop.leaseMs, staleRunningMs, MIN_STALE_RUNNING_MS);
+  const age = ageMs(run, now);
+  if (age <= threshold) return undefined;
+  const fingerprint = `openloops:health-scan:stale-running:${loop.id}:${run.id}`;
+  const message = `active loop latest run is still running after ${age}ms (threshold ${threshold}ms)`;
+  const finding: Omit<HealthScanFinding, "recommendedTask"> = {
+    kind: "stale-running",
+    severity: "critical",
+    fingerprint,
+    title: `OpenLoops stale running run - ${loop.name}`,
+    message,
+    loop: shortLoop(loop),
+    run,
+    route: expectation.route,
+    ageMs: age,
+    staleThresholdMs: threshold,
+  };
+  return {
+    ...finding,
+    recommendedTask: recommendedFindingTask(finding, expectation.route),
+  };
+}
+
+function scanStatus(findings: HealthScanFinding[]): HealthScanStatus {
+  if (findings.some((finding) => finding.severity === "critical")) return "critical";
+  if (findings.length > 0) return "degraded";
+  return "ok";
+}
+
+function timestampDir(root: string, generatedAt: string): string {
+  const stamp = generatedAt.replace(/[-:]/g, "").replace(/\./g, "");
+  return join(root, stamp);
+}
+
+function healthScanMarkdown(scan: LoopsHealthScan): string {
+  return [
+    "# OpenLoops Health Scan",
+    "",
+    `- status: ${scan.status}`,
+    `- generated_at: ${scan.generatedAt}`,
+    `- included_statuses: ${scan.includedStatuses.join(",")}`,
+    `- loops: total=${scan.counts.loops} active=${scan.counts.active} paused=${scan.counts.paused} stopped=${scan.counts.stopped} expired=${scan.counts.expired}`,
+    `- findings: total=${scan.counts.findings} reported=${scan.counts.reportedFindings} truncated=${scan.counts.truncatedFindings} latest_run=${scan.counts.latestRunFindings} stale_running=${scan.counts.staleRunning} daemon=${scan.counts.daemonFindings} doctor=${scan.counts.doctorFindings} preflight=${scan.counts.preflightFindings}`,
+    scan.daemon ? `- daemon: running=${scan.daemon.running} stale=${scan.daemon.stale} pid=${scan.daemon.pid ?? "none"}` : "- daemon: not checked",
+    scan.doctor ? `- doctor_ok: ${scan.doctor.ok}` : "- doctor: not checked",
+    scan.selfHeals.length ? `- self_heals: ${scan.selfHeals.map((action) => `${action.kind}:${action.attempted ? action.ok ? "ok" : "failed" : "skipped"}`).join(",")}` : "- self_heals: none",
+    "",
+    "## Findings",
+    scan.findings.length
+      ? scan.findings.map((finding) => `- ${finding.severity} ${finding.kind} ${finding.fingerprint} ${finding.loop ? `${finding.loop.name}: ` : ""}${compactText(finding.message, 240) ?? ""}`).join("\n")
+      : "None.",
+  ].join("\n");
+}
+
 export function classifyRunFailure(run: LoopRun): RunFailureSignal | undefined {
   if (run.status === "succeeded" || run.status === "running") return undefined;
-  const text = searchableText(run);
+  const rawText = searchableText(run);
+  const text = rawText.toLowerCase();
   let classification: RunFailureClassification = "unknown";
+  let summary: string | undefined;
   if (run.status === "timed_out") classification = "timeout";
   else if (run.status === "skipped" && /circuit breaker open/.test(text)) classification = "circuit_breaker";
   else if (run.status === "skipped" && /previous run still active/.test(text)) classification = "skipped_previous_active";
   else if (/runtime preflight failed|preflight failed|executable not found in path|none of required executables found|auth profile preflight failed|profile not found/.test(text)) classification = "preflight";
   else if (/rate limit|too many requests|429\b|quota exceeded/.test(text)) classification = "rate_limit";
-  else if (/unauthorized|authentication|auth\b|api key|invalid token|permission denied|401\b|403\b/.test(text)) classification = "auth";
+  else if (
+    /unauthorized|authentication|auth\b|api key|invalid token|permission denied|401\b|403\b|not logged in|please run \/login|login required|not authenticated|failed to authenticate/.test(
+      text,
+    )
+  ) classification = "auth";
+  else if ((summary = providerUnavailableSummary(rawText))) classification = "provider_unavailable";
   else if (/model .*not found|model_not_found|unknown model|invalid model|404.*model/.test(text)) classification = "model_not_found";
   else if (/context length|context_length|context window|maximum context|token limit|too many tokens/.test(text)) classification = "context_length";
   else if (/response_format|json schema|schema validation|invalid schema|structured output/.test(text)) classification = "schema_response_format";
@@ -183,8 +569,9 @@ export function classifyRunFailure(run: LoopRun): RunFailureSignal | undefined {
 
   return {
     classification,
-    fingerprint: stableFailureFingerprint(run, classification),
+    fingerprint: stableFailureFingerprint(run, classification, summary),
     evidence: {
+      summary,
       error: redactedEvidence(run.error),
       stdout: redactedEvidence(run.stdout),
       stderr: redactedEvidence(run.stderr),
@@ -372,6 +759,14 @@ function targetRoute(loop: Loop): LoopExpectationResult["route"] {
   };
 }
 
+function expectationLoop(loop: Loop): LoopExpectationResult["loop"] {
+  return { id: loop.id, name: loop.name, status: loop.status, nextRunAt: loop.nextRunAt, retryScheduledFor: loop.retryScheduledFor };
+}
+
+function hasPendingRetry(loop: Loop, run: LoopRun): boolean {
+  return loop.status === "active" && loop.retryScheduledFor === run.scheduledFor && run.attempt < loop.maxAttempts;
+}
+
 function recommendedTask(loop: Loop, run: LoopRun, failure: RunFailureSignal, route: LoopExpectationResult["route"]): RecommendedTaskUpsert {
   const title = `BUG: open-loops loop failure - ${loop.name}`;
   const description = [
@@ -383,6 +778,7 @@ function recommendedTask(loop: Loop, run: LoopRun, failure: RunFailureSignal, ro
     `No-tmux routing: Do not dispatch or paste prompts into tmux panes; use task-triggered headless worker/verifier workflows only.`,
     route.cwd ? `Route cwd: ${route.cwd}` : undefined,
     route.provider ? `Provider: ${route.provider}` : undefined,
+    failure.evidence.summary ? `Summary: ${failure.evidence.summary}` : undefined,
     failure.evidence.error ? `Error:\n${failure.evidence.error}` : undefined,
     failure.evidence.stderr ? `Stderr:\n${failure.evidence.stderr}` : undefined,
   ].filter(Boolean).join("\n\n");
@@ -390,7 +786,7 @@ function recommendedTask(loop: Loop, run: LoopRun, failure: RunFailureSignal, ro
   // "loops" is the tag control-room consumers query on; without it the
   // auto-filed failure tasks had no consumer. Keep the legacy tags too.
   const tags = ["bug", "openloops", "loops", "loop-health", failure.classification];
-  const priority = failure.classification === "auth" || failure.classification === "rate_limit" ? "high" : "medium";
+  const priority = failure.classification === "auth" || failure.classification === "rate_limit" || failure.classification === "provider_unavailable" ? "high" : "medium";
   return {
     title,
     description,
@@ -425,7 +821,7 @@ export function expectationForLoop(store: Store, loop: Loop): LoopExpectationRes
   const route = targetRoute(loop);
   if (!latestRun) {
     return {
-      loop: { id: loop.id, name: loop.name, status: loop.status, nextRunAt: loop.nextRunAt },
+      loop: expectationLoop(loop),
       ok: true,
       check: { id: "latest-run-succeeded", status: "warn", message: "loop has no recorded runs yet" },
       route,
@@ -434,7 +830,7 @@ export function expectationForLoop(store: Store, loop: Loop): LoopExpectationRes
   const routeFailure = detectRouteFunctionalFailure(store, loop, latestRun);
   if (routeFailure) {
     return {
-      loop: { id: loop.id, name: loop.name, status: loop.status, nextRunAt: loop.nextRunAt },
+      loop: expectationLoop(loop),
       ok: false,
       check: { id: "route-functional-health", status: "fail", message: routeFailure.evidence.error ?? "route functional blocker detected" },
       latestRun: healthRun(latestRun),
@@ -445,7 +841,7 @@ export function expectationForLoop(store: Store, loop: Loop): LoopExpectationRes
   }
   if (latestRun.status === "succeeded") {
     return {
-      loop: { id: loop.id, name: loop.name, status: loop.status, nextRunAt: loop.nextRunAt },
+      loop: expectationLoop(loop),
       ok: true,
       check: { id: "latest-run-succeeded", status: "pass", message: "latest run succeeded" },
       latestRun: healthRun(latestRun),
@@ -458,7 +854,7 @@ export function expectationForLoop(store: Store, loop: Loop): LoopExpectationRes
     // a manual resume clears the pause, so the stale marker stops flagging.
     if (loop.status !== "paused") {
       return {
-        loop: { id: loop.id, name: loop.name, status: loop.status, nextRunAt: loop.nextRunAt },
+        loop: expectationLoop(loop),
         ok: true,
         check: { id: "latest-run-succeeded", status: "warn", message: "circuit breaker cleared by resume; awaiting next run" },
         latestRun: healthRun(latestRun),
@@ -466,7 +862,7 @@ export function expectationForLoop(store: Store, loop: Loop): LoopExpectationRes
       };
     }
     return {
-      loop: { id: loop.id, name: loop.name, status: loop.status, nextRunAt: loop.nextRunAt },
+      loop: expectationLoop(loop),
       ok: false,
       check: { id: "latest-run-succeeded", status: "fail", message: latestRun.error ?? "circuit breaker open; loop auto-paused" },
       latestRun: healthRun(latestRun),
@@ -475,8 +871,23 @@ export function expectationForLoop(store: Store, loop: Loop): LoopExpectationRes
       recommendedTask: recommendedTask(loop, latestRun, failure, route),
     };
   }
+  if (failure?.classification === "provider_unavailable" && hasPendingRetry(loop, latestRun)) {
+    const message = [
+      "provider unavailable/network failure; retry is scheduled",
+      loop.nextRunAt ? `next attempt at ${loop.nextRunAt}` : undefined,
+      failure.evidence.summary,
+    ].filter(Boolean).join("; ");
+    return {
+      loop: expectationLoop(loop),
+      ok: true,
+      check: { id: "latest-run-succeeded", status: "warn", message },
+      latestRun: healthRun(latestRun),
+      failure,
+      route,
+    };
+  }
   return {
-    loop: { id: loop.id, name: loop.name, status: loop.status, nextRunAt: loop.nextRunAt },
+    loop: expectationLoop(loop),
     ok: false,
     check: { id: "latest-run-succeeded", status: "fail", message: `latest run is ${latestRun.status}` },
     latestRun: healthRun(latestRun),
@@ -509,4 +920,94 @@ export function buildHealthReport(store: Store, opts: { includeArchived?: boolea
     classifications,
     expectations,
   };
+}
+
+export function buildHealthScan(store: Store, opts: BuildHealthScanOptions = {}): LoopsHealthScan {
+  const generatedAt = (opts.now ?? new Date()).toISOString();
+  const now = opts.now ?? new Date(generatedAt);
+  const includeStatuses = [...includedStatusSet(opts.includeStatuses)];
+  const loops = scanLoops(store, includeStatuses, opts);
+  const health = healthReportForLoops(store, loops, generatedAt);
+  const expectationsByLoopId = new Map(health.expectations.map((expectation) => [expectation.loop.id, expectation]));
+  const loopsById = new Map(loops.map((loop) => [loop.id, loop]));
+  const maxFindings = Math.max(0, opts.maxFindings ?? DEFAULT_MAX_FINDINGS);
+  const allFindings: HealthScanFinding[] = [];
+  const pushFinding = (finding: HealthScanFinding | undefined): void => {
+    if (!finding) return;
+    allFindings.push(finding);
+  };
+
+  if (opts.daemon) pushFinding(daemonFinding(opts.daemon));
+
+  if (opts.latestRun !== false) {
+    for (const loop of loops) {
+      const expectation = expectationsByLoopId.get(loop.id);
+      if (!expectation) continue;
+      pushFinding(staleRunningFinding(loop, expectation, now, opts.staleRunningMs ?? MIN_STALE_RUNNING_MS));
+      pushFinding(latestRunFinding(expectation));
+    }
+  }
+
+  const doctor = opts.doctor ? publicDoctorReport(opts.doctor) : undefined;
+  if (doctor) {
+    for (const check of doctor.checks) {
+      const preflightLoopId = check.id.startsWith("loop:") && check.id.endsWith(":preflight")
+        ? check.id.slice("loop:".length, -":preflight".length)
+        : undefined;
+      const loop = preflightLoopId ? loopsById.get(preflightLoopId) : undefined;
+      const route = preflightLoopId ? expectationsByLoopId.get(preflightLoopId)?.route : undefined;
+      pushFinding(doctorFinding(check, loop, route));
+    }
+  }
+
+  const findings = allFindings.slice(0, maxFindings);
+  const status = scanStatus(allFindings);
+  const baseCounts = statusCounts(loops);
+  return {
+    ok: status === "ok",
+    status,
+    generatedAt,
+    includedStatuses: includeStatuses,
+    counts: {
+      ...baseCounts,
+      latestRunFindings: allFindings.filter((finding) => finding.kind === "latest-run").length,
+      staleRunning: allFindings.filter((finding) => finding.kind === "stale-running").length,
+      daemonFindings: allFindings.filter((finding) => finding.kind === "daemon").length,
+      doctorFindings: allFindings.filter((finding) => finding.kind === "doctor").length,
+      preflightFindings: allFindings.filter((finding) => finding.kind === "preflight").length,
+      findings: allFindings.length,
+      reportedFindings: findings.length,
+      truncatedFindings: Math.max(0, allFindings.length - findings.length),
+    },
+    daemon: opts.daemon
+      ? {
+          running: opts.daemon.running,
+          stale: opts.daemon.stale,
+          pid: opts.daemon.pid,
+          host: opts.daemon.host,
+          loops: opts.daemon.loops,
+          runs: opts.daemon.runs,
+          logPath: opts.daemon.logPath,
+        }
+      : undefined,
+    doctor,
+    health,
+    selfHeals: opts.selfHeals ?? [],
+    findings,
+  };
+}
+
+export function writeHealthScanReports(scan: LoopsHealthScan, opts: WriteHealthScanReportsOptions = {}): LoopsHealthScan {
+  const root = opts.reportDir ?? join(dataDir(), "reports", "health-scan");
+  const dir = timestampDir(root, scan.generatedAt);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const json = join(dir, "summary.json");
+  const markdown = join(dir, "report.md");
+  const withReports: LoopsHealthScan = {
+    ...scan,
+    reports: { dir, json, markdown },
+  };
+  writeFileSync(json, JSON.stringify(withReports, null, 2), { mode: 0o600 });
+  writeFileSync(markdown, healthScanMarkdown(withReports), { mode: 0o600 });
+  return withReports;
 }

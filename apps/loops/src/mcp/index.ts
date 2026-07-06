@@ -13,7 +13,7 @@ import {
   publicWorkflowRun,
   publicWorkflowStepRun,
 } from "../lib/format.js";
-import { buildHealthReport, classifyRunFailure, expectationForLoop } from "../lib/health.js";
+import { buildHealthReport, buildHealthScan, classifyRunFailure, expectationForLoop } from "../lib/health.js";
 import { nowIso } from "../lib/ids.js";
 import { dataDir } from "../lib/paths.js";
 import { computeNextAfter } from "../lib/recurrence.js";
@@ -405,6 +405,33 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
     },
     handler: ({ includeArchived, includeInactive, limit }) =>
       withStore((store) => buildHealthReport(store, { includeArchived, includeInactive, limit })),
+  },
+  {
+    name: "loops_health_scan",
+    description: "Build a read-only OpenLoops health scan with bounded daemon, doctor/preflight, latest-run, and stale-running findings.",
+    readOnly: true,
+    annotations: READ_ONLY_ANNOTATIONS,
+    inputSchema: {
+      includeStatuses: z.array(z.enum(LOOP_STATUSES)).optional().describe("Loop statuses to inventory (default active and paused)."),
+      includeArchived: z.boolean().optional().describe("Include archived loops in the scan (default false)."),
+      latestRun: z.boolean().optional().describe("Include latest-run and stale-running checks (default true)."),
+      doctor: z.boolean().optional().describe("Include doctor/preflight checks (default false)."),
+      daemon: z.boolean().optional().describe("Include daemon status checks (default false)."),
+      staleRunningMs: z.number().int().positive().optional().describe("Minimum age before a running latest run is stale; loop lease and 10m still apply."),
+      maxFindings: z.number().int().min(0).max(MAX_LIMIT).optional().describe(`Maximum findings to return (0-${MAX_LIMIT}, default 100).`),
+      limit: limitSchema,
+    },
+    handler: ({ includeStatuses, includeArchived, latestRun, doctor, daemon, staleRunningMs, maxFindings, limit }) =>
+      withStore((store) => buildHealthScan(store, {
+        includeStatuses: includeStatuses as LoopStatus[] | undefined,
+        includeArchived,
+        latestRun,
+        doctor: doctor ? runDoctor(store) : undefined,
+        daemon: daemon ? daemonStatus(store) : undefined,
+        staleRunningMs,
+        maxFindings,
+        limit,
+      })),
   },
   {
     name: "loops_diagnose",

@@ -78,6 +78,10 @@ describe("loops sdk", () => {
       expect(health.summary.loops).toBe(1);
       expect(health.expectations[0]?.loop.id).toBe(active.id);
       expect(client.health({ includeArchived: true }).summary.loops).toBe(2);
+      const scan = client.healthScan({ daemon: true });
+      expect(scan.counts.loops).toBe(1);
+      expect(scan.daemon?.running).toBe(false);
+      expect(scan.findings.map((finding) => finding.kind)).toContain("daemon");
     } finally {
       client.close();
     }

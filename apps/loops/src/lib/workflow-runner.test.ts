@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { MockLanguageModelV3 } from "ai/test";
 import type { WorkflowStepInput } from "../types.js";
+import { buildHealthReport } from "./health.js";
 import { tick } from "./scheduler.js";
 import { Store } from "./store.js";
 import { prHandoffCommand } from "./template-kit.js";
@@ -420,6 +421,66 @@ describe("workflow runner", () => {
     } finally {
       store.close();
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("workflow provider DNS failures are reported as retry-pending provider outages", async () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "machine-tasks-inprogress-completion-audit-workflow",
+        steps: [
+          {
+            id: "cursor-inprogress-audit",
+            target: {
+              type: "command",
+              command: "printf 'Error: [unavailable] getaddrinfo EAI_AGAIN api2.cursor.sh' >&2; exit 1",
+              shell: true,
+            },
+          },
+        ],
+      });
+      const loop = store.createLoop(
+        {
+          name: "machine-tasks-in-progress-audit",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "workflow", workflowId: workflow.id },
+          maxAttempts: 2,
+          retryDelayMs: 1_000,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+
+      const first = await tick({
+        store,
+        runnerId: "test",
+        now: () => new Date("2026-01-01T00:00:00Z"),
+        random: () => 0.5,
+      });
+
+      expect(first.completed[0]?.status).toBe("failed");
+      expect(first.completed[0]?.attempt).toBe(1);
+      const retrying = store.getLoop(loop.id);
+      expect(retrying?.status).toBe("active");
+      expect(retrying?.retryScheduledFor).toBe("2026-01-01T00:00:00.000Z");
+      expect(retrying?.nextRunAt).toBeDefined();
+      expect(retrying?.nextRunAt).not.toBe(retrying?.retryScheduledFor);
+
+      const report = buildHealthReport(store);
+      const expectation = report.expectations.find((entry) => entry.loop.id === loop.id);
+      expect(report.ok).toBe(true);
+      expect(report.summary.unhealthy).toBe(0);
+      expect(report.summary.warnings).toBe(1);
+      expect(report.classifications.provider_unavailable).toBe(1);
+      expect(expectation?.ok).toBe(true);
+      expect(expectation?.check.status).toBe("warn");
+      expect(expectation?.check.message).toContain("retry is scheduled");
+      expect(expectation?.loop.retryScheduledFor).toBe("2026-01-01T00:00:00.000Z");
+      expect(expectation?.failure?.classification).toBe("provider_unavailable");
+      expect(expectation?.failure?.evidence.summary).toBe("provider DNS lookup failed: EAI_AGAIN api2.cursor.sh");
+      expect(expectation?.recommendedTask).toBeUndefined();
+    } finally {
+      store.close();
     }
   });
 

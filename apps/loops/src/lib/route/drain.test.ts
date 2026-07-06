@@ -34,7 +34,6 @@ const BASE_OPTS = {
 // Merge intent + baked-in MERGED state => the freshness gate fires from evidence
 // text with no `gh` probe (hermetic, deterministic).
 const MERGED_PR_DESCRIPTION = "please merge https://github.com/hasna/example/pull/7 pr_state=MERGED";
-const TODOS_INTEGRATION_TIMEOUT_MS = 15_000;
 
 describe("drainTodosTaskRoutes freshness close", () => {
   let todosProject: string;
@@ -95,7 +94,7 @@ describe("drainTodosTaskRoutes freshness close", () => {
     expect(after.status).toBe("completed");
     expect(after.tags).not.toContain("auto:route");
     expect(readyCount()).toBe(0);
-  }, TODOS_INTEGRATION_TIMEOUT_MS);
+  }, 15_000);
 
   test.skipIf(!HAS_TODOS)("dry-run never mutates the source task", () => {
     const taskId = addTask(MERGED_PR_DESCRIPTION);
@@ -107,5 +106,5 @@ describe("drainTodosTaskRoutes freshness close", () => {
     expect(after.status).toBe("pending");
     expect(after.tags).toContain("auto:route");
     expect(readyCount()).toBe(1);
-  }, TODOS_INTEGRATION_TIMEOUT_MS);
+  });
 });

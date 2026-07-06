@@ -311,6 +311,19 @@ Workflow JSON can also embed goals at the workflow or step level:
 }
 ```
 
+For **workflow loops** (`loops create workflow ...`), prefer a single loop-level
+`--goal` wrapper around the scheduled workflow. Do not also define a top-level
+`"goal"` on the workflow JSON spec: nested loop-level and workflow-level goal
+wrappers deadlocked execution because each layer waited on the other. OpenLoops
+now rejects new workflow loops that combine both wrappers at creation time, and
+blocks retargeting a loop-level goal loop onto a workflow that also carries a
+top-level goal.
+
+Step-level goals inside workflow JSON remain valid. When a loop-level goal wraps
+a workflow that still carries a legacy top-level goal, the runner strips the
+workflow goal for that execution only; migrate away from the redundant wrapper
+with the append-only migrator (see **Workflows** below).
+
 ## Workflows
 
 Create a workflow JSON file:
@@ -440,22 +453,38 @@ worker finishes; pass `--verifier-idle-timeout none` or template variable
 `verifierIdleTimeoutMs=none` only when another heartbeat is guaranteed. Use a
 positive numeric `timeoutMs` only when an agentic step is intentionally bounded.
 
-To migrate existing workflow loops, do not edit `workflow_specs.steps_json`
-directly because historical workflow runs must keep pointing at their original
-spec. Use the append-only migrator:
+To migrate existing agentic loops, use the timeout migrator instead of editing
+the database directly. Workflow loops are migrated append-only because
+historical workflow runs must keep pointing at their original spec; direct
+agent loops selected with `--loop` update their stored target in place for
+future executions:
 
 ```bash
 loops workflows migrate-agent-timeouts --loop <loop-id-or-name>
 loops workflows migrate-agent-timeouts --loop <loop-id-or-name> --apply
+loops workflows migrate-goal-wrappers --loop <loop-id-or-name>
+loops workflows migrate-goal-wrappers --loop <loop-id-or-name> --apply
+loops workflows migrate-goal-wrappers --loop <loop-id-or-name> --apply --archive-old
 ```
 
-The command dry-runs by default. With `--apply`, it creates a new workflow spec
-with the requested agent timeout policy, retargets only future executions of
-eligible non-running workflow loops, and leaves terminal timed-out workflow runs
-as audit history. Use `loops workflows recover` only for interrupted `running`
-workflow runs whose recorded child process is gone; terminal `timed_out` runs
-must be requeued with `loops routes requeue <work-item-id> --reason "<cause fixed>"` before
-re-delivering or draining the original task/event route.
+Both migrators dry-run by default. For eligible non-running workflow loops,
+`--apply` creates a new workflow spec and retargets only future executions;
+historical workflow runs keep pointing at their original spec. For direct agent
+loops selected with `--loop`, `migrate-agent-timeouts --apply` updates the
+stored target in place for future executions. Use `--archive-old` to archive
+superseded workflow specs when no active loops still reference them.
+
+`migrate-agent-timeouts` clones the workflow with the requested agent timeout
+policy (`--timeout none` by default). `migrate-goal-wrappers` targets loops that
+define both a loop-level goal and a redundant workflow-level top-level goal: it
+clones a goal-free workflow spec, retargets the loop, and leaves the loop-level
+goal as the sole orchestration wrapper. Loops with only a workflow-level goal or
+only a loop-level goal are skipped.
+
+Use `loops workflows recover` only for interrupted `running` workflow runs
+whose recorded child process is gone; terminal `timed_out` runs must be
+requeued with `loops routes requeue <work-item-id> --reason "<cause fixed>"`
+before re-delivering or draining the original task/event route.
 
 ```json
 {
@@ -796,6 +825,9 @@ Use `--json` for machine-readable output. Prompt bodies and run stdout/stderr ar
 
 ```bash
 loops health --json
+loops health scan --include active,paused --latest-run --doctor --daemon --json
+loops health scan --include active,paused --latest-run --doctor --daemon \
+  --upsert-todos --dry-run --max-actions 5 --evidence-dir ~/.hasna/loops/reports/health-scan
 loops expectations <loop-id-or-name> --json
 loops health route-tasks --project ~/.hasna/loops --task-list loop-error-self-heal --max-actions 5
 loops hygiene names --json
@@ -809,6 +841,16 @@ fingerprints and bounded evidence. `health route-tasks` is the explicit
 mutating path: it upserts deduped Todos tasks for failed expectations and marks
 them with `no_tmux_dispatch=true` metadata. Use `--dry-run --json` before
 turning it into a production loop.
+
+`health scan` is the first-class replacement for local loop-error self-heal
+scripts. It inventories active/paused loops by default, can include doctor,
+daemon, preflight, latest-run, and stale-running findings, writes bounded
+`summary.json` and `report.md` files under
+`$LOOPS_DATA_DIR/reports/health-scan`, and prints compact human or stable JSON
+output. It is read-only unless `--upsert-todos` is supplied. The only built-in
+self-heal is `--start-daemon`, which attempts to start the daemon when status
+proves it is not running; it never stops, resumes, deletes, archives, or reaps
+loops.
 
 Add `--evidence-dir <dir>` to `health route-tasks` or `hygiene route-tasks`
 when the deterministic loop should write a durable JSON heartbeat/report in
