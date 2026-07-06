@@ -123,6 +123,27 @@ describe("auth", () => {
       }
     });
 
+    test("returns configured=true for TomTom when TOMTOM_API_KEY is set", () => {
+      const originalValue = process.env.TOMTOM_API_KEY;
+      process.env.TOMTOM_API_KEY = "tomtom_test_fake_key";
+      try {
+        const status = getAuthStatus("tomtom");
+        expect(status.type).toBe("apikey");
+        expect(status.configured).toBe(true);
+        const keyVar = status.envVars.find(
+          (v) => v.variable === "TOMTOM_API_KEY"
+        );
+        expect(keyVar).toBeDefined();
+        expect(keyVar!.set).toBe(true);
+      } finally {
+        if (originalValue === undefined) {
+          delete process.env.TOMTOM_API_KEY;
+        } else {
+          process.env.TOMTOM_API_KEY = originalValue;
+        }
+      }
+    });
+
     test("returns unconfigured oauth status when no tokens exist", () => {
       // Use a unique test connector name — no profile dir exists so configured=false
       // getAuthType falls back to 'apikey' for unknown connectors, so we test 'apikey'
