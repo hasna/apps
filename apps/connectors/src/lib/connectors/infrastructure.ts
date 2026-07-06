@@ -86,4 +86,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Infrastructure",
     tags: ["monitoring", "uptime", "performance", "alerts", "website"],
   },
+  {
+    name: "surtrdefensesystems",
+    displayName: "Surtr Defense Systems",
+    description: "Counter-UAS operating system: sensors, threat fusion, situation picture, and engagements",
+    category: "Infrastructure",
+    tags: ["counter-uas", "defense", "sensors", "threat-detection", "security"],
+  },
 ];
