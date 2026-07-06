@@ -7,10 +7,15 @@ import { BoundedOutputBuffer, PROVIDER_ADAPTERS, providerAdapter, spawnCapture }
 import { executeLoop } from "./executor.js";
 import { Store } from "./store.js";
 
-async function fakeCodewith(binDir: string, invocationsFile: string, opts: { profiles?: string; execStdout?: string } = {}): Promise<string> {
+async function fakeCodewith(
+  binDir: string,
+  invocationsFile: string,
+  opts: { profiles?: string; execStdout?: string; execExitCode?: number } = {},
+): Promise<string> {
   const fake = join(binDir, "codewith");
   // `codewith exec --json` streams JSONL events to stdout and exits 0 on success.
   const execStdout = opts.execStdout ?? '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}';
+  const execStdoutDelimiter = "__OPENLOOPS_FAKE_CODEWITH_EXEC_STDOUT__";
   await Bun.write(
     fake,
     [
@@ -24,11 +29,13 @@ async function fakeCodewith(binDir: string, invocationsFile: string, opts: { pro
       "if [[ \" $* \" == *\" exec \"* ]]; then",
       // Optional stall (no output) so the generic idle watchdog can reap it.
       "  if [[ -n \"${OPENLOOPS_FAKE_CODEWITH_SLEEP:-}\" ]]; then sleep \"$OPENLOOPS_FAKE_CODEWITH_SLEEP\"; fi",
-      `  printf '%s\\n' ${JSON.stringify(execStdout)}`,
+      `  cat <<'${execStdoutDelimiter}'`,
+      execStdout.endsWith("\n") ? execStdout.slice(0, -1) : execStdout,
+      execStdoutDelimiter,
       // Echo the stdin-delivered prompt so tests can assert prompt-on-stdin.
       "  printf 'stdin:'",
       "  cat",
-      "  exit 0",
+      `  exit ${opts.execExitCode ?? 0}`,
       "fi",
       "printf 'unexpected codewith invocation: %s\\n' \"$*\" >&2",
       "exit 64",
@@ -174,6 +181,100 @@ describe("agent adapters", () => {
       expect(execArgs).not.toContain("say ok");
       expect(result.stdout).toContain("item.completed");
       expect(result.stdout).toContain("stdin:say ok");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("reconciles failed codewith exec status when jsonl later emits task_complete", async () => {
+    const binDir = mkdtempSync(join(tmpdir(), "loops-codewith-reconcile-"));
+    const invocationsFile = join(binDir, "invocations");
+    await fakeCodewith(binDir, invocationsFile, {
+      execExitCode: 7,
+      execStdout: [
+        JSON.stringify({
+          type: "event_msg",
+          payload: {
+            type: "statusSnapshot",
+            status: "failed",
+            agent_id: "cli-test-agent",
+            thread_id: "019f1ffb-91b0-7292-b117-605c54be6a69",
+          },
+        }),
+        JSON.stringify({
+          type: "event_msg",
+          payload: {
+            type: "task_complete",
+            turn_id: "019f1ffb-93c1-7ba0-97d2-368596c0db11",
+            completed_at: 1782948553,
+          },
+        }),
+      ].join("\n"),
+    });
+
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "codewith-reconciled-agent",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "codewith",
+          prompt: "say ok",
+          cwd: ".",
+          configIsolation: "safe",
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, OPENLOOPS_FAKE_CODEWITH_INVOCATIONS: invocationsFile },
+      });
+      expect(result.status).toBe("succeeded");
+      expect(result.exitCode).toBe(7);
+      expect(result.error).toBeUndefined();
+      expect(result.stdout).toContain("task_complete");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("keeps failed codewith exec status when jsonl lacks terminal success", async () => {
+    const binDir = mkdtempSync(join(tmpdir(), "loops-codewith-failed-snapshot-"));
+    const invocationsFile = join(binDir, "invocations");
+    await fakeCodewith(binDir, invocationsFile, {
+      execExitCode: 7,
+      execStdout: JSON.stringify({
+        type: "event_msg",
+        payload: {
+          type: "statusSnapshot",
+          status: "failed",
+          agent_id: "cli-test-agent",
+        },
+      }),
+    });
+
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "codewith-failed-agent",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "codewith",
+          prompt: "say ok",
+          cwd: ".",
+          configIsolation: "safe",
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, OPENLOOPS_FAKE_CODEWITH_INVOCATIONS: invocationsFile },
+      });
+      expect(result.status).toBe("failed");
+      expect(result.exitCode).toBe(7);
+      expect(result.error).toContain("process exited with code 7");
     } finally {
       store.close();
     }

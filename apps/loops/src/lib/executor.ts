@@ -113,6 +113,7 @@ interface CommandSpec {
     tools?: string[];
     commands?: string[];
   };
+  agentProvider?: AgentProvider;
   worktree?: AgentWorktreeSpec;
 }
 
@@ -186,6 +187,31 @@ function timeoutResult(startedAt: string, error: string, fields: ResultFields = 
 
 function successResult(startedAt: string, fields: ResultFields = {}): ExecutorResult {
   return buildResult("succeeded", startedAt, fields);
+}
+
+function codewithJsonlHasTerminalSuccess(stdout: string): boolean {
+  for (const line of stdout.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || !trimmed.startsWith("{")) continue;
+    let event: unknown;
+    try {
+      event = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    if (!event || typeof event !== "object") continue;
+    const record = event as Record<string, unknown>;
+    if (record.type === "task_complete") return true;
+    const payload = record.payload;
+    if (payload && typeof payload === "object" && (payload as Record<string, unknown>).type === "task_complete") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function codewithJsonlReconciledSuccess(spec: CommandSpec, fields: ResultFields): boolean {
+  return spec.agentProvider === "codewith" && codewithJsonlHasTerminalSuccess(fields.stdout ?? "");
 }
 
 function notifySpawn(pid: number | undefined, opts: ExecuteOptions): void {
@@ -335,6 +361,7 @@ function commandSpec(target: ExecutableTarget, opts: ExecuteOptions): CommandSpe
     preflightAnyOf: invocation.preflightAnyOf,
     stdin: invocation.stdin,
     allowlist: agentTarget.allowlist,
+    agentProvider: agentTarget.provider,
     worktree: agentTarget.worktree,
   };
 }
@@ -919,6 +946,9 @@ async function executeRemoteSpec(
       fields,
     );
   }
+  if (!error && exitCode !== 0 && codewithJsonlReconciledSuccess(spec, fields)) {
+    return successResult(startedAt, fields);
+  }
   if (error || exitCode !== 0) {
     return failureResult(startedAt, error ?? `remote process on ${machine.id} exited with code ${exitCode ?? "unknown"}`, fields);
   }
@@ -1073,6 +1103,9 @@ export async function executeTarget(
       idleTimedOut ? `idle timed out after ${spec.idleTimeoutMs}ms without stdout/stderr` : `timed out after ${spec.timeoutMs}ms`,
       fields,
     );
+  }
+  if (!error && exitCode !== 0 && codewithJsonlReconciledSuccess(spec, fields)) {
+    return successResult(startedAt, fields);
   }
   if (error || exitCode !== 0) {
     return failureResult(startedAt, error ?? `process exited with code ${exitCode ?? "unknown"}`, fields);
