@@ -12,7 +12,7 @@ const release: ReleaseRecord = {
   publishedAt: "2026-07-06T09:00:00.000Z",
   publishPath: "ci",
   changelogRef: {
-    kind: "changelog",
+    kind: "document",
     id: "open-todos@1.2.3",
     uri: "https://github.com/hasna/open-todos/releases/tag/v1.2.3",
   },

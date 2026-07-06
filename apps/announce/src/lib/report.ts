@@ -34,6 +34,23 @@ function emptyChannel(channel: DeliveryChannel): ChannelEngagement {
 }
 
 /**
+ * Shortlink slugs to aggregate clicks for: the slugs persisted on ledger
+ * entries at send time. Legacy ledgers written before slug persistence fall
+ * back to the `<campaignId>:<channel>` pseudo-slug convention so old
+ * campaigns still report deterministic keys.
+ */
+export function collectShortlinkSlugs(entries: LedgerEntry[]): Set<string> {
+  const slugs = new Set<string>();
+  for (const entry of entries) {
+    for (const slug of entry.slugs ?? []) slugs.add(slug);
+  }
+  if (slugs.size === 0) {
+    for (const entry of entries) slugs.add(`${entry.campaignId}:${entry.channel}`);
+  }
+  return slugs;
+}
+
+/**
  * Aggregate one campaign's engagement: ledger sends per channel, mailery
  * opens/clicks/bounces for the email channel, shortlink clicks per slug,
  * and attributed site visits when an analytics adapter is provided.
@@ -65,14 +82,7 @@ export async function aggregateEngagement(
     email.unsubscribes = events.filter((event) => event.kind === "unsubscribe").length;
   }
 
-  const slugs = new Set<string>();
-  for (const entry of entries) {
-    // Slugs are not stored on ledger entries; shortlink click aggregation is
-    // keyed by campaign convention: adapters receive the campaignId-scoped
-    // slug list from the caller in real integrations. The mock convention
-    // uses `<campaignId>:<channel>` keys.
-    slugs.add(`${entry.campaignId}:${entry.channel}`);
-  }
+  const slugs = collectShortlinkSlugs(entries);
   const shortlinks: Array<{ slug: string; clicks: number }> = [];
   if (options.shortlinkClicks) {
     for (const slug of slugs) {

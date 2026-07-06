@@ -32,7 +32,7 @@ beforeAll(async () => {
       gitSha: "abc1234",
       publishedAt: "2026-07-06T09:00:00.000Z",
       publishPath: "ci",
-      changelogRef: { kind: "changelog", id: "open-todos@1.2.3", uri: "https://example.com/changelog" },
+      changelogRef: { kind: "document", id: "open-todos@1.2.3", uri: "https://example.com/changelog" },
       evidenceRefs: [{ id: "ev-1" }],
     }),
     "utf8",

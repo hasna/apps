@@ -17,7 +17,7 @@ const release: ReleaseRecord = {
   gitSha: "abc1234",
   publishedAt: "2026-07-06T09:00:00.000Z",
   publishPath: "ci",
-  changelogRef: { kind: "changelog", id: "open-todos@1.2.3", uri: "https://example.com/changelog" },
+  changelogRef: { kind: "document", id: "open-todos@1.2.3", uri: "https://example.com/changelog" },
   evidenceRefs: [{ id: "ev-1" }],
 };
 
@@ -88,6 +88,9 @@ describe("deliverCampaign --dry-run", () => {
     expect(doc.metadata?.simulated).toBe(true);
     expect(doc.channels).toHaveLength(3);
     expect(doc.releaseRef?.kind).toBe("release");
+    // Canonical package locator coupling: sourcePackage AND externalId.
+    expect(doc.releaseRef?.sourcePackage).toBe("@hasna/todos");
+    expect(doc.releaseRef?.externalId).toBe("@hasna/todos@1.2.3");
     expect(doc.audienceRef.kind).toBe("audience");
     // sms/conversations map to "other" in the contract channel enum.
     expect(doc.channels.map((channel) => channel.channel).sort()).toEqual(["email", "other", "telegram"]);
@@ -173,5 +176,56 @@ describe("deliverCampaign real sends (mock adapters)", () => {
     expect(events[0]!.data.campaignId).toBe("camp-test-1");
     expect(events[0]!.data.channels).toEqual(["email"]);
     expect(events[0]!.data.releaseId).toBe("@hasna/todos@1.2.3");
+  });
+
+  it("never uses mock go.hasna.example shortlinks for real sends when no shortlink adapter is passed", async () => {
+    const ledger = tempLedger();
+    const delivered: string[] = [];
+    const emailAdapter: DeliveryAdapter = {
+      channel: "email",
+      deliver: async (message) => {
+        delivered.push(message.body);
+        return { ok: true };
+      },
+    };
+
+    const result = await deliverCampaign(makeCampaign(), {
+      ledger,
+      adapters: { email: emailAdapter },
+      eventSink: async () => {},
+      // No `shortlinks` option on purpose: a real send must not default to
+      // the mock adapter whose links do not resolve.
+    });
+
+    expect(result.dryRun).toBe(false);
+    expect(delivered.length).toBeGreaterThan(0);
+    for (const message of result.rendered) {
+      for (const link of message.links) {
+        expect(link.shortUrl).not.toContain("go.hasna.example");
+      }
+    }
+    for (const body of delivered) {
+      expect(body).not.toContain("go.hasna.example");
+    }
+  });
+
+  it("persists shortlink slugs on sent ledger entries for engagement reporting", async () => {
+    const ledger = tempLedger();
+    const shortlinks = new MockShortlinkAdapter();
+    const emailAdapter: DeliveryAdapter = {
+      channel: "email",
+      deliver: async () => ({ ok: true }),
+    };
+    const result = await deliverCampaign(makeCampaign(), {
+      ledger,
+      adapters: { email: emailAdapter },
+      shortlinks,
+      eventSink: async () => {},
+    });
+    const email = result.entries.find((entry) => entry.channel === "email")!;
+    expect(email.status).toBe("sent");
+    expect(email.slugs?.length).toBeGreaterThan(0);
+    const rendered = result.rendered.find((message) => message.channel === "email")!;
+    expect(email.slugs).toEqual(rendered.links.map((link) => link.slug));
   });
 });

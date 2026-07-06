@@ -38,6 +38,7 @@ export interface AppendEntryInput {
   externalId?: string;
   renderedSubject?: string;
   renderedBytes?: number;
+  slugs?: string[];
 }
 
 /**
@@ -66,6 +67,7 @@ export class DeliveryLedger {
       externalId: input.externalId,
       renderedSubject: input.renderedSubject,
       renderedBytes: input.renderedBytes,
+      slugs: input.slugs,
     };
     if (entry.status === "sent" && !entry.deliveredAt) {
       throw new Error("ledger entries with status \"sent\" require deliveredAt");
@@ -130,7 +132,10 @@ export class DeliveryLedger {
       releaseRef: {
         kind: "release",
         id: `${campaign.release.package}@${campaign.release.version}`,
+        // Canonical resource pointers without a uri require BOTH
+        // sourcePackage and externalId (external package locator coupling).
         sourcePackage: campaign.release.package,
+        externalId: `${campaign.release.package}@${campaign.release.version}`,
       },
       channels,
       audienceRef: {

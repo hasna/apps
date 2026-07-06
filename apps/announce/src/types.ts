@@ -8,9 +8,79 @@ export type JsonObject = { [key: string]: JsonValue };
 // `hasna.announcement.v1` / `hasna.release.v1` and the shared primitives.
 // ---------------------------------------------------------------------------
 
+/** Mirror of the canonical `@hasna/contracts` ResourceKindSchema enum values. */
+export const RESOURCE_KINDS = [
+  "task",
+  "project",
+  "repo",
+  "run",
+  "loop",
+  "workflow",
+  "action",
+  "event",
+  "integration",
+  "session",
+  "machine",
+  "model",
+  "tool",
+  "file",
+  "document",
+  "url",
+  "artifact",
+  "knowledge",
+  "email",
+  "conversation",
+  "dashboard",
+  "render",
+  "panel",
+  "report",
+  "commit",
+  "branch",
+  "pull_request",
+  "issue",
+  "comment",
+  "verification",
+  "finding",
+  "context_pack",
+  "proof_bundle",
+  "memento",
+  "eval",
+  "budget",
+  "cost",
+  "alert",
+  "incident",
+  "app",
+  "release",
+  "rollout",
+  "announcement",
+  "audience",
+  "feedback",
+  "unknown",
+] as const;
+export type ResourceKind = (typeof RESOURCE_KINDS)[number];
+
+/** Mirror of the canonical `@hasna/contracts` EvidenceKindSchema enum values. */
+export const EVIDENCE_KINDS = [
+  "file",
+  "command_output",
+  "screenshot",
+  "log",
+  "diff",
+  "report",
+  "artifact",
+  "url",
+  "video",
+  "har",
+  "test_result",
+  "metric",
+  "trace",
+  "other",
+] as const;
+export type EvidenceKind = (typeof EVIDENCE_KINDS)[number];
+
 /** Mirror of `@hasna/contracts` ResourcePointer. */
 export interface ResourcePointer {
-  kind: string;
+  kind: ResourceKind;
   id: string;
   name?: string;
   uri?: string;
@@ -22,7 +92,7 @@ export interface ResourcePointer {
 /** Mirror of `@hasna/contracts` EvidencePointer. */
 export interface EvidencePointer {
   id: string;
-  kind?: string;
+  kind?: EvidenceKind;
   uri?: string;
   sha256?: string;
   summary?: string;
@@ -172,6 +242,11 @@ export interface LedgerEntry {
   externalId?: string;
   renderedSubject?: string;
   renderedBytes?: number;
+  /**
+   * Shortlink slugs produced for this channel at send time. Engagement
+   * reporting keys shortlink click aggregation off these stored slugs.
+   */
+  slugs?: string[];
 }
 
 // ---------------------------------------------------------------------------

@@ -10,7 +10,7 @@ import type {
 } from "../types.js";
 import { DeliveryLedger } from "./ledger.js";
 import { renderChannel } from "./render/index.js";
-import { MockShortlinkAdapter, shortenLinks } from "./shortlinks.js";
+import { MockShortlinkAdapter, resolveShortlinkAdapter, shortenLinks } from "./shortlinks.js";
 import type { ShortlinkAdapter } from "./shortlinks.js";
 
 export interface DeliverCampaignOptions {
@@ -51,7 +51,11 @@ export async function deliverCampaign(
   const nowIso = now.toISOString();
   const dryRun = options.dryRun ?? false;
   const ledger = options.ledger ?? new DeliveryLedger();
-  const shortlinks = options.shortlinks ?? new MockShortlinkAdapter();
+  // Dry-runs default to the deterministic mock adapter; REAL sends must never
+  // fall back to it (its go.hasna.example links do not resolve). Real sends
+  // default to `@hasna/shortlinks` when installed, otherwise pass-through.
+  const shortlinks =
+    options.shortlinks ?? (dryRun ? new MockShortlinkAdapter() : await resolveShortlinkAdapter());
   const entries: LedgerEntry[] = [];
   const rendered: RenderedMessage[] = [];
 
@@ -81,6 +85,8 @@ export async function deliverCampaign(
     });
     const message = renderChannel(channel, campaign, links);
     rendered.push(message);
+    const slugs = message.links.map((link) => link.slug).filter(Boolean);
+    const entrySlugs = slugs.length > 0 ? slugs : undefined;
 
     if (dryRun) {
       entries.push(
@@ -95,6 +101,7 @@ export async function deliverCampaign(
           detail: "dry-run: simulated delivery",
           renderedSubject: message.subject,
           renderedBytes: Buffer.byteLength(message.body, "utf8"),
+          slugs: entrySlugs,
         }),
       );
       continue;
@@ -132,6 +139,7 @@ export async function deliverCampaign(
             detail: result.detail,
             renderedSubject: message.subject,
             renderedBytes: Buffer.byteLength(message.body, "utf8"),
+            slugs: entrySlugs,
           }),
         );
       } else {

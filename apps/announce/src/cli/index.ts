@@ -8,6 +8,7 @@ import { deliverCampaign } from "../lib/deliver.js";
 import { DeliveryLedger, resolveAnnounceDataDir } from "../lib/ledger.js";
 import {
   aggregateEngagement,
+  collectShortlinkSlugs,
   MockAnalyticsEngagementAdapter,
   MockMaileryEngagementAdapter,
   MockShortlinkClicksAdapter,
@@ -64,10 +65,12 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       try {
         const channels = options.channel as string[];
         assertDeliveryChannels(channels);
+        // Changelog pointers use the canonical resource kind "document"
+        // ("changelog" is not a member of the contracts ResourceKind enum).
         const changelogRef: ResourcePointer | undefined =
           options.changelogId || options.changelogUri
             ? {
-                kind: "changelog",
+                kind: "document",
                 id: (options.changelogId as string | undefined) ?? (options.changelogUri as string),
                 uri: options.changelogUri as string | undefined,
               }
@@ -194,9 +197,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
             { campaignId, kind: "delivered" as const, at: entry.at },
             { campaignId, kind: "open" as const, at: entry.at },
           ]);
-        const clickMap = Object.fromEntries(
-          [...new Set(entries.map((entry) => `${entry.campaignId}:${entry.channel}`))].map((slug) => [slug, 1]),
-        );
+        const clickMap = Object.fromEntries([...collectShortlinkSlugs(entries)].map((slug) => [slug, 1]));
         printJson(
           await aggregateEngagement(campaignId, {
             ledger,
