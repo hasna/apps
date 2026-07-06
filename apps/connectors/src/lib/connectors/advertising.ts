@@ -30,4 +30,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Advertising",
     tags: ["tiktok", "ads", "campaigns"],
   },
+  {
+    name: "the-trade-desk",
+    displayName: "The Trade Desk",
+    description: "Programmatic ad platform (campaigns, events, search)",
+    category: "Advertising",
+    tags: ["ads", "programmatic", "dsp"],
+  },
 ];
