@@ -962,6 +962,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["project management", "agile", "scrum", "kanban", "open source"],
   },
   {
+    name: "testim",
+    displayName: "Testim",
+    description: "AI-powered test automation platform",
+    category: "Developer Tools",
+    tags: ["testing", "qa", "automation"],
+  },
+  {
     name: "testmonitor",
     displayName: "TestMonitor",
     description: "Test management tool for organizing, running, and reporting on software tests",

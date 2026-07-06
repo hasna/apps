@@ -88,6 +88,10 @@ export const TEST_ENDPOINTS: Record<string, TestEndpoint> = {
     url: "https://sentry.io/api/0/",
     headers: (key) => ({ Authorization: `Bearer ${key}` }),
   },
+  testim: {
+    url: "https://api.testim.io/tests",
+    headers: (key) => ({ Authorization: `Bearer ${key}` }),
+  },
   cloudflare: {
     url: "https://api.cloudflare.com/client/v4/user/tokens/verify",
     headers: (key) => ({ Authorization: `Bearer ${key}` }),
