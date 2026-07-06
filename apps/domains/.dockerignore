@@ -1,0 +1,17 @@
+node_modules
+dist
+.git
+.github
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+docs
+.takumi
+.codewith
+.hasna
+.implementation
+.scripts
+scripts/*.test.ts
+**/*.test.ts

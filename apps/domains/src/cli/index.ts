@@ -12,6 +12,7 @@ import { registerConfigCommands } from "./commands/config.js";
 import { registerDoctorCommand } from "./commands/doctor.js";
 import { registerMcpCommand } from "./commands/mcp-install.js";
 import { registerServeCommand } from "./commands/serve.js";
+import { registerDbCommands } from "./commands/db.js";
 import { registerRoute53Commands } from "./commands/route53.js";
 import { getPackageVersion } from "../lib/version.js";
 
@@ -136,6 +137,7 @@ registerConfigCommands(program);  // domains config <show|set|unset>
 registerDoctorCommand(program);   // domains doctor
 registerMcpCommand(program);      // domains mcp <install|uninstall|status>
 registerServeCommand(program);    // domains serve
+registerDbCommands(program);      // domains db <migrate|status>
 
 // ── Legacy provider-specific namespace (kept for explicit Route 53 ops) ───
 registerRoute53Commands(program); // domains r53 <...>

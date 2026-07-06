@@ -1,13 +1,14 @@
 {
   "name": "@hasna/domains",
   "version": "0.0.27",
-  "description": "Domain portfolio, registrar, marketplace, and DNS management for AI agents — CLI + MCP server with SQLite",
+  "description": "Domain portfolio, registrar, marketplace, and DNS management for AI agents — CLI + MCP + HTTP API + SDK, local SQLite or cloud Postgres",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
     "domains": "dist/cli/index.js",
-    "domains-mcp": "dist/mcp/index.js"
+    "domains-mcp": "dist/mcp/index.js",
+    "domains-serve": "dist/server/index.js"
   },
   "exports": {
     ".": {
@@ -41,6 +42,10 @@
     "./storage": {
       "types": "./dist/storage.d.ts",
       "import": "./dist/storage.js"
+    },
+    "./sdk": {
+      "types": "./dist/sdk/index.d.ts",
+      "import": "./dist/sdk/index.js"
     }
   },
   "files": [
@@ -50,11 +55,14 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && bun build src/cli/index.ts --outdir dist/cli --target bun --external ink --external react --external chalk --external ink-text-input --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/index.ts src/storage.ts --outdir dist --target bun && bun build src/lib/capability.ts src/lib/cloudflare.ts src/lib/cloudflare-auth.ts src/lib/delegate.ts src/lib/registrar.ts src/lib/route53.ts --outdir dist/lib --target node --packages external && tsc --emitDeclarationOnly --outDir dist",
+    "build": "bun run clean && bun build src/cli/index.ts --outdir dist/cli --target bun --external ink --external react --external chalk --external ink-text-input --external @modelcontextprotocol/sdk --external @hasna/contracts --external pg && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun --external @hasna/contracts --external pg && bun build src/sdk/index.ts --outdir dist/sdk --target bun && bun build src/index.ts src/storage.ts --outdir dist --target bun --external @hasna/contracts --external pg && bun build src/lib/capability.ts src/lib/cloudflare.ts src/lib/cloudflare-auth.ts src/lib/delegate.ts src/lib/registrar.ts src/lib/route53.ts --outdir dist/lib --target node --packages external && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "sdk:gen": "bun run scripts/gen-sdk.ts",
+    "kit:check": "contracts vendor-kit --check",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
+    "dev:serve": "bun run src/server/index.ts",
     "prepublishOnly": "bun run build",
     "postinstall": "mkdir -p ${XDG_DATA_HOME:-$HOME/.local/share}/open-domains ${XDG_CONFIG_HOME:-$HOME/.config}/open-domains 2>/dev/null || true"
   },
@@ -91,6 +99,7 @@
     "@aws-sdk/client-route-53": "^3.1067.0",
     "@aws-sdk/client-route-53-domains": "^3.1067.0",
     "@aws-sdk/credential-provider-ini": "3.972.53",
+    "@hasna/contracts": "0.4.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
