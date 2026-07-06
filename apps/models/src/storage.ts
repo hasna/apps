@@ -3,9 +3,10 @@ import { dirname } from "node:path";
 import { Database } from "bun:sqlite";
 import { getDbPath } from "./paths.js";
 import { parseProviderRef } from "./ref.js";
-import type { CatalogEntry, InstalledArtifact, ProviderRef, RemoteFileEntry } from "./types.js";
+import { assertModelCapability } from "./capabilities.js";
+import type { CatalogEntry, InstalledArtifact, ModelCapability, ProviderRef, RemoteFileEntry } from "./types.js";
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 function rowToInstall(row: Record<string, unknown>): InstalledArtifact {
   return {
@@ -34,6 +35,10 @@ function parseInstallRef(input: string): { ref: ProviderRef; hasExplicitRevision
   } catch {
     return null;
   }
+}
+
+function rowToCapability(row: Record<string, unknown>): ModelCapability {
+  return JSON.parse(String(row.capability_json)) as ModelCapability;
 }
 
 export class ModelsStore {
@@ -122,13 +127,95 @@ export class ModelsStore {
         updated_at TEXT NOT NULL
       )
     `);
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS model_capabilities (
+        provider TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        capability_version TEXT NOT NULL,
+        aliases_json TEXT NOT NULL,
+        capability_json TEXT NOT NULL,
+        provider_health TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (provider, model_id, capability_version)
+      )
+    `);
     this.db.run("CREATE INDEX IF NOT EXISTS idx_catalog_downloads ON catalog_entries(downloads DESC)");
     this.db.run("CREATE INDEX IF NOT EXISTS idx_catalog_task ON catalog_entries(task)");
     this.db.run("CREATE INDEX IF NOT EXISTS idx_files_repo ON remote_files(provider, entity_kind, repo_id)");
+    this.db.run("CREATE INDEX IF NOT EXISTS idx_model_capabilities_provider_model ON model_capabilities(provider, model_id)");
+    this.db.run("CREATE INDEX IF NOT EXISTS idx_model_capabilities_health ON model_capabilities(provider_health)");
     this.db.run(
       "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', ?)",
       [SCHEMA_VERSION],
     );
+  }
+
+  upsertCapabilities(capabilities: ModelCapability[]): number {
+    const stmt = this.db.prepare(`
+      INSERT INTO model_capabilities (
+        provider, model_id, capability_version, aliases_json, capability_json,
+        provider_health, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(provider, model_id, capability_version) DO UPDATE SET
+        aliases_json=excluded.aliases_json,
+        capability_json=excluded.capability_json,
+        provider_health=excluded.provider_health,
+        updated_at=excluded.updated_at
+    `);
+    const tx = this.db.transaction((items: ModelCapability[]) => {
+      for (const capability of items) {
+        const valid = assertModelCapability(capability);
+        stmt.run(
+          valid.provider,
+          valid.modelId,
+          valid.capabilityVersion,
+          JSON.stringify(valid.aliases),
+          JSON.stringify(valid),
+          valid.providerHealth.status,
+          valid.updatedAt,
+        );
+      }
+    });
+    tx(capabilities);
+    return capabilities.length;
+  }
+
+  listCapabilities(options: { provider?: string; health?: string; limit?: number } = {}): ModelCapability[] {
+    const limit = Math.max(1, Math.min(options.limit ?? 50, 500));
+    const conditions: string[] = [];
+    const params: (string | number)[] = [];
+    if (options.provider) {
+      conditions.push("provider = ?");
+      params.push(options.provider);
+    }
+    if (options.health) {
+      conditions.push("provider_health = ?");
+      params.push(options.health);
+    }
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const rows = this.db.query<Record<string, unknown>, (string | number)[]>(
+      `SELECT * FROM model_capabilities ${where} ORDER BY updated_at DESC, provider ASC, model_id ASC LIMIT ?`,
+    ).all(...params, limit);
+    return rows.map(rowToCapability);
+  }
+
+  findCapability(input: string): ModelCapability | null {
+    const exact = this.db.query<Record<string, unknown>, [string, string, string]>(
+      `SELECT * FROM model_capabilities
+       WHERE model_id = ? OR provider || ':' || model_id = ? OR provider || '/' || model_id = ?
+       ORDER BY updated_at DESC LIMIT 1`,
+    ).get(input, input, input);
+    if (exact) return rowToCapability(exact);
+
+    const rows = this.db.query<Record<string, unknown>, []>(
+      "SELECT * FROM model_capabilities ORDER BY updated_at DESC",
+    ).all();
+    for (const row of rows) {
+      const aliases = JSON.parse(String(row.aliases_json)) as string[];
+      if (aliases.includes(input)) return rowToCapability(row);
+    }
+    return null;
   }
 
   upsertCatalog(entries: CatalogEntry[]): number {
@@ -288,7 +375,7 @@ export class ModelsStore {
     return result.changes > 0;
   }
 
-  catalogStats(): { catalogEntries: number; remoteFiles: number; installs: number } {
+  catalogStats(): { catalogEntries: number; remoteFiles: number; installs: number; capabilities: number } {
     const one = <T extends string>(table: T): number => {
       const row = this.db.query<{ count: number }, []>(`SELECT COUNT(*) as count FROM ${table}`).get();
       return Number(row?.count ?? 0);
@@ -297,6 +384,7 @@ export class ModelsStore {
       catalogEntries: one("catalog_entries"),
       remoteFiles: one("remote_files"),
       installs: one("installs"),
+      capabilities: one("model_capabilities"),
     };
   }
 

@@ -118,3 +118,45 @@ test("where accepts canonical provider refs for installed artifacts", () => {
   expect(body.id).toBe("owner-repo-v2");
   expect(body.installPath).toBe("/tmp/models/owner-repo-v2");
 });
+
+test("capabilities CLI seeds fixtures and resolves aliases", () => {
+  const home = mkdtempSync(join(tmpdir(), "models-cli-capabilities-"));
+  const dbPath = join(home, "models.db");
+  const env = {
+    ...process.env,
+    HASNA_MODELS_HOME: home,
+    HASNA_MODELS_DB: dbPath,
+    NO_COLOR: "1",
+  };
+
+  const seed = spawnSync(process.execPath, [
+    "src/cli/index.ts",
+    "capabilities",
+    "seed-fixtures",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    env,
+  });
+  expect(seed.status).toBe(0);
+  const seeded = JSON.parse(seed.stdout) as { count: number; stats: { capabilities: number } };
+  expect(seeded.count).toBeGreaterThanOrEqual(5);
+  expect(seeded.stats.capabilities).toBe(seeded.count);
+
+  const get = spawnSync(process.execPath, [
+    "src/cli/index.ts",
+    "capabilities",
+    "get",
+    "ollama:llama3.1:8b",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    env,
+  });
+  expect(get.status).toBe(0);
+  const capability = JSON.parse(get.stdout) as { runtime: { kind: string }; providerHealth: { status: string } };
+  expect(capability.runtime.kind).toBe("ollama");
+  expect(capability.providerHealth.status).toBe("unknown");
+});

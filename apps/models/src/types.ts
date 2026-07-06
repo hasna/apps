@@ -95,3 +95,73 @@ export interface DoctorReport {
     detail: string;
   }>;
 }
+
+export const MODEL_CAPABILITY_SCHEMA_VERSION = "hasna.model-capability.v1" as const;
+
+export type CapabilitySupport = "yes" | "no" | "partial";
+export type CapabilityModality = "text" | "image" | "audio" | "video" | "embedding";
+export type CapabilityLatencyClass = "low" | "standard" | "batch" | "local";
+export type CapabilityRuntimeKind = "hosted" | "openai-compatible" | "ollama" | "lm-studio" | "huggingface-artifact";
+export type ProviderHealthStatus = "available" | "degraded" | "unavailable" | "unknown";
+export type PrivacyRetentionClass = "none" | "ephemeral" | "provider-retained" | "unknown";
+
+export interface ModelPricing {
+  currency: "USD" | string;
+  inputPerMillionTokens: number | null;
+  outputPerMillionTokens: number | null;
+  cacheReadPerMillionTokens?: number | null;
+  cacheWritePerMillionTokens?: number | null;
+  effectiveAt: string;
+}
+
+export interface ModelRuntimeRequirements {
+  kind: CapabilityRuntimeKind;
+  endpointEnv?: string | null;
+  packageName?: string | null;
+  minimumRamGb?: number | null;
+  minimumVramGb?: number | null;
+  quantization?: string | null;
+  fileFormats: string[];
+  notes?: string | null;
+}
+
+export interface ModelCapability {
+  schemaVersion: typeof MODEL_CAPABILITY_SCHEMA_VERSION;
+  capabilityVersion: string;
+  provider: ProviderId;
+  modelId: string;
+  aliases: string[];
+  displayName?: string | null;
+  contextWindowTokens: number;
+  maxOutputTokens: number;
+  modalities: {
+    input: CapabilityModality[];
+    output: CapabilityModality[];
+  };
+  toolUse: CapabilitySupport;
+  functionCalling: CapabilitySupport;
+  structuredOutput: CapabilitySupport;
+  jsonMode: CapabilitySupport;
+  pricing: ModelPricing;
+  latencyClass: CapabilityLatencyClass;
+  safetyLabels: string[];
+  privacy: {
+    retention: PrivacyRetentionClass;
+    usedForTraining: boolean | null;
+    zeroRetentionAvailable: boolean | null;
+  };
+  runtime: ModelRuntimeRequirements;
+  providerHealth: {
+    status: ProviderHealthStatus;
+    checkedAt: string;
+    region?: string | null;
+    detail?: string | null;
+  };
+  source: {
+    type: "fixture" | "manual" | "provider";
+    url?: string | null;
+    retrievedAt: string;
+  };
+  updatedAt: string;
+  metadata: Record<string, unknown>;
+}
