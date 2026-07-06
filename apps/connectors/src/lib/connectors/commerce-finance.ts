@@ -395,6 +395,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["nft", "web3", "blockchain"],
   },
   {
+    name: "synphony",
+    displayName: "Synphony",
+    description: "Farm robotics platform — farms, robots, telemetry, harvest runs, and bed analytics",
+    category: "Commerce & Finance",
+    tags: ["robotics", "agriculture", "iot", "telemetry"],
+  },
+  {
     name: "woocommerce",
     displayName: "WooCommerce",
     description: "WordPress e-commerce plugin for orders, products, and customers",
