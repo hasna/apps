@@ -31,6 +31,7 @@ const LOCAL_PRESENCE_DDL = `
     metadata TEXT,
     PRIMARY KEY (agent, project_id)
   );
+  CREATE UNIQUE INDEX idx_agent_presence_agent_unique ON agent_presence(agent);
 `;
 
 // SQLite stand-in for the hub Postgres schema. TEXT timestamps keep the
@@ -48,6 +49,7 @@ const REMOTE_DDL = `
     metadata TEXT,
     PRIMARY KEY (agent, project_id)
   );
+  CREATE UNIQUE INDEX idx_agent_presence_agent_unique ON agent_presence(agent);
   CREATE TABLE ${SYNC_AGENT_TOMBSTONES_TABLE} (
     agent TEXT PRIMARY KEY,
     deleted_at TEXT NOT NULL
@@ -111,11 +113,12 @@ function insertPresence(
   db: ConversationsDatabase,
   agent: string,
   lastSeenAt: string,
+  projectId = "",
 ): void {
   db.prepare(`
     INSERT INTO agent_presence (id, agent, project_id, status, last_seen_at, created_at)
-    VALUES (?, ?, '', 'online', ?, ?)
-  `).run(agent.slice(0, 8).padEnd(8, "0"), agent, lastSeenAt, lastSeenAt);
+    VALUES (?, ?, ?, 'online', ?, ?)
+  `).run(agent.slice(0, 8).padEnd(8, "0"), agent, projectId, lastSeenAt, lastSeenAt);
 }
 
 async function insertRemotePresence(remote: FakeRemote, agent: string, lastSeenAt: string): Promise<void> {
@@ -270,6 +273,55 @@ describe("agent tombstones", () => {
       expect(result.rowsRead).toBe(0);
       expect(result.rowsWritten).toBe(1);
       expect(localAgents(db)).toEqual([]);
+    } finally {
+      await remote.close();
+      db.close();
+    }
+  });
+
+  it("presence upserts converge on agent name across differing project_ids", async () => {
+    // The pre-fix conflict target (agent, project_id) missed the agent-unique
+    // index: the same name with another project_id took the INSERT path and
+    // aborted the whole presence sync (spark02's cutover push never converged).
+    const db = newLocal();
+    const remote = new FakeRemote();
+    try {
+      insertPresence(db, "wanderer", "2026-07-06T17:00:00.000", "/home/hasna/project-a");
+      await insertRemotePresence(remote, "wanderer", RECENT); // project_id '' on hub
+
+      const results = await syncPush(db, remote as unknown as PgAdapterAsync, { tables: ["agent_presence"] });
+
+      expect(results.find((r) => r.table === "agent_presence")!.errors).toEqual([]);
+      const rows = await remote.all(
+        "SELECT agent, project_id, last_seen_at FROM agent_presence WHERE agent = 'wanderer'",
+      ) as Array<{ agent: string; project_id: string; last_seen_at: string }>;
+      expect(rows).toHaveLength(1); // one identity per agent name — no dupes, no abort
+      expect(rows[0]!.project_id).toBe("/home/hasna/project-a"); // newer row won
+      expect(rows[0]!.last_seen_at).toBe("2026-07-06T17:00:00.000");
+    } finally {
+      await remote.close();
+      db.close();
+    }
+  });
+
+  it("a stale replica never regresses fresher presence (push or pull)", async () => {
+    const db = newLocal();
+    const remote = new FakeRemote();
+    try {
+      insertPresence(db, "keeper", "2026-07-06T10:00:00.000"); // replica's stale view
+      await insertRemotePresence(remote, "keeper", "2026-07-06T17:00:00.000"); // hub fresher
+
+      await syncPush(db, remote as unknown as PgAdapterAsync, { tables: ["agent_presence"] });
+      const remoteRow = await remote.get(
+        "SELECT last_seen_at FROM agent_presence WHERE agent = 'keeper'",
+      ) as { last_seen_at: string };
+      expect(remoteRow.last_seen_at).toBe("2026-07-06T17:00:00.000"); // guard held
+
+      await syncPull(remote as unknown as PgAdapterAsync, db, { tables: ["agent_presence"] });
+      const localRow = db.get<{ last_seen_at: string }>(
+        "SELECT last_seen_at FROM agent_presence WHERE agent = 'keeper'",
+      );
+      expect(localRow!.last_seen_at).toBe("2026-07-06T17:00:00.000"); // pull updated stale local
     } finally {
       await remote.close();
       db.close();

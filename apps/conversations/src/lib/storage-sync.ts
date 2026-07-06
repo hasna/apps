@@ -88,10 +88,24 @@ const PRIMARY_KEYS: Record<SyncTable, string[]> = {
   channels: ["name"],
   channel_members: ["channel", "agent"],
   channel_subscriptions: ["channel", "agent"],
-  agent_presence: ["agent", "project_id"],
+  // agent identity is the agent NAME (both stores enforce a unique index on
+  // agent alone). The old (agent, project_id) conflict target missed that
+  // index: the same name with a different project_id on another machine took
+  // the INSERT path, violated idx_agent_presence_agent_unique, and aborted
+  // the whole presence sync — which is why spark02's registry push never
+  // converged during the 2026-07-06 cutover.
+  agent_presence: ["agent"],
   resource_locks: ["resource_type", "resource_id", "lock_type"],
   graph_edges: ["from_type", "from_id", "to_type", "to_id", "relation"],
   feedback: ["id"],
+};
+
+// Per-table guards appended to DO UPDATE so an upsert never regresses a newer
+// row. The engine pushes/pulls FULL tables every run, so without this a stale
+// replica would overwrite fresher presence (last-writer-wins must be
+// last-SEEN-wins for presence).
+const UPDATE_GUARDS: Partial<Record<SyncTable, string>> = {
+  agent_presence: "excluded.last_seen_at > agent_presence.last_seen_at",
 };
 
 const CONFLICT_TABLES = new Set(["channels", "projects", "agent_presence"]);
@@ -433,9 +447,11 @@ async function upsertPg(remote: PgAdapterAsync, table: SyncTable, columns: strin
   const setClause = updateColumns.length > 0
     ? updateColumns.map((column) => `${quoteIdent(column)} = EXCLUDED.${quoteIdent(column)}`).join(", ")
     : `${quoteIdent(fallbackKey)} = EXCLUDED.${quoteIdent(fallbackKey)}`;
+  const guard = UPDATE_GUARDS[table];
+  const guardClause = guard ? ` WHERE ${guard}` : "";
   for (const row of rows) {
     await remote.run(
-      `INSERT INTO ${quoteIdent(table)} (${columnList}) VALUES (${placeholders}) ON CONFLICT (${keyList}) DO UPDATE SET ${setClause}`,
+      `INSERT INTO ${quoteIdent(table)} (${columnList}) VALUES (${placeholders}) ON CONFLICT (${keyList}) DO UPDATE SET ${setClause}${guardClause}`,
       ...columns.map((column) => coerceForPg(row[column], remoteColumns.get(column))),
     );
   }
@@ -453,7 +469,9 @@ function upsertSqlite(db: Database, table: SyncTable, columns: string[], rows: R
   const setClause = updateColumns.length > 0
     ? updateColumns.map((column) => `${quoteIdent(column)} = excluded.${quoteIdent(column)}`).join(", ")
     : `${quoteIdent(fallbackKey)} = excluded.${quoteIdent(fallbackKey)}`;
-  const statement = db.prepare(`INSERT INTO ${quoteIdent(table)} (${columnList}) VALUES (${placeholders}) ON CONFLICT (${keyList}) DO UPDATE SET ${setClause}`);
+  const guard = UPDATE_GUARDS[table];
+  const guardClause = guard ? ` WHERE ${guard}` : "";
+  const statement = db.prepare(`INSERT INTO ${quoteIdent(table)} (${columnList}) VALUES (${placeholders}) ON CONFLICT (${keyList}) DO UPDATE SET ${setClause}${guardClause}`);
   for (const row of rows) statement.run(...columns.map((column) => coerceForSqlite(row[column])));
   return rows.length;
 }
