@@ -95,13 +95,14 @@ jobs:
           set -euo pipefail
           IMAGE="${ECR_URL}:${GITHUB_SHA}"
           # Runner is arm64, so linux/arm64 builds natively — no emulation.
+          # ECR repo uses IMMUTABLE tags, so we push ONLY the unique SHA tag —
+          # a moving ":latest" cannot be overwritten and would fail the push.
           docker buildx build \
             --platform linux/arm64 \
             --provenance=false \
             --cache-from "type=gha" \
             --cache-to "type=gha,mode=max" \
             --tag "${IMAGE}" \
-            --tag "${ECR_URL}:latest" \
             --push \
             .
           echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
