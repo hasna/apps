@@ -955,6 +955,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["testing", "test management", "qa", "reporting", "software quality"],
   },
   {
+    name: "testrail",
+    displayName: "TestRail",
+    description: "Test case management platform for QA teams",
+    category: "Developer Tools",
+    tags: ["testing", "qa", "test-management"],
+  },
+  {
     name: "textkit",
     displayName: "TextKit",
     description: "Text processing and manipulation API for formatting and transforming text",
