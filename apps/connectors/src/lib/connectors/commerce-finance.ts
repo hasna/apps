@@ -17,6 +17,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["incorporation", "business"],
   },
   {
+    name: "stripe-connect-platform",
+    displayName: "Stripe Connect Platform",
+    description: "Stripe Connect platform operations - connected accounts, onboarding, transfers, and fees",
+    category: "Commerce & Finance",
+    tags: ["connect", "platform", "payments", "marketplace"],
+  },
+  {
     name: "stripe-billing-advanced",
     displayName: "Stripe Billing Advanced",
     description: "Advanced usage-based billing with pricing plans and billing intents",
