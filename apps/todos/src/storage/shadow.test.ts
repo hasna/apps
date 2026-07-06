@@ -1,0 +1,213 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
+import {
+  createLocalSqliteTodosStorageAdapter,
+  createShadowTodosStorageAdapter,
+  createTodosStorageAdapter,
+  loadTodosStorageConfig,
+  type TodosPostgresQueryClient,
+} from "../storage.js";
+import { getTodosShadowStatus } from "../lib/shadow-status.js";
+
+let db: Database;
+
+beforeEach(() => {
+  process.env["TODOS_DB_PATH"] = ":memory:";
+  resetDatabase();
+  db = getDatabase();
+});
+
+afterEach(() => {
+  closeDatabase();
+  delete process.env["TODOS_DB_PATH"];
+});
+
+interface MemoryRow {
+  service: string;
+  objectType: string;
+  objectId: string;
+  payload: Record<string, unknown>;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
+function createMemoryPostgresClient(options: { failFirst?: number } = {}) {
+  const calls: Array<{ sql: string; values?: readonly unknown[] }> = [];
+  const rows = new Map<string, MemoryRow>();
+  let remainingFailures = options.failFirst ?? 0;
+  const key = (s: unknown, t: unknown, i: unknown) => `${String(s)}:${String(t)}:${String(i)}`;
+
+  const client: TodosPostgresQueryClient = {
+    async query<T = Record<string, unknown>>(sql: string, values: readonly unknown[] = []) {
+      calls.push({ sql, values });
+
+      if (sql.includes("INSERT INTO todos_sync_records")) {
+        if (remainingFailures > 0) {
+          remainingFailures -= 1;
+          throw new Error("simulated mirror failure");
+        }
+        const [service, objectType, objectId, payload, updatedAt, deletedAt] = values;
+        const parsed = typeof payload === "string" ? JSON.parse(payload) : (payload as Record<string, unknown>);
+        rows.set(key(service, objectType, objectId), {
+          service: String(service),
+          objectType: String(objectType),
+          objectId: String(objectId),
+          payload: parsed,
+          updatedAt: String(updatedAt),
+          deletedAt: deletedAt ? String(deletedAt) : null,
+        });
+        return { rows: [] as T[] };
+      }
+
+      if (sql.includes("GROUP BY object_type")) {
+        const agg = new Map<string, { live: number; tombstones: number; last: string }>();
+        for (const row of rows.values()) {
+          if (row.service !== values[0]) continue;
+          const entry = agg.get(row.objectType) ?? { live: 0, tombstones: 0, last: "" };
+          if (row.deletedAt) entry.tombstones += 1;
+          else entry.live += 1;
+          if (row.updatedAt > entry.last) entry.last = row.updatedAt;
+          agg.set(row.objectType, entry);
+        }
+        return {
+          rows: [...agg.entries()].map(([object_type, e]) => ({
+            object_type,
+            live: e.live,
+            tombstones: e.tombstones,
+            last_updated: e.last,
+          })) as unknown as T[],
+        };
+      }
+
+      return { rows: [] as T[] };
+    },
+  };
+  return { client, calls, rows };
+}
+
+describe("dual-write shadow adapter", () => {
+  test("mirrors successful local writes to the remote sync store; reads stay local", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createShadowTodosStorageAdapter({
+      local: { db },
+      postgresClient: postgres.client,
+      sourceMachineId: "spark01",
+      ensureSchema: true,
+    });
+
+    const project = await adapter.projects.create({ name: "Shadow Project", path: "/tmp/shadow-project" });
+    const task = await adapter.tasks.create({ title: "Shadow task", project_id: project.id });
+
+    // Local reads work without touching Postgres beyond mirroring.
+    expect(await adapter.tasks.get(task.id)).toMatchObject({ id: task.id });
+    expect(adapter.capabilities.remotePersistence).toBe(false);
+
+    await adapter.shadow.flush();
+
+    // The mirrored task landed in the remote store via the shared upsert.
+    const mirroredTask = postgres.rows.get(`todos:tasks:${task.id}`);
+    expect(mirroredTask?.payload).toMatchObject({ id: task.id, title: "Shadow task" });
+    expect(postgres.rows.get(`todos:projects:${project.id}`)?.payload).toMatchObject({ id: project.id });
+    // source_machine_id (index 6) carries the machine id.
+    const insert = postgres.calls.find((c) => c.sql.includes("INSERT INTO todos_sync_records"));
+    expect(insert?.values?.[6]).toBe("spark01");
+
+    const metrics = adapter.shadow.getMetrics();
+    expect(metrics.mirrored).toBeGreaterThanOrEqual(2);
+    expect(metrics.failed).toBe(0);
+    expect(metrics.divergence).toBe(0);
+    expect(metrics.lastMirrorAt).not.toBeNull();
+  });
+
+  test("delete emits a tombstone to the remote store", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createShadowTodosStorageAdapter({ local: { db }, postgresClient: postgres.client });
+    const task = await adapter.tasks.create({ title: "Doomed task" });
+    await adapter.tasks.delete(task.id);
+    await adapter.shadow.flush();
+
+    const row = postgres.rows.get(`todos:tasks:${task.id}`);
+    expect(row?.deletedAt).not.toBeNull();
+  });
+
+  test("local write succeeds even when the mirror push fails, incrementing divergence", async () => {
+    // Fail every push attempt so retries are exhausted.
+    const postgres = createMemoryPostgresClient({ failFirst: Number.MAX_SAFE_INTEGER });
+    const adapter = createShadowTodosStorageAdapter({
+      local: { db },
+      postgresClient: postgres.client,
+      maxRetries: 1,
+      retryBaseMs: 1,
+      ensureSchema: false,
+    });
+
+    const task = await adapter.tasks.create({ title: "Resilient local write" });
+    // Local write is durable regardless of mirror health.
+    expect(await adapter.tasks.get(task.id)).toMatchObject({ id: task.id });
+
+    await adapter.shadow.flush();
+    const metrics = adapter.shadow.getMetrics();
+    expect(metrics.failed).toBe(1);
+    expect(metrics.divergence).toBeGreaterThanOrEqual(1);
+    expect(metrics.lastError).toContain("simulated mirror failure");
+  });
+
+  test("shadow-status reports local vs cloud divergence and mirror lag", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createShadowTodosStorageAdapter({ local: { db }, postgresClient: postgres.client });
+    const project = await adapter.projects.create({ name: "Divergence", path: "/tmp/divergence" });
+    await adapter.tasks.create({ title: "T1", project_id: project.id });
+    await adapter.tasks.create({ title: "T2", project_id: project.id });
+    await adapter.shadow.flush();
+
+    const local = createLocalSqliteTodosStorageAdapter({ db });
+    const report = await getTodosShadowStatus({ local, cloud: postgres.client });
+
+    expect(report.cloud_reachable).toBe(true);
+    const tasks = report.objects.find((o) => o.object_type === "tasks");
+    expect(tasks).toMatchObject({ local: 2, cloud: 2, diff: 0 });
+    expect(report.in_sync).toBe(true);
+    expect(report.last_mirror_at).not.toBeNull();
+    expect(report.last_mirror_lag_ms).not.toBeNull();
+  });
+
+  test("shadow-status surfaces an unreachable cloud without throwing", async () => {
+    const cloud: TodosPostgresQueryClient = {
+      async query() {
+        throw new Error("connection refused");
+      },
+    };
+    const local = createLocalSqliteTodosStorageAdapter({ db });
+    const report = await getTodosShadowStatus({ local, cloud });
+    expect(report.cloud_reachable).toBe(false);
+    expect(report.error).toContain("connection refused");
+  });
+
+  test("factory builds a shadow adapter when HASNA_TODOS_SHADOW is enabled", async () => {
+    const postgres = createMemoryPostgresClient();
+    const config = loadTodosStorageConfig({
+      HASNA_TODOS_STORAGE_MODE: "local",
+      HASNA_TODOS_SHADOW: "1",
+      HASNA_TODOS_DATABASE_URL: "postgres://todos@rds.example/todos",
+    });
+    const adapter = createTodosStorageAdapter({
+      config,
+      env: { HASNA_TODOS_SHADOW: "1", HASNA_TODOS_DATABASE_URL: "postgres://todos@rds.example/todos" },
+      local: { db },
+      postgresClient: postgres.client,
+    });
+    expect("shadow" in adapter).toBe(true);
+    expect(adapter.capabilities.remotePersistence).toBe(false);
+  });
+
+  test("factory rejects shadow mode without a remote DSN", () => {
+    const config = loadTodosStorageConfig({
+      HASNA_TODOS_STORAGE_MODE: "local",
+      HASNA_TODOS_SHADOW: "1",
+    });
+    expect(() =>
+      createTodosStorageAdapter({ config, env: { HASNA_TODOS_SHADOW: "1" }, local: { db } }),
+    ).toThrow("required");
+  });
+});
