@@ -101,6 +101,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["support", "helpdesk"],
   },
   {
+    name: "supportbee",
+    displayName: "SupportBee",
+    description: "Shared inbox helpdesk and support tickets",
+    category: "Business Tools",
+    tags: ["support", "helpdesk", "tickets"],
+  },
+  {
     name: "talkdesk",
     displayName: "Talkdesk",
     description: "Cloud contact center and customer support",
