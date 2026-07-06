@@ -36,7 +36,7 @@
     "CODE_OF_CONDUCT.md"
   ],
   "scripts": {
-    "build": "cd dashboard && bun run build && cd .. && bun build src/cli/index.ts --outdir dist/cli --target bun --packages external && bun build src/mcp/index.ts --outdir dist/mcp --target bun --packages external && bun build src/server/index.ts --outdir dist/server --target bun --packages external && bun build src/otel/index.ts --outdir dist/otel --target bun --packages external && bun build src/index.ts --outdir dist --target bun --packages external && tsc --emitDeclarationOnly --outDir dist",
+    "build": "cd dashboard && bun run build && cd .. && bun build src/cli/index.ts --outdir dist/cli --target bun --packages external && bun build src/mcp/index.ts --outdir dist/mcp --target bun --packages external && bun build src/server/index.ts --outdir dist/server --target bun --packages external && bun build src/db/pg-sync-worker.ts --outdir dist/server --target bun --packages external && bun build src/otel/index.ts --outdir dist/otel --target bun --packages external && bun build src/index.ts --outdir dist --target bun --packages external && tsc --emitDeclarationOnly --outDir dist",
     "build:cli": "bun build src/cli/index.ts --outdir dist/cli --target bun --packages external",
     "build:mcp": "bun build src/mcp/index.ts --outdir dist/mcp --target bun --packages external",
     "build:server": "bun build src/server/index.ts --outdir dist/server --target bun --packages external",
@@ -71,15 +71,18 @@
   "dependencies": {
     "@hasna/accounts": "0.1.6",
     "@hasna/cloud": "0.1.24",
+    "@hasna/contracts": "0.4.1",
+    "@hasna/events": "^0.1.7",
     "@hasna/projects": "0.1.51",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
-    "zod": "^3.24.2",
-    "@hasna/events": "^0.1.7"
+    "pg": "8.13.1",
+    "zod": "^3.24.2"
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "@types/pg": "^8.20.0",
     "bun-types": "latest",
     "typescript": "^5.7.2"
   },

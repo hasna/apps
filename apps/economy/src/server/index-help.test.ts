@@ -14,7 +14,7 @@ describe('economy-serve entrypoint', () => {
     const exitCode = await proc.exited
 
     expect(exitCode).toBe(0)
-    expect(stdout).toContain('Usage: economy-serve [options]')
+    expect(stdout).toContain('Usage: economy-serve [command] [options]')
     expect(stdout).toContain('REST API server for @hasna/economy')
     expect(stderr).toBe('')
   })

@@ -1,0 +1,32 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "economy",
+  "class": "service",
+  "contractVersion": "v1",
+  "kitVersion": "0.4.1",
+  "description": "AI coding cost tracker — CLI + MCP + HTTP API (economy-serve) + generated SDK. Cloud mode (HASNA_ECONOMY_STORAGE_MODE=cloud) is PURE REMOTE per Amendment A1: the serve process reads/writes the shared cloud Postgres directly with API-key auth via @hasna/contracts.",
+  "bins": ["economy", "economy-mcp", "economy-serve", "economy-otel"],
+  "storage": {
+    "mode": "local",
+    "envPrefix": "HASNA_ECONOMY_",
+    "aliasEnvPrefix": "ECONOMY_",
+    "databaseUrlSecretRef": "hasna/oss/economy/database-url",
+    "sqlitePath": "~/.hasna/economy/economy.db"
+  },
+  "metadata": {
+    "service": {
+      "port": 8787,
+      "healthPath": "/health",
+      "readyPath": "/ready",
+      "versionPath": "/version",
+      "openapiPath": "/openapi.json",
+      "apiVersion": "v1",
+      "auth": "api-key",
+      "signingSecretSecretRef": "hasna/oss/economy/api-key-signing-secret"
+    },
+    "client": {
+      "apiUrlEnv": "ECONOMY_API_URL",
+      "apiKeyEnv": "ECONOMY_API_KEY"
+    }
+  }
+}

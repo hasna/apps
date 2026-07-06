@@ -25,8 +25,40 @@ import { randomUUID } from 'crypto'
 import { existsSync } from 'fs'
 import { resolve, sep } from 'path'
 import { getServeBindHost } from '../lib/serve-auth.js'
+import { packageMetadata } from '../lib/package-metadata.js'
+import { isCloudMode, openCloudDatabase, resolveSigningSecret, createCloudPool, authClientFromPool } from '../db/cloud.js'
+import { verifyApiKey, ApiKeyStore } from '@hasna/contracts/auth'
+import { openApiSpec } from '../openapi.js'
 import type { Period } from '../types/index.js'
 import type { Agent } from '../lib/agents.js'
+
+/** The serve OpenAPI document (source of the generated SDK), version-synced. */
+export function openApiDocument(): Record<string, unknown> {
+  const spec = openApiSpec as unknown as Record<string, unknown>
+  return { ...spec, info: { ...(spec['info'] as object), version: packageMetadata.version } }
+}
+
+/**
+ * Framework-agnostic API-key verifier shape (matches `@hasna/contracts/auth`
+ * `ApiKeyVerifier`). Kept structural so serve.ts has no hard dependency on the
+ * auth package; the entry point injects the real verifier.
+ */
+export interface ApiAuthenticator {
+  authenticate(
+    headers: Headers,
+    context?: { method?: string | null; path?: string | null; requiredScopes?: readonly string[] },
+  ): Promise<{ ok: boolean; status: number; reason?: string; message?: string }>
+}
+
+/** Deployment mode reported by the foundation probes. */
+function serveMode(): string {
+  return isCloudMode() ? 'self_hosted' : 'local'
+}
+
+/** Shared { status, version, mode } envelope for /health, /ready, /version. */
+function foundationEnvelope(status: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return { status, version: packageMetadata.version, mode: serveMode(), service: 'economy', ...extra }
+}
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -111,12 +143,14 @@ function dashboardPath(root: string, pathname: string): string | null {
   return filePath === rootPath || filePath.startsWith(rootPath + sep) ? filePath : null
 }
 
+const FOUNDATION_PATHS = new Set(['/health', '/healthz', '/ready', '/readyz', '/version', '/openapi.json'])
+
 export function createServerFetch(apiHandler: (req: Request) => Promise<Response>, dashboardDir = DEFAULT_DASHBOARD_DIR) {
   return async function fetch(req: Request): Promise<Response> {
     const url = new URL(req.url)
 
-    // API routes
-    if (url.pathname.startsWith('/api') || url.pathname === '/health') {
+    // API routes (legacy /api, versioned /v1, and the foundation probes)
+    if (url.pathname.startsWith('/api') || url.pathname.startsWith('/v1') || FOUNDATION_PATHS.has(url.pathname)) {
       return apiHandler(req)
     }
 
@@ -144,17 +178,55 @@ function applyFields<T extends Record<string, unknown>>(obj: T, fields?: string[
   return Object.fromEntries(fields.map(f => [f, obj[f] ?? null])) as Partial<T>
 }
 
-export function createHandler(db: Database) {
+export interface HandlerOptions {
+  /** API-key verifier (from `@hasna/contracts/auth`). When present, every
+   * request outside the open foundation probes must present a valid
+   * `economy:*` scoped key. This is the internet-facing auth path. */
+  authenticator?: ApiAuthenticator
+  /** Readiness probe proving storage is reachable + migrated. */
+  readyCheck?: () => Promise<{ ready: boolean; detail?: string }>
+}
+
+export function createHandler(db: Database, options: HandlerOptions = {}) {
   return async function handler(req: Request): Promise<Response> {
     const url = new URL(req.url)
-    const path = url.pathname
+    // Normalize the versioned prefix onto the internal /api route table so both
+    // /v1/* (canonical) and /api/* (legacy) resolve to the same handlers.
+    const rawPath = url.pathname
+    const path = rawPath.startsWith('/v1/') ? '/api' + rawPath.slice(3) : rawPath === '/v1' ? '/api' : rawPath
     const method = req.method
 
     if (method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS })
 
-    if (!isAuthorizedRequest(req, path)) return err('Unauthorized', 401)
+    // ── Open foundation probes ({ status, version, mode }) ──────────────────
+    if (method === 'GET' && (rawPath === '/health' || rawPath === '/healthz')) {
+      return json(foundationEnvelope('ok'))
+    }
+    if (method === 'GET' && (rawPath === '/version' || rawPath === '/v1/version')) {
+      return json(foundationEnvelope('ok'))
+    }
+    if (method === 'GET' && (rawPath === '/ready' || rawPath === '/readyz')) {
+      const result = options.readyCheck ? await options.readyCheck() : { ready: true }
+      return json(
+        foundationEnvelope(result.ready ? 'ready' : 'not_ready', result.detail ? { detail: result.detail } : {}),
+        result.ready ? 200 : 503,
+      )
+    }
+    if (method === 'GET' && rawPath === '/openapi.json') {
+      return json(openApiDocument())
+    }
 
-    // Health
+    // ── Auth ────────────────────────────────────────────────────────────────
+    // Internet-facing path: the @hasna/contracts API-key verifier. Local/dev
+    // path: the legacy shared-token check. Foundation probes above are open.
+    if (options.authenticator) {
+      const decision = await options.authenticator.authenticate(req.headers, { method, path: rawPath })
+      if (!decision.ok) return json({ error: decision.reason ?? 'unauthorized', message: decision.message }, decision.status || 401)
+    } else if (!isAuthorizedRequest(req, path)) {
+      return err('Unauthorized', 401)
+    }
+
+    // Legacy health alias (kept for the SPA/dashboard; foundation probe above)
     if (path === '/health') return ok({ status: 'ok', ts: new Date().toISOString() })
 
     // Summary
@@ -521,18 +593,60 @@ export function createHandler(db: Database) {
   }
 }
 
+const APP = 'economy'
+
+function isLocalHost(host: string): boolean {
+  return ['127.0.0.1', 'localhost', '::1'].includes(host)
+}
+
 export function startServer(port = 3456, options: StartServerOptions = {}): ReturnType<typeof Bun.serve> {
-  const db = options.db ?? openDatabase()
-  ensurePricingSeeded(db)
-  const apiHandler = createHandler(db)
-  const hostname = options.hostname ?? getServeBindHost()
+  const cloud = options.db ? false : isCloudMode()
+  const hostname = options.hostname ?? (cloud ? (process.env['ECONOMY_HOST'] ?? '0.0.0.0') : getServeBindHost())
+  const log = options.log ?? console.log
+
+  const handlerOptions: HandlerOptions = {}
+  let db: Database
+
+  if (cloud) {
+    // Amendment A1 (PURE REMOTE): the serve reads/writes RDS Postgres directly.
+    db = openCloudDatabase()
+    const pool = createCloudPool()
+    const signingSecret = resolveSigningSecret()
+    if (signingSecret) {
+      const keys = new ApiKeyStore(authClientFromPool(pool))
+      // Idempotent: the api_keys table is normally created by the migration
+      // task, but ensureSchema keeps a fresh DB self-healing.
+      keys.ensureSchema().catch((e: unknown) => log(`api_keys ensureSchema: ${e instanceof Error ? e.message : String(e)}`))
+      handlerOptions.authenticator = verifyApiKey({
+        app: APP,
+        signingSecret,
+        isRevoked: keys.statusChecker(), // strict: unknown OR revoked kids denied
+        audit: (event) => log(JSON.stringify({ evt: 'api_auth', outcome: event.outcome, kid: event.kid, reason: event.reason, path: event.path, status: event.status })),
+      }) as unknown as ApiAuthenticator
+    } else if (!isLocalHost(hostname)) {
+      throw new Error('economy-serve on a non-local host requires an API signing secret (HASNA_ECONOMY_API_SIGNING_KEY / API_KEY_SIGNING_SECRET)')
+    }
+    handlerOptions.readyCheck = async () => {
+      try {
+        const res = await pool.query('SELECT to_regclass($1) AS reg', ['public.requests'])
+        if (!res.rows[0]?.reg) return { ready: false, detail: 'pending_migrations:requests' }
+        return { ready: true }
+      } catch (error) {
+        return { ready: false, detail: error instanceof Error ? error.message : 'storage_unreachable' }
+      }
+    }
+  } else {
+    db = options.db ?? openDatabase()
+    ensurePricingSeeded(db)
+  }
+
+  const apiHandler = createHandler(db, handlerOptions)
   const server = Bun.serve({
     port,
     hostname,
     fetch: createServerFetch(apiHandler, options.dashboardDir),
   })
   const address = `http://${hostname === '0.0.0.0' ? 'localhost' : hostname}:${server.port}`
-  const log = options.log ?? console.log
   log(`economy-serve listening on ${address}`)
   return server
 }

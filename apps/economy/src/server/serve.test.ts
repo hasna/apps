@@ -92,10 +92,22 @@ describe('REST API server', () => {
     }
   })
 
-  it('GET /health returns ok', async () => {
+  it('GET /health returns the foundation envelope', async () => {
     const { status, data } = await req(handler, '/health')
     expect(status).toBe(200)
-    expect((data as Record<string, unknown>)['data']).toMatchObject({ status: 'ok' })
+    // Foundation probe contract: { status, version, mode } at the top level.
+    expect(data as Record<string, unknown>).toMatchObject({ status: 'ok' })
+    expect((data as Record<string, unknown>)['version']).toBeDefined()
+    expect((data as Record<string, unknown>)['mode']).toBeDefined()
+  })
+
+  it('GET /version and /ready return the foundation envelope', async () => {
+    const version = await req(handler, '/version')
+    expect(version.status).toBe(200)
+    expect(version.data as Record<string, unknown>).toMatchObject({ status: 'ok' })
+    const ready = await req(handler, '/ready')
+    expect([200, 503]).toContain(ready.status)
+    expect((ready.data as Record<string, unknown>)['status']).toBeDefined()
   })
 
   it('GET /api/summary returns cost summary', async () => {
@@ -819,8 +831,8 @@ describe('REST API server', () => {
       expect(server.hostname).toBe('0.0.0.0')
       const response = await fetch(`http://127.0.0.1:${server.port}/health`)
       expect(response.status).toBe(200)
-      const payload = await response.json() as Record<string, Record<string, string>>
-      expect(payload['data']?.['status']).toBe('ok')
+      const payload = await response.json() as Record<string, string>
+      expect(payload['status']).toBe('ok')
     } finally {
       server.stop(true)
     }

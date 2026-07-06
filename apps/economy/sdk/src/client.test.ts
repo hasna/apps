@@ -33,7 +33,7 @@ describe('EconomyClient', () => {
     await client.getSessions({ agent: 'gemini', search: 'open-economy', account: 'work@example.com', machine: 'spark02', limit: 5 })
 
     const url = new URL(calls[0]!.url)
-    expect(url.origin + url.pathname).toBe('http://economy.test/api/sessions')
+    expect(url.origin + url.pathname).toBe('http://economy.test/v1/sessions')
     expect(url.searchParams.get('agent')).toBe('gemini')
     expect(url.searchParams.get('account')).toBe('work@example.com')
     expect(url.searchParams.get('machine')).toBe('spark02')
@@ -51,7 +51,7 @@ describe('EconomyClient', () => {
     const client = EconomyClient.fromEnv()
     await client.getMachines()
 
-    expect(calls[0]!.url).toBe('http://economy.env/api/machines')
+    expect(calls[0]!.url).toBe('http://economy.env/v1/machines')
   })
 
   it('maps read helpers to their REST API endpoints', async () => {
@@ -72,15 +72,15 @@ describe('EconomyClient', () => {
     await client.getGoals()
 
     expect(calls.map(call => call.url)).toEqual([
-      'http://economy.test/api/top?n=3&agent=codex',
-      'http://economy.test/api/models',
-      'http://economy.test/api/projects?period=month',
-      'http://economy.test/api/breakdown?by=agent&period=week',
-      'http://economy.test/api/accounts?period=month',
-      'http://economy.test/api/budgets',
-      'http://economy.test/api/daily?days=14',
-      'http://economy.test/api/pricing',
-      'http://economy.test/api/goals',
+      'http://economy.test/v1/top?n=3&agent=codex',
+      'http://economy.test/v1/models',
+      'http://economy.test/v1/projects?period=month',
+      'http://economy.test/v1/breakdown?by=agent&period=week',
+      'http://economy.test/v1/accounts?period=month',
+      'http://economy.test/v1/budgets',
+      'http://economy.test/v1/daily?days=14',
+      'http://economy.test/v1/pricing',
+      'http://economy.test/v1/goals',
     ])
   })
 
@@ -97,10 +97,10 @@ describe('EconomyClient', () => {
     const goalDelete = await client.deleteGoal('goal/with spaces')
 
     expect(calls.map(call => new URL(call.url).pathname)).toEqual([
-      '/api/sessions/session%2Fwith%20spaces/requests',
-      '/api/budgets/budget%2Fwith%20spaces',
-      '/api/pricing/openai%2Fgpt%205.5',
-      '/api/goals/goal%2Fwith%20spaces',
+      '/v1/sessions/session%2Fwith%20spaces/requests',
+      '/v1/budgets/budget%2Fwith%20spaces',
+      '/v1/pricing/openai%2Fgpt%205.5',
+      '/v1/goals/goal%2Fwith%20spaces',
     ])
     expect(calls.slice(1).map(call => call.init?.method)).toEqual(['DELETE', 'DELETE', 'DELETE'])
     expect([budgetDelete.ok, pricingDelete.ok, goalDelete.ok]).toEqual([true, true, true])
@@ -115,7 +115,7 @@ describe('EconomyClient', () => {
     const client = new EconomyClient({ baseUrl: 'http://economy.test', retries: 0 })
     await client.sync('hermes')
 
-    expect(calls[0]!.url).toBe('http://economy.test/api/sync')
+    expect(calls[0]!.url).toBe('http://economy.test/v1/sync')
     expect(calls[0]!.init?.method).toBe('POST')
     expect(JSON.parse(String(calls[0]!.init?.body))).toEqual({ sources: 'hermes' })
   })
@@ -133,10 +133,10 @@ describe('EconomyClient', () => {
     await client.getBillingDiff('month', 10)
 
     expect(calls.map((c) => c.url)).toEqual([
-      'http://economy.test/api/usage?period=month&agent=claude',
-      'http://economy.test/api/savings?period=month',
-      'http://economy.test/api/fleet?period=month',
-      'http://economy.test/api/billing/diff?period=month&threshold=10',
+      'http://economy.test/v1/usage?period=month&agent=claude',
+      'http://economy.test/v1/savings?period=month',
+      'http://economy.test/v1/fleet?period=month',
+      'http://economy.test/v1/billing/diff?period=month&threshold=10',
     ])
   })
 
@@ -150,8 +150,8 @@ describe('EconomyClient', () => {
     await client.getBilling('month')
     await client.syncBilling({ days: 7, providers: ['openai', 'gemini'] })
 
-    expect(calls[0]!.url).toBe('http://economy.test/api/billing?period=month')
-    expect(calls[1]!.url).toBe('http://economy.test/api/billing/sync')
+    expect(calls[0]!.url).toBe('http://economy.test/v1/billing?period=month')
+    expect(calls[1]!.url).toBe('http://economy.test/v1/billing/sync')
     expect(calls[1]!.init?.method).toBe('POST')
     expect(JSON.parse(String(calls[1]!.init?.body))).toEqual({ days: 7, providers: ['openai', 'gemini'] })
   })
@@ -161,7 +161,7 @@ describe('EconomyClient', () => {
       calls.push({ url: String(url), init })
       const path = new URL(String(url)).pathname
       const responses: Record<string, unknown> = {
-        '/api/budgets': {
+        '/v1/budgets': {
           id: 'budget-1',
           project_path: '/workspace/open-economy',
           agent: 'codex',
@@ -175,7 +175,7 @@ describe('EconomyClient', () => {
           is_over_limit: false,
           is_over_alert: false,
         },
-        '/api/pricing': {
+        '/v1/pricing': {
           model: 'custom-model',
           input_per_1m: 1,
           output_per_1m: 2,
@@ -185,7 +185,7 @@ describe('EconomyClient', () => {
           cache_storage_per_1m_hour: 4.5,
           updated_at: '2026-05-09T00:00:00.000Z',
         },
-        '/api/goals': {
+        '/v1/goals': {
           id: 'goal-1',
           period: 'week',
           project_path: '/workspace/open-economy',
@@ -225,9 +225,9 @@ describe('EconomyClient', () => {
     })
 
     expect(calls.map(call => call.url)).toEqual([
-      'http://economy.test/api/budgets',
-      'http://economy.test/api/pricing',
-      'http://economy.test/api/goals',
+      'http://economy.test/v1/budgets',
+      'http://economy.test/v1/pricing',
+      'http://economy.test/v1/goals',
     ])
     expect(calls.map(call => call.init?.method)).toEqual(['POST', 'POST', 'POST'])
     expect(JSON.parse(String(calls[0]!.init?.body))).toEqual({
@@ -277,7 +277,7 @@ describe('EconomyClient', () => {
           meta: {},
         })
       }
-      expect(path).toBe('/api/subscriptions')
+      expect(path).toBe('/v1/subscriptions')
       return mockJson({ data: [], meta: {} })
     }) as typeof fetch
 
@@ -293,9 +293,9 @@ describe('EconomyClient', () => {
     const removed = await client.deleteSubscription('sub/with spaces')
 
     expect(calls.map(call => call.url)).toEqual([
-      'http://economy.test/api/subscriptions',
-      'http://economy.test/api/subscriptions',
-      'http://economy.test/api/subscriptions/sub%2Fwith%20spaces',
+      'http://economy.test/v1/subscriptions',
+      'http://economy.test/v1/subscriptions',
+      'http://economy.test/v1/subscriptions/sub%2Fwith%20spaces',
     ])
     expect(calls.map(call => call.init?.method)).toEqual([undefined, 'POST', 'DELETE'])
     expect(JSON.parse(String(calls[1]!.init?.body))).toEqual({
@@ -332,8 +332,8 @@ describe('EconomyClient', () => {
 
     expect(summary.total_usd).toBe(1)
     expect(calls.length).toBe(2)
-    expect(calls[0]!.url).toBe('http://economy.test/api/summary?period=today&machine=spark02')
-    expect(calls[1]!.url).toBe('http://economy.test/api/summary?period=today&machine=spark02')
+    expect(calls[0]!.url).toBe('http://economy.test/v1/summary?period=today&machine=spark02')
+    expect(calls[1]!.url).toBe('http://economy.test/v1/summary?period=today&machine=spark02')
   })
 })
 

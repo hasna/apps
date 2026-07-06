@@ -31,6 +31,9 @@ import type {
 
 export interface EconomyClientOptions {
   baseUrl?: string
+  /** API key for the self-hosted service (sent as `x-api-key`). Required for
+   * the internet-facing /v1 API; optional for a loopback dev server. */
+  apiKey?: string
   retries?: number
   retryDelayMs?: number
 }
@@ -42,18 +45,26 @@ interface ApiResponse<T> {
 
 export class EconomyClient {
   private baseUrl: string
+  private apiKey?: string
   private retries: number
   private retryDelayMs: number
 
   constructor(opts?: EconomyClientOptions) {
-    this.baseUrl = opts?.baseUrl ?? 'http://localhost:3456'
+    this.baseUrl = (opts?.baseUrl ?? 'http://localhost:3456').replace(/\/+$/, '')
+    this.apiKey = opts?.apiKey
     this.retries = opts?.retries ?? 2
     this.retryDelayMs = opts?.retryDelayMs ?? 500
   }
 
+  /**
+   * Self-hosted client config: `ECONOMY_API_URL` + `ECONOMY_API_KEY`
+   * (never a DSN). Falls back to the legacy `ECONOMY_URL` for local dev.
+   */
   static fromEnv(): EconomyClient {
+    const env = typeof process !== 'undefined' ? process.env : {}
     return new EconomyClient({
-      baseUrl: (typeof process !== 'undefined' ? process.env['ECONOMY_URL'] : undefined) ?? 'http://localhost:3456',
+      baseUrl: env['ECONOMY_API_URL'] ?? env['ECONOMY_URL'] ?? 'http://localhost:3456',
+      apiKey: env['ECONOMY_API_KEY'],
     })
   }
 
@@ -75,6 +86,7 @@ export class EconomyClient {
           ...opts,
           headers: {
             'Content-Type': 'application/json',
+            ...(this.apiKey ? { 'x-api-key': this.apiKey } : {}),
             ...(opts?.headers ?? {}),
           },
         })
@@ -101,7 +113,7 @@ export class EconomyClient {
     if (period) params.set('period', period)
     if (machine) params.set('machine', machine)
     const qs = params.toString() ? `?${params.toString()}` : ''
-    return this.request<CostSummary>(`/api/summary${qs}`)
+    return this.request<CostSummary>(`/v1/summary${qs}`)
   }
 
   async getSessions(filter?: SessionFilter): Promise<Session[]> {
@@ -115,15 +127,15 @@ export class EconomyClient {
     if (filter?.offset != null) params.set('offset', String(filter.offset))
     if (filter?.since) params.set('since', filter.since)
     const qs = params.toString() ? `?${params.toString()}` : ''
-    return this.request<Session[]>(`/api/sessions${qs}`)
+    return this.request<Session[]>(`/v1/sessions${qs}`)
   }
 
   async getSessionRequests(sessionId: string): Promise<SessionRequest[]> {
-    return this.request<SessionRequest[]>(`/api/sessions/${encodeURIComponent(sessionId)}/requests`)
+    return this.request<SessionRequest[]>(`/v1/sessions/${encodeURIComponent(sessionId)}/requests`)
   }
 
   async getMachines(): Promise<MachineInfo[]> {
-    return this.request<MachineInfo[]>('/api/machines')
+    return this.request<MachineInfo[]>('/v1/machines')
   }
 
   async getTopSessions(n?: number, agent?: Agent | string): Promise<Session[]> {
@@ -131,41 +143,41 @@ export class EconomyClient {
     if (n != null) params.set('n', String(n))
     if (agent) params.set('agent', agent)
     const qs = params.toString() ? `?${params.toString()}` : ''
-    return this.request<Session[]>(`/api/top${qs}`)
+    return this.request<Session[]>(`/v1/top${qs}`)
   }
 
   async getModelBreakdown(): Promise<ModelBreakdown[]> {
-    return this.request<ModelBreakdown[]>('/api/models')
+    return this.request<ModelBreakdown[]>('/v1/models')
   }
 
   async getProjectBreakdown(period?: Period): Promise<ProjectBreakdown[]> {
     const qs = period ? `?period=${encodeURIComponent(period)}` : ''
-    return this.request<ProjectBreakdown[]>(`/api/projects${qs}`)
+    return this.request<ProjectBreakdown[]>(`/v1/projects${qs}`)
   }
 
   async getAgentBreakdown(period?: Period): Promise<AgentBreakdown[]> {
     const qs = period ? `?by=agent&period=${encodeURIComponent(period)}` : '?by=agent'
-    return this.request<AgentBreakdown[]>(`/api/breakdown${qs}`)
+    return this.request<AgentBreakdown[]>(`/v1/breakdown${qs}`)
   }
 
   async getAccountBreakdown(period?: Period): Promise<AccountBreakdown[]> {
     const qs = period ? `?period=${encodeURIComponent(period)}` : ''
-    return this.request<AccountBreakdown[]>(`/api/accounts${qs}`)
+    return this.request<AccountBreakdown[]>(`/v1/accounts${qs}`)
   }
 
   async getBudgets(): Promise<BudgetStatus[]> {
-    return this.request<BudgetStatus[]>('/api/budgets')
+    return this.request<BudgetStatus[]>('/v1/budgets')
   }
 
   async createBudget(input: CreateBudgetInput): Promise<BudgetStatus> {
-    return this.request<BudgetStatus>('/api/budgets', {
+    return this.request<BudgetStatus>('/v1/budgets', {
       method: 'POST',
       body: JSON.stringify(input),
     })
   }
 
   async deleteBudget(id: string): Promise<MutationOk> {
-    return this.request<MutationOk>(`/api/budgets/${encodeURIComponent(id)}`, {
+    return this.request<MutationOk>(`/v1/budgets/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     })
   }
@@ -174,56 +186,56 @@ export class EconomyClient {
     const params = new URLSearchParams()
     if (days != null) params.set('days', String(days))
     const qs = params.toString() ? `?${params.toString()}` : ''
-    return this.request<DailyPoint[]>(`/api/daily${qs}`)
+    return this.request<DailyPoint[]>(`/v1/daily${qs}`)
   }
 
   async getPricing(): Promise<ModelPricing[]> {
-    return this.request<ModelPricing[]>('/api/pricing')
+    return this.request<ModelPricing[]>('/v1/pricing')
   }
 
   async createPricing(input: CreatePricingInput): Promise<ModelPricing> {
-    return this.request<ModelPricing>('/api/pricing', {
+    return this.request<ModelPricing>('/v1/pricing', {
       method: 'POST',
       body: JSON.stringify(input),
     })
   }
 
   async deletePricing(model: string): Promise<MutationOk> {
-    return this.request<MutationOk>(`/api/pricing/${encodeURIComponent(model)}`, {
+    return this.request<MutationOk>(`/v1/pricing/${encodeURIComponent(model)}`, {
       method: 'DELETE',
     })
   }
 
   async getGoals(): Promise<GoalStatus[]> {
-    return this.request<GoalStatus[]>('/api/goals')
+    return this.request<GoalStatus[]>('/v1/goals')
   }
 
   async createGoal(input: CreateGoalInput): Promise<GoalStatus> {
-    return this.request<GoalStatus>('/api/goals', {
+    return this.request<GoalStatus>('/v1/goals', {
       method: 'POST',
       body: JSON.stringify(input),
     })
   }
 
   async deleteGoal(id: string): Promise<MutationOk> {
-    return this.request<MutationOk>(`/api/goals/${encodeURIComponent(id)}`, {
+    return this.request<MutationOk>(`/v1/goals/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     })
   }
 
   async getSubscriptions(): Promise<Subscription[]> {
-    return this.request<Subscription[]>('/api/subscriptions')
+    return this.request<Subscription[]>('/v1/subscriptions')
   }
 
   async createSubscription(input: CreateSubscriptionInput): Promise<Subscription> {
-    return this.request<Subscription>('/api/subscriptions', {
+    return this.request<Subscription>('/v1/subscriptions', {
       method: 'POST',
       body: JSON.stringify(input),
     })
   }
 
   async deleteSubscription(id: string): Promise<MutationOk> {
-    return this.request<MutationOk>(`/api/subscriptions/${encodeURIComponent(id)}`, {
+    return this.request<MutationOk>(`/v1/subscriptions/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     })
   }
@@ -232,18 +244,18 @@ export class EconomyClient {
     const params = new URLSearchParams()
     if (period) params.set('period', period)
     const qs = params.toString() ? `?${params.toString()}` : ''
-    return this.request<BillingSummary>(`/api/billing${qs}`)
+    return this.request<BillingSummary>(`/v1/billing${qs}`)
   }
 
   async syncBilling(opts?: { days?: number; providers?: Array<'anthropic' | 'openai' | 'gemini'> }): Promise<BillingSyncResult> {
-    return this.request<BillingSyncResult>('/api/billing/sync', {
+    return this.request<BillingSyncResult>('/v1/billing/sync', {
       method: 'POST',
       body: JSON.stringify(opts ?? {}),
     })
   }
 
   async sync(sources?: 'all' | Agent): Promise<SyncResult> {
-    return this.request<SyncResult>('/api/sync', {
+    return this.request<SyncResult>('/v1/sync', {
       method: 'POST',
       body: JSON.stringify({ sources: sources ?? 'all' }),
     })
@@ -254,7 +266,7 @@ export class EconomyClient {
     if (period) params.set('period', period)
     if (agent) params.set('agent', agent)
     const qs = params.toString() ? `?${params.toString()}` : ''
-    return this.request<UsageResponse>(`/api/usage${qs}`)
+    return this.request<UsageResponse>(`/v1/usage${qs}`)
   }
 
   async getSavings(period?: Period, agent?: Agent | string): Promise<SavingsSummary> {
@@ -262,14 +274,14 @@ export class EconomyClient {
     if (period) params.set('period', period)
     if (agent) params.set('agent', agent)
     const qs = params.toString() ? `?${params.toString()}` : ''
-    return this.request<SavingsSummary>(`/api/savings${qs}`)
+    return this.request<SavingsSummary>(`/v1/savings${qs}`)
   }
 
   async getFleet(period?: Period): Promise<FleetResponse> {
     const params = new URLSearchParams()
     if (period) params.set('period', period)
     const qs = params.toString() ? `?${params.toString()}` : ''
-    return this.request<FleetResponse>(`/api/fleet${qs}`)
+    return this.request<FleetResponse>(`/v1/fleet${qs}`)
   }
 
   async getBillingDiff(period?: Period, threshold?: number): Promise<BillingDiffSummary> {
@@ -277,6 +289,6 @@ export class EconomyClient {
     if (period) params.set('period', period)
     if (threshold != null) params.set('threshold', String(threshold))
     const qs = params.toString() ? `?${params.toString()}` : ''
-    return this.request<BillingDiffSummary>(`/api/billing/diff${qs}`)
+    return this.request<BillingDiffSummary>(`/v1/billing/diff${qs}`)
   }
 }
