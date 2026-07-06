@@ -17,6 +17,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["incorporation", "business"],
   },
   {
+    name: "stripe-billing-advanced",
+    displayName: "Stripe Billing Advanced",
+    description: "Advanced usage-based billing with pricing plans and billing intents",
+    category: "Commerce & Finance",
+    tags: ["billing", "usage-based", "stripe"],
+  },
+  {
     name: "shopify",
     displayName: "Shopify",
     description: "E-commerce platform",
