@@ -528,6 +528,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["fitness", "running", "cycling", "activities", "sports"],
   },
   {
+    name: "triple-whale",
+    displayName: "Triple Whale",
+    description: "Ecommerce analytics - summary, attribution, data-in, SQL, Moby",
+    category: "Data & Analytics",
+    tags: ["ecommerce", "analytics", "attribution", "marketing"],
+  },
+  {
     name: "typesense",
     displayName: "Typesense",
     description: "Open-source search engine for full-text, faceted, and vector search",
