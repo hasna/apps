@@ -255,7 +255,7 @@ async function findAvailablePort(preferred: number, strict = false): Promise<num
   throw new Error(`No available port found in range ${preferred}-${preferred + 99}`);
 }
 
-export async function startServer(requestedPort: number, options?: { open?: boolean; strict?: boolean }): Promise<void> {
+export async function startServer(requestedPort: number, options?: { open?: boolean; strict?: boolean }): Promise<number> {
   const shouldOpen = options?.open ?? true;
   const strict = options?.strict ?? false;
   loadConnectorVersions();
@@ -1070,4 +1070,6 @@ export async function startServer(requestedPort: number, options?: { open?: bool
       // Silently ignore if we can't open browser
     }
   }
+
+  return port;
 }

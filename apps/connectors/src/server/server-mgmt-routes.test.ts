@@ -3,29 +3,32 @@ import {
   test,
   expect,
   afterEach,
+  afterAll,
   beforeAll,
 } from "bun:test";
 import {
   existsSync,
   mkdirSync,
+  mkdtempSync,
   rmSync,
   readFileSync,
   readdirSync,
   writeFileSync,
 } from "fs";
 import { join } from "path";
-import { homedir } from "os";
+import { tmpdir } from "os";
 import { startServer } from "./serve.js";
 
-const HOME = homedir();
 const TEST_ID = `zzztest${process.pid}m`;
+const ORIGINAL_HOME = process.env.HOME;
+const TEST_HOME = mkdtempSync(join(tmpdir(), "open-connectors-server-mgmt-"));
 
 function testConfigDir(name: string): string {
-  return join(HOME, ".hasna", "connectors", name);
+  return join(TEST_HOME, ".hasna", "connectors", name);
 }
 
 function legacyTestConfigDir(name: string): string {
-  return join(HOME, ".hasna", "connectors", `connect-${name}`);
+  return join(TEST_HOME, ".hasna", "connectors", `connect-${name}`);
 }
 
 function cleanupTestConnectors(...names: string[]) {
@@ -48,9 +51,19 @@ describe("server management routes", () => {
   let baseUrl: string;
 
   beforeAll(async () => {
+    process.env.HOME = TEST_HOME;
     serverPort = 50000 + Math.floor(Math.random() * 10000);
+    serverPort = await startServer(serverPort, { open: false });
     baseUrl = `http://localhost:${serverPort}`;
-    await startServer(serverPort, { open: false });
+  });
+
+  afterAll(() => {
+    if (ORIGINAL_HOME) {
+      process.env.HOME = ORIGINAL_HOME;
+    } else {
+      delete process.env.HOME;
+    }
+    rmSync(TEST_HOME, { recursive: true, force: true });
   });
 
   describe("POST /api/connectors/:name/install", () => {

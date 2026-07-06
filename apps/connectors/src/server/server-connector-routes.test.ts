@@ -45,8 +45,8 @@ describe("server API routes", () => {
   beforeAll(async () => {
     process.env.HOME = TEST_HOME;
     serverPort = 40000 + Math.floor(Math.random() * 10000);
+    serverPort = await startServer(serverPort, { open: false });
     baseUrl = `http://localhost:${serverPort}`;
-    await startServer(serverPort, { open: false });
   });
 
   afterAll(() => {
