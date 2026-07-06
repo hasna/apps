@@ -514,6 +514,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["fitness", "running", "cycling", "activities", "sports"],
   },
   {
+    name: "tinybird",
+    displayName: "Tinybird",
+    description: "Real-time analytics and data platform",
+    category: "Data & Analytics",
+    tags: ["analytics", "data", "sql"],
+  },
+  {
     name: "uproc",
     displayName: "uProc",
     description: "Data processing and enrichment tools",
