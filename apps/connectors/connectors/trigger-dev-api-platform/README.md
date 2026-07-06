@@ -8,7 +8,7 @@ TypeScript connector for the [Trigger.dev](https://trigger.dev) management REST 
 - Trigger tasks with payloads and options
 - List and inspect schedules
 - Execute TRQL analytics queries
-- Multi-profile configuration with Bearer auth (secret key or PAT)
+- Multi-profile configuration with Bearer auth
 
 ## Quick Start
 
@@ -24,7 +24,9 @@ bun run dev runs list --period 7d
 | Method | Env / profile field | Notes |
 |--------|---------------------|-------|
 | Secret key | `TRIGGER_SECRET_KEY` / `apiKey` | Project-scoped (`tr_dev_*`, `tr_prod_*`) |
-| PAT | `TRIGGER_PAT` / `apiKey` | Also set `TRIGGER_PROJECT_REF` / `projectRef` |
+| PAT | `TRIGGER_ACCESS_TOKEN` or `TRIGGER_PAT` / `apiKey` | Also set `TRIGGER_PROJECT_REF` / `projectRef`; supported for project-scoped run listing |
+
+Task triggering, schedule operations, run retrieval, and TRQL queries require a Trigger.dev project secret key.
 
 ## Library Usage
 

@@ -60,7 +60,7 @@ describe('TriggerDevClient', () => {
     expect(recorded[0].method).toBe('GET');
   });
 
-  test('adds projectRef query param when using PAT', async () => {
+  test('does not add projectRef query param in the low-level client', async () => {
     const recorded = installFetch(() => ({ data: [] }));
     const client = new TriggerDevClient({
       apiKey: 'tr_pat_personal_token',
@@ -68,7 +68,7 @@ describe('TriggerDevClient', () => {
     });
     await client.get('/api/v1/runs');
     const url = new URL(recorded[0].url);
-    expect(url.searchParams.get('projectRef')).toBe('proj_abc123');
+    expect(url.searchParams.get('projectRef')).toBeNull();
   });
 
   test('does not add projectRef for secret keys', async () => {
@@ -105,6 +105,34 @@ describe('TriggerDevApiPlatform', () => {
     expect(url.pathname).toBe('/api/v1/runs');
     expect(url.searchParams.get('page[size]')).toBe('10');
     expect(url.searchParams.get('filter[status]')).toBe('COMPLETED');
+  });
+
+  test('listRuns uses project-scoped endpoint with PAT auth', async () => {
+    const recorded = installFetch(() => ({ data: [{ id: 'run_1' }] }));
+    const api = new TriggerDevApiPlatform({
+      apiKey: 'tr_pat_personal_token',
+      projectRef: 'proj_abc123',
+    });
+    await api.listRuns({ status: ['QUEUED'], pageSize: 5 });
+    const url = new URL(recorded[0].url);
+    expect(url.pathname).toBe('/api/v1/projects/proj_abc123/runs');
+    expect(url.searchParams.get('page[size]')).toBe('5');
+    expect(url.searchParams.get('filter[status]')).toBe('QUEUED');
+  });
+
+  test('listRuns requires projectRef with PAT auth', async () => {
+    const api = new TriggerDevApiPlatform({ apiKey: 'tr_pat_personal_token' });
+    await expect(api.listRuns()).rejects.toThrow('projectRef is required');
+  });
+
+  test('secret-key-only operations reject PAT auth before request', async () => {
+    const recorded = installFetch(() => ({ id: 'run_new' }));
+    const api = new TriggerDevApiPlatform({
+      apiKey: 'tr_pat_personal_token',
+      projectRef: 'proj_abc123',
+    });
+    await expect(api.triggerTask('my-task', { payload: {} })).rejects.toThrow('requires a Trigger.dev project secret key');
+    expect(recorded).toHaveLength(0);
   });
 
   test('triggerTask posts to task trigger endpoint', async () => {

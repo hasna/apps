@@ -30,10 +30,6 @@ export class TriggerDevClient {
   private buildUrl(path: string, params?: Record<string, string | number | boolean | undefined>): string {
     const url = new URL(`${this.baseUrl}${path}`);
 
-    if (this.projectRef && isPersonalAccessToken(this.apiKey)) {
-      url.searchParams.append('projectRef', this.projectRef);
-    }
-
     if (params) {
       for (const [key, value] of Object.entries(params)) {
         if (value !== undefined && value !== null && value !== '') {
@@ -139,6 +135,14 @@ export class TriggerDevClient {
       return `${this.apiKey.substring(0, 6)}...${this.apiKey.substring(this.apiKey.length - 4)}`;
     }
     return '***';
+  }
+
+  isPersonalAccessToken(): boolean {
+    return isPersonalAccessToken(this.apiKey);
+  }
+
+  getProjectRef(): string | undefined {
+    return this.projectRef;
   }
 }
 

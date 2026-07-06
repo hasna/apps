@@ -137,6 +137,7 @@ export function saveProfile(config: ProfileConfig, profile?: string): void {
 
 export function getApiKey(): string | undefined {
   return process.env.TRIGGER_SECRET_KEY
+    || process.env.TRIGGER_ACCESS_TOKEN
     || process.env.TRIGGER_PAT
     || loadProfile().apiKey;
 }
