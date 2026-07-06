@@ -1,0 +1,57 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: access
+      POSTGRES_USER: access
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_password
+    secrets: [pg_password]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U access"]
+      interval: 5s
+      retries: 10
+  serve:
+    image: oven/bun:1
+    # invoke the serve bin directly (NOT `bunx @hasna/access access-serve`, which runs the CLI
+    # and passes "access-serve" as a bogus arg). --package selects the correct bin.
+    command: ["bunx", "--package", "@hasna/access", "access-serve"]
+    environment:
+      HASNA_ACCESS_STORAGE_MODE: cloud
+      HASNA_ACCESS_DATABASE_URL_FILE: /run/secrets/database_url
+      HASNA_ACCESS_PORT: "3483"
+      # Bind 0.0.0.0 so the published 3483 is reachable; the default loopback bind is
+      # invisible to Docker port forwarding. A non-loopback bind (and cloud mode)
+      # forces auth ON and is asserted fail-closed at startup (assertAuthPosture),
+      # satisfied here by wiring API_CREDENTIALS. Never publish this port without them.
+      HASNA_ACCESS_BIND_HOST: "0.0.0.0"
+      HASNA_ACCESS_CORS_ORIGINS: ${CORS_ORIGINS:-}
+      HASNA_ACCESS_API_CREDENTIALS: ${ACCESS_API_CREDENTIALS:-}
+    secrets: [database_url]
+    depends_on: { db: { condition: service_healthy } }
+    ports: ["3483:3483"]
+  mcp:
+    image: oven/bun:1
+    # --package selects the MCP bin; a bare `bunx @hasna/access access-mcp` would run
+    # the CLI and treat "access-mcp" as a bogus argument. (BUILD-SPEC §6.4)
+    command: ["bunx", "--package", "@hasna/access", "access-mcp", "--http", "--port", "8887"]
+    environment:
+      HASNA_ACCESS_STORAGE_MODE: cloud
+      HASNA_ACCESS_DATABASE_URL_FILE: /run/secrets/database_url
+      MCP_HTTP: "1"
+      MCP_HTTP_PORT: "8887"
+      # Bind 0.0.0.0 so the published 8887 is reachable; the default loopback
+      # bind is invisible to Docker port forwarding. A non-loopback bind forces auth
+      # ON and is asserted fail-closed at startup (assertMcpServeSafety), satisfied
+      # here by wiring API_CREDENTIALS. Never publish this port without credentials.
+      HASNA_ACCESS_MCP_BIND_HOST: "0.0.0.0"
+      HASNA_ACCESS_API_CREDENTIALS: ${ACCESS_API_CREDENTIALS:-}
+    secrets: [database_url]
+    depends_on: { db: { condition: service_healthy } }
+    ports: ["8887:8887"]
+secrets:
+  pg_password:
+    file: ./secrets/pg_password
+  database_url:
+    file: ./secrets/database_url # postgres://access:<pw>@db:5432/access?sslmode=verify-full
+volumes: { pgdata: {} }
