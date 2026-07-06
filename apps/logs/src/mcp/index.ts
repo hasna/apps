@@ -300,7 +300,9 @@ export function buildServer(): McpServer {
     schema: Record<string, z.ZodTypeAny>,
     handler: McpToolHandler,
   ) {
-    return server.tool(
+    // Cast the schema to `any` at the call site to stop the MCP SDK's generic
+    // inference from recursing into every zod shape (TS2589 "excessively deep").
+    return (server.tool as (...a: unknown[]) => unknown)(
       name,
       desc,
       schema,

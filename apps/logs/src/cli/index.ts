@@ -519,6 +519,70 @@ storageCmd
     );
   });
 
+// ── cloud database (PURE REMOTE, Amendment A1) ────────────
+const dbCmd = program
+  .command("db")
+  .description(
+    "Cloud Postgres schema commands (HASNA_LOGS_STORAGE_MODE=cloud)",
+  );
+
+dbCmd
+  .command("migrate")
+  .description("Apply pending cloud Postgres migrations (schema + api_keys)")
+  .option("--dry-run", "Report the plan without applying anything")
+  .option("--json", "Output as JSON")
+  .action(async (opts) => {
+    const { runLogsCloudMigrations } = await import("../db/pg-migrate.ts");
+    const result = await runLogsCloudMigrations({
+      dryRun: Boolean(opts.dryRun),
+    });
+    const applied = result.plan
+      .filter((item) => item.state === "pending")
+      .map((item) => item.migration.id);
+    if (opts.json) {
+      printJson({
+        dryRun: result.dryRun,
+        pending: applied,
+        appliedCount: result.dryRun ? 0 : applied.length,
+        ledger: result.applied.map((m) => m.id),
+      });
+      return;
+    }
+    if (result.dryRun) {
+      console.log(
+        applied.length === 0
+          ? "Schema up to date; no pending migrations."
+          : `Pending migrations: ${applied.join(", ")}`,
+      );
+    } else {
+      console.log(
+        applied.length === 0
+          ? "Schema already up to date."
+          : `Applied ${applied.length} migration(s): ${applied.join(", ")}`,
+      );
+    }
+  });
+
+dbCmd
+  .command("status")
+  .description("Show applied/pending cloud migrations")
+  .option("--json", "Output as JSON")
+  .action(async (opts) => {
+    const { runLogsCloudMigrations } = await import("../db/pg-migrate.ts");
+    const result = await runLogsCloudMigrations({ dryRun: true });
+    const pending = result.plan
+      .filter((item) => item.state === "pending")
+      .map((item) => item.migration.id);
+    if (opts.json) {
+      printJson({ applied: result.applied.map((m) => m.id), pending });
+      return;
+    }
+    console.log(
+      `Applied: ${result.applied.map((m) => m.id).join(", ") || "(none)"}`,
+    );
+    console.log(`Pending: ${pending.join(", ") || "(none)"}`);
+  });
+
 // ── logs doctor ───────────────────────────────────────────
 const doctorCmd = program
   .command("doctor")

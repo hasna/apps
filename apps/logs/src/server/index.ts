@@ -6,9 +6,11 @@ import { Hono } from "hono";
 import { serveStatic } from "hono/bun";
 import { cors } from "hono/cors";
 import { getDb } from "../db/index.ts";
+import { resolveStorageMode } from "../generated/storage-kit/index.ts";
 import { getBrowserScript } from "../lib/browser-script.ts";
 import { getHealth } from "../lib/health.ts";
 import {
+  PACKAGE_VERSION,
   exitIfMetadataRequest,
   hasOption,
   readOptionValue,
@@ -19,6 +21,7 @@ import {
   isLocalOpenModeEnabled,
   requireApiTokenOrBrowserIngest,
 } from "./auth.ts";
+import { buildCloudServe } from "./cloud/serve.ts";
 import { resolveCorsOrigin } from "./cors.ts";
 import { alertsRoutes } from "./routes/alerts.ts";
 import { eventsRoutes } from "./routes/events.ts";
@@ -46,82 +49,98 @@ const tokenArg = readOptionValue(["--token"]);
 if (tokenArg) process.env.HASNA_LOGS_API_TOKEN = tokenArg;
 if (hasOption(["--local-open"])) process.env.HASNA_LOGS_LOCAL_OPEN = "1";
 
-const PORT = Number(portArg ?? process.env.LOGS_PORT ?? 3460);
-const db = getDb();
-const app = new Hono();
+const PORT = Number(
+  portArg ?? process.env.LOGS_PORT ?? process.env.PORT ?? 3460,
+);
 const serverDir = dirname(fileURLToPath(import.meta.url));
-const dashboardRoot = resolveDashboardRoot();
 
-app.use(
-  "*",
-  cors({
-    origin: (origin) => resolveCorsOrigin(origin),
-    allowHeaders: [
-      "Content-Type",
-      "Authorization",
-      "X-Logs-Token",
-      "X-Logs-Browser-Token",
-      "X-Logs-Write-Token",
-    ],
-    allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  }),
-);
+// PURE REMOTE (Amendment A1): in cloud mode the serve is a stateless API in
+// front of the shared cloud Postgres — no SQLite, no scheduler, API-key auth.
+const cloudMode = resolveStorageMode("logs", process.env).mode === "cloud";
 
-// Browser tracking script
-app.get("/script.js", (c) => {
-  const host = `${c.req.header("x-forwarded-proto") ?? "http"}://${c.req.header("host") ?? `localhost:${PORT}`}`;
-  c.header("Content-Type", "application/javascript");
-  c.header("Cache-Control", "public, max-age=300");
-  return c.text(getBrowserScript(host));
-});
+function buildLocalServe() {
+  const db = getDb();
+  const app = new Hono();
+  const dashboardRoot = resolveDashboardRoot();
 
-// API routes
-app.use("/api/*", requireApiTokenOrBrowserIngest(db));
-app.route("/api/logs", logsRoutes(db));
-app.route("/api/logs/stream", streamRoutes(db));
-app.route("/api/events", eventsRoutes(db));
-app.route("/api/test-reports", testReportsRoutes(db));
-app.route("/api/otel", otelRoutes(db));
-app.route("/api/projects", projectsRoutes(db));
-app.route("/api/jobs", jobsRoutes(db));
-app.route("/api/alerts", alertsRoutes(db));
-app.route("/api/issues", issuesRoutes(db));
-app.route("/api/perf", perfRoutes(db));
+  app.use(
+    "*",
+    cors({
+      origin: (origin) => resolveCorsOrigin(origin),
+      allowHeaders: [
+        "Content-Type",
+        "Authorization",
+        "X-Logs-Token",
+        "X-Logs-Browser-Token",
+        "X-Logs-Write-Token",
+      ],
+      allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    }),
+  );
 
-app.get("/health", (c) => c.json(getHealth(db)));
-app.get("/dashboard", (c) => c.redirect("/dashboard/"));
-app.use(
-  "/dashboard/*",
-  serveStatic({
-    root: dashboardRoot,
-    rewriteRequestPath: (p) => p.replace(/^\/dashboard/, ""),
-  }),
-);
-app.get("/", (c) =>
-  c.json({
-    service: "@hasna/logs",
-    port: PORT,
-    status: "ok",
-    dashboard: `http://localhost:${PORT}/dashboard/`,
-  }),
-);
+  // Browser tracking script
+  app.get("/script.js", (c) => {
+    const host = `${c.req.header("x-forwarded-proto") ?? "http"}://${c.req.header("host") ?? `localhost:${PORT}`}`;
+    c.header("Content-Type", "application/javascript");
+    c.header("Cache-Control", "public, max-age=300");
+    return c.text(getBrowserScript(host));
+  });
 
-// Start scheduler
-startScheduler(db);
+  // API routes
+  app.use("/api/*", requireApiTokenOrBrowserIngest(db));
+  app.route("/api/logs", logsRoutes(db));
+  app.route("/api/logs/stream", streamRoutes(db));
+  app.route("/api/events", eventsRoutes(db));
+  app.route("/api/test-reports", testReportsRoutes(db));
+  app.route("/api/otel", otelRoutes(db));
+  app.route("/api/projects", projectsRoutes(db));
+  app.route("/api/jobs", jobsRoutes(db));
+  app.route("/api/alerts", alertsRoutes(db));
+  app.route("/api/issues", issuesRoutes(db));
+  app.route("/api/perf", perfRoutes(db));
 
-const apiAuthMode = getConfiguredApiToken()
-  ? "token"
-  : isLocalOpenModeEnabled()
-    ? "local-open"
-    : "locked";
-console.log(
-  `@hasna/logs server running on http://localhost:${PORT} (api auth: ${apiAuthMode})`,
-);
+  app.get("/health", (c) => c.json(getHealth(db)));
+  app.get("/version", (c) =>
+    c.json({ status: "ok", version: PACKAGE_VERSION, mode: "local" }),
+  );
+  app.get("/ready", (c) =>
+    c.json({ status: "ok", version: PACKAGE_VERSION, mode: "local" }),
+  );
+  app.get("/dashboard", (c) => c.redirect("/dashboard/"));
+  app.use(
+    "/dashboard/*",
+    serveStatic({
+      root: dashboardRoot,
+      rewriteRequestPath: (p) => p.replace(/^\/dashboard/, ""),
+    }),
+  );
+  app.get("/", (c) =>
+    c.json({
+      service: "@hasna/logs",
+      port: PORT,
+      status: "ok",
+      dashboard: `http://localhost:${PORT}/dashboard/`,
+    }),
+  );
 
-export default {
-  port: PORT,
-  fetch: app.fetch,
-};
+  // Start scheduler
+  startScheduler(db);
+
+  const apiAuthMode = getConfiguredApiToken()
+    ? "token"
+    : isLocalOpenModeEnabled()
+      ? "local-open"
+      : "locked";
+  console.log(
+    `@hasna/logs server running on http://localhost:${PORT} (api auth: ${apiAuthMode})`,
+  );
+
+  return { port: PORT, fetch: app.fetch };
+}
+
+const serveExport = cloudMode ? buildCloudServe(PORT) : buildLocalServe();
+
+export default serveExport;
 
 function resolveDashboardRoot(): string {
   const cwdDashboardRoot = resolve(process.cwd(), "dashboard/dist");
