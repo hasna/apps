@@ -17,6 +17,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["incorporation", "business"],
   },
   {
+    name: "stripeapps",
+    displayName: "Stripe Apps",
+    description: "Items, events, and search via the Stripe Apps API",
+    category: "Commerce & Finance",
+    tags: ["payments", "apps"],
+  },
+  {
     name: "shopify",
     displayName: "Shopify",
     description: "E-commerce platform",
