@@ -562,4 +562,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Data & Analytics",
     tags: ["scraping", "data", "api"],
   },
+  {
+    name: "tableau",
+    displayName: "Tableau",
+    description: "Data visualization — workbooks, views, dashboards, and data sources",
+    category: "Data & Analytics",
+    tags: ["analytics", "bi", "visualization", "dashboards"],
+  },
 ];
