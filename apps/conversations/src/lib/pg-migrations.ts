@@ -613,4 +613,15 @@ export const PG_MIGRATIONS: string[] = [
   );
   INSERT INTO _migrations (id) VALUES (1) ON CONFLICT DO NOTHING;
   `,
+  // Migration 2: hot-path indexes for the high-volume messages table.
+  // messages is the dominant read/write table; these two composite/partial
+  // indexes target the two hottest query shapes that migration 1 left on
+  // single-column indexes:
+  //   - channel history read + pagination: WHERE channel = ? ORDER BY created_at, id
+  //   - unread inbox fan-in:               WHERE to_agent = ? AND read_at IS NULL
+  `
+  CREATE INDEX IF NOT EXISTS idx_messages_channel_created ON messages(channel, created_at, id);
+  CREATE INDEX IF NOT EXISTS idx_messages_to_agent_unread ON messages(to_agent) WHERE read_at IS NULL;
+  INSERT INTO _migrations (id) VALUES (2) ON CONFLICT DO NOTHING;
+  `,
 ];
