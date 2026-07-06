@@ -723,7 +723,7 @@ function detectHighEntropyStrings(
         severity: Severity.Medium,
         file: filePath,
         line,
-        message: `High-entropy hex string detected (possible secret): ${token.substring(0, 16)}...`,
+        message: "High-entropy hex string detected (possible secret)",
         code_snippet: getCodeSnippet(content, line),
       });
     }
@@ -741,7 +741,7 @@ function detectHighEntropyStrings(
         severity: Severity.Medium,
         file: filePath,
         line,
-        message: `High-entropy base64 string detected (possible secret): ${token.substring(0, 16)}...`,
+        message: "High-entropy base64 string detected (possible secret)",
         code_snippet: getCodeSnippet(content, line),
       });
     }

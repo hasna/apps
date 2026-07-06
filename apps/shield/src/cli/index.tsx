@@ -13,6 +13,7 @@ import { registerSupplyChainCommands } from "./commands/supply-chain.js";
 import { registerAlertsCommand } from "./commands/alerts.js";
 import { registerSecretsCommand } from "./commands/secrets.js";
 import { registerFleetPackageCommand } from "./commands/fleet-package.js";
+import { registerOssSecretPolicyCommand } from "./commands/oss-secret-policy.js";
 
 const program = new Command();
 
@@ -32,6 +33,7 @@ registerSupplyChainCommands(program);
 registerAlertsCommand(program);
 registerSecretsCommand(program);
 registerFleetPackageCommand(program);
+registerOssSecretPolicyCommand(program);
 registerEventsCommands(program, { source: "shield" });
 
 program.parse();
