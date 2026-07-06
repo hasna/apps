@@ -388,6 +388,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["nft", "blockchain", "digital collectibles", "tokens", "web3"],
   },
   {
+    name: "unifold",
+    displayName: "Unifold",
+    description: "Cross-chain deposit API",
+    category: "Commerce & Finance",
+    tags: ["crypto", "payments", "cross-chain", "treasury"],
+  },
+  {
     name: "whal3s",
     displayName: "Whal3s",
     description: "NFT utility and Web3 engagement platform",
