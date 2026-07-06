@@ -16,6 +16,7 @@ export const SHADOW_TRIGGER_TABLES: Array<{
 }> = [
   { table: "tasks", objectType: "tasks", deletes: true },
   { table: "projects", objectType: "projects", deletes: true },
+  { table: "project_machine_paths", objectType: "project_machine_paths", deletes: true },
   { table: "plans", objectType: "plans", deletes: true },
   { table: "agents", objectType: "agents", deletes: false },
   { table: "task_lists", objectType: "task_lists", deletes: true },
@@ -38,8 +39,10 @@ export function installShadowOutboxSchema(db: Database): void {
     attempts INTEGER NOT NULL DEFAULT 0,
     next_attempt_at INTEGER NOT NULL DEFAULT 0,
     last_error TEXT,
-    status TEXT NOT NULL DEFAULT 'pending'
+    status TEXT NOT NULL DEFAULT 'pending',
+    revision INTEGER NOT NULL DEFAULT 0
   )`);
+  ensureColumn(db, "shadow_outbox", "revision", "INTEGER NOT NULL DEFAULT 0");
   // Coalesce: keep at most one pending op per object so the queue tracks the
   // latest state instead of growing unbounded under hot write loops.
   db.run(
@@ -58,12 +61,24 @@ export function installShadowOutboxSchema(db: Database): void {
       .get(table);
     if (!exists) continue;
 
-    db.run(upsertTriggerSql(`shadow_ob_${table}_ai`, table, objectType, "INSERT", "NEW"));
-    db.run(upsertTriggerSql(`shadow_ob_${table}_au`, table, objectType, "UPDATE", "NEW"));
+    const insertTrigger = `shadow_ob_${table}_ai`;
+    const updateTrigger = `shadow_ob_${table}_au`;
+    db.run(`DROP TRIGGER IF EXISTS ${insertTrigger}`);
+    db.run(`DROP TRIGGER IF EXISTS ${updateTrigger}`);
+    db.run(upsertTriggerSql(insertTrigger, table, objectType, "INSERT", "NEW"));
+    db.run(upsertTriggerSql(updateTrigger, table, objectType, "UPDATE", "NEW"));
     if (deletes) {
-      db.run(deleteTriggerSql(`shadow_ob_${table}_ad`, table, objectType));
+      const deleteTrigger = `shadow_ob_${table}_ad`;
+      db.run(`DROP TRIGGER IF EXISTS ${deleteTrigger}`);
+      db.run(deleteTriggerSql(deleteTrigger, table, objectType));
     }
   }
+}
+
+function ensureColumn(db: Database, table: string, column: string, definition: string): void {
+  const rows = db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (rows.some((row) => row.name === column)) return;
+  db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
 function upsertTriggerSql(
@@ -76,10 +91,10 @@ function upsertTriggerSql(
   return `CREATE TRIGGER IF NOT EXISTS ${name}
     AFTER ${event} ON ${table}
     BEGIN
-      INSERT INTO shadow_outbox(object_type, object_id, op, enqueued_at, attempts, next_attempt_at, last_error, status)
-      VALUES('${objectType}', ${row}.id, 'upsert', CAST(strftime('%s','now') AS INTEGER) * 1000, 0, 0, NULL, 'pending')
+      INSERT INTO shadow_outbox(object_type, object_id, op, enqueued_at, attempts, next_attempt_at, last_error, status, revision)
+      VALUES('${objectType}', ${row}.id, 'upsert', CAST(strftime('%s','now') AS INTEGER) * 1000, 0, 0, NULL, 'pending', 0)
       ON CONFLICT(object_type, object_id) WHERE status='pending'
-      DO UPDATE SET op='upsert', enqueued_at=excluded.enqueued_at, attempts=0, next_attempt_at=0, last_error=NULL;
+      DO UPDATE SET op='upsert', enqueued_at=excluded.enqueued_at, attempts=0, next_attempt_at=0, last_error=NULL, revision=shadow_outbox.revision + 1;
     END`;
 }
 
@@ -87,9 +102,9 @@ function deleteTriggerSql(name: string, table: string, objectType: string): stri
   return `CREATE TRIGGER IF NOT EXISTS ${name}
     AFTER DELETE ON ${table}
     BEGIN
-      INSERT INTO shadow_outbox(object_type, object_id, op, enqueued_at, attempts, next_attempt_at, last_error, status)
-      VALUES('${objectType}', OLD.id, 'delete', CAST(strftime('%s','now') AS INTEGER) * 1000, 0, 0, NULL, 'pending')
+      INSERT INTO shadow_outbox(object_type, object_id, op, enqueued_at, attempts, next_attempt_at, last_error, status, revision)
+      VALUES('${objectType}', OLD.id, 'delete', CAST(strftime('%s','now') AS INTEGER) * 1000, 0, 0, NULL, 'pending', 0)
       ON CONFLICT(object_type, object_id) WHERE status='pending'
-      DO UPDATE SET op='delete', enqueued_at=excluded.enqueued_at, attempts=0, next_attempt_at=0, last_error=NULL;
+      DO UPDATE SET op='delete', enqueued_at=excluded.enqueued_at, attempts=0, next_attempt_at=0, last_error=NULL, revision=shadow_outbox.revision + 1;
     END`;
 }

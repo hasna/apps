@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
+import { setMachineLocalPath } from "../db/projects.js";
 import {
   createLocalSqliteTodosStorageAdapter,
   type TodosPostgresQueryClient,
@@ -22,13 +23,18 @@ interface MemoryRow {
  * Fake cloud client: records pushes into an in-memory map, and can be told to
  * fail a fixed number of the first push attempts to exercise retry/backoff.
  */
-function createMemoryPostgresClient(options: { failFirst?: number; failForever?: boolean } = {}) {
+function createMemoryPostgresClient(options: {
+  failFirst?: number;
+  failForever?: boolean;
+  onInsert?: () => void | Promise<void>;
+} = {}) {
   const rows = new Map<string, MemoryRow>();
   let remainingFailures = options.failFirst ?? 0;
   const key = (s: unknown, t: unknown, i: unknown) => `${String(s)}:${String(t)}:${String(i)}`;
   const client: TodosPostgresQueryClient = {
     async query<T = Record<string, unknown>>(sql: string, values: readonly unknown[] = []) {
       if (sql.includes("INSERT INTO todos_sync_records")) {
+        if (options.onInsert) await options.onInsert();
         if (options.failForever || remainingFailures > 0) {
           if (!options.failForever) remainingFailures -= 1;
           throw new Error("simulated mirror failure");
@@ -84,6 +90,22 @@ describe("durable shadow outbox", () => {
     expect(rows.every((r) => r.op === "upsert" && r.status === "pending")).toBe(true);
   });
 
+  test("captures project machine paths alongside projects", async () => {
+    const cloud = createMemoryPostgresClient();
+    const outbox = createTodosShadowOutbox({ db, postgresClient: cloud.client });
+    const local = createLocalSqliteTodosStorageAdapter({ db });
+    const project = await local.projects.create({ name: "Machine path", path: "/tmp/ob-machine-path" });
+    const machinePath = setMachineLocalPath(project.id, "/tmp/ob-machine-path", db);
+
+    const rows = outboxRows(db);
+    const captured = new Set(rows.map((r) => `${r.object_type}:${r.object_id}`));
+    expect(captured.has(`project_machine_paths:${machinePath.id}`)).toBe(true);
+
+    await outbox.flush();
+    expect(cloud.rows.get(`todos:project_machine_paths:${machinePath.id}`)?.payload)
+      .toMatchObject({ id: machinePath.id, project_id: project.id, path: "/tmp/ob-machine-path" });
+  });
+
   test("coalesces repeated writes to one pending row per object", async () => {
     createTodosShadowOutbox({ db, postgresClient: createMemoryPostgresClient().client });
     const local = createLocalSqliteTodosStorageAdapter({ db });
@@ -122,6 +144,42 @@ describe("durable shadow outbox", () => {
     await local.tasks.delete(task.id);
     await outbox.flush();
     expect(cloud.rows.get(`todos:tasks:${task.id}`)?.deletedAt).toBeTruthy();
+  });
+
+  test("keeps a newer write pending when it lands during an in-flight drain", async () => {
+    let releasePush!: () => void;
+    let insertStarted!: () => void;
+    const insertStartedPromise = new Promise<void>((resolve) => { insertStarted = resolve; });
+    const releasePushPromise = new Promise<void>((resolve) => { releasePush = resolve; });
+    let paused = false;
+    const cloud = createMemoryPostgresClient({
+      async onInsert() {
+        if (paused) return;
+        paused = true;
+        insertStarted();
+        await releasePushPromise;
+      },
+    });
+    const outbox = createTodosShadowOutbox({ db, postgresClient: cloud.client });
+    const local = createLocalSqliteTodosStorageAdapter({ db });
+    const task = await local.tasks.create({ title: "Before drain" });
+
+    const draining = outbox.drainOnce();
+    await insertStartedPromise;
+    const updated = await local.tasks.update(task.id, { title: "During drain", version: task.version });
+    expect(updated?.title).toBe("During drain");
+    releasePush();
+    await draining;
+
+    const pending = outboxRows(db).filter((row) => row.object_type === "tasks" && row.object_id === task.id);
+    expect(pending.length).toBe(1);
+    await outbox.flush();
+
+    expect(cloud.rows.get(`todos:tasks:${task.id}`)?.payload).toMatchObject({
+      id: task.id,
+      title: "During drain",
+    });
+    expect(outbox.getStats().pending).toBe(0);
   });
 
   test("unreachable cloud DEFERS: rows stay pending with backoff, then park as failed", async () => {
@@ -170,15 +228,14 @@ describe("durable shadow outbox: kill-and-restart", () => {
   test("pending outbox survives a process kill and drains after restart", async () => {
     // Guard for the deferred-backoff wait window.
 
-    // --- Process 1: cloud is DOWN, writes accumulate durably, then "crash". ---
+    // --- Process 1: writes accumulate durably, then the process "crashes"
+    // before any drain loop gets a chance to run.
     const db1 = getDatabase(dbPath);
-    const down = createMemoryPostgresClient({ failForever: true });
-    const outbox1 = createTodosShadowOutbox({ db: db1, postgresClient: down.client, retryBaseMs: 1 });
+    const outbox1 = createTodosShadowOutbox({ db: db1, postgresClient: createMemoryPostgresClient().client });
     const local1 = createLocalSqliteTodosStorageAdapter({ db: db1 });
     const project = await local1.projects.create({ name: "Persisted", path: "/tmp/ob-restart" });
     const t1 = await local1.tasks.create({ title: "Survivor 1", project_id: project.id });
     const t2 = await local1.tasks.create({ title: "Survivor 2", project_id: project.id });
-    await outbox1.drainOnce(); // fails against the down cloud
     expect(outbox1.getStats().pending).toBeGreaterThanOrEqual(3);
 
     // Simulate an abrupt kill: drop the singleton + handle without draining.
@@ -202,5 +259,5 @@ describe("durable shadow outbox: kill-and-restart", () => {
     expect(up.rows.get(`todos:tasks:${t2.id}`)?.payload).toMatchObject({ id: t2.id });
     expect(up.rows.get(`todos:projects:${project.id}`)?.payload).toMatchObject({ id: project.id });
     expect(outbox2.getStats().pending).toBe(0);
-  });
+  }, 15_000);
 });

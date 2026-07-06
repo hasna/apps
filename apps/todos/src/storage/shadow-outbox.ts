@@ -93,6 +93,7 @@ interface OutboxRow {
   op: "upsert" | "delete";
   enqueued_at: number;
   attempts: number;
+  revision: number;
 }
 
 const MAX_BACKOFF_MS = 5 * 60_000;
@@ -219,7 +220,7 @@ export class TodosShadowOutbox {
       const now = Date.now();
       const rows = this.db
         .query<OutboxRow, [number, number]>(
-          `SELECT seq, object_type, object_id, op, enqueued_at, attempts
+          `SELECT seq, object_type, object_id, op, enqueued_at, attempts, revision
              FROM shadow_outbox
             WHERE status='pending' AND next_attempt_at <= ?
             ORDER BY seq ASC
@@ -244,7 +245,7 @@ export class TodosShadowOutbox {
       const snapshot = await this.buildSnapshot(row);
       await this.syncStore.pushSnapshot(snapshot, {});
       const lagMs = Date.now() - row.enqueued_at;
-      this.db.run(`DELETE FROM shadow_outbox WHERE seq=?`, [row.seq]);
+      this.db.run(`DELETE FROM shadow_outbox WHERE seq=? AND revision=?`, [row.seq, row.revision]);
       this.metrics.mirrored += 1;
       this.metrics.lastMirrorAt = new Date().toISOString();
       this.metrics.lastLagMs = lagMs;
@@ -256,16 +257,16 @@ export class TodosShadowOutbox {
       const attempts = row.attempts + 1;
       if (attempts > this.maxRetries) {
         this.db.run(
-          `UPDATE shadow_outbox SET attempts=?, last_error=?, status='failed' WHERE seq=?`,
-          [attempts, message, row.seq],
+          `UPDATE shadow_outbox SET attempts=?, last_error=?, status='failed' WHERE seq=? AND revision=?`,
+          [attempts, message, row.seq, row.revision],
         );
         this.onEvent?.({ type: "parked", objectType: row.object_type, id: row.object_id, error: message });
         return;
       }
       const delay = Math.min(MAX_BACKOFF_MS, this.retryBaseMs * 2 ** (attempts - 1));
       this.db.run(
-        `UPDATE shadow_outbox SET attempts=?, next_attempt_at=?, last_error=? WHERE seq=?`,
-        [attempts, Date.now() + delay, message, row.seq],
+        `UPDATE shadow_outbox SET attempts=?, next_attempt_at=?, last_error=? WHERE seq=? AND revision=?`,
+        [attempts, Date.now() + delay, message, row.seq, row.revision],
       );
       this.onEvent?.({ type: "retry", objectType: row.object_type, id: row.object_id, attempt: attempts, error: message });
     }
@@ -287,6 +288,7 @@ export class TodosShadowOutbox {
     switch (row.object_type) {
       case "tasks": snapshot.tasks.push(record as unknown as TodosStorageSnapshot["tasks"][number]); break;
       case "projects": snapshot.projects.push(record as unknown as TodosStorageSnapshot["projects"][number]); break;
+      case "project_machine_paths": snapshot.projectMachinePaths?.push(record as unknown as NonNullable<TodosStorageSnapshot["projectMachinePaths"]>[number]); break;
       case "plans": snapshot.plans.push(record as unknown as TodosStorageSnapshot["plans"][number]); break;
       case "agents": snapshot.agents.push(record as unknown as TodosStorageSnapshot["agents"][number]); break;
       case "task_lists": snapshot.taskLists.push(record as unknown as TodosStorageSnapshot["taskLists"][number]); break;
@@ -304,6 +306,12 @@ export class TodosShadowOutbox {
     switch (objectType) {
       case "tasks": return (await this.local.tasks.get(id)) as Record<string, unknown> | null;
       case "projects": return (await this.local.projects.get(id)) as Record<string, unknown> | null;
+      case "project_machine_paths": {
+        const raw = this.db
+          .query<Record<string, unknown>, [string]>(`SELECT * FROM project_machine_paths WHERE id=?`)
+          .get(id);
+        return raw ?? null;
+      }
       case "plans": return (await this.local.plans.get(id)) as Record<string, unknown> | null;
       case "agents": return (await this.local.agents.get(id)) as Record<string, unknown> | null;
       case "task_lists": return (await this.local.taskLists.get(id)) as Record<string, unknown> | null;
