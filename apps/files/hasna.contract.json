@@ -1,0 +1,31 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "files",
+  "class": "service",
+  "contractVersion": "v1",
+  "kitVersion": "0.4.1",
+  "description": "Agent-first file management — index local folders and S3 buckets, sync Google Drive, tag, search, organize, and serve an evidence vault. CLI + MCP + HTTP API (files-serve) + generated SDK. Cloud mode (HASNA_FILES_STORAGE_MODE=cloud) is PURE REMOTE per Amendment A1: the serve process reads/writes the shared cloud Postgres directly with API-key auth via @hasna/contracts; file bytes stay in S3.",
+  "bins": ["files", "files-mcp", "files-serve", "files-migrate"],
+  "storage": {
+    "mode": "local",
+    "envPrefix": "HASNA_FILES_",
+    "aliasEnvPrefix": "FILES_",
+    "databaseUrlSecretRef": "hasna/oss/files/database-url",
+    "sqlitePath": "~/.hasna/files/files.db"
+  },
+  "metadata": {
+    "service": {
+      "port": 19432,
+      "healthPath": "/health",
+      "readyPath": "/ready",
+      "versionPath": "/version",
+      "apiVersion": "v1",
+      "auth": "api-key",
+      "signingSecretSecretRef": "hasna/oss/files/api-key-signing-secret"
+    },
+    "client": {
+      "apiUrlEnv": "FILES_API_URL",
+      "apiKeyEnv": "FILES_API_KEY"
+    }
+  }
+}

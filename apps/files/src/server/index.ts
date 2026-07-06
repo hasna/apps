@@ -59,14 +59,22 @@ const port = await findFreePort(requestedPort);
 if (port !== requestedPort) console.log(`Port ${requestedPort} in use, using ${port}`);
 startServer(port);
 
-// Auto-index all enabled local sources on startup (non-blocking)
-const machine = getCurrentMachine();
-for (const source of listSources(machine.id).filter((s) => s.enabled && s.type === "local")) {
-  indexLocalSource(source, machine.id).catch(() => {});
-}
+// PURE REMOTE (Amendment A1): when the service runs in cloud mode it talks to
+// RDS directly and does NOT index local folders or sync peers (that degraded
+// outbox/cache path lives in the CLIENT, not the service).
+const cloudMode = Boolean(
+  (process.env.HASNA_FILES_STORAGE_MODE ?? process.env.FILES_STORAGE_MODE) &&
+  (process.env.HASNA_FILES_DATABASE_URL ?? process.env.FILES_DATABASE_URL),
+);
 
-// Auto-sync peers on their configured intervals
-function scheduleAutoSync(): void {
+if (!cloudMode) {
+  // Auto-index all enabled local sources on startup (non-blocking)
+  const machine = getCurrentMachine();
+  for (const source of listSources(machine.id).filter((s) => s.enabled && s.type === "local")) {
+    indexLocalSource(source, machine.id).catch(() => {});
+  }
+
+  // Auto-sync peers on their configured intervals
   const peers = getAutosyncPeers();
   for (const peer of peers) {
     const intervalMs = peer.sync_interval_minutes * 60 * 1000;
@@ -78,4 +86,3 @@ function scheduleAutoSync(): void {
     }, intervalMs);
   }
 }
-scheduleAutoSync();

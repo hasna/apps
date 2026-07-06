@@ -1,0 +1,47 @@
+# @hasna/files — local development stack.
+#
+# Throwaway Postgres for exercising cloud mode (PURE REMOTE per Amendment A1)
+# against a local database instead of the shared RDS. Point files-serve at it:
+#
+#   export HASNA_FILES_STORAGE_MODE=cloud
+#   export HASNA_FILES_DATABASE_URL=postgres://files:files@localhost:5432/files
+#   export HASNA_FILES_API_SIGNING_KEY=$(openssl rand -hex 32)
+#   bun run src/server/migrate.ts     # apply schema + api_keys
+#   bun run src/server/index.ts       # files-serve on :19432
+#
+# Never commit real credentials; the values below are local-only throwaways.
+services:
+  postgres:
+    image: postgres:16
+    container_name: hasna-files-postgres
+    environment:
+      POSTGRES_USER: files
+      POSTGRES_PASSWORD: files
+      POSTGRES_DB: files
+    ports:
+      - "5432:5432"
+    volumes:
+      - files-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U files -d files"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  files-serve:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hasna-files-serve
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      HASNA_FILES_STORAGE_MODE: cloud
+      HASNA_FILES_DATABASE_URL: postgres://files:files@postgres:5432/files
+      HASNA_FILES_API_SIGNING_KEY: local-dev-signing-secret-change-me
+    ports:
+      - "19432:19432"
+
+volumes:
+  files-pgdata:

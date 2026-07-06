@@ -1,6 +1,6 @@
 {
   "name": "@hasna/files",
-  "version": "0.2.45",
+  "version": "0.2.46",
   "description": "Agent-first file management — index local folders and S3 buckets, sync Google Drive, tag, search, and retrieve files via CLI + MCP",
   "type": "module",
   "main": "dist/index.js",
@@ -8,12 +8,17 @@
   "bin": {
     "files": "dist/cli/index.js",
     "files-mcp": "dist/mcp/index.js",
-    "files-serve": "dist/server/index.js"
+    "files-serve": "dist/server/index.js",
+    "files-migrate": "dist/server/migrate.js"
   },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./sdk": {
+      "types": "./dist/sdk/index.d.ts",
+      "import": "./dist/sdk/index.js"
     },
     "./storage": {
       "types": "./dist/storage.d.ts",
@@ -38,7 +43,9 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && cd dashboard && bun run build && cd .. && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external @aws-sdk/* && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external @aws-sdk/* && bun build src/server/index.ts --outdir dist/server --target bun --external @aws-sdk/* && bun build src/index.ts src/storage.ts --outdir dist --target bun --external @aws-sdk/* && bun build src/lib/path.ts --outfile dist/path.js --target bun && bun build src/s3.ts --outfile dist/s3.js --target bun --external @aws-sdk/* && bun run build:types",
+    "build": "bun run clean && bun run build:sdk && cd dashboard && bun run build && cd .. && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external @aws-sdk/* --external pg --external @hasna/contracts && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external @aws-sdk/* --external pg --external @hasna/contracts && bun build src/server/index.ts src/server/migrate.ts --outdir dist/server --target bun --external @aws-sdk/* --external pg --external @hasna/contracts && bun build src/index.ts src/storage.ts src/sdk/index.ts --outdir dist --target bun --external @aws-sdk/* --external pg --external @hasna/contracts && bun build src/lib/path.ts --outfile dist/path.js --target bun && bun build src/s3.ts --outfile dist/s3.js --target bun --external @aws-sdk/* && bun run build:types",
+    "build:sdk": "bun run scripts/generate-sdk.ts",
+    "build:service": "bun build src/server/index.ts src/server/migrate.ts --outdir dist/server --target bun --external @aws-sdk/* --external pg --external @hasna/contracts",
     "build:cli": "bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk",
     "build:mcp": "bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk",
     "build:server": "bun build src/server/index.ts --outdir dist/server --target bun",
@@ -85,7 +92,7 @@
     "@aws-sdk/lib-storage": "^3.744.0",
     "@aws-sdk/s3-request-presigner": "^3.1009.0",
     "@hasna/connectors": "^1.3.42",
-    "@hasna/contracts": "^0.2.2",
+    "@hasna/contracts": "0.4.1",
     "@hasna/events": "^0.1.7",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@noble/hashes": "^1.7.2",

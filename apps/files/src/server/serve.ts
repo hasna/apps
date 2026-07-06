@@ -24,9 +24,38 @@ import { join } from "path";
 import { homedir } from "os";
 import { createRequire } from "module";
 import type { FileAssetStatus, GoogleDriveConfig, S3Config, SourceType } from "../types/index.js";
+import { createV1Handler } from "./v1.js";
+import { cloudEnabled, getCloudClient } from "./pg-store.js";
+import { checkHealth } from "../generated/storage-kit/health.js";
+import { CLOUD_MIGRATIONS } from "../db/cloud-migrations.js";
+import type { TypedQueryClient } from "../generated/storage-kit/query.js";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string };
+
+/** Storage mode reported by /health, /ready, /version. */
+function serviceMode(): "remote" | "local" {
+  return cloudEnabled() ? "remote" : "local";
+}
+
+/**
+ * Read-only readiness probe: reachable AND fully migrated. Unlike the kit's
+ * checkReady (which CREATEs the ledger table), this only SELECTs, so it works
+ * under the least-privilege runtime app role (no schema CREATE grant).
+ */
+async function readiness(client: TypedQueryClient): Promise<{ ok: boolean; latencyMs: number; pending: string[]; error?: string }> {
+  const start = Date.now();
+  const health = await checkHealth(client);
+  if (!health.ok) return { ok: false, latencyMs: health.latencyMs, pending: [], error: health.error };
+  try {
+    const rows = await client.many<{ id: string }>("SELECT id FROM schema_migrations");
+    const applied = new Set(rows.map((r) => r.id));
+    const pending = CLOUD_MIGRATIONS.filter((m) => !applied.has(m.id)).map((m) => m.id);
+    return { ok: pending.length === 0, latencyMs: Date.now() - start, pending };
+  } catch (e) {
+    return { ok: false, latencyMs: Date.now() - start, pending: [], error: `migration ledger unreadable: ${(e as Error).message}` };
+  }
+}
 
 type RestCapability = "mutations" | "destructive" | "imports" | "signed_urls" | "downloads" | "indexing";
 
@@ -125,14 +154,36 @@ function optionalAssetStatus(value: string | null): FileAssetStatus | undefined 
 }
 
 export function startServer(port: number): void {
+  const v1 = createV1Handler();
   Bun.serve({
     port,
+    idleTimeout: 30,
     async fetch(req) {
       const url = new URL(req.url);
       const path = url.pathname;
       const method = req.method;
 
       if (method === "OPTIONS") return new Response(null, { status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "*", "Access-Control-Allow-Headers": "*" } });
+
+      // ── Liveness / readiness / version (unauthenticated) ───────────────
+      if (path === "/health") return json({ status: "ok", version: pkg.version, mode: serviceMode() });
+      if (path === "/version") return json({ status: "ok", version: pkg.version, mode: serviceMode() });
+      if (path === "/ready") {
+        if (!cloudEnabled()) return json({ status: "ok", version: pkg.version, mode: "local" });
+        try {
+          const ready = await readiness(getCloudClient());
+          if (!ready.ok) {
+            return json({ status: "degraded", version: pkg.version, mode: "remote", latency_ms: ready.latencyMs, pending_migrations: ready.pending, error: ready.error }, 503);
+          }
+          return json({ status: "ok", version: pkg.version, mode: "remote", latency_ms: ready.latencyMs });
+        } catch (e) {
+          return json({ status: "error", version: pkg.version, mode: "remote", error: (e as Error).message }, 503);
+        }
+      }
+
+      // ── Versioned /v1 API (API-key authenticated, PURE REMOTE) ─────────
+      const v1res = await v1.handle(req, url);
+      if (v1res) return v1res;
 
       // ── Sources ──────────────────────────────────────────────────────────
       if (path === "/sources" && method === "GET") {
@@ -439,9 +490,6 @@ export function startServer(port: number): void {
         const by_source = db.query<any, []>("SELECT f.source_id, s.name, COUNT(*) as count FROM files f JOIN sources s ON s.id=f.source_id WHERE f.status='active' GROUP BY f.source_id ORDER BY count DESC").all();
         return json({ ...totals, by_ext, by_source });
       }
-
-      // ── Health ────────────────────────────────────────────────────────────
-      if (path === "/health") return json({ ok: true, version: pkg.version });
 
       return err("Not found", 404);
     },
