@@ -101,6 +101,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["cloud", "hosting", "vps"],
   },
   {
+    name: "vultr",
+    displayName: "Vultr",
+    description: "Cloud infrastructure for instances, block storage, firewalls, and snapshots",
+    category: "Developer Tools",
+    tags: ["cloud", "hosting", "vps", "infrastructure"],
+  },
+  {
     name: "datadog",
     displayName: "Datadog",
     description: "Monitoring and observability",
@@ -281,6 +288,13 @@ export const connectors: ConnectorMeta[] = [
     description: "Password management and secrets vault",
     category: "Developer Tools",
     tags: ["passwords", "security", "vault"],
+  },
+  {
+    name: "zohovault",
+    displayName: "Zoho Vault",
+    description: "Password and secrets manager with chambers, sharing, and audit",
+    category: "Developer Tools",
+    tags: ["passwords", "security", "vault", "zoho"],
   },
   {
     name: "bloock",
@@ -976,6 +990,20 @@ export const connectors: ConnectorMeta[] = [
     tags: ["url shortener", "links", "redirect", "analytics", "api"],
   },
   {
+    name: "tomtom",
+    displayName: "TomTom",
+    description: "Maps platform for geocoding, POI search, and routing",
+    category: "Developer Tools",
+    tags: ["maps", "geocoding", "routing", "navigation", "location"],
+  },
+  {
+    name: "trackjs",
+    displayName: "TrackJS",
+    description: "JavaScript error tracking and monitoring platform",
+    category: "Developer Tools",
+    tags: ["monitoring", "errors", "error-tracking", "javascript", "frontend"],
+  },
+  {
     name: "transifex",
     displayName: "Transifex",
     description: "Localization and translation management platform for software and content",
@@ -983,11 +1011,25 @@ export const connectors: ConnectorMeta[] = [
     tags: ["localization", "translation", "i18n", "l10n", "content"],
   },
   {
+    name: "trigger-dev-api-platform",
+    displayName: "Trigger.dev API Platform",
+    description: "Background jobs, workflows, and task run management",
+    category: "Developer Tools",
+    tags: ["background-jobs", "workflows", "trigger-dev", "automation"],
+  },
+  {
     name: "travisci",
     displayName: "Travis CI",
     description: "Continuous integration and delivery platform for testing and deploying software",
     category: "Developer Tools",
     tags: ["ci/cd", "continuous integration", "testing", "deployment", "devops"],
+  },
+  {
+    name: "trigger-dev",
+    displayName: "Trigger.dev",
+    description: "Background job platform",
+    category: "Developer Tools",
+    tags: ["background-jobs", "workflows", "trigger-dev", "automation"],
   },
   {
     name: "tuskr",
@@ -1002,6 +1044,20 @@ export const connectors: ConnectorMeta[] = [
     description: "Website uptime and performance monitoring",
     category: "Developer Tools",
     tags: ["monitoring", "uptime", "performance"],
+  },
+  {
+    name: "webhooks",
+    displayName: "Webhooks",
+    description: "Generic outbound HTTP webhook delivery with optional HMAC signing",
+    category: "Developer Tools",
+    tags: ["webhook", "outbound", "http", "integrations"],
+  },
+  {
+    name: "xray",
+    displayName: "Xray",
+    description: "Test management platform for QA scans, events, and search",
+    category: "Developer Tools",
+    tags: ["testing", "test-management", "qa", "scans"],
   },
   {
     name: "xata",
@@ -1037,5 +1093,12 @@ export const connectors: ConnectorMeta[] = [
     description: "Enterprise network and infrastructure monitoring",
     category: "Developer Tools",
     tags: ["monitoring", "infrastructure", "network"],
+  },
+  {
+    name: "zapier-api-platform",
+    displayName: "Zapier API Platform",
+    description: "Zapier API Platform integration for items, events, and search",
+    category: "Developer Tools",
+    tags: ["zapier", "automation", "api-platform"],
   },
 ];

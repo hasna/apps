@@ -122,6 +122,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "llm", "open-source"],
   },
   {
+    name: "zatanna",
+    displayName: "Zatanna",
+    description: "AI workflow automation and orchestration",
+    category: "AI & ML",
+    tags: ["ai", "workflows", "automation"],
+  },
+  {
     name: "cohere",
     displayName: "Cohere",
     description: "Enterprise NLP and embeddings",
@@ -913,6 +920,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["nlp", "content moderation", "sentiment", "language understanding", "api"],
   },
   {
+    name: "typless",
+    displayName: "Typless",
+    description: "AI-powered document data extraction and OCR for invoices and custom documents",
+    category: "AI & ML",
+    tags: ["ai", "document", "extraction", "ocr"],
+  },
+  {
     name: "udio",
     displayName: "Udio",
     description: "AI music generation platform",
@@ -927,11 +941,25 @@ export const connectors: ConnectorMeta[] = [
     tags: ["transcription", "meetings", "ai"],
   },
   {
+    name: "wato",
+    displayName: "Wato",
+    description: "Shared agent memories, workflows, tools, and artifacts",
+    category: "AI & ML",
+    tags: ["ai", "agents", "memory", "workflows"],
+  },
+  {
     name: "wavelineextract",
     displayName: "Waveline Extract",
     description: "Document data extraction and parsing",
     category: "AI & ML",
     tags: ["extraction", "documents", "parsing"],
+  },
+  {
+    name: "wayco",
+    displayName: "Wayco",
+    description: "Med-legal case management, lead intake, medical records, provider matching, and voice calls",
+    category: "AI & ML",
+    tags: ["ai", "med-legal", "healthcare"],
   },
   {
     name: "wonderchat",
@@ -967,5 +995,19 @@ export const connectors: ConnectorMeta[] = [
     description: "AI document data extraction and automation",
     category: "AI & ML",
     tags: ["ai", "extraction", "documents"],
+  },
+  {
+    name: "zhipu-ai",
+    displayName: "Zhipu AI",
+    description: "GLM large language models via Zhipu Open Platform",
+    category: "AI & ML",
+    tags: ["ai", "llm", "glm", "zhipu"],
+  },
+  {
+    name: "youart",
+    displayName: "YouArt",
+    description: "AI originals funding and creator economy",
+    category: "AI & ML",
+    tags: ["ai", "creator-economy", "funding"],
   },
 ];
