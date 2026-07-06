@@ -24,7 +24,7 @@ import {
   TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID,
 } from "../templates.js";
 import type { AgentWorkflowRole } from "../template-kit.js";
-import { eventData, eventMetadata, slugSegment, stableSuffix, stringField, taskEventField, taskRouteEligibility } from "./fields.js";
+import { eventData, eventMetadata, slugSegment, stableSuffix, stringField, taskEventField, taskEventRecords, taskEventTags, taskRouteEligibility } from "./fields.js";
 import { normalizeWorkflowForStorage, preflightStoredWorkflow, workflowSpecForPreflight } from "./gates.js";
 import { idleTimeoutDuration, listFromRepeatedOpts, nonNegativeInteger, timeoutDuration } from "./parse.js";
 import { assignPoolAuthProfiles, type PoolAuthProfileAssignment } from "./profile-pool.js";
@@ -192,6 +192,35 @@ function reactivateStaleTodosTaskWorkItem(
   });
 }
 
+function findRouteWorkItemByKeys(store: Store, routeKey: "todos-task" | "generic-event", idempotencyKeys: string[]): WorkflowWorkItem | undefined {
+  const [primaryKey, ...aliasKeys] = idempotencyKeys;
+  if (primaryKey) {
+    const existingItem = store.findWorkflowWorkItem(routeKey, primaryKey);
+    if (existingItem && isUnclearedRouteWorkItem(existingItem)) return existingItem;
+  }
+  for (const key of aliasKeys) {
+    const existingItem = store.findWorkflowWorkItem(routeKey, key);
+    if (existingItem && (isUnclearedRouteWorkItem(existingItem) || existingItem.status === "queued" || existingItem.status === "deferred")) return existingItem;
+  }
+  return undefined;
+}
+
+function isPrBacklogTask(data: Record<string, unknown>, metadata: Record<string, unknown>): boolean {
+  const explicitFingerprint = taskEventField(data, [
+    "pr_fingerprint",
+    "prFingerprint",
+    "github_pr",
+    "githubPr",
+    "github_pr_fingerprint",
+    "githubPrFingerprint",
+    "pull_request_fingerprint",
+    "pullRequestFingerprint",
+  ]);
+  if (explicitFingerprint) return true;
+  const tags = new Set(taskEventTags(taskEventRecords(data, metadata)).map((tag) => tag.toLowerCase()));
+  return tags.has("github-pr") && tags.has("pr-merge-queue");
+}
+
 export function todosTaskRouteTemplateId(opts: { template?: string }): string {
   const id = (opts.template ?? TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID).trim();
   if (!TODOS_TASK_ROUTE_TEMPLATE_IDS.has(id)) {
@@ -218,6 +247,7 @@ interface RouteEventPlan {
   event: EventEnvelope;
   opts: TodosTaskRouteOptions;
   idempotencyKey: string;
+  dedupeAliases?: string[];
   /** Rendered, named, and normalized workflow to store. */
   workflowBody: CreateWorkflowInput;
   /** Structured context reported when validation/preflight gates fail. */
@@ -329,6 +359,7 @@ function dedupedRoutePrint(
 function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
   const { event, opts, idempotencyKey, workflowBody } = plan;
   const sandboxPreflight = generatedRouteSandboxPreflight(workflowBody);
+  const dedupeKeys = [idempotencyKey, ...(plan.dedupeAliases ?? [])];
   const workItemInput: UpsertWorkflowWorkItemInput = {
     routeKey: plan.routeKey,
     idempotencyKey,
@@ -387,8 +418,8 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
     let poolAssignment: PoolAuthProfileAssignment | undefined;
     const outcome = store.writeTransaction(() => {
       const invocation = store.createWorkflowInvocation(plan.invocationInput);
-      const existingItem = store.findWorkflowWorkItem(plan.routeKey, idempotencyKey);
-      if (existingItem && isUnclearedRouteWorkItem(existingItem)) {
+      const existingItem = findRouteWorkItemByKeys(store, plan.routeKey, dedupeKeys);
+      if (existingItem) {
         // A terminal work item whose todos task is still actionable is re-admitted
         // (bounded) rather than deduped forever; the requeue drops it back to
         // `queued` so the upsert/admit path below re-dispatches a fresh run.
@@ -584,12 +615,14 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
   // the repos registry mints (one per local checkout of the same repo) collapse
   // to a single work item instead of spawning a worker per checkout. Non-PR
   // tasks keep the (source-path, task-id) key so unrelated tasks never collide.
-  const prFingerprint = prFingerprintFromTask(data, metadata);
+  const prFingerprint = isPrBacklogTask(data, metadata) ? prFingerprintFromTask(data, metadata) : undefined;
   const idempotencyKey = prFingerprint
     ? `todos-task:pr:${prFingerprint}`
     : sourceProjectIdempotencyPrefix
       ? `todos-task:${sourceProjectIdempotencyPrefix}:${taskId}`
       : `todos-task:${taskId}`;
+  const legacyTaskIdempotencyKey = `todos-task:${taskId}`;
+  const dedupeAliases = legacyTaskIdempotencyKey === idempotencyKey ? [] : [legacyTaskIdempotencyKey];
   const idempotencySuffix = stableSuffix(idempotencyKey);
   const namePrefix = opts.namePrefix ?? "event:todos-task";
   const workflowName = `${namePrefix}:${taskId.slice(0, 8)}:${idempotencySuffix}:workflow`;
@@ -599,8 +632,8 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     // events never fail on since-broken project paths or provider options.
     const store = new Store();
     try {
-      const existingItem = store.findWorkflowWorkItem("todos-task", idempotencyKey);
-      if (existingItem && isUnclearedRouteWorkItem(existingItem)) {
+      const existingItem = findRouteWorkItemByKeys(store, "todos-task", [idempotencyKey, ...dedupeAliases]);
+      if (existingItem) {
         // Re-admit a terminal work item whose task is still actionable instead of
         // deduping it away forever; requeue drops it to `queued` so the full
         // creation path below dispatches a fresh run. Otherwise dedupe as before.
@@ -736,6 +769,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     event,
     opts,
     idempotencyKey,
+    dedupeAliases,
     workflowBody,
     workflowContext,
     invocationInput,
