@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { Command } from 'commander';
 import chalk from 'chalk';
+import { randomBytes } from 'crypto';
 import { createServer } from 'http';
 import { Tumblr } from '../api';
 import {
@@ -108,7 +109,7 @@ authCmd
     setClientSecret(clientSecret);
 
     const scopes = opts.scope.split(/\s+/).filter(Boolean);
-    const state = Math.random().toString(36).substring(7);
+    const state = randomBytes(32).toString('hex');
     const authUrl = Tumblr.getAuthorizationUrl(clientId, opts.redirectUri, scopes, state);
 
     info('Opening browser for authentication...');
