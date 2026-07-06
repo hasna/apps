@@ -3,6 +3,8 @@ import { subscriptionOps } from "./subscriptions.js";
 import { invoiceOps } from "./invoices.js";
 import { dunningOps } from "./dunning.js";
 import { eventOps } from "./events.js";
+import { reconciliationOps } from "./reconciliation.js";
+import { supportOps } from "./support.js";
 import type { ServiceOp, ToolProfile } from "./context.js";
 
 /**
@@ -17,6 +19,8 @@ export const ALL_OPS: ServiceOp[] = [
   ...invoiceOps,
   ...dunningOps,
   ...eventOps,
+  ...reconciliationOps,
+  ...supportOps,
 ];
 
 const OP_INDEX: Map<string, ServiceOp> = new Map(ALL_OPS.map((op) => [op.op, op]));

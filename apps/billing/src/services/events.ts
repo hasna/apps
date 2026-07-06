@@ -12,6 +12,7 @@ import {
   type ServiceContext,
   type ServiceOp,
 } from "./context.js";
+import { emitAccountingReconciliation } from "./reconciliation.js";
 
 export function getEventRow(db: Database, id: string): EventRow | null {
   return (db.query("SELECT * FROM events WHERE id = ?").get(id) as EventRow | null) ?? null;
@@ -56,19 +57,88 @@ export function eventSignedPayload(input: {
 /** Apply a known Stripe event type to local mirror state. */
 function applyEventEffect(ctx: ServiceContext, entityId: string, type: string, payload: Record<string, unknown>): string {
   const stripeCustomerId = typeof payload["customer"] === "string" ? (payload["customer"] as string) : null;
+  const stripeInvoiceId = typeof payload["invoice"] === "string" ? (payload["invoice"] as string) : null;
+  const amount = typeof payload["amount"] === "number" ? payload["amount"] : typeof payload["amount_paid"] === "number" ? payload["amount_paid"] : null;
+  const currency = typeof payload["currency"] === "string" ? payload["currency"] : null;
+  const providerObjectId = stripeInvoiceId ?? (typeof payload["id"] === "string" ? (payload["id"] as string) : null);
   if (type === "invoice.payment_failed" && stripeCustomerId) {
     ctx.db.run("UPDATE customers SET delinquent = 1, updated_at = ? WHERE entity_id = ? AND stripe_customer_id = ?", [nowIso(), entityId, stripeCustomerId]);
+    emitAccountingReconciliation(ctx.db, ctx.actor_id, {
+      entity_id: entityId,
+      source: "stripe",
+      source_id: providerObjectId ?? "unknown",
+      event_type: "invoice.payment_failed",
+      amount,
+      currency,
+      payload,
+    });
     return "marked customer delinquent";
   }
   if (type === "invoice.paid" && stripeCustomerId) {
     ctx.db.run("UPDATE customers SET delinquent = 0, updated_at = ? WHERE entity_id = ? AND stripe_customer_id = ?", [nowIso(), entityId, stripeCustomerId]);
-    const stripeInvoiceId = typeof payload["invoice"] === "string" ? (payload["invoice"] as string) : null;
     if (stripeInvoiceId) {
-      ctx.db.run("UPDATE invoices SET status = 'paid', updated_at = ? WHERE entity_id = ? AND stripe_invoice_id = ?", [nowIso(), entityId, stripeInvoiceId]);
+      ctx.db.run(
+        `UPDATE invoices
+         SET status = 'paid', amount_paid = COALESCE(NULLIF(?, 0), amount_due), updated_at = ?
+         WHERE entity_id = ? AND (stripe_invoice_id = ? OR id = ?)`,
+        [amount ?? 0, nowIso(), entityId, stripeInvoiceId, stripeInvoiceId],
+      );
     }
+    emitAccountingReconciliation(ctx.db, ctx.actor_id, {
+      entity_id: entityId,
+      source: "stripe",
+      source_id: providerObjectId ?? "unknown",
+      event_type: "invoice.paid",
+      amount,
+      currency,
+      payload,
+    });
     return "cleared customer delinquency";
   }
+  if (["invoice.voided", "charge.refunded", "charge.dispute.created", "credit_note.created"].includes(type)) {
+    emitAccountingReconciliation(ctx.db, ctx.actor_id, {
+      entity_id: entityId,
+      source: "stripe",
+      source_id: providerObjectId ?? type,
+      event_type: type,
+      amount,
+      currency,
+      payload,
+    });
+    return "queued accounting reconciliation";
+  }
   return "no local effect";
+}
+
+function eventCreatedSeconds(payload: Record<string, unknown>): number | null {
+  const created = payload["created"];
+  return typeof created === "number" && Number.isSafeInteger(created) ? created : null;
+}
+
+function providerObjectId(type: string, payload: Record<string, unknown>): string | null {
+  if (typeof payload["invoice"] === "string") return payload["invoice"] as string;
+  if (typeof payload["id"] === "string") return payload["id"] as string;
+  if (typeof payload["charge"] === "string") return payload["charge"] as string;
+  return type.startsWith("invoice.") ? null : null;
+}
+
+function hasNewerProcessedEvent(ctx: ServiceContext, entityId: string, type: string, payload: Record<string, unknown>): boolean {
+  const created = eventCreatedSeconds(payload);
+  const objectId = providerObjectId(type, payload);
+  if (created === null || objectId === null) return false;
+  const rows = ctx.db.query("SELECT payload_json FROM events WHERE entity_id = ? AND type = ?").all(entityId, type) as Array<{ payload_json: string }>;
+  for (const row of rows) {
+    try {
+      const prior = JSON.parse(row.payload_json) as Record<string, unknown>;
+      if (providerObjectId(type, prior) === objectId) {
+        const priorCreated = eventCreatedSeconds(prior);
+        if (priorCreated !== null && priorCreated > created) return true;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return false;
 }
 
 export const eventOps: ServiceOp[] = [
@@ -115,6 +185,22 @@ export const eventOps: ServiceOp[] = [
       const id = newId();
       const at = nowIso();
       const payload = input.payload ?? {};
+      if (hasNewerProcessedEvent(ctx, input.entity_id, input.type, payload)) {
+        ctx.db.run(
+          `INSERT INTO events (id, entity_id, stripe_event_id, type, status, payload_json, received_at, processed_at)
+           VALUES (?, ?, ?, ?, 'ignored', ?, ?, ?)`,
+          [id, input.entity_id, input.stripe_event_id, input.type, JSON.stringify(payload), at, at],
+        );
+        appendAudit(ctx.db, {
+          entity_id: input.entity_id,
+          actor_id: ctx.actor_id,
+          action: "ignore_out_of_order_event",
+          resource: "events",
+          resource_id: id,
+          detail: input.type,
+        });
+        return ctx.db.query("SELECT * FROM events WHERE id = ?").get(id) as EventRow;
+      }
       const detail = applyEventEffect(ctx, input.entity_id, input.type, payload);
       ctx.db.run(
         `INSERT INTO events (id, entity_id, stripe_event_id, type, status, payload_json, received_at, processed_at)

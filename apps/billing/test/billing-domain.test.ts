@@ -6,7 +6,7 @@ import { runOp, type ServiceContext } from "../src/services/context.js";
 import { MockStripeAdapter, setStripeAdapter } from "../src/adapters/stripe.js";
 import { eventSignedPayload } from "../src/services/events.js";
 import { ruleForDeclineCode } from "../src/services/dunning.js";
-import type { CustomerRow, DunningRunRow, InvoiceRow, SubscriptionRow } from "../src/types/index.js";
+import type { AccountingReconciliationRow, CustomerRow, DunningRunRow, EventRow, InvoiceRow, SubscriptionRow } from "../src/types/index.js";
 
 async function call(ctx: ServiceContext, opName: string, input: unknown): Promise<unknown> {
   const op = getOp(opName);
@@ -67,6 +67,23 @@ describe("subscriptions & invoices", () => {
     const paid = (await call(ctx, "mark_invoice_paid", { id: invoice.id })) as InvoiceRow;
     expect(paid.status).toBe("paid");
     expect(paid.amount_paid).toBe(2500);
+  });
+});
+
+describe("destructive billing approvals", () => {
+  it("requires an approval reference for immediate cancellation and plan changes", async () => {
+    const customer = (await call(ctx, "create_customer", { entity_id: TEST_ENTITY_A, email: "a@b.com" })) as CustomerRow;
+    const sub = (await call(ctx, "create_subscription", { customer_id: customer.id, plan: "pro" })) as SubscriptionRow;
+
+    await expect(call(ctx, "cancel_subscription", { id: sub.id })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+    await expect(call(ctx, "change_subscription_plan", { id: sub.id, plan: "basic" })).rejects.toThrow();
+
+    const changed = (await call(ctx, "change_subscription_plan", {
+      id: sub.id,
+      plan: "basic",
+      approval_ref: "approval-123",
+    })) as SubscriptionRow;
+    expect(changed.plan).toBe("basic");
   });
 });
 
@@ -166,6 +183,9 @@ describe("events (idempotent ingest)", () => {
 
     const cust = (await call(ctx, "get_customer", { id: customer.id })) as CustomerRow;
     expect(cust.delinquent).toBe(1);
+    const recon = (await call(ctx, "list_accounting_reconciliation", { entity_id: TEST_ENTITY_A })) as AccountingReconciliationRow[];
+    expect(recon).toHaveLength(1);
+    expect(recon[0]).toMatchObject({ source: "stripe", event_type: "invoice.payment_failed", state: "pending" });
 
     const body2 = { stripe_event_id: "evt_1", type: "invoice.payment_failed", payload: {} };
     const replay = (await call(ctx, "ingest_event", {
@@ -175,6 +195,45 @@ describe("events (idempotent ingest)", () => {
     })) as { id: string; idempotent_replay?: boolean };
     expect(replay.idempotent_replay).toBe(true);
     expect(replay.id).toBe(evt1.id);
+  });
+
+  it("queues paid/refund/dispute accounting reconciliation and supports writeback acknowledgement", async () => {
+    const customer = (await call(ctx, "create_customer", { entity_id: TEST_ENTITY_A, email: "a@b.com" })) as CustomerRow;
+    const invoice = (await call(ctx, "create_invoice", {
+      customer_id: customer.id,
+      amount_due: 2500,
+      stripe_invoice_id: "in_1",
+    })) as InvoiceRow;
+    const paidBody = {
+      stripe_event_id: "evt_paid",
+      type: "invoice.paid",
+      payload: { customer: customer.stripe_customer_id, invoice: invoice.id, amount_paid: 2500, currency: "usd", created: 100 },
+    };
+    await call(ctx, "ingest_event", { entity_id: TEST_ENTITY_A, ...paidBody, signature: signEvent(paidBody) });
+    const refundBody = {
+      stripe_event_id: "evt_refund",
+      type: "charge.refunded",
+      payload: { id: "re_1", charge: "ch_1", amount: 500, currency: "usd", created: 101 },
+    };
+    await call(ctx, "ingest_event", { entity_id: TEST_ENTITY_A, ...refundBody, signature: signEvent(refundBody) });
+    const disputeBody = {
+      stripe_event_id: "evt_dispute",
+      type: "charge.dispute.created",
+      payload: { id: "dp_1", charge: "ch_1", amount: 500, currency: "usd", created: 102 },
+    };
+    await call(ctx, "ingest_event", { entity_id: TEST_ENTITY_A, ...disputeBody, signature: signEvent(disputeBody) });
+
+    const invoiceAfter = (await call(ctx, "get_invoice", { id: invoice.id })) as InvoiceRow;
+    expect(invoiceAfter.status).toBe("paid");
+
+    const rows = (await call(ctx, "list_accounting_reconciliation", { entity_id: TEST_ENTITY_A })) as AccountingReconciliationRow[];
+    expect(rows.map((r) => r.event_type).sort()).toEqual(["charge.dispute.created", "charge.refunded", "invoice.paid"]);
+    const written = (await call(ctx, "mark_accounting_reconciliation_written", {
+      id: rows[0]!.id,
+      accounting_entry_ref: "acct-entry-1",
+    })) as AccountingReconciliationRow;
+    expect(written.state).toBe("written");
+    expect(written.accounting_entry_ref).toBe("acct-entry-1");
   });
 
   it("rejects a forged event (bad signature) fail-closed WITHOUT mutating state", async () => {
@@ -200,5 +259,60 @@ describe("events (idempotent ingest)", () => {
     await expect(
       call(ctx, "ingest_event", { entity_id: TEST_ENTITY_A, ...body, signature: "t=1,v1=abc" }),
     ).rejects.toMatchObject({ code: "WEBHOOK_VERIFICATION_FAILED" });
+  });
+
+  it("rejects expired webhook signatures and ignores out-of-order events for the same Stripe object", async () => {
+    const customer = (await call(ctx, "create_customer", { entity_id: TEST_ENTITY_A, email: "a@b.com" })) as CustomerRow;
+    const expired = { stripe_event_id: "evt_expired", type: "invoice.payment_failed", payload: { customer: customer.stripe_customer_id } };
+    await expect(
+      call(ctx, "ingest_event", {
+        entity_id: TEST_ENTITY_A,
+        ...expired,
+        signature: mock.signWebhook(eventSignedPayload(expired), WEBHOOK_SECRET, Math.floor(Date.now() / 1000) - 1_000),
+      }),
+    ).rejects.toMatchObject({ code: "WEBHOOK_VERIFICATION_FAILED" });
+
+    const newer = {
+      stripe_event_id: "evt_newer",
+      type: "invoice.paid",
+      payload: { customer: customer.stripe_customer_id, invoice: "in_order", created: 200 },
+    };
+    await call(ctx, "ingest_event", { entity_id: TEST_ENTITY_A, ...newer, signature: signEvent(newer) });
+    const older = {
+      stripe_event_id: "evt_older",
+      type: "invoice.paid",
+      payload: { customer: customer.stripe_customer_id, invoice: "in_order", created: 100 },
+    };
+    const ignored = (await call(ctx, "ingest_event", { entity_id: TEST_ENTITY_A, ...older, signature: signEvent(older) })) as EventRow;
+    expect(ignored.status).toBe("ignored");
+  });
+});
+
+describe("operator support surface", () => {
+  it("returns customer, subscription, invoice, webhook, dunning, and reconciliation state", async () => {
+    const customer = (await call(ctx, "create_customer", { entity_id: TEST_ENTITY_A, email: "a@b.com" })) as CustomerRow;
+    const sub = (await call(ctx, "create_subscription", { customer_id: customer.id, plan: "pro" })) as SubscriptionRow;
+    const invoice = (await call(ctx, "create_invoice", { customer_id: customer.id, subscription_id: sub.id, amount_due: 3000 })) as InvoiceRow;
+    const policy = (await call(ctx, "create_dunning_policy", { entity_id: TEST_ENTITY_A, name: "support" })) as { id: string };
+    await call(ctx, "run_dunning", { invoice_id: invoice.id, policy_id: policy.id });
+    const body = {
+      stripe_event_id: "evt_support",
+      type: "invoice.payment_failed",
+      payload: { customer: customer.stripe_customer_id, invoice: invoice.stripe_invoice_id ?? invoice.id, created: 100 },
+    };
+    await call(ctx, "ingest_event", { entity_id: TEST_ENTITY_A, ...body, signature: signEvent(body) });
+
+    const snapshot = (await call(ctx, "get_support_customer_snapshot", { customer_id: customer.id })) as {
+      invoices: InvoiceRow[];
+      dunning_runs: DunningRunRow[];
+      webhook_events: EventRow[];
+      accounting_reconciliation: AccountingReconciliationRow[];
+      customer_portal: { handoff_available: boolean };
+    };
+    expect(snapshot.invoices.length).toBe(1);
+    expect(snapshot.dunning_runs.length).toBe(1);
+    expect(snapshot.webhook_events.length).toBe(1);
+    expect(snapshot.accounting_reconciliation.length).toBeGreaterThan(0);
+    expect(snapshot.customer_portal.handoff_available).toBe(true);
   });
 });
