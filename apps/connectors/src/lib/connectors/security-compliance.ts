@@ -129,6 +129,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ssl", "certificates", "security", "monitoring", "tls"],
   },
   {
+    name: "tenable",
+    displayName: "Tenable",
+    description: "Cloud vulnerability management and exposure platform",
+    category: "Security & Compliance",
+    tags: ["vulnerability-management", "security", "scanning", "exposure", "cyber"],
+  },
+  {
     name: "tines",
     displayName: "Tines",
     description: "Security automation and SOAR workflow orchestration platform",
