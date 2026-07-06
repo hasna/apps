@@ -17,6 +17,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["incorporation", "business"],
   },
   {
+    name: "stripe-issuing",
+    displayName: "Stripe Issuing",
+    description: "Corporate card programs and spend controls",
+    category: "Commerce & Finance",
+    tags: ["payments", "cards", "issuing"],
+  },
+  {
     name: "shopify",
     displayName: "Shopify",
     description: "E-commerce platform",
