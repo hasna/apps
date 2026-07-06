@@ -17,6 +17,33 @@ npm install -g @hasna/contacts
 contacts --help
 ```
 
+## Audiences, consent, and suppression
+
+Audience segments implement the `hasna.audience.v1` contract (distribution
+apps plan): predicate definitions over contact tags, attributes (columns or
+custom fields), and group membership, resolved to per-channel recipient lists
+that honor consent and suppression.
+
+```bash
+contacts audience create beta-testers \
+  --name "Beta testers" \
+  --predicates '[{"kind":"tag","value":"beta"}]' \
+  --policy opt_in
+contacts audience list
+contacts audience show beta-testers          # hasna.audience.v1 document
+contacts audience resolve beta-testers --channel email    # email|telegram|sms
+contacts consent set CONTACT_ID --channel email --status opt_in
+contacts suppression add someone@example.com --channel email --reason unsubscribe
+contacts suppression sync --dry-run          # push unsubscribes to mailery
+```
+
+Resolution always excludes archived and `do_not_contact` contacts and
+suppressed addresses; the audience `--policy` (`opt_in`, `opt_out`,
+`transactional`, `none`) controls how per-channel consent is applied.
+`contacts suppression sync` pushes unsynced email suppressions to mailery via
+`@hasna/mailery` when it is installed; any other backend can implement the
+`SuppressionSyncAdapter` interface exported from the package.
+
 ## MCP Server
 
 ```bash

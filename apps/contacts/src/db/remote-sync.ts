@@ -41,6 +41,9 @@ export const CONTACTS_REMOTE_TABLES = [
   "contact_documents",
   "contact_health",
   "feedback",
+  "audiences",
+  "contact_consent",
+  "contact_suppressions",
 ] as const;
 
 type RemoteTable = (typeof CONTACTS_REMOTE_TABLES)[number];
@@ -94,6 +97,9 @@ const PRIMARY_KEYS: Record<RemoteTable, string[]> = {
   contact_documents: ["id"],
   contact_health: ["id"],
   feedback: ["id"],
+  audiences: ["id"],
+  contact_consent: ["contact_id", "channel"],
+  contact_suppressions: ["id"],
 };
 
 export const CONTACTS_REMOTE_ENV = [

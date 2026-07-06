@@ -585,6 +585,43 @@ const MIGRATIONS = [
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
   `,
+
+  `
+  -- Distribution: audiences (hasna.audience.v1), per-channel consent, suppressions
+  CREATE TABLE IF NOT EXISTS audiences (
+    id TEXT PRIMARY KEY,
+    audience_id TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    match TEXT NOT NULL DEFAULT 'all' CHECK(match IN ('all','any')),
+    predicates TEXT NOT NULL DEFAULT '[]',
+    consent_policy TEXT NOT NULL DEFAULT 'opt_in' CHECK(consent_policy IN ('opt_in','opt_out','transactional','none')),
+    suppression_synced_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS contact_consent (
+    contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+    channel TEXT NOT NULL CHECK(channel IN ('email','telegram','sms')),
+    status TEXT NOT NULL DEFAULT 'unknown' CHECK(status IN ('opt_in','opt_out','unknown')),
+    source TEXT,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (contact_id, channel)
+  );
+
+  CREATE TABLE IF NOT EXISTS contact_suppressions (
+    id TEXT PRIMARY KEY,
+    contact_id TEXT REFERENCES contacts(id) ON DELETE CASCADE,
+    channel TEXT NOT NULL CHECK(channel IN ('email','telegram','sms')),
+    address TEXT NOT NULL,
+    reason TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    synced_at TEXT,
+    UNIQUE(channel, address)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_contact_suppressions_unsynced ON contact_suppressions(channel) WHERE synced_at IS NULL;
+  `,
 ];
 
 export type ContactsDatabase = SqliteAdapter;

@@ -940,3 +940,128 @@ export class DuplicateTagNameError extends Error {
     this.name = "DuplicateTagNameError";
   }
 }
+
+// ─── Audience / consent / suppression (distribution) ──────────────────────────
+// Mirrors hasna.audience.v1 from @hasna/contracts (feat/distribution-schemas).
+
+export const AUDIENCE_CHANNELS = ["email", "telegram", "sms"] as const;
+export type AudienceChannel = (typeof AUDIENCE_CHANNELS)[number];
+
+export const CONSENT_STATUSES = ["opt_in", "opt_out", "unknown"] as const;
+export type ConsentStatus = (typeof CONSENT_STATUSES)[number];
+
+export const CONSENT_POLICIES = ["opt_in", "opt_out", "transactional", "none"] as const;
+export type ConsentPolicy = (typeof CONSENT_POLICIES)[number];
+
+export type AudienceMatch = "all" | "any";
+export type AudiencePredicateKind = "tag" | "attribute" | "group";
+export type AudiencePredicateOp = "eq" | "neq" | "in" | "not_in" | "exists" | "not_exists";
+export type AudiencePredicateValue = string | number | boolean;
+
+export interface AudiencePredicate {
+  kind: AudiencePredicateKind;
+  /** Attribute key (required for attribute predicates), e.g. `job_title` or a custom field name. */
+  key?: string;
+  op?: AudiencePredicateOp;
+  value?: AudiencePredicateValue;
+  values?: AudiencePredicateValue[];
+}
+
+export interface Audience {
+  id: string;
+  audience_id: string;
+  name: string;
+  match: AudienceMatch;
+  predicates: AudiencePredicate[];
+  consent_policy: ConsentPolicy;
+  suppression_synced_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AudienceRow {
+  id: string;
+  audience_id: string;
+  name: string;
+  match: AudienceMatch;
+  predicates: string;
+  consent_policy: ConsentPolicy;
+  suppression_synced_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateAudienceInput {
+  audience_id: string;
+  name: string;
+  match?: AudienceMatch;
+  predicates: AudiencePredicate[];
+  consent_policy?: ConsentPolicy;
+}
+
+export interface UpdateAudienceInput {
+  name?: string;
+  match?: AudienceMatch;
+  predicates?: AudiencePredicate[];
+  consent_policy?: ConsentPolicy;
+}
+
+export interface ContactConsent {
+  contact_id: string;
+  channel: AudienceChannel;
+  status: ConsentStatus;
+  source: string | null;
+  updated_at: string;
+}
+
+export interface ContactSuppression {
+  id: string;
+  contact_id: string | null;
+  channel: AudienceChannel;
+  address: string;
+  reason: string | null;
+  created_at: string;
+  synced_at: string | null;
+}
+
+export interface AudienceRecipient {
+  contact_id: string;
+  display_name: string;
+  address: string;
+  consent_status: ConsentStatus;
+}
+
+export interface AudienceExclusion {
+  contact_id: string;
+  reason: "consent" | "suppressed" | "do_not_contact" | "no_address" | "archived";
+}
+
+export interface AudienceResolution {
+  audience_id: string;
+  channel: AudienceChannel;
+  consent_policy: ConsentPolicy;
+  matched: number;
+  recipients: AudienceRecipient[];
+  excluded: AudienceExclusion[];
+}
+
+export class AudienceNotFoundError extends Error {
+  constructor(id: string) {
+    super(`Audience not found: ${id}`);
+    this.name = "AudienceNotFoundError";
+  }
+}
+
+export class DuplicateAudienceIdError extends Error {
+  constructor(audienceId: string) {
+    super(`Audience with audience_id already exists: ${audienceId}`);
+    this.name = "DuplicateAudienceIdError";
+  }
+}
+
+export class InvalidAudienceDefinitionError extends Error {
+  constructor(detail: string) {
+    super(`Invalid audience definition: ${detail}`);
+    this.name = "InvalidAudienceDefinitionError";
+  }
+}
