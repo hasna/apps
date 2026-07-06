@@ -74,10 +74,12 @@
   "author": "Hasna",
   "license": "Apache-2.0",
   "peerDependencies": {
-    "@hasna/actions": "^0.1.0"
+    "@hasna/actions": "^0.1.0",
+    "@hasna/cloud": "^0.1.41"
   },
   "devDependencies": {
     "@hasna/actions": "file:../open-actions",
+    "@hasna/cloud": "file:../open-cloud",
     "@types/bun": "latest",
     "typescript": "^5.7.3"
   },

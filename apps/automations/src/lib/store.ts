@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { SqliteAdapter } from "@hasna/cloud/storage";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { hostname } from "node:os";
@@ -157,17 +157,20 @@ export interface CreateWebhookRouteInput {
 }
 
 export class AutomationsStore {
-  readonly db: Database;
+  // @hasna/cloud's SqliteAdapter opens with create:true and applies the
+  // WAL + foreign_keys pragmas in its constructor; `.query()` is a direct
+  // passthrough to the underlying bun:sqlite Statement API (including
+  // named `$param` bindings), so it is a drop-in replacement for the
+  // hand-rolled bun:sqlite Database this store used previously.
+  readonly db: SqliteAdapter;
   readonly path: string;
 
   constructor(options: AutomationsStoreOptions = {}) {
     ensureAutomationsDataDir();
     this.path = options.dbPath ?? automationsDbPath();
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
-    this.db = withBusyRetry(() => new Database(this.path, { create: true }));
+    this.db = withBusyRetry(() => new SqliteAdapter(this.path));
     withBusyRetry(() => this.db.exec("PRAGMA busy_timeout = 10000;"));
-    withBusyRetry(() => this.db.exec("PRAGMA foreign_keys = ON;"));
-    withBusyRetry(() => this.db.exec("PRAGMA journal_mode = WAL;"));
     withBusyRetry(() => this.migrate());
   }
 
@@ -1411,7 +1414,7 @@ function pruneUndefined<T extends object>(input: T): T {
   return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)) as T;
 }
 
-function withImmediateTransaction<T>(db: Database, fn: () => T): T {
+function withImmediateTransaction<T>(db: SqliteAdapter, fn: () => T): T {
   return withBusyRetry(() => {
     db.exec("BEGIN IMMEDIATE;");
     try {
