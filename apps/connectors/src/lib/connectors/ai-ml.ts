@@ -101,6 +101,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "llm", "fine-tuning"],
   },
   {
+    name: "traverse",
+    displayName: "Traverse",
+    description: "RL training environments, episodes, judgments, and datasets",
+    category: "AI & ML",
+    tags: ["ai", "rl", "training", "environments"],
+  },
+  {
     name: "groq",
     displayName: "Groq",
     description: "Ultra-fast LLM inference",
