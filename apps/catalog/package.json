@@ -1,0 +1,97 @@
+{
+  "name": "@hasna/catalog",
+  "version": "0.1.0",
+  "description": "Read-model app catalog for Hasna distribution: seed hasna.app.v1 records from opensource repos, query them via CLI/MCP/HTTP, and generate the public static catalog site.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "catalog": "dist/cli/index.js",
+    "catalog-mcp": "dist/mcp/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./contracts": {
+      "types": "./dist/contracts.d.ts",
+      "import": "./dist/contracts.js"
+    },
+    "./store": {
+      "types": "./dist/store.d.ts",
+      "import": "./dist/store.js"
+    },
+    "./seed": {
+      "types": "./dist/seed.d.ts",
+      "import": "./dist/seed.js"
+    },
+    "./site": {
+      "types": "./dist/site.d.ts",
+      "import": "./dist/site.js"
+    },
+    "./ingest": {
+      "types": "./dist/ingest.d.ts",
+      "import": "./dist/ingest.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp/index.d.ts",
+      "import": "./dist/mcp/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "fixtures",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "bun run clean && bun build src/index.ts src/contracts.ts src/store.ts src/seed.ts src/site.ts src/ingest.ts src/types.ts src/paths.ts src/version.ts --root src --outdir dist --target bun && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist && chmod +x dist/cli/index.js dist/mcp/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test ./tests",
+    "dev:cli": "bun run src/cli/index.ts",
+    "dev:mcp": "bun run src/mcp/index.ts",
+    "dev:serve": "bun run src/cli/index.ts serve",
+    "prepublishOnly": "bun run build && bun run typecheck && bun test"
+  },
+  "keywords": [
+    "catalog",
+    "distribution",
+    "app-registry",
+    "read-model",
+    "mcp",
+    "cli",
+    "hasna"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/open-catalog.git"
+  },
+  "homepage": "https://github.com/hasna/open-catalog",
+  "bugs": {
+    "url": "https://github.com/hasna/open-catalog/issues"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "author": "Hasna",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "commander": "^13.1.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.4",
+    "typescript": "^5.7.3"
+  }
+}
