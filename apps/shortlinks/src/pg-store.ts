@@ -4,6 +4,7 @@ import { makeId, now } from "./database.js";
 import { getMachineId } from "./machine.js";
 import { getShortlinksDatabaseSsl, getShortlinksDatabaseUrl } from "./runtime.js";
 import { DEFAULT_SLUG_LENGTH, normalizeSlug, randomToken } from "./slug.js";
+import type { TypedQueryClient } from "./generated/storage-kit/query.js";
 import type { AddDomainInput, Click, ClickInput, CreateLinkInput, Domain, Link, LinkStats } from "./types.js";
 
 type PgAdapterLike = {
@@ -167,11 +168,36 @@ function clickFromRow(row: ClickRow): Click {
   };
 }
 
+/**
+ * Adapt a vendored storage-kit `TypedQueryClient` (which speaks `$1` positional
+ * params) to the `?`-placeholder `PgAdapterLike` the store queries are written
+ * against. This lets `shortlinks-serve` reuse the exact same SQL as the CLI while
+ * opening its cloud pool through the sanctioned kit (`createCloudPoolFromEnv`).
+ */
+export function createKitPgAdapter(client: TypedQueryClient): PgAdapterLike {
+  return {
+    async get(sql: string, ...params: unknown[]): Promise<any> {
+      return client.get(toPostgresSql(sql), params as unknown[]);
+    },
+    async all(sql: string, ...params: unknown[]): Promise<any[]> {
+      return client.many(toPostgresSql(sql), params as unknown[]);
+    },
+    async run(sql: string, ...params: unknown[]): Promise<unknown> {
+      return client.query(toPostgresSql(sql), params as unknown[]);
+    },
+  };
+}
+
 export class PgShortlinksStore {
   constructor(private readonly pg: PgAdapterLike) {}
 
   static async fromConnectionString(connectionString: string, options: PgConnectionOptions = {}): Promise<PgShortlinksStore> {
     return new PgShortlinksStore(await PgPoolAdapter.create(connectionString, options));
+  }
+
+  /** Build a store over a vendored storage-kit query client (the serve path). */
+  static fromQueryClient(client: TypedQueryClient): PgShortlinksStore {
+    return new PgShortlinksStore(createKitPgAdapter(client));
   }
 
   static async fromEnv(env: NodeJS.ProcessEnv = process.env): Promise<PgShortlinksStore> {

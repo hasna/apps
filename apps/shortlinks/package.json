@@ -1,12 +1,14 @@
 {
   "name": "@hasna/shortlinks",
-  "version": "0.1.23",
+  "version": "0.1.24",
   "description": "CLI-only shortlink manager for custom domains, click tracking, Cloudflare setup, and app-owned Postgres runtime support",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "shortlinks": "dist/cli/index.js"
+    "shortlinks": "dist/cli/index.js",
+    "shortlinks-mcp": "dist/mcp/index.js",
+    "shortlinks-serve": "dist/serve/index.js"
   },
   "exports": {
     ".": {
@@ -28,6 +30,10 @@
     "./runtime": {
       "types": "./dist/runtime.d.ts",
       "import": "./dist/runtime.js"
+    },
+    "./sdk": {
+      "types": "./dist/sdk/index.d.ts",
+      "import": "./dist/sdk/index.js"
     }
   },
   "files": [
@@ -39,11 +45,15 @@
     "SECURITY.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun && bun build src/index.ts --outdir dist --target bun && bun build src/server.ts --outdir dist --target bun && bun build src/cloudflare.ts --outdir dist --target bun && bun build src/runtime.ts --outdir dist --target bun && bun build src/pg-store.ts --outdir dist --target bun && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "build": "rm -rf dist && bun build src/cli/index.ts src/mcp/index.ts src/serve/index.ts src/sdk/index.ts src/index.ts src/server.ts src/cloudflare.ts src/runtime.ts src/pg-store.ts --root src --outdir dist --target bun --external @modelcontextprotocol/sdk && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "sdk:generate": "bun run scripts/generate-sdk.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.ts",
-    "prepublishOnly": "bun run typecheck && bun run test && bun run build"
+    "dev:mcp": "bun run src/mcp/index.ts",
+    "dev:serve": "bun run src/serve/index.ts",
+    "verify:release": "bun run typecheck && bun run test && bun run build",
+    "prepublishOnly": "bun run verify:release"
   },
   "keywords": [
     "shortlinks",
@@ -74,9 +84,12 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
+    "@hasna/contracts": "0.4.1",
     "@hasna/events": "^0.1.6",
+    "@modelcontextprotocol/sdk": "^1.27.1",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
+    "hono": "^4.12.7",
     "pg": "^8.13.3"
   },
   "devDependencies": {

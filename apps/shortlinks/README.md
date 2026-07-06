@@ -1,8 +1,33 @@
 # @hasna/shortlinks
 
-CLI-only shortlink management for custom domains.
+Shortlink management for custom domains — CLI, MCP server, REST API, and a generated SDK.
 
 `shortlinks` creates Bitly-style short URLs, supports multiple domains, records click analytics, can run a tiny redirect server, and includes helper commands for Cloudflare DNS/Workers and `@hasna/domains`. It defaults to local SQLite and can serve from an app-owned PostgreSQL database when `HASNA_SHORTLINKS_STORE=postgres` and `HASNA_SHORTLINKS_DATABASE_URL` are configured.
+
+## Surfaces
+
+Four surfaces share one core library:
+
+| Surface | Bin / package | Purpose |
+| --- | --- | --- |
+| CLI | `shortlinks` | Interactive/scriptable link + domain management (`--json` for agents). |
+| MCP | `shortlinks-mcp` | Model Context Protocol server (stdio or `--http`) exposing link/domain tools to agents. |
+| REST API | `shortlinks-serve` | HTTP service: `GET /health`, `/ready`, `/version`, `/openapi.json`, and a versioned `/v1` CRUD API guarded by API-key auth. |
+| SDK | `@hasna/shortlinks-sdk` (+ `@hasna/shortlinks/sdk`) | Typed fetch client generated from the serve OpenAPI (`bun run sdk:generate`). |
+
+### Cloud service (PURE REMOTE, Amendment A1)
+
+`shortlinks-serve` reads/writes the shared cloud Postgres directly via the vendored `@hasna/contracts` storage kit — no sync engine or cache in the service. API-key auth comes from `@hasna/contracts/auth`; mint keys with `contracts issue-key --app shortlinks --scopes 'shortlinks:read,shortlinks:write'`.
+
+```bash
+HASNA_SHORTLINKS_STORAGE_MODE=cloud \
+HASNA_SHORTLINKS_DATABASE_URL=postgres://user:pass@host:5432/shortlinks?sslmode=require \
+HASNA_SHORTLINKS_API_SIGNING_KEY=... \
+shortlinks-serve            # migrate (idempotent) then serve on :8080
+shortlinks-serve migrate    # one-shot migration task
+```
+
+Client self_hosted mode uses `SHORTLINKS_API_URL` + `SHORTLINKS_API_KEY` (never a DSN).
 
 [![npm](https://img.shields.io/npm/v/@hasna/shortlinks)](https://www.npmjs.com/package/@hasna/shortlinks)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)

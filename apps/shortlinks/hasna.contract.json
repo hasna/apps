@@ -1,0 +1,31 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "shortlinks",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.4.1",
+  "description": "Open-source shortlink manager for custom domains, click tracking, and Cloudflare/Postgres runtime support, with a CLI, MCP server, REST API (shortlinks-serve), and a generated SDK. Cloud service is PURE REMOTE (Amendment A1): reads/writes RDS Postgres directly.",
+  "bins": ["shortlinks", "shortlinks-mcp", "shortlinks-serve"],
+  "storage": {
+    "mode": "cloud",
+    "envPrefix": "HASNA_SHORTLINKS_",
+    "aliasEnvPrefix": "SHORTLINKS_",
+    "databaseUrlSecretRef": "hasna/oss/shortlinks/database-url",
+    "sqlitePath": "~/.hasna/shortlinks/shortlinks.db"
+  },
+  "metadata": {
+    "surfaces": {
+      "cli": "shortlinks",
+      "mcp": "shortlinks-mcp",
+      "serve": "shortlinks-serve",
+      "sdk": "@hasna/shortlinks-sdk"
+    },
+    "serve": {
+      "port": 8080,
+      "probes": ["/health", "/ready", "/version"],
+      "openapi": "/openapi.json",
+      "apiVersion": "v1",
+      "auth": "api-key (@hasna/contracts)"
+    }
+  }
+}
