@@ -955,6 +955,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["testing", "test management", "qa", "reporting", "software quality"],
   },
   {
+    name: "testmo",
+    displayName: "Testmo",
+    description: "Test management platform for manual and automated testing",
+    category: "Developer Tools",
+    tags: ["testing", "qa", "automation", "test management"],
+  },
+  {
     name: "textkit",
     displayName: "TextKit",
     description: "Text processing and manipulation API for formatting and transforming text",
