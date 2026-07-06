@@ -1,0 +1,118 @@
+{
+  "name": "@hasna/announce",
+  "version": "0.1.0",
+  "description": "Release announcement composer, per-channel delivery ledger, scheduling, and engagement reporting for Hasna-coded apps",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "announce": "dist/cli/index.js",
+    "announce-mcp": "dist/mcp/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./contracts": {
+      "types": "./dist/contracts.d.ts",
+      "import": "./dist/contracts.js"
+    },
+    "./events": {
+      "types": "./dist/events.d.ts",
+      "import": "./dist/events.js"
+    },
+    "./compose": {
+      "types": "./dist/lib/compose.d.ts",
+      "import": "./dist/lib/compose.js"
+    },
+    "./render": {
+      "types": "./dist/lib/render/index.d.ts",
+      "import": "./dist/lib/render/index.js"
+    },
+    "./ledger": {
+      "types": "./dist/lib/ledger.d.ts",
+      "import": "./dist/lib/ledger.js"
+    },
+    "./deliver": {
+      "types": "./dist/lib/deliver.d.ts",
+      "import": "./dist/lib/deliver.js"
+    },
+    "./shortlinks": {
+      "types": "./dist/lib/shortlinks.d.ts",
+      "import": "./dist/lib/shortlinks.js"
+    },
+    "./report": {
+      "types": "./dist/lib/report.d.ts",
+      "import": "./dist/lib/report.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp/index.d.ts",
+      "import": "./dist/mcp/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md",
+    "SECURITY.md",
+    "CONTRIBUTING.md"
+  ],
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "bun run clean && bun build src/index.ts src/contracts.ts src/events.ts src/types.ts src/lib/compose.ts src/lib/ledger.ts src/lib/deliver.ts src/lib/shortlinks.ts src/lib/report.ts src/lib/render/index.ts --outdir dist --target bun --root src --packages external && bun build src/cli/index.ts --outdir dist/cli --target bun --packages external && bun build src/mcp/index.ts --outdir dist/mcp --target bun --packages external && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "dev:cli": "bun run src/cli/index.ts",
+    "dev:mcp": "bun run src/mcp/index.ts",
+    "prepack": "bun run build",
+    "prepublishOnly": "bun run typecheck && bun test",
+    "postinstall": "mkdir -p $HOME/.hasna/announce 2>/dev/null || true"
+  },
+  "keywords": [
+    "announcements",
+    "release",
+    "campaigns",
+    "email",
+    "telegram",
+    "shortlinks",
+    "mcp",
+    "cli",
+    "hasna"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/open-announce.git"
+  },
+  "homepage": "https://github.com/hasna/open-announce#readme",
+  "bugs": {
+    "url": "https://github.com/hasna/open-announce/issues"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "author": "Hasna",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@hasna/events": "^0.1.13",
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "commander": "^13.1.0",
+    "zod": "^3.25.76"
+  },
+  "peerDependencies": {
+    "@hasna/shortlinks": ">=0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@hasna/shortlinks": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.4",
+    "typescript": "^5.7.3"
+  }
+}
