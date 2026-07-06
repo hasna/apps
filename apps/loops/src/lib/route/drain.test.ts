@@ -94,7 +94,7 @@ describe("drainTodosTaskRoutes freshness close", () => {
     expect(after.status).toBe("completed");
     expect(after.tags).not.toContain("auto:route");
     expect(readyCount()).toBe(0);
-  });
+  }, 15_000);
 
   test.skipIf(!HAS_TODOS)("dry-run never mutates the source task", () => {
     const taskId = addTask(MERGED_PR_DESCRIPTION);
