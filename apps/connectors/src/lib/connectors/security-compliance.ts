@@ -129,6 +129,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ssl", "certificates", "security", "monitoring", "tls"],
   },
   {
+    name: "sucuri",
+    displayName: "Sucuri",
+    description: "Website malware scanning via the Sucuri Scanning API",
+    category: "Security & Compliance",
+    tags: ["security", "website", "scanning", "malware"],
+  },
+  {
     name: "tenable",
     displayName: "Tenable",
     description: "Cloud vulnerability management and exposure platform",
