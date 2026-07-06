@@ -101,11 +101,13 @@
     "bun": ">=1.0.0"
   },
   "dependencies": {
+    "@hasna/contracts": "^0.4.1",
     "@hasna/events": "^0.1.9",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@openrouter/ai-sdk-provider": "2.9.1",
     "ai": "6.0.204",
     "commander": "^13.1.0",
+    "pg": "^8.13.1",
     "zod": "4.4.3"
   },
   "optionalDependencies": {
@@ -113,6 +115,7 @@
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "@types/pg": "^8.11.10",
     "typescript": "^5.7.3"
   },
   "publishConfig": {

@@ -68,7 +68,7 @@ const GENERATED_ROUTE_TEMPLATE_IDS = new Set(["todos-task-worker-verifier", "tas
 const GENERATED_ROUTE_KEYS = new Set(["todos-task", "generic-event"]);
 const TASK_LIFECYCLE_TEMPLATE_ID = "task-lifecycle";
 
-interface LoopRow {
+export interface LoopRow {
   id: string;
   name: string;
   description: string | null;
@@ -92,7 +92,7 @@ interface LoopRow {
   updated_at: string;
 }
 
-interface RunRow {
+export interface RunRow {
   id: string;
   loop_id: string;
   loop_name: string;
@@ -126,7 +126,7 @@ interface LatestRunSummaryRow {
   created_at: string;
 }
 
-interface WorkflowRow {
+export interface WorkflowRow {
   id: string;
   name: string;
   description: string | null;
@@ -138,7 +138,7 @@ interface WorkflowRow {
   updated_at: string;
 }
 
-interface WorkflowRunRow {
+export interface WorkflowRunRow {
   id: string;
   workflow_id: string;
   workflow_name: string;
@@ -159,7 +159,7 @@ interface WorkflowRunRow {
   updated_at: string;
 }
 
-interface WorkflowInvocationRow {
+export interface WorkflowInvocationRow {
   id: string;
   workflow_id: string | null;
   template_id: string | null;
@@ -179,7 +179,7 @@ interface WorkflowInvocationRow {
   updated_at: string;
 }
 
-interface WorkflowWorkItemRow {
+export interface WorkflowWorkItemRow {
   id: string;
   route_key: string;
   idempotency_key: string;
@@ -203,7 +203,7 @@ interface WorkflowWorkItemRow {
   updated_at: string;
 }
 
-interface WorkflowStepRunRow {
+export interface WorkflowStepRunRow {
   id: string;
   workflow_run_id: string;
   step_id: string;
@@ -224,7 +224,7 @@ interface WorkflowStepRunRow {
   updated_at: string;
 }
 
-interface WorkflowEventRow {
+export interface WorkflowEventRow {
   id: string;
   workflow_run_id: string;
   sequence: number;
@@ -234,7 +234,7 @@ interface WorkflowEventRow {
   created_at: string;
 }
 
-interface GoalRow {
+export interface GoalRow {
   id: string;
   plan_id: string;
   objective: string;
@@ -255,7 +255,7 @@ interface GoalRow {
   updated_at: string;
 }
 
-interface GoalPlanNodeRow {
+export interface GoalPlanNodeRow {
   id: string;
   goal_id: string;
   plan_id: string;
@@ -273,7 +273,7 @@ interface GoalPlanNodeRow {
   updated_at: string;
 }
 
-interface GoalRunRow {
+export interface GoalRunRow {
   id: string;
   goal_id: string;
   plan_id: string;
@@ -303,7 +303,7 @@ export interface DaemonLease {
   updatedAt: string;
 }
 
-interface LeaseRow {
+export interface LeaseRow {
   id: string;
   pid: number;
   hostname: string;
@@ -313,7 +313,7 @@ interface LeaseRow {
   updated_at: string;
 }
 
-function rowToLoop(row: LoopRow): Loop {
+export function rowToLoop(row: LoopRow): Loop {
   return {
     id: row.id,
     name: row.name,
@@ -339,7 +339,7 @@ function rowToLoop(row: LoopRow): Loop {
   };
 }
 
-function rowToRun(row: RunRow): LoopRun {
+export function rowToRun(row: RunRow): LoopRun {
   return {
     id: row.id,
     loopId: row.loop_id,
@@ -369,7 +369,7 @@ function latestRunTime(row: LatestRunSummaryRow): string {
   return row.finished_at ?? row.started_at ?? row.created_at;
 }
 
-function rowToWorkflow(row: WorkflowRow): WorkflowSpec {
+export function rowToWorkflow(row: WorkflowRow): WorkflowSpec {
   return {
     id: row.id,
     name: row.name,
@@ -383,7 +383,7 @@ function rowToWorkflow(row: WorkflowRow): WorkflowSpec {
   };
 }
 
-function rowToWorkflowRun(row: WorkflowRunRow): WorkflowRun {
+export function rowToWorkflowRun(row: WorkflowRunRow): WorkflowRun {
   return {
     id: row.id,
     workflowId: row.workflow_id,
@@ -406,7 +406,7 @@ function rowToWorkflowRun(row: WorkflowRunRow): WorkflowRun {
   };
 }
 
-function rowToWorkflowInvocation(row: WorkflowInvocationRow): WorkflowInvocation {
+export function rowToWorkflowInvocation(row: WorkflowInvocationRow): WorkflowInvocation {
   return {
     id: row.id,
     workflowId: row.workflow_id ?? undefined,
@@ -421,7 +421,7 @@ function rowToWorkflowInvocation(row: WorkflowInvocationRow): WorkflowInvocation
   };
 }
 
-function rowToWorkflowWorkItem(row: WorkflowWorkItemRow): WorkflowWorkItem {
+export function rowToWorkflowWorkItem(row: WorkflowWorkItemRow): WorkflowWorkItem {
   return {
     id: row.id,
     routeKey: row.route_key,
@@ -447,7 +447,7 @@ function rowToWorkflowWorkItem(row: WorkflowWorkItemRow): WorkflowWorkItem {
   };
 }
 
-function rowToWorkflowStepRun(row: WorkflowStepRunRow): WorkflowStepRun {
+export function rowToWorkflowStepRun(row: WorkflowStepRunRow): WorkflowStepRun {
   return {
     id: row.id,
     workflowRunId: row.workflow_run_id,
@@ -470,7 +470,7 @@ function rowToWorkflowStepRun(row: WorkflowStepRunRow): WorkflowStepRun {
   };
 }
 
-function rowToGoal(row: GoalRow): Goal {
+export function rowToGoal(row: GoalRow): Goal {
   return {
     goalId: row.id,
     planId: row.plan_id,
@@ -493,7 +493,7 @@ function rowToGoal(row: GoalRow): Goal {
   };
 }
 
-function rowToGoalPlanNode(row: GoalPlanNodeRow): GoalPlanNode {
+export function rowToGoalPlanNode(row: GoalPlanNodeRow): GoalPlanNode {
   return {
     nodeId: row.id,
     planId: row.plan_id,
@@ -512,7 +512,7 @@ function rowToGoalPlanNode(row: GoalPlanNodeRow): GoalPlanNode {
   };
 }
 
-function rowToGoalRun(row: GoalRunRow): GoalRun {
+export function rowToGoalRun(row: GoalRunRow): GoalRun {
   return {
     runId: row.id,
     goalId: row.goal_id,
@@ -534,7 +534,7 @@ function rowToGoalRun(row: GoalRunRow): GoalRun {
   };
 }
 
-function rowToWorkflowEvent(row: WorkflowEventRow): WorkflowEvent {
+export function rowToWorkflowEvent(row: WorkflowEventRow): WorkflowEvent {
   return {
     id: row.id,
     workflowRunId: row.workflow_run_id,
@@ -588,7 +588,7 @@ function isLiveStepProcess(pid: number, stepStartedAt: string | null | undefined
   return actualMs >= stepStartMs - START_TIME_TOLERANCE_MS;
 }
 
-function rowToLease(row: LeaseRow): DaemonLease {
+export function rowToLease(row: LeaseRow): DaemonLease {
   return {
     id: row.id,
     pid: row.pid,
@@ -724,7 +724,7 @@ export interface RecordGoalEventInput {
   rawResponse?: unknown;
 }
 
-function workItemStatusForLoopRun(
+export function workItemStatusForLoopRun(
   status: RunStatus,
   attempt: number,
   maxAttempts: number | undefined,
@@ -758,7 +758,7 @@ function clampPersistedRunOutput(value: string | null): string | null {
 }
 
 /** Scrub secrets then bound size before persisting run stdout/stderr. */
-function persistedRunOutput(value: string | undefined | null): string | null {
+export function persistedRunOutput(value: string | undefined | null): string | null {
   return clampPersistedRunOutput(scrubbedOrNull(value));
 }
 
