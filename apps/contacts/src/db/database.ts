@@ -622,6 +622,19 @@ const MIGRATIONS = [
 
   CREATE INDEX IF NOT EXISTS idx_contact_suppressions_unsynced ON contact_suppressions(channel) WHERE synced_at IS NULL;
   `,
+
+  `
+  CREATE TABLE IF NOT EXISTS _contacts_tombstones (
+    table_name TEXT NOT NULL CHECK(table_name IN ('contacts','companies','tags')),
+    row_id TEXT NOT NULL,
+    deleted_at TEXT NOT NULL DEFAULT (datetime('now')),
+    actor TEXT,
+    reason TEXT,
+    PRIMARY KEY (table_name, row_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_contacts_tombstones_deleted_at ON _contacts_tombstones(deleted_at);
+  `,
 ];
 
 export type ContactsDatabase = SqliteAdapter;
