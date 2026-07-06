@@ -10,6 +10,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["payments", "billing"],
   },
   {
+    name: "stripe-financial-connections",
+    displayName: "Stripe Financial Connections",
+    description: "Banking data and financial account linking",
+    category: "Commerce & Finance",
+    tags: ["financial-connections", "banking", "stripe"],
+  },
+  {
     name: "stripeatlas",
     displayName: "Stripe Atlas",
     description: "Company incorporation",
