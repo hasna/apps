@@ -449,6 +449,9 @@ export interface Loop {
   retryDelayMs: number;
   leaseMs: number;
   expiresAt?: string;
+  latestRunId?: string;
+  latestRunStatus?: RunStatus;
+  lastRunAt?: string;
   createdAt: string;
   updatedAt: string;
 }

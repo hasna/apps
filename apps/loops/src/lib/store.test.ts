@@ -64,6 +64,51 @@ describe("Store", () => {
     }
   });
 
+  test("hydrates latest run summaries when listing loops without merging duplicate names", () => {
+    const store = new Store(":memory:");
+    try {
+      const paused = store.createLoop(
+        {
+          name: "duplicate-router",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      store.updateLoop(paused.id, { status: "paused" });
+      const active = store.createLoop(
+        {
+          name: "duplicate-router",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2025-12-31T00:00:01Z"),
+      );
+      const claim = store.claimRun(active, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
+      expect(claim).toBeDefined();
+      const run = store.finalizeRun(claim!.run.id, {
+        status: "succeeded",
+        finishedAt: "2026-01-01T00:00:05.000Z",
+        durationMs: 5_000,
+        stdout: "",
+        stderr: "",
+      });
+
+      const loops = store.listLoops({ includeArchived: true });
+      const activeListed = loops.find((loop) => loop.id === active.id);
+      const pausedListed = loops.find((loop) => loop.id === paused.id);
+      expect(activeListed).toMatchObject({
+        latestRunId: run.id,
+        latestRunStatus: "succeeded",
+        lastRunAt: "2026-01-01T00:00:05.000Z",
+      });
+      expect(pausedListed?.latestRunId).toBeUndefined();
+      expect(pausedListed?.name).toBe(activeListed?.name);
+    } finally {
+      store.close();
+    }
+  });
+
   test("clamps oversized run stdout/stderr but keeps small output verbatim (loops.db growth guard)", () => {
     const store = new Store(":memory:");
     try {
