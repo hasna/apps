@@ -16,6 +16,12 @@ API key via `TOMTOM_API_KEY` or `connect-tomtom config set-key <key>`.
 
 Dashboard auth type: **apikey** (field: `api_key`).
 
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `TOMTOM_API_KEY` | TomTom API key |
+
 ## API
 
 - Base URL: `https://api.tomtom.com`
