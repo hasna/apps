@@ -164,6 +164,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["hr", "employees", "management"],
   },
   {
+    name: "teamtailor",
+    displayName: "Teamtailor",
+    description: "Recruitment ATS - candidates, jobs, and applications",
+    category: "Business Tools",
+    tags: ["recruiting", "ats", "hiring", "candidates", "jobs"],
+  },
+  {
     name: "7todos",
     displayName: "7todos",
     description: "Task management and to-do lists",
