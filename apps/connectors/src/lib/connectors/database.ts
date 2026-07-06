@@ -79,4 +79,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Database",
     tags: ["database", "time-series", "postgresql", "analytics", "sql"],
   },
+  {
+    name: "turso",
+    displayName: "Turso",
+    description: "Serverless SQLite platform for edge databases with libSQL",
+    category: "Database",
+    tags: ["sqlite", "serverless", "database", "libsql", "edge"],
+  },
 ];
