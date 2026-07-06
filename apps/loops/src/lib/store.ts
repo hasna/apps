@@ -117,6 +117,15 @@ interface RunRow {
   updated_at: string;
 }
 
+interface LatestRunSummaryRow {
+  loop_id: string;
+  id: string;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+}
+
 interface WorkflowRow {
   id: string;
   name: string;
@@ -354,6 +363,10 @@ function rowToRun(row: RunRow): LoopRun {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function latestRunTime(row: LatestRunSummaryRow): string {
+  return row.finished_at ?? row.started_at ?? row.created_at;
 }
 
 function rowToWorkflow(row: WorkflowRow): WorkflowSpec {
@@ -1335,7 +1348,35 @@ export class Store {
         .query<LoopRow, [number]>("SELECT * FROM loops WHERE archived_at IS NULL ORDER BY status ASC, next_run_at ASC LIMIT ?")
         .all(limit);
     }
-    return rows.map(rowToLoop);
+    return this.withLatestRunSummaries(rows.map(rowToLoop));
+  }
+
+  private withLatestRunSummaries(loops: Loop[]): Loop[] {
+    if (loops.length === 0) return loops;
+    const placeholders = loops.map(() => "?").join(",");
+    const rows = this.db
+      .query<LatestRunSummaryRow, string[]>(
+        `SELECT loop_id, id, status, started_at, finished_at, created_at
+         FROM (
+           SELECT loop_id, id, status, started_at, finished_at, created_at,
+             ROW_NUMBER() OVER (PARTITION BY loop_id ORDER BY created_at DESC, id DESC) AS rn
+           FROM loop_runs
+           WHERE loop_id IN (${placeholders})
+         )
+         WHERE rn = 1`,
+      )
+      .all(...loops.map((loop) => loop.id));
+    const latestByLoopId = new Map(rows.map((row) => [row.loop_id, row]));
+    return loops.map((loop) => {
+      const latest = latestByLoopId.get(loop.id);
+      if (!latest) return loop;
+      return {
+        ...loop,
+        latestRunId: latest.id,
+        latestRunStatus: latest.status as RunStatus,
+        lastRunAt: latestRunTime(latest),
+      };
+    });
   }
 
   dueLoops(now: Date, limit = 500): Loop[] {
