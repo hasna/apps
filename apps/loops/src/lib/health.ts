@@ -555,7 +555,11 @@ export function classifyRunFailure(run: LoopRun): RunFailureSignal | undefined {
   else if (run.status === "skipped" && /previous run still active/.test(text)) classification = "skipped_previous_active";
   else if (/runtime preflight failed|preflight failed|executable not found in path|none of required executables found|auth profile preflight failed|profile not found/.test(text)) classification = "preflight";
   else if (/rate limit|too many requests|429\b|quota exceeded/.test(text)) classification = "rate_limit";
-  else if (/unauthorized|authentication|auth\b|api key|invalid token|permission denied|401\b|403\b/.test(text)) classification = "auth";
+  else if (
+    /unauthorized|authentication|auth\b|api key|invalid token|permission denied|401\b|403\b|not logged in|please run \/login|login required|not authenticated|failed to authenticate/.test(
+      text,
+    )
+  ) classification = "auth";
   else if ((summary = providerUnavailableSummary(rawText))) classification = "provider_unavailable";
   else if (/model .*not found|model_not_found|unknown model|invalid model|404.*model/.test(text)) classification = "model_not_found";
   else if (/context length|context_length|context window|maximum context|token limit|too many tokens/.test(text)) classification = "context_length";
