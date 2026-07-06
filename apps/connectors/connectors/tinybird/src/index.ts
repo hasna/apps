@@ -17,12 +17,6 @@ export {
   loadProfile,
   saveProfile,
   clearConfig,
-  getOAuthConfig,
-  setOAuthConfig,
-  loadOAuthTokens,
-  saveOAuthTokens,
-  clearOAuthTokens,
-  getAccessToken,
 } from './utils/config';
 export {
   formatOutput,

@@ -31,6 +31,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["research", "papers", "academic"],
   },
   {
+    name: "zenodo",
+    displayName: "Zenodo",
+    description: "Open research data repository — search records and manage deposits",
+    category: "Data & Analytics",
+    tags: ["research", "open-access", "datasets"],
+  },
+  {
     name: "brandsight",
     displayName: "Brandsight",
     description: "Brand monitoring",
@@ -395,6 +402,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["stocks", "market-data", "finance", "api"],
   },
   {
+    name: "twelve-data",
+    displayName: "Twelve Data",
+    description: "Real-time and historical stock, forex, and crypto market data",
+    category: "Data & Analytics",
+    tags: ["stocks", "forex", "crypto", "market-data", "finance"],
+  },
+  {
     name: "metabase",
     displayName: "Metabase",
     description: "Open-source business intelligence and analytics",
@@ -519,6 +533,20 @@ export const connectors: ConnectorMeta[] = [
     description: "Real-time analytics and data platform",
     category: "Data & Analytics",
     tags: ["analytics", "data", "sql"],
+  },
+  {
+    name: "triple-whale",
+    displayName: "Triple Whale",
+    description: "Ecommerce analytics - summary, attribution, data-in, SQL, Moby",
+    category: "Data & Analytics",
+    tags: ["ecommerce", "analytics", "attribution", "marketing"],
+  },
+  {
+    name: "typesense",
+    displayName: "Typesense",
+    description: "Open-source search engine for full-text, faceted, and vector search",
+    category: "Data & Analytics",
+    tags: ["search", "indexing", "vector", "full-text"],
   },
   {
     name: "uproc",

@@ -41,6 +41,29 @@ export class TinybirdClient {
     return text ? `?${text}` : '';
   }
 
+  createForm(params: Record<string, string | number | boolean | undefined>): URLSearchParams {
+    const form = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value === undefined || value === '') continue;
+      form.append(key, String(value));
+    }
+    return form;
+  }
+
+  createScopedTokenForm(options: {
+    name?: string;
+    description?: string;
+    scopes?: string[];
+  }): URLSearchParams {
+    const form = new URLSearchParams();
+    if (options.name) form.set('name', options.name);
+    if (options.description !== undefined) form.set('description', options.description);
+    for (const scope of options.scopes ?? []) {
+      form.append('scope', scope);
+    }
+    return form;
+  }
+
   async request<T = unknown>(path: string, options: TinybirdRequestOptions = {}): Promise<T> {
     const { method = 'GET', params, body, headers = {}, skipJsonContentType, rawText } = options;
     const url = `${this.baseUrl}${path}${this.buildQuery(params)}`;

@@ -43,14 +43,14 @@ export class DataSourcesApi {
   ): Promise<unknown> {
     return this.client.request(`/v0/datasources/${encodeURIComponent(name)}/alter`, {
       method: 'POST',
-      body: {
+      body: this.client.createForm({
         schema: options.schema,
         description: options.description,
         ttl: options.ttl,
         kafka_topic: options.kafkaTopic,
         kafka_store_raw_value: options.kafkaStoreRawValue,
         dry_run: options.dryRun,
-      },
+      }),
     });
   }
 
@@ -64,7 +64,7 @@ export class DataSourcesApi {
   async deleteRows(name: string, deleteCondition: string): Promise<unknown> {
     return this.client.request(`/v0/datasources/${encodeURIComponent(name)}/delete`, {
       method: 'POST',
-      body: { delete_condition: deleteCondition },
+      body: this.client.createForm({ delete_condition: deleteCondition }),
     });
   }
 
@@ -78,7 +78,7 @@ export class DataSourcesApi {
   async rename(name: string, newName: string): Promise<unknown> {
     return this.client.request(`/v0/datasources/${encodeURIComponent(name)}`, {
       method: 'PUT',
-      body: { name: newName },
+      body: this.client.createForm({ name: newName }),
     });
   }
 }

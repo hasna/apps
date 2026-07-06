@@ -10,6 +10,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["hospitality", "hotel", "booking", "pms"],
   },
   {
+    name: "trellistech",
+    displayName: "Trellis",
+    description: "Short-term rental property and task operations platform",
+    category: "Healthcare & Hospitality",
+    tags: ["hospitality", "property", "short-term-rental", "tasks"],
+  },
+  {
     name: "oura",
     displayName: "Oura",
     description: "Oura Ring health and sleep tracking data API",

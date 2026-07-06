@@ -18,18 +18,29 @@ export class PipesApi {
     sql?: string;
     nodes?: PipeNode[];
   }): Promise<unknown> {
-    const body: Record<string, unknown> = { name: options.name };
-    if (options.description) body.description = options.description;
-    if (options.sql) body.sql = options.sql;
-    if (options.nodes) body.nodes = options.nodes;
-    return this.client.request('/v0/pipes', { method: 'POST', body });
+    if (options.nodes) {
+      const body: Record<string, unknown> = { name: options.name, nodes: options.nodes };
+      if (options.description) body.description = options.description;
+      return this.client.request('/v0/pipes', { method: 'POST', body });
+    }
+    return this.client.request('/v0/pipes', {
+      method: 'POST',
+      params: {
+        name: options.name,
+        sql: options.sql,
+        description: options.description,
+      },
+    });
   }
 
   async update(name: string, options: { newName?: string; description?: string }): Promise<unknown> {
-    const body: Record<string, unknown> = {};
-    if (options.newName) body.name = options.newName;
-    if (options.description !== undefined) body.description = options.description;
-    return this.client.request(`/v0/pipes/${encodeURIComponent(name)}`, { method: 'PUT', body });
+    return this.client.request(`/v0/pipes/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      params: {
+        name: options.newName,
+        description: options.description,
+      },
+    });
   }
 
   async delete(name: string): Promise<unknown> {
@@ -54,11 +65,13 @@ export class PipesApi {
   ): Promise<unknown> {
     return this.client.request(`/v0/pipes/${encodeURIComponent(name)}/nodes`, {
       method: 'POST',
-      body: {
+      params: {
         name: options.nodeName,
-        sql: options.sql,
         description: options.description,
       },
+      body: options.sql,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      skipJsonContentType: true,
     });
   }
 
@@ -69,7 +82,13 @@ export class PipesApi {
   ): Promise<unknown> {
     return this.client.request(
       `/v0/pipes/${encodeURIComponent(name)}/nodes/${encodeURIComponent(nodeId)}`,
-      { method: 'PUT', body: options },
+      {
+        method: 'PUT',
+        params: { description: options.description },
+        body: options.sql,
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        skipJsonContentType: true,
+      },
     );
   }
 

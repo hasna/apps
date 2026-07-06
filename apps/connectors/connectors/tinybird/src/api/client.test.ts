@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Tinybird } from './index';
+import { TinybirdClient } from './client';
 
 const realFetch = globalThis.fetch;
 
@@ -86,6 +87,47 @@ describe('TinybirdClient transport', () => {
     expect(recorded[0].body).toBeUndefined();
   });
 
+  test('pipe create with SQL sends query parameters instead of JSON body', async () => {
+    const recorded = installFetch(() => ({ pipe: { name: 'p' } }));
+    const tb = new Tinybird({ apiToken: 'tok' });
+    await tb.pipes.create({ name: 'p', sql: 'select 1', description: 'demo' });
+    expect(recorded[0].url).toContain('/v0/pipes?');
+    expect(recorded[0].url).toContain('name=p');
+    expect(recorded[0].url).toContain('sql=select+1');
+    expect(recorded[0].url).toContain('description=demo');
+    expect(recorded[0].method).toBe('POST');
+    expect(recorded[0].body).toBeUndefined();
+  });
+
+  test('append node sends SQL as raw body with node metadata in query', async () => {
+    const recorded = installFetch(() => ({ node: { name: 'n' } }));
+    const tb = new Tinybird({ apiToken: 'tok' });
+    await tb.pipes.appendNode('p', { nodeName: 'n', sql: 'select * from p', description: 'next' });
+    expect(recorded[0].url).toContain('/v0/pipes/p/nodes?');
+    expect(recorded[0].url).toContain('name=n');
+    expect(recorded[0].url).toContain('description=next');
+    expect(recorded[0].headers['content-type']).toBe('text/plain; charset=utf-8');
+    expect(recorded[0].body).toBe('select * from p');
+  });
+
+  test('token create sends repeated scope form fields', async () => {
+    const recorded = installFetch(() => ({ token: 'p.token' }));
+    const tb = new Tinybird({ apiToken: 'tok' });
+    await tb.tokens.create({ name: 'read', scopes: ['PIPES:READ:p', 'DATASOURCES:READ:ds'], description: 'Read token' });
+    expect(recorded[0].url).toContain('/v0/tokens');
+    expect(recorded[0].headers['content-type']).toBe('application/x-www-form-urlencoded');
+    expect(recorded[0].body).toBe('name=read&description=Read+token&scope=PIPES%3AREAD%3Ap&scope=DATASOURCES%3AREAD%3Ads');
+  });
+
+  test('datasource row delete sends form-encoded delete condition', async () => {
+    const recorded = installFetch(() => ({ ok: true }));
+    const tb = new Tinybird({ apiToken: 'tok' });
+    await tb.datasources.deleteRows('events', "date < '2026-01-01'");
+    expect(recorded[0].url).toContain('/v0/datasources/events/delete');
+    expect(recorded[0].headers['content-type']).toBe('application/x-www-form-urlencoded');
+    expect(recorded[0].body).toBe('delete_condition=date+%3C+%272026-01-01%27');
+  });
+
   test('requires api token', () => {
     expect(() => new Tinybird({ apiToken: '' })).toThrow('Tinybird API token is required');
   });
@@ -95,5 +137,10 @@ describe('TinybirdClient transport', () => {
     const tb = new Tinybird({ apiToken: 'tok', baseUrl: 'https://custom.example.com/' });
     await tb.tokens.list();
     expect(recorded[0].url).toMatch(/^https:\/\/custom\.example\.com\/v0\/tokens/);
+  });
+
+  test('form helper skips empty and undefined values', () => {
+    const client = new TinybirdClient({ apiToken: 'tok' });
+    expect(client.createForm({ a: '1', b: '', c: undefined, d: false }).toString()).toBe('a=1&d=false');
   });
 });

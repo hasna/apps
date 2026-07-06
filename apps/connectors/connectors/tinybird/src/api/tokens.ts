@@ -14,11 +14,11 @@ export class TokensApi {
   async create(options: { name: string; scopes: string[]; description?: string }): Promise<unknown> {
     return this.client.request('/v0/tokens', {
       method: 'POST',
-      body: {
+      body: this.client.createScopedTokenForm({
         name: options.name,
         scopes: options.scopes,
         description: options.description,
-      },
+      }),
     });
   }
 
@@ -28,7 +28,7 @@ export class TokensApi {
   ): Promise<unknown> {
     return this.client.request(`/v0/tokens/${encodeURIComponent(id)}`, {
       method: 'PUT',
-      body: options,
+      body: this.client.createScopedTokenForm(options),
     });
   }
 
