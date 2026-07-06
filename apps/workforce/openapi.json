@@ -1,0 +1,570 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "@hasna/workforce",
+    "version": "0.1.0",
+    "description": "Unified roster/HRIS: humans, contractors and agents as first-class org members."
+  },
+  "servers": [
+    {
+      "url": "/v1"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "getHealth",
+        "summary": "Health check",
+        "tags": [
+          "system"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Service health { status, version, mode }"
+          }
+        }
+      }
+    },
+    "/v1/members": {
+      "get": {
+        "operationId": "listMembers",
+        "summary": "List roster members",
+        "tags": [
+          "members"
+        ],
+        "security": [
+          {
+            "bearerAuth": [
+              "workforce:read"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createMember",
+        "summary": "Onboard a member (human|contractor|agent)",
+        "tags": [
+          "lifecycle"
+        ],
+        "security": [
+          {
+            "bearerAuth": [
+              "workforce:write"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/v1/members/{id}": {
+      "get": {
+        "operationId": "getMember",
+        "summary": "Get a member by id",
+        "tags": [
+          "lifecycle"
+        ],
+        "security": [
+          {
+            "bearerAuth": [
+              "workforce:read"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateMember",
+        "summary": "Update member attributes",
+        "tags": [
+          "lifecycle"
+        ],
+        "security": [
+          {
+            "bearerAuth": [
+              "workforce:write"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/v1/members/{id}/capabilities": {
+      "get": {
+        "operationId": "listCapabilities",
+        "summary": "List a member's capabilities",
+        "tags": [
+          "capabilities"
+        ],
+        "security": [
+          {
+            "bearerAuth": [
+              "workforce:read"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "post": {
+        "operationId": "addCapability",
+        "summary": "Add a capability to a member",
+        "tags": [
+          "capabilities"
+        ],
+        "security": [
+          {
+            "bearerAuth": [
+              "workforce:write"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/v1/capabilities/{id}": {
+      "delete": {
+        "operationId": "removeCapability",
+        "summary": "Remove a capability",
+        "tags": [
+          "capabilities"
+        ],
+        "security": [
+          {
+            "bearerAuth": [
+              "workforce:write"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/v1/members/{id}/lifecycle": {
+      "get": {
+        "operationId": "listMemberLifecycle",
+        "summary": "List a member's lifecycle events",
+        "tags": [
+          "lifecycle"
+        ],
+        "security": [
+          {
+            "bearerAuth": [
+              "workforce:read"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/v1/members/{id}/role-change": {
+      "post": {
+        "operationId": "recordRoleChange",
+        "summary": "Record a role change (mover)",
+        "tags": [
+          "lifecycle"
+        ],
+        "security": [
+          {
+            "bearerAuth": [
+              "workforce:lifecycle"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/v1/members/{id}/suspend": {
+      "post": {
+        "operationId": "suspendMember",
+        "summary": "Suspend a member",
+        "tags": [
+          "lifecycle"
+        ],
+        "security": [
+          {
+            "bearerAuth": [
+              "workforce:lifecycle"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/v1/members/{id}/reactivate": {
+      "post": {
+        "operationId": "reactivateMember",
+        "summary": "Reactivate a suspended member",
+        "tags": [
+          "lifecycle"
+        ],
+        "security": [
+          {
+            "bearerAuth": [
+              "workforce:lifecycle"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/v1/members/{id}/offboard": {
+      "post": {
+        "operationId": "offboardMember",
+        "summary": "Offboard a member (leaver)",
+        "tags": [
+          "lifecycle"
+        ],
+        "security": [
+          {
+            "bearerAuth": [
+              "workforce:lifecycle"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/v1/lifecycle/verify": {
+      "get": {
+        "operationId": "verifyLifecycleAudit",
+        "summary": "Verify the tamper-evident lifecycle audit chain",
+        "tags": [
+          "lifecycle"
+        ],
+        "security": [
+          {
+            "bearerAuth": [
+              "workforce:admin"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/v1/assignments": {
+      "get": {
+        "operationId": "listAssignments",
+        "summary": "List assignments",
+        "tags": [
+          "assignments"
+        ],
+        "security": [
+          {
+            "bearerAuth": [
+              "workforce:read"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createAssignment",
+        "summary": "Assign a member to an entity/project",
+        "tags": [
+          "assignments"
+        ],
+        "security": [
+          {
+            "bearerAuth": [
+              "workforce:write"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/v1/assignments/{id}": {
+      "get": {
+        "operationId": "getAssignment",
+        "summary": "Get an assignment by id",
+        "tags": [
+          "assignments"
+        ],
+        "security": [
+          {
+            "bearerAuth": [
+              "workforce:read"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/v1/assignments/{id}/end": {
+      "post": {
+        "operationId": "endAssignment",
+        "summary": "End an assignment",
+        "tags": [
+          "assignments"
+        ],
+        "security": [
+          {
+            "bearerAuth": [
+              "workforce:write"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/v1/exports/roster": {
+      "get": {
+        "operationId": "exportRoster",
+        "summary": "Export the payroll/timesheets roster contract",
+        "tags": [
+          "exports"
+        ],
+        "security": [
+          {
+            "bearerAuth": [
+              "workforce:export"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    }
+  }
+}

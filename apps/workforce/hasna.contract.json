@@ -1,0 +1,20 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "workforce",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.4.1",
+  "description": "Unified roster/HRIS CLI + MCP + serve treating humans, contractors and agents as first-class org members. Local mode uses SQLite at ~/.hasna/workforce/workforce.db; cloud mode (HASNA_WORKFORCE_STORAGE_MODE=cloud) is PURE REMOTE per Amendment A1 with all reads/writes hitting the shared cloud Postgres.",
+  "bins": [
+    "workforce",
+    "workforce-mcp",
+    "workforce-serve"
+  ],
+  "storage": {
+    "mode": "local",
+    "envPrefix": "HASNA_WORKFORCE_",
+    "aliasEnvPrefix": "WORKFORCE_",
+    "databaseUrlSecretRef": "hasna/oss/workforce/database-url",
+    "sqlitePath": "~/.hasna/workforce/workforce.db"
+  }
+}

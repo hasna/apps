@@ -1,0 +1,54 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: workforce
+      POSTGRES_USER: workforce
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_password
+    secrets: [pg_password]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U workforce"]
+      interval: 5s
+      retries: 10
+  serve:
+    image: oven/bun:1
+    # Invoke the serve bin directly. `bunx --package` selects the correct bin;
+    # a bare `bunx @hasna/workforce workforce-serve` would run the CLI and pass
+    # "workforce-serve" as a bogus argument.
+    command: ["bunx", "--package", "@hasna/workforce", "workforce-serve"]
+    environment:
+      HASNA_WORKFORCE_STORAGE_MODE: cloud
+      HASNA_WORKFORCE_DATABASE_URL_FILE: /run/secrets/database_url
+      HASNA_WORKFORCE_PORT: "3484"
+      HASNA_WORKFORCE_BIND_HOST: "0.0.0.0"
+      HASNA_WORKFORCE_CORS_ORIGINS: ${CORS_ORIGINS:-}
+      HASNA_WORKFORCE_API_CREDENTIALS: ${API_CREDENTIALS:-}
+    secrets: [database_url]
+    depends_on: { db: { condition: service_healthy } }
+    ports: ["3484:3484"]
+  mcp:
+    image: oven/bun:1
+    # --package selects the MCP bin; a bare `bunx @hasna/workforce workforce-mcp`
+    # would run the CLI and treat "workforce-mcp" as a bogus argument. (BUILD-SPEC §6.4)
+    command: ["bunx", "--package", "@hasna/workforce", "workforce-mcp", "--http", "--port", "8888"]
+    environment:
+      HASNA_WORKFORCE_STORAGE_MODE: cloud
+      HASNA_WORKFORCE_DATABASE_URL_FILE: /run/secrets/database_url
+      MCP_HTTP: "1"
+      MCP_HTTP_PORT: "8888"
+      # Bind 0.0.0.0 so the published 8888 is reachable; the default loopback
+      # bind is invisible to Docker port forwarding. A non-loopback bind forces auth
+      # ON and is asserted fail-closed at startup (assertMcpServeSafety), satisfied
+      # here by wiring API_CREDENTIALS. Never publish this port without credentials.
+      HASNA_WORKFORCE_MCP_BIND_HOST: "0.0.0.0"
+      HASNA_WORKFORCE_API_CREDENTIALS: ${WORKFORCE_API_CREDENTIALS:-}
+    secrets: [database_url]
+    depends_on: { db: { condition: service_healthy } }
+    ports: ["8888:8888"]
+secrets:
+  pg_password:
+    file: ./secrets/pg_password
+  database_url:
+    file: ./secrets/database_url   # postgres://workforce:<pw>@db:5432/workforce?sslmode=verify-full
+volumes: { pgdata: {} }
