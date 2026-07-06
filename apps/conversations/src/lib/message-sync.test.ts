@@ -213,11 +213,13 @@ describe("message push/pull round trip", () => {
     expect(bReply!.reply_to).toBe(bRoot!.id);
     expect(bRoot!.id).not.toBe(hubRoot!.id);
 
-    // incremental: immediate re-run moves nothing
+    // incremental: immediate re-run writes nothing (pull re-scans a small id
+    // margin behind the cursor by design; the conflict WHERE gate no-ops it)
     const rePush = await pushMessages(machineA, remote);
     expect(rePush.rowsRead).toBe(0);
+    expect(rePush.rowsWritten).toBe(0);
     const rePull = await pullMessages(remote, machineB);
-    expect(rePull.rowsRead).toBe(0);
+    expect(rePull.rowsWritten).toBe(0);
 
     machineA.close();
     machineB.close();
@@ -246,6 +248,32 @@ describe("message push/pull round trip", () => {
     expect(aCount!.n).toBe(2);
 
     machineA.close();
+    machineB.close();
+    await remote.close();
+  });
+
+  it("heals rows that become visible behind the pull cursor (concurrent-push race)", async () => {
+    const machineB = newLocal();
+    const remote = new FakeRemote();
+
+    // rows 1 and 3 are visible; id 2 is still in-flight from another pusher
+    remote.db.run(
+      "INSERT INTO messages (id, uuid, session_id, from_agent, to_agent, channel, content, created_at) VALUES (1, 'u1', 's', 'a', 'channel', 'general', 'one', '2026-07-06T10:00:00.000Z')",
+    );
+    remote.db.run(
+      "INSERT INTO messages (id, uuid, session_id, from_agent, to_agent, channel, content, created_at) VALUES (3, 'u3', 's', 'a', 'channel', 'general', 'three', '2026-07-06T10:00:02.000Z')",
+    );
+    await pullMessages(remote, machineB);
+    expect(machineB.get<{ n: number }>("SELECT COUNT(*) AS n FROM messages")!.n).toBe(2);
+
+    // the in-flight row commits after the cursor already advanced to 3
+    remote.db.run(
+      "INSERT INTO messages (id, uuid, session_id, from_agent, to_agent, channel, content, created_at) VALUES (2, 'u2', 's', 'a', 'channel', 'general', 'two', '2026-07-06T10:00:01.000Z')",
+    );
+    const heal = await pullMessages(remote, machineB);
+    expect(heal.rowsWritten).toBe(1);
+    expect(machineB.get("SELECT id FROM messages WHERE uuid = 'u2'")).not.toBeNull();
+
     machineB.close();
     await remote.close();
   });

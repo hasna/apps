@@ -86,10 +86,16 @@ describe("conversations storage configuration", () => {
   it("exports storage helpers from the storage subpath source", async () => {
     const storage = await import("../storage.js");
 
+    // Force local mode so the assertion is independent of any real
+    // ~/.hasna/conversations/storage/config.json on the machine running tests.
+    process.env["HASNA_CONVERSATIONS_STORAGE_MODE"] = "local";
     expect(storage.DEFAULT_STORAGE_TABLES).toEqual(DEFAULT_STORAGE_TABLES);
+    expect(storage.ALL_STORAGE_TABLES).toEqual([...DEFAULT_STORAGE_TABLES, ...storage.MESSAGE_SYNC_TABLES]);
     expect(storage.getStorageDatabaseUrl()).toBeNull();
     expect(storage.PG_MIGRATIONS.length).toBeGreaterThan(0);
     expect(typeof storage.PgAdapterAsync).toBe("function");
+    expect(typeof storage.pushMessages).toBe("function");
+    expect(typeof storage.messageSyncStatus).toBe("function");
   });
 
   it("migrates legacy conflict tables before listing conflicts", () => {

@@ -31,6 +31,14 @@ export const MESSAGE_SYNC_STATE_TABLE = "_message_sync_state";
 
 const PAGE_SIZE = 1000;
 
+// Pull re-scan margin: hub ids are assigned at INSERT but become visible at
+// COMMIT, so with two machines pushing concurrently a row with a lower id can
+// appear after a higher id was already read (and the cursor advanced past it).
+// Pushes are autocommit-per-row, so the in-flight window is tiny; re-scanning
+// a fixed id margin behind the cursor self-heals any such skip. Conflict
+// handling is idempotent (WHERE-gated DO UPDATE), so the overlap is free.
+const PULL_RESCAN_MARGIN = 200;
+
 /** Minimal async adapter surface (PgAdapterAsync satisfies this). */
 export interface RemoteAdapter {
   run(sql: string, ...params: unknown[]): Promise<{ changes: number }>;
@@ -218,7 +226,8 @@ export async function pullMessages(remote: RemoteAdapter, db: Database): Promise
   try {
     ensureLocalMessageSyncReady(db);
     await ensureRemoteMessageSyncReady(remote);
-    let cursor = Number(getMessageSyncState(db, STATE_KEYS.pullMessages) ?? 0);
+    const savedCursor = Number(getMessageSyncState(db, STATE_KEYS.pullMessages) ?? 0);
+    let cursor = Math.max(0, savedCursor - PULL_RESCAN_MARGIN);
     const insertSql = `
       INSERT INTO messages (${MESSAGE_COLUMNS.join(", ")}, created_at, read_at)
       VALUES (${MESSAGE_COLUMNS.map(() => "?").join(", ")}, ?, ?)
