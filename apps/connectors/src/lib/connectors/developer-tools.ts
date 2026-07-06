@@ -955,6 +955,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["testing", "test management", "qa", "reporting", "software quality"],
   },
   {
+    name: "testrigor",
+    displayName: "TestRigor",
+    description: "AI-powered automated testing platform for UI and API test automation",
+    category: "Developer Tools",
+    tags: ["testing", "automation", "qa", "ai", "test suites"],
+  },
+  {
     name: "textkit",
     displayName: "TextKit",
     description: "Text processing and manipulation API for formatting and transforming text",
