@@ -5,6 +5,7 @@ import type { Loop, WorkflowSpec } from "../../types.js";
 import { objectField, stringField, tagsFromValue, taskEventField } from "./fields.js";
 import { listFromRepeatedOpts, positiveInteger, splitList } from "./parse.js";
 import { routeTodosTaskEvent, todosTaskRouteTemplateId } from "./route-event.js";
+import { routePolicyEvidenceFromOptions } from "./policies.js";
 import { normalizeRoutePath } from "./throttle.js";
 import { defaultLoopsProject, runLocalCommand, runLocalCommandWithStdoutFile, todosMutationSummary } from "./todos-cli.js";
 import { writeRouteEvidence } from "./cursors.js";
@@ -423,6 +424,7 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
   const report = {
     drainedAt: new Date().toISOString(),
     todosProject,
+    routePolicy: routePolicyEvidenceFromOptions(opts),
     templateId: todosTaskRouteTemplateId(opts),
     todosProjectId: opts.todosProjectId,
     taskList: opts.taskList,
@@ -460,6 +462,7 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
     ? {
         drainedAt: report.drainedAt,
         todosProject: report.todosProject,
+        routePolicy: report.routePolicy,
         templateId: report.templateId,
         todosProjectId: report.todosProjectId,
         taskList: report.taskList,

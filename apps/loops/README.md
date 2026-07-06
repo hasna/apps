@@ -663,6 +663,10 @@ directory-scoped write controls.
 Inspect route state with:
 
 ```bash
+loops routes policies list
+loops routes policies show oss
+loops routes policies render oss
+loops routes policies validate
 cat task-created-event.json | loops routes preview todos-task --sandbox workspace-write
 cat task-created-event.json | loops routes create todos-task --sandbox workspace-write
 loops routes drain todos-task --task-list oss --max-dispatch 2 --compact
@@ -672,6 +676,22 @@ loops routes show <work-item-id>
 loops routes requeue <work-item-id> --reason "fixed upstream blocker"
 loops routes invocations
 ```
+
+Named route policies let operators create and inspect recurring task-drain
+routes without copying the full live command. Built-in policies are
+`repoops-pr-queue`, `oss`, `pilot`, and `machine-sync`:
+
+```bash
+loops routes policies render oss
+loops routes schedule todos-task machine-oss-task-lifecycle-router --policy oss
+```
+
+Scheduling with a policy stores explicit route drain args plus
+`--route-policy-evidence <id>` instead of replaying `--policy`, so audits can see
+the exact task list, filters, account pool, throttles, worktree mode, evidence
+directory, and name prefix used for future runs. The `pilot` policy is a manual
+break-glass lane using `danger-full-access`; applying it requires an explicit
+`--manual-break-glass`.
 
 For OSS task-created routing, use a deterministic drain instead of tmux
 dispatch:

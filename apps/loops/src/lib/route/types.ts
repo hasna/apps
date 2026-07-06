@@ -3,6 +3,9 @@
 export interface TodosTaskRouteOptions {
   eventFile?: string;
   eventJson?: string;
+  policy?: string;
+  preset?: string;
+  routePolicyEvidence?: string;
   template?: string;
   provider?: string;
   providerRule?: string[];

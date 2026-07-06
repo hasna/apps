@@ -79,6 +79,8 @@ import {
   addAgentRoutingOptions,
   addRouteEventOptions,
   addTodosDrainOptions,
+  applyRoutePolicyToDrainOptions,
+  applyRoutePolicyToScheduleOptions,
   buildHygieneRouteTasks,
   collectValues,
   defaultLoopsProject,
@@ -96,15 +98,18 @@ import {
   preflightStoredWorkflow,
   providerAuthProfileFromOpts,
   readEventEnvelopeInput,
+  listRoutePolicies,
   routeCursorKey,
   routeDrainArgs,
   routeEventByKind,
+  renderRoutePolicy,
   sandboxFromOpts,
   splitList,
   stringField,
   todosTaskRouteTemplateId,
   timeoutDuration,
   upsertRouteTasks,
+  validateRoutePolicy,
   workflowBodyFromFile,
   workflowSpecForPreflight,
   type TodosDrainOptions,
@@ -1095,6 +1100,81 @@ routes
     }
   }));
 
+const routePolicies = routes.command("policies").alias("presets").description("inspect named route drain policies");
+
+routePolicies
+  .command("list")
+  .alias("ls")
+  .description("list named route drain policies")
+  .action(runAction(() => {
+    const policies = listRoutePolicies();
+    if (isJson()) {
+      print(policies.map((policy) => ({
+        id: policy.id,
+        title: policy.title,
+        routeKind: policy.routeKind,
+        safety: policy.safety,
+        aliases: policy.aliases,
+        source: policy.source,
+      })));
+      return;
+    }
+    for (const policy of policies) {
+      console.log(`${policy.id}\t${policy.safety}\t${policy.routeKind}\t${policy.title}`);
+    }
+  }));
+
+routePolicies
+  .command("show <id>")
+  .description("show one named route drain policy")
+  .action(runAction((id) => {
+    const rendered = renderRoutePolicy(id);
+    if (isJson()) print(rendered.policy);
+    else {
+      const policy = rendered.policy;
+      console.log(`${policy.id} (${policy.safety})`);
+      console.log(policy.title);
+      console.log(policy.description);
+      console.log(`source: ${policy.source}`);
+      if (policy.aliases?.length) console.log(`aliases: ${policy.aliases.join(",")}`);
+      if (policy.notes?.length) {
+        for (const note of policy.notes) console.log(`note: ${note}`);
+      }
+    }
+  }));
+
+routePolicies
+  .command("render <id>")
+  .description("render a named route policy as explicit replayable route drain arguments")
+  .action(runAction((id) => {
+    const rendered = renderRoutePolicy(id);
+    if (isJson()) print(rendered);
+    else {
+      console.log(rendered.command);
+      if (rendered.schedule.every) console.log(`schedule: --every ${rendered.schedule.every}`);
+      else if (rendered.schedule.cron) console.log(`schedule: --cron ${rendered.schedule.cron}`);
+      else if (rendered.schedule.at) console.log(`schedule: --at ${rendered.schedule.at}`);
+      else if (rendered.schedule.dynamic) console.log("schedule: --dynamic");
+    }
+  }));
+
+routePolicies
+  .command("validate [id]")
+  .description("validate one named route policy, or all policies when id is omitted")
+  .action(runAction((id) => {
+    const rendered = id ? [validateRoutePolicy(id)] : listRoutePolicies().map((policy) => validateRoutePolicy(policy.id));
+    const value = {
+      ok: true,
+      policies: rendered.map((entry) => ({
+        id: entry.policy.id,
+        safety: entry.policy.safety,
+        routeKind: entry.policy.routeKind,
+        explicitArgCount: entry.args.length,
+      })),
+    };
+    print(value, `valid route policies: ${value.policies.map((policy) => policy.id).join(",")}`);
+  }));
+
 async function handleRouteEvent(kind: string, opts: TodosTaskRouteOptions): Promise<void> {
   const event = await readEventEnvelopeInput(opts);
   const result = routeEventByKind(kind, event, opts);
@@ -1103,7 +1183,8 @@ async function handleRouteEvent(kind: string, opts: TodosTaskRouteOptions): Prom
 
 function handleRouteDrain(kind: string, opts: TodosDrainOptions): void {
   if (kind !== "todos-task") throw new ValidationError("route drain currently supports kind todos-task");
-  const result = drainTodosTaskRoutes(opts);
+  const expandedOpts = applyRoutePolicyToDrainOptions(opts, { requireExplicitSafety: true });
+  const result = drainTodosTaskRoutes(expandedOpts);
   print(result.value, result.human);
   // Non-skippable route errors are captured per-task so the batch completes, but
   // the run must not report success: a systemic misconfig where every candidate
@@ -1147,18 +1228,19 @@ addScheduleOptions(
   ),
 ).action(runAction((kind, name, opts) => {
   if (kind !== "todos-task") throw new ValidationError("route schedule currently supports kind todos-task");
-  todosTaskRouteTemplateId(opts);
+  const expandedOpts = applyRoutePolicyToScheduleOptions(opts);
+  todosTaskRouteTemplateId(expandedOpts);
   const store = new Store();
   try {
     const target: LoopTarget = {
       type: "command",
       command: "loops",
-      args: ["--json", ...routeDrainArgs({ ...opts, compact: opts.compact ?? true })],
+      args: ["--json", ...routeDrainArgs({ ...expandedOpts, compact: expandedOpts.compact ?? true })],
       timeoutMs: parseDuration("20m"),
-      preflight: runtimePreflightFromOpts(opts),
+      preflight: runtimePreflightFromOpts(expandedOpts),
     };
-    const input = baseCreateInput(name, opts, target);
-    const preflight = opts.preflight
+    const input = baseCreateInput(name, expandedOpts, target);
+    const preflight = expandedOpts.preflight
       ? preflightLoopTarget(input.target as Exclude<LoopTarget, { type: "workflow" }>, { name, type: "route-drain", kind }, { loopName: name }, { machine: input.machine })
       : undefined;
     const loop = store.createLoop(input);
