@@ -141,6 +141,51 @@ describe("loops CLI", () => {
     expect(daemonVersion.stdout.trim()).toBe(pkg.version);
   });
 
+  test("list --json includes latest run summaries for active duplicate-name loops", () => {
+    const dataDir = freshDataDir("loops-cli-list-latest-run-");
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      const paused = store.createLoop(
+        {
+          name: "duplicate-router",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      store.updateLoop(paused.id, { status: "paused" });
+      const active = store.createLoop(
+        {
+          name: "duplicate-router",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2025-12-31T00:00:01Z"),
+      );
+      const claim = store.claimRun(active, "2026-01-01T00:00:00.000Z", "seed", new Date("2026-01-01T00:00:00Z"));
+      expect(claim).toBeDefined();
+      store.finalizeRun(claim!.run.id, {
+        status: "succeeded",
+        finishedAt: "2026-01-01T00:00:03.000Z",
+        durationMs: 3_000,
+        stdout: "",
+        stderr: "",
+      });
+    } finally {
+      store.close();
+    }
+
+    const result = runCli(dataDir, ["--json", "list", "--all"]);
+    expect(result.status).toBe(0);
+    const loops = JSON.parse(result.stdout) as Array<Record<string, unknown>>;
+    const activeListed = loops.find((loop) => loop.name === "duplicate-router" && loop.status === "active");
+    const pausedListed = loops.find((loop) => loop.name === "duplicate-router" && loop.status === "paused");
+    expect(activeListed?.latestRunStatus).toBe("succeeded");
+    expect(activeListed?.latestRunId).toEqual(expect.any(String));
+    expect(activeListed?.lastRunAt).toBe("2026-01-01T00:00:03.000Z");
+    expect(pausedListed?.latestRunId).toBeUndefined();
+  });
+
   test("reports local deployment mode by default", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-mode-local-"));
     const mode = runCli(dataDir, ["--json", "mode"], undefined, {
