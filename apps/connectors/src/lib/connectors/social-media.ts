@@ -156,4 +156,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Social Media",
     tags: ["hashtags", "social-media", "content", "optimization", "twitter"],
   },
+  {
+    name: "tumblr",
+    displayName: "Tumblr",
+    description: "Microblogging platform — blogs, posts, and social features",
+    category: "Social Media",
+    tags: ["social", "blogging", "microblog"],
+  },
 ];

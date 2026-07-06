@@ -159,6 +159,13 @@ export const TEST_ENDPOINTS: Record<string, TestEndpoint> = {
     url: "https://www.googleapis.com/youtube/v3/channels?part=id&mine=true",
     headers: (key) => ({ Authorization: `Bearer ${key}` }),
   },
+  tumblr: {
+    url: "https://api.tumblr.com/v2/user/info",
+    headers: (key) => ({
+      Authorization: `Bearer ${key}`,
+      "User-Agent": "@hasna/connect-tumblr/0.1",
+    }),
+  },
   twitch: {
     url: "https://api.twitch.tv/helix/users",
     headers: (key) => ({
