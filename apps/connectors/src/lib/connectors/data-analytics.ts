@@ -514,6 +514,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["fitness", "running", "cycling", "activities", "sports"],
   },
   {
+    name: "time-saved",
+    displayName: "TimeSaved",
+    description: "Time analytics platform",
+    category: "Data & Analytics",
+    tags: ["time", "analytics", "productivity"],
+  },
+  {
     name: "uproc",
     displayName: "uProc",
     description: "Data processing and enrichment tools",
