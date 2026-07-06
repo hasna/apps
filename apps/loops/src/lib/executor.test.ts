@@ -30,6 +30,32 @@ function writeFakeCodewithProfileList(fake: string, output: string, exitCode = 0
   chmodSync(fake, 0o755);
 }
 
+function writeFakeCodewithProfileListJson(fake: string, jsonOutput: string, textOutput: string): void {
+  const jsonDelimiter = "__OPENLOOPS_FAKE_CODEWITH_PROFILE_LIST_JSON__";
+  const textDelimiter = "__OPENLOOPS_FAKE_CODEWITH_PROFILE_LIST_TEXT__";
+  writeFileSync(
+    fake,
+    [
+      "#!/usr/bin/env bash",
+      'if [[ "${1:-}" == "profile" && "${2:-}" == "list" && "${3:-}" == "--json" ]]; then',
+      `cat <<'${jsonDelimiter}'`,
+      jsonOutput.endsWith("\n") ? jsonOutput.slice(0, -1) : jsonOutput,
+      jsonDelimiter,
+      "exit 0",
+      "fi",
+      'if [[ "${1:-}" == "profile" && "${2:-}" == "list" ]]; then',
+      `cat <<'${textDelimiter}'`,
+      textOutput.endsWith("\n") ? textOutput.slice(0, -1) : textOutput,
+      textDelimiter,
+      "exit 0",
+      "fi",
+      "exit 0",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(fake, 0o755);
+}
+
 function remoteCodewithPreflightOptions(home: string, scriptFile?: string) {
   const runner = scriptFile
     ? `cat > ${JSON.stringify(scriptFile)}; HOME=${JSON.stringify(home)} PATH=/usr/bin:/bin bash ${JSON.stringify(scriptFile)}`
@@ -1108,6 +1134,54 @@ describe("executeLoop", () => {
     }
   });
 
+  test("local codewith auth profile preflight accepts usable apikey profiles from json inventory", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-local-codewith-json-auth-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithProfileListJson(
+      fake,
+      JSON.stringify(
+        {
+          currentProfile: { name: null, profileKind: "default", available: true },
+          data: [
+            {
+              name: "openai-api-default",
+              profileKind: "named",
+              authMode: "apikey",
+              subscriptionProvider: "chatgpt",
+              usable: true,
+              active: false,
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "NAME ACCOUNT PROVIDER MODE PLAN\naccount001 - ChatGPT chatgpt Pro",
+    );
+    const env = { HOME: home, PATH: `${binDir}:/usr/bin:/bin` };
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "openai-api-default", prompt: "run", configIsolation: "safe" },
+          {},
+          { env },
+        ),
+      ).not.toThrow();
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "missing", prompt: "run", configIsolation: "safe" },
+          {},
+          { env },
+        ),
+      ).toThrow("codewith auth profile not found: missing");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("remote codewith auth profile preflight accepts active and non-active listed profiles", () => {
     const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-auth-listed-"));
     const home = join(root, "home");
@@ -1137,6 +1211,53 @@ describe("executeLoop", () => {
           remoteCodewithPreflightOptions(home),
         ),
       ).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("remote codewith auth profile preflight accepts usable apikey profiles from json inventory", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-json-auth-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithProfileListJson(
+      fake,
+      JSON.stringify(
+        {
+          currentProfile: { name: null, profileKind: "default", available: true },
+          data: [
+            {
+              name: "openai-api-default",
+              profileKind: "named",
+              authMode: "apikey",
+              subscriptionProvider: "chatgpt",
+              usable: true,
+              active: false,
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "NAME ACCOUNT PROVIDER MODE PLAN\naccount001 - ChatGPT chatgpt Pro",
+    );
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "openai-api-default", prompt: "run", configIsolation: "safe" },
+          {},
+          remoteCodewithPreflightOptions(home),
+        ),
+      ).not.toThrow();
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "missing", prompt: "run", configIsolation: "safe" },
+          {},
+          remoteCodewithPreflightOptions(home),
+        ),
+      ).toThrow("codewith auth profile not found: missing");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

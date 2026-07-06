@@ -215,6 +215,37 @@ function codewithProfileCandidateFromLine(line: string): string | undefined {
   return cols[0];
 }
 
+function codewithProfilesFromText(output: string): Set<string> {
+  return new Set(
+    (output || "")
+      .split(/\r?\n/)
+      .slice(1)
+      .map(codewithProfileCandidateFromLine)
+      .filter((profile): profile is string => Boolean(profile)),
+  );
+}
+
+function codewithProfilesFromJson(output: string): Set<string> | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output);
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== "object") return undefined;
+  const data = (parsed as { data?: unknown }).data;
+  if (!Array.isArray(data)) return undefined;
+  const profiles = new Set<string>();
+  for (const entry of data) {
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as { name?: unknown; usable?: unknown };
+    if (typeof record.name !== "string") continue;
+    if (record.usable === false) continue;
+    profiles.add(record.name);
+  }
+  return profiles;
+}
+
 function codewithProfileForError(profile: string): string {
   return /[\u0000-\u001F\u007F]/.test(profile) ? (JSON.stringify(profile) ?? profile) : profile;
 }
@@ -532,11 +563,42 @@ function remotePreflightScript(spec: CommandSpec, metadata: ExecutionMetadata): 
     lines.push(
       `__OPENLOOPS_CODEWITH_PROFILE=${shellQuote(spec.nativeAuthProfile.profile)}`,
       "export __OPENLOOPS_CODEWITH_PROFILE",
-      `__OPENLOOPS_CODEWITH_PROFILES="$(${shellQuote(spec.command)} profile list)" || {`,
-      `  printf '%s\\n' ${shellQuote("codewith auth profile preflight failed")} >&2`,
-      "  exit 1",
-      "}",
-      `if ! printf '%s\\n' "$__OPENLOOPS_CODEWITH_PROFILES" | awk 'NR > 1 { candidate = ($1 == "*" ? $2 : $1); if (candidate == ENVIRON["__OPENLOOPS_CODEWITH_PROFILE"]) found = 1 } END { exit(found ? 0 : 1) }'; then`,
+      "__OPENLOOPS_CODEWITH_PROFILE_FOUND=0",
+      `if __OPENLOOPS_CODEWITH_PROFILE_JSON="$(${shellQuote(spec.command)} profile list --json)"; then`,
+      `  if printf '%s\\n' "$__OPENLOOPS_CODEWITH_PROFILE_JSON" | awk '`,
+      "    BEGIN { in_data = 0; depth = 0; object = \"\" }",
+      "    /\"data\"[[:space:]]*:[[:space:]]*\\[/ { in_data = 1 }",
+      "    in_data {",
+      "      if ($0 ~ /\\{/) depth++",
+      "      if (depth > 0) object = object $0 \"\\n\"",
+      "      if ($0 ~ /\\}/ && depth > 0) {",
+      "        depth--",
+      "        if (depth == 0) {",
+      "          profile_name = object",
+      "          if (profile_name ~ /\"name\"[[:space:]]*:[[:space:]]*\"/) {",
+      "            sub(/^.*\"name\"[[:space:]]*:[[:space:]]*\"/, \"\", profile_name)",
+      "            sub(/\".*$/, \"\", profile_name)",
+      "            if (profile_name == ENVIRON[\"__OPENLOOPS_CODEWITH_PROFILE\"] && object !~ /\"usable\"[[:space:]]*:[[:space:]]*false/) found = 1",
+      "          }",
+      "          object = \"\"",
+      "        }",
+      "      }",
+      "    }",
+      "    END { exit(found ? 0 : 1) }",
+      "  '; then",
+      "    __OPENLOOPS_CODEWITH_PROFILE_FOUND=1",
+      "  fi",
+      "fi",
+      "if [ \"$__OPENLOOPS_CODEWITH_PROFILE_FOUND\" != 1 ]; then",
+      `  __OPENLOOPS_CODEWITH_PROFILES="$(${shellQuote(spec.command)} profile list)" || {`,
+      `    printf '%s\\n' ${shellQuote("codewith auth profile preflight failed")} >&2`,
+      "    exit 1",
+      "  }",
+      `  if printf '%s\\n' "$__OPENLOOPS_CODEWITH_PROFILES" | awk 'NR > 1 { candidate = ($1 == "*" ? $2 : $1); if (candidate == ENVIRON["__OPENLOOPS_CODEWITH_PROFILE"]) found = 1 } END { exit(found ? 0 : 1) }'; then`,
+      "    __OPENLOOPS_CODEWITH_PROFILE_FOUND=1",
+      "  fi",
+      "fi",
+      `if [ "$__OPENLOOPS_CODEWITH_PROFILE_FOUND" != 1 ]; then`,
       `  printf '%s\\n' ${shellQuote(`codewith auth profile not found: ${profileForError}`)} >&2`,
       "  exit 1",
       "fi",
@@ -567,20 +629,41 @@ function assertCodewithProfileListed(
     const detail = (result.stderr || result.stdout || `exit ${result.status ?? "unknown"}`).trim();
     throw new Error(`codewith auth profile preflight failed${detail ? `: ${detail}` : ""}`);
   }
-  const profiles = new Set(
-    (result.stdout || "")
-      .split(/\r?\n/)
-      .slice(1)
-      .map(codewithProfileCandidateFromLine)
-      .filter(Boolean),
-  );
+  const profiles = codewithProfilesFromText(result.stdout);
   if (!profiles.has(profile)) {
     throw new Error(`codewith auth profile not found: ${codewithProfileForError(profile)}`);
   }
 }
 
+function assertCodewithJsonProfileListed(
+  profile: string,
+  result: { status: number | null; stdout: string; stderr: string; error?: string },
+): boolean {
+  if (result.error || (result.status ?? 1) !== 0) return false;
+  const profiles = codewithProfilesFromJson(result.stdout);
+  if (!profiles) return false;
+  if (!profiles.has(profile)) {
+    throw new Error(`codewith auth profile not found: ${codewithProfileForError(profile)}`);
+  }
+  return true;
+}
+
 function preflightNativeAuthProfileSync(spec: CommandSpec, env: NodeJS.ProcessEnv): void {
   if (spec.nativeAuthProfile?.provider !== "codewith") return;
+  const jsonResult = spawnSync(spec.command, ["profile", "list", "--json"], {
+    encoding: "utf8",
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 15_000,
+  });
+  if (assertCodewithJsonProfileListed(spec.nativeAuthProfile.profile, {
+    status: jsonResult.status,
+    stdout: jsonResult.stdout ?? "",
+    stderr: jsonResult.stderr ?? "",
+    error: jsonResult.error?.message,
+  })) {
+    return;
+  }
   const result = spawnSync(spec.command, ["profile", "list"], {
     encoding: "utf8",
     env,
@@ -597,6 +680,8 @@ function preflightNativeAuthProfileSync(spec: CommandSpec, env: NodeJS.ProcessEn
 
 async function preflightNativeAuthProfile(spec: CommandSpec, env: NodeJS.ProcessEnv): Promise<void> {
   if (spec.nativeAuthProfile?.provider !== "codewith") return;
+  const jsonResult = await spawnCapture(spec.command, ["profile", "list", "--json"], { env, timeoutMs: 15_000 });
+  if (assertCodewithJsonProfileListed(spec.nativeAuthProfile.profile, jsonResult)) return;
   const result = await spawnCapture(spec.command, ["profile", "list"], { env, timeoutMs: 15_000 });
   assertCodewithProfileListed(spec.nativeAuthProfile.profile, result);
 }
