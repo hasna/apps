@@ -14,7 +14,7 @@ export interface ListQueryParams {
 }
 
 export interface PingResponse {
-  ping: string;
+  version: string;
 }
 
 export interface OverviewResponse {

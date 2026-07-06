@@ -25,14 +25,14 @@ describe('TicketTailorClient', () => {
         ok: true,
         status: 200,
         async json() {
-          return { ping: 'pong' };
+          return { version: 'pong' };
         },
       } as Response;
     }) as typeof fetch;
 
     const client = new TicketTailorClient({ apiKey: 'my-key' });
     const result = await client.ping();
-    expect(result).toEqual({ ping: 'pong' });
+    expect(result).toEqual({ version: 'pong' });
     expect(capturedAuth).toBe(`Basic ${Buffer.from('my-key').toString('base64')}`);
   });
 
