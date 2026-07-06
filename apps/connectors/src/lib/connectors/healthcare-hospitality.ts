@@ -30,4 +30,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Healthcare & Hospitality",
     tags: ["booking", "reservations", "scheduling", "hospitality", "appointments"],
   },
+  {
+    name: "toast-pos",
+    displayName: "Toast POS",
+    description: "Toast Tab restaurant POS platform — menus, orders, and configuration APIs",
+    category: "Healthcare & Hospitality",
+    tags: ["hospitality", "pos", "restaurant", "orders", "menus"],
+  },
 ];
