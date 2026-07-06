@@ -33,11 +33,18 @@ import {
 } from "./message-sync.js";
 import { PG_MIGRATIONS } from "./pg-migrations.js";
 import { PgAdapterAsync } from "./remote-storage.js";
+import {
+  SYNC_AGENT_TOMBSTONES_TABLE,
+  pullAgentTombstones,
+  pushAgentTombstones,
+} from "./sync-tombstones.js";
 
 // Tables the GENERIC full-table engine below must never touch. `messages` and
 // `message_read_receipts` stay in this set: they replicate through the
 // uuid-keyed incremental engine in message-sync.ts (per-machine integer ids
 // collide fleet-wide, so full-table pk upserts would corrupt them).
+// `_sync_agent_tombstones` rides the agent_presence phase via its own
+// delete-propagating path in sync-tombstones.ts, never the generic engine.
 export const SYNC_EXCLUDED = new Set([
   "messages",
   "reactions",
@@ -53,6 +60,7 @@ export const SYNC_EXCLUDED = new Set([
   "_sync_conflicts",
   "_migrations",
   MESSAGE_SYNC_STATE_TABLE,
+  SYNC_AGENT_TOMBSTONES_TABLE,
   "sqlite_sequence",
 ]);
 
@@ -263,6 +271,10 @@ export async function syncPush(db: Database, remote: PgAdapterAsync, options: { 
   for (const table of options.tables) {
     if (MESSAGE_SYNC_TABLE_SET.has(table)) continue; // routed below (messages before receipts)
     results.push(await pushTable(db, remote, table as SyncTable));
+    // Agent removals must propagate: the generic engine is append-only, so a
+    // purge would otherwise be resurrected by the next pull (2026-07-06
+    // registry-purge regression). Tombstones ride with agent_presence.
+    if (table === "agent_presence") results.push(await pushAgentTombstones(db, remote));
   }
   if (options.tables.includes("messages")) results.push(await pushMessages(db, remote));
   if (options.tables.includes("message_read_receipts")) results.push(await pushReceipts(db, remote));
@@ -274,6 +286,9 @@ export async function syncPull(remote: PgAdapterAsync, db: Database, options: { 
   for (const table of options.tables) {
     if (MESSAGE_SYNC_TABLE_SET.has(table)) continue; // routed below (messages before receipts)
     results.push(await pullTable(remote, db, table as SyncTable));
+    // Runs AFTER the presence pull so rows the append-only upsert just
+    // resurrected are reconciled against tombstones in the same pass.
+    if (table === "agent_presence") results.push(await pullAgentTombstones(remote, db));
   }
   if (options.tables.includes("messages")) results.push(await pullMessages(remote, db));
   if (options.tables.includes("message_read_receipts")) results.push(await pullReceipts(remote, db));

@@ -624,4 +624,18 @@ export const PG_MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_messages_to_agent_unread ON messages(to_agent) WHERE read_at IS NULL;
   INSERT INTO _migrations (id) VALUES (2) ON CONFLICT DO NOTHING;
   `,
+  // Migration 3: agent-removal tombstones (sync-tombstones.ts). The legacy
+  // pk-upsert engine is append-only, so agent purges were resurrected by the
+  // next pull (2026-07-06 registry-purge regression, todos bc244f4d). Removals
+  // now record a tombstone that replicates with agent_presence; rows older
+  // than their tombstone are deleted on both sides. deleted_at is TEXT-bound
+  // with the same raw-naive convention the legacy engine uses for
+  // agent_presence.last_seen_at so comparisons stay internally consistent.
+  `
+  CREATE TABLE IF NOT EXISTS _sync_agent_tombstones (
+    agent TEXT PRIMARY KEY,
+    deleted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  INSERT INTO _migrations (id) VALUES (3) ON CONFLICT DO NOTHING;
+  `,
 ];

@@ -1,4 +1,5 @@
 import { getDb } from "./db.js";
+import { clearAgentTombstone, recordAgentTombstone } from "./sync-tombstones.js";
 import type { AgentPresence, AgentConflictError, RegisterAgentResult } from "../types.js";
 
 const ONLINE_THRESHOLD_SECONDS = 60;
@@ -243,6 +244,12 @@ export function removePresence(agent: string): boolean {
   const db = getDb();
   const normalizedAgent = normalizeAgentName(agent);
   const result = db.prepare("DELETE FROM agent_presence WHERE LOWER(agent) = ?").run(normalizedAgent);
+  // Removal must out-survive the append-only legacy storage sync: record a
+  // tombstone so hub/replicas drop the row too instead of resurrecting it on
+  // the next pull (2026-07-06 registry-purge regression, todos bc244f4d).
+  // Recorded even when no local row matched — the agent may only exist on the
+  // hub; a later re-registration always outlives the tombstone.
+  recordAgentTombstone(db, normalizedAgent);
   return result.changes > 0;
 }
 
@@ -257,7 +264,17 @@ export function renameAgent(oldName: string, newName: string): boolean {
   const conflict = db.prepare("SELECT agent FROM agent_presence WHERE LOWER(agent) = ?").get(normalizedNew);
   if (conflict) throw new Error(`Agent "${normalizedNew}" already exists`);
 
-  db.prepare("UPDATE agent_presence SET agent = ? WHERE LOWER(agent) = ?").run(normalizedNew, normalizedOld);
+  // last_seen_at is bumped so the renamed row outlives any tombstone the new
+  // name may carry from an earlier removal/rename — everywhere, including
+  // tombstone copies already replicated to the hub.
+  db.prepare(
+    "UPDATE agent_presence SET agent = ?, last_seen_at = strftime('%Y-%m-%dT%H:%M:%f', 'now') WHERE LOWER(agent) = ?",
+  ).run(normalizedNew, normalizedOld);
+  // A rename removes the old identity from this machine; without a tombstone
+  // the hub's copy of the old name would be resurrected by the next pull
+  // (same append-only mechanics as removePresence).
+  recordAgentTombstone(db, normalizedOld);
+  clearAgentTombstone(db, normalizedNew);
   return true;
 }
 

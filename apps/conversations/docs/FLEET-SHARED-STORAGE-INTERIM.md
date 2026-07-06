@@ -50,6 +50,26 @@ here (gate `97610c99` remains closed); the hub is on-prem Postgres on spark01.
   per-machine id cursor but the table syncs whole rows (pre-existing legacy
   behavior). Digest preview windows may be off after a sync; not data loss.
 - Reactions, mentions, and channel_notification_reads do not replicate in v1.
+- **Agent removal IS delete-propagating** (the one exception to append-only,
+  added after the 2026-07-06 registry-purge regression): `agents remove` /
+  `remove_agent` records a row in `_sync_agent_tombstones`; push uploads
+  tombstones and deletes hub `agent_presence` rows older than their tombstone;
+  pull downloads tombstones and reconciles local rows the same way — including
+  rows the same pull just resurrected. A re-registered (or still-heartbeating)
+  agent always outlives its tombstone, so removal never fights a live agent.
+  Regression context: the supervised registry purge (todos `bc244f4d`,
+  579 → 98 agents) was undone within minutes by the first post-cutover pull
+  because the pre-purge registry had already reached the hub. Do not purge by
+  raw SQL on the hub — run `agents remove` on a synced machine so the
+  tombstones exist and propagate.
+- **Legacy-engine timestamp caveat:** the pk-upsert engine binds SQLite
+  naive-UTC text to Postgres TIMESTAMPTZ without zone normalization, so hub
+  values for the 8 legacy tables are interpreted in the hub server timezone
+  (Europe/Bucharest ⇒ 3h skew) and come back Z-suffixed on pull. Tombstone
+  comparisons use the same raw-naive convention on both sides, so they stay
+  internally consistent. Normalizing the legacy engine (message-sync already
+  does this correctly) is a v2 item; both `agent_presence.last_seen_at` and
+  `_sync_agent_tombstones.deleted_at` must migrate together.
 
 ## Hub setup (spark01 — done)
 
@@ -77,6 +97,16 @@ restart — other production databases live in that cluster). Satellites reach i
 through a persistent SSH local-forward tunnel:
 
 ```bash
+# 0) GROOM THE LOCAL AGENT REGISTRY first (mandatory — every machine, before
+#    its first sync). An un-purged replica re-seeds the fleet registry with its
+#    stale agents at cutover (this is exactly how the 2026-07-06 purge
+#    regression happened). Export evidence, then remove stale non-standing
+#    agents with `conversations agents remove` (records sync tombstones):
+#      keep:   ^(chief|andrei|friday)|^codewith|^loop-|^machine-  + anything seen <7d
+#      remove: everything else stale >7d
+#    After the machine is synced, verify the fleet registry count did not
+#    rebound (machine-comms-agent-registry-groom tripwire watches this on hub).
+
 # 1) BACKUP first (mandatory):
 mkdir -p ~/.hasna/conversations/backups
 stamp=$(date +%Y%m%d%H%M%S)

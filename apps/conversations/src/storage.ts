@@ -1,6 +1,16 @@
 export { PG_MIGRATIONS } from "./lib/pg-migrations.js";
 export { PgAdapterAsync } from "./lib/remote-storage.js";
 export {
+  SYNC_AGENT_TOMBSTONES_TABLE,
+  applyAgentTombstonesLocal,
+  clearAgentTombstone,
+  ensureAgentTombstonesTable,
+  listAgentTombstones,
+  pullAgentTombstones,
+  pushAgentTombstones,
+  recordAgentTombstone,
+} from "./lib/sync-tombstones.js";
+export {
   MESSAGE_SYNC_STATE_TABLE,
   MESSAGE_SYNC_TABLES,
   ensureLocalMessageSyncReady,
