@@ -87,6 +87,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["monitoring", "uptime", "performance", "alerts", "website"],
   },
   {
+    name: "thousandeyes",
+    displayName: "ThousandEyes",
+    description: "Network monitoring platform",
+    category: "Infrastructure",
+    tags: ["monitoring", "network", "observability", "synthetic", "path-visibility"],
+  },
+  {
     name: "turbot-pipes",
     displayName: "Turbot Pipes",
     description: "Cloud intelligence platform for SQL queries across cloud APIs",
