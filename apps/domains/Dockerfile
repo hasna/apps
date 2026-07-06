@@ -35,6 +35,9 @@ ENV NODE_ENV=production \
 # Amazon RDS global CA bundle so sslmode=require (verify-full under current pg)
 # verifies the RDS server certificate. Referenced by PGSSLROOTCERT / the kit TLS.
 ADD https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /etc/ssl/rds-global-bundle.pem
+# ADD from a URL leaves the file root-only (0600); make it world-readable so the
+# non-root `bun` user can load it as NODE_EXTRA_CA_CERTS / PGSSLROOTCERT.
+RUN chmod 0644 /etc/ssl/rds-global-bundle.pem
 ENV NODE_EXTRA_CA_CERTS=/etc/ssl/rds-global-bundle.pem \
     PGSSLROOTCERT=/etc/ssl/rds-global-bundle.pem
 
