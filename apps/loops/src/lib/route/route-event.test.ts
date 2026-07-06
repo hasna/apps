@@ -147,9 +147,9 @@ describe("routeTodosTaskEvent dedupe re-admission", () => {
   });
 });
 
-// A PR-subject task with a concrete owner/repo#number reference but no
-// approve/merge/review intent: fingerprintable, yet the PR-review gate is not
-// required, so routing creates a worker without touching `gh` (hermetic).
+// A PR-backlog task with a concrete owner/repo#number reference: fingerprintable,
+// yet the PR-review gate is not required, so routing creates a worker without
+// touching `gh` (hermetic).
 function prTaskEvent(taskId: string) {
   return {
     id: `evt-${taskId}`,
@@ -161,6 +161,7 @@ function prTaskEvent(taskId: string) {
       title: "Investigate dependency bump",
       status: "pending",
       tags: ["auto:route"],
+      pr_fingerprint: "hasna/example#7",
       description: "tracking https://github.com/hasna/example/pull/7 for the rollout",
       project_path: process.cwd(),
     },
@@ -225,6 +226,7 @@ describe("routeTodosTaskEvent PR fingerprint dedupe", () => {
           title: "Investigate dependency bump",
           status: "pending",
           tags: ["auto:route"],
+          pr_fingerprint: "Hasna/Example#7",
           description: "tracking https://github.com/Hasna/Example/pull/7 rollout",
           project_path: process.cwd(),
         },
