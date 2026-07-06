@@ -1,0 +1,20 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "treasury",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.4.1",
+  "description": "Multi-entity cash/treasury cockpit CLI + MCP + serve. Local mode uses SQLite at ~/.hasna/treasury/treasury.db; cloud mode (HASNA_TREASURY_STORAGE_MODE=cloud) is PURE REMOTE per Amendment A1 with all reads/writes hitting the shared cloud Postgres.",
+  "bins": [
+    "treasury",
+    "treasury-mcp",
+    "treasury-serve"
+  ],
+  "storage": {
+    "mode": "local",
+    "envPrefix": "HASNA_TREASURY_",
+    "aliasEnvPrefix": "TREASURY_",
+    "databaseUrlSecretRef": "hasna/oss/treasury/database-url",
+    "sqlitePath": "~/.hasna/treasury/treasury.db"
+  }
+}
