@@ -13,7 +13,7 @@ describe('StripeBillingAdvancedClient', () => {
   });
 
   test('uses default base URL and API version', () => {
-    const client = new StripeBillingAdvancedClient({ apiKey: 'sk_test_1234567890' });
+    const client = new StripeBillingAdvancedClient({ apiKey: 'test_key_1234567890' });
     expect(client.buildUrl('/v2/billing/pricing_plans')).toBe(
       `${DEFAULT_BASE_URL}${DEFAULT_BILLING_PATH_PREFIX}/pricing_plans`,
     );
@@ -21,8 +21,8 @@ describe('StripeBillingAdvancedClient', () => {
   });
 
   test('getApiKeyPreview masks key', () => {
-    const client = new StripeBillingAdvancedClient({ apiKey: 'sk_test_abcdefghijklmnop' });
-    expect(client.getApiKeyPreview()).toBe('sk_tes...mnop');
+    const client = new StripeBillingAdvancedClient({ apiKey: 'test_key_abcdefghijklmnop' });
+    expect(client.getApiKeyPreview()).toBe('test_k...mnop');
   });
 
   test('POST pricing_plans sends Bearer, Stripe-Version, and JSON body', async () => {
@@ -41,7 +41,7 @@ describe('StripeBillingAdvancedClient', () => {
 
     try {
       const client = new StripeBillingAdvancedClient({
-        apiKey: 'sk_test_secret',
+        apiKey: 'test_key_secret',
         apiVersion: '2026-05-27.preview',
       });
       await client.post('/v2/billing/pricing_plans', {
@@ -52,7 +52,7 @@ describe('StripeBillingAdvancedClient', () => {
       expect(capturedUrl).toBe('https://api.stripe.com/v2/billing/pricing_plans');
       expect(capturedInit?.method).toBe('POST');
       const headers = capturedInit?.headers as Record<string, string>;
-      expect(headers.Authorization).toBe('Bearer sk_test_secret');
+      expect(headers.Authorization).toBe('Bearer test_key_secret');
       expect(headers['Stripe-Version']).toBe('2026-05-27.preview');
       expect(headers['Content-Type']).toBe('application/json');
       expect(capturedInit?.body).toBe(JSON.stringify({ display_name: 'Pro Plan', currency: 'usd' }));
@@ -76,7 +76,7 @@ describe('StripeBillingAdvanced', () => {
     }) as unknown as typeof fetch;
 
     try {
-      const api = new StripeBillingAdvanced({ apiKey: 'sk_test_key' });
+      const api = new StripeBillingAdvanced({ apiKey: 'test_key' });
       await api.createPricingPlan({ display_name: 'Test', currency: 'usd' });
       expect(capturedUrl).toBe('https://api.stripe.com/v2/billing/pricing_plans');
     } finally {

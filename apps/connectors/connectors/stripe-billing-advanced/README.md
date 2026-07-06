@@ -26,8 +26,8 @@ bun run build
 Bearer token (Stripe secret key). Configure via profile or environment:
 
 ```bash
-export STRIPE_BILLING_ADVANCED_API_KEY=sk_test_...
-connect-stripe-billing-advanced config set-key sk_test_...
+export STRIPE_BILLING_ADVANCED_API_KEY=your_stripe_secret_key
+connect-stripe-billing-advanced config set-key your_stripe_secret_key
 ```
 
 Optional:
