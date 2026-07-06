@@ -129,6 +129,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ssl", "certificates", "security", "monitoring", "tls"],
   },
   {
+    name: "the-hive-project",
+    displayName: "TheHiveProject",
+    description: "Security case platform for incident response and SOC workflows",
+    category: "Security & Compliance",
+    tags: ["security", "soc", "cases", "incident-response"],
+  },
+  {
     name: "thehive",
     displayName: "TheHive",
     description: "Security incident response platform for managing and investigating cyber threats",
