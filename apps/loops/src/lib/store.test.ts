@@ -64,6 +64,93 @@ describe("Store", () => {
     }
   });
 
+  test("overlap skip blocks a second running slot for the same loop", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "skip-overlap-catchup",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          catchUp: "latest",
+          catchUpLimit: 50,
+          overlap: "skip",
+          leaseMs: 30 * 60_000,
+        },
+        new Date("2026-06-25T11:12:00Z"),
+      );
+
+      const stale = store.claimRun(
+        loop,
+        "2026-06-25T11:12:00.000Z",
+        "runner-a",
+        new Date("2026-07-02T07:39:15.144Z"),
+      );
+      const current = store.claimRun(
+        loop,
+        "2026-07-02T07:12:00.000Z",
+        "runner-b",
+        new Date("2026-07-02T07:39:16.000Z"),
+      );
+
+      expect(stale?.run.status).toBe("running");
+      expect(current).toBeUndefined();
+      expect(store.listRuns({ loopId: loop.id, status: "running" })).toHaveLength(1);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("overlap allow still permits running different slots for the same loop", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "allow-overlap-catchup",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          catchUp: "all",
+          overlap: "allow",
+          leaseMs: 30 * 60_000,
+        },
+        new Date("2026-01-01T00:00:00Z"),
+      );
+
+      const first = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner-a", new Date("2026-01-01T00:00:00Z"));
+      const second = store.claimRun(loop, "2026-01-01T00:01:00.000Z", "runner-b", new Date("2026-01-01T00:01:00Z"));
+
+      expect(first?.run.status).toBe("running");
+      expect(second?.run.status).toBe("running");
+      expect(store.listRuns({ loopId: loop.id, status: "running" })).toHaveLength(2);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("overlap skip does not block a later slot on an expired dead lease", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "skip-overlap-expired-dead",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          overlap: "skip",
+          leaseMs: 10,
+        },
+        new Date("2026-01-01T00:00:00Z"),
+      );
+
+      const expired = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner-a", new Date("2026-01-01T00:00:00Z"));
+      expect(expired?.run.status).toBe("running");
+
+      const later = store.claimRun(loop, "2026-01-01T00:01:00.000Z", "runner-b", new Date("2026-01-01T00:01:00Z"));
+      expect(later?.run.status).toBe("running");
+    } finally {
+      store.close();
+    }
+  });
+
   test("clamps oversized run stdout/stderr but keeps small output verbatim (loops.db growth guard)", () => {
     const store = new Store(":memory:");
     try {
