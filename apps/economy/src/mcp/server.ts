@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { registerCloudTools } from '@hasna/cloud'
+import { registerAgentTools } from '@hasna/agent-registry'
 import { z } from 'zod'
 import { openDatabase, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryAgentBreakdown, queryAccountBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertGoal, deleteGoal, getGoalStatuses, listSubscriptions, upsertSubscription, deleteSubscription, listMachines, getMachineId, queryBillingSummary, listModelPricing, upsertModelPricing, deleteModelPricing } from '../db/database.js'
 import { syncAll } from '../lib/sync-all.js'
@@ -28,8 +29,6 @@ const server: any = new McpServer({
   name: MCP_NAME,
   version: packageMetadata.version,
 })
-
-const _econAgents = new Map<string, { id: string; name: string; last_seen_at: string; project_id?: string }>()
 
 const TOOL_NAMES = [
   'get_cost_summary',
@@ -650,54 +649,11 @@ server.tool(
   },
 )
 
-server.tool(
-  'register_agent',
-  'Register agent session.',
-  { name: z.string(), session_id: z.string().optional() },
-  async ({ name }: { name: string; session_id?: string }) => {
-    const existing = [..._econAgents.values()].find((agent) => agent.name === name)
-    if (existing) {
-      existing.last_seen_at = new Date().toISOString()
-      return text(JSON.stringify(existing))
-    }
-
-    const id = Math.random().toString(36).slice(2, 10)
-    const agent = { id, name, last_seen_at: new Date().toISOString() }
-    _econAgents.set(id, agent)
-    return text(JSON.stringify(agent))
-  },
-)
-
-server.tool(
-  'heartbeat',
-  'Update last_seen_at.',
-  { agent_id: z.string() },
-  async ({ agent_id }: { agent_id: string }) => {
-    const agent = _econAgents.get(agent_id)
-    if (!agent) return textError('Agent not found')
-    agent.last_seen_at = new Date().toISOString()
-    return text(`♥ ${agent.name}`)
-  },
-)
-
-server.tool(
-  'set_focus',
-  'Set active project context.',
-  { agent_id: z.string(), project_id: z.string().optional().nullable() },
-  async ({ agent_id, project_id }: { agent_id: string; project_id?: string | null }) => {
-    const agent = _econAgents.get(agent_id)
-    if (!agent) return textError('Agent not found')
-    agent.project_id = project_id ?? undefined
-    return text(project_id ? `Focus: ${project_id}` : 'Focus cleared')
-  },
-)
-
-server.tool(
-  'list_agents',
-  'List all registered agents.',
-  {},
-  async () => text(JSON.stringify([..._econAgents.values()])),
-)
+// register_agent, heartbeat, set_focus, and list_agents are the canonical
+// @hasna/agent-registry implementation (persistent, shared across services)
+// rather than a hand-rolled in-memory Map. send_feedback stays local (below)
+// since it persists into economy's own `feedback` table with a category enum.
+registerAgentTools(server, { includeFeedback: false })
 
 server.tool(
   'send_feedback',
