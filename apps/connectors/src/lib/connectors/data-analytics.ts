@@ -514,6 +514,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["fitness", "running", "cycling", "activities", "sports"],
   },
   {
+    name: "travo-ai",
+    displayName: "Travo",
+    description: "Travel AI platform",
+    category: "Data & Analytics",
+    tags: ["travel", "trips", "ai"],
+  },
+  {
     name: "uproc",
     displayName: "uProc",
     description: "Data processing and enrichment tools",
