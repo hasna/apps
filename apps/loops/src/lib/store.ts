@@ -3366,6 +3366,20 @@ export class Store {
     return (row?.count ?? 0) > 0;
   }
 
+  private hasBlockingRunningRunForOtherSlot(loopId: string, scheduledFor: string, nowIso: string): boolean {
+    const rows = this.db
+      .query<RunRow, [string, string]>(
+        `SELECT * FROM loop_runs
+         WHERE loop_id = ? AND scheduled_for <> ? AND status = 'running'`,
+      )
+      .all(loopId, scheduledFor);
+    return rows.some((row) => {
+      if (!row.lease_expires_at || row.lease_expires_at > nowIso) return true;
+      if (isRecordedProcessAlive(row.pid, row.process_started_at)) return true;
+      return this.hasLiveWorkflowStepProcesses(row.id);
+    });
+  }
+
   markRunPid(id: string, pid: number, claimedBy?: string, opts: DaemonLeaseFence = {}): LoopRun | undefined {
     const now = (opts.now ?? new Date()).toISOString();
     // Always record the pid's start-time fingerprint alongside it: recovery
@@ -3555,6 +3569,10 @@ export class Store {
       loop = currentLoop;
       const leaseExpiresAt = new Date(now.getTime() + loop.leaseMs).toISOString();
       const existing = this.getRunBySlot(loop.id, scheduledFor);
+      if (loop.overlap === "skip" && this.hasBlockingRunningRunForOtherSlot(loop.id, scheduledFor, startedAt)) {
+        this.db.exec("COMMIT");
+        return undefined;
+      }
 
       if (existing) {
         if (existing.status === "running") {
