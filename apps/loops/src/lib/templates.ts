@@ -11,6 +11,7 @@ import type {
   AgentWorktreeSpec,
   CreateWorkflowInput,
   LoopTemplateSource,
+  LoopTemplateContract,
   LoopTemplateSummary,
   TimeoutMs,
   WorkflowStep,
@@ -654,6 +655,11 @@ export function getLoopTemplate(id: string, opts: ListLoopTemplatesOptions = {})
     if (source === "builtin") return undefined;
   }
   return getCustomLoopTemplate(id, builtinTemplateKeys())?.summary;
+}
+
+export function getLoopTemplateContract(id: string, opts: ListLoopTemplatesOptions = {}): LoopTemplateContract | undefined {
+  const contract = getLoopTemplate(id, opts)?.contract;
+  return contract ? structuredClone(contract) : undefined;
 }
 
 // ---------------------------------------------------------------------------

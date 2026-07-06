@@ -7,6 +7,23 @@ materialization, queue state, approvals, DLQ/replay, idempotency, and audit
 evidence. OpenLoops owns workflow invocation, admission, execution, run
 manifests, and provider routing once work is explicitly handed off.
 
+## Current Template Contract Surface
+
+OpenLoops built-in workflow templates expose a versioned `contract` through
+`loops templates list/show` JSON. The contract carries a JSON-schema-shaped
+`inputSchema`, `outputSchema`, `taskBinding`, `requiredEvidence`, and
+`policyRequirements`. Custom templates may declare the same object; otherwise
+OpenLoops derives a conservative manual-workflow contract from their variables.
+
+The current event-triggered path is `loops routes create todos-task` for
+`@hasna/todos` `task.created` events and `loops routes create generic` for
+generic `@hasna/events` envelopes. Dry-run and `--preflight` output include the
+full selected `templateContract`, while the created `WorkflowInvocation` stores
+a compact contract reference plus output schema, required evidence, and policy
+requirements in `outputPolicy`. This gives event-triggered runs the same typed
+admission/evidence contract as cron or interval scheduled workflow loops without
+requiring callers to scrape prompt text.
+
 ## Planned Workflow Upsert SDK
 
 External compilers should not write OpenLoops SQLite rows directly. The stable

@@ -1,4 +1,4 @@
-import type { AgentWorktreeSpec, LoopTemplateSummary, LoopTemplateVariable } from "../types.js";
+import type { AgentWorktreeSpec, LoopTemplateContract, LoopTemplateSummary, LoopTemplateVariable } from "../types.js";
 
 /**
  * Builtin template metadata, prompt kit, and deterministic script assets.
@@ -57,6 +57,142 @@ function verifierIdleTimeoutVariable(): LoopTemplateVariable {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Template contract fragments
+// ---------------------------------------------------------------------------
+
+function objectSchema(
+  properties: Record<string, unknown>,
+  required: string[] = [],
+  description?: string,
+): Record<string, unknown> {
+  return {
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    type: "object",
+    ...(description ? { description } : {}),
+    properties,
+    required,
+    additionalProperties: true,
+  };
+}
+
+function stringSchema(description: string): Record<string, unknown> {
+  return { type: "string", description };
+}
+
+function booleanSchema(description: string): Record<string, unknown> {
+  return { type: "boolean", description };
+}
+
+function arraySchema(description: string, items: Record<string, unknown> = { type: "string" }): Record<string, unknown> {
+  return { type: "array", description, items };
+}
+
+const COMMON_AGENT_TEMPLATE_INPUT = {
+  projectPath: stringSchema("Repository or project working directory."),
+  routeProjectPath: stringSchema("Canonical project path used for route concurrency limits."),
+  projectGroup: stringSchema("Optional project group used for route concurrency limits."),
+  provider: stringSchema("Agent provider."),
+  authProfile: stringSchema("Provider-native auth profile."),
+  authProfilePool: arraySchema("Provider-native auth-profile pool."),
+  accountPool: arraySchema("OpenAccounts profile pool."),
+  sandbox: stringSchema("Provider sandbox mode."),
+  permissionMode: stringSchema("Provider permission mode."),
+  worktreeMode: stringSchema("Worktree isolation mode."),
+  worktreeRoot: stringSchema("Base directory for generated worktrees."),
+  timeoutMs: stringSchema("Agent timeout in milliseconds or unlimited/null."),
+  verifierIdleTimeoutMs: stringSchema("Verifier idle timeout in milliseconds or none/off."),
+};
+
+const WORKFLOW_OUTPUT_SCHEMA = objectSchema(
+  {
+    workflowRun: stringSchema("Workflow run id or receipt."),
+    workRun: stringSchema("Higher-level work-run receipt mapped from the workflow run."),
+    agentTrajectory: stringSchema("Trace summary or trajectory produced by agent steps."),
+    evidenceRefs: arraySchema("Evidence references such as logs, artifacts, commits, tasks, PRs, or reports.", objectSchema({
+      kind: stringSchema("Evidence kind."),
+      ref: stringSchema("Evidence identifier, path, URL, or command."),
+    })),
+    proofBundle: objectSchema({
+      validation: arraySchema("Validation commands and results."),
+      reviewer: stringSchema("Verifier or reviewer attribution."),
+      decision: stringSchema("Final verification decision."),
+    }),
+  },
+  [],
+  "OpenLoops workflow execution output contract.",
+);
+
+const WORKTREE_POLICY = {
+  id: "worktree-isolation",
+  description: "Repo-mutating agent steps must use the generated isolated worktree or an explicit non-mutating/main-checkout policy.",
+  enforcement: "template" as const,
+  required: true,
+};
+
+const SANDBOX_POLICY = {
+  id: "sandbox-or-break-glass",
+  description: "Agent routes must have provider sandbox isolation or explicit metadata-only manual break-glass evidence for danger-full-access.",
+  enforcement: "route-preflight" as const,
+  required: true,
+};
+
+const NO_TMUX_POLICY = {
+  id: "no-tmux-dispatch",
+  description: "Follow-up implementation must be routed through tasks/workflows, not pasted into tmux panes.",
+  enforcement: "prompt" as const,
+  required: true,
+};
+
+const ADVERSARIAL_REVIEW_POLICY = {
+  id: "adversarial-review",
+  description: "Worker output requires a fresh verifier or recorded adversarial review before closure.",
+  enforcement: "verifier" as const,
+  required: true,
+};
+
+const SOURCE_TASK_GATE_POLICY = {
+  id: "source-task-gate",
+  description: "Task-triggered routes must verify the source task still resolves before agent execution.",
+  enforcement: "gate" as const,
+  required: true,
+};
+
+const PR_HANDOFF_POLICY = {
+  id: "pr-handoff-artifact",
+  description: "When GitHub push/PR creation is blocked after successful validation, workers must write the bounded PR handoff artifact.",
+  enforcement: "prompt" as const,
+  required: true,
+};
+
+function contract(
+  input: {
+    templateVersion?: number;
+    inputSchema: Record<string, unknown>;
+    outputSchema?: Record<string, unknown>;
+    taskBinding?: LoopTemplateContract["taskBinding"];
+    requiredEvidence?: LoopTemplateContract["requiredEvidence"];
+    policyRequirements?: LoopTemplateContract["policyRequirements"];
+  },
+): LoopTemplateContract {
+  return {
+    contractVersion: 1,
+    templateVersion: input.templateVersion ?? 1,
+    inputSchema: input.inputSchema,
+    outputSchema: input.outputSchema ?? WORKFLOW_OUTPUT_SCHEMA,
+    taskBinding: input.taskBinding,
+    requiredEvidence: input.requiredEvidence ?? [],
+    policyRequirements: input.policyRequirements ?? [],
+  };
+}
+
+function agentEvidence(nouns: { worker: string; verifier: string }): LoopTemplateContract["requiredEvidence"] {
+  return [
+    { id: "worker-evidence", stage: "worker", required: true, description: nouns.worker },
+    { id: "verifier-evidence", stage: "verifier", required: true, description: nouns.verifier },
+  ];
+}
+
 /** Shared agent/permission/worktree variable block for the worker+verifier templates. */
 function workerVerifierAgentVariables(opts: { addDirs: boolean; branchNoun: string }): LoopTemplateVariable[] {
   return [
@@ -104,6 +240,37 @@ export const BUILTIN_TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
     description:
       "Create a one-shot workflow for a todos task: one agent performs the task, then a fresh verifier agent audits the result and records follow-up tasks or completion evidence.",
     kind: "workflow",
+    contract: contract({
+      inputSchema: objectSchema(
+        {
+          taskId: stringSchema("Todos task id to execute."),
+          taskTitle: stringSchema("Human-readable task title."),
+          taskDescription: stringSchema("Full task description or acceptance criteria."),
+          todosProjectPath: stringSchema("Todos storage project path for generated task commands."),
+          eventId: stringSchema("Source event id when created by an event route."),
+          eventType: stringSchema("Source event type when created by an event route."),
+          ...COMMON_AGENT_TEMPLATE_INPUT,
+        },
+        ["taskId", "projectPath"],
+        "Input contract for a task-triggered worker/verifier workflow.",
+      ),
+      taskBinding: {
+        source: "open-todos",
+        subject: "task",
+        eventTypes: ["task.created"],
+        requiredFields: ["taskId", "projectPath"],
+        projectPathFields: ["projectPath", "routeProjectPath", "todosProjectPath"],
+        idempotency: "todos-task:<sourceTodosProjectPath>:<taskId> or todos-task:<taskId>",
+      },
+      requiredEvidence: [
+        { id: "source-task", stage: "route", required: true, description: "Source todos task id and pinned todos project path." },
+        ...agentEvidence({
+          worker: "Changed files, validation commands/results, commit or blocker, and residual risks recorded on the source task.",
+          verifier: "Fresh verification findings and task decision recorded on the source task.",
+        }),
+      ],
+      policyRequirements: [SOURCE_TASK_GATE_POLICY, WORKTREE_POLICY, SANDBOX_POLICY, NO_TMUX_POLICY, ADVERSARIAL_REVIEW_POLICY],
+    }),
     variables: [
       { name: "taskId", required: true, description: "Todos task id to execute." },
       { name: "taskTitle", description: "Human-readable task title." },
@@ -119,6 +286,34 @@ export const BUILTIN_TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
     description:
       "Create a one-shot workflow for a generic Hasna event: one agent handles the event, then a fresh verifier agent audits the result and records evidence or follow-up tasks.",
     kind: "workflow",
+    contract: contract({
+      inputSchema: objectSchema(
+        {
+          eventId: stringSchema("Hasna event id."),
+          eventType: stringSchema("Hasna event type."),
+          eventSource: stringSchema("Hasna event source package or producer."),
+          eventSubject: stringSchema("Optional event subject."),
+          eventMessage: stringSchema("Optional event message."),
+          eventJson: stringSchema("Full event envelope JSON."),
+          ...COMMON_AGENT_TEMPLATE_INPUT,
+        },
+        ["eventId", "eventType", "eventSource", "eventJson", "projectPath"],
+        "Input contract for a generic event-triggered worker/verifier workflow.",
+      ),
+      taskBinding: {
+        source: "open-events",
+        subject: "event",
+        eventTypes: ["*"],
+        requiredFields: ["eventId", "eventType", "eventSource", "eventJson", "projectPath"],
+        projectPathFields: ["projectPath", "routeProjectPath"],
+        idempotency: "generic-event:<eventSource>:<eventType>:<eventId>",
+      },
+      requiredEvidence: agentEvidence({
+        worker: "Event handling decision, changed files or no-op rationale, validation, and blockers.",
+        verifier: "Fresh event-handling verification and follow-up task/comment decision.",
+      }),
+      policyRequirements: [WORKTREE_POLICY, SANDBOX_POLICY, ADVERSARIAL_REVIEW_POLICY],
+    }),
     variables: [
       { name: "eventId", required: true, description: "Hasna event id." },
       { name: "eventType", required: true, description: "Hasna event type." },
@@ -135,6 +330,28 @@ export const BUILTIN_TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
     description:
       "Create a bounded recurring-agent workflow: one agent performs a narrow objective, then a fresh verifier audits the result with separate account/profile selection.",
     kind: "workflow",
+    contract: contract({
+      inputSchema: objectSchema(
+        {
+          objective: stringSchema("Narrow goal-mode objective for the worker."),
+          prompt: stringSchema("Optional extra worker prompt details."),
+          ...COMMON_AGENT_TEMPLATE_INPUT,
+        },
+        ["objective", "projectPath"],
+        "Input contract for a bounded worker/verifier workflow.",
+      ),
+      taskBinding: {
+        source: "manual",
+        subject: "objective",
+        requiredFields: ["objective", "projectPath"],
+        projectPathFields: ["projectPath", "routeProjectPath"],
+      },
+      requiredEvidence: agentEvidence({
+        worker: "Bounded objective result, validation/evidence, and any follow-up tasks.",
+        verifier: "Adversarial review of correctness, regressions, output bounds, and evidence sufficiency.",
+      }),
+      policyRequirements: [WORKTREE_POLICY, SANDBOX_POLICY, NO_TMUX_POLICY, ADVERSARIAL_REVIEW_POLICY],
+    }),
     variables: [
       { name: "objective", required: true, description: "Narrow goal-mode objective for the worker." },
       { name: "prompt", description: "Optional extra worker prompt details." },
@@ -149,6 +366,45 @@ export const BUILTIN_TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
     description:
       "Run the standard task-created lifecycle: triage/dedupe, plan, worker execution, independent verification, and todos closure/follow-up evidence.",
     kind: "workflow",
+    contract: contract({
+      inputSchema: objectSchema(
+        {
+          taskId: stringSchema("Todos task id."),
+          taskTitle: stringSchema("Human-readable task title."),
+          taskDescription: stringSchema("Full task description or acceptance criteria."),
+          todosProjectPath: stringSchema("Todos storage project path for generated task commands."),
+          prHandoff: booleanSchema("Whether to add a bounded PR handoff step after the worker."),
+          eventId: stringSchema("Source event id when created by an event route."),
+          eventType: stringSchema("Source event type when created by an event route."),
+          ...COMMON_AGENT_TEMPLATE_INPUT,
+        },
+        ["taskId", "projectPath"],
+        "Input contract for the full task-created lifecycle.",
+      ),
+      taskBinding: {
+        source: "open-todos",
+        subject: "task",
+        eventTypes: ["task.created"],
+        requiredFields: ["taskId", "projectPath"],
+        projectPathFields: ["projectPath", "routeProjectPath", "todosProjectPath"],
+        idempotency: "todos-task:<sourceTodosProjectPath>:<taskId> or todos-task:pr:<owner/repo#number>",
+      },
+      requiredEvidence: [
+        { id: "triage-marker", stage: "triage", required: true, description: "Exact openloops:triage go/blocked marker with dependency, duplicate, approval, and route-gate evidence." },
+        { id: "planner-marker", stage: "planner", required: true, description: "Exact openloops:planner go/blocked marker with scoped files, validation plan, risk checks, and split/follow-up decision." },
+        { id: "worker-evidence", stage: "worker", required: true, description: "Changed files, validation results, commit SHA or blocker, PR or handoff artifact, and residual risks." },
+        { id: "verifier-evidence", stage: "verifier", required: true, description: "Independent verification findings and task closure/blocker decision." },
+        { id: "pr-handoff", stage: "handoff", required: false, description: "PR URL or bounded handoff artifact when GitHub network access blocks push/PR creation." },
+      ],
+      policyRequirements: [
+        SOURCE_TASK_GATE_POLICY,
+        WORKTREE_POLICY,
+        SANDBOX_POLICY,
+        NO_TMUX_POLICY,
+        ADVERSARIAL_REVIEW_POLICY,
+        PR_HANDOFF_POLICY,
+      ],
+    }),
     variables: [
       { name: "taskId", required: true, description: "Todos task id." },
       projectPathVariable(),
@@ -172,6 +428,32 @@ export const BUILTIN_TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
     description:
       "Review and drive a pull request toward merge-ready state with a worker and fresh adversarial verifier.",
     kind: "workflow",
+    contract: contract({
+      inputSchema: {
+        ...objectSchema(
+          {
+            prUrl: stringSchema("Pull request URL."),
+            prNumber: stringSchema("Pull request number."),
+            objective: stringSchema("Optional review objective override."),
+            ...COMMON_AGENT_TEMPLATE_INPUT,
+          },
+          ["projectPath"],
+          "Input contract for a pull-request review workflow.",
+        ),
+        anyOf: [{ required: ["prUrl"] }, { required: ["prNumber"] }],
+      },
+      taskBinding: {
+        source: "pr",
+        subject: "pr",
+        requiredFields: ["projectPath"],
+        projectPathFields: ["projectPath", "routeProjectPath"],
+      },
+      requiredEvidence: agentEvidence({
+        worker: "PR state, checks, branch freshness, review requirements, applied fixes, and validation evidence.",
+        verifier: "Adversarial PR review findings and merge-readiness or follow-up decision.",
+      }),
+      policyRequirements: [WORKTREE_POLICY, SANDBOX_POLICY, ADVERSARIAL_REVIEW_POLICY],
+    }),
     variables: [
       { name: "prUrl", description: "Pull request URL." },
       { name: "prNumber", description: "Pull request number." },
@@ -185,6 +467,27 @@ export const BUILTIN_TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
     description:
       "Run a bounded scheduled audit, record evidence, create follow-up tasks for actionable findings, then verify the audit result.",
     kind: "workflow",
+    contract: contract({
+      inputSchema: objectSchema(
+        {
+          objective: stringSchema("Audit objective."),
+          ...COMMON_AGENT_TEMPLATE_INPUT,
+        },
+        ["objective", "projectPath"],
+        "Input contract for a scheduled or manual audit workflow.",
+      ),
+      taskBinding: {
+        source: "schedule",
+        subject: "objective",
+        requiredFields: ["objective", "projectPath"],
+        projectPathFields: ["projectPath", "routeProjectPath"],
+      },
+      requiredEvidence: agentEvidence({
+        worker: "Audit findings, commands/data inspected, deduped follow-up tasks for actionable findings, and no-action rationale where applicable.",
+        verifier: "Verification of audit scope, evidence quality, and follow-up task dedupe.",
+      }),
+      policyRequirements: [WORKTREE_POLICY, SANDBOX_POLICY, NO_TMUX_POLICY, ADVERSARIAL_REVIEW_POLICY],
+    }),
     variables: [
       { name: "objective", required: true, description: "Audit objective." },
       projectPathVariable(),
@@ -197,6 +500,28 @@ export const BUILTIN_TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
     description:
       "Review recent knowledge, improve structure/schema where needed, create deduped tasks for code changes, and verify the knowledge update.",
     kind: "workflow",
+    contract: contract({
+      inputSchema: objectSchema(
+        {
+          scope: stringSchema("Knowledge scope or label to refresh."),
+          objective: stringSchema("Optional objective override."),
+          ...COMMON_AGENT_TEMPLATE_INPUT,
+        },
+        ["projectPath"],
+        "Input contract for a knowledge refresh workflow.",
+      ),
+      taskBinding: {
+        source: "manual",
+        subject: "objective",
+        requiredFields: ["projectPath"],
+        projectPathFields: ["projectPath", "routeProjectPath"],
+      },
+      requiredEvidence: agentEvidence({
+        worker: "Knowledge records inspected, updates made, duplicate checks, and follow-up tasks for code changes.",
+        verifier: "Verification of knowledge structure, dedupe, and task boundaries.",
+      }),
+      policyRequirements: [WORKTREE_POLICY, SANDBOX_POLICY, NO_TMUX_POLICY, ADVERSARIAL_REVIEW_POLICY],
+    }),
     variables: [
       { name: "scope", description: "Knowledge scope or label to refresh." },
       projectPathVariable(),
@@ -209,6 +534,31 @@ export const BUILTIN_TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
     description:
       "Produce a bounded report without mutating repositories; verifier checks evidence, scope, and absence of unauthorized changes.",
     kind: "workflow",
+    contract: contract({
+      inputSchema: objectSchema(
+        {
+          objective: stringSchema("Report objective."),
+          ...COMMON_AGENT_TEMPLATE_INPUT,
+        },
+        ["objective", "projectPath"],
+        "Input contract for a report-only workflow.",
+      ),
+      taskBinding: {
+        source: "manual",
+        subject: "objective",
+        requiredFields: ["objective", "projectPath"],
+        projectPathFields: ["projectPath", "routeProjectPath"],
+      },
+      requiredEvidence: agentEvidence({
+        worker: "Report artifact or summary, source evidence, and explicit no-mutation confirmation.",
+        verifier: "Verification of report evidence, scope, and absence of unauthorized mutations.",
+      }),
+      policyRequirements: [
+        { id: "read-only-main-checkout", description: "Report-only workflows default to read-only sandbox on the main checkout.", enforcement: "template", required: true },
+        SANDBOX_POLICY,
+        ADVERSARIAL_REVIEW_POLICY,
+      ],
+    }),
     variables: [
       { name: "objective", required: true, description: "Report objective." },
       projectPathVariable(),
@@ -225,6 +575,28 @@ export const BUILTIN_TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
     description:
       "Triage an incident, gather bounded evidence, apply only allowed narrow mitigation, create follow-up tasks, and verify the response.",
     kind: "workflow",
+    contract: contract({
+      inputSchema: objectSchema(
+        {
+          incidentId: stringSchema("Incident or task id."),
+          objective: stringSchema("Incident response objective."),
+          ...COMMON_AGENT_TEMPLATE_INPUT,
+        },
+        ["objective", "projectPath"],
+        "Input contract for a bounded incident response workflow.",
+      ),
+      taskBinding: {
+        source: "manual",
+        subject: "objective",
+        requiredFields: ["objective", "projectPath"],
+        projectPathFields: ["projectPath", "routeProjectPath"],
+      },
+      requiredEvidence: agentEvidence({
+        worker: "Incident timeline, evidence gathered, mitigation applied or skipped, and follow-up tasks.",
+        verifier: "Verification of mitigation scope, residual risk, and follow-up correctness.",
+      }),
+      policyRequirements: [WORKTREE_POLICY, SANDBOX_POLICY, ADVERSARIAL_REVIEW_POLICY],
+    }),
     variables: [
       { name: "incidentId", description: "Incident or task id." },
       { name: "objective", required: true, description: "Incident response objective." },
@@ -238,6 +610,40 @@ export const BUILTIN_TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
     description:
       "Run a deterministic check command that writes compact evidence and upserts one deduped todos task when its expectation is not met.",
     kind: "workflow",
+    contract: contract({
+      inputSchema: objectSchema(
+        {
+          checkCommand: stringSchema("Shell command that performs the deterministic check and task upsert."),
+          projectPath: stringSchema("Project working directory for the check."),
+          name: stringSchema("Workflow name."),
+          timeoutMs: stringSchema("Check timeout in milliseconds."),
+        },
+        ["checkCommand", "projectPath"],
+        "Input contract for a deterministic check workflow.",
+      ),
+      outputSchema: objectSchema(
+        {
+          checkExitCode: stringSchema("Process exit code for the deterministic check."),
+          evidenceRef: stringSchema("Compact evidence written by the check command."),
+          upsertedTask: stringSchema("Todos task id or fingerprint when an actionable finding was upserted."),
+        },
+        [],
+        "Output contract for a deterministic check workflow.",
+      ),
+      taskBinding: {
+        source: "deterministic",
+        subject: "check",
+        requiredFields: ["checkCommand", "projectPath"],
+        projectPathFields: ["projectPath"],
+      },
+      requiredEvidence: [
+        { id: "check-output", stage: "check", required: true, description: "Compact stdout/stderr or evidence artifact from the deterministic check." },
+        { id: "task-upsert", stage: "check", required: false, description: "Deduped todos task fingerprint when the expectation is not met." },
+      ],
+      policyRequirements: [
+        { id: "deterministic-command", description: "The check must be deterministic, bounded, and emit compact evidence.", enforcement: "operator", required: true },
+      ],
+    }),
     variables: [
       { name: "checkCommand", required: true, description: "Shell command that performs the check and task upsert." },
       projectPathVariable(),

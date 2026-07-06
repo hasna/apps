@@ -8,6 +8,7 @@ import type {
   CreateLoopInput,
   CreateWorkflowInput,
   CreateWorkflowInvocationInput,
+  LoopTemplateContract,
   UpsertWorkflowWorkItemInput,
   WorkflowSpec,
   WorkflowWorkItem,
@@ -20,6 +21,8 @@ import {
   renderEventWorkerVerifierWorkflow,
   renderTaskLifecycleWorkflow,
   renderTodosTaskWorkerVerifierWorkflow,
+  getLoopTemplateContract,
+  EVENT_WORKER_VERIFIER_TEMPLATE_ID,
   TASK_LIFECYCLE_TEMPLATE_ID,
   TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID,
 } from "../templates.js";
@@ -272,6 +275,7 @@ interface RouteEventPlan {
   valueExtras: Record<string, unknown>;
   /** Extra fields merged into deduped outputs. */
   dedupeValueExtras: Record<string, unknown>;
+  templateContract?: LoopTemplateContract;
 }
 
 interface PoolRoutingPlan {
@@ -331,8 +335,35 @@ function buildPoolRoutingPlan(
   return { pool, seed, maxPerProfile: maxPerProfile > 0 ? maxPerProfile : undefined, rolesByStepId };
 }
 
+function templateContractForRoute(templateId: string): LoopTemplateContract | undefined {
+  return getLoopTemplateContract(templateId, { source: "builtin" });
+}
+
+function outputPolicyForTemplate(
+  templateId: string,
+  contract: LoopTemplateContract | undefined,
+  createTask: "never" | "on_actionable" | "on_failure" | "always",
+): NonNullable<CreateWorkflowInvocationInput["outputPolicy"]> {
+  return {
+    report: "always",
+    createTask,
+    ...(contract
+      ? {
+          templateContract: {
+            templateId,
+            contractVersion: contract.contractVersion,
+            templateVersion: contract.templateVersion,
+          },
+          outputSchema: contract.outputSchema,
+          requiredEvidence: contract.requiredEvidence,
+          policyRequirements: contract.policyRequirements,
+        }
+      : {}),
+  };
+}
+
 function dedupedRoutePrint(
-  plan: Pick<RouteEventPlan, "event" | "idempotencyKey" | "dedupeValueExtras">,
+  plan: Pick<RouteEventPlan, "event" | "idempotencyKey" | "dedupeValueExtras" | "templateContract">,
   outcome: { existingItem: WorkflowWorkItem; existingLoop?: ReturnType<Store["getLoop"]>; existingWorkflow?: WorkflowSpec; invocation?: Parameters<typeof publicWorkflowInvocation>[0] },
 ): TodosTaskRoutePrint {
   return {
@@ -342,6 +373,7 @@ function dedupedRoutePrint(
       idempotencyKey: plan.idempotencyKey,
       dedupedBy: "work-item",
       event: plan.event,
+      templateContract: plan.templateContract,
       ...plan.dedupeValueExtras,
       invocation: outcome.invocation ? publicWorkflowInvocation(outcome.invocation) : undefined,
       workItem: publicWorkflowWorkItem(outcome.existingItem),
@@ -396,6 +428,7 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
         deduped: false,
         idempotencyKey,
         event,
+        templateContract: plan.templateContract,
         ...plan.valueExtras,
         invocation: plan.invocationInput,
         workItem: workItemInput,
@@ -528,6 +561,7 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
           reason: outcome.throttle.reason,
           idempotencyKey,
           event,
+          templateContract: plan.templateContract,
           ...plan.valueExtras,
           invocation: publicWorkflowInvocation(outcome.invocation),
           workItem: publicWorkflowWorkItem(outcome.workItem),
@@ -544,6 +578,7 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
         deduped: false,
         idempotencyKey,
         event,
+        templateContract: plan.templateContract,
         ...plan.valueExtras,
         invocation: publicWorkflowInvocation(outcome.invocation),
         workItem: publicWorkflowWorkItem(outcome.workItem),
@@ -627,6 +662,8 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
   const namePrefix = opts.namePrefix ?? "event:todos-task";
   const workflowName = `${namePrefix}:${taskId.slice(0, 8)}:${idempotencySuffix}:workflow`;
   const loopName = `${namePrefix}:${taskId.slice(0, 8)}:${idempotencySuffix}:run`;
+  const templateId = todosTaskRouteTemplateId(opts);
+  const templateContract = templateContractForRoute(templateId);
   if (!opts.dryRun) {
     // Dedupe before worktree validation and provider checks so replayed task
     // events never fail on since-broken project paths or provider options.
@@ -642,7 +679,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
           const existingWorkflow = existingItem.workflowId ? store.getWorkflow(existingItem.workflowId) : undefined;
           const existingInvocation = store.getWorkflowInvocation(existingItem.invocationId);
           return dedupedRoutePrint(
-            { event, idempotencyKey, dedupeValueExtras: {} },
+            { event, idempotencyKey, dedupeValueExtras: {}, templateContract },
             { existingItem, existingLoop, existingWorkflow, invocation: existingInvocation },
           );
         }
@@ -677,7 +714,6 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
   const permissionMode = permissionModeFromOpts({ permissionMode: opts.permissionMode ?? "bypass" }, provider);
   const sandbox = sandboxFromOpts({ sandbox: opts.sandbox }, provider);
   const authProfile = providerAuthProfileFromOpts({ authProfile: providerRouting.authProfile }, provider);
-  const templateId = todosTaskRouteTemplateId(opts);
   const workflowInput = {
     taskId,
     taskTitle,
@@ -720,6 +756,14 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     name: workflowName,
     type: "todos-task-event-workflow",
     event: event.id,
+    templateId,
+    templateContract: templateContract
+      ? {
+          contractVersion: templateContract.contractVersion,
+          templateVersion: templateContract.templateVersion,
+          taskBinding: templateContract.taskBinding,
+        }
+      : undefined,
   };
   let workflowBody = templateId === TASK_LIFECYCLE_TEMPLATE_ID
     ? renderTaskLifecycleWorkflow(workflowInput)
@@ -759,10 +803,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
       prReviewRouting: prReviewRouting.required ? prReviewRouting : undefined,
       concurrencyGroup: projectGroup ?? routeProjectPath,
     },
-    outputPolicy: {
-      report: "always" as const,
-      createTask: "on_failure" as const,
-    },
+    outputPolicy: outputPolicyForTemplate(templateId, templateContract, "on_failure"),
   };
   return routeEvent({
     routeKey: "todos-task",
@@ -788,6 +829,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
       prReviewRouting: prReviewRouting.required ? prReviewRouting : undefined,
     },
     dedupeValueExtras: {},
+    templateContract,
   });
 }
 
@@ -813,10 +855,20 @@ export function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOpti
   const permissionMode = permissionModeFromOpts({ permissionMode: opts.permissionMode ?? "bypass" }, provider);
   const sandbox = sandboxFromOpts({ sandbox: opts.sandbox }, provider);
   const authProfile = providerAuthProfileFromOpts({ authProfile: providerRouting.authProfile }, provider);
+  const templateId = EVENT_WORKER_VERIFIER_TEMPLATE_ID;
+  const templateContract = templateContractForRoute(templateId);
   const workflowContext = {
     name: workflowName,
     type: "generic-event-workflow",
     event: event.id,
+    templateId,
+    templateContract: templateContract
+      ? {
+          contractVersion: templateContract.contractVersion,
+          templateVersion: templateContract.templateVersion,
+          taskBinding: templateContract.taskBinding,
+        }
+      : undefined,
   };
   let workflowBody = renderEventWorkerVerifierWorkflow({
     eventId: event.id,
@@ -855,7 +907,7 @@ export function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOpti
   workflowBody = normalizeWorkflowForStorage(workflowBody, workflowContext);
   const hasExplicitRoleAccount = Boolean(opts.workerAuthProfile || opts.verifierAuthProfile || opts.workerAccount || opts.verifierAccount);
   const invocationInput: CreateWorkflowInvocationInput = {
-    templateId: "event-worker-verifier",
+    templateId,
     sourceRef: {
       kind: "event",
       id: event.id,
@@ -879,10 +931,7 @@ export function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOpti
       providerRouting: providerRoutingPublic(providerRouting),
       concurrencyGroup: projectGroup ?? routeProjectPath,
     },
-    outputPolicy: {
-      report: "always" as const,
-      createTask: "on_failure" as const,
-    },
+    outputPolicy: outputPolicyForTemplate(templateId, templateContract, "on_failure"),
   };
   const providerRoutingValue = providerRoutingPublic(providerRouting);
   return routeEvent({
@@ -905,6 +954,7 @@ export function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOpti
     humanSubject: `event ${event.id}`,
     valueExtras: { providerRouting: providerRoutingValue },
     dedupeValueExtras: { providerRouting: providerRoutingValue },
+    templateContract,
   });
 }
 

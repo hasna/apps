@@ -127,6 +127,7 @@ function compactDrainResult(result: TodosTaskRoutePrint): Record<string, unknown
   const throttle = objectField(value.throttle) as { reason?: string; allowed?: boolean } | undefined;
   const requeue = objectField(value.requeue);
   const providerRouting = objectField(value.providerRouting);
+  const templateContract = objectField(value.templateContract);
   return {
     kind: result.kind,
     taskId: event?.subject,
@@ -138,6 +139,13 @@ function compactDrainResult(result: TodosTaskRoutePrint): Record<string, unknown
     workflowId: stringField(workflow?.id),
     workflowName: stringField(workflow?.name),
     providerRouting,
+    templateContract: templateContract
+      ? {
+          contractVersion: templateContract.contractVersion,
+          templateVersion: templateContract.templateVersion,
+          taskBinding: objectField(templateContract.taskBinding),
+        }
+      : undefined,
     // Per-role codewith account attribution + the route scope that gates
     // --max-active, so drain reports show which account each step ran on and the
     // least-loaded spread is auditable.

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { dbPath } from "../paths.js";
 import { Store } from "../store.js";
 import type { TodosTaskRouteOptions } from "./types.js";
-import { routeTodosTaskEvent } from "./route-event.js";
+import { routeGenericEvent, routeTodosTaskEvent } from "./route-event.js";
 
 // Regression coverage for the drain wedge: a task-lifecycle work item whose todos
 // task is still pending must be re-admitted by the next drain (created > 0), not
@@ -109,6 +109,16 @@ describe("routeTodosTaskEvent dedupe re-admission", () => {
     routeTodosTaskEvent(pendingTaskEvent(), ROUTE_OPTS);
     const result = routeTodosTaskEvent(pendingTaskEvent(), ROUTE_OPTS);
     expect(result.kind).toBe("deduped");
+    expect(result.value.templateContract).toMatchObject({
+      contractVersion: 1,
+      templateVersion: 1,
+      taskBinding: { source: "open-todos", subject: "task", eventTypes: ["task.created"] },
+    });
+    expect((result.value.invocation as { outputPolicy?: { templateContract?: unknown } }).outputPolicy?.templateContract).toEqual({
+      templateId: "task-lifecycle",
+      contractVersion: 1,
+      templateVersion: 1,
+    });
   });
 
   test("re-admits a succeeded work item whose todos task is still pending", () => {
@@ -352,5 +362,39 @@ describe("routeTodosTaskEvent least-loaded auth-profile pool", () => {
     // Neutralization: without the guard this is "created" and stacks a 3rd run.
     expect(result.kind).toBe("throttled");
     expect(String(result.value.reason)).toContain("per-profile active limit reached");
+  });
+});
+
+describe("event route template contracts", () => {
+  let env: RouteEnv;
+  beforeEach(() => {
+    env = withRouteEnv();
+  });
+  afterEach(() => {
+    env.restore();
+  });
+
+  test("generic event dry-run exposes the open-events template contract without storing state", () => {
+    const result = routeGenericEvent(
+      {
+        id: "evt-contract-1",
+        type: "repo.push",
+        source: "@hasna/events",
+        subject: "repo:open-loops",
+        data: { project_path: process.cwd() },
+      } as never,
+      { ...ROUTE_OPTS, dryRun: true },
+    );
+    expect(result.kind).toBe("created");
+    expect(result.value.templateContract).toMatchObject({
+      contractVersion: 1,
+      templateVersion: 1,
+      taskBinding: { source: "open-events", subject: "event", eventTypes: ["*"] },
+    });
+    expect((result.value.invocation as { outputPolicy?: { templateContract?: unknown } }).outputPolicy?.templateContract).toEqual({
+      templateId: "event-worker-verifier",
+      contractVersion: 1,
+      templateVersion: 1,
+    });
   });
 });

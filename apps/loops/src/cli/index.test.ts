@@ -2705,7 +2705,14 @@ describe("loops CLI", () => {
     const dataDir = freshDataDir("loops-cli-template-render-");
     const list = runCli(dataDir, ["--json", "templates", "list"]);
     expect(list.status).toBe(0);
-    expect(JSON.parse(list.stdout).map((template: { id: string }) => template.id)).toEqual(expect.arrayContaining(["todos-task-worker-verifier", "event-worker-verifier"]));
+    const templates = JSON.parse(list.stdout);
+    expect(templates.map((template: { id: string }) => template.id)).toEqual(expect.arrayContaining(["todos-task-worker-verifier", "event-worker-verifier"]));
+    const taskTemplate = templates.find((template: { id: string }) => template.id === "todos-task-worker-verifier");
+    expect(taskTemplate.contract).toMatchObject({
+      contractVersion: 1,
+      templateVersion: 1,
+      taskBinding: { source: "open-todos", subject: "task", eventTypes: ["task.created"] },
+    });
 
     const render = runCli(dataDir, [
       "--json",
@@ -4764,6 +4771,19 @@ describe("loops CLI", () => {
     const previewValue = JSON.parse(preview.stdout);
     expect(previewValue.invocation.templateId).toBe("task-lifecycle");
     expect(previewValue.invocation.scope.accountPolicy).toBe("role-explicit");
+    expect(previewValue.templateContract).toMatchObject({
+      contractVersion: 1,
+      templateVersion: 1,
+      taskBinding: { source: "open-todos", subject: "task", eventTypes: ["task.created"] },
+    });
+    expect(previewValue.invocation.outputPolicy.templateContract).toEqual({
+      templateId: "task-lifecycle",
+      contractVersion: 1,
+      templateVersion: 1,
+    });
+    expect(previewValue.invocation.outputPolicy.requiredEvidence.map((entry: { id: string }) => entry.id)).toEqual(
+      expect.arrayContaining(["triage-marker", "planner-marker", "worker-evidence", "verifier-evidence"]),
+    );
     expect(previewValue.workflow.steps.map((step: { id: string }) => step.id)).toEqual([
       "source-task-gate",
       "triage",

@@ -863,6 +863,237 @@ exports[`builtin rendered workflow snapshots builtin template summaries 1`] = `
     "name": "Todos Task Worker + Verifier",
     "description": "Create a one-shot workflow for a todos task: one agent performs the task, then a fresh verifier agent audits the result and records follow-up tasks or completion evidence.",
     "kind": "workflow",
+    "contract": {
+      "contractVersion": 1,
+      "templateVersion": 1,
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "description": "Input contract for a task-triggered worker/verifier workflow.",
+        "properties": {
+          "taskId": {
+            "type": "string",
+            "description": "Todos task id to execute."
+          },
+          "taskTitle": {
+            "type": "string",
+            "description": "Human-readable task title."
+          },
+          "taskDescription": {
+            "type": "string",
+            "description": "Full task description or acceptance criteria."
+          },
+          "todosProjectPath": {
+            "type": "string",
+            "description": "Todos storage project path for generated task commands."
+          },
+          "eventId": {
+            "type": "string",
+            "description": "Source event id when created by an event route."
+          },
+          "eventType": {
+            "type": "string",
+            "description": "Source event type when created by an event route."
+          },
+          "projectPath": {
+            "type": "string",
+            "description": "Repository or project working directory."
+          },
+          "routeProjectPath": {
+            "type": "string",
+            "description": "Canonical project path used for route concurrency limits."
+          },
+          "projectGroup": {
+            "type": "string",
+            "description": "Optional project group used for route concurrency limits."
+          },
+          "provider": {
+            "type": "string",
+            "description": "Agent provider."
+          },
+          "authProfile": {
+            "type": "string",
+            "description": "Provider-native auth profile."
+          },
+          "authProfilePool": {
+            "type": "array",
+            "description": "Provider-native auth-profile pool.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "accountPool": {
+            "type": "array",
+            "description": "OpenAccounts profile pool.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sandbox": {
+            "type": "string",
+            "description": "Provider sandbox mode."
+          },
+          "permissionMode": {
+            "type": "string",
+            "description": "Provider permission mode."
+          },
+          "worktreeMode": {
+            "type": "string",
+            "description": "Worktree isolation mode."
+          },
+          "worktreeRoot": {
+            "type": "string",
+            "description": "Base directory for generated worktrees."
+          },
+          "timeoutMs": {
+            "type": "string",
+            "description": "Agent timeout in milliseconds or unlimited/null."
+          },
+          "verifierIdleTimeoutMs": {
+            "type": "string",
+            "description": "Verifier idle timeout in milliseconds or none/off."
+          }
+        },
+        "required": [
+          "taskId",
+          "projectPath"
+        ],
+        "additionalProperties": true
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "description": "OpenLoops workflow execution output contract.",
+        "properties": {
+          "workflowRun": {
+            "type": "string",
+            "description": "Workflow run id or receipt."
+          },
+          "workRun": {
+            "type": "string",
+            "description": "Higher-level work-run receipt mapped from the workflow run."
+          },
+          "agentTrajectory": {
+            "type": "string",
+            "description": "Trace summary or trajectory produced by agent steps."
+          },
+          "evidenceRefs": {
+            "type": "array",
+            "description": "Evidence references such as logs, artifacts, commits, tasks, PRs, or reports.",
+            "items": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "description": "Evidence kind."
+                },
+                "ref": {
+                  "type": "string",
+                  "description": "Evidence identifier, path, URL, or command."
+                }
+              },
+              "required": [],
+              "additionalProperties": true
+            }
+          },
+          "proofBundle": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "validation": {
+                "type": "array",
+                "description": "Validation commands and results.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "reviewer": {
+                "type": "string",
+                "description": "Verifier or reviewer attribution."
+              },
+              "decision": {
+                "type": "string",
+                "description": "Final verification decision."
+              }
+            },
+            "required": [],
+            "additionalProperties": true
+          }
+        },
+        "required": [],
+        "additionalProperties": true
+      },
+      "taskBinding": {
+        "source": "open-todos",
+        "subject": "task",
+        "eventTypes": [
+          "task.created"
+        ],
+        "requiredFields": [
+          "taskId",
+          "projectPath"
+        ],
+        "projectPathFields": [
+          "projectPath",
+          "routeProjectPath",
+          "todosProjectPath"
+        ],
+        "idempotency": "todos-task:<sourceTodosProjectPath>:<taskId> or todos-task:<taskId>"
+      },
+      "requiredEvidence": [
+        {
+          "id": "source-task",
+          "stage": "route",
+          "required": true,
+          "description": "Source todos task id and pinned todos project path."
+        },
+        {
+          "id": "worker-evidence",
+          "stage": "worker",
+          "required": true,
+          "description": "Changed files, validation commands/results, commit or blocker, and residual risks recorded on the source task."
+        },
+        {
+          "id": "verifier-evidence",
+          "stage": "verifier",
+          "required": true,
+          "description": "Fresh verification findings and task decision recorded on the source task."
+        }
+      ],
+      "policyRequirements": [
+        {
+          "id": "source-task-gate",
+          "description": "Task-triggered routes must verify the source task still resolves before agent execution.",
+          "enforcement": "gate",
+          "required": true
+        },
+        {
+          "id": "worktree-isolation",
+          "description": "Repo-mutating agent steps must use the generated isolated worktree or an explicit non-mutating/main-checkout policy.",
+          "enforcement": "template",
+          "required": true
+        },
+        {
+          "id": "sandbox-or-break-glass",
+          "description": "Agent routes must have provider sandbox isolation or explicit metadata-only manual break-glass evidence for danger-full-access.",
+          "enforcement": "route-preflight",
+          "required": true
+        },
+        {
+          "id": "no-tmux-dispatch",
+          "description": "Follow-up implementation must be routed through tasks/workflows, not pasted into tmux panes.",
+          "enforcement": "prompt",
+          "required": true
+        },
+        {
+          "id": "adversarial-review",
+          "description": "Worker output requires a fresh verifier or recorded adversarial review before closure.",
+          "enforcement": "verifier",
+          "required": true
+        }
+      ]
+    },
     "variables": [
       {
         "name": "taskId",
@@ -975,6 +1206,224 @@ exports[`builtin rendered workflow snapshots builtin template summaries 1`] = `
     "name": "Hasna Event Worker + Verifier",
     "description": "Create a one-shot workflow for a generic Hasna event: one agent handles the event, then a fresh verifier agent audits the result and records evidence or follow-up tasks.",
     "kind": "workflow",
+    "contract": {
+      "contractVersion": 1,
+      "templateVersion": 1,
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "description": "Input contract for a generic event-triggered worker/verifier workflow.",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "description": "Hasna event id."
+          },
+          "eventType": {
+            "type": "string",
+            "description": "Hasna event type."
+          },
+          "eventSource": {
+            "type": "string",
+            "description": "Hasna event source package or producer."
+          },
+          "eventSubject": {
+            "type": "string",
+            "description": "Optional event subject."
+          },
+          "eventMessage": {
+            "type": "string",
+            "description": "Optional event message."
+          },
+          "eventJson": {
+            "type": "string",
+            "description": "Full event envelope JSON."
+          },
+          "projectPath": {
+            "type": "string",
+            "description": "Repository or project working directory."
+          },
+          "routeProjectPath": {
+            "type": "string",
+            "description": "Canonical project path used for route concurrency limits."
+          },
+          "projectGroup": {
+            "type": "string",
+            "description": "Optional project group used for route concurrency limits."
+          },
+          "provider": {
+            "type": "string",
+            "description": "Agent provider."
+          },
+          "authProfile": {
+            "type": "string",
+            "description": "Provider-native auth profile."
+          },
+          "authProfilePool": {
+            "type": "array",
+            "description": "Provider-native auth-profile pool.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "accountPool": {
+            "type": "array",
+            "description": "OpenAccounts profile pool.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sandbox": {
+            "type": "string",
+            "description": "Provider sandbox mode."
+          },
+          "permissionMode": {
+            "type": "string",
+            "description": "Provider permission mode."
+          },
+          "worktreeMode": {
+            "type": "string",
+            "description": "Worktree isolation mode."
+          },
+          "worktreeRoot": {
+            "type": "string",
+            "description": "Base directory for generated worktrees."
+          },
+          "timeoutMs": {
+            "type": "string",
+            "description": "Agent timeout in milliseconds or unlimited/null."
+          },
+          "verifierIdleTimeoutMs": {
+            "type": "string",
+            "description": "Verifier idle timeout in milliseconds or none/off."
+          }
+        },
+        "required": [
+          "eventId",
+          "eventType",
+          "eventSource",
+          "eventJson",
+          "projectPath"
+        ],
+        "additionalProperties": true
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "description": "OpenLoops workflow execution output contract.",
+        "properties": {
+          "workflowRun": {
+            "type": "string",
+            "description": "Workflow run id or receipt."
+          },
+          "workRun": {
+            "type": "string",
+            "description": "Higher-level work-run receipt mapped from the workflow run."
+          },
+          "agentTrajectory": {
+            "type": "string",
+            "description": "Trace summary or trajectory produced by agent steps."
+          },
+          "evidenceRefs": {
+            "type": "array",
+            "description": "Evidence references such as logs, artifacts, commits, tasks, PRs, or reports.",
+            "items": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "description": "Evidence kind."
+                },
+                "ref": {
+                  "type": "string",
+                  "description": "Evidence identifier, path, URL, or command."
+                }
+              },
+              "required": [],
+              "additionalProperties": true
+            }
+          },
+          "proofBundle": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "validation": {
+                "type": "array",
+                "description": "Validation commands and results.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "reviewer": {
+                "type": "string",
+                "description": "Verifier or reviewer attribution."
+              },
+              "decision": {
+                "type": "string",
+                "description": "Final verification decision."
+              }
+            },
+            "required": [],
+            "additionalProperties": true
+          }
+        },
+        "required": [],
+        "additionalProperties": true
+      },
+      "taskBinding": {
+        "source": "open-events",
+        "subject": "event",
+        "eventTypes": [
+          "*"
+        ],
+        "requiredFields": [
+          "eventId",
+          "eventType",
+          "eventSource",
+          "eventJson",
+          "projectPath"
+        ],
+        "projectPathFields": [
+          "projectPath",
+          "routeProjectPath"
+        ],
+        "idempotency": "generic-event:<eventSource>:<eventType>:<eventId>"
+      },
+      "requiredEvidence": [
+        {
+          "id": "worker-evidence",
+          "stage": "worker",
+          "required": true,
+          "description": "Event handling decision, changed files or no-op rationale, validation, and blockers."
+        },
+        {
+          "id": "verifier-evidence",
+          "stage": "verifier",
+          "required": true,
+          "description": "Fresh event-handling verification and follow-up task/comment decision."
+        }
+      ],
+      "policyRequirements": [
+        {
+          "id": "worktree-isolation",
+          "description": "Repo-mutating agent steps must use the generated isolated worktree or an explicit non-mutating/main-checkout policy.",
+          "enforcement": "template",
+          "required": true
+        },
+        {
+          "id": "sandbox-or-break-glass",
+          "description": "Agent routes must have provider sandbox isolation or explicit metadata-only manual break-glass evidence for danger-full-access.",
+          "enforcement": "route-preflight",
+          "required": true
+        },
+        {
+          "id": "adversarial-review",
+          "description": "Worker output requires a fresh verifier or recorded adversarial review before closure.",
+          "enforcement": "verifier",
+          "required": true
+        }
+      ]
+    },
     "variables": [
       {
         "name": "eventId",
@@ -1094,6 +1543,204 @@ exports[`builtin rendered workflow snapshots builtin template summaries 1`] = `
     "name": "Bounded Agent Worker + Verifier",
     "description": "Create a bounded recurring-agent workflow: one agent performs a narrow objective, then a fresh verifier audits the result with separate account/profile selection.",
     "kind": "workflow",
+    "contract": {
+      "contractVersion": 1,
+      "templateVersion": 1,
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "description": "Input contract for a bounded worker/verifier workflow.",
+        "properties": {
+          "objective": {
+            "type": "string",
+            "description": "Narrow goal-mode objective for the worker."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Optional extra worker prompt details."
+          },
+          "projectPath": {
+            "type": "string",
+            "description": "Repository or project working directory."
+          },
+          "routeProjectPath": {
+            "type": "string",
+            "description": "Canonical project path used for route concurrency limits."
+          },
+          "projectGroup": {
+            "type": "string",
+            "description": "Optional project group used for route concurrency limits."
+          },
+          "provider": {
+            "type": "string",
+            "description": "Agent provider."
+          },
+          "authProfile": {
+            "type": "string",
+            "description": "Provider-native auth profile."
+          },
+          "authProfilePool": {
+            "type": "array",
+            "description": "Provider-native auth-profile pool.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "accountPool": {
+            "type": "array",
+            "description": "OpenAccounts profile pool.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sandbox": {
+            "type": "string",
+            "description": "Provider sandbox mode."
+          },
+          "permissionMode": {
+            "type": "string",
+            "description": "Provider permission mode."
+          },
+          "worktreeMode": {
+            "type": "string",
+            "description": "Worktree isolation mode."
+          },
+          "worktreeRoot": {
+            "type": "string",
+            "description": "Base directory for generated worktrees."
+          },
+          "timeoutMs": {
+            "type": "string",
+            "description": "Agent timeout in milliseconds or unlimited/null."
+          },
+          "verifierIdleTimeoutMs": {
+            "type": "string",
+            "description": "Verifier idle timeout in milliseconds or none/off."
+          }
+        },
+        "required": [
+          "objective",
+          "projectPath"
+        ],
+        "additionalProperties": true
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "description": "OpenLoops workflow execution output contract.",
+        "properties": {
+          "workflowRun": {
+            "type": "string",
+            "description": "Workflow run id or receipt."
+          },
+          "workRun": {
+            "type": "string",
+            "description": "Higher-level work-run receipt mapped from the workflow run."
+          },
+          "agentTrajectory": {
+            "type": "string",
+            "description": "Trace summary or trajectory produced by agent steps."
+          },
+          "evidenceRefs": {
+            "type": "array",
+            "description": "Evidence references such as logs, artifacts, commits, tasks, PRs, or reports.",
+            "items": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "description": "Evidence kind."
+                },
+                "ref": {
+                  "type": "string",
+                  "description": "Evidence identifier, path, URL, or command."
+                }
+              },
+              "required": [],
+              "additionalProperties": true
+            }
+          },
+          "proofBundle": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "validation": {
+                "type": "array",
+                "description": "Validation commands and results.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "reviewer": {
+                "type": "string",
+                "description": "Verifier or reviewer attribution."
+              },
+              "decision": {
+                "type": "string",
+                "description": "Final verification decision."
+              }
+            },
+            "required": [],
+            "additionalProperties": true
+          }
+        },
+        "required": [],
+        "additionalProperties": true
+      },
+      "taskBinding": {
+        "source": "manual",
+        "subject": "objective",
+        "requiredFields": [
+          "objective",
+          "projectPath"
+        ],
+        "projectPathFields": [
+          "projectPath",
+          "routeProjectPath"
+        ]
+      },
+      "requiredEvidence": [
+        {
+          "id": "worker-evidence",
+          "stage": "worker",
+          "required": true,
+          "description": "Bounded objective result, validation/evidence, and any follow-up tasks."
+        },
+        {
+          "id": "verifier-evidence",
+          "stage": "verifier",
+          "required": true,
+          "description": "Adversarial review of correctness, regressions, output bounds, and evidence sufficiency."
+        }
+      ],
+      "policyRequirements": [
+        {
+          "id": "worktree-isolation",
+          "description": "Repo-mutating agent steps must use the generated isolated worktree or an explicit non-mutating/main-checkout policy.",
+          "enforcement": "template",
+          "required": true
+        },
+        {
+          "id": "sandbox-or-break-glass",
+          "description": "Agent routes must have provider sandbox isolation or explicit metadata-only manual break-glass evidence for danger-full-access.",
+          "enforcement": "route-preflight",
+          "required": true
+        },
+        {
+          "id": "no-tmux-dispatch",
+          "description": "Follow-up implementation must be routed through tasks/workflows, not pasted into tmux panes.",
+          "enforcement": "prompt",
+          "required": true
+        },
+        {
+          "id": "adversarial-review",
+          "description": "Worker output requires a fresh verifier or recorded adversarial review before closure.",
+          "enforcement": "verifier",
+          "required": true
+        }
+      ]
+    },
     "variables": [
       {
         "name": "objective",
@@ -1198,6 +1845,259 @@ exports[`builtin rendered workflow snapshots builtin template summaries 1`] = `
     "name": "Task Lifecycle",
     "description": "Run the standard task-created lifecycle: triage/dedupe, plan, worker execution, independent verification, and todos closure/follow-up evidence.",
     "kind": "workflow",
+    "contract": {
+      "contractVersion": 1,
+      "templateVersion": 1,
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "description": "Input contract for the full task-created lifecycle.",
+        "properties": {
+          "taskId": {
+            "type": "string",
+            "description": "Todos task id."
+          },
+          "taskTitle": {
+            "type": "string",
+            "description": "Human-readable task title."
+          },
+          "taskDescription": {
+            "type": "string",
+            "description": "Full task description or acceptance criteria."
+          },
+          "todosProjectPath": {
+            "type": "string",
+            "description": "Todos storage project path for generated task commands."
+          },
+          "prHandoff": {
+            "type": "boolean",
+            "description": "Whether to add a bounded PR handoff step after the worker."
+          },
+          "eventId": {
+            "type": "string",
+            "description": "Source event id when created by an event route."
+          },
+          "eventType": {
+            "type": "string",
+            "description": "Source event type when created by an event route."
+          },
+          "projectPath": {
+            "type": "string",
+            "description": "Repository or project working directory."
+          },
+          "routeProjectPath": {
+            "type": "string",
+            "description": "Canonical project path used for route concurrency limits."
+          },
+          "projectGroup": {
+            "type": "string",
+            "description": "Optional project group used for route concurrency limits."
+          },
+          "provider": {
+            "type": "string",
+            "description": "Agent provider."
+          },
+          "authProfile": {
+            "type": "string",
+            "description": "Provider-native auth profile."
+          },
+          "authProfilePool": {
+            "type": "array",
+            "description": "Provider-native auth-profile pool.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "accountPool": {
+            "type": "array",
+            "description": "OpenAccounts profile pool.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sandbox": {
+            "type": "string",
+            "description": "Provider sandbox mode."
+          },
+          "permissionMode": {
+            "type": "string",
+            "description": "Provider permission mode."
+          },
+          "worktreeMode": {
+            "type": "string",
+            "description": "Worktree isolation mode."
+          },
+          "worktreeRoot": {
+            "type": "string",
+            "description": "Base directory for generated worktrees."
+          },
+          "timeoutMs": {
+            "type": "string",
+            "description": "Agent timeout in milliseconds or unlimited/null."
+          },
+          "verifierIdleTimeoutMs": {
+            "type": "string",
+            "description": "Verifier idle timeout in milliseconds or none/off."
+          }
+        },
+        "required": [
+          "taskId",
+          "projectPath"
+        ],
+        "additionalProperties": true
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "description": "OpenLoops workflow execution output contract.",
+        "properties": {
+          "workflowRun": {
+            "type": "string",
+            "description": "Workflow run id or receipt."
+          },
+          "workRun": {
+            "type": "string",
+            "description": "Higher-level work-run receipt mapped from the workflow run."
+          },
+          "agentTrajectory": {
+            "type": "string",
+            "description": "Trace summary or trajectory produced by agent steps."
+          },
+          "evidenceRefs": {
+            "type": "array",
+            "description": "Evidence references such as logs, artifacts, commits, tasks, PRs, or reports.",
+            "items": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "description": "Evidence kind."
+                },
+                "ref": {
+                  "type": "string",
+                  "description": "Evidence identifier, path, URL, or command."
+                }
+              },
+              "required": [],
+              "additionalProperties": true
+            }
+          },
+          "proofBundle": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "validation": {
+                "type": "array",
+                "description": "Validation commands and results.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "reviewer": {
+                "type": "string",
+                "description": "Verifier or reviewer attribution."
+              },
+              "decision": {
+                "type": "string",
+                "description": "Final verification decision."
+              }
+            },
+            "required": [],
+            "additionalProperties": true
+          }
+        },
+        "required": [],
+        "additionalProperties": true
+      },
+      "taskBinding": {
+        "source": "open-todos",
+        "subject": "task",
+        "eventTypes": [
+          "task.created"
+        ],
+        "requiredFields": [
+          "taskId",
+          "projectPath"
+        ],
+        "projectPathFields": [
+          "projectPath",
+          "routeProjectPath",
+          "todosProjectPath"
+        ],
+        "idempotency": "todos-task:<sourceTodosProjectPath>:<taskId> or todos-task:pr:<owner/repo#number>"
+      },
+      "requiredEvidence": [
+        {
+          "id": "triage-marker",
+          "stage": "triage",
+          "required": true,
+          "description": "Exact openloops:triage go/blocked marker with dependency, duplicate, approval, and route-gate evidence."
+        },
+        {
+          "id": "planner-marker",
+          "stage": "planner",
+          "required": true,
+          "description": "Exact openloops:planner go/blocked marker with scoped files, validation plan, risk checks, and split/follow-up decision."
+        },
+        {
+          "id": "worker-evidence",
+          "stage": "worker",
+          "required": true,
+          "description": "Changed files, validation results, commit SHA or blocker, PR or handoff artifact, and residual risks."
+        },
+        {
+          "id": "verifier-evidence",
+          "stage": "verifier",
+          "required": true,
+          "description": "Independent verification findings and task closure/blocker decision."
+        },
+        {
+          "id": "pr-handoff",
+          "stage": "handoff",
+          "required": false,
+          "description": "PR URL or bounded handoff artifact when GitHub network access blocks push/PR creation."
+        }
+      ],
+      "policyRequirements": [
+        {
+          "id": "source-task-gate",
+          "description": "Task-triggered routes must verify the source task still resolves before agent execution.",
+          "enforcement": "gate",
+          "required": true
+        },
+        {
+          "id": "worktree-isolation",
+          "description": "Repo-mutating agent steps must use the generated isolated worktree or an explicit non-mutating/main-checkout policy.",
+          "enforcement": "template",
+          "required": true
+        },
+        {
+          "id": "sandbox-or-break-glass",
+          "description": "Agent routes must have provider sandbox isolation or explicit metadata-only manual break-glass evidence for danger-full-access.",
+          "enforcement": "route-preflight",
+          "required": true
+        },
+        {
+          "id": "no-tmux-dispatch",
+          "description": "Follow-up implementation must be routed through tasks/workflows, not pasted into tmux panes.",
+          "enforcement": "prompt",
+          "required": true
+        },
+        {
+          "id": "adversarial-review",
+          "description": "Worker output requires a fresh verifier or recorded adversarial review before closure.",
+          "enforcement": "verifier",
+          "required": true
+        },
+        {
+          "id": "pr-handoff-artifact",
+          "description": "When GitHub push/PR creation is blocked after successful validation, workers must write the bounded PR handoff artifact.",
+          "enforcement": "prompt",
+          "required": true
+        }
+      ]
+    },
     "variables": [
       {
         "name": "taskId",
@@ -1271,6 +2171,212 @@ exports[`builtin rendered workflow snapshots builtin template summaries 1`] = `
     "name": "PR Review",
     "description": "Review and drive a pull request toward merge-ready state with a worker and fresh adversarial verifier.",
     "kind": "workflow",
+    "contract": {
+      "contractVersion": 1,
+      "templateVersion": 1,
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "description": "Input contract for a pull-request review workflow.",
+        "properties": {
+          "prUrl": {
+            "type": "string",
+            "description": "Pull request URL."
+          },
+          "prNumber": {
+            "type": "string",
+            "description": "Pull request number."
+          },
+          "objective": {
+            "type": "string",
+            "description": "Optional review objective override."
+          },
+          "projectPath": {
+            "type": "string",
+            "description": "Repository or project working directory."
+          },
+          "routeProjectPath": {
+            "type": "string",
+            "description": "Canonical project path used for route concurrency limits."
+          },
+          "projectGroup": {
+            "type": "string",
+            "description": "Optional project group used for route concurrency limits."
+          },
+          "provider": {
+            "type": "string",
+            "description": "Agent provider."
+          },
+          "authProfile": {
+            "type": "string",
+            "description": "Provider-native auth profile."
+          },
+          "authProfilePool": {
+            "type": "array",
+            "description": "Provider-native auth-profile pool.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "accountPool": {
+            "type": "array",
+            "description": "OpenAccounts profile pool.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sandbox": {
+            "type": "string",
+            "description": "Provider sandbox mode."
+          },
+          "permissionMode": {
+            "type": "string",
+            "description": "Provider permission mode."
+          },
+          "worktreeMode": {
+            "type": "string",
+            "description": "Worktree isolation mode."
+          },
+          "worktreeRoot": {
+            "type": "string",
+            "description": "Base directory for generated worktrees."
+          },
+          "timeoutMs": {
+            "type": "string",
+            "description": "Agent timeout in milliseconds or unlimited/null."
+          },
+          "verifierIdleTimeoutMs": {
+            "type": "string",
+            "description": "Verifier idle timeout in milliseconds or none/off."
+          }
+        },
+        "required": [
+          "projectPath"
+        ],
+        "additionalProperties": true,
+        "anyOf": [
+          {
+            "required": [
+              "prUrl"
+            ]
+          },
+          {
+            "required": [
+              "prNumber"
+            ]
+          }
+        ]
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "description": "OpenLoops workflow execution output contract.",
+        "properties": {
+          "workflowRun": {
+            "type": "string",
+            "description": "Workflow run id or receipt."
+          },
+          "workRun": {
+            "type": "string",
+            "description": "Higher-level work-run receipt mapped from the workflow run."
+          },
+          "agentTrajectory": {
+            "type": "string",
+            "description": "Trace summary or trajectory produced by agent steps."
+          },
+          "evidenceRefs": {
+            "type": "array",
+            "description": "Evidence references such as logs, artifacts, commits, tasks, PRs, or reports.",
+            "items": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "description": "Evidence kind."
+                },
+                "ref": {
+                  "type": "string",
+                  "description": "Evidence identifier, path, URL, or command."
+                }
+              },
+              "required": [],
+              "additionalProperties": true
+            }
+          },
+          "proofBundle": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "validation": {
+                "type": "array",
+                "description": "Validation commands and results.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "reviewer": {
+                "type": "string",
+                "description": "Verifier or reviewer attribution."
+              },
+              "decision": {
+                "type": "string",
+                "description": "Final verification decision."
+              }
+            },
+            "required": [],
+            "additionalProperties": true
+          }
+        },
+        "required": [],
+        "additionalProperties": true
+      },
+      "taskBinding": {
+        "source": "pr",
+        "subject": "pr",
+        "requiredFields": [
+          "projectPath"
+        ],
+        "projectPathFields": [
+          "projectPath",
+          "routeProjectPath"
+        ]
+      },
+      "requiredEvidence": [
+        {
+          "id": "worker-evidence",
+          "stage": "worker",
+          "required": true,
+          "description": "PR state, checks, branch freshness, review requirements, applied fixes, and validation evidence."
+        },
+        {
+          "id": "verifier-evidence",
+          "stage": "verifier",
+          "required": true,
+          "description": "Adversarial PR review findings and merge-readiness or follow-up decision."
+        }
+      ],
+      "policyRequirements": [
+        {
+          "id": "worktree-isolation",
+          "description": "Repo-mutating agent steps must use the generated isolated worktree or an explicit non-mutating/main-checkout policy.",
+          "enforcement": "template",
+          "required": true
+        },
+        {
+          "id": "sandbox-or-break-glass",
+          "description": "Agent routes must have provider sandbox isolation or explicit metadata-only manual break-glass evidence for danger-full-access.",
+          "enforcement": "route-preflight",
+          "required": true
+        },
+        {
+          "id": "adversarial-review",
+          "description": "Worker output requires a fresh verifier or recorded adversarial review before closure.",
+          "enforcement": "verifier",
+          "required": true
+        }
+      ]
+    },
     "variables": [
       {
         "name": "prUrl",
@@ -1317,6 +2423,200 @@ exports[`builtin rendered workflow snapshots builtin template summaries 1`] = `
     "name": "Scheduled Audit",
     "description": "Run a bounded scheduled audit, record evidence, create follow-up tasks for actionable findings, then verify the audit result.",
     "kind": "workflow",
+    "contract": {
+      "contractVersion": 1,
+      "templateVersion": 1,
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "description": "Input contract for a scheduled or manual audit workflow.",
+        "properties": {
+          "objective": {
+            "type": "string",
+            "description": "Audit objective."
+          },
+          "projectPath": {
+            "type": "string",
+            "description": "Repository or project working directory."
+          },
+          "routeProjectPath": {
+            "type": "string",
+            "description": "Canonical project path used for route concurrency limits."
+          },
+          "projectGroup": {
+            "type": "string",
+            "description": "Optional project group used for route concurrency limits."
+          },
+          "provider": {
+            "type": "string",
+            "description": "Agent provider."
+          },
+          "authProfile": {
+            "type": "string",
+            "description": "Provider-native auth profile."
+          },
+          "authProfilePool": {
+            "type": "array",
+            "description": "Provider-native auth-profile pool.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "accountPool": {
+            "type": "array",
+            "description": "OpenAccounts profile pool.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sandbox": {
+            "type": "string",
+            "description": "Provider sandbox mode."
+          },
+          "permissionMode": {
+            "type": "string",
+            "description": "Provider permission mode."
+          },
+          "worktreeMode": {
+            "type": "string",
+            "description": "Worktree isolation mode."
+          },
+          "worktreeRoot": {
+            "type": "string",
+            "description": "Base directory for generated worktrees."
+          },
+          "timeoutMs": {
+            "type": "string",
+            "description": "Agent timeout in milliseconds or unlimited/null."
+          },
+          "verifierIdleTimeoutMs": {
+            "type": "string",
+            "description": "Verifier idle timeout in milliseconds or none/off."
+          }
+        },
+        "required": [
+          "objective",
+          "projectPath"
+        ],
+        "additionalProperties": true
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "description": "OpenLoops workflow execution output contract.",
+        "properties": {
+          "workflowRun": {
+            "type": "string",
+            "description": "Workflow run id or receipt."
+          },
+          "workRun": {
+            "type": "string",
+            "description": "Higher-level work-run receipt mapped from the workflow run."
+          },
+          "agentTrajectory": {
+            "type": "string",
+            "description": "Trace summary or trajectory produced by agent steps."
+          },
+          "evidenceRefs": {
+            "type": "array",
+            "description": "Evidence references such as logs, artifacts, commits, tasks, PRs, or reports.",
+            "items": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "description": "Evidence kind."
+                },
+                "ref": {
+                  "type": "string",
+                  "description": "Evidence identifier, path, URL, or command."
+                }
+              },
+              "required": [],
+              "additionalProperties": true
+            }
+          },
+          "proofBundle": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "validation": {
+                "type": "array",
+                "description": "Validation commands and results.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "reviewer": {
+                "type": "string",
+                "description": "Verifier or reviewer attribution."
+              },
+              "decision": {
+                "type": "string",
+                "description": "Final verification decision."
+              }
+            },
+            "required": [],
+            "additionalProperties": true
+          }
+        },
+        "required": [],
+        "additionalProperties": true
+      },
+      "taskBinding": {
+        "source": "schedule",
+        "subject": "objective",
+        "requiredFields": [
+          "objective",
+          "projectPath"
+        ],
+        "projectPathFields": [
+          "projectPath",
+          "routeProjectPath"
+        ]
+      },
+      "requiredEvidence": [
+        {
+          "id": "worker-evidence",
+          "stage": "worker",
+          "required": true,
+          "description": "Audit findings, commands/data inspected, deduped follow-up tasks for actionable findings, and no-action rationale where applicable."
+        },
+        {
+          "id": "verifier-evidence",
+          "stage": "verifier",
+          "required": true,
+          "description": "Verification of audit scope, evidence quality, and follow-up task dedupe."
+        }
+      ],
+      "policyRequirements": [
+        {
+          "id": "worktree-isolation",
+          "description": "Repo-mutating agent steps must use the generated isolated worktree or an explicit non-mutating/main-checkout policy.",
+          "enforcement": "template",
+          "required": true
+        },
+        {
+          "id": "sandbox-or-break-glass",
+          "description": "Agent routes must have provider sandbox isolation or explicit metadata-only manual break-glass evidence for danger-full-access.",
+          "enforcement": "route-preflight",
+          "required": true
+        },
+        {
+          "id": "no-tmux-dispatch",
+          "description": "Follow-up implementation must be routed through tasks/workflows, not pasted into tmux panes.",
+          "enforcement": "prompt",
+          "required": true
+        },
+        {
+          "id": "adversarial-review",
+          "description": "Worker output requires a fresh verifier or recorded adversarial review before closure.",
+          "enforcement": "verifier",
+          "required": true
+        }
+      ]
+    },
     "variables": [
       {
         "name": "objective",
@@ -1360,6 +2660,202 @@ exports[`builtin rendered workflow snapshots builtin template summaries 1`] = `
     "name": "Knowledge Refresh",
     "description": "Review recent knowledge, improve structure/schema where needed, create deduped tasks for code changes, and verify the knowledge update.",
     "kind": "workflow",
+    "contract": {
+      "contractVersion": 1,
+      "templateVersion": 1,
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "description": "Input contract for a knowledge refresh workflow.",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "description": "Knowledge scope or label to refresh."
+          },
+          "objective": {
+            "type": "string",
+            "description": "Optional objective override."
+          },
+          "projectPath": {
+            "type": "string",
+            "description": "Repository or project working directory."
+          },
+          "routeProjectPath": {
+            "type": "string",
+            "description": "Canonical project path used for route concurrency limits."
+          },
+          "projectGroup": {
+            "type": "string",
+            "description": "Optional project group used for route concurrency limits."
+          },
+          "provider": {
+            "type": "string",
+            "description": "Agent provider."
+          },
+          "authProfile": {
+            "type": "string",
+            "description": "Provider-native auth profile."
+          },
+          "authProfilePool": {
+            "type": "array",
+            "description": "Provider-native auth-profile pool.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "accountPool": {
+            "type": "array",
+            "description": "OpenAccounts profile pool.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sandbox": {
+            "type": "string",
+            "description": "Provider sandbox mode."
+          },
+          "permissionMode": {
+            "type": "string",
+            "description": "Provider permission mode."
+          },
+          "worktreeMode": {
+            "type": "string",
+            "description": "Worktree isolation mode."
+          },
+          "worktreeRoot": {
+            "type": "string",
+            "description": "Base directory for generated worktrees."
+          },
+          "timeoutMs": {
+            "type": "string",
+            "description": "Agent timeout in milliseconds or unlimited/null."
+          },
+          "verifierIdleTimeoutMs": {
+            "type": "string",
+            "description": "Verifier idle timeout in milliseconds or none/off."
+          }
+        },
+        "required": [
+          "projectPath"
+        ],
+        "additionalProperties": true
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "description": "OpenLoops workflow execution output contract.",
+        "properties": {
+          "workflowRun": {
+            "type": "string",
+            "description": "Workflow run id or receipt."
+          },
+          "workRun": {
+            "type": "string",
+            "description": "Higher-level work-run receipt mapped from the workflow run."
+          },
+          "agentTrajectory": {
+            "type": "string",
+            "description": "Trace summary or trajectory produced by agent steps."
+          },
+          "evidenceRefs": {
+            "type": "array",
+            "description": "Evidence references such as logs, artifacts, commits, tasks, PRs, or reports.",
+            "items": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "description": "Evidence kind."
+                },
+                "ref": {
+                  "type": "string",
+                  "description": "Evidence identifier, path, URL, or command."
+                }
+              },
+              "required": [],
+              "additionalProperties": true
+            }
+          },
+          "proofBundle": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "validation": {
+                "type": "array",
+                "description": "Validation commands and results.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "reviewer": {
+                "type": "string",
+                "description": "Verifier or reviewer attribution."
+              },
+              "decision": {
+                "type": "string",
+                "description": "Final verification decision."
+              }
+            },
+            "required": [],
+            "additionalProperties": true
+          }
+        },
+        "required": [],
+        "additionalProperties": true
+      },
+      "taskBinding": {
+        "source": "manual",
+        "subject": "objective",
+        "requiredFields": [
+          "projectPath"
+        ],
+        "projectPathFields": [
+          "projectPath",
+          "routeProjectPath"
+        ]
+      },
+      "requiredEvidence": [
+        {
+          "id": "worker-evidence",
+          "stage": "worker",
+          "required": true,
+          "description": "Knowledge records inspected, updates made, duplicate checks, and follow-up tasks for code changes."
+        },
+        {
+          "id": "verifier-evidence",
+          "stage": "verifier",
+          "required": true,
+          "description": "Verification of knowledge structure, dedupe, and task boundaries."
+        }
+      ],
+      "policyRequirements": [
+        {
+          "id": "worktree-isolation",
+          "description": "Repo-mutating agent steps must use the generated isolated worktree or an explicit non-mutating/main-checkout policy.",
+          "enforcement": "template",
+          "required": true
+        },
+        {
+          "id": "sandbox-or-break-glass",
+          "description": "Agent routes must have provider sandbox isolation or explicit metadata-only manual break-glass evidence for danger-full-access.",
+          "enforcement": "route-preflight",
+          "required": true
+        },
+        {
+          "id": "no-tmux-dispatch",
+          "description": "Follow-up implementation must be routed through tasks/workflows, not pasted into tmux panes.",
+          "enforcement": "prompt",
+          "required": true
+        },
+        {
+          "id": "adversarial-review",
+          "description": "Worker output requires a fresh verifier or recorded adversarial review before closure.",
+          "enforcement": "verifier",
+          "required": true
+        }
+      ]
+    },
     "variables": [
       {
         "name": "scope",
@@ -1402,6 +2898,194 @@ exports[`builtin rendered workflow snapshots builtin template summaries 1`] = `
     "name": "Report Only",
     "description": "Produce a bounded report without mutating repositories; verifier checks evidence, scope, and absence of unauthorized changes.",
     "kind": "workflow",
+    "contract": {
+      "contractVersion": 1,
+      "templateVersion": 1,
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "description": "Input contract for a report-only workflow.",
+        "properties": {
+          "objective": {
+            "type": "string",
+            "description": "Report objective."
+          },
+          "projectPath": {
+            "type": "string",
+            "description": "Repository or project working directory."
+          },
+          "routeProjectPath": {
+            "type": "string",
+            "description": "Canonical project path used for route concurrency limits."
+          },
+          "projectGroup": {
+            "type": "string",
+            "description": "Optional project group used for route concurrency limits."
+          },
+          "provider": {
+            "type": "string",
+            "description": "Agent provider."
+          },
+          "authProfile": {
+            "type": "string",
+            "description": "Provider-native auth profile."
+          },
+          "authProfilePool": {
+            "type": "array",
+            "description": "Provider-native auth-profile pool.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "accountPool": {
+            "type": "array",
+            "description": "OpenAccounts profile pool.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sandbox": {
+            "type": "string",
+            "description": "Provider sandbox mode."
+          },
+          "permissionMode": {
+            "type": "string",
+            "description": "Provider permission mode."
+          },
+          "worktreeMode": {
+            "type": "string",
+            "description": "Worktree isolation mode."
+          },
+          "worktreeRoot": {
+            "type": "string",
+            "description": "Base directory for generated worktrees."
+          },
+          "timeoutMs": {
+            "type": "string",
+            "description": "Agent timeout in milliseconds or unlimited/null."
+          },
+          "verifierIdleTimeoutMs": {
+            "type": "string",
+            "description": "Verifier idle timeout in milliseconds or none/off."
+          }
+        },
+        "required": [
+          "objective",
+          "projectPath"
+        ],
+        "additionalProperties": true
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "description": "OpenLoops workflow execution output contract.",
+        "properties": {
+          "workflowRun": {
+            "type": "string",
+            "description": "Workflow run id or receipt."
+          },
+          "workRun": {
+            "type": "string",
+            "description": "Higher-level work-run receipt mapped from the workflow run."
+          },
+          "agentTrajectory": {
+            "type": "string",
+            "description": "Trace summary or trajectory produced by agent steps."
+          },
+          "evidenceRefs": {
+            "type": "array",
+            "description": "Evidence references such as logs, artifacts, commits, tasks, PRs, or reports.",
+            "items": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "description": "Evidence kind."
+                },
+                "ref": {
+                  "type": "string",
+                  "description": "Evidence identifier, path, URL, or command."
+                }
+              },
+              "required": [],
+              "additionalProperties": true
+            }
+          },
+          "proofBundle": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "validation": {
+                "type": "array",
+                "description": "Validation commands and results.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "reviewer": {
+                "type": "string",
+                "description": "Verifier or reviewer attribution."
+              },
+              "decision": {
+                "type": "string",
+                "description": "Final verification decision."
+              }
+            },
+            "required": [],
+            "additionalProperties": true
+          }
+        },
+        "required": [],
+        "additionalProperties": true
+      },
+      "taskBinding": {
+        "source": "manual",
+        "subject": "objective",
+        "requiredFields": [
+          "objective",
+          "projectPath"
+        ],
+        "projectPathFields": [
+          "projectPath",
+          "routeProjectPath"
+        ]
+      },
+      "requiredEvidence": [
+        {
+          "id": "worker-evidence",
+          "stage": "worker",
+          "required": true,
+          "description": "Report artifact or summary, source evidence, and explicit no-mutation confirmation."
+        },
+        {
+          "id": "verifier-evidence",
+          "stage": "verifier",
+          "required": true,
+          "description": "Verification of report evidence, scope, and absence of unauthorized mutations."
+        }
+      ],
+      "policyRequirements": [
+        {
+          "id": "read-only-main-checkout",
+          "description": "Report-only workflows default to read-only sandbox on the main checkout.",
+          "enforcement": "template",
+          "required": true
+        },
+        {
+          "id": "sandbox-or-break-glass",
+          "description": "Agent routes must have provider sandbox isolation or explicit metadata-only manual break-glass evidence for danger-full-access.",
+          "enforcement": "route-preflight",
+          "required": true
+        },
+        {
+          "id": "adversarial-review",
+          "description": "Worker output requires a fresh verifier or recorded adversarial review before closure.",
+          "enforcement": "verifier",
+          "required": true
+        }
+      ]
+    },
     "variables": [
       {
         "name": "objective",
@@ -1445,6 +3129,198 @@ exports[`builtin rendered workflow snapshots builtin template summaries 1`] = `
     "name": "Incident Response",
     "description": "Triage an incident, gather bounded evidence, apply only allowed narrow mitigation, create follow-up tasks, and verify the response.",
     "kind": "workflow",
+    "contract": {
+      "contractVersion": 1,
+      "templateVersion": 1,
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "description": "Input contract for a bounded incident response workflow.",
+        "properties": {
+          "incidentId": {
+            "type": "string",
+            "description": "Incident or task id."
+          },
+          "objective": {
+            "type": "string",
+            "description": "Incident response objective."
+          },
+          "projectPath": {
+            "type": "string",
+            "description": "Repository or project working directory."
+          },
+          "routeProjectPath": {
+            "type": "string",
+            "description": "Canonical project path used for route concurrency limits."
+          },
+          "projectGroup": {
+            "type": "string",
+            "description": "Optional project group used for route concurrency limits."
+          },
+          "provider": {
+            "type": "string",
+            "description": "Agent provider."
+          },
+          "authProfile": {
+            "type": "string",
+            "description": "Provider-native auth profile."
+          },
+          "authProfilePool": {
+            "type": "array",
+            "description": "Provider-native auth-profile pool.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "accountPool": {
+            "type": "array",
+            "description": "OpenAccounts profile pool.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sandbox": {
+            "type": "string",
+            "description": "Provider sandbox mode."
+          },
+          "permissionMode": {
+            "type": "string",
+            "description": "Provider permission mode."
+          },
+          "worktreeMode": {
+            "type": "string",
+            "description": "Worktree isolation mode."
+          },
+          "worktreeRoot": {
+            "type": "string",
+            "description": "Base directory for generated worktrees."
+          },
+          "timeoutMs": {
+            "type": "string",
+            "description": "Agent timeout in milliseconds or unlimited/null."
+          },
+          "verifierIdleTimeoutMs": {
+            "type": "string",
+            "description": "Verifier idle timeout in milliseconds or none/off."
+          }
+        },
+        "required": [
+          "objective",
+          "projectPath"
+        ],
+        "additionalProperties": true
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "description": "OpenLoops workflow execution output contract.",
+        "properties": {
+          "workflowRun": {
+            "type": "string",
+            "description": "Workflow run id or receipt."
+          },
+          "workRun": {
+            "type": "string",
+            "description": "Higher-level work-run receipt mapped from the workflow run."
+          },
+          "agentTrajectory": {
+            "type": "string",
+            "description": "Trace summary or trajectory produced by agent steps."
+          },
+          "evidenceRefs": {
+            "type": "array",
+            "description": "Evidence references such as logs, artifacts, commits, tasks, PRs, or reports.",
+            "items": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "description": "Evidence kind."
+                },
+                "ref": {
+                  "type": "string",
+                  "description": "Evidence identifier, path, URL, or command."
+                }
+              },
+              "required": [],
+              "additionalProperties": true
+            }
+          },
+          "proofBundle": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "validation": {
+                "type": "array",
+                "description": "Validation commands and results.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "reviewer": {
+                "type": "string",
+                "description": "Verifier or reviewer attribution."
+              },
+              "decision": {
+                "type": "string",
+                "description": "Final verification decision."
+              }
+            },
+            "required": [],
+            "additionalProperties": true
+          }
+        },
+        "required": [],
+        "additionalProperties": true
+      },
+      "taskBinding": {
+        "source": "manual",
+        "subject": "objective",
+        "requiredFields": [
+          "objective",
+          "projectPath"
+        ],
+        "projectPathFields": [
+          "projectPath",
+          "routeProjectPath"
+        ]
+      },
+      "requiredEvidence": [
+        {
+          "id": "worker-evidence",
+          "stage": "worker",
+          "required": true,
+          "description": "Incident timeline, evidence gathered, mitigation applied or skipped, and follow-up tasks."
+        },
+        {
+          "id": "verifier-evidence",
+          "stage": "verifier",
+          "required": true,
+          "description": "Verification of mitigation scope, residual risk, and follow-up correctness."
+        }
+      ],
+      "policyRequirements": [
+        {
+          "id": "worktree-isolation",
+          "description": "Repo-mutating agent steps must use the generated isolated worktree or an explicit non-mutating/main-checkout policy.",
+          "enforcement": "template",
+          "required": true
+        },
+        {
+          "id": "sandbox-or-break-glass",
+          "description": "Agent routes must have provider sandbox isolation or explicit metadata-only manual break-glass evidence for danger-full-access.",
+          "enforcement": "route-preflight",
+          "required": true
+        },
+        {
+          "id": "adversarial-review",
+          "description": "Worker output requires a fresh verifier or recorded adversarial review before closure.",
+          "enforcement": "verifier",
+          "required": true
+        }
+      ]
+    },
     "variables": [
       {
         "name": "incidentId",
@@ -1492,6 +3368,92 @@ exports[`builtin rendered workflow snapshots builtin template summaries 1`] = `
     "name": "Deterministic Check Create Task",
     "description": "Run a deterministic check command that writes compact evidence and upserts one deduped todos task when its expectation is not met.",
     "kind": "workflow",
+    "contract": {
+      "contractVersion": 1,
+      "templateVersion": 1,
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "description": "Input contract for a deterministic check workflow.",
+        "properties": {
+          "checkCommand": {
+            "type": "string",
+            "description": "Shell command that performs the deterministic check and task upsert."
+          },
+          "projectPath": {
+            "type": "string",
+            "description": "Project working directory for the check."
+          },
+          "name": {
+            "type": "string",
+            "description": "Workflow name."
+          },
+          "timeoutMs": {
+            "type": "string",
+            "description": "Check timeout in milliseconds."
+          }
+        },
+        "required": [
+          "checkCommand",
+          "projectPath"
+        ],
+        "additionalProperties": true
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "description": "Output contract for a deterministic check workflow.",
+        "properties": {
+          "checkExitCode": {
+            "type": "string",
+            "description": "Process exit code for the deterministic check."
+          },
+          "evidenceRef": {
+            "type": "string",
+            "description": "Compact evidence written by the check command."
+          },
+          "upsertedTask": {
+            "type": "string",
+            "description": "Todos task id or fingerprint when an actionable finding was upserted."
+          }
+        },
+        "required": [],
+        "additionalProperties": true
+      },
+      "taskBinding": {
+        "source": "deterministic",
+        "subject": "check",
+        "requiredFields": [
+          "checkCommand",
+          "projectPath"
+        ],
+        "projectPathFields": [
+          "projectPath"
+        ]
+      },
+      "requiredEvidence": [
+        {
+          "id": "check-output",
+          "stage": "check",
+          "required": true,
+          "description": "Compact stdout/stderr or evidence artifact from the deterministic check."
+        },
+        {
+          "id": "task-upsert",
+          "stage": "check",
+          "required": false,
+          "description": "Deduped todos task fingerprint when the expectation is not met."
+        }
+      ],
+      "policyRequirements": [
+        {
+          "id": "deterministic-command",
+          "description": "The check must be deterministic, bounded, and emit compact evidence.",
+          "enforcement": "operator",
+          "required": true
+        }
+      ]
+    },
     "variables": [
       {
         "name": "checkCommand",

@@ -897,6 +897,30 @@ function printTemplateDetails(template: LoopTemplateSummary): void {
     const description = variable.description ? `  ${variable.description}` : "";
     console.log(`  ${variable.name.padEnd(nameWidth)}  ${required}${defaultValue}${description}`);
   }
+  if (template.contract) {
+    console.log("");
+    console.log("Contract:");
+    console.log(`  contractVersion: ${template.contract.contractVersion}`);
+    console.log(`  templateVersion: ${template.contract.templateVersion}`);
+    if (template.contract.taskBinding) {
+      const binding = template.contract.taskBinding;
+      console.log(`  taskBinding: ${binding.source}/${binding.subject}`);
+      if (binding.eventTypes?.length) console.log(`  eventTypes: ${binding.eventTypes.join(", ")}`);
+      if (binding.requiredFields.length) console.log(`  requiredFields: ${binding.requiredFields.join(", ")}`);
+    }
+    if (template.contract.requiredEvidence.length) {
+      console.log("  requiredEvidence:");
+      for (const evidence of template.contract.requiredEvidence) {
+        console.log(`    - ${evidence.id}${evidence.stage ? ` (${evidence.stage})` : ""}: ${evidence.description}`);
+      }
+    }
+    if (template.contract.policyRequirements.length) {
+      console.log("  policyRequirements:");
+      for (const policy of template.contract.policyRequirements) {
+        console.log(`    - ${policy.id} [${policy.enforcement}]: ${policy.description}`);
+      }
+    }
+  }
   const requiredVariables = template.variables.filter((variable) => variable.required).map((variable) => variable.name);
   const hintVariables = requiredVariables.length ? requiredVariables : template.variables.slice(0, 2).map((variable) => variable.name);
   const renderArgs = hintVariables.map((name) => formatTemplateVariable(template, name));

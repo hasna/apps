@@ -400,6 +400,10 @@ one worker runs a narrow objective, then a fresh verifier audits the result.
 The catalog also includes `task-lifecycle`, `pr-review`, `scheduled-audit`,
 `knowledge-refresh`, `report-only`, `incident-response`, and
 `deterministic-check-create-task` for common operator workflows.
+Every template summary includes a versioned `contract` with JSON-schema-shaped
+input/output contracts, task/event binding metadata, required evidence, and
+policy requirements. `loops templates show <id>` prints the contract in text
+mode; `loops --json templates list|show <id>` returns it as structured JSON.
 
 ```bash
 loops templates list
@@ -540,6 +544,10 @@ arguments, and implicit Codewith/Codex full-access defaults. If a custom
 Codewith/Codex template uses `permissionMode: "bypass"`, it must also set
 `sandbox` to `workspace-write` or `read-only`. Use built-in templates with
 explicit break-glass handling for emergency workflows that need full access.
+Custom templates may declare the same `contract` object as built-ins. If a
+custom template omits it, OpenLoops derives a conservative contract from the
+declared variables and marks it as a manual workflow binding with required
+custom workflow result evidence.
 
 For event-driven task automation, `loops routes create todos-task` reads a
 Hasna event envelope from stdin or `HASNA_EVENT_JSON`, records a
@@ -557,6 +565,12 @@ cat task-created-event.json | loops routes create todos-task \
   --add-dir "$HOME/.hasna/todos,$HOME/.hasna/loops" \
   --worktree-mode required
 ```
+
+Route dry-runs and `--preflight` JSON include the selected `templateContract`
+and copy its compact reference, output schema, required evidence, and policy
+requirements into `WorkflowInvocation.outputPolicy`. This lets event-triggered
+`@hasna/todos` work expose the same evidence contract as scheduled
+cron/interval workflow loops before any state is mutated.
 
 Task routing is explicit opt-in. The handler skips the event without creating a
 workflow unless the event data or metadata has `route_enabled=true`,
@@ -644,7 +658,8 @@ steps — the guardrail that keeps higher concurrency from stacking on one
 subscription and tripping provider-side rate limits. The chosen account per role
 is recorded on each step (`account_profile`) and surfaced in drain reports.
 Use `--dry-run` to inspect the rendered invocation, work item, workflow, and
-loop input without storing anything.
+loop input without storing anything. Generic `@hasna/events` routes expose the
+`event-worker-verifier` contract with `open-events/event` task binding metadata.
 
 Generated worker/verifier workflows fail closed when `sandbox=danger-full-access`
 is requested without `manualBreakGlass=true`. Use `workspace-write` for

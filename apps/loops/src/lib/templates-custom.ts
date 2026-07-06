@@ -2,7 +2,12 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileS
 import { join, resolve } from "node:path";
 import type {
   CreateWorkflowInput,
+  LoopTemplateContract,
+  LoopTemplateEvidenceRequirement,
+  LoopTemplateJsonSchema,
+  LoopTemplatePolicyRequirement,
   LoopTemplateSummary,
+  LoopTemplateTaskBinding,
   LoopTemplateVariable,
   LoopTemplateVariableType,
 } from "../types.js";
@@ -31,6 +36,7 @@ interface CustomLoopTemplateDefinition {
   description: string;
   kind: "workflow";
   variables: LoopTemplateVariable[];
+  contract: LoopTemplateContract;
   workflow: unknown;
 }
 
@@ -88,6 +94,18 @@ function optionalTemplateBoolean(value: unknown, label: string): boolean | undef
   return value;
 }
 
+function optionalPositiveInteger(value: unknown, label: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isInteger(value) || (value as number) <= 0) throw new Error(`${label} must be a positive integer`);
+  return value as number;
+}
+
+function optionalStringArray(value: unknown, label: string): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
+  return value.map((entry, index) => assertTemplateString(entry, `${label}[${index}]`));
+}
+
 function validateCustomTemplateVariables(value: unknown, label: string): LoopTemplateVariable[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
@@ -118,6 +136,165 @@ function validateCustomTemplateVariables(value: unknown, label: string): LoopTem
       type,
     };
   });
+}
+
+function validateJsonSchema(value: unknown, label: string): LoopTemplateJsonSchema {
+  assertRecord(value, label);
+  return structuredClone(value) as LoopTemplateJsonSchema;
+}
+
+function schemaDefaultForCustomVariable(variable: LoopTemplateVariable): unknown {
+  if (variable.default === undefined) return undefined;
+  return coerceCustomTemplateValue(variable.default, variable.type, `${variable.name}.default`);
+}
+
+function schemaForCustomVariables(variables: LoopTemplateVariable[]): LoopTemplateJsonSchema {
+  const properties = Object.fromEntries(
+    variables.map((variable) => {
+      const defaultValue = schemaDefaultForCustomVariable(variable);
+      return [
+        variable.name,
+        {
+        type: variable.type === "number"
+          ? "number"
+          : variable.type === "boolean"
+            ? "boolean"
+            : variable.type === "json"
+              ? ["object", "array", "string", "number", "boolean", "null"]
+              : variable.type === "string[]"
+                ? "array"
+                : "string",
+        ...(variable.description ? { description: variable.description } : {}),
+        ...(defaultValue !== undefined ? { default: defaultValue } : {}),
+        ...(variable.type === "string[]" ? { items: { type: "string" } } : {}),
+        },
+      ];
+    }),
+  );
+  return {
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    type: "object",
+    properties,
+    required: variables.filter((variable) => variable.required).map((variable) => variable.name),
+    additionalProperties: false,
+  };
+}
+
+function defaultCustomTemplateContract(variables: LoopTemplateVariable[]): LoopTemplateContract {
+  return {
+    contractVersion: 1,
+    templateVersion: 1,
+    inputSchema: schemaForCustomVariables(variables),
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      description: "Rendered custom workflow execution output.",
+      additionalProperties: true,
+    },
+    taskBinding: {
+      source: "manual",
+      subject: "workflow",
+      requiredFields: variables.filter((variable) => variable.required).map((variable) => variable.name),
+    },
+    requiredEvidence: [
+      {
+        id: "custom-workflow-result",
+        stage: "worker",
+        required: true,
+        description: "Custom workflow must record execution result, validation evidence, or blocker.",
+      },
+    ],
+    policyRequirements: [
+      {
+        id: "custom-template-safety",
+        description: "Custom template rendering rejects danger-full-access flags, unsafe implicit bypass, and promptFile targets.",
+        enforcement: "template",
+        required: true,
+      },
+    ],
+  };
+}
+
+function validateEvidenceRequirements(value: unknown, label: string): LoopTemplateEvidenceRequirement[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
+  return value.map((entry, index) => {
+    const entryLabel = `${label}[${index}]`;
+    assertRecord(entry, entryLabel);
+    const id = assertTemplateString(entry.id, `${entryLabel}.id`);
+    const description = assertTemplateString(entry.description, `${entryLabel}.description`);
+    const stage = entry.stage === undefined ? undefined : assertTemplateString(entry.stage, `${entryLabel}.stage`) as LoopTemplateEvidenceRequirement["stage"];
+    const allowedStages = new Set(["triage", "planner", "worker", "verifier", "handoff", "route", "check"]);
+    if (stage && !allowedStages.has(stage)) throw new Error(`${entryLabel}.stage must be one of ${[...allowedStages].join(", ")}`);
+    return {
+      id,
+      description,
+      stage,
+      required: optionalTemplateBoolean(entry.required, `${entryLabel}.required`),
+    };
+  });
+}
+
+function validatePolicyRequirements(value: unknown, label: string): LoopTemplatePolicyRequirement[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
+  return value.map((entry, index) => {
+    const entryLabel = `${label}[${index}]`;
+    assertRecord(entry, entryLabel);
+    const id = assertTemplateString(entry.id, `${entryLabel}.id`);
+    const description = assertTemplateString(entry.description, `${entryLabel}.description`);
+    const enforcement = assertTemplateString(entry.enforcement, `${entryLabel}.enforcement`) as LoopTemplatePolicyRequirement["enforcement"];
+    const allowed = new Set(["template", "route-preflight", "prompt", "gate", "operator", "verifier"]);
+    if (!allowed.has(enforcement)) throw new Error(`${entryLabel}.enforcement must be one of ${[...allowed].join(", ")}`);
+    return {
+      id,
+      description,
+      enforcement,
+      required: optionalTemplateBoolean(entry.required, `${entryLabel}.required`),
+    };
+  });
+}
+
+function validateTaskBinding(value: unknown, label: string): LoopTemplateTaskBinding | undefined {
+  if (value === undefined) return undefined;
+  assertRecord(value, label);
+  const source = assertTemplateString(value.source, `${label}.source`) as LoopTemplateTaskBinding["source"];
+  const allowedSources = new Set(["open-todos", "open-events", "manual", "schedule", "pr", "deterministic"]);
+  if (!allowedSources.has(source)) throw new Error(`${label}.source must be one of ${[...allowedSources].join(", ")}`);
+  const subject = assertTemplateString(value.subject, `${label}.subject`) as LoopTemplateTaskBinding["subject"];
+  const allowedSubjects = new Set(["task", "event", "objective", "pr", "workflow", "check"]);
+  if (!allowedSubjects.has(subject)) throw new Error(`${label}.subject must be one of ${[...allowedSubjects].join(", ")}`);
+  return {
+    source,
+    subject,
+    eventTypes: optionalStringArray(value.eventTypes, `${label}.eventTypes`),
+    requiredFields: optionalStringArray(value.requiredFields, `${label}.requiredFields`) ?? [],
+    projectPathFields: optionalStringArray(value.projectPathFields, `${label}.projectPathFields`),
+    idempotency: value.idempotency === undefined ? undefined : assertTemplateString(value.idempotency, `${label}.idempotency`),
+  };
+}
+
+function validateCustomTemplateContract(
+  value: unknown,
+  variables: LoopTemplateVariable[],
+  label: string,
+): LoopTemplateContract {
+  if (value === undefined) return defaultCustomTemplateContract(variables);
+  assertRecord(value, label);
+  const fallback = defaultCustomTemplateContract(variables);
+  return {
+    contractVersion: optionalPositiveInteger(value.contractVersion, `${label}.contractVersion`) ?? 1,
+    templateVersion: optionalPositiveInteger(value.templateVersion, `${label}.templateVersion`) ?? 1,
+    inputSchema: value.inputSchema === undefined ? fallback.inputSchema : validateJsonSchema(value.inputSchema, `${label}.inputSchema`),
+    outputSchema: value.outputSchema === undefined ? fallback.outputSchema : validateJsonSchema(value.outputSchema, `${label}.outputSchema`),
+    taskBinding: validateTaskBinding(value.taskBinding, `${label}.taskBinding`) ?? fallback.taskBinding,
+    requiredEvidence: value.requiredEvidence === undefined
+      ? fallback.requiredEvidence
+      : validateEvidenceRequirements(value.requiredEvidence, `${label}.requiredEvidence`),
+    policyRequirements: value.policyRequirements === undefined
+      ? fallback.policyRequirements
+      : validatePolicyRequirements(value.policyRequirements, `${label}.policyRequirements`),
+  };
 }
 
 function hasDangerousArg(value: string): boolean {
@@ -189,10 +366,11 @@ function customTemplateDefinitionFromJson(value: unknown, sourcePath: string): C
   const description = assertTemplateString(value.description, `${sourcePath}.description`);
   const kind = assertTemplateKind(value.kind ?? "workflow", `${sourcePath}.kind`);
   const variables = validateCustomTemplateVariables(value.variables, `${sourcePath}.variables`);
+  const contract = validateCustomTemplateContract(value.contract, variables, `${sourcePath}.contract`);
   if (value.workflow === undefined) throw new Error(`${sourcePath}.workflow is required`);
   assertRecord(value.workflow, `${sourcePath}.workflow`);
   assertCustomTemplateSafety(value.workflow, `${sourcePath}.workflow`);
-  return { id, name, description, kind, variables, workflow: value.workflow };
+  return { id, name, description, kind, variables, contract, workflow: value.workflow };
 }
 
 function customTemplateSummary(definition: CustomLoopTemplateDefinition, sourcePath: string): LoopTemplateSummary {
@@ -202,6 +380,7 @@ function customTemplateSummary(definition: CustomLoopTemplateDefinition, sourceP
     description: definition.description,
     kind: definition.kind,
     variables: structuredClone(definition.variables),
+    contract: structuredClone(definition.contract),
     source: "custom",
     sourcePath,
   };

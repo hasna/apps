@@ -426,6 +426,10 @@ one worker runs a narrow objective, then a fresh verifier audits the result.
 The catalog also includes `task-lifecycle`, `pr-review`, `scheduled-audit`,
 `knowledge-refresh`, `report-only`, `incident-response`, and
 `deterministic-check-create-task` for common operator workflows.
+Every template summary includes a versioned `contract` with JSON-schema-shaped
+input/output contracts, task/event binding metadata, required evidence, and
+policy requirements. `loops templates show <id>` prints the contract in text
+mode; `loops --json templates list|show <id>` returns it as structured JSON.
 
 ```bash
 loops templates list
@@ -567,6 +571,10 @@ arguments, and implicit Codewith/Codex full-access defaults. If a custom
 Codewith/Codex template uses `permissionMode: "bypass"`, it must also set
 `sandbox` to `workspace-write` or `read-only`. Use built-in templates with
 explicit break-glass handling for emergency workflows that need full access.
+Custom templates may declare the same `contract` object as built-ins. If a
+custom template omits it, OpenLoops derives a conservative contract from the
+declared variables and marks it as a manual workflow binding with required
+custom workflow result evidence.
 
 Repo-mutating task/event routes should set `worktreeMode=required` so the
 workflow fails fast instead of falling back to the main checkout. When
@@ -620,6 +628,12 @@ cat task-created-event.json | loops routes create todos-task \
   --add-dir "$HOME/.hasna/todos,$HOME/.hasna/loops" \
   --worktree-mode required
 ```
+
+Route dry-runs and `--preflight` JSON include the selected `templateContract`
+and copy its compact reference, output schema, required evidence, and policy
+requirements into `WorkflowInvocation.outputPolicy`. This lets event-triggered
+`@hasna/todos` work expose the same evidence contract as scheduled
+cron/interval workflow loops before any state is mutated.
 
 Task routing is explicit opt-in. The handler skips the event without creating a
 workflow unless the event data or metadata has `route_enabled=true`,
@@ -840,7 +854,8 @@ verifier steps do not burn the same profile; OpenLoops picks deterministically
 and uses a different verifier profile when the pool has at least two entries.
 Use `--dry-run` to inspect the rendered invocation, work item, workflow, and
 loop input without storing anything, including the worktree path and branch for
-git-backed tasks.
+git-backed tasks. Generic `@hasna/events` routes expose the
+`event-worker-verifier` contract with `open-events/event` task binding metadata.
 
 Generated worker/verifier workflows fail closed when `sandbox=danger-full-access`
 is requested without `manualBreakGlass=true`. Use `workspace-write` for

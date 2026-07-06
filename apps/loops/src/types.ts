@@ -237,6 +237,14 @@ export interface WorkflowInvocationScope {
 export interface WorkflowInvocationOutputPolicy {
   report?: "always" | "on_change" | "on_failure";
   createTask?: "never" | "on_actionable" | "on_failure" | "always";
+  templateContract?: {
+    templateId: string;
+    contractVersion: number;
+    templateVersion: number;
+  };
+  outputSchema?: LoopTemplateJsonSchema;
+  requiredEvidence?: LoopTemplateEvidenceRequirement[];
+  policyRequirements?: LoopTemplatePolicyRequirement[];
   [key: string]: unknown;
 }
 
@@ -358,6 +366,9 @@ export interface CreateWorkflowInput {
 export type LoopTemplateKind = "workflow" | "loop";
 export type LoopTemplateSource = "builtin" | "custom";
 export type LoopTemplateVariableType = "string" | "number" | "boolean" | "json" | "string[]";
+export type LoopTemplateContractSource = "open-todos" | "open-events" | "manual" | "schedule" | "pr" | "deterministic";
+
+export type LoopTemplateJsonSchema = Record<string, unknown>;
 
 export interface LoopTemplateVariable {
   name: string;
@@ -367,12 +378,46 @@ export interface LoopTemplateVariable {
   type?: LoopTemplateVariableType;
 }
 
+export interface LoopTemplateTaskBinding {
+  source: LoopTemplateContractSource;
+  subject: "task" | "event" | "objective" | "pr" | "workflow" | "check";
+  eventTypes?: string[];
+  requiredFields: string[];
+  projectPathFields?: string[];
+  idempotency?: string;
+}
+
+export interface LoopTemplateEvidenceRequirement {
+  id: string;
+  description: string;
+  stage?: "triage" | "planner" | "worker" | "verifier" | "handoff" | "route" | "check";
+  required?: boolean;
+}
+
+export interface LoopTemplatePolicyRequirement {
+  id: string;
+  description: string;
+  enforcement: "template" | "route-preflight" | "prompt" | "gate" | "operator" | "verifier";
+  required?: boolean;
+}
+
+export interface LoopTemplateContract {
+  contractVersion: number;
+  templateVersion: number;
+  inputSchema: LoopTemplateJsonSchema;
+  outputSchema: LoopTemplateJsonSchema;
+  taskBinding?: LoopTemplateTaskBinding;
+  requiredEvidence: LoopTemplateEvidenceRequirement[];
+  policyRequirements: LoopTemplatePolicyRequirement[];
+}
+
 export interface LoopTemplateSummary {
   id: string;
   name: string;
   description: string;
   kind: LoopTemplateKind;
   variables: LoopTemplateVariable[];
+  contract?: LoopTemplateContract;
   source?: LoopTemplateSource;
   sourcePath?: string;
 }

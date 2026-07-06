@@ -16,6 +16,7 @@ import {
   SCHEDULED_AUDIT_TEMPLATE_ID,
   TASK_LIFECYCLE_TEMPLATE_ID,
   TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID,
+  getLoopTemplateContract,
   importCustomLoopTemplate,
   listLoopTemplates,
   renderBoundedAgentWorkerVerifierWorkflow,
@@ -503,14 +504,131 @@ describe("permission and break-glass fail-closed rendering", () => {
     );
     const imported = importCustomLoopTemplate(custom, { replace: true });
     expect(imported.template.source).toBe("custom");
+    expect(imported.template.contract?.contractVersion).toBe(1);
+    expect(imported.template.contract?.taskBinding?.source).toBe("manual");
+    expect(imported.template.contract?.inputSchema.required).toEqual(["message"]);
     expect(listLoopTemplates({ source: "custom" }).map((entry) => entry.id)).toContain("custom-echo");
     const rendered = renderLoopTemplate("custom-echo", { message: "hello" });
     expect(rendered.name).toBe("custom-echo-hello");
     expect(rendered.steps[0]?.target.type).toBe("command");
   });
+
+  test("derived custom template contracts coerce schema defaults by variable type", () => {
+    const custom = join(fixtureRoot, "typed-default-template.json");
+    writeFileSync(
+      custom,
+      JSON.stringify({
+        id: "custom-typed-defaults",
+        name: "Custom Typed Defaults",
+        description: "has typed defaults",
+        variables: [
+          { name: "retries", type: "number", default: "3" },
+          { name: "enabled", type: "boolean", default: "true" },
+          { name: "labels", type: "string[]", default: "worker, verifier" },
+        ],
+        workflow: {
+          name: "custom-typed-defaults",
+          steps: [{ id: "echo", target: { type: "command", command: "echo", args: ["${retries}", "${enabled}", "${labels}"] } }],
+        },
+      }),
+    );
+    const imported = importCustomLoopTemplate(custom, { replace: true });
+    const properties = imported.template.contract?.inputSchema.properties as Record<string, { default?: unknown }>;
+    expect(properties.retries.default).toBe(3);
+    expect(properties.enabled.default).toBe(true);
+    expect(properties.labels.default).toEqual(["worker", "verifier"]);
+  });
+
+  test("custom templates can declare explicit contracts with validation", () => {
+    const custom = join(fixtureRoot, "contract-template.json");
+    writeFileSync(
+      custom,
+      JSON.stringify({
+        id: "custom-contract",
+        name: "Custom Contract",
+        description: "declares a typed contract",
+        variables: [{ name: "eventJson", required: true, type: "json" }],
+        contract: {
+          contractVersion: 1,
+          templateVersion: 2,
+          inputSchema: { type: "object", required: ["eventJson"] },
+          outputSchema: { type: "object", properties: { evidenceRef: { type: "string" } } },
+          taskBinding: {
+            source: "open-events",
+            subject: "event",
+            eventTypes: ["repo.push"],
+            requiredFields: ["eventJson"],
+          },
+          requiredEvidence: [{ id: "event-decision", stage: "worker", required: true, description: "Event decision evidence." }],
+          policyRequirements: [{ id: "sandbox", enforcement: "route-preflight", required: true, description: "Sandbox required." }],
+        },
+        workflow: {
+          name: "custom-contract",
+          steps: [{ id: "echo", target: { type: "command", command: "true" } }],
+        },
+      }),
+    );
+    const imported = importCustomLoopTemplate(custom, { replace: true });
+    expect(imported.template.contract?.templateVersion).toBe(2);
+    expect(imported.template.contract?.taskBinding).toMatchObject({ source: "open-events", subject: "event", eventTypes: ["repo.push"] });
+
+    const invalid = join(fixtureRoot, "invalid-contract-template.json");
+    writeFileSync(
+      invalid,
+      JSON.stringify({
+        id: "custom-invalid-contract",
+        name: "Custom Invalid Contract",
+        description: "bad contract",
+        contract: {
+          policyRequirements: [{ id: "bad", description: "bad", enforcement: "runtime-magic" }],
+        },
+        workflow: { name: "bad", steps: [{ id: "run", target: { type: "command", command: "true" } }] },
+      }),
+    );
+    expect(() => validateCustomLoopTemplateFile(invalid)).toThrow("enforcement must be one of");
+  });
 });
 
 describe("builtin rendered workflow snapshots", () => {
+  test("builtin templates expose versioned contracts", () => {
+    const lifecycle = getLoopTemplateContract(TASK_LIFECYCLE_TEMPLATE_ID);
+    expect(lifecycle?.contractVersion).toBe(1);
+    expect(lifecycle?.templateVersion).toBe(1);
+    expect(lifecycle?.taskBinding).toMatchObject({
+      source: "open-todos",
+      subject: "task",
+      eventTypes: ["task.created"],
+    });
+    expect(lifecycle?.requiredEvidence.map((entry) => entry.id)).toEqual(
+      expect.arrayContaining(["triage-marker", "planner-marker", "worker-evidence", "verifier-evidence", "pr-handoff"]),
+    );
+    expect(lifecycle?.policyRequirements.map((entry) => entry.id)).toEqual(
+      expect.arrayContaining(["source-task-gate", "worktree-isolation", "no-tmux-dispatch", "adversarial-review"]),
+    );
+
+    const event = getLoopTemplateContract(EVENT_WORKER_VERIFIER_TEMPLATE_ID);
+    expect(event?.taskBinding).toMatchObject({
+      source: "open-events",
+      subject: "event",
+      eventTypes: ["*"],
+    });
+    expect(event?.inputSchema.required).toEqual(["eventId", "eventType", "eventSource", "eventJson", "projectPath"]);
+
+    const prReview = getLoopTemplateContract(PR_REVIEW_TEMPLATE_ID);
+    expect(prReview?.taskBinding?.requiredFields).toEqual(["projectPath"]);
+    expect(prReview?.inputSchema.anyOf).toEqual([{ required: ["prUrl"] }, { required: ["prNumber"] }]);
+
+    for (const template of listLoopTemplates({ source: "builtin" })) {
+      const binding = template.contract?.taskBinding;
+      if (!binding) continue;
+      const properties = template.contract?.inputSchema.properties as Record<string, unknown> | undefined;
+      expect(properties).toBeDefined();
+      for (const field of binding.requiredFields) {
+        expect(Object.prototype.hasOwnProperty.call(properties, field)).toBe(true);
+      }
+    }
+  });
+
   test("todos-task-worker-verifier", () => {
     const workflow = renderLoopTemplate(TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID, {
       taskId: "task-1200",
