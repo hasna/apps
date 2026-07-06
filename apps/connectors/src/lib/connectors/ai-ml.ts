@@ -892,6 +892,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "edge computing", "iot", "deployment", "models"],
   },
   {
+    name: "textcortex",
+    displayName: "TextCortex",
+    description: "AI writing assistant API for text generation, summarization, rewriting, and classification",
+    category: "AI & ML",
+    tags: ["ai", "writing", "content generation", "nlp", "text"],
+  },
+  {
     name: "textcortexai",
     displayName: "TextCortex AI",
     description: "AI writing assistant for generating and rewriting content across platforms",
