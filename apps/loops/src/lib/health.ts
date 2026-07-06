@@ -20,6 +20,7 @@ export type RunFailureClassification =
   | "route_functional"
   | "timeout"
   | "sigsegv"
+  | "restart_interrupted"
   | "skipped_previous_active"
   | "circuit_breaker"
   | "unknown";
@@ -184,10 +185,13 @@ const CLASSIFICATIONS: RunFailureClassification[] = [
   "route_functional",
   "timeout",
   "sigsegv",
+  "restart_interrupted",
   "skipped_previous_active",
   "circuit_breaker",
   "unknown",
 ];
+
+export const RESTART_INTERRUPTED_RUN_PREFIX = "daemon restart interrupted active run";
 
 function bounded(value: string | undefined, limit = EVIDENCE_CHARS): string | undefined {
   if (!value) return undefined;
@@ -551,6 +555,7 @@ export function classifyRunFailure(run: LoopRun): RunFailureSignal | undefined {
   let classification: RunFailureClassification = "unknown";
   let summary: string | undefined;
   if (run.status === "timed_out") classification = "timeout";
+  else if (run.status === "skipped" && run.error?.startsWith(RESTART_INTERRUPTED_RUN_PREFIX)) classification = "restart_interrupted";
   else if (run.status === "skipped" && /circuit breaker open/.test(text)) classification = "circuit_breaker";
   else if (run.status === "skipped" && /previous run still active/.test(text)) classification = "skipped_previous_active";
   else if (/runtime preflight failed|preflight failed|executable not found in path|none of required executables found|auth profile preflight failed|profile not found/.test(text)) classification = "preflight";
@@ -869,6 +874,16 @@ export function expectationForLoop(store: Store, loop: Loop): LoopExpectationRes
       failure,
       route,
       recommendedTask: recommendedTask(loop, latestRun, failure, route),
+    };
+  }
+  if (failure?.classification === "restart_interrupted") {
+    return {
+      loop: expectationLoop(loop),
+      ok: true,
+      check: { id: "latest-run-succeeded", status: "warn", message: latestRun.error ?? "daemon restart interrupted latest run" },
+      latestRun: healthRun(latestRun),
+      failure,
+      route,
     };
   }
   if (failure?.classification === "provider_unavailable" && hasPendingRetry(loop, latestRun)) {
