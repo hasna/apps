@@ -1108,6 +1108,91 @@ describe("executeLoop", () => {
     }
   });
 
+  test("local codewith auth profile preflight accepts JSON profile list output", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-local-codewith-json-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithProfileList(
+      fake,
+      JSON.stringify(
+        {
+          currentProfile: { name: null, profileKind: "default", available: true },
+          data: [
+            {
+              name: "account001",
+              profileKind: "named",
+              active: false,
+              selected: false,
+              subscriptionProvider: "chat-gpt",
+              authMode: "chatgpt",
+              accountLabel: "redacted",
+              usable: true,
+              unusableReason: null,
+            },
+            {
+              name: "account002",
+              profileKind: "named",
+              active: false,
+              selected: false,
+              subscriptionProvider: "chat-gpt",
+              authMode: "chatgpt",
+              accountLabel: "redacted",
+              usable: true,
+              unusableReason: null,
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+    const env = { HOME: home, PATH: `${binDir}:/usr/bin:/bin` };
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account002", prompt: "run", configIsolation: "safe" },
+          {},
+          { env },
+        ),
+      ).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("local codewith auth profile preflight does not accept JSON currentProfile without a saved profile", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-local-codewith-json-current-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithProfileList(
+      fake,
+      JSON.stringify(
+        {
+          currentProfile: { name: "account002", profileKind: "named", available: false },
+          data: [],
+        },
+        null,
+        2,
+      ),
+    );
+    const env = { HOME: home, PATH: `${binDir}:/usr/bin:/bin` };
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account002", prompt: "run", configIsolation: "safe" },
+          {},
+          { env },
+        ),
+      ).toThrow("codewith auth profile not found: account002");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("remote codewith auth profile preflight accepts active and non-active listed profiles", () => {
     const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-auth-listed-"));
     const home = join(root, "home");
@@ -1133,6 +1218,40 @@ describe("executeLoop", () => {
       expect(() =>
         preflightTarget(
           { type: "agent", provider: "codewith", authProfile: "account001", prompt: "run", configIsolation: "safe" },
+          {},
+          remoteCodewithPreflightOptions(home),
+        ),
+      ).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("remote codewith auth profile preflight accepts native tool-style JSON profiles", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-auth-json-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithProfileList(
+      fake,
+      JSON.stringify(
+        {
+          currentProfile: "account006",
+          profiles: [
+            { name: null, displayName: "Default", current: false },
+            { name: "account001", displayName: "account001", current: false },
+            { name: "account002", displayName: "account002", current: false },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account002", prompt: "run", configIsolation: "safe" },
           {},
           remoteCodewithPreflightOptions(home),
         ),
