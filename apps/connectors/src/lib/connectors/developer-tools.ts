@@ -1038,4 +1038,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Developer Tools",
     tags: ["monitoring", "infrastructure", "network"],
   },
+  {
+    name: "talend-api-platform",
+    displayName: "Talend API Platform",
+    description: "Talend Cloud Management Console tasks, plans, and executions",
+    category: "Developer Tools",
+    tags: ["api-management", "integration", "etl"],
+  },
 ];
