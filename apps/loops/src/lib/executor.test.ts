@@ -1013,6 +1013,37 @@ describe("executeLoop", () => {
     }
   });
 
+  test("remote preflight classifies ssh host key verification failures without bypassing trust", () => {
+    let message = "";
+    try {
+      preflightTarget(
+        { type: "command", command: "printf ok", shell: true },
+        {},
+        {
+          machine: { id: "station02", local: false, route: "ssh" },
+          machineResolver: (machine) => ({ ...machine, local: false, route: "ssh" }),
+          env: { HOME: tmpdir(), PATH: "/usr/bin:/bin" },
+          machineCommandResolver: () => ({
+            command: "bash",
+            args: ["-c", "printf 'Host key verification failed.\\n' >&2; exit 255"],
+            source: "ssh",
+          }),
+        },
+      );
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain("remote preflight failed on station02: SSH host key verification failed.");
+    expect(message).toContain("Verify station02's host identity");
+    expect(message).toContain("repair SSH known_hosts/trust material outside OpenLoops");
+    expect(message).toContain("OpenLoops will not disable host-key checking or modify known_hosts automatically.");
+    expect(message).toContain("Transport detail: Host key verification failed.");
+    expect(message).not.toContain("StrictHostKeyChecking=no");
+    expect(message).not.toContain("UserKnownHostsFile=/dev/null");
+    expect(message).not.toContain("ssh-keyscan");
+  });
+
   test("remote codewith auth profile preflight quotes missing profile errors safely", () => {
     const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-auth-"));
     const home = join(root, "home");

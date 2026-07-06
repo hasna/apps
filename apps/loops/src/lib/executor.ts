@@ -556,6 +556,21 @@ function transportEnv(opts: ExecuteOptions): NodeJS.ProcessEnv {
   return env;
 }
 
+function remotePreflightFailureMessage(machineId: string, detail: string): string {
+  const normalized = detail.trim();
+  if (/Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED|Offending .*key in .*known_hosts/i.test(normalized)) {
+    return [
+      `remote preflight failed on ${machineId}: SSH host key verification failed.`,
+      `Verify ${machineId}'s host identity and repair SSH known_hosts/trust material outside OpenLoops;`,
+      "OpenLoops will not disable host-key checking or modify known_hosts automatically.",
+      normalized ? `Transport detail: ${normalized}` : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
+  return `remote preflight failed on ${machineId}${normalized ? `: ${normalized}` : ""}`;
+}
+
 function assertCodewithProfileListed(
   profile: string,
   result: { status: number | null; stdout: string; stderr: string; error?: string },
@@ -757,7 +772,7 @@ function preflightRemoteSpec(
   if (result.error) throw new Error(`remote preflight failed on ${machine.id}: ${result.error.message}`);
   if ((result.status ?? 1) !== 0) {
     const detail = (result.stderr || result.stdout || `exit ${result.status ?? "unknown"}`).trim();
-    throw new Error(`remote preflight failed on ${machine.id}${detail ? `: ${detail}` : ""}`);
+    throw new Error(remotePreflightFailureMessage(machine.id, detail));
   }
 }
 
