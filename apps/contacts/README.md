@@ -96,9 +96,28 @@ PostgreSQL development URLs can disable TLS explicitly.
 
 By default, remote sync covers contacts, companies, tags, and the other
 non-sensitive relationship tables. `webhooks`, `contact_documents`, and
-`contact_health` are excluded until explicitly requested with `--tables`. Sync
-is a non-destructive merge: it inserts or updates rows and does not propagate
-deletes or tombstones.
+`contact_health` are excluded until explicitly requested with `--tables` and
+`HASNA_CONTACTS_ALLOW_SENSITIVE_SYNC=1`. Sync inserts or updates rows with
+timestamp conflict protection. Deletes for `contacts`, `companies`, and `tags`
+write `_contacts_tombstones`; push/pull sync carries those tombstones and pull
+applies them unless the local row has a newer `updated_at`.
+
+Shared REST/dashboard deployments must set one of
+`HASNA_CONTACTS_API_TOKENS`, `OPEN_CONTACTS_API_TOKENS`, or
+`CONTACTS_API_TOKENS`. Values are comma-separated `token=scope scope` records.
+Supported scopes include `contacts:read`, `contacts:write`,
+`contacts:import`, `contacts:export`, `contacts:export:full`,
+`documents:read`, `images:read`, `images:write`, `companies:*`, `tags:*`,
+`stats:read`, `dashboard:read`, and `mcp:access`. Loopback-only development
+without configured tokens remains allowed; shared hosts fail closed.
+
+Server exports are redacted by default: email addresses, phone numbers,
+addresses, notes, birthdays, social profiles, and custom fields are withheld.
+Full exports require both `contacts:export` and `contacts:export:full`. Export,
+import, document file read, image mutation, contact mutation, company mutation,
+and tag mutation routes write audit entries. Document attachments are served
+only from the managed contacts documents directory and use private `no-store`
+cache headers.
 
 `contacts cloud status`, `contacts cloud push`, `contacts cloud pull`, and
 `contacts cloud sync` remain compatibility aliases for the contacts-owned

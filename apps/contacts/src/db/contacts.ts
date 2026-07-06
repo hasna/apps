@@ -27,6 +27,7 @@ import type {
 import { ContactNotFoundError } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
 import { logActivity } from "./activity.js";
+import { recordRemoteTombstone } from "./remote-sync.js";
 
 // ─── Row mappers ──────────────────────────────────────────────────────────────
 
@@ -389,6 +390,7 @@ export function deleteContact(id: string, db?: ContactsDatabase): void {
 
   // Log before deleting so we still have the name
   logActivity(d, { contact_id: id, action: "contact.deleted", details: `Deleted contact: ${row.display_name}` });
+  recordRemoteTombstone("contacts", id, { db: d, reason: "contact.deleted" });
 
   d.run(`DELETE FROM contacts WHERE id = ?`, [id]);
 }

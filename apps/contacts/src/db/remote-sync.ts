@@ -44,6 +44,7 @@ export const CONTACTS_REMOTE_TABLES = [
   "audiences",
   "contact_consent",
   "contact_suppressions",
+  "_contacts_tombstones",
 ] as const;
 
 type RemoteTable = (typeof CONTACTS_REMOTE_TABLES)[number];
@@ -100,7 +101,19 @@ export const CONTACTS_REMOTE_CONFLICT_KEYS: Record<RemoteTable, string[]> = {
   audiences: ["id"],
   contact_consent: ["contact_id", "channel"],
   contact_suppressions: ["channel", "address"],
+  _contacts_tombstones: ["table_name", "row_id"],
 };
+
+export const CONTACTS_REMOTE_DELETABLE_TABLES = ["contacts", "companies", "tags"] as const;
+type ContactsRemoteDeletableTable = (typeof CONTACTS_REMOTE_DELETABLE_TABLES)[number];
+
+export interface RemoteTombstone {
+  table_name: ContactsRemoteDeletableTable;
+  row_id: string;
+  deleted_at: string;
+  actor: string | null;
+  reason: string | null;
+}
 
 export const CONTACTS_REMOTE_ENV = [
   "HASNA_CONTACTS_POSTGRES_URL",
@@ -174,6 +187,7 @@ export async function pullRemote(options?: { tables?: string[] }): Promise<SyncR
     await runRemoteMigrations(remote);
     const results: SyncResult[] = [];
     for (const table of resolveRemoteTables(options?.tables)) results.push(await pullTable(remote, db, table));
+    applyRemoteTombstones(db);
     recordSyncMeta(db, "pull", results);
     throwIfSyncErrors("pull", results);
     return results;
@@ -211,7 +225,73 @@ export function resolveRemoteTables(tables?: string[]): RemoteTable[] {
   const requested = tables.map((table) => table.trim()).filter(Boolean);
   const invalid = requested.filter((table) => !allowed.has(table));
   if (invalid.length > 0) throw new Error(`Unknown contacts sync table(s): ${invalid.join(", ")}`);
+  const sensitiveRequested = requested.filter((table) => (CONTACTS_REMOTE_SENSITIVE_TABLES as readonly string[]).includes(table));
+  if (sensitiveRequested.length > 0 && process.env["HASNA_CONTACTS_ALLOW_SENSITIVE_SYNC"] !== "1") {
+    throw new Error(
+      `Sensitive contacts sync table(s) require HASNA_CONTACTS_ALLOW_SENSITIVE_SYNC=1: ${sensitiveRequested.join(", ")}`
+    );
+  }
   return requested as RemoteTable[];
+}
+
+export function ensureTombstoneTable(db: ContactsDatabase): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS _contacts_tombstones (
+      table_name TEXT NOT NULL CHECK(table_name IN ('contacts','companies','tags')),
+      row_id TEXT NOT NULL,
+      deleted_at TEXT NOT NULL DEFAULT (datetime('now')),
+      actor TEXT,
+      reason TEXT,
+      PRIMARY KEY (table_name, row_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_contacts_tombstones_deleted_at ON _contacts_tombstones(deleted_at);
+  `);
+}
+
+export function recordRemoteTombstone(
+  table: ContactsRemoteDeletableTable,
+  rowId: string,
+  options?: { actor?: string; reason?: string; db?: ContactsDatabase },
+): void {
+  const db = options?.db ?? getDatabase();
+  ensureTombstoneTable(db);
+  db.run(
+    `INSERT INTO _contacts_tombstones (table_name, row_id, deleted_at, actor, reason)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(table_name, row_id) DO UPDATE SET
+       deleted_at = excluded.deleted_at,
+       actor = excluded.actor,
+       reason = excluded.reason`,
+    [table, rowId, new Date().toISOString(), options?.actor ?? "local", options?.reason ?? null],
+  );
+}
+
+export function applyRemoteTombstones(db: ContactsDatabase = getDatabase()): number {
+  ensureTombstoneTable(db);
+  const rows = db.query(
+    `SELECT table_name, row_id, deleted_at, actor, reason FROM _contacts_tombstones ORDER BY deleted_at ASC`
+  ).all() as RemoteTombstone[];
+  let applied = 0;
+  for (const row of rows) {
+    if (!(CONTACTS_REMOTE_DELETABLE_TABLES as readonly string[]).includes(row.table_name)) continue;
+    const columns = db.query(`PRAGMA table_info(${quoteIdent(row.table_name)})`).all() as Array<{ name: string }>;
+    const hasUpdatedAt = columns.some((column) => column.name === "updated_at");
+    const existing = db.query(
+      `SELECT ${hasUpdatedAt ? "updated_at" : "id"} FROM ${quoteIdent(row.table_name)} WHERE id = ?`
+    ).get(row.row_id) as { updated_at?: string } | null;
+    if (!existing) continue;
+    if (existing.updated_at && row.deleted_at && isTimestampAfter(existing.updated_at, row.deleted_at)) continue;
+    db.run(`DELETE FROM ${quoteIdent(row.table_name)} WHERE id = ?`, [row.row_id]);
+    applied++;
+  }
+  return applied;
+}
+
+function isTimestampAfter(left: string, right: string): boolean {
+  const leftTime = Date.parse(left);
+  const rightTime = Date.parse(right);
+  if (Number.isFinite(leftTime) && Number.isFinite(rightTime)) return leftTime > rightTime;
+  return left > right;
 }
 
 async function pushTable(db: ContactsDatabase, remote: PgAdapterAsync, table: RemoteTable): Promise<SyncResult> {
