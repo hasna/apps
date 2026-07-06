@@ -1,0 +1,32 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "calendar",
+  "class": "service",
+  "contractVersion": "v1",
+  "kitVersion": "0.4.1",
+  "description": "Universal calendar management for AI coding agents. CLI + MCP + HTTP API (calendar-serve) + generated SDK. Cloud mode (HASNA_CALENDAR_STORAGE_MODE=remote / HASNA_CALENDAR_DATABASE_URL set) is PURE REMOTE per Amendment A1: the serve process reads/writes the shared cloud Postgres directly with API-key auth via @hasna/contracts.",
+  "bins": ["calendar", "calendar-mcp", "calendar-serve"],
+  "storage": {
+    "mode": "local",
+    "envPrefix": "HASNA_CALENDAR_",
+    "aliasEnvPrefix": "CALENDAR_",
+    "databaseUrlSecretRef": "hasna/oss/calendar/database-url",
+    "sqlitePath": "~/.hasna/calendar/calendar.db"
+  },
+  "metadata": {
+    "service": {
+      "port": 19428,
+      "healthPath": "/health",
+      "readyPath": "/ready",
+      "versionPath": "/version",
+      "openapiPath": "/openapi.json",
+      "apiVersion": "v1",
+      "auth": "api-key",
+      "signingSecretSecretRef": "hasna/oss/calendar/api-key-signing-secret"
+    },
+    "client": {
+      "apiUrlEnv": "CALENDAR_API_URL",
+      "apiKeyEnv": "CALENDAR_API_KEY"
+    }
+  }
+}

@@ -14,16 +14,24 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./sdk": {
+      "types": "./dist/sdk/index.d.ts",
+      "import": "./dist/sdk/index.js"
     }
   },
   "files": [
     "dist",
     "dashboard/dist",
+    "migrations",
     "LICENSE",
     "README.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && printf '#!/usr/bin/env bun\\nimport \"./index.js\";\\n' > dist/mcp/bin.js && chmod +x dist/mcp/bin.js && bun build src/server/index.ts --outdir dist/server --target bun && printf '#!/usr/bin/env bun\\nimport \"./index.js\";\\n' > dist/server/bin.js && chmod +x dist/server/bin.js && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "build": "rm -rf dist && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && printf '#!/usr/bin/env bun\\nimport \"./index.js\";\\n' > dist/mcp/bin.js && chmod +x dist/mcp/bin.js && bun build src/server/index.ts --outdir dist/server --target bun && printf '#!/usr/bin/env bun\\nimport \"./index.js\";\\n' > dist/server/bin.js && chmod +x dist/server/bin.js && bun build src/sdk/index.ts --outdir dist/sdk --target bun && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "build:server": "rm -rf dist && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && printf '#!/usr/bin/env bun\\nimport \"./index.js\";\\n' > dist/mcp/bin.js && chmod +x dist/mcp/bin.js && bun build src/server/index.ts --outdir dist/server --target bun && printf '#!/usr/bin/env bun\\nimport \"./index.js\";\\n' > dist/server/bin.js && chmod +x dist/server/bin.js && bun build src/sdk/index.ts --outdir dist/sdk --target bun && bun build src/index.ts --outdir dist --target bun",
+    "migrate": "bun run src/server/index.ts migrate",
+    "generate:sdk": "bun run scripts/generate-sdk.ts",
     "typecheck": "tsc --noEmit",
     "test": "BUN_TEST=1 bun test",
     "dev:cli": "bun run src/cli/index.tsx",
@@ -60,6 +68,7 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
+    "@hasna/contracts": "0.4.1",
     "@hasna/events": "^0.1.7",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",

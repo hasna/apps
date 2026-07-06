@@ -1,4 +1,4 @@
-import { handleMcpFetch, healthPayload } from "../mcp/http.js";
+import { handleMcpFetch } from "../mcp/http.js";
 import {
   createOrg, listOrgs, getOrg, getOrgBySlug, updateOrg, deleteOrg,
   registerAgent, getAgent, getAgentByName, listAgents, heartbeat as agentHeartbeat,
@@ -9,6 +9,10 @@ import {
   createMembership, getMembershipsForOrg,
   closeDatabase,
 } from "../index.js";
+import { getPackageVersion } from "./version.js";
+import { buildV1OpenApiDocument } from "./openapi.js";
+import { handleV1Request } from "./v1.js";
+import { isCloudModeEnabled, pingCloud } from "./cloud.js";
 
 export function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data, null, 2), {
@@ -31,8 +35,14 @@ export async function readBody(req: Request): Promise<Record<string, unknown>> {
 
 type SSEClient = { controller: ReadableStreamDefaultController; orgId?: string; agentId?: string };
 
-export function serve(port: number) {
+export interface ServeOptions {
+  host?: string;
+}
+
+export function serve(port: number, options: ServeOptions = {}) {
   const sseClients = new Set<SSEClient>();
+  const hostname = options.host || process.env["CALENDAR_HOST"] || process.env["HOST"] || "127.0.0.1";
+  const mode = isCloudModeEnabled() ? "remote" : "local";
 
   function broadcastEvent(event: { type: string; event_id?: string; action: string; agent_id?: string | null; org_id?: string | null }) {
     const data = `data: ${JSON.stringify({ ...event, timestamp: new Date().toISOString() })}\n\n`;
@@ -45,15 +55,41 @@ export function serve(port: number) {
 
   const server = Bun.serve({
     port,
-    hostname: "127.0.0.1",
+    hostname,
+    idleTimeout: 60,
     async fetch(req: Request): Promise<Response> {
       const url = new URL(req.url);
       const path = url.pathname;
 
-      // ── MCP Streamable HTTP (shared long-lived server) ─────────────────
+      // ── Service contract endpoints (health / ready / version / openapi) ──
       if (path === "/health" && req.method === "GET") {
-        return json(healthPayload("calendar"));
+        return json({ status: "ok", version: getPackageVersion(), mode });
       }
+      if (path === "/version" && req.method === "GET") {
+        return json({ name: "calendar", version: getPackageVersion(), mode });
+      }
+      if (path === "/ready" && req.method === "GET") {
+        if (mode !== "remote") {
+          return json({ status: "ready", mode, checks: { database: "local" } });
+        }
+        try {
+          const ok = await pingCloud();
+          return ok
+            ? json({ status: "ready", mode, checks: { database: "ok" } })
+            : json({ status: "not_ready", mode, checks: { database: "unreachable" } }, 503);
+        } catch (e) {
+          return json({ status: "not_ready", mode, checks: { database: (e as Error).message } }, 503);
+        }
+      }
+      if (path === "/openapi.json" && req.method === "GET") {
+        return json(buildV1OpenApiDocument());
+      }
+
+      // ── Versioned /v1 API (A1 pure-remote, API-key auth) ──────────────────
+      const v1 = await handleV1Request(req, url);
+      if (v1) return v1;
+
+      // ── MCP Streamable HTTP (shared long-lived server) ─────────────────
       if (path === "/mcp") {
         return handleMcpFetch(req);
       }
@@ -239,7 +275,7 @@ export function serve(port: number) {
     },
   });
 
-  console.log(`Calendar server listening on http://localhost:${port}`);
+  console.log(`Calendar server listening on http://${hostname}:${port} (mode=${mode})`);
 
   // Graceful shutdown
   process.on("SIGINT", () => {
