@@ -347,6 +347,43 @@ describe("reconcile execution", () => {
     ]);
   });
 
+  for (const health of ["degraded", "unavailable"] as const) {
+    test(`declared MCP health ${health} fails verify:true rollout and rolls back`, async () => {
+      const manifest = manifestFixture();
+      const eventsPackage = manifest.packages!.find((entry) => entry.name === "@hasna/events")!;
+      eventsPackage.version = "0.3.0";
+      const { exec, calls } = mockExec((command, args) => {
+        if (command === "bun" && args[0] === "install") return { status: 0 };
+        if (command === "hasna-events" && args[0] === "--version") return { status: 0, stdout: "0.3.0\n" };
+        return { status: 1 };
+      });
+      const plan = buildReconcilePlan({
+        manifest,
+        machineId: "demo-node-01",
+        freezePath: emptyFreezePath,
+        installed: [{ name: "@hasna/events", version: "0.2.0" }],
+        packageFilter: "@hasna/events",
+      });
+      const result = await executeReconcilePlan(plan, {
+        dryRun: false,
+        exec,
+        recordsPath: null,
+        healthCheck: async () => health,
+      });
+
+      const events = result.results[0]!;
+      expect(events.status).toBe("failed");
+      expect(events.error).toContain(`MCP health ${health}`);
+      expect(events.verifiedBy).toEqual({ cliVersion: "0.3.0", mcpHealth: health });
+      expect(events.rolledBackTo).toBe("0.2.0");
+      expect(calls.some((call) => call.command === "bun" && call.args.join(" ") === "install -g @hasna/events@0.2.0")).toBe(true);
+      expect(result.records.map((record) => [record.action, record.result])).toEqual([
+        ["update", "failed"],
+        ["rollback", "succeeded"],
+      ]);
+    });
+  }
+
   test("verify: false packages succeed on install exit code without a CLI check", async () => {
     const manifest = manifestFixture();
     manifest.packages!.push({ name: "@hasna/contracts", version: "0.1.0", verify: false });
@@ -368,6 +405,43 @@ describe("reconcile execution", () => {
     expect(contracts.verifiedBy).toEqual({ mcpHealth: "not_checked" });
     expect(calls.every((call) => call.args[0] !== "--version")).toBe(true);
   });
+
+  for (const health of ["degraded", "unavailable"] as const) {
+    test(`declared MCP health ${health} fails verify:false package without a CLI check`, async () => {
+      const manifest = manifestFixture();
+      manifest.packages!.push({
+        name: "@hasna/contracts",
+        version: "0.1.0",
+        verify: false,
+        mcpHealthUrl: "http://127.0.0.1:9999/contracts/health",
+      });
+      const { exec, calls } = mockExec((command, args) => {
+        if (command === "bun" && args[0] === "install") return { status: 0 };
+        return { status: 1, stderr: "no CLI available" };
+      });
+      const plan = buildReconcilePlan({
+        manifest,
+        machineId: "demo-node-01",
+        freezePath: emptyFreezePath,
+        installed: [],
+        packageFilter: "@hasna/contracts",
+      });
+      const result = await executeReconcilePlan(plan, {
+        dryRun: false,
+        exec,
+        recordsPath: null,
+        healthCheck: async () => health,
+      });
+
+      const contracts = result.results[0]!;
+      expect(contracts.status).toBe("failed");
+      expect(contracts.error).toContain(`MCP health ${health}`);
+      expect(contracts.verifiedBy).toEqual({ mcpHealth: health });
+      expect(contracts.rolledBackTo).toBeNull();
+      expect(result.warnings).toContain("rollback_unavailable:@hasna/contracts");
+      expect(calls).toEqual([{ command: "bun", args: ["install", "-g", "@hasna/contracts@0.1.0"] }]);
+    });
+  }
 
   test("freeze gate blocks frozen packages and emits a blocked rollout record", async () => {
     const manifest = manifestFixture();
@@ -514,6 +588,41 @@ describe("machines reconcile CLI", () => {
     const result = runCli(["reconcile", "--dry-run", "--event-json", eventPath, "--installed-json", installedPath], cliEnv(dir));
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("release.published");
+  });
+
+  test("machines reconcile --apply exits non-zero when an action is freeze-blocked", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-cli-reconcile-blocked-"));
+    const { installedPath } = writeFixtures(dir);
+    writeFileSync(join(dir, "freeze.json"), `${JSON.stringify({
+      version: 1,
+      packages: [{ name: "left-pad", reason: "rollout hold" }],
+    })}\n`, "utf8");
+    const result = runCli([
+      "reconcile",
+      "--apply",
+      "--installed-json",
+      installedPath,
+      "--package",
+      "left-pad",
+      "--json",
+      "--no-emit",
+    ], cliEnv(dir));
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(1);
+    const output = JSON.parse(result.stdout) as {
+      mode: string;
+      results: Array<{ package: string; action: string; status: string; error?: string }>;
+      records: Array<{ action: string; result: string }>;
+    };
+    expect(output.mode).toBe("apply");
+    expect(output.results).toHaveLength(1);
+    expect(output.results[0]).toMatchObject({
+      package: "left-pad",
+      action: "freeze-blocked",
+      status: "blocked",
+    });
+    expect(output.results[0]?.error).toContain("rollout hold");
+    expect(output.records[0]).toMatchObject({ action: "freeze-blocked", result: "blocked" });
   });
 
   test("machines freeze add/check/list/remove drive the reconcile freeze gate", () => {

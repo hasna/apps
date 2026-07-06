@@ -308,6 +308,12 @@ interface VerifyOutcome {
   error?: string;
 }
 
+function mcpHealthFailure(health: McpHealth): string | null {
+  return health === "ok"
+    ? null
+    : `verify failed: MCP health ${health} at declared endpoint`;
+}
+
 async function verifyInstalledPackage(
   action: ReconcilePlanAction,
   targetVersion: string,
@@ -320,8 +326,9 @@ async function verifyInstalledPackage(
     const verifiedBy: RolloutVerification = { mcpHealth: "not_checked" };
     if (action.mcpHealthUrl) {
       verifiedBy.mcpHealth = await healthCheck(action.mcpHealthUrl);
-      if (verifiedBy.mcpHealth === "unavailable") {
-        return { ok: false, verifiedBy, error: `verify failed: MCP health unavailable at declared endpoint` };
+      const healthError = mcpHealthFailure(verifiedBy.mcpHealth);
+      if (healthError) {
+        return { ok: false, verifiedBy, error: healthError };
       }
     }
     return { ok: true, verifiedBy };
@@ -344,8 +351,9 @@ async function verifyInstalledPackage(
   }
   if (action.mcpHealthUrl) {
     verifiedBy.mcpHealth = await healthCheck(action.mcpHealthUrl);
-    if (verifiedBy.mcpHealth === "unavailable") {
-      return { ok: false, verifiedBy, error: `verify failed: MCP health unavailable at declared endpoint` };
+    const healthError = mcpHealthFailure(verifiedBy.mcpHealth);
+    if (healthError) {
+      return { ok: false, verifiedBy, error: healthError };
     }
   }
   return { ok: true, verifiedBy };

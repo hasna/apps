@@ -1690,7 +1690,7 @@ program
         deliver: options.deliver === true,
       });
       printCommandResult(result, renderReconcileResult(result), wantsCommandJson(options, command));
-      if (result.results.some((entry) => entry.status === "failed")) process.exitCode = 1;
+      if (result.results.some((entry) => entry.status === "failed" || entry.status === "blocked")) process.exitCode = 1;
       return;
     }
 
