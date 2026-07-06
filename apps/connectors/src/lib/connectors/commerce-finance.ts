@@ -395,11 +395,25 @@ export const connectors: ConnectorMeta[] = [
     tags: ["nft", "web3", "blockchain"],
   },
   {
+    name: "wave-accounting",
+    displayName: "Wave Accounting",
+    description: "Accounting, invoicing, and financial management via GraphQL API",
+    category: "Commerce & Finance",
+    tags: ["accounting", "invoicing", "finance", "graphql"],
+  },
+  {
     name: "woocommerce",
     displayName: "WooCommerce",
     description: "WordPress e-commerce plugin for orders, products, and customers",
     category: "Commerce & Finance",
     tags: ["ecommerce", "wordpress", "orders"],
+  },
+  {
+    name: "zerosettle",
+    displayName: "ZeroSettle",
+    description: "Direct IAP billing",
+    category: "Commerce & Finance",
+    tags: ["payments", "iap", "billing"],
   },
   {
     name: "xero",
@@ -414,5 +428,12 @@ export const connectors: ConnectorMeta[] = [
     description: "Online accounting and financial management",
     category: "Commerce & Finance",
     tags: ["accounting", "invoicing", "zoho"],
+  },
+  {
+    name: "zoho-inventory",
+    displayName: "Zoho Inventory",
+    description: "Inventory management for items, orders, and invoices",
+    category: "Commerce & Finance",
+    tags: ["inventory", "zoho", "orders"],
   },
 ];
