@@ -58,6 +58,11 @@ registerMiscCommands(program);
 registerOpsCommands(program);
 registerSystemCommands(program);
 registerSyncCommands(program);
-registerEventsCommands(program, { source: "connectors" });
+// @hasna/events 0.1.7 used webhooksCommandName; 0.1.13 renamed it to channelsCommandName.
+registerEventsCommands(program, {
+  source: "connectors",
+  webhooksCommandName: "webhooks",
+  channelsCommandName: "webhooks",
+} as any);
 
 program.parse();

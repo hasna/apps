@@ -4,7 +4,7 @@
  * directories for stored credentials, and handles token operations.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync } from "fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync } from "fs";
 import { randomBytes } from "crypto";
 import { join } from "path";
 import { getConnectorDocs } from "../lib/installer.js";
@@ -17,6 +17,8 @@ import {
 
 /** Timeout for external HTTP requests (10 seconds) */
 const FETCH_TIMEOUT = 10_000;
+const PRIVATE_DIR_MODE = 0o700;
+const PRIVATE_FILE_MODE = 0o600;
 
 /** In-memory CSRF state store for OAuth flows */
 const oauthStateStore = new Map<string, { connector: string; createdAt: number }>();
@@ -111,6 +113,29 @@ function getConnectorConfigDir(name: string): string {
 function getConnectorConfigReadDirs(name: string): string[] {
   name = normalizeConnectorName(name);
   return getResolvedConnectorConfigReadDirs(name);
+}
+
+function chmodIfPossible(path: string, mode: number): void {
+  try {
+    chmodSync(path, mode);
+  } catch {
+    // Best-effort hardening for platforms/filesystems that support POSIX modes.
+  }
+}
+
+function ensurePrivateDir(path: string): void {
+  mkdirSync(path, { recursive: true, mode: PRIVATE_DIR_MODE });
+  chmodIfPossible(path, PRIVATE_DIR_MODE);
+}
+
+function writePrivateJson(path: string, data: unknown): void {
+  writeFileSync(path, JSON.stringify(data, null, 2), { mode: PRIVATE_FILE_MODE });
+  chmodIfPossible(path, PRIVATE_FILE_MODE);
+}
+
+function writePrivateText(path: string, data: string): void {
+  writeFileSync(path, data, { mode: PRIVATE_FILE_MODE });
+  chmodIfPossible(path, PRIVATE_FILE_MODE);
 }
 
 /**
@@ -235,6 +260,67 @@ function isStoredOAuthEnvVarSet(
   return false;
 }
 
+function envVarToConfigField(variable: string, connectorName: string): string {
+  const connectorPrefix = normalizeConnectorName(connectorName).replace(/-/g, "_").toUpperCase();
+  const suffix = variable.startsWith(`${connectorPrefix}_`)
+    ? variable.slice(connectorPrefix.length + 1)
+    : variable.split("_").slice(1).join("_");
+  const parts = suffix.toLowerCase().split("_").filter(Boolean);
+
+  return parts
+    .map((part, index) =>
+      index === 0 ? part : part.charAt(0).toUpperCase() + part.slice(1)
+    )
+    .join("");
+}
+
+function isCredentialEnvVar(variable: string): boolean {
+  return /(^|_)(API_KEY|API_SECRET|ACCESS_KEY_ID|SECRET_ACCESS_KEY|ACCESS_TOKEN|REFRESH_TOKEN|BEARER_TOKEN|SERVICE_ROLE_KEY|APP_KEY|SECRET_KEY|CONSUMER_KEY|CONSUMER_SECRET|CLIENT_ID|CLIENT_SECRET|PRIVATE_KEY|TOKEN|SECRET|KEY|PASSWORD|PASS|CREDENTIAL|CREDENTIALS)($|_)/.test(variable);
+}
+
+function isStoredApiEnvVarSet(
+  variable: string,
+  connectorName: string,
+  profileConfig: Record<string, unknown>
+): boolean {
+  if (!isCredentialEnvVar(variable)) {
+    return false;
+  }
+
+  const field = envVarToConfigField(variable, connectorName);
+  if (typeof profileConfig[field] === "string" && profileConfig[field].length > 0) {
+    return true;
+  }
+
+  if (variable.endsWith("_API_KEY")) {
+    return typeof profileConfig.apiKey === "string" && profileConfig.apiKey.length > 0;
+  }
+  if (variable.endsWith("_TOKEN")) {
+    return [profileConfig.token, profileConfig.accessToken, profileConfig.bearerToken].some(
+      (value) => typeof value === "string" && value.length > 0
+    );
+  }
+  return false;
+}
+
+function hasGenericStoredApiCredential(profileConfig: Record<string, unknown>): boolean {
+  const credentialFields = [
+    "apiKey",
+    "apiSecret",
+    "token",
+    "accessToken",
+    "refreshToken",
+    "bearerToken",
+    "secret",
+    "secretToken",
+    "key",
+  ];
+
+  return credentialFields.some(
+    (field) => typeof profileConfig[field] === "string" && profileConfig[field].length > 0
+  );
+}
+
 /**
  * Get the full auth status for a connector
  */
@@ -244,7 +330,7 @@ export function getAuthStatus(name: string): AuthStatus {
   const docs = getConnectorDocs(name);
   const oauthConfig = authType === "oauth" ? getOAuthConfig(name) : {};
   const tokens = authType === "oauth" ? loadTokens(name) : null;
-  const profileConfig = authType === "oauth" ? loadProfileConfig(name) : {};
+  const profileConfig = loadProfileConfig(name);
 
   // Build env vars list with set/unset status (process env + stored credentials)
   const envVars = (docs?.envVars || []).map((v) => ({
@@ -253,7 +339,9 @@ export function getAuthStatus(name: string): AuthStatus {
     set:
       !!process.env[v.variable] ||
       (authType === "oauth" &&
-        isStoredOAuthEnvVarSet(v.variable, oauthConfig, tokens, profileConfig)),
+        isStoredOAuthEnvVarSet(v.variable, oauthConfig, tokens, profileConfig)) ||
+      ((authType === "apikey" || authType === "bearer") &&
+        isStoredApiEnvVarSet(v.variable, name, profileConfig)),
   }));
 
   const envVarTotalCount = envVars.length;
@@ -264,7 +352,13 @@ export function getAuthStatus(name: string): AuthStatus {
     const hasRefreshToken = !!tokens?.refreshToken || !!(profileConfig.refreshToken);
     const tokenExpiry = tokens?.expiresAt || (profileConfig.expiresAt as number | undefined);
     const hasOAuthCredentials = Boolean(oauthConfig.clientId && oauthConfig.clientSecret);
-    const hasEnvVar = envVars.some((v) => v.set);
+    const hasEnvVar = (docs?.envVars || []).some((v) =>
+      isCredentialEnvVar(v.variable) &&
+      (
+        !!process.env[v.variable] ||
+        isStoredOAuthEnvVarSet(v.variable, oauthConfig, tokens, profileConfig)
+      )
+    );
 
     return {
       type: "oauth",
@@ -279,11 +373,14 @@ export function getAuthStatus(name: string): AuthStatus {
   }
 
   // API key / Bearer token
-  const config = loadProfileConfig(name);
-  const hasKey = Object.values(config).some(
-    (v) => typeof v === "string" && v.length > 0
+  const hasEnvVar = (docs?.envVars || []).some((v) =>
+    isCredentialEnvVar(v.variable) &&
+    (
+      !!process.env[v.variable] ||
+      isStoredApiEnvVarSet(v.variable, name, profileConfig)
+    )
   );
-  const hasEnvVar = envVars.some((v) => v.set);
+  const hasKey = envVarTotalCount === 0 && hasGenericStoredApiCredential(profileConfig);
 
   return {
     type: authType,
@@ -324,25 +421,28 @@ function _saveApiKey(name: string, key: string, field?: string): void {
   // from there, and these are shared across all profiles.
   if (keyField === "clientId" || keyField === "clientSecret") {
     const credentialsFile = join(configDir, "credentials.json");
-    mkdirSync(configDir, { recursive: true });
+    ensurePrivateDir(configDir);
     let creds: Record<string, unknown> = {};
     if (existsSync(credentialsFile)) {
       try { creds = JSON.parse(readFileSync(credentialsFile, "utf-8")); } catch { /* use empty */ }
     }
     creds[keyField] = key;
-    writeFileSync(credentialsFile, JSON.stringify(creds, null, 2));
+    writePrivateJson(credentialsFile, creds);
     return;
   }
 
   // Try pattern 1: profiles/<name>.json
-  const profileFile = join(configDir, "profiles", `${profile}.json`);
-  const profileDir = join(configDir, "profiles", profile);
+  const profilesDir = join(configDir, "profiles");
+  const profileFile = join(profilesDir, `${profile}.json`);
+  const profileDir = join(profilesDir, profile);
 
   if (existsSync(profileFile)) {
     let config: Record<string, unknown> = {};
     try { config = JSON.parse(readFileSync(profileFile, "utf-8")); } catch { /* use empty */ }
     config[keyField] = key;
-    writeFileSync(profileFile, JSON.stringify(config, null, 2));
+    ensurePrivateDir(configDir);
+    ensurePrivateDir(profilesDir);
+    writePrivateJson(profileFile, config);
     return;
   }
 
@@ -354,14 +454,19 @@ function _saveApiKey(name: string, key: string, field?: string): void {
       try { config = JSON.parse(readFileSync(configFile, "utf-8")); } catch { /* use empty */ }
     }
     config[keyField] = key;
-    writeFileSync(configFile, JSON.stringify(config, null, 2));
+    ensurePrivateDir(configDir);
+    ensurePrivateDir(profilesDir);
+    ensurePrivateDir(profileDir);
+    writePrivateJson(configFile, config);
     return;
   }
 
   // Create new profile using directory pattern (profiles/<name>/config.json)
   // This matches what connector CLIs expect
-  mkdirSync(profileDir, { recursive: true });
-  writeFileSync(join(profileDir, "config.json"), JSON.stringify({ [keyField]: key }, null, 2));
+  ensurePrivateDir(configDir);
+  ensurePrivateDir(profilesDir);
+  ensurePrivateDir(profileDir);
+  writePrivateJson(join(profileDir, "config.json"), { [keyField]: key });
 }
 
 /**
@@ -525,11 +630,14 @@ function saveOAuthTokens(name: string, tokens: OAuthTokens): void {
   name = normalizeConnectorName(name);
   const configDir = getConnectorConfigDir(name);
   const profile = getCurrentProfile(name);
-  const profileDir = join(configDir, "profiles", profile);
+  const profilesDir = join(configDir, "profiles");
+  const profileDir = join(profilesDir, profile);
 
-  mkdirSync(profileDir, { recursive: true });
+  ensurePrivateDir(configDir);
+  ensurePrivateDir(profilesDir);
+  ensurePrivateDir(profileDir);
   const tokensFile = join(profileDir, "tokens.json");
-  writeFileSync(tokensFile, JSON.stringify(tokens, null, 2), { mode: 0o600 });
+  writePrivateJson(tokensFile, tokens);
 }
 
 /**
@@ -599,7 +707,7 @@ export function getTokenExpiry(name: string): number | null {
 
 /**
  * List all profile names for a connector.
- * Reads ~/.hasna/connectors/{name}/profiles/ and legacy connect-{name} entries —
+ * Reads ~/.hasna/connectors/{name}/profiles/ and legacy connect-{name} entries -
  * both .json files (pattern 1) and subdirectories (pattern 2).
  */
 export function listProfiles(name: string): string[] {
@@ -640,8 +748,8 @@ export function listProfiles(name: string): string[] {
 export function switchProfile(name: string, profile: string): void {
   name = normalizeConnectorName(name);
   const configDir = getConnectorConfigDir(name);
-  mkdirSync(configDir, { recursive: true });
-  writeFileSync(join(configDir, "current_profile"), profile);
+  ensurePrivateDir(configDir);
+  writePrivateText(join(configDir, "current_profile"), profile);
 }
 
 /**
