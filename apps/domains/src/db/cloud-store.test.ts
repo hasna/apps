@@ -1,12 +1,18 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+  countDomains,
   createDomain,
   deleteDomain,
   domainsCloudEnv,
+  getByRegistrar,
   getDomain,
+  getDomainByIdentifier,
+  getDomainStats,
   isCloudMode,
   listDomains,
+  listExpiring,
   resolveDomainsCloud,
+  searchDomains,
 } from "./cloud-store.js";
 
 const CLOUD_ENV = {
@@ -119,5 +125,91 @@ describe("routed CRUD hits the cloud API when self_hosted", () => {
     const ok = await deleteDomain("cloud-id-1", { ...CLOUD_ENV });
     expect(ok).toBe(true);
     expect(calls.some((c) => c.method === "DELETE" && c.url.endsWith("/v1/domains/cloud-id-1"))).toBe(true);
+  });
+
+  test("search -> GET /v1/domains?search=", async () => {
+    const results = await searchDomains("routed", { ...CLOUD_ENV });
+    expect(results).toHaveLength(1);
+    expect(calls.some((c) => c.method === "GET" && c.url.includes("search=routed"))).toBe(true);
+  });
+});
+
+describe("routed read views hit the cloud API when self_hosted", () => {
+  const realFetch = globalThis.fetch;
+  let calls: Array<{ method: string; url: string }>;
+
+  beforeEach(() => {
+    calls = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      const method = (init?.method ?? (input instanceof Request ? input.method : "GET")) ?? "GET";
+      calls.push({ method, url });
+      const j = (body: unknown, status = 200) =>
+        new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+      if (method === "GET" && url.endsWith("/v1/stats")) {
+        return j({
+          total: 3, active: 2, expired: 1, transferring: 0, redemption: 0,
+          auto_renew_enabled: 2, expiring_30_days: 1, ssl_expiring_30_days: 0,
+        });
+      }
+      // get-by-id miss (name lookup) -> 404
+      if (method === "GET" && /\/v1\/domains\/by-name\.example$/.test(url)) {
+        return j({ error: "domain not found" }, 404);
+      }
+      if (method === "GET" && url.includes("/v1/domains")) {
+        const soon = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString();
+        return j({
+          domains: [
+            { id: "a", name: "by-name.example", registrar: "route53", is_premium: false, status: "active", expires_at: soon, ssl_expires_at: null },
+            { id: "b", name: "other.example", registrar: "gandi", is_premium: true, status: "active", expires_at: null, ssl_expires_at: soon },
+          ],
+          count: 2,
+        });
+      }
+      return j({ error: "unexpected" }, 500);
+    }) as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  test("stats -> GET /v1/stats returns DomainStats", async () => {
+    const stats = await getDomainStats({ ...CLOUD_ENV });
+    expect(stats.total).toBe(3);
+    expect(stats.active).toBe(2);
+    expect(calls.some((c) => c.url.endsWith("/v1/stats"))).toBe(true);
+  });
+
+  test("count -> derived from /v1/stats total", async () => {
+    const n = await countDomains({ ...CLOUD_ENV });
+    expect(n).toBe(3);
+  });
+
+  test("getDomainByIdentifier falls back to exact name match on 404", async () => {
+    const d = await getDomainByIdentifier("by-name.example", { ...CLOUD_ENV });
+    expect(d?.id).toBe("a");
+    // first tried by-id (404), then listed by search
+    expect(calls.some((c) => c.url.endsWith("/v1/domains/by-name.example"))).toBe(true);
+    expect(calls.some((c) => c.url.includes("search=by-name.example"))).toBe(true);
+  });
+
+  test("getByRegistrar filters client-side (server has no registrar param)", async () => {
+    const rows = await getByRegistrar("gandi", { ...CLOUD_ENV });
+    expect(rows.map((d) => d.id)).toEqual(["b"]);
+    // registrar must NOT be sent to the server (it would be ignored → wrong result)
+    expect(calls.every((c) => !c.url.includes("registrar="))).toBe(true);
+  });
+
+  test("listDomains is_premium filter is applied client-side", async () => {
+    const rows = await listDomains({ is_premium: true }, { ...CLOUD_ENV });
+    expect(rows.map((d) => d.id)).toEqual(["b"]);
+    expect(calls.every((c) => !c.url.includes("is_premium"))).toBe(true);
+  });
+
+  test("listExpiring filters active domains by expiry window client-side", async () => {
+    const rows = await listExpiring(30, { ...CLOUD_ENV });
+    expect(rows.map((d) => d.id)).toEqual(["a"]);
   });
 });
