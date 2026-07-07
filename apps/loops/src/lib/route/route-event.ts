@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { resolve } from "node:path";
 import type { EventEnvelope } from "@hasna/events";
 import type {
@@ -16,6 +17,7 @@ import type {
 import { Store } from "../store.js";
 import { ValidationError } from "../errors.js";
 import { publicLoop, publicWorkflow, publicWorkflowInvocation, publicWorkflowWorkItem } from "../format.js";
+import { listOpenMachines } from "../machines.js";
 import {
   renderEventWorkerVerifierWorkflow,
   renderTaskLifecycleWorkflow,
@@ -298,6 +300,21 @@ function resolveRouteScope(opts: TodosTaskRouteOptions, routeKey: string): strin
   return opts.maxActiveScope?.trim() || process.env.LOOPS_LOOP_NAME?.trim() || routeKey || undefined;
 }
 
+function currentRouteMachineId(): string {
+  const explicit = stringField(process.env.LOOPS_MACHINE_ID) ??
+    stringField(process.env.HASNA_MACHINE_ID) ??
+    stringField(process.env.MACHINE_ID);
+  if (explicit) return explicit;
+  try {
+    const local = listOpenMachines().find((machine) => machine.local)?.id;
+    if (local) return local;
+  } catch {
+    // OpenMachines is optional in local development; hostname still gives
+    // deterministic reservation evidence without making routing depend on it.
+  }
+  return hostname();
+}
+
 /**
  * Build the least-loaded pool context for a rendered workflow. Active only for
  * codewith with a pool of 2+ and NO per-role auth-profile pins (explicit pins
@@ -370,6 +387,7 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
     subjectRef: plan.subjectRef,
     projectKey: plan.routeProjectPath,
     projectGroup: plan.projectGroup,
+    machineId: currentRouteMachineId(),
     routeScope: plan.routeScope,
     priority: 0,
     status: "queued" as const,
