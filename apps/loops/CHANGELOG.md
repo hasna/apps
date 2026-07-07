@@ -7,6 +7,30 @@ unless noted.
 
 ## Unreleased
 
+### Fixed
+
+- **Merge-lane wedge — the task's own repository wins over a group-root
+  `--project-path`:** commit 8ab2664 made the router-level `--project-path` win
+  unconditionally in todos-task drains, so multi-repo routers that pass it as a
+  concurrency group root (a non-repository directory such as the operator's
+  home) sent every task to the group root and skipped it (`worktreeMode=required
+  but projectPath is not an existing git repository`), zeroing merge dispatch
+  fleet-wide. A drain
+  now routes each task to its own first *usable* repository path (explicit
+  `project_path`, metadata, the description's `Repository:` line, then
+  `working_dir` — first that is a real git repo, probed once per path per tick);
+  the router-level `--project-path` remains the rescue fallback for tasks whose
+  recorded path is stale or broken (8ab2664's original intent). Registry drains
+  are unchanged (the scanned source project still wins; task-controlled fields
+  cannot redirect a route).
+- **Route-disallowed tasks no longer burn the candidate window:** tasks bearing
+  `no-auto`/`blocked`/`manual`-class tags can never route, but each occupied one
+  of the bounded candidate rows every tick just to be rejected by eligibility —
+  enough marked tasks starved a drain into `considered=N created=0` forever.
+  They are now held out of the window before slicing (unless the drain's own
+  `--tags` explicitly selects that tag) and counted as `excludedDisallowedTag`
+  in drain reports, so the exclusion is auditable.
+
 ## 0.4.18 (2026-07-07)
 
 Drain reliability: kill the todos-task redispatch "black hole" family. A

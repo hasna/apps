@@ -191,6 +191,31 @@ describe("drainTodosTaskRoutes freshness close", () => {
     expect(taskState(candidateId).status).toBe("pending");
   }, TODOS_INTEGRATION_TIMEOUT_MS);
 
+  test.skipIf(!HAS_TODOS)("holds route-disallowed tasks out of the candidate window", () => {
+    // A no-auto task can never route; before the fix it occupied one of the
+    // bounded candidate rows every tick (rejected by eligibility only AFTER
+    // taking the slot), so enough marked tasks starved the window forever.
+    const markedId = addTask("Marked non-routeable earlier", "auto:route,no-auto");
+    const routableId = addTask(MERGED_PR_DESCRIPTION);
+    expect(readyCount()).toBe(2);
+
+    const result = drainTodosTaskRoutes({ ...BASE_OPTS, todosProject });
+
+    // The no-auto task is excluded BEFORE the candidate slice (counted), so the
+    // routable task gets the window; no slot burns on an eligibility skip.
+    expect(result.value.excludedDisallowedTag).toBe(1);
+    expect(result.value.candidates).toBe(1);
+    expect(result.value.considered).toBe(1);
+    expect(result.human).toContain("excludedDisallowedTag=1");
+    const ids = (result.value.results as Array<Record<string, unknown>>).map((entry) => entry.taskId);
+    expect(ids).toEqual([routableId]);
+    expect(ids).not.toContain(markedId);
+
+    // The excluded task is untouched at the source (the memory only affects the window).
+    expect(taskState(markedId).status).toBe("pending");
+    expect(taskState(markedId).tags).toContain("no-auto");
+  }, TODOS_INTEGRATION_TIMEOUT_MS);
+
   test.skipIf(!HAS_TODOS)("reports a redispatch-cap dead-letter instead of a silent created=0", () => {
     const taskId = addTask("Worker keeps finishing without closing this task");
     // First drain admits the work item (attempts=1).
