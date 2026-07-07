@@ -500,6 +500,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["logs", "monitoring", "security", "analytics", "siem"],
   },
   {
+    name: "splunk-cloud",
+    displayName: "Splunk Cloud",
+    description: "Splunk Cloud Platform search jobs, saved searches, indexes, HEC tokens, and alerts",
+    category: "Data & Analytics",
+    tags: ["logs", "siem", "search", "monitoring", "cloud"],
+  },
+  {
     name: "sportsdata",
     displayName: "SportsData",
     description: "Real-time sports data, scores, and statistics API",
