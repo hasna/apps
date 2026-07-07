@@ -22,11 +22,31 @@ bun test
 
 ## CLI
 
+Default terminal output is intentionally compact for humans and agents:
+
 ```bash
 guardrails evaluate \
   --policy examples/policies/starter.guardrails.json \
-  --input examples/requests/destructive-shell-command.json \
-  --json
+  --input examples/requests/destructive-shell-command.json
+```
+
+Example compact output:
+
+```text
+APPROVAL approval_required: Destructive shell commands require a human approval checkpoint.
+1 policy | 1 evidence item | 0 obligations | 0 redactions | 1 approval
+matched: destructive-shell-command-approval:approval_required
+details: use --verbose or guardrails inspect --input <file> for evidence, obligations, redactions, approvals, and audit metadata.
+```
+
+Use gradual disclosure when you need more:
+
+```bash
+guardrails evaluate --input examples/requests/destructive-shell-command.json --verbose
+guardrails inspect --input examples/requests/destructive-shell-command.json --limit 10
+guardrails show --input examples/requests/secret-redaction.json --limit 1
+guardrails evaluate --input examples/requests/destructive-shell-command.json --json
+guardrails validate --policy examples/policies/starter.guardrails.json --verbose
 ```
 
 Exit codes:
@@ -34,6 +54,10 @@ Exit codes:
 - `0`: allowed, warned, or redacted.
 - `1`: denied or invalid input.
 - `2`: approval required.
+
+`--json` remains the full stable machine-readable decision object. Human output
+uses `--limit` and `--cursor` only for displayed sections, so agents can page
+through details without flooding context.
 
 ## SDK
 
@@ -87,4 +111,5 @@ run commands, call MCP tools, route models, or scan repositories.
   execution.
 
 See [docs/boundaries.md](docs/boundaries.md) and
-[docs/integrations.md](docs/integrations.md).
+[docs/integrations.md](docs/integrations.md). See
+[docs/cli-output.md](docs/cli-output.md) for compact-output conventions.
