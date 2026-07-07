@@ -1,9 +1,10 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { basename, resolve } from "node:path";
+import { basename, resolve, sep } from "node:path";
 import { getDatabase, resolvePartialId } from "../../db/database.js";
 import {
   createProject,
+  deleteProject,
   listProjects,
   updateProject,
   getProjectByPath,
@@ -42,6 +43,23 @@ function parseJsonObjectOption(value: string | undefined, label: string): Record
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
   } catch {}
   throw new Error(`${label} must be a JSON object`);
+}
+
+function countProjectTasks(projectId: string): { total: number; incomplete: number } {
+  const db = getDatabase();
+  return db.query(
+    `SELECT
+       COUNT(*) AS total,
+       COALESCE(SUM(CASE WHEN status NOT IN ('completed', 'cancelled') THEN 1 ELSE 0 END), 0) AS incomplete
+     FROM tasks
+     WHERE project_id = ?`,
+  ).get(projectId) as { total: number; incomplete: number };
+}
+
+function pathIsWithinPrefix(projectPath: string, prefix: string): boolean {
+  const normalizedPath = resolve(projectPath);
+  const normalizedPrefix = resolve(prefix);
+  return normalizedPath === normalizedPrefix || normalizedPath.startsWith(`${normalizedPrefix}${sep}`);
 }
 
 function resolveTaskListFilter(input: string | undefined, projectId?: string): string | undefined {
@@ -488,10 +506,48 @@ export function registerProjectCommands(program: Command) {
     .command("projects")
     .description("List and manage projects")
     .option("--add <path>", "Register a project by path")
+    .option("--deregister <project>", "Deregister a project without deleting its tasks; refuses projects with incomplete tasks")
+    .option("--path-prefix <prefix>", "Require deregistered project path to start with this prefix")
+    .option("--dry-run", "Show what would change without modifying local state")
     .option("--name <name>", "Project name (with --add)")
     .option("--task-list-id <id>", "Custom task list ID (with --add)")
     .action(async (opts) => {
       const globalOpts = program.opts();
+
+      if (opts.deregister) {
+        const project = resolveExplicitProject(opts.deregister);
+        const counts = countProjectTasks(project.id);
+
+        if (opts.pathPrefix && !pathIsWithinPrefix(project.path, opts.pathPrefix)) {
+          handleError(new Error(`Refusing to deregister ${project.name}: path ${project.path} is not within ${opts.pathPrefix}`));
+        }
+
+        if (counts.incomplete > 0) {
+          handleError(new Error(`Refusing to deregister ${project.name}: ${counts.incomplete} incomplete task(s) remain`));
+        }
+
+        const result = {
+          action: opts.dryRun ? "would_deregister" : "deregistered",
+          project_id: project.id,
+          name: project.name,
+          path: project.path,
+          total_tasks: counts.total,
+          incomplete_tasks: counts.incomplete,
+          tasks_preserved: true,
+        };
+
+        if (!opts.dryRun) {
+          deleteProject(project.id);
+        }
+
+        if (globalOpts.json) {
+          output(result, true);
+        } else {
+          console.log(chalk.green(`${opts.dryRun ? "Would deregister" : "Project deregistered"}: ${project.name} (${project.path})`));
+          console.log(chalk.dim(`  Tasks preserved: ${counts.total}`));
+        }
+        return;
+      }
 
       if (opts.add) {
         const projectPath = resolve(opts.add);
