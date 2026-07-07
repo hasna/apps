@@ -419,6 +419,41 @@ describe('REST API server', () => {
     expect(budget['percent_used']).toBeNumber()
   })
 
+  it('POST /v1/ingest bulk-imports rows and merges by id (idempotent)', async () => {
+    const rows = {
+      sessions: [{
+        id: 'ing-sess-1', agent: 'claude', project_path: '/p/x', project_name: 'x',
+        started_at: NOW, ended_at: null, total_cost_usd: 2, total_tokens: 100, request_count: 1,
+        machine_id: 'machineZ',
+      }],
+      requests: [{
+        id: 'ing-req-1', agent: 'claude', session_id: 'ing-sess-1', model: 'claude-sonnet-4-6',
+        input_tokens: 10, output_tokens: 5, cache_read_tokens: 0, cache_create_tokens: 0,
+        cost_usd: 2, cost_basis: 'metered_api', duration_ms: 100, timestamp: NOW,
+        source_request_id: 'ing-src-1', machine_id: 'machineZ',
+      }],
+    }
+    const first = await req(handler, '/v1/ingest', 'POST', rows)
+    expect(first.status).toBe(200)
+    const fd = (first.data as Record<string, unknown>)['data'] as Record<string, unknown>
+    expect(fd['total']).toBe(2)
+    // readback via a cloud-routed GET
+    const sess = await req(handler, '/v1/sessions?machine=machineZ')
+    const list = (sess.data as Record<string, unknown>)['data'] as unknown[]
+    expect(list.some(s => (s as Record<string, unknown>)['id'] === 'ing-sess-1')).toBeTrue()
+    // re-run merges by primary key -> no duplicate rows
+    const second = await req(handler, '/v1/ingest', 'POST', rows)
+    expect(second.status).toBe(200)
+    const again = await req(handler, '/v1/sessions?machine=machineZ')
+    const list2 = (again.data as Record<string, unknown>)['data'] as unknown[]
+    expect(list2.filter(s => (s as Record<string, unknown>)['id'] === 'ing-sess-1').length).toBe(1)
+  })
+
+  it('POST /v1/ingest rejects invalid JSON body', async () => {
+    const response = await rawReq(handler, '/v1/ingest', 'POST', '{not json')
+    expect(response.status).toBe(400)
+  })
+
   it('POST /api/budgets rejects invalid numeric input', async () => {
     let response = await req(handler, '/api/budgets', 'POST', {
       period: 'daily', limit_usd: 'not-a-number',

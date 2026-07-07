@@ -12,6 +12,7 @@ import {
   listMachineRegistry,
   queryBillingSummary,
   openDatabase,
+  upsertRequest, upsertSession, upsertBillingDaily, upsertUsageSnapshot,
 } from '../db/database.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
 import { AGENTS, isAgent } from '../lib/agents.js'
@@ -486,6 +487,43 @@ export function createHandler(db: Database, options: HandlerOptions = {}) {
         await checkAndFireWebhooks(db)
       } catch { /* webhooks are optional */ }
       return ok(results)
+    }
+
+    // Bulk ingest — import a client's local rows into the cloud DB over the
+    // authed HTTPS API (self_hosted flip forbids raw RDS DSN on fleet machines,
+    // and the big time-series tables have no other write path). Merges by primary
+    // key via the same upsert helpers the ingesters use, so re-runs are
+    // idempotent (no duplicates). Body: { requests?, sessions?, projects?,
+    // budgets?, goals?, billing_daily?, model_pricing?, subscriptions?,
+    // usage_snapshots? } — each an array of that table's rows.
+    if (path === '/api/ingest' && method === 'POST') {
+      const body = await jsonBody(req)
+      if (!body) return err('invalid JSON body')
+      const rowsOf = (k: string): Record<string, unknown>[] => {
+        const v = body[k]
+        return Array.isArray(v) ? (v as Record<string, unknown>[]) : []
+      }
+      const counts: Record<string, number> = {}
+      const apply = <T>(key: string, fn: (row: T) => void): void => {
+        const rows = rowsOf(key)
+        if (!rows.length) return
+        for (const row of rows) fn(row as unknown as T)
+        counts[key] = rows.length
+      }
+      const runAll = (): void => {
+        apply<Parameters<typeof upsertRequest>[1]>('requests', r => upsertRequest(db, r))
+        apply<Parameters<typeof upsertSession>[1]>('sessions', s => upsertSession(db, s))
+        apply<Parameters<typeof upsertProject>[1]>('projects', p => upsertProject(db, p))
+        apply<Parameters<typeof upsertBudget>[1]>('budgets', b => upsertBudget(db, b))
+        apply<Parameters<typeof upsertGoal>[1]>('goals', g => upsertGoal(db, g))
+        apply<Parameters<typeof upsertBillingDaily>[1]>('billing_daily', d => upsertBillingDaily(db, d))
+        apply<Parameters<typeof upsertModelPricing>[1]>('model_pricing', m => upsertModelPricing(db, m))
+        apply<Parameters<typeof upsertSubscription>[1]>('subscriptions', s => upsertSubscription(db, s))
+        apply<Parameters<typeof upsertUsageSnapshot>[1]>('usage_snapshots', u => upsertUsageSnapshot(db, u))
+      }
+      runAll()
+      const total = Object.values(counts).reduce((a, b) => a + b, 0)
+      return ok({ ingested: counts, total })
     }
 
     if (path === '/api/usage' && method === 'GET') {
