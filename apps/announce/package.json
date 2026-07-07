@@ -60,7 +60,7 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && bun build src/index.ts src/contracts.ts src/events.ts src/types.ts src/lib/compose.ts src/lib/ledger.ts src/lib/deliver.ts src/lib/shortlinks.ts src/lib/report.ts src/lib/render/index.ts --outdir dist --target bun --root src --packages external && bun build src/cli/index.ts --outdir dist/cli --target bun --packages external && bun build src/mcp/index.ts --outdir dist/mcp --target bun --packages external && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "build": "bun run clean && bun build src/index.ts src/contracts.ts src/events.ts src/types.ts src/lib/compose.ts src/lib/campaigns.ts src/lib/ledger.ts src/lib/deliver.ts src/lib/shortlinks.ts src/lib/report.ts src/lib/render/index.ts --outdir dist --target bun --root src --packages external && bun build src/cli/index.ts --outdir dist/cli --target bun --packages external && bun build src/mcp/index.ts --outdir dist/mcp --target bun --packages external && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.ts",
@@ -86,11 +86,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/open-announce.git"
+    "url": "git+https://github.com/hasna/announce.git"
   },
-  "homepage": "https://github.com/hasna/open-announce#readme",
+  "homepage": "https://github.com/hasna/announce#readme",
   "bugs": {
-    "url": "https://github.com/hasna/open-announce/issues"
+    "url": "https://github.com/hasna/announce/issues"
   },
   "engines": {
     "bun": ">=1.0.0"

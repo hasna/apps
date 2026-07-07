@@ -56,7 +56,7 @@ import { composeAnnouncementCampaign, deliverCampaign, DeliveryLedger, MockShort
 
 const campaign = composeAnnouncementCampaign({
   release: { appId: "open-todos", package: "@hasna/todos", version: "1.2.3", gitSha: "a".repeat(7), publishedAt: new Date().toISOString(), publishPath: "ci" },
-  changelogRef: { kind: "release", id: "open-todos@1.2.3", uri: "https://github.com/hasna/open-todos/releases/tag/v1.2.3" },
+  changelogRef: { kind: "document", id: "open-todos@1.2.3", uri: "https://github.com/hasna/open-todos/releases/tag/v1.2.3" },
   audience: { audienceId: "developers", name: "Developers" },
   channels: ["email", "telegram"],
 });
