@@ -24,6 +24,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["sms", "voice"],
   },
   {
+    name: "telnyx",
+    displayName: "Telnyx",
+    description: "Messaging, phone numbers, and carrier lookup APIs",
+    category: "Communication",
+    tags: ["sms", "voice", "messaging"],
+  },
+  {
     name: "resend",
     displayName: "Resend",
     description: "Email API for developers",
@@ -36,6 +43,13 @@ export const connectors: ConnectorMeta[] = [
     description: "Video meetings and webinars",
     category: "Communication",
     tags: ["video", "meetings"],
+  },
+  {
+    name: "zoho-meeting",
+    displayName: "Zoho Meeting",
+    description: "Video meetings, webinars, recordings, and reports",
+    category: "Communication",
+    tags: ["video", "meetings", "webinar", "zoho"],
   },
   {
     name: "maropost",
@@ -498,6 +512,13 @@ export const connectors: ConnectorMeta[] = [
     description: "Business SMS platform for sending bulk text messages and two-way communication",
     category: "Communication",
     tags: ["sms", "text messaging", "bulk sms", "two-way messaging", "notifications"],
+  },
+  {
+    name: "timelinesai",
+    displayName: "TimelinesAI",
+    description: "WhatsApp team inbox API for chats, messages, and connected accounts",
+    category: "Communication",
+    tags: ["whatsapp", "messaging", "api"],
   },
   {
     name: "trengo",

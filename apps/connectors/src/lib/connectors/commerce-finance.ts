@@ -3,6 +3,13 @@ import type { ConnectorMeta } from "../registry.js";
 // Commerce & Finance
 export const connectors: ConnectorMeta[] = [
   {
+    name: "sponge",
+    displayName: "Sponge",
+    description: "Agent wallet and payments API (transfers, onramps, cards, x402/MPP)",
+    category: "Commerce & Finance",
+    tags: ["payments", "wallet", "crypto", "finance"],
+  },
+  {
     name: "stripe",
     displayName: "Stripe",
     description: "Payments, subscriptions, and billing",
@@ -15,6 +22,55 @@ export const connectors: ConnectorMeta[] = [
     description: "Company incorporation",
     category: "Commerce & Finance",
     tags: ["incorporation", "business"],
+  },
+  {
+    name: "stripecapital",
+    displayName: "Stripe Capital",
+    description: "Financing offers and repayments for platforms",
+    category: "Commerce & Finance",
+    tags: ["financing", "lending", "capital"],
+  },
+  {
+    name: "stripe-connect-platform",
+    displayName: "Stripe Connect Platform",
+    description: "Stripe Connect platform operations - connected accounts, onboarding, transfers, and fees",
+    category: "Commerce & Finance",
+    tags: ["connect", "platform", "payments", "marketplace"],
+  },
+  {
+    name: "stripe-billing-advanced",
+    displayName: "Stripe Billing Advanced",
+    description: "Advanced usage-based billing with pricing plans and billing intents",
+    category: "Commerce & Finance",
+    tags: ["billing", "usage-based", "stripe"],
+  },
+  {
+    name: "stripeidentity",
+    displayName: "Stripe Identity",
+    description: "Identity verification",
+    category: "Commerce & Finance",
+    tags: ["identity", "verification", "kyc"],
+  },
+  {
+    name: "stripetreasury",
+    displayName: "Stripe Treasury",
+    description: "Banking-as-a-service financial accounts and money movement",
+    category: "Commerce & Finance",
+    tags: ["banking", "treasury", "payments", "fintech"],
+  },
+  {
+    name: "stripeclimate",
+    displayName: "Stripe Climate",
+    description: "Carbon removal products, suppliers, and orders",
+    category: "Commerce & Finance",
+    tags: ["payments", "climate", "carbon"],
+  },
+  {
+    name: "stripe-issuing",
+    displayName: "Stripe Issuing",
+    description: "Corporate card programs and spend controls",
+    category: "Commerce & Finance",
+    tags: ["payments", "cards", "issuing"],
   },
   {
     name: "shopify",
@@ -353,6 +409,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["blockchain", "tokenization", "enterprise", "web3", "assets"],
   },
   {
+    name: "spotpay",
+    displayName: "SpotPay",
+    description: "Global stablecoin neobank",
+    category: "Commerce & Finance",
+    tags: ["fintech", "payments", "stablecoin", "banking"],
+  },
+  {
     name: "tdameritrade",
     displayName: "TD Ameritrade",
     description: "Brokerage and trading platform API for market data, orders, and account management",
@@ -388,6 +451,20 @@ export const connectors: ConnectorMeta[] = [
     tags: ["nft", "blockchain", "digital collectibles", "tokens", "web3"],
   },
   {
+    name: "transload",
+    displayName: "Transload",
+    description: "Freight dimension measurement and warehouse computer vision",
+    category: "Commerce & Finance",
+    tags: ["freight", "logistics", "warehouse", "vision"],
+  },
+  {
+    name: "truelayer",
+    displayName: "TrueLayer",
+    description: "Open banking platform",
+    category: "Commerce & Finance",
+    tags: ["banking", "fintech", "open-banking", "payments"],
+  },
+  {
     name: "whal3s",
     displayName: "Whal3s",
     description: "NFT utility and Web3 engagement platform",
@@ -395,11 +472,25 @@ export const connectors: ConnectorMeta[] = [
     tags: ["nft", "web3", "blockchain"],
   },
   {
+    name: "wave-accounting",
+    displayName: "Wave Accounting",
+    description: "Accounting, invoicing, and financial management via GraphQL API",
+    category: "Commerce & Finance",
+    tags: ["accounting", "invoicing", "finance", "graphql"],
+  },
+  {
     name: "woocommerce",
     displayName: "WooCommerce",
     description: "WordPress e-commerce plugin for orders, products, and customers",
     category: "Commerce & Finance",
     tags: ["ecommerce", "wordpress", "orders"],
+  },
+  {
+    name: "zerosettle",
+    displayName: "ZeroSettle",
+    description: "Direct IAP billing",
+    category: "Commerce & Finance",
+    tags: ["payments", "iap", "billing"],
   },
   {
     name: "xero",
@@ -414,5 +505,12 @@ export const connectors: ConnectorMeta[] = [
     description: "Online accounting and financial management",
     category: "Commerce & Finance",
     tags: ["accounting", "invoicing", "zoho"],
+  },
+  {
+    name: "zoho-inventory",
+    displayName: "Zoho Inventory",
+    description: "Inventory management for items, orders, and invoices",
+    category: "Commerce & Finance",
+    tags: ["inventory", "zoho", "orders"],
   },
 ];

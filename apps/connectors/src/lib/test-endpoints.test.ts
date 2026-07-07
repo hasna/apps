@@ -55,6 +55,14 @@ describe("TEST_ENDPOINTS", () => {
     }
   });
 
+  test("includes a stable User-Agent for Tumblr health checks", () => {
+    expect(TEST_ENDPOINTS.tumblr).toBeDefined();
+    expect(TEST_ENDPOINTS.tumblr.headers("oauth-token")).toMatchObject({
+      Authorization: "Bearer oauth-token",
+      "User-Agent": "@hasna/connect-tumblr/0.1",
+    });
+  });
+
   test("POST endpoints include a JSON body", () => {
     const postEndpoints = Object.entries(TEST_ENDPOINTS).filter(
       ([, endpoint]) => endpoint.method === "POST"
