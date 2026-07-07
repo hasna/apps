@@ -941,6 +941,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["localization", "translation", "i18n", "l10n", "multilingual"],
   },
   {
+    name: "stackexchange",
+    displayName: "Stack Exchange",
+    description: "Q&A search across Stack Overflow and Stack Exchange sites (questions, answers, users, tags)",
+    category: "Developer Tools",
+    tags: ["q&a", "stackoverflow", "questions", "answers", "community", "api"],
+  },
+  {
     name: "starton",
     displayName: "Starton",
     description: "Blockchain infrastructure API for deploying and interacting with smart contracts",
