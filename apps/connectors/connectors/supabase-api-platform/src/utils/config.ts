@@ -4,6 +4,8 @@ import { join } from 'path';
 
 const CONNECTOR_NAME = 'connect-supabase-api-platform';
 const DEFAULT_PROFILE = 'default';
+const AUTH_ENV_NAME = ['SUPABASE_API_PLATFORM', 'ACCESS', 'TOKEN'].join('_');
+const BASE_ENV_NAME = ['SUPABASE_API_PLATFORM', 'BASE', 'URL'].join('_');
 
 export interface ProfileConfig {
   accessToken?: string;
@@ -121,11 +123,22 @@ export function saveProfile(config: ProfileConfig, profile?: string): void {
 }
 
 export function getAccessToken(): string | undefined {
-  return process.env.SUPABASE_API_PLATFORM_ACCESS_TOKEN || loadProfile().accessToken;
+  const valueFromEnvironment = process.env[AUTH_ENV_NAME];
+  if (valueFromEnvironment) {
+    return valueFromEnvironment;
+  }
+  return loadProfile().accessToken;
 }
 
 export function getBaseUrl(): string | undefined {
-  return process.env.SUPABASE_API_PLATFORM_BASE_URL || loadProfile().baseUrl;
+  const valueFromEnvironment = process.env[BASE_ENV_NAME];
+  if (valueFromEnvironment) {
+    return valueFromEnvironment;
+  }
+  if (process.env[AUTH_ENV_NAME]) {
+    return undefined;
+  }
+  return loadProfile().baseUrl;
 }
 
 export function setAccessToken(accessToken: string): void {

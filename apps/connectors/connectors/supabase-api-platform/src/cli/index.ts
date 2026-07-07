@@ -28,7 +28,7 @@ const program = new Command();
 
 program
   .name(CONNECTOR_NAME)
-  .description('Supabase Management API connector CLI - projects, audit events, search, and raw API access')
+  .description('Supabase Management API connector CLI - projects and raw API access')
   .version(VERSION)
   .option('-f, --format <format>', 'Output format (json, pretty)', 'pretty')
   .option('-p, --profile <profile>', 'Use a specific profile')
@@ -71,7 +71,7 @@ function parseBody(body?: string): Record<string, unknown> {
 function getClient(): SupabaseApiPlatform {
   const accessToken = getAccessToken();
   if (!accessToken) {
-    error(`No access token configured. Run "${CONNECTOR_NAME} config set-token <token>" or set SUPABASE_API_PLATFORM_ACCESS_TOKEN`);
+    error(`No access token configured. Run "${CONNECTOR_NAME} config set-token <token>" or set the access token environment variable`);
     process.exit(1);
   }
   return new SupabaseApiPlatform({ accessToken, baseUrl: getBaseUrl() });
@@ -202,37 +202,6 @@ itemsCmd.command('get <projectRef>')
       const client = getClient();
       const result = await client.getItem(projectRef);
       print(result, getFormat(cmd.parent as Command));
-    } catch (err) {
-      error(String(err));
-      process.exit(1);
-    }
-  });
-
-const eventsCmd = program.command('events').description('Organization audit events');
-
-eventsCmd.command('list')
-  .description('List audit events (GET /organizations/{organization_slug}/audit)')
-  .option('-q, --query <query>', 'Query string; must include organization_slug')
-  .action(async (opts, cmd) => {
-    try {
-      const client = getClient();
-      const result = await client.listEvents(parseQuery(opts.query));
-      print(result, getFormat(cmd.parent as Command));
-    } catch (err) {
-      error(String(err));
-      process.exit(1);
-    }
-  });
-
-program.command('search')
-  .description('Search projects via GET /projects query filters')
-  .option('-d, --data <json>', 'Filter JSON body', '{}')
-  .option('-q, --query <query>', 'Query string or JSON object')
-  .action(async (opts) => {
-    try {
-      const client = getClient();
-      const result = await client.search(parseBody(opts.data), parseQuery(opts.query));
-      print(result, getFormat(program));
     } catch (err) {
       error(String(err));
       process.exit(1);

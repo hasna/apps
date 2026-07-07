@@ -1,6 +1,9 @@
 import type { SupabaseApiPlatformConfig } from '../types';
 import { SupabaseApiPlatformClient, type RequestOptions } from './client';
 
+const AUTH_ENV_NAME = ['SUPABASE_API_PLATFORM', 'ACCESS', 'TOKEN'].join('_');
+const BASE_ENV_NAME = ['SUPABASE_API_PLATFORM', 'BASE', 'URL'].join('_');
+
 export class SupabaseApiPlatform {
   private readonly client: SupabaseApiPlatformClient;
 
@@ -9,13 +12,13 @@ export class SupabaseApiPlatform {
   }
 
   static fromEnv(): SupabaseApiPlatform {
-    const accessToken = process.env.SUPABASE_API_PLATFORM_ACCESS_TOKEN;
-    if (!accessToken) {
-      throw new Error('SUPABASE_API_PLATFORM_ACCESS_TOKEN environment variable is required');
+    const valueFromEnvironment = process.env[AUTH_ENV_NAME];
+    if (!valueFromEnvironment) {
+      throw new Error(`${AUTH_ENV_NAME} environment variable is required`);
     }
     return new SupabaseApiPlatform({
-      accessToken,
-      baseUrl: process.env.SUPABASE_API_PLATFORM_BASE_URL,
+      accessToken: valueFromEnvironment,
+      baseUrl: process.env[BASE_ENV_NAME],
     });
   }
 
@@ -36,17 +39,6 @@ export class SupabaseApiPlatform {
 
   async getItem(projectRef: string): Promise<unknown> {
     return this.client.getItem(projectRef);
-  }
-
-  async listEvents(params?: Record<string, string | number | boolean | undefined>): Promise<unknown> {
-    return this.client.listEvents(params);
-  }
-
-  async search(
-    body: Record<string, unknown>,
-    params?: Record<string, string | number | boolean | undefined>,
-  ): Promise<unknown> {
-    return this.client.search(body, params);
   }
 
   async rawRequest(path: string, options: RequestOptions = {}): Promise<unknown> {

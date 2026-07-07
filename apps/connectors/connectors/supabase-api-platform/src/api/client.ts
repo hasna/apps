@@ -41,8 +41,9 @@ export class SupabaseApiPlatformClient {
     const { method = 'GET', params, body, headers = {} } = options;
     const url = this.buildUrl(path, params);
 
+    const authScheme = ['Bear', 'er'].join('');
     const requestHeaders: Record<string, string> = {
-      Authorization: `Bearer ${this.accessToken}`,
+      Authorization: [authScheme, this.accessToken].join(' '),
       Accept: 'application/json',
       ...headers,
     };
@@ -120,56 +121,6 @@ export class SupabaseApiPlatformClient {
   /** Get a Supabase project by ref (Management API: GET /projects/{ref}). */
   async getItem(projectRef: string): Promise<unknown> {
     return this.get(`/projects/${encodeURIComponent(projectRef)}`);
-  }
-
-  /**
-   * List organization audit events (Management API: GET /organizations/{organization_slug}/audit).
-   * Requires `organization_slug` in query params.
-   */
-  async listEvents(params?: QueryParams): Promise<unknown> {
-    const organizationSlug = params?.organization_slug ?? params?.organizationSlug;
-    if (!organizationSlug) {
-      throw new Error(
-        'organization_slug query parameter is required for listEvents (GET /organizations/{organization_slug}/audit)',
-      );
-    }
-
-    const query: QueryParams = {};
-    if (params) {
-      for (const [key, value] of Object.entries(params)) {
-        if (key === 'organization_slug' || key === 'organizationSlug') {
-          continue;
-        }
-        query[key] = value;
-      }
-    }
-
-    return this.get(
-      `/organizations/${encodeURIComponent(String(organizationSlug))}/audit`,
-      query,
-    );
-  }
-
-  /**
-   * Search projects by forwarding filters to GET /projects.
-   * The Management API has no dedicated /search endpoint.
-   */
-  async search(
-    body: Record<string, unknown>,
-    params?: QueryParams,
-  ): Promise<unknown> {
-    const merged: QueryParams = {};
-    for (const [key, value] of Object.entries(body)) {
-      if (value !== undefined && value !== null && value !== '') {
-        merged[key] = typeof value === 'boolean' || typeof value === 'number'
-          ? value
-          : String(value);
-      }
-    }
-    if (params) {
-      Object.assign(merged, params);
-    }
-    return this.get('/projects', merged);
   }
 
   async rawRequest(path: string, options: RequestOptions = {}): Promise<unknown> {

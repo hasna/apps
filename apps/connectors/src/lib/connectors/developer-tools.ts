@@ -89,7 +89,7 @@ export const connectors: ConnectorMeta[] = [
   {
     name: "supabase-api-platform",
     displayName: "Supabase Api Platform",
-    description: "Supabase Management API: projects, audit events, search, and raw API access",
+    description: "Supabase Management API: projects and raw API access",
     category: "Developer Tools",
     tags: ["api-platform", "supabase", "management", "bearer"],
   },

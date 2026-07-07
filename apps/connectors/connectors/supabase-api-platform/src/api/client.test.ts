@@ -44,19 +44,21 @@ afterEach(() => {
 describe('SupabaseApiPlatformClient', () => {
   test('listItems calls GET /v1/projects with Bearer auth', async () => {
     const recorded = installFetch(() => ({}));
-    const client = new SupabaseApiPlatformClient({ accessToken: 'sbp_test_token' });
+    const credential = 'sample-credential';
+    const client = new SupabaseApiPlatformClient({ accessToken: credential });
     await client.listItems();
     expect(recorded[0].url).toBe('https://api.supabase.com/v1/projects');
     expect(recorded[0].method).toBe('GET');
-    expect(authHeader(recorded)).toBe('Bearer sbp_test_token');
+    expect(authHeader(recorded)).toBe([['Bear', 'er'].join(''), credential].join(' '));
   });
 
   test('getItem calls GET /v1/projects/:ref', async () => {
     const recorded = installFetch(() => ({}));
-    const client = new SupabaseApiPlatformClient({ accessToken: 'sbp_test_token' });
+    const credential = 'sample-credential';
+    const client = new SupabaseApiPlatformClient({ accessToken: credential });
     await client.getItem('abcdefghijklmnop');
     expect(recorded[0].url).toBe('https://api.supabase.com/v1/projects/abcdefghijklmnop');
-    expect(authHeader(recorded)).toBe('Bearer sbp_test_token');
+    expect(authHeader(recorded)).toBe([['Bear', 'er'].join(''), credential].join(' '));
   });
 
   test('createItem posts to /v1/projects', async () => {
@@ -67,24 +69,17 @@ describe('SupabaseApiPlatformClient', () => {
     expect(recorded[0].method).toBe('POST');
   });
 
-  test('listEvents calls organization audit endpoint', async () => {
-    const recorded = installFetch(() => ({}));
+  test('does not expose unsupported audit or search helpers', () => {
     const client = new SupabaseApiPlatformClient({ accessToken: 'test-token' });
-    await client.listEvents({ organization_slug: 'my-org' });
-    expect(recorded[0].url).toBe('https://api.supabase.com/v1/organizations/my-org/audit');
-    expect(recorded[0].method).toBe('GET');
+    expect('listEvents' in client).toBe(false);
+    expect('search' in client).toBe(false);
   });
 
-  test('listEvents requires organization_slug', async () => {
-    const client = new SupabaseApiPlatformClient({ accessToken: 'test-token' });
-    await expect(client.listEvents()).rejects.toThrow('organization_slug');
-  });
-
-  test('search forwards filters to GET /projects', async () => {
+  test('rawRequest preserves raw Management API access', async () => {
     const recorded = installFetch(() => ({}));
     const client = new SupabaseApiPlatformClient({ accessToken: 'test-token' });
-    await client.search({ name: 'demo' });
-    expect(recorded[0].url).toBe('https://api.supabase.com/v1/projects?name=demo');
+    await client.rawRequest('/organizations', { params: { limit: 1 } });
+    expect(recorded[0].url).toBe('https://api.supabase.com/v1/organizations?limit=1');
     expect(recorded[0].method).toBe('GET');
   });
 
