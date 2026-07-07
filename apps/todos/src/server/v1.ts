@@ -115,6 +115,31 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
   try {
     // ── /v1/tasks ──
     if (resource === "tasks") {
+      // ── POST /v1/tasks/exists — bulk existence check for parity verification ──
+      // Body: { ids: string[] }. Returns which task ids are present (live, NOT
+      // tombstoned) in cloud vs missing, in a SINGLE SQL `payload->>'id' IN (...)`
+      // query (include_subtasks so parent tasks AND subtasks are both counted).
+      // This lets a fleet-union backfill be proven complete without thousands of
+      // rate-limited GET-by-id calls (the previous verify approach hit HTTP 429).
+      if (id === "exists" && !action) {
+        if (method !== "POST") return error(405, `method ${method} not allowed on /v1/tasks/exists`);
+        const body = await readJson<{ ids?: unknown }>(req);
+        const ids = Array.isArray(body?.ids)
+          ? Array.from(new Set(body!.ids.filter((v): v is string => typeof v === "string" && v.length > 0)))
+          : [];
+        if (ids.length === 0) return error(400, "provide a non-empty string array `ids`");
+        if (ids.length > 5000) return error(400, `too many ids (${ids.length}); max 5000 per request`);
+        const found = await store.tasks.list({ ids, include_subtasks: true, limit: ids.length } as never);
+        const presentSet = new Set(found.map((t) => t.id));
+        const present = ids.filter((i) => presentSet.has(i));
+        const missing = ids.filter((i) => !presentSet.has(i));
+        return json({
+          requested: ids.length,
+          present_count: present.length,
+          missing_count: missing.length,
+          missing,
+        });
+      }
       if (!id) {
         if (method === "GET") {
           const filter = {
@@ -265,9 +290,17 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
     }
 
     // ── /v1/stats ──
+    // `tasks` keeps its historical meaning (top-level tasks, subtasks excluded) for
+    // back-compat, while `tasks_all` is the TRUE row count including subtasks —
+    // the number to compare against a local sqlite `count(*) from tasks` when
+    // proving fleet-union parity (the top-level count structurally under-reports).
     if (resource === "stats" && method === "GET") {
-      const [tasks, projects] = await Promise.all([store.tasks.count(), store.projects.list()]);
-      return json({ tasks, projects: projects.length });
+      const [tasks, tasksAll, projects] = await Promise.all([
+        store.tasks.count(),
+        store.tasks.count({ include_subtasks: true } as never),
+        store.projects.list(),
+      ]);
+      return json({ tasks, tasks_all: tasksAll, subtasks: tasksAll - tasks, projects: projects.length });
     }
 
     // ── /v1/import (bulk snapshot ingest / backfill) ──

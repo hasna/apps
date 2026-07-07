@@ -605,6 +605,37 @@ describe("storage adapter contracts", () => {
     expect(postgres.calls.some((c) => c.sql.includes("todos:list-tasks") && /OFFSET \$\d+/.test(c.sql))).toBe(true);
   });
 
+  test("filters by id set including subtasks (POST /v1/tasks/exists parity check)", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({
+      client: postgres.client,
+      sourceMachineId: "spark01",
+    });
+    const project = await adapter.projects.create({ name: "Exists", path: "/tmp/exists" });
+    const parent = await adapter.tasks.create({ title: "parent", project_id: project.id });
+    const child = await adapter.tasks.create({ title: "child", project_id: project.id, parent_id: parent.id });
+
+    // Default list EXCLUDES subtasks — a naive parity check would miss the child.
+    const topLevel = await adapter.tasks.list({ project_id: project.id });
+    expect(topLevel.map((t) => t.id)).toEqual([parent.id]);
+
+    // The exists query: id set + include_subtasks must return BOTH rows, so the
+    // subtask is provably present in cloud (not a false "missing").
+    const found = await adapter.tasks.list({
+      ids: [parent.id, child.id, "missing-id-xyz"],
+      include_subtasks: true,
+      limit: 3,
+    });
+    const foundIds = new Set(found.map((t) => t.id));
+    expect(foundIds.has(parent.id)).toBe(true);
+    expect(foundIds.has(child.id)).toBe(true);
+    expect(foundIds.has("missing-id-xyz")).toBe(false);
+
+    // tasks_all counterpart: count with include_subtasks sees every row.
+    expect(await adapter.tasks.count({ project_id: project.id })).toBe(1);
+    expect(await adapter.tasks.count({ project_id: project.id, include_subtasks: true })).toBe(2);
+  });
+
   test("matches SQLite plan slug semantics in the direct Postgres adapter", async () => {
     const postgres = createMemoryPostgresClient();
     const adapter = createPostgresTodosStorageAdapter({
