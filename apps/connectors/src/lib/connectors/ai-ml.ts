@@ -1032,6 +1032,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["chatbot", "ai", "knowledge-base"],
   },
   {
+    name: "wildcard",
+    displayName: "Wildcard",
+    description: "AI tool discovery, endpoint search, and agents.json flow execution",
+    category: "AI & ML",
+    tags: ["ai", "agents", "api-discovery", "tools"],
+  },
+  {
     name: "wondercraft",
     displayName: "Wondercraft",
     description: "AI-powered podcast and audio content creation",
