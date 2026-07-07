@@ -2,6 +2,10 @@
 
 Solcast API connector — solar PV power forecasts, live estimated actuals, and historic data.
 
+## Project Overview
+
+Solcast API connector CLI and library for rooftop PV power forecasts, live estimated actuals, historic data, and registered site endpoints against the public Solcast REST API.
+
 ## Build & Run
 
 ```bash
@@ -13,18 +17,40 @@ bun run typecheck
 
 ## Authentication
 
-API Key authentication. Credentials via:
-- `SOLCAST_API_KEY` environment variable
-- `connect-solcast config set-key <key>`
+API Key authentication. Credentials can be set via:
+- Environment variable `SOLCAST_API_KEY`
+- Profile configuration: `connect-solcast config set-key <key>`
 
-Optional `SOLCAST_BASE_URL` overrides the default `https://api.solcast.com.au`.
+Auth is sent as the `api_key` query parameter with `format=json`.
 
-## API Notes
+## CLI Commands
 
-- Auth: `api_key` query parameter + `format=json`
-- Rooftop PV endpoints: `/data/forecast|live|historic/rooftop_pv_power`
-- Site endpoints: `/rooftop_sites/{id}/forecasts`, `/rooftop_sites/{id}/estimated_actuals`
-- Docs: https://docs.solcast.com.au
+```bash
+# Configuration
+connect-solcast config set-key <key>
+connect-solcast config set-base-url <url>
+connect-solcast config show
+connect-solcast config clear
+
+# Rooftop PV by location
+connect-solcast forecast rooftop-pv-power --lat <lat> --lon <lon> --capacity <kw>
+connect-solcast live rooftop-pv-power --lat <lat> --lon <lon> --capacity <kw>
+connect-solcast historic rooftop-pv-power --lat <lat> --lon <lon> --capacity <kw> --start <iso> --end <iso>
+
+# Registered rooftop sites
+connect-solcast site forecasts <site-id>
+connect-solcast site actuals <site-id>
+
+# Raw API access
+connect-solcast raw --path /data/forecast/rooftop_pv_power --lat <lat> --lon <lon> --capacity <kw>
+```
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `SOLCAST_API_KEY` | Solcast API key |
+| `SOLCAST_BASE_URL` | Optional API base URL override (default `https://api.solcast.com.au`) |
 
 ## Data Storage
 
@@ -32,3 +58,10 @@ Optional `SOLCAST_BASE_URL` overrides the default `https://api.solcast.com.au`.
 ~/.hasna/connectors/connect-solcast/
 └── config.json
 ```
+
+## API Notes
+
+- Base URL: `https://api.solcast.com.au`
+- Rooftop PV: `/data/forecast|live|historic/rooftop_pv_power`
+- Sites: `/rooftop_sites/{id}/forecasts`, `/rooftop_sites/{id}/estimated_actuals`
+- Docs: https://docs.solcast.com.au

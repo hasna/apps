@@ -105,6 +105,8 @@ function rooftopOptions(cmd: Command) {
     .option('--tilt <degrees>', 'Panel tilt in degrees')
     .option('--azimuth <degrees>', 'Panel azimuth in degrees')
     .option('--loss-factor <factor>', 'Bulk loss factor')
+    .option('--install-date <date>', 'Install date (YYYY-MM-DD)')
+    .option('--terrain-shading', 'Enable terrain shading model')
     .option('--start <iso>', 'Start time (historic)')
     .option('--end <iso>', 'End time (historic)');
 }
@@ -120,6 +122,8 @@ function parseRooftopOpts(opts: Record<string, string | undefined>) {
     tilt: opts.tilt ? parseNumber(opts.tilt, 'tilt') : undefined,
     azimuth: opts.azimuth ? parseNumber(opts.azimuth, 'azimuth') : undefined,
     loss_factor: opts.lossFactor ? parseNumber(opts.lossFactor, 'loss factor') : undefined,
+    install_date: opts.installDate,
+    terrain_shading: opts.terrainShading ? true : undefined,
     start: opts.start,
     end: opts.end,
   };
