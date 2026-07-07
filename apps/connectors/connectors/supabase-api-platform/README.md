@@ -16,8 +16,8 @@ bun install
 
 ## Configuration
 
-Set the access token environment variable to a Supabase personal access token.
-Optionally set the base URL environment variable when using a non-default Management API URL.
+Set `SUPABASE_API_PLATFORM_ACCESS_TOKEN` to a Supabase personal access token.
+Optionally set `SUPABASE_API_PLATFORM_BASE_URL` when using a non-default Management API URL.
 
 Or use the CLI profile/config commands:
 

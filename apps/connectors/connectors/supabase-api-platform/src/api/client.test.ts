@@ -49,7 +49,7 @@ describe('SupabaseApiPlatformClient', () => {
     await client.listItems();
     expect(recorded[0].url).toBe('https://api.supabase.com/v1/projects');
     expect(recorded[0].method).toBe('GET');
-    expect(authHeader(recorded)).toBe([['Bear', 'er'].join(''), credential].join(' '));
+    expect(authHeader(recorded)).toBe(['Bearer', credential].join(' '));
   });
 
   test('getItem calls GET /v1/projects/:ref', async () => {
@@ -58,7 +58,7 @@ describe('SupabaseApiPlatformClient', () => {
     const client = new SupabaseApiPlatformClient({ accessToken: credential });
     await client.getItem('abcdefghijklmnop');
     expect(recorded[0].url).toBe('https://api.supabase.com/v1/projects/abcdefghijklmnop');
-    expect(authHeader(recorded)).toBe([['Bear', 'er'].join(''), credential].join(' '));
+    expect(authHeader(recorded)).toBe(['Bearer', credential].join(' '));
   });
 
   test('createItem posts to /v1/projects', async () => {

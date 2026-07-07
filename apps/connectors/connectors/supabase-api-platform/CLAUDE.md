@@ -30,8 +30,8 @@ The current Supabase Management OpenAPI does not define organization audit or pr
 
 | Variable | Description |
 |----------|-------------|
-| Access token env var | Personal access token (required) |
-| Base URL env var | Override base URL (optional) |
+| `SUPABASE_API_PLATFORM_ACCESS_TOKEN` | Personal access token (required) |
+| `SUPABASE_API_PLATFORM_BASE_URL` | Override base URL (optional) |
 
 ## CLI Commands
 

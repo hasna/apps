@@ -41,7 +41,7 @@ export class SupabaseApiPlatformClient {
     const { method = 'GET', params, body, headers = {} } = options;
     const url = this.buildUrl(path, params);
 
-    const authScheme = ['Bear', 'er'].join('');
+    const authScheme = 'Bearer';
     const requestHeaders: Record<string, string> = {
       Authorization: [authScheme, this.accessToken].join(' '),
       Accept: 'application/json',
