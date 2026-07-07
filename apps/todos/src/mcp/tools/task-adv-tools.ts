@@ -8,6 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Task } from "../../types/index.js";
 import { compactJson, compactStatus, compactTask, truncateText } from "../token-utils.js";
+import { getTodosCloudClient, cloudGetStats, cloudGetTask, cloudCountTasks } from "../../cli/cloud-router.js";
 
 interface TaskAdvContext {
   shouldRegisterTool: (name: string) => boolean;
@@ -60,7 +61,29 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
       },
       async ({ task_id, project_id, task_list_id, agent_id, explain_blocked, detail, comment_limit, file_limit }) => {
         try {
+          const cloud = getTodosCloudClient();
           if (!task_id) {
+            if (cloud) {
+              // self_hosted cloud routing: queue summary from <app>.hasna.xyz/v1.
+              const baseFilter: Record<string, unknown> = {};
+              if (project_id) baseFilter.project_id = project_id;
+              if (task_list_id) baseFilter.task_list_id = task_list_id;
+              const stats = await cloudGetStats(cloud);
+              const [pending, in_progress, completed, failed] = await Promise.all([
+                cloudCountTasks(cloud, { ...baseFilter, status: "pending" } as any),
+                cloudCountTasks(cloud, { ...baseFilter, status: "in_progress" } as any),
+                cloudCountTasks(cloud, { ...baseFilter, status: "completed" } as any),
+                cloudCountTasks(cloud, { ...baseFilter, status: "failed" } as any),
+              ]);
+              const total = pending + in_progress + completed + failed;
+              const cloudStatus = {
+                source: "cloud",
+                total: (stats.tasks as number) ?? total,
+                projects: stats.projects ?? null,
+                by_status: { pending, in_progress, completed, failed },
+              };
+              return { content: [{ type: "text" as const, text: JSON.stringify(cloudStatus, null, detail === "full" ? 2 : 0) }] };
+            }
             const { getStatus } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
             const filters: Record<string, string> = {};
             if (project_id) filters.project_id = resolveId(project_id, "projects");
@@ -69,6 +92,11 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
             return { content: [{ type: "text" as const, text: detail === "full" ? JSON.stringify(status, null, 2) : compactJson(compactStatus(status)) }] };
           }
 
+          if (cloud) {
+            const task = await cloudGetTask(cloud, task_id);
+            if (!task) throw new Error(`Task not found: ${task_id}`);
+            return { content: [{ type: "text" as const, text: compactJson({ source: "cloud", task: compactTask(task, 160) }) }] };
+          }
           const resolvedId = resolveId(task_id);
           const { getTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const task = getTask(resolvedId);

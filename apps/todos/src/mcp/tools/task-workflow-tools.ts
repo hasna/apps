@@ -9,6 +9,7 @@ import { z } from "zod";
 import type { Task } from "../../types/index.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 import { compactHandoff, compactJson, compactStatus, compactTask } from "../token-utils.js";
+import { getTodosCloudClient, cloudTaskAction, cloudListTasks } from "../../cli/cloud-router.js";
 
 interface TaskWorkflowContext {
   shouldRegisterTool: (name: string) => boolean;
@@ -74,6 +75,15 @@ export function registerTaskWorkflowTools(server: McpServer, ctx: TaskWorkflowCo
       },
       async ({ task_id, reason, agent_id, version }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const body: Record<string, unknown> = {};
+            if (reason !== undefined) body.reason = reason;
+            if (agent_id !== undefined) body.agent_id = agent_id;
+            const task = await cloudTaskAction(cloud, task_id, "fail", body);
+            const rc = (task as any)?.retry_count ?? (task as any)?.task?.retry_count ?? "?";
+            return { content: [{ type: "text" as const, text: `Task ${task_id.slice(0,8)} marked failed. Retry count: ${rc}` }] };
+          }
           const { failTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const resolvedId = resolveId(task_id);
           versionFor(resolvedId, version);
@@ -133,6 +143,18 @@ export function registerTaskWorkflowTools(server: McpServer, ctx: TaskWorkflowCo
       },
       async ({ agent_id, project_id, task_list_id, plan_id, tags }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            // No dedicated cloud next endpoint: the /v1 list is priority-ordered,
+            // so the first pending task IS the next task.
+            const q: Record<string, unknown> = { status: "pending", limit: 1 };
+            if (project_id) q.project_id = project_id;
+            if (task_list_id) q.task_list_id = task_list_id;
+            if (plan_id) q.plan_id = plan_id;
+            if (tags) q.tags = tags;
+            const next = (await cloudListTasks(cloud, q as any))[0];
+            return { content: [{ type: "text" as const, text: next ? formatTask(next) : "No available task." }] };
+          }
           const { getNextTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const filters: Record<string, unknown> = {};
           if (project_id) filters.project_id = resolveId(project_id, "projects");
@@ -163,6 +185,13 @@ export function registerTaskWorkflowTools(server: McpServer, ctx: TaskWorkflowCo
       },
       async ({ agent_id, project_id, task_list_id, plan_id, tags, steal_stale, stale_minutes }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            // /v1/tasks/:id/claim claims the next available task server-side
+            // (the :id segment is a required-but-ignored placeholder).
+            const task = await cloudTaskAction(cloud, "next", "claim", { agent_id });
+            return { content: [{ type: "text" as const, text: task ? `Claimed: ${formatTask(task)}` : "No available task to claim." }] };
+          }
           const { claimNextTask, claimOrSteal } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const filters: Record<string, unknown> = {};
           if (project_id) filters.project_id = resolveId(project_id, "projects");

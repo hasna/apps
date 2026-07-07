@@ -23,6 +23,7 @@ import {
 import {
   createPlan, listPlans, getPlan, updatePlan, deletePlan,
 } from "../../db/plans.js";
+import { getTodosCloudClient, cloudTaskAction } from "../../cli/cloud-router.js";
 import {
   addComment, listComments, updateComment, deleteComment,
 } from "../../db/comments.js";
@@ -1096,6 +1097,11 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_id, version }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const task = await cloudTaskAction(cloud, task_id, "start", version !== undefined ? { version } : {});
+            return { content: [{ type: "text" as const, text: formatTask(task) }] };
+          }
           const resolvedId = resolveId(task_id);
           if (version !== undefined) versionFor(resolvedId, version);
           const current = getTask(resolvedId);
@@ -1180,6 +1186,15 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_id, confidence, completed_at, version }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const body: Record<string, unknown> = {};
+            if (confidence !== undefined) body.confidence = confidence;
+            if (completed_at !== undefined) body.completed_at = completed_at;
+            if (version !== undefined) body.version = version;
+            const task = await cloudTaskAction(cloud, task_id, "complete", body);
+            return { content: [{ type: "text" as const, text: formatTask(task) }] };
+          }
           const resolvedId = resolveId(task_id);
           if (version !== undefined) versionFor(resolvedId, version);
           const current = getTask(resolvedId);

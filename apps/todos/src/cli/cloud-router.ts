@@ -124,6 +124,25 @@ export async function cloudTaskAction(
   return unwrapTask(raw);
 }
 
+/** Queue status summary from the cloud (`GET /v1/stats`). */
+export interface CloudStats {
+  tasks: number;
+  tasks_all?: number;
+  subtasks?: number;
+  projects?: number;
+  [key: string]: unknown;
+}
+
+/**
+ * Fetch the cloud queue summary (`GET /v1/stats`). Used by the MCP `get_status`
+ * tool so a flipped machine reports the shared cloud totals rather than its
+ * local SQLite island.
+ */
+export async function cloudGetStats(client: HasnaStorageClient): Promise<CloudStats> {
+  const raw = await client.transport.get<unknown>("/stats");
+  return (raw ?? {}) as CloudStats;
+}
+
 /**
  * Count tasks matching a filter. The `/v1/tasks` list response now returns a
  * SQL-side `total` (full match count, independent of limit/offset), so we ask for
