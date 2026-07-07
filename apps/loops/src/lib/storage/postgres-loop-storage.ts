@@ -43,6 +43,7 @@ import {
   rowToWorkflowRun,
   rowToWorkflowStepRun,
   rowToWorkflowWorkItem,
+  scrubbedOrNull,
   workItemStatusForLoopRun,
   type GoalPlanNodeRow,
   type GoalRow,
@@ -69,6 +70,7 @@ import type {
   LoopStatus,
   LoopTarget,
   RunReceipt,
+  WorkflowSpec,
   WorkflowWorkItemStatus,
   WriteRunReceiptInput,
 } from "../../types.js";
@@ -478,6 +480,170 @@ export class PostgresLoopStorage implements LoopStorageContract {
     }
     const row = await this.client.get<{ count: number }>(sql, params);
     return row?.count ?? 0;
+  }
+
+  // ----------------------------------------------- id-preserving bulk import
+  // Postgres counterparts of the sqlite Store.upsertMigration* methods. These
+  // preserve the incoming id/status/timestamps exactly (no genId, no forced
+  // "active"), so a local->self-hosted backfill reproduces the source rows
+  // faithfully and idempotently (ON CONFLICT(id) DO UPDATE — re-runs never
+  // duplicate). Without --replace an existing row is left untouched and
+  // returned as-is. Run/step output is re-clamped by persistedRunOutput and
+  // errors re-scrubbed, matching the sqlite import semantics exactly.
+
+  async upsertMigrationWorkflow(
+    ...args: M<"upsertMigrationWorkflow">["args"]
+  ): Promise<M<"upsertMigrationWorkflow">["result"]> {
+    const [workflow, opts = {}] = args as [WorkflowSpec, { replace?: boolean }?];
+    const existing = await this.getWorkflow(workflow.id);
+    if (existing && !opts.replace) return existing;
+    await this.client.execute(
+      `INSERT INTO workflow_specs (id, name, description, version, status, goal_json, steps_json, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9)
+       ON CONFLICT(id) DO UPDATE SET
+         name=EXCLUDED.name,
+         description=EXCLUDED.description,
+         version=EXCLUDED.version,
+         status=EXCLUDED.status,
+         goal_json=EXCLUDED.goal_json,
+         steps_json=EXCLUDED.steps_json,
+         created_at=EXCLUDED.created_at,
+         updated_at=EXCLUDED.updated_at`,
+      [
+        workflow.id,
+        workflow.name,
+        workflow.description ?? null,
+        workflow.version,
+        workflow.status,
+        workflow.goal ? JSON.stringify(workflow.goal) : null,
+        JSON.stringify(workflow.steps),
+        workflow.createdAt,
+        workflow.updatedAt,
+      ],
+    );
+    const imported = await this.getWorkflow(workflow.id);
+    if (!imported) throw new Error(`workflow not found after migration import: ${workflow.id}`);
+    return imported;
+  }
+
+  async upsertMigrationLoop(...args: M<"upsertMigrationLoop">["args"]): Promise<M<"upsertMigrationLoop">["result"]> {
+    const [loop, opts = {}] = args as [Loop, { replace?: boolean }?];
+    const existing = await this.loadLoop(this.client, loop.id);
+    if (existing && !opts.replace) return existing;
+    await this.client.execute(
+      `INSERT INTO loops (id, name, description, status, archived_at, archived_from_status, schedule_json, target_json,
+        goal_json, machine_json, next_run_at, retry_scheduled_for, catch_up, catch_up_limit, overlap, max_attempts,
+        retry_delay_ms, lease_ms, expires_at, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+       ON CONFLICT(id) DO UPDATE SET
+         name=EXCLUDED.name,
+         description=EXCLUDED.description,
+         status=EXCLUDED.status,
+         archived_at=EXCLUDED.archived_at,
+         archived_from_status=EXCLUDED.archived_from_status,
+         schedule_json=EXCLUDED.schedule_json,
+         target_json=EXCLUDED.target_json,
+         goal_json=EXCLUDED.goal_json,
+         machine_json=EXCLUDED.machine_json,
+         next_run_at=EXCLUDED.next_run_at,
+         retry_scheduled_for=EXCLUDED.retry_scheduled_for,
+         catch_up=EXCLUDED.catch_up,
+         catch_up_limit=EXCLUDED.catch_up_limit,
+         overlap=EXCLUDED.overlap,
+         max_attempts=EXCLUDED.max_attempts,
+         retry_delay_ms=EXCLUDED.retry_delay_ms,
+         lease_ms=EXCLUDED.lease_ms,
+         expires_at=EXCLUDED.expires_at,
+         created_at=EXCLUDED.created_at,
+         updated_at=EXCLUDED.updated_at`,
+      [
+        loop.id,
+        loop.name,
+        loop.description ?? null,
+        loop.status,
+        loop.archivedAt ?? null,
+        loop.archivedFromStatus ?? null,
+        JSON.stringify(loop.schedule),
+        JSON.stringify(loop.target),
+        loop.goal ? JSON.stringify(loop.goal) : null,
+        loop.machine ? JSON.stringify(loop.machine) : null,
+        loop.nextRunAt ?? null,
+        loop.retryScheduledFor ?? null,
+        loop.catchUp,
+        loop.catchUpLimit,
+        loop.overlap,
+        loop.maxAttempts,
+        loop.retryDelayMs,
+        loop.leaseMs,
+        loop.expiresAt ?? null,
+        loop.createdAt,
+        loop.updatedAt,
+      ],
+    );
+    const imported = await this.loadLoop(this.client, loop.id);
+    if (!imported) throw new Error(`loop not found after migration import: ${loop.id}`);
+    return imported;
+  }
+
+  async upsertMigrationRun(...args: M<"upsertMigrationRun">["args"]): Promise<M<"upsertMigrationRun">["result"]> {
+    const [run, opts = {}] = args as [LoopRun, { replace?: boolean }?];
+    if (run.status === "running") throw new ValidationError(`cannot import running run ${run.id}`);
+    const existing = await this.loadRun(this.client, run.id);
+    if (existing && !opts.replace) return existing;
+    await this.client.execute(
+      `INSERT INTO loop_runs (id, loop_id, loop_name, scheduled_for, attempt, status, started_at, finished_at,
+        claimed_by, claim_token, lease_expires_at, pid, pgid, process_started_at, exit_code, duration_ms,
+        stdout, stderr, error, goal_run_id, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+       ON CONFLICT(id) DO UPDATE SET
+         loop_id=EXCLUDED.loop_id,
+         loop_name=EXCLUDED.loop_name,
+         scheduled_for=EXCLUDED.scheduled_for,
+         attempt=EXCLUDED.attempt,
+         status=EXCLUDED.status,
+         started_at=EXCLUDED.started_at,
+         finished_at=EXCLUDED.finished_at,
+         claimed_by=EXCLUDED.claimed_by,
+         claim_token=NULL,
+         lease_expires_at=EXCLUDED.lease_expires_at,
+         pid=EXCLUDED.pid,
+         pgid=EXCLUDED.pgid,
+         process_started_at=EXCLUDED.process_started_at,
+         exit_code=EXCLUDED.exit_code,
+         duration_ms=EXCLUDED.duration_ms,
+         stdout=EXCLUDED.stdout,
+         stderr=EXCLUDED.stderr,
+         error=EXCLUDED.error,
+         goal_run_id=EXCLUDED.goal_run_id,
+         created_at=EXCLUDED.created_at,
+         updated_at=EXCLUDED.updated_at`,
+      [
+        run.id,
+        run.loopId,
+        run.loopName,
+        run.scheduledFor,
+        run.attempt,
+        run.status,
+        run.startedAt ?? null,
+        run.finishedAt ?? null,
+        run.claimedBy ?? null,
+        run.leaseExpiresAt ?? null,
+        run.pid ?? null,
+        run.pgid ?? null,
+        run.processStartedAt ?? null,
+        run.exitCode ?? null,
+        run.durationMs ?? null,
+        persistedRunOutput(run.stdout),
+        persistedRunOutput(run.stderr),
+        scrubbedOrNull(run.error),
+        run.goalRunId ?? null,
+        run.createdAt,
+        run.updatedAt,
+      ],
+    );
+    const imported = await this.loadRun(this.client, run.id);
+    if (!imported) throw new Error(`run not found after migration import: ${run.id}`);
+    return imported;
   }
 
   // ------------------------------------------------------------- run lifecycle

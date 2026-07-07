@@ -14,7 +14,7 @@ import pg from "pg";
 import { PgPoolExecutor } from "./pg-executor.js";
 import { PostgresStorage } from "./postgres.js";
 import { PostgresLoopStorage, NotImplementedError } from "./postgres-loop-storage.js";
-import type { CreateLoopInput } from "../../types.js";
+import type { CreateLoopInput, Loop, LoopRun, WorkflowSpec } from "../../types.js";
 
 const DATABASE_URL = process.env.LOOPS_TEST_DATABASE_URL;
 const RUN_LIVE = typeof DATABASE_URL === "string" && DATABASE_URL.length > 0;
@@ -198,6 +198,77 @@ suite("PostgresLoopStorage (live)", () => {
     const summary = await storage.pruneHistory({ maxAgeDays: 30 });
     expect(summary.loopRuns).toBe(1);
     expect(await storage.getRun("oldrun")).toBeUndefined();
+  });
+
+  test("upsertMigrationLoop/Run/Workflow preserve id+status, are idempotent, and honor replace", async () => {
+    const loop: Loop = {
+      id: "mig-loop-1",
+      name: "migrated",
+      description: "backfill",
+      status: "stopped",
+      archivedAt: "2026-01-02T00:00:00.000Z",
+      archivedFromStatus: "paused",
+      schedule: { type: "interval", everyMs: 60_000 },
+      target: { type: "command", command: "true" },
+      catchUp: "latest",
+      catchUpLimit: 50,
+      overlap: "skip",
+      maxAttempts: 1,
+      retryDelayMs: 60_000,
+      leaseMs: 1_800_000,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-02T00:00:00.000Z",
+    };
+    const first = await storage.upsertMigrationLoop(loop);
+    expect(first.id).toBe("mig-loop-1");
+    // status preserved exactly (not forced to "active"), archived state kept.
+    expect(first.status).toBe("stopped");
+    expect(first.archivedAt).toBe("2026-01-02T00:00:00.000Z");
+    expect(first.createdAt).toBe("2026-01-01T00:00:00.000Z");
+
+    // Idempotent: re-upsert without replace keeps a single row and does not
+    // overwrite even if the incoming row differs.
+    await storage.upsertMigrationLoop({ ...loop, name: "changed" });
+    expect((await storage.getLoop("mig-loop-1"))?.name).toBe("migrated");
+    expect(await storage.countLoops(undefined, { includeArchived: true })).toBe(1);
+
+    // replace=true updates in place (still one row).
+    await storage.upsertMigrationLoop({ ...loop, name: "changed" }, { replace: true });
+    expect((await storage.getLoop("mig-loop-1"))?.name).toBe("changed");
+    expect(await storage.countLoops(undefined, { includeArchived: true })).toBe(1);
+
+    const run: LoopRun = {
+      id: "mig-run-1",
+      loopId: "mig-loop-1",
+      loopName: "migrated",
+      scheduledFor: "2026-01-01T00:00:00.000Z",
+      attempt: 1,
+      status: "succeeded",
+      finishedAt: "2026-01-01T00:00:05.000Z",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:05.000Z",
+    };
+    const importedRun = await storage.upsertMigrationRun(run);
+    expect(importedRun.id).toBe("mig-run-1");
+    expect(importedRun.status).toBe("succeeded");
+    await storage.upsertMigrationRun(run); // idempotent
+    expect(await storage.countRuns()).toBe(1);
+    // Running runs are rejected (volatile lease/process ownership).
+    await expect(storage.upsertMigrationRun({ ...run, id: "mig-run-2", status: "running" })).rejects.toThrow();
+
+    const workflow: WorkflowSpec = {
+      id: "mig-wf-1",
+      name: "wf",
+      version: 1,
+      status: "active",
+      steps: [{ id: "s1", target: { type: "command", command: "true" } }],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const importedWf = await storage.upsertMigrationWorkflow(workflow);
+    expect(importedWf.id).toBe("mig-wf-1");
+    await storage.upsertMigrationWorkflow(workflow); // idempotent
+    expect(await storage.countWorkflows()).toBe(1);
   });
 
   test("TIER-2 unported methods throw NotImplementedError (never silently no-op)", () => {

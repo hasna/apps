@@ -780,7 +780,7 @@ export function workItemStatusForLoopRun(
   return undefined;
 }
 
-function scrubbedOrNull(value: string | undefined | null): string | null {
+export function scrubbedOrNull(value: string | undefined | null): string | null {
   return value == null ? null : scrubSecrets(value);
 }
 
@@ -4283,6 +4283,20 @@ export class Store {
           .map(rowToRun)
       : [];
     return { schemaVersion: SCHEMA_USER_VERSION, workflows, loops, runs, checks: this.migrationChecks() };
+  }
+
+  /**
+   * Page through loop_runs for a streaming export. A full `exportMigrationRows`
+   * loads every run's stdout/stderr into memory at once (hundreds of MB on a
+   * busy host); a self-hosted backfill instead pulls stable ordered pages so
+   * peak memory stays bounded. Order is deterministic (created_at, id) so
+   * offset paging over an immutable snapshot never skips or repeats a row.
+   */
+  exportMigrationRunPage(opts: { limit: number; offset: number }): LoopRun[] {
+    return this.db
+      .query<RunRow, [number, number]>("SELECT * FROM loop_runs ORDER BY created_at ASC, id ASC LIMIT ? OFFSET ?")
+      .all(opts.limit, opts.offset)
+      .map(rowToRun);
   }
 
   private countTable(table: string): number {

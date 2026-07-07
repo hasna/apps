@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { timingSafeEqual } from "node:crypto";
 import { Command } from "commander";
-import type { CreateLoopInput, LoopStatus, RunStatus, WriteRunReceiptInput } from "../types.js";
+import type { CreateLoopInput, Loop, LoopRun, LoopStatus, RunStatus, WorkflowSpec, WriteRunReceiptInput } from "../types.js";
 import { LoopArchivedError, LoopNotFoundError, ValidationError } from "../lib/errors.js";
 import { publicLoop, publicRun, publicRunReceipt, redact } from "../lib/format.js";
 import { buildDeploymentStatus, deploymentStatusLine } from "../lib/mode.js";
@@ -19,6 +19,10 @@ export function openApiDocument(): Record<string, unknown> {
 const program = new Command();
 const DEFAULT_BODY_LIMIT_BYTES = 64 * 1024;
 const DEFAULT_EVIDENCE_LIMIT_BYTES = 256 * 1024;
+// Bulk id-preserving import (POST /v1/import) accepts batches of full loop/run/
+// workflow rows, so it needs a much larger body budget than single-object CRUD.
+// The client batches by byte budget well under this ceiling.
+const DEFAULT_IMPORT_LIMIT_BYTES = 32 * 1024 * 1024;
 const MIN_RUNNER_LEASE_MS = 1_000;
 
 program
@@ -97,6 +101,7 @@ export interface LoopsApiServerOptions {
   storage?: LoopStorageContract;
   bodyLimitBytes?: number;
   evidenceLimitBytes?: number;
+  importLimitBytes?: number;
   now?: () => Date;
   /**
    * API-key verifier (from `@hasna/contracts/auth`). When present, every
@@ -189,6 +194,7 @@ export function createLoopsApiServer(opts: LoopsApiServerOptions = {}) {
         storage: opts.storage,
         bodyLimitBytes: opts.bodyLimitBytes ?? DEFAULT_BODY_LIMIT_BYTES,
         evidenceLimitBytes: opts.evidenceLimitBytes ?? DEFAULT_EVIDENCE_LIMIT_BYTES,
+        importLimitBytes: opts.importLimitBytes ?? DEFAULT_IMPORT_LIMIT_BYTES,
         now: opts.now ?? (() => new Date()),
       });
     },
@@ -201,6 +207,7 @@ interface V1RequestContext {
   storage?: LoopStorageContract;
   bodyLimitBytes: number;
   evidenceLimitBytes: number;
+  importLimitBytes: number;
   now: () => Date;
 }
 
@@ -210,6 +217,7 @@ async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
   if (ctx.request.method === "GET" && segments.length === 1) return ok({ service: "loops-api", version: "v1" });
   if (ctx.request.method === "GET" && segments[1] === "status") return Response.json(apiStatus());
   try {
+    if (segments[1] === "import") return await handleImportRequest(ctx, segments.slice(2));
     if (segments[1] === "loops") return await handleLoopsRequest(ctx, segments.slice(2));
     if (segments[1] === "runs") return await handleRunsRequest(ctx, segments.slice(2));
     if (segments[1] === "receipts") return await handleReceiptsRequest(ctx, segments.slice(2));
@@ -221,6 +229,57 @@ async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
   } catch (error) {
     return errorResponse(error);
   }
+}
+
+interface ImportRequestBody {
+  workflows?: WorkflowSpec[];
+  loops?: Loop[];
+  runs?: LoopRun[];
+  replace?: boolean;
+}
+
+/**
+ * Bulk id-preserving import for a local->self-hosted backfill.
+ *
+ * Accepts batches of full `workflows` / `loops` / `runs` rows (the same public
+ * shapes that `loops export` emits) and upserts them by id via the storage
+ * `upsertMigration*` methods — preserving id, status, archived state, and
+ * timestamps exactly, and idempotent on re-run (ON CONFLICT(id) DO UPDATE, or a
+ * no-op when the row exists and `replace` is not set). Rows are applied in
+ * FK-safe order (workflows, then loops, then runs). Volatile `running` runs are
+ * skipped (they carry lease/process ownership) and reported in `skippedRunning`
+ * rather than failing the batch. This is the endpoint the migration module noted
+ * as the missing "id-preserving import" surface for self-hosted push.
+ */
+async function handleImportRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  if (segments.length !== 0 || ctx.request.method !== "POST") return fail("not_found", 404);
+  const storage = requireStorage(ctx.storage);
+  const body = await readJsonBody<ImportRequestBody>(ctx.request, ctx.importLimitBytes);
+  const replace = body.replace === true;
+  const workflows = Array.isArray(body.workflows) ? body.workflows : [];
+  const loops = Array.isArray(body.loops) ? body.loops : [];
+  const runs = Array.isArray(body.runs) ? body.runs : [];
+  const imported = { workflows: 0, loops: 0, runs: 0 };
+  let skippedRunning = 0;
+  // FK-safe order: workflow_specs, then loops (loop_runs.loop_id REFERENCES
+  // loops), then loop_runs.
+  for (const workflow of workflows) {
+    await storage.upsertMigrationWorkflow(workflow, { replace });
+    imported.workflows += 1;
+  }
+  for (const loop of loops) {
+    await storage.upsertMigrationLoop(loop, { replace });
+    imported.loops += 1;
+  }
+  for (const run of runs) {
+    if (run.status === "running") {
+      skippedRunning += 1;
+      continue;
+    }
+    await storage.upsertMigrationRun(run, { replace });
+    imported.runs += 1;
+  }
+  return ok({ imported, skippedRunning });
 }
 
 async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {

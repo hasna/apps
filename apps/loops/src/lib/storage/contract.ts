@@ -14,6 +14,9 @@ export type LoopStorageMethodName =
   | "archiveLoop"
   | "unarchiveLoop"
   | "deleteLoop"
+  | "upsertMigrationLoop"
+  | "upsertMigrationRun"
+  | "upsertMigrationWorkflow"
   | "createWorkflow"
   | "getWorkflow"
   | "listWorkflows"
@@ -88,6 +91,9 @@ export interface LoopStorageContract extends Record<LoopStorageMethodName, (...a
   archiveLoop: AsyncStoreMethod<"archiveLoop">;
   unarchiveLoop: AsyncStoreMethod<"unarchiveLoop">;
   deleteLoop: AsyncStoreMethod<"deleteLoop">;
+  upsertMigrationLoop: AsyncStoreMethod<"upsertMigrationLoop">;
+  upsertMigrationRun: AsyncStoreMethod<"upsertMigrationRun">;
+  upsertMigrationWorkflow: AsyncStoreMethod<"upsertMigrationWorkflow">;
   createWorkflow: AsyncStoreMethod<"createWorkflow">;
   getWorkflow: AsyncStoreMethod<"getWorkflow">;
   listWorkflows: AsyncStoreMethod<"listWorkflows">;

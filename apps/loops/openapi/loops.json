@@ -377,6 +377,35 @@
         }
       }
     },
+    "/v1/import": {
+      "post": {
+        "operationId": "importRows",
+        "summary": "Bulk id-preserving import (self-hosted backfill)",
+        "description": "Upsert full workflow/loop/run rows by id (idempotent; ON CONFLICT(id) DO UPDATE). Preserves id, status, archived state, and timestamps. Applied FK-safe: workflows, then loops, then runs. Volatile running runs are skipped and reported.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "import counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/receipts": {
       "get": {
         "operationId": "listRunReceipts",
@@ -977,6 +1006,72 @@
         "required": [
           "ok",
           "receipts"
+        ]
+      },
+      "ImportInput": {
+        "type": "object",
+        "description": "Batches of full rows to upsert by id. Any array may be omitted.",
+        "properties": {
+          "workflows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "loops": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "replace": {
+            "type": "boolean",
+            "description": "Update existing rows whose id matches (default false: existing rows are left unchanged)."
+          }
+        }
+      },
+      "ImportResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "imported": {
+            "type": "object",
+            "properties": {
+              "workflows": {
+                "type": "integer"
+              },
+              "loops": {
+                "type": "integer"
+              },
+              "runs": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "workflows",
+              "loops",
+              "runs"
+            ]
+          },
+          "skippedRunning": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ok",
+          "imported",
+          "skippedRunning"
         ]
       }
     },
