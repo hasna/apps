@@ -1,6 +1,6 @@
 {
   "name": "@hasna/contacts",
-  "version": "0.6.25",
+  "version": "0.6.27",
   "description": "Contact management for AI coding agents — CLI + MCP + Web",
   "type": "module",
   "main": "dist/index.js",
@@ -73,7 +73,7 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/contracts": "^0.4.2",
+    "@hasna/contracts": "^0.5.1",
     "@hasna/events": "^0.1.6",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",

@@ -12,6 +12,7 @@ import type {
   RelationshipType,
 } from "../../types/index.js";
 import { getDatabase } from "../../db/database.js";
+import { getContactsCloud } from "../../cloud/store.js";
 import {
   createContact,
   getContact,
@@ -81,9 +82,14 @@ import {
 } from "../../db/groups.js";
 
 const json = (v: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(v, null, 2) }] });
+const stripUndef = (o: Record<string, unknown>): Record<string, unknown> => {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(o)) if (v !== undefined) out[k] = v;
+  return out;
+};
 
 export const coreHandlers: Record<string, ToolHandler> = {
-  create_contact: (a) => {
+  create_contact: async (a) => {
     const input: CreateContactInput = {
       first_name: a.first_name as string | undefined,
       last_name: a.last_name as string | undefined,
@@ -107,6 +113,10 @@ export const coreHandlers: Record<string, ToolHandler> = {
       source: a.source as CreateContactInput["source"],
       sensitivity: a.sensitivity as CreateContactInput["sensitivity"],
     };
+    const cloud = getContactsCloud();
+    if (cloud) {
+      return json(await cloud.createContact(input as Record<string, unknown>));
+    }
     const contact = createContact(input);
     if (Array.isArray(a.project_ids) && (a.project_ids as string[]).length > 0) {
       setContactProjects(contact.id, a.project_ids as string[]);
@@ -115,7 +125,11 @@ export const coreHandlers: Record<string, ToolHandler> = {
     return json({ ...contact, project_ids: projectIds });
   },
 
-  get_contact: (a) => {
+  get_contact: async (a) => {
+    const cloud = getContactsCloud();
+    if (cloud) {
+      return json(await cloud.getContact(a.id as string));
+    }
     const contact = getContact(a.id as string);
     if (contact) {
       const projectIds = getContactProjectIds(contact.id);
@@ -124,7 +138,7 @@ export const coreHandlers: Record<string, ToolHandler> = {
     return json(contact);
   },
 
-  update_contact: (a) => {
+  update_contact: async (a) => {
     const { id, ...rest } = a;
     const input: UpdateContactInput = {
       first_name: rest.first_name as string | undefined,
@@ -146,6 +160,10 @@ export const coreHandlers: Record<string, ToolHandler> = {
       emails_add: rest.emails_add as UpdateContactInput["emails_add"],
       phones_add: rest.phones_add as UpdateContactInput["phones_add"],
     };
+    const cloud = getContactsCloud();
+    if (cloud) {
+      return json(await cloud.updateContact(id as string, input as Record<string, unknown>));
+    }
     const contact = updateContact(id as string, input);
     if (Array.isArray(rest.project_ids)) {
       setContactProjects(id as string, rest.project_ids as string[]);
@@ -154,12 +172,33 @@ export const coreHandlers: Record<string, ToolHandler> = {
     return json({ ...contact, project_ids: projectIds });
   },
 
-  delete_contact: (a) => {
+  delete_contact: async (a) => {
+    const cloud = getContactsCloud();
+    if (cloud) {
+      await cloud.deleteContact(a.id as string);
+      return { content: [{ type: "text", text: `Contact ${a.id} deleted successfully` }] };
+    }
     deleteContact(a.id as string);
     return { content: [{ type: "text", text: `Contact ${a.id} deleted successfully` }] };
   },
 
-  list_contacts: (a) => {
+  list_contacts: async (a) => {
+    const cloud = getContactsCloud();
+    if (cloud) {
+      const res = await cloud.listContacts(stripUndef({
+        company_id: a.company_id,
+        tag_id: a.tag_id,
+        source: a.source,
+        status: a.status,
+        project_id: a.project_id,
+        archived: a.archived,
+        limit: a.limit,
+        offset: a.offset,
+        order_by: a.order_by,
+        order_dir: a.order_dir,
+      }));
+      return json({ contacts: res.contacts, count: res.total });
+    }
     const result = listContacts({
       company_id: a.company_id as string | undefined,
       tag_id: a.tag_id as string | undefined,
@@ -180,7 +219,13 @@ export const coreHandlers: Record<string, ToolHandler> = {
     return json(result);
   },
 
-  search_contacts: (a) => json(searchContacts(a.query as string)),
+  search_contacts: async (a) => {
+    const cloud = getContactsCloud();
+    if (cloud) {
+      return json(await cloud.searchContacts(a.query as string));
+    }
+    return json(searchContacts(a.query as string));
+  },
 
   create_company: (a) => {
     const rawTagIds = a.tag_ids;
