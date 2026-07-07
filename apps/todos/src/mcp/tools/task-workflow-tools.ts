@@ -110,10 +110,19 @@ export function registerTaskWorkflowTools(server: McpServer, ctx: TaskWorkflowCo
       },
       async ({ agent_id, status, project_id, limit }) => {
         try {
-          const { listTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const focus = ctx.getAgentFocus(agent_id || "");
           const effectiveAgentId = focus ? focus.agent_id : agent_id || "";
           const effectiveProjectId = focus?.project_id || project_id;
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const q: Record<string, unknown> = { assigned_to: effectiveAgentId, limit: limit || 50 };
+            if (status) q.status = status;
+            if (effectiveProjectId) q.project_id = effectiveProjectId;
+            const tasks = await cloudListTasks(cloud, q as any);
+            if (tasks.length === 0) return { content: [{ type: "text" as const, text: "No tasks found." }] };
+            return { content: [{ type: "text" as const, text: tasks.map(formatTask).join("\n") }] };
+          }
+          const { listTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const tasks = listTasks({
             assigned_to: effectiveAgentId,
             status,

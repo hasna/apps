@@ -23,7 +23,7 @@ import {
 import {
   createPlan, listPlans, getPlan, updatePlan, deletePlan,
 } from "../../db/plans.js";
-import { getTodosCloudClient, cloudTaskAction } from "../../cli/cloud-router.js";
+import { getTodosCloudClient, cloudTaskAction, cloudUpdateTask } from "../../cli/cloud-router.js";
 import {
   addComment, listComments, updateComment, deleteComment,
 } from "../../db/comments.js";
@@ -1218,6 +1218,13 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_id, version }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const patch: Record<string, unknown> = { status: "cancelled" };
+            if (version !== undefined) patch.version = version;
+            const task = await cloudUpdateTask(cloud, task_id, patch);
+            return { content: [{ type: "text" as const, text: formatTask(task) }] };
+          }
           const resolvedId = resolveId(task_id);
           const task = version === undefined
             ? setTaskStatus(resolvedId, "cancelled")
@@ -1241,6 +1248,13 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_id, new_assignee, version }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const patch: Record<string, unknown> = { assigned_to: new_assignee };
+            if (version !== undefined) patch.version = version;
+            const task = await cloudUpdateTask(cloud, task_id, patch);
+            return { content: [{ type: "text" as const, text: formatTask(task) }] };
+          }
           const resolvedId = resolveId(task_id);
           const resolvedAssignee = resolveId(new_assignee, "agents");
           const task = updateWithOptionalVersion(resolvedId, { assigned_to: resolvedAssignee }, version);
