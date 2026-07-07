@@ -45,6 +45,10 @@ export function getAuthUrl(): string {
   return `${SPOTIFY_AUTH_URL}?${params.toString()}`;
 }
 
+export function validateOAuthState(state: string | null): boolean {
+  return !!pendingAuthState && state === pendingAuthState;
+}
+
 function getBasicAuthHeader(): string {
   const clientId = getClientId();
   const clientSecret = getClientSecret();
@@ -157,7 +161,7 @@ export function startCallbackServer(): Promise<AuthResult> {
       const error = url.searchParams.get('error');
       const state = url.searchParams.get('state');
 
-      if (!pendingAuthState || state !== pendingAuthState) {
+      if (!validateOAuthState(state)) {
         const message = 'Invalid OAuth state';
         res.writeHead(400, { 'Content-Type': 'text/html' });
         res.end(`<html><body><h1>Authentication Failed</h1><p>${message}</p></body></html>`);
