@@ -72,10 +72,6 @@ import type { AIProvider } from "../lib/ai-client.js";
 import {
   getProject,
 } from "../db/projects.js";
-import {
-  getPersona,
-  listPersonas,
-} from "../db/personas.js";
 // Client storage resolver / facade: routes the user-facing persona CRUD commands
 // to the cloud /v1 API when HASNA_TESTERS_STORAGE_MODE=self_hosted + API_URL +
 // API_KEY are set, otherwise to the on-box SQLite store. See ../cloud/store.ts.
@@ -8673,20 +8669,21 @@ personaCmd
   .description("Attach a persona to a scenario")
   .action(async (personaId: string, scenarioId: string) => {
     try {
-      const persona = getPersona(personaId);
+      const persona = await storeGetPersona(personaId);
       if (!persona) {
         logError(chalk.red(`Persona not found: ${personaId}`));
         process.exit(1);
       }
       const scenario =
-        getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
+        (await storeGetScenario(scenarioId)) ??
+        (await storeGetScenarioByShortId(scenarioId));
       if (!scenario) {
         logError(chalk.red(`Scenario not found: ${scenarioId}`));
         process.exit(1);
       }
-      updateScenario(
+      await storeUpdateScenario(
         scenario.id,
-        { personaId: persona.id } as Parameters<typeof updateScenario>[1],
+        { personaId: persona.id } as Parameters<typeof storeUpdateScenario>[1],
         scenario.version,
       );
       log(
@@ -8775,12 +8772,12 @@ personaCmd
   .option("--json", "Output as JSON", false)
   .action(async (persona1: string, persona2: string, opts) => {
     try {
-      const p1 = getPersona(persona1);
+      const p1 = await storeGetPersona(persona1);
       if (!p1) {
         logError(chalk.red(`Persona not found: ${persona1}`));
         process.exit(1);
       }
-      const p2 = getPersona(persona2);
+      const p2 = await storeGetPersona(persona2);
       if (!p2) {
         logError(chalk.red(`Persona not found: ${persona2}`));
         process.exit(1);
@@ -9285,13 +9282,15 @@ program
       // Resolve personas
       let personas;
       if (opts.personas === "all") {
-        personas = listPersonas({ globalOnly: true, enabled: true });
+        personas = await storeListPersonas({ globalOnly: true, enabled: true });
       } else {
         const ids = opts.personas
           .split(",")
           .map((s: string) => s.trim())
           .filter(Boolean);
-        personas = ids.map((id: string) => getPersona(id)).filter(Boolean);
+        personas = (
+          await Promise.all(ids.map((id: string) => storeGetPersona(id)))
+        ).filter(Boolean);
       }
       if (personas.length === 0) {
         logError(chalk.red("No personas found. Run: testers persona seed"));
