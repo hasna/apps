@@ -1537,7 +1537,7 @@ export function bulkIngest(db: Database, body: Record<string, unknown>): { inges
     const deduped = new Map<string, unknown[]>()
     for (const row of raw as Record<string, unknown>[]) {
       const values = spec.map(row, now)
-      const key = pkIdx.map(i => String(values[i])).join(' ')
+      const key = pkIdx.map(i => String(values[i])).join('\u0000')
       deduped.set(key, values)
     }
     const rows = [...deduped.values()]

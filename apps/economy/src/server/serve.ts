@@ -66,6 +66,8 @@ const CORS = {
   'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Economy-Token',
 }
+const APP = 'economy'
+const ECONOMY_WRITE_SCOPE = `${APP}:write`
 const AGENT_ERROR = `agent must be one of: ${AGENTS.join(', ')}`
 const SYNC_SOURCES = ['all', ...AGENTS] as const
 const DEFAULT_DASHBOARD_DIR = new URL('../../dashboard/dist', import.meta.url).pathname
@@ -124,6 +126,11 @@ function optionalString(value: unknown): string | null {
 function optionalAgent(value: unknown): Agent | null | undefined {
   if (value == null || value === '') return null
   return typeof value === 'string' && (AGENTS as readonly string[]).includes(value) ? value as Agent : undefined
+}
+
+function requiredScopesForRequest(method: string, path: string): readonly string[] | undefined {
+  if (method === 'POST' && path === '/api/ingest') return [ECONOMY_WRITE_SCOPE]
+  return undefined
 }
 
 function stringArray(value: unknown): string[] {
@@ -221,7 +228,11 @@ export function createHandler(db: Database, options: HandlerOptions = {}) {
     // Internet-facing path: the @hasna/contracts API-key verifier. Local/dev
     // path: the legacy shared-token check. Foundation probes above are open.
     if (options.authenticator) {
-      const decision = await options.authenticator.authenticate(req.headers, { method, path: rawPath })
+      const decision = await options.authenticator.authenticate(req.headers, {
+        method,
+        path: rawPath,
+        requiredScopes: requiredScopesForRequest(method, path),
+      })
       if (!decision.ok) return json({ error: decision.reason ?? 'unauthorized', message: decision.message }, decision.status || 401)
     } else if (!isAuthorizedRequest(req, path)) {
       return err('Unauthorized', 401)
@@ -606,8 +617,6 @@ export function createHandler(db: Database, options: HandlerOptions = {}) {
     return err('Not found', 404)
   }
 }
-
-const APP = 'economy'
 
 function isLocalHost(host: string): boolean {
   return ['127.0.0.1', 'localhost', '::1'].includes(host)

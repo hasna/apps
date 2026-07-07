@@ -206,6 +206,27 @@ describe('REST API server', () => {
     }
   })
 
+  it('POST /v1/ingest requires an economy write scope when API-key auth is active', async () => {
+    const contexts: Array<{ requiredScopes?: readonly string[] }> = []
+    const scopedHandler = createHandler(db, {
+      authenticator: {
+        authenticate: async (_headers, context) => {
+          contexts.push({ requiredScopes: context?.requiredScopes })
+          return {
+            ok: false,
+            status: 403,
+            reason: 'insufficient_scope',
+            message: 'Missing required scope',
+          }
+        },
+      },
+    })
+
+    const response = await req(scopedHandler, '/v1/ingest', 'POST', { sessions: [] })
+    expect(response.status).toBe(403)
+    expect(contexts[0]?.requiredScopes).toEqual(['economy:write'])
+  })
+
   it('POST /api/billing/sync validates days', async () => {
     const { status, data } = await req(handler, '/api/billing/sync', 'POST', { days: 0 })
     expect(status).toBe(400)
@@ -467,6 +488,30 @@ describe('REST API server', () => {
     const row = list.filter(s => s['id'] === 'ing-upd-1')
     expect(row.length).toBe(1)
     expect(row[0]!['total_cost_usd']).toBe(42)
+  })
+
+  it('POST /v1/ingest handles duplicate primary keys inside one payload (last row wins)', async () => {
+    const res = await req(handler, '/v1/ingest', 'POST', {
+      sessions: [
+        {
+          id: 'ing-dupe-1', agent: 'claude', project_path: '/p/d', project_name: 'd',
+          started_at: NOW, ended_at: null, total_cost_usd: 1, total_tokens: 10, request_count: 1,
+          machine_id: 'machineD',
+        },
+        {
+          id: 'ing-dupe-1', agent: 'claude', project_path: '/p/d', project_name: 'd',
+          started_at: NOW, ended_at: null, total_cost_usd: 9, total_tokens: 90, request_count: 9,
+          machine_id: 'machineD',
+        },
+      ],
+    })
+    expect(res.status).toBe(200)
+    const data = (res.data as Record<string, unknown>)['data'] as Record<string, unknown>
+    expect(data['total']).toBe(1)
+    const sess = await req(handler, '/v1/sessions?machine=machineD')
+    const list = (sess.data as Record<string, unknown>)['data'] as Record<string, unknown>[]
+    expect(list.length).toBe(1)
+    expect(list[0]!['total_cost_usd']).toBe(9)
   })
 
   it('POST /v1/ingest bulk-imports many rows in a single request (chunked upsert)', async () => {
