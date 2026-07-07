@@ -55,7 +55,8 @@ type WorkflowUpsertResult = {
     manifestPath?: string;
   };
   action: "created" | "updated" | "reused" | "rejected";
-  preflight?: { ok: boolean; checks: unknown[]; error?: string };
+  preflight?: AutomationPreflightResult;
+  evidence?: AutomationEvidenceSummary;
 };
 ```
 
@@ -98,6 +99,227 @@ loops workflows upsert-one-shot ./workflow.json \
 `--mode preflight` must report the exact provider/account/worktree check that
 would fail. `--mode commit` must return the durable refs required for later
 inspection and replay.
+
+## Planned Automation Preflight API
+
+Automation-generated workflows need an aggregate preflight result that is richer
+than the current `PreflightResult` command/account tuple, but still compact
+enough to return from CLI, SDK, MCP, route drains, and run manifests. The API is
+a reporting contract first; implementation should reuse existing validators in
+`workflow-spec.ts`, provider capability metadata in `agent-adapter.ts`, account
+resolution in `accounts.ts`, machine/worktree checks in `executor.ts`, and
+redaction helpers in `redact.ts`.
+
+Proposed SDK shape:
+
+```ts
+type AutomationPreflightMode = "dry-run" | "preflight" | "commit";
+
+type AutomationPreflightDomain =
+  | "spec"
+  | "provider"
+  | "account"
+  | "command"
+  | "secret"
+  | "connector"
+  | "permissions"
+  | "sandbox"
+  | "worktree"
+  | "machine"
+  | "allowlist"
+  | "redaction"
+  | "evidence";
+
+type AutomationPreflightStatus = "pass" | "warn" | "fail" | "skipped";
+type AutomationPreflightSeverity = "info" | "warning" | "error" | "fatal";
+
+type AutomationPreflightClassification =
+  | "validation"
+  | "provider"
+  | "account"
+  | "auth"
+  | "command"
+  | "secret"
+  | "connector"
+  | "policy"
+  | "permission"
+  | "sandbox"
+  | "worktree"
+  | "machine"
+  | "redaction"
+  | "unknown";
+
+type AutomationPreflightCheck = {
+  id: string;
+  domain: AutomationPreflightDomain;
+  status: AutomationPreflightStatus;
+  severity: AutomationPreflightSeverity;
+  classification: AutomationPreflightClassification;
+  stepId?: string;
+  targetType?: "command" | "agent" | "workflow";
+  provider?: AgentProvider;
+  account?: { profile: string; tool?: string };
+  command?: string;
+  subject?: { kind: string; ref?: string };
+  summary: string;
+  remediation?: string;
+  evidenceRefs?: Array<{ kind: "manifest" | "run" | "workflow" | "loop" | "workItem" | "external"; ref: string }>;
+  redacted: true;
+};
+
+type AutomationPreflightResult = {
+  ok: boolean;
+  mode: AutomationPreflightMode;
+  executionMode: "standard" | "strict";
+  idempotencyKey: string;
+  specHash: string;
+  policyHash?: string;
+  generatedAt: string;
+  checks: AutomationPreflightCheck[];
+  summary: {
+    pass: number;
+    warn: number;
+    fail: number;
+    skipped: number;
+    highestSeverity: AutomationPreflightSeverity;
+    firstFailure?: Pick<AutomationPreflightCheck, "id" | "domain" | "classification" | "summary" | "remediation">;
+  };
+};
+```
+
+Required check domains:
+
+- `spec`: parse workflow JSON, canonicalize prompt file references, validate
+  command/action binding, enforce no embedded secrets in target env/prompt
+  metadata, and return the stable `specHash`.
+- `provider`: verify provider name, executable binding, provider capability
+  support, prompt delivery mode, and bounded subprocess preflight for binaries
+  only.
+- `account`: resolve Codewith `authProfile` or OpenAccounts `{profile, tool}`
+  refs, record profile/tool names only, and fail when the profile is missing or
+  the profile directory cannot be resolved.
+- `command`: validate command targets with `shell=false` executable rules,
+  `preflightAnyOf`, and planned allow-command enforcement before execution.
+- `secret`: check required secret refs by ref/name and owner response only;
+  never place secret values, exported env, or raw secret-manager payloads in the
+  result.
+- `connector`: ask the owning action/connector system whether the connector
+  credential handle exists, is scoped for the source action, and is usable; do
+  not make OpenLoops the connector credential store.
+- `permissions`: reject unsafe `permissionMode="bypass"`, unsafe
+  `configIsolation="none"`, mutable command targets without an explicit policy,
+  or missing approval evidence when strict automation requires it.
+- `sandbox`: verify provider-native sandbox support and reject strict mode when
+  requested sandboxing cannot be proven.
+- `worktree`: require `worktree.mode="required"` for repo mutation in strict
+  mode and verify worktree metadata contains repo root, path, branch, original
+  cwd, and target cwd without preparing the worktree during pure preflight.
+- `machine`: check requested machine route, local/remote confidence, and remote
+  bootstrap availability; fail a strict request when the route does not match
+  the workflow scope.
+- `allowlist`: in standard mode, preserve current `metadata_only` behavior as a
+  warning; in strict mode, fail unless command/tool allowlist enforcement can be
+  proven for every step that requests it.
+- `redaction`: prove the result was built through the redaction policy that will
+  be used for persistence and manifests.
+- `evidence`: include durable refs when available and enough context for the
+  caller to inspect the follow-on run without querying SQLite directly.
+
+Preflight must be side-effect bounded:
+
+- `dry-run` performs schema validation, canonicalization, policy normalization,
+  and hashing only. It must not create a database file in an empty data dir and
+  must not spawn account/provider probes.
+- `preflight` may run bounded local or remote readiness probes such as
+  `command -v`, `accounts env <profile> --tool <tool>`, provider profile-list
+  checks, and connector readiness calls owned by the automation/action system.
+  It must not run target commands, dispatch agents, create workflows or loops,
+  write task comments, prepare worktrees, or mutate queue state.
+- `commit` is idempotent. In strict mode it must run or reuse a fresh compatible
+  preflight result before storing or dispatching. In standard mode it may attach
+  warnings without changing current execution defaults.
+
+Strict-mode failures are fail-closed for missing account profiles, missing
+connector auth, missing required secret refs, unsupported sandbox posture,
+unsupported provider allowlist enforcement, bypass permissions, non-required
+worktrees for repo mutation, missing prompt files, and machine route mismatch.
+
+## Planned Compact Evidence API
+
+Every public surface should expose the same compact evidence shape so callers
+can hand results across `@hasna/actions`, `@hasna/automations`, OpenLoops route
+drains, MCP tools, and CLI scripts without scraping SQLite or leaking secrets.
+
+```ts
+type AutomationEvidenceRef = {
+  workflowId?: string;
+  loopId?: string;
+  invocationId?: string;
+  workItemId?: string;
+  runId?: string;
+  manifestPath?: string;
+  external?: Array<{ system: "actions" | "automations" | "connector" | string; ref: string }>;
+};
+
+type AutomationEvidenceSummary = {
+  version: 1;
+  kind: "workflow-upsert" | "preflight" | "route-admission" | "workflow-run";
+  generatedAt: string;
+  source: { kind: string; id: string; dedupeKey?: string };
+  subject: { kind: string; id?: string; path?: string; url?: string };
+  refs: AutomationEvidenceRef;
+  specHash: string;
+  policyHash?: string;
+  executionMode: "standard" | "strict";
+  dispatch: "schedule" | "run-now" | "none";
+  status: "accepted" | "reused" | "rejected" | "running" | "succeeded" | "failed" | "dead_letter";
+  preflight?: {
+    ok: boolean;
+    counts: AutomationPreflightResult["summary"];
+    failedCheckIds: string[];
+    warningCheckIds: string[];
+  };
+  redactionProfile: "default" | "strict";
+  redacted: true;
+};
+```
+
+Persistence and output rules:
+
+- CLI `--json`, SDK results, MCP tool results, route dry-run output, route work
+  item evidence, and workflow run manifests all return `AutomationEvidenceSummary`
+  plus optional full `AutomationPreflightResult` when the caller explicitly asks
+  for preflight detail.
+- Evidence contains names, refs, hashes, status, classifications, counts, and
+  remediation hints only. It never contains secret values, full env maps, raw
+  connector/provider payloads, private prompt text, stdout/stderr dumps, or
+  unsanitized errors.
+- `manifestPath` is the filesystem ref for durable evidence, but the compact
+  summary must be enough for a normal caller to find the workflow, loop, run,
+  work item, and owning external action/automation refs through public APIs.
+- Failed preflight evidence should be persistable when a commit attempt is
+  rejected, but pure `dry-run`/`preflight` calls should return it directly
+  without creating OpenLoops database rows.
+- Redaction happens before persistence and before API return. Tests should
+  exercise both flat secret-looking text and nested JSON evidence values.
+
+Implementation should expose the contract incrementally:
+
+1. Add shared types and a pure result builder that converts validator outcomes
+   into `AutomationPreflightCheck` entries.
+2. Wrap existing `preflightTarget`/`preflightWorkflow` with aggregate result
+   builders while keeping the current throwing APIs for compatibility.
+3. Add `loops workflows upsert-one-shot --mode dry-run|preflight|commit --json`
+   and SDK equivalents that return `WorkflowUpsertResult`.
+4. Thread compact evidence through route dry-runs, admitted work items, workflow
+   run manifests, MCP workflow validation, and the HTTP API.
+5. Add strict-mode enforcement only after provider allowlist and secret/connector
+   readiness adapters can prove enforcement without leaking payloads.
+
+Expected validation for that future implementation: focused unit tests for
+workflow parsing, executor preflight, route dry-run output, run manifests,
+redaction, SDK/CLI/MCP/API JSON shape, then `bun run typecheck`, `bun test`,
+`bun run build`, and `bun run test:boundary`.
 
 ## Planned Strict Automation Execution
 
