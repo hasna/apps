@@ -279,6 +279,15 @@ describe("installer", () => {
       expect(apiKey).toBeDefined();
     });
 
+    test("parses TomTom API key env var from connector docs", () => {
+      const docs = getConnectorDocs("tomtom");
+      expect(docs).not.toBeNull();
+
+      const apiKey = docs!.envVars.find((v) => v.variable === "TOMTOM_API_KEY");
+      expect(apiKey).toBeDefined();
+      expect(apiKey!.description).toContain("TomTom API key");
+    });
+
     test("parses CLI commands section", () => {
       const docs = getConnectorDocs("stripe");
       expect(docs!.cliCommands).toContain("connect-stripe");

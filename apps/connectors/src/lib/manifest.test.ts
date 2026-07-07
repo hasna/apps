@@ -38,4 +38,13 @@ describe("connector capability manifest", () => {
     expect(manifest.connectorCount).toBe(1);
     expect(manifest.connectors[0]?.id).toBe("github");
   });
+
+  test("includes twitter slug aliases on x connector capability", async () => {
+    const capability = await getConnectorCapability("twitter");
+
+    expect(capability?.id).toBe("x");
+    expect(capability?.name).toBe("x");
+    expect(capability?.aliases).toEqual(["x", "connect-x", "twitter", "x-twitter"]);
+    expect(capability?.runtime.configDirName).toBe("x");
+  });
 });
