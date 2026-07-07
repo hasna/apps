@@ -44,9 +44,10 @@
     "CONTRIBUTING.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/cli/index.ts src/daemon/index.ts src/index.ts src/types.ts src/lib/store.ts src/lib/paths.ts src/lib/runtime.ts --outdir dist --target bun --packages external && chmod +x dist/cli/index.js dist/daemon/index.js && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
-    "typecheck": "tsc --noEmit",
-    "test": "bun test",
+    "prepare:local-file-deps": "bun scripts/prepare-local-file-deps.mjs",
+    "build": "bun run prepare:local-file-deps && rm -rf dist && bun build src/cli/index.ts src/daemon/index.ts src/index.ts src/types.ts src/lib/store.ts src/lib/paths.ts src/lib/runtime.ts --outdir dist --target bun --packages external && chmod +x dist/cli/index.js dist/daemon/index.js && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "typecheck": "bun run prepare:local-file-deps && tsc --noEmit",
+    "test": "bun run prepare:local-file-deps && bun test",
     "prepublishOnly": "bun run test && bun run build"
   },
   "keywords": [

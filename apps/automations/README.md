@@ -53,6 +53,28 @@ The default data root is `~/.hasna/automations`. Override it with
 `automations-daemon run` stays alive and maintains the local daemon lease until
 it receives `SIGINT` or `SIGTERM`. Use `--once` for smoke checks and tests.
 
+## Local Validation
+
+This repository uses local file development dependencies for adjacent Hasna
+packages:
+
+- `@hasna/actions` from `../open-actions`
+- `@hasna/cloud` from `../open-cloud`
+
+Fresh OpenLoops worktrees may not have built `@hasna/actions` `dist` artifacts,
+and Bun can materialize local `file:` dependencies with broken self-referential
+file links. Run the normal validation commands from this repository; they first
+prepare deterministic copies under this worktree's `node_modules`, rebuild the
+local `@hasna/actions` copy when needed, and do not write to sibling
+repositories:
+
+```sh
+bun install --frozen-lockfile
+bun run typecheck
+bun run build
+bun test
+```
+
 ## Boundaries
 
 - `open-actions` defines portable action manifests and invocation contracts.
