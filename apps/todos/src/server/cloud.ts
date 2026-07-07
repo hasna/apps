@@ -134,6 +134,26 @@ export async function ensureCloudSchema(): Promise<void> {
   return schemaEnsured;
 }
 
+/**
+ * Repair legacy double-encoded payloads. Earlier writes bound `JSON.stringify(value)`
+ * to a `$::jsonb` param, which Bun.SQL stores as a jsonb STRING scalar rather than
+ * an object — so every server-side `payload->>'field'` filter (and jsonb_set for the
+ * short-id counter) silently failed. This converts those rows back to real jsonb
+ * objects. Idempotent: only touches rows where `jsonb_typeof(payload) = 'string'`,
+ * so it is safe to run repeatedly and a no-op once migrated. Returns the row count
+ * that was normalized.
+ */
+export async function normalizeCloudPayloads(): Promise<number> {
+  const client = getClient();
+  const res = await client.query<{ id: string }>(
+    `UPDATE todos_sync_records
+       SET payload = (payload #>> '{}')::jsonb
+     WHERE jsonb_typeof(payload) = 'string'
+     RETURNING object_id AS id`,
+  );
+  return res.rows.length;
+}
+
 /** Cheap readiness probe: round-trips a trivial query to RDS. */
 export async function pingCloud(): Promise<boolean> {
   const client = getClient();

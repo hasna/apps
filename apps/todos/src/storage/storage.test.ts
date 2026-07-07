@@ -1121,65 +1121,79 @@ function createMemoryPostgresClient(): {
     async query<T = Record<string, unknown>>(sql: string, values: readonly unknown[] = []) {
       calls.push({ sql, values });
 
-      // SQL-side task list/count (buildTaskFilterSql). Decode the jsonb predicates
-      // positionally in the SAME order the adapter emits them, then filter/sort/
-      // paginate the in-memory rows. KEEP IN SYNC with buildTaskFilterSql.
+      // SQL-side task list/count (buildTaskFilterSql). Resolve each predicate's
+      // bound value(s) by the explicit `$N` placeholder index found in the SQL,
+      // then filter/sort/paginate the in-memory rows. KEEP IN SYNC with
+      // buildTaskFilterSql (jsonb operators + scalar IN expansion).
       if (sql.includes("todos:list-tasks") || sql.includes("todos:count-tasks")) {
         const service = values[0];
-        let i = 2;
-        const nextVal = () => values[i++];
+        // marker → the exact SQL text immediately preceding a `$N` placeholder.
+        const grabScalar = (marker: string): unknown => {
+          const idx = sql.indexOf(marker);
+          if (idx < 0) return undefined;
+          const m = sql.slice(idx + marker.length).match(/^\$(\d+)/);
+          return m ? values[Number(m[1]) - 1] : undefined;
+        };
+        // colMarker → `<col> IN (`; returns the array of bound values in the list.
+        const grabIn = (colMarker: string): unknown[] | undefined => {
+          const idx = sql.indexOf(colMarker);
+          if (idx < 0) return undefined;
+          const rest = sql.slice(idx + colMarker.length);
+          const group = rest.slice(0, rest.indexOf(")"));
+          return [...group.matchAll(/\$(\d+)/g)].map((m) => values[Number(m[1]) - 1]);
+        };
         const preds: Array<(t: Record<string, unknown>) => boolean> = [];
-        if (sql.includes("payload->>'id' = ANY(")) {
-          const ids = nextVal() as string[];
-          preds.push((t) => ids.includes(String(t["id"])));
+        if (sql.includes("payload->>'id' IN (")) {
+          const ids = grabIn("payload->>'id' IN (")!;
+          preds.push((t) => ids.includes(t["id"]));
         }
         if (sql.includes("payload->>'project_id' = $")) {
-          const v = nextVal();
+          const v = grabScalar("payload->>'project_id' = ");
           preds.push((t) => (t["project_id"] ?? null) === v);
         }
         if (sql.includes("payload->>'parent_id' IS NOT DISTINCT FROM")) {
-          const v = (nextVal() ?? null) as unknown;
+          const v = grabScalar("payload->>'parent_id' IS NOT DISTINCT FROM ") ?? null;
           preds.push((t) => (t["parent_id"] ?? null) === v);
         }
         if (sql.includes("payload->>'plan_id' = $")) {
-          const v = nextVal();
+          const v = grabScalar("payload->>'plan_id' = ");
           preds.push((t) => (t["plan_id"] ?? null) === v);
         }
         if (sql.includes("payload->>'task_list_id' = $")) {
-          const v = nextVal();
+          const v = grabScalar("payload->>'task_list_id' = ");
           preds.push((t) => (t["task_list_id"] ?? null) === v);
         }
-        if (sql.includes("payload->>'status' = ANY(")) {
-          const arr = nextVal() as string[];
-          preds.push((t) => arr.includes(String(t["status"])));
+        if (sql.includes("payload->>'status' IN (")) {
+          const arr = grabIn("payload->>'status' IN (")!;
+          preds.push((t) => arr.includes(t["status"]));
         }
-        if (sql.includes("payload->>'priority' = ANY(")) {
-          const arr = nextVal() as string[];
-          preds.push((t) => arr.includes(String(t["priority"])));
+        if (sql.includes("payload->>'priority' IN (")) {
+          const arr = grabIn("payload->>'priority' IN (")!;
+          preds.push((t) => arr.includes(t["priority"]));
         }
         if (sql.includes("payload->>'assigned_to' = $")) {
-          const v = nextVal();
+          const v = grabScalar("payload->>'assigned_to' = ");
           preds.push((t) => (t["assigned_to"] ?? null) === v);
         }
         if (sql.includes("payload->>'agent_id' = $")) {
-          const v = nextVal();
+          const v = grabScalar("payload->>'agent_id' = ");
           preds.push((t) => (t["agent_id"] ?? null) === v);
         }
         if (sql.includes("payload->>'session_id' = $")) {
-          const v = nextVal();
+          const v = grabScalar("payload->>'session_id' = ");
           preds.push((t) => (t["session_id"] ?? null) === v);
         }
         if (sql.includes("payload->'tags' @>")) {
-          const tags = JSON.parse(String(nextVal())) as string[];
+          const tags = grabScalar("payload->'tags' @> ") as string[];
           preds.push((t) => Array.isArray(t["tags"]) && tags.every((x) => (t["tags"] as string[]).includes(x)));
         }
-        if (sql.includes("payload->>'recurrence_rule', '') <> '') = $")) {
-          const v = nextVal();
+        if (sql.includes("<> '') = $")) {
+          const v = grabScalar("<> '') = ");
           preds.push((t) => Boolean(t["recurrence_rule"]) === v);
         }
-        if (sql.includes("payload->>'task_type', '') = ANY(")) {
-          const arr = nextVal() as string[];
-          preds.push((t) => arr.includes(String(t["task_type"] ?? "")));
+        if (sql.includes("COALESCE(payload->>'task_type', '') IN (")) {
+          const arr = grabIn("COALESCE(payload->>'task_type', '') IN (")!;
+          preds.push((t) => arr.includes(t["task_type"] ?? ""));
         }
         if (sql.includes("payload->>'parent_id' IS NULL OR payload->>'parent_id' = ''")) {
           preds.push((t) => !t["parent_id"]);
@@ -1195,8 +1209,8 @@ function createMemoryPostgresClient(): {
         selected = selected.sort((a, b) =>
           rank(a["priority"]) - rank(b["priority"]) ||
           String(a["created_at"]).localeCompare(String(b["created_at"])));
-        const limit = sql.includes("LIMIT $") ? Number(nextVal()) : undefined;
-        const offset = sql.includes("OFFSET $") ? Number(nextVal()) : 0;
+        const limit = sql.includes("LIMIT $") ? Number(grabScalar("LIMIT ")) : undefined;
+        const offset = sql.includes("OFFSET $") ? Number(grabScalar("OFFSET ")) : 0;
         const page = selected.slice(offset, limit === undefined ? undefined : offset + limit);
         return { rows: page.map((payload) => ({ payload })) as T[] };
       }

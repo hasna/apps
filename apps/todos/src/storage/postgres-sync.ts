@@ -141,7 +141,10 @@ export class PostgresTodosSyncStore {
           this.service,
           entry.type,
           entry.id,
-          JSON.stringify(entry.payload),
+          // Bind the object directly — the driver serializes it to jsonb. Pre-
+          // encoding with JSON.stringify makes Bun.SQL double-encode into a jsonb
+          // string scalar (breaks server-side payload->>'field' filters).
+          entry.payload,
           entry.updatedAt,
           entry.deletedAt,
           sourceMachineId,

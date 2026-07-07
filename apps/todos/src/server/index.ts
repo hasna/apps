@@ -70,7 +70,8 @@ async function findFreePort(start: number): Promise<number> {
 }
 
 async function runMigrate(): Promise<void> {
-  const { ensureCloudSchema, pingCloud, resolveCloudDatabaseUrl, closeCloud } = await import("./cloud.js");
+  const { ensureCloudSchema, normalizeCloudPayloads, pingCloud, resolveCloudDatabaseUrl, closeCloud } =
+    await import("./cloud.js");
   if (!resolveCloudDatabaseUrl()) {
     console.error("migrate: no database URL (HASNA_TODOS_DATABASE_URL / TODOS_DATABASE_URL / DATABASE_URL)");
     process.exit(2);
@@ -79,6 +80,9 @@ async function runMigrate(): Promise<void> {
   await pingCloud();
   console.log("migrate: applying schema (sync tables + api_keys)…");
   await ensureCloudSchema();
+  console.log("migrate: normalizing legacy double-encoded jsonb payloads…");
+  const normalized = await normalizeCloudPayloads();
+  console.log(`migrate: normalized ${normalized} payload row(s)`);
   console.log("migrate: done");
   await closeCloud();
   process.exit(0);

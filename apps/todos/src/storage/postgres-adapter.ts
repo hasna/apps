@@ -250,22 +250,30 @@ class PostgresJsonRecordStore {
       params.push(value);
       return `$${params.length}`;
     };
-    if (filter.ids) conds.push(`payload->>'id' = ANY(${p(filter.ids)}::text[])`);
+    // Expand a set filter into scalar IN placeholders rather than a bound array
+    // (`= ANY($n::text[])`). The production driver is Bun.SQL (sql.unsafe), which
+    // does not bind a JS array to a Postgres array — it flattens it and PG throws
+    // "malformed array literal". Individual scalar params are driver-agnostic.
+    const inClause = (column: string, values: readonly unknown[]): string => {
+      if (values.length === 0) return "1=0";
+      return `${column} IN (${values.map((v) => p(v)).join(", ")})`;
+    };
+    if (filter.ids) conds.push(inClause("payload->>'id'", filter.ids));
     if (filter.project_id !== undefined) conds.push(`payload->>'project_id' = ${p(filter.project_id)}`);
     if (filter.parent_id !== undefined) conds.push(`payload->>'parent_id' IS NOT DISTINCT FROM ${p(filter.parent_id)}`);
     if (filter.plan_id !== undefined) conds.push(`payload->>'plan_id' = ${p(filter.plan_id)}`);
     if (filter.task_list_id !== undefined) conds.push(`payload->>'task_list_id' = ${p(filter.task_list_id)}`);
-    if (filter.status !== undefined) conds.push(`payload->>'status' = ANY(${p(toFilterArray(filter.status))}::text[])`);
-    if (filter.priority !== undefined) conds.push(`payload->>'priority' = ANY(${p(toFilterArray(filter.priority))}::text[])`);
+    if (filter.status !== undefined) conds.push(inClause("payload->>'status'", toFilterArray(filter.status)));
+    if (filter.priority !== undefined) conds.push(inClause("payload->>'priority'", toFilterArray(filter.priority)));
     if (filter.assigned_to !== undefined) conds.push(`payload->>'assigned_to' = ${p(filter.assigned_to)}`);
     if (filter.agent_id !== undefined) conds.push(`payload->>'agent_id' = ${p(filter.agent_id)}`);
     if (filter.session_id !== undefined) conds.push(`payload->>'session_id' = ${p(filter.session_id)}`);
-    if (filter.tags?.length) conds.push(`payload->'tags' @> ${p(JSON.stringify(filter.tags))}::jsonb`);
+    if (filter.tags?.length) conds.push(`payload->'tags' @> ${p(filter.tags)}::jsonb`);
     if (filter.has_recurrence !== undefined) {
       conds.push(`(COALESCE(payload->>'recurrence_rule', '') <> '') = ${p(filter.has_recurrence)}`);
     }
     if (filter.task_type !== undefined) {
-      conds.push(`COALESCE(payload->>'task_type', '') = ANY(${p(toFilterArray(filter.task_type))}::text[])`);
+      conds.push(inClause("COALESCE(payload->>'task_type', '')", toFilterArray(filter.task_type)));
     }
     // include_subtasks defaults to false: exclude tasks that have a parent.
     if (filter.include_subtasks !== true) conds.push(`(payload->>'parent_id' IS NULL OR payload->>'parent_id' = '')`);
@@ -351,7 +359,12 @@ class PostgresJsonRecordStore {
         this.service,
         type,
         value.id,
-        JSON.stringify(value),
+        // Bind the object directly (not JSON.stringify) so the driver stores a
+        // real jsonb OBJECT. Passing a JSON string to a $::jsonb param makes
+        // Bun.SQL double-encode it into a jsonb STRING scalar, which breaks every
+        // server-side payload->>'field' filter and jsonb_set (the short-id
+        // counter). See migrations/…normalize-payload.
+        jsonbParam(value),
         updatedAt,
         context.requestId ?? this.sourceMachineId ?? null,
         numberValue(value.version),
@@ -437,7 +450,7 @@ class PostgresJsonRecordStore {
         this.service,
         tombstone.object_type,
         tombstone.object_id,
-        JSON.stringify(tombstone.payload ?? { id: tombstone.object_id, deleted_at: deletedAt }),
+        jsonbParam(tombstone.payload ?? { id: tombstone.object_id, deleted_at: deletedAt }),
         updatedAt,
         deletedAt,
         tombstone.source_machine_id ?? context.requestId ?? this.sourceMachineId ?? null,
@@ -654,6 +667,13 @@ const TASK_ORDER_BY =
 
 function toFilterArray<T>(value: T | T[]): T[] {
   return Array.isArray(value) ? value : [value];
+}
+
+// Bind a value to a $::jsonb param. The driver (Bun.SQL / node-pg) serializes a
+// JS object/array to jsonb natively — pre-encoding with JSON.stringify would
+// make Bun.SQL store a double-encoded jsonb STRING scalar instead.
+function jsonbParam(value: unknown): unknown {
+  return value;
 }
 
 async function listTasks(filter: TaskFilter, store: PostgresJsonRecordStore): Promise<Task[]> {
