@@ -62,8 +62,10 @@ export class CloudLoopStore {
     const byId = await this.getLoop(idOrName).catch(() => undefined);
     if (byId) return byId;
     // Server-side exact-name filter: one bounded query instead of listing the
-    // entire loops table (which broke against the server's page cap).
-    const matches = await this.listLoops({ name: idOrName, limit: 1000 });
+    // entire loops table (which broke against the server's page cap). Re-filter
+    // client-side so a server that ignores `name` (version skew) can't return a
+    // wrong loop or spuriously report ambiguity.
+    const matches = (await this.listLoops({ name: idOrName, limit: 1000 })).filter((loop) => loop.name === idOrName);
     if (matches.length === 0) return undefined;
     if (matches.length === 1) return matches[0];
     const active = matches.filter((loop) => !loop.archivedAt);

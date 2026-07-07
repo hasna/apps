@@ -10,6 +10,13 @@ COPY package.json bun.lock ./
 # --ignore-scripts: the package `prepare` script builds from src/ (absent here);
 # the build stage runs `bun run build` explicitly after src/ is copied.
 RUN bun install --frozen-lockfile --ignore-scripts
+# @hasna/contracts is an optionalDependency resolved from the fleet-wide global
+# bun store on client machines; it is NOT on the public npm registry, so the
+# hermetic image build cannot fetch it. Vendor the exact 0.5.1 package into
+# node_modules so both the build (tsc types + `@hasna/contracts/auth`) and the
+# serve runtime resolve it. Both the build and runner stages inherit this
+# node_modules via COPY --from=deps.
+COPY vendor/contracts ./node_modules/@hasna/contracts
 
 FROM --platform=linux/arm64 oven/bun:1 AS build
 WORKDIR /app
