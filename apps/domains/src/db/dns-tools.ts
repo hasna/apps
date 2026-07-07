@@ -3,11 +3,95 @@
  * subdomain discovery, and DNS validation
  */
 
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
+import { domainToASCII } from "node:url";
 import { getDatabase } from "./database.js";
 import { getDomain, updateDomain, type UpdateDomainInput } from "./domain-records.js";
 import { createDnsRecord, listDnsRecords, type DnsRecord } from "./dns-records.js";
 import { USER_AGENT } from "../lib/version.js";
+
+export class DnsToolValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DnsToolValidationError";
+  }
+}
+
+const HOSTNAME_LABEL_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const DNS_QUERY_LABEL_RE = /^(?:\*|[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?)$/;
+const DNS_RECORD_TYPES = new Set([
+  "A",
+  "AAAA",
+  "CAA",
+  "CNAME",
+  "DNSKEY",
+  "DS",
+  "HTTPS",
+  "MX",
+  "NAPTR",
+  "NS",
+  "PTR",
+  "SOA",
+  "SPF",
+  "SRV",
+  "SSHFP",
+  "SVCB",
+  "TLSA",
+  "TXT",
+]);
+
+function normalizeDnsName(
+  value: string,
+  options: { allowUnderscore: boolean; allowWildcard: boolean }
+): string {
+  if (typeof value !== "string") {
+    throw new DnsToolValidationError("Invalid domain name. Use a hostname such as example.com.");
+  }
+
+  const ascii = domainToASCII(value.trim().replace(/\.$/, ""));
+  const labelRe = options.allowUnderscore ? DNS_QUERY_LABEL_RE : HOSTNAME_LABEL_RE;
+
+  if (!ascii || ascii.length > 253) {
+    throw new DnsToolValidationError("Invalid domain name. Use a hostname such as example.com.");
+  }
+
+  const normalized = ascii.toLowerCase();
+  const labels = normalized.split(".");
+  if (labels.length < 2) {
+    throw new DnsToolValidationError("Invalid domain name. Use a hostname such as example.com.");
+  }
+
+  for (const [index, label] of labels.entries()) {
+    if (!labelRe.test(label)) {
+      throw new DnsToolValidationError("Invalid domain name. Use a hostname such as example.com.");
+    }
+    if (label === "*" && (!options.allowWildcard || index !== 0)) {
+      throw new DnsToolValidationError("Invalid domain name. Use a hostname such as example.com.");
+    }
+  }
+
+  return normalized;
+}
+
+export function normalizeDomainName(value: string): string {
+  return normalizeDnsName(value, { allowUnderscore: false, allowWildcard: false });
+}
+
+function normalizeDnsQueryName(value: string): string {
+  return normalizeDnsName(value, { allowUnderscore: true, allowWildcard: true });
+}
+
+function normalizeDnsRecordType(value: string): string {
+  if (typeof value !== "string") {
+    throw new DnsToolValidationError("Invalid DNS record type.");
+  }
+
+  const recordType = value.trim().toUpperCase();
+  if (!DNS_RECORD_TYPES.has(recordType)) {
+    throw new DnsToolValidationError("Invalid DNS record type.");
+  }
+  return recordType;
+}
 
 // ============================================================
 // RDAP (Registration Data Access Protocol) — WHOIS successor
@@ -50,7 +134,8 @@ export interface RdapResponse {
  * Throws if the RDAP server returns an error.
  */
 export async function rdapLookup(domainName: string): Promise<RdapResponse> {
-  const url = `https://rdap.org/domain/${encodeURIComponent(domainName)}`;
+  const domain = normalizeDomainName(domainName);
+  const url = `https://rdap.org/domain/${encodeURIComponent(domain)}`;
   const response = await fetch(url, {
     signal: AbortSignal.timeout(15000),
     headers: {
@@ -61,9 +146,9 @@ export async function rdapLookup(domainName: string): Promise<RdapResponse> {
 
   if (!response.ok) {
     if (response.status === 404) {
-      throw new Error(`RDAP: domain "${domainName}" not found`);
+      throw new Error(`RDAP: domain "${domain}" not found`);
     }
-    throw new Error(`RDAP request failed with status ${response.status} for ${domainName}`);
+    throw new Error(`RDAP request failed with status ${response.status} for ${domain}`);
   }
 
   return response.json() as Promise<RdapResponse>;
@@ -203,16 +288,18 @@ export interface WhoisResult {
 }
 
 export function whoisLookup(domainName: string): WhoisResult {
+  const domain = normalizeDomainName(domainName);
+
   // Try RDAP first (structured, reliable, free)
   try {
-    const rdap = rdapLookupSync(domainName);
+    const rdap = rdapLookupSync(domain);
     if (rdap) return rdap;
   } catch {
     // Fall through to CLI
   }
 
   // Fallback: system whois CLI
-  return whoisCliLookup(domainName);
+  return whoisCliLookup(domain);
 }
 
 /**
@@ -220,12 +307,24 @@ export function whoisLookup(domainName: string): WhoisResult {
  * Returns null if RDAP is unavailable (not an error).
  */
 function rdapLookupSync(domainName: string): WhoisResult | null {
+  const domain = normalizeDomainName(domainName);
+
   // Use sync HTTP via child process with curl (since fetch is async)
   let stdout: string;
   try {
-    stdout = execSync(
-      `curl -s -m 15 -H "Accept: application/rdap+json, application/json" -A "${USER_AGENT}" "https://rdap.org/domain/${encodeURIComponent(domainName)}"`,
-      { encoding: "utf-8" },
+    stdout = execFileSync(
+      "curl",
+      [
+        "-s",
+        "-m",
+        "15",
+        "-H",
+        "Accept: application/rdap+json, application/json",
+        "-A",
+        USER_AGENT,
+        `https://rdap.org/domain/${encodeURIComponent(domain)}`,
+      ],
+      { encoding: "utf-8", timeout: 16000 },
     );
   } catch {
     return null;
@@ -252,7 +351,7 @@ function rdapLookupSync(domainName: string): WhoisResult | null {
 
   // Update DB if domain exists
   const db = getDatabase();
-  const row = db.prepare("SELECT id FROM domains WHERE name = ?").get(domainName) as { id: string } | null;
+  const row = db.prepare("SELECT id FROM domains WHERE name = ?").get(domain) as { id: string } | null;
   if (row) {
     const updates: UpdateDomainInput = { whois: rdap as Record<string, unknown> };
     if (registrar) updates.registrar = registrar;
@@ -262,7 +361,7 @@ function rdapLookupSync(domainName: string): WhoisResult | null {
   }
 
   return {
-    domain: domainName,
+    domain,
     registrar,
     expires_at,
     nameservers,
@@ -273,13 +372,15 @@ function rdapLookupSync(domainName: string): WhoisResult | null {
 }
 
 function whoisCliLookup(domainName: string): WhoisResult {
+  const domain = normalizeDomainName(domainName);
+
   let raw: string;
   try {
-    raw = execSync(`whois ${domainName}`, { timeout: 15000, encoding: "utf-8" });
+    raw = execFileSync("whois", [domain], { timeout: 15000, encoding: "utf-8" });
   } catch (error: unknown) {
     const err = error as { stdout?: string; stderr?: string };
     raw = err.stdout || err.stderr || "";
-    if (!raw) throw new Error(`whois command failed for ${domainName}`);
+    if (!raw) throw new Error(`whois command failed for ${domain}`);
   }
 
   const registrarMatch = raw.match(/Registrar:\s*(.+)/i) || raw.match(/registrar:\s*(.+)/i);
@@ -306,7 +407,7 @@ function whoisCliLookup(domainName: string): WhoisResult {
   }
 
   const db = getDatabase();
-  const row = db.prepare("SELECT id FROM domains WHERE name = ?").get(domainName) as { id: string } | null;
+  const row = db.prepare("SELECT id FROM domains WHERE name = ?").get(domain) as { id: string } | null;
   if (row) {
     const updates: UpdateDomainInput = { whois: { raw } };
     if (registrar) updates.registrar = registrar;
@@ -316,7 +417,7 @@ function whoisCliLookup(domainName: string): WhoisResult {
   }
 
   return {
-    domain: domainName,
+    domain,
     registrar,
     expires_at,
     nameservers,
@@ -355,12 +456,15 @@ export function checkDnsPropagation(
   domain: string,
   recordType: string = "A"
 ): DnsPropagationResult {
+  const queryName = normalizeDnsQueryName(domain);
+  const normalizedRecordType = normalizeDnsRecordType(recordType);
   const servers: DnsPropagationResult["servers"] = [];
 
   for (const server of DNS_SERVERS) {
     try {
-      const output = execSync(
-        `dig @${server} ${domain} ${recordType} +short +time=5 +tries=1`,
+      const output = execFileSync(
+        "dig",
+        [`@${server}`, queryName, normalizedRecordType, "+short", "+time=5", "+tries=1"],
         { timeout: 10000, encoding: "utf-8" }
       );
       const values = output
@@ -392,7 +496,7 @@ export function checkDnsPropagation(
       (s) => JSON.stringify(s.values.sort()) === JSON.stringify(okServers[0]!.values.sort())
     );
 
-  return { domain, record_type: recordType, servers, consistent };
+  return { domain: queryName, record_type: normalizedRecordType, servers, consistent };
 }
 
 // ============================================================
@@ -408,10 +512,18 @@ export interface SslCheckResult {
 }
 
 export function checkSsl(domainName: string): SslCheckResult {
+  const domain = normalizeDomainName(domainName);
+
   try {
-    const output = execSync(
-      `echo | openssl s_client -servername ${domainName} -connect ${domainName}:443 2>/dev/null | openssl x509 -noout -issuer -dates -subject 2>/dev/null`,
-      { timeout: 15000, encoding: "utf-8" }
+    const certificate = execFileSync(
+      "openssl",
+      ["s_client", "-servername", domain, "-connect", `${domain}:443`],
+      { timeout: 15000, encoding: "utf-8", input: "\n", stdio: ["pipe", "pipe", "ignore"] }
+    );
+    const output = execFileSync(
+      "openssl",
+      ["x509", "-noout", "-issuer", "-dates", "-subject"],
+      { timeout: 15000, encoding: "utf-8", input: certificate, stdio: ["pipe", "pipe", "ignore"] }
     );
 
     const issuerMatch = output.match(/issuer\s*=\s*(.+)/i);
@@ -432,7 +544,7 @@ export function checkSsl(domainName: string): SslCheckResult {
 
     // Update the DB record if exists
     const db = getDatabase();
-    const row = db.prepare("SELECT id FROM domains WHERE name = ?").get(domainName) as { id: string } | null;
+    const row = db.prepare("SELECT id FROM domains WHERE name = ?").get(domain) as { id: string } | null;
     if (row) {
       const updates: UpdateDomainInput = {};
       if (expires_at) updates.ssl_expires_at = expires_at;
@@ -440,10 +552,10 @@ export function checkSsl(domainName: string): SslCheckResult {
       updateDomain(row.id, updates);
     }
 
-    return { domain: domainName, issuer, expires_at, subject };
+    return { domain, issuer, expires_at, subject };
   } catch (error: unknown) {
     return {
-      domain: domainName,
+      domain,
       issuer: null,
       expires_at: null,
       subject: null,

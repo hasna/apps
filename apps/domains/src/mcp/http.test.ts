@@ -195,4 +195,57 @@ describe("stdio mode", () => {
 
     await client.close();
   });
+
+  it("rejects injected DNS helper arguments without running shell payloads", async () => {
+    const dir = useTempDb();
+
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+    await buildServer().connect(serverTransport);
+    await client.connect(clientTransport);
+
+    try {
+      const dnsDomainMarker = join(dir, "mcp-dns-domain-injected");
+      const dnsDomainResult = await client.callTool({
+        name: "check_dns_propagation",
+        arguments: { domain: `example.com; touch ${dnsDomainMarker} #`, record_type: "A" },
+      });
+      expect(dnsDomainResult.isError).toBe(true);
+      expect(existsSync(dnsDomainMarker)).toBe(false);
+
+      const dnsRecordMarker = join(dir, "mcp-dns-record-injected");
+      const dnsRecordResult = await client.callTool({
+        name: "check_dns_propagation",
+        arguments: { domain: "example.com", record_type: `A; touch ${dnsRecordMarker} #` },
+      });
+      expect(dnsRecordResult.isError).toBe(true);
+      expect(existsSync(dnsRecordMarker)).toBe(false);
+
+      const whoisMarker = join(dir, "mcp-whois-injected");
+      const whoisResult = await client.callTool({
+        name: "whois_lookup",
+        arguments: { domain: `example.com; touch ${whoisMarker} #` },
+      });
+      expect(whoisResult.isError).toBe(true);
+      expect(existsSync(whoisMarker)).toBe(false);
+
+      const sslMarker = join(dir, "mcp-ssl-injected");
+      const sslResult = await client.callTool({
+        name: "check_ssl",
+        arguments: { domain: `example.com; touch ${sslMarker} #` },
+      });
+      expect(sslResult.isError).toBe(true);
+      expect(existsSync(sslMarker)).toBe(false);
+
+      const ownerWhoisMarker = join(dir, "mcp-owner-whois-injected");
+      const ownerWhoisResult = await client.callTool({
+        name: "extract_domain_owner_from_whois",
+        arguments: { domain_name: `example.com; touch ${ownerWhoisMarker} #` },
+      });
+      expect(ownerWhoisResult.isError).toBe(true);
+      expect(existsSync(ownerWhoisMarker)).toBe(false);
+    } finally {
+      await client.close();
+    }
+  });
 });

@@ -299,18 +299,23 @@ export function registerDomainCommands(program: Command): void {
     .argument("<name>", "Domain name (e.g. example.com)")
     .option("--json", "Output as JSON", false)
     .action((name, opts) => {
-      const result = checkSsl(name);
-      if (opts.json) {
-        console.log(JSON.stringify(result, null, 2));
-      } else {
-        if (result.error) {
-          console.error(`SSL check failed: ${result.error}`);
-          process.exit(1);
+      try {
+        const result = checkSsl(name);
+        if (opts.json) {
+          console.log(JSON.stringify(result, null, 2));
+        } else {
+          if (result.error) {
+            console.error(`SSL check failed: ${result.error}`);
+            process.exit(1);
+          }
+          console.log(`SSL Certificate for ${result.domain}:`);
+          console.log(`  Issuer: ${result.issuer || "unknown"}`);
+          console.log(`  Expires: ${result.expires_at || "unknown"}`);
+          if (result.subject) console.log(`  Subject: ${result.subject}`);
         }
-        console.log(`SSL Certificate for ${result.domain}:`);
-        console.log(`  Issuer: ${result.issuer || "unknown"}`);
-        console.log(`  Expires: ${result.expires_at || "unknown"}`);
-        if (result.subject) console.log(`  Subject: ${result.subject}`);
+      } catch (error: unknown) {
+        console.error(`SSL check failed: ${error instanceof Error ? error.message : String(error)}`);
+        process.exit(1);
       }
     });
 

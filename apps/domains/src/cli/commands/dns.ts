@@ -239,17 +239,22 @@ export function registerDnsCommands(program: Command): void {
     .option("--record <type>", "Record type (A/AAAA/CNAME/MX/TXT/NS)", "A")
     .option("--json", "Output as JSON", false)
     .action((domain, opts) => {
-      const result = checkDnsPropagation(domain, opts.record);
-      if (opts.json) {
-        console.log(JSON.stringify(result, null, 2));
-      } else {
-        console.log(`DNS Propagation for ${result.domain} (${result.record_type}):`);
-        console.log(`  Consistent: ${result.consistent ? "yes" : "NO"}`);
-        for (const s of result.servers) {
-          const values = s.values.length > 0 ? s.values.join(", ") : "(empty)";
-          const status = s.status === "error" ? ` [ERROR: ${s.error}]` : "";
-          console.log(`  ${s.name} (${s.server}): ${values}${status}`);
+      try {
+        const result = checkDnsPropagation(domain, opts.record);
+        if (opts.json) {
+          console.log(JSON.stringify(result, null, 2));
+        } else {
+          console.log(`DNS Propagation for ${result.domain} (${result.record_type}):`);
+          console.log(`  Consistent: ${result.consistent ? "yes" : "NO"}`);
+          for (const s of result.servers) {
+            const values = s.values.length > 0 ? s.values.join(", ") : "(empty)";
+            const status = s.status === "error" ? ` [ERROR: ${s.error}]` : "";
+            console.log(`  ${s.name} (${s.server}): ${values}${status}`);
+          }
         }
+      } catch (error: unknown) {
+        console.error(`DNS propagation check failed: ${error instanceof Error ? error.message : String(error)}`);
+        process.exit(1);
       }
     });
 

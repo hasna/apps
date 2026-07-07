@@ -1,5 +1,5 @@
 import { describe, test, expect, afterAll, mock, beforeEach } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -178,6 +178,19 @@ describe("Bulk Domain Check", () => {
       expect(result.ssl).toHaveProperty("issuer");
       expect(result.ssl).toHaveProperty("expires_at");
     }
+  });
+
+  test("checkAllDomains reports invalid stored domains per result", () => {
+    const marker = join(tempDir, "bulk-ssl-injected");
+    const name = `example.com; touch ${marker} #`;
+    createDomain({ name });
+
+    const results = checkAllDomains();
+    const result = results.find((r) => r.domain === name);
+
+    expect(result?.whois?.error).toMatch(/Invalid domain name/);
+    expect(result?.ssl?.error).toMatch(/Invalid domain name/);
+    expect(existsSync(marker)).toBe(false);
   });
 
   test("checkAllDomains dns_validation result structure", () => {

@@ -368,21 +368,26 @@ export function registerDomainCommand(program: Command): void {
     .description("Run WHOIS lookup and update local DB record")
     .option("-j, --json", "Output JSON")
     .action((name: string, opts: { json?: boolean }) => {
-      const result = whoisLookup(name);
-      if (opts.json) { console.log(JSON.stringify(result, null, 2)); return; }
-      console.log(`\nWHOIS for ${result.domain} [${result.source}]:`);
-      console.log(`  Registrar: ${result.registrar ?? "unknown"}`);
-      console.log(`  Expires:   ${result.expires_at ?? "unknown"}`);
-      if (result.nameservers.length) { console.log(`  NS: ${result.nameservers.join(", ")}`); }
-      const r = result.registrant;
-      if (r?.name || r?.email || r?.organization) {
-        console.log(`  Registrant:`);
-        if (r.name) console.log(`    Name: ${r.name}`);
-        if (r.email) console.log(`    Email: ${r.email}`);
-        if (r.phone) console.log(`    Phone: ${r.phone}`);
-        if (r.organization) console.log(`    Org: ${r.organization}`);
+      try {
+        const result = whoisLookup(name);
+        if (opts.json) { console.log(JSON.stringify(result, null, 2)); return; }
+        console.log(`\nWHOIS for ${result.domain} [${result.source}]:`);
+        console.log(`  Registrar: ${result.registrar ?? "unknown"}`);
+        console.log(`  Expires:   ${result.expires_at ?? "unknown"}`);
+        if (result.nameservers.length) { console.log(`  NS: ${result.nameservers.join(", ")}`); }
+        const r = result.registrant;
+        if (r?.name || r?.email || r?.organization) {
+          console.log(`  Registrant:`);
+          if (r.name) console.log(`    Name: ${r.name}`);
+          if (r.email) console.log(`    Email: ${r.email}`);
+          if (r.phone) console.log(`    Phone: ${r.phone}`);
+          if (r.organization) console.log(`    Org: ${r.organization}`);
+        }
+        console.log();
+      } catch (error: unknown) {
+        console.error(`WHOIS lookup failed: ${error instanceof Error ? error.message : String(error)}`);
+        process.exit(1);
       }
-      console.log();
     });
 
   // ── export ──────────────────────────────────────────────────────────────

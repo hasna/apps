@@ -861,8 +861,15 @@ server.registerTool(
     },
   },
   async ({ domain, record_type }) => {
-    const result = checkDnsPropagation(domain, record_type);
-    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    try {
+      const result = checkDnsPropagation(domain, record_type);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (error: unknown) {
+      return {
+        content: [{ type: "text", text: `DNS propagation check failed: ${error instanceof Error ? error.message : String(error)}` }],
+        isError: true,
+      };
+    }
   }
 );
 
@@ -876,8 +883,15 @@ server.registerTool(
     inputSchema: { domain: z.string().describe("Domain name (e.g. example.com)") },
   },
   async ({ domain }) => {
-    const result = checkSsl(domain);
-    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    try {
+      const result = checkSsl(domain);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (error: unknown) {
+      return {
+        content: [{ type: "text", text: `SSL check failed: ${error instanceof Error ? error.message : String(error)}` }],
+        isError: true,
+      };
+    }
   }
 );
 
@@ -1898,11 +1912,18 @@ server.registerTool(
     inputSchema: { domain_name: z.string() },
   },
   async ({ domain_name }) => {
-    const whois = whoisLookup(domain_name);
-    if (!whois.raw) return { content: [{ type: "text", text: "WHOIS returned no data." }], isError: true };
-    const o = extractOwnerFromWhois(domain_name, whois.raw);
-    if (!o) return { content: [{ type: "text", text: "No owner information found in WHOIS data." }] };
-    return { content: [{ type: "text", text: JSON.stringify(o, null, 2) }] };
+    try {
+      const whois = whoisLookup(domain_name);
+      if (!whois.raw) return { content: [{ type: "text", text: "WHOIS returned no data." }], isError: true };
+      const o = extractOwnerFromWhois(domain_name, whois.raw);
+      if (!o) return { content: [{ type: "text", text: "No owner information found in WHOIS data." }] };
+      return { content: [{ type: "text", text: JSON.stringify(o, null, 2) }] };
+    } catch (error: unknown) {
+      return {
+        content: [{ type: "text", text: `WHOIS owner extraction failed: ${error instanceof Error ? error.message : String(error)}` }],
+        isError: true,
+      };
+    }
   }
 );
 

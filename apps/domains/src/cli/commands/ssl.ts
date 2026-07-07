@@ -10,16 +10,21 @@ export function registerSslCommand(program: Command): void {
     .description("Check SSL certificate for a domain and update the local DB record")
     .option("--json", "Output JSON")
     .action((domain: string, opts: { json?: boolean }) => {
-      const result = checkSsl(domain);
-      if (opts.json) { console.log(JSON.stringify(result, null, 2)); return; }
-      console.log(`\nSSL Certificate for ${result.domain}:`);
-      if (result.error) {
-        console.log(`  Error: ${result.error}`);
-      } else {
-        console.log(`  Issuer:  ${result.issuer ?? "unknown"}`);
-        console.log(`  Expires: ${result.expires_at ? result.expires_at.split("T")[0] : "unknown"}`);
+      try {
+        const result = checkSsl(domain);
+        if (opts.json) { console.log(JSON.stringify(result, null, 2)); return; }
+        console.log(`\nSSL Certificate for ${result.domain}:`);
+        if (result.error) {
+          console.log(`  Error: ${result.error}`);
+        } else {
+          console.log(`  Issuer:  ${result.issuer ?? "unknown"}`);
+          console.log(`  Expires: ${result.expires_at ? result.expires_at.split("T")[0] : "unknown"}`);
+        }
+        console.log();
+      } catch (error: unknown) {
+        console.error(`SSL check failed: ${error instanceof Error ? error.message : String(error)}`);
+        process.exit(1);
       }
-      console.log();
     });
 
   ssl

@@ -122,12 +122,20 @@ export function checkAllDomains(): BulkCheckResult[] {
     }
 
     // SSL check
-    const ssl = checkSsl(domain.name);
-    result.ssl = {
-      issuer: ssl.issuer,
-      expires_at: ssl.expires_at,
-      error: ssl.error,
-    };
+    try {
+      const ssl = checkSsl(domain.name);
+      result.ssl = {
+        issuer: ssl.issuer,
+        expires_at: ssl.expires_at,
+        error: ssl.error,
+      };
+    } catch (error: unknown) {
+      result.ssl = {
+        issuer: null,
+        expires_at: null,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
 
     // DNS validation
     const validation = validateDns(domain.id);
