@@ -95,13 +95,22 @@ export function compactInteraction(interaction: any, verbose = false): Record<st
   };
 }
 
+export function compactEnv(env: Record<string, unknown> | undefined, verbose = false): Record<string, unknown> {
+  const names = Object.keys(env ?? {}).sort();
+  return {
+    names: names.slice(0, verbose ? 50 : 6),
+    total: names.length,
+    values: "redacted",
+  };
+}
+
 export function compactSnapshot(snapshot: any, verbose = false): Record<string, unknown> {
   const recentCommands = Array.isArray(snapshot.recentCommands) ? snapshot.recentCommands : [];
   const processes = Array.isArray(snapshot.runningProcesses) ? snapshot.runningProcesses : [];
   const recipes = Array.isArray(snapshot.recipes) ? snapshot.recipes : [];
   return {
     cwd: snapshot.cwd,
-    env: verbose ? snapshot.env : Object.fromEntries(Object.entries(snapshot.env ?? {}).slice(0, 6)),
+    env: compactEnv(snapshot.env, verbose),
     runningProcesses: processes.slice(0, verbose ? 20 : 5).map(compactManagedProcess),
     recentCommands: recentCommands.slice(0, verbose ? 20 : 5).map((cmd: any) => ({
       cmd: verbose ? cmd.cmd : truncateText(cmd.cmd, 120),

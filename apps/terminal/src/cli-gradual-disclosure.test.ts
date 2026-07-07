@@ -6,17 +6,21 @@ import { join } from "node:path";
 
 let tempHome: string | null = null;
 
-function runCli(args: string[]) {
+function testEnvironment(): NodeJS.ProcessEnv {
   tempHome ??= mkdtempSync(join(tmpdir(), "terminal-cli-"));
+  return {
+    PATH: process.env.PATH,
+    HOME: tempHome,
+    HASNA_TERMINAL_DB_PATH: join(tempHome, "sessions.db"),
+    TERMINAL_DB_PATH: join(tempHome, "sessions.db"),
+  };
+}
+
+function runCli(args: string[]) {
   return spawnSync(process.execPath, ["src/cli.tsx", ...args], {
     cwd: process.cwd(),
     encoding: "utf8",
-    env: {
-      ...process.env,
-      HOME: tempHome,
-      HASNA_TERMINAL_DB_PATH: join(tempHome, "sessions.db"),
-      TERMINAL_DB_PATH: join(tempHome, "sessions.db"),
-    },
+    env: testEnvironment(),
   });
 }
 
