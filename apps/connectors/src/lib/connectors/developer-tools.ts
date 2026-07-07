@@ -934,6 +934,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["blockchain", "smart contracts", "web3", "api", "infrastructure"],
   },
   {
+    name: "stop-and-error",
+    displayName: "StopAndError",
+    description: "Workflow error handler",
+    category: "Developer Tools",
+    tags: ["workflow", "error-handler", "development"],
+  },
+  {
     name: "strapi",
     displayName: "Strapi",
     description: "Open-source headless CMS and content API platform",
