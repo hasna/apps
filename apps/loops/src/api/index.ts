@@ -298,6 +298,18 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
     const loop = await storage.createLoop(body);
     return ok({ loop: publicLoop(loop) }, { status: 201 });
   }
+  // GET /v1/loops/count — total-row verification (the list route caps at 1000
+  // with no offset, so counting a large backfilled table needs this).
+  if (segments.length === 1 && segments[0] === "count" && ctx.request.method === "GET") {
+    const count = await storage.countLoops(
+      optionalEnum<LoopStatus>(ctx.url.searchParams.get("status"), ["active", "paused", "stopped", "expired"]),
+      {
+        includeArchived: optionalBoolean(ctx.url.searchParams.get("includeArchived")),
+        archived: optionalBoolean(ctx.url.searchParams.get("archived")),
+      },
+    );
+    return ok({ count });
+  }
   const id = segments[0];
   if (!id) return fail("not_found", 404);
   if (segments.length === 1 && ctx.request.method === "GET") {
@@ -369,6 +381,14 @@ async function handleRunsRequest(ctx: V1RequestContext, segments: string[]): Pro
 
   const storage = requireStorage(ctx.storage);
   const showOutput = optionalBoolean(ctx.url.searchParams.get("showOutput")) ?? false;
+  // GET /v1/runs/count — total-row verification (run history is far larger than
+  // the 1000-row list cap).
+  if (segments.length === 1 && id === "count" && ctx.request.method === "GET") {
+    const count = await storage.countRuns(
+      optionalEnum<RunStatus>(ctx.url.searchParams.get("status"), ["running", "succeeded", "failed", "timed_out", "abandoned", "skipped"]),
+    );
+    return ok({ count });
+  }
   if (segments.length === 0 && ctx.request.method === "GET") {
     const runs = await storage.listRuns({
       loopId: ctx.url.searchParams.get("loopId") ?? undefined,
