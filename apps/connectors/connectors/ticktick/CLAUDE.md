@@ -55,21 +55,19 @@ Base URL: `https://api.ticktick.com/open/v1`
 
 ## Authentication
 
-Uses **Bearer token** authentication with the TickTick Open API. Obtain an OAuth2 access token from the [TickTick Developer Portal](https://developer.ticktick.com/manage):
-
-1. Register an application and note the Client ID and Client Secret
-2. Complete the OAuth2 authorization flow (scopes: `tasks:read`, `tasks:write`)
-3. Store the resulting access token via `connect-ticktick config set-token <token>` or `TICKTICK_ACCESS_TOKEN`
+Uses **Bearer token** authentication with the TickTick Open API:
 
 ```typescript
 'Authorization': `Bearer ${this.accessToken}`
 ```
 
+Obtain an access token from the [TickTick Developer Portal](https://developer.ticktick.com/manage) (register an app, authorize with scopes `tasks:read` and `tasks:write`, then store the token via `connect-ticktick config set-token <token>` or `TICKTICK_ACCESS_TOKEN`).
+
 ## Environment Variables
 
 | Variable | Description |
 |----------|-------------|
-| `TICKTICK_ACCESS_TOKEN` | OAuth2 access token (overrides profile config) |
+| `TICKTICK_ACCESS_TOKEN` | API access token (overrides profile config) |
 
 ## Data Storage
 
