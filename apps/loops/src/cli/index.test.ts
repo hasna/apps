@@ -3475,7 +3475,7 @@ describe("loops CLI", () => {
     expect(readFileSync(markerPath, "utf8")).toBe("preserve me\n");
   });
 
-  test("workflows run fails closed when a required worktree is on an unexpected branch", () => {
+  test("workflows run recovers a clean required worktree on an unexpected branch", () => {
     const dataDir = freshDataDir("loops-cli-executor-worktree-branch-");
     const repo = createGitRepo("loops-cli-executor-worktree-branch-repo-");
     const bin = stubPwdAgentBin(dataDir);
@@ -3500,6 +3500,41 @@ describe("loops CLI", () => {
     git(wtPath, ["checkout", "-b", "unexpected-openloops-branch"]);
 
     const second = runCli(dataDir, ["--json", "workflows", "run", "cli-worktree-exec", "--show-output"], undefined, env);
+    expect(second.status).toBe(0);
+    const value = JSON.parse(second.stdout);
+    expect(value.result.status).toBe("succeeded");
+    expect(value.steps[0].status).toBe("succeeded");
+    const shown = spawnSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" });
+    expect(shown.status).toBe(0);
+    expect(shown.stdout.trim()).toBe(branch);
+  });
+
+  test("workflows run fails closed when an unexpected required worktree branch has local changes", () => {
+    const dataDir = freshDataDir("loops-cli-executor-worktree-dirty-branch-");
+    const repo = createGitRepo("loops-cli-executor-worktree-dirty-branch-repo-");
+    const bin = stubPwdAgentBin(dataDir);
+    const env = { PATH: `${bin}:${process.env.PATH ?? ""}` };
+    const worktreeRoot = join(dataDir, "worktrees");
+    const wtPath = join(worktreeRoot, "repo", "cli-worktree-dirty-branch");
+    const branch = "openloops/cli-worktree-dirty-branch";
+    const file = worktreeWorkflowFile(dataDir, repo, {
+      mode: "required",
+      enabled: true,
+      originalCwd: repo,
+      cwd: wtPath,
+      repoRoot: repo,
+      root: worktreeRoot,
+      path: wtPath,
+      branch,
+    });
+    expect(runCli(dataDir, ["workflows", "create", file], undefined, env).status).toBe(0);
+
+    const first = runCli(dataDir, ["--json", "workflows", "run", "cli-worktree-exec"], undefined, env);
+    expect(first.status).toBe(0);
+    git(wtPath, ["checkout", "-b", "unexpected-openloops-dirty-branch"]);
+    writeFileSync(join(wtPath, "untracked-dirty.txt"), "do not overwrite\n");
+
+    const second = runCli(dataDir, ["--json", "workflows", "run", "cli-worktree-exec", "--show-output"], undefined, env);
     expect(second.status).toBe(1);
     const value = JSON.parse(second.stdout);
     expect(value.result.status).toBe("failed");
@@ -3508,8 +3543,9 @@ describe("loops CLI", () => {
     try {
       const stepError = store.listWorkflowStepRuns(value.workflowRun.id)[0]?.error ?? "";
       expect(stepError).toContain("worktree preparation failed (mode=required)");
-      expect(stepError).toContain("unexpected-openloops-branch");
+      expect(stepError).toContain("unexpected-openloops-dirty-branch");
       expect(stepError).toContain(`expected ${branch}`);
+      expect(stepError).toContain("has local changes");
     } finally {
       store.close();
     }
