@@ -143,6 +143,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["website builder", "landing pages", "design", "publishing", "no-code"],
   },
   {
+    name: "streamable",
+    displayName: "Streamable",
+    description: "Read-only video metadata and embed retrieval",
+    category: "Design & Content",
+    tags: ["video", "hosting", "streaming"],
+  },
+  {
     name: "tinypng",
     displayName: "TinyPNG",
     description: "Image compression and optimization for AVIF, WebP, JPEG, and PNG",
