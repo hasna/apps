@@ -21,6 +21,10 @@ describe("openapi document", () => {
     expect(doc.paths["/v1/scenarios/{id}"].get.operationId).toBe("getScenario");
     expect(doc.paths["/v1/scenarios/{id}"].put.operationId).toBe("updateScenario");
     expect(doc.paths["/v1/scenarios/{id}"].delete.operationId).toBe("deleteScenario");
+    // bulk migration surface (count + idempotent import)
+    expect(doc.paths["/v1/scenarios/count"].get.operationId).toBe("countScenarios");
+    expect(doc.paths["/v1/scenarios/import"].post.operationId).toBe("importScenarios");
+    expect(doc.paths["/v1/scenarios"].get.parameters.some((p: any) => p.name === "offset")).toBe(true);
   });
 
   it("marks probes public and /v1 secured by apiKey", () => {

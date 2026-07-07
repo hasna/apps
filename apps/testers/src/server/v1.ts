@@ -181,12 +181,20 @@ async function route(
 
   // ── scenarios ──
   if (resource === "scenarios") {
+    // Aggregate/bulk sub-routes (must precede the id-based branch).
+    if (id === "count" && method === "GET") {
+      return json({ count: await store.countScenarios(db) });
+    }
+    if (id === "import" && method === "POST") {
+      return json(await store.importScenarios(db, (await readJson(req)) as never), 200);
+    }
     if (!id) {
       if (method === "GET")
         return json(
           await store.listScenarios(db, {
             projectId: searchParams.get("projectId") ?? undefined,
             limit: numParam(searchParams.get("limit")),
+            offset: numParam(searchParams.get("offset")),
           }),
         );
       if (method === "POST") return json(await store.createScenario(db, (await readJson(req)) as never), 201);

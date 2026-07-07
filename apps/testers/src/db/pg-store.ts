@@ -368,6 +368,243 @@ export async function countScenarios(db: TypedQueryClient): Promise<number> {
   return Number(row?.n ?? 0);
 }
 
+// ─── scenario bulk import (idempotent, id-keyed migration path) ──────────────
+
+const SCENARIO_PRIORITIES = new Set<ScenarioPriority>(["low", "medium", "high", "critical"]);
+const SCENARIO_TYPES = new Set(["browser", "eval", "api", "pipeline"]);
+
+/** A JSON-string column that must always hold a value (defaults to `[]`/`{}`). */
+function jsonColumn(value: unknown, fallback: string): string {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === "string") return value; // already-serialized (from a source row)
+  return JSON.stringify(value);
+}
+/** A JSON-string column that may be NULL. */
+function nullableJsonColumn(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") return value;
+  return JSON.stringify(value);
+}
+
+export interface ImportScenarioInput {
+  id: string;
+  shortId?: string | null;
+  /** Local project *name* (project ids differ per store; we map by unique name). */
+  projectName?: string | null;
+  name: string;
+  description?: string | null;
+  steps?: unknown;
+  tags?: unknown;
+  priority?: string | null;
+  model?: string | null;
+  timeoutMs?: number | null;
+  targetPath?: string | null;
+  requiresAuth?: boolean | number | null;
+  authConfig?: unknown;
+  metadata?: unknown;
+  assertions?: unknown;
+  scenarioType?: string | null;
+  requiredRole?: string | null;
+  lastPassedAt?: string | null;
+  lastPassedUrl?: string | null;
+  parameters?: unknown;
+  version?: number | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface ImportProjectInput {
+  name: string;
+  path?: string | null;
+  description?: string | null;
+  baseUrl?: string | null;
+  port?: number | null;
+  scenarioPrefix?: string | null;
+  scenarioCounter?: number | null;
+}
+
+/** Normalized, ready-to-bind column values for one imported scenario. */
+export interface NormalizedImportScenario {
+  id: string;
+  shortId: string | null;
+  projectName: string | null;
+  name: string;
+  description: string;
+  steps: string;
+  tags: string;
+  priority: ScenarioPriority;
+  model: string | null;
+  timeoutMs: number | null;
+  targetPath: string | null;
+  requiresAuth: boolean;
+  authConfig: string | null;
+  metadata: string | null;
+  assertions: string;
+  scenarioType: string;
+  requiredRole: string | null;
+  lastPassedAt: string | null;
+  lastPassedUrl: string | null;
+  parameters: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Pure validation/normalization for an imported scenario record. Clamps CHECK-
+ * constrained columns, JSON-encodes structured columns, and fills defaults so
+ * the row is safe to upsert. Preserves the source `id` (idempotency key) and
+ * timestamps. Throws {@link ValidationError} on missing `id`/`name`.
+ */
+export function normalizeImportScenario(input: ImportScenarioInput): NormalizedImportScenario {
+  if (!input || typeof input !== "object") throw new ValidationError("scenario must be an object");
+  const id = typeof input.id === "string" ? input.id.trim() : "";
+  if (!id) throw new ValidationError("scenario.id is required for import");
+  if (!input.name || typeof input.name !== "string") throw new ValidationError(`scenario.name is required (id=${id})`);
+  const priority = (
+    typeof input.priority === "string" && SCENARIO_PRIORITIES.has(input.priority as ScenarioPriority)
+      ? input.priority
+      : "medium"
+  ) as ScenarioPriority;
+  const scenarioType =
+    typeof input.scenarioType === "string" && SCENARIO_TYPES.has(input.scenarioType) ? input.scenarioType : "browser";
+  const now = nowIso();
+  const version = Number.isFinite(Number(input.version)) && Number(input.version) > 0 ? Math.trunc(Number(input.version)) : 1;
+  return {
+    id,
+    shortId: typeof input.shortId === "string" && input.shortId.trim() ? input.shortId.trim() : null,
+    projectName: typeof input.projectName === "string" && input.projectName ? input.projectName : null,
+    name: input.name,
+    description: typeof input.description === "string" ? input.description : "",
+    steps: jsonColumn(input.steps, "[]"),
+    tags: jsonColumn(input.tags, "[]"),
+    priority,
+    model: input.model ?? null,
+    timeoutMs: input.timeoutMs ?? null,
+    targetPath: input.targetPath ?? null,
+    requiresAuth: asBool(input.requiresAuth),
+    authConfig: nullableJsonColumn(input.authConfig),
+    metadata: nullableJsonColumn(input.metadata),
+    assertions: jsonColumn(input.assertions, "[]"),
+    scenarioType,
+    requiredRole: input.requiredRole ?? null,
+    lastPassedAt: input.lastPassedAt ?? null,
+    lastPassedUrl: input.lastPassedUrl ?? null,
+    parameters: nullableJsonColumn(input.parameters),
+    version,
+    createdAt: typeof input.createdAt === "string" && input.createdAt ? input.createdAt : now,
+    updatedAt: typeof input.updatedAt === "string" && input.updatedAt ? input.updatedAt : now,
+  };
+}
+
+export interface ImportResult {
+  projects: { created: number; matched: number };
+  scenarios: { inserted: number; updated: number; total: number };
+}
+
+/**
+ * Idempotent bulk import of scenarios (and their projects) from another testers
+ * store into the cloud. Scenarios are upserted **by primary-key `id`**, so
+ * re-running never creates duplicate rows. Projects are matched/created by their
+ * UNIQUE `name` (ids differ across stores), and each scenario's project is
+ * resolved by `projectName`. On insert the source `short_id` is preserved when
+ * globally free, otherwise a fresh unique one is minted (the `short_id` UNIQUE
+ * constraint is never violated). Nothing is ever deleted.
+ */
+export async function importScenarios(
+  dbc: PoolQueryClient,
+  body: { projects?: ImportProjectInput[]; scenarios?: ImportScenarioInput[] },
+): Promise<ImportResult> {
+  const projectsIn = Array.isArray(body?.projects) ? body.projects : [];
+  const scenariosIn = Array.isArray(body?.scenarios) ? body.scenarios : [];
+  if (projectsIn.length === 0 && scenariosIn.length === 0) {
+    throw new ValidationError("nothing to import: provide scenarios[] and/or projects[]");
+  }
+  // Validate/normalize all scenarios up front so a bad record fails the whole
+  // batch before any write (keeps the batch atomic and predictable).
+  const scenarios = scenariosIn.map(normalizeImportScenario);
+
+  return dbc.transaction(async (db) => {
+    // 1) Map project name -> id (existing rows first, then upsert incoming).
+    const existing = await db.many<{ id: string; name: string }>("SELECT id, name FROM projects");
+    const nameToId = new Map<string, string>();
+    for (const p of existing) nameToId.set(p.name, p.id);
+
+    let projCreated = 0;
+    let projMatched = 0;
+    for (const p of projectsIn) {
+      if (!p?.name) continue;
+      if (nameToId.has(p.name)) {
+        projMatched++;
+        continue;
+      }
+      // `path` is UNIQUE — only carry it over if it isn't already taken.
+      let path = p.path ?? null;
+      if (path && (await db.get("SELECT 1 FROM projects WHERE path = $1", [path]))) path = null;
+      const ts = nowIso();
+      const counter = Number.isFinite(Number(p.scenarioCounter)) ? Math.max(0, Math.trunc(Number(p.scenarioCounter))) : 0;
+      const row = await db.get<{ id: string }>(
+        `INSERT INTO projects (id, name, path, description, base_url, port, scenario_prefix, scenario_counter, settings, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'{}',$9,$9)
+         ON CONFLICT (name) DO UPDATE SET updated_at = EXCLUDED.updated_at
+         RETURNING id`,
+        [uuid(), p.name, path, p.description ?? null, p.baseUrl ?? null, p.port ?? null, p.scenarioPrefix ?? "TST", counter, ts],
+      );
+      if (row?.id) {
+        nameToId.set(p.name, row.id);
+        projCreated++;
+      }
+    }
+
+    // 2) Upsert scenarios by id.
+    let inserted = 0;
+    let updated = 0;
+    for (const s of scenarios) {
+      const projectId = s.projectName ? (nameToId.get(s.projectName) ?? null) : null;
+      const prev = await db.get<{ id: string }>("SELECT id FROM scenarios WHERE id = $1", [s.id]);
+      if (prev) {
+        // Preserve the existing short_id on update (avoids UNIQUE churn).
+        await db.execute(
+          `UPDATE scenarios SET
+             project_id=$2, name=$3, description=$4, steps=$5, tags=$6, priority=$7, model=$8,
+             timeout_ms=$9, target_path=$10, requires_auth=$11, auth_config=$12, metadata=$13,
+             assertions=$14, scenario_type=$15, required_role=$16, last_passed_at=$17,
+             last_passed_url=$18, parameters=$19, version=$20, updated_at=$21
+           WHERE id=$1`,
+          [
+            s.id, projectId, s.name, s.description, s.steps, s.tags, s.priority, s.model,
+            s.timeoutMs, s.targetPath, s.requiresAuth, s.authConfig, s.metadata,
+            s.assertions, s.scenarioType, s.requiredRole, s.lastPassedAt,
+            s.lastPassedUrl, s.parameters, s.version, nowIso(),
+          ],
+        );
+        updated++;
+        continue;
+      }
+      // New row: keep the source short_id when globally free, else mint one.
+      let shortId = s.shortId ?? shortUuid();
+      while (await db.get("SELECT 1 FROM scenarios WHERE short_id = $1", [shortId])) {
+        shortId = shortUuid();
+      }
+      await db.execute(
+        `INSERT INTO scenarios
+           (id, short_id, project_id, name, description, steps, tags, priority, model, timeout_ms,
+            target_path, requires_auth, auth_config, metadata, assertions, scenario_type, required_role,
+            last_passed_at, last_passed_url, parameters, version, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
+        [
+          s.id, shortId, projectId, s.name, s.description, s.steps, s.tags, s.priority, s.model, s.timeoutMs,
+          s.targetPath, s.requiresAuth, s.authConfig, s.metadata, s.assertions, s.scenarioType, s.requiredRole,
+          s.lastPassedAt, s.lastPassedUrl, s.parameters, s.version, s.createdAt, s.updatedAt,
+        ],
+      );
+      inserted++;
+    }
+
+    return { projects: { created: projCreated, matched: projMatched }, scenarios: { inserted, updated, total: scenarios.length } };
+  });
+}
+
 // ─── runs ─────────────────────────────────────────────────────────────────
 
 export interface CreateRunBody {

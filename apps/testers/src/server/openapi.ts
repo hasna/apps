@@ -171,6 +171,55 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
           required: ["name", "role"],
         },
         DeleteResult: { type: "object", properties: { deleted: { type: "boolean" } }, required: ["deleted"] },
+        ScenarioCount: { type: "object", properties: { count: { type: "integer" } }, required: ["count"] },
+        ImportScenario: {
+          type: "object",
+          additionalProperties: true,
+          properties: {
+            id: { type: "string" },
+            shortId: { type: "string" },
+            projectName: { type: "string" },
+            name: { type: "string" },
+            description: { type: "string" },
+            steps: { type: "array", items: { type: "string" } },
+            tags: { type: "array", items: { type: "string" } },
+            priority: { type: "string", enum: ["low", "medium", "high", "critical"] },
+            createdAt: { type: "string" },
+            updatedAt: { type: "string" },
+          },
+          required: ["id", "name"],
+        },
+        ImportProject: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+            path: { type: "string" },
+            scenarioPrefix: { type: "string" },
+            scenarioCounter: { type: "integer" },
+          },
+          required: ["name"],
+        },
+        ImportScenarios: {
+          type: "object",
+          properties: {
+            projects: { type: "array", items: { $ref: "#/components/schemas/ImportProject" } },
+            scenarios: { type: "array", items: { $ref: "#/components/schemas/ImportScenario" } },
+          },
+        },
+        ImportResult: {
+          type: "object",
+          properties: {
+            projects: {
+              type: "object",
+              properties: { created: { type: "integer" }, matched: { type: "integer" } },
+            },
+            scenarios: {
+              type: "object",
+              properties: { inserted: { type: "integer" }, updated: { type: "integer" }, total: { type: "integer" } },
+            },
+          },
+          required: ["scenarios"],
+        },
       },
     },
     security: [{ apiKey: [] }],
@@ -199,10 +248,22 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
           parameters: [
             { name: "projectId", in: "query", required: false, schema: { type: "string" } },
             { name: "limit", in: "query", required: false, schema: { type: "integer" } },
+            { name: "offset", in: "query", required: false, schema: { type: "integer" } },
           ],
           responses: listOf("Scenario"),
         },
         post: { operationId: "createScenario", summary: "Create scenario", requestBody: jsonBody("CreateScenario"), responses: okJson("Scenario") },
+      },
+      "/v1/scenarios/count": {
+        get: { operationId: "countScenarios", summary: "Count all scenarios", responses: okJson("ScenarioCount") },
+      },
+      "/v1/scenarios/import": {
+        post: {
+          operationId: "importScenarios",
+          summary: "Idempotent bulk import of scenarios (upsert by id) and their projects (by name)",
+          requestBody: jsonBody("ImportScenarios"),
+          responses: okJson("ImportResult"),
+        },
       },
       "/v1/scenarios/{id}": {
         get: { operationId: "getScenario", summary: "Get scenario", parameters: [idParam], responses: okJson("Scenario") },
