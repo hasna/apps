@@ -13,7 +13,14 @@ const PROFILES_DIR = join(CONFIG_DIR, 'profiles');
 const CURRENT_PROFILE_FILE = join(CONFIG_DIR, 'current_profile');
 
 export function setProfileOverride(profile: string | undefined): void {
-  profileOverride = profile;
+  profileOverride = profile ? normalizeProfileName(profile) : undefined;
+}
+
+function normalizeProfileName(profile: string): string {
+  if (!/^[a-zA-Z0-9_-]+$/.test(profile)) {
+    throw new Error('Profile name can only contain letters, numbers, hyphens, and underscores');
+  }
+  return profile;
 }
 
 function chmodPrivate(path: string, mode: number): void {
@@ -41,7 +48,7 @@ export function ensureConfigDir(): void {
 }
 
 function getProfilePath(profile: string): string {
-  return join(PROFILES_DIR, `${profile}.json`);
+  return join(PROFILES_DIR, `${normalizeProfileName(profile)}.json`);
 }
 
 export function getCurrentProfile(): string {
@@ -67,12 +74,13 @@ export function getCurrentProfile(): string {
 
 export function setCurrentProfile(profile: string): void {
   ensureConfigDir();
+  const profileName = normalizeProfileName(profile);
 
-  if (!profileExists(profile) && profile !== DEFAULT_PROFILE) {
-    throw new Error(`Profile "${profile}" does not exist`);
+  if (!profileExists(profileName) && profileName !== DEFAULT_PROFILE) {
+    throw new Error(`Profile "${profileName}" does not exist`);
   }
 
-  writePrivateFile(CURRENT_PROFILE_FILE, profile);
+  writePrivateFile(CURRENT_PROFILE_FILE, profileName);
 }
 
 export function profileExists(profile: string): boolean {
@@ -94,16 +102,13 @@ export function listProfiles(): string[] {
 
 export function createProfile(profile: string, config: ProfileConfig = {}): boolean {
   ensureConfigDir();
+  const profileName = normalizeProfileName(profile);
 
-  if (profileExists(profile)) {
+  if (profileExists(profileName)) {
     return false;
   }
 
-  if (!/^[a-zA-Z0-9_-]+$/.test(profile)) {
-    throw new Error('Profile name can only contain letters, numbers, hyphens, and underscores');
-  }
-
-  writePrivateFile(getProfilePath(profile), JSON.stringify(config, null, 2));
+  writePrivateFile(getProfilePath(profileName), JSON.stringify(config, null, 2));
   return true;
 }
 

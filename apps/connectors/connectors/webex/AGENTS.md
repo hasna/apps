@@ -34,5 +34,5 @@ Bearer token via `WEBEX_ACCESS_TOKEN` or profile config at `~/.hasna/connectors/
 ## Security
 
 - No hardcoded tokens
-- No internal references (beepmedia, hasnaxyz)
+- No internal company or repository references
 - No browser-use dependency
