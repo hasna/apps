@@ -13,17 +13,17 @@ import {
   listDomainEmailLinks,
   linkDomainEmail,
   recordDomainPurchase,
-  searchDomains,
-  listExpiring,
-  getDomainStats,
   exportPortfolio, checkAllDomains, whoisLookup,
 } from "../../db/domains.js";
 import {
   createDomain as createDomainRouted,
-  getDomain as getDomainRouted,
+  getDomainByIdentifier as getDomainByIdentifierRouted,
   listDomains as listDomainsRouted,
   updateDomain as updateDomainRouted,
   deleteDomain as deleteDomainRouted,
+  searchDomains as searchDomainsRouted,
+  getDomainStats as getDomainStatsRouted,
+  listExpiring as listExpiringRouted,
   isCloudMode,
 } from "../../db/cloud-store.js";
 import { getAvailableProviders, getRegistrarProvider, getDnsProvider, getDomainInventoryProvider, providerHasInventory, autoDetectRegistrar } from "../../lib/registrar.js";
@@ -133,7 +133,7 @@ export function registerDomainCommand(program: Command): void {
     .action(async (identifier: string, opts: { json?: boolean }) => {
       const details = isCloudMode()
         ? await (async () => {
-            const d = await getDomainRouted(identifier);
+            const d = await getDomainByIdentifierRouted(identifier);
             return d ? { domain: d, offers: [] as never[], emails: [] as never[] } : null;
           })()
         : getDomainDetails(identifier);
@@ -320,8 +320,8 @@ export function registerDomainCommand(program: Command): void {
     .option("--all", "Show all matching domains")
     .option("--verbose", "Show registrar and truncated notes")
     .option("-j, --json", "Output JSON")
-    .action((query: string, opts: { limit?: string; offset?: string; all?: boolean; verbose?: boolean; json?: boolean }) => {
-      const results = searchDomains(query);
+    .action(async (query: string, opts: { limit?: string; offset?: string; all?: boolean; verbose?: boolean; json?: boolean }) => {
+      const results = await searchDomainsRouted(query);
       if (opts.json) { console.log(JSON.stringify({ results, count: results.length }, null, 2)); return; }
       let page;
       try {
@@ -347,8 +347,8 @@ export function registerDomainCommand(program: Command): void {
     .option("--limit <n>", "Limit number of displayed domains")
     .option("--all", "Show all matching domains")
     .option("-j, --json", "Output JSON")
-    .action((opts: { days: string; limit?: string; all?: boolean; json?: boolean }) => {
-      const domains = listExpiring(parseInt(opts.days));
+    .action(async (opts: { days: string; limit?: string; all?: boolean; json?: boolean }) => {
+      const domains = await listExpiringRouted(parseInt(opts.days));
       if (opts.json) { console.log(JSON.stringify(domains, null, 2)); return; }
       const page = pageItemsOrExit(domains, { limit: opts.limit, all: opts.all });
       if (page.items.length === 0) { console.log(`No domains expiring within ${opts.days} days.`); return; }
@@ -363,8 +363,8 @@ export function registerDomainCommand(program: Command): void {
     .command("stats")
     .description("Show portfolio statistics")
     .option("-j, --json", "Output JSON")
-    .action((opts: { json?: boolean }) => {
-      const stats = getDomainStats();
+    .action(async (opts: { json?: boolean }) => {
+      const stats = await getDomainStatsRouted();
       if (opts.json) { console.log(JSON.stringify(stats, null, 2)); return; }
       console.log("Domain Portfolio Stats:");
       for (const [k, v] of Object.entries(stats)) {

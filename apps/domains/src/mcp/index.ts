@@ -8,6 +8,14 @@ import {
   listDomains as listDomainsRouted,
   updateDomain as updateDomainRouted,
   deleteDomain as deleteDomainRouted,
+  getDomainByIdentifier as getDomainByIdentifierRouted,
+  searchDomains as searchDomainsRouted,
+  getByRegistrar as getByRegistrarRouted,
+  listExpiring as listExpiringRouted,
+  listSslExpiring as listSslExpiringRouted,
+  getDomainStats as getDomainStatsRouted,
+  countDomains as countDomainsRouted,
+  isCloudMode,
 } from "../db/cloud-store.js";
 import {
   DOMAIN_EMAIL_TYPES,
@@ -25,12 +33,6 @@ import {
   recordDomainPurchase,
   linkDomainEmail,
   listDomainEmailLinks,
-  countDomains,
-  searchDomains,
-  getByRegistrar,
-  listExpiring,
-  listSslExpiring,
-  getDomainStats,
   createDnsRecord,
   listDnsRecords,
   updateDnsRecord,
@@ -405,7 +407,15 @@ server.registerTool(
     inputSchema: { id: z.string() },
   },
   async ({ id }) => {
-    const details = getDomainDetails(id);
+    // Cloud mode: the API returns the domain only (no offers/emails join), so
+    // shape the response the same way but without the local-only relations.
+    // Local mode keeps the full details join (offers + emails).
+    const details = isCloudMode()
+      ? await (async () => {
+          const domain = await getDomainByIdentifierRouted(id);
+          return domain ? { domain, offers: [] as never[], emails: [] as never[] } : null;
+        })()
+      : getDomainDetails(id);
     if (!details) {
       return { content: [{ type: "text", text: `Domain '${id}' not found.` }], isError: true };
     }
@@ -640,7 +650,7 @@ server.registerTool(
     inputSchema: { query: z.string(), ...listControls },
   },
   async ({ query, ...params }) => {
-    const results = searchDomains(query);
+    const results = await searchDomainsRouted(query);
     return pagedJson("results", results, params, compactDomain, "result(s)", "Set verbose=true or call get_domain for full details.", { query });
   }
 );
@@ -653,7 +663,7 @@ server.registerTool(
     inputSchema: {},
   },
   async () => {
-    const count = countDomains();
+    const count = await countDomainsRouted();
     return { content: [{ type: "text", text: JSON.stringify({ count }) }] };
   }
 );
@@ -666,7 +676,7 @@ server.registerTool(
     inputSchema: { days: z.number().default(30), ...listControls },
   },
   async ({ days, ...params }) => {
-    const domains = listExpiring(days);
+    const domains = await listExpiringRouted(days);
     return pagedJson("domains", domains, params, compactDomain, "domain(s)", "Set verbose=true or call get_domain for full details.", { days });
   }
 );
@@ -679,7 +689,7 @@ server.registerTool(
     inputSchema: { days: z.number().default(30), ...listControls },
   },
   async ({ days, ...params }) => {
-    const domains = listSslExpiring(days);
+    const domains = await listSslExpiringRouted(days);
     return pagedJson("domains", domains, params, compactDomain, "domain(s)", "Set verbose=true or call get_domain for full details.", { days });
   }
 );
@@ -692,7 +702,7 @@ server.registerTool(
     inputSchema: { registrar: z.string(), ...listControls },
   },
   async ({ registrar, ...params }) => {
-    const domains = getByRegistrar(registrar);
+    const domains = await getByRegistrarRouted(registrar);
     return pagedJson("domains", domains, params, compactDomain, "domain(s)", "Set verbose=true or call get_domain for full details.", { registrar });
   }
 );
@@ -705,7 +715,7 @@ server.registerTool(
     inputSchema: {},
   },
   async () => {
-    const stats = getDomainStats();
+    const stats = await getDomainStatsRouted();
     return { content: [{ type: "text", text: JSON.stringify(stats, null, 2) }] };
   }
 );
