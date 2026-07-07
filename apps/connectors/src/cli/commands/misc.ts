@@ -495,6 +495,7 @@ complete -F _connectors connectors`);
           googlegemini: "key",
           googlemaps: "key",
           openweathermap: "appid",
+          tomtom: "key",
         };
         if (QUERY_PARAM_AUTH[name]) {
           const sep = testUrl.includes("?") ? "&" : "?";
