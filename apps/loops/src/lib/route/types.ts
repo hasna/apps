@@ -89,6 +89,8 @@ export interface TodosDrainOptions extends TodosTaskRouteOptions {
   limit?: string;
   scanLimit?: string;
   maxDispatch?: string;
+  launchGate?: string;
+  launchGateBlocker?: string[];
   evidenceDir?: string;
   compact?: boolean;
 }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,6 +21,7 @@ function todosAvailable(): boolean {
 }
 
 const HAS_TODOS = todosAvailable();
+const TODOS_INTEGRATION_TIMEOUT_MS = 15_000;
 
 const BASE_OPTS = {
   tags: "auto:route",
@@ -70,6 +71,15 @@ describe("drainTodosTaskRoutes freshness close", () => {
     return { status: task.status, tags: task.tags ?? [] };
   }
 
+  function completeTask(id: string): void {
+    const result = spawnSync(
+      "todos",
+      ["--project", todosProject, "done", id, "--notes", "launch gate blocker resolved for test"],
+      { encoding: "utf8", timeout: 30_000 },
+    );
+    if (result.status !== 0) throw new Error(`todos done failed: ${result.stderr}`);
+  }
+
   function readyCount(): number {
     const result = spawnSync("todos", ["--project", todosProject, "--json", "ready", "--limit", "20"], { encoding: "utf8", timeout: 30_000 });
     return (JSON.parse(result.stdout || "[]") as unknown[]).length;
@@ -94,7 +104,7 @@ describe("drainTodosTaskRoutes freshness close", () => {
     expect(after.status).toBe("completed");
     expect(after.tags).not.toContain("auto:route");
     expect(readyCount()).toBe(0);
-  }, 15_000);
+  }, TODOS_INTEGRATION_TIMEOUT_MS);
 
   test.skipIf(!HAS_TODOS)("dry-run never mutates the source task", () => {
     const taskId = addTask(MERGED_PR_DESCRIPTION);
@@ -106,5 +116,76 @@ describe("drainTodosTaskRoutes freshness close", () => {
     expect(after.status).toBe("pending");
     expect(after.tags).toContain("auto:route");
     expect(readyCount()).toBe(1);
-  });
+  }, TODOS_INTEGRATION_TIMEOUT_MS);
+
+  test.skipIf(!HAS_TODOS)("launch gate blocks a drain before route work is created", () => {
+    const blockerId = addTask("PA-19 blocker remains open", "controlled-launch");
+    const candidateId = addTask("Route candidate that must wait for the launch gate");
+
+    const result = drainTodosTaskRoutes({
+      ...BASE_OPTS,
+      todosProject,
+      launchGate: "pa19-controlled-launch",
+      launchGateBlocker: [`${todosProject}::${blockerId}`],
+    });
+
+    expect(result.value.created).toBe(0);
+    expect(result.value.blocked).toBe(1);
+    expect(result.value.considered).toBe(0);
+    expect(result.value.scanned).toBe(0);
+    expect(existsSync(join(dataDir, "loops.db"))).toBe(false);
+    const gate = result.value.launchGate as { blocked?: boolean; blockers?: Array<{ taskId?: string; status?: string; resolved?: boolean }> };
+    expect(gate.blocked).toBe(true);
+    expect(gate.blockers?.[0]).toMatchObject({ taskId: blockerId, status: "pending", resolved: false });
+
+    expect(taskState(blockerId).status).toBe("pending");
+    const candidate = taskState(candidateId);
+    expect(candidate.status).toBe("pending");
+    expect(candidate.tags).toContain("auto:route");
+  }, TODOS_INTEGRATION_TIMEOUT_MS);
+
+  test.skipIf(!HAS_TODOS)("launch gate dry-run is non-mutating", () => {
+    const blockerId = addTask("PA-19 blocker remains open", "controlled-launch");
+    const candidateId = addTask("Route candidate that must wait for the launch gate");
+
+    const result = drainTodosTaskRoutes({
+      ...BASE_OPTS,
+      todosProject,
+      dryRun: true,
+      launchGate: "pa19-controlled-launch",
+      launchGateBlocker: [`${todosProject}::${blockerId}`],
+    });
+
+    expect(result.value.created).toBe(0);
+    expect(result.value.blocked).toBe(1);
+    expect(result.value.dryRun).toBe(true);
+    expect(taskState(blockerId).status).toBe("pending");
+    const candidate = taskState(candidateId);
+    expect(candidate.status).toBe("pending");
+    expect(candidate.tags).toContain("auto:route");
+  }, TODOS_INTEGRATION_TIMEOUT_MS);
+
+  test.skipIf(!HAS_TODOS)("launch gate opens when blockers are completed", () => {
+    const blockerId = addTask("PA-19 blocker resolved", "controlled-launch");
+    completeTask(blockerId);
+    const candidateId = addTask("Route candidate that may run once the launch gate opens");
+
+    const result = drainTodosTaskRoutes({
+      ...BASE_OPTS,
+      todosProject,
+      dryRun: true,
+      launchGate: "pa19-controlled-launch",
+      launchGateBlocker: [`${todosProject}::${blockerId}`],
+    });
+
+    expect(result.value.created).toBe(1);
+    expect(result.value.blocked).toBe(0);
+    expect(result.value.considered).toBe(1);
+    const gate = result.value.launchGate as { blocked?: boolean; blockers?: Array<{ taskId?: string; status?: string; resolved?: boolean }> };
+    expect(gate.blocked).toBe(false);
+    expect(gate.blockers?.[0]).toMatchObject({ taskId: blockerId, status: "completed", resolved: true });
+    const routed = (result.value.results as Array<Record<string, unknown>>)[0]!;
+    expect(routed.kind).toBe("created");
+    expect(taskState(candidateId).status).toBe("pending");
+  }, TODOS_INTEGRATION_TIMEOUT_MS);
 });

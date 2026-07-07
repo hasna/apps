@@ -216,6 +216,23 @@ failures are recorded as failed loop runs with a `runtime preflight failed`
 error, so health/routing checks can create follow-up tasks without spawning the
 worker.
 
+For controlled launches, scheduled todos-task drains can be guarded by blocker
+tasks:
+
+```bash
+loops routes schedule todos-task platform-drain \
+  --every 5m \
+  --todos-project /path/to/source/todos-project \
+  --tags auto:route \
+  --launch-gate "pa19-controlled-launch" \
+  --launch-gate-blocker "/path/to/open-codewith::2d9d931b" \
+  --launch-gate-blocker "/path/to/open-loops::816e99db" \
+  --worktree-mode required
+```
+
+The drain creates zero worker loops while any blocker task is not completed.
+Each blocked tick writes launch-gate evidence and leaves source tasks untouched.
+
 Run a Claude loop every morning:
 
 ```bash
