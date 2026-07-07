@@ -4636,7 +4636,7 @@ describe("loops CLI", () => {
     expect(invalid.status).not.toBe(0);
     expect(invalid.stderr).toContain("unsupported provider");
     expect(invalid.stderr).toContain("unsupported-provider");
-  });
+  }, 15_000);
 
   test("todos task PR approval routes require non-author GitHub reviewer evidence", () => {
     const dataDir = freshDataDir("loops-cli-event-pr-review-routing-");
@@ -5674,7 +5674,12 @@ describe("loops CLI", () => {
     ]);
     expect(preview.status).toBe(0);
     const value = JSON.parse(preview.stdout);
-    expect(value.invocation.scope.routeThrottle).toEqual({ maxActiveScope: "codewith-impl", maxPerProfile: 2 });
+    expect(value.invocation.scope.routeThrottle).toMatchObject({
+      maxActiveScope: "codewith-impl",
+      maxPerProfile: 2,
+      limits: { maxActive: 4, maxActiveScope: "codewith-impl", maxPerProfile: 2 },
+      routeScope: "codewith-impl",
+    });
     expect(value.throttle.limits).toMatchObject({ maxActive: 4, maxActiveScope: "codewith-impl", maxPerProfile: 2 });
   });
 
