@@ -143,7 +143,7 @@ describe('Userlist Push API client', () => {
     const previous = process.env.USERLIST_PUSH_API_KEY;
     delete process.env.USERLIST_PUSH_API_KEY;
     expect(() => Userlist.fromEnv()).toThrow('USERLIST_PUSH_API_KEY');
-    if (previous) process.env.USERLIST_PUSH_API_KEY = previous;
+    if (previous) process.env['USERLIST_PUSH_API_KEY'] = previous;
   });
 
   test('Userlist module routes identify and track through client', async () => {

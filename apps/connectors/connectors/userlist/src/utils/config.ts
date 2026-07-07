@@ -211,7 +211,7 @@ export function getApiSecret(): string | undefined {
 
 export function setApiSecret(apiSecret: string): void {
   const config = loadProfile();
-  config.apiSecret = apiSecret;
+  config['apiSecret'] = apiSecret;
   saveProfile(config);
 }
 
