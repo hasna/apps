@@ -12,6 +12,7 @@ import { usageSnapshotFilterForPeriod } from '../lib/periods.js'
 import { computeCostFromDb } from '../lib/pricing.js'
 import { packageMetadata } from '../lib/package-metadata.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
+import { economyCloudStorage, cloudListItems, cloudObject } from '../lib/cloud-storage.js'
 import type { Period } from '../types/index.js'
 import type { Agent } from '../lib/agents.js'
 
@@ -21,6 +22,12 @@ export const DEFAULT_MCP_HTTP_PORT = 8860
 export function buildServer(): any {
 const db = openDatabase()
 ensurePricingSeeded(db)
+
+// self_hosted client flip: when HASNA_ECONOMY_API_URL + HASNA_ECONOMY_API_KEY
+// are set (cloud mode), every data tool reads AND writes through the cloud /v1
+// HTTP API instead of the local SQLite store, so the MCP shares the same fleet
+// state as the CLI. Reverting the env falls back to the local `db`.
+const cloud = economyCloudStorage()
 
 // The MCP SDK's tool-registration generics are expensive enough to make
 // project-wide typecheck impractically slow here; keep the runtime object and
@@ -149,7 +156,9 @@ server.tool(
   { period: z.enum(['today', 'week', 'month', 'year', 'all']).optional(), machine: z.string().optional() },
   async ({ period, machine }: { period?: Exclude<Period, 'yesterday'>; machine?: string }) => {
     const resolved = (period ?? 'today') as Exclude<Period, 'yesterday'>
-    const s = querySummary(db, resolved, machine)
+    const s = cloud.active
+      ? await cloudObject<{ total_usd: number; sessions: number; requests: number; tokens: number }>(cloud, '/summary', { period: resolved, machine })
+      : querySummary(db, resolved, machine)
     const machineLabel = machine ? ` on ${machine}` : ''
     return text([
       `period: ${resolved}${machineLabel}`,
@@ -173,13 +182,9 @@ server.tool(
     limit: z.number().int().positive().max(100).optional(),
   },
   async ({ agent, project, account, machine, limit }: { agent?: Agent; project?: string; account?: string; machine?: string; limit?: number }) => {
-    const sessions = querySessions(db, {
-      agent,
-      project,
-      account,
-      machine,
-      limit: limit ?? 20,
-    }) as unknown as Array<Record<string, unknown>>
+    const sessions = (cloud.active
+      ? await cloudListItems<Record<string, unknown>>(cloud, 'sessions', { agent, project, account, machine, limit: limit ?? 20 })
+      : querySessions(db, { agent, project, account, machine, limit: limit ?? 20 }) as unknown as Array<Record<string, unknown>>)
     const lines = ['id       agent  cost       tokens   project']
     for (const session of sessions) lines.push(fmtSession(session))
     return text(lines.join('\n'))
@@ -194,7 +199,9 @@ server.tool(
     agent: z.enum(AGENTS).optional(),
   },
   async ({ n, agent }: { n?: number; agent?: Agent }) => {
-    const sessions = queryTopSessions(db, n ?? 10, agent) as unknown as Array<Record<string, unknown>>
+    const sessions = (cloud.active
+      ? await cloudListItems<Record<string, unknown>>(cloud, 'top', { n: n ?? 10, agent })
+      : queryTopSessions(db, n ?? 10, agent) as unknown as Array<Record<string, unknown>>)
     const lines = ['rank  id       agent  cost       tokens   project']
     sessions.forEach((session, i) => lines.push(`${String(i + 1).padEnd(5)} ${fmtSession(session)}`))
     return text(lines.join('\n'))
@@ -206,7 +213,9 @@ server.tool(
   'Cost per model. No params.',
   {},
   async () => {
-    const rows = queryModelBreakdown(db) as unknown as Array<Record<string, unknown>>
+    const rows = (cloud.active
+      ? await cloudListItems<Record<string, unknown>>(cloud, 'breakdown', { by: 'model' })
+      : queryModelBreakdown(db) as unknown as Array<Record<string, unknown>>)
     const lines = ['model                          agent     reqs    tokens   cost']
     for (const row of rows) {
       lines.push(`${String(row['model']).slice(0, 30).padEnd(31)}${String(row['agent']).padEnd(10)}${String(row['requests']).padEnd(8)}${fmtTok(Number(row['total_tokens'])).padEnd(9)}${fmtUsd(Number(row['cost_usd']))}`)
@@ -220,7 +229,9 @@ server.tool(
   'Cost per project. Params: period(today|week|month|year|all).',
   { period: z.enum(['today', 'week', 'month', 'year', 'all']).optional() },
   async ({ period }: { period?: Exclude<Period, 'yesterday'> }) => {
-    const rows = queryProjectBreakdown(db, period ?? 'all') as unknown as Array<Record<string, unknown>>
+    const rows = (cloud.active
+      ? await cloudListItems<Record<string, unknown>>(cloud, 'breakdown', { by: 'project', period: period ?? 'all' })
+      : queryProjectBreakdown(db, period ?? 'all') as unknown as Array<Record<string, unknown>>)
     const lines = ['project              sessions tokens   cost']
     for (const row of rows) {
       const name = String(row['project_name'] || row['project_path'] || '—').slice(0, 20)
@@ -235,7 +246,9 @@ server.tool(
   'Cost per coding agent. Params: period(today|week|month|year|all). Shows API-equivalent, billable API, and subscription-included usage.',
   { period: z.enum(['today', 'week', 'month', 'year', 'all']).optional() },
   async ({ period }: { period?: Exclude<Period, 'yesterday'> }) => {
-    const rows = queryAgentBreakdown(db, period ?? 'all') as unknown as Array<Record<string, unknown>>
+    const rows = (cloud.active
+      ? await cloudListItems<Record<string, unknown>>(cloud, 'breakdown', { by: 'agent', period: period ?? 'all' })
+      : queryAgentBreakdown(db, period ?? 'all') as unknown as Array<Record<string, unknown>>)
     if (rows.length === 0) return text('No agent usage yet.')
     const lines = ['agent      sessions requests tokens   api_eq    billable  included']
     for (const row of rows) {
@@ -258,7 +271,9 @@ server.tool(
   'Cost per account/profile. Params: period(today|week|month|year|all). Shows API-equivalent, billable API, and subscription-included usage.',
   { period: z.enum(['today', 'week', 'month', 'year', 'all']).optional() },
   async ({ period }: { period?: Exclude<Period, 'yesterday'> }) => {
-    const rows = queryAccountBreakdown(db, period ?? 'all') as unknown as Array<Record<string, unknown>>
+    const rows = (cloud.active
+      ? await cloudListItems<Record<string, unknown>>(cloud, 'breakdown', { by: 'account', period: period ?? 'all' })
+      : queryAccountBreakdown(db, period ?? 'all') as unknown as Array<Record<string, unknown>>)
     if (rows.length === 0) return text('No account-attributed sessions yet.')
     const lines = ['account              agent      sessions requests tokens   api_eq    billable  included']
     for (const row of rows) {
@@ -283,7 +298,9 @@ server.tool(
   'Budget limits vs spend, percent used, alert flags. No params.',
   {},
   async () => {
-    const budgets = getBudgetStatuses(db) as unknown as Array<Record<string, unknown>>
+    const budgets = (cloud.active
+      ? await cloudListItems<Record<string, unknown>>(cloud, 'budgets')
+      : getBudgetStatuses(db) as unknown as Array<Record<string, unknown>>)
     if (budgets.length === 0) return text('No budgets set.')
 
     const lines = ['scope                period   spent      limit      used%  status']
@@ -308,6 +325,16 @@ server.tool(
     alert_at_percent: z.number().positive().max(100).optional(),
   },
   async ({ period, limit_usd, project_path, agent, alert_at_percent }: { period: 'daily' | 'weekly' | 'monthly'; limit_usd: number; project_path?: string; agent?: Agent; alert_at_percent?: number }) => {
+    if (cloud.active) {
+      await cloud.client.create('budgets', {
+        project_path: project_path ?? null,
+        ...(agent ? { agent } : {}),
+        period,
+        limit_usd,
+        alert_at_percent: alert_at_percent ?? 80,
+      })
+      return text('Budget set (cloud).')
+    }
     const now = new Date().toISOString()
     const id = randomUUID()
     upsertBudget(db, {
@@ -329,6 +356,10 @@ server.tool(
   'Delete a budget by id.',
   { id: z.string() },
   async ({ id }: { id: string }) => {
+    if (cloud.active) {
+      await cloud.client.delete('budgets', id)
+      return text('Budget removed (cloud).')
+    }
     deleteBudget(db, id)
     return text('Budget removed.')
   },
@@ -339,7 +370,9 @@ server.tool(
   'Editable model pricing rows. Includes input/output/cache rates and context-cache storage.',
   {},
   async () => {
-    const rows = listModelPricing(db)
+    const rows = cloud.active
+      ? await cloudListItems<{ model: string; input_per_1m: number; output_per_1m: number; cache_read_per_1m: number; cache_write_per_1m: number; cache_write_1h_per_1m?: number; cache_storage_per_1m_hour?: number }>(cloud, 'pricing')
+      : listModelPricing(db)
     const lines = ['model                          input    output   cache-r  cache-w  cache-1h storage-h']
     for (const row of rows) {
       lines.push(
@@ -371,7 +404,7 @@ server.tool(
   async (input: { model: string; input_per_1m: number; output_per_1m: number; cache_read_per_1m?: number; cache_write_per_1m?: number; cache_write_1h_per_1m?: number; cache_storage_per_1m_hour?: number }) => {
     const model = input.model.trim()
     if (!model) return textError('model is required')
-    upsertModelPricing(db, {
+    const pricing = {
       model,
       input_per_1m: input.input_per_1m,
       output_per_1m: input.output_per_1m,
@@ -380,7 +413,12 @@ server.tool(
       cache_write_1h_per_1m: input.cache_write_1h_per_1m ?? 0,
       cache_storage_per_1m_hour: input.cache_storage_per_1m_hour ?? 0,
       updated_at: new Date().toISOString(),
-    })
+    }
+    if (cloud.active) {
+      await cloud.client.create('pricing', pricing)
+      return text(`Pricing set: ${model} (cloud)`)
+    }
+    upsertModelPricing(db, pricing)
     return text(`Pricing set: ${model}`)
   },
 )
@@ -390,6 +428,10 @@ server.tool(
   'Delete a model pricing row by model id.',
   { model: z.string() },
   async ({ model }: { model: string }) => {
+    if (cloud.active) {
+      await cloud.client.delete('pricing', model)
+      return text('Pricing removed (cloud).')
+    }
     deleteModelPricing(db, model)
     return text('Pricing removed.')
   },
@@ -400,7 +442,9 @@ server.tool(
   'Daily cost table by agent. Params: days(30)',
   { days: z.number().int().positive().max(365).optional() },
   async ({ days }: { days?: number }) => {
-    const rows = queryDailyBreakdown(db, days ?? 30) as Array<Record<string, unknown>>
+    const rows = (cloud.active
+      ? await cloudListItems<Record<string, unknown>>(cloud, 'daily', { days: days ?? 30 })
+      : queryDailyBreakdown(db, days ?? 30) as Array<Record<string, unknown>>)
     const byDate = new Map<string, { claude: number; takumi: number; codex: number; gemini: number }>()
 
     for (const row of rows) {
@@ -427,7 +471,9 @@ server.tool(
   'Actual provider billing totals from admin API sync. Params: period(today|yesterday|week|month|year|all)',
   { period: z.enum(['today', 'yesterday', 'week', 'month', 'year', 'all']).optional() },
   async ({ period }: { period?: Period }) => {
-    const summary = queryBillingSummary(db, period ?? 'month')
+    const summary = cloud.active
+      ? await cloudObject<{ total_usd: number; by_provider: Record<string, number> }>(cloud, '/billing', { period: period ?? 'month' })
+      : queryBillingSummary(db, period ?? 'month')
     const lines = ['provider    billed']
     for (const [provider, cost] of Object.entries(summary.by_provider)) {
       lines.push(`${provider.padEnd(11)}${fmtUsd(cost)}`)
@@ -442,6 +488,32 @@ server.tool(
   'Per-request breakdown of a single session. Params: session_id (prefix ok)',
   { session_id: z.string() },
   async ({ session_id }: { session_id: string }) => {
+    if (cloud.active) {
+      const matches = await cloudListItems<Record<string, unknown>>(cloud, 'sessions', { search: session_id, limit: 1 })
+      const session = matches[0]
+      if (!session) return textError(`Session not found: ${session_id}`)
+      const requests = await cloudObject<Array<Record<string, unknown>>>(cloud, `/sessions/${encodeURIComponent(String(session['id']))}/requests`)
+      const lines = [
+        `session: ${String(session['id']).slice(0, 16)}`,
+        `agent: ${session['agent']}  project: ${session['project_name'] || '—'}`,
+        `cost: ${fmtUsd(Number(session['total_cost_usd']))}  tokens: ${fmtTok(Number(session['total_tokens']))}  requests: ${session['request_count']}`,
+        '',
+        'time      model                  input    output   cache-r  cache-5m cache-1h cost',
+      ]
+      for (const request of (requests ?? [])) {
+        lines.push(
+          `${String(request['timestamp']).slice(11, 19)}  ` +
+          `${String(request['model']).slice(0, 22).padEnd(23)}` +
+          `${fmtTok(Number(request['input_tokens'])).padEnd(9)}` +
+          `${fmtTok(Number(request['output_tokens'])).padEnd(9)}` +
+          `${fmtTok(Number(request['cache_read_tokens'])).padEnd(9)}` +
+          `${fmtTok(Number(request['cache_create_5m_tokens'] ?? request['cache_create_tokens'] ?? 0)).padEnd(9)}` +
+          `${fmtTok(Number(request['cache_create_1h_tokens'] ?? 0)).padEnd(9)}` +
+          `${fmtUsd(Number(request['cost_usd']))}`,
+        )
+      }
+      return text(lines.join('\n'))
+    }
     const session = db.prepare(`SELECT * FROM sessions WHERE id = ? OR id LIKE ?`).get(session_id, `${session_id}%`) as Record<string, unknown> | null
     if (!session) return textError(`Session not found: ${session_id}`)
 
@@ -488,6 +560,10 @@ server.tool(
   { period: z.enum(['today', 'week', 'month', 'year', 'all']).optional(), agent: z.enum(AGENTS).optional() },
   async ({ period, agent }: { period?: Exclude<Period, 'yesterday'>; agent?: Agent }) => {
     const p = (period ?? 'month') as Period
+    if (cloud.active) {
+      const payload = await cloudObject<unknown>(cloud, '/usage', { period: p, agent })
+      return text(JSON.stringify(payload, null, 2))
+    }
     const snaps = queryUsageSnapshots(db, { agent, ...usageSnapshotFilterForPeriod(p) })
     const summary = querySummary(db, p, undefined, true)
     return text(JSON.stringify({ snapshots: snaps, summary }, null, 2))
@@ -499,6 +575,10 @@ server.tool(
   'Subscription vs API savings summary',
   { period: z.enum(['today', 'week', 'month', 'year', 'all']).optional(), agent: z.enum(AGENTS).optional() },
   async ({ period, agent }: { period?: Period; agent?: Agent }) => {
+    if (cloud.active) {
+      const payload = await cloudObject<unknown>(cloud, '/savings', { period: period ?? 'month', agent })
+      return text(JSON.stringify(payload, null, 2))
+    }
     return text(JSON.stringify(querySavingsSummary(db, period ?? 'month', agent), null, 2))
   },
 )
@@ -508,7 +588,9 @@ server.tool(
   'List configured subscription plans used by savings calculations.',
   {},
   async () => {
-    const rows = listSubscriptions(db)
+    const rows = cloud.active
+      ? await cloudListItems<{ id: string; provider: string; plan: string; agent?: string | null; monthly_fee_usd: number; included_usage_usd: number; active: number | boolean }>(cloud, 'subscriptions')
+      : listSubscriptions(db)
     if (rows.length === 0) return text('No subscriptions configured.')
     const lines = ['id                 provider   plan       agent      fee       included  active']
     for (const row of rows) {
@@ -555,6 +637,10 @@ server.tool(
       created_at: now,
       updated_at: now,
     }
+    if (cloud.active) {
+      await cloud.client.create('subscriptions', row)
+      return text(JSON.stringify({ ...row, storage: 'cloud' }, null, 2))
+    }
     upsertSubscription(db, row)
     return text(JSON.stringify(row, null, 2))
   },
@@ -565,6 +651,10 @@ server.tool(
   'Delete a subscription plan by id.',
   { id: z.string() },
   async ({ id }: { id: string }) => {
+    if (cloud.active) {
+      await cloud.client.delete('subscriptions', id)
+      return text('Subscription removed (cloud).')
+    }
     deleteSubscription(db, id)
     return text('Subscription removed.')
   },
@@ -585,7 +675,9 @@ server.tool(
   'All spending goals with current progress. No params.',
   {},
   async () => {
-    const goals = getGoalStatuses(db) as unknown as Array<Record<string, unknown>>
+    const goals = (cloud.active
+      ? await cloudListItems<Record<string, unknown>>(cloud, 'goals')
+      : getGoalStatuses(db) as unknown as Array<Record<string, unknown>>)
     if (goals.length === 0) return text('No goals set.')
 
     const lines = ['period   scope                limit      spent      used%  status']
@@ -609,6 +701,15 @@ server.tool(
     agent: z.string().optional(),
   },
   async ({ period, limit_usd, project_path, agent }: { period: 'day' | 'week' | 'month' | 'year'; limit_usd: number; project_path?: string; agent?: string }) => {
+    if (cloud.active) {
+      await cloud.client.create('goals', {
+        period,
+        project_path: project_path ?? null,
+        ...(agent ? { agent } : {}),
+        limit_usd,
+      })
+      return text(`Goal set: ${period} $${limit_usd} (cloud)`)
+    }
     const now = new Date().toISOString()
     upsertGoal(db, {
       id: randomUUID(),
@@ -628,6 +729,10 @@ server.tool(
   'Delete a goal by id.',
   { id: z.string() },
   async ({ id }: { id: string }) => {
+    if (cloud.active) {
+      await cloud.client.delete('goals', id)
+      return text('Goal removed (cloud).')
+    }
     deleteGoal(db, id)
     return text('Goal removed.')
   },
@@ -638,7 +743,9 @@ server.tool(
   'List all machines that have synced data. No params.',
   {},
   async () => {
-    const machines = listMachines(db)
+    const machines = (cloud.active
+      ? await cloudListItems<{ machine_id: string; sessions: number; requests: number; total_cost_usd: number; last_active?: string | null }>(cloud, 'machines')
+      : listMachines(db))
     if (machines.length === 0) return text(`No machine data yet. Current machine: ${getMachineId()}`)
     const lines = ['machine          sessions  requests  cost        last_active']
     for (const m of machines) {
