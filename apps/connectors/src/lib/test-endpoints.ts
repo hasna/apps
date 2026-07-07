@@ -97,6 +97,10 @@ export const TEST_ENDPOINTS: Record<string, TestEndpoint> = {
     // Use a GET to the base crawl endpoint; 401 = bad key, 405/200 = key works
     successCodes: [200, 405],
   },
+  "stability-api-platform": {
+    url: "https://api.stabilityapiplatform.com/v1/items",
+    headers: (key) => ({ Authorization: `Bearer ${key}` }),
+  },
 
   // ── Design & Content ─────────────────────────────────────
   figma: {

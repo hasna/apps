@@ -934,6 +934,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["blockchain", "smart contracts", "web3", "api", "infrastructure"],
   },
   {
+    name: "stability-api-platform",
+    displayName: "Stability Api Platform",
+    description: "Stability Api Platform API: items, events, search, and raw API access",
+    category: "Developer Tools",
+    tags: ["api", "development", "rest"],
+  },
+  {
     name: "strapi",
     displayName: "Strapi",
     description: "Open-source headless CMS and content API platform",
