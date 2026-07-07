@@ -4,7 +4,7 @@ import { extname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(fileURLToPath(new URL("..", import.meta.url)));
-const skippedDirs = new Set([".git", ".hasna", "node_modules"]);
+const skippedDirs = new Set([".git", ".hasna", ".bun-cache", ".tmp", "node_modules"]);
 const skippedFiles = new Set([".project.json"]);
 const scannedExtensions = new Set([".ts", ".js", ".json", ".md", ".yml", ".yaml", ".toml", ".lock"]);
 

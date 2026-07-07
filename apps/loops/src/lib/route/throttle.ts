@@ -1,8 +1,7 @@
-import { realpathSync } from "node:fs";
-import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import type { Store } from "../store.js";
 import { ValidationError } from "../errors.js";
+import { gitProjectRootForPath, isExistingGitProjectPath, realpathOrResolve } from "../git-project.js";
 import { taskEventField } from "./fields.js";
 import { nonNegativeInteger, positiveInteger } from "./parse.js";
 
@@ -54,21 +53,7 @@ export function hasThrottleLimits(limits: RouteThrottleLimits): boolean {
 export function normalizeRoutePath(value: string | undefined): string | undefined {
   if (!value?.trim()) return undefined;
   const resolved = resolve(value.trim());
-  let canonical = resolved;
-  try {
-    canonical = realpathSync(resolved);
-  } catch {
-    return canonical;
-  }
-  const gitRoot = spawnSync("git", ["-C", canonical, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
-  if (gitRoot.status === 0 && gitRoot.stdout.trim()) {
-    try {
-      return realpathSync(gitRoot.stdout.trim());
-    } catch {
-      return resolve(gitRoot.stdout.trim());
-    }
-  }
-  return canonical;
+  return gitProjectRootForPath(resolved) ?? realpathOrResolve(resolved);
 }
 
 export function routeProjectGroup(optsGroup: string | undefined, data: Record<string, unknown>, metadata: Record<string, unknown>): string | undefined {
@@ -123,11 +108,6 @@ export function routeThrottleDryRunPreview(args: { projectPath: string; projectG
     ...(projectGroup ? { projectGroup } : {}),
     limits: args.limits,
   };
-}
-
-export function isExistingGitProjectPath(path: string): boolean {
-  const result = spawnSync("git", ["-C", path, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8" });
-  return result.status === 0;
 }
 
 export function validateRequiredRouteWorktreeProjectPath(opts: { worktreeMode?: string }, projectPath: string): void {

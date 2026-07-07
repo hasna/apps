@@ -81,6 +81,7 @@ import {
   validateCustomLoopTemplateFile as validateCustomLoopTemplateFileWithReserved,
 } from "./templates-custom.js";
 import type { CustomLoopTemplateImportOptions, CustomLoopTemplateImportResult } from "./templates-custom.js";
+import { gitProjectRootForPath } from "./git-project.js";
 
 export type { CustomLoopTemplateImportOptions, CustomLoopTemplateImportResult } from "./templates-custom.js";
 
@@ -318,15 +319,7 @@ function defaultWorktreeRoot(root: string | undefined): string {
 }
 
 function gitRootFor(path: string): string | undefined {
-  if (!existsSync(path)) return undefined;
-  try {
-    return execFileSync("git", ["-C", path, "rev-parse", "--show-toplevel"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  } catch {
-    return undefined;
-  }
+  return gitProjectRootForPath(path);
 }
 
 function gitCommonDirFor(path: string): string | undefined {

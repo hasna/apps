@@ -87,7 +87,11 @@ function slugify(value: string): string {
 
 function repoSlugFromCwd(cwd: string | undefined): string {
   if (!cwd || cwd === userHome()) return "";
-  if (cwd.includes("/.hasna/loops/")) return "";
+  const home = userHome().replace(/\/+$/g, "");
+  const normalized = cwd.replace(/\/+$/g, "");
+  const loopsDataDir = `${home}/.hasna/loops`;
+  if (normalized === loopsDataDir) return "";
+  if (normalized.startsWith(`${loopsDataDir}/`) && !normalized.startsWith(`${loopsDataDir}/worktrees/`)) return "";
   return slugify(basename(cwd));
 }
 

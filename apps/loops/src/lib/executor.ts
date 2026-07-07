@@ -493,7 +493,9 @@ function remoteWorktreePrepareLines(worktree: AgentWorktreeSpec): string[] {
   return [
     "__openloops_prepare_worktree() {",
     `  local repo=${shellQuote(repoRoot)} path=${shellQuote(path)} branch=${shellQuote(branch)}`,
-    "  local top expected_common actual_common current status recovered",
+    "  local repo_top top expected_common actual_common current status recovered",
+    '  repo_top="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null)" || { echo "worktree repoRoot is not a git repository: $repo" >&2; return 1; }',
+    '  if [ "$(cd "$repo_top" 2>/dev/null && pwd -P)" != "$(cd "$repo" 2>/dev/null && pwd -P)" ]; then echo "worktree repoRoot is not a git repository: $repo" >&2; return 1; fi',
     '  if [ -L "$path" ]; then echo "refusing symlinked worktree path $path" >&2; return 1; fi',
     '  if [ -e "$path" ]; then',
     '    top="$(git -C "$path" rev-parse --show-toplevel 2>/dev/null)" || { echo "refusing to reuse non-worktree path: $path" >&2; return 1; }',
@@ -517,7 +519,6 @@ function remoteWorktreePrepareLines(worktree: AgentWorktreeSpec): string[] {
     "    fi",
     "    return 0",
     "  fi",
-    '  git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "worktree repoRoot is not a git repository: $repo" >&2; return 1; }',
     '  mkdir -p "$(dirname "$path")" || return 1',
     "  # Preparation chatter goes to stderr so run stdout stays the agent's.",
     '  if git -C "$repo" show-ref --verify --quiet "refs/heads/$branch"; then',
@@ -747,6 +748,14 @@ async function ensureLocalWorktree(
   }
   const git = (args: string[]): Promise<Awaited<ReturnType<typeof spawnCapture>>> =>
     spawnCapture("git", args, { env, timeoutMs: WORKTREE_GIT_TIMEOUT_MS });
+
+  const repoTop = await git(["-C", repoRoot, "rev-parse", "--show-toplevel"]);
+  if (repoTop.error || (repoTop.status ?? 1) !== 0 || !repoTop.stdout.trim()) {
+    return { error: `worktree repoRoot is not a git repository: ${repoRoot}` };
+  }
+  if (!resolvedDirEquals(repoTop.stdout.trim(), repoRoot)) {
+    return { error: `worktree repoRoot is not a git repository: ${repoRoot}` };
+  }
 
   let stats: ReturnType<typeof lstatSync> | undefined;
   try {
