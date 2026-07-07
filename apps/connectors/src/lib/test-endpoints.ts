@@ -277,6 +277,12 @@ export const TEST_ENDPOINTS: Record<string, TestEndpoint> = {
     headers: (key) => ({ Authorization: `Bearer ${key}`, "Notion-Version": "2022-06-28" }),
   },
 
+  // ── Communication ────────────────────────────────────────
+  "zoho-cliq": {
+    url: "https://cliq.zoho.com/api/v2/users/me",
+    headers: (key) => ({ Authorization: `Zoho-oauthtoken ${key}` }),
+  },
+
   // ── Patents & IP ─────────────────────────────────────────
   uspto: {
     // USPTO public API (no auth required for basic search, but tests connectivity)

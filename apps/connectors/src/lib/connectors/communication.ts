@@ -591,6 +591,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["chatbot", "ai", "support"],
   },
   {
+    name: "zoho-cliq",
+    displayName: "Zoho Cliq",
+    description: "Team chat, channels, and messaging for business collaboration",
+    category: "Communication",
+    tags: ["zoho", "chat", "messaging"],
+  },
+  {
     name: "zulip",
     displayName: "Zulip",
     description: "Open-source team chat with threaded conversations",
