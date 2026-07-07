@@ -1038,4 +1038,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Developer Tools",
     tags: ["monitoring", "infrastructure", "network"],
   },
+  {
+    name: "stainlessapi",
+    displayName: "Stainless",
+    description: "Generate SDKs from OpenAPI specs - builds, projects, and orgs",
+    category: "Developer Tools",
+    tags: ["sdk", "openapi", "codegen", "api"],
+  },
 ];
