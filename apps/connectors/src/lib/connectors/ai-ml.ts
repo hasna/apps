@@ -1025,6 +1025,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "med-legal", "healthcare"],
   },
   {
+    name: "weaviate",
+    displayName: "Weaviate",
+    description: "Open-source vector database for AI embeddings",
+    category: "AI & ML",
+    tags: ["ai", "vector", "embeddings", "database"],
+  },
+  {
     name: "wonderchat",
     displayName: "Wonderchat",
     description: "AI chatbot builder from website content",
