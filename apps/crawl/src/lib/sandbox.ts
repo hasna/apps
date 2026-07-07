@@ -1,5 +1,9 @@
 import type { Page, Crawl, CreateCrawlInput } from "../types/index.js";
 
+const SANDBOX_DB_PATH = "/tmp/crawl-sandbox.db";
+const INSTALL_CRAWL_COMMAND =
+  "npm install -g webcrawl 2>/dev/null || npm install -g @hasna/crawl 2>/dev/null || true";
+
 export interface SandboxCrawlResult {
   crawl: Crawl;
   pages: Page[];
@@ -26,6 +30,52 @@ export function checkE2B(): { available: boolean; reason?: string } {
   return { available: true };
 }
 
+export function quoteSandboxShellArg(value: string | number): string {
+  const text = String(value);
+  if (text.length === 0) return "''";
+  return `'${text.replaceAll("'", "'\\''")}'`;
+}
+
+function buildSandboxCommand(args: Array<string | number>): string {
+  return args.map(quoteSandboxShellArg).join(" ");
+}
+
+export function buildSandboxEnv(): Record<string, string> {
+  return {
+    CRAWL_DB_PATH: SANDBOX_DB_PATH,
+  };
+}
+
+export function buildSandboxCrawlCommand(input: CreateCrawlInput): string {
+  const args: Array<string | number> = ["crawl", "crawl", input.url];
+
+  if (input.depth !== undefined) args.push("--depth", input.depth);
+  if (input.maxPages !== undefined) args.push("--max-pages", input.maxPages);
+  if (input.options?.render) args.push("--render");
+  if (input.options?.screenshot) args.push("--screenshot");
+  if (input.options?.delay !== undefined) args.push("--delay", input.options.delay);
+  args.push("--json");
+
+  return buildSandboxCommand(args);
+}
+
+export function buildSandboxPagesCommand(crawlId: string): string {
+  return buildSandboxCommand(["crawl", "pages", crawlId, "--json"]);
+}
+
+export function buildSandboxMapCommand(
+  url: string,
+  opts: { limit?: number; search?: string } = {}
+): string {
+  const args: Array<string | number> = ["crawl", "map", url];
+
+  if (opts.limit !== undefined) args.push("--limit", opts.limit);
+  if (opts.search) args.push("--search", opts.search);
+  args.push("--json");
+
+  return buildSandboxCommand(args);
+}
+
 /**
  * Run a crawl inside an isolated e2b cloud sandbox.
  * Installs webcrawl in the sandbox, runs the crawl, returns results.
@@ -45,11 +95,8 @@ export async function crawlInSandbox(
   const start = Date.now();
 
   const sandbox = await Sandbox.create({
-    envs: {
-      ...(process.env.OPENAI_API_KEY ? { OPENAI_API_KEY: process.env.OPENAI_API_KEY } : {}),
-      ...(process.env.ANTHROPIC_API_KEY ? { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY } : {}),
-      CRAWL_DB_PATH: "/tmp/crawl-sandbox.db",
-    },
+    apiKey,
+    envs: buildSandboxEnv(),
   });
 
   opts.onOutput?.(`[sandbox] Created: ${sandbox.sandboxId}`);
@@ -57,26 +104,13 @@ export async function crawlInSandbox(
   try {
     // Install webcrawl (or fallback to @hasna/crawl)
     opts.onOutput?.("[sandbox] Installing webcrawl...");
-    const install = await sandbox.commands.run(
-      "npm install -g webcrawl 2>/dev/null || npm install -g @hasna/crawl 2>/dev/null || true",
-      { timeoutMs: 120_000 }
-    );
+    const install = await sandbox.commands.run(INSTALL_CRAWL_COMMAND, { timeoutMs: 120_000 });
     opts.onOutput?.(`[sandbox] Install done (exit ${install.exitCode})`);
 
-    // Build crawl command
-    const args = [
-      `"${input.url}"`,
-      input.depth ? `--depth ${input.depth}` : "",
-      input.maxPages ? `--max-pages ${input.maxPages}` : "",
-      input.options?.render ? "--render" : "",
-      input.options?.screenshot ? "--screenshot" : "",
-      input.options?.delay ? `--delay ${input.options.delay}` : "",
-      "--json",
-    ].filter(Boolean).join(" ");
+    const crawlCommand = buildSandboxCrawlCommand(input);
+    opts.onOutput?.(`[sandbox] Running: ${crawlCommand}`);
 
-    opts.onOutput?.(`[sandbox] Running: crawl crawl ${args}`);
-
-    const crawlResult = await sandbox.commands.run(`crawl crawl ${args}`, {
+    const crawlResult = await sandbox.commands.run(crawlCommand, {
       timeoutMs,
       onStdout: (line: string) => opts.onOutput?.(`[sandbox] ${line}`),
       onStderr: (line: string) => opts.onOutput?.(`[sandbox] stderr: ${line}`),
@@ -96,10 +130,9 @@ export async function crawlInSandbox(
 
     // Fetch pages via CLI
     opts.onOutput?.(`[sandbox] Fetching pages for crawl ${crawl.id}...`);
-    const pagesResult = await sandbox.commands.run(
-      `crawl pages ${crawl.id} --json`,
-      { timeoutMs: 30_000 }
-    );
+    const pagesResult = await sandbox.commands.run(buildSandboxPagesCommand(crawl.id), {
+      timeoutMs: 30_000,
+    });
 
     let pages: Page[] = [];
     try {
@@ -170,25 +203,16 @@ export async function mapInSandbox(
     throw new Error("e2b not installed. Run: bun add e2b");
   });
 
-  if (!process.env.E2B_API_KEY) throw new Error("E2B_API_KEY not set");
+  const apiKey = opts.apiKey ?? process.env.E2B_API_KEY;
+  if (!apiKey) throw new Error("E2B_API_KEY not set");
 
-  const sandbox = await Sandbox.create();
+  const sandbox = await Sandbox.create({ apiKey });
   opts.onOutput?.(`[sandbox] Created: ${sandbox.sandboxId}`);
 
   try {
-    await sandbox.commands.run(
-      "npm install -g webcrawl 2>/dev/null || npm install -g @hasna/crawl 2>/dev/null || true",
-      { timeoutMs: 120_000 }
-    );
+    await sandbox.commands.run(INSTALL_CRAWL_COMMAND, { timeoutMs: 120_000 });
 
-    const args = [
-      `"${url}"`,
-      opts.limit ? `--limit ${opts.limit}` : "",
-      opts.search ? `--search "${opts.search}"` : "",
-      "--json",
-    ].filter(Boolean).join(" ");
-
-    const result = await sandbox.commands.run(`crawl map ${args}`, {
+    const result = await sandbox.commands.run(buildSandboxMapCommand(url, opts), {
       timeoutMs: opts.timeoutMs ?? 60_000,
     });
 
