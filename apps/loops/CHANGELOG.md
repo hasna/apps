@@ -55,6 +55,40 @@ actually ran.
   execution over the runner protocol, and id-preserving remote import remain
   follow-up work.
 
+## 0.4.15 – 0.4.17 (2026-07-06/07 — unpublished; first shipped with 0.4.18)
+
+These three versions were committed to `main` with version bumps but never
+published to npm individually; the 0.4.18 release is the first registry artifact
+that carries them. Consolidated here so the published history stays honest.
+
+### Added
+
+- **0.4.15** — self-hosted client mode: the CLI routes loop reads/writes to the
+  hosted `/v1` API when `self_hosted` mode is configured (#74).
+- **0.4.16** — id-preserving bulk import endpoint (`POST /v1/import`) for
+  self-hosted backfill, plus `loops self-hosted push --apply` in the CLI (#76).
+- **0.4.17** — `GET /v1/loops/count` and `GET /v1/runs/count` endpoints (#77).
+- Run receipt contract: run receipts table + API surface for verifiable run
+  evidence (`migrations/0005_run_receipts.sql` mirror).
+
+### Changed
+
+- **SQLite schema `user_version` 7 → 8** via ledger migrations
+  `0009_run_receipts` and `0010_work_item_machine_id` (additive; applied
+  automatically on first open). NOTE: binaries older than this range refuse to
+  open a migrated database ("schema version 8 is newer than this binary
+  supports"), so downgrading below 0.4.15 after opening a database with this
+  release requires restoring a pre-upgrade backup. A version-tolerance softening
+  (open unless a known-breaking delta) is planned follow-up work.
+- Launch-gated route drains: `--launch-gate`/`--launch-gate-blocker` hold a
+  drain closed until named blocker tasks are completed.
+
+### Fixed
+
+- codewith agent JSON output parsing (#17).
+- PR handoff: no-remote fallback repaired and handoff artifact errors scrubbed
+  from templates.
+
 ## 0.4.14 (2026-07-06)
 
 Self-hosted control-plane service brought to the full Hasna standard: all four
