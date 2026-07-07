@@ -58,6 +58,24 @@ describe("todos client self_hosted resolver", () => {
     expect(isCloudRouting(CLOUD_ENV)).toBe(true);
   });
 
+  test("API_URL + API_KEY WITHOUT a mode var -> local (flip-safety guard)", () => {
+    // contracts >=0.5.1 would resolve bare URL+KEY to cloud; the todos guard keeps
+    // it local so the flip is only ever armed by an explicit HASNA_TODOS_STORAGE_MODE.
+    const noMode = { HASNA_TODOS_API_URL: "https://todos.hasna.xyz", HASNA_TODOS_API_KEY: "k" } as never;
+    expect(getTodosCloudClient(noMode)).toBeNull();
+    expect(isCloudRouting(noMode)).toBe(false);
+  });
+
+  test("mode=cloud + API_URL + API_KEY -> cloud-http client", () => {
+    const client = getTodosCloudClient({
+      HASNA_TODOS_STORAGE_MODE: "cloud",
+      HASNA_TODOS_API_URL: "https://todos.hasna.xyz",
+      HASNA_TODOS_API_KEY: "hasna_todos_test_key",
+    } as never);
+    expect(client).not.toBeNull();
+    expect(client!.baseUrl).toBe("https://todos.hasna.xyz/v1");
+  });
+
   test("mode=self_hosted but missing API key -> throws (no silent local drift)", () => {
     expect(() =>
       getTodosCloudClient({ HASNA_TODOS_STORAGE_MODE: "self_hosted", HASNA_TODOS_API_URL: "https://todos.hasna.xyz" }),

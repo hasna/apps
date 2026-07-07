@@ -35,6 +35,18 @@ let _cache: { client: HasnaStorageClient | null } | undefined;
  */
 export function getTodosCloudClient(env: Env = process.env as Env): HasnaStorageClient | null {
   if (_cache !== undefined) return _cache.client;
+  // Local-first guard (flip safety): NEVER route to cloud unless a storage MODE is
+  // explicitly requested. @hasna/contracts >= 0.5.1 changed the resolver so that a
+  // bare API_URL+API_KEY (no mode) resolves to cloud — which would silently drift
+  // any machine that merely has those env vars present, violating the reversible
+  // "unset the mode -> local" contract. Require an explicit cloud mode here so the
+  // flip stays deliberate and `HASNA_TODOS_STORAGE_MODE` is the single switch.
+  const mode = (env.HASNA_TODOS_STORAGE_MODE ?? env.TODOS_STORAGE_MODE ?? "").trim().toLowerCase();
+  const CLOUD_MODES = new Set(["self_hosted", "cloud", "remote", "hybrid"]);
+  if (!CLOUD_MODES.has(mode)) {
+    _cache = { client: null };
+    return _cache.client;
+  }
   const resolved = resolveStorageClient("todos", env);
   _cache = { client: resolved.transport === "cloud-http" ? resolved.client : null };
   return _cache.client;
