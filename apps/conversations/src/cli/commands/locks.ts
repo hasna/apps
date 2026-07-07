@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import { acquireLock, releaseLock, checkLock, listLocksEnriched, cleanExpiredLocks, releaseStaleAgentLocks } from "../../lib/locks.js";
-import { sendMessage } from "../../lib/messages.js";
+import { sendMessage as cloudSendMessage } from "../../lib/cloud-store.js";
 import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { windowItems } from "../../lib/compact-output.js";
@@ -48,7 +48,7 @@ export function registerLockCommands(program: Command): void {
     .option("--exclusive", "Acquire an exclusive lock instead of advisory")
     .option("--no-dm", "Do not DM the holding agent on conflict")
     .option("-j, --json", "Output as JSON")
-    .action((key, opts) => {
+    .action(async (key, opts) => {
       const resourceId = resolveKey(key);
       const resourceType = resolveType(opts.type);
       const expiryMs = resolveTtlMs(opts.ttl);
@@ -63,7 +63,7 @@ export function registerLockCommands(program: Command): void {
 
       if (!result.acquired && result.held_by && opts.dm !== false) {
         try {
-          sendMessage({
+          await cloudSendMessage({
             from: agent,
             to: result.held_by,
             content: `Lock conflict: I (@${agent}) tried to acquire ${lockType} lock on \`${resourceType}/${resourceId}\` but you hold it. If you no longer need it, release it with \`conversations locks release ${resourceId}${resourceType !== DEFAULT_RESOURCE_TYPE ? ` --type ${resourceType}` : ""}\`.`,

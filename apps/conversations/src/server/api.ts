@@ -218,6 +218,7 @@ async function handleV1(
     const since = str(url.searchParams.get("since"));
     const sinceIdRaw = str(url.searchParams.get("since_id"));
     const q = str(url.searchParams.get("q"));
+    const uuid = str(url.searchParams.get("uuid"));
     const mentionsOnly = str(url.searchParams.get("mentions_only"));
     const unreadOnly = isTrue(url.searchParams.get("unread_only"));
     const threadsOnly = isTrue(url.searchParams.get("threads_only"));
@@ -235,6 +236,7 @@ async function handleV1(
     if (channel) { params.push(channel); clauses.push(`channel = $${params.length}`); }
     if (session) { params.push(session); clauses.push(`session_id = $${params.length}`); }
     if (projectId) { params.push(projectId); clauses.push(`project_id = $${params.length}`); }
+    if (uuid) { params.push(uuid); clauses.push(`uuid = $${params.length}`); }
     if (since) { params.push(since); clauses.push(`created_at > $${params.length}`); }
     if (sinceIdRaw && Number.isFinite(Number(sinceIdRaw))) { params.push(Number(sinceIdRaw)); clauses.push(`id > $${params.length}`); }
     if (q) { params.push(`%${q}%`); clauses.push(`content ILIKE $${params.length}`); }

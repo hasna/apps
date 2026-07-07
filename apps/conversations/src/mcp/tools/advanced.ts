@@ -5,7 +5,11 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { sendMessage, getMessageById, getThreadReplies, listUnreadCounts, listUnreadCountsWithMentions, getMessagesForAgent, markMentionsRead, getReadReceipts, getMessageReadStatus, recordReadReceipt } from "../../lib/messages.js";
+import { getMessageById, getThreadReplies, listUnreadCounts, listUnreadCountsWithMentions, getMessagesForAgent, markMentionsRead, getReadReceipts, getMessageReadStatus, recordReadReceipt } from "../../lib/messages.js";
+// Writes (auto-DMs) route to the cloud API in self_hosted mode so a flipped
+// fleet sees them; falls through to the local store otherwise. Read-only tools
+// below still read the local store (no cloud endpoint yet) — documented residual.
+import { sendMessage as cloudSendMessage } from "../../lib/cloud-store.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { addReaction, removeReaction, getReactions, getReactionSummary } from "../../lib/reactions.js";
 import { acquireLock, tryBulkAcquireLock, releaseLock, checkLock, listLocksEnriched, cleanExpiredLocks, releaseStaleAgentLocks } from "../../lib/locks.js";
@@ -307,7 +311,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
 
     if (!result.acquired && result.held_by && auto_dm !== false) {
       try {
-        sendMessage({
+        await cloudSendMessage({
           from: agent,
           to: result.held_by,
           content: `Lock conflict: I (@${agent}) tried to acquire ${lock_type ?? "advisory"} lock on \`${resource_type}/${resource_id}\` but you hold it. If you no longer need it, release it with \`release_lock\`.`,
@@ -379,7 +383,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
 
     if (!result.acquired && result.blocked_by && args.auto_dm !== false) {
       try {
-        sendMessage({
+        await cloudSendMessage({
           from: agent,
           to: result.blocked_by.held_by,
           content: `Bulk lock conflict: I (@${agent}) tried to atomically acquire ${args.resources.length} locks but you hold \`${result.blocked_by.resource_type}/${result.blocked_by.resource_id}\`. Release it when done.`,
