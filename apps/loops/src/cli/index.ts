@@ -37,6 +37,7 @@ import {
 } from "../lib/format.js";
 import { computeNextAfter, parseDuration } from "../lib/recurrence.js";
 import { Store } from "../lib/store.js";
+import { resolveCloudLoopStore } from "../lib/cloud/loops.js";
 import { executeWorkflow, preflightWorkflow } from "../lib/workflow-runner.js";
 import { advanceLoop, executeClaimedRun, manualRunScheduledFor, manualRunSource, shouldAdvanceManualRun, tick } from "../lib/scheduler.js";
 import { daemonStatus, stopDaemon } from "../daemon/control.js";
@@ -572,22 +573,28 @@ addGoalOptions(
       ),
     ),
   ),
-).action(runAction((name, opts) => {
+).action(runAction(async (name, opts) => {
+  const target: LoopTarget = {
+    type: "command",
+    command: opts.cmd,
+    cwd: opts.cwd,
+    shell: opts.shell,
+    timeoutMs: timeoutDuration(opts.timeout, "--timeout"),
+    account: accountFromOpts(opts),
+    preflight: runtimePreflightFromOpts(opts),
+  };
+  const input = baseCreateInput(name, opts, target);
+  const preflight = opts.preflight
+    ? preflightLoopTarget(input.target as Exclude<LoopTarget, { type: "workflow" }>, { name, type: "command" }, { loopName: name }, { machine: input.machine })
+    : undefined;
+  const cloud = resolveCloudLoopStore();
+  if (cloud) {
+    const loop = await cloud.createLoop(input);
+    printCreatedLoop(loop, `created loop ${loop.id} (${loop.name}) next=${loop.nextRunAt}`, preflight);
+    return;
+  }
   const store = new Store();
   try {
-    const target: LoopTarget = {
-      type: "command",
-      command: opts.cmd,
-      cwd: opts.cwd,
-      shell: opts.shell,
-      timeoutMs: timeoutDuration(opts.timeout, "--timeout"),
-      account: accountFromOpts(opts),
-      preflight: runtimePreflightFromOpts(opts),
-    };
-    const input = baseCreateInput(name, opts, target);
-    const preflight = opts.preflight
-      ? preflightLoopTarget(input.target as Exclude<LoopTarget, { type: "workflow" }>, { name, type: "command" }, { loopName: name }, { machine: input.machine })
-      : undefined;
     const loop = store.createLoop(input);
     printCreatedLoop(loop, `created loop ${loop.id} (${loop.name}) next=${loop.nextRunAt}`, preflight);
   } finally {
@@ -622,7 +629,7 @@ addGoalOptions(
       ),
     ),
   ),
-).action(runAction((name, opts) => {
+).action(runAction(async (name, opts) => {
   const provider = opts.provider as AgentProvider;
   if (!["claude", "cursor", "codewith", "aicopilot", "opencode", "codex"].includes(provider)) {
     throw new ValidationError("unsupported provider");
@@ -630,31 +637,37 @@ addGoalOptions(
   if (!["safe", "none"].includes(opts.configIsolation)) {
     throw new ValidationError("--config-isolation must be safe or none");
   }
+  const target = normalizeLoopTargetForStorage({
+    type: "agent",
+    provider,
+    prompt: opts.prompt,
+    promptFile: opts.promptFile,
+    cwd: opts.cwd,
+    model: opts.model,
+    variant: opts.variant,
+    agent: opts.agent,
+    authProfile: providerAuthProfileFromOpts(opts, provider),
+    addDirs: listFromRepeatedOpts(opts.addDir),
+    timeoutMs: timeoutDuration(opts.timeout, "--timeout"),
+    configIsolation: opts.configIsolation,
+    permissionMode: permissionModeFromOpts(opts, provider),
+    sandbox: sandboxFromOpts(opts, provider),
+    allowlist: allowlistFromOpts(opts),
+    account: accountFromOpts(opts),
+    preflight: runtimePreflightFromOpts(opts),
+  }, { name, type: "agent", provider }, { baseDir: process.cwd() });
+  const input = baseCreateInput(name, opts, target);
+  const preflight = opts.preflight
+    ? preflightLoopTarget(input.target as Exclude<LoopTarget, { type: "workflow" }>, { name, type: "agent", provider }, { loopName: name }, { machine: input.machine })
+    : undefined;
+  const cloud = resolveCloudLoopStore();
+  if (cloud) {
+    const loop = await cloud.createLoop(input);
+    printCreatedLoop(loop, `created loop ${loop.id} (${loop.name}) next=${loop.nextRunAt}`, preflight);
+    return;
+  }
   const store = new Store();
   try {
-    const target = normalizeLoopTargetForStorage({
-      type: "agent",
-      provider,
-      prompt: opts.prompt,
-      promptFile: opts.promptFile,
-      cwd: opts.cwd,
-      model: opts.model,
-      variant: opts.variant,
-      agent: opts.agent,
-      authProfile: providerAuthProfileFromOpts(opts, provider),
-      addDirs: listFromRepeatedOpts(opts.addDir),
-      timeoutMs: timeoutDuration(opts.timeout, "--timeout"),
-      configIsolation: opts.configIsolation,
-      permissionMode: permissionModeFromOpts(opts, provider),
-      sandbox: sandboxFromOpts(opts, provider),
-      allowlist: allowlistFromOpts(opts),
-      account: accountFromOpts(opts),
-      preflight: runtimePreflightFromOpts(opts),
-    }, { name, type: "agent", provider }, { baseDir: process.cwd() });
-    const input = baseCreateInput(name, opts, target);
-    const preflight = opts.preflight
-      ? preflightLoopTarget(input.target as Exclude<LoopTarget, { type: "workflow" }>, { name, type: "agent", provider }, { loopName: name }, { machine: input.machine })
-      : undefined;
     const loop = store.createLoop(input);
     printCreatedLoop(loop, `created loop ${loop.id} (${loop.name}) next=${loop.nextRunAt}`, preflight);
   } finally {
@@ -1799,21 +1812,26 @@ program
   .option("--status <status>", "filter by status")
   .option("--archived", "show only archived loops")
   .option("--all", "include archived loops")
-  .action(runAction((opts) => {
+  .action(runAction(async (opts) => {
     if (opts.archived && opts.all) throw new ValidationError("use either --archived or --all, not both");
-    const store = new Store();
-    try {
-      const loops = store.listLoops({ status: opts.status, archived: opts.archived, includeArchived: opts.all });
-      if (isJson()) print(loops.map(publicLoop));
-      else {
-        for (const loop of loops) {
-          const machine = loop.machine ? `  machine=${loop.machine.id}` : "";
-          const archive = loop.archivedAt ? `  archived=${loop.archivedAt} from=${loop.archivedFromStatus ?? "-"}` : "";
-          console.log(`${loop.id}  ${loop.status.padEnd(7)}  cadence=${scheduleLabel(loop.schedule)}  next=${loop.nextRunAt ?? "-"}  ${loop.name}${machine}${archive}`);
-        }
+    const cloud = resolveCloudLoopStore();
+    const loops = cloud
+      ? await cloud.listLoops({ status: opts.status, archived: opts.archived, includeArchived: opts.all })
+      : (() => {
+          const store = new Store();
+          try {
+            return store.listLoops({ status: opts.status, archived: opts.archived, includeArchived: opts.all });
+          } finally {
+            store.close();
+          }
+        })();
+    if (isJson()) print(loops.map(publicLoop));
+    else {
+      for (const loop of loops) {
+        const machine = loop.machine ? `  machine=${loop.machine.id}` : "";
+        const archive = loop.archivedAt ? `  archived=${loop.archivedAt} from=${loop.archivedFromStatus ?? "-"}` : "";
+        console.log(`${loop.id}  ${loop.status.padEnd(7)}  cadence=${scheduleLabel(loop.schedule)}  next=${loop.nextRunAt ?? "-"}  ${loop.name}${machine}${archive}`);
       }
-    } finally {
-      store.close();
     }
   }));
 
@@ -1832,7 +1850,12 @@ program
     await runLoopsUiApp({ refreshMs });
   }));
 
-program.command("show <idOrName>").description("show one loop by id or name").action(runAction((idOrName) => {
+program.command("show <idOrName>").description("show one loop by id or name").action(runAction(async (idOrName) => {
+  const cloud = resolveCloudLoopStore();
+  if (cloud) {
+    print(publicLoop(await cloud.requireLoop(idOrName)));
+    return;
+  }
   const store = new Store();
   try {
     print(publicLoop(store.requireLoop(idOrName)));
@@ -2348,7 +2371,22 @@ program
     }
   }));
 
-function updateStatus(idOrName: string, status: "paused" | "active" | "stopped"): void {
+async function updateStatus(idOrName: string, status: "paused" | "active" | "stopped"): Promise<void> {
+  const cloud = resolveCloudLoopStore();
+  if (cloud) {
+    const loop = await cloud.requireLoop(idOrName);
+    if (loop.archivedAt) throw new Error(`loop is archived; run 'loops unarchive ${idOrName}' first`);
+    let nextRunAt = loop.nextRunAt;
+    if (status === "stopped") {
+      nextRunAt = undefined;
+    } else if (status === "active" && !loop.nextRunAt) {
+      const now = new Date();
+      nextRunAt = computeNextAfter(loop.schedule, now, now);
+    }
+    const updated = await cloud.updateLoop(loop.id, { status, nextRunAt });
+    print(publicLoop(updated), `${updated.id} ${updated.status}`);
+    return;
+  }
   const store = new Store();
   try {
     // requireUniqueLoop so an ambiguous name errors instead of mutating the
@@ -2376,7 +2414,13 @@ program
   .command("remove <idOrName>")
   .alias("rm")
   .description("delete a loop and its run history")
-  .action(runAction((idOrName) => {
+  .action(runAction(async (idOrName) => {
+    const cloud = resolveCloudLoopStore();
+    if (cloud) {
+      const removed = await cloud.deleteLoop(idOrName);
+      print({ removed }, removed ? "removed" : "not removed");
+      return;
+    }
     const store = new Store();
     try {
       // requireUniqueLoop so an ambiguous name errors instead of deleting the
@@ -2388,7 +2432,13 @@ program
     }
   }));
 
-program.command("archive <idOrName>").description("archive a loop without deleting history").action(runAction((idOrName) => {
+program.command("archive <idOrName>").description("archive a loop without deleting history").action(runAction(async (idOrName) => {
+  const cloud = resolveCloudLoopStore();
+  if (cloud) {
+    const loop = await cloud.archiveLoop(idOrName);
+    print(publicLoop(loop), `${loop.id} archived`);
+    return;
+  }
   const store = new Store();
   try {
     const loop = store.archiveLoop(idOrName);
@@ -2398,7 +2448,13 @@ program.command("archive <idOrName>").description("archive a loop without deleti
   }
 }));
 
-program.command("unarchive <idOrName>").alias("restore").description("restore an archived loop").action(runAction((idOrName) => {
+program.command("unarchive <idOrName>").alias("restore").description("restore an archived loop").action(runAction(async (idOrName) => {
+  const cloud = resolveCloudLoopStore();
+  if (cloud) {
+    const loop = await cloud.unarchiveLoop(idOrName);
+    print(publicLoop(loop), `${loop.id} ${loop.status}`);
+    return;
+  }
   const store = new Store();
   try {
     const loop = store.unarchiveLoop(idOrName);
