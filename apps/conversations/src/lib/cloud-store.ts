@@ -107,6 +107,30 @@ export function isCloudMode(env: Env = process.env): boolean {
   return resolveConversationsCloud(env) !== null;
 }
 
+/** The resolved cloud API base URL when in cloud mode (else null). */
+export function cloudApiUrl(env: Env = process.env): string | null {
+  if (!isCloudMode(env)) return null;
+  return env.HASNA_CONVERSATIONS_API_URL ?? env.CONVERSATIONS_API_URL ?? null;
+}
+
+/**
+ * Cloud-served status counts, mirroring the local `status` command but sourced
+ * from the self_hosted API so operators verifying a flip see cloud state (not
+ * the stale local db). Returns null when not in cloud mode so callers fall back
+ * to the local store.
+ */
+export async function cloudStatus(
+  env: Env = process.env,
+): Promise<{ api_url: string | null; total_messages: number; unread_messages: number } | null> {
+  const client = resolveConversationsCloud(env);
+  if (!client) return null;
+  const [total, unread] = await Promise.all([
+    cloudMessageCount(client, {}),
+    cloudMessageCount(client, { unread_only: true }),
+  ]);
+  return { api_url: cloudApiUrl(env), total_messages: total, unread_messages: unread };
+}
+
 // ── Routed message CRUD ──────────────────────────────────────────────────────
 
 export async function sendMessage(opts: SendMessageOptions, env: Env = process.env): Promise<Message> {

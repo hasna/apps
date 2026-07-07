@@ -12,6 +12,7 @@ import { getConversationSummary } from "../../lib/summary.js";
 import { buildGraph, getAgentNetwork, getGraphStats } from "../../lib/graph.js";
 import { listChannelNotificationSubscriptions, readChannelNotifications } from "../../lib/channel-notifications.js";
 import { windowItems } from "../../lib/compact-output.js";
+import { cloudStatus } from "../../lib/cloud-store.js";
 import { getCliWindow, printCompactFooter } from "../compact.js";
 import pkg from "../../../package.json";
 
@@ -350,7 +351,29 @@ export function registerAnalyticsCommands(program: Command): void {
     .command("status")
     .description("Show database stats")
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
+    .action(async (opts) => {
+      // Cloud-aware: when self_hosted routing is active, report the cloud store
+      // (what agents actually read/write) instead of the stale local db, so
+      // operators verifying a flip don't get misled by local counts.
+      const cloud = await cloudStatus();
+      if (cloud) {
+        const stats = {
+          mode: "self_hosted",
+          api_url: cloud.api_url,
+          total_messages: cloud.total_messages,
+          unread_messages: cloud.unread_messages,
+        };
+        if (opts.json) {
+          console.log(JSON.stringify(stats, null, 2));
+        } else {
+          console.log(chalk.bold("Conversations Status"));
+          console.log(`  Mode:       self_hosted (cloud API)`);
+          console.log(`  API URL:    ${stats.api_url ?? "(set)"}`);
+          console.log(`  Messages:   ${stats.total_messages}`);
+          console.log(`  Unread:     ${stats.unread_messages}`);
+        }
+        return;
+      }
       const db = getDb();
       const dbPath = getDbPath();
       const totalMessages = (db.prepare("SELECT COUNT(*) as count FROM messages").get() as { count: number }).count;
