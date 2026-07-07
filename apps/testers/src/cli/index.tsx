@@ -84,6 +84,16 @@ import {
   listPersonas,
   deletePersona,
 } from "../db/personas.js";
+// Client storage resolver / facade: routes the user-facing persona CRUD commands
+// to the cloud /v1 API when HASNA_TESTERS_STORAGE_MODE=self_hosted + API_URL +
+// API_KEY are set, otherwise to the on-box SQLite store. See ../cloud/store.ts.
+import {
+  createPersona as storeCreatePersona,
+  getPersona as storeGetPersona,
+  listPersonas as storeListPersonas,
+  countPersonas as storeCountPersonas,
+  deletePersona as storeDeletePersona,
+} from "../cloud/store.js";
 import {
   countApiChecks,
   createApiCheck,
@@ -8348,7 +8358,7 @@ personaCmd
   .option("-l, --limit <n>", "Limit results")
   .option("--offset <n>", "Skip first N results", "0")
   .option("--verbose", "Show untruncated names and roles", false)
-  .action((opts) => {
+  .action(async (opts) => {
     try {
       const projectId = resolveProject(opts.project);
       const limit = compactLimit(opts.limit, 20, 100);
@@ -8358,7 +8368,7 @@ personaCmd
         globalOnly: opts.global ? true : undefined,
       };
       if (opts.json) {
-        const personas = listPersonas({
+        const personas = await storeListPersonas({
           ...filter,
           limit: cliRequestedLimit(opts.limit),
           offset: offset || undefined,
@@ -8366,12 +8376,12 @@ personaCmd
         log(JSON.stringify(redactPersonas(personas), null, 2));
         return;
       }
-      const personas = listPersonas({
+      const personas = await storeListPersonas({
         ...filter,
         limit,
         offset: offset || undefined,
       });
-      const total = countPersonas(filter);
+      const total = await storeCountPersonas(filter);
       if (personas.length === 0) {
         log(chalk.dim("No personas found."));
         return;
@@ -8439,7 +8449,7 @@ personaCmd
               .map((g: string) => g.trim())
               .filter(Boolean)
           : [];
-        const persona = createPersona({
+        const persona = await storeCreatePersona({
           name: opts.name.trim(),
           role: opts.role.trim(),
           description: opts.description?.trim() ?? "",
@@ -8507,7 +8517,7 @@ personaCmd
             .filter(Boolean)
         : [];
 
-      const persona = createPersona({
+      const persona = await storeCreatePersona({
         name: name.trim(),
         role: role.trim(),
         description: description.trim(),
@@ -8538,9 +8548,9 @@ personaCmd
 personaCmd
   .command("show <id>")
   .description("Show persona details")
-  .action((id: string) => {
+  .action(async (id: string) => {
     try {
-      const persona = getPersona(id);
+      const persona = await storeGetPersona(id);
       if (!persona) {
         logError(chalk.red(`Persona not found: ${id}`));
         process.exit(1);
@@ -8584,7 +8594,7 @@ personaCmd
   .option("-y, --yes", "Skip confirmation prompt", false)
   .action(async (id: string, opts) => {
     try {
-      const persona = getPersona(id);
+      const persona = await storeGetPersona(id);
       if (!persona) {
         logError(chalk.red(`Persona not found: ${id}`));
         process.exit(1);
@@ -8612,7 +8622,7 @@ personaCmd
           return;
         }
       }
-      const deleted = deletePersona(persona.id);
+      const deleted = await storeDeletePersona(persona.id);
       if (deleted) {
         log(chalk.green(`Deleted persona ${persona.shortId}: ${persona.name}`));
       } else {
