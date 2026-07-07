@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { readConfig, updateConfig } from "../config.js";
 import { DEFAULT_PORT, resolveConfigPath } from "../paths.js";
 import { ClipClient, createClipClient } from "../sdk.js";
-import type { CaptureMode, ClipboardKind, ClipClientOptions, ClipRecord } from "../types.js";
+import type { CaptureMode, ClipboardHistoryRecord, ClipboardKind, ClipClientOptions, ClipRecord } from "../types.js";
 import { startClipServer } from "../server/server.js";
 import { compactRecord } from "../util.js";
 
@@ -78,6 +78,11 @@ function outputRecord(program: Command, record: ClipRecord): void {
   output(program, record, compactRecord(record));
 }
 
+function compactHistoryRecord(value: ClipboardHistoryRecord): string {
+  const title = value.title ? ` ${value.title}` : "";
+  return `${value.id} ${value.slug} ${value.kind}${title} ${value.createdAt}`;
+}
+
 function client(program: Command): ClipClient {
   return createClipClient(globalOptions(program));
 }
@@ -130,6 +135,67 @@ program
   .action(async (opts: { kind: ClipboardKind; title?: string; copyLink?: boolean }, command: Command) => {
     try {
       const record = await client(command).shareClipboard(opts.kind, { title: opts.title });
+      if (opts.copyLink) await client(command).copyLink(record.id);
+      outputRecord(command, record);
+    } catch (error) {
+      handleError(command, error);
+    }
+  });
+
+const history = program
+  .command("history")
+  .option("--limit <n>", "Maximum rows", "25")
+  .description("List and manage opt-in local clipboard history")
+  .action((opts: { limit: string }, command: Command) => {
+    try {
+      const records = client(command).listClipboardHistory({ limit: Number.parseInt(opts.limit, 10) });
+      output(command, records, records.map(compactHistoryRecord).join("\n") || "No clipboard history");
+    } catch (error) {
+      handleError(command, error);
+    }
+  });
+
+history
+  .command("list")
+  .option("--limit <n>", "Maximum rows", "25")
+  .description("List opt-in local clipboard history")
+  .action((opts: { limit: string }, command: Command) => {
+    try {
+      const records = client(command).listClipboardHistory({ limit: Number.parseInt(opts.limit, 10) });
+      output(command, records, records.map(compactHistoryRecord).join("\n") || "No clipboard history");
+    } catch (error) {
+      handleError(command, error);
+    }
+  });
+
+history
+  .command("capture")
+  .option("--kind <kind>", "auto, text, image, or file", "auto")
+  .option("--title <title>", "History item title")
+  .option("--max-items <n>", "Maximum local history items to retain", "25")
+  .description("Capture the current clipboard into local history")
+  .action(async (opts: { kind: ClipboardKind; title?: string; maxItems: string }, command: Command) => {
+    try {
+      const record = await client(command).captureClipboardHistory(opts.kind, {
+        title: opts.title,
+        maxItems: Number.parseInt(opts.maxItems, 10),
+      });
+      output(command, record, compactHistoryRecord(record));
+    } catch (error) {
+      handleError(command, error);
+    }
+  });
+
+history
+  .command("share")
+  .alias("reshare")
+  .argument("<id-or-slug>")
+  .option("--title <title>", "Share title")
+  .option("--copy-link", "Copy the share URL after sharing")
+  .description("Create a normal share from a clipboard history item")
+  .action(async (ref: string, opts: { title?: string; copyLink?: boolean }, command: Command) => {
+    try {
+      const record = client(command).shareClipboardHistory(ref, { title: opts.title });
       if (opts.copyLink) await client(command).copyLink(record.id);
       outputRecord(command, record);
     } catch (error) {

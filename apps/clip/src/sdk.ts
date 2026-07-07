@@ -2,10 +2,10 @@ import { existsSync } from "node:fs";
 import { readConfig } from "./config.js";
 import { captureScreenshot } from "./capture/index.js";
 import { copyTextToClipboard, openLocalTarget } from "./capture/tools.js";
-import { detectClipboardCapabilities, shareClipboard } from "./clipboard.js";
+import { captureClipboardHistory, detectClipboardCapabilities, shareClipboard } from "./clipboard.js";
 import { ClipStore } from "./storage.js";
 import { buildShareUrl, resolveBaseUrl } from "./share.js";
-import type { CaptureMode, ClipboardKind, ClipClientOptions, ClipRecord, ClipStatus } from "./types.js";
+import type { CaptureMode, ClipboardHistoryRecord, ClipboardKind, ClipClientOptions, ClipRecord, ClipStatus } from "./types.js";
 import { detectCaptureCapabilities } from "./capture/index.js";
 
 export class ClipClient {
@@ -58,6 +58,10 @@ export class ClipClient {
     return await shareClipboard(kind, { ...this.options, title: options.title });
   }
 
+  async captureClipboardHistory(kind: ClipboardKind = "auto", options: { title?: string; maxItems?: number } = {}): Promise<ClipboardHistoryRecord> {
+    return await captureClipboardHistory(kind, { ...this.options, title: options.title, maxItems: options.maxItems });
+  }
+
   listShares(options: { limit?: number; includeDeleted?: boolean } = {}): ClipRecord[] {
     const store = new ClipStore(this.options);
     try {
@@ -71,6 +75,33 @@ export class ClipClient {
     const store = new ClipStore(this.options);
     try {
       return store.getClip(ref, { ...options, baseUrl: this.options.baseUrl });
+    } finally {
+      store.close();
+    }
+  }
+
+  listClipboardHistory(options: { limit?: number } = {}): ClipboardHistoryRecord[] {
+    const store = new ClipStore(this.options);
+    try {
+      return store.listClipboardHistory(options);
+    } finally {
+      store.close();
+    }
+  }
+
+  getClipboardHistory(ref: string): ClipboardHistoryRecord | null {
+    const store = new ClipStore(this.options);
+    try {
+      return store.getClipboardHistory(ref);
+    } finally {
+      store.close();
+    }
+  }
+
+  shareClipboardHistory(ref: string, options: { title?: string } = {}): ClipRecord {
+    const store = new ClipStore(this.options);
+    try {
+      return store.shareClipboardHistory(ref, { title: options.title, baseUrl: this.options.baseUrl });
     } finally {
       store.close();
     }

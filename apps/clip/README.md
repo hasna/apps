@@ -27,6 +27,9 @@ npm install -g @hasna/clip
 ```bash
 clip capture full --json
 clip clipboard --json
+clip history capture --kind text --json
+clip history
+clip history share <history-id-or-slug> --json
 clip share text "handoff note" --title "Note" --json
 clip share file ./screenshot.png --json
 clip list --json
@@ -42,6 +45,9 @@ clip serve --host 0.0.0.0 --port 3741 --base-url http://192.168.1.20:3741
 ```
 clip capture [full|window|region]   capture a screenshot when OS tools allow it
 clip clipboard                      share clipboard text, image, or file content
+clip history                        list opt-in local clipboard history
+clip history capture                capture clipboard content into local history
+clip history share <id-or-slug>     create a share from a history item
 clip share text <text...>           create a text share
 clip share file <path>              import and share a local file
 clip list                           list recent shares
