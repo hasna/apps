@@ -1,7 +1,7 @@
 {
   "name": "@hasna/economy",
-  "version": "0.2.43",
-  "description": "AI coding cost tracker — CLI + MCP server + REST API + web dashboard for Claude Code, Codex, Gemini, OpenCode, Cursor, Pi, and Hermes",
+  "version": "0.2.44",
+  "description": "AI coding cost tracker \u2014 CLI + MCP server + REST API + web dashboard for Claude Code, Codex, Gemini, OpenCode, Cursor, Pi, and Hermes",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/hasna/economy.git"
@@ -70,9 +70,11 @@
   },
   "dependencies": {
     "@hasna/accounts": "0.1.6",
+    "@hasna/agent-registry": "file:../open-agent-registry",
     "@hasna/cloud": "0.1.24",
-    "@hasna/contracts": "0.4.1",
+    "@hasna/contracts": "^0.5.0",
     "@hasna/events": "^0.1.7",
+    "@hasna/mcp-harness": "file:../open-mcp",
     "@hasna/projects": "0.1.51",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",

@@ -19,7 +19,8 @@ import { packageMetadata } from '../lib/package-metadata.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
 import { randomUUID } from 'crypto'
 import { execSync } from 'child_process'
-import type { AccountBreakdown, Period } from '../types/index.js'
+import { economyCloudStorage } from '../lib/cloud-storage.js'
+import type { AccountBreakdown, BudgetStatus, Period } from '../types/index.js'
 
 const program = new Command()
 
@@ -698,12 +699,25 @@ budgetCmd
   .option('--limit <usd>', 'Budget limit in USD')
   .option('--alert <percent>', 'Alert threshold %', '80')
   .option('--agent <agent>', 'Limit to agent (claude|takumi|codex|gemini)')
-  .action((opts: { project?: string; period?: string; limit?: string; alert?: string; agent?: string }) => {
+  .action(async (opts: { project?: string; period?: string; limit?: string; alert?: string; agent?: string }) => {
     const limitUsd = parsePositiveCliNumber(opts.limit, '--limit')
     const alertAtPercent = parsePositiveCliNumber(opts.alert ?? '80', '--alert')
     if (alertAtPercent > 100) fail('--alert must be between 1 and 100')
     const period = requireCliChoice(opts.period, '--period', ['daily', 'weekly', 'monthly'] as const)
     const agent = parseOptionalCliAgent(opts.agent) ?? null
+    const cloud = economyCloudStorage()
+    if (cloud.active) {
+      // self_hosted: write the budget to the cloud API, not the local store.
+      await cloud.client.create('budgets', {
+        project_path: opts.project ?? null,
+        ...(agent ? { agent } : {}),
+        period,
+        limit_usd: limitUsd,
+        alert_at_percent: alertAtPercent,
+      })
+      console.log(chalk.green(`✓ Budget set (cloud): ${opts.project ?? 'global'} — ${period} $${limitUsd}`))
+      return
+    }
     const db = openDatabase()
     const now = new Date().toISOString()
     upsertBudget(db, {
@@ -722,9 +736,11 @@ budgetCmd
 budgetCmd
   .command('list')
   .description('List all budgets')
-  .action(() => {
-    const db = openDatabase()
-    const statuses = getBudgetStatuses(db)
+  .action(async () => {
+    const cloud = economyCloudStorage()
+    const statuses = cloud.active
+      ? (await cloud.client.list<BudgetStatus>('budgets')).items
+      : getBudgetStatuses(openDatabase())
     if (statuses.length === 0) { console.log(chalk.yellow('No budgets set.')); return }
     console.log()
     printTable(
@@ -749,9 +765,14 @@ budgetCmd
 budgetCmd
   .command('remove <id>')
   .description('Remove a budget by ID')
-  .action((id: string) => {
-    const db = openDatabase()
-    deleteBudget(db, id)
+  .action(async (id: string) => {
+    const cloud = economyCloudStorage()
+    if (cloud.active) {
+      await cloud.client.delete('budgets', id)
+      console.log(chalk.green(`✓ Budget removed (cloud)`))
+      return
+    }
+    deleteBudget(openDatabase(), id)
     console.log(chalk.green(`✓ Budget removed`))
   })
 
@@ -1759,4 +1780,4 @@ registerFleetCommands(program)
 
 registerEventsCommands(program, { source: 'economy' })
 
-program.parse()
+program.parseAsync()

@@ -1,55 +1,46 @@
-import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
+import {
+  healthPayload,
+  isHttpMode as harnessIsHttpMode,
+  isStdioMode as harnessIsStdioMode,
+  resolveMcpHttpPort as harnessResolveMcpHttpPort,
+} from '@hasna/mcp-harness'
+import { handleMcpHttpRequest as harnessHandleMcpHttpRequest } from '@hasna/mcp-harness/bun'
 import { buildServer, DEFAULT_MCP_HTTP_PORT, MCP_NAME } from './server.js'
 
+// Port is owned by server.ts (co-located with the tool/server definitions);
+// re-exported here rather than redefined so there is a single source of truth.
 export { DEFAULT_MCP_HTTP_PORT, MCP_NAME }
 
+// Bun's default HTTP idle timeout (10s) is too short for long-lived MCP
+// Streamable HTTP requests. @hasna/mcp-harness's startBunHttpServer doesn't
+// expose an idleTimeout knob, so this transport is hand-wired directly on
+// Bun.serve (below) instead of delegating to the harness's Bun server starter.
 export const MCP_HTTP_IDLE_TIMEOUT_SECONDS = 0
 
 export function isHttpMode(argv: string[] = process.argv.slice(2)): boolean {
-  return argv.includes('--http') || process.env['MCP_HTTP'] === '1'
+  return harnessIsHttpMode(argv)
 }
 
 export function isStdioMode(argv: string[] = process.argv.slice(2)): boolean {
-  return argv.includes('--stdio') || process.env['MCP_STDIO'] === '1'
+  return harnessIsStdioMode(argv)
 }
 
 export function resolveHttpPort(argv: string[] = process.argv.slice(2)): number {
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]
-    if (arg === '--port' || arg === '-p') {
-      const raw = argv[i + 1]
-      if (!raw) throw new Error(`Invalid port: ${raw ?? ''}`)
-      return parsePort(raw, 'port')
-    }
-  }
-
-  const fromEnv = process.env['MCP_HTTP_PORT']
-  if (fromEnv) return parsePort(fromEnv, 'MCP_HTTP_PORT')
-  return DEFAULT_MCP_HTTP_PORT
-}
-
-function parsePort(raw: string, label: string): number {
-  const value = Number(raw)
-  if (!Number.isInteger(value) || value < 1 || value > 65535) {
-    throw new Error(`Invalid ${label}: ${raw}`)
-  }
-  return value
+  // Preserve the `-p <port>` shorthand (documented in --help) by normalizing
+  // it to `--port` before delegating to the harness's strict parser/precedence.
+  const normalized = argv.map((arg) => (arg === '-p' ? '--port' : arg))
+  return harnessResolveMcpHttpPort({ argv: normalized, default: DEFAULT_MCP_HTTP_PORT })
 }
 
 export async function handleMcpHttpRequest(req: Request): Promise<Response> {
   const url = new URL(req.url)
 
   if (url.pathname === '/health' && req.method === 'GET') {
-    return Response.json({ status: 'ok', name: MCP_NAME })
+    return Response.json(healthPayload(MCP_NAME))
   }
 
   if (url.pathname === '/mcp') {
-    const transport = new WebStandardStreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-    })
-    const server = buildServer()
-    await server.connect(transport)
-    return transport.handleRequest(req)
+    return harnessHandleMcpHttpRequest(req, buildServer)
   }
 
   return new Response('Not Found', { status: 404 })
