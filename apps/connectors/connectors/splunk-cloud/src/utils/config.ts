@@ -1,9 +1,11 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 
 const CONNECTOR_NAME = 'connect-splunk-cloud';
 const DEFAULT_PROFILE = 'default';
+const PRIVATE_DIR_MODE = 0o700;
+const PRIVATE_FILE_MODE = 0o600;
 
 export interface ProfileConfig {
   baseUrl?: string;
@@ -14,25 +16,41 @@ export interface ProfileConfig {
 
 let profileOverride: string | undefined;
 
-const CONFIG_DIR = join(homedir(), '.hasna', 'connectors', CONNECTOR_NAME);
-const PROFILES_DIR = join(CONFIG_DIR, 'profiles');
-const CURRENT_PROFILE_FILE = join(CONFIG_DIR, 'current_profile');
-
 export function setProfileOverride(profile: string | undefined): void {
   profileOverride = profile;
 }
 
+function getConfigRoot(): string {
+  return process.env.SPLUNK_CLOUD_CONFIG_DIR || join(homedir(), '.hasna', 'connectors', CONNECTOR_NAME);
+}
+
+function getProfilesDir(): string {
+  return join(getConfigRoot(), 'profiles');
+}
+
+function getCurrentProfileFile(): string {
+  return join(getConfigRoot(), 'current_profile');
+}
+
+function ensurePrivateDir(path: string): void {
+  if (!existsSync(path)) {
+    mkdirSync(path, { recursive: true, mode: PRIVATE_DIR_MODE });
+  }
+  chmodSync(path, PRIVATE_DIR_MODE);
+}
+
+function writePrivateFile(path: string, data: string): void {
+  writeFileSync(path, data, { mode: PRIVATE_FILE_MODE });
+  chmodSync(path, PRIVATE_FILE_MODE);
+}
+
 export function ensureConfigDir(): void {
-  if (!existsSync(CONFIG_DIR)) {
-    mkdirSync(CONFIG_DIR, { recursive: true });
-  }
-  if (!existsSync(PROFILES_DIR)) {
-    mkdirSync(PROFILES_DIR, { recursive: true });
-  }
+  ensurePrivateDir(getConfigRoot());
+  ensurePrivateDir(getProfilesDir());
 }
 
 function getProfilePath(profile: string): string {
-  return join(PROFILES_DIR, `${profile}.json`);
+  return join(getProfilesDir(), `${profile}.json`);
 }
 
 export function getCurrentProfile(): string {
@@ -42,9 +60,10 @@ export function getCurrentProfile(): string {
 
   ensureConfigDir();
 
-  if (existsSync(CURRENT_PROFILE_FILE)) {
+  const currentProfileFile = getCurrentProfileFile();
+  if (existsSync(currentProfileFile)) {
     try {
-      const profile = readFileSync(CURRENT_PROFILE_FILE, 'utf-8').trim();
+      const profile = readFileSync(currentProfileFile, 'utf-8').trim();
       if (profile && profileExists(profile)) {
         return profile;
       }
@@ -63,7 +82,7 @@ export function setCurrentProfile(profile: string): void {
     throw new Error(`Profile "${profile}" does not exist`);
   }
 
-  writeFileSync(CURRENT_PROFILE_FILE, profile);
+  writePrivateFile(getCurrentProfileFile(), profile);
 }
 
 export function profileExists(profile: string): boolean {
@@ -73,11 +92,12 @@ export function profileExists(profile: string): boolean {
 export function listProfiles(): string[] {
   ensureConfigDir();
 
-  if (!existsSync(PROFILES_DIR)) {
+  const profilesDir = getProfilesDir();
+  if (!existsSync(profilesDir)) {
     return [];
   }
 
-  return readdirSync(PROFILES_DIR)
+  return readdirSync(profilesDir)
     .filter(f => f.endsWith('.json'))
     .map(f => f.replace('.json', ''))
     .sort();
@@ -94,7 +114,7 @@ export function createProfile(profile: string, config: ProfileConfig = {}): bool
     throw new Error('Profile name can only contain letters, numbers, hyphens, and underscores');
   }
 
-  writeFileSync(getProfilePath(profile), JSON.stringify(config, null, 2));
+  writePrivateFile(getProfilePath(profile), JSON.stringify(config, null, 2));
   return true;
 }
 
@@ -134,7 +154,7 @@ export function loadProfile(profile?: string): ProfileConfig {
 export function saveProfile(config: ProfileConfig, profile?: string): void {
   ensureConfigDir();
   const profileName = profile || getCurrentProfile();
-  writeFileSync(getProfilePath(profileName), JSON.stringify(config, null, 2));
+  writePrivateFile(getProfilePath(profileName), JSON.stringify(config, null, 2));
 }
 
 export function getBaseUrl(): string | undefined {
@@ -177,7 +197,7 @@ export function clearConfig(): void {
 }
 
 export function getConfigDir(): string {
-  return CONFIG_DIR;
+  return getConfigRoot();
 }
 
 export function getActiveProfileName(): string {

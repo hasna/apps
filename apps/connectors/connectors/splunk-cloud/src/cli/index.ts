@@ -34,7 +34,6 @@ program
   .description('Splunk Cloud Platform connector - search jobs, saved searches, indexes, HEC, users, and alerts')
   .version(VERSION)
   .option('-b, --base-url <url>', 'Splunk Cloud REST base URL (overrides config)')
-  .option('-t, --token <token>', 'Authentication token (overrides config)')
   .option('-f, --format <format>', 'Output format (json, pretty, table)', 'pretty')
   .option('-p, --profile <profile>', 'Use a specific profile')
   .hook('preAction', (thisCommand) => {
@@ -48,9 +47,6 @@ program
     }
     if (opts.baseUrl) {
       process.env.SPLUNK_CLOUD_BASE_URL = opts.baseUrl;
-    }
-    if (opts.token) {
-      process.env.SPLUNK_CLOUD_TOKEN = opts.token;
     }
   });
 
@@ -74,7 +70,7 @@ function getClient(): SplunkCloud {
   const username = getUsername();
   const password = getPassword();
   if (!token && !(username && password)) {
-    error(`No credentials configured. Run "${CONNECTOR_NAME} config set-token <token>" or set SPLUNK_CLOUD_TOKEN.`);
+    error(`No credentials configured. Run "${CONNECTOR_NAME} config set-token" with SPLUNK_CLOUD_TOKEN set, or set SPLUNK_CLOUD_TOKEN for this command.`);
     process.exit(1);
   }
   return new SplunkCloud({ baseUrl, token, username, password });
@@ -129,14 +125,18 @@ profileCmd
   .command('create <name>')
   .description('Create a new profile')
   .option('--base-url <url>', 'Base URL')
-  .option('--token <token>', 'Authentication token')
+  .option('--with-env-token', 'Save SPLUNK_CLOUD_TOKEN into this profile')
   .option('--use', 'Switch to this profile after creation')
   .action((name: string, opts) => {
     if (profileExists(name)) {
       error(`Profile "${name}" already exists`);
       process.exit(1);
     }
-    createProfile(name, { baseUrl: opts.baseUrl, token: opts.token });
+    if (opts.withEnvToken && !process.env.SPLUNK_CLOUD_TOKEN) {
+      error('Set SPLUNK_CLOUD_TOKEN before using --with-env-token.');
+      process.exit(1);
+    }
+    createProfile(name, { baseUrl: opts.baseUrl, token: opts.withEnvToken ? process.env.SPLUNK_CLOUD_TOKEN : undefined });
     success(`Profile "${name}" created`);
     if (opts.use) {
       setCurrentProfile(name);
@@ -187,17 +187,27 @@ configCmd
   });
 
 configCmd
-  .command('set-token <token>')
-  .description('Set the authentication token')
-  .action((token: string) => {
+  .command('set-token')
+  .description('Set the authentication token from SPLUNK_CLOUD_TOKEN')
+  .action(() => {
+    const token = process.env.SPLUNK_CLOUD_TOKEN;
+    if (!token) {
+      error('Set SPLUNK_CLOUD_TOKEN before running this command.');
+      process.exit(1);
+    }
     setToken(token);
     success('Token saved');
   });
 
 configCmd
-  .command('set-basic <username> <password>')
-  .description('Set username/password (Basic auth)')
-  .action((username: string, password: string) => {
+  .command('set-basic <username>')
+  .description('Set username/password (Basic auth) from username plus SPLUNK_CLOUD_PASSWORD')
+  .action((username: string) => {
+    const password = process.env.SPLUNK_CLOUD_PASSWORD;
+    if (!password) {
+      error('Set SPLUNK_CLOUD_PASSWORD before running this command.');
+      process.exit(1);
+    }
     setBasicAuth(username, password);
     success('Basic auth credentials saved');
   });
