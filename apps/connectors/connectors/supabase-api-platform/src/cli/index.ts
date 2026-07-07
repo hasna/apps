@@ -69,12 +69,12 @@ function parseBody(body?: string): Record<string, unknown> {
 }
 
 function getClient(): SupabaseApiPlatform {
-  const accessToken = getAccessToken();
-  if (!accessToken) {
+  const credential = getAccessToken();
+  if (!credential) {
     error(`No access token configured. Run "${CONNECTOR_NAME} config set-token <token>" or set the access token environment variable`);
     process.exit(1);
   }
-  return new SupabaseApiPlatform({ accessToken, baseUrl: getBaseUrl() });
+  return new SupabaseApiPlatform({ accessToken: credential, baseUrl: getBaseUrl() });
 }
 
 const profileCmd = program.command('profile').description('Manage profiles');
@@ -154,8 +154,8 @@ configCmd.command('set-base-url <baseUrl>').description('Set API base URL').acti
 configCmd.command('show').description('Show config').action(() => {
   console.log(chalk.bold(`Profile: ${getCurrentProfile()}`));
   info(`Config dir: ${getConfigDir()}`);
-  const accessToken = getAccessToken();
-  info(`Access Token: ${accessToken ? accessToken.substring(0, 8) + '...' : chalk.gray('not set')}`);
+  const credential = getAccessToken();
+  info(`Access Token: ${credential ? credential.substring(0, 8) + '...' : chalk.gray('not set')}`);
   info(`Base URL: ${getBaseUrl() || chalk.gray('default (https://api.supabase.com/v1)')}`);
 });
 

@@ -13,14 +13,14 @@ export interface RequestOptions {
 type QueryParams = Record<string, string | number | boolean | undefined>;
 
 export class SupabaseApiPlatformClient {
-  private readonly accessToken: string;
+  private readonly credential: string;
   private readonly baseUrl: string;
 
   constructor(config: SupabaseApiPlatformConfig) {
     if (!config.accessToken) {
       throw new Error('Access token is required');
     }
-    this.accessToken = config.accessToken;
+    this.credential = config.accessToken;
     this.baseUrl = config.baseUrl || DEFAULT_BASE_URL;
   }
 
@@ -43,7 +43,7 @@ export class SupabaseApiPlatformClient {
 
     const authScheme = 'Bearer';
     const requestHeaders: Record<string, string> = {
-      Authorization: [authScheme, this.accessToken].join(' '),
+      Authorization: [authScheme, this.credential].join(' '),
       Accept: 'application/json',
       ...headers,
     };
@@ -128,8 +128,8 @@ export class SupabaseApiPlatformClient {
   }
 
   getAccessTokenPreview(): string {
-    if (this.accessToken.length > 10) {
-      return `${this.accessToken.substring(0, 6)}...${this.accessToken.substring(this.accessToken.length - 4)}`;
+    if (this.credential.length > 10) {
+      return `${this.credential.substring(0, 6)}...${this.credential.substring(this.credential.length - 4)}`;
     }
     return '***';
   }

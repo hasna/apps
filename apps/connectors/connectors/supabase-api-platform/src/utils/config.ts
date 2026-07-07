@@ -141,9 +141,9 @@ export function getBaseUrl(): string | undefined {
   return loadProfile().baseUrl;
 }
 
-export function setAccessToken(accessToken: string): void {
+export function setAccessToken(credential: string): void {
   const config = loadProfile();
-  config.accessToken = accessToken;
+  config['accessToken'] = credential;
   saveProfile(config);
 }
 
