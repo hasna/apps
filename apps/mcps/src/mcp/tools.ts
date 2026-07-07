@@ -10,6 +10,7 @@ import {
   disableServer,
   updateServer,
   getCachedTools,
+  getToolCounts,
 } from "../lib/registry.js";
 import { searchRegistry, installFromRegistry } from "../lib/remote.js";
 import { listAwesomeServers } from "../lib/finder.js";
@@ -56,6 +57,22 @@ import {
   searchProviderProfiles,
 } from "../lib/provider-profiles.js";
 import {
+  DEFAULT_LIST_LIMIT,
+  MAX_LIST_LIMIT,
+  compactCatalogEntry,
+  compactFinderResult,
+  compactFleetHealthReport,
+  compactFleetInstallReport,
+  compactMachine,
+  compactProviderProfile,
+  compactRegistryServer,
+  compactServer,
+  compactSource,
+  compactTool,
+  paginate,
+  type Page,
+} from "../lib/compact-output.js";
+import {
   STORAGE_SYNC_TABLES,
   collectStorageSyncErrors,
   getStorageSyncStatus,
@@ -101,6 +118,18 @@ function jsonContent(value: unknown) {
   return textContent(JSON.stringify(value, null, 2));
 }
 
+function compactPageContent<T>(page: Page<T>, hint: string) {
+  return jsonContent({
+    items: page.items,
+    total: page.total,
+    shown: page.items.length,
+    limit: page.limit,
+    cursor: page.offset,
+    nextCursor: page.nextCursor,
+    hint,
+  });
+}
+
 function errorContent(text: string) {
   return { ...textContent(text), isError: true };
 }
@@ -124,19 +153,37 @@ function readCredentialRefs(input: Record<string, unknown>): CredentialReference
   );
 }
 
+const listControls = {
+  limit: z.number().int().min(1).max(MAX_LIST_LIMIT).optional().describe(`Maximum compact items to return (default: ${DEFAULT_LIST_LIMIT})`),
+  cursor: z.string().optional().describe("Numeric cursor from a previous compact response"),
+  verbose: z.boolean().optional().describe("Return the previous full-detail JSON array instead of compact summaries"),
+};
+
 export function buildMcpTools(): McpsMcpToolDefinition[] {
   const definitions: InternalMcpToolDefinition[] = [
     {
       name: "list_servers",
-      description: "List all registered MCP servers",
-      paramsSchema: {},
-      run: () => jsonContent(listServers().map(redactServerEnv)),
+      description: "List registered MCP servers. Defaults to compact summaries; pass verbose=true for full records.",
+      paramsSchema: { ...listControls },
+      run: (input) => {
+        const servers = listServers().map(redactServerEnv);
+        if (input.verbose === true) return jsonContent(servers);
+        const toolCounts = getToolCounts();
+        const compact = servers.map((server) => compactServer(server, toolCounts.get(server.id) ?? 0));
+        const page = paginate(compact, { limit: input.limit, cursor: input.cursor });
+        return compactPageContent(page, "Use get_server_info({id}) for one server or list_servers({verbose:true}) for full records.");
+      },
     },
     {
       name: "search_registry",
-      description: "Search the official MCP registry for servers",
-      paramsSchema: { query: z.string().describe("Search query") },
-      run: async ({ query }) => jsonContent(await searchRegistry(String(query))),
+      description: "Search the official MCP registry for servers. Defaults to compact summaries; pass verbose=true for full registry records.",
+      paramsSchema: { query: z.string().describe("Search query"), ...listControls },
+      run: async ({ query, limit, cursor, verbose }) => {
+        const results = await searchRegistry(String(query));
+        if (verbose === true) return jsonContent(results);
+        const page = paginate(results.map(compactRegistryServer), { limit, cursor });
+        return compactPageContent(page, "Use search_registry({query, verbose:true}) for full registry records.");
+      },
     },
     {
       name: "add_server",
@@ -293,12 +340,18 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
     },
     {
       name: "list_tools",
-      description: "List all cached tools across registered servers without connecting. Optionally filter by server_id.",
-      paramsSchema: { server_id: z.string().optional().describe("Server ID to filter by (optional)") },
-      run: ({ server_id }) => {
+      description: "List cached tools across registered servers without connecting. Defaults to compact summaries without full input schemas.",
+      paramsSchema: {
+        server_id: z.string().optional().describe("Server ID to filter by (optional)"),
+        ...listControls,
+      },
+      run: ({ server_id, limit, cursor, verbose }) => {
         if (typeof server_id === "string" && server_id) {
           const toolsForServer = getCachedTools(server_id);
-          return jsonContent(toolsForServer.map((tool) => ({ ...tool, server_id })));
+          const full = toolsForServer.map((tool) => ({ ...tool, server_id }));
+          if (verbose === true) return jsonContent(full);
+          const page = paginate(full.map(compactTool), { limit, cursor });
+          return compactPageContent(page, "Use list_tools({server_id, verbose:true}) for full input schemas.");
         }
         const allTools: Array<{
           server_id: string;
@@ -311,7 +364,9 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
             allTools.push({ server_id: server.id, ...tool });
           }
         }
-        return jsonContent(allTools);
+        if (verbose === true) return jsonContent(allTools);
+        const page = paginate(allTools.map(compactTool), { limit, cursor });
+        return compactPageContent(page, "Use list_tools({verbose:true}) for full input schemas or get_server_info({id}) for one server.");
       },
     },
     {
@@ -367,19 +422,32 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
         query: z.string().describe("Search query (e.g., 'filesystem', 'postgres', 'browser')"),
         sources: z.array(z.string()).optional().describe("Source IDs to search (default: all enabled). Use list_sources to get IDs."),
         limit: z.number().optional().describe("Max results per source (default: 20)"),
+        cursor: z.string().optional().describe("Numeric cursor from a previous compact response"),
+        verbose: z.boolean().optional().describe("Return full finder records instead of compact summaries"),
       },
-      run: async ({ query, sources, limit }) => jsonContent(await findServers(String(query), {
-        sources: Array.isArray(sources) ? sources.map(String) : undefined,
-        limit: typeof limit === "number" ? limit : undefined,
-      })),
+      run: async ({ query, sources, limit, cursor, verbose }) => {
+        const results = await findServers(String(query), {
+          sources: Array.isArray(sources) ? sources.map(String) : undefined,
+          limit: typeof limit === "number" ? limit : undefined,
+        });
+        if (verbose === true) return jsonContent(results);
+        const page = paginate(results.map(compactFinderResult), { limit, cursor });
+        return compactPageContent(page, "Use find_mcp_servers({query, verbose:true}) for full result records.");
+      },
     },
     {
       name: "list_provider_profiles",
-      description: "List curated provider profiles for hosted/common MCP integrations such as GitHub, Slack, Google Workspace, Stripe, Cloudflare, Postgres, filesystem, and browser automation.",
+      description: "List curated provider profiles for hosted/common MCP integrations. Defaults to compact summaries.",
       paramsSchema: {
         enabled_only: z.boolean().optional().describe("Only include enabled provider profiles"),
+        ...listControls,
       },
-      run: ({ enabled_only }) => jsonContent(listProviderProfiles({ enabledOnly: enabled_only === true })),
+      run: ({ enabled_only, limit, cursor, verbose }) => {
+        const profiles = listProviderProfiles({ enabledOnly: enabled_only === true });
+        if (verbose === true) return jsonContent(profiles);
+        const page = paginate(profiles.map(compactProviderProfile), { limit, cursor });
+        return compactPageContent(page, "Use get_provider_profile({id}) for one profile or list_provider_profiles({verbose:true}) for full records.");
+      },
     },
     {
       name: "search_provider_profiles",
@@ -387,8 +455,14 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
       paramsSchema: {
         query: z.string().describe("Search query such as 'github', 'slack', 'postgres', or an endpoint URL"),
         enabled_only: z.boolean().optional().describe("Only include enabled provider profiles"),
+        ...listControls,
       },
-      run: ({ query, enabled_only }) => jsonContent(searchProviderProfiles(String(query), { enabledOnly: enabled_only === true })),
+      run: ({ query, enabled_only, limit, cursor, verbose }) => {
+        const profiles = searchProviderProfiles(String(query), { enabledOnly: enabled_only === true });
+        if (verbose === true) return jsonContent(profiles);
+        const page = paginate(profiles.map(compactProviderProfile), { limit, cursor });
+        return compactPageContent(page, "Use get_provider_profile({id}) for one profile or search_provider_profiles({query, verbose:true}) for full records.");
+      },
     },
     {
       name: "get_provider_profile",
@@ -426,9 +500,14 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
     },
     {
       name: "list_sources",
-      description: "List all configured search sources for finding MCP servers",
-      paramsSchema: {},
-      run: () => jsonContent(listSources()),
+      description: "List configured search sources for finding MCP servers. Defaults to compact summaries without URLs.",
+      paramsSchema: { ...listControls },
+      run: ({ limit, cursor, verbose }) => {
+        const sources = listSources();
+        if (verbose === true) return jsonContent(sources);
+        const page = paginate(sources.map(compactSource), { limit, cursor });
+        return compactPageContent(page, "Use list_sources({verbose:true}) for URLs and descriptions.");
+      },
     },
     {
       name: "add_source",
@@ -503,16 +582,22 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
     },
     {
       name: "list_awesome_servers",
-      description: "List all MCP servers from the curated punkpeye/awesome-mcp-servers GitHub list",
-      paramsSchema: {},
-      run: async () => jsonContent(await listAwesomeServers()),
+      description: "List MCP servers from the curated punkpeye/awesome-mcp-servers GitHub list. Defaults to compact paged summaries.",
+      paramsSchema: { ...listControls },
+      run: async ({ limit, cursor, verbose }) => {
+        const results = await listAwesomeServers();
+        if (verbose === true) return jsonContent(results);
+        const page = paginate(results.map(compactFinderResult), { limit, cursor });
+        return compactPageContent(page, "Use list_awesome_servers({verbose:true}) for full records or pass nextCursor for more.");
+      },
     },
     {
       name: "connect_and_list_tools",
-      description: "Connect to all enabled MCP servers and list their available tools",
+      description: "Connect to all enabled MCP servers and list available tools. Defaults to compact summaries without full input schemas.",
       paramsSchema: {
         allow_local_stdio: z.boolean().optional().describe("Approve launching enabled local stdio commands"),
         allow_risky_command: z.boolean().optional().describe("Approve launching risky local command patterns"),
+        ...listControls,
       },
       run: async (input) => {
         let liveTools = [];
@@ -522,7 +607,9 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
         } finally {
           await disconnectAll().catch(() => undefined);
         }
-        return jsonContent(liveTools);
+        if (input.verbose === true) return jsonContent(liveTools);
+        const page = paginate(liveTools.map(compactTool), { limit: input.limit, cursor: input.cursor });
+        return compactPageContent(page, "Use connect_and_list_tools({verbose:true}) for full live tool schemas.");
       },
     },
     {
@@ -568,11 +655,17 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
     },
     {
       name: "list_machines",
-      description: "List registered fleet machines",
+      description: "List registered fleet machines. Defaults to compact summaries without SSH targets.",
       paramsSchema: {
         enabled_only: z.boolean().optional().describe("When true, only return enabled machines"),
+        ...listControls,
       },
-      run: ({ enabled_only }) => jsonContent(listMachines().filter((machine) => (enabled_only === true ? machine.enabled : true))),
+      run: ({ enabled_only, limit, cursor, verbose }) => {
+        const machines = listMachines().filter((machine) => (enabled_only === true ? machine.enabled : true));
+        if (verbose === true) return jsonContent(machines);
+        const page = paginate(machines.map(compactMachine), { limit, cursor });
+        return compactPageContent(page, "Use list_machines({verbose:true}) for SSH targets and last errors.");
+      },
     },
     {
       name: "add_machine",
@@ -626,38 +719,47 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
     },
     {
       name: "list_hasna_mcp_catalog",
-      description: "List the discovered @hasna MCP package catalog",
+      description: "List the discovered @hasna MCP package catalog. Defaults to compact summaries.",
       paramsSchema: {
         packages: z.array(z.string()).optional().describe("Optional package-name filter"),
         refresh: z.boolean().optional().describe("Refresh npm metadata instead of using cache"),
+        ...listControls,
       },
-      run: async ({ packages, refresh }) => {
+      run: async ({ packages, refresh, limit, cursor, verbose }) => {
         const catalog = await listHasnaMcpCatalog({ refresh: refresh === true });
         const filtered = Array.isArray(packages) && packages.length > 0
           ? catalog.filter((entry) => packages.map(String).includes(entry.name))
           : catalog;
-        return jsonContent(filtered);
+        if (verbose === true) return jsonContent(filtered);
+        const page = paginate(filtered.map(compactCatalogEntry), { limit, cursor });
+        return compactPageContent(page, "Use list_hasna_mcp_catalog({verbose:true}) for repository, keywords, and bin maps.");
       },
     },
     {
       name: "fleet_health",
-      description: "Run fleet-wide MCP health checks across registered machines",
+      description: "Run fleet-wide MCP health checks across registered machines. Defaults to compact machine summaries.",
       paramsSchema: {
         machine_ids: z.array(z.string()).optional().describe("Optional machine IDs to check"),
         packages: z.array(z.string()).optional().describe("Optional @hasna package-name filter"),
         refresh_catalog: z.boolean().optional().describe("Refresh npm metadata before checking"),
         timeout_ms: z.number().int().min(1000).optional().describe("Remote timeout in milliseconds"),
+        ...listControls,
       },
-      run: async ({ machine_ids, packages, refresh_catalog, timeout_ms }) => jsonContent(await runFleetHealthCheck({
-        machineIds: Array.isArray(machine_ids) ? machine_ids.map(String) : undefined,
-        packages: Array.isArray(packages) ? packages.map(String) : undefined,
-        refreshCatalog: refresh_catalog === true,
-        timeoutMs: typeof timeout_ms === "number" ? timeout_ms : undefined,
-      })),
+      run: async ({ machine_ids, packages, refresh_catalog, timeout_ms, limit, cursor, verbose }) => {
+        const reports = await runFleetHealthCheck({
+          machineIds: Array.isArray(machine_ids) ? machine_ids.map(String) : undefined,
+          packages: Array.isArray(packages) ? packages.map(String) : undefined,
+          refreshCatalog: refresh_catalog === true,
+          timeoutMs: typeof timeout_ms === "number" ? timeout_ms : undefined,
+        });
+        if (verbose === true) return jsonContent(reports);
+        const page = paginate(reports.map(compactFleetHealthReport), { limit, cursor });
+        return compactPageContent(page, "Use fleet_health({verbose:true}) for per-package health details.");
+      },
     },
     {
       name: "fleet_install",
-      description: "Batch-install missing or outdated @hasna MCP packages across machines",
+      description: "Batch-install missing or outdated @hasna MCP packages across machines. Defaults to compact machine summaries.",
       paramsSchema: {
         machine_ids: z.array(z.string()).optional().describe("Optional machine IDs to target"),
         packages: z.array(z.string()).optional().describe("Optional @hasna package-name filter"),
@@ -665,15 +767,21 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
         installer: z.enum(["auto", "bun", "npm"]).optional().describe("Override installer"),
         refresh_catalog: z.boolean().optional().describe("Refresh npm metadata before installing"),
         timeout_ms: z.number().int().min(1000).optional().describe("Remote timeout in milliseconds"),
+        ...listControls,
       },
-      run: async ({ machine_ids, packages, mode, installer, refresh_catalog, timeout_ms }) => jsonContent(await runFleetInstall({
-        machineIds: Array.isArray(machine_ids) ? machine_ids.map(String) : undefined,
-        packages: Array.isArray(packages) ? packages.map(String) : undefined,
-        mode: mode === "missing" || mode === "missing-or-outdated" || mode === "all" ? mode : undefined,
-        installer: installer === "auto" || installer === "bun" || installer === "npm" ? installer : undefined,
-        refreshCatalog: refresh_catalog === true,
-        timeoutMs: typeof timeout_ms === "number" ? timeout_ms : undefined,
-      })),
+      run: async ({ machine_ids, packages, mode, installer, refresh_catalog, timeout_ms, limit, cursor, verbose }) => {
+        const reports = await runFleetInstall({
+          machineIds: Array.isArray(machine_ids) ? machine_ids.map(String) : undefined,
+          packages: Array.isArray(packages) ? packages.map(String) : undefined,
+          mode: mode === "missing" || mode === "missing-or-outdated" || mode === "all" ? mode : undefined,
+          installer: installer === "auto" || installer === "bun" || installer === "npm" ? installer : undefined,
+          refreshCatalog: refresh_catalog === true,
+          timeoutMs: typeof timeout_ms === "number" ? timeout_ms : undefined,
+        });
+        if (verbose === true) return jsonContent(reports);
+        const page = paginate(reports.map(compactFleetInstallReport), { limit, cursor });
+        return compactPageContent(page, "Use fleet_install({verbose:true}) for per-package install details and command output.");
+      },
     },
     {
       name: "send_feedback",
@@ -750,9 +858,21 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
     },
     {
       name: "list_agents",
-      description: "List all registered agents.",
-      paramsSchema: {},
-      run: () => jsonContent([...mcpsAgents.values()]),
+      description: "List registered agents. Defaults to compact paged summaries.",
+      paramsSchema: { ...listControls },
+      run: ({ limit, cursor, verbose }) => {
+        const agents = [...mcpsAgents.values()];
+        if (verbose === true) return jsonContent(agents);
+        const compact = agents.map((agent) => ({
+          id: agent.id,
+          name: agent.name,
+          project_id: agent.project_id ?? null,
+          last_seen_at: agent.last_seen_at,
+          hasSession: Boolean(agent.session_id),
+        }));
+        const page = paginate(compact, { limit, cursor });
+        return compactPageContent(page, "Use list_agents({verbose:true}) for full session metadata.");
+      },
     },
   ];
 

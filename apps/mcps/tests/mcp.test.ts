@@ -3,7 +3,7 @@ import "./setup";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { readFileSync } from "fs";
-import { addServer, getServer } from "../src/lib/registry";
+import { addServer, cacheTools, getServer } from "../src/lib/registry";
 import { getDb, closeDb } from "../src/lib/db";
 import { DEFAULT_PROVIDER_PROFILE_SEEDS } from "../src/lib/provider-profile-seeds";
 import { createMcpServer, listTools, tools } from "../src/mcp/index";
@@ -36,7 +36,12 @@ describe("MCP server tools", () => {
     const { client } = await createClientServer();
     const result = await client.callTool({ name: "list_servers", arguments: {} });
     const content = result.content as Array<{ type: string; text: string }>;
-    expect(JSON.parse(content[0].text)).toEqual([]);
+    expect(JSON.parse(content[0].text)).toMatchObject({
+      items: [],
+      total: 0,
+      shown: 0,
+      nextCursor: null,
+    });
     await client.close();
   });
 
@@ -62,8 +67,20 @@ describe("MCP server tools", () => {
     // List
     const listResult = await client.callTool({ name: "list_servers", arguments: {} });
     const servers = JSON.parse((listResult.content as any)[0].text);
-    expect(servers).toHaveLength(1);
-    expect(servers[0].name).toBe("TestMCP");
+    expect(servers.total).toBe(1);
+    expect(servers.items[0]).toMatchObject({
+      id: "testmcp",
+      name: "TestMCP",
+      enabled: true,
+      transport: "stdio",
+    });
+    expect(servers.items[0].command).toBeUndefined();
+    expect(servers.hint).toContain("get_server_info");
+
+    const verboseListResult = await client.callTool({ name: "list_servers", arguments: { verbose: true } });
+    const verboseServers = JSON.parse((verboseListResult.content as any)[0].text);
+    expect(verboseServers).toHaveLength(1);
+    expect(verboseServers[0].name).toBe("TestMCP");
 
     await client.close();
   });
@@ -103,7 +120,7 @@ describe("MCP server tools", () => {
       required: true,
     });
 
-    const listResult = await client.callTool({ name: "list_servers", arguments: {} });
+    const listResult = await client.callTool({ name: "list_servers", arguments: { verbose: true } });
     const listed = JSON.parse((listResult.content as any)[0].text);
     expect(listed[0].env).toEqual({});
     expect(JSON.stringify(listed)).not.toContain("sk_live_should_not_be_stored");
@@ -167,22 +184,63 @@ describe("MCP server tools", () => {
     await client.close();
   });
 
+  it("list_tools is compact by default and verbose returns full schemas", async () => {
+    const { client } = await createClientServer();
+
+    addServer({ command: "npx", name: "toolhost" });
+    cacheTools("toolhost", [
+      {
+        name: "noisy_tool",
+        description: "A tool with a large input schema that should not be dumped by default",
+        input_schema: {
+          type: "object",
+          properties: {
+            query: { type: "string", description: "Search query" },
+            limit: { type: "number" },
+          },
+          required: ["query"],
+        },
+      },
+    ]);
+
+    const compactResult = await client.callTool({ name: "list_tools", arguments: {} });
+    const compact = JSON.parse((compactResult.content as any)[0].text);
+    expect(compact.total).toBe(1);
+    expect(compact.items[0].inputSchema).toMatchObject({
+      propertyCount: 2,
+      requiredCount: 1,
+    });
+    expect(compact.items[0].input_schema).toBeUndefined();
+
+    const verboseResult = await client.callTool({ name: "list_tools", arguments: { verbose: true } });
+    const verbose = JSON.parse((verboseResult.content as any)[0].text);
+    expect(verbose[0].input_schema.properties.query.description).toBe("Search query");
+
+    await client.close();
+  });
+
   it("lists, searches, inspects, and installs provider profiles", async () => {
     const { client } = await createClientServer();
 
     const listResult = await client.callTool({ name: "list_provider_profiles", arguments: {} });
     const profiles = JSON.parse((listResult.content as any)[0].text);
+    expect(profiles.total).toBeGreaterThan(1);
+    expect(profiles.items[0].endpoint).toBeUndefined();
+
+    const verboseListResult = await client.callTool({ name: "list_provider_profiles", arguments: { verbose: true } });
+    const verboseProfiles = JSON.parse((verboseListResult.content as any)[0].text);
     const expectedIds = [...DEFAULT_PROVIDER_PROFILE_SEEDS]
       .sort((left, right) => left.displayName.localeCompare(right.displayName))
       .map((profile) => profile.id);
-    expect(profiles.map((profile: { id: string }) => profile.id)).toEqual(expectedIds);
-    expect(profiles.map((profile: { id: string }) => profile.id)).toContain("stripe");
-    expect(profiles.map((profile: { id: string }) => profile.id)).toContain("cloudflare");
+    expect(verboseProfiles.map((profile: { id: string }) => profile.id)).toEqual(expectedIds);
+    expect(verboseProfiles.map((profile: { id: string }) => profile.id)).toContain("stripe");
+    expect(verboseProfiles.map((profile: { id: string }) => profile.id)).toContain("cloudflare");
 
     const searchResult = await client.callTool({ name: "search_provider_profiles", arguments: { query: "notion" } });
     const searchProfiles = JSON.parse((searchResult.content as any)[0].text);
-    expect(searchProfiles).toHaveLength(1);
-    expect(searchProfiles[0].endpoint).toBe("https://mcp.notion.com/mcp");
+    expect(searchProfiles.total).toBe(1);
+    expect(searchProfiles.items[0].id).toBe("notion");
+    expect(searchProfiles.items[0].endpoint).toBeUndefined();
 
     const infoResult = await client.callTool({ name: "get_provider_profile", arguments: { id: "linear" } });
     const linear = JSON.parse((infoResult.content as any)[0].text);

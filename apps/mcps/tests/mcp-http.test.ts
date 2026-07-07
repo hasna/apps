@@ -85,7 +85,12 @@ describe("MCP HTTP transport", () => {
 
     const result = await client.callTool({ name: "list_servers", arguments: {} });
     const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
-    expect(JSON.parse(text)).toEqual([]);
+    expect(JSON.parse(text)).toMatchObject({
+      items: [],
+      total: 0,
+      shown: 0,
+      nextCursor: null,
+    });
 
     await client.close();
   });

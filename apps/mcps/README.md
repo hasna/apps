@@ -39,6 +39,27 @@ mcps --help
 - `mcps fleet health --refresh`
 - `mcps fleet install --yes`
 
+## Output Defaults
+
+CLI list/search/status-style commands are compact by default for human and
+agent terminals. They show essential fields, truncate long text, and cap rows.
+Use `--limit` and `--cursor` to page through broad results.
+
+Use detail flags and commands when you need full records:
+
+```bash
+mcps list --verbose
+mcps info <server-id> --json
+mcps tools --verbose --limit 50
+mcps find postgres --cursor 20
+mcps providers info github --json
+```
+
+MCP list/search/catalog tools follow the same gradual-disclosure pattern:
+default responses are compact envelopes with `items`, `total`, `nextCursor`,
+and a `hint`; pass `verbose: true` or call a detail tool such as
+`get_server_info` or `get_provider_profile` for full JSON records.
+
 ## Fleet Operations
 
 Use machine registration plus fleet health/install commands to manage `@hasna/*`

@@ -77,6 +77,17 @@ import {
   redactServerCredentials,
   redactEnv,
 } from "../lib/credentials.js";
+import {
+  DEFAULT_LIST_LIMIT,
+  compactProviderProfile,
+  compactServer,
+  compactSource,
+  compactTool,
+  pageSummary,
+  paginate,
+  truncateText,
+  type Page,
+} from "../lib/compact-output.js";
 import * as readline from "readline";
 import { startServer } from "../server/serve.js";
 import { App } from "./components/App.js";
@@ -105,6 +116,12 @@ type LocalConsentOptions = {
   yes?: boolean;
   allowLocalStdio?: boolean;
   allowRiskyCommand?: boolean;
+};
+
+type CompactListOptions = {
+  limit?: string;
+  cursor?: string;
+  verbose?: boolean;
 };
 
 function localConsentFromOptions(opts: LocalConsentOptions, approved = false): LocalCommandConsent {
@@ -185,6 +202,12 @@ function printJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
 }
 
+function printPageFooter<T>(page: Page<T>, noun: string, hint?: string): void {
+  console.log(chalk.dim(`\n${pageSummary(page, noun)}`));
+  if (page.nextCursor) console.log(chalk.dim(`Use --cursor ${page.nextCursor} for the next page.`));
+  if (hint) console.log(chalk.dim(hint));
+}
+
 function parseTables(value?: string): string[] | undefined {
   if (!value) return undefined;
   return value.split(",").map((table) => table.trim()).filter(Boolean);
@@ -211,45 +234,55 @@ function formatMachineTarget(machine: MachineEntry): string {
   return `${userPrefix}${machine.host}:${machine.port}`;
 }
 
-function renderMachines(machines: MachineEntry[]): void {
+function renderMachines(machines: MachineEntry[], opts: CompactListOptions = {}): void {
   if (machines.length === 0) {
     console.log(chalk.dim("No machines registered. Use `mcps machines add` or `mcps machines seed-defaults`."));
     return;
   }
 
-  for (const machine of machines) {
+  const page = paginate(machines, { limit: opts.limit, cursor: opts.cursor });
+  for (const machine of page.items) {
     const status = machine.enabled ? chalk.green("enabled") : chalk.red("disabled");
     const runtime = `${machine.platform}/${machine.arch}`;
     console.log(`  ${chalk.bold(machine.name)} ${chalk.dim(`[${machine.id}]`)} — ${status}`);
-    console.log(`    ${chalk.dim(`${formatMachineTarget(machine)} · installer=${machine.installer} · ${runtime}`)}`);
-    if (machine.last_seen_at) console.log(`    ${chalk.dim(`last seen: ${machine.last_seen_at}`)}`);
-    if (machine.last_error) console.log(`    ${chalk.red(machine.last_error)}`);
+    if (opts.verbose) {
+      console.log(`    ${chalk.dim(`${formatMachineTarget(machine)} · installer=${machine.installer} · ${runtime}`)}`);
+      if (machine.last_seen_at) console.log(`    ${chalk.dim(`last seen: ${machine.last_seen_at}`)}`);
+      if (machine.last_error) console.log(`    ${chalk.red(truncateText(machine.last_error, 180))}`);
+    } else {
+      console.log(`    ${chalk.dim(`${runtime} · installer=${machine.installer}${machine.last_error ? " · has last error" : ""}`)}`);
+    }
   }
+  printPageFooter(page, "machine(s)", "Use --verbose for SSH targets and last errors.");
 }
 
-function renderCatalog(entries: HasnaMcpCatalogEntry[]): void {
+function renderCatalog(entries: HasnaMcpCatalogEntry[], opts: CompactListOptions = {}): void {
   if (entries.length === 0) {
     console.log(chalk.dim("No @hasna MCP packages found."));
     return;
   }
 
-  for (const entry of entries) {
+  const page = paginate(entries, { limit: opts.limit, cursor: opts.cursor });
+  for (const entry of page.items) {
     const binLabel = entry.mcpBin ? chalk.dim(`bin=${entry.mcpBin}`) : chalk.yellow("no MCP bin");
     console.log(`  ${chalk.bold(entry.name)} ${chalk.dim(`@${entry.version}`)} ${binLabel}`);
-    if (entry.description) console.log(`    ${chalk.dim(entry.description)}`);
+    if (entry.description) console.log(`    ${chalk.dim(truncateText(entry.description))}`);
+    if (opts.verbose && entry.repository) console.log(`    ${chalk.cyan(entry.repository)}`);
   }
+  printPageFooter(page, "package(s)", "Use --verbose for repository URLs or -j for full catalog JSON.");
 }
 
-function renderFleetHealth(reports: FleetHealthReport[]): void {
+function renderFleetHealth(reports: FleetHealthReport[], opts: CompactListOptions = {}): void {
   if (reports.length === 0) {
     console.log(chalk.dim("No machines selected."));
     return;
   }
 
-  for (const report of reports) {
+  const page = paginate(reports, { limit: opts.limit, cursor: opts.cursor });
+  for (const report of page.items) {
     console.log(`  ${chalk.bold(report.machine.name)} ${chalk.dim(`[${report.machine.id}]`)} — ${chalk.dim(formatMachineTarget(report.machine))}`);
     if (report.error) {
-      console.log(`    ${chalk.red(report.error)}`);
+      console.log(`    ${chalk.red(truncateText(report.error, 180))}`);
       continue;
     }
 
@@ -258,6 +291,8 @@ function renderFleetHealth(reports: FleetHealthReport[]): void {
         `${report.runtime.platform}/${report.runtime.arch} · current=${report.summary.current} · missing=${report.summary.missing} · outdated=${report.summary.outdated} · unresponsive=${report.summary.unresponsive}`,
       )}`,
     );
+
+    if (!opts.verbose) continue;
 
     for (const pkg of report.packages) {
       const driftColor =
@@ -268,22 +303,25 @@ function renderFleetHealth(reports: FleetHealthReport[]): void {
       console.log(
         `    ${driftColor(pkg.drift.padEnd(8))} ${pkg.packageName} ${chalk.dim(`${installed} -> ${pkg.latestVersion} · handshake=${handshakeLabel}`)}`,
       );
-      if (pkg.handshakeError) console.log(`      ${chalk.red(pkg.handshakeError)}`);
+      if (pkg.handshakeError) console.log(`      ${chalk.red(truncateText(pkg.handshakeError, 180))}`);
     }
   }
+
+  printPageFooter(page, "machine report(s)", "Use --verbose for per-package health details or -j for full JSON.");
 }
 
-function renderFleetInstall(reports: FleetInstallReport[]): void {
+function renderFleetInstall(reports: FleetInstallReport[], opts: CompactListOptions = {}): void {
   if (reports.length === 0) {
     console.log(chalk.dim("No machines selected."));
     return;
   }
 
-  for (const report of reports) {
+  const page = paginate(reports, { limit: opts.limit, cursor: opts.cursor });
+  for (const report of page.items) {
     const installerLabel = report.installer ? chalk.dim(`installer=${report.installer}`) : chalk.dim("installer=none");
     console.log(`  ${chalk.bold(report.machine.name)} ${chalk.dim(`[${report.machine.id}]`)} ${installerLabel}`);
     if (report.error) {
-      console.log(`    ${chalk.red(report.error)}`);
+      console.log(`    ${chalk.red(truncateText(report.error, 180))}`);
       continue;
     }
 
@@ -292,14 +330,20 @@ function renderFleetInstall(reports: FleetInstallReport[]): void {
       continue;
     }
 
-    for (const result of report.results) {
-      const icon = result.success ? chalk.green("✓") : chalk.red("✗");
-      console.log(`    ${icon} ${result.packageName}@${result.requestedVersion}`);
-      if (!result.success && result.stderr.trim()) {
-        console.log(`      ${chalk.red(result.stderr.trim())}`);
+    const successes = report.results.filter((result) => result.success).length;
+    console.log(`    ${chalk.dim(`attempted=${report.attempted} · success=${successes} · failed=${report.results.length - successes}`)}`);
+    if (opts.verbose) {
+      for (const result of report.results) {
+        const icon = result.success ? chalk.green("✓") : chalk.red("✗");
+        console.log(`    ${icon} ${result.packageName}@${result.requestedVersion}`);
+        if (!result.success && result.stderr.trim()) {
+          console.log(`      ${chalk.red(truncateText(result.stderr.trim(), 180))}`);
+        }
       }
     }
   }
+
+  printPageFooter(page, "machine report(s)", "Use --verbose for per-package install results or -j for full JSON.");
 }
 
 const program = new Command();
@@ -316,6 +360,8 @@ program
   .description("List registered MCP servers")
   .option("--json", "Output as JSON")
   .option("--verbose", "Show detailed info including health, command, and transport")
+  .option("--limit <n>", "Maximum servers to show in compact output", String(DEFAULT_LIST_LIMIT))
+  .option("--cursor <offset>", "Start compact output at a numeric cursor")
   .action((opts) => {
     const servers = listServers();
     if (opts.json) {
@@ -330,14 +376,15 @@ program
       return;
     }
     const toolCounts = getToolCounts();
-    for (const s of servers) {
+    const page = paginate(servers, { limit: opts.limit, cursor: opts.cursor });
+    for (const s of page.items) {
       const status = s.enabled ? chalk.green("enabled") : chalk.red("disabled");
       const cachedCount = toolCounts.get(s.id) ?? 0;
       const toolCount = cachedCount > 0 ? chalk.dim(` (${cachedCount} tools)`) : "";
       const errorWarning = s.last_error ? chalk.red(" ⚠") : "";
       console.log(`  ${chalk.bold(s.name)} ${chalk.dim(`[${s.id}]`)} — ${status}${toolCount}${errorWarning}`);
-      if (s.description) console.log(`    ${chalk.dim(s.description)}`);
       if (opts.verbose) {
+        if (s.description) console.log(`    ${chalk.dim(truncateText(s.description))}`);
         console.log(`    Command:   ${chalk.dim(`${s.command} ${s.args.join(" ")}`)}`);
         console.log(`    Transport: ${chalk.dim(s.transport)}`);
         const now = Date.now();
@@ -365,9 +412,12 @@ program
           : chalk.yellow("⚠ stale");
         console.log(`    Health:    ${healthIcon}`);
       } else {
-        console.log(`    ${chalk.dim(`${s.command} ${s.args.join(" ")}`)}`);
+        const summary = compactServer(s, cachedCount);
+        if (s.description) console.log(`    ${chalk.dim(truncateText(s.description))}`);
+        console.log(chalk.dim(`    transport=${summary.transport} source=${summary.source}${summary.hasLastError ? " last_error=yes" : ""}`));
       }
     }
+    printPageFooter(page, "server(s)", "Use --verbose or `mcps info <id>` for command, env, health, and cached tool details.");
     closeDb();
   });
 
@@ -376,21 +426,29 @@ program
   .command("search")
   .argument("<query>", "Search query")
   .description("Search official MCP registry")
-  .action(async (query: string) => {
-    console.log(chalk.dim(`Searching registry for "${query}"...`));
+  .option("--json", "Output as JSON")
+  .option("--limit <n>", "Maximum results to show in compact output", String(DEFAULT_LIST_LIMIT))
+  .option("--cursor <offset>", "Start compact output at a numeric cursor")
+  .action(async (query: string, opts) => {
+    if (!opts.json) console.log(chalk.dim(`Searching registry for "${query}"...`));
     try {
       const results = await searchRegistry(query);
+      if (opts.json) {
+        printJson(results);
+        return;
+      }
       if (results.length === 0) {
         console.log(chalk.dim("No servers found."));
         return;
       }
-      for (const s of results) {
+      const page = paginate(results, { limit: opts.limit, cursor: opts.cursor });
+      for (const s of page.items) {
         console.log(`  ${chalk.bold(s.name)} ${chalk.dim(`[${s.id}]`)}`);
-        if (s.description) console.log(`    ${chalk.dim(s.description)}`);
+        if (s.description) console.log(`    ${chalk.dim(truncateText(s.description))}`);
         const pkg = s.packages?.[0];
         if (pkg) console.log(`    ${chalk.dim(`${pkg.registryType}: ${pkg.identifier}`)}`);
       }
-      console.log(chalk.dim(`\n${results.length} result(s). Use \`mcps add --from-registry <id>\` to install.`));
+      printPageFooter(page, "result(s)", "Use --json for full registry records, or `mcps add --from-registry <id>` to install.");
     } catch (err) {
       console.error(chalk.red(`Search failed: ${(err as Error).message}`));
       process.exit(1);
@@ -407,6 +465,9 @@ providersCmd
   .description("List curated provider profiles")
   .option("--json", "Output as JSON")
   .option("--enabled-only", "Only include enabled profiles")
+  .option("--verbose", "Show endpoints, auth metadata, and longer descriptions")
+  .option("--limit <n>", "Maximum profiles to show in compact output", String(DEFAULT_LIST_LIMIT))
+  .option("--cursor <offset>", "Start compact output at a numeric cursor")
   .action((opts) => {
     const profiles = listProviderProfiles({ enabledOnly: opts.enabledOnly === true });
     if (opts.json) {
@@ -419,7 +480,19 @@ providersCmd
       closeDb();
       return;
     }
-    for (const profile of profiles) printProviderProfile(profile);
+    const page = paginate(profiles, { limit: opts.limit, cursor: opts.cursor });
+    for (const profile of page.items) {
+      if (opts.verbose) {
+        printProviderProfile(profile);
+      } else {
+        const compact = compactProviderProfile(profile);
+        const status = compact.enabled ? chalk.green("enabled") : chalk.red("disabled");
+        console.log(`  ${chalk.bold(compact.displayName)} ${chalk.dim(`[${compact.id}]`)} — ${chalk.dim(compact.transport)} — ${status}`);
+        if (compact.description) console.log(`    ${chalk.dim(compact.description)}`);
+        console.log(chalk.dim(`    auth=${compact.authType} token=${compact.tokenMode}`));
+      }
+    }
+    printPageFooter(page, "profile(s)", "Use --verbose or `mcps providers info <id>` for endpoints, scopes, and fallback details.");
     closeDb();
   });
 
@@ -429,6 +502,9 @@ providersCmd
   .description("Search curated provider profiles")
   .option("--json", "Output as JSON")
   .option("--enabled-only", "Only include enabled profiles")
+  .option("--verbose", "Show endpoints, auth metadata, and longer descriptions")
+  .option("--limit <n>", "Maximum profiles to show in compact output", String(DEFAULT_LIST_LIMIT))
+  .option("--cursor <offset>", "Start compact output at a numeric cursor")
   .action((query: string, opts) => {
     const profiles = searchProviderProfiles(query, { enabledOnly: opts.enabledOnly === true });
     if (opts.json) {
@@ -441,8 +517,19 @@ providersCmd
       closeDb();
       return;
     }
-    for (const profile of profiles) printProviderProfile(profile);
-    console.log(chalk.dim(`\n${profiles.length} provider profile(s). Use \`mcps providers install <id>\` to register one.`));
+    const page = paginate(profiles, { limit: opts.limit, cursor: opts.cursor });
+    for (const profile of page.items) {
+      if (opts.verbose) {
+        printProviderProfile(profile);
+      } else {
+        const compact = compactProviderProfile(profile);
+        const status = compact.enabled ? chalk.green("enabled") : chalk.red("disabled");
+        console.log(`  ${chalk.bold(compact.displayName)} ${chalk.dim(`[${compact.id}]`)} — ${chalk.dim(compact.transport)} — ${status}`);
+        if (compact.description) console.log(`    ${chalk.dim(compact.description)}`);
+        console.log(chalk.dim(`    auth=${compact.authType} token=${compact.tokenMode}`));
+      }
+    }
+    printPageFooter(page, "profile(s)", "Use --verbose, `mcps providers info <id>`, or `mcps providers install <id>` for the next step.");
     closeDb();
   });
 
@@ -816,54 +903,57 @@ program
   .argument("[server-id]", "Optional server ID to filter by")
   .description("List tools (all or per server)")
   .option("--connect", "Connect to servers to fetch live tools")
+  .option("--json", "Output as JSON")
+  .option("--verbose", "Show descriptions in compact output")
+  .option("--limit <n>", "Maximum tools to show in compact output", String(DEFAULT_LIST_LIMIT))
+  .option("--cursor <offset>", "Start compact output at a numeric cursor")
   .option("--yes", "Approve launching local stdio commands when --connect is used")
   .option("--allow-local-stdio", "Approve launching local stdio commands when --connect is used")
   .option("--allow-risky-command", "Approve high-risk local command patterns")
   .action(async (serverId: string | undefined, opts) => {
+    let tools: Array<{ server_id?: string; name: string; description: string; input_schema: Record<string, unknown> }> = [];
     if (opts.connect) {
       console.log(chalk.dim("Connecting to enabled servers..."));
       await connectAllEnabled({ localCommandConsent: localConsentFromOptions(opts) });
-      const tools = listAllTools();
-      if (tools.length === 0) {
-        console.log(chalk.dim("No tools available."));
-      } else {
-        for (const t of tools) {
-          console.log(`  ${chalk.bold(t.name)}`);
-          if (t.description) console.log(`    ${chalk.dim(t.description)}`);
-        }
-        console.log(chalk.dim(`\n${tools.length} tool(s) available.`));
-      }
+      tools = listAllTools();
       await disconnectAll();
     } else if (serverId) {
-      const cached = getCachedTools(serverId);
-      if (cached.length === 0) {
-        console.log(chalk.dim(`No cached tools for "${serverId}". Use --connect to fetch live tools.`));
-      } else {
-        for (const t of cached) {
-          console.log(`  ${chalk.bold(t.name)}`);
-          if (t.description) console.log(`    ${chalk.dim(t.description)}`);
-        }
-      }
+      tools = getCachedTools(serverId).map((tool) => ({ ...tool, server_id: serverId }));
     } else {
       const servers = listServers();
-      let total = 0;
       for (const s of servers) {
         const cached = getCachedTools(s.id);
-        if (cached.length > 0) {
-          console.log(chalk.bold(`\n${s.name} [${s.id}]:`));
-          for (const t of cached) {
-            console.log(`  ${chalk.bold(t.name)}`);
-            if (t.description) console.log(`    ${chalk.dim(t.description)}`);
-          }
-          total += cached.length;
-        }
-      }
-      if (total === 0) {
-        console.log(chalk.dim("No cached tools. Use `mcps tools --connect` to fetch from servers."));
-      } else {
-        console.log(chalk.dim(`\n${total} tool(s) total.`));
+        tools.push(...cached.map((tool) => ({ ...tool, server_id: s.id })));
       }
     }
+
+    if (opts.json) {
+      printJson(tools);
+      closeDb();
+      return;
+    }
+
+    if (tools.length === 0) {
+      console.log(chalk.dim(serverId ? `No cached tools for "${serverId}". Use --connect to fetch live tools.` : "No cached tools. Use `mcps tools --connect` to fetch from servers."));
+      closeDb();
+      return;
+    }
+
+    const page = paginate(tools, { limit: opts.limit, cursor: opts.cursor });
+    for (const tool of page.items) {
+      const compact = compactTool(tool);
+      const prefix = compact.server_id ? `${compact.server_id}__` : "";
+      const schemaBits = [
+        `props=${compact.inputSchema.propertyCount}`,
+        `required=${compact.inputSchema.requiredCount}`,
+      ].join(" ");
+      console.log(`  ${chalk.bold(`${prefix}${compact.name}`)} ${chalk.dim(schemaBits)}`);
+      if (opts.verbose && compact.description) console.log(`    ${chalk.dim(compact.description)}`);
+      if (opts.verbose && compact.inputSchema.propertyPreview.length > 0) {
+        console.log(`    ${chalk.dim(`fields: ${compact.inputSchema.propertyPreview.join(", ")}`)}`);
+      }
+    }
+    printPageFooter(page, "tool(s)", "Use --verbose for descriptions/field previews, --json for full schemas, or `mcps info <server-id>` for one server.");
     closeDb();
   });
 
@@ -922,7 +1012,11 @@ program
   .command("info")
   .argument("<id>", "Server ID")
   .description("Show server details & tools")
-  .action((id: string) => {
+  .option("--json", "Output full server and cached tools as JSON")
+  .option("--verbose", "Show full cached tool descriptions")
+  .option("--limit <n>", "Maximum cached tools to show", String(DEFAULT_LIST_LIMIT))
+  .option("--cursor <offset>", "Start cached tools at a numeric cursor")
+  .action((id: string, opts) => {
     const server = getServer(id);
     if (!server) {
       console.error(chalk.red(`Server "${id}" not found.`));
@@ -931,13 +1025,20 @@ program
     }
 
     const safeServer = redactServerCredentials(server);
+    const cached = getCachedTools(id);
+    if (opts.json) {
+      printJson({ server: safeServer, tools: cached });
+      closeDb();
+      return;
+    }
+
     console.log(chalk.bold(safeServer.name) + " " + chalk.dim(`[${safeServer.id}]`));
     console.log(`  Status:    ${safeServer.enabled ? chalk.green("enabled") : chalk.red("disabled")}`);
     console.log(`  Source:    ${safeServer.source}`);
     console.log(`  Transport: ${safeServer.transport}`);
     console.log(`  Command:   ${safeServer.command} ${safeServer.args.join(" ")}`);
     if (safeServer.url) console.log(`  URL:       ${safeServer.url}`);
-    if (safeServer.description) console.log(`  Desc:      ${safeServer.description}`);
+    if (safeServer.description) console.log(`  Desc:      ${truncateText(safeServer.description, opts.verbose ? 400 : 160)}`);
     if (Object.keys(safeServer.env).length > 0) {
       console.log(`  Env:       ${Object.entries(safeServer.env).map(([k, v]) => `${k}=${v}`).join(", ")}`);
     }
@@ -949,13 +1050,20 @@ program
     console.log(`  Created:   ${safeServer.created_at}`);
     console.log(`  Updated:   ${safeServer.updated_at}`);
 
-    const cached = getCachedTools(id);
     if (cached.length > 0) {
+      const page = paginate(cached, { limit: opts.limit, cursor: opts.cursor });
       console.log(chalk.bold(`\n  Tools (${cached.length}):`));
-      for (const t of cached) {
+      for (const t of page.items) {
         console.log(`    ${chalk.bold(t.name)}`);
-        if (t.description) console.log(`      ${chalk.dim(t.description)}`);
+        if (t.description) console.log(`      ${chalk.dim(truncateText(t.description, opts.verbose ? 300 : 120))}`);
+        if (opts.verbose) {
+          const compact = compactTool(t);
+          if (compact.inputSchema.propertyPreview.length > 0) {
+            console.log(`      ${chalk.dim(`fields: ${compact.inputSchema.propertyPreview.join(", ")}`)}`);
+          }
+        }
       }
+      printPageFooter(page, "tool(s)", "Use --cursor for more cached tools or --json for full schemas.");
     }
     closeDb();
   });
@@ -1177,6 +1285,8 @@ program
   .description("Find MCP servers across npm, GitHub, official registry, and awesome lists")
   .option("--source <sources...>", "Source IDs to search (see `mcps sources list`)")
   .option("--limit <n>", "Max results per source", "20")
+  .option("--cursor <offset>", "Start compact output at a numeric cursor")
+  .option("--verbose", "Show URLs and longer descriptions in compact output")
   .option("--awesome", "List curated servers from punkpeye/awesome-mcp-servers")
   .option("--json", "Output as JSON")
   .option("--install", "After showing results, prompt to select one and install it")
@@ -1195,13 +1305,14 @@ program
         }
         const allSources = listSources();
         const sourceNameMap = new Map(allSources.map((s) => [s.id, s.name]));
-        for (const r of results) {
+        const page = paginate(results, { limit: opts.limit, cursor: opts.cursor });
+        for (const r of page.items) {
           const sourceName = r.sourceId ? (sourceNameMap.get(r.sourceId) ?? r.source) : r.source;
           console.log(`  ${chalk.bold(r.name)} ${chalk.yellow(`[${sourceName}]`)}`);
-          if (r.description) console.log(`    ${chalk.dim(r.description)}`);
-          if (r.url) console.log(`    ${chalk.cyan(r.url)}`);
+          if (r.description) console.log(`    ${chalk.dim(truncateText(r.description))}`);
+          if (opts.verbose && r.url) console.log(`    ${chalk.cyan(r.url)}`);
         }
-        console.log(chalk.dim(`\n${results.length} servers in awesome list.`));
+        printPageFooter(page, "server(s)", "Use --cursor for more results, --verbose for URLs, or --json for the full awesome list.");
         closeDb();
         return;
       }
@@ -1253,45 +1364,53 @@ program
         github: chalk.magenta,
       };
 
-      for (let i = 0; i < results.length; i++) {
-        const r = results[i];
+      const page = paginate(results, { limit, cursor: opts.cursor });
+      for (let i = 0; i < page.items.length; i++) {
+        const r = page.items[i];
         const sourceName = r.sourceId ? (sourceNameMap.get(r.sourceId) ?? r.source) : r.source;
         const sourceLabel = (sourceColors[r.source] ?? chalk.dim)(`[${sourceName}]`);
         const stars = r.stars ? chalk.dim(` ★${r.stars}`) : "";
         const idx = opts.install ? chalk.dim(`${i + 1}. `) : "  ";
         console.log(`${idx}${chalk.bold(r.name)} ${sourceLabel}${stars}`);
-        if (r.description) console.log(`    ${chalk.dim(r.description)}`);
+        if (r.description) console.log(`    ${chalk.dim(truncateText(r.description))}`);
         if (r.installCmd) console.log(`    ${chalk.green(`Install: ${r.installCmd}`)}`);
-        else if (r.url) console.log(`    ${chalk.cyan(r.url)}`);
+        else if (opts.verbose && r.url) console.log(`    ${chalk.cyan(r.url)}`);
       }
 
       console.log(
         chalk.dim(
-          `\nFound ${results.length} results across ${sourcesUsed} source${sourcesUsed === 1 ? "" : "s"} (${elapsed}ms)`
+          `\n${pageSummary(page, "result(s)")} Found ${results.length} total across ${sourcesUsed} source${sourcesUsed === 1 ? "" : "s"} (${elapsed}ms)`
         )
       );
+      if (page.nextCursor) console.log(chalk.dim(`Use --cursor ${page.nextCursor} for the next page.`));
       if (breakdownParts) console.log(chalk.dim(`  Breakdown: ${breakdownParts}`));
-      console.log(chalk.dim(`Use \`mcps add --from-registry <id>\` or \`mcps add npx -y <pkg>\` to install.`));
+      console.log(chalk.dim(`Use --verbose for URLs, --json for full records, or \`mcps add --from-registry <id>\` / \`mcps add npx -y <pkg>\` to install.`));
 
       if (opts.install) {
-        let chosen = results[0];
+        const installCandidates = page.items;
+        if (installCandidates.length === 0) {
+          console.log(chalk.dim("No visible results to install on this page."));
+          closeDb();
+          return;
+        }
+        let chosen = installCandidates[0];
 
-        if (results.length === 1 && opts.yes) {
+        if (results.length === 1 && installCandidates.length === 1 && opts.yes) {
           // Auto-install the single result
         } else {
           // Prompt the user to pick
           const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
           const answer = await new Promise<string>((resolve) => {
-            rl.question(chalk.cyan(`\nEnter number to install (1-${results.length}), or 0 to cancel: `), resolve);
+            rl.question(chalk.cyan(`\nEnter number to install from the visible page (1-${installCandidates.length}), or 0 to cancel: `), resolve);
           });
           rl.close();
           const num = parseInt(answer, 10);
-          if (!num || num < 1 || num > results.length) {
+          if (!num || num < 1 || num > installCandidates.length) {
             console.log(chalk.dim("Installation cancelled."));
             closeDb();
             return;
           }
-          chosen = results[num - 1];
+          chosen = installCandidates[num - 1];
         }
 
         if (!chosen.npmPackage && !chosen.installCmd) {
@@ -1347,19 +1466,35 @@ const sourcesCmd = program.command("sources").description("Manage search sources
 sourcesCmd
   .command("list")
   .description("List all search sources")
-  .action(() => {
+  .option("--json", "Output as JSON")
+  .option("--verbose", "Show source URLs and descriptions")
+  .option("--limit <n>", "Maximum sources to show in compact output", String(DEFAULT_LIST_LIMIT))
+  .option("--cursor <offset>", "Start compact output at a numeric cursor")
+  .action((opts) => {
     const sources = listSources();
+    if (opts.json) {
+      printJson(sources);
+      closeDb();
+      return;
+    }
     if (sources.length === 0) {
       console.log(chalk.dim("No sources configured."));
       closeDb();
       return;
     }
-    for (const s of sources) {
+    const page = paginate(sources, { limit: opts.limit, cursor: opts.cursor });
+    for (const s of page.items) {
+      const compact = compactSource(s);
       const status = s.enabled ? chalk.green("enabled") : chalk.red("disabled");
-      console.log(`  ${chalk.bold(s.name)} ${chalk.dim(`[${s.id}]`)} — ${chalk.dim(s.type)} — ${status}`);
-      if (s.description) console.log(`    ${chalk.dim(s.description)}`);
-      console.log(`    ${chalk.cyan(s.url)}`);
+      console.log(`  ${chalk.bold(compact.name)} ${chalk.dim(`[${compact.id}]`)} — ${chalk.dim(compact.type)} — ${status}`);
+      if (opts.verbose) {
+        if (s.description) console.log(`    ${chalk.dim(truncateText(s.description))}`);
+        console.log(`    ${chalk.cyan(s.url)}`);
+      } else if (compact.hasDescription) {
+        console.log(chalk.dim("    has description"));
+      }
     }
+    printPageFooter(page, "source(s)", "Use --verbose for URLs and descriptions or --json for full source records.");
     closeDb();
   });
 
@@ -1601,6 +1736,9 @@ machinesCmd
   .description("List registered machines")
   .option("-j, --json", "Output as JSON")
   .option("--enabled-only", "Only show enabled machines")
+  .option("--verbose", "Show SSH targets and last errors")
+  .option("--limit <n>", "Maximum machines to show in compact output", String(DEFAULT_LIST_LIMIT))
+  .option("--cursor <offset>", "Start compact output at a numeric cursor")
   .action((opts) => {
     const machines = listMachines().filter((machine) => (opts.enabledOnly ? machine.enabled : true));
     if (opts.json) {
@@ -1608,7 +1746,7 @@ machinesCmd
       closeDb();
       return;
     }
-    renderMachines(machines);
+    renderMachines(machines, opts);
     closeDb();
   });
 
@@ -1723,6 +1861,9 @@ machinesCmd
 machinesCmd
   .command("seed-defaults")
   .description("Seed the standard spark/apple machine inventory")
+  .option("--verbose", "Show SSH targets and last errors")
+  .option("--limit <n>", "Maximum machines to show in compact output", String(DEFAULT_LIST_LIMIT))
+  .option("--cursor <offset>", "Start compact output at a numeric cursor")
   .option("-j, --json", "Output as JSON")
   .action((opts) => {
     try {
@@ -1731,7 +1872,7 @@ machinesCmd
         printJson(machines);
       } else {
         console.log(chalk.green(`Seeded ${machines.length} machines.`));
-        renderMachines(machines);
+        renderMachines(machines, opts);
       }
     } catch (err) {
       console.error(chalk.red(`Failed to seed default machines: ${(err as Error).message}`));
@@ -1749,6 +1890,9 @@ fleetCmd
   .description("List the discovered @hasna MCP package catalog")
   .option("--refresh", "Refresh the npm catalog instead of using cache")
   .option("--package <packages...>", "Filter to specific package names")
+  .option("--verbose", "Show repository URLs")
+  .option("--limit <n>", "Maximum packages to show in compact output", String(DEFAULT_LIST_LIMIT))
+  .option("--cursor <offset>", "Start compact output at a numeric cursor")
   .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     try {
@@ -1758,7 +1902,7 @@ fleetCmd
       if (opts.json) {
         printJson(entries);
       } else {
-        renderCatalog(entries);
+        renderCatalog(entries, opts);
       }
     } catch (err) {
       console.error(chalk.red(`Catalog lookup failed: ${(err as Error).message}`));
@@ -1777,6 +1921,9 @@ fleetCmd
   .option("--package <packages...>", "Restrict the check to specific @hasna package names")
   .option("--refresh", "Refresh the package catalog before checking")
   .option("--timeout <ms>", "Remote timeout in milliseconds", String(180_000))
+  .option("--verbose", "Show per-package health details")
+  .option("--limit <n>", "Maximum machine reports to show in compact output", String(DEFAULT_LIST_LIMIT))
+  .option("--cursor <offset>", "Start compact output at a numeric cursor")
   .option("-j, --json", "Output as JSON")
   .action(async (machineIds: string[] | undefined, opts) => {
     try {
@@ -1790,7 +1937,7 @@ fleetCmd
       if (opts.json) {
         printJson(reports);
       } else {
-        renderFleetHealth(reports);
+        renderFleetHealth(reports, opts);
       }
     } catch (err) {
       console.error(chalk.red(`Fleet health check failed: ${(err as Error).message}`));
@@ -1811,6 +1958,9 @@ fleetCmd
   .option("--refresh", "Refresh the package catalog before installing")
   .option("--timeout <ms>", "Remote timeout in milliseconds", String(180_000))
   .option("--yes", "Confirm remote installs")
+  .option("--verbose", "Show per-package install results")
+  .option("--limit <n>", "Maximum machine reports to show in compact output", String(DEFAULT_LIST_LIMIT))
+  .option("--cursor <offset>", "Start compact output at a numeric cursor")
   .option("-j, --json", "Output as JSON")
   .action(async (machineIds: string[] | undefined, opts) => {
     try {
@@ -1830,7 +1980,7 @@ fleetCmd
       if (opts.json) {
         printJson(reports);
       } else {
-        renderFleetInstall(reports);
+        renderFleetInstall(reports, opts);
       }
     } catch (err) {
       console.error(chalk.red(`Fleet install failed: ${(err as Error).message}`));
