@@ -31,6 +31,23 @@ describe("resolveCloudStorage (loops)", () => {
     if (r.transport === "cloud-http") expect(r.baseUrl).toBe("https://loops.example.test/v1");
   });
 
+  test("cloud-http when URL + _API_TOKEN alias are set (control-plane bearer)", () => {
+    const r = resolveCloudStorage("loops", {
+      LOOPS_API_URL: "https://loops.example.test",
+      LOOPS_API_TOKEN: "control-plane-bearer-value",
+    });
+    expect(r.transport).toBe("cloud-http");
+    if (r.transport === "cloud-http") expect(r.baseUrl).toBe("https://loops.example.test/v1");
+  });
+
+  test("cloud-http when URL + HASNA_LOOPS_API_TOKEN alias are set", () => {
+    const r = resolveCloudStorage("loops", {
+      HASNA_LOOPS_API_URL: "https://loops.example.test",
+      HASNA_LOOPS_API_TOKEN: "control-plane-bearer-value",
+    });
+    expect(r.transport).toBe("cloud-http");
+  });
+
   test("explicit mode=local forces local even with API vars", () => {
     const r = resolveCloudStorage("loops", {
       HASNA_LOOPS_STORAGE_MODE: "local",
