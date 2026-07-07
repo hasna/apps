@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 import { timingSafeEqual } from "node:crypto";
 import { Command } from "commander";
-import type { CreateLoopInput, LoopStatus, RunStatus } from "../types.js";
+import type { CreateLoopInput, LoopStatus, RunStatus, WriteRunReceiptInput } from "../types.js";
 import { LoopArchivedError, LoopNotFoundError, ValidationError } from "../lib/errors.js";
-import { publicLoop, publicRun, redact } from "../lib/format.js";
+import { publicLoop, publicRun, publicRunReceipt, redact } from "../lib/format.js";
 import { buildDeploymentStatus, deploymentStatusLine } from "../lib/mode.js";
 import { computeNextAfter, dueSlots } from "../lib/recurrence.js";
 import { scrubSecretsDeep } from "../lib/redact.js";
@@ -212,6 +212,7 @@ async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
   try {
     if (segments[1] === "loops") return await handleLoopsRequest(ctx, segments.slice(2));
     if (segments[1] === "runs") return await handleRunsRequest(ctx, segments.slice(2));
+    if (segments[1] === "receipts") return await handleReceiptsRequest(ctx, segments.slice(2));
     if (segments[1] === "runners") return await handleRunnerRequest(ctx, segments.slice(2));
     if (segments[1] === "leases" && segments[2] === "recover" && ctx.request.method === "POST") {
       return runnerProtocolPending("lease recovery is implemented in the runner protocol stage");
@@ -322,6 +323,33 @@ async function handleRunsRequest(ctx: V1RequestContext, segments: string[]): Pro
     const run = await storage.getRun(id);
     if (!run) return fail("run_not_found", 404);
     return ok({ run: publicRun(run, showOutput, { redactError: true }) });
+  }
+  return fail("not_found", 404);
+}
+
+async function handleReceiptsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  const storage = requireStorage(ctx.storage);
+  const id = segments[0];
+  if (segments.length === 0 && ctx.request.method === "GET") {
+    const receipts = await storage.listRunReceipts({
+      loopId: ctx.url.searchParams.get("loopId") ?? undefined,
+      repo: ctx.url.searchParams.get("repo") ?? undefined,
+      taskId: ctx.url.searchParams.get("taskId") ?? undefined,
+      knowledgeId: ctx.url.searchParams.get("knowledgeId") ?? undefined,
+      status: ctx.url.searchParams.get("status") ?? undefined,
+      limit: optionalLimit(ctx.url.searchParams.get("limit")),
+    });
+    return ok({ receipts: receipts.map(publicRunReceipt) });
+  }
+  if (segments.length === 0 && ctx.request.method === "POST") {
+    const body = await readJsonBody<WriteRunReceiptInput>(ctx.request, ctx.evidenceLimitBytes);
+    return ok({ receipt: publicRunReceipt(await storage.writeRunReceipt(body)) }, { status: 201 });
+  }
+  if (!id) return fail("not_found", 404);
+  if (segments.length === 1 && ctx.request.method === "GET") {
+    const receipt = await storage.getRunReceipt(id);
+    if (!receipt) return fail("run_receipt_not_found", 404);
+    return ok({ receipt: publicRunReceipt(receipt) });
   }
   return fail("not_found", 404);
 }

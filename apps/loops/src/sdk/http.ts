@@ -23,6 +23,18 @@ export interface RunListResponse { "ok": boolean; "runs": Array<Run> }
 
 export interface DeleteResponse { "ok": boolean; "deleted": boolean }
 
+export type RunReceiptMachine = string | Record<string, unknown>;
+
+export interface RunReceiptSummary { "text"?: string; "stdout_bytes": number; "stderr_bytes": number; "stdout_excerpt"?: string; "stderr_excerpt"?: string; "error"?: string; "duration_ms"?: number }
+
+export interface RunReceipt { "loop_id": string; "run_id": string; "machine": RunReceiptMachine; "repo": string; "task_ids": Array<string>; "knowledge_ids": Array<string>; "digest_id": string; "started_at": string | null; "finished_at": string | null; "status": string; "exit_code": number | null; "summary": RunReceiptSummary; "evidence_paths": Array<string>; "created_at": string; "updated_at": string }
+
+export interface WriteRunReceiptInput { "loop_id"?: string; "run_id": string; "machine"?: RunReceiptMachine; "repo"?: string; "task_ids"?: Array<string>; "knowledge_ids"?: Array<string>; "digest_id"?: string; "started_at"?: string | null; "finished_at"?: string | null; "status"?: string; "exit_code"?: number | null; "summary"?: string | RunReceiptSummary | null; "evidence_paths"?: Array<string>; "stdout"?: string; "stderr"?: string; "error"?: string; "duration_ms"?: number }
+
+export interface RunReceiptResponse { "ok": boolean; "receipt": RunReceipt }
+
+export interface RunReceiptListResponse { "ok": boolean; "receipts": Array<RunReceipt> }
+
 export interface LoopsClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */
   baseUrl: string;
@@ -153,6 +165,33 @@ export class LoopsClient {
     /** Unarchive a loop */
     async unarchiveLoop(id: string, init?: RequestInit): Promise<LoopResponse> {
       return this.request("POST", `/v1/loops/${encodeURIComponent(String(id))}/unarchive`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List run receipts */
+    async listRunReceipts(query?: { "loopId"?: string; "repo"?: string; "taskId"?: string; "knowledgeId"?: string; "status"?: string; "limit"?: number }, init?: RequestInit): Promise<RunReceiptListResponse> {
+      return this.request("GET", `/v1/receipts`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Write a run receipt */
+    async writeRunReceipt(body: WriteRunReceiptInput, init?: RequestInit): Promise<RunReceiptResponse> {
+      return this.request("POST", `/v1/receipts`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Get a run receipt by run id */
+    async getRunReceipt(runId: string, init?: RequestInit): Promise<RunReceiptResponse> {
+      return this.request("GET", `/v1/receipts/${encodeURIComponent(String(runId))}`, {
         body: undefined,
         query: undefined,
         init,

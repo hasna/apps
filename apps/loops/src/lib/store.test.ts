@@ -244,6 +244,97 @@ describe("Store", () => {
     }
   });
 
+  test("writes idempotent scheduler-neutral run receipts with bounded summaries", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "receipt-loop",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "true", cwd: "/workspace/open-loops" },
+          machine: { id: "spark01" },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
+      expect(claim).toBeDefined();
+      const run = store.finalizeRun(claim!.run.id, {
+        status: "succeeded",
+        finishedAt: "2026-01-01T00:00:03.000Z",
+        durationMs: 3_000,
+        stdout: "stored",
+        stderr: "",
+      });
+
+      const first = store.writeRunReceipt(
+        {
+          run_id: run.id,
+          task_ids: ["task-1", "task-1"],
+          knowledge_ids: ["knowledge-1"],
+          summary: "worker finished",
+          evidence_paths: ["/tmp/evidence.json"],
+          stdout: `validated ${OPENAI_KEY}`,
+          stderr: "warn",
+        },
+        { now: new Date("2026-01-01T00:00:04Z") },
+      );
+
+      expect(first).toMatchObject({
+        loop_id: loop.id,
+        run_id: run.id,
+        repo: "/workspace/open-loops",
+        task_ids: ["task-1"],
+        knowledge_ids: ["knowledge-1"],
+        status: "succeeded",
+        exit_code: null,
+        started_at: "2026-01-01T00:00:00.000Z",
+        finished_at: "2026-01-01T00:00:03.000Z",
+      });
+      expect(first.digest_id).toMatch(/^sha256:/);
+      expect(first.summary.text).toBe("worker finished");
+      expect(first.summary.stdout_bytes).toBeGreaterThan(OPENAI_KEY.length);
+      expect(first.summary.stdout_excerpt).toContain("[SCRUBBED]");
+      expect(first.summary.stdout_excerpt).not.toContain(OPENAI_KEY);
+
+      const updated = store.writeRunReceipt(
+        {
+          run_id: run.id,
+          loop_id: loop.id,
+          repo: "/workspace/open-loops",
+          task_ids: ["task-2"],
+          status: "failed",
+          exit_code: 12,
+          summary: { text: "updated receipt", stdout_bytes: 0, stderr_bytes: 0 },
+        },
+        { now: new Date("2026-01-01T00:00:05Z") },
+      );
+      expect(updated.created_at).toBe(first.created_at);
+      expect(updated.updated_at).toBe("2026-01-01T00:00:05.000Z");
+      expect(updated.status).toBe("failed");
+      expect(updated.exit_code).toBe(12);
+      expect(store.getRunReceipt(run.id)?.task_ids).toEqual(["task-2"]);
+      expect(store.listRunReceipts({ taskId: "task-2" }).map((receipt) => receipt.run_id)).toEqual([run.id]);
+      expect(store.listRunReceipts({ knowledgeId: "knowledge-1" })).toEqual([]);
+      expect(store.listRunReceipts({ repo: "/workspace/open-loops", status: "failed" })).toHaveLength(1);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("rejects malformed receipt writes through receipt validation", () => {
+    const store = new Store(":memory:");
+    try {
+      expect(() =>
+        store.writeRunReceipt({
+          loop_id: "loop-id",
+          status: "succeeded",
+        } as any),
+      ).toThrow("run_id must be non-empty");
+    } finally {
+      store.close();
+    }
+  });
+
   test("persists loop machine assignments", () => {
     const store = new Store(":memory:");
     try {
@@ -1643,13 +1734,10 @@ exit 0
         "0006_run_process_tracking",
         "0007_run_claim_tokens",
         "0008_work_item_route_scope",
+        "0009_run_receipts",
       ]);
-      // 0008 adds a nullable, additive column and deliberately does NOT bump
-      // SCHEMA_USER_VERSION: an older binary must still open a DB the newer one
-      // touched (rollback safety), and the migration runner tolerates the extra
-      // ledger row + ignores the unknown column.
       const version = store["db"].query("PRAGMA user_version").get() as { user_version: number };
-      expect(version.user_version).toBeGreaterThanOrEqual(7);
+      expect(version.user_version).toBe(8);
     } finally {
       store.close();
     }
@@ -1735,11 +1823,12 @@ exit 0
       );
       expect(indexes).toContain("idx_runs_claim_token");
       const version = store["db"].query("PRAGMA user_version").get() as { user_version: number };
-      expect(version.user_version).toBe(7);
+      expect(version.user_version).toBe(8);
       const ids = (store["db"].query("SELECT id FROM schema_migrations ORDER BY id").all() as Array<{ id: string }>).map(
         (row) => row.id,
       );
       expect(ids).toContain("0007_run_claim_tokens");
+      expect(ids).toContain("0009_run_receipts");
       expect(store.listRuns()).toEqual([]);
     } finally {
       store.close();

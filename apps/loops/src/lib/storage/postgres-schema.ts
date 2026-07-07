@@ -343,4 +343,32 @@ ALTER TABLE workflow_work_items ADD COLUMN IF NOT EXISTS route_scope TEXT;
 CREATE INDEX IF NOT EXISTS idx_workflow_work_items_scope ON workflow_work_items(route_scope, status);
     `,
   ),
+  migration(
+    "0005_run_receipts",
+    `
+CREATE TABLE IF NOT EXISTS run_receipts (
+  run_id TEXT PRIMARY KEY,
+  loop_id TEXT NOT NULL,
+  machine_json JSONB NOT NULL,
+  repo TEXT NOT NULL,
+  task_ids_json JSONB NOT NULL,
+  knowledge_ids_json JSONB NOT NULL,
+  digest_id TEXT NOT NULL,
+  started_at TIMESTAMPTZ,
+  finished_at TIMESTAMPTZ,
+  status TEXT NOT NULL,
+  exit_code INTEGER,
+  summary_json JSONB NOT NULL,
+  evidence_paths_json JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_run_receipts_loop ON run_receipts(loop_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_run_receipts_repo ON run_receipts(repo, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_run_receipts_digest ON run_receipts(digest_id);
+CREATE INDEX IF NOT EXISTS idx_run_receipts_status ON run_receipts(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_run_receipts_task_ids ON run_receipts USING GIN (task_ids_json);
+CREATE INDEX IF NOT EXISTS idx_run_receipts_knowledge_ids ON run_receipts USING GIN (knowledge_ids_json);
+    `,
+  ),
 ]);

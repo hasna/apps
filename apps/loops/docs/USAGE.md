@@ -905,6 +905,27 @@ is requested without `manualBreakGlass=true`. Use `workspace-write` for
 unattended task/event routes. Full access is an explicit manual emergency path,
 not a default automation mode.
 
+## Run Receipts
+
+Use run receipts when an agent, scheduler, route, or external workflow needs a
+stable run outcome without parsing raw stdout or wrapper-script text. Receipts
+are scheduler-neutral JSON records with these public snake_case fields:
+`loop_id`, `run_id`, `machine`, `repo`, `task_ids`, `knowledge_ids`,
+`digest_id`, `started_at`, `finished_at`, `status`, `exit_code`, `summary`, and
+`evidence_paths`. The summary contains bounded, scrubbed excerpts and byte
+counts; raw unbounded stdout/stderr stays out of the receipt contract.
+
+```bash
+cat receipt.json | loops --json receipts write --file -
+loops --json receipts read run_123
+loops --json receipts list --loop-id loop_123 --task-id task_123
+```
+
+MCP clients can use `loops_receipt_read`, `loops_receipts_list`, and the
+mutation-gated `loops_receipt_write`. The SDK exposes `writeReceipt`,
+`receipt`, and `receipts`; the HTTP API exposes `POST /v1/receipts`,
+`GET /v1/receipts/{runId}`, and `GET /v1/receipts`.
+
 ## Transcript-Driven Loops
 
 OpenLoops can turn long-form media or meeting transcripts into recurring workflow work when paired with `iapp-transcriber`. The template at `docs/workflows/transcript-feedback-to-loops.json` transcribes an authorized media URL, asks an agent to extract recurring loop candidates, authors workflow specs, and validates generated workflows before scheduling. Copy it into the target repo, replace `/path/to/repo` with that repo's absolute path, and provide `TRANSCRIBER_SOURCE_URL` through the runner environment or a private, uncommitted workflow copy before storing or scheduling it. Do not commit private or signed media URLs.

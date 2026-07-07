@@ -102,7 +102,17 @@ describe("open-loops MCP server", () => {
           steps: [{ id: "check", target: { type: "command", command: "true" } }],
         });
         const workflowRun = store.createWorkflowRun({ workflow });
-        return { loopId: loop.id, workflowRunId: workflowRun.id };
+        const receipt = store.writeRunReceipt({
+          loop_id: loop.id,
+          run_id: "mcp-run-receipt",
+          machine: "spark01",
+          repo: "/workspace/open-loops",
+          task_ids: ["task-mcp"],
+          status: "succeeded",
+          summary: "mcp receipt",
+          evidence_paths: ["/tmp/mcp-receipt.json"],
+        });
+        return { loopId: loop.id, workflowRunId: workflowRun.id, receiptRunId: receipt.run_id };
       } finally {
         store.close();
       }
@@ -127,6 +137,16 @@ describe("open-loops MCP server", () => {
         loop: { id: string; name: string };
       };
       expect(show.loop).toMatchObject({ id: seeded.loopId, name: "mcp-smoke" });
+
+      const receiptRead = textPayload(
+        await client.callTool({ name: "loops_receipt_read", arguments: { run_id: seeded.receiptRunId } }),
+      ) as { receipt: { run_id: string; summary: { text: string } } };
+      expect(receiptRead.receipt).toMatchObject({ run_id: "mcp-run-receipt", summary: { text: "mcp receipt" } });
+
+      const receiptList = textPayload(
+        await client.callTool({ name: "loops_receipts_list", arguments: { task_id: "task-mcp" } }),
+      ) as { receipts: Array<{ run_id: string }> };
+      expect(receiptList.receipts.map((receipt) => receipt.run_id)).toEqual(["mcp-run-receipt"]);
 
       const doctor = textPayload(await client.callTool({ name: "loops_doctor", arguments: {} })) as {
         checks: Array<{ id: string }>;
@@ -241,6 +261,13 @@ describe("open-loops MCP server", () => {
       expect(result.isError).toBe(true);
       expect(JSON.stringify(result.content)).toContain("LOOPS_MCP_ALLOW_MUTATIONS=true");
 
+      const receiptWrite = await client.callTool({
+        name: "loops_receipt_write",
+        arguments: { loop_id: loopId, run_id: "mcp-denied-receipt", status: "succeeded" },
+      });
+      expect(receiptWrite.isError).toBe(true);
+      expect(JSON.stringify(receiptWrite.content)).toContain("LOOPS_MCP_ALLOW_MUTATIONS=true");
+
       // workflow_validate preflight spawns credential-resolution subprocesses
       // from model-controlled input, so it shares the mutation gate.
       const preflight = await client.callTool({
@@ -308,6 +335,23 @@ describe("open-loops MCP server", () => {
         await client.callTool({ name: "loop_resume", arguments: { idOrName: seeded.loopId } }),
       ) as { loop: { status: string } };
       expect(aliasResumed.loop.status).toBe("active");
+
+      const receiptWrite = textPayload(
+        await client.callTool({
+          name: "loops_receipt_write",
+          arguments: {
+            loop_id: seeded.loopId,
+            run_id: "mcp-written-receipt",
+            machine: "spark01",
+            repo: "/workspace/open-loops",
+            task_ids: ["task-written"],
+            status: "succeeded",
+            summary: "written over MCP",
+            evidence_paths: ["/tmp/mcp-written.json"],
+          },
+        }),
+      ) as { receipt: { run_id: string; summary: { text: string } } };
+      expect(receiptWrite.receipt).toMatchObject({ run_id: "mcp-written-receipt", summary: { text: "written over MCP" } });
 
       const scheduled = textPayload(
         await client.callTool({ name: "loops_run_now", arguments: { idOrName: seeded.loopId } }),
