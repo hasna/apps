@@ -486,6 +486,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["customer data", "retail", "analytics", "personalization", "cdp"],
   },
   {
+    name: "solcast",
+    displayName: "Solcast",
+    description: "Solar PV power forecasts and estimated actuals",
+    category: "Data & Analytics",
+    tags: ["solar", "pv", "forecast", "weather"],
+  },
+  {
     name: "specter",
     displayName: "Specter",
     description: "Game intelligence platform for game studios and developers",
