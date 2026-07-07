@@ -30,6 +30,26 @@ Requires:
 Optional:
 - Base URL override (`SPRINKLR_BASE_URL`, default `https://api.sprinklr.com/v1`)
 
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `SPRINKLR_API_KEY` | API key for Bearer token authentication |
+| `SPRINKLR_BASE_URL` | Optional API base URL override |
+
+## CLI Commands
+
+```bash
+connect-sprinklr cases list
+connect-sprinklr cases get <caseId>
+connect-sprinklr cases create --body '{"subject":"Support request"}'
+connect-sprinklr events list
+connect-sprinklr search --query "billing"
+connect-sprinklr raw --method GET --path /cases
+connect-sprinklr profile list|use|create|delete|show
+connect-sprinklr config set-key|set-base-url|show|clear
+```
+
 ## API Coverage
 
 - `GET /cases` — list cases

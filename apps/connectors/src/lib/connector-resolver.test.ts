@@ -45,6 +45,33 @@ describe("connector resolver", () => {
     expect(legacyConnectorName("connect-github")).toBe("connect-github");
   });
 
+  test("resolves alumia twitter slug aliases to canonical x connector", () => {
+    expect(normalizeConnectorName("twitter")).toBe("x");
+    expect(normalizeConnectorName("x-twitter")).toBe("x");
+    expect(normalizeConnectorName("connect-twitter")).toBe("x");
+    expect(normalizeConnectorName("connect-x-twitter")).toBe("x");
+    expect(normalizeConnectorName("x")).toBe("x");
+
+    expect(resolveConnectorName("twitter")).toEqual({
+      input: "twitter",
+      canonicalName: "x",
+      legacyName: "connect-x",
+      aliases: ["x", "connect-x", "twitter", "x-twitter"],
+      isLegacyInput: false,
+    });
+    expect(connectorPackageDirNames("twitter")).toEqual(["x", "connect-x"]);
+  });
+
+  test("resolves twitter alias to x package directory", () => {
+    mkdirSync(join(PACKAGE_DIR, "x"));
+
+    const resolution = resolveConnectorPackagePath(PACKAGE_DIR, "twitter");
+    expect(resolution.canonicalName).toBe("x");
+    expect(resolution.existingPath).toBe(join(PACKAGE_DIR, "x"));
+    expect(getConnectorPackagePath(PACKAGE_DIR, "twitter")).toBe(join(PACKAGE_DIR, "x"));
+    expect(getConnectorConfigDir("twitter", CONFIG_DIR)).toBe(join(CONFIG_DIR, "x"));
+  });
+
   test("resolves aliases with prefixless canonical name", () => {
     expect(resolveConnectorName("connect-googledrive")).toEqual({
       input: "connect-googledrive",
