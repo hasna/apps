@@ -561,6 +561,50 @@ describe("storage adapter contracts", () => {
     expect(postgres.calls.some((call) => call.values?.includes("spark01"))).toBe(true);
   });
 
+  test("pushes task filtering, count and pagination down to SQL (no whole-table load)", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({
+      client: postgres.client,
+      sourceMachineId: "spark01",
+    });
+    const project = await adapter.projects.create({ name: "Paginate", path: "/tmp/paginate" });
+    // Seed a mix of statuses and priorities.
+    for (let n = 0; n < 6; n++) {
+      await adapter.tasks.create({
+        title: `task-${n}`,
+        project_id: project.id,
+        status: n % 2 === 0 ? "pending" : "completed",
+        priority: n < 2 ? "critical" : "low",
+      });
+    }
+
+    // count() must issue a SQL COUNT(*) — never materialize the table in JS.
+    postgres.calls.length = 0;
+    expect(await adapter.tasks.count({ project_id: project.id })).toBe(6);
+    expect(await adapter.tasks.count({ project_id: project.id, status: "pending" })).toBe(3);
+    expect(postgres.calls.every((c) => !c.sql.includes("todos:list-tasks"))).toBe(true);
+    expect(postgres.calls.some((c) => c.sql.includes("todos:count-tasks") && c.sql.includes("COUNT(*)"))).toBe(true);
+
+    // Filter by status via SQL.
+    const pending = await adapter.tasks.list({ project_id: project.id, status: "pending" });
+    expect(pending).toHaveLength(3);
+    expect(pending.every((t) => t.status === "pending")).toBe(true);
+
+    // Priority-then-created_at ordering preserved (critical first).
+    const ordered = await adapter.tasks.list({ project_id: project.id });
+    expect(ordered.slice(0, 2).every((t) => t.priority === "critical")).toBe(true);
+
+    // LIMIT/OFFSET pagination via SQL.
+    const page1 = await adapter.tasks.list({ project_id: project.id, limit: 2, offset: 0 });
+    const page2 = await adapter.tasks.list({ project_id: project.id, limit: 2, offset: 2 });
+    expect(page1).toHaveLength(2);
+    expect(page2).toHaveLength(2);
+    expect(page1.map((t) => t.id)).not.toEqual(page2.map((t) => t.id));
+    expect(postgres.calls.some((c) => c.sql.includes("todos:list-tasks") && /LIMIT \$\d+/.test(c.sql))).toBe(true);
+    // offset:0 omits OFFSET; the offset:2 page must emit an OFFSET placeholder.
+    expect(postgres.calls.some((c) => c.sql.includes("todos:list-tasks") && /OFFSET \$\d+/.test(c.sql))).toBe(true);
+  });
+
   test("matches SQLite plan slug semantics in the direct Postgres adapter", async () => {
     const postgres = createMemoryPostgresClient();
     const adapter = createPostgresTodosStorageAdapter({
@@ -1076,6 +1120,86 @@ function createMemoryPostgresClient(): {
   const client: TodosPostgresQueryClient = {
     async query<T = Record<string, unknown>>(sql: string, values: readonly unknown[] = []) {
       calls.push({ sql, values });
+
+      // SQL-side task list/count (buildTaskFilterSql). Decode the jsonb predicates
+      // positionally in the SAME order the adapter emits them, then filter/sort/
+      // paginate the in-memory rows. KEEP IN SYNC with buildTaskFilterSql.
+      if (sql.includes("todos:list-tasks") || sql.includes("todos:count-tasks")) {
+        const service = values[0];
+        let i = 2;
+        const nextVal = () => values[i++];
+        const preds: Array<(t: Record<string, unknown>) => boolean> = [];
+        if (sql.includes("payload->>'id' = ANY(")) {
+          const ids = nextVal() as string[];
+          preds.push((t) => ids.includes(String(t["id"])));
+        }
+        if (sql.includes("payload->>'project_id' = $")) {
+          const v = nextVal();
+          preds.push((t) => (t["project_id"] ?? null) === v);
+        }
+        if (sql.includes("payload->>'parent_id' IS NOT DISTINCT FROM")) {
+          const v = (nextVal() ?? null) as unknown;
+          preds.push((t) => (t["parent_id"] ?? null) === v);
+        }
+        if (sql.includes("payload->>'plan_id' = $")) {
+          const v = nextVal();
+          preds.push((t) => (t["plan_id"] ?? null) === v);
+        }
+        if (sql.includes("payload->>'task_list_id' = $")) {
+          const v = nextVal();
+          preds.push((t) => (t["task_list_id"] ?? null) === v);
+        }
+        if (sql.includes("payload->>'status' = ANY(")) {
+          const arr = nextVal() as string[];
+          preds.push((t) => arr.includes(String(t["status"])));
+        }
+        if (sql.includes("payload->>'priority' = ANY(")) {
+          const arr = nextVal() as string[];
+          preds.push((t) => arr.includes(String(t["priority"])));
+        }
+        if (sql.includes("payload->>'assigned_to' = $")) {
+          const v = nextVal();
+          preds.push((t) => (t["assigned_to"] ?? null) === v);
+        }
+        if (sql.includes("payload->>'agent_id' = $")) {
+          const v = nextVal();
+          preds.push((t) => (t["agent_id"] ?? null) === v);
+        }
+        if (sql.includes("payload->>'session_id' = $")) {
+          const v = nextVal();
+          preds.push((t) => (t["session_id"] ?? null) === v);
+        }
+        if (sql.includes("payload->'tags' @>")) {
+          const tags = JSON.parse(String(nextVal())) as string[];
+          preds.push((t) => Array.isArray(t["tags"]) && tags.every((x) => (t["tags"] as string[]).includes(x)));
+        }
+        if (sql.includes("payload->>'recurrence_rule', '') <> '') = $")) {
+          const v = nextVal();
+          preds.push((t) => Boolean(t["recurrence_rule"]) === v);
+        }
+        if (sql.includes("payload->>'task_type', '') = ANY(")) {
+          const arr = nextVal() as string[];
+          preds.push((t) => arr.includes(String(t["task_type"] ?? "")));
+        }
+        if (sql.includes("payload->>'parent_id' IS NULL OR payload->>'parent_id' = ''")) {
+          preds.push((t) => !t["parent_id"]);
+        }
+        let selected = [...rows.values()]
+          .filter((row) => row.service === service && row.objectType === "tasks" && !row.deletedAt)
+          .map((row) => row.payload as Record<string, unknown>)
+          .filter((payload) => preds.every((pred) => pred(payload)));
+        if (sql.includes("todos:count-tasks")) {
+          return { rows: [{ count: selected.length }] as T[] };
+        }
+        const rank = (p: unknown) => ({ critical: 0, high: 1, medium: 2, low: 3 } as Record<string, number>)[String(p)] ?? 4;
+        selected = selected.sort((a, b) =>
+          rank(a["priority"]) - rank(b["priority"]) ||
+          String(a["created_at"]).localeCompare(String(b["created_at"])));
+        const limit = sql.includes("LIMIT $") ? Number(nextVal()) : undefined;
+        const offset = sql.includes("OFFSET $") ? Number(nextVal()) : 0;
+        const page = selected.slice(offset, limit === undefined ? undefined : offset + limit);
+        return { rows: page.map((payload) => ({ payload })) as T[] };
+      }
 
       if (sql.includes("INSERT INTO todos_sync_records")) {
         const [service, objectType, objectId, payload, updatedAt] = values;

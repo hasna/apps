@@ -15,7 +15,6 @@ import type {
   TaskFilter,
   TaskHistory,
   TaskList,
-  TaskPriority,
   TaskTemplate,
   TemplateWithTasks,
   UpdatePlanInput,
@@ -92,8 +91,8 @@ export function createPostgresTodosStorageAdapter(
     tasks: {
       create: (input, context) => createTask(input, store, context),
       get: (id) => store.get<Task>("tasks", id),
-      list: (filter = {}) => listTasks(filter, store),
-      count: async (filter = {}) => (await listTasks(filter, store)).length,
+      list: (filter = {}) => store.listTasks(filter),
+      count: (filter = {}) => store.countTasks(filter),
       update: (id, input) => updateTask(id, input, store),
       delete: (id, context) => store.delete("tasks", id, context),
       start: (id, agentId) => startTask(id, agentId, store),
@@ -230,6 +229,71 @@ class PostgresJsonRecordStore {
       payload: payloadRecord<T>(row.payload),
       updatedAt: stringValue(row.updated_at) ?? new Date().toISOString(),
     }));
+  }
+
+  /**
+   * SQL-side task filtering, sorting, pagination and counting over the jsonb
+   * payload. Historically the adapter materialized the ENTIRE tasks table into JS
+   * on every list/count/stats call and filtered in memory — with ~38k tasks that
+   * O(n) heap load OOM crash-looped the serve task (it now runs at 4GB). Pushing
+   * the TaskFilter, priority sort, LIMIT/OFFSET and COUNT down to Postgres means a
+   * request only materializes the page it returns.
+   *
+   * KEEP IN SYNC with the in-memory mock in storage.test.ts
+   * (createMemoryPostgresClient): the condition emission order below is decoded
+   * positionally there.
+   */
+  private buildTaskFilterSql(filter: TaskFilter): { where: string; params: unknown[] } {
+    const params: unknown[] = [this.service, "tasks"];
+    const conds: string[] = ["service = $1", "object_type = $2", "deleted_at IS NULL"];
+    const p = (value: unknown): string => {
+      params.push(value);
+      return `$${params.length}`;
+    };
+    if (filter.ids) conds.push(`payload->>'id' = ANY(${p(filter.ids)}::text[])`);
+    if (filter.project_id !== undefined) conds.push(`payload->>'project_id' = ${p(filter.project_id)}`);
+    if (filter.parent_id !== undefined) conds.push(`payload->>'parent_id' IS NOT DISTINCT FROM ${p(filter.parent_id)}`);
+    if (filter.plan_id !== undefined) conds.push(`payload->>'plan_id' = ${p(filter.plan_id)}`);
+    if (filter.task_list_id !== undefined) conds.push(`payload->>'task_list_id' = ${p(filter.task_list_id)}`);
+    if (filter.status !== undefined) conds.push(`payload->>'status' = ANY(${p(toFilterArray(filter.status))}::text[])`);
+    if (filter.priority !== undefined) conds.push(`payload->>'priority' = ANY(${p(toFilterArray(filter.priority))}::text[])`);
+    if (filter.assigned_to !== undefined) conds.push(`payload->>'assigned_to' = ${p(filter.assigned_to)}`);
+    if (filter.agent_id !== undefined) conds.push(`payload->>'agent_id' = ${p(filter.agent_id)}`);
+    if (filter.session_id !== undefined) conds.push(`payload->>'session_id' = ${p(filter.session_id)}`);
+    if (filter.tags?.length) conds.push(`payload->'tags' @> ${p(JSON.stringify(filter.tags))}::jsonb`);
+    if (filter.has_recurrence !== undefined) {
+      conds.push(`(COALESCE(payload->>'recurrence_rule', '') <> '') = ${p(filter.has_recurrence)}`);
+    }
+    if (filter.task_type !== undefined) {
+      conds.push(`COALESCE(payload->>'task_type', '') = ANY(${p(toFilterArray(filter.task_type))}::text[])`);
+    }
+    // include_subtasks defaults to false: exclude tasks that have a parent.
+    if (filter.include_subtasks !== true) conds.push(`(payload->>'parent_id' IS NULL OR payload->>'parent_id' = '')`);
+    return { where: conds.join(" AND "), params };
+  }
+
+  async listTasks(filter: TaskFilter): Promise<Task[]> {
+    await this.ensureSchema();
+    const { where, params } = this.buildTaskFilterSql(filter);
+    let sql = `/* todos:list-tasks */ SELECT payload FROM ${this.tableName} WHERE ${where} ${TASK_ORDER_BY}`;
+    if (filter.limit !== undefined) {
+      params.push(filter.limit);
+      sql += ` LIMIT $${params.length}`;
+    }
+    if (filter.offset) {
+      params.push(filter.offset);
+      sql += ` OFFSET $${params.length}`;
+    }
+    const result = await this.options.client.query<{ payload: unknown }>(sql, params);
+    return result.rows.map((row) => payloadRecord<Task>(row.payload));
+  }
+
+  async countTasks(filter: TaskFilter): Promise<number> {
+    await this.ensureSchema();
+    const { where, params } = this.buildTaskFilterSql(filter);
+    const sql = `/* todos:count-tasks */ SELECT COUNT(*)::int AS count FROM ${this.tableName} WHERE ${where}`;
+    const result = await this.options.client.query<{ count: number | string }>(sql, params);
+    return Number(result.rows[0]?.count ?? 0);
   }
 
   async listTombstones(): Promise<TodosStorageTombstone[]> {
@@ -582,13 +646,18 @@ async function patchTask(task: Task, patch: Partial<Task>, store: PostgresJsonRe
   return updated;
 }
 
+// SQL fragment: order by priority rank (critical→low) then created_at, matching
+// the previous in-JS sort. Kept as a constant so listTasks/countTasks and the
+// test mock stay in lockstep.
+const TASK_ORDER_BY =
+  "ORDER BY CASE payload->>'priority' WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END ASC, payload->>'created_at' ASC";
+
+function toFilterArray<T>(value: T | T[]): T[] {
+  return Array.isArray(value) ? value : [value];
+}
+
 async function listTasks(filter: TaskFilter, store: PostgresJsonRecordStore): Promise<Task[]> {
-  let tasks = await store.list<Task>("tasks");
-  tasks = tasks.filter((task) => taskMatchesFilter(task, filter));
-  tasks.sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority) || a.created_at.localeCompare(b.created_at));
-  const offset = filter.offset ?? 0;
-  const limit = filter.limit ?? tasks.length;
-  return tasks.slice(offset, offset + limit);
+  return store.listTasks(filter);
 }
 
 async function getNextTask(filters: TodosTaskClaimFilter | undefined, store: PostgresJsonRecordStore): Promise<Task | null> {
@@ -938,32 +1007,6 @@ async function generateProjectPrefix(name: string, store: PostgresJsonRecordStor
     candidate = `${base}${suffix}`;
   }
   return candidate;
-}
-
-function taskMatchesFilter(task: Task, filter: TaskFilter): boolean {
-  if (filter.ids && !filter.ids.includes(task.id)) return false;
-  if (filter.project_id !== undefined && task.project_id !== filter.project_id) return false;
-  if (filter.parent_id !== undefined && task.parent_id !== filter.parent_id) return false;
-  if (filter.plan_id !== undefined && task.plan_id !== filter.plan_id) return false;
-  if (filter.task_list_id !== undefined && task.task_list_id !== filter.task_list_id) return false;
-  if (filter.status !== undefined && !matchesOne(task.status, filter.status)) return false;
-  if (filter.priority !== undefined && !matchesOne(task.priority, filter.priority)) return false;
-  if (filter.assigned_to !== undefined && task.assigned_to !== filter.assigned_to) return false;
-  if (filter.agent_id !== undefined && task.agent_id !== filter.agent_id) return false;
-  if (filter.session_id !== undefined && task.session_id !== filter.session_id) return false;
-  if (filter.tags?.length && !filter.tags.every((tag) => task.tags.includes(tag))) return false;
-  if (filter.has_recurrence !== undefined && Boolean(task.recurrence_rule) !== filter.has_recurrence) return false;
-  if (filter.include_subtasks !== true && task.parent_id) return false;
-  if (filter.task_type !== undefined && !matchesOne(task.task_type ?? "", filter.task_type)) return false;
-  return true;
-}
-
-function matchesOne<T extends string>(value: T, expected: T | T[]): boolean {
-  return Array.isArray(expected) ? expected.includes(value) : value === expected;
-}
-
-function priorityRank(priority: TaskPriority): number {
-  return ({ critical: 0, high: 1, medium: 2, low: 3 } satisfies Record<TaskPriority, number>)[priority];
 }
 
 function slugifyRaw(value: string): string {

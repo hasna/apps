@@ -74,6 +74,14 @@ export function postgresTodosSyncSchemaSql(
       PRIMARY KEY (service, object_type, object_id)
     )`,
     `CREATE INDEX IF NOT EXISTS ${tableName}_updated_idx ON ${tableName} (service, updated_at)`,
+    // Push task list/count/stats filtering down to Postgres instead of loading the
+    // whole tasks table into JS on every request (the O(n) heap load that OOM
+    // crash-looped the serve task). These accelerate the jsonb predicates emitted
+    // by the postgres adapter's buildTaskFilterSql (status/project_id equality and
+    // tags/eq containment via GIN).
+    `CREATE INDEX IF NOT EXISTS ${tableName}_task_status_idx ON ${tableName} ((payload->>'status')) WHERE object_type = 'tasks' AND deleted_at IS NULL`,
+    `CREATE INDEX IF NOT EXISTS ${tableName}_task_project_idx ON ${tableName} ((payload->>'project_id')) WHERE object_type = 'tasks' AND deleted_at IS NULL`,
+    `CREATE INDEX IF NOT EXISTS ${tableName}_payload_gin ON ${tableName} USING gin (payload jsonb_path_ops)`,
     `CREATE TABLE IF NOT EXISTS ${cursorTableName} (
       service text NOT NULL,
       cursor_name text NOT NULL,
