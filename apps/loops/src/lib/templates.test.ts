@@ -847,9 +847,9 @@ describe("pr-handoff no-artifact / direct-PR path", () => {
           base: "main",
           commit: "abc123",
           remote: "origin",
-          githubRepo: "acme/repo",
+          remoteUrl: "https://token:secret@github.com/acme/repo.git",
           validation: "unit tests passed",
-          error: "Could not resolve host github.com",
+          error: "fatal: unable to access https://token:secret@github.com/acme/repo.git/: Could not resolve host: github.com",
         }),
       );
       const git = join(bin, "git");
@@ -862,7 +862,7 @@ describe("pr-handoff no-artifact / direct-PR path", () => {
           "if [[ \"$args\" == *\" branch --show-current\"* ]]; then printf '%s\\n' feat/artifact-pr; exit 0; fi",
           "if [[ \"$args\" == *\" rev-parse --verify abc123\"* ]]; then printf '%s\\n' abc123; exit 0; fi",
           "if [[ \"$args\" == *\" merge-base --is-ancestor abc123 HEAD\"* ]]; then exit 0; fi",
-          "if [[ \"$args\" == *\" ls-remote --heads origin main\"* ]]; then printf '%s\\n' 'fatal: unable to access https://github.com/acme/repo.git/: Could not resolve host: github.com' >&2; exit 128; fi",
+          "if [[ \"$args\" == *\" ls-remote --heads origin main\"* ]]; then printf '%s\\n' 'fatal: unable to access https://token:secret@github.com/acme/repo.git/: Could not resolve host: github.com' >&2; exit 128; fi",
           "printf 'unexpected git args: %s\\n' \"$*\" >&2",
           "exit 64",
         ].join("\n"),
@@ -897,6 +897,9 @@ describe("pr-handoff no-artifact / direct-PR path", () => {
       expect(captured).toContain("task\u0000upsert");
       expect(captured).toContain("openloops:pr-handoff:task-artifact-pr:feat/artifact-pr:abc123");
       expect(captured).toContain("github preflight failed before push/PR");
+      expect(captured).toContain("https://github.com/acme/repo.git");
+      expect(captured).not.toContain("token:secret");
+      expect(captured).not.toContain("secret@github.com");
       expect(captured).toContain("openloops:pr-handoff=pending");
       expect(result.stderr).not.toContain("gh should not run");
     } finally {
