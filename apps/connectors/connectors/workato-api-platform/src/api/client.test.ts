@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Connector } from './index';
-import { DEFAULT_BASE_URL } from './client';
+const TEST_BASE_URL = 'https://tenant.example.com/v1';
 
 const realFetch = globalThis.fetch;
 
@@ -62,12 +62,12 @@ describe('Workato API Platform client', () => {
   test('listItems sends Bearer auth and GET /items', async () => {
     const recorded = installFetch((entry) => {
       expect(entry.method).toBe('GET');
-      expect(entry.url).toBe(`${DEFAULT_BASE_URL}/items`);
+      expect(entry.url).toBe(`${TEST_BASE_URL}/items`);
       expect(entry.headers.authorization).toBe('Bearer test-api-key');
       return { items: [] };
     });
 
-    const connector = new Connector({ apiKey: 'test-api-key' });
+    const connector = new Connector({ apiKey: 'test-api-key', baseUrl: TEST_BASE_URL });
     const result = await connector.items.list();
     expect(result).toEqual({ items: [] });
     expect(recorded).toHaveLength(1);
@@ -76,12 +76,12 @@ describe('Workato API Platform client', () => {
   test('getItem encodes item ID and calls GET /items/:id', async () => {
     const recorded = installFetch((entry) => {
       expect(entry.method).toBe('GET');
-      expect(entry.url).toBe(`${DEFAULT_BASE_URL}/items/item%2F123`);
+      expect(entry.url).toBe(`${TEST_BASE_URL}/items/item%2F123`);
       expect(entry.headers.authorization).toBe('Bearer test-api-key');
       return { id: 'item/123' };
     });
 
-    const connector = new Connector({ apiKey: 'test-api-key' });
+    const connector = new Connector({ apiKey: 'test-api-key', baseUrl: TEST_BASE_URL });
     const result = await connector.items.get('item/123');
     expect(result).toEqual({ id: 'item/123' });
     expect(recorded).toHaveLength(1);
@@ -90,12 +90,12 @@ describe('Workato API Platform client', () => {
   test('createItem POSTs JSON body to /items', async () => {
     const recorded = installFetch((entry) => {
       expect(entry.method).toBe('POST');
-      expect(entry.url).toBe(`${DEFAULT_BASE_URL}/items`);
+      expect(entry.url).toBe(`${TEST_BASE_URL}/items`);
       expect(entry.body).toBe(JSON.stringify({ name: 'widget' }));
       return { id: 'new-item' };
     });
 
-    const connector = new Connector({ apiKey: 'test-api-key' });
+    const connector = new Connector({ apiKey: 'test-api-key', baseUrl: TEST_BASE_URL });
     await connector.items.create({ name: 'widget' });
     expect(recorded).toHaveLength(1);
   });
@@ -116,5 +116,9 @@ describe('Workato API Platform client', () => {
 
   test('requires API key', () => {
     expect(() => new Connector({})).toThrow('API key or token is required');
+  });
+
+  test('requires base URL', () => {
+    expect(() => new Connector({ apiKey: 'test-api-key' })).toThrow('baseUrl is required');
   });
 });

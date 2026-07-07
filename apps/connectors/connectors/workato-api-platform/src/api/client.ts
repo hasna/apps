@@ -1,7 +1,7 @@
 import type { ConnectorConfig, ListQueryParams } from '../types';
 import { ConnectorApiError, parseApiError } from '../types';
 
-export const DEFAULT_BASE_URL = 'https://api.workatoapiplatform.com/v1';
+export const DEFAULT_BASE_URL: string | undefined = undefined;
 
 export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
@@ -21,8 +21,12 @@ export class ConnectorClient {
     if (!key) {
       throw new Error('API key or token is required');
     }
+    const baseUrl = config.baseUrl || DEFAULT_BASE_URL;
+    if (!baseUrl) {
+      throw new Error('Workato API Platform baseUrl is required');
+    }
     this.apiKey = key;
-    this.baseUrl = (config.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
+    this.baseUrl = baseUrl.replace(/\/+$/, '');
   }
 
   getBaseUrl(): string {

@@ -44,6 +44,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/connect-workato-api-platform.git"
+    "url": "git+https://github.com/hasna/connectors.git"
   }
 }

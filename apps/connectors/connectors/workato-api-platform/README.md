@@ -1,6 +1,6 @@
 # connect-workato-api-platform
 
-TypeScript connector for the **Workato API Platform customer runtime API** (`api.workatoapiplatform.com`).
+TypeScript connector for a tenant-specific **Workato API Platform customer runtime API**.
 
 This package targets the deployed runtime API exposed to your integration consumers (`/items`, `/events`, `/search`). It is **not** the Workato workspace management API (`workato.com/api/*`).
 
@@ -18,7 +18,7 @@ Bearer token (`Authorization: Bearer <api_key>`).
 | Variable | Description |
 |----------|-------------|
 | `WORKATO_API_PLATFORM_API_KEY` | Runtime API key |
-| `WORKATO_API_PLATFORM_BASE_URL` | Optional tenant-specific base URL |
+| `WORKATO_API_PLATFORM_BASE_URL` | Required tenant-specific base URL |
 
 Profiles are stored under `~/.hasna/connectors/connect-workato-api-platform/`.
 

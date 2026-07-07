@@ -25,6 +25,9 @@ export class Connector {
     if (!apiKey) {
       throw new Error('WORKATO_API_PLATFORM_API_KEY environment variable is required');
     }
+    if (!baseUrl) {
+      throw new Error('WORKATO_API_PLATFORM_BASE_URL environment variable is required');
+    }
 
     return new Connector({ apiKey, baseUrl });
   }
