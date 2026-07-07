@@ -4,18 +4,131 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs"
 
 let _db: Database | null = null
 
-export type PromptsStorageMode = "local"
+export type PromptsStorageMode = "local" | "auto" | "remote"
+export type PromptsActiveStorage = "local-sqlite"
+export type PromptsRegistryState =
+  | "local-only"
+  | "remote-configured-local-fallback"
+  | "remote-requested-local-fallback"
+
+export interface PromptRegistryDiagnostics {
+  requested_mode: PromptsStorageMode
+  active_storage: PromptsActiveStorage
+  registry_state: PromptsRegistryState
+  local: {
+    db_path: string
+    scope: "home" | "project" | "custom"
+    storage: "SQLite"
+  }
+  remote: {
+    requested: boolean
+    configured: boolean
+    postgres: {
+      configured: boolean
+      env: "PROMPTS_REGISTRY_POSTGRES_URL"
+    }
+    object_storage: {
+      configured: boolean
+      provider: "s3" | "none"
+      bucket_configured: boolean
+      bucket_env: "PROMPTS_REGISTRY_S3_BUCKET"
+    }
+    aws: {
+      region_configured: boolean
+      region_env: "PROMPTS_REGISTRY_AWS_REGION"
+    }
+  }
+  sync: {
+    strategy: "local-first"
+    reads: "local SQLite"
+    writes: "local SQLite"
+    remote_mutation: false
+    reason: string
+  }
+  warnings: string[]
+}
+
+export interface DbPathOptions {
+  migrateLegacy?: boolean
+}
+
+const supportedStorageModes = new Set<PromptsStorageMode>(["local", "auto", "remote"])
 
 export function resolveStorageMode(): PromptsStorageMode {
   const raw = process.env["HASNA_PROMPTS_STORAGE_MODE"] ?? process.env["PROMPTS_STORAGE_MODE"] ?? "local"
-  const mode = raw.toLowerCase()
-  if (mode !== "local") {
-    throw new Error(`Unsupported prompts storage mode "${raw}". @hasna/prompts currently supports local SQLite storage only.`)
+  const mode = raw.trim().toLowerCase()
+  if (!supportedStorageModes.has(mode as PromptsStorageMode)) {
+    throw new Error(
+      `Unsupported prompts storage mode "${raw}". Supported modes are local, auto, and remote; remote registry settings currently fall back to local SQLite.`
+    )
   }
-  return "local"
+  return mode as PromptsStorageMode
 }
 
-export function getDbPath(): string {
+export function getPromptRegistryDiagnostics(): PromptRegistryDiagnostics {
+  const requestedMode = resolveStorageMode()
+  const dbPath = getDbPath({ migrateLegacy: false })
+  const remotePostgresConfigured = Boolean(process.env["PROMPTS_REGISTRY_POSTGRES_URL"])
+  const bucketConfigured = Boolean(process.env["PROMPTS_REGISTRY_S3_BUCKET"])
+  const regionConfigured = Boolean(process.env["PROMPTS_REGISTRY_AWS_REGION"])
+  const remoteConfigured = remotePostgresConfigured || bucketConfigured || regionConfigured
+  const remoteRequested = requestedMode === "remote" || (requestedMode === "auto" && remoteConfigured)
+
+  const registryState: PromptsRegistryState =
+    !remoteRequested
+      ? "local-only"
+      : remoteConfigured
+        ? "remote-configured-local-fallback"
+        : "remote-requested-local-fallback"
+
+  const reason =
+    registryState === "local-only"
+      ? "Local mode is active, so reads and writes use the local SQLite store."
+      : registryState === "remote-configured-local-fallback"
+        ? "Remote registry configuration is present, but this package has not been given a prompts-owned remote runtime, so reads and writes stay local."
+        : "Remote mode was requested without remote registry configuration, so reads and writes stay local."
+
+  return {
+    requested_mode: requestedMode,
+    active_storage: "local-sqlite",
+    registry_state: registryState,
+    local: {
+      db_path: dbPath,
+      scope: resolveLocalScope(dbPath),
+      storage: "SQLite",
+    },
+    remote: {
+      requested: remoteRequested,
+      configured: remoteConfigured,
+      postgres: {
+        configured: remotePostgresConfigured,
+        env: "PROMPTS_REGISTRY_POSTGRES_URL",
+      },
+      object_storage: {
+        configured: bucketConfigured,
+        provider: bucketConfigured ? "s3" : "none",
+        bucket_configured: bucketConfigured,
+        bucket_env: "PROMPTS_REGISTRY_S3_BUCKET",
+      },
+      aws: {
+        region_configured: regionConfigured,
+        region_env: "PROMPTS_REGISTRY_AWS_REGION",
+      },
+    },
+    sync: {
+      strategy: "local-first",
+      reads: "local SQLite",
+      writes: "local SQLite",
+      remote_mutation: false,
+      reason,
+    },
+    warnings: buildStorageWarnings(requestedMode, remoteConfigured, bucketConfigured, regionConfigured),
+  }
+}
+
+export function getDbPath(options: DbPathOptions = {}): string {
+  const migrateLegacy = options.migrateLegacy ?? true
+
   // Support env var overrides
   const envPath = process.env["HASNA_PROMPTS_DB_PATH"] ?? process.env["PROMPTS_DB_PATH"]
   if (envPath) return envPath
@@ -40,7 +153,7 @@ export function getDbPath(): string {
   const oldDir = join(home, ".prompts")
 
   // Auto-migrate from old location without overwriting newer target files.
-  if (existsSync(oldDir)) {
+  if (migrateLegacy && existsSync(oldDir)) {
     try {
       mergeDirectoryContents(oldDir, newDir)
     } catch {
@@ -49,6 +162,31 @@ export function getDbPath(): string {
   }
 
   return join(newDir, "prompts.db")
+}
+
+function resolveLocalScope(dbPath: string): PromptRegistryDiagnostics["local"]["scope"] {
+  if (process.env["HASNA_PROMPTS_DB_PATH"] || process.env["PROMPTS_DB_PATH"]) return "custom"
+  if (dbPath.includes(`${join(".prompts", "prompts.db")}`)) return "project"
+  return "home"
+}
+
+function buildStorageWarnings(
+  requestedMode: PromptsStorageMode,
+  remoteConfigured: boolean,
+  bucketConfigured: boolean,
+  regionConfigured: boolean
+): string[] {
+  const warnings: string[] = []
+  if (requestedMode === "remote" && !remoteConfigured) {
+    warnings.push("Remote mode was requested but no remote registry environment is configured.")
+  }
+  if (remoteConfigured) {
+    warnings.push("Remote registry configuration is detected but this package will not perform remote reads, writes, migrations, or AWS mutations.")
+  }
+  if (bucketConfigured && !regionConfigured) {
+    warnings.push("An S3 bucket is configured without a registry AWS region.")
+  }
+  return warnings
 }
 
 function mergeDirectoryContents(sourceDir: string, targetDir: string): void {
