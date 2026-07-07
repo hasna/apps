@@ -172,6 +172,82 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("POST /v1/import upserts id-preserving rows, preserves status/archived, is idempotent, and skips running runs", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+
+    const loop = {
+      id: "loop-import-1",
+      name: "imported-loop",
+      description: "backfilled",
+      status: "stopped",
+      archivedAt: "2026-01-02T00:00:00.000Z",
+      archivedFromStatus: "paused",
+      schedule: { type: "interval", every: "1h" },
+      target: { type: "command", command: "true" },
+      catchUp: "latest",
+      catchUpLimit: 50,
+      overlap: "skip",
+      maxAttempts: 1,
+      retryDelayMs: 60_000,
+      leaseMs: 1_800_000,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-02T00:00:00.000Z",
+    };
+    const terminalRun = {
+      id: "run-import-1",
+      loopId: "loop-import-1",
+      loopName: "imported-loop",
+      scheduledFor: "2026-01-01T00:00:00.000Z",
+      attempt: 1,
+      status: "succeeded",
+      finishedAt: "2026-01-01T00:00:05.000Z",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:05.000Z",
+    };
+    const runningRun = { ...terminalRun, id: "run-import-running", scheduledFor: "2026-01-01T01:00:00.000Z", status: "running" };
+
+    try {
+      const importResponse = await fetch(apiUrl(server, "/v1/import"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ loops: [loop], runs: [terminalRun, runningRun] }),
+      });
+      expect(importResponse.status).toBe(200);
+      expect(await importResponse.json()).toMatchObject({
+        ok: true,
+        imported: { workflows: 0, loops: 1, runs: 1 },
+        skippedRunning: 1,
+      });
+
+      // id + status + archived state preserved exactly (not forced to "active").
+      const fetched = await storage.getLoop("loop-import-1");
+      expect(fetched?.id).toBe("loop-import-1");
+      expect(fetched?.status).toBe("stopped");
+      expect(fetched?.archivedAt).toBe("2026-01-02T00:00:00.000Z");
+      expect(fetched?.createdAt).toBe("2026-01-01T00:00:00.000Z");
+      const importedRun = await storage.getRun("run-import-1");
+      expect(importedRun?.status).toBe("succeeded");
+      expect(await storage.getRun("run-import-running")).toBeUndefined();
+
+      // Idempotent: a second import of the same ids never duplicates rows.
+      const again = await fetch(apiUrl(server, "/v1/import"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ loops: [loop], runs: [terminalRun] }),
+      });
+      expect(again.status).toBe(200);
+      const allLoops = await storage.listLoops({ includeArchived: true, limit: 100 });
+      expect(allLoops.filter((entry) => entry.id === "loop-import-1")).toHaveLength(1);
+      const allRuns = await storage.listRuns({ loopId: "loop-import-1", limit: 100 });
+      expect(allRuns.filter((entry) => entry.id === "run-import-1")).toHaveLength(1);
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
   test("PATCH only touches fields present in the body and never wipes omitted schedule state", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
