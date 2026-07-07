@@ -7381,9 +7381,11 @@ describe("loops CLI", () => {
     const value = JSON.parse(result.stdout);
     expect(value.filteredCandidates).toBe(1);
     expect(value.created).toBe(1);
-    expect(value.results[0].event.data.cwd).toBe(repo);
-    expect(value.results[0].event.data.project_path).toBe(repo);
-    expect(value.results[0].workflow.steps[0].target.cwd).toBe(repo);
+    // The description-derived repo is now canonicalized (macOS: /var/... ->
+    // /private/var/...) because it rides the usable-repo route path.
+    expect(value.results[0].event.data.cwd).toBe(testPath(repo));
+    expect(value.results[0].event.data.project_path).toBe(testPath(repo));
+    expect(value.results[0].workflow.steps[0].target.cwd).toBe(testPath(repo));
   });
 
   test("todos task drain uses explicit project path instead of stale task working_dir for required worktrees", () => {
