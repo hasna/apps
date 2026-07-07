@@ -51,6 +51,7 @@ import { buildHealthReport, buildHealthScan, expectationForLoop, writeHealthScan
 import { runLoopsUiApp } from "./ui.js";
 import {
   applyImportMigrationBundle,
+  applySelfHostedPush,
   buildImportMigrationPlan,
   buildSelfHostedMigrationPlan,
   exportLoopsMigrationBundle,
@@ -847,12 +848,46 @@ selfHosted
 
 selfHosted
   .command("push")
-  .description("preview local rows that would be pushed to self-hosted")
+  .description("preview (default) or apply an id-preserving local->self-hosted backfill")
   .option("--api-url <url>", "self-hosted control-plane API URL")
-  .option("--dry-run", "preview only; self-hosted push does not apply remote changes yet")
-  .option("--no-runs", "omit loop run history from the preview")
+  .option("--apply", "apply the backfill via the control-plane /v1/import endpoint (default is preview)")
+  .option("--replace", "update existing remote rows whose id matches (default: leave existing rows unchanged)")
+  .option("--dry-run", "preview only; equivalent to omitting --apply")
+  .option("--no-runs", "omit loop run history")
   .option("--json", "print JSON")
-  .action(selfHostedMigrationCommand("self-hosted-push"));
+  .action(runAction(async (opts: { apiUrl?: string; apply?: boolean; replace?: boolean; dryRun?: boolean; runs?: boolean; json?: boolean }) => {
+    if (!opts.apply || opts.dryRun) {
+      const store = new Store();
+      try {
+        const plan = await buildSelfHostedMigrationPlan(store, {
+          operation: "self-hosted-push",
+          apiUrl: opts.apiUrl,
+          includeRuns: opts.runs,
+        });
+        printMigrationPlan(plan, opts);
+      } finally {
+        store.close();
+      }
+      return;
+    }
+    const store = new Store();
+    try {
+      const result = await applySelfHostedPush(store, {
+        apiUrl: opts.apiUrl,
+        includeRuns: opts.runs,
+        replace: opts.replace,
+      });
+      if (isJson() || opts.json) console.log(JSON.stringify(result, null, 2));
+      else {
+        console.log(
+          `pushed workflows=${result.applied.workflows} loops=${result.applied.loops} runs=${result.applied.runs} ` +
+            `(skipped running=${result.skipped.runningRuns} orphan-runs=${result.skipped.orphanRuns}, ${result.requests} requests) -> ${result.apiUrl}`,
+        );
+      }
+    } finally {
+      store.close();
+    }
+  }));
 
 selfHosted
   .command("pull")
