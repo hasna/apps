@@ -25,6 +25,8 @@ const CONNECTOR_NAME = 'connect-weaviate';
 const VERSION = '0.0.1';
 
 const program = new Command();
+let hostOverride: string | undefined;
+let apiKeyOverride: string | undefined;
 
 program
   .name(CONNECTOR_NAME)
@@ -43,8 +45,8 @@ program
       }
       setProfileOverride(opts.profile);
     }
-    if (opts.host) process.env.WEAVIATE_HOST = opts.host;
-    if (opts.apiKey) process.env.WEAVIATE_API_KEY = opts.apiKey;
+    if (opts.host) hostOverride = opts.host;
+    if (opts.apiKey) apiKeyOverride = opts.apiKey;
   });
 
 function getFormat(cmd: Command): OutputFormat {
@@ -53,12 +55,12 @@ function getFormat(cmd: Command): OutputFormat {
 }
 
 function getClient(): Weaviate {
-  const host = getHost();
+  const host = hostOverride || getHost();
   if (!host) {
     error(`No Weaviate host configured. Run "${CONNECTOR_NAME} config set-host <url>" or set WEAVIATE_HOST environment variable.`);
     process.exit(1);
   }
-  return new Weaviate({ host, apiKey: getApiKey() });
+  return new Weaviate({ host, apiKey: apiKeyOverride || getApiKey() });
 }
 
 const profileCmd = program.command('profile').description('Manage configuration profiles');

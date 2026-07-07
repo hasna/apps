@@ -24,6 +24,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["sms", "voice"],
   },
   {
+    name: "telnyx",
+    displayName: "Telnyx",
+    description: "Messaging, phone numbers, and carrier lookup APIs",
+    category: "Communication",
+    tags: ["sms", "voice", "messaging"],
+  },
+  {
     name: "resend",
     displayName: "Resend",
     description: "Email API for developers",
@@ -36,6 +43,13 @@ export const connectors: ConnectorMeta[] = [
     description: "Video meetings and webinars",
     category: "Communication",
     tags: ["video", "meetings"],
+  },
+  {
+    name: "zoho-meeting",
+    displayName: "Zoho Meeting",
+    description: "Video meetings, webinars, recordings, and reports",
+    category: "Communication",
+    tags: ["video", "meetings", "webinar", "zoho"],
   },
   {
     name: "maropost",
@@ -111,6 +125,13 @@ export const connectors: ConnectorMeta[] = [
     name: "sendgrid",
     displayName: "SendGrid",
     description: "Email delivery and marketing",
+    category: "Communication",
+    tags: ["email", "api", "transactional"],
+  },
+  {
+    name: "sparkpost",
+    displayName: "SparkPost",
+    description: "Transactional email delivery and analytics",
     category: "Communication",
     tags: ["email", "api", "transactional"],
   },
@@ -500,6 +521,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["sms", "text messaging", "bulk sms", "two-way messaging", "notifications"],
   },
   {
+    name: "timelinesai",
+    displayName: "TimelinesAI",
+    description: "WhatsApp team inbox API for chats, messages, and connected accounts",
+    category: "Communication",
+    tags: ["whatsapp", "messaging", "api"],
+  },
+  {
     name: "trengo",
     displayName: "Trengo",
     description: "Multi-channel customer communication platform for managing conversations at scale",
@@ -549,6 +577,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["meetings", "video", "transcription"],
   },
   {
+    name: "webex",
+    displayName: "Webex",
+    description: "Video conferencing, messaging, and collaboration",
+    category: "Communication",
+    tags: ["video", "meetings", "cisco"],
+  },
+  {
     name: "webexbycisco",
     displayName: "Webex by Cisco",
     description: "Video conferencing, messaging, and team collaboration",
@@ -568,6 +603,13 @@ export const connectors: ConnectorMeta[] = [
     description: "AI chatbot builder for customer support",
     category: "Communication",
     tags: ["chatbot", "ai", "support"],
+  },
+  {
+    name: "zoho-cliq",
+    displayName: "Zoho Cliq",
+    description: "Team chat, channels, and messaging for business collaboration",
+    category: "Communication",
+    tags: ["zoho", "chat", "messaging"],
   },
   {
     name: "zulip",

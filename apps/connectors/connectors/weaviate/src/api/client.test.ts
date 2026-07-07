@@ -5,7 +5,7 @@ import { WeaviateApiError } from '../types';
 describe('WeaviateClient', () => {
   const mockConfig = {
     host: 'https://example.com',
-    apiKey: 'weaviate-token',
+    apiKey: 'tok',
   };
 
   describe('constructor', () => {
@@ -49,7 +49,7 @@ describe('WeaviateClient', () => {
       const [url, options] = fetchMock.mock.calls[0];
       expect(url).toBe('https://example.com/v1/schema');
       expect(options.method).toBe('GET');
-      expect(options.headers.Authorization).toBe('Bearer weaviate-token');
+      expect(options.headers.Authorization).toBe('Bearer tok');
       expect(options.headers['Content-Type']).toBe('application/json');
       expect(result).toEqual(mockResponse);
     });
