@@ -17,6 +17,15 @@ import {
   unlockTask,
 } from "../../db/tasks.js";
 import { getTaskList, getTaskListBySlug } from "../../db/task-lists.js";
+import {
+  getTodosCloudClient,
+  cloudListTasks,
+  cloudGetTask,
+  cloudCreateTask,
+  cloudUpdateTask,
+  cloudDeleteTask,
+  cloudTaskAction,
+} from "../cloud-router.js";
 import type { TaskPriority, TaskStatus } from "../../types/index.js";
 import {
   formatTaskLine,
@@ -212,8 +221,47 @@ export function registerTaskCommands(program: Command) {
     .option("--due <date>", "Due date (ISO string or YYYY-MM-DD)")
     .option("--reason <text>", "Why this task exists")
     .option("--project <id>", "Assign to project by ID or slug (overrides auto-detect)")
-    .action((title: string, opts) => {
+    .action(async (title: string, opts) => {
       const globalOpts = program.opts();
+      opts.tags = opts.tags || opts.tag;
+      opts.list = opts.list || opts.taskList;
+
+      // self_hosted cloud routing: create straight against <app>.hasna.xyz/v1.
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        let task;
+        try {
+          task = await cloudCreateTask(cloud, {
+            title,
+            description: opts.description,
+            priority: parsePriority(opts.priority),
+            tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
+            plan_id: opts.plan,
+            assigned_to: opts.assign,
+            status: parseStatus(opts.status),
+            task_list_id: opts.list,
+            agent_id: globalOpts.agent,
+            session_id: globalOpts.session,
+            project_id: opts.project || globalOpts.project,
+            estimated_minutes: opts.estimated !== undefined ? parseIntOption(opts.estimated, "--estimated") : undefined,
+            sla_minutes: opts.slaMinutes !== undefined || opts.sla !== undefined ? parseIntOption(opts.slaMinutes ?? opts.sla, "--sla-minutes") : undefined,
+            requires_approval: opts.approval || undefined,
+            recurrence_rule: opts.recurrence,
+            due_at: opts.due ? (opts.due.length === 10 ? opts.due + "T00:00:00.000Z" : opts.due) : undefined,
+            reason: opts.reason,
+          });
+        } catch (e) {
+          handleError(e);
+        }
+        if (globalOpts.json) {
+          output(task, true);
+        } else {
+          console.log(chalk.green("Task created:"));
+          console.log(formatTaskLine(task));
+        }
+        return;
+      }
+
       // `--project` can land on either the command opts or the global program
       // opts depending on its position; commander routes it to globalOpts when a
       // global --project option exists. Honor both (matches the list/audit
@@ -448,11 +496,14 @@ export function registerTaskCommands(program: Command) {
     .option("--overdue", "Only overdue tasks (past due_at)")
     .option("--recurring", "Only recurring tasks")
     .option("--limit <n>", "Max tasks to return")
-    .action((opts) => {
+    .action(async (opts) => {
       const globalOpts = program.opts();
       opts.tags = opts.tags || opts.tag;
       opts.list = opts.list || opts.taskList;
-      const projectId = autoProject(globalOpts);
+      // self_hosted cloud routing: skip all local-store project/list detection —
+      // list straight from <app>.hasna.xyz/v1 (only explicit server-side filters).
+      const cloud = getTodosCloudClient();
+      const projectId = cloud ? undefined : autoProject(globalOpts);
       const hasAssignedFilter = Boolean(opts.assigned || opts.agentName);
       const hasExplicitProjectFilter = Boolean(globalOpts.project || opts.projectName);
       const allowedSortFields = new Set(["updated", "created", "priority", "status"]);
@@ -470,7 +521,9 @@ export function registerTaskCommands(program: Command) {
       if (projectId && !(hasAssignedFilter && !hasExplicitProjectFilter)) {
         filter["project_id"] = projectId;
       }
-      if (opts.list) {
+      if (opts.list && cloud) {
+        filter["task_list_id"] = opts.list;
+      } else if (opts.list) {
         const db = getDatabase();
         const listId = resolvePartialId(db, "task_lists", opts.list);
         if (!listId) {
@@ -489,7 +542,7 @@ export function registerTaskCommands(program: Command) {
       if (opts.priority) filter["priority"] = opts.priority;
       if (opts.assigned) filter["assigned_to"] = opts.assigned;
       if (opts.tags) filter["tags"] = opts.tags.split(",").map((t: string) => t.trim());
-      if (opts.projectName) {
+      if (opts.projectName && !cloud) {
         const { listProjects } = require("../../db/projects.js") as any;
         const projects = listProjects();
         const match = projects.find((p: any) => p.name.toLowerCase().includes(opts.projectName.toLowerCase()));
@@ -513,7 +566,7 @@ export function registerTaskCommands(program: Command) {
         filter["limit"] = parsedLimit;
       }
 
-      let tasks = listTasks(filter as any);
+      let tasks = cloud ? await cloudListTasks(cloud, filter as any) : listTasks(filter as any);
       if (opts.dueToday) {
         const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
         tasks = tasks.filter(t => t.due_at && t.due_at <= todayEnd.toISOString());
@@ -574,10 +627,11 @@ export function registerTaskCommands(program: Command) {
   program
     .command("count")
     .description("Show task count by status")
-    .action(() => {
+    .action(async () => {
       const globalOpts = program.opts();
-      const projectId = autoProject(globalOpts);
-      const all = listTasks({ project_id: projectId });
+      const cloud = getTodosCloudClient();
+      const projectId = cloud ? undefined : autoProject(globalOpts);
+      const all = cloud ? await cloudListTasks(cloud, {}) : listTasks({ project_id: projectId });
       const counts: Record<string, number> = { total: all.length };
       for (const t of all) counts[t.status] = (counts[t.status] || 0) + 1;
 
@@ -600,10 +654,21 @@ export function registerTaskCommands(program: Command) {
   program
     .command("show <id>")
     .description("Show full task details")
-    .action((id: string) => {
+    .action(async (id: string) => {
       const globalOpts = program.opts();
-      const resolvedId = resolveTaskId(id);
-      const task = getTaskWithRelations(resolvedId);
+      const cloud = getTodosCloudClient();
+      let task: any;
+      if (cloud) {
+        const remote = await cloudGetTask(cloud, id);
+        // The /v1 API returns the task row without relation graphs; default the
+        // relation arrays so the detail renderer below never touches undefined.
+        task = remote
+          ? { subtasks: [], dependencies: [], blocked_by: [], comments: [], ...remote, tags: remote.tags ?? [] }
+          : null;
+      } else {
+        const resolvedId = resolveTaskId(id);
+        task = getTaskWithRelations(resolvedId);
+      }
 
       if (!task) {
         console.error(chalk.red(`Task not found: ${id}`));
@@ -852,10 +917,44 @@ export function registerTaskCommands(program: Command) {
     .option("--recurrence <rule>", "Recurrence rule, empty to clear")
     .option("--approval", "Require approval before completion")
     .option("--clear-approval", "Remove the approval requirement")
-    .action((id: string, opts) => {
+    .action(async (id: string, opts) => {
       const globalOpts = program.opts();
       opts.tags = opts.tags || opts.tag;
       opts.list = opts.list || opts.taskList;
+
+      // self_hosted cloud routing: PATCH straight against <app>.hasna.xyz/v1.
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        let task;
+        try {
+          task = await cloudUpdateTask(cloud, id, {
+            title: opts.title,
+            description: opts.description,
+            status: parseStatus(opts.status),
+            priority: parsePriority(opts.priority),
+            assigned_to: opts.assign,
+            tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
+            plan_id: opts.plan ? opts.plan : opts.clearPlan ? null : undefined,
+            task_list_id: opts.list ? opts.list : opts.clearList ? null : undefined,
+            working_dir: opts.workingDir ? resolve(opts.workingDir) : opts.clearWorkingDir ? null : undefined,
+            estimated_minutes: opts.estimated !== undefined ? parseIntOption(opts.estimated, "--estimated") : undefined,
+            sla_minutes: opts.slaMinutes !== undefined || opts.sla !== undefined ? parseIntOption(opts.slaMinutes ?? opts.sla, "--sla-minutes") : undefined,
+            due_at: opts.due !== undefined ? (opts.due === "" ? null : opts.due.length === 10 ? opts.due + "T00:00:00.000Z" : opts.due) : undefined,
+            recurrence_rule: opts.recurrence !== undefined ? (opts.recurrence === "" ? null : opts.recurrence) : undefined,
+            requires_approval: opts.clearApproval ? false : (opts.approval !== undefined ? true : undefined),
+          });
+        } catch (e) {
+          handleError(e);
+        }
+        if (globalOpts.json) {
+          output(task, true);
+        } else {
+          console.log(chalk.green("Task updated:"));
+          console.log(formatTaskLine(task));
+        }
+        return;
+      }
+
       const resolvedId = resolveTaskId(id);
       const current = getTask(resolvedId);
       if (!current) {
@@ -930,8 +1029,24 @@ export function registerTaskCommands(program: Command) {
     .option("--commit-hash <hash>", "Git commit hash")
     .option("--notes <notes>", "Completion notes")
     .option("--confidence <0-1>", "Agent's confidence 0.0-1.0 that the task is fully complete (default: 1.0, <0.7 flagged for review)")
-    .action((id: string, opts: { attachIds?: string; filesChanged?: string; testResults?: string; commitHash?: string; notes?: string; confidence?: string }) => {
+    .action(async (id: string, opts: { attachIds?: string; filesChanged?: string; testResults?: string; commitHash?: string; notes?: string; confidence?: string }) => {
       const globalOpts = program.opts();
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        let task;
+        try {
+          task = await cloudTaskAction(cloud, id, "complete", { agent_id: globalOpts.agent });
+        } catch (e) {
+          handleError(e);
+        }
+        if (globalOpts.json) {
+          output(task, true);
+        } else {
+          console.log(chalk.green("Task completed:"));
+          console.log(formatTaskLine(task));
+        }
+        return;
+      }
       const resolvedId = resolveTaskId(id);
       const attachmentIds = opts.attachIds ? opts.attachIds.split(",").map((s) => s.trim()) : undefined;
       const filesChanged = opts.filesChanged ? opts.filesChanged.split(",").map((s) => s.trim()) : undefined;
@@ -997,11 +1112,26 @@ export function registerTaskCommands(program: Command) {
   program
     .command("start <id>")
     .description("Claim, lock, and start a task")
-    .action((id: string) => {
+    .action(async (id: string) => {
       const globalOpts = program.opts();
       const agentId = globalOpts.agent || "cli";
-      const resolvedId = resolveTaskId(id);
+      const cloud = getTodosCloudClient();
       let task;
+      if (cloud) {
+        try {
+          task = await cloudTaskAction(cloud, id, "start", { agent_id: agentId });
+        } catch (e) {
+          handleError(e);
+        }
+        if (globalOpts.json) {
+          output(task, true);
+        } else {
+          console.log(chalk.green(`Task started by ${agentId}:`));
+          console.log(formatTaskLine(task));
+        }
+        return;
+      }
+      const resolvedId = resolveTaskId(id);
       try {
         task = startTask(resolvedId, agentId);
       } catch (e) {
@@ -1065,10 +1195,10 @@ export function registerTaskCommands(program: Command) {
   program
     .command("delete <id>")
     .description("Delete a task")
-    .action((id: string) => {
+    .action(async (id: string) => {
       const globalOpts = program.opts();
-      const resolvedId = resolveTaskId(id);
-      const deleted = deleteTask(resolvedId);
+      const cloud = getTodosCloudClient();
+      const deleted = cloud ? await cloudDeleteTask(cloud, id) : deleteTask(resolveTaskId(id));
 
       if (globalOpts.json) {
         output({ deleted }, true);

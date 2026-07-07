@@ -195,4 +195,4 @@ registerScaleHardeningCommands(program);
 await registerOptionalEventsCommands(program);
 registerHelpCommands(program);
 
-program.parse();
+await program.parseAsync();
