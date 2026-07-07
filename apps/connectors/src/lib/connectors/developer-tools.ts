@@ -927,6 +927,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["localization", "translation", "i18n", "l10n", "multilingual"],
   },
   {
+    name: "sonarqube",
+    displayName: "SonarQube",
+    description: "Code quality, security, and static analysis platform",
+    category: "Developer Tools",
+    tags: ["code-quality", "sast", "devops"],
+  },
+  {
     name: "starton",
     displayName: "Starton",
     description: "Blockchain infrastructure API for deploying and interacting with smart contracts",
