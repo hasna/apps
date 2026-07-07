@@ -12,7 +12,7 @@ import { maybePullFromCloud, cloudPush, cloudPull, cloudSyncFull, getCloudDataba
 import { mergePeerDatabase } from '../lib/peer-sync.js'
 import { runEconomyFleetSync, writeFleetSyncReport } from '../lib/fleet-sync.js'
 import type { Agent } from '../lib/agents.js'
-import { openDatabase, querySummary, querySessions, queryTopSessions, queryZeroCostTokenizedModels, queryModelBreakdown, queryProjectBreakdown, queryAgentBreakdown, queryAccountBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertProject, deleteProject, getProject, listModelPricing, upsertModelPricing, deleteModelPricing, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId, listMachineRegistry } from '../db/database.js'
+import { openDatabase, querySummary, querySessions, queryTopSessions, queryZeroCostTokenizedModels, queryModelBreakdown, queryProjectBreakdown, queryAgentBreakdown, queryAccountBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertProject, deleteProject, getProject, listModelPricing, upsertModelPricing, deleteModelPricing, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId, listMachineRegistry, type DbModelPricing, type GoalStatus } from '../db/database.js'
 import { queryBillingSummary } from '../db/database.js'
 import { syncAnthropicBilling, syncOpenAIBilling, syncGeminiBilling } from '../ingest/billing.js'
 import { packageMetadata } from '../lib/package-metadata.js'
@@ -827,13 +827,19 @@ projectCmd
   .command('add <path>')
   .description('Add a project')
   .option('--name <name>', 'Human-readable name')
-  .action((path: string, opts: { name?: string }) => {
-    const db = openDatabase()
+  .action(async (path: string, opts: { name?: string }) => {
     const { basename } = require('path') as typeof import('path')
-    upsertProject(db, {
+    const name = opts.name ?? basename(path)
+    const cloud = economyCloudStorage()
+    if (cloud.active) {
+      await cloud.client.create('project-registry', { path, name, description: null, tags: [] })
+      console.log(chalk.green(`✓ Project added (cloud): ${path}`))
+      return
+    }
+    upsertProject(openDatabase(), {
       id: randomUUID(),
       path,
-      name: opts.name ?? basename(path),
+      name,
       description: null,
       tags: [],
       created_at: new Date().toISOString(),
@@ -865,16 +871,29 @@ projectCmd
 projectCmd
   .command('remove <path>')
   .description('Remove a project (keeps historical data)')
-  .action((path: string) => {
-    const db = openDatabase()
-    deleteProject(db, path)
+  .action(async (path: string) => {
+    const cloud = economyCloudStorage()
+    if (cloud.active) {
+      await cloud.client.delete('project-registry', path)
+      console.log(chalk.green(`✓ Project removed (cloud)`))
+      return
+    }
+    deleteProject(openDatabase(), path)
     console.log(chalk.green(`✓ Project removed`))
   })
 
 projectCmd
   .command('rename <path> <name>')
   .description('Rename a project')
-  .action((path: string, name: string) => {
+  .action(async (path: string, name: string) => {
+    const cloud = economyCloudStorage()
+    if (cloud.active) {
+      // No PUT for project-registry; rename = delete-by-path then re-create with the new name.
+      await cloud.client.delete('project-registry', path)
+      await cloud.client.create('project-registry', { path, name, description: null, tags: [] })
+      console.log(chalk.green(`✓ Renamed to: ${name} (cloud)`))
+      return
+    }
     const db = openDatabase()
     const existing = getProject(db, path)
     if (!existing) { console.error(chalk.red('Project not found')); process.exit(1) }
@@ -1014,10 +1033,16 @@ const pricingCmd = program.command('pricing').description('Manage model pricing 
 pricingCmd
   .command('list')
   .description('List all model prices')
-  .action(() => {
-    const db = openDatabase()
-    ensurePricingSeeded(db)
-    const rows = listModelPricing(db)
+  .action(async () => {
+    const cloud = economyCloudStorage()
+    let rows: DbModelPricing[]
+    if (cloud.active) {
+      rows = (await cloud.client.list<DbModelPricing>('pricing')).items
+    } else {
+      const db = openDatabase()
+      ensurePricingSeeded(db)
+      rows = listModelPricing(db)
+    }
     console.log()
     printTable(
       ['Model', 'Input/1M', 'Output/1M', 'CacheR/1M', 'CacheW/1M', 'CacheStorage/1M-h', 'Out/1k'],
@@ -1043,16 +1068,14 @@ pricingCmd
   .option('--cache-write <usd>', '5-minute cache write price per 1M tokens', '0')
   .option('--cache-write-1h <usd>', '1-hour cache write price per 1M tokens', '0')
   .option('--cache-storage <usd>', 'Context cache storage price per 1M token-hours', '0')
-  .action((model: string, opts: { input?: string; output?: string; cacheRead?: string; cacheWrite?: string; cacheWrite1h?: string; cacheStorage?: string }) => {
+  .action(async (model: string, opts: { input?: string; output?: string; cacheRead?: string; cacheWrite?: string; cacheWrite1h?: string; cacheStorage?: string }) => {
     const input = parseNonNegativeCliNumber(opts.input, '--input')
     const output = parseNonNegativeCliNumber(opts.output, '--output')
     const cacheRead = parseNonNegativeCliNumber(opts.cacheRead ?? '0', '--cache-read')
     const cacheWrite = parseNonNegativeCliNumber(opts.cacheWrite ?? '0', '--cache-write')
     const cacheWrite1h = parseNonNegativeCliNumber(opts.cacheWrite1h ?? '0', '--cache-write-1h')
     const cacheStorage = parseNonNegativeCliNumber(opts.cacheStorage ?? '0', '--cache-storage')
-    const db = openDatabase()
-    ensurePricingSeeded(db)
-    upsertModelPricing(db, {
+    const pricing = {
       model,
       input_per_1m: input,
       output_per_1m: output,
@@ -1061,16 +1084,31 @@ pricingCmd
       cache_write_1h_per_1m: cacheWrite1h,
       cache_storage_per_1m_hour: cacheStorage,
       updated_at: new Date().toISOString(),
-    })
+    }
+    const cloud = economyCloudStorage()
+    if (cloud.active) {
+      // self_hosted: write pricing to the cloud API, not the local store.
+      await cloud.client.create('pricing', pricing)
+      console.log(chalk.green(`✓ Pricing updated for ${model} (cloud)`))
+      return
+    }
+    const db = openDatabase()
+    ensurePricingSeeded(db)
+    upsertModelPricing(db, pricing)
     console.log(chalk.green(`✓ Pricing updated for ${model}`))
   })
 
 pricingCmd
   .command('remove <model>')
   .description('Remove pricing for a model')
-  .action((model: string) => {
-    const db = openDatabase()
-    deleteModelPricing(db, model)
+  .action(async (model: string) => {
+    const cloud = economyCloudStorage()
+    if (cloud.active) {
+      await cloud.client.delete('pricing', model)
+      console.log(chalk.green(`✓ Pricing removed for ${model} (cloud)`))
+      return
+    }
+    deleteModelPricing(openDatabase(), model)
     console.log(chalk.green(`✓ Pricing removed for ${model}`))
   })
 
@@ -1557,10 +1595,21 @@ goalCmd
   .option('--limit <usd>', 'Goal limit in USD')
   .option('--project <path>', 'Scope to project path')
   .option('--agent <agent>', 'Scope to agent')
-  .action((opts: { period?: string; limit?: string; project?: string; agent?: string }) => {
+  .action(async (opts: { period?: string; limit?: string; project?: string; agent?: string }) => {
     const limitUsd = parsePositiveCliNumber(opts.limit, '--limit')
     const period = requireCliChoice(opts.period, '--period', ['day', 'week', 'month', 'year'] as const)
     const agent = parseOptionalCliAgent(opts.agent) ?? null
+    const cloud = economyCloudStorage()
+    if (cloud.active) {
+      await cloud.client.create('goals', {
+        period,
+        project_path: opts.project ?? null,
+        ...(agent ? { agent } : {}),
+        limit_usd: limitUsd,
+      })
+      console.log(chalk.green(`✓ Goal set (cloud): ${period} $${limitUsd}${opts.project ? ` (${opts.project})` : ''}`))
+      return
+    }
     const db = openDatabase()
     const now = new Date().toISOString()
     upsertGoal(db, {
@@ -1578,9 +1627,11 @@ goalCmd
 goalCmd
   .command('list')
   .description('List all goals with progress')
-  .action(() => {
-    const db = openDatabase()
-    const statuses = getGoalStatuses(db)
+  .action(async () => {
+    const cloud = economyCloudStorage()
+    const statuses = cloud.active
+      ? (await cloud.client.list<GoalStatus>('goals')).items
+      : getGoalStatuses(openDatabase())
     if (statuses.length === 0) { console.log(chalk.yellow('No goals set.')); return }
     console.log()
     printTable(
@@ -1606,18 +1657,25 @@ goalCmd
 goalCmd
   .command('remove <id>')
   .description('Remove a goal')
-  .action((id: string) => {
-    const db = openDatabase()
-    deleteGoal(db, id)
+  .action(async (id: string) => {
+    const cloud = economyCloudStorage()
+    if (cloud.active) {
+      await cloud.client.delete('goals', id)
+      console.log(chalk.green(`✓ Goal removed (cloud)`))
+      return
+    }
+    deleteGoal(openDatabase(), id)
     console.log(chalk.green(`✓ Goal removed`))
   })
 
 goalCmd
   .command('status')
   .description('Quick goal progress summary')
-  .action(() => {
-    const db = openDatabase()
-    const statuses = getGoalStatuses(db)
+  .action(async () => {
+    const cloud = economyCloudStorage()
+    const statuses = cloud.active
+      ? (await cloud.client.list<GoalStatus>('goals')).items
+      : getGoalStatuses(openDatabase())
     if (statuses.length === 0) { console.log(chalk.yellow('No goals set.')); return }
     console.log()
     for (const g of statuses) {
@@ -1642,10 +1700,23 @@ program
   .command('remove <type> <id>')
   .alias('rm')
   .description('Remove a record. Type: budget | project | goal | pricing')
-  .action((type: string, id: string) => {
-    const db = openDatabase()
+  .action(async (type: string, id: string) => {
+    const cloud = economyCloudStorage()
+    const resourceFor: Record<string, string> = { budget: 'budgets', project: 'project-registry', goal: 'goals', pricing: 'pricing' }
+    const label: Record<string, string> = { budget: 'Budget', project: 'Project', goal: 'Goal', pricing: 'Pricing entry' }
     try {
-      switch (type.toLowerCase()) {
+      const t = type.toLowerCase()
+      if (!(t in resourceFor)) {
+        console.error(chalk.red(`Unknown type: ${type}. Use: budget | project | goal | pricing`))
+        process.exit(1)
+      }
+      if (cloud.active) {
+        await cloud.client.delete(resourceFor[t]!, id)
+        console.log(chalk.green(`✓ ${label[t]} ${id} removed (cloud)`))
+        return
+      }
+      const db = openDatabase()
+      switch (t) {
         case 'budget':
           deleteBudget(db, id)
           console.log(chalk.green(`✓ Budget ${id} removed`))
@@ -1662,9 +1733,6 @@ program
           deleteModelPricing(db, id)
           console.log(chalk.green(`✓ Pricing entry ${id} removed`))
           break
-        default:
-          console.error(chalk.red(`Unknown type: ${type}. Use: budget | project | goal | pricing`))
-          process.exit(1)
       }
     } catch (e) {
       console.error(chalk.red(`Failed: ${e instanceof Error ? e.message : String(e)}`))
