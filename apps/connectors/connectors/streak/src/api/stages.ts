@@ -11,7 +11,7 @@ export class StagesApi {
   }
 
   async create(pipelineKey: string, name: string): Promise<StreakStage> {
-    return this.client.put<StreakStage>(
+    return this.client.putForm<StreakStage>(
       `/pipelines/${encodeURIComponent(pipelineKey)}/stages`,
       { name },
     );

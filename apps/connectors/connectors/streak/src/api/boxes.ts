@@ -20,7 +20,7 @@ export class BoxesApi {
   }
 
   async create(pipelineKey: string, data: BoxCreateParams): Promise<StreakBox> {
-    return this.client.put<StreakBox>(
+    return this.client.postV2<StreakBox>(
       `/pipelines/${encodeURIComponent(pipelineKey)}/boxes`,
       data,
     );

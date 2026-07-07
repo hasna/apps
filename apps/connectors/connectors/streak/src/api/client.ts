@@ -3,13 +3,18 @@ import { ConnectorApiError, parseApiError } from '../types';
 
 const DEFAULT_BASE_URL = 'https://api.streak.com/api/v1';
 
+export type ApiVersion = 'v1' | 'v2';
+export type BodyFormat = 'json' | 'form';
+
 export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
   params?: Record<string, string | number | boolean | undefined>;
   body?: Record<string, unknown> | unknown[] | string;
+  bodyFormat?: BodyFormat;
   headers?: Record<string, string>;
   retries?: number;
   timeout?: number;
+  version?: ApiVersion;
 }
 
 export class ConnectorClient {
@@ -30,9 +35,21 @@ export class ConnectorClient {
     return `Basic ${encoded}`;
   }
 
-  private buildUrl(path: string, params?: Record<string, string | number | boolean | undefined>): string {
+  private getBaseUrl(version: ApiVersion): string {
+    const base = this.baseUrl.replace(/\/$/, '');
+    if (/\/api\/v[12]$/.test(base)) {
+      return base.replace(/\/api\/v[12]$/, `/api/${version}`);
+    }
+    return base;
+  }
+
+  private buildUrl(
+    path: string,
+    params?: Record<string, string | number | boolean | undefined>,
+    version: ApiVersion = 'v1',
+  ): string {
     const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-    const url = new URL(`${this.baseUrl}${normalizedPath}`);
+    const url = new URL(`${this.getBaseUrl(version)}${normalizedPath}`);
 
     if (params) {
       Object.entries(params).forEach(([key, value]) => {
@@ -43,6 +60,27 @@ export class ConnectorClient {
     }
 
     return url.toString();
+  }
+
+  private encodeFormBody(body: Record<string, unknown> | unknown[] | string): URLSearchParams {
+    if (typeof body === 'string') {
+      return new URLSearchParams(body);
+    }
+    if (Array.isArray(body)) {
+      throw new Error('Form body must be an object or URL-encoded string');
+    }
+    const form = new URLSearchParams();
+    Object.entries(body).forEach(([key, value]) => {
+      if (value === undefined || value === null) {
+        return;
+      }
+      if (typeof value === 'object') {
+        form.set(key, JSON.stringify(value));
+        return;
+      }
+      form.set(key, String(value));
+    });
+    return form;
   }
 
   private sleep(ms: number): Promise<void> {
@@ -58,8 +96,17 @@ export class ConnectorClient {
   }
 
   async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-    const { method = 'GET', params, body, headers = {}, retries = 3, timeout = 30000 } = options;
-    const url = this.buildUrl(path, params);
+    const {
+      method = 'GET',
+      params,
+      body,
+      bodyFormat = 'json',
+      headers = {},
+      retries = 3,
+      timeout = 30000,
+      version = 'v1',
+    } = options;
+    const url = this.buildUrl(path, params, version);
 
     const requestHeaders: Record<string, string> = {
       Authorization: this.buildAuthHeader(),
@@ -68,7 +115,9 @@ export class ConnectorClient {
     };
 
     if (body && ['POST', 'PUT', 'PATCH'].includes(method)) {
-      requestHeaders['Content-Type'] = 'application/json';
+      requestHeaders['Content-Type'] = bodyFormat === 'form'
+        ? 'application/x-www-form-urlencoded'
+        : 'application/json';
     }
 
     const fetchOptions: RequestInit = {
@@ -77,7 +126,9 @@ export class ConnectorClient {
     };
 
     if (body && ['POST', 'PUT', 'PATCH'].includes(method)) {
-      fetchOptions.body = typeof body === 'string' ? body : JSON.stringify(body);
+      fetchOptions.body = bodyFormat === 'form'
+        ? this.encodeFormBody(body).toString()
+        : typeof body === 'string' ? body : JSON.stringify(body);
     }
 
     let lastError: Error | null = null;
@@ -159,6 +210,22 @@ export class ConnectorClient {
 
   async put<T>(path: string, body?: Record<string, unknown> | object, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
     return this.request<T>(path, { method: 'PUT', body: body as Record<string, unknown>, params });
+  }
+
+  async postV2<T>(path: string, body?: Record<string, unknown> | object, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
+    return this.request<T>(path, { method: 'POST', body: body as Record<string, unknown>, params, version: 'v2' });
+  }
+
+  async getV2<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
+    return this.request<T>(path, { method: 'GET', params, version: 'v2' });
+  }
+
+  async deleteV2<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
+    return this.request<T>(path, { method: 'DELETE', params, version: 'v2' });
+  }
+
+  async putForm<T>(path: string, body?: Record<string, unknown> | object, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
+    return this.request<T>(path, { method: 'PUT', body: body as Record<string, unknown>, bodyFormat: 'form', params });
   }
 
   async delete<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {

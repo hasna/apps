@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { ConnectorClient } from './client';
+import { BoxesApi } from './boxes';
+import { CommentsApi } from './comments';
+import { FieldsApi } from './fields';
+import { PipelinesApi } from './pipelines';
+import { StagesApi } from './stages';
+import { TasksApi } from './tasks';
 
 const realFetch = globalThis.fetch;
 
@@ -67,17 +73,48 @@ describe('Streak ConnectorClient', () => {
     expect(recorded).toHaveLength(1);
   });
 
-  test('PUT creates resources (Streak convention)', async () => {
+  test('v1 PUT form requests send URL-encoded bodies', async () => {
     const recorded = installFetch((r) => {
       expect(r.method).toBe('PUT');
-      expect(r.url).toContain('/pipelines/pipe1/boxes');
+      expect(r.url).toBe('https://api.streak.com/api/v1/pipelines');
+      expect(r.headers['Content-Type']).toBe('application/x-www-form-urlencoded');
+      expect(r.body).toBe('name=Sales&teamWide=true');
+      return { key: 'p1', name: 'Sales' };
+    });
+    const client = new ConnectorClient({ apiKey: 'key' });
+    const pipeline = await client.putForm<{ key: string }>('/pipelines', {
+      name: 'Sales',
+      teamWide: true,
+    });
+    expect(pipeline.key).toBe('p1');
+    expect(recorded[0].method).toBe('PUT');
+  });
+
+  test('v2 POST requests use /api/v2 with JSON bodies', async () => {
+    const recorded = installFetch((r) => {
+      expect(r.method).toBe('POST');
+      expect(r.url).toBe('https://api.streak.com/api/v2/pipelines/pipe1/boxes');
+      expect(r.headers['Content-Type']).toBe('application/json');
       expect(r.body).toBe(JSON.stringify({ name: 'Deal' }));
       return { key: 'box1', name: 'Deal' };
     });
     const client = new ConnectorClient({ apiKey: 'key' });
-    const box = await client.put<{ key: string }>('/pipelines/pipe1/boxes', { name: 'Deal' });
+    const box = await client.postV2<{ key: string }>('/pipelines/pipe1/boxes', { name: 'Deal' });
     expect(box.key).toBe('box1');
-    expect(recorded[0].method).toBe('PUT');
+    expect(recorded[0].method).toBe('POST');
+  });
+
+  test('custom baseUrl is treated as the complete API root', async () => {
+    const recorded = installFetch((r) => {
+      expect(r.url).toBe('https://proxy.example/streak/pipelines');
+      return [];
+    });
+    const client = new ConnectorClient({
+      apiKey: 'key',
+      baseUrl: 'https://proxy.example/streak',
+    });
+    await client.get('/pipelines');
+    expect(recorded).toHaveLength(1);
   });
 
   test('POST updates resources (Streak convention)', async () => {
@@ -113,5 +150,61 @@ describe('Streak ConnectorClient', () => {
     })) as unknown as typeof fetch;
     const client = new ConnectorClient({ apiKey: 'bad-key' });
     await expect(client.get('/users/me')).rejects.toMatchObject({ statusCode: 401 });
+  });
+});
+
+describe('Streak documented endpoint conventions', () => {
+  test('box, task, and comment creates use v2 POST JSON endpoints', async () => {
+    const recorded = installFetch((r) => ({ key: r.url.split('/').pop() || 'created' }));
+    const client = new ConnectorClient({ apiKey: 'key' });
+
+    await new BoxesApi(client).create('pipe1', { name: 'Deal' });
+    await new TasksApi(client).create('box1', { text: 'Follow up' });
+    await new CommentsApi(client).create('box1', 'Called customer');
+
+    expect(recorded.map((r) => [r.method, r.url, r.body])).toEqual([
+      ['POST', 'https://api.streak.com/api/v2/pipelines/pipe1/boxes', '{"name":"Deal"}'],
+      ['POST', 'https://api.streak.com/api/v2/boxes/box1/tasks', '{"text":"Follow up"}'],
+      ['POST', 'https://api.streak.com/api/v2/boxes/box1/comments', '{"message":"Called customer"}'],
+    ]);
+  });
+
+  test('box update stays on the documented v1 POST JSON endpoint', async () => {
+    const recorded = installFetch((r) => ({ key: 'box1', name: JSON.parse(r.body || '{}').name }));
+    const client = new ConnectorClient({ apiKey: 'key' });
+
+    await new BoxesApi(client).update('box1', { name: 'Updated' });
+
+    expect(recorded.map((r) => [r.method, r.url, r.headers['Content-Type'], r.body])).toEqual([
+      ['POST', 'https://api.streak.com/api/v1/boxes/box1', 'application/json', '{"name":"Updated"}'],
+    ]);
+  });
+
+  test('task and comment deletes use documented v2 DELETE endpoints', async () => {
+    const recorded = installFetch(() => ({}));
+    const client = new ConnectorClient({ apiKey: 'key' });
+
+    await new TasksApi(client).delete('task1');
+    await new CommentsApi(client).delete('comment1');
+
+    expect(recorded.map((r) => [r.method, r.url])).toEqual([
+      ['DELETE', 'https://api.streak.com/api/v2/tasks/task1'],
+      ['DELETE', 'https://api.streak.com/api/v2/comments/comment1'],
+    ]);
+  });
+
+  test('pipeline, stage, and field creates use v1 PUT form endpoints', async () => {
+    const recorded = installFetch((r) => ({ key: r.url.split('/').pop() || 'created' }));
+    const client = new ConnectorClient({ apiKey: 'key' });
+
+    await new PipelinesApi(client).create({ name: 'Sales', orgWide: true });
+    await new StagesApi(client).create('pipe1', 'Qualified');
+    await new FieldsApi(client).create('pipe1', { name: 'Amount', type: 'TEXT_INPUT' });
+
+    expect(recorded.map((r) => [r.method, r.url, r.headers['Content-Type'], r.body])).toEqual([
+      ['PUT', 'https://api.streak.com/api/v1/pipelines', 'application/x-www-form-urlencoded', 'name=Sales&orgWide=true'],
+      ['PUT', 'https://api.streak.com/api/v1/pipelines/pipe1/stages', 'application/x-www-form-urlencoded', 'name=Qualified'],
+      ['PUT', 'https://api.streak.com/api/v1/pipelines/pipe1/fields', 'application/x-www-form-urlencoded', 'name=Amount&type=TEXT_INPUT'],
+    ]);
   });
 });

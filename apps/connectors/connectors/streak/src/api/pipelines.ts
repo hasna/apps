@@ -13,7 +13,7 @@ export class PipelinesApi {
   }
 
   async create(data: PipelineCreateParams): Promise<StreakPipeline> {
-    return this.client.put<StreakPipeline>('/pipelines', data);
+    return this.client.putForm<StreakPipeline>('/pipelines', data);
   }
 
   async update(key: string, data: PipelineUpdateParams): Promise<StreakPipeline> {

@@ -11,7 +11,7 @@ export class FieldsApi {
   }
 
   async create(pipelineKey: string, data: FieldCreateParams): Promise<StreakField> {
-    return this.client.put<StreakField>(
+    return this.client.putForm<StreakField>(
       `/pipelines/${encodeURIComponent(pipelineKey)}/fields`,
       data,
     );
