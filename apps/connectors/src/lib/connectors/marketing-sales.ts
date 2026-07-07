@@ -451,6 +451,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["email", "validation", "verification"],
   },
   {
+    name: "veriphone",
+    displayName: "Veriphone",
+    description: "Phone number validation and carrier lookup",
+    category: "Marketing & Sales",
+    tags: ["phone", "validation", "verification"],
+  },
+  {
     name: "whatconverts",
     displayName: "WhatConverts",
     description: "Lead tracking and marketing attribution platform",
