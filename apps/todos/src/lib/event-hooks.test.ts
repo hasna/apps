@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { Database } from "bun:sqlite";
 import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
 import { runMigrations } from "../db/schema.js";
@@ -23,8 +23,18 @@ import { approveReviewItem, claimReviewItem, requestReviewQueue } from "./review
 let home: string;
 let previousHome: string | undefined;
 
-function makeNonIsolatedHome(prefix: string): string {
-  return mkdtempSync(join(process.cwd(), `.test-${prefix}-`));
+function makeNonTempHome(prefix: string): string {
+  const requestedRoot = process.env["TODOS_TEST_NON_TEMP_HOME_ROOT"];
+  const fallbackRoot = join(process.cwd(), "node_modules", ".cache", "todos-test-non-temp-home");
+  const root = requestedRoot && !isUnder(tmpdir(), requestedRoot) ? requestedRoot : fallbackRoot;
+  if (!existsSync(root)) mkdirSync(root, { recursive: true });
+  return mkdtempSync(join(root, `${prefix}-`));
+}
+
+function isUnder(parent: string, child: string): boolean {
+  const normalizedParent = resolve(parent);
+  const normalizedChild = resolve(child);
+  return normalizedChild === normalizedParent || normalizedChild.startsWith(`${normalizedParent}${sep}`);
 }
 
 beforeEach(() => {
@@ -66,7 +76,7 @@ describe("local event hooks", () => {
   test("suppresses quiet lifecycle hooks for explicit in-memory databases using a non-isolated todos home", async () => {
     const previousHome = process.env["HOME"];
     const previousDbPath = process.env["TODOS_DB_PATH"];
-    const nonTempHome = makeNonIsolatedHome("todos-event-hooks-home");
+    const nonTempHome = makeNonTempHome("todos-event-hooks-home");
     const filePath = join(home, "explicit-lifecycle.jsonl");
     const explicitDb = new Database(":memory:");
     explicitDb.run("PRAGMA foreign_keys = ON");
@@ -100,7 +110,7 @@ describe("local event hooks", () => {
   test("suppresses quiet run hooks for explicit in-memory databases using a non-isolated todos home", async () => {
     const previousHome = process.env["HOME"];
     const previousDbPath = process.env["TODOS_DB_PATH"];
-    const nonTempHome = makeNonIsolatedHome("todos-run-hooks-home");
+    const nonTempHome = makeNonTempHome("todos-run-hooks-home");
     const filePath = join(home, "explicit-run.jsonl");
     const explicitDb = new Database(":memory:");
     explicitDb.run("PRAGMA foreign_keys = ON");
@@ -138,7 +148,7 @@ describe("local event hooks", () => {
   test("suppresses quiet approval and review hooks for explicit in-memory databases using a non-isolated todos home", async () => {
     const previousHome = process.env["HOME"];
     const previousDbPath = process.env["TODOS_DB_PATH"];
-    const nonTempHome = makeNonIsolatedHome("todos-review-hooks-home");
+    const nonTempHome = makeNonTempHome("todos-review-hooks-home");
     const filePath = join(home, "explicit-review.jsonl");
     const explicitDb = new Database(":memory:");
     explicitDb.run("PRAGMA foreign_keys = ON");

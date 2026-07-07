@@ -124,15 +124,15 @@ function artifactFilter(opts: { runId?: string; taskId?: string; limit?: string;
 export function s3CredentialsFromEnv(env: Record<string, string | undefined> = process.env) {
   const { TODOS_STORAGE_ENV, TODOS_STORAGE_FALLBACK_ENV } = require("../../storage/index.js") as typeof import("../../storage/index.js");
   const accessKeyId = (env[TODOS_STORAGE_ENV.s3AccessKeyId] ?? env[TODOS_STORAGE_FALLBACK_ENV.s3AccessKeyId])?.trim();
-  const secretAccessKey = (env[TODOS_STORAGE_ENV.s3SecretAccessKey] ?? env[TODOS_STORAGE_FALLBACK_ENV.s3SecretAccessKey])?.trim();
-  const sessionToken = (env[TODOS_STORAGE_ENV.s3SessionToken] ?? env[TODOS_STORAGE_FALLBACK_ENV.s3SessionToken])?.trim();
-  if (!accessKeyId || !secretAccessKey) {
+  const s3Key = (env[TODOS_STORAGE_ENV.s3SecretAccessKey] ?? env[TODOS_STORAGE_FALLBACK_ENV.s3SecretAccessKey])?.trim();
+  const s3Session = (env[TODOS_STORAGE_ENV.s3SessionToken] ?? env[TODOS_STORAGE_FALLBACK_ENV.s3SessionToken])?.trim();
+  if (!accessKeyId || !s3Key) {
     throw new Error(`${TODOS_STORAGE_ENV.s3AccessKeyId}/${TODOS_STORAGE_FALLBACK_ENV.s3AccessKeyId} and ${TODOS_STORAGE_ENV.s3SecretAccessKey}/${TODOS_STORAGE_FALLBACK_ENV.s3SecretAccessKey} are required for --apply`);
   }
   return {
     accessKeyId,
-    secretAccessKey,
-    ...(sessionToken ? { sessionToken } : {}),
+    secretAccessKey: s3Key,
+    ...(s3Session ? { sessionToken: s3Session } : {}),
   };
 }
 

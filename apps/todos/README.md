@@ -477,6 +477,14 @@ version, compact workflow pointers, and an `automation` object containing only
 boolean routing gates such as `no_auto`, `manual_required`,
 `requires_approval`, and `approval_required`.
 
+When running route smokes or tests with an explicit temp/in-memory task database
+through `TODOS_DB_PATH` or `HASNA_TODOS_DB_PATH`, also set `HASNA_EVENTS_DIR` or
+`HASNA_EVENTS_HOME` to a temp event store. Without an explicit event directory,
+Todos suppresses shared event emission for temp task databases so route-enabled
+scratch tasks cannot trigger global OpenLoops workers. Set
+`HASNA_TODOS_ALLOW_GLOBAL_EVENTS_FROM_TEMP_DB=1` only for deliberate integration
+tests that must exercise the global event bus.
+
 Production task-created routes should fail closed:
 
 - Require one explicit opt-in, either task metadata `route_enabled=true` or an

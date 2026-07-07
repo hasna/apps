@@ -4,8 +4,8 @@ import { getDatabasePath } from "../db/database.js";
 import { getTodosGlobalDir } from "./sync-utils.js";
 
 function envFlag(name: string): boolean {
-  const value = process.env[name];
-  return value === "1" || value === "true" || value === "yes";
+  const value = process.env[name]?.trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes" || value === "on";
 }
 
 function isUnder(parent: string, child: string): boolean {
@@ -35,7 +35,7 @@ export function usesIsolatedTodosHome(): boolean {
 
 export function shouldEmitSharedTaskEvents(dbPath?: string): boolean {
   if (envFlag("TODOS_DISABLE_SHARED_EVENTS")) return false;
-  if (envFlag("TODOS_ALLOW_EPHEMERAL_SHARED_EVENTS")) return true;
+  if (envFlag("TODOS_ALLOW_EPHEMERAL_SHARED_EVENTS") || envFlag("HASNA_TODOS_ALLOW_GLOBAL_EVENTS_FROM_TEMP_DB")) return true;
   if (!isEphemeralTodosDatabase(dbPath)) return true;
   return hasExplicitSharedEventsStore();
 }

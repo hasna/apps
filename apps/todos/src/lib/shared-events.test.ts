@@ -11,12 +11,16 @@ import { runMigrations } from "../db/schema.js";
 import { createTaskList } from "../db/task-lists.js";
 import { createTask } from "../db/tasks.js";
 import type { Task } from "../types/index.js";
+import { shouldEmitSharedTaskEvents } from "./event-emission-safety.js";
 import { emitSharedTaskEvent } from "./shared-events.js";
 
 let tempDir = "";
+const originalHome = process.env["HOME"];
+const originalHasnaTodosDbPath = process.env["HASNA_TODOS_DB_PATH"];
 
 beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), "todos-shared-events-"));
+  delete process.env["HASNA_TODOS_DB_PATH"];
   process.env["TODOS_DB_PATH"] = ":memory:";
   process.env["HASNA_EVENTS_DIR"] = join(tempDir, "events");
   resetDatabase();
@@ -26,6 +30,13 @@ afterEach(() => {
   closeDatabase();
   delete process.env["TODOS_DB_PATH"];
   delete process.env["HASNA_EVENTS_DIR"];
+  delete process.env["HASNA_EVENTS_HOME"];
+  delete process.env["HASNA_TODOS_ALLOW_GLOBAL_EVENTS_FROM_TEMP_DB"];
+  delete process.env["TODOS_ALLOW_EPHEMERAL_SHARED_EVENTS"];
+  if (originalHasnaTodosDbPath === undefined) delete process.env["HASNA_TODOS_DB_PATH"];
+  else process.env["HASNA_TODOS_DB_PATH"] = originalHasnaTodosDbPath;
+  if (originalHome === undefined) delete process.env["HOME"];
+  else process.env["HOME"] = originalHome;
   rmSync(tempDir, { recursive: true, force: true });
 });
 
@@ -162,6 +173,36 @@ describe("shared task events", () => {
     });
     expect(event.metadata.route_blocked_by_no_auto).toBe(true);
     expect(event.metadata.route_blocked_by_approval).toBe(true);
+  });
+
+  test("does not leak routeable temp-db tasks into the default shared event store", async () => {
+    closeDatabase();
+    resetDatabase();
+    delete process.env["HASNA_EVENTS_DIR"];
+    process.env["HOME"] = join(tempDir, "home");
+    process.env["TODOS_DB_PATH"] = join(tempDir, "scratch", "todos.db");
+
+    expect(shouldEmitSharedTaskEvents()).toBe(false);
+
+    process.env["HASNA_EVENTS_HOME"] = join(tempDir, "events-home");
+    expect(shouldEmitSharedTaskEvents()).toBe(true);
+    delete process.env["HASNA_EVENTS_HOME"];
+    expect(shouldEmitSharedTaskEvents()).toBe(false);
+    process.env["HASNA_TODOS_ALLOW_GLOBAL_EVENTS_FROM_TEMP_DB"] = " TRUE ";
+    expect(shouldEmitSharedTaskEvents()).toBe(true);
+    delete process.env["HASNA_TODOS_ALLOW_GLOBAL_EVENTS_FROM_TEMP_DB"];
+    expect(shouldEmitSharedTaskEvents()).toBe(false);
+
+    await emitSharedTaskEvent({
+      type: "task.created",
+      task: makeTask({
+        title: "Routeable task",
+        working_dir: "/home/hasna/workspace/hasna/opensource/open-todos",
+        metadata: { route_enabled: true, fingerprint: "route:cli:1" },
+      }),
+    });
+
+    expect(existsSync(join(process.env["HOME"]!, ".hasna", "events", "events.json"))).toBe(false);
   });
 
   test("includes workflow invocation pointers in task events", async () => {
