@@ -166,7 +166,7 @@ export class SparkPost {
   // Suppression List
   // ============================================
 
-  async listSuppressions(params?: { from?: string; to?: string; types?: string; limit?: number }): Promise<SuppressionListResponse> {
+  async listSuppressions(params?: { from?: string; to?: string; types?: string; per_page?: number }): Promise<SuppressionListResponse> {
     return this.client.get<SuppressionListResponse>('/suppression-list', params);
   }
 
@@ -175,7 +175,7 @@ export class SparkPost {
   }
 
   async addSuppression(entries: Array<{ recipient: string; type?: string; description?: string }>): Promise<unknown> {
-    return this.client.post('/suppression-list', entries);
+    return this.client.put('/suppression-list', { recipients: entries });
   }
 
   async deleteSuppression(email: string): Promise<void> {
@@ -324,7 +324,7 @@ export class SparkPost {
   // ============================================
 
   async validateRecipient(email: string): Promise<RecipientValidationResponse> {
-    return this.client.post<RecipientValidationResponse>('/recipient-validation/single', { email });
+    return this.client.get<RecipientValidationResponse>(`/recipient-validation/single/${encodeURIComponent(email)}`);
   }
 
   async validateRecipientsBulk(emails: string[]): Promise<unknown> {

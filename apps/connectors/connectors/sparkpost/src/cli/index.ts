@@ -368,7 +368,7 @@ suppressionCmd.command('ls').description('List suppressions')
       const client = getClient();
       const result = await client.listSuppressions({
         types: opts.types,
-        limit: parseInt(opts.limit),
+        per_page: parseInt(opts.limit),
       });
       print(result, getFormat(suppressionCmd));
     } catch (err) {

@@ -145,7 +145,11 @@ export function getRegion(): SparkPostRegion {
   if (envRegion === 'eu' || envRegion === 'us') {
     return envRegion;
   }
-  return loadProfile().region ?? 'us';
+  const profileRegion = loadProfile().region;
+  if (profileRegion === 'eu' || profileRegion === 'us') {
+    return profileRegion;
+  }
+  return 'us';
 }
 
 export function setApiKey(apiKey: string): void {

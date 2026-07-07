@@ -133,4 +133,34 @@ describe('SparkPostClient', () => {
       expect((err as SparkPostApiError).status).toBe(400);
     }
   });
+
+  test('rejects invalid region', () => {
+    expect(() => new SparkPostClient({ apiKey: 'key', region: 'ap' as 'us' })).toThrow('Region must be "us" or "eu"');
+  });
+
+  test('GET /recipient-validation/single/{address} validates email', async () => {
+    const recorded = installFetch(() => ({ results: { result: 'valid', valid: true } }));
+    const sp = new SparkPost({ apiKey: 'key' });
+    const result = await sp.validateRecipient('user@example.com');
+    expect(result.results.result).toBe('valid');
+    expect(recorded[0].method).toBe('GET');
+    expect(recorded[0].url).toContain('/recipient-validation/single/user%40example.com');
+  });
+
+  test('PUT /suppression-list wraps recipients array', async () => {
+    const recorded = installFetch(() => ({}));
+    const sp = new SparkPost({ apiKey: 'key' });
+    await sp.addSuppression([{ recipient: 'user@example.com', type: 'transactional' }]);
+    expect(recorded[0].method).toBe('PUT');
+    expect(recorded[0].url).toContain('/suppression-list');
+    const body = JSON.parse(recorded[0].body!);
+    expect(body.recipients[0].recipient).toBe('user@example.com');
+  });
+
+  test('listSuppressions forwards per_page query param', async () => {
+    const recorded = installFetch(() => ({ results: [] }));
+    const sp = new SparkPost({ apiKey: 'key' });
+    await sp.listSuppressions({ per_page: 50 });
+    expect(recorded[0].url).toContain('per_page=50');
+  });
 });

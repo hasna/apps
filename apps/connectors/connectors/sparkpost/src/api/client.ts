@@ -24,6 +24,9 @@ export class SparkPostClient {
     }
     this.apiKey = config.apiKey;
     const region = config.region ?? 'us';
+    if (region !== 'us' && region !== 'eu') {
+      throw new Error('Region must be "us" or "eu"');
+    }
     this.baseUrl = BASE_URLS[region];
   }
 
