@@ -245,6 +245,61 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { tasks: { type: "number" }, projects: { type: "number" } } } } } } },
         },
       },
+      "/v1/import": {
+        post: {
+          operationId: "importSnapshot",
+          summary: "Bulk-ingest a full or partial snapshot (idempotent upsert by id)",
+          description:
+            "Upserts every record carried in the body by primary key. All record arrays are optional and default to []; a caller may backfill a single object type (e.g. just tasks) or a complete snapshot. Re-posting the same rows never duplicates. Requires the todos:write scope.",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    exportedAt: { type: "string" },
+                    source: { type: "string" },
+                    tasks: { type: "array", items: { $ref: "#/components/schemas/Task" } },
+                    projects: { type: "array", items: { $ref: "#/components/schemas/Project" } },
+                    projectMachinePaths: { type: "array", items: { type: "object" } },
+                    plans: { type: "array", items: { type: "object" } },
+                    agents: { type: "array", items: { type: "object" } },
+                    taskLists: { type: "array", items: { type: "object" } },
+                    templates: { type: "array", items: { type: "object" } },
+                    auditHistory: { type: "array", items: { type: "object" } },
+                    tombstones: { type: "array", items: { type: "object" } },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      received: { type: "number" },
+                      result: {
+                        type: "object",
+                        properties: {
+                          inserted: { type: "number" },
+                          updated: { type: "number" },
+                          deleted: { type: "number" },
+                          skipped: { type: "number" },
+                          errors: { type: "array", items: { type: "string" } },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
     },
   };
 }

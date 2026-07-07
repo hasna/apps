@@ -8,7 +8,7 @@
  * over the core storage lib — there are NO stubs; unimplemented routes 404.
  */
 import type { CreateProjectInput, CreateTaskInput, UpdateTaskInput } from "../types/index.js";
-import type { TodosStorageContext } from "../storage/interfaces.js";
+import type { TodosStorageContext, TodosStorageSnapshot } from "../storage/interfaces.js";
 import { getCloudStorageAdapter, getCloudVerifier, ensureCloudSchema } from "./cloud.js";
 
 const JSON_HEADERS = { "Content-Type": "application/json" } as const;
@@ -34,6 +34,48 @@ async function readJson<T>(req: Request): Promise<T | null> {
 function contextFromPrincipal(principal: { agent: string | null }, body?: { agent_id?: string }): TodosStorageContext {
   const agentId = body?.agent_id || principal.agent || undefined;
   return agentId ? { agentId } : {};
+}
+
+/**
+ * Coerce an arbitrary request body into a well-formed {@link TodosStorageSnapshot}.
+ *
+ * Every record array is optional and defaults to `[]`, so a caller can backfill a
+ * single object type (e.g. just `tasks`) or a full snapshot. Non-array values for
+ * a record key are treated as empty rather than throwing, keeping partial-chunk
+ * ingest robust. The returned snapshot is safe to hand straight to
+ * `storage.sync.importSnapshot`, which upserts every row by primary key (idempotent).
+ */
+export function normalizeImportSnapshot(raw: unknown): TodosStorageSnapshot {
+  const body = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const arr = <T>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
+  return {
+    exportedAt: typeof body["exportedAt"] === "string" ? (body["exportedAt"] as string) : new Date().toISOString(),
+    source: (typeof body["source"] === "string" ? body["source"] : "sqlite") as TodosStorageSnapshot["source"],
+    tasks: arr(body["tasks"]),
+    projects: arr(body["projects"]),
+    projectMachinePaths: arr(body["projectMachinePaths"]),
+    plans: arr(body["plans"]),
+    agents: arr(body["agents"]),
+    taskLists: arr(body["taskLists"]),
+    templates: arr(body["templates"]),
+    auditHistory: arr(body["auditHistory"]),
+    tombstones: arr(body["tombstones"]),
+  };
+}
+
+/** Total number of records (across every object type) carried by a snapshot. */
+export function countSnapshotRecords(s: TodosStorageSnapshot): number {
+  return (
+    s.tasks.length +
+    s.projects.length +
+    (s.projectMachinePaths?.length ?? 0) +
+    s.plans.length +
+    s.agents.length +
+    s.taskLists.length +
+    s.templates.length +
+    s.auditHistory.length +
+    (s.tombstones?.length ?? 0)
+  );
 }
 
 /**
@@ -218,6 +260,28 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
     if (resource === "stats" && method === "GET") {
       const [tasks, projects] = await Promise.all([store.tasks.count(), store.projects.list()]);
       return json({ tasks, projects: projects.length });
+    }
+
+    // ── /v1/import (bulk snapshot ingest / backfill) ──
+    // Accepts a full or partial TodosStorageSnapshot and upserts every record by
+    // primary key via the storage adapter. Idempotent: re-posting the same rows
+    // never duplicates (ON CONFLICT DO UPDATE, guarded by updated_at/version), so
+    // large local→cloud backfills can be chunked and safely retried. Requires the
+    // `todos:write` scope (enforced above for non-GET methods).
+    if (resource === "import") {
+      if (method !== "POST") return error(405, `method ${method} not allowed on /v1/import`);
+      if (typeof store.sync.importSnapshot !== "function") {
+        return error(501, "snapshot import is not supported by this storage backend");
+      }
+      const raw = await readJson<unknown>(req);
+      if (raw === null) return error(400, "invalid JSON body");
+      const snapshot = normalizeImportSnapshot(raw);
+      const received = countSnapshotRecords(snapshot);
+      if (received === 0) {
+        return error(400, "empty snapshot: provide at least one record array (tasks/projects/plans/...)");
+      }
+      const result = await store.sync.importSnapshot(snapshot, contextFromPrincipal(principal));
+      return json({ result, received });
     }
 
     return error(404, `unknown /v1 resource: ${resource ?? "(root)"}`);
