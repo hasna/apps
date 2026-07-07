@@ -32,7 +32,7 @@
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
-    "test": "bun test --max-concurrency=1",
+    "test": "bun test --parallel=1",
     "check:secrets": "bun run src/cli/index.tsx oss-secrets-policy . --strict",
     "check:oss-policy": "bun run src/cli/index.tsx oss-secrets-policy . --strict",
     "no-cloud:source": "bun test src/no-cloud-boundary.test.ts",
