@@ -19,8 +19,8 @@ import { packageMetadata } from '../lib/package-metadata.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
 import { randomUUID } from 'crypto'
 import { execSync } from 'child_process'
-import { economyCloudStorage } from '../lib/cloud-storage.js'
-import type { AccountBreakdown, BudgetStatus, Period } from '../types/index.js'
+import { economyCloudStorage, cloudListItems, cloudObject } from '../lib/cloud-storage.js'
+import type { AccountBreakdown, BudgetStatus, CostSummary, ModelBreakdown, AgentBreakdown, ProjectBreakdown, EconomySession, Period } from '../types/index.js'
 
 const program = new Command()
 
@@ -32,6 +32,9 @@ program
 // ── Auto-sync helper ──────────────────────────────────────────────────────────
 
 async function autoSync(opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; opencode?: boolean; cursor?: boolean; pi?: boolean; hermes?: boolean; verbose?: boolean; dedupe?: boolean; cloud?: boolean } = {}): Promise<void> {
+  // self_hosted/cloud mode: reads come straight from the cloud API, so there is
+  // no local DB to ingest into or pull for. Skip the local sync entirely.
+  if (economyCloudStorage().active) return
   const db = openDatabase()
   ensurePricingSeeded(db)
   await maybePullFromCloud()
@@ -193,10 +196,11 @@ function parseSinceDate(since: string): string {
   return since
 }
 
-function printSummary(label: string, period: Period): void {
-  const db = openDatabase()
-  ensurePricingSeeded(db)
-  const s = querySummary(db, period)
+async function printSummary(label: string, period: Period): Promise<void> {
+  const cloud = economyCloudStorage()
+  const s = cloud.active
+    ? (await cloudObject<{ summary: CostSummary }>(cloud, '/usage', { period })).summary
+    : (() => { const db = openDatabase(); ensurePricingSeeded(db); return querySummary(db, period) })()
   console.log()
   console.log(chalk.bold.cyan(`  ${label}`))
   console.log()
@@ -216,16 +220,31 @@ function printSummary(label: string, period: Period): void {
 
 program.action(async () => {
   await autoSync()
-  const db = openDatabase()
-  const t = querySummary(db, 'today')
-  const w = querySummary(db, 'week')
-  const m = querySummary(db, 'month')
-  const projects = queryProjectBreakdown(db).slice(0, 3)
-  const daily = queryDailyBreakdown(db, 14).reduce((acc, d) => {
-    acc[d.date] = (acc[d.date] ?? 0) + d.cost_usd
-    return acc
-  }, {} as Record<string, number>)
-  const dailyValues = Object.values(daily)
+  const cloud = economyCloudStorage()
+  let t: CostSummary, w: CostSummary, m: CostSummary
+  let projects: ProjectBreakdown[]
+  let dailyValues: number[]
+  if (cloud.active) {
+    // self_hosted/cloud: pull the dashboard straight from the cloud API.
+    ;[t, w, m] = await Promise.all([
+      cloudObject<{ summary: CostSummary }>(cloud, '/usage', { period: 'today' }).then(r => r.summary),
+      cloudObject<{ summary: CostSummary }>(cloud, '/usage', { period: 'week' }).then(r => r.summary),
+      cloudObject<{ summary: CostSummary }>(cloud, '/usage', { period: 'month' }).then(r => r.summary),
+    ])
+    projects = (await cloudListItems<ProjectBreakdown>(cloud, 'projects')).slice(0, 3)
+    dailyValues = []
+  } else {
+    const db = openDatabase()
+    t = querySummary(db, 'today')
+    w = querySummary(db, 'week')
+    m = querySummary(db, 'month')
+    projects = queryProjectBreakdown(db).slice(0, 3)
+    const daily = queryDailyBreakdown(db, 14).reduce((acc, d) => {
+      acc[d.date] = (acc[d.date] ?? 0) + d.cost_usd
+      return acc
+    }, {} as Record<string, number>)
+    dailyValues = Object.values(daily)
+  }
 
   console.log()
   console.log(chalk.bold.cyan('  Economy'))
@@ -352,9 +371,9 @@ program
 
 // ── today / week / month ──────────────────────────────────────────────────────
 
-program.command('today').description('Cost summary for today').action(async () => { await autoSync(); printSummary('Today', 'today') })
-program.command('week').description('Cost summary for this week').action(async () => { await autoSync(); printSummary('This Week', 'week') })
-program.command('month').description('Cost summary for this month').action(async () => { await autoSync(); printSummary('This Month', 'month') })
+program.command('today').description('Cost summary for today').action(async () => { await autoSync(); await printSummary('Today', 'today') })
+program.command('week').description('Cost summary for this week').action(async () => { await autoSync(); await printSummary('This Week', 'week') })
+program.command('month').description('Cost summary for this month').action(async () => { await autoSync(); await printSummary('This Month', 'month') })
 
 // ── sessions ──────────────────────────────────────────────────────────────────
 
@@ -373,17 +392,27 @@ program
     const limit = parsePositiveCliInteger(opts.limit ?? '20', '--limit')
     const agent = parseOptionalCliAgent(opts.agent)
     await autoSync()
-    const db = openDatabase()
     const sinceDate = opts.since ? parseSinceDate(opts.since) : undefined
-    let sessions = querySessions(db, {
-      agent,
-      project: opts.project,
-      account: opts.account,
-      machine: opts.machine,
-      limit,
-      since: sinceDate,
-      search: opts.search,
-    })
+    const cloud = economyCloudStorage()
+    let sessions: EconomySession[] = cloud.active
+      ? await cloudListItems<EconomySession>(cloud, 'sessions', {
+          agent,
+          project: opts.project,
+          account: opts.account,
+          machine: opts.machine,
+          limit,
+          since: sinceDate,
+          search: opts.search,
+        })
+      : querySessions(openDatabase(), {
+          agent,
+          project: opts.project,
+          account: opts.account,
+          machine: opts.machine,
+          limit,
+          since: sinceDate,
+          search: opts.search,
+        })
     if (sessions.length === 0) { console.log(chalk.yellow('No sessions found.')); return }
     const f = opts.format ?? 'table'
     if (f === 'compact') {
@@ -420,12 +449,14 @@ program
   .option('-n <n>', 'Number of sessions', '10')
   .option('--agent <agent>', 'Filter by agent')
   .option('--since <date>', 'Filter sessions since date or relative (e.g. 2026-03-01, 7d, 30d)')
-  .action((opts: { n?: string; agent?: string; since?: string }) => {
+  .action(async (opts: { n?: string; agent?: string; since?: string }) => {
     const count = parsePositiveCliInteger(opts.n ?? '10', '-n')
     const agent = parseOptionalCliAgent(opts.agent)
-    const db = openDatabase()
     const sinceDate = opts.since ? parseSinceDate(opts.since) : undefined
-    const sessions = queryTopSessions(db, count, agent, sinceDate)
+    const cloud = economyCloudStorage()
+    const sessions = cloud.active
+      ? await cloudListItems<EconomySession>(cloud, 'top', { n: count, agent, since: sinceDate })
+      : queryTopSessions(openDatabase(), count, agent, sinceDate)
     if (sessions.length === 0) {
       console.log(chalk.yellow('No sessions found. Run `economy sync` first.'))
       return
@@ -452,13 +483,16 @@ program
   .description('Cost breakdown by model, agent, project, or account')
   .option('--by <dimension>', 'Dimension: model|agent|project|account', 'model')
   .option('--since <date>', 'Filter since date or relative (e.g. 2026-03-01, 7d, 30d)')
-  .action((opts: { by?: string; since?: string }) => {
-    const db = openDatabase()
+  .action(async (opts: { by?: string; since?: string }) => {
+    const cloud = economyCloudStorage()
+    const db = cloud.active ? undefined : openDatabase()
     const sinceDate = opts.since ? parseSinceDate(opts.since) : undefined
     console.log()
     if (opts.by === 'project') {
-      const rows = sinceDate
-        ? db.prepare(`
+      const rows = cloud.active
+        ? await cloudListItems<ProjectBreakdown>(cloud, 'breakdown', { by: 'project', since: sinceDate })
+        : sinceDate
+        ? db!.prepare(`
           SELECT project_path, project_name,
                  COUNT(*) as sessions,
                  COALESCE(SUM(total_tokens), 0) as total_tokens,
@@ -468,7 +502,7 @@ program
           FROM sessions WHERE started_at >= ?
           GROUP BY project_path ORDER BY cost_usd DESC
         `).all(sinceDate) as Array<{ project_path: string; project_name: string; sessions: number; total_tokens: number; requests: number; cost_usd: number; last_active: string }>
-        : queryProjectBreakdown(db)
+        : queryProjectBreakdown(db!)
       printTable(
         ['Project', 'Sessions', 'Requests', 'Tokens', 'Cost'],
         rows.map(r => [
@@ -480,8 +514,10 @@ program
         ]),
       )
     } else if (opts.by === 'agent') {
-      const rows = sinceDate
-        ? db.prepare(`
+      const rows = cloud.active
+        ? await cloudListItems<AgentBreakdown>(cloud, 'breakdown', { by: 'agent', since: sinceDate })
+        : sinceDate
+        ? db!.prepare(`
           SELECT agent,
                  COUNT(DISTINCT session_id) as sessions,
                  COUNT(*) as requests,
@@ -495,7 +531,7 @@ program
           GROUP BY agent
           ORDER BY api_equivalent_usd DESC
         `).all(sinceDate) as Array<{ agent: string; sessions: number; requests: number; total_tokens: number; api_equivalent_usd: number; billable_usd: number; subscription_included_usd: number }>
-        : queryAgentBreakdown(db)
+        : queryAgentBreakdown(db!)
       printTable(
         ['Agent', 'Sessions', 'Requests', 'Tokens', 'API Eq', 'Billable', 'Included'],
         rows.map(r => [
@@ -509,8 +545,10 @@ program
         ]),
       )
     } else if (opts.by === 'account') {
-      const rows = sinceDate
-        ? db.prepare(`
+      const rows = cloud.active
+        ? await cloudListItems<AccountBreakdown>(cloud, 'breakdown', { by: 'account', since: sinceDate })
+        : sinceDate
+        ? db!.prepare(`
           WITH request_rows AS (
             SELECT
               r.session_id as session_id,
@@ -610,11 +648,13 @@ program
           GROUP BY account_key, account_tool, account_email
           ORDER BY api_equivalent_usd DESC
         `).all(sinceDate, sinceDate) as AccountBreakdown[]
-        : queryAccountBreakdown(db)
+        : queryAccountBreakdown(db!)
       printAccountBreakdown(rows)
     } else {
-      const rows = sinceDate
-        ? db.prepare(`
+      const rows = cloud.active
+        ? await cloudListItems<ModelBreakdown>(cloud, 'breakdown', { by: 'model', since: sinceDate })
+        : sinceDate
+        ? db!.prepare(`
           SELECT model, agent,
                  COUNT(*) as requests,
                  COALESCE(SUM(input_tokens), 0) as input_tokens,
@@ -624,7 +664,7 @@ program
           FROM requests WHERE timestamp >= ?
           GROUP BY model, agent ORDER BY cost_usd DESC
         `).all(sinceDate) as Array<{ model: string; agent: string; requests: number; total_tokens: number; cost_usd: number }>
-        : queryModelBreakdown(db)
+        : queryModelBreakdown(db!)
       printTable(
         ['Model', 'Agent', 'Requests', 'Tokens', 'Cost'],
         rows.map(r => [
@@ -647,9 +687,12 @@ program
   .command('accounts [period]')
   .description('List account usage by email address and coding agent')
   .option('--json', 'Output JSON')
-  .action((periodArg: string | undefined, opts: { json?: boolean }) => {
+  .action(async (periodArg: string | undefined, opts: { json?: boolean }) => {
     const period = requireCliChoice(periodArg, 'period', ACCOUNT_PERIODS)
-    const rows = queryAccountBreakdown(openDatabase(), period)
+    const cloud = economyCloudStorage()
+    const rows = cloud.active
+      ? await cloudListItems<AccountBreakdown>(cloud, 'accounts', { period })
+      : queryAccountBreakdown(openDatabase(), period)
 
     if (opts.json) {
       console.log(JSON.stringify(rows, null, 2))

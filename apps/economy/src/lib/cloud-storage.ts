@@ -64,3 +64,53 @@ export function economyCloudStorage(env: NodeJS.ProcessEnv = process.env): Econo
 export function resetEconomyCloudStorageCache(): void {
   cache = undefined;
 }
+
+/** Active cloud storage (narrowed so `client` is non-null). */
+export type ActiveEconomyCloudStorage = Extract<EconomyCloudStorage, { active: true }>;
+
+/** Query params accepted by the read helpers below. */
+export type CloudQuery = Record<string, string | number | boolean | null | undefined>;
+
+/** Drop undefined/null entries so we never send empty query params. */
+function cleanQuery(query?: CloudQuery): CloudQuery | undefined {
+  if (!query) return undefined;
+  const out: CloudQuery = {};
+  for (const [k, v] of Object.entries(query)) {
+    if (v !== undefined && v !== null && v !== "") out[k] = v;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * Read a collection resource from the cloud API and return the extracted array
+ * (the serve envelope's `data`/`items`). Used by the read commands (sessions,
+ * top, breakdown, accounts) so they render cloud data — never the local store —
+ * when the client is in self_hosted/cloud mode.
+ */
+export async function cloudListItems<T = unknown>(
+  storage: ActiveEconomyCloudStorage,
+  resource: string,
+  query?: CloudQuery,
+): Promise<T[]> {
+  const cleaned = cleanQuery(query);
+  const res = await storage.client.list<T>(resource, cleaned ? { query: cleaned } : {});
+  return res.items;
+}
+
+/**
+ * Read a single (non-collection) resource and return the unwrapped `data`
+ * payload (e.g. `/usage` -> `{ snapshots, summary }`). Falls back to the raw
+ * body if the server does not use the `{ data }` envelope.
+ */
+export async function cloudObject<T = unknown>(
+  storage: ActiveEconomyCloudStorage,
+  path: string,
+  query?: CloudQuery,
+): Promise<T> {
+  const cleaned = cleanQuery(query);
+  const raw = await storage.client.transport.get<unknown>(path, cleaned ? { query: cleaned } : {});
+  if (raw && typeof raw === "object" && "data" in (raw as Record<string, unknown>)) {
+    return (raw as { data: T }).data;
+  }
+  return raw as T;
+}
