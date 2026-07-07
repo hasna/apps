@@ -8,6 +8,11 @@
     "security-mcp": "bin/security-mcp.js",
     "security-serve": "bin/security-serve.js"
   },
+  "scripts": {
+    "check:secrets": "bun ../../src/cli/index.tsx oss-secrets-policy . --strict",
+    "prepublishOnly": "bun run check:secrets",
+    "release:check": "bun run check:secrets"
+  },
   "dependencies": {
     "@hasna/shield": "0.1.25"
   },

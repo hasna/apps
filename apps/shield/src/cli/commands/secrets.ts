@@ -23,6 +23,19 @@ function formatFinding(finding: FindingInput): string {
   return `  [${finding.severity}] ${location} ${finding.message}`;
 }
 
+function redactFinding(finding: FindingInput): FindingInput {
+  return {
+    rule_id: finding.rule_id,
+    scanner_type: finding.scanner_type,
+    severity: finding.severity,
+    file: finding.file,
+    line: finding.line,
+    column: finding.column,
+    end_line: finding.end_line,
+    message: finding.message.replace(/: [A-Za-z0-9+/=_-]{8,}\.\.\./g, " redacted."),
+  };
+}
+
 function printTerminalSummary(
   scanPath: string,
   findings: FindingInput[],
@@ -100,7 +113,7 @@ export function registerSecretsCommand(program: Command): void {
           include_tmux: includeTmux,
         });
 
-        const filtered = filterSecretExposureBySeverity(result.findings, severityThreshold);
+        const filtered = filterSecretExposureBySeverity(result.findings, severityThreshold).map(redactFinding);
         const enabledSources = [
           "files",
           options.gitHistory ? "git-history" : null,
