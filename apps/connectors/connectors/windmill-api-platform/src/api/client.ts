@@ -1,27 +1,35 @@
 import {
   WindmillApiPlatformApiError,
   type WindmillApiPlatformConfig,
-  type ItemRecord,
-  type EventRecord,
-  type SearchRequest,
+  type QueryParams,
   type RawRequestOptions,
+  type RunScriptOptions,
 } from '../types';
 
-export const DEFAULT_BASE_URL = 'https://api.windmillapiplatform.com/v1';
+export const DEFAULT_BASE_URL: string | undefined = undefined;
 
 export class WindmillApiPlatformClient {
   private readonly apiKey: string;
   private readonly baseUrl: string;
+  private readonly workspace: string;
 
   constructor(config: WindmillApiPlatformConfig) {
     if (!config.apiKey) {
       throw new Error('API key is required');
     }
+    const baseUrl = config.baseUrl || DEFAULT_BASE_URL;
+    if (!baseUrl) {
+      throw new Error('Windmill API Platform baseUrl is required');
+    }
+    if (!config.workspace) {
+      throw new Error('Windmill API Platform workspace is required');
+    }
     this.apiKey = config.apiKey;
-    this.baseUrl = (config.baseUrl || DEFAULT_BASE_URL).replace(/\/$/, '');
+    this.baseUrl = baseUrl.replace(/\/$/, '');
+    this.workspace = config.workspace;
   }
 
-  buildUrl(path: string, query?: Record<string, string | number | boolean | undefined>): string {
+  buildUrl(path: string, query?: QueryParams): string {
     const normalizedPath = path.startsWith('/') ? path : `/${path}`;
     const url = new URL(`${this.baseUrl}${normalizedPath}`);
     if (query) {
@@ -34,9 +42,18 @@ export class WindmillApiPlatformClient {
     return url.toString();
   }
 
+  private workspacePath(path: string): string {
+    const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+    return `/w/${encodeURIComponent(this.workspace)}${normalizedPath}`;
+  }
+
+  private pathParam(path: string): string {
+    return encodeURIComponent(path);
+  }
+
   private async request<T>(
     path: string,
-    options: RequestInit & { query?: Record<string, string | number | boolean | undefined> } = {}
+    options: RequestInit & { query?: QueryParams } = {}
   ): Promise<T> {
     const { query, ...fetchOptions } = options;
     const url = this.buildUrl(path, query);
@@ -79,40 +96,62 @@ export class WindmillApiPlatformClient {
       return undefined as T;
     }
 
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      return text as T;
+    }
+
     return JSON.parse(text) as T;
   }
 
-  async listItems(query?: Record<string, string | number | boolean | undefined>): Promise<unknown> {
-    return this.request('/items', { query });
+  async listScripts(query?: QueryParams): Promise<unknown> {
+    return this.request(this.workspacePath('/scripts/list'), { query });
   }
 
-  async createItem(body: ItemRecord): Promise<unknown> {
-    return this.request('/items', {
+  async getScript(path: string): Promise<unknown> {
+    return this.request(this.workspacePath(`/scripts/get/p/${this.pathParam(path)}`));
+  }
+
+  async runScript(options: RunScriptOptions): Promise<unknown> {
+    return this.request(this.workspacePath(`/jobs/run/p/${this.pathParam(options.path)}`), {
       method: 'POST',
-      body: JSON.stringify(body),
+      query: options.query,
+      body: JSON.stringify(options.args ?? {}),
     });
   }
 
-  async getItem(itemId: string): Promise<unknown> {
-    const encodedId = encodeURIComponent(itemId);
-    return this.request(`/items/${encodedId}`);
-  }
-
-  async listEvents(query?: Record<string, string | number | boolean | undefined>): Promise<unknown> {
-    return this.request('/events', { query });
-  }
-
-  async search(body: SearchRequest): Promise<unknown> {
-    return this.request('/search', {
+  async runScriptAndWait(options: RunScriptOptions): Promise<unknown> {
+    return this.request(this.workspacePath(`/jobs/run_wait_result/p/${this.pathParam(options.path)}`), {
       method: 'POST',
-      body: JSON.stringify(body),
+      query: options.query,
+      body: JSON.stringify(options.args ?? {}),
     });
+  }
+
+  async listFlows(query?: QueryParams): Promise<unknown> {
+    return this.request(this.workspacePath('/flows/list'), { query });
+  }
+
+  async getFlow(path: string): Promise<unknown> {
+    return this.request(this.workspacePath(`/flows/get/${this.pathParam(path)}`));
+  }
+
+  async listResources(query?: QueryParams): Promise<unknown> {
+    return this.request(this.workspacePath('/resources/list'), { query });
+  }
+
+  async getResource(path: string): Promise<unknown> {
+    return this.request(this.workspacePath(`/resources/get/${this.pathParam(path)}`));
+  }
+
+  async listJobs(query?: QueryParams): Promise<unknown> {
+    return this.request(this.workspacePath('/jobs/list'), { query });
   }
 
   async rawRequest(options: RawRequestOptions): Promise<unknown> {
     const method = (options.method || 'GET').toUpperCase();
     const path = options.path.startsWith('/') ? options.path : `/${options.path}`;
-    const init: RequestInit & { query?: Record<string, string | number | boolean | undefined> } = {
+    const init: RequestInit & { query?: QueryParams } = {
       method,
       query: options.query,
       headers: options.headers,

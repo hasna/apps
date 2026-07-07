@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Windmill Api Platform connector CLI — a TypeScript wrapper for the Windmill Api Platform REST API (`https://api.windmillapiplatform.com/v1`). Provides multi-profile configuration, Bearer token authentication, and Commander.js CLI commands.
+Windmill API Platform connector CLI - a TypeScript wrapper for workspace-scoped Windmill REST APIs. Provides multi-profile configuration, Bearer token authentication, and Commander.js CLI commands.
 
 ## Build & Run Commands
 
@@ -29,19 +29,23 @@ Credentials via environment or profile config:
 | Variable | Description |
 |----------|-------------|
 | `WINDMILL_API_PLATFORM_API_KEY` | API key (overrides profile) |
-| `WINDMILL_API_PLATFORM_BASE_URL` | Optional base URL override |
+| `WINDMILL_API_PLATFORM_BASE_URL` | Required Windmill API base URL, e.g. `https://windmill.example.com/api` |
+| `WINDMILL_API_PLATFORM_WORKSPACE` | Required workspace id |
 
 ## CLI Commands
 
 ```bash
 connect-windmill-api-platform profile list
 connect-windmill-api-platform config set-key <key>
-connect-windmill-api-platform items list
-connect-windmill-api-platform items get <itemId>
-connect-windmill-api-platform items create --body '{"name":"example"}'
-connect-windmill-api-platform events list
-connect-windmill-api-platform search --body '{"query":"example"}'
-connect-windmill-api-platform raw-request --path /items --method GET
+connect-windmill-api-platform config set-base-url https://windmill.example.com/api
+connect-windmill-api-platform config set-workspace <workspace>
+connect-windmill-api-platform scripts list
+connect-windmill-api-platform scripts get u/admin/script
+connect-windmill-api-platform scripts run-wait u/admin/script --body '{"name":"example"}'
+connect-windmill-api-platform flows list
+connect-windmill-api-platform resources list
+connect-windmill-api-platform jobs list
+connect-windmill-api-platform raw-request --path /w/<workspace>/scripts/list --method GET
 ```
 
 ## Data Storage
@@ -58,17 +62,19 @@ Profile JSON:
 ```json
 {
   "apiKey": "your-api-key",
-  "baseUrl": "https://api.windmillapiplatform.com/v1"
+  "baseUrl": "https://your-windmill.example.com/api",
+  "workspace": "your-workspace"
 }
 ```
 
 ## API Operations
 
-- `GET /items` — list items
-- `POST /items` — create item
-- `GET /items/:id` — get item
-- `GET /events` — list events
-- `POST /search` — search
+- `GET /w/{workspace}/scripts/list` - list scripts
+- `GET /w/{workspace}/scripts/get/p/{path}` - get a script
+- `POST /w/{workspace}/jobs/run_wait_result/p/{path}` - run a script and wait for the result
+- `GET /w/{workspace}/flows/list` - list flows
+- `GET /w/{workspace}/resources/list` - list resources
+- `GET /w/{workspace}/jobs/list` - list jobs
 - `raw-request` — arbitrary path/method
 
 ## Dependencies

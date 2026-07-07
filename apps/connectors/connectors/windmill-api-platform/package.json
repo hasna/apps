@@ -1,7 +1,7 @@
 {
   "name": "@hasna/connect-windmill-api-platform",
   "version": "0.0.1",
-  "description": "Windmill Api Platform connector CLI - REST API integration with multi-profile support",
+  "description": "Windmill API Platform connector CLI - tenant runtime REST API integration",
   "type": "module",
   "bin": {
     "connect-windmill-api-platform": "./bin/index.js"
@@ -15,7 +15,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun",
+    "build": "tsc --emitDeclarationOnly && bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun",
     "dev": "bun run ./src/cli/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
@@ -47,6 +47,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/open-connectors.git"
+    "url": "git+https://github.com/hasna/connectors.git"
   }
 }

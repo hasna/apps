@@ -1,8 +1,8 @@
 import type {
   WindmillApiPlatformConfig,
-  ItemRecord,
-  SearchRequest,
+  QueryParams,
   RawRequestOptions,
+  RunScriptOptions,
 } from '../types';
 import { WindmillApiPlatformClient } from './client';
 
@@ -13,24 +13,40 @@ export class WindmillApiPlatform {
     this.client = new WindmillApiPlatformClient(config);
   }
 
-  async listItems(query?: Record<string, string | number | boolean | undefined>): Promise<unknown> {
-    return this.client.listItems(query);
+  async listScripts(query?: QueryParams): Promise<unknown> {
+    return this.client.listScripts(query);
   }
 
-  async createItem(body: ItemRecord): Promise<unknown> {
-    return this.client.createItem(body);
+  async getScript(path: string): Promise<unknown> {
+    return this.client.getScript(path);
   }
 
-  async getItem(itemId: string): Promise<unknown> {
-    return this.client.getItem(itemId);
+  async runScript(options: RunScriptOptions): Promise<unknown> {
+    return this.client.runScript(options);
   }
 
-  async listEvents(query?: Record<string, string | number | boolean | undefined>): Promise<unknown> {
-    return this.client.listEvents(query);
+  async runScriptAndWait(options: RunScriptOptions): Promise<unknown> {
+    return this.client.runScriptAndWait(options);
   }
 
-  async search(body: SearchRequest): Promise<unknown> {
-    return this.client.search(body);
+  async listFlows(query?: QueryParams): Promise<unknown> {
+    return this.client.listFlows(query);
+  }
+
+  async getFlow(path: string): Promise<unknown> {
+    return this.client.getFlow(path);
+  }
+
+  async listResources(query?: QueryParams): Promise<unknown> {
+    return this.client.listResources(query);
+  }
+
+  async getResource(path: string): Promise<unknown> {
+    return this.client.getResource(path);
+  }
+
+  async listJobs(query?: QueryParams): Promise<unknown> {
+    return this.client.listJobs(query);
   }
 
   async rawRequest(options: RawRequestOptions): Promise<unknown> {
@@ -42,9 +58,18 @@ export class WindmillApiPlatform {
     if (!apiKey) {
       throw new Error('WINDMILL_API_PLATFORM_API_KEY environment variable is required');
     }
+    const baseUrl = process.env.WINDMILL_API_PLATFORM_BASE_URL;
+    if (!baseUrl) {
+      throw new Error('WINDMILL_API_PLATFORM_BASE_URL environment variable is required');
+    }
+    const workspace = process.env.WINDMILL_API_PLATFORM_WORKSPACE;
+    if (!workspace) {
+      throw new Error('WINDMILL_API_PLATFORM_WORKSPACE environment variable is required');
+    }
     return new WindmillApiPlatform({
       apiKey,
-      baseUrl: process.env.WINDMILL_API_PLATFORM_BASE_URL,
+      baseUrl,
+      workspace,
     });
   }
 

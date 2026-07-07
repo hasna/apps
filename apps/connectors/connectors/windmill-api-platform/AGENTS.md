@@ -1,10 +1,10 @@
 # AGENTS.md
 
-Guidance for AI agents working with the Windmill Api Platform connector.
+Guidance for AI agents working with the Windmill API Platform connector.
 
 ## Overview
 
-REST API connector for Windmill Api Platform (`api.windmillapiplatform.com`). Bearer token auth. No browser-use dependency.
+REST API connector for workspace-scoped Windmill APIs. Bearer token auth. No browser-use dependency.
 
 ## Commands
 
@@ -30,11 +30,11 @@ src/
 ## Auth
 
 - Bearer token: `WINDMILL_API_PLATFORM_API_KEY`
-- Optional base URL: `WINDMILL_API_PLATFORM_BASE_URL`
+- Required API base URL: `WINDMILL_API_PLATFORM_BASE_URL`
+- Required workspace id: `WINDMILL_API_PLATFORM_WORKSPACE`
 - Config dir: `~/.hasna/connectors/connect-windmill-api-platform/`
 
 ## Security
 
 - No hardcoded API keys
-- No internal references (beepmedia, hasnaxyz, alumia)
 - `.env.example` uses placeholders only

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 
@@ -8,6 +8,7 @@ const DEFAULT_PROFILE = 'default';
 export interface ProfileConfig {
   apiKey?: string;
   baseUrl?: string;
+  workspace?: string;
 }
 
 let profileOverride: string | undefined;
@@ -21,8 +22,24 @@ export function setProfileOverride(profile: string | undefined): void {
 }
 
 export function ensureConfigDir(): void {
-  if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true });
-  if (!existsSync(PROFILES_DIR)) mkdirSync(PROFILES_DIR, { recursive: true });
+  if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  if (!existsSync(PROFILES_DIR)) mkdirSync(PROFILES_DIR, { recursive: true, mode: 0o700 });
+  for (const dir of [CONFIG_DIR, PROFILES_DIR]) {
+    try {
+      chmodSync(dir, 0o700);
+    } catch {
+      // Best effort on filesystems that do not support POSIX modes.
+    }
+  }
+}
+
+function writePrivateFile(path: string, value: string): void {
+  writeFileSync(path, value, { mode: 0o600 });
+  try {
+    chmodSync(path, 0o600);
+  } catch {
+    // Best effort on filesystems that do not support POSIX modes.
+  }
 }
 
 function getProfilePath(profile: string): string {
@@ -46,7 +63,7 @@ export function setCurrentProfile(profile: string): void {
   if (!profileExists(profile) && profile !== DEFAULT_PROFILE) {
     throw new Error(`Profile "${profile}" does not exist`);
   }
-  writeFileSync(CURRENT_PROFILE_FILE, profile);
+  writePrivateFile(CURRENT_PROFILE_FILE, profile);
 }
 
 export function profileExists(profile: string): boolean {
@@ -65,7 +82,7 @@ export function createProfile(profile: string, config: ProfileConfig = {}): bool
   if (!/^[a-zA-Z0-9_-]+$/.test(profile)) {
     throw new Error('Profile name can only contain letters, numbers, hyphens, and underscores');
   }
-  writeFileSync(getProfilePath(profile), JSON.stringify(config, null, 2));
+  writePrivateFile(getProfilePath(profile), JSON.stringify(config, null, 2));
   return true;
 }
 
@@ -86,7 +103,7 @@ export function loadProfile(profile?: string): ProfileConfig {
 
 export function saveProfile(config: ProfileConfig, profile?: string): void {
   ensureConfigDir();
-  writeFileSync(getProfilePath(profile || getCurrentProfile()), JSON.stringify(config, null, 2));
+  writePrivateFile(getProfilePath(profile || getCurrentProfile()), JSON.stringify(config, null, 2));
 }
 
 export function getApiKey(): string | undefined {
@@ -95,6 +112,10 @@ export function getApiKey(): string | undefined {
 
 export function getBaseUrl(): string | undefined {
   return process.env.WINDMILL_API_PLATFORM_BASE_URL || loadProfile().baseUrl;
+}
+
+export function getWorkspace(): string | undefined {
+  return process.env.WINDMILL_API_PLATFORM_WORKSPACE || loadProfile().workspace;
 }
 
 export function setApiKey(apiKey: string): void {
@@ -106,6 +127,12 @@ export function setApiKey(apiKey: string): void {
 export function setBaseUrl(baseUrl: string): void {
   const config = loadProfile();
   config.baseUrl = baseUrl;
+  saveProfile(config);
+}
+
+export function setWorkspace(workspace: string): void {
+  const config = loadProfile();
+  config.workspace = workspace;
   saveProfile(config);
 }
 

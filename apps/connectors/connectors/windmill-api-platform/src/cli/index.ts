@@ -6,8 +6,10 @@ import { WindmillApiPlatform } from '../api';
 import {
   getApiKey,
   getBaseUrl,
+  getWorkspace,
   setApiKey,
   setBaseUrl,
+  setWorkspace,
   clearConfig,
   getConfigDir,
   setProfileOverride,
@@ -21,7 +23,7 @@ import {
 } from '../utils/config';
 import type { OutputFormat } from '../utils/output';
 import { success, error, info, print } from '../utils/output';
-import type { ItemRecord, SearchRequest } from '../types';
+import type { QueryParams } from '../types';
 
 const CONNECTOR_NAME = 'connect-windmill-api-platform';
 const VERSION = '0.0.1';
@@ -30,9 +32,11 @@ const program = new Command();
 
 program
   .name(CONNECTOR_NAME)
-  .description('Windmill Api Platform connector CLI - REST API integration with multi-profile support')
+  .description('Windmill API Platform connector CLI - workspace REST API integration')
   .version(VERSION)
   .option('-k, --api-key <key>', 'API key (overrides config)')
+  .option('-b, --base-url <url>', 'Windmill API base URL, e.g. https://windmill.example.com/api')
+  .option('-w, --workspace <workspace>', 'Windmill workspace id (overrides config)')
   .option('-f, --format <format>', 'Output format (json, pretty)', 'pretty')
   .option('-p, --profile <profile>', 'Use a specific profile')
   .hook('preAction', (thisCommand) => {
@@ -47,11 +51,16 @@ program
     if (opts.apiKey) {
       process.env.WINDMILL_API_PLATFORM_API_KEY = opts.apiKey;
     }
+    if (opts.baseUrl) {
+      process.env.WINDMILL_API_PLATFORM_BASE_URL = opts.baseUrl;
+    }
+    if (opts.workspace) {
+      process.env.WINDMILL_API_PLATFORM_WORKSPACE = opts.workspace;
+    }
   });
 
-function getFormat(cmd: Command): OutputFormat {
-  const parent = cmd.parent;
-  return (parent?.opts().format || 'pretty') as OutputFormat;
+function getFormat(): OutputFormat {
+  return (program.opts().format || 'pretty') as OutputFormat;
 }
 
 function getClient(): WindmillApiPlatform {
@@ -60,11 +69,21 @@ function getClient(): WindmillApiPlatform {
     error(`No API key configured. Run "${CONNECTOR_NAME} config set-key <key>" or set WINDMILL_API_PLATFORM_API_KEY.`);
     process.exit(1);
   }
-  return new WindmillApiPlatform({ apiKey, baseUrl: getBaseUrl() });
+  const baseUrl = getBaseUrl();
+  if (!baseUrl) {
+    error(`No base URL configured. Run "${CONNECTOR_NAME} config set-base-url <url>" or set WINDMILL_API_PLATFORM_BASE_URL.`);
+    process.exit(1);
+  }
+  const workspace = getWorkspace();
+  if (!workspace) {
+    error(`No workspace configured. Run "${CONNECTOR_NAME} config set-workspace <workspace>" or set WINDMILL_API_PLATFORM_WORKSPACE.`);
+    process.exit(1);
+  }
+  return new WindmillApiPlatform({ apiKey, baseUrl, workspace });
 }
 
-function parseQueryPairs(pairs: string[] | undefined): Record<string, string> {
-  const query: Record<string, string> = {};
+function parseQueryPairs(pairs: string[] | undefined): QueryParams {
+  const query: QueryParams = {};
   for (const pair of pairs || []) {
     const [key, ...rest] = pair.split('=');
     if (key) query[key] = rest.join('=');
@@ -80,6 +99,13 @@ function parseJsonOption(value: string | undefined, label: string): Record<strin
     error(`Invalid JSON for ${label}`);
     process.exit(1);
   }
+}
+
+function readBody(opts: { body?: string; file?: string }): Record<string, unknown> {
+  if (opts.file) {
+    return JSON.parse(readFileSync(opts.file, 'utf-8')) as Record<string, unknown>;
+  }
+  return parseJsonOption(opts.body, 'body');
 }
 
 // Profile commands
@@ -112,14 +138,15 @@ profileCmd
   .command('create <name>')
   .description('Create a new profile')
   .option('--api-key <key>', 'API key')
-  .option('--base-url <url>', 'API base URL')
+  .option('--base-url <url>', 'Windmill API base URL')
+  .option('--workspace <workspace>', 'Windmill workspace id')
   .option('--use', 'Switch to this profile after creation')
   .action((name: string, opts) => {
     if (profileExists(name)) {
       error(`Profile "${name}" already exists`);
       process.exit(1);
     }
-    createProfile(name, { apiKey: opts.apiKey, baseUrl: opts.baseUrl });
+    createProfile(name, { apiKey: opts.apiKey, baseUrl: opts.baseUrl, workspace: opts.workspace });
     success(`Profile "${name}" created`);
     if (opts.use) {
       setCurrentProfile(name);
@@ -146,7 +173,8 @@ profileCmd.command('show [name]').description('Show profile configuration').acti
   const active = getCurrentProfile();
   console.log(chalk.bold(`Profile: ${profileName}${profileName === active ? chalk.green(' (active)') : ''}`));
   info(`API Key: ${config.apiKey ? `${config.apiKey.substring(0, 8)}...` : chalk.gray('not set')}`);
-  info(`Base URL: ${config.baseUrl || chalk.gray('default')}`);
+  info(`Base URL: ${config.baseUrl || chalk.gray('not set')}`);
+  info(`Workspace: ${config.workspace || chalk.gray('not set')}`);
 });
 
 // Config commands
@@ -157,9 +185,14 @@ configCmd.command('set-key <apiKey>').description('Set API key').action((apiKey:
   success(`API key saved to profile: ${getCurrentProfile()}`);
 });
 
-configCmd.command('set-base-url <url>').description('Set API base URL').action((url: string) => {
+configCmd.command('set-base-url <url>').description('Set Windmill API base URL').action((url: string) => {
   setBaseUrl(url);
   success(`Base URL saved to profile: ${getCurrentProfile()}`);
+});
+
+configCmd.command('set-workspace <workspace>').description('Set Windmill workspace id').action((workspace: string) => {
+  setWorkspace(workspace);
+  success(`Workspace saved to profile: ${getCurrentProfile()}`);
 });
 
 configCmd.command('show').description('Show current configuration').action(() => {
@@ -168,7 +201,8 @@ configCmd.command('show').description('Show current configuration').action(() =>
   console.log(chalk.bold(`Active Profile: ${profileName}`));
   info(`Config directory: ${getConfigDir()}`);
   info(`API Key: ${apiKey ? `${apiKey.substring(0, 8)}...` : chalk.gray('not set')}`);
-  info(`Base URL: ${getBaseUrl() || chalk.gray('default (https://api.windmillapiplatform.com/v1)')}`);
+  info(`Base URL: ${getBaseUrl() || chalk.gray('not set')}`);
+  info(`Workspace: ${getWorkspace() || chalk.gray('not set')}`);
 });
 
 configCmd.command('clear').description('Clear configuration for active profile').action(() => {
@@ -176,95 +210,141 @@ configCmd.command('clear').description('Clear configuration for active profile')
   success(`Configuration cleared for profile: ${getCurrentProfile()}`);
 });
 
-// Items commands
-const itemsCmd = program.command('items').description('Item operations');
+// Scripts commands
+const scriptsCmd = program.command('scripts').description('Manage Windmill scripts');
 
-itemsCmd
+scriptsCmd
   .command('list')
-  .description('List items')
+  .description('List scripts')
   .option('-q, --query <pair...>', 'Query parameters as key=value')
   .action(async (opts) => {
     try {
-      const client = getClient();
-      const result = await client.listItems(parseQueryPairs(opts.query));
-      print(result, getFormat(itemsCmd));
+      const result = await getClient().listScripts(parseQueryPairs(opts.query));
+      print(result, getFormat());
     } catch (err) {
       error(String(err));
       process.exit(1);
     }
   });
 
-itemsCmd
-  .command('create')
-  .description('Create an item')
-  .option('-b, --body <json>', 'Item JSON body')
-  .option('-f, --file <path>', 'JSON file with item body')
-  .action(async (opts) => {
+scriptsCmd
+  .command('get <path>')
+  .description('Get a script by path')
+  .action(async (path: string) => {
     try {
-      let body: Record<string, unknown> = {};
-      if (opts.file) {
-        body = JSON.parse(readFileSync(opts.file, 'utf-8')) as Record<string, unknown>;
-      } else {
-        body = parseJsonOption(opts.body, 'body');
-      }
-      const client = getClient();
-      const result = await client.createItem(body as ItemRecord);
-      print(result, getFormat(itemsCmd));
+      const result = await getClient().getScript(path);
+      print(result, getFormat());
     } catch (err) {
       error(String(err));
       process.exit(1);
     }
   });
 
-itemsCmd
-  .command('get <itemId>')
-  .description('Get an item by ID')
-  .action(async (itemId: string) => {
+scriptsCmd
+  .command('run <path>')
+  .description('Run a script by path and return the job id')
+  .option('-b, --body <json>', 'Script args JSON body')
+  .option('-f, --file <path>', 'JSON file with script args')
+  .option('-q, --query <pair...>', 'Query parameters as key=value')
+  .action(async (path: string, opts) => {
     try {
-      const client = getClient();
-      const result = await client.getItem(itemId);
-      print(result, getFormat(itemsCmd));
+      const result = await getClient().runScript({
+        path,
+        args: readBody(opts),
+        query: parseQueryPairs(opts.query),
+      });
+      print(result, getFormat());
     } catch (err) {
       error(String(err));
       process.exit(1);
     }
   });
 
-// Events commands
-const eventsCmd = program.command('events').description('Event operations');
+scriptsCmd
+  .command('run-wait <path>')
+  .description('Run a script by path and wait for the result')
+  .option('-b, --body <json>', 'Script args JSON body')
+  .option('-f, --file <path>', 'JSON file with script args')
+  .option('-q, --query <pair...>', 'Query parameters as key=value')
+  .action(async (path: string, opts) => {
+    try {
+      const result = await getClient().runScriptAndWait({
+        path,
+        args: readBody(opts),
+        query: parseQueryPairs(opts.query),
+      });
+      print(result, getFormat());
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
 
-eventsCmd
+// Flows commands
+const flowsCmd = program.command('flows').description('Manage Windmill flows');
+
+flowsCmd
   .command('list')
-  .description('List events')
+  .description('List flows')
   .option('-q, --query <pair...>', 'Query parameters as key=value')
   .action(async (opts) => {
     try {
-      const client = getClient();
-      const result = await client.listEvents(parseQueryPairs(opts.query));
-      print(result, getFormat(eventsCmd));
+      const result = await getClient().listFlows(parseQueryPairs(opts.query));
+      print(result, getFormat());
     } catch (err) {
       error(String(err));
       process.exit(1);
     }
   });
 
-// Search command
-program
-  .command('search')
-  .description('Search the API')
-  .option('-b, --body <json>', 'Search request JSON body')
-  .option('-f, --file <path>', 'JSON file with search body')
+flowsCmd.command('get <path>').description('Get a flow by path').action(async (path: string) => {
+  try {
+    const result = await getClient().getFlow(path);
+    print(result, getFormat());
+  } catch (err) {
+    error(String(err));
+    process.exit(1);
+  }
+});
+
+// Resources commands
+const resourcesCmd = program.command('resources').description('Manage Windmill resources');
+
+resourcesCmd
+  .command('list')
+  .description('List resources')
+  .option('-q, --query <pair...>', 'Query parameters as key=value')
   .action(async (opts) => {
     try {
-      let body: Record<string, unknown> = {};
-      if (opts.file) {
-        body = JSON.parse(readFileSync(opts.file, 'utf-8')) as Record<string, unknown>;
-      } else {
-        body = parseJsonOption(opts.body, 'body');
-      }
-      const client = getClient();
-      const result = await client.search(body as SearchRequest);
-      print(result, program.opts().format as OutputFormat);
+      const result = await getClient().listResources(parseQueryPairs(opts.query));
+      print(result, getFormat());
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+resourcesCmd.command('get <path>').description('Get a resource by path').action(async (path: string) => {
+  try {
+    const result = await getClient().getResource(path);
+    print(result, getFormat());
+  } catch (err) {
+    error(String(err));
+    process.exit(1);
+  }
+});
+
+// Jobs commands
+const jobsCmd = program.command('jobs').description('Inspect Windmill jobs');
+
+jobsCmd
+  .command('list')
+  .description('List jobs')
+  .option('-q, --query <pair...>', 'Query parameters as key=value')
+  .action(async (opts) => {
+    try {
+      const result = await getClient().listJobs(parseQueryPairs(opts.query));
+      print(result, getFormat());
     } catch (err) {
       error(String(err));
       process.exit(1);
@@ -274,8 +354,8 @@ program
 // Raw request command
 program
   .command('raw-request')
-  .description('Send an arbitrary API request')
-  .requiredOption('-p, --path <path>', 'API path (e.g. /items)')
+  .description('Send an arbitrary Windmill API request')
+  .requiredOption('-p, --path <path>', 'API path (e.g. /w/<workspace>/scripts/list)')
   .option('-m, --method <method>', 'HTTP method', 'GET')
   .option('-b, --body <json>', 'Request JSON body')
   .option('-f, --file <path>', 'JSON file with request body')
@@ -288,14 +368,13 @@ program
       } else if (opts.body) {
         body = parseJsonOption(opts.body, 'body');
       }
-      const client = getClient();
-      const result = await client.rawRequest({
+      const result = await getClient().rawRequest({
         method: opts.method,
         path: opts.path,
         body,
         query: parseQueryPairs(opts.query),
       });
-      print(result, program.opts().format as OutputFormat);
+      print(result, getFormat());
     } catch (err) {
       error(String(err));
       process.exit(1);

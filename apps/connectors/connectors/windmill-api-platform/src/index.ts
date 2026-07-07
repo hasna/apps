@@ -1,5 +1,5 @@
-// Windmill Api Platform Connector
-// TypeScript wrapper for the Windmill Api Platform REST API
+// Windmill API Platform Connector
+// TypeScript wrapper for workspace-scoped Windmill REST APIs
 
 export { WindmillApiPlatform } from './api';
 export * from './types';
@@ -10,6 +10,8 @@ export {
   setApiKey,
   getBaseUrl,
   setBaseUrl,
+  getWorkspace,
+  setWorkspace,
   getCurrentProfile,
   setCurrentProfile,
   listProfiles,
