@@ -89,4 +89,22 @@ describe('UpstashApiPlatformClient', () => {
     );
     expect(called).toBe(false);
   });
+
+  test('refuses paths that could rewrite the authenticated host', async () => {
+    let called = false;
+    globalThis.fetch = (async () => {
+      called = true;
+      throw new Error('fetch should not be called');
+    }) as unknown as typeof fetch;
+
+    const client = new UpstashApiPlatformClient(config);
+
+    await expect(
+      client.get('@example.com/leak', undefined, { baseUrl: 'https://api.upstash.com' }),
+    ).rejects.toThrow('Upstash API path must start with "/"');
+    await expect(
+      client.get('//example.com/leak', undefined, { baseUrl: 'https://api.upstash.com' }),
+    ).rejects.toThrow('Refusing to send Upstash credentials to a non-Upstash API host');
+    expect(called).toBe(false);
+  });
 });

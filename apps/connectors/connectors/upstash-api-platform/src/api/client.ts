@@ -38,7 +38,14 @@ export class UpstashApiPlatformClient {
     baseUrl: string,
     params?: Record<string, string | number | boolean | undefined>,
   ): string {
-    const url = new URL(`${baseUrl}${path}`);
+    const base = this.parseAllowedAuthenticatedBaseUrl(baseUrl);
+    if (!path.startsWith('/')) {
+      throw new Error('Upstash API path must start with "/"');
+    }
+
+    const basePath = base.pathname.replace(/\/+$/, '');
+    const url = new URL(`${basePath}${path}`, base.origin);
+    this.assertAllowedAuthenticatedUrl(url);
 
     if (params) {
       for (const [key, value] of Object.entries(params)) {
@@ -51,9 +58,13 @@ export class UpstashApiPlatformClient {
     return url.toString();
   }
 
-  private assertAllowedAuthenticatedBaseUrl(baseUrl: string): void {
+  private parseAllowedAuthenticatedBaseUrl(baseUrl: string): URL {
     const url = new URL(baseUrl);
+    this.assertAllowedAuthenticatedUrl(url);
+    return url;
+  }
 
+  private assertAllowedAuthenticatedUrl(url: URL): void {
     if (url.origin !== ALLOWED_AUTH_ORIGIN || url.username || url.password) {
       throw new Error('Refusing to send Upstash credentials to a non-Upstash API host');
     }
@@ -92,7 +103,6 @@ export class UpstashApiPlatformClient {
       retries = 2,
     } = options;
 
-    this.assertAllowedAuthenticatedBaseUrl(baseUrl);
     const url = this.buildUrl(path, baseUrl, params);
     const requestHeaders: Record<string, string> = {
       Authorization: this.getAuthHeader(),
