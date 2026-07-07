@@ -562,4 +562,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Data & Analytics",
     tags: ["scraping", "data", "api"],
   },
+  {
+    name: "specific",
+    displayName: "Specific",
+    description: "AI conversational survey and user-research platform",
+    category: "Data & Analytics",
+    tags: ["surveys", "user-research", "feedback", "analytics", "graphql"],
+  },
 ];
