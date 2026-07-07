@@ -4,7 +4,7 @@ import { homedir } from "os"
 import { join, resolve } from "path"
 import { existsSync, readFileSync, writeFileSync, readdirSync, statSync } from "fs"
 import { getPrompt } from "../../db/prompts.js"
-import { isJson, output, handleError } from "../utils.js"
+import { isJson, output, handleError, parseOffset, parsePositiveInt, printPageSummary } from "../utils.js"
 
 // Known AI agent config file locations
 // Each entry: agent name -> { global: path-relative-to-home, local: path-relative-to-cwd }
@@ -255,7 +255,10 @@ export function registerConfigCommands(program: Command): void {
     .option("--depth <n>", "Max directory depth to search for git repos", "3")
     .option("--agents <list>", "Comma-separated agents to check (default: all)")
     .option("--missing-only", "Only show repos with missing configs")
-    .action((workspace: string | undefined, opts: { depth?: string; agents?: string; missingOnly?: boolean }) => {
+    .option("-n, --limit <n>", "Max repo reports to show in human output", "20")
+    .option("-o, --offset <n>", "Skip first N repo reports", "0")
+    .option("--cursor <n>", "Alias for --offset")
+    .action((workspace: string | undefined, opts: { depth?: string; agents?: string; missingOnly?: boolean; limit?: string; offset?: string; cursor?: string }) => {
       try {
         const wsDir = workspace ? resolve(workspace) : resolve(homedir(), "workspace")
         if (!existsSync(wsDir)) handleError(program, `Workspace not found: ${wsDir}`)
@@ -321,7 +324,10 @@ export function registerConfigCommands(program: Command): void {
           return
         }
 
-        for (const r of reports) {
+        const limit = parsePositiveInt(opts.limit, 20)
+        const offset = parseOffset(opts as Record<string, string | boolean | undefined>)
+        const shown = reports.slice(offset, offset + limit)
+        for (const r of shown) {
           const rel = r.repo.replace(wsDir + "/", "")
           const status = r.missing_count === 0
             ? chalk.green(`✓ ${rel}`)
@@ -343,6 +349,15 @@ export function registerConfigCommands(program: Command): void {
         } else {
           console.log(chalk.green("✓ All checked repos have all config files."))
         }
+        printPageSummary({
+          shown: shown.length,
+          total: reports.length,
+          noun: "repo report",
+          limit,
+          offset,
+          hasMore: offset + shown.length < reports.length,
+          detailHint: "Use --json for full scan records.",
+        })
       } catch (e) { handleError(program, e) }
     })
 }

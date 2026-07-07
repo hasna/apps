@@ -1,9 +1,10 @@
 import { Command } from "commander"
 import chalk from "chalk"
-import { getPrompt, listPrompts, updatePrompt, deletePrompt, usePrompt, upsertPrompt, pinPrompt } from "../../db/prompts.js"
-import { searchPrompts, findSimilar } from "../../lib/search.js"
+import { getPrompt, listPrompts, listPromptsSlim, updatePrompt, deletePrompt, usePrompt, upsertPrompt, pinPrompt } from "../../db/prompts.js"
+import { searchPrompts, searchPromptsSlim, findSimilar } from "../../lib/search.js"
 import { renderTemplate, extractVariableInfo } from "../../lib/template.js"
-import { isJson, output, handleError, fmtPrompt, getActiveProjectId } from "../utils.js"
+import { isJson, output, handleError, fmtPrompt, fmtPromptDetail, fmtSearchResult, getActiveProjectId, parseOffset, parsePositiveInt, printPageSummary } from "../utils.js"
+import type { Prompt, SlimPrompt } from "../../types/index.js"
 
 export function registerPromptCommands(program: Command): void {
 
@@ -109,12 +110,14 @@ export function registerPromptCommands(program: Command): void {
   // ── get ─────────────────────────────────────────────────────────────────────
   program
     .command("get <id>")
+    .alias("show")
     .description("Get prompt details without incrementing use counter")
-    .action((id: string) => {
+    .option("--verbose", "Show the full body in human output")
+    .action((id: string, opts: { verbose?: boolean }) => {
       try {
         const prompt = getPrompt(id)
         if (!prompt) handleError(program, `Prompt not found: ${id}`)
-        output(program, isJson(program) ? prompt : fmtPrompt(prompt!))
+        output(program, isJson(program) ? prompt : fmtPromptDetail(prompt!, { verbose: opts.verbose }))
       } catch (e) {
         handleError(program, e)
       }
@@ -128,31 +131,45 @@ export function registerPromptCommands(program: Command): void {
     .option("-t, --tags <tags>", "Filter by tags (comma-separated)")
     .option("--templates", "Show only templates")
     .option("--recent", "Sort by recently used")
-    .option("-n, --limit <n>", "Max results", "50")
+    .option("-n, --limit <n>", "Max results (default: 20 human, 50 JSON)")
     .option("-o, --offset <n>", "Skip first N results", "0")
+    .option("--cursor <n>", "Alias for --offset")
+    .option("--verbose", "Show more metadata per prompt")
     .action((opts: Record<string, string | boolean>) => {
       try {
         const project_id = getActiveProjectId(program)
-        let prompts = listPrompts({
+        const json = isJson(program)
+        const limit = parsePositiveInt(opts["limit"], json ? 50 : 20)
+        const offset = parseOffset(opts)
+        const filter = {
           collection: opts["collection"] as string | undefined,
           tags: opts["tags"] ? (opts["tags"] as string).split(",").map((t) => t.trim()) : undefined,
           is_template: opts["templates"] ? true : undefined,
-          limit: parseInt(opts["limit"] as string) || 50,
-          offset: parseInt((opts["offset"] as string | undefined) ?? "0") || 0,
+          limit: json ? limit : limit + 1,
+          offset,
           ...(project_id !== null ? { project_id } : {}),
-        })
+        }
+        let prompts: Array<Prompt | SlimPrompt> = json ? listPrompts(filter) : listPromptsSlim(filter)
         if (opts["recent"]) {
           prompts = prompts
             .filter((p) => p.last_used_at !== null)
             .sort((a, b) => (b.last_used_at ?? "").localeCompare(a.last_used_at ?? ""))
         }
-        if (isJson(program)) {
+        if (json) {
           output(program, prompts)
         } else if (prompts.length === 0) {
           console.log(chalk.gray("No prompts found."))
         } else {
-          for (const p of prompts) console.log(fmtPrompt(p))
-          console.log(chalk.gray(`\n${prompts.length} prompt(s)`))
+          const shown = prompts.slice(0, limit)
+          for (const p of shown) console.log(fmtPrompt(p, { verbose: Boolean(opts["verbose"]) }))
+          printPageSummary({
+            shown: shown.length,
+            noun: "prompt",
+            limit,
+            offset,
+            hasMore: prompts.length > limit,
+            detailHint: "Use --verbose for more metadata, --json for raw records, or `prompts show <id>` / `prompts body <id>` for details.",
+          })
         }
       } catch (e) {
         handleError(program, e)
@@ -165,31 +182,39 @@ export function registerPromptCommands(program: Command): void {
     .description("Full-text search across prompts (FTS5)")
     .option("-c, --collection <name>")
     .option("-t, --tags <tags>")
-    .option("-n, --limit <n>", "Max results", "20")
+    .option("-n, --limit <n>", "Max results (default: 10 human, 20 JSON)")
     .option("-o, --offset <n>", "Skip first N results", "0")
+    .option("--cursor <n>", "Alias for --offset")
+    .option("--verbose", "Show more metadata and longer snippets")
     .action((query: string, opts: Record<string, string>) => {
       try {
         const project_id = getActiveProjectId(program)
-        const results = searchPrompts(query, {
+        const json = isJson(program)
+        const limit = parsePositiveInt(opts["limit"], json ? 20 : 10)
+        const offset = parseOffset(opts)
+        const filter = {
           collection: opts["collection"],
           tags: opts["tags"] ? opts["tags"].split(",").map((t) => t.trim()) : undefined,
-          limit: parseInt(opts["limit"] ?? "20") || 20,
-          offset: parseInt(opts["offset"] ?? "0") || 0,
+          limit: json ? limit : limit + 1,
+          offset,
           ...(project_id !== null ? { project_id } : {}),
-        })
-        if (isJson(program)) {
+        }
+        const results = json ? searchPrompts(query, filter) : searchPromptsSlim(query, filter)
+        if (json) {
           output(program, results)
         } else if (results.length === 0) {
           console.log(chalk.gray("No results."))
         } else {
-          for (const r of results) {
-            console.log(fmtPrompt(r.prompt))
-            if (r.snippet) {
-              const highlighted = r.snippet.replace(/\[([^\]]+)\]/g, (_m: string, word: string) => chalk.yellowBright(word))
-              console.log(chalk.gray("  ") + chalk.gray(highlighted))
-            }
-          }
-          console.log(chalk.gray(`\n${results.length} result(s)`))
+          const shown = results.slice(0, limit)
+          for (const r of shown) console.log(fmtSearchResult(r, { verbose: Boolean(opts["verbose"]) }))
+          printPageSummary({
+            shown: shown.length,
+            noun: "result",
+            limit,
+            offset,
+            hasMore: results.length > limit,
+            detailHint: "Use --verbose for longer snippets, --json for raw search records, or `prompts show <id>` / `prompts body <id>` for details.",
+          })
         }
       } catch (e) {
         handleError(program, e)
@@ -230,28 +255,43 @@ export function registerPromptCommands(program: Command): void {
     .command("templates")
     .description("List template prompts")
     .option("-c, --collection <name>")
-    .option("-n, --limit <n>", "Max results", "50")
+    .option("-n, --limit <n>", "Max results (default: 20 human, 50 JSON)")
     .option("-o, --offset <n>", "Skip first N results", "0")
+    .option("--cursor <n>", "Alias for --offset")
+    .option("--verbose", "Show more metadata per template")
     .action((opts: Record<string, string>) => {
       try {
         const project_id = getActiveProjectId(program)
-        const prompts = listPrompts({
+        const json = isJson(program)
+        const limit = parsePositiveInt(opts["limit"], json ? 50 : 20)
+        const offset = parseOffset(opts)
+        const filter = {
           is_template: true,
           collection: opts["collection"],
-          limit: parseInt(opts["limit"] ?? "50") || 50,
-          offset: parseInt(opts["offset"] ?? "0") || 0,
+          limit: json ? limit : limit + 1,
+          offset,
           ...(project_id !== null ? { project_id } : {}),
-        })
-        if (isJson(program)) {
+        }
+        const prompts = json ? listPrompts(filter) : listPromptsSlim(filter)
+        if (json) {
           output(program, prompts)
         } else if (prompts.length === 0) {
           console.log(chalk.gray("No templates found."))
         } else {
-          for (const p of prompts) {
-            const vars = extractVariableInfo(p.body)
+          const shown = prompts.slice(0, limit)
+          for (const p of shown) {
+            const vars = "body" in p ? extractVariableInfo(p.body).map((v) => (v.required ? v.name : `${v.name}?`)) : p.variable_names
             console.log(fmtPrompt(p))
-            console.log(chalk.cyan(`  vars: ${vars.map((v) => (v.required ? v.name : `${v.name}?`)).join(", ")}`))
+            if (vars.length > 0 || opts["verbose"]) console.log(chalk.cyan(`  vars: ${vars.join(", ") || "(none)"}`))
           }
+          printPageSummary({
+            shown: shown.length,
+            noun: "template",
+            limit,
+            offset,
+            hasMore: prompts.length > limit,
+            detailHint: "Use --verbose for more metadata, --json for raw records, or `prompts show <id>` / `prompts body <id>` for details.",
+          })
         }
       } catch (e) {
         handleError(program, e)
@@ -347,6 +387,7 @@ export function registerPromptCommands(program: Command): void {
     .command("similar <id>")
     .description("Find prompts similar to a given prompt (by tag overlap and collection)")
     .option("-n, --limit <n>", "Max results", "5")
+    .option("--verbose", "Show more metadata per prompt")
     .action((id: string, opts: Record<string, string>) => {
       try {
         const prompt = getPrompt(id)
@@ -356,7 +397,7 @@ export function registerPromptCommands(program: Command): void {
         if (results.length === 0) { console.log(chalk.gray("No similar prompts found.")); return }
         for (const r of results) {
           const score = chalk.gray(`${Math.round(r.score * 100)}%`)
-          console.log(`${fmtPrompt(r.prompt)}  ${score}`)
+          console.log(`${fmtPrompt(r.prompt, { verbose: Boolean(opts["verbose"]) })}  ${score}`)
         }
       } catch (e) { handleError(program, e) }
     })
