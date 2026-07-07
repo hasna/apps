@@ -31,6 +31,10 @@ describe('ZohoSubscriptionsClient', () => {
     test('throws for invalid data center', () => {
       expect(() => resolveBaseUrl({ dataCenter: 'invalid' })).toThrow('data_center must be one of');
     });
+
+    test('resolves UK API data center', () => {
+      expect(resolveBaseUrl({ dataCenter: 'uk' })).toBe('https://www.zohoapis.uk/billing/v1');
+    });
   });
 
   describe('request', () => {

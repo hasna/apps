@@ -9,6 +9,7 @@ export const DC_BASES: Record<string, string> = {
   jp: 'https://www.zohoapis.jp',
   ca: 'https://www.zohoapis.ca',
   sa: 'https://www.zohoapis.sa',
+  uk: 'https://www.zohoapis.uk',
 };
 
 export function resolveBaseUrl(config: Pick<ZohoSubscriptionsConfig, 'dataCenter' | 'baseUrl'>): string {

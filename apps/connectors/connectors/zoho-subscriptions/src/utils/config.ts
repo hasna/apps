@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import type { OAuth2Config, OAuth2Tokens } from '../types';
@@ -45,10 +45,26 @@ export function setProfileOverride(profile: string | undefined): void {
 
 export function ensureConfigDir(): void {
   if (!existsSync(CONFIG_DIR)) {
-    mkdirSync(CONFIG_DIR, { recursive: true });
+    mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
   }
   if (!existsSync(PROFILES_DIR)) {
-    mkdirSync(PROFILES_DIR, { recursive: true });
+    mkdirSync(PROFILES_DIR, { recursive: true, mode: 0o700 });
+  }
+  for (const dir of [CONFIG_DIR, PROFILES_DIR]) {
+    try {
+      chmodSync(dir, 0o700);
+    } catch {
+      // Best effort on filesystems that do not support POSIX modes.
+    }
+  }
+}
+
+function writePrivateFile(path: string, value: string): void {
+  writeFileSync(path, value, { mode: 0o600 });
+  try {
+    chmodSync(path, 0o600);
+  } catch {
+    // Best effort on filesystems that do not support POSIX modes.
   }
 }
 
@@ -90,7 +106,7 @@ export function setCurrentProfile(profile: string): void {
     throw new Error(`Profile "${profile}" does not exist`);
   }
 
-  writeFileSync(CURRENT_PROFILE_FILE, profile);
+  writePrivateFile(CURRENT_PROFILE_FILE, profile);
 }
 
 /**
@@ -131,7 +147,7 @@ export function createProfile(profile: string, config: ProfileConfig = {}): bool
     throw new Error('Profile name can only contain letters, numbers, hyphens, and underscores');
   }
 
-  writeFileSync(getProfilePath(profile), JSON.stringify(config, null, 2));
+  writePrivateFile(getProfilePath(profile), JSON.stringify(config, null, 2));
   return true;
 }
 
@@ -181,12 +197,11 @@ export function loadProfile(profile?: string): ProfileConfig {
 export function saveProfile(config: ProfileConfig, profile?: string): void {
   ensureConfigDir();
   const profileName = profile || getCurrentProfile();
-  writeFileSync(getProfilePath(profileName), JSON.stringify(config, null, 2));
+  writePrivateFile(getProfilePath(profileName), JSON.stringify(config, null, 2));
 }
 
 // ============================================
 // API Key Management
-// TODO: Update env var name for your API (e.g., PERPLEXITY_API_KEY)
 // ============================================
 
 export function getApiKey(): string | undefined {
@@ -200,7 +215,7 @@ export function setApiKey(apiKey: string): void {
 }
 
 export function getApiSecret(): string | undefined {
-  return process.env.CONNECTOR_API_SECRET || loadProfile().apiSecret;
+  return process.env.ZOHO_SUBSCRIPTIONS_CLIENT_SECRET || loadProfile().apiSecret;
 }
 
 export function setApiSecret(apiSecret: string): void {
@@ -227,7 +242,6 @@ export function getActiveProfileName(): string {
 
 // ============================================
 // Token/API Key Alias Functions
-// TODO: Update env var name for your API
 // ============================================
 
 /**
@@ -236,8 +250,6 @@ export function getActiveProfileName(): string {
 export function getToken(): string | undefined {
   return (
     process.env.ZOHO_SUBSCRIPTIONS_TOKEN ||
-    process.env.CONNECTOR_TOKEN ||
-    process.env.CONNECTOR_API_KEY ||
     loadProfile().accessToken ||
     loadProfile().token ||
     loadProfile().apiKey

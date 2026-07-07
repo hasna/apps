@@ -1,193 +1,75 @@
-# scaffold-connector
+# Zoho Subscriptions Connector
 
-A TypeScript scaffold for building API connector CLIs with multi-profile support.
+TypeScript and CLI connector for the Zoho Billing v1 API, formerly Zoho Subscriptions. It supports customers, subscriptions, plans, hosted pages, invoices, cards, products, events, webhooks, and organization metadata.
 
-## Features
-
-- Multi-profile configuration (switch between different API keys/accounts)
-- Bearer token authentication (easily customizable)
-- Clean CLI structure with Commander.js
-- Pretty and JSON output formats
-- TypeScript with strict mode
-
-## Quick Start
-
-### 1. Clone and Rename
+## Install
 
 ```bash
-# Clone for your connector
-git clone https://github.com/hasna/scaffold-connector.git connect-yourapi
-cd connect-yourapi
-
-# Update package.json name
-# Change "@hasna/scaffold-connector" to "@hasna/connect-yourapi"
-```
-
-### 2. Update Configuration
-
-Search for `TODO` comments throughout the codebase and update:
-
-- `src/cli/index.ts` - Update `CONNECTOR_NAME` and description
-- `src/utils/config.ts` - Update `CONNECTOR_NAME` and env var names
-- `src/api/client.ts` - Update `DEFAULT_BASE_URL` and authentication method
-- `src/api/index.ts` - Rename `Connector` class to your API name
-- `src/types/index.ts` - Add your API's type definitions
-- `package.json` - Update name, description, bin command
-- `.env.example` - Update environment variable names
-
-### 3. Install and Test
-
-```bash
-# Install dependencies
 bun install
-
-# Run CLI
-bun run dev
-
-# Or run specific commands
-bun run dev profile list
-bun run dev config show
+bun run build
 ```
 
-## CLI Structure
+## Authentication
+
+The API client uses a Zoho OAuth access token and a Zoho Billing organization ID.
 
 ```bash
-connector [options] [command]
-
-Options:
-  -k, --api-key <key>      API key (overrides config)
-  -f, --format <format>    Output format (json, pretty)
-  -p, --profile <profile>  Use a specific profile
-
-Commands:
-  profile list             List all profiles
-  profile use <name>       Switch to a profile
-  profile create <name>    Create a new profile
-  profile delete <name>    Delete a profile
-  profile show [name]      Show profile configuration
-
-  config set-key <key>     Set API key for active profile
-  config show              Show current configuration
-  config clear             Clear configuration
-
-  example list             Example API command (replace)
-  example get <id>         Example API command (replace)
-  example create           Example API command (replace)
+export ZOHO_SUBSCRIPTIONS_TOKEN="your-oauth-access-token"
+export ZOHO_SUBSCRIPTIONS_ORG_ID="your-organization-id"
 ```
 
-## Project Structure
-
-```
-src/
-├── api/
-│   ├── client.ts     # HTTP client with authentication
-│   ├── example.ts    # Example API module (replace with your API)
-│   └── index.ts      # Main connector class
-├── cli/
-│   └── index.ts      # CLI commands
-├── types/
-│   └── index.ts      # Type definitions
-├── utils/
-│   ├── config.ts     # Multi-profile configuration
-│   └── output.ts     # CLI output formatting
-└── index.ts          # Library exports
-```
-
-## Multi-Profile Configuration
-
-Profiles are stored in `~/.hasna/connectors/{connector-name}/profiles/`:
-
-```
-~/.hasna/connectors/connector/
-├── current_profile   # Name of active profile
-└── profiles/
-    ├── default.json  # Default profile
-    ├── work.json     # Named profile
-    └── personal.json # Named profile
-```
-
-### Profile Commands
-
-```bash
-# Create profiles
-connector profile create work --api-key sk-xxx --use
-connector profile create personal --api-key sk-yyy
-
-# Switch profiles
-connector profile use work
-
-# Use profile for single command
-connector -p personal example list
-
-# List profiles
-connector profile list
-```
-
-## Customizing Authentication
-
-Edit `src/api/client.ts` to change authentication:
-
-```typescript
-// Bearer token (default)
-'Authorization': `Bearer ${this.apiKey}`,
-
-// API Key header
-'X-API-Key': this.apiKey,
-
-// Basic auth
-'Authorization': `Basic ${Buffer.from(`${this.apiKey}:${this.apiSecret}`).toString('base64')}`,
-```
-
-## Adding API Endpoints
-
-1. Create a new file in `src/api/` (e.g., `users.ts`)
-2. Export it from `src/api/index.ts`
-3. Add types in `src/types/index.ts`
-4. Add CLI commands in `src/cli/index.ts`
-
-Example API module:
-
-```typescript
-// src/api/users.ts
-import type { ConnectorClient } from './client';
-
-export class UsersApi {
-  constructor(private readonly client: ConnectorClient) {}
-
-  async list(options?: { limit?: number }) {
-    return this.client.get('/users', { limit: options?.limit });
-  }
-
-  async get(id: string) {
-    return this.client.get(`/users/${id}`);
-  }
-}
-```
-
-## Environment Variables
+Optional environment variables:
 
 | Variable | Description |
-|----------|-------------|
-| `CONNECTOR_API_KEY` | API key (overrides profile config) |
-| `CONNECTOR_API_SECRET` | API secret (optional) |
-| `CONNECTOR_BASE_URL` | Override base URL (optional) |
+| --- | --- |
+| `ZOHO_SUBSCRIPTIONS_DATA_CENTER` | Zoho data center: `com`, `eu`, `in`, `com.au`, `jp`, `ca`, `sa`, or `uk`. Defaults to `com`. |
+| `ZOHO_SUBSCRIPTIONS_BASE_URL` | Override the Zoho Billing API base URL. |
+
+OAuth helper functions use Zoho Accounts endpoints for the selected data center and request the `ZohoSubscriptions.fullaccess.all` scope by default. Configure OAuth client credentials before using the login helper flow:
+
+```bash
+zoho-subscriptions config set-credentials --client-id <client-id> --client-secret <client-secret>
+```
+
+## CLI
+
+```bash
+zoho-subscriptions --help
+zoho-subscriptions config set-token <token>
+zoho-subscriptions config set-org-id <organization-id>
+zoho-subscriptions customers list
+zoho-subscriptions subscriptions list --status live
+zoho-subscriptions plans list
+zoho-subscriptions invoices list
+zoho-subscriptions webhooks list
+zoho-subscriptions organization
+```
+
+Profiles are stored under `~/.hasna/connectors/zoho-subscriptions/`. Profile files are written with restrictive permissions because they can contain tokens and OAuth client credentials.
+
+## Library Usage
+
+```ts
+import { ZohoSubscriptions } from "@hasna/connect-zoho-subscriptions";
+
+const client = new ZohoSubscriptions({
+  token: process.env.ZOHO_SUBSCRIPTIONS_TOKEN!,
+  organizationId: process.env.ZOHO_SUBSCRIPTIONS_ORG_ID!,
+  dataCenter: process.env.ZOHO_SUBSCRIPTIONS_DATA_CENTER,
+});
+
+const subscriptions = await client.listSubscriptions({ status: "live" });
+console.log(subscriptions);
+```
 
 ## Development
 
 ```bash
-# Install dependencies
-bun install
-
-# Run CLI in development
-bun run dev
-
-# Build for distribution
-bun run build
-
-# Type check
 bun run typecheck
+bun test
+bun run build
 ```
 
 ## License
 
-MIT
+Apache-2.0

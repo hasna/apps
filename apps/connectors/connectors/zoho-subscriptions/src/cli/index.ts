@@ -11,6 +11,7 @@ import {
   setDataCenter,
   clearConfig,
   getConfigDir,
+  setOAuthConfig,
   setProfileOverride,
   getCurrentProfile,
   setCurrentProfile,
@@ -156,6 +157,15 @@ configCmd.command('set-data-center <dc>').action((dc: string) => {
   setDataCenter(dc);
   success(`Data center saved to profile: ${getCurrentProfile()}`);
 });
+
+configCmd
+  .command('set-credentials')
+  .requiredOption('--client-id <id>', 'Zoho OAuth client ID')
+  .requiredOption('--client-secret <secret>', 'Zoho OAuth client secret')
+  .action((opts) => {
+    setOAuthConfig({ clientId: opts.clientId, clientSecret: opts.clientSecret });
+    success(`OAuth credentials saved to profile: ${getCurrentProfile()}`);
+  });
 
 configCmd.command('show').action(() => {
   console.log(chalk.bold(`Active Profile: ${getCurrentProfile()}`));
