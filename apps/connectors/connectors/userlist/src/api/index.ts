@@ -25,12 +25,12 @@ export class Userlist {
   }
 
   static fromEnv(): Userlist {
-    const apiKey = process.env.USERLIST_PUSH_API_KEY;
-    if (!apiKey) {
+    const key = process.env.USERLIST_PUSH_API_KEY;
+    if (!key) {
       throw new Error('USERLIST_PUSH_API_KEY environment variable is required');
     }
     return new Userlist({
-      apiKey,
+      apiKey: key,
       baseUrl: process.env.USERLIST_PUSH_BASE_URL,
     });
   }

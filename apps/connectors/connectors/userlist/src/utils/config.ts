@@ -1,7 +1,6 @@
 import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
-import type { OAuth2Config, OAuth2Tokens } from '../types';
 
 const CONNECTOR_NAME = 'connect-userlist';
 const DEFAULT_PROFILE = 'default';
@@ -11,17 +10,6 @@ export interface ProfileConfig {
   apiKey?: string;
   token?: string;       // Alias for apiKey
   apiSecret?: string;
-
-  // OAuth2 authentication
-  accessToken?: string;
-  refreshToken?: string;
-  expiresAt?: number;
-  tokenType?: string;
-  scope?: string;
-
-  // OAuth2 client credentials (stored separately for security)
-  clientId?: string;
-  clientSecret?: string;
 
   // Add more config fields as needed for your API
 }
@@ -263,82 +251,4 @@ export function setToken(token: string): void {
   config.token = token;
   config.apiKey = token; // Keep both in sync
   saveProfile(config);
-}
-
-// ============================================
-// OAuth2 Configuration Functions
-// ============================================
-
-/**
- * Get OAuth2 client configuration
- */
-export function getOAuthConfig(): OAuth2Config | null {
-  const profile = loadProfile();
-  if (profile.clientId && profile.clientSecret) {
-    return {
-      clientId: profile.clientId,
-      clientSecret: profile.clientSecret,
-    };
-  }
-  return null;
-}
-
-/**
- * Set OAuth2 client credentials
- */
-export function setOAuthConfig(config: OAuth2Config): void {
-  const profile = loadProfile();
-  profile.clientId = config.clientId;
-  profile.clientSecret = config.clientSecret;
-  saveProfile(profile);
-}
-
-/**
- * Load OAuth2 tokens
- */
-export function loadOAuthTokens(): OAuth2Tokens | null {
-  const profile = loadProfile();
-  if (profile.accessToken) {
-    return {
-      accessToken: profile.accessToken,
-      refreshToken: profile.refreshToken,
-      expiresAt: profile.expiresAt || 0,
-      tokenType: profile.tokenType,
-      scope: profile.scope,
-    };
-  }
-  return null;
-}
-
-/**
- * Save OAuth2 tokens
- */
-export function saveOAuthTokens(tokens: OAuth2Tokens): void {
-  const profile = loadProfile();
-  profile.accessToken = tokens.accessToken;
-  profile.refreshToken = tokens.refreshToken;
-  profile.expiresAt = tokens.expiresAt;
-  profile.tokenType = tokens.tokenType;
-  profile.scope = tokens.scope;
-  saveProfile(profile);
-}
-
-/**
- * Clear OAuth2 tokens (logout)
- */
-export function clearOAuthTokens(): void {
-  const profile = loadProfile();
-  delete profile.accessToken;
-  delete profile.refreshToken;
-  delete profile.expiresAt;
-  delete profile.tokenType;
-  delete profile.scope;
-  saveProfile(profile);
-}
-
-/**
- * Get the access token (for OAuth2 authentication)
- */
-export function getAccessToken(): string | undefined {
-  return loadProfile().accessToken;
 }
