@@ -1,37 +1,59 @@
 /**
- * Fleet env-flip mechanism.
+ * Fleet env-flip mechanism (API-client / self-hosted mode).
  *
  * Coordinates flipping an @hasna OSS app's runtime storage mode across the
- * fleet from local (sqlite) to cloud (remote Postgres) — and back — by:
+ * fleet from local (on-box sqlite/json) to **self_hosted** (the app's cloud
+ * API at https://<app>.hasna.xyz) — and back — by:
  *   1. writing a per-app fleet env file on each target machine,
  *   2. wiring that env file into the app's service manager (systemd / launchd),
  *   3. restarting the service,
  *   4. verifying `<app> storage status --json` reports the expected mode,
- *   5. supporting one-command revert.
+ *   5. supporting one-command revert (unset the two vars -> local original).
  *
- * SECRETS: the database DSN is NEVER transported in cleartext. The remote
- * script fetches it on the target machine via `secrets get <secretPath>`; the
- * orchestrator only ever handles the secret *path*. Nothing here logs a value.
+ * ARCHITECTURE (LOCKED): the only sanctioned cloud path for a CLIENT machine is
+ * the app HTTPS API — client -> https://<app>.hasna.xyz/v1 with a bearer
+ * `HASNA_<APP>_API_KEY`. The raw RDS DSN is NEVER distributed to machines and
+ * `STORAGE_MODE=remote` + `DATABASE_URL` is FORBIDDEN on clients. RDS is only
+ * reachable by the in-VPC ECS services + the admin tunnel. This module therefore
+ * writes exactly two vars per app:
+ *     HASNA_<APP>_API_URL=https://<app>.hasna.xyz
+ *     HASNA_<APP>_API_KEY=<key from Secrets Manager hasna/oss/<app>/api-key>
  *
- * Rollout shape: canary (1 machine) -> batch -> all, with an optional
- * freeze-check hook (used by the todos single-writer cutover) that must pass
- * before any mutation proceeds.
+ * SECRETS: the API key is NEVER transported in cleartext by the orchestrator.
+ * The remote script fetches it on the target machine via `secrets get <path>`;
+ * the orchestrator only ever handles the secret *path*. Nothing here logs a
+ * value.
+ *
+ * Rollout shape: canary (1 machine) -> batch -> all, OR a single atomic wave via
+ * `--all-machines` (used by the coordination-store cutover so machines flip
+ * together, never half-flipped / split-brain). An optional freeze-check hook
+ * (coordination stores) must pass before any mutation proceeds.
  */
 
-import type { FleetManifest, MachineManifest, MachinePlatform } from "../types.js";
+import type { FleetManifest, MachinePlatform } from "../types.js";
 
-export type FlipMode = "remote" | "local";
+export type FlipMode = "self_hosted" | "local";
+
+/** Normalize user-facing mode aliases to the canonical FlipMode. */
+export function normalizeFlipMode(value?: string): FlipMode {
+  const v = (value ?? "self_hosted").trim().toLowerCase();
+  if (v === "local" || v === "revert" || v === "off") return "local";
+  // remote/cloud/api/on all mean the sanctioned self-hosted API client mode.
+  return "self_hosted";
+}
 
 /** Per-app fleet-flip profile. Add a new app by adding an entry here. */
 export interface FlipAppSpec {
   /** App identifier, e.g. "todos". */
   app: string;
-  /** Env var that selects storage mode, e.g. HASNA_TODOS_STORAGE_MODE. */
-  modeEnv: string;
-  /** Env var carrying the Postgres DSN, e.g. HASNA_TODOS_DATABASE_URL. */
-  databaseUrlEnv: string;
+  /** Env var carrying the app API base URL, e.g. HASNA_TODOS_API_URL. */
+  apiUrlEnv: string;
+  /** Env var carrying the app API bearer key, e.g. HASNA_TODOS_API_KEY. */
+  apiKeyEnv: string;
+  /** App API base URL, e.g. https://todos.hasna.xyz (client appends /v1). */
+  apiUrl: string;
   /** Secret PATH (never the value) resolved on-target via `secrets get`. */
-  databaseUrlSecretPath: string;
+  apiKeySecretPath: string;
   /** systemd/launchd service unit/label base name, e.g. hasna-todos-mcp. */
   serviceUnit: string;
   /** CLI binary used to read storage status, e.g. "todos". */
@@ -39,13 +61,14 @@ export interface FlipAppSpec {
   /** Args passed to the CLI to emit redacted JSON storage status. */
   statusArgs: string;
   /**
-   * Extra env lines (KEY=VALUE) applied only in remote mode. Values here are
-   * non-secret literals only (e.g. shadow flags, bucket names). Never a DSN.
+   * Extra env lines (KEY=VALUE) applied only in self_hosted mode. Values here
+   * are non-secret literals only (e.g. shadow flags). Never a secret/DSN.
    */
-  extraRemoteEnv?: Record<string, string>;
+  extraSelfHostedEnv?: Record<string, string>;
   /**
    * When true this app requires a passing freeze-check before any flip
-   * (e.g. todos single-writer cutover). See runFreezeCheck.
+   * (coordination stores: drain the dual-write shadow to divergence==0 before
+   * the atomic cutover). See runFreezeCheck.
    */
   freezeRequired?: boolean;
   /** Human note surfaced in plans/docs. */
@@ -53,68 +76,78 @@ export interface FlipAppSpec {
 }
 
 /**
- * Canonical per-app flip registry.
- *
- * Secret paths follow the shared convention `hasna/oss/<app>/database-url`.
- * PURE REMOTE (Amendment A1): cloud mode reads+writes hit Postgres directly.
- * The single sanctioned exception is the todos dual-write shadow (async mirror
- * local->cloud, reads local) — modelled via HASNA_TODOS_SHADOW.
+ * All 25 @hasna OSS apps that expose a self-hosted API at <app>.hasna.xyz.
+ * Coordination hot stores are freeze-gated (drain shadow before atomic flip).
  */
-export const FLIP_APPS: Record<string, FlipAppSpec> = {
-  knowledge: {
-    app: "knowledge",
-    modeEnv: "HASNA_KNOWLEDGE_STORAGE_MODE",
-    databaseUrlEnv: "HASNA_KNOWLEDGE_DATABASE_URL",
-    databaseUrlSecretPath: "hasna/oss/knowledge/database-url",
-    serviceUnit: "hasna-knowledge-mcp",
-    cliBin: "knowledge",
+const ALL_APPS = [
+  "accounts",
+  "attachments",
+  "calendar",
+  "contacts",
+  "conversations",
+  "domains",
+  "economy",
+  "files",
+  "identities",
+  "instructions",
+  "knowledge",
+  "logs",
+  "loops",
+  "machines",
+  "mailery",
+  "mementos",
+  "projects",
+  "recordings",
+  "sandboxes",
+  "secrets",
+  "sessions",
+  "shortlinks",
+  "telephony",
+  "testers",
+  "todos",
+] as const;
+
+/**
+ * Coordination stores dual-write to a shadow before the atomic cutover; a flip
+ * to self_hosted must be preceded by a passing freeze-check (drain shadow to
+ * divergence==0) so machines never split-brain.
+ */
+const FREEZE_REQUIRED_APPS = new Set(["todos", "loops", "mementos", "conversations"]);
+
+/** Per-app non-secret env overlays applied only in self_hosted mode. */
+const EXTRA_SELF_HOSTED_ENV: Record<string, Record<string, string>> = {};
+
+function defineFlipApp(app: string): FlipAppSpec {
+  const UP = app.toUpperCase();
+  const spec: FlipAppSpec = {
+    app,
+    apiUrlEnv: `HASNA_${UP}_API_URL`,
+    apiKeyEnv: `HASNA_${UP}_API_KEY`,
+    apiUrl: `https://${app}.hasna.xyz`,
+    apiKeySecretPath: `hasna/oss/${app}/api-key`,
+    serviceUnit: `hasna-${app}-mcp`,
+    cliBin: app,
     statusArgs: "storage status --json",
-    extraRemoteEnv: { HASNA_KNOWLEDGE_S3_BUCKET: "hasna-oss-knowledge-prod-789877399345" },
-    note: "Postgres + S3 object storage (bucket hasna-oss-knowledge-prod-789877399345).",
-  },
-  mementos: {
-    app: "mementos",
-    modeEnv: "HASNA_MEMENTOS_STORAGE_MODE",
-    databaseUrlEnv: "HASNA_MEMENTOS_DATABASE_URL",
-    databaseUrlSecretPath: "hasna/oss/mementos/database-url",
-    serviceUnit: "hasna-mementos-mcp",
-    cliBin: "mementos",
-    statusArgs: "storage status --json",
-  },
-  loops: {
-    app: "loops",
-    modeEnv: "HASNA_LOOPS_STORAGE_MODE",
-    databaseUrlEnv: "HASNA_LOOPS_DATABASE_URL",
-    databaseUrlSecretPath: "hasna/oss/loops/database-url",
-    serviceUnit: "hasna-loops-mcp",
-    cliBin: "loops",
-    statusArgs: "storage status --json",
-  },
-  conversations: {
-    app: "conversations",
-    modeEnv: "HASNA_CONVERSATIONS_STORAGE_MODE",
-    databaseUrlEnv: "HASNA_CONVERSATIONS_DATABASE_URL",
-    databaseUrlSecretPath: "hasna/oss/conversations/database-url",
-    serviceUnit: "hasna-conversations-mcp",
-    cliBin: "conversations",
-    statusArgs: "storage status --json",
-  },
-  todos: {
-    app: "todos",
-    modeEnv: "HASNA_TODOS_STORAGE_MODE",
-    databaseUrlEnv: "HASNA_TODOS_DATABASE_URL",
-    databaseUrlSecretPath: "hasna/oss/todos/database-url",
-    serviceUnit: "hasna-todos-mcp",
-    cliBin: "todos",
-    statusArgs: "storage status --json",
-    // Sanctioned dual-write shadow: async mirror local->cloud, reads stay local
-    // until the single-writer cutover. The cutover flips mode to remote and is
-    // gated by a freeze-check.
-    extraRemoteEnv: { HASNA_TODOS_SHADOW: "1" },
-    freezeRequired: true,
-    note: "Dual-write shadow first; single-writer cutover to remote is freeze-gated.",
-  },
-};
+  };
+  if (FREEZE_REQUIRED_APPS.has(app)) {
+    spec.freezeRequired = true;
+    spec.note = "Coordination store: drain dual-write shadow to divergence==0, then atomic --all-machines cutover.";
+  }
+  const extra = EXTRA_SELF_HOSTED_ENV[app];
+  if (extra) spec.extraSelfHostedEnv = extra;
+  return spec;
+}
+
+/**
+ * Canonical per-app flip registry — ALL 25 @hasna OSS apps.
+ *
+ * Secret paths follow the shared convention `hasna/oss/<app>/api-key`.
+ * SELF-HOSTED (LOCKED): the client talks to the app's HTTPS API; no DSN ever
+ * reaches a machine.
+ */
+export const FLIP_APPS: Record<string, FlipAppSpec> = Object.fromEntries(
+  ALL_APPS.map((app) => [app, defineFlipApp(app)]),
+);
 
 export function getFlipApp(app: string): FlipAppSpec {
   const spec = FLIP_APPS[app];
@@ -180,19 +213,29 @@ export interface PlanWavesOptions {
   canarySize?: number;
   /** Machines per batch wave after the canary (default 4). */
   batchSize?: number;
+  /**
+   * Atomic mode: put EVERY target into a single wave (no canary, no batching).
+   * Used by `--all-machines` for the coordination-store cutover so the fleet
+   * flips together and is never half-flipped.
+   */
+  atomic?: boolean;
 }
 
 /**
  * Split ordered targets into canary -> batch(es). The final batch is the
  * remainder ("all"). Guarantees: canary is first, every target appears once,
- * order preserved.
+ * order preserved. With `atomic`, produces exactly one wave containing all
+ * targets.
  */
 export function planWaves(targets: FlipTarget[], options: PlanWavesOptions = {}): FlipWave[] {
+  if (targets.length === 0) return [];
+  if (options.atomic) {
+    return [{ name: "all-machines", index: 0, targets: targets.slice() }];
+  }
   const canarySize = Math.max(0, options.canarySize ?? 1);
   const batchSize = Math.max(1, options.batchSize ?? 4);
   const waves: FlipWave[] = [];
   let cursor = 0;
-  if (targets.length === 0) return waves;
   if (canarySize > 0) {
     waves.push({ name: "canary", index: 0, targets: targets.slice(0, canarySize) });
     cursor = Math.min(canarySize, targets.length);
@@ -222,15 +265,16 @@ export interface BuildScriptOptions {
 }
 
 /**
- * Build the remote bash script that applies (mode="remote") or reverts
+ * Build the remote bash script that applies (mode="self_hosted") or reverts
  * (mode="local") the flip for one app on one machine.
  *
- * The DSN is fetched on-target from the secret store; it never appears in the
- * script text, argv, or orchestrator logs. The env file is written 0600.
+ * The API key is fetched on-target from the secret store; it never appears in
+ * the script text, argv, or orchestrator logs. The env file is written 0600.
+ * Revert removes the env file and the service drop-in entirely so the two vars
+ * are fully unset and the app falls back to its untouched local original.
  */
 export function buildFlipScript(spec: FlipAppSpec, mode: FlipMode, options: BuildScriptOptions = {}): string {
   const envDir = options.envDir ?? "${HOME}/.hasna/cloud";
-  const envFile = `${envDir}/${spec.app}.env`;
   const lines: string[] = [
     "set -euo pipefail",
     `APP=${sq(spec.app)}`,
@@ -240,33 +284,29 @@ export function buildFlipScript(spec: FlipAppSpec, mode: FlipMode, options: Buil
     "umask 077",
   ];
 
-  if (mode === "remote") {
-    // Fetch DSN on-target; abort if the secret is missing (never write a
-    // half-configured remote env file).
+  if (mode === "self_hosted") {
+    // Fetch the API key on-target; abort if the secret is missing (never write
+    // a half-configured self_hosted env file).
     lines.push(
-      `DSN="$(secrets get ${sq(spec.databaseUrlSecretPath)} --raw 2>/dev/null || secrets get ${sq(spec.databaseUrlSecretPath)} 2>/dev/null)"`,
-      'if [ -z "${DSN:-}" ]; then echo "FLIP_ERROR: could not resolve DSN secret" >&2; exit 3; fi',
+      `API_KEY="$(secrets get ${sq(spec.apiKeySecretPath)} --raw 2>/dev/null || secrets get ${sq(spec.apiKeySecretPath)} 2>/dev/null)"`,
+      'if [ -z "${API_KEY:-}" ]; then echo "FLIP_ERROR: could not resolve API key secret" >&2; exit 3; fi',
       'TMP_ENV="$(mktemp "${ENV_DIR}/.${APP}.env.XXXXXX")"',
-      `printf '%s\\n' ${sq(`${spec.modeEnv}=remote`)} >> "$TMP_ENV"`,
-      `printf '%s=%s\\n' ${sq(spec.databaseUrlEnv)} "$DSN" >> "$TMP_ENV"`,
+      `printf '%s\\n' ${sq(`${spec.apiUrlEnv}=${spec.apiUrl}`)} >> "$TMP_ENV"`,
+      `printf '%s=%s\\n' ${sq(spec.apiKeyEnv)} "$API_KEY" >> "$TMP_ENV"`,
     );
-    for (const [key, value] of Object.entries(spec.extraRemoteEnv ?? {})) {
+    for (const [key, value] of Object.entries(spec.extraSelfHostedEnv ?? {})) {
       lines.push(`printf '%s\\n' ${sq(`${key}=${value}`)} >> "$TMP_ENV"`);
     }
-    lines.push('chmod 600 "$TMP_ENV"', 'mv -f "$TMP_ENV" "$ENV_FILE"', 'unset DSN');
+    lines.push('chmod 600 "$TMP_ENV"', 'mv -f "$TMP_ENV" "$ENV_FILE"', 'unset API_KEY');
   } else {
-    // Revert: pin local mode, drop the DSN entirely.
-    lines.push(
-      'TMP_ENV="$(mktemp "${ENV_DIR}/.${APP}.env.XXXXXX")"',
-      `printf '%s\\n' ${sq(`${spec.modeEnv}=local`)} >> "$TMP_ENV"`,
-      'chmod 600 "$TMP_ENV"',
-      'mv -f "$TMP_ENV" "$ENV_FILE"',
-    );
+    // Revert: remove the fleet env file entirely so HASNA_<APP>_API_URL and
+    // HASNA_<APP>_API_KEY are unset and the app returns to its local original.
+    lines.push('rm -f "$ENV_FILE"');
   }
 
   // Wire the env file into the service manager and (re)start, unless skipped.
   if (!options.skipRestart) {
-    lines.push(buildServiceWiring(spec));
+    lines.push(buildServiceWiring(spec, mode));
   }
 
   // Emit the storage status for verification by the orchestrator.
@@ -279,34 +319,59 @@ export function buildFlipScript(spec: FlipAppSpec, mode: FlipMode, options: Buil
 }
 
 /**
- * Portable service-manager wiring: systemd (linux) via a drop-in EnvironmentFile,
- * launchd (macOS) by injecting the env file reference and kickstarting the label.
+ * Portable service-manager wiring:
+ *  - systemd (linux): self_hosted writes a drop-in EnvironmentFile; local
+ *    removes that drop-in so the vars are gone.
+ *  - launchd (macOS): self_hosted setenv's each var from the env file; local
+ *    unsetenv's the two known vars.
  * Detection is at runtime on the target so one script serves the mixed fleet.
  */
-function buildServiceWiring(spec: FlipAppSpec): string {
+function buildServiceWiring(spec: FlipAppSpec, mode: FlipMode): string {
   const unit = spec.serviceUnit;
-  return [
+  const common = [
     `UNIT=${sq(unit)}`,
+    `API_URL_ENV=${sq(spec.apiUrlEnv)}`,
+    `API_KEY_ENV=${sq(spec.apiKeyEnv)}`,
     'ENV_FILE_ABS="$ENV_FILE"',
     'if command -v systemctl >/dev/null 2>&1; then',
     '  DROPIN_DIR="${HOME}/.config/systemd/user/${UNIT}.service.d"',
-    '  mkdir -p "$DROPIN_DIR"',
-    '  {',
-    '    echo "[Service]"',
-    '    echo "EnvironmentFile=${ENV_FILE_ABS}"',
-    '  } > "${DROPIN_DIR}/10-cloud-flip.conf"',
+  ];
+  if (mode === "self_hosted") {
+    common.push(
+      '  mkdir -p "$DROPIN_DIR"',
+      '  {',
+      '    echo "[Service]"',
+      '    echo "EnvironmentFile=${ENV_FILE_ABS}"',
+      '  } > "${DROPIN_DIR}/10-cloud-flip.conf"',
+    );
+  } else {
+    common.push('  rm -f "${DROPIN_DIR}/10-cloud-flip.conf"');
+  }
+  common.push(
     '  systemctl --user daemon-reload',
     '  systemctl --user restart "${UNIT}" || systemctl --user restart "${UNIT}.service"',
     'elif command -v launchctl >/dev/null 2>&1; then',
-    '  # macOS: source the env file into the user launchd domain, then restart.',
-    '  set -a; . "${ENV_FILE_ABS}"; set +a',
     '  DOMAIN="gui/$(id -u)"',
-    '  while IFS="=" read -r k v; do [ -n "$k" ] && launchctl setenv "$k" "$v"; done < "${ENV_FILE_ABS}"',
+  );
+  if (mode === "self_hosted") {
+    common.push(
+      '  # macOS: export each var from the env file into the user launchd domain.',
+      '  while IFS="=" read -r k v; do [ -n "$k" ] && launchctl setenv "$k" "$v"; done < "${ENV_FILE_ABS}"',
+    );
+  } else {
+    common.push(
+      '  # macOS: unset the two flip vars so the app falls back to local.',
+      '  launchctl unsetenv "$API_URL_ENV" 2>/dev/null || true',
+      '  launchctl unsetenv "$API_KEY_ENV" 2>/dev/null || true',
+    );
+  }
+  common.push(
     '  launchctl kickstart -k "${DOMAIN}/${UNIT}" 2>/dev/null || true',
     'else',
     '  echo "FLIP_WARN: no known service manager; env written, restart the app manually" >&2',
     'fi',
-  ].join("\n");
+  );
+  return common.join("\n");
 }
 
 // --- Verification ----------------------------------------------------------
@@ -314,31 +379,38 @@ function buildServiceWiring(spec: FlipAppSpec): string {
 export interface StorageStatusVerification {
   ok: boolean;
   observedMode: string | null;
-  remoteEnabled: boolean | null;
+  apiEnabled: boolean | null;
   reason?: string;
 }
 
 /**
  * Parse `<app> storage status --json` output (possibly wrapped in the
  * FLIP_STATUS_BEGIN/END markers) and check it matches the expected mode.
+ * Accepts either `api_enabled` or the legacy `remote_enabled` boolean.
  */
 export function verifyStorageMode(rawOutput: string, expected: FlipMode): StorageStatusVerification {
   const json = extractStatusJson(rawOutput);
   if (!json) {
-    return { ok: false, observedMode: null, remoteEnabled: null, reason: "no parseable storage status JSON" };
+    return { ok: false, observedMode: null, apiEnabled: null, reason: "no parseable storage status JSON" };
   }
   const observedMode = typeof json.mode === "string" ? json.mode : null;
-  const remoteEnabled = typeof json.remote_enabled === "boolean" ? json.remote_enabled : null;
-  if (expected === "remote") {
-    const ok = observedMode === "remote" && remoteEnabled === true;
-    return { ok, observedMode, remoteEnabled, reason: ok ? undefined : "expected mode=remote & remote_enabled=true" };
+  const apiEnabled =
+    typeof json.api_enabled === "boolean"
+      ? json.api_enabled
+      : typeof json.remote_enabled === "boolean"
+        ? json.remote_enabled
+        : null;
+  if (expected === "self_hosted") {
+    const ok = observedMode === "self_hosted" && apiEnabled !== false;
+    return { ok, observedMode, apiEnabled, reason: ok ? undefined : "expected mode=self_hosted & api_enabled!=false" };
   }
-  const ok = observedMode === "local" && remoteEnabled !== true;
-  return { ok, observedMode, remoteEnabled, reason: ok ? undefined : "expected mode=local" };
+  const ok = observedMode === "local" && apiEnabled !== true;
+  return { ok, observedMode, apiEnabled, reason: ok ? undefined : "expected mode=local" };
 }
 
 interface StorageStatusJson {
   mode?: unknown;
+  api_enabled?: unknown;
   remote_enabled?: unknown;
   [key: string]: unknown;
 }
@@ -360,7 +432,7 @@ function extractStatusJson(rawOutput: string): StorageStatusJson | null {
   }
 }
 
-// --- Freeze check (single-writer cutover gate) -----------------------------
+// --- Freeze check (coordination-store cutover gate) ------------------------
 
 /** Minimal shape of the injected remote command runner (see remote.ts). */
 export type RunnerFn = (
@@ -375,12 +447,12 @@ export interface FreezeCheckResult {
 }
 
 /**
- * Freeze-check hook for the todos single-writer cutover.
+ * Freeze-check hook for coordination-store cutovers.
  *
  * Before flipping a freeze-required app we require an explicit freeze command
  * to succeed (exit 0). Callers supply `freezeCommand` — e.g. a maintenance
- * script that pauses writers / drains the shadow queue. If the app does not
- * require a freeze, this is a no-op pass.
+ * script that pauses writers / drains the shadow queue to divergence==0. If the
+ * app does not require a freeze, this is a no-op pass.
  */
 export function runFreezeCheck(
   spec: FlipAppSpec,
@@ -448,8 +520,8 @@ export function runFlip(options: RunFlipOptions): RunFlipReport {
   for (const wave of waves) {
     let waveFailed = false;
     for (const target of wave.targets) {
-      // Freeze gate applies per-machine before any mutation (remote flips only).
-      if (execute && mode === "remote" && spec.freezeRequired) {
+      // Freeze gate applies per-machine before any mutation (self_hosted only).
+      if (execute && mode === "self_hosted" && spec.freezeRequired) {
         const freeze = runFreezeCheck(spec, runner, {
           machineId: target.id,
           freezeCommand: options.freezeCommand,
@@ -460,7 +532,7 @@ export function runFlip(options: RunFlipOptions): RunFlipReport {
             machineId: target.id,
             wave: wave.name,
             applied: false,
-            verification: { ok: false, observedMode: null, remoteEnabled: null, reason: freeze.reason },
+            verification: { ok: false, observedMode: null, apiEnabled: null, reason: freeze.reason },
             exitCode: -1,
             error: freeze.reason,
           });
@@ -475,7 +547,7 @@ export function runFlip(options: RunFlipOptions): RunFlipReport {
           machineId: target.id,
           wave: wave.name,
           applied: false,
-          verification: { ok: false, observedMode: null, remoteEnabled: null, reason: "dry-run" },
+          verification: { ok: false, observedMode: null, apiEnabled: null, reason: "dry-run" },
           exitCode: 0,
         });
         continue;
@@ -520,6 +592,6 @@ export function buildFlipPlan(spec: FlipAppSpec, mode: FlipMode, waves: FlipWave
     freezeRequired: Boolean(spec.freezeRequired),
     waves: waves.map((w) => ({ name: w.name, machines: w.targets.map((t) => t.id) })),
     scriptPreview: buildFlipScript(spec, mode, scriptOptions),
-    secretPathsReferenced: mode === "remote" ? [spec.databaseUrlSecretPath] : [],
+    secretPathsReferenced: mode === "self_hosted" ? [spec.apiKeySecretPath] : [],
   };
 }

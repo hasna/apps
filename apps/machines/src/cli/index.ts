@@ -45,6 +45,7 @@ import {
   buildFlipScript,
   getFlipApp,
   listFlipApps,
+  normalizeFlipMode,
   planWaves,
   runFlip,
   selectTargets,
@@ -3294,14 +3295,18 @@ function resolveFlipWaves(spec: ReturnType<typeof getFlipApp>, options: {
   exclude?: string;
   canary?: string;
   batch?: string;
+  allMachines?: boolean;
 }) {
   const manifest = readManifest();
+  // --all-machines: flip the ENTIRE fleet, ignoring any --machines restriction,
+  // in a single atomic wave (coordination-store cutover; no half-flip).
   const targets = selectTargets(manifest, {
-    machines: parseMachineList(options.machines),
+    machines: options.allMachines ? undefined : parseMachineList(options.machines),
     tags: parseMachineList(options.tags),
     exclude: parseMachineList(options.exclude),
   });
   const waves = planWaves(targets, {
+    atomic: Boolean(options.allMachines),
     canarySize: options.canary !== undefined ? Number(options.canary) : 1,
     batchSize: options.batch !== undefined ? Number(options.batch) : 4,
   });
@@ -3324,23 +3329,24 @@ flipCommand
     }
     for (const spec of listFlipApps()) {
       const freeze = spec.freezeRequired ? " [freeze-required]" : "";
-      console.log(`${spec.app}${freeze}\n  mode:   ${spec.modeEnv}\n  dsn:    ${spec.databaseUrlEnv} (secret: ${spec.databaseUrlSecretPath})\n  unit:   ${spec.serviceUnit}\n  verify: ${spec.cliBin} ${spec.statusArgs}${spec.note ? `\n  note:   ${spec.note}` : ""}`);
+      console.log(`${spec.app}${freeze}\n  url:    ${spec.apiUrlEnv}=${spec.apiUrl}\n  key:    ${spec.apiKeyEnv} (secret: ${spec.apiKeySecretPath})\n  unit:   ${spec.serviceUnit}\n  verify: ${spec.cliBin} ${spec.statusArgs}${spec.note ? `\n  note:   ${spec.note}` : ""}`);
     }
   });
 
 flipCommand
   .command("plan <app>")
   .description("Show the flip plan (waves + generated script) without executing")
-  .option("--mode <mode>", "remote (flip to cloud) or local (revert)", "remote")
+  .option("--mode <mode>", "self_hosted (flip to cloud API) or local (revert)", "self_hosted")
   .option("--machines <ids>", "Restrict to these machine ids (comma/space separated)")
   .option("--tags <tags>", "Restrict to machines carrying ALL of these tags")
   .option("--exclude <ids>", "Exclude these machine ids")
+  .option("--all-machines", "Flip the ENTIRE fleet in one atomic wave (coordination cutover)", false)
   .option("--canary <n>", "Canary wave size", "1")
   .option("--batch <n>", "Batch size after canary", "4")
   .option("-j, --json", "Print JSON output", false)
-  .action((app: string, options: Record<string, string | undefined> & { json?: boolean }) => {
+  .action((app: string, options: Record<string, string | undefined> & { json?: boolean; allMachines?: boolean }) => {
     const spec = getFlipApp(app);
-    const mode = (options["mode"] as FlipMode) ?? "remote";
+    const mode = normalizeFlipMode(options["mode"]);
     const { waves } = resolveFlipWaves(spec, options as never);
     const plan = buildFlipPlan(spec, mode, waves);
     if (options.json) {
@@ -3357,28 +3363,29 @@ flipCommand
 flipCommand
   .command("script <app>")
   .description("Print the generated remote flip script for one app")
-  .option("--mode <mode>", "remote or local", "remote")
+  .option("--mode <mode>", "self_hosted or local", "self_hosted")
   .option("--skip-restart", "Write env only; do not restart the service", false)
   .action((app: string, options: { mode?: string; skipRestart?: boolean }) => {
     const spec = getFlipApp(app);
-    console.log(buildFlipScript(spec, (options.mode as FlipMode) ?? "remote", { skipRestart: options.skipRestart }));
+    console.log(buildFlipScript(spec, normalizeFlipMode(options.mode), { skipRestart: options.skipRestart }));
   });
 
 flipCommand
   .command("apply <app>")
   .description("Apply the flip across the fleet, wave by wave, verifying each machine")
-  .option("--mode <mode>", "remote (flip to cloud) or local (revert)", "remote")
+  .option("--mode <mode>", "self_hosted (flip to cloud API) or local (revert)", "self_hosted")
   .option("--machines <ids>", "Restrict to these machine ids")
   .option("--tags <tags>", "Restrict to machines carrying ALL of these tags")
   .option("--exclude <ids>", "Exclude these machine ids")
+  .option("--all-machines", "Flip the ENTIRE fleet in one atomic wave (coordination cutover)", false)
   .option("--canary <n>", "Canary wave size", "1")
   .option("--batch <n>", "Batch size after canary", "4")
   .option("--freeze-check <cmd>", "Freeze command required for freeze-required apps")
   .option("--execute", "Actually run (default is dry-run)", false)
   .option("-j, --json", "Print JSON output", false)
-  .action((app: string, options: Record<string, string | undefined> & { execute?: boolean; json?: boolean; freezeCheck?: string }) => {
+  .action((app: string, options: Record<string, string | undefined> & { execute?: boolean; json?: boolean; freezeCheck?: string; allMachines?: boolean }) => {
     const spec = getFlipApp(app);
-    const mode = (options["mode"] as FlipMode) ?? "remote";
+    const mode = normalizeFlipMode(options["mode"]);
     const { waves } = resolveFlipWaves(spec, options as never);
     const report = runFlip({
       spec,
@@ -3409,11 +3416,12 @@ flipCommand
   .option("--machines <ids>", "Restrict to these machine ids")
   .option("--tags <tags>", "Restrict to machines carrying ALL of these tags")
   .option("--exclude <ids>", "Exclude these machine ids")
+  .option("--all-machines", "Revert the ENTIRE fleet in one atomic wave", false)
   .option("--canary <n>", "Canary wave size", "1")
   .option("--batch <n>", "Batch size after canary", "4")
   .option("--execute", "Actually run (default is dry-run)", false)
   .option("-j, --json", "Print JSON output", false)
-  .action((app: string, options: Record<string, string | undefined> & { execute?: boolean; json?: boolean }) => {
+  .action((app: string, options: Record<string, string | undefined> & { execute?: boolean; json?: boolean; allMachines?: boolean }) => {
     const spec = getFlipApp(app);
     const { waves } = resolveFlipWaves(spec, options as never);
     const report = runFlip({ spec, mode: "local", waves, runner: machineFlipRunner, execute: Boolean(options.execute) });

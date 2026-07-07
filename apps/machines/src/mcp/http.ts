@@ -1,7 +1,16 @@
 import { timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { healthPayload, isHttpMode as harnessIsHttpMode, resolveMcpHttpPort } from "@hasna/mcp-harness";
 import { buildServer } from "./server.js";
+
+// Mode/port/health boilerplate below is hand-wired through `@hasna/mcp-harness`
+// (harnessIsHttpMode / resolveMcpHttpPort / healthPayload). The request
+// authentication, Origin/CORS, and body-size enforcement below is a bespoke
+// security layer (authorizeHttpRequest / isLoopbackHost /
+// resolveHttpSecurityConfig / isTrustedHttpOrigin) with no harness equivalent
+// — it is preserved exactly as-is rather than routed through the harness's
+// generic transport handlers.
 
 export const DEFAULT_HTTP_PORT = 8821;
 export const HTTP_NAME = "machines";
@@ -22,34 +31,11 @@ export interface MachinesHttpSecurityConfig {
 }
 
 export function isHttpMode(args: string[] = process.argv.slice(2)): boolean {
-  return args.includes("--http") || process.env.MCP_HTTP === "1";
+  return harnessIsHttpMode(args);
 }
 
 export function resolveHttpPort(args: string[] = process.argv.slice(2)): number {
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === "--port" && args[i + 1]) {
-      return parsePort(args[i + 1]);
-    }
-    if (arg.startsWith("--port=")) {
-      return parsePort(arg.slice("--port=".length));
-    }
-  }
-
-  const envPort = process.env.MCP_HTTP_PORT;
-  if (envPort) {
-    return parsePort(envPort);
-  }
-
-  return DEFAULT_HTTP_PORT;
-}
-
-function parsePort(raw: string): number {
-  const port = Number.parseInt(raw, 10);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error(`Invalid port: ${raw}`);
-  }
-  return port;
+  return resolveMcpHttpPort({ argv: args, default: DEFAULT_HTTP_PORT });
 }
 
 function pathnameFromRequest(req: IncomingMessage): string {
@@ -248,7 +234,7 @@ export function startHttpServer(options: StartHttpServerOptions = {}): Server {
     const path = pathnameFromRequest(req);
 
     if (req.method === "GET" && path === "/health") {
-      writeJson(res, 200, { status: "ok", name });
+      writeJson(res, 200, { ...healthPayload(name) });
       return;
     }
 
