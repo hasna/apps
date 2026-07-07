@@ -19,6 +19,12 @@ otp bootstrap
 otp --version
 ```
 
+## Security
+
+See [SECURITY.md](./SECURITY.md) for the threat model, key management, at-rest encryption format, per-surface non-exposure guarantees, and known limitations.
+
+Summary: seeds are encrypted with AES-256-GCM using a locally generated 256-bit key (`vault.key`). Public APIs return `OtpEntry` metadata only; `encrypted_secret` and plaintext seeds are stripped before every CLI, SDK, and MCP response.
+
 ## Storage
 
 The local store is bootstrapped at:
@@ -29,7 +35,28 @@ The local store is bootstrapped at:
   vault.key
 ```
 
-Entries are encrypted with AES-256-GCM using a locally generated 256-bit key. The directory is chmod `700`; `entries.json` and `vault.key` are chmod `600`.
+### Key lifecycle
+
+On first use, `getMasterKey()` creates `vault.key` if it does not exist:
+
+1. `randomBytes(32)` generates a 256-bit AES key (not derived from a password).
+2. The key is written as a single hex-encoded line with mode `0600`.
+
+The key is cached in-process after the first read. There is no remote key escrow in v1.
+
+### Encryption format
+
+Each TOTP seed is encrypted individually before being written to `entries.json`:
+
+```text
+enc:v1:{12-byte-iv-hex}:{ciphertext+16-byte-gcm-tag-hex}
+```
+
+- Algorithm: AES-256-GCM
+- IV: 12 random bytes per secret
+- `decryptSecret()` is called only inside `generateOtpCode()` to compute a code in-process
+
+Entries are encrypted with AES-256-GCM using the local `vault.key`. The directory is chmod `700`; `entries.json` and `vault.key` are chmod `600`. Writes use an atomic temp-file + rename pattern.
 
 Security limitation: this first release protects against accidental disclosure in source, logs, normal command output, backups, and shared file reads, but the local key lives on the same machine as the encrypted store. Use full-disk encryption and OS account isolation. Future releases can add hardware-backed or `open-secrets` remote key wrapping.
 
@@ -76,6 +103,8 @@ Remove an entry:
 otp remove Example:agent@example.com
 ```
 
+CLI commands return entry metadata (`id`, `label`, `issuer`, `account`, algorithm settings, timestamps) or generated codes. Seeds and `encrypted_secret` are never included in stdout.
+
 ## MCP
 
 Run the stdio server:
@@ -103,13 +132,15 @@ const code = generateOtpCode(entries[0].id);
 
 Key exports:
 
-- `addOtpEntry(input)`
-- `importOtpAuthUri(input)`
-- `listOtpEntries()`
-- `getOtpEntry(target)`
-- `generateOtpCode(target)`
-- `removeOtpEntry(target)`
-- `getOtpStorageStatus()`
+- `addOtpEntry(input)` — accepts `secret` as write input; returns `OtpEntry` without it
+- `importOtpAuthUri(input)` — parses `otpauth://` URI; returns `OtpEntry` without secret
+- `listOtpEntries()` — returns `OtpEntry[]` (no `encrypted_secret`)
+- `getOtpEntry(target)` — returns `OtpEntry` (no `encrypted_secret`)
+- `generateOtpCode(target)` — decrypts in-process; returns code + metadata only
+- `removeOtpEntry(target)` — returns removed `OtpEntry` (no `encrypted_secret`)
+- `getOtpStorageStatus()` — paths and counts; no key bytes or seeds
+
+Exported types (`OtpEntry`, `GeneratedOtpCode`, `OtpStorageStatus`) never include `encrypted_secret` or plaintext seeds. `StoredOtpEntry` with `encrypted_secret` is internal to the storage layer.
 
 ## Development
 
