@@ -4,8 +4,19 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ClipStore } from "../storage.js";
 import { handleMcpHttpRequest } from "./http.js";
 import { buildServer } from "./server.js";
+
+const EXPECTED_TOOLS = ["clip_status", "clip_capture", "clip_share_clipboard", "clip_share_text", "clip_list", "clip_get", "clip_delete"] as const;
+
+type ToolResult = Awaited<ReturnType<Client["callTool"]>>;
+type ToolSchema = {
+  type?: string;
+  properties?: Record<string, { type?: string; enum?: string[]; maximum?: number; exclusiveMinimum?: number; pattern?: string }>;
+  required?: string[];
+  additionalProperties?: boolean;
+};
 
 function restoreEnv(name: string, value: string | undefined): void {
   if (value === undefined) {
@@ -13,6 +24,46 @@ function restoreEnv(name: string, value: string | undefined): void {
   } else {
     process.env[name] = value;
   }
+}
+
+async function withClient<T>(
+  options: Parameters<typeof buildServer>[0],
+  run: (client: Client) => Promise<T>,
+): Promise<T> {
+  const previousPath = process.env["PATH"];
+  const previousDisplay = process.env["DISPLAY"];
+  const previousWayland = process.env["WAYLAND_DISPLAY"];
+  const server = buildServer(options);
+  const client = new Client({ name: "clip-contract-test", version: "0.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  try {
+    process.env["PATH"] = "";
+    delete process.env["DISPLAY"];
+    delete process.env["WAYLAND_DISPLAY"];
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    return await run(client);
+  } finally {
+    restoreEnv("PATH", previousPath);
+    restoreEnv("DISPLAY", previousDisplay);
+    restoreEnv("WAYLAND_DISPLAY", previousWayland);
+    await client.close().catch(() => {});
+    await server.close().catch(() => {});
+  }
+}
+
+function toolText(result: ToolResult): string {
+  return (result.content as Array<{ type: string; text?: string }>)[0]?.text ?? "";
+}
+
+function parseToolJson<T>(result: ToolResult): T {
+  return JSON.parse(toolText(result)) as T;
+}
+
+function schemaFor(tools: Awaited<ReturnType<Client["listTools"]>>, name: string): ToolSchema {
+  const schema = tools.tools.find((tool) => tool.name === name)?.inputSchema as ToolSchema | undefined;
+  expect(schema).toBeTruthy();
+  return schema!;
 }
 
 describe("MCP startup contract", () => {
@@ -25,73 +76,144 @@ describe("MCP startup contract", () => {
 
   it("exposes the expected tools and resources", async () => {
     const dir = mkdtempSync(join(tmpdir(), "clip-mcp-"));
-    const previousPath = process.env["PATH"];
-    const previousDisplay = process.env["DISPLAY"];
-    const previousWayland = process.env["WAYLAND_DISPLAY"];
-    const server = buildServer({ homeDir: dir, baseUrl: "http://clip.test" });
-    const client = new Client({ name: "clip-contract-test", version: "0.0.0" });
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     try {
-      process.env["PATH"] = "";
-      delete process.env["DISPLAY"];
-      delete process.env["WAYLAND_DISPLAY"];
-      await server.connect(serverTransport);
-      await client.connect(clientTransport);
+      await withClient({ homeDir: dir, baseUrl: "http://clip.test" }, async (client) => {
+        const tools = await client.listTools();
+        const toolNames = tools.tools.map((tool) => tool.name);
+        for (const tool of EXPECTED_TOOLS) expect(toolNames.includes(tool)).toBe(true);
 
-      const tools = await client.listTools();
-      const toolNames = tools.tools.map((tool) => tool.name);
-      for (const tool of ["clip_status", "clip_capture", "clip_share_clipboard", "clip_share_text", "clip_list", "clip_get", "clip_delete"]) {
-        expect(toolNames.includes(tool)).toBe(true);
-      }
+        for (const tool of EXPECTED_TOOLS) expect(schemaFor(tools, tool).type).toBe("object");
+        for (const tool of EXPECTED_TOOLS) expect(schemaFor(tools, tool).additionalProperties).toBe(false);
+        expect(schemaFor(tools, "clip_capture").properties?.mode?.enum).toEqual(["full", "window", "region"]);
+        expect(schemaFor(tools, "clip_share_clipboard").properties?.kind?.enum).toEqual(["auto", "text", "image", "file"]);
+        expect(schemaFor(tools, "clip_share_text").required).toContain("text");
+        expect(schemaFor(tools, "clip_share_text").properties?.text?.type).toBe("string");
+        expect(schemaFor(tools, "clip_list").properties?.limit?.type).toBe("integer");
+        expect(schemaFor(tools, "clip_list").properties?.limit?.maximum).toBe(500);
+        expect(schemaFor(tools, "clip_get").required).toContain("ref");
+        expect(schemaFor(tools, "clip_delete").required).toContain("ref");
+        expect(schemaFor(tools, "clip_get").properties?.ref?.pattern).toBe("\\S");
+        expect(schemaFor(tools, "clip_delete").properties?.ref?.pattern).toBe("\\S");
 
-      const resources = await client.listResources();
-      const resourceUris = resources.resources.map((resource) => resource.uri);
-      expect(resourceUris.includes("clip://status")).toBe(true);
-      expect(resourceUris.includes("clip://shares")).toBe(true);
+        const resources = await client.listResources();
+        const resourceUris = resources.resources.map((resource) => resource.uri);
+        expect(resourceUris.includes("clip://status")).toBe(true);
+        expect(resourceUris.includes("clip://shares")).toBe(true);
 
-      const statusResource = await client.readResource({ uri: "clip://status" });
-      const statusText = statusResource.contents[0]?.text;
-      expect(JSON.parse(String(statusText)).baseUrl).toBe("http://clip.test");
+        const statusResource = await client.readResource({ uri: "clip://status" });
+        const statusText = statusResource.contents[0]?.text as string;
+        expect(JSON.parse(statusText).storage.localPathsRedacted).toBe(true);
+        expect(statusText).not.toContain(dir);
 
-      const created = await client.callTool({
-        name: "clip_share_text",
-        arguments: { text: "mcp contract", title: "MCP Contract" },
+        const sharesResource = await client.readResource({ uri: "clip://shares" });
+        expect(JSON.parse(sharesResource.contents[0]?.text as string).shares).toEqual([]);
+
+        const created = await client.callTool({
+          name: "clip_share_text",
+          arguments: { text: "mcp contract", title: "MCP Contract" },
+        });
+        const record = parseToolJson<{ slug?: string; text?: string; shareUrl?: string; artifactPath?: string }>(created);
+        expect(record.slug).toBeTruthy();
+        expect(record.text).toBe("mcp contract");
+        expect(record.shareUrl?.startsWith("http://clip.test/s/")).toBe(true);
+        expect(record.artifactPath).toBeUndefined();
       });
-      const createdText = (created.content as Array<{ type: string; text?: string }>)[0]?.text;
-      const record = JSON.parse(createdText ?? "{}") as { slug?: string; text?: string; shareUrl?: string };
-      expect(record.slug).toBeTruthy();
-      expect(record.text).toBe("mcp contract");
-      expect(record.shareUrl?.startsWith("http://clip.test/s/")).toBe(true);
-
-      const listed = await client.callTool({ name: "clip_list", arguments: { limit: 5 } });
-      const listedText = (listed.content as Array<{ type: string; text?: string }>)[0]?.text;
-      expect(JSON.parse(listedText ?? "{}").shares).toHaveLength(1);
-
-      const fetched = await client.callTool({ name: "clip_get", arguments: { ref: record.slug } });
-      const fetchedText = (fetched.content as Array<{ type: string; text?: string }>)[0]?.text;
-      expect(JSON.parse(fetchedText ?? "{}").slug).toBe(record.slug);
-
-      const missing = await client.callTool({ name: "clip_get", arguments: { ref: "missing" } });
-      const missingText = (missing.content as Array<{ type: string; text?: string }>)[0]?.text;
-      expect(JSON.parse(missingText ?? "{}")).toEqual({ error: "Share not found", ref: "missing" });
-
-      const deleted = await client.callTool({ name: "clip_delete", arguments: { ref: record.slug } });
-      const deletedText = (deleted.content as Array<{ type: string; text?: string }>)[0]?.text;
-      expect(JSON.parse(deletedText ?? "{}")).toEqual({ deleted: true, ref: record.slug });
-
-      const status = await client.callTool({ name: "clip_status", arguments: {} });
-      const statusToolText = (status.content as Array<{ type: string; text?: string }>)[0]?.text;
-      expect(JSON.parse(statusToolText ?? "{}").storage.deleted).toBe(1);
-
-      const sharesResource = await client.readResource({ uri: "clip://shares" });
-      const sharesText = sharesResource.contents[0]?.text;
-      expect(JSON.parse(String(sharesText)).cli_equivalent).toBe("clip list --json");
     } finally {
-      restoreEnv("PATH", previousPath);
-      restoreEnv("DISPLAY", previousDisplay);
-      restoreEnv("WAYLAND_DISPLAY", previousWayland);
-      await client.close().catch(() => {});
-      await server.close().catch(() => {});
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects invalid tool inputs with structured errors", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clip-mcp-invalid-"));
+    try {
+      await withClient({ homeDir: dir, baseUrl: "http://clip.test" }, async (client) => {
+        const invalidCalls = [
+          { name: "clip_status", arguments: { unexpected: true } },
+          { name: "clip_capture", arguments: { mode: "screen" } },
+          { name: "clip_share_clipboard", arguments: { kind: "html" } },
+          { name: "clip_share_text", arguments: { title: "Missing text" } },
+          { name: "clip_list", arguments: { limit: "25" } },
+          { name: "clip_list", arguments: null },
+          { name: "clip_get", arguments: { ref: "" } },
+          { name: "clip_delete", arguments: { ref: "" } },
+        ];
+
+        for (const invalidCall of invalidCalls) {
+          const result = await client.callTool({
+            name: invalidCall.name,
+            arguments: invalidCall.arguments as Record<string, unknown>,
+          });
+          const payload = parseToolJson<{ ok: boolean; error: { code: string; message: string } }>(result);
+          expect(result.isError).toBe(true);
+          expect(payload.ok).toBe(false);
+          expect(payload.error.code).toBe("invalid_input");
+          expect(payload.error.message.length).toBeGreaterThan(0);
+          expect((result.structuredContent as { error?: { code?: string } } | undefined)?.error?.code).toBe("invalid_input");
+          expect(JSON.stringify(result)).not.toContain(dir);
+        }
+
+        const missing = await client.callTool({ name: "clip_get", arguments: { ref: "missing-share" } });
+        const missingPayload = parseToolJson<{ ok: boolean; error: { code: string; message: string } }>(missing);
+        expect(missing.isError).toBe(true);
+        expect(missingPayload.error.code).toBe("not_found");
+        expect(missingPayload.error.message).toBe("Share not found");
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not leak artifact bytes or local secret paths in MCP output", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clip-mcp-leak-"));
+    const artifactBytes = "SUPER_SECRET_ARTIFACT_BYTES";
+    const secretPath = join(dir, "SECRET_PATH_SENTINEL.txt");
+    try {
+      const store = new ClipStore({ homeDir: dir, baseUrl: "http://clip.test" });
+      const record = store.createBufferClip({
+        buffer: Buffer.from(artifactBytes, "utf8"),
+        kind: "file",
+        title: "Secret Artifact",
+        mimeType: "text/plain",
+        source: "test",
+        metadata: {
+          path: secretPath,
+          nested: {
+            artifactPath: join(dir, "nested-artifact.txt"),
+            note: `terminal editing source:${join(dir, "nested-note.txt")}`,
+            safe: "visible",
+          },
+          note: `terminal editing ${secretPath}`,
+          args: ["--input", join(dir, "input.txt")],
+        },
+        baseUrl: "http://clip.test",
+      });
+      store.close();
+
+      await withClient({ homeDir: dir, baseUrl: "http://clip.test" }, async (client) => {
+        const outputs = [
+          await client.callTool({ name: "clip_status", arguments: {} }),
+          await client.callTool({ name: "clip_list", arguments: { limit: 10 } }),
+          await client.callTool({ name: "clip_get", arguments: { ref: record.slug } }),
+          await client.readResource({ uri: "clip://status" }),
+          await client.readResource({ uri: "clip://shares" }),
+        ];
+        const serialized = JSON.stringify(outputs);
+        const recordPayload = parseToolJson<{ artifactPath?: string; hasArtifact?: boolean; metadata?: Record<string, unknown> }>(outputs[2] as ToolResult);
+
+        expect(recordPayload.hasArtifact).toBe(true);
+        expect(recordPayload.artifactPath).toBeUndefined();
+        expect(recordPayload.metadata?.nested).toEqual({ note: "[redacted]", safe: "visible" });
+        expect(recordPayload.metadata?.note).toBe("[redacted]");
+        expect(serialized).not.toContain(artifactBytes);
+        expect(serialized).not.toContain(record.artifactPath ?? "missing-artifact-path");
+        expect(serialized).not.toContain(secretPath);
+        expect(serialized).not.toContain(dir);
+        expect(serialized).not.toContain("artifactPath");
+        expect(serialized).not.toContain("dbPath");
+        expect(serialized).not.toContain("artifactDir");
+        expect(serialized).not.toContain("homeDir");
+      });
+    } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
