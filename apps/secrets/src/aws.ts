@@ -205,7 +205,7 @@ export async function pushSecret(
     ]);
   }
 
-  const entry = getSecret(key);
+  const entry = await getSecret(key);
   if (!entry) throw new Error(`Secret not found: ${key}`);
 
   const client = clientFactory(config);
@@ -244,7 +244,7 @@ export async function pullSecret(
         action: "pull",
         key,
         awsName: name,
-        localState: getLocalMetadata(key) ? "exists" : "missing",
+        localState: (await getLocalMetadata(key)) ? "exists" : "missing",
         remoteState: "not-checked",
         mutation: "none",
         note: "Would read the AWS secret value and store it in the local vault.",
@@ -256,7 +256,7 @@ export async function pullSecret(
   const res = await client.send(new GetSecretValueCommand({ SecretId: name }));
   if (!res.SecretString) throw new Error(`No string value for secret: ${name}`);
 
-  setSecret(key, res.SecretString);
+  await setSecret(key, res.SecretString);
 }
 
 export async function syncAll(options: AwsCommandOptions = {}): Promise<AwsSyncResult> {
@@ -276,7 +276,7 @@ export async function syncAll(options: AwsCommandOptions = {}): Promise<AwsSyncR
 
   const client = clientFactory(config);
 
-  for (const entry of listSecretMetadata()) {
+  for (const entry of await listSecretMetadata()) {
     try {
       await pushSecret(entry.key, options);
       pushed.push(entry.key);
@@ -337,7 +337,7 @@ function makeDefaultClient(config: ResolvedAwsConfig): SecretsManagerClient {
 async function planSync(config: ResolvedAwsConfig): Promise<AwsPlanResult> {
   const actions: AwsPlanAction[] = [];
   const errors: string[] = [];
-  const local = listSecretMetadata();
+  const local = await listSecretMetadata();
   const localKeys = new Set(local.map((entry) => entry.key));
 
   for (const entry of local) {
@@ -406,8 +406,8 @@ function planResult(
   };
 }
 
-function getLocalMetadata(key: string): SecretMetadata | undefined {
-  return listSecretMetadata(key).find((entry) => entry.key === key);
+async function getLocalMetadata(key: string): Promise<SecretMetadata | undefined> {
+  return (await listSecretMetadata(key)).find((entry) => entry.key === key);
 }
 
 function awsName(key: string, prefix?: string): string {

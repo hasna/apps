@@ -8,27 +8,27 @@ import { registerUser, setSecret } from "../src/store.js";
 
 let testDir: string;
 
-beforeEach(() => {
+beforeEach(async () => {
   testDir = join(tmpdir(), "private-account-123-demo-host", `open-secrets-status-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(testDir, { recursive: true });
   process.env.OPEN_SECRETS_DB = join(testDir, "vault.db");
   resetDb();
 });
 
-afterEach(() => {
+afterEach(async () => {
   resetDb();
   delete process.env.OPEN_SECRETS_DB;
   rmSync(testDir, { recursive: true, force: true });
 });
 
 describe("secret reference status contract", () => {
-  it("reports metadata-only health without values, secret keys, hosts, or provider inventory", () => {
+  it("reports metadata-only health without values, secret keys, hosts, or provider inventory", async () => {
     const privateValue = "raw-super-secret-token-value";
     const privateKeyName = "private-account-123/demo-host/provider/live/token";
     const privateLabel = "demo-host private account token";
-    setSecret(privateKeyName, privateValue, "token", privateLabel);
-    setSecret("example/synthetic/test/api_key", "sk-synthetic-value", "api_key");
-    registerUser("agent-status", "Status Agent", "agent");
+    await setSecret(privateKeyName, privateValue, "token", privateLabel);
+    await setSecret("example/synthetic/test/api_key", "sk-synthetic-value", "api_key");
+    await registerUser("agent-status", "Status Agent", "agent");
 
     const status = getSecretReferenceStatus();
     expect(status).toMatchObject({

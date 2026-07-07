@@ -9,7 +9,7 @@ import { getSecret, setSecret } from "../src/store.js";
 let testDir: string;
 let secretsDir: string;
 
-beforeEach(() => {
+beforeEach(async () => {
   testDir = join(tmpdir(), `open-secrets-env-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   secretsDir = join(testDir, ".secrets");
   mkdirSync(secretsDir, { recursive: true });
@@ -17,17 +17,17 @@ beforeEach(() => {
   resetDb();
 });
 
-afterEach(() => {
+afterEach(async () => {
   resetDb();
   delete process.env.OPEN_SECRETS_DB;
   rmSync(testDir, { recursive: true, force: true });
 });
 
 describe("env-file bridge", () => {
-  it("exports canonical Hasna prod keys to prod.env", () => {
-    setSecret("hasna/xyz/opensource/files/prod/rds", "postgres://example", "credential");
+  it("exports canonical Hasna prod keys to prod.env", async () => {
+    await setSecret("hasna/xyz/opensource/files/prod/rds", "postgres://example", "credential");
 
-    const result = exportEnv({ dir: secretsDir, force: true });
+    const result = await exportEnv({ dir: secretsDir, force: true });
     const envPath = join(secretsDir, "hasna/xyz/opensource/files/prod.env");
 
     expect(result.exported).toBe(1);
@@ -48,13 +48,13 @@ describe("env-file bridge", () => {
     const result = await importEnv({ dir: secretsDir });
 
     expect(result.imported).toBe(1);
-    expect(getSecret("hasna/xyz/opensource/files/prod/rds")!.value).toBe("postgres://example");
+    expect((await getSecret("hasna/xyz/opensource/files/prod/rds"))!.value).toBe("postgres://example");
   });
 
-  it("exports pr-number env keys with valid env var names", () => {
-    setSecret("hasna/xyz/opensource/files/pr-123/database_url", "postgres://preview", "credential");
+  it("exports pr-number env keys with valid env var names", async () => {
+    await setSecret("hasna/xyz/opensource/files/pr-123/database_url", "postgres://preview", "credential");
 
-    exportEnv({ dir: secretsDir, force: true });
+    await exportEnv({ dir: secretsDir, force: true });
     const envPath = join(secretsDir, "hasna/xyz/opensource/files/pr-123.env");
 
     expect(existsSync(envPath)).toBe(true);
@@ -73,7 +73,7 @@ describe("env-file bridge", () => {
 
     await importEnv({ dir: secretsDir });
 
-    expect(getSecret("hasna/xyz/opensource/files/pr-123/database_url")!.value).toBe(
+    expect((await getSecret("hasna/xyz/opensource/files/pr-123/database_url"))!.value).toBe(
       "postgres://preview"
     );
   });

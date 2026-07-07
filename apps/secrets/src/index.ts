@@ -433,12 +433,12 @@ switch (command) {
     }
     // Warn if AGENT_ID is set but agent is not registered — mirrors open-todos pattern
     const agentId = process.env["AGENT_ID"];
-    if (agentId && !getUser(agentId)) {
+    if (agentId && !await getUser(agentId)) {
       console.warn(`⚠ Warning: AGENT_ID="${agentId}" is set but not registered. Run: secrets users register ${agentId} <name> --type agent`);
     }
     const expiresAt = flags.ttl ? parseTtl(flags.ttl) : undefined;
     try {
-      const entry = setSecret(key, value, type, flags.label, expiresAt);
+      const entry = await setSecret(key, value, type, flags.label, expiresAt);
       console.log(`✓ Stored: ${entry.key} [${entry.type}]${expiresAt ? ` (expires ${new Date(expiresAt).toLocaleDateString()})` : ""}`);
     } catch (e: any) {
       console.error(e.message);
@@ -450,7 +450,7 @@ switch (command) {
   case "get": {
     const [key] = positional;
     if (!key) { console.error("Usage: secrets get <key>"); process.exit(1); }
-    const entry = getSecret(key);
+    const entry = await getSecret(key);
     if (!entry) { console.error(`Not found: ${key}`); process.exit(1); }
     if (process.stdout.isTTY) {
       console.log(formatEntry(entry, true));
@@ -466,14 +466,14 @@ switch (command) {
   case "uninstall": {
     const [key] = positional;
     if (!key) { console.error(`Usage: secrets ${command} <key>`); process.exit(1); }
-    if (!deleteSecret(key)) { console.error(`Not found: ${key}`); process.exit(1); }
+    if (!await deleteSecret(key)) { console.error(`Not found: ${key}`); process.exit(1); }
     console.log(`✓ Deleted: ${key}`);
     break;
   }
 
   case "list": {
     const [namespace] = positional;
-    const entries = listSecretMetadata(namespace);
+    const entries = await listSecretMetadata(namespace);
     if (entries.length === 0) {
       console.log(namespace ? `No secrets in namespace: ${namespace}` : "Vault is empty.");
     } else {
@@ -486,7 +486,7 @@ switch (command) {
   case "search": {
     const [query] = positional;
     if (!query) { console.error("Usage: secrets search <query>"); process.exit(1); }
-    const results = searchSecretMetadata(query);
+    const results = await searchSecretMetadata(query);
     if (results.length === 0) { console.log(`No results for: ${query}`); }
     else {
       for (const e of results) console.log(formatEntry(e));
@@ -501,7 +501,7 @@ switch (command) {
       console.error("Usage: secrets export [--show|--plaintext] [--pretty]. Do not combine --redact with plaintext flags.");
       process.exit(1);
     }
-    console.log(formatJson(exportSecrets(!showPlaintext), flags.pretty === "true"));
+    console.log(formatJson(await exportSecrets(!showPlaintext), flags.pretty === "true"));
     break;
   }
 
@@ -632,7 +632,7 @@ switch (command) {
         console.error("Import refused: this looks like a redacted export. Use `secrets export --show` to create a restorable local backup.");
         process.exit(1);
       }
-      const count = importSecrets(entries as any);
+      const count = await importSecrets(entries as any);
       console.log(`✓ Imported ${count} secret(s)`);
     } catch (e: any) {
       console.error(`Import failed: ${e.message}`);
@@ -656,7 +656,7 @@ switch (command) {
   }
 
   case "gc": {
-    const count = pruneExpired();
+    const count = await pruneExpired();
     console.log(`✓ Pruned ${count} expired secret(s)`);
     break;
   }
@@ -664,7 +664,7 @@ switch (command) {
   case "audit": {
     const [key] = positional;
     const limit = flags.limit ? parseInt(flags.limit) : 50;
-    const entries = getAuditLog(key, limit);
+    const entries = await getAuditLog(key, limit);
     if (entries.length === 0) { console.log("No audit entries."); }
     else {
       for (const e of entries) {
@@ -684,7 +684,7 @@ switch (command) {
     const { flags: uFlags, positional: uPos } = parseArgs(userRest);
     switch (sub) {
       case "list": {
-        const users = listUsers(uFlags.type as any);
+        const users = await listUsers(uFlags.type as any);
         if (users.length === 0) { console.log("No users registered."); }
         else {
           for (const u of users) {
@@ -698,14 +698,14 @@ switch (command) {
       case "register": {
         const [id, name] = uPos;
         if (!id || !name) { console.error("Usage: secrets users register <id> <name> [--type human|agent]"); process.exit(1); }
-        const user = registerUser(id, name, (uFlags.type as any) ?? "human");
+        const user = await registerUser(id, name, (uFlags.type as any) ?? "human");
         console.log(`✓ Registered: ${user.id} [${user.type}] — ${user.name}`);
         break;
       }
       case "delete": {
         const [id] = uPos;
         if (!id) { console.error("Usage: secrets users delete <id>"); process.exit(1); }
-        if (!deleteUser(id)) { console.error(`Not found: ${id}`); process.exit(1); }
+        if (!await deleteUser(id)) { console.error(`Not found: ${id}`); process.exit(1); }
         console.log(`✓ Deleted user: ${id}`);
         break;
       }
@@ -725,7 +725,7 @@ switch (command) {
           console.error(`Invalid kind "${kind}". Valid: ${VAULT_ITEM_KINDS.join(", ")}`);
           process.exit(1);
         }
-        const items = listVaultItemMetadata(kind);
+        const items = await listVaultItemMetadata(kind);
         if (items.length === 0) {
           console.log(kind ? `No ${kind} vault items.` : "No structured vault items.");
         } else {
@@ -738,7 +738,7 @@ switch (command) {
       case "search": {
         const query = idOrKind;
         if (!query) { console.error("Usage: secrets items search <query>"); process.exit(1); }
-        const items = searchVaultItemMetadata(query);
+        const items = await searchVaultItemMetadata(query);
         if (items.length === 0) {
           console.log(`No vault items for: ${query}`);
         } else {
@@ -751,7 +751,7 @@ switch (command) {
       case "get": {
         const id = idOrKind;
         if (!id) { console.error("Usage: secrets items get <id> [--show]"); process.exit(1); }
-        const item = getVaultItem(id);
+        const item = await getVaultItem(id);
         if (!item) { console.error(`Not found: ${id}`); process.exit(1); }
         console.log(JSON.stringify({
           ...item,
@@ -765,7 +765,7 @@ switch (command) {
       case "remove": {
         const id = idOrKind;
         if (!id) { console.error(`Usage: secrets items ${sub} <id>`); process.exit(1); }
-        if (!deleteVaultItem(id)) { console.error(`Not found: ${id}`); process.exit(1); }
+        if (!await deleteVaultItem(id)) { console.error(`Not found: ${id}`); process.exit(1); }
         console.log(`✓ Deleted vault item: ${id}`);
         break;
       }
@@ -774,7 +774,7 @@ switch (command) {
         const title = requireFlag(flags, "title", "Usage: secrets items add-login --title <title> --url <url> --username <user> --password <pass>");
         const username = requireFlag(flags, "username", "Usage: secrets items add-login --title <title> --url <url> --username <user> --password <pass>");
         const password = requireFlag(flags, "password", "Usage: secrets items add-login --title <title> --url <url> --username <user> --password <pass>");
-        const item = setVaultItem({
+        const item = await setVaultItem({
           kind: "login",
           title,
           subtitle: username,
@@ -795,7 +795,7 @@ switch (command) {
 
       case "add-address": {
         const title = requireFlag(flags, "title", "Usage: secrets items add-address --title <title> [--name <name>] [--line1 <line>] [--city <city>]");
-        const item = setVaultItem({
+        const item = await setVaultItem({
           kind: "address",
           title,
           subtitle: flags.name ?? flags.email ?? flags.phone,
@@ -824,7 +824,7 @@ switch (command) {
       case "add-note": {
         const title = requireFlag(flags, "title", "Usage: secrets items add-note --title <title> --body <text>");
         const body = requireFlag(flags, "body", "Usage: secrets items add-note --title <title> --body <text>");
-        const item = setVaultItem({
+        const item = await setVaultItem({
           kind: "secure_note",
           title,
           subtitle: flags.subtitle,
@@ -876,7 +876,7 @@ switch (command) {
           if (result) console.log(JSON.stringify(result, null, 2));
           else console.log(`✓ Pushed: ${key}`);
         } else {
-          const entries = listSecretMetadata();
+          const entries = await listSecretMetadata();
           const dryRunActions = [];
           let dryRunResult: any;
           for (const e of entries) {
@@ -1077,8 +1077,8 @@ switch (command) {
         const key = rawKey.toLowerCase().replace(/_/g, "-");
         const type = inferType(rawKey);
         // Skip if already exists and not overriding
-        if (!flags.overwrite && getSecret(key)) { skipped++; continue; }
-        setSecret(key, rawValue, type);
+        if (!flags.overwrite && await getSecret(key)) { skipped++; continue; }
+        await setSecret(key, rawValue, type);
         imported++;
       }
     }
@@ -1112,7 +1112,7 @@ switch (command) {
   case "export-env": {
     const { exportEnv } = await import("./env.js");
     try {
-      const result = exportEnv({
+      const result = await exportEnv({
         dir: flags.dir,
         force: "force" in flags,
         dryRun: "dry-run" in flags,
