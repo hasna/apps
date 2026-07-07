@@ -920,6 +920,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "writing", "content generation", "nlp", "text"],
   },
   {
+    name: "terminal-use",
+    displayName: "Terminal Use",
+    description: "Agent deployment runtime API with tasks, events, and persistent filesystems",
+    category: "AI & ML",
+    tags: ["agents", "runtime", "deployment", "filesystem"],
+  },
+  {
     name: "textcortexai",
     displayName: "TextCortex AI",
     description: "AI writing assistant for generating and rewriting content across platforms",

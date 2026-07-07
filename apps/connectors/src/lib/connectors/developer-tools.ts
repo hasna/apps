@@ -129,6 +129,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["monitoring", "dashboards", "observability"],
   },
   {
+    name: "zipkin",
+    displayName: "Zipkin",
+    description: "Distributed tracing platform",
+    category: "Developer Tools",
+    tags: ["monitoring", "tracing", "observability"],
+  },
+  {
     name: "okta",
     displayName: "Okta",
     description: "Identity and access management",
@@ -981,6 +988,13 @@ export const connectors: ConnectorMeta[] = [
     description: "Workflow error handler",
     category: "Developer Tools",
     tags: ["workflow", "error-handler", "development"],
+  },
+  {
+    name: "stoplight",
+    displayName: "Stoplight",
+    description: "API design and documentation platform",
+    category: "Developer Tools",
+    tags: ["api", "openapi", "documentation", "design"],
   },
   {
     name: "steel-dev",
