@@ -1,11 +1,37 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ClipStore } from "../storage.js";
-import { handleClipHttpRequest } from "./server.js";
+import { handleClipHttpRequest, startClipServer } from "./server.js";
 
 describe("HTTP server routes", () => {
+  it("serves root health and not found responses without local paths", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clip-server-root-"));
+    try {
+      const root = await handleClipHttpRequest(new Request("http://x/"), {
+        clientOptions: { homeDir: dir },
+        host: "0.0.0.0",
+        port: 4567,
+      });
+      expect(root.status).toBe(200);
+      expect(await root.json()).toEqual({
+        status: "ok",
+        name: "clip",
+        baseUrl: "http://0.0.0.0:4567",
+      });
+
+      const health = await handleClipHttpRequest(new Request("http://x/health"), { clientOptions: { homeDir: dir } });
+      expect(health.status).toBe(200);
+
+      const missing = await handleClipHttpRequest(new Request("http://x/nope"), { clientOptions: { homeDir: dir } });
+      expect(missing.status).toBe(404);
+      expect(await missing.json()).toEqual({ error: "Not found" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("creates, reads, previews, and deletes text shares", async () => {
     const dir = mkdtempSync(join(tmpdir(), "clip-server-"));
     try {
@@ -25,6 +51,14 @@ describe("HTTP server routes", () => {
       const preview = await handleClipHttpRequest(new Request(`http://x/s/${record.slug}`), options);
       expect(preview.status).toBe(200);
       expect(await preview.text()).toContain("hello api");
+
+      const raw = await handleClipHttpRequest(new Request(`http://x/s/${record.slug}/raw`), options);
+      expect(raw.status).toBe(200);
+      expect(raw.headers.get("Content-Type")).toBe("text/plain; charset=utf-8");
+      expect(await raw.text()).toBe("hello api");
+
+      const list = await handleClipHttpRequest(new Request("http://x/api/shares?limit=1"), options);
+      expect((await list.json() as { shares: unknown[] }).shares).toHaveLength(1);
 
       const deleted = await handleClipHttpRequest(new Request(`http://x/api/shares/${record.id}`, { method: "DELETE" }), options);
       expect(deleted.status).toBe(200);
@@ -74,6 +108,35 @@ describe("HTTP server routes", () => {
       });
       expect(response.status).toBe(400);
       expect((await response.json() as { error: string }).error).toContain("limit");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns shares with default limits and rejects malformed create bodies", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clip-server-bodies-"));
+    try {
+      const options = { clientOptions: { homeDir: dir } };
+      const list = await handleClipHttpRequest(new Request("http://x/api/shares"), options);
+      expect(list.status).toBe(200);
+      expect(await list.json()).toEqual({ shares: [] });
+
+      const malformed = await handleClipHttpRequest(new Request("http://x/api/shares", {
+        method: "POST",
+        body: "{bad json",
+      }), options);
+      expect(malformed.status).toBe(400);
+      expect(await malformed.json()).toEqual({ error: "Expected text or dataBase64" });
+
+      const missingBody = await handleClipHttpRequest(new Request("http://x/api/shares", { method: "POST" }), options);
+      expect(missingBody.status).toBe(400);
+
+      const invalidBase64 = await handleClipHttpRequest(new Request("http://x/api/shares", {
+        method: "POST",
+        body: JSON.stringify({ dataBase64: "!" }),
+      }), options);
+      expect(invalidBase64.status).toBe(400);
+      expect(await invalidBase64.json()).toEqual({ error: "dataBase64 did not decode to content" });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -146,6 +209,101 @@ describe("HTTP server routes", () => {
     }
   });
 
+  it("returns missing share, missing artifact, image preview, and binary download branches", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clip-server-artifacts-"));
+    try {
+      const options = { clientOptions: { homeDir: dir }, baseUrl: "http://test.local" };
+      const store = new ClipStore({ homeDir: dir, baseUrl: "http://test.local" });
+      const image = store.createBufferClip({
+        buffer: Buffer.from("png"),
+        kind: "file",
+        title: "Image",
+        mimeType: "image/png",
+        source: "test",
+      });
+      const binary = store.createBufferClip({
+        buffer: Buffer.from("bin"),
+        kind: "file",
+        title: "Binary",
+        mimeType: "application/octet-stream",
+        source: "test",
+      });
+      store.close();
+
+      const missing = await handleClipHttpRequest(new Request("http://x/api/shares/missing"), options);
+      expect(missing.status).toBe(404);
+
+      const deleteMissing = await handleClipHttpRequest(new Request("http://x/api/shares/missing", { method: "DELETE" }), options);
+      expect(await deleteMissing.json()).toEqual({ deleted: false, ref: "missing" });
+
+      const imagePreview = await handleClipHttpRequest(new Request(`http://x/s/${image.slug}`), options);
+      expect(imagePreview.status).toBe(200);
+      expect(await imagePreview.text()).toContain(`<img src="/s/${image.slug}/raw"`);
+
+      const binaryPreview = await handleClipHttpRequest(new Request(`http://x/s/${binary.slug}`), options);
+      expect(binaryPreview.status).toBe(200);
+      expect(await binaryPreview.text()).toContain(`Download ${binary.title}`);
+
+      const binaryRaw = await handleClipHttpRequest(new Request(`http://x/s/${binary.slug}/raw`), options);
+      expect(binaryRaw.status).toBe(200);
+      expect(binaryRaw.headers.get("Content-Disposition")).toContain(`filename="${binary.slug}"`);
+      expect(await binaryRaw.text()).toBe("bin");
+
+      unlinkSync(image.artifactPath!);
+      const missingRaw = await handleClipHttpRequest(new Request(`http://x/s/${image.slug}/raw`), options);
+      expect(missingRaw.status).toBe(404);
+      expect(await missingRaw.json()).toEqual({ error: "Artifact not found" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("wraps capture and clipboard route errors as public 500s", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clip-server-tool-errors-"));
+    const previousPath = process.env["PATH"];
+    const previousDisplay = process.env["DISPLAY"];
+    const previousWayland = process.env["WAYLAND_DISPLAY"];
+    const logs: string[] = [];
+    try {
+      process.env["PATH"] = "";
+      delete process.env["DISPLAY"];
+      delete process.env["WAYLAND_DISPLAY"];
+      const options = { clientOptions: { homeDir: dir }, log: (message: string) => logs.push(message) };
+
+      const capture = await handleClipHttpRequest(new Request("http://x/api/capture", {
+        method: "POST",
+        body: JSON.stringify({ mode: "window", title: "No tools" }),
+      }), options);
+      expect(capture.status).toBe(500);
+      expect(await capture.json()).toEqual({ error: "Internal server error" });
+
+      const clipboard = await handleClipHttpRequest(new Request("http://x/api/clipboard", {
+        method: "POST",
+        body: JSON.stringify({ kind: "text" }),
+      }), options);
+      expect(clipboard.status).toBe(500);
+      expect(await clipboard.json()).toEqual({ error: "Internal server error" });
+      expect(logs.join("\n")).toContain("clip server request failed:");
+    } finally {
+      if (previousPath === undefined) {
+        delete process.env["PATH"];
+      } else {
+        process.env["PATH"] = previousPath;
+      }
+      if (previousDisplay === undefined) {
+        delete process.env["DISPLAY"];
+      } else {
+        process.env["DISPLAY"] = previousDisplay;
+      }
+      if (previousWayland === undefined) {
+        delete process.env["WAYLAND_DISPLAY"];
+      } else {
+        process.env["WAYLAND_DISPLAY"] = previousWayland;
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("does not expose raw exception messages in public 500 responses", async () => {
     const dir = mkdtempSync(join(tmpdir(), "clip-server-error-"));
     const dbPath = dir;
@@ -159,6 +317,29 @@ describe("HTTP server routes", () => {
       expect(payloadText).not.toContain(dir);
       expect(payloadText).not.toContain(dbPath);
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("starts a server with bound port wiring and request handling", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clip-server-start-"));
+    const logs: string[] = [];
+    const server = startClipServer({
+      host: "127.0.0.1",
+      port: 0,
+      clientOptions: { homeDir: dir },
+      log: (message) => logs.push(message),
+    });
+    try {
+      expect(server.port).toBeGreaterThan(0);
+      expect(logs[0]).toBe(`clip server listening on http://127.0.0.1:${server.port}`);
+
+      const response = await fetch(`http://127.0.0.1:${server.port}/health`);
+      expect(response.status).toBe(200);
+      const payload = await response.json() as { baseUrl: string };
+      expect(payload.baseUrl).toBe(`http://127.0.0.1:${server.port}`);
+    } finally {
+      server.stop(true);
       rmSync(dir, { recursive: true, force: true });
     }
   });
