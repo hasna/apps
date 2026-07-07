@@ -80,6 +80,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["incident management", "alerts", "on-call", "monitoring", "devops"],
   },
   {
+    name: "statuspage",
+    displayName: "Statuspage",
+    description: "Atlassian Statuspage incident and status page management",
+    category: "Infrastructure",
+    tags: ["status", "incidents", "monitoring", "atlassian", "devops"],
+  },
+  {
     name: "statuscake",
     displayName: "StatusCake",
     description: "Website uptime monitoring and performance testing platform",
