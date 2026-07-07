@@ -5384,6 +5384,9 @@ describe("loops CLI", () => {
       "oss",
       "--max-dispatch",
       "2",
+      "--provider-active-cap",
+      "6",
+      "--provider-admission-check",
       "--sandbox",
       "workspace-write",
     ]);
@@ -5393,6 +5396,8 @@ describe("loops CLI", () => {
     expect(loop.target.args).toEqual(expect.arrayContaining(["--provider-rule", "area=backend:codewith:account004,account005"]));
     expect(loop.target.args).toEqual(expect.arrayContaining(["--triage-auth-profile", "account004", "--planner-auth-profile", "account005"]));
     expect(loop.target.args).toEqual(expect.arrayContaining(["--max-dispatch", "2"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--provider-active-cap", "6"]));
+    expect(loop.target.args).toContain("--provider-admission-check");
   });
 
   test("routes schedule rejects unsupported todos task templates before storing a drain loop", () => {
@@ -5718,6 +5723,27 @@ describe("loops CLI", () => {
     expect(loops).toHaveLength(0);
   });
 
+  test("routes schedule rejects invalid provider active caps before storing a loop", () => {
+    const dataDir = freshDataDir("loops-cli-routes-schedule-provider-cap-invalid-");
+
+    const scheduled = runCli(dataDir, [
+      "routes",
+      "schedule",
+      "todos-task",
+      "route-drain-invalid-provider-cap",
+      "--every",
+      "5m",
+      "--provider-active-cap",
+      "0",
+    ]);
+
+    expect(scheduled.status).not.toBe(0);
+    expect(scheduled.stderr).toContain("--provider-active-cap must be a positive integer");
+
+    const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
+    expect(loops).toHaveLength(0);
+  });
+
   test("docs include the OSS task route drain safety recipe", () => {
     const usage = readFileSync(new URL("../../docs/USAGE.md", import.meta.url), "utf8");
 
@@ -5726,6 +5752,8 @@ describe("loops CLI", () => {
     expect(usage).toContain("--auth-profile-pool account001,account002,account003");
     expect(usage).toContain("--worktree-mode required");
     expect(usage).toContain("--max-active-per-project");
+    expect(usage).toContain("--provider-active-cap");
+    expect(usage).toContain("--provider-admission-check");
     expect(usage).toContain("--evidence-dir");
     expect(usage).toMatch(/Do not dispatch\s+or paste task prompts into tmux panes/);
   });
@@ -7101,6 +7129,20 @@ describe("loops CLI", () => {
       ].join("\n"),
     );
     chmodSync(todosBin, 0o755);
+    const codewithBin = join(binDir, "codewith");
+    writeFileSync(
+      codewithBin,
+      [
+        "#!/usr/bin/env bash",
+        "if [[ \"$*\" == \"agent diagnostics --json\" ]]; then",
+        "  printf '%s' '{\"activeRunCount\":2,\"maxActiveRunsPerUser\":8,\"availableActiveRunSlots\":6}'",
+        "  exit 0",
+        "fi",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(codewithBin, 0o755);
     const bulkyDetail = "very long private task details ".repeat(200);
     const ready = [
       {
@@ -7131,6 +7173,8 @@ describe("loops CLI", () => {
         evidenceDir,
         "--max-dispatch",
         "1",
+        "--provider-active-cap",
+        "6",
         "--worktree-mode",
         "off",
       ],
@@ -7150,11 +7194,95 @@ describe("loops CLI", () => {
       kind: "created",
       taskId: "task-drain-compact",
     });
+    expect(value.results[0].providerAdmission).toMatchObject({
+      allowed: true,
+      provider: "codewith",
+      checked: true,
+      activeCap: 6,
+      diagnostics: { activeRunCount: 2, availableActiveRunSlots: 6 },
+    });
     expect(value.results[0].event).toBeUndefined();
     expect(value.results[0].workflow).toBeUndefined();
     expect(existsSync(value.evidencePath)).toBe(true);
     const evidence = readFileSync(value.evidencePath, "utf8");
     expect(evidence).toContain("very long private task details");
+  });
+
+  test("todos task drain exits nonzero when provider admission diagnostics fail", () => {
+    const dataDir = freshDataDir("loops-cli-event-drain-provider-admission-fail-");
+    const binDir = join(dataDir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "if [[ \"$*\" == *\"ready\"* ]]; then printf '%s' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    const codewithBin = join(binDir, "codewith");
+    writeFileSync(
+      codewithBin,
+      [
+        "#!/usr/bin/env bash",
+        "if [[ \"$*\" == \"agent diagnostics --json\" ]]; then",
+        "  printf 'diagnostics unavailable\\n' >&2",
+        "  exit 17",
+        "fi",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(codewithBin, 0o755);
+    const ready = [
+      {
+        id: "task-drain-provider-admission-fail",
+        title: "Route task while diagnostics are broken",
+        description: "provider admission should fail closed",
+        status: "pending",
+        working_dir: dataDir,
+        tags: ["auto:route"],
+      },
+    ];
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-project",
+        join(dataDir, "todos-store"),
+        "--compact",
+        "--max-dispatch",
+        "1",
+        "--provider-admission-check",
+        "--worktree-mode",
+        "off",
+      ],
+      undefined,
+      {
+        PATH: `${binDir}:/usr/bin:/bin`,
+        TODOS_READY_JSON: JSON.stringify(ready),
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("route drain hit 1 non-skippable task error");
+    const value = JSON.parse(result.stdout);
+    expect(value.created).toBe(0);
+    expect(value.throttled).toBe(1);
+    expect(value.fatal).toBe(1);
+    expect(value.results[0].providerAdmission).toMatchObject({
+      allowed: false,
+      provider: "codewith",
+      checked: true,
+      fatal: true,
+    });
   });
 
   test("todos task drain derives project path from repository line in task descriptions", () => {

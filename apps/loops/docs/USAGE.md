@@ -826,6 +826,8 @@ loops routes drain todos-task \
   --max-active-per-project 1 \
   --max-active-per-project-group 4 \
   --max-active 12 \
+  --provider-active-cap 6 \
+  --provider-admission-check \
   --worktree-mode required \
   --evidence-dir "$HOME/.hasna/loops/reports/task-drain"
 ```
@@ -842,6 +844,16 @@ command loop: it fills only available capacity, writes compact JSON evidence
 when requested, and leaves excess ready tasks in todos for a later drain pass.
 Use `--dry-run` to preview candidates and rendered workflows without mutating
 OpenLoops state.
+
+The route throttle flags count OpenLoops routed workflow work items, not the
+live background-agent slots inside a provider. For Codewith drains, add
+`--provider-active-cap <n>` (or `--codewith-active-cap <n>`) so each candidate
+checks `codewith agent diagnostics --json` before workflow-loop creation and
+defers when `activeRunCount >= n`. Use `--provider-admission-check` when the
+drain should also fail closed on diagnostics errors, unsupported providers, or
+Codewith reports with no available admission slots. Backlog prioritizer and
+drain loops should use these first-class flags rather than a shell guard around
+`codewith agent diagnostics`.
 
 For an OSS task-created route, keep the drain deterministic and narrow:
 
@@ -861,6 +873,8 @@ loops routes schedule todos-task oss-task-route-drain \
   --max-active-per-project 1 \
   --max-active-per-project-group 4 \
   --max-active 12 \
+  --provider-active-cap 6 \
+  --provider-admission-check \
   --worktree-mode required \
   --evidence-dir "$HOME/.hasna/loops/reports/oss-task-route-drain" \
   --compact
@@ -871,11 +885,13 @@ in with the `auto:route` tag, `route_enabled=true`, or
 `automation.allowed=true` should be routed. Keep repo-mutating worker/verifier
 runs on a Codewith account pool with `--worktree-mode required`. Do not dispatch
 or paste task prompts into tmux panes. Use max-active throttles and
-`--max-dispatch` to bound agent fan-out, and write compact evidence into a
-bounded reports directory so operators can audit each drain without unbounded
-stdout or loop history growth. Keep `--scan-limit` large enough for the current
-ready-task backlog; if the scan is exhausted before matching tasks appear, the
-drain will correctly do no work.
+`--max-dispatch` to bound OpenLoops agent fan-out, and use
+`--provider-active-cap` plus `--provider-admission-check` to bound live Codewith
+background-agent admission. Write compact evidence into a bounded reports
+directory so operators can audit each drain without unbounded stdout or loop
+history growth. Keep `--scan-limit` large enough for the current ready-task
+backlog; if the scan is exhausted before matching tasks appear, the drain will
+correctly do no work.
 
 Generated task/event route workflow specs are lifecycle-managed. After a
 generated one-shot route workflow run reaches `succeeded`, `failed`,

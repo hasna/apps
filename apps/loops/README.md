@@ -757,6 +757,8 @@ loops routes schedule todos-task oss-task-route-drain \
   --max-active-per-project 1 \
   --max-active-per-project-group 4 \
   --max-active 12 \
+  --provider-active-cap 6 \
+  --provider-admission-check \
   --max-per-profile 2 \
   --worktree-mode required \
   --evidence-dir "$HOME/.hasna/loops/reports/oss-task-route-drain" \
@@ -773,6 +775,16 @@ machine ID, workflow ID, loop ID, and route scope for each considered task.
 anti-hog caps counted over all routes. Raise a router's `--max-active`
 deliberately once counting is per-route; keep `--max-per-profile` set so the
 extra concurrency spreads across subscription accounts.
+
+`--max-active` and related route throttles count OpenLoops routed workflow work
+items; they do not know whether Codewith is already at its live background-agent
+admission limit. Add `--provider-active-cap <n>` (or the Codewith-specific alias
+`--codewith-active-cap <n>`) to make the route run `codewith agent diagnostics
+--json` before creating workflow loops and defer when `activeRunCount >= n`.
+Add `--provider-admission-check` when drains should also fail closed on provider
+diagnostics failure, unsupported providers, or Codewith reports with no
+available admission slots. Backlog prioritizer and drain loops should use these
+first-class flags instead of shell-wrapping a temporary diagnostics guard.
 
 Only route tasks that explicitly opt in with `auto:route`, `route_enabled=true`,
 or `automation.allowed=true`. Use Codewith account pools, required worktrees,

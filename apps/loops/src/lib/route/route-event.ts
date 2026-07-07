@@ -41,6 +41,13 @@ import {
   sandboxFromOpts,
 } from "./provider.js";
 import {
+  checkProviderAdmission,
+  providerAdmissionDryRunPreview,
+  providerAdmissionPlanFromOpts,
+  providerAdmissionPlanWithAuthProfiles,
+  type ProviderAdmissionPlan,
+} from "./provider-admission.js";
+import {
   hasThrottleLimits,
   normalizeRoutePath,
   routeProjectGroup,
@@ -264,6 +271,7 @@ interface RouteEventPlan {
   /** codewith auth-profile pool context for least-loaded selection + the
    *  --max-per-profile guard, resolved once the store is live. */
   poolRouting?: PoolRoutingPlan;
+  providerAdmission?: ProviderAdmissionPlan;
   subjectRef: string;
   loopName: string;
   loopDescription: string;
@@ -349,6 +357,21 @@ function buildPoolRoutingPlan(
   return { pool, seed, maxPerProfile: maxPerProfile > 0 ? maxPerProfile : undefined, rolesByStepId };
 }
 
+function nonEmptyStrings(values: Array<string | undefined>): string[] | undefined {
+  const entries = values.map((entry) => entry?.trim()).filter((entry): entry is string => Boolean(entry));
+  return entries.length ? entries : undefined;
+}
+
+function codewithAuthProfilesFromWorkflow(workflow: CreateWorkflowInput): Array<string | undefined> | undefined {
+  const profiles: Array<string | undefined> = [];
+  for (const step of workflow.steps) {
+    const target = step.target;
+    if (target.type !== "agent" || target.provider !== "codewith") continue;
+    profiles.push(target.authProfile);
+  }
+  return profiles.length ? profiles : undefined;
+}
+
 function dedupedRoutePrint(
   plan: Pick<RouteEventPlan, "event" | "idempotencyKey" | "dedupeValueExtras">,
   outcome: { existingItem: WorkflowWorkItem; existingLoop?: ReturnType<Store["getLoop"]>; existingWorkflow?: WorkflowSpec; invocation?: Parameters<typeof publicWorkflowInvocation>[0] },
@@ -410,6 +433,9 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
           limits: plan.throttleLimits,
         })
       : undefined;
+    const providerAdmission = providerAdmissionDryRunPreview(
+      providerAdmissionPlanWithAuthProfiles(plan.providerAdmission, codewithAuthProfilesFromWorkflow(workflowBody) ?? []),
+    );
     const preflight = opts.preflight
       ? preflightStoredWorkflow(workflowSpecForPreflight(workflowBody, "event-preflight"), plan.workflowContext, {})
       : undefined;
@@ -425,6 +451,7 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
         workflow: workflowBody,
         loop: loopInput,
         throttle,
+        providerAdmission,
         sandboxPreflight,
         preflight,
       },
@@ -439,6 +466,28 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
       ? preflightStoredWorkflow(workflowPreflightSpec, plan.workflowContext, {})
       : undefined;
     let poolAssignment: PoolAuthProfileAssignment | undefined;
+    if (plan.poolRouting) {
+      const loadCounts = store.countRunningWorkflowStepsByAuthProfile();
+      poolAssignment = assignPoolAuthProfiles({
+        pool: plan.poolRouting.pool,
+        seed: plan.poolRouting.seed,
+        loadCounts,
+        maxPerProfile: plan.poolRouting.maxPerProfile,
+        roles: Object.values(plan.poolRouting.rolesByStepId),
+      });
+    }
+    if (poolAssignment && !poolAssignment.deferred) {
+      for (const step of workflowBody.steps) {
+        const role = plan.poolRouting?.rolesByStepId[step.id];
+        const chosen = role ? poolAssignment.profiles[role] : undefined;
+        if (chosen && step.target.type === "agent") step.target.authProfile = chosen;
+      }
+    }
+    const workflowProfiles = codewithAuthProfilesFromWorkflow(workflowBody);
+    const providerAdmissionPlan = workflowProfiles
+      ? providerAdmissionPlanWithAuthProfiles(plan.providerAdmission, workflowProfiles)
+      : plan.providerAdmission;
+    const providerAdmission = poolAssignment?.deferred ? undefined : checkProviderAdmission(providerAdmissionPlan);
     const outcome = store.writeTransaction(() => {
       const invocation = store.createWorkflowInvocation(plan.invocationInput);
       const existingItem = findRouteWorkItemByKeys(store, plan.routeKey, dedupeKeys);
@@ -460,25 +509,11 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
             limits: plan.throttleLimits,
           })
         : undefined;
-      // Least-loaded auth-profile pool selection + max-per-profile guard. Read
-      // the live per-account running load and either spread this route's steps
-      // to the least-loaded accounts or defer when every pool member is
-      // saturated. Runs after the active-workflow throttle so the store-side
-      // caps still bind first.
-      if (plan.poolRouting) {
-        const loadCounts = store.countRunningWorkflowStepsByAuthProfile();
-        poolAssignment = assignPoolAuthProfiles({
-          pool: plan.poolRouting.pool,
-          seed: plan.poolRouting.seed,
-          loadCounts,
-          maxPerProfile: plan.poolRouting.maxPerProfile,
-          roles: Object.values(plan.poolRouting.rolesByStepId),
-        });
-      }
       const activeThrottled = Boolean(throttle && !throttle.allowed);
       const poolDeferred = Boolean(poolAssignment?.deferred);
-      const deferred = activeThrottled || poolDeferred;
-      const deferReason = activeThrottled ? throttle!.reason : poolAssignment?.reason;
+      const providerDeferred = Boolean(providerAdmission && !providerAdmission.allowed);
+      const deferred = activeThrottled || poolDeferred || providerDeferred;
+      const deferReason = activeThrottled ? throttle!.reason : poolDeferred ? poolAssignment?.reason : providerAdmission?.reason;
       const effectiveThrottle: RouteThrottleDecision | undefined = activeThrottled
         ? throttle
         : poolDeferred
@@ -505,16 +540,14 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
           }
         : undefined;
       const refreshedInvocation = store.refreshWorkflowInvocationForWorkItem(workItem.id, plan.invocationInput);
-      if (deferred) return { kind: "throttled" as const, invocation: refreshedInvocation, workItem, throttle: effectiveThrottle! };
-      // Rewrite the codewith auth profile of each pooled agent step to its
-      // least-loaded assignment before the workflow is persisted, so the stored
-      // step targets (and their recorded account_profile) reflect the spread.
-      if (poolAssignment && !poolAssignment.deferred) {
-        for (const step of workflowBody.steps) {
-          const role = plan.poolRouting?.rolesByStepId[step.id];
-          const chosen = role ? poolAssignment.profiles[role] : undefined;
-          if (chosen && step.target.type === "agent") step.target.authProfile = chosen;
-        }
+      if (deferred) {
+        return {
+          kind: "throttled" as const,
+          invocation: refreshedInvocation,
+          workItem,
+          reason: deferReason,
+          throttle: effectiveThrottle,
+        };
       }
       const workflow = routeWorkflowForStorage(store, workflowBody);
       const loop = store.createLoop({
@@ -548,7 +581,7 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
         value: {
           skipped: true,
           queuedAtSource: true,
-          reason: outcome.throttle.reason,
+          reason: outcome.reason,
           idempotencyKey,
           event,
           ...plan.valueExtras,
@@ -557,8 +590,10 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
           throttle: outcome.throttle,
           workflow: workflowBody,
           loop: loopInput,
+          providerAdmission,
+          fatal: providerAdmission?.fatal === true ? true : undefined,
         },
-        human: `skipped ${plan.humanSubject}: ${outcome.throttle.reason}`,
+        human: `skipped ${plan.humanSubject}: ${outcome.reason}`,
       };
     }
     return {
@@ -574,6 +609,7 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
         loop: publicLoop(outcome.loop),
         requeue: outcome.requeue,
         throttle: outcome.throttle,
+        providerAdmission,
         // Per-role codewith account attribution: which subscription account each
         // pooled step was spread to (least-loaded selection). Surfaced so drain
         // reports show account_profile populated and the spread is auditable.
@@ -807,6 +843,16 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     projectGroup,
     routeScope: resolveRouteScope(opts, "todos-task"),
     poolRouting: buildPoolRoutingPlan(opts, provider, providerRouting.authProfilePool, workflowBody, taskId),
+    providerAdmission: providerAdmissionPlanFromOpts(opts, {
+      provider,
+      authProfile,
+      authProfiles: nonEmptyStrings([
+        opts.triageAuthProfile,
+        opts.plannerAuthProfile,
+        opts.workerAuthProfile,
+        opts.verifierAuthProfile,
+      ]) ?? providerRouting.authProfilePool,
+    }),
     subjectRef: taskId,
     loopName,
     loopDescription: `Run ${workflowBody.name} once for task ${taskId}; idempotency=${idempotencyKey}; event=${event.id}`,
@@ -932,6 +978,11 @@ export function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOpti
     projectGroup,
     routeScope: resolveRouteScope(opts, "generic-event"),
     poolRouting: buildPoolRoutingPlan(opts, provider, providerRouting.authProfilePool, workflowBody, `${event.source}:${event.type}:${event.id}`),
+    providerAdmission: providerAdmissionPlanFromOpts(opts, {
+      provider,
+      authProfile,
+      authProfiles: nonEmptyStrings([opts.workerAuthProfile, opts.verifierAuthProfile]) ?? providerRouting.authProfilePool,
+    }),
     subjectRef: stringField(event.subject) ?? event.id,
     loopName,
     loopDescription: `Run ${workflowBody.name} once for event ${event.id}; idempotency=${idempotencyKey}`,

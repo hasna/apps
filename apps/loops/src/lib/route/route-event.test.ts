@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { dbPath } from "../paths.js";
@@ -87,6 +87,58 @@ function workItemRow(): { status: string; attempts: number } | undefined {
   } finally {
     db.close();
   }
+}
+
+function loopCount(): number {
+  const store = new Store(dbPath());
+  try {
+    return store.listLoops().length;
+  } finally {
+    store.close();
+  }
+}
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
+
+function withFakeCodewith(dataDir: string, diagnostics: unknown, opts: { status?: number } = {}): { calls: string; restore: () => void } {
+  const binDir = join(dataDir, "bin");
+  mkdirSync(binDir, { recursive: true });
+  const calls = join(dataDir, "codewith-calls.log");
+  const codewith = join(binDir, "codewith");
+  writeFileSync(
+    codewith,
+    [
+      "#!/usr/bin/env bash",
+      "printf '%s\\n' \"$*\" >> \"$OPENLOOPS_TEST_CODEWITH_CALLS\"",
+      "if [[ \"${OPENLOOPS_TEST_CODEWITH_STATUS:-0}\" != \"0\" ]]; then",
+      "  printf 'diagnostics unavailable\\n' >&2",
+      "  exit \"$OPENLOOPS_TEST_CODEWITH_STATUS\"",
+      "fi",
+      "printf '%s' \"$OPENLOOPS_TEST_CODEWITH_DIAGNOSTICS\"",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(codewith, 0o755);
+  const oldPath = process.env.PATH;
+  const oldDiagnostics = process.env.OPENLOOPS_TEST_CODEWITH_DIAGNOSTICS;
+  const oldCalls = process.env.OPENLOOPS_TEST_CODEWITH_CALLS;
+  const oldStatus = process.env.OPENLOOPS_TEST_CODEWITH_STATUS;
+  process.env.PATH = `${binDir}:${process.env.PATH ?? ""}`;
+  process.env.OPENLOOPS_TEST_CODEWITH_DIAGNOSTICS = typeof diagnostics === "string" ? diagnostics : JSON.stringify(diagnostics);
+  process.env.OPENLOOPS_TEST_CODEWITH_CALLS = calls;
+  process.env.OPENLOOPS_TEST_CODEWITH_STATUS = String(opts.status ?? 0);
+  return {
+    calls,
+    restore: () => {
+      restoreEnv("PATH", oldPath);
+      restoreEnv("OPENLOOPS_TEST_CODEWITH_DIAGNOSTICS", oldDiagnostics);
+      restoreEnv("OPENLOOPS_TEST_CODEWITH_CALLS", oldCalls);
+      restoreEnv("OPENLOOPS_TEST_CODEWITH_STATUS", oldStatus);
+    },
+  };
 }
 
 describe("routeTodosTaskEvent dedupe re-admission", () => {
@@ -352,5 +404,189 @@ describe("routeTodosTaskEvent least-loaded auth-profile pool", () => {
     // Neutralization: without the guard this is "created" and stacks a 3rd run.
     expect(result.kind).toBe("throttled");
     expect(String(result.value.reason)).toContain("per-profile active limit reached");
+  });
+});
+
+describe("routeTodosTaskEvent provider-native admission", () => {
+  let env: RouteEnv;
+  let restoreCodewith: (() => void) | undefined;
+  beforeEach(() => {
+    env = withRouteEnv();
+  });
+  afterEach(() => {
+    restoreCodewith?.();
+    restoreCodewith = undefined;
+    env.restore();
+  });
+
+  test("--provider-active-cap throttles before creating a workflow loop when Codewith is saturated", () => {
+    const fake = withFakeCodewith(env.dataDir, {
+      activeRunCount: 8,
+      maxActiveRunsPerUser: 8,
+      availableActiveRunSlots: 0,
+    });
+    restoreCodewith = fake.restore;
+
+    const result = routeTodosTaskEvent(plainTaskEvent("provider-cap-hit"), {
+      ...ROUTE_OPTS,
+      authProfile: "account006",
+      providerActiveCap: "6",
+    });
+
+    expect(result.kind).toBe("throttled");
+    expect(result.value.queuedAtSource).toBe(true);
+    expect(String(result.value.reason)).toContain("codewith active-run cap reached (8/6)");
+    expect((result.value.providerAdmission as { activeCap?: number; diagnostics?: { activeRunCount?: number } }).activeCap).toBe(6);
+    expect((result.value.providerAdmission as { diagnostics?: { activeRunCount?: number } }).diagnostics?.activeRunCount).toBe(8);
+    expect((result.value.workItem as { status?: string }).status).toBe("deferred");
+    expect(loopCount()).toBe(0);
+    expect(readFileSync(fake.calls, "utf8")).toContain("--auth-profile account006 agent diagnostics --json");
+  });
+
+  test("below-cap Codewith diagnostics allow workflow loop creation", () => {
+    restoreCodewith = withFakeCodewith(env.dataDir, {
+      activeRunCount: 4,
+      maxActiveRunsPerUser: 8,
+      availableActiveRunSlots: 4,
+    }).restore;
+
+    const result = routeTodosTaskEvent(plainTaskEvent("provider-cap-open"), { ...ROUTE_OPTS, providerActiveCap: "6" });
+
+    expect(result.kind).toBe("created");
+    expect((result.value.providerAdmission as { allowed?: boolean; diagnostics?: { activeRunCount?: number } }).allowed).toBe(true);
+    expect((result.value.providerAdmission as { diagnostics?: { activeRunCount?: number } }).diagnostics?.activeRunCount).toBe(4);
+    expect(loopCount()).toBe(1);
+  });
+
+  test("--provider-admission-check fails closed when Codewith diagnostics fail", () => {
+    restoreCodewith = withFakeCodewith(env.dataDir, {}, { status: 17 }).restore;
+
+    const result = routeTodosTaskEvent(plainTaskEvent("provider-diagnostics-failure"), {
+      ...ROUTE_OPTS,
+      providerAdmissionCheck: true,
+    });
+
+    expect(result.kind).toBe("throttled");
+    expect(String(result.value.reason)).toContain("codewith diagnostics failed");
+    expect((result.value.providerAdmission as { allowed?: boolean }).allowed).toBe(false);
+    expect(result.value.fatal).toBe(true);
+    expect(loopCount()).toBe(0);
+  });
+
+  test("--codewith-active-cap is a Codewith-specific alias for the provider active cap", () => {
+    restoreCodewith = withFakeCodewith(env.dataDir, {
+      activeRunCount: 6,
+      maxActiveRunsPerUser: 8,
+      availableActiveRunSlots: 2,
+    }).restore;
+
+    const result = routeTodosTaskEvent(plainTaskEvent("provider-codewith-alias"), {
+      ...ROUTE_OPTS,
+      codewithActiveCap: "6",
+    });
+
+    expect(result.kind).toBe("throttled");
+    expect(String(result.value.reason)).toContain("codewith active-run cap reached (6/6)");
+    expect((result.value.providerAdmission as { activeCap?: number }).activeCap).toBe(6);
+    expect(loopCount()).toBe(0);
+  });
+
+  test("auth-profile pools run diagnostics against selected pool profiles, not the default profile", () => {
+    const fake = withFakeCodewith(env.dataDir, {
+      activeRunCount: 3,
+      maxActiveRunsPerUser: 8,
+      availableActiveRunSlots: 5,
+    });
+    restoreCodewith = fake.restore;
+    const store = new Store(dbPath());
+    try {
+      const workflow = store.createWorkflow({
+        name: "seed-pool-load",
+        steps: [{ id: "worker", target: { type: "agent", provider: "codewith", prompt: "seeded", sandbox: "workspace-write", authProfile: "acctA" } }],
+      });
+      const run = store.createWorkflowRun({ workflow });
+      store.startWorkflowStepRun(run.id, "worker");
+    } finally {
+      store.close();
+    }
+
+    const result = routeTodosTaskEvent(plainTaskEvent("provider-pool-profile"), {
+      ...ROUTE_OPTS,
+      authProfilePool: "acctA,acctB",
+      maxPerProfile: "0",
+      providerActiveCap: "6",
+    });
+
+    expect(result.kind).toBe("created");
+    const calls = readFileSync(fake.calls, "utf8").trim().split(/\r?\n/);
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every((line) => line.includes("--auth-profile"))).toBe(true);
+    expect(calls.join("\n")).toContain("--auth-profile acctB agent diagnostics --json");
+  });
+
+  test("mixed role pins and base auth profile check every rendered Codewith profile", () => {
+    const fake = withFakeCodewith(env.dataDir, {
+      activeRunCount: 3,
+      maxActiveRunsPerUser: 8,
+      availableActiveRunSlots: 5,
+    });
+    restoreCodewith = fake.restore;
+
+    const result = routeTodosTaskEvent(plainTaskEvent("provider-mixed-profiles"), {
+      ...ROUTE_OPTS,
+      authProfile: "acctB",
+      workerAuthProfile: "acctA",
+      providerActiveCap: "6",
+    });
+
+    expect(result.kind).toBe("created");
+    const calls = readFileSync(fake.calls, "utf8");
+    expect(calls).toContain("--auth-profile acctA agent diagnostics --json");
+    expect(calls).toContain("--auth-profile acctB agent diagnostics --json");
+  });
+
+  test("multi-profile admission marks fatal diagnostics failures even when another profile is capacity-throttled", () => {
+    const binDir = join(env.dataDir, "bin-fatal");
+    mkdirSync(binDir, { recursive: true });
+    const calls = join(env.dataDir, "codewith-fatal-calls.log");
+    const codewith = join(binDir, "codewith");
+    writeFileSync(
+      codewith,
+      [
+        "#!/usr/bin/env bash",
+        "printf '%s\\n' \"$*\" >> \"$OPENLOOPS_TEST_CODEWITH_CALLS\"",
+        "if [[ \"$*\" == *\"--auth-profile acctA\"* ]]; then",
+        "  printf '%s' '{\"activeRunCount\":6,\"maxActiveRunsPerUser\":8,\"availableActiveRunSlots\":2}'",
+        "  exit 0",
+        "fi",
+        "if [[ \"$*\" == *\"--auth-profile acctB\"* ]]; then",
+        "  printf 'diagnostics unavailable\\n' >&2",
+        "  exit 17",
+        "fi",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(codewith, 0o755);
+    const oldPath = process.env.PATH;
+    const oldCalls = process.env.OPENLOOPS_TEST_CODEWITH_CALLS;
+    process.env.PATH = `${binDir}:${process.env.PATH ?? ""}`;
+    process.env.OPENLOOPS_TEST_CODEWITH_CALLS = calls;
+    restoreCodewith = () => {
+      restoreEnv("PATH", oldPath);
+      restoreEnv("OPENLOOPS_TEST_CODEWITH_CALLS", oldCalls);
+    };
+
+    const result = routeTodosTaskEvent(plainTaskEvent("provider-multi-fatal"), {
+      ...ROUTE_OPTS,
+      authProfile: "acctA",
+      workerAuthProfile: "acctB",
+      providerActiveCap: "6",
+    });
+
+    expect(result.kind).toBe("throttled");
+    expect(String(result.value.reason)).toContain("codewith provider admission denied for acctB");
+    expect(result.value.fatal).toBe(true);
+    expect((result.value.providerAdmission as { fatal?: boolean }).fatal).toBe(true);
   });
 });
