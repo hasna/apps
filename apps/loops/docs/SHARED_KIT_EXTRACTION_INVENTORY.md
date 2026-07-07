@@ -24,8 +24,13 @@ human package-boundary decision.
 
 Recommended first automation slice:
 
-1. Normalize OpenLoops' generated storage kit to the current
-   `@hasna/contracts vendor-kit` output.
+1. Normalize OpenLoops' generated storage kit to
+   `@hasna/contracts vendor-kit` version `0.5.1` from the vendored generator
+   source committed in `hasna/loops` at
+   `fe0b4e767605611605e6f4fa4776e931a41ba91b`
+   (`vendor/contracts/src/kit/generate.ts` and
+   `vendor/contracts/src/kit/templates/*`). Do not use `latest` or an
+   unpinned `bunx @hasna/contracts` invocation for this check.
 2. After human approval of package ownership/name, extract the generated kit
    into a shared package or stable `@hasna/contracts` subpath.
 3. Migrate consumers one repo cohort at a time, preserving their local storage
@@ -327,8 +332,8 @@ package. Do not create a separate logging package without deciding whether
 ### 1. `@hasna/storage-kit`
 
 Status: highest-confidence candidate; package publish/name needs human
-approval. OpenLoops normalization to the current generated kit is ready for
-automation.
+approval. OpenLoops normalization to the pinned generated kit has already run
+through task `2b166a36-1e7c-4882-be7f-610c4f478d39` and produced PR #84.
 
 Responsibilities:
 
@@ -351,8 +356,13 @@ Non-responsibilities:
 
 Migration order:
 
-1. Normalize `open-loops/src/generated/storage-kit` to the latest
-   `@hasna/contracts vendor-kit` output and verify no OpenLoops semantic drift.
+1. Normalize `open-loops/src/generated/storage-kit` to
+   `@hasna/contracts vendor-kit` version `0.5.1` from the vendored generator
+   source committed in `hasna/loops` at
+   `fe0b4e767605611605e6f4fa4776e931a41ba91b` and verify no OpenLoops semantic
+   drift. This is the source/ref used for the current OpenLoops normalization
+   evidence; do not substitute an npm `latest` range or a machine-local
+   generator.
 2. Human approval: decide whether the importable boundary is a new
    `@hasna/storage-kit` package or an `@hasna/contracts/storage-kit` subpath.
 3. Move generator source into the approved package boundary and add package
@@ -367,7 +377,8 @@ Migration order:
 
 Validation:
 
-- `bunx @hasna/contracts vendor-kit --check` or replacement package check.
+- From a branch that carries the vendored generator source:
+  `bun -e 'import {checkKit} from "./vendor/contracts/src/kit/generate.ts"; const result = checkKit({targetRepo:"."}); if (!result.ok) { console.error(JSON.stringify(result, null, 2)); process.exit(1); } console.log(JSON.stringify(result, null, 2));'`
 - Per consumer: `bun run typecheck`, targeted storage tests, and package
   boundary/no-cloud tests where present.
 - For OpenLoops: `bun run typecheck`, `bun test src/lib/storage/*.test.ts`,
@@ -504,9 +515,9 @@ Blockers:
 
 Ready for automation now:
 
-- Normalize OpenLoops' generated storage kit to current
-  `@hasna/contracts vendor-kit` output, verify drift, and record exact consumer
-  impact. This does not require a new package, publish, or release-age change.
+- OpenLoops generated storage-kit normalization was completed by task
+  `2b166a36-1e7c-4882-be7f-610c4f478d39` and produced PR #84. Treat PR #84 as
+  the current normalization evidence; do not auto-route a duplicate task.
 
 Ready after human approval:
 
@@ -530,7 +541,10 @@ Created follow-up task:
    Task: `2b166a36-1e7c-4882-be7f-610c4f478d39`
    Fingerprint: `open-loops:p5:shared-kit:storage-kit:open-loops-normalize`
    Dependency: this inventory task.
-   Status: automation-ready.
+   Status: completed in todos; produced PR #84
+   (`https://github.com/hasna/loops/pull/84`). PR #84 is the live
+   normalization PR as of 2026-07-07 and still needs valid non-author review
+   before merge.
 
 Recommended follow-up tasks that were not created in this worker step:
 
@@ -551,9 +565,9 @@ Recommended follow-up tasks that were not created in this worker step:
    needed before package creation.
    Status: report-only unless approved.
 
-Only the first item was created and is safe to auto-route immediately. The
-other items remain documented until package ownership or compatibility
-decisions are made.
+The first item has already run and must not be auto-routed again. The other
+items remain documented until package ownership or compatibility decisions are
+made.
 
 ## Validation Requirements For Later Implementation
 
