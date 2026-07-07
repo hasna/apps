@@ -15,4 +15,11 @@ const decision = routePrompt({
   },
 });
 
-console.log(JSON.stringify(decision, null, 2));
+const topScores = decision.scores
+  .slice(0, 3)
+  .map((score) => `${score.model}:${score.score.toFixed(3)}`)
+  .join(", ");
+
+console.log(`selected=${decision.selected?.model.id ?? "none"} status=${decision.status}`);
+console.log(`scores=${topScores}`);
+console.log(`details=${decision.scores.length} scores, ${decision.skipped.length} skipped candidates`);
