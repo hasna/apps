@@ -183,6 +183,10 @@ export const TEST_ENDPOINTS: Record<string, TestEndpoint> = {
     url: "https://api.stripe.com/v1/treasury/financial_accounts?limit=1",
     headers: (key) => ({ Authorization: `Bearer ${key}` }),
   },
+  "stripe-webhooks-advanced": {
+    url: "https://api.stripe.com/v1/webhook_endpoints",
+    headers: (key) => ({ Authorization: `Bearer ${key}` }),
+  },
   shopify: {
     // Shopify Admin API requires the store domain, so we test the GraphQL endpoint
     // The key should be the access token; store-specific URLs are set in env
