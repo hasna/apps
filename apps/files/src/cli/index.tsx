@@ -49,7 +49,9 @@ import type {
   KnowledgeSourceResolveMode,
   S3Config,
   SearchScope,
+  Source,
 } from "../types/index.js";
+import { filesCloudStorage } from "../lib/cloud-storage.js";
 
 import { createRequire } from "module";
 const _require = createRequire(import.meta.url);
@@ -159,9 +161,12 @@ sources
   .alias("ls")
   .description("List all configured sources")
   .option("--json", "Output as JSON")
-  .action((opts: { json?: boolean }) => {
+  .action(async (opts: { json?: boolean }) => {
     const machine = getCurrentMachine();
-    const all = listSources();
+    const cloud = filesCloudStorage();
+    const all = cloud.active
+      ? (await cloud.client.list<Source>("sources")).items
+      : listSources();
     if (opts.json) { console.log(JSON.stringify(all, null, 2)); return; }
     if (!all.length) {
       console.log(chalk.dim("No sources configured. Run: files sources add <path>"));
@@ -191,7 +196,7 @@ sources
   .option("--aws-profile <profile>", "AWS shared config profile name (for S3)")
   .option("--endpoint <url>", "Custom S3 endpoint (for S3-compatible storage)")
   .option("--force-path-style", "Use path-style S3 requests for S3-compatible storage")
-  .action((pathOrS3: string, opts: {
+  .action(async (pathOrS3: string, opts: {
     name?: string;
     region?: string;
     prefix?: string;
@@ -202,6 +207,14 @@ sources
     forcePathStyle?: boolean;
   }) => {
     const machine = getCurrentMachine();
+    const cloud = filesCloudStorage();
+    // self_hosted: create the source in the cloud API. The cloud assigns the
+    // owning machine (the local machine id is not in the cloud registry), so we
+    // omit machine_id and let the server default it.
+    const persistSource = async (input: Parameters<typeof createSource>[0]) =>
+      cloud.active
+        ? await cloud.client.create<Source>("sources", { ...input, machine_id: undefined })
+        : createSource(input);
 
     if (pathOrS3.startsWith("s3://")) {
       const url = new URL(pathOrS3);
@@ -216,7 +229,7 @@ sources
       if (opts.endpoint) config.endpoint = opts.endpoint;
       if (opts.forcePathStyle) config.forcePathStyle = true;
 
-      const source = createSource({
+      const source = await persistSource({
         name: opts.name ?? bucket,
         type: "s3",
         bucket,
@@ -225,21 +238,21 @@ sources
         config,
         machine_id: machine.id,
       });
-      console.log(chalk.green(`✓ S3 source added: ${source.id} → s3://${bucket}${prefix ? `/${prefix}` : ""}`));
+      console.log(chalk.green(`✓ S3 source added${cloud.active ? " (cloud)" : ""}: ${source.id} → s3://${bucket}${prefix ? `/${prefix}` : ""}`));
     } else {
       const absPath = resolve(pathOrS3);
       if (!existsSync(absPath)) {
         console.error(chalk.red(`Path does not exist: ${absPath}`));
         process.exit(1);
       }
-      const source = createSource({
+      const source = await persistSource({
         name: opts.name ?? absPath,
         type: "local",
         path: absPath,
         config: {},
         machine_id: machine.id,
       });
-      console.log(chalk.green(`✓ Local source added: ${source.id} → ${absPath}`));
+      console.log(chalk.green(`✓ Local source added${cloud.active ? " (cloud)" : ""}: ${source.id} → ${absPath}`));
     }
   });
 
@@ -495,11 +508,19 @@ sources
   .command("remove <id>")
   .description("Remove a source (and all its indexed files)")
   .option("--yes", "Confirm destructive removal")
-  .action((id: string, opts: { yes?: boolean }) => {
+  .action(async (id: string, opts: { yes?: boolean }) => {
     try {
       if (!opts.yes) {
         console.error(chalk.red("Refusing to remove source without --yes (destructive operation)."));
         process.exit(1);
+      }
+      const cloud = filesCloudStorage();
+      if (cloud.active) {
+        // self_hosted: delete from the cloud API; the id is a cloud id, so we
+        // do not resolve it against the local store.
+        await cloud.client.delete("sources", id);
+        console.log(chalk.green(`✓ Source ${id} removed (cloud)`));
+        return;
       }
       const resolvedId = requireId(id, "sources");
       deleteSource(resolvedId);
@@ -2130,4 +2151,4 @@ program
     else { console.error(chalk.red(`Source not found: ${resolvedId}`)); process.exit(1); }
   });
 
-program.parse();
+program.parseAsync();
