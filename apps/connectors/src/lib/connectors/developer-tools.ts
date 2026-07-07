@@ -962,6 +962,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["localization", "translation", "i18n", "l10n", "multilingual"],
   },
   {
+    name: "sonarqube",
+    displayName: "SonarQube",
+    description: "Code quality, security, and static analysis platform",
+    category: "Developer Tools",
+    tags: ["code-quality", "sast", "devops"],
+  },
+  {
     name: "sse-trigger",
     displayName: "SseTrigger",
     description: "SSE workflow trigger",
