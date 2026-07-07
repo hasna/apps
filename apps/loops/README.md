@@ -5,8 +5,8 @@ OpenLoops is a local CLI and daemon for persistent loops and workflows: schedule
 Naming: the product is **OpenLoops**, published on npm as
 [`@hasna/loops`](https://www.npmjs.com/package/@hasna/loops) and developed in the
 [`hasna/loops`](https://github.com/hasna/loops) repository. The installed
-binaries are `loops`, `loops-daemon`, `loops-api`, `loops-runner`, and
-`loops-mcp`.
+binaries are `loops`, `loops-daemon`, `loops-api`, `loops-serve`,
+`loops-runner`, and `loops-mcp`.
 
 OpenLoops is the **runtime, scheduler, and workflow engine** for automations —
 not the automation domain model. Specs, triggers, queue ownership, approvals,
@@ -28,7 +28,14 @@ It supports deterministic command loops, JSON-defined workflows, and guarded CLI
 OpenLoops has three deployment modes:
 
 - `local`: SQLite in `LOOPS_DATA_DIR` is authoritative and `loops-daemon` executes scheduled work.
-- `self_hosted`: a user-operated `loops-api` control plane contract. This release exposes status, storage-backed `/v1` loop CRUD and run listing, runner claim/heartbeat/finalize protocol endpoints, a one-shot `loops-runner run-once` execution path for embedded control-plane hosts, id-preserving local export/import, and preview-only self-hosted migration/sync commands; full fleet rollout and remote apply are follow-up work.
+- `self_hosted`: the Hasna-owned AWS/RDS control-plane deployment, served by
+  `loops-serve` and backed by Postgres, with the embeddable `loops-api` contract
+  shared by serve, SDK, and tests. This release exposes status, storage-backed
+  `/v1` loop CRUD and run listing, runner claim/heartbeat/finalize protocol
+  endpoints, a one-shot `loops-runner run-once` execution path for embedded
+  control-plane hosts, id-preserving local export/import, and preview-only
+  self-hosted migration/sync commands; full fleet rollout and id-preserving
+  remote apply are follow-up work.
 - `cloud`: a hosted control-plane contract. This release exposes client/runner status only; hosted tenant auth and infrastructure live outside this package.
 
 `local` is the default and requires no network, token, Postgres, or hosted
@@ -48,25 +55,33 @@ Scheduler state is explicit in status JSON. `schedulerState.localStore` is
 SQLite plus local run artifact files: authoritative in `local`, cache/spool in
 non-local modes. `schedulerState.remoteStore` names the non-local contract
 (`api_control_plane_contract`, `postgres_contract`, or
-`hosted_control_plane_contract`) and reports `applySupported=false` because this
-public package does not directly mutate remote Postgres, S3/object storage, AWS
-resources, or hosted credentials. Route admission remains bounded by
-`max_dispatch`, `max_active`, `max_active_per_project`,
-`max_active_per_project_group`, `max_active_scope`, and `max_per_profile`.
+`hosted_control_plane_contract`). The standalone `loops` CLI reports
+`applySupported=false` for non-local apply because it does not perform
+id-preserving remote migration, S3/object storage mutation, AWS resource
+mutation, or hosted credential mutation. `loops-serve` mutates self-hosted
+Postgres for normal control-plane CRUD and runner protocol routes when it is
+explicitly configured. Route admission remains bounded by `max_dispatch`,
+`max_active`, `max_active_per_project`, `max_active_per_project_group`,
+`max_active_scope`, and `max_per_profile`.
 
-Useful status commands:
+Useful status and setup commands:
 
 ```bash
 loops mode
 loops --json mode
 loops self-hosted status
 loops self-hosted migrate --dry-run
+loops self-hosted push --dry-run
+loops self-hosted pull --dry-run
 loops self-hosted runner-register --runner-id <id> --machine-id <machine> --apply
 loops export --file ./loops-export.json --dry-run
 loops export --file ./loops-export.json
 loops import ./loops-export.json
+loops import ./loops-export.json --apply
 loops cloud status
 loops-api status
+loops-serve version
+HASNA_LOOPS_DATABASE_URL=... loops-serve migrate --dry-run
 loops-runner status
 ```
 
@@ -76,9 +91,10 @@ and machine-placement contract.
 ## Install
 
 **OpenLoops requires the [Bun](https://bun.sh) runtime (`bun >= 1.0`).** The
-`loops`, `loops-daemon`, `loops-api`, `loops-runner`, and `loops-mcp` binaries
-run with a `#!/usr/bin/env bun` shebang, so Bun must be on `PATH` even when the
-package is installed with npm. Node.js is not a supported runtime.
+`loops`, `loops-daemon`, `loops-api`, `loops-serve`, `loops-runner`, and
+`loops-mcp` binaries run with a `#!/usr/bin/env bun` shebang, so Bun must be on
+`PATH` even when the package is installed with npm. Node.js is not a supported
+runtime.
 
 From npm (with Bun installed):
 

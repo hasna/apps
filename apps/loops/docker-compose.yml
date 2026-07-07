@@ -1,4 +1,6 @@
-# Local development stack for @hasna/loops in cloud (PURE REMOTE) mode.
+# Local development stack for the @hasna/loops self-hosted service.
+# HASNA_LOOPS_STORAGE_MODE=cloud is the generated storage-kit direct-Postgres
+# flag; HASNA_LOOPS_DATABASE_URL makes OpenLoops resolve self_hosted mode.
 #   docker compose run --rm loops-migrate   # apply schema first
 #   docker compose up --build loops-serve
 services:

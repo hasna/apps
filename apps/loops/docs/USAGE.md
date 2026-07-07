@@ -15,12 +15,13 @@ It supports deterministic command loops, JSON-defined workflows, and guarded CLI
 
 OpenLoops defaults to `local`, where SQLite in `LOOPS_DATA_DIR` is
 authoritative and `loops-daemon` executes scheduled work. The package also
-defines `self_hosted` and `cloud` contracts for future non-local control
-planes:
+defines `self_hosted` and `cloud` contracts for non-local control planes:
 
-- `self_hosted`: user-operated `loops-api` control-plane contract; this
-  release exposes storage-backed API/runner foundations plus local migration
-  previews.
+- `self_hosted`: the Hasna-owned AWS/RDS control-plane deployment, served by
+  `loops-serve` and backed by Postgres, with the embeddable `loops-api` contract
+  shared by serve, SDK, and tests. This release exposes storage-backed `/v1`
+  loop CRUD and run listing, runner registration/claim/heartbeat/finalize
+  foundations, and local migration previews.
 - `cloud`: hosted control-plane contract; this release exposes client/runner
   status only, and requires `LOOPS_CLOUD_API_URL` plus `LOOPS_CLOUD_TOKEN` or
   `HASNA_LOOPS_CLOUD_TOKEN` before status can report ready.
@@ -29,13 +30,16 @@ Scheduler state is explicit in status JSON. `schedulerState.localStore` is
 SQLite plus local run artifact files: authoritative in `local`, cache/spool in
 non-local modes. `schedulerState.remoteStore` names the non-local contract
 (`api_control_plane_contract`, `postgres_contract`, or
-`hosted_control_plane_contract`) and reports `applySupported=false` because this
-public package does not directly mutate remote Postgres, S3/object storage, AWS
-resources, or hosted credentials. Route admission remains bounded by
-`max_dispatch`, `max_active`, `max_active_per_project`,
-`max_active_per_project_group`, `max_active_scope`, and `max_per_profile`.
+`hosted_control_plane_contract`). The standalone `loops` CLI reports
+`applySupported=false` for non-local apply because it does not perform
+id-preserving remote migration, S3/object storage mutation, AWS resource
+mutation, or hosted credential mutation. `loops-serve` mutates self-hosted
+Postgres for normal control-plane CRUD and runner protocol routes when it is
+explicitly configured. Route admission remains bounded by `max_dispatch`,
+`max_active`, `max_active_per_project`, `max_active_per_project_group`,
+`max_active_scope`, and `max_per_profile`.
 
-Useful status commands:
+Useful status and setup commands:
 
 ```bash
 loops mode
@@ -48,6 +52,8 @@ loops self-hosted runner-register --runner-id <id> --machine-id <machine>
 loops self-hosted runner-register --runner-id <id> --machine-id <machine> --apply
 loops cloud status
 loops-api status
+loops-serve version
+HASNA_LOOPS_DATABASE_URL=... loops-serve migrate --dry-run
 loops-runner status
 ```
 
@@ -93,14 +99,16 @@ The preview may inspect `LOOPS_API_URL`/`HASNA_LOOPS_API_URL`, but it refuses
 remote apply because normal loop CRUD would generate new ids. Use
 `loops self-hosted runner-register` to verify runner registration against an
 API, then use `loops-runner run-once` for the current bounded non-workflow
-claim/execute/finalize protocol.
+claim/execute/finalize protocol. `loops-serve migrate` applies the Postgres
+schema and `api_keys` table for a self-hosted control-plane host; the standalone
+CLI migration previews still do not perform id-preserving remote apply.
 Runner registration is preview-only unless `--apply` is present.
 
 ## Install
 
 **OpenLoops requires the [Bun](https://bun.sh) runtime (`bun >= 1.0`).** The
-installed binaries are `loops`, `loops-daemon`, `loops-api`, `loops-runner`, and
-`loops-mcp`; each uses a `#!/usr/bin/env bun` shebang.
+installed binaries are `loops`, `loops-daemon`, `loops-api`, `loops-serve`,
+`loops-runner`, and `loops-mcp`; each uses a `#!/usr/bin/env bun` shebang.
 
 From npm:
 

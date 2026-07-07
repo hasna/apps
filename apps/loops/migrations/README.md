@@ -14,10 +14,12 @@ source and regenerate.
 
 ## Applying
 
-Cloud (in-cluster, direct RDS, verify-full TLS via the baked RDS CA bundle):
+Self-hosted AWS control-plane host (direct RDS/Postgres, verify-full TLS via the
+baked RDS CA bundle when applicable). Local development can use a disposable
+Postgres DSN with `sslmode=disable`:
 
 ```
-DATABASE_URL=... loops-serve migrate          # or the ECS one-shot migration task
+HASNA_LOOPS_DATABASE_URL=... loops-serve migrate   # or the ECS one-shot migration task
 ```
 
 Out-of-band (operator, owner role through an SSM tunnel):

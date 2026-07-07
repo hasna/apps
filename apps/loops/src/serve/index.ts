@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 // `loops-serve` — the self-hosted HTTP control-plane binary.
 //
-// Amendment A1 (PURE REMOTE): the service reads and writes RDS Postgres
-// directly. There is no local SQLite, no cache, and no sync engine in the
+// The service reads and writes self-hosted RDS/Postgres directly. There is no
+// local SQLite, no cache, and no sync engine in the
 // serve process. Storage is the vendored @hasna/contracts kit pool wrapping the
 // real `PostgresLoopStorage` backend; auth is the framework-agnostic
 // `verifyApiKey` verifier from @hasna/contracts/auth backed by the shared
@@ -24,7 +24,7 @@ function resolveDatabaseUrl(): string {
     process.env.DATABASE_URL?.trim();
   if (!dsn) {
     throw new Error(
-      "loops-serve requires a cloud database URL: set HASNA_LOOPS_DATABASE_URL (or LOOPS_DATABASE_URL / DATABASE_URL)",
+      "loops-serve requires a self-hosted database URL: set HASNA_LOOPS_DATABASE_URL (or LOOPS_DATABASE_URL / DATABASE_URL)",
     );
   }
   return dsn;

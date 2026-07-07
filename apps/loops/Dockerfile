@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
-# @hasna/loops self_hosted control-plane — ARM64 / Bun.
-# Default CMD runs loops-serve (cloud / PURE REMOTE per Amendment A1: the serve
-# process reads/writes RDS Postgres directly with @hasna/contracts API-key auth).
+# @hasna/loops self_hosted control-plane - ARM64 / Bun.
+# Default CMD runs loops-serve: the self-hosted service reads/writes RDS
+# Postgres directly with @hasna/contracts API-key auth.
 # The ECS one-shot migration task overrides the command with `... migrate`.
 
 FROM --platform=linux/arm64 oven/bun:1 AS deps
@@ -35,6 +35,8 @@ COPY package.json bun.lock ./
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 EXPOSE 8787
-# Fail-closed: loops-serve refuses to start without a cloud DSN + signing secret
-# on a non-local bind (no silent stub).
+# Fail-closed: loops-serve refuses to start without a self-hosted DSN + signing
+# secret on a non-local bind (no silent stub). HASNA_LOOPS_STORAGE_MODE=cloud is
+# the generated storage-kit direct-Postgres flag; OpenLoops deployment mode is
+# selected from HASNA_LOOPS_MODE or from the self-hosted database/API URL env.
 CMD ["bun", "dist/serve/index.js"]
