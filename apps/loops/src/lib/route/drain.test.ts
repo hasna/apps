@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -106,5 +106,91 @@ describe("drainTodosTaskRoutes freshness close", () => {
     expect(after.status).toBe("pending");
     expect(after.tags).toContain("auto:route");
     expect(readyCount()).toBe(1);
+  });
+});
+
+describe("drainTodosTaskRoutes project-group admission", () => {
+  let todosProject: string;
+  let dataDir: string;
+  let binDir: string;
+  let oldDataDir: string | undefined;
+  let oldPath: string | undefined;
+  let oldReadyJson: string | undefined;
+
+  beforeEach(() => {
+    todosProject = mkdtempSync(join(tmpdir(), "loops-drain-group-src-"));
+    dataDir = mkdtempSync(join(tmpdir(), "loops-drain-group-data-"));
+    binDir = mkdtempSync(join(tmpdir(), "loops-drain-group-bin-"));
+    oldDataDir = process.env.LOOPS_DATA_DIR;
+    oldPath = process.env.PATH;
+    oldReadyJson = process.env.TODOS_READY_JSON;
+    process.env.LOOPS_DATA_DIR = dataDir;
+    process.env.PATH = `${binDir}:${process.env.PATH ?? ""}`;
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "if [[ \"$*\" == *\" ready \"* || \"$*\" == *\" ready\" ]]; then",
+        "  printf '%s\\n' \"$TODOS_READY_JSON\"",
+        "  exit 0",
+        "fi",
+        "if [[ \"$*\" == *\" task-lists\"* ]]; then printf '[]\\n'; exit 0; fi",
+        "printf 'fake todos did not handle: %s\\n' \"$*\" >&2",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+  });
+
+  afterEach(() => {
+    if (oldDataDir === undefined) delete process.env.LOOPS_DATA_DIR;
+    else process.env.LOOPS_DATA_DIR = oldDataDir;
+    if (oldPath === undefined) delete process.env.PATH;
+    else process.env.PATH = oldPath;
+    if (oldReadyJson === undefined) delete process.env.TODOS_READY_JSON;
+    else process.env.TODOS_READY_JSON = oldReadyJson;
+    rmSync(todosProject, { recursive: true, force: true });
+    rmSync(dataDir, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+  });
+
+  test("admits only the first sibling when task metadata sets a project-group cap of one", () => {
+    const repos = ["open-secrets", "open-economy", "open-repos"].map((name) => mkdtempSync(join(tmpdir(), `${name}-`)));
+    try {
+      process.env.TODOS_READY_JSON = JSON.stringify(
+        repos.map((repo, index) => ({
+          id: `rollout-task-${index + 1}`,
+          title: `Loop migration rollout ${index + 1}`,
+          status: "pending",
+          tags: ["auto:route"],
+          project_path: repo,
+          project_group: "loop-script-migration-rollout",
+          max_active_per_project_group: "1",
+        })),
+      );
+
+      const result = drainTodosTaskRoutes({
+        todosProject,
+        tags: "auto:route",
+        provider: "codewith",
+        sandbox: "workspace-write",
+        worktreeMode: "auto",
+        maxDispatch: "3",
+      });
+
+      expect(result.value.created).toBe(1);
+      expect(result.value.throttled).toBe(2);
+      const results = result.value.results as Array<Record<string, any>>;
+      expect(results.map((entry) => entry.kind)).toEqual(["created", "throttled", "throttled"]);
+      expect(results[1].reason).toContain("project-group active workflow limit reached (1/1)");
+      expect(results[1].workItem.status).toBe("deferred");
+      expect(results[1].throttle.limits.maxActivePerProjectGroup).toBe(1);
+      expect(results[2].throttle.counts.projectGroup).toBe(1);
+      expect(results[0].invocation.scope.routeThrottle.limits.maxActivePerProjectGroup).toBe(1);
+    } finally {
+      for (const repo of repos) rmSync(repo, { recursive: true, force: true });
+    }
   });
 });

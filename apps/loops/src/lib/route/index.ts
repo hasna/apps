@@ -45,6 +45,7 @@ export {
   hasThrottleLimits,
   normalizeRoutePath,
   routeThrottleDecision,
+  routeThrottleLimitsFromInputs,
   routeThrottleLimitsFromOpts,
   type RouteThrottleDecision,
   type RouteThrottleLimits,

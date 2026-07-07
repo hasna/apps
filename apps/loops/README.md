@@ -706,6 +706,10 @@ ceiling rather than a store-wide total shared by every router.
 anti-hog caps counted over all routes. Raise a router's `--max-active`
 deliberately once counting is per-route; keep `--max-per-profile` set so the
 extra concurrency spreads across subscription accounts.
+Task/event metadata can also carry `max_active`, `max_active_per_project`, or
+`max_active_per_project_group`; explicit CLI flags win. Generated workflow
+prompts and invocation manifests include the resolved route-admission context so
+project-group caps are auditable from the same evidence the agent sees.
 
 Only route tasks that explicitly opt in with `auto:route`, `route_enabled=true`,
 or `automation.allowed=true`. Use Codewith account pools, required worktrees,

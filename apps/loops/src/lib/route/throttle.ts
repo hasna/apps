@@ -39,6 +39,49 @@ export function routeThrottleLimitsFromOpts(opts: {
   };
 }
 
+function routeThrottleField(data: Record<string, unknown>, metadata: Record<string, unknown>, keys: string[]): string | undefined {
+  return taskEventField(data, keys) ?? taskEventField(metadata, keys);
+}
+
+export function routeThrottleLimitsFromInputs(
+  opts: {
+    maxActive?: string;
+    maxActivePerProject?: string;
+    maxActivePerProjectGroup?: string;
+  },
+  data: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+): RouteThrottleLimits {
+  return {
+    maxActive: positiveInteger(
+      opts.maxActive ?? routeThrottleField(data, metadata, ["max_active", "maxActive", "route_max_active", "routeMaxActive"]),
+      "--max-active",
+    ),
+    maxActivePerProject: positiveInteger(
+      opts.maxActivePerProject ?? routeThrottleField(data, metadata, [
+        "max_active_per_project",
+        "maxActivePerProject",
+        "route_max_active_per_project",
+        "routeMaxActivePerProject",
+      ]),
+      "--max-active-per-project",
+    ),
+    maxActivePerProjectGroup: positiveInteger(
+      opts.maxActivePerProjectGroup ?? routeThrottleField(data, metadata, [
+        "max_active_per_project_group",
+        "maxActivePerProjectGroup",
+        "max_active_per_group",
+        "maxActivePerGroup",
+        "project_group_max_active",
+        "projectGroupMaxActive",
+        "route_max_active_per_project_group",
+        "routeMaxActivePerProjectGroup",
+      ]),
+      "--max-active-per-project-group",
+    ),
+  };
+}
+
 export function hasThrottleLimits(limits: RouteThrottleLimits): boolean {
   return limits.maxActive !== undefined || limits.maxActivePerProject !== undefined || limits.maxActivePerProjectGroup !== undefined;
 }

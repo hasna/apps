@@ -697,6 +697,11 @@ The limits count active admitted/running OpenLoops work items once per workflow.
 uses the canonical git top-level path when available, so repo subdirectories
 share the same project cap. A throttled event records a deferred OpenLoops
 admission work item with JSON evidence instead of creating another worker loop.
+Task/event metadata can also provide `max_active`, `max_active_per_project`, or
+`max_active_per_project_group`; explicit CLI flags take precedence. Generated
+workflow prompts and invocation manifests include the resolved route-admission
+context so the prompt, stored evidence, and admission decision show the same
+project-group cap.
 Re-delivering the event later is safe because handlers dedupe by the work-item
 idempotency key before rendering worktree plans or checking route limits. In
 dry-run mode, throttle counts are not evaluated because opening the live loop

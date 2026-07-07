@@ -43,7 +43,7 @@ import {
   routeProjectGroup,
   routeThrottleDecision,
   routeThrottleDryRunPreview,
-  routeThrottleLimitsFromOpts,
+  routeThrottleLimitsFromInputs,
   validateRequiredRouteWorktreeProjectPath,
   type RouteThrottleDecision,
   type RouteThrottleLimits,
@@ -607,7 +607,8 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     process.cwd();
   const routeProjectPath = normalizeRoutePath(projectPath) ?? resolve(projectPath);
   const projectGroup = routeProjectGroup(opts.projectGroup, data, metadata);
-  const throttleLimits = routeThrottleLimitsFromOpts(opts);
+  const throttleLimits = routeThrottleLimitsFromInputs(opts, data, metadata);
+  const routeScope = resolveRouteScope(opts, "todos-task");
   const sourceProjectIdempotencyPrefix = sourceTodosProjectPath
     ? normalizeRoutePath(sourceTodosProjectPath) ?? resolve(sourceTodosProjectPath)
     : undefined;
@@ -710,6 +711,8 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     worktreeMode: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
     worktreeRoot: opts.worktreeRoot,
     worktreeBranchPrefix: opts.worktreeBranchPrefix ?? "openloops",
+    routeScope,
+    routeThrottleLimits: throttleLimits,
     prHandoff: templateId === TASK_LIFECYCLE_TEMPLATE_ID ? Boolean(opts.prHandoff) : false,
     prReviewRouting: prReviewRouting.required ? prReviewRouting : undefined,
     eventId: event.id,
@@ -758,6 +761,14 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
       providerRouting: providerRoutingPublic(providerRouting),
       prReviewRouting: prReviewRouting.required ? prReviewRouting : undefined,
       concurrencyGroup: projectGroup ?? routeProjectPath,
+      routeScope,
+      routeThrottle: hasThrottleLimits(throttleLimits)
+        ? {
+            limits: throttleLimits,
+            ...(projectGroup ? { projectGroup } : {}),
+            ...(routeScope ? { routeScope } : {}),
+          }
+        : undefined,
     },
     outputPolicy: {
       report: "always" as const,
@@ -775,7 +786,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     invocationInput,
     routeProjectPath,
     projectGroup,
-    routeScope: resolveRouteScope(opts, "todos-task"),
+    routeScope,
     poolRouting: buildPoolRoutingPlan(opts, provider, providerRouting.authProfilePool, workflowBody, taskId),
     subjectRef: taskId,
     loopName,
@@ -801,7 +812,8 @@ export function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOpti
     process.cwd();
   const routeProjectPath = normalizeRoutePath(projectPath) ?? resolve(projectPath);
   const projectGroup = routeProjectGroup(opts.projectGroup, data, metadata);
-  const throttleLimits = routeThrottleLimitsFromOpts(opts);
+  const throttleLimits = routeThrottleLimitsFromInputs(opts, data, metadata);
+  const routeScope = resolveRouteScope(opts, "generic-event");
   const eventSuffix = event.id.slice(0, 8);
   const source = slugSegment(event.source, "source");
   const type = slugSegment(event.type, "type");
@@ -849,6 +861,8 @@ export function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOpti
     worktreeMode: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
     worktreeRoot: opts.worktreeRoot,
     worktreeBranchPrefix: opts.worktreeBranchPrefix ?? "openloops",
+    routeScope,
+    routeThrottleLimits: throttleLimits,
   });
   workflowBody.name = workflowName;
   workflowBody.description = `Event-triggered worker/verifier workflow for ${event.source}/${event.type}; project=${projectPath}; projectGroup=${projectGroup ?? "-"}`;
@@ -878,6 +892,14 @@ export function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOpti
       accountPolicy: providerRouting.authProfilePool?.length || providerRouting.accountPool?.length ? "pool" : hasExplicitRoleAccount ? "role-explicit" : "single",
       providerRouting: providerRoutingPublic(providerRouting),
       concurrencyGroup: projectGroup ?? routeProjectPath,
+      routeScope,
+      routeThrottle: hasThrottleLimits(throttleLimits)
+        ? {
+            limits: throttleLimits,
+            ...(projectGroup ? { projectGroup } : {}),
+            ...(routeScope ? { routeScope } : {}),
+          }
+        : undefined,
     },
     outputPolicy: {
       report: "always" as const,
@@ -895,7 +917,7 @@ export function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOpti
     invocationInput,
     routeProjectPath,
     projectGroup,
-    routeScope: resolveRouteScope(opts, "generic-event"),
+    routeScope,
     poolRouting: buildPoolRoutingPlan(opts, provider, providerRouting.authProfilePool, workflowBody, `${event.source}:${event.type}:${event.id}`),
     subjectRef: stringField(event.subject) ?? event.id,
     loopName,

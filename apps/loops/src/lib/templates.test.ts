@@ -184,6 +184,21 @@ describe("prompt fragment composition", () => {
     expect(planner).toContain("openloops:planner=blocked task=task-1200 event=evt-9");
   });
 
+  test("route admission context is visible in lifecycle prompts", () => {
+    const lifecycle = renderTaskLifecycleWorkflow({
+      taskId: "task-1200",
+      projectPath: repoPath,
+      worktreeRoot,
+      projectGroup: "loop-script-migration-rollout",
+      routeScope: "route-drain-rollout",
+      routeThrottleLimits: { maxActivePerProjectGroup: 1 },
+    });
+    const worker = agentTargetOf(stepById(lifecycle, "worker")).prompt;
+    expect(worker).toContain('"routeAdmission":{"projectGroup":"loop-script-migration-rollout"');
+    expect(worker).toContain('"routeScope":"route-drain-rollout"');
+    expect(worker).toContain('"maxActivePerProjectGroup":1');
+  });
+
   test("lifecycle prompts propagate PR review routing evidence to follow-up todos", () => {
     const lifecycle = renderTaskLifecycleWorkflow({
       taskId: "task-pr-route",
