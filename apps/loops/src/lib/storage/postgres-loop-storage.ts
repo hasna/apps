@@ -105,6 +105,23 @@ export class NotImplementedError extends Error {
 
 const TERMINAL_RUN_STATUSES = ["succeeded", "failed", "timed_out", "abandoned", "skipped"] as const;
 const PRUNE_BATCH_SIZE = 400;
+
+/**
+ * Postgres SQLSTATE 23505 = unique_violation. A migration/backfill import keys
+ * every row by its primary id (`ON CONFLICT(id)`), but some tables carry a
+ * SECONDARY unique constraint that a re-keyed row from another machine can trip:
+ *   - workflow_specs: partial unique on (name) WHERE status='active'
+ *   - loop_runs:      UNIQUE(loop_id, scheduled_for)
+ * When a fleet-union backfill pushes a row whose id is new but whose secondary
+ * key already exists (a different machine already owns that active-workflow name
+ * or that loop schedule slot), the `ON CONFLICT(id)` clause can't catch it and
+ * the whole batch would abort. The import treats that as "already represented"
+ * and keeps the existing owner instead of failing the backfill.
+ */
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "23505";
+}
+
 const DEFAULT_RECOVERY_BATCH_LIMIT = 100;
 const DEFAULT_RECOVERY_SCAN_MULTIPLIER = 5;
 
@@ -505,30 +522,44 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const [workflow, opts = {}] = args as [WorkflowSpec, { replace?: boolean }?];
     const existing = await this.getWorkflow(workflow.id);
     if (existing && !opts.replace) return existing;
-    await this.client.execute(
-      `INSERT INTO workflow_specs (id, name, description, version, status, goal_json, steps_json, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9)
-       ON CONFLICT(id) DO UPDATE SET
-         name=EXCLUDED.name,
-         description=EXCLUDED.description,
-         version=EXCLUDED.version,
-         status=EXCLUDED.status,
-         goal_json=EXCLUDED.goal_json,
-         steps_json=EXCLUDED.steps_json,
-         created_at=EXCLUDED.created_at,
-         updated_at=EXCLUDED.updated_at`,
-      [
-        workflow.id,
-        workflow.name,
-        workflow.description ?? null,
-        workflow.version,
-        workflow.status,
-        workflow.goal ? JSON.stringify(workflow.goal) : null,
-        JSON.stringify(workflow.steps),
-        workflow.createdAt,
-        workflow.updatedAt,
-      ],
-    );
+    try {
+      await this.client.execute(
+        `INSERT INTO workflow_specs (id, name, description, version, status, goal_json, steps_json, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9)
+         ON CONFLICT(id) DO UPDATE SET
+           name=EXCLUDED.name,
+           description=EXCLUDED.description,
+           version=EXCLUDED.version,
+           status=EXCLUDED.status,
+           goal_json=EXCLUDED.goal_json,
+           steps_json=EXCLUDED.steps_json,
+           created_at=EXCLUDED.created_at,
+           updated_at=EXCLUDED.updated_at`,
+        [
+          workflow.id,
+          workflow.name,
+          workflow.description ?? null,
+          workflow.version,
+          workflow.status,
+          workflow.goal ? JSON.stringify(workflow.goal) : null,
+          JSON.stringify(workflow.steps),
+          workflow.createdAt,
+          workflow.updatedAt,
+        ],
+      );
+    } catch (error) {
+      // Secondary unique: another active workflow already owns this name (a
+      // different id from another machine). ON CONFLICT(id) can't catch it. Keep
+      // the existing active owner rather than aborting the fleet-union backfill.
+      if (isUniqueViolation(error)) {
+        const owner = await this.client.get<WorkflowRow>(
+          "SELECT * FROM workflow_specs WHERE name = $1 AND status = 'active' LIMIT 1",
+          [workflow.name],
+        );
+        if (owner) return rowToWorkflow(owner);
+      }
+      throw error;
+    }
     const imported = await this.getWorkflow(workflow.id);
     if (!imported) throw new Error(`workflow not found after migration import: ${workflow.id}`);
     return imported;
@@ -598,6 +629,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
     if (run.status === "running") throw new ValidationError(`cannot import running run ${run.id}`);
     const existing = await this.loadRun(this.client, run.id);
     if (existing && !opts.replace) return existing;
+    try {
     await this.client.execute(
       `INSERT INTO loop_runs (id, loop_id, loop_name, scheduled_for, attempt, status, started_at, finished_at,
         claimed_by, claim_token, lease_expires_at, pid, pgid, process_started_at, exit_code, duration_ms,
@@ -649,6 +681,17 @@ export class PostgresLoopStorage implements LoopStorageContract {
         run.updatedAt,
       ],
     );
+    } catch (error) {
+      // Secondary unique: a run for this (loop_id, scheduled_for) slot already
+      // exists under a different id (another machine ran the same shared loop at
+      // the same slot). ON CONFLICT(id) can't catch it; the slot can hold only
+      // one run, so keep the existing occupant rather than aborting the backfill.
+      if (isUniqueViolation(error)) {
+        const slot = await this.loadRunBySlot(this.client, run.loopId, run.scheduledFor);
+        if (slot) return slot;
+      }
+      throw error;
+    }
     const imported = await this.loadRun(this.client, run.id);
     if (!imported) throw new Error(`run not found after migration import: ${run.id}`);
     return imported;
