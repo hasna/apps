@@ -218,12 +218,12 @@ export async function importEnv(opts: ImportEnvOptions): Promise<{ imported: num
       }
 
       // Skip if already exists and not overwriting
-      if (!opts.overwrite && getSecret(vaultKey)) {
+      if (!opts.overwrite && await getSecret(vaultKey)) {
         skipped++;
         continue;
       }
 
-      setSecret(vaultKey, value, type, varName);
+      await setSecret(vaultKey, value, type, varName);
       imported++;
       if (opts.push) toPush.push(vaultKey);
     }
@@ -251,10 +251,10 @@ export interface ExportEnvOptions {
   dryRun?: boolean;
 }
 
-export function exportEnv(opts: ExportEnvOptions): { exported: number; files: number; skippedFiles: number } {
+export async function exportEnv(opts: ExportEnvOptions): Promise<{ exported: number; files: number; skippedFiles: number }> {
   const secretsRoot = opts.dir ?? join(homedir(), ".secrets");
 
-  const allSecrets = listSecrets();
+  const allSecrets = await listSecrets();
   if (allSecrets.length === 0) {
     throw new Error("Vault is empty — nothing to export.");
   }

@@ -66,13 +66,13 @@ function authorized(req: Request, token: string): boolean {
  * Given a URL, find secrets that look like they belong to that site.
  * Groups username/password pairs by common key prefix.
  */
-function matchLegacyUrl(rawUrl: string): Array<{
+async function matchLegacyUrl(rawUrl: string): Promise<Array<{
   source: "legacy";
   key_prefix: string;
   label: string;
   username?: string;
   password?: string;
-}> {
+}>> {
   let hostname: string;
   try {
     hostname = new URL(rawUrl).hostname.replace(/^www\./, "");
@@ -84,7 +84,7 @@ function matchLegacyUrl(rawUrl: string): Array<{
   const parts = hostname.split(".");
   const terms = [hostname, parts[0]].filter(Boolean);
 
-  const all = listSecrets();
+  const all = await listSecrets();
   const groups: Record<string, { label?: string; username?: string; password?: string }> = {};
 
   for (const s of all) {
@@ -122,8 +122,8 @@ function matchLegacyUrl(rawUrl: string): Array<{
     .filter(m => m.username || m.password);
 }
 
-function matchUrl(rawUrl: string): Array<Record<string, unknown>> {
-  const vaultMatches = matchVaultItemsForUrl(rawUrl)
+async function matchUrl(rawUrl: string): Promise<Array<Record<string, unknown>>> {
+  const vaultMatches = (await matchVaultItemsForUrl(rawUrl))
     .filter((item) => ["login", "address", "identity", "payment_card"].includes(item.kind))
     .map((item) => ({
       source: "vault_item",
@@ -134,7 +134,7 @@ function matchUrl(rawUrl: string): Array<Record<string, unknown>> {
       domains: item.domains,
       favorite: item.favorite,
     }));
-  return [...vaultMatches, ...matchLegacyUrl(rawUrl)];
+  return [...vaultMatches, ...(await matchLegacyUrl(rawUrl))];
 }
 
 export async function startHttpServer(options: { port?: number } = {}): Promise<void> {
@@ -151,7 +151,7 @@ export async function startHttpServer(options: { port?: number } = {}): Promise<
     port,
     hostname: "127.0.0.1", // never exposed to network
 
-    fetch(req: Request) {
+    async fetch(req: Request) {
       const url = new URL(req.url);
       const cors = corsHeaders(req);
 
@@ -173,7 +173,7 @@ export async function startHttpServer(options: { port?: number } = {}): Promise<
       // GET /v1/list[?namespace=xxx]
       if (url.pathname === "/v1/list") {
         const ns = url.searchParams.get("namespace") ?? undefined;
-        const secrets = listSecretMetadata(ns).map(s => ({
+        const secrets = (await listSecretMetadata(ns)).map(s => ({
           key: s.key,
           type: s.type,
           label: s.label ?? null,
@@ -186,7 +186,7 @@ export async function startHttpServer(options: { port?: number } = {}): Promise<
       if (url.pathname === "/v1/get") {
         const key = url.searchParams.get("key");
         if (!key) return err("Missing key", 400, cors);
-        const s = getSecret(key);
+        const s = await getSecret(key);
         if (!s) return err("Not found", 404, cors);
         return json({ key: s.key, value: s.value, type: s.type, label: s.label ?? null }, 200, cors);
       }
@@ -195,7 +195,7 @@ export async function startHttpServer(options: { port?: number } = {}): Promise<
       if (url.pathname === "/v1/search") {
         const q = url.searchParams.get("q");
         if (!q) return err("Missing q", 400, cors);
-        const results = searchSecretMetadata(q).map(s => ({
+        const results = (await searchSecretMetadata(q)).map(s => ({
           key: s.key,
           type: s.type,
           label: s.label ?? null,
@@ -207,7 +207,7 @@ export async function startHttpServer(options: { port?: number } = {}): Promise<
       // GET /v1/items[?kind=login]
       if (url.pathname === "/v1/items") {
         const kind = url.searchParams.get("kind") as any;
-        const items = listVaultItemMetadata(kind || undefined).map(item => ({
+        const items = (await listVaultItemMetadata(kind || undefined)).map(item => ({
           id: item.id,
           kind: item.kind,
           title: item.title,
@@ -225,7 +225,7 @@ export async function startHttpServer(options: { port?: number } = {}): Promise<
       if (url.pathname === "/v1/items/search") {
         const q = url.searchParams.get("q");
         if (!q) return err("Missing q", 400, cors);
-        const results = searchVaultItemMetadata(q).map(item => ({
+        const results = (await searchVaultItemMetadata(q)).map(item => ({
           id: item.id,
           kind: item.kind,
           title: item.title,
@@ -243,7 +243,7 @@ export async function startHttpServer(options: { port?: number } = {}): Promise<
       if (url.pathname === "/v1/items/get") {
         const id = url.searchParams.get("id");
         if (!id) return err("Missing id", 400, cors);
-        const item = getVaultItem(id);
+        const item = await getVaultItem(id);
         if (!item) return err("Not found", 404, cors);
         return json({
           id: item.id,

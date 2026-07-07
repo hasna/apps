@@ -27,7 +27,7 @@ const envKeys = [
   "HASNA_SECRETS_AWS_SESSION_NAME",
 ];
 
-beforeEach(() => {
+beforeEach(async () => {
   testDir = join(tmpdir(), `open-secrets-aws-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(testDir, { recursive: true });
   process.env.OPEN_SECRETS_DB = join(testDir, "vault.db");
@@ -36,7 +36,7 @@ beforeEach(() => {
   resetDb();
 });
 
-afterEach(() => {
+afterEach(async () => {
   setAwsClientFactoryForTests();
   resetDb();
   delete process.env.OPEN_SECRETS_DB;
@@ -45,7 +45,7 @@ afterEach(() => {
 });
 
 describe("AWS credential resolution", () => {
-  it("keeps legacy static aws.json credentials ahead of ambient AWS_PROFILE", () => {
+  it("keeps legacy static aws.json credentials ahead of ambient AWS_PROFILE", async () => {
     process.env.AWS_PROFILE = "ambient-profile";
 
     const resolved = resolveAwsConfig(
@@ -64,7 +64,7 @@ describe("AWS credential resolution", () => {
     expect(resolved.prefix).toBe("legacy-prefix");
   });
 
-  it("uses AWS_PROFILE/default-chain when no static config exists", () => {
+  it("uses AWS_PROFILE/default-chain when no static config exists", async () => {
     process.env.AWS_PROFILE = "hasna-xyz-infra";
 
     const resolved = resolveAwsConfig({}, null);
@@ -74,7 +74,7 @@ describe("AWS credential resolution", () => {
     expect(resolved.region).toBe("us-east-1");
   });
 
-  it("lets explicit profile and region override static config", () => {
+  it("lets explicit profile and region override static config", async () => {
     const resolved = resolveAwsConfig(
       { profile: "override", region: "eu-central-1", prefix: "canonical" },
       {
@@ -91,7 +91,7 @@ describe("AWS credential resolution", () => {
     expect(resolved.prefix).toBe("canonical");
   });
 
-  it("resolves explicit role configuration without exposing credentials", () => {
+  it("resolves explicit role configuration without exposing credentials", async () => {
     const resolved = resolveAwsConfig(
       {
         credentialMode: "role",
@@ -120,7 +120,7 @@ describe("AWS dry-run planning", () => {
         throw new Error("dry-run must not send");
       },
     }));
-    setSecret("hasna/xyz/opensource/files/prod/s3", "secret-value", "credential");
+    await setSecret("hasna/xyz/opensource/files/prod/s3", "secret-value", "credential");
     getDb()
       .prepare("UPDATE secrets SET value = ? WHERE key = ?")
       .run("enc:v1:malformed", "hasna/xyz/opensource/files/prod/s3");
@@ -156,7 +156,7 @@ describe("AWS dry-run planning", () => {
         };
       },
     }));
-    setSecret("hasna/xyz/opensource/files/prod/s3", "secret-value", "credential");
+    await setSecret("hasna/xyz/opensource/files/prod/s3", "secret-value", "credential");
     getDb()
       .prepare("UPDATE secrets SET value = ? WHERE key = ?")
       .run("enc:v1:malformed", "hasna/xyz/opensource/files/prod/s3");

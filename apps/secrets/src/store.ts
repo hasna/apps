@@ -3,6 +3,25 @@ import { hostname } from "os";
 import { getDb } from "./db.js";
 import { encrypt, decrypt, isEncrypted } from "./crypto.js";
 import { assertValidSecretPath } from "./hasna-xyz-paths.js";
+import {
+  resolveSecretsCloud,
+  cloudSetSecret,
+  cloudGetSecret,
+  cloudDeleteSecret,
+  cloudListSecrets,
+  cloudListSecretMetadata,
+  cloudSearchSecrets,
+  cloudSearchSecretMetadata,
+  cloudSetVaultItem,
+  cloudGetVaultItem,
+  cloudDeleteVaultItem,
+  cloudListVaultItemMetadata,
+  cloudSearchVaultItemMetadata,
+  cloudGetAuditLog,
+  cloudRegisterUser,
+  cloudGetUser,
+  cloudListUsers,
+} from "./store-cloud.js";
 import type {
   SecretEntry,
   SecretMetadata,
@@ -49,7 +68,22 @@ function audit(action: AuditEntry["action"], key: string): void {
   ).run(action, key, currentAgent(), new Date().toISOString());
 }
 
-export function setSecret(
+export async function setSecret(
+  key: string,
+  value: string,
+  type: SecretType = "other",
+  label?: string,
+  expiresAt?: string
+): Promise<SecretEntry> {
+  const cloud = resolveSecretsCloud();
+  if (cloud) {
+    assertValidSecretPath(key);
+    return cloudSetSecret(cloud, key, value, type, label, expiresAt);
+  }
+  return localSetSecret(key, value, type, label, expiresAt);
+}
+
+function localSetSecret(
   key: string,
   value: string,
   type: SecretType = "other",
@@ -77,10 +111,16 @@ export function setSecret(
   `).run(key, encryptedValue, type, label ?? null, expiresAt ?? null, existing?.created_at ?? now, now);
 
   audit("set", key);
-  return getSecret(key)!;
+  return localGetSecret(key)!;
 }
 
-export function getSecret(key: string): SecretEntry | undefined {
+export async function getSecret(key: string): Promise<SecretEntry | undefined> {
+  const cloud = resolveSecretsCloud();
+  if (cloud) return cloudGetSecret(cloud, key);
+  return localGetSecret(key);
+}
+
+function localGetSecret(key: string): SecretEntry | undefined {
   const db = getDb();
   const row = db.prepare("SELECT * FROM secrets WHERE key = ?").get(key) as SecretEntry | undefined;
   if (!row) return undefined;
@@ -89,7 +129,13 @@ export function getSecret(key: string): SecretEntry | undefined {
   return row;
 }
 
-export function deleteSecret(key: string): boolean {
+export async function deleteSecret(key: string): Promise<boolean> {
+  const cloud = resolveSecretsCloud();
+  if (cloud) return cloudDeleteSecret(cloud, key);
+  return localDeleteSecret(key);
+}
+
+function localDeleteSecret(key: string): boolean {
   const db = getDb();
   const result = db.prepare("DELETE FROM secrets WHERE key = ?").run(key);
   if (result.changes === 0) return false;
@@ -252,7 +298,17 @@ function hostSearchTerms(hostname: string): string[] {
   return [...terms].filter(Boolean);
 }
 
-export function setVaultItem(input: VaultItemInput): VaultItem {
+export async function setVaultItem(input: VaultItemInput): Promise<VaultItem> {
+  const cloud = resolveSecretsCloud();
+  if (cloud) {
+    assertVaultItemKind(input.kind);
+    if (!input.title.trim()) throw new Error("Vault item title is required");
+    return cloudSetVaultItem(cloud, input);
+  }
+  return localSetVaultItem(input);
+}
+
+function localSetVaultItem(input: VaultItemInput): VaultItem {
   assertVaultItemKind(input.kind);
   const title = input.title.trim();
   if (!title) throw new Error("Vault item title is required");
@@ -293,10 +349,16 @@ export function setVaultItem(input: VaultItemInput): VaultItem {
   );
 
   audit("set", `vault-item/${id}`);
-  return getVaultItem(id)!;
+  return localGetVaultItem(id)!;
 }
 
-export function getVaultItem(id: string): VaultItem | undefined {
+export async function getVaultItem(id: string): Promise<VaultItem | undefined> {
+  const cloud = resolveSecretsCloud();
+  if (cloud) return cloudGetVaultItem(cloud, id);
+  return localGetVaultItem(id);
+}
+
+function localGetVaultItem(id: string): VaultItem | undefined {
   const db = getDb();
   const row = db.prepare("SELECT * FROM vault_items WHERE id = ?").get(id) as VaultItemRow | undefined;
   if (!row) return undefined;
@@ -304,7 +366,13 @@ export function getVaultItem(id: string): VaultItem | undefined {
   return rowToVaultItem(row);
 }
 
-export function deleteVaultItem(id: string): boolean {
+export async function deleteVaultItem(id: string): Promise<boolean> {
+  const cloud = resolveSecretsCloud();
+  if (cloud) return cloudDeleteVaultItem(cloud, id);
+  return localDeleteVaultItem(id);
+}
+
+function localDeleteVaultItem(id: string): boolean {
   const db = getDb();
   const result = db.prepare("DELETE FROM vault_items WHERE id = ?").run(id);
   if (result.changes === 0) return false;
@@ -312,7 +380,13 @@ export function deleteVaultItem(id: string): boolean {
   return true;
 }
 
-export function listVaultItemMetadata(kind?: VaultItemKind): VaultItemMetadata[] {
+export async function listVaultItemMetadata(kind?: VaultItemKind): Promise<VaultItemMetadata[]> {
+  const cloud = resolveSecretsCloud();
+  if (cloud) return cloudListVaultItemMetadata(cloud, kind);
+  return localListVaultItemMetadata(kind);
+}
+
+function localListVaultItemMetadata(kind?: VaultItemKind): VaultItemMetadata[] {
   const db = getDb();
   const rows = kind
     ? db
@@ -324,7 +398,13 @@ export function listVaultItemMetadata(kind?: VaultItemKind): VaultItemMetadata[]
   return rows.map(rowToVaultItemMetadata);
 }
 
-export function searchVaultItemMetadata(query: string): VaultItemMetadata[] {
+export async function searchVaultItemMetadata(query: string): Promise<VaultItemMetadata[]> {
+  const cloud = resolveSecretsCloud();
+  if (cloud) return cloudSearchVaultItemMetadata(cloud, query);
+  return localSearchVaultItemMetadata(query);
+}
+
+function localSearchVaultItemMetadata(query: string): VaultItemMetadata[] {
   const db = getDb();
   const q = `%${query}%`;
   const rows = db
@@ -338,7 +418,7 @@ export function searchVaultItemMetadata(query: string): VaultItemMetadata[] {
   return rows.map(rowToVaultItemMetadata);
 }
 
-export function matchVaultItemsForUrl(rawUrl: string): VaultItemMetadata[] {
+export async function matchVaultItemsForUrl(rawUrl: string): Promise<VaultItemMetadata[]> {
   let hostname: string;
   try {
     hostname = normalizeDomain(rawUrl);
@@ -349,7 +429,8 @@ export function matchVaultItemsForUrl(rawUrl: string): VaultItemMetadata[] {
 
   const base = baseDomain(hostname);
   const terms = hostSearchTerms(hostname);
-  return listVaultItemMetadata().filter((item) => {
+  const items = await listVaultItemMetadata();
+  return items.filter((item) => {
     if (item.domains.length > 0) {
       return item.domains.some((domain) => domainMatches(hostname, domain));
     }
@@ -361,7 +442,13 @@ export function matchVaultItemsForUrl(rawUrl: string): VaultItemMetadata[] {
   });
 }
 
-export function listSecrets(namespace?: string): SecretEntry[] {
+export async function listSecrets(namespace?: string): Promise<SecretEntry[]> {
+  const cloud = resolveSecretsCloud();
+  if (cloud) return cloudListSecrets(cloud, namespace);
+  return localListSecrets(namespace);
+}
+
+function localListSecrets(namespace?: string): SecretEntry[] {
   const db = getDb();
   let rows: SecretEntry[];
   if (!namespace) {
@@ -375,7 +462,13 @@ export function listSecrets(namespace?: string): SecretEntry[] {
   return decryptRows(rows);
 }
 
-export function listSecretMetadata(namespace?: string): SecretMetadata[] {
+export async function listSecretMetadata(namespace?: string): Promise<SecretMetadata[]> {
+  const cloud = resolveSecretsCloud();
+  if (cloud) return cloudListSecretMetadata(cloud, namespace);
+  return localListSecretMetadata(namespace);
+}
+
+function localListSecretMetadata(namespace?: string): SecretMetadata[] {
   const db = getDb();
   if (!namespace) {
     return db
@@ -389,7 +482,13 @@ export function listSecretMetadata(namespace?: string): SecretMetadata[] {
     .all(`${prefix}%`, namespace) as SecretMetadata[];
 }
 
-export function searchSecrets(query: string): SecretEntry[] {
+export async function searchSecrets(query: string): Promise<SecretEntry[]> {
+  const cloud = resolveSecretsCloud();
+  if (cloud) return cloudSearchSecrets(cloud, query);
+  return localSearchSecrets(query);
+}
+
+function localSearchSecrets(query: string): SecretEntry[] {
   const db = getDb();
   const q = `%${query}%`;
   const rows = db
@@ -400,7 +499,13 @@ export function searchSecrets(query: string): SecretEntry[] {
   return decryptRows(rows);
 }
 
-export function searchSecretMetadata(query: string): SecretMetadata[] {
+export async function searchSecretMetadata(query: string): Promise<SecretMetadata[]> {
+  const cloud = resolveSecretsCloud();
+  if (cloud) return cloudSearchSecretMetadata(cloud, query);
+  return localSearchSecretMetadata(query);
+}
+
+function localSearchSecretMetadata(query: string): SecretMetadata[] {
   const db = getDb();
   const q = `%${query}%`;
   return db
@@ -410,18 +515,34 @@ export function searchSecretMetadata(query: string): SecretMetadata[] {
     .all(q, q, q) as SecretMetadata[];
 }
 
-export function importSecrets(
+export async function importSecrets(
   entries: Array<{ key: string; value: string; type?: SecretType; label?: string; expires_at?: string }>
-): number {
+): Promise<number> {
   let count = 0;
   for (const e of entries) {
-    setSecret(e.key, e.value, e.type ?? "other", e.label, e.expires_at);
+    await setSecret(e.key, e.value, e.type ?? "other", e.label, e.expires_at);
     count++;
   }
   return count;
 }
 
-export function exportSecrets(redact = true): { version: number; redacted: boolean; secrets: Record<string, SecretEntry> } {
+export async function exportSecrets(redact = true): Promise<{ version: number; redacted: boolean; secrets: Record<string, SecretEntry> }> {
+  const cloud = resolveSecretsCloud();
+  if (cloud) {
+    const secrets: Record<string, SecretEntry> = {};
+    if (redact) {
+      const meta = await cloudListSecretMetadata(cloud);
+      for (const m of meta) secrets[m.key] = { ...(m as SecretEntry), value: "***REDACTED***" };
+      return { version: 2, redacted: true, secrets };
+    }
+    const entries = await cloudListSecrets(cloud);
+    for (const e of entries) secrets[e.key] = e;
+    return { version: 2, redacted: false, secrets };
+  }
+  return localExportSecrets(redact);
+}
+
+function localExportSecrets(redact = true): { version: number; redacted: boolean; secrets: Record<string, SecretEntry> } {
   const db = getDb();
   const secrets: Record<string, SecretEntry> = {};
 
@@ -441,7 +562,13 @@ export function exportSecrets(redact = true): { version: number; redacted: boole
   return { version: 2, redacted: false, secrets };
 }
 
-export function getAuditLog(key?: string, limit = 100): AuditEntry[] {
+export async function getAuditLog(key?: string, limit = 100): Promise<AuditEntry[]> {
+  const cloud = resolveSecretsCloud();
+  if (cloud) return cloudGetAuditLog(cloud, key, limit);
+  return localGetAuditLog(key, limit);
+}
+
+function localGetAuditLog(key?: string, limit = 100): AuditEntry[] {
   const db = getDb();
   if (key) {
     return db
@@ -453,7 +580,10 @@ export function getAuditLog(key?: string, limit = 100): AuditEntry[] {
     .all(limit) as AuditEntry[];
 }
 
-export function pruneExpired(): number {
+export async function pruneExpired(): Promise<number> {
+  // Cloud mode: the server owns TTL/expiry enforcement, so there is nothing to
+  // prune from the client. Local mode: sweep expired rows from the vault.
+  if (resolveSecretsCloud()) return 0;
   const db = getDb();
   const result = db
     .prepare("DELETE FROM secrets WHERE expires_at IS NOT NULL AND expires_at < ?")
@@ -475,7 +605,9 @@ export interface User {
   last_seen?: string;
 }
 
-export function registerUser(id: string, name: string, type: "human" | "agent" = "human"): User {
+export async function registerUser(id: string, name: string, type: "human" | "agent" = "human"): Promise<User> {
+  const cloud = resolveSecretsCloud();
+  if (cloud) return (await cloudRegisterUser(cloud, id, name, type)) as User;
   const db = getDb();
   const now = new Date().toISOString();
   db.prepare(`
@@ -483,15 +615,23 @@ export function registerUser(id: string, name: string, type: "human" | "agent" =
     VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET name = excluded.name, type = excluded.type, last_seen = excluded.last_seen
   `).run(id, name, type, now, now);
-  return getUser(id)!;
+  return localGetUser(id)!;
 }
 
-export function getUser(id: string): User | undefined {
+export async function getUser(id: string): Promise<User | undefined> {
+  const cloud = resolveSecretsCloud();
+  if (cloud) return (await cloudGetUser(cloud, id)) as User | undefined;
+  return localGetUser(id);
+}
+
+function localGetUser(id: string): User | undefined {
   const db = getDb();
   return db.prepare("SELECT * FROM users WHERE id = ?").get(id) as User | undefined;
 }
 
-export function listUsers(type?: "human" | "agent"): User[] {
+export async function listUsers(type?: "human" | "agent"): Promise<User[]> {
+  const cloud = resolveSecretsCloud();
+  if (cloud) return (await cloudListUsers(cloud, type)) as User[];
   const db = getDb();
   if (type) {
     return db.prepare("SELECT * FROM users WHERE type = ? ORDER BY name").all(type) as User[];
@@ -499,12 +639,16 @@ export function listUsers(type?: "human" | "agent"): User[] {
   return db.prepare("SELECT * FROM users ORDER BY type, name").all() as User[];
 }
 
-export function deleteUser(id: string): boolean {
+export async function deleteUser(id: string): Promise<boolean> {
+  // No cloud delete-user route; local vault only.
+  if (resolveSecretsCloud()) return false;
   const db = getDb();
   return db.prepare("DELETE FROM users WHERE id = ?").run(id).changes > 0;
 }
 
-export function touchUser(id: string): void {
+export async function touchUser(id: string): Promise<void> {
+  // Cloud user activity is tracked server-side; nothing to touch from the client.
+  if (resolveSecretsCloud()) return;
   const db = getDb();
   db.prepare("UPDATE users SET last_seen = ? WHERE id = ?").run(new Date().toISOString(), id);
 }
