@@ -149,6 +149,7 @@ function compactDrainResult(result: TodosTaskRoutePrint): Record<string, unknown
   const event = objectField(value.event) as Partial<EventEnvelope> | undefined;
   const loop = objectField(value.loop) as Partial<Loop> | undefined;
   const workflow = objectField(value.workflow) as Partial<WorkflowSpec> | undefined;
+  const workItem = objectField(value.workItem);
   const throttle = objectField(value.throttle) as { reason?: string; allowed?: boolean } | undefined;
   const requeue = objectField(value.requeue);
   const providerRouting = objectField(value.providerRouting);
@@ -157,6 +158,9 @@ function compactDrainResult(result: TodosTaskRoutePrint): Record<string, unknown
     taskId: event?.subject,
     eventId: event?.id,
     idempotencyKey: stringField(value.idempotencyKey),
+    workItemId: stringField(workItem?.id),
+    workItemStatus: stringField(workItem?.status),
+    machineId: stringField(workItem?.machineId),
     reason: stringField(value.reason) ?? throttle?.reason,
     loopId: stringField(loop?.id),
     loopName: stringField(loop?.name),

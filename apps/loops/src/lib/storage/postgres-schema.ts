@@ -371,4 +371,13 @@ CREATE INDEX IF NOT EXISTS idx_run_receipts_task_ids ON run_receipts USING GIN (
 CREATE INDEX IF NOT EXISTS idx_run_receipts_knowledge_ids ON run_receipts USING GIN (knowledge_ids_json);
     `,
   ),
+  // Additive route reservation attribution (mirrors sqlite migration
+  // 0010_work_item_machine_id). Released migrations remain immutable.
+  migration(
+    "0006_work_item_machine_id",
+    `
+ALTER TABLE workflow_work_items ADD COLUMN IF NOT EXISTS machine_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_workflow_work_items_machine ON workflow_work_items(machine_id, status);
+    `,
+  ),
 ]);

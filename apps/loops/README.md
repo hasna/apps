@@ -604,6 +604,9 @@ redispatch cap has not been reached. Operators can still force a retry with
 `loops routes requeue <work-item-id> --reason "<cause fixed>"`. The next
 route-created output records `requeue` evidence with the previous work item id,
 previous attempts, reason, new attempt, workflow id, and loop id.
+Route work items are the durable reservation ledger: they include the stable
+idempotency key, task/event references, project/group keys, admitting machine
+ID, route scope, workflow/loop IDs, and the current terminal or active status.
 
 Task route drains can select providers from task metadata instead of running one
 fixed provider/account pool for the whole drain. Add one or more
@@ -764,6 +767,8 @@ loops routes schedule todos-task oss-task-route-drain \
 an explicit `--max-active-scope <key>` wins, else the running loop's
 `LOOPS_LOOP_NAME`, else the route key — so each router's limit is its own
 ceiling rather than a store-wide total shared by every router.
+Compact drain output includes route reservation IDs, work-item status,
+machine ID, workflow ID, loop ID, and route scope for each considered task.
 `--max-active-per-project` and `--max-active-per-project-group` remain cross-route
 anti-hog caps counted over all routes. Raise a router's `--max-active`
 deliberately once counting is per-route; keep `--max-per-profile` set so the

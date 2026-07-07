@@ -655,6 +655,9 @@ blocked, completed/done, cancelled/canceled, failed, archived, manual,
 approval-required, or `no-auto` tasks. This guard exists even when the upstream
 `@hasna/events` webhook filter is misconfigured, so task existence alone is not
 permission to execute agent work.
+Route work items are the durable reservation ledger: they include the stable
+idempotency key, task/event references, project/group keys, admitting machine
+ID, route scope, workflow/loop IDs, and the current terminal or active status.
 
 Task route drains can select providers from task metadata instead of running one
 fixed provider/account pool for the whole drain. Add one or more
@@ -768,6 +771,9 @@ loops routes show <work-item-id>
 loops routes requeue <work-item-id> --reason "fixed upstream blocker"
 loops routes invocations
 ```
+
+Compact drain output includes route reservation IDs, work-item status, machine
+ID, workflow ID, loop ID, and route scope for each considered task.
 
 Named route policies expand the long recurring drain commands used by the live
 task routers into explicit, replayable options. `repoops-pr-queue`, `oss`,

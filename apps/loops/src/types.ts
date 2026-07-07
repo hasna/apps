@@ -284,6 +284,8 @@ export interface WorkflowWorkItem {
   subjectRef: string;
   projectKey?: string;
   projectGroup?: string;
+  /** Machine that reserved/admitted this route work item, when known. */
+  machineId?: string;
   /**
    * The drain/route identity (loop name) that admitted this item. Used to scope
    * the `--max-active` global admission count to a single route instead of the
@@ -312,6 +314,7 @@ export interface UpsertWorkflowWorkItemInput {
   subjectRef: string;
   projectKey?: string;
   projectGroup?: string;
+  machineId?: string;
   routeScope?: string;
   priority?: number;
   status?: Extract<WorkflowWorkItemStatus, "queued" | "deferred">;

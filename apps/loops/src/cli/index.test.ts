@@ -3951,6 +3951,9 @@ describe("loops CLI", () => {
       taskId: "task-lifecycle-smoke-one",
       providerRouting: { provider: "codewith" },
       routeScope: "todos-task",
+      machineId: expect.any(String),
+      workItemId: expect.any(String),
+      workItemStatus: "admitted",
     });
     expect(firstValue.evidencePath).toContain(evidenceDir);
     expect(existsSync(firstValue.evidencePath)).toBe(true);
@@ -4844,6 +4847,7 @@ describe("loops CLI", () => {
     expect(created.status).toBe(0);
     const createdValue = JSON.parse(created.stdout);
     expect(createdValue.workItem.status).toBe("admitted");
+    expect(createdValue.workItem.machineId).toEqual(expect.any(String));
 
     const routes = runCli(dataDir, ["--json", "routes", "list"]);
     expect(routes.status).toBe(0);

@@ -211,6 +211,7 @@ export interface WorkflowWorkItemRow {
   subject_ref: string;
   project_key: string | null;
   project_group: string | null;
+  machine_id: string | null;
   route_scope: string | null;
   priority: number;
   status: string;
@@ -474,6 +475,7 @@ export function rowToWorkflowWorkItem(row: WorkflowWorkItemRow): WorkflowWorkIte
     subjectRef: row.subject_ref,
     projectKey: row.project_key ?? undefined,
     projectGroup: row.project_group ?? undefined,
+    machineId: row.machine_id ?? undefined,
     routeScope: row.route_scope ?? undefined,
     priority: row.priority,
     status: row.status as WorkflowWorkItemStatus,
@@ -984,6 +986,15 @@ export class Store {
         id: "0009_run_receipts",
         apply: () => this.createRunReceiptsSchema(),
       },
+      {
+        id: "0010_work_item_machine_id",
+        apply: () => {
+          // Nullable + additive reservation evidence. Keep downgrade behavior
+          // lenient like route_scope: older binaries ignore the extra column.
+          this.addColumnIfMissing("workflow_work_items", "machine_id", "TEXT");
+          this.db.exec("CREATE INDEX IF NOT EXISTS idx_workflow_work_items_machine ON workflow_work_items(machine_id, status)");
+        },
+      },
     ];
   }
 
@@ -1153,6 +1164,7 @@ export class Store {
         subject_ref TEXT NOT NULL,
         project_key TEXT,
         project_group TEXT,
+        machine_id TEXT,
         route_scope TEXT,
         priority INTEGER NOT NULL,
         status TEXT NOT NULL,
@@ -1171,10 +1183,10 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_workflow_work_items_project ON workflow_work_items(project_key, status);
       CREATE INDEX IF NOT EXISTS idx_workflow_work_items_group ON workflow_work_items(project_group, status);
       CREATE INDEX IF NOT EXISTS idx_workflow_work_items_invocation ON workflow_work_items(invocation_id);
-      -- idx_workflow_work_items_scope (route_scope, status) is created ONLY by
-      -- migration 0008_work_item_route_scope, never here: this baseline DDL
+      -- New-column indexes (route_scope, machine_id, etc.) are created ONLY by
+      -- their additive migrations, never here: this baseline DDL
       -- re-runs on EVERY open (0001 is not skip-guarded), and on a pre-0008
-      -- database the CREATE TABLE above is a no-op, so an index on route_scope
+      -- database the CREATE TABLE above is a no-op, so an index on a new column
       -- here would execute before the column exists and crash the open
       -- ("no such column: route_scope"). New columns may be folded into the
       -- CREATE TABLE (fresh-db only); their indexes must live in the migration.
@@ -2260,10 +2272,10 @@ export class Store {
     this.db
       .query(
         `INSERT INTO workflow_work_items (id, route_key, idempotency_key, invocation_id, source_type, source_ref,
-          subject_ref, project_key, project_group, route_scope, priority, status, attempts, next_attempt_at, lease_expires_at,
+          subject_ref, project_key, project_group, machine_id, route_scope, priority, status, attempts, next_attempt_at, lease_expires_at,
           workflow_id, loop_id, workflow_run_id, last_reason, created_at, updated_at)
          VALUES ($id, $routeKey, $idempotencyKey, $invocationId, $sourceType, $sourceRef, $subjectRef,
-          $projectKey, $projectGroup, $routeScope, $priority, $status, 0, $nextAttemptAt, NULL, NULL, NULL, NULL,
+          $projectKey, $projectGroup, $machineId, $routeScope, $priority, $status, 0, $nextAttemptAt, NULL, NULL, NULL, NULL,
           $lastReason, $created, $updated)
          ON CONFLICT(route_key, idempotency_key) DO UPDATE SET
           invocation_id=excluded.invocation_id,
@@ -2272,6 +2284,10 @@ export class Store {
           subject_ref=excluded.subject_ref,
           project_key=excluded.project_key,
           project_group=excluded.project_group,
+          machine_id=CASE
+            WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running', 'failed', 'dead_letter', 'cancelled') THEN workflow_work_items.machine_id
+            ELSE excluded.machine_id
+          END,
           route_scope=excluded.route_scope,
           priority=excluded.priority,
           status=CASE
@@ -2316,6 +2332,7 @@ export class Store {
         $subjectRef: input.subjectRef,
         $projectKey: input.projectKey ?? null,
         $projectGroup: input.projectGroup ?? null,
+        $machineId: input.machineId ?? null,
         $routeScope: input.routeScope ?? null,
         $priority: input.priority ?? 0,
         $status: status,
