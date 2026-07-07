@@ -1,6 +1,6 @@
 {
   "name": "@hasna/calendar",
-  "version": "0.1.16",
+  "version": "0.1.18",
   "description": "Universal calendar management for AI coding agents - CLI + MCP server + interactive TUI",
   "type": "module",
   "main": "dist/index.js",
@@ -68,7 +68,7 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/contracts": "0.4.1",
+    "@hasna/contracts": "^0.5.1",
     "@hasna/events": "^0.1.7",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",

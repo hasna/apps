@@ -10,6 +10,7 @@ import {
   getAvailabilityForAgent, upsertAgentAvailability,
   createMembership, getMembershipsForOrg, getOrgsForAgent,
 } from "../index.js";
+import { getCalendarCloud } from "../cloud/store.js";
 import { parseHttpArgv, resolveMcpHttpPort } from "./http.js";
 
 export function buildServer(): McpServer {
@@ -28,7 +29,10 @@ export function buildServer(): McpServer {
       description: z.string().optional(),
     },
     async ({ name, slug, description }) => {
-      const org = createOrg({ name, slug, description });
+      const cloud = getCalendarCloud();
+      const org = cloud
+        ? await cloud.createOrg({ name, slug, description })
+        : createOrg({ name, slug, description });
       return { content: [{ type: "text", text: JSON.stringify(org) }] };
     },
   );
@@ -37,7 +41,8 @@ export function buildServer(): McpServer {
     "List all organizations",
     {},
     async () => {
-      const orgs = listOrgs();
+      const cloud = getCalendarCloud();
+      const orgs = cloud ? await cloud.listOrgs() : listOrgs();
       return { content: [{ type: "text", text: JSON.stringify(orgs) }] };
     },
   );
@@ -46,7 +51,10 @@ export function buildServer(): McpServer {
     "Get an org by ID or slug",
     { idOrSlug: z.string().describe("Org ID or slug") },
     async ({ idOrSlug }) => {
-      const org = getOrg(idOrSlug) || getOrgBySlug(idOrSlug);
+      const cloud = getCalendarCloud();
+      const org = cloud
+        ? await cloud.getOrg(idOrSlug)
+        : (getOrg(idOrSlug) || getOrgBySlug(idOrSlug));
       if (!org) return { content: [{ type: "text", text: "Org not found" }], isError: true };
       return { content: [{ type: "text", text: JSON.stringify(org) }] };
     },
@@ -102,7 +110,9 @@ export function buildServer(): McpServer {
       visibility: z.enum(["public", "org", "private"]).optional(),
     },
     async (input) => {
-      const cal = createCalendar({ ...input, timezone: input.timezone || "UTC", visibility: input.visibility || "org" });
+      const payload = { ...input, timezone: input.timezone || "UTC", visibility: input.visibility || "org" };
+      const cloud = getCalendarCloud();
+      const cal = cloud ? await cloud.createCalendar(payload) : createCalendar(payload);
       return { content: [{ type: "text", text: JSON.stringify(cal) }] };
     },
   );
@@ -111,7 +121,9 @@ export function buildServer(): McpServer {
     "List calendars, optionally filtered by org",
     { org_id: z.string().optional() },
     async ({ org_id }) => {
-      return { content: [{ type: "text", text: JSON.stringify(listCalendars(org_id)) }] };
+      const cloud = getCalendarCloud();
+      const cals = cloud ? await cloud.listCalendars(org_id) : listCalendars(org_id);
+      return { content: [{ type: "text", text: JSON.stringify(cals) }] };
     },
   );
 
@@ -137,7 +149,9 @@ export function buildServer(): McpServer {
       created_by: z.string().optional().describe("Agent ID of creator"),
     },
     async (input) => {
-      const evt = createEvent({ ...input, timezone: input.timezone || "UTC", status: input.status || "confirmed", busy_type: input.busy_type || "busy", visibility: input.visibility || "default" });
+      const payload = { ...input, timezone: input.timezone || "UTC", status: input.status || "confirmed", busy_type: input.busy_type || "busy", visibility: input.visibility || "default" };
+      const cloud = getCalendarCloud();
+      const evt = cloud ? await cloud.createEvent(payload) : createEvent(payload);
       return { content: [{ type: "text", text: JSON.stringify(evt) }] };
     },
   );
@@ -152,7 +166,9 @@ export function buildServer(): McpServer {
       limit: z.number().optional(),
     },
     async (input) => {
-      return { content: [{ type: "text", text: JSON.stringify(listEvents(input)) }] };
+      const cloud = getCalendarCloud();
+      const events = cloud ? await cloud.listEvents(input) : listEvents(input);
+      return { content: [{ type: "text", text: JSON.stringify(events) }] };
     },
   );
 
@@ -160,7 +176,8 @@ export function buildServer(): McpServer {
     "Get event details including attendees",
     { id: z.string().describe("Event ID") },
     async ({ id }) => {
-      const evt = getEvent(id);
+      const cloud = getCalendarCloud();
+      const evt = cloud ? await cloud.getEvent(id) : getEvent(id);
       if (!evt) return { content: [{ type: "text", text: "Event not found" }], isError: true };
       return { content: [{ type: "text", text: JSON.stringify(evt) }] };
     },
@@ -179,7 +196,8 @@ export function buildServer(): McpServer {
       recurrence_rule: z.string().nullable().optional(),
     },
     async ({ id, ...rest }) => {
-      const evt = updateEvent(id, rest);
+      const cloud = getCalendarCloud();
+      const evt = cloud ? await cloud.updateEvent(id, rest) : updateEvent(id, rest);
       return { content: [{ type: "text", text: JSON.stringify(evt) }] };
     },
   );
@@ -188,7 +206,8 @@ export function buildServer(): McpServer {
     "Delete an event",
     { id: z.string().describe("Event ID") },
     async ({ id }) => {
-      const ok = deleteEvent(id);
+      const cloud = getCalendarCloud();
+      const ok = cloud ? await cloud.deleteEvent(id) : deleteEvent(id);
       return { content: [{ type: "text", text: ok ? "Deleted" : "Not found" }] };
     },
   );
@@ -312,10 +331,14 @@ export function buildServer(): McpServer {
       const agent = getAgentByName(agent_id) || getAgent(agent_id);
       if (!agent) return { content: [{ type: "text", text: `Agent not found: ${agent_id}` }], isError: true };
       agentHeartbeat(agent.id);
+      const cloud = getCalendarCloud();
       const orgs = getOrgsForAgent(agent.id);
-      const calendars = orgs.length > 0 ? listCalendars(orgs[0]!.org_id) : [];
+      const orgId = orgs.length > 0 ? orgs[0]!.org_id : undefined;
+      const calendars = orgId ? (cloud ? await cloud.listCalendars(orgId) : listCalendars(orgId)) : [];
       const now = new Date().toISOString();
-      const events = calendars.length > 0 ? listEvents({ org_id: orgs[0]!.org_id, after: now, limit: 5 }) : [];
+      const events = (orgId && (calendars as unknown[]).length > 0)
+        ? (cloud ? await cloud.listEvents({ org_id: orgId, after: now, limit: 5 }) : listEvents({ org_id: orgId, after: now, limit: 5 }))
+        : [];
       return { content: [{ type: "text", text: JSON.stringify({ agent, orgs, calendars, upcoming: events }) }] };
     },
   );
