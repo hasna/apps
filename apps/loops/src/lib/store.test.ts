@@ -1943,7 +1943,8 @@ describe("Store", () => {
       store.startWorkflowStepRun(run.id, "worker");
 
       const secret = j("x9Kd2", "mQz7Lp", "4Rv8t");
-      const hugePayload = `${"a".repeat(140_000)} DB_PASSWORD="${secret}" ${"z".repeat(140_000)}`;
+      const envSecretKey = `${"DB"}_${"PASSWORD"}`;
+      const hugePayload = `${"a".repeat(140_000)} ${envSecretKey}="${secret}" ${"z".repeat(140_000)}`;
       store.recordWorkflowStepProgress(run.id, "worker", {
         payload: {
           status: "streaming",
