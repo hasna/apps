@@ -14,7 +14,7 @@
 //
 // SAFETY: never logs or embeds the API key — it lives only inside the transport.
 
-import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
+import { resolveStorageClient, type HasnaStorageClient } from "./contracts-client/storage.js";
 
 /** Transport overrides (test injection: fetchImpl, headers, timeout, retry). */
 type StorageClientOverrides = Parameters<typeof resolveStorageClient>[2];
