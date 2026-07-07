@@ -55,7 +55,7 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && bun build src/cli/index.ts --outdir dist/cli --target bun --external ink --external react --external chalk --external ink-text-input --external @modelcontextprotocol/sdk --external @hasna/contracts --external @hasna/mcp-harness --external pg && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external @hasna/contracts --external @hasna/mcp-harness --external pg && bun build src/server/index.ts --outdir dist/server --target bun --external @hasna/contracts --external @hasna/mcp-harness --external pg && bun build src/sdk/index.ts --outdir dist/sdk --target bun --external @hasna/contracts --external @hasna/mcp-harness && bun build src/index.ts src/storage.ts --outdir dist --target bun --external @hasna/contracts --external @hasna/mcp-harness --external pg && bun build src/lib/capability.ts src/lib/cloudflare.ts src/lib/cloudflare-auth.ts src/lib/delegate.ts src/lib/registrar.ts src/lib/route53.ts --outdir dist/lib --target node --packages external && tsc --emitDeclarationOnly --outDir dist",
+    "build": "bun run clean && bun build src/cli/index.ts --outdir dist/cli --target bun --external ink --external react --external chalk --external ink-text-input --external @modelcontextprotocol/sdk --external pg && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external pg && bun build src/server/index.ts --outdir dist/server --target bun --external pg && bun build src/sdk/index.ts --outdir dist/sdk --target bun && bun build src/index.ts src/storage.ts --outdir dist --target bun --external pg && bun build src/lib/capability.ts src/lib/cloudflare.ts src/lib/cloudflare-auth.ts src/lib/delegate.ts src/lib/registrar.ts src/lib/route53.ts --outdir dist/lib --target node --packages external && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "sdk:gen": "bun run scripts/gen-sdk.ts",
@@ -99,8 +99,6 @@
     "@aws-sdk/client-route-53": "^3.1067.0",
     "@aws-sdk/client-route-53-domains": "^3.1067.0",
     "@aws-sdk/credential-provider-ini": "3.972.53",
-    "@hasna/contracts": "^0.5.0",
-    "@hasna/mcp-harness": "file:../open-mcp",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
