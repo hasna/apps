@@ -5203,6 +5203,25 @@ describe("loops CLI", () => {
     expect(command).toContain("const result = todos(");
     expect(command).toContain("'task'");
 
+    const noArtifactHandoff = spawnSync("bash", ["-lc", command], {
+      cwd: repo,
+      // Bun's test runner can omit SHLVL; bash -l then reports status 1 after the guarded exit.
+      env: { ...process.env, SHLVL: "1" },
+      encoding: "utf8",
+    });
+    if (noArtifactHandoff.status !== 0) {
+      throw new Error(
+        [
+          `missing-artifact handoff exited ${noArtifactHandoff.status}`,
+          `stdout: ${noArtifactHandoff.stdout}`,
+          `stderr: ${noArtifactHandoff.stderr}`,
+        ].join("\n"),
+      );
+    }
+    expect(noArtifactHandoff.stdout).toContain("no PR handoff artifact at");
+    expect(noArtifactHandoff.stdout).toContain(".openloops/pr-handoff/task-routes-pr-handoff-0001.json");
+    expect(noArtifactHandoff.stderr).toBe("");
+
     const artifactDir = join(repo, ".openloops", "pr-handoff");
     mkdirSync(artifactDir, { recursive: true });
     writeFileSync(join(artifactDir, "task-routes-pr-handoff-0001.json"), JSON.stringify({

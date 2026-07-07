@@ -150,6 +150,7 @@ const TRANSPORT_ENV_KEYS = new Set([
   "LOGNAME",
   "PATH",
   "SHELL",
+  "SHLVL",
   "SSH_AGENT_PID",
   "SSH_AUTH_SOCK",
   "TERM",
@@ -380,6 +381,7 @@ function composeExecutionEnv(
   Object.assign(env, spec.env ?? {});
   Object.assign(env, allowlistEnv(spec.allowlist));
   env.PATH = normalizeExecutionPath(env);
+  env.SHLVL ||= "1";
   Object.assign(env, metadataEnv(metadata));
   return env;
 }
@@ -636,6 +638,7 @@ function transportEnv(opts: ExecuteOptions): NodeJS.ProcessEnv {
     if (TRANSPORT_ENV_KEYS.has(key) || key.startsWith("LC_")) env[key] = value;
   }
   env.PATH = normalizeExecutionPath(env);
+  env.SHLVL ||= "1";
   return env;
 }
 
