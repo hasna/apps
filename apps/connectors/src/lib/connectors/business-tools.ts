@@ -864,6 +864,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["spreadsheet", "database", "no-code", "automation", "collaboration"],
   },
   {
+    name: "sticky-note",
+    displayName: "StickyNote",
+    description: "StickyNote API: notes, events, search, and raw API access",
+    category: "Business Tools",
+    tags: ["notes", "productivity", "workflow"],
+  },
+  {
     name: "suitedash",
     displayName: "SuiteDash",
     description: "All-in-one business management platform with CRM, billing, and portals",
