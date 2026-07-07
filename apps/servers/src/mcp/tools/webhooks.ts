@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createWebhook, getWebhook, listWebhooks, deleteWebhook, listDeliveries } from "../../db/webhooks.js";
+import { redactSensitiveFields } from "../../utils/redaction.js";
 
 type Helpers = {
   shouldRegisterTool: (name: string) => boolean;
@@ -41,7 +42,7 @@ export function registerWebhookTools(server: McpServer, { shouldRegisterTool, fo
         try {
           const wh = getWebhook(id);
           if (!wh) return { content: [{ type: "text" as const, text: `Webhook not found: ${id}` }], isError: true };
-          return { content: [{ type: "text" as const, text: JSON.stringify(wh, null, 2) }] };
+          return { content: [{ type: "text" as const, text: JSON.stringify(redactSensitiveFields(wh), null, 2) }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
       },
     );

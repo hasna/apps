@@ -73,8 +73,13 @@ import {
   startLocalServer,
   stopLocalServer,
 } from "../runtime/local-server.js";
+import {
+  resolveServerRuntimeConvention,
+  runtimeMetadataFromConvention,
+} from "../runtime/runtime-conventions.js";
 import type { Server, UpdateServerInput } from "../types/index.js";
 import { parseStrictInteger, type StrictIntegerOptions } from "../utils/integers.js";
+import { redactSensitiveFields } from "../utils/redaction.js";
 
 function getVersion(): string {
   try {
@@ -132,56 +137,6 @@ function wantsJson(opts: Record<string, any>): boolean {
   } catch {
     return false;
   }
-}
-
-const REDACTED_VALUE = "[redacted]";
-const SENSITIVE_KEY_PATTERN = /(?:^|[_-])(secret|token|key|password|passwd|credential|authorization|auth|cookie|session|private)(?:$|[_-])/i;
-const SENSITIVE_KEY_WORDS = new Set(["secret", "token", "key", "password", "passwd", "credential", "authorization", "auth", "cookie", "session", "private"]);
-
-function splitIdentifierWords(key: string): string[] {
-  return key
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-    .replace(/[^A-Za-z0-9]+/g, " ")
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(Boolean);
-}
-
-function isSensitiveKey(key: string): boolean {
-  if (SENSITIVE_KEY_PATTERN.test(key) || /api[_-]?key/i.test(key) || /access[_-]?token/i.test(key) || /refresh[_-]?token/i.test(key)) {
-    return true;
-  }
-
-  return splitIdentifierWords(key).some((word) => SENSITIVE_KEY_WORDS.has(word));
-}
-
-function redactSensitiveString(value: string): string {
-  return value
-    .replace(/\b([A-Za-z_][A-Za-z0-9_]*(?:SECRET|TOKEN|KEY|PASSWORD|PASSWD|CREDENTIAL|AUTH)[A-Za-z0-9_]*\s*=\s*)(?:"[^"]*"|'[^']*'|[^\s;&|]+)/gi, "$1[redacted]")
-    .replace(/([?&][^=\s&]*(?:secret|token|key|password|passwd|credential|auth)[^=\s&]*=)[^&\s]+/gi, "$1[redacted]")
-    .replace(/(bearer\s+)[A-Za-z0-9._~+/-]+=*/gi, "$1[redacted]");
-}
-
-function redactSensitiveFields<T>(value: T): T {
-  if (typeof value === "string") {
-    return redactSensitiveString(value) as T;
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((item) => redactSensitiveFields(item)) as T;
-  }
-
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-
-  const redacted: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    redacted[key] = isSensitiveKey(key) && child != null ? REDACTED_VALUE : redactSensitiveFields(child);
-  }
-
-  return redacted as T;
 }
 
 function printJson(value: unknown): void {
@@ -305,6 +260,7 @@ function lifecycleOptions(opts: Record<string, any>) {
     cwd: opts.cwd,
     port: parsePortOption(opts.port, "--port"),
     healthUrl: opts.healthUrl,
+    readinessUrl: opts.readinessUrl,
     env: parseEnvOptions(opts.env),
     wait: opts.wait,
     waitForLock: Boolean(opts.waitLock),
@@ -1052,7 +1008,8 @@ program
   .option("--description <desc>", "Server description")
   .option("--command <cmd>", "Explicit start command instead of auto-detection")
   .option("--port <port>", "Expected local port")
-  .option("--health-url <url>", "Readiness URL")
+  .option("--health-url <url>", "Health URL")
+  .option("--readiness-url <url>", "Readiness URL")
   .option("--env <pair>", "Environment variable KEY=VALUE", collectValue, [])
   .option("--log-file <path>", "Log file path")
   .option("--force", "Update an existing server with the same slug")
@@ -1071,9 +1028,17 @@ program
         cwd: projectPath,
         port,
         healthUrl: opts.healthUrl || defaultLifecycleHealthUrl(port),
+        readinessUrl: opts.readinessUrl || (opts.healthUrl ? opts.healthUrl : defaultLifecycleReadinessUrl(port)),
         metadata: { detected_from: "explicit" },
       }
-      : detectProjectServerConfig(projectPath, { port, healthUrl: opts.healthUrl });
+      : detectProjectServerConfig(projectPath, { port, healthUrl: opts.healthUrl, readinessUrl: opts.readinessUrl });
+    const runtime = resolveServerRuntimeConvention({
+      mode: "local",
+      port: detected.port,
+      healthUrl: detected.healthUrl,
+      readinessUrl: detected.readinessUrl,
+      env: env ?? {},
+    });
 
     let project = getProjectByPath(projectPath, db);
     if (!project) {
@@ -1083,10 +1048,12 @@ program
 
     const metadata: Record<string, unknown> = {
       ...detected.metadata,
+      ...runtimeMetadataFromConvention(runtime),
       start_command: detected.command,
       cwd: detected.cwd,
       port: detected.port,
       health_url: detected.healthUrl,
+      readiness_url: runtime.readinessUrl,
     };
     if (env) metadata.env = env;
     if (opts.logFile) metadata.log_file = resolve(opts.logFile);
@@ -1120,7 +1087,7 @@ program
       await emitWebhook("server.created", { server_id: server.id, project_id: server.project_id, server }, db);
     }
 
-    const output = { project, server: serverWithComputedFields(server), command: detected.command, next: `servers servers:start ${server.slug} --agent <name> --reason <why>` };
+    const output = { project, server: serverWithComputedFields(server), command: detected.command, runtime, next: `servers servers:start ${server.slug} --agent <name> --reason <why>` };
     if (wantsJson(opts)) {
       printJson(output);
     } else {
@@ -1128,14 +1095,20 @@ program
       console.log(`  Project:    ${project.path}`);
       console.log(`  Command:    ${detected.command}`);
       console.log(`  CWD:        ${detected.cwd}`);
+      console.log(`  Runtime:    ${runtime.mode}`);
       console.log(`  Health:     ${detected.healthUrl || "-"}`);
+      console.log(`  Readiness:  ${runtime.readinessUrl || "-"}`);
       console.log(`  Next:       ${output.next}`);
     }
     closeDatabase();
   });
 
 function defaultLifecycleHealthUrl(port: number | undefined): string | undefined {
-  return port ? `http://127.0.0.1:${port}` : undefined;
+  return port ? `http://127.0.0.1:${port}/health` : undefined;
+}
+
+function defaultLifecycleReadinessUrl(port: number | undefined): string | undefined {
+  return port ? `http://127.0.0.1:${port}/ready` : undefined;
 }
 
 program
@@ -1149,7 +1122,8 @@ program
   .option("--command <cmd>", "Override configured start command")
   .option("--cwd <path>", "Override working directory")
   .option("--port <port>", "Expected local port")
-  .option("--health-url <url>", "Readiness URL")
+  .option("--health-url <url>", "Health URL")
+  .option("--readiness-url <url>", "Readiness URL")
   .option("--env <pair>", "Environment variable KEY=VALUE", collectValue, [])
   .option("--log-file <path>", "Log file path")
   .option("--timeout <ms>", "Readiness timeout in ms")
@@ -1170,6 +1144,7 @@ program
         console.log(`  PID:        ${result.pid || result.snapshot.pid || "-"}`);
         console.log(`  Ready:      ${result.ready ? "yes" : "not yet"}`);
         console.log(`  Health:     ${result.snapshot.healthUrl || "-"}`);
+        console.log(`  Readiness:  ${result.snapshot.readinessUrl || "-"}`);
         console.log(`  Logs:       ${result.snapshot.logFile || "-"}`);
         console.log(`  Operation:  ${result.operation.id.slice(0, 8)}`);
       }
@@ -1192,7 +1167,8 @@ program
   .option("--command <cmd>", "Override configured start command")
   .option("--cwd <path>", "Override working directory")
   .option("--port <port>", "Expected local port")
-  .option("--health-url <url>", "Readiness URL")
+  .option("--health-url <url>", "Health URL")
+  .option("--readiness-url <url>", "Readiness URL")
   .option("--env <pair>", "Environment variable KEY=VALUE", collectValue, [])
   .option("--log-file <path>", "Log file path")
   .option("--timeout <ms>", "Readiness timeout in ms")
@@ -1214,6 +1190,7 @@ program
         console.log(`  PID:        ${result.pid || result.snapshot.pid || "-"}`);
         console.log(`  Ready:      ${result.ready ? "yes" : "not yet"}`);
         console.log(`  Health:     ${result.snapshot.healthUrl || "-"}`);
+        console.log(`  Readiness:  ${result.snapshot.readinessUrl || "-"}`);
         console.log(`  Logs:       ${result.snapshot.logFile || "-"}`);
         console.log(`  Operation:  ${result.operation.id.slice(0, 8)}`);
       }
@@ -1288,6 +1265,7 @@ program
       console.log(`  Running:    ${snapshot.running ? "yes" : "no"}`);
       console.log(`  Ready:      ${snapshot.ready ? "yes" : "no"}`);
       console.log(`  Health:     ${snapshot.healthUrl || "-"}`);
+      console.log(`  Readiness:  ${snapshot.readinessUrl || "-"}`);
       console.log(`  Logs:       ${snapshot.logFile || "-"}`);
     }
     closeDatabase();
@@ -1371,6 +1349,7 @@ program
       console.log(`  Command:    ${redactSensitiveFields(snapshot.command) || "-"}`);
       console.log(`  CWD:        ${snapshot.cwd || "-"}`);
       console.log(`  Health:     ${snapshot.healthUrl || "-"}`);
+      console.log(`  Readiness:  ${snapshot.readinessUrl || "-"}`);
       console.log(`  Lock:       ${lock ? stringifyForDisplay(lock) : "-"}`);
       console.log(chalk.bold("\n  Recent operations"));
       for (const op of operations) console.log(`    ${op.id.slice(0, 8)} ${op.status.padEnd(10)} ${op.operation_type.padEnd(10)} ${redactSensitiveFields(op.metadata.reason || "")}`);

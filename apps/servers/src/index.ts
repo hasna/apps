@@ -124,6 +124,14 @@ export {
   restartLocalServer,
 } from "./runtime/local-server.js";
 
+export {
+  SERVER_RUNTIME_ENV,
+  SERVER_RUNTIME_MODES,
+  assertLocalLifecycleManageable,
+  resolveServerRuntimeConvention,
+  runtimeMetadataFromConvention,
+} from "./runtime/runtime-conventions.js";
+
 export type {
   DetectedProjectServerConfig,
   DetectProjectServerOptions,
@@ -131,3 +139,10 @@ export type {
   LocalLifecycleResult,
   LocalServerSnapshot,
 } from "./runtime/local-server.js";
+
+export type {
+  ServerRuntimeConvention,
+  ServerRuntimeConventionInput,
+  ServerRuntimeMode,
+  ServerRuntimeProcessOwner,
+} from "./runtime/runtime-conventions.js";

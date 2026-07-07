@@ -66,6 +66,43 @@ servers servers:stop platform-alumia --agent diocletian --reason "done testing"
 
 For apps that need to be reachable from other machines, make the app command bind to `0.0.0.0` and set the managed port. `servers` records the local health check and exposes computed Tailscale URLs from `tailscale_hostname`/`tailscale_port` metadata.
 
+### Runtime Conventions
+
+`@hasna/servers` separates local process management from production cloud-backed runtime reporting.
+
+Local runtime records use `runtime_mode: "local"`. In this mode the package may start, stop, restart, inspect, and log a local process. The default bind/probe behavior is local-first: bind host `127.0.0.1`, probe host `127.0.0.1`, `PORT` for the managed port, `/health` for health, and `/ready` for readiness. `servers:init` writes these convention fields into server metadata and lifecycle readiness checks use `readiness_url` when present, falling back to `health_url` for older health-only records.
+
+Production cloud-backed records use `runtime_mode: "production-cloud"`. In this mode the process is owned by the hosting platform, not by `@hasna/servers`. The package records config and health/readiness metadata, but local lifecycle calls refuse to start, stop, restart, deploy, expose, or mutate production infrastructure. Use platform-owned deployment and approval workflows for live changes.
+
+Stable metadata and environment keys:
+
+- `runtime_mode`: `local` or `production-cloud`
+- `process_owner`: `hasna-servers` or `external-platform`
+- `bind_host`: local listener host, defaulting to `127.0.0.1` for local and `0.0.0.0` for production cloud-backed runtime
+- `probe_host`: health probe host, defaulting to `127.0.0.1`
+- `port` / `PORT`: runtime port
+- `health_path` / `SERVERS_HEALTH_PATH`: default `/health`
+- `readiness_path` / `SERVERS_READINESS_PATH`: default `/ready`
+- `health_url` / `SERVERS_HEALTH_URL`: explicit health endpoint when path+port defaults are not enough
+- `readiness_url` / `SERVERS_READINESS_URL`: explicit readiness endpoint when path+port defaults are not enough
+- `public_url` / `SERVERS_PUBLIC_URL`: externally routed URL, if one exists
+
+SDK helpers keep packages on the same contract:
+
+```typescript
+import {
+  resolveServerRuntimeConvention,
+  runtimeMetadataFromConvention,
+} from "@hasna/servers";
+
+const runtime = resolveServerRuntimeConvention({
+  mode: process.env.SERVERS_RUNTIME_MODE,
+  env: process.env,
+});
+
+const metadata = runtimeMetadataFromConvention(runtime);
+```
+
 ## MCP
 
 Run as MCP server with stdio transport (default):

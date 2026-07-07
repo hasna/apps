@@ -172,6 +172,8 @@ describe("startMcpHttpServer", () => {
   it("starts, checks, and stops a local server through MCP tools", async () => {
     const appDir = makeTempDir("servers-mcp-app-");
     const port = await getFreePort();
+    const sensitiveKey = ["ANTHROPIC", "API", "KEY"].join("_");
+    const sensitiveValue = "redaction-sentinel-value";
     let pid: number | undefined;
 
     writeFileSync(
@@ -202,11 +204,21 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
           path: appDir,
           command: "bun run server.js",
           port,
-          env: { PORT: String(port) },
+          env: { PORT: String(port), [sensitiveKey]: sensitiveValue },
         },
       });
       expect(init.isError).not.toBe(true);
+      expect(resultText(init)).not.toContain(sensitiveValue);
       expect(resultJson(init).server.slug).toBe("mcp-app");
+      expect(resultJson(init).server.metadata.env[sensitiveKey]).toBe("[redacted]");
+
+      const getServer = await client.callTool({
+        name: "get_server",
+        arguments: { id_or_slug: "mcp-app" },
+      });
+      expect(getServer.isError).not.toBe(true);
+      expect(resultText(getServer)).not.toContain(sensitiveValue);
+      expect(resultJson(getServer).metadata.env[sensitiveKey]).toBe("[redacted]");
 
       const duplicateInit = await client.callTool({
         name: "init_local_server",
@@ -231,9 +243,11 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
       });
       expect(start.isError).not.toBe(true);
       const started = resultJson(start);
+      expect(resultText(start)).not.toContain(sensitiveValue);
       pid = started.pid;
       expect(started.ready).toBe(true);
       expect(started.server.status).toBe("online");
+      expect(started.server.metadata.env[sensitiveKey]).toBe("[redacted]");
 
       const status = await client.callTool({
         name: "get_local_server_status",

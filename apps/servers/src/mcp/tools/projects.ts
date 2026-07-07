@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createProject, getProject, getProjectByPath, listProjects, updateProject, deleteProject } from "../../db/projects.js";
+import { redactSensitiveFields } from "../../utils/redaction.js";
 
 type Helpers = {
   shouldRegisterTool: (name: string) => boolean;
@@ -38,7 +39,7 @@ export function registerProjectTools(server: McpServer, { shouldRegisterTool, fo
           let project = getProject(id_or_path);
           if (!project) project = getProjectByPath(id_or_path);
           if (!project) return { content: [{ type: "text" as const, text: `Project not found: ${id_or_path}` }], isError: true };
-          return { content: [{ type: "text" as const, text: JSON.stringify(project, null, 2) }] };
+          return { content: [{ type: "text" as const, text: JSON.stringify(redactSensitiveFields(project), null, 2) }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
       },
     );
