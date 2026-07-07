@@ -77,6 +77,222 @@ Required semantics:
   for the caller to inspect, cancel, replay, or resolve the run without querying
   SQLite directly.
 
+## Planned Actions Target Binding
+
+`@hasna/actions` now exposes typed action contracts: `ActionManifest`,
+`ActionInvocation`, `ActionRun`, `ActionRunStatus`, `ActionQueueStatus`,
+`ActionAuditEvent`, `EvidenceRef`, and `ActionDeadLetter`. A future OpenLoops
+action binding must reuse those contracts instead of adding an OpenLoops-owned
+action status, action queue, or idempotency dialect.
+
+The binding should be a workflow-admission descriptor, not a direct executor in
+the first implementation:
+
+```ts
+type ActionsRuntimeBinding = {
+  integration: "hasna-actions";
+  role: "workflow-runtime";
+  targetType: "action";
+  actionOwner: "@hasna/actions";
+  runtimeOwner: "@hasna/loops";
+  handoff: "workflow-upsert";
+  statusModel: "action-owned";
+};
+
+type ActionTargetBindingRequest = {
+  type: "action";
+  action: {
+    id: string;
+    version: string;
+    invocationId?: string;
+    runId?: string;
+    idempotencyKey?: string;
+    dedupeKey?: string;
+  };
+  subject?: WorkflowUpsertRequest["subject"];
+  workflow: WorkflowUpsertRequest["workflow"];
+  route?: WorkflowUpsertRequest["route"];
+  execution?: WorkflowUpsertRequest["execution"];
+  mode?: WorkflowUpsertRequest["mode"];
+  dispatch?: WorkflowUpsertRequest["dispatch"];
+};
+```
+
+The planned implementation path is:
+
+1. The action owner validates the manifest, input, actor, approvals, dry-run
+   support, idempotency requirement, guardrails, audit fields, evidence fields,
+   and rollback policy using `@hasna/actions`.
+2. The action owner passes only a normalized `ActionTargetBindingRequest` or
+   `WorkflowUpsertRequest` to OpenLoops. Large inputs, private prompts, secret
+   values, and mutable action state stay in the action store or a referenced
+   artifact.
+3. OpenLoops admits a one-shot workflow loop through the planned upsert
+   contract, records workflow/run/manifests refs, and reports those refs back to
+   the action owner.
+4. The action owner records `ActionAuditEvent` and `EvidenceRef` entries that
+   include the returned OpenLoops refs. OpenLoops may store source refs for
+   lookup, but `@hasna/actions` remains the source of truth for action runs and
+   queue state.
+
+### Request And Result Mapping
+
+`ActionManifest.id` and `ActionManifest.version` map to
+`WorkflowUpsertRequest.source.id` and the canonical workflow hash input:
+
+```ts
+const request: WorkflowUpsertRequest = {
+  idempotencyKey:
+    invocation.idempotencyKey ??
+    `actions:${manifest.id}:${manifest.version}:${invocation.id}`,
+  source: {
+    kind: "action",
+    id: manifest.id,
+    dedupeKey: invocation.idempotencyKey ?? invocation.id,
+  },
+  subject: subjectFromAction(manifest, invocation),
+  workflow: renderedWorkflow,
+  loop: { name: `action-${manifest.id}`, schedule: { type: "once", at } },
+  route,
+  execution,
+  mode,
+  dispatch,
+};
+```
+
+`specHash` must be computed from the canonical OpenLoops workflow request plus
+the stable action contract identity: action id, manifest version, idempotency
+key or invocation id, selected executor binding kind/ref, route policy, and
+execution policy. It must not include raw secret values, raw credentials, or
+unredacted prompt bodies. If `@hasna/actions` later publishes its own manifest
+hash, OpenLoops should include that hash instead of re-hashing action internals.
+
+`WorkflowUpsertResult` keeps its existing semantics:
+
+- `idempotencyKey` is the action-owned idempotency key selected above.
+- `specHash` identifies the exact OpenLoops workflow admission request and
+  action contract identity that produced it.
+- `refs.workflowId`, `refs.loopId`, `refs.invocationId`, `refs.workItemId`,
+  `refs.runId`, and `refs.manifestPath` are OpenLoops refs that the action
+  owner can store as `EvidenceRef` or audit event data.
+- `action="created" | "updated" | "reused" | "rejected"` describes OpenLoops
+  materialization only. It is not an action run status.
+- Action run fields such as `status`, `dedupedFromRunId`, `evidence`, `events`,
+  and `error` remain on `ActionRun`.
+
+### Status Translation
+
+OpenLoops should translate its workflow and work-item state into action-owned
+status updates without persisting a new action status enum.
+
+Recommended initial translation:
+
+- An accepted dry-run/preflight maps to an `ActionRun` that remains
+  `planned`, `previewed`, or `awaiting_approval` according to
+  `@hasna/actions`; OpenLoops only returns preflight details.
+- A scheduled workflow maps to action queue status `queued` or
+  `waiting_approval`, depending on action-owned approval gates.
+- A claimed/running workflow maps to action queue status `claimed` and action
+  run status `executing`.
+- A successful workflow maps to action queue status `succeeded` and action run
+  status `succeeded`.
+- A terminal workflow failure maps to action queue status `failed` or `dead`
+  and action run status `failed`; the action owner decides whether the
+  `ActionDeadLetter.replayable` flag is true.
+- Operator cancellation maps to action queue status `cancelled` and action run
+  status `cancelled`.
+
+These mappings are adapter behavior. OpenLoops should expose its own workflow
+statuses for OpenLoops APIs and should call or return enough refs for
+`@hasna/actions` to update `ActionRun`, `ActionQueueStatus`, audit events, and
+dead-letter records.
+
+### Failure And Replay
+
+Failure handling must flow through action-owned APIs:
+
+- Provider, worktree, account, policy, and command failures are classified by
+  OpenLoops and returned as redacted workflow error evidence.
+- The action owner turns those failures into `ActionError`,
+  `ActionDeadLetter`, `ActionAuditEvent`, and `EvidenceRef` records.
+- Replay starts from an action-owned replay decision and a new action-owned
+  idempotency key. OpenLoops then receives a new upsert request whose
+  `source.dedupeKey` and `idempotencyKey` are the replay keys.
+- OpenLoops DLQ commands may mirror or inspect linked workflow failures, but
+  they must not fabricate action queue entries or mark an action replayable on
+  their own.
+
+### Mode And Dispatch Examples
+
+Dry-run without OpenLoops mutation:
+
+```bash
+actions run deploy.manifest.json \
+  --input-file deploy-input.json \
+  --idempotency-key deploy:preview:42 \
+  --dry-run \
+  --json
+
+loops workflows upsert-one-shot deploy-workflow.json \
+  --idempotency-key deploy:preview:42 \
+  --source-kind action \
+  --source-id deploy.service \
+  --mode dry-run \
+  --dispatch none \
+  --json
+```
+
+Preflight before scheduling:
+
+```bash
+loops workflows upsert-one-shot deploy-workflow.json \
+  --idempotency-key deploy:release:42 \
+  --source-kind action \
+  --source-id deploy.service \
+  --mode preflight \
+  --dispatch schedule \
+  --json
+```
+
+Commit and run immediately after the action owner approves:
+
+```bash
+actions approve <action-run-id> --reason "preview accepted" --json
+
+loops workflows upsert-one-shot deploy-workflow.json \
+  --idempotency-key deploy:release:42 \
+  --source-kind action \
+  --source-id deploy.service \
+  --mode commit \
+  --dispatch run-now \
+  --json
+```
+
+Commit without dispatch, for another owner to trigger later:
+
+```bash
+loops workflows upsert-one-shot deploy-workflow.json \
+  --idempotency-key deploy:release:42 \
+  --source-kind action \
+  --source-id deploy.service \
+  --mode commit \
+  --dispatch none \
+  --json
+```
+
+### Non-Goals
+
+- Do not let `@hasna/actions` write OpenLoops SQLite/Postgres rows directly.
+- Do not duplicate the action queue in OpenLoops.
+- Do not materialize triggers in OpenLoops; action and automation owners decide
+  when a concrete invocation exists.
+- Do not store secret values, unredacted prompts, credentials, or private
+  action input payloads in workflow specs, prompts, manifests, task comments,
+  or run output.
+- Do not add `target.type = "action"` as an executable target until the action
+  package has a stable runtime handoff API that can complete, fail, audit, and
+  replay action runs by action-owned refs.
+
 ## CLI Surface
 
 The planned CLI should mirror the SDK:

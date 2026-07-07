@@ -805,8 +805,54 @@ automations queue claim --runner open-loops:<worker-id>
 automations queue complete <action-id> --runner open-loops:<worker-id>
 ```
 
-Planned upsert/DLQ/strict-mode contracts:
-[`docs/AUTOMATION_RUNTIME_DESIGN.md`](docs/AUTOMATION_RUNTIME_DESIGN.md).
+For explicit event workflow routing, OpenAutomations can export the normalized
+event envelope and OpenLoops can consume it through the existing generic event
+route:
+
+```bash
+automations --json webhooks event <route> --body-json '<json>' \
+  | loops --json routes create generic
+```
+
+This is not automation materialization in OpenLoops. It is an explicit
+event-envelope workflow handoff: OpenAutomations owns deterministic automation
+specs, webhook normalization, queue state, approvals, DLQ, and replay; OpenLoops
+owns agent workflow invocation after the operator routes the envelope to
+`loops routes create generic`.
+
+Do not store automation specs in OpenLoops, infer automation triggers from event
+transport alone, or replace the OpenAutomations queue with loop/workflow rows.
+When a loop or workflow is used for execution, keep `HASNA_AUTOMATIONS_DIR`
+pointing at the owning OpenAutomations data root and preserve the runner id in
+completion/failure calls so OpenAutomations can enforce action leases.
+
+### Planned Workflow Upsert SDK
+
+External compilers such as `@hasna/actions` and `@hasna/automations` should not
+write OpenLoops SQLite rows directly. The stable contract should be an
+idempotent CLI/SDK upsert that accepts a fully rendered one-shot workflow loop
+request and returns durable refs.
+
+The canonical `WorkflowUpsertRequest` / `WorkflowUpsertResult` shapes and their
+required semantics (dry-run/preflight/commit modes, `idempotencyKey` +
+`specHash` idempotency, dispatch behavior, and redaction-before-persistence)
+are specified in `docs/AUTOMATION_RUNTIME_DESIGN.md`; this README intentionally
+does not duplicate that spec.
+
+That design doc also defines the planned `@hasna/actions` target binding. The
+binding reuses `ActionManifest`, `ActionInvocation`, `ActionRunStatus`,
+`ActionQueueStatus`, action-owned idempotency keys, action audit events, and
+dead-letter/replay records. OpenLoops only admits and executes the handed-off
+workflow, then returns workflow refs for action-owned evidence.
+
+The same design doc covers the planned DLQ/dead-letter lifecycle, including
+`loops dlq list/show/replay/resolve`, idempotent replay keys, and compatibility
+rules for `@hasna/actions`.
+
+The same design doc also defines the planned strict automation execution mode:
+minimal env inheritance, scoped secret refs, enforced allowlists,
+redaction-before-persistence, and provider-safe defaults for automation-created
+work.
 
 ## Transcript-Driven Loops
 
