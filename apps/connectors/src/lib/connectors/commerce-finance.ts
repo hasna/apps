@@ -73,6 +73,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["payments", "cards", "issuing"],
   },
   {
+    name: "stripe-webhooks-advanced",
+    displayName: "Stripe Webhooks Advanced",
+    description: "Webhook endpoints, events, and signature verification",
+    category: "Commerce & Finance",
+    tags: ["payments", "webhooks", "stripe"],
+  },
+  {
     name: "shopify",
     displayName: "Shopify",
     description: "E-commerce platform",
