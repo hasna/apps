@@ -1,0 +1,67 @@
+{
+  "taskId": "2bc68041-8996-480c-add4-c78c04623b17",
+  "worktreePath": "/home/hasna/.hasna/loops/worktrees/open-knowledge/2bc68041-8996-480c-add4-c78c04623b17-bd1f7ac9",
+  "branch": "openloops/open-knowledge/2bc68041-8996-480c-add4-c78c04623b17-bd1f7ac9",
+  "base": "main",
+  "commit": "cde7c726adb2eb29163e8c1737474dad8d42e7f0",
+  "remote": "https://github.com/hasna/knowledge.git",
+  "githubRepo": "hasna/knowledge",
+  "pullRequest": {
+    "number": 10,
+    "url": "https://github.com/hasna/knowledge/pull/10",
+    "headRef": "fix/json-store-lock-corruption",
+    "headOid": "cde7c726adb2eb29163e8c1737474dad8d42e7f0",
+    "author": "andrei-hasna",
+    "state": "OPEN",
+    "mergeable": "MERGEABLE",
+    "mergeStateStatus": "CLEAN",
+    "checks": {
+      "total": 7,
+      "successful": 7,
+      "failed": 0,
+      "pending": 0,
+      "runId": "28844213097"
+    }
+  },
+  "title": "PR #10 ready for non-author merge after rebase",
+  "body": "PR #10 was rebased onto origin/main 7eb47f3ccc885866a17e2c45b99a70557def7fb9 and force-pushed with lease from 0604c324884c3eed2da4ce21373cdfa310140fe5 to cde7c726adb2eb29163e8c1737474dad8d42e7f0. GitHub reports MERGEABLE/CLEAN and all 7 CI checks succeeded. The worker did not self-merge because the active GitHub account is the PR author and the selected non-author merger kriptoburak is not logged in on spark01.",
+  "validation": [
+    {
+      "command": "bun run build",
+      "result": "pass"
+    },
+    {
+      "command": "bun test tests/mcp.test.ts tests/storage.test.ts",
+      "result": "pass",
+      "summary": "5 pass, 0 fail"
+    },
+    {
+      "command": "bun test",
+      "result": "pass",
+      "summary": "169 pass, 2 skip, 0 fail"
+    },
+    {
+      "command": "gh run watch 28844213097 --repo hasna/knowledge --exit-status",
+      "result": "pass",
+      "summary": "7 GitHub CI jobs succeeded"
+    },
+    {
+      "command": "git diff --cached | todos redaction scan",
+      "result": "pass",
+      "summary": "No secret-like values detected before commit"
+    },
+    {
+      "command": "git diff origin/main...HEAD | todos redaction scan",
+      "result": "pass",
+      "summary": "No secret-like values detected before push"
+    }
+  ],
+  "error": {
+    "type": "non_author_merge_credential_unavailable",
+    "command": "gh auth switch --hostname github.com --user kriptoburak",
+    "message": "not logged in to github.com account kriptoburak",
+    "activeAccount": "andrei-hasna",
+    "policy": "Do not self-merge as the PR author."
+  },
+  "nextAction": "Run the merge under kriptoburak or another approved non-author reviewer, then resume the migration step: bun src/cli.ts storage merge-legacy-path --scope global --approve-write --approved-by openloops-2bc68041-8996-480c-add4-c78c04623b17 --json."
+}
