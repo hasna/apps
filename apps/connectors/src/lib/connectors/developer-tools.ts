@@ -927,6 +927,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["localization", "translation", "i18n", "l10n", "multilingual"],
   },
   {
+    name: "speakeasy-api",
+    displayName: "Speakeasy",
+    description: "API management platform for SDK generation and OpenAPI workflows",
+    category: "Developer Tools",
+    tags: ["api", "sdk", "openapi", "devtools"],
+  },
+  {
     name: "starton",
     displayName: "Starton",
     description: "Blockchain infrastructure API for deploying and interacting with smart contracts",
