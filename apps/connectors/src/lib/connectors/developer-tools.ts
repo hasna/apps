@@ -990,6 +990,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["workflow", "error-handler", "development"],
   },
   {
+    name: "stoplight",
+    displayName: "Stoplight",
+    description: "API design and documentation platform",
+    category: "Developer Tools",
+    tags: ["api", "openapi", "documentation", "design"],
+  },
+  {
     name: "steel-dev",
     displayName: "Steel Dev",
     description: "Browser automation platform and cloud browser sessions API",
