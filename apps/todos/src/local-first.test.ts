@@ -105,7 +105,13 @@ describe("OSS local-first runtime defaults", () => {
     expect(calls).toEqual([]);
   });
 
-  test("CLI ignores hosted remote env vars and writes to local SQLite", async () => {
+  // Safe-by-default boundary: self_hosted cloud routing only engages when an
+  // explicit mode var (HASNA_TODOS_STORAGE_MODE / _MODE) resolves to
+  // cloud/self_hosted. Having only API_URL + API_KEY present — with NO mode var
+  // — must NEVER silently drift the CLI onto the network. It stays local, and
+  // the remote endpoint is never touched. (Unset the mode -> local; this is the
+  // reverse half of the reversible-flip contract.)
+  test("API_URL+API_KEY without a mode var stays local (no accidental cloud drift)", async () => {
     let remoteCalls = 0;
     const server = Bun.serve({
       port: 0,
@@ -116,16 +122,18 @@ describe("OSS local-first runtime defaults", () => {
     });
 
     try {
-      const hostileRemoteEnv = {
+      // Both HASNA_TODOS_* and bare TODOS_* forms of URL+KEY, but no mode var.
+      const noModeEnv = {
+        HASNA_TODOS_API_URL: String(server.url).replace(/\/$/, ""),
+        HASNA_TODOS_API_KEY: "remote-token",
         TODOS_API_URL: String(server.url).replace(/\/$/, ""),
         TODOS_API_KEY: "remote-token",
-        TODOS_MODE: "remote",
       };
-      const created = await runCli(["--json", "add", "Local CLI task"], hostileRemoteEnv);
+      const created = await runCli(["--json", "add", "Local CLI task"], noModeEnv);
       expect(created.exitCode).toBe(0);
       expect(JSON.parse(created.stdout).title).toBe("Local CLI task");
 
-      const listed = await runCli(["--json", "list"], hostileRemoteEnv);
+      const listed = await runCli(["--json", "list"], noModeEnv);
       expect(listed.exitCode).toBe(0);
       expect(listed.stdout).toContain("Local CLI task");
       expect(remoteCalls).toBe(0);
