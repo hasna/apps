@@ -129,6 +129,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["email", "api", "transactional"],
   },
   {
+    name: "sparkpost",
+    displayName: "SparkPost",
+    description: "Transactional email delivery and analytics",
+    category: "Communication",
+    tags: ["email", "api", "transactional"],
+  },
+  {
     name: "mailgun",
     displayName: "Mailgun",
     description: "Email delivery API",
