@@ -17,22 +17,22 @@ bun run typecheck     # Type check
 
 ## API Reference
 
-- **Base URL**: `https://api.streak.com/api/v1`
+- **Default Base URL**: `https://api.streak.com/api/v1`
 - **Auth**: HTTP Basic (`Authorization: Basic base64(apiKey:)`)
-- **Create**: PUT requests
-- **Update**: POST requests
+- **API versions**: Most endpoints use `/api/v1`; tasks and comments use `/api/v2`; box create uses `/api/v2`, while box read/update/delete use `/api/v1`.
+- **Body format**: Legacy `/api/v1` pipeline/stage/field create endpoints use URL-encoded form bodies; `/api/v2` create/update endpoints use JSON.
 - **Docs**: https://streak.readme.io/
 
 ## API Modules
 
 | Module | Resource | Endpoints |
 |--------|----------|-----------|
-| `pipelines` | Pipelines | list, get, create (PUT), update (POST), delete |
-| `boxes` | Boxes | list (global or per-pipeline), get, create, update, delete |
-| `stages` | Stages | list, create per pipeline |
-| `fields` | Custom fields | list, create per pipeline |
-| `tasks` | Tasks | list, create, update, delete per box |
-| `comments` | Comments | list, create, delete per box |
+| `pipelines` | Pipelines | list, get, create (v1 PUT form), update (v1 POST JSON), delete |
+| `boxes` | Boxes | list/get/delete (v1), create (v2 POST JSON), update (v1 POST JSON) |
+| `stages` | Stages | list, create per pipeline (v1 PUT form) |
+| `fields` | Custom fields | list, create per pipeline (v1 PUT form) |
+| `tasks` | Tasks | list/create/update/delete (v2) |
+| `comments` | Comments | list/create/delete (v2) |
 | `threads` | Email threads | list per box |
 | `reminders` | Reminders | list, create per box |
 | `files` | Files | list per box |
