@@ -449,6 +449,41 @@ describe('REST API server', () => {
     expect(list2.filter(s => (s as Record<string, unknown>)['id'] === 'ing-sess-1').length).toBe(1)
   })
 
+  it('POST /v1/ingest updates existing rows on conflict (merge, not just insert)', async () => {
+    const base = {
+      sessions: [{
+        id: 'ing-upd-1', agent: 'claude', project_path: '/p/y', project_name: 'y',
+        started_at: NOW, ended_at: null, total_cost_usd: 5, total_tokens: 10, request_count: 1,
+        machine_id: 'machineU',
+      }],
+    }
+    await req(handler, '/v1/ingest', 'POST', base)
+    // Re-ingest the SAME id with a changed cost — ON CONFLICT DO UPDATE must merge.
+    const changed = { sessions: [{ ...base.sessions[0], total_cost_usd: 42 }] }
+    const res = await req(handler, '/v1/ingest', 'POST', changed)
+    expect(res.status).toBe(200)
+    const sess = await req(handler, '/v1/sessions?machine=machineU')
+    const list = (sess.data as Record<string, unknown>)['data'] as Record<string, unknown>[]
+    const row = list.filter(s => s['id'] === 'ing-upd-1')
+    expect(row.length).toBe(1)
+    expect(row[0]!['total_cost_usd']).toBe(42)
+  })
+
+  it('POST /v1/ingest bulk-imports many rows in a single request (chunked upsert)', async () => {
+    const sessions = Array.from({ length: 250 }, (_, i) => ({
+      id: `ing-bulk-${i}`, agent: 'claude', project_path: '/p/b', project_name: 'b',
+      started_at: NOW, ended_at: null, total_cost_usd: 1, total_tokens: 1, request_count: 1,
+      machine_id: 'machineB',
+    }))
+    const res = await req(handler, '/v1/ingest', 'POST', { sessions })
+    expect(res.status).toBe(200)
+    const data = (res.data as Record<string, unknown>)['data'] as Record<string, unknown>
+    expect(data['total']).toBe(250)
+    const sess = await req(handler, '/v1/sessions?machine=machineB&limit=1000')
+    const list = (sess.data as Record<string, unknown>)['data'] as unknown[]
+    expect(list.length).toBe(250)
+  })
+
   it('POST /v1/ingest rejects invalid JSON body', async () => {
     const response = await rawReq(handler, '/v1/ingest', 'POST', '{not json')
     expect(response.status).toBe(400)
