@@ -3,6 +3,13 @@ import type { ConnectorMeta } from "../registry.js";
 // Commerce & Finance
 export const connectors: ConnectorMeta[] = [
   {
+    name: "sponge",
+    displayName: "Sponge",
+    description: "Agent wallet and payments API (transfers, onramps, cards, x402/MPP)",
+    category: "Commerce & Finance",
+    tags: ["payments", "wallet", "crypto", "finance"],
+  },
+  {
     name: "stripe",
     displayName: "Stripe",
     description: "Payments, subscriptions, and billing",
