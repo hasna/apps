@@ -28,7 +28,7 @@
     "build:mcp": "bun build src/mcp/index.ts --outfile dist/mcp/index.js --target node",
     "build:server": "bun build src/server/index.ts --outfile dist/server/index.js --target node",
     "build:sdk": "cd sdk && bun run build",
-    "build:dashboard": "cd dashboard && bun run build",
+    "build:dashboard": "cd dashboard && bun install --frozen-lockfile && bun run build",
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
