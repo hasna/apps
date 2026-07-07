@@ -1,0 +1,48 @@
+name: macOS app build
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/macos-build.yml"
+      - "Package.swift"
+      - "Sources/**"
+      - "scripts/check_macos_sources.sh"
+      - "scripts/build_clip_app.sh"
+      - "README.md"
+      - "docs/macos-app.md"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/macos-build.yml"
+      - "Package.swift"
+      - "Sources/**"
+      - "scripts/check_macos_sources.sh"
+      - "scripts/build_clip_app.sh"
+      - "README.md"
+      - "docs/macos-app.md"
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    name: Compile OpenClip
+    runs-on: macos-15
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Check macOS source contract
+        run: bash scripts/check_macos_sources.sh
+
+      - name: Compile menu bar app
+        run: swift build -c release --product OpenClip
+
+      - name: Run smoke harness
+        run: swift run -c release ClipSmoke

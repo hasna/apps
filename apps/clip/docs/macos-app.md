@@ -25,12 +25,18 @@ scripts/check_macos_sources.sh
 ## Build On macOS
 
 ```bash
+bun run check:macos
+swift build -c release --product OpenClip
 swift run -c release ClipSmoke
 bash scripts/build_clip_app.sh
 open dist/OpenClip.app
 ```
 
 The bundle id is `com.hasna.openclip`.
+
+The GitHub Actions macOS app build is compile-only. It runs the source contract
+check, compiles the `OpenClip` executable, and runs `ClipSmoke`; it does not
+sign, notarize, publish, or upload an app bundle.
 
 ## Spark01 Validation
 
