@@ -3,7 +3,360 @@
 
 // src/serve.ts
 import { readFileSync as readFileSync2 } from "fs";
-import { verifyApiKey, ApiKeyStore } from "@hasna/contracts/auth";
+
+// node_modules/@hasna/contracts/dist/auth/index.js
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
+var API_KEY_TOKEN_VERSION = 1;
+var API_KEY_NAMESPACE = "hasna";
+var TOKEN_PATTERN = /^hasna_([a-z][a-z0-9-]*)_([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/;
+var DEFAULT_API_KEY_TTL_SECONDS = 90 * 24 * 60 * 60;
+function toBuffer(secret) {
+  return typeof secret === "string" ? Buffer.from(secret, "utf8") : secret;
+}
+function hmac(signingSecret, message) {
+  return createHmac("sha256", toBuffer(signingSecret)).update(message, "utf8").digest();
+}
+function apiKeyPrefix(app) {
+  return `${API_KEY_NAMESPACE}_${app}_`;
+}
+function parseApiKey(token) {
+  if (typeof token !== "string")
+    return null;
+  const match = TOKEN_PATTERN.exec(token);
+  if (!match)
+    return null;
+  const [, app, body, sig] = match;
+  if (!app || !body || !sig)
+    return null;
+  let claims;
+  try {
+    claims = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+  if (typeof claims !== "object" || claims === null || typeof claims.kid !== "string" || typeof claims.app !== "string" || !Array.isArray(claims.scopes)) {
+    return null;
+  }
+  return { app, body, sig, claims };
+}
+function verifyApiKeyToken(token, options) {
+  const parsed = parseApiKey(token);
+  if (!parsed) {
+    return { ok: false, reason: "malformed", message: "Token is malformed." };
+  }
+  const { app, body, sig, claims } = parsed;
+  if (claims.v !== API_KEY_TOKEN_VERSION) {
+    return { ok: false, reason: "unsupported_version", message: `Unsupported token version ${claims.v}.` };
+  }
+  if (claims.app !== app) {
+    return { ok: false, reason: "app_mismatch", message: "Token prefix app does not match claims." };
+  }
+  if (options.expectedApp !== undefined && app !== options.expectedApp) {
+    return { ok: false, reason: "app_mismatch", message: `Token is for app '${app}', expected '${options.expectedApp}'.` };
+  }
+  const expected = hmac(options.signingSecret, `${apiKeyPrefix(app)}${body}`);
+  let provided;
+  try {
+    provided = Buffer.from(sig, "base64url");
+  } catch {
+    return { ok: false, reason: "bad_signature", message: "Signature is not valid base64url." };
+  }
+  if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
+    return { ok: false, reason: "bad_signature", message: "Signature verification failed." };
+  }
+  const now = Math.floor((options.nowMs ?? Date.now()) / 1000);
+  const leeway = options.leewaySeconds ?? 0;
+  if (typeof claims.iat === "number" && now + leeway < claims.iat) {
+    return { ok: false, reason: "not_yet_valid", message: "Token is not yet valid." };
+  }
+  if (claims.exp !== null && typeof claims.exp === "number" && now - leeway >= claims.exp) {
+    return { ok: false, reason: "expired", message: "Token has expired." };
+  }
+  if (options.requiredScopes && options.requiredScopes.length > 0) {
+    const granted = claims.scopes;
+    const satisfies = (required) => granted.some((g) => {
+      if (g === "*")
+        return true;
+      const gi = g.indexOf(":");
+      const ri = required.indexOf(":");
+      if (gi < 0 || ri < 0)
+        return false;
+      const gApp = g.slice(0, gi);
+      const gAction = g.slice(gi + 1);
+      const rApp = required.slice(0, ri);
+      const rAction = required.slice(ri + 1);
+      return (gApp === "*" || gApp === rApp) && (gAction === "*" || gAction === rAction);
+    });
+    for (const required of options.requiredScopes) {
+      if (!satisfies(required)) {
+        return { ok: false, reason: "insufficient_scope", message: `Missing required scope '${required}'.` };
+      }
+    }
+  }
+  return { ok: true, claims, kid: claims.kid, app };
+}
+var DEFAULT_API_KEYS_TABLE = "api_keys";
+function createTableSql(table) {
+  return `CREATE TABLE IF NOT EXISTS ${table} (
+    kid TEXT PRIMARY KEY,
+    app TEXT NOT NULL,
+    agent TEXT,
+    scopes JSONB NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    issued_at TIMESTAMPTZ NOT NULL,
+    expires_at TIMESTAMPTZ,
+    revoked_at TIMESTAMPTZ,
+    revoked_reason TEXT,
+    last_used_at TIMESTAMPTZ,
+    created_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`;
+}
+function apiKeyMigrations(table = DEFAULT_API_KEYS_TABLE) {
+  return [
+    { id: `hasna_auth_0001_${table}`, sql: createTableSql(table) },
+    {
+      id: `hasna_auth_0002_${table}_indexes`,
+      sql: `CREATE INDEX IF NOT EXISTS ${table}_app_idx ON ${table} (app);
+            CREATE INDEX IF NOT EXISTS ${table}_token_hash_idx ON ${table} (token_hash);`
+    }
+  ];
+}
+function toIso(value) {
+  if (value === null || value === undefined)
+    return null;
+  if (value instanceof Date)
+    return value.toISOString();
+  return new Date(String(value)).toISOString();
+}
+function parseScopes(value) {
+  if (Array.isArray(value))
+    return value.map((v) => String(v));
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed.map((v) => String(v)) : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+function rowToRecord(row) {
+  return {
+    kid: String(row.kid),
+    app: String(row.app),
+    agent: row.agent === null || row.agent === undefined ? null : String(row.agent),
+    scopes: parseScopes(row.scopes),
+    tokenHash: String(row.token_hash),
+    issuedAt: toIso(row.issued_at) ?? new Date(0).toISOString(),
+    expiresAt: toIso(row.expires_at),
+    revokedAt: toIso(row.revoked_at),
+    revokedReason: row.revoked_reason === null || row.revoked_reason === undefined ? null : String(row.revoked_reason),
+    lastUsedAt: toIso(row.last_used_at),
+    createdBy: row.created_by === null || row.created_by === undefined ? null : String(row.created_by)
+  };
+}
+
+class ApiKeyStore {
+  client;
+  table;
+  constructor(client, options = {}) {
+    this.client = client;
+    this.table = options.table ?? DEFAULT_API_KEYS_TABLE;
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(this.table)) {
+      throw new Error(`Invalid api-keys table name '${this.table}'.`);
+    }
+  }
+  migrations() {
+    return apiKeyMigrations(this.table);
+  }
+  async ensureSchema() {
+    for (const migration of this.migrations()) {
+      await this.client.execute(migration.sql);
+    }
+  }
+  async insert(input) {
+    await this.client.execute(`INSERT INTO ${this.table}
+         (kid, app, agent, scopes, token_hash, issued_at, expires_at, created_by)
+       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)`, [
+      input.kid,
+      input.app,
+      input.agent ?? null,
+      JSON.stringify(input.scopes),
+      input.tokenHash,
+      input.issuedAt.toISOString(),
+      input.expiresAt ? input.expiresAt.toISOString() : null,
+      input.createdBy ?? null
+    ]);
+  }
+  async insertMinted(minted, createdBy) {
+    const claims = minted.claims;
+    await this.insert({
+      kid: minted.kid,
+      app: claims.app,
+      agent: claims.agent ?? null,
+      scopes: claims.scopes,
+      tokenHash: minted.tokenHash,
+      issuedAt: new Date(claims.iat * 1000),
+      expiresAt: claims.exp === null ? null : new Date(claims.exp * 1000),
+      createdBy: createdBy ?? null
+    });
+  }
+  async findByKid(kid) {
+    const row = await this.client.get(`SELECT * FROM ${this.table} WHERE kid = $1`, [kid]);
+    return row ? rowToRecord(row) : null;
+  }
+  async findByTokenHash(tokenHash) {
+    const row = await this.client.get(`SELECT * FROM ${this.table} WHERE token_hash = $1`, [tokenHash]);
+    return row ? rowToRecord(row) : null;
+  }
+  isRevoked = async (kid) => {
+    const row = await this.client.get(`SELECT revoked_at FROM ${this.table} WHERE kid = $1`, [kid]);
+    if (!row)
+      return false;
+    return row.revoked_at !== null && row.revoked_at !== undefined;
+  };
+  async status(kid, nowMs = Date.now()) {
+    const record = await this.findByKid(kid);
+    if (!record)
+      return "unknown";
+    if (record.revokedAt)
+      return "revoked";
+    if (record.expiresAt && new Date(record.expiresAt).getTime() <= nowMs)
+      return "expired";
+    return "active";
+  }
+  statusChecker() {
+    return async (kid) => {
+      const status = await this.status(kid);
+      return status !== "active";
+    };
+  }
+  async revoke(kid, reason, atMs = Date.now()) {
+    const row = await this.client.get(`UPDATE ${this.table}
+          SET revoked_at = COALESCE(revoked_at, $2), revoked_reason = COALESCE(revoked_reason, $3)
+        WHERE kid = $1
+      RETURNING kid`, [kid, new Date(atMs).toISOString(), reason ?? null]);
+    return row !== null;
+  }
+  async touchLastUsed(kid, atMs = Date.now()) {
+    await this.client.execute(`UPDATE ${this.table} SET last_used_at = $2 WHERE kid = $1`, [
+      kid,
+      new Date(atMs).toISOString()
+    ]);
+  }
+  async list(options = {}) {
+    const clauses = [];
+    const params = [];
+    if (options.app) {
+      params.push(options.app);
+      clauses.push(`app = $${params.length}`);
+    }
+    if (!options.includeRevoked) {
+      clauses.push("revoked_at IS NULL");
+    }
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    const rows = await this.client.many(`SELECT * FROM ${this.table} ${where} ORDER BY issued_at DESC`);
+    return rows.map(rowToRecord);
+  }
+  async revokedKids() {
+    const rows = await this.client.many(`SELECT kid FROM ${this.table} WHERE revoked_at IS NOT NULL`);
+    return rows.map((row) => String(row.kid));
+  }
+}
+function readHeader(source, name) {
+  const lower = name.toLowerCase();
+  if (typeof source === "function") {
+    return source(name) ?? source(lower) ?? null;
+  }
+  if (typeof Headers !== "undefined" && source instanceof Headers) {
+    return source.get(name);
+  }
+  const record = source;
+  const value = record[name] ?? record[lower] ?? record[name.toUpperCase()];
+  if (Array.isArray(value))
+    return value[0] ?? null;
+  return value ?? null;
+}
+function extractToken(source, headerName = "x-api-key", scheme = "Bearer") {
+  const direct = readHeader(source, headerName);
+  if (direct && direct.trim().length > 0)
+    return direct.trim();
+  const authz = readHeader(source, "authorization");
+  if (authz) {
+    const prefix = `${scheme} `;
+    if (authz.toLowerCase().startsWith(prefix.toLowerCase())) {
+      const token = authz.slice(prefix.length).trim();
+      if (token.length > 0)
+        return token;
+    }
+  }
+  return null;
+}
+function verifyApiKey(options) {
+  if (!options.app)
+    throw new Error("verifyApiKey requires an 'app' slug.");
+  if (!options.signingSecret) {
+    throw new Error("verifyApiKey requires a 'signingSecret'. Set it from HASNA_<APP>_API_SIGNING_KEY.");
+  }
+  const headerName = options.headerName ?? "x-api-key";
+  const scheme = options.scheme ?? "Bearer";
+  const clock = options.nowMs ?? (() => Date.now());
+  async function emit(event) {
+    if (!options.audit)
+      return;
+    try {
+      await options.audit(event);
+    } catch {}
+  }
+  async function authenticate(headers, context = {}) {
+    const method = context.method ?? null;
+    const path = context.path ?? null;
+    const requiredScopes = [...options.requiredScopes ?? [], ...context.requiredScopes ?? []];
+    const at = new Date(clock()).toISOString();
+    const token = extractToken(headers, headerName, scheme);
+    if (!token) {
+      const decision = {
+        ok: false,
+        status: 401,
+        reason: "missing_token",
+        message: `Missing API key. Send it as '${headerName}: <key>' or 'Authorization: ${scheme} <key>'.`
+      };
+      await emit({ outcome: "deny", app: options.app, kid: null, reason: "missing_token", scopesRequired: requiredScopes, method, path, status: 401, at });
+      return decision;
+    }
+    const verified = verifyApiKeyToken(token, {
+      signingSecret: options.signingSecret,
+      expectedApp: options.app,
+      nowMs: clock(),
+      ...options.leewaySeconds !== undefined ? { leewaySeconds: options.leewaySeconds } : {},
+      requiredScopes
+    });
+    if (!verified.ok) {
+      const status = verified.reason === "insufficient_scope" ? 403 : 401;
+      await emit({ outcome: "deny", app: options.app, kid: null, reason: verified.reason, scopesRequired: requiredScopes, method, path, status, at });
+      return { ok: false, status, reason: verified.reason, message: verified.message };
+    }
+    if (options.isRevoked) {
+      const revoked = await options.isRevoked(verified.kid);
+      if (revoked) {
+        await emit({ outcome: "deny", app: options.app, kid: verified.kid, reason: "revoked", scopesRequired: requiredScopes, method, path, status: 401, at });
+        return { ok: false, status: 401, reason: "revoked", message: "API key has been revoked." };
+      }
+    }
+    const principal = {
+      kid: verified.kid,
+      app: verified.app,
+      scopes: verified.claims.scopes,
+      agent: verified.claims.agent ?? null,
+      claims: verified.claims
+    };
+    await emit({ outcome: "allow", app: options.app, kid: verified.kid, reason: null, scopesRequired: requiredScopes, method, path, status: 200, at });
+    return { ok: true, status: 200, principal };
+  }
+  return { authenticate, app: options.app };
+}
 
 // src/generated/storage-kit/mode.ts
 var DEPRECATED_STORAGE_MODE_ALIASES = [
