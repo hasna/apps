@@ -1916,11 +1916,29 @@ program
   .description("list recent runs, optionally for one loop")
   .option("--limit <n>", "limit", "50")
   .option("--show-output", "show stdout/stderr")
-  .action(runAction((idOrName, opts) => {
+  .action(runAction(async (idOrName, opts) => {
+    const limit = positiveInteger(opts.limit, "--limit") ?? 50;
+    const cloud = resolveCloudLoopStore();
+    if (cloud) {
+      const loop = idOrName ? await cloud.requireLoop(idOrName) : undefined;
+      // Server returns rows already shaped by publicRun (output redacted unless
+      // showOutput), so print verbatim rather than re-applying publicRun.
+      const runs = await cloud.listRuns({ loopId: loop?.id, limit, showOutput: opts.showOutput });
+      if (isJson()) print(runs);
+      else {
+        for (const run of runs) {
+          console.log(
+            `${run.id}  ${String(run.status ?? "").padEnd(10)}  attempt=${run.attempt}  slot=${run.scheduledFor}  ${run.loopName ?? ""}`,
+          );
+          if (opts.showOutput) printTextOutput(run as { stdout?: string; stderr?: string });
+        }
+      }
+      return;
+    }
     const store = new Store();
     try {
       const loop = idOrName ? store.requireLoop(idOrName) : undefined;
-      const runs = store.listRuns({ loopId: loop?.id, limit: positiveInteger(opts.limit, "--limit") ?? 50 });
+      const runs = store.listRuns({ loopId: loop?.id, limit });
       if (isJson()) print(runs.map((run) => publicRun(run, opts.showOutput)));
       else {
         for (const run of runs) {

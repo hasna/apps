@@ -109,4 +109,19 @@ describe("CloudLoopStore CRUD over HTTP", () => {
     });
     expect(await store.deleteLoop("missing-id")).toBe(false);
   });
+
+  test("listRuns GETs /runs, forwards filters, extracts the { runs } envelope", async () => {
+    const { store, calls } = fakeClient((method, path) => {
+      if (method === "GET" && path.startsWith("/runs")) {
+        return { status: 200, body: { ok: true, runs: [{ id: "r1", status: "succeeded" }, { id: "r2", status: "failed" }] } };
+      }
+      return { status: 404, body: null };
+    });
+    const runs = await store.listRuns({ loopId: "abc", limit: 2, showOutput: true });
+    expect(runs.map((r) => r.id)).toEqual(["r1", "r2"]);
+    const runsCall = calls.find((c) => c.method === "GET" && c.path.startsWith("/runs"));
+    expect(runsCall?.path).toContain("loopId=abc");
+    expect(runsCall?.path).toContain("limit=2");
+    expect(runsCall?.path).toContain("showOutput=true");
+  });
 });

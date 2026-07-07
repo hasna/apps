@@ -95,6 +95,23 @@ export class CloudLoopStore {
     await this.client.delete(RESOURCE, loop.id);
     return true;
   }
+
+  /**
+   * List run history from the hosted `/v1/runs` API. Rows come back already
+   * shaped by the server's `publicRun` (output redacted unless `showOutput`),
+   * so the CLI prints them verbatim — no local `publicRun` re-application.
+   */
+  async listRuns(
+    opts: { loopId?: string; limit?: number; status?: LoopStatus; showOutput?: boolean } = {},
+  ): Promise<Array<Record<string, unknown>>> {
+    const query: Record<string, string | number | boolean> = {};
+    if (opts.loopId) query.loopId = opts.loopId;
+    if (opts.limit != null) query.limit = opts.limit;
+    if (opts.status) query.status = opts.status;
+    if (opts.showOutput != null) query.showOutput = opts.showOutput;
+    const result = await this.client.list<Record<string, unknown>>("runs", { query });
+    return extractRuns(result.raw, result.items);
+  }
 }
 
 function unwrapLoop(raw: { loop?: Loop } | Loop): Loop {
@@ -102,6 +119,13 @@ function unwrapLoop(raw: { loop?: Loop } | Loop): Loop {
     return (raw as { loop: Loop }).loop;
   }
   return raw as Loop;
+}
+
+function extractRuns(raw: unknown, fallback: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  if (raw && typeof raw === "object" && Array.isArray((raw as { runs?: unknown }).runs)) {
+    return (raw as { runs: Array<Record<string, unknown>> }).runs;
+  }
+  return fallback;
 }
 
 function extractLoops(raw: unknown, fallback: Loop[]): Loop[] {
