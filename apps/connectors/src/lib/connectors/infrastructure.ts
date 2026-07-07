@@ -80,6 +80,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["incident management", "alerts", "on-call", "monitoring", "devops"],
   },
   {
+    name: "ssh",
+    displayName: "SSH.com",
+    description: "SSH automation and sessions API",
+    category: "Infrastructure",
+    tags: ["ssh", "sessions", "security", "privx"],
+  },
+  {
     name: "statuscake",
     displayName: "StatusCake",
     description: "Website uptime monitoring and performance testing platform",
