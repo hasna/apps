@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.76] - 2026-07-06
+
+### Fixed
+- Auto project detection now skips disposable git roots under the system temp directory, preventing accidental registration of transient `/tmp` project shells.
+- Added guarded `todos projects --deregister` support that preserves tasks and refuses to deregister any project with incomplete tasks.
+
 ## [0.11.75] - 2026-07-05
 
 ### Added

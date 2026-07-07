@@ -22,9 +22,10 @@ import { approveReviewItem, claimReviewItem, requestReviewQueue } from "./review
 
 let home: string;
 let previousHome: string | undefined;
+const nonTempHomeRoot = process.env["HOME"] || process.env["USERPROFILE"] || process.cwd();
 
-function makeNonIsolatedHome(prefix: string): string {
-  return mkdtempSync(join(process.cwd(), `.test-${prefix}-`));
+function makeNonTempHome(prefix: string): string {
+  return mkdtempSync(join(nonTempHomeRoot, `.tmp-${prefix}-`));
 }
 
 beforeEach(() => {
@@ -66,7 +67,7 @@ describe("local event hooks", () => {
   test("suppresses quiet lifecycle hooks for explicit in-memory databases using a non-isolated todos home", async () => {
     const previousHome = process.env["HOME"];
     const previousDbPath = process.env["TODOS_DB_PATH"];
-    const nonTempHome = makeNonIsolatedHome("todos-event-hooks-home");
+    const nonTempHome = makeNonTempHome("todos-event-hooks-home");
     const filePath = join(home, "explicit-lifecycle.jsonl");
     const explicitDb = new Database(":memory:");
     explicitDb.run("PRAGMA foreign_keys = ON");
@@ -100,7 +101,7 @@ describe("local event hooks", () => {
   test("suppresses quiet run hooks for explicit in-memory databases using a non-isolated todos home", async () => {
     const previousHome = process.env["HOME"];
     const previousDbPath = process.env["TODOS_DB_PATH"];
-    const nonTempHome = makeNonIsolatedHome("todos-run-hooks-home");
+    const nonTempHome = makeNonTempHome("todos-run-hooks-home");
     const filePath = join(home, "explicit-run.jsonl");
     const explicitDb = new Database(":memory:");
     explicitDb.run("PRAGMA foreign_keys = ON");
@@ -138,7 +139,7 @@ describe("local event hooks", () => {
   test("suppresses quiet approval and review hooks for explicit in-memory databases using a non-isolated todos home", async () => {
     const previousHome = process.env["HOME"];
     const previousDbPath = process.env["TODOS_DB_PATH"];
-    const nonTempHome = makeNonIsolatedHome("todos-review-hooks-home");
+    const nonTempHome = makeNonTempHome("todos-review-hooks-home");
     const filePath = join(home, "explicit-review.jsonl");
     const explicitDb = new Database(":memory:");
     explicitDb.run("PRAGMA foreign_keys = ON");

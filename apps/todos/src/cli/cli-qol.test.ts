@@ -249,6 +249,86 @@ describe("CLI QoL commands", () => {
     expect(panel.metrics.some((metric: any) => metric.id === "total_tasks" && metric.value === 1)).toBe(true);
   });
 
+  it("projects --deregister refuses projects with incomplete tasks", () => {
+    const projPath = join(tmpDir, "deregister-open-project");
+    const proj = JSON.parse(run(`--json projects --add ${projPath} --name 'Deregister Open Project'`));
+    run(`add 'Still open' --project ${proj.id} --json`);
+
+    expect(() => run(`--json projects --deregister ${proj.id} --path-prefix ${tmpDir}`)).toThrow();
+
+    const projects = JSON.parse(run("--json projects"));
+    expect(projects.some((p: any) => p.id === proj.id)).toBe(true);
+  });
+
+  it("projects --deregister path-prefix guard is directory-aware", () => {
+    const prefix = join(tmpDir, "deregister-prefix");
+    const siblingPath = `${prefix}-sibling`;
+    const proj = JSON.parse(run(`--json projects --add ${siblingPath} --name 'Deregister Sibling Project'`));
+
+    expect(() => run(`--json projects --deregister ${proj.id} --path-prefix ${prefix}`)).toThrow();
+
+    const projects = JSON.parse(run("--json projects"));
+    expect(projects.some((p: any) => p.id === proj.id)).toBe(true);
+  });
+
+  it("projects --deregister preserves completed tasks", () => {
+    const projPath = join(tmpDir, "deregister-complete-project");
+    const proj = JSON.parse(run(`--json projects --add ${projPath} --name 'Deregister Complete Project'`));
+    const task = JSON.parse(run(`add 'Already complete' --project ${proj.id} --status completed --json`));
+
+    const result = JSON.parse(run(`--json projects --deregister ${proj.id} --path-prefix ${tmpDir}`));
+    expect(result).toMatchObject({
+      action: "deregistered",
+      project_id: proj.id,
+      incomplete_tasks: 0,
+      tasks_preserved: true,
+    });
+
+    const projects = JSON.parse(run("--json projects"));
+    expect(projects.some((p: any) => p.id === proj.id)).toBe(false);
+
+    const preserved = JSON.parse(run(`--json show ${task.id}`));
+    expect(preserved.id).toBe(task.id);
+    expect(preserved.project_id).toBeNull();
+  });
+
+  it("auto project detection does not register temp git worktrees", async () => {
+    const repo = join(tmpDir, "auto-project-temp-worktree");
+    await mkdir(repo, { recursive: true });
+    execSync("git init -q", { cwd: repo });
+
+    const before = JSON.parse(run("--json projects"));
+    const out = execSync(
+      `HOME=${fakeHome} TODOS_DB_PATH=${dbPath} TODOS_AUTO_PROJECT=true bun run ${join(CWD, "src/cli/index.tsx")} --json add 'Temp worktree task'`,
+      { encoding: "utf-8", cwd: repo, timeout: 15000 },
+    ).trim();
+    const task = JSON.parse(out);
+    const after = JSON.parse(run("--json projects"));
+
+    expect(task.project_id).toBeNull();
+    expect(after).toHaveLength(before.length);
+    expect(after.some((p: any) => p.path === repo)).toBe(false);
+  });
+
+  it("auto project detection still registers non-temp git worktrees", async () => {
+    const repo = await mkdtemp(join(CWD, ".tmp-auto-project-"));
+    try {
+      execSync("git init -q", { cwd: repo });
+
+      const out = execSync(
+        `HOME=${fakeHome} TODOS_DB_PATH=${dbPath} TODOS_AUTO_PROJECT=true bun run ${join(CWD, "src/cli/index.tsx")} --json add 'Non-temp worktree task'`,
+        { encoding: "utf-8", cwd: repo, timeout: 15000 },
+      ).trim();
+      const task = JSON.parse(out);
+      const projects = JSON.parse(run("--json projects"));
+
+      expect(task.project_id).toBeTruthy();
+      expect(projects.some((p: any) => p.id === task.project_id && p.path === repo)).toBe(true);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
   // ── list --agent-name ──────────────────────────────────────────
 
   it("list --agent-name should filter by assigned agent name", () => {
