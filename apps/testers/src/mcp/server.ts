@@ -5,12 +5,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import pkg from "../../package.json";
 
-import { createScenario, getScenario, getScenarioByShortId, listScenarios, countScenarios, updateScenario, deleteScenario, findStaleScenarios } from "../db/scenarios.js";
+import { createScenario, getScenario, getScenarioByShortId, listScenarios, countScenarios, updateScenario, deleteScenario } from "../cloud/store.js";
+import { findStaleScenarios } from "../db/scenarios.js";
 import { getTemplate, listTemplateNames, SCENARIO_TEMPLATES } from "../lib/templates.js";
 import { getRun, listRuns, countRuns, updateRun } from "../db/runs.js";
 import { listResults, getResultsByRun } from "../db/results.js";
 import { listScreenshots } from "../db/screenshots.js";
-import { createProject, ensureProject, listProjects } from "../db/projects.js";
+import { createProject, ensureProject, listProjects } from "../cloud/store.js";
 import { registerAgent, listAgents, heartbeatAgent, setAgentFocus } from "../db/agents.js";
 import { startRunAsync } from "../lib/runner.js";
 import { matchFilesToScenarios } from "../lib/affected.js";
@@ -23,7 +24,7 @@ import { getDatabase } from "../db/database.js";
 import { VersionConflictError } from "../types/index.js";
 import { createApiCheck, getApiCheck, listApiChecks, countApiChecks, updateApiCheck, deleteApiCheck, getLatestApiCheckResult, listApiCheckResults } from "../db/api-checks.js";
 import { runApiCheck, runApiChecksByFilter } from "../lib/api-runner.js";
-import { createPersona, getPersona, listPersonas, countPersonas, updatePersona, deletePersona } from "../db/personas.js";
+import { createPersona, getPersona, listPersonas, countPersonas, updatePersona, deletePersona } from "../cloud/store.js";
 import { PersonaNotFoundError } from "../types/index.js";
 import { getTestersDir } from "../lib/paths.js";
 import { createProdDebugPlan } from "../lib/prod-debug.js";
@@ -59,7 +60,7 @@ function notFoundErr(id: string, label = "Resource"): Error {
 
 function errorResponse(
   e: unknown,
-  context?: { fetchCurrent?: () => unknown }
+  context?: { current?: unknown }
 ): { content: [{ type: "text"; text: string }]; isError: true } {
   const err = e instanceof Error ? e : new Error(String(e));
 
@@ -82,15 +83,11 @@ function errorResponse(
       },
     };
 
-    if (context?.fetchCurrent) {
-      try {
-        const current = context.fetchCurrent() as { version?: number } | null;
-        if (current && typeof current.version === "number") {
-          payload.error.currentVersion = current.version;
-          payload.error.hint = `Retry with version: ${current.version}`;
-        }
-      } catch {
-        // ignore — return base conflict error
+    if (context?.current) {
+      const current = context.current as { version?: number } | null;
+      if (current && typeof current.version === "number") {
+        payload.error.currentVersion = current.version;
+        payload.error.hint = `Retry with version: ${current.version}`;
       }
     }
 
@@ -197,7 +194,7 @@ server.tool(
   },
   async ({ name, description, steps, tags, priority, model, targetPath, requiresAuth, projectId }) => {
     try {
-      const scenario = createScenario({ name, description, steps, tags, priority, model, targetPath, requiresAuth, projectId });
+      const scenario = await createScenario({ name, description, steps, tags, priority, model, targetPath, requiresAuth, projectId });
       return json(scenario);
     } catch (error) {
       return errorResponse(error);
@@ -229,7 +226,7 @@ server.tool(
       const results: { id: string; name: string; shortId: string; error?: string }[] = [];
       for (const s of scenarios) {
         try {
-          const scenario = createScenario({
+          const scenario = await createScenario({
             ...s,
             description: s.description ?? s.name,
             targetPath: s.targetPath ?? s.url,
@@ -285,7 +282,7 @@ server.tool(
       const results: { id: string; name: string; shortId: string; error?: string }[] = [];
       for (const s of scenarios) {
         try {
-          const scenario = createScenario({ ...s, projectId });
+          const scenario = await createScenario({ ...s, projectId });
           results.push({ id: scenario.id, name: scenario.name, shortId: scenario.shortId });
         } catch (e) {
           results.push({ id: "", name: s.name, shortId: "", error: e instanceof Error ? e.message : String(e) });
@@ -310,7 +307,7 @@ server.tool(
   },
   async ({ id }) => {
     try {
-      const scenario = getScenario(id) ?? getScenarioByShortId(id);
+      const scenario = await getScenario(id) ?? await getScenarioByShortId(id);
       if (!scenario) return errorResponse(notFoundErr(id, "Scenario"));
       return json(scenario);
     } catch (error) {
@@ -340,7 +337,7 @@ server.tool(
       let page;
       let total: number;
       if (flakyOnly) {
-        const scenarios = listScenarios({ projectId, tags, priority })
+        const scenarios = (await listScenarios({ projectId, tags, priority }))
           .filter((s) => s.flakinessScore !== null && s.flakinessScore !== undefined && s.flakinessScore < 0.8);
         page = pageItems(scenarios, {
           limit: effectiveLimit,
@@ -350,14 +347,14 @@ server.tool(
         });
         total = page.total;
       } else {
-        const scenarios = listScenarios({
+        const scenarios = await listScenarios({
           projectId,
           tags,
           priority,
           limit: effectiveLimit,
           offset: effectiveOffset || undefined,
         });
-        total = countScenarios({ projectId, tags, priority });
+        total = await countScenarios({ projectId, tags, priority });
         page = {
           items: scenarios,
           total,
@@ -396,11 +393,11 @@ server.tool(
   },
   async ({ id, name, description, steps, tags, priority, model, version }) => {
     try {
-      const scenario = updateScenario(id, { name, description, steps, tags, priority, model }, version);
+      const scenario = await updateScenario(id, { name, description, steps, tags, priority, model }, version);
       return json(scenario);
     } catch (error) {
       return errorResponse(error, {
-        fetchCurrent: () => getScenario(id) ?? getScenarioByShortId(id),
+        current: (await getScenario(id)) ?? (await getScenarioByShortId(id)),
       });
     }
   },
@@ -416,7 +413,7 @@ server.tool(
   },
   async ({ id }) => {
     try {
-      const deleted = deleteScenario(id);
+      const deleted = await deleteScenario(id);
       if (!deleted) return errorResponse(notFoundErr(id, "Scenario"));
       return json({ deleted: true, id });
     } catch (error) {
@@ -597,7 +594,7 @@ server.tool(
         results = results.filter((r) => r.scenarioId === scenarioId || r.scenarioId.startsWith(scenarioId));
       }
       const page = pageItems(results, { limit, offset, defaultLimit: 20, maxLimit: 100 });
-      const summaries = page.items.map((result) => compactResult(result, getScenario(result.scenarioId)));
+      const summaries = await Promise.all(page.items.map(async (result) => compactResult(result, await getScenario(result.scenarioId))));
       return json(compactToolPayload(
         verbose ? page.items : summaries,
         page.total,
@@ -670,8 +667,8 @@ server.tool(
   async ({ name, path, description }) => {
     try {
       const project = description
-        ? createProject({ name, path, description })
-        : ensureProject(name, path);
+        ? await createProject({ name, path, description })
+        : await ensureProject(name, path);
       return json(project);
     } catch (error) {
       return errorResponse(error);
@@ -691,7 +688,7 @@ server.tool(
   },
   async ({ limit, offset, verbose }) => {
     try {
-      const projects = listProjects();
+      const projects = await listProjects();
       const page = pageItems(projects, { limit, offset, defaultLimit: 20, maxLimit: 100 });
       return json(compactToolPayload(
         verbose ? page.items : page.items.map(compactProject),
@@ -956,7 +953,7 @@ server.tool(
   },
   async ({ name, projectId }) => {
     try {
-      const scenarios = listScenarios({ projectId });
+      const scenarios = await listScenarios({ projectId });
       const scenario = scenarios.find((s) => s.name === name) ?? null;
       return json({ exists: scenario !== null, scenario });
     } catch (error) {
@@ -1012,10 +1009,10 @@ server.tool(
       const results = getResultsByRun(runId);
       const totalCostCents = results.reduce((sum, r) => sum + (r.costCents ?? 0), 0);
       const totalTokens = results.reduce((sum, r) => sum + (r.tokensUsed ?? 0), 0);
-      const byScenario = results.map((r) => {
-        const scenario = getScenario(r.scenarioId);
+      const byScenario = await Promise.all(results.map(async (r) => {
+        const scenario = await getScenario(r.scenarioId);
         return { scenarioId: r.scenarioId, scenarioName: scenario?.name ?? r.scenarioId, costCents: r.costCents ?? 0, tokens: r.tokensUsed ?? 0, status: r.status };
-      });
+      }));
 
       return json({ runId, totalCostCents, totalTokens, byScenario });
     } catch (error) {
@@ -1055,7 +1052,7 @@ server.tool(
   },
   async ({ projectId }) => {
     try {
-      const scenarios = listScenarios({ projectId });
+      const scenarios = await listScenarios({ projectId });
       const tagSet = new Set<string>();
       for (const s of scenarios) {
         for (const tag of s.tags) {
@@ -1125,7 +1122,7 @@ server.tool(
   },
   async ({ url, filePaths, mappings, projectId, model, headed, parallel }) => {
     try {
-      const allScenarios = listScenarios({ projectId });
+      const allScenarios = await listScenarios({ projectId });
       const matched = matchFilesToScenarios(filePaths, allScenarios, mappings ?? []);
       if (matched.length === 0) {
         return json({ runId: null, scenarioCount: 0, matchedScenarios: [], message: "No scenarios matched the provided file paths." });
@@ -1503,7 +1500,7 @@ server.tool(
       return json(check);
     } catch (error) {
       return errorResponse(error, {
-        fetchCurrent: () => getApiCheck(id),
+        current: getApiCheck(id),
       });
     }
   },
@@ -1622,7 +1619,7 @@ server.tool(
   },
   async ({ name, role, description, instructions, traits, goals, projectId, authEmail, authPassword, authLoginPath }) => {
     try {
-      const persona = createPersona({
+      const persona = await createPersona({
         name,
         role,
         description,
@@ -1659,12 +1656,12 @@ server.tool(
       const effectiveLimit = compactLimit(limit, 20, 100);
       const effectiveOffset = compactOffset(offset);
       const filter = { projectId, enabled, globalOnly };
-      const personas = listPersonas({
+      const personas = await listPersonas({
         ...filter,
         limit: effectiveLimit,
         offset: effectiveOffset || undefined,
       });
-      const total = countPersonas(filter);
+      const total = await countPersonas(filter);
       return json(compactToolPayload(
         verbose ? redactPersonas(personas) : personas.map(compactPersona),
         total,
@@ -1687,7 +1684,7 @@ server.tool(
   },
   async ({ id }) => {
     try {
-      const persona = getPersona(id);
+      const persona = await getPersona(id);
       if (!persona) return errorResponse(notFoundErr(id, "Persona"));
 
       const db = getDatabase();
@@ -1726,11 +1723,11 @@ server.tool(
   },
   async ({ id, version, ...updates }) => {
     try {
-      const persona = updatePersona(id, updates, version);
+      const persona = await updatePersona(id, updates, version);
       return json(redactPersona(persona));
     } catch (error) {
       return errorResponse(error, {
-        fetchCurrent: () => getPersona(id),
+        current: await getPersona(id),
       });
     }
   },
@@ -1746,7 +1743,7 @@ server.tool(
   },
   async ({ id }) => {
     try {
-      const deleted = deletePersona(id);
+      const deleted = await deletePersona(id);
       if (!deleted) return errorResponse(notFoundErr(id, "Persona"));
       return json({ deleted: true, id });
     } catch (error) {
@@ -1766,13 +1763,13 @@ server.tool(
   },
   async ({ personaId, scenarioId }) => {
     try {
-      const persona = getPersona(personaId);
+      const persona = await getPersona(personaId);
       if (!persona) return errorResponse(notFoundErr(personaId, "Persona"));
 
-      const scenario = getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
+      const scenario = await getScenario(scenarioId) ?? await getScenarioByShortId(scenarioId);
       if (!scenario) return errorResponse(notFoundErr(scenarioId, "Scenario"));
 
-      const updated = updateScenario(scenario.id, { personaId: persona.id } as Parameters<typeof updateScenario>[1], scenario.version);
+      const updated = await updateScenario(scenario.id, { personaId: persona.id } as Parameters<typeof updateScenario>[1], scenario.version);
       return json({ ...updated, attachedPersona: redactPersona(persona) });
     } catch (error) {
       return errorResponse(error);
@@ -1790,10 +1787,10 @@ server.tool(
   },
   async ({ scenarioId }) => {
     try {
-      const scenario = getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
+      const scenario = await getScenario(scenarioId) ?? await getScenarioByShortId(scenarioId);
       if (!scenario) return errorResponse(notFoundErr(scenarioId, "Scenario"));
 
-      const updated = updateScenario(scenario.id, { personaId: null } as Parameters<typeof updateScenario>[1], scenario.version);
+      const updated = await updateScenario(scenario.id, { personaId: null } as Parameters<typeof updateScenario>[1], scenario.version);
       return json(updated);
     } catch (error) {
       return errorResponse(error);
@@ -1834,7 +1831,7 @@ server.tool(
       const resolvedTags = tags ?? ["smoke"];
 
       // Run browser scenarios (smoke-tagged, max 10, synchronously)
-      const smokeScenarios = listScenarios({ tags: resolvedTags, projectId, limit: 10 });
+      const smokeScenarios = await listScenarios({ tags: resolvedTags, projectId, limit: 10 });
       let browserPassed = 0;
       let browserFailed = 0;
       const failedScenarios: Array<{ name: string; shortId: string; error: string }> = [];
@@ -1969,7 +1966,7 @@ server.tool(
       const filePaths = [...new Set(diffOutput.split("\n").filter(Boolean))];
 
       // Match files to scenarios
-      const allScenarios = listScenarios({ projectId });
+      const allScenarios = await listScenarios({ projectId });
       const matched = matchFilesToScenarios(filePaths, allScenarios, []);
 
       if (matched.length === 0) {
@@ -2026,10 +2023,10 @@ server.tool(
 
       let scenarios;
       if (scenarioIds && scenarioIds.length > 0) {
-        const allScenarios = listScenarios({ projectId });
+        const allScenarios = await listScenarios({ projectId });
         scenarios = allScenarios.filter((s) => scenarioIds.includes(s.id) || scenarioIds.includes(s.shortId));
       } else {
-        scenarios = listScenarios({ tags, projectId });
+        scenarios = await listScenarios({ tags, projectId });
       }
 
       const count = scenarios.length;
@@ -2149,7 +2146,7 @@ server.tool(
         }
       }
 
-      const allScenarios = listScenarios({ projectId });
+      const allScenarios = await listScenarios({ projectId });
       const covered: Array<{ file: string; scenarios: Array<{ id: string; shortId: string; name: string }> }> = [];
       const uncovered: string[] = [];
 
@@ -2197,19 +2194,19 @@ server.tool(
       // Resolve scenarios
       let scenarios;
       if (scenarioIds && scenarioIds.length > 0) {
-        const all = listScenarios({ projectId });
+        const all = await listScenarios({ projectId });
         scenarios = all.filter((s) => scenarioIds.includes(s.id) || scenarioIds.includes(s.shortId));
       } else {
-        scenarios = listScenarios({ projectId, limit: 20 });
+        scenarios = await listScenarios({ projectId, limit: 20 });
       }
       if (scenarios.length === 0) return json({ runs: [], message: "No scenarios found." });
 
       // Resolve personas
       let personas;
       if (personaIds && personaIds.length > 0) {
-        personas = personaIds.map((id) => getPersona(id)).filter(Boolean);
+        personas = (await Promise.all(personaIds.map((id) => getPersona(id)))).filter(Boolean);
       } else {
-        personas = listPersonas({ globalOnly: true, enabled: true });
+        personas = await listPersonas({ globalOnly: true, enabled: true });
       }
       if (personas.length === 0) return json({ runs: [], message: "No personas found. Seed defaults with persona seed command." });
 
@@ -2268,14 +2265,14 @@ server.tool(
   },
   async ({ scenarioId, personaId, nameSuffix }) => {
     try {
-      const scenario = getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
+      const scenario = await getScenario(scenarioId) ?? await getScenarioByShortId(scenarioId);
       if (!scenario) return errorResponse(notFoundErr(scenarioId, "Scenario"));
 
-      const persona = getPersona(personaId);
+      const persona = await getPersona(personaId);
       if (!persona) return errorResponse(notFoundErr(personaId, "Persona"));
 
       const suffix = nameSuffix ?? persona.name;
-      const clone = createScenario({
+      const clone = await createScenario({
         name: `${scenario.name} [${suffix}]`,
         description: scenario.description,
         steps: scenario.steps,
@@ -2313,14 +2310,14 @@ server.tool(
       const created: Array<{ scenarioId: string; personaId: string; name: string; shortId: string }> = [];
 
       for (const scenarioId of scenarioIds) {
-        const scenario = getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
+        const scenario = await getScenario(scenarioId) ?? await getScenarioByShortId(scenarioId);
         if (!scenario) continue;
 
         for (const personaId of personaIds) {
-          const persona = getPersona(personaId);
+          const persona = await getPersona(personaId);
           if (!persona) continue;
 
-          const clone = createScenario({
+          const clone = await createScenario({
             name: `${scenario.name} [${persona.name}]`,
             description: scenario.description,
             steps: scenario.steps,
@@ -2373,7 +2370,7 @@ server.tool(
         ...(context ? [`Context: ${context}`] : []),
       ];
 
-      const scenario = createScenario({
+      const scenario = await createScenario({
         name,
         description: `Regression test for: ${error}${context ? `\n\nContext: ${context}` : ""}`,
         steps,
@@ -2662,7 +2659,7 @@ server.tool(
   },
   async ({ personaId }) => {
     try {
-      const persona = getPersona(personaId);
+      const persona = await getPersona(personaId);
       if (!persona) return errorResponse(notFoundErr(personaId, "Persona"));
       const { getContactsAvailability, syncPersonaFromContact } = await import("../lib/contacts-connector.js");
       const updated = syncPersonaFromContact(persona.id);
@@ -2845,7 +2842,7 @@ server.tool(
   },
   async ({ projectId, limit, offset, scenariosPerPage, verbose }) => {
     try {
-      const scenarios = listScenarios({ projectId });
+      const scenarios = await listScenarios({ projectId });
       const byPage: Record<string, Array<{ id: string; shortId: string; name: string; priority: string; tags: string[] }>> = {};
       const noPath: Array<{ id: string; shortId: string; name: string }> = [];
       const scenarioSampleLimit = compactLimit(scenariosPerPage, 5, 20);
