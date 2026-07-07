@@ -24,6 +24,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["monitoring", "errors"],
   },
   {
+    name: "stage",
+    displayName: "Stage",
+    description: "Structured code reviews, chapters, comments, and pull requests",
+    category: "Developer Tools",
+    tags: ["code-review", "git", "development"],
+  },
+  {
     name: "cloudflare",
     displayName: "Cloudflare",
     description: "DNS, CDN, and edge computing",
