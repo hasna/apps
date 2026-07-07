@@ -142,4 +142,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Social Media",
     tags: ["hashtags", "social-media", "content", "optimization", "twitter"],
   },
+  {
+    name: "sprinklr",
+    displayName: "Sprinklr",
+    description: "Customer experience platform",
+    category: "Social Media",
+    tags: ["social", "cx", "customer-experience"],
+  },
 ];
