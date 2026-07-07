@@ -136,6 +136,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["payments", "pos", "commerce"],
   },
   {
+    name: "squarespace",
+    displayName: "Squarespace",
+    description: "Website builder and commerce platform",
+    category: "Commerce & Finance",
+    tags: ["ecommerce", "store", "website"],
+  },
+  {
     name: "paddle",
     displayName: "Paddle",
     description: "SaaS billing and payments",
