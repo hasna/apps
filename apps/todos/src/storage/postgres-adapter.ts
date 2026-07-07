@@ -663,7 +663,7 @@ async function patchTask(task: Task, patch: Partial<Task>, store: PostgresJsonRe
 // the previous in-JS sort. Kept as a constant so listTasks/countTasks and the
 // test mock stay in lockstep.
 const TASK_ORDER_BY =
-  "ORDER BY CASE payload->>'priority' WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END ASC, payload->>'created_at' ASC";
+  "ORDER BY CASE payload->>'priority' WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END ASC, payload->>'created_at' ASC, payload->>'id' ASC";
 
 function toFilterArray<T>(value: T | T[]): T[] {
   return Array.isArray(value) ? value : [value];
