@@ -35,6 +35,8 @@ describe("Postgres storage migrations", () => {
       "0002_workflows_goals",
       "0003_remote_runners_and_audit",
       "0004_work_item_route_scope",
+      "0005_run_receipts",
+      "0006_work_item_machine_id",
     ]);
     for (const migration of POSTGRES_STORAGE_MIGRATIONS) {
       expect(migration.checksum).toBe(checksumStorageSql(migration.sql));
@@ -49,6 +51,7 @@ describe("Postgres storage migrations", () => {
     expect(combined).toContain("CREATE TABLE IF NOT EXISTS runner_leases");
     expect(combined).toContain("idx_runner_leases_active_loop_run");
     expect(combined).toContain("CREATE TABLE IF NOT EXISTS audit_events");
+    expect(combined).toContain("CREATE TABLE IF NOT EXISTS run_receipts");
   });
 
   test("released migration SQL is immutable — pinned checksums never change", () => {
@@ -65,6 +68,8 @@ describe("Postgres storage migrations", () => {
       "0002_workflows_goals": "sha256:cf9d74beafadaf97dcb26c3d584caa634265fb99978704417886c58d1f804b42",
       "0003_remote_runners_and_audit": "sha256:9f0816668315c08aefeda1afebb58ad74e803d6dd1bca580e0697f602486c520",
       "0004_work_item_route_scope": "sha256:341e439861d595ce3d069b0106f1f09134042bac0a70f3d00a1374e09f5404d9",
+      "0005_run_receipts": "sha256:27228e19e0101d31ce9da18d76d918a96dd8afff576fb291cbf8d018e97fe5d6",
+      "0006_work_item_machine_id": "sha256:80887626208cbb3659a436e6e26c56f0b0229f0bcb8d292de51738ee99ed11d1",
     };
     for (const migration of POSTGRES_STORAGE_MIGRATIONS) {
       expect(`${migration.id} ${migration.checksum}`).toBe(`${migration.id} ${pinned[migration.id]}`);
@@ -75,8 +80,15 @@ describe("Postgres storage migrations", () => {
       if (migration.id === "0004_work_item_route_scope") {
         expect(migration.sql).toContain("ADD COLUMN IF NOT EXISTS route_scope");
         expect(migration.sql).toContain("idx_workflow_work_items_scope");
+      } else if (migration.id === "0006_work_item_machine_id") {
+        expect(migration.sql).toContain("ADD COLUMN IF NOT EXISTS machine_id");
+        expect(migration.sql).toContain("idx_workflow_work_items_machine");
       } else {
         expect(migration.sql).not.toContain("route_scope");
+        if (migration.id === "0002_workflows_goals") {
+          expect(migration.sql).not.toContain("machine_id TEXT");
+          expect(migration.sql).not.toContain("idx_workflow_work_items_machine");
+        }
       }
     }
   });
@@ -115,13 +127,13 @@ describe("Postgres storage migrations", () => {
 
     expect(executor.executed).toHaveLength(0);
     expect(dryRun.applied.map((migration) => migration.id)).toEqual([POSTGRES_STORAGE_MIGRATIONS[0]!.id]);
-    expect(dryRun.plan.map((item) => item.state)).toEqual(["already_applied", "pending", "pending", "pending"]);
+    expect(dryRun.plan.map((item) => item.state)).toEqual(["already_applied", "pending", "pending", "pending", "pending", "pending"]);
   });
 
-  test("existing pre-route_scope database upgrades by applying only the additive 0004 migration", async () => {
+  test("existing pre-route_scope database upgrades by applying only later additive migrations", async () => {
     // The realistic upgrade: a deployment whose ledger recorded 0001-0003 with
     // the released checksums. Verification must pass (no released SQL was
-    // edited) and only 0004_work_item_route_scope may execute. This is the pg
+    // edited) and only later additive migrations may execute. This is the pg
     // twin of the sqlite pre-0008 fixture test: route_scope briefly lived
     // inside the checksummed 0002 block, which would have failed this exact
     // scenario with a checksum mismatch.
@@ -136,8 +148,10 @@ describe("Postgres storage migrations", () => {
     const result = await storage.migrate();
 
     const executedSql = executor.executed.filter((entry) => !entry.sql.startsWith("INSERT INTO") && !entry.sql.includes("CREATE TABLE IF NOT EXISTS open_loops_schema_migrations"));
-    expect(executedSql).toHaveLength(1);
+    expect(executedSql).toHaveLength(3);
     expect(executedSql[0]!.sql).toContain("ADD COLUMN IF NOT EXISTS route_scope");
+    expect(executedSql[1]!.sql).toContain("CREATE TABLE IF NOT EXISTS run_receipts");
+    expect(executedSql[2]!.sql).toContain("ADD COLUMN IF NOT EXISTS machine_id");
     expect(result.applied.map((migration) => migration.id)).toEqual(POSTGRES_STORAGE_MIGRATIONS.map((migration) => migration.id));
   });
 

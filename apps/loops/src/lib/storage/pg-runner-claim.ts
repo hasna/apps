@@ -1,7 +1,7 @@
-// Concurrency-safe run claiming for remote Postgres runners.
+// Concurrency-safe run claiming for self-hosted Postgres runners.
 //
 // The correctness core of the multi-runner backend: many `loops-runner`
-// processes poll the same cloud Postgres and must never both claim the same
+// processes poll the same Postgres database and must never both claim the same
 // queued run. This uses `SELECT ... FOR UPDATE SKIP LOCKED` inside a
 // transaction so that a row locked by one runner is invisible to the others'
 // claim attempt (they skip it and grab the next one, or get nothing), which is

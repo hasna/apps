@@ -33,6 +33,9 @@ export class SqliteLoopStorage implements LoopStorageContract {
   archiveLoop(...args: StoreMethod<"archiveLoop">["args"]) { return this.call("archiveLoop", ...args); }
   unarchiveLoop(...args: StoreMethod<"unarchiveLoop">["args"]) { return this.call("unarchiveLoop", ...args); }
   deleteLoop(...args: StoreMethod<"deleteLoop">["args"]) { return this.call("deleteLoop", ...args); }
+  upsertMigrationLoop(...args: StoreMethod<"upsertMigrationLoop">["args"]) { return this.call("upsertMigrationLoop", ...args); }
+  upsertMigrationRun(...args: StoreMethod<"upsertMigrationRun">["args"]) { return this.call("upsertMigrationRun", ...args); }
+  upsertMigrationWorkflow(...args: StoreMethod<"upsertMigrationWorkflow">["args"]) { return this.call("upsertMigrationWorkflow", ...args); }
   createWorkflow(...args: StoreMethod<"createWorkflow">["args"]) { return this.call("createWorkflow", ...args); }
   getWorkflow(...args: StoreMethod<"getWorkflow">["args"]) { return this.call("getWorkflow", ...args); }
   listWorkflows(...args: StoreMethod<"listWorkflows">["args"]) { return this.call("listWorkflows", ...args); }
@@ -74,6 +77,9 @@ export class SqliteLoopStorage implements LoopStorageContract {
   finalizeRun(...args: StoreMethod<"finalizeRun">["args"]) { return this.call("finalizeRun", ...args); }
   heartbeatRunLease(...args: StoreMethod<"heartbeatRunLease">["args"]) { return this.call("heartbeatRunLease", ...args); }
   listRuns(...args: StoreMethod<"listRuns">["args"]) { return this.call("listRuns", ...args); }
+  writeRunReceipt(...args: StoreMethod<"writeRunReceipt">["args"]) { return this.call("writeRunReceipt", ...args); }
+  getRunReceipt(...args: StoreMethod<"getRunReceipt">["args"]) { return this.call("getRunReceipt", ...args); }
+  listRunReceipts(...args: StoreMethod<"listRunReceipts">["args"]) { return this.call("listRunReceipts", ...args); }
   recoverExpiredRunLeases(...args: StoreMethod<"recoverExpiredRunLeases">["args"]) { return this.call("recoverExpiredRunLeases", ...args); }
   recoverExpiredRunLeasesDetailed(...args: StoreMethod<"recoverExpiredRunLeasesDetailed">["args"]) { return this.call("recoverExpiredRunLeasesDetailed", ...args); }
   countLoops(...args: StoreMethod<"countLoops">["args"]) { return this.call("countLoops", ...args); }

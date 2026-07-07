@@ -4,11 +4,24 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
 import { Store } from "./store.js";
-import { defaultAgentIdleTimeoutMs, executeLoop, preflightTarget, type SpawnedProcessInfo } from "./executor.js";
+import { defaultAgentIdleTimeoutMs, executeLoop, isStaleWorktreeRegistration, preflightTarget, type SpawnedProcessInfo } from "./executor.js";
 import { openGate, waitUntil } from "../test-helpers.js";
 
 function gateWaitScript(gate: string): string {
   return `while [ ! -f ${JSON.stringify(gate)} ]; do sleep 0.02; done\n`;
+}
+
+function guardedLoginExitCommand(missingPath: string): string {
+  const quoted = JSON.stringify(missingPath);
+  return [
+    `if [ ! -s ${quoted} ]; then`,
+    `  printf 'no artifact at %s\\n' ${quoted}`,
+    "  exit 0",
+    "fi",
+    "bun - <<'BUN'",
+    "console.log('unexpected artifact path');",
+    "BUN",
+  ].join("\n");
 }
 
 function writeFakeCodewithProfileList(fake: string, output: string, exitCode = 0): void {
@@ -102,6 +115,34 @@ describe("executeLoop", () => {
       expect(result.stdout).toContain("hello");
     } finally {
       store.close();
+    }
+  });
+
+  test("normalizes SHLVL for bash login command targets with guarded exits", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-login-shell-env-"));
+    try {
+      const loop = store.createLoop({
+        name: "guarded-login-shell",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "command",
+          command: "bash",
+          args: ["-lc", guardedLoginExitCommand(join(root, "missing.json"))],
+          timeoutMs: 5_000,
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: { HOME: root, PATH: "/usr/bin:/bin" },
+      });
+      expect(result.status).toBe("succeeded");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("no artifact at");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -302,7 +343,7 @@ describe("executeLoop", () => {
       return bin;
     }
 
-    test("prepares and enters a required git worktree before spawning", async () => {
+    test("prepares, enters, and recovers a clean required git worktree before spawning", async () => {
       const root = mkdtempSync(join(tmpdir(), "loops-worktree-required-"));
       const repo = initRepo(root);
       const bin = fakePwdBinary(root);
@@ -345,6 +386,101 @@ describe("executeLoop", () => {
         });
         expect(again.status).toBe("succeeded");
         expect(again.stdout.trim()).toBe(realpathSync(wtPath));
+
+        execFileSync("git", ["-C", wtPath, "checkout", "--detach"], { stdio: "ignore" });
+        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("");
+
+        const recovered = await executeLoop(loop, claim!.run, {
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+        });
+        expect(recovered.status).toBe("succeeded");
+        expect(recovered.stdout.trim()).toBe(realpathSync(wtPath));
+        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("openloops/exec-test");
+
+        writeFileSync(join(wtPath, "detached-marker.txt"), "preserve detached head\n");
+        execFileSync("git", ["-C", wtPath, "-c", "user.email=test@example.com", "-c", "user.name=test", "add", "detached-marker.txt"], {
+          stdio: "ignore",
+        });
+        execFileSync("git", ["-C", wtPath, "-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-m", "detached marker"], {
+          stdio: "ignore",
+        });
+        const detachedHead = execFileSync("git", ["-C", wtPath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+        execFileSync("git", ["-C", wtPath, "checkout", "--detach"], { stdio: "ignore" });
+        execFileSync("git", ["-C", repo, "branch", "-D", "openloops/exec-test"], { stdio: "ignore" });
+
+        const recreated = await executeLoop(loop, claim!.run, {
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+        });
+        expect(recreated.status).toBe("succeeded");
+        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("openloops/exec-test");
+        expect(execFileSync("git", ["-C", wtPath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim()).toBe(detachedHead);
+        expect(readFileSync(join(wtPath, "detached-marker.txt"), "utf8")).toBe("preserve detached head\n");
+      } finally {
+        store.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("detects git's stale 'missing but already registered worktree' error", () => {
+      expect(
+        isStaleWorktreeRegistration(
+          "fatal: '/x/run-1' is a missing but already registered worktree;\nuse 'add -f' to override, or 'prune' or 'remove' to clear",
+        ),
+      ).toBe(true);
+      expect(isStaleWorktreeRegistration("fatal: '/x/run-1' already exists")).toBe(false);
+      expect(isStaleWorktreeRegistration(undefined)).toBe(false);
+      expect(isStaleWorktreeRegistration("")).toBe(false);
+    });
+
+    test("self-heals a stale 'missing but already registered' worktree registration", async () => {
+      const root = mkdtempSync(join(tmpdir(), "loops-worktree-stale-"));
+      const repo = initRepo(root);
+      const bin = fakePwdBinary(root);
+      const wtPath = join(root, "worktrees", "repo", "run-1");
+      const store = new Store(":memory:");
+      try {
+        // Fabricate the exact 48693723 fault: register a worktree (creating the
+        // branch), then delete its directory, leaving the `.git/worktrees/<name>`
+        // entry git refuses to overwrite ("missing but already registered
+        // worktree") while the branch stays checked-out to the missing path.
+        execFileSync("git", ["-C", repo, "worktree", "add", "-b", "openloops/stale-test", wtPath], { stdio: "ignore" });
+        rmSync(wtPath, { recursive: true, force: true });
+        expect(existsSync(wtPath)).toBe(false);
+
+        const loop = store.createLoop({
+          name: "worktree-stale-selfheal",
+          schedule: { type: "once", at: new Date().toISOString() },
+          target: {
+            type: "agent",
+            provider: "claude",
+            prompt: "work",
+            configIsolation: "safe",
+            cwd: wtPath,
+            timeoutMs: 30_000,
+            worktree: {
+              mode: "required",
+              enabled: true,
+              originalCwd: repo,
+              cwd: wtPath,
+              repoRoot: repo,
+              root: join(root, "worktrees"),
+              path: wtPath,
+              branch: "openloops/stale-test",
+            },
+          },
+        });
+        const claim = store.claimRun(loop, new Date().toISOString(), "test");
+        expect(claim).toBeDefined();
+        const result = await executeLoop(loop, claim!.run, {
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+        });
+        // Self-heal: prune cleared the stale registration, the single retry
+        // recreated the worktree, and the agent ran inside it. Without the fix
+        // this fails "worktree preparation failed ... missing but already
+        // registered worktree" (mode=required fails closed).
+        expect(result.status).toBe("succeeded");
+        expect(result.stdout.trim()).toBe(realpathSync(wtPath));
+        expect(existsSync(join(wtPath, ".git"))).toBe(true);
       } finally {
         store.close();
         rmSync(root, { recursive: true, force: true });
@@ -489,13 +625,35 @@ describe("executeLoop", () => {
         expect(result.stdout.trim()).toBe(wtPath);
         expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("openloops/exec-test");
 
-        // Second run reuses the existing worktree.
+        // Second run recovers a clean detached worktree before entering it.
+        execFileSync("git", ["-C", wtPath, "checkout", "--detach"], { stdio: "ignore" });
         const again = await executeLoop(loop, claim!.run, {
           ...remoteHooks,
           env: { HOME: home, PATH: "/usr/bin:/bin" },
         });
         expect(again.status).toBe("succeeded");
         expect(again.stdout.trim()).toBe(wtPath);
+        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("openloops/exec-test");
+
+        writeFileSync(join(wtPath, "detached-marker.txt"), "preserve remote detached head\n");
+        execFileSync("git", ["-C", wtPath, "-c", "user.email=test@example.com", "-c", "user.name=test", "add", "detached-marker.txt"], {
+          stdio: "ignore",
+        });
+        execFileSync("git", ["-C", wtPath, "-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-m", "detached marker"], {
+          stdio: "ignore",
+        });
+        const detachedHead = execFileSync("git", ["-C", wtPath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+        execFileSync("git", ["-C", wtPath, "checkout", "--detach"], { stdio: "ignore" });
+        execFileSync("git", ["-C", repo, "branch", "-D", "openloops/exec-test"], { stdio: "ignore" });
+
+        const recreated = await executeLoop(loop, claim!.run, {
+          ...remoteHooks,
+          env: { HOME: home, PATH: "/usr/bin:/bin" },
+        });
+        expect(recreated.status).toBe("succeeded");
+        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("openloops/exec-test");
+        expect(execFileSync("git", ["-C", wtPath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim()).toBe(detachedHead);
+        expect(readFileSync(join(wtPath, "detached-marker.txt"), "utf8")).toBe("preserve remote detached head\n");
       } finally {
         store.close();
         rmSync(root, { recursive: true, force: true });
@@ -734,6 +892,36 @@ describe("executeLoop", () => {
       const script = readFileSync(scriptFile, "utf8");
       expect(script).toContain("sh -c ");
       expect(script).not.toContain("sh -lc ");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("normalizes SHLVL for remote bash login command targets with guarded exits", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-remote-login-shell-env-"));
+    try {
+      const loop = store.createLoop({
+        name: "remote-guarded-login-shell",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "command",
+          command: "bash",
+          args: ["-lc", guardedLoginExitCommand(join(root, "missing.json"))],
+          timeoutMs: 5_000,
+        },
+        machine: { id: "remote-test", local: false, route: "ssh" },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        ...remoteHooks,
+        env: { HOME: root, PATH: "/usr/bin:/bin" },
+      });
+      expect(result.status).toBe("succeeded");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("no artifact at");
     } finally {
       store.close();
       rmSync(root, { recursive: true, force: true });
@@ -1034,6 +1222,37 @@ describe("executeLoop", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("remote preflight classifies ssh host key verification failures without bypassing trust", () => {
+    let message = "";
+    try {
+      preflightTarget(
+        { type: "command", command: "printf ok", shell: true },
+        {},
+        {
+          machine: { id: "station02", local: false, route: "ssh" },
+          machineResolver: (machine) => ({ ...machine, local: false, route: "ssh" }),
+          env: { HOME: tmpdir(), PATH: "/usr/bin:/bin" },
+          machineCommandResolver: () => ({
+            command: "bash",
+            args: ["-c", "printf 'Host key verification failed.\\n' >&2; exit 255"],
+            source: "ssh",
+          }),
+        },
+      );
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain("remote preflight failed on station02: SSH host key verification failed.");
+    expect(message).toContain("Verify station02's host identity");
+    expect(message).toContain("repair SSH known_hosts/trust material outside OpenLoops");
+    expect(message).toContain("OpenLoops will not disable host-key checking or modify known_hosts automatically.");
+    expect(message).toContain("Transport detail: Host key verification failed.");
+    expect(message).not.toContain("StrictHostKeyChecking=no");
+    expect(message).not.toContain("UserKnownHostsFile=/dev/null");
+    expect(message).not.toContain("ssh-keyscan");
   });
 
   test("remote codewith auth profile preflight quotes missing profile errors safely", () => {

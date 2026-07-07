@@ -172,6 +172,89 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("POST /v1/import upserts id-preserving rows, preserves status/archived, is idempotent, and skips running runs", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+
+    const loop = {
+      id: "loop-import-1",
+      name: "imported-loop",
+      description: "backfilled",
+      status: "stopped",
+      archivedAt: "2026-01-02T00:00:00.000Z",
+      archivedFromStatus: "paused",
+      schedule: { type: "interval", every: "1h" },
+      target: { type: "command", command: "true" },
+      catchUp: "latest",
+      catchUpLimit: 50,
+      overlap: "skip",
+      maxAttempts: 1,
+      retryDelayMs: 60_000,
+      leaseMs: 1_800_000,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-02T00:00:00.000Z",
+    };
+    const terminalRun = {
+      id: "run-import-1",
+      loopId: "loop-import-1",
+      loopName: "imported-loop",
+      scheduledFor: "2026-01-01T00:00:00.000Z",
+      attempt: 1,
+      status: "succeeded",
+      finishedAt: "2026-01-01T00:00:05.000Z",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:05.000Z",
+    };
+    const runningRun = { ...terminalRun, id: "run-import-running", scheduledFor: "2026-01-01T01:00:00.000Z", status: "running" };
+
+    try {
+      const importResponse = await fetch(apiUrl(server, "/v1/import"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ loops: [loop], runs: [terminalRun, runningRun] }),
+      });
+      expect(importResponse.status).toBe(200);
+      expect(await importResponse.json()).toMatchObject({
+        ok: true,
+        imported: { workflows: 0, loops: 1, runs: 1 },
+        skippedRunning: 1,
+      });
+
+      // id + status + archived state preserved exactly (not forced to "active").
+      const fetched = await storage.getLoop("loop-import-1");
+      expect(fetched?.id).toBe("loop-import-1");
+      expect(fetched?.status).toBe("stopped");
+      expect(fetched?.archivedAt).toBe("2026-01-02T00:00:00.000Z");
+      expect(fetched?.createdAt).toBe("2026-01-01T00:00:00.000Z");
+      const importedRun = await storage.getRun("run-import-1");
+      expect(importedRun?.status).toBe("succeeded");
+      expect(await storage.getRun("run-import-running")).toBeUndefined();
+
+      // Idempotent: a second import of the same ids never duplicates rows.
+      const again = await fetch(apiUrl(server, "/v1/import"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ loops: [loop], runs: [terminalRun] }),
+      });
+      expect(again.status).toBe(200);
+      const allLoops = await storage.listLoops({ includeArchived: true, limit: 100 });
+      expect(allLoops.filter((entry) => entry.id === "loop-import-1")).toHaveLength(1);
+      const allRuns = await storage.listRuns({ loopId: "loop-import-1", limit: 100 });
+      expect(allRuns.filter((entry) => entry.id === "run-import-1")).toHaveLength(1);
+
+      // Count routes verify totals beyond the 1000-row list cap.
+      const loopCount = await fetch(apiUrl(server, "/v1/loops/count?includeArchived=true"));
+      expect(loopCount.status).toBe(200);
+      expect(await loopCount.json()).toMatchObject({ ok: true, count: 1 });
+      const runCount = await fetch(apiUrl(server, "/v1/runs/count"));
+      expect(await runCount.json()).toMatchObject({ ok: true, count: 1 });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
   test("PATCH only touches fields present in the body and never wipes omitted schedule state", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
@@ -263,6 +346,49 @@ describe("loops-api foundation", () => {
       expect(raw.run.stdout).toBe("private stdout");
       expect(raw.run.stderr).toBe("private stderr");
       expect(raw.run.error).toBe("[redacted 13 chars]");
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("run receipt routes write, read, and filter bounded receipts", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+
+    try {
+      const writeResponse = await fetch(apiUrl(server, "/v1/receipts"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          loop_id: "loop-api",
+          run_id: "run-api",
+          machine: "spark01",
+          repo: "/workspace/open-loops",
+          task_ids: ["task-api"],
+          knowledge_ids: ["knowledge-api"],
+          status: "succeeded",
+          summary: "api receipt",
+          evidence_paths: ["/tmp/api-receipt.json"],
+          stdout: "z".repeat(50_000),
+        }),
+      });
+      expect(writeResponse.status).toBe(201);
+      const written = (await writeResponse.json()) as { receipt: { run_id: string; summary: { stdout_bytes: number; stdout_excerpt: string } } };
+      expect(written.receipt.run_id).toBe("run-api");
+      expect(written.receipt.summary.stdout_bytes).toBe(50_000);
+      expect(written.receipt.summary.stdout_excerpt).toContain("chars omitted");
+
+      const readResponse = await fetch(apiUrl(server, "/v1/receipts/run-api"));
+      expect(readResponse.status).toBe(200);
+      const read = (await readResponse.json()) as { receipt: { summary: { text: string } } };
+      expect(read.receipt.summary.text).toBe("api receipt");
+
+      const listResponse = await fetch(apiUrl(server, "/v1/receipts?taskId=task-api"));
+      expect(listResponse.status).toBe(200);
+      const list = (await listResponse.json()) as { receipts: Array<{ run_id: string }> };
+      expect(list.receipts.map((receipt) => receipt.run_id)).toEqual(["run-api"]);
     } finally {
       server.stop(true);
       await storage.close();

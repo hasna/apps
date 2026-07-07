@@ -1,10 +1,10 @@
 // Postgres implementation of the LoopStorageContract.
 //
-// This is the cloud/remote backend counterpart to SqliteLoopStorage. It speaks
-// the exact same ~60-method surface as the local sqlite `Store`, but every
-// method is async and every statement runs against a live `pg.Pool` through the
-// vendored @hasna/contracts storage kit (PURE REMOTE, Amendment A1: reads and
-// writes hit the same cloud Postgres — no cache, no local mirror).
+// This is the self-hosted Postgres backend counterpart to SqliteLoopStorage. It
+// speaks the exact same ~60-method surface as the local sqlite `Store`, but
+// every method is async and every statement runs against a live `pg.Pool`
+// through the vendored @hasna/contracts storage kit (direct Postgres, no cache,
+// no local mirror).
 //
 // Row shape parity with sqlite is achieved by three pg type-parser overrides
 // registered at module load (see below): JSONB/JSON come back as raw text and
@@ -36,18 +36,21 @@ import {
   rowToLease,
   rowToLoop,
   rowToRun,
+  rowToRunReceipt,
   rowToWorkflow,
   rowToWorkflowEvent,
   rowToWorkflowInvocation,
   rowToWorkflowRun,
   rowToWorkflowStepRun,
   rowToWorkflowWorkItem,
+  scrubbedOrNull,
   workItemStatusForLoopRun,
   type GoalPlanNodeRow,
   type GoalRow,
   type GoalRunRow,
   type LeaseRow,
   type LoopRow,
+  type RunReceiptRow,
   type RunRow,
   type WorkflowEventRow,
   type WorkflowInvocationRow,
@@ -66,8 +69,12 @@ import type {
   LoopRun,
   LoopStatus,
   LoopTarget,
+  RunReceipt,
+  WorkflowSpec,
   WorkflowWorkItemStatus,
+  WriteRunReceiptInput,
 } from "../../types.js";
+import { normalizeRunReceipt } from "../run-receipts.js";
 import type { PoolQueryClient, TypedQueryClient } from "../../generated/storage-kit/query.js";
 import type { LoopStorageContract, LoopStorageMethodName } from "./contract.js";
 
@@ -475,6 +482,170 @@ export class PostgresLoopStorage implements LoopStorageContract {
     return row?.count ?? 0;
   }
 
+  // ----------------------------------------------- id-preserving bulk import
+  // Postgres counterparts of the sqlite Store.upsertMigration* methods. These
+  // preserve the incoming id/status/timestamps exactly (no genId, no forced
+  // "active"), so a local->self-hosted backfill reproduces the source rows
+  // faithfully and idempotently (ON CONFLICT(id) DO UPDATE — re-runs never
+  // duplicate). Without --replace an existing row is left untouched and
+  // returned as-is. Run/step output is re-clamped by persistedRunOutput and
+  // errors re-scrubbed, matching the sqlite import semantics exactly.
+
+  async upsertMigrationWorkflow(
+    ...args: M<"upsertMigrationWorkflow">["args"]
+  ): Promise<M<"upsertMigrationWorkflow">["result"]> {
+    const [workflow, opts = {}] = args as [WorkflowSpec, { replace?: boolean }?];
+    const existing = await this.getWorkflow(workflow.id);
+    if (existing && !opts.replace) return existing;
+    await this.client.execute(
+      `INSERT INTO workflow_specs (id, name, description, version, status, goal_json, steps_json, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9)
+       ON CONFLICT(id) DO UPDATE SET
+         name=EXCLUDED.name,
+         description=EXCLUDED.description,
+         version=EXCLUDED.version,
+         status=EXCLUDED.status,
+         goal_json=EXCLUDED.goal_json,
+         steps_json=EXCLUDED.steps_json,
+         created_at=EXCLUDED.created_at,
+         updated_at=EXCLUDED.updated_at`,
+      [
+        workflow.id,
+        workflow.name,
+        workflow.description ?? null,
+        workflow.version,
+        workflow.status,
+        workflow.goal ? JSON.stringify(workflow.goal) : null,
+        JSON.stringify(workflow.steps),
+        workflow.createdAt,
+        workflow.updatedAt,
+      ],
+    );
+    const imported = await this.getWorkflow(workflow.id);
+    if (!imported) throw new Error(`workflow not found after migration import: ${workflow.id}`);
+    return imported;
+  }
+
+  async upsertMigrationLoop(...args: M<"upsertMigrationLoop">["args"]): Promise<M<"upsertMigrationLoop">["result"]> {
+    const [loop, opts = {}] = args as [Loop, { replace?: boolean }?];
+    const existing = await this.loadLoop(this.client, loop.id);
+    if (existing && !opts.replace) return existing;
+    await this.client.execute(
+      `INSERT INTO loops (id, name, description, status, archived_at, archived_from_status, schedule_json, target_json,
+        goal_json, machine_json, next_run_at, retry_scheduled_for, catch_up, catch_up_limit, overlap, max_attempts,
+        retry_delay_ms, lease_ms, expires_at, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+       ON CONFLICT(id) DO UPDATE SET
+         name=EXCLUDED.name,
+         description=EXCLUDED.description,
+         status=EXCLUDED.status,
+         archived_at=EXCLUDED.archived_at,
+         archived_from_status=EXCLUDED.archived_from_status,
+         schedule_json=EXCLUDED.schedule_json,
+         target_json=EXCLUDED.target_json,
+         goal_json=EXCLUDED.goal_json,
+         machine_json=EXCLUDED.machine_json,
+         next_run_at=EXCLUDED.next_run_at,
+         retry_scheduled_for=EXCLUDED.retry_scheduled_for,
+         catch_up=EXCLUDED.catch_up,
+         catch_up_limit=EXCLUDED.catch_up_limit,
+         overlap=EXCLUDED.overlap,
+         max_attempts=EXCLUDED.max_attempts,
+         retry_delay_ms=EXCLUDED.retry_delay_ms,
+         lease_ms=EXCLUDED.lease_ms,
+         expires_at=EXCLUDED.expires_at,
+         created_at=EXCLUDED.created_at,
+         updated_at=EXCLUDED.updated_at`,
+      [
+        loop.id,
+        loop.name,
+        loop.description ?? null,
+        loop.status,
+        loop.archivedAt ?? null,
+        loop.archivedFromStatus ?? null,
+        JSON.stringify(loop.schedule),
+        JSON.stringify(loop.target),
+        loop.goal ? JSON.stringify(loop.goal) : null,
+        loop.machine ? JSON.stringify(loop.machine) : null,
+        loop.nextRunAt ?? null,
+        loop.retryScheduledFor ?? null,
+        loop.catchUp,
+        loop.catchUpLimit,
+        loop.overlap,
+        loop.maxAttempts,
+        loop.retryDelayMs,
+        loop.leaseMs,
+        loop.expiresAt ?? null,
+        loop.createdAt,
+        loop.updatedAt,
+      ],
+    );
+    const imported = await this.loadLoop(this.client, loop.id);
+    if (!imported) throw new Error(`loop not found after migration import: ${loop.id}`);
+    return imported;
+  }
+
+  async upsertMigrationRun(...args: M<"upsertMigrationRun">["args"]): Promise<M<"upsertMigrationRun">["result"]> {
+    const [run, opts = {}] = args as [LoopRun, { replace?: boolean }?];
+    if (run.status === "running") throw new ValidationError(`cannot import running run ${run.id}`);
+    const existing = await this.loadRun(this.client, run.id);
+    if (existing && !opts.replace) return existing;
+    await this.client.execute(
+      `INSERT INTO loop_runs (id, loop_id, loop_name, scheduled_for, attempt, status, started_at, finished_at,
+        claimed_by, claim_token, lease_expires_at, pid, pgid, process_started_at, exit_code, duration_ms,
+        stdout, stderr, error, goal_run_id, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+       ON CONFLICT(id) DO UPDATE SET
+         loop_id=EXCLUDED.loop_id,
+         loop_name=EXCLUDED.loop_name,
+         scheduled_for=EXCLUDED.scheduled_for,
+         attempt=EXCLUDED.attempt,
+         status=EXCLUDED.status,
+         started_at=EXCLUDED.started_at,
+         finished_at=EXCLUDED.finished_at,
+         claimed_by=EXCLUDED.claimed_by,
+         claim_token=NULL,
+         lease_expires_at=EXCLUDED.lease_expires_at,
+         pid=EXCLUDED.pid,
+         pgid=EXCLUDED.pgid,
+         process_started_at=EXCLUDED.process_started_at,
+         exit_code=EXCLUDED.exit_code,
+         duration_ms=EXCLUDED.duration_ms,
+         stdout=EXCLUDED.stdout,
+         stderr=EXCLUDED.stderr,
+         error=EXCLUDED.error,
+         goal_run_id=EXCLUDED.goal_run_id,
+         created_at=EXCLUDED.created_at,
+         updated_at=EXCLUDED.updated_at`,
+      [
+        run.id,
+        run.loopId,
+        run.loopName,
+        run.scheduledFor,
+        run.attempt,
+        run.status,
+        run.startedAt ?? null,
+        run.finishedAt ?? null,
+        run.claimedBy ?? null,
+        run.leaseExpiresAt ?? null,
+        run.pid ?? null,
+        run.pgid ?? null,
+        run.processStartedAt ?? null,
+        run.exitCode ?? null,
+        run.durationMs ?? null,
+        persistedRunOutput(run.stdout),
+        persistedRunOutput(run.stderr),
+        scrubbedOrNull(run.error),
+        run.goalRunId ?? null,
+        run.createdAt,
+        run.updatedAt,
+      ],
+    );
+    const imported = await this.loadRun(this.client, run.id);
+    if (!imported) throw new Error(`run not found after migration import: ${run.id}`);
+    return imported;
+  }
+
   // ------------------------------------------------------------- run lifecycle
 
   async createSkippedRun(...args: M<"createSkippedRun">["args"]): Promise<M<"createSkippedRun">["result"]> {
@@ -711,6 +882,98 @@ export class PostgresLoopStorage implements LoopStorageContract {
       rows = await this.client.many<RunRow>("SELECT * FROM loop_runs ORDER BY created_at DESC LIMIT $1", [limit]);
     }
     return rows.map(rowToRun);
+  }
+
+  async writeRunReceipt(...args: M<"writeRunReceipt">["args"]): Promise<M<"writeRunReceipt">["result"]> {
+    const [input, opts = {}] = args as [WriteRunReceiptInput, { now?: Date }?];
+    const inputRunId = typeof input.run_id === "string" && input.run_id.trim() ? input.run_id : undefined;
+    const existing = inputRunId ? await this.getRunReceipt(inputRunId) : undefined;
+    const run = inputRunId ? await this.getRun(inputRunId) : undefined;
+    const loop = input.loop_id ? await this.getLoop(input.loop_id) : run ? await this.getLoop(run.loopId) : undefined;
+    const receipt = normalizeRunReceipt(input, { now: opts.now, run, loop, existing });
+    await this.client.execute(
+      `INSERT INTO run_receipts (run_id, loop_id, machine_json, repo, task_ids_json, knowledge_ids_json, digest_id,
+        started_at, finished_at, status, exit_code, summary_json, evidence_paths_json, created_at, updated_at)
+       VALUES ($1,$2,$3::jsonb,$4,$5::jsonb,$6::jsonb,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14,$15)
+       ON CONFLICT(run_id) DO UPDATE SET
+        loop_id=EXCLUDED.loop_id,
+        machine_json=EXCLUDED.machine_json,
+        repo=EXCLUDED.repo,
+        task_ids_json=EXCLUDED.task_ids_json,
+        knowledge_ids_json=EXCLUDED.knowledge_ids_json,
+        digest_id=EXCLUDED.digest_id,
+        started_at=EXCLUDED.started_at,
+        finished_at=EXCLUDED.finished_at,
+        status=EXCLUDED.status,
+        exit_code=EXCLUDED.exit_code,
+        summary_json=EXCLUDED.summary_json,
+        evidence_paths_json=EXCLUDED.evidence_paths_json,
+        updated_at=EXCLUDED.updated_at`,
+      [
+        receipt.run_id,
+        receipt.loop_id,
+        JSON.stringify(receipt.machine),
+        receipt.repo,
+        JSON.stringify(receipt.task_ids),
+        JSON.stringify(receipt.knowledge_ids),
+        receipt.digest_id,
+        receipt.started_at,
+        receipt.finished_at,
+        receipt.status,
+        receipt.exit_code,
+        JSON.stringify(receipt.summary),
+        JSON.stringify(receipt.evidence_paths),
+        receipt.created_at,
+        receipt.updated_at,
+      ],
+    );
+    return (await this.getRunReceipt(receipt.run_id)) ?? receipt;
+  }
+
+  async getRunReceipt(...args: M<"getRunReceipt">["args"]): Promise<M<"getRunReceipt">["result"]> {
+    const row = await this.client.get<RunReceiptRow>("SELECT * FROM run_receipts WHERE run_id = $1", [args[0]]);
+    return row ? rowToRunReceipt(row) : undefined;
+  }
+
+  async listRunReceipts(...args: M<"listRunReceipts">["args"]): Promise<M<"listRunReceipts">["result"]> {
+    const opts = args[0] ?? {};
+    const limit = opts.limit ?? 100;
+    const filters: string[] = [];
+    const params: unknown[] = [];
+    const next = () => `$${params.length + 1}`;
+    if (opts.loopId) {
+      const slot = next();
+      filters.push(`loop_id = ${slot}`);
+      params.push(opts.loopId);
+    }
+    if (opts.repo) {
+      const slot = next();
+      filters.push(`repo = ${slot}`);
+      params.push(opts.repo);
+    }
+    if (opts.status) {
+      const slot = next();
+      filters.push(`status = ${slot}`);
+      params.push(opts.status);
+    }
+    if (opts.taskId) {
+      const slot = next();
+      filters.push(`task_ids_json ? ${slot}`);
+      params.push(opts.taskId);
+    }
+    if (opts.knowledgeId) {
+      const slot = next();
+      filters.push(`knowledge_ids_json ? ${slot}`);
+      params.push(opts.knowledgeId);
+    }
+    const limitSlot = next();
+    params.push(limit);
+    const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+    const rows = await this.client.many<RunReceiptRow>(
+      `SELECT * FROM run_receipts ${where} ORDER BY created_at DESC LIMIT ${limitSlot}`,
+      params,
+    );
+    return rows.map(rowToRunReceipt);
   }
 
   async countRuns(...args: M<"countRuns">["args"]): Promise<M<"countRuns">["result"]> {

@@ -18,6 +18,7 @@ import type {
   OverlapPolicy,
   ScheduleSpec,
   WorkflowSpec,
+  WriteRunReceiptInput,
 } from "../types.js";
 import { dataDir, daemonLogPath, dbPath } from "../lib/paths.js";
 import {
@@ -26,6 +27,7 @@ import {
   publicGoal,
   publicGoalRun,
   publicRun,
+  publicRunReceipt,
   publicWorkflow,
   publicWorkflowEvent,
   publicWorkflowInvocation,
@@ -37,6 +39,7 @@ import {
 } from "../lib/format.js";
 import { computeNextAfter, parseDuration } from "../lib/recurrence.js";
 import { Store } from "../lib/store.js";
+import { resolveCloudLoopStore } from "../lib/cloud/loops.js";
 import { executeWorkflow, preflightWorkflow } from "../lib/workflow-runner.js";
 import { advanceLoop, executeClaimedRun, manualRunScheduledFor, manualRunSource, shouldAdvanceManualRun, tick } from "../lib/scheduler.js";
 import { daemonStatus, stopDaemon } from "../daemon/control.js";
@@ -48,6 +51,7 @@ import { buildHealthReport, buildHealthScan, expectationForLoop, writeHealthScan
 import { runLoopsUiApp } from "./ui.js";
 import {
   applyImportMigrationBundle,
+  applySelfHostedPush,
   buildImportMigrationPlan,
   buildSelfHostedMigrationPlan,
   exportLoopsMigrationBundle,
@@ -79,6 +83,8 @@ import {
   addAgentRoutingOptions,
   addRouteEventOptions,
   addTodosDrainOptions,
+  applyRoutePolicyToDrainOptions,
+  applyRoutePolicyToScheduleOptions,
   buildHygieneRouteTasks,
   collectValues,
   defaultLoopsProject,
@@ -96,15 +102,18 @@ import {
   preflightStoredWorkflow,
   providerAuthProfileFromOpts,
   readEventEnvelopeInput,
+  listRoutePolicies,
   routeCursorKey,
   routeDrainArgs,
   routeEventByKind,
+  renderRoutePolicy,
   sandboxFromOpts,
   splitList,
   stringField,
   todosTaskRouteTemplateId,
   timeoutDuration,
   upsertRouteTasks,
+  validateRoutePolicy,
   workflowBodyFromFile,
   workflowSpecForPreflight,
   type TodosDrainOptions,
@@ -503,6 +512,16 @@ function parseJsonFile(file: string): unknown {
   }
 }
 
+function parseReceiptFile(file: string): WriteRunReceiptInput {
+  const raw = file === "-" ? readFileSync(0, "utf8") : readFileSync(file, "utf8");
+  try {
+    return JSON.parse(raw) as WriteRunReceiptInput;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new ValidationError(`failed to read receipt JSON from ${file}: ${reason}`);
+  }
+}
+
 function parseStringMap(values: string[] | undefined, flag: string): Record<string, string> {
   const result: Record<string, string> = {};
   for (const value of values ?? []) {
@@ -567,22 +586,28 @@ addGoalOptions(
       ),
     ),
   ),
-).action(runAction((name, opts) => {
+).action(runAction(async (name, opts) => {
+  const target: LoopTarget = {
+    type: "command",
+    command: opts.cmd,
+    cwd: opts.cwd,
+    shell: opts.shell,
+    timeoutMs: timeoutDuration(opts.timeout, "--timeout"),
+    account: accountFromOpts(opts),
+    preflight: runtimePreflightFromOpts(opts),
+  };
+  const input = baseCreateInput(name, opts, target);
+  const preflight = opts.preflight
+    ? preflightLoopTarget(input.target as Exclude<LoopTarget, { type: "workflow" }>, { name, type: "command" }, { loopName: name }, { machine: input.machine })
+    : undefined;
+  const cloud = resolveCloudLoopStore();
+  if (cloud) {
+    const loop = await cloud.createLoop(input);
+    printCreatedLoop(loop, `created loop ${loop.id} (${loop.name}) next=${loop.nextRunAt}`, preflight);
+    return;
+  }
   const store = new Store();
   try {
-    const target: LoopTarget = {
-      type: "command",
-      command: opts.cmd,
-      cwd: opts.cwd,
-      shell: opts.shell,
-      timeoutMs: timeoutDuration(opts.timeout, "--timeout"),
-      account: accountFromOpts(opts),
-      preflight: runtimePreflightFromOpts(opts),
-    };
-    const input = baseCreateInput(name, opts, target);
-    const preflight = opts.preflight
-      ? preflightLoopTarget(input.target as Exclude<LoopTarget, { type: "workflow" }>, { name, type: "command" }, { loopName: name }, { machine: input.machine })
-      : undefined;
     const loop = store.createLoop(input);
     printCreatedLoop(loop, `created loop ${loop.id} (${loop.name}) next=${loop.nextRunAt}`, preflight);
   } finally {
@@ -617,7 +642,7 @@ addGoalOptions(
       ),
     ),
   ),
-).action(runAction((name, opts) => {
+).action(runAction(async (name, opts) => {
   const provider = opts.provider as AgentProvider;
   if (!["claude", "cursor", "codewith", "aicopilot", "opencode", "codex"].includes(provider)) {
     throw new ValidationError("unsupported provider");
@@ -625,31 +650,37 @@ addGoalOptions(
   if (!["safe", "none"].includes(opts.configIsolation)) {
     throw new ValidationError("--config-isolation must be safe or none");
   }
+  const target = normalizeLoopTargetForStorage({
+    type: "agent",
+    provider,
+    prompt: opts.prompt,
+    promptFile: opts.promptFile,
+    cwd: opts.cwd,
+    model: opts.model,
+    variant: opts.variant,
+    agent: opts.agent,
+    authProfile: providerAuthProfileFromOpts(opts, provider),
+    addDirs: listFromRepeatedOpts(opts.addDir),
+    timeoutMs: timeoutDuration(opts.timeout, "--timeout"),
+    configIsolation: opts.configIsolation,
+    permissionMode: permissionModeFromOpts(opts, provider),
+    sandbox: sandboxFromOpts(opts, provider),
+    allowlist: allowlistFromOpts(opts),
+    account: accountFromOpts(opts),
+    preflight: runtimePreflightFromOpts(opts),
+  }, { name, type: "agent", provider }, { baseDir: process.cwd() });
+  const input = baseCreateInput(name, opts, target);
+  const preflight = opts.preflight
+    ? preflightLoopTarget(input.target as Exclude<LoopTarget, { type: "workflow" }>, { name, type: "agent", provider }, { loopName: name }, { machine: input.machine })
+    : undefined;
+  const cloud = resolveCloudLoopStore();
+  if (cloud) {
+    const loop = await cloud.createLoop(input);
+    printCreatedLoop(loop, `created loop ${loop.id} (${loop.name}) next=${loop.nextRunAt}`, preflight);
+    return;
+  }
   const store = new Store();
   try {
-    const target = normalizeLoopTargetForStorage({
-      type: "agent",
-      provider,
-      prompt: opts.prompt,
-      promptFile: opts.promptFile,
-      cwd: opts.cwd,
-      model: opts.model,
-      variant: opts.variant,
-      agent: opts.agent,
-      authProfile: providerAuthProfileFromOpts(opts, provider),
-      addDirs: listFromRepeatedOpts(opts.addDir),
-      timeoutMs: timeoutDuration(opts.timeout, "--timeout"),
-      configIsolation: opts.configIsolation,
-      permissionMode: permissionModeFromOpts(opts, provider),
-      sandbox: sandboxFromOpts(opts, provider),
-      allowlist: allowlistFromOpts(opts),
-      account: accountFromOpts(opts),
-      preflight: runtimePreflightFromOpts(opts),
-    }, { name, type: "agent", provider }, { baseDir: process.cwd() });
-    const input = baseCreateInput(name, opts, target);
-    const preflight = opts.preflight
-      ? preflightLoopTarget(input.target as Exclude<LoopTarget, { type: "workflow" }>, { name, type: "agent", provider }, { loopName: name }, { machine: input.machine })
-      : undefined;
     const loop = store.createLoop(input);
     printCreatedLoop(loop, `created loop ${loop.id} (${loop.name}) next=${loop.nextRunAt}`, preflight);
   } finally {
@@ -817,12 +848,46 @@ selfHosted
 
 selfHosted
   .command("push")
-  .description("preview local rows that would be pushed to self-hosted")
+  .description("preview (default) or apply an id-preserving local->self-hosted backfill")
   .option("--api-url <url>", "self-hosted control-plane API URL")
-  .option("--dry-run", "preview only; self-hosted push does not apply remote changes yet")
-  .option("--no-runs", "omit loop run history from the preview")
+  .option("--apply", "apply the backfill via the control-plane /v1/import endpoint (default is preview)")
+  .option("--replace", "update existing remote rows whose id matches (default: leave existing rows unchanged)")
+  .option("--dry-run", "preview only; equivalent to omitting --apply")
+  .option("--no-runs", "omit loop run history")
   .option("--json", "print JSON")
-  .action(selfHostedMigrationCommand("self-hosted-push"));
+  .action(runAction(async (opts: { apiUrl?: string; apply?: boolean; replace?: boolean; dryRun?: boolean; runs?: boolean; json?: boolean }) => {
+    if (!opts.apply || opts.dryRun) {
+      const store = new Store();
+      try {
+        const plan = await buildSelfHostedMigrationPlan(store, {
+          operation: "self-hosted-push",
+          apiUrl: opts.apiUrl,
+          includeRuns: opts.runs,
+        });
+        printMigrationPlan(plan, opts);
+      } finally {
+        store.close();
+      }
+      return;
+    }
+    const store = new Store();
+    try {
+      const result = await applySelfHostedPush(store, {
+        apiUrl: opts.apiUrl,
+        includeRuns: opts.runs,
+        replace: opts.replace,
+      });
+      if (isJson() || opts.json) console.log(JSON.stringify(result, null, 2));
+      else {
+        console.log(
+          `pushed workflows=${result.applied.workflows} loops=${result.applied.loops} runs=${result.applied.runs} ` +
+            `(skipped running=${result.skipped.runningRuns} orphan-runs=${result.skipped.orphanRuns}, ${result.requests} requests) -> ${result.apiUrl}`,
+        );
+      }
+    } finally {
+      store.close();
+    }
+  }));
 
 selfHosted
   .command("pull")
@@ -1060,15 +1125,19 @@ routes
 
 routes
   .command("requeue <id>")
-  .description("requeue a terminal admission work item for the next task/event delivery")
+  .description("requeue a terminal admission work item for the next task/event delivery (resets the redispatch attempt count so the unwedge is durable; --keep-attempts preserves it)")
   .option("--reason <text>", "operator reason recorded on the work item")
+  .option("--keep-attempts", "preserve the redispatch attempt count instead of resetting it (cautious path: the item may re-cap after one more terminal run)")
   .action(runAction((id, opts) => {
     const store = new Store();
     try {
       const reason = stringField(opts.reason);
       if (!reason) throw new ValidationError("routes requeue requires --reason <text>");
-      const item = store.requeueWorkflowWorkItem(id, { reason });
-      print(publicWorkflowWorkItem(item), `requeued route work item ${item.id} (${item.routeKey})`);
+      const item = store.requeueWorkflowWorkItem(id, { reason, resetAttempts: !opts.keepAttempts });
+      print(
+        publicWorkflowWorkItem(item),
+        `requeued route work item ${item.id} (${item.routeKey}) — ${opts.keepAttempts ? "attempts preserved" : "attempts reset"}`,
+      );
     } finally {
       store.close();
     }
@@ -1095,6 +1164,81 @@ routes
     }
   }));
 
+const routePolicies = routes.command("policies").alias("presets").description("inspect named route drain policies");
+
+routePolicies
+  .command("list")
+  .alias("ls")
+  .description("list named route drain policies")
+  .action(runAction(() => {
+    const policies = listRoutePolicies();
+    if (isJson()) {
+      print(policies.map((policy) => ({
+        id: policy.id,
+        title: policy.title,
+        routeKind: policy.routeKind,
+        safety: policy.safety,
+        aliases: policy.aliases,
+        source: policy.source,
+      })));
+      return;
+    }
+    for (const policy of policies) {
+      console.log(`${policy.id}\t${policy.safety}\t${policy.routeKind}\t${policy.title}`);
+    }
+  }));
+
+routePolicies
+  .command("show <id>")
+  .description("show one named route drain policy")
+  .action(runAction((id) => {
+    const rendered = renderRoutePolicy(id);
+    if (isJson()) print(rendered.policy);
+    else {
+      const policy = rendered.policy;
+      console.log(`${policy.id} (${policy.safety})`);
+      console.log(policy.title);
+      console.log(policy.description);
+      console.log(`source: ${policy.source}`);
+      if (policy.aliases?.length) console.log(`aliases: ${policy.aliases.join(",")}`);
+      if (policy.notes?.length) {
+        for (const note of policy.notes) console.log(`note: ${note}`);
+      }
+    }
+  }));
+
+routePolicies
+  .command("render <id>")
+  .description("render a named route policy as explicit replayable route drain arguments")
+  .action(runAction((id) => {
+    const rendered = renderRoutePolicy(id);
+    if (isJson()) print(rendered);
+    else {
+      console.log(rendered.command);
+      if (rendered.schedule.every) console.log(`schedule: --every ${rendered.schedule.every}`);
+      else if (rendered.schedule.cron) console.log(`schedule: --cron ${rendered.schedule.cron}`);
+      else if (rendered.schedule.at) console.log(`schedule: --at ${rendered.schedule.at}`);
+      else if (rendered.schedule.dynamic) console.log("schedule: --dynamic");
+    }
+  }));
+
+routePolicies
+  .command("validate [id]")
+  .description("validate one named route policy, or all policies when id is omitted")
+  .action(runAction((id) => {
+    const rendered = id ? [validateRoutePolicy(id)] : listRoutePolicies().map((policy) => validateRoutePolicy(policy.id));
+    const value = {
+      ok: true,
+      policies: rendered.map((entry) => ({
+        id: entry.policy.id,
+        safety: entry.policy.safety,
+        routeKind: entry.policy.routeKind,
+        explicitArgCount: entry.args.length,
+      })),
+    };
+    print(value, `valid route policies: ${value.policies.map((policy) => policy.id).join(",")}`);
+  }));
+
 async function handleRouteEvent(kind: string, opts: TodosTaskRouteOptions): Promise<void> {
   const event = await readEventEnvelopeInput(opts);
   const result = routeEventByKind(kind, event, opts);
@@ -1103,7 +1247,8 @@ async function handleRouteEvent(kind: string, opts: TodosTaskRouteOptions): Prom
 
 function handleRouteDrain(kind: string, opts: TodosDrainOptions): void {
   if (kind !== "todos-task") throw new ValidationError("route drain currently supports kind todos-task");
-  const result = drainTodosTaskRoutes(opts);
+  const expandedOpts = applyRoutePolicyToDrainOptions(opts, { requireExplicitSafety: true });
+  const result = drainTodosTaskRoutes(expandedOpts);
   print(result.value, result.human);
   // Non-skippable route errors are captured per-task so the batch completes, but
   // the run must not report success: a systemic misconfig where every candidate
@@ -1147,22 +1292,20 @@ addScheduleOptions(
   ),
 ).action(runAction((kind, name, opts) => {
   if (kind !== "todos-task") throw new ValidationError("route schedule currently supports kind todos-task");
-  todosTaskRouteTemplateId(opts);
+  const expandedOpts = applyRoutePolicyToScheduleOptions(opts);
+  todosTaskRouteTemplateId(expandedOpts);
   const store = new Store();
   try {
     const target: LoopTarget = {
       type: "command",
       command: "loops",
-      args: ["--json", ...routeDrainArgs({ ...opts, compact: opts.compact ?? true })],
+      args: ["--json", ...routeDrainArgs({ ...expandedOpts, compact: expandedOpts.compact ?? true })],
       timeoutMs: parseDuration("20m"),
-      preflight: runtimePreflightFromOpts(opts),
+      preflight: runtimePreflightFromOpts(expandedOpts),
     };
-    const input = baseCreateInput(name, opts, target);
-    const preflight = opts.preflight
-      ? preflightLoopTarget(input.target as Exclude<LoopTarget, { type: "workflow" }>, { name, type: "route-drain", kind }, { loopName: name }, { machine: input.machine })
-      : undefined;
+    const input = baseCreateInput(name, expandedOpts, target);
     const loop = store.createLoop(input);
-    printCreatedLoop(loop, `created route drain loop ${loop.id} (${loop.name}) next=${loop.nextRunAt}`, preflight);
+    printCreatedLoop(loop, `created route drain loop ${loop.id} (${loop.name}) next=${loop.nextRunAt}`);
   } finally {
     store.close();
   }
@@ -1720,21 +1863,26 @@ program
   .option("--status <status>", "filter by status")
   .option("--archived", "show only archived loops")
   .option("--all", "include archived loops")
-  .action(runAction((opts) => {
+  .action(runAction(async (opts) => {
     if (opts.archived && opts.all) throw new ValidationError("use either --archived or --all, not both");
-    const store = new Store();
-    try {
-      const loops = store.listLoops({ status: opts.status, archived: opts.archived, includeArchived: opts.all });
-      if (isJson()) print(loops.map(publicLoop));
-      else {
-        for (const loop of loops) {
-          const machine = loop.machine ? `  machine=${loop.machine.id}` : "";
-          const archive = loop.archivedAt ? `  archived=${loop.archivedAt} from=${loop.archivedFromStatus ?? "-"}` : "";
-          console.log(`${loop.id}  ${loop.status.padEnd(7)}  cadence=${scheduleLabel(loop.schedule)}  next=${loop.nextRunAt ?? "-"}  ${loop.name}${machine}${archive}`);
-        }
+    const cloud = resolveCloudLoopStore();
+    const loops = cloud
+      ? await cloud.listLoops({ status: opts.status, archived: opts.archived, includeArchived: opts.all })
+      : (() => {
+          const store = new Store();
+          try {
+            return store.listLoops({ status: opts.status, archived: opts.archived, includeArchived: opts.all });
+          } finally {
+            store.close();
+          }
+        })();
+    if (isJson()) print(loops.map(publicLoop));
+    else {
+      for (const loop of loops) {
+        const machine = loop.machine ? `  machine=${loop.machine.id}` : "";
+        const archive = loop.archivedAt ? `  archived=${loop.archivedAt} from=${loop.archivedFromStatus ?? "-"}` : "";
+        console.log(`${loop.id}  ${loop.status.padEnd(7)}  cadence=${scheduleLabel(loop.schedule)}  next=${loop.nextRunAt ?? "-"}  ${loop.name}${machine}${archive}`);
       }
-    } finally {
-      store.close();
     }
   }));
 
@@ -1753,7 +1901,12 @@ program
     await runLoopsUiApp({ refreshMs });
   }));
 
-program.command("show <idOrName>").description("show one loop by id or name").action(runAction((idOrName) => {
+program.command("show <idOrName>").description("show one loop by id or name").action(runAction(async (idOrName) => {
+  const cloud = resolveCloudLoopStore();
+  if (cloud) {
+    print(publicLoop(await cloud.requireLoop(idOrName)));
+    return;
+  }
   const store = new Store();
   try {
     print(publicLoop(store.requireLoop(idOrName)));
@@ -1779,6 +1932,67 @@ program
             `${run.id}  ${run.status.padEnd(10)}  attempt=${run.attempt}  slot=${run.scheduledFor}  ${run.loopName}`,
           );
           if (opts.showOutput) printTextOutput(run);
+        }
+      }
+    } finally {
+      store.close();
+    }
+  }));
+
+const receipts = program.command("receipts").description("read and write scheduler-neutral run receipts");
+
+receipts
+  .command("write")
+  .description("write a bounded run receipt from JSON")
+  .option("--file <path>", "receipt JSON file; use - for stdin", "-")
+  .action(runAction((opts) => {
+    const store = new Store();
+    try {
+      const receipt = store.writeRunReceipt(parseReceiptFile(opts.file));
+      print(publicRunReceipt(receipt), `receipt ${receipt.run_id} ${receipt.status} digest=${receipt.digest_id}`);
+    } finally {
+      store.close();
+    }
+  }));
+
+receipts
+  .command("read <runId>")
+  .description("read one run receipt by run id")
+  .action(runAction((runId) => {
+    const store = new Store();
+    try {
+      const receipt = store.getRunReceipt(runId);
+      if (!receipt) throw new ValidationError(`run receipt not found: ${runId}`);
+      print(publicRunReceipt(receipt), `receipt ${receipt.run_id} ${receipt.status} digest=${receipt.digest_id}`);
+    } finally {
+      store.close();
+    }
+  }));
+
+receipts
+  .command("list")
+  .description("list run receipts")
+  .option("--loop-id <id>", "filter by loop_id")
+  .option("--repo <repo>", "filter by repo")
+  .option("--task-id <id>", "filter by task id")
+  .option("--knowledge-id <id>", "filter by knowledge id")
+  .option("--status <status>", "filter by status")
+  .option("--limit <n>", "limit", "50")
+  .action(runAction((opts) => {
+    const store = new Store();
+    try {
+      const values = store.listRunReceipts({
+        loopId: opts.loopId,
+        repo: opts.repo,
+        taskId: opts.taskId,
+        knowledgeId: opts.knowledgeId,
+        status: opts.status,
+        limit: positiveInteger(opts.limit, "--limit") ?? 50,
+      });
+      if (isJson()) print(values.map(publicRunReceipt));
+      else {
+        for (const receipt of values) {
+          console.log(`${receipt.run_id}  ${receipt.status.padEnd(10)}  loop=${receipt.loop_id}  repo=${receipt.repo}`);
         }
       }
     } finally {
@@ -2269,7 +2483,22 @@ program
     }
   }));
 
-function updateStatus(idOrName: string, status: "paused" | "active" | "stopped"): void {
+async function updateStatus(idOrName: string, status: "paused" | "active" | "stopped"): Promise<void> {
+  const cloud = resolveCloudLoopStore();
+  if (cloud) {
+    const loop = await cloud.requireLoop(idOrName);
+    if (loop.archivedAt) throw new Error(`loop is archived; run 'loops unarchive ${idOrName}' first`);
+    let nextRunAt = loop.nextRunAt;
+    if (status === "stopped") {
+      nextRunAt = undefined;
+    } else if (status === "active" && !loop.nextRunAt) {
+      const now = new Date();
+      nextRunAt = computeNextAfter(loop.schedule, now, now);
+    }
+    const updated = await cloud.updateLoop(loop.id, { status, nextRunAt });
+    print(publicLoop(updated), `${updated.id} ${updated.status}`);
+    return;
+  }
   const store = new Store();
   try {
     // requireUniqueLoop so an ambiguous name errors instead of mutating the
@@ -2297,7 +2526,13 @@ program
   .command("remove <idOrName>")
   .alias("rm")
   .description("delete a loop and its run history")
-  .action(runAction((idOrName) => {
+  .action(runAction(async (idOrName) => {
+    const cloud = resolveCloudLoopStore();
+    if (cloud) {
+      const removed = await cloud.deleteLoop(idOrName);
+      print({ removed }, removed ? "removed" : "not removed");
+      return;
+    }
     const store = new Store();
     try {
       // requireUniqueLoop so an ambiguous name errors instead of deleting the
@@ -2309,7 +2544,13 @@ program
     }
   }));
 
-program.command("archive <idOrName>").description("archive a loop without deleting history").action(runAction((idOrName) => {
+program.command("archive <idOrName>").description("archive a loop without deleting history").action(runAction(async (idOrName) => {
+  const cloud = resolveCloudLoopStore();
+  if (cloud) {
+    const loop = await cloud.archiveLoop(idOrName);
+    print(publicLoop(loop), `${loop.id} archived`);
+    return;
+  }
   const store = new Store();
   try {
     const loop = store.archiveLoop(idOrName);
@@ -2319,7 +2560,13 @@ program.command("archive <idOrName>").description("archive a loop without deleti
   }
 }));
 
-program.command("unarchive <idOrName>").alias("restore").description("restore an archived loop").action(runAction((idOrName) => {
+program.command("unarchive <idOrName>").alias("restore").description("restore an archived loop").action(runAction(async (idOrName) => {
+  const cloud = resolveCloudLoopStore();
+  if (cloud) {
+    const loop = await cloud.unarchiveLoop(idOrName);
+    print(publicLoop(loop), `${loop.id} ${loop.status}`);
+    return;
+  }
   const store = new Store();
   try {
     const loop = store.unarchiveLoop(idOrName);

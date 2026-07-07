@@ -1,4 +1,15 @@
-import type { CreateLoopInput, Goal, GoalRun, Loop, LoopRun, LoopStatus, OpenAutomationsRuntimeBinding, RunStatus } from "../types.js";
+import type {
+  CreateLoopInput,
+  Goal,
+  GoalRun,
+  Loop,
+  LoopRun,
+  LoopStatus,
+  OpenAutomationsRuntimeBinding,
+  RunReceipt,
+  RunStatus,
+  WriteRunReceiptInput,
+} from "../types.js";
 import { daemonStatus } from "../daemon/control.js";
 import { runDoctor, type DoctorReport } from "../lib/doctor.js";
 import { LoopNotFoundError } from "../lib/errors.js";
@@ -66,6 +77,15 @@ export interface ListLoopsFilters {
 
 export interface ListRunsFilters {
   status?: RunStatus;
+  limit?: number;
+}
+
+export interface ListRunReceiptsFilters {
+  loopId?: string;
+  repo?: string;
+  taskId?: string;
+  knowledgeId?: string;
+  status?: string;
   limit?: number;
 }
 
@@ -148,6 +168,18 @@ export class LoopsClient {
       }
     }
     return this.store.listRuns({ loopId, status: filters.status, limit: filters.limit });
+  }
+
+  writeReceipt(input: WriteRunReceiptInput): RunReceipt {
+    return this.store.writeRunReceipt(input);
+  }
+
+  receipt(runId: string): RunReceipt | undefined {
+    return this.store.getRunReceipt(runId);
+  }
+
+  receipts(filters: ListRunReceiptsFilters = {}): RunReceipt[] {
+    return this.store.listRunReceipts(filters);
   }
 
   doctor(): DoctorReport {

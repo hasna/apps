@@ -1,10 +1,13 @@
 import { resolve } from "node:path";
 import type { EventEnvelope } from "@hasna/events";
 import { redact } from "../format.js";
+import { ValidationError } from "../errors.js";
 import type { Loop, WorkflowSpec } from "../../types.js";
 import { objectField, stringField, tagsFromValue, taskEventField } from "./fields.js";
 import { listFromRepeatedOpts, positiveInteger, splitList } from "./parse.js";
+import { providerActiveCapFromOpts } from "./provider-admission.js";
 import { routeTodosTaskEvent, todosTaskRouteTemplateId } from "./route-event.js";
+import { routePolicyEvidenceFromOptions } from "./policies.js";
 import { normalizeRoutePath } from "./throttle.js";
 import { defaultLoopsProject, runLocalCommand, runLocalCommandWithStdoutFile, todosMutationSummary } from "./todos-cli.js";
 import { writeRouteEvidence } from "./cursors.js";
@@ -45,6 +48,16 @@ function taskProjectPath(task: TodosReadyTask): string | undefined {
     taskEventField(metadata, ["working_dir", "workingDir", "cwd"]);
 }
 
+function taskSourceWorkingDir(task: TodosReadyTask): string | undefined {
+  const metadata = objectField(task.metadata) ?? {};
+  return taskField(task, ["working_dir", "workingDir", "cwd"]) ??
+    taskEventField(metadata, ["working_dir", "workingDir", "cwd"]);
+}
+
+function canonicalRoutePath(path: string | undefined): string | undefined {
+  return normalizeRoutePath(path) ?? (path?.trim() ? resolve(path) : undefined);
+}
+
 function taskListValues(task: TodosReadyTask): string[] {
   const taskList = objectField(task.task_list) as
     | {
@@ -62,12 +75,14 @@ function taskListValues(task: TodosReadyTask): string[] {
   ].filter((value): value is string => Boolean(value));
 }
 
-function taskDrainEvent(task: TodosReadyTask, sourceProjectPath?: string): EventEnvelope {
+function taskDrainEvent(task: TodosReadyTask, sourceProjectPath?: string, explicitRouteProjectPath?: string): EventEnvelope {
   const taskId = taskField(task, ["id", "task_id", "taskId"]);
   if (!taskId) throw new Error("todos ready returned a task without an id");
   const metadata = { ...(objectField(task.metadata) ?? {}) };
   const workingDir = taskProjectPath(task);
+  const sourceWorkingDir = taskSourceWorkingDir(task);
   const routeWorkingDir = taskField(task, ["project_path", "projectPath"]) ?? workingDir;
+  const routeProjectPath = canonicalRoutePath(explicitRouteProjectPath) ?? routeWorkingDir;
   const sourceProject = sourceProjectPath?.trim();
   if (!sourceProject) {
     delete metadata.source_project_path;
@@ -86,18 +101,30 @@ function taskDrainEvent(task: TodosReadyTask, sourceProjectPath?: string): Event
     delete data.source_project_path;
     delete data.sourceProjectPath;
   }
-  if (workingDir) {
-    data.working_dir = routeWorkingDir;
-    data.project_path = routeWorkingDir;
-    data.cwd = taskField(task, ["cwd"]) ?? routeWorkingDir;
+  if (routeProjectPath) {
+    data.working_dir = routeProjectPath;
+    data.project_path = routeProjectPath;
+    data.cwd = routeProjectPath;
+    data.route_project_path = routeProjectPath;
+    data.routeProjectPath = routeProjectPath;
+    metadata.route_project_path = routeProjectPath;
+    metadata.routeProjectPath = routeProjectPath;
+  }
+  if (workingDir && routeProjectPath && canonicalRoutePath(workingDir) !== canonicalRoutePath(routeProjectPath)) {
+    data.source_task_project_path = workingDir;
+    metadata.source_task_project_path = workingDir;
+  }
+  if (sourceWorkingDir && routeProjectPath && canonicalRoutePath(sourceWorkingDir) !== canonicalRoutePath(routeProjectPath)) {
+    data.source_task_working_dir = sourceWorkingDir;
+    metadata.source_task_working_dir = sourceWorkingDir;
   }
   if (sourceProject) {
     data.source_project_path = sourceProject;
     if (!data.project_path) data.project_path = sourceProject;
-    data.route_project_path = data.project_path;
-    data.routeProjectPath = data.project_path;
-    metadata.route_project_path = data.project_path;
-    metadata.routeProjectPath = data.project_path;
+    if (!data.route_project_path) data.route_project_path = data.project_path;
+    if (!data.routeProjectPath) data.routeProjectPath = data.project_path;
+    if (!metadata.route_project_path) metadata.route_project_path = data.project_path;
+    if (!metadata.routeProjectPath) metadata.routeProjectPath = data.project_path;
   }
   const time = new Date().toISOString();
   return {
@@ -112,7 +139,7 @@ function taskDrainEvent(task: TodosReadyTask, sourceProjectPath?: string): Event
     metadata: {
       ...metadata,
       ...(sourceProject ? { source_project_path: sourceProject } : {}),
-      ...(workingDir ? { working_dir: workingDir, project_path: data.project_path, cwd: data.cwd } : {}),
+      ...(routeProjectPath ? { working_dir: routeProjectPath, project_path: data.project_path, cwd: data.cwd } : {}),
       drained_by: "@hasna/loops",
       drained_from: "todos ready",
     },
@@ -124,20 +151,26 @@ function compactDrainResult(result: TodosTaskRoutePrint): Record<string, unknown
   const event = objectField(value.event) as Partial<EventEnvelope> | undefined;
   const loop = objectField(value.loop) as Partial<Loop> | undefined;
   const workflow = objectField(value.workflow) as Partial<WorkflowSpec> | undefined;
+  const workItem = objectField(value.workItem);
   const throttle = objectField(value.throttle) as { reason?: string; allowed?: boolean } | undefined;
   const requeue = objectField(value.requeue);
   const providerRouting = objectField(value.providerRouting);
+  const providerAdmission = objectField(value.providerAdmission);
   return {
     kind: result.kind,
     taskId: event?.subject,
     eventId: event?.id,
     idempotencyKey: stringField(value.idempotencyKey),
+    workItemId: stringField(workItem?.id),
+    workItemStatus: stringField(workItem?.status),
+    machineId: stringField(workItem?.machineId),
     reason: stringField(value.reason) ?? throttle?.reason,
     loopId: stringField(loop?.id),
     loopName: stringField(loop?.name),
     workflowId: stringField(workflow?.id),
     workflowName: stringField(workflow?.name),
     providerRouting,
+    providerAdmission,
     // Per-role codewith account attribution + the route scope that gates
     // --max-active, so drain reports show which account each step ran on and the
     // least-loaded spread is auditable.
@@ -145,6 +178,9 @@ function compactDrainResult(result: TodosTaskRoutePrint): Record<string, unknown
     routeScope: stringField(value.routeScope),
     requeue,
     queuedAtSource: value.queuedAtSource,
+    // Surface a redispatch-cap dead-letter in compact/cron output too, so a
+    // capped task is visible and not mistaken for an ordinary dedupe.
+    deadLettered: value.deadLettered === true ? true : undefined,
     // Preserve the non-skippable-error marker so compact/cron output still
     // exposes it; otherwise a fully-fatal drain looks identical to a no-op.
     fatal: value.fatal === true ? true : undefined,
@@ -153,6 +189,106 @@ function compactDrainResult(result: TodosTaskRoutePrint): Record<string, unknown
 
 interface TodosProjectDescriptor {
   path: string;
+}
+
+interface LaunchGateBlockerRef {
+  projectPath: string;
+  taskId: string;
+  raw: string;
+}
+
+interface LaunchGateBlockerStatus extends LaunchGateBlockerRef {
+  status?: string;
+  title?: string;
+  resolved: boolean;
+  error?: string;
+}
+
+interface LaunchGateEvaluation {
+  configured: true;
+  name?: string;
+  blocked: boolean;
+  reason: string;
+  blockers: LaunchGateBlockerStatus[];
+}
+
+const LAUNCH_GATE_RESOLVED_STATUSES = new Set(["completed", "done"]);
+
+function parseLaunchGateBlocker(raw: string): LaunchGateBlockerRef {
+  const value = raw.trim();
+  if (!value) throw new ValidationError("--launch-gate-blocker entries cannot be empty");
+  const delimiter = value.includes("::") ? "::" : value.includes("#") ? "#" : ":";
+  const index = value.lastIndexOf(delimiter);
+  if (index <= 0 || index + delimiter.length >= value.length) {
+    throw new ValidationError("--launch-gate-blocker must use <todos-project-path>::<task-id>");
+  }
+  const projectPath = value.slice(0, index).trim();
+  const taskId = value.slice(index + delimiter.length).trim();
+  if (!projectPath || !taskId) throw new ValidationError("--launch-gate-blocker must include both project path and task id");
+  return { projectPath, taskId, raw };
+}
+
+function parseTodosTaskJson(stdout: string): Record<string, unknown> {
+  const parsed = JSON.parse(stdout || "{}");
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("todos inspect returned a non-object value");
+  return parsed as Record<string, unknown>;
+}
+
+function inspectLaunchGateBlocker(ref: LaunchGateBlockerRef): LaunchGateBlockerStatus {
+  const result = runLocalCommand("todos", ["--project", ref.projectPath, "--json", "inspect", ref.taskId], {
+    timeoutMs: 30_000,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  if (!result.ok) {
+    return {
+      ...ref,
+      resolved: false,
+      error: redact(result.stderr || result.error || `todos inspect failed with status ${result.status}`, 320),
+    };
+  }
+  try {
+    const task = parseTodosTaskJson(result.stdout);
+    const status = stringField(task.status)?.trim().toLowerCase();
+    const title = stringField(task.title);
+    return {
+      ...ref,
+      status,
+      title: title ? redact(title, 160) : undefined,
+      resolved: Boolean(status && LAUNCH_GATE_RESOLVED_STATUSES.has(status)),
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ...ref,
+      resolved: false,
+      error: redact(`failed to parse todos inspect JSON: ${message}`, 320),
+    };
+  }
+}
+
+function evaluateLaunchGate(opts: TodosDrainOptions): LaunchGateEvaluation | undefined {
+  const blockerRefs = listFromRepeatedOpts(opts.launchGateBlocker) ?? [];
+  if (blockerRefs.length === 0 && !opts.launchGate?.trim()) return undefined;
+  if (blockerRefs.length === 0) {
+    throw new ValidationError("--launch-gate requires at least one --launch-gate-blocker");
+  }
+  const blockers = blockerRefs.map((entry) => inspectLaunchGateBlocker(parseLaunchGateBlocker(entry)));
+  const unresolved = blockers.filter((blocker) => !blocker.resolved);
+  const name = opts.launchGate?.trim() || undefined;
+  const blocked = unresolved.length > 0;
+  const label = name ? `launch gate ${name}` : "launch gate";
+  const reason = blocked
+    ? `${label} blocked by unresolved task(s): ${unresolved.map((blocker) =>
+        `${blocker.taskId} status=${blocker.status ?? "unknown"}${blocker.error ? " error=inspect-failed" : ""}`,
+      ).join(", ")}`
+    : `${label} open; all blocker tasks are completed`;
+  return {
+    configured: true,
+    name,
+    blocked,
+    reason,
+    blockers,
+  };
 }
 
 function parseTodosReadyJson(stdout: string): unknown {
@@ -273,6 +409,17 @@ function skippedDrainTask(
   extra: Record<string, unknown> = {},
 ): TodosTaskRoutePrint {
   const taskId = taskField(task, ["id", "task_id", "taskId"]) ?? event?.subject ?? "unknown";
+  const eventData = objectField(event?.data);
+  const eventMetadata = objectField((event as { metadata?: unknown } | undefined)?.metadata);
+  const routeProjectPath = taskEventField(eventData ?? {}, ["route_project_path", "routeProjectPath", "project_path", "projectPath", "working_dir", "workingDir", "cwd"]);
+  const sourceTaskProjectPath =
+    taskEventField(eventData ?? {}, ["source_task_project_path", "sourceTaskProjectPath"]) ??
+    taskEventField(eventMetadata ?? {}, ["source_task_project_path", "sourceTaskProjectPath"]) ??
+    taskProjectPath(task);
+  const sourceTaskWorkingDir =
+    taskEventField(eventData ?? {}, ["source_task_working_dir", "sourceTaskWorkingDir"]) ??
+    taskEventField(eventMetadata ?? {}, ["source_task_working_dir", "sourceTaskWorkingDir"]) ??
+    taskSourceWorkingDir(task);
   return {
     kind: "skipped",
     value: {
@@ -281,6 +428,9 @@ function skippedDrainTask(
       taskId,
       event,
       routeError: true,
+      routeProjectPath,
+      sourceTaskProjectPath,
+      sourceTaskWorkingDir,
       ...extra,
     },
     human: `skipped task ${taskId}: ${reason}`,
@@ -359,14 +509,92 @@ export interface DrainResult {
 }
 
 export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
+  providerActiveCapFromOpts(opts);
   const maxDispatch = positiveInteger(opts.maxDispatch ?? "1", "--max-dispatch") ?? 1;
   const todosProject = opts.todosProject ?? defaultLoopsProject();
   const requiredTags = splitList(opts.tags ?? opts.tag) ?? [];
-  const taskListFilter = opts.todosProjectsFromRegistry ? opts.taskList?.trim() : resolveTaskListFilter(todosProject, opts.taskList);
   const candidateLimit = positiveInteger(opts.limit ?? "50", "--limit") ?? 50;
-  const hasPostFilters = Boolean(opts.todosProjectId || taskListFilter || opts.projectPathPrefix || requiredTags.length);
+  const hasPostFilters = Boolean(opts.todosProjectId || opts.taskList || opts.projectPathPrefix || requiredTags.length);
   const defaultScanLimit = hasPostFilters ? Math.max(candidateLimit, 500) : candidateLimit;
   const scanLimit = positiveInteger(opts.scanLimit ?? String(defaultScanLimit), "--scan-limit") ?? defaultScanLimit;
+  const templateId = todosTaskRouteTemplateId(opts);
+  const routePolicy = routePolicyEvidenceFromOptions(opts);
+  const launchGate = evaluateLaunchGate(opts);
+  if (launchGate?.blocked) {
+    const report = {
+      drainedAt: new Date().toISOString(),
+      todosProject,
+      routePolicy,
+      templateId,
+      todosProjectId: opts.todosProjectId,
+      taskList: opts.taskList,
+      taskListId: undefined,
+      projectPathPrefix: opts.projectPathPrefix,
+      tags: requiredTags,
+      limit: candidateLimit,
+      scanLimit,
+      filtersApplied: hasPostFilters,
+      scanned: 0,
+      candidates: 0,
+      filteredCandidates: 0,
+      scanExhausted: false,
+      considered: 0,
+      created: 0,
+      deduped: 0,
+      deadLettered: 0,
+      throttled: 0,
+      skipped: 0,
+      freshnessClosed: 0,
+      fatal: 0,
+      blocked: 1,
+      maxDispatch,
+      source: "todos ready",
+      dryRun: Boolean(opts.dryRun),
+      launchGate,
+      results: [],
+    };
+    const evidencePath = writeRouteEvidence("todos-task-drain", report, opts.evidenceDir);
+    const value = opts.compact
+      ? {
+          drainedAt: report.drainedAt,
+          todosProject: report.todosProject,
+          routePolicy: report.routePolicy,
+          templateId: report.templateId,
+          todosProjectId: report.todosProjectId,
+          taskList: report.taskList,
+          taskListId: report.taskListId,
+          projectPathPrefix: report.projectPathPrefix,
+          tags: report.tags,
+          limit: report.limit,
+          scanLimit: report.scanLimit,
+          filtersApplied: report.filtersApplied,
+          scanned: report.scanned,
+          candidates: report.candidates,
+          filteredCandidates: report.filteredCandidates,
+          scanExhausted: report.scanExhausted,
+          considered: report.considered,
+          created: report.created,
+          deduped: report.deduped,
+          deadLettered: report.deadLettered,
+          throttled: report.throttled,
+          skipped: report.skipped,
+          freshnessClosed: report.freshnessClosed,
+          fatal: report.fatal,
+          blocked: report.blocked,
+          maxDispatch: report.maxDispatch,
+          source: report.source,
+          dryRun: report.dryRun,
+          launchGate,
+          evidencePath,
+          results: [],
+        }
+      : { ...report, evidencePath };
+    return {
+      value,
+      human: `blocked todos ready drain: ${launchGate.reason}`,
+    };
+  }
+  const taskListFilter = opts.todosProjectsFromRegistry ? opts.taskList?.trim() : resolveTaskListFilter(todosProject, opts.taskList);
   const ready = loadReadyTodosTasks(opts, scanLimit);
   const filteredCandidates = ready.filter((task) => taskMatchesDrainFilters(task, {
     projectId: opts.todosProjectId,
@@ -383,9 +611,11 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
     let result: TodosTaskRoutePrint;
     try {
       const sourceProject = opts.todosProjectsFromRegistry ? taskField(task, ["source_project_path", "sourceProjectPath"]) : undefined;
-      event = taskDrainEvent(task, sourceProject);
+      const explicitRouteProjectPath = sourceProject ? taskRoutePathFromRegistry(sourceProject) : opts.projectPath;
+      event = taskDrainEvent(task, sourceProject, explicitRouteProjectPath);
       result = routeTodosTaskEvent(event, {
         ...opts,
+        ...(explicitRouteProjectPath ? { projectPath: explicitRouteProjectPath } : {}),
         ...(sourceProject ? { sourceTodosProjectPath: sourceProject } : {}),
       });
     } catch (error) {
@@ -423,7 +653,8 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
   const report = {
     drainedAt: new Date().toISOString(),
     todosProject,
-    templateId: todosTaskRouteTemplateId(opts),
+    routePolicy,
+    templateId,
     todosProjectId: opts.todosProjectId,
     taskList: opts.taskList,
     taskListId: taskListFilter,
@@ -439,6 +670,10 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
     considered: results.length,
     created: results.filter((result) => result.kind === "created" && !result.value.deduped).length,
     deduped: results.filter((result) => result.kind === "deduped").length,
+    // Terminal work items the route dead-lettered because they hit the
+    // redispatch cap: the black hole made visible. Surfaced + counted so a
+    // capped, still-actionable task no longer silently reports created=0.
+    deadLettered: results.filter((result) => result.kind === "deduped" && result.value.deadLettered === true).length,
     throttled: results.filter((result) => result.kind === "throttled").length,
     skipped: results.filter((result) => result.kind === "skipped").length,
     // Tasks closed out of the queue because their PR is definitively
@@ -450,9 +685,11 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
     // where every candidate is fatal would otherwise report created=0 skipped=N
     // and exit 0; callers use this count to fail the run instead.
     fatal: results.filter((result) => result.value.fatal === true).length,
+    blocked: 0,
     maxDispatch,
     source: "todos ready",
     dryRun: Boolean(opts.dryRun),
+    launchGate,
     results: results.map((result) => ({ kind: result.kind, ...result.value })),
   };
   const evidencePath = writeRouteEvidence("todos-task-drain", report, opts.evidenceDir);
@@ -460,6 +697,7 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
     ? {
         drainedAt: report.drainedAt,
         todosProject: report.todosProject,
+        routePolicy: report.routePolicy,
         templateId: report.templateId,
         todosProjectId: report.todosProjectId,
         taskList: report.taskList,
@@ -476,19 +714,22 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
         considered: report.considered,
         created: report.created,
         deduped: report.deduped,
+        deadLettered: report.deadLettered,
         throttled: report.throttled,
         skipped: report.skipped,
         freshnessClosed: report.freshnessClosed,
         fatal: report.fatal,
+        blocked: report.blocked,
         maxDispatch: report.maxDispatch,
         source: report.source,
         dryRun: report.dryRun,
+        launchGate: report.launchGate,
         evidencePath,
         results: results.map(compactDrainResult),
       }
     : { ...report, evidencePath };
   return {
     value,
-    human: `drained todos ready queue: considered=${report.considered} created=${report.created} deduped=${report.deduped} throttled=${report.throttled} skipped=${report.skipped} freshnessClosed=${report.freshnessClosed} fatal=${report.fatal}`,
+    human: `drained todos ready queue: considered=${report.considered} created=${report.created} deduped=${report.deduped} deadLettered=${report.deadLettered} throttled=${report.throttled} skipped=${report.skipped} freshnessClosed=${report.freshnessClosed} fatal=${report.fatal}`,
   };
 }

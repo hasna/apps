@@ -5,6 +5,90 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## Unreleased
+
+## 0.4.18 (2026-07-07)
+
+Drain reliability: kill the todos-task redispatch "black hole" family. A
+still-actionable task whose runs kept finishing without closing it used to be
+deduped forever once its attempt count reached the cap (`considered=N created=0`
+with no signal), and purely infrastructural failures (a stale worktree
+registration, a tempfail retry-signal) burned that cap on tasks that never
+actually ran.
+
+### Fixed
+
+- **Redispatch cap no longer a silent black hole:** when a todos-task work item
+  reaches `MAX_TODOS_TASK_ROUTE_REDISPATCHES` (8) it is transitioned to a
+  visible `dead_letter` state instead of being deduped forever with no signal.
+  Drain reports gain a `deadLettered` count (and the deduped result carries
+  `deadLettered: true` + the reason), so a capped task is surfaced and an
+  operator can requeue it rather than the drain silently reporting `created=0`.
+- **Gate deaths no longer count toward the cap:** a run that dies before doing
+  real work — worktree preparation failure, or a fast (`<60s`) `triage`/`planner`
+  gate failure — has its attempt refunded by `finalizeWorkflowRun`, so an infra
+  fault cannot dead-letter a task that never reached its worker.
+- **`exit(75)` tempfail is requeueable, not dedupe-bait:** a step that exits 75
+  (`EX_TEMPFAIL`, "retry later") drops its work item back to `queued` with the
+  attempt refunded, so the "retry next tick" contract fires instead of leaving a
+  terminal row that counts toward the cap.
+- **`loops routes requeue` resets attempts by default:** an operator unwedge is
+  now durable rather than one-shot (a capped item no longer re-caps after a
+  single further terminal run). `--keep-attempts` preserves the count for the
+  cautious path; the bounded route-path re-admission still preserves attempts so
+  the cap keeps working.
+- **Executor self-heals a stale worktree registration:** on git's "missing but
+  already registered worktree" error, `ensureLocalWorktree` (and the remote
+  worktree-prep script) now runs `git worktree prune` and retries the add exactly
+  once — git's own prescribed remedy — before failing honestly. This removes the
+  single biggest burner of the redispatch cap at its source.
+
+### Changed
+
+- Documentation now names `loops-serve` as the Postgres-backed Hasna-owned
+  self-hosted control-plane host, keeps `loops-api` as the shared embeddable API
+  contract, and reserves `cloud` wording for the hosted SaaS contract rather
+  than the Hasna-owned self-hosted deployment.
+- The cutover and migration docs now match the 0.4.14 self-hosted backend:
+  `PostgresLoopStorage`, API-key auth, HTTP SDK, ARM64 deploy artifacts, and
+  `loops-serve migrate` are shipped; long-running runner daemon mode, workflow
+  execution over the runner protocol, and id-preserving remote import remain
+  follow-up work.
+
+## 0.4.15 – 0.4.17 (2026-07-06/07 — unpublished; first shipped with 0.4.18)
+
+These three versions were committed to `main` with version bumps but never
+published to npm individually; the 0.4.18 release is the first registry artifact
+that carries them. Consolidated here so the published history stays honest.
+
+### Added
+
+- **0.4.15** — self-hosted client mode: the CLI routes loop reads/writes to the
+  hosted `/v1` API when `self_hosted` mode is configured (#74).
+- **0.4.16** — id-preserving bulk import endpoint (`POST /v1/import`) for
+  self-hosted backfill, plus `loops self-hosted push --apply` in the CLI (#76).
+- **0.4.17** — `GET /v1/loops/count` and `GET /v1/runs/count` endpoints (#77).
+- Run receipt contract: run receipts table + API surface for verifiable run
+  evidence (`migrations/0005_run_receipts.sql` mirror).
+
+### Changed
+
+- **SQLite schema `user_version` 7 → 8** via ledger migrations
+  `0009_run_receipts` and `0010_work_item_machine_id` (additive; applied
+  automatically on first open). NOTE: binaries older than this range refuse to
+  open a migrated database ("schema version 8 is newer than this binary
+  supports"), so downgrading below 0.4.15 after opening a database with this
+  release requires restoring a pre-upgrade backup. A version-tolerance softening
+  (open unless a known-breaking delta) is planned follow-up work.
+- Launch-gated route drains: `--launch-gate`/`--launch-gate-blocker` hold a
+  drain closed until named blocker tasks are completed.
+
+### Fixed
+
+- codewith agent JSON output parsing (#17).
+- PR handoff: no-remote fallback repaired and handoff artifact errors scrubbed
+  from templates.
+
 ## 0.4.14 (2026-07-06)
 
 Self-hosted control-plane service brought to the full Hasna standard: all four

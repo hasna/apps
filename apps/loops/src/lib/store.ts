@@ -18,8 +18,11 @@ import type {
   LoopRun,
   LoopStatus,
   LoopTarget,
+  RunReceipt,
+  RunReceiptMachine,
   RunStatus,
   TimeoutMs,
+  WriteRunReceiptInput,
   WorkflowEvent,
   WorkflowInvocation,
   WorkflowRun,
@@ -45,6 +48,7 @@ import {
   discardWorkflowRunManifest,
   stageWorkflowRunManifest,
 } from "./run-artifacts.js";
+import { normalizeRunReceipt } from "./run-receipts.js";
 import { runLocalCommand, todosMutationSummary } from "./route/todos-cli.js";
 
 interface DaemonLeaseFence {
@@ -61,7 +65,7 @@ const LIVE_EXPIRED_RUN_GRACE_MS = 60_000;
  * numbered migration so older binaries refuse to open newer databases instead
  * of silently misreading them (checked against PRAGMA user_version).
  */
-const SCHEMA_USER_VERSION = 7;
+const SCHEMA_USER_VERSION = 8;
 const TERMINAL_RUN_STATUSES = ["succeeded", "failed", "timed_out", "abandoned", "skipped"] as const;
 const PRUNE_BATCH_SIZE = 400;
 const GENERATED_ROUTE_TEMPLATE_IDS = new Set(["todos-task-worker-verifier", "task-lifecycle", "event-worker-verifier"]);
@@ -113,6 +117,24 @@ export interface RunRow {
   stderr: string | null;
   error: string | null;
   goal_run_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RunReceiptRow {
+  loop_id: string;
+  run_id: string;
+  machine_json: string;
+  repo: string;
+  task_ids_json: string;
+  knowledge_ids_json: string;
+  digest_id: string;
+  started_at: string | null;
+  finished_at: string | null;
+  status: string;
+  exit_code: number | null;
+  summary_json: string;
+  evidence_paths_json: string;
   created_at: string;
   updated_at: string;
 }
@@ -189,6 +211,7 @@ export interface WorkflowWorkItemRow {
   subject_ref: string;
   project_key: string | null;
   project_group: string | null;
+  machine_id: string | null;
   route_scope: string | null;
   priority: number;
   status: string;
@@ -365,6 +388,26 @@ export function rowToRun(row: RunRow): LoopRun {
   };
 }
 
+export function rowToRunReceipt(row: RunReceiptRow): RunReceipt {
+  return {
+    loop_id: row.loop_id,
+    run_id: row.run_id,
+    machine: JSON.parse(row.machine_json) as RunReceiptMachine,
+    repo: row.repo,
+    task_ids: JSON.parse(row.task_ids_json) as string[],
+    knowledge_ids: JSON.parse(row.knowledge_ids_json) as string[],
+    digest_id: row.digest_id,
+    started_at: row.started_at,
+    finished_at: row.finished_at,
+    status: row.status,
+    exit_code: row.exit_code,
+    summary: JSON.parse(row.summary_json) as RunReceipt["summary"],
+    evidence_paths: JSON.parse(row.evidence_paths_json) as string[],
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
 function latestRunTime(row: LatestRunSummaryRow): string {
   return row.finished_at ?? row.started_at ?? row.created_at;
 }
@@ -432,6 +475,7 @@ export function rowToWorkflowWorkItem(row: WorkflowWorkItemRow): WorkflowWorkIte
     subjectRef: row.subject_ref,
     projectKey: row.project_key ?? undefined,
     projectGroup: row.project_group ?? undefined,
+    machineId: row.machine_id ?? undefined,
     routeScope: row.route_scope ?? undefined,
     priority: row.priority,
     status: row.status as WorkflowWorkItemStatus,
@@ -736,7 +780,56 @@ export function workItemStatusForLoopRun(
   return undefined;
 }
 
-function scrubbedOrNull(value: string | undefined | null): string | null {
+/**
+ * `exit(75)` = `EX_TEMPFAIL`: the sysexits.h "temporary failure, retry later"
+ * code. A gate/worker step that exits 75 (e.g. an account-quota probe that is
+ * still dry) is signalling "not now", not a real failed attempt — so it must
+ * not burn the todos-task redispatch cap and must leave the work item
+ * requeueable rather than persisting as a terminal, dedupe-forever row.
+ */
+export const WORK_ITEM_TEMPFAIL_EXIT_CODE = 75;
+
+/**
+ * Workflow step ids that run BEFORE the worker does any real work. A failure in
+ * one of these (triage/planner gate, or the pre-step worktree preparation) that
+ * dies quickly is a "gate death": the run never executed the worker, so it must
+ * not count toward the redispatch cap (otherwise a purely infrastructural fault
+ * — e.g. a stale worktree registration — silently dead-letters a task that
+ * never actually ran).
+ */
+export const GATE_STEP_IDS: ReadonlySet<string> = new Set(["triage", "planner", "plan"]);
+
+/** A gate-step failure only counts as a gate death when it dies before any real
+ *  work could have happened. Worktree-prep deaths are always gate deaths (they
+ *  fail before the agent is spawned) regardless of this bound. */
+export const GATE_DEATH_MAX_DURATION_MS = 60_000;
+
+export type NonProductiveFailureKind = "tempfail" | "gate-death";
+
+type ClassifiableStepRun = Pick<WorkflowStepRun, "stepId" | "status" | "exitCode" | "durationMs" | "error">;
+
+/**
+ * Classify a just-finalized *failed* workflow run's decisive failing step. A
+ * non-productive finish (a tempfail retry-signal, or a gate death before the
+ * worker ran) must not count toward the todos-task redispatch cap. Returns the
+ * non-productive kind, or `undefined` when the run represents a real worker
+ * attempt that legitimately counts toward the cap. Pure/exported for tests.
+ */
+export function classifyNonProductiveStepFailure(steps: ClassifiableStepRun[]): NonProductiveFailureKind | undefined {
+  // Steps arrive in sequence order; the decisive step is the last one that
+  // failed or timed out (a later gate stop never reaches earlier successes).
+  const failing = [...steps].reverse().find((step) => step.status === "failed" || step.status === "timed_out");
+  if (!failing) return undefined;
+  if (failing.exitCode === WORK_ITEM_TEMPFAIL_EXIT_CODE) return "tempfail";
+  // Worktree preparation fails before the agent process is spawned, so it is a
+  // gate death by definition — no real work happened — independent of duration.
+  if (typeof failing.error === "string" && failing.error.includes("worktree preparation failed")) return "gate-death";
+  const fast = failing.durationMs === undefined || failing.durationMs < GATE_DEATH_MAX_DURATION_MS;
+  if (GATE_STEP_IDS.has(failing.stepId) && fast) return "gate-death";
+  return undefined;
+}
+
+export function scrubbedOrNull(value: string | undefined | null): string | null {
   return value == null ? null : scrubSecrets(value);
 }
 
@@ -747,6 +840,7 @@ function scrubbedOrNull(value: string | undefined | null): string | null {
  * kept as head + tail around a truncation marker so evidence stays useful.
  */
 const MAX_PERSISTED_RUN_OUTPUT_CHARS = 64 * 1024;
+const MAX_PERSISTED_WORKFLOW_EVENT_PAYLOAD_CHARS = 64 * 1024;
 
 function clampPersistedRunOutput(value: string | null): string | null {
   if (value == null || value.length <= MAX_PERSISTED_RUN_OUTPUT_CHARS) return value;
@@ -760,6 +854,41 @@ function clampPersistedRunOutput(value: string | null): string | null {
 /** Scrub secrets then bound size before persisting run stdout/stderr. */
 export function persistedRunOutput(value: string | undefined | null): string | null {
   return clampPersistedRunOutput(scrubbedOrNull(value));
+}
+
+function clampTextToChars(value: string, maxChars: number, reason: string): string {
+  if (value.length <= maxChars) return value;
+  const marker = `\n...[truncated by ${reason}]...\n`;
+  const budget = Math.max(0, maxChars - marker.length);
+  const headLength = Math.ceil(budget / 2);
+  const tailLength = Math.floor(budget / 2);
+  return `${value.slice(0, headLength)}${marker}${value.slice(value.length - tailLength)}`;
+}
+
+function boundedWorkflowEventPayloadJson(scrubbedJson: string): string {
+  if (scrubbedJson.length <= MAX_PERSISTED_WORKFLOW_EVENT_PAYLOAD_CHARS) return scrubbedJson;
+
+  const base = {
+    truncated: true,
+    originalChars: scrubbedJson.length,
+    maxChars: MAX_PERSISTED_WORKFLOW_EVENT_PAYLOAD_CHARS,
+    preview: "",
+  };
+  const baseChars = JSON.stringify(base).length;
+  let previewBudget = Math.max(0, MAX_PERSISTED_WORKFLOW_EVENT_PAYLOAD_CHARS - baseChars - 64);
+
+  while (true) {
+    const preview = clampTextToChars(scrubbedJson, previewBudget, "loops workflow-event payload retention");
+    const bounded = JSON.stringify({ ...base, preview });
+    if (bounded.length <= MAX_PERSISTED_WORKFLOW_EVENT_PAYLOAD_CHARS || previewBudget === 0) return bounded;
+    previewBudget = Math.max(0, previewBudget - (bounded.length - MAX_PERSISTED_WORKFLOW_EVENT_PAYLOAD_CHARS) - 64);
+  }
+}
+
+function persistedWorkflowEventPayload(payload: Record<string, unknown> | undefined | null): string | null {
+  if (payload == null) return null;
+  const scrubbed = scrubSecretsDeep(payload);
+  return boundedWorkflowEventPayloadJson(scrubSecrets(JSON.stringify(scrubbed)));
 }
 
 function chmodIfExists(path: string, mode: number): void {
@@ -902,6 +1031,19 @@ export class Store {
           this.db.exec("CREATE INDEX IF NOT EXISTS idx_workflow_work_items_scope ON workflow_work_items(route_scope, status)");
         },
       },
+      {
+        id: "0009_run_receipts",
+        apply: () => this.createRunReceiptsSchema(),
+      },
+      {
+        id: "0010_work_item_machine_id",
+        apply: () => {
+          // Nullable + additive reservation evidence. Keep downgrade behavior
+          // lenient like route_scope: older binaries ignore the extra column.
+          this.addColumnIfMissing("workflow_work_items", "machine_id", "TEXT");
+          this.db.exec("CREATE INDEX IF NOT EXISTS idx_workflow_work_items_machine ON workflow_work_items(machine_id, status)");
+        },
+      },
     ];
   }
 
@@ -962,6 +1104,28 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_runs_status ON loop_runs(status);
       CREATE INDEX IF NOT EXISTS idx_runs_status_lease ON loop_runs(status, lease_expires_at);
       CREATE INDEX IF NOT EXISTS idx_runs_scheduled ON loop_runs(scheduled_for);
+
+      CREATE TABLE IF NOT EXISTS run_receipts (
+        run_id TEXT PRIMARY KEY,
+        loop_id TEXT NOT NULL,
+        machine_json TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        task_ids_json TEXT NOT NULL,
+        knowledge_ids_json TEXT NOT NULL,
+        digest_id TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        status TEXT NOT NULL,
+        exit_code INTEGER,
+        summary_json TEXT NOT NULL,
+        evidence_paths_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_loop ON run_receipts(loop_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_repo ON run_receipts(repo, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_digest ON run_receipts(digest_id);
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_status ON run_receipts(status, created_at DESC);
 
       CREATE TABLE IF NOT EXISTS daemon_lease (
         id TEXT PRIMARY KEY,
@@ -1049,6 +1213,7 @@ export class Store {
         subject_ref TEXT NOT NULL,
         project_key TEXT,
         project_group TEXT,
+        machine_id TEXT,
         route_scope TEXT,
         priority INTEGER NOT NULL,
         status TEXT NOT NULL,
@@ -1067,10 +1232,10 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_workflow_work_items_project ON workflow_work_items(project_key, status);
       CREATE INDEX IF NOT EXISTS idx_workflow_work_items_group ON workflow_work_items(project_group, status);
       CREATE INDEX IF NOT EXISTS idx_workflow_work_items_invocation ON workflow_work_items(invocation_id);
-      -- idx_workflow_work_items_scope (route_scope, status) is created ONLY by
-      -- migration 0008_work_item_route_scope, never here: this baseline DDL
+      -- New-column indexes (route_scope, machine_id, etc.) are created ONLY by
+      -- their additive migrations, never here: this baseline DDL
       -- re-runs on EVERY open (0001 is not skip-guarded), and on a pre-0008
-      -- database the CREATE TABLE above is a no-op, so an index on route_scope
+      -- database the CREATE TABLE above is a no-op, so an index on a new column
       -- here would execute before the column exists and crash the open
       -- ("no such column: route_scope"). New columns may be folded into the
       -- CREATE TABLE (fresh-db only); their indexes must live in the migration.
@@ -1179,6 +1344,32 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_goal_runs_goal_created ON goal_runs(goal_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_goal_runs_loop_run ON goal_runs(loop_run_id);
       CREATE INDEX IF NOT EXISTS idx_goal_runs_workflow_run ON goal_runs(workflow_run_id);
+    `);
+  }
+
+  private createRunReceiptsSchema(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS run_receipts (
+        run_id TEXT PRIMARY KEY,
+        loop_id TEXT NOT NULL,
+        machine_json TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        task_ids_json TEXT NOT NULL,
+        knowledge_ids_json TEXT NOT NULL,
+        digest_id TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        status TEXT NOT NULL,
+        exit_code INTEGER,
+        summary_json TEXT NOT NULL,
+        evidence_paths_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_loop ON run_receipts(loop_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_repo ON run_receipts(repo, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_digest ON run_receipts(digest_id);
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_status ON run_receipts(status, created_at DESC);
     `);
   }
 
@@ -2130,10 +2321,10 @@ export class Store {
     this.db
       .query(
         `INSERT INTO workflow_work_items (id, route_key, idempotency_key, invocation_id, source_type, source_ref,
-          subject_ref, project_key, project_group, route_scope, priority, status, attempts, next_attempt_at, lease_expires_at,
+          subject_ref, project_key, project_group, machine_id, route_scope, priority, status, attempts, next_attempt_at, lease_expires_at,
           workflow_id, loop_id, workflow_run_id, last_reason, created_at, updated_at)
          VALUES ($id, $routeKey, $idempotencyKey, $invocationId, $sourceType, $sourceRef, $subjectRef,
-          $projectKey, $projectGroup, $routeScope, $priority, $status, 0, $nextAttemptAt, NULL, NULL, NULL, NULL,
+          $projectKey, $projectGroup, $machineId, $routeScope, $priority, $status, 0, $nextAttemptAt, NULL, NULL, NULL, NULL,
           $lastReason, $created, $updated)
          ON CONFLICT(route_key, idempotency_key) DO UPDATE SET
           invocation_id=excluded.invocation_id,
@@ -2142,6 +2333,10 @@ export class Store {
           subject_ref=excluded.subject_ref,
           project_key=excluded.project_key,
           project_group=excluded.project_group,
+          machine_id=CASE
+            WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running', 'failed', 'dead_letter', 'cancelled') THEN workflow_work_items.machine_id
+            ELSE excluded.machine_id
+          END,
           route_scope=excluded.route_scope,
           priority=excluded.priority,
           status=CASE
@@ -2186,6 +2381,7 @@ export class Store {
         $subjectRef: input.subjectRef,
         $projectKey: input.projectKey ?? null,
         $projectGroup: input.projectGroup ?? null,
+        $machineId: input.machineId ?? null,
         $routeScope: input.routeScope ?? null,
         $priority: input.priority ?? 0,
         $status: status,
@@ -2306,7 +2502,15 @@ export class Store {
     return counts;
   }
 
-  requeueWorkflowWorkItem(id: string, patch: { reason?: string } = {}): WorkflowWorkItem {
+  /**
+   * Requeue a terminal admission work item for the next task/event delivery.
+   * By default `attempts` is preserved (used by the bounded stale-terminal
+   * re-admission on the route path, which must keep counting toward the cap).
+   * Pass `resetAttempts: true` for the operator unwedge (`loops routes requeue`)
+   * so a manual requeue is DURABLE rather than one-shot: without the reset a
+   * capped item that finishes terminal once more re-caps instantly.
+   */
+  requeueWorkflowWorkItem(id: string, patch: { reason?: string; resetAttempts?: boolean } = {}): WorkflowWorkItem {
     const current = this.getWorkflowWorkItem(id);
     if (!current) throw new Error(`workflow work item not found: ${id}`);
     const requeueableStatuses: WorkflowWorkItemStatus[] = ["succeeded", "failed", "dead_letter", "cancelled"];
@@ -2320,6 +2524,7 @@ export class Store {
       .query(
         `UPDATE workflow_work_items
          SET status='queued', workflow_id=NULL, loop_id=NULL, workflow_run_id=NULL,
+          ${patch.resetAttempts ? "attempts=0," : ""}
           next_attempt_at=NULL, lease_expires_at=NULL, last_reason=?, updated_at=?
          WHERE id=? AND status IN (${placeholders})`,
       )
@@ -2328,6 +2533,68 @@ export class Store {
     if (!item) throw new Error(`workflow work item not found after requeue: ${id}`);
     if (res.changes !== 1) throw new Error(`workflow work item was not requeued: ${id} status=${item.status}`);
     return item;
+  }
+
+  /**
+   * Transition a terminal admission work item to `dead_letter`. Used by the
+   * route path when a still-actionable todos task has exhausted the redispatch
+   * cap: instead of silently deduping the same terminal row forever (the "black
+   * hole" — `considered=N created=0` with no signal), the item is moved to a
+   * visible `dead_letter` state so drain reports can surface + count it and an
+   * operator can `loops routes requeue` it. Idempotent: a no-op on an item that
+   * is already dead-lettered.
+   */
+  deadLetterWorkflowWorkItem(id: string, patch: { reason?: string } = {}): WorkflowWorkItem {
+    const now = nowIso();
+    const reason = patch.reason?.trim() || "redispatch cap reached; dead-lettered";
+    this.db
+      .query(
+        `UPDATE workflow_work_items
+         SET status='dead_letter', next_attempt_at=NULL, lease_expires_at=NULL, last_reason=?, updated_at=?
+         WHERE id=? AND status IN ('succeeded','failed','cancelled')`,
+      )
+      .run(reason, now, id);
+    const item = this.getWorkflowWorkItem(id);
+    if (!item) throw new Error(`workflow work item not found after dead-letter: ${id}`);
+    return item;
+  }
+
+  /**
+   * Refund a redispatch attempt for a *failed* run that never did real work.
+   * Called from {@link finalizeWorkflowRun} the moment a work item is set
+   * `failed`, so the todos-task redispatch cap only ever counts real worker
+   * attempts. A tempfail (`exit 75`) is additionally made requeueable (dropped
+   * back to `queued`, bindings cleared) so its "retry later" contract fires on
+   * the next drain instead of persisting as a terminal, dedupe-forever row. A
+   * gate death stays `failed` (the bounded re-admission picks it up after
+   * backoff once the underlying infra fault clears). Both floor attempts at 0.
+   */
+  private demoteNonProductiveWorkItems(workflowRunId: string, finishedAt: string): void {
+    const kind = classifyNonProductiveStepFailure(this.listWorkflowStepRuns(workflowRunId));
+    if (!kind) return;
+    if (kind === "tempfail") {
+      this.db
+        .query(
+          `UPDATE workflow_work_items
+           SET status='queued', attempts=CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END,
+            workflow_id=NULL, loop_id=NULL, workflow_run_id=NULL,
+            next_attempt_at=NULL, lease_expires_at=NULL,
+            last_reason='worker exited 75 (tempfail): requeued for retry; attempt refunded (does not count toward redispatch cap)',
+            updated_at=?
+           WHERE workflow_run_id=? AND status='failed'`,
+        )
+        .run(finishedAt, workflowRunId);
+      return;
+    }
+    this.db
+      .query(
+        `UPDATE workflow_work_items
+         SET attempts=CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END,
+          last_reason='gate death before real work (worktree prep / triage / planner): attempt refunded (does not count toward redispatch cap)',
+          updated_at=?
+         WHERE workflow_run_id=? AND status='failed'`,
+      )
+      .run(finishedAt, workflowRunId);
   }
 
   admitWorkflowWorkItem(id: string, patch: { workflowId: string; loopId: string; reason?: string }): WorkflowWorkItem {
@@ -2933,7 +3200,7 @@ export class Store {
         .run({
           $id: genId(),
           $workflowRunId: runId,
-          $payload: JSON.stringify({
+          $payload: persistedWorkflowEventPayload({
             workflowId: input.workflow.id,
             workflowName: input.workflow.name,
             stepCount: input.workflow.steps.length,
@@ -3293,6 +3560,10 @@ export class Store {
         const itemStatus: WorkflowWorkItemStatus =
           status === "succeeded" ? "succeeded" : status === "cancelled" ? "cancelled" : "failed";
         this.setWorkflowWorkItemsForWorkflowRun(workflowRunId, itemStatus, error, finishedAt);
+        // A run that finished non-productively (a tempfail retry-signal, or a
+        // gate death before the worker ran) must not burn the redispatch cap:
+        // refund the attempt, and for a tempfail make the item requeueable now.
+        if (itemStatus === "failed") this.demoteNonProductiveWorkItems(workflowRunId, finishedAt);
         this.maybeArchiveTerminalGeneratedRouteWorkflow(workflowRunId, finishedAt);
       }
       this.db.exec("COMMIT");
@@ -3373,7 +3644,7 @@ export class Store {
           $sequence: sequence,
           $eventType: eventType,
           $stepId: stepId ?? null,
-          $payload: payload ? JSON.stringify(payload) : null,
+          $payload: persistedWorkflowEventPayload(payload),
           $created: now,
         });
       const event = this.db.query<WorkflowEventRow, [string]>("SELECT * FROM workflow_events WHERE id = ?").get(id);
@@ -3835,6 +4106,89 @@ export class Store {
     return rows.map(rowToRun);
   }
 
+  writeRunReceipt(input: WriteRunReceiptInput, opts: { now?: Date } = {}): RunReceipt {
+    const inputRunId = typeof input.run_id === "string" && input.run_id.trim() ? input.run_id : undefined;
+    const existing = inputRunId ? this.getRunReceipt(inputRunId) : undefined;
+    const run = inputRunId ? this.getRun(inputRunId) : undefined;
+    const loop = input.loop_id ? this.getLoop(input.loop_id) : run ? this.getLoop(run.loopId) : undefined;
+    const receipt = normalizeRunReceipt(input, { now: opts.now, run, loop, existing });
+    this.db
+      .query(
+        `INSERT INTO run_receipts (run_id, loop_id, machine_json, repo, task_ids_json, knowledge_ids_json, digest_id,
+          started_at, finished_at, status, exit_code, summary_json, evidence_paths_json, created_at, updated_at)
+         VALUES ($runId, $loopId, $machineJson, $repo, $taskIdsJson, $knowledgeIdsJson, $digestId,
+          $startedAt, $finishedAt, $status, $exitCode, $summaryJson, $evidencePathsJson, $createdAt, $updatedAt)
+         ON CONFLICT(run_id) DO UPDATE SET
+          loop_id=excluded.loop_id,
+          machine_json=excluded.machine_json,
+          repo=excluded.repo,
+          task_ids_json=excluded.task_ids_json,
+          knowledge_ids_json=excluded.knowledge_ids_json,
+          digest_id=excluded.digest_id,
+          started_at=excluded.started_at,
+          finished_at=excluded.finished_at,
+          status=excluded.status,
+          exit_code=excluded.exit_code,
+          summary_json=excluded.summary_json,
+          evidence_paths_json=excluded.evidence_paths_json,
+          updated_at=excluded.updated_at`,
+      )
+      .run({
+        $runId: receipt.run_id,
+        $loopId: receipt.loop_id,
+        $machineJson: JSON.stringify(receipt.machine),
+        $repo: receipt.repo,
+        $taskIdsJson: JSON.stringify(receipt.task_ids),
+        $knowledgeIdsJson: JSON.stringify(receipt.knowledge_ids),
+        $digestId: receipt.digest_id,
+        $startedAt: receipt.started_at,
+        $finishedAt: receipt.finished_at,
+        $status: receipt.status,
+        $exitCode: receipt.exit_code,
+        $summaryJson: JSON.stringify(receipt.summary),
+        $evidencePathsJson: JSON.stringify(receipt.evidence_paths),
+        $createdAt: receipt.created_at,
+        $updatedAt: receipt.updated_at,
+      });
+    return this.getRunReceipt(receipt.run_id) ?? receipt;
+  }
+
+  getRunReceipt(runId: string): RunReceipt | undefined {
+    const row = this.db.query<RunReceiptRow, [string]>("SELECT * FROM run_receipts WHERE run_id = ?").get(runId);
+    return row ? rowToRunReceipt(row) : undefined;
+  }
+
+  listRunReceipts(opts: { loopId?: string; repo?: string; taskId?: string; knowledgeId?: string; status?: string; limit?: number } = {}): RunReceipt[] {
+    const limit = opts.limit ?? 100;
+    const filters: string[] = [];
+    const params: unknown[] = [];
+    if (opts.loopId) {
+      filters.push("loop_id = ?");
+      params.push(opts.loopId);
+    }
+    if (opts.repo) {
+      filters.push("repo = ?");
+      params.push(opts.repo);
+    }
+    if (opts.status) {
+      filters.push("status = ?");
+      params.push(opts.status);
+    }
+    if (opts.taskId) {
+      filters.push("EXISTS (SELECT 1 FROM json_each(run_receipts.task_ids_json) WHERE value = ?)");
+      params.push(opts.taskId);
+    }
+    if (opts.knowledgeId) {
+      filters.push("EXISTS (SELECT 1 FROM json_each(run_receipts.knowledge_ids_json) WHERE value = ?)");
+      params.push(opts.knowledgeId);
+    }
+    const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+    const rows = this.db
+      .query<RunReceiptRow, any>(`SELECT * FROM run_receipts ${where} ORDER BY created_at DESC LIMIT ?`)
+      .all(...params, limit);
+    return rows.map(rowToRunReceipt);
+  }
+
   private deferLiveExpiredRun(id: string, now: Date, opts: DaemonLeaseFence = {}): void {
     const updated = now.toISOString();
     const deferredUntil = new Date(now.getTime() + LIVE_EXPIRED_RUN_GRACE_MS).toISOString();
@@ -4053,6 +4407,20 @@ export class Store {
           .map(rowToRun)
       : [];
     return { schemaVersion: SCHEMA_USER_VERSION, workflows, loops, runs, checks: this.migrationChecks() };
+  }
+
+  /**
+   * Page through loop_runs for a streaming export. A full `exportMigrationRows`
+   * loads every run's stdout/stderr into memory at once (hundreds of MB on a
+   * busy host); a self-hosted backfill instead pulls stable ordered pages so
+   * peak memory stays bounded. Order is deterministic (created_at, id) so
+   * offset paging over an immutable snapshot never skips or repeats a row.
+   */
+  exportMigrationRunPage(opts: { limit: number; offset: number }): LoopRun[] {
+    return this.db
+      .query<RunRow, [number, number]>("SELECT * FROM loop_runs ORDER BY created_at ASC, id ASC LIMIT ? OFFSET ?")
+      .all(opts.limit, opts.offset)
+      .map(rowToRun);
   }
 
   private countTable(table: string): number {

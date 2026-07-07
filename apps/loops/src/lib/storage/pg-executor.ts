@@ -2,8 +2,8 @@
 //
 // Adapts the vendored @hasna/contracts storage kit (`createQueryClient` over a
 // `pg.Pool`) to the `PostgresQueryExecutor` contract consumed by
-// `PostgresStorage`. PURE REMOTE (Amendment A1): a pool is only ever built when
-// a cloud database URL is present; there is no local/hybrid Postgres path.
+// `PostgresStorage`. A pool is only ever built when a self-hosted database URL
+// is present; there is no local/hybrid Postgres path.
 
 import type { PoolQueryClient } from "../../generated/storage-kit/query.js";
 import { createPgPool } from "../../generated/storage-kit/pool.js";

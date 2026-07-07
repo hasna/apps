@@ -638,6 +638,131 @@ export async function buildSelfHostedMigrationPlan(store: Store, opts: SelfHoste
   return { ...plan, importable: false };
 }
 
+export interface SelfHostedPushOptions {
+  apiUrl?: string;
+  apiToken?: string;
+  includeRuns?: boolean;
+  replace?: boolean;
+  fetchImpl?: typeof fetch;
+  env?: NodeJS.ProcessEnv;
+  /** Max rows per workflow/loop batch (default 200). */
+  batchRows?: number;
+  /** Approx max JSON bytes per run batch (default 4 MiB). */
+  runBatchBytes?: number;
+  onProgress?: (event: { phase: "workflows" | "loops" | "runs"; sent: number; requests: number }) => void;
+}
+
+export interface SelfHostedPushResult {
+  ok: boolean;
+  apiUrl: string;
+  applied: { workflows: number; loops: number; runs: number };
+  skipped: { runningRuns: number; orphanRuns: number };
+  requests: number;
+}
+
+interface ImportCounts {
+  workflows: number;
+  loops: number;
+  runs: number;
+}
+
+async function postImportBatch(
+  fetchImpl: typeof fetch,
+  config: { apiUrl: string; token?: string },
+  payload: { workflows?: unknown[]; loops?: unknown[]; runs?: unknown[]; replace?: boolean },
+): Promise<{ imported: ImportCounts; skippedRunning: number }> {
+  const body = await requestJson(fetchImpl, config, "/v1/import", { method: "POST", body: JSON.stringify(payload) });
+  const imported = (body.imported ?? {}) as Partial<ImportCounts>;
+  return {
+    imported: { workflows: imported.workflows ?? 0, loops: imported.loops ?? 0, runs: imported.runs ?? 0 },
+    skippedRunning: typeof body.skippedRunning === "number" ? body.skippedRunning : 0,
+  };
+}
+
+/**
+ * Apply a local->self-hosted backfill through the control plane's id-preserving
+ * `/v1/import` endpoint. Rows are pushed FK-safe (workflows, loops, then runs).
+ * Runs are streamed in bounded pages so a busy host's multi-hundred-MB run
+ * history never loads into memory at once; volatile `running` runs and orphan
+ * runs (whose parent loop is absent) are dropped and counted. Idempotent: the
+ * endpoint upserts by id, so re-running never duplicates rows.
+ */
+export async function applySelfHostedPush(store: Store, opts: SelfHostedPushOptions): Promise<SelfHostedPushResult> {
+  const resolved = resolveApiConfig(opts);
+  if (!resolved.apiUrl) throw new ValidationError("LOOPS_API_URL or --api-url is required for self-hosted push");
+  if (!isLocalApiUrl(resolved.apiUrl) && !resolved.token) {
+    throw new ValidationError("non-local self-hosted APIs require LOOPS_API_TOKEN or HASNA_LOOPS_API_TOKEN");
+  }
+  const config = { apiUrl: resolved.apiUrl, token: resolved.token };
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const includeRuns = opts.includeRuns ?? true;
+  const replace = opts.replace ?? false;
+  const batchRows = Math.max(1, opts.batchRows ?? 200);
+  const runBatchBytes = Math.max(64 * 1024, opts.runBatchBytes ?? 4 * 1024 * 1024);
+
+  const applied: ImportCounts = { workflows: 0, loops: 0, runs: 0 };
+  const skipped = { runningRuns: 0, orphanRuns: 0 };
+  let requests = 0;
+
+  // Definitions only: exportMigrationRows({includeRuns:false}) never loads run
+  // output, so workflows+loops stay cheap even on a busy host.
+  const base = store.exportMigrationRows({ includeRuns: false });
+  const loopIds = new Set(base.loops.map((loop) => loop.id));
+
+  for (let i = 0; i < base.workflows.length; i += batchRows) {
+    const batch = base.workflows.slice(i, i + batchRows);
+    const result = await postImportBatch(fetchImpl, config, { workflows: batch, replace });
+    applied.workflows += result.imported.workflows;
+    requests += 1;
+    opts.onProgress?.({ phase: "workflows", sent: applied.workflows, requests });
+  }
+
+  for (let i = 0; i < base.loops.length; i += batchRows) {
+    const batch = base.loops.slice(i, i + batchRows);
+    const result = await postImportBatch(fetchImpl, config, { loops: batch, replace });
+    applied.loops += result.imported.loops;
+    requests += 1;
+    opts.onProgress?.({ phase: "loops", sent: applied.loops, requests });
+  }
+
+  if (includeRuns) {
+    const pageSize = 500;
+    let pending: LoopRun[] = [];
+    let pendingBytes = 0;
+    const flush = async (): Promise<void> => {
+      if (pending.length === 0) return;
+      const result = await postImportBatch(fetchImpl, config, { runs: pending, replace });
+      applied.runs += result.imported.runs;
+      skipped.runningRuns += result.skippedRunning;
+      requests += 1;
+      opts.onProgress?.({ phase: "runs", sent: applied.runs, requests });
+      pending = [];
+      pendingBytes = 0;
+    };
+    for (let offset = 0; ; offset += pageSize) {
+      const page = store.exportMigrationRunPage({ limit: pageSize, offset });
+      if (page.length === 0) break;
+      for (const run of page) {
+        // Skip orphan runs whose parent loop is absent: loop_runs.loop_id has a
+        // FK to loops, so importing one would fail the whole batch.
+        if (!loopIds.has(run.loopId)) {
+          skipped.orphanRuns += 1;
+          continue;
+        }
+        const encoded = JSON.stringify(run).length;
+        if (pending.length > 0 && pendingBytes + encoded > runBatchBytes) await flush();
+        pending.push(run);
+        pendingBytes += encoded;
+        if (pending.length >= batchRows * 4) await flush();
+      }
+      if (page.length < pageSize) break;
+    }
+    await flush();
+  }
+
+  return { ok: true, apiUrl: config.apiUrl, applied, skipped, requests };
+}
+
 export async function registerSelfHostedRunner(opts: RunnerRegistrationOptions): Promise<RunnerRegistrationResult> {
   const config = resolveApiConfig(opts);
   if (!config.apiUrl) throw new ValidationError("LOOPS_API_URL or --api-url is required");

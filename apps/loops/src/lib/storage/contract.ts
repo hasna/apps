@@ -14,6 +14,9 @@ export type LoopStorageMethodName =
   | "archiveLoop"
   | "unarchiveLoop"
   | "deleteLoop"
+  | "upsertMigrationLoop"
+  | "upsertMigrationRun"
+  | "upsertMigrationWorkflow"
   | "createWorkflow"
   | "getWorkflow"
   | "listWorkflows"
@@ -55,6 +58,9 @@ export type LoopStorageMethodName =
   | "finalizeRun"
   | "heartbeatRunLease"
   | "listRuns"
+  | "writeRunReceipt"
+  | "getRunReceipt"
+  | "listRunReceipts"
   | "recoverExpiredRunLeases"
   | "recoverExpiredRunLeasesDetailed"
   | "countLoops"
@@ -85,6 +91,9 @@ export interface LoopStorageContract extends Record<LoopStorageMethodName, (...a
   archiveLoop: AsyncStoreMethod<"archiveLoop">;
   unarchiveLoop: AsyncStoreMethod<"unarchiveLoop">;
   deleteLoop: AsyncStoreMethod<"deleteLoop">;
+  upsertMigrationLoop: AsyncStoreMethod<"upsertMigrationLoop">;
+  upsertMigrationRun: AsyncStoreMethod<"upsertMigrationRun">;
+  upsertMigrationWorkflow: AsyncStoreMethod<"upsertMigrationWorkflow">;
   createWorkflow: AsyncStoreMethod<"createWorkflow">;
   getWorkflow: AsyncStoreMethod<"getWorkflow">;
   listWorkflows: AsyncStoreMethod<"listWorkflows">;
@@ -126,6 +135,9 @@ export interface LoopStorageContract extends Record<LoopStorageMethodName, (...a
   finalizeRun: AsyncStoreMethod<"finalizeRun">;
   heartbeatRunLease: AsyncStoreMethod<"heartbeatRunLease">;
   listRuns: AsyncStoreMethod<"listRuns">;
+  writeRunReceipt: AsyncStoreMethod<"writeRunReceipt">;
+  getRunReceipt: AsyncStoreMethod<"getRunReceipt">;
+  listRunReceipts: AsyncStoreMethod<"listRunReceipts">;
   recoverExpiredRunLeases: AsyncStoreMethod<"recoverExpiredRunLeases">;
   recoverExpiredRunLeasesDetailed: AsyncStoreMethod<"recoverExpiredRunLeasesDetailed">;
   countLoops: AsyncStoreMethod<"countLoops">;

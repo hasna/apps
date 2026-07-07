@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 import { timingSafeEqual } from "node:crypto";
 import { Command } from "commander";
-import type { CreateLoopInput, LoopStatus, RunStatus } from "../types.js";
+import type { CreateLoopInput, Loop, LoopRun, LoopStatus, RunStatus, WorkflowSpec, WriteRunReceiptInput } from "../types.js";
 import { LoopArchivedError, LoopNotFoundError, ValidationError } from "../lib/errors.js";
-import { publicLoop, publicRun, redact } from "../lib/format.js";
+import { publicLoop, publicRun, publicRunReceipt, redact } from "../lib/format.js";
 import { buildDeploymentStatus, deploymentStatusLine } from "../lib/mode.js";
 import { computeNextAfter, dueSlots } from "../lib/recurrence.js";
 import { scrubSecretsDeep } from "../lib/redact.js";
@@ -19,6 +19,10 @@ export function openApiDocument(): Record<string, unknown> {
 const program = new Command();
 const DEFAULT_BODY_LIMIT_BYTES = 64 * 1024;
 const DEFAULT_EVIDENCE_LIMIT_BYTES = 256 * 1024;
+// Bulk id-preserving import (POST /v1/import) accepts batches of full loop/run/
+// workflow rows, so it needs a much larger body budget than single-object CRUD.
+// The client batches by byte budget well under this ceiling.
+const DEFAULT_IMPORT_LIMIT_BYTES = 32 * 1024 * 1024;
 const MIN_RUNNER_LEASE_MS = 1_000;
 
 program
@@ -97,6 +101,7 @@ export interface LoopsApiServerOptions {
   storage?: LoopStorageContract;
   bodyLimitBytes?: number;
   evidenceLimitBytes?: number;
+  importLimitBytes?: number;
   now?: () => Date;
   /**
    * API-key verifier (from `@hasna/contracts/auth`). When present, every
@@ -189,6 +194,7 @@ export function createLoopsApiServer(opts: LoopsApiServerOptions = {}) {
         storage: opts.storage,
         bodyLimitBytes: opts.bodyLimitBytes ?? DEFAULT_BODY_LIMIT_BYTES,
         evidenceLimitBytes: opts.evidenceLimitBytes ?? DEFAULT_EVIDENCE_LIMIT_BYTES,
+        importLimitBytes: opts.importLimitBytes ?? DEFAULT_IMPORT_LIMIT_BYTES,
         now: opts.now ?? (() => new Date()),
       });
     },
@@ -201,6 +207,7 @@ interface V1RequestContext {
   storage?: LoopStorageContract;
   bodyLimitBytes: number;
   evidenceLimitBytes: number;
+  importLimitBytes: number;
   now: () => Date;
 }
 
@@ -210,8 +217,10 @@ async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
   if (ctx.request.method === "GET" && segments.length === 1) return ok({ service: "loops-api", version: "v1" });
   if (ctx.request.method === "GET" && segments[1] === "status") return Response.json(apiStatus());
   try {
+    if (segments[1] === "import") return await handleImportRequest(ctx, segments.slice(2));
     if (segments[1] === "loops") return await handleLoopsRequest(ctx, segments.slice(2));
     if (segments[1] === "runs") return await handleRunsRequest(ctx, segments.slice(2));
+    if (segments[1] === "receipts") return await handleReceiptsRequest(ctx, segments.slice(2));
     if (segments[1] === "runners") return await handleRunnerRequest(ctx, segments.slice(2));
     if (segments[1] === "leases" && segments[2] === "recover" && ctx.request.method === "POST") {
       return runnerProtocolPending("lease recovery is implemented in the runner protocol stage");
@@ -220,6 +229,57 @@ async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
   } catch (error) {
     return errorResponse(error);
   }
+}
+
+interface ImportRequestBody {
+  workflows?: WorkflowSpec[];
+  loops?: Loop[];
+  runs?: LoopRun[];
+  replace?: boolean;
+}
+
+/**
+ * Bulk id-preserving import for a local->self-hosted backfill.
+ *
+ * Accepts batches of full `workflows` / `loops` / `runs` rows (the same public
+ * shapes that `loops export` emits) and upserts them by id via the storage
+ * `upsertMigration*` methods — preserving id, status, archived state, and
+ * timestamps exactly, and idempotent on re-run (ON CONFLICT(id) DO UPDATE, or a
+ * no-op when the row exists and `replace` is not set). Rows are applied in
+ * FK-safe order (workflows, then loops, then runs). Volatile `running` runs are
+ * skipped (they carry lease/process ownership) and reported in `skippedRunning`
+ * rather than failing the batch. This is the endpoint the migration module noted
+ * as the missing "id-preserving import" surface for self-hosted push.
+ */
+async function handleImportRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  if (segments.length !== 0 || ctx.request.method !== "POST") return fail("not_found", 404);
+  const storage = requireStorage(ctx.storage);
+  const body = await readJsonBody<ImportRequestBody>(ctx.request, ctx.importLimitBytes);
+  const replace = body.replace === true;
+  const workflows = Array.isArray(body.workflows) ? body.workflows : [];
+  const loops = Array.isArray(body.loops) ? body.loops : [];
+  const runs = Array.isArray(body.runs) ? body.runs : [];
+  const imported = { workflows: 0, loops: 0, runs: 0 };
+  let skippedRunning = 0;
+  // FK-safe order: workflow_specs, then loops (loop_runs.loop_id REFERENCES
+  // loops), then loop_runs.
+  for (const workflow of workflows) {
+    await storage.upsertMigrationWorkflow(workflow, { replace });
+    imported.workflows += 1;
+  }
+  for (const loop of loops) {
+    await storage.upsertMigrationLoop(loop, { replace });
+    imported.loops += 1;
+  }
+  for (const run of runs) {
+    if (run.status === "running") {
+      skippedRunning += 1;
+      continue;
+    }
+    await storage.upsertMigrationRun(run, { replace });
+    imported.runs += 1;
+  }
+  return ok({ imported, skippedRunning });
 }
 
 async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
@@ -237,6 +297,18 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
     const body = await readJsonBody<CreateLoopInput>(ctx.request, ctx.bodyLimitBytes);
     const loop = await storage.createLoop(body);
     return ok({ loop: publicLoop(loop) }, { status: 201 });
+  }
+  // GET /v1/loops/count — total-row verification (the list route caps at 1000
+  // with no offset, so counting a large backfilled table needs this).
+  if (segments.length === 1 && segments[0] === "count" && ctx.request.method === "GET") {
+    const count = await storage.countLoops(
+      optionalEnum<LoopStatus>(ctx.url.searchParams.get("status"), ["active", "paused", "stopped", "expired"]),
+      {
+        includeArchived: optionalBoolean(ctx.url.searchParams.get("includeArchived")),
+        archived: optionalBoolean(ctx.url.searchParams.get("archived")),
+      },
+    );
+    return ok({ count });
   }
   const id = segments[0];
   if (!id) return fail("not_found", 404);
@@ -309,6 +381,14 @@ async function handleRunsRequest(ctx: V1RequestContext, segments: string[]): Pro
 
   const storage = requireStorage(ctx.storage);
   const showOutput = optionalBoolean(ctx.url.searchParams.get("showOutput")) ?? false;
+  // GET /v1/runs/count — total-row verification (run history is far larger than
+  // the 1000-row list cap).
+  if (segments.length === 1 && id === "count" && ctx.request.method === "GET") {
+    const count = await storage.countRuns(
+      optionalEnum<RunStatus>(ctx.url.searchParams.get("status"), ["running", "succeeded", "failed", "timed_out", "abandoned", "skipped"]),
+    );
+    return ok({ count });
+  }
   if (segments.length === 0 && ctx.request.method === "GET") {
     const runs = await storage.listRuns({
       loopId: ctx.url.searchParams.get("loopId") ?? undefined,
@@ -322,6 +402,33 @@ async function handleRunsRequest(ctx: V1RequestContext, segments: string[]): Pro
     const run = await storage.getRun(id);
     if (!run) return fail("run_not_found", 404);
     return ok({ run: publicRun(run, showOutput, { redactError: true }) });
+  }
+  return fail("not_found", 404);
+}
+
+async function handleReceiptsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  const storage = requireStorage(ctx.storage);
+  const id = segments[0];
+  if (segments.length === 0 && ctx.request.method === "GET") {
+    const receipts = await storage.listRunReceipts({
+      loopId: ctx.url.searchParams.get("loopId") ?? undefined,
+      repo: ctx.url.searchParams.get("repo") ?? undefined,
+      taskId: ctx.url.searchParams.get("taskId") ?? undefined,
+      knowledgeId: ctx.url.searchParams.get("knowledgeId") ?? undefined,
+      status: ctx.url.searchParams.get("status") ?? undefined,
+      limit: optionalLimit(ctx.url.searchParams.get("limit")),
+    });
+    return ok({ receipts: receipts.map(publicRunReceipt) });
+  }
+  if (segments.length === 0 && ctx.request.method === "POST") {
+    const body = await readJsonBody<WriteRunReceiptInput>(ctx.request, ctx.evidenceLimitBytes);
+    return ok({ receipt: publicRunReceipt(await storage.writeRunReceipt(body)) }, { status: 201 });
+  }
+  if (!id) return fail("not_found", 404);
+  if (segments.length === 1 && ctx.request.method === "GET") {
+    const receipt = await storage.getRunReceipt(id);
+    if (!receipt) return fail("run_receipt_not_found", 404);
+    return ok({ receipt: publicRunReceipt(receipt) });
   }
   return fail("not_found", 404);
 }

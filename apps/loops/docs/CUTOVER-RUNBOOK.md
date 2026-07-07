@@ -1,61 +1,78 @@
 # Loops Postgres Cutover Runbook
 
-Status: **backend foundation landed; daemon still runs on local sqlite.** Do NOT
-flip the running daemon to Postgres until every step below is green.
+Status: **self-hosted control-plane backend landed; local daemon cutover is not
+complete.** Do not flip scheduled production execution away from local SQLite
+until the runner and migration follow-ups below are green.
 
-PURE REMOTE (Amendment A1): in cloud mode, reads AND writes hit cloud Postgres
-directly. There is no hybrid/sync/cache mode. After a verified migration the
-local sqlite file is renamed to `<name>.db.pre-cloud-2026-07-06.bak`.
+Deployment vocabulary: `self_hosted` is the Hasna-owned AWS/RDS control-plane
+deployment. `cloud` is the future hosted SaaS contract for outside users. The
+vendored `@hasna/contracts` storage kit still calls direct Postgres storage
+mode `cloud`; treat that as a storage-kit implementation term, not the
+OpenLoops deployment mode.
 
-## What shipped in this PR
+## What Shipped
 
-- Vendored `@hasna/contracts` storage kit → `src/generated/storage-kit/`
-  (pool/query/tls/mode/migrations/health). Regenerate: `bunx @hasna/contracts vendor-kit`.
-- `src/lib/storage/pg-executor.ts` — `PgPoolExecutor` adapting the vendored
-  `pg.Pool` client to `PostgresQueryExecutor` (drives `PostgresStorage.migrate`).
-- `src/lib/storage/pg-runner-claim.ts` — `claimNextRun` / `heartbeatRunLease`
-  using `SELECT ... FOR UPDATE SKIP LOCKED` for concurrent runners.
-- `src/lib/storage/postgres-concurrency.test.ts` — two-connection race test
-  (skips unless `LOOPS_TEST_DATABASE_URL` is set; verified green against a
-  throwaway local Postgres 16).
-- `pg` promoted to a direct dependency; `@types/pg` added as devDependency.
+- `loops-serve` HTTP control plane: RDS-direct Postgres, `GET /health`,
+  `/ready`, `/version`, `/openapi.json`, storage-backed `/v1` loop CRUD and run
+  listing, and runner registration/claim/heartbeat/finalize protocol routes.
+- `@hasna/contracts` API-key auth on non-local `loops-serve` binds, backed by
+  the shared `api_keys` table and a signing secret.
+- Full `PostgresLoopStorage` behind `LoopStorageContract`, plus
+  `PgPoolExecutor`, runner claim/lease helpers, and Postgres concurrency tests.
+- `loops-serve migrate`, which applies the ledger-tracked Postgres migrations
+  and ensures the `api_keys` table.
+- `@hasna/loops/sdk/http`, generated from `openapi/loops.json`.
+- ARM64/Bun `Dockerfile`, local `docker-compose.yml`, `hasna.contract.json`,
+  and a generated `migrations/` mirror for review.
 
-## Remaining before daemon cutover (tracked, NOT done here)
+## Local Postgres Smoke For loops-serve
 
-1. **Full `PostgresLoopStorage` implementing `LoopStorageContract`** (60+ methods
-   in `src/lib/storage/contract.ts`). Only the migration ledger + claim/lease
-   primitives exist today. The claim primitive here is the correctness core to
-   build the rest on.
-2. **Async consumer wiring.** All call sites construct `new Store()` synchronously
-   (`src/cli`, `src/daemon`, `src/sdk`, `src/mcp`, `src/lib/route`). PURE REMOTE
-   requires routing them through the async `LoopStorageContract` when
-   `LOOPS_DATABASE_URL` is set (mode resolved by `src/lib/mode.ts`, which stays
-   authoritative). `SqliteLoopStorage` already wraps the sync store for the
-   local path.
-3. **`loops migrate-local` command** (data migration TOOLING only): copy
-   definitions + schedules + last 30 days of runs from local sqlite into cloud
-   Postgres, then rename the sqlite file to the `.pre-cloud-2026-07-06.bak`
-   backup. Does NOT enable cloud mode.
-4. **Apply schema to shared RDS** via SSM tunnel on local port 15438 using the
-   `hasna/oss/loops/database-url-owner` secret, then run
-   `PostgresStorage(new PgPoolExecutor(...)).migrate()` (dry-run first). Kill the
-   tunnel and remove temp files afterward. Never run the test suite against RDS.
+Run the local development stack for the self-hosted service:
 
-## Enable steps (run only after 1–4 are green)
+```bash
+docker compose run --rm loops-migrate
+docker compose up --build loops-serve
+curl -fsS http://127.0.0.1:8787/health
+curl -fsS http://127.0.0.1:8787/ready
+curl -fsS http://127.0.0.1:8787/openapi.json
+```
 
-1. Confirm `PostgresStorage.migrate({ dryRun: true })` reports all four
-   migrations already applied on the loops RDS database.
-2. Stop the loops daemon: `loops daemon stop`.
-3. `loops migrate-local --database-url "$LOOPS_DATABASE_URL"` (moves defs +
-   schedules + 30d of runs; verify counts; sqlite renamed to backup).
-4. Export `LOOPS_DATABASE_URL` (from `hasna/oss/loops/database-url`) and the
-   cloud storage-mode env for the daemon unit; restart the daemon.
-5. Verify `loops status` reports `deploymentMode: cloud`, `sourceOfTruth:
-   cloud_control_plane`, and that a test loop run claims + finalizes against
-   Postgres.
+`loops-serve` may bind to loopback without an API signing secret for local
+development. A non-local bind must set `HASNA_LOOPS_API_SIGNING_KEY`,
+`HASNA_API_SIGNING_KEY`, or `API_KEY_SIGNING_SECRET`; otherwise the service
+fails closed before exposing `/v1`.
+
+## AWS Self-Hosted Gates
+
+1. Apply migrations with the ECS one-shot task or an operator command:
+   `HASNA_LOOPS_DATABASE_URL=... loops-serve migrate --dry-run`, then
+   `HASNA_LOOPS_DATABASE_URL=... loops-serve migrate`.
+2. Start `loops-serve` with `HASNA_LOOPS_MODE=self_hosted`,
+   `HASNA_LOOPS_DATABASE_URL`, and the API signing secret from the approved
+   vault item. Do not log or copy the secret value into task evidence.
+3. Verify `/health`, `/ready`, `/version`, and `/openapi.json`.
+4. Verify an authenticated `/v1` read/write smoke against a throwaway loop and
+   a runner registration/claim/finalize smoke if a runner API URL is configured.
+5. Record package version, git SHA, image tag, database migration plan/result,
+   redacted API URL, health/readiness responses, and rollback handle.
+
+## Still Pending Before Daemon Cutover
+
+- Long-running `loops-runner` daemon mode with backoff, fleet observability, and
+  durable machine registration records.
+- Workflow target execution over the runner protocol.
+- Id-preserving self-hosted import endpoints for workflow specs, loop
+  definitions, run history, workflow history, work items, goals, and audit rows.
+- A no-loss migration path from local SQLite into the self-hosted control plane.
+  Current `loops export`/`loops import` are local-store tools, and
+  `loops self-hosted migrate|push|pull` remain previews.
+- Hosted SaaS integration outside this public package.
 
 ## Rollback
 
-Cloud mode is off until `LOOPS_DATABASE_URL` is present in the daemon env.
-To roll back: unset it, restore the sqlite backup
-(`mv <name>.db.pre-cloud-2026-07-06.bak <name>.db`), restart the daemon.
+For the self-hosted service, roll back by moving traffic to the previous image
+or stopping the new `loops-serve` task. Local scheduled execution remains on
+SQLite unless operators explicitly configure a runner/control-plane cutover, so
+removing `LOOPS_API_URL`, `HASNA_LOOPS_API_URL`, `LOOPS_DATABASE_URL`, or
+`HASNA_LOOPS_DATABASE_URL` returns the standalone CLI/daemon perspective to
+`local`.

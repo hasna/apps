@@ -159,6 +159,50 @@
         }
       }
     },
+    "/v1/loops/count": {
+      "get": {
+        "operationId": "countLoops",
+        "summary": "Count loops (total-row verification)",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "includeArchived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "archived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "count",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CountResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/loops/{id}": {
       "get": {
         "operationId": "getLoop",
@@ -349,6 +393,34 @@
         }
       }
     },
+    "/v1/runs/count": {
+      "get": {
+        "operationId": "countRuns",
+        "summary": "Count runs (total-row verification)",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "count",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CountResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/runs/{id}": {
       "get": {
         "operationId": "getRun",
@@ -370,6 +442,157 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RunResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/import": {
+      "post": {
+        "operationId": "importRows",
+        "summary": "Bulk id-preserving import (self-hosted backfill)",
+        "description": "Upsert full workflow/loop/run rows by id (idempotent; ON CONFLICT(id) DO UPDATE). Preserves id, status, archived state, and timestamps. Applied FK-safe: workflows, then loops, then runs. Volatile running runs are skipped and reported.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "import counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/receipts": {
+      "get": {
+        "operationId": "listRunReceipts",
+        "summary": "List run receipts",
+        "parameters": [
+          {
+            "name": "loopId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "taskId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "knowledgeId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "run receipts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunReceiptListResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "writeRunReceipt",
+        "summary": "Write a run receipt",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WriteRunReceiptInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "run receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunReceiptResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/receipts/{runId}": {
+      "get": {
+        "operationId": "getRunReceipt",
+        "summary": "Get a run receipt by run id",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "run receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunReceiptResponse"
                 }
               }
             }
@@ -608,6 +831,334 @@
         "required": [
           "ok",
           "deleted"
+        ]
+      },
+      "RunReceiptMachine": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "additionalProperties": true
+          }
+        ]
+      },
+      "RunReceiptSummary": {
+        "type": "object",
+        "required": [
+          "stdout_bytes",
+          "stderr_bytes"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "stdout_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "stderr_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "stdout_excerpt": {
+            "type": "string"
+          },
+          "stderr_excerpt": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "duration_ms": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "RunReceipt": {
+        "type": "object",
+        "required": [
+          "loop_id",
+          "run_id",
+          "machine",
+          "repo",
+          "task_ids",
+          "knowledge_ids",
+          "digest_id",
+          "started_at",
+          "finished_at",
+          "status",
+          "exit_code",
+          "summary",
+          "evidence_paths",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "loop_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "machine": {
+            "$ref": "#/components/schemas/RunReceiptMachine"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "task_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "knowledge_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "digest_id": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "exit_code": {
+            "type": "integer",
+            "nullable": true
+          },
+          "summary": {
+            "$ref": "#/components/schemas/RunReceiptSummary"
+          },
+          "evidence_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WriteRunReceiptInput": {
+        "type": "object",
+        "required": [
+          "run_id"
+        ],
+        "properties": {
+          "loop_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "machine": {
+            "$ref": "#/components/schemas/RunReceiptMachine"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "task_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "knowledge_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "digest_id": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "exit_code": {
+            "type": "integer",
+            "nullable": true
+          },
+          "summary": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/components/schemas/RunReceiptSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evidence_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "stdout": {
+            "type": "string"
+          },
+          "stderr": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "duration_ms": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "RunReceiptResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/RunReceipt"
+          }
+        },
+        "required": [
+          "ok",
+          "receipt"
+        ]
+      },
+      "RunReceiptListResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "receipts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunReceipt"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "receipts"
+        ]
+      },
+      "ImportInput": {
+        "type": "object",
+        "description": "Batches of full rows to upsert by id. Any array may be omitted.",
+        "properties": {
+          "workflows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "loops": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "replace": {
+            "type": "boolean",
+            "description": "Update existing rows whose id matches (default false: existing rows are left unchanged)."
+          }
+        }
+      },
+      "ImportResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "imported": {
+            "type": "object",
+            "properties": {
+              "workflows": {
+                "type": "integer"
+              },
+              "loops": {
+                "type": "integer"
+              },
+              "runs": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "workflows",
+              "loops",
+              "runs"
+            ]
+          },
+          "skippedRunning": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ok",
+          "imported",
+          "skippedRunning"
+        ]
+      },
+      "CountResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "count": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ok",
+          "count"
         ]
       }
     },
