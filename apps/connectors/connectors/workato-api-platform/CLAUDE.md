@@ -4,7 +4,7 @@ Workato API Platform connector — customer runtime REST API for items, events, 
 
 ## API Details
 
-- **Base URL**: `https://api.workatoapiplatform.com/v1` (tenant-specific override supported)
+- **Base URL**: tenant-specific runtime API URL configured with `WORKATO_API_PLATFORM_BASE_URL`
 - **Auth**: API key via Bearer token (`Authorization: Bearer <api_key>`)
 - **Not** the Workato workspace management API (`workato.com/api/*`)
 
@@ -23,7 +23,7 @@ Workato API Platform connector — customer runtime REST API for items, events, 
 | Variable | Description |
 |----------|-------------|
 | `WORKATO_API_PLATFORM_API_KEY` | Runtime API key |
-| `WORKATO_API_PLATFORM_BASE_URL` | Optional base URL override |
+| `WORKATO_API_PLATFORM_BASE_URL` | Required tenant-specific runtime API base URL |
 
 ## CLI Commands
 

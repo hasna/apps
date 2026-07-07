@@ -32,7 +32,7 @@ program
   .description('Workato API Platform connector CLI - customer runtime API')
   .version(VERSION)
   .option('-k, --api-key <key>', 'API key (overrides config)')
-  .option('-b, --base-url <url>', 'Base URL override (tenant-specific runtime API)')
+  .option('-b, --base-url <url>', 'Tenant-specific runtime API base URL')
   .option('-f, --format <format>', 'Output format (json, pretty)', 'pretty')
   .option('-p, --profile <profile>', 'Use a specific profile')
   .option('-v, --verbose', 'Enable verbose output for debugging')
@@ -76,6 +76,10 @@ function getClient(): Connector {
     process.exit(1);
   }
   const baseUrl = getBaseUrl();
+  if (!baseUrl) {
+    error(`No base URL configured. Run "${CONNECTOR_NAME} config set-base-url <url>" or set WORKATO_API_PLATFORM_BASE_URL.`);
+    process.exit(1);
+  }
   return new Connector({ apiKey, baseUrl });
 }
 
@@ -187,7 +191,7 @@ profileCmd
 
     console.log(chalk.bold(`Profile: ${profileName}${profileName === active ? chalk.green(' (active)') : ''}`));
     info(`API Key: ${config.apiKey ? `${config.apiKey.substring(0, 8)}...` : chalk.gray('not set')}`);
-    info(`Base URL: ${config.baseUrl || chalk.gray('default')}`);
+    info(`Base URL: ${config.baseUrl || chalk.gray('not set')}`);
   });
 
 const configCmd = program.command('config').description('Manage CLI configuration (for active profile)');
@@ -202,7 +206,7 @@ configCmd
 
 configCmd
   .command('set-base-url <url>')
-  .description('Set base URL override')
+  .description('Set tenant-specific runtime API base URL')
   .action((url: string) => {
     setBaseUrl(url);
     success(`Base URL saved to profile: ${getCurrentProfile()}`);
@@ -219,7 +223,7 @@ configCmd
     console.log(chalk.bold(`Active Profile: ${profileName}`));
     info(`Config directory: ${getConfigDir()}`);
     info(`API Key: ${apiKey ? `${apiKey.substring(0, 8)}...` : chalk.gray('not set')}`);
-    info(`Base URL: ${baseUrl || chalk.gray('https://api.workatoapiplatform.com/v1 (default)')}`);
+    info(`Base URL: ${baseUrl || chalk.gray('not set')}`);
   });
 
 configCmd
