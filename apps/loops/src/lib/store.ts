@@ -1464,31 +1464,41 @@ export class Store {
     })();
   }
 
-  listLoops(opts: { status?: LoopStatus; limit?: number; archived?: boolean; includeArchived?: boolean } = {}): Loop[] {
+  listLoops(opts: { status?: LoopStatus; limit?: number; offset?: number; archived?: boolean; includeArchived?: boolean; name?: string } = {}): Loop[] {
     const limit = opts.limit ?? 200;
+    const offset = Math.max(0, Math.floor(opts.offset ?? 0));
+    // Exact-name lookup short-circuits every other filter: it returns *all*
+    // loops (archived included) matching the name so callers can detect
+    // ambiguity, mirroring findLoopByName plus the resolveLoop resolution path.
+    if (opts.name != null) {
+      const rows = this.db
+        .query<LoopRow, [string, number, number]>("SELECT * FROM loops WHERE name = ? ORDER BY created_at DESC LIMIT ? OFFSET ?")
+        .all(opts.name, limit, offset);
+      return this.withLatestRunSummaries(rows.map(rowToLoop));
+    }
     let rows: LoopRow[];
     if (opts.status && opts.archived) {
       rows = this.db
-        .query<LoopRow, [string, number]>("SELECT * FROM loops WHERE status = ? AND archived_at IS NOT NULL ORDER BY next_run_at ASC LIMIT ?")
-        .all(opts.status, limit);
+        .query<LoopRow, [string, number, number]>("SELECT * FROM loops WHERE status = ? AND archived_at IS NOT NULL ORDER BY next_run_at ASC LIMIT ? OFFSET ?")
+        .all(opts.status, limit, offset);
     } else if (opts.status && opts.includeArchived) {
       rows = this.db
-        .query<LoopRow, [string, number]>("SELECT * FROM loops WHERE status = ? ORDER BY next_run_at ASC LIMIT ?")
-        .all(opts.status, limit);
+        .query<LoopRow, [string, number, number]>("SELECT * FROM loops WHERE status = ? ORDER BY next_run_at ASC LIMIT ? OFFSET ?")
+        .all(opts.status, limit, offset);
     } else if (opts.status) {
       rows = this.db
-        .query<LoopRow, [string, number]>("SELECT * FROM loops WHERE status = ? AND archived_at IS NULL ORDER BY next_run_at ASC LIMIT ?")
-        .all(opts.status, limit);
+        .query<LoopRow, [string, number, number]>("SELECT * FROM loops WHERE status = ? AND archived_at IS NULL ORDER BY next_run_at ASC LIMIT ? OFFSET ?")
+        .all(opts.status, limit, offset);
     } else if (opts.archived) {
       rows = this.db
-        .query<LoopRow, [number]>("SELECT * FROM loops WHERE archived_at IS NOT NULL ORDER BY archived_at DESC LIMIT ?")
-        .all(limit);
+        .query<LoopRow, [number, number]>("SELECT * FROM loops WHERE archived_at IS NOT NULL ORDER BY archived_at DESC LIMIT ? OFFSET ?")
+        .all(limit, offset);
     } else if (opts.includeArchived) {
-      rows = this.db.query<LoopRow, [number]>("SELECT * FROM loops ORDER BY status ASC, next_run_at ASC LIMIT ?").all(limit);
+      rows = this.db.query<LoopRow, [number, number]>("SELECT * FROM loops ORDER BY status ASC, next_run_at ASC LIMIT ? OFFSET ?").all(limit, offset);
     } else {
       rows = this.db
-        .query<LoopRow, [number]>("SELECT * FROM loops WHERE archived_at IS NULL ORDER BY status ASC, next_run_at ASC LIMIT ?")
-        .all(limit);
+        .query<LoopRow, [number, number]>("SELECT * FROM loops WHERE archived_at IS NULL ORDER BY status ASC, next_run_at ASC LIMIT ? OFFSET ?")
+        .all(limit, offset);
     }
     return this.withLatestRunSummaries(rows.map(rowToLoop));
   }
@@ -3959,25 +3969,26 @@ export class Store {
     return this.getRun(id);
   }
 
-  listRuns(opts: { loopId?: string; status?: RunStatus; limit?: number } = {}): LoopRun[] {
+  listRuns(opts: { loopId?: string; status?: RunStatus; limit?: number; offset?: number } = {}): LoopRun[] {
     const limit = opts.limit ?? 100;
+    const offset = Math.max(0, Math.floor(opts.offset ?? 0));
     let rows: RunRow[];
     if (opts.loopId && opts.status) {
       rows = this.db
-        .query<RunRow, [string, string, number]>(
-          "SELECT * FROM loop_runs WHERE loop_id = ? AND status = ? ORDER BY created_at DESC LIMIT ?",
+        .query<RunRow, [string, string, number, number]>(
+          "SELECT * FROM loop_runs WHERE loop_id = ? AND status = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
         )
-        .all(opts.loopId, opts.status, limit);
+        .all(opts.loopId, opts.status, limit, offset);
     } else if (opts.loopId) {
       rows = this.db
-        .query<RunRow, [string, number]>("SELECT * FROM loop_runs WHERE loop_id = ? ORDER BY created_at DESC LIMIT ?")
-        .all(opts.loopId, limit);
+        .query<RunRow, [string, number, number]>("SELECT * FROM loop_runs WHERE loop_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?")
+        .all(opts.loopId, limit, offset);
     } else if (opts.status) {
       rows = this.db
-        .query<RunRow, [string, number]>("SELECT * FROM loop_runs WHERE status = ? ORDER BY created_at DESC LIMIT ?")
-        .all(opts.status, limit);
+        .query<RunRow, [string, number, number]>("SELECT * FROM loop_runs WHERE status = ? ORDER BY created_at DESC LIMIT ? OFFSET ?")
+        .all(opts.status, limit, offset);
     } else {
-      rows = this.db.query<RunRow, [number]>("SELECT * FROM loop_runs ORDER BY created_at DESC LIMIT ?").all(limit);
+      rows = this.db.query<RunRow, [number, number]>("SELECT * FROM loop_runs ORDER BY created_at DESC LIMIT ? OFFSET ?").all(limit, offset);
     }
     return rows.map(rowToRun);
   }

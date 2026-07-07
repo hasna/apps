@@ -9,7 +9,7 @@
 // pause/etc.) is done client-side by listing and matching, mirroring the local
 // store's requireLoop()/findLoopByName() behaviour.
 
-import type { CreateLoopInput, Loop, LoopStatus } from "../../types.js";
+import type { CreateLoopInput, Loop, LoopStatus, RunStatus } from "../../types.js";
 import { AmbiguousNameError, LoopNotFoundError } from "../errors.js";
 import { resolveCloudStorage } from "./resolve.js";
 import type { HasnaStorageClient } from "./storage.js";
@@ -19,8 +19,11 @@ const RESOURCE = "loops";
 export interface ListLoopsOptions {
   status?: LoopStatus;
   limit?: number;
+  offset?: number;
   archived?: boolean;
   includeArchived?: boolean;
+  /** Exact-name filter: returns every loop with this name (archived included). */
+  name?: string;
 }
 
 /** Loop CRUD backed by the hosted `/v1/loops` API. */
@@ -39,8 +42,10 @@ export class CloudLoopStore {
     const query: Record<string, string | number | boolean> = {};
     if (opts.status) query.status = opts.status;
     if (opts.limit != null) query.limit = opts.limit;
+    if (opts.offset != null) query.offset = opts.offset;
     if (opts.archived != null) query.archived = opts.archived;
     if (opts.includeArchived != null) query.includeArchived = opts.includeArchived;
+    if (opts.name != null) query.name = opts.name;
     const result = await this.client.list<Loop>(RESOURCE, { query });
     // Loops serve app envelopes as { ok, loops: [...] }; the generic client's
     // item extractor doesn't know the `loops` key, so pull it explicitly.
@@ -56,8 +61,9 @@ export class CloudLoopStore {
   async resolveLoop(idOrName: string): Promise<Loop | undefined> {
     const byId = await this.getLoop(idOrName).catch(() => undefined);
     if (byId) return byId;
-    const all = await this.listLoops({ includeArchived: true, limit: 10_000 });
-    const matches = all.filter((loop) => loop.name === idOrName);
+    // Server-side exact-name filter: one bounded query instead of listing the
+    // entire loops table (which broke against the server's page cap).
+    const matches = await this.listLoops({ name: idOrName, limit: 1000 });
     if (matches.length === 0) return undefined;
     if (matches.length === 1) return matches[0];
     const active = matches.filter((loop) => !loop.archivedAt);
@@ -102,7 +108,7 @@ export class CloudLoopStore {
    * so the CLI prints them verbatim — no local `publicRun` re-application.
    */
   async listRuns(
-    opts: { loopId?: string; limit?: number; status?: LoopStatus; showOutput?: boolean } = {},
+    opts: { loopId?: string; limit?: number; status?: RunStatus; showOutput?: boolean } = {},
   ): Promise<Array<Record<string, unknown>>> {
     const query: Record<string, string | number | boolean> = {};
     if (opts.loopId) query.loopId = opts.loopId;

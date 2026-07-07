@@ -306,36 +306,44 @@ export class PostgresLoopStorage implements LoopStorageContract {
   async listLoops(...args: M<"listLoops">["args"]): Promise<M<"listLoops">["result"]> {
     const opts = args[0] ?? {};
     const limit = opts.limit ?? 200;
+    const offset = Math.max(0, Math.floor(opts.offset ?? 0));
     let rows: LoopRow[];
-    if (opts.status && opts.archived) {
+    // Exact-name lookup short-circuits every other filter: returns *all* loops
+    // (archived included) matching the name so callers can detect ambiguity.
+    if (opts.name != null) {
       rows = await this.client.many<LoopRow>(
-        "SELECT * FROM loops WHERE status = $1 AND archived_at IS NOT NULL ORDER BY next_run_at ASC LIMIT $2",
-        [opts.status, limit],
+        "SELECT * FROM loops WHERE name = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+        [opts.name, limit, offset],
+      );
+    } else if (opts.status && opts.archived) {
+      rows = await this.client.many<LoopRow>(
+        "SELECT * FROM loops WHERE status = $1 AND archived_at IS NOT NULL ORDER BY next_run_at ASC LIMIT $2 OFFSET $3",
+        [opts.status, limit, offset],
       );
     } else if (opts.status && opts.includeArchived) {
       rows = await this.client.many<LoopRow>(
-        "SELECT * FROM loops WHERE status = $1 ORDER BY next_run_at ASC LIMIT $2",
-        [opts.status, limit],
+        "SELECT * FROM loops WHERE status = $1 ORDER BY next_run_at ASC LIMIT $2 OFFSET $3",
+        [opts.status, limit, offset],
       );
     } else if (opts.status) {
       rows = await this.client.many<LoopRow>(
-        "SELECT * FROM loops WHERE status = $1 AND archived_at IS NULL ORDER BY next_run_at ASC LIMIT $2",
-        [opts.status, limit],
+        "SELECT * FROM loops WHERE status = $1 AND archived_at IS NULL ORDER BY next_run_at ASC LIMIT $2 OFFSET $3",
+        [opts.status, limit, offset],
       );
     } else if (opts.archived) {
       rows = await this.client.many<LoopRow>(
-        "SELECT * FROM loops WHERE archived_at IS NOT NULL ORDER BY archived_at DESC LIMIT $1",
-        [limit],
+        "SELECT * FROM loops WHERE archived_at IS NOT NULL ORDER BY archived_at DESC LIMIT $1 OFFSET $2",
+        [limit, offset],
       );
     } else if (opts.includeArchived) {
       rows = await this.client.many<LoopRow>(
-        "SELECT * FROM loops ORDER BY status ASC, next_run_at ASC LIMIT $1",
-        [limit],
+        "SELECT * FROM loops ORDER BY status ASC, next_run_at ASC LIMIT $1 OFFSET $2",
+        [limit, offset],
       );
     } else {
       rows = await this.client.many<LoopRow>(
-        "SELECT * FROM loops WHERE archived_at IS NULL ORDER BY status ASC, next_run_at ASC LIMIT $1",
-        [limit],
+        "SELECT * FROM loops WHERE archived_at IS NULL ORDER BY status ASC, next_run_at ASC LIMIT $1 OFFSET $2",
+        [limit, offset],
       );
     }
     return rows.map(rowToLoop);
@@ -862,24 +870,25 @@ export class PostgresLoopStorage implements LoopStorageContract {
   async listRuns(...args: M<"listRuns">["args"]): Promise<M<"listRuns">["result"]> {
     const opts = args[0] ?? {};
     const limit = opts.limit ?? 100;
+    const offset = Math.max(0, Math.floor(opts.offset ?? 0));
     let rows: RunRow[];
     if (opts.loopId && opts.status) {
       rows = await this.client.many<RunRow>(
-        "SELECT * FROM loop_runs WHERE loop_id = $1 AND status = $2 ORDER BY created_at DESC LIMIT $3",
-        [opts.loopId, opts.status, limit],
+        "SELECT * FROM loop_runs WHERE loop_id = $1 AND status = $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4",
+        [opts.loopId, opts.status, limit, offset],
       );
     } else if (opts.loopId) {
       rows = await this.client.many<RunRow>(
-        "SELECT * FROM loop_runs WHERE loop_id = $1 ORDER BY created_at DESC LIMIT $2",
-        [opts.loopId, limit],
+        "SELECT * FROM loop_runs WHERE loop_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+        [opts.loopId, limit, offset],
       );
     } else if (opts.status) {
       rows = await this.client.many<RunRow>(
-        "SELECT * FROM loop_runs WHERE status = $1 ORDER BY created_at DESC LIMIT $2",
-        [opts.status, limit],
+        "SELECT * FROM loop_runs WHERE status = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+        [opts.status, limit, offset],
       );
     } else {
-      rows = await this.client.many<RunRow>("SELECT * FROM loop_runs ORDER BY created_at DESC LIMIT $1", [limit]);
+      rows = await this.client.many<RunRow>("SELECT * FROM loop_runs ORDER BY created_at DESC LIMIT $1 OFFSET $2", [limit, offset]);
     }
     return rows.map(rowToRun);
   }

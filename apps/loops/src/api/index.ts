@@ -288,8 +288,10 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
     const loops = await storage.listLoops({
       status: optionalEnum<LoopStatus>(ctx.url.searchParams.get("status"), ["active", "paused", "stopped", "expired"]),
       limit: optionalLimit(ctx.url.searchParams.get("limit")),
+      offset: optionalOffset(ctx.url.searchParams.get("offset")),
       includeArchived: optionalBoolean(ctx.url.searchParams.get("includeArchived")),
       archived: optionalBoolean(ctx.url.searchParams.get("archived")),
+      name: optionalString(ctx.url.searchParams.get("name")),
     });
     return ok({ loops: loops.map(publicLoop) });
   }
@@ -394,6 +396,7 @@ async function handleRunsRequest(ctx: V1RequestContext, segments: string[]): Pro
       loopId: ctx.url.searchParams.get("loopId") ?? undefined,
       status: optionalEnum<RunStatus>(ctx.url.searchParams.get("status"), ["running", "succeeded", "failed", "timed_out", "abandoned", "skipped"]),
       limit: optionalLimit(ctx.url.searchParams.get("limit")),
+      offset: optionalOffset(ctx.url.searchParams.get("offset")),
     });
     return ok({ runs: runs.map((run) => publicRun(run, showOutput, { redactError: true })) });
   }
@@ -669,11 +672,24 @@ function runnerProtocolPending(message: string): Response {
   return fail("runner_protocol_pending", 501, { message });
 }
 
+// Per-request page cap. A single response never streams more than this many rows
+// into memory; larger result sets are walked with `offset` pagination. Values
+// above the cap are clamped (not rejected) so a caller asking for "everything"
+// still gets a valid first page instead of a 422 or an empty array.
+const MAX_PAGE_LIMIT = 1000;
+
 function optionalLimit(value: string | null): number | undefined {
   if (value == null || value === "") return undefined;
   const limit = Number(value);
-  if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw Object.assign(new Error("invalid_limit"), { status: 422 });
-  return limit;
+  if (!Number.isInteger(limit) || limit < 1) throw Object.assign(new Error("invalid_limit"), { status: 422 });
+  return Math.min(limit, MAX_PAGE_LIMIT);
+}
+
+function optionalOffset(value: string | null): number | undefined {
+  if (value == null || value === "") return undefined;
+  const offset = Number(value);
+  if (!Number.isInteger(offset) || offset < 0) throw Object.assign(new Error("invalid_offset"), { status: 422 });
+  return offset;
 }
 
 function optionalString(value: unknown): string | undefined {

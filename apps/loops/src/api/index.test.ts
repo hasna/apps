@@ -716,4 +716,51 @@ describe("loops-api foundation", () => {
       await storage.close();
     }
   });
+
+  test("GET /v1/loops paginates with offset, clamps oversized limit, and filters by name", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+    try {
+      for (let i = 0; i < 5; i += 1) {
+        await storage.createLoop({
+          name: `page-loop-${i}`,
+          schedule: { type: "once", at: "2030-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        });
+      }
+      // limit>1000 is clamped, NOT rejected with 422 and NOT an empty array.
+      const clamped = await fetch(apiUrl(server, "/v1/loops?limit=100000&includeArchived=true"));
+      expect(clamped.status).toBe(200);
+      const clampedBody = (await clamped.json()) as { ok: boolean; loops: Array<{ id: string }> };
+      expect(clampedBody.ok).toBe(true);
+      expect(clampedBody.loops).toHaveLength(5);
+
+      // offset actually skips rows (page 1 vs page 2 differ).
+      const page1 = (await (await fetch(apiUrl(server, "/v1/loops?limit=2&offset=0&includeArchived=true"))).json()) as {
+        loops: Array<{ id: string }>;
+      };
+      const page2 = (await (await fetch(apiUrl(server, "/v1/loops?limit=2&offset=2&includeArchived=true"))).json()) as {
+        loops: Array<{ id: string }>;
+      };
+      expect(page1.loops).toHaveLength(2);
+      expect(page2.loops).toHaveLength(2);
+      const overlap = page1.loops.filter((l) => page2.loops.some((p) => p.id === l.id));
+      expect(overlap).toHaveLength(0);
+
+      // name filter returns the single exact match (server-side name resolution).
+      const byName = (await (await fetch(apiUrl(server, "/v1/loops?name=page-loop-3&includeArchived=true"))).json()) as {
+        loops: Array<{ name: string }>;
+      };
+      expect(byName.loops).toHaveLength(1);
+      expect(byName.loops[0]?.name).toBe("page-loop-3");
+
+      // negative offset is a 422 (validation, not silent).
+      const badOffset = await fetch(apiUrl(server, "/v1/loops?offset=-1"));
+      expect(badOffset.status).toBe(422);
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
 });

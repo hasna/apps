@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod/v3";
 import { daemonStatus } from "../daemon/control.js";
 import { runDoctor } from "../lib/doctor.js";
-import { CodedError } from "../lib/errors.js";
+import { CodedError, LoopArchivedError } from "../lib/errors.js";
 import {
   publicLoop,
   publicRun,
@@ -20,6 +20,7 @@ import { dataDir } from "../lib/paths.js";
 import { computeNextAfter } from "../lib/recurrence.js";
 import { runLoopNow } from "../lib/scheduler.js";
 import { Store } from "../lib/store.js";
+import { CloudLoopStore, resolveCloudLoopStore } from "../lib/cloud/loops.js";
 import { packageVersion } from "../lib/version.js";
 import { preflightWorkflow } from "../lib/workflow-runner.js";
 import { workflowBodyFromJson } from "../lib/workflow-spec.js";
@@ -215,6 +216,25 @@ async function withStore<T>(fn: (store: Store) => T | Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * Loop-CRUD tools route to the hosted `/v1/loops` API when the process is
+ * flipped to self_hosted (HASNA_LOOPS_STORAGE_MODE=self_hosted +
+ * HASNA_LOOPS_API_URL/KEY); otherwise they fall back to the local SQLite store.
+ * This is the MCP mirror of the CLI's `resolveCloudLoopStore()` branch so MCP
+ * reads and writes never silently stay on local sqlite while the CLI is on cloud.
+ *
+ * `cloud` receives the {@link CloudLoopStore}; `local` receives a scoped
+ * {@link Store} (opened and closed here). Only ONE branch runs per call.
+ */
+async function withLoopBackend<T>(handlers: {
+  cloud: (cloud: CloudLoopStore) => Promise<T>;
+  local: (store: Store) => T | Promise<T>;
+}): Promise<T> {
+  const cloud = resolveCloudLoopStore();
+  if (cloud) return await handlers.cloud(cloud);
+  return await withStore(handlers.local);
+}
+
 // Mutation gate: the old confirm:z.literal("...") parameters were removed on
 // purpose. Zod validated the literal before the handler ran and LLM clients
 // auto-fill required literal params, so they confirmed nothing. The real
@@ -359,16 +379,28 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
       archivedOnly: z.boolean().optional().describe("Return only archived loops (default false)."),
     },
     handler: ({ status, limit, includeArchived, archivedOnly }) =>
-      withStore((store) => ({
-        loops: store
-          .listLoops({
-            status: filteredLoopStatus(status),
-            limit,
-            includeArchived: includeArchived ?? false,
-            archived: archivedOnly ?? false,
-          })
-          .map(publicLoop),
-      })),
+      withLoopBackend({
+        cloud: async (cloud) => ({
+          loops: (
+            await cloud.listLoops({
+              status: filteredLoopStatus(status),
+              limit,
+              includeArchived: includeArchived ?? false,
+              archived: archivedOnly ?? false,
+            })
+          ).map(publicLoop),
+        }),
+        local: (store) => ({
+          loops: store
+            .listLoops({
+              status: filteredLoopStatus(status),
+              limit,
+              includeArchived: includeArchived ?? false,
+              archived: archivedOnly ?? false,
+            })
+            .map(publicLoop),
+        }),
+      }),
   },
   {
     name: "loops_show",
@@ -381,13 +413,24 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
       showOutput: showOutputSchema,
     },
     handler: ({ idOrName, includeLatestRun, showOutput }) =>
-      withStore((store) => {
-        const loop = store.requireLoop(idOrName);
-        const latestRun = includeLatestRun ? store.listRuns({ loopId: loop.id, limit: 1 })[0] : undefined;
-        return {
-          loop: publicLoop(loop),
-          latestRun: latestRun ? publicRun(latestRun, showOutput ?? false) : undefined,
-        };
+      withLoopBackend({
+        cloud: async (cloud) => {
+          const loop = await cloud.requireLoop(idOrName);
+          // Cloud runs come back already shaped by the server's publicRun
+          // (output redacted unless showOutput), so return verbatim.
+          const latestRun = includeLatestRun
+            ? (await cloud.listRuns({ loopId: loop.id, limit: 1, showOutput: showOutput ?? false }))[0]
+            : undefined;
+          return { loop: publicLoop(loop), latestRun };
+        },
+        local: (store) => {
+          const loop = store.requireLoop(idOrName);
+          const latestRun = includeLatestRun ? store.listRuns({ loopId: loop.id, limit: 1 })[0] : undefined;
+          return {
+            loop: publicLoop(loop),
+            latestRun: latestRun ? publicRun(latestRun, showOutput ?? false) : undefined,
+          };
+        },
       }),
   },
   {
@@ -403,16 +446,29 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
       showOutput: showOutputSchema,
     },
     handler: ({ idOrName, status, limit, showOutput }) =>
-      withStore((store) => {
-        const loop = idOrName ? store.requireLoop(idOrName) : undefined;
-        const runs = store
-          .listRuns({
+      withLoopBackend({
+        cloud: async (cloud) => {
+          const loop = idOrName ? await cloud.requireLoop(idOrName) : undefined;
+          // Cloud runs are already publicRun-shaped by the server; return verbatim.
+          const runs = await cloud.listRuns({
             loopId: loop?.id,
             status: status as RunStatus | undefined,
             limit,
-          })
-          .map((run) => publicRun(run, showOutput ?? false));
-        return { loop: loop ? publicLoop(loop) : undefined, runs };
+            showOutput: showOutput ?? false,
+          });
+          return { loop: loop ? publicLoop(loop) : undefined, runs };
+        },
+        local: (store) => {
+          const loop = idOrName ? store.requireLoop(idOrName) : undefined;
+          const runs = store
+            .listRuns({
+              loopId: loop?.id,
+              status: status as RunStatus | undefined,
+              limit,
+            })
+            .map((run) => publicRun(run, showOutput ?? false));
+          return { loop: loop ? publicLoop(loop) : undefined, runs };
+        },
       }),
   },
   {
@@ -662,7 +718,14 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
     annotations: mutationAnnotations({ idempotent: true }),
     inputSchema: { idOrName: loopIdOrNameSchema },
     handler: ({ idOrName }) =>
-      withStore((store) => ({ loop: publicLoop(store.updateLoop(store.requireUniqueLoop(idOrName).id, { status: "paused" })) })),
+      withLoopBackend({
+        cloud: async (cloud) => {
+          const loop = await cloud.requireLoop(idOrName);
+          if (loop.archivedAt) throw new LoopArchivedError(idOrName);
+          return { loop: publicLoop(await cloud.updateLoop(loop.id, { status: "paused" })) };
+        },
+        local: (store) => ({ loop: publicLoop(store.updateLoop(store.requireUniqueLoop(idOrName).id, { status: "paused" })) }),
+      }),
   },
   {
     name: "loops_resume",
@@ -673,17 +736,29 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
     annotations: mutationAnnotations({ idempotent: true }),
     inputSchema: { idOrName: loopIdOrNameSchema },
     handler: ({ idOrName }) =>
-      withStore((store) => {
-        const loop = store.requireUniqueLoop(idOrName);
-        // A stopped loop has next_run_at NULL; dueLoops requires it IS NOT NULL,
-        // so resuming without recomputing leaves the loop active but permanently
-        // dormant. Recompute the next slot from now when it is missing.
-        let nextRunAt = loop.nextRunAt;
-        if (!nextRunAt) {
-          const now = new Date();
-          nextRunAt = computeNextAfter(loop.schedule, now, now);
-        }
-        return { loop: publicLoop(store.updateLoop(loop.id, { status: "active", nextRunAt })) };
+      withLoopBackend({
+        cloud: async (cloud) => {
+          const loop = await cloud.requireLoop(idOrName);
+          if (loop.archivedAt) throw new LoopArchivedError(idOrName);
+          let nextRunAt = loop.nextRunAt;
+          if (!nextRunAt) {
+            const now = new Date();
+            nextRunAt = computeNextAfter(loop.schedule, now, now);
+          }
+          return { loop: publicLoop(await cloud.updateLoop(loop.id, { status: "active", nextRunAt })) };
+        },
+        local: (store) => {
+          const loop = store.requireUniqueLoop(idOrName);
+          // A stopped loop has next_run_at NULL; dueLoops requires it IS NOT NULL,
+          // so resuming without recomputing leaves the loop active but permanently
+          // dormant. Recompute the next slot from now when it is missing.
+          let nextRunAt = loop.nextRunAt;
+          if (!nextRunAt) {
+            const now = new Date();
+            nextRunAt = computeNextAfter(loop.schedule, now, now);
+          }
+          return { loop: publicLoop(store.updateLoop(loop.id, { status: "active", nextRunAt })) };
+        },
       }),
   },
   {
@@ -695,9 +770,16 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
     annotations: mutationAnnotations({ idempotent: true }),
     inputSchema: { idOrName: loopIdOrNameSchema },
     handler: ({ idOrName }) =>
-      withStore((store) => ({
-        loop: publicLoop(store.updateLoop(store.requireUniqueLoop(idOrName).id, { status: "stopped", nextRunAt: undefined })),
-      })),
+      withLoopBackend({
+        cloud: async (cloud) => {
+          const loop = await cloud.requireLoop(idOrName);
+          if (loop.archivedAt) throw new LoopArchivedError(idOrName);
+          return { loop: publicLoop(await cloud.updateLoop(loop.id, { status: "stopped", nextRunAt: undefined })) };
+        },
+        local: (store) => ({
+          loop: publicLoop(store.updateLoop(store.requireUniqueLoop(idOrName).id, { status: "stopped", nextRunAt: undefined })),
+        }),
+      }),
   },
   {
     name: "loops_run_now",
@@ -709,19 +791,41 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
     annotations: mutationAnnotations(),
     inputSchema: { idOrName: loopIdOrNameSchema },
     handler: ({ idOrName }) =>
-      withStore(async (store) => {
-        const daemon = daemonStatus(store);
-        // requireUniqueLoop so an ambiguous name errors instead of scheduling the
-        // newest same-named loop.
-        const result = await runLoopNow({ store, idOrName: store.requireUniqueLoop(idOrName).id, runnerId: `mcp:${process.pid}`, mode: "schedule" });
-        return {
-          scheduledFor: result.scheduledFor,
-          loop: publicLoop(result.loop),
-          daemon: { running: daemon.running, stale: daemon.stale, pid: daemon.pid },
-          warning: daemon.running
-            ? undefined
-            : "loops daemon is not running: the loop is marked due, but nothing will execute it until the daemon starts ('loops daemon start').",
-        };
+      withLoopBackend<{
+        scheduledFor: string;
+        loop: ReturnType<typeof publicLoop>;
+        daemon: { running: boolean; stale: boolean; pid: number | undefined } | undefined;
+        warning: string | undefined;
+      }>({
+        cloud: async (cloud) => {
+          // Flipped to cloud: marking due is a schedule mutation on the hosted
+          // loop record (set next_run_at=now); a self-hosted runner picks it up.
+          const loop = await cloud.requireLoop(idOrName);
+          if (loop.archivedAt) throw new LoopArchivedError(idOrName);
+          const now = new Date().toISOString();
+          const updated = await cloud.updateLoop(loop.id, { status: "active", nextRunAt: now });
+          return {
+            scheduledFor: now,
+            loop: publicLoop(updated),
+            daemon: undefined,
+            warning:
+              "loops is flipped to self_hosted: the loop is marked due on the hosted control plane; a self-hosted runner must execute it.",
+          };
+        },
+        local: async (store) => {
+          const daemon = daemonStatus(store);
+          // requireUniqueLoop so an ambiguous name errors instead of scheduling the
+          // newest same-named loop.
+          const result = await runLoopNow({ store, idOrName: store.requireUniqueLoop(idOrName).id, runnerId: `mcp:${process.pid}`, mode: "schedule" });
+          return {
+            scheduledFor: result.scheduledFor,
+            loop: publicLoop(result.loop),
+            daemon: { running: daemon.running, stale: daemon.stale, pid: daemon.pid },
+            warning: daemon.running
+              ? undefined
+              : "loops daemon is not running: the loop is marked due, but nothing will execute it until the daemon starts ('loops daemon start').",
+          };
+        },
       }),
   },
   {
@@ -731,7 +835,11 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
     guarded: true,
     annotations: mutationAnnotations({ idempotent: true }),
     inputSchema: { idOrName: loopIdOrNameSchema },
-    handler: ({ idOrName }) => withStore((store) => ({ loop: publicLoop(store.archiveLoop(idOrName)) })),
+    handler: ({ idOrName }) =>
+      withLoopBackend({
+        cloud: async (cloud) => ({ loop: publicLoop(await cloud.archiveLoop(idOrName)) }),
+        local: (store) => ({ loop: publicLoop(store.archiveLoop(idOrName)) }),
+      }),
   },
   {
     name: "loops_unarchive",
@@ -740,7 +848,11 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
     guarded: true,
     annotations: mutationAnnotations({ idempotent: true }),
     inputSchema: { idOrName: loopIdOrNameSchema },
-    handler: ({ idOrName }) => withStore((store) => ({ loop: publicLoop(store.unarchiveLoop(idOrName)) })),
+    handler: ({ idOrName }) =>
+      withLoopBackend({
+        cloud: async (cloud) => ({ loop: publicLoop(await cloud.unarchiveLoop(idOrName)) }),
+        local: (store) => ({ loop: publicLoop(store.unarchiveLoop(idOrName)) }),
+      }),
   },
   {
     name: "loops_create_command",
@@ -762,24 +874,24 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
       // CLI or SDK.
       shell: z.never().optional().describe("Not supported over MCP: shell execution is rejected. Use 'command' plus 'args' instead."),
     },
-    handler: (input) =>
-      withStore((store) => {
-        const timeoutMs = input.timeoutMs as TimeoutMs | undefined;
-        const loop = store.createLoop(
-          commonCreateInput({
-            ...input,
-            target: {
-              type: "command",
-              command: nonEmpty(input.command, "command"),
-              args: input.args,
-              cwd: input.cwd,
-              shell: false,
-              timeoutMs,
-            },
-          }),
-        );
-        return { loop: publicLoop(loop) };
-      }),
+    handler: (input) => {
+      const timeoutMs = input.timeoutMs as TimeoutMs | undefined;
+      const createInput = commonCreateInput({
+        ...input,
+        target: {
+          type: "command",
+          command: nonEmpty(input.command, "command"),
+          args: input.args,
+          cwd: input.cwd,
+          shell: false,
+          timeoutMs,
+        },
+      });
+      return withLoopBackend({
+        cloud: async (cloud) => ({ loop: publicLoop(await cloud.createLoop(createInput)) }),
+        local: (store) => ({ loop: publicLoop(store.createLoop(createInput)) }),
+      });
+    },
   },
   {
     name: "loops_create_workflow",
@@ -793,23 +905,24 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
       workflow: workflowIdOrNameSchema,
       workflowInput: z.record(z.string(), z.string()).optional().describe("String key/value input passed to the workflow on each run."),
     },
-    handler: (input) =>
-      withStore((store) => {
-        const workflow = store.requireWorkflow(input.workflow);
-        const timeoutMs = input.timeoutMs as TimeoutMs | undefined;
-        const loop = store.createLoop(
-          commonCreateInput({
-            ...input,
-            target: {
-              type: "workflow",
-              workflowId: workflow.id,
-              input: input.workflowInput,
-              timeoutMs,
-            },
-          }),
-        );
-        return { workflow: publicWorkflow(workflow), loop: publicLoop(loop) };
-      }),
+    handler: (input) => {
+      // Workflow *specs* are local definitions (like a command's PATH binary),
+      // resolved from the local store even when loops are flipped to cloud; only
+      // the loop record is centralized. Resolve the spec first, then create the
+      // loop against whichever backend is active.
+      const timeoutMs = input.timeoutMs as TimeoutMs | undefined;
+      const workflow = withStore((store) => store.requireWorkflow(input.workflow));
+      return workflow.then((wf) => {
+        const createInput = commonCreateInput({
+          ...input,
+          target: { type: "workflow", workflowId: wf.id, input: input.workflowInput, timeoutMs },
+        });
+        return withLoopBackend({
+          cloud: async (cloud) => ({ workflow: publicWorkflow(wf), loop: publicLoop(await cloud.createLoop(createInput)) }),
+          local: (store) => ({ workflow: publicWorkflow(wf), loop: publicLoop(store.createLoop(createInput)) }),
+        });
+      });
+    },
   },
 ];
 

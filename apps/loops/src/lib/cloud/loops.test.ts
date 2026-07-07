@@ -110,6 +110,45 @@ describe("CloudLoopStore CRUD over HTTP", () => {
     expect(await store.deleteLoop("missing-id")).toBe(false);
   });
 
+  test("resolveLoop falls back to a server-side name filter, not a full list", async () => {
+    const { store, calls } = fakeClient((method, path) => {
+      // id lookup misses; name filter returns the single match.
+      if (method === "GET" && path === "/loops/my-loop") return { status: 404, body: { ok: false, error: "not_found" } };
+      if (method === "GET" && path.startsWith("/loops?")) {
+        return { status: 200, body: { ok: true, loops: [{ id: "L1", name: "my-loop", status: "active" }] } };
+      }
+      return { status: 404, body: null };
+    });
+    const loop = await store.requireLoop("my-loop");
+    expect(loop.id).toBe("L1");
+    const nameCall = calls.find((c) => c.method === "GET" && c.path.startsWith("/loops?"));
+    // Must use the bounded name filter, never an unbounded limit=10000 list.
+    expect(nameCall?.path).toContain("name=my-loop");
+    expect(nameCall?.path).not.toContain("limit=10000");
+  });
+
+  test("resolveLoop throws AmbiguousNameError when >1 active name match", async () => {
+    const { store } = fakeClient((method, path) => {
+      if (method === "GET" && path === "/loops/dup") return { status: 404, body: { ok: false, error: "not_found" } };
+      if (method === "GET" && path.startsWith("/loops?")) {
+        return { status: 200, body: { ok: true, loops: [{ id: "A", name: "dup", status: "active" }, { id: "B", name: "dup", status: "active" }] } };
+      }
+      return { status: 404, body: null };
+    });
+    await expect(store.requireLoop("dup")).rejects.toThrow(/ambiguous/i);
+  });
+
+  test("listLoops forwards offset for pagination past the page cap", async () => {
+    const { store, calls } = fakeClient((method, path) => {
+      if (method === "GET" && path.startsWith("/loops")) return { status: 200, body: { ok: true, loops: [] } };
+      return { status: 404, body: null };
+    });
+    await store.listLoops({ limit: 1000, offset: 2000, includeArchived: true });
+    const call = calls.find((c) => c.method === "GET" && c.path.startsWith("/loops"));
+    expect(call?.path).toContain("offset=2000");
+    expect(call?.path).toContain("limit=1000");
+  });
+
   test("listRuns GETs /runs, forwards filters, extracts the { runs } envelope", async () => {
     const { store, calls } = fakeClient((method, path) => {
       if (method === "GET" && path.startsWith("/runs")) {
