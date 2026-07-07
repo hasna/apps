@@ -129,9 +129,17 @@ For apps that cannot build inside the sandbox resource limit, build locally firs
 ### Common Flags
 
 - `--json --output results.json` — write structured results to a file for downstream tooling.
+- `--limit <n> --offset <n>` — page list, status, and result output without filling a terminal or agent context.
+- `--verbose` — expand long human-readable fields such as URLs, scenario names, reasoning, errors, paths, and tags.
 - `--timeout <ms>` — per-scenario timeout (default: 60s).
 - `--overall-timeout <ms>` — hard timeout for the whole run (default: 10 minutes; CI safety net).
 - `--github-comment` — post a pass/fail summary as a comment on the current GitHub PR.
+
+### Output And Gradual Disclosure
+
+Human-readable list, status, and result commands are compact by default. They show essential fields, cap rows, truncate long text, and print a hint for the next detail command. Use detail commands such as `testers show <id>`, `testers project show <id>`, `testers workflow show <id>`, or `testers results <run-id> --verbose` when you need full context.
+
+`--json` remains the machine-readable path and returns full records where commands already did so. MCP list tools follow the same compact default and accept `limit`, `offset`, and `verbose: true`; use a matching `get_*` tool when one exists for a single full record.
 
 ### Secure Production Debugging
 

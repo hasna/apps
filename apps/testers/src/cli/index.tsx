@@ -13,10 +13,11 @@ import {
   getScenario,
   getScenarioByShortId,
   listScenarios,
+  countScenarios,
   updateScenario,
   deleteScenario,
 } from "../db/scenarios.js";
-import { getRun, listRuns } from "../db/runs.js";
+import { getRun, listRuns, countRuns } from "../db/runs.js";
 import { getResultsByRun } from "../db/results.js";
 import { listScreenshots } from "../db/screenshots.js";
 import { runByFilter, startRunAsync, onRunEvent } from "../lib/runner.js";
@@ -27,6 +28,7 @@ import {
   formatRunList,
   formatScenarioList,
 } from "../lib/reporter.js";
+import { compactLimit, compactOffset, pageItems, paginationHint, truncateText } from "../lib/compact-output.js";
 import { loadConfig } from "../lib/config.js";
 import { importFromTodos } from "../lib/todos-connector.js";
 import { installBrowser } from "../lib/browser.js";
@@ -77,11 +79,13 @@ import {
 } from "../db/projects.js";
 import {
   createPersona,
+  countPersonas,
   getPersona,
   listPersonas,
   deletePersona,
 } from "../db/personas.js";
 import {
+  countApiChecks,
   createApiCheck,
   getApiCheck,
   listApiChecks,
@@ -766,6 +770,25 @@ function stripAnsi(str: string): string {
   return str.replace(/\x1B\[[0-9;]*m/g, "");
 }
 
+function cliPage<T>(items: T[], opts: { limit?: string; offset?: string }, defaultLimit = 20, maxLimit = 100) {
+  return pageItems(items, {
+    limit: compactLimit(opts.limit, defaultLimit, maxLimit),
+    offset: compactOffset(opts.offset),
+    defaultLimit,
+    maxLimit,
+  });
+}
+
+function cliRequestedLimit(value: unknown, fallback?: number): number | undefined {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.floor(parsed);
+}
+
+function logCompactFooter(shown: number, total: number, detail: string, offset = 0) {
+  log(chalk.dim(`  ${paginationHint(shown, total, detail, offset)}`));
+}
+
 program
   .name("testers")
   .version(pkg.version)
@@ -1011,18 +1034,27 @@ program
   .option("--offset <n>", "Skip first N results", "0")
   .option("--json", "Output as JSON", false)
   .option("--group", "Group scenarios by first tag", false)
+  .option("--verbose", "Show untruncated scenario names and tags", false)
   .action((opts) => {
     try {
-      const scenarios = listScenarios({
+      const limit = opts.json
+        ? (cliRequestedLimit(opts.limit, 50) ?? 50)
+        : compactLimit(opts.limit, 50, 200);
+      const offset = compactOffset(opts.offset);
+      const filter = {
         tags: opts.tag ? [opts.tag] : undefined,
         priority: opts.priority as ScenarioPriority | undefined,
         projectId: opts.project,
         search: opts.search,
         sort: opts.sort as "date" | "priority" | "name" | undefined,
         desc: !opts.asc,
-        limit: parseInt(opts.limit, 10),
-        offset: parseInt(opts.offset, 10) || undefined,
+      };
+      const scenarios = listScenarios({
+        ...filter,
+        limit,
+        offset: offset || undefined,
       });
+      const total = countScenarios(filter);
       if (opts.json) {
         log(JSON.stringify(scenarios, null, 2));
       } else if (opts.group) {
@@ -1036,10 +1068,10 @@ program
           log("");
           log(chalk.bold(`  ${groupName}`) + chalk.dim(` (${items.length})`));
           log(chalk.dim("  " + "─".repeat(40)));
-          log(formatScenarioList(items));
+          log(formatScenarioList(items, { total: items.length, verbose: opts.verbose }));
         }
       } else {
-        log(formatScenarioList(scenarios));
+        log(formatScenarioList(scenarios, { total, limit, offset, verbose: opts.verbose }));
       }
     } catch (error) {
       logError(
@@ -1750,10 +1782,15 @@ program
                 `\r  ${statusIcon}  ${run.passed} passed  ${run.failed} failed  ${run.total - run.passed - run.failed} running  (${results.length}/${run.total})\n`,
               );
 
-              for (const r of results) {
+              const resultPage = pageItems(results, {
+                limit: 50,
+                defaultLimit: 50,
+                maxLimit: 50,
+              });
+              for (const r of resultPage.items) {
                 const scenario = getScenario(r.scenarioId);
                 const name = scenario
-                  ? scenario.name
+                  ? truncateText(scenario.name, 90)
                   : r.scenarioId.slice(0, 8);
                 const icon =
                   r.status === "passed"
@@ -1768,6 +1805,13 @@ program
                     ? chalk.dim(` ${(r.durationMs / 1000).toFixed(1)}s`)
                     : "";
                 process.stdout.write(`    ${icon} ${name}${dur}\n`);
+              }
+              if (resultPage.truncated) {
+                process.stdout.write(
+                  chalk.dim(
+                    `    ${paginationHint(resultPage.returned, resultPage.total, `testers results ${runId.slice(0, 8)} --verbose or --limit/--offset`, resultPage.offset)}\n`,
+                  ),
+                );
               }
             };
 
@@ -1787,7 +1831,7 @@ program
             if (finalRun) {
               log("");
               const results = getResultsByRun(runId);
-              log(formatTerminal(finalRun, results));
+              log(formatTerminal(finalRun, results, { verbose: opts.verbose }));
             }
             process.exit(finalRun ? getExitCode(finalRun) : 0);
           }
@@ -1928,7 +1972,7 @@ program
               log(jsonOutput);
             }
           } else {
-            log(formatTerminal(run, results, { failedOnly: opts.failedOnly }));
+            log(formatTerminal(run, results, { failedOnly: opts.failedOnly, verbose: opts.verbose }));
           }
 
           // Post GitHub PR comment if requested
@@ -2111,7 +2155,7 @@ program
             log(jsonOutput);
           }
         } else {
-          log(formatTerminal(run, results, { failedOnly: opts.failedOnly }));
+          log(formatTerminal(run, results, { failedOnly: opts.failedOnly, verbose: opts.verbose }));
         }
 
         // Post GitHub PR comment if requested (works for the main run path too, not just ad-hoc)
@@ -2159,9 +2203,14 @@ program
   .option("-l, --limit <n>", "Limit results", "20")
   .option("--offset <n>", "Skip first N results", "0")
   .option("--json", "Output as JSON", false)
+  .option("--verbose", "Show untruncated run URLs", false)
   .action((opts) => {
     try {
-      const runs = listRuns({
+      const limit = opts.json
+        ? (cliRequestedLimit(opts.limit, 20) ?? 20)
+        : compactLimit(opts.limit, 20, 100);
+      const offset = compactOffset(opts.offset);
+      const filter = {
         status: opts.status as
           | "pending"
           | "running"
@@ -2171,13 +2220,17 @@ program
           | undefined,
         sort: opts.sort as "date" | "duration" | "cost" | undefined,
         desc: !opts.asc,
-        limit: parseInt(opts.limit, 10),
-        offset: parseInt(opts.offset, 10) || undefined,
+      };
+      const runs = listRuns({
+        ...filter,
+        limit,
+        offset: offset || undefined,
       });
+      const total = countRuns(filter);
       if (opts.json) {
         log(JSON.stringify(runs, null, 2));
       } else {
-        log(formatRunList(runs));
+        log(formatRunList(runs, { total, limit, offset, verbose: opts.verbose }));
       }
     } catch (error) {
       logError(
@@ -2195,6 +2248,10 @@ program
   .command("results <run-id>")
   .description("Show results for a test run")
   .option("--json", "Output as JSON", false)
+  .option("-l, --limit <n>", "Limit displayed results", "50")
+  .option("--offset <n>", "Skip first N results", "0")
+  .option("--failed-only", "Show only failed/error results", false)
+  .option("--verbose", "Show full reasoning, errors, scenario names, and run URL", false)
   .action((runId: string, opts) => {
     try {
       const run = getRun(runId);
@@ -2207,7 +2264,12 @@ program
       if (opts.json) {
         log(formatJSON(run, results));
       } else {
-        log(formatTerminal(run, results));
+        const filtered = opts.failedOnly
+          ? results.filter((r) => r.status === "failed" || r.status === "error")
+          : results;
+        const page = cliPage(filtered, opts, 50, 200);
+        log(formatTerminal(run, page.items, { failedOnly: false, summaryResults: results, verbose: opts.verbose, compactFooter: false }));
+        logCompactFooter(page.returned, page.total, "testers results <run-id> --json, --verbose, --failed-only, or --limit/--offset", page.offset);
       }
     } catch (error) {
       logError(
@@ -2721,10 +2783,13 @@ projectCmd
   )
   .option("-l, --limit <n>", "Limit results", "100")
   .option("--offset <n>", "Skip first N results", "0")
+  .option("--verbose", "Show untruncated names and paths", false)
   .action((opts) => {
     try {
-      const limit = Math.max(1, parseInt(opts.limit, 10) || 100);
-      const offset = Math.max(0, parseInt(opts.offset, 10) || 0);
+      const limit = opts.json
+        ? (cliRequestedLimit(opts.limit, 100) ?? 100)
+        : compactLimit(opts.limit, 100, 200);
+      const offset = compactOffset(opts.offset);
       const search =
         typeof opts.search === "string" && opts.search.trim().length > 0
           ? opts.search.trim().toLowerCase()
@@ -2772,18 +2837,14 @@ projectCmd
         `  ${"─".repeat(38)} ${"─".repeat(24)} ${"─".repeat(30)} ${"─".repeat(20)}`,
       );
       for (const p of paged) {
+        const name = opts.verbose ? p.name : truncateText(p.name, 24);
+        const path = opts.verbose ? (p.path ?? "—") : truncateText(p.path ?? "—", 30);
         log(
-          `  ${p.id.padEnd(38)} ${p.name.padEnd(24)} ${(p.path ?? chalk.dim("—")).toString().padEnd(30)} ${p.createdAt}`,
+          `  ${p.id.padEnd(38)} ${name.padEnd(24)} ${path.padEnd(30)} ${p.createdAt}`,
         );
       }
-      if (offset + paged.length < filtered.length) {
-        log("");
-        log(
-          chalk.dim(
-            `  Showing ${paged.length} of ${filtered.length} projects (use --limit/--offset to paginate)`,
-          ),
-        );
-      }
+      log("");
+      logCompactFooter(paged.length, filtered.length, "testers project show <id>, --verbose, or --json", offset);
       log("");
     } catch (error) {
       logError(
@@ -3596,8 +3657,12 @@ sandboxCmd
   .command("list")
   .description("List app sandboxes launched by testers")
   .option("--json", "Output as JSON", false)
+  .option("-l, --limit <n>", "Limit results", "20")
+  .option("--offset <n>", "Skip first N results", "0")
+  .option("--verbose", "Show full source and working directories", false)
   .action((opts) => {
     const launches = listSandboxAppLaunches();
+    const page = cliPage(launches, opts, 20, 100);
     if (opts.json) {
       log(JSON.stringify(launches, null, 2));
       return;
@@ -3609,16 +3674,18 @@ sandboxCmd
     log("");
     log(chalk.bold("  App Sandboxes"));
     log("");
-    for (const item of launches) {
+    for (const item of page.items) {
       log(
-        `  ${chalk.dim(item.sandboxId.slice(0, 8))}  ${item.provider.padEnd(8)} ${item.mode.padEnd(4)} ${item.publicUrl}`,
+        `  ${chalk.dim(item.sandboxId.slice(0, 8))}  ${item.provider.padEnd(8)} ${item.mode.padEnd(4)} ${truncateText(item.publicUrl, 90)}`,
       );
       log(
         chalk.dim(
-          `            ${item.sourceDir} (${item.workingDir}) expires ${item.expiresAt}`,
+          `            ${opts.verbose ? item.sourceDir : truncateText(item.sourceDir, 72)} (${opts.verbose ? item.workingDir : truncateText(item.workingDir, 48)}) expires ${item.expiresAt}`,
         ),
       );
     }
+    log("");
+    logCompactFooter(page.returned, page.total, "testers sandbox logs <id>, --verbose, or --json", page.offset);
     log("");
   });
 
@@ -3733,9 +3800,10 @@ sessionCmd
   .option("--limit <n>", "Max sessions to show", "20")
   .option("--search <query>", "Search by URL or title")
   .option("--json", "Output as JSON", false)
+  .option("--verbose", "Show full URLs and titles", false)
   .action((opts) => {
     try {
-      const limit = parseInt(opts.limit, 10);
+      const limit = compactLimit(opts.limit, 20, 100);
       const sessions = opts.search
         ? searchSessions(opts.search, limit)
         : listSessions(limit);
@@ -3767,21 +3835,20 @@ sessionCmd
             : s.status === "saved"
               ? chalk.yellow
               : chalk.dim;
-        const url = s.url
-          ? s.url.length > 60
-            ? s.url.slice(0, 57) + "..."
-            : s.url
-          : "about:blank";
+        const url = s.url ? (opts.verbose ? s.url : truncateText(s.url, 80)) : "about:blank";
+        const title = opts.verbose ? (s.title ?? "Untitled") : truncateText(s.title ?? "Untitled", 80);
         log(
           chalk.bold(`  ${s.id.slice(0, 8)}`) +
             `  ${statusColor(s.status)}  ${url}`,
         );
         log(
           chalk.dim(
-            `         ${s.title ?? "Untitled"} | ${s.entryCount} entries | ${s.errorCount} errors | ${s.startTime}`,
+            `         ${title} | ${s.entryCount} entries | ${s.errorCount} errors | ${s.startTime}`,
           ),
         );
       }
+      log("");
+      logCompactFooter(sessions.length, total, "testers sessions show <id>, --verbose, or --json");
       log("");
     } catch (error) {
       logError(
@@ -4003,6 +4070,9 @@ scheduleCmd
   .option("--project <id>", "Filter by project ID")
   .option("--enabled", "Show only enabled schedules")
   .option("--json", "Output as JSON", false)
+  .option("-l, --limit <n>", "Limit results", "20")
+  .option("--offset <n>", "Skip first N results", "0")
+  .option("--verbose", "Show untruncated schedule names and URLs", false)
   .action((opts) => {
     try {
       const projectId = resolveProject(opts.project);
@@ -4010,6 +4080,7 @@ scheduleCmd
         projectId,
         enabled: opts.enabled ? true : undefined,
       });
+      const page = cliPage(schedules, opts, 20, 100);
       if (opts.json) {
         log(JSON.stringify(schedules, null, 2));
         return;
@@ -4027,14 +4098,18 @@ scheduleCmd
       log(
         `  ${"─".repeat(20)} ${"─".repeat(18)} ${"─".repeat(30)} ${"─".repeat(9)} ${"─".repeat(22)} ${"─".repeat(22)}`,
       );
-      for (const s of schedules) {
+      for (const s of page.items) {
         const enabled = s.enabled ? chalk.green("yes") : chalk.red("no");
         const nextRun = s.nextRunAt ?? chalk.dim("—");
         const lastRun = s.lastRunAt ?? chalk.dim("—");
+        const name = opts.verbose ? s.name : truncateText(s.name, 20);
+        const url = opts.verbose ? s.url : truncateText(s.url, 30);
         log(
-          `  ${s.name.padEnd(20)} ${s.cronExpression.padEnd(18)} ${s.url.padEnd(30)} ${enabled.toString().padEnd(9)} ${nextRun.toString().padEnd(22)} ${lastRun}`,
+          `  ${name.padEnd(20)} ${s.cronExpression.padEnd(18)} ${url.padEnd(30)} ${enabled.toString().padEnd(9)} ${nextRun.toString().padEnd(22)} ${lastRun}`,
         );
       }
+      log("");
+      logCompactFooter(page.returned, page.total, "testers schedule show <id>, --verbose, or --json", page.offset);
       log("");
     } catch (error) {
       logError(
@@ -4917,9 +4992,13 @@ authCmd
 authCmd
   .command("list")
   .description("List auth presets")
-  .action(() => {
+  .option("-l, --limit <n>", "Limit results", "20")
+  .option("--offset <n>", "Skip first N results", "0")
+  .option("--verbose", "Show full preset names, email references, and paths", false)
+  .action((opts) => {
     try {
       const presets = listAuthPresets();
+      const page = cliPage(presets, opts, 20, 100);
       if (presets.length === 0) {
         log(chalk.dim("No auth presets found."));
         return;
@@ -4933,11 +5012,16 @@ authCmd
       log(
         `  ${"─".repeat(20)} ${"─".repeat(30)} ${"─".repeat(15)} ${"─".repeat(22)}`,
       );
-      for (const p of presets) {
+      for (const p of page.items) {
+        const name = opts.verbose ? p.name : truncateText(p.name, 20);
+        const email = opts.verbose ? p.email : truncateText(p.email, 30);
+        const loginPath = opts.verbose ? p.loginPath : truncateText(p.loginPath, 15);
         log(
-          `  ${p.name.padEnd(20)} ${p.email.padEnd(30)} ${p.loginPath.padEnd(15)} ${p.createdAt}`,
+          `  ${name.padEnd(20)} ${email.padEnd(30)} ${loginPath.padEnd(15)} ${p.createdAt}`,
         );
       }
+      log("");
+      logCompactFooter(page.returned, page.total, "testers auth list --verbose", page.offset);
       log("");
     } catch (error) {
       logError(
@@ -5205,8 +5289,12 @@ flowCmd
   .description("List all flows")
   .option("--project <id>", "Project ID")
   .option("--json", "Output as JSON", false)
+  .option("-l, --limit <n>", "Limit results", "20")
+  .option("--offset <n>", "Skip first N results", "0")
+  .option("--verbose", "Show untruncated flow names", false)
   .action((opts) => {
     const flows = listFlows(resolveProject(opts.project) ?? undefined);
+    const page = cliPage(flows, opts, 20, 100);
     if (opts.json) {
       log(JSON.stringify(flows, null, 2));
       return;
@@ -5218,11 +5306,13 @@ flowCmd
     log("");
     log(chalk.bold("  Flows"));
     log("");
-    for (const f of flows) {
+    for (const f of page.items) {
       log(
-        `  ${chalk.dim(f.id.slice(0, 8))}  ${f.name}  ${chalk.dim(`(${f.scenarioIds.length} scenarios)`)}`,
+        `  ${chalk.dim(f.id.slice(0, 8))}  ${opts.verbose ? f.name : truncateText(f.name, 80)}  ${chalk.dim(`(${f.scenarioIds.length} scenarios)`)}`,
       );
     }
+    log("");
+      logCompactFooter(page.returned, page.total, "testers flow show <id>, --verbose, or --json", page.offset);
     log("");
   });
 
@@ -5345,9 +5435,13 @@ envCmd
   .description("List all environments")
   .option("--project <id>", "Filter by project ID")
   .option("--json", "Output as JSON", false)
+  .option("-l, --limit <n>", "Limit results", "20")
+  .option("--offset <n>", "Skip first N results", "0")
+  .option("--verbose", "Show full URLs", false)
   .action((opts) => {
     try {
       const envs = listEnvironments(opts.project);
+      const page = cliPage(envs, opts, 20, 100);
       if (opts.json) {
         log(JSON.stringify({ total: envs.length, items: envs }, null, 2));
         return;
@@ -5360,13 +5454,15 @@ envCmd
         );
         return;
       }
-      for (const env of envs) {
+      for (const env of page.items) {
         const marker = env.isDefault ? chalk.green(" ★ default") : "";
         const auth = env.authPresetName
           ? chalk.dim(` (auth: ${env.authPresetName})`)
           : "";
-        log(`  ${chalk.bold(env.name)}  ${env.url}${auth}${marker}`);
+        log(`  ${chalk.bold(truncateText(env.name, 50))}  ${opts.verbose ? env.url : truncateText(env.url, 90)}${auth}${marker}`);
       }
+      log("");
+      logCompactFooter(page.returned, page.total, "testers env list --verbose or --json", page.offset);
     } catch (error) {
       logError(
         chalk.red(
@@ -6189,20 +6285,26 @@ agentCmd
 agentCmd
   .command("list")
   .description("List all registered agents")
-  .action(() => {
+  .option("-l, --limit <n>", "Limit results", "20")
+  .option("--offset <n>", "Skip first N results", "0")
+  .option("--verbose", "Show full focus text", false)
+  .action((opts) => {
     try {
       const { listAgents } = require("../db/agents.js");
       const agents = listAgents();
+      const page = cliPage(agents, opts, 20, 100);
       if (agents.length === 0) {
         log(chalk.dim("No agents registered."));
         return;
       }
-      for (const a of agents) {
+      for (const a of page.items) {
         const focus = (a.metadata as Record<string, unknown> | null)?.focus;
         log(
-          `  ${chalk.cyan(a.id.slice(0, 8))}  ${chalk.bold(a.name)}${a.role ? chalk.dim(` [${a.role}]`) : ""}${focus ? chalk.yellow(` → ${focus}`) : ""}  ${chalk.dim(a.lastSeenAt)}`,
+          `  ${chalk.cyan(a.id.slice(0, 8))}  ${chalk.bold(truncateText(a.name, 40))}${a.role ? chalk.dim(` [${truncateText(a.role, 30)}]`) : ""}${focus ? chalk.yellow(` → ${opts.verbose ? focus : truncateText(focus, 80)}`) : ""}  ${chalk.dim(a.lastSeenAt)}`,
         );
       }
+      log("");
+      logCompactFooter(page.returned, page.total, "testers agent <name>, --verbose, or --json where available", page.offset);
     } catch (error) {
       logError(
         chalk.red(
@@ -6436,21 +6538,26 @@ scanCmd
   )
   .option("--project <id>", "Filter by project ID")
   .option("--limit <n>", "Max results", "50")
+  .option("--offset <n>", "Skip first N results", "0")
+  .option("--verbose", "Show full issue messages and page URLs", false)
   .option("--json", "Output as JSON", false)
   .action((opts) => {
     try {
       const { listScanIssues } = require("../db/scan-issues.js");
-      const issues = listScanIssues({
+      const filteredIssues = listScanIssues({
         status: opts.status,
         type: opts.type,
         projectId: opts.project,
-        limit: parseInt(opts.limit),
       });
+      const page = cliPage(filteredIssues, opts, 50, 200);
+      const issues = page.items;
       if (opts.json) {
-        log(JSON.stringify(issues, null, 2));
+        const jsonLimit = Math.max(1, parseInt(opts.limit, 10) || 50);
+        const jsonOffset = compactOffset(opts.offset);
+        log(JSON.stringify(filteredIssues.slice(jsonOffset, jsonOffset + jsonLimit), null, 2));
         return;
       }
-      if (issues.length === 0) {
+      if (filteredIssues.length === 0) {
         log(chalk.dim("No scan issues found."));
         return;
       }
@@ -6462,9 +6569,11 @@ scanCmd
               ? chalk.yellow
               : chalk.green;
         log(
-          `  ${statusColor(i.status.padEnd(10))} ${chalk.cyan(i.type.padEnd(16))} ${chalk.bold(i.severity.padEnd(8))} ${i.message.slice(0, 60)} ${chalk.dim(i.pageUrl)}`,
+          `  ${statusColor(i.status.padEnd(10))} ${chalk.cyan(i.type.padEnd(16))} ${chalk.bold(i.severity.padEnd(8))} ${opts.verbose ? i.message : truncateText(i.message, 80)} ${chalk.dim(opts.verbose ? i.pageUrl : truncateText(i.pageUrl, 90))}`,
         );
       }
+      log("");
+      logCompactFooter(page.returned, page.total, "testers scan issues --verbose or --json", page.offset);
     } catch (e) {
       logError(chalk.red(e instanceof Error ? e.message : String(e)));
       process.exit(1);
@@ -6943,17 +7052,35 @@ apiCmd
   .option("--project <id>", "Filter by project ID")
   .option("--enabled", "Show only enabled checks")
   .option("--json", "Output as JSON", false)
+  .option("-l, --limit <n>", "Limit results")
+  .option("--offset <n>", "Skip first N results", "0")
+  .option("--verbose", "Show untruncated names, URLs, and tags", false)
   .action((opts) => {
     try {
       const projectId = resolveProject(opts.project);
-      const checks = listApiChecks({
-        projectId,
-        enabled: opts.enabled ? true : undefined,
-      });
+      const limit = compactLimit(opts.limit, 20, 100);
+      const offset = compactOffset(opts.offset);
       if (opts.json) {
+        const jsonLimit = cliRequestedLimit(opts.limit);
+        const checks = listApiChecks({
+          projectId,
+          enabled: opts.enabled ? true : undefined,
+          limit: jsonLimit,
+          offset: offset || undefined,
+        });
         log(JSON.stringify(checks, null, 2));
         return;
       }
+      const checks = listApiChecks({
+        projectId,
+        enabled: opts.enabled ? true : undefined,
+        limit,
+        offset: offset || undefined,
+      });
+      const total = countApiChecks({
+        projectId,
+        enabled: opts.enabled ? true : undefined,
+      });
       if (checks.length === 0) {
         log(chalk.dim("No API checks found."));
         return;
@@ -6970,10 +7097,15 @@ apiCmd
       for (const c of checks) {
         const enabled = c.enabled ? chalk.green("on") : chalk.red("off");
         const method = c.method.padEnd(6);
+        const name = opts.verbose ? c.name : truncateText(c.name, 25);
+        const url = opts.verbose ? c.url : truncateText(c.url, 35);
+        const tags = opts.verbose ? c.tags.join(", ") : truncateText(c.tags.join(", "), 50);
         log(
-          `  ${c.shortId.padEnd(10)} ${method.padEnd(8)} ${c.name.slice(0, 24).padEnd(25)} ${c.url.slice(0, 34).padEnd(35)} ${enabled.toString().padEnd(8)} ${c.tags.join(", ")}`,
+          `  ${c.shortId.padEnd(10)} ${method.padEnd(8)} ${name.padEnd(25)} ${url.padEnd(35)} ${enabled.toString().padEnd(8)} ${tags}`,
         );
       }
+      log("");
+      logCompactFooter(checks.length, total, "testers api show <id>, --verbose, or --json", offset);
       log("");
     } catch (error) {
       logError(
@@ -7821,11 +7953,15 @@ workflowCmd
   .option("--project <id>", "Project ID")
   .option("--all", "Include disabled workflows", false)
   .option("--json", "Output as JSON", false)
+  .option("-l, --limit <n>", "Limit results", "20")
+  .option("--offset <n>", "Skip first N results", "0")
+  .option("--verbose", "Show untruncated workflow names", false)
   .action((opts) => {
     const workflows = listTestingWorkflows({
       projectId: opts.project ? resolveProject(opts.project) : undefined,
       enabled: opts.all ? undefined : true,
     });
+    const page = cliPage(workflows, opts, 20, 100);
     if (opts.json) {
       log(JSON.stringify(workflows, null, 2));
       return;
@@ -7837,7 +7973,7 @@ workflowCmd
     log("");
     log(chalk.bold("  Testing Workflows"));
     log("");
-    for (const workflow of workflows) {
+    for (const workflow of page.items) {
       const target =
         workflow.execution.target === "sandbox"
           ? chalk.cyan(
@@ -7845,9 +7981,11 @@ workflowCmd
             )
           : chalk.green("local");
       log(
-        `  ${chalk.dim(workflow.id.slice(0, 8))}  ${workflow.name}  ${target}  ${chalk.dim(workflow.personaIds.length ? `${workflow.personaIds.length} personas` : "no personas")}`,
+        `  ${chalk.dim(workflow.id.slice(0, 8))}  ${opts.verbose ? workflow.name : truncateText(workflow.name, 80)}  ${target}  ${chalk.dim(workflow.personaIds.length ? `${workflow.personaIds.length} personas` : "no personas")}`,
       );
     }
+    log("");
+    logCompactFooter(page.returned, page.total, "testers workflow show <id>, --verbose, or --json", page.offset);
     log("");
   });
 
@@ -7855,6 +7993,7 @@ workflowCmd
   .command("show <id>")
   .description("Show workflow details")
   .option("--json", "Output as JSON", false)
+  .option("--verbose", "Show full long fields", false)
   .action((id: string, opts) => {
     const workflow = getTestingWorkflow(id);
     if (!workflow) {
@@ -7874,7 +8013,10 @@ workflowCmd
     log(
       `  Personas: ${workflow.personaIds.length > 0 ? workflow.personaIds.join(", ") : chalk.dim("none")}`,
     );
-    log(`  Goal:     ${workflow.goal?.prompt ?? chalk.dim("none")}`);
+    log(`  Goal:     ${workflow.goal?.prompt ? (opts.verbose ? workflow.goal.prompt : truncateText(workflow.goal.prompt, 240)) : chalk.dim("none")}`);
+    if (!opts.verbose && workflow.goal?.prompt && workflow.goal.prompt.length > 240) {
+      log(chalk.dim("            Use --json for the full goal prompt."));
+    }
     log("");
   });
 
@@ -8203,17 +8345,33 @@ personaCmd
   .option("--project <id>", "Filter by project ID")
   .option("--global", "Show only global personas", false)
   .option("--json", "Output as JSON", false)
+  .option("-l, --limit <n>", "Limit results")
+  .option("--offset <n>", "Skip first N results", "0")
+  .option("--verbose", "Show untruncated names and roles", false)
   .action((opts) => {
     try {
       const projectId = resolveProject(opts.project);
-      const personas = listPersonas({
+      const limit = compactLimit(opts.limit, 20, 100);
+      const offset = compactOffset(opts.offset);
+      const filter = {
         projectId: opts.global ? undefined : projectId,
         globalOnly: opts.global ? true : undefined,
-      });
+      };
       if (opts.json) {
+        const personas = listPersonas({
+          ...filter,
+          limit: cliRequestedLimit(opts.limit),
+          offset: offset || undefined,
+        });
         log(JSON.stringify(redactPersonas(personas), null, 2));
         return;
       }
+      const personas = listPersonas({
+        ...filter,
+        limit,
+        offset: offset || undefined,
+      });
+      const total = countPersonas(filter);
       if (personas.length === 0) {
         log(chalk.dim("No personas found."));
         return;
@@ -8229,10 +8387,14 @@ personaCmd
       );
       for (const p of personas) {
         const scope = p.projectId ? chalk.dim(`project`) : chalk.blue("Global");
+        const name = opts.verbose ? p.name : truncateText(p.name, 22);
+        const role = opts.verbose ? p.role : truncateText(p.role, 22);
         log(
-          `  ${p.shortId.padEnd(10)} ${p.name.slice(0, 21).padEnd(22)} ${p.role.slice(0, 21).padEnd(22)} ${scope.toString().padEnd(18)} ${p.traits.length} traits`,
+          `  ${p.shortId.padEnd(10)} ${name.padEnd(22)} ${role.padEnd(22)} ${scope.toString().padEnd(18)} ${p.traits.length} traits`,
         );
       }
+      log("");
+      logCompactFooter(personas.length, total, "testers persona show <id>, --verbose, or --json", offset);
       log("");
     } catch (error) {
       logError(
@@ -8960,11 +9122,15 @@ goldenCmd
   .description("List golden answer checks")
   .option("--project <id>", "Filter by project ID")
   .option("--json", "Output as JSON", false)
+  .option("-l, --limit <n>", "Limit results", "20")
+  .option("--offset <n>", "Skip first N results", "0")
+  .option("--verbose", "Show untruncated endpoint and question text", false)
   .action(async (opts) => {
     try {
       const { listGoldenAnswers } = await import("../db/golden-answers.js");
       const projectId = resolveProject(opts.project);
       const goldens = listGoldenAnswers({ projectId });
+      const page = cliPage(goldens, opts, 20, 100);
 
       if (opts.json) {
         log(JSON.stringify(goldens, null, 2));
@@ -8978,14 +9144,16 @@ goldenCmd
 
       log(chalk.bold(`\n  Golden Answer Checks (${goldens.length})`));
       log(chalk.dim("  ─────────────────────────────────────────────────────"));
-      for (const g of goldens) {
+      for (const g of page.items) {
         const status = g.enabled
           ? chalk.green("enabled")
           : chalk.dim("disabled");
         log(
-          `  ${g.shortId}  ${status}  ${chalk.bold(g.endpoint)}  ${g.question.slice(0, 50)}`,
+          `  ${g.shortId}  ${status}  ${chalk.bold(opts.verbose ? g.endpoint : truncateText(g.endpoint, 70))}  ${opts.verbose ? g.question : truncateText(g.question, 70)}`,
         );
       }
+      log("");
+      logCompactFooter(page.returned, page.total, "testers golden run <base-url>, --verbose, or --json", page.offset);
       log("");
     } catch (error) {
       logError(
