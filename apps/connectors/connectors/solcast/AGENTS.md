@@ -15,11 +15,11 @@ bun run typecheck
 
 ```
 src/
-├── api/client.ts   # HTTP client (api_key query auth)
-├── api/solcast.ts  # Endpoint methods
-├── cli/index.ts    # Commander CLI
-├── types/index.ts
-└── utils/config.ts
+|-- api/client.ts   # HTTP client (api_key query auth)
+|-- api/solcast.ts  # Endpoint methods
+|-- cli/index.ts    # Commander CLI
+|-- types/index.ts
+`-- utils/config.ts
 ```
 
 ## Environment

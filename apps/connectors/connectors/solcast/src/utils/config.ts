@@ -7,6 +7,7 @@ const LEGACY_CONNECTOR_NAME = 'connect-solcast';
 const DEFAULT_PROFILE = 'default';
 const PRIVATE_DIR_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
+const PROFILE_NAME_PATTERN = /^[A-Za-z0-9_.-]+$/;
 
 export interface CliConfig {
   apiKey?: string;
@@ -50,7 +51,23 @@ function ensurePrivateDir(path: string): void {
   chmodIfPossible(path, PRIVATE_DIR_MODE);
 }
 
+function normalizeProfileName(profile: string): string {
+  const trimmed = profile.trim();
+  if (
+    !trimmed ||
+    trimmed === '.' ||
+    trimmed === '..' ||
+    trimmed.includes('/') ||
+    trimmed.includes('\\') ||
+    !PROFILE_NAME_PATTERN.test(trimmed)
+  ) {
+    return DEFAULT_PROFILE;
+  }
+  return trimmed;
+}
+
 function ensureWritableProfileDir(profile: string): string {
+  profile = normalizeProfileName(profile);
   const configDir = getPreferredConfigDir();
   const profilesDir = join(configDir, 'profiles');
   const profileDir = join(profilesDir, profile);
@@ -90,7 +107,7 @@ function getCurrentProfile(): string {
       continue;
     }
     try {
-      return readFileSync(currentProfileFile, 'utf-8').trim() || DEFAULT_PROFILE;
+      return normalizeProfileName(readFileSync(currentProfileFile, 'utf-8'));
     } catch {
       return DEFAULT_PROFILE;
     }
@@ -99,6 +116,7 @@ function getCurrentProfile(): string {
 }
 
 function loadConfigFromDir(configDir: string, profile: string): CliConfig {
+  profile = normalizeProfileName(profile);
   const rootConfig = readJsonConfig(join(configDir, 'config.json'));
   const flatProfileConfig = readJsonConfig(join(configDir, 'profiles', `${profile}.json`));
   const profileDirConfig = readJsonConfig(join(configDir, 'profiles', profile, 'config.json'));
@@ -111,6 +129,7 @@ function loadConfigFromDir(configDir: string, profile: string): CliConfig {
 }
 
 function getConfigFilePaths(configDir: string, profile: string): string[] {
+  profile = normalizeProfileName(profile);
   return [
     join(configDir, 'config.json'),
     join(configDir, 'profiles', `${profile}.json`),

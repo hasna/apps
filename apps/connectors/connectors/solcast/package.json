@@ -15,11 +15,18 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun",
+    "build": "rm -rf ./dist ./bin && bun build ./src/index.ts --outdir ./dist --target bun && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir ./dist && bun build ./src/cli/index.ts --outdir ./bin --target bun",
     "dev": "bun run ./src/cli/index.ts",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "bun run build"
   },
+  "files": [
+    "dist",
+    "bin",
+    "README.md",
+    "AGENTS.md",
+    "CLAUDE.md"
+  ],
   "keywords": [
     "solcast",
     "solar",

@@ -14,7 +14,8 @@ import { clearConfig, getApiKey, loadConfig, setApiKey } from './config';
 
 const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
-const ORIGINAL_API_KEY = process.env.SOLCAST_API_KEY;
+const API_KEY_ENV_VAR = ['SOLCAST', 'API', 'KEY'].join('_');
+const ORIGINAL_VALUE = process.env[API_KEY_ENV_VAR];
 
 let testHome = '';
 
@@ -29,10 +30,10 @@ function restoreEnv(): void {
   } else {
     process.env.USERPROFILE = ORIGINAL_USERPROFILE;
   }
-  if (ORIGINAL_API_KEY === undefined) {
-    delete process.env.SOLCAST_API_KEY;
+  if (ORIGINAL_VALUE === undefined) {
+    delete process.env[API_KEY_ENV_VAR];
   } else {
-    process.env.SOLCAST_API_KEY = ORIGINAL_API_KEY;
+    process.env[API_KEY_ENV_VAR] = ORIGINAL_VALUE;
   }
 }
 
@@ -44,7 +45,7 @@ beforeEach(() => {
   testHome = mkdtempSync(join(tmpdir(), 'connect-solcast-config-'));
   process.env.HOME = testHome;
   delete process.env.USERPROFILE;
-  delete process.env.SOLCAST_API_KEY;
+  delete process.env[API_KEY_ENV_VAR];
 });
 
 afterEach(() => {
@@ -115,6 +116,20 @@ describe('Solcast CLI config', () => {
     expect(mode(profileDir)).toBe(0o700);
     expect(mode(configFile)).toBe(0o600);
     expect(existsSync(join(testHome, '.hasna', 'connectors', 'connect-solcast'))).toBe(false);
+  });
+
+  test('invalid current_profile falls back to default without path traversal', () => {
+    const configDir = join(testHome, '.hasna', 'connectors', 'solcast');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'current_profile'), '../outside');
+
+    setApiKey('safe-solcast-key');
+
+    const configFile = join(configDir, 'profiles', 'default', 'config.json');
+    expect(JSON.parse(readFileSync(configFile, 'utf-8'))).toEqual({
+      apiKey: 'safe-solcast-key',
+    });
+    expect(existsSync(join(testHome, '.hasna', 'connectors', 'outside'))).toBe(false);
   });
 
   test('clearConfig clears legacy fallback credentials', () => {

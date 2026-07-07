@@ -707,7 +707,7 @@ export function getTokenExpiry(name: string): number | null {
 
 /**
  * List all profile names for a connector.
- * Reads ~/.hasna/connectors/{name}/profiles/ and legacy connect-{name} entries —
+ * Reads ~/.hasna/connectors/{name}/profiles/ and legacy connect-{name} entries -
  * both .json files (pattern 1) and subdirectories (pattern 2).
  */
 export function listProfiles(name: string): string[] {

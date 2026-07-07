@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Solcast API connector — solar PV power forecasts, live estimated actuals, and historic data.
+Solcast API connector - solar PV power forecasts, live estimated actuals, and historic data.
 
 ## Project Overview
 
@@ -56,10 +56,10 @@ connect-solcast raw --path /data/forecast/rooftop_pv_power --lat <lat> --lon <lo
 
 ```
 ~/.hasna/connectors/solcast/
-├── current_profile
-└── profiles/
-    └── default/
-        └── config.json
+|-- current_profile
+`-- profiles/
+    `-- default/
+        `-- config.json
 ```
 
 Legacy `~/.hasna/connectors/connect-solcast/` profile config is still read as a fallback.

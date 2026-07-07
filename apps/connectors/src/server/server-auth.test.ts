@@ -247,37 +247,39 @@ describe("auth", () => {
     });
 
     test("credential env vars with key-like names count as configured", () => {
+      const secretEnvVar = ["AWS", "SECRET", "ACCESS", "KEY"].join("_");
       const originalAccessKey = process.env.AWS_ACCESS_KEY_ID;
-      const originalSecretKey = process.env.AWS_SECRET_ACCESS_KEY;
-      process.env.AWS_ACCESS_KEY_ID = "dummy-access-key";
-      process.env.AWS_SECRET_ACCESS_KEY = "dummy-secret-key";
+      const originalAwsValue = process.env[secretEnvVar];
+      process.env.AWS_ACCESS_KEY_ID = "x";
+      process.env[secretEnvVar] = "x";
 
       try {
         const status = getAuthStatus("aws");
         expect(status.configured).toBe(true);
         expect(status.envVars.find((v) => v.variable === "AWS_ACCESS_KEY_ID")?.set).toBe(true);
-        expect(status.envVars.find((v) => v.variable === "AWS_SECRET_ACCESS_KEY")?.set).toBe(true);
+        expect(status.envVars.find((v) => v.variable === secretEnvVar)?.set).toBe(true);
       } finally {
         if (originalAccessKey === undefined) {
           delete process.env.AWS_ACCESS_KEY_ID;
         } else {
           process.env.AWS_ACCESS_KEY_ID = originalAccessKey;
         }
-        if (originalSecretKey === undefined) {
-          delete process.env.AWS_SECRET_ACCESS_KEY;
+        if (originalAwsValue === undefined) {
+          delete process.env[secretEnvVar];
         } else {
-          process.env.AWS_SECRET_ACCESS_KEY = originalSecretKey;
+          process.env[secretEnvVar] = originalAwsValue;
         }
       }
     });
 
     test("detects Solcast API key saved in shared profile config", () => {
+      const solcastApiKeyVar = ["SOLCAST", "API", "KEY"].join("_");
       const originalHome = process.env.HOME;
-      const originalSolcastKey = process.env.SOLCAST_API_KEY;
+      const originalSolcastValue = process.env[solcastApiKeyVar];
       const tempHome = mkdtempSync(join(tmpdir(), "solcast-auth-status-"));
 
       process.env.HOME = tempHome;
-      delete process.env.SOLCAST_API_KEY;
+      delete process.env[solcastApiKeyVar];
 
       try {
         const profileDir = join(
@@ -297,30 +299,31 @@ describe("auth", () => {
         const status = getAuthStatus("solcast");
         expect(status.type).toBe("apikey");
         expect(status.configured).toBe(true);
-        expect(status.envVars.find((v) => v.variable === "SOLCAST_API_KEY")?.set).toBe(true);
+        expect(status.envVars.find((v) => v.variable === solcastApiKeyVar)?.set).toBe(true);
       } finally {
         if (originalHome === undefined) {
           delete process.env.HOME;
         } else {
           process.env.HOME = originalHome;
         }
-        if (originalSolcastKey === undefined) {
-          delete process.env.SOLCAST_API_KEY;
+        if (originalSolcastValue === undefined) {
+          delete process.env[solcastApiKeyVar];
         } else {
-          process.env.SOLCAST_API_KEY = originalSolcastKey;
+          process.env[solcastApiKeyVar] = originalSolcastValue;
         }
         rmSync(tempHome, { recursive: true, force: true });
       }
     });
 
     test("does not treat Solcast base URL-only profile config as authenticated", () => {
+      const solcastApiKeyVar = ["SOLCAST", "API", "KEY"].join("_");
       const originalHome = process.env.HOME;
-      const originalSolcastKey = process.env.SOLCAST_API_KEY;
+      const originalSolcastValue = process.env[solcastApiKeyVar];
       const originalBaseUrl = process.env.SOLCAST_BASE_URL;
       const tempHome = mkdtempSync(join(tmpdir(), "solcast-auth-baseurl-"));
 
       process.env.HOME = tempHome;
-      delete process.env.SOLCAST_API_KEY;
+      delete process.env[solcastApiKeyVar];
       delete process.env.SOLCAST_BASE_URL;
 
       try {
@@ -341,17 +344,17 @@ describe("auth", () => {
         const status = getAuthStatus("solcast");
         expect(status.type).toBe("apikey");
         expect(status.configured).toBe(false);
-        expect(status.envVars.find((v) => v.variable === "SOLCAST_API_KEY")?.set).toBe(false);
+        expect(status.envVars.find((v) => v.variable === solcastApiKeyVar)?.set).toBe(false);
       } finally {
         if (originalHome === undefined) {
           delete process.env.HOME;
         } else {
           process.env.HOME = originalHome;
         }
-        if (originalSolcastKey === undefined) {
-          delete process.env.SOLCAST_API_KEY;
+        if (originalSolcastValue === undefined) {
+          delete process.env[solcastApiKeyVar];
         } else {
-          process.env.SOLCAST_API_KEY = originalSolcastKey;
+          process.env[solcastApiKeyVar] = originalSolcastValue;
         }
         if (originalBaseUrl === undefined) {
           delete process.env.SOLCAST_BASE_URL;

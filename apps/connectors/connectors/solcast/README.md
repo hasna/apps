@@ -1,6 +1,6 @@
 # Solcast Connector
 
-TypeScript CLI and library for the [Solcast API](https://docs.solcast.com.au) — solar irradiance, weather, and rooftop PV power forecasts.
+TypeScript CLI and library for the [Solcast API](https://docs.solcast.com.au) - solar irradiance, weather, and rooftop PV power forecasts.
 
 ## Install
 
@@ -16,7 +16,7 @@ API key authentication via query parameter. Set credentials with:
 ```bash
 connect-solcast config set-key <your-api-key>
 # or
-export SOLCAST_API_KEY=your_api_key_here
+export SOLCAST_API_KEY
 ```
 
 Get an API key from the [Solcast Toolkit](https://toolkit.solcast.com.au/).

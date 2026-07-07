@@ -17,6 +17,7 @@ const pkg = await import('../../package.json');
 const VERSION = pkg.version || '0.0.0';
 
 const program = new Command();
+let apiKeyOverride: string | undefined;
 
 program
   .name('connect-solcast')
@@ -27,12 +28,12 @@ program
   .hook('preAction', (thisCommand) => {
     const opts = thisCommand.opts();
     if (opts.apiKey) {
-      process.env.SOLCAST_API_KEY = opts.apiKey;
+      apiKeyOverride = opts.apiKey;
     }
   });
 
 function getClient(): Solcast {
-  const apiKey = getApiKey();
+  const apiKey = apiKeyOverride || getApiKey();
   if (!apiKey) {
     error('No API key configured. Run "connect-solcast config set-key <key>" or set SOLCAST_API_KEY');
     process.exit(1);
