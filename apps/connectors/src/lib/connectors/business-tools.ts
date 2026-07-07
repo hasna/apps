@@ -878,6 +878,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["proposals", "documents", "automation", "sales", "crm"],
   },
   {
+    name: "squid",
+    displayName: "Squid",
+    description: "AI grid planning workspace",
+    category: "Business Tools",
+    tags: ["energy", "grid", "planning", "workflows"],
+  },
+  {
     name: "stackby",
     displayName: "Stackby",
     description: "Spreadsheet-database hybrid with API integrations and no-code automations",
