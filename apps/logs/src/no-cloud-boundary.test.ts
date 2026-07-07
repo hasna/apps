@@ -5,7 +5,12 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-const explicitFiles = ["package.json", "bun.lock", "README.md"];
+// bun.lock is intentionally NOT scanned: it is a dev-only lockfile that is never
+// shipped (package.json `files` ships dist + dashboard/dist only) and it records
+// transitive *devDependencies* of build-time file: deps (e.g. @hasna/agent-registry's
+// dev-only @hasna/cloud). The client-facing dependency surface is validated via
+// package.json (direct runtime deps) below, which stays free of retired cloud packages.
+const explicitFiles = ["package.json", "README.md"];
 
 const scannedRoots = ["docs", "src"];
 
@@ -46,6 +51,10 @@ const retiredMarkers: Array<{ label: string; pattern: RegExp }> = [
 
 const allowedCompatibilityMarkers = new Set([
   "src/lib/remote-storage.ts: retired Postgres adapter",
+  // Vendored @hasna storage-kit's canonical TLS resolver. It *documents* the one
+  // correct fleet TLS approach (and rejects blanket rejectUnauthorized:false); the
+  // marker fires on the word in its comments/type, which is a false positive.
+  "src/generated/storage-kit/tls.ts: disabled TLS",
 ]);
 
 function collectFiles(dir: string): string[] {

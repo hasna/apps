@@ -126,14 +126,47 @@ function wrap(client: HasnaStorageClient): LogsCloudStore {
   };
 }
 
+/** Env keys the resolver reads for the client-flip (canonical + LOGS_ aliases). */
+const MODE_KEYS = [
+  "HASNA_LOGS_STORAGE_MODE",
+  "HASNA_LOGS_MODE",
+  "LOGS_STORAGE_MODE",
+  "LOGS_MODE",
+] as const;
+const API_URL_KEYS = ["HASNA_LOGS_API_URL", "LOGS_API_URL"] as const;
+const API_KEY_KEYS = ["HASNA_LOGS_API_KEY", "LOGS_API_KEY"] as const;
+
+function firstSet(env: NodeJS.ProcessEnv, keys: readonly string[]): boolean {
+  return keys.some((k) => (env[k]?.trim() ?? "") !== "");
+}
+
+/**
+ * The fleet flip writes exactly two vars per app — `HASNA_LOGS_API_URL` and
+ * `HASNA_LOGS_API_KEY` — and deliberately does NOT set a storage-mode var.
+ * Presence of both API vars therefore *is* self_hosted intent: synthesize
+ * `HASNA_LOGS_STORAGE_MODE=self_hosted` so the @hasna/contracts client-flip
+ * resolves to `cloud-http`. If a mode var is already present we leave the env
+ * untouched (explicit `=local` stays local; unset both API vars -> local).
+ */
+function withImpliedSelfHostedMode(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (firstSet(env, MODE_KEYS)) return env;
+  if (firstSet(env, API_URL_KEYS) && firstSet(env, API_KEY_KEYS)) {
+    return { ...env, HASNA_LOGS_STORAGE_MODE: "self_hosted" };
+  }
+  return env;
+}
+
 /**
  * Resolve the cloud logs store from the environment. Returns a ready
  * {@link LogsCloudStore} when the client-flip resolves to cloud-http, else
  * `null` so the caller uses the local SQLite store. Throws if cloud was
  * requested but misconfigured (never silent local drift).
+ *
+ * self_hosted is implied by the two flip vars (API_URL + API_KEY) even when no
+ * storage-mode var is set — matching what `@hasna/machines flip` writes.
  */
 export function resolveLogsCloudStore(env: NodeJS.ProcessEnv = process.env): LogsCloudStore | null {
-  const resolved = resolveStorageClient(LOGS_APP_SLUG, env);
+  const resolved = resolveStorageClient(LOGS_APP_SLUG, withImpliedSelfHostedMode(env));
   if (resolved.transport !== "cloud-http") return null;
   return wrap(resolved.client);
 }

@@ -53,4 +53,30 @@ describe("logs cloud-store resolver (self_hosted client flip)", () => {
     expect(store).not.toBeNull();
     expect(store!.baseUrl).toBe("https://logs.hasna.xyz/v1");
   });
+
+  // Regression: the fleet flip writes ONLY these two vars (no storage-mode var).
+  // Presence of both must imply self_hosted and route to cloud-http, otherwise
+  // an installed CLI silently keeps reading local even with the env set.
+  test("routes to cloud when only the two flip vars (url + key) are set — no mode var", () => {
+    const store = resolveLogsCloudStore({
+      HASNA_LOGS_API_URL: "https://logs.hasna.xyz",
+      HASNA_LOGS_API_KEY: "k_fake_test_key",
+    } as NodeJS.ProcessEnv);
+    expect(store).not.toBeNull();
+    expect(store!.baseUrl).toBe("https://logs.hasna.xyz/v1");
+  });
+
+  test("key alone (no url, no mode var) stays local — flip writes both vars together", () => {
+    const store = resolveLogsCloudStore({
+      HASNA_LOGS_API_KEY: "k_fake_test_key",
+    } as NodeJS.ProcessEnv);
+    expect(store).toBeNull();
+  });
+
+  test("url alone (no key) stays local when no mode var is set", () => {
+    const store = resolveLogsCloudStore({
+      HASNA_LOGS_API_URL: "https://logs.hasna.xyz",
+    } as NodeJS.ProcessEnv);
+    expect(store).toBeNull();
+  });
 });

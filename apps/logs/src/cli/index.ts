@@ -626,7 +626,7 @@ storageCmd
 const dbCmd = program
   .command("db")
   .description(
-    "Cloud Postgres schema commands (HASNA_LOGS_STORAGE_MODE=cloud)",
+    "Server-side Postgres schema commands (in-VPC admin only)",
   );
 
 dbCmd
@@ -2258,4 +2258,9 @@ if (!program.commands.some((command) => command.name() === "events")) {
   registerEventsCommands(program, { source: "logs" });
 }
 
-program.parse();
+// Must be parseAsync (not parse): several actions are async — they route reads
+// and writes to the cloud HTTP API in self_hosted mode. With the synchronous
+// program.parse() the bundled binary can exit before an awaited cloud call and
+// its console output complete, silently no-opping cloud writes. parseAsync
+// awaits the action to completion for both sync and async commands.
+await program.parseAsync();
