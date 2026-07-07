@@ -1,0 +1,8 @@
+.git
+dashboard/node_modules
+dashboard/dist
+sdk/node_modules
+menubar/.build
+coverage
+*.tgz
+*.log

@@ -207,4 +207,43 @@ export const PG_MIGRATIONS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_savings_date ON savings_daily(date)`,
   `CREATE INDEX IF NOT EXISTS idx_requests_account ON requests(account_key)`,
   `CREATE INDEX IF NOT EXISTS idx_sessions_account ON sessions(account_key)`,
+
+  // Widen token/count/duration columns from INT4 to BIGINT. SQLite INTEGER is
+  // 64-bit, so local rows routinely exceed Postgres' int4 max (2,147,483,647) —
+  // e.g. a session's cumulative cache-read tokens. Without this, ingesting those
+  // rows fails with "value ... is out of range for type integer".
+  `ALTER TABLE requests ALTER COLUMN input_tokens TYPE BIGINT`,
+  `ALTER TABLE requests ALTER COLUMN output_tokens TYPE BIGINT`,
+  `ALTER TABLE requests ALTER COLUMN cache_read_tokens TYPE BIGINT`,
+  `ALTER TABLE requests ALTER COLUMN cache_create_tokens TYPE BIGINT`,
+  `ALTER TABLE requests ALTER COLUMN cache_create_5m_tokens TYPE BIGINT`,
+  `ALTER TABLE requests ALTER COLUMN cache_create_1h_tokens TYPE BIGINT`,
+  `ALTER TABLE requests ALTER COLUMN duration_ms TYPE BIGINT`,
+  `ALTER TABLE sessions ALTER COLUMN total_tokens TYPE BIGINT`,
+  `ALTER TABLE sessions ALTER COLUMN request_count TYPE BIGINT`,
+
+  // Widen money columns from REAL (float4) to DOUBLE PRECISION (float8). SQLite
+  // stores REAL as 8-byte doubles, so single-precision cloud columns lose
+  // precision on write and — worse — Postgres SUM(real) uses a float4 accumulator
+  // that drifts materially over hundreds of thousands of rows (fleet spend was
+  // off by ~$79 on ~$694k). Money must be float8 end to end.
+  `ALTER TABLE requests ALTER COLUMN cost_usd TYPE DOUBLE PRECISION`,
+  `ALTER TABLE sessions ALTER COLUMN total_cost_usd TYPE DOUBLE PRECISION`,
+  `ALTER TABLE budgets ALTER COLUMN limit_usd TYPE DOUBLE PRECISION`,
+  `ALTER TABLE goals ALTER COLUMN limit_usd TYPE DOUBLE PRECISION`,
+  `ALTER TABLE model_pricing ALTER COLUMN input_per_1m TYPE DOUBLE PRECISION`,
+  `ALTER TABLE model_pricing ALTER COLUMN output_per_1m TYPE DOUBLE PRECISION`,
+  `ALTER TABLE model_pricing ALTER COLUMN cache_read_per_1m TYPE DOUBLE PRECISION`,
+  `ALTER TABLE model_pricing ALTER COLUMN cache_write_per_1m TYPE DOUBLE PRECISION`,
+  `ALTER TABLE model_pricing ALTER COLUMN cache_write_1h_per_1m TYPE DOUBLE PRECISION`,
+  `ALTER TABLE model_pricing ALTER COLUMN cache_storage_per_1m_hour TYPE DOUBLE PRECISION`,
+  `ALTER TABLE billing_daily ALTER COLUMN cost_usd TYPE DOUBLE PRECISION`,
+  `ALTER TABLE subscriptions ALTER COLUMN monthly_fee_usd TYPE DOUBLE PRECISION`,
+  `ALTER TABLE subscriptions ALTER COLUMN included_usage_usd TYPE DOUBLE PRECISION`,
+  `ALTER TABLE usage_snapshots ALTER COLUMN value TYPE DOUBLE PRECISION`,
+  `ALTER TABLE savings_daily ALTER COLUMN api_equivalent_usd TYPE DOUBLE PRECISION`,
+  `ALTER TABLE savings_daily ALTER COLUMN subscription_fee_usd TYPE DOUBLE PRECISION`,
+  `ALTER TABLE savings_daily ALTER COLUMN included_consumed_usd TYPE DOUBLE PRECISION`,
+  `ALTER TABLE savings_daily ALTER COLUMN on_demand_usd TYPE DOUBLE PRECISION`,
+  `ALTER TABLE savings_daily ALTER COLUMN saved_usd TYPE DOUBLE PRECISION`,
 ];

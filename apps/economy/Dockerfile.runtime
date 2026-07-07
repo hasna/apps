@@ -1,0 +1,22 @@
+# Runtime-only image for the economy self_hosted serve, assembled from
+# host-built artifacts (dist + node_modules). Used because the standard
+# multi-stage Dockerfile runs `bun install --frozen-lockfile`, which cannot
+# resolve the two unpublished `file:` sibling deps (@hasna/agent-registry,
+# @hasna/mcp-harness) in an isolated build context. The serve bundle only needs
+# @hasna/cloud, @hasna/contracts and pg at runtime, all present in the host
+# node_modules; host and target are both linux/arm64 so the artifacts are
+# binary-compatible.
+FROM --platform=linux/arm64 oven/bun:1 AS runner
+WORKDIR /app
+COPY docker/rds-global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
+ENV NODE_ENV=production \
+    HASNA_ECONOMY_STORAGE_MODE=cloud \
+    NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem \
+    PGSSLROOTCERT=/etc/ssl/certs/rds-global-bundle.pem \
+    ECONOMY_HOST=0.0.0.0 \
+    ECONOMY_PORT=8787
+COPY package.json bun.lock ./
+COPY node_modules ./node_modules
+COPY dist ./dist
+EXPOSE 8787
+CMD ["bun", "dist/server/index.js", "--port", "8787"]
