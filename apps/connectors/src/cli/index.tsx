@@ -2,6 +2,7 @@
 import React from "react";
 import { render } from "ink";
 import { Command } from "commander";
+import { EventsClient, sanitizeChannelsForOutput } from "@hasna/events";
 import { registerEventsCommands } from "@hasna/events/commander";
 import _pkg from "../../package.json" with { type: "json" };
 import { loadConnectorVersions } from "../lib/registry.js";
@@ -59,5 +60,39 @@ registerOpsCommands(program);
 registerSystemCommands(program);
 registerSyncCommands(program);
 registerEventsCommands(program, { source: "connectors" });
+registerWebhooksCompatibilityCommand(program);
 
 program.parse();
+
+function registerWebhooksCompatibilityCommand(program: Command) {
+  if (program.commands.some((command) => command.name() === "webhooks")) {
+    return;
+  }
+
+  const webhooks = program.command("webhooks").description("Manage webhook event channels");
+
+  webhooks
+    .command("list")
+    .description("List webhook channels")
+    .option("--json", "Output as JSON")
+    .action(async (opts: { json?: boolean }) => {
+      const client = new EventsClient();
+      const channels = sanitizeChannelsForOutput(
+        (await client.listChannels()).filter((channel) => channel.transport === "webhook")
+      );
+
+      if (opts.json) {
+        console.log(JSON.stringify(channels, null, 2));
+        return;
+      }
+
+      if (channels.length === 0) {
+        console.log("No webhook channels configured.");
+        return;
+      }
+
+      for (const channel of channels) {
+        console.log(`${channel.id}\t${channel.name || ""}\t${channel.enabled ? "enabled" : "disabled"}`);
+      }
+    });
+}

@@ -374,6 +374,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["sales", "email outreach", "automation", "sequences", "prospecting"],
   },
   {
+    name: "stampedio",
+    displayName: "Stamped.io",
+    description: "Product reviews, ratings, UGC, and loyalty for e-commerce stores",
+    category: "Marketing & Sales",
+    tags: ["reviews", "ratings", "loyalty", "ugc", "ecommerce"],
+  },
+  {
     name: "surveysparrow",
     displayName: "SurveySparrow",
     description: "Conversational survey and feedback management platform",
