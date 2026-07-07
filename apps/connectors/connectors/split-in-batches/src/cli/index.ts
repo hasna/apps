@@ -57,8 +57,11 @@ program
   });
 
 function getFormat(cmd: Command): OutputFormat {
-  const parent = cmd.parent;
-  return (parent?.opts().format || 'pretty') as OutputFormat;
+  return (cmd.opts().format || cmd.parent?.opts().format || 'pretty') as OutputFormat;
+}
+
+function isJsonFormat(cmd: Command): boolean {
+  return getFormat(cmd) === 'json';
 }
 
 function getClient(): Connector {
@@ -267,7 +270,9 @@ batchesCmd
 
       const client = getClient();
       const result = await client.batches.create(body);
-      success('Batch created');
+      if (!isJsonFormat(batchesCmd)) {
+        success('Batch created');
+      }
       print(result, getFormat(batchesCmd));
     } catch (err) {
       error(String(err));
