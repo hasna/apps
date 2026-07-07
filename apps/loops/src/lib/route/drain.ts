@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import type { EventEnvelope } from "@hasna/events";
 import { redact } from "../format.js";
+import { ValidationError } from "../errors.js";
 import type { Loop, WorkflowSpec } from "../../types.js";
 import { objectField, stringField, tagsFromValue, taskEventField } from "./fields.js";
 import { listFromRepeatedOpts, positiveInteger, splitList } from "./parse.js";
@@ -185,6 +186,106 @@ function compactDrainResult(result: TodosTaskRoutePrint): Record<string, unknown
 
 interface TodosProjectDescriptor {
   path: string;
+}
+
+interface LaunchGateBlockerRef {
+  projectPath: string;
+  taskId: string;
+  raw: string;
+}
+
+interface LaunchGateBlockerStatus extends LaunchGateBlockerRef {
+  status?: string;
+  title?: string;
+  resolved: boolean;
+  error?: string;
+}
+
+interface LaunchGateEvaluation {
+  configured: true;
+  name?: string;
+  blocked: boolean;
+  reason: string;
+  blockers: LaunchGateBlockerStatus[];
+}
+
+const LAUNCH_GATE_RESOLVED_STATUSES = new Set(["completed", "done"]);
+
+function parseLaunchGateBlocker(raw: string): LaunchGateBlockerRef {
+  const value = raw.trim();
+  if (!value) throw new ValidationError("--launch-gate-blocker entries cannot be empty");
+  const delimiter = value.includes("::") ? "::" : value.includes("#") ? "#" : ":";
+  const index = value.lastIndexOf(delimiter);
+  if (index <= 0 || index + delimiter.length >= value.length) {
+    throw new ValidationError("--launch-gate-blocker must use <todos-project-path>::<task-id>");
+  }
+  const projectPath = value.slice(0, index).trim();
+  const taskId = value.slice(index + delimiter.length).trim();
+  if (!projectPath || !taskId) throw new ValidationError("--launch-gate-blocker must include both project path and task id");
+  return { projectPath, taskId, raw };
+}
+
+function parseTodosTaskJson(stdout: string): Record<string, unknown> {
+  const parsed = JSON.parse(stdout || "{}");
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("todos inspect returned a non-object value");
+  return parsed as Record<string, unknown>;
+}
+
+function inspectLaunchGateBlocker(ref: LaunchGateBlockerRef): LaunchGateBlockerStatus {
+  const result = runLocalCommand("todos", ["--project", ref.projectPath, "--json", "inspect", ref.taskId], {
+    timeoutMs: 30_000,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  if (!result.ok) {
+    return {
+      ...ref,
+      resolved: false,
+      error: redact(result.stderr || result.error || `todos inspect failed with status ${result.status}`, 320),
+    };
+  }
+  try {
+    const task = parseTodosTaskJson(result.stdout);
+    const status = stringField(task.status)?.trim().toLowerCase();
+    const title = stringField(task.title);
+    return {
+      ...ref,
+      status,
+      title: title ? redact(title, 160) : undefined,
+      resolved: Boolean(status && LAUNCH_GATE_RESOLVED_STATUSES.has(status)),
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ...ref,
+      resolved: false,
+      error: redact(`failed to parse todos inspect JSON: ${message}`, 320),
+    };
+  }
+}
+
+function evaluateLaunchGate(opts: TodosDrainOptions): LaunchGateEvaluation | undefined {
+  const blockerRefs = listFromRepeatedOpts(opts.launchGateBlocker) ?? [];
+  if (blockerRefs.length === 0 && !opts.launchGate?.trim()) return undefined;
+  if (blockerRefs.length === 0) {
+    throw new ValidationError("--launch-gate requires at least one --launch-gate-blocker");
+  }
+  const blockers = blockerRefs.map((entry) => inspectLaunchGateBlocker(parseLaunchGateBlocker(entry)));
+  const unresolved = blockers.filter((blocker) => !blocker.resolved);
+  const name = opts.launchGate?.trim() || undefined;
+  const blocked = unresolved.length > 0;
+  const label = name ? `launch gate ${name}` : "launch gate";
+  const reason = blocked
+    ? `${label} blocked by unresolved task(s): ${unresolved.map((blocker) =>
+        `${blocker.taskId} status=${blocker.status ?? "unknown"}${blocker.error ? " error=inspect-failed" : ""}`,
+      ).join(", ")}`
+    : `${label} open; all blocker tasks are completed`;
+  return {
+    configured: true,
+    name,
+    blocked,
+    reason,
+    blockers,
+  };
 }
 
 function parseTodosReadyJson(stdout: string): unknown {
@@ -409,11 +510,86 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
   const maxDispatch = positiveInteger(opts.maxDispatch ?? "1", "--max-dispatch") ?? 1;
   const todosProject = opts.todosProject ?? defaultLoopsProject();
   const requiredTags = splitList(opts.tags ?? opts.tag) ?? [];
-  const taskListFilter = opts.todosProjectsFromRegistry ? opts.taskList?.trim() : resolveTaskListFilter(todosProject, opts.taskList);
   const candidateLimit = positiveInteger(opts.limit ?? "50", "--limit") ?? 50;
-  const hasPostFilters = Boolean(opts.todosProjectId || taskListFilter || opts.projectPathPrefix || requiredTags.length);
+  const hasPostFilters = Boolean(opts.todosProjectId || opts.taskList || opts.projectPathPrefix || requiredTags.length);
   const defaultScanLimit = hasPostFilters ? Math.max(candidateLimit, 500) : candidateLimit;
   const scanLimit = positiveInteger(opts.scanLimit ?? String(defaultScanLimit), "--scan-limit") ?? defaultScanLimit;
+  const templateId = todosTaskRouteTemplateId(opts);
+  const routePolicy = routePolicyEvidenceFromOptions(opts);
+  const launchGate = evaluateLaunchGate(opts);
+  if (launchGate?.blocked) {
+    const report = {
+      drainedAt: new Date().toISOString(),
+      todosProject,
+      routePolicy,
+      templateId,
+      todosProjectId: opts.todosProjectId,
+      taskList: opts.taskList,
+      taskListId: undefined,
+      projectPathPrefix: opts.projectPathPrefix,
+      tags: requiredTags,
+      limit: candidateLimit,
+      scanLimit,
+      filtersApplied: hasPostFilters,
+      scanned: 0,
+      candidates: 0,
+      filteredCandidates: 0,
+      scanExhausted: false,
+      considered: 0,
+      created: 0,
+      deduped: 0,
+      throttled: 0,
+      skipped: 0,
+      freshnessClosed: 0,
+      fatal: 0,
+      blocked: 1,
+      maxDispatch,
+      source: "todos ready",
+      dryRun: Boolean(opts.dryRun),
+      launchGate,
+      results: [],
+    };
+    const evidencePath = writeRouteEvidence("todos-task-drain", report, opts.evidenceDir);
+    const value = opts.compact
+      ? {
+          drainedAt: report.drainedAt,
+          todosProject: report.todosProject,
+          routePolicy: report.routePolicy,
+          templateId: report.templateId,
+          todosProjectId: report.todosProjectId,
+          taskList: report.taskList,
+          taskListId: report.taskListId,
+          projectPathPrefix: report.projectPathPrefix,
+          tags: report.tags,
+          limit: report.limit,
+          scanLimit: report.scanLimit,
+          filtersApplied: report.filtersApplied,
+          scanned: report.scanned,
+          candidates: report.candidates,
+          filteredCandidates: report.filteredCandidates,
+          scanExhausted: report.scanExhausted,
+          considered: report.considered,
+          created: report.created,
+          deduped: report.deduped,
+          throttled: report.throttled,
+          skipped: report.skipped,
+          freshnessClosed: report.freshnessClosed,
+          fatal: report.fatal,
+          blocked: report.blocked,
+          maxDispatch: report.maxDispatch,
+          source: report.source,
+          dryRun: report.dryRun,
+          launchGate,
+          evidencePath,
+          results: [],
+        }
+      : { ...report, evidencePath };
+    return {
+      value,
+      human: `blocked todos ready drain: ${launchGate.reason}`,
+    };
+  }
+  const taskListFilter = opts.todosProjectsFromRegistry ? opts.taskList?.trim() : resolveTaskListFilter(todosProject, opts.taskList);
   const ready = loadReadyTodosTasks(opts, scanLimit);
   const filteredCandidates = ready.filter((task) => taskMatchesDrainFilters(task, {
     projectId: opts.todosProjectId,
@@ -472,8 +648,8 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
   const report = {
     drainedAt: new Date().toISOString(),
     todosProject,
-    routePolicy: routePolicyEvidenceFromOptions(opts),
-    templateId: todosTaskRouteTemplateId(opts),
+    routePolicy,
+    templateId,
     todosProjectId: opts.todosProjectId,
     taskList: opts.taskList,
     taskListId: taskListFilter,
@@ -500,9 +676,11 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
     // where every candidate is fatal would otherwise report created=0 skipped=N
     // and exit 0; callers use this count to fail the run instead.
     fatal: results.filter((result) => result.value.fatal === true).length,
+    blocked: 0,
     maxDispatch,
     source: "todos ready",
     dryRun: Boolean(opts.dryRun),
+    launchGate,
     results: results.map((result) => ({ kind: result.kind, ...result.value })),
   };
   const evidencePath = writeRouteEvidence("todos-task-drain", report, opts.evidenceDir);
@@ -531,9 +709,11 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
         skipped: report.skipped,
         freshnessClosed: report.freshnessClosed,
         fatal: report.fatal,
+        blocked: report.blocked,
         maxDispatch: report.maxDispatch,
         source: report.source,
         dryRun: report.dryRun,
+        launchGate: report.launchGate,
         evidencePath,
         results: results.map(compactDrainResult),
       }

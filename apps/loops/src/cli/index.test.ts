@@ -5452,6 +5452,35 @@ describe("loops CLI", () => {
     expect(loop.target.args).toEqual(expect.arrayContaining(["--max-dispatch", "3"]));
   });
 
+  test("routes schedule preserves launch gate blocker options", () => {
+    const dataDir = freshDataDir("loops-cli-routes-template-schedule-launch-gate-");
+
+    const scheduled = runCli(dataDir, [
+      "--json",
+      "routes",
+      "schedule",
+      "todos-task",
+      "route-drain-launch-gate-test",
+      "--every",
+      "5m",
+      "--launch-gate",
+      "pa19-controlled-launch",
+      "--launch-gate-blocker",
+      "/tmp/open-codewith::2d9d931b",
+      "--launch-gate-blocker",
+      "/tmp/open-loops::816e99db,/tmp/open-loops::f30153fd",
+      "--max-dispatch",
+      "3",
+    ]);
+    expect(scheduled.status).toBe(0);
+    const loop = JSON.parse(scheduled.stdout);
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--launch-gate", "pa19-controlled-launch"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--launch-gate-blocker", "/tmp/open-codewith::2d9d931b"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--launch-gate-blocker", "/tmp/open-loops::816e99db"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--launch-gate-blocker", "/tmp/open-loops::f30153fd"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--max-dispatch", "3"]));
+  });
+
   test("routes policies inspect, validate, and render replayable explicit args", () => {
     const dataDir = freshDataDir("loops-cli-route-policies-render-");
 
