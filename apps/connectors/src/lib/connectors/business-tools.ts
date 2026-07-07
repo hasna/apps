@@ -864,6 +864,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["spreadsheet", "database", "no-code", "automation", "collaboration"],
   },
   {
+    name: "streak",
+    displayName: "Streak",
+    description: "Streak CRM in Gmail - pipelines, boxes, stages, custom fields, tasks, comments, threads, reminders, files, teams, and search",
+    category: "Business Tools",
+    tags: ["crm", "pipelines", "gmail"],
+  },
+  {
     name: "suitedash",
     displayName: "SuiteDash",
     description: "All-in-one business management platform with CRM, billing, and portals",
