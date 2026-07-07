@@ -8,11 +8,11 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { sendMessage, readMessages, markReadByIds } from "../../lib/messages.js";
+// Routed reads/writes: cloud-store dispatches to the self_hosted API when set.
+import { sendMessage, readMessages, markReadByIds, recordReadReceiptsBatch } from "../../lib/cloud-store.js";
 import { createChannel, updateChannel, renameChannel, archiveChannel, unarchiveChannel, listChannels, getChannel, joinChannel, leaveChannel } from "../../lib/channels.js";
 import { listChannelNotificationSubscriptions, markAllChannelNotificationsRead, markChannelNotificationsRead, readChannelNotifications, subscribeToChannelNotifications, unsubscribeFromChannelNotifications } from "../../lib/channel-notifications.js";
 import { resolveIdentity } from "../../lib/identity.js";
-import { recordReadReceiptsBatch } from "../../lib/messages.js";
 import { getConversationSummary } from "../../lib/summary.js";
 import { compactQueriedMessages, compactWindowedChannels, jsonText, resolveMcpWindow } from "../compact.js";
 
@@ -101,7 +101,7 @@ export function registerChannelTools(server: McpServer): void {
       };
     }
 
-    const msg = sendMessage({
+    const msg = await sendMessage({
       from,
       to: channel,
       content,
@@ -135,7 +135,7 @@ export function registerChannelTools(server: McpServer): void {
     const { channel, from: fromParam, since, limit, mark_read, max_content_length, threads_only, include_reply_counts, latest } = args;
     const window = resolveMcpWindow(args);
     const verbose = args.verbose === true;
-    const messages = readMessages({
+    const messages = await readMessages({
       channel,
       since,
       limit: verbose ? limit : window.limit + 1,
@@ -148,13 +148,13 @@ export function registerChannelTools(server: McpServer): void {
     const visible = verbose ? messages : messages.slice(0, window.limit);
 
     if (mark_read !== false && visible.length > 0) {
-      markReadByIds(visible.map((m) => m.id));
+      await markReadByIds(visible.map((m) => m.id));
     }
 
     // Record per-agent read receipts for all channel messages
     if (fromParam && visible.length > 0) {
       const agent = resolveIdentity(fromParam);
-      recordReadReceiptsBatch(visible.map((m) => m.id), agent);
+      await recordReadReceiptsBatch(visible.map((m) => m.id), agent);
       markChannelNotificationsRead(agent, visible.map((m) => m.id));
     }
 

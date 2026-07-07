@@ -19,7 +19,7 @@ export function compactMessage(msg: Message): Partial<Message> {
   return result;
 }
 
-function parseMessage(row: Record<string, unknown>): Message {
+export function parseMessage(row: Record<string, unknown>): Message {
   let metadata: Record<string, unknown> | null = null;
   if (row.metadata) {
     try {
@@ -38,12 +38,21 @@ function parseMessage(row: Record<string, unknown>): Message {
     }
   }
 
+  // Coerce integer id columns to numbers: SQLite already yields numbers, but the
+  // cloud API serializes Postgres bigint as a string ("23"), which would break
+  // numeric id comparisons/paging downstream. Number() is a no-op for numbers.
+  const id = row.id === undefined || row.id === null ? row.id : Number(row.id);
+  const replyToRaw = row.reply_to === undefined || row.reply_to === null ? null : Number(row.reply_to);
+  const replyCount = row.reply_count === undefined || row.reply_count === null ? undefined : Number(row.reply_count);
+
   return {
     ...row,
+    id,
     metadata,
     attachments,
-    blocking: !!(row.blocking as number),
-    reply_to: (row.reply_to as number) || null,
+    blocking: !!row.blocking,
+    reply_to: replyToRaw || null,
+    ...(replyCount === undefined ? {} : { reply_count: replyCount }),
   } as Message;
 }
 
@@ -434,7 +443,7 @@ export const DEFAULT_DIGEST_SNIPPET_BYTES = 320;
 
 const DIGEST_ID_PLACEHOLDER = "0000000000000000";
 
-function resolveDigestMaxBytes(value: unknown): number {
+export function resolveDigestMaxBytes(value: unknown): number {
   if (value === undefined || value === null || value === "") return DEFAULT_DIGEST_MAX_BYTES;
   const parsed = typeof value === "number" ? value : Number.parseInt(String(value), 10);
   if (!Number.isFinite(parsed)) return DEFAULT_DIGEST_MAX_BYTES;
@@ -445,14 +454,14 @@ function resolveDigestMaxBytes(value: unknown): number {
   return Math.min(bytes, MAX_DIGEST_MAX_BYTES);
 }
 
-function resolveDigestLimit(value: unknown): number {
+export function resolveDigestLimit(value: unknown): number {
   if (value === undefined || value === null || value === "") return DEFAULT_DIGEST_LIMIT;
   const parsed = typeof value === "number" ? value : Number.parseInt(String(value), 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_DIGEST_LIMIT;
   return Math.min(Math.floor(parsed), MAX_DIGEST_LIMIT);
 }
 
-function resolveDigestCursor(value: unknown): number | undefined {
+export function resolveDigestCursor(value: unknown): number | undefined {
   if (value === undefined || value === null || value === "") return undefined;
   const parsed = typeof value === "number" ? value : Number.parseInt(String(value), 10);
   return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : undefined;
@@ -656,6 +665,133 @@ function markDigestEntriesRead(entries: DigestMessage[], reader?: string): numbe
   return markedRead;
 }
 
+/** Normalized digest inputs shared by the local and cloud digest paths. */
+export interface DigestNorm {
+  channel: string | null;
+  session_id?: string;
+  to?: string;
+  since?: string;
+  cursor?: number;
+  maxBytes: number;
+  limit: number;
+}
+
+/** Counts a digest reports (total matching + total unread). */
+export interface DigestCounts {
+  total_available: number;
+  total_unread: number;
+}
+
+/**
+ * Result of assembling a digest page: the entries that would be marked read
+ * (empty when nothing shown) and a `rebuild(markedRead)` closure that produces
+ * the final DigestResult for a given marked-read count. The heavy byte-budget
+ * packing is done ONCE here, storage-agnostic — the caller supplies the counts
+ * and pre-fetched rows (from SQLite locally, or the cloud API), then marks the
+ * entries and calls `rebuild`. This keeps the packing algorithm a single source
+ * of truth across the local and self_hosted digest paths.
+ */
+export interface DigestAssembly {
+  rebuild: (markedRead: number) => DigestResult;
+  markableEntries: DigestMessage[];
+}
+
+/**
+ * Pure digest packer: given the normalized filters, the counts, the candidate
+ * rows (id ASC), and whether mark_read was requested (so the byte budget can
+ * reserve room for the marked_read counter), pack as many messages as fit under
+ * `maxBytes` and return the terminal shape as a rebuild closure.
+ */
+export function assembleDigest(
+  norm: DigestNorm,
+  counts: DigestCounts,
+  messages: Message[],
+  markReadRequested: boolean,
+): DigestAssembly {
+  const build = (entries: DigestMessage[], extra: Partial<Parameters<typeof buildDigestResult>[0]> = {}): DigestResult =>
+    buildDigestResult({
+      channel: norm.channel,
+      session_id: norm.session_id ?? null,
+      to: norm.to ?? null,
+      since: norm.since ?? null,
+      cursor: norm.cursor ?? null,
+      max_bytes: norm.maxBytes,
+      limit: norm.limit,
+      total_available: counts.total_available,
+      total_unread: counts.total_unread,
+      entries,
+      ...extra,
+    });
+
+  let entries: DigestMessage[] = [];
+  for (const message of messages) {
+    let low = 0;
+    let high = DEFAULT_DIGEST_SNIPPET_BYTES;
+    let best: DigestMessage | null = null;
+
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      const candidateMessage = makeDigestMessage(message, mid);
+      const candidate = build([...entries, candidateMessage], {
+        marked_read: markReadRequested ? entries.length + 1 : 0,
+      });
+      if (candidate.byte_length <= norm.maxBytes) {
+        best = candidateMessage;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+
+    if (!best) {
+      const skipped = build(entries, {
+        skipped_count: 1,
+        advance_cursor: message.id,
+        marked_read: markReadRequested ? entries.length : 0,
+      });
+
+      if (skipped.byte_length > norm.maxBytes && entries.length > 0) {
+        // Even skipping this message overflows: drop it, keep the cursor put.
+        const captured = entries;
+        return {
+          markableEntries: captured,
+          rebuild: (markedRead: number) => {
+            const page = build(captured, { marked_read: markedRead });
+            assertDigestFits(page);
+            return page;
+          },
+        };
+      }
+
+      const captured = entries;
+      const capturedAdvance = message.id;
+      return {
+        markableEntries: captured,
+        rebuild: (markedRead: number) => {
+          const s = build(captured, {
+            skipped_count: 1,
+            advance_cursor: capturedAdvance,
+            marked_read: markedRead,
+          });
+          assertDigestFits(s);
+          return s;
+        },
+      };
+    }
+    entries = [...entries, best];
+  }
+
+  const captured = entries;
+  return {
+    markableEntries: captured,
+    rebuild: (markedRead: number) => {
+      const result = build(captured, { marked_read: markedRead });
+      assertDigestFits(result);
+      return result;
+    },
+  };
+}
+
 export function readDigest(opts: ReadDigestOptions = {}): DigestResult {
   const maxBytes = resolveDigestMaxBytes(opts.max_bytes);
   const limit = resolveDigestLimit(opts.limit);
@@ -682,135 +818,14 @@ export function readDigest(opts: ReadDigestOptions = {}): DigestResult {
     limit,
   });
 
-  let entries: DigestMessage[] = [];
-  for (const message of messages) {
-    let low = 0;
-    let high = DEFAULT_DIGEST_SNIPPET_BYTES;
-    let best: DigestMessage | null = null;
-
-    while (low <= high) {
-      const mid = Math.floor((low + high) / 2);
-      const candidateMessage = makeDigestMessage(message, mid);
-      const candidate = buildDigestResult({
-        channel,
-        session_id: opts.session_id ?? null,
-        to: opts.to ?? null,
-        since: opts.since ?? null,
-        cursor: cursor ?? null,
-        max_bytes: maxBytes,
-        limit,
-        total_available: counts.total_available,
-        total_unread: counts.total_unread,
-        entries: [...entries, candidateMessage],
-        marked_read: opts.mark_read ? entries.length + 1 : 0,
-      });
-
-      if (candidate.byte_length <= maxBytes) {
-        best = candidateMessage;
-        low = mid + 1;
-      } else {
-        high = mid - 1;
-      }
-    }
-
-    if (!best) {
-      let skipped = buildDigestResult({
-        channel,
-        session_id: opts.session_id ?? null,
-        to: opts.to ?? null,
-        since: opts.since ?? null,
-        cursor: cursor ?? null,
-        max_bytes: maxBytes,
-        limit,
-        total_available: counts.total_available,
-        total_unread: counts.total_unread,
-        entries,
-        skipped_count: 1,
-        advance_cursor: message.id,
-        marked_read: opts.mark_read ? entries.length : 0,
-      });
-
-      if (skipped.byte_length > maxBytes && entries.length > 0) {
-        let page = buildDigestResult({
-          channel,
-          session_id: opts.session_id ?? null,
-          to: opts.to ?? null,
-          since: opts.since ?? null,
-          cursor: cursor ?? null,
-          max_bytes: maxBytes,
-          limit,
-          total_available: counts.total_available,
-          total_unread: counts.total_unread,
-          entries,
-          marked_read: opts.mark_read ? entries.length : 0,
-        });
-
-        assertDigestFits(page);
-        if (opts.mark_read) {
-          const markedRead = markDigestEntriesRead(entries, opts.reader);
-          page = buildDigestResult({
-            channel,
-            session_id: opts.session_id ?? null,
-            to: opts.to ?? null,
-            since: opts.since ?? null,
-            cursor: cursor ?? null,
-            max_bytes: maxBytes,
-            limit,
-            total_available: counts.total_available,
-            total_unread: counts.total_unread,
-            entries,
-            marked_read: markedRead,
-          });
-          assertDigestFits(page);
-        }
-        return page;
-      }
-
-      assertDigestFits(skipped);
-      if (opts.mark_read && entries.length > 0) {
-        const markedRead = markDigestEntriesRead(entries, opts.reader);
-        skipped = buildDigestResult({
-          channel,
-          session_id: opts.session_id ?? null,
-          to: opts.to ?? null,
-          since: opts.since ?? null,
-          cursor: cursor ?? null,
-          max_bytes: maxBytes,
-          limit,
-          total_available: counts.total_available,
-          total_unread: counts.total_unread,
-          entries,
-          skipped_count: 1,
-          advance_cursor: message.id,
-          marked_read: markedRead,
-        });
-        assertDigestFits(skipped);
-      }
-      return skipped;
-    }
-    entries = [...entries, best];
-  }
+  const norm: DigestNorm = { channel, session_id: opts.session_id, to: opts.to, since: opts.since, cursor, maxBytes, limit };
+  const assembly = assembleDigest(norm, counts, messages, !!opts.mark_read);
 
   let markedRead = 0;
-  if (opts.mark_read && entries.length > 0) {
-    markedRead = markDigestEntriesRead(entries, opts.reader);
+  if (opts.mark_read && assembly.markableEntries.length > 0) {
+    markedRead = markDigestEntriesRead(assembly.markableEntries, opts.reader);
   }
-
-  const result = buildDigestResult({
-    channel,
-    session_id: opts.session_id ?? null,
-    to: opts.to ?? null,
-    since: opts.since ?? null,
-    cursor: cursor ?? null,
-    max_bytes: maxBytes,
-    limit,
-    total_available: counts.total_available,
-    total_unread: counts.total_unread,
-    entries,
-    marked_read: markedRead,
-  });
-  assertDigestFits(result);
-  return result;
+  return assembly.rebuild(markedRead);
 }
 
 export interface ExportMessagesOptions {

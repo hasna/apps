@@ -16,7 +16,8 @@
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { readMessages, markReadByIds } from "../lib/messages.js";
+// Routed reads/writes: cloud-store dispatches to the self_hosted API when set.
+import { readMessages, markReadByIds } from "../lib/cloud-store.js";
 import { markChannelNotificationsRead, readChannelNotifications } from "../lib/channel-notifications.js";
 
 const DEFAULT_POLL_INTERVAL_MS = 1000;
@@ -99,7 +100,7 @@ export function registerChannelBridge(
 
       // Only acknowledge delivery after the channel transport accepts it.
       if (mode === "direct") {
-        try { markReadByIds([msg.id]); } catch { /* ok */ }
+        try { await markReadByIds([msg.id]); } catch { /* ok */ }
       } else if (mode === "channel_blurb") {
         const agent = getSessionAgent();
         if (agent) {
@@ -122,7 +123,7 @@ export function registerChannelBridge(
 
       // Poll DMs to this agent — skip messages FROM self (no echoes)
       if (agent) {
-        const msgs = readMessages({ to: agent, unread_only: true, order: "asc", limit: 20 })
+        const msgs = (await readMessages({ to: agent, unread_only: true, order: "asc", limit: 20 }))
           .filter(m => m.id > lastAgentMsgId && m.from_agent !== agent);
         for (const msg of msgs) {
           const delivered = await pushNotification(msg, "dm");
@@ -133,7 +134,7 @@ export function registerChannelBridge(
 
       // Poll direct session-targeted messages — skip self (no echoes)
       if (sid) {
-        const msgs = readMessages({ to: `session:${sid}`, unread_only: true, order: "asc", limit: 20 })
+        const msgs = (await readMessages({ to: `session:${sid}`, unread_only: true, order: "asc", limit: 20 }))
           .filter(m => m.id > lastSessionMsgId && m.from_agent !== agent);
         for (const msg of msgs) {
           const delivered = await pushNotification(msg, "direct");

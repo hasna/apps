@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { recordReadReceiptsBatch, sendMessage, readMessages } from "../../lib/messages.js";
+// Routed reads/writes: cloud-store dispatches to the self_hosted API when set.
+import { recordReadReceiptsBatch, sendMessage, readMessages } from "../../lib/cloud-store.js";
 import { createChannel, updateChannel, renameChannel, archiveChannel, unarchiveChannel, listChannels, getChannel, joinChannel, leaveChannel, getChannelMembers } from "../../lib/channels.js";
 import { listChannelNotificationSubscriptions, markChannelNotificationsRead, subscribeToChannelNotifications, unsubscribeFromChannelNotifications } from "../../lib/channel-notifications.js";
 import { closeDb } from "../../lib/db.js";
@@ -293,7 +294,7 @@ export function registerChannelCommands(program: Command): void {
     .option("--from <agent>", "Sender agent ID")
     .option("--priority <level>", "Priority: low, normal, high, urgent", "normal")
     .option("-j, --json", "Output as JSON")
-    .action((channelName, message, opts) => {
+    .action(async (channelName, message, opts) => {
       const from = resolveIdentity(opts.from).trim();
       const channelArg = typeof channelName === "string" ? channelName.trim() : "";
       const content = typeof message === "string" ? message : "";
@@ -317,7 +318,7 @@ export function registerChannelCommands(program: Command): void {
         process.exit(1);
       }
 
-      const msg = sendMessage({
+      const msg = await sendMessage({
         from,
         to: channelArg,
         content,
@@ -344,14 +345,14 @@ export function registerChannelCommands(program: Command): void {
     .option("--cursor <n>", "Skip first N messages for pagination", parseInt)
     .option("--verbose", "Show full message bodies")
     .option("-j, --json", "Output as JSON")
-    .action((channelName, opts) => {
+    .action(async (channelName, opts) => {
       const channelArg = typeof channelName === "string" ? channelName.trim() : "";
       if (!channelArg) {
         console.error(chalk.red("Channel name cannot be empty."));
         process.exit(1);
       }
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
-      const messages = readMessages({
+      const messages = await readMessages({
         channel: channelArg,
         since: opts.since,
         limit: opts.json ? opts.limit : queryLimitFor(window),
@@ -367,7 +368,7 @@ export function registerChannelCommands(program: Command): void {
           console.error(chalk.red("Agent identity is required."));
           process.exit(1);
         }
-        recordReadReceiptsBatch(page.items.map((m) => m.id), agent);
+        await recordReadReceiptsBatch(page.items.map((m) => m.id), agent);
         markChannelNotificationsRead(agent, page.items.map((m) => m.id));
       }
 

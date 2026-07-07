@@ -1,7 +1,8 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { readMessages, readDigest, markRead, markReadByIds, markSessionRead, markChannelRead, markAllRead, searchMessages, exportMessages, editMessage, pinMessage, unpinMessage, getPinnedMessages, getUnreadBlockers } from "../../lib/messages.js";
-import { sendMessage, getMessageById, deleteMessage } from "../../lib/cloud-store.js";
+import { exportMessages, getUnreadBlockers } from "../../lib/messages.js";
+// Routed reads/writes: cloud-store dispatches to the self_hosted API when set.
+import { readMessages, readDigest, markRead, markReadByIds, markSessionRead, markChannelRead, markAllRead, searchMessages, editMessage, pinMessage, unpinMessage, getPinnedMessages, sendMessage, getMessageById, deleteMessage } from "../../lib/cloud-store.js";
 import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { renderContent } from "../../lib/terminal-markdown.js";
@@ -117,9 +118,9 @@ export function registerMessagingCommands(program: Command): void {
     .option("--mark-read", "Mark returned messages as read")
     .option("--verbose", "Show full message bodies")
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
+    .action(async (opts) => {
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
-      const messages = readMessages({
+      const messages = await readMessages({
         session_id: opts.session,
         from: opts.from,
         to: opts.to,
@@ -136,7 +137,7 @@ export function registerMessagingCommands(program: Command): void {
       if (opts.markRead) {
         const reader = resolveIdentity(opts.to);
         const ids = page.items.filter((m) => !m.read_at).map((m) => m.id);
-        if (ids.length > 0) markReadByIds(ids, reader);
+        if (ids.length > 0) await markReadByIds(ids, reader);
       }
 
       if (opts.json) {
@@ -208,7 +209,7 @@ export function registerMessagingCommands(program: Command): void {
     .option("--mark-read", "Mark returned messages read after building the digest")
     .option("--from <agent>", "Reader identity for --mark-read")
     .option("-j, --json", "Output as JSON")
-    .action((channelArg, opts) => {
+    .action(async (channelArg, opts) => {
       const channel = typeof channelArg === "string" && channelArg.trim() ? channelArg.trim() : undefined;
       if (!channel && !opts.session && !opts.to) {
         console.error(chalk.red("Provide a channel name, --session <id>, or --to <agent>."));
@@ -223,7 +224,7 @@ export function registerMessagingCommands(program: Command): void {
 
       let result;
       try {
-        result = readDigest({
+        result = await readDigest({
           channel,
           session_id: opts.session,
           since: opts.since,
@@ -278,7 +279,7 @@ export function registerMessagingCommands(program: Command): void {
     .option("--cursor <n>", "Skip first N results for pagination", parseInt)
     .option("--verbose", "Show full message bodies")
     .option("-j, --json", "Output as JSON")
-    .action((query, opts) => {
+    .action(async (query, opts) => {
       const q = typeof query === "string" ? query.trim() : "";
       if (!q) {
         console.error(chalk.red("Search query cannot be empty."));
@@ -286,7 +287,7 @@ export function registerMessagingCommands(program: Command): void {
       }
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
 
-      const messages = searchMessages({
+      const messages = await searchMessages({
         query: q,
         channel: opts.channel,
         from: opts.from,
@@ -327,7 +328,7 @@ export function registerMessagingCommands(program: Command): void {
     .option("--cursor <n>", "Skip first N messages for pagination", parseInt)
     .option("--verbose", "Show full message bodies")
     .option("-j, --json", "Output as JSON")
-    .action((duration, opts) => {
+    .action(async (duration, opts) => {
       // Parse duration string: 30m, 2h, 1d
       const match = duration.match(/^(\d+)([mhd])$/);
       if (!match) {
@@ -340,7 +341,7 @@ export function registerMessagingCommands(program: Command): void {
       const since = new Date(Date.now() - value * msMap[unit]).toISOString().replace("T", "T").slice(0, 23);
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
 
-      const messages = readMessages({
+      const messages = await readMessages({
         since,
         order: "asc",
         limit: opts.json ? (opts.limit ?? 200) : queryLimitFor(window),
@@ -429,18 +430,18 @@ export function registerMessagingCommands(program: Command): void {
     .option("--channel <name>", "Mark all messages in channel as read")
     .option("--agent <id>", "Agent marking messages as read")
     .option("-j, --json", "Output as JSON")
-    .action((ids, opts) => {
+    .action(async (ids, opts) => {
       const agent = resolveIdentity(opts.agent);
       let count = 0;
 
       if (opts.all) {
-        count = markAllRead(agent);
+        count = await markAllRead(agent);
       } else if (opts.session) {
-        count = markSessionRead(opts.session, agent);
+        count = await markSessionRead(opts.session, agent);
       } else if (opts.channel) {
-        count = markChannelRead(opts.channel, agent);
+        count = await markChannelRead(opts.channel, agent);
       } else if (ids.length > 0) {
-        count = markRead(ids.map(Number), agent);
+        count = await markRead(ids.map(Number), agent);
       } else {
         console.error(chalk.red("Provide message IDs, --all, --session, or --channel flag."));
         process.exit(1);
@@ -486,7 +487,7 @@ export function registerMessagingCommands(program: Command): void {
     .argument("<new-content>", "New message content")
     .option("--from <agent>", "Sender agent ID")
     .option("-j, --json", "Output as JSON")
-    .action((id, newContent, opts) => {
+    .action(async (id, newContent, opts) => {
       const agent = resolveIdentity(opts.from).trim();
       const content = typeof newContent === "string" ? newContent : "";
       if (!agent) {
@@ -498,7 +499,7 @@ export function registerMessagingCommands(program: Command): void {
         process.exit(1);
       }
 
-      const msg = editMessage(id, agent, content);
+      const msg = await editMessage(id, agent, content);
 
       if (opts.json) {
         console.log(JSON.stringify(msg, null, 2));
@@ -548,8 +549,8 @@ export function registerMessagingCommands(program: Command): void {
     .description("Pin a message")
     .argument("<id>", "Message ID", parseInt)
     .option("-j, --json", "Output as JSON")
-    .action((id, opts) => {
-      const msg = pinMessage(id);
+    .action(async (id, opts) => {
+      const msg = await pinMessage(id);
 
       if (opts.json) {
         console.log(JSON.stringify(msg, null, 2));
@@ -570,8 +571,8 @@ export function registerMessagingCommands(program: Command): void {
     .description("Unpin a message")
     .argument("<id>", "Message ID", parseInt)
     .option("-j, --json", "Output as JSON")
-    .action((id, opts) => {
-      const msg = unpinMessage(id);
+    .action(async (id, opts) => {
+      const msg = await unpinMessage(id);
 
       if (opts.json) {
         console.log(JSON.stringify(msg, null, 2));
@@ -596,9 +597,9 @@ export function registerMessagingCommands(program: Command): void {
     .option("--cursor <n>", "Skip first N results for pagination", parseInt)
     .option("--verbose", "Show full message bodies")
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
+    .action(async (opts) => {
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
-      const messages = getPinnedMessages({
+      const messages = await getPinnedMessages({
         channel: opts.channel,
         session_id: opts.session,
         limit: opts.json ? opts.limit : queryLimitFor(window),
@@ -726,7 +727,7 @@ export function registerMessagingCommands(program: Command): void {
     .option("--all", "Watch DMs and all subscribed channels")
     .option("--interval <ms>", "Poll interval in milliseconds", parseInt)
     .option("--verbose", "Show full message bodies")
-    .action((opts) => {
+    .action(async (opts) => {
       const agent = resolveIdentity(opts.from);
       heartbeat(agent);
 
@@ -812,7 +813,7 @@ export function registerMessagingCommands(program: Command): void {
 
       // Show recent messages first
       if (opts.all) {
-        const dmRecent = readMessages({ to: agent, limit: 20, order: "asc" });
+        const dmRecent = await readMessages({ to: agent, limit: 20, order: "asc" });
         const pendingNotifications = readChannelNotifications({
           agent,
           unread_only: true,
@@ -832,7 +833,7 @@ export function registerMessagingCommands(program: Command): void {
           console.log(chalk.dim(`  ── Live ──\n`));
         }
       } else {
-        const recent = readMessages({
+        const recent = await readMessages({
           to: opts.channel ? undefined : agent,
           channel: opts.channel,
           limit: 20,

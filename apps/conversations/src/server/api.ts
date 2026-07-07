@@ -100,6 +100,13 @@ function clampLimit(raw: string | null, def = 50, max = 500): number {
   return Math.min(n, max);
 }
 
+/** Truthy query-param check: "true", "1", "yes" all count. */
+function isTrue(raw: string | null): boolean {
+  if (!raw) return false;
+  const v = raw.toLowerCase();
+  return v === "true" || v === "1" || v === "yes";
+}
+
 const VALID_PRIORITIES = ["low", "normal", "high", "urgent"];
 
 /** Max messages accepted in a single bulk-ingest request. */
@@ -206,14 +213,37 @@ async function handleV1(
     const to = str(url.searchParams.get("to"));
     const from = str(url.searchParams.get("from"));
     const channel = str(url.searchParams.get("channel"));
-    const session = str(url.searchParams.get("session"));
+    const session = str(url.searchParams.get("session")) ?? str(url.searchParams.get("session_id"));
+    const projectId = str(url.searchParams.get("project_id"));
+    const since = str(url.searchParams.get("since"));
+    const sinceIdRaw = str(url.searchParams.get("since_id"));
+    const q = str(url.searchParams.get("q"));
+    const mentionsOnly = str(url.searchParams.get("mentions_only"));
+    const unreadOnly = isTrue(url.searchParams.get("unread_only"));
+    const threadsOnly = isTrue(url.searchParams.get("threads_only"));
+    const includeReplyCounts = isTrue(url.searchParams.get("include_reply_counts"));
+    // Default DESC (newest first) preserves the original behaviour; ?order=asc
+    // gives chronological order for read_channel-style paging.
+    const order = str(url.searchParams.get("order"))?.toLowerCase() === "asc" ? "ASC" : "DESC";
     const limit = clampLimit(url.searchParams.get("limit"));
+    const offsetRaw = parseInt(url.searchParams.get("offset") || url.searchParams.get("cursor") || "0", 10);
+    const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0;
     const clauses: string[] = [];
     const params: unknown[] = [];
     if (to) { params.push(to); clauses.push(`to_agent = $${params.length}`); }
     if (from) { params.push(from); clauses.push(`from_agent = $${params.length}`); }
     if (channel) { params.push(channel); clauses.push(`channel = $${params.length}`); }
     if (session) { params.push(session); clauses.push(`session_id = $${params.length}`); }
+    if (projectId) { params.push(projectId); clauses.push(`project_id = $${params.length}`); }
+    if (since) { params.push(since); clauses.push(`created_at > $${params.length}`); }
+    if (sinceIdRaw && Number.isFinite(Number(sinceIdRaw))) { params.push(Number(sinceIdRaw)); clauses.push(`id > $${params.length}`); }
+    if (q) { params.push(`%${q}%`); clauses.push(`content ILIKE $${params.length}`); }
+    if (mentionsOnly) {
+      params.push(mentionsOnly.toLowerCase());
+      clauses.push(`id IN (SELECT message_id FROM message_mentions WHERE mentioned_agent = $${params.length})`);
+    }
+    if (unreadOnly) clauses.push(`read_at IS NULL`);
+    if (threadsOnly) clauses.push(`reply_to IS NULL`);
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
     // count=1 → authoritative total (honours the same filters). Lets callers
     // verify backfill parity from the API without paging through every row.
@@ -224,10 +254,145 @@ async function handleV1(
       );
       return json({ count: Number(row?.n ?? 0) });
     }
+    const replyCountSelect = includeReplyCounts
+      ? `, (SELECT count(*) FROM messages r WHERE r.reply_to = messages.id)::int AS reply_count`
+      : "";
     params.push(limit);
+    const limitIdx = params.length;
+    params.push(offset);
+    const offsetIdx = params.length;
     const rows = await client.many(
-      `SELECT id, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, blocking, reply_to, created_at, read_at
-       FROM messages ${where} ORDER BY id DESC LIMIT $${params.length}`,
+      `SELECT id, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority,
+              blocking, reply_to, working_dir, repository, branch, metadata, edited_at, pinned_at,
+              attachments, created_at, read_at${replyCountSelect}
+       FROM messages ${where} ORDER BY created_at ${order}, id ${order} LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+      params,
+    );
+    return json({ messages: rows });
+  }
+
+  // ---- mark messages read (per-agent receipts + global read_at) ----
+  // Mirrors the local markReadByIds/markAllRead/markChannelRead/markSessionRead
+  // semantics so read state routes to the cloud identically.
+  if (sub === "messages/read" && method === "POST") {
+    const body = await readJson(req);
+    const reader = str(body.reader) ?? str(body.agent) ?? agent ?? undefined;
+    const ids = Array.isArray(body.ids)
+      ? (body.ids as unknown[]).map(Number).filter((n) => Number.isFinite(n))
+      : [];
+    const all = body.all === true;
+    const channel = str(body.channel);
+    const session = str(body.session) ?? str(body.session_id);
+    let marked = 0;
+    if (ids.length) {
+      if (reader) {
+        const rParams: unknown[] = [];
+        const rowsSql: string[] = [];
+        const lower = reader.toLowerCase();
+        for (const id of ids) {
+          rParams.push(id, lower);
+          rowsSql.push(`($${rParams.length - 1}, $${rParams.length}, NOW())`);
+        }
+        await client.query(
+          `INSERT INTO message_read_receipts (message_id, agent, read_at) VALUES ${rowsSql.join(", ")}
+           ON CONFLICT (message_id, agent) DO UPDATE SET read_at = EXCLUDED.read_at`,
+          rParams,
+        );
+      }
+      const res = await client.query(
+        `UPDATE messages SET read_at = NOW()::text WHERE id = ANY($1::bigint[]) AND read_at IS NULL`,
+        [ids],
+      );
+      marked = res.rowCount;
+    } else if (all && reader) {
+      const res = await client.query(
+        `UPDATE messages SET read_at = NOW()::text WHERE to_agent = $1 AND read_at IS NULL`,
+        [reader],
+      );
+      marked = res.rowCount;
+    } else if (channel && reader) {
+      const res = await client.query(
+        `UPDATE messages SET read_at = NOW()::text WHERE channel = $1 AND from_agent <> $2 AND read_at IS NULL`,
+        [channel, reader],
+      );
+      marked = res.rowCount;
+    } else if (session && reader) {
+      const res = await client.query(
+        `UPDATE messages SET read_at = NOW()::text WHERE session_id = $1 AND to_agent = $2 AND read_at IS NULL`,
+        [session, reader],
+      );
+      marked = res.rowCount;
+    } else {
+      return json({ error: "provide ids, or all/channel/session with reader" }, 400);
+    }
+    return json({ marked });
+  }
+
+  // ---- mark messages unread (clear global read_at) ----
+  if (sub === "messages/unread" && method === "POST") {
+    const body = await readJson(req);
+    const ids = Array.isArray(body.ids)
+      ? (body.ids as unknown[]).map(Number).filter((n) => Number.isFinite(n))
+      : [];
+    if (!ids.length) return json({ error: "provide ids" }, 400);
+    const res = await client.query(
+      `UPDATE messages SET read_at = NULL WHERE id = ANY($1::bigint[]) AND read_at IS NOT NULL`,
+      [ids],
+    );
+    return json({ marked_unread: res.rowCount });
+  }
+
+  // ---- unread counts per channel ----
+  if (sub === "messages/unread-counts" && method === "GET") {
+    const who = str(url.searchParams.get("agent"));
+    if (who) {
+      const rows = await client.many(
+        `SELECT channel,
+                COUNT(CASE WHEN read_at IS NULL AND from_agent <> $1 THEN 1 END) AS unread_count,
+                MAX(created_at) AS latest_message_at
+         FROM messages
+         WHERE channel IS NOT NULL AND channel IN (
+           SELECT DISTINCT channel FROM channel_members WHERE agent = $1
+           UNION
+           SELECT DISTINCT channel FROM messages WHERE to_agent = $1 AND channel IS NOT NULL
+         )
+         GROUP BY channel HAVING COUNT(*) > 0
+         ORDER BY unread_count DESC, latest_message_at DESC`,
+        [who],
+      );
+      return json({ counts: rows });
+    }
+    const rows = await client.many(
+      `SELECT channel,
+              COUNT(CASE WHEN read_at IS NULL THEN 1 END) AS unread_count,
+              MAX(created_at) AS latest_message_at
+       FROM messages WHERE channel IS NOT NULL
+       GROUP BY channel HAVING COUNT(*) > 0
+       ORDER BY unread_count DESC, latest_message_at DESC`,
+    );
+    return json({ counts: rows });
+  }
+
+  // ---- pinned messages ----
+  if (sub === "messages/pinned" && method === "GET") {
+    const channel = str(url.searchParams.get("channel"));
+    const session = str(url.searchParams.get("session")) ?? str(url.searchParams.get("session_id"));
+    const limit = clampLimit(url.searchParams.get("limit"));
+    const offsetRaw = parseInt(url.searchParams.get("offset") || "0", 10);
+    const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0;
+    const clauses = ["pinned_at IS NOT NULL"];
+    const params: unknown[] = [];
+    if (channel) { params.push(channel); clauses.push(`channel = $${params.length}`); }
+    if (session) { params.push(session); clauses.push(`session_id = $${params.length}`); }
+    params.push(limit);
+    const limitIdx = params.length;
+    params.push(offset);
+    const offsetIdx = params.length;
+    const rows = await client.many(
+      `SELECT id, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority,
+              blocking, reply_to, working_dir, repository, branch, metadata, edited_at, pinned_at,
+              attachments, created_at, read_at
+       FROM messages WHERE ${clauses.join(" AND ")} ORDER BY pinned_at DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       params,
     );
     return json({ messages: rows });
@@ -333,12 +498,64 @@ async function handleV1(
     return json({ requested: items.length, inserted, skipped: items.length - inserted, total }, 200);
   }
 
+  // ---- read receipts for one message ----
+  const receiptMatch = sub.match(/^messages\/(\d+)\/receipts$/);
+  if (receiptMatch) {
+    const id = Number(receiptMatch[1]);
+    if (method === "GET") {
+      const rows = await client.many(
+        `SELECT message_id, agent, read_at FROM message_read_receipts WHERE message_id = $1 ORDER BY read_at ASC`,
+        [id],
+      );
+      return json({ receipts: rows });
+    }
+    if (method === "POST") {
+      const body = await readJson(req);
+      const who = str(body.agent) ?? agent ?? undefined;
+      if (!who) return json({ error: "agent is required" }, 400);
+      const row = await client.get(
+        `INSERT INTO message_read_receipts (message_id, agent, read_at) VALUES ($1, $2, NOW())
+         ON CONFLICT (message_id, agent) DO UPDATE SET read_at = EXCLUDED.read_at
+         RETURNING message_id, agent, read_at`,
+        [id, who.toLowerCase()],
+      );
+      return json({ receipt: row }, 201);
+    }
+  }
+
+  // ---- pin / unpin one message ----
+  const pinMatch = sub.match(/^messages\/(\d+)\/(pin|unpin)$/);
+  if (pinMatch && method === "POST") {
+    const id = Number(pinMatch[1]);
+    const pinning = pinMatch[2] === "pin";
+    const row = await client.get(
+      `UPDATE messages SET pinned_at = ${pinning ? "NOW()::text" : "NULL"} WHERE id = $1 RETURNING id, pinned_at`,
+      [id],
+    );
+    if (!row) return json({ error: "Message not found" }, 404);
+    return json({ message: row });
+  }
+
   const msgIdMatch = sub.match(/^messages\/(\d+)$/);
   if (msgIdMatch) {
     const id = Number(msgIdMatch[1]);
     if (method === "GET") {
       const row = await client.get(`SELECT * FROM messages WHERE id = $1`, [id]);
       if (!row) return json({ error: "Message not found" }, 404);
+      return json({ message: row });
+    }
+    if (method === "PATCH") {
+      // Edit content — only the original sender may edit; stamps edited_at.
+      const body = await readJson(req);
+      const from = str(body.from) ?? agent ?? undefined;
+      const content = typeof body.content === "string" ? body.content : undefined;
+      if (!from || content === undefined) return json({ error: "from and content are required" }, 400);
+      const row = await client.get(
+        `UPDATE messages SET content = $1, edited_at = NOW()::text
+         WHERE id = $2 AND from_agent = $3 RETURNING *`,
+        [content, id, from],
+      );
+      if (!row) return json({ error: "Message not found or not yours" }, 404);
       return json({ message: row });
     }
     if (method === "DELETE") {
