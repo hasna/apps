@@ -1,5 +1,12 @@
 #!/usr/bin/env bun
-import { registerEventCommands, registerWebhookCommands } from "@hasna/events/commander";
+import * as eventsCommander from "@hasna/events/commander";
+const { registerEventCommands } = eventsCommander;
+// `registerWebhookCommands` only exists in newer @hasna/events builds. Call it
+// defensively so the CLI builds/runs against currently-published versions that
+// do not export it yet (no published version exposes it as of events 0.1.13).
+const registerWebhookCommands = (eventsCommander as {
+  registerWebhookCommands?: (program: unknown, opts: { source: string }) => void;
+}).registerWebhookCommands;
 import { program } from "commander";
 import { registerCoreCommands } from "./commands/core.js";
 import { registerCrmCommands } from "./commands/crm.js";
@@ -21,7 +28,7 @@ registerCrmCommands(program);
 registerAdvancedCommands(program);
 registerAudienceCommands(program);
 registerStorageCommands(program);
-registerWebhookCommands(program, { source: "contacts" });
+registerWebhookCommands?.(program, { source: "contacts" });
 registerEventCommands(program, { source: "contacts", eventsCommandName: "hasna-events" });
 
 

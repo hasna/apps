@@ -38,6 +38,7 @@ import type {
 import { readFileSync, writeFileSync, existsSync, copyFileSync, statSync, mkdirSync, readdirSync, chmodSync } from "fs";
 import { extname, join } from "path";
 import { renderTable, formatContact, promptUser as prompt, confirmUser as confirm } from "../utils.js";
+import { getContactsCloud } from "../../cloud/store.js";
 
 function collect(val: string, prev: string[]): string[] {
   return [...prev, val];
@@ -90,18 +91,24 @@ program
         phones: opts.phone ? [{ number: opts.phone, type: "mobile", is_primary: true }] : undefined,
       };
 
-      const contact = createContact(input);
+      const cloud = getContactsCloud();
+      const contact = cloud ? await cloud.createContact(input as unknown as Record<string, unknown>) : createContact(input);
 
-      // Apply tags by name if provided
+      // Apply tags by name if provided (local store only; cloud tag linking is
+      // managed via the tags API separately).
       if (opts.tag.length > 0) {
-        const db = getDatabase();
-        const allTags = listTags();
-        for (const tagName of opts.tag) {
-          const tag = allTags.find(t => t.name === tagName);
-          if (tag) {
-            db.run(`INSERT OR IGNORE INTO contact_tags (contact_id, tag_id) VALUES (?, ?)`, [contact.id, tag.id]);
-          } else {
-            console.log(chalk.yellow(`  ! Tag not found: ${tagName} (skipped)`));
+        if (cloud) {
+          console.log(chalk.yellow(`  ! Tag linking is not applied in self_hosted mode (skipped)`));
+        } else {
+          const db = getDatabase();
+          const allTags = listTags();
+          for (const tagName of opts.tag) {
+            const tag = allTags.find(t => t.name === tagName);
+            if (tag) {
+              db.run(`INSERT OR IGNORE INTO contact_tags (contact_id, tag_id) VALUES (?, ?)`, [contact.id, tag.id]);
+            } else {
+              console.log(chalk.yellow(`  ! Tag not found: ${tagName} (skipped)`));
+            }
           }
         }
       }
@@ -136,7 +143,8 @@ program
       phones: phoneStr ? [{ number: phoneStr, type: "mobile", is_primary: true }] : undefined,
     };
 
-    const contact = createContact(input);
+    const cloud = getContactsCloud();
+    const contact = cloud ? await cloud.createContact(input as unknown as Record<string, unknown>) : createContact(input);
     console.log(chalk.green(`\n✓ Contact created: ${contact.display_name} (${contact.id})\n`));
   });
 
@@ -154,15 +162,22 @@ program
   .option("--order-dir <dir>", "Sort direction: asc|desc", "asc")
   .option("-j, --json", "Output JSON")
   .action(async (opts: { tag?: string; company?: string; includeRestricted?: boolean; limit: string; offset: string; orderBy: string; orderDir: string; json?: boolean }) => {
-    const result = listContacts({
-      tag_id: opts.tag,
-      company_id: opts.company,
-      include_restricted: opts.includeRestricted,
-      limit: parseInt(opts.limit, 10),
-      offset: parseInt(opts.offset, 10),
-      order_by: opts.orderBy as "display_name" | "created_at" | "updated_at" | "last_contacted_at" | "follow_up_at",
-      order_dir: opts.orderDir === "desc" ? "desc" : "asc",
-    });
+    const cloud = getContactsCloud();
+    const result = cloud
+      ? await cloud.listContacts({
+          company_id: opts.company,
+          limit: parseInt(opts.limit, 10),
+          offset: parseInt(opts.offset, 10),
+        })
+      : listContacts({
+          tag_id: opts.tag,
+          company_id: opts.company,
+          include_restricted: opts.includeRestricted,
+          limit: parseInt(opts.limit, 10),
+          offset: parseInt(opts.offset, 10),
+          order_by: opts.orderBy as "display_name" | "created_at" | "updated_at" | "last_contacted_at" | "follow_up_at",
+          order_dir: opts.orderDir === "desc" ? "desc" : "asc",
+        });
 
     if (opts.json) {
       console.log(JSON.stringify(result, null, 2));
@@ -180,7 +195,7 @@ program
       Company: c.company?.name ?? "",
       Email: c.emails?.[0]?.address ?? "",
       Phone: c.phones?.[0]?.number ?? "",
-      Tags: c.tags?.map((t) => `#${t.name}`).join(" ") ?? "",
+      Tags: c.tags?.map((t: { name: string }) => `#${t.name}`).join(" ") ?? "",
     }));
 
     renderTable(["Name", "Company", "Email", "Phone", "Tags"], rows);
@@ -192,8 +207,9 @@ program
 program
   .command("show <id>")
   .description("Show full contact details")
-  .action((id: string) => {
-    const contact = getContact(id);
+  .action(async (id: string) => {
+    const cloud = getContactsCloud();
+    const contact = cloud ? await cloud.getContact(id) : getContact(id);
     formatContact(contact);
   });
 
@@ -220,7 +236,8 @@ program
     note?: string;
     website?: string;
   }) => {
-    const contact = getContact(id);
+    const cloud = getContactsCloud();
+    const contact = cloud ? await cloud.getContact(id) : getContact(id);
 
     // Non-interactive path: flags provided
     const hasFlags = opts.first || opts.last || opts.display || opts.email ||
@@ -234,6 +251,16 @@ program
       if (opts.title !== undefined) updates.job_title = opts.title;
       if (opts.note !== undefined) updates.notes = opts.note;
       if (opts.website !== undefined) updates.website = opts.website;
+
+      if (cloud) {
+        const updated = await cloud.updateContact(id, updates);
+        if (opts.email || opts.phone) {
+          console.log(chalk.yellow(`  ! Email/phone editing is not applied in self_hosted mode (skipped)`));
+        }
+        console.log(chalk.green(`\n✓ Contact updated: ${updated.display_name}\n`));
+        formatContact(await cloud.getContact(id));
+        return;
+      }
 
       const updated = updateContact(id, updates);
 
@@ -289,7 +316,8 @@ program
   .description("Delete a contact")
   .option("-f, --force", "Skip confirmation")
   .action(async (id: string, opts: { force?: boolean }) => {
-    const contact = getContact(id);
+    const cloud = getContactsCloud();
+    const contact = cloud ? await cloud.getContact(id) : getContact(id);
 
     if (!opts.force) {
       const ok = await confirm(`Delete ${chalk.bold(contact.display_name)}?`);
@@ -299,7 +327,8 @@ program
       }
     }
 
-    deleteContact(id);
+    if (cloud) await cloud.deleteContact(id);
+    else deleteContact(id);
     console.log(chalk.green(`\n✓ Contact deleted: ${contact.display_name}\n`));
   });
 
@@ -308,8 +337,9 @@ program
 program
   .command("search <query>")
   .description("Search contacts")
-  .action((query: string) => {
-    const contacts = searchContacts(query);
+  .action(async (query: string) => {
+    const cloud = getContactsCloud();
+    const contacts = cloud ? await cloud.searchContacts(query) : searchContacts(query);
 
     if (contacts.length === 0) {
       console.log(chalk.gray(`\nNo contacts found for: "${query}"\n`));
@@ -322,7 +352,7 @@ program
       Company: c.company?.name ?? "",
       Email: c.emails?.[0]?.address ?? "",
       Phone: c.phones?.[0]?.number ?? "",
-      Tags: c.tags?.map((t) => `#${t.name}`).join(" ") ?? "",
+      Tags: c.tags?.map((t: { name: string }) => `#${t.name}`).join(" ") ?? "",
     }));
 
     renderTable(["Name", "Company", "Email", "Phone", "Tags"], rows);
