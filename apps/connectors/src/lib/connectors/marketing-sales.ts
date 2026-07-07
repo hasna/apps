@@ -374,6 +374,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["sales", "email outreach", "automation", "sequences", "prospecting"],
   },
   {
+    name: "sprig",
+    displayName: "Sprig",
+    description: "Continuous in-product user research and survey platform",
+    category: "Marketing & Sales",
+    tags: ["surveys", "feedback", "user-research", "product", "ux"],
+  },
+  {
     name: "surveysparrow",
     displayName: "SurveySparrow",
     description: "Conversational survey and feedback management platform",
