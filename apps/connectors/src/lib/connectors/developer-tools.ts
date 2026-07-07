@@ -129,6 +129,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["monitoring", "dashboards", "observability"],
   },
   {
+    name: "zipkin",
+    displayName: "Zipkin",
+    description: "Distributed tracing platform",
+    category: "Developer Tools",
+    tags: ["monitoring", "tracing", "observability"],
+  },
+  {
     name: "okta",
     displayName: "Okta",
     description: "Identity and access management",
