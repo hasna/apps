@@ -2,6 +2,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z, type ToolHelpers } from "./helpers.js";
+import { truncateText } from "../../compact-output.js";
 
 // Fallback memory store when mementos SDK not available
 function getLocalMemoryFile(): string {
@@ -60,16 +61,18 @@ export function registerMemoryTools(server: McpServer, h: ToolHelpers): void {
     "Recall project memories from previous sessions. Returns all saved learnings, patterns, and decisions for this project.",
     {
       search: z.string().optional().describe("Search query to filter memories"),
-      limit: z.number().optional().describe("Max memories to return (default: 20)"),
+      limit: z.number().optional().describe("Max memories to return (default: 10, max: 100)"),
+      verbose: z.boolean().optional().describe("Return full memory values"),
     },
-    async ({ search, limit }) => {
+    async ({ search, limit, verbose }) => {
       let items: { key: string; value: string; importance: number }[] = [];
+      const pageSize = Math.min(limit ?? 10, 100);
       // Try mementos SDK first, fall back to local file
       try {
         const mementos = require("@hasna/mementos");
         const memories = search
-          ? mementos.searchMemories(search, { limit: limit ?? 20 })
-          : mementos.listMemories({ scope: "shared", limit: limit ?? 20 });
+          ? mementos.searchMemories(search, { limit: pageSize })
+          : mementos.listMemories({ scope: "shared", limit: pageSize });
         items = (memories ?? []).map((m: any) => ({ key: m.key, value: m.value, importance: m.importance }));
       } catch {
         let local = loadLocalMemories();
@@ -77,10 +80,15 @@ export function registerMemoryTools(server: McpServer, h: ToolHelpers): void {
           const q = search.toLowerCase();
           local = local.filter(m => m.key.toLowerCase().includes(q) || m.value.toLowerCase().includes(q));
         }
-        items = local.slice(0, limit ?? 20);
+        items = local.slice(0, pageSize);
       }
       h.logCall("recall", { command: `recall${search ? `: ${search}` : ""}` });
-      return { content: [{ type: "text" as const, text: JSON.stringify({ memories: items, total: items.length }) }] };
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        memories: verbose ? items : items.map((item) => ({ ...item, value: truncateText(item.value, 180) })),
+        total: items.length,
+        limit: pageSize,
+        hint: "Use verbose=true for full memory values.",
+      }) }] };
     }
   );
 
@@ -93,8 +101,10 @@ export function registerMemoryTools(server: McpServer, h: ToolHelpers): void {
       save: z.string().optional().describe("Note to save"),
       recall: z.boolean().optional().describe("Return all saved notes"),
       clear: z.boolean().optional().describe("Clear all notes"),
+      limit: z.number().optional().describe("Max notes to return (default: 10, max: 100)"),
+      verbose: z.boolean().optional().describe("Return full note text"),
     },
-    async ({ save, recall, clear }) => {
+    async ({ save, recall, clear, limit, verbose }) => {
       const { existsSync, readFileSync, writeFileSync, mkdirSync } = await import("fs");
       const { join } = await import("path");
       const notesDir = join(process.cwd(), ".terminal");
@@ -120,7 +130,14 @@ export function registerMemoryTools(server: McpServer, h: ToolHelpers): void {
         return { content: [{ type: "text" as const, text: JSON.stringify({ saved: true, total: notes.length }) }] };
       }
 
-      return { content: [{ type: "text" as const, text: JSON.stringify({ notes, total: notes.length }) }] };
+      const pageSize = Math.min(limit ?? 10, 100);
+      const page = notes.slice(-pageSize);
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        notes: verbose ? page : page.map((note) => ({ ...note, text: truncateText(note.text, 180) })),
+        total: notes.length,
+        returned: page.length,
+        hint: "Use verbose=true or limit=N for more note detail.",
+      }) }] };
     }
   );
 
@@ -166,7 +183,11 @@ export function registerMemoryTools(server: McpServer, h: ToolHelpers): void {
       }
       // Also show env vars that look like secrets
       const envSecrets = Object.keys(process.env).filter(k => /API_KEY|TOKEN|SECRET|PASSWORD/i.test(k));
-      return { content: [{ type: "text" as const, text: JSON.stringify({ stored: names, environment: envSecrets }) }] };
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        stored: names.slice(0, 50),
+        environment: envSecrets.slice(0, 50),
+        totals: { stored: names.length, environment: envSecrets.length },
+      }) }] };
     }
   );
 }

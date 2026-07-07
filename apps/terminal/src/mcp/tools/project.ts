@@ -7,6 +7,7 @@ import { estimateTokens } from "../../tokens.js";
 import { processOutput } from "../../output-processor.js";
 import { getOutputProvider } from "../../providers/index.js";
 import { getBootContext } from "../../session-boot.js";
+import { truncateText } from "../../compact-output.js";
 
 /** Detect project toolchain from filesystem */
 function detectToolchain(workDir: string): { runner: string; ecosystem: string } {
@@ -105,11 +106,17 @@ export function registerProjectTools(server: McpServer, h: ToolHelpers): void {
         content: [{ type: "text" as const, text: JSON.stringify({
           name: pkg?.name,
           version: pkg?.version,
-          scripts: pkg?.scripts,
-          dependencies: pkg?.dependencies ? Object.keys(pkg.dependencies) : [],
-          devDependencies: pkg?.devDependencies ? Object.keys(pkg.devDependencies) : [],
-          sourceFiles: srcResult.stdout.split("\n").filter(l => l.trim()),
-          configFiles: configResult.stdout.split("\n").filter(l => l.trim()),
+          scripts: pkg?.scripts ? Object.fromEntries(Object.entries(pkg.scripts).slice(0, 12).map(([name, script]) => [name, truncateText(script, 120)])) : {},
+          dependencies: pkg?.dependencies ? Object.keys(pkg.dependencies).slice(0, 30) : [],
+          devDependencies: pkg?.devDependencies ? Object.keys(pkg.devDependencies).slice(0, 30) : [],
+          sourceFiles: srcResult.stdout.split("\n").filter(l => l.trim()).slice(0, 50),
+          configFiles: configResult.stdout.split("\n").filter(l => l.trim()).slice(0, 50),
+          totals: {
+            scripts: pkg?.scripts ? Object.keys(pkg.scripts).length : 0,
+            dependencies: pkg?.dependencies ? Object.keys(pkg.dependencies).length : 0,
+            devDependencies: pkg?.devDependencies ? Object.keys(pkg.devDependencies).length : 0,
+          },
+          hint: "Default overview is compact. Use read_file({path:'package.json', full:true}) for full package metadata.",
         }) }],
       };
     }

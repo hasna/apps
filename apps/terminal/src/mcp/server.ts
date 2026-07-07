@@ -6,6 +6,7 @@ import { z } from "zod";
 import { createSession } from "../sessions-db.js";
 import { getPackageVersion } from "../package-info.js";
 import { createHelpers } from "./tools/helpers.js";
+import { truncateText } from "../compact-output.js";
 
 // Tool registration modules
 import { registerExecuteTools } from "./tools/execute.js";
@@ -96,11 +97,20 @@ export function createServer(): McpServer {
   server.tool(
     "list_agents",
     "List all registered agents.",
-    {},
-    async () => {
+    { limit: z.number().optional().describe("Max agents to return (default: 20)") },
+    async ({ limit }) => {
       const agents = [..._agentReg.values()];
-      if (agents.length === 0) return { content: [{ type: "text" as const, text: "No agents registered." }] };
-      return { content: [{ type: "text" as const, text: JSON.stringify(agents, null, 2) }] };
+      const pageSize = Math.min(limit ?? 20, 100);
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        agents: agents.slice(0, pageSize).map((agent) => ({
+          ...agent,
+          name: truncateText(agent.name, 80),
+          project_id: agent.project_id ? truncateText(agent.project_id, 100) : undefined,
+        })),
+        total: agents.length,
+        returned: Math.min(agents.length, pageSize),
+        hint: agents.length === 0 ? "No agents registered." : undefined,
+      }) }] };
     }
   );
 

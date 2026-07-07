@@ -10,6 +10,7 @@ import { shouldBeLazy, toLazy } from "../../lazy-executor.js";
 import { diffOutput } from "../../diff-cache.js";
 import { recordSaving } from "../../economy.js";
 import { shellPathArg } from "../../shell-quote.js";
+import { compactLines, compactPath, truncateText } from "../../compact-output.js";
 
 export function buildBrowseCommand(options: {
   target: string;
@@ -185,10 +186,16 @@ export function registerExecuteTools(server: McpServer, h: ToolHelpers): void {
         }) }] };
       }
 
-      // First run — return full output (ANSI stripped)
+      // First run — return a bounded preview and keep full output expandable.
       const clean = stripAnsi(output);
+      const preview = compactLines(clean, 80, 6000);
+      const detailKey = preview.truncated ? storeOutput(command, clean) : undefined;
       return { content: [{ type: "text" as const, text: JSON.stringify({
-        exitCode: result.exitCode, output: clean,
+        exitCode: result.exitCode,
+        output: preview.content,
+        lines: preview.lineCount,
+        truncated: preview.truncated,
+        ...(detailKey ? { detailKey, expandable: true, hint: "Use expand({key: detailKey}) for full first-run output." } : {}),
         diffSummary: "first run", duration: result.duration,
       }) }] };
     }
@@ -225,10 +232,13 @@ export function registerExecuteTools(server: McpServer, h: ToolHelpers): void {
       recursive: z.boolean().optional().describe("List recursively (default: false)"),
       maxDepth: z.number().optional().describe("Max depth for recursive listing (default: 2)"),
       includeHidden: z.boolean().optional().describe("Include hidden files (default: false)"),
+      limit: z.number().optional().describe("Max entries to return (default: 50, max: 200)"),
+      full: z.boolean().optional().describe("Return all entries. Default is compact and capped."),
     },
-    async ({ path, recursive, maxDepth, includeHidden }) => {
+    async ({ path, recursive, maxDepth, includeHidden, limit, full }) => {
       const target = path ?? process.cwd();
-      const depth = maxDepth ?? 2;
+      const depth = Math.min(maxDepth ?? 2, 5);
+      const pageSize = Math.min(limit ?? 50, 200);
       const command = buildBrowseCommand({
         target,
         recursive: !!recursive,
@@ -238,7 +248,15 @@ export function registerExecuteTools(server: McpServer, h: ToolHelpers): void {
 
       const result = await h.exec(command);
       const files = result.stdout.split("\n").filter(l => l.trim());
-      return { content: [{ type: "text" as const, text: JSON.stringify({ cwd: target, files, count: files.length }) }] };
+      const visible = full ? files : files.slice(0, pageSize);
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        cwd: compactPath(target, 4),
+        files: visible.map((file) => truncateText(file, 220)),
+        count: files.length,
+        returned: visible.length,
+        truncated: !full && files.length > visible.length,
+        hint: !full && files.length > visible.length ? "Use limit, recursive/maxDepth, or full=true for more entries." : undefined,
+      }) }] };
     }
   );
 

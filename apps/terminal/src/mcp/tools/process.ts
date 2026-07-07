@@ -3,6 +3,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z, type ToolHelpers } from "./helpers.js";
 import { bgStart, bgStatus, bgStop, bgLogs, bgWaitPort } from "../../supervisor.js";
+import { compactManagedProcess, truncateText } from "../../compact-output.js";
 
 export function registerProcessTools(server: McpServer, h: ToolHelpers): void {
 
@@ -17,7 +18,7 @@ export function registerProcessTools(server: McpServer, h: ToolHelpers): void {
     },
     async ({ command, cwd }) => {
       const result = bgStart(command, cwd);
-      return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+      return { content: [{ type: "text" as const, text: JSON.stringify(compactManagedProcess(result)) }] };
     }
   );
 
@@ -26,8 +27,19 @@ export function registerProcessTools(server: McpServer, h: ToolHelpers): void {
   server.tool(
     "bg_status",
     "List all managed background processes with status, ports, and recent output.",
-    async () => {
-      return { content: [{ type: "text" as const, text: JSON.stringify(bgStatus()) }] };
+    {
+      verbose: z.boolean().optional().describe("Include more process detail"),
+      limit: z.number().optional().describe("Max processes to return (default: 20)"),
+    },
+    async ({ verbose, limit }) => {
+      const processes = bgStatus();
+      const pageSize = Math.min(limit ?? 20, 100);
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        processes: verbose ? processes.slice(0, pageSize) : processes.slice(0, pageSize).map(compactManagedProcess),
+        total: processes.length,
+        returned: Math.min(processes.length, pageSize),
+        hint: "Use bg_logs({pid, tail}) for more output.",
+      }) }] };
     }
   );
 
@@ -53,8 +65,14 @@ export function registerProcessTools(server: McpServer, h: ToolHelpers): void {
       tail: z.number().optional().describe("Number of lines (default: 20)"),
     },
     async ({ pid, tail }) => {
-      const lines = bgLogs(pid, tail);
-      return { content: [{ type: "text" as const, text: JSON.stringify({ pid, lines }) }] };
+      const requestedTail = Math.min(tail ?? 20, 200);
+      const lines = bgLogs(pid, requestedTail).map((line) => truncateText(line, 220));
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        pid,
+        lines,
+        tail: requestedTail,
+        hint: requestedTail >= 200 ? "Output capped at 200 lines." : undefined,
+      }) }] };
     }
   );
 

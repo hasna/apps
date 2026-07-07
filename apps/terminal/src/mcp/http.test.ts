@@ -1,6 +1,6 @@
 import { describe, test, expect, afterAll } from "bun:test";
 import type { Server } from "node:http";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -22,6 +22,11 @@ function buildStubServer(): McpServer {
     async ({ msg }) => ({ content: [{ type: "text", text: `pong:${msg}` }] }),
   );
   return server;
+}
+
+function parseToolJson(result: any): any {
+  const content = result.content as Array<{ type: string; text: string }>;
+  return JSON.parse(content[0]?.text ?? "{}");
 }
 
 describe("terminal MCP HTTP transport", () => {
@@ -82,6 +87,42 @@ describe("terminal MCP HTTP transport", () => {
       await client.connect(transport);
       const tools = await client.listTools();
       expect(tools.tools.some((t) => t.name === "execute")).toBe(true);
+
+      const compactSnapshot = parseToolJson(await client.callTool({ name: "snapshot", arguments: {} }));
+      expect(compactSnapshot.totals).toBeDefined();
+      expect(compactSnapshot.recentCommands.length).toBeLessThanOrEqual(5);
+      expect(compactSnapshot.hint).toContain("full=true");
+
+      const fullSnapshot = parseToolJson(await client.callTool({ name: "snapshot", arguments: { full: true } }));
+      expect(fullSnapshot.cwd).toBe(process.cwd());
+      expect(fullSnapshot.env).toBeDefined();
+      expect(fullSnapshot.totals).toBeUndefined();
+
+      const readDir = mkdtempSync(join(tempDir, "read-files-"));
+      const bigContent = Array.from({ length: 200 }, (_, i) => `line ${i} ${"x".repeat(80)}`).join("\n");
+      const readPaths = Array.from({ length: 10 }, (_, i) => {
+        const file = join(readDir, `file-${i}.txt`);
+        writeFileSync(file, bigContent);
+        return file;
+      });
+      const readFiles = parseToolJson(await client.callTool({ name: "read_files", arguments: { files: readPaths } }));
+      expect(readFiles.__meta.returned).toBe(10);
+      expect(readFiles.__meta.truncated).toBe(true);
+      expect(readFiles[readPaths[0]].content.length).toBeLessThan(1600);
+      expect(JSON.stringify(readFiles).length).toBeLessThan(20000);
+
+      const browse = parseToolJson(await client.callTool({ name: "browse", arguments: { path: "src", recursive: true, limit: 5 } }));
+      expect(browse.files.length).toBeLessThanOrEqual(5);
+      expect(browse.returned).toBeLessThanOrEqual(5);
+
+      const repoState = parseToolJson(await client.callTool({ name: "repo_state", arguments: { limit: 5 } }));
+      expect(repoState.totals).toBeDefined();
+      expect(repoState.hint).toContain("verbose=true");
+
+      const agents = parseToolJson(await client.callTool({ name: "list_agents", arguments: { limit: 1 } }));
+      expect(Array.isArray(agents.agents)).toBe(true);
+      expect(agents.returned).toBeLessThanOrEqual(1);
+      expect(agents.total).toBeGreaterThanOrEqual(agents.returned);
       await client.close();
     } finally {
       realServer?.close();
