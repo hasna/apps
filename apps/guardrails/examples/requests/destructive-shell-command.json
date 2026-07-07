@@ -1,0 +1,12 @@
+{
+  "operationType": "shell_command",
+  "shell": {
+    "command": "rm -rf ./tmp/generated-output",
+    "cwd": "/workspace/project",
+    "targetKind": "shell"
+  },
+  "session": {
+    "tool": "open-terminal",
+    "traceId": "example-destructive-shell"
+  }
+}

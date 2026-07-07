@@ -1,0 +1,13 @@
+{
+  "operationType": "source_access",
+  "sourceAccess": {
+    "uri": "https://example.invalid/untrusted-post",
+    "sourceType": "url",
+    "trustLevel": "external",
+    "contentType": "text/html"
+  },
+  "session": {
+    "tool": "open-browser",
+    "traceId": "example-external-source"
+  }
+}
