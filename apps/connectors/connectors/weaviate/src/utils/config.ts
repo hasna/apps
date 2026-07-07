@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 
@@ -17,16 +17,38 @@ const PROFILES_DIR = join(CONFIG_DIR, 'profiles');
 const CURRENT_PROFILE_FILE = join(CONFIG_DIR, 'current_profile');
 
 export function setProfileOverride(profile: string | undefined): void {
-  profileOverride = profile;
+  profileOverride = profile ? normalizeProfileName(profile) : undefined;
+}
+
+function normalizeProfileName(profile: string): string {
+  if (!/^[a-zA-Z0-9_-]+$/.test(profile)) {
+    throw new Error('Profile name can only contain letters, numbers, hyphens, and underscores');
+  }
+  return profile;
+}
+
+function chmodPrivate(path: string, mode: number): void {
+  try {
+    chmodSync(path, mode);
+  } catch {
+    // Best effort: some filesystems do not support POSIX modes.
+  }
+}
+
+function writePrivateFile(path: string, contents: string): void {
+  writeFileSync(path, contents, { mode: 0o600 });
+  chmodPrivate(path, 0o600);
 }
 
 export function ensureConfigDir(): void {
-  if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true });
-  if (!existsSync(PROFILES_DIR)) mkdirSync(PROFILES_DIR, { recursive: true });
+  if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  if (!existsSync(PROFILES_DIR)) mkdirSync(PROFILES_DIR, { recursive: true, mode: 0o700 });
+  chmodPrivate(CONFIG_DIR, 0o700);
+  chmodPrivate(PROFILES_DIR, 0o700);
 }
 
 function getProfilePath(profile: string): string {
-  return join(PROFILES_DIR, `${profile}.json`);
+  return join(PROFILES_DIR, `${normalizeProfileName(profile)}.json`);
 }
 
 export function getCurrentProfile(): string {
@@ -45,10 +67,11 @@ export function getCurrentProfile(): string {
 
 export function setCurrentProfile(profile: string): void {
   ensureConfigDir();
-  if (!profileExists(profile) && profile !== DEFAULT_PROFILE) {
-    throw new Error(`Profile "${profile}" does not exist`);
+  const profileName = normalizeProfileName(profile);
+  if (!profileExists(profileName) && profileName !== DEFAULT_PROFILE) {
+    throw new Error(`Profile "${profileName}" does not exist`);
   }
-  writeFileSync(CURRENT_PROFILE_FILE, profile);
+  writePrivateFile(CURRENT_PROFILE_FILE, profileName);
 }
 
 export function profileExists(profile: string): boolean {
@@ -66,11 +89,9 @@ export function listProfiles(): string[] {
 
 export function createProfile(profile: string, config: ProfileConfig = {}): boolean {
   ensureConfigDir();
-  if (profileExists(profile)) return false;
-  if (!/^[a-zA-Z0-9_-]+$/.test(profile)) {
-    throw new Error('Profile name can only contain letters, numbers, hyphens, and underscores');
-  }
-  writeFileSync(getProfilePath(profile), JSON.stringify(config, null, 2));
+  const profileName = normalizeProfileName(profile);
+  if (profileExists(profileName)) return false;
+  writePrivateFile(getProfilePath(profileName), JSON.stringify(config, null, 2));
   return true;
 }
 
@@ -97,7 +118,7 @@ export function loadProfile(profile?: string): ProfileConfig {
 export function saveProfile(config: ProfileConfig, profile?: string): void {
   ensureConfigDir();
   const profileName = profile || getCurrentProfile();
-  writeFileSync(getProfilePath(profileName), JSON.stringify(config, null, 2));
+  writePrivateFile(getProfilePath(profileName), JSON.stringify(config, null, 2));
 }
 
 export function getHost(): string | undefined {

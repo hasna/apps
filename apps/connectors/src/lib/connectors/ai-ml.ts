@@ -927,11 +927,25 @@ export const connectors: ConnectorMeta[] = [
     tags: ["transcription", "meetings", "ai"],
   },
   {
+    name: "wato",
+    displayName: "Wato",
+    description: "Shared agent memories, workflows, tools, and artifacts",
+    category: "AI & ML",
+    tags: ["ai", "agents", "memory", "workflows"],
+  },
+  {
     name: "wavelineextract",
     displayName: "Waveline Extract",
     description: "Document data extraction and parsing",
     category: "AI & ML",
     tags: ["extraction", "documents", "parsing"],
+  },
+  {
+    name: "wayco",
+    displayName: "Wayco",
+    description: "Med-legal case management, lead intake, medical records, provider matching, and voice calls",
+    category: "AI & ML",
+    tags: ["ai", "med-legal", "healthcare"],
   },
   {
     name: "weaviate",
@@ -946,6 +960,13 @@ export const connectors: ConnectorMeta[] = [
     description: "AI chatbot builder from website content",
     category: "AI & ML",
     tags: ["chatbot", "ai", "knowledge-base"],
+  },
+  {
+    name: "wildcard",
+    displayName: "Wildcard",
+    description: "AI tool discovery, endpoint search, and agents.json flow execution",
+    category: "AI & ML",
+    tags: ["ai", "agents", "api-discovery", "tools"],
   },
   {
     name: "wondercraft",
@@ -974,5 +995,33 @@ export const connectors: ConnectorMeta[] = [
     description: "AI document data extraction and automation",
     category: "AI & ML",
     tags: ["ai", "extraction", "documents"],
+  },
+  {
+    name: "yousearch",
+    displayName: "You.com Search",
+    description: "You.com web search and research API",
+    category: "AI & ML",
+    tags: ["ai", "search", "research"],
+  },
+  {
+    name: "tensorboard",
+    displayName: "TensorBoard",
+    description: "TensorBoard training run metrics and scalars",
+    category: "AI & ML",
+    tags: ["ai", "ml", "metrics", "visualization"],
+  },
+  {
+    name: "zhipu-ai",
+    displayName: "Zhipu AI",
+    description: "GLM large language models via Zhipu Open Platform",
+    category: "AI & ML",
+    tags: ["ai", "llm", "glm", "zhipu"],
+  },
+  {
+    name: "youart",
+    displayName: "YouArt",
+    description: "AI originals funding and creator economy",
+    category: "AI & ML",
+    tags: ["ai", "creator-economy", "funding"],
   },
 ];
