@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSessionRead, markChannelRead, markAllRead, getMessageById, searchMessages, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, getUnreadBlockers } from "../../lib/messages.js";
+import { readMessages, readDigest, markRead, markReadByIds, markSessionRead, markChannelRead, markAllRead, searchMessages, exportMessages, editMessage, pinMessage, unpinMessage, getPinnedMessages, getUnreadBlockers } from "../../lib/messages.js";
+import { sendMessage, getMessageById, deleteMessage } from "../../lib/cloud-store.js";
 import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { renderContent } from "../../lib/terminal-markdown.js";
@@ -45,7 +46,7 @@ export function registerMessagingCommands(program: Command): void {
     .option("--channel <name>", "Send to a channel instead of a specific agent")
     .option("--blocking", "Send as a blocking message (recipient must acknowledge)")
     .option("-j, --json", "Output as JSON")
-    .action((message, opts) => {
+    .action(async (message, opts) => {
       const from = resolveIdentity(opts.from).trim();
       const to = typeof opts.to === "string" ? opts.to.trim() : "";
       const channel = typeof opts.channel === "string" ? opts.channel.trim() : "";
@@ -77,7 +78,7 @@ export function registerMessagingCommands(program: Command): void {
         }
       }
 
-      const msg = sendMessage({
+      const msg = await sendMessage({
         from,
         to: to || from,
         channel: channel || undefined,
@@ -163,14 +164,14 @@ export function registerMessagingCommands(program: Command): void {
     .description("Show a full message by ID")
     .argument("<id>", "Numeric message ID")
     .option("-j, --json", "Output as JSON")
-    .action((idArg, opts) => {
+    .action(async (idArg, opts) => {
       const id = Number.parseInt(String(idArg), 10);
       if (!Number.isFinite(id) || id <= 0) {
         console.error(chalk.red("Message ID must be a positive integer."));
         process.exit(1);
       }
 
-      const msg = getMessageById(id);
+      const msg = await getMessageById(id);
       if (!msg) {
         console.error(chalk.red(`Message #${id} not found.`));
         process.exit(1);
@@ -378,8 +379,8 @@ export function registerMessagingCommands(program: Command): void {
     .option("--from <agent>", "Sender agent ID")
     .option("--priority <level>", "Priority: low, normal, high, urgent", "normal")
     .option("-j, --json", "Output as JSON")
-    .action((message, opts) => {
-      const original = getMessageById(opts.to);
+    .action(async (message, opts) => {
+      const original = await getMessageById(opts.to);
       if (!original) {
         console.error(chalk.red(`Message #${opts.to} not found.`));
         process.exit(1);
@@ -401,7 +402,7 @@ export function registerMessagingCommands(program: Command): void {
       const to = channel
         ? channel
         : (original.from_agent === from ? original.to_agent : original.from_agent);
-      const msg = sendMessage({
+      const msg = await sendMessage({
         from,
         to,
         content,
@@ -519,14 +520,14 @@ export function registerMessagingCommands(program: Command): void {
     .argument("<id>", "Message ID", parseInt)
     .option("--from <agent>", "Sender agent ID")
     .option("-j, --json", "Output as JSON")
-    .action((id, opts) => {
+    .action(async (id, opts) => {
       const agent = resolveIdentity(opts.from).trim();
       if (!agent) {
         console.error(chalk.red("Agent identity is required."));
         process.exit(1);
       }
 
-      const result = deleteMessage(id, agent);
+      const result = await deleteMessage(id, agent);
 
       if (opts.json) {
         console.log(JSON.stringify({ id, deleted: result }));
