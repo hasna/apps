@@ -23,6 +23,40 @@ import type { KnowledgeItem } from './store';
 /** App slug used for the client-flip env keys (HASNA_KNOWLEDGE_*). */
 export const KNOWLEDGE_APP_SLUG = 'knowledge';
 
+/**
+ * Storage-mode env keys the contracts client-flip inspects, in priority order.
+ * Mirrors `clientTransportEnvKeys('knowledge')` in @hasna/contracts.
+ */
+const MODE_ENV_KEYS = [
+  'HASNA_KNOWLEDGE_STORAGE_MODE',
+  'HASNA_KNOWLEDGE_MODE',
+  'KNOWLEDGE_STORAGE_MODE',
+  'KNOWLEDGE_MODE',
+] as const;
+const API_URL_ENV_KEYS = ['HASNA_KNOWLEDGE_API_URL', 'KNOWLEDGE_API_URL'] as const;
+const API_KEY_ENV_KEYS = ['HASNA_KNOWLEDGE_API_KEY', 'KNOWLEDGE_API_KEY'] as const;
+
+function hasAnyEnv(env: NodeJS.ProcessEnv, keys: readonly string[]): boolean {
+  return keys.some((k) => (env[k] ?? '').trim().length > 0);
+}
+
+/**
+ * The fleet flip writes exactly two vars per app —
+ * `HASNA_KNOWLEDGE_API_URL` + `HASNA_KNOWLEDGE_API_KEY` — and no STORAGE_MODE.
+ * Presence of BOTH is the self_hosted trigger. When no explicit storage-mode
+ * var is present we infer `cloud` so the contracts resolver routes every
+ * read/write to the HTTP client. An explicit storage-mode var always wins
+ * (e.g. `...STORAGE_MODE=local` pins local), so the cloud flip stays fully
+ * reversible: unset either the API URL or the API key -> local db.json.
+ */
+function withInferredCloudMode(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (hasAnyEnv(env, MODE_ENV_KEYS)) return env; // explicit mode wins
+  if (hasAnyEnv(env, API_URL_ENV_KEYS) && hasAnyEnv(env, API_KEY_ENV_KEYS)) {
+    return { ...env, HASNA_KNOWLEDGE_STORAGE_MODE: 'cloud' };
+  }
+  return env;
+}
+
 /** Cloud resource path served under /v1 by knowledge-serve. */
 export const KNOWLEDGE_RESOURCE = 'notes';
 
@@ -140,7 +174,7 @@ function isNotFound(error: unknown): boolean {
  * requested but misconfigured (never silent local drift).
  */
 export function resolveKnowledgeCloudStore(env: NodeJS.ProcessEnv = process.env): KnowledgeCloudStore | null {
-  const resolved = resolveStorageClient(KNOWLEDGE_APP_SLUG, env);
+  const resolved = resolveStorageClient(KNOWLEDGE_APP_SLUG, withInferredCloudMode(env));
   if (resolved.transport !== 'cloud-http') return null;
   return wrap(resolved.client);
 }
