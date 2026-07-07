@@ -12,6 +12,8 @@ import type {
   CreateLoopInput,
   CreateWorkflowInput,
   Loop,
+  LoopMachinePlacement,
+  LoopMachineRef,
   LoopTemplateSummary,
   LoopTarget,
   OverlapPolicy,
@@ -347,7 +349,40 @@ function defaultLoopDescription(name: string, schedule: ScheduleSpec, target: Lo
   ].join(" ");
 }
 
-function baseCreateInput(name: string, opts: Record<string, string | boolean | undefined>, target: LoopTarget): CreateLoopInput {
+function hasMachinePlacementOptions(opts: Record<string, unknown>): boolean {
+  return Boolean(opts.machineMode)
+    || (listFromRepeatedOpts(opts.machineFanout as string[] | undefined) ?? []).length > 0
+    || (listFromRepeatedOpts(opts.machineLabel as string[] | undefined) ?? []).length > 0
+    || (listFromRepeatedOpts(opts.machineCapability as string[] | undefined) ?? []).length > 0;
+}
+
+function machineFromOpts(opts: Record<string, unknown>): LoopMachineRef | undefined {
+  if (typeof opts.machine !== "string") return undefined;
+  if (hasMachinePlacementOptions(opts)) {
+    throw new ValidationError("--machine cannot be combined with --machine-fanout, --machine-label, --machine-capability, or --machine-mode");
+  }
+  return resolveLoopMachine(opts.machine);
+}
+
+function placementFromOpts(opts: Record<string, unknown>): LoopMachinePlacement | undefined {
+  const fanoutIds = listFromRepeatedOpts(opts.machineFanout as string[] | undefined) ?? [];
+  const labels = parseStringMap(listFromRepeatedOpts(opts.machineLabel as string[] | undefined), "--machine-label");
+  const capabilities = parseJsonMap(listFromRepeatedOpts(opts.machineCapability as string[] | undefined), "--machine-capability");
+  if (!fanoutIds.length && !Object.keys(labels).length && !Object.keys(capabilities).length && !opts.machineMode) return undefined;
+  const mode = opts.machineMode === undefined ? (fanoutIds.length ? "fanout" : "single") : String(opts.machineMode);
+  if (!["single", "fanout"].includes(mode)) throw new ValidationError("--machine-mode must be single or fanout");
+  const ids = fanoutIds.map((machineId) => resolveLoopMachine(machineId).id);
+  return {
+    mode: mode as LoopMachinePlacement["mode"],
+    selector: {
+      ids: ids.length ? ids : undefined,
+      labels: Object.keys(labels).length ? labels : undefined,
+      capabilities: Object.keys(capabilities).length ? capabilities : undefined,
+    },
+  };
+}
+
+function baseCreateInput(name: string, opts: Record<string, unknown>, target: LoopTarget): CreateLoopInput {
   const schedule = parseSchedule({
     at: typeof opts.at === "string" ? opts.at : undefined,
     every: typeof opts.every === "string" ? opts.every : undefined,
@@ -368,8 +403,9 @@ function baseCreateInput(name: string, opts: Record<string, string | boolean | u
     description: explicitDescription ?? defaultLoopDescription(name, schedule, target),
     schedule,
     target,
-    goal: goalFromOpts(opts),
-    machine: typeof opts.machine === "string" ? resolveLoopMachine(opts.machine) : undefined,
+    goal: goalFromOpts(opts as Record<string, string | boolean | undefined>),
+    machine: machineFromOpts(opts),
+    placement: placementFromOpts(opts),
     ...policy,
     expiresAt: typeof opts.expiresAt === "string" ? new Date(opts.expiresAt).toISOString() : undefined,
   };
@@ -398,7 +434,12 @@ function addAccountOptions(command: Command): Command {
 }
 
 function addMachineOptions(command: Command): Command {
-  return command.option("--machine <id>", "OpenMachines machine id to assign this loop to");
+  return command
+    .option("--machine <id>", "OpenMachines machine id to assign this loop to")
+    .option("--machine-fanout <id>", "OpenMachines machine id for intentional multi-machine fanout; may be repeated or comma-separated", collectValues, [] as string[])
+    .option("--machine-label <key=value>", "runner label selector for a machine pool; may be repeated or comma-separated", collectValues, [] as string[])
+    .option("--machine-capability <key=json>", "runner capability selector for a machine pool; may be repeated or comma-separated", collectValues, [] as string[])
+    .option("--machine-mode <mode>", "single or fanout placement mode");
 }
 
 function addGoalOptions(command: Command): Command {

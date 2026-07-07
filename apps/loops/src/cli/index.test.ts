@@ -1016,6 +1016,37 @@ describe("loops CLI", () => {
     expect(shown.machine.id).toBe(value.machine.id);
   });
 
+  test("create command stores machine pool placement selectors", () => {
+    const dataDir = freshDataDir("loops-cli-machine-placement-");
+    const create = runCli(dataDir, [
+      "--json",
+      "create",
+      "command",
+      "machine-pool",
+      "--at",
+      futureAt(),
+      "--cmd",
+      "true",
+      "--machine-label",
+      "role=worker",
+      "--machine-capability",
+      "gpu=true",
+    ]);
+    expect(create.status).toBe(0);
+    const value = JSON.parse(create.stdout);
+    expect(value.placement).toEqual({
+      mode: "single",
+      selector: {
+        labels: { role: "worker" },
+        capabilities: { gpu: true },
+      },
+    });
+
+    const show = runCli(dataDir, ["--json", "show", "machine-pool"]);
+    expect(show.status).toBe(0);
+    expect(JSON.parse(show.stdout).placement).toEqual(value.placement);
+  });
+
   test("create agent stores advisory allowlist metadata", () => {
     const dataDir = freshDataDir("loops-cli-agent-allowlist-");
     const create = runCli(dataDir, [

@@ -15,6 +15,7 @@ import type {
   GoalSpec,
   GoalStatus,
   Loop,
+  LoopMachinePlacement,
   LoopRun,
   LoopStatus,
   LoopTarget,
@@ -33,6 +34,7 @@ import type {
 } from "../types.js";
 import { AmbiguousNameError, LoopArchivedError, LoopNotFoundError, ValidationError } from "./errors.js";
 import { genId, nowIso } from "./ids.js";
+import { normalizeLoopMachinePlacement } from "./machines.js";
 import { dbPath } from "./paths.js";
 import { processStartTimeMs, sameProcessStart, START_TIME_TOLERANCE_MS } from "./process-identity.js";
 import { scrubSecrets, scrubSecretsDeep } from "./redact.js";
@@ -50,6 +52,8 @@ interface DaemonLeaseFence {
   daemonLeaseId?: string;
   now?: Date;
   claimToken?: string;
+  fanoutKey?: string;
+  machineId?: string;
 }
 
 const DEFAULT_RECOVERY_BATCH_LIMIT = 100;
@@ -60,7 +64,7 @@ const LIVE_EXPIRED_RUN_GRACE_MS = 60_000;
  * numbered migration so older binaries refuse to open newer databases instead
  * of silently misreading them (checked against PRAGMA user_version).
  */
-const SCHEMA_USER_VERSION = 7;
+const SCHEMA_USER_VERSION = 8;
 const TERMINAL_RUN_STATUSES = ["succeeded", "failed", "timed_out", "abandoned", "skipped"] as const;
 const PRUNE_BATCH_SIZE = 400;
 const GENERATED_ROUTE_TEMPLATE_IDS = new Set(["todos-task-worker-verifier", "task-lifecycle", "event-worker-verifier"]);
@@ -77,6 +81,7 @@ interface LoopRow {
   target_json: string;
   goal_json: string | null;
   machine_json: string | null;
+  placement_json: string | null;
   next_run_at: string | null;
   retry_scheduled_for: string | null;
   catch_up: string;
@@ -100,6 +105,8 @@ interface RunRow {
   started_at: string | null;
   finished_at: string | null;
   claimed_by: string | null;
+  machine_id: string | null;
+  fanout_key: string | null;
   claim_token: string | null;
   lease_expires_at: string | null;
   pid: number | null;
@@ -114,6 +121,38 @@ interface RunRow {
   created_at: string;
   updated_at: string;
 }
+
+interface SqliteColumnInfo {
+  name: string;
+  type: string;
+}
+
+const LOOP_RUNS_CORE_COLUMNS = new Set([
+  "id",
+  "loop_id",
+  "loop_name",
+  "scheduled_for",
+  "attempt",
+  "status",
+  "started_at",
+  "finished_at",
+  "claimed_by",
+  "machine_id",
+  "fanout_key",
+  "claim_token",
+  "lease_expires_at",
+  "pid",
+  "pgid",
+  "process_started_at",
+  "exit_code",
+  "duration_ms",
+  "stdout",
+  "stderr",
+  "error",
+  "goal_run_id",
+  "created_at",
+  "updated_at",
+]);
 
 interface WorkflowRow {
   id: string;
@@ -313,6 +352,7 @@ function rowToLoop(row: LoopRow): Loop {
     target: JSON.parse(row.target_json) as Loop["target"],
     goal: row.goal_json ? (JSON.parse(row.goal_json) as Loop["goal"]) : undefined,
     machine: row.machine_json ? (JSON.parse(row.machine_json) as Loop["machine"]) : undefined,
+    placement: row.placement_json ? (JSON.parse(row.placement_json) as Loop["placement"]) : undefined,
     nextRunAt: row.next_run_at ?? undefined,
     retryScheduledFor: row.retry_scheduled_for ?? undefined,
     catchUp: row.catch_up as Loop["catchUp"],
@@ -338,6 +378,8 @@ function rowToRun(row: RunRow): LoopRun {
     startedAt: row.started_at ?? undefined,
     finishedAt: row.finished_at ?? undefined,
     claimedBy: row.claimed_by ?? undefined,
+    machineId: row.machine_id ?? undefined,
+    fanoutKey: row.fanout_key ?? undefined,
     leaseExpiresAt: row.lease_expires_at ?? undefined,
     pid: row.pid ?? undefined,
     pgid: row.pgid ?? undefined,
@@ -723,6 +765,20 @@ function scrubbedOrNull(value: string | undefined | null): string | null {
   return value == null ? null : scrubSecrets(value);
 }
 
+function runFanoutKey(opts: Pick<DaemonLeaseFence, "fanoutKey">): string {
+  const value = opts.fanoutKey?.trim();
+  return value || "single";
+}
+
+function sqlIdentifier(name: string): string {
+  return `"${name.replace(/"/g, '""')}"`;
+}
+
+function sqliteColumnType(type: string | undefined): string {
+  const normalized = type?.trim();
+  return normalized && /^[A-Za-z0-9_(), ]+$/.test(normalized) ? normalized : "TEXT";
+}
+
 function chmodIfExists(path: string, mode: number): void {
   try {
     if (existsSync(path)) chmodSync(path, mode);
@@ -845,6 +901,13 @@ export class Store {
           this.db.exec("CREATE INDEX IF NOT EXISTS idx_runs_claim_token ON loop_runs(claim_token) WHERE claim_token IS NOT NULL");
         },
       },
+      {
+        id: "0008_machine_placement_fanout",
+        apply: () => {
+          this.addColumnIfMissing("loops", "placement_json", "TEXT");
+          this.ensureLoopRunsFanoutSchema();
+        },
+      },
     ];
   }
 
@@ -861,6 +924,7 @@ export class Store {
         target_json TEXT NOT NULL,
         goal_json TEXT,
         machine_json TEXT,
+        placement_json TEXT,
         next_run_at TEXT,
         retry_scheduled_for TEXT,
         catch_up TEXT NOT NULL,
@@ -886,6 +950,8 @@ export class Store {
         started_at TEXT,
         finished_at TEXT,
         claimed_by TEXT,
+        machine_id TEXT,
+        fanout_key TEXT NOT NULL DEFAULT 'single',
         claim_token TEXT,
         lease_expires_at TEXT,
         pid INTEGER,
@@ -899,7 +965,7 @@ export class Store {
         goal_run_id TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        UNIQUE(loop_id, scheduled_for)
+        UNIQUE(loop_id, scheduled_for, fanout_key)
       );
       CREATE INDEX IF NOT EXISTS idx_runs_loop ON loop_runs(loop_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_runs_status ON loop_runs(status);
@@ -1130,6 +1196,85 @@ export class Store {
     this.db.query(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();
   }
 
+  private loopRunsUniqueIncludesFanout(): boolean {
+    const indexes = this.db.query("PRAGMA index_list(loop_runs)").all() as Array<{ name: string; unique: number }>;
+    for (const index of indexes) {
+      if (index.unique !== 1) continue;
+      const columns = (this.db.query(`PRAGMA index_info(${index.name})`).all() as Array<{ name: string }>).map((column) => column.name);
+      if (columns.length === 3 && columns[0] === "loop_id" && columns[1] === "scheduled_for" && columns[2] === "fanout_key") {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private ensureLoopRunsFanoutSchema(): void {
+    this.addColumnIfMissing("loop_runs", "machine_id", "TEXT");
+    this.addColumnIfMissing("loop_runs", "fanout_key", "TEXT NOT NULL DEFAULT 'single'");
+    const columns = this.db.query("PRAGMA table_info(loop_runs)").all() as SqliteColumnInfo[];
+    const extraColumns = columns.filter((column) => !LOOP_RUNS_CORE_COLUMNS.has(column.name));
+    const extraColumnDefinitions = extraColumns.map((column) => `, ${sqlIdentifier(column.name)} ${sqliteColumnType(column.type)}`);
+    const extraColumnNames = extraColumns.map((column) => sqlIdentifier(column.name));
+    if (!this.loopRunsUniqueIncludesFanout()) {
+      this.db.exec(`
+        PRAGMA foreign_keys = OFF;
+        BEGIN;
+        CREATE TABLE loop_runs_new (
+          id TEXT PRIMARY KEY,
+          loop_id TEXT NOT NULL,
+          loop_name TEXT NOT NULL,
+          scheduled_for TEXT NOT NULL,
+          attempt INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          started_at TEXT,
+          finished_at TEXT,
+          claimed_by TEXT,
+          machine_id TEXT,
+          fanout_key TEXT NOT NULL DEFAULT 'single',
+          claim_token TEXT,
+          lease_expires_at TEXT,
+          pid INTEGER,
+          pgid INTEGER,
+          process_started_at TEXT,
+          exit_code INTEGER,
+          duration_ms INTEGER,
+          stdout TEXT,
+          stderr TEXT,
+          error TEXT,
+          goal_run_id TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+          ${extraColumnDefinitions.join("\n          ")},
+          UNIQUE(loop_id, scheduled_for, fanout_key)
+        );
+        INSERT INTO loop_runs_new (
+          id, loop_id, loop_name, scheduled_for, attempt, status, started_at, finished_at,
+          claimed_by, machine_id, fanout_key, claim_token, lease_expires_at, pid, pgid, process_started_at,
+          exit_code, duration_ms, stdout, stderr, error, goal_run_id, created_at, updated_at
+          ${extraColumnNames.length ? `, ${extraColumnNames.join(", ")}` : ""}
+        )
+        SELECT
+          id, loop_id, loop_name, scheduled_for, attempt, status, started_at, finished_at,
+          claimed_by, NULL, 'single', claim_token, lease_expires_at, pid, pgid, process_started_at,
+          exit_code, duration_ms, stdout, stderr, error, goal_run_id, created_at, updated_at
+          ${extraColumnNames.length ? `, ${extraColumnNames.join(", ")}` : ""}
+        FROM loop_runs;
+        DROP TABLE loop_runs;
+        ALTER TABLE loop_runs_new RENAME TO loop_runs;
+        COMMIT;
+        PRAGMA foreign_keys = ON;
+      `);
+    }
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_runs_loop ON loop_runs(loop_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_runs_status ON loop_runs(status);
+      CREATE INDEX IF NOT EXISTS idx_runs_status_lease ON loop_runs(status, lease_expires_at);
+      CREATE INDEX IF NOT EXISTS idx_runs_scheduled ON loop_runs(scheduled_for);
+      CREATE INDEX IF NOT EXISTS idx_runs_claim_token ON loop_runs(claim_token) WHERE claim_token IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_runs_machine ON loop_runs(machine_id);
+    `);
+  }
+
   private createWorkflowRunBackfillIndexes(): void {
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_workflow_runs_invocation ON workflow_runs(invocation_id);
@@ -1179,6 +1324,7 @@ export class Store {
       target,
       goal: input.goal,
       machine: input.machine,
+      placement: normalizeLoopMachinePlacement(input.placement),
       nextRunAt: initialNextRun(input.schedule, from),
       catchUp: input.catchUp ?? "latest",
       catchUpLimit: input.catchUpLimit ?? 50,
@@ -1192,9 +1338,9 @@ export class Store {
     };
     this.db
       .query(
-        `INSERT INTO loops (id, name, description, status, schedule_json, target_json, machine_json, next_run_at, retry_scheduled_for,
+        `INSERT INTO loops (id, name, description, status, schedule_json, target_json, machine_json, placement_json, next_run_at, retry_scheduled_for,
           goal_json, catch_up, catch_up_limit, overlap, max_attempts, retry_delay_ms, lease_ms, expires_at, created_at, updated_at)
-         VALUES ($id, $name, $description, $status, $schedule, $target, $machine, $nextRun, NULL, $goal, $catchUp, $catchUpLimit,
+         VALUES ($id, $name, $description, $status, $schedule, $target, $machine, $placement, $nextRun, NULL, $goal, $catchUp, $catchUpLimit,
           $overlap, $maxAttempts, $retryDelay, $leaseMs, $expiresAt, $created, $updated)`,
       )
       .run({
@@ -1205,6 +1351,7 @@ export class Store {
         $schedule: JSON.stringify(loop.schedule),
         $target: JSON.stringify(loop.target),
         $machine: loop.machine ? JSON.stringify(loop.machine) : null,
+        $placement: loop.placement ? JSON.stringify(loop.placement) : null,
         $goal: loop.goal ? JSON.stringify(loop.goal) : null,
         $nextRun: loop.nextRunAt ?? null,
         $catchUp: loop.catchUp,
@@ -3264,6 +3411,7 @@ export class Store {
 
   createSkippedRun(loop: Loop, scheduledFor: string, reason: string, opts: DaemonLeaseFence = {}): LoopRun {
     const now = nowIso();
+    const fanoutKey = runFanoutKey(opts);
     const run: LoopRun = {
       id: genId(),
       loopId: loop.id,
@@ -3271,6 +3419,8 @@ export class Store {
       scheduledFor,
       attempt: 1,
       status: "skipped",
+      machineId: opts.machineId,
+      fanoutKey,
       finishedAt: now,
       error: reason,
       createdAt: now,
@@ -3282,8 +3432,8 @@ export class Store {
       this.db
         .query(
           `INSERT OR IGNORE INTO loop_runs (id, loop_id, loop_name, scheduled_for, attempt, status, started_at, finished_at,
-            claimed_by, lease_expires_at, pid, exit_code, duration_ms, stdout, stderr, error, created_at, updated_at)
-           VALUES ($id, $loopId, $loopName, $scheduledFor, $attempt, $status, NULL, $finished, NULL, NULL, NULL, NULL, NULL,
+            claimed_by, machine_id, fanout_key, lease_expires_at, pid, exit_code, duration_ms, stdout, stderr, error, created_at, updated_at)
+           VALUES ($id, $loopId, $loopName, $scheduledFor, $attempt, $status, NULL, $finished, NULL, $machineId, $fanoutKey, NULL, NULL, NULL, NULL,
             NULL, NULL, $error, $created, $updated)`,
         )
         .run({
@@ -3294,6 +3444,8 @@ export class Store {
           $attempt: run.attempt,
           $status: run.status,
           $finished: run.finishedAt ?? null,
+          $machineId: run.machineId ?? null,
+          $fanoutKey: run.fanoutKey ?? "single",
           $error: run.error ?? null,
           $created: run.createdAt,
           $updated: run.updatedAt,
@@ -3307,7 +3459,7 @@ export class Store {
       }
       throw error;
     }
-    return this.getRunBySlot(loop.id, scheduledFor) ?? run;
+    return this.getRunBySlot(loop.id, scheduledFor, fanoutKey) ?? run;
   }
 
   getRun(id: string): LoopRun | undefined {
@@ -3315,10 +3467,10 @@ export class Store {
     return row ? rowToRun(row) : undefined;
   }
 
-  getRunBySlot(loopId: string, scheduledFor: string): LoopRun | undefined {
+  getRunBySlot(loopId: string, scheduledFor: string, fanoutKey = "single"): LoopRun | undefined {
     const row = this.db
-      .query<RunRow, [string, string]>("SELECT * FROM loop_runs WHERE loop_id = ? AND scheduled_for = ?")
-      .get(loopId, scheduledFor);
+      .query<RunRow, [string, string, string]>("SELECT * FROM loop_runs WHERE loop_id = ? AND scheduled_for = ? AND fanout_key = ?")
+      .get(loopId, scheduledFor, fanoutKey);
     return row ? rowToRun(row) : undefined;
   }
 
@@ -3350,6 +3502,7 @@ export class Store {
   ): ClaimRunResult | undefined {
     const startedAt = now.toISOString();
     const claimToken = opts.claimToken ?? genId();
+    const fanoutKey = runFanoutKey(opts);
 
     this.db.exec("BEGIN IMMEDIATE");
     try {
@@ -3361,7 +3514,7 @@ export class Store {
       }
       loop = currentLoop;
       const leaseExpiresAt = new Date(now.getTime() + loop.leaseMs).toISOString();
-      const existing = this.getRunBySlot(loop.id, scheduledFor);
+      const existing = this.getRunBySlot(loop.id, scheduledFor, fanoutKey);
 
       if (existing) {
         if (existing.status === "running") {
@@ -3376,7 +3529,7 @@ export class Store {
           const res = this.db
             .query(
               `UPDATE loop_runs SET status='running', started_at=$started, finished_at=NULL,
-               claimed_by=$claimedBy, claim_token=$claimToken, lease_expires_at=$lease, pid=NULL, pgid=NULL, process_started_at=NULL, exit_code=NULL,
+               claimed_by=$claimedBy, machine_id=$machineId, claim_token=$claimToken, lease_expires_at=$lease, pid=NULL, pgid=NULL, process_started_at=NULL, exit_code=NULL,
                duration_ms=NULL, stdout=NULL, stderr=NULL, error=NULL, updated_at=$updated
                WHERE id=$id AND status='running' AND lease_expires_at <= $now`,
             )
@@ -3384,6 +3537,7 @@ export class Store {
               $id: existing.id,
               $started: startedAt,
               $claimedBy: runnerId,
+              $machineId: opts.machineId ?? existing.machineId ?? null,
               $claimToken: claimToken,
               $lease: leaseExpiresAt,
               $updated: startedAt,
@@ -3404,7 +3558,7 @@ export class Store {
         const res = this.db
           .query(
             `UPDATE loop_runs SET attempt=$attempt, status='running', started_at=$started, finished_at=NULL,
-             claimed_by=$claimedBy, claim_token=$claimToken, lease_expires_at=$lease, pid=NULL, pgid=NULL, process_started_at=NULL, exit_code=NULL,
+             claimed_by=$claimedBy, machine_id=$machineId, claim_token=$claimToken, lease_expires_at=$lease, pid=NULL, pgid=NULL, process_started_at=NULL, exit_code=NULL,
              duration_ms=NULL, stdout=NULL, stderr=NULL, error=NULL, updated_at=$updated
              WHERE id=$id
                AND status IN ('failed', 'timed_out', 'abandoned')
@@ -3415,6 +3569,7 @@ export class Store {
             $attempt: attempt,
             $started: startedAt,
             $claimedBy: runnerId,
+            $machineId: opts.machineId ?? existing.machineId ?? null,
             $claimToken: claimToken,
             $lease: leaseExpiresAt,
             $updated: startedAt,
@@ -3430,8 +3585,8 @@ export class Store {
       const res = this.db
         .query(
           `INSERT OR IGNORE INTO loop_runs (id, loop_id, loop_name, scheduled_for, attempt, status, started_at, finished_at,
-            claimed_by, claim_token, lease_expires_at, pid, exit_code, duration_ms, stdout, stderr, error, created_at, updated_at)
-           VALUES ($id, $loopId, $loopName, $scheduledFor, 1, 'running', $started, NULL, $claimedBy, $claimToken, $lease,
+            claimed_by, machine_id, fanout_key, claim_token, lease_expires_at, pid, exit_code, duration_ms, stdout, stderr, error, created_at, updated_at)
+           VALUES ($id, $loopId, $loopName, $scheduledFor, 1, 'running', $started, NULL, $claimedBy, $machineId, $fanoutKey, $claimToken, $lease,
             NULL, NULL, NULL, NULL, NULL, NULL, $created, $updated)`,
         )
         .run({
@@ -3441,6 +3596,8 @@ export class Store {
           $scheduledFor: scheduledFor,
           $started: startedAt,
           $claimedBy: runnerId,
+          $machineId: opts.machineId ?? null,
+          $fanoutKey: fanoutKey,
           $claimToken: claimToken,
           $lease: leaseExpiresAt,
           $created: startedAt,
@@ -3882,10 +4039,10 @@ export class Store {
     this.db
       .query(
         `INSERT INTO loops (id, name, description, status, archived_at, archived_from_status, schedule_json, target_json,
-          goal_json, machine_json, next_run_at, retry_scheduled_for, catch_up, catch_up_limit, overlap, max_attempts,
+          goal_json, machine_json, placement_json, next_run_at, retry_scheduled_for, catch_up, catch_up_limit, overlap, max_attempts,
           retry_delay_ms, lease_ms, expires_at, created_at, updated_at)
          VALUES ($id, $name, $description, $status, $archivedAt, $archivedFromStatus, $schedule, $target,
-          $goal, $machine, $nextRun, $retrySlot, $catchUp, $catchUpLimit, $overlap, $maxAttempts,
+          $goal, $machine, $placement, $nextRun, $retrySlot, $catchUp, $catchUpLimit, $overlap, $maxAttempts,
           $retryDelay, $leaseMs, $expiresAt, $created, $updated)
          ON CONFLICT(id) DO UPDATE SET
            name=$name,
@@ -3897,6 +4054,7 @@ export class Store {
            target_json=$target,
            goal_json=$goal,
            machine_json=$machine,
+           placement_json=$placement,
            next_run_at=$nextRun,
            retry_scheduled_for=$retrySlot,
            catch_up=$catchUp,
@@ -3920,6 +4078,7 @@ export class Store {
         $target: JSON.stringify(loop.target),
         $goal: loop.goal ? JSON.stringify(loop.goal) : null,
         $machine: loop.machine ? JSON.stringify(loop.machine) : null,
+        $placement: loop.placement ? JSON.stringify(normalizeLoopMachinePlacement(loop.placement)) : null,
         $nextRun: loop.nextRunAt ?? null,
         $retrySlot: loop.retryScheduledFor ?? null,
         $catchUp: loop.catchUp,
@@ -3944,10 +4103,10 @@ export class Store {
     this.db
       .query(
         `INSERT INTO loop_runs (id, loop_id, loop_name, scheduled_for, attempt, status, started_at, finished_at,
-          claimed_by, claim_token, lease_expires_at, pid, pgid, process_started_at, exit_code, duration_ms,
+          claimed_by, machine_id, fanout_key, claim_token, lease_expires_at, pid, pgid, process_started_at, exit_code, duration_ms,
           stdout, stderr, error, goal_run_id, created_at, updated_at)
          VALUES ($id, $loopId, $loopName, $scheduledFor, $attempt, $status, $startedAt, $finishedAt,
-          $claimedBy, NULL, $leaseExpiresAt, $pid, $pgid, $processStartedAt, $exitCode, $durationMs,
+          $claimedBy, $machineId, $fanoutKey, NULL, $leaseExpiresAt, $pid, $pgid, $processStartedAt, $exitCode, $durationMs,
           $stdout, $stderr, $error, $goalRunId, $created, $updated)
          ON CONFLICT(id) DO UPDATE SET
            loop_id=$loopId,
@@ -3958,6 +4117,8 @@ export class Store {
            started_at=$startedAt,
            finished_at=$finishedAt,
            claimed_by=$claimedBy,
+           machine_id=$machineId,
+           fanout_key=$fanoutKey,
            claim_token=NULL,
            lease_expires_at=$leaseExpiresAt,
            pid=$pid,
@@ -3982,6 +4143,8 @@ export class Store {
         $startedAt: run.startedAt ?? null,
         $finishedAt: run.finishedAt ?? null,
         $claimedBy: run.claimedBy ?? null,
+        $machineId: run.machineId ?? null,
+        $fanoutKey: run.fanoutKey ?? "single",
         $leaseExpiresAt: run.leaseExpiresAt ?? null,
         $pid: run.pid ?? null,
         $pgid: run.pgid ?? null,

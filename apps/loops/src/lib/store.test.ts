@@ -64,6 +64,36 @@ describe("Store", () => {
     }
   });
 
+  test("claims explicit fanout rows per machine without weakening single-run leases", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "fanout",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+          placement: { mode: "fanout", selector: { ids: ["machine-a", "machine-b"] } },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const slot = "2026-01-01T00:00:00.000Z";
+      const machineA = store.claimRun(loop, slot, "runner-a", new Date(slot), { fanoutKey: "machine-a", machineId: "machine-a" });
+      const duplicateA = store.claimRun(loop, slot, "runner-a-2", new Date(slot), { fanoutKey: "machine-a", machineId: "machine-a" });
+      const machineB = store.claimRun(loop, slot, "runner-b", new Date(slot), { fanoutKey: "machine-b", machineId: "machine-b" });
+      const single = store.claimRun(loop, "2026-01-01T00:00:01.000Z", "single-a", new Date(slot));
+      const duplicateSingle = store.claimRun(loop, "2026-01-01T00:00:01.000Z", "single-b", new Date(slot));
+
+      expect(machineA?.run).toMatchObject({ status: "running", fanoutKey: "machine-a", machineId: "machine-a" });
+      expect(duplicateA).toBeUndefined();
+      expect(machineB?.run).toMatchObject({ status: "running", fanoutKey: "machine-b", machineId: "machine-b" });
+      expect(single?.run).toMatchObject({ status: "running", fanoutKey: "single" });
+      expect(duplicateSingle).toBeUndefined();
+      expect(store.listRuns({ loopId: loop.id })).toHaveLength(3);
+    } finally {
+      store.close();
+    }
+  });
+
   test("persists loop machine assignments", () => {
     const store = new Store(":memory:");
     try {
@@ -1365,9 +1395,10 @@ describe("Store", () => {
         "0005_workflow_invocations_and_admission",
         "0006_run_process_tracking",
         "0007_run_claim_tokens",
+        "0008_machine_placement_fanout",
       ]);
       const version = store["db"].query("PRAGMA user_version").get() as { user_version: number };
-      expect(version.user_version).toBeGreaterThanOrEqual(7);
+      expect(version.user_version).toBeGreaterThanOrEqual(8);
     } finally {
       store.close();
     }
@@ -1395,7 +1426,7 @@ describe("Store", () => {
     expect(() => new Store(dbFile)).toThrow(/newer than this binary supports/);
   });
 
-  test("upgrades version 6 stores before creating claim-token indexes", () => {
+  test("upgrades version 6 stores before creating claim-token and fanout indexes", () => {
     const root = mkdtempSync(join(tmpdir(), "loops-v6-claim-token-"));
     const dbFile = join(root, "loops.db");
     const raw = new Database(dbFile);
@@ -1453,11 +1484,12 @@ describe("Store", () => {
       );
       expect(indexes).toContain("idx_runs_claim_token");
       const version = store["db"].query("PRAGMA user_version").get() as { user_version: number };
-      expect(version.user_version).toBe(7);
+      expect(version.user_version).toBe(8);
       const ids = (store["db"].query("SELECT id FROM schema_migrations ORDER BY id").all() as Array<{ id: string }>).map(
         (row) => row.id,
       );
       expect(ids).toContain("0007_run_claim_tokens");
+      expect(ids).toContain("0008_machine_placement_fanout");
       expect(store.listRuns()).toEqual([]);
     } finally {
       store.close();
@@ -1489,6 +1521,10 @@ describe("Store", () => {
         (column) => column.name,
       );
       expect(columns).toContain("metadata_json");
+      const runColumns = (store["db"].query("PRAGMA table_info(loop_runs)").all() as Array<{ name: string }>).map(
+        (column) => column.name,
+      );
+      expect(runColumns).toContain("source");
       const loop = store.createLoop(
         {
           name: "fork-survivor",

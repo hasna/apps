@@ -50,6 +50,19 @@ export interface LoopMachineRef {
   warnings?: string[];
 }
 
+export type LoopMachinePlacementMode = "single" | "fanout";
+
+export interface LoopMachineSelector {
+  ids?: string[];
+  labels?: Record<string, string>;
+  capabilities?: Record<string, unknown>;
+}
+
+export interface LoopMachinePlacement {
+  mode: LoopMachinePlacementMode;
+  selector: LoopMachineSelector;
+}
+
 export interface OnceSchedule {
   type: "once";
   at: string;
@@ -430,6 +443,7 @@ export interface Loop {
   target: LoopTarget;
   goal?: GoalSpec;
   machine?: LoopMachineRef;
+  placement?: LoopMachinePlacement;
   nextRunAt?: string;
   retryScheduledFor?: string;
   catchUp: CatchUpPolicy;
@@ -453,6 +467,8 @@ export interface LoopRun {
   startedAt?: string;
   finishedAt?: string;
   claimedBy?: string;
+  machineId?: string;
+  fanoutKey?: string;
   leaseExpiresAt?: string;
   pid?: number;
   pgid?: number;
@@ -474,6 +490,7 @@ export interface CreateLoopInput {
   target: LoopTargetInput;
   goal?: GoalSpec;
   machine?: LoopMachineRef;
+  placement?: LoopMachinePlacement;
   catchUp?: CatchUpPolicy;
   catchUpLimit?: number;
   overlap?: OverlapPolicy;

@@ -42,7 +42,8 @@ describe("Postgres storage migrations", () => {
     const combined = POSTGRES_STORAGE_MIGRATIONS.map((migration) => migration.sql).join("\n");
     expect(combined).toContain("CREATE TABLE IF NOT EXISTS loops");
     expect(combined).toContain("CREATE TABLE IF NOT EXISTS loop_runs");
-    expect(combined).toContain("UNIQUE(loop_id, scheduled_for)");
+    expect(combined).toContain("UNIQUE(loop_id, scheduled_for, fanout_key)");
+    expect(combined).toContain("idx_runs_machine");
     expect(combined).toContain("CREATE TABLE IF NOT EXISTS workflow_runs");
     expect(combined).toContain("CREATE TABLE IF NOT EXISTS runner_machines");
     expect(combined).toContain("CREATE TABLE IF NOT EXISTS runner_leases");

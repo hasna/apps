@@ -4,7 +4,7 @@ import type {
   MachineTopology,
   MachineTopologyEntry,
 } from "@hasna/machines/consumer";
-import type { LoopMachineRef } from "../types.js";
+import type { LoopMachinePlacement, LoopMachineRef } from "../types.js";
 
 type MachinesConsumer = typeof import("@hasna/machines/consumer");
 
@@ -51,9 +51,114 @@ export interface OpenMachineSummary {
   tags: string[];
 }
 
+export interface RunnerMachineIdentity {
+  id: string;
+  machineId?: string;
+  hostname?: string;
+  labels?: Record<string, string>;
+  capabilities?: Record<string, unknown>;
+}
+
 function compact(value: string | null | undefined): string | undefined {
   const text = value?.trim();
   return text ? text : undefined;
+}
+
+function compactStringList(values: readonly string[] | undefined): string[] | undefined {
+  const result = Array.from(new Set((values ?? []).map((value) => compact(value)).filter((value): value is string => Boolean(value))));
+  return result.length ? result : undefined;
+}
+
+function compactStringRecord(value: Record<string, string> | undefined): Record<string, string> | undefined {
+  const result: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(value ?? {})) {
+    const normalizedKey = compact(key);
+    const normalizedValue = compact(entry);
+    if (normalizedKey && normalizedValue) result[normalizedKey] = normalizedValue;
+  }
+  return Object.keys(result).length ? result : undefined;
+}
+
+function compactCapabilityRecord(value: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  const result: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value ?? {})) {
+    const normalizedKey = compact(key);
+    if (normalizedKey && entry !== undefined) result[normalizedKey] = entry;
+  }
+  return Object.keys(result).length ? result : undefined;
+}
+
+function identityCandidates(runner: RunnerMachineIdentity): Set<string> {
+  return new Set([runner.id, runner.machineId, runner.hostname].map((value) => compact(value)).filter((value): value is string => Boolean(value)));
+}
+
+function capabilityMatches(actual: unknown, expected: unknown): boolean {
+  if (Object.is(actual, expected)) return true;
+  if (actual === undefined) return false;
+  if (typeof actual === "object" || typeof expected === "object") {
+    try {
+      return JSON.stringify(actual) === JSON.stringify(expected);
+    } catch {
+      return false;
+    }
+  }
+  return String(actual) === String(expected);
+}
+
+export function normalizeLoopMachinePlacement(placement: LoopMachinePlacement | undefined): LoopMachinePlacement | undefined {
+  if (!placement) return undefined;
+  if (!["single", "fanout"].includes(placement.mode)) throw new Error("machine placement mode must be single or fanout");
+  const selector = {
+    ids: compactStringList(placement.selector.ids),
+    labels: compactStringRecord(placement.selector.labels),
+    capabilities: compactCapabilityRecord(placement.selector.capabilities),
+  };
+  if (!selector.ids && !selector.labels && !selector.capabilities) {
+    throw new Error("machine placement selector requires ids, labels, or capabilities");
+  }
+  if (placement.mode === "fanout" && !selector.ids?.length) {
+    throw new Error("fanout machine placement requires explicit machine ids");
+  }
+  return {
+    mode: placement.mode,
+    selector,
+  };
+}
+
+export function runnerMatchesLoopMachine(
+  machine: LoopMachineRef | undefined,
+  placement: LoopMachinePlacement | undefined,
+  runner: RunnerMachineIdentity,
+): boolean {
+  const candidates = identityCandidates(runner);
+  if (machine) {
+    const machineMatches = candidates.has(machine.id) || (machine.requestedId ? candidates.has(machine.requestedId) : false);
+    if (!machineMatches) return false;
+  }
+  if (!placement) return true;
+  const normalized = normalizeLoopMachinePlacement(placement);
+  if (!normalized) return true;
+  const { selector } = normalized;
+  if (selector.ids?.length && !selector.ids.some((id) => candidates.has(id))) return false;
+  for (const [key, value] of Object.entries(selector.labels ?? {})) {
+    if (runner.labels?.[key] !== value) return false;
+  }
+  for (const [key, value] of Object.entries(selector.capabilities ?? {})) {
+    if (!capabilityMatches(runner.capabilities?.[key], value)) return false;
+  }
+  return true;
+}
+
+export function runnerFanoutKey(placement: LoopMachinePlacement | undefined, runner: RunnerMachineIdentity): string {
+  if (placement?.mode !== "fanout") return "single";
+  const candidates = identityCandidates(runner);
+  const matchedId = placement.selector.ids?.find((id) => candidates.has(id));
+  return matchedId ?? compact(runner.machineId) ?? compact(runner.hostname) ?? runner.id;
+}
+
+export function expectedFanoutKeys(placement: LoopMachinePlacement | undefined): string[] | undefined {
+  if (placement?.mode !== "fanout") return undefined;
+  return normalizeLoopMachinePlacement(placement)?.selector.ids;
 }
 
 function entryToSummary(entry: MachineTopologyEntry, topology: MachineTopology): OpenMachineSummary {

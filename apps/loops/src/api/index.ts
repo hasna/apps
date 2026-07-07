@@ -4,6 +4,7 @@ import { Command } from "commander";
 import type { CreateLoopInput, LoopStatus, RunStatus } from "../types.js";
 import { LoopArchivedError, LoopNotFoundError, ValidationError } from "../lib/errors.js";
 import { publicLoop, publicRun, redact } from "../lib/format.js";
+import { expectedFanoutKeys, runnerFanoutKey, runnerMatchesLoopMachine } from "../lib/machines.js";
 import { buildDeploymentStatus, deploymentStatusLine } from "../lib/mode.js";
 import { computeNextAfter, dueSlots } from "../lib/recurrence.js";
 import { scrubSecretsDeep } from "../lib/redact.js";
@@ -14,6 +15,7 @@ const program = new Command();
 const DEFAULT_BODY_LIMIT_BYTES = 64 * 1024;
 const DEFAULT_EVIDENCE_LIMIT_BYTES = 256 * 1024;
 const MIN_RUNNER_LEASE_MS = 1_000;
+const TERMINAL_RUN_STATUSES = new Set<RunStatus>(["succeeded", "failed", "timed_out", "abandoned", "skipped"]);
 
 program
   .name("loops-api")
@@ -245,12 +247,12 @@ async function handleRunnerRequest(ctx: V1RequestContext, segments: string[]): P
   const action = segments.length === 1 ? segments[0] : segments[1];
   if (action === "register" || action === "heartbeat") {
     const body = await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes);
-    return ok({ runner: runnerRecord(body) });
+    return ok({ runner: runnerRecord(body, ctx.now()) });
   }
   if (action === "poll" || action === "claim") {
     const storage = requireStorage(ctx.storage);
     const body = await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes);
-    const runner = runnerRecord(body);
+    const runner = runnerRecord(body, ctx.now());
     const claims = await claimRuns(storage, runner, {
       now: ctx.now(),
       maxClaims: optionalPositiveInteger(body.maxClaims, 1, 100) ?? 1,
@@ -269,7 +271,7 @@ interface RunnerRecord {
   lastSeenAt: string;
 }
 
-function runnerRecord(body: Record<string, unknown>): RunnerRecord {
+function runnerRecord(body: Record<string, unknown>, now = new Date()): RunnerRecord {
   const machineId = optionalString(body.machineId);
   const hostname = optionalString(body.hostname);
   const id = optionalString(body.runnerId) ?? machineId ?? hostname;
@@ -280,7 +282,7 @@ function runnerRecord(body: Record<string, unknown>): RunnerRecord {
     hostname,
     labels: stringRecord(body.labels),
     capabilities: objectRecord(body.capabilities),
-    lastSeenAt: new Date().toISOString(),
+    lastSeenAt: now.toISOString(),
   };
 }
 
@@ -292,12 +294,16 @@ async function claimRuns(
   const claims: Array<Record<string, unknown>> = [];
   for (const loop of await storage.dueLoops(opts.now)) {
     if (claims.length >= opts.maxClaims) break;
-    if (!runnerMatchesLoop(loop.machine, runner)) continue;
+    if (!runnerMatchesLoopMachine(loop.machine, loop.placement, runner)) continue;
     if (loop.target.type === "workflow") continue;
-    if (loop.overlap === "skip" && (await storage.listRuns({ loopId: loop.id, status: "running", limit: 1 })).length > 0) continue;
+    const fanout = runnerFanoutKey(loop.placement, runner);
+    if (loop.overlap === "skip" && fanout === "single" && (await storage.listRuns({ loopId: loop.id, status: "running", limit: 1 })).length > 0) continue;
     for (const slot of dueSlots(loop, opts.now).slots) {
       if (claims.length >= opts.maxClaims) break;
-      const claim = await storage.claimRun(loop, slot, runner.id, opts.now);
+      const claim = await storage.claimRun(loop, slot, runner.id, opts.now, {
+        fanoutKey: fanout,
+        machineId: runner.machineId ?? runner.hostname ?? runner.id,
+      });
       if (!claim) continue;
       const run = await storage.heartbeatRunLease(
         claim.run.id,
@@ -315,12 +321,6 @@ async function claimRuns(
     }
   }
   return claims;
-}
-
-function runnerMatchesLoop(machine: { id?: string; requestedId?: string } | undefined, runner: RunnerRecord): boolean {
-  if (!machine) return true;
-  const candidates = new Set([runner.id, runner.machineId, runner.hostname].filter(Boolean));
-  return candidates.has(machine.id) || (machine.requestedId ? candidates.has(machine.requestedId) : false);
 }
 
 async function heartbeatRun(storage: LoopStorageContract, runId: string, body: Record<string, unknown>, now: Date): Promise<Response> {
@@ -371,7 +371,10 @@ async function finalizeRun(storage: LoopStorageContract, runId: string, body: Re
     { claimedBy: existing.claimedBy, claimToken, now },
   );
   if (finalized.status === "running") return fail("stale_claim", 409);
-  await advanceLoopAfterRun(storage, loop, finalized, new Date(finalized.finishedAt ?? finishedAt), finalized.status === "succeeded");
+  const advancedOrWaitingForFanout = await maybeAdvanceFanoutLoop(storage, loop, finalized, new Date(finalized.finishedAt ?? finishedAt));
+  if (!advancedOrWaitingForFanout) {
+    await advanceLoopAfterRun(storage, loop, finalized, new Date(finalized.finishedAt ?? finishedAt), finalized.status === "succeeded");
+  }
   return ok({ run: publicRun(finalized, false, { redactError: true }) });
 }
 
@@ -406,6 +409,29 @@ async function advanceLoopAfterRun(
     nextRunAt,
     retryScheduledFor: undefined,
   });
+}
+
+async function maybeAdvanceFanoutLoop(
+  storage: LoopStorageContract,
+  loop: Awaited<ReturnType<LoopStorageContract["getLoop"]>> & {},
+  run: Awaited<ReturnType<LoopStorageContract["getRun"]>> & {},
+  finishedAt: Date,
+): Promise<boolean> {
+  const expected = expectedFanoutKeys(loop.placement);
+  if (!expected?.length) return false;
+  const expectedSet = new Set(expected);
+  const slotRuns = (await storage.listRuns({ loopId: loop.id, limit: 10_000 }))
+    .filter((candidate) => candidate.scheduledFor === run.scheduledFor && candidate.fanoutKey && expectedSet.has(candidate.fanoutKey));
+  const latestByFanout = new Map<string, typeof slotRuns[number]>();
+  for (const candidate of slotRuns) latestByFanout.set(candidate.fanoutKey!, candidate);
+  if (latestByFanout.size < expectedSet.size) return true;
+  const latestRuns = [...latestByFanout.values()];
+  if (latestRuns.some((candidate) => candidate.status === "running")) return true;
+  if (latestRuns.some((candidate) => !TERMINAL_RUN_STATUSES.has(candidate.status))) return true;
+  if (latestRuns.some((candidate) => ["failed", "timed_out", "abandoned"].includes(candidate.status) && candidate.attempt < loop.maxAttempts)) return true;
+  const failed = latestRuns.find((candidate) => candidate.status !== "succeeded" && candidate.status !== "skipped");
+  await advanceLoopAfterRun(storage, loop, failed ?? run, finishedAt, !failed);
+  return true;
 }
 
 function retryDelayMs(loop: Awaited<ReturnType<LoopStorageContract["getLoop"]>> & {}, run: Awaited<ReturnType<LoopStorageContract["getRun"]>> & {}): number {

@@ -74,6 +74,9 @@ export interface RunRunnerOnceOptions {
   apiToken?: string;
   runnerId?: string;
   machineId?: string;
+  hostname?: string;
+  labels?: Record<string, string>;
+  capabilities?: Record<string, unknown>;
   now?: Date;
   heartbeatIntervalMs?: number;
   fetchImpl?: typeof fetch;
@@ -81,7 +84,32 @@ export interface RunRunnerOnceOptions {
   env?: NodeJS.ProcessEnv;
 }
 
-function resolveRunnerConfig(opts: RunRunnerOnceOptions): { apiUrl: string; token?: string; runnerId: string; machineId?: string } {
+function parseJsonRecordEnv(value: string | undefined, name: string): Record<string, unknown> {
+  if (!value?.trim()) return {};
+  const parsed = JSON.parse(value) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(`${name} must be a JSON object`);
+  return parsed as Record<string, unknown>;
+}
+
+function parseStringRecordEnv(value: string | undefined, name: string): Record<string, string> {
+  const parsed = parseJsonRecordEnv(value, name);
+  const result: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(parsed)) {
+    if (typeof entry !== "string") throw new Error(`${name} values must be strings`);
+    result[key] = entry;
+  }
+  return result;
+}
+
+function resolveRunnerConfig(opts: RunRunnerOnceOptions): {
+  apiUrl: string;
+  token?: string;
+  runnerId: string;
+  machineId?: string;
+  hostname?: string;
+  labels: Record<string, string>;
+  capabilities: Record<string, unknown>;
+} {
   const env = opts.env ?? process.env;
   const apiUrl = opts.apiUrl ?? configuredApiUrl(env);
   if (!apiUrl) throw new Error("loops-runner requires LOOPS_API_URL or HASNA_LOOPS_API_URL");
@@ -92,11 +120,48 @@ function resolveRunnerConfig(opts: RunRunnerOnceOptions): { apiUrl: string; toke
     token,
     runnerId: opts.runnerId ?? env.LOOPS_RUNNER_ID ?? env.LOOPS_RUNNER_MACHINE_ID ?? env.HASNA_MACHINE_ID ?? DEFAULT_RUNNER_ID,
     machineId: opts.machineId ?? env.LOOPS_RUNNER_MACHINE_ID ?? env.HASNA_MACHINE_ID,
+    hostname: opts.hostname ?? env.LOOPS_RUNNER_HOSTNAME ?? env.HOSTNAME,
+    labels: opts.labels ?? parseStringRecordEnv(env.LOOPS_RUNNER_LABELS, "LOOPS_RUNNER_LABELS"),
+    capabilities: opts.capabilities ?? parseJsonRecordEnv(env.LOOPS_RUNNER_CAPABILITIES, "LOOPS_RUNNER_CAPABILITIES"),
   };
 }
 
 function endpoint(base: string, path: string): string {
   return new URL(path.replace(/^\//, ""), base.endsWith("/") ? base : `${base}/`).toString();
+}
+
+function collectValues(value: string, previous: string[] = []): string[] {
+  previous.push(value);
+  return previous;
+}
+
+function splitRepeated(values: string[] | undefined): string[] {
+  return (values ?? []).flatMap((value) => value.split(",").map((entry) => entry.trim()).filter(Boolean));
+}
+
+function parseStringMap(values: string[] | undefined, flag: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const value of splitRepeated(values)) {
+    const index = value.indexOf("=");
+    if (index <= 0) throw new Error(`invalid ${flag} value, expected key=value: ${value}`);
+    result[value.slice(0, index)] = value.slice(index + 1);
+  }
+  return result;
+}
+
+function parseJsonMap(values: string[] | undefined, flag: string): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const value of splitRepeated(values)) {
+    const index = value.indexOf("=");
+    if (index <= 0) throw new Error(`invalid ${flag} value, expected key=json-or-string: ${value}`);
+    const raw = value.slice(index + 1);
+    try {
+      result[value.slice(0, index)] = JSON.parse(raw);
+    } catch {
+      result[value.slice(0, index)] = raw;
+    }
+  }
+  return result;
 }
 
 async function postJson(fetchImpl: typeof fetch, config: { apiUrl: string; token?: string }, path: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -119,6 +184,9 @@ export async function runRunnerOnce(opts: RunRunnerOnceOptions = {}): Promise<Ru
   const runnerBody = {
     runnerId: config.runnerId,
     machineId: config.machineId,
+    hostname: config.hostname,
+    labels: config.labels,
+    capabilities: config.capabilities,
     now: (opts.now ?? new Date()).toISOString(),
     maxClaims: 1,
   };
@@ -223,12 +291,18 @@ program
   .option("--api-url <url>", "control-plane API URL")
   .option("--runner-id <id>", "runner id")
   .option("--machine-id <id>", "machine id")
+  .option("--hostname <name>", "runner hostname/alias advertised to the control plane")
+  .option("--label <key=value>", "runner label; may be repeated or comma-separated", collectValues, [] as string[])
+  .option("--capability <key=json>", "runner capability; may be repeated or comma-separated", collectValues, [] as string[])
   .option("-j, --json", "print JSON")
   .action(async (opts) => {
     const result = await runRunnerOnce({
       apiUrl: opts.apiUrl,
       runnerId: opts.runnerId,
       machineId: opts.machineId,
+      hostname: opts.hostname,
+      labels: opts.label?.length ? parseStringMap(opts.label, "--label") : undefined,
+      capabilities: opts.capability?.length ? parseJsonMap(opts.capability, "--capability") : undefined,
     });
     if (wantsJson(opts)) console.log(JSON.stringify(result, null, 2));
     else console.log(`claimed=${result.claimed} completed=${result.completed.length}`);

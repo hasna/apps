@@ -2,7 +2,15 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { listOpenMachines, refreshLoopMachine, resolveLoopMachine } from "./machines.js";
+import {
+  expectedFanoutKeys,
+  normalizeLoopMachinePlacement,
+  runnerFanoutKey,
+  runnerMatchesLoopMachine,
+  listOpenMachines,
+  refreshLoopMachine,
+  resolveLoopMachine,
+} from "./machines.js";
 
 const LOCAL_ID = "openloops-test-local-a71";
 const REMOTE_ID = "openloops-test-remote-b82";
@@ -94,5 +102,40 @@ describe("machines", () => {
     expect(refreshed.id).toBe(REMOTE_ID);
     expect(refreshed.route).toBe("ssh");
     expect(refreshed.workspacePath).toBe("/workspace/remote");
+  });
+
+  test("placement helpers match exact machines, pools, and fanout keys", () => {
+    const pool = normalizeLoopMachinePlacement({
+      mode: "single",
+      selector: {
+        labels: { role: "worker" },
+        capabilities: { gpu: true, concurrency: 2 },
+      },
+    });
+    expect(
+      runnerMatchesLoopMachine(undefined, pool, {
+        id: "runner-a",
+        machineId: "machine-a",
+        labels: { role: "worker" },
+        capabilities: { gpu: true, concurrency: 2 },
+      }),
+    ).toBe(true);
+    expect(
+      runnerMatchesLoopMachine(undefined, pool, {
+        id: "runner-b",
+        machineId: "machine-b",
+        labels: { role: "planner" },
+        capabilities: { gpu: true, concurrency: 2 },
+      }),
+    ).toBe(false);
+
+    const fanout = normalizeLoopMachinePlacement({
+      mode: "fanout",
+      selector: { ids: ["machine-a", "machine-b"] },
+    });
+    expect(expectedFanoutKeys(fanout)).toEqual(["machine-a", "machine-b"]);
+    expect(runnerFanoutKey(fanout, { id: "runner-a", machineId: "machine-a" })).toBe("machine-a");
+    expect(runnerMatchesLoopMachine({ id: "machine-a" }, undefined, { id: "runner-a", machineId: "machine-a" })).toBe(true);
+    expect(runnerMatchesLoopMachine({ id: "machine-a" }, undefined, { id: "runner-b", machineId: "machine-b" })).toBe(false);
   });
 });

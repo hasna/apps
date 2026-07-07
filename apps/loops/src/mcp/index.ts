@@ -25,6 +25,7 @@ import { workflowBodyFromJson } from "../lib/workflow-spec.js";
 import type {
   CatchUpPolicy,
   CreateLoopInput,
+  LoopMachinePlacement,
   LoopStatus,
   LoopTarget,
   OverlapPolicy,
@@ -97,6 +98,15 @@ const scheduleSchema = z
   ])
   .describe("When the loop runs.");
 
+const machinePlacementSchema = z.object({
+  mode: z.enum(["single", "fanout"]).describe("single claims one runner from the selector; fanout creates one run per explicit machine id."),
+  selector: z.object({
+    ids: z.array(z.string().min(1)).optional().describe("Exact runner machine ids/aliases. Required for fanout."),
+    labels: z.record(z.string()).optional().describe("Runner labels that must match exactly."),
+    capabilities: z.record(z.unknown()).optional().describe("Runner capabilities that must match the expected JSON values."),
+  }),
+});
+
 const createLoopCommonSchema = {
   name: z.string().min(1).describe("Unique loop name."),
   description: z.string().optional().describe("Why/how/outcome description; a default is generated when omitted."),
@@ -109,6 +119,7 @@ const createLoopCommonSchema = {
   retryDelayMs: z.number().int().positive().optional().describe("Base retry delay in milliseconds (exponential backoff with jitter)."),
   leaseMs: z.number().int().positive().optional().describe("Run lease in milliseconds before an unresponsive runner is considered dead."),
   expiresAt: z.string().optional().describe("Date/time after which the loop expires and stops scheduling."),
+  placement: machinePlacementSchema.optional().describe("Optional machine placement selector for self-hosted runner claims."),
 };
 
 export interface LoopsMcpToolMetadata {
@@ -263,6 +274,7 @@ function commonCreateInput(input: {
   retryDelayMs?: number;
   leaseMs?: number;
   expiresAt?: string;
+  placement?: LoopMachinePlacement;
 }): CreateLoopInput {
   const name = nonEmpty(input.name, "name");
   const schedule = normalizeSchedule(input.schedule);
@@ -278,6 +290,7 @@ function commonCreateInput(input: {
     retryDelayMs: input.retryDelayMs,
     leaseMs: input.leaseMs,
     expiresAt: input.expiresAt ? normalizeDate(input.expiresAt, "expiresAt") : undefined,
+    placement: input.placement,
   };
 }
 

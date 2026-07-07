@@ -162,15 +162,25 @@ status, and timestamp.
 
 ## Machine Placement
 
-A loop can eventually target:
+A loop can target:
 
 - one specific machine,
 - a machine pool selected by capability labels,
 - or multiple machines intentionally.
 
-Single-run loops need a lease so only one runner executes each scheduled slot.
-Multi-machine loops must record per-machine run evidence so duplicate work is
-distinguishable from intentional fan-out.
+Specific-machine targeting uses the existing `machine` assignment. Pool
+targeting uses runner-advertised labels and capabilities from
+`loops-runner run-once --label <key=value> --capability <key=json>` or the
+`LOOPS_RUNNER_LABELS` / `LOOPS_RUNNER_CAPABILITIES` JSON environment variables.
+Intentional multi-machine fanout requires explicit machine ids in the placement
+selector; each target machine receives its own run row for the same scheduled
+slot.
+
+Single-run loops use a durable `single` fanout key so only one runner executes
+each scheduled slot. Multi-machine loops use a per-machine fanout key and record
+`machineId` plus `fanoutKey` on each run, so duplicate work is distinguishable
+from intentional fanout. A fanout loop advances only after all explicit target
+machines have terminal evidence for the slot.
 
 This is separate from existing local OpenMachines dispatch. In `local` mode,
 `loops-daemon` can still dispatch a loop target to a configured remote machine

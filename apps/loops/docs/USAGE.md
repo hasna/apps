@@ -198,6 +198,19 @@ failures are recorded as failed loop runs with a `runtime preflight failed`
 error, so health/routing checks can create follow-up tasks without spawning the
 worker.
 
+## Machine Placement
+
+`--machine <id>` keeps the existing exact OpenMachines assignment for one
+machine. For self-hosted runner claims, create a pool selector with
+`--machine-label <key=value>` and `--machine-capability <key=json>`; matching
+`loops-runner run-once` processes advertise their metadata with `--label`,
+`--capability`, `LOOPS_RUNNER_LABELS`, or `LOOPS_RUNNER_CAPABILITIES`.
+
+Use repeated `--machine-fanout <id>` for intentional multi-machine fanout. A
+fanout slot records one run per target machine with `machineId` and `fanoutKey`
+evidence, and the loop advances only after every explicit target has terminal
+evidence for that scheduled slot.
+
 Run a Claude loop every morning:
 
 ```bash
@@ -981,7 +994,7 @@ On Linux this writes a user systemd service. On macOS it writes a LaunchAgent pl
 - `catch_up=all`: runs up to `catch_up_limit` missed slots.
 - `catch_up=none`: runs only the persisted next slot.
 - `overlap=skip` by default: a due slot records a skipped run if a previous run is still active.
-- Each run is keyed by `(loop_id, scheduled_for)` so a slot is claimed once.
+- Normal runs are keyed by `(loop_id, scheduled_for, "single")` so a slot is claimed once. Intentional fanout runs replace `"single"` with a per-machine key.
 - Failed slots retry only when `--attempts` is greater than `1`; retries keep the original `scheduled_for` value.
 - Failed ad-hoc manual `run-now` slots are single attempts and do not schedule retries. Due-slot and retry-slot manual runs use normal retry behavior.
 - Running rows have leases. If a daemon dies, a later daemon marks expired running rows as `abandoned`.

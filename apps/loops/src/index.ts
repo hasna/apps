@@ -159,7 +159,15 @@ export { workflowBodyFromJson, workflowExecutionOrder } from "./lib/workflow-spe
 // ---------------------------------------------------------------------------
 // Experimental: machines, templates, hygiene, goals
 // ---------------------------------------------------------------------------
-export { listOpenMachines, refreshLoopMachine, resolveLoopMachine } from "./lib/machines.js";
+export {
+  expectedFanoutKeys,
+  listOpenMachines,
+  normalizeLoopMachinePlacement,
+  refreshLoopMachine,
+  resolveLoopMachine,
+  runnerFanoutKey,
+  runnerMatchesLoopMachine,
+} from "./lib/machines.js";
 export {
   BOUNDED_AGENT_WORKER_VERIFIER_TEMPLATE_ID,
   EVENT_WORKER_VERIFIER_TEMPLATE_ID,
@@ -205,8 +213,11 @@ export type {
   GoalSpec,
   GoalStatus,
   LoopMachineConfidence,
+  LoopMachinePlacement,
+  LoopMachinePlacementMode,
   LoopMachineRef,
   LoopMachineRoute,
+  LoopMachineSelector,
   LoopTemplateKind,
   LoopTemplateSource,
   LoopTemplateSummary,

@@ -100,6 +100,36 @@ describe("loops-runner foundation", () => {
     }
   });
 
+  test("runRunnerOnce advertises runner hostname, labels, and capabilities", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const jsonResponse = (body: unknown, status = 200): Response =>
+      ({ ok: status >= 200 && status < 300, status, json: async () => body }) as Response;
+    const fetchImpl = (async (_url: string | URL, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+      return jsonResponse({ ok: true, claims: [] });
+    }) as unknown as typeof fetch;
+
+    const result = await runRunnerOnce({
+      apiUrl: "http://127.0.0.1:1/",
+      runnerId: "runner-meta",
+      machineId: "machine-meta",
+      hostname: "host-meta",
+      labels: { role: "worker" },
+      capabilities: { concurrency: 2 },
+      fetchImpl,
+    });
+
+    expect(result).toEqual({ ok: true, claimed: 0, completed: [] });
+    expect(bodies[0]).toMatchObject({
+      runnerId: "runner-meta",
+      machineId: "machine-meta",
+      hostname: "host-meta",
+      labels: { role: "worker" },
+      capabilities: { concurrency: 2 },
+    });
+    expect(bodies[1]).toMatchObject(bodies[0]!);
+  });
+
   test("runRunnerOnce heartbeats while executing so another runner cannot steal the claim", async () => {
     const storage = createSqliteLoopStorage(":memory:");
     let serverNow = new Date("2026-01-01T00:00:00Z");

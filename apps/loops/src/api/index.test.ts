@@ -463,6 +463,149 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("runner claim matches exact machines and pool selectors from heartbeat metadata", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = mod.createLoopsApiServer({
+      host: "127.0.0.1",
+      port: 0,
+      storage,
+      now: () => new Date("2026-01-01T00:00:00Z"),
+    });
+
+    try {
+      const exact = await storage.createLoop(
+        {
+          name: "api-exact-machine-loop",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+          machine: { id: "machine-a", requestedId: "host-a" },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const pool = await storage.createLoop(
+        {
+          name: "api-pool-loop",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+          placement: {
+            mode: "single",
+            selector: { labels: { role: "worker" }, capabilities: { gpu: true } },
+          },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+
+      const miss = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          runnerId: "runner-b",
+          machineId: "machine-b",
+          labels: { role: "planner" },
+          capabilities: { gpu: true },
+          maxClaims: 10,
+        }),
+      });
+      expect(miss.status).toBe(200);
+      expect(await miss.json()).toMatchObject({ ok: true, claims: [] });
+
+      const hit = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          runnerId: "runner-a",
+          machineId: "machine-a",
+          hostname: "host-a",
+          labels: { role: "worker" },
+          capabilities: { gpu: true },
+          maxClaims: 10,
+        }),
+      });
+      expect(hit.status).toBe(200);
+      const claimed = (await hit.json()) as { runner: { labels: Record<string, string>; capabilities: Record<string, unknown> }; claims: Array<{ loop: { id: string }; run: { machineId?: string; fanoutKey?: string } }> };
+      expect(claimed.runner).toMatchObject({ labels: { role: "worker" }, capabilities: { gpu: true } });
+      expect(claimed.claims.map((claim) => claim.loop.id).sort()).toEqual([exact.id, pool.id].sort());
+      expect(claimed.claims.every((claim) => claim.run.machineId === "machine-a")).toBe(true);
+      expect(claimed.claims.every((claim) => claim.run.fanoutKey === "single")).toBe(true);
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("explicit fanout claims record per-machine evidence and advance only after every target finishes", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    let now = new Date("2026-01-01T00:00:00Z");
+    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage, now: () => now });
+
+    try {
+      const loop = await storage.createLoop(
+        {
+          name: "api-fanout-loop",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+          placement: { mode: "fanout", selector: { ids: ["machine-a", "machine-b"] } },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+
+      const claimA = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "runner-a", machineId: "machine-a", maxClaims: 1 }),
+      });
+      expect(claimA.status).toBe(200);
+      const claimedA = (await claimA.json()) as { claims: Array<{ claimToken: string; run: { id: string; fanoutKey?: string; machineId?: string } }> };
+      expect(claimedA.claims).toHaveLength(1);
+      expect(claimedA.claims[0]!.run).toMatchObject({ fanoutKey: "machine-a", machineId: "machine-a" });
+
+      now = new Date("2026-01-01T00:00:01Z");
+      const finalizeA = await fetch(apiUrl(server, `/v1/runs/${claimedA.claims[0]!.run.id}/finalize`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ claimToken: claimedA.claims[0]!.claimToken, status: "succeeded", stdout: "", stderr: "" }),
+      });
+      expect(finalizeA.status).toBe(200);
+      expect(await storage.getLoop(loop.id)).toMatchObject({ status: "active", nextRunAt: "2026-01-01T00:00:00.000Z" });
+
+      const duplicateA = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "runner-a-2", machineId: "machine-a", maxClaims: 1 }),
+      });
+      expect(duplicateA.status).toBe(200);
+      expect(await duplicateA.json()).toMatchObject({ ok: true, claims: [] });
+
+      const claimB = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "runner-b", machineId: "machine-b", maxClaims: 1 }),
+      });
+      expect(claimB.status).toBe(200);
+      const claimedB = (await claimB.json()) as { claims: Array<{ claimToken: string; run: { id: string; fanoutKey?: string; machineId?: string } }> };
+      expect(claimedB.claims).toHaveLength(1);
+      expect(claimedB.claims[0]!.run).toMatchObject({ fanoutKey: "machine-b", machineId: "machine-b" });
+
+      now = new Date("2026-01-01T00:00:02Z");
+      const finalizeB = await fetch(apiUrl(server, `/v1/runs/${claimedB.claims[0]!.run.id}/finalize`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ claimToken: claimedB.claims[0]!.claimToken, status: "succeeded", stdout: "", stderr: "" }),
+      });
+      expect(finalizeB.status).toBe(200);
+      expect(await storage.getLoop(loop.id)).toMatchObject({ status: "stopped", nextRunAt: undefined });
+      expect((await storage.listRuns({ loopId: loop.id })).map((run) => [run.fanoutKey, run.machineId]).sort()).toEqual([
+        ["machine-a", "machine-a"],
+        ["machine-b", "machine-b"],
+      ]);
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
   test("runner finalization uses server time for stale-claim fencing", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");

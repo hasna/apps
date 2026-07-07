@@ -52,6 +52,8 @@ CREATE TABLE IF NOT EXISTS loop_runs (
   started_at TIMESTAMPTZ,
   finished_at TIMESTAMPTZ,
   claimed_by TEXT,
+  machine_id TEXT,
+  fanout_key TEXT NOT NULL DEFAULT 'single',
   claim_token TEXT,
   lease_expires_at TIMESTAMPTZ,
   pid INTEGER,
@@ -65,13 +67,14 @@ CREATE TABLE IF NOT EXISTS loop_runs (
   goal_run_id TEXT,
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL,
-  UNIQUE(loop_id, scheduled_for)
+  UNIQUE(loop_id, scheduled_for, fanout_key)
 );
 CREATE INDEX IF NOT EXISTS idx_runs_loop ON loop_runs(loop_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_runs_status ON loop_runs(status);
 CREATE INDEX IF NOT EXISTS idx_runs_status_lease ON loop_runs(status, lease_expires_at);
 CREATE INDEX IF NOT EXISTS idx_runs_scheduled ON loop_runs(scheduled_for);
 CREATE INDEX IF NOT EXISTS idx_runs_claim_token ON loop_runs(claim_token) WHERE claim_token IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_runs_machine ON loop_runs(machine_id);
 
 CREATE TABLE IF NOT EXISTS daemon_lease (
   id TEXT PRIMARY KEY,

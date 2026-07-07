@@ -161,6 +161,51 @@
           "type": "string",
           "description": "Date/time after which the loop expires and stops scheduling."
         },
+        "placement": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "single",
+                "fanout"
+              ],
+              "description": "single claims one runner from the selector; fanout creates one run per explicit machine id."
+            },
+            "selector": {
+              "type": "object",
+              "properties": {
+                "ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "description": "Exact runner machine ids/aliases. Required for fanout."
+                },
+                "labels": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "description": "Runner labels that must match exactly."
+                },
+                "capabilities": {
+                  "type": "object",
+                  "additionalProperties": {},
+                  "description": "Runner capabilities that must match the expected JSON values."
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "mode",
+            "selector"
+          ],
+          "additionalProperties": false,
+          "description": "Optional machine placement selector for self-hosted runner claims."
+        },
         "command": {
           "type": "string",
           "minLength": 1,
@@ -344,6 +389,51 @@
         "expiresAt": {
           "type": "string",
           "description": "Date/time after which the loop expires and stops scheduling."
+        },
+        "placement": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "single",
+                "fanout"
+              ],
+              "description": "single claims one runner from the selector; fanout creates one run per explicit machine id."
+            },
+            "selector": {
+              "type": "object",
+              "properties": {
+                "ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "description": "Exact runner machine ids/aliases. Required for fanout."
+                },
+                "labels": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "description": "Runner labels that must match exactly."
+                },
+                "capabilities": {
+                  "type": "object",
+                  "additionalProperties": {},
+                  "description": "Runner capabilities that must match the expected JSON values."
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "mode",
+            "selector"
+          ],
+          "additionalProperties": false,
+          "description": "Optional machine placement selector for self-hosted runner claims."
         },
         "workflow": {
           "type": "string",
@@ -676,6 +766,51 @@
           "type": "string",
           "description": "Date/time after which the loop expires and stops scheduling."
         },
+        "placement": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "single",
+                "fanout"
+              ],
+              "description": "single claims one runner from the selector; fanout creates one run per explicit machine id."
+            },
+            "selector": {
+              "type": "object",
+              "properties": {
+                "ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "description": "Exact runner machine ids/aliases. Required for fanout."
+                },
+                "labels": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "description": "Runner labels that must match exactly."
+                },
+                "capabilities": {
+                  "type": "object",
+                  "additionalProperties": {},
+                  "description": "Runner capabilities that must match the expected JSON values."
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "mode",
+            "selector"
+          ],
+          "additionalProperties": false,
+          "description": "Optional machine placement selector for self-hosted runner claims."
+        },
         "command": {
           "type": "string",
           "minLength": 1,
@@ -859,6 +994,51 @@
         "expiresAt": {
           "type": "string",
           "description": "Date/time after which the loop expires and stops scheduling."
+        },
+        "placement": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "single",
+                "fanout"
+              ],
+              "description": "single claims one runner from the selector; fanout creates one run per explicit machine id."
+            },
+            "selector": {
+              "type": "object",
+              "properties": {
+                "ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "description": "Exact runner machine ids/aliases. Required for fanout."
+                },
+                "labels": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "description": "Runner labels that must match exactly."
+                },
+                "capabilities": {
+                  "type": "object",
+                  "additionalProperties": {},
+                  "description": "Runner capabilities that must match the expected JSON values."
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "mode",
+            "selector"
+          ],
+          "additionalProperties": false,
+          "description": "Optional machine placement selector for self-hosted runner claims."
         },
         "workflow": {
           "type": "string",
