@@ -423,6 +423,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["fintech", "payments", "stablecoin", "banking"],
   },
   {
+    name: "standard-signal",
+    displayName: "Standard Signal",
+    description: "AI hedge fund platform for portfolios, strategies, positions, and trades",
+    category: "Commerce & Finance",
+    tags: ["finance", "trading", "ai", "hedge-fund", "portfolios"],
+  },
+  {
     name: "tdameritrade",
     displayName: "TD Ameritrade",
     description: "Brokerage and trading platform API for market data, orders, and account management",
