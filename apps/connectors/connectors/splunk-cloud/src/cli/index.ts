@@ -455,13 +455,18 @@ userCmd
   .action((name: string, _opts, cmd) => run(cmd, c => c.getUser(name)));
 
 userCmd
-  .command('create <name> <password>')
-  .description('Create a user')
+  .command('create <name>')
+  .description('Create a user with password from SPLUNK_CLOUD_NEW_USER_PASSWORD')
   .requiredOption('--roles <roles>', 'Comma-separated roles')
   .option('--realname <name>', 'Real name')
   .option('--email <email>', 'Email address')
-  .action((name: string, password: string, opts, cmd) =>
-    run(cmd, c =>
+  .action((name: string, opts, cmd) => {
+    const password = process.env.SPLUNK_CLOUD_NEW_USER_PASSWORD;
+    if (!password) {
+      error('Set SPLUNK_CLOUD_NEW_USER_PASSWORD before creating a user.');
+      process.exit(1);
+    }
+    return run(cmd, c =>
       c.createUser({
         name,
         password,
@@ -469,8 +474,8 @@ userCmd
         realname: opts.realname,
         email: opts.email,
       }),
-    ),
-  );
+    );
+  });
 
 userCmd
   .command('delete <name>')

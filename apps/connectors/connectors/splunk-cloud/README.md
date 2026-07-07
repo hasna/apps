@@ -35,7 +35,8 @@ Or store them in a profile:
 
 ```bash
 connect-splunk-cloud config set-base-url "https://<stack>.splunkcloud.com:8089"
-SPLUNK_CLOUD_TOKEN="<your-token>" connect-splunk-cloud config set-token
+export SPLUNK_CLOUD_TOKEN="<your-token>"
+connect-splunk-cloud config set-token
 ```
 
 ## CLI Usage
