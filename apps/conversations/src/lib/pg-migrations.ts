@@ -101,6 +101,10 @@ export const PG_MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_messages_blocking ON messages(blocking);
   CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to);
   CREATE INDEX IF NOT EXISTS idx_messages_project ON messages(project_id);
+  -- Idempotent conflict target for bulk backfill (ON CONFLICT (uuid) DO NOTHING).
+  -- The CREATE TABLE above declares uuid UNIQUE, but older tables may have had
+  -- uuid added via ALTER without the constraint; this guarantees it either way.
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_uuid ON messages(uuid);
   UPDATE channel_subscriptions ss
   SET since_message_id = COALESCE(
     (SELECT MAX(m.id) FROM messages m WHERE m.channel = ss.channel),

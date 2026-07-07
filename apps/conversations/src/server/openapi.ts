@@ -111,6 +111,7 @@ export const openapiSpec = {
           { name: "channel", in: "query", schema: { type: "string" } },
           { name: "session", in: "query", schema: { type: "string" } },
           { name: "limit", in: "query", schema: { type: "integer" } },
+          { name: "count", in: "query", description: "When set, return { count } (honours the same filters) instead of rows.", schema: { type: "boolean" } },
         ],
         responses: { "200": { description: "messages", content: { "application/json": { schema: okObject } } } },
       },
@@ -130,6 +131,56 @@ export const openapiSpec = {
           } } },
         },
         responses: { "201": { description: "created", content: { "application/json": { schema: okObject } } } },
+      },
+    },
+    "/v1/messages/bulk": {
+      post: {
+        operationId: "bulkIngestMessages",
+        summary: "Bulk-ingest messages (idempotent backfill)",
+        description:
+          "Insert many messages in one request, preserving each message's uuid and " +
+          "created_at. Idempotent via ON CONFLICT (uuid) DO NOTHING — re-running never " +
+          "duplicates. Requires the conversations:write scope. Returns { requested, " +
+          "inserted, skipped, total } where total is the authoritative post-insert count.",
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: {
+            type: "object",
+            required: ["messages"],
+            properties: {
+              messages: {
+                type: "array",
+                maxItems: 2000,
+                items: {
+                  type: "object",
+                  required: ["uuid", "from", "to", "content"],
+                  properties: {
+                    uuid: { type: "string" },
+                    from: { type: "string" },
+                    to: { type: "string" },
+                    content: { type: "string" },
+                    channel: { type: "string" },
+                    project_id: { type: "string" },
+                    session_id: { type: "string" },
+                    priority: { type: "string" },
+                    blocking: { type: "boolean" },
+                    created_at: { type: "string" },
+                    read_at: { type: "string" },
+                    edited_at: { type: "string" },
+                    pinned_at: { type: "string" },
+                    working_dir: { type: "string" },
+                    repository: { type: "string" },
+                    branch: { type: "string" },
+                    metadata: { type: "string" },
+                    attachments: { type: "string" },
+                    reply_to: { type: "integer" },
+                  },
+                },
+              },
+            },
+          } } },
+        },
+        responses: { "200": { description: "ingest result", content: { "application/json": { schema: okObject } } } },
       },
     },
     "/v1/messages/{id}": {

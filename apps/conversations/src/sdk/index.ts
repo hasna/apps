@@ -2,7 +2,7 @@
 // Regenerate: bun run sdk:generate
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: ConversationsClient 0.3.3
+// Source: ConversationsClient 0.4.0
 
 export interface Message { "id"?: number; "uuid"?: string; "session_id"?: string; "from_agent"?: string; "to_agent"?: string; "channel"?: string | null; "project_id"?: string | null; "content"?: string; "priority"?: string; "blocking"?: boolean; "created_at"?: string }
 
@@ -134,7 +134,7 @@ export class ConversationsClient {
     }
 
     /** List messages */
-    async listMessages(query?: { "to"?: string; "from"?: string; "channel"?: string; "session"?: string; "limit"?: number }, init?: RequestInit): Promise<Record<string, unknown>> {
+    async listMessages(query?: { "to"?: string; "from"?: string; "channel"?: string; "session"?: string; "limit"?: number; "count"?: boolean }, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("GET", `/v1/messages`, {
         body: undefined,
         query,
@@ -145,6 +145,15 @@ export class ConversationsClient {
     /** Send a message */
     async sendMessage(body: { "from"?: string; "to": string; "content": string; "channel"?: string; "project_id"?: string; "session_id"?: string; "priority"?: string; "blocking"?: boolean }, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("POST", `/v1/messages`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Bulk-ingest messages (idempotent backfill) */
+    async bulkIngestMessages(body: { "messages": Array<{ "uuid": string; "from": string; "to": string; "content": string; "channel"?: string; "project_id"?: string; "session_id"?: string; "priority"?: string; "blocking"?: boolean; "created_at"?: string; "read_at"?: string; "edited_at"?: string; "pinned_at"?: string; "working_dir"?: string; "repository"?: string; "branch"?: string; "metadata"?: string; "attachments"?: string; "reply_to"?: number }> }, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/messages/bulk`, {
         body,
         query: undefined,
         init,

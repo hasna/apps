@@ -102,6 +102,15 @@ function clampLimit(raw: string | null, def = 50, max = 500): number {
 
 const VALID_PRIORITIES = ["low", "normal", "high", "urgent"];
 
+/** Max messages accepted in a single bulk-ingest request. */
+const BULK_MAX = 2000;
+
+/** Authoritative current message count — the API-visible parity signal. */
+async function messageTotal(client: TypedQueryClient): Promise<number> {
+  const row = await client.get<{ n: string | number }>("SELECT count(*)::bigint AS n FROM messages");
+  return Number(row?.n ?? 0);
+}
+
 // ---- server -----------------------------------------------------------------
 
 export interface StartApiServerOptions {
@@ -206,6 +215,15 @@ async function handleV1(
     if (channel) { params.push(channel); clauses.push(`channel = $${params.length}`); }
     if (session) { params.push(session); clauses.push(`session_id = $${params.length}`); }
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    // count=1 → authoritative total (honours the same filters). Lets callers
+    // verify backfill parity from the API without paging through every row.
+    if (str(url.searchParams.get("count"))) {
+      const row = await client.get<{ n: string | number }>(
+        `SELECT count(*)::bigint AS n FROM messages ${where}`,
+        params,
+      );
+      return json({ count: Number(row?.n ?? 0) });
+    }
     params.push(limit);
     const rows = await client.many(
       `SELECT id, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, blocking, reply_to, created_at, read_at
@@ -234,6 +252,85 @@ async function handleV1(
       [sessionId, from, to, channel ?? null, projectId ?? null, content, priority, blocking],
     );
     return json({ message: row }, 201);
+  }
+
+  // ---- bulk message ingest (backfill local -> cloud to parity) ----
+  // Idempotent: ON CONFLICT (uuid) DO NOTHING, so re-running never duplicates.
+  // Preserves the original uuid + created_at (and every scalar field) so the
+  // cloud copy is a faithful mirror of the authoritative local store, not a
+  // batch of "now"-stamped rows. Requires the conversations:write scope.
+  if (sub === "messages/bulk" && method === "POST") {
+    const body = await readJson(req);
+    const items = body.messages;
+    if (!Array.isArray(items)) return json({ error: "'messages' must be an array" }, 400);
+    if (items.length === 0) return json({ requested: 0, inserted: 0, skipped: 0, total: await messageTotal(client) });
+    if (items.length > BULK_MAX) return json({ error: `batch too large (max ${BULK_MAX} per request)` }, 400);
+
+    // Column order for the multi-row INSERT. created_at is special-cased below
+    // so a missing/blank value falls back to NOW() rather than inserting NULL
+    // into a NOT NULL column.
+    const cols = [
+      "uuid", "session_id", "from_agent", "to_agent", "channel", "project_id",
+      "content", "priority", "working_dir", "repository", "branch", "metadata",
+      "edited_at", "pinned_at", "blocking", "attachments", "reply_to",
+      "created_at", "read_at",
+    ] as const;
+    const createdIdx = cols.indexOf("created_at");
+
+    const params: unknown[] = [];
+    const rowsSql: string[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const raw = items[i];
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        return json({ error: `messages[${i}] must be an object` }, 400);
+      }
+      const m = raw as Record<string, unknown>;
+      const uuid = str(m.uuid);
+      const from = str(m.from) ?? str(m.from_agent) ?? agent ?? undefined;
+      const to = str(m.to) ?? str(m.to_agent);
+      const content = typeof m.content === "string" ? m.content : undefined;
+      if (!uuid || !from || !to || content === undefined) {
+        return json({ error: `messages[${i}] requires uuid, from, to, and content` }, 400);
+      }
+      let priority = str(m.priority)?.toLowerCase() ?? "normal";
+      if (!VALID_PRIORITIES.includes(priority)) priority = "normal";
+      const values: unknown[] = [
+        uuid,
+        str(m.session_id) ?? `api:${from}`,
+        from,
+        to,
+        str(m.channel) ?? null,
+        str(m.project_id) ?? null,
+        content,
+        priority,
+        str(m.working_dir) ?? null,
+        str(m.repository) ?? null,
+        str(m.branch) ?? null,
+        str(m.metadata) ?? null,
+        str(m.edited_at) ?? null,
+        str(m.pinned_at) ?? null,
+        m.blocking === true || m.blocking === 1,
+        str(m.attachments) ?? null,
+        typeof m.reply_to === "number" ? m.reply_to : null,
+        str(m.created_at) ?? null,
+        str(m.read_at) ?? null,
+      ];
+      const base = params.length;
+      const placeholders = values.map((_, j) =>
+        j === createdIdx ? `COALESCE($${base + j + 1}::timestamptz, NOW())` : `$${base + j + 1}`,
+      );
+      rowsSql.push(`(${placeholders.join(", ")})`);
+      params.push(...values);
+    }
+
+    const result = await client.query(
+      `INSERT INTO messages (${cols.join(", ")}) VALUES ${rowsSql.join(", ")}
+       ON CONFLICT (uuid) DO NOTHING`,
+      params,
+    );
+    const inserted = result.rowCount;
+    const total = await messageTotal(client);
+    return json({ requested: items.length, inserted, skipped: items.length - inserted, total }, 200);
   }
 
   const msgIdMatch = sub.match(/^messages\/(\d+)$/);
