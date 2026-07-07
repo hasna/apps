@@ -62,9 +62,13 @@ function unwrapTask(raw: unknown): Task {
 function toListQuery(filter: TaskFilter = {}): Record<string, string | number> {
   const query: Record<string, string | number> = {};
   if (typeof filter.status === "string") query["status"] = filter.status;
+  if (typeof filter.priority === "string") query["priority"] = filter.priority;
   if (filter.project_id) query["project_id"] = filter.project_id;
+  if (filter.plan_id) query["plan_id"] = filter.plan_id;
   if (filter.assigned_to) query["assigned_to"] = filter.assigned_to;
+  if (filter.agent_id) query["agent_id"] = filter.agent_id;
   if (typeof filter.limit === "number") query["limit"] = filter.limit;
+  if (typeof filter.offset === "number") query["offset"] = filter.offset;
   return query;
 }
 
@@ -108,9 +112,18 @@ export async function cloudTaskAction(
   return unwrapTask(raw);
 }
 
-/** Count tasks matching a filter by listing (the `/v1` API has no count route for filters). */
+/**
+ * Count tasks matching a filter. The `/v1/tasks` list response now returns a
+ * SQL-side `total` (full match count, independent of limit/offset), so we ask for
+ * a single row and read `total` instead of pulling the whole result set into the
+ * client (which previously loaded every matching task over HTTP just to count).
+ */
 export async function cloudCountTasks(client: HasnaStorageClient, filter: TaskFilter = {}): Promise<number> {
-  const { limit: _drop, ...rest } = filter;
+  const { limit: _drop, offset: _o, ...rest } = filter;
+  const res = await client.list<Task>("tasks", { query: { ...toListQuery(rest), limit: 1 } });
+  const envelope = res.raw as { total?: number; count?: number; tasks?: Task[] } | undefined;
+  if (typeof envelope?.total === "number") return envelope.total;
+  // Fallback for older servers without `total`: list everything and count.
   const tasks = await cloudListTasks(client, rest);
   return tasks.length;
 }

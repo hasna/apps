@@ -119,13 +119,21 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
         if (method === "GET") {
           const filter = {
             ...(url.searchParams.get("status") ? { status: url.searchParams.get("status") as never } : {}),
+            ...(url.searchParams.get("priority") ? { priority: url.searchParams.get("priority") as never } : {}),
             ...(url.searchParams.get("project_id") ? { project_id: url.searchParams.get("project_id")! } : {}),
+            ...(url.searchParams.get("plan_id") ? { plan_id: url.searchParams.get("plan_id")! } : {}),
             ...(url.searchParams.get("assigned_to") ? { assigned_to: url.searchParams.get("assigned_to")! } : {}),
             ...(url.searchParams.get("agent_id") ? { agent_id: url.searchParams.get("agent_id")! } : {}),
             ...(url.searchParams.get("limit") ? { limit: Number(url.searchParams.get("limit")) } : {}),
+            ...(url.searchParams.get("offset") ? { offset: Number(url.searchParams.get("offset")) } : {}),
           };
           const tasks = await store.tasks.list(filter);
-          return json({ tasks, count: tasks.length });
+          // `total` is the full match count for the filter (ignoring limit/offset),
+          // so clients can paginate without pulling the whole result set. Both the
+          // list and the count are SQL-side now — no O(n) JS materialization.
+          const { limit: _l, offset: _o, ...countFilter } = filter;
+          const total = await store.tasks.count(countFilter);
+          return json({ tasks, count: tasks.length, total });
         }
         if (method === "POST") {
           const body = await readJson<CreateTaskInput>(req);
