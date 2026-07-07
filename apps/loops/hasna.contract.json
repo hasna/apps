@@ -3,9 +3,15 @@
   "name": "loops",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.4.1",
+  "kitVersion": "0.5.1",
   "description": "Persistent local loop and workflow runner for deterministic commands and headless AI coding agents. CLI + MCP + HTTP API (loops-serve) + generated SDK. Self-hosted mode runs loops-serve against Hasna-owned Postgres/RDS with API-key auth via @hasna/contracts; the generated storage kit's HASNA_LOOPS_STORAGE_MODE=cloud flag is only its direct-Postgres implementation term.",
-  "bins": ["loops", "loops-mcp", "loops-serve", "loops-daemon", "loops-runner"],
+  "bins": [
+    "loops",
+    "loops-mcp",
+    "loops-serve",
+    "loops-daemon",
+    "loops-runner"
+  ],
   "storage": {
     "mode": "local",
     "envPrefix": "HASNA_LOOPS_",
