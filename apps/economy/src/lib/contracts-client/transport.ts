@@ -142,6 +142,14 @@ export function resolveClientTransport(name: string, env: Env = process.env): Cl
         `Deprecated mode '${deprecatedAlias}' from ${modeHit.key} is treated as 'cloud'. Prefer ${keys.modeKeys[0]}=cloud.`,
       );
     }
+  } else if (urlHit && keyHit) {
+    // Flip signal: the fleet env-flip writes EXACTLY HASNA_<APP>_API_URL +
+    // HASNA_<APP>_API_KEY per app and NO explicit STORAGE_MODE (see machines
+    // FLEET-FLIP.md). Their joint presence IS the self_hosted intent, so infer
+    // `cloud`. Revert removes both vars, so the client falls back to local. Without
+    // this, a flipped client with only url+key silently kept reading its local store.
+    mode = "cloud";
+    modeSource = `${urlHit.key}+${keyHit.key}`;
   }
 
   // Local mode: never route to the network, regardless of URL/key presence.
