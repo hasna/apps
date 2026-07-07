@@ -41,6 +41,7 @@ import { basename, dirname, resolve, join } from "path";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import type {
   FilesContextPack,
+  FileWithTags,
   FileSearchDocument,
   FileSearchDocumentKind,
   FileSearchDocumentStatus,
@@ -241,7 +242,9 @@ sources
       console.log(chalk.green(`✓ S3 source added${cloud.active ? " (cloud)" : ""}: ${source.id} → s3://${bucket}${prefix ? `/${prefix}` : ""}`));
     } else {
       const absPath = resolve(pathOrS3);
-      if (!existsSync(absPath)) {
+      // In cloud (self_hosted) mode the source path may live on another machine,
+      // so we do not require it to exist on this client. Local mode still checks.
+      if (!cloud.active && !existsSync(absPath)) {
         console.error(chalk.red(`Path does not exist: ${absPath}`));
         process.exit(1);
       }
@@ -1010,7 +1013,7 @@ program
   .option("--sort <field>", "Sort by: name, size, date (default: date)")
   .option("--asc", "Sort ascending (default: descending)")
   .option("--json", "Output as JSON")
-  .action((opts: {
+  .action(async (opts: {
     source?: string; machine?: string; tag?: string; ext?: string;
     collection?: string; project?: string; limit: string; offset: string;
     after?: string; before?: string; minSize?: string; maxSize?: string;
@@ -1026,22 +1029,36 @@ program
       process.exit(1);
     }
 
-    const files = listFiles({
-      source_id: opts.source,
-      machine_id: opts.machine,
-      tag: opts.tag,
-      ext: opts.ext,
-      collection_id: opts.collection,
-      project_id: opts.project,
-      limit,
-      offset,
-      after: opts.after,
-      before: opts.before,
-      min_size: opts.minSize ? parseSize(opts.minSize) : undefined,
-      max_size: opts.maxSize ? parseSize(opts.maxSize) : undefined,
-      sort: (opts.sort as "name" | "size" | "date") ?? "date",
-      sort_dir: opts.asc ? "asc" : "desc",
-    });
+    const cloud = filesCloudStorage();
+    const files = cloud.active
+      ? (await cloud.client.list<FileWithTags>("files", {
+          query: {
+            // The cloud /v1/files endpoint filters server-side on these params;
+            // richer local-only filters (tag/collection/project/date/size/sort)
+            // are not part of the API contract and are intentionally omitted.
+            source_id: opts.source,
+            machine_id: opts.machine,
+            ext: opts.ext,
+            limit,
+            offset,
+          },
+        })).items
+      : listFiles({
+          source_id: opts.source,
+          machine_id: opts.machine,
+          tag: opts.tag,
+          ext: opts.ext,
+          collection_id: opts.collection,
+          project_id: opts.project,
+          limit,
+          offset,
+          after: opts.after,
+          before: opts.before,
+          min_size: opts.minSize ? parseSize(opts.minSize) : undefined,
+          max_size: opts.maxSize ? parseSize(opts.maxSize) : undefined,
+          sort: (opts.sort as "name" | "size" | "date") ?? "date",
+          sort_dir: opts.asc ? "asc" : "desc",
+        });
     if (opts.json) { console.log(JSON.stringify(files, null, 2)); return; }
     if (!files.length) { console.log(chalk.dim("No files found.")); return; }
     for (const f of files) {
@@ -1080,8 +1097,11 @@ program
   .command("tags")
   .description("List all tags")
   .option("--json", "Output as JSON")
-  .action((opts: { json?: boolean }) => {
-    const tags = listTags();
+  .action(async (opts: { json?: boolean }) => {
+    const cloud = filesCloudStorage();
+    const tags = cloud.active
+      ? (await cloud.client.list<{ id: string; name: string; color: string }>("tags")).items
+      : listTags();
     if (opts.json) { console.log(JSON.stringify(tags, null, 2)); return; }
     if (!tags.length) { console.log(chalk.dim("No tags yet.")); return; }
     for (const t of tags) console.log(`${chalk.bold(t.id)}  ${chalk.hex(t.color)(t.name)}`);
@@ -1136,14 +1156,20 @@ const cols = program.command("collections").description("Manage collections");
 cols
   .command("list")
   .option("--json", "Output as JSON")
-  .action((opts: { json?: boolean }) => {
-    const collections = listCollections();
+  .action(async (opts: { json?: boolean }) => {
+    const cloud = filesCloudStorage();
+    const collections = cloud.active
+      ? (await cloud.client.list<{ id: string; name: string; description?: string }>("collections")).items
+      : listCollections();
     if (opts.json) { console.log(JSON.stringify(collections, null, 2)); return; }
     for (const c of collections) console.log(`${chalk.bold(c.id)}  ${chalk.cyan(c.name)}  ${chalk.dim(c.description)}`);
   });
-cols.command("create <name> [description]").action((name: string, desc?: string) => {
-  const c = createCollection(name, desc);
-  console.log(chalk.green(`✓ Collection created: ${c.id}`));
+cols.command("create <name> [description]").action(async (name: string, desc?: string) => {
+  const cloud = filesCloudStorage();
+  const c = cloud.active
+    ? await cloud.client.create<{ id: string }>("collections", { name, description: desc })
+    : createCollection(name, desc);
+  console.log(chalk.green(`✓ Collection created${cloud.active ? " (cloud)" : ""}: ${c.id}`));
 });
 cols.command("remove <id>").description("Delete a collection").option("--yes", "Confirm destructive removal").action((id: string, opts: { yes?: boolean }) => {
   try {
@@ -1166,14 +1192,20 @@ const projs = program.command("projects").description("Manage projects");
 projs
   .command("list")
   .option("--json", "Output as JSON")
-  .action((opts: { json?: boolean }) => {
-    const projects = listProjects();
+  .action(async (opts: { json?: boolean }) => {
+    const cloud = filesCloudStorage();
+    const projects = cloud.active
+      ? (await cloud.client.list<{ id: string; name: string; description?: string }>("projects")).items
+      : listProjects();
     if (opts.json) { console.log(JSON.stringify(projects, null, 2)); return; }
     for (const p of projects) console.log(`${chalk.bold(p.id)}  ${chalk.cyan(p.name)}  ${chalk.dim(p.description)}`);
   });
-projs.command("create <name> [description]").action((name: string, desc?: string) => {
-  const p = createProject(name, desc);
-  console.log(chalk.green(`✓ Project created: ${p.id}`));
+projs.command("create <name> [description]").action(async (name: string, desc?: string) => {
+  const cloud = filesCloudStorage();
+  const p = cloud.active
+    ? await cloud.client.create<{ id: string }>("projects", { name, description: desc })
+    : createProject(name, desc);
+  console.log(chalk.green(`✓ Project created${cloud.active ? " (cloud)" : ""}: ${p.id}`));
 });
 projs.command("remove <id>").description("Delete a project").option("--yes", "Confirm destructive removal").action((id: string, opts: { yes?: boolean }) => {
   try {
