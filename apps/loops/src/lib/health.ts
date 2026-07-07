@@ -11,6 +11,7 @@ import type { Store } from "./store.js";
 export type RunFailureClassification =
   | "rate_limit"
   | "auth"
+  | "provider_capacity"
   | "provider_unavailable"
   | "model_not_found"
   | "context_length"
@@ -176,6 +177,7 @@ const MIN_STALE_RUNNING_MS = 10 * 60_000;
 const CLASSIFICATIONS: RunFailureClassification[] = [
   "rate_limit",
   "auth",
+  "provider_capacity",
   "provider_unavailable",
   "model_not_found",
   "context_length",
@@ -246,6 +248,12 @@ function isCursorHost(host: string | undefined): boolean {
   return host === "cursor.sh" || Boolean(host?.endsWith(".cursor.sh"));
 }
 
+function cursorHostFromText(rawText: string): string | undefined {
+  const match = /\b(?:https?:\/\/)?([a-z0-9.-]*cursor\.sh)\b/i.exec(rawText);
+  const host = safeHost(match?.[1]);
+  return isCursorHost(host) ? host : undefined;
+}
+
 function providerUnavailableSummary(rawText: string): string | undefined {
   const dns = /\bgetaddrinfo\s+(EAI_AGAIN|ENOTFOUND)\s+([a-z0-9.-]+)/i.exec(rawText);
   if (dns) {
@@ -255,8 +263,23 @@ function providerUnavailableSummary(rawText: string): string | undefined {
   return undefined;
 }
 
+function providerCapacitySummary(rawText: string): string | undefined {
+  if (!/\bresource[_-]exhausted\b/i.test(rawText)) return undefined;
+  const host = cursorHostFromText(rawText);
+  if (!host) return undefined;
+  return `provider capacity exhausted: resource_exhausted ${host}`;
+}
+
+function failureSummary(run: LoopRun, classification: RunFailureClassification, summary?: string): string | undefined {
+  if (summary) return summary;
+  const text = searchableText(run);
+  if (classification === "provider_capacity") return providerCapacitySummary(text);
+  if (classification === "provider_unavailable") return providerUnavailableSummary(text);
+  return undefined;
+}
+
 function stableFailureFingerprint(run: LoopRun, classification: RunFailureClassification, summary?: string): string {
-  const evidence = summary ?? (classification === "provider_unavailable" ? providerUnavailableSummary(searchableText(run)) : undefined) ?? run.error ?? run.stderr ?? run.stdout ?? "";
+  const evidence = failureSummary(run, classification, summary) ?? run.error ?? run.stderr ?? run.stdout ?? "";
   return stableFingerprint([
     run.loopId,
     classification,
@@ -565,6 +588,7 @@ export function classifyRunFailure(run: LoopRun): RunFailureSignal | undefined {
       text,
     )
   ) classification = "auth";
+  else if ((summary = providerCapacitySummary(rawText))) classification = "provider_capacity";
   else if ((summary = providerUnavailableSummary(rawText))) classification = "provider_unavailable";
   else if (/model .*not found|model_not_found|unknown model|invalid model|404.*model/.test(text)) classification = "model_not_found";
   else if (/context length|context_length|context window|maximum context|token limit|too many tokens/.test(text)) classification = "context_length";
@@ -772,6 +796,19 @@ function hasPendingRetry(loop: Loop, run: LoopRun): boolean {
   return loop.status === "active" && loop.retryScheduledFor === run.scheduledFor && run.attempt < loop.maxAttempts;
 }
 
+function isHighPriorityFailure(classification: RunFailureClassification): boolean {
+  return classification === "auth" || classification === "rate_limit" || classification === "provider_capacity" || classification === "provider_unavailable";
+}
+
+function isRetryPendingProviderFailure(classification: RunFailureClassification): boolean {
+  return classification === "provider_capacity" || classification === "provider_unavailable";
+}
+
+function providerRetryMessage(classification: RunFailureClassification): string {
+  if (classification === "provider_capacity") return "provider capacity/resource exhaustion; retry is scheduled";
+  return "provider unavailable/network failure; retry is scheduled";
+}
+
 function recommendedTask(loop: Loop, run: LoopRun, failure: RunFailureSignal, route: LoopExpectationResult["route"]): RecommendedTaskUpsert {
   const title = `BUG: open-loops loop failure - ${loop.name}`;
   const description = [
@@ -791,7 +828,7 @@ function recommendedTask(loop: Loop, run: LoopRun, failure: RunFailureSignal, ro
   // "loops" is the tag control-room consumers query on; without it the
   // auto-filed failure tasks had no consumer. Keep the legacy tags too.
   const tags = ["bug", "openloops", "loops", "loop-health", failure.classification];
-  const priority = failure.classification === "auth" || failure.classification === "rate_limit" || failure.classification === "provider_unavailable" ? "high" : "medium";
+  const priority = isHighPriorityFailure(failure.classification) ? "high" : "medium";
   return {
     title,
     description,
@@ -886,9 +923,9 @@ export function expectationForLoop(store: Store, loop: Loop): LoopExpectationRes
       route,
     };
   }
-  if (failure?.classification === "provider_unavailable" && hasPendingRetry(loop, latestRun)) {
+  if (failure && isRetryPendingProviderFailure(failure.classification) && hasPendingRetry(loop, latestRun)) {
     const message = [
-      "provider unavailable/network failure; retry is scheduled",
+      providerRetryMessage(failure.classification),
       loop.nextRunAt ? `next attempt at ${loop.nextRunAt}` : undefined,
       failure.evidence.summary,
     ].filter(Boolean).join("; ");
