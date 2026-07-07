@@ -76,7 +76,7 @@ describe('Userlist Push API client', () => {
   test('POST /users sends Push auth header and JSON body', async () => {
     const recorded = installFetch(() => ({ status: 202 }));
 
-    const client = new ConnectorClient({ apiKey: 'test-push-key' });
+    const client = new ConnectorClient({ apiKey: 'tok' });
     await client.post('/users', {
       identifier: 'user-123',
       email: 'user@example.com',
@@ -85,7 +85,7 @@ describe('Userlist Push API client', () => {
     expect(recorded).toHaveLength(1);
     expect(recorded[0].url).toBe('https://push.userlist.com/users');
     expect(recorded[0].method).toBe('POST');
-    expect(recorded[0].headers.authorization).toBe('Push test-push-key');
+    expect(recorded[0].headers.authorization).toBe('Push tok');
     expect(recorded[0].headers['content-type']).toContain('application/json');
     expect(JSON.parse(recorded[0].body!)).toEqual({
       identifier: 'user-123',
@@ -96,7 +96,7 @@ describe('Userlist Push API client', () => {
   test('DELETE /users sends JSON body per Push API docs', async () => {
     const recorded = installFetch(() => ({ status: 202 }));
 
-    const client = new ConnectorClient({ apiKey: 'test-push-key' });
+    const client = new ConnectorClient({ apiKey: 'tok' });
     await client.delete('/users', { identifier: 'user-123' });
 
     expect(recorded[0].method).toBe('DELETE');
@@ -107,7 +107,7 @@ describe('Userlist Push API client', () => {
   test('DELETE /relationships sends user and company in body', async () => {
     const recorded = installFetch(() => ({ status: 202 }));
 
-    const client = new ConnectorClient({ apiKey: 'test-push-key' });
+    const client = new ConnectorClient({ apiKey: 'tok' });
     await client.delete('/relationships', { user: 'user-123', company: 'company-567' });
 
     expect(JSON.parse(recorded[0].body!)).toEqual({
@@ -119,7 +119,7 @@ describe('Userlist Push API client', () => {
   test('202 Accepted returns empty success object', async () => {
     installFetch(() => ({ status: 202 }));
 
-    const client = new ConnectorClient({ apiKey: 'test-push-key' });
+    const client = new ConnectorClient({ apiKey: 'tok' });
     const result = await client.post('/events', { name: 'signed_up', user: 'user-1' });
     expect(result).toEqual({});
   });
@@ -135,7 +135,7 @@ describe('Userlist Push API client', () => {
       }),
     }));
 
-    const client = new ConnectorClient({ apiKey: 'test-push-key' });
+    const client = new ConnectorClient({ apiKey: 'tok' });
     await expect(client.post('/events', { name: 'test' })).rejects.toThrow('User must exist');
   });
 

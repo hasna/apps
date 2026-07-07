@@ -14,7 +14,7 @@ TypeScript connector for the [Userlist Push API](https://userlist.com/docs/devel
 ```bash
 cd connectors/userlist
 bun install
-export USERLIST_PUSH_API_KEY=your-push-api-key
+export USERLIST_PUSH_API_KEY=
 bun run dev users identify --identifier user-123 --email user@example.com
 ```
 

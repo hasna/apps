@@ -24,6 +24,7 @@ const CONNECTOR_NAME = 'connect-userlist';
 const VERSION = '0.0.1';
 
 const program = new Command();
+let apiKeyOverride: string | undefined;
 
 program
   .name(CONNECTOR_NAME)
@@ -51,7 +52,7 @@ program
     }
 
     if (opts.apiKey) {
-      process.env.USERLIST_PUSH_API_KEY = opts.apiKey;
+      apiKeyOverride = opts.apiKey;
       debug('API key set from command line flag');
     }
   });
@@ -62,7 +63,7 @@ function getFormat(cmd: Command): OutputFormat {
 }
 
 function getClient(): Userlist {
-  const apiKey = getApiKey();
+  const apiKey = apiKeyOverride || getApiKey();
   if (!apiKey) {
     error(`No Push API key configured. Run "${CONNECTOR_NAME} config set-key <key>" or set USERLIST_PUSH_API_KEY.`);
     process.exit(1);
