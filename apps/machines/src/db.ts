@@ -83,6 +83,20 @@ function createTables(db: Database): void {
   `);
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS machine_registry (
+      id TEXT PRIMARY KEY,
+      friendly_name TEXT,
+      platform TEXT,
+      arch TEXT,
+      status TEXT NOT NULL DEFAULT 'unknown',
+      labels_json TEXT NOT NULL DEFAULT '{}',
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `);
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS mutation_approval_nonces (
       nonce_sha256 TEXT PRIMARY KEY,
       token_sha256 TEXT NOT NULL,

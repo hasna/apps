@@ -15,6 +15,7 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import chalk from "chalk";
 import { getPackageVersion } from "../version.js";
+import { resolveMachineRegistryStore } from "../cloud/registry.js";
 import { runMigrations } from "../server/migrate.js";
 import {
   manifestAdd,
@@ -3438,6 +3439,114 @@ flipCommand
     if (report.aborted || report.results.some((r) => report.execute && !r.verification.ok)) {
       process.exitCode = 1;
     }
+  });
+
+const registryCommand = program
+  .command("registry")
+  .description("Machine registry CRUD (routes to <machines.host>/v1/machines when self_hosted, else local store)");
+
+registryCommand
+  .command("backend")
+  .description("Show whether the registry resolves to the cloud API or the local store")
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { json?: boolean }, command: Command) => {
+    const store = resolveMachineRegistryStore();
+    printCommandResult(
+      { backend: store.backend, baseUrl: store.baseUrl },
+      store.backend === "cloud-http" ? `cloud-http ${store.baseUrl}` : "local",
+      wantsCommandJson(options, command),
+    );
+  });
+
+registryCommand
+  .command("list")
+  .description("List machines in the registry")
+  .option("--status <status>", "Filter by status")
+  .option("--limit <n>", "Maximum rows to return")
+  .option("-j, --json", "Print JSON output", false)
+  .action(async (options: { status?: string; limit?: string; json?: boolean }, command: Command) => {
+    const store = resolveMachineRegistryStore();
+    const machines = await store.list({
+      status: options.status,
+      limit: options.limit ? parseIntegerOption(options.limit, "limit", { min: 1 }) : undefined,
+    });
+    printCommandResult(
+      { backend: store.backend, machines, count: machines.length },
+      machines.map((m) => `${m.id}\t${m.status}\t${m.friendlyName ?? "-"}\t${m.platform ?? "-"}`).join("\n") || "(no machines)",
+      wantsCommandJson(options, command),
+    );
+  });
+
+registryCommand
+  .command("show <id>")
+  .description("Show one machine by id")
+  .option("-j, --json", "Print JSON output", false)
+  .action(async (id: string, options: { json?: boolean }, command: Command) => {
+    const store = resolveMachineRegistryStore();
+    const machine = await store.get(id);
+    if (!machine) {
+      console.error(chalk.red(`machine not found: ${id}`));
+      process.exitCode = 1;
+      return;
+    }
+    printCommandResult(machine, JSON.stringify(machine, null, 2), wantsCommandJson(options, command));
+  });
+
+registryCommand
+  .command("register <id>")
+  .description("Create or update a machine in the registry (upsert)")
+  .option("--name <name>", "Friendly name")
+  .option("--platform <platform>", "Platform, e.g. linux, darwin")
+  .option("--arch <arch>", "Architecture, e.g. arm64, x64")
+  .option("--status <status>", "Status", "online")
+  .option("--labels <json>", "Labels JSON object")
+  .option("--metadata <json>", "Metadata JSON object")
+  .option("--approval-token <token>", "Scoped mutation approval token")
+  .option("-j, --json", "Print JSON output", false)
+  .action(async (
+    id: string,
+    options: { name?: string; platform?: string; arch?: string; status?: string; labels?: string; metadata?: string; approvalToken?: string; json?: boolean },
+    command: Command,
+  ) => {
+    requireCliMutation("machines_registry_register", options.approvalToken, {
+      resourceId: `registry:register:${id}`,
+      args: { id },
+    });
+    const store = resolveMachineRegistryStore();
+    const record = await store.upsert({
+      id,
+      friendlyName: options.name ?? null,
+      platform: options.platform ?? null,
+      arch: options.arch ?? null,
+      status: options.status ?? "online",
+      labels: options.labels ? (JSON.parse(options.labels) as Record<string, unknown>) : undefined,
+      metadata: options.metadata ? (JSON.parse(options.metadata) as Record<string, unknown>) : undefined,
+    });
+    printCommandResult(
+      { backend: store.backend, machine: record },
+      `registered ${record.id} (${store.backend})`,
+      wantsCommandJson(options, command),
+    );
+  });
+
+registryCommand
+  .command("remove <id>")
+  .description("Delete a machine from the registry")
+  .option("--approval-token <token>", "Scoped mutation approval token")
+  .option("-j, --json", "Print JSON output", false)
+  .action(async (id: string, options: { approvalToken?: string; json?: boolean }, command: Command) => {
+    requireCliMutation("machines_registry_remove", options.approvalToken, {
+      resourceId: `registry:remove:${id}`,
+      args: { id },
+    });
+    const store = resolveMachineRegistryStore();
+    const removed = await store.remove(id);
+    printCommandResult(
+      { backend: store.backend, removed, id },
+      removed ? `removed ${id} (${store.backend})` : `not removed: ${id}`,
+      wantsCommandJson(options, command),
+    );
+    if (!removed) process.exitCode = 1;
   });
 
 try {
