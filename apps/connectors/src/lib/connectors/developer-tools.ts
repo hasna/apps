@@ -164,6 +164,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["feature-flags", "experimentation"],
   },
   {
+    name: "statsig",
+    displayName: "Statsig",
+    description: "Feature flags, experiments, and dynamic configs",
+    category: "Developer Tools",
+    tags: ["feature-flags", "experimentation"],
+  },
+  {
     name: "abuselpdb",
     displayName: "AbuseIPDB",
     description: "IP abuse checking and threat intelligence",
