@@ -948,6 +948,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["localization", "translation", "i18n", "l10n", "multilingual"],
   },
   {
+    name: "sse-trigger",
+    displayName: "SseTrigger",
+    description: "SSE workflow trigger",
+    category: "Developer Tools",
+    tags: ["sse", "triggers", "workflows", "events"],
+  },
+  {
     name: "stackexchange",
     displayName: "Stack Exchange",
     description: "Q&A search across Stack Overflow and Stack Exchange sites (questions, answers, users, tags)",
