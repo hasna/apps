@@ -3,8 +3,9 @@ import { extname } from "node:path";
 import { Buffer } from "node:buffer";
 import { captureScreenshot } from "../capture/index.js";
 import { shareClipboard } from "../clipboard.js";
+import { publicClipRecord, publicClipRecords, publicStorageStatus } from "../public.js";
 import { ClipStore } from "../storage.js";
-import type { CaptureMode, ClipboardKind, ClipClientOptions, ClipRecord, ClipStorageStatus } from "../types.js";
+import type { CaptureMode, ClipboardKind, ClipClientOptions, ClipRecord } from "../types.js";
 import { extensionForMime, htmlEscape, isTextMime, normalizeLimit } from "../util.js";
 import { DEFAULT_PORT } from "../paths.js";
 import { resolveBaseUrl } from "../share.js";
@@ -22,17 +23,6 @@ const MIME_TYPES: Record<string, string> = {
   ".webp": "image/webp",
 };
 
-const LOCAL_PATH_METADATA_KEYS = new Set([
-  "artifactDir",
-  "artifactPath",
-  "dbPath",
-  "filePath",
-  "homeDir",
-  "localPath",
-  "outputPath",
-  "path",
-]);
-
 export interface ClipServerOptions {
   host?: string;
   port?: number;
@@ -49,51 +39,6 @@ function jsonResponse(value: unknown, status = 200): Response {
       "X-Content-Type-Options": "nosniff",
     },
   });
-}
-
-function looksLikeLocalPath(value: string): boolean {
-  return value.startsWith("/") || value.startsWith("file://") || /^[A-Za-z]:[\\/]/.test(value);
-}
-
-function redactPublicMetadataValue(value: unknown): unknown {
-  if (typeof value === "string") return looksLikeLocalPath(value) ? "[redacted]" : value;
-  if (Array.isArray(value)) return value.map(redactPublicMetadataValue);
-  if (!value || typeof value !== "object") return value;
-
-  const redacted: Record<string, unknown> = {};
-  for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
-    if (LOCAL_PATH_METADATA_KEYS.has(key)) continue;
-    redacted[key] = redactPublicMetadataValue(nestedValue);
-  }
-  return redacted;
-}
-
-function publicMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
-  return redactPublicMetadataValue(metadata) as Record<string, unknown>;
-}
-
-function publicClipRecord(record: ClipRecord): Record<string, unknown> {
-  const { artifactPath: _artifactPath, metadata, ...rest } = record;
-  return {
-    ...rest,
-    hasArtifact: Boolean(record.artifactPath),
-    rawUrl: `/s/${encodeURIComponent(record.slug)}/raw`,
-    metadata: publicMetadata(metadata),
-  };
-}
-
-function publicClipRecords(records: ClipRecord[]): Record<string, unknown>[] {
-  return records.map(publicClipRecord);
-}
-
-function publicStorageStatus(status: ClipStorageStatus): Record<string, unknown> {
-  return {
-    totalActive: status.totalActive,
-    deleted: status.deleted,
-    database: "sqlite",
-    artifacts: "local",
-    localPathsRedacted: true,
-  };
 }
 
 async function requestJson(req: Request): Promise<Record<string, unknown>> {
