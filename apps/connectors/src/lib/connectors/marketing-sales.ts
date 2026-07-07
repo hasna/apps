@@ -374,6 +374,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["sales", "email outreach", "automation", "sequences", "prospecting"],
   },
   {
+    name: "sprig",
+    displayName: "Sprig",
+    description: "Continuous in-product user research and survey platform",
+    category: "Marketing & Sales",
+    tags: ["surveys", "feedback", "user-research", "product", "ux"],
+  },
+  {
     name: "surveysparrow",
     displayName: "SurveySparrow",
     description: "Conversational survey and feedback management platform",
@@ -444,6 +451,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["email", "validation", "verification"],
   },
   {
+    name: "veriphone",
+    displayName: "Veriphone",
+    description: "Phone number validation and carrier lookup",
+    category: "Marketing & Sales",
+    tags: ["phone", "validation", "verification"],
+  },
+  {
     name: "vwo",
     displayName: "VWO",
     description: "A/B testing, feature flags, surveys, heatmaps, and conversion optimization platform",
@@ -463,5 +477,12 @@ export const connectors: ConnectorMeta[] = [
     description: "Cold email outreach and follow-up automation",
     category: "Marketing & Sales",
     tags: ["email", "outreach", "sales"],
+  },
+  {
+    name: "zerobounce",
+    displayName: "ZeroBounce",
+    description: "Email validation, verification, and deliverability platform",
+    category: "Marketing & Sales",
+    tags: ["email", "validation", "verification", "deliverability"],
   },
 ];
