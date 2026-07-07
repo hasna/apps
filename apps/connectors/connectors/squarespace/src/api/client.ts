@@ -1,11 +1,14 @@
 import type { SquarespaceConfig } from '../types';
 import { SquarespaceApiError } from '../types';
 
-const DEFAULT_BASE_URL = 'https://api.squarespace.com/1.0';
+const API_ORIGIN = 'https://api.squarespace.com';
+const DEFAULT_BASE_URL = `${API_ORIGIN}/1.0`;
+
+type QueryValue = string | number | boolean;
 
 export interface SquarespaceRequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
-  params?: Record<string, string | number | boolean | undefined>;
+  params?: Record<string, QueryValue | QueryValue[] | undefined>;
   body?: unknown;
   headers?: Record<string, string>;
 }
@@ -25,11 +28,17 @@ export class SquarespaceClient {
   async request<T>(endpoint: string, options: SquarespaceRequestOptions = {}): Promise<T> {
     const { method = 'GET', params, body, headers = {} } = options;
 
-    let url = `${this.baseUrl}${endpoint}`;
+    let url = this.getUrl(endpoint);
     if (params) {
       const searchParams = new URLSearchParams();
       Object.entries(params).forEach(([key, value]) => {
-        if (value !== undefined && value !== null && value !== '') {
+        if (Array.isArray(value)) {
+          value.forEach(item => {
+            if (item !== '') {
+              searchParams.append(key, String(item));
+            }
+          });
+        } else if (value !== undefined && value !== null && value !== '') {
           searchParams.append(key, String(value));
         }
       });
@@ -104,5 +113,17 @@ export class SquarespaceClient {
       return `${this.apiKey.substring(0, 6)}...${this.apiKey.substring(this.apiKey.length - 4)}`;
     }
     return '***';
+  }
+
+  private getUrl(endpoint: string): string {
+    if (/^https?:\/\//.test(endpoint)) {
+      return endpoint;
+    }
+
+    if (endpoint.startsWith('/v') || endpoint.startsWith('/1.0/')) {
+      return `${API_ORIGIN}${endpoint}`;
+    }
+
+    return `${this.baseUrl}${endpoint}`;
   }
 }

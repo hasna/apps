@@ -12,6 +12,10 @@ export interface TransactionsListResponse {
   pagination?: { nextPageCursor?: string; hasNextPage?: boolean };
 }
 
+export interface TransactionsGetResponse {
+  documents: Transaction[];
+}
+
 export class TransactionsApi {
   constructor(private readonly client: SquarespaceClient) {}
 
@@ -25,7 +29,8 @@ export class TransactionsApi {
     });
   }
 
-  async get(id: string): Promise<Transaction> {
-    return this.client.request<Transaction>(`/commerce/transactions/${encodeURIComponent(id)}`);
+  async get(documentIds: string | string[]): Promise<TransactionsGetResponse> {
+    const ids = (Array.isArray(documentIds) ? documentIds : [documentIds]).map(encodeURIComponent).join(',');
+    return this.client.request<TransactionsGetResponse>(`/commerce/transactions/${ids}`);
   }
 }

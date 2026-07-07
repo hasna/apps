@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { SquarespaceClient } from './client';
+import { InventoryApi } from './inventory';
+import { OrdersApi } from './orders';
+import { ProductsApi } from './products';
+import { TransactionsApi } from './transactions';
 import { SquarespaceApiError } from '../types';
 
 const realFetch = globalThis.fetch;
@@ -52,7 +56,7 @@ afterEach(() => {
 });
 
 describe('SquarespaceClient', () => {
-  const mockConfig = { apiKey: 'test-api-key-12345678' };
+  const mockConfig = { apiKey: 'sample-value-0000' };
 
   test('throws when API key is missing', () => {
     expect(() => new SquarespaceClient({ apiKey: '' })).toThrow('Squarespace API key is required');
@@ -60,7 +64,7 @@ describe('SquarespaceClient', () => {
 
   test('masks long API keys', () => {
     const client = new SquarespaceClient(mockConfig);
-    expect(client.getApiKeyPreview()).toBe('test-a...5678');
+    expect(client.getApiKeyPreview()).toBe(`${mockConfig.apiKey.substring(0, 6)}...${mockConfig.apiKey.slice(-4)}`);
   });
 
   test('returns *** for short keys', () => {
@@ -81,7 +85,7 @@ describe('SquarespaceClient', () => {
     expect(recorded).toHaveLength(1);
     expect(recorded[0].url).toBe('https://api.squarespace.com/1.0/commerce/inventory');
     expect(recorded[0].method).toBe('GET');
-    expect(recorded[0].headers.Authorization).toBe('Bearer test-api-key-12345678');
+    expect(recorded[0].headers.Authorization).toBe(`Bearer ${mockConfig.apiKey}`);
     expect(result).toEqual({ inventory: [] });
   });
 
@@ -95,25 +99,68 @@ describe('SquarespaceClient', () => {
   test('filters undefined query params', async () => {
     const recorded = installFetch(() => ({ ok: true, status: 200, json: {} }));
     const client = new SquarespaceClient(mockConfig);
-    await client.request('/commerce/products', { params: { cursor: 'x', type: undefined } });
+    await client.request('/test-resource', { params: { cursor: 'x', type: undefined } });
     expect(recorded[0].url).toContain('cursor=x');
     expect(recorded[0].url).not.toContain('type=');
+  });
+
+  test('supports versioned endpoint paths and repeated query params', async () => {
+    const recorded = installFetch(() => ({ ok: true, status: 200, json: {} }));
+    const client = new SquarespaceClient(mockConfig);
+    await client.request('/v2/commerce/products', { params: { type: ['PHYSICAL', 'SERVICE'] } });
+    expect(recorded[0].url).toBe('https://api.squarespace.com/v2/commerce/products?type=PHYSICAL&type=SERVICE');
   });
 
   test('POST sends JSON body', async () => {
     const recorded = installFetch(() => ({ ok: true, status: 200, json: { id: '1' } }));
     const client = new SquarespaceClient(mockConfig);
     const body = { name: 'Test Product' };
-    await client.request('/commerce/products', { method: 'POST', body });
+    await client.request('/test-resource', { method: 'POST', body });
     expect(recorded[0].method).toBe('POST');
     expect(recorded[0].headers['Content-Type']).toBe('application/json');
     expect(recorded[0].body).toBe(JSON.stringify(body));
   });
 
+  test('ProductsApi uses current v2 methods for update and variant image association', async () => {
+    const recorded = installFetch(() => ({ ok: true, status: 200, json: { products: [] } }));
+    const client = new SquarespaceClient(mockConfig);
+    const products = new ProductsApi(client);
+
+    await products.update('prod-1', { name: { present: true, value: 'Updated' } });
+    await products.associateVariantImage('prod-1', 'var-1', 'image-1');
+
+    expect(recorded[0].url).toBe('https://api.squarespace.com/v2/commerce/products/prod-1');
+    expect(recorded[0].method).toBe('POST');
+    expect(recorded[1].url).toBe('https://api.squarespace.com/v2/commerce/products/prod-1/variants/var-1/image');
+    expect(recorded[1].method).toBe('POST');
+    expect(recorded[1].body).toBe(JSON.stringify({ imageId: { present: true, value: 'image-1' } }));
+  });
+
+  test('order creation and inventory adjustment require idempotency keys', async () => {
+    const recorded = installFetch(() => ({ ok: true, status: 200, json: { id: '1' } }));
+    const client = new SquarespaceClient(mockConfig);
+
+    await new OrdersApi(client).create({ lineItems: [] }, 'order-key');
+    await new InventoryApi(client).adjust({ incrementOperations: [] }, 'inventory-key');
+
+    expect(recorded[0].headers['Idempotency-Key']).toBe('order-key');
+    expect(recorded[1].headers['Idempotency-Key']).toBe('inventory-key');
+  });
+
+  test('TransactionsApi get supports multiple document IDs and documents response', async () => {
+    const recorded = installFetch(() => ({ ok: true, status: 200, json: { documents: [] } }));
+    const client = new SquarespaceClient(mockConfig);
+
+    const result = await new TransactionsApi(client).get(['txn 1', 'txn/2']);
+
+    expect(recorded[0].url).toBe('https://api.squarespace.com/1.0/commerce/transactions/txn%201,txn%2F2');
+    expect(result).toEqual({ documents: [] });
+  });
+
   test('handles 204 No Content', async () => {
     installFetch(() => ({ ok: true, status: 204, text: '' }));
     const client = new SquarespaceClient(mockConfig);
-    const result = await client.request('/commerce/products/1', { method: 'DELETE' });
+    const result = await client.request('/test-resource/1', { method: 'DELETE' });
     expect(result).toEqual({});
   });
 

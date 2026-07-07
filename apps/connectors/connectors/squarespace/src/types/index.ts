@@ -25,7 +25,7 @@ export interface InventoryAdjustmentRequest {
   incrementOperations?: Array<Record<string, unknown>>;
   decrementOperations?: Array<Record<string, unknown>>;
   setFiniteOperations?: Array<Record<string, unknown>>;
-  setUnlimitedOperations?: Array<Record<string, unknown>>;
+  setUnlimitedOperations?: string[];
 }
 
 export interface Order {
@@ -80,12 +80,6 @@ export interface StorePage {
   id: string;
   title?: string;
   isEnabled?: boolean;
-  [key: string]: unknown;
-}
-
-export interface Form {
-  id: string;
-  name?: string;
   [key: string]: unknown;
 }
 

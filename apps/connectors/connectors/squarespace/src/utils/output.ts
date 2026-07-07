@@ -2,15 +2,35 @@ import chalk from 'chalk';
 
 export type OutputFormat = 'json' | 'table' | 'pretty';
 
+const SENSITIVE_KEY_PATTERN = /(api[-_]?key|authorization|bearer|credential|password|private[-_]?key|secret|token)/i;
+
+function redactValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(redactValue);
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, child]) => [
+        key,
+        SENSITIVE_KEY_PATTERN.test(key) ? '[REDACTED]' : redactValue(child),
+      ]),
+    );
+  }
+
+  return value;
+}
+
 export function formatOutput(data: unknown, format: OutputFormat = 'pretty'): string {
+  const safeData = redactValue(data);
   switch (format) {
     case 'json':
-      return JSON.stringify(data, null, 2);
+      return JSON.stringify(safeData, null, 2);
     case 'table':
-      return formatAsTable(data);
+      return formatAsTable(safeData);
     case 'pretty':
     default:
-      return formatPretty(data);
+      return formatPretty(safeData);
   }
 }
 

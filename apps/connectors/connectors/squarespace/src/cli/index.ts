@@ -23,10 +23,11 @@ const CONNECTOR_NAME = 'connect-squarespace';
 const VERSION = '0.1.0';
 
 const program = new Command();
+let apiKeyOverride: string | undefined;
 
 program
   .name(CONNECTOR_NAME)
-  .description('Squarespace Commerce API connector - Products, Orders, Inventory, Transactions, Profiles, Forms, Webhooks')
+  .description('Squarespace Commerce API connector - Products, Orders, Inventory, Transactions, Profiles, Store Pages, Webhooks')
   .version(VERSION)
   .option('-f, --format <format>', 'Output format (json, pretty)', 'pretty')
   .option('-p, --profile <profile>', 'Use a specific profile')
@@ -41,7 +42,7 @@ program
       setProfileOverride(opts.profile);
     }
     if (opts.apiKey) {
-      process.env.SQUARESPACE_API_KEY = opts.apiKey;
+      apiKeyOverride = opts.apiKey;
     }
   });
 
@@ -51,7 +52,7 @@ function getFormat(cmd: Command): OutputFormat {
 }
 
 function getClient(): Squarespace {
-  const apiKey = getApiKey();
+  const apiKey = apiKeyOverride || getApiKey();
   if (!apiKey) {
     error(`No API key configured. Run "${CONNECTOR_NAME} config set-key <key>" or set SQUARESPACE_API_KEY.`);
     process.exit(1);
@@ -162,8 +163,9 @@ inventoryCmd
   .command('adjust')
   .description('Adjust inventory')
   .requiredOption('--data <json>', 'Adjustment JSON body')
-  .action(async function (this: Command, opts: { data: string }) {
-    const result = await getClient().inventory.adjust(parseJson(opts.data, '--data'));
+  .requiredOption('--idempotency-key <key>', 'Idempotency key')
+  .action(async function (this: Command, opts: { data: string; idempotencyKey: string }) {
+    const result = await getClient().inventory.adjust(parseJson(opts.data, '--data'), opts.idempotencyKey);
     print(result, getFormat(this));
   });
 
@@ -195,8 +197,9 @@ ordersCmd
   .command('create')
   .description('Create order')
   .requiredOption('--data <json>', 'Order JSON body')
-  .action(async function (this: Command, opts: { data: string }) {
-    print(await getClient().orders.create(parseJson(opts.data, '--data')), getFormat(this));
+  .requiredOption('--idempotency-key <key>', 'Idempotency key')
+  .action(async function (this: Command, opts: { data: string; idempotencyKey: string }) {
+    print(await getClient().orders.create(parseJson(opts.data, '--data'), opts.idempotencyKey), getFormat(this));
   });
 
 ordersCmd
@@ -207,14 +210,6 @@ ordersCmd
     print(await getClient().orders.fulfill(id, parseJson(opts.data, '--data')), getFormat(this));
   });
 
-ordersCmd
-  .command('refund <id>')
-  .description('Refund order')
-  .requiredOption('--data <json>', 'Refund JSON body')
-  .action(async function (this: Command, id: string, opts: { data: string }) {
-    print(await getClient().orders.refund(id, parseJson(opts.data, '--data') as Parameters<Squarespace['orders']['refund']>[1]), getFormat(this));
-  });
-
 // Products
 const productsCmd = program.command('products').description('Product operations');
 
@@ -222,21 +217,24 @@ productsCmd
   .command('list')
   .description('List products')
   .option('--cursor <cursor>', 'Pagination cursor')
-  .option('--type <type>', 'Product type filter')
+  .option('--query <query>', 'Search query')
+  .option('--type <type>', 'Product type filter; repeat as comma-separated values')
   .option('--modified-after <date>', 'Modified after')
   .option('--modified-before <date>', 'Modified before')
-  .action(async function (this: Command, opts: { cursor?: string; type?: string; modifiedAfter?: string; modifiedBefore?: string }) {
+  .action(async function (this: Command, opts: { cursor?: string; query?: string; type?: string; modifiedAfter?: string; modifiedBefore?: string }) {
     const result = await getClient().products.list({
       cursor: opts.cursor,
-      type: opts.type,
+      query: opts.query,
+      type: opts.type ? opts.type.split(',').map(t => t.trim()).filter(Boolean) : undefined,
       modifiedAfter: opts.modifiedAfter,
       modifiedBefore: opts.modifiedBefore,
     });
     print(result.products ?? result, getFormat(this));
   });
 
-productsCmd.command('get <id>').description('Get product').action(async function (this: Command, id: string) {
-  print(await getClient().products.get(id), getFormat(this));
+productsCmd.command('get <productIds...>').description('Get products by IDs').action(async function (this: Command, productIds: string[]) {
+  const result = await getClient().products.get(productIds);
+  print(result.products ?? result, getFormat(this));
 });
 
 productsCmd
@@ -285,12 +283,11 @@ productsCmd
   });
 
 productsCmd
-  .command('assign-image <productId>')
-  .description('Assign image to product')
+  .command('associate-variant-image <productId> <variantId>')
+  .description('Associate image with product variant')
   .requiredOption('--image-id <id>', 'Image ID')
-  .option('--ordering <n>', 'Image ordering', parseInt)
-  .action(async function (this: Command, productId: string, opts: { imageId: string; ordering?: number }) {
-    print(await getClient().products.assignImage(productId, opts.imageId, opts.ordering), getFormat(this));
+  .action(async function (this: Command, productId: string, variantId: string, opts: { imageId: string }) {
+    print(await getClient().products.associateVariantImage(productId, variantId, opts.imageId), getFormat(this));
   });
 
 // Transactions
@@ -311,9 +308,13 @@ transactionsCmd
     print(result.documents ?? result, getFormat(this));
   });
 
-transactionsCmd.command('get <id>').description('Get transaction').action(async function (this: Command, id: string) {
-  print(await getClient().transactions.get(id), getFormat(this));
-});
+transactionsCmd
+  .command('get <id...>')
+  .description('Get one or more transactions')
+  .action(async function (this: Command, ids: string[]) {
+    const result = await getClient().transactions.get(ids);
+    print(result.documents ?? result, getFormat(this));
+  });
 
 // Profiles
 const profilesCmd = program.command('profiles').description('Customer profile operations');
@@ -323,37 +324,30 @@ profilesCmd
   .description('List profiles')
   .option('--cursor <cursor>', 'Pagination cursor')
   .option('--filter <filter>', 'Filter expression')
-  .option('--sort-direction <dir>', 'Sort direction (asc|desc)')
+  .option('--sort-direction <dir>', 'Sort direction (asc|dsc)')
   .option('--sort-field <field>', 'Sort field')
-  .action(async function (this: Command, opts: { cursor?: string; filter?: string; sortDirection?: 'asc' | 'desc'; sortField?: string }) {
+  .action(async function (this: Command, opts: { cursor?: string; filter?: string; sortDirection?: string; sortField?: string }) {
+    let sortDirection: 'asc' | 'dsc' | undefined;
+    if (opts.sortDirection) {
+      if (opts.sortDirection !== 'asc' && opts.sortDirection !== 'dsc') {
+        error('Invalid sort direction. Use "asc" or "dsc".');
+        process.exit(1);
+      }
+      sortDirection = opts.sortDirection;
+    }
     const result = await getClient().profiles.list({
       cursor: opts.cursor,
       filter: opts.filter,
-      sortDirection: opts.sortDirection,
+      sortDirection,
       sortField: opts.sortField,
     });
     print(result.profiles ?? result, getFormat(this));
   });
 
-profilesCmd.command('get <id>').description('Get profile').action(async function (this: Command, id: string) {
-  print(await getClient().profiles.get(id), getFormat(this));
+profilesCmd.command('get <profileIds...>').description('Get profiles by IDs').action(async function (this: Command, profileIds: string[]) {
+  const result = await getClient().profiles.get(profileIds);
+  print(result.profiles ?? result, getFormat(this));
 });
-
-profilesCmd
-  .command('create')
-  .description('Create profile')
-  .requiredOption('--data <json>', 'Profile JSON body')
-  .action(async function (this: Command, opts: { data: string }) {
-    print(await getClient().profiles.create(parseJson(opts.data, '--data')), getFormat(this));
-  });
-
-profilesCmd
-  .command('update <id>')
-  .description('Update profile')
-  .requiredOption('--data <json>', 'Profile patch JSON')
-  .action(async function (this: Command, id: string, opts: { data: string }) {
-    print(await getClient().profiles.update(id, parseJson(opts.data, '--data')), getFormat(this));
-  });
 
 // Store pages
 const storePagesCmd = program.command('store-pages').description('Store page operations');
@@ -367,51 +361,8 @@ storePagesCmd
     print(result.storePages ?? result, getFormat(this));
   });
 
-storePagesCmd.command('get <id>').description('Get store page').action(async function (this: Command, id: string) {
-  print(await getClient().storePages.get(id), getFormat(this));
-});
-
-// Membership
-const membershipCmd = program.command('membership').description('Membership operations');
-
-membershipCmd
-  .command('plans')
-  .description('List membership plans')
-  .option('--cursor <cursor>', 'Pagination cursor')
-  .action(async function (this: Command, opts: { cursor?: string }) {
-    const result = await getClient().membership.listPlans(opts.cursor);
-    print(result.plans ?? result, getFormat(this));
-  });
-
-membershipCmd
-  .command('members')
-  .description('List members')
-  .option('--cursor <cursor>', 'Pagination cursor')
-  .option('--plan-id <id>', 'Filter by plan ID')
-  .action(async function (this: Command, opts: { cursor?: string; planId?: string }) {
-    const result = await getClient().membership.listMembers({ cursor: opts.cursor, planId: opts.planId });
-    print(result.members ?? result, getFormat(this));
-  });
-
-// Forms
-const formsCmd = program.command('forms').description('Form operations');
-
-formsCmd.command('list').description('List forms').action(async function (this: Command) {
-  const result = await getClient().forms.list();
-  print(result.forms ?? result, getFormat(this));
-});
-
-formsCmd
-  .command('submissions <formId>')
-  .description('List form submissions')
-  .option('--cursor <cursor>', 'Pagination cursor')
-  .action(async function (this: Command, formId: string, opts: { cursor?: string }) {
-    const result = await getClient().forms.listSubmissions(formId, opts.cursor);
-    print(result.submissions ?? result, getFormat(this));
-  });
-
 // Webhooks
-const webhooksCmd = program.command('webhooks').description('Webhook subscription operations');
+const webhooksCmd = program.command('webhooks').description('Webhook subscription operations (OAuth access token required)');
 
 webhooksCmd.command('list').description('List webhook subscriptions').action(async function (this: Command) {
   const result = await getClient().webhooks.list();

@@ -31,10 +31,15 @@ export class OrdersApi {
     return this.client.request<Order>(`/commerce/orders/${encodeURIComponent(id)}`);
   }
 
-  async create(order: Record<string, unknown>): Promise<Order> {
+  async create(order: Record<string, unknown>, idempotencyKey: string): Promise<Order> {
+    if (!idempotencyKey) {
+      throw new Error('Idempotency key is required for order creation');
+    }
+
     return this.client.request<Order>('/commerce/orders', {
       method: 'POST',
       body: order,
+      headers: { 'Idempotency-Key': idempotencyKey },
     });
   }
 
@@ -48,18 +53,4 @@ export class OrdersApi {
     });
   }
 
-  async refund(
-    id: string,
-    payload: {
-      idempotencyKey: string;
-      reason?: string;
-      refundType?: string;
-      amounts?: Array<Record<string, unknown>>;
-    },
-  ): Promise<unknown> {
-    return this.client.request(`/commerce/orders/${encodeURIComponent(id)}/refund`, {
-      method: 'POST',
-      body: payload,
-    });
-  }
 }

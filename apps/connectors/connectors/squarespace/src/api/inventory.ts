@@ -24,10 +24,15 @@ export class InventoryApi {
     return this.client.request<{ inventory: InventoryItem[] }>(`/commerce/inventory/${ids}`);
   }
 
-  async adjust(adjustment: InventoryAdjustmentRequest): Promise<unknown> {
+  async adjust(adjustment: InventoryAdjustmentRequest, idempotencyKey: string): Promise<unknown> {
+    if (!idempotencyKey) {
+      throw new Error('Idempotency key is required for inventory adjustments');
+    }
+
     return this.client.request('/commerce/inventory/adjustments', {
       method: 'POST',
       body: adjustment,
+      headers: { 'Idempotency-Key': idempotencyKey },
     });
   }
 }

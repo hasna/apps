@@ -2,23 +2,31 @@
   "name": "@hasna/connect-squarespace",
   "version": "0.1.0",
   "license": "Apache-2.0",
-  "description": "Squarespace Commerce API connector - Products, Orders, Inventory, Transactions, Profiles, Forms, Webhooks",
+  "description": "Squarespace Commerce API connector - Products, Orders, Inventory, Transactions, Profiles, Store Pages, Webhooks",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
   "bin": {
     "connect-squarespace": "./bin/index.js"
   },
   "scripts": {
-    "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun",
+    "build": "rm -rf ./dist ./bin && bun build ./src/index.ts --outdir ./dist --target bun && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir ./dist && bun build ./src/cli/index.ts --outdir ./bin --target bun",
     "dev": "bun run ./src/cli/index.ts",
+    "prepublishOnly": "bun run build",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "files": [
     "dist",
     "bin",
-    "src",
+    "README.md",
+    "AGENTS.md",
     "CLAUDE.md"
   ],
   "dependencies": {

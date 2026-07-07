@@ -9,8 +9,6 @@ export {
   TransactionsApi,
   ProfilesApi,
   StorePagesApi,
-  MembershipApi,
-  FormsApi,
   WebhooksApi,
 } from './api';
 

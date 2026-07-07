@@ -15,7 +15,4 @@ export class StorePagesApi {
     });
   }
 
-  async get(id: string): Promise<StorePage> {
-    return this.client.request<StorePage>(`/commerce/store_pages/${encodeURIComponent(id)}`);
-  }
 }

@@ -3,7 +3,8 @@ import type { Product } from '../types';
 
 export interface ListProductsOptions {
   cursor?: string;
-  type?: string;
+  query?: string;
+  type?: string | string[];
   modifiedAfter?: string;
   modifiedBefore?: string;
 }
@@ -13,13 +14,18 @@ export interface ProductsListResponse {
   pagination?: { nextPageCursor?: string; hasNextPage?: boolean };
 }
 
+export interface ProductsGetResponse {
+  products: Product[];
+}
+
 export class ProductsApi {
   constructor(private readonly client: SquarespaceClient) {}
 
   async list(options: ListProductsOptions = {}): Promise<ProductsListResponse> {
-    return this.client.request<ProductsListResponse>('/commerce/products', {
+    return this.client.request<ProductsListResponse>('/v2/commerce/products', {
       params: {
         cursor: options.cursor,
+        query: options.query,
         type: options.type,
         modifiedAfter: options.modifiedAfter,
         modifiedBefore: options.modifiedBefore,
@@ -27,32 +33,33 @@ export class ProductsApi {
     });
   }
 
-  async get(id: string): Promise<Product> {
-    return this.client.request<Product>(`/commerce/products/${encodeURIComponent(id)}`);
+  async get(productIds: string | string[]): Promise<ProductsGetResponse> {
+    const ids = (Array.isArray(productIds) ? productIds : [productIds]).map(encodeURIComponent).join(',');
+    return this.client.request<ProductsGetResponse>(`/v2/commerce/products/${ids}`);
   }
 
   async create(product: Record<string, unknown>): Promise<Product> {
-    return this.client.request<Product>('/commerce/products', {
+    return this.client.request<Product>('/v2/commerce/products', {
       method: 'POST',
       body: product,
     });
   }
 
   async update(id: string, data: Record<string, unknown>): Promise<Product> {
-    return this.client.request<Product>(`/commerce/products/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
+    return this.client.request<Product>(`/v2/commerce/products/${encodeURIComponent(id)}`, {
+      method: 'POST',
       body: data,
     });
   }
 
   async delete(id: string): Promise<void> {
-    await this.client.request<void>(`/commerce/products/${encodeURIComponent(id)}`, {
+    await this.client.request<void>(`/v2/commerce/products/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     });
   }
 
   async createVariant(productId: string, variant: Record<string, unknown>): Promise<unknown> {
-    return this.client.request(`/commerce/products/${encodeURIComponent(productId)}/variants`, {
+    return this.client.request(`/v2/commerce/products/${encodeURIComponent(productId)}/variants`, {
       method: 'POST',
       body: variant,
     });
@@ -60,22 +67,22 @@ export class ProductsApi {
 
   async updateVariant(productId: string, variantId: string, data: Record<string, unknown>): Promise<unknown> {
     return this.client.request(
-      `/commerce/products/${encodeURIComponent(productId)}/variants/${encodeURIComponent(variantId)}`,
-      { method: 'PATCH', body: data },
+      `/v2/commerce/products/${encodeURIComponent(productId)}/variants/${encodeURIComponent(variantId)}`,
+      { method: 'POST', body: data },
     );
   }
 
   async deleteVariant(productId: string, variantId: string): Promise<void> {
     await this.client.request<void>(
-      `/commerce/products/${encodeURIComponent(productId)}/variants/${encodeURIComponent(variantId)}`,
+      `/v2/commerce/products/${encodeURIComponent(productId)}/variants/${encodeURIComponent(variantId)}`,
       { method: 'DELETE' },
     );
   }
 
-  async assignImage(productId: string, imageId: string, ordering?: number): Promise<unknown> {
-    return this.client.request(`/commerce/products/${encodeURIComponent(productId)}/image`, {
+  async associateVariantImage(productId: string, variantId: string, imageId: string | null): Promise<unknown> {
+    return this.client.request(`/v2/commerce/products/${encodeURIComponent(productId)}/variants/${encodeURIComponent(variantId)}/image`, {
       method: 'POST',
-      body: { imageId, ordering },
+      body: { imageId: { present: true, value: imageId } },
     });
   }
 }

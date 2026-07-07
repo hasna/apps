@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 
@@ -21,14 +21,23 @@ export function setProfileOverride(profile: string | undefined): void {
 
 export function ensureConfigDir(): void {
   if (!existsSync(CONFIG_DIR)) {
-    mkdirSync(CONFIG_DIR, { recursive: true });
+    mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
   }
+  chmodSync(CONFIG_DIR, 0o700);
   if (!existsSync(PROFILES_DIR)) {
-    mkdirSync(PROFILES_DIR, { recursive: true });
+    mkdirSync(PROFILES_DIR, { recursive: true, mode: 0o700 });
+  }
+  chmodSync(PROFILES_DIR, 0o700);
+}
+
+function validateProfileName(profile: string): void {
+  if (!/^[a-zA-Z0-9_-]+$/.test(profile)) {
+    throw new Error('Profile name can only contain letters, numbers, hyphens, and underscores');
   }
 }
 
 function getProfilePath(profile: string): string {
+  validateProfileName(profile);
   return join(PROFILES_DIR, `${profile}.json`);
 }
 
@@ -60,7 +69,8 @@ export function setCurrentProfile(profile: string): void {
     throw new Error(`Profile "${profile}" does not exist`);
   }
 
-  writeFileSync(CURRENT_PROFILE_FILE, profile);
+  writeFileSync(CURRENT_PROFILE_FILE, profile, { mode: 0o600 });
+  chmodSync(CURRENT_PROFILE_FILE, 0o600);
 }
 
 export function profileExists(profile: string): boolean {
@@ -87,11 +97,8 @@ export function createProfile(profile: string, config: ProfileConfig = {}): bool
     return false;
   }
 
-  if (!/^[a-zA-Z0-9_-]+$/.test(profile)) {
-    throw new Error('Profile name can only contain letters, numbers, hyphens, and underscores');
-  }
-
-  writeFileSync(getProfilePath(profile), JSON.stringify(config, null, 2));
+  writeFileSync(getProfilePath(profile), JSON.stringify(config, null, 2), { mode: 0o600 });
+  chmodSync(getProfilePath(profile), 0o600);
   return true;
 }
 
@@ -131,7 +138,8 @@ export function loadProfile(profile?: string): ProfileConfig {
 export function saveProfile(config: ProfileConfig, profile?: string): void {
   ensureConfigDir();
   const profileName = profile || getCurrentProfile();
-  writeFileSync(getProfilePath(profileName), JSON.stringify(config, null, 2));
+  writeFileSync(getProfilePath(profileName), JSON.stringify(config, null, 2), { mode: 0o600 });
+  chmodSync(getProfilePath(profileName), 0o600);
 }
 
 export function getApiKey(): string | undefined {

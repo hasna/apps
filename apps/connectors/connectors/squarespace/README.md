@@ -1,6 +1,6 @@
 # connect-squarespace
 
-Squarespace Commerce API connector — Products, Orders, Inventory, Transactions, Profiles, Store Pages, Membership, Forms, and Webhooks.
+Squarespace Commerce API connector - Products, Orders, Inventory, Transactions, Profiles, Store Pages, and Webhooks.
 
 ## Installation
 
@@ -12,10 +12,10 @@ bun install -g @hasna/connect-squarespace
 
 ```bash
 # Set API key (generate in Squarespace dashboard)
-connect-squarespace config set-key YOUR_API_KEY
+connect-squarespace config set-key your-squarespace-token
 
-# Or use environment variable
-export SQUARESPACE_API_KEY=YOUR_API_KEY
+# Or export SQUARESPACE_API_KEY from your local shell
+export SQUARESPACE_API_KEY
 ```
 
 ## CLI Commands
@@ -24,16 +24,15 @@ export SQUARESPACE_API_KEY=YOUR_API_KEY
 ```bash
 connect-squarespace inventory list
 connect-squarespace inventory get <variantId> [variantId...]
-connect-squarespace inventory adjust --data '{"incrementOperations":[...]}'
+connect-squarespace inventory adjust --idempotency-key <key> --data '{"incrementOperations":[...]}'
 ```
 
 ### Orders
 ```bash
 connect-squarespace orders list
 connect-squarespace orders get <id>
-connect-squarespace orders create --data '{"lineItems":[...]}'
+connect-squarespace orders create --idempotency-key <key> --data '{"lineItems":[...]}'
 connect-squarespace orders fulfill <id> --data '{"shipments":[...]}'
-connect-squarespace orders refund <id> --data '{"idempotencyKey":"...","amounts":[...]}'
 ```
 
 ### Products
@@ -41,31 +40,30 @@ connect-squarespace orders refund <id> --data '{"idempotencyKey":"...","amounts"
 connect-squarespace products list
 connect-squarespace products get <id>
 connect-squarespace products create --data '{"storePageId":"...","type":"PHYSICAL","name":"..."}'
-connect-squarespace products update <id> --data '{"name":"Updated"}'
+connect-squarespace products update <id> --data '{"name":{"present":true,"value":"Updated"}}'
 connect-squarespace products delete <id>
+connect-squarespace products associate-variant-image <productId> <variantId> --image-id <imageId>
 ```
 
 ### Transactions
 ```bash
 connect-squarespace transactions list
-connect-squarespace transactions get <id>
+connect-squarespace transactions get <id> [id...]
 ```
 
 ### Profiles
 ```bash
 connect-squarespace profiles list
-connect-squarespace profiles get <id>
-connect-squarespace profiles create --data '{"email":"user@example.com"}'
+connect-squarespace profiles get <id> [id...]
 ```
 
-### Store Pages, Membership, Forms, Webhooks
+### Store Pages and Webhooks
 ```bash
 connect-squarespace store-pages list
-connect-squarespace membership plans
-connect-squarespace membership members
-connect-squarespace forms list
 connect-squarespace webhooks list
 ```
+
+Webhook subscription commands require a Squarespace OAuth access token with webhook scopes. Store that access token with `SQUARESPACE_API_KEY` when using `connect-squarespace webhooks ...`.
 
 ### Profile & Config
 ```bash
@@ -89,12 +87,14 @@ const orders = await client.orders.list({ fulfillmentStatus: 'PENDING' });
 
 | Variable | Description |
 |----------|-------------|
-| `SQUARESPACE_API_KEY` | Commerce API key (Bearer token) |
+| `SQUARESPACE_API_KEY` | Commerce API key or OAuth access token (Bearer token) |
 
 ## API Reference
 
 - Base URL: `https://api.squarespace.com/1.0`
-- Auth: `Authorization: Bearer <api_key>`
+- Products API: `https://api.squarespace.com/v2/commerce/products`
+- Auth: `Authorization: Bearer <token>`
+- Order creation and inventory adjustment require an `Idempotency-Key` header.
 - Docs: https://developers.squarespace.com/commerce-apis/overview
 
 ## License

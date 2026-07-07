@@ -4,13 +4,17 @@ import type { Profile } from '../types';
 export interface ListProfilesOptions {
   cursor?: string;
   filter?: string;
-  sortDirection?: 'asc' | 'desc';
+  sortDirection?: 'asc' | 'dsc';
   sortField?: string;
 }
 
 export interface ProfilesListResponse {
   profiles: Profile[];
   pagination?: { nextPageCursor?: string; hasNextPage?: boolean };
+}
+
+export interface ProfilesGetResponse {
+  profiles: Profile[];
 }
 
 export class ProfilesApi {
@@ -27,21 +31,8 @@ export class ProfilesApi {
     });
   }
 
-  async get(id: string): Promise<Profile> {
-    return this.client.request<Profile>(`/profiles/${encodeURIComponent(id)}`);
-  }
-
-  async create(profile: Record<string, unknown>): Promise<Profile> {
-    return this.client.request<Profile>('/profiles', {
-      method: 'POST',
-      body: profile,
-    });
-  }
-
-  async update(id: string, data: Record<string, unknown>): Promise<Profile> {
-    return this.client.request<Profile>(`/profiles/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      body: data,
-    });
+  async get(profileIds: string | string[]): Promise<ProfilesGetResponse> {
+    const ids = (Array.isArray(profileIds) ? profileIds : [profileIds]).map(encodeURIComponent).join(',');
+    return this.client.request<ProfilesGetResponse>(`/profiles/${ids}`);
   }
 }
