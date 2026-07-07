@@ -1,4 +1,8 @@
 #!/usr/bin/env bun
+import {
+  type AgentEventsClient,
+  registerAgentTools,
+} from "@hasna/agent-registry";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -64,15 +68,57 @@ exitIfMetadataRequest({
 
 const db = getDb();
 
-// --- in-memory agent registry (module-level for shared HTTP process) ---
-interface _LogsAgent {
-  id: string;
-  name: string;
-  session_id?: string;
-  last_seen_at: string;
-  project_id?: string;
-}
-const _logsAgents = new Map<string, _LogsAgent>();
+// register_agent / heartbeat / set_focus / list_agents are the canonical
+// @hasna/agent-registry implementation (persistent SQLite-backed registry)
+// rather than a hand-rolled in-memory Map. `send_feedback` stays local (see
+// below) since it persists into logs' own `feedback` table with a category
+// enum. Lifecycle activity is still mirrored into logs' own durable event
+// store via `agentRegistryEvents` below, preserving prior self-telemetry.
+const agentRegistryEvents: AgentEventsClient = {
+  emit(input) {
+    try {
+      const phase = input.type.startsWith("agent.")
+        ? input.type.slice("agent.".length)
+        : input.type;
+      const displayPhase = phase === "focus_changed" ? "focus" : phase;
+      const name = input.subject ?? "unknown";
+      const data = (input.data ?? {}) as Record<string, unknown>;
+      const sessionId =
+        typeof data.session_id === "string" ? data.session_id : undefined;
+      const agentId =
+        typeof data.agent_id === "string" ? data.agent_id : undefined;
+      const projectId =
+        typeof data.project_id === "string" ? data.project_id : undefined;
+      ingestUniversalEvent(db, {
+        type: "agent",
+        source: "mcp",
+        severity: "info",
+        privacy: "internal",
+        message: input.message ?? `MCP agent ${displayPhase}: ${name}`,
+        session_id: sessionId,
+        attributes: {
+          category: "mcp_agent_session",
+          phase: displayPhase,
+          agent_id: agentId,
+          agent_name: name,
+          session_id: sessionId,
+          project_id: projectId,
+        },
+        body: {
+          agent: {
+            id: agentId ?? null,
+            name,
+            session_id: sessionId ?? null,
+            project_id: projectId ?? null,
+            phase: displayPhase,
+          },
+        },
+      });
+    } catch {
+      // Agent registry telemetry must not affect MCP tool behavior.
+    }
+  },
+};
 
 export function buildServer(): McpServer {
   const server = new McpServer({ name: "logs", version: PACKAGE_VERSION });
@@ -1512,45 +1558,6 @@ export function buildServer(): McpServer {
     }
   }
 
-  function recordMcpAgentActivity(
-    phase: string,
-    agent: _LogsAgent,
-    extra: Record<string, unknown> = {},
-  ): void {
-    try {
-      ingestUniversalEvent(db, {
-        type: "agent",
-        source: "mcp",
-        severity: "info",
-        privacy: "internal",
-        message: `MCP agent ${phase}: ${agent.name}`,
-        session_id: agent.session_id ?? undefined,
-        attributes: {
-          category: "mcp_agent_session",
-          phase,
-          agent_id: agent.id,
-          agent_name: agent.name,
-          session_id: agent.session_id,
-          project_id: agent.project_id,
-          ...extra,
-        },
-        body: {
-          agent: {
-            id: agent.id,
-            name: agent.name,
-            session_id: agent.session_id ?? null,
-            project_id: agent.project_id ?? null,
-            last_seen_at: agent.last_seen_at,
-            phase,
-            ...extra,
-          },
-        },
-      });
-    } catch {
-      // Agent registry actions should survive telemetry persistence failures.
-    }
-  }
-
   interface McpArgumentSummary {
     keys: string[];
     shape: unknown;
@@ -1655,123 +1662,16 @@ export function buildServer(): McpServer {
   }
 
   // --- Agent Tools ---
-
-  registerTrackedTool(
-    "register_agent",
-    "Register an agent session. Returns agent_id. Auto-triggers a heartbeat.",
-    {
-      name: z.string(),
-      session_id: z.string().optional(),
-    },
-    async (params) => {
-      const existing = [..._logsAgents.values()].find(
-        (a) => a.name === params.name,
-      );
-      if (existing) {
-        existing.last_seen_at = new Date().toISOString();
-        if (params.session_id) existing.session_id = params.session_id;
-        recordMcpAgentActivity("registered_existing", existing);
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(existing) }],
-        };
-      }
-      const id = Math.random().toString(36).slice(2, 10);
-      const ag: _LogsAgent = {
-        id,
-        name: params.name,
-        session_id: params.session_id,
-        last_seen_at: new Date().toISOString(),
-      };
-      _logsAgents.set(id, ag);
-      recordMcpAgentActivity("registered", ag);
-      return { content: [{ type: "text" as const, text: JSON.stringify(ag) }] };
-    },
-  );
-
-  registerTrackedTool(
-    "heartbeat",
-    "Update last_seen_at to signal agent is active.",
-    {
-      agent_id: z.string(),
-    },
-    async (params) => {
-      const ag = _logsAgents.get(params.agent_id);
-      if (!ag)
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Agent not found: ${params.agent_id}`,
-            },
-          ],
-          isError: true,
-        };
-      ag.last_seen_at = new Date().toISOString();
-      recordMcpAgentActivity("heartbeat", ag);
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify({
-              agent_id: ag.id,
-              last_seen_at: ag.last_seen_at,
-            }),
-          },
-        ],
-      };
-    },
-  );
-
-  registerTrackedTool(
-    "set_focus",
-    "Set active project context for this agent session.",
-    {
-      agent_id: z.string(),
-      project_id: z.string().optional(),
-    },
-    async (params) => {
-      const ag = _logsAgents.get(params.agent_id);
-      if (!ag)
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Agent not found: ${params.agent_id}`,
-            },
-          ],
-          isError: true,
-        };
-      ag.project_id = params.project_id;
-      recordMcpAgentActivity("focus", ag);
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify({
-              agent_id: ag.id,
-              project_id: ag.project_id ?? null,
-            }),
-          },
-        ],
-      };
-    },
-  );
-
-  registerTrackedTool(
-    "list_agents",
-    "List all registered agents.",
-    {},
-    async () => {
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify([..._logsAgents.values()]),
-          },
-        ],
-      };
-    },
-  );
+  // register_agent / heartbeat / set_focus / list_agents via the shared,
+  // persistent @hasna/agent-registry (replaces the hand-rolled in-memory
+  // Map). `send_feedback` stays local below since it persists into logs'
+  // own `feedback` table with a category enum. Lifecycle activity is
+  // mirrored into logs' own durable event store via `agentRegistryEvents`.
+  registerAgentTools(server, {
+    service: "logs",
+    events: agentRegistryEvents,
+    includeFeedback: false,
+  });
 
   registerTrackedTool(
     "storage_status",

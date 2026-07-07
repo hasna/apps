@@ -4,6 +4,10 @@ import { readFileSync } from "node:fs";
 import { registerEventsCommands } from "@hasna/events/commander";
 import { Command } from "commander";
 import { getDb } from "../db/index.ts";
+import {
+  type LogsCloudStore,
+  resolveLogsCloudStore,
+} from "../lib/cloud-store.ts";
 import { runCommand } from "../lib/command-runner.ts";
 import {
   rebuildEventStoreIndex,
@@ -48,7 +52,7 @@ import {
   ingestUniversalEvent,
   validateUniversalEventInput,
 } from "../lib/universal-ingest.ts";
-import type { LogLevel, LogSource } from "../types/index.ts";
+import type { LogLevel, LogRow, LogSource } from "../types/index.ts";
 
 // ── Color helpers ──────────────────────────────────────────
 const C = {
@@ -86,6 +90,16 @@ function colorLevel(level: string): string {
 function resolveProject(nameOrId: string | undefined): string | undefined {
   if (!nameOrId) return undefined;
   return resolveProjectId(getDb(), nameOrId) ?? nameOrId;
+}
+
+/**
+ * Client-flip (self_hosted): returns a cloud store when HASNA_LOGS_STORAGE_MODE=
+ * self_hosted and HASNA_LOGS_API_URL + HASNA_LOGS_API_KEY are set, else null so
+ * the CLI uses its local SQLite store. Throws if cloud is requested but the
+ * config is incomplete (never silent local drift).
+ */
+function logsCloud(): LogsCloudStore | null {
+  return resolveLogsCloudStore();
 }
 
 function resolveExistingProjectId(
@@ -209,20 +223,26 @@ program
   .option("--text <query>", "Full-text search")
   .option("--limit <n>", "Max results", "100")
   .option("--format <fmt>", "Output format: table|json|compact", "table")
-  .action((opts) => {
-    const db = getDb();
-    const since = parseRelativeTime(opts.since);
-    const until = parseRelativeTime(opts.until);
-    const rows = searchLogs(db, {
-      project_id: resolveProject(opts.project),
-      page_id: opts.page,
-      level: opts.level ? (opts.level.split(",") as LogLevel[]) : undefined,
-      service: opts.service,
-      since,
-      until,
-      text: opts.text,
-      limit: Number(opts.limit),
-    });
+  .action(async (opts) => {
+    const cloud = logsCloud();
+    const rows = cloud
+      ? await cloud.list({
+          project_id: opts.project,
+          level: opts.level ? (opts.level.split(",") as LogLevel[]) : undefined,
+          service: opts.service,
+          text: opts.text,
+          limit: Number(opts.limit),
+        })
+      : searchLogs(getDb(), {
+          project_id: resolveProject(opts.project),
+          page_id: opts.page,
+          level: opts.level ? (opts.level.split(",") as LogLevel[]) : undefined,
+          service: opts.service,
+          since: parseRelativeTime(opts.since),
+          until: parseRelativeTime(opts.until),
+          text: opts.text,
+          limit: Number(opts.limit),
+        });
     if (opts.format === "json") {
       console.log(JSON.stringify(rows, null, 2));
       return;
@@ -249,12 +269,11 @@ program
   .description("Show most recent logs")
   .option("--project <name|id>", "Project name or ID")
   .option("--n <count>", "Number of logs", "50")
-  .action((opts) => {
-    const rows = tailLogs(
-      getDb(),
-      resolveProject(opts.project),
-      Number(opts.n),
-    );
+  .action(async (opts) => {
+    const cloud = logsCloud();
+    const rows = cloud
+      ? await cloud.list({ project_id: opts.project, limit: Number(opts.n) })
+      : tailLogs(getDb(), resolveProject(opts.project), Number(opts.n));
     for (const r of rows)
       console.log(colorRow(r.timestamp, r.level, r.service ?? "-", r.message));
   });
@@ -266,13 +285,32 @@ program
   .option("--project <name|id>", "Project name or ID")
   .option("--since <time>", "Relative time (1h, 24h, 7d)", "24h")
   .option("--until <time>", "Upper bound time")
-  .action((opts) => {
-    const summary = summarizeLogs(
-      getDb(),
-      resolveProject(opts.project),
-      parseRelativeTime(opts.since),
-      parseRelativeTime(opts.until),
-    );
+  .action(async (opts) => {
+    const cloud = logsCloud();
+    let summary: { level: string; service: string | null; count: number; latest: string }[];
+    if (cloud) {
+      const rows = await cloud.list({ project_id: opts.project, limit: 100000 });
+      const agg = new Map<string, { level: string; service: string | null; count: number; latest: string }>();
+      for (const r of rows) {
+        if (r.level !== "warn" && r.level !== "error" && r.level !== "fatal") continue;
+        const key = `${r.level} ${r.service ?? "-"}`;
+        const cur = agg.get(key);
+        if (cur) {
+          cur.count += 1;
+          if (r.timestamp > cur.latest) cur.latest = r.timestamp;
+        } else {
+          agg.set(key, { level: r.level, service: r.service, count: 1, latest: r.timestamp });
+        }
+      }
+      summary = [...agg.values()].sort((a, b) => b.count - a.count);
+    } else {
+      summary = summarizeLogs(
+        getDb(),
+        resolveProject(opts.project),
+        parseRelativeTime(opts.since),
+        parseRelativeTime(opts.until),
+      );
+    }
     if (!summary.length) {
       console.log("No errors/warnings in this window.");
       return;
@@ -293,7 +331,20 @@ program
   .option("--service <name>")
   .option("--project <name|id>", "Project name or ID")
   .option("--trace <id>", "Trace ID")
-  .action((message, opts) => {
+  .action(async (message, opts) => {
+    const cloud = logsCloud();
+    if (cloud) {
+      const row = await cloud.create({
+        timestamp: opts.timestamp,
+        level: opts.level as LogLevel,
+        message,
+        service: opts.service,
+        project_id: opts.project,
+        trace_id: opts.trace,
+      });
+      console.log(`Logged: ${row.id}`);
+      return;
+    }
     const row = ingestLog(getDb(), {
       id: opts.id,
       timestamp: opts.timestamp,
@@ -304,6 +355,58 @@ program
       trace_id: opts.trace,
     });
     console.log(`Logged: ${row.id}`);
+  });
+
+// ── logs get ──────────────────────────────────────────────
+program
+  .command("get <id>")
+  .description("Fetch one log entry by id")
+  .option("--format <fmt>", "Output format: json|table", "json")
+  .action(async (id, opts) => {
+    const cloud = logsCloud();
+    const row = cloud
+      ? await cloud.get(id)
+      : ((getDb()
+          .prepare(
+            "SELECT id, timestamp, project_id, page_id, level, source, service, message, trace_id, session_id, agent, url, stack_trace, metadata FROM logs WHERE id = ?",
+          )
+          .get(id) as LogRow | null) ?? null);
+    if (!row) {
+      console.error(`Log not found: ${id}`);
+      process.exitCode = 1;
+      return;
+    }
+    if (opts.format === "table") {
+      console.log(colorRow(row.timestamp, row.level, row.service ?? "-", row.message));
+      return;
+    }
+    console.log(JSON.stringify(row, null, 2));
+  });
+
+// ── logs delete ───────────────────────────────────────────
+program
+  .command("delete <id>")
+  .alias("rm")
+  .description("Delete one log entry by id")
+  .action(async (id) => {
+    const cloud = logsCloud();
+    if (cloud) {
+      const ok = await cloud.delete(id);
+      if (!ok) {
+        console.error(`Log not found: ${id}`);
+        process.exitCode = 1;
+        return;
+      }
+      console.log(`Deleted: ${id}`);
+      return;
+    }
+    const res = getDb().run("DELETE FROM logs WHERE id = ?", [id]);
+    if (!res.changes) {
+      console.error(`Log not found: ${id}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`Deleted: ${id}`);
   });
 
 // ── logs import-jsonl ─────────────────────────────────────
@@ -1345,15 +1448,48 @@ program
   .option("--until <time>", "Until")
   .option("--group-by <field>", "Breakdown: level | service")
   .action(async (opts) => {
-    const { countLogs } = await import("../lib/count.ts");
-    const result = countLogs(getDb(), {
-      project_id: resolveProject(opts.project),
-      service: opts.service,
-      level: opts.level,
-      since: opts.since,
-      until: opts.until,
-      group_by: opts.groupBy as "level" | "service" | undefined,
-    });
+    const cloud = logsCloud();
+    let result: {
+      total: number;
+      errors: number;
+      warns: number;
+      fatals: number;
+      by_level: Record<string, number>;
+      by_service?: Record<string, number>;
+    };
+    if (cloud) {
+      const rows = await cloud.list({
+        project_id: opts.project,
+        service: opts.service,
+        level: opts.level ? (opts.level as LogLevel) : undefined,
+        limit: 100000,
+      });
+      const by_level: Record<string, number> = {};
+      const by_service: Record<string, number> = {};
+      for (const r of rows) {
+        by_level[r.level] = (by_level[r.level] ?? 0) + 1;
+        const svc = r.service ?? "-";
+        by_service[svc] = (by_service[svc] ?? 0) + 1;
+      }
+      result = {
+        total: rows.length,
+        errors: by_level.error ?? 0,
+        warns: by_level.warn ?? 0,
+        fatals: by_level.fatal ?? 0,
+        by_level,
+        ...(opts.groupBy === "service" ? { by_service } : {}),
+      };
+    } else {
+      const { countLogs } = await import("../lib/count.ts");
+      result = countLogs(getDb(), {
+        project_id: resolveProject(opts.project),
+        service: opts.service,
+        level: opts.level,
+        since: opts.since,
+        until: opts.until,
+        group_by: opts.groupBy as "level" | "service" | undefined,
+      });
+    }
     console.log(
       `Total: ${result.total}  ${C.red}Errors: ${result.errors}${C.reset}  ${C.yellow}Warns: ${result.warns}${C.reset}  Fatals: ${result.fatals}`,
     );
@@ -1382,6 +1518,42 @@ program
   .option("--output <file>", "Output file (default: stdout)")
   .option("--limit <n>", "Max rows", "100000")
   .action(async (opts) => {
+    const cloud = logsCloud();
+    if (cloud) {
+      const { writeFileSync } = await import("node:fs");
+      const rows = await cloud.list({
+        project_id: opts.project,
+        level: opts.level ? (opts.level as LogLevel) : undefined,
+        service: opts.service,
+        limit: Number(opts.limit),
+      });
+      let payload: string;
+      if (opts.format === "csv") {
+        const cols = [
+          "id",
+          "timestamp",
+          "level",
+          "service",
+          "message",
+          "trace_id",
+        ];
+        const esc = (v: unknown) =>
+          `"${String(v ?? "").replace(/"/g, '""')}"`;
+        payload = `${cols.join(",")}\n${rows
+          .map((r) => cols.map((c) => esc((r as unknown as Record<string, unknown>)[c])).join(","))
+          .join("\n")}\n`;
+      } else {
+        payload = `${JSON.stringify(rows, null, 2)}\n`;
+      }
+      if (opts.output) {
+        writeFileSync(opts.output, payload);
+        console.error(`Exported ${rows.length} log(s) to ${opts.output}`);
+      } else {
+        process.stdout.write(payload);
+        process.stderr.write(`\nExported ${rows.length} log(s)\n`);
+      }
+      return;
+    }
     const { exportToCsv, exportToJson } = await import("../lib/export.ts");
     const { createWriteStream } = await import("node:fs");
     const db = getDb();
@@ -1419,7 +1591,48 @@ program
     "Volume overview: count, DB size, timeline, top services, error rate",
   )
   .option("--project <name|id>", "Scope to a project")
-  .action((opts) => {
+  .action(async (opts) => {
+    const cloud = logsCloud();
+    if (cloud) {
+      const rows = await cloud.list({ project_id: opts.project, limit: 100000 });
+      const total = rows.length;
+      const byLevel: Record<string, number> = {};
+      const byService: Record<string, number> = {};
+      let oldest: string | null = null;
+      let newest: string | null = null;
+      for (const r of rows) {
+        byLevel[r.level] = (byLevel[r.level] ?? 0) + 1;
+        const svc = r.service ?? "-";
+        byService[svc] = (byService[svc] ?? 0) + 1;
+        if (r.timestamp) {
+          if (oldest === null || r.timestamp < oldest) oldest = r.timestamp;
+          if (newest === null || r.timestamp > newest) newest = r.timestamp;
+        }
+      }
+      const errors = byLevel.error ?? 0;
+      const fatals = byLevel.fatal ?? 0;
+      const errorRate = total > 0 ? (((errors + fatals) / total) * 100).toFixed(2) : "0.00";
+      console.log(
+        `\n${C.bold}Log Volume Stats${C.reset}${opts.project ? ` [${opts.project}]` : ""} ${C.dim}(cloud)${C.reset}`,
+      );
+      console.log(`  Total:      ${total.toLocaleString()}`);
+      console.log(`  Oldest:     ${oldest?.slice(0, 19) ?? "-"}`);
+      console.log(`  Newest:     ${newest?.slice(0, 19) ?? "-"}`);
+      console.log(`  Error rate: ${errorRate}%  (${errors} errors, ${fatals} fatals)`);
+      const levels = Object.entries(byLevel).sort((a, b) => b[1] - a[1]);
+      if (levels.length) {
+        console.log(`\n${C.bold}By Level:${C.reset}`);
+        for (const [lvl, c] of levels) console.log(`  ${colorLevel(lvl)}  ${c.toLocaleString()}`);
+      }
+      const services = Object.entries(byService).sort((a, b) => b[1] - a[1]).slice(0, 5);
+      if (services.length) {
+        console.log(`\n${C.bold}Top Services:${C.reset}`);
+        for (const [svc, c] of services)
+          console.log(`  ${C.cyan}${pad(svc, 20)}${C.reset}  ${c.toLocaleString()}`);
+      }
+      console.log("");
+      return;
+    }
     const db = getDb();
     const projectId = resolveProject(opts.project);
     const pFilter = projectId
