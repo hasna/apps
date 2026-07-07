@@ -563,6 +563,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["email", "sms", "marketing"],
   },
   {
+    name: "userlist",
+    displayName: "Userlist",
+    description: "Behavioral email marketing and lifecycle messaging platform",
+    category: "Communication",
+    tags: ["email", "marketing", "automation", "lifecycle"],
+  },
+  {
     name: "vero",
     displayName: "Vero",
     description: "Behavioral email marketing and automation",
