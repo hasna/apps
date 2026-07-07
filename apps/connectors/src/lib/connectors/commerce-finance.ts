@@ -353,6 +353,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["blockchain", "tokenization", "enterprise", "web3", "assets"],
   },
   {
+    name: "spotpay",
+    displayName: "SpotPay",
+    description: "Global stablecoin neobank",
+    category: "Commerce & Finance",
+    tags: ["fintech", "payments", "stablecoin", "banking"],
+  },
+  {
     name: "tdameritrade",
     displayName: "TD Ameritrade",
     description: "Brokerage and trading platform API for market data, orders, and account management",

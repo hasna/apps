@@ -170,6 +170,10 @@ export const TEST_ENDPOINTS: Record<string, TestEndpoint> = {
     url: "https://api.mercury.com/api/v1/accounts",
     headers: (key) => ({ Authorization: `Bearer ${key}` }),
   },
+  spotpay: {
+    url: "https://api.spotpay.com/v1/account",
+    headers: (key) => ({ Authorization: `Bearer ${key}` }),
+  },
   pandadoc: {
     url: "https://api.pandadoc.com/public/v1/documents?count=1",
     headers: (key) => ({ Authorization: `API-Key ${key}` }),
