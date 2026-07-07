@@ -1,0 +1,32 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "todos",
+  "class": "service",
+  "contractVersion": "v1",
+  "kitVersion": "0.4.1",
+  "description": "Universal task management for AI coding agents. CLI + MCP + HTTP API (todos-serve) + generated SDK. Cloud mode (HASNA_TODOS_STORAGE_MODE=remote / HASNA_TODOS_DATABASE_URL set) is PURE REMOTE per Amendment A1: the serve process reads/writes the shared cloud Postgres directly with API-key auth via @hasna/contracts.",
+  "bins": ["todos", "todos-mcp", "todos-serve"],
+  "storage": {
+    "mode": "local",
+    "envPrefix": "HASNA_TODOS_",
+    "aliasEnvPrefix": "TODOS_",
+    "databaseUrlSecretRef": "hasna/oss/todos/database-url",
+    "sqlitePath": "~/.hasna/todos/todos.db"
+  },
+  "metadata": {
+    "service": {
+      "port": 19427,
+      "healthPath": "/health",
+      "readyPath": "/ready",
+      "versionPath": "/version",
+      "openapiPath": "/openapi.json",
+      "apiVersion": "v1",
+      "auth": "api-key",
+      "signingSecretSecretRef": "hasna/oss/todos/api-key-signing-secret"
+    },
+    "client": {
+      "apiUrlEnv": "TODOS_API_URL",
+      "apiKeyEnv": "TODOS_API_KEY"
+    }
+  }
+}

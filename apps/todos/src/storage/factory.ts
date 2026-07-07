@@ -7,7 +7,14 @@ import {
 import { createPostgresTodosStorageAdapter } from "./postgres-adapter.js";
 import type { PostgresTodosSyncStore, TodosPostgresQueryClient } from "./postgres-sync.js";
 import {
+  createShadowTodosStorageAdapter,
+  type CreateShadowTodosStorageAdapterOptions,
+} from "./shadow.js";
+import { createTodosCloudQueryClientFromEnv } from "./cloud-client.js";
+import {
   assertTodosRemoteStorageConfig,
+  assertTodosShadowConfig,
+  isTodosShadowEnabled,
   loadTodosStorageConfig,
   type TodosStorageConfig,
   type TodosStorageEnv,
@@ -22,11 +29,15 @@ export interface CreateTodosStorageAdapterOptions {
   postgresClient?: TodosPostgresQueryClient;
   postgresSyncStore?: PostgresTodosSyncStore;
   hybrid?: Omit<CreateHybridTodosStorageAdapterOptions, "local" | "postgresClient" | "syncStore">;
+  shadow?: Omit<CreateShadowTodosStorageAdapterOptions, "local" | "localAdapter" | "postgresClient" | "syncStore">;
 }
 
 export function createTodosStorageAdapter(options: CreateTodosStorageAdapterOptions = {}): TodosStorageAdapter {
   const config = options.config ?? loadTodosStorageConfig(options.env);
-  if (config.mode === "local") return createLocalSqliteTodosStorageAdapter(options.local);
+  if (config.mode === "local") {
+    if (isTodosShadowEnabled(options.env)) return createShadowAdapter(options, config);
+    return createLocalSqliteTodosStorageAdapter(options.local);
+  }
 
   assertTodosRemoteStorageConfig(config);
 
@@ -42,6 +53,26 @@ export function createTodosStorageAdapter(options: CreateTodosStorageAdapterOpti
   }
   assertRemoteAdapterCapabilities(adapter, config.mode);
   return adapter;
+}
+
+function createShadowAdapter(
+  options: CreateTodosStorageAdapterOptions,
+  config: TodosStorageConfig,
+): TodosStorageAdapter {
+  assertTodosShadowConfig(config, options.env);
+  const postgresClient = options.postgresClient ?? createTodosCloudQueryClientFromEnv(options.env);
+  if (!options.postgresSyncStore && !postgresClient) {
+    throw new Error(
+      "shadow mirror requires a remote database URL or an injected Postgres client",
+    );
+  }
+  return createShadowTodosStorageAdapter({
+    ...(options.shadow ?? {}),
+    ...(options.local ? { local: options.local } : {}),
+    ...(options.postgresSyncStore ? { syncStore: options.postgresSyncStore } : {}),
+    ...(postgresClient ? { postgresClient } : {}),
+    ...(options.hybrid?.sourceMachineId ? { sourceMachineId: options.hybrid.sourceMachineId } : {}),
+  });
 }
 
 function createImplicitPostgresAdapter(options: CreateTodosStorageAdapterOptions): TodosStorageAdapter | null {

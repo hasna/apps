@@ -94,7 +94,13 @@ describe("todos MCP HTTP transport", () => {
   it("GET /health returns 200 from todos-serve", async () => {
     const res = await fetch(`http://127.0.0.1:${port}/health`);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ status: "ok", name: "todos" });
+    // Standard service-surface probe shape: {status,version,mode,name}. Without a
+    // remote DATABASE_URL the serve reports local mode.
+    const body = await res.json();
+    expect(body.status).toBe("ok");
+    expect(body.name).toBe("todos");
+    expect(body.mode).toBe("local");
+    expect(typeof body.version).toBe("string");
   });
 
   it("handles initialize + tools/list over Streamable HTTP on todos-serve", async () => {

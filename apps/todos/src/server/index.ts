@@ -69,7 +69,28 @@ async function findFreePort(start: number): Promise<number> {
   return start; // fallback
 }
 
+async function runMigrate(): Promise<void> {
+  const { ensureCloudSchema, pingCloud, resolveCloudDatabaseUrl, closeCloud } = await import("./cloud.js");
+  if (!resolveCloudDatabaseUrl()) {
+    console.error("migrate: no database URL (HASNA_TODOS_DATABASE_URL / TODOS_DATABASE_URL / DATABASE_URL)");
+    process.exit(2);
+  }
+  console.log("migrate: connecting…");
+  await pingCloud();
+  console.log("migrate: applying schema (sync tables + api_keys)…");
+  await ensureCloudSchema();
+  console.log("migrate: done");
+  await closeCloud();
+  process.exit(0);
+}
+
 async function main() {
+  // One-shot schema migration (used by the ECS migration task):
+  //   todos-serve migrate
+  if (process.argv.includes("migrate")) {
+    await runMigrate();
+    return;
+  }
   if (hasVersionFlag()) {
     console.log(getPackageVersion());
     return;
@@ -78,16 +99,20 @@ async function main() {
     printHelp();
     return;
   }
-  const requestedPort = parsePort();
-  const port = await findFreePort(requestedPort);
+  // When PORT is set (container/service deployment) bind it EXACTLY — never scan
+  // for a free port, or the ALB health check would target the wrong port.
+  const explicitPortArg = process.argv.some((a) => a === "--port" || a.startsWith("--port="));
+  const envPort = process.env.PORT ? parseInt(process.env.PORT, 10) : undefined;
+  const requestedPort = explicitPortArg ? parsePort() : (envPort ?? parsePort());
+  const port = envPort || explicitPortArg ? requestedPort : await findFreePort(requestedPort);
   if (port !== requestedPort) {
     console.log(`Port ${requestedPort} in use, using ${port}`);
   }
-  const noOpen = process.argv.includes("--no-open") || process.env["TODOS_NO_OPEN"] === "true";
+  const noOpen = process.argv.includes("--no-open") || process.env["TODOS_NO_OPEN"] === "true" || Boolean(envPort);
   const { startServer } = await import("./serve.js");
   startServer(port, {
     open: !noOpen,
-    host: parseStringArg("--host"),
+    host: parseStringArg("--host") || process.env.HOST,
     apiKey: parseStringArg("--api-key"),
   });
 }

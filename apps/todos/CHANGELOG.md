@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.75] - 2026-07-05
+
+### Added
+- `todos doctor routing` — deterministic routing-metadata drift detection (wrong/null `working_dir`, null/unresolvable `task_list_id`, invalid project paths, cross-repo intent, no-auto conflicts) with per-finding `repair_class` (`safe_auto` | `blocker_*` | `unsupported`), project-stable `--shard i/N` scoping, and a machine-consumable `--json` contract (`todos.routing_doctor.v1`) with documented exit codes (0 clean / 1 findings / 2 invalid invocation).
+- `todos doctor routing --apply` — safe repairs for `safe_auto` findings only, via supported update paths (no raw DB edits), with a DB backup, per-task evidence comments, and an undo record carrying real per-repair undo commands.
+- `todos update --working-dir <path>`, `--clear-working-dir`, and `--clear-list` — first-class routing-metadata repair and null-reset flags for existing tasks; `--list` now resolves exact UUID → partial UUID → project-scoped slug (UUID authoritative) and errors on unresolvable references instead of silently succeeding.
+- `scripts/routing-health-scan.mjs` — deterministic OpenLoops command-loop consumer of the doctor JSON (deduped per-scope task upserts), and `scripts/routing-remediation.workflow.json` — validated planner → worker → adversarial-reviewer remediation workflow spec.
+
+### Fixed
+- `doctor routing --apply`/`--fix` reached the subcommand as a silent dry-run (Commander actionable-parent option shadowing); the flags now apply and are guarded by a CLI-level end-to-end regression test.
+- Multi-megabyte `doctor routing --json` reports intermittently truncated when stdout was a pipe; now emitted through the flush-safe writer.
+
+## [0.11.74] - 2026-07-05
+
+### Fixed
+- Task `route_state` made authoritative and aligned with the OpenLoops drain: the `auto:route`/`route:enabled` tag authorizes routing when `route_enabled` is unset; explicit denies and `no-auto` still deny. Added `route_class`, route evidence, and optional project-root verification (backfilled entry for the #37/#38 release).
+
 ## [0.11.73] - 2026-07-03
 
 ### Fixed

@@ -42,6 +42,7 @@ export interface TodosStorageConfig {
 
 export const TODOS_STORAGE_ENV = {
   mode: "HASNA_TODOS_STORAGE_MODE",
+  shadow: "HASNA_TODOS_SHADOW",
   databaseUrl: "HASNA_TODOS_DATABASE_URL",
   databaseSsl: "HASNA_TODOS_DATABASE_SSL",
   databaseSchema: "HASNA_TODOS_DATABASE_SCHEMA",
@@ -59,6 +60,7 @@ export const TODOS_STORAGE_ENV = {
 
 export const TODOS_STORAGE_FALLBACK_ENV = {
   mode: "TODOS_STORAGE_MODE",
+  shadow: "TODOS_SHADOW",
   databaseUrl: "TODOS_DATABASE_URL",
   databaseSsl: "TODOS_DATABASE_SSL",
   databaseSchema: "TODOS_DATABASE_SCHEMA",
@@ -165,6 +167,35 @@ export function getTodosStorageMode(env: TodosStorageEnv = process.env): TodosSt
 
 export function getStorageMode(env: TodosStorageEnv = process.env): TodosStorageMode {
   return getTodosStorageMode(env);
+}
+
+/**
+ * Dual-write shadow mode. When enabled, local SQLite stays the sole source of
+ * truth for reads AND writes; every successful local write is asynchronously
+ * mirrored to the remote Postgres sync tables (fire-and-forget with retries).
+ * NOTHING is ever read from the remote store while shadow mode is active — it
+ * is a pure pre-cutover mirror for validating divergence, per Amendment A1.
+ */
+export function isTodosShadowEnabled(env: TodosStorageEnv = process.env): boolean {
+  return parseBoolean(readStorageEnv(env, "shadow").value, false);
+}
+
+export function getTodosStorageShadowEnvName(env: TodosStorageEnv = process.env): string {
+  return readStorageEnv(env, "shadow").name;
+}
+
+export function assertTodosShadowConfig(config: TodosStorageConfig, env: TodosStorageEnv = process.env): void {
+  if (!isTodosShadowEnabled(env)) return;
+  if (config.mode !== "local") {
+    throw new Error(
+      `${readStorageEnv(env, "shadow").name} shadow mirror requires ${TODOS_STORAGE_ENV.mode}=local (got ${config.mode})`,
+    );
+  }
+  if (!config.database?.url) {
+    throw new Error(
+      `${TODOS_STORAGE_ENV.databaseUrl} is required when ${readStorageEnv(env, "shadow").name} is enabled`,
+    );
+  }
 }
 
 export function getTodosStorageDatabaseEnv(env: TodosStorageEnv = process.env): string {

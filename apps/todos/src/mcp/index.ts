@@ -302,6 +302,11 @@ async function main() {
   const portRequested = process.argv.some((arg) => arg === "--port" || arg.startsWith("--port="));
   if (!isHttpMode() && !portRequested) {
     const server = buildServer();
+    // Durable dual-write shadow: long-running stdio MCP drains the outbox.
+    try {
+      const { startRuntimeShadowDrain } = await import("../storage/shadow-runtime.js");
+      startRuntimeShadowDrain(getDatabase());
+    } catch { /* shadow disabled or unavailable — local writes stay durable */ }
     const transport = new StdioServerTransport();
     await server.connect(transport);
     return;
