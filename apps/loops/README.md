@@ -597,13 +597,20 @@ matching rule wins. Rule profiles become a Codewith auth-profile pool for
 can also carry `provider_hint`/`route_provider`, `auth_profile_pool`, or
 `account_pool` metadata. Dry-run, drain evidence, and route invocation scope
 include `providerRouting` so operators can see why a provider/account was
-selected.
+selected. Selector values may contain `:`; the parser treats the colon before a
+supported provider id as the route delimiter, so exact tag selectors such as
+`tags=area:frontend:claude:account003,account015` and
+`tags=provider:claude-code:claude:account003,account015` match literal task
+tags `area:frontend` and `provider:claude-code`.
 
 ```bash
 loops routes drain todos-task \
   --dry-run \
+  --provider-rule tags=area:frontend:claude:account003,account015 \
+  --provider-rule tags=provider:claude-code:claude:account003,account015 \
   --provider-rule area=frontend:claude:claude-ui-a,claude-ui-b \
   --provider-rule area=backend:codewith:account001,account002 \
+  --provider-rule tags=task-lifecycle:codewith:account001,account002 \
   --worktree-mode required
 ```
 

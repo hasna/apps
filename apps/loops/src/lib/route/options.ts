@@ -93,7 +93,7 @@ const AGENT_ROUTING_OPTION_SPECS: RouteOptionSpec[] = [
     flags: "--provider-rule <rule>",
     key: "providerRule",
     kind: "repeat",
-    description: "task/event metadata provider routing rule field=value:provider[:profile1,profile2]; may be repeated",
+    description: "task/event metadata provider routing rule field=value:provider[:profile1,profile2]; values may contain ':' when followed by a supported provider",
   },
   { flags: "--auth-profile <profile>", key: "authProfile", kind: "value", description: "provider-native auth profile; currently supported for codewith" },
   { flags: "--auth-profile-pool <profiles>", key: "authProfilePool", kind: "value", description: "comma-separated provider-native auth profile pool" },
