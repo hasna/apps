@@ -6,7 +6,6 @@ import {
   createDomain,
   getDomainDetails,
   getDomainByName,
-  listDomains,
   updateDomain,
   markDomainPremium,
   createDomainOffer,
@@ -14,12 +13,19 @@ import {
   listDomainEmailLinks,
   linkDomainEmail,
   recordDomainPurchase,
-  deleteDomain,
   searchDomains,
   listExpiring,
   getDomainStats,
   exportPortfolio, checkAllDomains, whoisLookup,
 } from "../../db/domains.js";
+import {
+  createDomain as createDomainRouted,
+  getDomain as getDomainRouted,
+  listDomains as listDomainsRouted,
+  updateDomain as updateDomainRouted,
+  deleteDomain as deleteDomainRouted,
+  isCloudMode,
+} from "../../db/cloud-store.js";
 import { getAvailableProviders, getRegistrarProvider, getDnsProvider, getDomainInventoryProvider, providerHasInventory, autoDetectRegistrar } from "../../lib/registrar.js";
 import { loadConfig, resolveContact, applyPurchaseProfile } from "../../lib/config.js";
 import { registerDomain, checkAvailability, getRegistrationStatus, createHostedZone, updateNameservers } from "../../lib/route53.js";
@@ -78,7 +84,7 @@ export function registerDomainCommand(program: Command): void {
     .option("--all", "Show all matching domains")
     .option("--verbose", "Show registrar, expiry, and notes columns")
     .option("-j, --json", "Output JSON")
-    .action((opts: { status?: string; registrar?: string; premium?: boolean; limit?: string; offset?: string; all?: boolean; verbose?: boolean; json?: boolean }) => {
+    .action(async (opts: { status?: string; registrar?: string; premium?: boolean; limit?: string; offset?: string; all?: boolean; verbose?: boolean; json?: boolean }) => {
       let limit: number | undefined;
       let offset: number;
       try {
@@ -96,8 +102,8 @@ export function registerDomainCommand(program: Command): void {
       };
       const jsonPaging = !opts.all && (opts.limit !== undefined || offset > 0) ? { limit, offset } : {};
       const domains = opts.json
-        ? listDomains({ ...filters, ...jsonPaging })
-        : listDomains(filters);
+        ? await listDomainsRouted({ ...filters, ...jsonPaging })
+        : await listDomainsRouted(filters);
 
       if (opts.json) {
         console.log(JSON.stringify({ domains, count: domains.length, limit: limit ?? null, offset }, null, 2));
@@ -124,8 +130,13 @@ export function registerDomainCommand(program: Command): void {
     .command("get <identifier>")
     .description("Get a domain by ID or name")
     .option("-j, --json", "Output JSON")
-    .action((identifier: string, opts: { json?: boolean }) => {
-      const details = getDomainDetails(identifier);
+    .action(async (identifier: string, opts: { json?: boolean }) => {
+      const details = isCloudMode()
+        ? await (async () => {
+            const d = await getDomainRouted(identifier);
+            return d ? { domain: d, offers: [] as never[], emails: [] as never[] } : null;
+          })()
+        : getDomainDetails(identifier);
       if (!details) { console.error(`Domain '${identifier}' not found.`); process.exit(1); }
       if (opts.json) { console.log(JSON.stringify(details, null, 2)); return; }
       const d = details.domain;
@@ -184,7 +195,7 @@ export function registerDomainCommand(program: Command): void {
     .option("--purchase-date <date>", "Purchase date (ISO or YYYY-MM-DD)")
     .option("--notes <text>", "Notes")
     .option("-j, --json", "Output JSON")
-    .action((opts: {
+    .action(async (opts: {
       name: string;
       registrar?: string;
       status: string;
@@ -200,7 +211,7 @@ export function registerDomainCommand(program: Command): void {
       const premiumPrice = parseOptionalNumber(opts.premiumPrice, "--premium-price");
       const standardPrice = parseOptionalNumber(opts.standardPrice, "--standard-price");
       const purchasePrice = parseOptionalNumber(opts.purchasePrice, "--purchase-price");
-      const d = createDomain({
+      const d = await createDomainRouted({
         name: opts.name, registrar: opts.registrar,
         status: opts.status as (typeof DOMAIN_STATUSES)[number],
         expires_at: opts.expires,
@@ -230,7 +241,7 @@ export function registerDomainCommand(program: Command): void {
     .option("--purchase-date <date>", "Purchase date")
     .option("--notes <text>", "Notes")
     .option("-j, --json", "Output JSON")
-    .action((id: string, opts: {
+    .action(async (id: string, opts: {
       registrar?: string;
       status?: string;
       expires?: string;
@@ -245,7 +256,7 @@ export function registerDomainCommand(program: Command): void {
       const premiumPrice = parseOptionalNumber(opts.premiumPrice, "--premium-price");
       const standardPrice = parseOptionalNumber(opts.standardPrice, "--standard-price");
       const purchasePrice = parseOptionalNumber(opts.purchasePrice, "--purchase-price");
-      const d = updateDomain(id, {
+      const d = await updateDomainRouted(id, {
         registrar: opts.registrar,
         status: opts.status as (typeof DOMAIN_STATUSES)[number] | undefined,
         expires_at: opts.expires,
@@ -268,7 +279,7 @@ export function registerDomainCommand(program: Command): void {
     .description("Delete a domain from the portfolio")
     .option("-f, --force", "Required confirmation for destructive delete")
     .option("-j, --json", "Output JSON")
-    .action((id: string, opts: { force?: boolean; json?: boolean }) => {
+    .action(async (id: string, opts: { force?: boolean; json?: boolean }) => {
       if (!opts.force) {
         const message = `Refusing to delete domain '${id}' without --force.`;
         if (opts.json) {
@@ -280,7 +291,7 @@ export function registerDomainCommand(program: Command): void {
         process.exit(1);
       }
 
-      const deleted = deleteDomain(id);
+      const deleted = await deleteDomainRouted(id);
       if (!deleted) {
         const message = `Domain '${id}' not found.`;
         if (opts.json) {

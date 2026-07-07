@@ -4,6 +4,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import {
+  createDomain as createDomainRouted,
+  listDomains as listDomainsRouted,
+  updateDomain as updateDomainRouted,
+  deleteDomain as deleteDomainRouted,
+} from "../db/cloud-store.js";
+import {
   DOMAIN_EMAIL_TYPES,
   DOMAIN_OFFER_STATUSES,
   DOMAIN_STATUSES,
@@ -11,7 +17,6 @@ import {
   getDomain,
   getDomainDetails,
   getDomainByIdentifier,
-  listDomains,
   updateDomain,
   markDomainPremium,
   createDomainOffer,
@@ -20,7 +25,6 @@ import {
   recordDomainPurchase,
   linkDomainEmail,
   listDomainEmailLinks,
-  deleteDomain,
   countDomains,
   searchDomains,
   getByRegistrar,
@@ -388,7 +392,7 @@ server.registerTool(
     },
   },
   async (params) => {
-    const domain = createDomain(params);
+    const domain = await createDomainRouted(params);
     return { content: [{ type: "text", text: JSON.stringify(domain, null, 2) }] };
   }
 );
@@ -424,7 +428,7 @@ server.registerTool(
   },
   async (params) => {
     const { limit, offset, all, verbose, ...filters } = params;
-    const domains = listDomains(filters);
+    const domains = await listDomainsRouted(filters);
     return pagedJson("domains", domains, { limit, offset, all, verbose }, compactDomain, "domain(s)", "Set verbose=true or call get_domain for full details.");
   }
 );
@@ -454,7 +458,7 @@ server.registerTool(
     },
   },
   async ({ id, ...input }) => {
-    const domain = updateDomain(id, input);
+    const domain = await updateDomainRouted(id, input);
     if (!domain) {
       return { content: [{ type: "text", text: `Domain '${id}' not found.` }], isError: true };
     }
@@ -623,7 +627,7 @@ server.registerTool(
     inputSchema: { id: z.string() },
   },
   async ({ id }) => {
-    const deleted = deleteDomain(id);
+    const deleted = await deleteDomainRouted(id);
     return { content: [{ type: "text", text: JSON.stringify({ id, deleted }) }] };
   }
 );
