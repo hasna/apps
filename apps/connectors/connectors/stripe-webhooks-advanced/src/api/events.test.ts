@@ -37,6 +37,24 @@ describe('EventsApi', () => {
     expect(url).toContain('limit=10');
   });
 
+  test('list encodes nested created and array filters', async () => {
+    mockFetch({ object: 'list', data: [], has_more: false, url: '/v1/events' });
+    await events.list({
+      created: { gte: 1700000000, lt: 1700000300 },
+      delivery_success: false,
+      types: ['invoice.paid', 'charge.succeeded'],
+    });
+
+    const [url] = (global.fetch as ReturnType<typeof mock>).mock.calls[0];
+    const searchParams = new URL(url).searchParams;
+    expect(searchParams.get('created[gte]')).toBe('1700000000');
+    expect(searchParams.get('created[lt]')).toBe('1700000300');
+    expect(searchParams.get('delivery_success')).toBe('false');
+    expect(searchParams.get('types[0]')).toBe('invoice.paid');
+    expect(searchParams.get('types[1]')).toBe('charge.succeeded');
+    expect(url).not.toContain('[object');
+  });
+
   test('get calls GET /events/:id', async () => {
     mockFetch({ id: 'evt_123', object: 'event' });
     await events.get('evt_123');

@@ -1,4 +1,4 @@
-import type { ConnectorConfig } from '../types';
+import type { ConnectorConfig, QueryParams, QueryParamValue } from '../types';
 import { ConnectorApiError } from '../types';
 
 const DEFAULT_BASE_URL = 'https://api.stripe.com/v1';
@@ -6,7 +6,7 @@ const DEFAULT_API_VERSION = '2025-01-27.acacia';
 
 export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
-  params?: Record<string, string | number | boolean | undefined>;
+  params?: QueryParams;
   body?: Record<string, unknown> | unknown[] | string;
   headers?: Record<string, string>;
 }
@@ -37,6 +37,24 @@ function encodeFormData(data: Record<string, unknown>, prefix = ''): string {
   return parts.filter(Boolean).join('&');
 }
 
+function appendSearchParam(searchParams: URLSearchParams, key: string, value: QueryParamValue): void {
+  if (value === undefined || value === null || value === '') return;
+
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => appendSearchParam(searchParams, `${key}[${index}]`, item));
+    return;
+  }
+
+  if (typeof value === 'object') {
+    Object.entries(value).forEach(([childKey, childValue]) => {
+      appendSearchParam(searchParams, `${key}[${childKey}]`, childValue);
+    });
+    return;
+  }
+
+  searchParams.append(key, String(value));
+}
+
 export class ConnectorClient {
   private readonly apiKey: string;
   private readonly baseUrl: string;
@@ -57,15 +75,13 @@ export class ConnectorClient {
     }
   }
 
-  private buildUrl(path: string, params?: Record<string, string | number | boolean | undefined>): string {
+  private buildUrl(path: string, params?: QueryParams): string {
     const normalizedPath = path.startsWith('/') ? path : `/${path}`;
     const url = new URL(`${this.baseUrl}${normalizedPath}`);
 
     if (params) {
       Object.entries(params).forEach(([key, value]) => {
-        if (value !== undefined && value !== null && value !== '') {
-          url.searchParams.append(key, String(value));
-        }
+        appendSearchParam(url.searchParams, key, value);
       });
     }
 
@@ -136,19 +152,19 @@ export class ConnectorClient {
     return data as T;
   }
 
-  async get<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
+  async get<T>(path: string, params?: QueryParams): Promise<T> {
     return this.request<T>(path, { method: 'GET', params });
   }
 
   async post<T>(
     path: string,
     body?: Record<string, unknown> | string,
-    params?: Record<string, string | number | boolean | undefined>,
+    params?: QueryParams,
   ): Promise<T> {
     return this.request<T>(path, { method: 'POST', body, params });
   }
 
-  async delete<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
+  async delete<T>(path: string, params?: QueryParams): Promise<T> {
     return this.request<T>(path, { method: 'DELETE', params });
   }
 

@@ -11,6 +11,9 @@ export interface ConnectorConfig {
 export type OutputFormat = 'json' | 'pretty';
 
 export type Metadata = Record<string, string>;
+export type QueryParamPrimitive = string | number | boolean;
+export type QueryParamValue = QueryParamPrimitive | QueryParamValue[] | { [key: string]: QueryParamValue } | null | undefined;
+export type QueryParams = Record<string, QueryParamValue>;
 
 export interface StripeList<T> {
   object: 'list';
@@ -109,7 +112,7 @@ export interface VerifyResult {
 export interface RawRequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
   path: string;
-  params?: Record<string, string | number | boolean | undefined>;
+  params?: QueryParams;
   body?: Record<string, unknown> | string;
 }
 
