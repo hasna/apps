@@ -13,9 +13,7 @@ import {
   getScenario,
   getScenarioByShortId,
   listScenarios,
-  countScenarios,
   updateScenario,
-  deleteScenario,
 } from "../db/scenarios.js";
 import { getRun, listRuns, countRuns } from "../db/runs.js";
 import { getResultsByRun } from "../db/results.js";
@@ -72,17 +70,11 @@ import {
 import type { AIProvider } from "../lib/ai-client.js";
 
 import {
-  createProject,
   getProject,
-  listProjects,
-  ensureProject,
 } from "../db/projects.js";
 import {
-  createPersona,
-  countPersonas,
   getPersona,
   listPersonas,
-  deletePersona,
 } from "../db/personas.js";
 // Client storage resolver / facade: routes the user-facing persona CRUD commands
 // to the cloud /v1 API when HASNA_TESTERS_STORAGE_MODE=self_hosted + API_URL +
@@ -93,6 +85,18 @@ import {
   listPersonas as storeListPersonas,
   countPersonas as storeCountPersonas,
   deletePersona as storeDeletePersona,
+  createScenario as storeCreateScenario,
+  getScenario as storeGetScenario,
+  getScenarioByShortId as storeGetScenarioByShortId,
+  listScenarios as storeListScenarios,
+  countScenarios as storeCountScenarios,
+  updateScenario as storeUpdateScenario,
+  deleteScenario as storeDeleteScenario,
+  createProject as storeCreateProject,
+  getProject as storeGetProject,
+  listProjects as storeListProjects,
+  ensureProject as storeEnsureProject,
+  isCloud as isCloudStore,
 } from "../cloud/store.js";
 import {
   countApiChecks,
@@ -888,6 +892,31 @@ function resolveProject(optProject?: string): string | undefined {
   return getProject(activeProject) ? activeProject : undefined;
 }
 
+/**
+ * Resolve the project id for a WRITE (scenario create) in a way that is safe
+ * against the local/cloud split. In cloud mode the on-box active-project pointer
+ * may reference a project that only exists in the local SQLite store; sending
+ * that id to the cloud `/v1` API would violate the scenarios→projects foreign
+ * key and 500. When that happens we drop the project (create a global scenario)
+ * and tell the user to bind a cloud project with `testers project use`.
+ */
+async function resolveWriteProjectId(optProject?: string): Promise<string | undefined> {
+  const projectId = resolveProject(optProject);
+  if (projectId && isCloudStore()) {
+    const inCloud = await storeGetProject(projectId);
+    if (!inCloud) {
+      logError(
+        chalk.yellow(
+          `Note: project ${projectId} does not exist in the cloud store; creating the scenario without a project. ` +
+            `Run 'testers project use <name>' to bind a cloud project.`,
+        ),
+      );
+      return undefined;
+    }
+  }
+  return projectId;
+}
+
 // ─── testers add <name> ─────────────────────────────────────────────────────
 
 program
@@ -973,16 +1002,16 @@ program
           );
           process.exit(1);
         }
-        const projectId = resolveProject(opts.project);
+        const projectId = await resolveWriteProjectId(opts.project);
         for (const input of template) {
-          const s = createScenario({ ...input, projectId });
+          const s = await storeCreateScenario({ ...input, projectId });
           log(chalk.green(`  Created ${s.shortId}: ${s.name}`));
         }
         return;
       }
 
       const assertions = (opts.assert as string[]).map(parseAssertionString);
-      const projectId = resolveProject(opts.project);
+      const projectId = await resolveWriteProjectId(opts.project);
       const authPreset = opts.authPreset
         ? getAuthPreset(opts.authPreset)
         : null;
@@ -990,7 +1019,7 @@ program
         logError(chalk.red(`Auth preset not found: ${opts.authPreset}`));
         process.exit(1);
       }
-      const scenario = createScenario({
+      const scenario = await storeCreateScenario({
         name,
         description: opts.description || name,
         steps: opts.steps,
@@ -1045,7 +1074,7 @@ program
   .option("--json", "Output as JSON", false)
   .option("--group", "Group scenarios by first tag", false)
   .option("--verbose", "Show untruncated scenario names and tags", false)
-  .action((opts) => {
+  .action(async (opts) => {
     try {
       const limit = opts.json
         ? (cliRequestedLimit(opts.limit, 50) ?? 50)
@@ -1059,12 +1088,12 @@ program
         sort: opts.sort as "date" | "priority" | "name" | undefined,
         desc: !opts.asc,
       };
-      const scenarios = listScenarios({
+      const scenarios = await storeListScenarios({
         ...filter,
         limit,
         offset: offset || undefined,
       });
-      const total = countScenarios(filter);
+      const total = await storeCountScenarios(filter);
       if (opts.json) {
         log(JSON.stringify(scenarios, null, 2));
       } else if (opts.group) {
@@ -1099,9 +1128,9 @@ program
   .command("show <id>")
   .description("Show scenario details")
   .option("--json", "Output as JSON", false)
-  .action((id: string, opts) => {
+  .action(async (id: string, opts) => {
     try {
-      const scenario = getScenario(id) ?? getScenarioByShortId(id);
+      const scenario = (await storeGetScenario(id)) ?? (await storeGetScenarioByShortId(id));
       if (!scenario) {
         logError(chalk.red(`Scenario not found: ${id}`));
         process.exit(1);
@@ -1195,9 +1224,9 @@ program
   )
   .option("-p, --priority <level>", "New priority")
   .option("-m, --model <model>", "New model")
-  .action((id: string, opts) => {
+  .action(async (id: string, opts) => {
     try {
-      const scenario = getScenario(id) ?? getScenarioByShortId(id);
+      const scenario = (await storeGetScenario(id)) ?? (await storeGetScenarioByShortId(id));
       if (!scenario) {
         logError(chalk.red(`Scenario not found: ${id}`));
         process.exit(1);
@@ -1215,7 +1244,7 @@ program
         newTags = [...existing];
       }
 
-      const updated = updateScenario(
+      const updated = await storeUpdateScenario(
         scenario.id,
         {
           name: opts.name,
@@ -1254,7 +1283,7 @@ program
   .option("-y, --yes", "Skip confirmation prompt", false)
   .action(async (id: string, opts) => {
     try {
-      const scenario = getScenario(id) ?? getScenarioByShortId(id);
+      const scenario = (await storeGetScenario(id)) ?? (await storeGetScenarioByShortId(id));
       if (!scenario) {
         logError(chalk.red(`Scenario not found: ${id}`));
         process.exit(1);
@@ -1285,7 +1314,7 @@ program
         }
       }
 
-      const deleted = deleteScenario(scenario.id);
+      const deleted = await storeDeleteScenario(scenario.id);
       if (deleted) {
         log(
           chalk.green(`Deleted scenario ${scenario.shortId}: ${scenario.name}`),
@@ -1313,7 +1342,7 @@ program
   .option("-y, --yes", "Skip confirmation prompt", false)
   .action(async (id: string, opts) => {
     try {
-      const scenario = getScenario(id) ?? getScenarioByShortId(id);
+      const scenario = (await storeGetScenario(id)) ?? (await storeGetScenarioByShortId(id));
       if (!scenario) {
         logError(chalk.red(`Scenario not found: ${id}`));
         process.exit(1);
@@ -1343,7 +1372,7 @@ program
         }
       }
 
-      const deleted = deleteScenario(scenario.id);
+      const deleted = await storeDeleteScenario(scenario.id);
       if (deleted) {
         log(
           chalk.green(`Removed scenario ${scenario.shortId}: ${scenario.name}`),
@@ -2760,9 +2789,9 @@ projectCmd
   .option("--path <path>", "Project path")
   .option("-d, --description <text>", "Project description")
   .option("--prefix <prefix>", "Scenario prefix", "TST")
-  .action((name: string, opts) => {
+  .action(async (name: string, opts) => {
     try {
-      const project = createProject({
+      const project = await storeCreateProject({
         name,
         path: opts.path,
         description: opts.description,
@@ -2794,7 +2823,7 @@ projectCmd
   .option("-l, --limit <n>", "Limit results", "100")
   .option("--offset <n>", "Skip first N results", "0")
   .option("--verbose", "Show untruncated names and paths", false)
-  .action((opts) => {
+  .action(async (opts) => {
     try {
       const limit = opts.json
         ? (cliRequestedLimit(opts.limit, 100) ?? 100)
@@ -2805,7 +2834,7 @@ projectCmd
           ? opts.search.trim().toLowerCase()
           : null;
 
-      const allProjects = listProjects();
+      const allProjects = await storeListProjects();
       const filtered = search
         ? allProjects.filter((p) => {
             const name = p.name.toLowerCase();
@@ -2870,12 +2899,12 @@ projectCmd
   .command("show <id>")
   .description("Show project details")
   .option("--json", "Output as JSON", false)
-  .action((id: string, opts) => {
+  .action(async (id: string, opts) => {
     try {
       // Try full UUID, then partial prefix match, then name
-      let project = getProject(id);
+      let project = await storeGetProject(id);
       if (!project) {
-        const all = listProjects();
+        const all = await storeListProjects();
         project = all.find((p) => p.id.startsWith(id) || p.name === id) ?? null;
       }
       if (!project) {
@@ -2970,9 +2999,9 @@ projectCmd
   .command("use <name>")
   .description("Set active project (find or create)")
   .option("--json", "Output as JSON", false)
-  .action((name: string, opts) => {
+  .action(async (name: string, opts) => {
     try {
-      const project = ensureProject(name, process.cwd());
+      const project = await storeEnsureProject(name, process.cwd());
       if (!existsSync(CONFIG_DIR)) {
         mkdirSync(CONFIG_DIR, { recursive: true });
       }

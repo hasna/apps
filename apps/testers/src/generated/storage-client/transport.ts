@@ -143,6 +143,15 @@ export function resolveClientTransport(name: string, env: Env = process.env): Cl
         `Deprecated mode '${deprecatedAlias}' from ${modeHit.key} is treated as 'cloud'. Prefer ${keys.modeKeys[0]}=cloud.`,
       );
     }
+  } else if (urlHit && keyHit) {
+    // No explicit *_STORAGE_MODE, but a cloud endpoint + API key are both
+    // configured — exactly what the fleet flip writes (HASNA_<APP>_API_URL +
+    // HASNA_<APP>_API_KEY, no mode var). Treat that as an implicit request to
+    // route to the cloud `/v1` API. An explicit `*_STORAGE_MODE=local` is still
+    // honored above and overrides this, so `unset -> local` and an explicit
+    // opt-out both keep the on-box store.
+    mode = "cloud";
+    modeSource = `${urlHit.key}+${keyHit.key}`;
   }
 
   // Local mode: never route to the network, regardless of URL/key presence.

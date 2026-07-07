@@ -168,6 +168,16 @@ export async function listScenarios(filter?: ScenarioFilter): Promise<Scenario[]
   }
   return localScenarios.listScenarios(filter);
 }
+export async function countScenarios(filter?: ScenarioFilter): Promise<number> {
+  if (isCloud()) {
+    // Count all matching rows (ignore pagination) to mirror the local semantics.
+    const { limit: _limit, offset: _offset, ...rest } = filter ?? {};
+    void _limit;
+    void _offset;
+    return (await listScenarios(rest as ScenarioFilter)).length;
+  }
+  return localScenarios.countScenarios(filter);
+}
 export async function getScenario(id: string): Promise<Scenario | null> {
   if (isCloud()) return cloud().get<Scenario>("scenarios", id);
   return localScenarios.getScenario(id);
@@ -207,4 +217,15 @@ export async function getProject(id: string): Promise<Project | null> {
 export async function updateProject(id: string, input: UpdateProjectInput): Promise<Project> {
   if (isCloud()) return cloud().update<Project>("projects", id, input, { method: "PUT" });
   return localProjects.updateProject(id, input);
+}
+export async function ensureProject(name: string, path: string): Promise<Project> {
+  if (isCloud()) {
+    const all = (await cloud().list<Project>("projects")).items;
+    const byPath = path ? all.find((p) => p.path === path) : undefined;
+    if (byPath) return byPath;
+    const byName = all.find((p) => p.name === name);
+    if (byName) return byName;
+    return cloud().create<Project>("projects", { name, path } as CreateProjectInput);
+  }
+  return localProjects.ensureProject(name, path);
 }
