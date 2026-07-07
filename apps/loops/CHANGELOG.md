@@ -7,6 +7,42 @@ unless noted.
 
 ## Unreleased
 
+## 0.4.18 (2026-07-07)
+
+Drain reliability: kill the todos-task redispatch "black hole" family. A
+still-actionable task whose runs kept finishing without closing it used to be
+deduped forever once its attempt count reached the cap (`considered=N created=0`
+with no signal), and purely infrastructural failures (a stale worktree
+registration, a tempfail retry-signal) burned that cap on tasks that never
+actually ran.
+
+### Fixed
+
+- **Redispatch cap no longer a silent black hole:** when a todos-task work item
+  reaches `MAX_TODOS_TASK_ROUTE_REDISPATCHES` (8) it is transitioned to a
+  visible `dead_letter` state instead of being deduped forever with no signal.
+  Drain reports gain a `deadLettered` count (and the deduped result carries
+  `deadLettered: true` + the reason), so a capped task is surfaced and an
+  operator can requeue it rather than the drain silently reporting `created=0`.
+- **Gate deaths no longer count toward the cap:** a run that dies before doing
+  real work — worktree preparation failure, or a fast (`<60s`) `triage`/`planner`
+  gate failure — has its attempt refunded by `finalizeWorkflowRun`, so an infra
+  fault cannot dead-letter a task that never reached its worker.
+- **`exit(75)` tempfail is requeueable, not dedupe-bait:** a step that exits 75
+  (`EX_TEMPFAIL`, "retry later") drops its work item back to `queued` with the
+  attempt refunded, so the "retry next tick" contract fires instead of leaving a
+  terminal row that counts toward the cap.
+- **`loops routes requeue` resets attempts by default:** an operator unwedge is
+  now durable rather than one-shot (a capped item no longer re-caps after a
+  single further terminal run). `--keep-attempts` preserves the count for the
+  cautious path; the bounded route-path re-admission still preserves attempts so
+  the cap keeps working.
+- **Executor self-heals a stale worktree registration:** on git's "missing but
+  already registered worktree" error, `ensureLocalWorktree` (and the remote
+  worktree-prep script) now runs `git worktree prune` and retries the add exactly
+  once — git's own prescribed remedy — before failing honestly. This removes the
+  single biggest burner of the redispatch cap at its source.
+
 ### Changed
 
 - Documentation now names `loops-serve` as the Postgres-backed Hasna-owned

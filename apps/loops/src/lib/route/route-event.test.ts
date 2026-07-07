@@ -192,10 +192,21 @@ describe("routeTodosTaskEvent dedupe re-admission", () => {
     expect(routeTodosTaskEvent(pendingTaskEvent(), ROUTE_OPTS).kind).toBe("deduped");
   });
 
-  test("stops re-admitting once the redispatch cap is reached", () => {
+  test("at the redispatch cap it dead-letters (visible) instead of silently deduping forever", () => {
     routeTodosTaskEvent(pendingTaskEvent(), ROUTE_OPTS);
     forceTerminal("failed", { attempts: 8, ageMs: 24 * 60 * 60_000 });
-    expect(routeTodosTaskEvent(pendingTaskEvent(), ROUTE_OPTS).kind).toBe("deduped");
+    const first = routeTodosTaskEvent(pendingTaskEvent(), ROUTE_OPTS);
+    // Still no new dispatch (deduped) — but now VISIBLE, not a silent black hole.
+    expect(first.kind).toBe("deduped");
+    expect(first.value.deadLettered).toBe(true);
+    expect(first.value.dedupedBy).toBe("work-item");
+    expect(workItemRow()).toEqual({ status: "dead_letter", attempts: 8 });
+    // A subsequent drain keeps deduping the dead-lettered item without churn or
+    // re-escalation; it stays dead_letter until an operator requeues it.
+    const second = routeTodosTaskEvent(pendingTaskEvent(), ROUTE_OPTS);
+    expect(second.kind).toBe("deduped");
+    expect(second.value.deadLettered).toBe(true);
+    expect(workItemRow()?.status).toBe("dead_letter");
   });
 });
 
