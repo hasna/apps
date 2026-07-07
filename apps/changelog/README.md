@@ -45,6 +45,48 @@ Remote CLI commands use `CHANGELOG_API_TOKEN` from the environment when `--api-u
 
 When `--app` is omitted for `add`, `generate`, `release`, or `publish`, the CLI infers an app id from the local `package.json` name.
 
+App ids are normalized to the `hasna.app.v1` AppId slug used as the join key
+across the Hasna distribution contracts: `@hasna/todos` maps to the
+`open-todos` repo-folder convention, and other names are slugified
+(lowercase, dash-separated).
+
+### Release publishing (open-releases entrypoint)
+
+`changelog publish --release` is the entrypoint invoked by open-releases when
+a version ships: it accepts an appId and version, promotes that app's pending
+entries, regenerates the changelog file, and prints a JSON result containing a
+`changelogRef` resource pointer (`kind: "document"`,
+`id: changelog:<appId>@<version>`) that the caller embeds in its
+`hasna.release.v1` document.
+
+```bash
+changelog publish --release --app open-todos --version 1.2.3
+changelog publish --release --app @hasna/todos --version 1.2.3 \
+  --target CHANGELOG.md --base-url https://changelog.hasna.com
+```
+
+Programmatic consumers can call `publishRelease` from
+`@hasna/changelog/release`. Promoting zero entries is legal — deferred
+changelog refs are allowed by the release contract, and the ref still
+resolves once entries land.
+
+### Static web changelog site
+
+`changelog web` renders a static site with one page per app plus RSS 2.0 and
+JSON Feed 1.1 feeds (`apps/<appId>/index.html`, `apps/<appId>/rss.xml`,
+`apps/<appId>/feed.json`, a directory `index.html`, and a machine-readable
+`site.json`).
+
+```bash
+changelog web --out ./public --base-url https://changelog.hasna.com
+changelog web --out ./public --app open-todos --title "open-todos releases"
+```
+
+The generator is also exported as `generateChangelogSite` from
+`@hasna/changelog/web`. Pass `--base-url` when publishing: feed
+`link`/`home_page_url`/`feed_url` fields require absolute URLs and are
+omitted when no base URL is configured.
+
 ## SDK
 
 ```ts

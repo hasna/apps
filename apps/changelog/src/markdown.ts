@@ -1,6 +1,6 @@
 import type { ChangelogEntry, ChangelogKind, GenerateChangelogOptions } from "./types.js";
 
-const categoryHeadings: Record<ChangelogKind, string> = {
+export const categoryHeadings: Record<ChangelogKind, string> = {
   added: "Added",
   changed: "Changed",
   deprecated: "Deprecated",
@@ -10,9 +10,9 @@ const categoryHeadings: Record<ChangelogKind, string> = {
   other: "Other",
 };
 
-const categoryOrder: ChangelogKind[] = ["added", "changed", "deprecated", "removed", "fixed", "security", "other"];
+export const categoryOrder: ChangelogKind[] = ["added", "changed", "deprecated", "removed", "fixed", "security", "other"];
 
-interface VersionGroup {
+export interface VersionGroup {
   version: string;
   date: string;
   entries: ChangelogEntry[];
@@ -75,6 +75,10 @@ function compareVersionsDesc(a: VersionGroup, b: VersionGroup): number {
     return -comparePrereleaseAsc(semverA.prerelease, semverB.prerelease);
   }
   return b.date.localeCompare(a.date) || b.version.localeCompare(a.version);
+}
+
+export function groupChangelogEntries(entries: ChangelogEntry[]): VersionGroup[] {
+  return groupEntries(entries);
 }
 
 function groupEntries(entries: ChangelogEntry[]): VersionGroup[] {

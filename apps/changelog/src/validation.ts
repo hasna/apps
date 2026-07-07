@@ -50,9 +50,44 @@ const changelogDateSchema = z
   .regex(/^\d{4}-\d{2}-\d{2}$/)
   .refine(isValidIsoDate, "Date must be a real YYYY-MM-DD date");
 
+/**
+ * hasna.app.v1 AppId slug (mirror of `AppIdSchema` from `@hasna/contracts`
+ * branch `feat/distribution-schemas`): the join key across all distribution
+ * documents, e.g. `open-todos`.
+ */
+export const appIdSchema = z.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "appId must be a lowercase slug (hasna.app.v1 AppId)");
+
+/**
+ * Normalize an app identifier to the hasna.app.v1 AppId slug. npm names in
+ * the `@hasna/*` scope map to the `open-<name>` repo-folder convention
+ * (`@hasna/todos` -> `open-todos`); other values are slugified.
+ */
+export function normalizeAppId(value: string): string {
+  const trimmed = value.trim();
+  const scoped = trimmed.match(/^@([^/]+)\/(.+)$/);
+  const base = scoped ? scoped[2]! : trimmed;
+  const slug = base
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!slug) throw new Error(`Cannot derive a hasna.app.v1 appId from "${value}"`);
+  if (scoped && scoped[1] === "hasna" && !slug.startsWith("open-")) {
+    return `open-${slug}`;
+  }
+  return slug;
+}
+
+export function parseAppId(value: unknown): string {
+  return appIdSchema.parse(typeof value === "string" ? normalizeAppId(value) : value);
+}
+
 export const changelogEntryInputSchema = z.object({
-  appId: z.string().trim().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/),
-  version: z.string().trim().min(1).max(80).optional().default("Unreleased"),
+  // Accepts npm names (e.g. @hasna/todos) and legacy ids; parseChangelogEntryInput
+  // normalizes to the hasna.app.v1 AppId slug via normalizeAppId.
+  appId: z.string().trim().min(1).max(214).regex(/^@?[A-Za-z0-9][A-Za-z0-9._/-]*$/),
+  // Defense-in-depth alongside output escaping: reject HTML/XML metacharacters
+  // and line breaks so a hostile version can never look like markup.
+  version: z.string().trim().min(1).max(80).regex(/^[^<>&"'\r\n]+$/, "version must not contain HTML/XML special characters").optional().default("Unreleased"),
   kind: z.enum(changelogKinds).optional(),
   category: z.enum(changelogCategories).optional(),
   title: z.string().trim().min(1).max(500),
@@ -154,7 +189,7 @@ export function parseChangelogEntryInput(input: unknown, now = new Date()): Pars
   const metadata = parsed.metadata ? (redactSensitiveJson(parsed.metadata) as JsonObject) : undefined;
   return {
     ...parsed,
-    appId: parsed.appId.trim(),
+    appId: normalizeAppId(parsed.appId),
     version: parsed.version.trim(),
     kind,
     category: kind,
@@ -179,6 +214,7 @@ export function parseChangelogEntryUpdate(input: unknown): ChangelogEntryUpdate 
   }
   return {
     ...parsed,
+    appId: parsed.appId === undefined ? undefined : normalizeAppId(parsed.appId),
     tags: parsed.tags ? normalizeTags(parsed.tags) : undefined,
     links: parsed.links ? normalizeLinks(parsed.links) : undefined,
     commits: parsed.commits ? normalizeRefs(parsed.commits) : undefined,
