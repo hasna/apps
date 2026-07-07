@@ -745,6 +745,10 @@ equivalent directory-scoped write controls.
 Inspect route state with:
 
 ```bash
+loops routes policies list
+loops routes policies show oss
+loops routes policies render oss
+loops routes policies validate
 cat task-created-event.json | loops routes preview todos-task --sandbox workspace-write
 cat task-created-event.json | loops routes create todos-task --sandbox workspace-write
 loops routes drain todos-task --task-list oss --max-dispatch 2 --compact
@@ -754,6 +758,26 @@ loops routes show <work-item-id>
 loops routes requeue <work-item-id> --reason "fixed upstream blocker"
 loops routes invocations
 ```
+
+Named route policies expand the long recurring drain commands used by the live
+task routers into explicit, replayable options. `repoops-pr-queue`, `oss`,
+`pilot`, and `machine-sync` are built in. Operators can inspect the policy,
+render the exact `loops --json routes drain todos-task ...` command, and validate
+that the rendered args no longer depend on `--policy`/`--preset`:
+
+```bash
+loops routes policies render oss
+loops routes schedule todos-task machine-oss-task-lifecycle-router --policy oss
+```
+
+Scheduled policy routes store explicit drain args plus
+`--route-policy-evidence <id>`, so future runs remain auditable even if a policy
+definition changes later. Policy drains and dry-runs include `routePolicy`
+evidence with the source, safety class, guards, expanded options, and rendered
+args. Passing a conflicting explicit option fails before the route is created.
+The `pilot` policy uses `sandbox=danger-full-access` and is treated as a paused
+manual break-glass lane; applying it requires the operator to pass
+`--manual-break-glass` explicitly.
 
 When a workflow run starts from an admitted work item, OpenLoops writes a
 manifest under:

@@ -40,6 +40,9 @@ const EVENT_INPUT_OPTION_SPECS: RouteOptionSpec[] = [
 ];
 
 const DRAIN_FILTER_OPTION_SPECS: RouteOptionSpec[] = [
+  { flags: "--policy <id>", key: "policy", kind: "value", description: "apply a named route policy before draining or scheduling", skipSerialize: true },
+  { flags: "--preset <id>", key: "preset", kind: "value", description: "alias for --policy", skipSerialize: true },
+  { flags: "--route-policy-evidence <id>", key: "routePolicyEvidence", kind: "value", description: "record an already-expanded route policy id for audit evidence" },
   {
     flags: "--todos-projects-from-registry",
     key: "todosProjectsFromRegistry",

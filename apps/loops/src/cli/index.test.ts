@@ -5352,6 +5352,203 @@ describe("loops CLI", () => {
     expect(loop.target.args).toEqual(expect.arrayContaining(["--max-dispatch", "3"]));
   });
 
+  test("routes policies inspect, validate, and render replayable explicit args", () => {
+    const dataDir = freshDataDir("loops-cli-route-policies-render-");
+
+    const list = runCli(dataDir, ["--json", "routes", "policies", "list"]);
+    expect(list.status).toBe(0);
+    const policies = JSON.parse(list.stdout);
+    expect(policies.map((policy: { id: string }) => policy.id)).toEqual(expect.arrayContaining(["repoops-pr-queue", "oss", "pilot", "machine-sync"]));
+
+    const validate = runCli(dataDir, ["--json", "routes", "policies", "validate"]);
+    expect(validate.status).toBe(0);
+    expect(JSON.parse(validate.stdout).policies).toHaveLength(4);
+
+    const render = runCli(dataDir, ["--json", "routes", "policies", "render", "oss"]);
+    expect(render.status).toBe(0);
+    const rendered = JSON.parse(render.stdout);
+    expect(rendered.policy.id).toBe("oss");
+    expect(rendered.policy.safety).toBe("unattended");
+    expect(rendered.command).not.toContain("--policy");
+    expect(rendered.args).toEqual(expect.arrayContaining([
+      "--route-policy-evidence",
+      "oss",
+      "--template",
+      "task-lifecycle",
+      "--max-active-scope",
+      "codewith-impl",
+      "--max-per-profile",
+      "3",
+    ]));
+    expect(rendered.drain.prHandoff).toBe(true);
+    expect(rendered.schedule.every).toBe("2m");
+  });
+
+  test("routes schedule applies named policy defaults into explicit drain argv", () => {
+    const dataDir = freshDataDir("loops-cli-route-policy-schedule-");
+
+    const scheduled = runCli(
+      dataDir,
+      [
+        "--json",
+        "routes",
+        "schedule",
+        "todos-task",
+        "oss-policy-drain",
+        "--policy",
+        "oss",
+      ],
+      undefined,
+      { PATH: "/usr/bin:/bin" },
+    );
+    expect(scheduled.status).toBe(0);
+    const scheduledValue = JSON.parse(scheduled.stdout);
+    const loop = scheduledValue.loop ?? scheduledValue;
+    expect(loop.schedule.everyMs).toBe(120_000);
+    expect(loop.maxAttempts).toBe(2);
+    expect(loop.leaseMs).toBe(20 * 60_000);
+    expect(loop.target.args).not.toContain("--policy");
+    expect(loop.target.args).toEqual(expect.arrayContaining([
+      "--route-policy-evidence",
+      "oss",
+      "--project-path-prefix",
+      join(process.env.HOME ?? "", "workspace", "hasna", "opensource"),
+      "--max-dispatch",
+      "6",
+      "--max-active-scope",
+      "codewith-impl",
+      "--max-per-profile",
+      "3",
+      "--worktree-mode",
+      "required",
+      "--pr-handoff",
+    ]));
+  });
+
+  test("route policies reject conflicting overrides and require explicit pilot break-glass", () => {
+    const dataDir = freshDataDir("loops-cli-route-policy-conflicts-");
+
+    const conflict = runCli(dataDir, [
+      "routes",
+      "schedule",
+      "todos-task",
+      "oss-policy-conflict",
+      "--policy",
+      "oss",
+      "--scan-limit",
+      "200",
+    ]);
+    expect(conflict.status).not.toBe(0);
+    expect(conflict.stderr).toContain("route policy oss has conflicting explicit option");
+
+    const pilot = runCli(dataDir, [
+      "routes",
+      "schedule",
+      "todos-task",
+      "pilot-policy-drain",
+      "--policy",
+      "pilot",
+    ]);
+    expect(pilot.status).not.toBe(0);
+    expect(pilot.stderr).toContain("requires explicit --manual-break-glass");
+  });
+
+  test("routes drain policy dry-run records expanded policy evidence", () => {
+    const dataDir = freshDataDir("loops-cli-route-policy-drain-evidence-");
+    const binDir = join(dataDir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "if [[ \"$*\" == *\"task-lists\"* ]]; then printf '[]'; exit 0; fi",
+        "if [[ \"$*\" == *\"ready\"* ]]; then printf '[]'; exit 0; fi",
+        "printf 'unexpected todos call: %s' \"$*\" >&2",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+
+    const drain = runCli(
+      dataDir,
+      ["--json", "routes", "drain", "todos-task", "--policy", "machine-sync", "--dry-run"],
+      undefined,
+      { PATH: `${binDir}:/usr/bin:/bin` },
+    );
+    expect(drain.status).toBe(0);
+    const value = JSON.parse(drain.stdout);
+    expect(value.routePolicy.id).toBe("machine-sync");
+    expect(value.routePolicy.expandedOptions.taskList).toBe("machine-default-sync");
+    expect(value.routePolicy.explicitArgs).toEqual(expect.arrayContaining(["--route-policy-evidence", "machine-sync", "--worktree-mode", "required"]));
+    expect(value.routePolicy.guards[0].kind).toBe("codewith-active-cap");
+
+    const evidenceOnly = runCli(
+      dataDir,
+      [
+        "--json",
+        "routes",
+        "drain",
+        "todos-task",
+        "--route-policy-evidence",
+        "oss",
+        "--scan-limit",
+        "123",
+        "--max-dispatch",
+        "9",
+        "--dry-run",
+      ],
+      undefined,
+      { PATH: `${binDir}:/usr/bin:/bin` },
+    );
+    expect(evidenceOnly.status).toBe(0);
+    const replay = JSON.parse(evidenceOnly.stdout);
+    expect(replay.routePolicy.id).toBe("oss");
+    expect(replay.routePolicy.expandedOptions.scanLimit).toBe("123");
+    expect(replay.routePolicy.explicitArgs).toEqual(expect.arrayContaining(["--route-policy-evidence", "oss", "--scan-limit", "123", "--max-dispatch", "9"]));
+  });
+
+  test("route dry-run exposes active scope and selected profile throttle evidence", () => {
+    const dataDir = freshDataDir("loops-cli-route-throttle-profile-evidence-");
+    const event = {
+      id: "evt-route-profile-throttle-0001",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-route-profile-throttle-0001",
+        title: "Route with profile throttle evidence",
+        working_dir: "/tmp/open-loops",
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const preview = runCli(dataDir, [
+      "--json",
+      "routes",
+      "create",
+      "todos-task",
+      "--dry-run",
+      "--event-json",
+      JSON.stringify(event),
+      "--auth-profile-pool",
+      "account004,account005",
+      "--max-active",
+      "4",
+      "--max-active-scope",
+      "codewith-impl",
+      "--max-per-profile",
+      "2",
+      "--sandbox",
+      "workspace-write",
+    ]);
+    expect(preview.status).toBe(0);
+    const value = JSON.parse(preview.stdout);
+    expect(value.invocation.scope.routeThrottle).toEqual({ maxActiveScope: "codewith-impl", maxPerProfile: 2 });
+    expect(value.throttle.limits).toMatchObject({ maxActive: 4, maxActiveScope: "codewith-impl", maxPerProfile: 2 });
+  });
+
   test("todos task lifecycle routes preserve explicit OpenAccounts role accounts", () => {
     const dataDir = freshDataDir("loops-cli-routes-task-lifecycle-accounts-");
     const repo = createGitRepo("loops-cli-routes-task-lifecycle-accounts-repo-");
