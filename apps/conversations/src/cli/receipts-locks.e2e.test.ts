@@ -69,6 +69,28 @@ describe("receipts + locks CLI (e2e)", () => {
     expect(wrongChannel.stderr).toContain("does not belong");
   });
 
+  test("receipts matches mixed-case channel members against normalized read receipts", () => {
+    const create = runCli(["channel", "create", "mixed-receipt-ch", "--from", "Admin"], "Admin");
+    expect(create.exitCode).toBe(0);
+    runCli(["channel", "join", "mixed-receipt-ch", "--from", "Bob"], "Bob");
+    runCli(["channel", "join", "mixed-receipt-ch", "--from", "Carol"], "Carol");
+
+    const send = runCli(["channel", "send", "mixed-receipt-ch", "mixed case quorum", "--from", "Admin", "--json"], "Admin");
+    expect(send.exitCode).toBe(0);
+    const messageId = JSON.parse(send.stdout).id as number;
+
+    const read = runCli(["channel", "read", "mixed-receipt-ch", "--from", "Bob"], "Bob");
+    expect(read.exitCode).toBe(0);
+
+    const receipts = runCli(["receipts", String(messageId), "--channel", "mixed-receipt-ch", "--json"], "Admin");
+    expect(receipts.exitCode).toBe(0);
+    const status = JSON.parse(receipts.stdout);
+    expect(status.receipts.map((r: { agent: string }) => r.agent)).toContain("bob");
+    expect(status.unread_by).toContain("Admin");
+    expect(status.unread_by).toContain("Carol");
+    expect(status.unread_by).not.toContain("Bob");
+  });
+
   test("receipts errors on unknown message or channel", () => {
     const missing = runCli(["receipts", "999999", "--json"], "alice");
     expect(missing.exitCode).toBe(1);

@@ -1290,6 +1290,6 @@ export function getMessageReadStatus(
   const members = db.prepare(
     "SELECT agent FROM channel_members WHERE channel = ?"
   ).all(normalized) as { agent: string }[];
-  const unread_by = members.map((m) => m.agent).filter((a) => !readers.has(a));
+  const unread_by = members.map((m) => m.agent).filter((a) => !readers.has(a.toLowerCase()));
   return { receipts, unread_by };
 }

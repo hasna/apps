@@ -1117,4 +1117,17 @@ describe("recordReadReceipt / getReadReceipts / getMessageReadStatus", () => {
     expect(status.unread_by).toContain("bob");
     expect(status.unread_by).not.toContain("alice");
   });
+
+  test("getMessageReadStatus matches mixed-case members against normalized receipts", () => {
+    createChannel("mixed-rs", "Admin");
+    joinChannel("mixed-rs", "Bob");
+    joinChannel("mixed-rs", "Carol");
+    const msg = sendMessage({ from: "Admin", to: "mixed-rs", channel: "mixed-rs", content: "hey" });
+    recordReadReceipt(msg.id, "Bob");
+    const status = getMessageReadStatus(msg.id, "mixed-rs");
+    expect(status.receipts.map((r) => r.agent)).toContain("bob");
+    expect(status.unread_by).toContain("Admin");
+    expect(status.unread_by).toContain("Carol");
+    expect(status.unread_by).not.toContain("Bob");
+  });
 });
