@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { ShortlinksStore } from "../store.js";
 import { PgShortlinksStore, applyPostgresMigrations } from "../pg-store.js";
+import { CloudShortlinksStore } from "../cloud-store.js";
 import { getConfigPath, getDataDir, getDatabasePath, loadConfig, saveConfig, updateConfig } from "../config.js";
 import { serveShortlinks } from "../server.js";
 import { createCloudflarePlan, writeWorkerFiles, upsertCloudflareDnsRecord } from "../cloudflare.js";
@@ -24,7 +25,7 @@ import {
 import type { Link } from "../types.js";
 import type { ShortlinksStoreMode } from "../runtime.js";
 
-type RuntimeStore = ShortlinksStore | PgShortlinksStore;
+type RuntimeStore = ShortlinksStore | PgShortlinksStore | CloudShortlinksStore;
 
 function getPackageVersion(): string {
   try {
@@ -93,6 +94,17 @@ function localStatsIfDatabaseExists(dbPath: string): { domains: number; links: n
 }
 
 async function withRuntimeStore<T>(fn: (store: RuntimeStore) => T | Promise<T>): Promise<T> {
+  // self_hosted client flip: when HASNA_SHORTLINKS_MODE=self_hosted (or cloud)
+  // AND HASNA_SHORTLINKS_API_URL + HASNA_SHORTLINKS_API_KEY are set, route ALL
+  // reads/writes to the cloud /v1 HTTP API. No DSN, no local SQLite.
+  const cloud = CloudShortlinksStore.fromEnv(process.env);
+  if (cloud) {
+    try {
+      return await fn(cloud);
+    } finally {
+      await cloud.close();
+    }
+  }
   if (storeMode() === "postgres") {
     const store = await PgShortlinksStore.fromEnv();
     try {
