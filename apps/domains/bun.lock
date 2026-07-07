@@ -8,7 +8,8 @@
         "@aws-sdk/client-route-53": "^3.1067.0",
         "@aws-sdk/client-route-53-domains": "^3.1067.0",
         "@aws-sdk/credential-provider-ini": "3.972.53",
-        "@hasna/contracts": "0.4.1",
+        "@hasna/contracts": "^0.4.2",
+        "@hasna/mcp-harness": "file:../open-mcp",
         "@modelcontextprotocol/sdk": "^1.29.0",
         "chalk": "^5.4.1",
         "commander": "^13.1.0",
@@ -84,7 +85,11 @@
 
     "@hasna/contacts": ["@hasna/contacts@0.6.19", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.12.1", "chalk": "^5.4.1", "commander": "^13.1.0", "ink": "^5.2.0", "pg": "^8.13.3", "react": "^18.3.1", "zod": "^3.24.2" }, "bin": { "contacts": "dist/cli/index.js", "contacts-mcp": "dist/mcp/index.js", "contacts-serve": "dist/server/index.js" } }, "sha512-S5nZcJeRALMK9skH99PRmn2BsqBD/aOyxywUlFZxs4xVMdOtuxD3RmJFg0bQtPQW5+TNAZH0k0s4FAUr3GvNSQ=="],
 
-    "@hasna/contracts": ["@hasna/contracts@0.4.1", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/index.js" } }, "sha512-oubsu1FFyVvxbt5d+85iBXEK6M81ZsaeODycoQGZuFNqQ3ecfXFujlQz3cL+NHwHJPVmy4wBGLPcaXcRTjO/IQ=="],
+    "@hasna/contracts": ["@hasna/contracts@0.4.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/index.js" } }, "sha512-xD7ZWQXR+AjYAJVpaMsQ+8V0SABiJSKVeI0B1WbPByYeGz6daDtgyZ6c3q0c2S6uzIEtUxlGHPundr675636ew=="],
+
+    "@hasna/events": ["@hasna/events@0.1.13", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-DzmEiDrBoibxzCBeZPEmdpWsNh+5SXTSnilqCeHxi0Do3a9mQJ43ZSxq/Ipzw/xNa2rShAx48KzduCZrGDHi9g=="],
+
+    "@hasna/mcp-harness": ["@hasna/mcp-harness@file:../open-mcp", { "devDependencies": { "@modelcontextprotocol/sdk": "^1.12.1", "@types/bun": "latest", "typescript": "^5.7.3", "zod": "^3.24.2" }, "peerDependencies": { "@modelcontextprotocol/sdk": "^1.12.1", "zod": "^3.24.2" } }],
 
     "@hono/node-server": ["@hono/node-server@1.19.11", "", { "peerDependencies": { "hono": "^4" } }, "sha512-dr8/3zEaB+p0D2n/IUrlPF1HZm586qgJNXK1a9fhg/PzdtkK7Ksd5l312tJX2yBuALqDYBlG20QEbayqPyxn+g=="],
 
