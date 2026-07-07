@@ -45,6 +45,35 @@ describe('knowledge cloud-store resolver (self_hosted client flip)', () => {
     expect(store!.baseUrl).toBe('https://knowledge.hasna.xyz/v1');
   });
 
+  test('routes to cloud when ONLY API url+key are set (fleet-flip writes no STORAGE_MODE)', () => {
+    // Regression: the machines flip writes exactly two vars per app
+    // (HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY) and no STORAGE_MODE.
+    // Presence of both must trigger the cloud-http client, else the installed
+    // CLI silently keeps reading the local db.json even with the flip applied.
+    const store = resolveKnowledgeCloudStore({
+      HASNA_KNOWLEDGE_API_URL: 'https://knowledge.hasna.xyz',
+      HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
+    } as NodeJS.ProcessEnv);
+    expect(store).not.toBeNull();
+    expect(store!.baseUrl).toBe('https://knowledge.hasna.xyz/v1');
+  });
+
+  test('stays local when only the API url is set (key missing -> not both)', () => {
+    expect(
+      resolveKnowledgeCloudStore({
+        HASNA_KNOWLEDGE_API_URL: 'https://knowledge.hasna.xyz',
+      } as NodeJS.ProcessEnv),
+    ).toBeNull();
+  });
+
+  test('stays local when only the API key is set (url missing -> not both)', () => {
+    expect(
+      resolveKnowledgeCloudStore({
+        HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
+      } as NodeJS.ProcessEnv),
+    ).toBeNull();
+  });
+
   test('defaults the base URL to https://knowledge.hasna.xyz/v1 when only mode+key set', () => {
     const store = resolveKnowledgeCloudStore({
       HASNA_KNOWLEDGE_STORAGE_MODE: 'self_hosted',

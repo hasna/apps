@@ -2889,7 +2889,7 @@ var init_schemas = __esm(() => {
             })));
           }
         }
-
+        
         if (${id}.value === undefined) {
           if (${k} in input) {
             newResult[${k}] = undefined;
@@ -2897,7 +2897,7 @@ var init_schemas = __esm(() => {
         } else {
           newResult[${k}] = ${id}.value;
         }
-
+        
       `);
         } else if (!isOptionalIn) {
           doc.write(`
@@ -2934,7 +2934,7 @@ var init_schemas = __esm(() => {
             path: iss.path ? [${k}, ...iss.path] : [${k}]
           })));
         }
-
+        
         if (${id}.value === undefined) {
           if (${k} in input) {
             newResult[${k}] = undefined;
@@ -2942,7 +2942,7 @@ var init_schemas = __esm(() => {
         } else {
           newResult[${k}] = ${id}.value;
         }
-
+        
       `);
         }
       }
@@ -14997,7 +14997,7 @@ import { existsSync as existsSync13, readFileSync as readFileSync14, writeFileSy
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.79",
+  version: "0.2.80",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   exports: {
@@ -15074,7 +15074,7 @@ var package_default = {
     "@ai-sdk/openai": "^3.0.68",
     "@aws-sdk/client-s3": "^3.1063.0",
     "@aws-sdk/credential-providers": "^3.1063.0",
-    "@hasna/contracts": "^0.4.1",
+    "@hasna/contracts": "^0.5.0",
     "@hasna/events": "^0.1.3",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/json-schema": "^7.0.15",
