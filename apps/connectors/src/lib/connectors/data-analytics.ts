@@ -618,4 +618,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Data & Analytics",
     tags: ["scraping", "data", "api"],
   },
+  {
+    name: "stitch-data",
+    displayName: "Stitch",
+    description: "ETL / data pipeline management",
+    category: "Data & Analytics",
+    tags: ["etl", "data-pipeline", "integration"],
+  },
 ];
