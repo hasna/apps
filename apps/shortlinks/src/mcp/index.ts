@@ -16,6 +16,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { ShortlinksStore } from "../store.js";
 import { PgShortlinksStore } from "../pg-store.js";
+import { CloudShortlinksStore } from "../cloud-store.js";
 import { getShortlinksStoreMode } from "../runtime.js";
 import { isHttpMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
 
@@ -33,6 +34,18 @@ interface RuntimeStore {
 }
 
 async function withStore<T>(fn: (store: RuntimeStore) => Promise<T> | T): Promise<T> {
+  // self_hosted client flip: when HASNA_SHORTLINKS_MODE=self_hosted (or cloud)
+  // AND HASNA_SHORTLINKS_API_URL + HASNA_SHORTLINKS_API_KEY are set, route ALL
+  // reads/writes to the cloud /v1 HTTP API. No DSN, no local SQLite. Mirrors the
+  // CLI's withRuntimeStore precedence so CLI and MCP share one cloud path.
+  const cloud = CloudShortlinksStore.fromEnv(process.env);
+  if (cloud) {
+    try {
+      return await fn(cloud as unknown as RuntimeStore);
+    } finally {
+      await cloud.close();
+    }
+  }
   if (getShortlinksStoreMode() === "postgres") {
     const store = await PgShortlinksStore.fromEnv();
     try {
