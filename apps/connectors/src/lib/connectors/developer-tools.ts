@@ -927,6 +927,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["screenshot", "pdf", "capture", "api", "automation"],
   },
   {
+    name: "split-in-batches",
+    displayName: "Split In Batches",
+    description: "Batch workflow splitter",
+    category: "Developer Tools",
+    tags: ["batches", "workflow", "automation"],
+  },
+  {
     name: "searxng",
     displayName: "SearXNG",
     description: "Privacy-respecting open-source metasearch engine",
