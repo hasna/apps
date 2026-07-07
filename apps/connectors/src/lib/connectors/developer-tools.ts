@@ -1123,6 +1123,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["monitoring", "uptime", "performance"],
   },
   {
+    name: "workato-api-platform",
+    displayName: "Workato API Platform",
+    description: "Customer runtime API for items, events, and search",
+    category: "Developer Tools",
+    tags: ["workato", "api-platform", "integration"],
+  },
+  {
     name: "webhooks",
     displayName: "Webhooks",
     description: "Generic outbound HTTP webhook delivery with optional HMAC signing",
