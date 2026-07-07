@@ -583,6 +583,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
   const taskTitle = taskEventField(data, ["title", "task_title", "taskTitle"]);
   const taskDescription = taskEventField(data, ["description", "body"]);
   const sourceTodosProjectPath = opts.sourceTodosProjectPath?.trim();
+  const explicitProjectPath = opts.projectPath?.trim();
   const dataProjectPath = taskEventField(data, [
     "route_project_path",
     "routeProjectPath",
@@ -601,9 +602,9 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     "cwd",
   ]);
   const projectPath =
+    explicitProjectPath ??
     dataProjectPath ??
     metadataProjectPath ??
-    opts.projectPath ??
     process.cwd();
   const routeProjectPath = normalizeRoutePath(projectPath) ?? resolve(projectPath);
   const projectGroup = routeProjectGroup(opts.projectGroup, data, metadata);
