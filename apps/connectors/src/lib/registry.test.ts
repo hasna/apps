@@ -227,5 +227,19 @@ describe("registry", () => {
       expect(result).toBeDefined();
       expect(result!.displayName).toBe("X (Twitter)");
     });
+
+    test("resolves twitter alumia slug alias to x connector", async () => {
+      const { getConnector } = await import("./registry.js");
+      const byTwitter = getConnector("twitter");
+      const byXTwitter = getConnector("x-twitter");
+      const byX = getConnector("x");
+
+      expect(byTwitter).toBeDefined();
+      expect(byXTwitter).toBeDefined();
+      expect(byX).toBeDefined();
+      expect(byTwitter!.name).toBe("x");
+      expect(byXTwitter!.name).toBe("x");
+      expect(byTwitter).toEqual(byX);
+    });
   });
 });

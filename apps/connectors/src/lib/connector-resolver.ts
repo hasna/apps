@@ -4,7 +4,25 @@ import { getConnectorsHome } from "../db/database.js";
 
 export const LEGACY_CONNECTOR_PREFIX = "connect-";
 
+/** Alumia/registry slug aliases → canonical open-connectors connector id. */
+export const CONNECTOR_SLUG_ALIASES: Readonly<Record<string, string>> = {
+  twitter: "x",
+  "x-twitter": "x",
+};
+
 const CONNECTOR_NAME_RE = /^[a-z0-9-]+$/;
+
+function stripLegacyPrefix(name: string): string {
+  return name.startsWith(LEGACY_CONNECTOR_PREFIX)
+    ? name.slice(LEGACY_CONNECTOR_PREFIX.length)
+    : name;
+}
+
+export function getSlugAliasesForCanonical(canonicalName: string): string[] {
+  return Object.entries(CONNECTOR_SLUG_ALIASES)
+    .filter(([, target]) => target === canonicalName)
+    .map(([alias]) => alias);
+}
 
 export interface ConnectorNameResolution {
   input: string;
@@ -34,9 +52,8 @@ export interface ConnectorConfigPathResolution extends ConnectorNameResolution {
 
 export function normalizeConnectorName(name: string): string {
   const trimmed = name.trim().toLowerCase();
-  return trimmed.startsWith(LEGACY_CONNECTOR_PREFIX)
-    ? trimmed.slice(LEGACY_CONNECTOR_PREFIX.length)
-    : trimmed;
+  const withoutPrefix = stripLegacyPrefix(trimmed);
+  return CONNECTOR_SLUG_ALIASES[withoutPrefix] ?? withoutPrefix;
 }
 
 export function legacyConnectorName(name: string): string {
@@ -46,11 +63,14 @@ export function legacyConnectorName(name: string): string {
 export function resolveConnectorName(name: string): ConnectorNameResolution {
   const canonicalName = normalizeConnectorName(name);
   const legacyName = legacyConnectorName(canonicalName);
+  const slugAliases = getSlugAliasesForCanonical(canonicalName);
+  const baseAliases =
+    canonicalName === legacyName ? [canonicalName] : [canonicalName, legacyName];
   return {
     input: name,
     canonicalName,
     legacyName,
-    aliases: canonicalName === legacyName ? [canonicalName] : [canonicalName, legacyName],
+    aliases: [...new Set([...baseAliases, ...slugAliases])],
     isLegacyInput: name.trim().toLowerCase().startsWith(LEGACY_CONNECTOR_PREFIX),
   };
 }

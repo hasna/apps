@@ -34,8 +34,9 @@
     "dev": "bun run ./src/cli/index.tsx",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.social.json --noEmit",
     "test": "bun test",
+    "secrets:scan:npmrc": "bun run scripts/scan-npmrc-auth.mjs",
     "sdk:build": "cd sdk && bun run build",
-    "prepublishOnly": "bun run build && bun test"
+    "prepublishOnly": "bun run secrets:scan:npmrc && bun run build && bun test"
   },
   "keywords": [
     "connectors",
