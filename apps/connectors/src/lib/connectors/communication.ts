@@ -577,6 +577,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["meetings", "video", "transcription"],
   },
   {
+    name: "webex",
+    displayName: "Webex",
+    description: "Video conferencing, messaging, and collaboration",
+    category: "Communication",
+    tags: ["video", "meetings", "cisco"],
+  },
+  {
     name: "webexbycisco",
     displayName: "Webex by Cisco",
     description: "Video conferencing, messaging, and team collaboration",
