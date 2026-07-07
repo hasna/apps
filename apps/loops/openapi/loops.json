@@ -159,6 +159,50 @@
         }
       }
     },
+    "/v1/loops/count": {
+      "get": {
+        "operationId": "countLoops",
+        "summary": "Count loops (total-row verification)",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "includeArchived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "archived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "count",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CountResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/loops/{id}": {
       "get": {
         "operationId": "getLoop",
@@ -342,6 +386,34 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RunListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/count": {
+      "get": {
+        "operationId": "countRuns",
+        "summary": "Count runs (total-row verification)",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "count",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CountResponse"
                 }
               }
             }
@@ -1072,6 +1144,21 @@
           "ok",
           "imported",
           "skippedRunning"
+        ]
+      },
+      "CountResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "count": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ok",
+          "count"
         ]
       }
     },

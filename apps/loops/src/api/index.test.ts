@@ -242,6 +242,13 @@ describe("loops-api foundation", () => {
       expect(allLoops.filter((entry) => entry.id === "loop-import-1")).toHaveLength(1);
       const allRuns = await storage.listRuns({ loopId: "loop-import-1", limit: 100 });
       expect(allRuns.filter((entry) => entry.id === "run-import-1")).toHaveLength(1);
+
+      // Count routes verify totals beyond the 1000-row list cap.
+      const loopCount = await fetch(apiUrl(server, "/v1/loops/count?includeArchived=true"));
+      expect(loopCount.status).toBe(200);
+      expect(await loopCount.json()).toMatchObject({ ok: true, count: 1 });
+      const runCount = await fetch(apiUrl(server, "/v1/runs/count"));
+      expect(await runCount.json()).toMatchObject({ ok: true, count: 1 });
     } finally {
       server.stop(true);
       await storage.close();
