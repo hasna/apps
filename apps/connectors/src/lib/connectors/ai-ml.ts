@@ -101,6 +101,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "llm", "fine-tuning"],
   },
   {
+    name: "traverse",
+    displayName: "Traverse",
+    description: "RL training environments, episodes, judgments, and datasets",
+    category: "AI & ML",
+    tags: ["ai", "rl", "training", "environments"],
+  },
+  {
     name: "groq",
     displayName: "Groq",
     description: "Ultra-fast LLM inference",
@@ -120,6 +127,13 @@ export const connectors: ConnectorMeta[] = [
     description: "Open-source model inference and fine-tuning",
     category: "AI & ML",
     tags: ["ai", "llm", "open-source"],
+  },
+  {
+    name: "zatanna",
+    displayName: "Zatanna",
+    description: "AI workflow automation and orchestration",
+    category: "AI & ML",
+    tags: ["ai", "workflows", "automation"],
   },
   {
     name: "cohere",
@@ -365,6 +379,13 @@ export const connectors: ConnectorMeta[] = [
     description: "AI-powered browser automation tasks and sessions",
     category: "AI & ML",
     tags: ["ai", "browser", "automation"],
+  },
+  {
+    name: "stablebrowse",
+    displayName: "StableBrowse",
+    description: "AI browser automation tasks, sessions, and design extraction",
+    category: "AI & ML",
+    tags: ["ai", "browser", "automation", "agent"],
   },
   {
     name: "cody",
@@ -836,6 +857,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "chatbot", "white-label", "agencies", "automation"],
   },
   {
+    name: "strand-ai",
+    displayName: "Strand AI",
+    description: "Multimodal bio-data: WSI uploads, Lattice inference jobs, imputation results",
+    category: "AI & ML",
+    tags: ["ai", "biology", "imputation", "research"],
+  },
+  {
     name: "studiobyai21labs",
     displayName: "Studio by AI21 Labs",
     description: "AI writing and language models API by AI21 Labs",
@@ -885,6 +913,20 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "edge computing", "iot", "deployment", "models"],
   },
   {
+    name: "textcortex",
+    displayName: "TextCortex",
+    description: "AI writing assistant API for text generation, summarization, rewriting, and classification",
+    category: "AI & ML",
+    tags: ["ai", "writing", "content generation", "nlp", "text"],
+  },
+  {
+    name: "terminal-use",
+    displayName: "Terminal Use",
+    description: "Agent deployment runtime API with tasks, events, and persistent filesystems",
+    category: "AI & ML",
+    tags: ["agents", "runtime", "deployment", "filesystem"],
+  },
+  {
     name: "textcortexai",
     displayName: "TextCortex AI",
     description: "AI writing assistant for generating and rewriting content across platforms",
@@ -897,6 +939,27 @@ export const connectors: ConnectorMeta[] = [
     description: "Text analytics API for language detection, sentiment analysis, and NLP",
     category: "AI & ML",
     tags: ["nlp", "text analytics", "sentiment", "language detection", "api"],
+  },
+  {
+    name: "textrazor",
+    displayName: "TextRazor",
+    description: "NLP API for entity extraction, topic detection, sentiment analysis, and text understanding",
+    category: "AI & ML",
+    tags: ["nlp", "entities", "topics", "sentiment", "text-analysis"],
+  },
+  {
+    name: "the-company-company",
+    displayName: "The Company Company",
+    description: "Business agent platform",
+    category: "AI & ML",
+    tags: ["ai", "agents", "business-automation", "integrations"],
+  },
+  {
+    name: "the-token-company",
+    displayName: "The Token Company",
+    description: "LLM prompt compression",
+    category: "AI & ML",
+    tags: ["ai", "llm", "compression", "tokens", "middleware"],
   },
   {
     name: "thoughtfulgpt",
@@ -913,6 +976,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["nlp", "content moderation", "sentiment", "language understanding", "api"],
   },
   {
+    name: "typless",
+    displayName: "Typless",
+    description: "AI-powered document data extraction and OCR for invoices and custom documents",
+    category: "AI & ML",
+    tags: ["ai", "document", "extraction", "ocr"],
+  },
+  {
     name: "udio",
     displayName: "Udio",
     description: "AI music generation platform",
@@ -927,11 +997,11 @@ export const connectors: ConnectorMeta[] = [
     tags: ["transcription", "meetings", "ai"],
   },
   {
-    name: "weights-biases-api-platform",
-    displayName: "Weights & Biases API Platform",
-    description: "W&B API Platform items, events, and search",
+    name: "wato",
+    displayName: "Wato",
+    description: "Shared agent memories, workflows, tools, and artifacts",
     category: "AI & ML",
-    tags: ["wandb", "ml", "api-platform"],
+    tags: ["ai", "agents", "memory", "workflows"],
   },
   {
     name: "wavelineextract",
@@ -939,6 +1009,13 @@ export const connectors: ConnectorMeta[] = [
     description: "Document data extraction and parsing",
     category: "AI & ML",
     tags: ["extraction", "documents", "parsing"],
+  },
+  {
+    name: "wayco",
+    displayName: "Wayco",
+    description: "Med-legal case management, lead intake, medical records, provider matching, and voice calls",
+    category: "AI & ML",
+    tags: ["ai", "med-legal", "healthcare"],
   },
   {
     name: "wonderchat",
@@ -974,5 +1051,33 @@ export const connectors: ConnectorMeta[] = [
     description: "AI document data extraction and automation",
     category: "AI & ML",
     tags: ["ai", "extraction", "documents"],
+  },
+  {
+    name: "tensorboard",
+    displayName: "TensorBoard",
+    description: "TensorBoard training run metrics and scalars",
+    category: "AI & ML",
+    tags: ["ai", "ml", "metrics", "visualization"],
+  },
+  {
+    name: "zhipu-ai",
+    displayName: "Zhipu AI",
+    description: "GLM large language models via Zhipu Open Platform",
+    category: "AI & ML",
+    tags: ["ai", "llm", "glm", "zhipu"],
+  },
+  {
+    name: "youart",
+    displayName: "YouArt",
+    description: "AI originals funding and creator economy",
+    category: "AI & ML",
+    tags: ["ai", "creator-economy", "funding"],
+  },
+  {
+    name: "weights-biases-api-platform",
+    displayName: "Weights & Biases API Platform",
+    description: "W&B API Platform items, events, and search",
+    category: "AI & ML",
+    tags: ["wandb", "ml", "api-platform"],
   },
 ];
