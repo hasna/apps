@@ -1,7 +1,8 @@
 import chalk from "chalk";
 import { execSync } from "node:child_process";
 import { writeSync } from "node:fs";
-import { resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { resolve, sep } from "node:path";
 import { getDatabase, resolvePartialId } from "../db/database.js";
 import { ensureProject, getProject, getProjectByPath, slugify } from "../db/projects.js";
 import { getPackageVersion } from "../lib/package-version.js";
@@ -39,6 +40,20 @@ export function detectGitRoot(): string | null {
   } catch {
     return null;
   }
+}
+
+function isPathWithin(child: string, parent: string): boolean {
+  const normalizedChild = resolve(child);
+  const normalizedParent = resolve(parent);
+  return normalizedChild === normalizedParent || normalizedChild.startsWith(`${normalizedParent}${sep}`);
+}
+
+export function shouldSkipAutoProjectForGitRoot(gitRoot: string): boolean {
+  const normalized = resolve(gitRoot);
+  if (process.platform !== "win32" && (normalized === "/tmp" || normalized.startsWith("/tmp/"))) {
+    return true;
+  }
+  return isPathWithin(normalized, tmpdir());
 }
 
 /**
@@ -87,6 +102,7 @@ export function autoDetectProject(opts: { project?: string }): Project | undefin
   if (process.env["TODOS_AUTO_PROJECT"] === "false") return undefined;
   const gitRoot = detectGitRoot();
   if (gitRoot) {
+    if (shouldSkipAutoProjectForGitRoot(gitRoot)) return undefined;
     return ensureProject(basename(gitRoot), gitRoot);
   }
   return undefined;

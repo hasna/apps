@@ -22,10 +22,13 @@ import { approveReviewItem, claimReviewItem, requestReviewQueue } from "./review
 
 let home: string;
 let previousHome: string | undefined;
+const nonTempHomeRoot = process.env["HOME"] || process.env["USERPROFILE"] || process.cwd();
 
 function makeNonTempHome(prefix: string): string {
   const requestedRoot = process.env["TODOS_TEST_NON_TEMP_HOME_ROOT"];
-  const fallbackRoot = join(process.cwd(), "node_modules", ".cache", "todos-test-non-temp-home");
+  const fallbackRoot = !isUnder(tmpdir(), nonTempHomeRoot)
+    ? nonTempHomeRoot
+    : join(process.cwd(), "node_modules", ".cache", "todos-test-non-temp-home");
   const root = requestedRoot && !isUnder(tmpdir(), requestedRoot) ? requestedRoot : fallbackRoot;
   if (!existsSync(root)) mkdirSync(root, { recursive: true });
   return mkdtempSync(join(root, `${prefix}-`));
