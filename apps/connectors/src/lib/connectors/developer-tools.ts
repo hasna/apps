@@ -80,6 +80,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["hosting", "deployment", "serverless"],
   },
   {
+    name: "wakatime",
+    displayName: "WakaTime",
+    description: "Coding time analytics and developer productivity tracking",
+    category: "Developer Tools",
+    tags: ["time-tracking", "productivity", "developer-analytics"],
+  },
+  {
     name: "netlify",
     displayName: "Netlify",
     description: "Web hosting and deployment",
