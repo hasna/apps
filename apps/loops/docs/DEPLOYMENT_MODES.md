@@ -69,6 +69,7 @@ loops cloud status
 loops-api status
 loops-serve version
 HASNA_LOOPS_DATABASE_URL=... loops-serve migrate --dry-run
+HASNA_LOOPS_DATABASE_URL=... loops-serve serve --host 127.0.0.1 --port 8787
 loops-runner status
 loops export --file ./loops-export.json --dry-run
 loops export --file ./loops-export.json
@@ -119,6 +120,9 @@ package. It reads and writes Postgres directly, serves open foundation probes
 (`GET /health`, `/ready`, `/version`, `/openapi.json`), gates `/v1` loop/run and
 runner-protocol routes with API-key auth on non-local binds, and applies the
 Postgres migrations plus the shared `api_keys` table with `loops-serve migrate`.
+Use `HASNA_LOOPS_DATABASE_URL=... loops-serve migrate --dry-run` to inspect
+Postgres migrations before applying them, then start the host with
+`HASNA_LOOPS_DATABASE_URL=... loops-serve serve`.
 
 `loops-api` is the embeddable API contract and local/dev foundation server in
 the same public package. It is not a separate package because self-hosted users
@@ -184,11 +188,13 @@ authoritative until a safe import is applied; in non-local modes it may remain
 a cache, offline spool, and audit copy.
 
 `LOOPS_DATABASE_URL` or `HASNA_LOOPS_DATABASE_URL` selects the self-hosted
-Postgres scheduler-state contract and is required by `loops-serve`. It does not
-make the standalone `loops` CLI mutate a remote database by itself. Remote
-execution still flows through a configured control-plane API and runner
-protocol. `loops-runner` needs `LOOPS_API_URL` or `HASNA_LOOPS_API_URL` to claim
-work; a database URL alone is migration/readiness configuration.
+Postgres scheduler-state contract and is required by `loops-serve`; the
+`loops-serve` process also accepts `DATABASE_URL` for platform hosts that expose
+that conventional name. Setting a database URL does not make the standalone
+`loops` CLI mutate a remote database by itself. Remote execution still flows
+through a configured control-plane API and runner protocol. `loops-runner` needs
+`LOOPS_API_URL` or `HASNA_LOOPS_API_URL` to claim work; a database URL alone is
+migration/readiness configuration.
 
 `loops self-hosted runner-register` is also preview-only unless `--apply` is
 present. The dry run prints the runner id, machine id, labels, and
@@ -237,6 +243,7 @@ The public package owns:
 - local SQLite scheduling and daemon execution,
 - the mode resolver and status surfaces,
 - the self-hosted API contract,
+- the `loops-serve` self-hosted control-plane host,
 - the runner contract,
 - local cache/spool semantics,
 - import/export and migration commands,

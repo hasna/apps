@@ -54,6 +54,7 @@ loops cloud status
 loops-api status
 loops-serve version
 HASNA_LOOPS_DATABASE_URL=... loops-serve migrate --dry-run
+HASNA_LOOPS_DATABASE_URL=... loops-serve serve --host 127.0.0.1 --port 8787
 loops-runner status
 ```
 
@@ -97,6 +98,7 @@ loops self-hosted pull --dry-run
 
 The preview may inspect `LOOPS_API_URL`/`HASNA_LOOPS_API_URL`, but it refuses
 remote apply because normal loop CRUD would generate new ids. Use
+`loops-serve migrate --dry-run` to inspect the Postgres control-plane schema,
 `loops self-hosted runner-register` to verify runner registration against an
 API, then use `loops-runner run-once` for the current bounded non-workflow
 claim/execute/finalize protocol. `loops-serve migrate` applies the Postgres

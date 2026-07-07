@@ -44,11 +44,17 @@ service. Set `LOOPS_MODE` or `HASNA_LOOPS_MODE` to `local`, `self_hosted`, or
 selects `cloud`, while `LOOPS_API_URL` or `LOOPS_DATABASE_URL` selects
 `self_hosted`.
 
+`loops-serve` belongs to `self_hosted`: it is not used for the default local
+SQLite scheduler, and it is not the hosted multi-tenant cloud service. Local
+mode remains `loops-daemon` plus local SQLite. Cloud mode remains a public
+client/runner contract until an external hosted URL and token are configured.
+
 The public `@hasna/loops` package owns the local runtime, mode resolver,
-self-hosted API contract, runner contract, SDK, MCP server, and CLI. Hosted
-tenant auth, account administration, and infrastructure live outside this
-package. Cloud mode is a public contract until a cloud-specific hosted URL and
-cloud token are configured through `LOOPS_CLOUD_API_URL` plus
+self-hosted API contract, `loops-serve` control-plane host, runner contract,
+SDK, MCP server, and CLI. Hosted tenant auth, account administration, and
+infrastructure live outside this package. Cloud mode is a public contract until
+a cloud-specific hosted URL and cloud token are configured through
+`LOOPS_CLOUD_API_URL` plus
 `LOOPS_CLOUD_TOKEN` or `HASNA_LOOPS_CLOUD_TOKEN`.
 
 Scheduler state is explicit in status JSON. `schedulerState.localStore` is
@@ -82,6 +88,7 @@ loops cloud status
 loops-api status
 loops-serve version
 HASNA_LOOPS_DATABASE_URL=... loops-serve migrate --dry-run
+HASNA_LOOPS_DATABASE_URL=... loops-serve serve --host 127.0.0.1 --port 8787
 loops-runner status
 ```
 
