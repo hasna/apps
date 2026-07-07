@@ -1,4 +1,4 @@
-import { basename } from "node:path";
+import { basename, isAbsolute, relative, sep } from "node:path";
 import { homedir } from "node:os";
 import type { Loop, ScheduleSpec } from "../types.js";
 import type { Store } from "./store.js";
@@ -85,14 +85,32 @@ function slugify(value: string): string {
     .toLowerCase();
 }
 
+function stripTrailingSlashes(value: string): string {
+  return value.replace(/\/+$/g, "") || value;
+}
+
+function pathSegmentsWithin(parent: string, child: string): string[] | undefined {
+  const rel = relative(parent, child);
+  if (!rel) return [];
+  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return undefined;
+  return rel.split(/[\\/]+/g).filter(Boolean);
+}
+
 function repoSlugFromCwd(cwd: string | undefined): string {
-  if (!cwd || cwd === userHome()) return "";
-  const home = userHome().replace(/\/+$/g, "");
-  const normalized = cwd.replace(/\/+$/g, "");
+  if (!cwd) return "";
+  const home = stripTrailingSlashes(userHome());
+  const normalized = stripTrailingSlashes(cwd);
+  if (normalized === home) return "";
   const loopsDataDir = `${home}/.hasna/loops`;
-  if (normalized === loopsDataDir) return "";
-  if (normalized.startsWith(`${loopsDataDir}/`) && !normalized.startsWith(`${loopsDataDir}/worktrees/`)) return "";
-  return slugify(basename(cwd));
+  const loopsRelative = pathSegmentsWithin(loopsDataDir, normalized);
+  if (loopsRelative) {
+    if (loopsRelative[0] !== "worktrees") return "";
+    // Managed worktrees are <loops>/worktrees/<repoSlug>/<seedSlug>[/relativeCwd].
+    const [repoSlug, seedSlug] = loopsRelative.slice(1);
+    if (!repoSlug || !seedSlug) return "";
+    return slugify(repoSlug);
+  }
+  return slugify(basename(normalized));
 }
 
 function scopeForLoop(loop: Loop): { scope: "machine" | "repo"; prefix: string; scopeSlug: string } {

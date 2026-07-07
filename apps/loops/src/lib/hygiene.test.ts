@@ -1,5 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { Store } from "./store.js";
@@ -50,6 +50,62 @@ describe("hygiene", () => {
     } finally {
       store.close();
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("name hygiene scopes managed worktree cwd by repository slug", () => {
+    const store = new Store(":memory:");
+    const home = process.env.HOME || homedir();
+    const worktree = join(
+      home,
+      ".hasna",
+      "loops",
+      "worktrees",
+      "open-loops",
+      "a813060b-7895-4fa5-9efa-645f89fa7487-67e7783c",
+    );
+    try {
+      store.createLoop({
+        name: "codewith:open-loops:lint:hourly",
+        schedule: { type: "interval", everyMs: 3_600_000 },
+        target: { type: "command", command: "true", cwd: worktree },
+      });
+      store.createLoop({
+        name: "codewith:open-loops:typecheck:daily",
+        schedule: { type: "interval", everyMs: 86_400_000 },
+        target: { type: "command", command: "true", cwd: join(worktree, "src", "lib") },
+      });
+      const report = buildNameHygieneReport(store);
+      const names = report.changes.map((change) => change.newName).sort();
+      expect(report.checked).toBe(2);
+      expect(report.changed).toBe(2);
+      expect(report.changes.every((change) => change.scope === "repo")).toBe(true);
+      expect(report.changes.every((change) => change.scopeSlug === "open-loops")).toBe(true);
+      expect(names).toEqual(["repo-open-loops-lint", "repo-open-loops-typecheck"]);
+      expect(names).not.toContain("repo-a813060b-7895-4fa5-9efa-645f89fa7487-67e7783c-lint");
+      expect(names).not.toContain("repo-lib-typecheck");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("name hygiene keeps non-worktree loops data cwd machine scoped", () => {
+    const store = new Store(":memory:");
+    const home = process.env.HOME || homedir();
+    try {
+      store.createLoop({
+        name: "codewith:loops:data",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "true", cwd: join(home, ".hasna", "loops", "reports", "health-scan") },
+      });
+      const report = buildNameHygieneReport(store);
+      expect(report.checked).toBe(1);
+      expect(report.changed).toBe(1);
+      expect(report.changes[0]?.scope).toBe("machine");
+      expect(report.changes[0]?.scopeSlug).toBe("machine");
+      expect(report.changes[0]?.newName).toBe("machine-loops-data");
+    } finally {
+      store.close();
     }
   });
 
