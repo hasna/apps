@@ -9,6 +9,7 @@ import { createEvent, getEvent, listEvents, updateEvent, deleteEvent, findConfli
 import { createAttendee, getAttendeesForEvent, updateAttendee, deleteAttendee } from "../db/attendees.js";
 import { getAvailabilityForAgent, upsertAgentAvailability, deleteAvailability } from "../db/availability.js";
 import { createMembership, getMembershipsForOrg, getOrgsForAgent, deleteMembershipByAgentAndOrg } from "../db/memberships.js";
+import { getCalendarCloud } from "../cloud/store.js";
 
 const packageJson = await Bun.file(new URL("../../package.json", import.meta.url)).json() as { version: string };
 const program = new Command();
@@ -37,22 +38,27 @@ calendarCommand("org-add <name>")
   .description("Create a new org")
   .option("--slug <slug>", "Org slug")
   .option("--description <desc>", "Description")
-  .action((name, opts) => {
-    const org = createOrg({ name, slug: opts.slug, description: opts.description });
+  .action(async (name, opts) => {
+    const cloud = getCalendarCloud();
+    const org = cloud
+      ? (await cloud.createOrg({ name, slug: opts.slug, description: opts.description })) as any
+      : createOrg({ name, slug: opts.slug, description: opts.description });
     output(wantsJson(opts) ? JSON.stringify(org) : chalk.green(`Org created: ${org.name} (${org.slug}) [${org.id}]`));
   });
 
 calendarCommand("org-list")
   .description("List all orgs")
-  .action((opts) => {
-    const orgs = listOrgs();
+  .action(async (opts) => {
+    const cloud = getCalendarCloud();
+    const orgs = (cloud ? await cloud.listOrgs() : listOrgs()) as any[];
     output(wantsJson(opts) ? JSON.stringify(orgs) : orgs.map((o) => `${o.name} (${o.slug}) [${o.id}]`).join("\n") || chalk.gray("No orgs"));
   });
 
 calendarCommand("org-show <id>")
   .description("Show org details")
-  .action((id, opts) => {
-    const org = getOrg(id) || getOrgBySlug(id);
+  .action(async (id, opts) => {
+    const cloud = getCalendarCloud();
+    const org = (cloud ? await cloud.getOrg(id) : (getOrg(id) || getOrgBySlug(id))) as any;
     if (!org) fail("Org not found");
     output(wantsJson(opts) ? JSON.stringify(org) : `${org.name} (${org.slug})\n  ID: ${org.id}`);
   });
@@ -61,15 +67,19 @@ calendarCommand("org-update <id>")
   .description("Update an org")
   .option("--name <name>", "Org name")
   .option("--description <desc>", "Description")
-  .action((id, opts) => {
-    const org = updateOrg(id, { name: opts.name, description: opts.description });
+  .action(async (id, opts) => {
+    const cloud = getCalendarCloud();
+    const org = (cloud
+      ? await cloud.updateOrg(id, { name: opts.name, description: opts.description })
+      : updateOrg(id, { name: opts.name, description: opts.description })) as any;
     output(wantsJson(opts) ? JSON.stringify(org) : chalk.green(`Org updated: ${org.name}`));
   });
 
 calendarCommand("org-delete <id>")
   .description("Delete an org")
-  .action((id, opts) => {
-    const ok = deleteOrg(id);
+  .action(async (id, opts) => {
+    const cloud = getCalendarCloud();
+    const ok = cloud ? await cloud.deleteOrg(id) : deleteOrg(id);
     outputJsonOrText({ deleted: ok }, ok ? chalk.green("Org deleted") : chalk.red("Org not found"), opts);
   });
 
@@ -129,8 +139,8 @@ calendarCommand("cal-add <name>")
   .option("--color <color>", "Color hex")
   .option("--timezone <tz>", "Timezone (default: UTC)")
   .option("--visibility <vis>", "Visibility: public, org, private")
-  .action((name, opts) => {
-    const cal = createCalendar({
+  .action(async (name, opts) => {
+    const input = {
       name,
       org_id: opts.org,
       slug: opts.slug,
@@ -138,15 +148,18 @@ calendarCommand("cal-add <name>")
       color: opts.color,
       timezone: opts.timezone || "UTC",
       visibility: opts.visibility as any,
-    });
+    };
+    const cloud = getCalendarCloud();
+    const cal = (cloud ? await cloud.createCalendar(input) : createCalendar(input)) as any;
     output(wantsJson(opts) ? JSON.stringify(cal) : chalk.green(`Calendar created: ${cal.name} [${cal.id}]`));
   });
 
 calendarCommand("cal-list")
   .description("List calendars")
   .option("--org <orgId>", "Filter by org")
-  .action((opts) => {
-    const cals = listCalendars(opts.org || undefined);
+  .action(async (opts) => {
+    const cloud = getCalendarCloud();
+    const cals = (cloud ? await cloud.listCalendars(opts.org || undefined) : listCalendars(opts.org || undefined)) as any[];
     output(wantsJson(opts) ? JSON.stringify(cals) : cals.map((c) => `${c.name} (${c.slug}) [${c.id}]`).join("\n") || chalk.gray("No calendars"));
   });
 
@@ -157,21 +170,24 @@ calendarCommand("cal-update <id>")
   .option("--color <color>", "Color")
   .option("--timezone <tz>", "Timezone")
   .option("--visibility <vis>", "Visibility")
-  .action((id, opts) => {
-    const cal = updateCalendar(id, {
+  .action(async (id, opts) => {
+    const input = {
       name: opts.name,
       description: opts.description,
       color: opts.color,
       timezone: opts.timezone,
       visibility: opts.visibility as any,
-    });
+    };
+    const cloud = getCalendarCloud();
+    const cal = (cloud ? await cloud.updateCalendar(id, input) : updateCalendar(id, input)) as any;
     output(wantsJson(opts) ? JSON.stringify(cal) : chalk.green(`Calendar updated: ${cal.name}`));
   });
 
 calendarCommand("cal-delete <id>")
   .description("Delete a calendar")
-  .action((id, opts) => {
-    const ok = deleteCalendar(id);
+  .action(async (id, opts) => {
+    const cloud = getCalendarCloud();
+    const ok = cloud ? await cloud.deleteCalendar(id) : deleteCalendar(id);
     outputJsonOrText({ deleted: ok }, ok ? chalk.green("Calendar deleted") : chalk.red("Calendar not found"), opts);
   });
 
@@ -192,11 +208,12 @@ calendarCommand("add <title>")
   .option("--rrule <rule>", "Recurrence rule (RRULE)")
   .option("--source-task <id>", "Link to open-todos task ID")
   .option("--agent <agentId>", "Creator agent ID")
-  .action((title, opts) => {
-    const cal = getCalendar(opts.calendar);
+  .action(async (title, opts) => {
+    const cloud = getCalendarCloud();
+    const cal = (cloud ? await cloud.getCalendar(opts.calendar) : getCalendar(opts.calendar)) as any;
     if (!cal) fail("Calendar not found");
 
-    const evt = createEvent({
+    const input = {
       title,
       calendar_id: opts.calendar,
       org_id: opts.org || cal.org_id,
@@ -211,7 +228,8 @@ calendarCommand("add <title>")
       recurrence_rule: opts.rrule,
       source_task_id: opts.sourceTask,
       created_by: opts.agent,
-    });
+    };
+    const evt = (cloud ? await cloud.createEvent(input) : createEvent(input)) as any;
 
     output(wantsJson(opts) ? JSON.stringify(evt) : chalk.green(`Event created: ${evt.title}\n  ${evt.start_at} -> ${evt.end_at} [${evt.id}]`));
   });
@@ -223,23 +241,35 @@ calendarCommand("list")
   .option("--after <date>", "After date (ISO)")
   .option("--before <date>", "Before date (ISO)")
   .option("--limit <n>", "Limit results", parseInt)
-  .action((opts) => {
-    const events = listEvents({
+  .action(async (opts) => {
+    const filter = {
       calendar_id: opts.calendar,
       org_id: opts.org,
       after: opts.after,
       before: opts.before,
       limit: opts.limit,
-    });
+    };
+    const cloud = getCalendarCloud();
+    const events = (cloud ? await cloud.listEvents(filter) : listEvents(filter)) as any[];
     output(wantsJson(opts) ? JSON.stringify(events) : events.map((e) => `${e.title}\n  ${e.start_at} -> ${e.end_at} [${e.id}]`).join("\n") || chalk.gray("No events"));
   });
 
 calendarCommand("show <id>")
   .description("Show event details")
-  .action((id, opts) => {
-    const evt = getEvent(id);
-    if (!evt) fail("Event not found");
-    const attendees = getAttendeesForEvent(id);
+  .action(async (id, opts) => {
+    const cloud = getCalendarCloud();
+    let evt: any;
+    let attendees: any[];
+    if (cloud) {
+      const withAtt = await cloud.getEventWithAttendees(id);
+      if (!withAtt) fail("Event not found");
+      evt = withAtt!.event;
+      attendees = withAtt!.attendees as any[];
+    } else {
+      evt = getEvent(id);
+      if (!evt) fail("Event not found");
+      attendees = getAttendeesForEvent(id);
+    }
     const result = { event: evt, attendees };
     output(wantsJson(opts) ? JSON.stringify(result) : `${evt.title}\n  ${evt.start_at} -> ${evt.end_at}\n  Location: ${evt.location || "—"}\n  Status: ${evt.status}\n  Attendees: ${attendees.length}`);
   });
@@ -252,22 +282,25 @@ calendarCommand("update <id>")
   .option("--description <desc>", "Description")
   .option("--location <loc>", "Location")
   .option("--status <status>", "Status")
-  .action((id, opts) => {
-    const evt = updateEvent(id, {
+  .action(async (id, opts) => {
+    const input = {
       title: opts.title,
       start_at: opts.start,
       end_at: opts.end,
       description: opts.description,
       location: opts.location,
       status: opts.status as any,
-    });
+    };
+    const cloud = getCalendarCloud();
+    const evt = (cloud ? await cloud.updateEvent(id, input) : updateEvent(id, input)) as any;
     output(wantsJson(opts) ? JSON.stringify(evt) : chalk.green(`Event updated: ${evt.title}`));
   });
 
 calendarCommand("delete <id>")
   .description("Delete an event")
-  .action((id, opts) => {
-    const ok = deleteEvent(id);
+  .action(async (id, opts) => {
+    const cloud = getCalendarCloud();
+    const ok = cloud ? await cloud.deleteEvent(id) : deleteEvent(id);
     outputJsonOrText({ deleted: ok }, ok ? chalk.green("Event deleted") : chalk.red("Event not found"), opts);
   });
 
