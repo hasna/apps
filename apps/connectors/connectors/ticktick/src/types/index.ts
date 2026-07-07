@@ -25,9 +25,10 @@ export interface Project {
   sortOrder?: number;
 }
 
-export interface ProjectWithData extends Project {
-  tasks?: Task[];
-  columns?: unknown[];
+export interface ProjectWithData {
+  project: Project;
+  tasks: Task[];
+  columns: unknown[];
 }
 
 export interface ChecklistItem {
@@ -82,7 +83,7 @@ export interface UpdateProjectInput {
 
 export interface CreateTaskInput {
   title: string;
-  projectId?: string;
+  projectId: string;
   content?: string;
   desc?: string;
   isAllDay?: boolean;
@@ -99,7 +100,7 @@ export interface CreateTaskInput {
 
 export interface UpdateTaskInput {
   id?: string;
-  projectId?: string;
+  projectId: string;
   title?: string;
   content?: string;
   desc?: string;

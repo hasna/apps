@@ -50,10 +50,16 @@ export class TickTick {
   }
 
   async createTask(input: CreateTaskInput): Promise<Task> {
+    if (!input.projectId) {
+      throw new Error('projectId is required to create a TickTick task');
+    }
     return this.client.post<Task>('/task', input as unknown as Record<string, unknown>);
   }
 
   async updateTask(taskId: string, input: UpdateTaskInput): Promise<Task> {
+    if (!input.projectId) {
+      throw new Error('projectId is required to update a TickTick task');
+    }
     return this.client.post<Task>(`/task/${encodeURIComponent(taskId)}`, {
       id: taskId,
       ...input,

@@ -356,7 +356,7 @@ taskCmd
 taskCmd
   .command('create <title>')
   .description('Create a new task')
-  .option('-p, --project <projectId>', 'Project ID')
+  .requiredOption('-p, --project <projectId>', 'Project ID')
   .option('-c, --content <content>', 'Task content')
   .option('-d, --desc <desc>', 'Task description')
   .option('--priority <priority>', 'Priority (0=none, 1=low, 3=medium, 5=high)', parseInt)
@@ -395,7 +395,7 @@ taskCmd
 taskCmd
   .command('update <taskId>')
   .description('Update a task')
-  .option('-p, --project <projectId>', 'Project ID')
+  .requiredOption('-p, --project <projectId>', 'Project ID')
   .option('-t, --title <title>', 'New title')
   .option('-c, --content <content>', 'Task content')
   .option('-d, --desc <desc>', 'Task description')

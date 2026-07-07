@@ -1,5 +1,6 @@
 import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
 import { TickTickClient } from './client';
+import { TickTick } from './index';
 import { TickTickApiError } from '../types';
 
 describe('TickTickClient', () => {
@@ -120,6 +121,20 @@ describe('TickTickClient', () => {
 
       const [url] = (global.fetch as ReturnType<typeof mock>).mock.calls[0];
       expect(url).toBe('https://api.ticktick.com/open/v1/project/p1/task/t1/complete');
+    });
+
+    test('createTask requires projectId before making request', async () => {
+      const api = new TickTick(mockConfig);
+      global.fetch = mock(() => Promise.resolve(new Response('{}')));
+      await expect(api.createTask({ title: 'Task', projectId: '' })).rejects.toThrow('projectId is required');
+      expect(global.fetch).toHaveBeenCalledTimes(0);
+    });
+
+    test('updateTask requires projectId before making request', async () => {
+      const api = new TickTick(mockConfig);
+      global.fetch = mock(() => Promise.resolve(new Response('{}')));
+      await expect(api.updateTask('t1', { title: 'Task', projectId: '' })).rejects.toThrow('projectId is required');
+      expect(global.fetch).toHaveBeenCalledTimes(0);
     });
 
     test('throws TickTickApiError on error response', async () => {
