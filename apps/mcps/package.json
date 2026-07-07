@@ -1,6 +1,6 @@
 {
   "name": "@hasna/mcps",
-  "version": "0.0.29",
+  "version": "0.0.31",
   "description": "Meta-MCP registry & CLI — discover, manage, and proxy MCP servers",
   "type": "module",
   "repository": {
@@ -17,6 +17,10 @@
     "./mcp": {
       "import": "./dist/mcp/index.js",
       "types": "./dist/mcp/index.d.ts"
+    },
+    "./storage": {
+      "import": "./dist/storage.js",
+      "types": "./dist/storage.d.ts"
     }
   },
   "bin": {
@@ -31,19 +35,21 @@
     "README.md"
   ],
   "scripts": {
-    "build": "bun run build:dashboard && bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun run scripts/fix-shebangs.ts && bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/mcp/index.ts --outdir ./dist/mcp --target bun && tsc --emitDeclarationOnly --declaration --outDir dist",
+    "build": "rm -rf dist bin dashboard/dist && bun run build:dashboard && bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk --external pg && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun --external pg && bun run scripts/fix-shebangs.ts && bun build ./src/index.ts ./src/storage.ts --outdir ./dist --target bun --external pg && bun build ./src/mcp/index.ts --outdir ./dist/mcp --target bun --external pg && tsc --emitDeclarationOnly --declaration --outDir dist",
     "build:dashboard": "cd dashboard && bun install && bun run build",
     "dev": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:dashboard": "cd dashboard && bun run dev",
     "serve": "bun run src/cli/index.tsx serve",
     "test": "bun test",
+    "no-cloud:source": "bun test src/no-cloud-boundary.test.ts",
+    "no-cloud:pack": "bun run build && bun scripts/no-cloud-artifact-scan.mjs",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "bun run build",
+    "prepack": "bun run build && bun scripts/no-cloud-artifact-scan.mjs",
+    "prepublishOnly": "bun test && bun run build && bun scripts/no-cloud-artifact-scan.mjs",
     "postinstall": "mkdir -p $HOME/.hasna/mcps/cache 2>/dev/null || true"
   },
   "dependencies": {
-    "@hasna/cloud": "0.1.24",
     "@hasna/events": "^0.1.6",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "chalk": "^5.3.0",
@@ -52,11 +58,13 @@
     "ink-select-input": "^6.0.0",
     "ink-spinner": "^5.0.0",
     "ink-text-input": "^6.0.0",
+    "pg": "^8.22.0",
     "react": "^18.2.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "@types/pg": "^8.20.0",
     "@types/react": "^18.2.0",
     "typescript": "^5"
   },

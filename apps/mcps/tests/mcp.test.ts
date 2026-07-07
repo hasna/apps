@@ -15,7 +15,7 @@ function clearDb() {
 }
 
 async function createClientServer() {
-  const server = createMcpServer({ name: "mcps-test", version: "0.0.1", cloudTools: false });
+  const server = createMcpServer({ name: "mcps-test", version: "0.0.1" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "test-client", version: "0.0.1" });
   await server.connect(serverTransport);
@@ -295,6 +295,10 @@ describe("MCP server tools", () => {
     expect(pkg.exports["./mcp"]).toEqual({
       import: "./dist/mcp/index.js",
       types: "./dist/mcp/index.d.ts",
+    });
+    expect(pkg.exports["./storage"]).toEqual({
+      import: "./dist/storage.js",
+      types: "./dist/storage.d.ts",
     });
   });
 });

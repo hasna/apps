@@ -19,6 +19,7 @@ export const TEST_DB_PATH = join(TEST_DIR, "test.db");
 mock.module(join(import.meta.dir, "../src/lib/config.ts"), () => ({
   MCPS_DIR: TEST_DIR,
   DB_PATH: TEST_DB_PATH,
+  resolveStorageMode: () => "local",
   REGISTRY_API_URL: "https://registry.modelcontextprotocol.io/v0/servers",
   TOOL_PREFIX_SEPARATOR: "__",
 }));

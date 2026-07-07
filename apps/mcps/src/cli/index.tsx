@@ -208,6 +208,11 @@ function printPageFooter<T>(page: Page<T>, noun: string, hint?: string): void {
   if (hint) console.log(chalk.dim(hint));
 }
 
+function parseTables(value?: string): string[] | undefined {
+  if (!value) return undefined;
+  return value.split(",").map((table) => table.trim()).filter(Boolean);
+}
+
 function parseIntegerOption(value: string, label: string, { min = 0, max }: { min?: number; max?: number } = {}): number {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || Number.isNaN(parsed) || parsed < min || (max !== undefined && parsed > max)) {
@@ -1085,6 +1090,68 @@ program
     closeDb();
   });
 
+// --- storage ---
+program
+  .command("storage [action]")
+  .description("Inspect or sync the app-owned MCP registry storage")
+  .option("--tables <tables>", "comma-separated table list")
+  .action(async (action = "status", opts: { tables?: string }) => {
+    const {
+      collectStorageSyncErrors,
+      getStorageSyncStatus,
+      storagePull,
+      storagePush,
+      storageSync,
+    } = await import("../lib/storage-sync.js");
+    const tables = parseTables(opts.tables);
+    try {
+      switch (action) {
+        case "status":
+          printJson(getStorageSyncStatus());
+          break;
+        case "push":
+          {
+            const result = await storagePush({ tables });
+            printJson(result);
+            if (collectStorageSyncErrors(result).length > 0) {
+              closeDb();
+              process.exit(1);
+            }
+          }
+          break;
+        case "pull":
+          {
+            const result = await storagePull({ tables });
+            printJson(result);
+            if (collectStorageSyncErrors(result).length > 0) {
+              closeDb();
+              process.exit(1);
+            }
+          }
+          break;
+        case "sync":
+          {
+            const result = await storageSync({ tables });
+            printJson(result);
+            if (collectStorageSyncErrors(result).length > 0) {
+              closeDb();
+              process.exit(1);
+            }
+          }
+          break;
+        default:
+          console.error(chalk.red(`Unknown storage action: ${action}`));
+          closeDb();
+          process.exit(1);
+      }
+    } catch (err) {
+      console.error(chalk.red(`Storage ${action} failed: ${(err as Error).message}`));
+      closeDb();
+      process.exit(1);
+    }
+    closeDb();
+  });
+
 // --- doctor ---
 program
   .command("doctor")
@@ -1138,7 +1205,7 @@ program
   .argument("<shell>", "Shell type: bash, zsh, fish")
   .description("Generate shell completion script")
   .action((shell: string) => {
-    const commands = ["list","search","providers","find","add","remove","enable","disable","info","status","tools","call","doctor","install","machines","fleet","export","import","env","sources","clone","update-server","serve","update","mcp","completion"];
+    const commands = ["list","search","providers","find","add","remove","enable","disable","info","status","storage","tools","call","doctor","install","machines","fleet","export","import","env","sources","clone","update-server","serve","update","mcp","completion"];
 
     if (shell === "bash") {
       console.log(`# Add to ~/.bashrc: eval "$(mcps completion bash)"

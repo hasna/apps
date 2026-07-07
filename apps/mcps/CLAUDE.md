@@ -24,8 +24,8 @@ This is a **meta-MCP system** — it is itself an MCP server that manages, proxi
 
 ### Core Library (`src/lib/`)
 
-- **`config.ts`** — Constants: `~/.mcps/` dir, DB path, registry API URL, tool prefix separator (`__`)
-- **`db.ts`** — Singleton SQLite via `bun:sqlite` at `~/.mcps/registry.db`. WAL mode. Two tables: `servers` and `tool_cache`
+- **`config.ts`** — Constants: `~/.hasna/mcps/` dir, DB path, explicit local storage mode, registry API URL, tool prefix separator (`__`)
+- **`db.ts`** — Singleton SQLite via `bun:sqlite` at `~/.hasna/mcps/registry.db`. WAL mode. Core tables include `servers`, `tool_cache`, sources, machines, provider profiles, and feedback
 - **`registry.ts`** — CRUD for local server entries. Server IDs are auto-generated slugs from the name. Also manages the `tool_cache` table
 - **`remote.ts`** — Client for the official MCP registry API (`registry.modelcontextprotocol.io`). The API returns `{ servers: [{ server: {...}, _meta: {...} }] }` — note the nested `server` wrapper
 - **`proxy.ts`** — Connection pooling for upstream MCP servers. Maintains a `Map<string, ConnectedServer>` with MCP SDK clients. Supports stdio/SSE/streamable-http transports. Tools are exposed with prefixed names: `server_id__tool_name`
@@ -42,6 +42,7 @@ User adds server → stored in SQLite → `connectToServer()` spawns process / c
 - The proxy stores the MCP SDK `Client` instance as `(connected as any)._client` on the `ConnectedServer` object
 - Tool names crossing server boundaries use `__` (double underscore) as separator
 - Registry server IDs from the official API use the `server.name` field (e.g., `ai.vendor/server-name`)
+- Storage is local SQLite only unless a future mcps-owned storage boundary is implemented. `HASNA_MCPS_STORAGE_MODE` and `MCPS_STORAGE_MODE` must be `local` when set.
 
 ## Tech Stack
 

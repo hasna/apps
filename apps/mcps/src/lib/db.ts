@@ -1,21 +1,39 @@
 import { Database } from "bun:sqlite";
-import { SqliteAdapter } from "@hasna/cloud";
 import { mkdirSync } from "fs";
-import { MCPS_DIR, DB_PATH } from "./config.js";
+import { MCPS_DIR, DB_PATH, resolveStorageMode } from "./config.js";
 import { DEFAULT_PROVIDER_PROFILE_SEEDS } from "./provider-profile-seeds.js";
 
+export interface McpsDbAdapter {
+  raw: Database;
+  run(sql: string, ...params: any[]): unknown;
+}
+
+class LocalDbAdapter implements McpsDbAdapter {
+  raw: Database;
+
+  constructor(path: string) {
+    this.raw = new Database(path);
+    this.raw.exec("PRAGMA journal_mode = WAL");
+    this.raw.exec("PRAGMA foreign_keys = ON");
+    this.raw.exec("PRAGMA busy_timeout = 5000");
+  }
+
+  run(sql: string, ...params: any[]): unknown {
+    return this.raw.prepare(sql).run(...params);
+  }
+}
+
 let db: Database | null = null;
-let _adapter: SqliteAdapter | null = null;
+let _adapter: McpsDbAdapter | null = null;
 
 export function getDb(): Database {
   if (db) return db;
 
+  resolveStorageMode();
   mkdirSync(MCPS_DIR, { recursive: true });
 
-  _adapter = new SqliteAdapter(DB_PATH);
+  _adapter = new LocalDbAdapter(DB_PATH);
   db = _adapter.raw;
-  // SqliteAdapter already sets WAL and foreign_keys; add busy_timeout
-  db.exec("PRAGMA busy_timeout = 5000");
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS servers (
@@ -183,8 +201,8 @@ export function closeDb(): void {
   }
 }
 
-/** Get the SqliteAdapter for direct SQL queries (e.g. feedback). */
-export function getAdapter(): SqliteAdapter {
+/** Get the local SQLite adapter for direct SQL queries (e.g. feedback). */
+export function getAdapter(): McpsDbAdapter {
   if (!_adapter) {
     getDb(); // force initialization
   }
