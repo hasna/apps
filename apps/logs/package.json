@@ -71,7 +71,7 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@hasna/agent-registry": "file:../open-agent-registry",
-    "@hasna/contracts": "^0.4.2",
+    "@hasna/contracts": "^0.5.0",
     "@hasna/events": "^0.1.6",
     "@hasna/mcp-harness": "file:../open-mcp",
     "@modelcontextprotocol/sdk": "^1.29.0",
