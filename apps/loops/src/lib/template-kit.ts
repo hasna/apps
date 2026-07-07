@@ -19,6 +19,7 @@ export const KNOWLEDGE_REFRESH_TEMPLATE_ID = "knowledge-refresh";
 export const REPORT_ONLY_TEMPLATE_ID = "report-only";
 export const INCIDENT_RESPONSE_TEMPLATE_ID = "incident-response";
 export const DETERMINISTIC_CHECK_CREATE_TASK_TEMPLATE_ID = "deterministic-check-create-task";
+export const ROUTING_REMEDIATION_TEMPLATE_ID = "routing-remediation";
 
 export type AgentWorkflowRole = "triage" | "planner" | "worker" | "verifier";
 
@@ -245,6 +246,29 @@ export const BUILTIN_TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "timeoutMs", default: "300000", description: "Check timeout in milliseconds." },
     ],
   },
+  {
+    id: ROUTING_REMEDIATION_TEMPLATE_ID,
+    name: "Routing Remediation",
+    description:
+      "Run a bounded routing-doctor remediation workflow: deterministic preflight, safe Todos CLI repair, blocker task filing, and adversarial verification.",
+    kind: "workflow",
+    variables: [
+      projectPathVariable("Repository/project path used for workflow evidence artifacts."),
+      { name: "todosProjectPath", description: "Todos storage project path to inspect and repair; defaults to projectPath." },
+      { name: "doctorJsonPath", description: "Optional existing todos doctor routing --json output to consume instead of running a fresh dry-run." },
+      { name: "doctorProject", description: "Optional todos doctor routing --project scope (id, slug, or path)." },
+      { name: "tag", description: "Optional todos doctor routing --tag scope." },
+      { name: "status", default: "pending,in_progress", description: "Comma-separated task statuses for the doctor." },
+      { name: "shard", description: "Optional deterministic shard such as 0/6." },
+      { name: "limit", description: "Optional maximum tasks inspected by the doctor." },
+      { name: "maxRepairs", default: "25", description: "Capacity gate: maximum safe_auto findings allowed in one apply run." },
+      { name: "dryRun", default: "true", description: "When true, perform preflight/reporting only and do not apply repairs." },
+      { name: "idempotencyKey", description: "Stable key used for evidence paths, undo records, and dedupe fingerprints." },
+      { name: "evidenceDir", description: "Directory for doctor, preflight, apply, and recheck JSON artifacts." },
+      { name: "undoDir", description: "Directory for todos doctor routing --undo-record output." },
+      ...lifecycleSharedVariables({ worktreeModeDefault: "required" }),
+    ],
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -402,6 +426,178 @@ export function worktreeContextFragment(plan: AgentWorktreeSpec): Record<string,
 
 export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+export interface RoutingRemediationScopeOptions {
+  doctorProject?: string;
+  tag?: string;
+  status?: string;
+  shard?: string;
+  limit?: string;
+}
+
+export interface RoutingRemediationPreflightCommandOptions extends RoutingRemediationScopeOptions {
+  todosProjectPath: string;
+  doctorJsonPath?: string;
+  doctorOutputPath: string;
+  preflightOutputPath: string;
+  maxRepairs: number;
+  dryRun: boolean;
+  idempotencyKey: string;
+  applyCommand: string;
+}
+
+export function routingRemediationDoctorScopeArgs(opts: RoutingRemediationScopeOptions): string[] {
+  return [
+    opts.doctorProject ? ["--project", opts.doctorProject] : [],
+    opts.tag ? ["--tag", opts.tag] : [],
+    opts.status ? ["--status", opts.status] : [],
+    opts.shard ? ["--shard", opts.shard] : [],
+    opts.limit ? ["--limit", opts.limit] : [],
+  ].flat();
+}
+
+function displayCommand(command: string, args: string[]): string {
+  const shellSafe = /^[A-Za-z0-9_./:@%+=,-]+$/;
+  return [command, ...args.map((arg) => shellSafe.test(arg) ? arg : shellQuote(arg))].join(" ");
+}
+
+export function routingRemediationDoctorCommand(opts: RoutingRemediationScopeOptions & {
+  todosProjectPath: string;
+  apply?: boolean;
+  undoRecordPath?: string;
+}): string {
+  const args = [
+    "--project",
+    opts.todosProjectPath,
+    "doctor",
+    "routing",
+    "--json",
+    ...(opts.apply ? ["--apply"] : []),
+    ...(opts.apply && opts.undoRecordPath ? ["--undo-record", opts.undoRecordPath] : []),
+    ...routingRemediationDoctorScopeArgs(opts),
+  ];
+  return displayCommand("todos", args);
+}
+
+const ROUTING_REMEDIATION_PREFLIGHT_SCRIPT = [
+  "const { mkdirSync, readFileSync, writeFileSync } = await import('node:fs');",
+  "const { dirname } = await import('node:path');",
+  "const { spawnSync } = await import('node:child_process');",
+  "const env = process.env;",
+  "const required = (name) => {",
+  "  const value = env[name];",
+  "  if (!value || !value.trim()) throw new Error(`${name} is required`);",
+  "  return value.trim();",
+  "};",
+  "const optional = (name) => {",
+  "  const value = env[name];",
+  "  return value && value.trim() ? value.trim() : undefined;",
+  "};",
+  "const parseJson = (text, label) => {",
+  "  try { return JSON.parse(text || '{}'); } catch (error) { throw new Error(`${label} is not valid JSON: ${error?.message || error}`); }",
+  "};",
+  "const writeJson = (path, value) => {",
+  "  mkdirSync(dirname(path), { recursive: true });",
+  "  writeFileSync(path, `${JSON.stringify(value, null, 2)}\\n`);",
+  "};",
+  "const todosProject = required('OPENLOOPS_ROUTING_REMEDIATION_TODOS_PROJECT');",
+  "const doctorJsonPath = optional('OPENLOOPS_ROUTING_REMEDIATION_DOCTOR_JSON');",
+  "const doctorOutputPath = required('OPENLOOPS_ROUTING_REMEDIATION_DOCTOR_OUTPUT');",
+  "const preflightOutputPath = required('OPENLOOPS_ROUTING_REMEDIATION_PREFLIGHT_OUTPUT');",
+  "const idempotencyKey = required('OPENLOOPS_ROUTING_REMEDIATION_IDEMPOTENCY_KEY');",
+  "const applyCommand = required('OPENLOOPS_ROUTING_REMEDIATION_APPLY_COMMAND');",
+  "const scopeArgs = parseJson(env.OPENLOOPS_ROUTING_REMEDIATION_SCOPE_ARGS || '[]', 'scope args');",
+  "if (!Array.isArray(scopeArgs) || !scopeArgs.every((entry) => typeof entry === 'string')) throw new Error('scope args must be a string array');",
+  "const maxRepairs = Number(env.OPENLOOPS_ROUTING_REMEDIATION_MAX_REPAIRS || '25');",
+  "if (!Number.isInteger(maxRepairs) || maxRepairs < 0) throw new Error('maxRepairs must be a non-negative integer');",
+  "const dryRun = !['0', 'false', 'no', 'off'].includes(String(env.OPENLOOPS_ROUTING_REMEDIATION_DRY_RUN || 'true').toLowerCase());",
+  "let doctor;",
+  "let sourceDoctorRun;",
+  "if (doctorJsonPath) {",
+  "  doctor = parseJson(readFileSync(doctorJsonPath, 'utf8'), doctorJsonPath);",
+  "  sourceDoctorRun = { type: 'file', path: doctorJsonPath };",
+  "} else {",
+  "  const args = ['--project', todosProject, 'doctor', 'routing', '--json', ...scopeArgs];",
+  "  const result = spawnSync('todos', args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });",
+  "  if (![0, 1].includes(result.status ?? -1)) {",
+  "    throw new Error(`todos doctor routing preflight failed status=${result.status ?? 'null'} ${String(result.stderr || result.error || result.stdout).slice(0, 500)}`);",
+  "  }",
+  "  doctor = parseJson(result.stdout, 'todos doctor routing output');",
+  "  sourceDoctorRun = { type: 'command', command: ['todos', ...args].join(' ') };",
+  "}",
+  "if (doctor.schema_version !== 'todos.routing_doctor.v1') throw new Error(`unsupported routing doctor schema: ${doctor.schema_version || 'missing'}`);",
+  "const findings = Array.isArray(doctor.findings) ? doctor.findings : [];",
+  "const safeFindings = findings.filter((finding) => finding?.repair_class === 'safe_auto');",
+  "const allowedSafeFields = new Set(['working_dir', 'task_list_id']);",
+  "const safeFields = safeFindings.map((finding) => String(finding?.suggested_repair?.field || finding?.field || '__missing_safe_field__'));",
+  "const unsupportedSafeFields = [...new Set(safeFields.filter((field) => !allowedSafeFields.has(field)))];",
+  "const blockerClasses = new Set(['blocker_human', 'blocker_cross_repo', 'blocker_invalid_path', 'unsupported']);",
+  "const blockerFindings = findings.filter((finding) => blockerClasses.has(String(finding?.repair_class || '')));",
+  "const byCategory = findings.reduce((acc, finding) => {",
+  "  const category = String(finding?.category || 'unknown');",
+  "  acc[category] = (acc[category] || 0) + 1;",
+  "  return acc;",
+  "}, {});",
+  "const preflight = {",
+  "  schema_version: 'openloops.routing_remediation_preflight.v1',",
+  "  generated_at: new Date().toISOString(),",
+  "  ok: unsupportedSafeFields.length === 0 && safeFindings.length <= maxRepairs,",
+  "  dry_run: dryRun,",
+  "  idempotency_key: idempotencyKey,",
+  "  source_doctor_run: sourceDoctorRun,",
+  "  doctor_json_path: doctorOutputPath,",
+  "  safe_auto: safeFindings.length,",
+  "  blocker_findings: blockerFindings.length,",
+  "  unsupported_findings: findings.filter((finding) => finding?.repair_class === 'unsupported').length,",
+  "  by_category: byCategory,",
+  "  allowed_safe_fields: [...allowedSafeFields],",
+  "  unsupported_safe_fields: unsupportedSafeFields,",
+  "  capacity: { max_repairs: maxRepairs, requested_repairs: safeFindings.length, allowed: safeFindings.length <= maxRepairs },",
+  "  apply_allowed: !dryRun && unsupportedSafeFields.length === 0 && safeFindings.length <= maxRepairs,",
+  "  apply_command: applyCommand,",
+  "  blocker_task_tags: ['from-kai', 'routing-health'],",
+  "  blocker_repair_classes: [...blockerClasses],",
+  "};",
+  "writeJson(doctorOutputPath, doctor);",
+  "writeJson(preflightOutputPath, preflight);",
+  "console.log(JSON.stringify({",
+  "  ok: preflight.ok,",
+  "  dry_run: preflight.dry_run,",
+  "  idempotency_key: preflight.idempotency_key,",
+  "  doctor_json_path: preflight.doctor_json_path,",
+  "  preflight_output_path: preflightOutputPath,",
+  "  safe_auto: preflight.safe_auto,",
+  "  blocker_findings: preflight.blocker_findings,",
+  "  unsupported_safe_fields: preflight.unsupported_safe_fields,",
+  "  capacity: preflight.capacity,",
+  "}));",
+  "if (unsupportedSafeFields.length) {",
+  "  console.error(`routing remediation preflight blocked unsupported safe_auto fields: ${unsupportedSafeFields.join(', ')}`);",
+  "  process.exit(12);",
+  "}",
+  "if (safeFindings.length > maxRepairs) {",
+  "  console.error(`routing remediation preflight blocked capacity: safe_auto=${safeFindings.length} maxRepairs=${maxRepairs}`);",
+  "  process.exit(12);",
+  "}",
+].join("\n");
+
+export function routingRemediationPreflightCommand(opts: RoutingRemediationPreflightCommandOptions): string {
+  return [
+    "set -euo pipefail",
+    `export OPENLOOPS_ROUTING_REMEDIATION_TODOS_PROJECT=${shellQuote(opts.todosProjectPath)}`,
+    `export OPENLOOPS_ROUTING_REMEDIATION_DOCTOR_JSON=${shellQuote(opts.doctorJsonPath ?? "")}`,
+    `export OPENLOOPS_ROUTING_REMEDIATION_DOCTOR_OUTPUT=${shellQuote(opts.doctorOutputPath)}`,
+    `export OPENLOOPS_ROUTING_REMEDIATION_PREFLIGHT_OUTPUT=${shellQuote(opts.preflightOutputPath)}`,
+    `export OPENLOOPS_ROUTING_REMEDIATION_IDEMPOTENCY_KEY=${shellQuote(opts.idempotencyKey)}`,
+    `export OPENLOOPS_ROUTING_REMEDIATION_MAX_REPAIRS=${shellQuote(String(opts.maxRepairs))}`,
+    `export OPENLOOPS_ROUTING_REMEDIATION_DRY_RUN=${shellQuote(opts.dryRun ? "true" : "false")}`,
+    `export OPENLOOPS_ROUTING_REMEDIATION_SCOPE_ARGS=${shellQuote(JSON.stringify(routingRemediationDoctorScopeArgs(opts)))}`,
+    `export OPENLOOPS_ROUTING_REMEDIATION_APPLY_COMMAND=${shellQuote(opts.applyCommand)}`,
+    "bun - <<'BUN'",
+    ROUTING_REMEDIATION_PREFLIGHT_SCRIPT,
+    "BUN",
+  ].join("\n");
 }
 
 export function sourceTaskGateCommand(todosProjectPath: string, taskId: string): string {

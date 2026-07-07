@@ -5,8 +5,14 @@ OpenLoops is a local CLI and daemon for persistent loops and workflows: schedule
 Naming: the product is **OpenLoops**, published on npm as
 [`@hasna/loops`](https://www.npmjs.com/package/@hasna/loops) and developed in the
 [`hasna/loops`](https://github.com/hasna/loops) repository. The installed
-binaries are `loops`, `loops-daemon`, `loops-api`, `loops-runner`, and
-`loops-mcp`.
+binaries are `loops`, `loops-daemon`, `loops-api`, `loops-serve`,
+`loops-runner`, and `loops-mcp`.
+
+OpenLoops is the **runtime, scheduler, and workflow engine** for automations —
+not the automation domain model. Specs, triggers, queue ownership, approvals,
+DLQ/replay, and audit live in `@hasna/automations` and `@hasna/actions`; see
+[Runtime Boundary](docs/RUNTIME_BOUNDARY.md) for ownership split and external
+compiler handoff examples.
 
 It supports deterministic command loops, JSON-defined workflows, and guarded CLI adapters for headless coding agents:
 
@@ -22,7 +28,14 @@ It supports deterministic command loops, JSON-defined workflows, and guarded CLI
 OpenLoops has three deployment modes:
 
 - `local`: SQLite in `LOOPS_DATA_DIR` is authoritative and `loops-daemon` executes scheduled work.
-- `self_hosted`: a user-operated `loops-api` control plane contract. This release exposes status, storage-backed `/v1` loop CRUD and run listing, runner claim/heartbeat/finalize protocol endpoints, a one-shot `loops-runner run-once` execution path for embedded control-plane hosts, id-preserving local export/import, and preview-only self-hosted migration/sync commands; full fleet rollout and remote apply are follow-up work.
+- `self_hosted`: the Hasna-owned AWS/RDS control-plane deployment, served by
+  `loops-serve` and backed by Postgres, with the embeddable `loops-api` contract
+  shared by serve, SDK, and tests. This release exposes status, storage-backed
+  `/v1` loop CRUD and run listing, runner claim/heartbeat/finalize protocol
+  endpoints, a one-shot `loops-runner run-once` execution path for embedded
+  control-plane hosts, id-preserving local export/import, and preview-only
+  self-hosted migration/sync commands; full fleet rollout and id-preserving
+  remote apply are follow-up work.
 - `cloud`: a hosted control-plane contract. This release exposes client/runner status only; hosted tenant auth and infrastructure live outside this package.
 
 `local` is the default and requires no network, token, Postgres, or hosted
@@ -42,25 +55,33 @@ Scheduler state is explicit in status JSON. `schedulerState.localStore` is
 SQLite plus local run artifact files: authoritative in `local`, cache/spool in
 non-local modes. `schedulerState.remoteStore` names the non-local contract
 (`api_control_plane_contract`, `postgres_contract`, or
-`hosted_control_plane_contract`) and reports `applySupported=false` because this
-public package does not directly mutate remote Postgres, S3/object storage, AWS
-resources, or hosted credentials. Route admission remains bounded by
-`max_dispatch`, `max_active`, `max_active_per_project`,
-`max_active_per_project_group`, `max_active_scope`, and `max_per_profile`.
+`hosted_control_plane_contract`). The standalone `loops` CLI reports
+`applySupported=false` for non-local apply because it does not perform
+id-preserving remote migration, S3/object storage mutation, AWS resource
+mutation, or hosted credential mutation. `loops-serve` mutates self-hosted
+Postgres for normal control-plane CRUD and runner protocol routes when it is
+explicitly configured. Route admission remains bounded by `max_dispatch`,
+`max_active`, `max_active_per_project`, `max_active_per_project_group`,
+`max_active_scope`, and `max_per_profile`.
 
-Useful status commands:
+Useful status and setup commands:
 
 ```bash
 loops mode
 loops --json mode
 loops self-hosted status
 loops self-hosted migrate --dry-run
+loops self-hosted push --dry-run
+loops self-hosted pull --dry-run
 loops self-hosted runner-register --runner-id <id> --machine-id <machine> --apply
 loops export --file ./loops-export.json --dry-run
 loops export --file ./loops-export.json
 loops import ./loops-export.json
+loops import ./loops-export.json --apply
 loops cloud status
 loops-api status
+loops-serve version
+HASNA_LOOPS_DATABASE_URL=... loops-serve migrate --dry-run
 loops-runner status
 ```
 
@@ -70,9 +91,10 @@ and machine-placement contract.
 ## Install
 
 **OpenLoops requires the [Bun](https://bun.sh) runtime (`bun >= 1.0`).** The
-`loops`, `loops-daemon`, `loops-api`, `loops-runner`, and `loops-mcp` binaries
-run with a `#!/usr/bin/env bun` shebang, so Bun must be on `PATH` even when the
-package is installed with npm. Node.js is not a supported runtime.
+`loops`, `loops-daemon`, `loops-api`, `loops-serve`, `loops-runner`, and
+`loops-mcp` binaries run with a `#!/usr/bin/env bun` shebang, so Bun must be on
+`PATH` even when the package is installed with npm. Node.js is not a supported
+runtime.
 
 From npm (with Bun installed):
 
@@ -393,13 +415,20 @@ Use `shell: true` only when you intentionally want shell parsing:
 ## Templates And Task Events
 
 Built-in templates turn common orchestration flows into reusable workflow JSON.
+Todos-task routes are OpenLoops-native runtime admission — see
+[Runtime Boundary](docs/RUNTIME_BOUNDARY.md) for how this differs from
+OpenAutomations queue ownership.
 `todos-task-worker-verifier` performs one todos task and then verifies it.
 `event-worker-verifier` handles any Hasna event envelope and then verifies the
 handling. `bounded-agent-worker-verifier` is for recurring bounded agent work:
 one worker runs a narrow objective, then a fresh verifier audits the result.
 The catalog also includes `task-lifecycle`, `pr-review`, `scheduled-audit`,
 `knowledge-refresh`, `report-only`, `incident-response`, and
-`deterministic-check-create-task` for common operator workflows.
+`deterministic-check-create-task` for common operator workflows. Use
+`routing-remediation` for bounded routing-doctor repair runs: it dry-runs by
+default, gates `safe_auto` capacity, applies only supported
+`todos doctor routing --apply` repairs when explicitly enabled, and files
+blocker tasks for human/cross-repo/unsupported findings.
 
 ```bash
 loops templates list
@@ -434,6 +463,12 @@ loops templates render pr-review \
 loops templates render deterministic-check-create-task \
   --var projectPath=/path/to/repo \
   --var checkCommand='your deterministic check and todos upsert command'
+loops templates render routing-remediation \
+  --var projectPath=/path/to/repo \
+  --var todosProjectPath=/path/to/todos-project \
+  --var shard=0/6 \
+  --var maxRepairs=25 \
+  --var idempotencyKey=routing-health:repo:shard0
 ```
 
 Custom reusable workflow templates live under the OpenLoops app data directory:
@@ -578,13 +613,20 @@ matching rule wins. Rule profiles become a Codewith auth-profile pool for
 can also carry `provider_hint`/`route_provider`, `auth_profile_pool`, or
 `account_pool` metadata. Dry-run, drain evidence, and route invocation scope
 include `providerRouting` so operators can see why a provider/account was
-selected.
+selected. Selector values may contain `:`; the parser treats the colon before a
+supported provider id as the route delimiter, so exact tag selectors such as
+`tags=area:frontend:claude:account003,account015` and
+`tags=provider:claude-code:claude:account003,account015` match literal task
+tags `area:frontend` and `provider:claude-code`.
 
 ```bash
 loops routes drain todos-task \
   --dry-run \
+  --provider-rule tags=area:frontend:claude:account003,account015 \
+  --provider-rule tags=provider:claude-code:claude:account003,account015 \
   --provider-rule area=frontend:claude:claude-ui-a,claude-ui-b \
   --provider-rule area=backend:codewith:account001,account002 \
+  --provider-rule tags=task-lifecycle:codewith:account001,account002 \
   --worktree-mode required
 ```
 
@@ -663,6 +705,10 @@ directory-scoped write controls.
 Inspect route state with:
 
 ```bash
+loops routes policies list
+loops routes policies show oss
+loops routes policies render oss
+loops routes policies validate
 cat task-created-event.json | loops routes preview todos-task --sandbox workspace-write
 cat task-created-event.json | loops routes create todos-task --sandbox workspace-write
 loops routes drain todos-task --task-list oss --max-dispatch 2 --compact
@@ -672,6 +718,22 @@ loops routes show <work-item-id>
 loops routes requeue <work-item-id> --reason "fixed upstream blocker"
 loops routes invocations
 ```
+
+Named route policies let operators create and inspect recurring task-drain
+routes without copying the full live command. Built-in policies are
+`repoops-pr-queue`, `oss`, `pilot`, and `machine-sync`:
+
+```bash
+loops routes policies render oss
+loops routes schedule todos-task machine-oss-task-lifecycle-router --policy oss
+```
+
+Scheduling with a policy stores explicit route drain args plus
+`--route-policy-evidence <id>` instead of replaying `--policy`, so audits can see
+the exact task list, filters, account pool, throttles, worktree mode, evidence
+directory, and name prefix used for future runs. The `pilot` policy is a manual
+break-glass lane using `danger-full-access`; applying it requires an explicit
+`--manual-break-glass`.
 
 For OSS task-created routing, use a deterministic drain instead of tmux
 dispatch:
@@ -722,30 +784,25 @@ Workflow run manifests are written under
 
 ## OpenAutomations Runtime Binding
 
-OpenLoops can be used as an execution runtime for deterministic OpenAutomations
-product automations, but it does not own the automation product surface.
-`@hasna/automations` owns automation specs, trigger materialization, product
-automation action queues, DLQ/replay, idempotency, approvals, and audit
-evidence. OpenLoops owns agent workflow invocation/admission/runs. OpenLoops
-only executes work that OpenAutomations has explicitly handed off; it does not
-make OpenAutomations the queue owner for todos task/PR/review agent workflows.
+OpenLoops executes automations that external compilers have materialized; it
+does not own the automation product surface. See
+[Runtime Boundary](docs/RUNTIME_BOUNDARY.md) for the full ownership table,
+three handoff paths (claim-queue, planned `@hasna/actions` upsert-one-shot, and
+explicit event-envelope routing), todos-task route distinction, and
+anti-patterns.
 
-The SDK exposes the boundary descriptor:
+Quick reference:
 
 ```ts
 import { openAutomationsRuntimeBinding } from "@hasna/loops";
-
 const binding = openAutomationsRuntimeBinding();
-console.log(binding.handoff); // "claim-queue"
-console.log(binding.eventHandoff.handlerCommand); // "loops routes create generic"
+// binding.handoff === "claim-queue"
+// binding.eventHandoff.handlerCommand === "loops routes create generic"
 ```
-
-The claim-queue handoff uses the OpenAutomations CLI or SDK:
 
 ```bash
 automations queue claim --runner open-loops:<worker-id>
 automations queue complete <action-id> --runner open-loops:<worker-id>
-automations queue fail <action-id> --runner open-loops:<worker-id> --code <code> --message <message>
 ```
 
 For explicit event workflow routing, OpenAutomations can export the normalized
@@ -970,4 +1027,4 @@ The adapters intentionally use provider command surfaces instead of pretending e
 - `--variant` is provider-specific reasoning/model effort. Claude maps it to `--effort`, Codewith/Codex map it to `model_reasoning_effort`, and OpenCode/AICopilot pass `--variant`.
 - Daemon and scheduled runs prepend common user executable directories such as `~/.local/bin` and `~/.bun/bin` before resolving provider CLIs.
 
-For production loops that can mutate repos, use disposable worktrees (`--worktree-mode required` / `worktreeMode=required`) and explicit prompts that name allowed write scope. Worktrees are executor-enforced: when a target carries worktree metadata, the executor prepares and enters the git worktree before spawning the child process, records the worktree it entered, and with `mode=required` fails the run closed instead of falling back to the original checkout when preparation fails. Remote machine runs with a required worktree are verified fail-closed on the remote side before the target executes.
+For production loops that can mutate repos, use disposable worktrees (`--worktree-mode required` / `worktreeMode=required`) and explicit prompts that name allowed write scope. Worktrees are executor-enforced: when a target carries worktree metadata, the executor prepares and enters the git worktree before spawning the child process, records the worktree it entered, and with `mode=required` fails the run closed instead of falling back to the original checkout when preparation fails. Existing managed worktrees are reused only after top-level and git-common-dir checks; a clean detached or stale-branch checkout may be reattached to the expected generated branch, while dirty or unsafe mismatches fail with cleanup evidence. Remote machine runs with a required worktree apply the same checks on the remote side before the target executes.

@@ -70,3 +70,15 @@ export {
 } from "./route-tasks.js";
 export { defaultLoopsProject, ensureTodosTaskList, runLocalCommand, runLocalCommandWithStdoutFile } from "./todos-cli.js";
 export { addAgentRoutingOptions, addRouteEventOptions, addTodosDrainOptions, routeDrainArgs, type AgentRoutingOptionConfig } from "./options.js";
+export {
+  applyRoutePolicyToDrainOptions,
+  applyRoutePolicyToScheduleOptions,
+  getRoutePolicy,
+  listRoutePolicies,
+  renderRoutePolicy,
+  routePolicyEvidenceFromOptions,
+  validateRoutePolicy,
+  type RoutePolicyDefinition,
+  type RoutePolicyId,
+  type RoutePolicyRender,
+} from "./policies.js";

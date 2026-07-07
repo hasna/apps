@@ -72,7 +72,7 @@ describe("loops-api foundation", () => {
     });
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("non-local loops-api binds require");
+    expect(result.stderr).toContain("non-local loops-serve binds require");
   });
 
   test("non-local serve requires the configured bearer token", async () => {
@@ -263,6 +263,49 @@ describe("loops-api foundation", () => {
       expect(raw.run.stdout).toBe("private stdout");
       expect(raw.run.stderr).toBe("private stderr");
       expect(raw.run.error).toBe("[redacted 13 chars]");
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("run receipt routes write, read, and filter bounded receipts", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+
+    try {
+      const writeResponse = await fetch(apiUrl(server, "/v1/receipts"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          loop_id: "loop-api",
+          run_id: "run-api",
+          machine: "spark01",
+          repo: "/workspace/open-loops",
+          task_ids: ["task-api"],
+          knowledge_ids: ["knowledge-api"],
+          status: "succeeded",
+          summary: "api receipt",
+          evidence_paths: ["/tmp/api-receipt.json"],
+          stdout: "z".repeat(50_000),
+        }),
+      });
+      expect(writeResponse.status).toBe(201);
+      const written = (await writeResponse.json()) as { receipt: { run_id: string; summary: { stdout_bytes: number; stdout_excerpt: string } } };
+      expect(written.receipt.run_id).toBe("run-api");
+      expect(written.receipt.summary.stdout_bytes).toBe(50_000);
+      expect(written.receipt.summary.stdout_excerpt).toContain("chars omitted");
+
+      const readResponse = await fetch(apiUrl(server, "/v1/receipts/run-api"));
+      expect(readResponse.status).toBe(200);
+      const read = (await readResponse.json()) as { receipt: { summary: { text: string } } };
+      expect(read.receipt.summary.text).toBe("api receipt");
+
+      const listResponse = await fetch(apiUrl(server, "/v1/receipts?taskId=task-api"));
+      expect(listResponse.status).toBe(200);
+      const list = (await listResponse.json()) as { receipts: Array<{ run_id: string }> };
+      expect(list.receipts.map((receipt) => receipt.run_id)).toEqual(["run-api"]);
     } finally {
       server.stop(true);
       await storage.close();

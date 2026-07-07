@@ -8,6 +8,7 @@ import { CodedError } from "../lib/errors.js";
 import {
   publicLoop,
   publicRun,
+  publicRunReceipt,
   publicWorkflow,
   publicWorkflowEvent,
   publicWorkflowRun,
@@ -32,6 +33,7 @@ import type {
   ScheduleSpec,
   TimeoutMs,
   WorkflowSpec,
+  WriteRunReceiptInput,
 } from "../types.js";
 
 const LOOP_STATUSES = ["active", "paused", "stopped", "expired"] as const;
@@ -57,6 +59,34 @@ const showOutputSchema = z
   .optional()
   .describe("Include raw stdout/stderr (default false: only redacted lengths are returned).");
 const limitSchema = z.number().int().min(1).max(MAX_LIMIT).optional().describe(`Maximum entries to return (1-${MAX_LIMIT}).`);
+const runReceiptSummarySchema = z.object({
+  text: z.string().optional().describe("Short human summary. It is scrubbed and bounded before storage."),
+  stdout_bytes: z.number().int().min(0).optional().describe("Original stdout byte count."),
+  stderr_bytes: z.number().int().min(0).optional().describe("Original stderr byte count."),
+  stdout_excerpt: z.string().optional().describe("Bounded stdout excerpt. Raw unbounded stdout is never required."),
+  stderr_excerpt: z.string().optional().describe("Bounded stderr excerpt. Raw unbounded stderr is never required."),
+  error: z.string().optional().describe("Bounded error excerpt."),
+  duration_ms: z.number().int().min(0).optional().describe("Run duration in milliseconds."),
+});
+const runReceiptInputSchema = {
+  loop_id: z.string().min(1).optional().describe("OpenLoops loop id. Optional when run_id references an existing loop run."),
+  run_id: z.string().min(1).describe("Scheduler-neutral run id. Existing values are updated idempotently."),
+  machine: z.union([z.string().min(1), z.record(z.string(), z.unknown())]).optional().describe("Machine id/name or machine metadata object."),
+  repo: z.string().min(1).optional().describe("Repository path or owner/repo string. Defaults from the loop target cwd when possible."),
+  task_ids: z.array(z.string().min(1)).optional().describe("Task ids associated with this run."),
+  knowledge_ids: z.array(z.string().min(1)).optional().describe("Knowledge record ids associated with this run."),
+  digest_id: z.string().min(1).optional().describe("Stable digest id. Computed from normalized receipt content when omitted."),
+  started_at: z.string().nullable().optional().describe("Run start timestamp."),
+  finished_at: z.string().nullable().optional().describe("Run finish timestamp."),
+  status: z.string().min(1).optional().describe("Run status."),
+  exit_code: z.number().int().nullable().optional().describe("Process exit code."),
+  summary: z.union([z.string(), runReceiptSummarySchema]).nullable().optional().describe("Bounded structured summary; may be a string shorthand."),
+  evidence_paths: z.array(z.string().min(1)).optional().describe("Bounded paths to durable evidence artifacts."),
+  stdout: z.string().optional().describe("Optional raw stdout to summarize and bound before storage."),
+  stderr: z.string().optional().describe("Optional raw stderr to summarize and bound before storage."),
+  error: z.string().optional().describe("Optional raw error text to summarize and bound before storage."),
+  duration_ms: z.number().int().min(0).optional().describe("Run duration in milliseconds."),
+};
 const optionalTimeoutSchema = z
   .number()
   .int()
@@ -384,6 +414,53 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
           .map((run) => publicRun(run, showOutput ?? false));
         return { loop: loop ? publicLoop(loop) : undefined, runs };
       }),
+  },
+  {
+    name: "loops_receipts_list",
+    description: "List scheduler-neutral run receipts with bounded summaries and evidence paths.",
+    readOnly: true,
+    annotations: READ_ONLY_ANNOTATIONS,
+    inputSchema: {
+      loop_id: z.string().min(1).optional().describe("Filter by loop_id."),
+      repo: z.string().min(1).optional().describe("Filter by repo."),
+      task_id: z.string().min(1).optional().describe("Filter by task id."),
+      knowledge_id: z.string().min(1).optional().describe("Filter by knowledge id."),
+      status: z.string().min(1).optional().describe("Filter by receipt status."),
+      limit: limitSchema,
+    },
+    handler: ({ loop_id, repo, task_id, knowledge_id, status, limit }) =>
+      withStore((store) => ({
+        receipts: store
+          .listRunReceipts({ loopId: loop_id, repo, taskId: task_id, knowledgeId: knowledge_id, status, limit })
+          .map(publicRunReceipt),
+      })),
+  },
+  {
+    name: "loops_receipt_read",
+    description: "Read one scheduler-neutral run receipt by run id.",
+    readOnly: true,
+    annotations: READ_ONLY_ANNOTATIONS,
+    inputSchema: {
+      run_id: z.string().min(1).describe("Run id."),
+    },
+    handler: ({ run_id }) =>
+      withStore((store) => {
+        const receipt = store.getRunReceipt(run_id);
+        if (!receipt) throw new Error(`run receipt not found: ${run_id}`);
+        return { receipt: publicRunReceipt(receipt) };
+      }),
+  },
+  {
+    name: "loops_receipt_write",
+    description: `Write a scheduler-neutral run receipt. Requires ${MUTATION_ENV}=true on the MCP server process.`,
+    readOnly: false,
+    guarded: true,
+    annotations: mutationAnnotations({ idempotent: true }),
+    inputSchema: runReceiptInputSchema,
+    handler: (input) => {
+      requireMutationsEnabled();
+      return withStore((store) => ({ receipt: publicRunReceipt(store.writeRunReceipt(input as WriteRunReceiptInput)) }));
+    },
   },
   {
     name: "loops_doctor",

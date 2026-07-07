@@ -4,6 +4,7 @@ import type {
   GoalRun,
   Loop,
   LoopRun,
+  RunReceipt,
   WorkflowEvent,
   WorkflowInvocation,
   WorkflowRun,
@@ -80,6 +81,10 @@ export function publicRun(run: LoopRun, showOutput = false, opts: { redactError?
     stderr: showOutput ? run.stderr : run.stderr ? `[redacted ${run.stderr.length} chars]` : undefined,
     error: opts.redactError ? redact(run.error) : run.error,
   };
+}
+
+export function publicRunReceipt(receipt: RunReceipt): Record<string, unknown> {
+  return { ...receipt };
 }
 
 export function publicExecutorResult(result: ExecutorResult, showOutput = false): Record<string, unknown> {

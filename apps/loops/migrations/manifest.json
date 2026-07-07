@@ -1,0 +1,30 @@
+{
+  "ledgerTable": "open_loops_schema_migrations",
+  "migrations": [
+    {
+      "id": "0001_core_runtime",
+      "file": "0001_core_runtime.sql",
+      "checksum": "sha256:99cab06c75144cbcd3076ea42132fe511fe0f8c89d1c96bdcc4abef7c026ef32"
+    },
+    {
+      "id": "0002_workflows_goals",
+      "file": "0002_workflows_goals.sql",
+      "checksum": "sha256:cf9d74beafadaf97dcb26c3d584caa634265fb99978704417886c58d1f804b42"
+    },
+    {
+      "id": "0003_remote_runners_and_audit",
+      "file": "0003_remote_runners_and_audit.sql",
+      "checksum": "sha256:9f0816668315c08aefeda1afebb58ad74e803d6dd1bca580e0697f602486c520"
+    },
+    {
+      "id": "0004_work_item_route_scope",
+      "file": "0004_work_item_route_scope.sql",
+      "checksum": "sha256:341e439861d595ce3d069b0106f1f09134042bac0a70f3d00a1374e09f5404d9"
+    },
+    {
+      "id": "0005_run_receipts",
+      "file": "0005_run_receipts.sql",
+      "checksum": "sha256:27228e19e0101d31ce9da18d76d918a96dd8afff576fb291cbf8d018e97fe5d6"
+    }
+  ]
+}

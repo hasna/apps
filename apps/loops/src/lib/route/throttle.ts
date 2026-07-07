@@ -4,14 +4,16 @@ import { resolve } from "node:path";
 import type { Store } from "../store.js";
 import { ValidationError } from "../errors.js";
 import { taskEventField } from "./fields.js";
-import { positiveInteger } from "./parse.js";
+import { nonNegativeInteger, positiveInteger } from "./parse.js";
 
 /** Active-workflow admission throttles and canonical project-path handling. */
 
 export interface RouteThrottleLimits {
   maxActive?: number;
+  maxActiveScope?: string;
   maxActivePerProject?: number;
   maxActivePerProjectGroup?: number;
+  maxPerProfile?: number;
 }
 
 export interface RouteThrottleDecision {
@@ -29,18 +31,24 @@ export interface RouteThrottleDecision {
 
 export function routeThrottleLimitsFromOpts(opts: {
   maxActive?: string;
+  maxActiveScope?: string;
   maxActivePerProject?: string;
   maxActivePerProjectGroup?: string;
+  maxPerProfile?: string;
 }): RouteThrottleLimits {
   return {
     maxActive: positiveInteger(opts.maxActive, "--max-active"),
+    maxActiveScope: opts.maxActiveScope?.trim() || undefined,
     maxActivePerProject: positiveInteger(opts.maxActivePerProject, "--max-active-per-project"),
     maxActivePerProjectGroup: positiveInteger(opts.maxActivePerProjectGroup, "--max-active-per-project-group"),
+    maxPerProfile: nonNegativeInteger(opts.maxPerProfile, "--max-per-profile"),
   };
 }
 
 export function hasThrottleLimits(limits: RouteThrottleLimits): boolean {
-  return limits.maxActive !== undefined || limits.maxActivePerProject !== undefined || limits.maxActivePerProjectGroup !== undefined;
+  return limits.maxActive !== undefined ||
+    limits.maxActivePerProject !== undefined ||
+    limits.maxActivePerProjectGroup !== undefined;
 }
 
 export function normalizeRoutePath(value: string | undefined): string | undefined {
@@ -84,7 +92,8 @@ export function routeThrottleDecision(
     counts,
   };
   if (args.limits.maxActive !== undefined && counts.global >= args.limits.maxActive) {
-    return { ...base, allowed: false, reason: `global active workflow limit reached (${counts.global}/${args.limits.maxActive})` };
+    const scopeLabel = routeScope ? `scope ${routeScope}` : "global";
+    return { ...base, allowed: false, reason: `${scopeLabel} active workflow limit reached (${counts.global}/${args.limits.maxActive})` };
   }
   if (args.limits.maxActivePerProject !== undefined && counts.project >= args.limits.maxActivePerProject) {
     return { ...base, allowed: false, reason: `project active workflow limit reached (${counts.project}/${args.limits.maxActivePerProject})` };

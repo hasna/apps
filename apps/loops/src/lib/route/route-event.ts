@@ -25,6 +25,7 @@ import {
 } from "../templates.js";
 import type { AgentWorkflowRole } from "../template-kit.js";
 import { eventData, eventMetadata, slugSegment, stableSuffix, stringField, taskEventField, taskEventRecords, taskEventTags, taskRouteEligibility } from "./fields.js";
+import { routePolicyEvidenceFromOptions } from "./policies.js";
 import { normalizeWorkflowForStorage, preflightStoredWorkflow, workflowSpecForPreflight } from "./gates.js";
 import { idleTimeoutDuration, listFromRepeatedOpts, nonNegativeInteger, timeoutDuration } from "./parse.js";
 import { assignPoolAuthProfiles, type PoolAuthProfileAssignment } from "./profile-pool.js";
@@ -385,7 +386,11 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
   };
   if (opts.dryRun) {
     const throttle = hasThrottleLimits(plan.throttleLimits)
-      ? routeThrottleDryRunPreview({ projectPath: plan.routeProjectPath, projectGroup: plan.projectGroup, limits: plan.throttleLimits })
+      ? routeThrottleDryRunPreview({
+          projectPath: plan.routeProjectPath,
+          projectGroup: plan.projectGroup,
+          limits: plan.throttleLimits,
+        })
       : undefined;
     const preflight = opts.preflight
       ? preflightStoredWorkflow(workflowSpecForPreflight(workflowBody, "event-preflight"), plan.workflowContext, {})
@@ -430,7 +435,7 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
         }
       }
       const throttle = hasThrottleLimits(plan.throttleLimits)
-        ? routeThrottleDecision(store, {
+          ? routeThrottleDecision(store, {
             projectPath: plan.routeProjectPath,
             projectGroup: plan.projectGroup,
             routeScope: plan.routeScope,
@@ -583,6 +588,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
   const taskTitle = taskEventField(data, ["title", "task_title", "taskTitle"]);
   const taskDescription = taskEventField(data, ["description", "body"]);
   const sourceTodosProjectPath = opts.sourceTodosProjectPath?.trim();
+  const explicitProjectPath = opts.projectPath?.trim();
   const dataProjectPath = taskEventField(data, [
     "route_project_path",
     "routeProjectPath",
@@ -601,9 +607,9 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     "cwd",
   ]);
   const projectPath =
+    explicitProjectPath ??
     dataProjectPath ??
     metadataProjectPath ??
-    opts.projectPath ??
     process.cwd();
   const routeProjectPath = normalizeRoutePath(projectPath) ?? resolve(projectPath);
   const projectGroup = routeProjectGroup(opts.projectGroup, data, metadata);
@@ -729,6 +735,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     `Task-triggered ${templateId} workflow for ${taskTitle ?? taskId} from ${event.source}/${event.type}; ` +
     `idempotency=${idempotencyKey}; event=${event.id}; project=${projectPath}; projectGroup=${projectGroup ?? "-"}`;
   workflowBody = normalizeWorkflowForStorage(workflowBody, workflowContext);
+  const routePolicy = routePolicyEvidenceFromOptions(opts);
   const hasExplicitRoleAccount =
     Boolean(opts.triageAuthProfile || opts.plannerAuthProfile || opts.workerAuthProfile || opts.verifierAuthProfile) ||
     Boolean(opts.triageAccount || opts.plannerAccount || opts.workerAccount || opts.verifierAccount);
@@ -757,6 +764,11 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
       accountPolicy: providerRouting.authProfilePool?.length || providerRouting.accountPool?.length ? "pool" : hasExplicitRoleAccount ? "role-explicit" : "single",
       providerRouting: providerRoutingPublic(providerRouting),
       prReviewRouting: prReviewRouting.required ? prReviewRouting : undefined,
+      routePolicy,
+      routeThrottle: {
+        maxActiveScope: throttleLimits.maxActiveScope,
+        maxPerProfile: throttleLimits.maxPerProfile,
+      },
       concurrencyGroup: projectGroup ?? routeProjectPath,
     },
     outputPolicy: {
@@ -786,6 +798,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     valueExtras: {
       providerRouting: providerRoutingPublic(providerRouting),
       prReviewRouting: prReviewRouting.required ? prReviewRouting : undefined,
+      routePolicy,
     },
     dedupeValueExtras: {},
   });
@@ -877,6 +890,10 @@ export function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOpti
       manualBreakGlass: Boolean(opts.manualBreakGlass),
       accountPolicy: providerRouting.authProfilePool?.length || providerRouting.accountPool?.length ? "pool" : hasExplicitRoleAccount ? "role-explicit" : "single",
       providerRouting: providerRoutingPublic(providerRouting),
+      routeThrottle: {
+        maxActiveScope: throttleLimits.maxActiveScope,
+        maxPerProfile: throttleLimits.maxPerProfile,
+      },
       concurrencyGroup: projectGroup ?? routeProjectPath,
     },
     outputPolicy: {

@@ -1,0 +1,32 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "loops",
+  "class": "service",
+  "contractVersion": "v1",
+  "kitVersion": "0.4.1",
+  "description": "Persistent local loop and workflow runner for deterministic commands and headless AI coding agents. CLI + MCP + HTTP API (loops-serve) + generated SDK. Self-hosted mode runs loops-serve against Hasna-owned Postgres/RDS with API-key auth via @hasna/contracts; the generated storage kit's HASNA_LOOPS_STORAGE_MODE=cloud flag is only its direct-Postgres implementation term.",
+  "bins": ["loops", "loops-mcp", "loops-serve", "loops-daemon", "loops-runner"],
+  "storage": {
+    "mode": "local",
+    "envPrefix": "HASNA_LOOPS_",
+    "aliasEnvPrefix": "LOOPS_",
+    "databaseUrlSecretRef": "hasna/oss/loops/database-url",
+    "sqlitePath": "~/.hasna/loops/loops.db"
+  },
+  "metadata": {
+    "service": {
+      "port": 8787,
+      "healthPath": "/health",
+      "readyPath": "/ready",
+      "versionPath": "/version",
+      "openapiPath": "/openapi.json",
+      "apiVersion": "v1",
+      "auth": "api-key",
+      "signingSecretSecretRef": "hasna/oss/loops/api-key-signing-secret"
+    },
+    "client": {
+      "apiUrlEnv": "LOOPS_API_URL",
+      "apiKeyEnv": "LOOPS_API_KEY"
+    }
+  }
+}

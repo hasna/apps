@@ -5,6 +5,7 @@ import type { Loop, WorkflowSpec } from "../../types.js";
 import { objectField, stringField, tagsFromValue, taskEventField } from "./fields.js";
 import { listFromRepeatedOpts, positiveInteger, splitList } from "./parse.js";
 import { routeTodosTaskEvent, todosTaskRouteTemplateId } from "./route-event.js";
+import { routePolicyEvidenceFromOptions } from "./policies.js";
 import { normalizeRoutePath } from "./throttle.js";
 import { defaultLoopsProject, runLocalCommand, runLocalCommandWithStdoutFile, todosMutationSummary } from "./todos-cli.js";
 import { writeRouteEvidence } from "./cursors.js";
@@ -45,6 +46,16 @@ function taskProjectPath(task: TodosReadyTask): string | undefined {
     taskEventField(metadata, ["working_dir", "workingDir", "cwd"]);
 }
 
+function taskSourceWorkingDir(task: TodosReadyTask): string | undefined {
+  const metadata = objectField(task.metadata) ?? {};
+  return taskField(task, ["working_dir", "workingDir", "cwd"]) ??
+    taskEventField(metadata, ["working_dir", "workingDir", "cwd"]);
+}
+
+function canonicalRoutePath(path: string | undefined): string | undefined {
+  return normalizeRoutePath(path) ?? (path?.trim() ? resolve(path) : undefined);
+}
+
 function taskListValues(task: TodosReadyTask): string[] {
   const taskList = objectField(task.task_list) as
     | {
@@ -62,12 +73,14 @@ function taskListValues(task: TodosReadyTask): string[] {
   ].filter((value): value is string => Boolean(value));
 }
 
-function taskDrainEvent(task: TodosReadyTask, sourceProjectPath?: string): EventEnvelope {
+function taskDrainEvent(task: TodosReadyTask, sourceProjectPath?: string, explicitRouteProjectPath?: string): EventEnvelope {
   const taskId = taskField(task, ["id", "task_id", "taskId"]);
   if (!taskId) throw new Error("todos ready returned a task without an id");
   const metadata = { ...(objectField(task.metadata) ?? {}) };
   const workingDir = taskProjectPath(task);
+  const sourceWorkingDir = taskSourceWorkingDir(task);
   const routeWorkingDir = taskField(task, ["project_path", "projectPath"]) ?? workingDir;
+  const routeProjectPath = canonicalRoutePath(explicitRouteProjectPath) ?? routeWorkingDir;
   const sourceProject = sourceProjectPath?.trim();
   if (!sourceProject) {
     delete metadata.source_project_path;
@@ -86,18 +99,30 @@ function taskDrainEvent(task: TodosReadyTask, sourceProjectPath?: string): Event
     delete data.source_project_path;
     delete data.sourceProjectPath;
   }
-  if (workingDir) {
-    data.working_dir = routeWorkingDir;
-    data.project_path = routeWorkingDir;
-    data.cwd = taskField(task, ["cwd"]) ?? routeWorkingDir;
+  if (routeProjectPath) {
+    data.working_dir = routeProjectPath;
+    data.project_path = routeProjectPath;
+    data.cwd = routeProjectPath;
+    data.route_project_path = routeProjectPath;
+    data.routeProjectPath = routeProjectPath;
+    metadata.route_project_path = routeProjectPath;
+    metadata.routeProjectPath = routeProjectPath;
+  }
+  if (workingDir && routeProjectPath && canonicalRoutePath(workingDir) !== canonicalRoutePath(routeProjectPath)) {
+    data.source_task_project_path = workingDir;
+    metadata.source_task_project_path = workingDir;
+  }
+  if (sourceWorkingDir && routeProjectPath && canonicalRoutePath(sourceWorkingDir) !== canonicalRoutePath(routeProjectPath)) {
+    data.source_task_working_dir = sourceWorkingDir;
+    metadata.source_task_working_dir = sourceWorkingDir;
   }
   if (sourceProject) {
     data.source_project_path = sourceProject;
     if (!data.project_path) data.project_path = sourceProject;
-    data.route_project_path = data.project_path;
-    data.routeProjectPath = data.project_path;
-    metadata.route_project_path = data.project_path;
-    metadata.routeProjectPath = data.project_path;
+    if (!data.route_project_path) data.route_project_path = data.project_path;
+    if (!data.routeProjectPath) data.routeProjectPath = data.project_path;
+    if (!metadata.route_project_path) metadata.route_project_path = data.project_path;
+    if (!metadata.routeProjectPath) metadata.routeProjectPath = data.project_path;
   }
   const time = new Date().toISOString();
   return {
@@ -112,7 +137,7 @@ function taskDrainEvent(task: TodosReadyTask, sourceProjectPath?: string): Event
     metadata: {
       ...metadata,
       ...(sourceProject ? { source_project_path: sourceProject } : {}),
-      ...(workingDir ? { working_dir: workingDir, project_path: data.project_path, cwd: data.cwd } : {}),
+      ...(routeProjectPath ? { working_dir: routeProjectPath, project_path: data.project_path, cwd: data.cwd } : {}),
       drained_by: "@hasna/loops",
       drained_from: "todos ready",
     },
@@ -273,6 +298,17 @@ function skippedDrainTask(
   extra: Record<string, unknown> = {},
 ): TodosTaskRoutePrint {
   const taskId = taskField(task, ["id", "task_id", "taskId"]) ?? event?.subject ?? "unknown";
+  const eventData = objectField(event?.data);
+  const eventMetadata = objectField((event as { metadata?: unknown } | undefined)?.metadata);
+  const routeProjectPath = taskEventField(eventData ?? {}, ["route_project_path", "routeProjectPath", "project_path", "projectPath", "working_dir", "workingDir", "cwd"]);
+  const sourceTaskProjectPath =
+    taskEventField(eventData ?? {}, ["source_task_project_path", "sourceTaskProjectPath"]) ??
+    taskEventField(eventMetadata ?? {}, ["source_task_project_path", "sourceTaskProjectPath"]) ??
+    taskProjectPath(task);
+  const sourceTaskWorkingDir =
+    taskEventField(eventData ?? {}, ["source_task_working_dir", "sourceTaskWorkingDir"]) ??
+    taskEventField(eventMetadata ?? {}, ["source_task_working_dir", "sourceTaskWorkingDir"]) ??
+    taskSourceWorkingDir(task);
   return {
     kind: "skipped",
     value: {
@@ -281,6 +317,9 @@ function skippedDrainTask(
       taskId,
       event,
       routeError: true,
+      routeProjectPath,
+      sourceTaskProjectPath,
+      sourceTaskWorkingDir,
       ...extra,
     },
     human: `skipped task ${taskId}: ${reason}`,
@@ -383,9 +422,11 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
     let result: TodosTaskRoutePrint;
     try {
       const sourceProject = opts.todosProjectsFromRegistry ? taskField(task, ["source_project_path", "sourceProjectPath"]) : undefined;
-      event = taskDrainEvent(task, sourceProject);
+      const explicitRouteProjectPath = sourceProject ? taskRoutePathFromRegistry(sourceProject) : opts.projectPath;
+      event = taskDrainEvent(task, sourceProject, explicitRouteProjectPath);
       result = routeTodosTaskEvent(event, {
         ...opts,
+        ...(explicitRouteProjectPath ? { projectPath: explicitRouteProjectPath } : {}),
         ...(sourceProject ? { sourceTodosProjectPath: sourceProject } : {}),
       });
     } catch (error) {
@@ -423,6 +464,7 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
   const report = {
     drainedAt: new Date().toISOString(),
     todosProject,
+    routePolicy: routePolicyEvidenceFromOptions(opts),
     templateId: todosTaskRouteTemplateId(opts),
     todosProjectId: opts.todosProjectId,
     taskList: opts.taskList,
@@ -460,6 +502,7 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
     ? {
         drainedAt: report.drainedAt,
         todosProject: report.todosProject,
+        routePolicy: report.routePolicy,
         templateId: report.templateId,
         todosProjectId: report.todosProjectId,
         taskList: report.taskList,

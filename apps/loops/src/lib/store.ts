@@ -18,8 +18,11 @@ import type {
   LoopRun,
   LoopStatus,
   LoopTarget,
+  RunReceipt,
+  RunReceiptMachine,
   RunStatus,
   TimeoutMs,
+  WriteRunReceiptInput,
   WorkflowEvent,
   WorkflowInvocation,
   WorkflowRun,
@@ -45,6 +48,7 @@ import {
   discardWorkflowRunManifest,
   stageWorkflowRunManifest,
 } from "./run-artifacts.js";
+import { normalizeRunReceipt } from "./run-receipts.js";
 import { runLocalCommand, todosMutationSummary } from "./route/todos-cli.js";
 
 interface DaemonLeaseFence {
@@ -61,14 +65,14 @@ const LIVE_EXPIRED_RUN_GRACE_MS = 60_000;
  * numbered migration so older binaries refuse to open newer databases instead
  * of silently misreading them (checked against PRAGMA user_version).
  */
-const SCHEMA_USER_VERSION = 7;
+const SCHEMA_USER_VERSION = 8;
 const TERMINAL_RUN_STATUSES = ["succeeded", "failed", "timed_out", "abandoned", "skipped"] as const;
 const PRUNE_BATCH_SIZE = 400;
 const GENERATED_ROUTE_TEMPLATE_IDS = new Set(["todos-task-worker-verifier", "task-lifecycle", "event-worker-verifier"]);
 const GENERATED_ROUTE_KEYS = new Set(["todos-task", "generic-event"]);
 const TASK_LIFECYCLE_TEMPLATE_ID = "task-lifecycle";
 
-interface LoopRow {
+export interface LoopRow {
   id: string;
   name: string;
   description: string | null;
@@ -92,7 +96,7 @@ interface LoopRow {
   updated_at: string;
 }
 
-interface RunRow {
+export interface RunRow {
   id: string;
   loop_id: string;
   loop_name: string;
@@ -117,6 +121,24 @@ interface RunRow {
   updated_at: string;
 }
 
+export interface RunReceiptRow {
+  loop_id: string;
+  run_id: string;
+  machine_json: string;
+  repo: string;
+  task_ids_json: string;
+  knowledge_ids_json: string;
+  digest_id: string;
+  started_at: string | null;
+  finished_at: string | null;
+  status: string;
+  exit_code: number | null;
+  summary_json: string;
+  evidence_paths_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
 interface LatestRunSummaryRow {
   loop_id: string;
   id: string;
@@ -126,7 +148,7 @@ interface LatestRunSummaryRow {
   created_at: string;
 }
 
-interface WorkflowRow {
+export interface WorkflowRow {
   id: string;
   name: string;
   description: string | null;
@@ -138,7 +160,7 @@ interface WorkflowRow {
   updated_at: string;
 }
 
-interface WorkflowRunRow {
+export interface WorkflowRunRow {
   id: string;
   workflow_id: string;
   workflow_name: string;
@@ -159,7 +181,7 @@ interface WorkflowRunRow {
   updated_at: string;
 }
 
-interface WorkflowInvocationRow {
+export interface WorkflowInvocationRow {
   id: string;
   workflow_id: string | null;
   template_id: string | null;
@@ -179,7 +201,7 @@ interface WorkflowInvocationRow {
   updated_at: string;
 }
 
-interface WorkflowWorkItemRow {
+export interface WorkflowWorkItemRow {
   id: string;
   route_key: string;
   idempotency_key: string;
@@ -203,7 +225,7 @@ interface WorkflowWorkItemRow {
   updated_at: string;
 }
 
-interface WorkflowStepRunRow {
+export interface WorkflowStepRunRow {
   id: string;
   workflow_run_id: string;
   step_id: string;
@@ -224,7 +246,7 @@ interface WorkflowStepRunRow {
   updated_at: string;
 }
 
-interface WorkflowEventRow {
+export interface WorkflowEventRow {
   id: string;
   workflow_run_id: string;
   sequence: number;
@@ -234,7 +256,7 @@ interface WorkflowEventRow {
   created_at: string;
 }
 
-interface GoalRow {
+export interface GoalRow {
   id: string;
   plan_id: string;
   objective: string;
@@ -255,7 +277,7 @@ interface GoalRow {
   updated_at: string;
 }
 
-interface GoalPlanNodeRow {
+export interface GoalPlanNodeRow {
   id: string;
   goal_id: string;
   plan_id: string;
@@ -273,7 +295,7 @@ interface GoalPlanNodeRow {
   updated_at: string;
 }
 
-interface GoalRunRow {
+export interface GoalRunRow {
   id: string;
   goal_id: string;
   plan_id: string;
@@ -303,7 +325,7 @@ export interface DaemonLease {
   updatedAt: string;
 }
 
-interface LeaseRow {
+export interface LeaseRow {
   id: string;
   pid: number;
   hostname: string;
@@ -313,7 +335,7 @@ interface LeaseRow {
   updated_at: string;
 }
 
-function rowToLoop(row: LoopRow): Loop {
+export function rowToLoop(row: LoopRow): Loop {
   return {
     id: row.id,
     name: row.name,
@@ -339,7 +361,7 @@ function rowToLoop(row: LoopRow): Loop {
   };
 }
 
-function rowToRun(row: RunRow): LoopRun {
+export function rowToRun(row: RunRow): LoopRun {
   return {
     id: row.id,
     loopId: row.loop_id,
@@ -365,11 +387,31 @@ function rowToRun(row: RunRow): LoopRun {
   };
 }
 
+export function rowToRunReceipt(row: RunReceiptRow): RunReceipt {
+  return {
+    loop_id: row.loop_id,
+    run_id: row.run_id,
+    machine: JSON.parse(row.machine_json) as RunReceiptMachine,
+    repo: row.repo,
+    task_ids: JSON.parse(row.task_ids_json) as string[],
+    knowledge_ids: JSON.parse(row.knowledge_ids_json) as string[],
+    digest_id: row.digest_id,
+    started_at: row.started_at,
+    finished_at: row.finished_at,
+    status: row.status,
+    exit_code: row.exit_code,
+    summary: JSON.parse(row.summary_json) as RunReceipt["summary"],
+    evidence_paths: JSON.parse(row.evidence_paths_json) as string[],
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
 function latestRunTime(row: LatestRunSummaryRow): string {
   return row.finished_at ?? row.started_at ?? row.created_at;
 }
 
-function rowToWorkflow(row: WorkflowRow): WorkflowSpec {
+export function rowToWorkflow(row: WorkflowRow): WorkflowSpec {
   return {
     id: row.id,
     name: row.name,
@@ -383,7 +425,7 @@ function rowToWorkflow(row: WorkflowRow): WorkflowSpec {
   };
 }
 
-function rowToWorkflowRun(row: WorkflowRunRow): WorkflowRun {
+export function rowToWorkflowRun(row: WorkflowRunRow): WorkflowRun {
   return {
     id: row.id,
     workflowId: row.workflow_id,
@@ -406,7 +448,7 @@ function rowToWorkflowRun(row: WorkflowRunRow): WorkflowRun {
   };
 }
 
-function rowToWorkflowInvocation(row: WorkflowInvocationRow): WorkflowInvocation {
+export function rowToWorkflowInvocation(row: WorkflowInvocationRow): WorkflowInvocation {
   return {
     id: row.id,
     workflowId: row.workflow_id ?? undefined,
@@ -421,7 +463,7 @@ function rowToWorkflowInvocation(row: WorkflowInvocationRow): WorkflowInvocation
   };
 }
 
-function rowToWorkflowWorkItem(row: WorkflowWorkItemRow): WorkflowWorkItem {
+export function rowToWorkflowWorkItem(row: WorkflowWorkItemRow): WorkflowWorkItem {
   return {
     id: row.id,
     routeKey: row.route_key,
@@ -447,7 +489,7 @@ function rowToWorkflowWorkItem(row: WorkflowWorkItemRow): WorkflowWorkItem {
   };
 }
 
-function rowToWorkflowStepRun(row: WorkflowStepRunRow): WorkflowStepRun {
+export function rowToWorkflowStepRun(row: WorkflowStepRunRow): WorkflowStepRun {
   return {
     id: row.id,
     workflowRunId: row.workflow_run_id,
@@ -470,7 +512,7 @@ function rowToWorkflowStepRun(row: WorkflowStepRunRow): WorkflowStepRun {
   };
 }
 
-function rowToGoal(row: GoalRow): Goal {
+export function rowToGoal(row: GoalRow): Goal {
   return {
     goalId: row.id,
     planId: row.plan_id,
@@ -493,7 +535,7 @@ function rowToGoal(row: GoalRow): Goal {
   };
 }
 
-function rowToGoalPlanNode(row: GoalPlanNodeRow): GoalPlanNode {
+export function rowToGoalPlanNode(row: GoalPlanNodeRow): GoalPlanNode {
   return {
     nodeId: row.id,
     planId: row.plan_id,
@@ -512,7 +554,7 @@ function rowToGoalPlanNode(row: GoalPlanNodeRow): GoalPlanNode {
   };
 }
 
-function rowToGoalRun(row: GoalRunRow): GoalRun {
+export function rowToGoalRun(row: GoalRunRow): GoalRun {
   return {
     runId: row.id,
     goalId: row.goal_id,
@@ -534,7 +576,7 @@ function rowToGoalRun(row: GoalRunRow): GoalRun {
   };
 }
 
-function rowToWorkflowEvent(row: WorkflowEventRow): WorkflowEvent {
+export function rowToWorkflowEvent(row: WorkflowEventRow): WorkflowEvent {
   return {
     id: row.id,
     workflowRunId: row.workflow_run_id,
@@ -588,7 +630,7 @@ function isLiveStepProcess(pid: number, stepStartedAt: string | null | undefined
   return actualMs >= stepStartMs - START_TIME_TOLERANCE_MS;
 }
 
-function rowToLease(row: LeaseRow): DaemonLease {
+export function rowToLease(row: LeaseRow): DaemonLease {
   return {
     id: row.id,
     pid: row.pid,
@@ -724,7 +766,7 @@ export interface RecordGoalEventInput {
   rawResponse?: unknown;
 }
 
-function workItemStatusForLoopRun(
+export function workItemStatusForLoopRun(
   status: RunStatus,
   attempt: number,
   maxAttempts: number | undefined,
@@ -747,6 +789,7 @@ function scrubbedOrNull(value: string | undefined | null): string | null {
  * kept as head + tail around a truncation marker so evidence stays useful.
  */
 const MAX_PERSISTED_RUN_OUTPUT_CHARS = 64 * 1024;
+const MAX_PERSISTED_WORKFLOW_EVENT_PAYLOAD_CHARS = 64 * 1024;
 
 function clampPersistedRunOutput(value: string | null): string | null {
   if (value == null || value.length <= MAX_PERSISTED_RUN_OUTPUT_CHARS) return value;
@@ -758,8 +801,43 @@ function clampPersistedRunOutput(value: string | null): string | null {
 }
 
 /** Scrub secrets then bound size before persisting run stdout/stderr. */
-function persistedRunOutput(value: string | undefined | null): string | null {
+export function persistedRunOutput(value: string | undefined | null): string | null {
   return clampPersistedRunOutput(scrubbedOrNull(value));
+}
+
+function clampTextToChars(value: string, maxChars: number, reason: string): string {
+  if (value.length <= maxChars) return value;
+  const marker = `\n...[truncated by ${reason}]...\n`;
+  const budget = Math.max(0, maxChars - marker.length);
+  const headLength = Math.ceil(budget / 2);
+  const tailLength = Math.floor(budget / 2);
+  return `${value.slice(0, headLength)}${marker}${value.slice(value.length - tailLength)}`;
+}
+
+function boundedWorkflowEventPayloadJson(scrubbedJson: string): string {
+  if (scrubbedJson.length <= MAX_PERSISTED_WORKFLOW_EVENT_PAYLOAD_CHARS) return scrubbedJson;
+
+  const base = {
+    truncated: true,
+    originalChars: scrubbedJson.length,
+    maxChars: MAX_PERSISTED_WORKFLOW_EVENT_PAYLOAD_CHARS,
+    preview: "",
+  };
+  const baseChars = JSON.stringify(base).length;
+  let previewBudget = Math.max(0, MAX_PERSISTED_WORKFLOW_EVENT_PAYLOAD_CHARS - baseChars - 64);
+
+  while (true) {
+    const preview = clampTextToChars(scrubbedJson, previewBudget, "loops workflow-event payload retention");
+    const bounded = JSON.stringify({ ...base, preview });
+    if (bounded.length <= MAX_PERSISTED_WORKFLOW_EVENT_PAYLOAD_CHARS || previewBudget === 0) return bounded;
+    previewBudget = Math.max(0, previewBudget - (bounded.length - MAX_PERSISTED_WORKFLOW_EVENT_PAYLOAD_CHARS) - 64);
+  }
+}
+
+function persistedWorkflowEventPayload(payload: Record<string, unknown> | undefined | null): string | null {
+  if (payload == null) return null;
+  const scrubbed = scrubSecretsDeep(payload);
+  return boundedWorkflowEventPayloadJson(scrubSecrets(JSON.stringify(scrubbed)));
 }
 
 function chmodIfExists(path: string, mode: number): void {
@@ -902,6 +980,10 @@ export class Store {
           this.db.exec("CREATE INDEX IF NOT EXISTS idx_workflow_work_items_scope ON workflow_work_items(route_scope, status)");
         },
       },
+      {
+        id: "0009_run_receipts",
+        apply: () => this.createRunReceiptsSchema(),
+      },
     ];
   }
 
@@ -962,6 +1044,28 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_runs_status ON loop_runs(status);
       CREATE INDEX IF NOT EXISTS idx_runs_status_lease ON loop_runs(status, lease_expires_at);
       CREATE INDEX IF NOT EXISTS idx_runs_scheduled ON loop_runs(scheduled_for);
+
+      CREATE TABLE IF NOT EXISTS run_receipts (
+        run_id TEXT PRIMARY KEY,
+        loop_id TEXT NOT NULL,
+        machine_json TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        task_ids_json TEXT NOT NULL,
+        knowledge_ids_json TEXT NOT NULL,
+        digest_id TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        status TEXT NOT NULL,
+        exit_code INTEGER,
+        summary_json TEXT NOT NULL,
+        evidence_paths_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_loop ON run_receipts(loop_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_repo ON run_receipts(repo, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_digest ON run_receipts(digest_id);
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_status ON run_receipts(status, created_at DESC);
 
       CREATE TABLE IF NOT EXISTS daemon_lease (
         id TEXT PRIMARY KEY,
@@ -1179,6 +1283,32 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_goal_runs_goal_created ON goal_runs(goal_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_goal_runs_loop_run ON goal_runs(loop_run_id);
       CREATE INDEX IF NOT EXISTS idx_goal_runs_workflow_run ON goal_runs(workflow_run_id);
+    `);
+  }
+
+  private createRunReceiptsSchema(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS run_receipts (
+        run_id TEXT PRIMARY KEY,
+        loop_id TEXT NOT NULL,
+        machine_json TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        task_ids_json TEXT NOT NULL,
+        knowledge_ids_json TEXT NOT NULL,
+        digest_id TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        status TEXT NOT NULL,
+        exit_code INTEGER,
+        summary_json TEXT NOT NULL,
+        evidence_paths_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_loop ON run_receipts(loop_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_repo ON run_receipts(repo, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_digest ON run_receipts(digest_id);
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_status ON run_receipts(status, created_at DESC);
     `);
   }
 
@@ -2933,7 +3063,7 @@ export class Store {
         .run({
           $id: genId(),
           $workflowRunId: runId,
-          $payload: JSON.stringify({
+          $payload: persistedWorkflowEventPayload({
             workflowId: input.workflow.id,
             workflowName: input.workflow.name,
             stepCount: input.workflow.steps.length,
@@ -3373,7 +3503,7 @@ export class Store {
           $sequence: sequence,
           $eventType: eventType,
           $stepId: stepId ?? null,
-          $payload: payload ? JSON.stringify(payload) : null,
+          $payload: persistedWorkflowEventPayload(payload),
           $created: now,
         });
       const event = this.db.query<WorkflowEventRow, [string]>("SELECT * FROM workflow_events WHERE id = ?").get(id);
@@ -3833,6 +3963,89 @@ export class Store {
       rows = this.db.query<RunRow, [number]>("SELECT * FROM loop_runs ORDER BY created_at DESC LIMIT ?").all(limit);
     }
     return rows.map(rowToRun);
+  }
+
+  writeRunReceipt(input: WriteRunReceiptInput, opts: { now?: Date } = {}): RunReceipt {
+    const inputRunId = typeof input.run_id === "string" && input.run_id.trim() ? input.run_id : undefined;
+    const existing = inputRunId ? this.getRunReceipt(inputRunId) : undefined;
+    const run = inputRunId ? this.getRun(inputRunId) : undefined;
+    const loop = input.loop_id ? this.getLoop(input.loop_id) : run ? this.getLoop(run.loopId) : undefined;
+    const receipt = normalizeRunReceipt(input, { now: opts.now, run, loop, existing });
+    this.db
+      .query(
+        `INSERT INTO run_receipts (run_id, loop_id, machine_json, repo, task_ids_json, knowledge_ids_json, digest_id,
+          started_at, finished_at, status, exit_code, summary_json, evidence_paths_json, created_at, updated_at)
+         VALUES ($runId, $loopId, $machineJson, $repo, $taskIdsJson, $knowledgeIdsJson, $digestId,
+          $startedAt, $finishedAt, $status, $exitCode, $summaryJson, $evidencePathsJson, $createdAt, $updatedAt)
+         ON CONFLICT(run_id) DO UPDATE SET
+          loop_id=excluded.loop_id,
+          machine_json=excluded.machine_json,
+          repo=excluded.repo,
+          task_ids_json=excluded.task_ids_json,
+          knowledge_ids_json=excluded.knowledge_ids_json,
+          digest_id=excluded.digest_id,
+          started_at=excluded.started_at,
+          finished_at=excluded.finished_at,
+          status=excluded.status,
+          exit_code=excluded.exit_code,
+          summary_json=excluded.summary_json,
+          evidence_paths_json=excluded.evidence_paths_json,
+          updated_at=excluded.updated_at`,
+      )
+      .run({
+        $runId: receipt.run_id,
+        $loopId: receipt.loop_id,
+        $machineJson: JSON.stringify(receipt.machine),
+        $repo: receipt.repo,
+        $taskIdsJson: JSON.stringify(receipt.task_ids),
+        $knowledgeIdsJson: JSON.stringify(receipt.knowledge_ids),
+        $digestId: receipt.digest_id,
+        $startedAt: receipt.started_at,
+        $finishedAt: receipt.finished_at,
+        $status: receipt.status,
+        $exitCode: receipt.exit_code,
+        $summaryJson: JSON.stringify(receipt.summary),
+        $evidencePathsJson: JSON.stringify(receipt.evidence_paths),
+        $createdAt: receipt.created_at,
+        $updatedAt: receipt.updated_at,
+      });
+    return this.getRunReceipt(receipt.run_id) ?? receipt;
+  }
+
+  getRunReceipt(runId: string): RunReceipt | undefined {
+    const row = this.db.query<RunReceiptRow, [string]>("SELECT * FROM run_receipts WHERE run_id = ?").get(runId);
+    return row ? rowToRunReceipt(row) : undefined;
+  }
+
+  listRunReceipts(opts: { loopId?: string; repo?: string; taskId?: string; knowledgeId?: string; status?: string; limit?: number } = {}): RunReceipt[] {
+    const limit = opts.limit ?? 100;
+    const filters: string[] = [];
+    const params: unknown[] = [];
+    if (opts.loopId) {
+      filters.push("loop_id = ?");
+      params.push(opts.loopId);
+    }
+    if (opts.repo) {
+      filters.push("repo = ?");
+      params.push(opts.repo);
+    }
+    if (opts.status) {
+      filters.push("status = ?");
+      params.push(opts.status);
+    }
+    if (opts.taskId) {
+      filters.push("EXISTS (SELECT 1 FROM json_each(run_receipts.task_ids_json) WHERE value = ?)");
+      params.push(opts.taskId);
+    }
+    if (opts.knowledgeId) {
+      filters.push("EXISTS (SELECT 1 FROM json_each(run_receipts.knowledge_ids_json) WHERE value = ?)");
+      params.push(opts.knowledgeId);
+    }
+    const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+    const rows = this.db
+      .query<RunReceiptRow, any>(`SELECT * FROM run_receipts ${where} ORDER BY created_at DESC LIMIT ?`)
+      .all(...params, limit);
+    return rows.map(rowToRunReceipt);
   }
 
   private deferLiveExpiredRun(id: string, now: Date, opts: DaemonLeaseFence = {}): void {
