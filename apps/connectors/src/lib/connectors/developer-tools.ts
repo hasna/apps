@@ -962,6 +962,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["blockchain", "smart contracts", "web3", "api", "infrastructure"],
   },
   {
+    name: "steel-dev",
+    displayName: "Steel Dev",
+    description: "Browser automation platform and cloud browser sessions API",
+    category: "Developer Tools",
+    tags: ["browser", "automation", "sessions"],
+  },
+  {
     name: "strapi",
     displayName: "Strapi",
     description: "Open-source headless CMS and content API platform",
