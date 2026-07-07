@@ -17,6 +17,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["incorporation", "business"],
   },
   {
+    name: "stripecapital",
+    displayName: "Stripe Capital",
+    description: "Financing offers and repayments for platforms",
+    category: "Commerce & Finance",
+    tags: ["financing", "lending", "capital"],
+  },
+  {
     name: "stripe-connect-platform",
     displayName: "Stripe Connect Platform",
     description: "Stripe Connect platform operations - connected accounts, onboarding, transfers, and fees",
