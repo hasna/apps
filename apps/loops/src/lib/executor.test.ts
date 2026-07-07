@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
 import { Store } from "./store.js";
-import { defaultAgentIdleTimeoutMs, executeLoop, preflightTarget, type SpawnedProcessInfo } from "./executor.js";
+import { defaultAgentIdleTimeoutMs, executeLoop, isStaleWorktreeRegistration, preflightTarget, type SpawnedProcessInfo } from "./executor.js";
 import { openGate, waitUntil } from "../test-helpers.js";
 
 function gateWaitScript(gate: string): string {
@@ -415,6 +415,72 @@ describe("executeLoop", () => {
         expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("openloops/exec-test");
         expect(execFileSync("git", ["-C", wtPath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim()).toBe(detachedHead);
         expect(readFileSync(join(wtPath, "detached-marker.txt"), "utf8")).toBe("preserve detached head\n");
+      } finally {
+        store.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("detects git's stale 'missing but already registered worktree' error", () => {
+      expect(
+        isStaleWorktreeRegistration(
+          "fatal: '/x/run-1' is a missing but already registered worktree;\nuse 'add -f' to override, or 'prune' or 'remove' to clear",
+        ),
+      ).toBe(true);
+      expect(isStaleWorktreeRegistration("fatal: '/x/run-1' already exists")).toBe(false);
+      expect(isStaleWorktreeRegistration(undefined)).toBe(false);
+      expect(isStaleWorktreeRegistration("")).toBe(false);
+    });
+
+    test("self-heals a stale 'missing but already registered' worktree registration", async () => {
+      const root = mkdtempSync(join(tmpdir(), "loops-worktree-stale-"));
+      const repo = initRepo(root);
+      const bin = fakePwdBinary(root);
+      const wtPath = join(root, "worktrees", "repo", "run-1");
+      const store = new Store(":memory:");
+      try {
+        // Fabricate the exact 48693723 fault: register a worktree (creating the
+        // branch), then delete its directory, leaving the `.git/worktrees/<name>`
+        // entry git refuses to overwrite ("missing but already registered
+        // worktree") while the branch stays checked-out to the missing path.
+        execFileSync("git", ["-C", repo, "worktree", "add", "-b", "openloops/stale-test", wtPath], { stdio: "ignore" });
+        rmSync(wtPath, { recursive: true, force: true });
+        expect(existsSync(wtPath)).toBe(false);
+
+        const loop = store.createLoop({
+          name: "worktree-stale-selfheal",
+          schedule: { type: "once", at: new Date().toISOString() },
+          target: {
+            type: "agent",
+            provider: "claude",
+            prompt: "work",
+            configIsolation: "safe",
+            cwd: wtPath,
+            timeoutMs: 30_000,
+            worktree: {
+              mode: "required",
+              enabled: true,
+              originalCwd: repo,
+              cwd: wtPath,
+              repoRoot: repo,
+              root: join(root, "worktrees"),
+              path: wtPath,
+              branch: "openloops/stale-test",
+            },
+          },
+        });
+        const claim = store.claimRun(loop, new Date().toISOString(), "test");
+        expect(claim).toBeDefined();
+        const result = await executeLoop(loop, claim!.run, {
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+        });
+        // Self-heal: prune cleared the stale registration, the single retry
+        // recreated the worktree, and the agent ran inside it. Without the fix
+        // this fails "worktree preparation failed ... missing but already
+        // registered worktree" (mode=required fails closed).
+        expect(result.status).toBe("succeeded");
+        expect(result.stdout.trim()).toBe(realpathSync(wtPath));
+        expect(existsSync(join(wtPath, ".git"))).toBe(true);
       } finally {
         store.close();
         rmSync(root, { recursive: true, force: true });

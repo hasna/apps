@@ -178,6 +178,9 @@ function compactDrainResult(result: TodosTaskRoutePrint): Record<string, unknown
     routeScope: stringField(value.routeScope),
     requeue,
     queuedAtSource: value.queuedAtSource,
+    // Surface a redispatch-cap dead-letter in compact/cron output too, so a
+    // capped task is visible and not mistaken for an ordinary dedupe.
+    deadLettered: value.deadLettered === true ? true : undefined,
     // Preserve the non-skippable-error marker so compact/cron output still
     // exposes it; otherwise a fully-fatal drain looks identical to a no-op.
     fatal: value.fatal === true ? true : undefined,
@@ -538,6 +541,7 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
       considered: 0,
       created: 0,
       deduped: 0,
+      deadLettered: 0,
       throttled: 0,
       skipped: 0,
       freshnessClosed: 0,
@@ -571,6 +575,7 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
           considered: report.considered,
           created: report.created,
           deduped: report.deduped,
+          deadLettered: report.deadLettered,
           throttled: report.throttled,
           skipped: report.skipped,
           freshnessClosed: report.freshnessClosed,
@@ -665,6 +670,10 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
     considered: results.length,
     created: results.filter((result) => result.kind === "created" && !result.value.deduped).length,
     deduped: results.filter((result) => result.kind === "deduped").length,
+    // Terminal work items the route dead-lettered because they hit the
+    // redispatch cap: the black hole made visible. Surfaced + counted so a
+    // capped, still-actionable task no longer silently reports created=0.
+    deadLettered: results.filter((result) => result.kind === "deduped" && result.value.deadLettered === true).length,
     throttled: results.filter((result) => result.kind === "throttled").length,
     skipped: results.filter((result) => result.kind === "skipped").length,
     // Tasks closed out of the queue because their PR is definitively
@@ -705,6 +714,7 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
         considered: report.considered,
         created: report.created,
         deduped: report.deduped,
+        deadLettered: report.deadLettered,
         throttled: report.throttled,
         skipped: report.skipped,
         freshnessClosed: report.freshnessClosed,
@@ -720,6 +730,6 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
     : { ...report, evidencePath };
   return {
     value,
-    human: `drained todos ready queue: considered=${report.considered} created=${report.created} deduped=${report.deduped} throttled=${report.throttled} skipped=${report.skipped} freshnessClosed=${report.freshnessClosed} fatal=${report.fatal}`,
+    human: `drained todos ready queue: considered=${report.considered} created=${report.created} deduped=${report.deduped} deadLettered=${report.deadLettered} throttled=${report.throttled} skipped=${report.skipped} freshnessClosed=${report.freshnessClosed} fatal=${report.fatal}`,
   };
 }

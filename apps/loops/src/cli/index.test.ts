@@ -8167,6 +8167,45 @@ describe("loops CLI", () => {
     expect(loopsAfterRequeue).toHaveLength(2);
   });
 
+  test("routes requeue resets attempts by default and preserves them with --keep-attempts", () => {
+    const dataDir = freshDataDir("loops-cli-requeue-reset-");
+    function admitFailedItem(idSuffix: string, attempts: number): string {
+      const event = {
+        id: `evt-requeue-${idSuffix}`,
+        type: "task.created",
+        source: "@hasna/todos",
+        data: { id: `task-requeue-${idSuffix}`, title: "requeue attempts", working_dir: "/tmp/open-todos", tags: ["auto:route"] },
+        timestamp: new Date().toISOString(),
+      };
+      const res = runCli(dataDir, ["--json", "events", "handle", "todos-task"], JSON.stringify(event));
+      expect(res.status).toBe(0);
+      const created = JSON.parse(res.stdout);
+      const db = new Database(join(dataDir, "loops.db"));
+      try {
+        db.query("UPDATE workflow_work_items SET status='failed', loop_id=NULL, attempts=? WHERE id=?").run(attempts, created.workItem.id);
+      } finally {
+        db.close();
+      }
+      return created.workItem.id as string;
+    }
+
+    // Default: reset — an operator unwedge is durable, not one-shot.
+    const resetId = admitFailedItem("reset", 6);
+    const reset = runCli(dataDir, ["--json", "routes", "requeue", resetId, "--reason", "durable operator unwedge"]);
+    expect(reset.status).toBe(0);
+    const resetItem = JSON.parse(reset.stdout);
+    expect(resetItem.status).toBe("queued");
+    expect(resetItem.attempts).toBe(0);
+
+    // --keep-attempts: the cautious path preserves the count.
+    const keepId = admitFailedItem("keep", 6);
+    const keep = runCli(dataDir, ["--json", "routes", "requeue", keepId, "--reason", "cautious", "--keep-attempts"]);
+    expect(keep.status).toBe(0);
+    const keepItem = JSON.parse(keep.stdout);
+    expect(keepItem.status).toBe("queued");
+    expect(keepItem.attempts).toBe(6);
+  });
+
   test("todos task event handler requeues succeeded work items with operator evidence", () => {
     const dataDir = freshDataDir("loops-cli-event-succeeded-requeue-");
     const event = {
@@ -8207,6 +8246,9 @@ describe("loops CLI", () => {
     expect(refusedActive.status).not.toBe(0);
     expect(refusedActive.stderr).toContain("--reason");
 
+    // --keep-attempts preserves the attempt count so the requeue-evidence
+    // reporting (previousAttempts/attempt) below is exercised; the default now
+    // resets attempts (covered by the dedicated reset test).
     const requeue = runCli(dataDir, [
       "--json",
       "routes",
@@ -8214,6 +8256,7 @@ describe("loops CLI", () => {
       created.workItem.id,
       "--reason",
       "dependency resolved",
+      "--keep-attempts",
     ]);
     expect(requeue.status).toBe(0);
     const requeued = JSON.parse(requeue.stdout);
@@ -8647,6 +8690,8 @@ describe("loops CLI", () => {
       db.close();
     }
 
+    // --keep-attempts preserves the attempt count so the requeue-evidence
+    // (previousAttempts/attempt) is reported; the default resets attempts.
     const requeue = runCli(dataDir, [
       "--json",
       "routes",
@@ -8654,6 +8699,7 @@ describe("loops CLI", () => {
       created.workItem.id,
       "--reason",
       "generic dependency resolved",
+      "--keep-attempts",
     ]);
     expect(requeue.status).toBe(0);
 

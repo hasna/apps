@@ -780,6 +780,55 @@ export function workItemStatusForLoopRun(
   return undefined;
 }
 
+/**
+ * `exit(75)` = `EX_TEMPFAIL`: the sysexits.h "temporary failure, retry later"
+ * code. A gate/worker step that exits 75 (e.g. an account-quota probe that is
+ * still dry) is signalling "not now", not a real failed attempt — so it must
+ * not burn the todos-task redispatch cap and must leave the work item
+ * requeueable rather than persisting as a terminal, dedupe-forever row.
+ */
+export const WORK_ITEM_TEMPFAIL_EXIT_CODE = 75;
+
+/**
+ * Workflow step ids that run BEFORE the worker does any real work. A failure in
+ * one of these (triage/planner gate, or the pre-step worktree preparation) that
+ * dies quickly is a "gate death": the run never executed the worker, so it must
+ * not count toward the redispatch cap (otherwise a purely infrastructural fault
+ * — e.g. a stale worktree registration — silently dead-letters a task that
+ * never actually ran).
+ */
+export const GATE_STEP_IDS: ReadonlySet<string> = new Set(["triage", "planner", "plan"]);
+
+/** A gate-step failure only counts as a gate death when it dies before any real
+ *  work could have happened. Worktree-prep deaths are always gate deaths (they
+ *  fail before the agent is spawned) regardless of this bound. */
+export const GATE_DEATH_MAX_DURATION_MS = 60_000;
+
+export type NonProductiveFailureKind = "tempfail" | "gate-death";
+
+type ClassifiableStepRun = Pick<WorkflowStepRun, "stepId" | "status" | "exitCode" | "durationMs" | "error">;
+
+/**
+ * Classify a just-finalized *failed* workflow run's decisive failing step. A
+ * non-productive finish (a tempfail retry-signal, or a gate death before the
+ * worker ran) must not count toward the todos-task redispatch cap. Returns the
+ * non-productive kind, or `undefined` when the run represents a real worker
+ * attempt that legitimately counts toward the cap. Pure/exported for tests.
+ */
+export function classifyNonProductiveStepFailure(steps: ClassifiableStepRun[]): NonProductiveFailureKind | undefined {
+  // Steps arrive in sequence order; the decisive step is the last one that
+  // failed or timed out (a later gate stop never reaches earlier successes).
+  const failing = [...steps].reverse().find((step) => step.status === "failed" || step.status === "timed_out");
+  if (!failing) return undefined;
+  if (failing.exitCode === WORK_ITEM_TEMPFAIL_EXIT_CODE) return "tempfail";
+  // Worktree preparation fails before the agent process is spawned, so it is a
+  // gate death by definition — no real work happened — independent of duration.
+  if (typeof failing.error === "string" && failing.error.includes("worktree preparation failed")) return "gate-death";
+  const fast = failing.durationMs === undefined || failing.durationMs < GATE_DEATH_MAX_DURATION_MS;
+  if (GATE_STEP_IDS.has(failing.stepId) && fast) return "gate-death";
+  return undefined;
+}
+
 export function scrubbedOrNull(value: string | undefined | null): string | null {
   return value == null ? null : scrubSecrets(value);
 }
@@ -2453,7 +2502,15 @@ export class Store {
     return counts;
   }
 
-  requeueWorkflowWorkItem(id: string, patch: { reason?: string } = {}): WorkflowWorkItem {
+  /**
+   * Requeue a terminal admission work item for the next task/event delivery.
+   * By default `attempts` is preserved (used by the bounded stale-terminal
+   * re-admission on the route path, which must keep counting toward the cap).
+   * Pass `resetAttempts: true` for the operator unwedge (`loops routes requeue`)
+   * so a manual requeue is DURABLE rather than one-shot: without the reset a
+   * capped item that finishes terminal once more re-caps instantly.
+   */
+  requeueWorkflowWorkItem(id: string, patch: { reason?: string; resetAttempts?: boolean } = {}): WorkflowWorkItem {
     const current = this.getWorkflowWorkItem(id);
     if (!current) throw new Error(`workflow work item not found: ${id}`);
     const requeueableStatuses: WorkflowWorkItemStatus[] = ["succeeded", "failed", "dead_letter", "cancelled"];
@@ -2467,6 +2524,7 @@ export class Store {
       .query(
         `UPDATE workflow_work_items
          SET status='queued', workflow_id=NULL, loop_id=NULL, workflow_run_id=NULL,
+          ${patch.resetAttempts ? "attempts=0," : ""}
           next_attempt_at=NULL, lease_expires_at=NULL, last_reason=?, updated_at=?
          WHERE id=? AND status IN (${placeholders})`,
       )
@@ -2475,6 +2533,68 @@ export class Store {
     if (!item) throw new Error(`workflow work item not found after requeue: ${id}`);
     if (res.changes !== 1) throw new Error(`workflow work item was not requeued: ${id} status=${item.status}`);
     return item;
+  }
+
+  /**
+   * Transition a terminal admission work item to `dead_letter`. Used by the
+   * route path when a still-actionable todos task has exhausted the redispatch
+   * cap: instead of silently deduping the same terminal row forever (the "black
+   * hole" — `considered=N created=0` with no signal), the item is moved to a
+   * visible `dead_letter` state so drain reports can surface + count it and an
+   * operator can `loops routes requeue` it. Idempotent: a no-op on an item that
+   * is already dead-lettered.
+   */
+  deadLetterWorkflowWorkItem(id: string, patch: { reason?: string } = {}): WorkflowWorkItem {
+    const now = nowIso();
+    const reason = patch.reason?.trim() || "redispatch cap reached; dead-lettered";
+    this.db
+      .query(
+        `UPDATE workflow_work_items
+         SET status='dead_letter', next_attempt_at=NULL, lease_expires_at=NULL, last_reason=?, updated_at=?
+         WHERE id=? AND status IN ('succeeded','failed','cancelled')`,
+      )
+      .run(reason, now, id);
+    const item = this.getWorkflowWorkItem(id);
+    if (!item) throw new Error(`workflow work item not found after dead-letter: ${id}`);
+    return item;
+  }
+
+  /**
+   * Refund a redispatch attempt for a *failed* run that never did real work.
+   * Called from {@link finalizeWorkflowRun} the moment a work item is set
+   * `failed`, so the todos-task redispatch cap only ever counts real worker
+   * attempts. A tempfail (`exit 75`) is additionally made requeueable (dropped
+   * back to `queued`, bindings cleared) so its "retry later" contract fires on
+   * the next drain instead of persisting as a terminal, dedupe-forever row. A
+   * gate death stays `failed` (the bounded re-admission picks it up after
+   * backoff once the underlying infra fault clears). Both floor attempts at 0.
+   */
+  private demoteNonProductiveWorkItems(workflowRunId: string, finishedAt: string): void {
+    const kind = classifyNonProductiveStepFailure(this.listWorkflowStepRuns(workflowRunId));
+    if (!kind) return;
+    if (kind === "tempfail") {
+      this.db
+        .query(
+          `UPDATE workflow_work_items
+           SET status='queued', attempts=CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END,
+            workflow_id=NULL, loop_id=NULL, workflow_run_id=NULL,
+            next_attempt_at=NULL, lease_expires_at=NULL,
+            last_reason='worker exited 75 (tempfail): requeued for retry; attempt refunded (does not count toward redispatch cap)',
+            updated_at=?
+           WHERE workflow_run_id=? AND status='failed'`,
+        )
+        .run(finishedAt, workflowRunId);
+      return;
+    }
+    this.db
+      .query(
+        `UPDATE workflow_work_items
+         SET attempts=CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END,
+          last_reason='gate death before real work (worktree prep / triage / planner): attempt refunded (does not count toward redispatch cap)',
+          updated_at=?
+         WHERE workflow_run_id=? AND status='failed'`,
+      )
+      .run(finishedAt, workflowRunId);
   }
 
   admitWorkflowWorkItem(id: string, patch: { workflowId: string; loopId: string; reason?: string }): WorkflowWorkItem {
@@ -3440,6 +3560,10 @@ export class Store {
         const itemStatus: WorkflowWorkItemStatus =
           status === "succeeded" ? "succeeded" : status === "cancelled" ? "cancelled" : "failed";
         this.setWorkflowWorkItemsForWorkflowRun(workflowRunId, itemStatus, error, finishedAt);
+        // A run that finished non-productively (a tempfail retry-signal, or a
+        // gate death before the worker ran) must not burn the redispatch cap:
+        // refund the attempt, and for a tempfail make the item requeueable now.
+        if (itemStatus === "failed") this.demoteNonProductiveWorkItems(workflowRunId, finishedAt);
         this.maybeArchiveTerminalGeneratedRouteWorkflow(workflowRunId, finishedAt);
       }
       this.db.exec("COMMIT");

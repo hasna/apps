@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { dbPath } from "../paths.js";
 import { drainTodosTaskRoutes } from "./drain.js";
 
 // Integration coverage for the freshness-close path: a route whose PR is
@@ -187,5 +189,43 @@ describe("drainTodosTaskRoutes freshness close", () => {
     const routed = (result.value.results as Array<Record<string, unknown>>)[0]!;
     expect(routed.kind).toBe("created");
     expect(taskState(candidateId).status).toBe("pending");
+  }, TODOS_INTEGRATION_TIMEOUT_MS);
+
+  test.skipIf(!HAS_TODOS)("reports a redispatch-cap dead-letter instead of a silent created=0", () => {
+    const taskId = addTask("Worker keeps finishing without closing this task");
+    // First drain admits the work item (attempts=1).
+    const first = drainTodosTaskRoutes({ ...BASE_OPTS, todosProject });
+    expect(first.value.created).toBe(1);
+    expect(first.value.deadLettered).toBe(0);
+
+    // Simulate 8 prior runs that finished terminal without closing the task,
+    // backdated past the backoff window — the redispatch cap is now reached.
+    const db = new Database(dbPath());
+    try {
+      const backdated = new Date(Date.now() - 24 * 60 * 60_000).toISOString();
+      db.query("UPDATE workflow_work_items SET status='failed', attempts=8, updated_at=? WHERE route_key='todos-task'").run(backdated);
+    } finally {
+      db.close();
+    }
+
+    // Next drain: no new dispatch, but the cap is now VISIBLE (not a silent hole).
+    const second = drainTodosTaskRoutes({ ...BASE_OPTS, todosProject });
+    expect(second.value.created).toBe(0);
+    expect(second.value.deduped).toBe(1);
+    expect(second.value.deadLettered).toBe(1);
+    expect(second.human).toContain("deadLettered=1");
+    const dl = (second.value.results as Array<Record<string, unknown>>)[0]!;
+    expect(dl.kind).toBe("deduped");
+    expect(dl.deadLettered).toBe(true);
+
+    // The task is still actionable (pending), but its work item is now dead_letter.
+    expect(taskState(taskId).status).toBe("pending");
+    const after = new Database(dbPath());
+    try {
+      const row = after.query<{ status: string }, []>("SELECT status FROM workflow_work_items WHERE route_key='todos-task' LIMIT 1").get();
+      expect(row?.status).toBe("dead_letter");
+    } finally {
+      after.close();
+    }
   }, TODOS_INTEGRATION_TIMEOUT_MS);
 });
