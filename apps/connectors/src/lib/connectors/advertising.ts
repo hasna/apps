@@ -24,6 +24,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["google", "ads", "ppc", "campaigns"],
   },
   {
+    name: "spotify-ads",
+    displayName: "Spotify Ads",
+    description: "Spotify advertising API (campaigns, ad sets, ads, reporting)",
+    category: "Advertising",
+    tags: ["spotify", "ads", "campaigns"],
+  },
+  {
     name: "tiktok-events-api",
     displayName: "TikTok Events API",
     description: "Server-side TikTok Events API 2.0 conversion events, pixels, and event sets",
