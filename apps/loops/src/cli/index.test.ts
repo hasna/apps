@@ -2852,6 +2852,7 @@ describe("loops CLI", () => {
       "report-only",
       "incident-response",
       "deterministic-check-create-task",
+      "routing-remediation",
     ]));
 
     const prReview = runCli(dataDir, [
@@ -2896,6 +2897,35 @@ describe("loops CLI", () => {
     expect(lifecycleStepsById.verifier.timeoutMs).toBe(600_000);
     expect(lifecycleStepsById["triage-gate"].timeoutMs).toBe(120_000);
     expect(lifecycleStepsById["planner-gate"].timeoutMs).toBe(120_000);
+
+    const routingRemediation = runCli(dataDir, [
+      "--json",
+      "templates",
+      "render",
+      "routing-remediation",
+      "--var",
+      `projectPath=${repo}`,
+      "--var",
+      "todosProjectPath=/tmp/todos-store",
+      "--var",
+      "dryRun=false",
+      "--var",
+      "maxRepairs=2",
+      "--var",
+      "shard=0/6",
+      "--var",
+      "idempotencyKey=routing-health:open-loops:shard0",
+    ]);
+    expect(routingRemediation.status).toBe(0);
+    const routingWorkflow = JSON.parse(routingRemediation.stdout);
+    expect(routingWorkflow.name).toContain("routing-remediation");
+    expect(routingWorkflow.steps.map((step: { id: string }) => step.id)).toEqual(["routing-doctor-preflight", "worker", "verifier"]);
+    expect(routingWorkflow.steps[0].target.type).toBe("command");
+    expect(routingWorkflow.steps[0].target.args.join("\n")).toContain("OPENLOOPS_ROUTING_REMEDIATION_MAX_REPAIRS='2'");
+    expect(routingWorkflow.steps[0].target.args.join("\n")).toContain("\"--shard\",\"0/6\"");
+    expect(routingWorkflow.steps[0].blockedExitCodes).toEqual([12]);
+    expect(routingWorkflow.steps[1].target.prompt).toContain("[redacted");
+    expect(routingWorkflow.steps[1].target.worktree.mode).toBe("required");
 
     const deterministic = runCli(dataDir, [
       "--json",

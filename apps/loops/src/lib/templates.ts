@@ -35,6 +35,9 @@ import {
   PR_REVIEW_TEMPLATE_ID,
   prHandoffCommand,
   REPORT_ONLY_TEMPLATE_ID,
+  ROUTING_REMEDIATION_TEMPLATE_ID,
+  routingRemediationDoctorCommand,
+  routingRemediationPreflightCommand,
   SCHEDULED_AUDIT_TEMPLATE_ID,
   sourceTaskGateCommand,
   TASK_LIFECYCLE_TEMPLATE_ID,
@@ -64,6 +67,7 @@ export {
   KNOWLEDGE_REFRESH_TEMPLATE_ID,
   PR_REVIEW_TEMPLATE_ID,
   REPORT_ONLY_TEMPLATE_ID,
+  ROUTING_REMEDIATION_TEMPLATE_ID,
   SCHEDULED_AUDIT_TEMPLATE_ID,
   TASK_LIFECYCLE_TEMPLATE_ID,
   TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID,
@@ -148,6 +152,21 @@ export interface BoundedAgentWorkflowTemplateInput extends AgentWorkflowTemplate
   prompt?: string;
 }
 
+export interface RoutingRemediationWorkflowTemplateInput extends AgentWorkflowTemplateBaseInput {
+  todosProjectPath?: string;
+  doctorJsonPath?: string;
+  doctorProject?: string;
+  tag?: string;
+  status?: string;
+  shard?: string;
+  limit?: string;
+  maxRepairs?: number;
+  dryRun?: boolean;
+  idempotencyKey?: string;
+  evidenceDir?: string;
+  undoDir?: string;
+}
+
 export type LoopTemplateSourceFilter = LoopTemplateSource | "all";
 
 export interface ListLoopTemplatesOptions {
@@ -222,6 +241,13 @@ function parseDeterministicTimeoutMs(raw: string | undefined, fallbackMs: number
   if (raw === undefined || raw.trim() === "") return fallbackMs;
   const value = Number(raw);
   if (!Number.isInteger(value) || value <= 0) throw new Error(`${label} must be a positive integer number of milliseconds`);
+  return value;
+}
+
+function parseNonNegativeIntegerVar(raw: string | undefined, fallback: number, label: string): number {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) throw new Error(`${label} must be a non-negative integer`);
   return value;
 }
 
@@ -893,6 +919,163 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
   };
 }
 
+export function renderRoutingRemediationWorkflow(input: RoutingRemediationWorkflowTemplateInput): CreateWorkflowInput {
+  if (!input.projectPath?.trim()) throw new Error("projectPath is required");
+  const todosProjectPath = input.todosProjectPath ?? input.routeProjectPath ?? input.projectPath;
+  const status = input.status ?? "pending,in_progress";
+  const scope = {
+    doctorProject: input.doctorProject,
+    tag: input.tag,
+    status,
+    shard: input.shard,
+    limit: input.limit,
+  };
+  const idempotencyKey =
+    input.idempotencyKey?.trim() ||
+    [
+      "routing-remediation",
+      todosProjectPath,
+      input.doctorJsonPath ?? "doctor-live",
+      input.doctorProject ?? "all-projects",
+      input.tag ?? "all-tags",
+      status,
+      input.shard ?? "all-shards",
+      input.limit ?? "unlimited",
+    ].join(":");
+  const runId = `${slugSegment(idempotencyKey, "routing-remediation").slice(0, 48)}-${stableHex(idempotencyKey)}`;
+  const maxRepairs = input.maxRepairs ?? 25;
+  if (!Number.isInteger(maxRepairs) || maxRepairs < 0) throw new Error("maxRepairs must be a non-negative integer");
+  const dryRun = input.dryRun ?? true;
+  const plan = worktreePlan(input, idempotencyKey);
+  const evidenceDir = input.evidenceDir ?? join(input.projectPath, ".openloops", "routing-remediation");
+  const undoDir = input.undoDir ?? evidenceDir;
+  const doctorOutputPath = join(evidenceDir, `routing-doctor-${runId}.json`);
+  const preflightOutputPath = join(evidenceDir, `routing-remediation-preflight-${runId}.json`);
+  const applyOutputPath = join(evidenceDir, `routing-remediation-apply-${runId}.json`);
+  const recheckOutputPath = join(evidenceDir, `routing-remediation-recheck-${runId}.json`);
+  const undoRecordPath = join(undoDir, `routing-remediation-${runId}.undo.json`);
+  const applyCommand = routingRemediationDoctorCommand({
+    todosProjectPath,
+    apply: true,
+    undoRecordPath,
+    ...scope,
+  });
+  const recheckCommand = routingRemediationDoctorCommand({
+    todosProjectPath,
+    ...scope,
+  });
+  const preflightCommand = routingRemediationPreflightCommand({
+    todosProjectPath,
+    doctorJsonPath: input.doctorJsonPath,
+    doctorOutputPath,
+    preflightOutputPath,
+    maxRepairs,
+    dryRun,
+    idempotencyKey,
+    applyCommand,
+    ...scope,
+  });
+  const context = {
+    idempotencyKey,
+    projectPath: input.projectPath,
+    routeProjectPath: input.routeProjectPath,
+    projectGroup: input.projectGroup,
+    todosProjectPath,
+    doctorJsonPath: input.doctorJsonPath,
+    doctorProject: input.doctorProject,
+    tag: input.tag,
+    status,
+    shard: input.shard,
+    limit: input.limit,
+    maxRepairs,
+    dryRun,
+    evidence: {
+      doctorOutputPath,
+      preflightOutputPath,
+      applyOutputPath,
+      recheckOutputPath,
+      undoRecordPath,
+    },
+    worktree: worktreeContextFragment(plan),
+  };
+  const shared = [
+    worktreePrompt(plan),
+    "Routing remediation contract:",
+    `- Todos project path: ${todosProjectPath}`,
+    `- Idempotency key: ${idempotencyKey}`,
+    `- Dry-run/preflight mode: ${dryRun ? "true" : "false"}`,
+    `- Max safe_auto repairs for this run: ${maxRepairs}`,
+    `- Source doctor JSON: ${input.doctorJsonPath ?? "generated by routing-doctor-preflight"}`,
+    `- Normalized doctor JSON: ${doctorOutputPath}`,
+    `- Preflight JSON: ${preflightOutputPath}`,
+    `- Apply JSON target: ${applyOutputPath}`,
+    `- Recheck JSON target: ${recheckOutputPath}`,
+    `- Undo record target: ${undoRecordPath}`,
+    "Never edit the Todos SQLite database, raw DB files, or task JSON storage directly. Do not use sqlite3, ad hoc SQL, or filesystem mutations as a repair mechanism.",
+    "Only supported Todos CLI/API commands may mutate tasks. Safe repairs are limited to doctor findings classified safe_auto whose suggested_repair.field is working_dir or task_list_id.",
+    "Refuse blocker_human, blocker_cross_repo, blocker_invalid_path, unsupported, legal, and other human-judgement findings as mutations. File or update blocker tasks instead.",
+    NO_TMUX_DISPATCH_FRAGMENT,
+    "",
+    `Routing remediation context JSON: ${compactJson(context)}`,
+  ].join("\n");
+  const workerPrompt = [
+    ...boundedStepHeaderFragment("Apply bounded routing-doctor remediation from preflight evidence.", "worker", "bounded"),
+    shared,
+    "Read the preflight JSON before making any mutation. If preflight apply_allowed is false, do not run the apply command.",
+    dryRun
+      ? "This workflow was rendered with dryRun=true. Do not run the apply command; produce only a dry-run summary and blocker-task preview/update evidence."
+      : `If preflight permits apply, run the supported repair command and capture stdout JSON to ${applyOutputPath}: ${applyCommand}`,
+    `After any apply run, recheck route state and capture stdout JSON to ${recheckOutputPath}: ${recheckCommand}`,
+    "For every modified task, ensure a task comment records old value, new value, repair command, source doctor run, undo record, and route-state recheck result. If the Todos CLI already wrote a complete per-task repair comment, verify it; otherwise add the missing evidence with todos comment.",
+    "Create or update deduped blocker tasks for every blocker_human, blocker_cross_repo, blocker_invalid_path, unsupported, legal, or otherwise unsupported finding.",
+    [
+      "Blocker task command shape:",
+      `todos --project ${todosProjectPath} task upsert --fingerprint "routing-health:blocker:<source-task-id>:<finding-category>" --title "Routing remediation blocker: <finding-category> for <source-task-id>" -d "<source task id, finding category, repair_class, old value, new value, source doctor run, and why automation refused mutation>" -p high -t from-kai,routing-health`,
+    ].join("\n"),
+    "Do not change cross-repo task intent. A cross-repo finding can only be changed when the doctor itself classifies the exact field repair as safe_auto and the supported Todos repair command applies it.",
+    "Record compact workflow evidence: changed tasks, blocker fingerprints, apply/recheck artifact paths, undo record path, validation results, and residual risks.",
+  ].join("\n");
+  const verifierPrompt = [
+    ...boundedStepHeaderFragment("Verify bounded routing-doctor remediation evidence.", "verifier", "bounded"),
+    shared,
+    adversarialReviewFragment("the preflight artifact, apply output, undo record, blocker tasks, per-task comments, and route-state recheck", TASK_REVIEW_FOCUS),
+    verifierRuntimeGuidance(input),
+    `Re-run or inspect the route-state recheck command as needed: ${recheckCommand}`,
+    "Confirm safe_auto repairs were limited to working_dir and task_list_id, raw DB edits were not used, cross-repo/human/legal/unsupported findings became from-kai,routing-health blocker tasks, and every changed task has old/new/command/source/recheck evidence.",
+    "If dry-run mode was rendered, verify that no apply/repair mutation occurred and that the output is clearly preflight-only.",
+    "If invalid, record precise blocker evidence and create follow-up tasks rather than broad fixes.",
+    VERIFIER_TINY_FIXES_FRAGMENT,
+  ].join("\n");
+
+  return {
+    name: `routing-remediation-${runId}`,
+    description: `Routing doctor remediation workflow; dryRun=${dryRun}; maxRepairs=${maxRepairs}; idempotency=${idempotencyKey}`,
+    version: 1,
+    steps: [
+      commandStep({
+        id: "routing-doctor-preflight",
+        name: "Routing Doctor Preflight",
+        description: "Run or consume routing doctor JSON, enforce safe-field and repair-capacity gates, and write bounded evidence.",
+        command: preflightCommand,
+        cwd: input.projectPath,
+        timeoutMs: 5 * 60_000,
+        idleTimeoutMs: 60_000,
+        blockedExitCodes: GATE_BLOCKED_EXIT_CODES,
+      }),
+      ...workerVerifierSteps({
+        input,
+        seed: idempotencyKey,
+        plan,
+        workerPrompt,
+        verifierPrompt,
+        workerDescription: "Apply only supported Todos CLI safe_auto repairs and file blocker tasks.",
+        verifierDescription: "Adversarially verify routing remediation evidence and safety boundaries.",
+        workerDependsOn: ["routing-doctor-preflight"],
+      }),
+    ],
+  };
+}
+
 export function renderEventWorkerVerifierWorkflow(input: EventWorkflowTemplateInput): CreateWorkflowInput {
   if (!input.eventId?.trim()) throw new Error("eventId is required");
   if (!input.eventType?.trim()) throw new Error("eventType is required");
@@ -1178,9 +1361,32 @@ function renderDeterministicCheckCreateTaskWorkflow(values: Record<string, strin
   };
 }
 
+function renderRoutingRemediationTemplate(values: Record<string, string | undefined>): CreateWorkflowInput {
+  const base = agentTemplateInput(values);
+  return renderRoutingRemediationWorkflow({
+    ...base,
+    todosProjectPath: values.todosProjectPath ?? values.todosProject,
+    doctorJsonPath: values.doctorJsonPath,
+    doctorProject: values.doctorProject,
+    tag: values.tag,
+    status: values.status,
+    shard: values.shard,
+    limit: values.limit,
+    maxRepairs: parseNonNegativeIntegerVar(values.maxRepairs, 25, "maxRepairs"),
+    dryRun: booleanVar(values.dryRun) ?? true,
+    idempotencyKey: values.idempotencyKey,
+    evidenceDir: values.evidenceDir,
+    undoDir: values.undoDir,
+    worktreeMode: base.worktreeMode ?? "required",
+  });
+}
+
 function renderBuiltinLoopTemplate(id: string, values: Record<string, string | undefined>): CreateWorkflowInput {
   if (id === DETERMINISTIC_CHECK_CREATE_TASK_TEMPLATE_ID) {
     return renderDeterministicCheckCreateTaskWorkflow(values);
+  }
+  if (id === ROUTING_REMEDIATION_TEMPLATE_ID) {
+    return renderRoutingRemediationTemplate(values);
   }
   const lifecycle = renderLifecycleBoundedTemplate(id, values);
   if (lifecycle) return lifecycle;

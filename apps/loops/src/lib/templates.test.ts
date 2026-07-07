@@ -13,6 +13,7 @@ import {
   KNOWLEDGE_REFRESH_TEMPLATE_ID,
   PR_REVIEW_TEMPLATE_ID,
   REPORT_ONLY_TEMPLATE_ID,
+  ROUTING_REMEDIATION_TEMPLATE_ID,
   SCHEDULED_AUDIT_TEMPLATE_ID,
   TASK_LIFECYCLE_TEMPLATE_ID,
   TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID,
@@ -261,6 +262,53 @@ describe("prompt fragment composition", () => {
     const disabledVerifier = agentTargetOf(stepById(disabled, "verifier"));
     expect(disabledVerifier.prompt).toContain("The verifier idle watchdog is disabled for this workflow");
     expect(disabledVerifier.idleTimeoutMs).toBeUndefined();
+  });
+
+  test("routing-remediation prompt and preflight enforce safe CLI-only repairs", () => {
+    const workflow = renderLoopTemplate(ROUTING_REMEDIATION_TEMPLATE_ID, {
+      projectPath: repoPath,
+      todosProjectPath: "/srv/todos",
+      dryRun: "false",
+      shard: "0/6",
+      limit: "10",
+      maxRepairs: "3",
+      idempotencyKey: "routing-health:open-loops:shard0",
+      worktreeRoot,
+    });
+    expect(workflow.steps.map((step) => step.id)).toEqual(["routing-doctor-preflight", "worker", "verifier"]);
+    const preflight = stepById(workflow, "routing-doctor-preflight") as WorkflowStepInput & { blockedExitCodes?: number[] };
+    expect(preflight.target.type).toBe("command");
+    expect(preflight.target.type === "command" ? preflight.target.cwd : undefined).toBe(repoPath);
+    expect(preflight.blockedExitCodes).toEqual([12]);
+    const preflightCommand = commandOf(preflight);
+    expect(preflightCommand).toContain("OPENLOOPS_ROUTING_REMEDIATION_MAX_REPAIRS='3'");
+    expect(preflightCommand).toContain("OPENLOOPS_ROUTING_REMEDIATION_SCOPE_ARGS='[");
+    expect(preflightCommand).toContain("\"--shard\",\"0/6\"");
+    expect(preflightCommand).toContain("allowedSafeFields = new Set(['working_dir', 'task_list_id'])");
+    expect(preflightCommand).toContain("__missing_safe_field__");
+    expect(preflightCommand).toContain("process.exit(12);");
+
+    const worker = agentTargetOf(stepById(workflow, "worker"));
+    expect(worker.prompt).toContain("Dry-run/preflight mode: false");
+    expect(worker.prompt).toContain("todos --project /srv/todos doctor routing --json --apply --undo-record");
+    expect(worker.prompt).toContain("Never edit the Todos SQLite database");
+    expect(worker.prompt).toContain("safe_auto");
+    expect(worker.prompt).toContain("blocker_cross_repo");
+    expect(worker.prompt).toContain("from-kai,routing-health");
+    expect(worker.prompt).toContain("old value, new value, repair command, source doctor run, undo record, and route-state recheck result");
+    expect(worker.prompt).toContain("routing-health:blocker:<source-task-id>:<finding-category>");
+
+    const verifier = agentTargetOf(stepById(workflow, "verifier"));
+    expect(verifier.prompt).toContain("Confirm safe_auto repairs were limited to working_dir and task_list_id");
+    expect(verifier.prompt).toContain("If dry-run mode was rendered, verify that no apply/repair mutation occurred");
+
+    const dryRunWorkflow = renderLoopTemplate(ROUTING_REMEDIATION_TEMPLATE_ID, {
+      projectPath: repoPath,
+      todosProjectPath: "/srv/todos",
+      idempotencyKey: "routing-health:open-loops:dry-run",
+      worktreeRoot,
+    });
+    expect(agentTargetOf(stepById(dryRunWorkflow, "worker")).prompt).toContain("This workflow was rendered with dryRun=true. Do not run the apply command");
   });
 });
 

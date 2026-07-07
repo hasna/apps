@@ -432,7 +432,11 @@ handling. `bounded-agent-worker-verifier` is for recurring bounded agent work:
 one worker runs a narrow objective, then a fresh verifier audits the result.
 The catalog also includes `task-lifecycle`, `pr-review`, `scheduled-audit`,
 `knowledge-refresh`, `report-only`, `incident-response`, and
-`deterministic-check-create-task` for common operator workflows.
+`deterministic-check-create-task` for common operator workflows. Use
+`routing-remediation` for bounded routing-doctor repair runs: it dry-runs by
+default, gates `safe_auto` capacity, applies only supported
+`todos doctor routing --apply` repairs when explicitly enabled, and files
+blocker tasks for human/cross-repo/unsupported findings.
 
 ```bash
 loops templates list
@@ -466,6 +470,12 @@ loops templates render pr-review \
 loops templates render deterministic-check-create-task \
   --var projectPath=/path/to/repo \
   --var checkCommand='your deterministic check and todos upsert command'
+loops templates render routing-remediation \
+  --var projectPath=/path/to/repo \
+  --var todosProjectPath=/path/to/todos-project \
+  --var shard=0/6 \
+  --var maxRepairs=25 \
+  --var idempotencyKey=routing-health:repo:shard0
 ```
 
 Custom reusable workflow templates live under the OpenLoops app data directory:
