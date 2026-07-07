@@ -2119,6 +2119,87 @@ exit 0
     }
   });
 
+  test("scrubs workflow step progress event payloads before persistence", () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "progress-redaction-workflow",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const run = store.createWorkflowRun({ workflow });
+      store.startWorkflowStepRun(run.id, "worker");
+
+      const randomSecret = j("q7Rt2x", "Vz9LpW4", "mKe8sYw");
+      store.recordWorkflowStepProgress(run.id, "worker", {
+        payload: {
+          status: "streaming",
+          apiKey: randomSecret,
+          nested: { token: OPENAI_KEY },
+          safe: "visible",
+        },
+      });
+
+      const internal = store as unknown as { db: Database };
+      const row = internal.db
+        .query<{ payload_json: string | null }, []>(
+          "SELECT payload_json FROM workflow_events WHERE event_type = 'step_progress'",
+        )
+        .get();
+      expect(row?.payload_json).toContain("[SCRUBBED]");
+      expect(row?.payload_json).not.toContain(randomSecret);
+      expect(row?.payload_json).not.toContain(OPENAI_KEY);
+
+      const progressEvent = store.listWorkflowEvents(run.id).find((event) => event.eventType === "step_progress");
+      expect(progressEvent?.payload).toEqual({
+        status: "streaming",
+        apiKey: "[SCRUBBED]",
+        nested: { token: "[SCRUBBED]" },
+        safe: "visible",
+      });
+    } finally {
+      store.close();
+    }
+  });
+
+  test("bounds oversized workflow step progress event payloads before persistence", () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "progress-bounds-workflow",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const run = store.createWorkflowRun({ workflow });
+      store.startWorkflowStepRun(run.id, "worker");
+
+      const secret = j("x9Kd2", "mQz7Lp", "4Rv8t");
+      const envSecretKey = `${"DB"}_${"PASSWORD"}`;
+      const hugePayload = `${"a".repeat(140_000)} ${envSecretKey}="${secret}" ${"z".repeat(140_000)}`;
+      store.recordWorkflowStepProgress(run.id, "worker", {
+        payload: {
+          status: "streaming",
+          hugePayload,
+        },
+      });
+
+      const internal = store as unknown as { db: Database };
+      const row = internal.db
+        .query<{ payload_json: string | null }, []>(
+          "SELECT payload_json FROM workflow_events WHERE event_type = 'step_progress'",
+        )
+        .get();
+      expect(row?.payload_json).toBeDefined();
+      expect(row!.payload_json!.length).toBeLessThanOrEqual(64 * 1024);
+      expect(row?.payload_json).not.toContain(secret);
+
+      const progressEvent = store.listWorkflowEvents(run.id).find((event) => event.eventType === "step_progress");
+      expect(progressEvent?.payload?.truncated).toBe(true);
+      expect(progressEvent?.payload?.maxChars).toBe(64 * 1024);
+      expect(progressEvent?.payload?.preview).toContain("truncated by loops workflow-event payload retention");
+    } finally {
+      store.close();
+    }
+  });
+
   test("re-planning goal nodes keeps existing keys and adds new ones", () => {
     const store = new Store(":memory:");
     try {
