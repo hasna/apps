@@ -73,6 +73,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["tasks", "todo"],
   },
   {
+    name: "ticktick",
+    displayName: "TickTick",
+    description: "Task and project management with reminders and checklists",
+    category: "Business Tools",
+    tags: ["tasks", "todo", "productivity"],
+  },
+  {
     name: "hubspot",
     displayName: "HubSpot",
     description: "CRM contacts, companies, deals, and tickets",
