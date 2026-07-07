@@ -45,6 +45,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["video", "meetings"],
   },
   {
+    name: "zoho-meeting",
+    displayName: "Zoho Meeting",
+    description: "Video meetings, webinars, recordings, and reports",
+    category: "Communication",
+    tags: ["video", "meetings", "webinar", "zoho"],
+  },
+  {
     name: "maropost",
     displayName: "Maropost",
     description: "Email marketing automation",

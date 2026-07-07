@@ -976,6 +976,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["blockchain", "smart contracts", "web3", "api", "infrastructure"],
   },
   {
+    name: "stop-and-error",
+    displayName: "StopAndError",
+    description: "Workflow error handler",
+    category: "Developer Tools",
+    tags: ["workflow", "error-handler", "development"],
+  },
+  {
     name: "steel-dev",
     displayName: "Steel Dev",
     description: "Browser automation platform and cloud browser sessions API",
