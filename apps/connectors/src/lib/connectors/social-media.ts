@@ -163,4 +163,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Social Media",
     tags: ["social", "blogging", "microblog"],
   },
+  {
+    name: "sprout-social",
+    displayName: "Sprout Social",
+    description: "Social media management, publishing, and analytics",
+    category: "Social Media",
+    tags: ["social", "management", "analytics", "publishing"],
+  },
 ];
