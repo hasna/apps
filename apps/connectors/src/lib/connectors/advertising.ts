@@ -23,4 +23,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Advertising",
     tags: ["google", "ads", "ppc", "campaigns"],
   },
+  {
+    name: "spotify-ads",
+    displayName: "Spotify Ads",
+    description: "Spotify advertising API (campaigns, ad sets, ads, reporting)",
+    category: "Advertising",
+    tags: ["spotify", "ads", "campaigns"],
+  },
 ];
