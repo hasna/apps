@@ -202,6 +202,8 @@ Captured cases are tagged `captured` and `needs-review` and include a short resp
 ```bash
 # Run a dataset
 evals run datasets/smoke.jsonl --adapter http --url http://localhost:3000/api/chat
+evals run datasets/smoke.jsonl --adapter http --url http://localhost:3000/api/chat --verbose
+evals run datasets/smoke.jsonl --adapter http --url http://localhost:3000/api/chat --json
 
 # CI mode — exit 1 on regression
 evals ci run datasets/smoke.jsonl --adapter http --url http://localhost:3000/api/chat --baseline main --fail-if-regression 5
@@ -215,6 +217,11 @@ evals estimate datasets/smoke.jsonl --model claude-sonnet-4-6
 # Compare two runs
 evals compare <run-id-before> <run-id-after>
 evals compare main latest --markdown
+
+# List and inspect saved runs
+evals runs list --limit 20
+evals runs show <run-id> --verbose
+evals runs show <run-id> --json
 
 # One-shot judge
 evals judge --input "What is AI?" --output "AI is..." --rubric "Should define AI clearly"
@@ -237,6 +244,8 @@ evals mcp register --codex       # Codex (~/.codex/config.json)
 evals mcp register --gemini      # Gemini (~/.gemini/settings.json)
 evals mcp register --all         # all three at once
 ```
+
+Default CLI output is compact for agent terminals: `run`, `ci run`, `compare`, `calibrate`, and `runs show` cap rows and truncate long details. Use `--verbose` for all human-readable rows, `--limit <n>` for a larger compact view, and `--json` for full machine-readable data. Saved-run discovery is progressive: `evals runs list` shows summaries, while `evals runs show <id>` or `evals runs inspect <id>` shows details.
 
 ---
 
@@ -265,11 +274,13 @@ Register with your agent: `evals mcp register --claude` (or `--codex`, `--gemini
 | `evals_run` | Run a full eval dataset |
 | `evals_run_single` | Judge a single response mid-session |
 | `evals_judge` | One-shot LLM judge call |
-| `evals_list_datasets` | List available datasets |
-| `evals_get_results` | Get past run results |
+| `evals_list_datasets` | List available datasets with `limit`/`cursor` pagination |
+| `evals_get_results` | Get compact past-run summaries; set `format=json` for full run data |
 | `evals_compare` | Compare two runs |
 | `evals_create_case` | Add a case to a dataset |
 | `evals_generate_cases` | Auto-generate cases from a description |
+
+MCP tools default to compact summaries for agent context. Use `limit`/`cursor` to page lists, `verbose=true` for more summary rows, and `format=json` or `output_format=json` only when a full run object is needed.
 
 **Key agent pattern** — self-check before responding:
 ```

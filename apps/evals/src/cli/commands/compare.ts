@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { compareRuns, printDiffReport, toMarkdown } from "../../core/reporter.js";
+import { compareRuns, parseDisplayLimit, printDiffReport, toMarkdown } from "../../core/reporter.js";
 import { getRun, getBaseline } from "../../db/store.js";
 
 export function renderMarkdownDiff(diff: ReturnType<typeof compareRuns>): string {
@@ -38,13 +38,22 @@ export function compareCommand(): Command {
     .argument("<after>", "After run ID (or 'latest')")
     .option("-j, --json", "Output JSON diff")
     .option("--markdown", "Output markdown diff")
+    .option("--limit <n>", "Max diff rows in compact terminal output", String(20))
+    .option("--verbose", "Show all diff rows in terminal output")
     .action(async (beforeArg: string, afterArg: string, opts: Record<string, string>) => {
       const { listRuns } = await import("../../db/store.js");
 
-      const beforeRun = getRun(beforeArg) ?? getBaseline(beforeArg);
-      const afterRun = afterArg === "latest"
-        ? listRuns(1)[0]
-        : getRun(afterArg) ?? getBaseline(afterArg);
+      let beforeRun;
+      let afterRun;
+      try {
+        beforeRun = getRun(beforeArg) ?? getBaseline(beforeArg);
+        afterRun = afterArg === "latest"
+          ? listRuns(1)[0]
+          : getRun(afterArg) ?? getBaseline(afterArg);
+      } catch (err) {
+        console.error(err instanceof Error ? err.message : String(err));
+        process.exit(1);
+      }
 
       if (!beforeRun) { console.error(`Run/baseline not found: ${beforeArg}`); process.exit(1); }
       if (!afterRun)  { console.error(`Run/baseline not found: ${afterArg}`); process.exit(1); }
@@ -58,7 +67,10 @@ export function compareCommand(): Command {
         console.log();
         console.log(renderMarkdownDiff(diff));
       } else {
-        printDiffReport(diff);
+        printDiffReport(diff, {
+          limit: parseDisplayLimit(opts["limit"]),
+          verbose: Boolean(opts["verbose"]),
+        });
       }
 
       process.exit(diff.regressions.length > 0 ? 1 : 0);
