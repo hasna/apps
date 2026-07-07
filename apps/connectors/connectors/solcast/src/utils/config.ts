@@ -1,36 +1,147 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 
-const CONFIG_DIR = join(homedir(), '.hasna', 'connectors', 'connect-solcast');
-const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
+const CONNECTOR_NAME = 'solcast';
+const LEGACY_CONNECTOR_NAME = 'connect-solcast';
+const DEFAULT_PROFILE = 'default';
+const PRIVATE_DIR_MODE = 0o700;
+const PRIVATE_FILE_MODE = 0o600;
 
 export interface CliConfig {
   apiKey?: string;
   baseUrl?: string;
 }
 
-function ensureConfigDir(): void {
-  if (!existsSync(CONFIG_DIR)) {
-    mkdirSync(CONFIG_DIR, { recursive: true });
+function getHomeDir(): string {
+  return process.env.HOME || process.env.USERPROFILE || homedir();
+}
+
+function getHasnaDir(): string {
+  return join(getHomeDir(), '.hasna');
+}
+
+function getConnectorsHome(): string {
+  return join(getHasnaDir(), 'connectors');
+}
+
+function getPreferredConfigDir(): string {
+  return join(getConnectorsHome(), CONNECTOR_NAME);
+}
+
+function getLegacyConfigDir(): string {
+  return join(getConnectorsHome(), LEGACY_CONNECTOR_NAME);
+}
+
+function getConfigReadDirs(): string[] {
+  return [getPreferredConfigDir(), getLegacyConfigDir()];
+}
+
+function chmodIfPossible(path: string, mode: number): void {
+  try {
+    chmodSync(path, mode);
+  } catch {
+    // Best-effort hardening for platforms/filesystems that support POSIX modes.
   }
 }
 
-export function loadConfig(): CliConfig {
-  ensureConfigDir();
-  if (!existsSync(CONFIG_FILE)) {
+function ensurePrivateDir(path: string): void {
+  mkdirSync(path, { recursive: true, mode: PRIVATE_DIR_MODE });
+  chmodIfPossible(path, PRIVATE_DIR_MODE);
+}
+
+function ensureWritableProfileDir(profile: string): string {
+  const configDir = getPreferredConfigDir();
+  const profilesDir = join(configDir, 'profiles');
+  const profileDir = join(profilesDir, profile);
+
+  ensurePrivateDir(getHasnaDir());
+  ensurePrivateDir(getConnectorsHome());
+  ensurePrivateDir(configDir);
+  ensurePrivateDir(profilesDir);
+  ensurePrivateDir(profileDir);
+
+  return profileDir;
+}
+
+function readJsonConfig(path: string): CliConfig {
+  if (!existsSync(path)) {
     return {};
   }
   try {
-    return JSON.parse(readFileSync(CONFIG_FILE, 'utf-8')) as CliConfig;
+    const parsed = JSON.parse(readFileSync(path, 'utf-8')) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as CliConfig)
+      : {};
   } catch {
     return {};
   }
 }
 
+function writePrivateJson(path: string, config: CliConfig): void {
+  writeFileSync(path, JSON.stringify(config, null, 2), { mode: PRIVATE_FILE_MODE });
+  chmodIfPossible(path, PRIVATE_FILE_MODE);
+}
+
+function getCurrentProfile(): string {
+  for (const configDir of getConfigReadDirs()) {
+    const currentProfileFile = join(configDir, 'current_profile');
+    if (!existsSync(currentProfileFile)) {
+      continue;
+    }
+    try {
+      return readFileSync(currentProfileFile, 'utf-8').trim() || DEFAULT_PROFILE;
+    } catch {
+      return DEFAULT_PROFILE;
+    }
+  }
+  return DEFAULT_PROFILE;
+}
+
+function loadConfigFromDir(configDir: string, profile: string): CliConfig {
+  const rootConfig = readJsonConfig(join(configDir, 'config.json'));
+  const flatProfileConfig = readJsonConfig(join(configDir, 'profiles', `${profile}.json`));
+  const profileDirConfig = readJsonConfig(join(configDir, 'profiles', profile, 'config.json'));
+
+  return {
+    ...rootConfig,
+    ...flatProfileConfig,
+    ...profileDirConfig,
+  };
+}
+
+function getConfigFilePaths(configDir: string, profile: string): string[] {
+  return [
+    join(configDir, 'config.json'),
+    join(configDir, 'profiles', `${profile}.json`),
+    join(configDir, 'profiles', profile, 'config.json'),
+  ];
+}
+
+function clearConfigFileIfExists(path: string): boolean {
+  if (!existsSync(path)) {
+    return false;
+  }
+  ensurePrivateDir(dirname(path));
+  writePrivateJson(path, {});
+  return true;
+}
+
+export function loadConfig(): CliConfig {
+  const profile = getCurrentProfile();
+  const merged: CliConfig = {};
+
+  for (const configDir of getConfigReadDirs().reverse()) {
+    Object.assign(merged, loadConfigFromDir(configDir, profile));
+  }
+
+  return merged;
+}
+
 export function saveConfig(config: CliConfig): void {
-  ensureConfigDir();
-  writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+  const profile = getCurrentProfile();
+  const profileDir = ensureWritableProfileDir(profile);
+  writePrivateJson(join(profileDir, 'config.json'), config);
 }
 
 export function getApiKey(): string | undefined {
@@ -54,5 +165,20 @@ export function setBaseUrl(baseUrl: string): void {
 }
 
 export function clearConfig(): void {
-  saveConfig({});
+  const profile = getCurrentProfile();
+  const preferredConfigDir = getPreferredConfigDir();
+  let clearedPreferredConfig = false;
+
+  for (const configDir of getConfigReadDirs()) {
+    for (const path of getConfigFilePaths(configDir, profile)) {
+      const cleared = clearConfigFileIfExists(path);
+      if (cleared && configDir === preferredConfigDir) {
+        clearedPreferredConfig = true;
+      }
+    }
+  }
+
+  if (!clearedPreferredConfig) {
+    saveConfig({});
+  }
 }

@@ -8,13 +8,15 @@ import {
 import {
   existsSync,
   mkdirSync,
+  mkdtempSync,
   rmSync,
   readFileSync,
   readdirSync,
+  statSync,
   writeFileSync,
 } from "fs";
 import { join } from "path";
-import { homedir } from "os";
+import { homedir, tmpdir } from "os";
 import {
   getAuthType,
   getAuthStatus,
@@ -56,6 +58,10 @@ function cleanupTestConnectors(...names: string[]) {
       }
     }
   }
+}
+
+function fileMode(path: string): number {
+  return statSync(path).mode & 0o777;
 }
 
 // ============================================================================
@@ -207,7 +213,14 @@ describe("auth", () => {
 
     test("envVars show set=false when env vars are not set", () => {
       const originalValue = process.env.ANTHROPIC_API_KEY;
+      const originalHome = process.env.HOME;
+      const originalUserProfile = process.env.USERPROFILE;
+      const tempHome = mkdtempSync(join(tmpdir(), "connectors-auth-empty-home-"));
+
       delete process.env.ANTHROPIC_API_KEY;
+      process.env.HOME = tempHome;
+      delete process.env.USERPROFILE;
+
       try {
         const status = getAuthStatus("anthropic");
         const keyVar = status.envVars.find(
@@ -219,6 +232,133 @@ describe("auth", () => {
         if (originalValue !== undefined) {
           process.env.ANTHROPIC_API_KEY = originalValue;
         }
+        if (originalHome !== undefined) {
+          process.env.HOME = originalHome;
+        } else {
+          delete process.env.HOME;
+        }
+        if (originalUserProfile !== undefined) {
+          process.env.USERPROFILE = originalUserProfile;
+        } else {
+          delete process.env.USERPROFILE;
+        }
+        rmSync(tempHome, { recursive: true, force: true });
+      }
+    });
+
+    test("credential env vars with key-like names count as configured", () => {
+      const originalAccessKey = process.env.AWS_ACCESS_KEY_ID;
+      const originalSecretKey = process.env.AWS_SECRET_ACCESS_KEY;
+      process.env.AWS_ACCESS_KEY_ID = "dummy-access-key";
+      process.env.AWS_SECRET_ACCESS_KEY = "dummy-secret-key";
+
+      try {
+        const status = getAuthStatus("aws");
+        expect(status.configured).toBe(true);
+        expect(status.envVars.find((v) => v.variable === "AWS_ACCESS_KEY_ID")?.set).toBe(true);
+        expect(status.envVars.find((v) => v.variable === "AWS_SECRET_ACCESS_KEY")?.set).toBe(true);
+      } finally {
+        if (originalAccessKey === undefined) {
+          delete process.env.AWS_ACCESS_KEY_ID;
+        } else {
+          process.env.AWS_ACCESS_KEY_ID = originalAccessKey;
+        }
+        if (originalSecretKey === undefined) {
+          delete process.env.AWS_SECRET_ACCESS_KEY;
+        } else {
+          process.env.AWS_SECRET_ACCESS_KEY = originalSecretKey;
+        }
+      }
+    });
+
+    test("detects Solcast API key saved in shared profile config", () => {
+      const originalHome = process.env.HOME;
+      const originalSolcastKey = process.env.SOLCAST_API_KEY;
+      const tempHome = mkdtempSync(join(tmpdir(), "solcast-auth-status-"));
+
+      process.env.HOME = tempHome;
+      delete process.env.SOLCAST_API_KEY;
+
+      try {
+        const profileDir = join(
+          tempHome,
+          ".hasna",
+          "connectors",
+          "solcast",
+          "profiles",
+          "default"
+        );
+        mkdirSync(profileDir, { recursive: true });
+        writeFileSync(
+          join(profileDir, "config.json"),
+          JSON.stringify({ apiKey: "shared-solcast-key" }, null, 2)
+        );
+
+        const status = getAuthStatus("solcast");
+        expect(status.type).toBe("apikey");
+        expect(status.configured).toBe(true);
+        expect(status.envVars.find((v) => v.variable === "SOLCAST_API_KEY")?.set).toBe(true);
+      } finally {
+        if (originalHome === undefined) {
+          delete process.env.HOME;
+        } else {
+          process.env.HOME = originalHome;
+        }
+        if (originalSolcastKey === undefined) {
+          delete process.env.SOLCAST_API_KEY;
+        } else {
+          process.env.SOLCAST_API_KEY = originalSolcastKey;
+        }
+        rmSync(tempHome, { recursive: true, force: true });
+      }
+    });
+
+    test("does not treat Solcast base URL-only profile config as authenticated", () => {
+      const originalHome = process.env.HOME;
+      const originalSolcastKey = process.env.SOLCAST_API_KEY;
+      const originalBaseUrl = process.env.SOLCAST_BASE_URL;
+      const tempHome = mkdtempSync(join(tmpdir(), "solcast-auth-baseurl-"));
+
+      process.env.HOME = tempHome;
+      delete process.env.SOLCAST_API_KEY;
+      delete process.env.SOLCAST_BASE_URL;
+
+      try {
+        const profileDir = join(
+          tempHome,
+          ".hasna",
+          "connectors",
+          "solcast",
+          "profiles",
+          "default"
+        );
+        mkdirSync(profileDir, { recursive: true });
+        writeFileSync(
+          join(profileDir, "config.json"),
+          JSON.stringify({ baseUrl: "https://profile.example.test" }, null, 2)
+        );
+
+        const status = getAuthStatus("solcast");
+        expect(status.type).toBe("apikey");
+        expect(status.configured).toBe(false);
+        expect(status.envVars.find((v) => v.variable === "SOLCAST_API_KEY")?.set).toBe(false);
+      } finally {
+        if (originalHome === undefined) {
+          delete process.env.HOME;
+        } else {
+          process.env.HOME = originalHome;
+        }
+        if (originalSolcastKey === undefined) {
+          delete process.env.SOLCAST_API_KEY;
+        } else {
+          process.env.SOLCAST_API_KEY = originalSolcastKey;
+        }
+        if (originalBaseUrl === undefined) {
+          delete process.env.SOLCAST_BASE_URL;
+        } else {
+          process.env.SOLCAST_BASE_URL = originalBaseUrl;
+        }
+        rmSync(tempHome, { recursive: true, force: true });
       }
     });
   });
@@ -232,9 +372,10 @@ describe("auth", () => {
     const name3 = `${TEST_ID}save3`;
     const name4 = `${TEST_ID}save4`;
     const name5 = `${TEST_ID}oauth-creds`;
+    const name6 = `${TEST_ID}save-mode`;
 
     afterEach(() => {
-      cleanupTestConnectors(name1, name2, name3, name4, name5);
+      cleanupTestConnectors(name1, name2, name3, name4, name5, name6);
     });
 
     test("creates profile directory and saves key for new connector", async () => {
@@ -250,6 +391,20 @@ describe("auth", () => {
 
       const content = JSON.parse(readFileSync(configFile, "utf-8"));
       expect(content.apiKey).toBe("test-api-key-123");
+    });
+
+    test("creates credential-bearing directories and files with owner-only permissions", async () => {
+      await saveApiKey(name6, "mode-test-api-key");
+
+      const configDir = testConfigDir(name6);
+      const profilesDir = join(configDir, "profiles");
+      const profileDir = join(profilesDir, "default");
+      const configFile = join(profileDir, "config.json");
+
+      expect(fileMode(configDir)).toBe(0o700);
+      expect(fileMode(profilesDir)).toBe(0o700);
+      expect(fileMode(profileDir)).toBe(0o700);
+      expect(fileMode(configFile)).toBe(0o600);
     });
 
     test("saves key with custom field name", async () => {

@@ -21,6 +21,10 @@ export SOLCAST_API_KEY=your_api_key_here
 
 Get an API key from the [Solcast Toolkit](https://toolkit.solcast.com.au/).
 
+CLI credentials are saved under the shared connector profile path:
+`~/.hasna/connectors/solcast/profiles/<profile>/config.json`. Existing
+`~/.hasna/connectors/connect-solcast/` profile config is read as a fallback.
+
 ## CLI Commands
 
 ```bash

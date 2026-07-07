@@ -55,9 +55,14 @@ connect-solcast raw --path /data/forecast/rooftop_pv_power --lat <lat> --lon <lo
 ## Data Storage
 
 ```
-~/.hasna/connectors/connect-solcast/
-└── config.json
+~/.hasna/connectors/solcast/
+├── current_profile
+└── profiles/
+    └── default/
+        └── config.json
 ```
+
+Legacy `~/.hasna/connectors/connect-solcast/` profile config is still read as a fallback.
 
 ## API Notes
 
