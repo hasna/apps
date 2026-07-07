@@ -864,6 +864,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["spreadsheet", "database", "no-code", "automation", "collaboration"],
   },
   {
+    name: "standout",
+    displayName: "Standout",
+    description: "Hiring candidates, roles, and candidate assessments",
+    category: "Business Tools",
+    tags: ["hr", "recruiting", "assessments", "hiring"],
+  },
+  {
     name: "suitedash",
     displayName: "SuiteDash",
     description: "All-in-one business management platform with CRM, billing, and portals",
