@@ -21,12 +21,134 @@ export interface LocalFeedbackStoreOptions {
   filePath?: string;
 }
 
+export type FeedbackStoreRuntimeMode = "local" | "cloud";
+export type FeedbackStoreRuntimeDiagnosticMode = FeedbackStoreRuntimeMode | "invalid";
+
+export interface FeedbackStoreRuntimeOptions {
+  env?: Record<string, string | undefined>;
+  local?: LocalFeedbackStoreOptions;
+  cloudStore?: FeedbackStore;
+}
+
+export interface FeedbackCloudRuntimeDiagnostics {
+  provider: string;
+  databaseUrlConfigured: boolean;
+  resourceArnConfigured: boolean;
+  secretArnConfigured: boolean;
+  tableNameConfigured: boolean;
+  adapterProvided: boolean;
+  ready: boolean;
+  blockers: string[];
+}
+
+export interface FeedbackStoreRuntimeDiagnostics {
+  mode: FeedbackStoreRuntimeDiagnosticMode;
+  requestedMode: FeedbackStoreRuntimeDiagnosticMode;
+  activeStore: "local-jsonl" | "cloud-adapter" | "unavailable";
+  ok: boolean;
+  local?: {
+    dataFile: string;
+  };
+  cloud?: FeedbackCloudRuntimeDiagnostics;
+  blockers: string[];
+}
+
 export function resolveFeedbackDataDir(dataDir = process.env["FEEDBACK_DATA_DIR"]): string {
   return dataDir && dataDir.trim() ? dataDir : DEFAULT_DATA_DIR;
 }
 
 export function resolveFeedbackFilePath(options: LocalFeedbackStoreOptions = {}): string {
   return options.filePath ?? join(resolveFeedbackDataDir(options.dataDir), DEFAULT_FEEDBACK_FILE);
+}
+
+function runtimeModeFromEnv(env: Record<string, string | undefined>): FeedbackStoreRuntimeDiagnostics["mode"] {
+  const rawMode = (env["FEEDBACK_STORE"] ?? env["FEEDBACK_STORAGE_BACKEND"] ?? "local").trim().toLowerCase();
+  if (!rawMode || rawMode === "local" || rawMode === "jsonl" || rawMode === "file") return "local";
+  if (rawMode === "cloud" || rawMode === "rds" || rawMode === "postgres" || rawMode === "postgresql") return "cloud";
+  return "invalid";
+}
+
+function cloudDiagnostics(options: FeedbackStoreRuntimeOptions): FeedbackCloudRuntimeDiagnostics {
+  const env = options.env ?? process.env;
+  const adapterProvided = Boolean(options.cloudStore);
+  const provider = env["FEEDBACK_CLOUD_PROVIDER"]?.trim() || "custom";
+  const databaseUrlConfigured = Boolean(env["FEEDBACK_CLOUD_DATABASE_URL"]?.trim());
+  const resourceArnConfigured = Boolean(env["FEEDBACK_CLOUD_RESOURCE_ARN"]?.trim());
+  const secretArnConfigured = Boolean(env["FEEDBACK_CLOUD_SECRET_ARN"]?.trim());
+  const tableNameConfigured = Boolean(env["FEEDBACK_CLOUD_TABLE"]?.trim());
+  const blockers: string[] = [];
+
+  if (!adapterProvided) {
+    blockers.push("Cloud storage mode requires a host-provided FeedbackStore adapter.");
+  }
+
+  return {
+    provider,
+    databaseUrlConfigured,
+    resourceArnConfigured,
+    secretArnConfigured,
+    tableNameConfigured,
+    adapterProvided,
+    ready: blockers.length === 0,
+    blockers,
+  };
+}
+
+export function describeFeedbackStoreRuntime(options: FeedbackStoreRuntimeOptions = {}): FeedbackStoreRuntimeDiagnostics {
+  const env = options.env ?? process.env;
+  const mode = runtimeModeFromEnv(env);
+  const requestedMode = mode;
+
+  if (mode === "local") {
+    const dataFile = resolveFeedbackFilePath({
+      dataDir: options.local?.dataDir ?? env["FEEDBACK_DATA_DIR"],
+      filePath: options.local?.filePath,
+    });
+    return {
+      mode,
+      requestedMode,
+      activeStore: "local-jsonl",
+      ok: true,
+      local: { dataFile },
+      blockers: [],
+    };
+  }
+
+  if (mode === "cloud") {
+    const cloud = cloudDiagnostics(options);
+    return {
+      mode,
+      requestedMode,
+      activeStore: cloud.adapterProvided ? "cloud-adapter" : "unavailable",
+      ok: cloud.ready,
+      cloud,
+      blockers: cloud.blockers,
+    };
+  }
+
+  return {
+    mode,
+    requestedMode,
+    activeStore: "unavailable",
+    ok: false,
+    blockers: [
+      "Unsupported FEEDBACK_STORE/FEEDBACK_STORAGE_BACKEND value. Use \"local\" or \"cloud\".",
+    ],
+  };
+}
+
+export function createFeedbackStore(options: FeedbackStoreRuntimeOptions = {}): FeedbackStore {
+  const runtime = describeFeedbackStoreRuntime(options);
+  if (runtime.mode === "local") {
+    return new LocalFeedbackStore({
+      dataDir: options.local?.dataDir ?? options.env?.["FEEDBACK_DATA_DIR"],
+      filePath: options.local?.filePath,
+    });
+  }
+  if (runtime.mode === "cloud" && options.cloudStore) {
+    return options.cloudStore;
+  }
+  throw new Error(runtime.blockers.join(" "));
 }
 
 function ensureParentDir(filePath: string): void {

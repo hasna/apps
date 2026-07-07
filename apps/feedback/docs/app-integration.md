@@ -88,6 +88,8 @@ If the deployed API uses `FEEDBACK_API_TOKEN`, route browser submissions through
 
 ## Server Apps
 
+Local-first server apps can write JSONL directly:
+
 ```ts
 import { LocalFeedbackStore } from "@hasna/feedback/storage";
 
@@ -106,13 +108,39 @@ await store.createFeedback({
 });
 ```
 
+Production server apps that need cloud-backed review storage should inject their own `FeedbackStore` adapter. `@hasna/feedback` keeps the HTTP/API contract and validation/redaction behavior, while the host app owns the cloud connection, migrations, credentials, and approval flow.
+
+```ts
+import { createFeedbackHandler, type FeedbackStore } from "@hasna/feedback";
+
+const store: FeedbackStore = createProductionFeedbackStore();
+
+export const feedbackHandler = createFeedbackHandler({
+  store,
+  apiToken: process.env.FEEDBACK_API_TOKEN,
+});
+```
+
 ## API Deployment
+
+Local or single-host deployment:
 
 ```bash
 FEEDBACK_DATA_DIR=/var/lib/open-feedback \
 FEEDBACK_API_TOKEN="$FEEDBACK_API_TOKEN" \
 feedback serve --host 0.0.0.0 --port 8787
 ```
+
+Cloud-backed production deployment:
+
+```bash
+FEEDBACK_STORE=cloud \
+FEEDBACK_CLOUD_PROVIDER=aws-rds \
+FEEDBACK_API_TOKEN="$FEEDBACK_API_TOKEN" \
+your-app-server
+```
+
+Cloud mode is readiness-safe: it requires the host runtime to pass a `FeedbackStore` adapter into `createFeedbackHandler`, `startFeedbackServer`, or the MCP server builder. The package does not provision databases, run migrations, create secrets, apply Terraform, send notifications, or move private feedback data. If cloud mode is selected without an injected adapter, the runtime fails closed and `feedback doctor` reports a blocker.
 
 When `FEEDBACK_API_TOKEN` is set, clients must send:
 
@@ -140,10 +168,14 @@ feedback submit "Search results need date filters" --app my-app --kind idea --ta
 feedback submit "Billing export fails on custom ranges" --app my-app --kind bug --severity high
 ```
 
+Use `--api-url` and `--token` when slash commands should write to a shared cloud-backed API. Do not put `FEEDBACK_API_TOKEN` in browser-side environment variables.
+
 ## MCP Collection
 
 Agents can run `feedback-mcp` and call `submit_feedback` with the same shape as the HTTP API. This gives coding agents a standard place to file product feedback discovered during implementation or verification.
 
+The `feedback_diagnostics` MCP tool returns redacted runtime diagnostics. It reports local versus cloud mode, local data file path in local mode, whether cloud settings are present, and any readiness blockers without exposing token, DSN, ARN, or secret values.
+
 ## Data Handling
 
-Open Feedback stores newline-delimited JSON in `~/.hasna/feedback/feedback.jsonl` by default. The JSONL format is intentionally portable: teams can archive it, load it into a database later, or pipe it into analysis workflows.
+Open Feedback stores newline-delimited JSON in `~/.hasna/feedback/feedback.jsonl` by default. The JSONL format is intentionally portable: teams can archive it, load it into a database later, or pipe it into analysis workflows. Validation redacts common credential patterns from message text, URLs, metadata, and context before persistence in either local or injected cloud storage paths.

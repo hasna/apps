@@ -2,7 +2,7 @@
 
 Reusable feedback collection for Hasna-coded apps.
 
-Open Feedback provides a small HTTP API, TypeScript SDK, CLI, MCP server, and local JSONL storage so apps can collect product feedback without standing up a database first. The local project slug is `open-feedback`; the GitHub repository is `hasna/feedback`.
+Open Feedback provides a small HTTP API, TypeScript SDK, CLI, MCP server, and local JSONL storage so apps can collect product feedback without standing up a database first. Production deployments can inject a cloud-backed `FeedbackStore` adapter while keeping local operation unchanged. The local project slug is `open-feedback`; the GitHub repository is `hasna/feedback`.
 
 ## Install
 
@@ -121,9 +121,9 @@ feedback stats
 feedback export --format jsonl --until 2026-12-31
 ```
 
-Use `--api-url` and `--token` to target a remote Open Feedback API instead of local JSONL storage.
+Use `--api-url` and `--token` to target a remote Open Feedback API instead of local JSONL storage. This is the CLI path for a shared production deployment; the CLI does not open database connections or create cloud resources itself.
 
-`feedback doctor` checks the package version, local data file path, basic storage permissions, token configuration, and whether the expected binaries are on `PATH`.
+`feedback doctor` checks the package version, selected storage runtime, local data file path and permissions when local mode is active, token configuration, cloud configuration presence, and whether the expected binaries are on `PATH`. Diagnostics only report whether sensitive settings are configured; they do not print token, DSN, ARN, or secret values.
 
 ### Terminal Slash Commands
 
@@ -155,16 +155,31 @@ Available tools:
 - `update_feedback_status`
 - `feedback_stats`
 - `export_feedback`
+- `feedback_diagnostics`
 
 ## Storage
 
-By default, Open Feedback writes JSONL to:
+By default, Open Feedback runs in local JSONL mode and writes to:
 
 ```text
 ~/.hasna/feedback/feedback.jsonl
 ```
 
 Override the directory with `FEEDBACK_DATA_DIR`.
+
+Set `FEEDBACK_STORE=cloud` only in a host runtime that injects a cloud-backed `FeedbackStore` adapter:
+
+```ts
+import { createFeedbackHandler, type FeedbackStore } from "@hasna/feedback";
+
+const cloudStore: FeedbackStore = createYourFeedbackStoreAdapter();
+const handler = createFeedbackHandler({
+  store: cloudStore,
+  apiToken: process.env.FEEDBACK_API_TOKEN,
+});
+```
+
+`@hasna/feedback` does not create databases, run migrations, provision AWS/RDS resources, create secrets, or send notifications. Without an injected adapter, cloud mode fails closed with a clear diagnostic blocker. Optional readiness settings such as `FEEDBACK_CLOUD_PROVIDER`, `FEEDBACK_CLOUD_DATABASE_URL`, `FEEDBACK_CLOUD_RESOURCE_ARN`, `FEEDBACK_CLOUD_SECRET_ARN`, and `FEEDBACK_CLOUD_TABLE` are reported as configured/not configured only.
 
 ## App Integration
 

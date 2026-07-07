@@ -6,8 +6,16 @@ import { delimiter } from "node:path";
 import { dirname, join } from "node:path";
 import { FeedbackClient } from "../client.js";
 import { startFeedbackServer } from "../server/index.js";
-import { LocalFeedbackStore, resolveFeedbackFilePath } from "../storage.js";
-import type { FeedbackContext, FeedbackInput, FeedbackKind, FeedbackListFilter, FeedbackStatus, JsonObject } from "../types.js";
+import { createFeedbackStore, describeFeedbackStoreRuntime, resolveFeedbackFilePath } from "../storage.js";
+import type {
+  FeedbackContext,
+  FeedbackInput,
+  FeedbackKind,
+  FeedbackListFilter,
+  FeedbackStatus,
+  FeedbackStore,
+  JsonObject,
+} from "../types.js";
 import { parseFeedbackStatus } from "../validation.js";
 import { VERSION } from "../version.js";
 
@@ -49,8 +57,8 @@ function maybeClient(options: { apiUrl?: string; token?: string }): FeedbackClie
   });
 }
 
-function localStore(): LocalFeedbackStore {
-  return new LocalFeedbackStore();
+function localStore(): FeedbackStore {
+  return createFeedbackStore();
 }
 
 function commonFilter(options: { app?: string; status?: FeedbackStatus; tag?: string; search?: string; since?: string; until?: string; limit?: string }): FeedbackListFilter {
@@ -77,8 +85,8 @@ function buildContext(options: Record<string, string | string[] | undefined>): F
   return Object.values(context).some((value) => value !== undefined) ? context : undefined;
 }
 
-function findOnPath(command: string): string | null {
-  for (const dir of (process.env["PATH"] ?? "").split(delimiter).filter(Boolean)) {
+function findOnPath(command: string, pathValue = process.env["PATH"]): string | null {
+  for (const dir of (pathValue ?? "").split(delimiter).filter(Boolean)) {
     const filePath = join(dir, command);
     if (!existsSync(filePath)) continue;
     try {
@@ -91,44 +99,66 @@ function findOnPath(command: string): string | null {
   return null;
 }
 
-async function runDoctor(): Promise<void> {
-  const filePath = resolveFeedbackFilePath();
-  const dataDir = dirname(filePath);
-  mkdirSync(dataDir, { recursive: true });
-  const tmpPath = join(dataDir, `.feedback-doctor-${process.pid}.tmp`);
-  let dataDirWritable = false;
-  let dataFileReadable = false;
-  try {
-    await writeFile(tmpPath, "", "utf8");
-    await rm(tmpPath, { force: true });
-    dataDirWritable = true;
-  } catch {
-    dataDirWritable = false;
-  }
-  try {
-    if (!existsSync(filePath)) {
-      dataFileReadable = true;
-    } else {
-      await access(filePath, constants.R_OK);
-      dataFileReadable = true;
+export interface FeedbackDoctorReport {
+  ok: boolean;
+  version: string;
+  runtime: ReturnType<typeof describeFeedbackStoreRuntime>;
+  dataFile?: string;
+  dataDirWritable: boolean | null;
+  dataFileReadable: boolean | null;
+  apiTokenConfigured: boolean;
+  bins: Record<"feedback" | "feedback-mcp" | "feedback-serve", string | null>;
+}
+
+export async function buildDoctorReport(env: Record<string, string | undefined> = process.env): Promise<FeedbackDoctorReport> {
+  const runtime = describeFeedbackStoreRuntime({ env });
+  const filePath = runtime.local?.dataFile ?? resolveFeedbackFilePath({ dataDir: env["FEEDBACK_DATA_DIR"] });
+  let dataDirWritable: boolean | null = null;
+  let dataFileReadable: boolean | null = null;
+
+  if (runtime.mode === "local") {
+    const dataDir = dirname(filePath);
+    mkdirSync(dataDir, { recursive: true });
+    const tmpPath = join(dataDir, `.feedback-doctor-${process.pid}.tmp`);
+    try {
+      await writeFile(tmpPath, "", "utf8");
+      await rm(tmpPath, { force: true });
+      dataDirWritable = true;
+    } catch {
+      dataDirWritable = false;
     }
-  } catch {
-    dataFileReadable = false;
+    try {
+      if (!existsSync(filePath)) {
+        dataFileReadable = true;
+      } else {
+        await access(filePath, constants.R_OK);
+        dataFileReadable = true;
+      }
+    } catch {
+      dataFileReadable = false;
+    }
   }
+
   const bins = {
-    feedback: findOnPath("feedback"),
-    "feedback-mcp": findOnPath("feedback-mcp"),
-    "feedback-serve": findOnPath("feedback-serve"),
+    feedback: findOnPath("feedback", env["PATH"]),
+    "feedback-mcp": findOnPath("feedback-mcp", env["PATH"]),
+    "feedback-serve": findOnPath("feedback-serve", env["PATH"]),
   };
-  printJson({
-    ok: dataDirWritable && dataFileReadable,
+  const localStorageOk = runtime.mode !== "local" || (dataDirWritable === true && dataFileReadable === true);
+  return {
+    ok: runtime.ok && localStorageOk,
     version: VERSION,
-    dataFile: filePath,
+    runtime,
+    dataFile: runtime.mode === "local" ? filePath : undefined,
     dataDirWritable,
     dataFileReadable,
-    apiTokenConfigured: Boolean(process.env["FEEDBACK_API_TOKEN"]),
+    apiTokenConfigured: Boolean(env["FEEDBACK_API_TOKEN"]),
     bins,
-  });
+  };
+}
+
+async function runDoctor(): Promise<void> {
+  printJson(await buildDoctorReport());
 }
 
 export async function main(argv: string[] = process.argv): Promise<void> {

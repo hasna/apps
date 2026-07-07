@@ -1,4 +1,4 @@
-import { LocalFeedbackStore } from "./storage.js";
+import { createFeedbackStore } from "./storage.js";
 import type { FeedbackListFilter, FeedbackStatus, FeedbackStore } from "./types.js";
 import { parseFeedbackInput, parseFeedbackStatus, validationErrorMessage } from "./validation.js";
 import { VERSION } from "./version.js";
@@ -154,7 +154,7 @@ function listFilterFromUrl(url: URL): FeedbackListFilter {
 }
 
 export function createFeedbackHandler(options: FeedbackApiOptions = {}): (request: Request) => Promise<Response> {
-  const store = options.store ?? new LocalFeedbackStore();
+  const store = options.store ?? createFeedbackStore();
   const auth = resolveAuth(options);
   const corsOrigin = options.corsOrigin ?? process.env["FEEDBACK_CORS_ORIGIN"] ?? "*";
   const buckets = new Map<string, RateBucket>();
