@@ -7,6 +7,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { getDb } from "../db/index.ts";
+import { resolveLogsCloudStore } from "../lib/cloud-store.ts";
 import {
   createAlertRule,
   deleteAlertRule,
@@ -160,6 +161,16 @@ export function buildServer(): McpServer {
   function rp(idOrName?: string): string | undefined {
     if (!idOrName) return undefined;
     return resolveProjectId(db, idOrName) ?? idOrName;
+  }
+
+  // Client-flip (self_hosted): returns a cloud store when HASNA_LOGS_API_URL +
+  // HASNA_LOGS_API_KEY are set (mode implied), else null so the MCP uses its
+  // local SQLite store. Mirrors the CLI's logsCloud() so the MCP reads and
+  // writes the SAME shared cloud logs as the flipped CLI. Fully reversible:
+  // unset the env vars -> local. Resolved per-call so a restart-free env change
+  // (or an unset for rollback) is honored immediately.
+  function logsCloud() {
+    return resolveLogsCloudStore();
   }
 
   function existingProjectId(idOrName?: string): string | null {
@@ -478,7 +489,22 @@ export function buildServer(): McpServer {
       url: z.string().optional(),
       metadata: z.record(z.string(), z.unknown()).optional(),
     },
-    (args) => {
+    async (args) => {
+      const cloud = logsCloud();
+      if (cloud) {
+        const row = await cloud.create({
+          level: args.level,
+          message: args.message,
+          project_id: args.project_id,
+          service: args.service,
+          trace_id: args.trace_id,
+          session_id: args.session_id,
+          agent: args.agent,
+          url: args.url,
+          metadata: args.metadata,
+        });
+        return { content: [{ type: "text", text: `Logged: ${row.id}` }] };
+      }
       const row = ingestLog(db, { ...args, project_id: rp(args.project_id) });
       return { content: [{ type: "text", text: `Logged: ${row.id}` }] };
     },
@@ -510,7 +536,7 @@ export function buildServer(): McpServer {
           "Shared project_id applied to all entries (individual entry project_id takes precedence)",
         ),
     },
-    ({
+    async ({
       entries,
       trace_id,
       project_id,
@@ -519,6 +545,30 @@ export function buildServer(): McpServer {
       trace_id?: string;
       project_id?: string;
     }) => {
+      const cloud = logsCloud();
+      if (cloud) {
+        const rows: { id: string }[] = [];
+        for (const e of entries) {
+          rows.push(
+            await cloud.create({
+              level: e.level,
+              message: e.message,
+              project_id: e.project_id ?? project_id,
+              service: e.service,
+              trace_id: e.trace_id ?? trace_id,
+              metadata: e.metadata,
+            }),
+          );
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Logged ${rows.length} entries${trace_id ? ` (trace: ${trace_id})` : ""}`,
+            },
+          ],
+        };
+      }
       const mapped = entries.map((e) => ({
         ...e,
         project_id: rp(e.project_id ?? project_id),
@@ -549,14 +599,28 @@ export function buildServer(): McpServer {
       limit: z.number().optional(),
       brief: z.boolean().optional(),
     },
-    (args) => {
-      const rows = searchLogs(db, {
-        ...args,
-        project_id: rp(args.project_id),
-        level: args.level ? (args.level.split(",") as LogLevel[]) : undefined,
-        since: parseTime(args.since) ?? args.since,
-        until: parseTime(args.until) ?? args.until,
-      });
+    async (args) => {
+      const cloud = logsCloud();
+      const rows = cloud
+        ? await cloud.list({
+            project_id: args.project_id,
+            level: args.level
+              ? (args.level.split(",") as LogLevel[])
+              : undefined,
+            service: args.service,
+            trace_id: args.trace_id,
+            text: args.text,
+            limit: args.limit,
+          })
+        : searchLogs(db, {
+            ...args,
+            project_id: rp(args.project_id),
+            level: args.level
+              ? (args.level.split(",") as LogLevel[])
+              : undefined,
+            since: parseTime(args.since) ?? args.since,
+            until: parseTime(args.until) ?? args.until,
+          });
       return {
         content: [
           {
@@ -575,8 +639,11 @@ export function buildServer(): McpServer {
       n: z.number().optional(),
       brief: z.boolean().optional(),
     },
-    ({ project_id, n, brief }) => {
-      const rows = tailLogs(db, rp(project_id), n ?? 50);
+    async ({ project_id, n, brief }) => {
+      const cloud = logsCloud();
+      const rows = cloud
+        ? await cloud.list({ project_id, limit: n ?? 50 })
+        : tailLogs(db, rp(project_id), n ?? 50);
       return {
         content: [
           {
@@ -603,16 +670,47 @@ export function buildServer(): McpServer {
           "Return breakdown by 'level' or 'service' in addition to totals",
         ),
     },
-    (args) => ({
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            countLogs(db, { ...args, project_id: rp(args.project_id) }),
-          ),
-        },
-      ],
-    }),
+    async (args) => {
+      const cloud = logsCloud();
+      if (cloud) {
+        const rows = await cloud.list({
+          project_id: args.project_id,
+          service: args.service,
+          level: args.level
+            ? (args.level.split(",") as LogLevel[])
+            : undefined,
+          limit: 100000,
+        });
+        const by_level: Record<string, number> = {};
+        const by_service: Record<string, number> = {};
+        for (const r of rows) {
+          by_level[r.level] = (by_level[r.level] ?? 0) + 1;
+          const s = r.service ?? "-";
+          by_service[s] = (by_service[s] ?? 0) + 1;
+        }
+        const count = {
+          total: rows.length,
+          errors: by_level.error ?? 0,
+          warns: by_level.warn ?? 0,
+          fatals: by_level.fatal ?? 0,
+          by_level,
+          ...(args.group_by === "service" ? { by_service } : {}),
+        };
+        return {
+          content: [{ type: "text", text: JSON.stringify(count) }],
+        };
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              countLogs(db, { ...args, project_id: rp(args.project_id) }),
+            ),
+          },
+        ],
+      };
+    },
   );
 
   registerTool(
@@ -622,13 +720,20 @@ export function buildServer(): McpServer {
       since: z.string().optional(),
       limit: z.number().optional(),
     },
-    ({ project_id, since, limit }) => {
-      const rows = searchLogs(db, {
-        project_id: rp(project_id),
-        level: ["error", "fatal"],
-        since: parseTime(since ?? "1h"),
-        limit: limit ?? 20,
-      });
+    async ({ project_id, since, limit }) => {
+      const cloud = logsCloud();
+      const rows = cloud
+        ? await cloud.list({
+            project_id,
+            level: ["error", "fatal"],
+            limit: limit ?? 20,
+          })
+        : searchLogs(db, {
+            project_id: rp(project_id),
+            level: ["error", "fatal"],
+            since: parseTime(since ?? "1h"),
+            limit: limit ?? 20,
+          });
       return {
         content: [
           { type: "text", text: JSON.stringify(applyBrief(rows, true)) },
