@@ -381,6 +381,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "browser", "automation"],
   },
   {
+    name: "stablebrowse",
+    displayName: "StableBrowse",
+    description: "AI browser automation tasks, sessions, and design extraction",
+    category: "AI & ML",
+    tags: ["ai", "browser", "automation", "agent"],
+  },
+  {
     name: "cody",
     displayName: "Cody",
     description: "AI coding assistant by Sourcegraph",
