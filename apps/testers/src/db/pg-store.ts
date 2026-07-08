@@ -15,7 +15,20 @@ import type {
   Persona,
   ScenarioPriority,
   PersistedScanIssue,
+  Agent,
+  Schedule,
+  Flow,
+  ApiCheck,
+  ApiCheckResult,
+  TestingWorkflow,
+  Screenshot,
 } from "../types/index.js";
+import { workflowExecutionFromValue } from "../types/index.js";
+import type { Environment } from "./environments.js";
+import type { AuthPreset } from "./auth-presets.js";
+import type { Session } from "./sessions.js";
+import type { StepResult } from "./step-results.js";
+import type { GoldenAnswer, GoldenCheckResult } from "./golden-answers.js";
 
 // ─── helpers ──────────────────────────────────────────────────────────────
 
@@ -1024,6 +1037,940 @@ export async function deleteWebhook(db: TypedQueryClient, id: string): Promise<b
   if (!existing) return false;
   await db.execute("DELETE FROM webhooks WHERE id = $1", [existing.id]);
   return true;
+}
+
+// ─── agents ───────────────────────────────────────────────────────────────
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function agentRow(r: any): Agent {
+  return {
+    id: r.id,
+    name: r.name,
+    description: r.description ?? null,
+    role: r.role ?? null,
+    metadata: r.metadata ? parse<Record<string, unknown>>(r.metadata, null as never) : null,
+    createdAt: r.created_at,
+    lastSeenAt: r.last_seen_at,
+  };
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+export async function listAgents(db: TypedQueryClient): Promise<Agent[]> {
+  const rows = await db.many("SELECT * FROM agents ORDER BY created_at DESC");
+  return rows.map(agentRow);
+}
+export async function getAgent(db: TypedQueryClient, id: string): Promise<Agent | null> {
+  const row = await db.get("SELECT * FROM agents WHERE id = $1", [id]);
+  return row ? agentRow(row) : null;
+}
+export async function registerAgent(
+  db: TypedQueryClient,
+  body: { name?: string; description?: string | null; role?: string | null },
+): Promise<Agent> {
+  if (!body?.name) throw new ValidationError("name is required");
+  const existing = await db.get("SELECT * FROM agents WHERE name = $1", [body.name]);
+  if (existing) {
+    const row = await db.get("UPDATE agents SET last_seen_at = $2 WHERE id = $1 RETURNING *", [
+      (existing as { id: string }).id,
+      nowIso(),
+    ]);
+    return agentRow(row);
+  }
+  const row = await db.get(
+    `INSERT INTO agents (id, name, description, role, metadata, created_at, last_seen_at)
+     VALUES ($1,$2,$3,$4,'{}',$5,$5) RETURNING *`,
+    [uuid(), body.name, body.description ?? null, body.role ?? null, nowIso()],
+  );
+  return agentRow(row);
+}
+/** PATCH /v1/agents/:id — heartbeat (default) and optional focus update. */
+export async function updateAgent(
+  db: TypedQueryClient,
+  id: string,
+  body: { heartbeat?: boolean; focusScenarioId?: string | null },
+): Promise<Agent | null> {
+  const existing = await getAgent(db, id);
+  if (!existing) return null;
+  if (body.focusScenarioId !== undefined) {
+    const metadata = { ...(existing.metadata ?? {}), focus: body.focusScenarioId };
+    const row = await db.get("UPDATE agents SET metadata = $2, last_seen_at = $3 WHERE id = $1 RETURNING *", [
+      id,
+      j(metadata),
+      nowIso(),
+    ]);
+    return row ? agentRow(row) : null;
+  }
+  const row = await db.get("UPDATE agents SET last_seen_at = $2 WHERE id = $1 RETURNING *", [id, nowIso()]);
+  return row ? agentRow(row) : null;
+}
+
+// ─── environments (keyed on id; client resolves name client-side) ────────────
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function environmentRow(r: any): Environment {
+  const meta = parse<Record<string, unknown>>(r.metadata, {});
+  return {
+    id: r.id,
+    name: r.name,
+    url: r.url,
+    authPresetName: r.auth_preset_name ?? null,
+    projectId: r.project_id ?? null,
+    isDefault: asBool(r.is_default),
+    variables: (meta.variables as Record<string, string>) ?? {},
+    createdAt: r.created_at,
+  };
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+export async function listEnvironments(db: TypedQueryClient, projectId?: string): Promise<Environment[]> {
+  const rows = projectId
+    ? await db.many("SELECT * FROM environments WHERE project_id = $1 ORDER BY is_default DESC, created_at DESC", [projectId])
+    : await db.many("SELECT * FROM environments ORDER BY is_default DESC, created_at DESC");
+  return rows.map(environmentRow);
+}
+export async function getEnvironment(db: TypedQueryClient, id: string): Promise<Environment | null> {
+  const row = await db.get("SELECT * FROM environments WHERE id = $1", [id]);
+  return row ? environmentRow(row) : null;
+}
+export async function createEnvironment(
+  db: TypedQueryClient,
+  body: {
+    name?: string;
+    url?: string;
+    authPresetName?: string | null;
+    projectId?: string | null;
+    isDefault?: boolean;
+    variables?: Record<string, string>;
+  },
+): Promise<Environment> {
+  if (!body?.name) throw new ValidationError("name is required");
+  if (!body?.url) throw new ValidationError("url is required");
+  if (body.isDefault) await db.execute("UPDATE environments SET is_default = FALSE");
+  const row = await db.get(
+    `INSERT INTO environments (id, name, url, auth_preset_name, project_id, is_default, metadata, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+    [uuid(), body.name, body.url, body.authPresetName ?? null, body.projectId ?? null, Boolean(body.isDefault), j({ variables: body.variables ?? {} }), nowIso()],
+  );
+  return environmentRow(row);
+}
+export async function updateEnvironment(
+  db: TypedQueryClient,
+  id: string,
+  body: { name?: string; url?: string; isDefault?: boolean; variables?: Record<string, string> },
+): Promise<Environment | null> {
+  const existing = await getEnvironment(db, id);
+  if (!existing) return null;
+  if (body.isDefault === true) await db.execute("UPDATE environments SET is_default = FALSE");
+  const sets: string[] = [];
+  const params: unknown[] = [id];
+  if (body.name !== undefined) { params.push(body.name); sets.push(`name = $${params.length}`); }
+  if (body.url !== undefined) { params.push(body.url); sets.push(`url = $${params.length}`); }
+  if (body.isDefault !== undefined) { params.push(Boolean(body.isDefault)); sets.push(`is_default = $${params.length}`); }
+  if (body.variables !== undefined) { params.push(j({ variables: body.variables })); sets.push(`metadata = $${params.length}`); }
+  if (sets.length === 0) return existing;
+  const row = await db.get(`UPDATE environments SET ${sets.join(", ")} WHERE id = $1 RETURNING *`, params);
+  return row ? environmentRow(row) : null;
+}
+export async function deleteEnvironment(db: TypedQueryClient, id: string): Promise<boolean> {
+  const existing = await getEnvironment(db, id);
+  if (!existing) return false;
+  await db.execute("DELETE FROM environments WHERE id = $1", [existing.id]);
+  return true;
+}
+
+// ─── auth presets (get/delete keyed on name) ─────────────────────────────────
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function authPresetRow(r: any): AuthPreset {
+  return {
+    id: r.id,
+    name: r.name,
+    email: r.email,
+    password: r.password,
+    loginPath: r.login_path ?? "/login",
+    metadata: parse<Record<string, unknown>>(r.metadata, {}),
+    createdAt: r.created_at,
+  };
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+export async function listAuthPresets(db: TypedQueryClient): Promise<AuthPreset[]> {
+  const rows = await db.many("SELECT * FROM auth_presets ORDER BY created_at DESC");
+  return rows.map(authPresetRow);
+}
+export async function getAuthPreset(db: TypedQueryClient, name: string): Promise<AuthPreset | null> {
+  const row = await db.get("SELECT * FROM auth_presets WHERE name = $1 OR id = $1", [name]);
+  return row ? authPresetRow(row) : null;
+}
+export async function createAuthPreset(
+  db: TypedQueryClient,
+  body: { name?: string; email?: string; password?: string; loginPath?: string },
+): Promise<AuthPreset> {
+  if (!body?.name) throw new ValidationError("name is required");
+  if (!body?.email) throw new ValidationError("email is required");
+  if (!body?.password) throw new ValidationError("password is required");
+  const row = await db.get(
+    `INSERT INTO auth_presets (id, name, email, password, login_path, metadata, created_at)
+     VALUES ($1,$2,$3,$4,$5,'{}',$6) RETURNING *`,
+    [uuid(), body.name, body.email, body.password, body.loginPath ?? "/login", nowIso()],
+  );
+  return authPresetRow(row);
+}
+export async function deleteAuthPreset(db: TypedQueryClient, name: string): Promise<boolean> {
+  const existing = await getAuthPreset(db, name);
+  if (!existing) return false;
+  await db.execute("DELETE FROM auth_presets WHERE id = $1", [existing.id]);
+  return true;
+}
+
+// ─── schedules ───────────────────────────────────────────────────────────────
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function scheduleRow(r: any): Schedule {
+  return {
+    id: r.id,
+    projectId: r.project_id ?? null,
+    name: r.name,
+    cronExpression: r.cron_expression,
+    url: r.url,
+    scenarioFilter: parse(r.scenario_filter, {}),
+    model: r.model ?? null,
+    headed: asBool(r.headed),
+    parallel: asNum(r.parallel),
+    timeoutMs: r.timeout_ms ?? null,
+    enabled: asBool(r.enabled),
+    lastRunId: r.last_run_id ?? null,
+    lastRunAt: r.last_run_at ?? null,
+    nextRunAt: r.next_run_at ?? null,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+export async function listSchedules(
+  db: TypedQueryClient,
+  filter: { projectId?: string; enabled?: boolean } = {},
+): Promise<Schedule[]> {
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  if (filter.projectId) { params.push(filter.projectId); clauses.push(`project_id = $${params.length}`); }
+  if (filter.enabled !== undefined) { params.push(filter.enabled); clauses.push(`enabled = $${params.length}`); }
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  const rows = await db.many(`SELECT * FROM schedules ${where} ORDER BY created_at DESC`, params);
+  return rows.map(scheduleRow);
+}
+export async function getSchedule(db: TypedQueryClient, id: string): Promise<Schedule | null> {
+  const row = await db.get("SELECT * FROM schedules WHERE id = $1", [id]);
+  return row ? scheduleRow(row) : null;
+}
+export async function createSchedule(
+  db: TypedQueryClient,
+  body: {
+    projectId?: string | null;
+    name?: string;
+    cronExpression?: string;
+    url?: string;
+    scenarioFilter?: Record<string, unknown>;
+    model?: string | null;
+    headed?: boolean;
+    parallel?: number;
+    timeoutMs?: number | null;
+  },
+): Promise<Schedule> {
+  if (!body?.name) throw new ValidationError("name is required");
+  if (!body?.cronExpression) throw new ValidationError("cronExpression is required");
+  if (!body?.url) throw new ValidationError("url is required");
+  const ts = nowIso();
+  const row = await db.get(
+    `INSERT INTO schedules (id, project_id, name, cron_expression, url, scenario_filter, model, headed, parallel, timeout_ms, enabled, created_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE,$11,$11) RETURNING *`,
+    [uuid(), body.projectId ?? null, body.name, body.cronExpression, body.url, j(body.scenarioFilter ?? {}), body.model ?? null, Boolean(body.headed), body.parallel ?? 1, body.timeoutMs ?? null, ts],
+  );
+  return scheduleRow(row);
+}
+export async function updateSchedule(
+  db: TypedQueryClient,
+  id: string,
+  body: {
+    name?: string;
+    cronExpression?: string;
+    url?: string;
+    scenarioFilter?: Record<string, unknown>;
+    model?: string | null;
+    headed?: boolean;
+    parallel?: number;
+    timeoutMs?: number | null;
+    enabled?: boolean;
+    lastRunId?: string;
+    nextRunAt?: string;
+  },
+): Promise<Schedule | null> {
+  const existing = await getSchedule(db, id);
+  if (!existing) return null;
+  const sets: string[] = [];
+  const params: unknown[] = [id];
+  if (body.name !== undefined) { params.push(body.name); sets.push(`name = $${params.length}`); }
+  if (body.cronExpression !== undefined) { params.push(body.cronExpression); sets.push(`cron_expression = $${params.length}`); }
+  if (body.url !== undefined) { params.push(body.url); sets.push(`url = $${params.length}`); }
+  if (body.scenarioFilter !== undefined) { params.push(j(body.scenarioFilter)); sets.push(`scenario_filter = $${params.length}`); }
+  if (body.model !== undefined) { params.push(body.model); sets.push(`model = $${params.length}`); }
+  if (body.headed !== undefined) { params.push(Boolean(body.headed)); sets.push(`headed = $${params.length}`); }
+  if (body.parallel !== undefined) { params.push(body.parallel); sets.push(`parallel = $${params.length}`); }
+  if (body.timeoutMs !== undefined) { params.push(body.timeoutMs); sets.push(`timeout_ms = $${params.length}`); }
+  if (body.enabled !== undefined) { params.push(Boolean(body.enabled)); sets.push(`enabled = $${params.length}`); }
+  if (body.lastRunId !== undefined) {
+    params.push(body.lastRunId); sets.push(`last_run_id = $${params.length}`);
+    params.push(nowIso()); sets.push(`last_run_at = $${params.length}`);
+  }
+  if (body.nextRunAt !== undefined) { params.push(body.nextRunAt); sets.push(`next_run_at = $${params.length}`); }
+  if (sets.length === 0) return existing;
+  params.push(nowIso()); sets.push(`updated_at = $${params.length}`);
+  const row = await db.get(`UPDATE schedules SET ${sets.join(", ")} WHERE id = $1 RETURNING *`, params);
+  return row ? scheduleRow(row) : null;
+}
+export async function deleteSchedule(db: TypedQueryClient, id: string): Promise<boolean> {
+  const existing = await getSchedule(db, id);
+  if (!existing) return false;
+  await db.execute("DELETE FROM schedules WHERE id = $1", [existing.id]);
+  return true;
+}
+
+// ─── flows + scenario dependencies ───────────────────────────────────────────
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function flowRow(r: any): Flow {
+  return {
+    id: r.id,
+    projectId: r.project_id ?? null,
+    name: r.name,
+    description: r.description ?? null,
+    scenarioIds: parse<string[]>(r.scenario_ids, []),
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+export async function listFlows(db: TypedQueryClient, projectId?: string): Promise<Flow[]> {
+  const rows = projectId
+    ? await db.many("SELECT * FROM flows WHERE project_id = $1 ORDER BY created_at DESC", [projectId])
+    : await db.many("SELECT * FROM flows ORDER BY created_at DESC");
+  return rows.map(flowRow);
+}
+export async function getFlow(db: TypedQueryClient, id: string): Promise<Flow | null> {
+  const row = await db.get("SELECT * FROM flows WHERE id = $1", [id]);
+  return row ? flowRow(row) : null;
+}
+export async function createFlow(
+  db: TypedQueryClient,
+  body: { name?: string; description?: string | null; scenarioIds?: string[]; projectId?: string | null },
+): Promise<Flow> {
+  if (!body?.name) throw new ValidationError("name is required");
+  const ts = nowIso();
+  const row = await db.get(
+    `INSERT INTO flows (id, project_id, name, description, scenario_ids, created_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$6) RETURNING *`,
+    [uuid(), body.projectId ?? null, body.name, body.description ?? null, j(body.scenarioIds ?? []), ts],
+  );
+  return flowRow(row);
+}
+export async function deleteFlow(db: TypedQueryClient, id: string): Promise<boolean> {
+  const existing = await getFlow(db, id);
+  if (!existing) return false;
+  await db.execute("DELETE FROM flows WHERE id = $1", [existing.id]);
+  return true;
+}
+
+export interface FlowDependency {
+  scenarioId: string;
+  dependsOn: string;
+}
+export async function listFlowDependencies(
+  db: TypedQueryClient,
+  filter: { scenarioId?: string; dependsOn?: string } = {},
+): Promise<FlowDependency[]> {
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  if (filter.scenarioId) { params.push(filter.scenarioId); clauses.push(`scenario_id = $${params.length}`); }
+  if (filter.dependsOn) { params.push(filter.dependsOn); clauses.push(`depends_on = $${params.length}`); }
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  const rows = await db.many(`SELECT scenario_id, depends_on FROM scenario_dependencies ${where}`, params);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return rows.map((r: any) => ({ scenarioId: r.scenario_id, dependsOn: r.depends_on }));
+}
+export async function createFlowDependency(
+  db: TypedQueryClient,
+  body: { scenarioId?: string; dependsOn?: string },
+): Promise<FlowDependency> {
+  if (!body?.scenarioId || !body?.dependsOn) throw new ValidationError("scenarioId and dependsOn are required");
+  await db.execute(
+    `INSERT INTO scenario_dependencies (scenario_id, depends_on) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+    [body.scenarioId, body.dependsOn],
+  );
+  return { scenarioId: body.scenarioId, dependsOn: body.dependsOn };
+}
+export async function deleteFlowDependency(db: TypedQueryClient, scenarioId: string, dependsOn: string): Promise<boolean> {
+  await db.execute("DELETE FROM scenario_dependencies WHERE scenario_id = $1 AND depends_on = $2", [scenarioId, dependsOn]);
+  return true;
+}
+
+// ─── sessions ────────────────────────────────────────────────────────────────
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function sessionRow(r: any): Session {
+  return {
+    id: r.id,
+    tabId: asNum(r.tab_id),
+    url: r.url ?? null,
+    title: r.title ?? null,
+    entries: parse<unknown[]>(r.entries, []),
+    entryCount: asNum(r.entry_count),
+    errorCount: asNum(r.error_count),
+    consoleCount: asNum(r.console_count),
+    navCount: asNum(r.nav_count),
+    status: r.status,
+    startTime: r.start_time,
+    endTime: r.end_time ?? null,
+    createdAt: r.created_at,
+  };
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+export async function listSessions(db: TypedQueryClient, limit = 50, offset = 0): Promise<Session[]> {
+  const lim = Math.min(Math.max(limit, 1), 500);
+  const off = Math.max(offset, 0);
+  const rows = await db.many(`SELECT * FROM sessions ORDER BY created_at DESC LIMIT ${lim} OFFSET ${off}`);
+  return rows.map(sessionRow);
+}
+export async function getSession(db: TypedQueryClient, id: string): Promise<Session | null> {
+  const row = await db.get("SELECT * FROM sessions WHERE id = $1", [id]);
+  return row ? sessionRow(row) : null;
+}
+export async function createSession(
+  db: TypedQueryClient,
+  body: {
+    sessionId?: string;
+    tabId?: number;
+    url?: string | null;
+    title?: string | null;
+    entries?: string;
+    entryCount?: number;
+    errorCount?: number;
+    consoleCount?: number;
+    navCount?: number;
+    status?: string;
+    startTime?: string;
+    endTime?: string | null;
+  },
+): Promise<Session> {
+  const entries = typeof body.entries === "string" ? body.entries : j(body.entries ?? []);
+  const row = await db.get(
+    `INSERT INTO sessions (id, tab_id, url, title, entries, entry_count, error_count, console_count, nav_count, status, start_time, end_time, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+    [
+      body.sessionId ?? uuid(),
+      body.tabId ?? 0,
+      body.url ?? null,
+      body.title ?? null,
+      entries,
+      body.entryCount ?? 0,
+      body.errorCount ?? 0,
+      body.consoleCount ?? 0,
+      body.navCount ?? 0,
+      body.status ?? "exported",
+      body.startTime ?? nowIso(),
+      body.endTime ?? null,
+      nowIso(),
+    ],
+  );
+  return sessionRow(row);
+}
+export async function deleteSession(db: TypedQueryClient, id: string): Promise<boolean> {
+  const existing = await getSession(db, id);
+  if (!existing) return false;
+  await db.execute("DELETE FROM sessions WHERE id = $1", [existing.id]);
+  return true;
+}
+
+// ─── api checks + results ────────────────────────────────────────────────────
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function apiCheckRow(r: any): ApiCheck {
+  return {
+    id: r.id,
+    shortId: r.short_id,
+    projectId: r.project_id ?? null,
+    name: r.name,
+    description: r.description ?? "",
+    method: r.method,
+    url: r.url,
+    headers: parse<Record<string, string>>(r.headers, {}),
+    body: r.body ?? null,
+    expectedStatus: asNum(r.expected_status),
+    expectedBodyContains: r.expected_body_contains ?? null,
+    expectedResponseTimeMs: r.expected_response_time_ms ?? null,
+    timeoutMs: asNum(r.timeout_ms),
+    tags: parse<string[]>(r.tags, []),
+    enabled: asBool(r.enabled),
+    version: asNum(r.version),
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+function apiCheckResultRow(r: any): ApiCheckResult {
+  return {
+    id: r.id,
+    checkId: r.check_id,
+    runId: r.run_id ?? null,
+    status: r.status,
+    statusCode: r.status_code ?? null,
+    responseTimeMs: r.response_time_ms ?? null,
+    responseBody: r.response_body ?? null,
+    responseHeaders: parse<Record<string, string>>(r.response_headers, {}),
+    error: r.error ?? null,
+    assertionsPassed: parse<string[]>(r.assertions_passed, []),
+    assertionsFailed: parse<string[]>(r.assertions_failed, []),
+    metadata: r.metadata ? parse<Record<string, unknown>>(r.metadata, null as never) : null,
+    createdAt: r.created_at,
+  };
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+export async function listApiChecks(
+  db: TypedQueryClient,
+  filter: { projectId?: string; enabled?: boolean } = {},
+): Promise<ApiCheck[]> {
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  if (filter.projectId) { params.push(filter.projectId); clauses.push(`project_id = $${params.length}`); }
+  if (filter.enabled !== undefined) { params.push(filter.enabled); clauses.push(`enabled = $${params.length}`); }
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  const rows = await db.many(`SELECT * FROM api_checks ${where} ORDER BY created_at DESC`, params);
+  return rows.map(apiCheckRow);
+}
+export async function getApiCheck(db: TypedQueryClient, id: string): Promise<ApiCheck | null> {
+  const row = await db.get("SELECT * FROM api_checks WHERE id = $1 OR short_id = $1", [id]);
+  return row ? apiCheckRow(row) : null;
+}
+export async function createApiCheck(
+  db: TypedQueryClient,
+  body: {
+    projectId?: string | null;
+    name?: string;
+    description?: string;
+    method?: string;
+    url?: string;
+    headers?: Record<string, string>;
+    body?: string | null;
+    expectedStatus?: number;
+    expectedBodyContains?: string | null;
+    expectedResponseTimeMs?: number | null;
+    timeoutMs?: number;
+    tags?: string[];
+    enabled?: boolean;
+  },
+): Promise<ApiCheck> {
+  if (!body?.name) throw new ValidationError("name is required");
+  if (!body?.url) throw new ValidationError("url is required");
+  const ts = nowIso();
+  const row = await db.get(
+    `INSERT INTO api_checks (id, short_id, project_id, name, description, method, url, headers, body, expected_status, expected_body_contains, expected_response_time_ms, timeout_ms, tags, enabled, version, created_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,1,$16,$16) RETURNING *`,
+    [
+      uuid(), shortUuid(), body.projectId ?? null, body.name, body.description ?? "", body.method ?? "GET", body.url,
+      j(body.headers ?? {}), body.body ?? null, body.expectedStatus ?? 200, body.expectedBodyContains ?? null,
+      body.expectedResponseTimeMs ?? null, body.timeoutMs ?? 10000, j(body.tags ?? []), body.enabled !== false, ts,
+    ],
+  );
+  return apiCheckRow(row);
+}
+export async function updateApiCheck(
+  db: TypedQueryClient,
+  id: string,
+  body: Record<string, unknown>,
+): Promise<ApiCheck | null> {
+  const existing = await getApiCheck(db, id);
+  if (!existing) return null;
+  const map: Record<string, string> = {
+    name: "name", description: "description", method: "method", url: "url",
+    expectedStatus: "expected_status", expectedBodyContains: "expected_body_contains",
+    expectedResponseTimeMs: "expected_response_time_ms", timeoutMs: "timeout_ms",
+  };
+  const sets: string[] = [];
+  const params: unknown[] = [existing.id];
+  for (const [key, col] of Object.entries(map)) {
+    if (body[key] !== undefined) { params.push(body[key]); sets.push(`${col} = $${params.length}`); }
+  }
+  if (body.headers !== undefined) { params.push(j(body.headers)); sets.push(`headers = $${params.length}`); }
+  if (body.tags !== undefined) { params.push(j(body.tags)); sets.push(`tags = $${params.length}`); }
+  if (body.body !== undefined) { params.push(body.body ?? null); sets.push(`body = $${params.length}`); }
+  if (body.enabled !== undefined) { params.push(Boolean(body.enabled)); sets.push(`enabled = $${params.length}`); }
+  params.push(existing.version + 1); sets.push(`version = $${params.length}`);
+  params.push(nowIso()); sets.push(`updated_at = $${params.length}`);
+  const row = await db.get(`UPDATE api_checks SET ${sets.join(", ")} WHERE id = $1 RETURNING *`, params);
+  return row ? apiCheckRow(row) : null;
+}
+export async function deleteApiCheck(db: TypedQueryClient, id: string): Promise<boolean> {
+  const existing = await getApiCheck(db, id);
+  if (!existing) return false;
+  await db.execute("DELETE FROM api_checks WHERE id = $1", [existing.id]);
+  return true;
+}
+export async function listApiCheckResults(db: TypedQueryClient, checkId: string): Promise<ApiCheckResult[]> {
+  const rows = await db.many("SELECT * FROM api_check_results WHERE check_id = $1 ORDER BY created_at DESC", [checkId]);
+  return rows.map(apiCheckResultRow);
+}
+export async function createApiCheckResult(
+  db: TypedQueryClient,
+  body: {
+    checkId?: string;
+    runId?: string | null;
+    status?: string;
+    statusCode?: number | null;
+    responseTimeMs?: number | null;
+    responseBody?: string | null;
+    responseHeaders?: Record<string, string>;
+    error?: string | null;
+    assertionsPassed?: string[];
+    assertionsFailed?: string[];
+    metadata?: Record<string, unknown>;
+  },
+): Promise<ApiCheckResult> {
+  if (!body?.checkId) throw new ValidationError("checkId is required");
+  if (!body?.status) throw new ValidationError("status is required");
+  const row = await db.get(
+    `INSERT INTO api_check_results (id, check_id, run_id, status, status_code, response_time_ms, response_body, response_headers, error, assertions_passed, assertions_failed, metadata, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+    [
+      uuid(), body.checkId, body.runId ?? null, body.status, body.statusCode ?? null, body.responseTimeMs ?? null,
+      body.responseBody ?? null, j(body.responseHeaders ?? {}), body.error ?? null,
+      j(body.assertionsPassed ?? []), j(body.assertionsFailed ?? []), body.metadata ? j(body.metadata) : null, nowIso(),
+    ],
+  );
+  return apiCheckResultRow(row);
+}
+
+// ─── screenshots ─────────────────────────────────────────────────────────────
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function screenshotRow(r: any): Screenshot {
+  return {
+    id: r.id,
+    resultId: r.result_id,
+    stepNumber: asNum(r.step_number),
+    action: r.action,
+    filePath: r.file_path,
+    width: asNum(r.width),
+    height: asNum(r.height),
+    timestamp: r.timestamp,
+    description: r.description ?? null,
+    pageUrl: r.page_url ?? null,
+    thumbnailPath: r.thumbnail_path ?? null,
+  };
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+export async function listScreenshots(db: TypedQueryClient, resultId: string): Promise<Screenshot[]> {
+  const rows = await db.many("SELECT * FROM screenshots WHERE result_id = $1 ORDER BY step_number ASC", [resultId]);
+  return rows.map(screenshotRow);
+}
+export async function createScreenshot(
+  db: TypedQueryClient,
+  body: {
+    resultId?: string;
+    stepNumber?: number;
+    action?: string;
+    filePath?: string;
+    width?: number;
+    height?: number;
+    description?: string | null;
+    pageUrl?: string | null;
+    thumbnailPath?: string | null;
+  },
+): Promise<Screenshot> {
+  if (!body?.resultId) throw new ValidationError("resultId is required");
+  if (!body?.filePath) throw new ValidationError("filePath is required");
+  const row = await db.get(
+    `INSERT INTO screenshots (id, result_id, step_number, action, file_path, width, height, timestamp, description, page_url, thumbnail_path)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+    [
+      uuid(), body.resultId, body.stepNumber ?? 0, body.action ?? "", body.filePath, body.width ?? 0, body.height ?? 0,
+      nowIso(), body.description ?? null, body.pageUrl ?? null, body.thumbnailPath ?? null,
+    ],
+  );
+  return screenshotRow(row);
+}
+
+// ─── step results ────────────────────────────────────────────────────────────
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function stepResultRow(r: any): StepResult {
+  return {
+    id: r.id,
+    resultId: r.result_id,
+    stepNumber: asNum(r.step_number),
+    action: r.action,
+    status: r.status,
+    toolName: r.tool_name ?? null,
+    toolInput: r.tool_input ? parse<Record<string, unknown>>(r.tool_input, null as never) : null,
+    toolResult: r.tool_result ?? null,
+    thinking: r.thinking ?? null,
+    error: r.error ?? null,
+    durationMs: r.duration_ms ?? null,
+    screenshotId: r.screenshot_id ?? null,
+    createdAt: r.created_at,
+  };
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+export async function listStepResults(db: TypedQueryClient, resultId: string): Promise<StepResult[]> {
+  const rows = await db.many("SELECT * FROM step_results WHERE result_id = $1 ORDER BY step_number ASC", [resultId]);
+  return rows.map(stepResultRow);
+}
+export async function getStepResult(db: TypedQueryClient, id: string): Promise<StepResult | null> {
+  const row = await db.get("SELECT * FROM step_results WHERE id = $1", [id]);
+  return row ? stepResultRow(row) : null;
+}
+export async function createStepResult(
+  db: TypedQueryClient,
+  body: {
+    resultId?: string;
+    stepNumber?: number;
+    action?: string;
+    toolName?: string | null;
+    toolInput?: Record<string, unknown> | null;
+    thinking?: string | null;
+  },
+): Promise<StepResult> {
+  if (!body?.resultId) throw new ValidationError("resultId is required");
+  const row = await db.get(
+    `INSERT INTO step_results (id, result_id, step_number, action, status, tool_name, tool_input, thinking, created_at)
+     VALUES ($1,$2,$3,$4,'running',$5,$6,$7,$8) RETURNING *`,
+    [
+      uuid(), body.resultId, body.stepNumber ?? 0, body.action ?? "", body.toolName ?? null,
+      body.toolInput ? j(body.toolInput) : null, body.thinking ?? null, nowIso(),
+    ],
+  );
+  return stepResultRow(row);
+}
+export async function updateStepResult(
+  db: TypedQueryClient,
+  id: string,
+  body: Record<string, unknown>,
+): Promise<StepResult | null> {
+  const existing = await getStepResult(db, id);
+  if (!existing) return null;
+  const map: Record<string, string> = {
+    status: "status", action: "action", toolName: "tool_name", thinking: "thinking",
+    error: "error", durationMs: "duration_ms", screenshotId: "screenshot_id",
+  };
+  const sets: string[] = [];
+  const params: unknown[] = [existing.id];
+  for (const [key, col] of Object.entries(map)) {
+    if (body[key] !== undefined) { params.push(body[key]); sets.push(`${col} = $${params.length}`); }
+  }
+  if (body.toolInput !== undefined) { params.push(body.toolInput ? j(body.toolInput) : null); sets.push(`tool_input = $${params.length}`); }
+  if (body.toolResult !== undefined) { params.push(body.toolResult ?? null); sets.push(`tool_result = $${params.length}`); }
+  if (sets.length === 0) return existing;
+  const row = await db.get(`UPDATE step_results SET ${sets.join(", ")} WHERE id = $1 RETURNING *`, params);
+  return row ? stepResultRow(row) : null;
+}
+
+// ─── testing workflows ───────────────────────────────────────────────────────
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function workflowRow(r: any): TestingWorkflow {
+  return {
+    id: r.id,
+    projectId: r.project_id ?? null,
+    name: r.name,
+    description: r.description ?? null,
+    scenarioFilter: parse(r.scenario_filter, {}),
+    personaIds: parse<string[]>(r.persona_ids, []),
+    goal: r.goal ? parse(r.goal, null) : null,
+    execution: workflowExecutionFromValue(parse(r.execution, { target: "local" })),
+    settings: parse(r.settings, {}),
+    enabled: asBool(r.enabled),
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+export async function listTestingWorkflows(
+  db: TypedQueryClient,
+  filter: { projectId?: string; enabled?: boolean } = {},
+): Promise<TestingWorkflow[]> {
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  if (filter.projectId) { params.push(filter.projectId); clauses.push(`project_id = $${params.length}`); }
+  if (filter.enabled !== undefined) { params.push(filter.enabled); clauses.push(`enabled = $${params.length}`); }
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  const rows = await db.many(`SELECT * FROM testing_workflows ${where} ORDER BY created_at DESC`, params);
+  return rows.map(workflowRow);
+}
+export async function getTestingWorkflow(db: TypedQueryClient, id: string): Promise<TestingWorkflow | null> {
+  const row = await db.get("SELECT * FROM testing_workflows WHERE id = $1 OR name = $1", [id]);
+  return row ? workflowRow(row) : null;
+}
+export async function createTestingWorkflow(
+  db: TypedQueryClient,
+  body: {
+    projectId?: string | null;
+    name?: string;
+    description?: string | null;
+    scenarioFilter?: Record<string, unknown>;
+    personaIds?: string[];
+    goal?: Record<string, unknown> | null;
+    execution?: unknown;
+    settings?: Record<string, unknown>;
+    enabled?: boolean;
+  },
+): Promise<TestingWorkflow> {
+  if (!body?.name) throw new ValidationError("name is required");
+  const ts = nowIso();
+  const row = await db.get(
+    `INSERT INTO testing_workflows (id, project_id, name, description, scenario_filter, persona_ids, goal, execution, settings, enabled, created_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11) RETURNING *`,
+    [
+      uuid(), body.projectId ?? null, body.name, body.description ?? null, j(body.scenarioFilter ?? {}),
+      j(body.personaIds ?? []), j(body.goal ?? null), j(workflowExecutionFromValue(body.execution ?? { target: "local" })),
+      j(body.settings ?? {}), body.enabled !== false, ts,
+    ],
+  );
+  return workflowRow(row);
+}
+export async function updateTestingWorkflow(
+  db: TypedQueryClient,
+  id: string,
+  body: Record<string, unknown>,
+): Promise<TestingWorkflow | null> {
+  const existing = await getTestingWorkflow(db, id);
+  if (!existing) return null;
+  const sets: string[] = [];
+  const params: unknown[] = [existing.id];
+  if (body.name !== undefined) { params.push(body.name); sets.push(`name = $${params.length}`); }
+  if (body.description !== undefined) { params.push(body.description ?? null); sets.push(`description = $${params.length}`); }
+  if (body.scenarioFilter !== undefined) { params.push(j(body.scenarioFilter)); sets.push(`scenario_filter = $${params.length}`); }
+  if (body.personaIds !== undefined) { params.push(j(body.personaIds)); sets.push(`persona_ids = $${params.length}`); }
+  if (body.goal !== undefined) { params.push(j(body.goal ?? null)); sets.push(`goal = $${params.length}`); }
+  if (body.execution !== undefined) { params.push(j(workflowExecutionFromValue(body.execution))); sets.push(`execution = $${params.length}`); }
+  if (body.settings !== undefined) { params.push(j(body.settings)); sets.push(`settings = $${params.length}`); }
+  if (body.enabled !== undefined) { params.push(Boolean(body.enabled)); sets.push(`enabled = $${params.length}`); }
+  if (sets.length === 0) return existing;
+  params.push(nowIso()); sets.push(`updated_at = $${params.length}`);
+  const row = await db.get(`UPDATE testing_workflows SET ${sets.join(", ")} WHERE id = $1 RETURNING *`, params);
+  return row ? workflowRow(row) : null;
+}
+export async function deleteTestingWorkflow(db: TypedQueryClient, id: string): Promise<boolean> {
+  const existing = await getTestingWorkflow(db, id);
+  if (!existing) return false;
+  await db.execute("DELETE FROM testing_workflows WHERE id = $1", [existing.id]);
+  return true;
+}
+
+// ─── golden answers + check results ──────────────────────────────────────────
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function goldenRow(r: any): GoldenAnswer {
+  return {
+    id: r.id,
+    shortId: r.short_id,
+    projectId: r.project_id ?? null,
+    question: r.question,
+    goldenAnswer: r.golden_answer,
+    constraints: parse<string[]>(r.constraints, []),
+    endpoint: r.endpoint,
+    judgeModel: r.judge_model ?? null,
+    enabled: asBool(r.enabled),
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+function goldenCheckResultRow(r: any): GoldenCheckResult {
+  return {
+    id: r.id,
+    goldenId: r.golden_id,
+    response: r.response,
+    similarityScore: r.similarity_score ?? null,
+    passed: asBool(r.passed),
+    driftDetected: asBool(r.drift_detected),
+    judgeModel: r.judge_model ?? null,
+    provider: r.provider ?? null,
+    createdAt: r.created_at,
+  };
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+export async function listGoldenAnswers(
+  db: TypedQueryClient,
+  filter: { projectId?: string; enabled?: boolean } = {},
+): Promise<GoldenAnswer[]> {
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  if (filter.projectId) { params.push(filter.projectId); clauses.push(`project_id = $${params.length}`); }
+  if (filter.enabled !== undefined) { params.push(filter.enabled); clauses.push(`enabled = $${params.length}`); }
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  const rows = await db.many(`SELECT * FROM golden_answers ${where} ORDER BY created_at DESC`, params);
+  return rows.map(goldenRow);
+}
+export async function getGoldenAnswer(db: TypedQueryClient, id: string): Promise<GoldenAnswer | null> {
+  const row = await db.get("SELECT * FROM golden_answers WHERE id = $1 OR short_id = $1", [id]);
+  return row ? goldenRow(row) : null;
+}
+export async function createGoldenAnswer(
+  db: TypedQueryClient,
+  body: {
+    projectId?: string | null;
+    question?: string;
+    goldenAnswer?: string;
+    constraints?: string[];
+    endpoint?: string;
+    judgeModel?: string | null;
+    enabled?: boolean;
+  },
+): Promise<GoldenAnswer> {
+  if (!body?.question) throw new ValidationError("question is required");
+  if (!body?.goldenAnswer) throw new ValidationError("goldenAnswer is required");
+  if (!body?.endpoint) throw new ValidationError("endpoint is required");
+  const ts = nowIso();
+  const row = await db.get(
+    `INSERT INTO golden_answers (id, short_id, project_id, question, golden_answer, constraints, endpoint, judge_model, enabled, created_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10) RETURNING *`,
+    [
+      uuid(), shortUuid(), body.projectId ?? null, body.question, body.goldenAnswer, j(body.constraints ?? []),
+      body.endpoint, body.judgeModel ?? null, body.enabled !== false, ts,
+    ],
+  );
+  return goldenRow(row);
+}
+export async function listGoldenCheckResults(db: TypedQueryClient, goldenId: string): Promise<GoldenCheckResult[]> {
+  const rows = await db.many("SELECT * FROM golden_check_results WHERE golden_id = $1 ORDER BY created_at DESC", [goldenId]);
+  return rows.map(goldenCheckResultRow);
+}
+export async function createGoldenCheckResult(
+  db: TypedQueryClient,
+  body: {
+    goldenId?: string;
+    response?: string;
+    similarityScore?: number | null;
+    passed?: boolean;
+    driftDetected?: boolean;
+    judgeModel?: string | null;
+    provider?: string | null;
+  },
+): Promise<GoldenCheckResult> {
+  if (!body?.goldenId) throw new ValidationError("goldenId is required");
+  const row = await db.get(
+    `INSERT INTO golden_check_results (id, golden_id, response, similarity_score, passed, drift_detected, judge_model, provider, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+    [
+      uuid(), body.goldenId, body.response ?? "", body.similarityScore ?? null, Boolean(body.passed),
+      Boolean(body.driftDetected), body.judgeModel ?? null, body.provider ?? null, nowIso(),
+    ],
+  );
+  return goldenCheckResultRow(row);
 }
 
 // ─── errors ─────────────────────────────────────────────────────────────────

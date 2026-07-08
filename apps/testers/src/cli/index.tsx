@@ -9525,4 +9525,10 @@ program.hook("preAction", () => {
   }
 });
 
-program.parse();
+// Use parseAsync so rejections from async command actions surface as clean,
+// single-line errors with a non-zero exit code instead of an uncaught raw stack
+// trace (e.g. a cloud API returning 404 for an unreachable route).
+program.parseAsync().catch((error) => {
+  logError(chalk.red(error instanceof Error ? error.message : String(error)));
+  process.exit(1);
+});
