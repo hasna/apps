@@ -75,6 +75,13 @@ import type {
 
 const APP = "domains";
 
+/**
+ * The server's per-response row cap for `/v1/domains` (server/repo.ts clamps
+ * `limit` to `[1, 1000]`). ApiStore paginates in units of this size so cloud
+ * reads return the full result set instead of the server's default LIMIT 100.
+ */
+const DOMAINS_PAGE_SIZE = 1000;
+
 type Env = Record<string, string | undefined>;
 
 // ── The single data interface ────────────────────────────────────────────────
@@ -282,24 +289,65 @@ export class ApiStore implements DomainsStore {
   }
 
   async listDomains(options: ListDomainsOptions = {}): Promise<Domain[]> {
-    // The cloud `/v1/domains` endpoint filters on search/status/limit/offset.
-    // `registrar` and `is_premium` are applied client-side over the match set so
-    // the server's limit/offset can't truncate before those filters run.
-    const needsClientFilter = options.registrar !== undefined || options.is_premium !== undefined;
-    const serverQuery = needsClientFilter
-      ? q({ search: options.search, status: options.status })
-      : q({ search: options.search, status: options.status, limit: options.limit, offset: options.offset });
-    const result = await this.client.list<Domain>("domains", { query: serverQuery });
-    const raw = result.raw as { domains?: Domain[] } | undefined;
-    let items = raw?.domains ?? result.items;
-    if (needsClientFilter) {
-      if (options.registrar !== undefined) items = items.filter((d) => d.registrar === options.registrar);
-      if (options.is_premium !== undefined) items = items.filter((d) => d.is_premium === options.is_premium);
-      const offset = options.offset ?? 0;
-      if (offset > 0) items = items.slice(offset);
-      if (typeof options.limit === "number") items = items.slice(0, options.limit);
+    // Parity contract with LocalStore (db/domain-records.listDomains): filter by
+    // search/status/registrar/is_premium, order by name ASC, then apply
+    // offset/limit AFTER filtering. The cloud `/v1/domains` endpoint only filters
+    // on search/status, caps each response at 1000 rows, and — critically —
+    // defaults to LIMIT 100 when no limit is sent (server/repo.ts). LocalStore is
+    // unbounded, so any request that must return more than the server's page (or
+    // that needs client-side registrar/is_premium filtering) MUST paginate the
+    // full match set; otherwise cloud silently drops rows beyond the first 100.
+    const needsClientFilter =
+      options.registrar !== undefined || options.is_premium !== undefined;
+
+    // Fast path: a bounded request the server satisfies exactly in one call —
+    // no client-side filter and an explicit limit within the server's page cap.
+    if (!needsClientFilter && typeof options.limit === "number" && options.limit <= DOMAINS_PAGE_SIZE) {
+      const result = await this.client.list<Domain>("domains", {
+        query: q({
+          search: options.search,
+          status: options.status,
+          limit: options.limit,
+          offset: options.offset,
+        }),
+      });
+      const raw = result.raw as { domains?: Domain[] } | undefined;
+      return raw?.domains ?? result.items;
     }
+
+    // Parity path: gather ALL rows matching the server-side filters (search/
+    // status), then apply client-side registrar/is_premium filters and
+    // offset/limit exactly like LocalStore.
+    let items = await this.listAllDomains(q({ search: options.search, status: options.status }));
+    if (options.registrar !== undefined) items = items.filter((d) => d.registrar === options.registrar);
+    if (options.is_premium !== undefined) items = items.filter((d) => d.is_premium === options.is_premium);
+    const offset = options.offset ?? 0;
+    if (offset > 0) items = items.slice(offset);
+    if (typeof options.limit === "number") items = items.slice(0, options.limit);
     return items;
+  }
+
+  /**
+   * Page through `/v1/domains` until the full result set for the given
+   * server-side query (search/status only) is retrieved. The server orders by
+   * name ASC and caps each page at {@link DOMAINS_PAGE_SIZE}; a short page means
+   * the end has been reached. This is what makes cloud parity match LocalStore's
+   * unbounded reads at >100-domain scale.
+   */
+  private async listAllDomains(serverQuery: Record<string, string | number | boolean>): Promise<Domain[]> {
+    const acc: Domain[] = [];
+    let offset = 0;
+    for (;;) {
+      const result = await this.client.list<Domain>("domains", {
+        query: { ...serverQuery, limit: DOMAINS_PAGE_SIZE, offset },
+      });
+      const raw = result.raw as { domains?: Domain[] } | undefined;
+      const page = raw?.domains ?? result.items;
+      acc.push(...page);
+      if (page.length < DOMAINS_PAGE_SIZE) break;
+      offset += DOMAINS_PAGE_SIZE;
+    }
+    return acc;
   }
 
   async updateDomain(id: string, input: UpdateDomainInput): Promise<Domain | null> {
