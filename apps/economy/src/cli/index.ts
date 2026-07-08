@@ -1312,6 +1312,14 @@ billingCmd
   .option('--openai', 'Only sync OpenAI')
   .option('--gemini', 'Only sync Gemini')
   .action(async (opts: { days?: string; anthropic?: boolean; openai?: boolean; gemini?: boolean }) => {
+    // self_hosted/cloud mode: provider billing is pulled into the local DB by the
+    // machine that owns the provider credentials; there is no ApiStore write path
+    // for billing, so writing here would land in a local SQLite the cloud
+    // transport never reads. Skip+warn exactly like the `sync` command.
+    if (isCloudStore()) {
+      console.log(chalk.yellow('cloud mode: billing ingest is a local-only operation; nothing to sync (reads route to the cloud API)'))
+      return
+    }
     const days = parsePositiveCliInteger(opts.days ?? '31', '--days')
     if (days > 366) fail('--days must be between 1 and 366')
     const db = openDatabase()

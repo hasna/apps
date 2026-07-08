@@ -7,7 +7,7 @@ import { syncAll } from '../lib/sync-all.js'
 import { AGENTS } from '../lib/agents.js'
 import { packageMetadata } from '../lib/package-metadata.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
-import { getStore } from '../lib/store/index.js'
+import { getStore, isCloudStore } from '../lib/store/index.js'
 import type { Period } from '../types/index.js'
 import type { Agent } from '../lib/agents.js'
 
@@ -466,6 +466,13 @@ server.tool(
   `Ingest new cost data. sources: all|${AGENTS.join('|')}`,
   { sources: z.enum(['all', ...AGENTS] as [string, ...string[]]).optional() },
   async ({ sources }: { sources?: typeof AGENTS[number] | 'all' }) => {
+    // self_hosted/cloud mode: this client reads and writes the shared cloud API
+    // and has no local DB to ingest into. Local log ingestion is a local-mode
+    // concept only — skip it here exactly like the CLI `sync` command, so we
+    // never write to a local SQLite that the cloud transport will never read.
+    if (isCloudStore()) {
+      return text('cloud mode: ingest is a local-only operation; nothing to sync (reads/writes route to the cloud API)')
+    }
     const selected = sources ?? 'all'
     const opts = selected === 'all' ? {} : { [selected]: true } as Record<string, boolean>
     const result = await syncAll(db, opts)

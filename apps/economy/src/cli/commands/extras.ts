@@ -2,8 +2,6 @@ import { Command } from 'commander'
 import chalk from 'chalk'
 import {
   openDatabase,
-  querySummary,
-  queryBillingSummary,
   dedupeRequests,
   queryZeroCostTokenizedModels,
 } from '../../db/database.js'
@@ -157,47 +155,59 @@ export function registerExtendedCommands(program: Command): void {
     .command('doctor')
     .description('Diagnose agents, cloud, pricing, and billing health')
     .action(async () => {
-      const db = openDatabase()
-      ensurePricingSeeded(db)
+      const cloud = isCloudStore()
+      const store = getStore()
       const checks: Array<{ ok: boolean; msg: string }> = []
 
-      const paths: Array<[string, string]> = [
-        ['claude', agentPaths().claudeProjects],
-        ['codex', agentPaths().codexDb],
-        ['gemini', join(agentPaths().geminiTmp, '..')],
-        ['opencode', join(agentPaths().opencodeMessages, '..', '..')],
-        ['pi', agentPaths().piSessions],
-        ['hermes', agentPaths().hermesDb],
-      ]
-      for (const [agent, path] of paths) {
-        checks.push({ ok: existsSync(path), msg: `${agent}: ${existsSync(path) ? path : 'not found'}` })
+      // Agent log directories and the Cursor token are inputs to LOCAL ingestion
+      // only; in cloud mode this client never ingests, so these checks do not apply.
+      if (!cloud) {
+        const paths: Array<[string, string]> = [
+          ['claude', agentPaths().claudeProjects],
+          ['codex', agentPaths().codexDb],
+          ['gemini', join(agentPaths().geminiTmp, '..')],
+          ['opencode', join(agentPaths().opencodeMessages, '..', '..')],
+          ['pi', agentPaths().piSessions],
+          ['hermes', agentPaths().hermesDb],
+        ]
+        for (const [agent, path] of paths) {
+          checks.push({ ok: existsSync(path), msg: `${agent}: ${existsSync(path) ? path : 'not found'}` })
+        }
+        checks.push({ ok: Boolean(process.env['CURSOR_SESSION_TOKEN']), msg: `cursor token: ${process.env['CURSOR_SESSION_TOKEN'] ? 'set' : 'missing CURSOR_SESSION_TOKEN'}` })
       }
-      checks.push({ ok: Boolean(process.env['CURSOR_SESSION_TOKEN']), msg: `cursor token: ${process.env['CURSOR_SESSION_TOKEN'] ? 'set' : 'missing CURSOR_SESSION_TOKEN'}` })
-      checks.push({ ok: true, msg: `storage: ${isCloudStore() ? 'self_hosted/cloud (HASNA_ECONOMY_API_URL + key)' : 'local'}` })
+      checks.push({ ok: true, msg: `storage: ${cloud ? 'self_hosted/cloud (HASNA_ECONOMY_API_URL + key)' : 'local'}` })
 
-      const zeroCostBuckets = queryZeroCostTokenizedModels(db, 5)
-      const zeroCost = db.prepare(`
-        SELECT COUNT(*) as c
-        FROM requests
-        WHERE cost_usd = 0
-          AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_create_tokens > 0)
-      `).get() as { c: number }
-      const zeroCostSuffix = zeroCostBuckets.length > 0
-        ? `; top buckets: ${zeroCostBuckets.map(row => {
-            const pricing = getPricingFromDb(db, row.model)
-            const status = pricing ? 'pricing configured' : 'missing pricing'
-            return `${row.agent}/${row.model} ${row.requests} req ${fmtTokens(row.total_tokens)} tok (${status})`
-          }).join('; ')}`
-        : ''
-      checks.push({ ok: zeroCost.c === 0, msg: `zero-cost requests with tokens: ${zeroCost.c}${zeroCostSuffix}` })
+      // Zero-cost tokenized-request detection and dedupe are LOCAL-DB maintenance
+      // operations; the cloud serve owns dedup + pricing for its dataset, so run
+      // them only against the local SQLite in local mode.
+      if (!cloud) {
+        const db = openDatabase()
+        ensurePricingSeeded(db)
+        const zeroCostBuckets = queryZeroCostTokenizedModels(db, 5)
+        const zeroCost = db.prepare(`
+          SELECT COUNT(*) as c
+          FROM requests
+          WHERE cost_usd = 0
+            AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_create_tokens > 0)
+        `).get() as { c: number }
+        const zeroCostSuffix = zeroCostBuckets.length > 0
+          ? `; top buckets: ${zeroCostBuckets.map(row => {
+              const pricing = getPricingFromDb(db, row.model)
+              const status = pricing ? 'pricing configured' : 'missing pricing'
+              return `${row.agent}/${row.model} ${row.requests} req ${fmtTokens(row.total_tokens)} tok (${status})`
+            }).join('; ')}`
+          : ''
+        checks.push({ ok: zeroCost.c === 0, msg: `zero-cost requests with tokens: ${zeroCost.c}${zeroCostSuffix}` })
 
-      const estimated = querySummary(db, 'month', undefined, true)
-      const actual = queryBillingSummary(db, 'month')
-      const drift = actual.total_usd > 0 ? Math.abs(estimated.total_usd - actual.total_usd) / actual.total_usd : 0
-      checks.push({ ok: drift < 0.15, msg: `billing drift month: ${(drift * 100).toFixed(1)}%` })
+        const removed = dedupeRequests(db)
+        if (removed > 0) checks.push({ ok: true, msg: `deduped ${removed} duplicate requests` })
+      }
 
-      const removed = dedupeRequests(db)
-      if (removed > 0) checks.push({ ok: true, msg: `deduped ${removed} duplicate requests` })
+      // Billing drift (estimated vs actual provider billing) routes through the
+      // Store so it reflects the SAME dataset the reads use in both modes.
+      const diff = await store.billingDiff('month')
+      const drift = Math.abs(diff.delta_pct) / 100
+      checks.push({ ok: !diff.is_alert, msg: `billing drift month: ${(drift * 100).toFixed(1)}%` })
 
       console.log()
       console.log(chalk.bold.cyan('  Economy Doctor'))
