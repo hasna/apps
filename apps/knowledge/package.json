@@ -1,6 +1,6 @@
 {
   "name": "@hasna/knowledge",
-  "version": "0.2.84",
+  "version": "0.2.86",
   "description": "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   "type": "module",
   "exports": {
@@ -85,7 +85,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@hasna/contracts": "/home/hasna/.hasna/fleet-dist/hasna-contracts-0.5.1.tgz",
+    "@hasna/contracts": "0.5.2",
     "@types/bun": "^1.3.14",
     "@types/pg": "^8.15.6"
   }

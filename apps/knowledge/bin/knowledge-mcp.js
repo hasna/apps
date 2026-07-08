@@ -14997,7 +14997,7 @@ import { existsSync as existsSync14, readFileSync as readFileSync13, writeFileSy
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.84",
+  version: "0.2.86",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   exports: {
@@ -15082,7 +15082,7 @@ var package_default = {
     zod: "^4.3.6"
   },
   devDependencies: {
-    "@hasna/contracts": "/home/hasna/.hasna/fleet-dist/hasna-contracts-0.5.1.tgz",
+    "@hasna/contracts": "0.5.2",
     "@types/bun": "^1.3.14",
     "@types/pg": "^8.15.6"
   }
@@ -26434,7 +26434,10 @@ function truncateText(value, maxChars) {
   const normalized = normalizeText(value);
   if (normalized.length <= maxChars)
     return normalized;
-  return `${normalized.slice(0, Math.max(0, maxChars - 1)).trim()}...`;
+  const ellipsis = "...";
+  if (maxChars <= ellipsis.length)
+    return normalized.slice(0, Math.max(0, maxChars));
+  return `${normalized.slice(0, maxChars - ellipsis.length).trim()}${ellipsis}`;
 }
 function parseJsonObject5(value) {
   if (!value)

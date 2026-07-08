@@ -27732,7 +27732,10 @@ function truncateText(value, maxChars) {
   const normalized = normalizeText(value);
   if (normalized.length <= maxChars)
     return normalized;
-  return `${normalized.slice(0, Math.max(0, maxChars - 1)).trim()}...`;
+  const ellipsis = "...";
+  if (maxChars <= ellipsis.length)
+    return normalized.slice(0, Math.max(0, maxChars));
+  return `${normalized.slice(0, maxChars - ellipsis.length).trim()}${ellipsis}`;
 }
 function parseJsonObject5(value) {
   if (!value)
@@ -42948,7 +42951,7 @@ function toTimestamp(value) {
   return Number.isNaN(parsed.valueOf()) ? undefined : parsed.toISOString();
 }
 function hasUriScheme(value) {
-  return /^[a-z][a-z0-9+.-]*:/i.test(value);
+  return UriSchema2.safeParse(value).success;
 }
 function resource(kind, id, name, uri, tags = []) {
   return {
@@ -43001,11 +43004,12 @@ function inventoryItems(inventory, limit) {
       priority: "medium",
       timestamp: toTimestamp(row.updated_at ?? row.created_at),
       resourceRefs: [resource("knowledge", row.id, row.title, `knowledge://item/${encodeURIComponent(row.id)}`, row.tags)],
-      evidenceRefs: row.url ? [{ id: `url_${row.id}`, kind: "url", uri: row.url, summary: "Source URL for this knowledge item." }] : [],
+      evidenceRefs: row.url && hasUriScheme(row.url) ? [{ id: `url_${row.id}`, kind: "url", uri: row.url, summary: "Source URL for this knowledge item." }] : [],
       metadata: {
         source: "legacy_store",
         archived: row.archived,
-        tags: row.tags
+        tags: row.tags,
+        url: row.url || undefined
       }
     });
   }
