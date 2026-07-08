@@ -678,7 +678,27 @@ program
   .description('Network health dashboard')
   .option('-j, --json', 'Output JSON')
   .action(async (opts: { json?: boolean }) => {
-    const s = await getStore().getNetworkStats();
+    const store = getStore();
+    // The full dashboard aggregates cold/tasks/deals/applications, which only the
+    // on-box (local) store computes. In self_hosted/cloud mode the /v1 API exposes
+    // basic counts only, so degrade to a network-size summary from store.stats()
+    // (real cloud counts) rather than crashing or reading local — never split-brain.
+    let s: Awaited<ReturnType<typeof store.getNetworkStats>>;
+    try {
+      s = await store.getNetworkStats();
+    } catch (err) {
+      if (!(err instanceof Error && err.name === 'ApiUnavailableError')) throw err;
+      const basic = await store.stats();
+      if (opts.json) {
+        console.log(JSON.stringify({ total_contacts: basic.contacts, total_companies: basic.companies, total_tags: basic.tags, total_groups: basic.groups, extended_metrics: 'unavailable_in_self_hosted_mode' }, null, 2));
+        return;
+      }
+      console.log(chalk.bold.blue('\n━━━ Network Health Dashboard ━━━\n'));
+      console.log(chalk.bold('  Network Size:'));
+      console.log(`    ${chalk.cyan(String(basic.contacts))} contacts   ${chalk.cyan(String(basic.companies))} companies   ${chalk.cyan(String(basic.tags))} tags   ${chalk.cyan(String(basic.groups))} groups`);
+      console.log(chalk.gray('\n  (Cold/tasks/deals/pipeline metrics are computed on-box and are not\n   available in self_hosted mode — run in local mode for the full dashboard.)\n'));
+      return;
+    }
     if (opts.json) {
       console.log(JSON.stringify(s, null, 2));
       return;
