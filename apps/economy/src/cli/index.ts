@@ -12,15 +12,13 @@ import { maybePullFromCloud, cloudPush, cloudPull, cloudSyncFull, getCloudDataba
 import { mergePeerDatabase } from '../lib/peer-sync.js'
 import { runEconomyFleetSync, writeFleetSyncReport } from '../lib/fleet-sync.js'
 import type { Agent } from '../lib/agents.js'
-import { openDatabase, querySummary, querySessions, queryTopSessions, queryZeroCostTokenizedModels, queryModelBreakdown, queryProjectBreakdown, queryAgentBreakdown, queryAccountBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertProject, deleteProject, getProject, listModelPricing, upsertModelPricing, deleteModelPricing, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId, listMachineRegistry, type DbModelPricing, type GoalStatus } from '../db/database.js'
-import { queryBillingSummary } from '../db/database.js'
+import { openDatabase, queryZeroCostTokenizedModels, getMachineId, listMachineRegistry } from '../db/database.js'
 import { syncAnthropicBilling, syncOpenAIBilling, syncGeminiBilling } from '../ingest/billing.js'
 import { packageMetadata } from '../lib/package-metadata.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
-import { randomUUID } from 'crypto'
 import { execSync } from 'child_process'
-import { economyCloudStorage, cloudListItems, cloudObject } from '../lib/cloud-storage.js'
-import type { AccountBreakdown, BudgetStatus, CostSummary, ModelBreakdown, AgentBreakdown, ProjectBreakdown, EconomySession, Period } from '../types/index.js'
+import { getStore, isCloudStore } from '../lib/store/index.js'
+import type { AccountBreakdown, CostSummary, ProjectBreakdown, Period } from '../types/index.js'
 
 const program = new Command()
 
@@ -34,7 +32,7 @@ program
 async function autoSync(opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; opencode?: boolean; cursor?: boolean; pi?: boolean; hermes?: boolean; verbose?: boolean; dedupe?: boolean; cloud?: boolean } = {}): Promise<void> {
   // self_hosted/cloud mode: reads come straight from the cloud API, so there is
   // no local DB to ingest into or pull for. Skip the local sync entirely.
-  if (economyCloudStorage().active) return
+  if (isCloudStore()) return
   const db = openDatabase()
   ensurePricingSeeded(db)
   await maybePullFromCloud()
@@ -197,10 +195,7 @@ function parseSinceDate(since: string): string {
 }
 
 async function printSummary(label: string, period: Period): Promise<void> {
-  const cloud = economyCloudStorage()
-  const s = cloud.active
-    ? (await cloudObject<{ summary: CostSummary }>(cloud, '/usage', { period })).summary
-    : (() => { const db = openDatabase(); ensurePricingSeeded(db); return querySummary(db, period) })()
+  const s = await getStore().summary(period)
   console.log()
   console.log(chalk.bold.cyan(`  ${label}`))
   console.log()
@@ -220,31 +215,21 @@ async function printSummary(label: string, period: Period): Promise<void> {
 
 program.action(async () => {
   await autoSync()
-  const cloud = economyCloudStorage()
+  const store = getStore()
   let t: CostSummary, w: CostSummary, m: CostSummary
   let projects: ProjectBreakdown[]
   let dailyValues: number[]
-  if (cloud.active) {
-    // self_hosted/cloud: pull the dashboard straight from the cloud API.
-    ;[t, w, m] = await Promise.all([
-      cloudObject<{ summary: CostSummary }>(cloud, '/usage', { period: 'today' }).then(r => r.summary),
-      cloudObject<{ summary: CostSummary }>(cloud, '/usage', { period: 'week' }).then(r => r.summary),
-      cloudObject<{ summary: CostSummary }>(cloud, '/usage', { period: 'month' }).then(r => r.summary),
-    ])
-    projects = (await cloudListItems<ProjectBreakdown>(cloud, 'projects')).slice(0, 3)
-    dailyValues = []
-  } else {
-    const db = openDatabase()
-    t = querySummary(db, 'today')
-    w = querySummary(db, 'week')
-    m = querySummary(db, 'month')
-    projects = queryProjectBreakdown(db).slice(0, 3)
-    const daily = queryDailyBreakdown(db, 14).reduce((acc, d) => {
-      acc[d.date] = (acc[d.date] ?? 0) + d.cost_usd
-      return acc
-    }, {} as Record<string, number>)
-    dailyValues = Object.values(daily)
-  }
+  ;[t, w, m] = await Promise.all([
+    store.summary('today'),
+    store.summary('week'),
+    store.summary('month'),
+  ])
+  projects = (await store.projectBreakdown()).slice(0, 3)
+  const daily = (await store.daily(14)).reduce((acc, d) => {
+    acc[d.date] = (acc[d.date] ?? 0) + d.cost_usd
+    return acc
+  }, {} as Record<string, number>)
+  dailyValues = Object.values(daily)
 
   console.log()
   console.log(chalk.bold.cyan('  Economy'))
@@ -393,26 +378,15 @@ program
     const agent = parseOptionalCliAgent(opts.agent)
     await autoSync()
     const sinceDate = opts.since ? parseSinceDate(opts.since) : undefined
-    const cloud = economyCloudStorage()
-    let sessions: EconomySession[] = cloud.active
-      ? await cloudListItems<EconomySession>(cloud, 'sessions', {
-          agent,
-          project: opts.project,
-          account: opts.account,
-          machine: opts.machine,
-          limit,
-          since: sinceDate,
-          search: opts.search,
-        })
-      : querySessions(openDatabase(), {
-          agent,
-          project: opts.project,
-          account: opts.account,
-          machine: opts.machine,
-          limit,
-          since: sinceDate,
-          search: opts.search,
-        })
+    const sessions = await getStore().sessions({
+      agent,
+      project: opts.project,
+      account: opts.account,
+      machine: opts.machine,
+      limit,
+      since: sinceDate,
+      search: opts.search,
+    })
     if (sessions.length === 0) { console.log(chalk.yellow('No sessions found.')); return }
     const f = opts.format ?? 'table'
     if (f === 'compact') {
@@ -453,10 +427,7 @@ program
     const count = parsePositiveCliInteger(opts.n ?? '10', '-n')
     const agent = parseOptionalCliAgent(opts.agent)
     const sinceDate = opts.since ? parseSinceDate(opts.since) : undefined
-    const cloud = economyCloudStorage()
-    const sessions = cloud.active
-      ? await cloudListItems<EconomySession>(cloud, 'top', { n: count, agent, since: sinceDate })
-      : queryTopSessions(openDatabase(), count, agent, sinceDate)
+    const sessions = await getStore().topSessions(count, agent, sinceDate)
     if (sessions.length === 0) {
       console.log(chalk.yellow('No sessions found. Run `economy sync` first.'))
       return
@@ -484,25 +455,11 @@ program
   .option('--by <dimension>', 'Dimension: model|agent|project|account', 'model')
   .option('--since <date>', 'Filter since date or relative (e.g. 2026-03-01, 7d, 30d)')
   .action(async (opts: { by?: string; since?: string }) => {
-    const cloud = economyCloudStorage()
-    const db = cloud.active ? undefined : openDatabase()
-    const sinceDate = opts.since ? parseSinceDate(opts.since) : undefined
+    const store = getStore()
+    const since = opts.since ? parseSinceDate(opts.since) : undefined
     console.log()
     if (opts.by === 'project') {
-      const rows = cloud.active
-        ? await cloudListItems<ProjectBreakdown>(cloud, 'breakdown', { by: 'project', since: sinceDate })
-        : sinceDate
-        ? db!.prepare(`
-          SELECT project_path, project_name,
-                 COUNT(*) as sessions,
-                 COALESCE(SUM(total_tokens), 0) as total_tokens,
-                 COALESCE(SUM(request_count), 0) as requests,
-                 COALESCE(SUM(total_cost_usd), 0) as cost_usd,
-                 MAX(started_at) as last_active
-          FROM sessions WHERE started_at >= ?
-          GROUP BY project_path ORDER BY cost_usd DESC
-        `).all(sinceDate) as Array<{ project_path: string; project_name: string; sessions: number; total_tokens: number; requests: number; cost_usd: number; last_active: string }>
-        : queryProjectBreakdown(db!)
+      const rows = await store.projectBreakdown({ since })
       printTable(
         ['Project', 'Sessions', 'Requests', 'Tokens', 'Cost'],
         rows.map(r => [
@@ -514,24 +471,7 @@ program
         ]),
       )
     } else if (opts.by === 'agent') {
-      const rows = cloud.active
-        ? await cloudListItems<AgentBreakdown>(cloud, 'breakdown', { by: 'agent', since: sinceDate })
-        : sinceDate
-        ? db!.prepare(`
-          SELECT agent,
-                 COUNT(DISTINCT session_id) as sessions,
-                 COUNT(*) as requests,
-                 COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_create_tokens), 0) as total_tokens,
-                 COALESCE(SUM(cost_usd), 0) as api_equivalent_usd,
-                 COALESCE(SUM(CASE WHEN cost_basis = 'metered_api' THEN cost_usd ELSE 0 END), 0) as billable_usd,
-                 COALESCE(SUM(CASE WHEN cost_basis = 'subscription_included' THEN cost_usd ELSE 0 END), 0) as subscription_included_usd,
-                 MAX(timestamp) as last_active
-          FROM requests
-          WHERE timestamp >= ?
-          GROUP BY agent
-          ORDER BY api_equivalent_usd DESC
-        `).all(sinceDate) as Array<{ agent: string; sessions: number; requests: number; total_tokens: number; api_equivalent_usd: number; billable_usd: number; subscription_included_usd: number }>
-        : queryAgentBreakdown(db!)
+      const rows = await store.agentBreakdown({ since })
       printTable(
         ['Agent', 'Sessions', 'Requests', 'Tokens', 'API Eq', 'Billable', 'Included'],
         rows.map(r => [
@@ -545,126 +485,9 @@ program
         ]),
       )
     } else if (opts.by === 'account') {
-      const rows = cloud.active
-        ? await cloudListItems<AccountBreakdown>(cloud, 'breakdown', { by: 'account', since: sinceDate })
-        : sinceDate
-        ? db!.prepare(`
-          WITH request_rows AS (
-            SELECT
-              r.session_id as session_id,
-              COALESCE(NULLIF(r.agent, ''), NULLIF(s.agent, ''), NULLIF(r.account_tool, ''), NULLIF(s.account_tool, ''), 'unknown') as account_agent,
-              COALESCE(NULLIF(r.account_key, ''), NULLIF(s.account_key, ''), '') as raw_account_key,
-              COALESCE(NULLIF(r.account_name, ''), NULLIF(s.account_name, ''), '') as raw_account_name,
-              LOWER(TRIM(COALESCE(NULLIF(r.account_email, ''), NULLIF(s.account_email, ''), ''))) as raw_account_email,
-              COALESCE(NULLIF(r.account_source, ''), NULLIF(s.account_source, ''), 'unknown') as account_source,
-              1 as requests,
-              COALESCE(r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_create_tokens, 0) as total_tokens,
-              COALESCE(r.cost_usd, 0) as cost_usd,
-              COALESCE(NULLIF(r.cost_basis, ''), 'estimated') as cost_basis,
-              r.timestamp as last_active
-            FROM requests r
-            LEFT JOIN sessions s ON s.id = r.session_id
-            WHERE r.timestamp >= ?
-              AND (
-                COALESCE(NULLIF(r.account_key, ''), NULLIF(s.account_key, ''), '') != ''
-                OR COALESCE(NULLIF(r.account_tool, ''), NULLIF(s.account_tool, ''), '') != ''
-                OR COALESCE(NULLIF(r.account_name, ''), NULLIF(s.account_name, ''), '') != ''
-                OR COALESCE(NULLIF(r.account_email, ''), NULLIF(s.account_email, ''), '') != ''
-              )
-          ),
-          session_only_rows AS (
-            SELECT
-              s.id as session_id,
-              COALESCE(NULLIF(s.agent, ''), NULLIF(s.account_tool, ''), 'unknown') as account_agent,
-              s.account_key as raw_account_key,
-              s.account_name as raw_account_name,
-              LOWER(TRIM(COALESCE(s.account_email, ''))) as raw_account_email,
-              COALESCE(NULLIF(s.account_source, ''), 'unknown') as account_source,
-              COALESCE(s.request_count, 0) as requests,
-              COALESCE(s.total_tokens, 0) as total_tokens,
-              COALESCE(s.total_cost_usd, 0) as cost_usd,
-              'estimated' as cost_basis,
-              s.started_at as last_active
-            FROM sessions s
-            WHERE s.started_at >= ?
-              AND s.id NOT IN (SELECT DISTINCT session_id FROM requests)
-              AND (s.account_key != '' OR s.account_tool != '' OR s.account_name != '' OR s.account_email != '')
-          ),
-          normalized AS (
-            SELECT
-              CASE
-                WHEN raw_account_email != '' THEN account_agent || ':' || raw_account_email
-                WHEN raw_account_name != '' THEN account_agent || ':' || raw_account_name
-                ELSE raw_account_key
-              END as account_key,
-              account_agent as account_tool,
-              raw_account_name as account_name,
-              raw_account_email as account_email,
-              account_source,
-              session_id,
-              requests,
-              total_tokens,
-              cost_usd,
-              cost_basis,
-              last_active
-            FROM request_rows
-            UNION ALL
-            SELECT
-              CASE
-                WHEN raw_account_email != '' THEN account_agent || ':' || raw_account_email
-                WHEN raw_account_name != '' THEN account_agent || ':' || raw_account_name
-                ELSE raw_account_key
-              END as account_key,
-              account_agent as account_tool,
-              raw_account_name as account_name,
-              raw_account_email as account_email,
-              account_source,
-              session_id,
-              requests,
-              total_tokens,
-              cost_usd,
-              cost_basis,
-              last_active
-            FROM session_only_rows
-          )
-          SELECT account_key,
-                 account_tool,
-                 COALESCE(MAX(NULLIF(account_name, '')), MAX(NULLIF(account_email, '')), account_key) as account_name,
-                 NULLIF(account_email, '') as account_email,
-                 COALESCE(MAX(NULLIF(account_source, 'unknown')), 'unknown') as account_source,
-                 COUNT(DISTINCT session_id) as sessions,
-                 COALESCE(SUM(requests), 0) as requests,
-                 COALESCE(SUM(total_tokens), 0) as total_tokens,
-                 COALESCE(SUM(cost_usd), 0) as api_equivalent_usd,
-                 COALESCE(SUM(CASE WHEN cost_basis = 'metered_api' THEN cost_usd ELSE 0 END), 0) as billable_usd,
-                 COALESCE(SUM(CASE WHEN cost_basis = 'metered_api' THEN cost_usd ELSE 0 END), 0) as metered_api_usd,
-                 COALESCE(SUM(CASE WHEN cost_basis = 'subscription_included' THEN cost_usd ELSE 0 END), 0) as subscription_included_usd,
-                 COALESCE(SUM(CASE WHEN cost_basis NOT IN ('metered_api', 'subscription_included', 'unknown') THEN cost_usd ELSE 0 END), 0) as estimated_usd,
-                 COALESCE(SUM(CASE WHEN cost_basis = 'unknown' THEN cost_usd ELSE 0 END), 0) as unknown_usd,
-                 COALESCE(SUM(cost_usd), 0) as cost_usd,
-                 MAX(last_active) as last_active
-          FROM normalized
-          WHERE account_key != ''
-          GROUP BY account_key, account_tool, account_email
-          ORDER BY api_equivalent_usd DESC
-        `).all(sinceDate, sinceDate) as AccountBreakdown[]
-        : queryAccountBreakdown(db!)
-      printAccountBreakdown(rows)
+      printAccountBreakdown(await store.accountBreakdown({ since }))
     } else {
-      const rows = cloud.active
-        ? await cloudListItems<ModelBreakdown>(cloud, 'breakdown', { by: 'model', since: sinceDate })
-        : sinceDate
-        ? db!.prepare(`
-          SELECT model, agent,
-                 COUNT(*) as requests,
-                 COALESCE(SUM(input_tokens), 0) as input_tokens,
-                 COALESCE(SUM(output_tokens), 0) as output_tokens,
-                 COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_create_tokens), 0) as total_tokens,
-                 COALESCE(SUM(cost_usd), 0) as cost_usd
-          FROM requests WHERE timestamp >= ?
-          GROUP BY model, agent ORDER BY cost_usd DESC
-        `).all(sinceDate) as Array<{ model: string; agent: string; requests: number; total_tokens: number; cost_usd: number }>
-        : queryModelBreakdown(db!)
+      const rows = await store.modelBreakdown({ since })
       printTable(
         ['Model', 'Agent', 'Requests', 'Tokens', 'Cost'],
         rows.map(r => [
@@ -689,10 +512,7 @@ program
   .option('--json', 'Output JSON')
   .action(async (periodArg: string | undefined, opts: { json?: boolean }) => {
     const period = requireCliChoice(periodArg, 'period', ACCOUNT_PERIODS)
-    const cloud = economyCloudStorage()
-    const rows = cloud.active
-      ? await cloudListItems<AccountBreakdown>(cloud, 'accounts', { period })
-      : queryAccountBreakdown(openDatabase(), period)
+    const rows = await getStore().accounts(period)
 
     if (opts.json) {
       console.log(JSON.stringify(rows, null, 2))
@@ -748,30 +568,12 @@ budgetCmd
     if (alertAtPercent > 100) fail('--alert must be between 1 and 100')
     const period = requireCliChoice(opts.period, '--period', ['daily', 'weekly', 'monthly'] as const)
     const agent = parseOptionalCliAgent(opts.agent) ?? null
-    const cloud = economyCloudStorage()
-    if (cloud.active) {
-      // self_hosted: write the budget to the cloud API, not the local store.
-      await cloud.client.create('budgets', {
-        project_path: opts.project ?? null,
-        ...(agent ? { agent } : {}),
-        period,
-        limit_usd: limitUsd,
-        alert_at_percent: alertAtPercent,
-      })
-      console.log(chalk.green(`✓ Budget set (cloud): ${opts.project ?? 'global'} — ${period} $${limitUsd}`))
-      return
-    }
-    const db = openDatabase()
-    const now = new Date().toISOString()
-    upsertBudget(db, {
-      id: randomUUID(),
+    await getStore().setBudget({
       project_path: opts.project ?? null,
       agent,
       period,
       limit_usd: limitUsd,
       alert_at_percent: alertAtPercent,
-      created_at: now,
-      updated_at: now,
     })
     console.log(chalk.green(`✓ Budget set: ${opts.project ?? 'global'} — ${period} $${limitUsd}`))
   })
@@ -780,10 +582,7 @@ budgetCmd
   .command('list')
   .description('List all budgets')
   .action(async () => {
-    const cloud = economyCloudStorage()
-    const statuses = cloud.active
-      ? (await cloud.client.list<BudgetStatus>('budgets')).items
-      : getBudgetStatuses(openDatabase())
+    const statuses = await getStore().listBudgets()
     if (statuses.length === 0) { console.log(chalk.yellow('No budgets set.')); return }
     console.log()
     printTable(
@@ -809,13 +608,7 @@ budgetCmd
   .command('remove <id>')
   .description('Remove a budget by ID')
   .action(async (id: string) => {
-    const cloud = economyCloudStorage()
-    if (cloud.active) {
-      await cloud.client.delete('budgets', id)
-      console.log(chalk.green(`✓ Budget removed (cloud)`))
-      return
-    }
-    deleteBudget(openDatabase(), id)
+    await getStore().removeBudget(id)
     console.log(chalk.green(`✓ Budget removed`))
   })
 
@@ -830,29 +623,15 @@ projectCmd
   .action(async (path: string, opts: { name?: string }) => {
     const { basename } = require('path') as typeof import('path')
     const name = opts.name ?? basename(path)
-    const cloud = economyCloudStorage()
-    if (cloud.active) {
-      await cloud.client.create('project-registry', { path, name, description: null, tags: [] })
-      console.log(chalk.green(`✓ Project added (cloud): ${path}`))
-      return
-    }
-    upsertProject(openDatabase(), {
-      id: randomUUID(),
-      path,
-      name,
-      description: null,
-      tags: [],
-      created_at: new Date().toISOString(),
-    })
+    await getStore().addProject(path, name)
     console.log(chalk.green(`✓ Project added: ${path}`))
   })
 
 projectCmd
   .command('list')
   .description('List all projects with costs')
-  .action(() => {
-    const db = openDatabase()
-    const projects = queryProjectBreakdown(db)
+  .action(async () => {
+    const projects = await getStore().listProjects()
     if (projects.length === 0) { console.log(chalk.yellow('No projects tracked yet.')); return }
     console.log()
     printTable(
@@ -872,13 +651,7 @@ projectCmd
   .command('remove <path>')
   .description('Remove a project (keeps historical data)')
   .action(async (path: string) => {
-    const cloud = economyCloudStorage()
-    if (cloud.active) {
-      await cloud.client.delete('project-registry', path)
-      console.log(chalk.green(`✓ Project removed (cloud)`))
-      return
-    }
-    deleteProject(openDatabase(), path)
+    await getStore().removeProject(path)
     console.log(chalk.green(`✓ Project removed`))
   })
 
@@ -886,18 +659,11 @@ projectCmd
   .command('rename <path> <name>')
   .description('Rename a project')
   .action(async (path: string, name: string) => {
-    const cloud = economyCloudStorage()
-    if (cloud.active) {
-      // No PUT for project-registry; rename = delete-by-path then re-create with the new name.
-      await cloud.client.delete('project-registry', path)
-      await cloud.client.create('project-registry', { path, name, description: null, tags: [] })
-      console.log(chalk.green(`✓ Renamed to: ${name} (cloud)`))
-      return
+    try {
+      await getStore().renameProject(path, name)
+    } catch (e) {
+      console.error(chalk.red(e instanceof Error ? e.message : String(e))); process.exit(1)
     }
-    const db = openDatabase()
-    const existing = getProject(db, path)
-    if (!existing) { console.error(chalk.red('Project not found')); process.exit(1) }
-    upsertProject(db, { ...existing, name })
     console.log(chalk.green(`✓ Renamed to: ${name}`))
   })
 
@@ -1034,15 +800,7 @@ pricingCmd
   .command('list')
   .description('List all model prices')
   .action(async () => {
-    const cloud = economyCloudStorage()
-    let rows: DbModelPricing[]
-    if (cloud.active) {
-      rows = (await cloud.client.list<DbModelPricing>('pricing')).items
-    } else {
-      const db = openDatabase()
-      ensurePricingSeeded(db)
-      rows = listModelPricing(db)
-    }
+    const rows = await getStore().listPricing()
     console.log()
     printTable(
       ['Model', 'Input/1M', 'Output/1M', 'CacheR/1M', 'CacheW/1M', 'CacheStorage/1M-h', 'Out/1k'],
@@ -1075,7 +833,7 @@ pricingCmd
     const cacheWrite = parseNonNegativeCliNumber(opts.cacheWrite ?? '0', '--cache-write')
     const cacheWrite1h = parseNonNegativeCliNumber(opts.cacheWrite1h ?? '0', '--cache-write-1h')
     const cacheStorage = parseNonNegativeCliNumber(opts.cacheStorage ?? '0', '--cache-storage')
-    const pricing = {
+    await getStore().setPricing({
       model,
       input_per_1m: input,
       output_per_1m: output,
@@ -1083,18 +841,7 @@ pricingCmd
       cache_write_per_1m: cacheWrite,
       cache_write_1h_per_1m: cacheWrite1h,
       cache_storage_per_1m_hour: cacheStorage,
-      updated_at: new Date().toISOString(),
-    }
-    const cloud = economyCloudStorage()
-    if (cloud.active) {
-      // self_hosted: write pricing to the cloud API, not the local store.
-      await cloud.client.create('pricing', pricing)
-      console.log(chalk.green(`✓ Pricing updated for ${model} (cloud)`))
-      return
-    }
-    const db = openDatabase()
-    ensurePricingSeeded(db)
-    upsertModelPricing(db, pricing)
+    })
     console.log(chalk.green(`✓ Pricing updated for ${model}`))
   })
 
@@ -1102,13 +849,7 @@ pricingCmd
   .command('remove <model>')
   .description('Remove pricing for a model')
   .action(async (model: string) => {
-    const cloud = economyCloudStorage()
-    if (cloud.active) {
-      await cloud.client.delete('pricing', model)
-      console.log(chalk.green(`✓ Pricing removed for ${model} (cloud)`))
-      return
-    }
-    deleteModelPricing(openDatabase(), model)
+    await getStore().removePricing(model)
     console.log(chalk.green(`✓ Pricing removed for ${model}`))
   })
 
@@ -1212,10 +953,9 @@ program
   .description('Show detailed breakdown of a single session')
   .action(async (id: string) => {
     await autoSync()
-    const db = openDatabase()
-    const session = db.prepare(`SELECT * FROM sessions WHERE id = ? OR id LIKE ?`).get(id, `%${id}%`) as Record<string, unknown> | null
-    if (!session) { console.log(chalk.red(`Session not found: ${id}`)); process.exit(1) }
-    const requests = db.prepare(`SELECT * FROM requests WHERE session_id = ? ORDER BY timestamp ASC`).all(session['id'] as string) as Array<Record<string, unknown>>
+    const detail = await getStore().sessionDetail(id)
+    if (!detail) { console.log(chalk.red(`Session not found: ${id}`)); process.exit(1) }
+    const { session, requests } = detail
 
     console.log()
     console.log(chalk.bold.cyan(`  Session: ${(session['id'] as string).substring(0, 16)}...`))
@@ -1256,8 +996,7 @@ program
   .description('List all machines that have synced data')
   .action(async () => {
     await autoSync()
-    const db = openDatabase()
-    const machines = listMachines(db)
+    const machines = await getStore().machines()
     const current = getMachineId()
     if (machines.length === 0) {
       console.log(chalk.yellow(`No machine data yet. Current machine: ${current}`))
@@ -1599,27 +1338,11 @@ goalCmd
     const limitUsd = parsePositiveCliNumber(opts.limit, '--limit')
     const period = requireCliChoice(opts.period, '--period', ['day', 'week', 'month', 'year'] as const)
     const agent = parseOptionalCliAgent(opts.agent) ?? null
-    const cloud = economyCloudStorage()
-    if (cloud.active) {
-      await cloud.client.create('goals', {
-        period,
-        project_path: opts.project ?? null,
-        ...(agent ? { agent } : {}),
-        limit_usd: limitUsd,
-      })
-      console.log(chalk.green(`✓ Goal set (cloud): ${period} $${limitUsd}${opts.project ? ` (${opts.project})` : ''}`))
-      return
-    }
-    const db = openDatabase()
-    const now = new Date().toISOString()
-    upsertGoal(db, {
-      id: randomUUID(),
+    await getStore().setGoal({
       period,
       project_path: opts.project ?? null,
       agent,
       limit_usd: limitUsd,
-      created_at: now,
-      updated_at: now,
     })
     console.log(chalk.green(`✓ Goal set: ${period} $${limitUsd}${opts.project ? ` (${opts.project})` : ''}`))
   })
@@ -1628,10 +1351,7 @@ goalCmd
   .command('list')
   .description('List all goals with progress')
   .action(async () => {
-    const cloud = economyCloudStorage()
-    const statuses = cloud.active
-      ? (await cloud.client.list<GoalStatus>('goals')).items
-      : getGoalStatuses(openDatabase())
+    const statuses = await getStore().listGoals()
     if (statuses.length === 0) { console.log(chalk.yellow('No goals set.')); return }
     console.log()
     printTable(
@@ -1658,13 +1378,7 @@ goalCmd
   .command('remove <id>')
   .description('Remove a goal')
   .action(async (id: string) => {
-    const cloud = economyCloudStorage()
-    if (cloud.active) {
-      await cloud.client.delete('goals', id)
-      console.log(chalk.green(`✓ Goal removed (cloud)`))
-      return
-    }
-    deleteGoal(openDatabase(), id)
+    await getStore().removeGoal(id)
     console.log(chalk.green(`✓ Goal removed`))
   })
 
@@ -1672,10 +1386,7 @@ goalCmd
   .command('status')
   .description('Quick goal progress summary')
   .action(async () => {
-    const cloud = economyCloudStorage()
-    const statuses = cloud.active
-      ? (await cloud.client.list<GoalStatus>('goals')).items
-      : getGoalStatuses(openDatabase())
+    const statuses = await getStore().listGoals()
     if (statuses.length === 0) { console.log(chalk.yellow('No goals set.')); return }
     console.log()
     for (const g of statuses) {
@@ -1701,39 +1412,21 @@ program
   .alias('rm')
   .description('Remove a record. Type: budget | project | goal | pricing')
   .action(async (type: string, id: string) => {
-    const cloud = economyCloudStorage()
-    const resourceFor: Record<string, string> = { budget: 'budgets', project: 'project-registry', goal: 'goals', pricing: 'pricing' }
     const label: Record<string, string> = { budget: 'Budget', project: 'Project', goal: 'Goal', pricing: 'Pricing entry' }
     try {
       const t = type.toLowerCase()
-      if (!(t in resourceFor)) {
+      if (!(t in label)) {
         console.error(chalk.red(`Unknown type: ${type}. Use: budget | project | goal | pricing`))
         process.exit(1)
       }
-      if (cloud.active) {
-        await cloud.client.delete(resourceFor[t]!, id)
-        console.log(chalk.green(`✓ ${label[t]} ${id} removed (cloud)`))
-        return
-      }
-      const db = openDatabase()
+      const store = getStore()
       switch (t) {
-        case 'budget':
-          deleteBudget(db, id)
-          console.log(chalk.green(`✓ Budget ${id} removed`))
-          break
-        case 'project':
-          deleteProject(db, id)
-          console.log(chalk.green(`✓ Project ${id} removed`))
-          break
-        case 'goal':
-          deleteGoal(db, id)
-          console.log(chalk.green(`✓ Goal ${id} removed`))
-          break
-        case 'pricing':
-          deleteModelPricing(db, id)
-          console.log(chalk.green(`✓ Pricing entry ${id} removed`))
-          break
+        case 'budget': await store.removeBudget(id); break
+        case 'project': await store.removeProject(id); break
+        case 'goal': await store.removeGoal(id); break
+        case 'pricing': await store.removePricing(id); break
       }
+      console.log(chalk.green(`✓ ${label[t]} ${id} removed`))
     } catch (e) {
       console.error(chalk.red(`Failed: ${e instanceof Error ? e.message : String(e)}`))
       process.exit(1)
@@ -1861,11 +1554,11 @@ billingCmd
   .command('show')
   .description('Show actual billing totals vs our estimated costs')
   .option('--period <p>', 'Period: today|yesterday|week|month|year|all', 'month')
-  .action((opts: { period?: string }) => {
-    const db = openDatabase()
+  .action(async (opts: { period?: string }) => {
+    const store = getStore()
     const period = (opts.period ?? 'month') as Period
-    const actual = queryBillingSummary(db, period)
-    const estimated = querySummary(db, period)
+    const actual = await store.billingSummary(period)
+    const estimated = await store.summary(period)
     console.log()
     console.log(chalk.bold.cyan(`  Billing ${period} (actual from admin APIs)\n`))
     printTable(
