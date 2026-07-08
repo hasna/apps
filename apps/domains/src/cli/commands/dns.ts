@@ -18,6 +18,30 @@ import { loadConfig } from "../../lib/config.js";
 import { createDnsPlan, getDnsApplyBlockReason, parseDesiredDnsState, planHasChanges, type DnsPlan } from "../../lib/dns-plan.js";
 import { compactHint, pageItemsOrExit, truncateText } from "../../lib/compact-output.js";
 
+/** Record types the store (local sqlite CHECK + cloud API) accepts on write. */
+export const SUPPORTED_DNS_TYPES = new Set(["A", "AAAA", "CNAME", "MX", "TXT", "NS", "SRV"]);
+
+/**
+ * Split provider-returned records into persistable ones and skipped ones.
+ * Real zones always carry provider-managed records (SOA, and often CAA) whose
+ * types are outside the supported set; persisting them fails the local CHECK
+ * constraint and makes the cloud API return 400. `dns pull` must skip them.
+ */
+export function partitionPullableRecords<T extends { type: string }>(
+  records: T[],
+): { keep: T[]; skipped: Map<string, number> } {
+  const keep: T[] = [];
+  const skipped = new Map<string, number>();
+  for (const r of records) {
+    if (SUPPORTED_DNS_TYPES.has(r.type)) {
+      keep.push(r);
+    } else {
+      skipped.set(r.type, (skipped.get(r.type) ?? 0) + 1);
+    }
+  }
+  return { keep, skipped };
+}
+
 function printDnsPlan(plan: DnsPlan): void {
   console.log(`DNS plan for ${plan.domain}: ${plan.creates} create, ${plan.updates} update, ${plan.deletes} delete, ${plan.unchanged} unchanged`);
   for (const op of plan.operations) {
@@ -382,12 +406,18 @@ export function registerDnsCommands(program: Command): void {
           console.error(`Domain '${domain}' not found in local DB. Add it first: domains domain add --name ${domain}`);
           process.exit(1);
         }
+        // Skip provider-managed types (SOA/CAA/…) the store cannot persist.
+        const { keep, skipped } = partitionPullableRecords(records);
         let count = 0;
-        for (const r of records) {
+        for (const r of keep) {
           await createDnsRecord({ domain_id: dbDomain.id, type: r.type as "A" | "AAAA" | "CNAME" | "MX" | "TXT" | "NS" | "SRV", name: r.name, value: r.value, ttl: r.ttl, priority: r.priority });
           count++;
         }
         console.log(`✓ Pulled ${count} record(s) from ${providerName} into local DB for ${domain}`);
+        if (skipped.size > 0) {
+          const summary = Array.from(skipped.entries()).map(([t, n]) => `${n} ${t}`).join(", ");
+          console.log(`  Skipped ${summary} record(s) (unsupported/provider-managed type).`);
+        }
       } catch (e) {
         console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
