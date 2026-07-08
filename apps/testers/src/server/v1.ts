@@ -158,6 +158,29 @@ export async function handleV1(
   }
 }
 
+/**
+ * Split a `/v1/...` pathname into decoded path segments.
+ *
+ * The standard Hasna storage client `encodeURIComponent()`s every id (RFC 3986),
+ * so a composite id like `scenarioId:dependsOn` arrives on the wire as
+ * `scenarioId%3AdependsOn`. Percent-decode each segment here so reserved
+ * characters (`:`, `/`, spaces, ...) round-trip to the literal form the route
+ * handlers expect. Malformed escapes fall back to the raw segment.
+ */
+export function parsePathSegments(pathname: string): string[] {
+  return pathname
+    .replace(/^\/v1\//, "")
+    .split("/")
+    .filter(Boolean)
+    .map((s) => {
+      try {
+        return decodeURIComponent(s);
+      } catch {
+        return s;
+      }
+    });
+}
+
 async function route(
   req: Request,
   pathname: string,
@@ -165,7 +188,7 @@ async function route(
   searchParams: URLSearchParams,
 ): Promise<Response> {
   const db = getCloudClient();
-  const seg = pathname.replace(/^\/v1\//, "").split("/").filter(Boolean); // e.g. ["scenarios","<id>"]
+  const seg = parsePathSegments(pathname); // e.g. ["scenarios","<id>"]
   const [resource, id, sub] = seg;
 
   // ── projects ──
