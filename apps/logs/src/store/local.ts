@@ -10,18 +10,19 @@
  * concrete {@link LocalStore} obtained via `requireLocalStore`) and never see
  * the db handle — that is the split-brain boundary this module enforces.
  */
-import { getDb } from "../db/index.ts";
+import { backupLogsDb, getDb } from "../db/index.ts";
 import {
   type AlertRule,
   createAlertRule,
   deleteAlertRule,
   listAlertRules,
 } from "../lib/alerts.ts";
-import type {
-  CommandRunOptions,
-  CommandRunResult,
+import {
+  type CommandRunOptions,
+  type CommandRunResult,
+  LocalRunSink,
+  runCapturedCommand,
 } from "../lib/command-runner.ts";
-import { runCommand } from "../lib/command-runner.ts";
 import { type CompareResult, compare } from "../lib/compare.ts";
 import { countLogs } from "../lib/count.ts";
 import {
@@ -87,6 +88,7 @@ import {
 import {
   type StructuredLogOptions,
   ingestStructuredJsonLines,
+  validateStructuredLogReferences,
 } from "../lib/structured-logs.ts";
 import { summarizeLogs } from "../lib/summarize.ts";
 import {
@@ -117,7 +119,8 @@ import type {
   CreateJobInput,
   CreatePageInput,
   CreateProjectInput,
-  PushUniversalEventOptions,
+  ImportStructuredLogsResult,
+  PushEventOptions,
   Store,
 } from "./types.ts";
 
@@ -242,30 +245,47 @@ export class LocalStore implements Store {
     return row?.id ?? null;
   }
 
-  importStructuredLogs(
+  async importStructuredLogs(
     input: string,
     options: StructuredLogOptions,
     source: string,
-  ): LogRow[] {
-    return ingestStructuredJsonLines(getDb(), input, options, source);
+  ): Promise<ImportStructuredLogsResult> {
+    const rows = ingestStructuredJsonLines(getDb(), input, options, source);
+    return { inserted: rows.length, ids: rows.map((row) => row.id) };
   }
 
   followStructuredLogs(
     file: string,
     options: FollowStructuredJsonLinesOptions,
   ): Promise<FollowStructuredJsonLinesResult> {
-    return followStructuredJsonLines(getDb(), file, options);
+    const db = getDb();
+    return followStructuredJsonLines(
+      (entry) => {
+        validateStructuredLogReferences(db, [entry]);
+        return ingestLog(db, entry);
+      },
+      file,
+      options,
+    );
   }
 
   runCapturedCommand(
     command: string[],
     options: CommandRunOptions,
   ): Promise<CommandRunResult> {
-    return runCommand(getDb(), command, options);
+    return runCapturedCommand(new LocalRunSink(getDb()), command, options);
   }
 
   verifyEventStore(): EventStoreVerification {
     return verifyEventStore(getDb());
+  }
+
+  /**
+   * Back up the on-disk database before a destructive maintenance op. Returns
+   * the backup path, or `null` when there is nothing to snapshot.
+   */
+  backupDatabase(): string | null {
+    return backupLogsDb();
   }
 
   rebuildEventStoreIndex(): RebuildEventStoreIndexResult {
@@ -282,10 +302,10 @@ export class LocalStore implements Store {
    * Ingest a raw-first universal event, optionally auto-detecting runtime
    * identity (machine/repo/app) when the caller did not supply one.
    */
-  pushUniversalEvent(
+  async pushEvent(
     input: UniversalEventInput,
-    options: PushUniversalEventOptions = {},
-  ): UniversalEventIngestResult {
+    options: PushEventOptions = {},
+  ): Promise<UniversalEventIngestResult> {
     const db = getDb();
     validateUniversalEventInput(input);
     if (options.detectIdentity) {

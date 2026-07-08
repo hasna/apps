@@ -368,6 +368,22 @@ export function normalizeUniversalEvent(
   };
 }
 
+/**
+ * Validate, normalize and redact a universal event input into a safe telemetry
+ * envelope + its (already-redacted) metadata, WITHOUT touching any store. This
+ * is the DB-agnostic front half of {@link ingestUniversalEvent}: the local
+ * SQLite ingest and the cloud Postgres ingest both call it so both apply the
+ * IDENTICAL redaction pass (secrets never reach either backend).
+ */
+export function normalizeAndRedactUniversalEvent(input: UniversalEventInput): {
+  envelope: TelemetryEnvelope;
+  metadata: Record<string, unknown>;
+} {
+  return redactEnvelope(
+    normalizeUniversalEvent(validateUniversalEventInput(input)),
+  );
+}
+
 function redactEnvelope(envelope: TelemetryEnvelope): {
   envelope: TelemetryEnvelope;
   metadata: Record<string, unknown>;

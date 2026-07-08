@@ -1632,8 +1632,8 @@ describe("GET /api/events/stream", () => {
     );
     expect(res.status).toBe(200);
     const waitForEvent = readSseUntil(res, "Process started");
-    const { runCommand } = await import("../lib/command-runner.ts");
-    await runCommand(db, [process.execPath, "-e", ""], {
+    const { LocalRunSink, runCommand } = await import("../lib/command-runner.ts");
+    await runCommand(new LocalRunSink(db), [process.execPath, "-e", ""], {
       tee: false,
       environment: "test",
     });

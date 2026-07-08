@@ -21,16 +21,23 @@ import {
   sep,
 } from "node:path";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
-import type { LogLevel, LogSource } from "../types/index.ts";
+import type { Store } from "../store/types.ts";
+import type { LogEntry, LogLevel, LogRow, LogSource } from "../types/index.ts";
 import { publishEventCatalogEvent } from "./event-bus.ts";
 import {
+  type EventIndexInput,
   type TelemetryEnvelope,
   appendRawEvent,
   indexRawEvent,
   withEventStoreLock,
 } from "./event-store.ts";
 import { getEvent } from "./events.ts";
-import { detectRuntimeIdentity } from "./identity.ts";
+import {
+  type IdentityDetectionOptions,
+  type RuntimeIdentity,
+  computeRuntimeIdentity,
+  detectRuntimeIdentity,
+} from "./identity.ts";
 import { ingestLog } from "./ingest.ts";
 import {
   type RedactionReport,
@@ -44,6 +51,10 @@ import {
   upsertSourceMapProjection,
 } from "./source-map-projections.ts";
 import { upsertTestReportProjection } from "./test-report-projections.ts";
+import type {
+  UniversalEventInput,
+  UniversalEventType,
+} from "./universal-ingest.ts";
 
 export interface CommandRunOptions {
   cwd?: string;
@@ -316,8 +327,240 @@ const TEST_REPORT_ROOT_FILES = [
   "results.xml",
 ];
 
+// ── run telemetry sink (the Store boundary for `logs run`) ──────────────────
+// `logs run` spawns a subprocess and emits a rich, ordered stream of telemetry
+// (per-line log rows + universal process/metric/tree/artifact/test-report
+// events). That telemetry must be PERSISTED through the resolved Store so a
+// flipped machine ships it to the shared cloud instead of a stale local db.
+// The capture engine below stays transport-agnostic by writing through this
+// sink; LocalRunSink keeps the exact on-box SQLite behavior, ApiRunSink routes
+// every record to the cloud `/v1` API (logs + events) in submission order.
+
+interface BeginRunData {
+  process_id: string;
+  run_id: string;
+  machine_id: string;
+  repo_id: string | null;
+  app_id: string | null;
+  pid: number | null;
+  ppid: number;
+  command: string[];
+  cwd: string;
+  started_at: string;
+  environment: string;
+  project_id: string | null;
+  classifier: CommandRunClassifier;
+}
+
+interface FinishRunData {
+  process_id: string;
+  run_id: string;
+  ended_at: string;
+  exit_code: number;
+  signal: string | null;
+  status: "completed" | "failed";
+  duration_ms: number;
+  stdout_lines: number;
+  stderr_lines: number;
+  command: string[];
+  cwd: string;
+  environment: string;
+  project_id: string | null;
+  classifier: CommandRunClassifier;
+  summary: CommandRunOutputSummary;
+  resource_usage: CommandRunResourceSummary;
+  process_tree: CommandRunProcessTreeSummary;
+  artifacts: CommandRunArtifactSummary;
+  test_reports: CommandRunTestReportSummary;
+  stdout_chunks: number;
+  stderr_chunks: number;
+  stdout_bytes: number;
+  stderr_bytes: number;
+}
+
+/** Local-only side projections the capture engine layers on top of an event. */
+type RunEventProjection =
+  | {
+      kind: "artifact";
+      artifact: CommandRunArtifactInfo;
+      metadata: Record<string, unknown>;
+    }
+  | { kind: "test_report" };
+
+/**
+ * The persistence boundary for `logs run`. One method per data-plane write the
+ * capture engine performs. Callers never touch a db handle or raw HTTP.
+ */
+export interface RunSink {
+  existingProjectId(projectId: string | undefined): Promise<string | null>;
+  detectIdentity(cwd: string, opts: IdentityDetectionOptions): RuntimeIdentity;
+  beginRun(data: BeginRunData): void;
+  finishRun(data: FinishRunData): void;
+  ingestLog(entry: LogEntry): void;
+  recordEvent(
+    envelope: TelemetryEnvelope,
+    index: EventIndexInput,
+    projection?: RunEventProjection,
+  ): void;
+  /** Await all queued writes; throws the first write error, if any. */
+  flush(): Promise<void>;
+}
+
+/** On-box SQLite sink — preserves the exact prior `logs run` local behavior. */
+export class LocalRunSink implements RunSink {
+  constructor(private readonly db: Database) {}
+
+  async existingProjectId(
+    projectId: string | undefined,
+  ): Promise<string | null> {
+    return existingProjectId(this.db, projectId);
+  }
+
+  detectIdentity(cwd: string, opts: IdentityDetectionOptions): RuntimeIdentity {
+    return detectRuntimeIdentity(this.db, cwd, opts);
+  }
+
+  beginRun(data: BeginRunData): void {
+    insertProcessAndRun(this.db, data);
+  }
+
+  finishRun(data: FinishRunData): void {
+    updateProcessAndRun(this.db, data);
+  }
+
+  ingestLog(entry: LogEntry): void {
+    ingestLog(this.db, entry);
+  }
+
+  recordEvent(
+    envelope: TelemetryEnvelope,
+    index: EventIndexInput,
+    projection?: RunEventProjection,
+  ): void {
+    const catalogEvent = withEventStoreLock(this.db, () => {
+      const write = appendRawEvent(this.db, envelope);
+      indexRawEvent(this.db, index, write);
+      if (projection?.kind === "artifact") {
+        upsertCommandRunArtifact(
+          this.db,
+          projection.artifact,
+          projection.metadata,
+        );
+        upsertSourceMapProjection(this.db, envelope, index);
+      } else if (projection?.kind === "test_report") {
+        upsertTestReportProjection(this.db, envelope, index);
+      }
+      return getEvent(this.db, envelope.event_id, false);
+    });
+    if (catalogEvent) publishEventCatalogEvent(catalogEvent);
+  }
+
+  async flush(): Promise<void> {}
+}
+
+/**
+ * Cloud sink — ships captured telemetry to the shared `/v1` API (self_hosted or
+ * cloud) via the resolved {@link Store}. Writes are queued onto a serial chain
+ * so cloud persistence preserves the capture order; `flush()` awaits them and
+ * surfaces the first failure. The server derives process/run rows and artifact/
+ * test-report projections from the universal events, so beginRun/finishRun (a
+ * local-catalog convenience) are no-ops here.
+ */
+export class ApiRunSink implements RunSink {
+  private chain: Promise<void> = Promise.resolve();
+  private firstError: unknown = null;
+
+  constructor(private readonly store: Store) {}
+
+  async existingProjectId(
+    projectId: string | undefined,
+  ): Promise<string | null> {
+    if (!projectId) return null;
+    return (await this.store.resolveProjectId(projectId)) ?? null;
+  }
+
+  detectIdentity(cwd: string, opts: IdentityDetectionOptions): RuntimeIdentity {
+    return computeRuntimeIdentity(cwd, opts);
+  }
+
+  beginRun(): void {}
+
+  finishRun(): void {}
+
+  ingestLog(entry: LogEntry): void {
+    this.enqueue(() => this.store.ingestLog(entry));
+  }
+
+  recordEvent(envelope: TelemetryEnvelope, index: EventIndexInput): void {
+    const input = envelopeToUniversalEventInput(envelope, index);
+    this.enqueue(() => this.store.pushEvent(input));
+  }
+
+  async flush(): Promise<void> {
+    await this.chain;
+    if (this.firstError) throw this.firstError;
+  }
+
+  private enqueue(op: () => Promise<unknown>): void {
+    this.chain = this.chain.then(async () => {
+      try {
+        await op();
+      } catch (error) {
+        if (this.firstError === null) this.firstError = error;
+      }
+    });
+  }
+}
+
+/** Map a captured telemetry envelope (+ its index) onto a cloud event input. */
+function envelopeToUniversalEventInput(
+  envelope: TelemetryEnvelope,
+  index: EventIndexInput,
+): UniversalEventInput {
+  return {
+    schema_version: envelope.schema_version,
+    event_id: envelope.event_id,
+    source_event_id: envelope.source_event_id ?? undefined,
+    event_time: envelope.event_time,
+    type: envelope.type as UniversalEventType,
+    source: envelope.source,
+    severity: envelope.severity ?? undefined,
+    privacy: envelope.privacy ?? undefined,
+    project_id: index.project_id ?? undefined,
+    page_id: index.page_id ?? undefined,
+    machine_id: envelope.machine_id ?? undefined,
+    repo_id: envelope.repo_id ?? undefined,
+    app_id: envelope.app_id ?? undefined,
+    process_id: envelope.process_id ?? undefined,
+    run_id: envelope.run_id ?? undefined,
+    trace_id: envelope.trace_id ?? undefined,
+    span_id: envelope.span_id ?? undefined,
+    parent_span_id: envelope.parent_span_id ?? undefined,
+    session_id: envelope.session_id ?? undefined,
+    release_id: envelope.release_id ?? undefined,
+    environment: envelope.environment ?? undefined,
+    artifact_id: index.artifact_id ?? undefined,
+    message: envelope.message ?? undefined,
+    body: envelope.body,
+    attributes: envelope.attributes,
+  };
+}
+
+/**
+ * Run a subprocess and capture its telemetry through the resolved {@link Store}
+ * (local SQLite or the shared cloud `/v1` API). This is the single entry point
+ * used by the CLI/MCP/SDK for `logs run` in EVERY mode.
+ */
+export function runCapturedCommand(
+  sink: RunSink,
+  command: string[],
+  opts: CommandRunOptions = {},
+): Promise<CommandRunResult> {
+  return runCommand(sink, command, opts);
+}
+
 export async function runCommand(
-  db: Database,
+  sink: RunSink,
   command: string[],
   opts: CommandRunOptions = {},
 ): Promise<CommandRunResult> {
@@ -332,8 +575,8 @@ export async function runCommand(
   const runId = `run_${randomId()}`;
   const classifier = classifyCommand(command);
   const commandLine = command.join(" ");
-  const projectId = existingProjectId(db, opts.project_id);
-  const identity = detectRuntimeIdentity(db, cwd, {
+  const projectId = await sink.existingProjectId(opts.project_id);
+  const identity = sink.detectIdentity(cwd, {
     project_id: projectId,
     environment: opts.environment,
   });
@@ -353,7 +596,7 @@ export async function runCommand(
   const abortForwarder = installAbortForwarder(child, opts.signal);
   const observedSequence: SharedSequence = { value: 0 };
 
-  insertProcessAndRun(db, {
+  sink.beginRun({
     process_id: processId,
     run_id: runId,
     machine_id: identity.machine_id,
@@ -369,7 +612,7 @@ export async function runCommand(
     classifier,
   });
 
-  recordProcessEvent(db, {
+  recordProcessEvent(sink, {
     event_id: `evt_${randomId()}`,
     event_time: startedAt,
     phase: "start",
@@ -410,7 +653,7 @@ export async function runCommand(
     },
   });
 
-  const stdoutPromise = consumeProcessStream(db, child.stdout, "stdout", {
+  const stdoutPromise = consumeProcessStream(sink, child.stdout, "stdout", {
     run_id: runId,
     process_id: processId,
     command,
@@ -426,7 +669,7 @@ export async function runCommand(
     observed_sequence: observedSequence,
     tee: opts.tee === true,
   });
-  const stderrPromise = consumeProcessStream(db, child.stderr, "stderr", {
+  const stderrPromise = consumeProcessStream(sink, child.stderr, "stderr", {
     run_id: runId,
     process_id: processId,
     command,
@@ -485,7 +728,7 @@ export async function runCommand(
   const signal = readSignalCode(child) ?? abortForwarder.getSignal();
   const status = exitCode === 0 && !signal ? "completed" : "failed";
 
-  updateProcessAndRun(db, {
+  sink.finishRun({
     process_id: processId,
     run_id: runId,
     ended_at: endedAt,
@@ -511,7 +754,7 @@ export async function runCommand(
     test_reports: safeTestReportSummary,
   });
 
-  recordProcessEvent(db, {
+  recordProcessEvent(sink, {
     event_id: `evt_${randomId()}`,
     event_time: endedAt,
     phase: "exit",
@@ -581,7 +824,7 @@ export async function runCommand(
     },
   });
 
-  recordProcessResourceMetricEvent(db, {
+  recordProcessResourceMetricEvent(sink, {
     event_time: endedAt,
     run_id: runId,
     process_id: processId,
@@ -595,7 +838,7 @@ export async function runCommand(
     resource_usage: resourceUsage,
   });
 
-  recordProcessTreeEvent(db, {
+  recordProcessTreeEvent(sink, {
     event_time: endedAt,
     run_id: runId,
     process_id: processId,
@@ -609,7 +852,7 @@ export async function runCommand(
     process_tree: processTree,
   });
 
-  recordArtifactEvents(db, {
+  recordArtifactEvents(sink, {
     event_time: endedAt,
     run_id: runId,
     process_id: processId,
@@ -622,7 +865,7 @@ export async function runCommand(
     artifacts: artifactSummary,
   });
 
-  recordTestReportEvents(db, {
+  recordTestReportEvents(sink, {
     event_time: endedAt,
     run_id: runId,
     process_id: processId,
@@ -635,7 +878,7 @@ export async function runCommand(
     test_reports: testReportSummary,
   });
 
-  recordLifecycleSummaryEvent(db, {
+  recordLifecycleSummaryEvent(sink, {
     run_id: runId,
     process_id: processId,
     machine_id: identity.machine_id,
@@ -665,6 +908,10 @@ export async function runCommand(
     artifacts: safeArtifactSummary,
     test_reports: safeTestReportSummary,
   });
+
+  // Ensure every queued cloud write lands (and surface failures) before the
+  // caller sees a result. A no-op for the local sink.
+  await sink.flush();
 
   const safeResultCommand = redactValue(command, "command").value as string[];
   const safeResultCwd = redactString(cwd, "cwd").value;
@@ -850,7 +1097,7 @@ function updateProcessAndRun(
 }
 
 async function consumeProcessStream(
-  db: Database,
+  sink: RunSink,
   stream: ReadableStream<Uint8Array> | null,
   streamName: StreamName,
   context: {
@@ -875,7 +1122,7 @@ async function consumeProcessStream(
 
   const reader = stream.getReader();
   const decoder = new TextDecoder();
-  const chunkRecorder = createStreamChunkRecorder(db, streamName, context);
+  const chunkRecorder = createStreamChunkRecorder(sink, streamName, context);
   let buffered = "";
   let lineNumber = 0;
 
@@ -884,7 +1131,7 @@ async function consumeProcessStream(
     const message = line.replace(/\r$/, "");
     const insight = inspectProcessLine(message, streamName);
     addLineToSummary(summary, message, insight);
-    ingestLog(db, {
+    sink.ingestLog({
       id: `${context.run_id}-${streamName}-${lineNumber}`,
       timestamp: new Date().toISOString(),
       level: insight.severity,
@@ -944,7 +1191,7 @@ async function consumeProcessStream(
 }
 
 function createStreamChunkRecorder(
-  db: Database,
+  sink: RunSink,
   streamName: StreamName,
   context: {
     run_id: string;
@@ -969,7 +1216,7 @@ function createStreamChunkRecorder(
     if (bytes.byteLength === 0) return;
     chunkSequence += 1;
     const observedSequence = ++context.observed_sequence.value;
-    recordProcessStreamChunk(db, {
+    recordProcessStreamChunk(sink, {
       event_id: `${context.run_id}-${streamName}-chunk-${chunkSequence}`,
       event_time: new Date().toISOString(),
       stream: streamName,
@@ -1003,7 +1250,7 @@ function createStreamChunkRecorder(
 }
 
 function recordProcessStreamChunk(
-  db: Database,
+  sink: RunSink,
   event: {
     event_id: string;
     event_time: string;
@@ -1121,39 +1368,30 @@ function recordProcessStreamChunk(
       framework: event.context.classifier.framework,
     },
   };
-  const catalogEvent = withEventStoreLock(db, () => {
-    const write = appendRawEvent(db, envelope);
-    indexRawEvent(
-      db,
-      {
-        event_id: event.event_id,
-        schema_version: envelope.schema_version,
-        source_event_id: envelope.source_event_id,
-        event_type: envelope.type,
-        event_time: envelope.event_time,
-        ingest_time: envelope.ingest_time,
-        severity: envelope.severity,
-        source: envelope.source,
-        project_id: event.context.project_id,
-        machine_id: event.context.machine_id,
-        repo_id: event.context.repo_id,
-        app_id: event.context.app_id,
-        process_id: event.context.process_id,
-        run_id: event.context.run_id,
-        environment: event.context.environment,
-        privacy_tier: "internal",
-        message: messageResult.value,
-        metadata: safeMetadata,
-      },
-      write,
-    );
-    return getEvent(db, event.event_id, false);
+  sink.recordEvent(envelope, {
+    event_id: event.event_id,
+    schema_version: envelope.schema_version,
+    source_event_id: envelope.source_event_id,
+    event_type: envelope.type,
+    event_time: envelope.event_time,
+    ingest_time: envelope.ingest_time,
+    severity: envelope.severity,
+    source: envelope.source,
+    project_id: event.context.project_id,
+    machine_id: event.context.machine_id,
+    repo_id: event.context.repo_id,
+    app_id: event.context.app_id,
+    process_id: event.context.process_id,
+    run_id: event.context.run_id,
+    environment: event.context.environment,
+    privacy_tier: "internal",
+    message: messageResult.value,
+    metadata: safeMetadata,
   });
-  if (catalogEvent) publishEventCatalogEvent(catalogEvent);
 }
 
 function recordProcessEvent(
-  db: Database,
+  sink: RunSink,
   event: {
     event_id: string;
     event_time: string;
@@ -1212,38 +1450,29 @@ function recordProcessEvent(
       phase: event.phase,
     },
   };
-  const catalogEvent = withEventStoreLock(db, () => {
-    const write = appendRawEvent(db, envelope);
-    indexRawEvent(
-      db,
-      {
-        event_id: event.event_id,
-        schema_version: envelope.schema_version,
-        source_event_id: envelope.source_event_id,
-        event_type: envelope.type,
-        event_time: envelope.event_time,
-        ingest_time: envelope.ingest_time,
-        severity: envelope.severity,
-        source: envelope.source,
-        machine_id: event.machine_id,
-        repo_id: event.repo_id,
-        app_id: event.app_id,
-        process_id: event.process_id,
-        run_id: event.run_id,
-        environment: event.environment,
-        privacy_tier: "internal",
-        message: messageResult.value,
-        metadata: safeMetadata,
-      },
-      write,
-    );
-    return getEvent(db, event.event_id, false);
+  sink.recordEvent(envelope, {
+    event_id: event.event_id,
+    schema_version: envelope.schema_version,
+    source_event_id: envelope.source_event_id,
+    event_type: envelope.type,
+    event_time: envelope.event_time,
+    ingest_time: envelope.ingest_time,
+    severity: envelope.severity,
+    source: envelope.source,
+    machine_id: event.machine_id,
+    repo_id: event.repo_id,
+    app_id: event.app_id,
+    process_id: event.process_id,
+    run_id: event.run_id,
+    environment: event.environment,
+    privacy_tier: "internal",
+    message: messageResult.value,
+    metadata: safeMetadata,
   });
-  if (catalogEvent) publishEventCatalogEvent(catalogEvent);
 }
 
 function recordProcessResourceMetricEvent(
-  db: Database,
+  sink: RunSink,
   data: {
     event_time: string;
     run_id: string;
@@ -1349,39 +1578,30 @@ function recordProcessResourceMetricEvent(
       environment: data.environment,
     },
   };
-  const catalogEvent = withEventStoreLock(db, () => {
-    const write = appendRawEvent(db, envelope);
-    indexRawEvent(
-      db,
-      {
-        event_id: eventId,
-        schema_version: envelope.schema_version,
-        source_event_id: envelope.source_event_id,
-        event_type: envelope.type,
-        event_time: envelope.event_time,
-        ingest_time: envelope.ingest_time,
-        severity: envelope.severity,
-        source: envelope.source,
-        project_id: data.project_id,
-        machine_id: data.machine_id,
-        repo_id: data.repo_id,
-        app_id: data.app_id,
-        process_id: data.process_id,
-        run_id: data.run_id,
-        environment: data.environment,
-        privacy_tier: "internal",
-        message: messageResult.value,
-        metadata: safeMetadata,
-      },
-      write,
-    );
-    return getEvent(db, eventId, false);
+  sink.recordEvent(envelope, {
+    event_id: eventId,
+    schema_version: envelope.schema_version,
+    source_event_id: envelope.source_event_id,
+    event_type: envelope.type,
+    event_time: envelope.event_time,
+    ingest_time: envelope.ingest_time,
+    severity: envelope.severity,
+    source: envelope.source,
+    project_id: data.project_id,
+    machine_id: data.machine_id,
+    repo_id: data.repo_id,
+    app_id: data.app_id,
+    process_id: data.process_id,
+    run_id: data.run_id,
+    environment: data.environment,
+    privacy_tier: "internal",
+    message: messageResult.value,
+    metadata: safeMetadata,
   });
-  if (catalogEvent) publishEventCatalogEvent(catalogEvent);
 }
 
 function recordProcessTreeEvent(
-  db: Database,
+  sink: RunSink,
   data: {
     event_time: string;
     run_id: string;
@@ -1469,39 +1689,30 @@ function recordProcessTreeEvent(
       environment: data.environment,
     },
   };
-  const catalogEvent = withEventStoreLock(db, () => {
-    const write = appendRawEvent(db, envelope);
-    indexRawEvent(
-      db,
-      {
-        event_id: eventId,
-        schema_version: envelope.schema_version,
-        source_event_id: envelope.source_event_id,
-        event_type: envelope.type,
-        event_time: envelope.event_time,
-        ingest_time: envelope.ingest_time,
-        severity: envelope.severity,
-        source: envelope.source,
-        project_id: data.project_id,
-        machine_id: data.machine_id,
-        repo_id: data.repo_id,
-        app_id: data.app_id,
-        process_id: data.process_id,
-        run_id: data.run_id,
-        environment: data.environment,
-        privacy_tier: "internal",
-        message: messageResult.value,
-        metadata: safeMetadata,
-      },
-      write,
-    );
-    return getEvent(db, eventId, false);
+  sink.recordEvent(envelope, {
+    event_id: eventId,
+    schema_version: envelope.schema_version,
+    source_event_id: envelope.source_event_id,
+    event_type: envelope.type,
+    event_time: envelope.event_time,
+    ingest_time: envelope.ingest_time,
+    severity: envelope.severity,
+    source: envelope.source,
+    project_id: data.project_id,
+    machine_id: data.machine_id,
+    repo_id: data.repo_id,
+    app_id: data.app_id,
+    process_id: data.process_id,
+    run_id: data.run_id,
+    environment: data.environment,
+    privacy_tier: "internal",
+    message: messageResult.value,
+    metadata: safeMetadata,
   });
-  if (catalogEvent) publishEventCatalogEvent(catalogEvent);
 }
 
 function recordArtifactEvents(
-  db: Database,
+  sink: RunSink,
   data: {
     event_time: string;
     run_id: string;
@@ -1611,9 +1822,9 @@ function recordArtifactEvents(
       body: bodyResult.value as Record<string, unknown>,
       attributes: safeAttributes,
     };
-    const catalogEvent = withEventStoreLock(db, () => {
-      const write = appendRawEvent(db, envelope);
-      const index = {
+    sink.recordEvent(
+      envelope,
+      {
         event_id: artifact.artifact_id,
         schema_version: envelope.schema_version,
         source_event_id: envelope.source_event_id,
@@ -1633,18 +1844,14 @@ function recordArtifactEvents(
         privacy_tier: "internal",
         message: messageResult.value,
         metadata: safeMetadata,
-      };
-      indexRawEvent(db, index, write);
-      upsertCommandRunArtifact(db, artifact, safeMetadata);
-      upsertSourceMapProjection(db, envelope, index);
-      return getEvent(db, artifact.artifact_id, false);
-    });
-    if (catalogEvent) publishEventCatalogEvent(catalogEvent);
+      },
+      { kind: "artifact", artifact, metadata: safeMetadata },
+    );
   }
 }
 
 function recordTestReportEvents(
-  db: Database,
+  sink: RunSink,
   data: {
     event_time: string;
     run_id: string;
@@ -1792,9 +1999,9 @@ function recordTestReportEvents(
       body: bodyResult.value as Record<string, unknown>,
       attributes: safeAttributes,
     };
-    const catalogEvent = withEventStoreLock(db, () => {
-      const write = appendRawEvent(db, envelope);
-      const index = {
+    sink.recordEvent(
+      envelope,
+      {
         event_id: report.report_id,
         schema_version: envelope.schema_version,
         source_event_id: envelope.source_event_id,
@@ -1813,12 +2020,9 @@ function recordTestReportEvents(
         privacy_tier: "internal",
         message: messageResult.value,
         metadata: safeMetadata,
-      };
-      indexRawEvent(db, index, write);
-      upsertTestReportProjection(db, envelope, index);
-      return getEvent(db, report.report_id, false);
-    });
-    if (catalogEvent) publishEventCatalogEvent(catalogEvent);
+      },
+      { kind: "test_report" },
+    );
   }
 }
 
@@ -1861,7 +2065,7 @@ function upsertCommandRunArtifact(
 }
 
 function recordLifecycleSummaryEvent(
-  db: Database,
+  sink: RunSink,
   data: {
     run_id: string;
     process_id: string;
@@ -2027,35 +2231,26 @@ function recordLifecycleSummaryEvent(
       duration_ms: data.duration_ms,
     },
   };
-  const catalogEvent = withEventStoreLock(db, () => {
-    const write = appendRawEvent(db, envelope);
-    indexRawEvent(
-      db,
-      {
-        event_id: eventId,
-        schema_version: envelope.schema_version,
-        source_event_id: envelope.source_event_id,
-        event_type: envelope.type,
-        event_time: envelope.event_time,
-        ingest_time: envelope.ingest_time,
-        severity: envelope.severity,
-        source: envelope.source,
-        project_id: data.project_id,
-        machine_id: data.machine_id,
-        repo_id: data.repo_id,
-        app_id: data.app_id,
-        process_id: data.process_id,
-        run_id: data.run_id,
-        environment: data.environment,
-        privacy_tier: "internal",
-        message: messageResult.value,
-        metadata: safeMetadata,
-      },
-      write,
-    );
-    return getEvent(db, eventId, false);
+  sink.recordEvent(envelope, {
+    event_id: eventId,
+    schema_version: envelope.schema_version,
+    source_event_id: envelope.source_event_id,
+    event_type: envelope.type,
+    event_time: envelope.event_time,
+    ingest_time: envelope.ingest_time,
+    severity: envelope.severity,
+    source: envelope.source,
+    project_id: data.project_id,
+    machine_id: data.machine_id,
+    repo_id: data.repo_id,
+    app_id: data.app_id,
+    process_id: data.process_id,
+    run_id: data.run_id,
+    environment: data.environment,
+    privacy_tier: "internal",
+    message: messageResult.value,
+    metadata: safeMetadata,
   });
-  if (catalogEvent) publishEventCatalogEvent(catalogEvent);
 }
 
 function classifyCommand(command: string[]): CommandRunClassifier {

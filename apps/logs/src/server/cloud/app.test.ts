@@ -22,8 +22,43 @@ function fakeClient(): {
   const state = {
     logs: new Map<string, Record<string, unknown>>(),
     projects: new Map<string, Record<string, unknown>>(),
+    events: new Map<string, Record<string, unknown>>(),
     migrations: logsCloudMigrations().map((m) => ({ id: m.id })),
   };
+
+  const EVENT_COLUMNS = [
+    "event_id",
+    "schema_version",
+    "source_event_id",
+    "event_type",
+    "event_time",
+    "ingest_time",
+    "severity",
+    "source",
+    "project_id",
+    "page_id",
+    "log_id",
+    "machine_id",
+    "repo_id",
+    "app_id",
+    "process_id",
+    "run_id",
+    "trace_id",
+    "span_id",
+    "parent_span_id",
+    "session_id",
+    "release_id",
+    "environment",
+    "artifact_id",
+    "privacy_tier",
+    "segment_id",
+    "segment_path",
+    "byte_offset",
+    "byte_length",
+    "record_hash",
+    "message",
+    "metadata",
+  ];
 
   async function run<T extends QueryResultRow>(
     sql: string,
@@ -100,6 +135,25 @@ function fakeClient(): {
     }
     if (s.startsWith("SELECT") && s.includes("FROM logs")) {
       return [...state.logs.values()] as unknown as T[];
+    }
+    if (s.startsWith("INSERT INTO event_records")) {
+      const p = params as unknown[];
+      const eventId = p[0] as string;
+      if (!state.events.has(eventId)) {
+        const row: Record<string, unknown> = { created_at: new Date().toISOString() };
+        EVENT_COLUMNS.forEach((col, i) => {
+          row[col] = p[i] ?? null;
+        });
+        state.events.set(eventId, row);
+      }
+      return [];
+    }
+    if (s.startsWith("SELECT * FROM event_records WHERE event_id = $1")) {
+      const row = state.events.get((params as string[])[0] ?? "");
+      return row ? [row as unknown as T] : [];
+    }
+    if (s.startsWith("SELECT * FROM event_records")) {
+      return [...state.events.values()] as unknown as T[];
     }
     if (s.startsWith("INSERT INTO feedback")) {
       return [{ id: "fb1" } as unknown as T];
@@ -325,6 +379,73 @@ describe("cloud serve data-plane parity (v1 surface)", () => {
       body: JSON.stringify({ project_id: "p1", name: "r" }),
     });
     expect(alerts.status).toBe(403);
+  });
+
+  test("POST /v1/events ingests a telemetry event and it round-trips", async () => {
+    const a = app();
+    const write = {
+      "x-api-key": tokenWith(["logs:write"]),
+      "content-type": "application/json",
+    };
+    const read = { "x-api-key": tokenWith(["logs:read"]) };
+
+    // A logs:read key cannot ingest.
+    const forbidden = await a.request("/v1/events", {
+      method: "POST",
+      headers: { ...read, "content-type": "application/json" },
+      body: JSON.stringify({ type: "log", message: "hi" }),
+    });
+    expect(forbidden.status).toBe(403);
+
+    // Ingest a single event.
+    const created = await a.request("/v1/events", {
+      method: "POST",
+      headers: write,
+      body: JSON.stringify({
+        type: "log",
+        source: "cli",
+        message: "hello cloud",
+        attributes: { project_id: "p1" },
+      }),
+    });
+    expect(created.status).toBe(201);
+    const event = (await created.json()) as { event_id: string; raw: unknown };
+    expect(typeof event.event_id).toBe("string");
+    expect(event.raw).toBeNull();
+
+    // It is retrievable via search and by id.
+    const listed = await a.request("/v1/events", { headers: read });
+    expect(listed.status).toBe(200);
+    expect(((await listed.json()).events as unknown[]).length).toBe(1);
+
+    const fetched = await a.request(`/v1/events/${event.event_id}`, {
+      headers: read,
+    });
+    expect(fetched.status).toBe(200);
+    expect(((await fetched.json()) as { event_id: string }).event_id).toBe(
+      event.event_id,
+    );
+
+    // A batch re-post of the same event is idempotent (inserted count 0).
+    const batch = await a.request("/v1/events", {
+      method: "POST",
+      headers: write,
+      body: JSON.stringify({ events: [{ type: "log", event_id: event.event_id }] }),
+    });
+    expect(batch.status).toBe(201);
+    expect(((await batch.json()) as { inserted: number }).inserted).toBe(0);
+  });
+
+  test("POST /v1/events rejects an invalid event (422)", async () => {
+    const res = await app().request("/v1/events", {
+      method: "POST",
+      headers: {
+        "x-api-key": tokenWith(["logs:write"]),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ type: "not-a-real-type" }),
+    });
+    expect(res.status).toBe(422);
   });
 
   test("feedback requires logs:write and accepts a message", async () => {

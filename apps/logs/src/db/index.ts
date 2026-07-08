@@ -16,6 +16,7 @@ import { migrateAlertRules } from "./migrations/001_alert_rules.ts";
 import { migrateIssues } from "./migrations/002_issues.ts";
 import { migrateRetention } from "./migrations/003_retention.ts";
 import { migratePageAuth } from "./migrations/004_page_auth.ts";
+import { migrateLogsSourceCheck } from "./migrations/005_logs_source_check.ts";
 
 const PRIVATE_DIR_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
@@ -119,6 +120,28 @@ export function closeDb(): void {
   _db = null;
 }
 
+/**
+ * Snapshot the on-disk SQLite database to a timestamped sidecar file and return
+ * its path (or `null` when there is nothing to back up, e.g. an in-memory DB or
+ * a not-yet-created file). Callers MUST take this backup before any destructive
+ * maintenance (index rebuilds, repairs) so the operation stays reversible. The
+ * WAL is checkpointed first so the copied `.db` file is a complete snapshot.
+ */
+export function backupLogsDb(): string | null {
+  if (DB_PATH === ":memory:" || !existsSync(DB_PATH)) return null;
+  const db = getDb();
+  try {
+    db.run("PRAGMA wal_checkpoint(TRUNCATE)");
+  } catch {
+    // Best effort: a busy WAL still leaves the main file consistent to copy.
+  }
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const backupPath = `${DB_PATH}.backup-${stamp}`;
+  cpSync(DB_PATH, backupPath);
+  chmodIfExists(backupPath, PRIVATE_FILE_MODE);
+  return backupPath;
+}
+
 export function createTestDb(): Database {
   const db = new Database(":memory:");
   setEventStoreDataDir(
@@ -215,6 +238,10 @@ function migrate(db: Database): void {
     )
   `,
   );
+
+  // Drop the legacy source CHECK on pre-existing DBs before (re)building indexes,
+  // so the rebuilt table gets fresh indexes below.
+  migrateLogsSourceCheck(db);
 
   db.run(
     "CREATE INDEX IF NOT EXISTS idx_logs_project_level_ts ON logs(project_id, level, timestamp DESC)",

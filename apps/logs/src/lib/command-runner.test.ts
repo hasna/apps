@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTestDb } from "../db/index.ts";
-import { runCommand } from "./command-runner.ts";
+import { LocalRunSink, runCommand } from "./command-runner.ts";
 import {
   getEventRecord,
   readRawEvent,
@@ -19,8 +19,7 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
 describe("command runner", () => {
   it("captures process lifecycle and stdout/stderr as raw-backed telemetry", async () => {
     const db = createTestDb();
-    const result = await runCommand(
-      db,
+    const result = await runCommand(new LocalRunSink(db),
       [
         process.execPath,
         "-e",
@@ -312,8 +311,7 @@ describe("command runner", () => {
 
   it("captures bounded child process tree telemetry without command payloads", async () => {
     const db = createTestDb();
-    const result = await runCommand(
-      db,
+    const result = await runCommand(new LocalRunSink(db),
       [
         process.execPath,
         "-e",
@@ -409,8 +407,7 @@ describe("command runner", () => {
         "utf8",
       );
 
-      const result = await runCommand(
-        db,
+      const result = await runCommand(new LocalRunSink(db),
         [
           process.execPath,
           "-e",
@@ -715,8 +712,7 @@ describe("command runner", () => {
         "utf8",
       );
 
-      const result = await runCommand(
-        db,
+      const result = await runCommand(new LocalRunSink(db),
         [
           process.execPath,
           "-e",
@@ -834,8 +830,7 @@ describe("command runner", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "open-logs-artifact-redact-"));
     const secret = "OPENLOGS_SECRET_CANARY_ARTIFACT_PATH_12345";
     try {
-      const result = await runCommand(
-        db,
+      const result = await runCommand(new LocalRunSink(db),
         [
           process.execPath,
           "-e",
@@ -897,8 +892,7 @@ describe("command runner", () => {
     const db = createTestDb();
     const tempDir = mkdtempSync(join(tmpdir(), "open-logs-junit-"));
     try {
-      const result = await runCommand(
-        db,
+      const result = await runCommand(new LocalRunSink(db),
         [
           process.execPath,
           "-e",
@@ -1168,8 +1162,7 @@ describe("command runner", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "open-logs-junit-redact-"));
     const secret = "OPENLOGS_SECRET_CANARY_JUNIT_REPORT_24680";
     try {
-      const result = await runCommand(
-        db,
+      const result = await runCommand(new LocalRunSink(db),
         [
           process.execPath,
           "-e",
@@ -1242,8 +1235,7 @@ describe("command runner", () => {
     const db = createTestDb();
     const tempDir = mkdtempSync(join(tmpdir(), "open-logs-junit-unsafe-"));
     try {
-      const result = await runCommand(
-        db,
+      const result = await runCommand(new LocalRunSink(db),
         [
           process.execPath,
           "-e",
@@ -1287,8 +1279,7 @@ describe("command runner", () => {
 
   it("preserves raw stream chunks with byte metadata and observed ordering", async () => {
     const db = createTestDb();
-    const result = await runCommand(
-      db,
+    const result = await runCommand(new LocalRunSink(db),
       [
         process.execPath,
         "-e",
@@ -1350,8 +1341,7 @@ describe("command runner", () => {
 
   it("ignores unknown project IDs before identity and log persistence", async () => {
     const db = createTestDb();
-    const result = await runCommand(
-      db,
+    const result = await runCommand(new LocalRunSink(db),
       [process.execPath, "-e", "console.log('unknown-project-ok')"],
       {
         cwd: repoRoot,
@@ -1383,8 +1373,7 @@ describe("command runner", () => {
 
   it("classifies build and test output into queryable lifecycle metadata", async () => {
     const db = createTestDb();
-    const result = await runCommand(
-      db,
+    const result = await runCommand(new LocalRunSink(db),
       [
         process.execPath,
         "-e",
@@ -1497,7 +1486,7 @@ describe("command runner", () => {
   it("rebuilds command-runner final status from raw process and lifecycle events", async () => {
     const commandDb = createTestDb();
     const commandResult = await runCommand(
-      commandDb,
+      new LocalRunSink(commandDb),
       [process.execPath, "-e", "process.exit(0)"],
       {
         cwd: repoRoot,
@@ -1529,8 +1518,7 @@ describe("command runner", () => {
     });
 
     const db = createTestDb();
-    const result = await runCommand(
-      db,
+    const result = await runCommand(new LocalRunSink(db),
       [process.execPath, "-e", "process.exit(0)", "test"],
       {
         cwd: repoRoot,
@@ -1588,8 +1576,7 @@ describe("command runner", () => {
   it("finalizes interrupted dev-server runs through an abort signal", async () => {
     const db = createTestDb();
     const controller = new AbortController();
-    const running = runCommand(
-      db,
+    const running = runCommand(new LocalRunSink(db),
       [process.execPath, "-e", "setTimeout(() => {}, 10000)", "dev"],
       {
         cwd: repoRoot,
@@ -1649,8 +1636,7 @@ describe("command runner", () => {
     const assignmentSecret = "ABCD123456789";
     const splitArgSecret = "hunter2Value123";
     const prefixedSplitArgSecret = "dbPasswordValue456";
-    await runCommand(
-      db,
+    await runCommand(new LocalRunSink(db),
       [
         process.execPath,
         "-e",

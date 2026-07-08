@@ -1,12 +1,16 @@
-import type { Database } from "bun:sqlite";
 import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
-import type { LogRow } from "../types/index.ts";
-import { ingestLog } from "./ingest.ts";
+import type { LogEntry, LogRow } from "../types/index.ts";
 import {
   type StructuredLogOptions,
   structuredLogToEntry,
-  validateStructuredLogReferences,
 } from "./structured-logs.ts";
+
+/**
+ * Persist one parsed {@link LogEntry} through the resolved transport. The caller
+ * supplies this so the follower stays storage-agnostic: LocalStore validates +
+ * writes SQLite; ApiStore POSTs to the shared cloud `/v1` API.
+ */
+export type FollowIngestFn = (entry: LogEntry) => LogRow | Promise<LogRow>;
 
 export interface FollowStructuredJsonLinesOptions extends StructuredLogOptions {
   from_end?: boolean;
@@ -31,7 +35,7 @@ export interface FollowStructuredJsonLinesResult {
 const READ_BUFFER_BYTES = 64 * 1024;
 
 export async function followStructuredJsonLines(
-  db: Database,
+  ingest: FollowIngestFn,
   file: string,
   options: FollowStructuredJsonLinesOptions = {},
 ): Promise<FollowStructuredJsonLinesResult> {
@@ -54,7 +58,7 @@ export async function followStructuredJsonLines(
   const ids: string[] = [];
   const reachedMaxLines = () =>
     maxLines !== undefined && ids.length >= maxLines;
-  const ingestPendingCompleteLines = (): boolean => {
+  const ingestPendingCompleteLines = async (): Promise<boolean> => {
     while (true) {
       if (reachedMaxLines()) return false;
       const newline = pending.indexOf("\n");
@@ -66,7 +70,7 @@ export async function followStructuredJsonLines(
       pendingStartOffset += Buffer.byteLength(rawLineWithNewline, "utf8");
       lineNumber += 1;
       if (rawLine.trim().length === 0) continue;
-      const row = ingestStructuredLine(db, rawLine, options, {
+      const row = await ingestStructuredLine(ingest, rawLine, options, {
         index: ids.length,
         line: lineNumber,
         source: sourceName,
@@ -94,12 +98,17 @@ export async function followStructuredJsonLines(
       }
 
       if (stat.size > offset) {
-        const readResult = readAvailable(fd, offset, stat.size, (bytes) => {
-          const text = decoder.decode(bytes, { stream: true });
-          if (!text) return !reachedMaxLines();
-          pending += text;
-          return ingestPendingCompleteLines();
-        });
+        const readResult = await readAvailable(
+          fd,
+          offset,
+          stat.size,
+          async (bytes) => {
+            const text = decoder.decode(bytes, { stream: true });
+            if (!text) return !reachedMaxLines();
+            pending += text;
+            return ingestPendingCompleteLines();
+          },
+        );
         offset = readResult.next_offset;
         bytesRead += readResult.bytes_read;
         lastActivity = Date.now();
@@ -122,7 +131,7 @@ export async function followStructuredJsonLines(
 
     if (!reachedMaxLines() && pending.trim().length > 0) {
       lineNumber += 1;
-      const row = ingestStructuredLine(db, pending, options, {
+      const row = await ingestStructuredLine(ingest, pending, options, {
         index: ids.length,
         line: lineNumber,
         source: sourceName,
@@ -146,8 +155,8 @@ export async function followStructuredJsonLines(
   }
 }
 
-function ingestStructuredLine(
-  db: Database,
+async function ingestStructuredLine(
+  ingest: FollowIngestFn,
   line: string,
   options: FollowStructuredJsonLinesOptions,
   position: {
@@ -156,7 +165,7 @@ function ingestStructuredLine(
     source: string;
     byte_offset: number;
   },
-): LogRow {
+): Promise<LogRow> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(line);
@@ -166,16 +175,18 @@ function ingestStructuredLine(
     );
   }
   const entry = structuredLogToEntry(parsed, options, position);
-  validateStructuredLogReferences(db, [entry]);
-  return ingestLog(db, entry);
+  return ingest(entry);
 }
 
-function readAvailable(
+async function readAvailable(
   fd: number,
   startOffset: number,
   endOffset: number,
-  onChunk: (bytes: Uint8Array, chunkStartOffset: number) => boolean | undefined,
-): { next_offset: number; bytes_read: number } {
+  onChunk: (
+    bytes: Uint8Array,
+    chunkStartOffset: number,
+  ) => Promise<boolean | undefined> | boolean | undefined,
+): Promise<{ next_offset: number; bytes_read: number }> {
   const buffer = Buffer.alloc(
     Math.min(READ_BUFFER_BYTES, endOffset - startOffset),
   );
@@ -185,7 +196,7 @@ function readAvailable(
     const toRead = Math.min(buffer.byteLength, endOffset - offset);
     const read = readSync(fd, buffer, 0, toRead, offset);
     if (read <= 0) break;
-    const shouldContinue = onChunk(buffer.subarray(0, read), offset);
+    const shouldContinue = await onChunk(buffer.subarray(0, read), offset);
     offset += read;
     bytesRead += read;
     if (shouldContinue === false) break;
