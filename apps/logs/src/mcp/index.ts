@@ -661,11 +661,8 @@ export function buildServer(): McpServer {
           "Return N logs before and after the target log's timestamp (in addition to trace context)",
         ),
     },
-    ({ log_id, brief, window }) => {
-      const rows = local("log_context_from_id").logContextFromId(
-        log_id,
-        window ?? 0,
-      );
+    async ({ log_id, brief, window }) => {
+      const rows = await store.getLogContextFromId(log_id, window ?? 0);
       return {
         content: [
           {
@@ -736,13 +733,14 @@ export function buildServer(): McpServer {
         .optional(),
     },
     async ({ project_id, since, include }) => {
-      const store = local("log_diagnose");
       const resolved = (await store.resolveProjectId(project_id)) ?? project_id;
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify(store.diagnose(resolved, since, include)),
+            text: JSON.stringify(
+              await store.diagnose(resolved, since, include),
+            ),
           },
         ],
       };
@@ -759,14 +757,13 @@ export function buildServer(): McpServer {
       b_until: z.string(),
     },
     async ({ project_id, a_since, a_until, b_since, b_until }) => {
-      const store = local("log_compare");
       const resolved = (await store.resolveProjectId(project_id)) ?? project_id;
       return {
         content: [
           {
             type: "text",
             text: JSON.stringify(
-              store.compareWindows(
+              await store.compareWindows(
                 resolved,
                 parseTime(a_since) ?? a_since,
                 parseTime(a_until) ?? a_until,
@@ -787,7 +784,7 @@ export function buildServer(): McpServer {
       brief: z.boolean().optional(),
     },
     async ({ session_id, brief }) => {
-      const ctx = await local("log_session_context").sessionContext(session_id);
+      const ctx = await store.sessionContext(session_id);
       return {
         content: [
           {
@@ -939,9 +936,8 @@ export function buildServer(): McpServer {
       include_raw: z.boolean().optional(),
     },
     async (args) => {
-      const store = local("event_export");
       const chunks: string[] = [];
-      const count = store.exportEvents(
+      const count = await store.exportEvents(
         {
           ...args,
           project_id: await store.resolveProjectId(args.project_id),
@@ -1088,9 +1084,8 @@ export function buildServer(): McpServer {
       page_id: z.string().optional(),
     },
     async ({ project_id, page_id }) => {
-      const store = local("perf_snapshot");
       const resolved = (await store.resolveProjectId(project_id)) ?? project_id;
-      const snap = store.latestPerfSnapshot(resolved, page_id);
+      const snap = await store.latestPerfSnapshot(resolved, page_id);
       return {
         content: [
           {
@@ -1113,14 +1108,13 @@ export function buildServer(): McpServer {
       limit: z.number().optional(),
     },
     async ({ project_id, page_id, since, limit }) => {
-      const store = local("perf_trend");
       const resolved = (await store.resolveProjectId(project_id)) ?? project_id;
       return {
         content: [
           {
             type: "text",
             text: JSON.stringify(
-              store.perfTrend(
+              await store.perfTrend(
                 resolved,
                 page_id,
                 parseTime(since) ?? since,
@@ -1177,14 +1171,13 @@ export function buildServer(): McpServer {
       limit: z.number().optional(),
     },
     async ({ project_id, status, limit }) => {
-      const store = local("list_issues");
       const resolved = await store.resolveProjectId(project_id);
       return {
         content: [
           {
             type: "text",
             text: JSON.stringify(
-              store.listIssues(resolved, status, limit ?? 50),
+              await store.listIssues(resolved, status, limit ?? 50),
             ),
           },
         ],
@@ -1198,14 +1191,12 @@ export function buildServer(): McpServer {
       id: z.string(),
       status: z.enum(["open", "resolved", "ignored"]),
     },
-    ({ id, status }) => {
+    async ({ id, status }) => {
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify(
-              local("resolve_issue").updateIssueStatus(id, status),
-            ),
+            text: JSON.stringify(await store.updateIssueStatus(id, status)),
           },
         ],
       };
@@ -1225,7 +1216,6 @@ export function buildServer(): McpServer {
       webhook_url: z.string().optional(),
     },
     async (args) => {
-      const store = local("create_alert_rule");
       const resolved =
         (await store.resolveProjectId(args.project_id)) ?? args.project_id;
       return {
@@ -1233,7 +1223,7 @@ export function buildServer(): McpServer {
           {
             type: "text",
             text: JSON.stringify(
-              store.createAlertRule({ ...args, project_id: resolved }),
+              await store.createAlertRule({ ...args, project_id: resolved }),
             ),
           },
         ],
@@ -1247,21 +1237,20 @@ export function buildServer(): McpServer {
       project_id: z.string().optional(),
     },
     async ({ project_id }) => {
-      const store = local("list_alert_rules");
       const resolved = await store.resolveProjectId(project_id);
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify(store.listAlertRules(resolved)),
+            text: JSON.stringify(await store.listAlertRules(resolved)),
           },
         ],
       };
     },
   );
 
-  registerTool("delete_alert_rule", { id: z.string() }, ({ id }) => {
-    local("delete_alert_rule").deleteAlertRule(id);
+  registerTool("delete_alert_rule", { id: z.string() }, async ({ id }) => {
+    await store.deleteAlertRule(id);
     return { content: [{ type: "text", text: "deleted" }] };
   });
 
@@ -1342,7 +1331,7 @@ export function buildServer(): McpServer {
     },
     async (params) => {
       try {
-        local("send_feedback").recordFeedback(
+        await store.recordFeedback(
           params.message,
           params.email || null,
           params.category || "general",

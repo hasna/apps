@@ -2,8 +2,8 @@
 import { readFileSync } from "node:fs";
 import { registerEventsCommands } from "@hasna/events/commander";
 import { Command } from "commander";
-import type { CliEventWatchFilter, WatchEventRow } from "../lib/event-watch.ts";
 import { streamServerEvents } from "../lib/event-stream-client.ts";
+import type { CliEventWatchFilter, WatchEventRow } from "../lib/event-watch.ts";
 import type { EventCatalogEntry } from "../lib/events.ts";
 import { PACKAGE_VERSION } from "../lib/package-meta.ts";
 import type { StructuredLogFormat } from "../lib/structured-logs.ts";
@@ -782,12 +782,11 @@ eventsCmd
   .option("--limit <n>", "Max results", "100000")
   .option("--output <file>", "Output file (default: stdout)")
   .action(async (opts) => {
-    const local = requireLocalStore("events export");
     const options = {
       event_type: opts.type,
       source: opts.source,
       severity: opts.severity,
-      project_id: await local.resolveProjectId(opts.project),
+      project_id: await store.resolveProjectId(opts.project),
       trace_id: opts.trace,
       run_id: opts.run,
       text: opts.text,
@@ -799,12 +798,14 @@ eventsCmd
     if (opts.output) {
       const { createWriteStream } = await import("node:fs");
       const stream = createWriteStream(opts.output);
-      const count = local.exportEvents(options, (s) => stream.write(`${s}\n`));
+      const count = await store.exportEvents(options, (s) =>
+        stream.write(`${s}\n`),
+      );
       stream.end();
       console.error(`Exported ${count} event(s) to ${opts.output}`);
       return;
     }
-    const count = local.exportEvents(options, (s) =>
+    const count = await store.exportEvents(options, (s) =>
       process.stdout.write(`${s}\n`),
     );
     process.stderr.write(`Exported ${count} event(s)\n`);
@@ -1041,14 +1042,13 @@ program
     "Comma-separated: top_errors,error_rate,failing_pages,perf",
   )
   .action(async (opts) => {
-    const local = requireLocalStore("diagnose");
-    const projectId = await local.resolveProjectId(opts.project);
+    const projectId = await store.resolveProjectId(opts.project);
     if (!projectId) {
       console.error("--project required");
       process.exit(1);
     }
     const include = opts.include ? opts.include.split(",") : undefined;
-    const result = local.diagnose(projectId, opts.since, include);
+    const result = await store.diagnose(projectId, opts.since, include);
     const scoreColor =
       result.score === "green"
         ? "\x1b[32m"
@@ -1156,9 +1156,7 @@ program
       // targets an explicit server, so a resolver failure (e.g. cloud briefly
       // unreachable) must not crash it — fall back to the raw value.
       const serverProjectId = opts.project
-        ? await store
-            .resolveProjectId(opts.project)
-            .catch(() => opts.project)
+        ? await store.resolveProjectId(opts.project).catch(() => opts.project)
         : undefined;
       await watchServerEvents(opts, serverProjectId);
       return;

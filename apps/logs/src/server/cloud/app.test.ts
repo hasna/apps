@@ -101,6 +101,9 @@ function fakeClient(): {
     if (s.startsWith("SELECT") && s.includes("FROM logs")) {
       return [...state.logs.values()] as unknown as T[];
     }
+    if (s.startsWith("INSERT INTO feedback")) {
+      return [{ id: "fb1" } as unknown as T];
+    }
     return [];
   }
 
@@ -269,6 +272,72 @@ describe("cloud serve CRUD roundtrip", () => {
       body: JSON.stringify({ level: "nope", message: "x" }),
     });
     expect(res.status).toBe(400);
+  });
+});
+
+describe("cloud serve data-plane parity (v1 surface)", () => {
+  // Guards the review finding: events / test-reports / pages / jobs / perf /
+  // issues / alert-rules / diagnose / compare must exist on the cloud /v1 API
+  // so the ApiStore has parity with the local store after the fleet flip.
+  const readRoutes = [
+    "/v1/pages?project_id=p1",
+    "/v1/jobs",
+    "/v1/events",
+    "/v1/test-reports",
+    "/v1/perf/latest?project_id=p1",
+    "/v1/perf/trend?project_id=p1",
+    "/v1/issues",
+    "/v1/alert-rules",
+    "/v1/sessions/s1/context",
+    "/v1/diagnose?project_id=p1",
+    "/v1/compare?project_id=p1&a_since=2026-01-01&a_until=2026-01-02&b_since=2026-01-03&b_until=2026-01-04",
+    "/v1/logs/l1/context",
+  ];
+
+  for (const route of readRoutes) {
+    test(`GET ${route} requires a key (401)`, async () => {
+      const res = await app().request(route);
+      expect(res.status).toBe(401);
+    });
+
+    test(`GET ${route} succeeds with logs:read`, async () => {
+      const res = await app().request(route, {
+        headers: { "x-api-key": tokenWith(["logs:read"]) },
+      });
+      expect(res.status).toBe(200);
+    });
+  }
+
+  test("write routes reject insufficient scope (403)", async () => {
+    const h = {
+      "x-api-key": tokenWith(["logs:read"]),
+      "content-type": "application/json",
+    };
+    const pages = await app().request("/v1/pages", {
+      method: "POST",
+      headers: h,
+      body: JSON.stringify({ project_id: "p1", url: "https://x.test/" }),
+    });
+    expect(pages.status).toBe(403);
+    const alerts = await app().request("/v1/alert-rules", {
+      method: "POST",
+      headers: h,
+      body: JSON.stringify({ project_id: "p1", name: "r" }),
+    });
+    expect(alerts.status).toBe(403);
+  });
+
+  test("feedback requires logs:write and accepts a message", async () => {
+    const res = await app().request("/v1/feedback", {
+      method: "POST",
+      headers: {
+        "x-api-key": tokenWith(["logs:write"]),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ message: "great tool" }),
+    });
+    expect(res.status).toBe(201);
+    expect((await res.json()).ok).toBe(true);
   });
 });
 

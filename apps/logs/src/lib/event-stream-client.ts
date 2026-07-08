@@ -55,9 +55,7 @@ export async function* streamServerEvents(
 
   const response = await fetch(req.url, { headers, signal: req.signal });
   if (!response.ok) {
-    throw new Error(
-      `Stream failed: ${response.status} ${response.statusText}`,
-    );
+    throw new Error(`Stream failed: ${response.status} ${response.statusText}`);
   }
   yield* readSseMessages(response.body);
 }

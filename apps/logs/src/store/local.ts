@@ -306,28 +306,28 @@ export class LocalStore implements Store {
     return ingestUniversalEvent(getDb(), input);
   }
 
-  exportEvents(
+  async exportEvents(
     query: EventCatalogQuery,
     writeLine: (line: string) => void,
-  ): number {
+  ): Promise<number> {
     return exportEventsToJson(getDb(), query, writeLine);
   }
 
-  diagnose(
+  async diagnose(
     projectId: string,
     since?: string,
     include?: DiagnoseInclude[],
-  ): DiagnosisResult {
+  ): Promise<DiagnosisResult> {
     return diagnose(getDb(), projectId, since, include);
   }
 
-  compareWindows(
+  async compareWindows(
     projectId: string,
     aSince: string,
     aUntil: string,
     bSince: string,
     bUntil: string,
-  ): CompareResult {
+  ): Promise<CompareResult> {
     return compare(getDb(), projectId, aSince, aUntil, bSince, bUntil);
   }
 
@@ -335,55 +335,59 @@ export class LocalStore implements Store {
     return getSessionContext(getDb(), sessionId);
   }
 
-  logContextFromId(logId: string, window: number): LogRow[] {
+  async getLogContextFromId(logId: string, window: number): Promise<LogRow[]> {
     return getLogContextFromId(getDb(), logId, window);
   }
 
-  latestPerfSnapshot(
+  async latestPerfSnapshot(
     projectId: string,
     pageId?: string,
-  ): PerformanceSnapshot | null {
+  ): Promise<PerformanceSnapshot | null> {
     return getLatestSnapshot(getDb(), projectId, pageId);
   }
 
-  perfTrend(
+  async perfTrend(
     projectId: string,
     pageId?: string,
     since?: string,
     limit?: number,
-  ): PerformanceSnapshot[] {
+  ): Promise<PerformanceSnapshot[]> {
     return getPerfTrend(getDb(), projectId, pageId, since, limit);
   }
 
-  listIssues(projectId?: string, status?: string, limit?: number): Issue[] {
+  async listIssues(
+    projectId?: string,
+    status?: string,
+    limit?: number,
+  ): Promise<Issue[]> {
     return listIssues(getDb(), projectId, status, limit);
   }
 
-  updateIssueStatus(
+  async updateIssueStatus(
     id: string,
     status: "open" | "resolved" | "ignored",
-  ): Issue | null {
+  ): Promise<Issue | null> {
     return updateIssueStatus(getDb(), id, status);
   }
 
-  createAlertRule(input: CreateAlertRuleInput): AlertRule {
+  async createAlertRule(input: CreateAlertRuleInput): Promise<AlertRule> {
     return createAlertRule(getDb(), input);
   }
 
-  listAlertRules(projectId?: string): AlertRule[] {
+  async listAlertRules(projectId?: string): Promise<AlertRule[]> {
     return listAlertRules(getDb(), projectId);
   }
 
-  deleteAlertRule(id: string): void {
+  async deleteAlertRule(id: string): Promise<void> {
     deleteAlertRule(getDb(), id);
   }
 
-  recordFeedback(
+  async recordFeedback(
     message: string,
     email: string | null,
     category: string,
     version: string,
-  ): void {
+  ): Promise<void> {
     getDb().run(
       "INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)",
       [message, email, category, version],
