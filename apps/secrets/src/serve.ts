@@ -254,7 +254,7 @@ export async function startHttpServer(options: { port?: number } = {}): Promise<
       if (url.pathname === "/v1/match") {
         const targetUrl = url.searchParams.get("url");
         if (!targetUrl) return err("Missing url", 400, cors);
-        return json({ matches: matchUrl(targetUrl) }, 200, cors);
+        return json({ matches: await matchUrl(targetUrl) }, 200, cors);
       }
 
       return err("Not found", 404, cors);

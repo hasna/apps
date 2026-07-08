@@ -1,5 +1,22 @@
-// @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: SecretsApi 0.1.32
+// Typed client for the secrets serve API (@hasna/secrets/sdk).
+//
+// The method surface mirrors the serve OpenAPI document (src/server/openapi.ts).
+// It does NOT open its own HTTP transport: every request routes through the ONE
+// shared Hasna transport (createHasnaHttpTransport) that the ApiStore uses, so
+// there is a single auth/retry/timeout implementation — no raw `fetch` and no
+// second parallel transport. Auth is sent as BOTH `Authorization: Bearer` and
+// `x-api-key` (the serve accepts either), matching the Store transport exactly.
+//
+// This is a client-only surface: it always talks to a remote `<baseUrl>` and can
+// never touch local data, so it cannot split-brain.
+
+import {
+  createHasnaHttpTransport,
+  HasnaHttpError,
+  type HasnaHttpTransport,
+  type HasnaRequestOptions,
+  type QueryParams,
+} from "../store/contracts-client/transport.js";
 
 export interface Status { "status": string; "version": string; "mode": string }
 
@@ -20,9 +37,9 @@ export interface VaultItemInput { "id"?: string; "kind": string; "title": string
 export interface UserInput { "id": string; "name": string; "type"?: "human" | "agent" }
 
 export interface SecretsClientOptions {
-  /** Base URL, e.g. process.env.APP_API_URL. */
+  /** Base URL origin, e.g. process.env.APP_API_URL (`https://secrets.hasna.xyz`). */
   baseUrl: string;
-  /** API key, e.g. process.env.APP_API_KEY. Sent as the 'x-api-key' header. */
+  /** API key, e.g. process.env.APP_API_KEY. Sent as Bearer + x-api-key. */
   apiKey?: string;
   /** Custom fetch (defaults to global fetch). */
   fetch?: typeof fetch;
@@ -38,40 +55,35 @@ export class ApiError extends Error {
 }
 
 export class SecretsClient {
-  private readonly baseUrl: string;
-  private readonly apiKey: string | undefined;
-  private readonly fetchImpl: typeof fetch;
-  private readonly baseHeaders: Record<string, string>;
+  private readonly transport: HasnaHttpTransport;
 
   constructor(options: SecretsClientOptions) {
     if (!options.baseUrl) throw new Error("SecretsClient requires a baseUrl.");
-    this.baseUrl = options.baseUrl.replace(/\/$/, "");
-    this.apiKey = options.apiKey;
-    this.fetchImpl = options.fetch ?? globalThis.fetch;
-    this.baseHeaders = options.headers ?? {};
+    // The OpenAPI paths already carry their own prefix (`/v1/...`, `/health`,
+    // `/version`), so the transport base is the raw origin, not `<origin>/v1`.
+    this.transport = createHasnaHttpTransport({
+      name: "secrets",
+      baseUrl: options.baseUrl.replace(/\/+$/, ""),
+      apiKey: options.apiKey ?? "",
+      ...(options.fetch ? { fetchImpl: (input, init) => options.fetch!(input, init) } : {}),
+      ...(options.headers ? { headers: options.headers } : {}),
+    });
   }
 
   private async request<T>(method: string, path: string, opts: { body?: unknown; query?: Record<string, unknown>; init?: RequestInit }): Promise<T> {
-    const url = new URL(this.baseUrl + path);
-    if (opts.query) {
-      for (const [key, value] of Object.entries(opts.query)) {
-        if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
+    const requestOpts: HasnaRequestOptions = {};
+    if (opts.query) requestOpts.query = opts.query as QueryParams;
+    const initHeaders = opts.init?.headers as Record<string, string> | undefined;
+    if (initHeaders) requestOpts.headers = initHeaders;
+    if (opts.init?.signal) requestOpts.signal = opts.init.signal;
+    try {
+      return await this.transport.request<T>(method, path, opts.body, requestOpts);
+    } catch (error) {
+      if (error instanceof HasnaHttpError) {
+        throw new ApiError(error.status, `${method} ${path} failed: ${error.status}`, error.body);
       }
+      throw error;
     }
-    const headers: Record<string, string> = { Accept: "application/json", ...this.baseHeaders, ...(opts.init?.headers as Record<string, string> | undefined) };
-    if (this.apiKey) headers["x-api-key"] = this.apiKey;
-    let payload: BodyInit | undefined;
-    if (opts.body !== undefined) {
-      headers["Content-Type"] = "application/json";
-      payload = JSON.stringify(opts.body);
-    }
-    const response = await this.fetchImpl(url.toString(), { ...opts.init, method, headers, body: payload });
-    const text = await response.text();
-    const data = text ? (() => { try { return JSON.parse(text); } catch { return text; } })() : undefined;
-    if (!response.ok) {
-      throw new ApiError(response.status, `${method} ${path} failed: ${response.status}`, data);
-    }
-    return data as T;
   }
 
     /** Liveness probe */

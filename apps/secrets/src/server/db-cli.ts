@@ -1,9 +1,10 @@
 /**
- * `secrets db <migrate|status|init>` — the cloud migration runner.
+ * `secrets-serve db <migrate|status|init>` — the cloud migration runner.
  *
- * Invoked by the one-shot ECS migration task (["secrets","db","migrate"]) before
- * every service update, and usable locally against a throwaway Postgres. Runs
- * the checksummed MigrationLedger over SECRETS_MIGRATIONS (PURE REMOTE, A1).
+ * Invoked by the one-shot ECS migration task (["secrets-serve","db","migrate"])
+ * before every service update, and usable locally against a throwaway Postgres.
+ * Runs the checksummed MigrationLedger over SECRETS_MIGRATIONS (PURE REMOTE, A1).
+ * Lives in the server bundle only — the client `secrets` binary never ships it.
  */
 
 import { createCloudPoolFromEnv, MigrationLedger } from "../generated/storage-kit/index.js";
