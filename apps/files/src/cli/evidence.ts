@@ -1,17 +1,8 @@
 import { Command } from "commander";
 import chalk from "chalk";
+import { store } from "../store/index.js";
 import {
-  completeEvidenceUpload,
-  createEvidenceUploadIntent,
   getEvidenceStorageOptions,
-  getFileAsset,
-  linkEvidenceAsset,
-  listFileAccessEvents,
-  listFileAssets,
-  listFileLinks,
-  signEvidenceDownload,
-  uploadEvidenceFile,
-  verifyEvidenceAsset,
   DEFAULT_EVIDENCE_S3_BUCKET,
   type EvidenceStorageOptions,
 } from "../lib/evidence.js";
@@ -63,7 +54,7 @@ export function registerEvidenceCommands(program: Command): void {
     .option("--json", "Output as JSON")
     .action(async (opts: EvidenceCreateUploadOptions) => {
       await runCli(async () => {
-        const result = await createEvidenceUploadIntent({
+        const result = await store().createEvidenceUploadIntent({
           org_id: opts.org,
           company_id: opts.company,
           app: opts.app,
@@ -101,7 +92,7 @@ export function registerEvidenceCommands(program: Command): void {
     .option("--json", "Output as JSON")
     .action(async (path: string, opts: EvidenceUploadOptions) => {
       await runCli(async () => {
-        const result = await uploadEvidenceFile({
+        const result = await store().uploadEvidenceFile({
           path,
           org_id: opts.org,
           company_id: opts.company,
@@ -111,7 +102,7 @@ export function registerEvidenceCommands(program: Command): void {
           storage_class: opts.storageClass,
         }, storageOptions(opts));
         const link = opts.sourceType && opts.sourceId
-          ? linkEvidenceAsset({
+          ? await store().linkEvidenceAsset({
               asset_id: result.asset.id,
               org_id: opts.org,
               company_id: opts.company,
@@ -137,7 +128,7 @@ export function registerEvidenceCommands(program: Command): void {
     .option("--json", "Output as JSON")
     .action(async (intentId: string, opts: EvidenceStorageCliOptions) => {
       await runCli(async () => {
-        const asset = await completeEvidenceUpload(intentId, storageOptions(opts));
+        const asset = await store().completeEvidenceUpload(intentId, storageOptions(opts));
         printResult(asset, opts.json, `Completed upload for ${asset.id}`);
       });
     });
@@ -152,9 +143,9 @@ export function registerEvidenceCommands(program: Command): void {
     .requiredOption("--kind <kind>", "Link kind")
     .option("--company <companyId>", "Company ID")
     .option("--json", "Output as JSON")
-    .action((assetId: string, opts: EvidenceLinkOptions) => {
-      runCliSync(() => {
-        const link = linkEvidenceAsset({
+    .action(async (assetId: string, opts: EvidenceLinkOptions) => {
+      await runCli(async () => {
+        const link = await store().linkEvidenceAsset({
           asset_id: assetId,
           org_id: opts.org,
           company_id: opts.company,
@@ -182,7 +173,7 @@ export function registerEvidenceCommands(program: Command): void {
     .option("--json", "Output as JSON")
     .action(async (assetId: string, opts: EvidenceDownloadOptions) => {
       await runCli(async () => {
-        const grant = await signEvidenceDownload({
+        const grant = await store().signEvidenceDownload({
           asset_id: assetId,
           actor_id: opts.actor,
           purpose: opts.purpose,
@@ -204,7 +195,7 @@ export function registerEvidenceCommands(program: Command): void {
     .option("--json", "Output as JSON")
     .action(async (assetId: string, opts: EvidenceStorageCliOptions) => {
       await runCli(async () => {
-        const result = await verifyEvidenceAsset(assetId, storageOptions(opts));
+        const result = await store().verifyEvidenceAsset(assetId, storageOptions(opts));
         printResult(result, opts.json, result.ok ? `Verified ${assetId}` : `Verification failed: ${result.diagnostics.join(", ")}`);
       });
     });
@@ -219,9 +210,9 @@ export function registerEvidenceCommands(program: Command): void {
     .option("--status <status>", "Status")
     .option("--limit <n>", "Limit", "50")
     .option("--json", "Output as JSON")
-    .action((opts: EvidenceListOptions) => {
-      runCliSync(() => {
-        const assets = listFileAssets({
+    .action(async (opts: EvidenceListOptions) => {
+      await runCli(async () => {
+        const assets = await store().listEvidenceAssets({
           org_id: opts.org,
           company_id: opts.company,
           app: opts.app,
@@ -243,14 +234,14 @@ export function registerEvidenceCommands(program: Command): void {
     .command("audit <asset-id>")
     .description("Show links and access events for a file asset")
     .option("--json", "Output as JSON")
-    .action((assetId: string, opts: { json?: boolean }) => {
-      runCliSync(() => {
-        const asset = getFileAsset(assetId);
+    .action(async (assetId: string, opts: { json?: boolean }) => {
+      await runCli(async () => {
+        const asset = await store().getEvidenceAsset(assetId);
         if (!asset) throw new Error(`File asset not found: ${assetId}`);
         const result = {
           asset,
-          links: listFileLinks(assetId),
-          events: listFileAccessEvents(assetId),
+          links: await store().listEvidenceLinks(assetId),
+          events: await store().listEvidenceAccessEvents(assetId),
         };
         if (opts.json) {
           console.log(JSON.stringify(result, null, 2));
@@ -351,15 +342,6 @@ function parseFileAssetStatus(value: string | undefined): FileAssetStatus | unde
 async function runCli(fn: () => Promise<void>): Promise<void> {
   try {
     await fn();
-  } catch (error) {
-    console.error(chalk.red((error as Error).message));
-    process.exit(1);
-  }
-}
-
-function runCliSync(fn: () => void): void {
-  try {
-    fn();
   } catch (error) {
     console.error(chalk.red((error as Error).message));
     process.exit(1);

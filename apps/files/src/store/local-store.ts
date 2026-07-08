@@ -59,6 +59,29 @@ import {
   updateProject,
 } from "../db/projects.js";
 import { recordFeedback } from "../db/feedback.js";
+import {
+  completeEvidenceUpload,
+  createEvidenceUploadIntent,
+  linkEvidenceAsset,
+  signEvidenceDownload,
+  uploadEvidenceFile,
+  verifyEvidenceAsset,
+  type CreateEvidenceUploadInput,
+  type EvidenceDownloadGrant,
+  type EvidenceStorageOptions,
+  type EvidenceUploadResult,
+  type EvidenceVerifyResult,
+  type SignEvidenceDownloadInput,
+  type UploadEvidenceFileInput,
+} from "../lib/evidence.js";
+import {
+  getFileAsset,
+  listFileAccessEvents,
+  listFileAssets,
+  listFileLinks,
+  type ListFileAssetsOptions,
+} from "../db/evidence.js";
+import type { CreateFileLinkInput, FileAccessEvent, FileAsset, FileLink } from "../types/index.js";
 import { getAgent, listAgents, registerAgent, setAgentFocus, updateAgentHeartbeat } from "../db/agents.js";
 import { getAgentActivity, getFileHistory, getSessionActivity, logActivity } from "../db/activity.js";
 import { requireId, resolveId } from "../db/resolve.js";
@@ -265,5 +288,38 @@ export class LocalStore implements FilesStore {
   }
   async getSessionActivity(sessionId: string, opts: ActivityQueryOptions = {}): Promise<AgentActivity[]> {
     return getSessionActivity(sessionId, opts);
+  }
+
+  // ── evidence ───────────────────────────────────────────────────────────────
+  // Uses the default (sqlite) evidence DB seam; bytes on local disk / S3.
+  async createEvidenceUploadIntent(input: CreateEvidenceUploadInput, storage?: EvidenceStorageOptions): Promise<EvidenceUploadResult> {
+    return createEvidenceUploadIntent(input, storage);
+  }
+  async uploadEvidenceFile(input: UploadEvidenceFileInput, storage?: EvidenceStorageOptions): Promise<EvidenceUploadResult> {
+    return uploadEvidenceFile(input, storage);
+  }
+  async completeEvidenceUpload(intentId: string, storage?: EvidenceStorageOptions): Promise<FileAsset> {
+    return completeEvidenceUpload(intentId, storage);
+  }
+  async linkEvidenceAsset(input: CreateFileLinkInput): Promise<FileLink> {
+    return linkEvidenceAsset(input);
+  }
+  async signEvidenceDownload(input: SignEvidenceDownloadInput, storage?: EvidenceStorageOptions): Promise<EvidenceDownloadGrant> {
+    return signEvidenceDownload(input, storage);
+  }
+  async verifyEvidenceAsset(assetId: string, storage?: EvidenceStorageOptions): Promise<EvidenceVerifyResult> {
+    return verifyEvidenceAsset(assetId, storage);
+  }
+  async listEvidenceAssets(opts: ListFileAssetsOptions = {}): Promise<FileAsset[]> {
+    return listFileAssets(opts);
+  }
+  async getEvidenceAsset(id: string): Promise<FileAsset | null> {
+    return getFileAsset(id);
+  }
+  async listEvidenceLinks(assetId: string): Promise<FileLink[]> {
+    return listFileLinks(assetId);
+  }
+  async listEvidenceAccessEvents(assetId: string, limit = 50): Promise<FileAccessEvent[]> {
+    return listFileAccessEvents(assetId, limit);
   }
 }

@@ -26,7 +26,11 @@ import type {
   AgentActivity,
   AutoRules,
   Collection,
+  CreateFileLinkInput,
   DuplicateGroup,
+  FileAccessEvent,
+  FileAsset,
+  FileLink,
   FileWithTags,
   ListFilesOptions,
   Machine,
@@ -38,6 +42,16 @@ import type {
   SourceType,
   Tag,
 } from "../types/index.js";
+import type {
+  CreateEvidenceUploadInput,
+  EvidenceDownloadGrant,
+  EvidenceStorageOptions,
+  EvidenceUploadResult,
+  EvidenceVerifyResult,
+  SignEvidenceDownloadInput,
+  UploadEvidenceFileInput,
+} from "../lib/evidence.js";
+import type { ListFileAssetsOptions } from "../db/evidence.js";
 
 /** Input to {@link FilesStore.createSource}. `machine_id` is honored by the
  *  LocalStore and dropped by the ApiStore (the cloud assigns the owner). */
@@ -217,4 +231,24 @@ export interface FilesStore {
   getFileHistory(fileId: string, opts?: ActivityQueryOptions): Promise<AgentActivity[]>;
   getAgentActivity(agentId: string, opts?: ActivityQueryOptions): Promise<AgentActivity[]>;
   getSessionActivity(sessionId: string, opts?: ActivityQueryOptions): Promise<AgentActivity[]>;
+
+  // ── evidence (shared cross-app vault) ──────────────────────────────────────
+  /**
+   * The shared evidence vault (used by iapp-* apps for compliance receipts,
+   * etc.). Both transports are first-class: LocalStore keeps metadata in on-box
+   * SQLite and bytes on local disk / S3; ApiStore routes metadata to the cloud
+   * `/v1/evidence` surface where the SERVER owns S3 storage (bytes go to the
+   * shared bucket via a server-signed URL). The `storage` overrides are honored
+   * only by the LocalStore; the ApiStore ignores them (server-owned storage).
+   */
+  createEvidenceUploadIntent(input: CreateEvidenceUploadInput, storage?: EvidenceStorageOptions): Promise<EvidenceUploadResult>;
+  uploadEvidenceFile(input: UploadEvidenceFileInput, storage?: EvidenceStorageOptions): Promise<EvidenceUploadResult>;
+  completeEvidenceUpload(intentId: string, storage?: EvidenceStorageOptions): Promise<FileAsset>;
+  linkEvidenceAsset(input: CreateFileLinkInput): Promise<FileLink>;
+  signEvidenceDownload(input: SignEvidenceDownloadInput, storage?: EvidenceStorageOptions): Promise<EvidenceDownloadGrant>;
+  verifyEvidenceAsset(assetId: string, storage?: EvidenceStorageOptions): Promise<EvidenceVerifyResult>;
+  listEvidenceAssets(opts?: ListFileAssetsOptions): Promise<FileAsset[]>;
+  getEvidenceAsset(id: string): Promise<FileAsset | null>;
+  listEvidenceLinks(assetId: string): Promise<FileLink[]>;
+  listEvidenceAccessEvents(assetId: string, limit?: number): Promise<FileAccessEvent[]>;
 }

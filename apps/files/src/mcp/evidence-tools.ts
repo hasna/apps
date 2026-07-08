@@ -1,16 +1,6 @@
 import { z } from "zod";
-import {
-  completeEvidenceUpload,
-  createEvidenceUploadIntent,
-  linkEvidenceAsset,
-  listFileAccessEvents,
-  listFileAssets,
-  listFileLinks,
-  signEvidenceDownload,
-  uploadEvidenceFile,
-  verifyEvidenceAsset,
-  type EvidenceStorageOptions,
-} from "../lib/evidence.js";
+import { store } from "../store/index.js";
+import type { EvidenceStorageOptions } from "../lib/evidence.js";
 import type { FileAssetStatus, FileStorageProvider } from "../types/index.js";
 
 type ToolHandler = (params: any) => unknown | Promise<unknown>;
@@ -52,7 +42,7 @@ export function registerEvidenceTools(registerTool: RegisterTool): void {
     expires_in_seconds: z.number().int().positive().optional(),
     ...storageSchema,
   }, async (params) => {
-    const result = await createEvidenceUploadIntent({
+    const result = await store().createEvidenceUploadIntent({
       org_id: params.org_id,
       company_id: params.company_id,
       app: params.app,
@@ -89,7 +79,7 @@ export function registerEvidenceTools(registerTool: RegisterTool): void {
     metadata: z.record(z.unknown()).optional(),
     ...storageSchema,
   }, async (params) => {
-    const result = await uploadEvidenceFile({
+    const result = await store().uploadEvidenceFile({
       path: params.path,
       org_id: params.org_id,
       company_id: params.company_id,
@@ -110,7 +100,7 @@ export function registerEvidenceTools(registerTool: RegisterTool): void {
   registerTool("complete_evidence_upload", "Complete an evidence upload intent after bytes are uploaded", {
     intent_id: z.string(),
     ...storageSchema,
-  }, async (params) => jsonResult(await completeEvidenceUpload(params.intent_id, storageOptions(params))));
+  }, async (params) => jsonResult(await store().completeEvidenceUpload(params.intent_id, storageOptions(params))));
 
   registerTool("link_evidence_asset", "Link a verified evidence asset to an app domain record", {
     asset_id: z.string(),
@@ -121,7 +111,7 @@ export function registerEvidenceTools(registerTool: RegisterTool): void {
     source_id: z.string(),
     kind: z.string(),
     metadata: z.record(z.unknown()).optional(),
-  }, (params) => jsonResult(linkEvidenceAsset({
+  }, async (params) => jsonResult(await store().linkEvidenceAsset({
     asset_id: params.asset_id,
     org_id: params.org_id,
     company_id: params.company_id,
@@ -138,7 +128,7 @@ export function registerEvidenceTools(registerTool: RegisterTool): void {
     purpose: z.string().optional(),
     expires_in_seconds: z.number().int().positive().optional(),
     ...storageSchema,
-  }, async (params) => jsonResult(await signEvidenceDownload({
+  }, async (params) => jsonResult(await store().signEvidenceDownload({
     asset_id: params.asset_id,
     actor_id: params.actor_id,
     purpose: params.purpose,
@@ -148,7 +138,7 @@ export function registerEvidenceTools(registerTool: RegisterTool): void {
   registerTool("verify_evidence_asset", "Verify evidence object size and checksum", {
     asset_id: z.string(),
     ...storageSchema,
-  }, async (params) => jsonResult(await verifyEvidenceAsset(params.asset_id, storageOptions(params))));
+  }, async (params) => jsonResult(await store().verifyEvidenceAsset(params.asset_id, storageOptions(params))));
 
   registerTool("list_evidence_assets", "List shared evidence assets with app/company filters", {
     org_id: z.string().optional(),
@@ -159,7 +149,7 @@ export function registerEvidenceTools(registerTool: RegisterTool): void {
     checksum: z.string().optional(),
     limit: z.number().int().positive().optional(),
     offset: z.number().int().nonnegative().optional(),
-  }, (params) => jsonResult(listFileAssets({
+  }, async (params) => jsonResult(await store().listEvidenceAssets({
     org_id: params.org_id,
     company_id: params.company_id,
     app: params.app,
@@ -173,9 +163,9 @@ export function registerEvidenceTools(registerTool: RegisterTool): void {
   registerTool("audit_evidence_asset", "Return evidence asset links and access audit events", {
     asset_id: z.string(),
     limit: z.number().int().positive().optional(),
-  }, (params) => jsonResult({
-    links: listFileLinks(params.asset_id),
-    events: listFileAccessEvents(params.asset_id, params.limit ?? 50),
+  }, async (params) => jsonResult({
+    links: await store().listEvidenceLinks(params.asset_id),
+    events: await store().listEvidenceAccessEvents(params.asset_id, params.limit ?? 50),
   }));
 }
 

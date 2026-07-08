@@ -107,4 +107,39 @@ describe("ApiStore route mapping", () => {
     expect(find("GET", "/agents/ag_1/activity")).toBeDefined();
     expect(find("GET", "/sessions/sess_1/activity")).toBeDefined();
   });
+
+  it("routes the shared evidence vault through /v1/evidence (never local sqlite)", async () => {
+    const { transport, calls } = fakeTransport();
+    const store = new ApiStore(createHasnaStorageClient("files", transport));
+
+    await store.createEvidenceUploadIntent({
+      org_id: "org_1", app: "iapp-accounting", kind: "receipt",
+      original_name: "r.pdf", size: 10, checksum: "a".repeat(64),
+    });
+    await store.completeEvidenceUpload("upl_1");
+    await store.linkEvidenceAsset({
+      asset_id: "asset_1", org_id: "org_1", app: "iapp-accounting",
+      source_type: "invoice", source_id: "inv_1", kind: "supporting_document",
+    });
+    await store.signEvidenceDownload({ asset_id: "asset_1", actor_id: "a1" });
+    await store.verifyEvidenceAsset("asset_1");
+    await store.listEvidenceAssets({ org_id: "org_1", app: "iapp-accounting" });
+    await store.getEvidenceAsset("asset_1");
+    await store.listEvidenceLinks("asset_1");
+    await store.listEvidenceAccessEvents("asset_1", 20);
+
+    const find = (method: string, path: string) => calls.find((c) => c.method === method && c.path === path);
+
+    expect(find("POST", "/evidence/upload-intents")?.body).toMatchObject({ org_id: "org_1", app: "iapp-accounting", kind: "receipt" });
+    expect(find("POST", "/evidence/upload-intents/upl_1/complete")).toBeDefined();
+    // asset_id travels in the path, not the body.
+    expect(find("POST", "/evidence/assets/asset_1/links")?.body).toMatchObject({ source_type: "invoice", source_id: "inv_1" });
+    expect((find("POST", "/evidence/assets/asset_1/links")?.body as Record<string, unknown>).asset_id).toBeUndefined();
+    expect(find("POST", "/evidence/assets/asset_1/sign-download")?.body).toMatchObject({ actor_id: "a1" });
+    expect(find("POST", "/evidence/assets/asset_1/verify")).toBeDefined();
+    expect(find("GET", "/evidence/assets")).toBeDefined();
+    expect(find("GET", "/evidence/assets/asset_1")).toBeDefined();
+    expect(find("GET", "/evidence/assets/asset_1/links")).toBeDefined();
+    expect(find("GET", "/evidence/assets/asset_1/access-events")).toBeDefined();
+  });
 });

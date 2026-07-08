@@ -10,7 +10,22 @@ import { ApiKeyStore, verifyApiKey, type ApiKeyVerifier } from "@hasna/contracts
 import { getCloudClient } from "./pg-store.js";
 import * as store from "./pg-store.js";
 import { generateCanonicalName } from "../lib/normalize.js";
+import {
+  completeEvidenceUpload,
+  createEvidenceUploadIntent,
+  linkEvidenceAsset,
+  signEvidenceDownload,
+  verifyEvidenceAsset,
+} from "../lib/evidence.js";
+import type { FileAssetStatus } from "../types/index.js";
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
+
+const FILE_ASSET_STATUSES: readonly FileAssetStatus[] = [
+  "pending_upload", "uploaded", "verified", "archived", "deleted",
+];
+function asAssetStatus(value: string | null | undefined): FileAssetStatus | undefined {
+  return value && (FILE_ASSET_STATUSES as readonly string[]).includes(value) ? (value as FileAssetStatus) : undefined;
+}
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -388,6 +403,88 @@ export function createV1Handler(): V1Handler {
 
         // ── /v1/stats ──────────────────────────────────────────────────
         if (seg[0] === "stats" && seg.length === 1 && method === "GET") return json(await store.stats(client));
+
+        // ── /v1/evidence (shared cross-app vault) ──────────────────────
+        // Storage (S3 bucket/region/creds) is SERVER-owned: the service uses its
+        // own configured storage and never honors client overrides, so a thin
+        // client can never redirect the vault. Metadata lives in cloud Postgres.
+        if (seg[0] === "evidence") {
+          const evDb = store.evidenceDbFor(client);
+          const serverStorage = {}; // env-configured server defaults only
+
+          if (seg[1] === "upload-intents" && seg.length === 2 && method === "POST") {
+            const b = await body();
+            const result = await createEvidenceUploadIntent({
+              org_id: b.org_id as string,
+              company_id: b.company_id as string | undefined,
+              app: b.app as string,
+              kind: b.kind as string,
+              original_name: b.original_name as string,
+              content_type: b.content_type as string | undefined,
+              size: Number(b.size),
+              checksum: b.checksum as string,
+              classification: b.classification as string | undefined,
+              retention_until: b.retention_until as string | undefined,
+              retention_policy: b.retention_policy as string | undefined,
+              storage_class: b.storage_class as string | undefined,
+              legal_hold: b.legal_hold as boolean | undefined,
+              immutable: b.immutable as boolean | undefined,
+              metadata: b.metadata as Record<string, unknown> | undefined,
+              expires_in_seconds: b.expires_in_seconds as number | undefined,
+            }, serverStorage, evDb);
+            return json(result, 201);
+          }
+          if (seg[1] === "upload-intents" && seg.length === 4 && seg[3] === "complete" && method === "POST") {
+            return json(await completeEvidenceUpload(seg[2]!, serverStorage, evDb));
+          }
+          if (seg[1] === "assets" && seg.length === 2 && method === "GET") {
+            return json(await store.evListFileAssets(client, {
+              org_id: q("org_id"),
+              company_id: q("company_id"),
+              app: q("app"),
+              kind: q("kind"),
+              status: asAssetStatus(q("status")),
+              checksum: q("checksum"),
+              limit: url.searchParams.has("limit") ? Number(q("limit")) : undefined,
+              offset: url.searchParams.has("offset") ? Number(q("offset")) : undefined,
+            }));
+          }
+          if (seg[1] === "assets" && seg.length === 3 && method === "GET") {
+            const asset = await store.evGetFileAsset(client, seg[2]!);
+            return asset ? json(asset) : err("Evidence asset not found", 404);
+          }
+          if (seg[1] === "assets" && seg.length === 4 && seg[3] === "links" && method === "POST") {
+            const b = await body();
+            return json(await linkEvidenceAsset({
+              asset_id: seg[2]!,
+              org_id: b.org_id as string,
+              company_id: b.company_id as string | undefined,
+              app: b.app as string,
+              source_type: b.source_type as string,
+              source_id: b.source_id as string,
+              kind: b.kind as string,
+              metadata: b.metadata as Record<string, unknown> | undefined,
+            }, evDb), 201);
+          }
+          if (seg[1] === "assets" && seg.length === 4 && seg[3] === "links" && method === "GET") {
+            return json(await store.evListFileLinks(client, seg[2]!));
+          }
+          if (seg[1] === "assets" && seg.length === 4 && seg[3] === "sign-download" && method === "POST") {
+            const b = await body();
+            return json(await signEvidenceDownload({
+              asset_id: seg[2]!,
+              actor_id: b.actor_id as string | undefined,
+              purpose: b.purpose as string | undefined,
+              expires_in_seconds: b.expires_in_seconds as number | undefined,
+            }, serverStorage, evDb));
+          }
+          if (seg[1] === "assets" && seg.length === 4 && seg[3] === "verify" && method === "POST") {
+            return json(await verifyEvidenceAsset(seg[2]!, serverStorage, evDb));
+          }
+          if (seg[1] === "assets" && seg.length === 4 && seg[3] === "access-events" && method === "GET") {
+            return json(await store.evListAccessEvents(client, seg[2]!, url.searchParams.has("limit") ? Number(q("limit")) : 50));
+          }
+        }
 
         return err("Not found", 404);
       } catch (e) {

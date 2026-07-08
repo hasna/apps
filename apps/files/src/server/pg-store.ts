@@ -16,6 +16,17 @@ import type {
   Agent,
   AgentActivity,
   Collection,
+  CreateFileAccessEventInput,
+  CreateFileAssetInput,
+  CreateFileLinkInput,
+  FileAccessAction,
+  FileAccessEvent,
+  FileAsset,
+  FileAssetStatus,
+  FileLink,
+  FileScanStatus,
+  FileStorageProvider,
+  FileUploadIntent,
   FileWithTags,
   Machine,
   Project,
@@ -23,6 +34,7 @@ import type {
   SourceType,
   Tag,
 } from "../types/index.js";
+import type { CreateUploadIntentInput, UpdateFileAssetStatusInput } from "../lib/evidence.js";
 
 const APP = "files";
 
@@ -756,5 +768,259 @@ export async function stats(client: TypedQueryClient): Promise<Record<string, un
     total_collections: Number(totalCollections?.cnt ?? 0),
     total_projects: Number(totalProjects?.cnt ?? 0),
     total_agents: Number(totalAgents?.cnt ?? 0),
+  };
+}
+
+// ── Evidence vault (shared cross-app assets) ────────────────────────────────
+// PG mirror of the on-box `db/evidence.ts` seam. Bound to a client by the `/v1`
+// evidence routes and injected into the shared orchestration in
+// `lib/evidence.ts`, so the self-hosted service and the local CLI run the SAME
+// choreography over their respective stores (never a second code path).
+
+export interface ListFileAssetsQuery {
+  org_id?: string;
+  company_id?: string;
+  app?: string;
+  kind?: string;
+  status?: FileAssetStatus;
+  checksum?: string;
+  limit?: number;
+  offset?: number;
+}
+
+function toEvAsset(r: Record<string, unknown>): FileAsset {
+  return {
+    id: String(r.id),
+    org_id: String(r.org_id),
+    company_id: r.company_id == null ? undefined : String(r.company_id),
+    app: String(r.app),
+    kind: String(r.kind),
+    classification: String(r.classification),
+    original_name: String(r.original_name),
+    content_type: String(r.content_type),
+    size: Number(r.size),
+    checksum: String(r.checksum),
+    checksum_algorithm: String(r.checksum_algorithm),
+    storage_provider: String(r.storage_provider) as FileStorageProvider,
+    bucket: r.bucket == null ? undefined : String(r.bucket),
+    region: r.region == null ? undefined : String(r.region),
+    object_key: String(r.object_key),
+    quarantine_key: r.quarantine_key == null ? undefined : String(r.quarantine_key),
+    status: String(r.status) as FileAssetStatus,
+    scan_status: String(r.scan_status) as FileScanStatus,
+    retention_until: r.retention_until == null ? undefined : String(r.retention_until),
+    retention_policy: r.retention_policy == null ? undefined : String(r.retention_policy),
+    storage_class: r.storage_class == null ? undefined : String(r.storage_class),
+    legal_hold: Boolean(r.legal_hold),
+    immutable: Boolean(r.immutable),
+    metadata: parseJson(r.metadata, {}),
+    created_at: String(r.created_at),
+    updated_at: String(r.updated_at),
+    verified_at: r.verified_at == null ? undefined : String(r.verified_at),
+  };
+}
+
+function toEvIntent(r: Record<string, unknown>): FileUploadIntent {
+  return {
+    id: String(r.id),
+    asset_id: String(r.asset_id),
+    method: "PUT",
+    upload_url: undefined,
+    expires_at: String(r.expires_at),
+    status: String(r.status) as FileUploadIntent["status"],
+    expected_checksum: String(r.expected_checksum),
+    expected_checksum_algorithm: String(r.expected_checksum_algorithm),
+    expected_size: Number(r.expected_size),
+    required_headers: parseJson(r.required_headers, {}) as Record<string, string>,
+    metadata: parseJson(r.metadata, {}),
+    created_at: String(r.created_at),
+    completed_at: r.completed_at == null ? undefined : String(r.completed_at),
+  };
+}
+
+function toEvLink(r: Record<string, unknown>): FileLink {
+  return {
+    id: String(r.id),
+    asset_id: String(r.asset_id),
+    org_id: String(r.org_id),
+    company_id: r.company_id == null ? undefined : String(r.company_id),
+    app: String(r.app),
+    source_type: String(r.source_type),
+    source_id: String(r.source_id),
+    kind: String(r.kind),
+    metadata: parseJson(r.metadata, {}),
+    created_at: String(r.created_at),
+  };
+}
+
+function toEvEvent(r: Record<string, unknown>): FileAccessEvent {
+  return {
+    id: String(r.id),
+    asset_id: String(r.asset_id),
+    org_id: String(r.org_id),
+    company_id: r.company_id == null ? undefined : String(r.company_id),
+    app: r.app == null ? undefined : String(r.app),
+    actor_id: r.actor_id == null ? undefined : String(r.actor_id),
+    action: String(r.action) as FileAccessAction,
+    purpose: r.purpose == null ? undefined : String(r.purpose),
+    metadata: parseJson(r.metadata, {}),
+    created_at: String(r.created_at),
+  };
+}
+
+export async function evCreateFileAsset(client: TypedQueryClient, input: CreateFileAssetInput): Promise<FileAsset> {
+  const id = input.id ?? `asset_${nanoid(12)}`;
+  await client.execute(
+    `INSERT INTO file_assets (
+      id, org_id, company_id, app, kind, classification, original_name, content_type,
+      size, checksum, checksum_algorithm, storage_provider, bucket, region, object_key,
+      quarantine_key, retention_until, retention_policy, storage_class, legal_hold, immutable, metadata
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
+    [
+      id, input.org_id, input.company_id ?? null, input.app, input.kind,
+      input.classification ?? "general", input.original_name, input.content_type,
+      input.size, input.checksum, input.checksum_algorithm ?? "sha256", input.storage_provider,
+      input.bucket ?? null, input.region ?? null, input.object_key, input.quarantine_key ?? null,
+      input.retention_until ?? null, input.retention_policy ?? null, input.storage_class ?? null,
+      input.legal_hold ? true : false, input.immutable ? true : false,
+      JSON.stringify(input.metadata ?? {}),
+    ],
+  );
+  return (await evGetFileAsset(client, id))!;
+}
+
+export async function evGetFileAsset(client: TypedQueryClient, id: string): Promise<FileAsset | null> {
+  const row = await client.get<Record<string, unknown>>("SELECT * FROM file_assets WHERE id = $1", [id]);
+  return row ? toEvAsset(row) : null;
+}
+
+export async function evListFileAssets(client: TypedQueryClient, opts: ListFileAssetsQuery = {}): Promise<FileAsset[]> {
+  const conditions: string[] = ["status != 'deleted'"];
+  const params: unknown[] = [];
+  const push = (col: string, val: unknown) => { params.push(val); conditions.push(`${col} = $${params.length}`); };
+  if (opts.org_id) push("org_id", opts.org_id);
+  if (opts.company_id) push("company_id", opts.company_id);
+  if (opts.app) push("app", opts.app);
+  if (opts.kind) push("kind", opts.kind);
+  if (opts.status) push("status", opts.status);
+  if (opts.checksum) push("checksum", opts.checksum);
+  params.push(opts.limit ?? 50);
+  const limitIdx = params.length;
+  params.push(opts.offset ?? 0);
+  const offsetIdx = params.length;
+  const rows = await client.many<Record<string, unknown>>(
+    `SELECT * FROM file_assets WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+    params,
+  );
+  return rows.map(toEvAsset);
+}
+
+export async function evCreateUploadIntent(client: TypedQueryClient, input: CreateUploadIntentInput): Promise<FileUploadIntent> {
+  const id = `upl_${nanoid(12)}`;
+  await client.execute(
+    `INSERT INTO file_upload_intents (
+      id, asset_id, expires_at, expected_checksum, expected_checksum_algorithm,
+      expected_size, required_headers, metadata
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [
+      id, input.asset_id, input.expires_at, input.expected_checksum,
+      input.expected_checksum_algorithm, input.expected_size,
+      JSON.stringify(input.required_headers ?? {}), JSON.stringify(input.metadata ?? {}),
+    ],
+  );
+  return (await evGetUploadIntent(client, id))!;
+}
+
+export async function evGetUploadIntent(client: TypedQueryClient, id: string): Promise<FileUploadIntent | null> {
+  const row = await client.get<Record<string, unknown>>("SELECT * FROM file_upload_intents WHERE id = $1", [id]);
+  return row ? toEvIntent(row) : null;
+}
+
+export async function evMarkUploadIntentCompleted(client: TypedQueryClient, id: string): Promise<FileUploadIntent | null> {
+  await client.execute(
+    "UPDATE file_upload_intents SET status = 'completed', completed_at = NOW()::text WHERE id = $1",
+    [id],
+  );
+  return evGetUploadIntent(client, id);
+}
+
+export async function evUpdateFileAssetStatus(client: TypedQueryClient, input: UpdateFileAssetStatusInput): Promise<FileAsset | null> {
+  await client.execute(
+    `UPDATE file_assets
+     SET status = $1, scan_status = COALESCE($2, scan_status), updated_at = NOW()::text,
+         verified_at = CASE WHEN $3 THEN NOW()::text ELSE verified_at END
+     WHERE id = $4`,
+    [input.status, input.scan_status ?? null, input.verified ? true : false, input.id],
+  );
+  return evGetFileAsset(client, input.id);
+}
+
+export async function evCreateFileLink(client: TypedQueryClient, input: CreateFileLinkInput): Promise<FileLink> {
+  const asset = await evGetFileAsset(client, input.asset_id);
+  if (!asset) throw new Error(`File asset not found: ${input.asset_id}`);
+  if (asset.status !== "verified") throw new Error(`File asset must be verified before linking: ${input.asset_id}`);
+  if (asset.scan_status !== "clean" && asset.scan_status !== "skipped") {
+    throw new Error(`File asset scan status blocks linking: ${asset.scan_status}`);
+  }
+  const id = `link_${nanoid(12)}`;
+  await client.execute(
+    `INSERT INTO file_links (
+      id, asset_id, org_id, company_id, app, source_type, source_id, kind, metadata
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+    ON CONFLICT (asset_id, app, source_type, source_id, kind) DO NOTHING`,
+    [
+      id, input.asset_id, input.org_id, input.company_id ?? null, input.app,
+      input.source_type, input.source_id, input.kind, JSON.stringify(input.metadata ?? {}),
+    ],
+  );
+  const row = await client.get<Record<string, unknown>>(
+    `SELECT * FROM file_links WHERE asset_id = $1 AND app = $2 AND source_type = $3 AND source_id = $4 AND kind = $5`,
+    [input.asset_id, input.app, input.source_type, input.source_id, input.kind],
+  );
+  return toEvLink(row!);
+}
+
+export async function evListFileLinks(client: TypedQueryClient, assetId: string): Promise<FileLink[]> {
+  const rows = await client.many<Record<string, unknown>>(
+    "SELECT * FROM file_links WHERE asset_id = $1 ORDER BY created_at DESC",
+    [assetId],
+  );
+  return rows.map(toEvLink);
+}
+
+export async function evCreateAccessEvent(client: TypedQueryClient, input: CreateFileAccessEventInput): Promise<FileAccessEvent> {
+  const id = `evt_${nanoid(12)}`;
+  await client.execute(
+    `INSERT INTO file_access_events (
+      id, asset_id, org_id, company_id, app, actor_id, action, purpose, metadata
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+    [
+      id, input.asset_id, input.org_id, input.company_id ?? null, input.app ?? null,
+      input.actor_id ?? null, input.action, input.purpose ?? null, JSON.stringify(input.metadata ?? {}),
+    ],
+  );
+  const row = await client.get<Record<string, unknown>>("SELECT * FROM file_access_events WHERE id = $1", [id]);
+  return toEvEvent(row!);
+}
+
+export async function evListAccessEvents(client: TypedQueryClient, assetId: string, limit = 50): Promise<FileAccessEvent[]> {
+  const rows = await client.many<Record<string, unknown>>(
+    "SELECT * FROM file_access_events WHERE asset_id = $1 ORDER BY created_at DESC LIMIT $2",
+    [assetId, limit],
+  );
+  return rows.map(toEvEvent);
+}
+
+/** Build an {@link EvidenceDb} bound to a cloud client for the shared orchestration. */
+export function evidenceDbFor(client: TypedQueryClient) {
+  return {
+    createFileAsset: (i: CreateFileAssetInput) => evCreateFileAsset(client, i),
+    getFileAsset: (id: string) => evGetFileAsset(client, id),
+    createFileUploadIntent: (i: CreateUploadIntentInput) => evCreateUploadIntent(client, i),
+    getFileUploadIntent: (id: string) => evGetUploadIntent(client, id),
+    markFileUploadIntentCompleted: (id: string) => evMarkUploadIntentCompleted(client, id),
+    updateFileAssetStatus: (i: UpdateFileAssetStatusInput) => evUpdateFileAssetStatus(client, i),
+    createFileLink: (i: CreateFileLinkInput) => evCreateFileLink(client, i),
+    createFileAccessEvent: (i: CreateFileAccessEventInput) => evCreateAccessEvent(client, i),
   };
 }

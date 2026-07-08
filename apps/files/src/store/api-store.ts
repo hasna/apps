@@ -10,13 +10,21 @@
  * transport escape hatch handles the sub-resource + action routes the CRUD
  * shape cannot express, matching the `/v1` route table in `src/server/v1.ts`.
  */
+import { existsSync, readFileSync, statSync } from "fs";
+import { basename } from "path";
+import { lookup as mimeLookup } from "mime-types";
 import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { HasnaHttpError } from "@hasna/contracts/client";
+import { sha256File } from "../lib/hasher.js";
 import type {
   Agent,
   AgentActivity,
   Collection,
+  CreateFileLinkInput,
   DuplicateGroup,
+  FileAccessEvent,
+  FileAsset,
+  FileLink,
   FileWithTags,
   ListFilesOptions,
   Machine,
@@ -25,6 +33,16 @@ import type {
   Source,
   Tag,
 } from "../types/index.js";
+import type {
+  CreateEvidenceUploadInput,
+  EvidenceDownloadGrant,
+  EvidenceStorageOptions,
+  EvidenceUploadResult,
+  EvidenceVerifyResult,
+  SignEvidenceDownloadInput,
+  UploadEvidenceFileInput,
+} from "../lib/evidence.js";
+import type { ListFileAssetsOptions } from "../db/evidence.js";
 import type {
   ActivityQueryOptions,
   CollectionDetail,
@@ -288,5 +306,72 @@ export class ApiStore implements FilesStore {
 
   private activityQuery(opts: ActivityQueryOptions): Record<string, string | number | undefined> {
     return { after: opts.after, before: opts.before, action: opts.action, limit: opts.limit, offset: opts.offset };
+  }
+
+  // ── evidence ───────────────────────────────────────────────────────────────
+  // Storage (S3 bucket/creds) is owned by the self-hosted service; the `storage`
+  // overrides are intentionally NOT forwarded — a thin api client can never
+  // redirect the shared vault. Bytes go to the server-signed URL directly.
+  async createEvidenceUploadIntent(input: CreateEvidenceUploadInput, _storage?: EvidenceStorageOptions): Promise<EvidenceUploadResult> {
+    return this.http.post<EvidenceUploadResult>("/evidence/upload-intents", input);
+  }
+  async uploadEvidenceFile(input: UploadEvidenceFileInput, _storage?: EvidenceStorageOptions): Promise<EvidenceUploadResult> {
+    if (!existsSync(input.path)) throw new Error(`File not found: ${input.path}`);
+    const stat = statSync(input.path);
+    const { path: _path, original_name, ...rest } = input;
+    const { intent } = await this.createEvidenceUploadIntent({
+      ...rest,
+      original_name: original_name ?? basename(input.path),
+      content_type: (mimeLookup(input.path) || "application/octet-stream").toString(),
+      size: stat.size,
+      checksum: sha256File(input.path),
+      checksum_algorithm: "sha256",
+    });
+    if (!intent.upload_url) throw new Error("Server did not return an evidence upload URL");
+    const res = await fetch(intent.upload_url, {
+      method: intent.method,
+      headers: intent.required_headers,
+      body: readFileSync(input.path),
+    });
+    if (!res.ok) throw new Error(`Evidence byte upload failed: ${res.status} ${res.statusText}`);
+    const asset = await this.completeEvidenceUpload(intent.id);
+    return { asset, intent };
+  }
+  async completeEvidenceUpload(intentId: string, _storage?: EvidenceStorageOptions): Promise<FileAsset> {
+    return this.http.post<FileAsset>(`/evidence/upload-intents/${seg(intentId)}/complete`);
+  }
+  async linkEvidenceAsset(input: CreateFileLinkInput): Promise<FileLink> {
+    const { asset_id, ...rest } = input;
+    return this.http.post<FileLink>(`/evidence/assets/${seg(asset_id)}/links`, rest);
+  }
+  async signEvidenceDownload(input: SignEvidenceDownloadInput, _storage?: EvidenceStorageOptions): Promise<EvidenceDownloadGrant> {
+    const { asset_id, ...rest } = input;
+    return this.http.post<EvidenceDownloadGrant>(`/evidence/assets/${seg(asset_id)}/sign-download`, rest);
+  }
+  async verifyEvidenceAsset(assetId: string, _storage?: EvidenceStorageOptions): Promise<EvidenceVerifyResult> {
+    return this.http.post<EvidenceVerifyResult>(`/evidence/assets/${seg(assetId)}/verify`);
+  }
+  async listEvidenceAssets(opts: ListFileAssetsOptions = {}): Promise<FileAsset[]> {
+    return this.http.get<FileAsset[]>("/evidence/assets", {
+      query: {
+        org_id: opts.org_id,
+        company_id: opts.company_id,
+        app: opts.app,
+        kind: opts.kind,
+        status: opts.status,
+        checksum: opts.checksum,
+        limit: opts.limit,
+        offset: opts.offset,
+      },
+    });
+  }
+  async getEvidenceAsset(id: string): Promise<FileAsset | null> {
+    return orNull(this.http.get<FileAsset>(`/evidence/assets/${seg(id)}`));
+  }
+  async listEvidenceLinks(assetId: string): Promise<FileLink[]> {
+    return this.http.get<FileLink[]>(`/evidence/assets/${seg(assetId)}/links`);
+  }
+  async listEvidenceAccessEvents(assetId: string, limit = 50): Promise<FileAccessEvent[]> {
+    return this.http.get<FileAccessEvent[]>(`/evidence/assets/${seg(assetId)}/access-events`, { query: { limit } });
   }
 }
