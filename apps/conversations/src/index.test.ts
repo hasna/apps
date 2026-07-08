@@ -16,7 +16,6 @@ describe("public API exports", () => {
     expect(typeof index.cloudApiUrl).toBe("function");
     expect(typeof index.resolveConversationsCloud).toBe("function");
     expect(typeof index.conversationsCloudEnv).toBe("function");
-    expect(typeof index.cloudStatus).toBe("function");
     expect(typeof index.normalizeChannelName).toBe("function");
   });
 

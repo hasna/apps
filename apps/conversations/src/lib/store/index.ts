@@ -26,6 +26,7 @@
 
 import { resolveStorageClient, type HasnaStorageClient } from "../contracts-client/storage.js";
 import { normalizeChannelName } from "../channel-names.js";
+import { localHealthChecks } from "../db.js";
 import { ApiStore } from "./api-store.js";
 
 import * as channelsLib from "../channels.js";
@@ -95,8 +96,23 @@ export function cloudApiUrl(env: Env = process.env): string | null {
  * know (or branch on) which one. Method signatures mirror the domain helpers so
  * the local path is a pure delegation and the cloud path is HTTP.
  */
+/** A single health-check row surfaced by the `doctor` command. */
+export interface StoreHealthCheck {
+  name: string;
+  ok: boolean;
+  message: string;
+}
+
 export interface ConversationsStore {
   readonly transport: "local" | "cloud-http";
+
+  /**
+   * Transport-appropriate health probe for the `doctor` diagnostic. LocalStore
+   * checks the on-box sqlite (opens + WAL); ApiStore checks cloud API reachability
+   * + auth. Routed through the Store so `doctor` never touches sqlite directly and
+   * reports the store the client is ACTUALLY flipped to (not the stale local db).
+   */
+  health: () => Promise<StoreHealthCheck[]>;
 
   // channels
   createChannel: Async<typeof channelsLib.createChannel>;
@@ -243,6 +259,8 @@ export interface ConversationsStore {
 
 export class LocalStore implements ConversationsStore {
   readonly transport = "local" as const;
+
+  health: ConversationsStore["health"] = async () => localHealthChecks();
 
   // channels
   createChannel: ConversationsStore["createChannel"] = async (...a) => channelsLib.createChannel(...a);
@@ -397,25 +415,6 @@ export function getStore(env: Env = process.env): ConversationsStore {
   if (client) return new ApiStore(client);
   if (!localSingleton) localSingleton = new LocalStore();
   return localSingleton;
-}
-
-/**
- * Cloud-served status counts, mirroring the local `status` command but sourced
- * from the self_hosted API so operators verifying a flip see cloud state (not the
- * stale local db). Returns null when not in cloud mode so callers fall back to the
- * local store.
- */
-export async function cloudStatus(
-  env: Env = process.env,
-): Promise<{ api_url: string | null; total_messages: number; unread_messages: number } | null> {
-  const client = resolveConversationsCloud(env);
-  if (!client) return null;
-  const count = async (q: Record<string, string | number | boolean>): Promise<number> => {
-    const body = await client.transport.get<{ count?: number }>("/messages", { query: { ...q, count: 1 } });
-    return Number(body?.count ?? 0);
-  };
-  const [total, unread] = await Promise.all([count({}), count({ unread_only: true })]);
-  return { api_url: cloudApiUrl(env), total_messages: total, unread_messages: unread };
 }
 
 export { normalizeChannelName };

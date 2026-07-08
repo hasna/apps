@@ -14,6 +14,7 @@ import type { HasnaStorageClient } from "../contracts-client/storage.js";
 import type { ConversationsStore } from "./index.js";
 import { normalizeChannelName } from "../channel-names.js";
 import { normalizeSince } from "../since.js";
+import { parseProject } from "../projects.js";
 import {
   parseMessage,
   compactMessage,
@@ -62,6 +63,19 @@ export class ApiStore implements ConversationsStore {
   private async del(path: string, query?: Q): Promise<void> {
     await this.t.del(path, undefined, query ? { query: prune(query) } : undefined);
   }
+
+  // ── health ──────────────────────────────────────────────────────────────────
+  // Cloud-mode probe for `doctor`: an authenticated, cheap count round-trips the
+  // /v1 API so a flipped client verifies reachability AND that its bearer key
+  // works. The base URL (no secret) is surfaced; the key never leaves the transport.
+  health: ConversationsStore["health"] = async () => {
+    try {
+      await this.get<{ count?: number }>("/messages", { count: 1, limit: 1 });
+      return [{ name: "Cloud API", ok: true, message: `OK — reachable at ${this.client.baseUrl}` }];
+    } catch (e) {
+      return [{ name: "Cloud API", ok: false, message: `Unreachable/unauthorized at ${this.client.baseUrl}: ${(e as Error).message}` }];
+    }
+  };
 
   // ── channels ────────────────────────────────────────────────────────────────
   createChannel: ConversationsStore["createChannel"] = async (name, createdBy, options) => {
@@ -336,26 +350,39 @@ export class ApiStore implements ConversationsStore {
   };
 
   // ── projects ────────────────────────────────────────────────────────────────
+  // Project rows come back raw from the API (tags/metadata/settings as JSON text).
+  // Normalize through the shared `parseProject` so cloud mode returns the identical
+  // contract as local — `tags` is always an array, never a raw string/null (that
+  // mismatch crashed `project get`). `channel_count` is surfaced as ProjectInfo when
+  // the server provides it, defaulting to 0.
+  private static asProject(row: unknown): Record<string, unknown> {
+    return parseProject((row ?? {}) as Record<string, unknown>) as unknown as Record<string, unknown>;
+  }
+  private static asProjectInfo(row: unknown): Record<string, unknown> {
+    const r = (row ?? {}) as Record<string, unknown>;
+    return { ...ApiStore.asProject(r), channel_count: Number(r.channel_count ?? 0) };
+  }
   createProject: ConversationsStore["createProject"] = async (opts) => {
     const body = await this.post<{ project: unknown }>("/projects", opts);
-    return body.project as never;
+    return ApiStore.asProject(body.project) as never;
   };
   listProjects: ConversationsStore["listProjects"] = async (opts) => {
     const body = await this.get<{ projects?: unknown[] }>("/projects", opts as Q);
-    return (body.projects ?? []) as never;
+    return (body.projects ?? []).map((p) => ApiStore.asProjectInfo(p)) as never;
   };
   getProject: ConversationsStore["getProject"] = async (id) => {
     const body = await this.get<{ project: unknown } | null>(`/projects/${encodeURIComponent(id)}`);
-    return (body?.project ?? null) as never;
+    return (body?.project ? ApiStore.asProjectInfo(body.project) : null) as never;
   };
   getProjectByName: ConversationsStore["getProjectByName"] = async (name) => {
     const body = await this.get<{ project: unknown } | null>("/projects", { name, limit: 1 });
     const list = (body as { projects?: unknown[] } | null)?.projects;
-    return ((list && list[0]) ?? (body as { project?: unknown } | null)?.project ?? null) as never;
+    const row = (list && list[0]) ?? (body as { project?: unknown } | null)?.project ?? null;
+    return (row ? ApiStore.asProjectInfo(row) : null) as never;
   };
   updateProject: ConversationsStore["updateProject"] = async (id, updates) => {
     const body = await this.patch<{ project: unknown }>(`/projects/${encodeURIComponent(id)}`, updates);
-    return (body?.project ?? null) as never;
+    return (body?.project ? ApiStore.asProject(body.project) : null) as never;
   };
   deleteProject: ConversationsStore["deleteProject"] = async (id) => {
     try {

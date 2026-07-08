@@ -10,6 +10,7 @@ import { buildMessagePreview } from "../../lib/channel-notifications.js";
 import { previewText } from "../../lib/compact-output.js";
 import { getCliWindow, pageFromQuery, printCompactFooter, queryLimitFor } from "../compact.js";
 import { printMessageEntry } from "../message-output.js";
+import { checkForUpdate } from "../../lib/version-check.js";
 import type { DigestResult } from "../../lib/messages.js";
 
 function quoteDigestCommandArg(value: string): string {
@@ -913,15 +914,8 @@ export function registerMessagingCommands(program: Command): void {
     .option("--check", "Only check for updates, don't install")
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
-      const pkg = await import("../../../package.json");
-      const current = pkg.version;
-
-      let latest: string;
-      try {
-        const res = await fetch("https://registry.npmjs.org/@hasna/conversations/latest");
-        const data = await res.json() as { version: string };
-        latest = data.version;
-      } catch {
+      const info = await checkForUpdate();
+      if (info.latest === null) {
         if (opts.json) {
           console.log(JSON.stringify({ error: "Failed to check npm registry" }));
         } else {
@@ -930,7 +924,7 @@ export function registerMessagingCommands(program: Command): void {
         process.exit(1);
       }
 
-      const updateAvailable = current !== latest;
+      const { current, latest, updateAvailable } = info;
 
       if (opts.check || !updateAvailable) {
         if (opts.json) {

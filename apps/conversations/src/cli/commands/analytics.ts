@@ -1,12 +1,12 @@
 import type { Command } from "commander";
 import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
-import { getDb, getDbPath, closeDb } from "../../lib/db.js";
+import { getDbPath, closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { windowItems } from "../../lib/compact-output.js";
-import { cloudStatus } from "../../lib/store/index.js";
+import { isCloudStore, cloudApiUrl } from "../../lib/store/index.js";
+import { checkForUpdate } from "../../lib/version-check.js";
 import { getCliWindow, printCompactFooter } from "../compact.js";
-import pkg from "../../../package.json";
 
 export function registerAnalyticsCommands(program: Command): void {
   // ---- graph ----
@@ -337,42 +337,37 @@ export function registerAnalyticsCommands(program: Command): void {
     .description("Show database stats")
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
-      // Cloud-aware: when self_hosted routing is active, report the cloud store
-      // (what agents actually read/write) instead of the stale local db, so
-      // operators verifying a flip don't get misled by local counts.
-      const cloud = await cloudStatus();
-      if (cloud) {
-        const stats = {
-          mode: "self_hosted",
-          api_url: cloud.api_url,
-          total_messages: cloud.total_messages,
-          unread_messages: cloud.unread_messages,
-        };
-        if (opts.json) {
-          console.log(JSON.stringify(stats, null, 2));
-        } else {
-          console.log(chalk.bold("Conversations Status"));
-          console.log(`  Mode:       self_hosted (cloud API)`);
-          console.log(`  API URL:    ${stats.api_url ?? "(set)"}`);
-          console.log(`  Messages:   ${stats.total_messages}`);
-          console.log(`  Unread:     ${stats.unread_messages}`);
-        }
-        return;
-      }
-      const db = getDb();
-      const dbPath = getDbPath();
-      const totalMessages = (db.prepare("SELECT COUNT(*) as count FROM messages").get() as { count: number }).count;
-      const totalSessions = (db.prepare("SELECT COUNT(DISTINCT session_id) as count FROM messages").get() as { count: number }).count;
-      const totalUnread = (db.prepare("SELECT COUNT(*) as count FROM messages WHERE read_at IS NULL").get() as { count: number }).count;
-      const totalChannels = (db.prepare("SELECT COUNT(*) as count FROM channels").get() as { count: number }).count;
-      const totalProjects = (db.prepare("SELECT COUNT(*) as count FROM projects").get() as { count: number }).count;
+      // ONE path through the Store: counts come from whichever transport the client
+      // is flipped to (LocalStore sqlite or the self_hosted/cloud API), so operators
+      // verifying a flip see the store agents actually read/write — never raw sqlite,
+      // never the stale local db while cloud is active.
+      const store = getStore();
+      const cloud = isCloudStore();
 
-      const stats = {
-        db_path: dbPath,
+      const [totalMessages, sessions, channels, projects, totalUnread] = await Promise.all([
+        store.countMessages(),
+        store.listSessions(),
+        store.listChannels({ include_archived: true }),
+        store.listProjects(),
+        store.countMessages({ unread_only: true }),
+      ]);
+
+      const stats: {
+        mode: "self_hosted" | "local";
+        api_url?: string | null;
+        db_path?: string;
+        total_messages: number;
+        total_sessions: number;
+        total_channels: number;
+        total_projects: number;
+        unread_messages: number;
+      } = {
+        mode: cloud ? "self_hosted" : "local",
+        ...(cloud ? { api_url: cloudApiUrl() } : { db_path: getDbPath() }),
         total_messages: totalMessages,
-        total_sessions: totalSessions,
-        total_channels: totalChannels,
-        total_projects: totalProjects,
+        total_sessions: sessions.length,
+        total_channels: channels.length,
+        total_projects: projects.length,
         unread_messages: totalUnread,
       };
 
@@ -380,10 +375,16 @@ export function registerAnalyticsCommands(program: Command): void {
         console.log(JSON.stringify(stats, null, 2));
       } else {
         console.log(chalk.bold("Conversations Status"));
-        console.log(`  DB Path:    ${stats.db_path}`);
+        if (cloud) {
+          console.log(`  Mode:       self_hosted (cloud API)`);
+          console.log(`  API URL:    ${stats.api_url ?? "(set)"}`);
+        } else {
+          console.log(`  Mode:       local`);
+          console.log(`  DB Path:    ${stats.db_path}`);
+        }
         console.log(`  Messages:   ${stats.total_messages}`);
         console.log(`  Sessions:   ${stats.total_sessions}`);
-        console.log(`  Channels:     ${stats.total_channels}`);
+        console.log(`  Channels:   ${stats.total_channels}`);
         console.log(`  Projects:   ${stats.total_projects}`);
         console.log(`  Unread:     ${stats.unread_messages}`);
       }
@@ -398,24 +399,13 @@ export function registerAnalyticsCommands(program: Command): void {
     .action(async (opts) => {
       const checks: { name: string; ok: boolean; message: string }[] = [];
 
-      // 1. DB accessible
+      // 1. Storage health — routed through the Store so this reflects the transport
+      //    the client is flipped to (local sqlite opens + WAL, or cloud API reach +
+      //    auth). No CLI command touches sqlite directly.
       try {
-        const db = getDb();
-        db.prepare("SELECT 1").get();
-        const dbPath = getDbPath();
-        checks.push({ name: "Database", ok: true, message: `OK — ${dbPath}` });
+        checks.push(...(await getStore().health()));
       } catch (e: any) {
-        checks.push({ name: "Database", ok: false, message: `Cannot open DB: ${e.message}` });
-      }
-
-      // 2. WAL mode
-      try {
-        const db = getDb();
-        const mode = db.prepare("PRAGMA journal_mode").get() as { journal_mode: string };
-        const isWal = mode.journal_mode === "wal";
-        checks.push({ name: "WAL mode", ok: isWal, message: isWal ? "OK — WAL mode enabled" : `WARNING — journal_mode is ${mode.journal_mode}` });
-      } catch {
-        checks.push({ name: "WAL mode", ok: false, message: "Could not check WAL mode" });
+        checks.push({ name: "Storage", ok: false, message: `Health check failed: ${e.message}` });
       }
 
       // 3. MCP binary on PATH
@@ -428,16 +418,16 @@ export function registerAnalyticsCommands(program: Command): void {
         checks.push({ name: "MCP binary", ok: false, message: "Could not check MCP binary" });
       }
 
-      // 4. npm version check
-      try {
-        const current = pkg.version;
-        const res = await fetch("https://registry.npmjs.org/@hasna/conversations/latest");
-        const data = await res.json() as { version: string };
-        const latest = data.version;
-        const upToDate = current === latest;
-        checks.push({ name: "npm version", ok: upToDate, message: upToDate ? `OK — v${current} (latest)` : `Update available: v${current} → v${latest} — run: bun install -g @hasna/conversations@latest` });
-      } catch {
-        checks.push({ name: "npm version", ok: true, message: "Could not check npm registry (offline?)" });
+      // 4. npm version check (registry probe via shared helper — never a raw fetch here)
+      {
+        const info = await checkForUpdate();
+        if (info.latest === null) {
+          checks.push({ name: "npm version", ok: true, message: "Could not check npm registry (offline?)" });
+        } else if (info.updateAvailable) {
+          checks.push({ name: "npm version", ok: false, message: `Update available: v${info.current} → v${info.latest} — run: bun install -g @hasna/conversations@latest` });
+        } else {
+          checks.push({ name: "npm version", ok: true, message: `OK — v${info.current} (latest)` });
+        }
       }
 
       // 5. Webhook config validity
