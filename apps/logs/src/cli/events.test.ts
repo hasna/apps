@@ -780,6 +780,111 @@ describe("logs events CLI", () => {
     }
   }, 15_000);
 
+  test("watches a remote --server stream in api mode without the local-only guard", async () => {
+    // Regression: `watch --server` is an explicit out-of-band SSE tail and must
+    // be reachable in self_hosted/cloud (api) mode. Previously the command hit
+    // requireLocalStore("watch") unconditionally and threw the local-only error
+    // before ever reaching the --server branch.
+    const dataDir = mkdtempSync(
+      join(tmpdir(), "open-logs-events-watch-apimode-cli-"),
+    );
+    const port = await getFreePort();
+    const token = "remote-watch-apimode-token";
+    const server = spawn("bun", ["src/server/index.ts"], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        HASNA_LOGS_DATA_DIR: dataDir,
+        HASNA_LOGS_DB_PATH: join(dataDir, "logs.db"),
+        HASNA_LOGS_FSYNC: "0",
+        HASNA_LOGS_API_TOKEN: token,
+        LOGS_PORT: String(port),
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    try {
+      await waitForHealth(port, server);
+      const baseUrl = `http://127.0.0.1:${port}`;
+      await postRemoteEvent(baseUrl, token, {
+        type: "metric",
+        event_id: "cli-watch-apimode-anchor",
+        source: "sdk",
+        message: "api-mode watch anchor",
+      });
+
+      const watcher = spawn(
+        "bun",
+        [
+          "src/cli/index.ts",
+          "watch",
+          "--server",
+          baseUrl,
+          "--token",
+          token,
+          "--type",
+          "metric",
+          "--last-event-id",
+          "cli-watch-apimode-anchor",
+          "--once",
+          "--format",
+          "json",
+        ],
+        {
+          cwd: repoRoot,
+          env: {
+            ...process.env,
+            HASNA_LOGS_DATA_DIR: dataDir,
+            HASNA_LOGS_DB_PATH: join(dataDir, "logs.db"),
+            HASNA_LOGS_FSYNC: "0",
+            // Flip the resolved store into api (self_hosted) mode. The URL below
+            // is never contacted (no --project ⇒ no resolveProjectId call); the
+            // tail targets the explicit --server above.
+            HASNA_LOGS_API_URL: "https://logs.example.invalid/v1",
+            HASNA_LOGS_API_KEY: "test-api-key-unused",
+          },
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      const watcherResult = waitForExit(watcher, 8_000);
+
+      await postRemoteEvent(baseUrl, token, {
+        type: "metric",
+        event_id: "cli-watch-apimode-live",
+        source: "sdk",
+        severity: "info",
+        message: "api-mode watch live metric",
+      });
+
+      const result = await watcherResult;
+      expect(result.stderr).not.toContain("local-only operation");
+      expect(result.stderr).not.toContain("Stream failed");
+      expect(result.code).toBe(0);
+      const rows = result.stdout
+        .trim()
+        .split(/\n+/)
+        .filter(Boolean)
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              event_id: string;
+              event_type: string;
+              message: string;
+            },
+        );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        event_id: "cli-watch-apimode-live",
+        event_type: "metric",
+        message: "api-mode watch live metric",
+      });
+    } finally {
+      server.kill("SIGTERM");
+      await waitForExit(server, 2_000).catch(() => server.kill("SIGKILL"));
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   test("retries remote event catalog watch after an initial stream connection failure", async () => {
     const dataDir = mkdtempSync(
       join(tmpdir(), "open-logs-events-watch-remote-retry-cli-"),
