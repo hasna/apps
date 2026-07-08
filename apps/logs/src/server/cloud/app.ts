@@ -222,10 +222,39 @@ export function buildCloudApp(options: CloudAppOptions): Hono {
     return c.json(log, 201);
   });
 
+  // Aggregates — feed the CLI/MCP data-plane (ApiStore) over /v1.
+  // Registered before "/logs/:id" so "count"/"summary" are not swallowed as ids.
+  v1.get("/logs/count", requireScope("logs:read"), async (c) => {
+    const q = c.req.query();
+    const group_by = q.group_by === "service" ? "service" : undefined;
+    return c.json(
+      await store.countLogsBreakdown({
+        ...(q.project_id ? { project_id: q.project_id } : {}),
+        ...(q.service ? { service: q.service } : {}),
+        ...(q.level && isLogLevel(q.level) ? { level: q.level } : {}),
+        ...(q.since ? { since: q.since } : {}),
+        ...(q.until ? { until: q.until } : {}),
+        ...(group_by ? { group_by } : {}),
+      }),
+    );
+  });
+
+  v1.get("/logs/summary", requireScope("logs:read"), async (c) => {
+    const q = c.req.query();
+    const summary = await store.summarize(q.project_id, q.since, q.until);
+    return c.json({ summary });
+  });
+
   v1.get("/logs/:id", requireScope("logs:read"), async (c) => {
     const log = await store.getLog(c.req.param("id") ?? "");
     if (!log) return c.json({ error: "Log not found." }, 404);
     return c.json(log);
+  });
+
+  // Health summary (HealthResult-shaped) for the ApiStore.
+  v1.get("/health", requireScope("logs:read"), async (c) => {
+    const uptime = Math.floor(process.uptime());
+    return c.json(await store.healthSummary(uptime));
   });
 
   v1.delete("/logs/:id", requireScope("logs:write"), async (c) => {

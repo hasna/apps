@@ -268,4 +268,162 @@ export class CloudLogStore {
     );
     return row ? Number(row.count) : 0;
   }
+
+  // --- aggregates (feed the CLI/MCP data-plane over /v1) --------------------
+
+  /** Level (and optional service) breakdown, matching the local `countLogs`. */
+  async countLogsBreakdown(filters: CountLogsFilters = {}): Promise<CloudLogCount> {
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    const add = (sql: string, value: unknown): void => {
+      params.push(value);
+      clauses.push(sql.replace("$?", `$${params.length}`));
+    };
+    if (filters.project_id) add("project_id = $?", filters.project_id);
+    if (filters.service) add("service = $?", filters.service);
+    if (filters.level) add("level = $?", filters.level);
+    if (filters.since) add("timestamp >= $?", filters.since);
+    if (filters.until) add("timestamp <= $?", filters.until);
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+
+    const levelRows = await this.client.many<{ level: string; c: string }>(
+      `SELECT level, COUNT(*)::text AS c FROM logs ${where} GROUP BY level`,
+      params,
+    );
+    const by_level: Record<string, number> = {};
+    let total = 0;
+    for (const r of levelRows) {
+      const n = Number(r.c);
+      by_level[r.level] = n;
+      total += n;
+    }
+    const result: CloudLogCount = {
+      total,
+      errors: by_level.error ?? 0,
+      warns: by_level.warn ?? 0,
+      fatals: by_level.fatal ?? 0,
+      by_level,
+    };
+    if (filters.group_by === "service") {
+      const svcRows = await this.client.many<{ service: string | null; c: string }>(
+        `SELECT service, COUNT(*)::text AS c FROM logs ${where} GROUP BY service`,
+        params,
+      );
+      result.by_service = Object.fromEntries(
+        svcRows.map((r) => [r.service ?? "(none)", Number(r.c)]),
+      );
+    }
+    return result;
+  }
+
+  /** Error/warn/fatal counts grouped by project/service/page/level. */
+  async summarize(
+    projectId?: string,
+    since?: string,
+    until?: string,
+  ): Promise<CloudLogSummary[]> {
+    const clauses: string[] = ["level IN ('warn','error','fatal')"];
+    const params: unknown[] = [];
+    const add = (sql: string, value: unknown): void => {
+      params.push(value);
+      clauses.push(sql.replace("$?", `$${params.length}`));
+    };
+    if (projectId) add("project_id = $?", projectId);
+    if (since) add("timestamp >= $?", since);
+    if (until) add("timestamp <= $?", until);
+    const rows = await this.client.many<{
+      project_id: string | null;
+      service: string | null;
+      level: string;
+      count: string;
+      latest: string | Date;
+    }>(
+      `SELECT project_id, service, level, COUNT(*)::text AS count,
+              MAX(timestamp) AS latest
+       FROM logs WHERE ${clauses.join(" AND ")}
+       GROUP BY project_id, service, level
+       ORDER BY count DESC`,
+      params,
+    );
+    return rows.map((r) => ({
+      project_id: r.project_id,
+      service: r.service,
+      page_id: null,
+      level: r.level as LogLevel,
+      count: Number(r.count),
+      latest: toIso(r.latest),
+    }));
+  }
+
+  /** A HealthResult-shaped summary for the cloud tier (logs + projects only). */
+  async healthSummary(uptimeSeconds: number): Promise<CloudHealth> {
+    const [projects, byLevel, bounds] = await Promise.all([
+      this.client.get<{ c: string }>("SELECT COUNT(*)::text AS c FROM projects"),
+      this.client.many<{ level: string; c: string }>(
+        "SELECT level, COUNT(*)::text AS c FROM logs GROUP BY level",
+      ),
+      this.client.get<{ oldest: string | Date | null; newest: string | Date | null }>(
+        "SELECT MIN(timestamp) AS oldest, MAX(timestamp) AS newest FROM logs",
+      ),
+    ]);
+    const logs_by_level: Record<string, number> = {};
+    let total_logs = 0;
+    for (const r of byLevel) {
+      const n = Number(r.c);
+      logs_by_level[r.level] = n;
+      total_logs += n;
+    }
+    return {
+      status: "ok",
+      uptime_seconds: uptimeSeconds,
+      db_size_bytes: null,
+      projects: projects ? Number(projects.c) : 0,
+      total_logs,
+      logs_by_level,
+      oldest_log: bounds?.oldest ? toIso(bounds.oldest) : null,
+      newest_log: bounds?.newest ? toIso(bounds.newest) : null,
+      scheduler_jobs: 0,
+      open_issues: 0,
+    };
+  }
+}
+
+export interface CountLogsFilters {
+  project_id?: string;
+  service?: string;
+  level?: LogLevel;
+  since?: string;
+  until?: string;
+  group_by?: "level" | "service";
+}
+
+export interface CloudLogCount {
+  total: number;
+  errors: number;
+  warns: number;
+  fatals: number;
+  by_level: Record<string, number>;
+  by_service?: Record<string, number>;
+}
+
+export interface CloudLogSummary {
+  project_id: string | null;
+  service: string | null;
+  page_id: string | null;
+  level: LogLevel;
+  count: number;
+  latest: string;
+}
+
+export interface CloudHealth {
+  status: "ok";
+  uptime_seconds: number;
+  db_size_bytes: number | null;
+  projects: number;
+  total_logs: number;
+  logs_by_level: Record<string, number>;
+  oldest_log: string | null;
+  newest_log: string | null;
+  scheduler_jobs: number;
+  open_issues: number;
 }

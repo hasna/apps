@@ -7,38 +7,22 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { getDb } from "../db/index.ts";
-import { resolveLogsCloudStore } from "../lib/cloud-store.ts";
+import { isApiMode, resolveStore } from "../store/index.ts";
 import {
   createAlertRule,
   deleteAlertRule,
   listAlertRules,
 } from "../lib/alerts.ts";
 import { compare } from "../lib/compare.ts";
-import { countLogs } from "../lib/count.ts";
 import { diagnose } from "../lib/diagnose.ts";
-import { exportEventsToJson, getEvent, searchEvents } from "../lib/events.ts";
-import { exportToCsv, exportToJson } from "../lib/export.ts";
-import { getHealth } from "../lib/health.ts";
+import { exportEventsToJson, getEvent } from "../lib/events.ts";
 import { detectRuntimeIdentity } from "../lib/identity.ts";
-import { ingestBatch, ingestLog } from "../lib/ingest.ts";
 import { listIssues, updateIssueStatus } from "../lib/issues.ts";
-import { createJob, listJobs } from "../lib/jobs.ts";
 import { PACKAGE_VERSION, exitIfMetadataRequest } from "../lib/package-meta.ts";
 import { parseTime } from "../lib/parse-time.ts";
 import { getLatestSnapshot, getPerfTrend, scoreLabel } from "../lib/perf.ts";
-import {
-  createPage,
-  createProject,
-  listPages,
-  listProjects,
-  resolveProjectId,
-} from "../lib/projects.ts";
-import {
-  getLogContext,
-  getLogContextFromId,
-  searchLogs,
-  tailLogs,
-} from "../lib/query.ts";
+import { resolveProjectId } from "../lib/projects.ts";
+import { getLogContextFromId } from "../lib/query.ts";
 import { getSessionContext } from "../lib/session-context.ts";
 import {
   getStoragePg,
@@ -47,8 +31,6 @@ import {
   storagePush,
   storageSync,
 } from "../lib/storage-sync.ts";
-import { summarizeLogs } from "../lib/summarize.ts";
-import { getTestReport, searchTestReports } from "../lib/test-reports.ts";
 import {
   UNIVERSAL_EVENT_TYPES,
   type UniversalEventInput,
@@ -163,15 +145,26 @@ export function buildServer(): McpServer {
     return resolveProjectId(db, idOrName) ?? idOrName;
   }
 
-  // Client-flip (self_hosted): returns a cloud store when HASNA_LOGS_API_URL +
-  // HASNA_LOGS_API_KEY are set (mode implied), else null so the MCP uses its
-  // local SQLite store. Mirrors the CLI's logsCloud() so the MCP reads and
-  // writes the SAME shared cloud logs as the flipped CLI. Fully reversible:
-  // unset the env vars -> local. Resolved per-call so a restart-free env change
-  // (or an unset for rollback) is honored immediately.
-  function logsCloud() {
-    return resolveLogsCloudStore();
-  }
+  // The unified data-plane Store: LocalStore (SQLite) or ApiStore (HTTP /v1 +
+  // bearer key), resolved from the environment. Every data-plane tool routes
+  // through this — no per-tool `cloud ? : local` branching, no `getDb()` reads
+  // in handlers. Fully reversible: unset HASNA_LOGS_API_URL/KEY -> local.
+  const store = resolveStore();
+
+  // Resolve a project name-or-id through the live store (local db or /v1).
+  const rid = (idOrName?: string): Promise<string | undefined> =>
+    store.resolveProjectId(idOrName);
+
+  // Guard local-only tools (analytics/telemetry backed only by the local db).
+  const requireLocalMode = (tool: string): void => {
+    if (isApiMode()) {
+      throw new Error(
+        `MCP tool '${tool}' is a local-only operation and is not available in ` +
+          `self_hosted/cloud mode (the cloud tier is a shared log sink). Unset ` +
+          `HASNA_LOGS_API_URL/HASNA_LOGS_API_KEY to use it against the local store.`,
+      );
+    }
+  };
 
   function existingProjectId(idOrName?: string): string | null {
     const resolved = resolveProjectId(db, idOrName);
@@ -399,11 +392,9 @@ export function buildServer(): McpServer {
     ],
   }));
 
-  registerTool("resolve_project", { name: z.string() }, ({ name }) => {
-    const id = resolveProjectId(db, name);
-    const project = id
-      ? db.prepare("SELECT * FROM projects WHERE id = $id").get({ $id: id })
-      : null;
+  registerTool("resolve_project", { name: z.string() }, async ({ name }) => {
+    const id = await rid(name);
+    const project = id ? await store.getProject(id) : null;
     return {
       content: [
         {
@@ -424,9 +415,9 @@ export function buildServer(): McpServer {
       base_url: z.string().optional(),
       description: z.string().optional(),
     },
-    (args) => ({
+    async (args) => ({
       content: [
-        { type: "text", text: JSON.stringify(createProject(db, args)) },
+        { type: "text", text: JSON.stringify(await store.createProject(args)) },
       ],
     }),
   );
@@ -439,14 +430,14 @@ export function buildServer(): McpServer {
       path: z.string().optional(),
       name: z.string().optional(),
     },
-    (args) => ({
+    async (args) => ({
       content: [
         {
           type: "text",
           text: JSON.stringify(
-            createPage(db, {
+            await store.createPage({
               ...args,
-              project_id: rp(args.project_id) ?? args.project_id,
+              project_id: (await rid(args.project_id)) ?? args.project_id,
             }),
           ),
         },
@@ -461,14 +452,14 @@ export function buildServer(): McpServer {
       schedule: z.string(),
       page_id: z.string().optional(),
     },
-    (args) => ({
+    async (args) => ({
       content: [
         {
           type: "text",
           text: JSON.stringify(
-            createJob(db, {
+            await store.createJob({
               ...args,
-              project_id: rp(args.project_id) ?? args.project_id,
+              project_id: (await rid(args.project_id)) ?? args.project_id,
             }),
           ),
         },
@@ -490,22 +481,10 @@ export function buildServer(): McpServer {
       metadata: z.record(z.string(), z.unknown()).optional(),
     },
     async (args) => {
-      const cloud = logsCloud();
-      if (cloud) {
-        const row = await cloud.create({
-          level: args.level,
-          message: args.message,
-          project_id: args.project_id,
-          service: args.service,
-          trace_id: args.trace_id,
-          session_id: args.session_id,
-          agent: args.agent,
-          url: args.url,
-          metadata: args.metadata,
-        });
-        return { content: [{ type: "text", text: `Logged: ${row.id}` }] };
-      }
-      const row = ingestLog(db, { ...args, project_id: rp(args.project_id) });
+      const row = await store.ingestLog({
+        ...args,
+        project_id: await rid(args.project_id),
+      });
       return { content: [{ type: "text", text: `Logged: ${row.id}` }] };
     },
   );
@@ -545,35 +524,16 @@ export function buildServer(): McpServer {
       trace_id?: string;
       project_id?: string;
     }) => {
-      const cloud = logsCloud();
-      if (cloud) {
-        const rows: { id: string }[] = [];
-        for (const e of entries) {
-          rows.push(
-            await cloud.create({
-              level: e.level,
-              message: e.message,
-              project_id: e.project_id ?? project_id,
-              service: e.service,
-              trace_id: e.trace_id ?? trace_id,
-              metadata: e.metadata,
-            }),
-          );
-        }
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Logged ${rows.length} entries${trace_id ? ` (trace: ${trace_id})` : ""}`,
-            },
-          ],
-        };
+      const rows: { id: string }[] = [];
+      for (const e of entries) {
+        rows.push(
+          await store.ingestLog({
+            ...e,
+            project_id: await rid(e.project_id ?? project_id),
+            trace_id: e.trace_id ?? trace_id,
+          }),
+        );
       }
-      const mapped = entries.map((e) => ({
-        ...e,
-        project_id: rp(e.project_id ?? project_id),
-      }));
-      const rows = ingestBatch(db, mapped, trace_id);
       return {
         content: [
           {
@@ -600,27 +560,17 @@ export function buildServer(): McpServer {
       brief: z.boolean().optional(),
     },
     async (args) => {
-      const cloud = logsCloud();
-      const rows = cloud
-        ? await cloud.list({
-            project_id: args.project_id,
-            level: args.level
-              ? (args.level.split(",") as LogLevel[])
-              : undefined,
-            service: args.service,
-            trace_id: args.trace_id,
-            text: args.text,
-            limit: args.limit,
-          })
-        : searchLogs(db, {
-            ...args,
-            project_id: rp(args.project_id),
-            level: args.level
-              ? (args.level.split(",") as LogLevel[])
-              : undefined,
-            since: parseTime(args.since) ?? args.since,
-            until: parseTime(args.until) ?? args.until,
-          });
+      const rows = await store.listLogs({
+        project_id: await rid(args.project_id),
+        page_id: args.page_id,
+        level: args.level ? (args.level.split(",") as LogLevel[]) : undefined,
+        service: args.service,
+        trace_id: args.trace_id,
+        text: args.text,
+        since: parseTime(args.since) ?? args.since,
+        until: parseTime(args.until) ?? args.until,
+        limit: args.limit,
+      });
       return {
         content: [
           {
@@ -640,10 +590,7 @@ export function buildServer(): McpServer {
       brief: z.boolean().optional(),
     },
     async ({ project_id, n, brief }) => {
-      const cloud = logsCloud();
-      const rows = cloud
-        ? await cloud.list({ project_id, limit: n ?? 50 })
-        : tailLogs(db, rp(project_id), n ?? 50);
+      const rows = await store.tailLogs(await rid(project_id), n ?? 50);
       return {
         content: [
           {
@@ -671,44 +618,16 @@ export function buildServer(): McpServer {
         ),
     },
     async (args) => {
-      const cloud = logsCloud();
-      if (cloud) {
-        const rows = await cloud.list({
-          project_id: args.project_id,
-          service: args.service,
-          level: args.level
-            ? (args.level.split(",") as LogLevel[])
-            : undefined,
-          limit: 100000,
-        });
-        const by_level: Record<string, number> = {};
-        const by_service: Record<string, number> = {};
-        for (const r of rows) {
-          by_level[r.level] = (by_level[r.level] ?? 0) + 1;
-          const s = r.service ?? "-";
-          by_service[s] = (by_service[s] ?? 0) + 1;
-        }
-        const count = {
-          total: rows.length,
-          errors: by_level.error ?? 0,
-          warns: by_level.warn ?? 0,
-          fatals: by_level.fatal ?? 0,
-          by_level,
-          ...(args.group_by === "service" ? { by_service } : {}),
-        };
-        return {
-          content: [{ type: "text", text: JSON.stringify(count) }],
-        };
-      }
+      const count = await store.countLogs({
+        project_id: await rid(args.project_id),
+        service: args.service,
+        level: args.level,
+        since: args.since,
+        until: args.until,
+        group_by: args.group_by,
+      });
       return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              countLogs(db, { ...args, project_id: rp(args.project_id) }),
-            ),
-          },
-        ],
+        content: [{ type: "text", text: JSON.stringify(count) }],
       };
     },
   );
@@ -721,19 +640,12 @@ export function buildServer(): McpServer {
       limit: z.number().optional(),
     },
     async ({ project_id, since, limit }) => {
-      const cloud = logsCloud();
-      const rows = cloud
-        ? await cloud.list({
-            project_id,
-            level: ["error", "fatal"],
-            limit: limit ?? 20,
-          })
-        : searchLogs(db, {
-            project_id: rp(project_id),
-            level: ["error", "fatal"],
-            since: parseTime(since ?? "1h"),
-            limit: limit ?? 20,
-          });
+      const rows = await store.listLogs({
+        project_id: await rid(project_id),
+        level: ["error", "fatal"],
+        since: parseTime(since ?? "1h"),
+        limit: limit ?? 20,
+      });
       return {
         content: [
           { type: "text", text: JSON.stringify(applyBrief(rows, true)) },
@@ -748,12 +660,12 @@ export function buildServer(): McpServer {
       project_id: z.string().optional(),
       since: z.string().optional(),
     },
-    ({ project_id, since }) => ({
+    async ({ project_id, since }) => ({
       content: [
         {
           type: "text",
           text: JSON.stringify(
-            summarizeLogs(db, rp(project_id), parseTime(since) ?? since),
+            await store.summarize(await rid(project_id), parseTime(since) ?? since),
           ),
         },
       ],
@@ -766,12 +678,12 @@ export function buildServer(): McpServer {
       trace_id: z.string(),
       brief: z.boolean().optional(),
     },
-    ({ trace_id, brief }) => ({
+    async ({ trace_id, brief }) => ({
       content: [
         {
           type: "text",
           text: JSON.stringify(
-            applyBrief(getLogContext(db, trace_id), brief !== false),
+            applyBrief(await store.getLogContext(trace_id), brief !== false),
           ),
         },
       ],
@@ -792,19 +704,22 @@ export function buildServer(): McpServer {
           "Return N logs before and after the target log's timestamp (in addition to trace context)",
         ),
     },
-    ({ log_id, brief, window }) => ({
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            applyBrief(
-              getLogContextFromId(db, log_id, window ?? 0),
-              brief !== false,
+    ({ log_id, brief, window }) => {
+      requireLocalMode("log_context_from_id");
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              applyBrief(
+                getLogContextFromId(db, log_id, window ?? 0),
+                brief !== false,
+              ),
             ),
-          ),
-        },
-      ],
-    }),
+          },
+        ],
+      };
+    },
   );
 
   registerTool(
@@ -822,23 +737,30 @@ export function buildServer(): McpServer {
       service: z.string().optional(),
       limit: z.number().optional().default(100000),
     },
-    (args) => {
-      const chunks: string[] = [];
-      const write = (s: string) => {
-        chunks.push(s);
-        return true;
-      };
-      const options = {
-        project_id: rp(args.project_id),
-        level: args.level as never,
+    async (args) => {
+      const rows = await store.listLogs({
+        project_id: await rid(args.project_id),
+        level: args.level ? (args.level as LogLevel[]) : undefined,
         service: args.service,
-        since: args.since,
-        until: args.until,
+        since: parseTime(args.since) ?? args.since,
+        until: parseTime(args.until) ?? args.until,
         limit: args.limit ?? 100000,
-      };
-      if (args.format === "csv") exportToCsv(db, options, write);
-      else exportToJson(db, options, write);
-      return { content: [{ type: "text" as const, text: chunks.join("") }] };
+      });
+      let text: string;
+      if (args.format === "csv") {
+        const cols = ["id", "timestamp", "level", "service", "message", "trace_id"];
+        const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+        text = `${cols.join(",")}\n${rows
+          .map((r) =>
+            cols
+              .map((c) => esc((r as unknown as Record<string, unknown>)[c]))
+              .join(","),
+          )
+          .join("\n")}\n`;
+      } else {
+        text = JSON.stringify(rows);
+      }
+      return { content: [{ type: "text" as const, text }] };
     },
   );
 
@@ -851,16 +773,19 @@ export function buildServer(): McpServer {
         .array(z.enum(["top_errors", "error_rate", "failing_pages", "perf"]))
         .optional(),
     },
-    ({ project_id, since, include }) => ({
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            diagnose(db, rp(project_id) ?? project_id, since, include),
-          ),
-        },
-      ],
-    }),
+    ({ project_id, since, include }) => {
+      requireLocalMode("log_diagnose");
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              diagnose(db, rp(project_id) ?? project_id, since, include),
+            ),
+          },
+        ],
+      };
+    },
   );
 
   registerTool(
@@ -872,23 +797,26 @@ export function buildServer(): McpServer {
       b_since: z.string(),
       b_until: z.string(),
     },
-    ({ project_id, a_since, a_until, b_since, b_until }) => ({
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            compare(
-              db,
-              rp(project_id) ?? project_id,
-              parseTime(a_since) ?? a_since,
-              parseTime(a_until) ?? a_until,
-              parseTime(b_since) ?? b_since,
-              parseTime(b_until) ?? b_until,
+    ({ project_id, a_since, a_until, b_since, b_until }) => {
+      requireLocalMode("log_compare");
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              compare(
+                db,
+                rp(project_id) ?? project_id,
+                parseTime(a_since) ?? a_since,
+                parseTime(a_until) ?? a_until,
+                parseTime(b_since) ?? b_since,
+                parseTime(b_until) ?? b_until,
+              ),
             ),
-          ),
-        },
-      ],
-    }),
+          },
+        ],
+      };
+    },
   );
 
   registerTool(
@@ -898,6 +826,7 @@ export function buildServer(): McpServer {
       brief: z.boolean().optional(),
     },
     async ({ session_id, brief }) => {
+      requireLocalMode("log_session_context");
       const ctx = await getSessionContext(db, session_id);
       return {
         content: [
@@ -945,6 +874,7 @@ export function buildServer(): McpServer {
       attributes: z.record(z.string(), z.unknown()).optional(),
     },
     (args) => {
+      requireLocalMode("event_push");
       const projectId = rp(args.project_id);
       const hasExplicitIdentity = Boolean(
         args.machine_id || args.repo_id || args.app_id,
@@ -1004,14 +934,14 @@ export function buildServer(): McpServer {
       include_raw: z.boolean().optional(),
       include_internal: z.boolean().optional(),
     },
-    (args) => ({
+    async (args) => ({
       content: [
         {
           type: "text",
           text: JSON.stringify(
-            searchEvents(db, {
+            await store.listEvents({
               ...args,
-              project_id: rp(args.project_id),
+              project_id: await rid(args.project_id),
               since: parseTime(args.since) ?? args.since,
               until: parseTime(args.until) ?? args.until,
               limit: args.limit ?? 100,
@@ -1030,11 +960,13 @@ export function buildServer(): McpServer {
       event_id: z.string(),
       include_raw: z.boolean().optional(),
     },
-    ({ event_id, include_raw }) => ({
+    async ({ event_id, include_raw }) => ({
       content: [
         {
           type: "text",
-          text: JSON.stringify(getEvent(db, event_id, include_raw !== false)),
+          text: JSON.stringify(
+            await store.getEvent(event_id, include_raw !== false),
+          ),
         },
       ],
     }),
@@ -1056,6 +988,7 @@ export function buildServer(): McpServer {
       include_raw: z.boolean().optional(),
     },
     (args) => {
+      requireLocalMode("event_export");
       const chunks: string[] = [];
       const count = exportEventsToJson(
         db,
@@ -1159,14 +1092,14 @@ export function buildServer(): McpServer {
       limit: z.number().optional(),
       include_cases: z.boolean().optional(),
     },
-    (args) => ({
+    async (args) => ({
       content: [
         {
           type: "text",
           text: JSON.stringify(
-            searchTestReports(db, {
+            await store.listTestReports({
               ...args,
-              project_id: rp(args.project_id),
+              project_id: await rid(args.project_id),
               since: parseTime(args.since) ?? args.since,
               until: parseTime(args.until) ?? args.until,
               limit: args.limit ?? 100,
@@ -1184,12 +1117,12 @@ export function buildServer(): McpServer {
       report_id: z.string(),
       include_cases: z.boolean().optional(),
     },
-    ({ report_id, include_cases }) => ({
+    async ({ report_id, include_cases }) => ({
       content: [
         {
           type: "text",
           text: JSON.stringify(
-            getTestReport(db, report_id, include_cases !== false),
+            await store.getTestReport(report_id, include_cases !== false),
           ),
         },
       ],
@@ -1203,6 +1136,7 @@ export function buildServer(): McpServer {
       page_id: z.string().optional(),
     },
     ({ project_id, page_id }) => {
+      requireLocalMode("perf_snapshot");
       const snap = getLatestSnapshot(db, rp(project_id) ?? project_id, page_id);
       return {
         content: [
@@ -1225,7 +1159,9 @@ export function buildServer(): McpServer {
       since: z.string().optional(),
       limit: z.number().optional(),
     },
-    ({ project_id, page_id, since, limit }) => ({
+    ({ project_id, page_id, since, limit }) => {
+      requireLocalMode("perf_trend");
+      return {
       content: [
         {
           type: "text",
@@ -1240,7 +1176,8 @@ export function buildServer(): McpServer {
           ),
         },
       ],
-    }),
+      };
+    },
   );
 
   registerTool(
@@ -1248,25 +1185,34 @@ export function buildServer(): McpServer {
     {
       project_id: z.string().optional(),
     },
-    ({ project_id }) => ({
+    async ({ project_id }) => ({
       content: [
-        { type: "text", text: JSON.stringify(listJobs(db, rp(project_id))) },
+        {
+          type: "text",
+          text: JSON.stringify(await store.listJobs(await rid(project_id))),
+        },
       ],
     }),
   );
 
-  registerTool("list_projects", {}, () => ({
-    content: [{ type: "text", text: JSON.stringify(listProjects(db)) }],
+  registerTool("list_projects", {}, async () => ({
+    content: [{ type: "text", text: JSON.stringify(await store.listProjects()) }],
   }));
 
-  registerTool("list_pages", { project_id: z.string() }, ({ project_id }) => ({
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify(listPages(db, rp(project_id) ?? project_id)),
-      },
-    ],
-  }));
+  registerTool(
+    "list_pages",
+    { project_id: z.string() },
+    async ({ project_id }) => ({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            await store.listPages((await rid(project_id)) ?? project_id),
+          ),
+        },
+      ],
+    }),
+  );
 
   registerTool(
     "list_issues",
@@ -1275,16 +1221,19 @@ export function buildServer(): McpServer {
       status: z.string().optional(),
       limit: z.number().optional(),
     },
-    ({ project_id, status, limit }) => ({
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            listIssues(db, rp(project_id), status, limit ?? 50),
-          ),
-        },
-      ],
-    }),
+    ({ project_id, status, limit }) => {
+      requireLocalMode("list_issues");
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              listIssues(db, rp(project_id), status, limit ?? 50),
+            ),
+          },
+        ],
+      };
+    },
   );
 
   registerTool(
@@ -1293,14 +1242,17 @@ export function buildServer(): McpServer {
       id: z.string(),
       status: z.enum(["open", "resolved", "ignored"]),
     },
-    ({ id, status }) => ({
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(updateIssueStatus(db, id, status)),
-        },
-      ],
-    }),
+    ({ id, status }) => {
+      requireLocalMode("resolve_issue");
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(updateIssueStatus(db, id, status)),
+          },
+        ],
+      };
+    },
   );
 
   registerTool(
@@ -1315,19 +1267,22 @@ export function buildServer(): McpServer {
       action: z.enum(["webhook", "log"]).optional(),
       webhook_url: z.string().optional(),
     },
-    (args) => ({
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            createAlertRule(db, {
-              ...args,
-              project_id: rp(args.project_id) ?? args.project_id,
-            }),
-          ),
-        },
-      ],
-    }),
+    (args) => {
+      requireLocalMode("create_alert_rule");
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              createAlertRule(db, {
+                ...args,
+                project_id: rp(args.project_id) ?? args.project_id,
+              }),
+            ),
+          },
+        ],
+      };
+    },
   );
 
   registerTool(
@@ -1335,23 +1290,27 @@ export function buildServer(): McpServer {
     {
       project_id: z.string().optional(),
     },
-    ({ project_id }) => ({
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(listAlertRules(db, rp(project_id))),
-        },
-      ],
-    }),
+    ({ project_id }) => {
+      requireLocalMode("list_alert_rules");
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(listAlertRules(db, rp(project_id))),
+          },
+        ],
+      };
+    },
   );
 
   registerTool("delete_alert_rule", { id: z.string() }, ({ id }) => {
+    requireLocalMode("delete_alert_rule");
     deleteAlertRule(db, id);
     return { content: [{ type: "text", text: "deleted" }] };
   });
 
-  registerTool("get_health", {}, () => ({
-    content: [{ type: "text", text: JSON.stringify(getHealth(db)) }],
+  registerTool("get_health", {}, async () => ({
+    content: [{ type: "text", text: JSON.stringify(await store.health()) }],
   }));
 
   registerTool(
@@ -1362,49 +1321,42 @@ export function buildServer(): McpServer {
         .optional()
         .describe("Project name or ID (scope stats to a project)"),
     },
-    (args) => {
-      const projectId = rp(args.project_id);
-      const pFilter = projectId ? "WHERE project_id = ?" : "";
-      const pAnd = projectId ? "AND project_id = ?" : "";
-      const pParam = projectId ? [projectId] : [];
-
-      const total = (
-        db
-          .query(`SELECT COUNT(*) as c FROM logs ${pFilter}`)
-          .get(...pParam) as {
-          c: number;
+    async (args) => {
+      const rows = await store.listLogs({
+        project_id: await rid(args.project_id),
+        limit: 100000,
+      });
+      const total = rows.length;
+      const byLevel: Record<string, number> = {};
+      const byService: Record<string, number> = {};
+      const byDay: Record<string, number> = {};
+      const weekAgo = Date.now() - 7 * 24 * 3600 * 1000;
+      let oldest: string | null = null;
+      let newest: string | null = null;
+      for (const r of rows) {
+        byLevel[r.level] = (byLevel[r.level] ?? 0) + 1;
+        const svc = r.service ?? "-";
+        byService[svc] = (byService[svc] ?? 0) + 1;
+        if (r.timestamp) {
+          if (oldest === null || r.timestamp < oldest) oldest = r.timestamp;
+          if (newest === null || r.timestamp > newest) newest = r.timestamp;
+          const t = new Date(r.timestamp).getTime();
+          if (Number.isFinite(t) && t >= weekAgo) {
+            const day = r.timestamp.slice(0, 10);
+            byDay[day] = (byDay[day] ?? 0) + 1;
+          }
         }
-      ).c;
-      const oldest = (
-        db
-          .query(`SELECT MIN(timestamp) as t FROM logs ${pFilter}`)
-          .get(...pParam) as { t: string | null }
-      ).t;
-      const newest = (
-        db
-          .query(`SELECT MAX(timestamp) as t FROM logs ${pFilter}`)
-          .get(...pParam) as { t: string | null }
-      ).t;
-      const byLevel = db
-        .query(
-          `SELECT level, COUNT(*) as c FROM logs ${pFilter} GROUP BY level ORDER BY c DESC`,
-        )
-        .all(...pParam) as { level: string; c: number }[];
-      const topServices = db
-        .query(
-          `SELECT COALESCE(service, '-') as service, COUNT(*) as c FROM logs ${pFilter} GROUP BY service ORDER BY c DESC LIMIT 5`,
-        )
-        .all(...pParam) as { service: string; c: number }[];
-      const days = db
-        .query(
-          `SELECT strftime('%Y-%m-%d', timestamp) as day, COUNT(*) as c FROM logs WHERE timestamp >= datetime('now', '-7 days') ${pAnd} GROUP BY day ORDER BY day`,
-        )
-        .all(...pParam) as { day: string; c: number }[];
-      const errors =
-        (byLevel.find((r) => r.level === "error")?.c ?? 0) +
-        (byLevel.find((r) => r.level === "fatal")?.c ?? 0);
+      }
+      const errors = (byLevel.error ?? 0) + (byLevel.fatal ?? 0);
       const error_rate_pct =
         total > 0 ? Number.parseFloat(((errors / total) * 100).toFixed(2)) : 0;
+      const top_services = Object.entries(byService)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([service, c]) => ({ service, c }));
+      const last_7_days = Object.entries(byDay)
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([day, c]) => ({ day, c }));
       return {
         content: [
           {
@@ -1413,9 +1365,9 @@ export function buildServer(): McpServer {
               total,
               oldest,
               newest,
-              by_level: Object.fromEntries(byLevel.map((r) => [r.level, r.c])),
-              top_services: topServices,
-              last_7_days: days,
+              by_level: byLevel,
+              top_services,
+              last_7_days,
               error_rate_pct,
             }),
           },
