@@ -1111,6 +1111,7 @@ program
   .command("download <file-id> [dest]")
   .description("Download a file to local disk")
   .action(async (fileId: string, dest?: string) => {
+    requireLocalTransport("files download");
     let resolved;
     try {
       resolved = resolveFileObject(requireId(fileId, "files"));
@@ -1269,6 +1270,7 @@ program
   .description("Resolve a file to its current object storage location")
   .option("--json", "Output as JSON")
   .action((fileId: string, opts: { json?: boolean }) => {
+    requireLocalTransport("files resolve");
     try {
       const resolved = resolveFileObject(requireId(fileId, "files"));
       const summary = resolvedFileObjectSummary(resolved);
@@ -1433,6 +1435,7 @@ program
   .command("open <file-id>")
   .description("Open a file in the default application")
   .action((fileId: string) => {
+    requireLocalTransport("files open");
     try {
       const file = getFile(requireId(fileId, "files"))!;
       const source = getSource(file.source_id);
@@ -1446,6 +1449,7 @@ program
   .command("where <file-id>")
   .description("Print the full absolute path of a file (for shell scripting)")
   .action((fileId: string) => {
+    requireLocalTransport("files where");
     try {
       const file = getFile(requireId(fileId, "files"))!;
       const source = getSource(file.source_id);
@@ -1459,6 +1463,7 @@ program
   .description("Print file content to stdout")
   .option("--max-bytes <n>", "Max bytes to read (default: unlimited)", "0")
   .action((fileId: string, opts: { maxBytes: string }) => {
+    requireLocalTransport("files cat");
     try {
       const file = getFile(requireId(fileId, "files"))!;
       const source = getSource(file.source_id);
@@ -2124,4 +2129,9 @@ program
     else { console.error(chalk.red(`Source not found: ${id}`)); process.exit(1); }
   });
 
-program.parseAsync();
+program.parseAsync().catch((error: unknown) => {
+  // Any command action that rejects (e.g. a HasnaHttpError from the cloud
+  // transport) surfaces here as a single clean line — never a raw stack trace.
+  console.error(chalk.red(error instanceof Error ? error.message : String(error)));
+  process.exit(1);
+});

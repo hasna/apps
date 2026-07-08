@@ -1,7 +1,7 @@
 {
   "name": "@hasna/files",
-  "version": "0.3.0",
-  "description": "Agent-first file management \u2014 index local folders and S3 buckets, sync Google Drive, tag, search, and retrieve files via CLI + MCP",
+  "version": "0.3.2",
+  "description": "Agent-first file management — index local folders and S3 buckets, sync Google Drive, tag, search, and retrieve files via CLI + MCP",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

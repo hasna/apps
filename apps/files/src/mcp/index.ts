@@ -492,6 +492,8 @@ registerTool("build_context_pack", "Build a bounded, cited context pack for expl
   output_local_path: z.string().optional().describe("Write full bounded pack JSON to this local path and return a compact pointer"),
   dry_run: z.boolean().optional().default(false).describe("With output_local_path, preview the pointer without writing"),
 }, async (params) => {
+  const denied = requireLocalTransport("build_context_pack");
+  if (denied) return denied;
   try {
     const pack = await buildFilesContextPack({
       file_ids: params.file_ids,
@@ -526,6 +528,8 @@ registerTool("search_context_pack", "Search files and return a bounded, cited co
   output_local_path: z.string().optional().describe("Write full bounded pack JSON to this local path and return a compact pointer"),
   dry_run: z.boolean().optional().default(false).describe("With output_local_path, preview the pointer without writing"),
 }, async (params) => {
+  const denied = requireLocalTransport("search_context_pack");
+  if (denied) return denied;
   try {
     const pack = await buildFilesSearchPack({
       query: params.query,
@@ -561,6 +565,8 @@ registerTool("download_file", "Download a file from S3 to a local path", {
   dest: z.string().optional().describe("Destination path (defaults to ~/Downloads/<filename>)"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ id, dest, agent_id }) => {
+  const denied = requireLocalTransport("download_file");
+  if (denied) return denied;
   let resolved;
   try {
     resolved = resolveFileObject(id);
@@ -787,6 +793,8 @@ registerTool("get_file_url", "Get a pre-signed URL for temporary access to an S3
   id: z.string().describe("File ID"),
   expires_in: z.number().optional().default(3600).describe("URL expiry in seconds (default 1 hour)"),
 }, async ({ id, expires_in }) => {
+  const denied = requireLocalTransport("get_file_url");
+  if (denied) return denied;
   let resolved;
   try {
     resolved = resolveFileObject(id);
@@ -802,6 +810,8 @@ registerTool("get_file_url", "Get a pre-signed URL for temporary access to an S3
 registerTool("resolve_file_storage", "Resolve a file to its current object storage location", {
   id: z.string().describe("File ID"),
 }, ({ id }) => {
+  const denied = requireLocalTransport("resolve_file_storage");
+  if (denied) return denied;
   try {
     return { content: [{ type: "text", text: JSON.stringify(resolvedFileObjectSummary(resolveFileObject(id)), null, 2) }] };
   } catch (error) {
@@ -816,6 +826,8 @@ registerTool("get_file_content", "Read the content of a text file (local or S3 s
   max_bytes: z.number().optional().default(102400).describe("Max bytes to read (default 100KB)"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ id, max_bytes, agent_id }) => {
+  const denied = requireLocalTransport("get_file_content");
+  if (denied) return denied;
   try {
     const limit = normalizeMcpReadLimit(max_bytes);
     const resolution = await resolveKnowledgeSourceRef(buildOpenFilesFileRef(id), {
@@ -844,6 +856,8 @@ registerTool("extract_file_text", "Return chunk-ready extracted text metadata fo
   segment_chars: z.number().optional().default(4000).describe("Maximum characters per segment"),
   redact_patterns: z.array(z.string()).optional().describe("Regex patterns to redact from segment text"),
 }, async ({ id, max_bytes, segment_chars, redact_patterns }) => {
+  const denied = requireLocalTransport("extract_file_text");
+  if (denied) return denied;
   try {
     const result = await extractTextFromFile(id, {
       max_bytes,
@@ -862,6 +876,8 @@ registerTool("extract_file_snapshot", "Return a deterministic extraction snapsho
   segment_chars: z.number().optional().default(4000).describe("Maximum characters per source segment"),
   redact_patterns: z.array(z.string()).optional().describe("Regex patterns to redact from snapshot text"),
 }, async ({ id, max_bytes, segment_chars, redact_patterns }) => {
+  const denied = requireLocalTransport("extract_file_snapshot");
+  if (denied) return denied;
   try {
     const result = await extractTextSnapshotFromFile(id, {
       max_bytes,
@@ -893,6 +909,8 @@ registerTool("export_knowledge_manifest", "Export a read-only open-files source 
   include_acl_summary: z.boolean().optional(),
   include_evidence_assets: z.boolean().optional(),
 }, async (params) => {
+  const denyApi = requireLocalTransport("export_knowledge_manifest");
+  if (denyApi) return denyApi;
   try {
     if (params.output_local_path || params.output_s3_source_id || params.output_s3_key) {
       const denied = requireMcpCapability("export_knowledge_manifest", "mutations");
@@ -938,6 +956,8 @@ registerTool("resolve_knowledge_source", "Resolve an open-files:// source ref wi
   agent_id: z.string().optional(),
   session_id: z.string().optional(),
 }, async (params) => {
+  const denied = requireLocalTransport("resolve_knowledge_source");
+  if (denied) return denied;
   try {
     const result = await resolveKnowledgeSourceRef(params.source_ref, {
       mode: params.mode as KnowledgeSourceResolveMode,
@@ -970,6 +990,8 @@ registerTool("doctor_knowledge_sources", "Diagnose open-files source refs for kn
   max_bytes: z.number().optional().default(262144),
   segment_chars: z.number().optional().default(4000),
 }, async (params) => {
+  const denied = requireLocalTransport("doctor_knowledge_sources");
+  if (denied) return denied;
   try {
     const result = await doctorKnowledgeSources({
       source_refs: params.source_refs,
@@ -997,6 +1019,8 @@ registerTool("resolve_extracted_text", "Resolve extracted text for an open-files
   max_bytes: z.number().optional().default(1048576),
   segment_chars: z.number().optional().default(4000),
 }, async ({ source_ref, purpose, max_bytes, segment_chars }) => {
+  const denied = requireLocalTransport("resolve_extracted_text");
+  if (denied) return denied;
   try {
     parseOpenFilesSourceRef(source_ref);
     const result = await resolveKnowledgeSourceRef(source_ref, {
@@ -1024,6 +1048,8 @@ registerTool("poll_knowledge_outbox", "Poll open-files source change outbox even
   file_id: z.string().optional(),
   limit: z.number().optional().default(100),
 }, async (params) => {
+  const denied = requireLocalTransport("poll_knowledge_outbox");
+  if (denied) return denied;
   try {
     const result = pollKnowledgeSourceOutbox({
       consumer_id: params.consumer_id,
@@ -1043,6 +1069,8 @@ registerTool("ack_knowledge_outbox", "Acknowledge open-files source change outbo
   consumer_id: z.string(),
   cursor: z.number(),
 }, async ({ consumer_id, cursor }) => {
+  const denied = requireLocalTransport("ack_knowledge_outbox");
+  if (denied) return denied;
   try {
     const checkpoint = acknowledgeKnowledgeSourceOutbox(consumer_id, cursor);
     return { content: [{ type: "text", text: JSON.stringify(checkpoint, null, 2) }] };
@@ -1080,6 +1108,8 @@ registerTool("describe_file", "Get file metadata + first lines of content in one
   id: z.string().describe("File ID"),
   lines: z.number().optional().default(50).describe("Number of lines to preview (default 50)"),
 }, async ({ id, lines }) => {
+  const denied = requireLocalTransport("describe_file");
+  if (denied) return denied;
   let resolved;
   try {
     resolved = resolveFileObject(id);

@@ -71,6 +71,23 @@ async function orNull<T>(p: Promise<T>): Promise<T | null> {
   }
 }
 
+/**
+ * Resolve a DELETE to a truthful boolean: `true` when the server confirmed the
+ * removal, `false` on 404 (the record — or the route — was absent). The
+ * @hasna/contracts `client.delete` helper *swallows* a 404 and returns void,
+ * which made every delete report a false "removed" even when nothing was
+ * deleted; the raw transport `del` throws on 404 so we can tell the difference.
+ */
+async function deletedOk(p: Promise<unknown>): Promise<boolean> {
+  try {
+    await p;
+    return true;
+  } catch (e) {
+    if (e instanceof HasnaHttpError && e.status === 404) return false;
+    throw e;
+  }
+}
+
 export class ApiStore implements FilesStore {
   readonly transport = "api" as const;
 
@@ -96,8 +113,7 @@ export class ApiStore implements FilesStore {
     return orNull(this.client.update<Source>("sources", id, patch));
   }
   async deleteSource(id: string): Promise<boolean> {
-    await this.client.delete("sources", id);
-    return true;
+    return deletedOk(this.http.del(`/sources/${seg(id)}`));
   }
 
   // ── machines ───────────────────────────────────────────────────────────────
@@ -198,8 +214,7 @@ export class ApiStore implements FilesStore {
     await this.http.del(`/files/${seg(fileId)}/tags`, { tags: [tag] });
   }
   async deleteTag(id: string): Promise<boolean> {
-    await this.client.delete("tags", id);
-    return true;
+    return deletedOk(this.http.del(`/tags/${seg(id)}`));
   }
 
   // ── collections ────────────────────────────────────────────────────────────
@@ -223,8 +238,7 @@ export class ApiStore implements FilesStore {
     return orNull(this.client.update<Collection>("collections", id, patch));
   }
   async deleteCollection(id: string): Promise<boolean> {
-    await this.client.delete("collections", id);
-    return true;
+    return deletedOk(this.http.del(`/collections/${seg(id)}`));
   }
   async getOrCreateCollection(name: string, description?: string): Promise<Collection> {
     return this.http.post<Collection>("/collections/get-or-create", { name, description });
@@ -255,8 +269,7 @@ export class ApiStore implements FilesStore {
     return orNull(this.client.update<Project>("projects", id, patch));
   }
   async deleteProject(id: string): Promise<boolean> {
-    await this.client.delete("projects", id);
-    return true;
+    return deletedOk(this.http.del(`/projects/${seg(id)}`));
   }
   async getOrCreateProject(name: string, description?: string): Promise<Project> {
     return this.http.post<Project>("/projects/get-or-create", { name, description });

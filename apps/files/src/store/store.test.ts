@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import { createHasnaStorageClient } from "@hasna/contracts/client/storage";
+import { HasnaHttpError } from "@hasna/contracts/client";
 import type { HasnaHttpTransport } from "@hasna/contracts/client/transport";
 import { ApiStore } from "./api-store.js";
 import { LocalStore } from "./local-store.js";
@@ -79,6 +80,39 @@ describe("ApiStore route mapping", () => {
     expect(find("DELETE", "/collections/col_1/files/file_1")).toBeDefined();
     expect(find("POST", "/projects/prj_1/files")?.body).toEqual({ file_id: "file_1" });
     expect(find("DELETE", "/projects/prj_1/files/file_1")).toBeDefined();
+  });
+
+  it("reports deletes truthfully: 404 -> false, success -> true (no false 'removed')", async () => {
+    // A transport whose DELETE 404s (record — or route — absent). The
+    // @hasna/contracts `client.delete` helper swallows this and returns void,
+    // which used to make every delete claim success; the ApiStore now goes
+    // through the raw transport so a 404 is surfaced as `false`.
+    const del404: HasnaHttpTransport = {
+      baseUrl: "https://files.hasna.xyz/v1",
+      get: async () => ({}),
+      post: async () => ({}),
+      put: async () => ({}),
+      patch: async () => ({}),
+      del: async (path: string) => { throw new HasnaHttpError("DELETE", path, 404, { error: "not found" }); },
+    } as unknown as HasnaHttpTransport;
+    const missing = new ApiStore(createHasnaStorageClient("files", del404));
+    expect(await missing.deleteCollection("nope")).toBe(false);
+    expect(await missing.deleteProject("nope")).toBe(false);
+    expect(await missing.deleteSource("nope")).toBe(false);
+    expect(await missing.deleteTag("nope")).toBe(false);
+
+    const { transport } = fakeTransport(); // del resolves -> deleted
+    const present = new ApiStore(createHasnaStorageClient("files", transport));
+    expect(await present.deleteCollection("col_1")).toBe(true);
+    expect(await present.deleteProject("prj_1")).toBe(true);
+
+    // A non-404 error must still propagate (not be masked as a boolean).
+    const del500: HasnaHttpTransport = {
+      ...del404,
+      del: async (path: string) => { throw new HasnaHttpError("DELETE", path, 500, { error: "boom" }); },
+    } as unknown as HasnaHttpTransport;
+    const broken = new ApiStore(createHasnaStorageClient("files", del500));
+    await expect(broken.deleteCollection("col_1")).rejects.toThrow();
   });
 
   it("routes agent registry + activity through /v1 (never local sqlite)", async () => {
