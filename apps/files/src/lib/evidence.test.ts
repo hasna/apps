@@ -78,7 +78,9 @@ describe("evidence vault", () => {
 
     expect(result.asset.status).toBe("verified");
     expect(result.asset.scan_status).toBe("skipped");
-    expect(result.asset.bucket).toBeUndefined();
+    // The resolved local root is persisted as the asset's storage container so
+    // later invocations can locate the bytes without re-passing --local-root.
+    expect(result.asset.bucket).toBe(evidenceRoot());
     expect(result.asset.retention_policy).toBe("tax_evidence");
     expect(result.asset.storage_class).toBe("STANDARD_IA");
     expect(result.asset.legal_hold).toBe(true);

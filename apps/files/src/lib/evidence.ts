@@ -190,7 +190,12 @@ export async function createEvidenceUploadIntent(
     content_type: contentType,
     checksum_algorithm: input.checksum_algorithm ?? "sha256",
     storage_provider: storage.provider,
-    bucket: storage.provider === "s3" ? storage.bucket : undefined,
+    // `bucket` is the storage container for the asset. For s3 that is the S3
+    // bucket; for local it is the resolved on-box evidence root. Persisting it
+    // here is what lets a LATER `complete`/`verify`/`sign-download` invocation
+    // locate the bytes without re-passing `--local-root` — otherwise the root
+    // is re-resolved to the default and the object appears missing.
+    bucket: storage.provider === "s3" ? storage.bucket : storage.localRoot,
     region: storage.provider === "s3" ? storage.region : undefined,
     object_key: objectKey,
     quarantine_key: quarantineKey,
@@ -219,7 +224,7 @@ export async function createEvidenceUploadIntent(
         checksumSha256: asset.checksum,
         metadata: evidenceMetadata(asset),
       })
-    : pathToFileURL(localObjectPath(storage, quarantineKey)).toString();
+    : pathToFileURL(localObjectPath(storage, quarantineKey, asset)).toString();
 
   await db.createFileAccessEvent({
     asset_id: asset.id,
@@ -267,7 +272,7 @@ export async function uploadEvidenceFile(
       result.asset.checksum,
     );
   } else {
-    const dest = localObjectPath(storage, key);
+    const dest = localObjectPath(storage, key, result.asset);
     mkdirSync(dirname(dest), { recursive: true });
     copyFileSync(input.path, dest);
   }
@@ -301,10 +306,10 @@ export async function completeEvidenceUpload(
       await deleteFromS3(source, quarantineKey);
     }
   } else {
-    const sourcePath = localObjectPath(storage, quarantineKey);
+    const sourcePath = localObjectPath(storage, quarantineKey, asset);
     if (!existsSync(sourcePath)) throw new Error(`Uploaded file not found: ${sourcePath}`);
     assertUploadedObjectMatches(asset, statSync(sourcePath).size, sha256File(sourcePath));
-    const finalPath = localObjectPath(storage, asset.object_key);
+    const finalPath = localObjectPath(storage, asset.object_key, asset);
     mkdirSync(dirname(finalPath), { recursive: true });
     renameSync(sourcePath, finalPath);
   }
@@ -356,7 +361,7 @@ export async function signEvidenceDownload(
   const expiresIn = input.expires_in_seconds ?? 300;
   const url = asset.storage_provider === "s3"
     ? await getPresignedUrl(makeEvidenceSource(storage, asset), asset.object_key, expiresIn)
-    : pathToFileURL(localObjectPath(storage, asset.object_key)).toString();
+    : pathToFileURL(localObjectPath(storage, asset.object_key, asset)).toString();
   const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
 
   await db.createFileAccessEvent({
@@ -394,7 +399,7 @@ export async function verifyEvidenceAsset(
     if (!head) diagnostics.push("object_missing");
     else collectObjectDiagnostics(asset, head.size, head.metadata.checksum ?? head.checksum_sha256, diagnostics);
   } else {
-    const path = localObjectPath(storage, asset.object_key);
+    const path = localObjectPath(storage, asset.object_key, asset);
     if (!existsSync(path)) diagnostics.push("object_missing");
     else collectObjectDiagnostics(asset, statSync(path).size, sha256File(path), diagnostics);
   }
@@ -486,8 +491,15 @@ function collectObjectDiagnostics(asset: FileAsset, size: number, checksum: stri
   }
 }
 
-function localObjectPath(storage: Required<EvidenceStorageOptions>, key: string): string {
-  return join(storage.localRoot, key);
+/**
+ * Resolve the on-disk path for a local evidence object. The root is taken from
+ * the asset's persisted container (`asset.bucket`, stamped at intent creation)
+ * when available so that byte resolution is stable across CLI invocations, and
+ * only falls back to the freshly-resolved `storage.localRoot` when the asset
+ * carries no persisted root (e.g. the intent-creation call itself).
+ */
+function localObjectPath(storage: Required<EvidenceStorageOptions>, key: string, asset?: Pick<FileAsset, "bucket">): string {
+  return join(asset?.bucket ?? storage.localRoot, key);
 }
 
 function cleanSegment(value: string): string {

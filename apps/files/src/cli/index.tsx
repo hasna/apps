@@ -798,6 +798,7 @@ program
   .option("--dry-run", "With --out, preview the artifact pointer without writing the file")
   .action(async (fileIds: string[], opts: ContextPackCliOptions) => {
     try {
+      requireLocalTransport("context-pack");
       const positionalRefs = fileIds.filter((value) => value.startsWith("open-files://"));
       const positionalFileIds = fileIds.filter((value) => !value.startsWith("open-files://"));
       const pack = await buildFilesContextPack({
@@ -832,6 +833,7 @@ program
   .option("--dry-run", "With --out, preview the artifact pointer without writing the file")
   .action(async (query: string, opts: SearchPackCliOptions) => {
     try {
+      requireLocalTransport("search-pack");
       const pack = await buildFilesSearchPack({
         query,
         source_id: opts.source,
