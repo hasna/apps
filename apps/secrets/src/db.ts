@@ -102,6 +102,13 @@ function migrate(db: Database): void {
     );
   `);
 
+  // Older vaults created the feedback table with a NOT NULL `service` column (no
+  // default) and an `id` column with no generator default. CREATE TABLE IF NOT
+  // EXISTS never rewrites an existing table, so canonical inserts — which omit
+  // both — fail with "NOT NULL constraint failed: feedback.service". Rebuild the
+  // table to the canonical shape, preserving any existing rows.
+  rebuildLegacyFeedback(db);
+
   // Idempotent column upgrades for vaults created by older versions. CREATE TABLE
   // IF NOT EXISTS never alters an existing table, so pre-existing installs miss
   // columns added later (e.g. feedback.category). Add any missing columns with
@@ -114,6 +121,56 @@ function migrate(db: Database): void {
   });
   ensureColumns(db, "users", { type: "TEXT NOT NULL DEFAULT 'human'" });
   ensureColumns(db, "secrets", { label: "TEXT", expires_at: "TEXT" });
+}
+
+/**
+ * Rebuild a legacy feedback table (identified by a leftover `service` column) into
+ * the canonical schema. The legacy shape had `service TEXT NOT NULL` with no
+ * default and an `id` with no generator default, both of which break canonical
+ * inserts that omit them. Existing rows are copied across; the dropped `service`
+ * value is discarded. No-op when the table is already canonical or absent.
+ */
+function rebuildLegacyFeedback(db: Database): void {
+  const cols = new Set(
+    (db.prepare(`PRAGMA table_info(feedback)`).all() as Array<{ name: string }>).map((c) => c.name),
+  );
+  if (cols.size === 0 || !cols.has("service")) return;
+
+  const has = (c: string): boolean => cols.has(c);
+  const pick = (c: string, fallback: string): string => (has(c) ? `NULLIF(${c}, '')` : fallback);
+
+  db.exec("BEGIN");
+  try {
+    db.exec("ALTER TABLE feedback RENAME TO feedback_legacy");
+    db.exec(`
+      CREATE TABLE feedback (
+        id         TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        message    TEXT NOT NULL,
+        email      TEXT,
+        category   TEXT DEFAULT 'general',
+        version    TEXT,
+        machine_id TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+    db.exec(`
+      INSERT INTO feedback (id, message, email, category, version, machine_id, created_at)
+      SELECT
+        COALESCE(${has("id") ? "NULLIF(id, '')" : "NULL"}, lower(hex(randomblob(16)))),
+        message,
+        ${pick("email", "NULL")},
+        COALESCE(${has("category") ? "NULLIF(category, '')" : "NULL"}, 'general'),
+        ${pick("version", "NULL")},
+        ${pick("machine_id", "NULL")},
+        COALESCE(${has("created_at") ? "NULLIF(created_at, '')" : "NULL"}, datetime('now'))
+      FROM feedback_legacy;
+    `);
+    db.exec("DROP TABLE feedback_legacy");
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 /**
