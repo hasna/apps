@@ -1,5 +1,6 @@
 import { type EmbeddingRuntimeOptions } from './embeddings';
 import { type GeneratedArtifactProvenance, type KnowledgeProvenance } from './provenance';
+import type { KnowledgeItem } from './store';
 import type { KnowledgeConfig } from './workspace';
 export type SearchResultKind = 'source_chunk' | 'wiki_chunk' | 'legacy_item' | 'wiki_page' | 'knowledge_index';
 export type SearchProvenance = KnowledgeProvenance | GeneratedArtifactProvenance;
@@ -65,3 +66,12 @@ export interface HybridSearchEntry {
 }
 export declare function hybridSearch(options: HybridSearchOptions): Promise<HybridSearchResult>;
 export declare function hybridSearchLegacyStore(options: Omit<HybridSearchOptions, 'dbPath'>): Promise<HybridSearchResult>;
+/**
+ * Lexical search over an in-memory knowledge-item corpus. In api (self_hosted /
+ * cloud) mode the client has no local sqlite catalog; the shared corpus is the
+ * cloud knowledge-items fetched through the item Store. Both `search` and `ask`
+ * route their retrieval here so cloud mode is first-class instead of throwing.
+ * Semantic ranking (vector index) lives only in the local sqlite catalog, so it
+ * is reported as skipped rather than silently ignored.
+ */
+export declare function hybridSearchItems(items: KnowledgeItem[], options: Omit<HybridSearchOptions, 'dbPath' | 'legacyStorePath'>, baseWarnings?: string[]): Promise<HybridSearchResult>;

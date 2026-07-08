@@ -14993,7 +14993,7 @@ var init_mcp_http = () => {};
 init_zod();
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { existsSync as existsSync14, readFileSync as readFileSync14, writeFileSync as writeFileSync6 } from "fs";
+import { existsSync as existsSync14, readFileSync as readFileSync13, writeFileSync as writeFileSync6 } from "fs";
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
@@ -15268,615 +15268,6 @@ function writeKnowledgeConfig(path, config2) {
   writeFileSync(path, `${JSON.stringify(config2, null, 2)}
 `);
 }
-
-// src/knowledge-db.ts
-var MIGRATION_1 = `
-PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
-
-CREATE TABLE IF NOT EXISTS schema_versions (
-  version INTEGER PRIMARY KEY,
-  applied_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS sources (
-  id TEXT PRIMARY KEY,
-  uri TEXT NOT NULL UNIQUE,
-  kind TEXT NOT NULL,
-  title TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  acl_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS source_revisions (
-  id TEXT PRIMARY KEY,
-  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-  revision TEXT NOT NULL,
-  hash TEXT,
-  extracted_text_uri TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  UNIQUE(source_id, revision)
-);
-
-CREATE TABLE IF NOT EXISTS chunks (
-  id TEXT PRIMARY KEY,
-  source_revision_id TEXT REFERENCES source_revisions(id) ON DELETE CASCADE,
-  wiki_page_id TEXT,
-  kind TEXT NOT NULL,
-  ordinal INTEGER NOT NULL,
-  text TEXT NOT NULL,
-  token_count INTEGER,
-  start_offset INTEGER,
-  end_offset INTEGER,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS chunk_embeddings (
-  id TEXT PRIMARY KEY,
-  chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
-  provider TEXT NOT NULL,
-  model TEXT NOT NULL,
-  dimensions INTEGER NOT NULL,
-  vector_json TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  UNIQUE(chunk_id, provider, model)
-);
-
-CREATE TABLE IF NOT EXISTS wiki_pages (
-  id TEXT PRIMARY KEY,
-  path TEXT NOT NULL UNIQUE,
-  title TEXT NOT NULL,
-  artifact_uri TEXT,
-  content_hash TEXT,
-  status TEXT NOT NULL DEFAULT 'active',
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS wiki_backlinks (
-  from_page_id TEXT NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
-  to_page_id TEXT NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
-  label TEXT,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY(from_page_id, to_page_id)
-);
-
-CREATE TABLE IF NOT EXISTS citations (
-  id TEXT PRIMARY KEY,
-  wiki_page_id TEXT REFERENCES wiki_pages(id) ON DELETE CASCADE,
-  chunk_id TEXT REFERENCES chunks(id) ON DELETE SET NULL,
-  source_uri TEXT NOT NULL,
-  quote TEXT,
-  start_offset INTEGER,
-  end_offset INTEGER,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS knowledge_indexes (
-  id TEXT PRIMARY KEY,
-  kind TEXT NOT NULL,
-  name TEXT NOT NULL,
-  artifact_uri TEXT,
-  shard_key TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE(kind, name, shard_key)
-);
-
-CREATE TABLE IF NOT EXISTS runs (
-  id TEXT PRIMARY KEY,
-  type TEXT NOT NULL,
-  prompt TEXT,
-  status TEXT NOT NULL,
-  provider TEXT,
-  model TEXT,
-  cost_tokens INTEGER NOT NULL DEFAULT 0,
-  cost_usd REAL NOT NULL DEFAULT 0,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS run_events (
-  id TEXT PRIMARY KEY,
-  run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-  level TEXT NOT NULL,
-  event TEXT NOT NULL,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS provider_usage (
-  id TEXT PRIMARY KEY,
-  run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
-  provider TEXT NOT NULL,
-  model TEXT NOT NULL,
-  input_tokens INTEGER NOT NULL DEFAULT 0,
-  output_tokens INTEGER NOT NULL DEFAULT 0,
-  cost_usd REAL NOT NULL DEFAULT 0,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS redaction_findings (
-  id TEXT PRIMARY KEY,
-  source_uri TEXT,
-  run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
-  severity TEXT NOT NULL,
-  finding_type TEXT NOT NULL,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS storage_objects (
-  id TEXT PRIMARY KEY,
-  artifact_uri TEXT NOT NULL UNIQUE,
-  kind TEXT NOT NULL,
-  content_type TEXT,
-  hash TEXT,
-  size_bytes INTEGER,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
-  text,
-  title,
-  source_uri,
-  content='',
-  tokenize='porter unicode61'
-);
-
-INSERT OR IGNORE INTO schema_versions(version, applied_at)
-VALUES (1, datetime('now'));
-`;
-var MIGRATION_2 = `
-DROP TABLE IF EXISTS chunks_fts;
-
-CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
-  chunk_id UNINDEXED,
-  text,
-  title,
-  source_uri,
-  tokenize='porter unicode61'
-);
-
-INSERT OR IGNORE INTO schema_versions(version, applied_at)
-VALUES (2, datetime('now'));
-`;
-var MIGRATION_3 = `
-CREATE TABLE IF NOT EXISTS audit_events (
-  id TEXT PRIMARY KEY,
-  event_type TEXT NOT NULL,
-  action TEXT NOT NULL,
-  target_uri TEXT,
-  decision TEXT NOT NULL,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS approval_gates (
-  id TEXT PRIMARY KEY,
-  action TEXT NOT NULL,
-  target_uri TEXT,
-  status TEXT NOT NULL,
-  reason TEXT,
-  approved_by TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_audit_events_action ON audit_events(action);
-CREATE INDEX IF NOT EXISTS idx_audit_events_target ON audit_events(target_uri);
-CREATE INDEX IF NOT EXISTS idx_audit_events_created ON audit_events(created_at);
-CREATE INDEX IF NOT EXISTS idx_approval_gates_action ON approval_gates(action);
-CREATE INDEX IF NOT EXISTS idx_approval_gates_status ON approval_gates(status);
-
-INSERT OR IGNORE INTO schema_versions(version, applied_at)
-VALUES (3, datetime('now'));
-`;
-var MIGRATION_4 = `
-CREATE TABLE IF NOT EXISTS vector_index_entries (
-  id TEXT PRIMARY KEY,
-  chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
-  source_revision_id TEXT REFERENCES source_revisions(id) ON DELETE CASCADE,
-  provider TEXT NOT NULL,
-  model TEXT NOT NULL,
-  dimensions INTEGER NOT NULL,
-  vector_json TEXT NOT NULL,
-  vector_norm REAL NOT NULL,
-  source_uri TEXT,
-  source_ref TEXT,
-  revision TEXT,
-  hash TEXT,
-  start_offset INTEGER,
-  end_offset INTEGER,
-  token_count INTEGER,
-  status TEXT NOT NULL DEFAULT 'active',
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE(chunk_id, provider, model)
-);
-
-CREATE INDEX IF NOT EXISTS idx_vector_index_provider_model ON vector_index_entries(provider, model);
-CREATE INDEX IF NOT EXISTS idx_vector_index_source_revision ON vector_index_entries(source_revision_id);
-CREATE INDEX IF NOT EXISTS idx_vector_index_source_uri ON vector_index_entries(source_uri);
-CREATE INDEX IF NOT EXISTS idx_vector_index_status ON vector_index_entries(status);
-
-INSERT OR IGNORE INTO schema_versions(version, applied_at)
-VALUES (4, datetime('now'));
-`;
-var MIGRATION_5 = `
-CREATE TABLE IF NOT EXISTS reindex_queue (
-  id TEXT PRIMARY KEY,
-  kind TEXT NOT NULL,
-  target_id TEXT NOT NULL,
-  source_uri TEXT,
-  reason TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending',
-  attempts INTEGER NOT NULL DEFAULT 0,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE(kind, target_id, reason)
-);
-
-CREATE INDEX IF NOT EXISTS idx_reindex_queue_status ON reindex_queue(status);
-CREATE INDEX IF NOT EXISTS idx_reindex_queue_kind_target ON reindex_queue(kind, target_id);
-CREATE INDEX IF NOT EXISTS idx_reindex_queue_source_uri ON reindex_queue(source_uri);
-
-INSERT OR IGNORE INTO schema_versions(version, applied_at)
-VALUES (5, datetime('now'));
-`;
-var MIGRATION_6 = `
-CREATE TABLE IF NOT EXISTS knowledge_machines (
-  machine_id TEXT PRIMARY KEY,
-  hostname TEXT,
-  platform TEXT,
-  user_label TEXT,
-  workspace_home TEXT,
-  tailscale_dns TEXT,
-  tailscale_ips_json TEXT NOT NULL DEFAULT '[]',
-  ssh_target TEXT,
-  last_seen_at TEXT,
-  capabilities_json TEXT NOT NULL DEFAULT '{}',
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS knowledge_sync_snapshots (
-  id TEXT PRIMARY KEY,
-  machine_id TEXT NOT NULL,
-  scope TEXT NOT NULL,
-  workspace_home TEXT NOT NULL,
-  sqlite_schema_version INTEGER NOT NULL,
-  artifact_root_uri TEXT NOT NULL,
-  content_hash TEXT NOT NULL,
-  tables_json TEXT NOT NULL,
-  artifact_hashes_json TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS knowledge_sync_changes (
-  id TEXT PRIMARY KEY,
-  origin_machine_id TEXT NOT NULL,
-  updated_by_machine_id TEXT NOT NULL,
-  entity_kind TEXT NOT NULL,
-  entity_id TEXT NOT NULL,
-  operation TEXT NOT NULL,
-  base_hash TEXT,
-  next_hash TEXT,
-  source_ref TEXT,
-  source_revision_id TEXT,
-  artifact_uri TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS knowledge_sync_conflicts (
-  id TEXT PRIMARY KEY,
-  entity_kind TEXT NOT NULL,
-  entity_id TEXT NOT NULL,
-  local_machine_id TEXT NOT NULL,
-  remote_machine_id TEXT NOT NULL,
-  local_hash TEXT,
-  remote_hash TEXT,
-  base_hash TEXT,
-  status TEXT NOT NULL,
-  resolution_strategy TEXT,
-  proposed_patch_uri TEXT,
-  approved_by TEXT,
-  resolved_at TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_knowledge_machines_last_seen ON knowledge_machines(last_seen_at);
-CREATE INDEX IF NOT EXISTS idx_sync_snapshots_machine_created ON knowledge_sync_snapshots(machine_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_sync_snapshots_hash ON knowledge_sync_snapshots(content_hash);
-CREATE INDEX IF NOT EXISTS idx_sync_changes_entity ON knowledge_sync_changes(entity_kind, entity_id);
-CREATE INDEX IF NOT EXISTS idx_sync_changes_origin ON knowledge_sync_changes(origin_machine_id);
-CREATE INDEX IF NOT EXISTS idx_sync_changes_created ON knowledge_sync_changes(created_at);
-CREATE INDEX IF NOT EXISTS idx_sync_conflicts_status ON knowledge_sync_conflicts(status);
-CREATE INDEX IF NOT EXISTS idx_sync_conflicts_entity ON knowledge_sync_conflicts(entity_kind, entity_id);
-
-INSERT OR IGNORE INTO schema_versions(version, applied_at)
-VALUES (6, datetime('now'));
-`;
-var MIGRATION_7_TABLES_AND_INDEXES = `
-CREATE TABLE IF NOT EXISTS knowledge_sync_table_clocks (
-  table_name TEXT NOT NULL,
-  machine_id TEXT NOT NULL,
-  logical_clock INTEGER NOT NULL DEFAULT 0,
-  high_water_hash TEXT,
-  high_water_bundle_id TEXT,
-  origin_machine_id TEXT,
-  updated_by_machine_id TEXT,
-  last_applied_at TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  PRIMARY KEY(table_name, machine_id)
-);
-
-CREATE TABLE IF NOT EXISTS knowledge_sync_imports (
-  bundle_id TEXT PRIMARY KEY,
-  source_machine_id TEXT NOT NULL,
-  target_machine_id TEXT NOT NULL,
-  direction TEXT NOT NULL,
-  status TEXT NOT NULL,
-  content_hash TEXT NOT NULL,
-  table_clocks_json TEXT NOT NULL,
-  tables_json TEXT NOT NULL,
-  generated_at TEXT NOT NULL,
-  applied_at TEXT NOT NULL,
-  metadata_json TEXT NOT NULL DEFAULT '{}'
-);
-
-CREATE INDEX IF NOT EXISTS idx_sync_changes_bundle ON knowledge_sync_changes(bundle_id);
-CREATE INDEX IF NOT EXISTS idx_sync_changes_clock ON knowledge_sync_changes(entity_kind, logical_clock);
-CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_machine ON knowledge_sync_table_clocks(machine_id);
-CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_updated ON knowledge_sync_table_clocks(updated_at);
-CREATE INDEX IF NOT EXISTS idx_sync_imports_source ON knowledge_sync_imports(source_machine_id, applied_at);
-CREATE INDEX IF NOT EXISTS idx_sync_imports_target ON knowledge_sync_imports(target_machine_id, applied_at);
-CREATE INDEX IF NOT EXISTS idx_sync_imports_status ON knowledge_sync_imports(status);
-
-INSERT OR IGNORE INTO schema_versions(version, applied_at)
-VALUES (7, datetime('now'));
-`;
-var MIGRATION_8_TABLES_AND_INDEXES = `
-CREATE INDEX IF NOT EXISTS idx_wiki_pages_lifecycle_status ON wiki_pages(status, valid_to);
-CREATE INDEX IF NOT EXISTS idx_wiki_pages_last_verified ON wiki_pages(last_verified_at);
-CREATE INDEX IF NOT EXISTS idx_wiki_pages_supersedes ON wiki_pages(supersedes);
-CREATE INDEX IF NOT EXISTS idx_wiki_pages_superseded_by ON wiki_pages(superseded_by);
-
-INSERT OR IGNORE INTO schema_versions(version, applied_at)
-VALUES (8, datetime('now'));
-`;
-function openKnowledgeDb(path) {
-  ensureParentDir(path);
-  const db = new Database(path);
-  db.exec("PRAGMA foreign_keys = ON;");
-  db.exec("PRAGMA busy_timeout = 5000;");
-  return db;
-}
-function migrateKnowledgeDb(path) {
-  const db = openKnowledgeDb(path);
-  try {
-    db.exec(MIGRATION_1);
-    if (getSchemaVersion(db) < 2)
-      db.exec(MIGRATION_2);
-    if (getSchemaVersion(db) < 3)
-      db.exec(MIGRATION_3);
-    if (getSchemaVersion(db) < 4)
-      db.exec(MIGRATION_4);
-    if (getSchemaVersion(db) < 5)
-      db.exec(MIGRATION_5);
-    if (getSchemaVersion(db) < 6)
-      db.exec(MIGRATION_6);
-    if (needsMigration7(db))
-      applyMigration7(db);
-    if (needsMigration8(db))
-      applyMigration8(db);
-    return { path, schema_version: getSchemaVersion(db) };
-  } finally {
-    db.close();
-  }
-}
-function getSchemaVersion(db) {
-  const row = db.query("SELECT MAX(version) AS version FROM schema_versions").get();
-  return row?.version ?? 0;
-}
-function count(db, table) {
-  const row = db.query(`SELECT COUNT(*) AS n FROM ${table}`).get();
-  return row?.n ?? 0;
-}
-function quoteIdentifier(identifier) {
-  return `"${identifier.replaceAll('"', '""')}"`;
-}
-function tableExists(db, table) {
-  const row = db.query("SELECT name FROM sqlite_master WHERE type IN ('table', 'virtual') AND name = ?").get(table);
-  return Boolean(row);
-}
-function columnExists(db, table, column) {
-  if (!tableExists(db, table))
-    return false;
-  const columns = db.query(`PRAGMA table_info(${quoteIdentifier(table)})`).all();
-  return columns.some((row) => row.name === column);
-}
-function ensureColumn(db, table, column, definition) {
-  if (!columnExists(db, table, column)) {
-    db.exec(`ALTER TABLE ${quoteIdentifier(table)} ADD COLUMN ${quoteIdentifier(column)} ${definition};`);
-  }
-}
-function needsMigration7(db) {
-  return getSchemaVersion(db) < 7 || !columnExists(db, "knowledge_sync_changes", "logical_clock") || !columnExists(db, "knowledge_sync_changes", "bundle_id") || !tableExists(db, "knowledge_sync_table_clocks") || !tableExists(db, "knowledge_sync_imports");
-}
-function applyMigration7(db) {
-  if (!tableExists(db, "knowledge_sync_changes"))
-    db.exec(MIGRATION_6);
-  ensureColumn(db, "knowledge_sync_changes", "logical_clock", "INTEGER NOT NULL DEFAULT 0");
-  ensureColumn(db, "knowledge_sync_changes", "bundle_id", "TEXT");
-  db.exec(MIGRATION_7_TABLES_AND_INDEXES);
-}
-function needsMigration8(db) {
-  return getSchemaVersion(db) < 8 || !columnExists(db, "wiki_pages", "valid_from") || !columnExists(db, "wiki_pages", "valid_to") || !columnExists(db, "wiki_pages", "supersedes") || !columnExists(db, "wiki_pages", "superseded_by") || !columnExists(db, "wiki_pages", "confidence") || !columnExists(db, "wiki_pages", "last_verified_at");
-}
-function applyMigration8(db) {
-  if (!tableExists(db, "wiki_pages"))
-    db.exec(MIGRATION_1);
-  ensureColumn(db, "wiki_pages", "valid_from", "TEXT");
-  ensureColumn(db, "wiki_pages", "valid_to", "TEXT");
-  ensureColumn(db, "wiki_pages", "supersedes", "TEXT");
-  ensureColumn(db, "wiki_pages", "superseded_by", "TEXT");
-  ensureColumn(db, "wiki_pages", "confidence", "REAL");
-  ensureColumn(db, "wiki_pages", "last_verified_at", "TEXT");
-  db.exec(`
-    UPDATE wiki_pages
-    SET valid_from = COALESCE(valid_from, created_at),
-        last_verified_at = COALESCE(last_verified_at, updated_at),
-        confidence = COALESCE(confidence, 0.8)
-    WHERE valid_from IS NULL OR last_verified_at IS NULL OR confidence IS NULL;
-  `);
-  db.exec(MIGRATION_8_TABLES_AND_INDEXES);
-}
-function getKnowledgeDbStats(path) {
-  const db = openKnowledgeDb(path);
-  try {
-    return {
-      schema_version: getSchemaVersion(db),
-      sources: count(db, "sources"),
-      source_revisions: count(db, "source_revisions"),
-      chunks: count(db, "chunks"),
-      wiki_pages: count(db, "wiki_pages"),
-      citations: count(db, "citations"),
-      indexes: count(db, "knowledge_indexes"),
-      runs: count(db, "runs"),
-      run_events: count(db, "run_events"),
-      redaction_findings: count(db, "redaction_findings"),
-      audit_events: count(db, "audit_events"),
-      approval_gates: count(db, "approval_gates"),
-      storage_objects: count(db, "storage_objects"),
-      embeddings: count(db, "chunk_embeddings"),
-      vector_entries: count(db, "vector_index_entries"),
-      reindex_queue: count(db, "reindex_queue"),
-      knowledge_machines: count(db, "knowledge_machines"),
-      sync_snapshots: count(db, "knowledge_sync_snapshots"),
-      sync_changes: count(db, "knowledge_sync_changes"),
-      sync_conflicts: count(db, "knowledge_sync_conflicts"),
-      sync_table_clocks: count(db, "knowledge_sync_table_clocks"),
-      sync_imports: count(db, "knowledge_sync_imports")
-    };
-  } finally {
-    db.close();
-  }
-}
-
-// src/store.ts
-import { readFileSync as readFileSync2, writeFileSync as writeFileSync2, existsSync as existsSync2, renameSync, unlinkSync } from "fs";
-import { randomUUID } from "crypto";
-function defaultStorePath() {
-  return workspaceForHome(globalKnowledgeHome()).jsonStorePath;
-}
-function ensureStore(path) {
-  if (!existsSync2(path)) {
-    ensureParentDir(path);
-    if (path === defaultStorePath() && existsSync2(legacyGlobalStorePath())) {
-      writeFileSync2(path, readFileSync2(legacyGlobalStorePath(), "utf8"));
-    } else {
-      writeFileSync2(path, JSON.stringify({ items: [] }, null, 2));
-    }
-  }
-}
-function loadStoreIfExists(path) {
-  if (!existsSync2(path))
-    return { exists: false, items: [] };
-  const raw = readFileSync2(path, "utf8");
-  const parsed = JSON.parse(raw);
-  if (!parsed || !Array.isArray(parsed.items)) {
-    return { exists: true, items: [] };
-  }
-  return { exists: true, items: parsed.items };
-}
-function lockPath(path) {
-  return `${path}.lock`;
-}
-function acquireLock(lockPath2, ownerId) {
-  const maxWait = 5000;
-  const interval = 50;
-  const start = Date.now();
-  while (Date.now() - start < maxWait) {
-    try {
-      if (!existsSync2(lockPath2)) {
-        writeFileSync2(lockPath2, JSON.stringify({ owner: ownerId, ts: Date.now() }));
-        return;
-      }
-      const lock = JSON.parse(readFileSync2(lockPath2, "utf8"));
-      if (Date.now() - lock.ts > 1e4) {
-        unlinkSync(lockPath2);
-      }
-    } catch {}
-    const start2 = Date.now();
-    while (Date.now() - start2 < interval) {}
-  }
-  throw new Error(`Could not acquire lock on ${lockPath2} after ${maxWait}ms`);
-}
-function releaseLock(lockPath2, ownerId) {
-  try {
-    if (existsSync2(lockPath2)) {
-      const lock = JSON.parse(readFileSync2(lockPath2, "utf8"));
-      if (lock.owner === ownerId) {
-        unlinkSync(lockPath2);
-      }
-    }
-  } catch {}
-}
-function loadStore(path) {
-  ensureStore(path);
-  const raw = readFileSync2(path, "utf8");
-  const parsed = JSON.parse(raw);
-  if (!parsed || !Array.isArray(parsed.items)) {
-    return { items: [] };
-  }
-  return parsed;
-}
-function saveStore(path, store) {
-  const tmp = `${path}.tmp.${randomUUID()}`;
-  writeFileSync2(tmp, JSON.stringify(store, null, 2));
-  renameSync(tmp, path);
-}
-function withLock(path, fn, options = {}) {
-  const owner = randomUUID();
-  const lpath = lockPath(path);
-  if (options.createParent)
-    ensureParentDir(lpath);
-  acquireLock(lpath, owner);
-  try {
-    return fn();
-  } finally {
-    releaseLock(lpath, owner);
-  }
-}
-function makeId() {
-  return `k_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-function makeShortId(id) {
-  return id.replace(/^k_/, "").slice(0, 12);
-}
-
-// src/item-store.ts
-import { existsSync as existsSync3 } from "fs";
 
 // node_modules/@hasna/contracts/dist/client/storage.js
 var __defProp2 = Object.defineProperty;
@@ -22346,6 +21737,7 @@ function wrap(client) {
     },
     async create(input) {
       return client.create(KNOWLEDGE_RESOURCE, {
+        ...input.id ? { id: input.id } : {},
         title: input.title,
         content: input.content,
         url: input.url ?? null,
@@ -22380,6 +21772,9 @@ function resolveKnowledgeCloudStore(env = process.env) {
     return null;
   return wrap(resolved.client);
 }
+function isKnowledgeApiMode(env = process.env) {
+  return resolveStorageClient(KNOWLEDGE_APP_SLUG, withInferredCloudMode(env)).transport === "cloud-http";
+}
 async function fetchAllCloudItems(store) {
   const pageSize = 200;
   const all = [];
@@ -22394,7 +21789,624 @@ async function fetchAllCloudItems(store) {
   return all;
 }
 
+// src/knowledge-db.ts
+function assertLocalCatalogMode(operation = "catalog") {
+  if (isKnowledgeApiMode()) {
+    throw new Error(`knowledge: ${operation} builds/reads the on-box sqlite RAG catalog (source ingestion, chunk embeddings, ` + `wiki compilation, cross-machine sync, machine registry). That local indexing pipeline is not available while ` + `the cloud API flip is active (HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY set). In cloud mode the shared ` + `corpus is the cloud knowledge-items: 'add/list/get/update/delete' item commands AND 'search/ask/build/context' ` + `over that shared corpus all route to the cloud. Unset the API env to use the full local catalog pipeline.`);
+  }
+}
+var MIGRATION_1 = `
+PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS schema_versions (
+  version INTEGER PRIMARY KEY,
+  applied_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sources (
+  id TEXT PRIMARY KEY,
+  uri TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL,
+  title TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  acl_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS source_revisions (
+  id TEXT PRIMARY KEY,
+  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  revision TEXT NOT NULL,
+  hash TEXT,
+  extracted_text_uri TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  UNIQUE(source_id, revision)
+);
+
+CREATE TABLE IF NOT EXISTS chunks (
+  id TEXT PRIMARY KEY,
+  source_revision_id TEXT REFERENCES source_revisions(id) ON DELETE CASCADE,
+  wiki_page_id TEXT,
+  kind TEXT NOT NULL,
+  ordinal INTEGER NOT NULL,
+  text TEXT NOT NULL,
+  token_count INTEGER,
+  start_offset INTEGER,
+  end_offset INTEGER,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS chunk_embeddings (
+  id TEXT PRIMARY KEY,
+  chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  dimensions INTEGER NOT NULL,
+  vector_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(chunk_id, provider, model)
+);
+
+CREATE TABLE IF NOT EXISTS wiki_pages (
+  id TEXT PRIMARY KEY,
+  path TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL,
+  artifact_uri TEXT,
+  content_hash TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS wiki_backlinks (
+  from_page_id TEXT NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
+  to_page_id TEXT NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
+  label TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(from_page_id, to_page_id)
+);
+
+CREATE TABLE IF NOT EXISTS citations (
+  id TEXT PRIMARY KEY,
+  wiki_page_id TEXT REFERENCES wiki_pages(id) ON DELETE CASCADE,
+  chunk_id TEXT REFERENCES chunks(id) ON DELETE SET NULL,
+  source_uri TEXT NOT NULL,
+  quote TEXT,
+  start_offset INTEGER,
+  end_offset INTEGER,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_indexes (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  artifact_uri TEXT,
+  shard_key TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(kind, name, shard_key)
+);
+
+CREATE TABLE IF NOT EXISTS runs (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  prompt TEXT,
+  status TEXT NOT NULL,
+  provider TEXT,
+  model TEXT,
+  cost_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL NOT NULL DEFAULT 0,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS run_events (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  level TEXT NOT NULL,
+  event TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS provider_usage (
+  id TEXT PRIMARY KEY,
+  run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL NOT NULL DEFAULT 0,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS redaction_findings (
+  id TEXT PRIMARY KEY,
+  source_uri TEXT,
+  run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+  severity TEXT NOT NULL,
+  finding_type TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS storage_objects (
+  id TEXT PRIMARY KEY,
+  artifact_uri TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL,
+  content_type TEXT,
+  hash TEXT,
+  size_bytes INTEGER,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+  text,
+  title,
+  source_uri,
+  content='',
+  tokenize='porter unicode61'
+);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (1, datetime('now'));
+`;
+var MIGRATION_2 = `
+DROP TABLE IF EXISTS chunks_fts;
+
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+  chunk_id UNINDEXED,
+  text,
+  title,
+  source_uri,
+  tokenize='porter unicode61'
+);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (2, datetime('now'));
+`;
+var MIGRATION_3 = `
+CREATE TABLE IF NOT EXISTS audit_events (
+  id TEXT PRIMARY KEY,
+  event_type TEXT NOT NULL,
+  action TEXT NOT NULL,
+  target_uri TEXT,
+  decision TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS approval_gates (
+  id TEXT PRIMARY KEY,
+  action TEXT NOT NULL,
+  target_uri TEXT,
+  status TEXT NOT NULL,
+  reason TEXT,
+  approved_by TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_action ON audit_events(action);
+CREATE INDEX IF NOT EXISTS idx_audit_events_target ON audit_events(target_uri);
+CREATE INDEX IF NOT EXISTS idx_audit_events_created ON audit_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_approval_gates_action ON approval_gates(action);
+CREATE INDEX IF NOT EXISTS idx_approval_gates_status ON approval_gates(status);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (3, datetime('now'));
+`;
+var MIGRATION_4 = `
+CREATE TABLE IF NOT EXISTS vector_index_entries (
+  id TEXT PRIMARY KEY,
+  chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+  source_revision_id TEXT REFERENCES source_revisions(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  dimensions INTEGER NOT NULL,
+  vector_json TEXT NOT NULL,
+  vector_norm REAL NOT NULL,
+  source_uri TEXT,
+  source_ref TEXT,
+  revision TEXT,
+  hash TEXT,
+  start_offset INTEGER,
+  end_offset INTEGER,
+  token_count INTEGER,
+  status TEXT NOT NULL DEFAULT 'active',
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(chunk_id, provider, model)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vector_index_provider_model ON vector_index_entries(provider, model);
+CREATE INDEX IF NOT EXISTS idx_vector_index_source_revision ON vector_index_entries(source_revision_id);
+CREATE INDEX IF NOT EXISTS idx_vector_index_source_uri ON vector_index_entries(source_uri);
+CREATE INDEX IF NOT EXISTS idx_vector_index_status ON vector_index_entries(status);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (4, datetime('now'));
+`;
+var MIGRATION_5 = `
+CREATE TABLE IF NOT EXISTS reindex_queue (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  source_uri TEXT,
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(kind, target_id, reason)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reindex_queue_status ON reindex_queue(status);
+CREATE INDEX IF NOT EXISTS idx_reindex_queue_kind_target ON reindex_queue(kind, target_id);
+CREATE INDEX IF NOT EXISTS idx_reindex_queue_source_uri ON reindex_queue(source_uri);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (5, datetime('now'));
+`;
+var MIGRATION_6 = `
+CREATE TABLE IF NOT EXISTS knowledge_machines (
+  machine_id TEXT PRIMARY KEY,
+  hostname TEXT,
+  platform TEXT,
+  user_label TEXT,
+  workspace_home TEXT,
+  tailscale_dns TEXT,
+  tailscale_ips_json TEXT NOT NULL DEFAULT '[]',
+  ssh_target TEXT,
+  last_seen_at TEXT,
+  capabilities_json TEXT NOT NULL DEFAULT '{}',
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_sync_snapshots (
+  id TEXT PRIMARY KEY,
+  machine_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  workspace_home TEXT NOT NULL,
+  sqlite_schema_version INTEGER NOT NULL,
+  artifact_root_uri TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  tables_json TEXT NOT NULL,
+  artifact_hashes_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_sync_changes (
+  id TEXT PRIMARY KEY,
+  origin_machine_id TEXT NOT NULL,
+  updated_by_machine_id TEXT NOT NULL,
+  entity_kind TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  base_hash TEXT,
+  next_hash TEXT,
+  source_ref TEXT,
+  source_revision_id TEXT,
+  artifact_uri TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_sync_conflicts (
+  id TEXT PRIMARY KEY,
+  entity_kind TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  local_machine_id TEXT NOT NULL,
+  remote_machine_id TEXT NOT NULL,
+  local_hash TEXT,
+  remote_hash TEXT,
+  base_hash TEXT,
+  status TEXT NOT NULL,
+  resolution_strategy TEXT,
+  proposed_patch_uri TEXT,
+  approved_by TEXT,
+  resolved_at TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_machines_last_seen ON knowledge_machines(last_seen_at);
+CREATE INDEX IF NOT EXISTS idx_sync_snapshots_machine_created ON knowledge_sync_snapshots(machine_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_sync_snapshots_hash ON knowledge_sync_snapshots(content_hash);
+CREATE INDEX IF NOT EXISTS idx_sync_changes_entity ON knowledge_sync_changes(entity_kind, entity_id);
+CREATE INDEX IF NOT EXISTS idx_sync_changes_origin ON knowledge_sync_changes(origin_machine_id);
+CREATE INDEX IF NOT EXISTS idx_sync_changes_created ON knowledge_sync_changes(created_at);
+CREATE INDEX IF NOT EXISTS idx_sync_conflicts_status ON knowledge_sync_conflicts(status);
+CREATE INDEX IF NOT EXISTS idx_sync_conflicts_entity ON knowledge_sync_conflicts(entity_kind, entity_id);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (6, datetime('now'));
+`;
+var MIGRATION_7_TABLES_AND_INDEXES = `
+CREATE TABLE IF NOT EXISTS knowledge_sync_table_clocks (
+  table_name TEXT NOT NULL,
+  machine_id TEXT NOT NULL,
+  logical_clock INTEGER NOT NULL DEFAULT 0,
+  high_water_hash TEXT,
+  high_water_bundle_id TEXT,
+  origin_machine_id TEXT,
+  updated_by_machine_id TEXT,
+  last_applied_at TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(table_name, machine_id)
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_sync_imports (
+  bundle_id TEXT PRIMARY KEY,
+  source_machine_id TEXT NOT NULL,
+  target_machine_id TEXT NOT NULL,
+  direction TEXT NOT NULL,
+  status TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  table_clocks_json TEXT NOT NULL,
+  tables_json TEXT NOT NULL,
+  generated_at TEXT NOT NULL,
+  applied_at TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_sync_changes_bundle ON knowledge_sync_changes(bundle_id);
+CREATE INDEX IF NOT EXISTS idx_sync_changes_clock ON knowledge_sync_changes(entity_kind, logical_clock);
+CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_machine ON knowledge_sync_table_clocks(machine_id);
+CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_updated ON knowledge_sync_table_clocks(updated_at);
+CREATE INDEX IF NOT EXISTS idx_sync_imports_source ON knowledge_sync_imports(source_machine_id, applied_at);
+CREATE INDEX IF NOT EXISTS idx_sync_imports_target ON knowledge_sync_imports(target_machine_id, applied_at);
+CREATE INDEX IF NOT EXISTS idx_sync_imports_status ON knowledge_sync_imports(status);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (7, datetime('now'));
+`;
+var MIGRATION_8_TABLES_AND_INDEXES = `
+CREATE INDEX IF NOT EXISTS idx_wiki_pages_lifecycle_status ON wiki_pages(status, valid_to);
+CREATE INDEX IF NOT EXISTS idx_wiki_pages_last_verified ON wiki_pages(last_verified_at);
+CREATE INDEX IF NOT EXISTS idx_wiki_pages_supersedes ON wiki_pages(supersedes);
+CREATE INDEX IF NOT EXISTS idx_wiki_pages_superseded_by ON wiki_pages(superseded_by);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (8, datetime('now'));
+`;
+function openKnowledgeDb(path) {
+  assertLocalCatalogMode("opening the local knowledge.db catalog");
+  ensureParentDir(path);
+  const db = new Database(path);
+  db.exec("PRAGMA foreign_keys = ON;");
+  db.exec("PRAGMA busy_timeout = 5000;");
+  return db;
+}
+function openKnowledgeDbReadonly(path) {
+  assertLocalCatalogMode("reading the local knowledge.db catalog");
+  return new Database(path, { readonly: true });
+}
+function migrateKnowledgeDb(path) {
+  const db = openKnowledgeDb(path);
+  try {
+    db.exec(MIGRATION_1);
+    if (getSchemaVersion(db) < 2)
+      db.exec(MIGRATION_2);
+    if (getSchemaVersion(db) < 3)
+      db.exec(MIGRATION_3);
+    if (getSchemaVersion(db) < 4)
+      db.exec(MIGRATION_4);
+    if (getSchemaVersion(db) < 5)
+      db.exec(MIGRATION_5);
+    if (getSchemaVersion(db) < 6)
+      db.exec(MIGRATION_6);
+    if (needsMigration7(db))
+      applyMigration7(db);
+    if (needsMigration8(db))
+      applyMigration8(db);
+    return { path, schema_version: getSchemaVersion(db) };
+  } finally {
+    db.close();
+  }
+}
+function getSchemaVersion(db) {
+  const row = db.query("SELECT MAX(version) AS version FROM schema_versions").get();
+  return row?.version ?? 0;
+}
+function count(db, table) {
+  const row = db.query(`SELECT COUNT(*) AS n FROM ${table}`).get();
+  return row?.n ?? 0;
+}
+function quoteIdentifier(identifier) {
+  return `"${identifier.replaceAll('"', '""')}"`;
+}
+function tableExists(db, table) {
+  const row = db.query("SELECT name FROM sqlite_master WHERE type IN ('table', 'virtual') AND name = ?").get(table);
+  return Boolean(row);
+}
+function columnExists(db, table, column) {
+  if (!tableExists(db, table))
+    return false;
+  const columns = db.query(`PRAGMA table_info(${quoteIdentifier(table)})`).all();
+  return columns.some((row) => row.name === column);
+}
+function ensureColumn(db, table, column, definition) {
+  if (!columnExists(db, table, column)) {
+    db.exec(`ALTER TABLE ${quoteIdentifier(table)} ADD COLUMN ${quoteIdentifier(column)} ${definition};`);
+  }
+}
+function needsMigration7(db) {
+  return getSchemaVersion(db) < 7 || !columnExists(db, "knowledge_sync_changes", "logical_clock") || !columnExists(db, "knowledge_sync_changes", "bundle_id") || !tableExists(db, "knowledge_sync_table_clocks") || !tableExists(db, "knowledge_sync_imports");
+}
+function applyMigration7(db) {
+  if (!tableExists(db, "knowledge_sync_changes"))
+    db.exec(MIGRATION_6);
+  ensureColumn(db, "knowledge_sync_changes", "logical_clock", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "knowledge_sync_changes", "bundle_id", "TEXT");
+  db.exec(MIGRATION_7_TABLES_AND_INDEXES);
+}
+function needsMigration8(db) {
+  return getSchemaVersion(db) < 8 || !columnExists(db, "wiki_pages", "valid_from") || !columnExists(db, "wiki_pages", "valid_to") || !columnExists(db, "wiki_pages", "supersedes") || !columnExists(db, "wiki_pages", "superseded_by") || !columnExists(db, "wiki_pages", "confidence") || !columnExists(db, "wiki_pages", "last_verified_at");
+}
+function applyMigration8(db) {
+  if (!tableExists(db, "wiki_pages"))
+    db.exec(MIGRATION_1);
+  ensureColumn(db, "wiki_pages", "valid_from", "TEXT");
+  ensureColumn(db, "wiki_pages", "valid_to", "TEXT");
+  ensureColumn(db, "wiki_pages", "supersedes", "TEXT");
+  ensureColumn(db, "wiki_pages", "superseded_by", "TEXT");
+  ensureColumn(db, "wiki_pages", "confidence", "REAL");
+  ensureColumn(db, "wiki_pages", "last_verified_at", "TEXT");
+  db.exec(`
+    UPDATE wiki_pages
+    SET valid_from = COALESCE(valid_from, created_at),
+        last_verified_at = COALESCE(last_verified_at, updated_at),
+        confidence = COALESCE(confidence, 0.8)
+    WHERE valid_from IS NULL OR last_verified_at IS NULL OR confidence IS NULL;
+  `);
+  db.exec(MIGRATION_8_TABLES_AND_INDEXES);
+}
+function getKnowledgeDbStats(path) {
+  const db = openKnowledgeDb(path);
+  try {
+    return {
+      schema_version: getSchemaVersion(db),
+      sources: count(db, "sources"),
+      source_revisions: count(db, "source_revisions"),
+      chunks: count(db, "chunks"),
+      wiki_pages: count(db, "wiki_pages"),
+      citations: count(db, "citations"),
+      indexes: count(db, "knowledge_indexes"),
+      runs: count(db, "runs"),
+      run_events: count(db, "run_events"),
+      redaction_findings: count(db, "redaction_findings"),
+      audit_events: count(db, "audit_events"),
+      approval_gates: count(db, "approval_gates"),
+      storage_objects: count(db, "storage_objects"),
+      embeddings: count(db, "chunk_embeddings"),
+      vector_entries: count(db, "vector_index_entries"),
+      reindex_queue: count(db, "reindex_queue"),
+      knowledge_machines: count(db, "knowledge_machines"),
+      sync_snapshots: count(db, "knowledge_sync_snapshots"),
+      sync_changes: count(db, "knowledge_sync_changes"),
+      sync_conflicts: count(db, "knowledge_sync_conflicts"),
+      sync_table_clocks: count(db, "knowledge_sync_table_clocks"),
+      sync_imports: count(db, "knowledge_sync_imports")
+    };
+  } finally {
+    db.close();
+  }
+}
+
+// src/store.ts
+import { readFileSync as readFileSync2, writeFileSync as writeFileSync2, existsSync as existsSync2, renameSync, unlinkSync } from "fs";
+import { randomUUID } from "crypto";
+function defaultStorePath() {
+  return workspaceForHome(globalKnowledgeHome()).jsonStorePath;
+}
+function ensureStore(path) {
+  if (!existsSync2(path)) {
+    ensureParentDir(path);
+    if (path === defaultStorePath() && existsSync2(legacyGlobalStorePath())) {
+      writeFileSync2(path, readFileSync2(legacyGlobalStorePath(), "utf8"));
+    } else {
+      writeFileSync2(path, JSON.stringify({ items: [] }, null, 2));
+    }
+  }
+}
+function loadStoreIfExists(path) {
+  if (!existsSync2(path))
+    return { exists: false, items: [] };
+  const raw = readFileSync2(path, "utf8");
+  const parsed = JSON.parse(raw);
+  if (!parsed || !Array.isArray(parsed.items)) {
+    return { exists: true, items: [] };
+  }
+  return { exists: true, items: parsed.items };
+}
+function lockPath(path) {
+  return `${path}.lock`;
+}
+function acquireLock(lockPath2, ownerId) {
+  const maxWait = 5000;
+  const interval = 50;
+  const start = Date.now();
+  while (Date.now() - start < maxWait) {
+    try {
+      if (!existsSync2(lockPath2)) {
+        writeFileSync2(lockPath2, JSON.stringify({ owner: ownerId, ts: Date.now() }));
+        return;
+      }
+      const lock = JSON.parse(readFileSync2(lockPath2, "utf8"));
+      if (Date.now() - lock.ts > 1e4) {
+        unlinkSync(lockPath2);
+      }
+    } catch {}
+    const start2 = Date.now();
+    while (Date.now() - start2 < interval) {}
+  }
+  throw new Error(`Could not acquire lock on ${lockPath2} after ${maxWait}ms`);
+}
+function releaseLock(lockPath2, ownerId) {
+  try {
+    if (existsSync2(lockPath2)) {
+      const lock = JSON.parse(readFileSync2(lockPath2, "utf8"));
+      if (lock.owner === ownerId) {
+        unlinkSync(lockPath2);
+      }
+    }
+  } catch {}
+}
+function loadStore(path) {
+  ensureStore(path);
+  const raw = readFileSync2(path, "utf8");
+  const parsed = JSON.parse(raw);
+  if (!parsed || !Array.isArray(parsed.items)) {
+    return { items: [] };
+  }
+  return parsed;
+}
+function saveStore(path, store) {
+  const tmp = `${path}.tmp.${randomUUID()}`;
+  writeFileSync2(tmp, JSON.stringify(store, null, 2));
+  renameSync(tmp, path);
+}
+function withLock(path, fn, options = {}) {
+  const owner = randomUUID();
+  const lpath = lockPath(path);
+  if (options.createParent)
+    ensureParentDir(lpath);
+  acquireLock(lpath, owner);
+  try {
+    return fn();
+  } finally {
+    releaseLock(lpath, owner);
+  }
+}
+function makeId() {
+  return `k_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+function makeShortId(id) {
+  return id.replace(/^k_/, "").slice(0, 12);
+}
+
 // src/item-store.ts
+import { existsSync as existsSync3 } from "fs";
 function matchesId(item, idOrShort) {
   return item.id === idOrShort || item.short_id === idOrShort;
 }
@@ -22511,6 +22523,7 @@ class ApiItemStore {
   }
   async create(input) {
     return this.cloud.create({
+      ...input.id ? { id: input.id } : {},
       title: input.title,
       content: input.content,
       url: input.url ?? null,
@@ -22866,163 +22879,8 @@ function knowledgeAuthStatus(config2, env = process.env) {
   };
 }
 
-// src/remote-client.ts
-var REMOTE_KNOWLEDGE_CONTRACT_VERSION = 1;
-function isRecord(value) {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-function stringValue(record2, key) {
-  const value = record2[key];
-  return typeof value === "string" ? value : undefined;
-}
-function numberValue(record2, key) {
-  const value = record2[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-function arrayValue(record2, key) {
-  const value = record2[key];
-  return Array.isArray(value) ? value : undefined;
-}
-function normalizeRemoteKnowledgeRunContract(payload, fallback) {
-  const record2 = isRecord(payload) ? payload : {};
-  return {
-    contract_version: REMOTE_KNOWLEDGE_CONTRACT_VERSION,
-    id: stringValue(record2, "id") ?? fallback?.id,
-    type: stringValue(record2, "type") ?? fallback?.type,
-    status: stringValue(record2, "status") ?? fallback?.status,
-    query: stringValue(record2, "query") ?? fallback?.query,
-    prompt: stringValue(record2, "prompt") ?? fallback?.prompt,
-    output_preview: Object.prototype.hasOwnProperty.call(record2, "output_preview") ? record2.output_preview : fallback?.output_preview,
-    citations: arrayValue(record2, "citations") ?? fallback?.citations,
-    artifacts: arrayValue(record2, "artifacts") ?? fallback?.artifacts,
-    usage: isRecord(record2.usage) ? record2.usage : fallback?.usage,
-    created_at: stringValue(record2, "created_at") ?? fallback?.created_at,
-    started_at: stringValue(record2, "started_at") ?? fallback?.started_at,
-    completed_at: stringValue(record2, "completed_at") ?? fallback?.completed_at,
-    duration_ms: numberValue(record2, "duration_ms") ?? fallback?.duration_ms,
-    error_code: stringValue(record2, "error_code") ?? fallback?.error_code,
-    error_message: stringValue(record2, "error_message") ?? fallback?.error_message,
-    error: stringValue(record2, "error") ?? fallback?.error,
-    details: Object.prototype.hasOwnProperty.call(record2, "details") ? record2.details : fallback?.details
-  };
-}
-function knowledgeRegistryContract(input) {
-  return {
-    contract_version: REMOTE_KNOWLEDGE_CONTRACT_VERSION,
-    service: "open-knowledge",
-    mode: input.mode,
-    capabilities: [
-      "registry",
-      "search",
-      "ask",
-      "build",
-      "sync",
-      "status",
-      "logs",
-      "artifacts",
-      "open-files-source-refs",
-      "s3-generated-artifacts"
-    ],
-    endpoints: {
-      registry: "/api/v1/knowledge/registry",
-      search: "/api/v1/knowledge/search",
-      ask: "/api/v1/knowledge/ask",
-      build: "/api/v1/knowledge/build",
-      sync: "/api/v1/knowledge/sync",
-      run_status: "/api/v1/knowledge/runs/{run_id}",
-      run_logs: "/api/v1/knowledge/runs/{run_id}/logs",
-      run_artifacts: "/api/v1/knowledge/runs/{run_id}/artifacts"
-    },
-    source_contract: {
-      owner: "open-files",
-      preferred_ref: "open-files",
-      allowed_schemes: input.sourceSchemes,
-      raw_source_bytes_stored_in_open_knowledge: false
-    },
-    artifact_contract: {
-      storage_type: input.storageType,
-      uri_prefix: input.artifactUriPrefix,
-      generated_only: true
-    }
-  };
-}
-
-class RemoteKnowledgeClient {
-  apiKey;
-  apiUrl;
-  constructor(apiKey, apiUrl) {
-    this.apiKey = apiKey;
-    this.apiUrl = apiUrl;
-  }
-  static fromConfig(config2, env = process.env) {
-    const key = getKnowledgeApiKey(env);
-    if (!key.apiKey)
-      return null;
-    return new RemoteKnowledgeClient(key.apiKey, resolveKnowledgeApiUrl(config2, env));
-  }
-  async request(path, options = {}) {
-    return fetch(`${this.apiUrl}${path}`, {
-      ...options,
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json",
-        ...options.headers
-      }
-    });
-  }
-  async registry() {
-    const response = await this.request("/api/v1/knowledge/registry");
-    return response.json();
-  }
-  async search(request) {
-    const response = await this.request("/api/v1/knowledge/search", {
-      method: "POST",
-      body: JSON.stringify(request)
-    });
-    return normalizeRemoteKnowledgeRunContract(await response.json(), { type: "search", query: request.query });
-  }
-  async ask(request) {
-    const response = await this.request("/api/v1/knowledge/ask", {
-      method: "POST",
-      body: JSON.stringify(request)
-    });
-    return normalizeRemoteKnowledgeRunContract(await response.json(), { type: "ask", prompt: request.prompt });
-  }
-  async build(request) {
-    const response = await this.request("/api/v1/knowledge/build", {
-      method: "POST",
-      body: JSON.stringify(request)
-    });
-    return normalizeRemoteKnowledgeRunContract(await response.json(), { type: "build", prompt: request.prompt });
-  }
-  async sync(request = {}) {
-    const response = await this.request("/api/v1/knowledge/sync", {
-      method: "POST",
-      body: JSON.stringify(request)
-    });
-    return normalizeRemoteKnowledgeRunContract(await response.json(), { type: "sync" });
-  }
-  async runStatus(runId) {
-    const response = await this.request(`/api/v1/knowledge/runs/${encodeURIComponent(runId)}`);
-    if (!response.ok)
-      return null;
-    return normalizeRemoteKnowledgeRunContract(await response.json(), { id: runId, type: "status" });
-  }
-  async runLogs(runId) {
-    const response = await this.request(`/api/v1/knowledge/runs/${encodeURIComponent(runId)}/logs`);
-    if (!response.ok)
-      return [];
-    const payload = await response.json();
-    return Array.isArray(payload) ? payload : [];
-  }
-  async runArtifacts(runId) {
-    const response = await this.request(`/api/v1/knowledge/runs/${encodeURIComponent(runId)}/artifacts`);
-    if (!response.ok)
-      return [];
-    const payload = await response.json();
-    return Array.isArray(payload) ? payload : [];
-  }
-}
+// src/registry-contract.ts
+var KNOWLEDGE_REGISTRY_CONTRACT_VERSION = 2;
 
 // src/storage-contract.ts
 var GENERATED_ARTIFACTS = [
@@ -23140,7 +22998,7 @@ function resolveStorageContract(config2, workspace, scope = "global") {
       api_url_env: "KNOWLEDGE_API_URL",
       api_key_env: "KNOWLEDGE_API_KEY",
       auth_storage: "~/.hasna/knowledge/auth.json",
-      remote_contract_version: REMOTE_KNOWLEDGE_CONTRACT_VERSION,
+      registry_contract_version: KNOWLEDGE_REGISTRY_CONTRACT_VERSION,
       requires_hosted_account_for_local_use: false
     },
     source_ownership: {
@@ -25663,10 +25521,13 @@ function legacyItemHaystack(item) {
     ...item.tags ?? []
   ].filter((value) => typeof value === "string" && value.length > 0).join(" ").toLowerCase();
 }
-function selectLegacyItems(path, terms, limit) {
+function selectItems(items, terms, limit) {
   if (terms.length === 0)
     return [];
-  return readLegacyItems(path).filter((item) => item.archived !== true).map((item) => ({ item, haystack: legacyItemHaystack(item) })).filter(({ haystack }) => terms.some((term) => haystack.includes(term))).map(({ item, haystack }) => ({ item, score: catalogScore(haystack, terms) })).sort((a, b) => b.score - a.score || a.item.id.localeCompare(b.item.id)).slice(0, limit);
+  return items.filter((item) => item.archived !== true).map((item) => ({ item, haystack: legacyItemHaystack(item) })).filter(({ haystack }) => terms.some((term) => haystack.includes(term))).map(({ item, haystack }) => ({ item, score: catalogScore(haystack, terms) })).sort((a, b) => b.score - a.score || a.item.id.localeCompare(b.item.id)).slice(0, limit);
+}
+function selectLegacyItems(path, terms, limit) {
+  return selectItems(readLegacyItems(path), terms, limit);
 }
 function chunkResult(row, keywordScore) {
   const metadata = parseJsonObject4(row.chunk_metadata_json);
@@ -25917,6 +25778,9 @@ async function hybridSearch(options) {
   };
 }
 async function hybridSearchLegacyStore(options) {
+  return hybridSearchItems(readLegacyItems(options.legacyStorePath), options, ["knowledge_db_missing"]);
+}
+async function hybridSearchItems(items, options, baseWarnings = []) {
   const query = options.query.trim();
   if (!query)
     throw new Error("Search query is required.");
@@ -25924,11 +25788,11 @@ async function hybridSearchLegacyStore(options) {
   const terms = queryTerms(query);
   const semanticEnabled = options.semantic === true || options.fake === true || Boolean(options.modelRef);
   const merged = new Map;
-  const legacyRows = selectLegacyItems(options.legacyStorePath, terms, Math.max(limit, 10));
-  legacyRows.forEach(({ item, score }) => mergeResult(merged, legacyItemResult(item, score)));
-  const warnings = ["knowledge_db_missing"];
+  const itemRows = selectItems(items, terms, Math.max(limit, 10));
+  itemRows.forEach(({ item, score }) => mergeResult(merged, legacyItemResult(item, score)));
+  const warnings = [...baseWarnings];
   if (semanticEnabled)
-    warnings.push("semantic_search_skipped_knowledge_db_missing");
+    warnings.push("semantic_search_requires_local_catalog");
   const results = sortResults(Array.from(merged.values())).slice(0, limit);
   return {
     query,
@@ -25942,7 +25806,7 @@ async function hybridSearchLegacyStore(options) {
     semantic_model: null,
     semantic_dimensions: null,
     counts: {
-      keyword_results: legacyRows.length,
+      keyword_results: itemRows.length,
       catalog_results: 0,
       semantic_results: 0,
       merged_results: results.length
@@ -26174,6 +26038,10 @@ async function retrieveKnowledgeContext(options) {
     dbPath: options.dbPath,
     contextChars: options.contextChars
   });
+}
+async function retrieveKnowledgeContextFromItems(items, options) {
+  const search = await hybridSearchItems(items, options);
+  return retrieveKnowledgeContextFromSearch(search, { contextChars: options.contextChars });
 }
 
 // src/agent.ts
@@ -26449,6 +26317,85 @@ ${answer}`;
     },
     now
   });
+  return {
+    run_id: runId,
+    prompt,
+    generated,
+    provider,
+    model,
+    answer,
+    context,
+    citations: context.citations,
+    proposed_wiki_updates: updates,
+    write_policy: writePolicy,
+    usage,
+    warnings
+  };
+}
+async function runKnowledgePromptOverItems(items, options) {
+  const prompt = options.prompt.trim();
+  if (!prompt)
+    throw new Error("Knowledge prompt is required.");
+  const runId = `run_${randomUUID6()}`;
+  const modelRef = resolveModelRef(options.modelRef ?? "default", options.config);
+  const parsed = parseModelRef(modelRef);
+  const { prompt: _p, generate: _g, approveWrite: _a3, now: _n, ...retrievalOptions } = options;
+  const context = await retrieveKnowledgeContextFromItems(items, {
+    ...retrievalOptions,
+    query: prompt
+  });
+  let answer = localAnswer(prompt, context);
+  let generated = false;
+  let provider = "local";
+  let model = "context-draft";
+  let usage = {
+    input_tokens: estimateTokens(prompt) + context.excerpts.reduce((sum, excerpt) => sum + estimateTokens(excerpt.text), 0),
+    output_tokens: estimateTokens(answer),
+    cost_usd: 0
+  };
+  const warnings = [...context.warnings];
+  if (options.generate) {
+    if (options.fake) {
+      generated = true;
+      provider = parsed.provider;
+      model = parsed.model;
+      answer = `Fake generated answer for: ${prompt}
+
+${answer}`;
+    } else {
+      const { generateText } = await import("ai");
+      const languageModel = await languageModelFor(modelRef, {
+        config: options.config,
+        env: options.env
+      });
+      const result = await generateText({
+        model: languageModel,
+        system: "You answer company knowledge-base prompts using only provided context and citation ids.",
+        prompt: promptForModel(prompt, context)
+      });
+      generated = true;
+      provider = parsed.provider;
+      model = parsed.model;
+      answer = result.text;
+      const normalized = normalizeAiSdkUsage({
+        provider,
+        model,
+        usage: result.usage,
+        providerMetadata: result.providerMetadata
+      });
+      usage = {
+        input_tokens: normalized.input_tokens,
+        output_tokens: normalized.output_tokens,
+        cost_usd: normalized.cost_usd
+      };
+    }
+  }
+  const updates = proposedUpdates(prompt, context);
+  const writePolicy = {
+    approved: options.approveWrite === true,
+    durable_writes_performed: false,
+    reason: options.approveWrite ? "Approval flag recorded; durable wiki writes require the local catalog (wiki compile) and are not available in cloud mode." : "Dry-run mode: proposed wiki updates require approval before durable writes."
+  };
   return {
     run_id: runId,
     prompt,
@@ -32382,7 +32329,6 @@ function recordWikiLayoutCatalog(db, artifacts, now = new Date) {
 
 // src/workspace-migration.ts
 import { createHash as createHash16 } from "crypto";
-import { Database as Database2 } from "bun:sqlite";
 import {
   cpSync,
   existsSync as existsSync12,
@@ -32432,7 +32378,7 @@ function sqliteSummary(path) {
   if (!existsSync12(path)) {
     return { exists: false, integrity_check: null, table_counts: {} };
   }
-  const db = new Database2(path, { readonly: true });
+  const db = openKnowledgeDbReadonly(path);
   try {
     const integrity = db.query("PRAGMA integrity_check").get();
     const integrityCheck = integrity ? Object.values(integrity)[0] ?? null : null;
@@ -32781,10 +32727,10 @@ function parseJsonStringArray(value) {
 function recordValue(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
-function stringValue2(value) {
+function stringValue(value) {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
-function numberValue2(value) {
+function numberValue(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 function booleanValue(value) {
@@ -32795,17 +32741,17 @@ function stringArrayValue(value) {
 }
 function registryCacheability(value, resolver, prefix) {
   const raw = recordValue(value);
-  const observedAt = stringValue2(raw.observed_at) ?? stringValue2(resolver[`${prefix}_observed_at`]);
-  const sourceAuthority = stringValue2(raw.source_authority) ?? stringValue2(resolver[`${prefix}_source_authority`]);
+  const observedAt = stringValue(raw.observed_at) ?? stringValue(resolver[`${prefix}_observed_at`]);
+  const sourceAuthority = stringValue(raw.source_authority) ?? stringValue(resolver[`${prefix}_source_authority`]);
   if (!observedAt || !sourceAuthority)
     return null;
   return {
     observed_at: observedAt,
-    verified_at: stringValue2(raw.verified_at),
-    expires_at: stringValue2(raw.expires_at) ?? stringValue2(resolver[`${prefix}_expires_at`]),
-    ttl_ms: numberValue2(raw.ttl_ms),
+    verified_at: stringValue(raw.verified_at),
+    expires_at: stringValue(raw.expires_at) ?? stringValue(resolver[`${prefix}_expires_at`]),
+    ttl_ms: numberValue(raw.ttl_ms),
     source_authority: sourceAuthority,
-    confidence: stringValue2(raw.confidence) ?? (prefix === "route" ? stringValue2(resolver.route_confidence) : null),
+    confidence: stringValue(raw.confidence) ?? (prefix === "route" ? stringValue(resolver.route_confidence) : null),
     cacheable: booleanValue(raw.cacheable) ?? booleanValue(resolver[`${prefix}_cacheable`]) ?? false,
     stale: booleanValue(raw.stale) ?? booleanValue(resolver[`${prefix}_stale`]) ?? false,
     reasons: stringArrayValue(raw.reasons)
@@ -32825,7 +32771,7 @@ function registryResolverCapabilities(row) {
 }
 function registryRouteKind(row) {
   const resolver = registryResolverCapabilities(row);
-  const kind = stringValue2(resolver.route_kind);
+  const kind = stringValue(resolver.route_kind);
   if (kind === "local" || kind === "lan" || kind === "tailscale" || kind === "ssh" || kind === "unknown")
     return kind;
   if (row.tailscale_dns && row.ssh_target === row.tailscale_dns)
@@ -32834,13 +32780,13 @@ function registryRouteKind(row) {
 }
 function registryRouteTargetKind(row) {
   const resolver = registryResolverCapabilities(row);
-  const kind = stringValue2(resolver.route_target_kind);
+  const kind = stringValue(resolver.route_target_kind);
   if (kind === "local" || kind === "lan" || kind === "tailscale" || kind === "ssh" || kind === "unknown")
     return kind;
   return registryRouteKind(row);
 }
 function registryRouteConfidence(row) {
-  return stringValue2(registryResolverCapabilities(row).route_confidence) ?? "medium";
+  return stringValue(registryResolverCapabilities(row).route_confidence) ?? "medium";
 }
 function routeFromRegistry(row, machine, fallback) {
   const evidence = registryResolverEvidence(row);
@@ -32876,16 +32822,16 @@ function workspaceFromRegistry(row, machine, fallback) {
     adapter: fallback.adapter,
     requested_machine_id: machine,
     machine_id: row.machine_id,
-    project_id: stringValue2(workspaceEvidence.project_id) ?? fallback.project_id,
-    repo_name: stringValue2(workspaceEvidence.repo_name) ?? fallback.repo_name,
+    project_id: stringValue(workspaceEvidence.project_id) ?? fallback.project_id,
+    repo_name: stringValue(workspaceEvidence.repo_name) ?? fallback.repo_name,
     project_root: row.workspace_home,
-    project_root_source: stringValue2(resolver.project_root_source) ?? "registry",
-    workspace_root: stringValue2(workspaceEvidence.workspace_root),
-    workspace_root_source: stringValue2(resolver.workspace_root_source) ?? "registry",
-    open_files_root: stringValue2(workspaceEvidence.open_files_root),
-    open_files_root_source: stringValue2(resolver.open_files_root_source) ?? "registry",
-    trust_status: stringValue2(resolver.trust_status) ?? "unknown",
-    auth_status: stringValue2(resolver.auth_status) ?? "unknown",
+    project_root_source: stringValue(resolver.project_root_source) ?? "registry",
+    workspace_root: stringValue(workspaceEvidence.workspace_root),
+    workspace_root_source: stringValue(resolver.workspace_root_source) ?? "registry",
+    open_files_root: stringValue(workspaceEvidence.open_files_root),
+    open_files_root_source: stringValue(resolver.open_files_root_source) ?? "registry",
+    trust_status: stringValue(resolver.trust_status) ?? "unknown",
+    auth_status: stringValue(resolver.auth_status) ?? "unknown",
     current: false,
     primary: false,
     diagnostics: [],
@@ -33752,7 +33698,7 @@ class KnowledgeService {
       artifact_uri_prefix: storage.artifact_store.uri_prefix,
       canonical_example: storage.canonical_example,
       config_path: workspace.configPath,
-      next: mode === "hosted" ? ["knowledge auth login --api-key <key>", "knowledge storage status --json", "knowledge remote contracts --json"] : ["knowledge search <query>", "knowledge <prompt>"],
+      next: mode === "hosted" ? ["knowledge auth login --api-key <key>", "knowledge storage status --json"] : ["knowledge search <query>", "knowledge <prompt>"],
       message: `Set knowledge mode to ${mode}`
     };
   }
@@ -33772,18 +33718,6 @@ class KnowledgeService {
   }
   clearAuth(env = process.env) {
     return clearKnowledgeAuth(env);
-  }
-  remoteContract() {
-    const storage = this.storageContract();
-    return knowledgeRegistryContract({
-      mode: this.config().mode,
-      sourceSchemes: this.config().sources.allowed_schemes,
-      storageType: storage.artifact_store.type,
-      artifactUriPrefix: storage.artifact_store.uri_prefix
-    });
-  }
-  remoteClient(env = process.env) {
-    return RemoteKnowledgeClient.fromConfig(this.config(), env);
   }
   paths() {
     const workspace = this.workspace;
@@ -33812,6 +33746,7 @@ class KnowledgeService {
     return migrateKnowledgeDb(this.ensureWorkspace().knowledgeDbPath);
   }
   dbStats() {
+    assertLocalCatalogMode("reading knowledge.db stats");
     const workspace = this.workspace;
     if (!existsSync13(workspace.knowledgeDbPath))
       return emptyKnowledgeDbStats();
@@ -34344,8 +34279,28 @@ class KnowledgeService {
       config: this.config()
     });
   }
+  isApiMode() {
+    return isKnowledgeApiMode();
+  }
+  async fetchCloudItems() {
+    const cloud = resolveKnowledgeCloudStore();
+    if (!cloud)
+      throw new Error("knowledge: cloud store requested but not resolvable (check HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY).");
+    return fetchAllCloudItems(cloud);
+  }
   async semanticSearch(options) {
     const workspace = this.workspace;
+    if (this.isApiMode()) {
+      const items = await this.fetchCloudItems();
+      const search = await hybridSearchItems(items, { ...options }, ["semantic_search_requires_local_catalog"]);
+      return {
+        provider: "openai",
+        model: "text-embedding-3-small",
+        dimensions: options.dimensions ?? 1536,
+        query: options.query,
+        results: search.results
+      };
+    }
     if (!existsSync13(workspace.knowledgeDbPath)) {
       return {
         provider: "openai",
@@ -34363,6 +34318,10 @@ class KnowledgeService {
   }
   async search(options) {
     const workspace = this.workspace;
+    if (this.isApiMode()) {
+      const items = await this.fetchCloudItems();
+      return hybridSearchItems(items, options);
+    }
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
     if (!existsSync13(workspace.knowledgeDbPath)) {
       if (existsSync13(legacyStorePath)) {
@@ -34383,6 +34342,10 @@ class KnowledgeService {
   }
   async retrieveContext(options) {
     const workspace = this.workspace;
+    if (this.isApiMode()) {
+      const items = await this.fetchCloudItems();
+      return retrieveKnowledgeContextFromItems(items, options);
+    }
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
     if (!existsSync13(workspace.knowledgeDbPath)) {
       if (existsSync13(legacyStorePath)) {
@@ -34406,6 +34369,16 @@ class KnowledgeService {
   }
   async contextPack(options) {
     const workspace = this.workspace;
+    if (this.isApiMode()) {
+      const query = (options.query ?? options.topic ?? "").trim();
+      if (query && options.source !== "loops" && options.source !== "runs") {
+        const items = await this.fetchCloudItems();
+        const search = await hybridSearchItems(items, { ...options, query });
+        const context = retrieveKnowledgeContextFromSearch(search, { contextChars: options.contextChars });
+        return legacyAgentContextPack(options, context, this.safetyPolicy());
+      }
+      return emptyAgentContextPack(options);
+    }
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
     if (!existsSync13(workspace.knowledgeDbPath)) {
       const query = (options.query ?? options.topic ?? "").trim();
@@ -34432,6 +34405,10 @@ class KnowledgeService {
     });
   }
   async runPrompt(options) {
+    if (this.isApiMode()) {
+      const items = await this.fetchCloudItems();
+      return runKnowledgePromptOverItems(items, { ...options, config: this.config() });
+    }
     const workspace = this.ensureWorkspace();
     const legacyStorePath = options.legacyStorePath ?? workspace.jsonStorePath;
     if (!options.legacyStorePath)
@@ -34992,498 +34969,6 @@ function createKnowledgeService(options = {}) {
   return new KnowledgeService(options);
 }
 
-// src/db/pg-migrations.ts
-var PG_MIGRATIONS = [
-  `CREATE TABLE IF NOT EXISTS sources (
-    id TEXT PRIMARY KEY,
-    uri TEXT NOT NULL UNIQUE,
-    kind TEXT NOT NULL,
-    title TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    acl_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS wiki_pages (
-    id TEXT PRIMARY KEY,
-    path TEXT NOT NULL UNIQUE,
-    title TEXT NOT NULL,
-    artifact_uri TEXT,
-    content_hash TEXT,
-    status TEXT NOT NULL DEFAULT 'active',
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS source_revisions (
-    id TEXT PRIMARY KEY,
-    source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-    revision TEXT NOT NULL,
-    hash TEXT,
-    extracted_text_uri TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    UNIQUE(source_id, revision)
-  )`,
-  `CREATE TABLE IF NOT EXISTS chunks (
-    id TEXT PRIMARY KEY,
-    source_revision_id TEXT REFERENCES source_revisions(id) ON DELETE CASCADE,
-    wiki_page_id TEXT REFERENCES wiki_pages(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL,
-    ordinal INTEGER NOT NULL,
-    text TEXT NOT NULL,
-    token_count INTEGER,
-    start_offset INTEGER,
-    end_offset INTEGER,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS chunk_embeddings (
-    id TEXT PRIMARY KEY,
-    chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
-    provider TEXT NOT NULL,
-    model TEXT NOT NULL,
-    dimensions INTEGER NOT NULL,
-    vector_json TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    UNIQUE(chunk_id, provider, model)
-  )`,
-  `CREATE TABLE IF NOT EXISTS wiki_backlinks (
-    from_page_id TEXT NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
-    to_page_id TEXT NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
-    label TEXT,
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    PRIMARY KEY(from_page_id, to_page_id)
-  )`,
-  `CREATE TABLE IF NOT EXISTS citations (
-    id TEXT PRIMARY KEY,
-    wiki_page_id TEXT REFERENCES wiki_pages(id) ON DELETE CASCADE,
-    chunk_id TEXT REFERENCES chunks(id) ON DELETE SET NULL,
-    source_uri TEXT NOT NULL,
-    quote TEXT,
-    start_offset INTEGER,
-    end_offset INTEGER,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS knowledge_indexes (
-    id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL,
-    name TEXT NOT NULL,
-    artifact_uri TEXT,
-    shard_key TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text,
-    UNIQUE(kind, name, shard_key)
-  )`,
-  `CREATE TABLE IF NOT EXISTS runs (
-    id TEXT PRIMARY KEY,
-    type TEXT NOT NULL,
-    prompt TEXT,
-    status TEXT NOT NULL,
-    provider TEXT,
-    model TEXT,
-    cost_tokens INTEGER NOT NULL DEFAULT 0,
-    cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS run_events (
-    id TEXT PRIMARY KEY,
-    run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-    level TEXT NOT NULL,
-    event TEXT NOT NULL,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS provider_usage (
-    id TEXT PRIMARY KEY,
-    run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
-    provider TEXT NOT NULL,
-    model TEXT NOT NULL,
-    input_tokens INTEGER NOT NULL DEFAULT 0,
-    output_tokens INTEGER NOT NULL DEFAULT 0,
-    cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS redaction_findings (
-    id TEXT PRIMARY KEY,
-    source_uri TEXT,
-    run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
-    severity TEXT NOT NULL,
-    finding_type TEXT NOT NULL,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS storage_objects (
-    id TEXT PRIMARY KEY,
-    artifact_uri TEXT NOT NULL UNIQUE,
-    kind TEXT NOT NULL,
-    content_type TEXT,
-    hash TEXT,
-    size_bytes INTEGER,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS audit_events (
-    id TEXT PRIMARY KEY,
-    event_type TEXT NOT NULL,
-    action TEXT NOT NULL,
-    target_uri TEXT,
-    decision TEXT NOT NULL,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS approval_gates (
-    id TEXT PRIMARY KEY,
-    action TEXT NOT NULL,
-    target_uri TEXT,
-    status TEXT NOT NULL,
-    reason TEXT,
-    approved_by TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS vector_index_entries (
-    id TEXT PRIMARY KEY,
-    chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
-    source_revision_id TEXT REFERENCES source_revisions(id) ON DELETE CASCADE,
-    provider TEXT NOT NULL,
-    model TEXT NOT NULL,
-    dimensions INTEGER NOT NULL,
-    vector_json TEXT NOT NULL,
-    vector_norm DOUBLE PRECISION NOT NULL,
-    source_uri TEXT,
-    source_ref TEXT,
-    revision TEXT,
-    hash TEXT,
-    start_offset INTEGER,
-    end_offset INTEGER,
-    token_count INTEGER,
-    status TEXT NOT NULL DEFAULT 'active',
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text,
-    UNIQUE(chunk_id, provider, model)
-  )`,
-  `CREATE TABLE IF NOT EXISTS reindex_queue (
-    id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL,
-    target_id TEXT NOT NULL,
-    source_uri TEXT,
-    reason TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    attempts INTEGER NOT NULL DEFAULT 0,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text,
-    UNIQUE(kind, target_id, reason)
-  )`,
-  `CREATE TABLE IF NOT EXISTS knowledge_machines (
-    machine_id TEXT PRIMARY KEY,
-    hostname TEXT,
-    platform TEXT,
-    user_label TEXT,
-    workspace_home TEXT,
-    tailscale_dns TEXT,
-    tailscale_ips_json TEXT NOT NULL DEFAULT '[]',
-    ssh_target TEXT,
-    last_seen_at TEXT,
-    capabilities_json TEXT NOT NULL DEFAULT '{}',
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS knowledge_sync_snapshots (
-    id TEXT PRIMARY KEY,
-    machine_id TEXT NOT NULL,
-    scope TEXT NOT NULL,
-    workspace_home TEXT NOT NULL,
-    sqlite_schema_version INTEGER NOT NULL,
-    artifact_root_uri TEXT NOT NULL,
-    content_hash TEXT NOT NULL,
-    tables_json TEXT NOT NULL,
-    artifact_hashes_json TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS knowledge_sync_changes (
-    id TEXT PRIMARY KEY,
-    origin_machine_id TEXT NOT NULL,
-    updated_by_machine_id TEXT NOT NULL,
-    entity_kind TEXT NOT NULL,
-    entity_id TEXT NOT NULL,
-    operation TEXT NOT NULL,
-    base_hash TEXT,
-    next_hash TEXT,
-    source_ref TEXT,
-    source_revision_id TEXT,
-    artifact_uri TEXT,
-    logical_clock INTEGER NOT NULL DEFAULT 0,
-    bundle_id TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `ALTER TABLE knowledge_sync_changes ADD COLUMN IF NOT EXISTS logical_clock INTEGER NOT NULL DEFAULT 0`,
-  `ALTER TABLE knowledge_sync_changes ADD COLUMN IF NOT EXISTS bundle_id TEXT`,
-  `CREATE TABLE IF NOT EXISTS knowledge_sync_conflicts (
-    id TEXT PRIMARY KEY,
-    entity_kind TEXT NOT NULL,
-    entity_id TEXT NOT NULL,
-    local_machine_id TEXT NOT NULL,
-    remote_machine_id TEXT NOT NULL,
-    local_hash TEXT,
-    remote_hash TEXT,
-    base_hash TEXT,
-    status TEXT NOT NULL,
-    resolution_strategy TEXT,
-    proposed_patch_uri TEXT,
-    approved_by TEXT,
-    resolved_at TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS knowledge_sync_table_clocks (
-    table_name TEXT NOT NULL,
-    machine_id TEXT NOT NULL,
-    logical_clock INTEGER NOT NULL DEFAULT 0,
-    high_water_hash TEXT,
-    high_water_bundle_id TEXT,
-    origin_machine_id TEXT,
-    updated_by_machine_id TEXT,
-    last_applied_at TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text,
-    PRIMARY KEY(table_name, machine_id)
-  )`,
-  `CREATE TABLE IF NOT EXISTS knowledge_sync_imports (
-    bundle_id TEXT PRIMARY KEY,
-    source_machine_id TEXT NOT NULL,
-    target_machine_id TEXT NOT NULL,
-    direction TEXT NOT NULL,
-    status TEXT NOT NULL,
-    content_hash TEXT NOT NULL,
-    table_clocks_json TEXT NOT NULL,
-    tables_json TEXT NOT NULL,
-    generated_at TEXT NOT NULL,
-    applied_at TEXT NOT NULL,
-    metadata_json TEXT NOT NULL DEFAULT '{}'
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_source_revisions_source ON source_revisions(source_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_chunks_source_revision ON chunks(source_revision_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_chunks_wiki_page ON chunks(wiki_page_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_citations_wiki_page ON citations(wiki_page_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_citations_chunk ON citations(chunk_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_provider_usage_run ON provider_usage(run_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_audit_events_action ON audit_events(action)`,
-  `CREATE INDEX IF NOT EXISTS idx_audit_events_target ON audit_events(target_uri)`,
-  `CREATE INDEX IF NOT EXISTS idx_audit_events_created ON audit_events(created_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_approval_gates_action ON approval_gates(action)`,
-  `CREATE INDEX IF NOT EXISTS idx_approval_gates_status ON approval_gates(status)`,
-  `CREATE INDEX IF NOT EXISTS idx_vector_index_provider_model ON vector_index_entries(provider, model)`,
-  `CREATE INDEX IF NOT EXISTS idx_vector_index_source_revision ON vector_index_entries(source_revision_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_vector_index_source_uri ON vector_index_entries(source_uri)`,
-  `CREATE INDEX IF NOT EXISTS idx_vector_index_status ON vector_index_entries(status)`,
-  `CREATE INDEX IF NOT EXISTS idx_reindex_queue_status ON reindex_queue(status)`,
-  `CREATE INDEX IF NOT EXISTS idx_reindex_queue_kind_target ON reindex_queue(kind, target_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_reindex_queue_source_uri ON reindex_queue(source_uri)`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_machines_last_seen ON knowledge_machines(last_seen_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_snapshots_machine_created ON knowledge_sync_snapshots(machine_id, created_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_snapshots_hash ON knowledge_sync_snapshots(content_hash)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_changes_entity ON knowledge_sync_changes(entity_kind, entity_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_changes_origin ON knowledge_sync_changes(origin_machine_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_changes_created ON knowledge_sync_changes(created_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_changes_bundle ON knowledge_sync_changes(bundle_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_changes_clock ON knowledge_sync_changes(entity_kind, logical_clock)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_conflicts_status ON knowledge_sync_conflicts(status)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_conflicts_entity ON knowledge_sync_conflicts(entity_kind, entity_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_machine ON knowledge_sync_table_clocks(machine_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_updated ON knowledge_sync_table_clocks(updated_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_imports_source ON knowledge_sync_imports(source_machine_id, applied_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_imports_target ON knowledge_sync_imports(target_machine_id, applied_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_imports_status ON knowledge_sync_imports(status)`,
-  `CREATE TABLE IF NOT EXISTS knowledge_items (
-    id TEXT PRIMARY KEY,
-    short_id TEXT,
-    title TEXT NOT NULL,
-    content TEXT NOT NULL DEFAULT '',
-    url TEXT,
-    tags JSONB NOT NULL DEFAULT '[]'::jsonb,
-    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-    archived BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_short_id ON knowledge_items(short_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_archived ON knowledge_items(archived)`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_created ON knowledge_items(created_at)`
-];
-// src/generated/storage-kit/tls.ts
-import { readFileSync as readFileSync13 } from "fs";
-function sslModeFromConnectionString(connectionString) {
-  const queryStart = connectionString.indexOf("?");
-  const params = new URLSearchParams(queryStart === -1 ? "" : connectionString.slice(queryStart + 1));
-  const sslmode = params.get("sslmode")?.trim().toLowerCase();
-  if (sslmode) {
-    switch (sslmode) {
-      case "disable":
-      case "prefer":
-      case "require":
-      case "verify-ca":
-      case "verify-full":
-        return sslmode;
-      case "allow":
-        return "prefer";
-      default:
-        throw new Error(`Unknown sslmode '${sslmode}' in connection string.`);
-    }
-  }
-  const ssl = params.get("ssl")?.trim().toLowerCase();
-  if (ssl && ["1", "true", "yes", "on", "require"].includes(ssl))
-    return "require";
-  return "disable";
-}
-function loadCaBundle(options) {
-  const env = options.env ?? process.env;
-  if (options.ca && options.ca.trim())
-    return options.ca;
-  const path = options.caCertPath ?? env.PGSSLROOTCERT ?? env.NODE_EXTRA_CA_CERTS;
-  if (path && path.trim())
-    return readFileSync13(path.trim(), "utf8");
-  return null;
-}
-function resolveTlsConfig(connectionString, options = {}) {
-  const mode = sslModeFromConnectionString(connectionString);
-  if (mode === "disable") {
-    return;
-  }
-  const ca = loadCaBundle(options);
-  if (mode === "prefer" || mode === "require") {
-    return ca ? { rejectUnauthorized: false, ca } : { rejectUnauthorized: false };
-  }
-  if (!ca) {
-    throw new Error(`sslmode=${mode} requires a CA bundle. Set PGSSLROOTCERT (or pass caCertPath/ca) to the ` + `Amazon RDS global bundle: https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem`);
-  }
-  return { rejectUnauthorized: true, ca };
-}
-// src/generated/storage-kit/query.ts
-function wrapExecutor(executor) {
-  return {
-    async query(sql, params) {
-      const result = await executor.query(sql, params);
-      return { rows: result.rows, rowCount: result.rowCount ?? result.rows.length };
-    },
-    async many(sql, params) {
-      const result = await executor.query(sql, params);
-      return result.rows;
-    },
-    async get(sql, params) {
-      const result = await executor.query(sql, params);
-      return result.rows[0] ?? null;
-    },
-    async one(sql, params) {
-      const result = await executor.query(sql, params);
-      if (result.rows.length !== 1) {
-        throw new Error(`Expected exactly one row, got ${result.rows.length}.`);
-      }
-      return result.rows[0];
-    },
-    async execute(sql, params) {
-      await executor.query(sql, params);
-    }
-  };
-}
-function createQueryClient(pool) {
-  const base = wrapExecutor(pool);
-  return {
-    ...base,
-    pool,
-    async transaction(fn) {
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        const result = await fn(wrapExecutor(client));
-        await client.query("COMMIT");
-        return result;
-      } catch (error51) {
-        try {
-          await client.query("ROLLBACK");
-        } catch {}
-        throw error51;
-      } finally {
-        client.release();
-      }
-    },
-    async close() {
-      await pool.end();
-    }
-  };
-}
-// src/generated/storage-kit/pool.ts
-import pg from "pg";
-function createPgPool(options) {
-  const ssl = resolveTlsConfig(options.connectionString, {
-    ...options.ca !== undefined ? { ca: options.ca } : {},
-    ...options.caCertPath !== undefined ? { caCertPath: options.caCertPath } : {},
-    ...options.env !== undefined ? { env: options.env } : {}
-  });
-  const config2 = { connectionString: options.connectionString };
-  if (ssl !== undefined)
-    config2.ssl = ssl;
-  if (options.max !== undefined)
-    config2.max = options.max;
-  if (options.idleTimeoutMillis !== undefined)
-    config2.idleTimeoutMillis = options.idleTimeoutMillis;
-  if (options.connectionTimeoutMillis !== undefined)
-    config2.connectionTimeoutMillis = options.connectionTimeoutMillis;
-  if (options.applicationName !== undefined)
-    config2.application_name = options.applicationName;
-  return new pg.Pool(config2);
-}
-// src/db/remote-storage.ts
-function translatePlaceholders(sql) {
-  let index = 0;
-  return sql.replace(/\?/g, () => `$${++index}`);
-}
-function normalizeParams2(params) {
-  const flat = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
-  return flat.map((value) => value === undefined ? null : value);
-}
-
-class PgAdapterAsync {
-  client;
-  constructor(connectionString) {
-    const pool2 = createPgPool({
-      connectionString,
-      applicationName: "@hasna/knowledge"
-    });
-    this.client = createQueryClient(pool2);
-  }
-  get pool() {
-    return this.client.pool;
-  }
-  async run(sql, ...params) {
-    const result = await this.client.query(translatePlaceholders(sql), normalizeParams2(params));
-    return { changes: result.rowCount };
-  }
-  async all(sql, ...params) {
-    const result = await this.client.query(translatePlaceholders(sql), normalizeParams2(params));
-    return result.rows;
-  }
-  async get(sql, ...params) {
-    return this.client.get(translatePlaceholders(sql), normalizeParams2(params));
-  }
-  async close() {
-    await this.client.close();
-  }
-}
-
 // src/db/storage-sync.ts
 var STORAGE_TABLES = [
   "sources",
@@ -35516,31 +35001,6 @@ var KNOWLEDGE_STORAGE_FALLBACK_ENV = "KNOWLEDGE_DATABASE_URL";
 var KNOWLEDGE_STORAGE_MODE_ENV = "HASNA_KNOWLEDGE_STORAGE_MODE";
 var KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV = "KNOWLEDGE_STORAGE_MODE";
 var STORAGE_DATABASE_ENV = [KNOWLEDGE_STORAGE_ENV, KNOWLEDGE_STORAGE_FALLBACK_ENV];
-var PRIMARY_KEYS2 = {
-  sources: ["id"],
-  wiki_pages: ["id"],
-  source_revisions: ["id"],
-  chunks: ["id"],
-  chunk_embeddings: ["id"],
-  wiki_backlinks: ["from_page_id", "to_page_id"],
-  citations: ["id"],
-  knowledge_indexes: ["id"],
-  runs: ["id"],
-  run_events: ["id"],
-  provider_usage: ["id"],
-  redaction_findings: ["id"],
-  storage_objects: ["id"],
-  audit_events: ["id"],
-  approval_gates: ["id"],
-  vector_index_entries: ["id"],
-  reindex_queue: ["id"],
-  knowledge_machines: ["machine_id"],
-  knowledge_sync_snapshots: ["id"],
-  knowledge_sync_changes: ["id"],
-  knowledge_sync_conflicts: ["id"],
-  knowledge_sync_table_clocks: ["table_name", "machine_id"],
-  knowledge_sync_imports: ["bundle_id"]
-};
 function readEnv(name) {
   const value = process.env[name]?.trim();
   return value || undefined;
@@ -35575,68 +35035,11 @@ function getStorageDatabaseEnv() {
   const name = getStorageDatabaseEnvName();
   return name ? { name } : null;
 }
-function getStorageDatabaseUrl() {
-  const env = getStorageDatabaseEnv();
-  return env ? readEnv(env.name) ?? null : null;
-}
 function getStorageMode() {
-  const mode2 = normalizeStorageMode2(readEnv(KNOWLEDGE_STORAGE_MODE_ENV)) ?? normalizeStorageMode2(readEnv(KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV));
-  if (mode2)
-    return mode2;
+  const mode = normalizeStorageMode2(readEnv(KNOWLEDGE_STORAGE_MODE_ENV)) ?? normalizeStorageMode2(readEnv(KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV));
+  if (mode)
+    return mode;
   return "local";
-}
-async function getStoragePg() {
-  const url2 = getStorageDatabaseUrl();
-  if (!url2) {
-    throw new Error("Missing HASNA_KNOWLEDGE_DATABASE_URL or KNOWLEDGE_DATABASE_URL");
-  }
-  return new PgAdapterAsync(url2);
-}
-async function runStorageMigrations(remote) {
-  await remote.run("CREATE EXTENSION IF NOT EXISTS pgcrypto");
-  for (const sql of PG_MIGRATIONS)
-    await remote.run(sql);
-}
-async function storagePush(options = {}) {
-  const remote = options.remote ?? await getStoragePg();
-  const ownsRemote = !options.remote;
-  const local = openScopedDb(options);
-  try {
-    await runStorageMigrations(remote);
-    const results = [];
-    for (const table of resolveTables(options.tables)) {
-      results.push(await pushTable(local.db, remote, table));
-    }
-    recordSyncMeta(local.db, "push", results);
-    return results;
-  } finally {
-    local.db.close();
-    if (ownsRemote)
-      await remote.close();
-  }
-}
-async function storagePull(options = {}) {
-  const remote = options.remote ?? await getStoragePg();
-  const ownsRemote = !options.remote;
-  const local = openScopedDb(options);
-  try {
-    await runStorageMigrations(remote);
-    const results = [];
-    for (const table of resolveTables(options.tables)) {
-      results.push(await pullTable(remote, local.db, table));
-    }
-    recordSyncMeta(local.db, "pull", results);
-    return results;
-  } finally {
-    local.db.close();
-    if (ownsRemote)
-      await remote.close();
-  }
-}
-async function storageSync(options = {}) {
-  const pull = await storagePull(options);
-  const push = await storagePush(options);
-  return { pull, push };
 }
 function getStorageStatus(options = {}) {
   const activeEnv = getStorageDatabaseEnv();
@@ -35659,112 +35062,6 @@ function getStorageStatus(options = {}) {
     local.db.close();
   }
 }
-function resolveTables(tables) {
-  if (!tables || tables.length === 0)
-    return [...STORAGE_TABLES];
-  const allowed = new Set(STORAGE_TABLES);
-  const requested = tables.map((table) => table.trim()).filter(Boolean);
-  const invalid = requested.filter((table) => !allowed.has(table));
-  if (invalid.length > 0)
-    throw new Error(`Unknown knowledge sync table(s): ${invalid.join(", ")}`);
-  return requested;
-}
-async function pushTable(db, remote, table) {
-  const result = { table, rowsRead: 0, rowsWritten: 0, errors: [] };
-  try {
-    if (!tableExists3(db, table))
-      return result;
-    const rows = db.query(`SELECT * FROM ${quoteIdent2(table)}`).all();
-    result.rowsRead = rows.length;
-    if (rows.length === 0)
-      return result;
-    const remoteColumns = await getRemoteColumns(remote, table);
-    const columns = filterRemoteColumns(remoteColumns, Object.keys(rows[0]));
-    result.rowsWritten = await upsertPg(remote, table, columns, rows, remoteColumns);
-  } catch (error51) {
-    result.errors.push(error51 instanceof Error ? error51.message : String(error51));
-  }
-  return result;
-}
-async function pullTable(remote, db, table) {
-  const result = { table, rowsRead: 0, rowsWritten: 0, errors: [] };
-  try {
-    if (!tableExists3(db, table))
-      return result;
-    const rows = await remote.all(`SELECT * FROM ${quoteIdent2(table)}`);
-    result.rowsRead = rows.length;
-    if (rows.length === 0)
-      return result;
-    const columns = filterLocalColumns2(db, table, Object.keys(rows[0]));
-    result.rowsWritten = upsertSqlite(db, table, columns, rows);
-  } catch (error51) {
-    result.errors.push(error51 instanceof Error ? error51.message : String(error51));
-  }
-  return result;
-}
-async function getRemoteColumns(remote, table) {
-  const rows = await remote.all("SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = ?", table);
-  return new Map(rows.map((row) => [row.column_name, row.data_type]));
-}
-function filterRemoteColumns(remoteColumns, columns) {
-  if (remoteColumns.size === 0)
-    return columns;
-  return columns.filter((column) => remoteColumns.has(column));
-}
-function filterLocalColumns2(db, table, columns) {
-  const rows = db.query(`PRAGMA table_info(${quoteIdent2(table)})`).all();
-  const allowed = new Set(rows.map((row) => row.name));
-  return columns.filter((column) => allowed.has(column));
-}
-async function upsertPg(remote, table, columns, rows, remoteColumns) {
-  if (columns.length === 0)
-    return 0;
-  const primaryKeys = PRIMARY_KEYS2[table];
-  const columnList = columns.map(quoteIdent2).join(", ");
-  const placeholders2 = columns.map(() => "?").join(", ");
-  const keyList = primaryKeys.map(quoteIdent2).join(", ");
-  const updateColumns = columns.filter((column) => !primaryKeys.includes(column));
-  const fallbackKey = primaryKeys[0];
-  const setClause = updateColumns.length > 0 ? updateColumns.map((column) => `${quoteIdent2(column)} = EXCLUDED.${quoteIdent2(column)}`).join(", ") : `${quoteIdent2(fallbackKey)} = EXCLUDED.${quoteIdent2(fallbackKey)}`;
-  for (const row of rows) {
-    await remote.run(`INSERT INTO ${quoteIdent2(table)} (${columnList}) VALUES (${placeholders2})
-       ON CONFLICT (${keyList}) DO UPDATE SET ${setClause}`, ...columns.map((column) => coerceForPg(row[column], remoteColumns.get(column))));
-  }
-  return rows.length;
-}
-function upsertSqlite(db, table, columns, rows) {
-  if (columns.length === 0)
-    return 0;
-  const primaryKeys = PRIMARY_KEYS2[table];
-  const columnList = columns.map(quoteIdent2).join(", ");
-  const placeholders2 = columns.map(() => "?").join(", ");
-  const keyList = primaryKeys.map(quoteIdent2).join(", ");
-  const updateColumns = columns.filter((column) => !primaryKeys.includes(column));
-  const fallbackKey = primaryKeys[0];
-  const setClause = updateColumns.length > 0 ? updateColumns.map((column) => `${quoteIdent2(column)} = excluded.${quoteIdent2(column)}`).join(", ") : `${quoteIdent2(fallbackKey)} = excluded.${quoteIdent2(fallbackKey)}`;
-  const statement = db.query(`INSERT INTO ${quoteIdent2(table)} (${columnList}) VALUES (${placeholders2})
-     ON CONFLICT (${keyList}) DO UPDATE SET ${setClause}`);
-  const insert = db.transaction((batch) => {
-    for (const row of batch)
-      statement.run(...columns.map((column) => coerceForSqlite2(row[column])));
-  });
-  insert(rows);
-  return rows.length;
-}
-function recordSyncMeta(db, direction, results) {
-  ensureSyncMetaTable(db);
-  const now = new Date().toISOString();
-  const statement = db.query(`
-    INSERT INTO _knowledge_sync_meta (table_name, last_synced_at, direction)
-    VALUES (?, ?, ?)
-    ON CONFLICT(table_name, direction) DO UPDATE SET last_synced_at = excluded.last_synced_at
-  `);
-  for (const result of results) {
-    if (result.errors.length > 0)
-      continue;
-    statement.run(result.table, now, direction);
-  }
-}
 function ensureSyncMetaTable(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS _knowledge_sync_meta (
@@ -35775,45 +35072,8 @@ function ensureSyncMetaTable(db) {
     )
   `);
 }
-function tableExists3(db, table) {
-  const row = db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
-  return Boolean(row);
-}
-function quoteIdent2(identifier) {
-  return `"${identifier.replace(/"/g, '""')}"`;
-}
-function coerceForPg(value, dataType) {
-  if (value === undefined || value === null)
-    return null;
-  if (dataType === "boolean") {
-    if (typeof value === "boolean")
-      return value;
-    if (typeof value === "number")
-      return value !== 0;
-    if (typeof value === "string")
-      return value === "1" || value.toLowerCase() === "true";
-  }
-  if (value instanceof Date)
-    return value.toISOString();
-  if (Buffer.isBuffer(value) || value instanceof Uint8Array)
-    return value;
-  if (typeof value === "object")
-    return JSON.stringify(value);
-  return value;
-}
-function coerceForSqlite2(value) {
-  if (value === undefined || value === null)
-    return null;
-  if (typeof value === "string" || typeof value === "number" || typeof value === "bigint" || typeof value === "boolean")
-    return value;
-  if (value instanceof Date)
-    return value.toISOString();
-  if (Buffer.isBuffer(value) || value instanceof Uint8Array)
-    return value;
-  if (typeof value === "object")
-    return JSON.stringify(value);
-  return String(value);
-}
+// src/generated/storage-kit/pool.ts
+import pg from "pg";
 // src/mcp.js
 var storePathField = exports_external.string().optional().describe("Path to the JSON store file");
 var scopeField = exports_external.enum(["local", "global", "project"]).optional().describe("Workspace scope");
@@ -35825,9 +35085,6 @@ function compactJsonText(data) {
 }
 function errorText(message) {
   return { content: [{ type: "text", text: `Error: ${message}` }], isError: true };
-}
-function shortIdFor(id) {
-  return id.replace(/^k_/, "").slice(0, 12);
 }
 function resolveStorePath(storePath, scope) {
   if (storePath)
@@ -35843,17 +35100,6 @@ function readStoreLocked(storePath, fn) {
 function itemStoreFor(storePath, scope) {
   const resolved = resolveStorePath(storePath, scope);
   return resolveItemStore({ storePath: resolved, storePathOverridden: Boolean(storePath) });
-}
-function writeStoreLocked(storePath, fn) {
-  return withLock(storePath, () => {
-    const db = loadStore(storePath);
-    const result = fn(db);
-    saveStore(storePath, db);
-    return result;
-  }, { createParent: true });
-}
-function findItem(db, id) {
-  return db.items.find((item) => item.id === id || item.short_id === id);
 }
 function sortItems(items, sort = "created", desc = false) {
   const sorted = [...items].sort((a, b) => {
@@ -36251,10 +35497,10 @@ async function getKnowledgeRecord(kind, id, options = {}) {
   const attempts = normalized === "auto" ? ["item", "source", "wiki_page", "run", "index", "decision"] : [normalized];
   for (const entry of attempts) {
     if (entry === "item") {
-      const storePath = resolveStorePath(options.store_path, options.scope);
-      const item = readStoreLocked(storePath, (db) => findItem(db, id));
+      const store = itemStoreFor(options.store_path, options.scope);
+      const item = await store.get(id);
       if (item)
-        return { kind: "item", item, store_path: storePath };
+        return { kind: "item", item, store_path: store.location };
     }
     if (entry === "source") {
       const source = sourceSnapshot(id, { limit: options.limit, service });
@@ -36704,36 +35950,6 @@ function buildServer() {
       return errorText(error51 instanceof Error ? error51.message : String(error51));
     }
   });
-  registerTool(server, "storage_push", "Push knowledge database storage", "Push local knowledge.db catalog rows to storage PostgreSQL", {
-    scope: scopeField,
-    tables: exports_external.array(exports_external.string()).optional().describe("Optional knowledge.db tables to push")
-  }, async ({ scope, tables }) => {
-    try {
-      return jsonText(await storagePush({ scope, tables }));
-    } catch (error51) {
-      return errorText(error51 instanceof Error ? error51.message : String(error51));
-    }
-  });
-  registerTool(server, "storage_pull", "Pull knowledge database storage", "Pull knowledge.db catalog rows from storage PostgreSQL to local SQLite", {
-    scope: scopeField,
-    tables: exports_external.array(exports_external.string()).optional().describe("Optional knowledge.db tables to pull")
-  }, async ({ scope, tables }) => {
-    try {
-      return jsonText(await storagePull({ scope, tables }));
-    } catch (error51) {
-      return errorText(error51 instanceof Error ? error51.message : String(error51));
-    }
-  });
-  registerTool(server, "storage_sync", "Sync knowledge database storage", "Bidirectional knowledge.db sync: pull then push", {
-    scope: scopeField,
-    tables: exports_external.array(exports_external.string()).optional().describe("Optional knowledge.db tables to sync")
-  }, async ({ scope, tables }) => {
-    try {
-      return jsonText(await storageSync({ scope, tables }));
-    } catch (error51) {
-      return errorText(error51 instanceof Error ? error51.message : String(error51));
-    }
-  });
   registerTool(server, "ok_parse_source_ref", "Parse source reference", "Parse and validate an open-files, S3, file, or web source ref", {
     uri: exports_external.string().describe("Source reference URI")
   }, async ({ uri }) => {
@@ -37060,8 +36276,7 @@ function buildServer() {
       return jsonText({
         ok: validation.ok,
         ...service.storageContract(),
-        validation,
-        remote_contract: service.remoteContract()
+        validation
       });
     } catch (error51) {
       return errorText(error51 instanceof Error ? error51.message : String(error51));
@@ -37375,23 +36590,28 @@ function buildServer() {
   }, async ({ file: file2, store_path, scope }) => {
     if (!existsSync14(file2))
       return errorText(`File not found: ${file2}`);
-    const imported = JSON.parse(readFileSync14(file2, "utf8"));
+    const imported = JSON.parse(readFileSync13(file2, "utf8"));
     if (!imported || !Array.isArray(imported.items))
       return errorText('Invalid import file: expected {"items": [...]}');
-    const storePath = resolveStorePath(store_path, scope);
-    const result = writeStoreLocked(storePath, (db) => {
-      const existingIds = new Set(db.items.map((item) => item.id));
-      let added = 0;
-      for (const item of imported.items) {
-        if (!existingIds.has(item.id)) {
-          db.items.push(item);
-          existingIds.add(item.id);
-          added += 1;
-        }
-      }
-      return { added, skipped: imported.items.length - added };
-    });
-    return jsonText({ ok: true, ...result });
+    const store = itemStoreFor(store_path, scope);
+    const { items: existing } = await store.listAll();
+    const existingIds = new Set(existing.map((item) => item.id));
+    let added = 0;
+    for (const item of imported.items) {
+      if (item.id && existingIds.has(item.id))
+        continue;
+      const created = await store.create({
+        id: item.id,
+        title: item.title,
+        content: item.content,
+        url: item.url ?? null,
+        tags: item.tags ?? [],
+        metadata: item.metadata ?? {}
+      });
+      existingIds.add(created.id);
+      added += 1;
+    }
+    return jsonText({ ok: true, added, skipped: imported.items.length - added });
   });
   registerTool(server, "ok_batch", "Batch add knowledge items", "Add multiple items at once", {
     items: exports_external.array(exports_external.object({
@@ -37406,35 +36626,27 @@ function buildServer() {
     store_path: storePathField,
     scope: scopeField
   }, async ({ items, store_path, scope }) => {
-    const storePath = resolveStorePath(store_path, scope);
-    const result = writeStoreLocked(storePath, (db) => {
-      const existingIds = new Set(db.items.map((item) => item.id));
-      let added = 0;
-      let skipped = 0;
-      const now = new Date().toISOString();
-      for (const entry of items) {
-        if (entry.id && existingIds.has(entry.id)) {
-          skipped += 1;
-          continue;
-        }
-        const id = entry.id ?? makeId();
-        db.items.push({
-          id,
-          short_id: shortIdFor(id),
-          title: entry.title,
-          content: entry.content,
-          tags: entry.tags ?? [],
-          metadata: entry.metadata ?? {},
-          archived: false,
-          created_at: entry.created_at ?? now,
-          updated_at: entry.updated_at ?? now
-        });
-        existingIds.add(id);
-        added += 1;
+    const store = itemStoreFor(store_path, scope);
+    const { items: existing } = await store.listAll();
+    const existingIds = new Set(existing.map((item) => item.id));
+    let added = 0;
+    let skipped = 0;
+    for (const entry of items) {
+      if (entry.id && existingIds.has(entry.id)) {
+        skipped += 1;
+        continue;
       }
-      return { added, skipped };
-    });
-    return jsonText({ ok: true, ...result });
+      const created = await store.create({
+        id: entry.id,
+        title: entry.title,
+        content: entry.content,
+        tags: entry.tags ?? [],
+        metadata: entry.metadata ?? {}
+      });
+      existingIds.add(created.id);
+      added += 1;
+    }
+    return jsonText({ ok: true, added, skipped });
   });
   return server;
 }

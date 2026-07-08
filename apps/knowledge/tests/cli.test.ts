@@ -1206,7 +1206,7 @@ describe('knowledge cli', () => {
     expect(existsSync(join(home, '.hasna', 'knowledge', 'db.json'))).toBe(false);
   });
 
-  test('setup, auth, and remote commands expose hosted-aware JSON contracts', () => {
+  test('setup and auth commands expose hosted-aware JSON contracts', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-hosted-cli-'));
     const authDir = join(dir, 'auth');
     const env = { HASNA_KNOWLEDGE_AUTH_DIR: authDir };
@@ -1235,18 +1235,6 @@ describe('knowledge cli', () => {
     expect(loginOut.authenticated).toBe(true);
     expect(loginOut.email).toBe('agent@example.com');
     expect(existsSync(join(authDir, 'auth.json'))).toBe(true);
-
-    const remote = runCli(['remote', 'status', '--scope', 'project', '--json'], dir, env);
-    expect(remote.exitCode).toBe(0);
-    const remoteOut = JSON.parse(new TextDecoder().decode(remote.stdout));
-    expect(remoteOut.client_ready).toBe(true);
-    expect(remoteOut.capabilities).toContain('s3-generated-artifacts');
-
-    const contracts = runCli(['remote', 'contracts', '--scope', 'project', '--json'], dir, env);
-    expect(contracts.exitCode).toBe(0);
-    const contractsOut = JSON.parse(new TextDecoder().decode(contracts.stdout));
-    expect(contractsOut.contract.source_contract.owner).toBe('open-files');
-    expect(contractsOut.contract.endpoints.ask).toBe('/api/v1/knowledge/ask');
 
     const logout = runCli(['auth', 'logout', '--scope', 'project', '--json'], dir, env);
     expect(logout.exitCode).toBe(0);

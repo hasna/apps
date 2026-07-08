@@ -11,6 +11,7 @@ export interface Note {
     "updated_at": string;
 }
 export interface NoteInput {
+    "id"?: string;
     "title": string;
     "content"?: string;
     "url"?: string | null;

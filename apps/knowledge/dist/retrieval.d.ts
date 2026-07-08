@@ -1,4 +1,5 @@
 import { type HybridSearchEntry, type HybridSearchOptions, type HybridSearchResult, type SearchProvenance } from './search';
+import type { KnowledgeItem } from './store';
 export interface RetrievalOptions extends HybridSearchOptions {
     contextChars?: number;
 }
@@ -73,3 +74,9 @@ export declare function retrieveKnowledgeContextFromSearch(search: HybridSearchR
     contextChars?: number;
 }): KnowledgeContextPack;
 export declare function retrieveKnowledgeContext(options: RetrievalOptions): Promise<KnowledgeContextPack>;
+/**
+ * Retrieve context from an in-memory knowledge-item corpus (api / cloud mode).
+ * No local sqlite catalog means no graph evidence — the shared corpus is the
+ * cloud knowledge-items fetched through the item Store.
+ */
+export declare function retrieveKnowledgeContextFromItems(items: KnowledgeItem[], options: Omit<RetrievalOptions, 'dbPath' | 'legacyStorePath'>): Promise<KnowledgeContextPack>;

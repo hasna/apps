@@ -23,7 +23,8 @@ import {
   saveKnowledgeAuth,
   type KnowledgeAuthStatus,
 } from './auth';
-import { runKnowledgePrompt, type KnowledgePromptOptions } from './agent';
+import { runKnowledgePrompt, runKnowledgePromptOverItems, type KnowledgePromptOptions } from './agent';
+import { isKnowledgeApiMode, resolveKnowledgeCloudStore, fetchAllCloudItems } from './cloud-store';
 import { buildKnowledgeAgentContextPack, type KnowledgeAgentContextPack, type KnowledgeAgentContextPackOptions } from './context-pack';
 import {
   proposeKnowledgeSyncConflictResolutionWithAi,
@@ -37,7 +38,7 @@ import {
   type EmbeddingSearchOptions,
 } from './embeddings';
 import { consumeOpenFilesOutbox } from './outbox-consume';
-import { getKnowledgeDbStats, migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
+import { assertLocalCatalogMode, getKnowledgeDbStats, migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { ingestOpenFilesManifest } from './manifest-ingest';
 import {
   discoverKnowledgeMachineTopology,
@@ -53,13 +54,12 @@ import { ingestSourceRef } from './source-ingest';
 import { resolveOpenFilesSource } from './source-resolver';
 import { providerStatus, listModelRegistry, type ProviderStatusResult, type ModelRegistryEntry } from './providers';
 import { enqueueMissingEmbeddings, refreshEmbeddingIndex, reindexHealth, type ReindexRuntimeOptions } from './reindex';
-import { knowledgeRegistryContract, RemoteKnowledgeClient, type RemoteKnowledgeRegistryContract } from './remote-client';
-import { retrieveKnowledgeContext, retrieveKnowledgeContextFromSearch, type KnowledgeContextPack, type RetrievalOptions } from './retrieval';
+import { retrieveKnowledgeContext, retrieveKnowledgeContextFromItems, retrieveKnowledgeContextFromSearch, type KnowledgeContextPack, type RetrievalOptions } from './retrieval';
 import {
   importRulesProvenance,
   type RulesProvenanceImportResult,
 } from './rules-provenance';
-import { hybridSearch, hybridSearchLegacyStore, type HybridSearchOptions, type HybridSearchResult } from './search';
+import { hybridSearch, hybridSearchItems, hybridSearchLegacyStore, type HybridSearchOptions, type HybridSearchResult } from './search';
 import { recordAuditEvent, redactSecrets, resolveSafetyPolicy, type SafetyPolicy } from './safety';
 import { runProviderWebSearch, type WebSearchOptions } from './web-search';
 import {
@@ -1654,7 +1654,7 @@ export class KnowledgeService {
       canonical_example: storage.canonical_example,
       config_path: workspace.configPath,
       next: mode === 'hosted'
-        ? ['knowledge auth login --api-key <key>', 'knowledge storage status --json', 'knowledge remote contracts --json']
+        ? ['knowledge auth login --api-key <key>', 'knowledge storage status --json']
         : ['knowledge search <query>', 'knowledge <prompt>'],
       message: `Set knowledge mode to ${mode}`,
     };
@@ -1687,20 +1687,6 @@ export class KnowledgeService {
     return clearKnowledgeAuth(env);
   }
 
-  remoteContract(): RemoteKnowledgeRegistryContract {
-    const storage = this.storageContract();
-    return knowledgeRegistryContract({
-      mode: this.config().mode,
-      sourceSchemes: this.config().sources.allowed_schemes,
-      storageType: storage.artifact_store.type,
-      artifactUriPrefix: storage.artifact_store.uri_prefix,
-    });
-  }
-
-  remoteClient(env: Record<string, string | undefined> = process.env): RemoteKnowledgeClient | null {
-    return RemoteKnowledgeClient.fromConfig(this.config(), env);
-  }
-
   paths(): KnowledgePathsResult {
     const workspace = this.workspace;
     return {
@@ -1730,6 +1716,9 @@ export class KnowledgeService {
   }
 
   dbStats() {
+    // Refuse in api mode even when no local db exists yet, so `db stats` never
+    // reports the on-box catalog as authoritative while the cloud flip is active.
+    assertLocalCatalogMode('reading knowledge.db stats');
     const workspace = this.workspace;
     if (!existsSync(workspace.knowledgeDbPath)) return emptyKnowledgeDbStats();
     return getKnowledgeDbStats(workspace.knowledgeDbPath);
@@ -2306,8 +2295,35 @@ export class KnowledgeService {
     });
   }
 
+  /** True when the client-flip resolves to the cloud HTTP transport. In api mode
+   * the shared corpus is the cloud knowledge-items, not a local sqlite catalog. */
+  private isApiMode(): boolean {
+    return isKnowledgeApiMode();
+  }
+
+  /** Fetch the entire shared knowledge-item corpus from the cloud (api mode). */
+  private async fetchCloudItems(): Promise<KnowledgeItem[]> {
+    const cloud = resolveKnowledgeCloudStore();
+    if (!cloud) throw new Error('knowledge: cloud store requested but not resolvable (check HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY).');
+    return fetchAllCloudItems(cloud);
+  }
+
   async semanticSearch(options: Omit<EmbeddingSearchOptions, 'dbPath' | 'config'>) {
     const workspace = this.workspace;
+    if (this.isApiMode()) {
+      // The vector index lives only in the local sqlite catalog. In cloud mode
+      // fall back to lexical search over the shared cloud item corpus rather
+      // than throwing — semantic ranking is reported as unavailable.
+      const items = await this.fetchCloudItems();
+      const search = await hybridSearchItems(items, { ...options }, ['semantic_search_requires_local_catalog']);
+      return {
+        provider: 'openai' as const,
+        model: 'text-embedding-3-small',
+        dimensions: options.dimensions ?? 1536,
+        query: options.query,
+        results: search.results,
+      };
+    }
     if (!existsSync(workspace.knowledgeDbPath)) {
       return {
         provider: 'openai' as const,
@@ -2326,6 +2342,10 @@ export class KnowledgeService {
 
   async search(options: Omit<HybridSearchOptions, 'dbPath' | 'config'>) {
     const workspace = this.workspace;
+    if (this.isApiMode()) {
+      const items = await this.fetchCloudItems();
+      return hybridSearchItems(items, options);
+    }
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
     if (!existsSync(workspace.knowledgeDbPath)) {
       if (existsSync(legacyStorePath)) {
@@ -2351,6 +2371,10 @@ export class KnowledgeService {
 
   async retrieveContext(options: Omit<RetrievalOptions, 'dbPath' | 'config'>) {
     const workspace = this.workspace;
+    if (this.isApiMode()) {
+      const items = await this.fetchCloudItems();
+      return retrieveKnowledgeContextFromItems(items, options);
+    }
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
     if (!existsSync(workspace.knowledgeDbPath)) {
       if (existsSync(legacyStorePath)) {
@@ -2379,6 +2403,16 @@ export class KnowledgeService {
 
   async contextPack(options: Omit<KnowledgeAgentContextPackOptions, 'dbPath' | 'config' | 'safetyPolicy'>) {
     const workspace = this.workspace;
+    if (this.isApiMode()) {
+      const query = (options.query ?? options.topic ?? '').trim();
+      if (query && options.source !== 'loops' && options.source !== 'runs') {
+        const items = await this.fetchCloudItems();
+        const search = await hybridSearchItems(items, { ...options, query });
+        const context = retrieveKnowledgeContextFromSearch(search, { contextChars: options.contextChars });
+        return legacyAgentContextPack(options, context, this.safetyPolicy());
+      }
+      return emptyAgentContextPack(options);
+    }
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
     if (!existsSync(workspace.knowledgeDbPath)) {
       const query = (options.query ?? options.topic ?? '').trim();
@@ -2406,6 +2440,10 @@ export class KnowledgeService {
   }
 
   async runPrompt(options: Omit<KnowledgePromptOptions, 'dbPath' | 'config'>) {
+    if (this.isApiMode()) {
+      const items = await this.fetchCloudItems();
+      return runKnowledgePromptOverItems(items, { ...options, config: this.config() });
+    }
     const workspace = this.ensureWorkspace();
     const legacyStorePath = options.legacyStorePath ?? workspace.jsonStorePath;
     if (!options.legacyStorePath) ensureStore(legacyStorePath);

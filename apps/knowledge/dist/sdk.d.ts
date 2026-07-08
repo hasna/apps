@@ -50,10 +50,6 @@ export interface KnowledgeClient {
         readonly login: (input: KnowledgeAuthInput, env?: Record<string, string | undefined>) => ReturnType<KnowledgeService['saveAuth']>;
         readonly logout: (env?: Record<string, string | undefined>) => ReturnType<KnowledgeService['clearAuth']>;
     };
-    readonly remote: {
-        readonly contract: () => ReturnType<KnowledgeService['remoteContract']>;
-        readonly client: (env?: Record<string, string | undefined>) => ReturnType<KnowledgeService['remoteClient']>;
-    };
     readonly storage: {
         readonly status: () => ReturnType<KnowledgeService['storageContract']>;
         readonly validate: () => ReturnType<KnowledgeService['validateStorage']>;

@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { languageModelFor, normalizeAiSdkUsage, parseModelRef, recordProviderUsage, resolveModelRef } from './providers';
-import { retrieveKnowledgeContext, type KnowledgeContextPack, type RetrievalOptions } from './retrieval';
+import { retrieveKnowledgeContext, retrieveKnowledgeContextFromItems, type KnowledgeContextPack, type RetrievalOptions } from './retrieval';
+import type { KnowledgeItem } from './store';
 import type { KnowledgeConfig } from './workspace';
 
 export interface KnowledgePromptOptions extends Omit<RetrievalOptions, 'query'> {
@@ -349,6 +350,103 @@ export async function runKnowledgePrompt(options: KnowledgePromptOptions): Promi
     },
     now,
   });
+
+  return {
+    run_id: runId,
+    prompt,
+    generated,
+    provider,
+    model,
+    answer,
+    context,
+    citations: context.citations,
+    proposed_wiki_updates: updates,
+    write_policy: writePolicy,
+    usage,
+    warnings,
+  };
+}
+
+export interface KnowledgePromptOverItemsOptions
+  extends Omit<KnowledgePromptOptions, 'dbPath' | 'legacyStorePath'> {}
+
+/**
+ * Run an `ask`/`build` prompt against an in-memory knowledge-item corpus — the
+ * api (self_hosted / cloud) path. Retrieval reads the shared cloud items (fetched
+ * through the item Store); the LLM runs client-side with the caller's provider
+ * key. There is no local sqlite catalog, so run telemetry is not persisted to a
+ * local db (it would be split-brain); the run id is still returned for the shape.
+ */
+export async function runKnowledgePromptOverItems(
+  items: KnowledgeItem[],
+  options: KnowledgePromptOverItemsOptions,
+): Promise<KnowledgePromptResult> {
+  const prompt = options.prompt.trim();
+  if (!prompt) throw new Error('Knowledge prompt is required.');
+  const runId = `run_${randomUUID()}`;
+  const modelRef = resolveModelRef(options.modelRef ?? 'default', options.config);
+  const parsed = parseModelRef(modelRef);
+
+  const { prompt: _p, generate: _g, approveWrite: _a, now: _n, ...retrievalOptions } = options;
+  const context = await retrieveKnowledgeContextFromItems(items, {
+    ...retrievalOptions,
+    query: prompt,
+  });
+
+  let answer = localAnswer(prompt, context);
+  let generated = false;
+  let provider = 'local';
+  let model = 'context-draft';
+  let usage = {
+    input_tokens: estimateTokens(prompt) + context.excerpts.reduce((sum, excerpt) => sum + estimateTokens(excerpt.text), 0),
+    output_tokens: estimateTokens(answer),
+    cost_usd: 0,
+  };
+  const warnings = [...context.warnings];
+
+  if (options.generate) {
+    if (options.fake) {
+      generated = true;
+      provider = parsed.provider;
+      model = parsed.model;
+      answer = `Fake generated answer for: ${prompt}\n\n${answer}`;
+    } else {
+      const { generateText } = await import('ai');
+      const languageModel = await languageModelFor(modelRef, {
+        config: options.config,
+        env: options.env,
+      });
+      const result = await generateText({
+        model: languageModel as never,
+        system: 'You answer company knowledge-base prompts using only provided context and citation ids.',
+        prompt: promptForModel(prompt, context),
+      });
+      generated = true;
+      provider = parsed.provider;
+      model = parsed.model;
+      answer = result.text;
+      const normalized = normalizeAiSdkUsage({
+        provider,
+        model,
+        usage: result.usage as Record<string, unknown> | undefined,
+        providerMetadata: result.providerMetadata as Record<string, unknown> | undefined,
+      });
+      usage = {
+        input_tokens: normalized.input_tokens,
+        output_tokens: normalized.output_tokens,
+        cost_usd: normalized.cost_usd,
+      };
+    }
+  }
+
+  const updates = proposedUpdates(prompt, context);
+  const writePolicy = {
+    approved: options.approveWrite === true,
+    durable_writes_performed: false as const,
+    reason: options.approveWrite
+      ? 'Approval flag recorded; durable wiki writes require the local catalog (wiki compile) and are not available in cloud mode.'
+      : 'Dry-run mode: proposed wiki updates require approval before durable writes.',
+  };
 
   return {
     run_id: runId,

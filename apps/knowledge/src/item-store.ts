@@ -31,8 +31,9 @@ import {
 import { resolveKnowledgeCloudStore, fetchAllCloudItems, type KnowledgeCloudStore } from './cloud-store';
 
 export interface ItemCreateInput {
-  /** Optional caller-supplied id (upsert). Ignored by the API transport, which
-   * lets the server assign ids. */
+  /** Optional caller-supplied id (upsert/import). Both transports honor it: the
+   * local store persists it; the API transport forwards it and the server upserts
+   * on it, so re-invocation updates the same row instead of duplicating. */
   id?: string;
   title: string;
   content: string;
@@ -185,9 +186,12 @@ class ApiItemStore implements ItemStore {
   }
 
   async create(input: ItemCreateInput): Promise<KnowledgeItem> {
-    // The server assigns ids; a caller-supplied `id` (upsert) is intentionally
-    // not forwarded — cloud identity is server-owned.
+    // A caller-supplied `id` (upsert / import) IS forwarded: the server upserts
+    // on it, so `upsert --id <stable>` re-finds and updates the same row instead
+    // of creating a duplicate — identical to the local store. When absent, the
+    // server assigns the id.
     return this.cloud.create({
+      ...(input.id ? { id: input.id } : {}),
       title: input.title,
       content: input.content,
       url: input.url ?? null,

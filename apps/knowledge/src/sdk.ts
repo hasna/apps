@@ -64,10 +64,6 @@ export interface KnowledgeClient {
     ) => ReturnType<KnowledgeService['saveAuth']>;
     readonly logout: (env?: Record<string, string | undefined>) => ReturnType<KnowledgeService['clearAuth']>;
   };
-  readonly remote: {
-    readonly contract: () => ReturnType<KnowledgeService['remoteContract']>;
-    readonly client: (env?: Record<string, string | undefined>) => ReturnType<KnowledgeService['remoteClient']>;
-  };
   readonly storage: {
     readonly status: () => ReturnType<KnowledgeService['storageContract']>;
     readonly validate: () => ReturnType<KnowledgeService['validateStorage']>;
@@ -153,10 +149,6 @@ export function createKnowledgeClient(options: KnowledgeClientOptions = {}): Kno
       status: (env = process.env) => service.authStatus(env),
       login: (input, env = process.env) => service.saveAuth(input, env),
       logout: (env = process.env) => service.clearAuth(env),
-    },
-    remote: {
-      contract: () => service.remoteContract(),
-      client: (env = process.env) => service.remoteClient(env),
     },
     storage: {
       status: () => service.storageContract(),

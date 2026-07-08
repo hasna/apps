@@ -217,15 +217,10 @@ export {
   getStorageDatabaseEnvName,
   getStorageDatabaseUrl,
   getStorageMode,
-  getStoragePg,
   getStorageStatus,
   getSyncMetaAll,
   parseStorageTables,
   resolveTables,
-  runStorageMigrations,
-  storagePull,
-  storagePush,
-  storageSync,
 } from './storage.js';
 export type {
   StorageEnv,
@@ -404,19 +399,3 @@ export {
   type StartServeOptions as KnowledgeStartServeOptions,
   type RunningServe as KnowledgeRunningServe,
 } from './serve.js';
-export {
-  REMOTE_KNOWLEDGE_CONTRACT_VERSION,
-  RemoteKnowledgeClient,
-  knowledgeRegistryContract,
-  normalizeRemoteKnowledgeRunContract,
-  type RemoteKnowledgeArtifact,
-  type RemoteKnowledgeArtifactContract,
-  type RemoteKnowledgeLogEntry,
-  type RemoteKnowledgePromptRequest,
-  type RemoteKnowledgeRegistryContract,
-  type RemoteKnowledgeRunContract,
-  type RemoteKnowledgeRunStatus,
-  type RemoteKnowledgeSearchRequest,
-  type RemoteKnowledgeSourceContract,
-  type RemoteKnowledgeSyncRequest,
-} from './remote-client.js';

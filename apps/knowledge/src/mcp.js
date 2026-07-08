@@ -5,16 +5,11 @@ import { z } from 'zod';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import pkg from '../package.json' with { type: 'json' };
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db.ts';
-import { defaultStorePath, loadStore, saveStore, makeId, withLock } from './store.ts';
+import { defaultStorePath, loadStore, withLock } from './store.ts';
 import { resolveItemStore } from './item-store.ts';
 import { parseSourceRef } from './source-ref.ts';
 import { createKnowledgeService } from './service.ts';
-import {
-  getStorageStatus as getDatabaseStorageStatus,
-  storagePull as databaseStoragePull,
-  storagePush as databaseStoragePush,
-  storageSync as databaseStorageSync,
-} from './storage.ts';
+import { getStorageStatus as getDatabaseStorageStatus } from './storage.ts';
 
 const storePathField = z.string().optional().describe('Path to the JSON store file');
 const scopeField = z.enum(['local', 'global', 'project']).optional().describe('Workspace scope');
@@ -29,10 +24,6 @@ function compactJsonText(data) {
 
 function errorText(message) {
   return { content: [{ type: 'text', text: `Error: ${message}` }], isError: true };
-}
-
-function shortIdFor(id) {
-  return id.replace(/^k_/, '').slice(0, 12);
 }
 
 function resolveStorePath(storePath, scope) {
@@ -57,19 +48,6 @@ function readStoreLocked(storePath, fn) {
 function itemStoreFor(storePath, scope) {
   const resolved = resolveStorePath(storePath, scope);
   return resolveItemStore({ storePath: resolved, storePathOverridden: Boolean(storePath) });
-}
-
-function writeStoreLocked(storePath, fn) {
-  return withLock(storePath, () => {
-    const db = loadStore(storePath);
-    const result = fn(db);
-    saveStore(storePath, db);
-    return result;
-  }, { createParent: true });
-}
-
-function findItem(db, id) {
-  return db.items.find((item) => item.id === id || item.short_id === id);
 }
 
 function sortItems(items, sort = 'created', desc = false) {
@@ -488,9 +466,9 @@ async function getKnowledgeRecord(kind, id, options = {}) {
 
   for (const entry of attempts) {
     if (entry === 'item') {
-      const storePath = resolveStorePath(options.store_path, options.scope);
-      const item = readStoreLocked(storePath, (db) => findItem(db, id));
-      if (item) return { kind: 'item', item, store_path: storePath };
+      const store = itemStoreFor(options.store_path, options.scope);
+      const item = await store.get(id);
+      if (item) return { kind: 'item', item, store_path: store.location };
     }
     if (entry === 'source') {
       const source = sourceSnapshot(id, { limit: options.limit, service });
@@ -1096,38 +1074,11 @@ export function buildServer() {
     }
   });
 
-  registerTool(server, 'storage_push', 'Push knowledge database storage', 'Push local knowledge.db catalog rows to storage PostgreSQL', {
-    scope: scopeField,
-    tables: z.array(z.string()).optional().describe('Optional knowledge.db tables to push'),
-  }, async ({ scope, tables }) => {
-    try {
-      return jsonText(await databaseStoragePush({ scope, tables }));
-    } catch (error) {
-      return errorText(error instanceof Error ? error.message : String(error));
-    }
-  });
-
-  registerTool(server, 'storage_pull', 'Pull knowledge database storage', 'Pull knowledge.db catalog rows from storage PostgreSQL to local SQLite', {
-    scope: scopeField,
-    tables: z.array(z.string()).optional().describe('Optional knowledge.db tables to pull'),
-  }, async ({ scope, tables }) => {
-    try {
-      return jsonText(await databaseStoragePull({ scope, tables }));
-    } catch (error) {
-      return errorText(error instanceof Error ? error.message : String(error));
-    }
-  });
-
-  registerTool(server, 'storage_sync', 'Sync knowledge database storage', 'Bidirectional knowledge.db sync: pull then push', {
-    scope: scopeField,
-    tables: z.array(z.string()).optional().describe('Optional knowledge.db tables to sync'),
-  }, async ({ scope, tables }) => {
-    try {
-      return jsonText(await databaseStorageSync({ scope, tables }));
-    } catch (error) {
-      return errorText(error instanceof Error ? error.message : String(error));
-    }
-  });
+  // The knowledge.db Postgres sync tools (storage_push / storage_pull /
+  // storage_sync) were REMOVED: they were a forbidden DSN-on-client path that
+  // connected fleet machines straight to the shared RDS. The shared store is
+  // reached through the HTTP ApiStore (knowledge items), not by syncing local
+  // sqlite to Postgres.
 
   registerTool(server, 'ok_parse_source_ref', 'Parse source reference', 'Parse and validate an open-files, S3, file, or web source ref', {
     uri: z.string().describe('Source reference URI'),
@@ -1476,7 +1427,6 @@ export function buildServer() {
         ok: validation.ok,
         ...service.storageContract(),
         validation,
-        remote_contract: service.remoteContract(),
       });
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
@@ -1782,20 +1732,26 @@ export function buildServer() {
     if (!existsSync(file)) return errorText(`File not found: ${file}`);
     const imported = JSON.parse(readFileSync(file, 'utf8'));
     if (!imported || !Array.isArray(imported.items)) return errorText('Invalid import file: expected {"items": [...]}');
-    const storePath = resolveStorePath(store_path, scope);
-    const result = writeStoreLocked(storePath, (db) => {
-      const existingIds = new Set(db.items.map((item) => item.id));
-      let added = 0;
-      for (const item of imported.items) {
-        if (!existingIds.has(item.id)) {
-          db.items.push(item);
-          existingIds.add(item.id);
-          added += 1;
-        }
-      }
-      return { added, skipped: imported.items.length - added };
-    });
-    return jsonText({ ok: true, ...result });
+    // Route through the item Store so imports land in the shared cloud when the
+    // API flip is active (never silently into local db.json).
+    const store = itemStoreFor(store_path, scope);
+    const { items: existing } = await store.listAll();
+    const existingIds = new Set(existing.map((item) => item.id));
+    let added = 0;
+    for (const item of imported.items) {
+      if (item.id && existingIds.has(item.id)) continue;
+      const created = await store.create({
+        id: item.id,
+        title: item.title,
+        content: item.content,
+        url: item.url ?? null,
+        tags: item.tags ?? [],
+        metadata: item.metadata ?? {},
+      });
+      existingIds.add(created.id);
+      added += 1;
+    }
+    return jsonText({ ok: true, added, skipped: imported.items.length - added });
   });
 
   registerTool(server, 'ok_batch', 'Batch add knowledge items', 'Add multiple items at once', {
@@ -1811,35 +1767,29 @@ export function buildServer() {
     store_path: storePathField,
     scope: scopeField,
   }, async ({ items, store_path, scope }) => {
-    const storePath = resolveStorePath(store_path, scope);
-    const result = writeStoreLocked(storePath, (db) => {
-      const existingIds = new Set(db.items.map((item) => item.id));
-      let added = 0;
-      let skipped = 0;
-      const now = new Date().toISOString();
-      for (const entry of items) {
-        if (entry.id && existingIds.has(entry.id)) {
-          skipped += 1;
-          continue;
-        }
-        const id = entry.id ?? makeId();
-        db.items.push({
-          id,
-          short_id: shortIdFor(id),
-          title: entry.title,
-          content: entry.content,
-          tags: entry.tags ?? [],
-          metadata: entry.metadata ?? {},
-          archived: false,
-          created_at: entry.created_at ?? now,
-          updated_at: entry.updated_at ?? now,
-        });
-        existingIds.add(id);
-        added += 1;
+    // Route through the item Store so batch adds land in the shared cloud when
+    // the API flip is active (never silently into local db.json).
+    const store = itemStoreFor(store_path, scope);
+    const { items: existing } = await store.listAll();
+    const existingIds = new Set(existing.map((item) => item.id));
+    let added = 0;
+    let skipped = 0;
+    for (const entry of items) {
+      if (entry.id && existingIds.has(entry.id)) {
+        skipped += 1;
+        continue;
       }
-      return { added, skipped };
-    });
-    return jsonText({ ok: true, ...result });
+      const created = await store.create({
+        id: entry.id,
+        title: entry.title,
+        content: entry.content,
+        tags: entry.tags ?? [],
+        metadata: entry.metadata ?? {},
+      });
+      existingIds.add(created.id);
+      added += 1;
+    }
+    return jsonText({ ok: true, added, skipped });
   });
 
   return server;

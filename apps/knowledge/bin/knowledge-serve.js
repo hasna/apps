@@ -587,34 +587,28 @@ function createKnowledgeCloudClient() {
   return createCloudPoolFromEnv(KNOWLEDGE_APP_NAME, { applicationName: "@hasna/knowledge" }).client;
 }
 
-// src/remote-client.ts
-var REMOTE_KNOWLEDGE_CONTRACT_VERSION = 1;
+// src/registry-contract.ts
+var KNOWLEDGE_REGISTRY_CONTRACT_VERSION = 2;
 function knowledgeRegistryContract(input) {
   return {
-    contract_version: REMOTE_KNOWLEDGE_CONTRACT_VERSION,
+    contract_version: KNOWLEDGE_REGISTRY_CONTRACT_VERSION,
     service: "open-knowledge",
     mode: input.mode,
     capabilities: [
       "registry",
-      "search",
-      "ask",
-      "build",
-      "sync",
-      "status",
-      "logs",
-      "artifacts",
+      "notes-read",
+      "notes-write",
       "open-files-source-refs",
       "s3-generated-artifacts"
     ],
     endpoints: {
-      registry: "/api/v1/knowledge/registry",
-      search: "/api/v1/knowledge/search",
-      ask: "/api/v1/knowledge/ask",
-      build: "/api/v1/knowledge/build",
-      sync: "/api/v1/knowledge/sync",
-      run_status: "/api/v1/knowledge/runs/{run_id}",
-      run_logs: "/api/v1/knowledge/runs/{run_id}/logs",
-      run_artifacts: "/api/v1/knowledge/runs/{run_id}/artifacts"
+      registry: "/v1/registry",
+      notes: "/v1/notes",
+      note: "/v1/notes/{id}",
+      health: "/health",
+      version: "/version",
+      ready: "/ready",
+      openapi: "/openapi.json"
     },
     source_contract: {
       owner: "open-files",
@@ -712,8 +706,31 @@ class NoteRepo {
     if (!input.title || typeof input.title !== "string") {
       throw new HttpError(400, "title is required");
     }
-    const id = makeId();
     const now = new Date().toISOString();
+    const suppliedId = typeof input.id === "string" ? input.id.trim() : "";
+    if (suppliedId) {
+      const row2 = await this.client.get(`INSERT INTO knowledge_items (id, short_id, title, content, url, tags, metadata, archived, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,FALSE,$8,$8)
+         ON CONFLICT (id) DO UPDATE SET
+           title = EXCLUDED.title,
+           content = EXCLUDED.content,
+           url = EXCLUDED.url,
+           tags = EXCLUDED.tags,
+           metadata = EXCLUDED.metadata,
+           updated_at = EXCLUDED.updated_at
+         RETURNING *`, [
+        suppliedId,
+        makeShortId(suppliedId),
+        input.title,
+        input.content ?? "",
+        input.url ?? null,
+        JSON.stringify(input.tags ?? []),
+        JSON.stringify(input.metadata ?? {}),
+        now
+      ]);
+      return rowToItem(row2);
+    }
+    const id = makeId();
     const row = await this.client.get(`INSERT INTO knowledge_items (id, short_id, title, content, url, tags, metadata, archived, created_at, updated_at)
        VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,FALSE,$8,$9)
        RETURNING *`, [
@@ -804,6 +821,7 @@ function knowledgeOpenApi(version) {
   const noteInput = {
     type: "object",
     properties: {
+      id: { type: "string" },
       title: { type: "string" },
       content: { type: "string" },
       url: { type: "string", nullable: true },

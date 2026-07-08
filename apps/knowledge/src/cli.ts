@@ -9,14 +9,7 @@ import { resolveItemStore, type ItemStore } from './item-store';
 import { openKnowledgeDb } from './knowledge-db';
 import { createKnowledgeService } from './service';
 import { createKnowledgeProjectPanel, formatKnowledgeProjectPanel } from './project-panel';
-import {
-  getStorageStatus as getDatabaseStorageStatus,
-  parseStorageTables,
-  storagePull as databaseStoragePull,
-  storagePush as databaseStoragePush,
-  storageSync as databaseStorageSync,
-  type SyncResult,
-} from './storage';
+import { getStorageStatus as getDatabaseStorageStatus } from './storage';
 import { assertProviderCredentials, parseModelRef, resolveModelRef, type AiProviderId } from './providers';
 import { approvalStatus, assertS3ReadAllowed, assertWebSearchAllowed, createApprovalGate, recordAuditEvent, recordRedactionFindings, redactSecrets } from './safety';
 import { Command } from 'commander';
@@ -408,7 +401,7 @@ function printCommandHelp(command: string): void {
   if (command === 'storage') { console.log('Usage: knowledge storage status|validate|repair-artifact-keys|migrate-legacy-path [--approve-write --approved-by <name>] [--scope local|global|project] [--json]'); return; }
   if (command === 'machines') { console.log('Usage: knowledge machines topology [--no-tailscale] | preflight [machine] [--workspace <repo>] [--scope local|global|project] [--json]'); return; }
   if (command === 'sync') { console.log('Usage: knowledge sync status|doctor|readiness|snapshot|machines|conflicts [show|propose|resolve] [id] | dry-run|pull|push|sync|export|import [--peer-workspace <path>] [--machine <ssh-alias>] [--tables <names>] [--dry-run] [--limit <n>] [--approve-write] [--approved-by <name>] [--strategy <name>] [--mode deterministic|ai] [--model <alias|provider:model>] [--fake] [--no-tailscale] [--scope local|global|project] [--json]\n\nRemote machine sync resolves peer paths through @hasna/machines when --peer-workspace is omitted.'); return; }
-  if (command === 'db') { console.log('Usage: knowledge db init|stats|storage status|push|pull|sync [--tables sources,chunks] [--scope local|global|project] [--json]'); return; }
+  if (command === 'db') { console.log('Usage: knowledge db init|stats|storage status [--scope local|global|project] [--json]'); return; }
   if (command === 'wiki') { console.log('Usage: knowledge wiki init|compile|file-answer|lint [query|prompt] [--title <title>] [--content <answer>] [--approve-write] [--limit <n>] [--scope local|global|project] [--json]'); return; }
   if (command === 'app-wiki') { console.log('Usage: knowledge app-wiki init | note add|get|list | source add <source-ref> | search <query> | query <query> [--title <title>] [--content <text>] [--tag <tag>] [--source-ref <uri>] [--scope project|local|global] [--allow-global] [--json]'); return; }
   if (command === 'source') { console.log('Usage: knowledge source resolve <source-ref> [--purpose knowledge_answer|knowledge_index] [--limit <n>] [--scope local|global|project] [--json]'); return; }
@@ -480,17 +473,6 @@ function formatInventory(inventory: ReturnType<ReturnType<typeof createKnowledge
 
 function machineIsLocal(machine: string | undefined): boolean {
   return !machine || machine === 'local' || machine === 'localhost';
-}
-
-function syncOk(results: SyncResult[]): boolean {
-  return results.every((result) => result.errors.length === 0);
-}
-
-function syncMessage(results: SyncResult[], label: string): string {
-  const written = results.reduce((sum, result) => sum + result.rowsWritten, 0);
-  const errors = results.flatMap((result) => result.errors.map((error) => `${result.table}: ${error}`));
-  if (errors.length > 0) return `Storage ${label} completed with errors: ${errors.join('; ')}`;
-  return `Storage ${label} completed: ${written} rows across ${results.length} tables`;
 }
 
 function requireId(flags: Flags): asserts flags is Flags & { id: string } {
@@ -921,7 +903,6 @@ async function run(argv: string[]): Promise<void> {
     }
     if (action === 'storage') {
       const storageAction = positional[2] ?? 'status';
-      const tables = parseStorageTables(flags.tables);
       if (storageAction === 'status') {
         const status = getDatabaseStorageStatus({ scope: flags.scope });
         output({
@@ -931,26 +912,13 @@ async function run(argv: string[]): Promise<void> {
         }, flags.json);
         return;
       }
-      if (storageAction === 'push') {
-        const results = await databaseStoragePush({ scope: flags.scope, tables });
-        output({ ok: syncOk(results), results, message: syncMessage(results, 'push') }, flags.json);
-        return;
-      }
-      if (storageAction === 'pull') {
-        const results = await databaseStoragePull({ scope: flags.scope, tables });
-        output({ ok: syncOk(results), results, message: syncMessage(results, 'pull') }, flags.json);
-        return;
-      }
-      if (storageAction === 'sync') {
-        const result = await databaseStorageSync({ scope: flags.scope, tables });
-        output({
-          ok: syncOk(result.pull) && syncOk(result.push),
-          ...result,
-          message: `${syncMessage(result.pull, 'pull')}; ${syncMessage(result.push, 'push')}`,
-        }, flags.json);
-        return;
-      }
-      throw new Error("Invalid db storage action. Use 'status', 'push', 'pull', or 'sync'.");
+      // The client-side Postgres sync engine (push/pull/sync) was removed: it was
+      // a forbidden DSN-on-client path. The shared store is reached through the
+      // HTTP ApiStore (knowledge items) — not by syncing local sqlite to RDS.
+      throw new Error(
+        "Invalid db storage action. Only 'status' is supported. The 'push'/'pull'/'sync' "
+          + 'Postgres sync commands were removed (DSN-on-client is forbidden); use the cloud API flip instead.',
+      );
     }
     throw new Error("Invalid db action. Use 'init', 'stats', or 'storage'.");
   }

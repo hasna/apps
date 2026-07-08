@@ -3,7 +3,6 @@ import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { clearKnowledgeAuth, knowledgeAuthStatus, normalizeKnowledgeApiOrigin } from '../src/auth';
-import { normalizeRemoteKnowledgeRunContract, REMOTE_KNOWLEDGE_CONTRACT_VERSION } from '../src/remote-client';
 import { createKnowledgeService } from '../src/service';
 
 describe('hosted-aware config and remote contracts', () => {
@@ -111,37 +110,7 @@ describe('hosted-aware config and remote contracts', () => {
     expect(service.authStatus(env).authenticated).toBe(false);
   });
 
-  test('exposes typed remote contracts and normalized run payloads', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ok-remote-contract-'));
-    const service = createKnowledgeService({ scope: 'project', cwd: dir });
-    const contract = service.remoteContract();
-
-    expect(contract.contract_version).toBe(REMOTE_KNOWLEDGE_CONTRACT_VERSION);
-    expect(contract.endpoints.search).toBe('/api/v1/knowledge/search');
-    expect(contract.capabilities).toContain('open-files-source-refs');
-    expect(contract.source_contract).toMatchObject({
-      owner: 'open-files',
-      preferred_ref: 'open-files',
-      raw_source_bytes_stored_in_open_knowledge: false,
-    });
-    expect(contract.artifact_contract.generated_only).toBe(true);
-
-    const run = normalizeRemoteKnowledgeRunContract({
-      id: 'run_remote',
-      status: 'completed',
-      output_preview: 'answer',
-      citations: [{ source_uri: 'open-files://file/f_1' }],
-      duration_ms: 12,
-    }, { type: 'ask', prompt: 'What is known?' });
-    expect(run).toMatchObject({
-      contract_version: REMOTE_KNOWLEDGE_CONTRACT_VERSION,
-      id: 'run_remote',
-      type: 'ask',
-      status: 'completed',
-      prompt: 'What is known?',
-      duration_ms: 12,
-    });
-
+  test('normalizes hosted api origins to the bare https origin', () => {
     expect(normalizeKnowledgeApiOrigin('https://knowledge.example.com/api/v1')).toBe('https://knowledge.example.com');
     expect(() => normalizeKnowledgeApiOrigin('ftp://knowledge.example.com')).toThrow('http or https');
   });

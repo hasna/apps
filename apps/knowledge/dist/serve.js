@@ -17,7 +17,7 @@ var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
 var __require = import.meta.require;
 
 // src/serve.ts
-import { readFileSync as readFileSync5 } from "fs";
+import { readFileSync as readFileSync4 } from "fs";
 
 // node_modules/@hasna/contracts/dist/auth/index.js
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
@@ -738,197 +738,32 @@ var KIT_VERSION = "0.4.0";
 
 // src/db/remote-storage.ts
 var KNOWLEDGE_APP_NAME = "knowledge";
-function translatePlaceholders(sql) {
-  let index = 0;
-  return sql.replace(/\?/g, () => `$${++index}`);
-}
-function normalizeParams(params) {
-  const flat = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
-  return flat.map((value) => value === undefined ? null : value);
-}
-
-class PgAdapterAsync {
-  client;
-  constructor(connectionString) {
-    const pool2 = createPgPool({
-      connectionString,
-      applicationName: "@hasna/knowledge"
-    });
-    this.client = createQueryClient(pool2);
-  }
-  get pool() {
-    return this.client.pool;
-  }
-  async run(sql, ...params) {
-    const result = await this.client.query(translatePlaceholders(sql), normalizeParams(params));
-    return { changes: result.rowCount };
-  }
-  async all(sql, ...params) {
-    const result = await this.client.query(translatePlaceholders(sql), normalizeParams(params));
-    return result.rows;
-  }
-  async get(sql, ...params) {
-    return this.client.get(translatePlaceholders(sql), normalizeParams(params));
-  }
-  async close() {
-    await this.client.close();
-  }
-}
 function createKnowledgeCloudClient() {
   return createCloudPoolFromEnv(KNOWLEDGE_APP_NAME, { applicationName: "@hasna/knowledge" }).client;
 }
 
-// src/auth.ts
-import { existsSync, mkdirSync, readFileSync as readFileSync2, unlinkSync, writeFileSync } from "fs";
-import { homedir } from "os";
-import { dirname, join } from "path";
-var DEFAULT_KNOWLEDGE_API_URL = "https://knowledge.hasna.xyz";
-function normalizeKnowledgeApiOrigin(apiUrl) {
-  const url = new URL(apiUrl);
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("Knowledge API URL must use http or https.");
-  }
-  const pathname = url.pathname.replace(/\/+$/, "");
-  if (pathname === "/api" || pathname === "/api/v1") {
-    url.pathname = "/";
-  } else if (pathname.endsWith("/api/v1")) {
-    url.pathname = pathname.slice(0, -"/api/v1".length) || "/";
-  } else if (pathname.endsWith("/api")) {
-    url.pathname = pathname.slice(0, -"/api".length) || "/";
-  }
-  return url.toString().replace(/\/+$/, "");
-}
-function knowledgeAuthPath(env = process.env) {
-  if (env.HASNA_KNOWLEDGE_AUTH_PATH)
-    return env.HASNA_KNOWLEDGE_AUTH_PATH;
-  const root = env.HASNA_KNOWLEDGE_AUTH_DIR ?? join(homedir(), ".hasna", "knowledge");
-  return join(root, "auth.json");
-}
-function resolveKnowledgeApiUrl(config, env = process.env) {
-  return normalizeKnowledgeApiOrigin(env.KNOWLEDGE_API_URL ?? config?.hosted?.api_url ?? DEFAULT_KNOWLEDGE_API_URL);
-}
-function getKnowledgeAuth(env = process.env) {
-  try {
-    const path = knowledgeAuthPath(env);
-    if (!existsSync(path))
-      return null;
-    const parsed = JSON.parse(readFileSync2(path, "utf8"));
-    return typeof parsed.api_key === "string" && parsed.api_key.length > 0 ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-function saveKnowledgeAuth(auth, env = process.env) {
-  const path = knowledgeAuthPath(env);
-  const stored = {
-    ...auth,
-    api_url: auth.api_url ? normalizeKnowledgeApiOrigin(auth.api_url) : undefined,
-    created_at: auth.created_at ?? new Date().toISOString()
-  };
-  mkdirSync(dirname(path), { recursive: true, mode: 448 });
-  writeFileSync(path, `${JSON.stringify(stored, null, 2)}
-`, { mode: 384 });
-  return stored;
-}
-function clearKnowledgeAuth(env = process.env) {
-  try {
-    unlinkSync(knowledgeAuthPath(env));
-    return true;
-  } catch {
-    return false;
-  }
-}
-function getKnowledgeApiKey(env = process.env) {
-  if (env.KNOWLEDGE_API_KEY)
-    return { apiKey: env.KNOWLEDGE_API_KEY, source: "env" };
-  if (env.HASNA_KNOWLEDGE_API_KEY)
-    return { apiKey: env.HASNA_KNOWLEDGE_API_KEY, source: "env" };
-  const auth = getKnowledgeAuth(env);
-  return auth?.api_key ? { apiKey: auth.api_key, source: "file" } : { apiKey: null, source: "none" };
-}
-function knowledgeAuthStatus(config, env = process.env) {
-  const auth = getKnowledgeAuth(env);
-  const key = getKnowledgeApiKey(env);
-  const apiUrl = env.KNOWLEDGE_API_URL ? resolveKnowledgeApiUrl(config, env) : auth?.api_url ? normalizeKnowledgeApiOrigin(auth.api_url) : resolveKnowledgeApiUrl(config, env);
-  return {
-    authenticated: Boolean(key.apiKey),
-    source: key.source,
-    api_url: apiUrl,
-    auth_path: knowledgeAuthPath(env),
-    email: key.source === "file" ? auth?.email ?? null : null,
-    org_id: key.source === "file" ? auth?.org_id ?? null : null,
-    org_slug: key.source === "file" ? auth?.org_slug ?? null : null,
-    user_id: key.source === "file" ? auth?.user_id ?? null : null,
-    api_key_present: Boolean(key.apiKey)
-  };
-}
-
-// src/remote-client.ts
-var REMOTE_KNOWLEDGE_CONTRACT_VERSION = 1;
-function isRecord(value) {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-function stringValue(record, key) {
-  const value = record[key];
-  return typeof value === "string" ? value : undefined;
-}
-function numberValue(record, key) {
-  const value = record[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-function arrayValue(record, key) {
-  const value = record[key];
-  return Array.isArray(value) ? value : undefined;
-}
-function normalizeRemoteKnowledgeRunContract(payload, fallback) {
-  const record = isRecord(payload) ? payload : {};
-  return {
-    contract_version: REMOTE_KNOWLEDGE_CONTRACT_VERSION,
-    id: stringValue(record, "id") ?? fallback?.id,
-    type: stringValue(record, "type") ?? fallback?.type,
-    status: stringValue(record, "status") ?? fallback?.status,
-    query: stringValue(record, "query") ?? fallback?.query,
-    prompt: stringValue(record, "prompt") ?? fallback?.prompt,
-    output_preview: Object.prototype.hasOwnProperty.call(record, "output_preview") ? record.output_preview : fallback?.output_preview,
-    citations: arrayValue(record, "citations") ?? fallback?.citations,
-    artifacts: arrayValue(record, "artifacts") ?? fallback?.artifacts,
-    usage: isRecord(record.usage) ? record.usage : fallback?.usage,
-    created_at: stringValue(record, "created_at") ?? fallback?.created_at,
-    started_at: stringValue(record, "started_at") ?? fallback?.started_at,
-    completed_at: stringValue(record, "completed_at") ?? fallback?.completed_at,
-    duration_ms: numberValue(record, "duration_ms") ?? fallback?.duration_ms,
-    error_code: stringValue(record, "error_code") ?? fallback?.error_code,
-    error_message: stringValue(record, "error_message") ?? fallback?.error_message,
-    error: stringValue(record, "error") ?? fallback?.error,
-    details: Object.prototype.hasOwnProperty.call(record, "details") ? record.details : fallback?.details
-  };
-}
+// src/registry-contract.ts
+var KNOWLEDGE_REGISTRY_CONTRACT_VERSION = 2;
 function knowledgeRegistryContract(input) {
   return {
-    contract_version: REMOTE_KNOWLEDGE_CONTRACT_VERSION,
+    contract_version: KNOWLEDGE_REGISTRY_CONTRACT_VERSION,
     service: "open-knowledge",
     mode: input.mode,
     capabilities: [
       "registry",
-      "search",
-      "ask",
-      "build",
-      "sync",
-      "status",
-      "logs",
-      "artifacts",
+      "notes-read",
+      "notes-write",
       "open-files-source-refs",
       "s3-generated-artifacts"
     ],
     endpoints: {
-      registry: "/api/v1/knowledge/registry",
-      search: "/api/v1/knowledge/search",
-      ask: "/api/v1/knowledge/ask",
-      build: "/api/v1/knowledge/build",
-      sync: "/api/v1/knowledge/sync",
-      run_status: "/api/v1/knowledge/runs/{run_id}",
-      run_logs: "/api/v1/knowledge/runs/{run_id}/logs",
-      run_artifacts: "/api/v1/knowledge/runs/{run_id}/artifacts"
+      registry: "/v1/registry",
+      notes: "/v1/notes",
+      note: "/v1/notes/{id}",
+      health: "/health",
+      version: "/version",
+      ready: "/ready",
+      openapi: "/openapi.json"
     },
     source_contract: {
       owner: "open-files",
@@ -944,93 +779,16 @@ function knowledgeRegistryContract(input) {
   };
 }
 
-class RemoteKnowledgeClient {
-  apiKey;
-  apiUrl;
-  constructor(apiKey, apiUrl) {
-    this.apiKey = apiKey;
-    this.apiUrl = apiUrl;
-  }
-  static fromConfig(config, env = process.env) {
-    const key = getKnowledgeApiKey(env);
-    if (!key.apiKey)
-      return null;
-    return new RemoteKnowledgeClient(key.apiKey, resolveKnowledgeApiUrl(config, env));
-  }
-  async request(path, options = {}) {
-    return fetch(`${this.apiUrl}${path}`, {
-      ...options,
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json",
-        ...options.headers
-      }
-    });
-  }
-  async registry() {
-    const response = await this.request("/api/v1/knowledge/registry");
-    return response.json();
-  }
-  async search(request) {
-    const response = await this.request("/api/v1/knowledge/search", {
-      method: "POST",
-      body: JSON.stringify(request)
-    });
-    return normalizeRemoteKnowledgeRunContract(await response.json(), { type: "search", query: request.query });
-  }
-  async ask(request) {
-    const response = await this.request("/api/v1/knowledge/ask", {
-      method: "POST",
-      body: JSON.stringify(request)
-    });
-    return normalizeRemoteKnowledgeRunContract(await response.json(), { type: "ask", prompt: request.prompt });
-  }
-  async build(request) {
-    const response = await this.request("/api/v1/knowledge/build", {
-      method: "POST",
-      body: JSON.stringify(request)
-    });
-    return normalizeRemoteKnowledgeRunContract(await response.json(), { type: "build", prompt: request.prompt });
-  }
-  async sync(request = {}) {
-    const response = await this.request("/api/v1/knowledge/sync", {
-      method: "POST",
-      body: JSON.stringify(request)
-    });
-    return normalizeRemoteKnowledgeRunContract(await response.json(), { type: "sync" });
-  }
-  async runStatus(runId) {
-    const response = await this.request(`/api/v1/knowledge/runs/${encodeURIComponent(runId)}`);
-    if (!response.ok)
-      return null;
-    return normalizeRemoteKnowledgeRunContract(await response.json(), { id: runId, type: "status" });
-  }
-  async runLogs(runId) {
-    const response = await this.request(`/api/v1/knowledge/runs/${encodeURIComponent(runId)}/logs`);
-    if (!response.ok)
-      return [];
-    const payload = await response.json();
-    return Array.isArray(payload) ? payload : [];
-  }
-  async runArtifacts(runId) {
-    const response = await this.request(`/api/v1/knowledge/runs/${encodeURIComponent(runId)}/artifacts`);
-    if (!response.ok)
-      return [];
-    const payload = await response.json();
-    return Array.isArray(payload) ? payload : [];
-  }
-}
-
 // src/store.ts
-import { readFileSync as readFileSync4, writeFileSync as writeFileSync3, existsSync as existsSync3, renameSync, unlinkSync as unlinkSync2 } from "fs";
+import { readFileSync as readFileSync3, writeFileSync as writeFileSync2, existsSync as existsSync2, renameSync, unlinkSync } from "fs";
 import { randomUUID } from "crypto";
 
 // src/workspace.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "fs";
-import { homedir as homedir2 } from "os";
-import { dirname as dirname2, join as join2, resolve } from "path";
-var HASNA_KNOWLEDGE_APP_PATH = join2(".hasna", "knowledge");
-var LEGACY_HASNA_KNOWLEDGE_APP_PATH = join2(".hasna", "apps", "knowledge");
+import { existsSync, mkdirSync, readFileSync as readFileSync2, writeFileSync } from "fs";
+import { homedir } from "os";
+import { dirname, join, resolve } from "path";
+var HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "knowledge");
+var LEGACY_HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "apps", "knowledge");
 var EXAMPLE_KNOWLEDGE_CANONICAL = {
   division: "xyz",
   app_type: "opensource",
@@ -1068,16 +826,16 @@ function canonicalExampleKnowledgeStorage() {
   };
 }
 function legacyGlobalStorePath() {
-  return join2(homedir2(), ".open-knowledge", "db.json");
+  return join(homedir(), ".open-knowledge", "db.json");
 }
 function globalKnowledgeHome() {
-  return join2(homedir2(), ".hasna", "knowledge");
+  return join(homedir(), ".hasna", "knowledge");
 }
 function projectKnowledgeHome(cwd = process.cwd()) {
   return resolve(cwd, HASNA_KNOWLEDGE_APP_PATH);
 }
 function legacyGlobalKnowledgeHome() {
-  return join2(homedir2(), LEGACY_HASNA_KNOWLEDGE_APP_PATH);
+  return join(homedir(), LEGACY_HASNA_KNOWLEDGE_APP_PATH);
 }
 function legacyProjectKnowledgeHome(cwd = process.cwd()) {
   return resolve(cwd, LEGACY_HASNA_KNOWLEDGE_APP_PATH);
@@ -1091,17 +849,17 @@ function resolveLegacyScopedWorkspace(scope, cwd = process.cwd()) {
 function workspaceForHome(home) {
   return {
     home,
-    configPath: join2(home, "config.json"),
-    jsonStorePath: join2(home, "db.json"),
-    knowledgeDbPath: join2(home, "knowledge.db"),
-    artifactsDir: join2(home, "artifacts"),
-    cacheDir: join2(home, "cache"),
-    exportsDir: join2(home, "exports"),
-    indexesDir: join2(home, "indexes"),
-    logsDir: join2(home, "logs"),
-    runsDir: join2(home, "runs"),
-    schemasDir: join2(home, "schemas"),
-    wikiDir: join2(home, "wiki")
+    configPath: join(home, "config.json"),
+    jsonStorePath: join(home, "db.json"),
+    knowledgeDbPath: join(home, "knowledge.db"),
+    artifactsDir: join(home, "artifacts"),
+    cacheDir: join(home, "cache"),
+    exportsDir: join(home, "exports"),
+    indexesDir: join(home, "indexes"),
+    logsDir: join(home, "logs"),
+    runsDir: join(home, "runs"),
+    schemasDir: join(home, "schemas"),
+    wikiDir: join(home, "wiki")
   };
 }
 function defaultKnowledgeConfig() {
@@ -1164,7 +922,7 @@ function defaultKnowledgeConfig() {
 }
 function ensureKnowledgeWorkspace(home) {
   const workspace = workspaceForHome(home);
-  mkdirSync2(workspace.home, { recursive: true });
+  mkdirSync(workspace.home, { recursive: true });
   for (const dir of [
     workspace.artifactsDir,
     workspace.cacheDir,
@@ -1175,10 +933,10 @@ function ensureKnowledgeWorkspace(home) {
     workspace.schemasDir,
     workspace.wikiDir
   ]) {
-    mkdirSync2(dir, { recursive: true });
+    mkdirSync(dir, { recursive: true });
   }
-  if (!existsSync2(workspace.configPath)) {
-    writeFileSync2(workspace.configPath, `${JSON.stringify(defaultKnowledgeConfig(), null, 2)}
+  if (!existsSync(workspace.configPath)) {
+    writeFileSync(workspace.configPath, `${JSON.stringify(defaultKnowledgeConfig(), null, 2)}
 `);
   }
   return workspace;
@@ -1190,15 +948,15 @@ function resolveScopedWorkspace(scope, cwd = process.cwd()) {
   return workspaceForHome(globalKnowledgeHome());
 }
 function ensureParentDir(path) {
-  mkdirSync2(dirname2(path), { recursive: true });
+  mkdirSync(dirname(path), { recursive: true });
 }
 function readKnowledgeConfig(path) {
-  const raw = readFileSync3(path, "utf8");
+  const raw = readFileSync2(path, "utf8");
   return JSON.parse(raw);
 }
 function writeKnowledgeConfig(path, config) {
   ensureParentDir(path);
-  writeFileSync2(path, `${JSON.stringify(config, null, 2)}
+  writeFileSync(path, `${JSON.stringify(config, null, 2)}
 `);
 }
 
@@ -1207,19 +965,19 @@ function defaultStorePath() {
   return workspaceForHome(globalKnowledgeHome()).jsonStorePath;
 }
 function ensureStore(path) {
-  if (!existsSync3(path)) {
+  if (!existsSync2(path)) {
     ensureParentDir(path);
-    if (path === defaultStorePath() && existsSync3(legacyGlobalStorePath())) {
-      writeFileSync3(path, readFileSync4(legacyGlobalStorePath(), "utf8"));
+    if (path === defaultStorePath() && existsSync2(legacyGlobalStorePath())) {
+      writeFileSync2(path, readFileSync3(legacyGlobalStorePath(), "utf8"));
     } else {
-      writeFileSync3(path, JSON.stringify({ items: [] }, null, 2));
+      writeFileSync2(path, JSON.stringify({ items: [] }, null, 2));
     }
   }
 }
 function loadStoreIfExists(path) {
-  if (!existsSync3(path))
+  if (!existsSync2(path))
     return { exists: false, items: [] };
-  const raw = readFileSync4(path, "utf8");
+  const raw = readFileSync3(path, "utf8");
   const parsed = JSON.parse(raw);
   if (!parsed || !Array.isArray(parsed.items)) {
     return { exists: true, items: [] };
@@ -1235,13 +993,13 @@ function acquireLock(lockPath2, ownerId) {
   const start = Date.now();
   while (Date.now() - start < maxWait) {
     try {
-      if (!existsSync3(lockPath2)) {
-        writeFileSync3(lockPath2, JSON.stringify({ owner: ownerId, ts: Date.now() }));
+      if (!existsSync2(lockPath2)) {
+        writeFileSync2(lockPath2, JSON.stringify({ owner: ownerId, ts: Date.now() }));
         return;
       }
-      const lock = JSON.parse(readFileSync4(lockPath2, "utf8"));
+      const lock = JSON.parse(readFileSync3(lockPath2, "utf8"));
       if (Date.now() - lock.ts > 1e4) {
-        unlinkSync2(lockPath2);
+        unlinkSync(lockPath2);
       }
     } catch {}
     const start2 = Date.now();
@@ -1251,17 +1009,17 @@ function acquireLock(lockPath2, ownerId) {
 }
 function releaseLock(lockPath2, ownerId) {
   try {
-    if (existsSync3(lockPath2)) {
-      const lock = JSON.parse(readFileSync4(lockPath2, "utf8"));
+    if (existsSync2(lockPath2)) {
+      const lock = JSON.parse(readFileSync3(lockPath2, "utf8"));
       if (lock.owner === ownerId) {
-        unlinkSync2(lockPath2);
+        unlinkSync(lockPath2);
       }
     }
   } catch {}
 }
 function saveStore(path, store) {
   const tmp = `${path}.tmp.${randomUUID()}`;
-  writeFileSync3(tmp, JSON.stringify(store, null, 2));
+  writeFileSync2(tmp, JSON.stringify(store, null, 2));
   renameSync(tmp, path);
 }
 function withLock(path, fn, options = {}) {
@@ -1303,7 +1061,7 @@ function resolveVersion() {
     return process.env.HASNA_KNOWLEDGE_VERSION;
   try {
     const url = new URL("../package.json", import.meta.url);
-    const pkg = JSON.parse(readFileSync5(url, "utf8"));
+    const pkg = JSON.parse(readFileSync4(url, "utf8"));
     return pkg.version ?? "0.0.0";
   } catch {
     return process.env.npm_package_version ?? "0.0.0";
@@ -1352,8 +1110,31 @@ class NoteRepo {
     if (!input.title || typeof input.title !== "string") {
       throw new HttpError(400, "title is required");
     }
-    const id = makeId();
     const now = new Date().toISOString();
+    const suppliedId = typeof input.id === "string" ? input.id.trim() : "";
+    if (suppliedId) {
+      const row2 = await this.client.get(`INSERT INTO knowledge_items (id, short_id, title, content, url, tags, metadata, archived, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,FALSE,$8,$8)
+         ON CONFLICT (id) DO UPDATE SET
+           title = EXCLUDED.title,
+           content = EXCLUDED.content,
+           url = EXCLUDED.url,
+           tags = EXCLUDED.tags,
+           metadata = EXCLUDED.metadata,
+           updated_at = EXCLUDED.updated_at
+         RETURNING *`, [
+        suppliedId,
+        makeShortId(suppliedId),
+        input.title,
+        input.content ?? "",
+        input.url ?? null,
+        JSON.stringify(input.tags ?? []),
+        JSON.stringify(input.metadata ?? {}),
+        now
+      ]);
+      return rowToItem(row2);
+    }
+    const id = makeId();
     const row = await this.client.get(`INSERT INTO knowledge_items (id, short_id, title, content, url, tags, metadata, archived, created_at, updated_at)
        VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,FALSE,$8,$9)
        RETURNING *`, [
@@ -1444,6 +1225,7 @@ function knowledgeOpenApi(version) {
   const noteInput = {
     type: "object",
     properties: {
+      id: { type: "string" },
       title: { type: "string" },
       content: { type: "string" },
       url: { type: "string", nullable: true },

@@ -6,7 +6,7 @@
 
 export interface Note { "id": string; "short_id"?: string | null; "title": string; "content": string; "url"?: string | null; "tags": Array<string>; "metadata"?: Record<string, unknown>; "archived": boolean; "created_at": string; "updated_at": string }
 
-export interface NoteInput { "title": string; "content"?: string; "url"?: string | null; "tags"?: Array<string>; "metadata"?: Record<string, unknown> }
+export interface NoteInput { "id"?: string; "title": string; "content"?: string; "url"?: string | null; "tags"?: Array<string>; "metadata"?: Record<string, unknown> }
 
 export interface NotePatch { "title"?: string; "content"?: string; "url"?: string | null; "tags"?: Array<string>; "metadata"?: Record<string, unknown>; "archived"?: boolean }
 

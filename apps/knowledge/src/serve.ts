@@ -21,7 +21,7 @@
 import { readFileSync } from 'node:fs';
 import { verifyApiKey, ApiKeyStore, type ApiKeyVerifier, type ApiKeyPrincipal } from '@hasna/contracts/auth';
 import { createKnowledgeCloudClient } from './db/remote-storage.js';
-import { knowledgeRegistryContract } from './remote-client.js';
+import { knowledgeRegistryContract } from './registry-contract.js';
 import { makeId, makeShortId, type KnowledgeItem } from './store.js';
 import type { PoolQueryClient } from './generated/storage-kit/index.js';
 
@@ -81,6 +81,10 @@ function resolveSigningSecret(env: NodeJS.ProcessEnv = process.env): string {
 // ---------------------------------------------------------------------------
 
 export interface NoteInput {
+  /** Optional caller-supplied stable id (upsert). When present, create is an
+   * idempotent upsert on this id — matching the local db.json upsert semantics so
+   * `upsert --id <stable>` and data import/re-sync never duplicate in cloud mode. */
+  id?: string;
   title: string;
   content?: string;
   url?: string | null;
@@ -128,8 +132,39 @@ export class NoteRepo {
     if (!input.title || typeof input.title !== 'string') {
       throw new HttpError(400, 'title is required');
     }
-    const id = makeId();
     const now = new Date().toISOString();
+    const suppliedId = typeof input.id === 'string' ? input.id.trim() : '';
+    if (suppliedId) {
+      // Caller-supplied stable id => idempotent upsert (parity with the local
+      // db.json store, where `upsert --id` persists that id so a later get()
+      // re-finds it). Without this, cloud create dropped the id and every
+      // `upsert --id`/import re-invocation created a duplicate. id is the PK, so
+      // ON CONFLICT is safe; short_id is only derived on first insert.
+      const row = await this.client.get<Record<string, unknown>>(
+        `INSERT INTO knowledge_items (id, short_id, title, content, url, tags, metadata, archived, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,FALSE,$8,$8)
+         ON CONFLICT (id) DO UPDATE SET
+           title = EXCLUDED.title,
+           content = EXCLUDED.content,
+           url = EXCLUDED.url,
+           tags = EXCLUDED.tags,
+           metadata = EXCLUDED.metadata,
+           updated_at = EXCLUDED.updated_at
+         RETURNING *`,
+        [
+          suppliedId,
+          makeShortId(suppliedId),
+          input.title,
+          input.content ?? '',
+          input.url ?? null,
+          JSON.stringify(input.tags ?? []),
+          JSON.stringify(input.metadata ?? {}),
+          now,
+        ],
+      );
+      return rowToItem(row!);
+    }
+    const id = makeId();
     const row = await this.client.get<Record<string, unknown>>(
       `INSERT INTO knowledge_items (id, short_id, title, content, url, tags, metadata, archived, created_at, updated_at)
        VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,FALSE,$8,$9)
@@ -235,6 +270,7 @@ export function knowledgeOpenApi(version: string): Record<string, unknown> {
   const noteInput = {
     type: 'object',
     properties: {
+      id: { type: 'string' },
       title: { type: 'string' },
       content: { type: 'string' },
       url: { type: 'string', nullable: true },

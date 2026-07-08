@@ -7,7 +7,6 @@ import { type EmbeddingIndexOptions, type EmbeddingSearchOptions } from './embed
 import { type KnowledgeMachinePreflightOptions, type KnowledgeMachineRouteResolution, type KnowledgeMachineWorkspaceResolution, type KnowledgeMachineTopologyOptions } from './machines';
 import { type ProviderStatusResult, type ModelRegistryEntry } from './providers';
 import { type ReindexRuntimeOptions } from './reindex';
-import { RemoteKnowledgeClient, type RemoteKnowledgeRegistryContract } from './remote-client';
 import { type KnowledgeContextPack, type RetrievalOptions } from './retrieval';
 import { type RulesProvenanceImportResult } from './rules-provenance';
 import { type HybridSearchOptions, type HybridSearchResult } from './search';
@@ -384,8 +383,6 @@ export declare class KnowledgeService {
         apiUrl?: string;
     }, env?: Record<string, string | undefined>): import("./auth").KnowledgeAuthConfig;
     clearAuth(env?: Record<string, string | undefined>): boolean;
-    remoteContract(): RemoteKnowledgeRegistryContract;
-    remoteClient(env?: Record<string, string | undefined>): RemoteKnowledgeClient | null;
     paths(): KnowledgePathsResult;
     initDb(): {
         path: string;
@@ -436,7 +433,18 @@ export declare class KnowledgeService {
     modelRegistry(): ModelRegistryEntry[];
     embeddingStatus(): import("./embeddings").EmbeddingStatusResult;
     indexEmbeddings(options?: Omit<EmbeddingIndexOptions, 'dbPath' | 'config'>): Promise<import("./embeddings").EmbeddingIndexResult>;
-    semanticSearch(options: Omit<EmbeddingSearchOptions, 'dbPath' | 'config'>): Promise<import("./embeddings").SemanticSearchResult>;
+    /** True when the client-flip resolves to the cloud HTTP transport. In api mode
+     * the shared corpus is the cloud knowledge-items, not a local sqlite catalog. */
+    private isApiMode;
+    /** Fetch the entire shared knowledge-item corpus from the cloud (api mode). */
+    private fetchCloudItems;
+    semanticSearch(options: Omit<EmbeddingSearchOptions, 'dbPath' | 'config'>): Promise<import("./embeddings").SemanticSearchResult | {
+        provider: "openai";
+        model: string;
+        dimensions: number;
+        query: string;
+        results: import("./search").HybridSearchEntry[];
+    }>;
     search(options: Omit<HybridSearchOptions, 'dbPath' | 'config'>): Promise<HybridSearchResult>;
     retrieveContext(options: Omit<RetrievalOptions, 'dbPath' | 'config'>): Promise<KnowledgeContextPack>;
     contextPack(options: Omit<KnowledgeAgentContextPackOptions, 'dbPath' | 'config' | 'safetyPolicy'>): Promise<KnowledgeAgentContextPack>;

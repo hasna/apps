@@ -1,3 +1,8 @@
+// Local, read-only knowledge.db storage status helpers. The client-side
+// Postgres sync engine (getStoragePg / storagePush / storagePull / storageSync /
+// runStorageMigrations) has been REMOVED: it was a forbidden DSN-on-client path
+// that connected fleet machines straight to the shared RDS. Clients reach the
+// shared store only through the HTTP ApiStore.
 export {
   KNOWLEDGE_STORAGE_ENV,
   KNOWLEDGE_STORAGE_FALLBACK_ENV,
@@ -11,15 +16,10 @@ export {
   getStorageDatabaseEnvName,
   getStorageDatabaseUrl,
   getStorageMode,
-  getStoragePg,
   getStorageStatus,
   getSyncMetaAll,
   parseStorageTables,
   resolveTables,
-  runStorageMigrations,
-  storagePull,
-  storagePush,
-  storageSync,
 } from './db/storage-sync.js';
 export type {
   StorageEnv,
@@ -27,22 +27,21 @@ export type {
   StorageStatus,
   StorageStatusOptions,
   StorageSyncOptions,
-  StorageRemoteAdapter,
   SyncMeta,
   SyncResult,
 } from './db/storage-sync.js';
-export { PgAdapterAsync, createKnowledgeCloudClient, KNOWLEDGE_APP_NAME } from './db/remote-storage.js';
+
+// SERVER-SIDE cloud access (src/serve + scripts/apply-cloud-migrations). These
+// require the RDS DSN, which is injected only inside our AWS and NEVER shipped
+// to fleet machines. They are intentionally kept out of the CLI/MCP/SDK client
+// command surface.
+export { createKnowledgeCloudClient, KNOWLEDGE_APP_NAME } from './db/remote-storage.js';
 export { PG_MIGRATIONS } from './db/pg-migrations.js';
 
 // Vendored @hasna/contracts storage kit — the sanctioned cloud-mode pg access
-// layer (PURE REMOTE per Amendment A1). Re-exported so downstream consumers get
-// the canonical TLS/pool/query/migration surface from one place.
+// layer used by the server and the deploy migration script.
 export {
   KIT_VERSION,
-  createPgPool,
-  createCloudPoolFromEnv,
-  createQueryClient,
-  wrapExecutor,
   resolveStorageMode,
   resolveDatabaseUrl,
   resolveTlsConfig,
@@ -52,6 +51,7 @@ export {
   createMigrationLedger,
   defineMigration,
   checksumSql,
+  wrapExecutor,
   checkHealth,
   checkReady,
 } from './generated/storage-kit/index.js';
@@ -59,9 +59,6 @@ export type {
   PoolQueryClient,
   TypedQueryClient,
   PgExecutor,
-  CreatePgPoolOptions,
-  CreateCloudPoolFromEnvOptions,
-  CloudPoolFromEnv,
   Migration,
   MigrationResult,
   StorageModeResolution,
