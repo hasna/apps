@@ -423,6 +423,54 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
       }
     }
 
+    // ── /v1/activity — recent task-history entries ──
+    // Read-only feed powering the CLI `log` and `burndown` views on a flipped
+    // machine. Previously those read this box's local sqlite task_history, so a
+    // self_hosted box reported its private island instead of the shared ledger.
+    if (resource === "activity" && !id) {
+      if (method !== "GET") return error(405, `method ${method} not allowed on /v1/activity`);
+      const limitParam = url.searchParams.get("limit");
+      const limit = limitParam ? Math.max(1, Math.min(10000, Number(limitParam) || 50)) : 50;
+      const activity = await store.audit.getRecentActivity(limit);
+      return json({ activity, count: activity.length });
+    }
+
+    // ── /v1/task-lists — task lists (optionally scoped to a project) ──
+    if (resource === "task-lists" && !id) {
+      if (method !== "GET") return error(405, `method ${method} not allowed on /v1/task-lists`);
+      const projectId = url.searchParams.get("project_id") ?? undefined;
+      const taskLists = await store.taskLists.list(projectId);
+      return json({ task_lists: taskLists, count: taskLists.length });
+    }
+
+    // ── /v1/dependencies — every dependency edge in the dataset ──
+    // Edges are far fewer than tasks, so the whole set is cheap to return; the CLI
+    // derives blocked/ready/sprint/recap dependency analytics from it client-side
+    // instead of reading local sqlite.
+    if (resource === "dependencies" && !id) {
+      if (method !== "GET") return error(405, `method ${method} not allowed on /v1/dependencies`);
+      if (typeof store.dependencies?.listAll !== "function") {
+        return error(501, "dependency edge listing is not supported by this storage backend");
+      }
+      const dependencies = await store.dependencies.listAll();
+      return json({ dependencies, count: dependencies.length });
+    }
+
+    // ── /v1/next — the best pending task to work on next ──
+    // Priority-ranked pick from the shared queue (parity with the CLI `next`
+    // command's local getNextTask). Returns `{ task: null }` when the queue is empty.
+    if (resource === "next" && !id) {
+      if (method !== "GET") return error(405, `method ${method} not allowed on /v1/next`);
+      const agent = url.searchParams.get("agent") ?? undefined;
+      const filters = {
+        ...(url.searchParams.get("project_id") ? { project_id: url.searchParams.get("project_id")! } : {}),
+        ...(url.searchParams.get("task_list_id") ? { task_list_id: url.searchParams.get("task_list_id")! } : {}),
+        ...(url.searchParams.get("plan_id") ? { plan_id: url.searchParams.get("plan_id")! } : {}),
+      };
+      const task = await store.tasks.getNext(agent, filters as never);
+      return json({ task: task ?? null });
+    }
+
     // ── /v1/stats ──
     // `tasks` keeps its historical meaning (top-level tasks, subtasks excluded) for
     // back-compat, while `tasks_all` is the TRUE row count including subtasks —

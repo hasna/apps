@@ -16,6 +16,19 @@ import {
   cloudRemoveDependency,
   cloudGetDependencies,
   cloudRecordVerification,
+  cloudActiveWork,
+  cloudStaleTasks,
+  cloudOverdueTasks,
+  cloudEscalatedTasks,
+  cloudChangedSince,
+  cloudTaskStats,
+  cloudRecentActivity,
+  cloudListTaskLists,
+  cloudNextTask,
+  cloudAllDependencies,
+  cloudBlockingDepsMap,
+  cloudRecap,
+  cloudTimeline,
 } from "./cloud-router.js";
 
 const CLOUD_ENV = {
@@ -228,5 +241,214 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
     expect(calls[0]!.method).toBe("POST");
     expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t1/verifications");
     expect(calls[0]!.body).toEqual({ command: "bun test", status: "passed" });
+  });
+});
+
+describe("cloud read/analytics routing reads the shared cloud dataset", () => {
+  const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
+
+  test("active work -> GET /v1/tasks?status=in_progress, priority-sorted", async () => {
+    const calls = installFetch(() => ({
+      body: {
+        tasks: [
+          { id: "a", title: "low", priority: "low", status: "in_progress", updated_at: iso(1000) },
+          { id: "b", title: "crit", priority: "critical", status: "in_progress", updated_at: iso(5000) },
+        ],
+      },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const work = await cloudActiveWork(client, {});
+    expect(work.map((t) => t.id)).toEqual(["b", "a"]);
+    expect(calls[0]!.url).toContain("/v1/tasks");
+    expect(calls[0]!.url).toContain("status=in_progress");
+  });
+
+  test("stale tasks -> in_progress older than threshold", async () => {
+    installFetch(() => ({
+      body: {
+        tasks: [
+          { id: "fresh", status: "in_progress", updated_at: iso(60 * 1000), locked_at: null },
+          { id: "stale", status: "in_progress", updated_at: iso(60 * 60 * 1000), locked_at: null },
+        ],
+      },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const tasks = await cloudStaleTasks(client, 30, {});
+    expect(tasks.map((t) => t.id)).toEqual(["stale"]);
+  });
+
+  test("overdue tasks -> active tasks past due_at", async () => {
+    installFetch((c) => {
+      const status = c.url.includes("status=pending") ? "pending" : "in_progress";
+      return {
+        body: {
+          tasks:
+            status === "pending"
+              ? [
+                  { id: "overdue", status: "pending", due_at: iso(24 * 60 * 60 * 1000) },
+                  { id: "future", status: "pending", due_at: new Date(Date.now() + 8.64e7).toISOString() },
+                ]
+              : [],
+        },
+      };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const tasks = await cloudOverdueTasks(client);
+    expect(tasks.map((t) => t.id)).toEqual(["overdue"]);
+  });
+
+  test("escalated tasks -> overdue and sla_breached reasons", async () => {
+    installFetch((c) => ({
+      body: {
+        tasks: c.url.includes("status=pending")
+          ? [{ id: "od", status: "pending", due_at: iso(60 * 60 * 1000), created_at: iso(9e7) }]
+          : [{ id: "sla", status: "in_progress", sla_minutes: 1, started_at: iso(60 * 60 * 1000), created_at: iso(9e7) }],
+      },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const esc = await cloudEscalatedTasks(client, {});
+    const byId = Object.fromEntries(esc.map((e) => [e.task.id, e.reasons]));
+    expect(byId["od"]).toEqual(["overdue"]);
+    expect(byId["sla"]).toEqual(["sla_breached"]);
+  });
+
+  test("changed-since -> filters updated_at > since", async () => {
+    installFetch(() => ({
+      body: {
+        tasks: [
+          { id: "new", updated_at: iso(1000) },
+          { id: "old", updated_at: iso(48 * 60 * 60 * 1000) },
+        ],
+      },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const since = iso(24 * 60 * 60 * 1000);
+    const tasks = await cloudChangedSince(client, since);
+    expect(tasks.map((t) => t.id)).toEqual(["new"]);
+  });
+
+  test("task stats -> counts by status/priority/agent from cloud", async () => {
+    installFetch(() => ({
+      body: {
+        tasks: [
+          { id: "1", status: "completed", priority: "high", assigned_to: "julius" },
+          { id: "2", status: "pending", priority: "low", assigned_to: null, agent_id: "cato" },
+          { id: "3", status: "completed", priority: "high", assigned_to: "julius" },
+        ],
+      },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const stats = await cloudTaskStats(client, {});
+    expect(stats.total).toBe(3);
+    expect(stats.by_status["completed"]).toBe(2);
+    expect(stats.by_priority["high"]).toBe(2);
+    expect(stats.by_agent["julius"]).toBe(2);
+    expect(stats.completion_rate).toBe(67);
+  });
+
+  test("recent activity -> GET /v1/activity?limit, unwraps { activity }", async () => {
+    const calls = installFetch(() => ({ body: { activity: [{ id: "h1", task_id: "t1", action: "create", created_at: iso(0) }], count: 1 } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const entries = await cloudRecentActivity(client, 30);
+    expect(entries).toHaveLength(1);
+    expect(calls[0]!.method).toBe("GET");
+    expect(calls[0]!.url).toContain("/v1/activity");
+    expect(calls[0]!.url).toContain("limit=30");
+  });
+
+  test("task lists -> GET /v1/task-lists?project_id, unwraps { task_lists }", async () => {
+    const calls = installFetch(() => ({ body: { task_lists: [{ id: "tl1", name: "Backlog", slug: "backlog" }], count: 1 } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const lists = await cloudListTaskLists(client, "proj1");
+    expect(lists).toHaveLength(1);
+    expect(calls[0]!.url).toContain("/v1/task-lists");
+    expect(calls[0]!.url).toContain("project_id=proj1");
+  });
+
+  test("next -> GET /v1/next, unwraps { task }; empty -> null", async () => {
+    const calls = installFetch((c) =>
+      c.url.includes("agent=julius") ? { body: { task: { id: "best", title: "do this" } } } : { body: { task: null } },
+    );
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const task = await cloudNextTask(client, "julius", { project_id: "p1" });
+    expect(task!.id).toBe("best");
+    expect(calls[0]!.url).toContain("/v1/next");
+    expect(calls[0]!.url).toContain("agent=julius");
+    expect(calls[0]!.url).toContain("project_id=p1");
+    const none = await cloudNextTask(client);
+    expect(none).toBeNull();
+  });
+
+  test("all dependencies -> GET /v1/dependencies, unwraps { dependencies }", async () => {
+    const calls = installFetch(() => ({ body: { dependencies: [{ task_id: "a", depends_on: "b" }], count: 1 } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const edges = await cloudAllDependencies(client);
+    expect(edges).toHaveLength(1);
+    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/dependencies");
+  });
+
+  test("blocking deps map -> incomplete blockers only", async () => {
+    installFetch((c) => {
+      if (c.url.endsWith("/dependencies")) {
+        return { body: { dependencies: [{ task_id: "cand", depends_on: "done" }, { task_id: "cand", depends_on: "open" }] } };
+      }
+      if (c.url.endsWith("/tasks/done")) return { body: { task: { id: "done", status: "completed", title: "done" } } };
+      if (c.url.endsWith("/tasks/open")) return { body: { task: { id: "open", status: "pending", title: "open" } } };
+      return { body: { task: null } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const map = await cloudBlockingDepsMap(client, [{ id: "cand" } as never]);
+    expect(map.get("cand")!.map((t) => t.id)).toEqual(["open"]);
+  });
+
+  test("recap -> completed/created/in_progress/stale/blocked/agents from cloud", async () => {
+    installFetch((c) => {
+      if (c.url.endsWith("/agents")) {
+        return { body: { agents: [{ id: "ag1", name: "julius", last_seen_at: iso(60 * 1000) }] } };
+      }
+      if (c.url.endsWith("/dependencies")) return { body: { dependencies: [] } };
+      // /v1/tasks (list, no status filter)
+      return {
+        body: {
+          tasks: [
+            { id: "c1", status: "completed", completed_at: iso(60 * 1000), started_at: iso(60 * 60 * 1000), created_at: iso(60 * 60 * 1000), assigned_to: "ag1", title: "done" },
+            { id: "p1", status: "in_progress", updated_at: iso(1000), created_at: iso(90 * 60 * 1000), assigned_to: "ag1", title: "wip" },
+            { id: "s1", status: "in_progress", updated_at: iso(60 * 60 * 1000), created_at: iso(90 * 60 * 1000), title: "stuck" },
+          ],
+        },
+      };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const recap = await cloudRecap(client, 8);
+    expect(recap.completed.map((t) => t.id)).toEqual(["c1"]);
+    expect(recap.completed[0]!.duration_minutes).toBe(59);
+    expect(recap.in_progress.map((t) => t.id).sort()).toEqual(["p1", "s1"]);
+    expect(recap.stale.map((t) => t.id)).toEqual(["s1"]);
+    expect(recap.agents[0]!.name).toBe("julius");
+    expect(recap.agents[0]!.completed_count).toBe(1);
+  });
+
+  test("timeline -> maps /v1/activity to entries, honors order + since", async () => {
+    installFetch(() => ({
+      body: {
+        activity: [
+          { id: "h1", task_id: "t1", action: "create", agent_id: "julius", created_at: iso(60 * 60 * 1000), field: null },
+          { id: "h2", task_id: "t2", action: "complete", agent_id: null, created_at: iso(1000), field: "status", old_value: "pending", new_value: "completed" },
+        ],
+      },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const page = await cloudTimeline(client, { order: "desc", limit: 10 });
+    expect(page.total).toBe(2);
+    expect(page.entries[0]!.task_id).toBe("t2");
+    expect(page.entries[0]!.event_type).toBe("complete");
+    expect(page.entries[0]!.message).toContain("status");
+  });
+
+  test("timeline -> non-task entity filter yields no rows (cloud degradation)", async () => {
+    installFetch(() => ({ body: { activity: [{ id: "h1", task_id: "t1", action: "create", created_at: iso(0) }] } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const page = await cloudTimeline(client, { entity_type: "project", entity_id: "p1" });
+    expect(page.total).toBe(0);
   });
 });

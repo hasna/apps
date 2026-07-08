@@ -21,7 +21,7 @@
  * subnet routing — pure API-client path per the locked architecture.
  */
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
-import type { Agent, Plan, Project, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter } from "../types/index.js";
+import type { Agent, Plan, Project, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList } from "../types/index.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -314,4 +314,383 @@ export async function cloudRecordVerification(
     return (raw as { verification: CloudTaskVerification }).verification;
   }
   return raw as CloudTaskVerification;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Read/analytics routing (B2 continued)
+//
+// The query/reporting commands (`active`, `stale`, `overdue`, `sla`, `sprint`,
+// `blocked`, `ready`, `next`, `priorities`, `week`, `today`, `yesterday`,
+// `summary`, `report`, `recap`, `standup`, `log`, `burndown`, `lists`, `agent`,
+// `mine`) historically read this machine's LOCAL sqlite even on a flipped
+// machine, so a `self_hosted` box reported its private island instead of the
+// shared cloud dataset. The helpers below re-derive each of those views from the
+// cloud `/v1` API so a flipped machine reports the SAME numbers as every other
+// agent. Analytics that the local `db/*` helpers compute in SQL are recomputed
+// client-side over the cloud task set (parity with the local full-scan
+// behaviour); the few that need data the task list does not carry (activity
+// history, task lists, dependency edges, the priority-ranked "next" pick) route
+// to dedicated `/v1` endpoints.
+// ───────────────────────────────────────────────────────────────────────────
+
+const PRIORITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+function priorityRank(priority?: string | null): number {
+  return PRIORITY_RANK[priority ?? ""] ?? 4;
+}
+
+/** All non-terminal tasks (pending + in_progress) — the "active" working set. */
+export async function cloudActiveTasks(client: HasnaStorageClient, filter: TaskFilter = {}): Promise<Task[]> {
+  const [pending, inProgress] = await Promise.all([
+    cloudListTasks(client, { ...filter, status: "pending" as never }),
+    cloudListTasks(client, { ...filter, status: "in_progress" as never }),
+  ]);
+  return [...pending, ...inProgress];
+}
+
+/** In-progress tasks, priority- then recency-sorted (parity with `getActiveWork`). */
+export async function cloudActiveWork(client: HasnaStorageClient, filter: TaskFilter = {}): Promise<Task[]> {
+  const tasks = await cloudListTasks(client, { ...filter, status: "in_progress" as never });
+  return tasks.sort(
+    (a, b) => priorityRank(a.priority) - priorityRank(b.priority) || (b.updated_at ?? "").localeCompare(a.updated_at ?? ""),
+  );
+}
+
+/** In-progress tasks whose last update (or lock) is older than `minutes` (parity with `getStaleTasks`). */
+export async function cloudStaleTasks(client: HasnaStorageClient, minutes: number, filter: TaskFilter = {}): Promise<Task[]> {
+  const cutoff = new Date(Date.now() - minutes * 60 * 1000).toISOString();
+  const tasks = await cloudListTasks(client, { ...filter, status: "in_progress" as never });
+  return tasks
+    .filter((t) => (t.updated_at ?? "") < cutoff || (t.locked_at != null && t.locked_at < cutoff))
+    .sort((a, b) => (a.updated_at ?? "").localeCompare(b.updated_at ?? ""));
+}
+
+/** Non-terminal tasks past their due date (parity with `getOverdueTasks`). */
+export async function cloudOverdueTasks(client: HasnaStorageClient, projectId?: string, at: Date = new Date()): Promise<Task[]> {
+  const nowStr = at.toISOString();
+  const filter: TaskFilter = projectId ? ({ project_id: projectId } as TaskFilter) : {};
+  const active = await cloudActiveTasks(client, filter);
+  return active
+    .filter((t) => !t.archived_at && t.due_at != null && t.due_at < nowStr)
+    .sort((a, b) => (a.due_at ?? "").localeCompare(b.due_at ?? ""));
+}
+
+export interface CloudEscalatedTask {
+  task: Task;
+  reasons: Array<"overdue" | "sla_breached">;
+  breached_at: string;
+}
+
+/** Overdue or SLA-breached non-terminal tasks (parity with `getEscalatedTasks`). */
+export async function cloudEscalatedTasks(
+  client: HasnaStorageClient,
+  opts: { project_id?: string; agent_id?: string } = {},
+  at: Date = new Date(),
+): Promise<CloudEscalatedTask[]> {
+  const nowMs = at.getTime();
+  const filter: TaskFilter = {};
+  if (opts.project_id) (filter as TaskFilter).project_id = opts.project_id;
+  const active = await cloudActiveTasks(client, filter);
+  return active
+    .filter((t) => !t.archived_at && (opts.agent_id ? t.assigned_to === opts.agent_id : true))
+    .map((task) => {
+      const reasons: CloudEscalatedTask["reasons"] = [];
+      const breachedTimes: number[] = [];
+      if (task.due_at) {
+        const dueMs = new Date(task.due_at).getTime();
+        if (Number.isFinite(dueMs) && dueMs < nowMs) {
+          reasons.push("overdue");
+          breachedTimes.push(dueMs);
+        }
+      }
+      if (task.sla_minutes != null) {
+        const startMs = new Date(task.started_at ?? task.created_at).getTime();
+        const breachedMs = startMs + task.sla_minutes * 60_000;
+        if (Number.isFinite(breachedMs) && breachedMs < nowMs) {
+          reasons.push("sla_breached");
+          breachedTimes.push(breachedMs);
+        }
+      }
+      if (reasons.length === 0) return null;
+      return { task, reasons, breached_at: new Date(Math.min(...breachedTimes)).toISOString() } satisfies CloudEscalatedTask;
+    })
+    .filter((item): item is CloudEscalatedTask => item !== null)
+    .sort((a, b) => (a.task.due_at ?? "").localeCompare(b.task.due_at ?? "") || a.task.created_at.localeCompare(b.task.created_at));
+}
+
+/** Tasks updated since `since` (parity with `getTasksChangedSince`). */
+export async function cloudChangedSince(client: HasnaStorageClient, since: string, filter: TaskFilter = {}): Promise<Task[]> {
+  const tasks = await cloudListTasks(client, filter);
+  return tasks
+    .filter((t) => (t.updated_at ?? "") > since)
+    .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+}
+
+export interface CloudTaskStats {
+  total: number;
+  by_status: Record<string, number>;
+  by_priority: Record<string, number>;
+  completion_rate: number;
+  by_agent: Record<string, number>;
+}
+
+/** Task counts grouped by status/priority/agent (parity with `getTaskStats`). */
+export async function cloudTaskStats(client: HasnaStorageClient, filter: TaskFilter = {}): Promise<CloudTaskStats> {
+  const tasks = await cloudListTasks(client, filter);
+  const by_status: Record<string, number> = {};
+  const by_priority: Record<string, number> = {};
+  const by_agent: Record<string, number> = {};
+  for (const t of tasks) {
+    by_status[t.status] = (by_status[t.status] ?? 0) + 1;
+    by_priority[t.priority] = (by_priority[t.priority] ?? 0) + 1;
+    const agent = t.assigned_to ?? t.agent_id ?? "unassigned";
+    by_agent[agent] = (by_agent[agent] ?? 0) + 1;
+  }
+  const completed = by_status["completed"] ?? 0;
+  return {
+    total: tasks.length,
+    by_status,
+    by_priority,
+    by_agent,
+    completion_rate: tasks.length > 0 ? Math.round((completed / tasks.length) * 100) : 0,
+  };
+}
+
+/**
+ * Recent task-history entries (`GET /v1/activity`). Powers `log` and `burndown`.
+ * Requires the `/v1/activity` server route (ECS redeploy).
+ */
+export async function cloudRecentActivity(client: HasnaStorageClient, limit = 50): Promise<TaskHistory[]> {
+  const raw = await client.transport.get<unknown>("/activity", { query: { limit } });
+  const envelope = (raw ?? {}) as { activity?: TaskHistory[]; entries?: TaskHistory[] };
+  if (Array.isArray(envelope.activity)) return envelope.activity;
+  if (Array.isArray(envelope.entries)) return envelope.entries;
+  return Array.isArray(raw) ? (raw as TaskHistory[]) : [];
+}
+
+/**
+ * Task lists (`GET /v1/task-lists`). Powers `lists`. Requires the
+ * `/v1/task-lists` server route (ECS redeploy).
+ */
+export async function cloudListTaskLists(client: HasnaStorageClient, projectId?: string): Promise<TaskList[]> {
+  const query = projectId ? { project_id: projectId } : {};
+  const raw = await client.transport.get<unknown>("/task-lists", { query });
+  const envelope = (raw ?? {}) as { task_lists?: TaskList[]; taskLists?: TaskList[] };
+  if (Array.isArray(envelope.task_lists)) return envelope.task_lists;
+  if (Array.isArray(envelope.taskLists)) return envelope.taskLists;
+  return Array.isArray(raw) ? (raw as TaskList[]) : [];
+}
+
+/**
+ * The single best pending task to work on next (`GET /v1/next`) — the server
+ * applies the same agent-affinity + priority ranking + blocked-exclusion as the
+ * local `getNextTask`. Powers `next`. Requires the `/v1/next` route (ECS redeploy).
+ */
+export async function cloudNextTask(
+  client: HasnaStorageClient,
+  agent?: string,
+  filters?: { project_id?: string; task_list_id?: string; plan_id?: string },
+): Promise<Task | null> {
+  const query: Record<string, string> = {};
+  if (agent) query["agent"] = agent;
+  if (filters?.project_id) query["project_id"] = filters.project_id;
+  if (filters?.task_list_id) query["task_list_id"] = filters.task_list_id;
+  if (filters?.plan_id) query["plan_id"] = filters.plan_id;
+  const raw = await client.transport.get<unknown>("/next", { query });
+  if (raw == null) return null;
+  const task = unwrapTask(raw);
+  return task && (task as Task).id ? task : null;
+}
+
+/**
+ * Every dependency edge in the shared dataset (`GET /v1/dependencies`). Edges are
+ * far fewer than tasks, so this stays cheap even on the full cloud set. Powers the
+ * blocked/ready/sprint/recap dependency analytics. Requires the `/v1/dependencies`
+ * route (ECS redeploy).
+ */
+export async function cloudAllDependencies(client: HasnaStorageClient): Promise<TaskDependency[]> {
+  const raw = await client.transport.get<unknown>("/dependencies");
+  const envelope = (raw ?? {}) as { dependencies?: TaskDependency[] };
+  if (Array.isArray(envelope.dependencies)) return envelope.dependencies;
+  return Array.isArray(raw) ? (raw as TaskDependency[]) : [];
+}
+
+/** Fetch a set of tasks by id via bounded parallel `GET /v1/tasks/:id`. */
+export async function cloudGetTasksByIds(client: HasnaStorageClient, ids: readonly string[]): Promise<Map<string, Task>> {
+  const unique = Array.from(new Set(ids));
+  const map = new Map<string, Task>();
+  const CONCURRENCY = 8;
+  for (let i = 0; i < unique.length; i += CONCURRENCY) {
+    const batch = unique.slice(i, i + CONCURRENCY);
+    const tasks = await Promise.all(batch.map((id) => cloudGetTask(client, id)));
+    for (const task of tasks) if (task && task.id) map.set(task.id, task);
+  }
+  return map;
+}
+
+/**
+ * For each candidate task, its incomplete blocking dependencies (parity with
+ * `getBlockingDeps`): the tasks it depends on whose status is not `completed`.
+ */
+export async function cloudBlockingDepsMap(
+  client: HasnaStorageClient,
+  candidates: readonly Task[],
+): Promise<Map<string, Task[]>> {
+  const result = new Map<string, Task[]>();
+  if (candidates.length === 0) return result;
+  const edges = await cloudAllDependencies(client);
+  const dependsByTask = new Map<string, string[]>();
+  for (const edge of edges) {
+    if (!edge.task_id || !edge.depends_on) continue;
+    const arr = dependsByTask.get(edge.task_id) ?? [];
+    arr.push(edge.depends_on);
+    dependsByTask.set(edge.task_id, arr);
+  }
+  const candidateIds = new Set(candidates.map((t) => t.id));
+  const blockerIds = new Set<string>();
+  for (const id of candidateIds) for (const dep of dependsByTask.get(id) ?? []) blockerIds.add(dep);
+  const blockers = await cloudGetTasksByIds(client, Array.from(blockerIds));
+  for (const task of candidates) {
+    const deps = dependsByTask.get(task.id) ?? [];
+    const incomplete = deps
+      .map((depId) => blockers.get(depId))
+      .filter((b): b is Task => b != null && b.status !== "completed");
+    if (incomplete.length > 0) result.set(task.id, incomplete);
+  }
+  return result;
+}
+
+export interface CloudRecapSummary {
+  hours: number;
+  since: string;
+  completed: Array<Task & { duration_minutes: number | null }>;
+  created: Task[];
+  in_progress: Task[];
+  blocked: Task[];
+  stale: Task[];
+  agents: { name: string; completed_count: number; in_progress_count: number; last_seen_at: string }[];
+}
+
+/**
+ * The `recap`/`standup` summary computed over the shared cloud dataset (parity
+ * with `getRecap`): completed/created in the window, current in-progress, blocked
+ * (incomplete deps), stale, and per-agent activity. Uses `/v1/dependencies` for
+ * the blocked set and `/v1/agents` for the roster.
+ */
+export async function cloudRecap(client: HasnaStorageClient, hours: number, projectId?: string): Promise<CloudRecapSummary> {
+  const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+  const staleWindow = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+  const filter: TaskFilter = projectId ? ({ project_id: projectId } as TaskFilter) : {};
+  const [all, agents] = await Promise.all([cloudListTasks(client, filter), cloudListAgents(client)]);
+
+  const completed = all
+    .filter((t) => t.status === "completed" && t.completed_at != null && t.completed_at > since)
+    .sort((a, b) => (b.completed_at ?? "").localeCompare(a.completed_at ?? ""))
+    .map((t) => ({
+      ...t,
+      duration_minutes:
+        t.started_at && t.completed_at
+          ? Math.round((new Date(t.completed_at).getTime() - new Date(t.started_at).getTime()) / 60000)
+          : null,
+    }));
+  const created = all.filter((t) => t.created_at > since).sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const in_progress = all
+    .filter((t) => t.status === "in_progress")
+    .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+  const stale = in_progress
+    .filter((t) => (t.updated_at ?? "") < staleWindow)
+    .sort((a, b) => (a.updated_at ?? "").localeCompare(b.updated_at ?? ""));
+
+  const pending = all.filter((t) => t.status === "pending");
+  const blockedMap = await cloudBlockingDepsMap(client, pending);
+  const blocked = pending.filter((t) => blockedMap.has(t.id));
+
+  const sinceMs = new Date(since).getTime();
+  const agentSummaries = agents
+    .map((agent) => {
+      const owned = all.filter((t) => t.assigned_to === agent.id || t.agent_id === agent.id);
+      return {
+        name: agent.name,
+        completed_count: owned.filter((t) => t.status === "completed" && t.completed_at != null && t.completed_at > since).length,
+        in_progress_count: owned.filter((t) => t.status === "in_progress").length,
+        last_seen_at: agent.last_seen_at,
+      };
+    })
+    .filter((a) => a.last_seen_at != null && new Date(a.last_seen_at).getTime() > sinceMs)
+    .sort((a, b) => b.completed_count - a.completed_count);
+
+  return { hours, since, completed, created, in_progress, blocked, stale, agents: agentSummaries };
+}
+
+export interface CloudTimelineEntry {
+  id: string;
+  source: string;
+  event_type: string;
+  entity_type: "task";
+  entity_id: string;
+  task_id: string;
+  project_id: string | null;
+  plan_id: string | null;
+  run_id: string | null;
+  agent_id: string | null;
+  created_at: string;
+  title: string;
+  message: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface CloudTimelinePage {
+  entries: CloudTimelineEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface CloudTimelineOptions {
+  entity_type?: "task" | "run" | "project" | "plan";
+  entity_id?: string;
+  since?: string;
+  until?: string;
+  limit?: number;
+  offset?: number;
+  order?: "asc" | "desc";
+}
+
+/**
+ * A cloud activity timeline built from the shared task-history ledger
+ * (`GET /v1/activity`). The shared cloud dataset only carries task history (not the
+ * local run-ledger / project / plan sources), so `entity_type` filters other than
+ * `task` return no rows — a documented degradation from the richer local timeline.
+ */
+export async function cloudTimeline(client: HasnaStorageClient, options: CloudTimelineOptions = {}): Promise<CloudTimelinePage> {
+  const activity = await cloudRecentActivity(client, 5000);
+  let entries: CloudTimelineEntry[] = activity.map((h) => ({
+    id: h.id,
+    source: "task_history",
+    event_type: h.action,
+    entity_type: "task" as const,
+    entity_id: h.task_id,
+    task_id: h.task_id,
+    project_id: null,
+    plan_id: null,
+    run_id: null,
+    agent_id: h.agent_id ?? null,
+    created_at: h.created_at,
+    title: "",
+    message: h.field
+      ? `${h.field}: ${h.old_value ?? ""}${h.new_value != null ? ` -> ${h.new_value}` : ""}`.trim()
+      : null,
+    metadata: {},
+  }));
+  if (options.entity_type && options.entity_type !== "task") {
+    entries = [];
+  } else if (options.entity_type === "task" && options.entity_id) {
+    entries = entries.filter((e) => e.task_id === options.entity_id);
+  }
+  if (options.since) entries = entries.filter((e) => e.created_at >= options.since!);
+  if (options.until) entries = entries.filter((e) => e.created_at <= options.until!);
+  entries.sort((a, b) => (options.order === "asc" ? a.created_at.localeCompare(b.created_at) : b.created_at.localeCompare(a.created_at)));
+  const total = entries.length;
+  const offset = options.offset ?? 0;
+  const limit = options.limit ?? 50;
+  return { entries: entries.slice(offset, offset + limit), total, limit, offset };
 }

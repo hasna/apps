@@ -114,6 +114,7 @@ export function createPostgresTodosStorageAdapter(
       add: (taskId, dependsOn, context) => addDependency(taskId, dependsOn, store, context),
       remove: (taskId, dependsOn) => removeDependency(taskId, dependsOn, store),
       list: (taskId) => listDependencies(taskId, store),
+      listAll: () => store.list<TaskDependency>("dependencies"),
     },
     verifications: {
       add: (input, context) => addVerification(input, store, context),

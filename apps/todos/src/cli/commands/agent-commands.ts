@@ -6,7 +6,7 @@ import { releaseAgent, listAgents, normalizeGeneratedAgentNames, suggestAgentNam
 import { createTaskList, listTaskLists, deleteTaskList } from "../../db/task-lists.js";
 import { listTasks } from "../../db/tasks.js";
 import { getPackageVersion, handleError, autoProject, output } from "../helpers.js";
-import { getTodosCloudClient, cloudListAgents, cloudRegisterAgent } from "../cloud-router.js";
+import { getTodosCloudClient, cloudListAgents, cloudRegisterAgent, cloudListTasks, cloudListTaskLists } from "../cloud-router.js";
 
 export function registerAgentCommands(program: Command) {
   // init
@@ -198,16 +198,22 @@ export function registerAgentCommands(program: Command) {
     .option("-j, --json", "Output as JSON")
     .action(async (name: string, opts) => {
       const globalOpts = program.opts();
+      const cloud = getTodosCloudClient();
       const { getAgentByName: findByName } = await import("../../db/agents.js");
-      const agent = findByName(name);
+      // In cloud mode resolve the agent from the SHARED /v1/agents roster (a
+      // cloud-only agent is invisible to this box's local sqlite), then read that
+      // agent's tasks from the cloud too.
+      const agent = cloud
+        ? (await cloudListAgents(cloud)).find((a) => a.name === name || a.id === name) ?? null
+        : findByName(name);
 
       if (!agent) {
         console.error(chalk.red(`Agent not found: ${name}`));
         process.exit(1);
       }
 
-      const byAssigned = listTasks({ assigned_to: agent.name });
-      const byId = listTasks({ agent_id: agent.id });
+      const byAssigned = cloud ? await cloudListTasks(cloud, { assigned_to: agent.name }) : listTasks({ assigned_to: agent.name });
+      const byId = cloud ? await cloudListTasks(cloud, { agent_id: agent.id }) : listTasks({ agent_id: agent.id });
       const seen = new Set<string>();
       const allTasks = [...byAssigned, ...byId].filter(t => {
         if (seen.has(t.id)) return false;
@@ -359,7 +365,8 @@ export function registerAgentCommands(program: Command) {
           return;
         }
 
-        const lists = listTaskLists(projectId);
+        const cloud = getTodosCloudClient();
+        const lists = cloud ? await cloudListTaskLists(cloud, projectId ?? undefined) : listTaskLists(projectId);
         if (globalOpts.json) {
           output(lists, true);
           return;

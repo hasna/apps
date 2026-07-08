@@ -82,6 +82,12 @@ export interface TodosDependencyStore {
   add(taskId: string, dependsOn: string, context?: TodosStorageContext): MaybePromise<TaskDependency>;
   remove(taskId: string, dependsOn: string, context?: TodosStorageContext): MaybePromise<boolean>;
   list(taskId: string, context?: TodosStorageContext): MaybePromise<TodosTaskDependencies>;
+  /**
+   * Every dependency edge in the dataset. Optional — present on the Postgres
+   * (self_hosted) adapter so the CLI can derive blocked/ready/sprint/recap
+   * dependency analytics over the shared cloud set in one round trip.
+   */
+  listAll?(context?: TodosStorageContext): MaybePromise<TaskDependency[]>;
 }
 
 export interface TodosTaskVerification {

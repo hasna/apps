@@ -59,7 +59,23 @@ import {
 import { createLocalReport, renderLocalReportMarkdown } from "../../lib/local-reports.js";
 import type { BoardLane, BoardScope, CalendarEventKind, TaskPriority } from "../../types/index.js";
 import { autoProject, handleError, output, formatTaskLine, resolveTaskId, resolveExplicitProject } from "../helpers.js";
-import { getTodosCloudClient, cloudGetStats, cloudCountTasks, cloudListTasks } from "../cloud-router.js";
+import {
+  getTodosCloudClient,
+  cloudGetStats,
+  cloudCountTasks,
+  cloudListTasks,
+  cloudActiveWork,
+  cloudStaleTasks,
+  cloudOverdueTasks,
+  cloudEscalatedTasks,
+  cloudChangedSince,
+  cloudTaskStats,
+  cloudRecentActivity,
+  cloudNextTask,
+  cloudBlockingDepsMap,
+  cloudRecap,
+  cloudTimeline,
+} from "../cloud-router.js";
 import { TASK_STATUSES } from "../../types/index.js";
 
 function parseJsonObjectOption(value: string | undefined, label: string): Record<string, unknown> | undefined {
@@ -277,7 +293,10 @@ export function registerQueryCommands(program: Command) {
           || (db.query("SELECT id FROM projects WHERE path = ? OR name = ? OR task_list_id = ?").get(projectInput, projectInput, projectInput) as any)?.id;
         if (pid) filters.project_id = pid;
       }
-      const task = getNextTask(opts.agent, Object.keys(filters).length ? filters : undefined, db);
+      const cloud = getTodosCloudClient();
+      const task = cloud
+        ? await cloudNextTask(cloud, opts.agent, Object.keys(filters).length ? filters : undefined)
+        : getNextTask(opts.agent, Object.keys(filters).length ? filters : undefined, db);
       if (!task) {
         if (json) { console.log(JSON.stringify(null)); return; }
         console.log(chalk.dim("No tasks available."));
@@ -411,9 +430,12 @@ export function registerQueryCommands(program: Command) {
     .description("Show what happened in the last N hours — completed tasks, new tasks, agent activity, blockers")
     .option("--hours <n>", "Look back N hours (default: 8)", "8")
     .option("--project <id>", "Filter to project")
-    .action((opts) => {
+    .action(async (opts) => {
       const globalOpts = program.opts();
-      const recap = getRecap(parseInt(opts.hours, 10), opts.project);
+      const cloud = getTodosCloudClient();
+      const recap = cloud
+        ? await cloudRecap(cloud, parseInt(opts.hours, 10), opts.project)
+        : getRecap(parseInt(opts.hours, 10), opts.project);
       if (globalOpts.json) { output(recap, true); return; }
 
       console.log(chalk.bold(`\nRecap — last ${recap.hours} hours (since ${new Date(recap.since).toLocaleString()})\n`));
@@ -479,13 +501,14 @@ export function registerQueryCommands(program: Command) {
     .description("Generate standup notes — completed since yesterday, in progress, blocked. Grouped by agent.")
     .option("--since <date>", "ISO date or 'yesterday' (default: yesterday)")
     .option("--project <id>", "Filter to project")
-    .action((opts) => {
+    .action(async (opts) => {
       const globalOpts = program.opts();
       const sinceDate = opts.since === "yesterday" || !opts.since
         ? new Date(Date.now() - 24 * 60 * 60 * 1000)
         : new Date(opts.since);
       const hours = Math.max(1, Math.round((Date.now() - sinceDate.getTime()) / (60 * 60 * 1000)));
-      const recap = getRecap(hours, opts.project);
+      const cloud = getTodosCloudClient();
+      const recap = cloud ? await cloudRecap(cloud, hours, opts.project) : getRecap(hours, opts.project);
 
       if (globalOpts.json) { output(recap, true); return; }
 
@@ -561,7 +584,10 @@ export function registerQueryCommands(program: Command) {
       const db = getDatabase();
       const filters: Record<string, string> = {};
       if (opts.project) filters.project_id = opts.project;
-      const work = getActiveWork(Object.keys(filters).length ? filters : undefined, db);
+      const cloud = getTodosCloudClient();
+      const work = cloud
+        ? await cloudActiveWork(cloud, Object.keys(filters).length ? (filters as never) : {})
+        : getActiveWork(Object.keys(filters).length ? filters : undefined, db);
       if (json) { console.log(JSON.stringify(work, null, 2)); return; }
       if (work.length === 0) { console.log(chalk.dim("No active work.")); return; }
       console.log(chalk.bold(`Active work (${work.length}):`));
@@ -585,7 +611,10 @@ export function registerQueryCommands(program: Command) {
       const db = getDatabase();
       const filters: Record<string, string> = {};
       if (opts.project) filters.project_id = opts.project;
-      const tasks = getStaleTasks(parseInt(opts.minutes, 10), Object.keys(filters).length ? filters : undefined, db);
+      const cloud = getTodosCloudClient();
+      const tasks = cloud
+        ? await cloudStaleTasks(cloud, parseInt(opts.minutes, 10), Object.keys(filters).length ? (filters as never) : {})
+        : getStaleTasks(parseInt(opts.minutes, 10), Object.keys(filters).length ? filters : undefined, db);
       if (json) { console.log(JSON.stringify(tasks, null, 2)); return; }
       if (tasks.length === 0) { console.log(chalk.dim("No stale tasks.")); return; }
       console.log(chalk.bold(`Stale tasks (${tasks.length}):`));
@@ -737,12 +766,17 @@ export function registerQueryCommands(program: Command) {
       if (projectId) filter.project_id = projectId;
       if (opts.agent) filter.assigned_to = opts.agent;
 
+      const cloud = getTodosCloudClient();
       const { getTasksChangedSince } = await import("../../db/tasks.js");
-      const changed = getTasksChangedSince(since, Object.keys(filter).length ? filter : undefined, db) as any[];
+      const changed = (cloud
+        ? await cloudChangedSince(cloud, since, filter as never)
+        : getTasksChangedSince(since, Object.keys(filter).length ? filter : undefined, db)) as any[];
       const completed = changed.filter((t: any) => t.status === "completed");
       const inProgress = changed.filter((t: any) => t.status === "in_progress");
       const failed = changed.filter((t: any) => t.status === "failed");
-      const allTasks = listTasks({ ...(filter as any), status: "pending" as any });
+      const allTasks = cloud
+        ? await cloudListTasks(cloud, { ...(filter as any), status: "pending" } as never)
+        : listTasks({ ...(filter as any), status: "pending" as any });
 
       if (opts.json || globalOpts.json) {
         console.log(JSON.stringify({ completed, in_progress: inProgress, failed, pending: allTasks.length, period_days: days }, null, 2));
@@ -1047,12 +1081,17 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
       const filter: Record<string, unknown> = {};
       if (projectId) filter.project_id = projectId;
 
+      const cloud = getTodosCloudClient();
       const { getTasksChangedSince, getTaskStats } = await import("../../db/tasks.js");
-      const changed: any[] = getTasksChangedSince(since, Object.keys(filter).length ? filter : undefined, db);
+      const changed: any[] = cloud
+        ? await cloudChangedSince(cloud, since, filter as never)
+        : getTasksChangedSince(since, Object.keys(filter).length ? filter : undefined, db);
       const completed = changed.filter((t: any) => t.status === "completed");
       const failed = changed.filter((t: any) => t.status === "failed");
-      const all = listTasks(filter as any);
-      const stats = getTaskStats(Object.keys(filter).length ? filter : undefined, db) as any;
+      const all = cloud ? await cloudListTasks(cloud, filter as never) : listTasks(filter as any);
+      const stats = (cloud
+        ? await cloudTaskStats(cloud, filter as never)
+        : getTaskStats(Object.keys(filter).length ? filter : undefined, db)) as any;
 
       // By-day activity (count tasks updated per day)
       const byDay: Record<string, number> = {};
@@ -1114,9 +1153,12 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .action(async (opts) => {
       const globalOpts = program.opts();
       const db = getDatabase();
+      const cloud = getTodosCloudClient();
       const { getTasksChangedSince } = await import("../../db/tasks.js");
       const start = new Date(); start.setHours(0, 0, 0, 0);
-      const tasks: any[] = getTasksChangedSince(start.toISOString(), undefined, db);
+      const tasks: any[] = cloud
+        ? await cloudChangedSince(cloud, start.toISOString())
+        : getTasksChangedSince(start.toISOString(), undefined, db);
       const completed = tasks.filter((t: any) => t.status === "completed");
       const started = tasks.filter((t: any) => t.status === "in_progress");
       const other = tasks.filter((t: any) => t.status !== "completed" && t.status !== "in_progress");
@@ -1144,10 +1186,13 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .action(async (opts) => {
       const globalOpts = program.opts();
       const db = getDatabase();
+      const cloud = getTodosCloudClient();
       const { getTasksChangedSince } = await import("../../db/tasks.js");
       const start = new Date(); start.setDate(start.getDate() - 1); start.setHours(0, 0, 0, 0);
       const end = new Date(start); end.setHours(23, 59, 59, 999);
-      const allChanged: any[] = getTasksChangedSince(start.toISOString(), undefined, db);
+      const allChanged: any[] = cloud
+        ? await cloudChangedSince(cloud, start.toISOString())
+        : getTasksChangedSince(start.toISOString(), undefined, db);
       const tasks = allChanged.filter((t: any) => t.updated_at <= end.toISOString());
       const completed = tasks.filter((t: any) => t.status === "completed");
       const started = tasks.filter((t: any) => t.status === "in_progress");
@@ -1176,13 +1221,14 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
       const globalOpts = program.opts();
       const db = getDatabase();
       const projectId = globalOpts.project ? (autoProject(globalOpts) || undefined) : undefined;
+      const cloud = getTodosCloudClient();
       const filter: any = { assigned_to: agent };
       if (projectId) filter.project_id = projectId;
-      const tasks: any[] = listTasks(filter, db);
+      const tasks: any[] = cloud ? await cloudListTasks(cloud, filter) : listTasks(filter, db);
       // Also check agent_id for tasks created by this agent
       const filterByAgent: any = { agent_id: agent };
       if (projectId) filterByAgent.project_id = projectId;
-      const agentTasks: any[] = listTasks(filterByAgent, db);
+      const agentTasks: any[] = cloud ? await cloudListTasks(cloud, filterByAgent) : listTasks(filterByAgent, db);
       // Merge, dedupe by id
       const seen = new Set(tasks.map((t: any) => t.id));
       for (const t of agentTasks) {
@@ -1225,15 +1271,24 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .action(async (opts) => {
       const globalOpts = program.opts();
       const db = getDatabase();
-      const { getBlockingDeps } = await import("../../db/tasks.js");
+      const cloud = getTodosCloudClient();
       const projectId = autoProject(globalOpts) || opts.project || undefined;
       const filter: any = { status: "pending" as const };
       if (projectId) filter.project_id = projectId;
-      const allPending: any[] = listTasks(filter, db);
+      const allPending: any[] = cloud ? await cloudListTasks(cloud, filter) : listTasks(filter, db);
       const blockedTasks: { task: any; blockers: any[] }[] = [];
-      for (const t of allPending) {
-        const blockers = getBlockingDeps(t.id, db);
-        if (blockers.length > 0) blockedTasks.push({ task: t, blockers });
+      if (cloud) {
+        const map = await cloudBlockingDepsMap(cloud, allPending);
+        for (const t of allPending) {
+          const blockers = map.get(t.id);
+          if (blockers && blockers.length > 0) blockedTasks.push({ task: t, blockers });
+        }
+      } else {
+        const { getBlockingDeps } = await import("../../db/tasks.js");
+        for (const t of allPending) {
+          const blockers = getBlockingDeps(t.id, db);
+          if (blockers.length > 0) blockedTasks.push({ task: t, blockers });
+        }
       }
       if (opts.json || globalOpts.json) {
         console.log(JSON.stringify(blockedTasks.map(b => ({ ...b.task, blocked_by: b.blockers.map((bl: any) => ({ id: bl.id, short_id: bl.short_id, title: bl.title, status: bl.status })) }))));
@@ -1261,8 +1316,9 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .action(async (opts) => {
       const globalOpts = program.opts();
       const projectId = autoProject(globalOpts) || opts.project || undefined;
+      const cloud = getTodosCloudClient();
       const { getOverdueTasks } = await import("../../db/tasks.js");
-      const tasks: any[] = getOverdueTasks(projectId);
+      const tasks: any[] = cloud ? await cloudOverdueTasks(cloud, projectId) : getOverdueTasks(projectId);
       if (opts.json || globalOpts.json) {
         console.log(JSON.stringify(tasks));
         return;
@@ -1290,10 +1346,11 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .action(async (opts) => {
       const globalOpts = program.opts();
       const projectId = autoProject(globalOpts) || opts.project || undefined;
-      const escalations = getEscalatedTasks({
-        project_id: projectId,
-        agent_id: opts.agent,
-      }).slice(0, parseInt(opts.limit, 10));
+      const cloud = getTodosCloudClient();
+      const escalations = (cloud
+        ? await cloudEscalatedTasks(cloud, { project_id: projectId, agent_id: opts.agent })
+        : getEscalatedTasks({ project_id: projectId, agent_id: opts.agent })
+      ).slice(0, parseInt(opts.limit, 10));
       if (opts.json || globalOpts.json) {
         console.log(JSON.stringify(escalations));
         return;
@@ -1318,12 +1375,15 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .action(async (opts) => {
       const globalOpts = program.opts();
       const db = getDatabase();
+      const cloud = getTodosCloudClient();
       const { getTasksChangedSince } = await import("../../db/tasks.js");
       const now = new Date();
       const start = new Date(now);
       start.setDate(start.getDate() - 7);
       start.setHours(0, 0, 0, 0);
-      const tasks: any[] = getTasksChangedSince(start.toISOString(), undefined, db);
+      const tasks: any[] = cloud
+        ? await cloudChangedSince(cloud, start.toISOString())
+        : getTasksChangedSince(start.toISOString(), undefined, db);
 
       // Group by day
       const days: Record<string, { completed: any[]; started: any[]; other: any[] }> = {};
@@ -1373,9 +1433,10 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .action(async (opts) => {
       const globalOpts = program.opts();
       const db = getDatabase();
+      const cloud = getTodosCloudClient();
       const { getRecentActivity } = await import("../../db/audit.js");
       const numDays = parseInt(opts.days, 10);
-      const entries: any[] = getRecentActivity(5000, db);
+      const entries: any[] = cloud ? await cloudRecentActivity(cloud, 5000) : getRecentActivity(5000, db);
       const now = new Date();
       const dayStats: { date: string; completed: number; created: number; failed: number }[] = [];
       for (let i = numDays - 1; i >= 0; i--) {
@@ -1420,8 +1481,11 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .action(async (opts) => {
       const globalOpts = program.opts();
       const db = getDatabase();
+      const cloud = getTodosCloudClient();
       const { getRecentActivity } = await import("../../db/audit.js");
-      const entries: any[] = getRecentActivity(parseInt(opts.limit, 10), db);
+      const entries: any[] = cloud
+        ? await cloudRecentActivity(cloud, parseInt(opts.limit, 10))
+        : getRecentActivity(parseInt(opts.limit, 10), db);
       if (opts.json || globalOpts.json) {
         console.log(JSON.stringify(entries));
         return;
@@ -1473,6 +1537,38 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .action(async (opts) => {
       const globalOpts = program.opts();
       const db = getDatabase();
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        const cloudOptions = {
+          since: opts.since,
+          until: opts.until,
+          limit: parseInt(opts.limit, 10),
+          offset: parseInt(opts.offset, 10),
+          order: (opts.order === "asc" ? "asc" : "desc") as "asc" | "desc",
+          ...(opts.task ? { entity_type: "task" as const, entity_id: opts.task } : {}),
+          ...(opts.project ? { entity_type: "project" as const, entity_id: opts.project } : {}),
+          ...(opts.plan ? { entity_type: "plan" as const, entity_id: opts.plan } : {}),
+          ...(opts.run ? { entity_type: "run" as const, entity_id: opts.run } : {}),
+        };
+        const timeline = await cloudTimeline(cloud, cloudOptions);
+        if (opts.json || globalOpts.json) {
+          console.log(JSON.stringify(timeline, null, 2));
+          return;
+        }
+        if (timeline.entries.length === 0) {
+          console.log(chalk.dim("  No activity yet."));
+          return;
+        }
+        console.log(chalk.bold(`Activity timeline (${timeline.total}${timeline.total > timeline.entries.length ? `, showing ${timeline.entries.length}` : ""}):\n`));
+        for (const entry of timeline.entries) {
+          const time = entry.created_at.replace("T", " ").slice(0, 16);
+          const ref = entry.run_id ? `run ${entry.run_id.slice(0, 8)}` : `task ${entry.task_id.slice(0, 8)}`;
+          const agent = entry.agent_id ? chalk.dim(` (${entry.agent_id})`) : "";
+          const message = entry.message ? ` ${entry.message}` : "";
+          console.log(`  ${chalk.dim(time)} ${chalk.cyan(entry.source)} ${chalk.dim(ref)} ${entry.event_type}${message}${agent}`);
+        }
+        return;
+      }
       const { getLocalActivityTimeline } = await import("../../lib/activity-timeline.js");
       const { resolveTaskRunId } = await import("../../db/task-runs.js");
       const options: Parameters<typeof getLocalActivityTimeline>[0] = {
@@ -1565,21 +1661,34 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
         return;
       }
       const db = getDatabase();
-      const { getBlockingDeps } = await import("../../db/tasks.js");
+      const cloud = getTodosCloudClient();
       const { isLockExpired } = await import("../../db/database.js");
       const projectId = autoProject(globalOpts) || opts.project || undefined;
       const filter: any = { status: "pending" };
       if (projectId) filter.project_id = projectId;
-      const pending: any[] = listTasks(filter, db);
-      const ready = pending.filter((t: any) => {
-        // Not locked (or lock expired)
-        if (t.locked_by && !isLockExpired(t.locked_at)) return false;
-        // No unmet dependencies
-        const blockers = getBlockingDeps(t.id, db);
-        return blockers.length === 0;
-      });
+      const pending: any[] = cloud ? await cloudListTasks(cloud, filter) : listTasks(filter, db);
+      let ready: any[];
+      if (cloud) {
+        const map = await cloudBlockingDepsMap(cloud, pending);
+        ready = pending.filter((t: any) => {
+          if (t.locked_by && !isLockExpired(t.locked_at)) return false;
+          return !map.has(t.id);
+        });
+      } else {
+        const { getBlockingDeps } = await import("../../db/tasks.js");
+        ready = pending.filter((t: any) => {
+          // Not locked (or lock expired)
+          if (t.locked_by && !isLockExpired(t.locked_at)) return false;
+          // No unmet dependencies
+          return getBlockingDeps(t.id, db).length === 0;
+        });
+      }
       const limited = ready.slice(0, parseInt(opts.limit, 10));
       if (opts.json || globalOpts.json) {
+        if (cloud) {
+          console.log(JSON.stringify(limited));
+          return;
+        }
         const { getTaskRouteState } = await import("../../lib/task-routing.js");
         console.log(JSON.stringify(limited.map((task) => ({ ...task, route_state: getTaskRouteState(task, db) }))));
         return;
@@ -1605,20 +1714,33 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .action(async (opts) => {
       const globalOpts = program.opts();
       const db = getDatabase();
-      const { getBlockingDeps } = await import("../../db/tasks.js");
+      const cloud = getTodosCloudClient();
       const projectId = autoProject(globalOpts) || opts.project || undefined;
       const baseFilter: any = {};
       if (projectId) baseFilter.project_id = projectId;
 
-      const inProgress: any[] = listTasks({ ...baseFilter, status: "in_progress" }, db);
-      const pending: any[] = listTasks({ ...baseFilter, status: "pending" }, db);
+      const inProgress: any[] = cloud
+        ? await cloudListTasks(cloud, { ...baseFilter, status: "in_progress" })
+        : listTasks({ ...baseFilter, status: "in_progress" }, db);
+      const pending: any[] = cloud
+        ? await cloudListTasks(cloud, { ...baseFilter, status: "pending" })
+        : listTasks({ ...baseFilter, status: "pending" }, db);
       const nowStr = new Date().toISOString();
 
       // Find blocked tasks
       const blocked: { task: any; blockers: any[] }[] = [];
-      for (const t of pending) {
-        const blockers = getBlockingDeps(t.id, db);
-        if (blockers.length > 0) blocked.push({ task: t, blockers });
+      if (cloud) {
+        const map = await cloudBlockingDepsMap(cloud, pending);
+        for (const t of pending) {
+          const blockers = map.get(t.id);
+          if (blockers && blockers.length > 0) blocked.push({ task: t, blockers });
+        }
+      } else {
+        const { getBlockingDeps } = await import("../../db/tasks.js");
+        for (const t of pending) {
+          const blockers = getBlockingDeps(t.id, db);
+          if (blockers.length > 0) blocked.push({ task: t, blockers });
+        }
       }
 
       // Find overdue
@@ -1872,17 +1994,22 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .action(async (opts) => {
       const globalOpts = program.opts();
       const db = getDatabase();
+      const cloud = getTodosCloudClient();
       const { countTasks } = await import("../../db/tasks.js");
+      const countFn = cloud
+        ? (f: any) => cloudCountTasks(cloud, f)
+        : (f: any) => Promise.resolve(countTasks(f, db));
       const projectId = autoProject(globalOpts) || opts.project || undefined;
       const base = projectId ? { project_id: projectId } : {};
       const priorities = ["critical", "high", "medium", "low", "none"] as const;
       const counts: Record<string, { total: number; pending: number; in_progress: number; completed: number }> = {};
       for (const p of priorities) {
+        const base2: any = { ...base, priority: p === "none" ? undefined : p };
         counts[p] = {
-          total: countTasks({ ...base, priority: p === "none" ? undefined : p }, db),
-          pending: countTasks({ ...base, priority: p === "none" ? undefined : p, status: "pending" }, db),
-          in_progress: countTasks({ ...base, priority: p === "none" ? undefined : p, status: "in_progress" }, db),
-          completed: countTasks({ ...base, priority: p === "none" ? undefined : p, status: "completed" }, db),
+          total: await countFn(base2),
+          pending: await countFn({ ...base2, status: "pending" }),
+          in_progress: await countFn({ ...base2, status: "in_progress" }),
+          completed: await countFn({ ...base2, status: "completed" }),
         };
       }
       if (opts.json || globalOpts.json) { console.log(JSON.stringify(counts)); return; }
