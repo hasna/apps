@@ -14,7 +14,7 @@ import type {
   WorkflowWorkItem,
   WorkflowWorkItemStatus,
 } from "../../types.js";
-import { Store } from "../store.js";
+import { GATE_DEATH_CEILING, Store } from "../store.js";
 import { ValidationError } from "../errors.js";
 import { publicLoop, publicWorkflow, publicWorkflowInvocation, publicWorkflowWorkItem } from "../format.js";
 import { listOpenMachines } from "../machines.js";
@@ -211,6 +211,13 @@ function reactivateStaleTodosTaskWorkItem(
 ): StaleTodosTaskReactivation {
   if (routeKey !== "todos-task") return { kind: "dedupe" };
   if (!REACTIVATABLE_TERMINAL_STATUSES.has(item.status)) return { kind: "dedupe" };
+  // An item parked at the gate-death ceiling stays dead-lettered until an
+  // operator requeues it (which resets the streak): its attempts were refunded
+  // (typically ~0), so without this guard the bounded re-admission below would
+  // requeue it straight back into the same deterministic infrastructure fault.
+  if (item.status === "dead_letter" && item.gateDeaths >= GATE_DEATH_CEILING) {
+    return { kind: "dedupe" };
+  }
   if (item.attempts >= MAX_TODOS_TASK_ROUTE_REDISPATCHES) {
     if (item.status === "dead_letter") return { kind: "dedupe" };
     const deadLettered = store.deadLetterWorkflowWorkItem(item.id, {

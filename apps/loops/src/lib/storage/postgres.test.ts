@@ -37,6 +37,7 @@ describe("Postgres storage migrations", () => {
       "0004_work_item_route_scope",
       "0005_run_receipts",
       "0006_work_item_machine_id",
+      "0007_work_item_gate_deaths",
     ]);
     for (const migration of POSTGRES_STORAGE_MIGRATIONS) {
       expect(migration.checksum).toBe(checksumStorageSql(migration.sql));
@@ -70,6 +71,7 @@ describe("Postgres storage migrations", () => {
       "0004_work_item_route_scope": "sha256:341e439861d595ce3d069b0106f1f09134042bac0a70f3d00a1374e09f5404d9",
       "0005_run_receipts": "sha256:27228e19e0101d31ce9da18d76d918a96dd8afff576fb291cbf8d018e97fe5d6",
       "0006_work_item_machine_id": "sha256:80887626208cbb3659a436e6e26c56f0b0229f0bcb8d292de51738ee99ed11d1",
+      "0007_work_item_gate_deaths": "sha256:95ac3c0dfeef6f6e6d4bd8b92473d19aabae0c83ebc3b1f4409d84fc0bbfa11c",
     };
     for (const migration of POSTGRES_STORAGE_MIGRATIONS) {
       expect(`${migration.id} ${migration.checksum}`).toBe(`${migration.id} ${pinned[migration.id]}`);
@@ -127,7 +129,7 @@ describe("Postgres storage migrations", () => {
 
     expect(executor.executed).toHaveLength(0);
     expect(dryRun.applied.map((migration) => migration.id)).toEqual([POSTGRES_STORAGE_MIGRATIONS[0]!.id]);
-    expect(dryRun.plan.map((item) => item.state)).toEqual(["already_applied", "pending", "pending", "pending", "pending", "pending"]);
+    expect(dryRun.plan.map((item) => item.state)).toEqual(["already_applied", "pending", "pending", "pending", "pending", "pending", "pending"]);
   });
 
   test("existing pre-route_scope database upgrades by applying only later additive migrations", async () => {
@@ -148,10 +150,11 @@ describe("Postgres storage migrations", () => {
     const result = await storage.migrate();
 
     const executedSql = executor.executed.filter((entry) => !entry.sql.startsWith("INSERT INTO") && !entry.sql.includes("CREATE TABLE IF NOT EXISTS open_loops_schema_migrations"));
-    expect(executedSql).toHaveLength(3);
+    expect(executedSql).toHaveLength(4);
     expect(executedSql[0]!.sql).toContain("ADD COLUMN IF NOT EXISTS route_scope");
     expect(executedSql[1]!.sql).toContain("CREATE TABLE IF NOT EXISTS run_receipts");
     expect(executedSql[2]!.sql).toContain("ADD COLUMN IF NOT EXISTS machine_id");
+    expect(executedSql[3]!.sql).toContain("ADD COLUMN IF NOT EXISTS gate_deaths");
     expect(result.applied.map((migration) => migration.id)).toEqual(POSTGRES_STORAGE_MIGRATIONS.map((migration) => migration.id));
   });
 
