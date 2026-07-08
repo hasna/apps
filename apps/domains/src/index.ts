@@ -137,7 +137,6 @@ export {
   type DomainReputation,
   type CreateReputationInput,
 } from "./db/reputation.js";
-export { getDatabase, closeDatabase } from "./db/database.js";
 
 // Registrar providers
 export {

@@ -6,8 +6,8 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { getDomainByIdentifier } from "./domain-records.js";
-import { createHistoryEntry, type DomainHistory } from "./domain-history.js";
+import { getDomainByIdentifier } from "./domains.js";
+import { createHistoryEntry, type DomainHistory } from "./history.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -110,17 +110,17 @@ export async function deepSearchDomain(domainName: string): Promise<string | nul
  * Full domain research: search + company lookup + history save.
  */
 export async function researchDomain(domainName: string): Promise<ExaResearchResult> {
-  const domain = getDomainByIdentifier(domainName);
+  const domain = await getDomainByIdentifier(domainName);
   if (!domain) throw new Error(`Domain '${domainName}' not found in database`);
 
   const { results, companies } = await searchDomainWithExa(domainName);
   const summary = await deepSearchDomain(domainName);
 
   // Build a combined owner hint from results
-  let ownerId: string | null = null;
+  const ownerId: string | null = null;
 
   // Save everything to history
-  const history = createHistoryEntry({
+  const history = await createHistoryEntry({
     domain_id: domain.id,
     snapshot_type: "exa_research",
     raw_data: {
