@@ -37,7 +37,6 @@ describe("domains events CLI", () => {
 
     expect(result.exitCode).toBe(0);
     expect(body.available).toContain("events");
-    expect(body.available).toContain("storage");
     expect(body.available).toContain("marketplace");
   });
 });

@@ -106,7 +106,6 @@ import {
   type RegisteredDomain,
   type Route53Record,
 } from "../lib/route53.js";
-import { registerDomainsStorageTools } from "./storage-tools.js";
 import { applySafeModeToolFilter } from "./tool-filter.js";
 import { formatDate, pageItems, truncateText } from "../lib/compact-output.js";
 import type { DomainOwner, DomainWithOwner } from "../db/owners.js";
@@ -360,7 +359,6 @@ const server = new McpServer({
   version: getPackageVersion(),
 });
 applySafeModeToolFilter(server);
-registerDomainsStorageTools(server);
 
 // --- Domains ---
 
