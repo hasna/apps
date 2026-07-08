@@ -63,6 +63,29 @@ function cloud(): HasnaStorageClient {
   return r.client;
 }
 
+/**
+ * Server list routes apply LIMIT/OFFSET in SQL (default 100, hard cap 500) and
+ * return neither a total nor a cursor. The facade re-implements the local
+ * filter/sort/slice semantics client-side, so it must first pull the WHOLE
+ * matching set — not a single server page. Passing the caller's limit/offset to
+ * the server and then re-slicing double-paginates (page 2+ returns nothing) and
+ * caps counts at the page size. This pages by offset with the server's max page
+ * size until a short page is returned, up to a hard safety bound.
+ */
+const CLOUD_PAGE_SIZE = 500;
+const CLOUD_MAX_ROWS = 100_000;
+async function fetchAllCloud<T>(resource: string, query: Record<string, string | number | boolean> = {}): Promise<T[]> {
+  const out: T[] = [];
+  for (let offset = 0; offset < CLOUD_MAX_ROWS; offset += CLOUD_PAGE_SIZE) {
+    const page = (await cloud().list<T>(resource, { query: { ...query, limit: CLOUD_PAGE_SIZE, offset } })).items;
+    out.push(...page);
+    if (page.length < CLOUD_PAGE_SIZE) break;
+  }
+  return out;
+}
+
+const PRIORITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+
 /** Raised for operations the cloud `/v1` API does not (yet) expose. */
 export class CloudUnsupportedError extends Error {
   constructor(op: string) {
@@ -93,7 +116,7 @@ export async function listPersonas(filter?: PersonaFilter): Promise<Persona[]> {
     const q: Record<string, string | boolean> = {};
     if (filter?.projectId) q.project_id = filter.projectId;
     if (filter?.globalOnly) q.global = true;
-    let items = applyPersonaFilter((await cloud().list<Persona>("personas", { query: q })).items, filter);
+    let items = applyPersonaFilter(await fetchAllCloud<Persona>("personas", q), filter);
     if (filter?.offset) items = items.slice(filter.offset);
     if (filter?.limit) items = items.slice(0, filter.limit);
     return items;
@@ -106,7 +129,7 @@ export async function countPersonas(filter?: PersonaFilter): Promise<number> {
     const q: Record<string, string | boolean> = {};
     if (filter?.projectId) q.project_id = filter.projectId;
     if (filter?.globalOnly) q.global = true;
-    return applyPersonaFilter((await cloud().list<Persona>("personas", { query: q })).items, filter).length;
+    return applyPersonaFilter(await fetchAllCloud<Persona>("personas", q), filter).length;
   }
   return localPersonas.countPersonas(filter);
 }
@@ -115,7 +138,7 @@ export async function getPersona(id: string): Promise<Persona | null> {
     const direct = await cloud().get<Persona>("personas", id);
     if (direct) return direct;
     // Allow lookup by shortId too (CLI passes either).
-    const items = (await cloud().list<Persona>("personas")).items;
+    const items = await fetchAllCloud<Persona>("personas");
     return items.find((p) => p.shortId === id) ?? null;
   }
   return localPersonas.getPersona(id);
@@ -137,34 +160,40 @@ export async function createScenario(input: CreateScenarioInput): Promise<Scenar
   if (isCloud()) return cloud().create<Scenario>("scenarios", input);
   return localScenarios.createScenario(input);
 }
+/** Apply the local ScenarioFilter semantics (filter -> sort -> paginate) to a full set. */
+function applyScenarioFilter(all: Scenario[], filter?: ScenarioFilter): Scenario[] {
+  let items = all;
+  if (filter?.projectId) items = items.filter((s) => s.projectId === filter.projectId);
+  if (filter?.tags?.length) items = items.filter((s) => filter.tags!.every((t) => s.tags.includes(t)));
+  if (filter?.priority) items = items.filter((s) => s.priority === filter.priority);
+  if (filter?.search) {
+    const needle = filter.search.toLowerCase();
+    items = items.filter((s) => s.name.toLowerCase().includes(needle) || (s.description ?? "").toLowerCase().includes(needle));
+  }
+  const sort = filter?.sort ?? "date";
+  const dir = filter?.desc === false ? 1 : -1;
+  items = [...items].sort((a, b) => {
+    if (sort === "name") return dir * a.name.localeCompare(b.name);
+    if (sort === "priority") {
+      const ra = PRIORITY_RANK[a.priority] ?? 4;
+      const rb = PRIORITY_RANK[b.priority] ?? 4;
+      return dir * (ra - rb);
+    }
+    return dir * (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0);
+  });
+  if (filter?.offset) items = items.slice(filter.offset);
+  if (filter?.limit) items = items.slice(0, filter.limit);
+  return items;
+}
+
 export async function listScenarios(filter?: ScenarioFilter): Promise<Scenario[]> {
   if (isCloud()) {
+    // Fetch the whole matching set (paged) and apply local filter/sort/paginate
+    // client-side. Sending the caller's limit/offset to the server would
+    // double-paginate against its SQL LIMIT/OFFSET.
     const q: Record<string, string | number> = {};
     if (filter?.projectId) q.project_id = filter.projectId;
-    if (filter?.priority) q.priority = filter.priority;
-    if (filter?.search) q.search = filter.search;
-    if (filter?.tags?.[0]) q.tag = filter.tags[0];
-    if (filter?.limit) q.limit = filter.limit;
-    if (filter?.offset) q.offset = filter.offset;
-    let items = (await cloud().list<Scenario>("scenarios", { query: q })).items;
-    // Apply filters the server may not honor, matching the local semantics.
-    if (filter?.tags?.length) items = items.filter((s) => filter.tags!.every((t) => s.tags.includes(t)));
-    if (filter?.priority) items = items.filter((s) => s.priority === filter.priority);
-    if (filter?.projectId) items = items.filter((s) => s.projectId === filter.projectId);
-    if (filter?.search) {
-      const needle = filter.search.toLowerCase();
-      items = items.filter((s) => s.name.toLowerCase().includes(needle) || (s.description ?? "").toLowerCase().includes(needle));
-    }
-    const sort = filter?.sort ?? "date";
-    const dir = filter?.desc === false ? 1 : -1;
-    items.sort((a, b) => {
-      if (sort === "name") return dir * a.name.localeCompare(b.name);
-      if (sort === "priority") return dir * String(a.priority).localeCompare(String(b.priority));
-      return dir * (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0);
-    });
-    if (filter?.offset) items = items.slice(filter.offset);
-    if (filter?.limit) items = items.slice(0, filter.limit);
-    return items;
+    return applyScenarioFilter(await fetchAllCloud<Scenario>("scenarios", q), filter);
   }
   return localScenarios.listScenarios(filter);
 }
@@ -184,7 +213,7 @@ export async function getScenario(id: string): Promise<Scenario | null> {
 }
 export async function getScenarioByShortId(shortId: string): Promise<Scenario | null> {
   if (isCloud()) {
-    const items = (await cloud().list<Scenario>("scenarios")).items;
+    const items = await fetchAllCloud<Scenario>("scenarios");
     return items.find((s) => s.shortId === shortId) ?? null;
   }
   return localScenarios.getScenarioByShortId(shortId);
