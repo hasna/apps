@@ -90,20 +90,24 @@ ops
   .option("--root <paths...>", "Root directories to scan (default: ~/.hasna and ~/.codewith)")
   .option("--max-dbs <n>", "Maximum DB files to inspect", "200")
   .option("--max-size <size>", "Skip DB files larger than this size", "512mb")
+  .option("--timeout <ms>", "Overall wall-clock budget; remaining DBs are skipped once exceeded", "60000")
+  .option("--busy-timeout <ms>", "Per-DB SQLite busy_timeout for locked/live DBs", "2000")
   .option("--report <path>", "Write JSON evidence to this path")
   .option("--json", "Output JSON")
-  .action((opts: { root?: string[]; maxDbs: string; maxSize: string; report?: string; json?: boolean }) => {
+  .action((opts: { root?: string[]; maxDbs: string; maxSize: string; timeout: string; busyTimeout: string; report?: string; json?: boolean }) => {
     const result = runDbIntegrityCheck({
       roots: opts.root,
       maxDbs: parseIntFlag(opts.maxDbs, "max-dbs", { min: 1 }),
       maxSizeBytes: parseSize(opts.maxSize),
+      timeoutMs: parseIntFlag(opts.timeout, "timeout", { min: 1 }),
+      busyTimeoutMs: parseIntFlag(opts.busyTimeout, "busy-timeout", { min: 1 }),
       reportPath: opts.report,
     });
     if (opts.json) {
       console.log(JSON.stringify(result, null, 2));
     } else {
       const status = result.summary.failed === 0 ? chalk.green("ok") : chalk.red("failed");
-      console.log(`${status} checked=${result.summary.checked} failed=${result.summary.failed} skipped=${result.summary.skipped} truncated=${result.summary.truncated}`);
+      console.log(`${status} checked=${result.summary.checked} failed=${result.summary.failed} skipped=${result.summary.skipped} truncated=${result.summary.truncated} timed_out=${result.summary.timed_out}`);
       if (result.report_path) console.log(chalk.dim(`report=${result.report_path}`));
       for (const row of result.databases.filter((entry) => entry.status !== "ok").slice(0, 20)) {
         console.log(`${row.status === "failed" ? chalk.red("failed") : chalk.yellow("skipped")} ${row.path} ${chalk.dim(row.detail)}`);

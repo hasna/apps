@@ -45,7 +45,23 @@ describe("ops loop checks", () => {
     expect(result.summary.failed).toBe(1);
     expect(result.databases.find((entry) => entry.path === goodDb)?.status).toBe("ok");
     expect(result.databases.find((entry) => entry.path === badDb)?.status).toBe("failed");
+    expect(result.summary.timed_out).toBe(false);
     expect(JSON.stringify(result)).not.toContain("not sqlite");
+  });
+
+  test("honours the wall-clock budget instead of stalling on a big DB tree", () => {
+    const dir = makeTempDir();
+    for (let i = 0; i < 5; i += 1) createDb(join(dir, `db-${i}.db`));
+
+    // A 0-ms budget forces every discovered DB to be skipped as timed out,
+    // proving the check always returns instead of blocking on the tree.
+    const result = runDbIntegrityCheck({ roots: [dir], maxDbs: 10, timeoutMs: 0 });
+
+    expect(result.summary.discovered).toBe(5);
+    expect(result.summary.timed_out).toBe(true);
+    expect(result.summary.checked).toBe(0);
+    expect(result.summary.skipped).toBe(5);
+    expect(result.databases.every((entry) => entry.detail === "time budget exceeded")).toBe(true);
   });
 
   test("creates bounded operational DB snapshots and supports dry runs", () => {

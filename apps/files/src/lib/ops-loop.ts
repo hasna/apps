@@ -22,6 +22,14 @@ export interface DbIntegrityCheckOptions {
   roots?: string[];
   maxDbs?: number;
   maxSizeBytes?: number;
+  /** Overall wall-clock budget for the whole check, in ms. Databases still
+   * unexamined once this elapses are marked skipped so the command always
+   * returns instead of stalling on a huge or WAL-locked home DB tree. */
+  timeoutMs?: number;
+  /** Per-database SQLite `busy_timeout`, in ms. Bounds how long a single
+   * quick_check waits on a lock held by a live daemon (e.g. files-mcp on
+   * files.db) before failing fast instead of hanging. */
+  busyTimeoutMs?: number;
   reportPath?: string;
 }
 
@@ -40,6 +48,7 @@ export interface DbIntegrityCheckResult {
     failed: number;
     skipped: number;
     truncated: boolean;
+    timed_out: boolean;
   };
   databases: Array<{
     path: string;
@@ -94,6 +103,11 @@ export interface OpsSnapshotResult {
 
 const DEFAULT_MAX_DBS = 200;
 const DEFAULT_MAX_SIZE_BYTES = 512 * 1024 * 1024;
+// Loop-safe defaults: the whole check must return well under the 2-minute loop
+// budget even against the full ~/.hasna + ~/.codewith tree, and no single
+// quick_check may hang on a lock held by a live daemon.
+const DEFAULT_TIMEOUT_MS = 60_000;
+const DEFAULT_BUSY_TIMEOUT_MS = 2_000;
 const DEFAULT_KEEP_DAYS = 7;
 const DEFAULT_KEEP_BATCHES = 20;
 
@@ -122,18 +136,30 @@ const SENSITIVE_DB_PATH_MARKERS = [
 ];
 
 export function runDbIntegrityCheck(options: DbIntegrityCheckOptions = {}): DbIntegrityCheckResult {
+  const startedAt = Date.now();
   const roots = normalizeRoots(options.roots);
   const maxDbs = normalizePositiveInteger(options.maxDbs, DEFAULT_MAX_DBS);
   const maxSizeBytes = normalizePositiveInteger(options.maxSizeBytes, DEFAULT_MAX_SIZE_BYTES);
+  const timeoutMs = normalizeNonNegativeInteger(options.timeoutMs, DEFAULT_TIMEOUT_MS);
+  const busyTimeoutMs = normalizePositiveInteger(options.busyTimeoutMs, DEFAULT_BUSY_TIMEOUT_MS);
+  const deadline = startedAt + timeoutMs;
   const discovered = discoverSqliteDatabases(roots, { maxDbs, maxSizeBytes });
   const databases: DbIntegrityCheckResult["databases"] = [];
+  let timedOut = false;
 
   for (const db of discovered.databases) {
+    if (timedOut || Date.now() >= deadline) {
+      // Never start (or continue) checks past the budget: return a truthful
+      // "skipped" for the remainder instead of stalling the loop.
+      timedOut = true;
+      databases.push({ path: db.path, size: db.size, status: "skipped", detail: "time budget exceeded" });
+      continue;
+    }
     if (db.size > maxSizeBytes) {
       databases.push({ path: db.path, size: db.size, status: "skipped", detail: "larger than max_size_bytes" });
       continue;
     }
-    databases.push(checkDatabase(db));
+    databases.push(checkDatabase(db, busyTimeoutMs));
   }
 
   const result: DbIntegrityCheckResult = {
@@ -148,6 +174,7 @@ export function runDbIntegrityCheck(options: DbIntegrityCheckOptions = {}): DbIn
       failed: databases.filter((db) => db.status === "failed").length,
       skipped: databases.filter((db) => db.status === "skipped").length,
       truncated: discovered.truncated,
+      timed_out: timedOut,
     },
     databases,
   };
@@ -261,6 +288,14 @@ function normalizePositiveInteger(value: number | undefined, fallback: number): 
   return Math.floor(value);
 }
 
+// Like normalizePositiveInteger but permits an explicit 0 (used for the check's
+// wall-clock budget, where 0 means "already exhausted"). Only undefined /
+// non-finite / negative values fall back to the default.
+function normalizeNonNegativeInteger(value: number | undefined, fallback: number): number {
+  if (value == null || !Number.isFinite(value) || value < 0) return fallback;
+  return Math.floor(value);
+}
+
 function discoverSqliteDatabases(
   roots: string[],
   limits: { maxDbs: number; maxSizeBytes: number; excludeSensitive?: boolean },
@@ -343,11 +378,16 @@ function looksLikeSqlitePath(name: string): boolean {
   return false;
 }
 
-function checkDatabase(db: DiscoveredDatabase): DbIntegrityCheckResult["databases"][number] {
+function checkDatabase(db: DiscoveredDatabase, busyTimeoutMs = DEFAULT_BUSY_TIMEOUT_MS): DbIntegrityCheckResult["databases"][number] {
   let database: Database | undefined;
   try {
     database = new Database(db.path, { readonly: true });
-    const rows = database.query<Record<string, string>, []>("PRAGMA quick_check").all();
+    // Fail fast on a lock held by a live daemon (e.g. files-mcp on files.db)
+    // instead of blocking indefinitely, and never mutate the inspected DB.
+    database.exec(`PRAGMA busy_timeout=${busyTimeoutMs}`);
+    database.exec("PRAGMA query_only=ON");
+    // quick_check(1): stop after the first error — we only report ok/not-ok.
+    const rows = database.query<Record<string, string>, []>("PRAGMA quick_check(1)").all();
     const detail = Object.values(rows[0] ?? {})[0] ?? "";
     const ok = detail.toLowerCase() === "ok";
     return {
