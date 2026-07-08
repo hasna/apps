@@ -15,21 +15,8 @@
  */
 import type { Command } from "commander";
 import chalk from "chalk";
-import { getDatabase } from "../../db/database.js";
-import {
-  createAudience,
-  deleteAudience,
-  getAudience,
-  listAudiences,
-  listContactConsent,
-  listSuppressions,
-  resolveAudience,
-  setContactConsent,
-  suppressAddress,
-  unsuppressAddress,
-} from "../../db/audiences.js";
+import { getStore } from "../../store/index.js";
 import { toAudienceContract } from "../../lib/audience-contract.js";
-import { syncSuppressions } from "../../lib/mailery-sync.js";
 import type { AudienceChannel, AudiencePredicate, ConsentPolicy, ConsentStatus } from "../../types/index.js";
 import { AUDIENCE_CHANNELS, CONSENT_POLICIES, CONSENT_STATUSES } from "../../types/index.js";
 import { renderTable } from "../utils.js";
@@ -71,20 +58,20 @@ audience
   .option("--match <match>", "Predicate combinator: all|any", "all")
   .option("--policy <policy>", `Consent policy: ${CONSENT_POLICIES.join("|")}`, "opt_in")
   .option("--json", "Output JSON")
-  .action((slug: string, opts: { name: string; predicates: string; match: string; policy: string; json?: boolean }) => {
-    const db = getDatabase();
+  .action(async (slug: string, opts: { name: string; predicates: string; match: string; policy: string; json?: boolean }) => {
+    const store = getStore();
     if (!["all", "any"].includes(opts.match)) fail("--match must be all or any");
     if (!(CONSENT_POLICIES as readonly string[]).includes(opts.policy)) {
       fail(`--policy must be one of: ${CONSENT_POLICIES.join("|")}`);
     }
     try {
-      const created = createAudience({
+      const created = await store.createAudience({
         audience_id: slug,
         name: opts.name,
         match: opts.match as "all" | "any",
         predicates: parsePredicates(opts.predicates),
         consent_policy: opts.policy as ConsentPolicy,
-      }, db);
+      });
       if (opts.json) {
         console.log(JSON.stringify(created, null, 2));
         return;
@@ -99,9 +86,9 @@ audience
   .command("list")
   .description("List audience segments")
   .option("--json", "Output JSON")
-  .action((opts: { json?: boolean }) => {
-    const db = getDatabase();
-    const audiences = listAudiences(db);
+  .action(async (opts: { json?: boolean }) => {
+    const store = getStore();
+    const audiences = await store.listAudiences();
     if (opts.json) {
       console.log(JSON.stringify(audiences, null, 2));
       return;
@@ -128,10 +115,10 @@ audience
 audience
   .command("show <id>")
   .description("Show an audience as its hasna.audience.v1 contract document")
-  .action((id: string) => {
-    const db = getDatabase();
+  .action(async (id: string) => {
+    const store = getStore();
     try {
-      console.log(JSON.stringify(toAudienceContract(getAudience(id, db)), null, 2));
+      console.log(JSON.stringify(toAudienceContract(await store.getAudience(id)), null, 2));
     } catch (err) {
       fail(err instanceof Error ? err.message : String(err));
     }
@@ -140,10 +127,10 @@ audience
 audience
   .command("delete <id>")
   .description("Delete an audience segment")
-  .action((id: string) => {
-    const db = getDatabase();
+  .action(async (id: string) => {
+    const store = getStore();
     try {
-      deleteAudience(id, db);
+      await store.deleteAudience(id);
       console.log(chalk.green(`\nDeleted audience ${id}\n`));
     } catch (err) {
       fail(err instanceof Error ? err.message : String(err));
@@ -155,11 +142,11 @@ audience
   .description("Resolve an audience to recipients for a channel, honoring consent + suppression")
   .requiredOption("--channel <channel>", `Delivery channel: ${AUDIENCE_CHANNELS.join("|")}`)
   .option("--json", "Output JSON")
-  .action((id: string, opts: { channel: string; json?: boolean }) => {
-    const db = getDatabase();
+  .action(async (id: string, opts: { channel: string; json?: boolean }) => {
+    const store = getStore();
     const channel = parseChannel(opts.channel);
     try {
-      const resolution = resolveAudience(id, channel, db);
+      const resolution = await store.resolveAudience(id, channel);
       if (opts.json) {
         console.log(JSON.stringify(resolution, null, 2));
         return;
@@ -195,14 +182,14 @@ consent
   .requiredOption("--channel <channel>", `Channel: ${AUDIENCE_CHANNELS.join("|")}`)
   .requiredOption("--status <status>", `Status: ${CONSENT_STATUSES.join("|")}`)
   .option("--source <source>", "Where the consent signal came from (form, import, reply, ...)")
-  .action((contactId: string, opts: { channel: string; status: string; source?: string }) => {
-    const db = getDatabase();
+  .action(async (contactId: string, opts: { channel: string; status: string; source?: string }) => {
+    const store = getStore();
     const channel = parseChannel(opts.channel);
     if (!(CONSENT_STATUSES as readonly string[]).includes(opts.status)) {
       fail(`--status must be one of: ${CONSENT_STATUSES.join("|")}`);
     }
     try {
-      const record = setContactConsent(contactId, channel, opts.status as ConsentStatus, opts.source, db);
+      const record = await store.setContactConsent(contactId, channel, opts.status as ConsentStatus, opts.source);
       console.log(chalk.green(`\nConsent for ${contactId} on ${record.channel}: ${record.status}\n`));
     } catch (err) {
       fail(err instanceof Error ? err.message : String(err));
@@ -213,9 +200,9 @@ consent
   .command("show <contactId>")
   .description("Show a contact's consent status per channel")
   .option("--json", "Output JSON")
-  .action((contactId: string, opts: { json?: boolean }) => {
-    const db = getDatabase();
-    const records = listContactConsent(contactId, db);
+  .action(async (contactId: string, opts: { json?: boolean }) => {
+    const store = getStore();
+    const records = await store.listContactConsent(contactId);
     if (opts.json) {
       console.log(JSON.stringify(records, null, 2));
       return;
@@ -242,11 +229,11 @@ suppression
   .requiredOption("--channel <channel>", `Channel: ${AUDIENCE_CHANNELS.join("|")}`)
   .option("--contact <contactId>", "Contact this address belongs to")
   .option("--reason <reason>", "Why the address is suppressed (unsubscribe, bounce, complaint, ...)")
-  .action((address: string, opts: { channel: string; contact?: string; reason?: string }) => {
-    const db = getDatabase();
+  .action(async (address: string, opts: { channel: string; contact?: string; reason?: string }) => {
+    const store = getStore();
     const channel = parseChannel(opts.channel);
     try {
-      const entry = suppressAddress({ channel, address, contact_id: opts.contact, reason: opts.reason }, db);
+      const entry = await store.suppressAddress({ channel, address, contact_id: opts.contact, reason: opts.reason });
       console.log(chalk.green(`\nSuppressed ${entry.address} on ${entry.channel}\n`));
     } catch (err) {
       fail(err instanceof Error ? err.message : String(err));
@@ -257,9 +244,9 @@ suppression
   .command("remove <address>")
   .description("Remove an address from the suppression list")
   .requiredOption("--channel <channel>", `Channel: ${AUDIENCE_CHANNELS.join("|")}`)
-  .action((address: string, opts: { channel: string }) => {
-    const db = getDatabase();
-    unsuppressAddress(parseChannel(opts.channel), address, db);
+  .action(async (address: string, opts: { channel: string }) => {
+    const store = getStore();
+    await store.unsuppressAddress(parseChannel(opts.channel), address);
     console.log(chalk.green(`\nUnsuppressed ${address}\n`));
   });
 
@@ -269,10 +256,10 @@ suppression
   .option("--channel <channel>", `Filter by channel: ${AUDIENCE_CHANNELS.join("|")}`)
   .option("--unsynced", "Only entries not yet pushed to mailery")
   .option("--json", "Output JSON")
-  .action((opts: { channel?: string; unsynced?: boolean; json?: boolean }) => {
-    const db = getDatabase();
+  .action(async (opts: { channel?: string; unsynced?: boolean; json?: boolean }) => {
+    const store = getStore();
     const channel = opts.channel ? parseChannel(opts.channel) : undefined;
-    const entries = listSuppressions({ channel, unsyncedOnly: opts.unsynced }, db);
+    const entries = await store.listSuppressions({ channel, unsyncedOnly: opts.unsynced });
     if (opts.json) {
       console.log(JSON.stringify(entries, null, 2));
       return;
@@ -294,9 +281,9 @@ suppression
   .description("Push unsynced email suppressions to mailery (@hasna/mailery)")
   .option("--dry-run", "Report what would be pushed without pushing")
   .action(async (opts: { dryRun?: boolean }) => {
-    const db = getDatabase();
+    const store = getStore();
     try {
-      const result = await syncSuppressions({ dryRun: opts.dryRun, db });
+      const result = await store.syncSuppressions(opts.dryRun);
       if (result.dry_run) {
         console.log(chalk.cyan(`\n[dry-run] ${result.pending} suppression(s) pending push via ${result.adapter}\n`));
         return;
