@@ -241,6 +241,29 @@ export class CalendarPgStore {
     const r = await this.many("UPDATE agents SET last_seen_at=now() WHERE id=$1 OR name=$1 RETURNING *", [id]);
     return r[0] ? rowToAgent(r[0]) : null;
   }
+  async updateAgent(id: string, updates: Partial<RegisterAgentInput>): Promise<Agent | null> {
+    const existing = await this.getAgent(id);
+    if (!existing) throw new NotFoundError("Agent", id);
+    const sets: string[] = [];
+    const params: unknown[] = [existing.id];
+    const push = (col: string, value: unknown) => { params.push(value); sets.push(`${col}=$${params.length}`); };
+    if (updates.description !== undefined) push("description", updates.description ?? null);
+    if (updates.role !== undefined) push("role", updates.role ?? null);
+    if (updates.title !== undefined) push("title", updates.title ?? null);
+    if (updates.level !== undefined) push("level", updates.level ?? null);
+    if (updates.capabilities !== undefined) { params.push(JSON.stringify(updates.capabilities)); sets.push(`capabilities=$${params.length}::jsonb`); }
+    if (updates.session_id !== undefined) push("session_id", updates.session_id ?? null);
+    if (updates.working_dir !== undefined) push("working_dir", updates.working_dir ?? null);
+    if (updates.org_id !== undefined) push("active_org_id", updates.org_id ?? null);
+    if (sets.length === 0) return existing;
+    sets.push("last_seen_at=now()");
+    await this.client.query(`UPDATE agents SET ${sets.join(", ")} WHERE id=$1`, params);
+    return this.getAgent(existing.id);
+  }
+  async deleteAgent(id: string): Promise<boolean> {
+    const r = await this.many("DELETE FROM agents WHERE id=$1 RETURNING id", [id]);
+    return r.length > 0;
+  }
 
   // ── Calendars ──
   async createCalendar(input: CreateCalendarInput): Promise<Calendar> {
@@ -410,6 +433,10 @@ export class CalendarPgStore {
     );
     return (await this.getAttendee(id))!;
   }
+  async deleteAttendee(id: string): Promise<boolean> {
+    const r = await this.many("DELETE FROM event_attendees WHERE id=$1 RETURNING id", [id]);
+    return r.length > 0;
+  }
 
   // ── Availability ──
   async getAvailabilityForAgent(agentId: string, orgId?: string): Promise<Availability[]> {
@@ -433,6 +460,10 @@ export class CalendarPgStore {
       [id, agentId, orgId, dayOfWeek, startTime, endTime]);
     return rowToAvailability((await this.one("SELECT * FROM availability WHERE id=$1", [id]))!);
   }
+  async deleteAvailability(id: string): Promise<boolean> {
+    const r = await this.many("DELETE FROM availability WHERE id=$1 RETURNING id", [id]);
+    return r.length > 0;
+  }
 
   // ── Memberships ──
   async createMembership(input: CreateOrgMembershipInput): Promise<OrgMembership> {
@@ -449,5 +480,12 @@ export class CalendarPgStore {
   }
   async getMembershipsForOrg(orgId: string): Promise<OrgMembership[]> {
     return (await this.many("SELECT * FROM org_memberships WHERE org_id=$1 ORDER BY created_at", [orgId])).map(rowToMembership);
+  }
+  async getOrgsForAgent(agentId: string): Promise<OrgMembership[]> {
+    return (await this.many("SELECT * FROM org_memberships WHERE agent_id=$1 ORDER BY role DESC", [agentId])).map(rowToMembership);
+  }
+  async deleteMembershipByAgentAndOrg(agentId: string, orgId: string): Promise<boolean> {
+    const r = await this.many("DELETE FROM org_memberships WHERE agent_id=$1 AND org_id=$2 RETURNING id", [agentId, orgId]);
+    return r.length > 0;
   }
 }

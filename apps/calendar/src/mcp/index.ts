@@ -1,16 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import {
-  createOrg, getOrg, getOrgBySlug, listOrgs,
-  registerAgent, getAgent, getAgentByName, listAgents, heartbeat as agentHeartbeat,
-  createCalendar, listCalendars,
-  createEvent, getEvent, listEvents, updateEvent, deleteEvent, findConflicts, searchEvents,
-  createAttendee, getAttendeesForEvent, updateAttendee,
-  getAvailabilityForAgent, upsertAgentAvailability,
-  createMembership, getMembershipsForOrg, getOrgsForAgent,
-} from "../index.js";
-import { getCalendarCloud } from "../cloud/store.js";
+import { getStore } from "../store/index.js";
 import { parseHttpArgv, resolveMcpHttpPort } from "./http.js";
 
 export function buildServer(): McpServer {
@@ -29,10 +20,7 @@ export function buildServer(): McpServer {
       description: z.string().optional(),
     },
     async ({ name, slug, description }) => {
-      const cloud = getCalendarCloud();
-      const org = cloud
-        ? await cloud.createOrg({ name, slug, description })
-        : createOrg({ name, slug, description });
+      const org = await getStore().createOrg({ name, slug, description });
       return { content: [{ type: "text", text: JSON.stringify(org) }] };
     },
   );
@@ -41,8 +29,7 @@ export function buildServer(): McpServer {
     "List all organizations",
     {},
     async () => {
-      const cloud = getCalendarCloud();
-      const orgs = cloud ? await cloud.listOrgs() : listOrgs();
+      const orgs = await getStore().listOrgs();
       return { content: [{ type: "text", text: JSON.stringify(orgs) }] };
     },
   );
@@ -51,10 +38,7 @@ export function buildServer(): McpServer {
     "Get an org by ID or slug",
     { idOrSlug: z.string().describe("Org ID or slug") },
     async ({ idOrSlug }) => {
-      const cloud = getCalendarCloud();
-      const org = cloud
-        ? await cloud.getOrg(idOrSlug)
-        : (getOrg(idOrSlug) || getOrgBySlug(idOrSlug));
+      const org = await getStore().getOrg(idOrSlug);
       if (!org) return { content: [{ type: "text", text: "Org not found" }], isError: true };
       return { content: [{ type: "text", text: JSON.stringify(org) }] };
     },
@@ -72,7 +56,7 @@ export function buildServer(): McpServer {
       org_id: z.string().optional(),
     },
     async (input) => {
-      const agent = registerAgent(input);
+      const agent = await getStore().registerAgent(input);
       return { content: [{ type: "text", text: JSON.stringify(agent) }] };
     },
   );
@@ -81,7 +65,7 @@ export function buildServer(): McpServer {
     "List all registered agents",
     {},
     async () => {
-      return { content: [{ type: "text", text: JSON.stringify(listAgents()) }] };
+      return { content: [{ type: "text", text: JSON.stringify(await getStore().listAgents()) }] };
     },
   );
 
@@ -89,9 +73,8 @@ export function buildServer(): McpServer {
     "Update agent last_seen_at timestamp",
     { name: z.string().describe("Agent name") },
     async ({ name }) => {
-      const agent = getAgentByName(name);
+      const agent = await getStore().heartbeatAgent(name);
       if (!agent) return { content: [{ type: "text", text: "Agent not found" }], isError: true };
-      agentHeartbeat(agent.id);
       return { content: [{ type: "text", text: `Heartbeat updated for ${name}` }] };
     },
   );
@@ -110,9 +93,7 @@ export function buildServer(): McpServer {
       visibility: z.enum(["public", "org", "private"]).optional(),
     },
     async (input) => {
-      const payload = { ...input, timezone: input.timezone || "UTC", visibility: input.visibility || "org" };
-      const cloud = getCalendarCloud();
-      const cal = cloud ? await cloud.createCalendar(payload) : createCalendar(payload);
+      const cal = await getStore().createCalendar({ ...input, timezone: input.timezone || "UTC", visibility: input.visibility || "org" });
       return { content: [{ type: "text", text: JSON.stringify(cal) }] };
     },
   );
@@ -121,8 +102,7 @@ export function buildServer(): McpServer {
     "List calendars, optionally filtered by org",
     { org_id: z.string().optional() },
     async ({ org_id }) => {
-      const cloud = getCalendarCloud();
-      const cals = cloud ? await cloud.listCalendars(org_id) : listCalendars(org_id);
+      const cals = await getStore().listCalendars(org_id);
       return { content: [{ type: "text", text: JSON.stringify(cals) }] };
     },
   );
@@ -149,9 +129,7 @@ export function buildServer(): McpServer {
       created_by: z.string().optional().describe("Agent ID of creator"),
     },
     async (input) => {
-      const payload = { ...input, timezone: input.timezone || "UTC", status: input.status || "confirmed", busy_type: input.busy_type || "busy", visibility: input.visibility || "default" };
-      const cloud = getCalendarCloud();
-      const evt = cloud ? await cloud.createEvent(payload) : createEvent(payload);
+      const evt = await getStore().createEvent({ ...input, timezone: input.timezone || "UTC", status: input.status || "confirmed", busy_type: input.busy_type || "busy", visibility: input.visibility || "default" });
       return { content: [{ type: "text", text: JSON.stringify(evt) }] };
     },
   );
@@ -166,8 +144,7 @@ export function buildServer(): McpServer {
       limit: z.number().optional(),
     },
     async (input) => {
-      const cloud = getCalendarCloud();
-      const events = cloud ? await cloud.listEvents(input) : listEvents(input);
+      const events = await getStore().listEvents(input);
       return { content: [{ type: "text", text: JSON.stringify(events) }] };
     },
   );
@@ -176,10 +153,9 @@ export function buildServer(): McpServer {
     "Get event details including attendees",
     { id: z.string().describe("Event ID") },
     async ({ id }) => {
-      const cloud = getCalendarCloud();
-      const evt = cloud ? await cloud.getEvent(id) : getEvent(id);
-      if (!evt) return { content: [{ type: "text", text: "Event not found" }], isError: true };
-      return { content: [{ type: "text", text: JSON.stringify(evt) }] };
+      const result = await getStore().getEventWithAttendees(id);
+      if (!result) return { content: [{ type: "text", text: "Event not found" }], isError: true };
+      return { content: [{ type: "text", text: JSON.stringify(result) }] };
     },
   );
 
@@ -196,8 +172,7 @@ export function buildServer(): McpServer {
       recurrence_rule: z.string().nullable().optional(),
     },
     async ({ id, ...rest }) => {
-      const cloud = getCalendarCloud();
-      const evt = cloud ? await cloud.updateEvent(id, rest) : updateEvent(id, rest);
+      const evt = await getStore().updateEvent(id, rest);
       return { content: [{ type: "text", text: JSON.stringify(evt) }] };
     },
   );
@@ -206,8 +181,7 @@ export function buildServer(): McpServer {
     "Delete an event",
     { id: z.string().describe("Event ID") },
     async ({ id }) => {
-      const cloud = getCalendarCloud();
-      const ok = cloud ? await cloud.deleteEvent(id) : deleteEvent(id);
+      const ok = await getStore().deleteEvent(id);
       return { content: [{ type: "text", text: ok ? "Deleted" : "Not found" }] };
     },
   );
@@ -219,7 +193,7 @@ export function buildServer(): McpServer {
       org_id: z.string().optional(),
     },
     async ({ query, org_id }) => {
-      return { content: [{ type: "text", text: JSON.stringify(searchEvents(query, org_id)) }] };
+      return { content: [{ type: "text", text: JSON.stringify(await getStore().searchEvents(query, org_id)) }] };
     },
   );
 
@@ -231,7 +205,7 @@ export function buildServer(): McpServer {
       end: z.string().describe("End time (ISO 8601)"),
     },
     async ({ calendar_id, start, end }) => {
-      return { content: [{ type: "text", text: JSON.stringify(findConflicts(calendar_id, { start, end })) }] };
+      return { content: [{ type: "text", text: JSON.stringify(await getStore().findConflicts(calendar_id, { start, end })) }] };
     },
   );
 
@@ -247,7 +221,7 @@ export function buildServer(): McpServer {
       required: z.boolean().optional().default(true),
     },
     async (input) => {
-      return { content: [{ type: "text", text: JSON.stringify(createAttendee(input)) }] };
+      return { content: [{ type: "text", text: JSON.stringify(await getStore().createAttendee(input)) }] };
     },
   );
 
@@ -255,7 +229,7 @@ export function buildServer(): McpServer {
     "List all attendees for an event",
     { event_id: z.string().describe("Event ID") },
     async ({ event_id }) => {
-      return { content: [{ type: "text", text: JSON.stringify(getAttendeesForEvent(event_id)) }] };
+      return { content: [{ type: "text", text: JSON.stringify(await getStore().getAttendeesForEvent(event_id)) }] };
     },
   );
 
@@ -267,7 +241,7 @@ export function buildServer(): McpServer {
       comment: z.string().optional(),
     },
     async ({ attendee_id, status, comment }) => {
-      return { content: [{ type: "text", text: JSON.stringify(updateAttendee(attendee_id, { status, response_comment: comment || null })) }] };
+      return { content: [{ type: "text", text: JSON.stringify(await getStore().updateAttendee(attendee_id, { status, response_comment: comment || null })) }] };
     },
   );
 
@@ -283,7 +257,7 @@ export function buildServer(): McpServer {
       end_time: z.string().describe("HH:mm"),
     },
     async ({ agent_id, org_id, day_of_week, start_time, end_time }) => {
-      return { content: [{ type: "text", text: JSON.stringify(upsertAgentAvailability(agent_id, org_id, day_of_week, start_time, end_time)) }] };
+      return { content: [{ type: "text", text: JSON.stringify(await getStore().upsertAgentAvailability(agent_id, org_id, day_of_week, start_time, end_time)) }] };
     },
   );
 
@@ -294,7 +268,7 @@ export function buildServer(): McpServer {
       org_id: z.string().optional(),
     },
     async ({ agent_id, org_id }) => {
-      return { content: [{ type: "text", text: JSON.stringify(getAvailabilityForAgent(agent_id, org_id)) }] };
+      return { content: [{ type: "text", text: JSON.stringify(await getStore().getAvailabilityForAgent(agent_id, org_id)) }] };
     },
   );
 
@@ -308,7 +282,7 @@ export function buildServer(): McpServer {
       role: z.enum(["admin", "member", "service"]).optional(),
     },
     async (input) => {
-      return { content: [{ type: "text", text: JSON.stringify(createMembership(input)) }] };
+      return { content: [{ type: "text", text: JSON.stringify(await getStore().createMembership(input)) }] };
     },
   );
 
@@ -316,7 +290,7 @@ export function buildServer(): McpServer {
     "List all members of an org",
     { org_id: z.string() },
     async ({ org_id }) => {
-      return { content: [{ type: "text", text: JSON.stringify(getMembershipsForOrg(org_id)) }] };
+      return { content: [{ type: "text", text: JSON.stringify(await getStore().getMembershipsForOrg(org_id)) }] };
     },
   );
 
@@ -328,18 +302,18 @@ export function buildServer(): McpServer {
       agent_id: z.string().describe("Agent name or ID"),
     },
     async ({ agent_id }) => {
-      const agent = getAgentByName(agent_id) || getAgent(agent_id);
+      const store = getStore();
+      const agent = await store.getAgent(agent_id);
       if (!agent) return { content: [{ type: "text", text: `Agent not found: ${agent_id}` }], isError: true };
-      agentHeartbeat(agent.id);
-      const cloud = getCalendarCloud();
-      const orgs = getOrgsForAgent(agent.id);
+      await store.heartbeatAgent(agent.id);
+      const orgs = await store.getOrgsForAgent(agent.id);
       const orgId = orgs.length > 0 ? orgs[0]!.org_id : undefined;
-      const calendars = orgId ? (cloud ? await cloud.listCalendars(orgId) : listCalendars(orgId)) : [];
+      const calendars = orgId ? await store.listCalendars(orgId) : [];
       const now = new Date().toISOString();
-      const events = (orgId && (calendars as unknown[]).length > 0)
-        ? (cloud ? await cloud.listEvents({ org_id: orgId, after: now, limit: 5 }) : listEvents({ org_id: orgId, after: now, limit: 5 }))
+      const upcoming = (orgId && calendars.length > 0)
+        ? await store.listEvents({ org_id: orgId, after: now, limit: 5 })
         : [];
-      return { content: [{ type: "text", text: JSON.stringify({ agent, orgs, calendars, upcoming: events }) }] };
+      return { content: [{ type: "text", text: JSON.stringify({ agent, orgs, calendars, upcoming }) }] };
     },
   );
 

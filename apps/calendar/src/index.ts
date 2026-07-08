@@ -14,3 +14,7 @@ export * from "./db/memberships.js";
 
 // Utility helpers
 export { findConflicts, findAgentConflicts, searchEvents, listEvents, type ListEventsFilter, type TimeRange } from "./db/events.js";
+
+// Storage abstraction (LocalStore + ApiStore behind one interface)
+export { getStore, resetStoreCache, LocalStore, ApiStore } from "./store/index.js";
+export type { CalendarStore, EventWithAttendees } from "./store/index.js";
