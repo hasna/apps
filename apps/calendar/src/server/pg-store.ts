@@ -425,11 +425,14 @@ export class CalendarPgStore {
     const existing = await this.getAttendee(id);
     if (!existing) throw new NotFoundError("EventAttendee", id);
     const newStatus = input.status ?? existing.status;
+    // Stamp responded_at on the first response, then preserve it. Computed here
+    // (not via a SQL CASE that reuses $2) so each placeholder is bound exactly
+    // once — the reused-parameter form crashed the driver with a 500.
+    const respondedAt = existing.responded_at ?? new Date().toISOString();
     await this.client.query(
-      `UPDATE event_attendees SET status=$2, response_comment=$3, required=$4,
-        responded_at = CASE WHEN $2 IS NOT NULL AND responded_at IS NULL THEN now() ELSE responded_at END WHERE id=$1`,
+      `UPDATE event_attendees SET status=$2, response_comment=$3, required=$4, responded_at=$5 WHERE id=$1`,
       [id, newStatus, input.response_comment !== undefined ? input.response_comment : existing.response_comment,
-        input.required !== undefined ? input.required : existing.required],
+        input.required !== undefined ? input.required : existing.required, respondedAt],
     );
     return (await this.getAttendee(id))!;
   }
