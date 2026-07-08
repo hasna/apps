@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { registerEventsCommands } from "@hasna/events/commander";
 import { Command } from "commander";
 import type { CliEventWatchFilter, WatchEventRow } from "../lib/event-watch.ts";
+import { streamServerEvents } from "../lib/event-stream-client.ts";
 import type { EventCatalogEntry } from "../lib/events.ts";
 import { PACKAGE_VERSION } from "../lib/package-meta.ts";
 import type { StructuredLogFormat } from "../lib/structured-logs.ts";
@@ -1146,6 +1147,25 @@ program
   )
   .option("--since <time>", "Start from this time (default: now)")
   .action(async (opts) => {
+    // `--server` is an explicit, operator-named out-of-band SSE tail (not the
+    // mode-resolved data plane), so it must be reachable in EVERY mode — resolve
+    // the project id via the mode-resolved store (best-effort; never throws for
+    // being in the "wrong" mode) rather than hard-requiring the local store.
+    if (opts.server) {
+      // Best-effort name→id resolution via the mode-resolved store; the tail
+      // targets an explicit server, so a resolver failure (e.g. cloud briefly
+      // unreachable) must not crash it — fall back to the raw value.
+      const serverProjectId = opts.project
+        ? await store
+            .resolveProjectId(opts.project)
+            .catch(() => opts.project)
+        : undefined;
+      await watchServerEvents(opts, serverProjectId);
+      return;
+    }
+
+    // Every non-server watch path tails the on-box event catalog / log rows,
+    // which are local-only (no cloud data model) — require the local store here.
     const local = requireLocalStore("watch");
 
     // Resolve project name → ID if needed
@@ -1164,8 +1184,7 @@ program
     const BOLD = "\x1b[1m";
 
     const useEventCatalog = Boolean(
-      opts.server ||
-        opts.events ||
+      opts.events ||
         opts.type ||
         opts.source ||
         opts.trace ||
@@ -1175,10 +1194,6 @@ program
         opts.environment ||
         opts.lastEventId,
     );
-    if (opts.server) {
-      await watchServerEvents(opts, projectId);
-      return;
-    }
     if (useEventCatalog) {
       await watchLocalEventCatalog(local, opts, projectId);
       return;
@@ -1480,12 +1495,6 @@ interface WatchCommandOptions {
   since?: string;
 }
 
-interface SseMessage {
-  event: string;
-  id: string | null;
-  data: string;
-}
-
 /** Map CLI watch flags to a {@link CliEventWatchFilter} for the local store. */
 function toWatchFilter(
   opts: WatchCommandOptions,
@@ -1593,20 +1602,17 @@ async function watchServerEvents(
   }
 
   while (true) {
-    const url = buildEventStreamUrl(opts, projectId, lastEventId);
-    const headers: Record<string, string> = {};
-    if (token) headers.Authorization = `Bearer ${token}`;
-    if (lastEventId) headers["Last-Event-ID"] = lastEventId;
     const controller = new AbortController();
 
     try {
-      const response = await fetch(url, { headers, signal: controller.signal });
-      if (!response.ok)
-        throw new Error(
-          `Stream failed: ${response.status} ${response.statusText}`,
-        );
+      const messages = streamServerEvents({
+        url: buildEventStreamUrl(opts, projectId, lastEventId),
+        token,
+        lastEventId,
+        signal: controller.signal,
+      });
 
-      for await (const message of readSseMessages(response.body)) {
+      for await (const message of messages) {
         if (message.event === "overflow") {
           const overflow = parseJson(message.data) as {
             reason?: string;
@@ -1736,59 +1742,6 @@ function stripWatchRow(row: WatchEventRow): EventCatalogEntry {
   const { rowid, ...event } = row;
   void rowid;
   return event;
-}
-
-async function* readSseMessages(
-  body: ReadableStream<Uint8Array> | null,
-): AsyncGenerator<SseMessage> {
-  if (!body) return;
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let frameEnd = findSseFrameEnd(buffer);
-      while (frameEnd >= 0) {
-        const frame = buffer.slice(0, frameEnd);
-        buffer = buffer.slice(frameEnd).replace(/^\r?\n\r?\n?/, "");
-        const message = parseSseFrame(frame);
-        if (message) yield message;
-        frameEnd = findSseFrameEnd(buffer);
-      }
-    }
-  } finally {
-    await reader.cancel().catch(() => {});
-    reader.releaseLock();
-  }
-}
-
-function findSseFrameEnd(buffer: string): number {
-  const lf = buffer.indexOf("\n\n");
-  const crlf = buffer.indexOf("\r\n\r\n");
-  if (lf === -1) return crlf;
-  if (crlf === -1) return lf;
-  return Math.min(lf, crlf);
-}
-
-function parseSseFrame(frame: string): SseMessage | null {
-  let event = "message";
-  let id: string | null = null;
-  const data: string[] = [];
-  for (const rawLine of frame.split(/\r?\n/)) {
-    if (!rawLine || rawLine.startsWith(":")) continue;
-    const separator = rawLine.indexOf(":");
-    const field = separator >= 0 ? rawLine.slice(0, separator) : rawLine;
-    const value =
-      separator >= 0 ? rawLine.slice(separator + 1).replace(/^ /, "") : "";
-    if (field === "event") event = value || "message";
-    if (field === "id") id = value;
-    if (field === "data") data.push(value);
-  }
-  if (data.length === 0) return null;
-  return { event, id, data: data.join("\n") };
 }
 
 function parseJson(value: string): unknown {
