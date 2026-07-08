@@ -3,13 +3,9 @@ import { existsSync, mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  KNOWLEDGE_STORAGE_ENV,
-  KNOWLEDGE_STORAGE_FALLBACK_ENV,
   KNOWLEDGE_STORAGE_MODE_ENV,
   KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV,
   STORAGE_TABLES,
-  getStorageDatabaseEnv,
-  getStorageDatabaseUrl,
   getStorageMode,
   getStorageStatus,
   parseStorageTables,
@@ -17,8 +13,6 @@ import {
 } from '../src/storage';
 
 const ENV_KEYS = [
-  KNOWLEDGE_STORAGE_ENV,
-  KNOWLEDGE_STORAGE_FALLBACK_ENV,
   KNOWLEDGE_STORAGE_MODE_ENV,
   KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV,
 ] as const;
@@ -28,21 +22,10 @@ afterEach(() => {
 });
 
 describe('knowledge database storage status (local, read-only)', () => {
-  test('resolves canonical database env, fallback env, and storage mode', () => {
+  test('resolves the storage mode from the mode env only (no client DSN surface)', () => {
     for (const key of ENV_KEYS) delete process.env[key];
-    expect(getStorageDatabaseEnv()).toBeNull();
-    expect(getStorageDatabaseUrl()).toBeNull();
+    // Default is local; the client has NO DATABASE_URL/DSN surface at all.
     expect(getStorageMode()).toBe('local');
-
-    // A DATABASE_URL alone no longer implies cloud.
-    process.env[KNOWLEDGE_STORAGE_FALLBACK_ENV] = 'postgres://fallback/knowledge';
-    expect(getStorageDatabaseEnv()?.name).toBe(KNOWLEDGE_STORAGE_FALLBACK_ENV);
-    expect(getStorageDatabaseUrl()).toBe('postgres://fallback/knowledge');
-    expect(getStorageMode()).toBe('local');
-
-    process.env[KNOWLEDGE_STORAGE_ENV] = 'postgres://primary/knowledge';
-    expect(getStorageDatabaseEnv()?.name).toBe(KNOWLEDGE_STORAGE_ENV);
-    expect(getStorageDatabaseUrl()).toBe('postgres://primary/knowledge');
 
     // Canonical cloud mode, plus deprecated aliases that normalize to cloud.
     process.env[KNOWLEDGE_STORAGE_MODE_ENV] = 'cloud';
@@ -78,11 +61,9 @@ describe('knowledge database storage status (local, read-only)', () => {
     const status = getStorageStatus({ scope: 'project', cwd: dir });
 
     expect(status).toMatchObject({
-      configured: false,
       mode: 'local',
       service: 'knowledge',
       scope: 'project',
-      activeEnv: null,
       sync: [],
     });
     expect(existsSync(status.databasePath)).toBe(true);

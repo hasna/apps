@@ -15035,11 +15035,10 @@ var package_default = {
     "smoke:machines-adapter": "bun scripts/smoke-machines-adapter.mjs",
     "smoke:machine-sync-release": "bun scripts/smoke-machine-sync-release.mjs",
     "smoke:open-files-installed-boundary": "bun scripts/smoke-open-files-installed-boundary.mjs",
-    "generate:sdk": "bun scripts/generate-sdk.mjs",
     "migrate:cloud": "bun scripts/apply-cloud-migrations.mjs",
     serve: "bun src/serve-entry.ts",
     "verify:generated": "bun run build && bun scripts/verify-generated-artifacts.mjs",
-    build: "bun run generate:sdk && rm -rf dist && bun build --target=bun --outfile=bin/knowledge.js --minify --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --target=bun --outfile=bin/knowledge-mcp.js --external pg --external @hasna/machines --external @hasna/machines/consumer --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js && bun build --target=bun --outfile=bin/knowledge-serve.js --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/serve-entry.ts && bun build ./src/index.ts ./src/storage.ts ./src/serve.ts --outdir ./dist --target bun --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek && bun scripts/strip-generated-trailing-whitespace.mjs && bunx tsc -p tsconfig.build.json",
+    build: "rm -rf dist && bun build --target=bun --outfile=bin/knowledge.js --minify --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --target=bun --outfile=bin/knowledge-mcp.js --external pg --external @hasna/machines --external @hasna/machines/consumer --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js && bun build --target=bun --outfile=bin/knowledge-serve.js --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/serve-entry.ts && bun build ./src/index.ts ./src/storage.ts ./src/serve.ts --outdir ./dist --target bun --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek && bun scripts/strip-generated-trailing-whitespace.mjs && bunx tsc -p tsconfig.build.json",
     prepublishOnly: "bun run build"
   },
   keywords: [
@@ -35053,11 +35052,8 @@ var STORAGE_TABLES = [
   "knowledge_sync_imports"
 ];
 var DEPRECATED_CLOUD_ALIASES = ["remote", "hybrid", "self_hosted"];
-var KNOWLEDGE_STORAGE_ENV = "HASNA_KNOWLEDGE_DATABASE_URL";
-var KNOWLEDGE_STORAGE_FALLBACK_ENV = "KNOWLEDGE_DATABASE_URL";
 var KNOWLEDGE_STORAGE_MODE_ENV = "HASNA_KNOWLEDGE_STORAGE_MODE";
 var KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV = "KNOWLEDGE_STORAGE_MODE";
-var STORAGE_DATABASE_ENV = [KNOWLEDGE_STORAGE_ENV, KNOWLEDGE_STORAGE_FALLBACK_ENV];
 function readEnv(name) {
   const value = process.env[name]?.trim();
   return value || undefined;
@@ -35081,17 +35077,6 @@ function openScopedDb(options = {}) {
     scope: options.scope ?? "global"
   };
 }
-function getStorageDatabaseEnvName() {
-  for (const name of STORAGE_DATABASE_ENV) {
-    if (readEnv(name))
-      return name;
-  }
-  return null;
-}
-function getStorageDatabaseEnv() {
-  const name = getStorageDatabaseEnvName();
-  return name ? { name } : null;
-}
 function getStorageMode() {
   const mode = normalizeStorageMode2(readEnv(KNOWLEDGE_STORAGE_MODE_ENV)) ?? normalizeStorageMode2(readEnv(KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV));
   if (mode)
@@ -35099,16 +35084,12 @@ function getStorageMode() {
   return "local";
 }
 function getStorageStatus(options = {}) {
-  const activeEnv = getStorageDatabaseEnv();
   const local = openScopedDb(options);
   try {
     ensureSyncMetaTable(local.db);
     const sync = local.db.query("SELECT table_name, last_synced_at, direction FROM _knowledge_sync_meta ORDER BY table_name, direction").all();
     return {
-      configured: Boolean(activeEnv),
       mode: getStorageMode(),
-      env: STORAGE_DATABASE_ENV,
-      activeEnv: activeEnv?.name ?? null,
       service: "knowledge",
       scope: local.scope,
       databasePath: local.path,
@@ -35150,9 +35131,6 @@ function resolveStorePath(storePath, scope) {
     return createKnowledgeService({ scope }).jsonStorePath();
   }
   return defaultStorePath();
-}
-function readStoreLocked(storePath, fn) {
-  return withLock(storePath, () => fn(loadStore(storePath)));
 }
 function itemStoreFor(storePath, scope) {
   const resolved = resolveStorePath(storePath, scope);
@@ -35220,13 +35198,15 @@ function openProjectDb(service = projectService()) {
   migrateKnowledgeDb(workspace.knowledgeDbPath);
   return openKnowledgeDb(workspace.knowledgeDbPath);
 }
-function itemResources(storePath = createKnowledgeService({ scope: "project" }).jsonStorePath()) {
-  return readStoreLocked(storePath, (db) => activeItems(db.items, false).slice(0, 100).map((item) => ({
+async function itemResources(storePath, scope = "project") {
+  const store = itemStoreFor(storePath, scope);
+  const { items } = await store.listAll();
+  return activeItems(items, false).slice(0, 100).map((item) => ({
     uri: `knowledge://project/items/${encodeURIComponent(item.id)}`,
     name: item.title,
     description: `Knowledge item ${item.id}`,
     mimeType: "application/json"
-  })));
+  }));
 }
 function listRows(db, sql, params = []) {
   return db.query(sql).all(...params);
@@ -35613,7 +35593,7 @@ function registerKnowledgeResources(server) {
   }));
   registerJsonResource(server, "knowledge-project-runs", "knowledge://project/runs", "Project knowledge runs", "Recent prompt, ingestion, web search, and reindex run ledger entries", async () => ({ ok: true, scope: "project", runs: runRows() }));
   registerJsonResource(server, "knowledge-project-decisions", "knowledge://project/decisions", "Project knowledge decisions", "Approval gates and audit decisions for generated knowledge operations", async () => decisionsSnapshot());
-  registerJsonTemplate(server, "knowledge-project-items", "knowledge://project/items/{id}", "Project knowledge item", "Read a compatibility JSON-store item by id", async () => ({ resources: itemResources() }), async (_uri, variables) => {
+  registerJsonTemplate(server, "knowledge-project-items", "knowledge://project/items/{id}", "Project knowledge item", "Read a compatibility JSON-store item by id", async () => ({ resources: await itemResources() }), async (_uri, variables) => {
     const id = decodeURIComponent(String(variables.id));
     const record2 = await getKnowledgeRecord("item", id, { scope: "project" });
     return record2 ? { ok: true, ...record2 } : { ok: false, error: `Item not found: ${id}` };

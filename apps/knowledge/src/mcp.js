@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import pkg from '../package.json' with { type: 'json' };
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db.ts';
-import { defaultStorePath, loadStore, withLock } from './store.ts';
+import { defaultStorePath } from './store.ts';
 import { resolveItemStore } from './item-store.ts';
 import { isKnowledgeApiMode } from './cloud-store.ts';
 import { parseSourceRef } from './source-ref.ts';
@@ -33,10 +33,6 @@ function resolveStorePath(storePath, scope) {
     return createKnowledgeService({ scope }).jsonStorePath();
   }
   return defaultStorePath();
-}
-
-function readStoreLocked(storePath, fn) {
-  return withLock(storePath, () => fn(loadStore(storePath)));
 }
 
 /**
@@ -119,13 +115,15 @@ function openProjectDb(service = projectService()) {
   return openKnowledgeDb(workspace.knowledgeDbPath);
 }
 
-function itemResources(storePath = createKnowledgeService({ scope: 'project' }).jsonStorePath()) {
-  return readStoreLocked(storePath, (db) => activeItems(db.items, false).slice(0, 100).map((item) => ({
+async function itemResources(storePath, scope = 'project') {
+  const store = itemStoreFor(storePath, scope);
+  const { items } = await store.listAll();
+  return activeItems(items, false).slice(0, 100).map((item) => ({
     uri: `knowledge://project/items/${encodeURIComponent(item.id)}`,
     name: item.title,
     description: `Knowledge item ${item.id}`,
     mimeType: 'application/json',
-  })));
+  }));
 }
 
 function listRows(db, sql, params = []) {
@@ -622,7 +620,7 @@ function registerKnowledgeResources(server) {
     'knowledge://project/items/{id}',
     'Project knowledge item',
     'Read a compatibility JSON-store item by id',
-    async () => ({ resources: itemResources() }),
+    async () => ({ resources: await itemResources() }),
     async (_uri, variables) => {
       const id = decodeURIComponent(String(variables.id));
       const record = await getKnowledgeRecord('item', id, { scope: 'project' });

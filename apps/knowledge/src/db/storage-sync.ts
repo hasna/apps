@@ -54,10 +54,6 @@ export type StorageMode = 'local' | 'cloud';
 
 const DEPRECATED_CLOUD_ALIASES = ['remote', 'hybrid', 'self_hosted'] as const;
 
-export interface StorageEnv {
-  name: string;
-}
-
 export interface StorageSyncOptions {
   tables?: string[];
   scope?: string;
@@ -82,18 +78,12 @@ export interface SyncMeta {
   direction: 'push' | 'pull';
 }
 
-export const KNOWLEDGE_STORAGE_ENV = 'HASNA_KNOWLEDGE_DATABASE_URL';
-export const KNOWLEDGE_STORAGE_FALLBACK_ENV = 'KNOWLEDGE_DATABASE_URL';
 export const KNOWLEDGE_STORAGE_MODE_ENV = 'HASNA_KNOWLEDGE_STORAGE_MODE';
 export const KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV = 'KNOWLEDGE_STORAGE_MODE';
-export const STORAGE_DATABASE_ENV = [KNOWLEDGE_STORAGE_ENV, KNOWLEDGE_STORAGE_FALLBACK_ENV] as const;
 export const STORAGE_MODE_ENV = [KNOWLEDGE_STORAGE_MODE_ENV, KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV] as const;
 
 export interface StorageStatus {
-  configured: boolean;
   mode: StorageMode;
-  env: typeof STORAGE_DATABASE_ENV;
-  activeEnv: string | null;
   service: 'knowledge';
   scope: string;
   databasePath: string;
@@ -124,23 +114,6 @@ function openScopedDb(options: StorageStatusOptions = {}): { db: Database; path:
   };
 }
 
-export function getStorageDatabaseEnvName(): (typeof STORAGE_DATABASE_ENV)[number] | null {
-  for (const name of STORAGE_DATABASE_ENV) {
-    if (readEnv(name)) return name;
-  }
-  return null;
-}
-
-export function getStorageDatabaseEnv(): StorageEnv | null {
-  const name = getStorageDatabaseEnvName();
-  return name ? { name } : null;
-}
-
-export function getStorageDatabaseUrl(): string | null {
-  const env = getStorageDatabaseEnv();
-  return env ? readEnv(env.name) ?? null : null;
-}
-
 export function getStorageMode(): StorageMode {
   const mode = normalizeStorageMode(readEnv(KNOWLEDGE_STORAGE_MODE_ENV))
     ?? normalizeStorageMode(readEnv(KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV));
@@ -161,16 +134,12 @@ export function getSyncMetaAll(options: StorageStatusOptions = {}): SyncMeta[] {
 }
 
 export function getStorageStatus(options: StorageStatusOptions = {}): StorageStatus {
-  const activeEnv = getStorageDatabaseEnv();
   const local = openScopedDb(options);
   try {
     ensureSyncMetaTable(local.db);
     const sync = local.db.query('SELECT table_name, last_synced_at, direction FROM _knowledge_sync_meta ORDER BY table_name, direction').all() as SyncMeta[];
     return {
-      configured: Boolean(activeEnv),
       mode: getStorageMode(),
-      env: STORAGE_DATABASE_ENV,
-      activeEnv: activeEnv?.name ?? null,
       service: 'knowledge',
       scope: local.scope,
       databasePath: local.path,

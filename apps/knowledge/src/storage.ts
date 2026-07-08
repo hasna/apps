@@ -4,17 +4,11 @@
 // that connected fleet machines straight to the shared RDS. Clients reach the
 // shared store only through the HTTP ApiStore.
 export {
-  KNOWLEDGE_STORAGE_ENV,
-  KNOWLEDGE_STORAGE_FALLBACK_ENV,
   KNOWLEDGE_STORAGE_MODE_ENV,
   KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV,
   KNOWLEDGE_STORAGE_TABLES,
-  STORAGE_DATABASE_ENV,
   STORAGE_MODE_ENV,
   STORAGE_TABLES,
-  getStorageDatabaseEnv,
-  getStorageDatabaseEnvName,
-  getStorageDatabaseUrl,
   getStorageMode,
   getStorageStatus,
   getSyncMetaAll,
@@ -22,7 +16,6 @@ export {
   resolveTables,
 } from './db/storage-sync.js';
 export type {
-  StorageEnv,
   StorageMode,
   StorageStatus,
   StorageStatusOptions,

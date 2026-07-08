@@ -22139,11 +22139,8 @@ var STORAGE_TABLES = [
 ];
 var KNOWLEDGE_STORAGE_TABLES = STORAGE_TABLES;
 var DEPRECATED_CLOUD_ALIASES = ["remote", "hybrid", "self_hosted"];
-var KNOWLEDGE_STORAGE_ENV = "HASNA_KNOWLEDGE_DATABASE_URL";
-var KNOWLEDGE_STORAGE_FALLBACK_ENV = "KNOWLEDGE_DATABASE_URL";
 var KNOWLEDGE_STORAGE_MODE_ENV = "HASNA_KNOWLEDGE_STORAGE_MODE";
 var KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV = "KNOWLEDGE_STORAGE_MODE";
-var STORAGE_DATABASE_ENV = [KNOWLEDGE_STORAGE_ENV, KNOWLEDGE_STORAGE_FALLBACK_ENV];
 var STORAGE_MODE_ENV = [KNOWLEDGE_STORAGE_MODE_ENV, KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV];
 function readEnv(name) {
   const value = process.env[name]?.trim();
@@ -22168,21 +22165,6 @@ function openScopedDb(options = {}) {
     scope: options.scope ?? "global"
   };
 }
-function getStorageDatabaseEnvName() {
-  for (const name of STORAGE_DATABASE_ENV) {
-    if (readEnv(name))
-      return name;
-  }
-  return null;
-}
-function getStorageDatabaseEnv() {
-  const name = getStorageDatabaseEnvName();
-  return name ? { name } : null;
-}
-function getStorageDatabaseUrl() {
-  const env = getStorageDatabaseEnv();
-  return env ? readEnv(env.name) ?? null : null;
-}
 function getStorageMode() {
   const mode = normalizeStorageMode2(readEnv(KNOWLEDGE_STORAGE_MODE_ENV)) ?? normalizeStorageMode2(readEnv(KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV));
   if (mode)
@@ -22199,16 +22181,12 @@ function getSyncMetaAll(options = {}) {
   }
 }
 function getStorageStatus(options = {}) {
-  const activeEnv = getStorageDatabaseEnv();
   const local = openScopedDb(options);
   try {
     ensureSyncMetaTable(local.db);
     const sync = local.db.query("SELECT table_name, last_synced_at, direction FROM _knowledge_sync_meta ORDER BY table_name, direction").all();
     return {
-      configured: Boolean(activeEnv),
       mode: getStorageMode(),
-      env: STORAGE_DATABASE_ENV,
-      activeEnv: activeEnv?.name ?? null,
       service: "knowledge",
       scope: local.scope,
       databasePath: local.path,
@@ -43198,104 +43176,6 @@ function formatKnowledgeProjectPanel(panel) {
   return lines.join(`
 `);
 }
-// src/generated/knowledge-api-client.ts
-class ApiError extends Error {
-  status;
-  body;
-  constructor(status, message, body) {
-    super(message);
-    this.status = status;
-    this.body = body;
-    this.name = "ApiError";
-  }
-}
-
-class KnowledgeApiClient {
-  baseUrl;
-  apiKey;
-  fetchImpl;
-  baseHeaders;
-  constructor(options) {
-    if (!options.baseUrl)
-      throw new Error("KnowledgeApiClient requires a baseUrl.");
-    this.baseUrl = options.baseUrl.replace(/\/$/, "");
-    this.apiKey = options.apiKey;
-    this.fetchImpl = options.fetch ?? globalThis.fetch;
-    this.baseHeaders = options.headers ?? {};
-  }
-  async request(method, path, opts) {
-    const url2 = new URL(this.baseUrl + path);
-    if (opts.query) {
-      for (const [key, value] of Object.entries(opts.query)) {
-        if (value !== undefined && value !== null)
-          url2.searchParams.set(key, String(value));
-      }
-    }
-    const headers = { Accept: "application/json", ...this.baseHeaders, ...opts.init?.headers };
-    if (this.apiKey)
-      headers["x-api-key"] = this.apiKey;
-    let payload;
-    if (opts.body !== undefined) {
-      headers["Content-Type"] = "application/json";
-      payload = JSON.stringify(opts.body);
-    }
-    const response = await this.fetchImpl(url2.toString(), { ...opts.init, method, headers, body: payload });
-    const text = await response.text();
-    const data = text ? (() => {
-      try {
-        return JSON.parse(text);
-      } catch {
-        return text;
-      }
-    })() : undefined;
-    if (!response.ok) {
-      throw new ApiError(response.status, `${method} ${path} failed: ${response.status}`, data);
-    }
-    return data;
-  }
-  async listNotes(query2, init) {
-    return this.request("GET", `/v1/notes`, {
-      body: undefined,
-      query: query2,
-      init
-    });
-  }
-  async createNote(body, init) {
-    return this.request("POST", `/v1/notes`, {
-      body,
-      query: undefined,
-      init
-    });
-  }
-  async getNote(id, init) {
-    return this.request("GET", `/v1/notes/${encodeURIComponent(String(id))}`, {
-      body: undefined,
-      query: undefined,
-      init
-    });
-  }
-  async deleteNote(id, init) {
-    return this.request("DELETE", `/v1/notes/${encodeURIComponent(String(id))}`, {
-      body: undefined,
-      query: undefined,
-      init
-    });
-  }
-  async updateNote(id, body, init) {
-    return this.request("PATCH", `/v1/notes/${encodeURIComponent(String(id))}`, {
-      body,
-      query: undefined,
-      init
-    });
-  }
-  async getRegistry(init) {
-    return this.request("GET", `/v1/registry`, {
-      body: undefined,
-      query: undefined,
-      init
-    });
-  }
-}
 export {
   writeKnowledgeConfig,
   writeAppWikiNote,
@@ -43368,9 +43248,6 @@ export {
   getSyncMetaAll,
   getStorageStatus,
   getStorageMode,
-  getStorageDatabaseUrl,
-  getStorageDatabaseEnvName,
-  getStorageDatabaseEnv,
   getKnowledgeSyncStatus,
   getKnowledgeAuth,
   getKnowledgeApiKey,
@@ -43405,14 +43282,11 @@ export {
   applyKnowledgeSyncBundle,
   STORAGE_TABLES,
   STORAGE_MODE_ENV,
-  STORAGE_DATABASE_ENV,
   S3ArtifactStore,
   NoteRepo,
   LocalArtifactStore,
   LEGACY_HASNA_KNOWLEDGE_APP_PATH,
   KnowledgeService,
-  ApiError as KnowledgeApiError,
-  KnowledgeApiClient,
   KNOWLEDGE_SYNC_TABLES,
   CURRENT_SCHEMA_VERSION as KNOWLEDGE_SYNC_SCHEMA_VERSION,
   KNOWLEDGE_SYNC_PROTOCOL_VERSION,
@@ -43420,8 +43294,6 @@ export {
   KNOWLEDGE_STORAGE_TABLES,
   KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV,
   KNOWLEDGE_STORAGE_MODE_ENV,
-  KNOWLEDGE_STORAGE_FALLBACK_ENV,
-  KNOWLEDGE_STORAGE_ENV,
   KNOWLEDGE_SERVE_APP,
   KNOWLEDGE_RESOURCE,
   KNOWLEDGE_MACHINES_ADAPTER_PACKAGE,

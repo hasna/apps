@@ -7269,11 +7269,8 @@ var STORAGE_TABLES = [
 ];
 var KNOWLEDGE_STORAGE_TABLES = STORAGE_TABLES;
 var DEPRECATED_CLOUD_ALIASES = ["remote", "hybrid", "self_hosted"];
-var KNOWLEDGE_STORAGE_ENV = "HASNA_KNOWLEDGE_DATABASE_URL";
-var KNOWLEDGE_STORAGE_FALLBACK_ENV = "KNOWLEDGE_DATABASE_URL";
 var KNOWLEDGE_STORAGE_MODE_ENV = "HASNA_KNOWLEDGE_STORAGE_MODE";
 var KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV = "KNOWLEDGE_STORAGE_MODE";
-var STORAGE_DATABASE_ENV = [KNOWLEDGE_STORAGE_ENV, KNOWLEDGE_STORAGE_FALLBACK_ENV];
 var STORAGE_MODE_ENV = [KNOWLEDGE_STORAGE_MODE_ENV, KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV];
 function readEnv(name) {
   const value = process.env[name]?.trim();
@@ -7298,21 +7295,6 @@ function openScopedDb(options = {}) {
     scope: options.scope ?? "global"
   };
 }
-function getStorageDatabaseEnvName() {
-  for (const name of STORAGE_DATABASE_ENV) {
-    if (readEnv(name))
-      return name;
-  }
-  return null;
-}
-function getStorageDatabaseEnv() {
-  const name = getStorageDatabaseEnvName();
-  return name ? { name } : null;
-}
-function getStorageDatabaseUrl() {
-  const env = getStorageDatabaseEnv();
-  return env ? readEnv(env.name) ?? null : null;
-}
 function getStorageMode() {
   const mode = normalizeStorageMode2(readEnv(KNOWLEDGE_STORAGE_MODE_ENV)) ?? normalizeStorageMode2(readEnv(KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV));
   if (mode)
@@ -7329,16 +7311,12 @@ function getSyncMetaAll(options = {}) {
   }
 }
 function getStorageStatus(options = {}) {
-  const activeEnv = getStorageDatabaseEnv();
   const local = openScopedDb(options);
   try {
     ensureSyncMetaTable(local.db);
     const sync = local.db.query("SELECT table_name, last_synced_at, direction FROM _knowledge_sync_meta ORDER BY table_name, direction").all();
     return {
-      configured: Boolean(activeEnv),
       mode: getStorageMode(),
-      env: STORAGE_DATABASE_ENV,
-      activeEnv: activeEnv?.name ?? null,
       service: "knowledge",
       scope: local.scope,
       databasePath: local.path,
@@ -8086,9 +8064,6 @@ export {
   getSyncMetaAll,
   getStorageStatus,
   getStorageMode,
-  getStorageDatabaseUrl,
-  getStorageDatabaseEnvName,
-  getStorageDatabaseEnv,
   defineMigration,
   createMigrationLedger,
   createKnowledgeCloudClient,
@@ -8097,14 +8072,11 @@ export {
   checkHealth,
   STORAGE_TABLES,
   STORAGE_MODE_ENV,
-  STORAGE_DATABASE_ENV,
   PG_MIGRATIONS,
   MigrationLedger,
   KNOWLEDGE_STORAGE_TABLES,
   KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV,
   KNOWLEDGE_STORAGE_MODE_ENV,
-  KNOWLEDGE_STORAGE_FALLBACK_ENV,
-  KNOWLEDGE_STORAGE_ENV,
   KNOWLEDGE_APP_NAME,
   KIT_VERSION
 };

@@ -171,11 +171,8 @@ knowledge remote contracts --scope project --json
 # Initialize the project SQLite catalog
 knowledge db init --scope project
 
-# Inspect optional PostgreSQL sync for knowledge.db
+# Inspect the local knowledge.db catalog status (mode + sync history)
 knowledge db storage status --scope project --json
-
-# Push selected catalog tables when HASNA_KNOWLEDGE_DATABASE_URL is configured
-HASNA_KNOWLEDGE_DATABASE_URL=postgres://... knowledge db storage push --scope project --tables sources,chunks --json
 
 # Initialize scalable wiki/schema/index/log artifacts
 knowledge wiki init --scope project
@@ -516,9 +513,11 @@ remote `knowledge sync export/import` commands. The remote machine must have a
 compatible published `knowledge` CLI on PATH, and `--peer-workspace` should be
 the remote repo root or remote `.hasna/knowledge` path.
 
-This command is separate from `knowledge db storage sync`: `sync` owns
-knowledge semantics and conflict visibility, while `db storage sync` moves
-SQLite catalog rows to or from PostgreSQL using the open-core storage contract.
+`knowledge sync` owns knowledge semantics and conflict visibility for
+peer/machine catalog transfer. It is distinct from `db storage status`, which is
+a read-only local catalog inspector. (The legacy `db storage sync`/`push`/`pull`
+Postgres-DSN commands were removed; cross-machine sharing uses the cloud API
+flip — `HASNA_KNOWLEDGE_API_URL` + `HASNA_KNOWLEDGE_API_KEY` — instead.)
 
 ### setup / auth / remote
 ```bash
@@ -544,19 +543,19 @@ knowledge db init [--scope project]
 knowledge db stats [--scope project]
 knowledge inventory [--scope project] [--json]
 knowledge db storage status [--scope project] [--json]
-knowledge db storage push [--tables sources,chunks] [--scope project] [--json]
-knowledge db storage pull [--tables sources,chunks] [--scope project] [--json]
-knowledge db storage sync [--tables sources,chunks] [--scope project] [--json]
 ```
 Initialize or inspect the versioned SQLite catalog at
 `.hasna/knowledge/knowledge.db`.
 
-`db storage` is separate from `knowledge storage`: it syncs durable catalog rows
-between local SQLite and PostgreSQL. Configure it with
-`HASNA_KNOWLEDGE_DATABASE_URL` or fallback `KNOWLEDGE_DATABASE_URL`. Optional
-mode env vars are `HASNA_KNOWLEDGE_STORAGE_MODE` and
-`KNOWLEDGE_STORAGE_MODE`, with `local`, `hybrid`, or `remote` values.
-The sync table list excludes local derived FTS indexes such as `chunks_fts`.
+`db storage status` reports the local catalog: the resolved storage mode, the
+durable table list, and local sync history. It is read-only. The legacy
+`push`/`pull`/`sync` Postgres commands and the client `HASNA_KNOWLEDGE_DATABASE_URL`
+DSN were removed — a raw database DSN is never distributed to clients. To share
+knowledge across machines, use the cloud API flip instead: set
+`HASNA_KNOWLEDGE_API_URL` + `HASNA_KNOWLEDGE_API_KEY` so every read/write routes
+through the self-hosted HTTP API. The optional mode env vars are
+`HASNA_KNOWLEDGE_STORAGE_MODE` / `KNOWLEDGE_STORAGE_MODE` (`local` or `cloud`).
+The durable table list excludes local derived FTS indexes such as `chunks_fts`.
 
 ### wiki
 ```bash

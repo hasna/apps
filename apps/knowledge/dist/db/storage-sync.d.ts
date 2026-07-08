@@ -20,9 +20,6 @@ type StorageTable = (typeof STORAGE_TABLES)[number];
  * deprecated aliases that normalize to `cloud`.
  */
 export type StorageMode = 'local' | 'cloud';
-export interface StorageEnv {
-    name: string;
-}
 export interface StorageSyncOptions {
     tables?: string[];
     scope?: string;
@@ -43,26 +40,17 @@ export interface SyncMeta {
     last_synced_at: string | null;
     direction: 'push' | 'pull';
 }
-export declare const KNOWLEDGE_STORAGE_ENV = "HASNA_KNOWLEDGE_DATABASE_URL";
-export declare const KNOWLEDGE_STORAGE_FALLBACK_ENV = "KNOWLEDGE_DATABASE_URL";
 export declare const KNOWLEDGE_STORAGE_MODE_ENV = "HASNA_KNOWLEDGE_STORAGE_MODE";
 export declare const KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV = "KNOWLEDGE_STORAGE_MODE";
-export declare const STORAGE_DATABASE_ENV: readonly ["HASNA_KNOWLEDGE_DATABASE_URL", "KNOWLEDGE_DATABASE_URL"];
 export declare const STORAGE_MODE_ENV: readonly ["HASNA_KNOWLEDGE_STORAGE_MODE", "KNOWLEDGE_STORAGE_MODE"];
 export interface StorageStatus {
-    configured: boolean;
     mode: StorageMode;
-    env: typeof STORAGE_DATABASE_ENV;
-    activeEnv: string | null;
     service: 'knowledge';
     scope: string;
     databasePath: string;
     tables: typeof STORAGE_TABLES;
     sync: SyncMeta[];
 }
-export declare function getStorageDatabaseEnvName(): (typeof STORAGE_DATABASE_ENV)[number] | null;
-export declare function getStorageDatabaseEnv(): StorageEnv | null;
-export declare function getStorageDatabaseUrl(): string | null;
 export declare function getStorageMode(): StorageMode;
 export declare function getSyncMetaAll(options?: StorageStatusOptions): SyncMeta[];
 export declare function getStorageStatus(options?: StorageStatusOptions): StorageStatus;

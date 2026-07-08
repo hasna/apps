@@ -228,17 +228,11 @@ export {
   type StorageValidationResult,
 } from './storage-contract.js';
 export {
-  KNOWLEDGE_STORAGE_ENV,
-  KNOWLEDGE_STORAGE_FALLBACK_ENV,
   KNOWLEDGE_STORAGE_MODE_ENV,
   KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV,
   KNOWLEDGE_STORAGE_TABLES,
-  STORAGE_DATABASE_ENV,
   STORAGE_MODE_ENV,
   STORAGE_TABLES,
-  getStorageDatabaseEnv,
-  getStorageDatabaseEnvName,
-  getStorageDatabaseUrl,
   getStorageMode,
   getStorageStatus,
   getSyncMetaAll,
@@ -246,7 +240,6 @@ export {
   resolveTables,
 } from './storage.js';
 export type {
-  StorageEnv,
   StorageMode,
   StorageStatus,
   StorageStatusOptions,
@@ -401,15 +394,6 @@ export {
   type KnowledgeAuthConfig,
   type KnowledgeAuthStatus,
 } from './auth.js';
-export {
-  KnowledgeApiClient,
-  ApiError as KnowledgeApiError,
-  type KnowledgeApiClientOptions,
-  type Note as KnowledgeNote,
-  type NoteInput as KnowledgeNoteInput,
-  type NotePatch as KnowledgeNotePatch,
-  type NoteList as KnowledgeNoteList,
-} from './generated/knowledge-api-client.js';
 export {
   KNOWLEDGE_SERVE_APP,
   createServeHandler,
