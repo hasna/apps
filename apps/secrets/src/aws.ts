@@ -10,7 +10,7 @@ import { fromIni, fromTemporaryCredentials } from "@aws-sdk/credential-providers
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
-import { setSecret, listSecretMetadata, getSecret } from "./store.js";
+import { getStore } from "./store/index.js";
 import type { AwsConfig, AwsCredentialMode, SecretMetadata } from "./types.js";
 
 type AwsClient = Pick<SecretsManagerClient, "send">;
@@ -205,7 +205,7 @@ export async function pushSecret(
     ]);
   }
 
-  const entry = await getSecret(key);
+  const entry = await getStore().getSecret(key);
   if (!entry) throw new Error(`Secret not found: ${key}`);
 
   const client = clientFactory(config);
@@ -256,7 +256,7 @@ export async function pullSecret(
   const res = await client.send(new GetSecretValueCommand({ SecretId: name }));
   if (!res.SecretString) throw new Error(`No string value for secret: ${name}`);
 
-  await setSecret(key, res.SecretString);
+  await getStore().setSecret(key, res.SecretString);
 }
 
 export async function syncAll(options: AwsCommandOptions = {}): Promise<AwsSyncResult> {
@@ -276,7 +276,7 @@ export async function syncAll(options: AwsCommandOptions = {}): Promise<AwsSyncR
 
   const client = clientFactory(config);
 
-  for (const entry of await listSecretMetadata()) {
+  for (const entry of await getStore().listSecretMetadata()) {
     try {
       await pushSecret(entry.key, options);
       pushed.push(entry.key);
@@ -337,7 +337,7 @@ function makeDefaultClient(config: ResolvedAwsConfig): SecretsManagerClient {
 async function planSync(config: ResolvedAwsConfig): Promise<AwsPlanResult> {
   const actions: AwsPlanAction[] = [];
   const errors: string[] = [];
-  const local = await listSecretMetadata();
+  const local = await getStore().listSecretMetadata();
   const localKeys = new Set(local.map((entry) => entry.key));
 
   for (const entry of local) {
@@ -407,7 +407,7 @@ function planResult(
 }
 
 async function getLocalMetadata(key: string): Promise<SecretMetadata | undefined> {
-  return (await listSecretMetadata(key)).find((entry) => entry.key === key);
+  return (await getStore().listSecretMetadata(key)).find((entry) => entry.key === key);
 }
 
 function awsName(key: string, prefix?: string): string {

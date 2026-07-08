@@ -4,36 +4,13 @@ import { realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { z } from "zod";
 import {
-  STORAGE_TABLES,
-  getStorageStatus,
-  getStorageSyncMetaAll,
-  storagePull,
-  storagePush,
-  storageSync,
-} from "./storage-sync.js";
-import {
   scanHistoryExposures,
   scanWorkspaceExposures,
 } from "./scanner.js";
-import {
-  setSecret,
-  getSecret,
-  deleteSecret,
-  listSecretMetadata,
-  searchSecretMetadata,
-  setVaultItem,
-  getVaultItem,
-  deleteVaultItem,
-  listVaultItemMetadata,
-  searchVaultItemMetadata,
-  getAuditLog,
-  registerUser,
-  listUsers,
-} from "./store.js";
+import { getStore } from "./store/index.js";
 
 const SECRET_TYPES = ["api_key", "password", "token", "credential", "other"] as const;
 const VAULT_ITEM_KINDS = ["login", "address", "identity", "payment_card", "secure_note", "api_key", "custom"] as const;
-const STORAGE_TABLE_SCHEMA = z.enum(STORAGE_TABLES);
 
 export function buildServer(): McpServer {
   const server = new McpServer({
@@ -41,12 +18,16 @@ export function buildServer(): McpServer {
     version: "0.1.0",
   });
 
+  // Every DATA tool routes through the resolved Store (LocalStore or ApiStore).
+  // No tool touches sqlite or fetch directly.
+  const store = getStore();
+
   server.tool(
     "get_secret",
     "Retrieve a secret value by key",
     { key: z.string().describe("The secret key (e.g. openai/api_key)") },
     async ({ key }) => {
-      const entry = await getSecret(key);
+      const entry = await store.getSecret(key);
       if (!entry) return { content: [{ type: "text", text: `Not found: ${key}` }], isError: true };
       return {
         content: [
@@ -71,7 +52,7 @@ export function buildServer(): McpServer {
     },
     async ({ key, value, type, label, ttl }) => {
       const expiresAt = ttl ? parseTtl(ttl) : undefined;
-      const entry = await setSecret(key, value, type ?? "other", label, expiresAt);
+      const entry = await store.setSecret(key, value, type ?? "other", label, expiresAt);
       return { content: [{ type: "text", text: `Stored: ${entry.key} [${entry.type}]` }] };
     }
   );
@@ -81,7 +62,7 @@ export function buildServer(): McpServer {
     "Delete a secret from the vault",
     { key: z.string() },
     async ({ key }) => {
-      const ok = await deleteSecret(key);
+      const ok = await store.deleteSecret(key);
       if (!ok) return { content: [{ type: "text", text: `Not found: ${key}` }], isError: true };
       return { content: [{ type: "text", text: `Deleted: ${key}` }] };
     }
@@ -92,7 +73,7 @@ export function buildServer(): McpServer {
     "List secrets, optionally filtered by namespace",
     { namespace: z.string().optional().describe("Namespace prefix e.g. openai") },
     async ({ namespace }) => {
-      const entries = await listSecretMetadata(namespace);
+      const entries = await store.listSecretMetadata(namespace);
       const lines = entries.map((e) => `${e.key} [${e.type}]${e.label ? ` — ${e.label}` : ""}`);
       return { content: [{ type: "text", text: lines.join("\n") || "No secrets found." }] };
     }
@@ -103,7 +84,7 @@ export function buildServer(): McpServer {
     "Search secrets by key, label, or type",
     { query: z.string() },
     async ({ query }) => {
-      const entries = await searchSecretMetadata(query);
+      const entries = await store.searchSecretMetadata(query);
       const lines = entries.map((e) => `${e.key} [${e.type}]${e.label ? ` — ${e.label}` : ""}`);
       return { content: [{ type: "text", text: lines.join("\n") || "No results." }] };
     }
@@ -114,7 +95,7 @@ export function buildServer(): McpServer {
     "List structured vault item metadata, optionally filtered by kind",
     { kind: z.enum(VAULT_ITEM_KINDS).optional().describe("Vault item kind") },
     async ({ kind }) => {
-      const entries = await listVaultItemMetadata(kind);
+      const entries = await store.listVaultItemMetadata(kind);
       return {
         content: [{
           type: "text",
@@ -129,7 +110,7 @@ export function buildServer(): McpServer {
     "Search structured vault item metadata",
     { query: z.string() },
     async ({ query }) => {
-      const entries = await searchVaultItemMetadata(query);
+      const entries = await store.searchVaultItemMetadata(query);
       return {
         content: [{
           type: "text",
@@ -144,7 +125,7 @@ export function buildServer(): McpServer {
     "Retrieve a structured vault item, including decrypted payload",
     { id: z.string().describe("Vault item id") },
     async ({ id }) => {
-      const item = await getVaultItem(id);
+      const item = await store.getVaultItem(id);
       if (!item) return { content: [{ type: "text", text: `Not found: ${id}` }], isError: true };
       return {
         content: [{
@@ -169,7 +150,7 @@ export function buildServer(): McpServer {
       favorite: z.boolean().optional(),
     },
     async ({ kind, title, data, id, subtitle, domains, tags, favorite }) => {
-      const item = await setVaultItem({ id, kind, title, subtitle, domains, tags, favorite, data });
+      const item = await store.setVaultItem({ id, kind, title, subtitle, domains, tags, favorite, data });
       return { content: [{ type: "text", text: `Stored vault item: ${item.id} [${item.kind}] ${item.title}` }] };
     }
   );
@@ -179,7 +160,7 @@ export function buildServer(): McpServer {
     "Delete a structured vault item",
     { id: z.string() },
     async ({ id }) => {
-      const ok = await deleteVaultItem(id);
+      const ok = await store.deleteVaultItem(id);
       if (!ok) return { content: [{ type: "text", text: `Not found: ${id}` }], isError: true };
       return { content: [{ type: "text", text: `Deleted vault item: ${id}` }] };
     }
@@ -193,7 +174,7 @@ export function buildServer(): McpServer {
       limit: z.number().optional().describe("Max entries (default 50)"),
     },
     async ({ key, limit }) => {
-      const entries = await getAuditLog(key, limit ?? 50);
+      const entries = await store.getAuditLog(key, limit ?? 50);
       const lines = entries.map(
         (e) => `[${e.timestamp}] ${e.action.toUpperCase()} ${e.key} by ${e.agent}`
       );
@@ -210,7 +191,7 @@ export function buildServer(): McpServer {
       type: z.enum(["human", "agent"]).optional(),
     },
     async ({ id, name, type }) => {
-      const user = await registerUser(id, name, type ?? "human");
+      const user = await store.registerUser(id, name, type ?? "human");
       return { content: [{ type: "text", text: `Registered: ${user.id} (${user.type})` }] };
     }
   );
@@ -220,7 +201,7 @@ export function buildServer(): McpServer {
     "List registered users and agents",
     { type: z.enum(["human", "agent"]).optional() },
     async ({ type }) => {
-      const users = await listUsers(type);
+      const users = await store.listUsers(type);
       const lines = users.map((u) => `${u.id} [${u.type}] — ${u.name}`);
       return { content: [{ type: "text", text: lines.join("\n") || "No users registered." }] };
     }
@@ -235,56 +216,9 @@ export function buildServer(): McpServer {
       category: z.enum(["bug", "feature", "general"]).optional().describe("Feedback category"),
     },
     async ({ message, email, category }) => {
-      const { getDb } = await import("./db.js");
-      const db = getDb();
-      db.run(
-        "INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)",
-        [message, email || null, category || "general", "0.1.0"]
-      );
+      await store.sendFeedback(message, email || undefined, category || "general");
       return { content: [{ type: "text", text: "Feedback saved. Thank you!" }] };
     }
-  );
-
-  server.tool(
-    "storage_status",
-    "Show open-secrets remote storage configuration and local sync metadata",
-    {},
-    async () => ({
-      content: [{
-        type: "text",
-        text: JSON.stringify({
-          ...getStorageStatus(),
-          sync: getStorageSyncMetaAll(),
-        }, null, 2),
-      }],
-    })
-  );
-
-  server.tool(
-    "storage_push",
-    "Push local open-secrets tables to the configured remote Postgres storage",
-    { tables: z.array(STORAGE_TABLE_SCHEMA).optional().describe("Tables to push") },
-    async ({ tables }) => ({
-      content: [{ type: "text", text: JSON.stringify(await storagePush({ tables }), null, 2) }],
-    })
-  );
-
-  server.tool(
-    "storage_pull",
-    "Pull open-secrets tables from the configured remote Postgres storage",
-    { tables: z.array(STORAGE_TABLE_SCHEMA).optional().describe("Tables to pull") },
-    async ({ tables }) => ({
-      content: [{ type: "text", text: JSON.stringify(await storagePull({ tables }), null, 2) }],
-    })
-  );
-
-  server.tool(
-    "storage_sync",
-    "Push then pull open-secrets tables with the configured remote Postgres storage",
-    { tables: z.array(STORAGE_TABLE_SCHEMA).optional().describe("Tables to sync") },
-    async ({ tables }) => ({
-      content: [{ type: "text", text: JSON.stringify(await storageSync({ tables }), null, 2) }],
-    })
   );
 
   server.tool(

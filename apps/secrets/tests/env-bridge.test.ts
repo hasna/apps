@@ -4,7 +4,11 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { resetDb } from "../src/db.js";
 import { exportEnv, importEnv } from "../src/env.js";
-import { getSecret, setSecret } from "../src/store.js";
+import { LocalStore } from "../src/store/index.js";
+
+const _store = new LocalStore();
+const getSecret = _store.getSecret.bind(_store);
+const setSecret = _store.setSecret.bind(_store);
 
 let testDir: string;
 let secretsDir: string;

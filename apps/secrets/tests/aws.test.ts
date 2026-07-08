@@ -9,7 +9,10 @@ import {
   setAwsClientFactoryForTests,
   syncAll,
 } from "../src/aws.js";
-import { setSecret } from "../src/store.js";
+import { LocalStore } from "../src/store/index.js";
+
+const _store = new LocalStore();
+const setSecret = _store.setSecret.bind(_store);
 
 let testDir: string;
 

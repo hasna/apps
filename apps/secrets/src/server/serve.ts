@@ -210,6 +210,24 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
         if (!body?.id || !body.name) return json({ error: "id and name are required" }, 400);
         return json(await store.registerUser(body.id, body.name, body.type ?? "human"));
       }
+      const userMatch = path.match(/^\/v1\/users\/([^/]+)$/);
+      if (userMatch && method === "DELETE") {
+        const a = await auth(req, WRITE);
+        if (!a.ok) return a.res;
+        const id = decodeURIComponent(userMatch[1]!);
+        const ok = await store.deleteUser(id);
+        return json({ deleted: ok }, ok ? 200 : 404);
+      }
+
+      // ---- /v1 feedback ----
+      if (path === "/v1/feedback" && method === "POST") {
+        const a = await auth(req, WRITE);
+        if (!a.ok) return a.res;
+        const body = (await req.json().catch(() => null)) as { message?: string; email?: string; category?: string } | null;
+        if (!body?.message) return json({ error: "message is required" }, 400);
+        await store.addFeedback(body.message, body.email, body.category ?? "general", VERSION);
+        return json({ ok: true });
+      }
 
       return json({ error: "Not found" }, 404);
     } catch (error) {

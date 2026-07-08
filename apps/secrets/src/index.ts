@@ -1,28 +1,7 @@
 #!/usr/bin/env bun
-import {
-  getUser,
-  setSecret,
-  getSecret,
-  deleteSecret,
-  listSecrets,
-  listSecretMetadata,
-  searchSecretMetadata,
-  setVaultItem,
-  getVaultItem,
-  deleteVaultItem,
-  listVaultItemMetadata,
-  searchVaultItemMetadata,
-  importSecrets,
-  exportSecrets,
-  getAuditLog,
-  pruneExpired,
-  getVaultPath,
-  registerUser,
-  listUsers,
-  deleteUser,
-} from "./store.js";
-import { getDb } from "./db.js";
-import { encrypt, decrypt, isEncrypted, getMasterKey, initKms, getKeyStatus } from "./crypto.js";
+import { getStore } from "./store/index.js";
+import type { Store } from "./store/types.js";
+import { getMasterKey, initKms, getKeyStatus } from "./crypto.js";
 import type { SecretEntry, SecretMetadata, VaultItemKind, VaultItemMetadata, VaultItemPayload } from "./types.js";
 import { getSecretReferenceStatus } from "./status.js";
 import { runEventsCli } from "@hasna/events/cli";
@@ -85,11 +64,6 @@ Commands:
   aws pull <key>              pull secret from AWS Secrets Manager [--dry-run|--plan]
   aws sync                    bidirectional sync [--dry-run|--plan]
 
-  storage status              show remote storage sync status
-  storage push                push local vault tables to remote Postgres storage
-  storage pull                pull vault tables from remote Postgres storage
-  storage sync                push then pull remote Postgres storage tables
-
   serve                       start local HTTP server for Chrome extension (port 27462)
   serve token                 print the current serve token
   serve-cloud                 start the cloud HTTP API (PURE REMOTE; == secrets-serve)
@@ -113,7 +87,9 @@ Examples:
   secrets users register my-agent "My Agent" --type agent
   secrets aws configure
   secrets aws sync
-  secrets storage status
+
+Self-hosted (api mode): set HASNA_SECRETS_API_URL + HASNA_SECRETS_API_KEY to route
+all reads/writes to the cloud API. Unset them to fall back to the local vault.
 `);
 }
 
@@ -214,21 +190,16 @@ MCP usage
     set_secret(key, value, type?, label?, ttl?)
     delete_secret(key)
     audit_log(key?, limit?)
-    storage_status()
-    storage_push(tables?)
-    storage_pull(tables?)
-    storage_sync(tables?)
     scan_workspace_exposures(root?, limit?, maxFileBytes?, maxFiles?, maxBytesScanned?, timeoutMs?)
     scan_history_exposures(root?, limit?, maxCommits?, timeoutMs?)
 
-Remote storage sync
-  Configure a Postgres/RDS database URL:
-    export HASNA_SECRETS_DATABASE_URL=postgres://...
+Self-hosted (api mode)
+  Route all reads/writes to the cloud API instead of the local vault:
+    export HASNA_SECRETS_API_URL=https://secrets.hasna.xyz
+    export HASNA_SECRETS_API_KEY=<bearer key from your vault>
 
-  Sync local vault tables:
-    secrets storage push
-    secrets storage pull
-    secrets storage sync
+  Unset both vars to fall back to the local encrypted vault (fully reversible).
+  A raw database URL is NEVER used on the client.
 
 Safety
   list, search, export, and scan commands do not print secret values by default.
@@ -345,12 +316,6 @@ function formatVaultItem(item: VaultItemMetadata): string {
   return `${item.id} [${item.kind}]${favorite} ${item.title}${subtitle}${domains}`;
 }
 
-function parseTableFlags(flags: Record<string, string>): string[] | undefined {
-  const raw = flags.table ?? flags.tables;
-  if (!raw) return undefined;
-  return raw.split(",").map((table) => table.trim()).filter(Boolean);
-}
-
 function parseAwsOptions(flags: Record<string, string>) {
   return {
     dryRun: flags["dry-run"] === "true" || flags.plan === "true",
@@ -416,6 +381,22 @@ if (!command || command === "--help" || command === "-h") {
 
 const { flags, positional } = parseArgs(rest);
 
+// Resolve the active Store (LocalStore or ApiStore) lazily and once. Only data
+// commands trigger resolution; utility commands (docs/key/mcp install) do not.
+let _store: Store | undefined;
+function store(): Store {
+  if (_store) return _store;
+  try {
+    _store = getStore();
+  } catch (e: any) {
+    // Misconfigured cloud mode (e.g. mode=cloud but no API key). Fail loud with a
+    // clean message instead of silently reading the wrong dataset.
+    console.error(e?.message ?? String(e));
+    process.exit(1);
+  }
+  return _store;
+}
+
 switch (command) {
   case "docs":
   case "guide": {
@@ -431,14 +412,22 @@ switch (command) {
       console.error(`Invalid type "${type}". Valid: ${SECRET_TYPES.join(", ")}`);
       process.exit(1);
     }
-    // Warn if AGENT_ID is set but agent is not registered — mirrors open-todos pattern
+    // Warn if AGENT_ID is set but agent is not registered — mirrors open-todos
+    // pattern. Best-effort DX only; never let it fail the write (a lookup error
+    // in api mode must not block storing a secret).
     const agentId = process.env["AGENT_ID"];
-    if (agentId && !await getUser(agentId)) {
-      console.warn(`⚠ Warning: AGENT_ID="${agentId}" is set but not registered. Run: secrets users register ${agentId} <name> --type agent`);
+    if (agentId) {
+      try {
+        if (!(await store().getUser(agentId))) {
+          console.warn(`⚠ Warning: AGENT_ID="${agentId}" is set but not registered. Run: secrets users register ${agentId} <name> --type agent`);
+        }
+      } catch {
+        /* ignore: the unregistered-agent hint is advisory */
+      }
     }
     const expiresAt = flags.ttl ? parseTtl(flags.ttl) : undefined;
     try {
-      const entry = await setSecret(key, value, type, flags.label, expiresAt);
+      const entry = await store().setSecret(key, value, type, flags.label, expiresAt);
       console.log(`✓ Stored: ${entry.key} [${entry.type}]${expiresAt ? ` (expires ${new Date(expiresAt).toLocaleDateString()})` : ""}`);
     } catch (e: any) {
       console.error(e.message);
@@ -450,7 +439,7 @@ switch (command) {
   case "get": {
     const [key] = positional;
     if (!key) { console.error("Usage: secrets get <key>"); process.exit(1); }
-    const entry = await getSecret(key);
+    const entry = await store().getSecret(key);
     if (!entry) { console.error(`Not found: ${key}`); process.exit(1); }
     if (process.stdout.isTTY) {
       console.log(formatEntry(entry, true));
@@ -466,14 +455,14 @@ switch (command) {
   case "uninstall": {
     const [key] = positional;
     if (!key) { console.error(`Usage: secrets ${command} <key>`); process.exit(1); }
-    if (!await deleteSecret(key)) { console.error(`Not found: ${key}`); process.exit(1); }
+    if (!await store().deleteSecret(key)) { console.error(`Not found: ${key}`); process.exit(1); }
     console.log(`✓ Deleted: ${key}`);
     break;
   }
 
   case "list": {
     const [namespace] = positional;
-    const entries = await listSecretMetadata(namespace);
+    const entries = await store().listSecretMetadata(namespace);
     if (entries.length === 0) {
       console.log(namespace ? `No secrets in namespace: ${namespace}` : "Vault is empty.");
     } else {
@@ -486,7 +475,7 @@ switch (command) {
   case "search": {
     const [query] = positional;
     if (!query) { console.error("Usage: secrets search <query>"); process.exit(1); }
-    const results = await searchSecretMetadata(query);
+    const results = await store().searchSecretMetadata(query);
     if (results.length === 0) { console.log(`No results for: ${query}`); }
     else {
       for (const e of results) console.log(formatEntry(e));
@@ -501,7 +490,7 @@ switch (command) {
       console.error("Usage: secrets export [--show|--plaintext] [--pretty]. Do not combine --redact with plaintext flags.");
       process.exit(1);
     }
-    console.log(formatJson(await exportSecrets(!showPlaintext), flags.pretty === "true"));
+    console.log(formatJson(await store().exportSecrets(!showPlaintext), flags.pretty === "true"));
     break;
   }
 
@@ -632,7 +621,7 @@ switch (command) {
         console.error("Import refused: this looks like a redacted export. Use `secrets export --show` to create a restorable local backup.");
         process.exit(1);
       }
-      const count = await importSecrets(entries as any);
+      const count = await store().importSecrets(entries as any);
       console.log(`✓ Imported ${count} secret(s)`);
     } catch (e: any) {
       console.error(`Import failed: ${e.message}`);
@@ -642,12 +631,13 @@ switch (command) {
   }
 
   case "status": {
-    const status = getSecretReferenceStatus();
+    const status = await getSecretReferenceStatus();
     if ("json" in flags) {
       console.log(JSON.stringify(status, null, 2));
     } else {
       console.log(`secrets ${status.package.version}`);
-      console.log(`dataDir: ${status.dataDir}`);
+      console.log(`mode: ${status.mode}`);
+      console.log(`location: ${status.location}`);
       console.log(`secrets: ${status.counts.secrets}`);
       console.log(`users: ${status.counts.users}`);
       console.log("values: not included");
@@ -656,7 +646,7 @@ switch (command) {
   }
 
   case "gc": {
-    const count = await pruneExpired();
+    const count = await store().pruneExpired();
     console.log(`✓ Pruned ${count} expired secret(s)`);
     break;
   }
@@ -664,7 +654,7 @@ switch (command) {
   case "audit": {
     const [key] = positional;
     const limit = flags.limit ? parseInt(flags.limit) : 50;
-    const entries = await getAuditLog(key, limit);
+    const entries = await store().getAuditLog(key, limit);
     if (entries.length === 0) { console.log("No audit entries."); }
     else {
       for (const e of entries) {
@@ -675,7 +665,7 @@ switch (command) {
   }
 
   case "path": {
-    console.log(getVaultPath());
+    console.log(store().describe().location);
     break;
   }
 
@@ -684,7 +674,7 @@ switch (command) {
     const { flags: uFlags, positional: uPos } = parseArgs(userRest);
     switch (sub) {
       case "list": {
-        const users = await listUsers(uFlags.type as any);
+        const users = await store().listUsers(uFlags.type as any);
         if (users.length === 0) { console.log("No users registered."); }
         else {
           for (const u of users) {
@@ -698,14 +688,14 @@ switch (command) {
       case "register": {
         const [id, name] = uPos;
         if (!id || !name) { console.error("Usage: secrets users register <id> <name> [--type human|agent]"); process.exit(1); }
-        const user = await registerUser(id, name, (uFlags.type as any) ?? "human");
+        const user = await store().registerUser(id, name, (uFlags.type as any) ?? "human");
         console.log(`✓ Registered: ${user.id} [${user.type}] — ${user.name}`);
         break;
       }
       case "delete": {
         const [id] = uPos;
         if (!id) { console.error("Usage: secrets users delete <id>"); process.exit(1); }
-        if (!await deleteUser(id)) { console.error(`Not found: ${id}`); process.exit(1); }
+        if (!await store().deleteUser(id)) { console.error(`Not found: ${id}`); process.exit(1); }
         console.log(`✓ Deleted user: ${id}`);
         break;
       }
@@ -725,7 +715,7 @@ switch (command) {
           console.error(`Invalid kind "${kind}". Valid: ${VAULT_ITEM_KINDS.join(", ")}`);
           process.exit(1);
         }
-        const items = await listVaultItemMetadata(kind);
+        const items = await store().listVaultItemMetadata(kind);
         if (items.length === 0) {
           console.log(kind ? `No ${kind} vault items.` : "No structured vault items.");
         } else {
@@ -738,7 +728,7 @@ switch (command) {
       case "search": {
         const query = idOrKind;
         if (!query) { console.error("Usage: secrets items search <query>"); process.exit(1); }
-        const items = await searchVaultItemMetadata(query);
+        const items = await store().searchVaultItemMetadata(query);
         if (items.length === 0) {
           console.log(`No vault items for: ${query}`);
         } else {
@@ -751,7 +741,7 @@ switch (command) {
       case "get": {
         const id = idOrKind;
         if (!id) { console.error("Usage: secrets items get <id> [--show]"); process.exit(1); }
-        const item = await getVaultItem(id);
+        const item = await store().getVaultItem(id);
         if (!item) { console.error(`Not found: ${id}`); process.exit(1); }
         console.log(JSON.stringify({
           ...item,
@@ -765,7 +755,7 @@ switch (command) {
       case "remove": {
         const id = idOrKind;
         if (!id) { console.error(`Usage: secrets items ${sub} <id>`); process.exit(1); }
-        if (!await deleteVaultItem(id)) { console.error(`Not found: ${id}`); process.exit(1); }
+        if (!await store().deleteVaultItem(id)) { console.error(`Not found: ${id}`); process.exit(1); }
         console.log(`✓ Deleted vault item: ${id}`);
         break;
       }
@@ -774,7 +764,7 @@ switch (command) {
         const title = requireFlag(flags, "title", "Usage: secrets items add-login --title <title> --url <url> --username <user> --password <pass>");
         const username = requireFlag(flags, "username", "Usage: secrets items add-login --title <title> --url <url> --username <user> --password <pass>");
         const password = requireFlag(flags, "password", "Usage: secrets items add-login --title <title> --url <url> --username <user> --password <pass>");
-        const item = await setVaultItem({
+        const item = await store().setVaultItem({
           kind: "login",
           title,
           subtitle: username,
@@ -795,7 +785,7 @@ switch (command) {
 
       case "add-address": {
         const title = requireFlag(flags, "title", "Usage: secrets items add-address --title <title> [--name <name>] [--line1 <line>] [--city <city>]");
-        const item = await setVaultItem({
+        const item = await store().setVaultItem({
           kind: "address",
           title,
           subtitle: flags.name ?? flags.email ?? flags.phone,
@@ -824,7 +814,7 @@ switch (command) {
       case "add-note": {
         const title = requireFlag(flags, "title", "Usage: secrets items add-note --title <title> --body <text>");
         const body = requireFlag(flags, "body", "Usage: secrets items add-note --title <title> --body <text>");
-        const item = await setVaultItem({
+        const item = await store().setVaultItem({
           kind: "secure_note",
           title,
           subtitle: flags.subtitle,
@@ -876,7 +866,7 @@ switch (command) {
           if (result) console.log(JSON.stringify(result, null, 2));
           else console.log(`✓ Pushed: ${key}`);
         } else {
-          const entries = await listSecretMetadata();
+          const entries = await store().listSecretMetadata();
           const dryRunActions = [];
           let dryRunResult: any;
           for (const e of entries) {
@@ -921,52 +911,6 @@ switch (command) {
       default:
         console.error(`Unknown aws subcommand: ${sub}`);
         process.exit(1);
-    }
-    break;
-  }
-
-  case "storage": {
-    const [sub = "status"] = positional;
-    const {
-      getStorageStatus,
-      getStorageSyncMetaAll,
-      storagePull,
-      storagePush,
-      storageSync,
-    } = await import("./storage-sync.js");
-    const tables = parseTableFlags(flags);
-    try {
-      switch (sub) {
-        case "status": {
-          console.log(JSON.stringify({
-            ...getStorageStatus(),
-            sync: getStorageSyncMetaAll(),
-          }, null, 2));
-          break;
-        }
-
-        case "push": {
-          console.log(JSON.stringify(await storagePush({ tables }), null, 2));
-          break;
-        }
-
-        case "pull": {
-          console.log(JSON.stringify(await storagePull({ tables }), null, 2));
-          break;
-        }
-
-        case "sync": {
-          console.log(JSON.stringify(await storageSync({ tables }), null, 2));
-          break;
-        }
-
-        default:
-          console.error(`Unknown storage subcommand: ${sub}`);
-          process.exit(1);
-      }
-    } catch (e: any) {
-      console.error(`Storage ${sub} failed: ${e.message}`);
-      process.exit(1);
     }
     break;
   }
@@ -1077,8 +1021,8 @@ switch (command) {
         const key = rawKey.toLowerCase().replace(/_/g, "-");
         const type = inferType(rawKey);
         // Skip if already exists and not overriding
-        if (!flags.overwrite && await getSecret(key)) { skipped++; continue; }
-        await setSecret(key, rawValue, type);
+        if (!flags.overwrite && await store().getSecret(key)) { skipped++; continue; }
+        await store().setSecret(key, rawValue, type);
         imported++;
       }
     }
@@ -1131,22 +1075,14 @@ switch (command) {
   }
 
   case "encrypt-vault": {
-    // Migrate all plaintext secrets to encrypted
-    const db = getDb();
-    const rows = db.prepare("SELECT key, value FROM secrets").all() as { key: string; value: string }[];
-    let migrated = 0;
-    let alreadyEncrypted = 0;
-    for (const row of rows) {
-      if (isEncrypted(row.value)) {
-        alreadyEncrypted++;
-        continue;
-      }
-      const enc = encrypt(row.value);
-      db.prepare("UPDATE secrets SET value = ?, updated_at = ? WHERE key = ?")
-        .run(enc, new Date().toISOString(), row.key);
-      migrated++;
+    // Migrate all plaintext secrets to encrypted (local vault maintenance).
+    try {
+      const { migrated, alreadyEncrypted } = await store().encryptVault();
+      console.log(`✓ Encrypted ${migrated} secret(s). ${alreadyEncrypted} already encrypted.`);
+    } catch (e: any) {
+      console.error(e.message);
+      process.exit(1);
     }
-    console.log(`✓ Encrypted ${migrated} secret(s). ${alreadyEncrypted} already encrypted.`);
     break;
   }
 
@@ -1215,11 +1151,7 @@ switch (command) {
     const [msg, ...restMsg] = positional;
     const message = [msg, ...restMsg.filter(r => !r.startsWith("--"))].join(" ");
     if (!message) { console.error("Usage: secrets feedback <message> [--email <email>] [--category <cat>]"); process.exit(1); }
-    const db = getDb();
-    db.run(
-      "INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)",
-      [message, flags.email || null, flags.category || "general", "0.1.0"]
-    );
+    await store().sendFeedback(message, flags.email || undefined, flags.category || "general");
     console.log("✓ Feedback saved. Thank you!");
     break;
   }

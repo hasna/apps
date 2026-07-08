@@ -1,16 +1,7 @@
 import { join } from "path";
 import { homedir } from "os";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
-import {
-  listSecrets,
-  getSecret,
-  listSecretMetadata,
-  searchSecretMetadata,
-  listVaultItemMetadata,
-  searchVaultItemMetadata,
-  getVaultItem,
-  matchVaultItemsForUrl,
-} from "./store.js";
+import { getStore } from "./store/index.js";
 
 export const SERVE_PORT = 27462;
 const TOKEN_PATH = join(homedir(), ".hasna", "secrets", ".serve-token");
@@ -84,7 +75,7 @@ async function matchLegacyUrl(rawUrl: string): Promise<Array<{
   const parts = hostname.split(".");
   const terms = [hostname, parts[0]].filter(Boolean);
 
-  const all = await listSecrets();
+  const all = await getStore().listSecrets();
   const groups: Record<string, { label?: string; username?: string; password?: string }> = {};
 
   for (const s of all) {
@@ -123,7 +114,7 @@ async function matchLegacyUrl(rawUrl: string): Promise<Array<{
 }
 
 async function matchUrl(rawUrl: string): Promise<Array<Record<string, unknown>>> {
-  const vaultMatches = (await matchVaultItemsForUrl(rawUrl))
+  const vaultMatches = (await getStore().matchVaultItemsForUrl(rawUrl))
     .filter((item) => ["login", "address", "identity", "payment_card"].includes(item.kind))
     .map((item) => ({
       source: "vault_item",
@@ -173,7 +164,7 @@ export async function startHttpServer(options: { port?: number } = {}): Promise<
       // GET /v1/list[?namespace=xxx]
       if (url.pathname === "/v1/list") {
         const ns = url.searchParams.get("namespace") ?? undefined;
-        const secrets = (await listSecretMetadata(ns)).map(s => ({
+        const secrets = (await getStore().listSecretMetadata(ns)).map(s => ({
           key: s.key,
           type: s.type,
           label: s.label ?? null,
@@ -186,7 +177,7 @@ export async function startHttpServer(options: { port?: number } = {}): Promise<
       if (url.pathname === "/v1/get") {
         const key = url.searchParams.get("key");
         if (!key) return err("Missing key", 400, cors);
-        const s = await getSecret(key);
+        const s = await getStore().getSecret(key);
         if (!s) return err("Not found", 404, cors);
         return json({ key: s.key, value: s.value, type: s.type, label: s.label ?? null }, 200, cors);
       }
@@ -195,7 +186,7 @@ export async function startHttpServer(options: { port?: number } = {}): Promise<
       if (url.pathname === "/v1/search") {
         const q = url.searchParams.get("q");
         if (!q) return err("Missing q", 400, cors);
-        const results = (await searchSecretMetadata(q)).map(s => ({
+        const results = (await getStore().searchSecretMetadata(q)).map(s => ({
           key: s.key,
           type: s.type,
           label: s.label ?? null,
@@ -207,7 +198,7 @@ export async function startHttpServer(options: { port?: number } = {}): Promise<
       // GET /v1/items[?kind=login]
       if (url.pathname === "/v1/items") {
         const kind = url.searchParams.get("kind") as any;
-        const items = (await listVaultItemMetadata(kind || undefined)).map(item => ({
+        const items = (await getStore().listVaultItemMetadata(kind || undefined)).map(item => ({
           id: item.id,
           kind: item.kind,
           title: item.title,
@@ -225,7 +216,7 @@ export async function startHttpServer(options: { port?: number } = {}): Promise<
       if (url.pathname === "/v1/items/search") {
         const q = url.searchParams.get("q");
         if (!q) return err("Missing q", 400, cors);
-        const results = (await searchVaultItemMetadata(q)).map(item => ({
+        const results = (await getStore().searchVaultItemMetadata(q)).map(item => ({
           id: item.id,
           kind: item.kind,
           title: item.title,
@@ -243,7 +234,7 @@ export async function startHttpServer(options: { port?: number } = {}): Promise<
       if (url.pathname === "/v1/items/get") {
         const id = url.searchParams.get("id");
         if (!id) return err("Missing id", 400, cors);
-        const item = await getVaultItem(id);
+        const item = await getStore().getVaultItem(id);
         if (!item) return err("Not found", 404, cors);
         return json({
           id: item.id,

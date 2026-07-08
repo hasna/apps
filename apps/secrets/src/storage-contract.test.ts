@@ -3,51 +3,70 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveMcpRoot } from "./mcp.js";
+import { getStore, LocalStore, ApiStore } from "./store/index.js";
 
 const rootDir = join(import.meta.dir, "..");
 
 describe("secrets storage surface contract", () => {
-  it("documents storage commands in help instead of cloud commands", () => {
+  it("resolves LocalStore without api env and ApiStore with url+key", () => {
+    const local = getStore({} as NodeJS.ProcessEnv);
+    expect(local).toBeInstanceOf(LocalStore);
+    expect(local.mode).toBe("local");
+
+    const api = getStore({
+      HASNA_SECRETS_API_URL: "https://secrets.hasna.xyz",
+      HASNA_SECRETS_API_KEY: "hasna_secrets_test_key",
+    } as unknown as NodeJS.ProcessEnv);
+    expect(api).toBeInstanceOf(ApiStore);
+    expect(api.mode).toBe("api");
+  });
+
+  it("does not embed the api key in the ApiStore descriptor", () => {
+    const api = getStore({
+      HASNA_SECRETS_API_URL: "https://secrets.hasna.xyz",
+      HASNA_SECRETS_API_KEY: "hasna_secrets_super_secret_value",
+    } as unknown as NodeJS.ProcessEnv);
+    const descriptor = api.describe();
+    expect(descriptor.mode).toBe("api");
+    expect(JSON.stringify(descriptor)).not.toContain("hasna_secrets_super_secret_value");
+  });
+
+  it("removed the forbidden DSN storage command from help", () => {
     const result = Bun.spawnSync({
       cmd: ["bun", "src/index.ts", "--help"],
       cwd: rootDir,
-      env: {
-        ...process.env,
-        HASNA_SECRETS_DB_PATH: ":memory:",
-        NO_COLOR: "1",
-      },
+      env: { ...process.env, HASNA_SECRETS_DB_PATH: ":memory:", NO_COLOR: "1" },
     });
 
     const stdout = new TextDecoder().decode(result.stdout);
     expect(result.exitCode).toBe(0);
-    expect(stdout).toContain("storage status");
-    expect(stdout).toContain("secrets storage status");
-    expect(stdout).not.toContain("cloud status");
-    expect(stdout).not.toContain("cloud_push");
+    expect(stdout).not.toContain("storage status");
+    expect(stdout).not.toContain("storage push");
+    expect(stdout).toContain("HASNA_SECRETS_API_URL");
   });
 
-  it("does not keep a hidden cloud CLI command alias", () => {
+  it("has no DSN storage command or direct sqlite/DATABASE_URL in the CLI", () => {
     const source = readFileSync(join(import.meta.dir, "index.ts"), "utf8");
-    const retiredAlias = `case "${["cl", "oud"].join("")}":`;
-
-    expect(source).toContain('case "storage":');
-    expect(source).not.toContain(retiredAlias);
+    expect(source).not.toContain('case "storage":');
+    expect(source).not.toContain("storage-sync");
+    expect(source).not.toContain("DATABASE_URL");
+    expect(source).not.toContain("getDb");
+    // Data commands route through the resolved Store.
+    expect(source).toContain("getStore");
+    expect(source).toContain("store().");
   });
 
-  it("registers storage MCP tools instead of cloud tools", () => {
+  it("registers Store-routed MCP tools and no DSN storage tools", () => {
     const source = readFileSync(join(import.meta.dir, "mcp.ts"), "utf8");
-
-    expect(source).toContain('"storage_status"');
-    expect(source).toContain('"storage_push"');
-    expect(source).toContain('"storage_pull"');
-    expect(source).toContain('"storage_sync"');
+    expect(source).toContain("getStore");
     expect(source).toContain('"scan_workspace_exposures"');
     expect(source).toContain('"scan_history_exposures"');
     expect(source).toContain("MCP scan root must be inside the server working directory");
-    expect(source).not.toContain('"cloud_status"');
-    expect(source).not.toContain('"cloud_push"');
-    expect(source).not.toContain('"cloud_pull"');
-    expect(source).not.toContain('"cloud_sync"');
+    expect(source).not.toContain('"storage_status"');
+    expect(source).not.toContain('"storage_push"');
+    expect(source).not.toContain('"storage_pull"');
+    expect(source).not.toContain('"storage_sync"');
+    expect(source).not.toContain("getDb");
   });
 
   it("keeps MCP scan roots inside the real server working directory", () => {
@@ -78,28 +97,5 @@ describe("secrets storage surface contract", () => {
       process.chdir(originalCwd);
       rmSync(tempRoot, { recursive: true, force: true });
     }
-  });
-
-  it("storage status includes canonical RDS metadata without values", () => {
-    const result = Bun.spawnSync({
-      cmd: ["bun", "src/index.ts", "storage", "status"],
-      cwd: rootDir,
-      env: {
-        ...process.env,
-        HASNA_SECRETS_DB_PATH: ":memory:",
-        NO_COLOR: "1",
-      },
-    });
-
-    expect(result.exitCode).toBe(0);
-    const status = JSON.parse(new TextDecoder().decode(result.stdout));
-    expect(status.canonical).toEqual({
-      cluster: "hasna-xyz-infra-apps-prod-postgres",
-      database: "secrets",
-      runtimeSecretPath: "hasna/xyz/opensource/secrets/prod/rds",
-      primaryEnv: "HASNA_SECRETS_DATABASE_URL",
-      fallbackEnv: "SECRETS_DATABASE_URL",
-    });
-    expect(JSON.stringify(status)).not.toContain("postgres://user:secret");
   });
 });

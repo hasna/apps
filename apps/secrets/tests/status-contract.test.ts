@@ -4,7 +4,11 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { resetDb } from "../src/db.js";
 import { getSecretReferenceStatus } from "../src/status.js";
-import { registerUser, setSecret } from "../src/store.js";
+import { LocalStore } from "../src/store/index.js";
+
+const _store = new LocalStore();
+const registerUser = _store.registerUser.bind(_store);
+const setSecret = _store.setSecret.bind(_store);
 
 let testDir: string;
 
@@ -30,10 +34,10 @@ describe("secret reference status contract", () => {
     await setSecret("example/synthetic/test/api_key", "sk-synthetic-value", "api_key");
     await registerUser("agent-status", "Status Agent", "agent");
 
-    const status = getSecretReferenceStatus();
+    const status = await getSecretReferenceStatus();
     expect(status).toMatchObject({
       service: "secrets",
-      schemaVersion: "1.0",
+      schemaVersion: "2.0",
       package: {
         name: "@hasna/secrets",
         version: expect.any(String),

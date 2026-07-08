@@ -304,6 +304,11 @@ export class CloudSecretsStore {
     return this.db.many<CloudUser>("SELECT * FROM users ORDER BY type, name");
   }
 
+  async deleteUser(id: string): Promise<boolean> {
+    const rows = await this.db.many<{ id: string }>("DELETE FROM users WHERE id = $1 RETURNING id", [id]);
+    return rows.length > 0;
+  }
+
   // ---- audit ----
   async getAuditLog(key: string | undefined, limit = 50): Promise<Array<{ id: number; action: string; key: string; agent: string; timestamp: string }>> {
     if (key) {
