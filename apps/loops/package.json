@@ -1,6 +1,6 @@
 {
   "name": "@hasna/loops",
-  "version": "0.4.21",
+  "version": "0.4.22",
   "description": "Persistent local loop and workflow runner for deterministic commands and headless AI coding agents",
   "type": "module",
   "main": "dist/index.js",
@@ -120,7 +120,7 @@
   },
   "optionalDependencies": {
     "@hasna/machines": "0.0.49",
-    "@hasna/contracts": "^0.5.1"
+    "@hasna/contracts": "^0.4.2"
   },
   "devDependencies": {
     "@types/bun": "latest",
