@@ -123,4 +123,24 @@ describe("CloudShortlinksStore routes to /v1 with bearer key", () => {
     expect(calls.map((c) => c.method)).toEqual(["GET", "DELETE"]);
     expect(calls[1].url).toContain("/v1/domains/has.na");
   });
+
+  test("deleteDomain surfaces a DELETE 404 instead of a false success", async () => {
+    // Regression: the domain exists (GET resolves it) but the server's DELETE
+    // route is missing/returns 404. This MUST throw, never resolve as deleted —
+    // the generic client.delete() swallowing 404 was the false-success bug.
+    const { s, calls } = store((c) => {
+      if (c.method === "GET") return { json: { items: [{ id: "dom_9", hostname: "gone.na" }] } };
+      return { status: 404, json: { error: "Not found" } };
+    });
+    await expect(s.deleteDomain("gone.na")).rejects.toThrow();
+    expect(calls.map((c) => c.method)).toEqual(["GET", "DELETE"]);
+  });
+
+  test("deleteLink surfaces a DELETE 404 instead of a false success", async () => {
+    const { s } = store((c) => {
+      if (c.method === "GET") return { json: { id: "lnk_9", slug: "gone" } };
+      return { status: 404, json: { error: "Not found" } };
+    });
+    await expect(s.deleteLink("gone")).rejects.toThrow();
+  });
 });

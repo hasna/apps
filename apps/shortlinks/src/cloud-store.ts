@@ -109,7 +109,12 @@ export class CloudShortlinksStore implements Store {
     // domain record, so resolve it first, then delete by hostname.
     const domain = await this.getDomain(hostnameOrId);
     if (!domain) throw new Error("Domain not found.");
-    await this.client.delete("domains", domain.hostname);
+    // Use the transport DELETE directly rather than the generic storage-client
+    // delete(), which swallows a 404 and would report a false success when the
+    // server lacks the route (or the row is already gone). We already proved the
+    // domain exists above, so any non-2xx here — including 404 — is a real
+    // failure that MUST surface, never a silent "deleted: true".
+    await this.transport.del(`/domains/${enc(domain.hostname)}`);
     return domain;
   }
 
@@ -176,9 +181,12 @@ export class CloudShortlinksStore implements Store {
       ? await this.getLink(domainOrSlug, maybeSlug)
       : await this.getLink(domainOrSlug);
     if (!link) throw new Error("Link not found.");
-    await this.client.delete(
-      "links",
-      link.slug,
+    // Transport DELETE directly (not the generic delete(), which swallows 404)
+    // so a missing route or already-gone row surfaces as an error instead of a
+    // false success — same defect class as deleteDomain.
+    await this.transport.del(
+      `/links/${enc(link.slug)}`,
+      undefined,
       maybeSlug ? { query: { domain: domainOrSlug } } : {},
     );
     return link;
