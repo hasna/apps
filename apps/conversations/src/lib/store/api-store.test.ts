@@ -21,6 +21,26 @@ function fakeClient(getBody: unknown): HasnaStorageClient {
   } as unknown as HasnaStorageClient;
 }
 
+/** A client whose transport rejects every read with a 404 HasnaHttpError. */
+function throwing404Client(): HasnaStorageClient {
+  const err = Object.assign(new Error("Not Found"), { name: "HasnaHttpError", status: 404 });
+  const reject = async () => {
+    throw err;
+  };
+  const transport = {
+    baseUrl: "https://conversations.hasna.xyz/v1",
+    get: reject,
+    post: reject,
+    patch: reject,
+    del: reject,
+  } as unknown as HasnaStorageClient["transport"];
+  return {
+    name: "conversations",
+    baseUrl: "https://conversations.hasna.xyz/v1",
+    transport,
+  } as unknown as HasnaStorageClient;
+}
+
 describe("ApiStore project normalization", () => {
   test("getProject coerces raw JSON-text tags into a string[] (regression: tags=null crash)", async () => {
     // Server returns a raw row: tags as null (the shape that crashed `project get`).
@@ -54,5 +74,21 @@ describe("ApiStore project normalization", () => {
   test("getProject returns null when the API has no project", async () => {
     const store = new ApiStore(fakeClient({ project: null }));
     expect(await store.getProject("missing")).toBeNull();
+  });
+
+  test("getProject returns null (not throw) when the server 404s the lookup", async () => {
+    // The server 404s a missing project (GET /projects/:id). The LocalStore
+    // contract is null, so ApiStore must translate the 404 rather than throw —
+    // otherwise `project-panel`'s resolveProject() crashes instead of falling
+    // through to getProjectByName().
+    const store = new ApiStore(throwing404Client());
+    expect(await store.getProject("nope")).toBeNull();
+  });
+
+  test("getChannel returns null (not throw) when the server 404s the lookup", async () => {
+    // Same contract for channels: the server 404s a missing channel, the local
+    // store returns null.
+    const store = new ApiStore(throwing404Client());
+    expect(await store.getChannel("nope")).toBeNull();
   });
 });

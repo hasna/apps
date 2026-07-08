@@ -91,8 +91,14 @@ export class ApiStore implements ConversationsStore {
     return (body.channels ?? []) as never;
   };
   getChannel: ConversationsStore["getChannel"] = async (name) => {
-    const body = await this.get<{ channel: unknown } | null>(`/channels/${encodeURIComponent(normalizeChannelName(name))}`);
-    return (body?.channel ?? null) as never;
+    try {
+      const body = await this.get<{ channel: unknown } | null>(`/channels/${encodeURIComponent(normalizeChannelName(name))}`);
+      return (body?.channel ?? null) as never;
+    } catch (e) {
+      // The server 404s a missing channel; the LocalStore contract is null.
+      if (isHttpStatus(e, 404)) return null as never;
+      throw e;
+    }
   };
   joinChannel: ConversationsStore["joinChannel"] = async (channelName, agent) => {
     const body = await this.post<{ joined?: boolean }>(`/channels/${encodeURIComponent(normalizeChannelName(channelName))}/members`, { agent });
@@ -371,8 +377,14 @@ export class ApiStore implements ConversationsStore {
     return (body.projects ?? []).map((p) => ApiStore.asProjectInfo(p)) as never;
   };
   getProject: ConversationsStore["getProject"] = async (id) => {
-    const body = await this.get<{ project: unknown } | null>(`/projects/${encodeURIComponent(id)}`);
-    return (body?.project ? ApiStore.asProjectInfo(body.project) : null) as never;
+    try {
+      const body = await this.get<{ project: unknown } | null>(`/projects/${encodeURIComponent(id)}`);
+      return (body?.project ? ApiStore.asProjectInfo(body.project) : null) as never;
+    } catch (e) {
+      // The server 404s a missing project; the LocalStore contract is null.
+      if (isHttpStatus(e, 404)) return null as never;
+      throw e;
+    }
   };
   getProjectByName: ConversationsStore["getProjectByName"] = async (name) => {
     const body = await this.get<{ project: unknown } | null>("/projects", { name, limit: 1 });
