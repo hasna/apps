@@ -3,7 +3,7 @@ import { z } from "zod";
 import { registerAgent, isAgentConflict, releaseAgent, getAgent, getAgentByName, listAgents, updateAgent, updateAgentActivity, archiveAgent, unarchiveAgent, getAvailableNamesFromPool } from "../../db/agents.js";
 import { getAgentPoolForProject } from "../../lib/config.js";
 import { getDatabase } from "../../db/database.js";
-import { getTodosCloudClient, cloudListAgents } from "../../cli/cloud-router.js";
+import { getTodosCloudClient, cloudListAgents, cloudRegisterAgent } from "../../cli/cloud-router.js";
 
 interface AgentFocus {
   agent_id: string;
@@ -108,6 +108,22 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
       },
       async ({ name, description, role, title, level, permissions, capabilities, session_id, working_dir, force }) => {
         try {
+          // self_hosted cloud routing: register into the SHARED cloud roster so the
+          // agent lands in /v1/agents (not this machine's local sqlite island),
+          // fixing the identity misroute where list_agents/tasks read cloud but the
+          // agent existed only locally.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const agent = await cloudRegisterAgent(cloud, {
+              name, description, role, title, level, permissions, capabilities, session_id, working_dir, force,
+            });
+            return {
+              content: [{
+                type: "text" as const,
+                text: `Agent registered:\nID: ${agent.id}\nName: ${agent.name}${agent.description ? `\nDescription: ${agent.description}` : ""}\nSession: ${agent.session_id ?? "unbound"}\nCreated: ${agent.created_at}\nLast seen: ${agent.last_seen_at}`,
+              }],
+            };
+          }
           // Look up the pool for this project (from config, based on working_dir) — null = no restriction
           const pool = getAgentPoolForProject(working_dir);
           const result = registerAgent({ name, description, role, title, level, permissions, capabilities, session_id, working_dir, force, pool: pool || undefined });

@@ -21,7 +21,7 @@
  * subnet routing — pure API-client path per the locked architecture.
  */
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
-import type { Agent, Plan, Project, Task, TaskComment, TaskFilter } from "../types/index.js";
+import type { Agent, Plan, Project, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter } from "../types/index.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -197,4 +197,121 @@ export async function cloudCountTasks(client: HasnaStorageClient, filter: TaskFi
   // Fallback for older servers without `total`: list everything and count.
   const tasks = await cloudListTasks(client, rest);
   return tasks.length;
+}
+
+/**
+ * Register (or renew) an agent in the shared cloud roster (`POST /v1/agents`).
+ * This is the fix for the agent-identity misroute: `todos init` and the MCP
+ * `register_agent` tool historically wrote the agent to LOCAL sqlite even on a
+ * flipped machine, so the cloud `/v1/agents` roster never saw it. Routing through
+ * here writes the agent to the shared dataset with the bearer key. A name that is
+ * already actively held by another session comes back as HTTP 409, which the
+ * transport throws — surfaced to the caller as a conflict error (parity with the
+ * local conflict path) rather than a silent duplicate.
+ */
+export async function cloudRegisterAgent(client: HasnaStorageClient, input: RegisterAgentInput): Promise<Agent> {
+  const raw = await client.transport.post<unknown>("/agents", input as unknown as Record<string, unknown>);
+  if (raw && typeof raw === "object" && "agent" in (raw as Record<string, unknown>)) {
+    return (raw as { agent: Agent }).agent;
+  }
+  return raw as Agent;
+}
+
+/** Result of a cloud lock/unlock action (mirrors the local `LockResult` shape). */
+export interface CloudLockResult {
+  success: boolean;
+  locked_by?: string;
+  locked_at?: string;
+  expires_at?: string;
+  error?: string;
+}
+
+/**
+ * Acquire an exclusive lock on a cloud task (`POST /v1/tasks/:id/lock`). Locking is
+ * a task-field operation (`locked_by`/`locked_at`) resolved server-side against the
+ * shared dataset so a flipped machine coordinates on the SAME lock as every other
+ * agent — the previous local-sqlite lookup 404'd cloud tasks ("Task not found").
+ */
+export async function cloudLockTask(client: HasnaStorageClient, id: string, agentId: string): Promise<CloudLockResult> {
+  const raw = await client.transport.post<unknown>(`/tasks/${encodeURIComponent(id)}/lock`, { agent_id: agentId });
+  if (raw && typeof raw === "object" && "result" in (raw as Record<string, unknown>)) {
+    return (raw as { result: CloudLockResult }).result;
+  }
+  return (raw ?? { success: true }) as CloudLockResult;
+}
+
+/** Release a lock on a cloud task (`POST /v1/tasks/:id/unlock`). */
+export async function cloudUnlockTask(client: HasnaStorageClient, id: string, agentId?: string): Promise<boolean> {
+  const raw = await client.transport.post<unknown>(
+    `/tasks/${encodeURIComponent(id)}/unlock`,
+    agentId ? { agent_id: agentId } : {},
+  );
+  if (raw && typeof raw === "object" && "success" in (raw as Record<string, unknown>)) {
+    return Boolean((raw as { success: unknown }).success);
+  }
+  return true;
+}
+
+/** A task's dependency edges from the cloud (`GET /v1/tasks/:id/dependencies`). */
+export interface CloudTaskDependencies {
+  dependencies: TaskDependency[];
+  blocked_by: TaskDependency[];
+}
+
+/** List a cloud task's dependency edges (`GET /v1/tasks/:id/dependencies`). */
+export async function cloudGetDependencies(client: HasnaStorageClient, id: string): Promise<CloudTaskDependencies> {
+  const raw = await client.transport.get<unknown>(`/tasks/${encodeURIComponent(id)}/dependencies`);
+  const env = (raw ?? {}) as Partial<CloudTaskDependencies>;
+  return { dependencies: env.dependencies ?? [], blocked_by: env.blocked_by ?? [] };
+}
+
+/** Add a dependency edge to a cloud task (`POST /v1/tasks/:id/dependencies`). */
+export async function cloudAddDependency(client: HasnaStorageClient, id: string, dependsOn: string): Promise<TaskDependency> {
+  const raw = await client.transport.post<unknown>(`/tasks/${encodeURIComponent(id)}/dependencies`, { depends_on: dependsOn });
+  if (raw && typeof raw === "object" && "dependency" in (raw as Record<string, unknown>)) {
+    return (raw as { dependency: TaskDependency }).dependency;
+  }
+  return raw as TaskDependency;
+}
+
+/** Remove a dependency edge from a cloud task (`DELETE /v1/tasks/:id/dependencies/:dep`). */
+export async function cloudRemoveDependency(client: HasnaStorageClient, id: string, dependsOn: string): Promise<boolean> {
+  const raw = await client.transport.del<unknown>(
+    `/tasks/${encodeURIComponent(id)}/dependencies/${encodeURIComponent(dependsOn)}`,
+  );
+  if (raw && typeof raw === "object" && "removed" in (raw as Record<string, unknown>)) {
+    return Boolean((raw as { removed: unknown }).removed);
+  }
+  return true;
+}
+
+/** A verification record returned by the cloud. */
+export interface CloudTaskVerification {
+  id: string;
+  task_id: string;
+  command: string;
+  status: "passed" | "failed" | "unknown";
+  output_summary: string | null;
+  artifact_path: string | null;
+  agent_id: string | null;
+  run_at: string;
+  created_at: string;
+}
+
+/**
+ * Record a verification command + result against a cloud task
+ * (`POST /v1/tasks/:id/verifications`). The previous local path wrote the row to
+ * this machine's sqlite where the cloud task does not exist, tripping a FOREIGN
+ * KEY constraint; routing to the shared store attaches it to the real task.
+ */
+export async function cloudRecordVerification(
+  client: HasnaStorageClient,
+  id: string,
+  input: { command: string; status?: string; output_summary?: string; artifact_path?: string; agent_id?: string },
+): Promise<CloudTaskVerification> {
+  const raw = await client.transport.post<unknown>(`/tasks/${encodeURIComponent(id)}/verifications`, input);
+  if (raw && typeof raw === "object" && "verification" in (raw as Record<string, unknown>)) {
+    return (raw as { verification: CloudTaskVerification }).verification;
+  }
+  return raw as CloudTaskVerification;
 }

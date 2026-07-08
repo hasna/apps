@@ -6,7 +6,7 @@ import { releaseAgent, listAgents, normalizeGeneratedAgentNames, suggestAgentNam
 import { createTaskList, listTaskLists, deleteTaskList } from "../../db/task-lists.js";
 import { listTasks } from "../../db/tasks.js";
 import { getPackageVersion, handleError, autoProject, output } from "../helpers.js";
-import { getTodosCloudClient, cloudListAgents } from "../cloud-router.js";
+import { getTodosCloudClient, cloudListAgents, cloudRegisterAgent } from "../cloud-router.js";
 
 export function registerAgentCommands(program: Command) {
   // init
@@ -17,8 +17,15 @@ export function registerAgentCommands(program: Command) {
     .action(async (name: string, opts) => {
       const globalOpts = program.opts();
       try {
-        const { registerAgent, isAgentConflict } = await import("../../db/agents.js");
-        const result = registerAgent({ name, description: opts.description });
+        // self_hosted cloud routing: register into the SHARED cloud roster so the
+        // agent identity lives in /v1/agents (not this machine's local sqlite).
+        // This is the agent-identity misroute fix — a flipped machine's `init`
+        // used to write the agent locally only, invisible to the cloud fleet.
+        const cloud = getTodosCloudClient();
+        const result = cloud
+          ? await cloudRegisterAgent(cloud, { name, description: opts.description })
+          : (await import("../../db/agents.js")).registerAgent({ name, description: opts.description });
+        const { isAgentConflict } = await import("../../db/agents.js");
         if (isAgentConflict(result)) {
           console.error(chalk.red("CONFLICT:"), result.message);
           process.exit(1);

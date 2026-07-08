@@ -107,10 +107,11 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
   await ensureCloudSchema();
   const store = getCloudStorageAdapter();
 
-  const segments = path.split("/").filter(Boolean); // ["v1", resource, id?, action?]
+  const segments = path.split("/").filter(Boolean); // ["v1", resource, id?, action?, subId?]
   const resource = segments[1];
   const id = segments[2];
   const action = segments[3];
+  const subId = segments[4];
 
   try {
     // ── /v1/tasks ──
@@ -209,6 +210,95 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
             return json({ comment }, 201);
           }
           return error(405, `method ${method} not allowed on /v1/tasks/:id/comments`);
+        }
+        // ── /v1/tasks/:id/lock and /unlock — exclusive task locking ──
+        // Locking is a task-field (`locked_by`/`locked_at`) operation resolved on
+        // the shared cloud dataset so a flipped machine coordinates on the SAME
+        // lock as every other agent. The previous CLI/MCP path read LOCAL sqlite
+        // and 404'd cloud tasks ("Task not found").
+        if (action === "lock" || action === "unlock") {
+          if (method !== "POST") return error(405, `method ${method} not allowed on /v1/tasks/:id/${action}`);
+          if (typeof store.tasks.lock !== "function" || typeof store.tasks.unlock !== "function") {
+            return error(501, "task locking is not supported by this storage backend");
+          }
+          const body = (await readJson<{ agent_id?: string }>(req)) ?? {};
+          if (!(await store.tasks.get(id))) return error(404, "task not found");
+          if (action === "lock") {
+            const agentId = body.agent_id || principal.agent || "todos-serve";
+            return json({ result: await store.tasks.lock(id, agentId) });
+          }
+          const released = await store.tasks.unlock(id, body.agent_id || principal.agent || undefined);
+          return json({ success: released });
+        }
+        // ── /v1/tasks/:id/dependencies[/:dep] — dependency edges ──
+        if (action === "dependencies") {
+          if (!store.dependencies) return error(501, "dependencies are not supported by this storage backend");
+          if (method === "GET") {
+            if (!(await store.tasks.get(id))) return error(404, "task not found");
+            const edges = await store.dependencies.list(id);
+            return json(edges);
+          }
+          if (method === "POST") {
+            const body = (await readJson<{ depends_on?: string }>(req)) ?? {};
+            if (typeof body.depends_on !== "string" || !body.depends_on.trim()) {
+              return error(400, "depends_on is required");
+            }
+            try {
+              const dependency = await store.dependencies.add(id, body.depends_on, contextFromPrincipal(principal));
+              return json({ dependency }, 201);
+            } catch (e) {
+              const msg = (e as Error).message || "";
+              if (msg.includes("not found")) return error(404, msg);
+              if (msg.includes("cycle") || msg.includes("itself")) return error(409, msg);
+              throw e;
+            }
+          }
+          if (method === "DELETE") {
+            if (!subId) return error(400, "dependency target id is required (/v1/tasks/:id/dependencies/:dep)");
+            const removed = await store.dependencies.remove(id, subId);
+            return json({ removed });
+          }
+          return error(405, `method ${method} not allowed on /v1/tasks/:id/dependencies`);
+        }
+        // ── /v1/tasks/:id/verifications — verification records ──
+        if (action === "verifications") {
+          if (!store.verifications) return error(501, "verifications are not supported by this storage backend");
+          if (method === "GET") {
+            if (!(await store.tasks.get(id))) return error(404, "task not found");
+            const verifications = await store.verifications.list(id);
+            return json({ verifications, count: verifications.length });
+          }
+          if (method === "POST") {
+            const body = (await readJson<{
+              command?: string;
+              status?: "passed" | "failed" | "unknown";
+              output_summary?: string;
+              artifact_path?: string;
+              agent_id?: string;
+            }>(req)) ?? {};
+            if (typeof body.command !== "string" || !body.command.trim()) {
+              return error(400, "command is required");
+            }
+            try {
+              const verification = await store.verifications.add(
+                {
+                  task_id: id,
+                  command: body.command,
+                  status: body.status,
+                  output_summary: body.output_summary,
+                  artifact_path: body.artifact_path,
+                  agent_id: body.agent_id,
+                },
+                contextFromPrincipal(principal, body),
+              );
+              return json({ verification }, 201);
+            } catch (e) {
+              const msg = (e as Error).message || "";
+              if (msg.includes("not found")) return error(404, msg);
+              throw e;
+            }
+          }
+          return error(405, `method ${method} not allowed on /v1/tasks/:id/verifications`);
         }
         const body = (await readJson<{ agent_id?: string; reason?: string }>(req)) ?? {};
         const agentId = body.agent_id || principal.agent || "todos-serve";
@@ -317,9 +407,15 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
       }
       if (!id && method === "POST") {
         const body = await readJson<{ name?: string }>(req);
-        if (!body || typeof body.name !== "string") return error(400, "name is required");
-        const agent = await store.agents.register(body as never, contextFromPrincipal(principal));
-        return json({ agent }, 201);
+        if (!body || typeof body.name !== "string" || !body.name.trim()) return error(400, "name is required");
+        const result = await store.agents.register(body as never, contextFromPrincipal(principal));
+        // register() returns a conflict envelope when the name is actively held by
+        // another session — surface it as 409 so the client sees a real conflict
+        // instead of a 201 wrapping a non-agent object.
+        if (result && typeof result === "object" && "conflict" in result) {
+          return error(409, (result as { message?: string }).message ?? "agent name conflict", { conflict: true });
+        }
+        return json({ agent: result }, 201);
       }
       if (id && method === "GET") {
         const agent = await store.agents.get(id);

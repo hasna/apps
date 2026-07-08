@@ -25,6 +25,8 @@ import {
   cloudUpdateTask,
   cloudDeleteTask,
   cloudTaskAction,
+  cloudLockTask,
+  cloudUnlockTask,
 } from "../cloud-router.js";
 import type { TaskPriority, TaskStatus } from "../../types/index.js";
 import {
@@ -1167,13 +1169,16 @@ export function registerTaskCommands(program: Command) {
   program
     .command("lock <id>")
     .description("Acquire exclusive lock on a task")
-    .action((id: string) => {
+    .action(async (id: string) => {
       const globalOpts = program.opts();
       const agentId = globalOpts.agent || "cli";
+      const cloud = getTodosCloudClient();
       const resolvedId = resolveTaskId(id);
       let result;
       try {
-        result = lockTask(resolvedId, agentId);
+        // self_hosted cloud routing: lock on the SHARED dataset so every agent
+        // coordinates on the same lock. Local lookup 404'd cloud tasks before.
+        result = cloud ? await cloudLockTask(cloud, resolvedId, agentId) : lockTask(resolvedId, agentId);
       } catch (e) {
         handleError(e);
       }
@@ -1192,11 +1197,13 @@ export function registerTaskCommands(program: Command) {
   program
     .command("unlock <id>")
     .description("Release lock on a task")
-    .action((id: string) => {
+    .action(async (id: string) => {
       const globalOpts = program.opts();
+      const cloud = getTodosCloudClient();
       const resolvedId = resolveTaskId(id);
       try {
-        unlockTask(resolvedId, globalOpts.agent);
+        if (cloud) await cloudUnlockTask(cloud, resolvedId, globalOpts.agent);
+        else unlockTask(resolvedId, globalOpts.agent);
       } catch (e) {
         handleError(e);
       }

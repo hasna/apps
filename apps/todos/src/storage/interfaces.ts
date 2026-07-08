@@ -11,6 +11,7 @@ import type {
   RegisterAgentInput,
   Task,
   TaskComment,
+  TaskDependency,
   TaskFilter,
   TaskHistory,
   TaskList,
@@ -53,7 +54,60 @@ export interface TodosStorageAdapter {
   readonly templates: TodosTemplateStore;
   readonly audit: TodosAuditStore;
   readonly sync: TodosSyncStore;
+  /**
+   * Task dependency edges. Optional because only the cloud/remote adapters expose
+   * it through the `/v1` API — the local CLI/MCP paths call the sqlite `db/*`
+   * helpers directly. Present on the Postgres (self_hosted) adapter.
+   */
+  readonly dependencies?: TodosDependencyStore;
+  /** Task verification records (optional; present on the Postgres adapter). */
+  readonly verifications?: TodosVerificationStore;
   transaction?<T>(fn: (adapter: TodosStorageAdapter) => MaybePromise<T>, context?: TodosStorageContext): MaybePromise<T>;
+}
+
+export interface TodosLockResult {
+  success: boolean;
+  locked_by?: string;
+  locked_at?: string;
+  expires_at?: string;
+  error?: string;
+}
+
+export interface TodosTaskDependencies {
+  dependencies: TaskDependency[];
+  blocked_by: TaskDependency[];
+}
+
+export interface TodosDependencyStore {
+  add(taskId: string, dependsOn: string, context?: TodosStorageContext): MaybePromise<TaskDependency>;
+  remove(taskId: string, dependsOn: string, context?: TodosStorageContext): MaybePromise<boolean>;
+  list(taskId: string, context?: TodosStorageContext): MaybePromise<TodosTaskDependencies>;
+}
+
+export interface TodosTaskVerification {
+  id: string;
+  task_id: string;
+  command: string;
+  status: "passed" | "failed" | "unknown";
+  output_summary: string | null;
+  artifact_path: string | null;
+  agent_id: string | null;
+  run_at: string;
+  created_at: string;
+}
+
+export interface CreateTodosVerificationInput {
+  task_id: string;
+  command: string;
+  status?: "passed" | "failed" | "unknown";
+  output_summary?: string | null;
+  artifact_path?: string | null;
+  agent_id?: string | null;
+}
+
+export interface TodosVerificationStore {
+  add(input: CreateTodosVerificationInput, context?: TodosStorageContext): MaybePromise<TodosTaskVerification>;
+  list(taskId: string, context?: TodosStorageContext): MaybePromise<TodosTaskVerification[]>;
 }
 
 export interface TodosTaskStore {
@@ -76,6 +130,10 @@ export interface TodosTaskStore {
   getNext(agentId?: string, filters?: TodosTaskClaimFilter, context?: TodosStorageContext): MaybePromise<Task | null>;
   getActiveWork(filters?: TodosActiveWorkFilter, context?: TodosStorageContext): MaybePromise<ActiveWorkItem[]>;
   getChangedSince(since: string, filters?: TodosActiveWorkFilter, context?: TodosStorageContext): MaybePromise<Task[]>;
+  /** Acquire an exclusive lock (`locked_by`/`locked_at`). Optional — cloud adapters only. */
+  lock?(id: string, agentId: string, context?: TodosStorageContext): MaybePromise<TodosLockResult>;
+  /** Release a lock. Optional — cloud adapters only. */
+  unlock?(id: string, agentId?: string, context?: TodosStorageContext): MaybePromise<boolean>;
 }
 
 export interface TodosProjectStore {

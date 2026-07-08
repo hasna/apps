@@ -117,7 +117,7 @@ Perform this as one coordinated operation across every fleet machine.
 2. **Final mirror + drain.** Let each machine's mirror queue drain
    (`shadow-status` → `pending: 0`, `divergence: 0`). For any residual
    divergence, run a one-shot reconcile from that machine's local SQLite into the
-   cloud sync tables (adapter snapshot push) until counts match.
+   cloud snapshot tables (adapter snapshot push) until counts match.
 3. **Verify counts.** On each machine, `todos storage shadow-status --json` and
    confirm `diff == 0` for `tasks`, `projects`, `plans`, `agents`, `task_lists`,
    and `templates`. Reconcile any machine that is behind before proceeding.

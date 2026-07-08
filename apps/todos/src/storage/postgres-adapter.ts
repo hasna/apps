@@ -12,6 +12,7 @@ import type {
   RegisterAgentInput,
   Task,
   TaskComment,
+  TaskDependency,
   TaskFilter,
   TaskHistory,
   TaskList,
@@ -25,6 +26,8 @@ import type {
   ActiveWorkItem,
   TodosActiveWorkFilter,
   TodosAgentUpdateInput,
+  CreateTodosVerificationInput,
+  TodosLockResult,
   TodosStorageAdapter,
   TodosStorageContext,
   TodosStorageImportResult,
@@ -32,8 +35,10 @@ import type {
   TodosStorageTombstone,
   TodosTaskClaimFilter,
   TodosTaskCompletionOptions,
+  TodosTaskDependencies,
   TodosTaskFailureOptions,
   TodosTaskFailureResult,
+  TodosTaskVerification,
   UpdateTemplateInput,
 } from "./interfaces.js";
 import {
@@ -44,7 +49,7 @@ import {
   type TodosPostgresSyncRecordType,
 } from "./postgres-sync.js";
 
-type RemoteObjectType = TodosPostgresSyncRecordType | "comments";
+type RemoteObjectType = TodosPostgresSyncRecordType | "comments" | "dependencies" | "verifications";
 
 export interface CreatePostgresTodosStorageAdapterOptions {
   client: TodosPostgresQueryClient;
@@ -102,6 +107,17 @@ export function createPostgresTodosStorageAdapter(
       getNext: (_agentId, filters) => getNextTask(filters, store),
       getActiveWork: (filters) => getActiveWork(filters, store),
       getChangedSince: (since, filters) => getChangedSince(since, filters, store),
+      lock: (id, agentId) => lockTask(id, agentId, store),
+      unlock: (id, agentId) => unlockTask(id, agentId, store),
+    },
+    dependencies: {
+      add: (taskId, dependsOn, context) => addDependency(taskId, dependsOn, store, context),
+      remove: (taskId, dependsOn) => removeDependency(taskId, dependsOn, store),
+      list: (taskId) => listDependencies(taskId, store),
+    },
+    verifications: {
+      add: (input, context) => addVerification(input, store, context),
+      list: (taskId) => listVerifications(taskId, store),
     },
     projects: {
       create: (input, context) => createProject(input, store, context),
@@ -660,6 +676,132 @@ async function patchTask(task: Task, patch: Partial<Task>, store: PostgresJsonRe
   };
   await store.upsert("tasks", updated);
   return updated;
+}
+
+// Lock lease TTL — keep in lockstep with the local sqlite path (LOCK_EXPIRY_MINUTES).
+const CLOUD_LOCK_EXPIRY_MINUTES = 30;
+
+function cloudLockExpired(lockedAt: string | null | undefined): boolean {
+  if (!lockedAt) return true;
+  return new Date(lockedAt).getTime() + CLOUD_LOCK_EXPIRY_MINUTES * 60 * 1000 < Date.now();
+}
+
+function cloudLockExpiresAt(lockedAt: string): string {
+  return new Date(new Date(lockedAt).getTime() + CLOUD_LOCK_EXPIRY_MINUTES * 60 * 1000).toISOString();
+}
+
+/**
+ * Acquire an exclusive lock on a cloud task by setting `locked_by`/`locked_at` on
+ * the shared record. Mirrors the local sqlite semantics: completed/cancelled tasks
+ * cannot be locked, a same-agent re-lock renews the lease, and a live lock held by
+ * a DIFFERENT agent is reported (not stolen). No transactions on this adapter, so
+ * this is best-effort last-writer-wins — the same guarantee `start`/`claim` give.
+ */
+async function lockTask(id: string, agentId: string, store: PostgresJsonRecordStore): Promise<TodosLockResult> {
+  const task = await requireRecord<Task>("tasks", id, store);
+  if (task.status === "completed" || task.status === "cancelled") {
+    return { success: false, error: `Task is ${task.status} and cannot be locked` };
+  }
+  if (task.locked_by && task.locked_by !== agentId && !cloudLockExpired(task.locked_at)) {
+    return { success: false, locked_by: task.locked_by, locked_at: task.locked_at ?? undefined, error: `Task is locked by ${task.locked_by}` };
+  }
+  const timestamp = new Date().toISOString();
+  await patchTask(task, { locked_by: agentId, locked_at: timestamp }, store);
+  return { success: true, locked_by: agentId, locked_at: timestamp, expires_at: cloudLockExpiresAt(timestamp) };
+}
+
+/** Release a lock on a cloud task. A non-matching agent is rejected (parity with local). */
+async function unlockTask(id: string, agentId: string | undefined, store: PostgresJsonRecordStore): Promise<boolean> {
+  const task = await requireRecord<Task>("tasks", id, store);
+  if (agentId && task.locked_by && task.locked_by !== agentId) {
+    throw new Error(`Task ${id} is locked by ${task.locked_by}, not ${agentId}`);
+  }
+  await patchTask(task, { locked_by: null, locked_at: null }, store);
+  return true;
+}
+
+function dependencyId(taskId: string, dependsOn: string): string {
+  return `${taskId}::${dependsOn}`;
+}
+
+/** Add a dependency edge (taskId depends on dependsOn). Both tasks must exist; cycles are rejected. */
+async function addDependency(
+  taskId: string,
+  dependsOn: string,
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<TaskDependency> {
+  if (taskId === dependsOn) throw new Error("A task cannot depend on itself");
+  if (!(await store.get<Task>("tasks", taskId))) throw new Error(`Task not found: ${taskId}`);
+  if (!(await store.get<Task>("tasks", dependsOn))) throw new Error(`Task not found: ${dependsOn}`);
+  // Cycle guard: adding taskId->dependsOn creates a cycle if dependsOn can already
+  // reach taskId through the existing edges. BFS over the current dependency set.
+  const edges = await store.list<TaskDependency & { id?: string }>("dependencies");
+  const adjacency = new Map<string, string[]>();
+  for (const edge of edges) {
+    if (!adjacency.has(edge.task_id)) adjacency.set(edge.task_id, []);
+    adjacency.get(edge.task_id)!.push(edge.depends_on);
+  }
+  const queue = [dependsOn];
+  const seen = new Set<string>();
+  while (queue.length) {
+    const node = queue.shift()!;
+    if (node === taskId) throw new Error(`Adding dependency ${taskId} -> ${dependsOn} would create a cycle`);
+    if (seen.has(node)) continue;
+    seen.add(node);
+    for (const next of adjacency.get(node) ?? []) queue.push(next);
+  }
+  const timestamp = new Date().toISOString();
+  const record = { id: dependencyId(taskId, dependsOn), task_id: taskId, depends_on: dependsOn, created_at: timestamp, updated_at: timestamp };
+  await store.upsert("dependencies", record, context);
+  return { task_id: taskId, depends_on: dependsOn };
+}
+
+/** Remove a dependency edge. Returns false when the edge did not exist. */
+async function removeDependency(taskId: string, dependsOn: string, store: PostgresJsonRecordStore): Promise<boolean> {
+  const existing = await store.get<unknown>("dependencies", dependencyId(taskId, dependsOn));
+  if (!existing) return false;
+  await store.delete("dependencies", dependencyId(taskId, dependsOn));
+  return true;
+}
+
+/** List a task's outgoing (dependencies) and incoming (blocked_by) dependency edges. */
+async function listDependencies(taskId: string, store: PostgresJsonRecordStore): Promise<TodosTaskDependencies> {
+  const edges = await store.list<TaskDependency>("dependencies");
+  return {
+    dependencies: edges.filter((edge) => edge.task_id === taskId).map((edge) => ({ task_id: edge.task_id, depends_on: edge.depends_on })),
+    blocked_by: edges.filter((edge) => edge.depends_on === taskId).map((edge) => ({ task_id: edge.task_id, depends_on: edge.depends_on })),
+  };
+}
+
+/** Record a verification against a task. The task must exist (parity with the local FK). */
+async function addVerification(
+  input: CreateTodosVerificationInput,
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<TodosTaskVerification> {
+  if (!(await store.get<Task>("tasks", input.task_id))) throw new Error(`Task not found: ${input.task_id}`);
+  const timestamp = new Date().toISOString();
+  const verification: TodosTaskVerification = {
+    id: randomUUID(),
+    task_id: input.task_id,
+    command: input.command,
+    status: input.status ?? "unknown",
+    output_summary: input.output_summary ?? null,
+    artifact_path: input.artifact_path ?? null,
+    agent_id: input.agent_id ?? context?.agentId ?? null,
+    run_at: timestamp,
+    created_at: timestamp,
+  };
+  await store.upsert("verifications", { ...verification, updated_at: timestamp }, context);
+  return verification;
+}
+
+/** List verifications recorded for a task, newest first. */
+async function listVerifications(taskId: string, store: PostgresJsonRecordStore): Promise<TodosTaskVerification[]> {
+  return (await store.list<TodosTaskVerification>("verifications"))
+    .filter((verification) => verification.task_id === taskId)
+    .sort((a, b) => b.run_at.localeCompare(a.run_at));
 }
 
 // SQL fragment: order by priority rank (critical→low) then created_at, matching

@@ -4,7 +4,8 @@ import { execSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createTask } from "../../db/tasks.js";
-import { autoProject, output, resolveTaskId } from "../helpers.js";
+import { autoProject, output, resolveTaskId, handleError } from "../helpers.js";
+import { getTodosCloudClient, cloudRecordVerification } from "../cloud-router.js";
 
 const HOME = process.env["HOME"] || process.env["USERPROFILE"] || "~";
 
@@ -497,22 +498,36 @@ exit 0
     .option("--agent <name>", "Agent that ran the command")
     .action(async (taskId: string, command: string, opts: { status?: string; summary?: string; artifact?: string; agent?: string }) => {
       const globalOpts = program.opts();
-      const resolvedId = resolveTaskId(taskId);
       if (opts.status !== "passed" && opts.status !== "failed" && opts.status !== "unknown") {
         console.error(chalk.red("--status must be passed, failed, or unknown"));
         process.exit(1);
       }
-      const { addTaskVerification } = await import("../../db/task-commits.js");
-      const verification = addTaskVerification({
-        task_id: resolvedId,
-        command,
-        status: opts.status,
-        output_summary: opts.summary,
-        artifact_path: opts.artifact,
-        agent_id: opts.agent,
-      });
-      if (globalOpts.json) { output(verification, true); return; }
-      console.log(chalk.green(`Recorded ${verification.status} verification for task ${taskId}`));
+      try {
+        // self_hosted cloud routing: attach the verification to the REAL cloud task.
+        // The local path wrote the row to this machine's sqlite where the cloud task
+        // does not exist, tripping a FOREIGN KEY constraint.
+        const cloud = getTodosCloudClient();
+        const verification = cloud
+          ? await cloudRecordVerification(cloud, resolveTaskId(taskId), {
+              command,
+              status: opts.status,
+              output_summary: opts.summary,
+              artifact_path: opts.artifact,
+              agent_id: opts.agent,
+            })
+          : (await import("../../db/task-commits.js")).addTaskVerification({
+              task_id: resolveTaskId(taskId),
+              command,
+              status: opts.status,
+              output_summary: opts.summary,
+              artifact_path: opts.artifact,
+              agent_id: opts.agent,
+            });
+        if (globalOpts.json) { output(verification, true); return; }
+        console.log(chalk.green(`Recorded ${verification.status} verification for task ${taskId}`));
+      } catch (e) {
+        handleError(e);
+      }
     });
 
   program

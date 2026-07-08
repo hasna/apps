@@ -561,6 +561,49 @@ describe("storage adapter contracts", () => {
     expect(postgres.calls.some((call) => call.values?.includes("spark01"))).toBe(true);
   });
 
+  test("cloud adapter supports lock/unlock, dependencies and verifications on the shared dataset", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client, sourceMachineId: "spark01" });
+    const project = await adapter.projects.create({ name: "Coord", path: "/tmp/coord" });
+    const a = await adapter.tasks.create({ title: "Task A", project_id: project.id });
+    const b = await adapter.tasks.create({ title: "Task B", project_id: project.id });
+
+    // lock / unlock (task-field coordination)
+    const lock = await adapter.tasks.lock!(a.id, "seneca");
+    expect(lock).toMatchObject({ success: true, locked_by: "seneca" });
+    expect(await adapter.tasks.get(a.id)).toMatchObject({ locked_by: "seneca" });
+    // a different agent cannot steal a live lock
+    const contested = await adapter.tasks.lock!(a.id, "brutus");
+    expect(contested).toMatchObject({ success: false, locked_by: "seneca" });
+    // wrong-agent unlock is rejected
+    await expect(Promise.resolve(adapter.tasks.unlock!(a.id, "brutus"))).rejects.toBeDefined();
+    expect(await adapter.tasks.unlock!(a.id, "seneca")).toBe(true);
+    expect(await adapter.tasks.get(a.id)).toMatchObject({ locked_by: null });
+    // completed tasks cannot be locked
+    await adapter.tasks.complete(b.id, "seneca");
+    expect(await adapter.tasks.lock!(b.id, "seneca")).toMatchObject({ success: false });
+
+    // dependencies (A depends on B)
+    const dep = await adapter.dependencies!.add(a.id, b.id);
+    expect(dep).toEqual({ task_id: a.id, depends_on: b.id });
+    const edges = await adapter.dependencies!.list(a.id);
+    expect(edges.dependencies).toEqual([{ task_id: a.id, depends_on: b.id }]);
+    expect((await adapter.dependencies!.list(b.id)).blocked_by).toEqual([{ task_id: a.id, depends_on: b.id }]);
+    // cycle guard: B depends on A would close a loop
+    await expect(Promise.resolve(adapter.dependencies!.add(b.id, a.id))).rejects.toThrow(/cycle/);
+    // missing task rejected
+    await expect(Promise.resolve(adapter.dependencies!.add(a.id, "nope"))).rejects.toThrow(/not found/);
+    expect(await adapter.dependencies!.remove(a.id, b.id)).toBe(true);
+    expect(await adapter.dependencies!.remove(a.id, b.id)).toBe(false);
+
+    // verifications (attached to a real cloud task)
+    const v = await adapter.verifications!.add({ task_id: a.id, command: "bun test", status: "passed", agent_id: "seneca" });
+    expect(v).toMatchObject({ task_id: a.id, command: "bun test", status: "passed" });
+    expect(await adapter.verifications!.list(a.id)).toEqual([expect.objectContaining({ id: v.id })]);
+    // verification on a missing task fails loudly (parity with the local FK)
+    await expect(Promise.resolve(adapter.verifications!.add({ task_id: "nope", command: "x" }))).rejects.toThrow(/not found/);
+  });
+
   test("pushes task filtering, count and pagination down to SQL (no whole-table load)", async () => {
     const postgres = createMemoryPostgresClient();
     const adapter = createPostgresTodosStorageAdapter({

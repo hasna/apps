@@ -10,7 +10,7 @@ import {
   getProjectByPath,
 } from "../../db/projects.js";
 import { addComment } from "../../db/comments.js";
-import { getTodosCloudClient, cloudAddComment, cloudListProjects } from "../cloud-router.js";
+import { getTodosCloudClient, cloudAddComment, cloudListProjects, cloudAddDependency, cloudRemoveDependency, cloudGetDependencies } from "../cloud-router.js";
 import { searchTasks } from "../../lib/search.js";
 import {
   deleteSearchView,
@@ -441,6 +441,44 @@ export function registerProjectCommands(program: Command) {
     .option("--direction <direction>", "Graph direction: up, down, or both", "both")
     .action(async (id: string, opts) => {
       const globalOpts = program.opts();
+      const cloud = getTodosCloudClient();
+
+      // self_hosted cloud routing: dependency edges live on the SHARED dataset.
+      // The previous path read LOCAL sqlite and 404'd cloud tasks. The recursive
+      // `--graph` view is a local-only concept; in cloud mode we show the flat
+      // dependency/blocked-by edges instead.
+      if (cloud) {
+        const cloudId = resolveTaskId(id);
+        if (opts.needs) {
+          try {
+            const dep = await cloudAddDependency(cloud, cloudId, resolveTaskId(opts.needs));
+            if (globalOpts.json) output(dep, true);
+            else console.log(chalk.green("Dependency added."));
+          } catch (e) { handleError(e); }
+          return;
+        }
+        if (opts.remove) {
+          const removed = await cloudRemoveDependency(cloud, cloudId, resolveTaskId(opts.remove));
+          if (globalOpts.json) output({ removed }, true);
+          else console.log(removed ? chalk.green("Dependency removed.") : chalk.red("Dependency not found."));
+          return;
+        }
+        const edges = await cloudGetDependencies(cloud, cloudId);
+        if (globalOpts.json) { output(edges, true); return; }
+        if (edges.dependencies.length > 0) {
+          console.log(chalk.bold("Depends on:"));
+          for (const dep of edges.dependencies) console.log(`  ${chalk.cyan(dep.depends_on)}`);
+        }
+        if (edges.blocked_by.length > 0) {
+          console.log(chalk.bold("Blocks:"));
+          for (const b of edges.blocked_by) console.log(`  ${chalk.cyan(b.task_id)}`);
+        }
+        if (edges.dependencies.length === 0 && edges.blocked_by.length === 0) {
+          console.log(chalk.dim("No dependencies."));
+        }
+        return;
+      }
+
       const { addDependency, removeDependency, getTaskGraph, getTaskWithRelations } = await import("../../db/tasks.js");
       const resolvedId = resolveTaskId(id);
 

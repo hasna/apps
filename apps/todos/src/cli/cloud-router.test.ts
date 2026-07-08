@@ -9,6 +9,13 @@ import {
   cloudUpdateTask,
   cloudDeleteTask,
   cloudTaskAction,
+  cloudRegisterAgent,
+  cloudLockTask,
+  cloudUnlockTask,
+  cloudAddDependency,
+  cloudRemoveDependency,
+  cloudGetDependencies,
+  cloudRecordVerification,
 } from "./cloud-router.js";
 
 const CLOUD_ENV = {
@@ -144,5 +151,82 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     expect(task.status).toBe("in_progress");
     expect(calls[0]!.method).toBe("POST");
     expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t4/start");
+  });
+});
+
+describe("cloud agent + lock + deps + verification routing (identity/coordination fixes)", () => {
+  test("register_agent -> POST /v1/agents, unwraps { agent }, carries bearer key", async () => {
+    const calls = installFetch(() => ({ status: 201, body: { agent: { id: "ag1", name: "seneca" } } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const agent = await cloudRegisterAgent(client, { name: "seneca", description: "worker" });
+    expect(agent.id).toBe("ag1");
+    expect(calls[0]!.method).toBe("POST");
+    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/agents");
+    expect(calls[0]!.body).toEqual({ name: "seneca", description: "worker" });
+    expect(calls[0]!.headers["authorization"]).toBe("Bearer hasna_todos_test_key");
+  });
+
+  test("register_agent -> a 409 conflict throws (no silent local duplicate)", async () => {
+    installFetch(() => ({ status: 409, body: { error: "Agent name 'seneca' is already active", conflict: true } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudRegisterAgent(client, { name: "seneca" })).rejects.toBeDefined();
+  });
+
+  test("lock -> POST /v1/tasks/:id/lock with agent_id, unwraps { result }", async () => {
+    const calls = installFetch(() => ({ body: { result: { success: true, locked_by: "cli", locked_at: "2026-01-01T00:00:00Z" } } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const result = await cloudLockTask(client, "t1", "cli");
+    expect(result.success).toBe(true);
+    expect(result.locked_by).toBe("cli");
+    expect(calls[0]!.method).toBe("POST");
+    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t1/lock");
+    expect(calls[0]!.body).toEqual({ agent_id: "cli" });
+  });
+
+  test("unlock -> POST /v1/tasks/:id/unlock, returns success boolean", async () => {
+    const calls = installFetch(() => ({ body: { success: true } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudUnlockTask(client, "t1", "cli")).resolves.toBe(true);
+    expect(calls[0]!.method).toBe("POST");
+    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t1/unlock");
+    expect(calls[0]!.body).toEqual({ agent_id: "cli" });
+  });
+
+  test("deps add -> POST /v1/tasks/:id/dependencies, unwraps { dependency }", async () => {
+    const calls = installFetch(() => ({ status: 201, body: { dependency: { task_id: "t1", depends_on: "t2" } } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const dep = await cloudAddDependency(client, "t1", "t2");
+    expect(dep.depends_on).toBe("t2");
+    expect(calls[0]!.method).toBe("POST");
+    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t1/dependencies");
+    expect(calls[0]!.body).toEqual({ depends_on: "t2" });
+  });
+
+  test("deps remove -> DELETE /v1/tasks/:id/dependencies/:dep, returns removed", async () => {
+    const calls = installFetch(() => ({ body: { removed: true } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudRemoveDependency(client, "t1", "t2")).resolves.toBe(true);
+    expect(calls[0]!.method).toBe("DELETE");
+    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t1/dependencies/t2");
+  });
+
+  test("deps list -> GET /v1/tasks/:id/dependencies, defaults arrays", async () => {
+    const calls = installFetch(() => ({ body: { dependencies: [{ task_id: "t1", depends_on: "t2" }], blocked_by: [] } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const edges = await cloudGetDependencies(client, "t1");
+    expect(edges.dependencies).toHaveLength(1);
+    expect(edges.blocked_by).toEqual([]);
+    expect(calls[0]!.method).toBe("GET");
+    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t1/dependencies");
+  });
+
+  test("record-verification -> POST /v1/tasks/:id/verifications, unwraps { verification }", async () => {
+    const calls = installFetch(() => ({ status: 201, body: { verification: { id: "v1", task_id: "t1", command: "bun test", status: "passed" } } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const v = await cloudRecordVerification(client, "t1", { command: "bun test", status: "passed" });
+    expect(v.status).toBe("passed");
+    expect(calls[0]!.method).toBe("POST");
+    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t1/verifications");
+    expect(calls[0]!.body).toEqual({ command: "bun test", status: "passed" });
   });
 });
