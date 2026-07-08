@@ -4,11 +4,8 @@ import { readFileSync } from "node:fs";
 import { registerEventsCommands } from "@hasna/events/commander";
 import { Command } from "commander";
 import { getDb } from "../db/index.ts";
-import {
-  type LogsCloudStore,
-  resolveLogsCloudStore,
-} from "../lib/cloud-store.ts";
 import { runCommand } from "../lib/command-runner.ts";
+import { isApiMode, resolveStore } from "../store/index.ts";
 import {
   rebuildEventStoreIndex,
   repairEventStoreSegments,
@@ -17,21 +14,10 @@ import {
 import {
   type EventCatalogEntry,
   exportEventsToJson,
-  getEvent,
-  searchEvents,
 } from "../lib/events.ts";
 import { detectRuntimeIdentity } from "../lib/identity.ts";
-import { ingestLog } from "../lib/ingest.ts";
-import { createJob, listJobs } from "../lib/jobs.ts";
 import { PACKAGE_VERSION } from "../lib/package-meta.ts";
-import {
-  createPage,
-  createProject,
-  listPages,
-  listProjects,
-  resolveProjectId,
-} from "../lib/projects.ts";
-import { searchLogs, tailLogs } from "../lib/query.ts";
+import { resolveProjectId } from "../lib/projects.ts";
 import { runJob } from "../lib/scheduler.ts";
 import {
   getStorageStatus,
@@ -44,15 +30,13 @@ import {
   type StructuredLogFormat,
   ingestStructuredJsonLines,
 } from "../lib/structured-logs.ts";
-import { summarizeLogs } from "../lib/summarize.ts";
-import { getTestReport, searchTestReports } from "../lib/test-reports.ts";
 import {
   type UniversalEventInput,
   type UniversalEventType,
   ingestUniversalEvent,
   validateUniversalEventInput,
 } from "../lib/universal-ingest.ts";
-import type { LogLevel, LogRow, LogSource } from "../types/index.ts";
+import type { LogLevel, LogSource } from "../types/index.ts";
 
 // ── Color helpers ──────────────────────────────────────────
 const C = {
@@ -93,13 +77,27 @@ function resolveProject(nameOrId: string | undefined): string | undefined {
 }
 
 /**
- * Client-flip (self_hosted): returns a cloud store when HASNA_LOGS_STORAGE_MODE=
- * self_hosted and HASNA_LOGS_API_URL + HASNA_LOGS_API_KEY are set, else null so
- * the CLI uses its local SQLite store. Throws if cloud is requested but the
- * config is incomplete (never silent local drift).
+ * The unified data-plane {@link Store}: LocalStore (SQLite) or ApiStore (HTTP
+ * /v1 + bearer key), resolved from the environment. Every data-plane command
+ * routes through this — no per-command `cloud ? : local` branching, no `getDb()`
+ * in handlers. Fully reversible: unset HASNA_LOGS_API_URL/KEY -> local.
  */
-function logsCloud(): LogsCloudStore | null {
-  return resolveLogsCloudStore();
+const store = resolveStore();
+
+/**
+ * Guard for local-only infrastructure/compute commands (db migrate, storage
+ * sync, event-store repair, headless scans, subprocess capture, file follow).
+ * These operate on the on-box SQLite/filesystem and have no cloud data model;
+ * refuse loudly in api mode instead of silently touching a stale local db.
+ */
+function requireLocalMode(command: string): void {
+  if (isApiMode()) {
+    throw new Error(
+      `'logs ${command}' is a local-only operation and cannot run in ` +
+        `self_hosted/cloud mode. Unset HASNA_LOGS_API_URL/HASNA_LOGS_API_KEY ` +
+        `to run it against the local store.`,
+    );
+  }
 }
 
 function resolveExistingProjectId(
@@ -224,25 +222,16 @@ program
   .option("--limit <n>", "Max results", "100")
   .option("--format <fmt>", "Output format: table|json|compact", "table")
   .action(async (opts) => {
-    const cloud = logsCloud();
-    const rows = cloud
-      ? await cloud.list({
-          project_id: opts.project,
-          level: opts.level ? (opts.level.split(",") as LogLevel[]) : undefined,
-          service: opts.service,
-          text: opts.text,
-          limit: Number(opts.limit),
-        })
-      : searchLogs(getDb(), {
-          project_id: resolveProject(opts.project),
-          page_id: opts.page,
-          level: opts.level ? (opts.level.split(",") as LogLevel[]) : undefined,
-          service: opts.service,
-          since: parseRelativeTime(opts.since),
-          until: parseRelativeTime(opts.until),
-          text: opts.text,
-          limit: Number(opts.limit),
-        });
+    const rows = await store.listLogs({
+      project_id: await store.resolveProjectId(opts.project),
+      page_id: opts.page,
+      level: opts.level ? (opts.level.split(",") as LogLevel[]) : undefined,
+      service: opts.service,
+      since: parseRelativeTime(opts.since),
+      until: parseRelativeTime(opts.until),
+      text: opts.text,
+      limit: Number(opts.limit),
+    });
     if (opts.format === "json") {
       console.log(JSON.stringify(rows, null, 2));
       return;
@@ -270,10 +259,10 @@ program
   .option("--project <name|id>", "Project name or ID")
   .option("--n <count>", "Number of logs", "50")
   .action(async (opts) => {
-    const cloud = logsCloud();
-    const rows = cloud
-      ? await cloud.list({ project_id: opts.project, limit: Number(opts.n) })
-      : tailLogs(getDb(), resolveProject(opts.project), Number(opts.n));
+    const rows = await store.tailLogs(
+      await store.resolveProjectId(opts.project),
+      Number(opts.n),
+    );
     for (const r of rows)
       console.log(colorRow(r.timestamp, r.level, r.service ?? "-", r.message));
   });
@@ -286,31 +275,11 @@ program
   .option("--since <time>", "Relative time (1h, 24h, 7d)", "24h")
   .option("--until <time>", "Upper bound time")
   .action(async (opts) => {
-    const cloud = logsCloud();
-    let summary: { level: string; service: string | null; count: number; latest: string }[];
-    if (cloud) {
-      const rows = await cloud.list({ project_id: opts.project, limit: 100000 });
-      const agg = new Map<string, { level: string; service: string | null; count: number; latest: string }>();
-      for (const r of rows) {
-        if (r.level !== "warn" && r.level !== "error" && r.level !== "fatal") continue;
-        const key = `${r.level} ${r.service ?? "-"}`;
-        const cur = agg.get(key);
-        if (cur) {
-          cur.count += 1;
-          if (r.timestamp > cur.latest) cur.latest = r.timestamp;
-        } else {
-          agg.set(key, { level: r.level, service: r.service, count: 1, latest: r.timestamp });
-        }
-      }
-      summary = [...agg.values()].sort((a, b) => b.count - a.count);
-    } else {
-      summary = summarizeLogs(
-        getDb(),
-        resolveProject(opts.project),
-        parseRelativeTime(opts.since),
-        parseRelativeTime(opts.until),
-      );
-    }
+    const summary = await store.summarize(
+      await store.resolveProjectId(opts.project),
+      parseRelativeTime(opts.since),
+      parseRelativeTime(opts.until),
+    );
     if (!summary.length) {
       console.log("No errors/warnings in this window.");
       return;
@@ -332,26 +301,13 @@ program
   .option("--project <name|id>", "Project name or ID")
   .option("--trace <id>", "Trace ID")
   .action(async (message, opts) => {
-    const cloud = logsCloud();
-    if (cloud) {
-      const row = await cloud.create({
-        timestamp: opts.timestamp,
-        level: opts.level as LogLevel,
-        message,
-        service: opts.service,
-        project_id: opts.project,
-        trace_id: opts.trace,
-      });
-      console.log(`Logged: ${row.id}`);
-      return;
-    }
-    const row = ingestLog(getDb(), {
+    const row = await store.ingestLog({
       id: opts.id,
       timestamp: opts.timestamp,
       level: opts.level as LogLevel,
       message,
       service: opts.service,
-      project_id: resolveProject(opts.project),
+      project_id: await store.resolveProjectId(opts.project),
       trace_id: opts.trace,
     });
     console.log(`Logged: ${row.id}`);
@@ -363,14 +319,7 @@ program
   .description("Fetch one log entry by id")
   .option("--format <fmt>", "Output format: json|table", "json")
   .action(async (id, opts) => {
-    const cloud = logsCloud();
-    const row = cloud
-      ? await cloud.get(id)
-      : ((getDb()
-          .prepare(
-            "SELECT id, timestamp, project_id, page_id, level, source, service, message, trace_id, session_id, agent, url, stack_trace, metadata FROM logs WHERE id = ?",
-          )
-          .get(id) as LogRow | null) ?? null);
+    const row = await store.getLog(id);
     if (!row) {
       console.error(`Log not found: ${id}`);
       process.exitCode = 1;
@@ -389,19 +338,8 @@ program
   .alias("rm")
   .description("Delete one log entry by id")
   .action(async (id) => {
-    const cloud = logsCloud();
-    if (cloud) {
-      const ok = await cloud.delete(id);
-      if (!ok) {
-        console.error(`Log not found: ${id}`);
-        process.exitCode = 1;
-        return;
-      }
-      console.log(`Deleted: ${id}`);
-      return;
-    }
-    const res = getDb().run("DELETE FROM logs WHERE id = ?", [id]);
-    if (!res.changes) {
+    const ok = await store.deleteLog(id);
+    if (!ok) {
       console.error(`Log not found: ${id}`);
       process.exitCode = 1;
       return;
@@ -442,6 +380,7 @@ program
   )
   .option("--json", "Print import summary as JSON")
   .action(async (file, opts) => {
+    requireLocalMode("import-jsonl");
     try {
       const metadata = parseJsonObjectOption(opts.metadata, "--metadata");
       const ingestOptions = {
@@ -520,6 +459,7 @@ program
   .option("--no-tee", "Do not mirror child stdout/stderr to this terminal")
   .allowUnknownOption(true)
   .action(async (cmd: string[], opts) => {
+    requireLocalMode("run");
     const runAbort = createRunAbortController();
     let result: Awaited<ReturnType<typeof runCommand>>;
     try {
@@ -720,6 +660,7 @@ doctorCmd
   )
   .option("--json", "Output as JSON")
   .action((opts) => {
+    requireLocalMode("db doctor rebuild-index");
     const db = getDb();
     const rebuild = rebuildEventStoreIndex(db);
     const verification = verifyEventStore(db);
@@ -751,6 +692,7 @@ doctorCmd
   )
   .option("--json", "Output as JSON")
   .action((opts) => {
+    requireLocalMode("db doctor repair-segments");
     const db = getDb();
     const result = repairEventStoreSegments(db, { apply: opts.apply === true });
     if (opts.json) {
@@ -831,6 +773,7 @@ eventsCmd
   .option("--body <json>", "Event body JSON object")
   .option("--attributes <json>", "Event attributes JSON object")
   .action((opts) => {
+    requireLocalMode("events push");
     try {
       const db = getDb();
       const projectId = resolveProject(opts.project);
@@ -916,12 +859,12 @@ eventsCmd
   .option("--include-raw", "Include raw segment envelope")
   .option("--limit <n>", "Max results", "100")
   .option("--format <fmt>", "Output format: table|json", "table")
-  .action((opts) => {
-    const rows = searchEvents(getDb(), {
+  .action(async (opts) => {
+    const rows = await store.listEvents({
       event_type: opts.type,
       source: opts.source,
       severity: opts.severity,
-      project_id: resolveProject(opts.project),
+      project_id: await store.resolveProjectId(opts.project),
       machine_id: opts.machine,
       repo_id: opts.repo,
       app_id: opts.app,
@@ -952,8 +895,8 @@ eventsCmd
   .command("get <event_id>")
   .description("Read one event record and reconstruct its raw segment envelope")
   .option("--no-raw", "Do not include the raw envelope")
-  .action((eventId, opts) => {
-    const event = getEvent(getDb(), eventId, opts.raw !== false);
+  .action(async (eventId, opts) => {
+    const event = await store.getEvent(eventId, opts.raw !== false);
     if (!event) {
       console.error(`Event not found: ${eventId}`);
       process.exitCode = 1;
@@ -1042,11 +985,11 @@ testReportsCmd
   .option("--include-cases", "Include bounded case rows")
   .option("--limit <n>", "Max results", "100")
   .option("--format <fmt>", "Output format: table|json", "table")
-  .action((opts) => {
-    const rows = searchTestReports(getDb(), {
+  .action(async (opts) => {
+    const rows = await store.listTestReports({
       report_id: opts.report,
       event_id: opts.event,
-      project_id: resolveProject(opts.project),
+      project_id: await store.resolveProjectId(opts.project),
       machine_id: opts.machine,
       repo_id: opts.repo,
       app_id: opts.app,
@@ -1085,8 +1028,8 @@ testReportsCmd
   .command("get <report_id>")
   .description("Read one projected test report and its bounded case rows")
   .option("--no-cases", "Do not include bounded case rows")
-  .action((reportId, opts) => {
-    const report = getTestReport(getDb(), reportId, opts.cases !== false);
+  .action(async (reportId, opts) => {
+    const report = await store.getTestReport(reportId, opts.cases !== false);
     if (!report) {
       console.error(`Test report not found: ${reportId}`);
       process.exitCode = 1;
@@ -1103,12 +1046,12 @@ projectCmd
   .option("--name <name>", "Project name")
   .option("--repo <url>", "GitHub repo")
   .option("--url <url>", "Base URL")
-  .action((opts) => {
+  .action(async (opts) => {
     if (!opts.name) {
       console.error("--name is required");
       process.exit(1);
     }
-    const p = createProject(getDb(), {
+    const p = await store.createProject({
       name: opts.name,
       github_repo: opts.repo,
       base_url: opts.url,
@@ -1116,8 +1059,8 @@ projectCmd
     console.log(`Created project: ${p.id} — ${p.name}`);
   });
 
-projectCmd.command("list").action(() => {
-  const projects = listProjects(getDb());
+projectCmd.command("list").action(async () => {
+  const projects = await store.listProjects();
   for (const p of projects)
     console.log(
       `${p.id}  ${p.name}  ${p.base_url ?? ""}  ${p.github_repo ?? ""}`,
@@ -1132,17 +1075,17 @@ pageCmd
   .option("--project <name|id>", "Project name or ID")
   .option("--url <url>")
   .option("--name <name>")
-  .action((opts) => {
+  .action(async (opts) => {
     if (!opts.project || !opts.url) {
       console.error("--project and --url required");
       process.exit(1);
     }
-    const projectId = resolveProject(opts.project);
+    const projectId = await store.resolveProjectId(opts.project);
     if (!projectId) {
       console.error("Project not found");
       process.exit(1);
     }
-    const p = createPage(getDb(), {
+    const p = await store.createPage({
       project_id: projectId,
       url: opts.url,
       name: opts.name,
@@ -1153,17 +1096,17 @@ pageCmd
 pageCmd
   .command("list")
   .option("--project <name|id>", "Project name or ID")
-  .action((opts) => {
+  .action(async (opts) => {
     if (!opts.project) {
       console.error("--project required");
       process.exit(1);
     }
-    const projectId = resolveProject(opts.project);
+    const projectId = await store.resolveProjectId(opts.project);
     if (!projectId) {
       console.error("Project not found");
       process.exit(1);
     }
-    const pages = listPages(getDb(), projectId);
+    const pages = await store.listPages(projectId);
     for (const p of pages)
       console.log(`${p.id}  ${p.url}  last=${p.last_scanned_at ?? "never"}`);
   });
@@ -1175,17 +1118,17 @@ jobCmd
   .command("create")
   .option("--project <name|id>", "Project name or ID")
   .option("--schedule <cron>", "Cron expression", "*/30 * * * *")
-  .action((opts) => {
+  .action(async (opts) => {
     if (!opts.project) {
       console.error("--project required");
       process.exit(1);
     }
-    const projectId = resolveProject(opts.project);
+    const projectId = await store.resolveProjectId(opts.project);
     if (!projectId) {
       console.error("Project not found");
       process.exit(1);
     }
-    const j = createJob(getDb(), {
+    const j = await store.createJob({
       project_id: projectId,
       schedule: opts.schedule,
     });
@@ -1195,8 +1138,8 @@ jobCmd
 jobCmd
   .command("list")
   .option("--project <name|id>", "Project name or ID")
-  .action((opts) => {
-    const jobs = listJobs(getDb(), resolveProject(opts.project));
+  .action(async (opts) => {
+    const jobs = await store.listJobs(await store.resolveProjectId(opts.project));
     for (const j of jobs)
       console.log(
         `${j.id}  ${j.schedule}  enabled=${j.enabled}  last=${j.last_run_at ?? "never"}`,
@@ -1210,6 +1153,7 @@ program
   .option("--job <id>")
   .option("--project <name|id>", "Project name or ID")
   .action(async (opts) => {
+    requireLocalMode("scan");
     if (!opts.job) {
       console.error("--job required");
       process.exit(1);
@@ -1342,6 +1286,7 @@ program
   )
   .option("--since <time>", "Start from this time (default: now)")
   .action(async (opts) => {
+    requireLocalMode("watch");
     const db = getDb();
     const { searchLogs } = await import("../lib/query.ts");
 
@@ -1448,48 +1393,14 @@ program
   .option("--until <time>", "Until")
   .option("--group-by <field>", "Breakdown: level | service")
   .action(async (opts) => {
-    const cloud = logsCloud();
-    let result: {
-      total: number;
-      errors: number;
-      warns: number;
-      fatals: number;
-      by_level: Record<string, number>;
-      by_service?: Record<string, number>;
-    };
-    if (cloud) {
-      const rows = await cloud.list({
-        project_id: opts.project,
-        service: opts.service,
-        level: opts.level ? (opts.level as LogLevel) : undefined,
-        limit: 100000,
-      });
-      const by_level: Record<string, number> = {};
-      const by_service: Record<string, number> = {};
-      for (const r of rows) {
-        by_level[r.level] = (by_level[r.level] ?? 0) + 1;
-        const svc = r.service ?? "-";
-        by_service[svc] = (by_service[svc] ?? 0) + 1;
-      }
-      result = {
-        total: rows.length,
-        errors: by_level.error ?? 0,
-        warns: by_level.warn ?? 0,
-        fatals: by_level.fatal ?? 0,
-        by_level,
-        ...(opts.groupBy === "service" ? { by_service } : {}),
-      };
-    } else {
-      const { countLogs } = await import("../lib/count.ts");
-      result = countLogs(getDb(), {
-        project_id: resolveProject(opts.project),
-        service: opts.service,
-        level: opts.level,
-        since: opts.since,
-        until: opts.until,
-        group_by: opts.groupBy as "level" | "service" | undefined,
-      });
-    }
+    const result = await store.countLogs({
+      project_id: await store.resolveProjectId(opts.project),
+      service: opts.service,
+      level: opts.level,
+      since: opts.since,
+      until: opts.until,
+      group_by: opts.groupBy as "level" | "service" | undefined,
+    });
     console.log(
       `Total: ${result.total}  ${C.red}Errors: ${result.errors}${C.reset}  ${C.yellow}Warns: ${result.warns}${C.reset}  Fatals: ${result.fatals}`,
     );
@@ -1518,69 +1429,34 @@ program
   .option("--output <file>", "Output file (default: stdout)")
   .option("--limit <n>", "Max rows", "100000")
   .action(async (opts) => {
-    const cloud = logsCloud();
-    if (cloud) {
-      const { writeFileSync } = await import("node:fs");
-      const rows = await cloud.list({
-        project_id: opts.project,
-        level: opts.level ? (opts.level as LogLevel) : undefined,
-        service: opts.service,
-        limit: Number(opts.limit),
-      });
-      let payload: string;
-      if (opts.format === "csv") {
-        const cols = [
-          "id",
-          "timestamp",
-          "level",
-          "service",
-          "message",
-          "trace_id",
-        ];
-        const esc = (v: unknown) =>
-          `"${String(v ?? "").replace(/"/g, '""')}"`;
-        payload = `${cols.join(",")}\n${rows
-          .map((r) => cols.map((c) => esc((r as unknown as Record<string, unknown>)[c])).join(","))
-          .join("\n")}\n`;
-      } else {
-        payload = `${JSON.stringify(rows, null, 2)}\n`;
-      }
-      if (opts.output) {
-        writeFileSync(opts.output, payload);
-        console.error(`Exported ${rows.length} log(s) to ${opts.output}`);
-      } else {
-        process.stdout.write(payload);
-        process.stderr.write(`\nExported ${rows.length} log(s)\n`);
-      }
-      return;
-    }
-    const { exportToCsv, exportToJson } = await import("../lib/export.ts");
-    const { createWriteStream } = await import("node:fs");
-    const db = getDb();
-    const options = {
-      project_id: resolveProject(opts.project),
+    const { writeFileSync } = await import("node:fs");
+    const rows = await store.listLogs({
+      project_id: await store.resolveProjectId(opts.project),
       since: parseRelativeTime(opts.since),
-      level: opts.level,
+      level: opts.level ? (opts.level as LogLevel) : undefined,
       service: opts.service,
       limit: Number(opts.limit),
-    };
-    let count = 0;
-    if (opts.output) {
-      const stream = createWriteStream(opts.output);
-      const write = (s: string) => stream.write(s);
-      count =
-        opts.format === "csv"
-          ? exportToCsv(db, options, write)
-          : exportToJson(db, options, write);
-      stream.end();
-      console.error(`Exported ${count} log(s) to ${opts.output}`);
+    });
+    let payload: string;
+    if (opts.format === "csv") {
+      const cols = ["id", "timestamp", "level", "service", "message", "trace_id"];
+      const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+      payload = `${cols.join(",")}\n${rows
+        .map((r) =>
+          cols
+            .map((c) => esc((r as unknown as Record<string, unknown>)[c]))
+            .join(","),
+        )
+        .join("\n")}\n`;
     } else {
-      const write = (s: string) => process.stdout.write(s);
-      count =
-        opts.format === "csv"
-          ? exportToCsv(db, options, write)
-          : exportToJson(db, options, write);
-      process.stderr.write(`\nExported ${count} log(s)\n`);
+      payload = `${JSON.stringify(rows, null, 2)}\n`;
+    }
+    if (opts.output) {
+      writeFileSync(opts.output, payload);
+      console.error(`Exported ${rows.length} log(s) to ${opts.output}`);
+    } else {
+      process.stdout.write(payload);
+      process.stderr.write(`\nExported ${rows.length} log(s)\n`);
     }
   });
 
@@ -1592,98 +1468,36 @@ program
   )
   .option("--project <name|id>", "Scope to a project")
   .action(async (opts) => {
-    const cloud = logsCloud();
-    if (cloud) {
-      const rows = await cloud.list({ project_id: opts.project, limit: 100000 });
-      const total = rows.length;
-      const byLevel: Record<string, number> = {};
-      const byService: Record<string, number> = {};
-      let oldest: string | null = null;
-      let newest: string | null = null;
-      for (const r of rows) {
-        byLevel[r.level] = (byLevel[r.level] ?? 0) + 1;
-        const svc = r.service ?? "-";
-        byService[svc] = (byService[svc] ?? 0) + 1;
-        if (r.timestamp) {
-          if (oldest === null || r.timestamp < oldest) oldest = r.timestamp;
-          if (newest === null || r.timestamp > newest) newest = r.timestamp;
+    const projectId = await store.resolveProjectId(opts.project);
+    const rows = await store.listLogs({ project_id: projectId, limit: 100000 });
+    const total = rows.length;
+    const byLevel: Record<string, number> = {};
+    const byService: Record<string, number> = {};
+    const byDay: Record<string, number> = {};
+    const weekAgo = Date.now() - 7 * 24 * 3600 * 1000;
+    let oldest: string | null = null;
+    let newest: string | null = null;
+    for (const r of rows) {
+      byLevel[r.level] = (byLevel[r.level] ?? 0) + 1;
+      const svc = r.service ?? "-";
+      byService[svc] = (byService[svc] ?? 0) + 1;
+      if (r.timestamp) {
+        if (oldest === null || r.timestamp < oldest) oldest = r.timestamp;
+        if (newest === null || r.timestamp > newest) newest = r.timestamp;
+        const t = new Date(r.timestamp).getTime();
+        if (Number.isFinite(t) && t >= weekAgo) {
+          const day = r.timestamp.slice(0, 10);
+          byDay[day] = (byDay[day] ?? 0) + 1;
         }
       }
-      const errors = byLevel.error ?? 0;
-      const fatals = byLevel.fatal ?? 0;
-      const errorRate = total > 0 ? (((errors + fatals) / total) * 100).toFixed(2) : "0.00";
-      console.log(
-        `\n${C.bold}Log Volume Stats${C.reset}${opts.project ? ` [${opts.project}]` : ""} ${C.dim}(cloud)${C.reset}`,
-      );
-      console.log(`  Total:      ${total.toLocaleString()}`);
-      console.log(`  Oldest:     ${oldest?.slice(0, 19) ?? "-"}`);
-      console.log(`  Newest:     ${newest?.slice(0, 19) ?? "-"}`);
-      console.log(`  Error rate: ${errorRate}%  (${errors} errors, ${fatals} fatals)`);
-      const levels = Object.entries(byLevel).sort((a, b) => b[1] - a[1]);
-      if (levels.length) {
-        console.log(`\n${C.bold}By Level:${C.reset}`);
-        for (const [lvl, c] of levels) console.log(`  ${colorLevel(lvl)}  ${c.toLocaleString()}`);
-      }
-      const services = Object.entries(byService).sort((a, b) => b[1] - a[1]).slice(0, 5);
-      if (services.length) {
-        console.log(`\n${C.bold}Top Services:${C.reset}`);
-        for (const [svc, c] of services)
-          console.log(`  ${C.cyan}${pad(svc, 20)}${C.reset}  ${c.toLocaleString()}`);
-      }
-      console.log("");
-      return;
     }
-    const db = getDb();
-    const projectId = resolveProject(opts.project);
-    const pFilter = projectId
-      ? `WHERE project_id = '${projectId.replace(/'/g, "''")}'`
-      : "";
-    const pAnd = projectId
-      ? `AND project_id = '${projectId.replace(/'/g, "''")}'`
-      : "";
-
-    const total = (
-      db.query(`SELECT COUNT(*) as c FROM logs ${pFilter}`).get() as {
-        c: number;
-      }
-    ).c;
-    const oldest = (
-      db.query(`SELECT MIN(timestamp) as t FROM logs ${pFilter}`).get() as {
-        t: string | null;
-      }
-    ).t;
-    const newest = (
-      db.query(`SELECT MAX(timestamp) as t FROM logs ${pFilter}`).get() as {
-        t: string | null;
-      }
-    ).t;
-
-    const byLevel = db
-      .query(
-        `SELECT level, COUNT(*) as c FROM logs ${pFilter} GROUP BY level ORDER BY c DESC`,
-      )
-      .all() as { level: string; c: number }[];
-
-    const topServices = db
-      .query(
-        `SELECT COALESCE(service, '-') as service, COUNT(*) as c FROM logs ${pFilter} GROUP BY service ORDER BY c DESC LIMIT 5`,
-      )
-      .all() as { service: string; c: number }[];
-
-    // Last 7 days histogram
-    const days = db
-      .query(
-        `SELECT strftime('%Y-%m-%d', timestamp) as day, COUNT(*) as c FROM logs WHERE timestamp >= datetime('now', '-7 days') ${pAnd} GROUP BY day ORDER BY day`,
-      )
-      .all() as { day: string; c: number }[];
-
-    const errors = byLevel.find((r) => r.level === "error")?.c ?? 0;
-    const fatals = byLevel.find((r) => r.level === "fatal")?.c ?? 0;
+    const errors = byLevel.error ?? 0;
+    const fatals = byLevel.fatal ?? 0;
     const errorRate =
       total > 0 ? (((errors + fatals) / total) * 100).toFixed(2) : "0.00";
 
     console.log(
-      `\n${C.bold}Log Volume Stats${C.reset}${projectId ? ` [${opts.project}]` : ""}`,
+      `\n${C.bold}Log Volume Stats${C.reset}${opts.project ? ` [${opts.project}]` : ""} ${C.dim}(${store.mode})${C.reset}`,
     );
     console.log(`  Total:      ${total.toLocaleString()}`);
     console.log(`  Oldest:     ${oldest?.slice(0, 19) ?? "-"}`);
@@ -1692,28 +1506,29 @@ program
       `  Error rate: ${errorRate}%  (${errors} errors, ${fatals} fatals)`,
     );
 
-    if (byLevel.length) {
+    const levels = Object.entries(byLevel).sort((a, b) => b[1] - a[1]);
+    if (levels.length) {
       console.log(`\n${C.bold}By Level:${C.reset}`);
-      for (const r of byLevel)
-        console.log(`  ${colorLevel(r.level)}  ${r.c.toLocaleString()}`);
+      for (const [lvl, c] of levels)
+        console.log(`  ${colorLevel(lvl)}  ${c.toLocaleString()}`);
     }
 
-    if (topServices.length) {
+    const services = Object.entries(byService)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5);
+    if (services.length) {
       console.log(`\n${C.bold}Top Services:${C.reset}`);
-      for (const r of topServices)
-        console.log(
-          `  ${C.cyan}${pad(r.service, 20)}${C.reset}  ${r.c.toLocaleString()}`,
-        );
+      for (const [svc, c] of services)
+        console.log(`  ${C.cyan}${pad(svc, 20)}${C.reset}  ${c.toLocaleString()}`);
     }
 
+    const days = Object.entries(byDay).sort((a, b) => a[0].localeCompare(b[0]));
     if (days.length) {
-      const maxC = Math.max(...days.map((d) => d.c));
+      const maxC = Math.max(...days.map(([, c]) => c));
       console.log(`\n${C.bold}Last 7 Days:${C.reset}`);
-      for (const d of days) {
-        const bar = "█".repeat(Math.max(1, Math.round((d.c / maxC) * 20)));
-        console.log(
-          `  ${d.day}  ${C.cyan}${bar}${C.reset}  ${d.c.toLocaleString()}`,
-        );
+      for (const [day, c] of days) {
+        const bar = "█".repeat(Math.max(1, Math.round((c / maxC) * 20)));
+        console.log(`  ${day}  ${C.cyan}${bar}${C.reset}  ${c.toLocaleString()}`);
       }
     }
     console.log("");
@@ -1724,8 +1539,7 @@ program
   .command("health")
   .description("Show server health and DB stats")
   .action(async () => {
-    const { getHealth } = await import("../lib/health.ts");
-    const h = getHealth(getDb());
+    const h = await store.health();
     console.log(JSON.stringify(h, null, 2));
   });
 
@@ -2263,4 +2077,13 @@ if (!program.commands.some((command) => command.name() === "events")) {
 // program.parse() the bundled binary can exit before an awaited cloud call and
 // its console output complete, silently no-opping cloud writes. parseAsync
 // awaits the action to completion for both sync and async commands.
-await program.parseAsync();
+//
+// A single top-level boundary turns thrown errors (local-only guards, cloud
+// HTTP failures, validation) into a clean one-line message + non-zero exit
+// instead of an unhandled-rejection stack trace.
+try {
+  await program.parseAsync();
+} catch (err) {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+}
