@@ -3,13 +3,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { makeCapabilityGuard } from "@hasna/mcp-harness";
-import { getCurrentMachine, listMachines } from "../db/machines.js";
-import { createSource, listSources, getSource, deleteSource } from "../db/sources.js";
+import { getCurrentMachine } from "../db/machines.js";
+import { createSource, listSources, getSource } from "../db/sources.js";
 import { listFiles, getFile, getFileByPath, annotateFile } from "../db/files.js";
 import { searchFiles } from "../db/search.js";
-import { tagFile, untagFile, listTags, deleteTag } from "../db/tags.js";
-import { createCollection, updateCollection, listCollections, getCollection, deleteCollection, addToCollection, removeFromCollection, autoPopulateCollection } from "../db/collections.js";
-import { createProject, updateProject, listProjects, getProject, deleteProject, addToProject, removeFromProject } from "../db/projects.js";
+import { tagFile, deleteTag } from "../db/tags.js";
+import { createCollection, updateCollection, getCollection, deleteCollection, autoPopulateCollection } from "../db/collections.js";
+import { createProject, updateProject, getProject, deleteProject } from "../db/projects.js";
 import { indexLocalSource } from "../lib/indexer.js";
 import { listGoogleDriveItems, listGoogleDriveProfiles, preflightGoogleDriveSource, syncGoogleDriveSource } from "../lib/google-drive.js";
 import { indexS3Source, downloadFromS3, uploadToS3, getPresignedUrl } from "../lib/s3.js";
@@ -22,7 +22,7 @@ import { resolveKnowledgeSourceRef } from "../lib/knowledge-resolver.js";
 import { buildFilesContextPack, buildFilesSearchPack } from "../lib/context-pack.js";
 import { acknowledgeKnowledgeSourceOutbox, pollKnowledgeSourceOutbox } from "../db/knowledge-outbox.js";
 import { parseOpenFilesSourceRef } from "../lib/source-ref.js";
-import { filesCloudStorage } from "../lib/cloud-storage.js";
+import { store } from "../store/index.js";
 import { registerEvidenceTools } from "./evidence-tools.js";
 import { registerOrganizationTools } from "./organization-tools.js";
 import { registerStorageTools } from "./storage-tools.js";
@@ -33,7 +33,7 @@ import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { createRequire } from "module";
 import { buildOpenFilesFileRef } from "../lib/source-ref.js";
-import type { FilesContextPack, FileWithTags, GoogleDriveConfig, KnowledgeSourceManifestFormat, KnowledgeSourceResolveMode, S3Config, Source } from "../types/index.js";
+import type { FilesContextPack, GoogleDriveConfig, KnowledgeSourceManifestFormat, KnowledgeSourceResolveMode, S3Config } from "../types/index.js";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string };
@@ -259,10 +259,7 @@ registerStorageTools(registerTool);
 registerTool("list_sources", "List all configured file sources", {
   machine_id: z.string().optional().describe("Filter by machine ID"),
 }, async ({ machine_id }) => {
-  const cloud = filesCloudStorage();
-  const sources = cloud.active
-    ? (await cloud.client.list<Source>("sources")).items
-    : listSources(machine_id);
+  const sources = await store().listSources(machine_id);
   return { content: [{ type: "text", text: JSON.stringify(sources, null, 2) }] };
 });
 
@@ -279,7 +276,6 @@ registerTool("add_source", "Add a local folder or S3 bucket as an indexed source
     forcePathStyle: z.boolean().optional(),
   }).strict().optional().describe("S3 named profile/endpoint settings only. Static credentials are rejected; use env/default chain or an AWS profile."),
 }, async ({ type, path, bucket, prefix, region, name, config }) => {
-  const cloud = filesCloudStorage();
   const input = {
     type,
     path,
@@ -289,9 +285,9 @@ registerTool("add_source", "Add a local folder or S3 bucket as an indexed source
     name: name ?? (type === "s3" ? bucket! : path!),
     config: (config as S3Config) ?? {},
   };
-  const source = cloud.active
-    ? await cloud.client.create<Source>("sources", { ...input, machine_id: undefined })
-    : createSource({ ...input, machine_id: getCurrentMachine().id });
+  // The Store handles the transport difference (the ApiStore drops the local
+  // machine id so the cloud assigns the owning machine).
+  const source = await store().createSource({ ...input, machine_id: getCurrentMachine().id });
   return { content: [{ type: "text", text: JSON.stringify(source, null, 2) }] };
 });
 
@@ -381,12 +377,7 @@ registerTool("sync_google_drive", "Sync one Google Drive source, or all enabled 
 registerTool("remove_source", "Remove a source and all its indexed file records", {
   id: z.string().describe("Source ID"),
 }, async ({ id }) => {
-  const cloud = filesCloudStorage();
-  if (cloud.active) {
-    await cloud.client.delete("sources", id);
-    return { content: [{ type: "text", text: `Source ${id} removed (cloud)` }] };
-  }
-  const ok = deleteSource(id);
+  const ok = await store().deleteSource(id);
   return { content: [{ type: "text", text: ok ? `Source ${id} removed` : `Source not found: ${id}` }] };
 });
 
@@ -437,28 +428,14 @@ registerTool("list_files", "List indexed files with optional filters. If agent_i
   sync_status: z.enum(["local_only", "synced", "conflict"]).optional().describe("Filter by sync status"),
   agent_id: z.string().optional().describe("Agent ID — auto-applies focused project filter if set"),
 }, async (opts) => {
-  const cloud = filesCloudStorage();
-  if (cloud.active) {
-    // The cloud /v1/files endpoint filters server-side on these params; richer
-    // local-only filters (tag/collection/project/date/size/sort) are not part of
-    // the API contract and are intentionally omitted, mirroring the CLI.
-    const files = (await cloud.client.list<FileWithTags>("files", {
-      query: {
-        source_id: opts.source_id,
-        machine_id: opts.machine_id,
-        ext: opts.ext,
-        limit: opts.limit,
-        offset: opts.offset,
-      },
-    })).items;
-    return { content: [{ type: "text", text: JSON.stringify(files, null, 2) }] };
-  }
-  // Workspace scoping: auto-apply agent's focused project
+  // Workspace scoping: auto-apply agent's focused project (a local-store
+  // concern; the ApiStore honors only the source_id/machine_id/ext/limit/offset
+  // subset the cloud /v1/files endpoint supports).
   if (opts.agent_id && !opts.project_id) {
     const agent = getAgent(opts.agent_id);
     if (agent?.project_id) opts.project_id = agent.project_id;
   }
-  const files = listFiles(opts);
+  const files = await store().listFiles(opts);
   return { content: [{ type: "text", text: JSON.stringify(files, null, 2) }] };
 });
 
@@ -600,10 +577,7 @@ registerTool("upload_file", "Upload a local file to an S3 source", {
 // ─── Tags ─────────────────────────────────────────────────────────────────────
 
 registerTool("list_tags", "List all tags", {}, async () => {
-  const cloud = filesCloudStorage();
-  const tags = cloud.active
-    ? (await cloud.client.list<{ id: string; name: string; color: string }>("tags")).items
-    : listTags();
+  const tags = await store().listTags();
   return { content: [{ type: "text", text: JSON.stringify(tags, null, 2) }] };
 });
 
@@ -612,7 +586,8 @@ registerTool("tag_file", "Add one or more tags to a file", {
   tags: z.array(z.string()).describe("Tag names to add"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ file_id, tags, agent_id }) => {
-  for (const tag of tags) tagFile(file_id, tag);
+  const files = store();
+  for (const tag of tags) await files.tagFile(file_id, tag);
   if (agent_id) logActivity({ agent_id, action: "tag", file_id, metadata: { tags } });
   return { content: [{ type: "text", text: `Tagged file ${file_id} with: ${tags.join(", ")}` }] };
 });
@@ -622,7 +597,8 @@ registerTool("untag_file", "Remove tags from a file", {
   tags: z.array(z.string()),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ file_id, tags, agent_id }) => {
-  for (const tag of tags) untagFile(file_id, tag);
+  const files = store();
+  for (const tag of tags) await files.untagFile(file_id, tag);
   if (agent_id) logActivity({ agent_id, action: "untag", file_id, metadata: { tags } });
   return { content: [{ type: "text", text: "Tags removed" }] };
 });
@@ -639,10 +615,7 @@ registerTool("delete_tag", "Delete a tag entirely (removes from all files)", {
 registerTool("list_collections", "List all collections", {
   parent_id: z.string().optional().describe("Filter by parent collection ID"),
 }, async ({ parent_id }) => {
-  const cloud = filesCloudStorage();
-  const collections = cloud.active
-    ? (await cloud.client.list<{ id: string; name: string; description?: string }>("collections")).items
-    : listCollections(parent_id);
+  const collections = await store().listCollections(parent_id);
   return { content: [{ type: "text", text: JSON.stringify(collections, null, 2) }] };
 });
 
@@ -657,10 +630,7 @@ registerTool("create_collection", "Create a new collection (supports nesting and
     source_id: z.string().optional().describe("Limit to a specific source"),
   }).optional().describe("Smart rules to auto-populate the collection"),
 }, async ({ name, description, parent_id, auto_rules }) => {
-  const cloud = filesCloudStorage();
-  const c = cloud.active
-    ? await cloud.client.create<{ id: string }>("collections", { name, description, parent_id, auto_rules })
-    : createCollection(name, description, { parent_id, auto_rules });
+  const c = await store().createCollection(name, description, { parent_id, auto_rules });
   return { content: [{ type: "text", text: JSON.stringify(c, null, 2) }] };
 });
 
@@ -700,7 +670,7 @@ registerTool("add_to_collection", "Add a file to a collection", {
   collection_id: z.string(),
   file_id: z.string(),
 }, async ({ collection_id, file_id }) => {
-  addToCollection(collection_id, file_id);
+  await store().addToCollection(collection_id, file_id);
   return { content: [{ type: "text", text: "Added to collection" }] };
 });
 
@@ -708,7 +678,7 @@ registerTool("remove_from_collection", "Remove a file from a collection", {
   collection_id: z.string(),
   file_id: z.string(),
 }, async ({ collection_id, file_id }) => {
-  removeFromCollection(collection_id, file_id);
+  await store().removeFromCollection(collection_id, file_id);
   return { content: [{ type: "text", text: "Removed from collection" }] };
 });
 
@@ -724,10 +694,7 @@ registerTool("delete_collection", "Delete a collection (does not delete files, o
 registerTool("list_projects", "List all projects", {
   status: z.enum(["active", "archived", "completed"]).optional().describe("Filter by status"),
 }, async ({ status }) => {
-  const cloud = filesCloudStorage();
-  const projects = cloud.active
-    ? (await cloud.client.list<{ id: string; name: string; description?: string }>("projects")).items
-    : listProjects(status);
+  const projects = await store().listProjects(status);
   return { content: [{ type: "text", text: JSON.stringify(projects, null, 2) }] };
 });
 
@@ -736,10 +703,7 @@ registerTool("create_project", "Create a new project", {
   description: z.string().optional().default(""),
   status: z.enum(["active", "archived", "completed"]).optional().default("active"),
 }, async ({ name, description, status }) => {
-  const cloud = filesCloudStorage();
-  const p = cloud.active
-    ? await cloud.client.create<{ id: string }>("projects", { name, description, status })
-    : createProject(name, description, { status });
+  const p = await store().createProject(name, description, { status });
   return { content: [{ type: "text", text: JSON.stringify(p, null, 2) }] };
 });
 
@@ -766,7 +730,7 @@ registerTool("add_to_project", "Add a file to a project", {
   project_id: z.string(),
   file_id: z.string(),
 }, async ({ project_id, file_id }) => {
-  addToProject(project_id, file_id);
+  await store().addToProject(project_id, file_id);
   return { content: [{ type: "text", text: "Added to project" }] };
 });
 
@@ -774,7 +738,7 @@ registerTool("remove_from_project", "Remove a file from a project", {
   project_id: z.string(),
   file_id: z.string(),
 }, async ({ project_id, file_id }) => {
-  removeFromProject(project_id, file_id);
+  await store().removeFromProject(project_id, file_id);
   return { content: [{ type: "text", text: "Removed from project" }] };
 });
 
@@ -788,7 +752,7 @@ registerTool("delete_project", "Delete a project (does not delete files, only th
 // ─── Machines ─────────────────────────────────────────────────────────────────
 
 registerTool("list_machines", "List all known machines that have indexed files", {}, async () => {
-  return { content: [{ type: "text", text: JSON.stringify(listMachines(), null, 2) }] };
+  return { content: [{ type: "text", text: JSON.stringify(await store().listMachines(), null, 2) }] };
 });
 
 // ─── get_file_url ─────────────────────────────────────────────────────────────

@@ -33,14 +33,16 @@ export type FilesCloudStorage =
       readonly client: null;
     };
 
-let cache: FilesCloudStorage | undefined;
-
 /**
  * Resolve the files client storage transport for the current environment.
  *
  * Returns `{ active: true, client }` only when mode=self_hosted/cloud AND
  * HASNA_FILES_API_URL + HASNA_FILES_API_KEY are set. Otherwise `{ active: false }`
  * (local store). Throws if cloud was requested but is misconfigured.
+ *
+ * Callers do not use this directly — {@link resolveStore} consults it and picks
+ * the {@link ApiStore} or {@link LocalStore} transport. It is the one place the
+ * client decides local vs cloud.
  */
 export function resolveFilesCloudStorage(
   env: NodeJS.ProcessEnv = process.env,
@@ -50,15 +52,4 @@ export function resolveFilesCloudStorage(
   return resolved.transport === "cloud-http"
     ? { active: true, client: resolved.client }
     : { active: false, client: null };
-}
-
-/** Memoized {@link resolveFilesCloudStorage} for the process lifetime. */
-export function filesCloudStorage(env: NodeJS.ProcessEnv = process.env): FilesCloudStorage {
-  if (cache === undefined) cache = resolveFilesCloudStorage(env);
-  return cache;
-}
-
-/** Test-only: drop the memoized resolution so a new env can be resolved. */
-export function resetFilesCloudStorageCache(): void {
-  cache = undefined;
 }

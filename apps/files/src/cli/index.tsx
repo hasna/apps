@@ -2,9 +2,9 @@
 import { Command } from "commander";
 import { registerEventsCommands } from "@hasna/events/commander";
 import chalk from "chalk";
-import { getCurrentMachine, listMachines } from "../db/machines.js";
+import { getCurrentMachine } from "../db/machines.js";
 import { createSource, listSources, deleteSource, getSource, updateSource } from "../db/sources.js";
-import { listFiles, getFile } from "../db/files.js";
+import { getFile } from "../db/files.js";
 import { searchFiles } from "../db/search.js";
 import { getLatestFileVersion } from "../db/file-versions.js";
 import {
@@ -14,9 +14,8 @@ import {
   refreshAllFileSearchDocumentFts,
   upsertFileSearchDocument,
 } from "../db/file-search-documents.js";
-import { listTags, tagFile, untagFile } from "../db/tags.js";
-import { createCollection, listCollections, addToCollection, deleteCollection } from "../db/collections.js";
-import { createProject, listProjects, addToProject, deleteProject } from "../db/projects.js";
+import { deleteCollection } from "../db/collections.js";
+import { deleteProject } from "../db/projects.js";
 import { listPeers, addPeer, removePeer } from "../db/peers.js";
 import { getConfigPath, loadConfig, setConfigValue } from "../lib/config.js";
 import { registerEvidenceCommands } from "./evidence.js";
@@ -41,7 +40,6 @@ import { basename, dirname, resolve, join } from "path";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import type {
   FilesContextPack,
-  FileWithTags,
   FileSearchDocument,
   FileSearchDocumentKind,
   FileSearchDocumentStatus,
@@ -50,9 +48,8 @@ import type {
   KnowledgeSourceResolveMode,
   S3Config,
   SearchScope,
-  Source,
 } from "../types/index.js";
-import { filesCloudStorage } from "../lib/cloud-storage.js";
+import { store } from "../store/index.js";
 
 import { createRequire } from "module";
 const _require = createRequire(import.meta.url);
@@ -164,10 +161,7 @@ sources
   .option("--json", "Output as JSON")
   .action(async (opts: { json?: boolean }) => {
     const machine = getCurrentMachine();
-    const cloud = filesCloudStorage();
-    const all = cloud.active
-      ? (await cloud.client.list<Source>("sources")).items
-      : listSources();
+    const all = await store().listSources();
     if (opts.json) { console.log(JSON.stringify(all, null, 2)); return; }
     if (!all.length) {
       console.log(chalk.dim("No sources configured. Run: files sources add <path>"));
@@ -208,14 +202,11 @@ sources
     forcePathStyle?: boolean;
   }) => {
     const machine = getCurrentMachine();
-    const cloud = filesCloudStorage();
-    // self_hosted: create the source in the cloud API. The cloud assigns the
-    // owning machine (the local machine id is not in the cloud registry), so we
-    // omit machine_id and let the server default it.
-    const persistSource = async (input: Parameters<typeof createSource>[0]) =>
-      cloud.active
-        ? await cloud.client.create<Source>("sources", { ...input, machine_id: undefined })
-        : createSource(input);
+    const files = store();
+    const isCloud = files.transport === "api";
+    // The Store handles the transport difference (the ApiStore drops the local
+    // machine id so the cloud assigns the owning machine).
+    const persistSource = (input: Parameters<typeof createSource>[0]) => files.createSource(input);
 
     if (pathOrS3.startsWith("s3://")) {
       const url = new URL(pathOrS3);
@@ -239,12 +230,12 @@ sources
         config,
         machine_id: machine.id,
       });
-      console.log(chalk.green(`✓ S3 source added${cloud.active ? " (cloud)" : ""}: ${source.id} → s3://${bucket}${prefix ? `/${prefix}` : ""}`));
+      console.log(chalk.green(`✓ S3 source added${isCloud ? " (cloud)" : ""}: ${source.id} → s3://${bucket}${prefix ? `/${prefix}` : ""}`));
     } else {
       const absPath = resolve(pathOrS3);
       // In cloud (self_hosted) mode the source path may live on another machine,
       // so we do not require it to exist on this client. Local mode still checks.
-      if (!cloud.active && !existsSync(absPath)) {
+      if (!isCloud && !existsSync(absPath)) {
         console.error(chalk.red(`Path does not exist: ${absPath}`));
         process.exit(1);
       }
@@ -255,7 +246,7 @@ sources
         config: {},
         machine_id: machine.id,
       });
-      console.log(chalk.green(`✓ Local source added${cloud.active ? " (cloud)" : ""}: ${source.id} → ${absPath}`));
+      console.log(chalk.green(`✓ Local source added${isCloud ? " (cloud)" : ""}: ${source.id} → ${absPath}`));
     }
   });
 
@@ -517,17 +508,10 @@ sources
         console.error(chalk.red("Refusing to remove source without --yes (destructive operation)."));
         process.exit(1);
       }
-      const cloud = filesCloudStorage();
-      if (cloud.active) {
-        // self_hosted: delete from the cloud API; the id is a cloud id, so we
-        // do not resolve it against the local store.
-        await cloud.client.delete("sources", id);
-        console.log(chalk.green(`✓ Source ${id} removed (cloud)`));
-        return;
-      }
-      const resolvedId = requireId(id, "sources");
-      deleteSource(resolvedId);
-      console.log(chalk.green(`✓ Source ${resolvedId} removed`));
+      // The LocalStore resolves a partial id against the local db; the ApiStore
+      // passes the cloud id straight through to DELETE /v1/sources/:id.
+      await store().deleteSource(id);
+      console.log(chalk.green(`✓ Source ${id} removed`));
     } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
   });
 
@@ -710,8 +694,8 @@ program
   .command("machines")
   .description("List known machines")
   .option("--json", "Output as JSON")
-  .action((opts: { json?: boolean }) => {
-    const machines = listMachines();
+  .action(async (opts: { json?: boolean }) => {
+    const machines = await store().listMachines();
     if (opts.json) { console.log(JSON.stringify(machines, null, 2)); return; }
     for (const m of machines) {
       const current = m.is_current ? chalk.green(" (this machine)") : "";
@@ -1029,36 +1013,24 @@ program
       process.exit(1);
     }
 
-    const cloud = filesCloudStorage();
-    const files = cloud.active
-      ? (await cloud.client.list<FileWithTags>("files", {
-          query: {
-            // The cloud /v1/files endpoint filters server-side on these params;
-            // richer local-only filters (tag/collection/project/date/size/sort)
-            // are not part of the API contract and are intentionally omitted.
-            source_id: opts.source,
-            machine_id: opts.machine,
-            ext: opts.ext,
-            limit,
-            offset,
-          },
-        })).items
-      : listFiles({
-          source_id: opts.source,
-          machine_id: opts.machine,
-          tag: opts.tag,
-          ext: opts.ext,
-          collection_id: opts.collection,
-          project_id: opts.project,
-          limit,
-          offset,
-          after: opts.after,
-          before: opts.before,
-          min_size: opts.minSize ? parseSize(opts.minSize) : undefined,
-          max_size: opts.maxSize ? parseSize(opts.maxSize) : undefined,
-          sort: (opts.sort as "name" | "size" | "date") ?? "date",
-          sort_dir: opts.asc ? "asc" : "desc",
-        });
+    // The Store routes to the on-box db (rich filters) or the cloud /v1/files
+    // endpoint (which honors the source_id/machine_id/ext/limit/offset subset).
+    const files = await store().listFiles({
+      source_id: opts.source,
+      machine_id: opts.machine,
+      tag: opts.tag,
+      ext: opts.ext,
+      collection_id: opts.collection,
+      project_id: opts.project,
+      limit,
+      offset,
+      after: opts.after,
+      before: opts.before,
+      min_size: opts.minSize ? parseSize(opts.minSize) : undefined,
+      max_size: opts.maxSize ? parseSize(opts.maxSize) : undefined,
+      sort: (opts.sort as "name" | "size" | "date") ?? "date",
+      sort_dir: opts.asc ? "asc" : "desc",
+    });
     if (opts.json) { console.log(JSON.stringify(files, null, 2)); return; }
     if (!files.length) { console.log(chalk.dim("No files found.")); return; }
     for (const f of files) {
@@ -1073,11 +1045,12 @@ program
 program
   .command("tag <file-id> <tags...>")
   .description("Add tags to a file")
-  .action((fileId: string, tags: string[]) => {
+  .action(async (fileId: string, tags: string[]) => {
     try {
-      const id = requireId(fileId, "files");
-      const file = getFile(id)!;
-      for (const tag of tags) tagFile(id, tag);
+      const files = store();
+      const file = await files.getFile(fileId);
+      if (!file) throw new Error(`No file found matching "${fileId}"`);
+      for (const tag of tags) await files.tagFile(fileId, tag);
       console.log(chalk.green(`✓ Tagged ${file.name} with: ${tags.join(", ")}`));
     } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
   });
@@ -1085,10 +1058,10 @@ program
 program
   .command("untag <file-id> <tags...>")
   .description("Remove tags from a file")
-  .action((fileId: string, tags: string[]) => {
+  .action(async (fileId: string, tags: string[]) => {
     try {
-      const id = requireId(fileId, "files");
-      for (const tag of tags) untagFile(id, tag);
+      const files = store();
+      for (const tag of tags) await files.untagFile(fileId, tag);
       console.log(chalk.green(`✓ Tags removed`));
     } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
   });
@@ -1098,10 +1071,7 @@ program
   .description("List all tags")
   .option("--json", "Output as JSON")
   .action(async (opts: { json?: boolean }) => {
-    const cloud = filesCloudStorage();
-    const tags = cloud.active
-      ? (await cloud.client.list<{ id: string; name: string; color: string }>("tags")).items
-      : listTags();
+    const tags = await store().listTags();
     if (opts.json) { console.log(JSON.stringify(tags, null, 2)); return; }
     if (!tags.length) { console.log(chalk.dim("No tags yet.")); return; }
     for (const t of tags) console.log(`${chalk.bold(t.id)}  ${chalk.hex(t.color)(t.name)}`);
@@ -1157,19 +1127,13 @@ cols
   .command("list")
   .option("--json", "Output as JSON")
   .action(async (opts: { json?: boolean }) => {
-    const cloud = filesCloudStorage();
-    const collections = cloud.active
-      ? (await cloud.client.list<{ id: string; name: string; description?: string }>("collections")).items
-      : listCollections();
+    const collections = await store().listCollections();
     if (opts.json) { console.log(JSON.stringify(collections, null, 2)); return; }
     for (const c of collections) console.log(`${chalk.bold(c.id)}  ${chalk.cyan(c.name)}  ${chalk.dim(c.description)}`);
   });
 cols.command("create <name> [description]").action(async (name: string, desc?: string) => {
-  const cloud = filesCloudStorage();
-  const c = cloud.active
-    ? await cloud.client.create<{ id: string }>("collections", { name, description: desc })
-    : createCollection(name, desc);
-  console.log(chalk.green(`✓ Collection created${cloud.active ? " (cloud)" : ""}: ${c.id}`));
+  const c = await store().createCollection(name, desc);
+  console.log(chalk.green(`✓ Collection created: ${c.id}`));
 });
 cols.command("remove <id>").description("Delete a collection").option("--yes", "Confirm destructive removal").action((id: string, opts: { yes?: boolean }) => {
   try {
@@ -1181,9 +1145,9 @@ cols.command("remove <id>").description("Delete a collection").option("--yes", "
     console.log(ok ? chalk.green("✓ Collection removed") : chalk.red("Collection not found"));
   } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
 });
-cols.command("add <collection-id> <file-id>").action((colId: string, fileId: string) => {
+cols.command("add <collection-id> <file-id>").action(async (colId: string, fileId: string) => {
   try {
-    addToCollection(requireId(colId, "collections"), requireId(fileId, "files"));
+    await store().addToCollection(colId, fileId);
     console.log(chalk.green("✓ Added to collection"));
   } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
 });
@@ -1193,19 +1157,13 @@ projs
   .command("list")
   .option("--json", "Output as JSON")
   .action(async (opts: { json?: boolean }) => {
-    const cloud = filesCloudStorage();
-    const projects = cloud.active
-      ? (await cloud.client.list<{ id: string; name: string; description?: string }>("projects")).items
-      : listProjects();
+    const projects = await store().listProjects();
     if (opts.json) { console.log(JSON.stringify(projects, null, 2)); return; }
     for (const p of projects) console.log(`${chalk.bold(p.id)}  ${chalk.cyan(p.name)}  ${chalk.dim(p.description)}`);
   });
 projs.command("create <name> [description]").action(async (name: string, desc?: string) => {
-  const cloud = filesCloudStorage();
-  const p = cloud.active
-    ? await cloud.client.create<{ id: string }>("projects", { name, description: desc })
-    : createProject(name, desc);
-  console.log(chalk.green(`✓ Project created${cloud.active ? " (cloud)" : ""}: ${p.id}`));
+  const p = await store().createProject(name, desc);
+  console.log(chalk.green(`✓ Project created: ${p.id}`));
 });
 projs.command("remove <id>").description("Delete a project").option("--yes", "Confirm destructive removal").action((id: string, opts: { yes?: boolean }) => {
   try {
@@ -1217,9 +1175,9 @@ projs.command("remove <id>").description("Delete a project").option("--yes", "Co
     console.log(ok ? chalk.green("✓ Project removed") : chalk.red("Project not found"));
   } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
 });
-projs.command("add <project-id> <file-id>").action((projId: string, fileId: string) => {
+projs.command("add <project-id> <file-id>").action(async (projId: string, fileId: string) => {
   try {
-    addToProject(requireId(projId, "projects"), requireId(fileId, "files"));
+    await store().addToProject(projId, fileId);
     console.log(chalk.green("✓ Added to project"));
   } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
 });
