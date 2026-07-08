@@ -18,12 +18,35 @@ export {
   type KnowledgeClientOptions,
   type KnowledgeContextOptions,
   type KnowledgeInventoryOptions,
+  type KnowledgeItemsSdk,
   type KnowledgeRulesProvenanceOptions,
   type KnowledgeSearchOptions,
   type KnowledgeSetupOptions,
   type KnowledgeSyncDoctorOptions,
   type KnowledgeWebSearchOptions,
 } from './sdk.js';
+export {
+  resolveItemStore,
+  type ItemStore,
+  type ItemCreateInput,
+  type ItemPatch,
+  type ItemListResult,
+  type ResolveItemStoreOptions,
+} from './item-store.js';
+export {
+  type KnowledgeItem,
+  type Store as KnowledgeItemStoreFile,
+} from './store.js';
+export {
+  KNOWLEDGE_APP_SLUG,
+  KNOWLEDGE_RESOURCE,
+  isKnowledgeApiMode,
+  resolveKnowledgeCloudStore,
+  type KnowledgeCloudStore,
+  type KnowledgeCloudCreateInput,
+  type KnowledgeCloudListOptions,
+  type KnowledgeCloudPatch,
+} from './cloud-store.js';
 export {
   buildKnowledgeAgentContextPack,
   type KnowledgeAgentContextCitation,

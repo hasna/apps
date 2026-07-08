@@ -1017,6 +1017,15 @@ function releaseLock(lockPath2, ownerId) {
     }
   } catch {}
 }
+function loadStore(path) {
+  ensureStore(path);
+  const raw = readFileSync3(path, "utf8");
+  const parsed = JSON.parse(raw);
+  if (!parsed || !Array.isArray(parsed.items)) {
+    return { items: [] };
+  }
+  return parsed;
+}
 function saveStore(path, store) {
   const tmp = `${path}.tmp.${randomUUID()}`;
   writeFileSync2(tmp, JSON.stringify(store, null, 2));

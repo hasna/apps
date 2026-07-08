@@ -567,18 +567,14 @@ async function run(argv: string[]): Promise<void> {
   const itemStore: ItemStore = resolveItemStore({ storePath, storePathOverridden });
 
   if (command === 'inventory') {
-    // In cloud/api mode report the shared cloud item corpus (routes through the
-    // cloud transport); otherwise the full local inventory across json + sqlite.
-    const inventory = isKnowledgeApiMode()
-      ? await service.cloudInventory({
-          limit: flags.limit,
-          includeArchived: flags.includeArchived || flags.archived,
-        })
-      : service.inventory({
-          limit: flags.limit,
-          includeArchived: flags.includeArchived || flags.archived,
-          storePath,
-        });
+    // Single dispatch shared with the MCP + SDK: the shared cloud item corpus in
+    // api mode (routes through the cloud transport), otherwise the full local
+    // inventory across json + sqlite. No surface reads a divergent store.
+    const inventory = await service.resolveInventory({
+      limit: flags.limit,
+      includeArchived: flags.includeArchived || flags.archived,
+      storePath: isKnowledgeApiMode() ? undefined : storePath,
+    });
     output(flags.json ? inventory : formatInventory(inventory), flags.json);
     return;
   }
@@ -586,10 +582,10 @@ async function run(argv: string[]): Promise<void> {
   if (command === 'project-panel') {
     const projectRef = flags.project ?? positional[1];
     if (!projectRef) throw new Error('Usage: knowledge project-panel --project <id|name|slug> [--json|--contract]');
-    const panel = createKnowledgeProjectPanel(projectRef, {
+    const panel = await createKnowledgeProjectPanel(projectRef, {
       service,
       limit: flags.limit,
-      storePath,
+      storePath: isKnowledgeApiMode() ? undefined : storePath,
       includeArchived: flags.includeArchived || flags.archived,
     });
     output(flags.json || flags.contract ? panel : formatKnowledgeProjectPanel(panel), flags.json || flags.contract);

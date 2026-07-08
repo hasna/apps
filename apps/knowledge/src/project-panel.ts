@@ -204,12 +204,15 @@ function inventoryItems(inventory: KnowledgeInventoryResult, limit: number): Pro
   return items.slice(0, limit);
 }
 
-export function createKnowledgeProjectPanel(projectRef: string, options: KnowledgeProjectPanelOptions = {}): ProjectPanel {
+export async function createKnowledgeProjectPanel(projectRef: string, options: KnowledgeProjectPanelOptions = {}): Promise<ProjectPanel> {
   const limit = clampLimit(options.limit);
   const generatedAt = new Date().toISOString();
   const projectId = slugify(projectRef);
   const service = options.service ?? createKnowledgeService({ scope: options.scope ?? 'project', cwd: options.cwd });
-  const inventory = service.inventory({
+  // Route through the unified inventory dispatch so the panel reflects the shared
+  // cloud corpus in api mode and the local catalog otherwise — never the local
+  // sqlite guard throw when the fleet flip is active on a box with a local db.
+  const inventory = await service.resolveInventory({
     limit,
     storePath: options.storePath,
     includeArchived: options.includeArchived,

@@ -37,7 +37,7 @@ describe('knowledge project panel provider', () => {
     writeFileSync(source, 'Swiss banking source document with due diligence context.');
     await service.ingestSource(`file://${source}`, 'knowledge_index');
 
-    const panel = createKnowledgeProjectPanel('Swiss Bank Account', { service, limit: 5 });
+    const panel = await createKnowledgeProjectPanel('Swiss Bank Account', { service, limit: 5 });
 
     expect(panel.schema).toBe('hasna.project_panel.v1');
     expect(panel.projectId).toBe('swiss-bank-account');

@@ -33638,6 +33638,36 @@ class KnowledgeService {
   jsonStorePath() {
     return this.ensureWorkspace().jsonStorePath;
   }
+  itemStore() {
+    const workspace = this.ensureWorkspace();
+    return resolveItemStore({
+      storePath: workspace.jsonStorePath,
+      storePathOverridden: false
+    });
+  }
+  async listItems() {
+    return this.itemStore().listAll();
+  }
+  async getItem(idOrShort) {
+    return this.itemStore().get(idOrShort);
+  }
+  async createItem(input) {
+    return this.itemStore().create(input);
+  }
+  async updateItem(idOrShort, patch) {
+    return this.itemStore().update(idOrShort, patch);
+  }
+  async deleteItem(idOrShort) {
+    return this.itemStore().delete(idOrShort);
+  }
+  async deleteItems(idsOrShorts) {
+    return this.itemStore().deleteMany(idsOrShorts);
+  }
+  async resolveInventory(options = {}) {
+    if (this.isApiMode())
+      return this.cloudInventory(options);
+    return this.inventory(options);
+  }
   config(options = {}) {
     const workspace = options.ensure ? this.ensureWorkspace() : this.workspace;
     if (!this.cachedConfig || options.ensure || existsSync13(workspace.configPath)) {
@@ -35568,7 +35598,7 @@ async function getKnowledgeRecord(kind, id, options = {}) {
 function registerKnowledgeResources(server) {
   registerJsonResource(server, "knowledge-project-config", "knowledge://project/config", "Project knowledge config", "Resolved project workspace config, provider registry, and storage contract", async () => configSnapshot());
   registerJsonResource(server, "knowledge-project-storage", "knowledge://project/storage", "Project knowledge storage", "Artifact storage contract and validation for project knowledge", async () => storageSnapshot());
-  registerJsonResource(server, "knowledge-project-inventory", "knowledge://project/inventory", "Project knowledge inventory", "Unified capped inventory of JSON items, SQLite catalog rows, wiki artifacts, runs, and sync state", async () => projectService().inventory({ limit: 50 }));
+  registerJsonResource(server, "knowledge-project-inventory", "knowledge://project/inventory", "Project knowledge inventory", "Unified capped inventory of JSON items, SQLite catalog rows, wiki artifacts, runs, and sync state", async () => projectService().resolveInventory({ limit: 50 }));
   registerJsonResource(server, "knowledge-project-machines", "knowledge://project/machines", "Project machine topology", "Optional machine topology for project knowledge sync planning", async () => await projectService().machineTopology({ includeTailscale: false }));
   registerJsonResource(server, "knowledge-project-sync", "knowledge://project/sync", "Project sync status", "Machine registry, sync snapshot, change ledger, and conflict summary", async () => projectService().syncStatus());
   registerJsonResource(server, "knowledge-project-schema", "knowledge://project/schema", "Project knowledge schema", "SQLite schema version and table counts for project knowledge", async () => dbStatsSnapshot());
@@ -35679,7 +35709,11 @@ function buildServer() {
   }, async ({ scope, limit, include_archived, store_path }) => {
     const service = createKnowledgeService({ scope });
     try {
-      const inventory = isKnowledgeApiMode() ? await service.cloudInventory({ limit, includeArchived: include_archived }) : service.inventory({ limit, includeArchived: include_archived, storePath: store_path });
+      const inventory = await service.resolveInventory({
+        limit,
+        includeArchived: include_archived,
+        storePath: isKnowledgeApiMode() ? undefined : store_path
+      });
       return jsonText(inventory);
     } catch (error51) {
       return errorText(error51 instanceof Error ? error51.message : String(error51));

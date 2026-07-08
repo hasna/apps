@@ -536,7 +536,7 @@ function registerKnowledgeResources(server) {
     'knowledge://project/inventory',
     'Project knowledge inventory',
     'Unified capped inventory of JSON items, SQLite catalog rows, wiki artifacts, runs, and sync state',
-    async () => projectService().inventory({ limit: 50 }),
+    async () => projectService().resolveInventory({ limit: 50 }),
   );
   registerJsonResource(
     server,
@@ -764,11 +764,13 @@ export function buildServer() {
   }, async ({ scope, limit, include_archived, store_path }) => {
     const service = createKnowledgeService({ scope });
     try {
-      // Cloud/api mode reports the shared cloud item corpus via the cloud
-      // transport; local mode reports the full json + sqlite catalog inventory.
-      const inventory = isKnowledgeApiMode()
-        ? await service.cloudInventory({ limit, includeArchived: include_archived })
-        : service.inventory({ limit, includeArchived: include_archived, storePath: store_path });
+      // Single dispatch shared with the CLI + SDK: cloud item corpus in api
+      // mode via the cloud transport; local json + sqlite catalog otherwise.
+      const inventory = await service.resolveInventory({
+        limit,
+        includeArchived: include_archived,
+        storePath: isKnowledgeApiMode() ? undefined : store_path,
+      });
       return jsonText(inventory);
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));

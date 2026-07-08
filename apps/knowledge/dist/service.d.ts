@@ -15,6 +15,8 @@ import { type WebSearchOptions } from './web-search';
 import { type KnowledgeSyncConflict, type KnowledgeSyncConflictResolutionProposal, type KnowledgePeerSyncResult, type KnowledgeSyncApplyResult, type KnowledgeSyncBundle, type KnowledgeSyncMachineRow, type KnowledgeSyncSnapshotResult, type KnowledgeSyncStatus } from './sync';
 import { type WikiCompileOptions } from './wiki-compiler';
 import { type StorageContract, type StorageValidationResult } from './storage-contract';
+import { type KnowledgeItem } from './store';
+import { type ItemStore, type ItemCreateInput, type ItemPatch, type ItemListResult } from './item-store';
 import { type KnowledgeConfig, type KnowledgeWorkspace } from './workspace';
 import { type KnowledgeLegacyWorkspaceMigrationResult } from './workspace-migration';
 export interface KnowledgeServiceOptions {
@@ -357,6 +359,32 @@ export declare class KnowledgeService {
     get workspace(): KnowledgeWorkspace;
     ensureWorkspace(): KnowledgeWorkspace;
     jsonStorePath(): string;
+    /**
+     * The single knowledge-item Store for this scope. One interface, two
+     * transports resolved from the environment: LocalItemStore (on-box db.json)
+     * in local mode, ApiItemStore (HTTP `/v1` + bearer key) in self_hosted/cloud
+     * mode. EVERY item read/write — CLI, MCP, and SDK — routes through this one
+     * surface, so no path touches sqlite or the raw HTTP client directly.
+     */
+    itemStore(): ItemStore;
+    /** List every knowledge item (including archived) via the unified Store. */
+    listItems(): Promise<ItemListResult>;
+    /** Fetch one knowledge item by id or short id via the unified Store. */
+    getItem(idOrShort: string): Promise<KnowledgeItem | null>;
+    /** Create (or upsert on a caller-supplied id) an item via the unified Store. */
+    createItem(input: ItemCreateInput): Promise<KnowledgeItem>;
+    /** Patch an item by id or short id via the unified Store. */
+    updateItem(idOrShort: string, patch: ItemPatch): Promise<KnowledgeItem | null>;
+    /** Delete one item by id or short id via the unified Store. */
+    deleteItem(idOrShort: string): Promise<boolean>;
+    /** Delete many items by id/short id via the unified Store; returns the count. */
+    deleteItems(idsOrShorts: string[]): Promise<number>;
+    /**
+     * Unified inventory dispatch: the shared cloud knowledge-item corpus in api
+     * mode (self_hosted/cloud), the local sqlite/JSON catalog otherwise. CLI, MCP,
+     * and SDK all call this so no surface reads a divergent store.
+     */
+    resolveInventory(options?: KnowledgeInventoryOptions): Promise<KnowledgeInventoryResult>;
     config(options?: {
         ensure?: boolean;
     }): KnowledgeConfig;

@@ -23397,6 +23397,15 @@ function releaseLock(lockPath2, ownerId) {
     }
   } catch {}
 }
+function loadStore(path) {
+  ensureStore(path);
+  const raw = readFileSync3(path, "utf8");
+  const parsed = JSON.parse(raw);
+  if (!parsed || !Array.isArray(parsed.items)) {
+    return { items: [] };
+  }
+  return parsed;
+}
 function saveStore(path, store) {
   const tmp = `${path}.tmp.${randomUUID()}`;
   writeFileSync2(tmp, JSON.stringify(store, null, 2));
@@ -24024,7 +24033,7 @@ function createArtifactStore(config, workspace) {
 // src/service.ts
 import { createHash as createHash19 } from "crypto";
 import { spawnSync as spawnSync2 } from "child_process";
-import { existsSync as existsSync12, readFileSync as readFileSync14 } from "fs";
+import { existsSync as existsSync13, readFileSync as readFileSync14 } from "fs";
 import { hostname as hostname5 } from "os";
 import { join as join6, resolve as resolve5 } from "path";
 
@@ -33551,6 +33560,154 @@ function lintWiki(options) {
   }
 }
 
+// src/item-store.ts
+import { existsSync as existsSync11 } from "fs";
+function matchesId(item, idOrShort) {
+  return item.id === idOrShort || item.short_id === idOrShort;
+}
+
+class LocalItemStore {
+  storePath;
+  kind = "local";
+  constructor(storePath) {
+    this.storePath = storePath;
+  }
+  get location() {
+    return this.storePath;
+  }
+  get exists() {
+    return existsSync11(this.storePath);
+  }
+  async listAll() {
+    const store = loadStoreIfExists(this.storePath);
+    return { items: store.items, exists: store.exists };
+  }
+  async get(idOrShort) {
+    const store = loadStoreIfExists(this.storePath);
+    return store.items.find((item) => matchesId(item, idOrShort)) ?? null;
+  }
+  async create(input) {
+    return withLock(this.storePath, () => {
+      const db = loadStore(this.storePath);
+      const now = new Date().toISOString();
+      const id = input.id ?? makeId();
+      const item = {
+        id,
+        short_id: makeShortId(id),
+        title: input.title,
+        content: input.content,
+        url: input.url ?? null,
+        tags: input.tags ?? [],
+        metadata: input.metadata ?? {},
+        archived: false,
+        created_at: now,
+        updated_at: now
+      };
+      db.items.push(item);
+      saveStore(this.storePath, db);
+      return item;
+    }, { createParent: true });
+  }
+  async update(idOrShort, patch) {
+    return withLock(this.storePath, () => {
+      const db = loadStore(this.storePath);
+      const idx = db.items.findIndex((item2) => matchesId(item2, idOrShort));
+      if (idx === -1)
+        return null;
+      const item = db.items[idx];
+      if (patch.title !== undefined)
+        item.title = patch.title;
+      if (patch.content !== undefined)
+        item.content = patch.content;
+      if (patch.url !== undefined)
+        item.url = patch.url;
+      if (patch.tags !== undefined)
+        item.tags = patch.tags;
+      if (patch.metadata !== undefined)
+        item.metadata = patch.metadata;
+      if (patch.archived !== undefined)
+        item.archived = patch.archived;
+      item.updated_at = new Date().toISOString();
+      db.items[idx] = item;
+      saveStore(this.storePath, db);
+      return item;
+    }, { createParent: true });
+  }
+  async delete(idOrShort) {
+    return withLock(this.storePath, () => {
+      const db = loadStore(this.storePath);
+      const before = db.items.length;
+      db.items = db.items.filter((item) => !matchesId(item, idOrShort));
+      const removed = before !== db.items.length;
+      if (removed)
+        saveStore(this.storePath, db);
+      return removed;
+    }, { createParent: true });
+  }
+  async deleteMany(idsOrShorts) {
+    if (idsOrShorts.length === 0)
+      return 0;
+    const targets = new Set(idsOrShorts);
+    return withLock(this.storePath, () => {
+      const db = loadStore(this.storePath);
+      const before = db.items.length;
+      db.items = db.items.filter((item) => !targets.has(item.id) && !(item.short_id != null && targets.has(item.short_id)));
+      const removed = before - db.items.length;
+      if (removed > 0)
+        saveStore(this.storePath, db);
+      return removed;
+    }, { createParent: true });
+  }
+}
+
+class ApiItemStore {
+  cloud;
+  kind = "api";
+  exists = true;
+  constructor(cloud) {
+    this.cloud = cloud;
+  }
+  get location() {
+    return this.cloud.baseUrl;
+  }
+  async listAll() {
+    return { items: await fetchAllCloudItems(this.cloud), exists: true };
+  }
+  async get(idOrShort) {
+    return this.cloud.get(idOrShort);
+  }
+  async create(input) {
+    return this.cloud.create({
+      ...input.id ? { id: input.id } : {},
+      title: input.title,
+      content: input.content,
+      url: input.url ?? null,
+      tags: input.tags ?? [],
+      ...input.metadata ? { metadata: input.metadata } : {}
+    });
+  }
+  async update(idOrShort, patch) {
+    return this.cloud.update(idOrShort, patch);
+  }
+  async delete(idOrShort) {
+    return this.cloud.delete(idOrShort);
+  }
+  async deleteMany(idsOrShorts) {
+    let removed = 0;
+    for (const id of idsOrShorts) {
+      if (await this.cloud.delete(id))
+        removed += 1;
+    }
+    return removed;
+  }
+}
+function resolveItemStore(options) {
+  const cloud = options.storePathOverridden ? null : resolveKnowledgeCloudStore(options.env ?? process.env);
+  if (cloud)
+    return new ApiItemStore(cloud);
+  return new LocalItemStore(options.storePath);
+}
+
 // src/wiki-layout.ts
 import { createHash as createHash17 } from "crypto";
 function todayParts2(now) {
@@ -33761,7 +33918,7 @@ function recordWikiLayoutCatalog(db, artifacts, now = new Date) {
 import { createHash as createHash18 } from "crypto";
 import {
   cpSync,
-  existsSync as existsSync11,
+  existsSync as existsSync12,
   lstatSync as lstatSync2,
   mkdirSync as mkdirSync4,
   readdirSync as readdirSync2,
@@ -33772,7 +33929,7 @@ import {
 } from "fs";
 import { dirname as dirname4, join as join5, relative as relative5 } from "path";
 function walkFiles(root, base = root) {
-  if (!existsSync11(root))
+  if (!existsSync12(root))
     return [];
   const stat = lstatSync2(root);
   if (stat.isFile())
@@ -33799,13 +33956,13 @@ function hashFiles(root, files) {
   return { sha256: tree.digest("hex"), bytes };
 }
 function jsonItemCount(path) {
-  if (!existsSync11(path))
+  if (!existsSync12(path))
     return null;
   const parsed = JSON.parse(readFileSync13(path, "utf8"));
   return Array.isArray(parsed.items) ? parsed.items.length : null;
 }
 function sqliteSummary(path) {
-  if (!existsSync11(path)) {
+  if (!existsSync12(path)) {
     return { exists: false, integrity_check: null, table_counts: {} };
   }
   const db = openKnowledgeDbReadonly(path);
@@ -33831,14 +33988,14 @@ function summarizeWorkspaceTree(workspace) {
   const artifactHash = hashFiles(workspace.artifactsDir, artifactFiles);
   return {
     path: workspace.home,
-    exists: existsSync11(workspace.home),
+    exists: existsSync12(workspace.home),
     file_count: files.length,
     total_bytes: treeHash.bytes,
     tree_sha256: treeHash.sha256,
     json_items: jsonItemCount(workspace.jsonStorePath),
     sqlite: sqliteSummary(workspace.knowledgeDbPath),
     artifacts: {
-      exists: existsSync11(workspace.artifactsDir),
+      exists: existsSync12(workspace.artifactsDir),
       file_count: artifactFiles.length,
       total_bytes: artifactHash.bytes,
       tree_sha256: artifactHash.sha256
@@ -34069,7 +34226,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
     current_after: currentAfter
   }, null, 2)}
 `);
-  checks3.tombstone_written = existsSync11(tombstonePath);
+  checks3.tombstone_written = existsSync12(tombstonePath);
   const ok = checks3.backup_matches_legacy && checks3.migrated_matches_backup && checks3.tombstone_written;
   return {
     ok,
@@ -34093,7 +34250,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
 // src/service.ts
 function resolvePeerWorkspace(input) {
   const target = resolve5(input);
-  if (existsSync12(join6(target, "knowledge.db")) || existsSync12(join6(target, "config.json"))) {
+  if (existsSync13(join6(target, "knowledge.db")) || existsSync13(join6(target, "config.json"))) {
     return ensureKnowledgeWorkspace(target);
   }
   return ensureKnowledgeWorkspace(workspaceForHome(projectKnowledgeHome(target)).home);
@@ -34393,7 +34550,7 @@ function selectInventoryRows(db, sql, params = []) {
   return db.query(sql).all(...params);
 }
 function readLegacyInventoryStore(path) {
-  if (!existsSync12(path))
+  if (!existsSync13(path))
     return { exists: false, read_error: null, items: [] };
   try {
     const parsed = JSON.parse(readFileSync14(path, "utf8"));
@@ -34498,11 +34655,11 @@ function emptyContextPack(query2, limit, semantic = false) {
 }
 function legacyStorePathForRead(scope, workspace, preferred) {
   const current = preferred ?? workspace.jsonStorePath;
-  if (existsSync12(current))
+  if (existsSync13(current))
     return current;
   if (scope === "global") {
     const legacy = legacyGlobalStorePath();
-    if (existsSync12(legacy))
+    if (existsSync13(legacy))
       return legacy;
   }
   return current;
@@ -35068,10 +35225,40 @@ class KnowledgeService {
   jsonStorePath() {
     return this.ensureWorkspace().jsonStorePath;
   }
+  itemStore() {
+    const workspace = this.ensureWorkspace();
+    return resolveItemStore({
+      storePath: workspace.jsonStorePath,
+      storePathOverridden: false
+    });
+  }
+  async listItems() {
+    return this.itemStore().listAll();
+  }
+  async getItem(idOrShort) {
+    return this.itemStore().get(idOrShort);
+  }
+  async createItem(input) {
+    return this.itemStore().create(input);
+  }
+  async updateItem(idOrShort, patch) {
+    return this.itemStore().update(idOrShort, patch);
+  }
+  async deleteItem(idOrShort) {
+    return this.itemStore().delete(idOrShort);
+  }
+  async deleteItems(idsOrShorts) {
+    return this.itemStore().deleteMany(idsOrShorts);
+  }
+  async resolveInventory(options = {}) {
+    if (this.isApiMode())
+      return this.cloudInventory(options);
+    return this.inventory(options);
+  }
   config(options = {}) {
     const workspace = options.ensure ? this.ensureWorkspace() : this.workspace;
-    if (!this.cachedConfig || options.ensure || existsSync12(workspace.configPath)) {
-      this.cachedConfig = existsSync12(workspace.configPath) ? readKnowledgeConfig(workspace.configPath) : defaultKnowledgeConfig();
+    if (!this.cachedConfig || options.ensure || existsSync13(workspace.configPath)) {
+      this.cachedConfig = existsSync13(workspace.configPath) ? readKnowledgeConfig(workspace.configPath) : defaultKnowledgeConfig();
     }
     return this.cachedConfig;
   }
@@ -35155,13 +35342,13 @@ class KnowledgeService {
       ok: true,
       scope: this.scope,
       home: workspace.home,
-      exists: existsSync12(workspace.home),
+      exists: existsSync13(workspace.home),
       config_path: workspace.configPath,
-      config_exists: existsSync12(workspace.configPath),
+      config_exists: existsSync13(workspace.configPath),
       json_store_path: workspace.jsonStorePath,
-      json_store_exists: existsSync12(workspace.jsonStorePath),
+      json_store_exists: existsSync13(workspace.jsonStorePath),
       knowledge_db_path: workspace.knowledgeDbPath,
-      knowledge_db_exists: existsSync12(workspace.knowledgeDbPath),
+      knowledge_db_exists: existsSync13(workspace.knowledgeDbPath),
       artifacts_dir: workspace.artifactsDir,
       indexes_dir: workspace.indexesDir,
       logs_dir: workspace.logsDir,
@@ -35178,7 +35365,7 @@ class KnowledgeService {
   dbStats() {
     assertLocalCatalogMode("reading knowledge.db stats");
     const workspace = this.workspace;
-    if (!existsSync12(workspace.knowledgeDbPath))
+    if (!existsSync13(workspace.knowledgeDbPath))
       return emptyKnowledgeDbStats();
     return getKnowledgeDbStats(workspace.knowledgeDbPath);
   }
@@ -35277,7 +35464,7 @@ class KnowledgeService {
     const legacyStore = readLegacyInventoryStore(storePath);
     const activeItems = legacyStore.items.filter((item) => item.archived !== true);
     const visibleItems = options.includeArchived ? legacyStore.items : activeItems;
-    const dbExists = existsSync12(workspace.knowledgeDbPath);
+    const dbExists = existsSync13(workspace.knowledgeDbPath);
     if (!dbExists) {
       return this.itemOnlyInventory({
         items: legacyStore.items,
@@ -35554,7 +35741,7 @@ class KnowledgeService {
   }
   listAppWikiNotes(options = {}) {
     const workspace = this.workspace;
-    if (!existsSync12(workspace.knowledgeDbPath))
+    if (!existsSync13(workspace.knowledgeDbPath))
       return [];
     return listAppWikiNotes({
       dbPath: workspace.knowledgeDbPath,
@@ -35563,7 +35750,7 @@ class KnowledgeService {
   }
   async getAppWikiNote(id, options = {}) {
     const workspace = this.workspace;
-    if (!existsSync12(workspace.knowledgeDbPath))
+    if (!existsSync13(workspace.knowledgeDbPath))
       return null;
     return getAppWikiNote({
       dbPath: workspace.knowledgeDbPath,
@@ -35692,7 +35879,7 @@ class KnowledgeService {
   }
   reindexHealth(options = {}) {
     const workspace = this.workspace;
-    if (!existsSync12(workspace.knowledgeDbPath))
+    if (!existsSync13(workspace.knowledgeDbPath))
       return emptyReindexHealth();
     return reindexHealth({
       ...options,
@@ -35724,7 +35911,7 @@ class KnowledgeService {
   }
   embeddingStatus() {
     const workspace = this.workspace;
-    if (!existsSync12(workspace.knowledgeDbPath))
+    if (!existsSync13(workspace.knowledgeDbPath))
       return emptyEmbeddingStatus();
     return embeddingIndexStatus(workspace.knowledgeDbPath);
   }
@@ -35758,7 +35945,7 @@ class KnowledgeService {
         results: search.results
       };
     }
-    if (!existsSync12(workspace.knowledgeDbPath)) {
+    if (!existsSync13(workspace.knowledgeDbPath)) {
       return {
         provider: "openai",
         model: "text-embedding-3-small",
@@ -35780,8 +35967,8 @@ class KnowledgeService {
       return hybridSearchItems(items, options);
     }
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
-    if (!existsSync12(workspace.knowledgeDbPath)) {
-      if (existsSync12(legacyStorePath)) {
+    if (!existsSync13(workspace.knowledgeDbPath)) {
+      if (existsSync13(legacyStorePath)) {
         return hybridSearchLegacyStore({
           ...options,
           legacyStorePath,
@@ -35804,8 +35991,8 @@ class KnowledgeService {
       return retrieveKnowledgeContextFromItems(items, options);
     }
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
-    if (!existsSync12(workspace.knowledgeDbPath)) {
-      if (existsSync12(legacyStorePath)) {
+    if (!existsSync13(workspace.knowledgeDbPath)) {
+      if (existsSync13(legacyStorePath)) {
         const search = await hybridSearchLegacyStore({
           ...options,
           legacyStorePath,
@@ -35837,9 +36024,9 @@ class KnowledgeService {
       return emptyAgentContextPack(options);
     }
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
-    if (!existsSync12(workspace.knowledgeDbPath)) {
+    if (!existsSync13(workspace.knowledgeDbPath)) {
       const query2 = (options.query ?? options.topic ?? "").trim();
-      if (query2 && options.source !== "loops" && options.source !== "runs" && existsSync12(legacyStorePath)) {
+      if (query2 && options.source !== "loops" && options.source !== "runs" && existsSync13(legacyStorePath)) {
         const search = await hybridSearchLegacyStore({
           ...options,
           query: query2,
@@ -35908,7 +36095,7 @@ class KnowledgeService {
   }
   syncStatus() {
     const workspace = this.workspace;
-    if (!existsSync12(workspace.knowledgeDbPath)) {
+    if (!existsSync13(workspace.knowledgeDbPath)) {
       return emptySyncStatus({
         scope: this.scope,
         workspaceHome: workspace.home
@@ -36129,7 +36316,7 @@ class KnowledgeService {
   }
   syncConflicts(options = {}) {
     const workspace = this.workspace;
-    if (!existsSync12(workspace.knowledgeDbPath))
+    if (!existsSync13(workspace.knowledgeDbPath))
       return [];
     return listKnowledgeSyncConflicts(workspace.knowledgeDbPath, options);
   }
@@ -36202,7 +36389,7 @@ class KnowledgeService {
   }
   syncMachines() {
     const workspace = this.workspace;
-    if (!existsSync12(workspace.knowledgeDbPath))
+    if (!existsSync13(workspace.knowledgeDbPath))
       return [];
     return listKnowledgeMachines(workspace.knowledgeDbPath);
   }
@@ -36459,7 +36646,16 @@ function createKnowledgeClient(options = {}) {
       peer: (input) => service.syncPeer(input),
       remotePeer: (input) => service.syncRemotePeer(input)
     },
-    inventory: (input = {}) => service.inventory(input),
+    items: {
+      store: () => service.itemStore(),
+      list: () => service.listItems(),
+      get: (idOrShort) => service.getItem(idOrShort),
+      create: (input) => service.createItem(input),
+      update: (idOrShort, patch) => service.updateItem(idOrShort, patch),
+      delete: (idOrShort) => service.deleteItem(idOrShort),
+      deleteMany: (idsOrShorts) => service.deleteItems(idsOrShorts)
+    },
+    inventory: (input = {}) => service.resolveInventory(input),
     db: {
       init: () => service.initDb(),
       stats: () => service.dbStats()
@@ -42912,12 +43108,12 @@ function inventoryItems(inventory, limit) {
   }
   return items.slice(0, limit);
 }
-function createKnowledgeProjectPanel(projectRef, options = {}) {
+async function createKnowledgeProjectPanel(projectRef, options = {}) {
   const limit = clampLimit(options.limit);
   const generatedAt = new Date().toISOString();
   const projectId = slugify4(projectRef);
   const service = options.service ?? createKnowledgeService({ scope: options.scope ?? "project", cwd: options.cwd });
-  const inventory = service.inventory({
+  const inventory = await service.resolveInventory({
     limit,
     storePath: options.storePath,
     includeArchived: options.includeArchived
@@ -43123,7 +43319,9 @@ export {
   resolveLegacyScopedWorkspace,
   resolveKnowledgeMachineWorkspace,
   resolveKnowledgeMachineRoute,
+  resolveKnowledgeCloudStore,
   resolveKnowledgeApiUrl,
+  resolveItemStore,
   resolveEmbeddingModelRef,
   reindexHealth,
   refreshMachineRegistryFromTopology,
@@ -43156,6 +43354,7 @@ export {
   knowledgeAuthStatus,
   knowledgeAuthPath,
   isSupportedSourceRef,
+  isKnowledgeApiMode,
   initAppWikiScope,
   ingestSourceRef,
   ingestOpenFilesManifestItems,
@@ -43224,9 +43423,11 @@ export {
   KNOWLEDGE_STORAGE_FALLBACK_ENV,
   KNOWLEDGE_STORAGE_ENV,
   KNOWLEDGE_SERVE_APP,
+  KNOWLEDGE_RESOURCE,
   KNOWLEDGE_MACHINES_ADAPTER_PACKAGE,
   KNOWLEDGE_MACHINES_ADAPTER_ENTRYPOINT,
   KNOWLEDGE_MACHINES_ADAPTER_CONTRACT_VERSION,
+  KNOWLEDGE_APP_SLUG,
   HASNA_KNOWLEDGE_APP_PATH,
   EXAMPLE_KNOWLEDGE_CANONICAL,
   DEFAULT_KNOWLEDGE_API_URL,
