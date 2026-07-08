@@ -20,10 +20,6 @@
       "types": "./dist/sdk/index.d.ts",
       "import": "./dist/sdk/index.js"
     },
-    "./storage": {
-      "types": "./dist/storage.d.ts",
-      "import": "./dist/storage.js"
-    },
     "./path": {
       "types": "./dist/lib/path.d.ts",
       "import": "./dist/path.js"
@@ -43,13 +39,13 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && bun run build:sdk && cd dashboard && bun run build && cd .. && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external @aws-sdk/* --external pg && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external @aws-sdk/* --external pg && bun build src/server/index.ts src/server/migrate.ts --outdir dist/server --target bun --external @aws-sdk/* --external pg && bun build src/index.ts src/storage.ts src/sdk/index.ts --outdir dist --target bun --external @aws-sdk/* --external pg && bun build src/lib/path.ts --outfile dist/path.js --target bun && bun build src/s3.ts --outfile dist/s3.js --target bun --external @aws-sdk/* && bun run build:types",
+    "build": "bun run clean && bun run build:sdk && cd dashboard && bun run build && cd .. && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external @aws-sdk/* --external pg && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external @aws-sdk/* --external pg && bun build src/server/index.ts src/server/migrate.ts --outdir dist/server --target bun --external @aws-sdk/* --external pg && bun build src/index.ts src/sdk/index.ts --outdir dist --target bun --external @aws-sdk/* --external pg && bun build src/lib/path.ts --outfile dist/path.js --target bun && bun build src/s3.ts --outfile dist/s3.js --target bun --external @aws-sdk/* && bun run build:types",
     "build:sdk": "bun run scripts/generate-sdk.ts",
     "build:service": "bun build src/server/index.ts src/server/migrate.ts --outdir dist/server --target bun --external @aws-sdk/* --external pg",
     "build:cli": "bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk",
     "build:mcp": "bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk",
     "build:server": "bun build src/server/index.ts --outdir dist/server --target bun",
-    "build:lib": "bun build src/index.ts src/storage.ts --outdir dist --target bun --external @aws-sdk/* && bun build src/lib/path.ts --outfile dist/path.js --target bun && bun build src/s3.ts --outfile dist/s3.js --target bun --external @aws-sdk/* && bun run build:types",
+    "build:lib": "bun build src/index.ts --outdir dist --target bun --external @aws-sdk/* && bun build src/lib/path.ts --outfile dist/path.js --target bun && bun build src/s3.ts --outfile dist/s3.js --target bun --external @aws-sdk/* && bun run build:types",
     "build:types": "tsc --emitDeclarationOnly --outDir dist",
     "build:dashboard": "cd dashboard && bun run build",
     "prepack": "bun run build",

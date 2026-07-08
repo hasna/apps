@@ -3,13 +3,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { makeCapabilityGuard } from "@hasna/mcp-harness";
-import { getCurrentMachine } from "../db/machines.js";
-import { createSource, listSources, getSource } from "../db/sources.js";
-import { listFiles, getFile, getFileByPath, annotateFile } from "../db/files.js";
-import { searchFiles } from "../db/search.js";
-import { tagFile, deleteTag } from "../db/tags.js";
-import { createCollection, updateCollection, getCollection, deleteCollection, autoPopulateCollection } from "../db/collections.js";
-import { createProject, updateProject, getProject, deleteProject } from "../db/projects.js";
 import { indexLocalSource } from "../lib/indexer.js";
 import { listGoogleDriveItems, listGoogleDriveProfiles, preflightGoogleDriveSource, syncGoogleDriveSource } from "../lib/google-drive.js";
 import { indexS3Source, downloadFromS3, uploadToS3, getPresignedUrl } from "../lib/s3.js";
@@ -25,7 +18,6 @@ import { parseOpenFilesSourceRef } from "../lib/source-ref.js";
 import { store } from "../store/index.js";
 import { registerEvidenceTools } from "./evidence-tools.js";
 import { registerOrganizationTools } from "./organization-tools.js";
-import { registerStorageTools } from "./storage-tools.js";
 import { registerAgent, getAgent, listAgents as listDbAgents, updateAgentHeartbeat, setAgentFocus } from "../db/agents.js";
 import { logActivity, getFileHistory, getAgentActivity, getSessionActivity } from "../db/activity.js";
 import { basename, dirname, join, resolve } from "path";
@@ -190,6 +182,20 @@ function mcpError(message: string) {
   return { content: [{ type: "text" as const, text: message }], isError: true };
 }
 
+/**
+ * Guard for tools that perform physical, machine-local work (indexing a local
+ * folder or S3 bucket, syncing Google Drive, moving/copying bytes on local
+ * disk, watching the filesystem). These only make sense against the on-box
+ * {@link LocalStore}; in api mode the cloud service owns ingestion, so the thin
+ * client refuses rather than silently operating on the wrong machine.
+ */
+function requireLocalTransport(tool: string) {
+  if (store().transport !== "local") {
+    return mcpError(`${tool} runs on-box only and is unavailable in cloud (api) mode; the self-hosted service owns ingestion.`);
+  }
+  return null;
+}
+
 function mcpContextPackResult(
   toolName: string,
   pack: FilesContextPack,
@@ -252,7 +258,6 @@ function registerTool(
 
 registerEvidenceTools(registerTool);
 registerOrganizationTools(registerTool);
-registerStorageTools(registerTool);
 
 // ─── Sources ──────────────────────────────────────────────────────────────────
 
@@ -287,7 +292,7 @@ registerTool("add_source", "Add a local folder or S3 bucket as an indexed source
   };
   // The Store handles the transport difference (the ApiStore drops the local
   // machine id so the cloud assigns the owning machine).
-  const source = await store().createSource({ ...input, machine_id: getCurrentMachine().id });
+  const source = await store().createSource({ ...input, machine_id: (await store().currentMachine()).id });
   return { content: [{ type: "text", text: JSON.stringify(source, null, 2) }] };
 });
 
@@ -306,14 +311,16 @@ registerTool("add_google_drive_source", "Add a Google Drive source that syncs in
   path_mode: z.enum(["path_based", "id_based"]).optional().default("path_based"),
   delete_behavior: z.enum(["ignore", "mark_deleted"]).optional().default("ignore"),
 }, async (params) => {
+  const denied = requireLocalTransport("add_google_drive_source");
+  if (denied) return denied;
   if (params.destination_source_id) {
-    const destination = getSource(params.destination_source_id);
+    const destination = await store().getSource(params.destination_source_id);
     if (!destination || (destination.type !== "s3" && destination.type !== "local")) {
       return { content: [{ type: "text" as const, text: "Destination source must be an S3 or local source" }], isError: true };
     }
   }
 
-  const machine = getCurrentMachine();
+  const machine = await store().currentMachine();
   const config: GoogleDriveConfig = {
     profile: params.profile,
     include_my_drive: params.include_my_drive,
@@ -324,7 +331,7 @@ registerTool("add_google_drive_source", "Add a Google Drive source that syncs in
     path_mode: params.path_mode,
     delete_behavior: params.delete_behavior,
   };
-  const source = createSource({
+  const source = await store().createSource({
     name: params.name ?? `Google Drive (${params.profile})`,
     type: "google_drive",
     config,
@@ -336,7 +343,9 @@ registerTool("add_google_drive_source", "Add a Google Drive source that syncs in
 registerTool("list_google_drive_items", "List Google Drive items visible to a Google Drive source", {
   source_id: z.string().describe("Google Drive source ID"),
 }, async ({ source_id }) => {
-  const source = getSource(source_id);
+  const denied = requireLocalTransport("list_google_drive_items");
+  if (denied) return denied;
+  const source = await store().getSource(source_id);
   if (!source || source.type !== "google_drive") {
     return { content: [{ type: "text" as const, text: "Source must be a Google Drive source" }], isError: true };
   }
@@ -347,7 +356,9 @@ registerTool("list_google_drive_items", "List Google Drive items visible to a Go
 registerTool("preflight_google_drive_sync", "Check Google Drive auth, destination, and visible item scope without uploading", {
   source_id: z.string().describe("Google Drive source ID"),
 }, async ({ source_id }) => {
-  const source = getSource(source_id);
+  const denied = requireLocalTransport("preflight_google_drive_sync");
+  if (denied) return denied;
+  const source = await store().getSource(source_id);
   if (!source || source.type !== "google_drive") {
     return { content: [{ type: "text" as const, text: "Source must be a Google Drive source" }], isError: true };
   }
@@ -359,9 +370,11 @@ registerTool("sync_google_drive", "Sync one Google Drive source, or all enabled 
   source_id: z.string().optional().describe("Google Drive source ID"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ source_id, agent_id }) => {
+  const denied = requireLocalTransport("sync_google_drive");
+  if (denied) return denied;
   const sources = source_id
-    ? [getSource(source_id)].filter(Boolean)
-    : listSources().filter((source) => source.enabled && source.type === "google_drive");
+    ? [await store().getSource(source_id)].filter(Boolean)
+    : (await store().listSources()).filter((source) => source.enabled && source.type === "google_drive");
   const results = [];
   for (const source of sources) {
     if (!source || source.type !== "google_drive") {
@@ -385,10 +398,12 @@ registerTool("index_source", "Re-index a source (or all sources on this machine)
   source_id: z.string().optional().describe("Source ID — omit to index all enabled sources"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ source_id, agent_id }) => {
-  const machine = getCurrentMachine();
+  const denied = requireLocalTransport("index_source");
+  if (denied) return denied;
+  const machine = await store().currentMachine();
   const toIndex = source_id
-    ? [getSource(source_id)].filter(Boolean)
-    : listSources(machine.id).filter((s) => s.enabled);
+    ? [await store().getSource(source_id)].filter(Boolean)
+    : (await store().listSources(machine.id)).filter((s) => s.enabled);
 
   const results = [];
   for (const source of toIndex) {
@@ -449,7 +464,7 @@ registerTool("search_files", "Full-text search across file names, paths, and tag
   offset: z.number().optional().default(0),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ query, source_id, machine_id, tag, ext, limit, offset, agent_id }) => {
-  const results = searchFiles(query, { source_id, machine_id, tag, ext, limit, offset });
+  const results = await store().searchFiles(query, { source_id, machine_id, tag, ext, limit, offset });
   if (agent_id) {
     logActivity({ agent_id, action: "search", metadata: { query, results_count: results.length } });
   }
@@ -527,7 +542,7 @@ registerTool("search_context_pack", "Search files and return a bounded, cited co
 registerTool("get_file", "Get full details for a file by ID", {
   id: z.string().describe("File ID"),
 }, async ({ id }) => {
-  const file = getFile(id);
+  const file = await store().getFile(id);
   if (!file) return { content: [{ type: "text", text: `File not found: ${id}` }], isError: true };
   return { content: [{ type: "text", text: JSON.stringify(file, null, 2) }] };
 });
@@ -562,12 +577,14 @@ registerTool("upload_file", "Upload a local file to an S3 source", {
   s3_key: z.string().optional().describe("Custom S3 key (defaults to prefix/filename)"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ local_path, source_id, s3_key, agent_id }) => {
-  const source = getSource(source_id);
+  const denied = requireLocalTransport("upload_file");
+  if (denied) return denied;
+  const source = await store().getSource(source_id);
   if (!source) return { content: [{ type: "text", text: `Source not found: ${source_id}` }], isError: true };
   if (source.type !== "s3") return { content: [{ type: "text", text: "upload_file only works with S3 sources" }], isError: true };
   if (!existsSync(local_path)) return { content: [{ type: "text", text: `File not found: ${local_path}` }], isError: true };
 
-  const machine = getCurrentMachine();
+  const machine = await store().currentMachine();
   const key = await uploadToS3(source, local_path, s3_key);
   await indexS3Source(source, machine.id);
   if (agent_id) logActivity({ agent_id, action: "upload", source_id, metadata: { local_path, s3_key: key } });
@@ -606,7 +623,7 @@ registerTool("untag_file", "Remove tags from a file", {
 registerTool("delete_tag", "Delete a tag entirely (removes from all files)", {
   id: z.string().describe("Tag ID"),
 }, async ({ id }) => {
-  const ok = deleteTag(id);
+  const ok = await store().deleteTag(id);
   return { content: [{ type: "text", text: ok ? `Tag ${id} deleted` : `Tag not found: ${id}` }] };
 });
 
@@ -646,7 +663,7 @@ registerTool("update_collection", "Update a collection's name, description, pare
     source_id: z.string().optional(),
   }).optional(),
 }, async ({ id, name, description, parent_id, auto_rules }) => {
-  const c = updateCollection(id, { name, description, parent_id, auto_rules });
+  const c = await store().updateCollection(id, { name, description, parent_id, auto_rules });
   if (!c) return { content: [{ type: "text", text: `Collection not found: ${id}` }], isError: true };
   return { content: [{ type: "text", text: JSON.stringify(c, null, 2) }] };
 });
@@ -654,7 +671,7 @@ registerTool("update_collection", "Update a collection's name, description, pare
 registerTool("get_collection", "Get collection details with file count and child collections", {
   id: z.string().describe("Collection ID"),
 }, async ({ id }) => {
-  const c = getCollection(id);
+  const c = await store().getCollection(id);
   if (!c) return { content: [{ type: "text", text: `Collection not found: ${id}` }], isError: true };
   return { content: [{ type: "text", text: JSON.stringify(c, null, 2) }] };
 });
@@ -662,7 +679,7 @@ registerTool("get_collection", "Get collection details with file count and child
 registerTool("auto_populate_collection", "Run a collection's auto-rules and add all matching files", {
   collection_id: z.string().describe("Collection ID"),
 }, async ({ collection_id }) => {
-  const added = autoPopulateCollection(collection_id);
+  const added = await store().autoPopulateCollection(collection_id);
   return { content: [{ type: "text", text: `Added ${added} file(s) to collection` }] };
 });
 
@@ -685,7 +702,7 @@ registerTool("remove_from_collection", "Remove a file from a collection", {
 registerTool("delete_collection", "Delete a collection (does not delete files, only the collection)", {
   id: z.string().describe("Collection ID"),
 }, async ({ id }) => {
-  const ok = deleteCollection(id);
+  const ok = await store().deleteCollection(id);
   return { content: [{ type: "text", text: ok ? `Collection ${id} deleted` : `Collection not found: ${id}` }] };
 });
 
@@ -713,7 +730,7 @@ registerTool("update_project", "Update a project's name, description, status, or
   description: z.string().optional(),
   status: z.enum(["active", "archived", "completed"]).optional(),
 }, async ({ id, name, description, status }) => {
-  const p = updateProject(id, { name, description, status });
+  const p = await store().updateProject(id, { name, description, status });
   if (!p) return { content: [{ type: "text", text: `Project not found: ${id}` }], isError: true };
   return { content: [{ type: "text", text: JSON.stringify(p, null, 2) }] };
 });
@@ -721,7 +738,7 @@ registerTool("update_project", "Update a project's name, description, status, or
 registerTool("get_project", "Get project details with file count", {
   id: z.string().describe("Project ID"),
 }, async ({ id }) => {
-  const p = getProject(id);
+  const p = await store().getProject(id);
   if (!p) return { content: [{ type: "text", text: `Project not found: ${id}` }], isError: true };
   return { content: [{ type: "text", text: JSON.stringify(p, null, 2) }] };
 });
@@ -745,7 +762,7 @@ registerTool("remove_from_project", "Remove a file from a project", {
 registerTool("delete_project", "Delete a project (does not delete files, only the project)", {
   id: z.string().describe("Project ID"),
 }, async ({ id }) => {
-  const ok = deleteProject(id);
+  const ok = await store().deleteProject(id);
   return { content: [{ type: "text", text: ok ? `Project ${id} deleted` : `Project not found: ${id}` }] };
 });
 
@@ -1035,13 +1052,14 @@ registerTool("bulk_tag", "Add tags to multiple files at once (by IDs or search q
   ext: z.string().optional(),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ tags, file_ids, query, source_id, ext, agent_id }) => {
+  const files = store();
   let ids: string[] = file_ids ?? [];
   if (query) {
-    const results = searchFiles(query, { source_id, ext, limit: 500 });
+    const results = await files.searchFiles(query, { source_id, ext, limit: 500 });
     ids = [...new Set([...ids, ...results.map((f) => f.id)])];
   }
   for (const id of ids) {
-    for (const tag of tags) tagFile(id, tag);
+    for (const tag of tags) await files.tagFile(id, tag);
   }
   if (agent_id) logActivity({ agent_id, action: "tag", metadata: { tags, file_count: ids.length, query } });
   return { content: [{ type: "text", text: `Tagged ${ids.length} file(s) with: ${tags.join(", ")}` }] };
@@ -1098,12 +1116,14 @@ registerTool("move_file", "Move a file to a different path within the same sourc
   } catch (error) {
     return mcpError(error instanceof Error ? error.message : String(error));
   }
-  const file = getFile(file_id);
+  const files = store();
+  const file = await files.getFile(file_id);
   if (!file) return { content: [{ type: "text" as const, text: `File not found: ${file_id}` }], isError: true };
-  const source = getSource(file.source_id);
+  const source = await files.getSource(file.source_id);
   if (!source) return { content: [{ type: "text" as const, text: "Source not found" }], isError: true };
 
-  if (source.type === "local") {
+  // Physically move bytes only for a local source that lives on this box.
+  if (files.transport === "local" && source.type === "local") {
     const { renameSync, mkdirSync } = await import("fs");
     const { join: jp, dirname } = await import("path");
     const oldPath = jp(source.path!, file.path);
@@ -1111,9 +1131,7 @@ registerTool("move_file", "Move a file to a different path within the same sourc
     mkdirSync(dirname(newPath), { recursive: true });
     renameSync(oldPath, newPath);
   }
-  // Update DB
-  const { getDb: getMoveDb } = await import("../db/database.js");
-  getMoveDb().run("UPDATE files SET path=?, status='active', sync_version=sync_version+1 WHERE id=?", [safeDestPath, file_id]);
+  await files.moveFile(file_id, safeDestPath);
   if (agent_id) logActivity({ agent_id, action: "move", file_id, metadata: { from: file.path, to: safeDestPath } });
   return { content: [{ type: "text" as const, text: `Moved ${file.path} -> ${safeDestPath}` }] };
 });
@@ -1124,10 +1142,12 @@ registerTool("copy_file", "Copy a file to another source (local→S3, S3→local
   dest_path: z.string().optional().describe("Custom destination path"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ file_id, dest_source_id, dest_path, agent_id }) => {
-  const file = getFile(file_id);
+  const denied = requireLocalTransport("copy_file");
+  if (denied) return denied;
+  const file = await store().getFile(file_id);
   if (!file) return { content: [{ type: "text" as const, text: `File not found: ${file_id}` }], isError: true };
-  const srcSource = getSource(file.source_id);
-  const dstSource = getSource(dest_source_id);
+  const srcSource = await store().getSource(file.source_id);
+  const dstSource = await store().getSource(dest_source_id);
   if (!srcSource || !dstSource) return { content: [{ type: "text" as const, text: "Source not found" }], isError: true };
 
   let finalDest: string;
@@ -1145,12 +1165,12 @@ registerTool("copy_file", "Copy a file to another source (local→S3, S3→local
     const dst = jp(dstSource.path!, finalDest);
     mkdirSync(dirname(dst), { recursive: true });
     copyFileSync(src, dst);
-    const machine = getCurrentMachine();
+    const machine = await store().currentMachine();
     await indexLocalSource(dstSource, machine.id);
   } else if (srcSource.type === "local" && dstSource.type === "s3") {
     const src = jp(srcSource.path!, file.path);
     await uploadToS3(dstSource, src, finalDest);
-    const machine = getCurrentMachine();
+    const machine = await store().currentMachine();
     await indexS3Source(dstSource, machine.id);
   } else if (srcSource.type === "s3" && dstSource.type === "local") {
     const { mkdirSync } = await import("fs");
@@ -1158,7 +1178,7 @@ registerTool("copy_file", "Copy a file to another source (local→S3, S3→local
     const dst = jp(dstSource.path!, finalDest);
     mkdirSync(dirname(dst), { recursive: true });
     await downloadFromS3(srcSource, file.path, dst);
-    const machine = getCurrentMachine();
+    const machine = await store().currentMachine();
     await indexLocalSource(dstSource, machine.id);
   }
 
@@ -1178,18 +1198,13 @@ registerTool("rename_file", "Rename a file and regenerate its canonical name", {
   } catch (error) {
     return mcpError(error instanceof Error ? error.message : String(error));
   }
-  const file = getFile(file_id);
+  const file = await store().getFile(file_id);
   if (!file) return { content: [{ type: "text" as const, text: `File not found: ${file_id}` }], isError: true };
 
-  const { generateCanonicalName: genCan } = await import("../lib/normalize.js");
   const { extname: en } = await import("path");
-  const canonical = genCan(safeName);
   const ext = en(safeName).toLowerCase();
-  const { getDb: getRenameDb } = await import("../db/database.js");
-  getRenameDb().run(
-    "UPDATE files SET name=?, original_name=?, canonical_name=?, ext=?, sync_version=sync_version+1 WHERE id=?",
-    [safeName, safeName, canonical, ext, file_id]
-  );
+  const canonical = await store().renameFile(file_id, safeName, ext);
+  if (canonical === null) return { content: [{ type: "text" as const, text: `File not found: ${file_id}` }], isError: true };
 
   if (agent_id) logActivity({ agent_id, action: "rename", file_id, metadata: { old_name: file.name, new_name: safeName } });
   return { content: [{ type: "text" as const, text: `Renamed to ${safeName} (canonical: ${canonical})` }] };
@@ -1200,25 +1215,28 @@ registerTool("delete_file", "Soft-delete a file (or hard-delete from disk/S3)", 
   hard_delete: z.boolean().optional().default(false).describe("true = remove from disk/S3, false = soft delete (default)"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ file_id, hard_delete, agent_id }) => {
-  const file = getFile(file_id);
+  const files = store();
+  const file = await files.getFile(file_id);
   if (!file) return { content: [{ type: "text" as const, text: `File not found: ${file_id}` }], isError: true };
 
   if (hard_delete) {
     const denied = requireMcpCapability("delete_file hard_delete", "destructive");
     if (denied) return denied;
-    const source = getSource(file.source_id);
-    if (source?.type === "local") {
-      const { unlinkSync } = await import("fs");
-      const { join: jp } = await import("path");
-      try { unlinkSync(jp(source.path!, file.path)); } catch {}
-    } else if (source?.type === "s3") {
-      const { deleteFromS3: delS3 } = await import("../lib/s3.js");
-      await delS3(source, file.path);
+    // Physical byte removal only applies to an on-box source.
+    if (files.transport === "local") {
+      const source = await files.getSource(file.source_id);
+      if (source?.type === "local") {
+        const { unlinkSync } = await import("fs");
+        const { join: jp } = await import("path");
+        try { unlinkSync(jp(source.path!, file.path)); } catch {}
+      } else if (source?.type === "s3") {
+        const { deleteFromS3: delS3 } = await import("../lib/s3.js");
+        await delS3(source, file.path);
+      }
     }
   }
 
-  const { getDb: getDelDb } = await import("../db/database.js");
-  getDelDb().run("UPDATE files SET status='deleted', sync_version=sync_version+1 WHERE id=?", [file_id]);
+  await files.softDeleteFile(file_id);
   if (agent_id) logActivity({ agent_id, action: "delete", file_id, metadata: { hard_delete } });
   return { content: [{ type: "text" as const, text: `${hard_delete ? "Hard" : "Soft"}-deleted ${file.name}` }] };
 });
@@ -1227,11 +1245,8 @@ registerTool("restore_file", "Restore a soft-deleted file", {
   file_id: z.string().describe("File ID"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ file_id, agent_id }) => {
-  const { getDb: getRestoreDb } = await import("../db/database.js");
-  const result = getRestoreDb().run(
-    "UPDATE files SET status='active', sync_version=sync_version+1 WHERE id=? AND status='deleted'", [file_id]
-  );
-  if (result.changes === 0) return { content: [{ type: "text" as const, text: `File not found or not deleted: ${file_id}` }], isError: true };
+  const restored = await store().restoreFile(file_id);
+  if (!restored) return { content: [{ type: "text" as const, text: `File not found or not deleted: ${file_id}` }], isError: true };
   if (agent_id) logActivity({ agent_id, action: "restore", file_id });
   return { content: [{ type: "text" as const, text: `Restored file ${file_id}` }] };
 });
@@ -1241,52 +1256,15 @@ registerTool("restore_file", "Restore a soft-deleted file", {
 registerTool("find_duplicates", "Find files with the same BLAKE3 hash (duplicates)", {
   source_id: z.string().optional().describe("Limit to a specific source"),
 }, async ({ source_id }) => {
-  const { getDb } = await import("../db/database.js");
-  const db = getDb();
-  const sourceFilter = source_id ? "AND source_id = ?" : "";
-  const params = source_id ? [source_id] as import("bun:sqlite").SQLQueryBindings[] : [];
-  const groups = db.query<{ hash: string; cnt: number; paths: string }, import("bun:sqlite").SQLQueryBindings[]>(`
-    SELECT hash, COUNT(*) as cnt, GROUP_CONCAT(path, ' | ') as paths
-    FROM files WHERE status='active' AND hash IS NOT NULL ${sourceFilter}
-    GROUP BY hash HAVING cnt > 1
-    ORDER BY cnt DESC
-  `).all(...params);
+  const groups = await store().findDuplicates(source_id);
   return { content: [{ type: "text", text: JSON.stringify(groups, null, 2) }] };
 });
 
 // ─── get_stats ────────────────────────────────────────────────────────────────
 
 registerTool("get_stats", "Get aggregate statistics about all indexed files", {}, async () => {
-  const { getDb: getStatsDb } = await import("../db/database.js");
-  const db = getStatsDb();
-
-  const totals = db.query<{ total_files: number; total_size: number }, []>(
-    "SELECT COUNT(*) as total_files, COALESCE(SUM(size), 0) as total_size FROM files WHERE status='active'"
-  ).get()!;
-
-  const by_ext = db.query<{ ext: string; count: number }, []>(
-    "SELECT ext, COUNT(*) as count FROM files WHERE status='active' GROUP BY ext ORDER BY count DESC LIMIT 20"
-  ).all();
-
-  const by_source = db.query<{ source_id: string; name: string; count: number }, []>(
-    "SELECT f.source_id, s.name, COUNT(*) as count FROM files f JOIN sources s ON s.id=f.source_id WHERE f.status='active' GROUP BY f.source_id ORDER BY count DESC"
-  ).all();
-
-  const by_machine = db.query<{ machine_id: string; name: string; count: number }, []>(
-    "SELECT f.machine_id, m.name, COUNT(*) as count FROM files f JOIN machines m ON m.id=f.machine_id WHERE f.status='active' GROUP BY f.machine_id ORDER BY count DESC"
-  ).all();
-
-  const by_tag = db.query<{ tag: string; count: number }, []>(
-    "SELECT t.name as tag, COUNT(*) as count FROM file_tags ft JOIN tags t ON t.id=ft.tag_id GROUP BY t.name ORDER BY count DESC LIMIT 20"
-  ).all();
-
-  const total_collections = db.query<{ cnt: number }, []>("SELECT COUNT(*) as cnt FROM collections").get()!.cnt;
-  const total_projects = db.query<{ cnt: number }, []>("SELECT COUNT(*) as cnt FROM projects").get()!.cnt;
-  const total_agents = db.query<{ cnt: number }, []>("SELECT COUNT(*) as cnt FROM agents").get()!.cnt;
-
-  return { content: [{ type: "text" as const, text: JSON.stringify({
-    ...totals, by_ext, by_source, by_machine, by_tag, total_collections, total_projects, total_agents,
-  }, null, 2) }] };
+  const stats = await store().getStats();
+  return { content: [{ type: "text" as const, text: JSON.stringify(stats, null, 2) }] };
 });
 
 // ─── annotate_file ────────────────────────────────────────────────────────────
@@ -1296,7 +1274,7 @@ registerTool("annotate_file", "Add or update a description/annotation on a file"
   description: z.string().describe("Description or annotation text"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ file_id, description, agent_id }) => {
-  const file = annotateFile(file_id, description);
+  const file = await store().annotateFile(file_id, description);
   if (!file) return { content: [{ type: "text" as const, text: `File not found: ${file_id}` }], isError: true };
   if (agent_id) logActivity({ agent_id, action: "annotate", file_id, metadata: { description } });
   return { content: [{ type: "text" as const, text: JSON.stringify(file, null, 2) }] };
@@ -1308,18 +1286,7 @@ registerTool("normalize_source", "Batch-generate canonical names for all files i
   source_id: z.string().describe("Source ID"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ source_id, agent_id }) => {
-  const { getDb: getNormDb } = await import("../db/database.js");
-  const { generateCanonicalName: genCanonical } = await import("../lib/normalize.js");
-  const db = getNormDb();
-  const rows = db.query<{ id: string; name: string }, [string]>(
-    "SELECT id, name FROM files WHERE source_id = ? AND canonical_name IS NULL AND status = 'active'"
-  ).all(source_id);
-  let count = 0;
-  for (const row of rows) {
-    const canonical = genCanonical(row.name);
-    db.run("UPDATE files SET original_name = ?, canonical_name = ? WHERE id = ?", [row.name, canonical, row.id]);
-    count++;
-  }
+  const count = await store().normalizeSource(source_id);
   if (agent_id) logActivity({ agent_id, action: "index", source_id, metadata: { normalized: count } });
   return { content: [{ type: "text" as const, text: `Normalized ${count} file(s) in source ${source_id}` }] };
 });
@@ -1333,7 +1300,9 @@ registerTool("import_from_url", "Import a file from any URL (iCloud, Google Driv
   tags: z.array(z.string()).optional().describe("Tags to apply after import"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ url: fileUrl, dest_source_id, dest_path, tags: importTags, agent_id }) => {
-  const source = getSource(dest_source_id);
+  const denied = requireLocalTransport("import_from_url");
+  if (denied) return denied;
+  const source = await store().getSource(dest_source_id);
   if (!source) return { content: [{ type: "text" as const, text: `Source not found: ${dest_source_id}` }], isError: true };
 
   try {
@@ -1364,7 +1333,7 @@ registerTool("import_from_url", "Import a file from any URL (iCloud, Google Driv
       mkdirSync(dirname(finalPath), { recursive: true });
       writeFileSync(finalPath, body);
 
-      const machine = getCurrentMachine();
+      const machine = await store().currentMachine();
       await indexLocalSource(source, machine.id);
     } else if (source.type === "s3") {
       // Write to temp, upload, cleanup
@@ -1373,16 +1342,15 @@ registerTool("import_from_url", "Import a file from any URL (iCloud, Google Driv
       await uploadToS3(source, tmpPath, finalRelativePath);
       const { unlinkSync } = await import("fs");
       try { unlinkSync(tmpPath); } catch {}
-      const machine = getCurrentMachine();
+      const machine = await store().currentMachine();
       await indexS3Source(source, machine.id);
     }
 
     // Apply tags if provided
     if (importTags?.length) {
-      const { getFileByPath: getByPath } = await import("../db/files.js");
-      const file = getByPath(dest_source_id, finalRelativePath);
+      const file = await store().getFileByPath(dest_source_id, finalRelativePath);
       if (file) {
-        for (const tag of importTags) tagFile(file.id, tag);
+        for (const tag of importTags) await store().tagFile(file.id, tag);
       }
     }
 
@@ -1401,7 +1369,9 @@ registerTool("import_from_local", "Import a file from any local path into a mana
   copy: z.boolean().optional().default(true).describe("true=copy (default), false=move"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ path: srcPath, dest_source_id, dest_path, tags: importTags, copy, agent_id }) => {
-  const source = getSource(dest_source_id);
+  const denied = requireLocalTransport("import_from_local");
+  if (denied) return denied;
+  const source = await store().getSource(dest_source_id);
   if (!source) return { content: [{ type: "text" as const, text: `Source not found: ${dest_source_id}` }], isError: true };
   if (!existsSync(srcPath)) return { content: [{ type: "text" as const, text: `File not found: ${srcPath}` }], isError: true };
 
@@ -1420,20 +1390,19 @@ registerTool("import_from_local", "Import a file from any local path into a mana
     mkDir(dirname(finalPath), { recursive: true });
     if (copy) copyFileSync(srcPath, finalPath);
     else renameSync(srcPath, finalPath);
-    const machine = getCurrentMachine();
+    const machine = await store().currentMachine();
     await indexLocalSource(source, machine.id);
   } else if (source.type === "s3") {
     await uploadToS3(source, srcPath, finalRelativePath);
     if (!copy) { const { unlinkSync } = await import("fs"); try { unlinkSync(srcPath); } catch {} }
-    const machine = getCurrentMachine();
+    const machine = await store().currentMachine();
     await indexS3Source(source, machine.id);
   }
 
   if (importTags?.length) {
-    const { getFileByPath: getByPath } = await import("../db/files.js");
-    const file = getByPath(dest_source_id, finalRelativePath);
+    const file = await store().getFileByPath(dest_source_id, finalRelativePath);
     if (file) {
-      for (const tag of importTags) tagFile(file.id, tag);
+      for (const tag of importTags) await store().tagFile(file.id, tag);
     }
   }
 
@@ -1449,6 +1418,8 @@ registerTool("bulk_import", "Import multiple files at once from URLs or local pa
   dest_source_id: z.string().describe("Destination source ID"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ items, dest_source_id, agent_id }) => {
+  const denied = requireLocalTransport("bulk_import");
+  if (denied) return denied;
   let imported = 0;
   let failed = 0;
   const errors: string[] = [];
@@ -1465,7 +1436,7 @@ registerTool("bulk_import", "Import multiple files at once from URLs or local pa
         const { writeFileSync: ws } = await import("fs");
         const tmpPath = `/tmp/files-import-${Date.now()}-${fileName}`;
         ws(tmpPath, await readResponseBodyWithLimit(resp, normalizeMcpImportLimit()));
-        const source = getSource(dest_source_id)!;
+        const source = (await store().getSource(dest_source_id))!;
         const finalPath = normalizeManagedRelativePath(undefined, fileName);
         if (source.type === "s3") {
           await uploadToS3(source, tmpPath, finalPath);
@@ -1478,7 +1449,7 @@ registerTool("bulk_import", "Import multiple files at once from URLs or local pa
         const { unlinkSync: ul } = await import("fs"); try { ul(tmpPath); } catch {}
       } else {
         if (!existsSync(item.url_or_path)) throw new Error(`File not found: ${item.url_or_path}`);
-        const source = getSource(dest_source_id)!;
+        const source = (await store().getSource(dest_source_id))!;
         const { basename: bn } = await import("path");
         const fileName = safeTempFileName(bn(item.url_or_path));
         const finalPath = normalizeManagedRelativePath(undefined, fileName);
@@ -1499,9 +1470,9 @@ registerTool("bulk_import", "Import multiple files at once from URLs or local pa
   }
 
   // Re-index the source once after all imports
-  const source = getSource(dest_source_id);
+  const source = await store().getSource(dest_source_id);
   if (source) {
-    const machine = getCurrentMachine();
+    const machine = await store().currentMachine();
     if (source.type === "s3") await indexS3Source(source, machine.id);
     else await indexLocalSource(source, machine.id);
   }
@@ -1530,9 +1501,9 @@ registerTool("get_file_by_path", "Look up a file by its path within a source", {
   source_id: z.string().describe("Source ID"),
   path: z.string().describe("File path relative to source root"),
 }, async ({ source_id, path }) => {
-  const file = getFileByPath(source_id, path);
+  const file = await store().getFileByPath(source_id, path);
   if (!file) return { content: [{ type: "text" as const, text: `File not found: ${path} in source ${source_id}` }], isError: true };
-  const full = getFile(file.id);
+  const full = await store().getFile(file.id);
   return { content: [{ type: "text" as const, text: JSON.stringify(full, null, 2) }] };
 });
 
@@ -1540,15 +1511,7 @@ registerTool("recent_files", "Get files recently touched by agents (read, upload
   agent_id: z.string().optional().describe("Filter by agent ID (omit for all agents)"),
   limit: z.number().optional().default(20),
 }, async ({ agent_id, limit }) => {
-  const { getDb: getRecentDb } = await import("../db/database.js");
-  const db = getRecentDb();
-  const lim = limit ?? 20;
-  const query = agent_id
-    ? "SELECT DISTINCT file_id, MAX(created_at) as last_touched FROM agent_activity WHERE file_id IS NOT NULL AND agent_id = ? GROUP BY file_id ORDER BY last_touched DESC LIMIT ?"
-    : "SELECT DISTINCT file_id, MAX(created_at) as last_touched FROM agent_activity WHERE file_id IS NOT NULL GROUP BY file_id ORDER BY last_touched DESC LIMIT ?";
-  const params = agent_id ? [agent_id, lim] : [lim];
-  const rows = (db.query(query) as any).all(params) as { file_id: string; last_touched: string }[];
-  const files = rows.map(r => { const f = getFile(r.file_id); return f ? { ...f, last_touched: r.last_touched } : null; }).filter(Boolean);
+  const files = await store().recentFiles(agent_id, limit ?? 20);
   return { content: [{ type: "text" as const, text: JSON.stringify(files, null, 2) }] };
 });
 
@@ -1557,7 +1520,7 @@ registerTool("list_deleted_files", "List soft-deleted files (trash)", {
   limit: z.number().optional().default(50),
   offset: z.number().optional().default(0),
 }, async ({ source_id, limit, offset }) => {
-  const files = listFiles({ source_id, status: "deleted", limit, offset });
+  const files = await store().listFiles({ source_id, status: "deleted", limit, offset });
   return { content: [{ type: "text" as const, text: JSON.stringify(files, null, 2) }] };
 });
 
@@ -1565,14 +1528,7 @@ registerTool("list_conflicts", "List files with sync conflicts", {
   source_id: z.string().optional(),
   limit: z.number().optional().default(50),
 }, async ({ source_id, limit }) => {
-  const { getDb: getConflictDb } = await import("../db/database.js");
-  const db = getConflictDb();
-  const lim = limit ?? 50;
-  const query = source_id
-    ? "SELECT * FROM files WHERE sync_status = 'conflict' AND source_id = ? LIMIT ?"
-    : "SELECT * FROM files WHERE sync_status = 'conflict' LIMIT ?";
-  const params = source_id ? [source_id, lim] : [lim];
-  const rows = (db.query(query) as any).all(params);
+  const rows = await store().listConflicts(source_id, limit ?? 50);
   return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
 });
 
@@ -1580,8 +1536,8 @@ registerTool("resolve_conflict", "Resolve a sync conflict by picking a side", {
   file_id: z.string().describe("File ID with conflict"),
   resolution: z.enum(["keep_local", "keep_remote", "mark_resolved"]).describe("How to resolve"),
 }, async ({ file_id, resolution }) => {
-  const { getDb: getResDb } = await import("../db/database.js");
-  getResDb().run("UPDATE files SET sync_status = 'synced', sync_version = sync_version + 1 WHERE id = ?", [file_id]);
+  const ok = await store().resolveConflict(file_id);
+  if (!ok) return { content: [{ type: "text" as const, text: `No conflict found for ${file_id}` }], isError: true };
   return { content: [{ type: "text" as const, text: `Conflict resolved for ${file_id} (${resolution})` }] };
 });
 
@@ -1589,28 +1545,15 @@ registerTool("purge_deleted", "Permanently remove soft-deleted files from the da
   source_id: z.string().optional().describe("Limit to a specific source"),
   older_than: z.string().optional().describe("Only purge files deleted before this date (ISO 8601)"),
 }, async ({ source_id, older_than }) => {
-  const { getDb: getPurgeDb } = await import("../db/database.js");
-  const db = getPurgeDb();
-  const conditions = ["status = 'deleted'"];
-  const params: import("bun:sqlite").SQLQueryBindings[] = [];
-  if (source_id) { conditions.push("source_id = ?"); params.push(source_id); }
-  if (older_than) { conditions.push("indexed_at <= ?"); params.push(older_than); }
-  const result = db.run(`DELETE FROM files WHERE ${conditions.join(" AND ")}`, params);
-  return { content: [{ type: "text" as const, text: `Purged ${result.changes} deleted file(s)` }] };
+  const purged = await store().purgeDeleted(source_id, older_than);
+  return { content: [{ type: "text" as const, text: `Purged ${purged} deleted file(s)` }] };
 });
 
 registerTool("get_or_create_collection", "Find a collection by name, or create it if it doesn't exist", {
   name: z.string(),
   description: z.string().optional().default(""),
 }, async ({ name, description }) => {
-  const { getDb: getGocDb } = await import("../db/database.js");
-  const db = getGocDb();
-  const existing = db.query<{ id: string }, [string]>("SELECT id FROM collections WHERE name = ?").get(name);
-  if (existing) {
-    const c = getCollection(existing.id);
-    return { content: [{ type: "text" as const, text: JSON.stringify(c, null, 2) }] };
-  }
-  const c = createCollection(name, description);
+  const c = await store().getOrCreateCollection(name, description);
   return { content: [{ type: "text" as const, text: JSON.stringify(c, null, 2) }] };
 });
 
@@ -1618,14 +1561,7 @@ registerTool("get_or_create_project", "Find a project by name, or create it if i
   name: z.string(),
   description: z.string().optional().default(""),
 }, async ({ name, description }) => {
-  const { getDb: getGopDb } = await import("../db/database.js");
-  const db = getGopDb();
-  const existing = db.query<{ id: string }, [string]>("SELECT id FROM projects WHERE name = ?").get(name);
-  if (existing) {
-    const p = getProject(existing.id);
-    return { content: [{ type: "text" as const, text: JSON.stringify(p, null, 2) }] };
-  }
-  const p = createProject(name, description);
+  const p = await store().getOrCreateProject(name, description);
   return { content: [{ type: "text" as const, text: JSON.stringify(p, null, 2) }] };
 });
 
@@ -1641,11 +1577,12 @@ registerTool(
   },
   async (params) => {
     try {
-      const { getDb: getFeedbackDb } = await import("../db/database.js");
-      const db = getFeedbackDb();
-      db.run("INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)", [
-        params.message, params.email || null, params.category || "general", pkg.version,
-      ]);
+      await store().recordFeedback({
+        message: params.message,
+        email: params.email,
+        category: params.category || "general",
+        version: pkg.version,
+      });
       return { content: [{ type: "text" as const, text: "Feedback saved. Thank you!" }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: String(e) }], isError: true };
@@ -1689,11 +1626,13 @@ registerTool("list_agents", "List all registered agents.", {}, async () => {
 registerTool("watch_source", "Start watching a local source for file changes (real-time indexing)", {
   source_id: z.string().describe("Source ID (must be a local source)"),
 }, async ({ source_id }) => {
-  const source = getSource(source_id);
+  const denied = requireLocalTransport("watch_source");
+  if (denied) return denied;
+  const source = await store().getSource(source_id);
   if (!source) return { content: [{ type: "text" as const, text: `Source not found: ${source_id}` }], isError: true };
   if (source.type !== "local") return { content: [{ type: "text" as const, text: "watch_source only works with local sources" }], isError: true };
   const { watchSource } = await import("../lib/watcher.js");
-  const machine = getCurrentMachine();
+  const machine = await store().currentMachine();
   watchSource(source, machine.id);
   return { content: [{ type: "text" as const, text: `Watching ${source.name} (${source.path})` }] };
 });

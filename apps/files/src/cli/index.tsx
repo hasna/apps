@@ -3,9 +3,8 @@ import { Command } from "commander";
 import { registerEventsCommands } from "@hasna/events/commander";
 import chalk from "chalk";
 import { getCurrentMachine } from "../db/machines.js";
-import { createSource, listSources, deleteSource, getSource, updateSource } from "../db/sources.js";
+import { createSource, listSources, getSource, updateSource } from "../db/sources.js";
 import { getFile } from "../db/files.js";
-import { searchFiles } from "../db/search.js";
 import { getLatestFileVersion } from "../db/file-versions.js";
 import {
   deleteFileSearchDocument,
@@ -14,13 +13,10 @@ import {
   refreshAllFileSearchDocumentFts,
   upsertFileSearchDocument,
 } from "../db/file-search-documents.js";
-import { deleteCollection } from "../db/collections.js";
-import { deleteProject } from "../db/projects.js";
 import { listPeers, addPeer, removePeer } from "../db/peers.js";
 import { getConfigPath, loadConfig, setConfigValue } from "../lib/config.js";
 import { registerEvidenceCommands } from "./evidence.js";
 import { registerOrganizationCommands } from "./organize.js";
-import { registerStorageCommands } from "./storage.js";
 import { indexLocalSource } from "../lib/indexer.js";
 import { listGoogleDriveItems, listGoogleDriveProfiles, listGoogleDriveSharedDrives, preflightGoogleDriveSource, syncGoogleDriveSource } from "../lib/google-drive.js";
 import { indexS3Source, uploadToS3 } from "../lib/s3.js";
@@ -34,7 +30,7 @@ import { buildFilesContextPack, buildFilesSearchPack } from "../lib/context-pack
 import { buildOpenFilesFileRef, buildOpenFilesFileRevisionRef } from "../lib/source-ref.js";
 import { acknowledgeKnowledgeSourceOutbox, pollKnowledgeSourceOutbox } from "../db/knowledge-outbox.js";
 import { runDbIntegrityCheck, runOpsStateSnapshot } from "../lib/ops-loop.js";
-import { getDb, getDbPath } from "../db/database.js";
+import { getDbPath } from "../db/database.js";
 import { requireId } from "../db/resolve.js";
 import { basename, dirname, resolve, join } from "path";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
@@ -62,6 +58,21 @@ const DEFAULT_PROD_FILES_REGION = "us-east-1";
 const DEFAULT_PROD_FILES_PREFIX = "imports/google-drive/live";
 const DEFAULT_PROD_FILES_SOURCE_NAME = "prod-files-drive";
 
+/**
+ * Refuse a physical, on-box-only command when the client is bound to the cloud
+ * (api) transport. Indexing, Drive sync, uploads, extraction, local FTS/search
+ * indexes, peer sync, the change outbox, and on-disk diagnostics are all
+ * machine-local side effects the self-hosted service owns; a thin api-mode
+ * client must never silently read or write the local SQLite island for them.
+ * Data-plane reads/writes always route through the Store and work in both modes.
+ */
+function requireLocalTransport(command: string): void {
+  if (store().transport !== "local") {
+    console.error(chalk.red(`${command} runs on-box only and is unavailable in cloud (api) mode; the self-hosted service owns ingestion.`));
+    process.exit(1);
+  }
+}
+
 program
   .name("files")
   .description("Agent-first file management — index, sync, search, and retrieve files across local, S3, and Google Drive sources")
@@ -70,7 +81,6 @@ program
 registerEvidenceCommands(program);
 registerEventsCommands(program, { source: "files" });
 registerOrganizationCommands(program);
-registerStorageCommands(program);
 
 const ops = program.command("ops").description("Loop-safe operational checks");
 
@@ -160,8 +170,9 @@ sources
   .description("List all configured sources")
   .option("--json", "Output as JSON")
   .action(async (opts: { json?: boolean }) => {
-    const machine = getCurrentMachine();
-    const all = await store().listSources();
+    const files = store();
+    const machine = await files.currentMachine();
+    const all = await files.listSources();
     if (opts.json) { console.log(JSON.stringify(all, null, 2)); return; }
     if (!all.length) {
       console.log(chalk.dim("No sources configured. Run: files sources add <path>"));
@@ -201,8 +212,8 @@ sources
     endpoint?: string;
     forcePathStyle?: boolean;
   }) => {
-    const machine = getCurrentMachine();
     const files = store();
+    const machine = await files.currentMachine();
     const isCloud = files.transport === "api";
     // The Store handles the transport difference (the ApiStore drops the local
     // machine id so the cloud assigns the owning machine).
@@ -280,6 +291,7 @@ sources
     json?: boolean;
   }) => {
     return (async () => {
+    requireLocalTransport("files sources add-google-drive");
     const machine = getCurrentMachine();
     const destinationId = opts.destinationSource ? requireId(opts.destinationSource, "sources") : undefined;
     if (destinationId) {
@@ -363,6 +375,7 @@ sources
     googleDriveDefault?: boolean;
     json?: boolean;
   }) => {
+    requireLocalTransport("files sources bootstrap-prod-files");
     const machine = getCurrentMachine();
     const config: S3Config = { profile: opts.awsProfile };
     const productionNames = new Set([opts.name, DEFAULT_PROD_FILES_SOURCE_NAME, "prod-files", "prod-emails-drive"]);
@@ -463,6 +476,7 @@ sources
   .description("List Google Drive profiles available through connectors auth")
   .option("--json", "Output as JSON")
   .action(async (opts: { json?: boolean }) => {
+    requireLocalTransport("files sources google-drive-profiles");
     const profiles = await listGoogleDriveProfiles();
     if (opts.json) { console.log(JSON.stringify(profiles, null, 2)); return; }
     if (!profiles.length) {
@@ -474,10 +488,10 @@ sources
 sources
   .command("rename <id> <name>")
   .description("Rename a source")
-  .action((id: string, name: string) => {
+  .action(async (id: string, name: string) => {
     try {
-      const resolvedId = requireId(id, "sources");
-      updateSource(resolvedId, { name });
+      const updated = await store().updateSource(id, { name });
+      if (!updated) throw new Error(`No source found matching "${id}"`);
       console.log(chalk.green(`✓ Source renamed to "${name}"`));
     } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
   });
@@ -485,17 +499,21 @@ sources
 sources
   .command("enable <id>")
   .description("Enable a source")
-  .action((id: string) => {
-    try { updateSource(requireId(id, "sources"), { enabled: true }); console.log(chalk.green("✓ Source enabled")); }
-    catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
+  .action(async (id: string) => {
+    try {
+      if (!(await store().updateSource(id, { enabled: true }))) throw new Error(`No source found matching "${id}"`);
+      console.log(chalk.green("✓ Source enabled"));
+    } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
   });
 
 sources
   .command("disable <id>")
   .description("Disable a source (skipped during index)")
-  .action((id: string) => {
-    try { updateSource(requireId(id, "sources"), { enabled: false }); console.log(chalk.green("✓ Source disabled")); }
-    catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
+  .action(async (id: string) => {
+    try {
+      if (!(await store().updateSource(id, { enabled: false }))) throw new Error(`No source found matching "${id}"`);
+      console.log(chalk.green("✓ Source disabled"));
+    } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
   });
 
 sources
@@ -521,6 +539,7 @@ program
   .command("index [source-id]")
   .description("Index all sources (or a specific one)")
   .action(async (sourceId?: string) => {
+    requireLocalTransport("files index");
     const machine = getCurrentMachine();
     let resolvedSourceId = sourceId;
     if (sourceId) {
@@ -560,6 +579,7 @@ sources
   .description("List accessible Google shared drives for a source")
   .option("--json", "Output as JSON")
   .action(async (id: string, opts: { json?: boolean }) => {
+    requireLocalTransport("files sources shared-drives");
     const source = getSource(requireId(id, "sources"));
     if (!source || source.type !== "google_drive") {
       console.error(chalk.red("Source must be a Google Drive source"));
@@ -578,6 +598,7 @@ sources
   .description("List Google Drive items visible to a source")
   .option("--json", "Output as JSON")
   .action(async (id: string, opts: { json?: boolean }) => {
+    requireLocalTransport("files sources google-drive-items");
     const source = getSource(requireId(id, "sources"));
     if (!source || source.type !== "google_drive") {
       console.error(chalk.red("Source must be a Google Drive source"));
@@ -596,6 +617,7 @@ sources
   .description("Preflight Google Drive auth, destination, and item scope without uploading")
   .option("--json", "Output as JSON")
   .action(async (id: string | undefined, opts: { json?: boolean }) => {
+    requireLocalTransport("files sources google-drive-status");
     const sources = id
       ? [getSource(requireId(id, "sources"))].filter(Boolean)
       : listSources().filter((source) => source.enabled && source.type === "google_drive");
@@ -626,6 +648,7 @@ sources
   .option("--dry-run", "Preflight auth, destination, and item scope without uploading")
   .option("--json", "Output as JSON")
   .action(async (id: string | undefined, opts: { dryRun?: boolean; json?: boolean }) => {
+    requireLocalTransport("files sources sync-google-drive");
     const toSync = id
       ? [getSource(requireId(id, "sources"))].filter(Boolean)
       : listSources().filter((source) => source.enabled && source.type === "google_drive");
@@ -716,7 +739,7 @@ program
   .option("-l, --limit <n>", "Max results", "20")
   .option("--offset <n>", "Offset", "0")
   .option("--json", "Output as JSON")
-  .action((query: string, opts: {
+  .action(async (query: string, opts: {
     source?: string;
     machine?: string;
     tag?: string;
@@ -738,7 +761,7 @@ program
       process.exit(1);
     }
 
-    const results = searchFiles(query, {
+    const results = await store().searchFiles(query, {
       source_id: opts.source,
       machine_id: opts.machine,
       tag: opts.tag,
@@ -860,6 +883,7 @@ searchIndex
     replaceExisting?: boolean;
     json?: boolean;
   }) => {
+    requireLocalTransport("files search-index add");
     try {
       const id = requireId(fileId, "files");
       if (!getFile(id)) throw new Error(`File not found: ${id}`);
@@ -919,6 +943,7 @@ searchIndex
     offset: string;
     json?: boolean;
   }) => {
+    requireLocalTransport("files search-index list");
     try {
       const docs = listFileSearchDocuments({
         file_id: fileId ? requireId(fileId, "files") : undefined,
@@ -941,6 +966,7 @@ searchIndex
   .description("Remove a derived search document and its FTS entry")
   .option("--json", "Output as JSON")
   .action((documentId: string, opts: { json?: boolean }) => {
+    requireLocalTransport("files search-index remove");
     try {
       const removed = deleteFileSearchDocument(documentId);
       if (opts.json) { console.log(JSON.stringify({ removed }, null, 2)); return; }
@@ -953,6 +979,7 @@ searchIndex
   .description("Show derived search index coverage")
   .option("--json", "Output as JSON")
   .action((opts: { json?: boolean }) => {
+    requireLocalTransport("files search-index stats");
     const stats = getFileSearchIndexStats();
     if (opts.json) { console.log(JSON.stringify(stats, null, 2)); return; }
     console.log(chalk.bold("derived search index"));
@@ -971,6 +998,7 @@ searchIndex
   .description("Rebuild derived search FTS entries from stored search documents")
   .option("--json", "Output as JSON")
   .action((opts: { json?: boolean }) => {
+    requireLocalTransport("files search-index rebuild-fts");
     const refreshed = refreshAllFileSearchDocumentFts();
     if (opts.json) { console.log(JSON.stringify({ refreshed }, null, 2)); return; }
     console.log(chalk.green(`refreshed ${refreshed} search document(s)`));
@@ -1109,6 +1137,7 @@ program
   .command("upload <local-path> <source-id> [s3-key]")
   .description("Upload a local file to an S3 source")
   .action(async (localPath: string, sourceId: string, s3Key?: string) => {
+    requireLocalTransport("files upload");
     let source; try { source = getSource(requireId(sourceId, "sources"))!; } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
     if (source.type !== "s3") { console.error(chalk.red("upload only works with S3 sources")); process.exit(1); }
     if (!existsSync(localPath)) { console.error(chalk.red(`File not found: ${localPath}`)); process.exit(1); }
@@ -1135,13 +1164,13 @@ cols.command("create <name> [description]").action(async (name: string, desc?: s
   const c = await store().createCollection(name, desc);
   console.log(chalk.green(`✓ Collection created: ${c.id}`));
 });
-cols.command("remove <id>").description("Delete a collection").option("--yes", "Confirm destructive removal").action((id: string, opts: { yes?: boolean }) => {
+cols.command("remove <id>").description("Delete a collection").option("--yes", "Confirm destructive removal").action(async (id: string, opts: { yes?: boolean }) => {
   try {
     if (!opts.yes) {
       console.error(chalk.red("Refusing to remove collection without --yes (destructive operation)."));
       process.exit(1);
     }
-    const ok = deleteCollection(requireId(id, "collections"));
+    const ok = await store().deleteCollection(id);
     console.log(ok ? chalk.green("✓ Collection removed") : chalk.red("Collection not found"));
   } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
 });
@@ -1165,13 +1194,13 @@ projs.command("create <name> [description]").action(async (name: string, desc?: 
   const p = await store().createProject(name, desc);
   console.log(chalk.green(`✓ Project created: ${p.id}`));
 });
-projs.command("remove <id>").description("Delete a project").option("--yes", "Confirm destructive removal").action((id: string, opts: { yes?: boolean }) => {
+projs.command("remove <id>").description("Delete a project").option("--yes", "Confirm destructive removal").action(async (id: string, opts: { yes?: boolean }) => {
   try {
     if (!opts.yes) {
       console.error(chalk.red("Refusing to remove project without --yes (destructive operation)."));
       process.exit(1);
     }
-    const ok = deleteProject(requireId(id, "projects"));
+    const ok = await store().deleteProject(id);
     console.log(ok ? chalk.green("✓ Project removed") : chalk.red("Project not found"));
   } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
 });
@@ -1216,8 +1245,11 @@ program
   .command("info <file-id>")
   .description("Show file details")
   .option("--json", "Output as JSON")
-  .action((fileId: string, opts: { json?: boolean }) => {
-    let file; try { file = getFile(requireId(fileId, "files"))!; } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
+  .action(async (fileId: string, opts: { json?: boolean }) => {
+    // Data-plane read: routed through the Store so metadata reflects the active
+    // transport (on-box db or cloud service).
+    const file = await store().getFile(fileId);
+    if (!file) { console.error(chalk.red(`No file found matching "${fileId}"`)); process.exit(1); }
     if (opts.json) { console.log(JSON.stringify(file, null, 2)); return; }
     console.log(`${chalk.bold("ID:")}        ${file.id}`);
     console.log(`${chalk.bold("Name:")}      ${file.name}`);
@@ -1264,64 +1296,34 @@ program
   .command("stats")
   .description("Show storage statistics")
   .option("--json", "Output as JSON")
-  .action((opts: { json?: boolean }) => {
-    const db = getDb();
-    const totalFiles = (db.query<{ n: number }, []>("SELECT COUNT(*) as n FROM files WHERE status='active'").get())!.n;
-    const totalSize = (db.query<{ s: number }, []>("SELECT COALESCE(SUM(size),0) as s FROM files WHERE status='active'").get())!.s;
+  .action(async (opts: { json?: boolean }) => {
+    // Data-plane read: the Store reports the on-box db (local) or the cloud
+    // service (api) — never a stale local island while in api mode.
+    const stats = await store().getStats();
+    if (opts.json) { console.log(JSON.stringify(stats, null, 2)); return; }
 
-    if (opts.json) {
-      const bySource = db.query<{ name: string; cnt: number; sz: number }, []>(`
-        SELECT s.name, COUNT(f.id) as cnt, COALESCE(SUM(f.size),0) as sz
-        FROM sources s LEFT JOIN files f ON f.source_id=s.id AND f.status='active'
-        GROUP BY s.id ORDER BY sz DESC
-      `).all();
-      const byExtJson = db.query<{ ext: string; cnt: number; sz: number }, []>(`
-        SELECT ext, COUNT(*) as cnt, COALESCE(SUM(size),0) as sz
-        FROM files WHERE status='active' AND ext != ''
-        GROUP BY ext ORDER BY cnt DESC LIMIT 15
-      `).all();
-      const byMachineJson = db.query<{ hostname: string; cnt: number; sz: number }, []>(`
-        SELECT m.hostname, COUNT(f.id) as cnt, COALESCE(SUM(f.size),0) as sz
-        FROM machines m LEFT JOIN files f ON f.machine_id=m.id AND f.status='active'
-        GROUP BY m.id ORDER BY cnt DESC
-      `).all();
-      console.log(JSON.stringify({ total_files: totalFiles, total_size: totalSize, by_source: bySource, by_ext: byExtJson, by_machine: byMachineJson }, null, 2));
-      return;
-    }
+    const totalFiles = Number(stats.total_files ?? 0);
+    const totalSize = Number(stats.total_size ?? 0);
+    const bySource = (stats.by_source as Array<{ name?: string; count: number }> | undefined) ?? [];
+    const byExt = (stats.by_ext as Array<{ ext?: string; count: number }> | undefined) ?? [];
+    const byMachine = (stats.by_machine as Array<{ name?: string; count: number }> | undefined) ?? [];
 
     console.log(chalk.bold("\n  Files Overview"));
     console.log(`  ${chalk.cyan(totalFiles.toLocaleString())} files  ${chalk.cyan(formatSize(totalSize))} total\n`);
 
-    const bySrc = db.query<{ name: string; cnt: number; sz: number }, []>(`
-      SELECT s.name, COUNT(f.id) as cnt, COALESCE(SUM(f.size),0) as sz
-      FROM sources s LEFT JOIN files f ON f.source_id=s.id AND f.status='active'
-      GROUP BY s.id ORDER BY sz DESC
-    `).all();
-    if (bySrc.length) {
+    if (bySource.length) {
       console.log(chalk.bold("  By Source"));
-      for (const r of bySrc) console.log(`  ${chalk.cyan(r.name.padEnd(30))} ${String(r.cnt).padStart(7)} files  ${formatSize(r.sz).padStart(9)}`);
+      for (const r of bySource) console.log(`  ${chalk.cyan((r.name ?? "(unknown)").padEnd(30))} ${String(r.count).padStart(7)} files`);
       console.log();
     }
-
-    const byExt = db.query<{ ext: string; cnt: number; sz: number }, []>(`
-      SELECT ext, COUNT(*) as cnt, COALESCE(SUM(size),0) as sz
-      FROM files WHERE status='active' AND ext != ''
-      GROUP BY ext ORDER BY cnt DESC LIMIT 15
-    `).all();
     if (byExt.length) {
       console.log(chalk.bold("  Top Extensions"));
-      for (const r of byExt) console.log(`  ${chalk.yellow((r.ext || "(none)").padEnd(12))} ${String(r.cnt).padStart(7)} files  ${formatSize(r.sz).padStart(9)}`);
+      for (const r of byExt) console.log(`  ${chalk.yellow((r.ext || "(none)").padEnd(12))} ${String(r.count).padStart(7)} files`);
       console.log();
     }
-
-    const byMachine = db.query<{ hostname: string; cnt: number; sz: number }, []>(`
-      SELECT m.hostname, COUNT(f.id) as cnt, COALESCE(SUM(f.size),0) as sz
-      FROM machines m LEFT JOIN files f ON f.machine_id=m.id AND f.status='active'
-      GROUP BY m.id ORDER BY cnt DESC
-    `).all();
     if (byMachine.length) {
       console.log(chalk.bold("  By Machine"));
-      for (const r of byMachine) console.log(`  ${chalk.magenta(r.hostname.padEnd(30))} ${String(r.cnt).padStart(7)} files  ${formatSize(r.sz).padStart(9)}`);
+      for (const r of byMachine) console.log(`  ${chalk.magenta((r.name ?? "(unknown)").padEnd(30))} ${String(r.count).padStart(7)} files`);
       console.log();
     }
   });
@@ -1331,53 +1333,23 @@ program
   .description("Find duplicate files (same BLAKE3 hash, different paths)")
   .option("-s, --source <id>", "Limit to a specific source")
   .option("--json", "Output as JSON")
-  .action((opts: { source?: string; json?: boolean }) => {
-    const db = getDb();
-    const resolvedSourceId = opts.source ? requireId(opts.source, "sources") : undefined;
+  .action(async (opts: { source?: string; json?: boolean }) => {
+    // Data-plane read: duplicate detection runs against the active transport's
+    // dataset (on-box db or the cloud service), never the wrong island.
+    const groups = await store().findDuplicates(opts.source);
 
-    const groups = resolvedSourceId
-      ? db.query<{ hash: string; cnt: number; total_size: number }, [string]>(`
-          SELECT hash, COUNT(*) as cnt, SUM(size) as total_size
-          FROM files WHERE status='active' AND hash IS NOT NULL AND source_id = ?
-          GROUP BY hash HAVING cnt > 1
-          ORDER BY total_size DESC
-        `).all(resolvedSourceId)
-      : db.query<{ hash: string; cnt: number; total_size: number }, []>(`
-          SELECT hash, COUNT(*) as cnt, SUM(size) as total_size
-          FROM files WHERE status='active' AND hash IS NOT NULL
-          GROUP BY hash HAVING cnt > 1
-          ORDER BY total_size DESC
-        `).all();
-
-    if (opts.json) {
-      const detailedGroups = groups.map((g) => ({
-        hash: g.hash,
-        count: g.cnt,
-        total_size: g.total_size,
-        files: db.query<{ id: string; name: string; path: string; source_id: string; size: number }, [string]>(
-          "SELECT id, name, path, source_id, size FROM files WHERE hash=? AND status='active' ORDER BY indexed_at"
-        ).all(g.hash),
-      }));
-      const wastedBytes = groups.reduce((acc, g) => acc + g.total_size - (g.total_size / g.cnt), 0);
-      console.log(JSON.stringify({ groups: detailedGroups, wasted_bytes: wastedBytes }, null, 2));
-      return;
-    }
+    if (opts.json) { console.log(JSON.stringify(groups, null, 2)); return; }
 
     if (!groups.length) {
       console.log(chalk.green("✓ No duplicates found."));
       return;
     }
 
-    const wasted = groups.reduce((acc, g) => acc + g.total_size - (g.total_size / g.cnt), 0);
-    console.log(chalk.bold(`\n  ${groups.length} duplicate group(s) — ${formatSize(wasted)} wasted\n`));
-
+    console.log(chalk.bold(`\n  ${groups.length} duplicate group(s)\n`));
     for (const g of groups) {
-      const files = db.query<{ id: string; name: string; path: string; source_id: string; size: number }, [string]>(
-        "SELECT id, name, path, source_id, size FROM files WHERE hash=? AND status='active' ORDER BY indexed_at"
-      ).all(g.hash);
-      console.log(chalk.yellow(`  ${g.hash.slice(0, 16)}…  ${chalk.dim(`×${g.cnt}  ${formatSize(files[0]!.size)} each`)}`));
-      for (const f of files) {
-        console.log(`    ${chalk.bold(f.id)}  ${chalk.cyan(f.name)}  ${chalk.dim(f.path)}`);
+      console.log(chalk.yellow(`  ${g.hash.slice(0, 16)}…  ${chalk.dim(`×${g.cnt}`)}`));
+      for (const p of g.paths.split(" | ")) {
+        console.log(`    ${chalk.dim(p)}`);
       }
       console.log();
     }
@@ -1393,6 +1365,7 @@ peers
   .description("List saved peers")
   .option("--json", "Output as JSON")
   .action((opts: { json?: boolean }) => {
+    requireLocalTransport("files peers list");
     const all = listPeers();
     if (opts.json) { console.log(JSON.stringify(all, null, 2)); return; }
     if (!all.length) { console.log(chalk.dim("No peers saved. Run: files peers add <url>")); return; }
@@ -1410,6 +1383,7 @@ peers
   .option("--auto", "Enable auto-sync")
   .option("--interval <minutes>", "Auto-sync interval in minutes", "30")
   .action((url: string, opts: { name?: string; auto?: boolean; interval: string }) => {
+    requireLocalTransport("files peers add");
     let intervalMinutes: number;
     try {
       intervalMinutes = parseIntFlag(opts.interval, "interval", { min: 1 });
@@ -1427,6 +1401,7 @@ peers
   .description("Remove a peer")
   .option("--yes", "Confirm destructive removal")
   .action((idOrUrl: string, opts: { yes?: boolean }) => {
+    requireLocalTransport("files peers remove");
     if (!opts.yes) {
       console.error(chalk.red("Refusing to remove peer without --yes (destructive operation)."));
       process.exit(1);
@@ -1441,6 +1416,7 @@ program
   .description("Sync file index from one or more peer machines (e.g. http://192.168.1.10:19432)")
   .option("--json", "Output as JSON")
   .action(async (peerUrls: string[], opts: { json?: boolean }) => {
+    requireLocalTransport("files sync");
     const { syncWithPeers } = await import("../lib/sync.js");
     const results = await syncWithPeers(peerUrls);
     if (opts.json) { console.log(JSON.stringify(results, null, 2)); return; }
@@ -1509,6 +1485,7 @@ program
     segmentChars: string;
     redact: string[];
   }) => {
+    requireLocalTransport("files extract-text");
     try {
       const maxBytes = parseIntFlag(opts.maxBytes, "max-bytes", { min: 1 });
       const maxSegmentChars = parseIntFlag(opts.segmentChars, "segment-chars", { min: 256 });
@@ -1549,6 +1526,7 @@ program
     segmentChars: string;
     redact: string[];
   }) => {
+    requireLocalTransport("files extract-snapshot");
     try {
       const maxBytes = parseIntFlag(opts.maxBytes, "max-bytes", { min: 1 });
       const maxSegmentChars = parseIntFlag(opts.segmentChars, "segment-chars", { min: 256 });
@@ -1614,6 +1592,7 @@ knowledge
     includeEvidenceAssets?: boolean;
     json?: boolean;
   }) => {
+    requireLocalTransport("files knowledge manifest");
     try {
       const limit = parseIntFlag(opts.limit, "limit", { min: 1 });
       const format = parseManifestFormat(opts.format);
@@ -1679,6 +1658,7 @@ knowledge
     segmentChars: string;
     json?: boolean;
   }) => {
+    requireLocalTransport("files knowledge doctor");
     try {
       const report = await doctorKnowledgeSources({
         source_refs: sourceRefs,
@@ -1733,6 +1713,7 @@ knowledge
     signedUrlExpires: string;
     json?: boolean;
   }) => {
+    requireLocalTransport("files knowledge resolve");
     try {
       const mode = parseResolveMode(opts.mode);
       const result = await resolveKnowledgeSourceRef(sourceRef, {
@@ -1781,6 +1762,7 @@ knowledgeOutbox
     limit: string;
     json?: boolean;
   }) => {
+    requireLocalTransport("files knowledge outbox poll");
     try {
       const result = pollKnowledgeSourceOutbox({
         consumer_id: opts.consumer,
@@ -1806,6 +1788,7 @@ knowledgeOutbox
   .description("Acknowledge source change outbox progress")
   .option("--json", "Output as JSON")
   .action((consumerId: string, cursor: string, opts: { json?: boolean }) => {
+    requireLocalTransport("files knowledge outbox ack");
     try {
       const checkpoint = acknowledgeKnowledgeSourceOutbox(
         consumerId,
@@ -1821,10 +1804,11 @@ knowledgeOutbox
 
 program
   .command("recent")
-  .description("Show recently indexed files")
+  .description("Show files most recently touched by agent activity")
+  .option("-a, --agent <id>", "Limit to a specific agent")
   .option("-l, --limit <n>", "Max results", "20")
   .option("--json", "Output as JSON")
-  .action((opts: { limit: string; json?: boolean }) => {
+  .action(async (opts: { agent?: string; limit: string; json?: boolean }) => {
     let limit: number;
     try {
       limit = parseIntFlag(opts.limit, "limit", { min: 1 });
@@ -1833,13 +1817,12 @@ program
       process.exit(1);
     }
 
-    const db = getDb();
-    const files = db.query<{ id: string; name: string; path: string; size: number; indexed_at: string; source_id: string }, [number]>(
-      "SELECT id, name, path, size, indexed_at, source_id FROM files WHERE status='active' ORDER BY indexed_at DESC LIMIT ?"
-    ).all(limit);
+    // Data-plane read: routed through the Store so api mode reports the cloud's
+    // recent activity, not the local island.
+    const files = await store().recentFiles(opts.agent, limit);
     if (opts.json) { console.log(JSON.stringify(files, null, 2)); return; }
     for (const f of files) {
-      console.log(`${chalk.bold(f.id)}  ${chalk.cyan(f.name)}  ${formatSize(f.size)}  ${chalk.dim(f.indexed_at)}`);
+      console.log(`${chalk.bold(f.id)}  ${chalk.cyan(f.name)}  ${formatSize(f.size)}  ${chalk.dim(f.last_touched ?? f.indexed_at)}`);
     }
   });
 
@@ -1847,6 +1830,7 @@ program
   .command("watch")
   .description("Start file watcher for all local sources (foreground daemon)")
   .action(async () => {
+    requireLocalTransport("files watch");
     const machine = getCurrentMachine();
     const { watchSource } = await import("../lib/watcher.js");
     const localSources = listSources(machine.id).filter((s) => s.enabled && s.type === "local");
@@ -1898,8 +1882,8 @@ config
 
 program
   .command("db")
-  .description("Show database path")
-  .action(() => console.log(getDbPath()));
+  .description("Show the on-box SQLite database path (local mode only)")
+  .action(() => { requireLocalTransport("files db"); console.log(getDbPath()); });
 
 // ─── utils ───────────────────────────────────────────────────────────────────
 
@@ -2130,15 +2114,14 @@ program
   .command("remove <source-id>")
   .description("Remove a source and all its indexed files (alias for sources remove)")
   .option("--yes", "Confirm destructive removal")
-  .action((id: string, opts: { yes?: boolean }) => {
+  .action(async (id: string, opts: { yes?: boolean }) => {
     if (!opts.yes) {
       console.error(chalk.red("Refusing to remove source without --yes (destructive operation)."));
       process.exit(1);
     }
-    const resolvedId = requireId(id, "sources");
-    const ok = deleteSource(resolvedId);
-    if (ok) console.log(chalk.green(`✓ Source ${resolvedId} removed`));
-    else { console.error(chalk.red(`Source not found: ${resolvedId}`)); process.exit(1); }
+    const ok = await store().deleteSource(id);
+    if (ok) console.log(chalk.green(`✓ Source ${id} removed`));
+    else { console.error(chalk.red(`Source not found: ${id}`)); process.exit(1); }
   });
 
 program.parseAsync();

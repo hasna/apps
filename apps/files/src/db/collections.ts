@@ -84,6 +84,14 @@ export function deleteCollection(id: string): boolean {
   return getDb().run("DELETE FROM collections WHERE id=?", [id]).changes > 0;
 }
 
+/** Find a collection by exact name, or create it if it does not exist. */
+export function getOrCreateCollection(name: string, description = ""): Collection {
+  const db = getDb();
+  const existing = db.query<CollectionRow, [string]>("SELECT * FROM collections WHERE name = ?").get(name);
+  if (existing) return toCollection(existing);
+  return createCollection(name, description);
+}
+
 export function addToCollection(collection_id: string, file_id: string): void {
   getDb().run("INSERT OR IGNORE INTO collection_files (collection_id, file_id) VALUES (?,?)", [collection_id, file_id]);
 }

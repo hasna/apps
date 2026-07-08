@@ -57,6 +57,7 @@ describe("ApiStore route mapping", () => {
 
     await store.listSources("m1");
     await store.createSource({ name: "n", type: "local", path: "/tmp", machine_id: "local-only" });
+    await store.updateSource("src_1", { name: "renamed", enabled: false });
     await store.deleteSource("src_1");
     await store.tagFile("file_1", "invoice");
     await store.untagFile("file_1", "invoice");
@@ -70,6 +71,7 @@ describe("ApiStore route mapping", () => {
     expect(find("GET", "/sources")).toBeDefined();
     // machine_id travels as a query param, not in the path.
     expect(find("POST", "/sources")?.body).toMatchObject({ name: "n", type: "local", machine_id: undefined });
+    expect(find("PATCH", "/sources/src_1")?.body).toEqual({ name: "renamed", enabled: false });
     expect(find("DELETE", "/sources/src_1")).toBeDefined();
     expect(find("POST", "/files/file_1/tags")?.body).toEqual({ tags: ["invoice"] });
     expect(find("DELETE", "/files/file_1/tags")?.body).toEqual({ tags: ["invoice"] });

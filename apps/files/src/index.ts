@@ -1,13 +1,9 @@
 // DB layer
 export { getDb, getDbPath, DB_PATH } from "./db/database.js";
 
-// DB — PostgreSQL migrations
+// DB — canonical PostgreSQL data-plane schema (applied server-side only, via
+// the cloud MigrationLedger). No client-side DSN, sync engine, or migrate path.
 export { PG_MIGRATIONS } from "./db/pg-migrations.js";
-export { applyPgMigrations } from "./db/pg-migrate.js";
-export { PgAdapterAsync } from "./db/remote-storage.js";
-export { getStorageConfig, getStorageConnectionString, getStorageDatabaseUrlEnvName, STORAGE_CONFIG_PATH } from "./db/storage-config.js";
-export { STORAGE_TABLES, DEFAULT_GOOGLE_DRIVE_CANONICAL_MAPPING_PATH, applyGoogleDriveCanonicalMapping, getStoragePg, getStorageStatus, importGoogleDriveMetadata, parseStorageTables, pullStorageChanges, pushStorageChanges, runStorageMigrations, syncStorageChanges } from "./db/storage-sync.js";
-export type { StorageRuntimeContract, StorageStatus, SyncResult, GoogleDriveMetadataImportResult } from "./db/storage-sync.js";
 export { getCurrentMachine, listMachines, getMachine, upsertMachine } from "./db/machines.js";
 export { createSource, getSource, listSources, updateSource, deleteSource, markSourceIndexed } from "./db/sources.js";
 export { buildS3ObjectIdentity, buildS3ObjectResolverContract, findS3ObjectRecordForStorage, getS3ObjectRecord, listS3ObjectRecords, upsertS3ObjectRecord } from "./db/s3-objects.js";

@@ -1,10 +1,11 @@
+import type { SQLQueryBindings } from "bun:sqlite";
 import { getDb } from "./database.js";
 import { nanoid } from "nanoid";
 import { getLatestFileVersion, upsertCurrentFileVersion } from "./file-versions.js";
 import { appendKnowledgeSourceOutboxEvent } from "./knowledge-outbox.js";
 import { generateCanonicalName } from "../lib/normalize.js";
 import { buildOpenFilesFileRef } from "../lib/source-ref.js";
-import type { FileRecord, FileVersion, FileWithTags, ListFilesOptions, FileStatus, KnowledgeSourceOutboxEventType } from "../types/index.js";
+import type { DuplicateGroup, FileRecord, FileVersion, FileWithTags, ListFilesOptions, FileStatus, KnowledgeSourceOutboxEventType } from "../types/index.js";
 
 interface FileRow {
   id: string;
@@ -313,6 +314,143 @@ export function refreshAllFts(): void {
   db.run("DELETE FROM files_fts");
   const files = db.query<FileRow, []>("SELECT * FROM files").all();
   for (const f of files) refreshFileFts(f.id);
+}
+
+// ── Data-plane operations that back the LocalStore ─────────────────────────────
+// These are the SQLite implementations for the FilesStore methods the CLI/MCP
+// used to run inline (via getDb) — relocated here so the db layer stays the one
+// and only place that touches bun:sqlite.
+
+/** Move a file to a new managed relative path within its source. */
+export function moveFile(id: string, destPath: string): boolean {
+  return getDb().run(
+    "UPDATE files SET path=?, status='active', sync_version=sync_version+1 WHERE id=?",
+    [destPath, id],
+  ).changes > 0;
+}
+
+/** Rename a file and regenerate its canonical name. Returns the canonical name. */
+export function renameFile(id: string, newName: string, ext: string): string | null {
+  const canonical = generateCanonicalName(newName);
+  const result = getDb().run(
+    "UPDATE files SET name=?, original_name=?, canonical_name=?, ext=?, sync_version=sync_version+1 WHERE id=?",
+    [newName, newName, canonical, ext, id],
+  );
+  if (result.changes === 0) return null;
+  refreshFileFts(id);
+  return canonical;
+}
+
+/** Soft-delete a file (status='deleted'). */
+export function softDeleteFile(id: string): boolean {
+  return getDb().run(
+    "UPDATE files SET status='deleted', sync_version=sync_version+1 WHERE id=?",
+    [id],
+  ).changes > 0;
+}
+
+/** Restore a soft-deleted file. */
+export function restoreFile(id: string): boolean {
+  return getDb().run(
+    "UPDATE files SET status='active', sync_version=sync_version+1 WHERE id=? AND status='deleted'",
+    [id],
+  ).changes > 0;
+}
+
+/** Group active files that share a BLAKE3 hash (duplicates). */
+export function findDuplicates(source_id?: string): DuplicateGroup[] {
+  const db = getDb();
+  const filter = source_id ? "AND source_id = ?" : "";
+  const params: SQLQueryBindings[] = source_id ? [source_id] : [];
+  return db.query<DuplicateGroup, SQLQueryBindings[]>(
+    `SELECT hash, COUNT(*) as cnt, GROUP_CONCAT(path, ' | ') as paths
+     FROM files WHERE status='active' AND hash IS NOT NULL ${filter}
+     GROUP BY hash HAVING cnt > 1 ORDER BY cnt DESC`,
+  ).all(...params);
+}
+
+/** Aggregate statistics across all indexed files. */
+export function computeStats(): Record<string, unknown> {
+  const db = getDb();
+  const totals = db.query<{ total_files: number; total_size: number }, []>(
+    "SELECT COUNT(*) as total_files, COALESCE(SUM(size), 0) as total_size FROM files WHERE status='active'",
+  ).get()!;
+  const by_ext = db.query<{ ext: string; count: number }, []>(
+    "SELECT ext, COUNT(*) as count FROM files WHERE status='active' GROUP BY ext ORDER BY count DESC LIMIT 20",
+  ).all();
+  const by_source = db.query<{ source_id: string; name: string; count: number }, []>(
+    "SELECT f.source_id, s.name, COUNT(*) as count FROM files f JOIN sources s ON s.id=f.source_id WHERE f.status='active' GROUP BY f.source_id ORDER BY count DESC",
+  ).all();
+  const by_machine = db.query<{ machine_id: string; name: string; count: number }, []>(
+    "SELECT f.machine_id, m.name, COUNT(*) as count FROM files f JOIN machines m ON m.id=f.machine_id WHERE f.status='active' GROUP BY f.machine_id ORDER BY count DESC",
+  ).all();
+  const by_tag = db.query<{ tag: string; count: number }, []>(
+    "SELECT t.name as tag, COUNT(*) as count FROM file_tags ft JOIN tags t ON t.id=ft.tag_id GROUP BY t.name ORDER BY count DESC LIMIT 20",
+  ).all();
+  const total_collections = db.query<{ cnt: number }, []>("SELECT COUNT(*) as cnt FROM collections").get()!.cnt;
+  const total_projects = db.query<{ cnt: number }, []>("SELECT COUNT(*) as cnt FROM projects").get()!.cnt;
+  const total_agents = db.query<{ cnt: number }, []>("SELECT COUNT(*) as cnt FROM agents").get()!.cnt;
+  return { ...totals, by_ext, by_source, by_machine, by_tag, total_collections, total_projects, total_agents };
+}
+
+/** Batch-generate canonical names for files in a source that lack one. */
+export function normalizeSource(source_id: string): number {
+  const db = getDb();
+  const rows = db.query<{ id: string; name: string }, [string]>(
+    "SELECT id, name FROM files WHERE source_id = ? AND canonical_name IS NULL AND status = 'active'",
+  ).all(source_id);
+  let count = 0;
+  for (const row of rows) {
+    const canonical = generateCanonicalName(row.name);
+    db.run("UPDATE files SET original_name = ?, canonical_name = ? WHERE id = ?", [row.name, canonical, row.id]);
+    count++;
+  }
+  return count;
+}
+
+/** List files whose sync_status is 'conflict'. */
+export function listConflicts(source_id?: string, limit = 50): FileWithTags[] {
+  const db = getDb();
+  const filter = source_id ? "AND source_id = ?" : "";
+  const params: SQLQueryBindings[] = source_id ? [source_id, limit] : [limit];
+  const rows = db.query<FileRow, SQLQueryBindings[]>(
+    `SELECT * FROM files WHERE sync_status = 'conflict' ${filter} LIMIT ?`,
+  ).all(...params);
+  return rows.map((row) => ({ ...toFile(row), tags: [] }));
+}
+
+/** Resolve a sync conflict by marking the file synced. */
+export function resolveConflict(id: string): boolean {
+  return getDb().run(
+    "UPDATE files SET sync_status = 'synced', sync_version = sync_version + 1 WHERE id = ?",
+    [id],
+  ).changes > 0;
+}
+
+/** Permanently remove soft-deleted files, optionally scoped/aged. */
+export function purgeDeleted(source_id?: string, older_than?: string): number {
+  const db = getDb();
+  const conditions = ["status = 'deleted'"];
+  const params: SQLQueryBindings[] = [];
+  if (source_id) { conditions.push("source_id = ?"); params.push(source_id); }
+  if (older_than) { conditions.push("indexed_at <= ?"); params.push(older_than); }
+  return db.run(`DELETE FROM files WHERE ${conditions.join(" AND ")}`, params).changes;
+}
+
+/** Files most recently touched by agent activity. */
+export function recentFiles(agent_id?: string, limit = 20): FileWithTags[] {
+  const db = getDb();
+  const query = agent_id
+    ? "SELECT DISTINCT file_id, MAX(created_at) as last_touched FROM agent_activity WHERE file_id IS NOT NULL AND agent_id = ? GROUP BY file_id ORDER BY last_touched DESC LIMIT ?"
+    : "SELECT DISTINCT file_id, MAX(created_at) as last_touched FROM agent_activity WHERE file_id IS NOT NULL GROUP BY file_id ORDER BY last_touched DESC LIMIT ?";
+  const params: SQLQueryBindings[] = agent_id ? [agent_id, limit] : [limit];
+  const rows = db.query<{ file_id: string; last_touched: string }, SQLQueryBindings[]>(query).all(...params);
+  const out: FileWithTags[] = [];
+  for (const r of rows) {
+    const f = getFile(r.file_id);
+    if (f) out.push({ ...f, last_touched: r.last_touched } as FileWithTags & { last_touched: string });
+  }
+  return out;
 }
 
 function classifyFileChange(

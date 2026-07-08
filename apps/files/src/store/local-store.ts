@@ -6,26 +6,78 @@
  */
 import type {
   Collection,
+  DuplicateGroup,
   FileWithTags,
   ListFilesOptions,
   Machine,
   Project,
   ProjectStatus,
+  SearchResult,
   Source,
   Tag,
 } from "../types/index.js";
-import { createSource, deleteSource, getSource, listSources } from "../db/sources.js";
-import { getFile, listFiles } from "../db/files.js";
-import { listTags, tagFile, untagFile } from "../db/tags.js";
-import { addToCollection, createCollection, listCollections, removeFromCollection } from "../db/collections.js";
-import { addToProject, createProject, listProjects, removeFromProject } from "../db/projects.js";
-import { listMachines } from "../db/machines.js";
+import { createSource, deleteSource, getSource, listSources, updateSource } from "../db/sources.js";
+import {
+  annotateFile,
+  computeStats,
+  findDuplicates,
+  getFile,
+  getFileByPath,
+  listConflicts,
+  listFiles,
+  moveFile,
+  normalizeSource,
+  purgeDeleted,
+  recentFiles,
+  renameFile,
+  resolveConflict,
+  restoreFile,
+  softDeleteFile,
+} from "../db/files.js";
+import { searchFiles } from "../db/search.js";
+import { deleteTag, listTags, tagFile, untagFile } from "../db/tags.js";
+import { getCurrentMachine, listMachines } from "../db/machines.js";
+import {
+  addToCollection,
+  autoPopulateCollection,
+  createCollection,
+  deleteCollection,
+  getCollection,
+  getOrCreateCollection,
+  listCollections,
+  removeFromCollection,
+  updateCollection,
+} from "../db/collections.js";
+import {
+  addToProject,
+  createProject,
+  deleteProject,
+  getOrCreateProject,
+  getProject,
+  listProjects,
+  removeFromProject,
+  updateProject,
+} from "../db/projects.js";
+import { recordFeedback } from "../db/feedback.js";
 import { requireId, resolveId } from "../db/resolve.js";
-import type { CreateCollectionOptions, CreateProjectOptions, CreateSourceInput, FilesStore } from "./types.js";
+import type {
+  CollectionDetail,
+  CreateCollectionOptions,
+  CreateProjectOptions,
+  CreateSourceInput,
+  FeedbackInput,
+  FilesStore,
+  ProjectDetail,
+  RecentFile,
+  UpdateCollectionInput,
+  UpdateProjectInput,
+  UpdateSourceInput,
+} from "./types.js";
 
 export class LocalStore implements FilesStore {
   readonly transport = "local" as const;
 
+  // ── sources ──────────────────────────────────────────────────────────────
   async listSources(machineId?: string): Promise<Source[]> {
     return listSources(machineId);
   }
@@ -36,10 +88,22 @@ export class LocalStore implements FilesStore {
     const rid = resolveId(id, "sources");
     return rid ? getSource(rid) : null;
   }
+  async updateSource(id: string, patch: UpdateSourceInput): Promise<Source | null> {
+    return updateSource(requireId(id, "sources"), patch);
+  }
   async deleteSource(id: string): Promise<boolean> {
     return deleteSource(requireId(id, "sources"));
   }
 
+  // ── machines ───────────────────────────────────────────────────────────────
+  async listMachines(): Promise<Machine[]> {
+    return listMachines();
+  }
+  async currentMachine(): Promise<Machine> {
+    return getCurrentMachine();
+  }
+
+  // ── files ────────────────────────────────────────────────────────────────
   async listFiles(opts: ListFilesOptions = {}): Promise<FileWithTags[]> {
     return listFiles(opts);
   }
@@ -47,22 +111,87 @@ export class LocalStore implements FilesStore {
     const rid = resolveId(id, "files");
     return rid ? getFile(rid) : null;
   }
+  async getFileByPath(sourceId: string, path: string): Promise<FileWithTags | null> {
+    const rec = getFileByPath(requireId(sourceId, "sources"), path);
+    return rec ? getFile(rec.id) : null;
+  }
+  async searchFiles(query: string, opts: Omit<ListFilesOptions, "query"> = {}): Promise<SearchResult[]> {
+    return searchFiles(query, opts);
+  }
+  async recentFiles(agentId?: string, limit = 20): Promise<RecentFile[]> {
+    return recentFiles(agentId, limit);
+  }
+  async findDuplicates(sourceId?: string): Promise<DuplicateGroup[]> {
+    return findDuplicates(sourceId ? requireId(sourceId, "sources") : undefined);
+  }
+  async getStats(): Promise<Record<string, unknown>> {
+    return computeStats();
+  }
+  async annotateFile(fileId: string, description: string): Promise<FileWithTags | null> {
+    const id = requireId(fileId, "files");
+    if (!annotateFile(id, description)) return null;
+    return getFile(id);
+  }
+  async moveFile(fileId: string, destPath: string): Promise<boolean> {
+    return moveFile(requireId(fileId, "files"), destPath);
+  }
+  async renameFile(fileId: string, newName: string, ext: string): Promise<string | null> {
+    return renameFile(requireId(fileId, "files"), newName, ext);
+  }
+  async softDeleteFile(fileId: string): Promise<boolean> {
+    return softDeleteFile(requireId(fileId, "files"));
+  }
+  async restoreFile(fileId: string): Promise<boolean> {
+    return restoreFile(requireId(fileId, "files"));
+  }
+  async purgeDeleted(sourceId?: string, olderThan?: string): Promise<number> {
+    return purgeDeleted(sourceId ? requireId(sourceId, "sources") : undefined, olderThan);
+  }
+  async normalizeSource(sourceId: string): Promise<number> {
+    return normalizeSource(requireId(sourceId, "sources"));
+  }
+  async listConflicts(sourceId?: string, limit = 50): Promise<FileWithTags[]> {
+    return listConflicts(sourceId ? requireId(sourceId, "sources") : undefined, limit);
+  }
+  async resolveConflict(fileId: string): Promise<boolean> {
+    return resolveConflict(requireId(fileId, "files"));
+  }
+
+  // ── tags ─────────────────────────────────────────────────────────────────
+  async listTags(): Promise<Tag[]> {
+    return listTags();
+  }
   async tagFile(fileId: string, tag: string): Promise<void> {
     tagFile(requireId(fileId, "files"), tag);
   }
   async untagFile(fileId: string, tag: string): Promise<void> {
     untagFile(requireId(fileId, "files"), tag);
   }
-
-  async listTags(): Promise<Tag[]> {
-    return listTags();
+  async deleteTag(id: string): Promise<boolean> {
+    return deleteTag(id);
   }
 
+  // ── collections ────────────────────────────────────────────────────────────
   async listCollections(parentId?: string): Promise<Collection[]> {
     return listCollections(parentId);
   }
+  async getCollection(id: string): Promise<CollectionDetail | null> {
+    return getCollection(requireId(id, "collections"));
+  }
   async createCollection(name: string, description?: string, opts?: CreateCollectionOptions): Promise<Collection> {
     return createCollection(name, description, opts);
+  }
+  async updateCollection(id: string, patch: UpdateCollectionInput): Promise<Collection | null> {
+    return updateCollection(requireId(id, "collections"), patch);
+  }
+  async deleteCollection(id: string): Promise<boolean> {
+    return deleteCollection(requireId(id, "collections"));
+  }
+  async getOrCreateCollection(name: string, description?: string): Promise<Collection> {
+    return getOrCreateCollection(name, description);
+  }
+  async autoPopulateCollection(id: string): Promise<number> {
+    return autoPopulateCollection(requireId(id, "collections"));
   }
   async addToCollection(collectionId: string, fileId: string): Promise<void> {
     addToCollection(requireId(collectionId, "collections"), requireId(fileId, "files"));
@@ -71,11 +200,24 @@ export class LocalStore implements FilesStore {
     removeFromCollection(requireId(collectionId, "collections"), requireId(fileId, "files"));
   }
 
+  // ── projects ───────────────────────────────────────────────────────────────
   async listProjects(status?: ProjectStatus): Promise<Project[]> {
     return listProjects(status);
   }
+  async getProject(id: string): Promise<ProjectDetail | null> {
+    return getProject(requireId(id, "projects"));
+  }
   async createProject(name: string, description?: string, opts?: CreateProjectOptions): Promise<Project> {
     return createProject(name, description, opts);
+  }
+  async updateProject(id: string, patch: UpdateProjectInput): Promise<Project | null> {
+    return updateProject(requireId(id, "projects"), patch);
+  }
+  async deleteProject(id: string): Promise<boolean> {
+    return deleteProject(requireId(id, "projects"));
+  }
+  async getOrCreateProject(name: string, description?: string): Promise<Project> {
+    return getOrCreateProject(name, description);
   }
   async addToProject(projectId: string, fileId: string): Promise<void> {
     addToProject(requireId(projectId, "projects"), requireId(fileId, "files"));
@@ -84,7 +226,8 @@ export class LocalStore implements FilesStore {
     removeFromProject(requireId(projectId, "projects"), requireId(fileId, "files"));
   }
 
-  async listMachines(): Promise<Machine[]> {
-    return listMachines();
+  // ── feedback ─────────────────────────────────────────────────────────────
+  async recordFeedback(input: FeedbackInput): Promise<void> {
+    recordFeedback(input);
   }
 }

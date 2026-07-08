@@ -2,27 +2,34 @@
  * @hasna/files — the single client Store seam.
  *
  * Every CLI command, MCP tool, and SDK method that reads or writes the files
- * *data plane* (sources, files, tags, collections, projects, machines) routes
- * through a `FilesStore`. There are exactly two transports behind this one
- * interface:
+ * *data plane* routes through a `FilesStore`. There are exactly two transports
+ * behind this one interface:
  *
  *   - {@link LocalStore} — on-box SQLite at ~/.hasna/files/files.db (first-class).
  *   - {@link ApiStore}   — HTTPS `https://files.hasna.xyz/v1` + bearer key.
  *
  * `self_hosted` and `cloud` BOTH use the ApiStore (identical client code; only
  * the URL/key differ — that distinction is server-side tenancy, not a client
- * concern). Callers never branch on transport and never touch SQLite or a raw
- * HTTP client directly: that inline branching was the split-brain bug this seam
- * eliminates. A raw database DSN is NEVER used by the client.
+ * concern). Callers never branch on transport for data access and never touch
+ * SQLite or a raw HTTP client directly: that inline branching was the
+ * split-brain bug this seam eliminates. A raw database DSN is NEVER used by the
+ * client.
+ *
+ * On-box *ingestion* capabilities (filesystem/S3/Google Drive indexing,
+ * extraction, local file watching, evidence upload) are physical, machine-local
+ * side effects — they only run under {@link LocalStore} and are refused in api
+ * mode by the caller. Their DB effects, however, still flow through this seam.
  */
 import type {
   AutoRules,
   Collection,
+  DuplicateGroup,
   FileWithTags,
   ListFilesOptions,
   Machine,
   Project,
   ProjectStatus,
+  SearchResult,
   Source,
   SourceConfig,
   SourceType,
@@ -42,6 +49,18 @@ export interface CreateSourceInput {
   machine_id: string;
 }
 
+/** Patch accepted by {@link FilesStore.updateSource}. Static S3 credentials are
+ *  never accepted here (the config is sanitized by both transports). */
+export interface UpdateSourceInput {
+  name?: string;
+  enabled?: boolean;
+  config?: SourceConfig;
+  path?: string;
+  bucket?: string;
+  prefix?: string;
+  region?: string;
+}
+
 /** Optional metadata accepted when creating a collection. */
 export interface CreateCollectionOptions {
   parent_id?: string;
@@ -55,12 +74,42 @@ export interface CreateProjectOptions {
   metadata?: Record<string, unknown>;
 }
 
+/** Patch accepted by {@link FilesStore.updateCollection}. */
+export interface UpdateCollectionInput {
+  name?: string;
+  description?: string;
+  parent_id?: string | null;
+  auto_rules?: AutoRules;
+  metadata?: Record<string, unknown>;
+}
+
+/** Patch accepted by {@link FilesStore.updateProject}. */
+export interface UpdateProjectInput {
+  name?: string;
+  description?: string;
+  status?: ProjectStatus;
+  metadata?: Record<string, unknown>;
+}
+
+/** A collection with derived counts + children. */
+export type CollectionDetail = Collection & { file_count: number; children: Collection[] };
+/** A project with a derived file count. */
+export type ProjectDetail = Project & { file_count: number };
+/** A file annotated with the timestamp it was last touched by an agent. */
+export type RecentFile = FileWithTags & { last_touched?: string };
+
+/** Feedback record accepted by {@link FilesStore.recordFeedback}. */
+export interface FeedbackInput {
+  message: string;
+  email?: string;
+  category?: string;
+  version: string;
+}
+
 /**
- * The portable data-plane operations supported by BOTH transports. Local-only
- * concerns (filesystem indexing, extraction, Google Drive / S3 sync, evidence,
- * organization, ops snapshots) are not part of this interface — they are
- * implementation details of the on-box installation and never route to the
- * cloud API.
+ * The full portable data plane, supported by BOTH transports. Every reader and
+ * writer of files/sources/tags/collections/projects/machines routes through
+ * this interface — there is no second path to the data.
  */
 export interface FilesStore {
   /** "local" for the SQLite transport, "api" for the cloud HTTP transport. */
@@ -70,22 +119,48 @@ export interface FilesStore {
   listSources(machineId?: string): Promise<Source[]>;
   createSource(input: CreateSourceInput): Promise<Source>;
   getSource(id: string): Promise<Source | null>;
+  updateSource(id: string, patch: UpdateSourceInput): Promise<Source | null>;
   deleteSource(id: string): Promise<boolean>;
+
+  // ── machines ───────────────────────────────────────────────────────────────
+  listMachines(): Promise<Machine[]>;
+  /** The machine that owns this client (local host, or the cloud service row). */
+  currentMachine(): Promise<Machine>;
 
   // ── files ────────────────────────────────────────────────────────────────
   listFiles(opts?: ListFilesOptions): Promise<FileWithTags[]>;
   getFile(id: string): Promise<FileWithTags | null>;
-  tagFile(fileId: string, tag: string): Promise<void>;
-  untagFile(fileId: string, tag: string): Promise<void>;
+  getFileByPath(sourceId: string, path: string): Promise<FileWithTags | null>;
+  searchFiles(query: string, opts?: Omit<ListFilesOptions, "query">): Promise<SearchResult[]>;
+  recentFiles(agentId?: string, limit?: number): Promise<RecentFile[]>;
+  findDuplicates(sourceId?: string): Promise<DuplicateGroup[]>;
+  getStats(): Promise<Record<string, unknown>>;
+  annotateFile(fileId: string, description: string): Promise<FileWithTags | null>;
+  moveFile(fileId: string, destPath: string): Promise<boolean>;
+  renameFile(fileId: string, newName: string, ext: string): Promise<string | null>;
+  softDeleteFile(fileId: string): Promise<boolean>;
+  restoreFile(fileId: string): Promise<boolean>;
+  purgeDeleted(sourceId?: string, olderThan?: string): Promise<number>;
+  normalizeSource(sourceId: string): Promise<number>;
+  listConflicts(sourceId?: string, limit?: number): Promise<FileWithTags[]>;
+  resolveConflict(fileId: string): Promise<boolean>;
 
   // ── tags ─────────────────────────────────────────────────────────────────
   listTags(): Promise<Tag[]>;
+  tagFile(fileId: string, tag: string): Promise<void>;
+  untagFile(fileId: string, tag: string): Promise<void>;
+  deleteTag(id: string): Promise<boolean>;
 
   // ── collections ────────────────────────────────────────────────────────────
   /** `parentId` filters child collections on the LocalStore; the ApiStore
    *  ignores it (the cloud /v1/collections endpoint has no parent filter). */
   listCollections(parentId?: string): Promise<Collection[]>;
+  getCollection(id: string): Promise<CollectionDetail | null>;
   createCollection(name: string, description?: string, opts?: CreateCollectionOptions): Promise<Collection>;
+  updateCollection(id: string, patch: UpdateCollectionInput): Promise<Collection | null>;
+  deleteCollection(id: string): Promise<boolean>;
+  getOrCreateCollection(name: string, description?: string): Promise<Collection>;
+  autoPopulateCollection(id: string): Promise<number>;
   addToCollection(collectionId: string, fileId: string): Promise<void>;
   removeFromCollection(collectionId: string, fileId: string): Promise<void>;
 
@@ -93,10 +168,14 @@ export interface FilesStore {
   /** `status` filters on the LocalStore; the ApiStore ignores it (the cloud
    *  /v1/projects endpoint has no status filter). */
   listProjects(status?: ProjectStatus): Promise<Project[]>;
+  getProject(id: string): Promise<ProjectDetail | null>;
   createProject(name: string, description?: string, opts?: CreateProjectOptions): Promise<Project>;
+  updateProject(id: string, patch: UpdateProjectInput): Promise<Project | null>;
+  deleteProject(id: string): Promise<boolean>;
+  getOrCreateProject(name: string, description?: string): Promise<Project>;
   addToProject(projectId: string, fileId: string): Promise<void>;
   removeFromProject(projectId: string, fileId: string): Promise<void>;
 
-  // ── machines ───────────────────────────────────────────────────────────────
-  listMachines(): Promise<Machine[]>;
+  // ── feedback ─────────────────────────────────────────────────────────────
+  recordFeedback(input: FeedbackInput): Promise<void>;
 }
