@@ -12,9 +12,14 @@
  * That is the split-brain bug this module eliminates: a single resolver picks
  * the transport from the environment, and callers never branch on mode again.
  */
+import type { AlertRule } from "../lib/alerts.ts";
+import type { CompareResult } from "../lib/compare.ts";
 import type { LogCount } from "../lib/count.ts";
+import type { DiagnoseInclude, DiagnosisResult } from "../lib/diagnose.ts";
 import type { EventCatalogEntry, EventCatalogQuery } from "../lib/events.ts";
 import type { HealthResult } from "../lib/health.ts";
+import type { Issue } from "../lib/issues.ts";
+import type { SessionContext } from "../lib/session-context.ts";
 import type { TestReportEntry, TestReportQuery } from "../lib/test-reports.ts";
 import type {
   LogEntry,
@@ -22,6 +27,7 @@ import type {
   LogRow,
   LogSummary,
   Page,
+  PerformanceSnapshot,
   Project,
   ScanJob,
 } from "../types/index.ts";
@@ -93,6 +99,8 @@ export interface Store {
   tailLogs(projectId: string | undefined, n: number): Promise<LogRow[]>;
   getLog(id: string): Promise<LogRow | null>;
   getLogContext(traceId: string): Promise<LogRow[]>;
+  /** Trace context plus an optional ±window of neighbouring logs by time. */
+  getLogContextFromId(logId: string, window: number): Promise<LogRow[]>;
   ingestLog(entry: LogEntry): Promise<LogRow>;
   deleteLog(id: string): Promise<boolean>;
   countLogs(input: CountLogsInput): Promise<LogCount>;
@@ -109,6 +117,11 @@ export interface Store {
     eventId: string,
     includeRaw: boolean,
   ): Promise<EventCatalogEntry | null>;
+  /** Stream matching events as a JSON array via `writeLine`; returns the count. */
+  exportEvents(
+    query: EventCatalogQuery,
+    writeLine: (line: string) => void,
+  ): Promise<number>;
 
   // ── test reports ────────────────────────────────────────
   listTestReports(query: TestReportQuery): Promise<TestReportEntry[]>;
@@ -127,4 +140,55 @@ export interface Store {
   createPage(input: CreatePageInput): Promise<Page>;
   listJobs(projectId?: string): Promise<ScanJob[]>;
   createJob(input: CreateJobInput): Promise<ScanJob>;
+
+  // ── performance ─────────────────────────────────────────
+  latestPerfSnapshot(
+    projectId: string,
+    pageId?: string,
+  ): Promise<PerformanceSnapshot | null>;
+  perfTrend(
+    projectId: string,
+    pageId?: string,
+    since?: string,
+    limit?: number,
+  ): Promise<PerformanceSnapshot[]>;
+
+  // ── issues ──────────────────────────────────────────────
+  listIssues(
+    projectId?: string,
+    status?: string,
+    limit?: number,
+  ): Promise<Issue[]>;
+  updateIssueStatus(
+    id: string,
+    status: "open" | "resolved" | "ignored",
+  ): Promise<Issue | null>;
+
+  // ── alert rules ─────────────────────────────────────────
+  createAlertRule(input: CreateAlertRuleInput): Promise<AlertRule>;
+  listAlertRules(projectId?: string): Promise<AlertRule[]>;
+  deleteAlertRule(id: string): Promise<void>;
+
+  // ── feedback ────────────────────────────────────────────
+  recordFeedback(
+    message: string,
+    email: string | null,
+    category: string,
+    version: string,
+  ): Promise<void>;
+
+  // ── diagnostics ─────────────────────────────────────────
+  sessionContext(sessionId: string): Promise<SessionContext>;
+  diagnose(
+    projectId: string,
+    since?: string,
+    include?: DiagnoseInclude[],
+  ): Promise<DiagnosisResult>;
+  compareWindows(
+    projectId: string,
+    aSince: string,
+    aUntil: string,
+    bSince: string,
+    bUntil: string,
+  ): Promise<CompareResult>;
 }

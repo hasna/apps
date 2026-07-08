@@ -9,18 +9,26 @@
  * cloud HTTP API (`https://logs.hasna.xyz/v1/...`) with the bearer key managed
  * inside the @hasna/contracts transport.
  *
- * The cloud tier is, by design, a shared log sink: it persists `logs` and
- * `projects`. Local-only analytics subsystems (events catalog, test reports,
- * scan jobs, pages) have no cloud data model; ApiStore surfaces a clear error
- * for those rather than silently returning empty/wrong data (no silent drift).
+ * The cloud tier is a first-class shared backend: it persists and serves the
+ * full data plane over `/v1` — logs, projects, pages, scan jobs, the events
+ * catalog, test reports, performance snapshots, issues, alert rules, feedback,
+ * and the diagnose/compare analytics. Every {@link Store} method routes here in
+ * self_hosted/cloud mode, giving cloud parity with the local SQLite store. The
+ * ONE thing the cloud tier cannot serve is the raw event envelope body, which
+ * lives in local append-only segment files (`raw` comes back null in cloud).
  *
  * SAFETY: never logs, returns, or embeds the API key. The key lives only inside
  * the HTTP transport created by @hasna/contracts.
  */
 import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
+import type { AlertRule } from "../lib/alerts.ts";
+import type { CompareResult } from "../lib/compare.ts";
 import type { LogCount } from "../lib/count.ts";
+import type { DiagnoseInclude, DiagnosisResult } from "../lib/diagnose.ts";
 import type { EventCatalogEntry, EventCatalogQuery } from "../lib/events.ts";
 import type { HealthResult } from "../lib/health.ts";
+import type { Issue } from "../lib/issues.ts";
+import type { SessionContext } from "../lib/session-context.ts";
 import type { TestReportEntry, TestReportQuery } from "../lib/test-reports.ts";
 import type {
   LogEntry,
@@ -29,11 +37,13 @@ import type {
   LogRow,
   LogSummary,
   Page,
+  PerformanceSnapshot,
   Project,
   ScanJob,
 } from "../types/index.ts";
 import type {
   CountLogsInput,
+  CreateAlertRuleInput,
   CreateJobInput,
   CreatePageInput,
   CreateProjectInput,
@@ -45,20 +55,15 @@ import type {
 const LOGS = "logs";
 const PROJECTS = "projects";
 
-/** Features with no cloud data model — local-only. */
-function unsupported(mode: StoreMode, feature: string): never {
-  throw new Error(
-    `${feature} is a local-only feature and is not available in ${mode} mode. ` +
-      `The cloud tier is a shared log sink (logs + projects). ` +
-      `Run against the local store (unset HASNA_LOGS_API_URL/HASNA_LOGS_API_KEY) to use ${feature}.`,
-  );
-}
-
 /** Normalize a cloud log record (metadata may be an object) into a LogRow. */
 function toLogRow(record: Record<string, unknown>): LogRow {
   const meta = record.metadata;
   const metadata =
-    meta == null ? null : typeof meta === "string" ? meta : JSON.stringify(meta);
+    meta == null
+      ? null
+      : typeof meta === "string"
+        ? meta
+        : JSON.stringify(meta);
   return {
     id: String(record.id),
     timestamp: String(record.timestamp ?? ""),
@@ -123,9 +128,12 @@ export class ApiStore implements Store {
     if (query.limit !== undefined) q.limit = query.limit;
     const levels = levelsOf(query.level);
     if (levels.length === 1) q.level = levels[0];
-    const res = await this.client.list<Record<string, unknown>>(LOGS, { query: q });
+    const res = await this.client.list<Record<string, unknown>>(LOGS, {
+      query: q,
+    });
     const raw = res.raw as { logs?: unknown[] } | null;
-    const arr = Array.isArray(raw?.logs) ? raw!.logs : res.items;
+    const list = raw?.logs;
+    const arr = Array.isArray(list) ? list : res.items;
     let rows = (arr as Record<string, unknown>[]).map(toLogRow);
     if (levels.length > 1) {
       const set = new Set(levels);
@@ -164,7 +172,10 @@ export class ApiStore implements Store {
       metadata: entry.metadata ?? null,
       timestamp: entry.timestamp ?? null,
     };
-    const record = await this.client.create<Record<string, unknown>>(LOGS, body);
+    const record = await this.client.create<Record<string, unknown>>(
+      LOGS,
+      body,
+    );
     return toLogRow(record);
   }
 
@@ -185,9 +196,14 @@ export class ApiStore implements Store {
     if (input.since) query.since = input.since;
     if (input.until) query.until = input.until;
     if (input.group_by) query.group_by = input.group_by;
-    return this.client.transport.request<LogCount>("GET", `/${LOGS}/count`, undefined, {
-      query,
-    });
+    return this.client.transport.request<LogCount>(
+      "GET",
+      `/${LOGS}/count`,
+      undefined,
+      {
+        query,
+      },
+    );
   }
 
   async summarize(
@@ -217,7 +233,8 @@ export class ApiStore implements Store {
   async listProjects(): Promise<Project[]> {
     const res = await this.client.list<Record<string, unknown>>(PROJECTS);
     const raw = res.raw as { projects?: unknown[] } | null;
-    const arr = Array.isArray(raw?.projects) ? raw!.projects : res.items;
+    const list = raw?.projects;
+    const arr = Array.isArray(list) ? list : res.items;
     return (arr as Record<string, unknown>[]).map(toProject);
   }
 
@@ -248,37 +265,357 @@ export class ApiStore implements Store {
     return byName ? byName.id : nameOrId;
   }
 
-  // ── local-only analytics (no cloud data model) ──────────
+  // ── log context ─────────────────────────────────────────
 
-  async listEvents(_query: EventCatalogQuery): Promise<EventCatalogEntry[]> {
-    return unsupported(this.mode, "the events catalog");
+  async getLogContextFromId(logId: string, window: number): Promise<LogRow[]> {
+    const res = await this.client.transport.request<{ logs?: unknown[] }>(
+      "GET",
+      `/${LOGS}/${encodeURIComponent(logId)}/context`,
+      undefined,
+      { query: { window } },
+    );
+    return (res?.logs ?? []).map((r) => toLogRow(r as Record<string, unknown>));
   }
 
-  async getEvent(): Promise<EventCatalogEntry | null> {
-    return unsupported(this.mode, "the events catalog");
+  // ── events catalog ──────────────────────────────────────
+
+  async listEvents(query: EventCatalogQuery): Promise<EventCatalogEntry[]> {
+    const res = await this.client.transport.request<{
+      events?: EventCatalogEntry[];
+    }>("GET", "/events", undefined, { query: eventQueryParams(query) });
+    return res?.events ?? [];
   }
 
-  async listTestReports(_query: TestReportQuery): Promise<TestReportEntry[]> {
-    return unsupported(this.mode, "test reports");
+  async getEvent(
+    eventId: string,
+    _includeRaw: boolean,
+  ): Promise<EventCatalogEntry | null> {
+    // Raw event bodies live in local segment files; the cloud tier has none, so
+    // `raw` is always null here regardless of the includeRaw flag.
+    const record = await this.client.get<EventCatalogEntry>("events", eventId);
+    return record ?? null;
   }
 
-  async getTestReport(): Promise<TestReportEntry | null> {
-    return unsupported(this.mode, "test reports");
+  async exportEvents(
+    query: EventCatalogQuery,
+    writeLine: (line: string) => void,
+  ): Promise<number> {
+    const events = await this.listEvents({
+      ...query,
+      limit: query.limit ?? 100_000,
+      max_limit: 100_000,
+    });
+    writeLine("[");
+    events.forEach((event, i) => {
+      writeLine((i > 0 ? "," : "") + JSON.stringify(event));
+    });
+    writeLine("]");
+    return events.length;
   }
 
-  async listPages(_projectId: string): Promise<Page[]> {
-    return unsupported(this.mode, "pages");
+  // ── test reports ────────────────────────────────────────
+
+  async listTestReports(query: TestReportQuery): Promise<TestReportEntry[]> {
+    const res = await this.client.transport.request<{
+      reports?: TestReportEntry[];
+    }>("GET", "/test-reports", undefined, {
+      query: testReportQueryParams(query),
+    });
+    return res?.reports ?? [];
   }
 
-  async createPage(_input: CreatePageInput): Promise<Page> {
-    return unsupported(this.mode, "pages");
+  async getTestReport(
+    reportId: string,
+    includeCases: boolean,
+  ): Promise<TestReportEntry | null> {
+    const record = await this.client.transport.request<TestReportEntry | null>(
+      "GET",
+      `/test-reports/${encodeURIComponent(reportId)}`,
+      undefined,
+      { query: { include_cases: includeCases ? "true" : "false" } },
+    );
+    return record ?? null;
   }
 
-  async listJobs(_projectId?: string): Promise<ScanJob[]> {
-    return unsupported(this.mode, "scan jobs");
+  // ── pages ───────────────────────────────────────────────
+
+  async listPages(projectId: string): Promise<Page[]> {
+    const res = await this.client.transport.request<{ pages?: Page[] }>(
+      "GET",
+      "/pages",
+      undefined,
+      { query: { project_id: projectId } },
+    );
+    return res?.pages ?? [];
   }
 
-  async createJob(_input: CreateJobInput): Promise<ScanJob> {
-    return unsupported(this.mode, "scan jobs");
+  async createPage(input: CreatePageInput): Promise<Page> {
+    return this.client.create<Page>("pages", {
+      project_id: input.project_id,
+      url: input.url,
+      path: input.path ?? null,
+      name: input.name ?? null,
+    });
   }
+
+  // ── scan jobs ───────────────────────────────────────────
+
+  async listJobs(projectId?: string): Promise<ScanJob[]> {
+    const res = await this.client.transport.request<{ jobs?: ScanJob[] }>(
+      "GET",
+      "/jobs",
+      undefined,
+      { query: projectId ? { project_id: projectId } : {} },
+    );
+    return res?.jobs ?? [];
+  }
+
+  async createJob(input: CreateJobInput): Promise<ScanJob> {
+    return this.client.create<ScanJob>("jobs", {
+      project_id: input.project_id,
+      schedule: input.schedule,
+      page_id: input.page_id ?? null,
+    });
+  }
+
+  // ── performance ─────────────────────────────────────────
+
+  async latestPerfSnapshot(
+    projectId: string,
+    pageId?: string,
+  ): Promise<PerformanceSnapshot | null> {
+    const res = await this.client.transport.request<{
+      snapshot?: PerformanceSnapshot | null;
+    }>("GET", "/perf/latest", undefined, {
+      query: { project_id: projectId, ...(pageId ? { page_id: pageId } : {}) },
+    });
+    return res?.snapshot ?? null;
+  }
+
+  async perfTrend(
+    projectId: string,
+    pageId?: string,
+    since?: string,
+    limit?: number,
+  ): Promise<PerformanceSnapshot[]> {
+    const res = await this.client.transport.request<{
+      snapshots?: PerformanceSnapshot[];
+    }>("GET", "/perf/trend", undefined, {
+      query: {
+        project_id: projectId,
+        ...(pageId ? { page_id: pageId } : {}),
+        ...(since ? { since } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      },
+    });
+    return res?.snapshots ?? [];
+  }
+
+  // ── issues ──────────────────────────────────────────────
+
+  async listIssues(
+    projectId?: string,
+    status?: string,
+    limit?: number,
+  ): Promise<Issue[]> {
+    const res = await this.client.transport.request<{ issues?: Issue[] }>(
+      "GET",
+      "/issues",
+      undefined,
+      {
+        query: {
+          ...(projectId ? { project_id: projectId } : {}),
+          ...(status ? { status } : {}),
+          ...(limit !== undefined ? { limit } : {}),
+        },
+      },
+    );
+    return res?.issues ?? [];
+  }
+
+  async updateIssueStatus(
+    id: string,
+    status: "open" | "resolved" | "ignored",
+  ): Promise<Issue | null> {
+    return this.client.transport
+      .request<Issue>("PATCH", `/issues/${encodeURIComponent(id)}`, { status })
+      .catch(() => null);
+  }
+
+  // ── alert rules ─────────────────────────────────────────
+
+  async createAlertRule(input: CreateAlertRuleInput): Promise<AlertRule> {
+    return this.client.transport.request<AlertRule>(
+      "POST",
+      "/alert-rules",
+      input,
+    );
+  }
+
+  async listAlertRules(projectId?: string): Promise<AlertRule[]> {
+    const res = await this.client.transport.request<{ rules?: AlertRule[] }>(
+      "GET",
+      "/alert-rules",
+      undefined,
+      { query: projectId ? { project_id: projectId } : {} },
+    );
+    return res?.rules ?? [];
+  }
+
+  async deleteAlertRule(id: string): Promise<void> {
+    await this.client.transport.request(
+      "DELETE",
+      `/alert-rules/${encodeURIComponent(id)}`,
+    );
+  }
+
+  // ── feedback ────────────────────────────────────────────
+
+  async recordFeedback(
+    message: string,
+    email: string | null,
+    category: string,
+    version: string,
+  ): Promise<void> {
+    await this.client.transport.request("POST", "/feedback", {
+      message,
+      email,
+      category,
+      version,
+    });
+  }
+
+  // ── session context ─────────────────────────────────────
+
+  async sessionContext(sessionId: string): Promise<SessionContext> {
+    const res = await this.client.transport.request<{
+      session_id?: string;
+      logs?: unknown[];
+      session?: Record<string, unknown>;
+      error?: string;
+    }>("GET", `/sessions/${encodeURIComponent(sessionId)}/context`);
+    return {
+      session_id: res?.session_id ?? sessionId,
+      logs: (res?.logs ?? []).map((r) =>
+        toLogRow(r as Record<string, unknown>),
+      ),
+      ...(res?.session ? { session: res.session } : {}),
+      ...(res?.error ? { error: res.error } : {}),
+    };
+  }
+
+  // ── diagnose / compare ──────────────────────────────────
+
+  async diagnose(
+    projectId: string,
+    since?: string,
+    include?: DiagnoseInclude[],
+  ): Promise<DiagnosisResult> {
+    return this.client.transport.request<DiagnosisResult>(
+      "GET",
+      "/diagnose",
+      undefined,
+      {
+        query: {
+          project_id: projectId,
+          ...(since ? { since } : {}),
+          ...(include?.length ? { include: include.join(",") } : {}),
+        },
+      },
+    );
+  }
+
+  async compareWindows(
+    projectId: string,
+    aSince: string,
+    aUntil: string,
+    bSince: string,
+    bUntil: string,
+  ): Promise<CompareResult> {
+    return this.client.transport.request<CompareResult>(
+      "GET",
+      "/compare",
+      undefined,
+      {
+        query: {
+          project_id: projectId,
+          a_since: aSince,
+          a_until: aUntil,
+          b_since: bSince,
+          b_until: bUntil,
+        },
+      },
+    );
+  }
+}
+
+/** Serialize an {@link EventCatalogQuery} into flat query params (arrays joined). */
+function eventQueryParams(
+  query: EventCatalogQuery,
+): Record<string, string | number> {
+  const q: Record<string, string | number> = {};
+  const join = (v: string | string[] | undefined) =>
+    v === undefined ? undefined : Array.isArray(v) ? v.join(",") : v;
+  const assign = (key: string, value: string | number | undefined) => {
+    if (value !== undefined && value !== "") q[key] = value;
+  };
+  assign("event_id", query.event_id);
+  assign("event_type", join(query.event_type));
+  assign("source", join(query.source));
+  assign("severity", join(query.severity));
+  assign("project_id", query.project_id);
+  assign("page_id", query.page_id);
+  assign("machine_id", query.machine_id);
+  assign("repo_id", query.repo_id);
+  assign("app_id", query.app_id);
+  assign("process_id", query.process_id);
+  assign("run_id", query.run_id);
+  assign("trace_id", query.trace_id);
+  assign("span_id", query.span_id);
+  assign("session_id", query.session_id);
+  assign("release_id", query.release_id);
+  assign("environment", query.environment);
+  assign("since", query.since);
+  assign("until", query.until);
+  assign("text", query.text);
+  assign("limit", query.limit);
+  assign("offset", query.offset);
+  assign("max_limit", query.max_limit);
+  if (query.exclude_mcp_tool_telemetry) q.exclude_mcp_tool_telemetry = "true";
+  return q;
+}
+
+/** Serialize a {@link TestReportQuery} into flat query params. */
+function testReportQueryParams(
+  query: TestReportQuery,
+): Record<string, string | number> {
+  const q: Record<string, string | number> = {};
+  const assign = (key: string, value: string | number | null | undefined) => {
+    if (value !== undefined && value !== null && value !== "") q[key] = value;
+  };
+  assign("report_id", query.report_id);
+  assign("event_id", query.event_id);
+  assign("project_id", query.project_id);
+  assign("machine_id", query.machine_id);
+  assign("repo_id", query.repo_id);
+  assign("app_id", query.app_id);
+  assign("process_id", query.process_id);
+  assign("run_id", query.run_id);
+  assign("environment", query.environment);
+  assign("source", query.source);
+  assign("parser", query.parser);
+  assign("parse_status", query.parse_status);
+  assign("path", query.path);
+  assign("case_status", query.case_status);
+  assign("outcome", query.outcome);
+  assign("min_failures", query.min_failures);
+  assign("min_errors", query.min_errors);
+  assign("min_skipped", query.min_skipped);
+  assign("since", query.since);
+  assign("until", query.until);
+  assign("text", query.text);
+  assign("limit", query.limit);
+  assign("offset", query.offset);
+  if (query.include_cases) q.include_cases = "true";
+  return q;
 }

@@ -16,6 +16,8 @@ import {
   type TypedQueryClient,
   checkHealth,
 } from "../../generated/storage-kit/index.ts";
+import type { EventCatalogQuery } from "../../lib/events.ts";
+import type { TestReportQuery } from "../../lib/test-reports.ts";
 import { buildOpenApiDocument } from "./openapi.ts";
 import { CloudLogStore, LOG_LEVELS, type LogLevel } from "./store.ts";
 
@@ -263,8 +265,341 @@ export function buildCloudApp(options: CloudAppOptions): Hono {
     return c.json({ deleted, id });
   });
 
+  // Trace/context window around a single log id.
+  v1.get("/logs/:id/context", requireScope("logs:read"), async (c) => {
+    const id = c.req.param("id") ?? "";
+    const window = Number(c.req.query("window") ?? 0);
+    return c.json({
+      logs: await store.logContextFromId(
+        id,
+        Number.isFinite(window) ? window : 0,
+      ),
+    });
+  });
+
+  // Pages
+  v1.get("/pages", requireScope("logs:read"), async (c) => {
+    const projectId = c.req.query("project_id");
+    if (!projectId) return c.json({ error: "project_id is required." }, 400);
+    return c.json({ pages: await store.listPages(projectId) });
+  });
+
+  v1.post("/pages", requireScope("logs:write"), async (c) => {
+    const body = await c.req.json().catch(() => null);
+    if (
+      !body ||
+      typeof body.project_id !== "string" ||
+      typeof body.url !== "string"
+    ) {
+      return c.json(
+        { error: "Fields 'project_id' and 'url' are required." },
+        400,
+      );
+    }
+    const page = await store.createPage({
+      project_id: body.project_id,
+      url: body.url,
+      ...(body.path ? { path: body.path } : {}),
+      ...(body.name ? { name: body.name } : {}),
+    });
+    return c.json(page, 201);
+  });
+
+  // Scan jobs
+  v1.get("/jobs", requireScope("logs:read"), async (c) => {
+    const projectId = c.req.query("project_id");
+    return c.json({ jobs: await store.listJobs(projectId || undefined) });
+  });
+
+  v1.post("/jobs", requireScope("logs:write"), async (c) => {
+    const body = await c.req.json().catch(() => null);
+    if (
+      !body ||
+      typeof body.project_id !== "string" ||
+      typeof body.schedule !== "string"
+    ) {
+      return c.json(
+        { error: "Fields 'project_id' and 'schedule' are required." },
+        400,
+      );
+    }
+    const job = await store.createJob({
+      project_id: body.project_id,
+      schedule: body.schedule,
+      ...(body.page_id ? { page_id: body.page_id } : {}),
+    });
+    return c.json(job, 201);
+  });
+
+  // Events catalog (read; raw envelope is local-only)
+  v1.get("/events", requireScope("logs:read"), async (c) =>
+    c.json({
+      events: await store.searchEvents(parseEventQuery(c.req.query())),
+    }),
+  );
+
+  v1.get("/events/:id", requireScope("logs:read"), async (c) => {
+    const event = await store.getEvent(c.req.param("id") ?? "");
+    if (!event) return c.json({ error: "Event not found." }, 404);
+    return c.json(event);
+  });
+
+  // Test reports
+  v1.get("/test-reports", requireScope("logs:read"), async (c) =>
+    c.json({
+      reports: await store.searchTestReports(
+        parseTestReportQuery(c.req.query()),
+      ),
+    }),
+  );
+
+  v1.get("/test-reports/:id", requireScope("logs:read"), async (c) => {
+    const includeCases = c.req.query("include_cases") !== "false";
+    const report = await store.getTestReport(
+      c.req.param("id") ?? "",
+      includeCases,
+    );
+    if (!report) return c.json({ error: "Test report not found." }, 404);
+    return c.json(report);
+  });
+
+  // Performance snapshots
+  v1.get("/perf/latest", requireScope("logs:read"), async (c) => {
+    const projectId = c.req.query("project_id");
+    if (!projectId) return c.json({ error: "project_id is required." }, 400);
+    return c.json({
+      snapshot: await store.latestPerfSnapshot(
+        projectId,
+        c.req.query("page_id") || undefined,
+      ),
+    });
+  });
+
+  v1.get("/perf/trend", requireScope("logs:read"), async (c) => {
+    const projectId = c.req.query("project_id");
+    if (!projectId) return c.json({ error: "project_id is required." }, 400);
+    const limit = Number(c.req.query("limit") ?? 50);
+    return c.json({
+      snapshots: await store.perfTrend(
+        projectId,
+        c.req.query("page_id") || undefined,
+        c.req.query("since") || undefined,
+        Number.isFinite(limit) ? limit : 50,
+      ),
+    });
+  });
+
+  // Issues
+  v1.get("/issues", requireScope("logs:read"), async (c) => {
+    const limit = Number(c.req.query("limit") ?? 50);
+    return c.json({
+      issues: await store.listIssues(
+        c.req.query("project_id") || undefined,
+        c.req.query("status") || undefined,
+        Number.isFinite(limit) ? limit : 50,
+      ),
+    });
+  });
+
+  v1.patch("/issues/:id", requireScope("logs:write"), async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const status = body?.status;
+    if (status !== "open" && status !== "resolved" && status !== "ignored") {
+      return c.json(
+        { error: "Field 'status' must be one of open, resolved, ignored." },
+        400,
+      );
+    }
+    const updated = await store.updateIssueStatus(
+      c.req.param("id") ?? "",
+      status,
+    );
+    if (!updated) return c.json({ error: "Issue not found." }, 404);
+    return c.json(updated);
+  });
+
+  // Alert rules
+  v1.get("/alert-rules", requireScope("logs:read"), async (c) =>
+    c.json({
+      rules: await store.listAlertRules(c.req.query("project_id") || undefined),
+    }),
+  );
+
+  v1.post("/alert-rules", requireScope("logs:write"), async (c) => {
+    const body = await c.req.json().catch(() => null);
+    if (
+      !body ||
+      typeof body.project_id !== "string" ||
+      typeof body.name !== "string"
+    ) {
+      return c.json(
+        { error: "Fields 'project_id' and 'name' are required." },
+        400,
+      );
+    }
+    const rule = await store.createAlertRule({
+      project_id: body.project_id,
+      name: body.name,
+      ...(body.service ? { service: body.service } : {}),
+      ...(body.level ? { level: body.level } : {}),
+      ...(body.threshold_count !== undefined
+        ? { threshold_count: Number(body.threshold_count) }
+        : {}),
+      ...(body.window_seconds !== undefined
+        ? { window_seconds: Number(body.window_seconds) }
+        : {}),
+      ...(body.action ? { action: body.action } : {}),
+      ...(body.webhook_url ? { webhook_url: body.webhook_url } : {}),
+    });
+    return c.json(rule, 201);
+  });
+
+  v1.delete("/alert-rules/:id", requireScope("logs:write"), async (c) => {
+    const id = c.req.param("id") ?? "";
+    await store.deleteAlertRule(id);
+    return c.json({ deleted: true, id });
+  });
+
+  // Feedback
+  v1.post("/feedback", requireScope("logs:write"), async (c) => {
+    const body = await c.req.json().catch(() => null);
+    if (
+      !body ||
+      typeof body.message !== "string" ||
+      body.message.trim() === ""
+    ) {
+      return c.json({ error: "Field 'message' is required." }, 400);
+    }
+    await store.recordFeedback(
+      body.message,
+      typeof body.email === "string" ? body.email : null,
+      typeof body.category === "string" ? body.category : "general",
+      typeof body.version === "string" ? body.version : "",
+    );
+    return c.json({ ok: true }, 201);
+  });
+
+  // Session context
+  v1.get("/sessions/:id/context", requireScope("logs:read"), async (c) =>
+    c.json(await store.sessionContext(c.req.param("id") ?? "")),
+  );
+
+  // Diagnose / compare analytics
+  v1.get("/diagnose", requireScope("logs:read"), async (c) => {
+    const projectId = c.req.query("project_id");
+    if (!projectId) return c.json({ error: "project_id is required." }, 400);
+    const includeRaw = c.req.query("include");
+    const include = includeRaw
+      ? (includeRaw
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean) as never[])
+      : undefined;
+    return c.json(
+      await store.diagnose(
+        projectId,
+        c.req.query("since") || undefined,
+        include,
+      ),
+    );
+  });
+
+  v1.get("/compare", requireScope("logs:read"), async (c) => {
+    const q = c.req.query();
+    if (!q.project_id || !q.a_since || !q.a_until || !q.b_since || !q.b_until) {
+      return c.json(
+        {
+          error:
+            "Fields 'project_id', 'a_since', 'a_until', 'b_since', 'b_until' are required.",
+        },
+        400,
+      );
+    }
+    return c.json(
+      await store.compare(
+        q.project_id,
+        q.a_since,
+        q.a_until,
+        q.b_since,
+        q.b_until,
+      ),
+    );
+  });
+
   app.route("/v1", v1);
   return app;
+}
+
+/** Map a flat query string bag into an {@link EventCatalogQuery}. */
+function parseEventQuery(q: Record<string, string>): EventCatalogQuery {
+  const query: EventCatalogQuery = {};
+  const scalars: (keyof EventCatalogQuery)[] = [
+    "event_id",
+    "event_type",
+    "source",
+    "severity",
+    "project_id",
+    "page_id",
+    "machine_id",
+    "repo_id",
+    "app_id",
+    "process_id",
+    "run_id",
+    "trace_id",
+    "span_id",
+    "session_id",
+    "release_id",
+    "environment",
+    "since",
+    "until",
+    "text",
+  ];
+  for (const key of scalars) {
+    const value = q[key as string];
+    if (value) (query as Record<string, unknown>)[key as string] = value;
+  }
+  if (q.limit) query.limit = Number(q.limit);
+  if (q.offset) query.offset = Number(q.offset);
+  if (q.max_limit) query.max_limit = Number(q.max_limit);
+  if (q.exclude_mcp_tool_telemetry === "true")
+    query.exclude_mcp_tool_telemetry = true;
+  return query;
+}
+
+/** Map a flat query string bag into a {@link TestReportQuery}. */
+function parseTestReportQuery(q: Record<string, string>): TestReportQuery {
+  const query: TestReportQuery = {};
+  const scalars: (keyof TestReportQuery)[] = [
+    "report_id",
+    "event_id",
+    "project_id",
+    "machine_id",
+    "repo_id",
+    "app_id",
+    "process_id",
+    "run_id",
+    "environment",
+    "source",
+    "parser",
+    "parse_status",
+    "path",
+    "case_status",
+    "since",
+    "until",
+    "text",
+  ];
+  for (const key of scalars) {
+    const value = q[key as string];
+    if (value) (query as Record<string, unknown>)[key as string] = value;
+  }
+  if (q.outcome) query.outcome = q.outcome as TestReportQuery["outcome"];
+  if (q.min_failures) query.min_failures = Number(q.min_failures);
+  if (q.min_errors) query.min_errors = Number(q.min_errors);
+  if (q.min_skipped) query.min_skipped = Number(q.min_skipped);
+  if (q.limit) query.limit = Number(q.limit);
+  if (q.offset) query.offset = Number(q.offset);
+  if (q.include_cases === "true") query.include_cases = true;
+  return query;
 }
 
 /** Close a pool-backed client if it exposes `close()`. */
