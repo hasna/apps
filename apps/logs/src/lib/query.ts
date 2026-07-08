@@ -3,6 +3,22 @@ import type { LogQuery, LogRow } from "../types/index.ts";
 import { parseTime } from "./parse-time.ts";
 import { sqlBindings } from "./sqlite-bindings.ts";
 
+/**
+ * Build a safe FTS5 MATCH expression from arbitrary user text.
+ *
+ * Raw user input cannot be passed to FTS5 directly: characters like `-`, `:`,
+ * `"`, `*`, `(`, `)` and `^` are query-syntax operators, so a term such as
+ * `mcp-qa` is parsed as `mcp NOT qa` (and `qa` as a column filter → "no such
+ * column: qa"). We tokenize on whitespace and wrap each token in double quotes
+ * (doubling any embedded quotes) so every token is treated as a literal phrase,
+ * preserving implicit AND-of-terms semantics for multi-word queries.
+ */
+export function toFtsMatchQuery(text: string): string {
+  const tokens = text.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return '""';
+  return tokens.map((t) => `"${t.replace(/"/g, '""')}"`).join(" ");
+}
+
 export function searchLogs(db: Database, q: LogQuery): LogRow[] {
   const conditions: string[] = [];
   const params: Record<string, unknown> = {};
@@ -47,8 +63,9 @@ export function searchLogs(db: Database, q: LogQuery): LogRow[] {
   params.$offset = offset;
 
   if (q.text) {
-    // FTS search via subquery
-    params.$text = q.text;
+    // FTS search via subquery. User text is sanitized into a phrase-quoted
+    // MATCH expression so query-syntax characters (e.g. `-`, `:`) are literal.
+    params.$text = toFtsMatchQuery(q.text);
     const where = conditions.length
       ? `WHERE ${conditions.join(" AND ")} AND`
       : "WHERE";

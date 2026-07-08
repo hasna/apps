@@ -1,7 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import { createTestDb } from "../db/index.ts";
 import { ingestBatch } from "./ingest.ts";
-import { getLogContext, searchLogs, tailLogs } from "./query.ts";
+import {
+  getLogContext,
+  searchLogs,
+  tailLogs,
+  toFtsMatchQuery,
+} from "./query.ts";
 
 function seed(db: ReturnType<typeof createTestDb>) {
   ingestBatch(db, [
@@ -60,6 +65,50 @@ describe("searchLogs", () => {
     expect(rows[0]?.message).toContain("connection");
   });
 
+  it("full-text search with a hyphenated term (FTS5 syntax char)", () => {
+    const db = createTestDb();
+    ingestBatch(db, [
+      { level: "info", message: "run mcp-qa passed", service: "qa" },
+      { level: "info", message: "unrelated entry", service: "other" },
+    ]);
+    const rows = searchLogs(db, { text: "mcp-qa" });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.message).toContain("mcp-qa");
+  });
+
+  it("full-text search with a multi-hyphen identifier", () => {
+    const db = createTestDb();
+    ingestBatch(db, [
+      {
+        level: "info",
+        message: "session mcplocal-1783534937-32229 started",
+        service: "qa",
+      },
+      { level: "info", message: "noise", service: "other" },
+    ]);
+    const rows = searchLogs(db, { text: "mcplocal-1783534937-32229" });
+    expect(rows).toHaveLength(1);
+  });
+
+  it("full-text search with an embedded double quote does not throw", () => {
+    const db = createTestDb();
+    ingestBatch(db, [
+      { level: "info", message: 'quote " inside message', service: "qa" },
+    ]);
+    expect(() => searchLogs(db, { text: 'quote"' })).not.toThrow();
+  });
+
+  it("multi-word text search keeps AND-of-terms semantics", () => {
+    const db = createTestDb();
+    ingestBatch(db, [
+      { level: "error", message: "database connection failed", service: "api" },
+      { level: "error", message: "connection reset", service: "api" },
+    ]);
+    const rows = searchLogs(db, { text: "database connection" });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.message).toContain("database");
+  });
+
   it("filters by trace_id", () => {
     const db = createTestDb();
     seed(db);
@@ -115,5 +164,22 @@ describe("getLogContext", () => {
     const db = createTestDb();
     const rows = getLogContext(db, "unknown");
     expect(rows).toHaveLength(0);
+  });
+});
+
+describe("toFtsMatchQuery", () => {
+  it("quotes a single hyphenated token", () => {
+    expect(toFtsMatchQuery("mcp-qa")).toBe('"mcp-qa"');
+  });
+  it("quotes each token in a multi-word query", () => {
+    expect(toFtsMatchQuery("database connection")).toBe(
+      '"database" "connection"',
+    );
+  });
+  it("doubles embedded double quotes", () => {
+    expect(toFtsMatchQuery('a"b')).toBe('"a""b"');
+  });
+  it("returns an empty phrase for blank input", () => {
+    expect(toFtsMatchQuery("   ")).toBe('""');
   });
 });
