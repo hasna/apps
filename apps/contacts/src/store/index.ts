@@ -28,6 +28,8 @@
  */
 import type { ContactsDatabase } from "../db/database.js";
 import { getDatabase } from "../db/database.js";
+import * as storageDb from "../db/storage.js";
+import type { ContactsStorageStatus } from "../db/storage.js";
 import * as contactsDb from "../db/contacts.js";
 import * as companiesDb from "../db/companies.js";
 import * as tagsDb from "../db/tags.js";
@@ -384,6 +386,12 @@ export interface Store {
   // Feedback
   saveFeedback(message: string, email: string | null, category: string, version: string): Promise<void>;
 
+  // Storage diagnostics — on-box table/row status. LocalStore reports the SQLite
+  // tables; ApiStore returns null (there are NO on-box tables when pointed at the
+  // cloud — transport status conveys that instead). Lets CLI/MCP inspect storage
+  // WITHOUT importing the db layer directly (which would be a split-brain bypass).
+  storageStatus(): Promise<ContactsStorageStatus | null>;
+
   // Webhooks (local delivery registry — reads only; delivery stays in caller)
   listActiveWebhooks(): Promise<Array<{ id: string; event_type: string; url: string; secret?: string | null }>>;
 }
@@ -731,6 +739,9 @@ class LocalStore implements Store {
     this.db.prepare("INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)").run(message, email, category, version);
   }
 
+  // Storage diagnostics
+  async storageStatus() { return storageDb.getStorageStatus(this.db); }
+
   // Webhooks
   async listActiveWebhooks() {
     try {
@@ -1037,6 +1048,8 @@ class ApiStore implements Store {
   async vaultStatus(): Promise<never> { return unavailable("vaultStatus"); }
 
   async saveFeedback(): Promise<never> { return unavailable("saveFeedback"); }
+  // No on-box tables when pointed at the cloud; transport status conveys state.
+  async storageStatus(): Promise<null> { return null; }
   async listActiveWebhooks(): Promise<never> { return unavailable("listActiveWebhooks"); }
 }
 
@@ -1059,3 +1072,6 @@ export function getStore(env: Record<string, string | undefined> = process.env):
 export function resetStoreCache(): void {
   cached = undefined;
 }
+
+// Storage-status shape returned by `Store.storageStatus()` (on-box table rows).
+export type { ContactsStorageStatus, StorageTableStatus } from "../db/storage.js";

@@ -38,5 +38,11 @@ describe("contacts MCP storage contract", () => {
       expect(mcpSource).not.toContain(term);
       expect(storageSource).not.toContain(term);
     }
+
+    // The storage tools must route through the single Store — never the db/*
+    // layer or raw SQLite directly (the split-brain bug this rebuild eliminates).
+    expect(storageSource).toContain("getStore");
+    expect(storageSource).not.toContain("../db/");
+    expect(storageSource).not.toContain("getDatabase");
   });
 });
