@@ -659,7 +659,7 @@ export function registerTaskCommands(program: Command) {
       const cloud = getTodosCloudClient();
       let task: any;
       if (cloud) {
-        const remote = await cloudGetTask(cloud, id);
+        const remote = await cloudGetTask(cloud, resolveTaskId(id));
         // The /v1 API returns the task row without relation graphs; default the
         // relation arrays so the detail renderer below never touches undefined.
         task = remote
@@ -927,7 +927,7 @@ export function registerTaskCommands(program: Command) {
       if (cloud) {
         let task;
         try {
-          task = await cloudUpdateTask(cloud, id, {
+          task = await cloudUpdateTask(cloud, resolveTaskId(id), {
             title: opts.title,
             description: opts.description,
             status: parseStatus(opts.status),
@@ -1035,7 +1035,7 @@ export function registerTaskCommands(program: Command) {
       if (cloud) {
         let task;
         try {
-          task = await cloudTaskAction(cloud, id, "complete", { agent_id: globalOpts.agent });
+          task = await cloudTaskAction(cloud, resolveTaskId(id), "complete", { agent_id: globalOpts.agent });
         } catch (e) {
           handleError(e);
         }
@@ -1119,7 +1119,7 @@ export function registerTaskCommands(program: Command) {
       let task;
       if (cloud) {
         try {
-          task = await cloudTaskAction(cloud, id, "start", { agent_id: agentId });
+          task = await cloudTaskAction(cloud, resolveTaskId(id), "start", { agent_id: agentId });
         } catch (e) {
           handleError(e);
         }
@@ -1198,7 +1198,7 @@ export function registerTaskCommands(program: Command) {
     .action(async (id: string) => {
       const globalOpts = program.opts();
       const cloud = getTodosCloudClient();
-      const deleted = cloud ? await cloudDeleteTask(cloud, id) : deleteTask(resolveTaskId(id));
+      const deleted = cloud ? await cloudDeleteTask(cloud, resolveTaskId(id)) : deleteTask(resolveTaskId(id));
 
       if (globalOpts.json) {
         output({ deleted }, true);

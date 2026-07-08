@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
 import { getPackageVersion } from "../lib/package-version.js";
+import { handleError } from "./helpers.js";
 
 const program = new Command();
 
@@ -195,4 +196,12 @@ registerScaleHardeningCommands(program);
 await registerOptionalEventsCommands(program);
 registerHelpCommands(program);
 
-await program.parseAsync();
+// Single top-level guard: any error thrown from an async action handler (e.g. a
+// TaskNotFoundError when a full UUID references a task absent from the local
+// mirror) surfaces as a clean red message + exit(1) instead of an unhandled
+// promise-rejection stack trace.
+try {
+  await program.parseAsync();
+} catch (err) {
+  handleError(err);
+}

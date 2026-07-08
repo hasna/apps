@@ -3,6 +3,7 @@ import { execSync } from "node:child_process";
 import { writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, sep } from "node:path";
+import { isCloudRouting } from "./cloud-router.js";
 import { getDatabase, resolvePartialId } from "../db/database.js";
 import { ensureProject, getProject, getProjectByPath, slugify } from "../db/projects.js";
 import { getPackageVersion } from "../lib/package-version.js";
@@ -18,20 +19,60 @@ export function handleError(e: unknown): never {
   process.exit(1);
 }
 
+/** Canonical task UUID (v4-shaped, but tolerant of any version/variant nibble). */
+const TASK_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Resolve a user-supplied task reference (full UUID, id prefix, or short_id) to a
+ * canonical task id, CONSISTENTLY across every `todos` subcommand.
+ *
+ * Two rules make this safe whether the machine is `local` or flipped to the shared
+ * `self_hosted` cloud store:
+ *
+ *  1. A full task UUID is authoritative on its own — it is returned verbatim and is
+ *     NEVER required to exist in this box's local SQLite mirror. On a flipped
+ *     machine the task lives in the cloud and may have never synced down; the
+ *     downstream read/write (cloud `GET/PATCH/POST /v1/tasks/:id` or a local query)
+ *     is the single source of truth for existence and reports a precise not-found.
+ *     This is what previously broke: resolver-based commands (comment, inspect,
+ *     lock, deps, …) demanded the row be present locally, so they failed on
+ *     cloud-only tasks even with a valid full UUID, while raw-id commands (show,
+ *     update, start, done) worked — the reported inconsistency.
+ *
+ *  2. A short prefix / short_id is expanded against the local mirror, the only
+ *     prefix index available client-side (the `/v1` API has no prefix lookup).
+ *     Ambiguous or unknown prefixes fail loudly with actionable guidance.
+ */
 export function resolveTaskId(partialId: string): string {
-  const db = getDatabase();
-  const id = resolvePartialId(db, "tasks", partialId);
-  if (!id) {
-    const similar = db.query("SELECT id FROM tasks WHERE id LIKE ? LIMIT 3").all(`%${partialId}%`) as { id: string }[];
-    if (similar.length > 0) {
-      console.error(chalk.red(`Could not resolve task ID: ${partialId}`));
-      console.error(chalk.dim(`Did you mean: ${similar.map(s => s.id.slice(0, 8)).join(", ")}?`));
-    } else {
-      console.error(chalk.red(`Could not resolve task ID: ${partialId}`));
-    }
+  const raw = (partialId ?? "").trim();
+
+  if (!raw) {
+    console.error(chalk.red("Could not resolve task ID: (empty)"));
     process.exit(1);
   }
-  return id;
+
+  // Rule 1: full UUID → trust it as-is (works for local AND cloud-only tasks).
+  // Canonicalize to lower-case: ids are generated/stored lower-case, and the
+  // cloud API matches them case-sensitively, so an upper-case UUID must be
+  // normalized or it would 404 a task that actually exists.
+  if (TASK_UUID_RE.test(raw)) return raw.toLowerCase();
+
+  // Rule 2: prefix / short_id → expand against the local mirror.
+  const db = getDatabase();
+  const id = resolvePartialId(db, "tasks", raw);
+  if (id) return id;
+
+  const similar = db.query("SELECT id FROM tasks WHERE id LIKE ? LIMIT 3").all(`%${raw}%`) as { id: string }[];
+  console.error(chalk.red(`Could not resolve task ID: ${raw}`));
+  if (similar.length > 0) {
+    console.error(chalk.dim(`Did you mean: ${similar.map(s => s.id.slice(0, 8)).join(", ")}?`));
+  } else if (isCloudRouting()) {
+    console.error(chalk.dim(
+      "Cloud mode: short id prefixes resolve only for tasks present in this machine's local mirror. "
+      + "Pass the full task UUID (copy it from `todos show <id>` or `todos list --json`).",
+    ));
+  }
+  process.exit(1);
 }
 
 export function detectGitRoot(): string | null {
