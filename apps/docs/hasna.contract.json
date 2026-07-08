@@ -1,0 +1,33 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "docs",
+  "class": "service",
+  "contractVersion": "v1",
+  "kitVersion": "0.1.0",
+  "description": "Headless rich-text document SDK over the ProseMirror/TipTap JSON model. Primary surface is a browser React <Editor> (@hasna/docs/react) plus a framework-agnostic, dependency-free document core (createDocument/loadDocument, Markdown/HTML/JSON import-export, outline + word count, programmatic edits/steps). A `docs` CLI performs headless conversions and analysis over files. MCP + HTTP serve + Postgres persistence are optional scaffolding not yet shipped in this v1.",
+  "bins": [
+    "docs"
+  ],
+  "storage": {
+    "mode": "local",
+    "envPrefix": "HASNA_DOCS_",
+    "aliasEnvPrefix": "DOCS_",
+    "databaseUrlSecretRef": "hasna/oss/docs/database-url",
+    "sqlitePath": "~/.hasna/docs/docs.db"
+  },
+  "metadata": {
+    "service": {
+      "port": 19436,
+      "healthPath": "/health",
+      "readyPath": "/ready",
+      "versionPath": "/version",
+      "apiVersion": "v1",
+      "auth": "api-key",
+      "signingSecretSecretRef": "hasna/oss/docs/api-key-signing-secret"
+    },
+    "client": {
+      "apiUrlEnv": "DOCS_API_URL",
+      "apiKeyEnv": "DOCS_API_KEY"
+    }
+  }
+}
