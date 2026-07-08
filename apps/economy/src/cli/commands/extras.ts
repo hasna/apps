@@ -8,17 +8,11 @@ import {
   queryZeroCostTokenizedModels,
 } from '../../db/database.js'
 import { buildStatusLine, gatherStatusData } from './tui.js'
-import { getStore } from '../../lib/store/index.js'
+import { getStore, isCloudStore } from '../../lib/store/index.js'
 import { ensurePricingSeeded, getPricingFromDb } from '../../lib/pricing.js'
 import { AGENTS, parseAgent } from '../../lib/agents.js'
 import type { SavingsSummary } from '../../lib/savings.js'
 import type { CostSummary, Period, UsageSnapshot } from '../../types/index.js'
-import {
-  getCloudDatabaseUrl,
-  getCloudScheduleStatus,
-  registerCloudSchedule,
-  removeCloudSchedule,
-} from '../../lib/cloud-sync.js'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { printCompletion } from './completion.js'
@@ -179,7 +173,7 @@ export function registerExtendedCommands(program: Command): void {
         checks.push({ ok: existsSync(path), msg: `${agent}: ${existsSync(path) ? path : 'not found'}` })
       }
       checks.push({ ok: Boolean(process.env['CURSOR_SESSION_TOKEN']), msg: `cursor token: ${process.env['CURSOR_SESSION_TOKEN'] ? 'set' : 'missing CURSOR_SESSION_TOKEN'}` })
-      checks.push({ ok: Boolean(getCloudDatabaseUrl()), msg: `cloud: ${getCloudDatabaseUrl() ? 'ECONOMY_CLOUD_DATABASE_URL set' : 'not configured'}` })
+      checks.push({ ok: true, msg: `storage: ${isCloudStore() ? 'self_hosted/cloud (HASNA_ECONOMY_API_URL + key)' : 'local'}` })
 
       const zeroCostBuckets = queryZeroCostTokenizedModels(db, 5)
       const zeroCost = db.prepare(`
@@ -219,17 +213,18 @@ export function registerExtendedCommands(program: Command): void {
     .description('First-run setup wizard hints')
     .action(async () => {
       console.log(chalk.bold.cyan('\n  Economy Init\n'))
+      console.log('  Local mode (on-box SQLite):')
       console.log('  1. Set machine id:  export ECONOMY_MACHINE_ID=spark01')
-      console.log('  2. Cloud sync:      export ECONOMY_CLOUD_DATABASE_URL=postgresql://...')
-      console.log('  3. Auto cloud:      export ECONOMY_CLOUD_AUTO=1')
-      console.log('  4. Cursor token:    export CURSOR_SESSION_TOKEN=...')
-      console.log('  5. Run ingest:      economy sync --verbose')
-      console.log('  6. Schedule sync:   economy cloud schedule install --minutes 10')
-      console.log('  7. MCP install:     economy mcp --all')
-      console.log('  8. Subscriptions:   economy subscriptions set --provider cursor --plan pro --fee 20 --included 20 --agent cursor')
-      console.log('  9. OTel sidecar:   economy-otel --port 4318')
-      console.log('  10. API auth:      export ECONOMY_API_TOKEN=... (serve binds localhost)')
-      console.log('  11. Linux status:  economy tui --watch  |  economy waybar')
+      console.log('  2. Cursor token:    export CURSOR_SESSION_TOKEN=...')
+      console.log('  3. Run ingest:      economy sync --verbose')
+      console.log('  4. MCP install:     economy mcp --all')
+      console.log('  5. Subscriptions:   economy subscriptions set --provider cursor --plan pro --fee 20 --included 20 --agent cursor')
+      console.log('  6. OTel sidecar:    economy-otel --port 4318')
+      console.log('  7. Linux status:    economy tui --watch  |  economy waybar')
+      console.log()
+      console.log('  Self-hosted/cloud mode (shared cloud API — reads/writes route to it):')
+      console.log('  a. API URL:         export HASNA_ECONOMY_API_URL=https://economy.hasna.xyz/v1')
+      console.log('  b. API key:         export HASNA_ECONOMY_API_KEY=<bearer key>   (never a DB DSN)')
       console.log()
     })
 
@@ -306,32 +301,6 @@ export function registerExtendedCommands(program: Command): void {
       })
   }
 
-  const cloudCmd = program.commands.find(c => c.name() === 'cloud')
-  if (cloudCmd) {
-    const scheduleCmd = cloudCmd.command('schedule').description('Manage automatic cloud sync schedule')
-    scheduleCmd
-      .command('install')
-      .description('Install launchd/systemd schedule')
-      .option('--minutes <n>', 'Interval minutes', '10')
-      .action(async (opts: { minutes?: string }) => {
-        await registerCloudSchedule(Number(opts.minutes ?? 10))
-        console.log(chalk.green(`✓ Cloud sync scheduled every ${opts.minutes ?? 10} minutes`))
-      })
-    scheduleCmd
-      .command('status')
-      .description('Show schedule status')
-      .action(async () => {
-        const status = await getCloudScheduleStatus()
-        console.log(JSON.stringify(status, null, 2))
-      })
-    scheduleCmd
-      .command('remove')
-      .description('Remove schedule')
-      .action(async () => {
-        await removeCloudSchedule()
-        console.log(chalk.green('✓ Cloud sync schedule removed'))
-      })
-  }
 }
 
 export function registerFleetCommands(program: Command): void {

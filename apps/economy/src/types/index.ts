@@ -174,7 +174,6 @@ export interface SyncOptions {
   hermes?: boolean
   verbose?: boolean
   dedupe?: boolean
-  cloud?: boolean
 }
 
 export interface SessionFilter {

@@ -1,6 +1,5 @@
 import chalk from 'chalk'
 import { getStore, type EconomyStore } from '../../lib/store/index.js'
-import { getCloudDatabaseUrl, getLastCloudPull } from '../../lib/cloud-sync.js'
 import { getServeApiToken } from '../../lib/serve-auth.js'
 import type { SavingsSummary } from '../../lib/savings.js'
 import type { AgentBreakdown, CostSummary, UsageSnapshot } from '../../types/index.js'
@@ -62,15 +61,10 @@ export async function gatherStatusData(store: EconomyStore = getStore()): Promis
   }
 }
 
-/** Deployment/sync label for the status line. */
+/** Deployment label for the status line, derived purely from the active Store
+ * transport: the cloud HTTP transport is self_hosted/cloud, else local. */
 function modeLabel(transport: EconomyStore['transport']): string {
-  if (transport === 'cloud-http') return 'self_hosted'
-  const lastPull = getLastCloudPull()
-  const pullAge = lastPull
-    ? `${Math.round((Date.now() - new Date(lastPull).getTime()) / 60000)}m`
-    : 'never'
-  const cloud = getCloudDatabaseUrl() ? 'cloud' : 'local'
-  return `${cloud} pull ${pullAge}`
+  return transport === 'cloud-http' ? 'self_hosted' : 'local'
 }
 
 export function buildStatusLine(data: StatusData): string {

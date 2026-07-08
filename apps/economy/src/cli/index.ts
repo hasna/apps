@@ -8,11 +8,8 @@ import { registerExtendedCommands, registerFleetCommands } from './commands/extr
 import { registerBriefCommand } from './commands/brief.js'
 import { AGENTS, parseAgent } from '../lib/agents.js'
 import { syncAll } from '../lib/sync-all.js'
-import { maybePullFromCloud, cloudPush, cloudPull, cloudSyncFull, getCloudDatabaseUrl, getCloudPg } from '../lib/cloud-sync.js'
-import { mergePeerDatabase } from '../lib/peer-sync.js'
-import { runEconomyFleetSync, writeFleetSyncReport } from '../lib/fleet-sync.js'
 import type { Agent } from '../lib/agents.js'
-import { openDatabase, queryZeroCostTokenizedModels, getMachineId, listMachineRegistry } from '../db/database.js'
+import { openDatabase, queryZeroCostTokenizedModels, getMachineId } from '../db/database.js'
 import { syncAnthropicBilling, syncOpenAIBilling, syncGeminiBilling } from '../ingest/billing.js'
 import { packageMetadata } from '../lib/package-metadata.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
@@ -29,13 +26,12 @@ program
 
 // ── Auto-sync helper ──────────────────────────────────────────────────────────
 
-async function autoSync(opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; opencode?: boolean; cursor?: boolean; pi?: boolean; hermes?: boolean; verbose?: boolean; dedupe?: boolean; cloud?: boolean } = {}): Promise<void> {
+async function autoSync(opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; opencode?: boolean; cursor?: boolean; pi?: boolean; hermes?: boolean; verbose?: boolean; dedupe?: boolean } = {}): Promise<void> {
   // self_hosted/cloud mode: reads come straight from the cloud API, so there is
-  // no local DB to ingest into or pull for. Skip the local sync entirely.
+  // no local DB to ingest into. Skip the local sync entirely.
   if (isCloudStore()) return
   const db = openDatabase()
   ensurePricingSeeded(db)
-  await maybePullFromCloud()
   await syncAll(db, opts)
 }
 
@@ -272,6 +268,14 @@ program
   .option('--backfill-machine', 'Tag existing records that have no machine_id with current hostname')
   .option('--recalculate', 'Recalculate costs for all requests with cost_usd = 0')
   .action(async (opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; opencode?: boolean; cursor?: boolean; pi?: boolean; hermes?: boolean; verbose?: boolean; force?: boolean; backfillMachine?: boolean; recalculate?: boolean }) => {
+    // self_hosted/cloud mode: this client reads and writes the shared cloud API,
+    // it has no local DB to ingest into. Local log ingestion is a local-mode
+    // concept only — skip it here exactly like autoSync does before reads, so we
+    // never write to a local SQLite that the cloud transport will never read.
+    if (isCloudStore()) {
+      console.log(chalk.yellow('cloud mode: ingest is a local-only operation; nothing to sync (reads/writes route to the cloud API)'))
+      return
+    }
     const db = openDatabase()
     ensurePricingSeeded(db)
     const anySpecific = opts.claude || opts.takumi || opts.codex || opts.gemini || opts.opencode || opts.cursor || opts.pi || opts.hermes
@@ -301,7 +305,7 @@ program
       hermes: opts.hermes,
       verbose: opts.verbose,
     })
-    console.log(chalk.green(`✓ deduped ${result.deduped}${result.cloudPushed ? ', pushed to cloud' : ''}`))
+    console.log(chalk.green(`✓ deduped ${result.deduped}`))
     // Backfill empty machine_id records
     if (opts.backfillMachine) {
       const machine = getMachineId()
@@ -994,80 +998,6 @@ program
     console.log()
   })
 
-program
-  .command('fleet-sync')
-  .description('Loop-safe cross-machine sync using remote SQLite snapshots')
-  .option('--machine <ids>', 'Comma-separated remote machines', 'spark02,apple03')
-  .option('--no-local-sync', 'Skip local economy sync before remote merge')
-  .option('--no-remote-sync', 'Skip remote economy sync before snapshot')
-  .option('--cache-dir <path>', 'Directory for verified pulled DB snapshots')
-  .option('--report-dir <path>', 'Directory for JSON evidence reports')
-  .option('--remote-snapshot-dir <path>', 'Remote snapshot directory', '$HOME/.hasna/economy/fleet-sync-snapshots')
-  .option('--timeout-ms <n>', 'Per remote command timeout', '120000')
-  .option('--dry-run', 'Plan without syncing, pulling, or merging')
-  .option('--json', 'Output JSON')
-  .action((opts: {
-    machine?: string
-    localSync?: boolean
-    remoteSync?: boolean
-    cacheDir?: string
-    reportDir?: string
-    remoteSnapshotDir?: string
-    timeoutMs?: string
-    dryRun?: boolean
-    json?: boolean
-  }) => {
-    const result = runEconomyFleetSync({
-      machines: opts.machine?.split(',').map((entry) => entry.trim()).filter(Boolean),
-      localSync: opts.localSync !== false,
-      remoteSync: opts.remoteSync !== false,
-      cacheDir: opts.cacheDir,
-      remoteSnapshotDir: opts.remoteSnapshotDir,
-      timeoutMs: parsePositiveCliInteger(opts.timeoutMs, '--timeout-ms'),
-      dryRun: opts.dryRun,
-    })
-    const reportPath = opts.reportDir ? writeFleetSyncReport(opts.reportDir, result) : undefined
-    if (opts.json) {
-      console.log(JSON.stringify({ ...result, ...(reportPath ? { report_path: reportPath } : {}) }, null, 2))
-      return
-    }
-    const status = result.summary.failed === 0 ? chalk.green('ok') : chalk.red('failed')
-    console.log(`${status} machines=${result.summary.machines} merged=${result.summary.merged} failed=${result.summary.failed} dry_run=${result.summary.dry_run}`)
-    if (reportPath) console.log(chalk.dim(`report=${reportPath}`))
-    for (const row of result.remote.filter((entry) => entry.status !== 'merged').slice(0, 20)) {
-      console.log(`${row.status === 'failed' ? chalk.red('failed') : chalk.yellow(row.status)} ${row.machine} ${chalk.dim(row.error ?? '')}`)
-    }
-    if (result.local.status === 'failed' || result.summary.failed > 0) process.exitCode = 1
-  })
-
-program
-  .command('merge-db <source-db>')
-  .description('Merge another Economy SQLite database into this machine')
-  .option('--source-machine <id>', 'Machine id to use for source rows that do not have one')
-  .option('--json', 'Output JSON')
-  .action((sourceDb: string, opts: { sourceMachine?: string; json?: boolean }) => {
-    const db = openDatabase()
-    const result = mergePeerDatabase(db, sourceDb, { sourceMachine: opts.sourceMachine })
-    if (opts.json) {
-      console.log(JSON.stringify(result, null, 2))
-      return
-    }
-
-    console.log()
-    console.log(chalk.bold.cyan(`  Merged Economy DB — ${result.source_machine}`))
-    console.log(`  Rows written: ${fmtCount(result.rows_written)} · collisions remapped: ${fmtCount(result.collisions)} · deduped: ${fmtCount(result.deduped)}`)
-    for (const table of result.tables) {
-      console.log(
-        `  ${chalk.white(table.table.padEnd(16))}`
-        + ` inserted ${fmtCount(table.inserted).padStart(6)}`
-        + `  updated ${fmtCount(table.updated).padStart(6)}`
-        + `  skipped ${fmtCount(table.skipped).padStart(6)}`
-        + `  collisions ${fmtCount(table.collisions).padStart(3)}`,
-      )
-    }
-    console.log()
-  })
-
 // ── export ────────────────────────────────────────────────────────────────────
 
 program
@@ -1370,73 +1300,6 @@ program
     }
   })
 
-// ── cloud ────────────────────────────────────────────────────────────────────
-
-const cloudCmd = program.command('cloud').description('Cross-machine sync via cloud PostgreSQL')
-
-cloudCmd
-  .command('push')
-  .description('Push local economy data to cloud PostgreSQL')
-  .option('--tables <tables>', 'Comma-separated table names (default: all)')
-  .action(async (opts: { tables?: string }) => {
-    const tableList = opts.tables ? opts.tables.split(',').map(t => t.trim()) : undefined
-    process.stdout.write(chalk.cyan('→ Pushing to cloud... '))
-    const r = await cloudPush({ tables: tableList })
-    console.log(chalk.green(`✓ ${r.rows} rows from ${r.machine}`))
-  })
-
-cloudCmd
-  .command('pull')
-  .description('Pull cloud PostgreSQL data to local')
-  .option('--tables <tables>', 'Comma-separated table names (default: all)')
-  .action(async (opts: { tables?: string }) => {
-    const tableList = opts.tables ? opts.tables.split(',').map(t => t.trim()) : undefined
-    process.stdout.write(chalk.cyan('→ Pulling from cloud... '))
-    const r = await cloudPull({ tables: tableList })
-    console.log(chalk.green(`✓ ${r.rows} rows to ${r.machine}`))
-  })
-
-cloudCmd
-  .command('sync')
-  .description('Full sync: ingest local → push to cloud → pull from cloud')
-  .action(async () => {
-    console.log(chalk.bold.cyan(`  Cloud Sync — ${getMachineId()}\n`))
-    process.stdout.write(chalk.cyan('→ Ingesting local data... '))
-    await autoSync()
-    console.log(chalk.green('✓'))
-    process.stdout.write(chalk.cyan('→ Cloud round-trip... '))
-    const r = await cloudSyncFull()
-    console.log(chalk.green(`✓ push ${r.push} / pull ${r.pull}`))
-    console.log(chalk.bold.green('\n✓ Cloud sync complete'))
-  })
-
-cloudCmd
-  .command('status')
-  .description('Check cloud connection and fleet machine registry')
-  .action(async () => {
-    console.log()
-    console.log(`  Machine: ${chalk.white(getMachineId())}`)
-    console.log(`  Cloud URL: ${chalk.white(getCloudDatabaseUrl() ?? '(not set — export ECONOMY_CLOUD_DATABASE_URL)')}`)
-    const registry = listMachineRegistry(openDatabase())
-    if (registry.length > 0) {
-      console.log(chalk.dim('\n  Fleet registry:'))
-      for (const m of registry) {
-        console.log(`    ${m.machine_id.padEnd(12)} push ${m.last_push_at?.substring(0, 16) ?? '—'}  pull ${m.last_pull_at?.substring(0, 16) ?? '—'}`)
-      }
-    }
-    try {
-      const cloud = await getCloudPg()
-      await cloud.get('SELECT 1 as ok')
-      const tables = await cloud.all("SELECT tablename FROM pg_tables WHERE schemaname = 'public'") as Array<{ tablename: string }>
-      console.log(`\n  PostgreSQL: ${chalk.green('connected')}`)
-      console.log(`  Tables: ${chalk.white(tables.map(t => t.tablename).join(', ') || '(none)')}`)
-      await cloud.close()
-    } catch (err: unknown) {
-      console.log(`\n  PostgreSQL: ${chalk.red(`failed — ${err instanceof Error ? err.message : String(err)}`)}`)
-    }
-    console.log()
-  })
-
 // ── billing ──────────────────────────────────────────────────────────────────
 
 const billingCmd = program.command('billing').description('Pull actual billing from provider billing sources (ground truth)')
@@ -1515,7 +1378,7 @@ billingCmd
 
 registerBrainsCommand(program)
 registerTodosCommand(program)
-registerBriefCommand(program, { beforeRead: () => autoSync({ dedupe: false, cloud: false }) })
+registerBriefCommand(program, { beforeRead: () => autoSync({ dedupe: false }) })
 registerExtendedCommands(program)
 registerFleetCommands(program)
 
