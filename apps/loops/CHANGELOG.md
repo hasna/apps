@@ -7,6 +7,16 @@ unless noted.
 
 ## Unreleased
 
+## 0.4.18 (2026-07-07/08)
+
+Drain reliability: kill the todos-task redispatch "black hole" family, then the
+merge-lane routing wedge and the schema-lockout class behind it. One artifact
+consolidates the whole independently-reviewed family: #82 (dead-letter at the
+cap + attempt refunds + requeue reset + worktree self-heal), #88 (per-task
+repository routing + candidate-window memory), #89 (schema-compat soft-open +
+gate-death ceiling), plus the previously unpublished 0.4.15–0.4.17 ride-alongs
+documented below.
+
 ### Fixed
 
 - **Merge-lane wedge — the task's own repository wins over a group-root
@@ -37,40 +47,22 @@ unless noted.
   count consecutive gate deaths (`gate_deaths`, additive migration
   `0011_work_item_gate_deaths`, no schema `user_version` bump); at the ceiling
   (20) the item is dead-lettered — visible in drain reports — instead of
-  spinning, and the bounded route re-admission will not requeue it. Any run
-  that reaches the worker (success, productive failure, or an `exit 75`
-  tempfail) resets the streak; `loops routes requeue` (default attempts reset)
-  re-arms the full ceiling.
-
-### Changed
-
-- **Newer-schema databases soft-open when the delta is non-breaking:** an older
-  binary used to refuse ANY database with a newer `PRAGMA user_version` — during
-  the 2026-07-07 schema-8 lockout that bricked the whole CLI fleet over purely
-  additive migrations. The database now carries a compatibility floor
-  (`schema_compat.min_compatible_user_version`, raised only by BREAKING
-  migrations; additive ones leave it untouched): a binary opens any newer
-  database whose floor it meets, preserves the newer `user_version` stamp
-  (never downgrades it), and refuses only on a known-breaking delta or when the
-  floor row is absent (pre-contract/unblessed databases stay conservative).
-
-## 0.4.18 (2026-07-07)
-
-Drain reliability: kill the todos-task redispatch "black hole" family. A
-still-actionable task whose runs kept finishing without closing it used to be
-deduped forever once its attempt count reached the cap (`considered=N created=0`
-with no signal), and purely infrastructural failures (a stale worktree
-registration, a tempfail retry-signal) burned that cap on tasks that never
-actually ran.
-
-### Fixed
-
-- **Redispatch cap no longer a silent black hole:** when a todos-task work item
-  reaches `MAX_TODOS_TASK_ROUTE_REDISPATCHES` (8) it is transitioned to a
-  visible `dead_letter` state instead of being deduped forever with no signal.
-  Drain reports gain a `deadLettered` count (and the deduped result carries
-  `deadLettered: true` + the reason), so a capped task is surfaced and an
-  operator can requeue it rather than the drain silently reporting `created=0`.
+  spinning, and the bounded route re-admission will not requeue it. A
+  productive failure or an `exit 75` tempfail (runs that reached the worker)
+  resets the streak; `loops routes requeue` (default attempts reset) re-arms
+  the full ceiling. Known gap (review finding N1; fix queued for the next
+  patch): a non-closing SUCCESS does not yet reset the streak — bounded and
+  safe (it errs toward a recoverable early dead-letter, and the redispatch cap
+  independently bounds chronically non-closing successes).
+- **Redispatch cap no longer a silent black hole** (the original #82 core: a
+  still-actionable task whose runs kept finishing without closing it was
+  deduped forever once its attempt count reached the cap): when a todos-task
+  work item reaches `MAX_TODOS_TASK_ROUTE_REDISPATCHES` (8) it is transitioned
+  to a visible `dead_letter` state instead of being deduped forever with no
+  signal. Drain reports gain a `deadLettered` count (and the deduped result
+  carries `deadLettered: true` + the reason), so a capped task is surfaced and
+  an operator can requeue it rather than the drain silently reporting
+  `created=0`.
 - **Gate deaths no longer count toward the cap:** a run that dies before doing
   real work — worktree preparation failure, or a fast (`<60s`) `triage`/`planner`
   gate failure — has its attempt refunded by `finalizeWorkflowRun`, so an infra
@@ -91,6 +83,16 @@ actually ran.
   single biggest burner of the redispatch cap at its source.
 
 ### Changed
+
+- **Newer-schema databases soft-open when the delta is non-breaking:** an older
+  binary used to refuse ANY database with a newer `PRAGMA user_version` — during
+  the 2026-07-07 schema-8 lockout that bricked the whole CLI fleet over purely
+  additive migrations. The database now carries a compatibility floor
+  (`schema_compat.min_compatible_user_version`, raised only by BREAKING
+  migrations; additive ones leave it untouched): a binary opens any newer
+  database whose floor it meets, preserves the newer `user_version` stamp
+  (never downgrades it), and refuses only on a known-breaking delta or when the
+  floor row is absent (pre-contract/unblessed databases stay conservative).
 
 - Documentation now names `loops-serve` as the Postgres-backed Hasna-owned
   self-hosted control-plane host, keeps `loops-api` as the shared embeddable API
