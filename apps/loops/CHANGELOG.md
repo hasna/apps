@@ -30,6 +30,29 @@ unless noted.
   They are now held out of the window before slicing (unless the drain's own
   `--tags` explicitly selects that tag) and counted as `excludedDisallowedTag`
   in drain reports, so the exclusion is auditable.
+- **Deterministic gate deaths are bounded by a secondary ceiling:** gate deaths
+  (runs that fail at worktree prep or a fast triage/planner gate before any real
+  work) refund their redispatch attempt — correct for transient faults, but a
+  deterministic fault would retry forever at the backoff floor. Work items now
+  count consecutive gate deaths (`gate_deaths`, additive migration
+  `0011_work_item_gate_deaths`, no schema `user_version` bump); at the ceiling
+  (20) the item is dead-lettered — visible in drain reports — instead of
+  spinning, and the bounded route re-admission will not requeue it. Any run
+  that reaches the worker (success, productive failure, or an `exit 75`
+  tempfail) resets the streak; `loops routes requeue` (default attempts reset)
+  re-arms the full ceiling.
+
+### Changed
+
+- **Newer-schema databases soft-open when the delta is non-breaking:** an older
+  binary used to refuse ANY database with a newer `PRAGMA user_version` — during
+  the 2026-07-07 schema-8 lockout that bricked the whole CLI fleet over purely
+  additive migrations. The database now carries a compatibility floor
+  (`schema_compat.min_compatible_user_version`, raised only by BREAKING
+  migrations; additive ones leave it untouched): a binary opens any newer
+  database whose floor it meets, preserves the newer `user_version` stamp
+  (never downgrades it), and refuses only on a known-breaking delta or when the
+  floor row is absent (pre-contract/unblessed databases stay conservative).
 
 ## 0.4.18 (2026-07-07)
 

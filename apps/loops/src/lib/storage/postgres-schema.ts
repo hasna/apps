@@ -380,4 +380,13 @@ ALTER TABLE workflow_work_items ADD COLUMN IF NOT EXISTS machine_id TEXT;
 CREATE INDEX IF NOT EXISTS idx_workflow_work_items_machine ON workflow_work_items(machine_id, status);
     `,
   ),
+  // Additive consecutive gate-death counter (mirrors sqlite migration
+  // 0011_work_item_gate_deaths): bounds the retry-forever loop of a
+  // deterministic pre-worker infrastructure fault whose attempts are refunded.
+  migration(
+    "0007_work_item_gate_deaths",
+    `
+ALTER TABLE workflow_work_items ADD COLUMN IF NOT EXISTS gate_deaths INTEGER NOT NULL DEFAULT 0;
+    `,
+  ),
 ]);

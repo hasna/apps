@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   classifyNonProductiveStepFailure,
+  GATE_DEATH_CEILING,
   Store,
   WORK_ITEM_TEMPFAIL_EXIT_CODE,
 } from "./store.js";
@@ -157,6 +159,55 @@ describe("Store drain-reliability state machine", () => {
     const item = store.getWorkflowWorkItem(ctx.workItemId);
     expect(item?.status).toBe("failed");
     expect(item?.attempts).toBe(0); // refunded: the worker never ran
+    expect(item?.gateDeaths).toBe(1); // ...but the consecutive streak is counted
+  });
+
+  /** Set the consecutive gate-death counter directly (scratch db). */
+  function setGateDeaths(workItemId: string, value: number): void {
+    const raw = new Database(join(root, "loops.db"));
+    try {
+      raw.query("UPDATE workflow_work_items SET gate_deaths = ? WHERE id = ?").run(value, workItemId);
+    } finally {
+      raw.close();
+    }
+  }
+
+  test("(F3) the gate-death ceiling dead-letters a deterministic pre-worker fault", () => {
+    const ctx = admit("gate-ceiling", ["triage", "worker"]);
+    setGateDeaths(ctx.workItemId, GATE_DEATH_CEILING - 1);
+    failRun(ctx, { stepId: "triage", exitCode: 1, durationMs: 3_000 });
+    const item = store.getWorkflowWorkItem(ctx.workItemId);
+    expect(item?.status).toBe("dead_letter"); // bounded: no more auto-retry
+    expect(item?.gateDeaths).toBe(GATE_DEATH_CEILING);
+    expect(item?.attempts).toBe(0); // still refunded — the worker never ran
+    expect(item?.lastReason).toContain("gate-death ceiling reached");
+  });
+
+  test("(F3) a run that reaches the worker resets the gate-death streak", () => {
+    // Productive failure resets.
+    const productive = admit("gate-streak-productive", ["triage", "worker"]);
+    setGateDeaths(productive.workItemId, 5);
+    failRun(productive, { stepId: "worker", exitCode: 1, durationMs: 120_000 });
+    expect(store.getWorkflowWorkItem(productive.workItemId)?.gateDeaths).toBe(0);
+
+    // Tempfail also reached the worker: resets too (and requeues as before).
+    const tempfail = admit("gate-streak-tempfail", ["triage", "worker"]);
+    setGateDeaths(tempfail.workItemId, 5);
+    failRun(tempfail, { stepId: "worker", exitCode: WORK_ITEM_TEMPFAIL_EXIT_CODE, durationMs: 5_000 });
+    const item = store.getWorkflowWorkItem(tempfail.workItemId);
+    expect(item?.status).toBe("queued");
+    expect(item?.gateDeaths).toBe(0);
+  });
+
+  test("(F3) operator requeue with attempts reset also clears the gate-death streak", () => {
+    const ctx = admit("gate-requeue", ["triage", "worker"]);
+    setGateDeaths(ctx.workItemId, GATE_DEATH_CEILING - 1);
+    failRun(ctx, { stepId: "triage", exitCode: 1, durationMs: 3_000 });
+    expect(store.getWorkflowWorkItem(ctx.workItemId)?.status).toBe("dead_letter");
+    const requeued = store.requeueWorkflowWorkItem(ctx.workItemId, { reason: "operator: infra fixed", resetAttempts: true });
+    expect(requeued.status).toBe("queued");
+    expect(requeued.gateDeaths).toBe(0); // full ceiling re-armed
+    expect(requeued.attempts).toBe(0);
   });
 
   test("(c) an exit-75 tempfail makes the item requeueable and refunds its attempt", () => {
