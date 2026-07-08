@@ -94,9 +94,9 @@ export interface ProviderAvailability {
 }
 
 export type DbFunctions = {
-  getDomainByName: (name: string) => Domain | null;
-  createDomain: (input: CreateDomainInput) => Domain;
-  updateDomain: (id: string, input: UpdateDomainInput) => Domain | null;
+  getDomainByName: (name: string) => Promise<Domain | null>;
+  createDomain: (input: CreateDomainInput) => Promise<Domain>;
+  updateDomain: (id: string, input: UpdateDomainInput) => Promise<Domain | null>;
 };
 
 /** Handles domain inventory discovery and sync into the local portfolio. */
@@ -495,11 +495,11 @@ export async function syncAll(dbFns: DbFunctions): Promise<SyncAllResult> {
   return result;
 }
 
-export function autoDetectRegistrar(
+export async function autoDetectRegistrar(
   domain: string,
-  getDomainByName: (name: string) => Domain | null
-): string | null {
-  const dbDomain = getDomainByName(domain);
+  getDomainByName: (name: string) => Promise<Domain | null>
+): Promise<string | null> {
+  const dbDomain = await getDomainByName(domain);
   if (!dbDomain?.registrar) return null;
 
   const r = dbDomain.registrar.toLowerCase();

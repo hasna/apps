@@ -1,9 +1,22 @@
 /**
- * Domain, DNS record, and alert CRUD operations
+ * Routed data facade for @hasna/domains.
  *
- * This file re-exports everything from the individual modules so that
- * existing imports continue to work without changes.
+ * Every data operation below routes through the single {@link DomainsStore}
+ * resolved by {@link getStore}: LocalStore (on-box sqlite) in local mode, or
+ * ApiStore (HTTPS `/v1` + bearer key) in self_hosted/cloud mode. There is NO
+ * per-command local fallback and NO direct sqlite access here — the transport is
+ * chosen once, centrally, by the env. This is the module CLI commands, MCP
+ * tools, and the SDK import; none of them touch sqlite or fetch directly.
+ *
+ * Types and enum constants are re-exported from the underlying record modules
+ * (they carry no storage behaviour). The sqlite-backed record modules
+ * (domain-records, dns-records, alerts, ...) are the LocalStore backing and are
+ * reached ONLY through the store, never imported directly by callers.
  */
+
+import { getStore } from "./store.js";
+
+// ── type + constant re-exports (no behaviour) ────────────────────────────────
 
 export type {
   Domain,
@@ -21,65 +34,19 @@ export type {
   DomainDetails,
   RecordDomainPurchaseInput,
 } from "./domain-records.js";
-
 export {
   DOMAIN_STATUSES,
   DOMAIN_OFFER_STATUSES,
   DOMAIN_EMAIL_TYPES,
   rowToDomain,
-  createDomain,
-  getDomain,
-  getDomainByIdentifier,
-  getDomainDetails,
-  listDomains,
-  updateDomain,
-  markDomainPremium,
-  updateDomainLifecycleStatus,
-  recordDomainPurchase,
-  deleteDomain,
-  countDomains,
-  searchDomains,
-  getByRegistrar,
-  listExpiring,
-  listSslExpiring,
-  getDomainStats,
-  getDomainByName,
   rowToDomainOffer,
-  createDomainOffer,
-  getDomainOffer,
-  listDomainOffers,
   rowToDomainEmailLink,
-  linkDomainEmail,
-  getDomainEmailLink,
-  listDomainEmailLinks,
 } from "./domain-records.js";
 
-export type {
-  DnsRecord,
-  CreateDnsRecordInput,
-  UpdateDnsRecordInput,
-} from "./dns-records.js";
+export type { DnsRecord, CreateDnsRecordInput, UpdateDnsRecordInput } from "./dns-records.js";
+export { rowToDnsRecord } from "./dns-records.js";
 
-export {
-  rowToDnsRecord,
-  createDnsRecord,
-  getDnsRecord,
-  listDnsRecords,
-  updateDnsRecord,
-  deleteDnsRecord,
-} from "./dns-records.js";
-
-export type {
-  Alert,
-  CreateAlertInput,
-} from "./alerts.js";
-
-export {
-  createAlert,
-  getAlert,
-  listAlerts,
-  deleteAlert,
-} from "./alerts.js";
+export type { Alert, CreateAlertInput } from "./alerts.js";
 
 export type {
   WhoisResult,
@@ -90,7 +57,6 @@ export type {
   DnsValidationIssue,
   DnsValidationResult,
 } from "./dns-tools.js";
-
 export {
   whoisLookup,
   checkDnsPropagation,
@@ -102,5 +68,132 @@ export {
 } from "./dns-tools.js";
 
 export type { BulkCheckResult } from "./monitoring.js";
-
 export { exportPortfolio, checkAllDomains } from "./monitoring.js";
+
+import type {
+  Domain,
+  CreateDomainInput,
+  UpdateDomainInput,
+  ListDomainsOptions,
+  DomainStats,
+  DomainOffer,
+  CreateDomainOfferInput,
+  DomainEmailLink,
+  CreateDomainEmailLinkInput,
+  DomainDetails,
+  RecordDomainPurchaseInput,
+  DomainStatus,
+} from "./domain-records.js";
+import type { DnsRecord, CreateDnsRecordInput, UpdateDnsRecordInput } from "./dns-records.js";
+import type { Alert, CreateAlertInput } from "./alerts.js";
+
+// ── domains ──────────────────────────────────────────────────────────────────
+
+export function createDomain(input: CreateDomainInput): Promise<Domain> {
+  return getStore().createDomain(input);
+}
+export function getDomain(id: string): Promise<Domain | null> {
+  return getStore().getDomain(id);
+}
+export function getDomainByName(name: string): Promise<Domain | null> {
+  return getStore().getDomainByName(name);
+}
+export function getDomainByIdentifier(identifier: string): Promise<Domain | null> {
+  return getStore().getDomainByIdentifier(identifier);
+}
+export function getDomainDetails(identifier: string): Promise<DomainDetails | null> {
+  return getStore().getDomainDetails(identifier);
+}
+export function listDomains(options: ListDomainsOptions = {}): Promise<Domain[]> {
+  return getStore().listDomains(options);
+}
+export function updateDomain(id: string, input: UpdateDomainInput): Promise<Domain | null> {
+  return getStore().updateDomain(id, input);
+}
+export function deleteDomain(id: string): Promise<boolean> {
+  return getStore().deleteDomain(id);
+}
+export function countDomains(): Promise<number> {
+  return getStore().countDomains();
+}
+export function searchDomains(query: string): Promise<Domain[]> {
+  return getStore().searchDomains(query);
+}
+export function getByRegistrar(registrar: string): Promise<Domain[]> {
+  return getStore().getByRegistrar(registrar);
+}
+export function listExpiring(days: number): Promise<Domain[]> {
+  return getStore().listExpiring(days);
+}
+export function listSslExpiring(days: number): Promise<Domain[]> {
+  return getStore().listSslExpiring(days);
+}
+export function getDomainStats(): Promise<DomainStats> {
+  return getStore().getDomainStats();
+}
+export function markDomainPremium(identifier: string, premiumPrice: number, standardPrice?: number): Promise<Domain | null> {
+  return getStore().markDomainPremium(identifier, premiumPrice, standardPrice);
+}
+export function updateDomainLifecycleStatus(identifier: string, status: DomainStatus, notes?: string): Promise<Domain | null> {
+  return getStore().updateDomainLifecycleStatus(identifier, status, notes);
+}
+export function recordDomainPurchase(identifier: string, input: RecordDomainPurchaseInput): Promise<Domain | null> {
+  return getStore().recordDomainPurchase(identifier, input);
+}
+
+// ── offers ─────────────────────────────────────────────────────────────────
+
+export function createDomainOffer(input: CreateDomainOfferInput): Promise<DomainOffer> {
+  return getStore().createDomainOffer(input);
+}
+export function getDomainOffer(id: string): Promise<DomainOffer | null> {
+  return getStore().getDomainOffer(id);
+}
+export function listDomainOffers(domainId: string): Promise<DomainOffer[]> {
+  return getStore().listDomainOffers(domainId);
+}
+
+// ── email links ──────────────────────────────────────────────────────────────
+
+export function linkDomainEmail(input: CreateDomainEmailLinkInput): Promise<DomainEmailLink> {
+  return getStore().linkDomainEmail(input);
+}
+export function getDomainEmailLink(id: string): Promise<DomainEmailLink | null> {
+  return getStore().getDomainEmailLink(id);
+}
+export function listDomainEmailLinks(domainId: string): Promise<DomainEmailLink[]> {
+  return getStore().listDomainEmailLinks(domainId);
+}
+
+// ── dns records ──────────────────────────────────────────────────────────────
+
+export function createDnsRecord(input: CreateDnsRecordInput): Promise<DnsRecord> {
+  return getStore().createDnsRecord(input);
+}
+export function getDnsRecord(id: string): Promise<DnsRecord | null> {
+  return getStore().getDnsRecord(id);
+}
+export function listDnsRecords(domainId: string, type?: DnsRecord["type"]): Promise<DnsRecord[]> {
+  return getStore().listDnsRecords(domainId, type);
+}
+export function updateDnsRecord(id: string, input: UpdateDnsRecordInput): Promise<DnsRecord | null> {
+  return getStore().updateDnsRecord(id, input);
+}
+export function deleteDnsRecord(id: string): Promise<boolean> {
+  return getStore().deleteDnsRecord(id);
+}
+
+// ── alerts ─────────────────────────────────────────────────────────────────
+
+export function createAlert(input: CreateAlertInput): Promise<Alert> {
+  return getStore().createAlert(input);
+}
+export function getAlert(id: string): Promise<Alert | null> {
+  return getStore().getAlert(id);
+}
+export function listAlerts(domainId: string): Promise<Alert[]> {
+  return getStore().listAlerts(domainId);
+}
+export function deleteAlert(id: string): Promise<boolean> {
+  return getStore().deleteAlert(id);
+}

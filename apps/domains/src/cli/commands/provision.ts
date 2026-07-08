@@ -55,7 +55,7 @@ export function registerProvisionCommand(program: Command): void {
       const listDomains = async (): Promise<string[]> => {
         if (opts.domains) return opts.domains.split(",").map((d) => d.trim());
         const { listDomains: dbList } = await import("../../db/domains.js");
-        return dbList({ status: "active" }).map((d) => d.name);
+        return (await dbList({ status: "active" })).map((d) => d.name);
       };
 
       if (opts.once) {

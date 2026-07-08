@@ -21,7 +21,7 @@ async function seedDomainDb(count: number): Promise<{ dbPath: string; dir: strin
   let firstDomainId = "";
 
   for (let i = 0; i < count; i += 1) {
-    const domain = createDomain({
+    const domain = await createDomain({
       name: `compact-${String(i).padStart(2, "0")}.example`,
       registrar: "Example Registrar",
       expires_at: `2030-01-${String((i % 28) + 1).padStart(2, "0")}T00:00:00Z`,
@@ -31,7 +31,7 @@ async function seedDomainDb(count: number): Promise<{ dbPath: string; dir: strin
   }
 
   for (let i = 0; i < count; i += 1) {
-    createDnsRecord({
+    await createDnsRecord({
       domain_id: firstDomainId,
       type: "TXT",
       name: `record-${String(i).padStart(2, "0")}`,

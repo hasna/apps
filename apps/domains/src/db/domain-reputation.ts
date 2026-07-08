@@ -5,8 +5,6 @@
 
 import { getDatabase } from "./database.js";
 import { getDomainByIdentifier } from "./domain-records.js";
-import { getDomain } from "./domains.js";
-import { createHistoryEntry } from "./domain-history.js";
 
 export interface DomainReputation {
   id: string;
@@ -233,48 +231,6 @@ export function checkDnsBlacklist(
   // In production, we'd resolve domain IP then check IP.zone via DNS.
   // For now, return empty — actual checks require DNS resolution.
   return result;
-}
-
-/**
- * Run a full reputation check on a domain and save the results.
- * Combines DNS blacklist check with history tracking.
- */
-export function checkDomainReputation(domainName: string): {
-  reputation: DomainReputation | null;
-  dnsBlacklist: { listed: boolean; zones: string[] };
-} {
-  const domain = getDomainByNameOrExit(domainName);
-
-  const dnsBlacklist = checkDnsBlacklist(domainName);
-
-  // If we have an existing reputation, update last_checked_at
-  const existing = getDomainReputation(domain.id);
-  if (existing) {
-    updateDomainReputation(existing.id, {
-      last_checked_at: new Date().toISOString(),
-    });
-  }
-
-  // Save a history entry for this check
-  createHistoryEntry({
-    domain_id: domain.id,
-    snapshot_type: "reputation",
-    raw_data: { dns_blacklist: dnsBlacklist },
-    notes: dnsBlacklist.listed
-      ? `Listed in: ${dnsBlacklist.zones.join(", ")}`
-      : "Clean — no blacklist hits",
-  });
-
-  return {
-    reputation: existing,
-    dnsBlacklist,
-  };
-}
-
-function getDomainByNameOrExit(name: string) {
-  const domain = getDomainByIdentifier(name);
-  if (!domain) throw new Error(`Domain '${name}' not found in database`);
-  return domain;
 }
 
 /**

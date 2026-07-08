@@ -4,7 +4,6 @@
  */
 
 import { getDatabase } from "./database.js";
-import { getDomainByIdentifier } from "./domain-records.js";
 
 export interface DomainOwner {
   id: string;
@@ -168,10 +167,12 @@ export function deleteDomainOwner(id: string): boolean {
 /**
  * Extract owner info from WHOIS data (RDAP JSON or CLI raw text) and create/update a domain owner record.
  */
-export function extractOwnerFromWhois(domainName: string, whoisData: string): DomainOwner | null {
-  const domain = getDomainByIdentifier(domainName);
-  if (!domain) return null;
-
+export function parseWhoisOwner(whoisData: string): {
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  organization: string | null;
+} | null {
   let name: string | null = null;
   let email: string | null = null;
   let phone: string | null = null;
@@ -205,26 +206,7 @@ export function extractOwnerFromWhois(domainName: string, whoisData: string): Do
   }
 
   if (!name && !email && !org) return null;
-
-  const existing = getDomainOwnerByDomain(domain.id);
-  if (existing) {
-    return updateDomainOwner(existing.id, {
-      owner_name: name ?? existing.owner_name ?? undefined,
-      owner_email: email ?? existing.owner_email ?? undefined,
-      owner_phone: phone ?? existing.owner_phone ?? undefined,
-      owner_organization: org ?? existing.owner_organization ?? undefined,
-      source: "whois",
-    })!;
-  }
-
-  return createDomainOwner({
-    domain_id: domain.id,
-    owner_name: name ?? undefined,
-    owner_email: email ?? undefined,
-    owner_phone: phone ?? undefined,
-    owner_organization: org ?? undefined,
-    source: "whois",
-  });
+  return { name, email, phone, organization: org };
 }
 
 /**
@@ -287,49 +269,6 @@ interface RdapEntity {
   vcardArray?: [string, unknown[]];
   roles?: string[];
   entities?: RdapEntity[];
-}
-
-/**
- * Create a contact in open-contacts for a domain owner and link them.
- * Returns the contact_id from open-contacts.
- */
-export function linkOwnerToContacts(
-  domainId: string,
-  contactsDbFns: {
-    createContact: (input: { first_name: string; last_name?: string; email?: string; phone?: string; job_title?: string; source: string; notes?: string }) => { id: string };
-    getContactByEmail: (email: string) => { id: string } | null;
-  }
-): string | null {
-  const owner = getDomainOwnerByDomain(domainId);
-  if (!owner || !owner.owner_email) return null;
-
-  // Check if contact already exists
-  const existing = contactsDbFns.getContactByEmail(owner.owner_email);
-  if (existing) {
-    updateDomainOwner(owner.id, { contact_id: existing.id });
-    return existing.id;
-  }
-
-  // Split name into first/last
-  const parts = (owner.owner_name || owner.owner_email.split("@")[0] || "Unknown").split(" ");
-  const first_name = parts[0] ?? "Unknown";
-  const last_name = parts.length > 1 ? parts.slice(1).join(" ") : undefined;
-
-  const notes = owner.owner_organization
-    ? `Owner of domain via ${owner.owner_organization}`
-    : `Domain owner (linked from open-domains)`;
-
-  const contact = contactsDbFns.createContact({
-    first_name,
-    last_name,
-    email: owner.owner_email,
-    phone: owner.owner_phone ?? undefined,
-    source: "manual",
-    notes,
-  });
-
-  updateDomainOwner(owner.id, { contact_id: contact.id });
-  return contact.id;
 }
 
 export interface DomainWithOwner {

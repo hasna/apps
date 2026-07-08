@@ -39,14 +39,14 @@ describe("provider inventory metadata", () => {
 });
 
 describe("autoDetectRegistrar", () => {
-  it("ignores DNS-only and source-only discovery markers", () => {
+  it("ignores DNS-only and source-only discovery markers", async () => {
     for (const registrar of ["Cloudflare DNS", "AWS Route 53 DNS", "AWS SSM (imported)"]) {
-      expect(autoDetectRegistrar("example.com", () => domain(registrar))).toBeNull();
+      expect(await autoDetectRegistrar("example.com", async () => domain(registrar))).toBeNull();
     }
   });
 
-  it("detects real registrar names", () => {
-    expect(autoDetectRegistrar("example.com", () => domain("AWS Route 53"))).toBe("route53");
-    expect(autoDetectRegistrar("example.com", () => domain("Brandsight"))).toBe("brandsight");
+  it("detects real registrar names", async () => {
+    expect(await autoDetectRegistrar("example.com", async () => domain("AWS Route 53"))).toBe("route53");
+    expect(await autoDetectRegistrar("example.com", async () => domain("Brandsight"))).toBe("brandsight");
   });
 });

@@ -28,14 +28,14 @@ async function waitForInk(ms = 50): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function clearDomains(): void {
-  for (const domain of listDomains()) {
-    deleteDomain(domain.id);
+async function clearDomains(): Promise<void> {
+  for (const domain of await listDomains()) {
+    await deleteDomain(domain.id);
   }
 }
 
 describe("Header", () => {
-  test("renders portfolio title and count", () => {
+  test("renders portfolio title and count", async () => {
     const { lastFrame } = render(<Header count={3} filter="all" view="list" />);
     const frame = frameText(lastFrame);
     expect(frame).toContain("domains");
@@ -45,10 +45,10 @@ describe("Header", () => {
 });
 
 describe("DomainTable", () => {
-  test("renders column headers and rows", () => {
+  test("renders column headers and rows", async () => {
     const domains = [
-      createDomain({ name: "alpha.com", registrar: "Route53", status: "active" }),
-      createDomain({ name: "beta.io", registrar: "Namecheap", status: "expired" }),
+      await createDomain({ name: "alpha.com", registrar: "Route53", status: "active" }),
+      await createDomain({ name: "beta.io", registrar: "Namecheap", status: "expired" }),
     ];
 
     const { lastFrame } = render(<DomainTable domains={domains} selectedIndex={0} />);
@@ -60,28 +60,28 @@ describe("DomainTable", () => {
     expect(frame).toContain("❯");
   });
 
-  test("shows empty state", () => {
+  test("shows empty state", async () => {
     const { lastFrame } = render(<DomainTable domains={[]} selectedIndex={0} />);
     expect(frameText(lastFrame)).toContain("No domains match");
   });
 
-  test("clamps invalid selected index", () => {
-    const domains = [createDomain({ name: "solo.com", status: "active" })];
+  test("clamps invalid selected index", async () => {
+    const domains = [await createDomain({ name: "solo.com", status: "active" })];
     const { lastFrame } = render(<DomainTable domains={domains} selectedIndex={-1} />);
     expect(frameText(lastFrame)).toContain("❯ solo.com");
   });
 });
 
 describe("DomainDetail", () => {
-  test("renders domain fields", () => {
-    const domain = createDomain({
+  test("renders domain fields", async () => {
+    const domain = await createDomain({
       name: "detail.test",
       registrar: "GoDaddy",
       status: "active",
       expires_at: "2031-06-01T00:00:00Z",
       notes: "Portfolio note",
     });
-    const details = getDomainDetails(domain.id)!;
+    const details = (await getDomainDetails(domain.id))!;
 
     const { lastFrame } = render(<DomainDetail details={details} />);
     const frame = frameText(lastFrame);
@@ -93,19 +93,20 @@ describe("DomainDetail", () => {
 });
 
 describe("App", () => {
-  beforeAll(() => {
-    clearDomains();
+  beforeAll(async () => {
+    await clearDomains();
   });
 
-  beforeEach(() => {
-    clearDomains();
+  beforeEach(async () => {
+    await clearDomains();
   });
 
-  test("loads domains from database in list view", () => {
-    createDomain({ name: "interactive-one.com", status: "active" });
-    createDomain({ name: "interactive-two.com", status: "active" });
+  test("loads domains from database in list view", async () => {
+    await createDomain({ name: "interactive-one.com", status: "active" });
+    await createDomain({ name: "interactive-two.com", status: "active" });
 
     const { lastFrame } = render(<App />);
+    await waitForInk();
     const frame = frameText(lastFrame);
     expect(frame).toContain("interactive-one.com");
     expect(frame).toContain("interactive-two.com");
@@ -113,8 +114,8 @@ describe("App", () => {
   });
 
   test("moves selection with arrow keys", async () => {
-    createDomain({ name: "aaa-first.com", status: "active" });
-    createDomain({ name: "bbb-second.com", status: "active" });
+    await createDomain({ name: "aaa-first.com", status: "active" });
+    await createDomain({ name: "bbb-second.com", status: "active" });
 
     const { lastFrame, stdin } = render(<App />);
     await waitForInk();
@@ -124,30 +125,32 @@ describe("App", () => {
     expect(frame).toContain("❯ bbb-second.com");
   });
 
-  test("initialStatus prop sets the starting filter", () => {
-    createDomain({ name: "status-active-only.com", status: "active" });
-    createDomain({ name: "status-expired-only.com", status: "expired" });
+  test("initialStatus prop sets the starting filter", async () => {
+    await createDomain({ name: "status-active-only.com", status: "active" });
+    await createDomain({ name: "status-expired-only.com", status: "expired" });
 
     const { lastFrame } = render(<App initialStatus="active" />);
+    await waitForInk();
     const frame = frameText(lastFrame);
     expect(frame).toContain("Active");
     expect(frame).toContain("status-active-only.com");
     expect(frame).not.toContain("status-expired-only.com");
   });
 
-  test("initialStatus expiring sets expiring filter", () => {
-    createDomain({
+  test("initialStatus expiring sets expiring filter", async () => {
+    await createDomain({
       name: "expiring-soon.com",
       status: "active",
       expires_at: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString(),
     });
-    createDomain({
+    await createDomain({
       name: "expiring-later.com",
       status: "active",
       expires_at: new Date(Date.now() + 120 * 24 * 60 * 60 * 1000).toISOString(),
     });
 
     const { lastFrame } = render(<App initialStatus="expiring" />);
+    await waitForInk();
     const frame = frameText(lastFrame);
     expect(frame).toContain("Expiring (30d)");
     expect(frame).toContain("expiring-soon.com");
@@ -169,7 +172,7 @@ describe("App", () => {
   });
 
   test("recovers selection after empty filter and down arrow", async () => {
-    createDomain({ name: "solo.com", status: "active" });
+    await createDomain({ name: "solo.com", status: "active" });
 
     const { lastFrame, stdin } = render(<App />);
     await waitForInk();
@@ -192,7 +195,7 @@ describe("App", () => {
   });
 
   test("opens search, finds domains, and selects a result", async () => {
-    createDomain({ name: "findable-search-test.com", status: "active", registrar: "TestRegistrar" });
+    await createDomain({ name: "findable-search-test.com", status: "active", registrar: "TestRegistrar" });
 
     const { lastFrame, stdin } = render(<App />);
     await waitForInk();
@@ -216,7 +219,7 @@ describe("App", () => {
   });
 
   test("returns from detail view on escape", async () => {
-    createDomain({ name: "escape-detail-test.com", status: "active" });
+    await createDomain({ name: "escape-detail-test.com", status: "active" });
 
     const { lastFrame, stdin } = render(<App />);
     await waitForInk();

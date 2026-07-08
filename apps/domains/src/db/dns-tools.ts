@@ -5,9 +5,9 @@
 
 import { execFileSync } from "node:child_process";
 import { domainToASCII } from "node:url";
-import { getDatabase } from "./database.js";
-import { getDomain, updateDomain, type UpdateDomainInput } from "./domain-records.js";
-import { createDnsRecord, listDnsRecords, type DnsRecord } from "./dns-records.js";
+import { getStore } from "./store.js";
+import type { UpdateDomainInput } from "./domain-records.js";
+import type { DnsRecord } from "./dns-records.js";
 import { USER_AGENT } from "../lib/version.js";
 
 export class DnsToolValidationError extends Error {
@@ -287,12 +287,12 @@ export interface WhoisResult {
   };
 }
 
-export function whoisLookup(domainName: string): WhoisResult {
+export async function whoisLookup(domainName: string): Promise<WhoisResult> {
   const domain = normalizeDomainName(domainName);
 
   // Try RDAP first (structured, reliable, free)
   try {
-    const rdap = rdapLookupSync(domain);
+    const rdap = await rdapLookupSync(domain);
     if (rdap) return rdap;
   } catch {
     // Fall through to CLI
@@ -303,10 +303,11 @@ export function whoisLookup(domainName: string): WhoisResult {
 }
 
 /**
- * Synchronous wrapper around rdapLookup for sync callers.
+ * RDAP lookup via curl (sync subprocess). Persists the fetched fields to the
+ * domain record through the resolved store when the domain is tracked.
  * Returns null if RDAP is unavailable (not an error).
  */
-function rdapLookupSync(domainName: string): WhoisResult | null {
+async function rdapLookupSync(domainName: string): Promise<WhoisResult | null> {
   const domain = normalizeDomainName(domainName);
 
   // Use sync HTTP via child process with curl (since fetch is async)
@@ -349,15 +350,15 @@ function rdapLookupSync(domainName: string): WhoisResult | null {
   const nameservers = extractNameserversFromRdap(rdap);
   const registrant = extractRegistrantFromRdap(rdap);
 
-  // Update DB if domain exists
-  const db = getDatabase();
-  const row = db.prepare("SELECT id FROM domains WHERE name = ?").get(domain) as { id: string } | null;
-  if (row) {
+  // Update the domain record (via the resolved store) if it is tracked.
+  const store = getStore();
+  const existing = await store.getDomainByName(domain);
+  if (existing) {
     const updates: UpdateDomainInput = { whois: rdap as Record<string, unknown> };
     if (registrar) updates.registrar = registrar;
     if (expires_at) updates.expires_at = expires_at;
     if (nameservers.length > 0) updates.nameservers = nameservers;
-    updateDomain(row.id, updates);
+    await store.updateDomain(existing.id, updates);
   }
 
   return {
@@ -371,7 +372,7 @@ function rdapLookupSync(domainName: string): WhoisResult | null {
   };
 }
 
-function whoisCliLookup(domainName: string): WhoisResult {
+async function whoisCliLookup(domainName: string): Promise<WhoisResult> {
   const domain = normalizeDomainName(domainName);
 
   let raw: string;
@@ -406,14 +407,14 @@ function whoisCliLookup(domainName: string): WhoisResult {
     if (ns && !nameservers.includes(ns)) nameservers.push(ns);
   }
 
-  const db = getDatabase();
-  const row = db.prepare("SELECT id FROM domains WHERE name = ?").get(domain) as { id: string } | null;
-  if (row) {
+  const store = getStore();
+  const existing = await store.getDomainByName(domain);
+  if (existing) {
     const updates: UpdateDomainInput = { whois: { raw } };
     if (registrar) updates.registrar = registrar;
     if (expires_at) updates.expires_at = expires_at;
     if (nameservers.length > 0) updates.nameservers = nameservers;
-    updateDomain(row.id, updates);
+    await store.updateDomain(existing.id, updates);
   }
 
   return {
@@ -511,7 +512,7 @@ export interface SslCheckResult {
   error?: string;
 }
 
-export function checkSsl(domainName: string): SslCheckResult {
+export async function checkSsl(domainName: string): Promise<SslCheckResult> {
   const domain = normalizeDomainName(domainName);
 
   try {
@@ -542,14 +543,14 @@ export function checkSsl(domainName: string): SslCheckResult {
       }
     }
 
-    // Update the DB record if exists
-    const db = getDatabase();
-    const row = db.prepare("SELECT id FROM domains WHERE name = ?").get(domain) as { id: string } | null;
-    if (row) {
+    // Update the domain record via the resolved store if it is tracked.
+    const store = getStore();
+    const existing = await store.getDomainByName(domain);
+    if (existing) {
       const updates: UpdateDomainInput = {};
       if (expires_at) updates.ssl_expires_at = expires_at;
       if (issuer) updates.ssl_issuer = issuer;
-      updateDomain(row.id, updates);
+      await store.updateDomain(existing.id, updates);
     }
 
     return { domain, issuer, expires_at, subject };
@@ -568,11 +569,12 @@ export function checkSsl(domainName: string): SslCheckResult {
 // Zone File Export / Import
 // ============================================================
 
-export function exportZoneFile(domainId: string): string | null {
-  const domain = getDomain(domainId);
+export async function exportZoneFile(domainId: string): Promise<string | null> {
+  const store = getStore();
+  const domain = await store.getDomain(domainId);
   if (!domain) return null;
 
-  const records = listDnsRecords(domainId);
+  const records = await store.listDnsRecords(domainId);
   const lines: string[] = [];
 
   lines.push(`; Zone file for ${domain.name}`);
@@ -601,8 +603,9 @@ export interface ZoneImportResult {
   records: DnsRecord[];
 }
 
-export function importZoneFile(domainId: string, content: string): ZoneImportResult | null {
-  const domain = getDomain(domainId);
+export async function importZoneFile(domainId: string, content: string): Promise<ZoneImportResult | null> {
+  const store = getStore();
+  const domain = await store.getDomain(domainId);
   if (!domain) return null;
 
   const result: ZoneImportResult = { imported: 0, skipped: 0, errors: [], records: [] };
@@ -667,7 +670,7 @@ export function importZoneFile(domainId: string, content: string): ZoneImportRes
     if (name === domain.name || name === "") name = "@";
 
     try {
-      const record = createDnsRecord({
+      const record = await store.createDnsRecord({
         domain_id: domainId,
         type: type as DnsRecord["type"],
         name,
@@ -760,11 +763,12 @@ export interface DnsValidationResult {
   valid: boolean;
 }
 
-export function validateDns(domainId: string): DnsValidationResult | null {
-  const domain = getDomain(domainId);
+export async function validateDns(domainId: string): Promise<DnsValidationResult | null> {
+  const store = getStore();
+  const domain = await store.getDomain(domainId);
   if (!domain) return null;
 
-  const records = listDnsRecords(domainId);
+  const records = await store.listDnsRecords(domainId);
   const issues: DnsValidationIssue[] = [];
 
   // Group records by name

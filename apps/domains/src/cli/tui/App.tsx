@@ -1,13 +1,13 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import {
   getDomainDetails,
   listDomains,
   listExpiring,
   searchDomains,
+  listDnsRecords,
 } from "../../db/domains.js";
-import { listDnsRecords } from "../../db/dns-records.js";
-import type { Domain, DomainDetails } from "../../db/domains.js";
+import type { Domain, DomainDetails, DnsRecord } from "../../db/domains.js";
 import { Header } from "./Header.js";
 import { DomainTable } from "./DomainTable.js";
 import { DomainDetail } from "./DomainDetail.js";
@@ -21,7 +21,7 @@ export interface AppProps {
   initialStatus?: string;
 }
 
-function loadDomainsForFilter(activeFilter: DomainFilter): Domain[] {
+function loadDomainsForFilter(activeFilter: DomainFilter): Promise<Domain[]> {
   switch (activeFilter) {
     case "active":
       return listDomains({ status: "active" });
@@ -44,30 +44,62 @@ export function App({ initialStatus }: AppProps) {
   const [searchResults, setSearchResults] = useState<Domain[]>([]);
   const [searchIndex, setSearchIndex] = useState(0);
 
-  const [domains, setDomains] = useState<Domain[]>(() => loadDomainsForFilter(initialFilter));
+  const [domains, setDomains] = useState<Domain[]>([]);
+  const [previewDetails, setPreviewDetails] = useState<DomainDetails | null>(null);
+  const [previewDns, setPreviewDns] = useState<DnsRecord[]>([]);
+  const [detailDns, setDetailDns] = useState<DnsRecord[]>([]);
 
-  const refresh = useCallback(() => {
-    const next = loadDomainsForFilter(filter);
+  const refresh = useCallback(async () => {
+    const next = await loadDomainsForFilter(filter);
     setDomains(next);
     setSelectedIndex((current) => clampSelectedIndex(current, next.length));
     return next;
   }, [filter]);
 
   useEffect(() => {
-    refresh();
+    void refresh();
   }, [refresh]);
 
   const selectedDomain = domains[clampSelectedIndex(selectedIndex, domains.length)] ?? null;
 
-  const previewDetails = useMemo(() => {
-    if (!selectedDomain) return null;
-    return getDomainDetails(selectedDomain.id);
+  // Load preview details + DNS for the highlighted domain (list view).
+  useEffect(() => {
+    if (!selectedDomain) {
+      setPreviewDetails(null);
+      setPreviewDns([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const [d, dns] = await Promise.all([
+        getDomainDetails(selectedDomain.id),
+        listDnsRecords(selectedDomain.id),
+      ]);
+      if (!cancelled) {
+        setPreviewDetails(d);
+        setPreviewDns(dns);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [selectedDomain]);
 
-  const previewDns = useMemo(() => {
-    if (!selectedDomain) return [];
-    return listDnsRecords(selectedDomain.id);
-  }, [selectedDomain]);
+  // Load DNS records for the open detail view.
+  useEffect(() => {
+    if (!details) {
+      setDetailDns([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const dns = await listDnsRecords(details.domain.id);
+      if (!cancelled) setDetailDns(dns);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [details]);
 
   useInput((input, key) => {
     if (input === "q") {
@@ -82,11 +114,13 @@ export function App({ initialStatus }: AppProps) {
         if (domains.length === 0) return;
         setSelectedIndex((index) => clampSelectedIndex(index + 1, domains.length));
       } else if (key.return && selectedDomain) {
-        const full = getDomainDetails(selectedDomain.id);
-        if (full) {
-          setDetails(full);
-          setView("detail");
-        }
+        void (async () => {
+          const full = await getDomainDetails(selectedDomain.id);
+          if (full) {
+            setDetails(full);
+            setView("detail");
+          }
+        })();
       } else if (input === "/") {
         setSearchResults([]);
         setSearchIndex(0);
@@ -116,9 +150,11 @@ export function App({ initialStatus }: AppProps) {
     if (view === "detail") {
       if (key.escape) {
         setView("list");
-        refresh();
+        void refresh();
       } else if (input === "r" && details) {
-        setDetails(getDomainDetails(details.domain.id));
+        void (async () => {
+          setDetails(await getDomainDetails(details.domain.id));
+        })();
       }
     }
   });
@@ -130,20 +166,23 @@ export function App({ initialStatus }: AppProps) {
       setSearchIndex(0);
       return;
     }
-    const results = searchDomains(trimmed);
-    setSearchResults(results);
-    setSearchIndex(0);
+    void (async () => {
+      const results = await searchDomains(trimmed);
+      setSearchResults(results);
+      setSearchIndex(0);
+    })();
   }, []);
 
   const handleSearchSelect = useCallback((domain: Domain) => {
-    const full = getDomainDetails(domain.id);
-    if (full) {
-      setDetails(full);
-      setView("detail");
-    }
+    void (async () => {
+      const full = await getDomainDetails(domain.id);
+      if (full) {
+        setDetails(full);
+        setView("detail");
+      }
+    })();
   }, []);
 
-  const detailDns = details ? listDnsRecords(details.domain.id) : [];
   const listSelectedIndex = clampSelectedIndex(selectedIndex, domains.length);
 
   return (

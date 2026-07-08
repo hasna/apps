@@ -34,7 +34,7 @@ afterAll(() => {
 // ============================================================
 
 describe("RDAP Data Extraction", () => {
-  test("extractRegistrantFromRdap with full vCard", () => {
+  test("extractRegistrantFromRdap with full vCard", async () => {
     // Code destructures as [prop, _params, type] so value is at index 2
     const rdap: RdapResponse = {
       entities: [
@@ -60,7 +60,7 @@ describe("RDAP Data Extraction", () => {
     expect(result.organization).toBe("Example Corp");
   });
 
-  test("extractRegistrantFromRdap with nested entities", () => {
+  test("extractRegistrantFromRdap with nested entities", async () => {
     const rdap: RdapResponse = {
       entities: [
         {
@@ -81,7 +81,7 @@ describe("RDAP Data Extraction", () => {
     expect(result.name).toBe("Jane Smith");
   });
 
-  test("extractRegistrantFromRdap with structured name (N)", () => {
+  test("extractRegistrantFromRdap with structured name (N)", async () => {
     const rdap: RdapResponse = {
       entities: [
         {
@@ -102,7 +102,7 @@ describe("RDAP Data Extraction", () => {
     expect(result.name).toBe("Mr A John Doe");
   });
 
-  test("extractRegistrantFromRdap falls back to handle", () => {
+  test("extractRegistrantFromRdap falls back to handle", async () => {
     const rdap: RdapResponse = {
       entities: [
         {
@@ -117,7 +117,7 @@ describe("RDAP Data Extraction", () => {
     expect(result.name).toBe("REG-123");
   });
 
-  test("extractRegistrantFromRdap returns nulls for empty data", () => {
+  test("extractRegistrantFromRdap returns nulls for empty data", async () => {
     const rdap: RdapResponse = {};
     const result = extractRegistrantFromRdap(rdap);
     expect(result.name).toBeNull();
@@ -126,7 +126,7 @@ describe("RDAP Data Extraction", () => {
     expect(result.organization).toBeNull();
   });
 
-  test("extractRegistrarFromRdap from vCard", () => {
+  test("extractRegistrarFromRdap from vCard", async () => {
     const rdap: RdapResponse = {
       entities: [
         {
@@ -142,7 +142,7 @@ describe("RDAP Data Extraction", () => {
     expect(extractRegistrarFromRdap(rdap)).toBe("Example Registrar Inc");
   });
 
-  test("extractRegistrarFromRdap from remarks", () => {
+  test("extractRegistrarFromRdap from remarks", async () => {
     const rdap: RdapResponse = {
       entities: [
         {
@@ -160,7 +160,7 @@ describe("RDAP Data Extraction", () => {
     expect(extractRegistrarFromRdap(rdap)).toBe("GoDaddy LLC");
   });
 
-  test("extractRegistrarFromRdap from handle fallback", () => {
+  test("extractRegistrarFromRdap from handle fallback", async () => {
     const rdap: RdapResponse = {
       entities: [
         {
@@ -173,14 +173,14 @@ describe("RDAP Data Extraction", () => {
     expect(extractRegistrarFromRdap(rdap)).toBe("REG-ABC");
   });
 
-  test("extractRegistrarFromRdap returns null when no registrar entity", () => {
+  test("extractRegistrarFromRdap returns null when no registrar entity", async () => {
     const rdap: RdapResponse = {
       entities: [{ roles: ["registrant"] }],
     };
     expect(extractRegistrarFromRdap(rdap)).toBeNull();
   });
 
-  test("extractExpiryFromRdap finds expiration event", () => {
+  test("extractExpiryFromRdap finds expiration event", async () => {
     const rdap: RdapResponse = {
       events: [
         { eventAction: "registration", eventDate: "2020-01-01" },
@@ -192,20 +192,20 @@ describe("RDAP Data Extraction", () => {
     expect(extractExpiryFromRdap(rdap)).toBe("2025-12-31T23:59:59Z");
   });
 
-  test("extractExpiryFromRdap finds expiry event", () => {
+  test("extractExpiryFromRdap finds expiry event", async () => {
     const rdap: RdapResponse = {
       events: [{ eventAction: "expiry", eventDate: "2026-01-15" }],
     };
     expect(extractExpiryFromRdap(rdap)).toBe("2026-01-15");
   });
 
-  test("extractExpiryFromRdap returns null for missing events", () => {
+  test("extractExpiryFromRdap returns null for missing events", async () => {
     const rdap: RdapResponse = { events: [] };
     expect(extractExpiryFromRdap(rdap)).toBeNull();
     expect(extractExpiryFromRdap({})).toBeNull();
   });
 
-  test("extractNameserversFromRdap", () => {
+  test("extractNameserversFromRdap", async () => {
     const rdap: RdapResponse = {
       nameservers: [
         { ldhName: "NS1.EXAMPLE.COM" },
@@ -218,7 +218,7 @@ describe("RDAP Data Extraction", () => {
     expect(result).toEqual(["ns1.example.com", "ns2.example.com", "ns3.example.com"]);
   });
 
-  test("extractNameserversFromRdap returns empty for missing nameservers", () => {
+  test("extractNameserversFromRdap returns empty for missing nameservers", async () => {
     expect(extractNameserversFromRdap({})).toEqual([]);
   });
 });
@@ -228,31 +228,31 @@ describe("RDAP Data Extraction", () => {
 // ============================================================
 
 describe("DNS tool input validation", () => {
-  test("whoisLookup rejects shell metacharacters before subprocess execution", () => {
+  test("whoisLookup rejects shell metacharacters before subprocess execution", async () => {
     const marker = join(tempDir, "whois-injected");
 
-    expect(() => whoisLookup(`example.com; touch ${marker} #`)).toThrow(/Invalid domain name/);
+    await expect(whoisLookup(`example.com; touch ${marker} #`)).rejects.toThrow(/Invalid domain name/);
     expect(existsSync(marker)).toBe(false);
   });
 
-  test("checkDnsPropagation rejects injected query names before dig execution", () => {
+  test("checkDnsPropagation rejects injected query names before dig execution", async () => {
     const marker = join(tempDir, "dns-domain-injected");
 
     expect(() => checkDnsPropagation(`example.com; touch ${marker} #`, "A")).toThrow(/Invalid domain name/);
     expect(existsSync(marker)).toBe(false);
   });
 
-  test("checkDnsPropagation rejects injected record types before dig execution", () => {
+  test("checkDnsPropagation rejects injected record types before dig execution", async () => {
     const marker = join(tempDir, "dns-record-injected");
 
     expect(() => checkDnsPropagation("example.com", `A; touch ${marker} #`)).toThrow(/Invalid DNS record type/);
     expect(existsSync(marker)).toBe(false);
   });
 
-  test("checkSsl rejects shell metacharacters before openssl execution", () => {
+  test("checkSsl rejects shell metacharacters before openssl execution", async () => {
     const marker = join(tempDir, "ssl-injected");
 
-    expect(() => checkSsl(`example.com; touch ${marker} #`)).toThrow(/Invalid domain name/);
+    await expect(checkSsl(`example.com; touch ${marker} #`)).rejects.toThrow(/Invalid domain name/);
     expect(existsSync(marker)).toBe(false);
   });
 });
@@ -264,25 +264,25 @@ describe("DNS tool input validation", () => {
 describe("Zone File Export / Import", () => {
   let domainId: string;
 
-  test("setup: create domain for zone tests", () => {
-    const domain = createDomain({ name: "zone-test.com" });
+  test("setup: create domain for zone tests", async () => {
+    const domain = await createDomain({ name: "zone-test.com" });
     domainId = domain.id;
     expect(domainId).toBeTruthy();
   });
 
-  test("exportZoneFile returns null for non-existent domain", () => {
-    expect(exportZoneFile("nonexistent")).toBeNull();
+  test("exportZoneFile returns null for non-existent domain", async () => {
+    expect(await exportZoneFile("nonexistent")).toBeNull();
   });
 
-  test("exportZoneFile produces valid zone file header", () => {
-    const result = exportZoneFile(domainId);
+  test("exportZoneFile produces valid zone file header", async () => {
+    const result = await exportZoneFile(domainId);
     expect(result).not.toBeNull();
     expect(result).toContain("; Zone file for zone-test.com");
     expect(result).toContain("$ORIGIN zone-test.com.");
     expect(result).toContain("$TTL 3600");
   });
 
-  test("exportZoneFile includes DNS records", () => {
+  test("exportZoneFile includes DNS records", async () => {
     createDnsRecord({
       domain_id: domainId,
       type: "A",
@@ -291,11 +291,11 @@ describe("Zone File Export / Import", () => {
       ttl: 300,
     });
 
-    const result = exportZoneFile(domainId);
+    const result = await exportZoneFile(domainId);
     expect(result).toContain("zone-test.com.\t300\tIN\tA\t192.168.1.1");
   });
 
-  test("exportZoneFile formats MX records with priority", () => {
+  test("exportZoneFile formats MX records with priority", async () => {
     createDnsRecord({
       domain_id: domainId,
       type: "MX",
@@ -305,24 +305,24 @@ describe("Zone File Export / Import", () => {
       priority: 10,
     });
 
-    const result = exportZoneFile(domainId);
+    const result = await exportZoneFile(domainId);
     // exportZoneFile replaces "@" with domain name
     expect(result).toContain("zone-test.com.\t3600\tIN\tMX\t10\tmail.zone-test.com.");
   });
 
-  test("importZoneFile returns null for non-existent domain", () => {
-    expect(importZoneFile("nonexistent", "$ORIGIN test.com.")).toBeNull();
+  test("importZoneFile returns null for non-existent domain", async () => {
+    expect(await importZoneFile("nonexistent", "$ORIGIN test.com.")).toBeNull();
   });
 
-  test("importZoneFile parses A records", () => {
+  test("importZoneFile parses A records", async () => {
     const content = `; Test zone file
 $ORIGIN import-test.com.
 $TTL 3600
 @ 3600 IN A 10.0.0.1
 www 3600 IN A 10.0.0.2
 `;
-    const domain = createDomain({ name: "import-a-test.com" });
-    const result = importZoneFile(domain.id, content);
+    const domain = await createDomain({ name: "import-a-test.com" });
+    const result = await importZoneFile(domain.id, content);
     expect(result).not.toBeNull();
     expect(result!.imported).toBe(2);
     expect(result!.skipped).toBe(0);
@@ -330,65 +330,65 @@ www 3600 IN A 10.0.0.2
     expect(result!.records.length).toBe(2);
   });
 
-  test("importZoneFile skips comments and directives", () => {
+  test("importZoneFile skips comments and directives", async () => {
     const content = `; This is a comment
 $ORIGIN import-comment.com.
 $TTL 7200
 `;
-    const domain = createDomain({ name: "import-comment-test.com" });
-    const result = importZoneFile(domain.id, content);
+    const domain = await createDomain({ name: "import-comment-test.com" });
+    const result = await importZoneFile(domain.id, content);
     expect(result).not.toBeNull();
     expect(result!.imported).toBe(0);
     expect(result!.skipped).toBe(0);
   });
 
-  test("importZoneFile handles short lines (less than 4 parts)", () => {
+  test("importZoneFile handles short lines (less than 4 parts)", async () => {
     const content = `short line
 one
 `;
-    const domain = createDomain({ name: "import-bad-test.com" });
-    const result = importZoneFile(domain.id, content);
+    const domain = await createDomain({ name: "import-bad-test.com" });
+    const result = await importZoneFile(domain.id, content);
     expect(result).not.toBeNull();
     expect(result!.errors.length).toBe(2);
     expect(result!.skipped).toBe(2);
   });
 
-  test("importZoneFile normalizes domain name to @", () => {
+  test("importZoneFile normalizes domain name to @", async () => {
     const content = `import-normalize.com. 3600 IN A 1.2.3.4
 `;
-    const domain = createDomain({ name: "import-normalize.com" });
-    const result = importZoneFile(domain.id, content);
+    const domain = await createDomain({ name: "import-normalize.com" });
+    const result = await importZoneFile(domain.id, content);
     expect(result).not.toBeNull();
     expect(result!.imported).toBe(1);
     expect(result!.records[0]!.name).toBe("@");
   });
 
-  test("importZoneFile strips trailing dot and normalizes domain name to @", () => {
+  test("importZoneFile strips trailing dot and normalizes domain name to @", async () => {
     const content = `import-dot-test.com. 3600 IN A 5.6.7.8
 `;
-    const domain = createDomain({ name: "import-dot-test.com" });
-    const result = importZoneFile(domain.id, content);
+    const domain = await createDomain({ name: "import-dot-test.com" });
+    const result = await importZoneFile(domain.id, content);
     expect(result).not.toBeNull();
     expect(result!.imported).toBe(1);
     expect(result!.records[0]!.name).toBe("@");
   });
 
-  test("importZoneFile handles MX records with priority", () => {
+  test("importZoneFile handles MX records with priority", async () => {
     const content = `@ 3600 IN MX 10 mail.import-mx-test.com.
 `;
-    const domain = createDomain({ name: "import-mx-test.com" });
-    const result = importZoneFile(domain.id, content);
+    const domain = await createDomain({ name: "import-mx-test.com" });
+    const result = await importZoneFile(domain.id, content);
     expect(result).not.toBeNull();
     expect(result!.imported).toBe(1);
     expect(result!.records[0]!.type).toBe("MX");
     expect(result!.records[0]!.priority).toBe(10);
   });
 
-  test("importZoneFile reports errors for unknown record types", () => {
+  test("importZoneFile reports errors for unknown record types", async () => {
     const content = `@ 3600 IN UNKNOWN value
 `;
-    const domain = createDomain({ name: "import-unknown-test.com" });
-    const result = importZoneFile(domain.id, content);
+    const domain = await createDomain({ name: "import-unknown-test.com" });
+    const result = await importZoneFile(domain.id, content);
     expect(result).not.toBeNull();
     expect(result!.skipped).toBe(1);
     expect(result!.errors[0]).toContain("Unknown record type");
@@ -402,24 +402,24 @@ one
 describe("DNS Validation", () => {
   let domainId: string;
 
-  test("setup: create domain for validation tests", () => {
-    const domain = createDomain({ name: "validate-test.com" });
+  test("setup: create domain for validation tests", async () => {
+    const domain = await createDomain({ name: "validate-test.com" });
     domainId = domain.id;
   });
 
-  test("validateDns returns null for non-existent domain", () => {
-    expect(validateDns("nonexistent")).toBeNull();
+  test("validateDns returns null for non-existent domain", async () => {
+    expect(await validateDns("nonexistent")).toBeNull();
   });
 
-  test("validateDns passes with no records", () => {
-    const result = validateDns(domainId);
+  test("validateDns passes with no records", async () => {
+    const result = await validateDns(domainId);
     expect(result).not.toBeNull();
     expect(result!.valid).toBe(true);
     expect(result!.issues.length).toBe(0);
   });
 
-  test("validateDns detects CNAME + A conflict", () => {
-    const domain = createDomain({ name: "cname-conflict-test.com" });
+  test("validateDns detects CNAME + A conflict", async () => {
+    const domain = await createDomain({ name: "cname-conflict-test.com" });
 
     createDnsRecord({
       domain_id: domain.id,
@@ -436,14 +436,14 @@ describe("DNS Validation", () => {
       ttl: 3600,
     });
 
-    const result = validateDns(domain.id);
+    const result = await validateDns(domain.id);
     expect(result).not.toBeNull();
     expect(result!.valid).toBe(false);
     expect(result!.issues.some((i) => i.type === "error" && i.message.includes("CNAME"))).toBe(true);
   });
 
-  test("validateDns detects CNAME + MX conflict", () => {
-    const domain = createDomain({ name: "cname-mx-test.com" });
+  test("validateDns detects CNAME + MX conflict", async () => {
+    const domain = await createDomain({ name: "cname-mx-test.com" });
 
     createDnsRecord({
       domain_id: domain.id,
@@ -461,12 +461,12 @@ describe("DNS Validation", () => {
       priority: 10,
     });
 
-    const result = validateDns(domain.id);
+    const result = await validateDns(domain.id);
     expect(result).not.toBeNull();
     expect(result!.valid).toBe(false);
   });
 
-  test("validateDns warns about missing MX at root", () => {
+  test("validateDns warns about missing MX at root", async () => {
     createDnsRecord({
       domain_id: domainId,
       type: "A",
@@ -475,14 +475,14 @@ describe("DNS Validation", () => {
       ttl: 3600,
     });
 
-    const result = validateDns(domainId);
+    const result = await validateDns(domainId);
     expect(result).not.toBeNull();
     expect(result!.valid).toBe(true);
     expect(result!.issues.some((i) => i.type === "warning" && i.message.includes("MX"))).toBe(true);
   });
 
-  test("validateDns warns about CNAME pointing to nonexistent target", () => {
-    const domain = createDomain({ name: "orphan-cname-test.com" });
+  test("validateDns warns about CNAME pointing to nonexistent target", async () => {
+    const domain = await createDomain({ name: "orphan-cname-test.com" });
 
     createDnsRecord({
       domain_id: domain.id,
@@ -492,13 +492,13 @@ describe("DNS Validation", () => {
       ttl: 3600,
     });
 
-    const result = validateDns(domain.id);
+    const result = await validateDns(domain.id);
     expect(result).not.toBeNull();
     expect(result!.issues.some((i) => i.type === "warning" && i.message.includes("has no records"))).toBe(true);
   });
 
-  test("validateDns warns about MX without priority", () => {
-    const domain = createDomain({ name: "mx-nopriority-test.com" });
+  test("validateDns warns about MX without priority", async () => {
+    const domain = await createDomain({ name: "mx-nopriority-test.com" });
 
     createDnsRecord({
       domain_id: domain.id,
@@ -508,13 +508,13 @@ describe("DNS Validation", () => {
       ttl: 3600,
     });
 
-    const result = validateDns(domain.id);
+    const result = await validateDns(domain.id);
     expect(result).not.toBeNull();
     expect(result!.issues.some((i) => i.message.includes("no priority"))).toBe(true);
   });
 
-  test("validateDns detects multiple CNAMEs at same name", () => {
-    const domain = createDomain({ name: "multi-cname-test.com" });
+  test("validateDns detects multiple CNAMEs at same name", async () => {
+    const domain = await createDomain({ name: "multi-cname-test.com" });
 
     createDnsRecord({
       domain_id: domain.id,
@@ -531,14 +531,14 @@ describe("DNS Validation", () => {
       ttl: 3600,
     });
 
-    const result = validateDns(domain.id);
+    const result = await validateDns(domain.id);
     expect(result).not.toBeNull();
     expect(result!.valid).toBe(false);
     expect(result!.issues.some((i) => i.message.includes("Multiple CNAME"))).toBe(true);
   });
 
-  test("validateDns passes with clean records", () => {
-    const domain = createDomain({ name: "clean-dns-test.com" });
+  test("validateDns passes with clean records", async () => {
+    const domain = await createDomain({ name: "clean-dns-test.com" });
 
     createDnsRecord({
       domain_id: domain.id,
@@ -563,7 +563,7 @@ describe("DNS Validation", () => {
       priority: 10,
     });
 
-    const result = validateDns(domain.id);
+    const result = await validateDns(domain.id);
     expect(result).not.toBeNull();
     expect(result!.valid).toBe(true);
     expect(result!.issues.length).toBe(0);

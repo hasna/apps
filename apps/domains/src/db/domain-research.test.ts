@@ -26,8 +26,8 @@ afterAll(() => {
 describe("Domain Research — Exa Integration", () => {
   let domainId: string;
 
-  test("setup: create domain for research tests", () => {
-    const domain = createDomain({ name: "research-test.com" });
+  test("setup: create domain for research tests", async () => {
+    const domain = await createDomain({ name: "research-test.com" });
     domainId = domain.id;
     expect(domainId).toBeTruthy();
   });

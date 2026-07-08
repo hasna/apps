@@ -9,9 +9,9 @@ export function registerSslCommand(program: Command): void {
     .command("check <domain>")
     .description("Check SSL certificate for a domain and update the local DB record")
     .option("--json", "Output JSON")
-    .action((domain: string, opts: { json?: boolean }) => {
+    .action(async (domain: string, opts: { json?: boolean }) => {
       try {
-        const result = checkSsl(domain);
+        const result = await checkSsl(domain);
         if (opts.json) { console.log(JSON.stringify(result, null, 2)); return; }
         console.log(`\nSSL Certificate for ${result.domain}:`);
         if (result.error) {
@@ -34,8 +34,8 @@ export function registerSslCommand(program: Command): void {
     .option("--limit <n>", "Limit number of displayed domains")
     .option("--all", "Show all matching domains")
     .option("--json", "Output JSON")
-    .action((opts: { days: string; limit?: string; all?: boolean; json?: boolean }) => {
-      const domains = listSslExpiring(parseInt(opts.days));
+    .action(async (opts: { days: string; limit?: string; all?: boolean; json?: boolean }) => {
+      const domains = await listSslExpiring(parseInt(opts.days));
       if (opts.json) { console.log(JSON.stringify(domains, null, 2)); return; }
       const page = pageItemsOrExit(domains, { limit: opts.limit, all: opts.all });
       if (page.items.length === 0) {

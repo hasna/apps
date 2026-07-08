@@ -21,10 +21,10 @@ afterAll(() => {
 // ============================================================
 
 describe("Portfolio Export", () => {
-  test("export JSON format", () => {
-    createDomain({ name: "json-export-test.com" });
+  test("export JSON format", async () => {
+    await createDomain({ name: "json-export-test.com" });
 
-    const result = exportPortfolio("json");
+    const result = await exportPortfolio("json");
     const parsed = JSON.parse(result);
 
     expect(Array.isArray(parsed)).toBe(true);
@@ -38,10 +38,10 @@ describe("Portfolio Export", () => {
     expect(domain).toHaveProperty("nameservers");
   });
 
-  test("export CSV format", () => {
-    createDomain({ name: "csv-export-test.com" });
+  test("export CSV format", async () => {
+    await createDomain({ name: "csv-export-test.com" });
 
-    const result = exportPortfolio("csv");
+    const result = await exportPortfolio("csv");
     const lines = result.trim().split("\n");
 
     expect(lines.length).toBeGreaterThanOrEqual(2);
@@ -56,10 +56,10 @@ describe("Portfolio Export", () => {
     expect(headers).toContain("nameservers");
   });
 
-  test("CSV includes domain data row", () => {
-    createDomain({ name: "csv-row-test.com" });
+  test("CSV includes domain data row", async () => {
+    await createDomain({ name: "csv-row-test.com" });
 
-    const result = exportPortfolio("csv");
+    const result = await exportPortfolio("csv");
     const lines = result.trim().split("\n");
     expect(lines.length).toBeGreaterThanOrEqual(2);
 
@@ -68,10 +68,10 @@ describe("Portfolio Export", () => {
     expect(domainLine).toBeDefined();
   });
 
-  test("CSV escapes values with commas", () => {
-    createDomain({ name: "csv-escape-test.com", notes: "test, with comma" });
+  test("CSV escapes values with commas", async () => {
+    await createDomain({ name: "csv-escape-test.com", notes: "test, with comma" });
 
-    const result = exportPortfolio("csv");
+    const result = await exportPortfolio("csv");
     const lines = result.trim().split("\n");
 
     // Find the line with our domain
@@ -81,10 +81,10 @@ describe("Portfolio Export", () => {
     expect(domainLine).toContain('"test, with comma"');
   });
 
-  test("CSV escapes values with quotes", () => {
-    createDomain({ name: "csv-quote-test.com", notes: 'has "quotes"' });
+  test("CSV escapes values with quotes", async () => {
+    await createDomain({ name: "csv-quote-test.com", notes: 'has "quotes"' });
 
-    const result = exportPortfolio("csv");
+    const result = await exportPortfolio("csv");
     const lines = result.trim().split("\n");
 
     const domainLine = lines.find((l) => l.includes("csv-quote-test.com"));
@@ -93,17 +93,17 @@ describe("Portfolio Export", () => {
     expect(domainLine).toContain('"has ""quotes"""');
   });
 
-  test("JSON defaults to json format", () => {
-    createDomain({ name: "default-format-test.com" });
+  test("JSON defaults to json format", async () => {
+    await createDomain({ name: "default-format-test.com" });
 
-    const result = exportPortfolio();
+    const result = await exportPortfolio();
     expect(result.startsWith("[")).toBe(true);
   });
 
-  test("export includes boolean fields", () => {
-    createDomain({ name: "bool-test.com", auto_renew: true, is_premium: true });
+  test("export includes boolean fields", async () => {
+    await createDomain({ name: "bool-test.com", auto_renew: true, is_premium: true });
 
-    const jsonResult = exportPortfolio("json");
+    const jsonResult = await exportPortfolio("json");
     const parsed = JSON.parse(jsonResult);
     const domain = parsed.find((d: any) => d.name === "bool-test.com");
 
@@ -111,15 +111,15 @@ describe("Portfolio Export", () => {
     expect(domain.is_premium).toBe(true);
   });
 
-  test("export includes price fields", () => {
-    createDomain({
+  test("export includes price fields", async () => {
+    await createDomain({
       name: "price-test.com",
       premium_price: 999,
       standard_price: 10,
       purchase_price: 5,
     });
 
-    const jsonResult = exportPortfolio("json");
+    const jsonResult = await exportPortfolio("json");
     const parsed = JSON.parse(jsonResult);
     const domain = parsed.find((d: any) => d.name === "price-test.com");
 
@@ -134,16 +134,16 @@ describe("Portfolio Export", () => {
 // ============================================================
 
 describe("Bulk Domain Check", () => {
-  test("checkAllDomains returns empty array when no domains", () => {
-    const results = checkAllDomains();
+  test("checkAllDomains returns empty array when no domains", async () => {
+    const results = await checkAllDomains();
     expect(Array.isArray(results)).toBe(true);
     // May have results from other test domains, just check structure
   });
 
-  test("checkAllDomains returns structured results", () => {
-    createDomain({ name: "bulk-check-test.com" });
+  test("checkAllDomains returns structured results", async () => {
+    await createDomain({ name: "bulk-check-test.com" });
 
-    const results = checkAllDomains();
+    const results = await checkAllDomains();
     expect(results.length).toBeGreaterThan(0);
 
     const result = results.find((r) => r.domain === "bulk-check-test.com");
@@ -156,10 +156,10 @@ describe("Bulk Domain Check", () => {
     }
   });
 
-  test("checkAllDomains whois result structure", () => {
-    createDomain({ name: "whois-check-test.com" });
+  test("checkAllDomains whois result structure", async () => {
+    await createDomain({ name: "whois-check-test.com" });
 
-    const results = checkAllDomains();
+    const results = await checkAllDomains();
     const result = results.find((r) => r.domain === "whois-check-test.com");
 
     if (result?.whois) {
@@ -168,10 +168,10 @@ describe("Bulk Domain Check", () => {
     }
   });
 
-  test("checkAllDomains ssl result structure", () => {
-    createDomain({ name: "ssl-check-test.com" });
+  test("checkAllDomains ssl result structure", async () => {
+    await createDomain({ name: "ssl-check-test.com" });
 
-    const results = checkAllDomains();
+    const results = await checkAllDomains();
     const result = results.find((r) => r.domain === "ssl-check-test.com");
 
     if (result?.ssl) {
@@ -180,12 +180,12 @@ describe("Bulk Domain Check", () => {
     }
   });
 
-  test("checkAllDomains reports invalid stored domains per result", () => {
+  test("checkAllDomains reports invalid stored domains per result", async () => {
     const marker = join(tempDir, "bulk-ssl-injected");
     const name = `example.com; touch ${marker} #`;
-    createDomain({ name });
+    await createDomain({ name });
 
-    const results = checkAllDomains();
+    const results = await checkAllDomains();
     const result = results.find((r) => r.domain === name);
 
     expect(result?.whois?.error).toMatch(/Invalid domain name/);
@@ -193,10 +193,10 @@ describe("Bulk Domain Check", () => {
     expect(existsSync(marker)).toBe(false);
   });
 
-  test("checkAllDomains dns_validation result structure", () => {
-    createDomain({ name: "dns-val-check-test.com" });
+  test("checkAllDomains dns_validation result structure", async () => {
+    await createDomain({ name: "dns-val-check-test.com" });
 
-    const results = checkAllDomains();
+    const results = await checkAllDomains();
     const result = results.find((r) => r.domain === "dns-val-check-test.com");
 
     if (result?.dns_validation) {

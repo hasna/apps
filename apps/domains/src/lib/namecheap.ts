@@ -366,7 +366,7 @@ export function splitDomain(domain: string): { sld: string; tld: string } {
 // ============================================================
 
 export async function syncToLocalDb(dbFunctions: {
-  getDomainByName: (name: string) => { id: string } | null;
+  getDomainByName: (name: string) => Promise<{ id: string } | null>;
   createDomain: (input: {
     name: string;
     registrar?: string;
@@ -375,7 +375,7 @@ export async function syncToLocalDb(dbFunctions: {
     expires_at?: string;
     auto_renew?: boolean;
     nameservers?: string[];
-  }) => { id: string; name: string };
+  }) => Promise<{ id: string; name: string }>;
   updateDomain: (
     id: string,
     input: {
@@ -386,7 +386,7 @@ export async function syncToLocalDb(dbFunctions: {
       auto_renew?: boolean;
       nameservers?: string[];
     }
-  ) => unknown;
+  ) => Promise<unknown>;
 }, config?: NamecheapConfig): Promise<NamecheapSyncResult> {
   const cfg = config || getConfig();
   const result: NamecheapSyncResult = { synced: 0, errors: [], domains: [] };
@@ -416,9 +416,9 @@ export async function syncToLocalDb(dbFunctions: {
       const expiresAt = normalizeDate(info.expires || ncDomain.expiry);
       const createdAt = normalizeDate(info.created);
 
-      const existing = dbFunctions.getDomainByName(ncDomain.domain);
+      const existing = await dbFunctions.getDomainByName(ncDomain.domain);
       if (existing) {
-        dbFunctions.updateDomain(existing.id, {
+        await dbFunctions.updateDomain(existing.id, {
           registrar: "Namecheap",
           status: "active",
           registered_at: createdAt || undefined,
@@ -427,7 +427,7 @@ export async function syncToLocalDb(dbFunctions: {
           nameservers: info.nameservers.length > 0 ? info.nameservers : undefined,
         });
       } else {
-        dbFunctions.createDomain({
+        await dbFunctions.createDomain({
           name: ncDomain.domain,
           registrar: "Namecheap",
           status: "active",

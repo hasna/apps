@@ -85,6 +85,58 @@ export {
   type BulkCheckResult,
 } from "./db/domains.js";
 
+export {
+  getStore,
+  isCloudStore,
+  LocalStore,
+  ApiStore,
+  type DomainsStore,
+} from "./db/store.js";
+export {
+  createDomainOwner,
+  getDomainOwner,
+  getDomainOwnerByDomain,
+  getDomainOwnerByDomainName,
+  listDomainOwners,
+  updateDomainOwner,
+  deleteDomainOwner,
+  listDomainsWithOwners,
+  extractOwnerFromWhois,
+  linkOwnerToContacts,
+  DOMAIN_OWNER_SOURCES,
+  type DomainOwner,
+  type DomainOwnerSource,
+  type CreateDomainOwnerInput,
+  type DomainWithOwner,
+} from "./db/owners.js";
+export {
+  createHistoryEntry,
+  getHistoryEntry,
+  getHistoryByDomain,
+  getLatestSnapshot,
+  getHistoryByDateRange,
+  getLatestByDomainName,
+  listDomainsWithHistoryChanges,
+  deleteHistoryEntry,
+  deleteHistoryByDomain,
+  HISTORY_TYPES,
+  type DomainHistory,
+  type DomainHistoryType,
+  type CreateHistoryEntryInput,
+} from "./db/history.js";
+export {
+  upsertDomainReputation,
+  getDomainReputation,
+  getDomainReputationByName,
+  updateDomainReputation,
+  listBlacklistedDomains,
+  listHighThreatDomains,
+  deleteDomainReputation,
+  checkDomainReputation,
+  checkDnsBlacklist,
+  type DomainReputation,
+  type CreateReputationInput,
+} from "./db/reputation.js";
 export { getDatabase, closeDatabase } from "./db/database.js";
 export { PG_MIGRATIONS } from "./db/pg-migrations.js";
 export { PgAdapterAsync } from "./db/remote-storage.js";

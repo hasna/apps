@@ -11,10 +11,9 @@
  *   SEDO_PARTNER_ID, SEDO_API_KEY (signkey), SEDO_USERNAME, SEDO_PASSWORD
  */
 
-import { getDatabase } from "../db/database.js";
 import { firstEnv, SEDO_ENV } from "./env-aliases.js";
 import { createDomain, getDomainByName } from "../db/domains.js";
-import { createHistoryEntry } from "../db/domain-history.js";
+import { createHistoryEntry } from "../db/history.js";
 
 // ============================================================
 // Types
@@ -481,17 +480,17 @@ export async function checkSedoBlacklist(
  * Sedo doesn't have a direct purchase API — purchases go through
  * their marketplace UI. This records the acquisition locally.
  */
-export function recordSedoPurchase(
+export async function recordSedoPurchase(
   domain: string,
   price: number,
   orderId?: string
 ) {
-  const existing = getDomainByName(domain);
+  const existing = await getDomainByName(domain);
   if (existing) {
     throw new Error(`Domain '${domain}' already exists in local database`);
   }
 
-  const created = createDomain({
+  const created = await createDomain({
     name: domain,
     registrar: "Sedo",
     status: "active",
@@ -502,7 +501,7 @@ export function recordSedoPurchase(
     notes: orderId ? `Purchased via Sedo (order: ${orderId})` : "Purchased via Sedo",
   });
 
-  createHistoryEntry({
+  await createHistoryEntry({
     domain_id: created.id,
     snapshot_type: "purchase",
     raw_data: { price, orderId, source: "sedo" },

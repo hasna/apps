@@ -35,13 +35,13 @@ afterAll(() => {
 describe("Domain History — CRUD", () => {
   let domainId: string;
 
-  test("setup: create domain for history tests", () => {
-    const domain = createDomain({ name: "history-test.com" });
+  test("setup: create domain for history tests", async () => {
+    const domain = await createDomain({ name: "history-test.com" });
     domainId = domain.id;
     expect(domainId).toBeTruthy();
   });
 
-  test("create WHOIS history entry", () => {
+  test("create WHOIS history entry", async () => {
     const entry = createHistoryEntry({
       domain_id: domainId,
       snapshot_type: "whois",
@@ -68,7 +68,7 @@ describe("Domain History — CRUD", () => {
     expect(entry.created_at).toBeTruthy();
   });
 
-  test("create entry with minimal fields", () => {
+  test("create entry with minimal fields", async () => {
     const entry = createHistoryEntry({
       domain_id: domainId,
       snapshot_type: "dns",
@@ -84,7 +84,7 @@ describe("Domain History — CRUD", () => {
     expect(entry.nameservers).toEqual([]);
   });
 
-  test("create entry with raw_data", () => {
+  test("create entry with raw_data", async () => {
     const entry = createHistoryEntry({
       domain_id: domainId,
       snapshot_type: "exa_research",
@@ -101,7 +101,7 @@ describe("Domain History — CRUD", () => {
     });
   });
 
-  test("create SSL snapshot", () => {
+  test("create SSL snapshot", async () => {
     const entry = createHistoryEntry({
       domain_id: domainId,
       snapshot_type: "ssl",
@@ -113,7 +113,7 @@ describe("Domain History — CRUD", () => {
     expect(entry.raw_data).toHaveProperty("issuer", "Let's Encrypt");
   });
 
-  test("create reputation snapshot", () => {
+  test("create reputation snapshot", async () => {
     const entry = createHistoryEntry({
       domain_id: domainId,
       snapshot_type: "reputation",
@@ -124,7 +124,7 @@ describe("Domain History — CRUD", () => {
     expect(entry.snapshot_type).toBe("reputation");
   });
 
-  test("create RDAP snapshot", () => {
+  test("create RDAP snapshot", async () => {
     const entry = createHistoryEntry({
       domain_id: domainId,
       snapshot_type: "rdap",
@@ -136,7 +136,7 @@ describe("Domain History — CRUD", () => {
     expect(entry.registrant_name).toBe("RDAP Person");
   });
 
-  test("get history entry by ID", () => {
+  test("get history entry by ID", async () => {
     const entries = getHistoryByDomain(domainId);
     const first = entries[0];
     expect(first).toBeDefined();
@@ -147,11 +147,11 @@ describe("Domain History — CRUD", () => {
     expect(entry!.snapshot_type).toBe(first!.snapshot_type);
   });
 
-  test("get non-existent entry returns null", () => {
+  test("get non-existent entry returns null", async () => {
     expect(getHistoryEntry("nonexistent-id")).toBeNull();
   });
 
-  test("delete history entry", () => {
+  test("delete history entry", async () => {
     const entry = createHistoryEntry({
       domain_id: domainId,
       snapshot_type: "whois",
@@ -162,7 +162,7 @@ describe("Domain History — CRUD", () => {
     expect(getHistoryEntry(entry.id)).toBeNull();
   });
 
-  test("delete non-existent entry returns false", () => {
+  test("delete non-existent entry returns false", async () => {
     expect(deleteHistoryEntry("nonexistent-id")).toBe(false);
   });
 });
@@ -175,9 +175,9 @@ describe("Domain History — Query & Filter", () => {
   let domainId1: string;
   let domainId2: string;
 
-  test("setup: create domains with history", () => {
-    const d1 = createDomain({ name: "query-test1.com" });
-    const d2 = createDomain({ name: "query-test2.com" });
+  test("setup: create domains with history", async () => {
+    const d1 = await createDomain({ name: "query-test1.com" });
+    const d2 = await createDomain({ name: "query-test2.com" });
     domainId1 = d1.id;
     domainId2 = d2.id;
 
@@ -213,12 +213,12 @@ describe("Domain History — Query & Filter", () => {
     });
   });
 
-  test("get all history for a domain", () => {
+  test("get all history for a domain", async () => {
     const entries = getHistoryByDomain(domainId1);
     expect(entries.length).toBe(4);
   });
 
-  test("filter history by type", () => {
+  test("filter history by type", async () => {
     const whoisEntries = getHistoryByDomain(domainId1, { type: "whois" });
     expect(whoisEntries.length).toBe(2);
     expect(whoisEntries.every((e) => e.snapshot_type === "whois")).toBe(true);
@@ -228,12 +228,12 @@ describe("Domain History — Query & Filter", () => {
     expect(sslEntries[0]!.snapshot_type).toBe("ssl");
   });
 
-  test("limit history results", () => {
+  test("limit history results", async () => {
     const entries = getHistoryByDomain(domainId1, { limit: 2 });
     expect(entries.length).toBe(2);
   });
 
-  test("history ordered by created_at DESC", () => {
+  test("history ordered by created_at DESC", async () => {
     const whoisEntries = getHistoryByDomain(domainId1, { type: "whois" });
     expect(whoisEntries.length).toBe(2);
     // Both entries may have the same timestamp, but both should be whois type
@@ -243,7 +243,7 @@ describe("Domain History — Query & Filter", () => {
     expect(notes).toContain("WHOIS snapshot 2");
   });
 
-  test("get history by date range", () => {
+  test("get history by date range", async () => {
     const now = new Date();
     const future = new Date(now.getTime() + 86400000).toISOString();
     const past = new Date(now.getTime() - 86400000).toISOString();
@@ -252,7 +252,7 @@ describe("Domain History — Query & Filter", () => {
     expect(entries.length).toBe(4);
   });
 
-  test("get history by date range for specific domain", () => {
+  test("get history by date range for specific domain", async () => {
     const now = new Date();
     const future = new Date(now.getTime() + 86400000).toISOString();
     const past = new Date(now.getTime() - 86400000).toISOString();
@@ -262,12 +262,12 @@ describe("Domain History — Query & Filter", () => {
     expect(entries[0]!.domain_id).toBe(domainId2);
   });
 
-  test("get history by date range with no results", () => {
+  test("get history by date range with no results", async () => {
     const entries = getHistoryByDateRange("2000-01-01", "2000-01-02", domainId1);
     expect(entries.length).toBe(0);
   });
 
-  test("get latest snapshot of a type", () => {
+  test("get latest snapshot of a type", async () => {
     const latest = getLatestSnapshot(domainId1, "whois");
     expect(latest).not.toBeNull();
     expect(latest!.snapshot_type).toBe("whois");
@@ -275,33 +275,33 @@ describe("Domain History — Query & Filter", () => {
     expect(["WHOIS snapshot 1", "WHOIS snapshot 2"]).toContain(latest!.notes);
   });
 
-  test("get latest snapshot returns null for missing type", () => {
+  test("get latest snapshot returns null for missing type", async () => {
     const latest = getLatestSnapshot(domainId2, "whois");
     expect(latest).toBeNull();
   });
 
-  test("get latest by domain name", () => {
+  test("get latest by domain name", async () => {
     const latest = getLatestByDomainName("query-test1.com", "whois");
     expect(latest).not.toBeNull();
     expect(latest!.snapshot_type).toBe("whois");
   });
 
-  test("get latest by domain name returns null for missing domain", () => {
+  test("get latest by domain name returns null for missing domain", async () => {
     expect(getLatestByDomainName("nonexistent.xyz")).toBeNull();
   });
 
-  test("get latest by domain name defaults to whois type", () => {
+  test("get latest by domain name defaults to whois type", async () => {
     const latest = getLatestByDomainName("query-test1.com");
     expect(latest).not.toBeNull();
   });
 
-  test("delete all history for a domain", () => {
+  test("delete all history for a domain", async () => {
     expect(deleteHistoryByDomain(domainId2)).toBe(true);
     expect(getHistoryByDomain(domainId2).length).toBe(0);
   });
 
-  test("delete all history for domain with no history returns false", () => {
-    const domain = createDomain({ name: "no-history.com" });
+  test("delete all history for domain with no history returns false", async () => {
+    const domain = await createDomain({ name: "no-history.com" });
     expect(deleteHistoryByDomain(domain.id)).toBe(false);
   });
 });
@@ -311,7 +311,7 @@ describe("Domain History — Query & Filter", () => {
 // ============================================================
 
 describe("Domain History — Timeline", () => {
-  test("listDomainsWithHistoryChanges returns structured data", () => {
+  test("listDomainsWithHistoryChanges returns structured data", async () => {
     const results = listDomainsWithHistoryChanges();
     expect(results.length).toBeGreaterThan(0);
 
@@ -325,15 +325,15 @@ describe("Domain History — Timeline", () => {
     }
   });
 
-  test("timeline includes domains with multiple snapshots", () => {
+  test("timeline includes domains with multiple snapshots", async () => {
     const results = listDomainsWithHistoryChanges();
     const historyTest = results.find((r) => r.domain_name === "history-test.com");
     expect(historyTest).toBeDefined();
     expect(historyTest!.snapshot_count).toBeGreaterThan(1);
   });
 
-  test("timeline returns empty array when no history exists", () => {
-    const domain = createDomain({ name: "timeline-empty.com" });
+  test("timeline returns empty array when no history exists", async () => {
+    const domain = await createDomain({ name: "timeline-empty.com" });
     const results = listDomainsWithHistoryChanges();
     // Our test domain should not appear since it has no history
     expect(results.some((r) => r.domain_name === "timeline-empty.com")).toBe(false);
@@ -345,7 +345,7 @@ describe("Domain History — Timeline", () => {
 // ============================================================
 
 describe("Domain History — Types", () => {
-  test("all history types are valid", () => {
+  test("all history types are valid", async () => {
     expect(HISTORY_TYPES).toContain("whois");
     expect(HISTORY_TYPES).toContain("rdap");
     expect(HISTORY_TYPES).toContain("dns");

@@ -734,7 +734,7 @@ export async function setDnsRecords(domain: string, records: BrandsightDnsRecord
 }
 
 export async function syncToLocalDb(
-  dbFns: { getDomainByName: (name: string) => import("../db/domains.js").Domain | null; createDomain: (input: import("../db/domains.js").CreateDomainInput) => import("../db/domains.js").Domain; updateDomain: (id: string, input: import("../db/domains.js").UpdateDomainInput) => import("../db/domains.js").Domain | null; },
+  dbFns: { getDomainByName: (name: string) => Promise<import("../db/domains.js").Domain | null>; createDomain: (input: import("../db/domains.js").CreateDomainInput) => Promise<import("../db/domains.js").Domain>; updateDomain: (id: string, input: import("../db/domains.js").UpdateDomainInput) => Promise<import("../db/domains.js").Domain | null>; },
   config?: BrandsightConfig
 ): Promise<{ synced: number; created: number; updated: number; errors: string[] }> {
   const domains = await listDomains(config);
@@ -743,9 +743,9 @@ export async function syncToLocalDb(
 
   for (const d of domains) {
     try {
-      const existing = dbFns.getDomainByName(d.domain);
+      const existing = await dbFns.getDomainByName(d.domain);
       if (existing) {
-        dbFns.updateDomain(existing.id, {
+        await dbFns.updateDomain(existing.id, {
           registrar: "Brandsight",
           expires_at: d.expires || undefined,
           auto_renew: d.auto_renew,
@@ -754,7 +754,7 @@ export async function syncToLocalDb(
         });
         updated++;
       } else {
-        dbFns.createDomain({
+        await dbFns.createDomain({
           name: d.domain,
           registrar: "Brandsight",
           expires_at: d.expires || undefined,
