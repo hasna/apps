@@ -4,7 +4,6 @@ import type { Store } from "./store/types.js";
 import { getMasterKey, initKms, getKeyStatus } from "./crypto.js";
 import type { SecretEntry, SecretMetadata, VaultItemKind, VaultItemMetadata, VaultItemPayload } from "./types.js";
 import { getSecretReferenceStatus } from "./status.js";
-import { runEventsCli } from "@hasna/events/cli";
 
 const SECRET_TYPES: SecretEntry["type"][] = ["api_key", "password", "token", "credential", "other"];
 const VAULT_ITEM_KINDS: VaultItemKind[] = [
@@ -358,18 +357,16 @@ async function runSharedEventCli(args: string[]): Promise<boolean> {
     import("@hasna/events/commander"),
   ]);
   const program = new Command().name("secrets");
-  registerEventsCommands(program, { source: "secrets" });
+  // The shared events package renamed its "webhooks" command to "channels";
+  // register it under the "webhooks" name so `secrets webhooks …` (as advertised
+  // in --help) keeps working against event channel subscriptions.
+  registerEventsCommands(program, { source: "secrets", channelsCommandName: "webhooks" });
   await program.parseAsync(["node", "secrets", ...args]);
   return true;
 }
 
 if (await runSharedEventCli(args)) process.exit(0);
 const [command, ...rest] = args;
-
-if (command === "events" || command === "webhooks") {
-  await runEventsCli(args, { source: "secrets", programName: "secrets" });
-  process.exit(0);
-}
 
 if (!command || command === "--help" || command === "-h") {
   usage();
