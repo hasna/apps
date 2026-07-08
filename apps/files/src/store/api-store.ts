@@ -13,6 +13,8 @@
 import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { HasnaHttpError } from "@hasna/contracts/client";
 import type {
+  Agent,
+  AgentActivity,
   Collection,
   DuplicateGroup,
   FileWithTags,
@@ -24,12 +26,14 @@ import type {
   Tag,
 } from "../types/index.js";
 import type {
+  ActivityQueryOptions,
   CollectionDetail,
   CreateCollectionOptions,
   CreateProjectOptions,
   CreateSourceInput,
   FeedbackInput,
   FilesStore,
+  LogActivityInput,
   ProjectDetail,
   RecentFile,
   UpdateCollectionInput,
@@ -249,5 +253,40 @@ export class ApiStore implements FilesStore {
   // ── feedback ─────────────────────────────────────────────────────────────
   async recordFeedback(input: FeedbackInput): Promise<void> {
     await this.http.post("/feedback", input);
+  }
+
+  // ── agents ─────────────────────────────────────────────────────────────
+  async registerAgent(name: string, sessionId?: string): Promise<Agent> {
+    return this.http.post<Agent>("/agents", { name, session_id: sessionId });
+  }
+  async heartbeatAgent(agentId: string): Promise<Agent | null> {
+    return orNull(this.http.post<Agent>(`/agents/${seg(agentId)}/heartbeat`));
+  }
+  async setAgentFocus(agentId: string, projectId?: string): Promise<Agent | null> {
+    return orNull(this.http.post<Agent>(`/agents/${seg(agentId)}/focus`, { project_id: projectId ?? null }));
+  }
+  async getAgent(agentId: string): Promise<Agent | null> {
+    return this.client.get<Agent>("agents", agentId);
+  }
+  async listAgents(): Promise<Agent[]> {
+    return (await this.client.list<Agent>("agents")).items;
+  }
+
+  // ── activity ─────────────────────────────────────────────────────────────
+  async logActivity(input: LogActivityInput): Promise<void> {
+    await this.http.post("/activity", input);
+  }
+  async getFileHistory(fileId: string, opts: ActivityQueryOptions = {}): Promise<AgentActivity[]> {
+    return this.http.get<AgentActivity[]>(`/files/${seg(fileId)}/history`, { query: this.activityQuery(opts) });
+  }
+  async getAgentActivity(agentId: string, opts: ActivityQueryOptions = {}): Promise<AgentActivity[]> {
+    return this.http.get<AgentActivity[]>(`/agents/${seg(agentId)}/activity`, { query: this.activityQuery(opts) });
+  }
+  async getSessionActivity(sessionId: string, opts: ActivityQueryOptions = {}): Promise<AgentActivity[]> {
+    return this.http.get<AgentActivity[]>(`/sessions/${seg(sessionId)}/activity`, { query: this.activityQuery(opts) });
+  }
+
+  private activityQuery(opts: ActivityQueryOptions): Record<string, string | number | undefined> {
+    return { after: opts.after, before: opts.before, action: opts.action, limit: opts.limit, offset: opts.offset };
   }
 }

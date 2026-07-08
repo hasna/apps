@@ -21,6 +21,9 @@
  * mode by the caller. Their DB effects, however, still flow through this seam.
  */
 import type {
+  ActionType,
+  Agent,
+  AgentActivity,
   AutoRules,
   Collection,
   DuplicateGroup,
@@ -106,6 +109,25 @@ export interface FeedbackInput {
   version: string;
 }
 
+/** Input to {@link FilesStore.logActivity}. */
+export interface LogActivityInput {
+  agent_id: string;
+  action: ActionType;
+  file_id?: string;
+  source_id?: string;
+  session_id?: string;
+  metadata?: Record<string, unknown>;
+}
+
+/** Filters accepted by the activity readers on {@link FilesStore}. */
+export interface ActivityQueryOptions {
+  after?: string;
+  before?: string;
+  action?: ActionType;
+  limit?: number;
+  offset?: number;
+}
+
 /**
  * The full portable data plane, supported by BOTH transports. Every reader and
  * writer of files/sources/tags/collections/projects/machines routes through
@@ -178,4 +200,21 @@ export interface FilesStore {
 
   // ── feedback ─────────────────────────────────────────────────────────────
   recordFeedback(input: FeedbackInput): Promise<void>;
+
+  // ── agents ─────────────────────────────────────────────────────────────
+  /** Register (or refresh) an agent session by name; also bumps last_seen_at. */
+  registerAgent(name: string, sessionId?: string): Promise<Agent>;
+  /** Bump last_seen_at for an agent. Returns null if the agent is unknown. */
+  heartbeatAgent(agentId: string): Promise<Agent | null>;
+  /** Set (or clear) the active project focus for an agent. */
+  setAgentFocus(agentId: string, projectId?: string): Promise<Agent | null>;
+  getAgent(agentId: string): Promise<Agent | null>;
+  listAgents(): Promise<Agent[]>;
+
+  // ── activity ─────────────────────────────────────────────────────────────
+  /** Append an agent-activity record (telemetry for reads/writes). */
+  logActivity(input: LogActivityInput): Promise<void>;
+  getFileHistory(fileId: string, opts?: ActivityQueryOptions): Promise<AgentActivity[]>;
+  getAgentActivity(agentId: string, opts?: ActivityQueryOptions): Promise<AgentActivity[]>;
+  getSessionActivity(sessionId: string, opts?: ActivityQueryOptions): Promise<AgentActivity[]>;
 }

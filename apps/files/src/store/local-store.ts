@@ -59,14 +59,19 @@ import {
   updateProject,
 } from "../db/projects.js";
 import { recordFeedback } from "../db/feedback.js";
+import { getAgent, listAgents, registerAgent, setAgentFocus, updateAgentHeartbeat } from "../db/agents.js";
+import { getAgentActivity, getFileHistory, getSessionActivity, logActivity } from "../db/activity.js";
 import { requireId, resolveId } from "../db/resolve.js";
+import type { Agent, AgentActivity } from "../types/index.js";
 import type {
+  ActivityQueryOptions,
   CollectionDetail,
   CreateCollectionOptions,
   CreateProjectOptions,
   CreateSourceInput,
   FeedbackInput,
   FilesStore,
+  LogActivityInput,
   ProjectDetail,
   RecentFile,
   UpdateCollectionInput,
@@ -229,5 +234,36 @@ export class LocalStore implements FilesStore {
   // ── feedback ─────────────────────────────────────────────────────────────
   async recordFeedback(input: FeedbackInput): Promise<void> {
     recordFeedback(input);
+  }
+
+  // ── agents ─────────────────────────────────────────────────────────────
+  async registerAgent(name: string, sessionId?: string): Promise<Agent> {
+    return registerAgent(name, sessionId);
+  }
+  async heartbeatAgent(agentId: string): Promise<Agent | null> {
+    return updateAgentHeartbeat(agentId);
+  }
+  async setAgentFocus(agentId: string, projectId?: string): Promise<Agent | null> {
+    return setAgentFocus(agentId, projectId ? requireId(projectId, "projects") : undefined);
+  }
+  async getAgent(agentId: string): Promise<Agent | null> {
+    return getAgent(agentId);
+  }
+  async listAgents(): Promise<Agent[]> {
+    return listAgents();
+  }
+
+  // ── activity ─────────────────────────────────────────────────────────────
+  async logActivity(input: LogActivityInput): Promise<void> {
+    logActivity(input);
+  }
+  async getFileHistory(fileId: string, opts: ActivityQueryOptions = {}): Promise<AgentActivity[]> {
+    return getFileHistory(requireId(fileId, "files"), opts);
+  }
+  async getAgentActivity(agentId: string, opts: ActivityQueryOptions = {}): Promise<AgentActivity[]> {
+    return getAgentActivity(agentId, opts);
+  }
+  async getSessionActivity(sessionId: string, opts: ActivityQueryOptions = {}): Promise<AgentActivity[]> {
+    return getSessionActivity(sessionId, opts);
   }
 }

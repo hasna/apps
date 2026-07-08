@@ -22,6 +22,17 @@ function err(message: string, status = 400, extra: Record<string, unknown> = {})
   return json({ error: message, ...extra }, status);
 }
 
+function activityQuery(url: URL): store.ActivityQuery {
+  const p = url.searchParams;
+  return {
+    after: p.get("after") ?? undefined,
+    before: p.get("before") ?? undefined,
+    action: p.get("action") ?? undefined,
+    limit: p.has("limit") ? Number(p.get("limit")) : undefined,
+    offset: p.has("offset") ? Number(p.get("offset")) : undefined,
+  };
+}
+
 function signingSecret(): string {
   const s = process.env.HASNA_FILES_API_SIGNING_KEY ?? process.env.HASNA_API_SIGNING_KEY;
   if (!s) throw new Error("HASNA_FILES_API_SIGNING_KEY (or HASNA_API_SIGNING_KEY) is not set — API-key auth cannot start.");
@@ -212,6 +223,9 @@ export function createV1Handler(): V1Handler {
           if (seg.length === 3 && seg[2] === "resolve-conflict" && method === "POST") {
             return (await store.resolveConflict(client, seg[1]!)) ? json({ ok: true }) : err("File not found", 404);
           }
+          if (seg.length === 3 && seg[2] === "history" && method === "GET") {
+            return json(await store.getFileHistory(client, seg[1]!, activityQuery(url)));
+          }
         }
 
         // ── /v1/tags ───────────────────────────────────────────────────
@@ -312,6 +326,51 @@ export function createV1Handler(): V1Handler {
         if (seg[0] === "machines") {
           if (seg.length === 1 && method === "GET") return json(await store.listMachines(client));
           if (seg.length === 2 && seg[1] === "current" && method === "GET") return json(await store.currentMachine(client));
+        }
+
+        // ── /v1/agents ─────────────────────────────────────────────────
+        if (seg[0] === "agents") {
+          if (seg.length === 1 && method === "GET") return json(await store.listAgents(client));
+          if (seg.length === 1 && method === "POST") {
+            const b = await body();
+            if (!b.name) return err("name is required");
+            return json(await store.registerAgent(client, b.name as string, b.session_id as string | undefined), 201);
+          }
+          if (seg.length === 3 && seg[2] === "heartbeat" && method === "POST") {
+            const a = await store.heartbeatAgent(client, seg[1]!);
+            return a ? json(a) : err("Agent not found", 404);
+          }
+          if (seg.length === 3 && seg[2] === "focus" && method === "POST") {
+            const b = await body();
+            const a = await store.setAgentFocus(client, seg[1]!, (b.project_id as string | null) ?? undefined);
+            return a ? json(a) : err("Agent not found", 404);
+          }
+          if (seg.length === 3 && seg[2] === "activity" && method === "GET") {
+            return json(await store.getAgentActivity(client, seg[1]!, activityQuery(url)));
+          }
+          if (seg.length === 2 && method === "GET") {
+            const a = await store.getAgent(client, seg[1]!);
+            return a ? json(a) : err("Agent not found", 404);
+          }
+        }
+
+        // ── /v1/sessions ───────────────────────────────────────────────
+        if (seg[0] === "sessions" && seg.length === 3 && seg[2] === "activity" && method === "GET") {
+          return json(await store.getSessionActivity(client, seg[1]!, activityQuery(url)));
+        }
+
+        // ── /v1/activity ───────────────────────────────────────────────
+        if (seg[0] === "activity" && seg.length === 1 && method === "POST") {
+          const b = await body();
+          if (!b.agent_id || !b.action) return err("agent_id and action are required");
+          return json(await store.logActivity(client, {
+            agent_id: b.agent_id as string,
+            action: b.action as store.LogActivityInput["action"],
+            file_id: b.file_id as string | undefined,
+            source_id: b.source_id as string | undefined,
+            session_id: b.session_id as string | undefined,
+            metadata: (b.metadata as Record<string, unknown>) ?? {},
+          }), 201);
         }
 
         // ── /v1/feedback ───────────────────────────────────────────────

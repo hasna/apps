@@ -11,8 +11,10 @@ import { createCloudPoolFromEnv } from "../generated/storage-kit/index.js";
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
 import { sanitizeSourceConfig } from "../db/sources.js";
 import { generateCanonicalName } from "../lib/normalize.js";
-import type { AutoRules } from "../types/index.js";
+import type { ActionType, AutoRules } from "../types/index.js";
 import type {
+  Agent,
+  AgentActivity,
   Collection,
   FileWithTags,
   Machine,
@@ -599,6 +601,129 @@ export async function recordFeedback(client: TypedQueryClient, input: FeedbackIn
     "INSERT INTO feedback (id, message, email, category, version) VALUES ($1,$2,$3,$4,$5)",
     [`fb_${nanoid(10)}`, input.message, input.email ?? null, input.category ?? "general", input.version],
   );
+}
+
+// ── Agents ────────────────────────────────────────────────────────────────
+function toAgent(r: Record<string, unknown>): Agent {
+  return {
+    id: String(r.id),
+    name: String(r.name),
+    session_id: r.session_id == null ? undefined : String(r.session_id),
+    project_id: r.project_id == null ? undefined : String(r.project_id),
+    last_seen_at: String(r.last_seen_at),
+    created_at: String(r.created_at),
+  };
+}
+
+export async function listAgents(client: TypedQueryClient): Promise<Agent[]> {
+  const rows = await client.many<Record<string, unknown>>("SELECT * FROM agents ORDER BY last_seen_at DESC");
+  return rows.map(toAgent);
+}
+
+export async function getAgent(client: TypedQueryClient, id: string): Promise<Agent | null> {
+  const row = await client.get<Record<string, unknown>>("SELECT * FROM agents WHERE id = $1", [id]);
+  return row ? toAgent(row) : null;
+}
+
+/** Register a new agent, or refresh an existing one by name. */
+export async function registerAgent(client: TypedQueryClient, name: string, sessionId?: string): Promise<Agent> {
+  const existing = await client.get<Record<string, unknown>>("SELECT * FROM agents WHERE name = $1", [name]);
+  if (existing) {
+    await client.execute(
+      "UPDATE agents SET last_seen_at = NOW()::text, session_id = COALESCE($1, session_id) WHERE id = $2",
+      [sessionId ?? null, String(existing.id)],
+    );
+    return (await getAgent(client, String(existing.id)))!;
+  }
+  const id = `ag_${nanoid(8)}`;
+  await client.execute("INSERT INTO agents (id, name, session_id) VALUES ($1,$2,$3)", [id, name, sessionId ?? null]);
+  return (await getAgent(client, id))!;
+}
+
+export async function heartbeatAgent(client: TypedQueryClient, id: string): Promise<Agent | null> {
+  await client.execute("UPDATE agents SET last_seen_at = NOW()::text WHERE id = $1", [id]);
+  return getAgent(client, id);
+}
+
+export async function setAgentFocus(client: TypedQueryClient, id: string, projectId?: string): Promise<Agent | null> {
+  await client.execute("UPDATE agents SET project_id = $1 WHERE id = $2", [projectId ?? null, id]);
+  return getAgent(client, id);
+}
+
+// ── Activity ──────────────────────────────────────────────────────────────
+function toActivity(r: Record<string, unknown>): AgentActivity {
+  return {
+    id: String(r.id),
+    agent_id: String(r.agent_id),
+    action: String(r.action) as ActionType,
+    file_id: r.file_id == null ? undefined : String(r.file_id),
+    source_id: r.source_id == null ? undefined : String(r.source_id),
+    session_id: r.session_id == null ? undefined : String(r.session_id),
+    metadata: parseJson(r.metadata, {}),
+    created_at: String(r.created_at),
+  };
+}
+
+export interface LogActivityInput {
+  agent_id: string;
+  action: ActionType;
+  file_id?: string;
+  source_id?: string;
+  session_id?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export async function logActivity(client: TypedQueryClient, input: LogActivityInput): Promise<AgentActivity> {
+  const id = `act_${nanoid(10)}`;
+  await client.execute(
+    `INSERT INTO agent_activity (id, agent_id, action, file_id, source_id, session_id, metadata)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [
+      id,
+      input.agent_id,
+      input.action,
+      input.file_id ?? null,
+      input.source_id ?? null,
+      input.session_id ?? null,
+      JSON.stringify(input.metadata ?? {}),
+    ],
+  );
+  return (await client.get<Record<string, unknown>>("SELECT * FROM agent_activity WHERE id = $1", [id]).then((r) => toActivity(r!)));
+}
+
+export interface ActivityQuery {
+  after?: string;
+  before?: string;
+  action?: string;
+  limit?: number;
+  offset?: number;
+}
+
+function activityWhere(column: string, value: string, opts: ActivityQuery): { sql: string; params: unknown[] } {
+  const conditions = [`${column} = $1`];
+  const params: unknown[] = [value];
+  if (opts.after) { params.push(opts.after); conditions.push(`created_at >= $${params.length}`); }
+  if (opts.before) { params.push(opts.before); conditions.push(`created_at <= $${params.length}`); }
+  if (opts.action) { params.push(opts.action); conditions.push(`action = $${params.length}`); }
+  const limit = Math.min(Math.max(Number(opts.limit) || 50, 1), 500);
+  const offset = Math.max(Number(opts.offset) || 0, 0);
+  const sql = `SELECT * FROM agent_activity WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`;
+  return { sql, params };
+}
+
+export async function getFileHistory(client: TypedQueryClient, fileId: string, opts: ActivityQuery = {}): Promise<AgentActivity[]> {
+  const { sql, params } = activityWhere("file_id", fileId, opts);
+  return (await client.many<Record<string, unknown>>(sql, params)).map(toActivity);
+}
+
+export async function getAgentActivity(client: TypedQueryClient, agentId: string, opts: ActivityQuery = {}): Promise<AgentActivity[]> {
+  const { sql, params } = activityWhere("agent_id", agentId, opts);
+  return (await client.many<Record<string, unknown>>(sql, params)).map(toActivity);
+}
+
+export async function getSessionActivity(client: TypedQueryClient, sessionId: string, opts: ActivityQuery = {}): Promise<AgentActivity[]> {
+  const { sql, params } = activityWhere("session_id", sessionId, opts);
+  return (await client.many<Record<string, unknown>>(sql, params)).map(toActivity);
 }
 
 // ── Stats ─────────────────────────────────────────────────────────────────

@@ -16,10 +16,9 @@ import { buildFilesContextPack, buildFilesSearchPack } from "../lib/context-pack
 import { acknowledgeKnowledgeSourceOutbox, pollKnowledgeSourceOutbox } from "../db/knowledge-outbox.js";
 import { parseOpenFilesSourceRef } from "../lib/source-ref.js";
 import { store } from "../store/index.js";
+import type { LogActivityInput } from "../store/types.js";
 import { registerEvidenceTools } from "./evidence-tools.js";
 import { registerOrganizationTools } from "./organization-tools.js";
-import { registerAgent, getAgent, listAgents as listDbAgents, updateAgentHeartbeat, setAgentFocus } from "../db/agents.js";
-import { logActivity, getFileHistory, getAgentActivity, getSessionActivity } from "../db/activity.js";
 import { basename, dirname, join, resolve } from "path";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { homedir } from "os";
@@ -180,6 +179,16 @@ async function readResponseBodyWithLimit(resp: Response, maxBytes: number): Prom
 
 function mcpError(message: string) {
   return { content: [{ type: "text" as const, text: message }], isError: true };
+}
+
+/**
+ * Best-effort activity telemetry. Routes through the active {@link store} (local
+ * SQLite or the cloud API — never a direct sqlite touch), and never lets a
+ * failed activity write fail the primary tool call. Local writes complete
+ * synchronously; cloud writes are fire-and-forget from the caller's view.
+ */
+function logActivity(input: LogActivityInput): void {
+  void store().logActivity(input).catch(() => {});
 }
 
 /**
@@ -447,7 +456,7 @@ registerTool("list_files", "List indexed files with optional filters. If agent_i
   // concern; the ApiStore honors only the source_id/machine_id/ext/limit/offset
   // subset the cloud /v1/files endpoint supports).
   if (opts.agent_id && !opts.project_id) {
-    const agent = getAgent(opts.agent_id);
+    const agent = await store().getAgent(opts.agent_id);
     if (agent?.project_id) opts.project_id = agent.project_id;
   }
   const files = await store().listFiles(opts);
@@ -1596,14 +1605,14 @@ registerTool("register_agent", "Register an agent session. Returns agent_id. Aut
   name: z.string(),
   session_id: z.string().optional(),
 }, async (params) => {
-  const agent = registerAgent(params.name, params.session_id);
+  const agent = await store().registerAgent(params.name, params.session_id);
   return { content: [{ type: "text" as const, text: JSON.stringify(agent) }] };
 });
 
 registerTool("heartbeat", "Update last_seen_at to signal agent is active.", {
   agent_id: z.string(),
 }, async (params) => {
-  const agent = updateAgentHeartbeat(params.agent_id);
+  const agent = await store().heartbeatAgent(params.agent_id);
   if (!agent) return { content: [{ type: "text" as const, text: `Agent not found: ${params.agent_id}` }], isError: true };
   return { content: [{ type: "text" as const, text: JSON.stringify({ agent_id: agent.id, last_seen_at: agent.last_seen_at }) }] };
 });
@@ -1612,13 +1621,13 @@ registerTool("set_focus", "Set active project context for this agent session.", 
   agent_id: z.string(),
   project_id: z.string().optional(),
 }, async (params) => {
-  const agent = setAgentFocus(params.agent_id, params.project_id);
+  const agent = await store().setAgentFocus(params.agent_id, params.project_id);
   if (!agent) return { content: [{ type: "text" as const, text: `Agent not found: ${params.agent_id}` }], isError: true };
   return { content: [{ type: "text" as const, text: JSON.stringify({ agent_id: agent.id, project_id: agent.project_id ?? null }) }] };
 });
 
 registerTool("list_agents", "List all registered agents.", {}, async () => {
-  return { content: [{ type: "text" as const, text: JSON.stringify(listDbAgents()) }] };
+  return { content: [{ type: "text" as const, text: JSON.stringify(await store().listAgents()) }] };
 });
 
 // ─── Watcher ──────────────────────────────────────────────────────────────────
@@ -1655,7 +1664,7 @@ registerTool("get_file_history", "Get all agent activity for a file", {
   limit: z.number().optional().default(50),
   offset: z.number().optional().default(0),
 }, async ({ file_id, after, before, action, limit, offset }) => {
-  const history = getFileHistory(file_id, { after, before, action: action as any, limit, offset });
+  const history = await store().getFileHistory(file_id, { after, before, action: action as any, limit, offset });
   return { content: [{ type: "text" as const, text: JSON.stringify(history, null, 2) }] };
 });
 
@@ -1667,7 +1676,7 @@ registerTool("get_agent_activity", "Get all activity by a specific agent", {
   limit: z.number().optional().default(50),
   offset: z.number().optional().default(0),
 }, async ({ agent_id, after, before, action, limit, offset }) => {
-  const activity = getAgentActivity(agent_id, { after, before, action: action as any, limit, offset });
+  const activity = await store().getAgentActivity(agent_id, { after, before, action: action as any, limit, offset });
   return { content: [{ type: "text" as const, text: JSON.stringify(activity, null, 2) }] };
 });
 
@@ -1679,7 +1688,7 @@ registerTool("get_session_activity", "Get all activity within a session", {
   limit: z.number().optional().default(50),
   offset: z.number().optional().default(0),
 }, async ({ session_id, after, before, action, limit, offset }) => {
-  const activity = getSessionActivity(session_id, { after, before, action: action as any, limit, offset });
+  const activity = await store().getSessionActivity(session_id, { after, before, action: action as any, limit, offset });
   return { content: [{ type: "text" as const, text: JSON.stringify(activity, null, 2) }] };
 });
 

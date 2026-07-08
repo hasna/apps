@@ -80,4 +80,31 @@ describe("ApiStore route mapping", () => {
     expect(find("POST", "/projects/prj_1/files")?.body).toEqual({ file_id: "file_1" });
     expect(find("DELETE", "/projects/prj_1/files/file_1")).toBeDefined();
   });
+
+  it("routes agent registry + activity through /v1 (never local sqlite)", async () => {
+    const { transport, calls } = fakeTransport();
+    const store = new ApiStore(createHasnaStorageClient("files", transport));
+
+    await store.registerAgent("agent-smith", "sess_1");
+    await store.heartbeatAgent("ag_1");
+    await store.setAgentFocus("ag_1", "prj_1");
+    await store.getAgent("ag_1");
+    await store.listAgents();
+    await store.logActivity({ agent_id: "ag_1", action: "read", file_id: "file_1" });
+    await store.getFileHistory("file_1", { limit: 10 });
+    await store.getAgentActivity("ag_1", { action: "read" });
+    await store.getSessionActivity("sess_1");
+
+    const find = (method: string, path: string) => calls.find((c) => c.method === method && c.path === path);
+
+    expect(find("POST", "/agents")?.body).toEqual({ name: "agent-smith", session_id: "sess_1" });
+    expect(find("POST", "/agents/ag_1/heartbeat")).toBeDefined();
+    expect(find("POST", "/agents/ag_1/focus")?.body).toEqual({ project_id: "prj_1" });
+    expect(find("GET", "/agents/ag_1")).toBeDefined();
+    expect(find("GET", "/agents")).toBeDefined();
+    expect(find("POST", "/activity")?.body).toMatchObject({ agent_id: "ag_1", action: "read", file_id: "file_1" });
+    expect(find("GET", "/files/file_1/history")).toBeDefined();
+    expect(find("GET", "/agents/ag_1/activity")).toBeDefined();
+    expect(find("GET", "/sessions/sess_1/activity")).toBeDefined();
+  });
 });
