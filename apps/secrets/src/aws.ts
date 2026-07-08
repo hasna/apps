@@ -190,7 +190,7 @@ export async function pushSecret(
   const name = awsName(key, config.prefix);
 
   if (options.dryRun) {
-    const metadata = getLocalMetadata(key);
+    const metadata = await getLocalMetadata(key);
     if (!metadata) throw new Error(`Secret not found: ${key}`);
     return planResult("push", config, [
       {
@@ -295,7 +295,7 @@ export async function syncAll(options: AwsCommandOptions = {}): Promise<AwsSyncR
         if (!s.Name) continue;
         if (config.prefix && !s.Name.startsWith(`${config.prefix}/`)) continue;
         const key = localKey(s.Name, config.prefix);
-        if (!getLocalMetadata(key)) {
+        if (!(await getLocalMetadata(key))) {
           try {
             await pullSecret(key, options);
             pulled.push(key);

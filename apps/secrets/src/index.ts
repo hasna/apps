@@ -950,69 +950,6 @@ switch (command) {
     break;
   }
 
-  case "import-dot-secrets": {
-    // Bridge: import all *.env files from ~/.secrets/ into the vault
-    const { readdirSync, readFileSync, existsSync } = await import("fs");
-    const { join } = await import("path");
-    const { homedir } = await import("os");
-    const secretsDir = flags.dir ?? join(homedir(), ".secrets");
-    if (!existsSync(secretsDir)) {
-      console.error(`Directory not found: ${secretsDir}`);
-      process.exit(1);
-    }
-
-    // Recursively find *.env files
-    function findEnvFiles(dir: string): string[] {
-      const results: string[] = [];
-      try {
-        for (const entry of readdirSync(dir, { withFileTypes: true })) {
-          const full = join(dir, entry.name);
-          if (entry.isDirectory()) results.push(...findEnvFiles(full));
-          else if (entry.isFile() && entry.name.endsWith(".env")) results.push(full);
-        }
-      } catch { /* skip unreadable dirs */ }
-      return results;
-    }
-
-    // Infer type from key name
-    function inferType(key: string): SecretEntry["type"] {
-      const k = key.toUpperCase();
-      if (k.includes("PASSWORD") || k.includes("PASS") || k.includes("PWD")) return "password";
-      if (k.includes("API_KEY") || k.includes("APIKEY") || k.includes("SECRET_KEY")) return "api_key";
-      if (k.includes("TOKEN") || k.includes("_KEY")) return "token";
-      if (k.includes("CERT") || k.includes("CERTIFICATE")) return "credential";
-      return "other";
-    }
-
-    const envFiles = findEnvFiles(secretsDir);
-    let imported = 0, skipped = 0;
-    for (const file of envFiles) {
-      const content = readFileSync(file, "utf-8");
-      for (const line of content.split("\n")) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith("#")) continue;
-        const eqIdx = trimmed.indexOf("=");
-        if (eqIdx === -1) continue;
-        const rawKey = trimmed.slice(0, eqIdx).trim();
-        let rawValue = trimmed.slice(eqIdx + 1).trim();
-        if ((rawValue.startsWith('"') && rawValue.endsWith('"')) ||
-            (rawValue.startsWith("'") && rawValue.endsWith("'"))) {
-          rawValue = rawValue.slice(1, -1);
-        }
-        if (!rawKey || !rawValue) continue;
-        const key = rawKey.toLowerCase().replace(/_/g, "-");
-        const type = inferType(rawKey);
-        // Skip if already exists and not overriding
-        if (!flags.overwrite && await store().getSecret(key)) { skipped++; continue; }
-        await store().setSecret(key, rawValue, type);
-        imported++;
-      }
-    }
-    console.log(`✓ Imported ${imported} secret(s) from ${envFiles.length} file(s) in ${secretsDir}`);
-    if (skipped > 0) console.log(`  Skipped ${skipped} already-existing key(s) (use --overwrite to replace)`);
-    break;
-  }
-
   case "import-env": {
     const { importEnv } = await import("./env.js");
     try {
@@ -1069,6 +1006,13 @@ switch (command) {
   }
 
   case "key": {
+    // The `key` family (init, kms setup, status) manages the LOCAL encryption
+    // master key. In api mode the server owns encryption at rest, so these are
+    // meaningless and must not create a local key file. Guard like encrypt-vault.
+    if (store().mode === "api") {
+      console.error("`secrets key` is a local-vault operation; in api mode the server owns encryption at rest.");
+      process.exit(1);
+    }
     const [sub] = positional;
     const { statSync } = await import("fs");
 
