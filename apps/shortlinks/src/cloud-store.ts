@@ -20,6 +20,7 @@ import {
   type HasnaStorageClient,
 } from "@hasna/contracts/client/storage";
 import type { Env } from "@hasna/contracts/mode";
+import type { ListLinksOptions, Store, TotalStats } from "./store-interface.js";
 import type {
   AddDomainInput,
   Click,
@@ -41,7 +42,8 @@ function enc(value: string): string {
  * bearer key. Mirrors the async `PgShortlinksStore` method signatures so it is a
  * drop-in `RuntimeStore` for the CLI.
  */
-export class CloudShortlinksStore {
+export class CloudShortlinksStore implements Store {
+  readonly kind = "cloud-http" as const;
   readonly transport: HasnaStorageClient["transport"];
 
   private constructor(private readonly client: HasnaStorageClient) {

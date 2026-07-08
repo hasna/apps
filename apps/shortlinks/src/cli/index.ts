@@ -6,9 +6,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { ShortlinksStore } from "../store.js";
 import { PgShortlinksStore, applyPostgresMigrations } from "../pg-store.js";
-import { CloudShortlinksStore } from "../cloud-store.js";
+import { LocalStore, resolveStore, type Store } from "../client-store.js";
+import type { TotalStats } from "../store-interface.js";
 import { getConfigPath, getDataDir, getDatabasePath, loadConfig, saveConfig, updateConfig } from "../config.js";
 import { serveShortlinks } from "../server.js";
 import { createCloudflarePlan, writeWorkerFiles, upsertCloudflareDnsRecord } from "../cloudflare.js";
@@ -22,10 +22,8 @@ import {
   parseShortlinksStoreMode,
   redactDatabaseUrl,
 } from "../runtime.js";
-import type { Link } from "../types.js";
+import type { Link, LinkStats } from "../types.js";
 import type { ShortlinksStoreMode } from "../runtime.js";
-
-type RuntimeStore = ShortlinksStore | PgShortlinksStore | CloudShortlinksStore;
 
 function getPackageVersion(): string {
   try {
@@ -60,24 +58,6 @@ function handleError(error: unknown): never {
   process.exit(1);
 }
 
-function withStore<T>(fn: (store: ShortlinksStore) => T): T {
-  const store = new ShortlinksStore(program.opts().db);
-  try {
-    return fn(store);
-  } finally {
-    store.close();
-  }
-}
-
-async function withStoreAsync<T>(fn: (store: ShortlinksStore) => Promise<T>): Promise<T> {
-  const store = new ShortlinksStore(program.opts().db);
-  try {
-    return await fn(store);
-  } finally {
-    store.close();
-  }
-}
-
 function storeMode(): ShortlinksStoreMode {
   const opts = program.opts();
   return parseShortlinksStoreMode(opts.store || process.env.HASNA_SHORTLINKS_STORE || process.env.SHORTLINKS_STORE || "local");
@@ -88,36 +68,28 @@ function runtimeEnv(): NodeJS.ProcessEnv {
   return opts.store ? { ...process.env, HASNA_SHORTLINKS_STORE: opts.store } : process.env;
 }
 
-function localStatsIfDatabaseExists(dbPath: string): { domains: number; links: number; clicks: number } | null {
+async function localTotalStats(dbPath: string): Promise<{ domains: number; links: number; clicks: number } | null> {
   if (!existsSync(dbPath)) return null;
-  return withStore((store) => store.totalStats());
+  const store = new LocalStore(program.opts().db);
+  try {
+    return await store.totalStats();
+  } finally {
+    await store.close();
+  }
 }
 
-async function withRuntimeStore<T>(fn: (store: RuntimeStore) => T | Promise<T>): Promise<T> {
-  // self_hosted client flip: when HASNA_SHORTLINKS_MODE=self_hosted (or cloud)
-  // AND HASNA_SHORTLINKS_API_URL + HASNA_SHORTLINKS_API_KEY are set, route ALL
-  // reads/writes to the cloud /v1 HTTP API. No DSN, no local SQLite.
-  const cloud = CloudShortlinksStore.fromEnv(process.env);
-  if (cloud) {
-    try {
-      return await fn(cloud);
-    } finally {
-      await cloud.close();
-    }
-  }
-  if (storeMode() === "postgres") {
-    const store = await PgShortlinksStore.fromEnv();
-    try {
-      return await fn(store);
-    } finally {
-      await store.close();
-    }
-  }
-  const store = new ShortlinksStore(program.opts().db);
+/**
+ * Run `fn` with the resolved client {@link Store}. The store is the cloud
+ * ApiStore when the client flip is on (HASNA_SHORTLINKS_API_URL + _API_KEY /
+ * _STORAGE_MODE), otherwise the on-box LocalStore. There is no DSN/postgres
+ * client path: a client never touches the raw RDS.
+ */
+async function withRuntimeStore<T>(fn: (store: Store) => T | Promise<T>): Promise<T> {
+  const store = resolveStore(process.env, { dbPath: program.opts().db });
   try {
     return await fn(store);
   } finally {
-    store.close();
+    await store.close();
   }
 }
 
@@ -158,12 +130,12 @@ program
           config.defaultDomain = domain.hostname;
           config.publicBaseUrl = opts.publicBaseUrl || `https://${domain.hostname}`;
         }
-        if (storeMode() === "local") saveConfig(config);
+        if (store.kind === "local") saveConfig(config);
         return {
           data_dir: getDataDir(),
           config_path: getConfigPath(),
           db_path: getDatabasePath(program.opts().db),
-          store: storeMode(),
+          store: store.kind,
           config,
           stats: await store.totalStats(),
         };
@@ -503,7 +475,7 @@ program
   .option("-j, --json", "Output JSON")
   .action(async (slug, opts) => {
     try {
-      const result = await withRuntimeStore((store) => {
+      const result = await withRuntimeStore<LinkStats | TotalStats>((store) => {
         if (slug) return opts.domain ? store.getStats(opts.domain, slug) : store.getStats(slug);
         return store.totalStats();
       });
@@ -760,7 +732,7 @@ program
         config_path: getConfigPath(),
         db_path: dbPath,
         db_exists: existsSync(dbPath),
-        stats: localStatsIfDatabaseExists(dbPath),
+        stats: await localTotalStats(dbPath),
         runtime,
         no_network: true,
         commands: {

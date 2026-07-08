@@ -7,60 +7,16 @@
  *   shortlinks-mcp            stdio (default; for editor/agent clients)
  *   shortlinks-mcp --http     Streamable HTTP on 127.0.0.1:8851 (shared service)
  *
- * Store mode follows HASNA_SHORTLINKS_STORE (local SQLite | postgres). In
- * postgres mode it reads/writes RDS directly (Amendment A1).
+ * Every tool routes through the shared client {@link Store}: the cloud ApiStore
+ * (HTTPS `/v1` + bearer key) when the client flip is on, otherwise the on-box
+ * LocalStore SQLite. No DSN, no direct sqlite/fetch — same seam the CLI uses.
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { ShortlinksStore } from "../store.js";
-import { PgShortlinksStore } from "../pg-store.js";
-import { CloudShortlinksStore } from "../cloud-store.js";
-import { getShortlinksStoreMode } from "../runtime.js";
+import { withStore } from "../client-store.js";
 import { isHttpMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
-
-interface RuntimeStore {
-  addDomain(input: any): unknown | Promise<unknown>;
-  listDomains(): unknown | Promise<unknown>;
-  createLink(input: any): unknown | Promise<unknown>;
-  listLinks(options?: any): unknown | Promise<unknown>;
-  getLink(domainOrSlug: string, maybeSlug?: string): unknown | Promise<unknown>;
-  setLinkActive(domainOrSlug: string, slugOrActive: any, active?: boolean): unknown | Promise<unknown>;
-  deleteLink(domainOrSlug: string, maybeSlug?: string): unknown | Promise<unknown>;
-  getStats(domainOrSlug: string, maybeSlug?: string): unknown | Promise<unknown>;
-  totalStats(): unknown | Promise<unknown>;
-  close?(): unknown | Promise<unknown>;
-}
-
-async function withStore<T>(fn: (store: RuntimeStore) => Promise<T> | T): Promise<T> {
-  // self_hosted client flip: when HASNA_SHORTLINKS_MODE=self_hosted (or cloud)
-  // AND HASNA_SHORTLINKS_API_URL + HASNA_SHORTLINKS_API_KEY are set, route ALL
-  // reads/writes to the cloud /v1 HTTP API. No DSN, no local SQLite. Mirrors the
-  // CLI's withRuntimeStore precedence so CLI and MCP share one cloud path.
-  const cloud = CloudShortlinksStore.fromEnv(process.env);
-  if (cloud) {
-    try {
-      return await fn(cloud as unknown as RuntimeStore);
-    } finally {
-      await cloud.close();
-    }
-  }
-  if (getShortlinksStoreMode() === "postgres") {
-    const store = await PgShortlinksStore.fromEnv();
-    try {
-      return await fn(store as unknown as RuntimeStore);
-    } finally {
-      await store.close();
-    }
-  }
-  const store = new ShortlinksStore();
-  try {
-    return await fn(store as unknown as RuntimeStore);
-  } finally {
-    store.close();
-  }
-}
 
 const TOOLS = [
   {

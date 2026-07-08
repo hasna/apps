@@ -1,5 +1,8 @@
 export { ShortlinksDatabase, SQLITE_MIGRATIONS, makeId, now } from "./database.js";
 export { ShortlinksStore } from "./store.js";
+export { LocalStore, ApiStore, resolveStore, withStore } from "./client-store.js";
+export { CloudShortlinksStore } from "./cloud-store.js";
+export type { Store, ListLinksOptions, TotalStats } from "./store-interface.js";
 export { PgShortlinksStore, applyPostgresMigrations, createKitPgAdapter } from "./pg-store.js";
 export { SHORTLINKS_MIGRATIONS } from "./db/migrations.js";
 export { createServeApp } from "./serve/app.js";
