@@ -50,12 +50,14 @@ describe("getStore mode resolution", () => {
     await expect(store.getContact(created.id)).rejects.toThrow();
   });
 
-  it("ApiStore throws ApiUnavailableError for ops the /v1 API does not expose (no silent local fallback)", async () => {
+  it("ApiStore throws ApiUnavailableError for ops that stay on-box (no silent local fallback)", async () => {
     const store = getStore(API_ENV);
-    // Groups/relationships/notes have no /v1 route yet: they must fail loudly,
-    // never write on-box SQLite while pointed at the cloud.
-    await expect(store.listGroups()).rejects.toBeInstanceOf(ApiUnavailableError);
-    await expect(store.createRelationship({} as never)).rejects.toBeInstanceOf(ApiUnavailableError);
-    await expect(store.addNote("c", "note")).rejects.toBeInstanceOf(ApiUnavailableError);
+    // Vault key material, encrypted documents/health, on-box images, and
+    // embedding-backed semantic search are intentionally NOT exposed over /v1:
+    // they must fail loudly, never write on-box SQLite while pointed at the cloud.
+    await expect(store.semanticSearch("q", 5)).rejects.toBeInstanceOf(ApiUnavailableError);
+    await expect(store.addDocument({} as never)).rejects.toBeInstanceOf(ApiUnavailableError);
+    await expect(store.saveImage("c", "src")).rejects.toBeInstanceOf(ApiUnavailableError);
+    await expect(store.unlockVault("pw")).rejects.toBeInstanceOf(ApiUnavailableError);
   });
 });

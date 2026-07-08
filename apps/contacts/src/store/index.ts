@@ -772,6 +772,32 @@ class ApiStore implements Store {
   readonly mode = "api" as const;
   constructor(private readonly client: StorageClient) {}
 
+  // ── Raw /v1 transport helpers (unwrap a named envelope key) ──────────────────
+  private g(path: string, query?: QueryParams): Promise<unknown> {
+    return this.client.transport.get(path, query ? { query } : undefined);
+  }
+  private post(path: string, body?: unknown): Promise<unknown> {
+    return this.client.transport.post(path, body);
+  }
+  private patch(path: string, body?: unknown): Promise<unknown> {
+    return this.client.transport.patch(path, body);
+  }
+  private del(path: string, query?: QueryParams): Promise<unknown> {
+    return this.client.transport.del(path, undefined, query ? { query } : undefined);
+  }
+  /** GET that resolves to null on a 404 (for get-by-id endpoints). */
+  private async gMaybe(path: string): Promise<unknown> {
+    try {
+      return await this.client.transport.get(path);
+    } catch (e) {
+      if (e && typeof e === "object" && (e as { status?: number }).status === 404) return null;
+      throw e;
+    }
+  }
+  private enc(id: string): string {
+    return encodeURIComponent(String(id));
+  }
+
   // Contacts
   async createContact(input: CreateContactInput) {
     const res = await this.client.create<{ contact?: unknown }>("contacts", stripUndefined(input as unknown as Record<string, unknown>));
@@ -866,33 +892,33 @@ class ApiStore implements Store {
   async removeTagFromCompany(): Promise<never> { return unavailable("removeTagFromCompany"); }
 
   // Groups
-  async createGroup(): Promise<never> { return unavailable("createGroup"); }
-  async getGroup(): Promise<never> { return unavailable("getGroup"); }
-  async listGroups(): Promise<never> { return unavailable("listGroups"); }
-  async updateGroup(): Promise<never> { return unavailable("updateGroup"); }
-  async deleteGroup(): Promise<never> { return unavailable("deleteGroup"); }
-  async addContactToGroup(): Promise<never> { return unavailable("addContactToGroup"); }
-  async removeContactFromGroup(): Promise<never> { return unavailable("removeContactFromGroup"); }
-  async listContactsInGroup(): Promise<never> { return unavailable("listContactsInGroup"); }
-  async listGroupsForContact(): Promise<never> { return unavailable("listGroupsForContact"); }
-  async addCompanyToGroup(): Promise<never> { return unavailable("addCompanyToGroup"); }
-  async removeCompanyFromGroup(): Promise<never> { return unavailable("removeCompanyFromGroup"); }
-  async listCompaniesInGroup(): Promise<never> { return unavailable("listCompaniesInGroup"); }
-  async listGroupsForCompany(): Promise<never> { return unavailable("listGroupsForCompany"); }
+  async createGroup(input: CreateGroupInput) { return pick(await this.post("/groups", input), "group"); }
+  async getGroup(id: string) { return pick(await this.gMaybe(`/groups/${this.enc(id)}`), "group") ?? null; }
+  async listGroups(projectId?: string) { return (pick<unknown[]>(await this.g("/groups", projectId ? { project_id: projectId } : undefined), "groups") ?? []); }
+  async updateGroup(id: string, input: UpdateGroupInput) { return pick(await this.patch(`/groups/${this.enc(id)}`, input), "group"); }
+  async deleteGroup(id: string) { await this.del(`/groups/${this.enc(id)}`); }
+  async addContactToGroup(contactId: string, groupId: string) { return this.post(`/groups/${this.enc(groupId)}/contacts`, { contact_id: contactId }); }
+  async removeContactFromGroup(contactId: string, groupId: string) { await this.del(`/groups/${this.enc(groupId)}/contacts/${this.enc(contactId)}`); }
+  async listContactsInGroup(groupId: string) { return (pick<string[]>(await this.g(`/groups/${this.enc(groupId)}/contacts`), "contact_ids") ?? []); }
+  async listGroupsForContact(contactId: string) { return (pick<unknown[]>(await this.g(`/groups/for-contact/${this.enc(contactId)}`), "groups") ?? []); }
+  async addCompanyToGroup(companyId: string, groupId: string) { return this.post(`/groups/${this.enc(groupId)}/companies`, { company_id: companyId }); }
+  async removeCompanyFromGroup(companyId: string, groupId: string) { await this.del(`/groups/${this.enc(groupId)}/companies/${this.enc(companyId)}`); }
+  async listCompaniesInGroup(groupId: string) { return (pick<string[]>(await this.g(`/groups/${this.enc(groupId)}/companies`), "company_ids") ?? []); }
+  async listGroupsForCompany(companyId: string) { return (pick<unknown[]>(await this.g(`/groups/for-company/${this.enc(companyId)}`), "groups") ?? []); }
 
   // Relationships
-  async createRelationship(): Promise<never> { return unavailable("createRelationship"); }
-  async listRelationships(): Promise<never> { return unavailable("listRelationships"); }
-  async deleteRelationship(): Promise<never> { return unavailable("deleteRelationship"); }
-  async createCompanyRelationship(): Promise<never> { return unavailable("createCompanyRelationship"); }
-  async listCompanyRelationships(): Promise<never> { return unavailable("listCompanyRelationships"); }
-  async deleteCompanyRelationship(): Promise<never> { return unavailable("deleteCompanyRelationship"); }
+  async createRelationship(input: CreateRelationshipInput) { return pick(await this.post("/relationships", input), "relationship"); }
+  async listRelationships(opts: ListRelationshipsOptions = {}) { return (pick<unknown[]>(await this.g("/relationships", stripUndefined(opts as Record<string, unknown>) as QueryParams), "relationships") ?? []); }
+  async deleteRelationship(id: string) { await this.del(`/relationships/${this.enc(id)}`); }
+  async createCompanyRelationship(input: CreateCompanyRelationshipInput) { return pick(await this.post("/company-relationships", input), "relationship"); }
+  async listCompanyRelationships(opts: ListCompanyRelationshipsOptions = {}) { return (pick<unknown[]>(await this.g("/company-relationships", stripUndefined(opts as Record<string, unknown>) as QueryParams), "relationships") ?? []); }
+  async deleteCompanyRelationship(id: string) { await this.del(`/company-relationships/${this.enc(id)}`); }
 
   // Notes
-  async addNote(): Promise<never> { return unavailable("addNote"); }
-  async listNotes(): Promise<never> { return unavailable("listNotes"); }
-  async listNotesForContactAtCompany(): Promise<never> { return unavailable("listNotesForContactAtCompany"); }
-  async deleteNote(): Promise<never> { return unavailable("deleteNote"); }
+  async addNote(contactId: string, body: string, createdBy?: string, companyId?: string) { return pick(await this.post("/notes", { contact_id: contactId, body, created_by: createdBy, company_id: companyId }), "note"); }
+  async listNotes(contactId: string) { return (pick<unknown[]>(await this.g("/notes", { contact_id: contactId }), "notes") ?? []); }
+  async listNotesForContactAtCompany(contactId: string, companyId: string) { return (pick<unknown[]>(await this.g("/notes", { contact_id: contactId, company_id: companyId }), "notes") ?? []); }
+  async deleteNote(noteId: string) { await this.del(`/notes/${this.enc(noteId)}`); }
 
   // Activity
   async listActivity(): Promise<never> { return unavailable("listActivity"); }
@@ -907,100 +933,108 @@ class ApiStore implements Store {
       groups: Number(res?.groups ?? 0),
     };
   }
-  async findEmailDuplicates(): Promise<never> { return unavailable("findEmailDuplicates"); }
-  async findNameDuplicates(): Promise<never> { return unavailable("findNameDuplicates"); }
-  async flushForBackup(): Promise<never> { return unavailable("flushForBackup"); }
+  async findEmailDuplicates() { return (pick<Array<{ email: string; contact_ids: string[] }>>(await this.g("/email-duplicates"), "duplicates") ?? []); }
+  async findNameDuplicates() { return (pick<Array<{ contact_ids: [string, string]; similarity: number }>>(await this.g("/name-duplicates"), "duplicates") ?? []); }
+  // On-box SQLite maintenance only; a no-op when pointed at the cloud.
+  async flushForBackup() { /* no on-box handle in api mode */ }
 
-  // ── Extended domains — not exposed by /v1 yet; loud failure, never local ────
-  async listColdContacts(): Promise<never> { return unavailable("listColdContacts"); }
-  async findOrCreateContact(): Promise<never> { return unavailable("findOrCreateContact"); }
-  async findContactsForContext(): Promise<never> { return unavailable("findContactsForContext"); }
-  async listContactsNotContactedSince(): Promise<never> { return unavailable("listContactsNotContactedSince"); }
-  async listFollowupDueContacts(): Promise<never> { return unavailable("listFollowupDueContacts"); }
+  // ── Extended domains — routed through the /v1 API ───────────────────────────
+  async listColdContacts(days: number) { return (pick<unknown[]>(await this.g("/cold-contacts", { days }), "contacts") ?? []); }
+  async findOrCreateContact(input: CreateContactInput) {
+    const emails = (input.emails ?? []).map((e) => e.address).filter(Boolean);
+    for (const addr of emails) { const c = await this.getContactByEmail(addr); if (c) return { contact: c, created: false }; }
+    const nameQuery = input.display_name ?? ((input.first_name || input.last_name) ? `${input.first_name ?? ""} ${input.last_name ?? ""}`.trim() : null);
+    if (nameQuery) { const results = await this.searchContacts(nameQuery); if (results[0]) return { contact: results[0], created: false }; }
+    return { contact: await this.createContact(input), created: true };
+  }
+  async findContactsForContext(topic: string, limit: number) { return (pick<Array<{ id: string; display_name: string; job_title: string | null; reason: string }>>(await this.g("/contacts-for-context", { topic, limit }), "contacts") ?? []); }
+  async listContactsNotContactedSince(days: number, limit: number) { return (pick<Array<{ id: string; display_name: string; last_contacted_at: string | null }>>(await this.g("/not-contacted", { days, limit }), "contacts") ?? []); }
+  async listFollowupDueContacts(onOrBefore: string) { return (pick<Array<{ id: string; display_name: string; follow_up_at: string }>>(await this.g("/followup-due-contacts", { on_or_before: onOrBefore }), "contacts") ?? []); }
 
-  async logVendorCommunication(): Promise<never> { return unavailable("logVendorCommunication"); }
-  async listVendorCommunications(): Promise<never> { return unavailable("listVendorCommunications"); }
-  async listMissingInvoices(): Promise<never> { return unavailable("listMissingInvoices"); }
-  async listPendingFollowUps(): Promise<never> { return unavailable("listPendingFollowUps"); }
-  async markFollowUpDone(): Promise<never> { return unavailable("markFollowUpDone"); }
+  async logVendorCommunication(input: Parameters<typeof vendorCommsDb.logVendorCommunication>[0]) { return pick(await this.post("/vendor-comms", input), "communication"); }
+  async listVendorCommunications(companyId: string, opts: Parameters<typeof vendorCommsDb.listVendorCommunications>[1] = {}) { return (pick<unknown[]>(await this.g("/vendor-comms", { company_id: companyId, ...stripUndefined(opts as Record<string, unknown>) } as QueryParams), "communications") ?? []); }
+  async listMissingInvoices() { return (pick<unknown[]>(await this.g("/vendor-comms/missing-invoices"), "communications") ?? []); }
+  async listPendingFollowUps() { return (pick<unknown[]>(await this.g("/vendor-comms/pending-follow-ups"), "communications") ?? []); }
+  async markFollowUpDone(id: string) { return pick(await this.post(`/vendor-comms/${this.enc(id)}/mark-done`), "communication"); }
 
-  async createContactTask(): Promise<never> { return unavailable("createContactTask"); }
-  async listContactTasks(): Promise<never> { return unavailable("listContactTasks"); }
-  async updateContactTask(): Promise<never> { return unavailable("updateContactTask"); }
-  async deleteContactTask(): Promise<never> { return unavailable("deleteContactTask"); }
-  async listOverdueTasks(): Promise<never> { return unavailable("listOverdueTasks"); }
-  async checkEscalations(): Promise<never> { return unavailable("checkEscalations"); }
+  async createContactTask(input: Parameters<typeof contactTasksDb.createContactTask>[0]) { return pick(await this.post("/tasks", input), "task"); }
+  async listContactTasks(opts: Parameters<typeof contactTasksDb.listContactTasks>[0] = {}) { return (pick<unknown[]>(await this.g("/tasks", stripUndefined(opts as Record<string, unknown>) as QueryParams), "tasks") ?? []); }
+  async updateContactTask(id: string, input: Parameters<typeof contactTasksDb.updateContactTask>[1]) { return pick(await this.patch(`/tasks/${this.enc(id)}`, input), "task"); }
+  async deleteContactTask(id: string) { await this.del(`/tasks/${this.enc(id)}`); }
+  async listOverdueTasks() { return (pick<unknown[]>(await this.g("/tasks/overdue"), "tasks") ?? []); }
+  async checkEscalations() { return (pick<unknown[]>(await this.g("/tasks/escalations"), "escalations") ?? []); }
 
-  async createApplication(): Promise<never> { return unavailable("createApplication"); }
-  async listApplications(): Promise<never> { return unavailable("listApplications"); }
-  async updateApplication(): Promise<never> { return unavailable("updateApplication"); }
-  async listFollowUpDueApplications(): Promise<never> { return unavailable("listFollowUpDueApplications"); }
+  async createApplication(input: Parameters<typeof applicationsDb.createApplication>[0]) { return pick(await this.post("/applications", input), "application"); }
+  async listApplications(opts: Parameters<typeof applicationsDb.listApplications>[0] = {}) { return (pick<unknown[]>(await this.g("/applications", stripUndefined(opts as Record<string, unknown>) as QueryParams), "applications") ?? []); }
+  async updateApplication(id: string, input: Parameters<typeof applicationsDb.updateApplication>[1]) { return pick(await this.patch(`/applications/${this.enc(id)}`, input), "application"); }
+  async listFollowUpDueApplications() { return (pick<unknown[]>(await this.g("/applications/follow-up-due"), "applications") ?? []); }
 
-  async addOrgMember(): Promise<never> { return unavailable("addOrgMember"); }
-  async listOrgMembers(): Promise<never> { return unavailable("listOrgMembers"); }
-  async updateOrgMember(): Promise<never> { return unavailable("updateOrgMember"); }
-  async removeOrgMember(): Promise<never> { return unavailable("removeOrgMember"); }
-  async listOrgMembersForContact(): Promise<never> { return unavailable("listOrgMembersForContact"); }
+  async addOrgMember(input: Parameters<typeof orgMembersDb.addOrgMember>[0]) { return pick(await this.post("/org-members", input), "org_member"); }
+  async listOrgMembers(companyId: string) { return (pick<unknown[]>(await this.g("/org-members", { company_id: companyId }), "org_members") ?? []); }
+  async updateOrgMember(id: string, input: Parameters<typeof orgMembersDb.updateOrgMember>[1]) { return pick(await this.patch(`/org-members/${this.enc(id)}`, input), "org_member"); }
+  async removeOrgMember(id: string) { await this.del(`/org-members/${this.enc(id)}`); }
+  async listOrgMembersForContact(contactId: string) { return (pick<unknown[]>(await this.g("/org-members", { contact_id: contactId }), "org_members") ?? []); }
 
-  async createDeal(): Promise<never> { return unavailable("createDeal"); }
-  async getDeal(): Promise<never> { return unavailable("getDeal"); }
-  async listDeals(): Promise<never> { return unavailable("listDeals"); }
-  async updateDeal(): Promise<never> { return unavailable("updateDeal"); }
-  async deleteDeal(): Promise<never> { return unavailable("deleteDeal"); }
+  async createDeal(input: Parameters<typeof dealsDb.createDeal>[0]) { return pick(await this.post("/deals", input), "deal"); }
+  async getDeal(id: string) { return pick(await this.gMaybe(`/deals/${this.enc(id)}`), "deal") ?? null; }
+  async listDeals(opts: Parameters<typeof dealsDb.listDeals>[0] = {}) { return (pick<unknown[]>(await this.g("/deals", stripUndefined(opts as Record<string, unknown>) as QueryParams), "deals") ?? []); }
+  async updateDeal(id: string, input: Parameters<typeof dealsDb.updateDeal>[1]) { return pick(await this.patch(`/deals/${this.enc(id)}`, input), "deal") ?? null; }
+  async deleteDeal(id: string) { await this.del(`/deals/${this.enc(id)}`); }
 
-  async logEvent(): Promise<never> { return unavailable("logEvent"); }
-  async listEvents(): Promise<never> { return unavailable("listEvents"); }
-  async deleteEvent(): Promise<never> { return unavailable("deleteEvent"); }
+  async logEvent(input: Parameters<typeof eventsDb.logEvent>[0]) { return pick(await this.post("/events", input), "event"); }
+  async listEvents(opts: Parameters<typeof eventsDb.listEvents>[0] = {}) { return (pick<unknown[]>(await this.g("/events", stripUndefined(opts as Record<string, unknown>) as QueryParams), "events") ?? []); }
+  async deleteEvent(id: string) { await this.del(`/events/${this.enc(id)}`); }
 
-  async getFieldHistory(): Promise<never> { return unavailable("getFieldHistory"); }
-  async getContactAt(): Promise<never> { return unavailable("getContactAt"); }
+  async getFieldHistory(contactId: string, fieldName?: string) { return (pick<unknown[]>(await this.g(`/contacts/${this.enc(contactId)}/field-history`, fieldName ? { field_name: fieldName } : undefined), "history") ?? []); }
+  async getContactAt(contactId: string, timestamp: string) { return (pick<Record<string, string>>(await this.g(`/contacts/${this.enc(contactId)}/field-at`, { timestamp }), "fields") ?? {}); }
 
-  async addJobEntry(): Promise<never> { return unavailable("addJobEntry"); }
-  async getJobHistory(): Promise<never> { return unavailable("getJobHistory"); }
+  async addJobEntry(contactId: string, input: Parameters<typeof jobHistoryDb.addJobEntry>[1]) { return pick(await this.post(`/contacts/${this.enc(contactId)}/job-history`, input), "job"); }
+  async getJobHistory(contactId: string) { return (pick<unknown[]>(await this.g(`/contacts/${this.enc(contactId)}/job-history`), "job_history") ?? []); }
 
-  async saveLearning(): Promise<never> { return unavailable("saveLearning"); }
-  async getLearnings(): Promise<never> { return unavailable("getLearnings"); }
-  async searchLearnings(): Promise<never> { return unavailable("searchLearnings"); }
-  async confirmLearning(): Promise<never> { return unavailable("confirmLearning"); }
-  async getStaleLearnings(): Promise<never> { return unavailable("getStaleLearnings"); }
-  async runLearningMaintenance(): Promise<never> { return unavailable("runLearningMaintenance"); }
+  async saveLearning(contactId: string, input: Parameters<typeof learningsDb.saveLearning>[1]) { return pick(await this.post(`/contacts/${this.enc(contactId)}/learnings`, input), "learning"); }
+  async getLearnings(contactId: string, opts: Parameters<typeof learningsDb.getLearnings>[1] = {}) { return (pick<Array<{ confidence: number; type: string; content: string }>>(await this.g(`/contacts/${this.enc(contactId)}/learnings`, stripUndefined(opts as Record<string, unknown>) as QueryParams), "learnings") ?? []); }
+  async searchLearnings(query: string, opts: Parameters<typeof learningsDb.searchLearnings>[1] = {}) { return (pick<Array<{ contact_id: string; type: string; confidence: number; content: string }>>(await this.g("/learnings/search", { q: query, ...stripUndefined(opts as Record<string, unknown>) } as QueryParams), "learnings") ?? []); }
+  async confirmLearning(learningId: string) { await this.post(`/learnings/${this.enc(learningId)}/confirm`); }
+  async getStaleLearnings(daysOld: number, minConfidence: number) { return (pick<unknown[]>(await this.g("/learnings/stale", { days_old: daysOld, min_confidence: minConfidence }), "learnings") ?? []); }
+  async runLearningMaintenance() { const r = await this.post("/learnings/maintenance") as { decayed_count?: number; potential_contradictions?: unknown[] }; return { decayed_count: Number(r?.decayed_count ?? 0), potential_contradictions: r?.potential_contradictions ?? [] }; }
 
-  async acquireContactLock(): Promise<never> { return unavailable("acquireContactLock"); }
-  async releaseContactLock(): Promise<never> { return unavailable("releaseContactLock"); }
-  async checkContactLock(): Promise<never> { return unavailable("checkContactLock"); }
-  async logAgentActivity(): Promise<never> { return unavailable("logAgentActivity"); }
-  async getAgentActivity(): Promise<never> { return unavailable("getAgentActivity"); }
+  async acquireContactLock(contactId: string, agentName: string, ttlSeconds?: number, reason?: string, sessionId?: string) { return this.post("/locks", { contact_id: contactId, agent_name: agentName, ttl_seconds: ttlSeconds, reason, session_id: sessionId }); }
+  async releaseContactLock(contactId: string, agentName: string) { const r = await this.del(`/locks/${this.enc(contactId)}`, { agent_name: agentName }) as { released?: boolean }; return Boolean(r?.released); }
+  async checkContactLock(contactId: string) { return pick(await this.g(`/locks/${this.enc(contactId)}`), "lock") ?? null; }
+  async logAgentActivity(contactId: string, agentName: string, action: string, details?: string, sessionId?: string) { await this.post("/activity", { contact_id: contactId, agent_name: agentName, action, details, session_id: sessionId }); }
+  async getAgentActivity(contactId: string, limit: number) { return (pick<unknown[]>(await this.g("/activity", { contact_id: contactId, limit }), "activity") ?? []); }
 
-  async computeRelationshipStrength(): Promise<never> { return unavailable("computeRelationshipStrength"); }
-  async findWarmPath(): Promise<never> { return unavailable("findWarmPath"); }
-  async findConnectionsAtCompany(): Promise<never> { return unavailable("findConnectionsAtCompany"); }
-  async detectCoolingRelationships(): Promise<never> { return unavailable("detectCoolingRelationships"); }
+  async computeRelationshipStrength(contactId: string) { const r = await this.g(`/graph/strength/${this.enc(contactId)}`) as { strength?: number }; return Number(r?.strength ?? 0); }
+  async findWarmPath(fromContactId: string, toContactId: string) { return (pick<unknown[]>(await this.g("/graph/warm-path", { from: fromContactId, to: toContactId }), "path") ?? []); }
+  async findConnectionsAtCompany(companyId: string) { return (pick<unknown[]>(await this.g(`/graph/company/${this.enc(companyId)}`), "connections") ?? []); }
+  async detectCoolingRelationships() { return (pick<Array<{ display_name: string; days_since: number }>>(await this.g("/graph/cooling"), "cooling") ?? []); }
 
-  async resolveContactIdentity(): Promise<never> { return unavailable("resolveContactIdentity"); }
-  async addContactIdentity(): Promise<never> { return unavailable("addContactIdentity"); }
-  async getContactIdentities(): Promise<never> { return unavailable("getContactIdentities"); }
+  async resolveContactIdentity(partial: Parameters<typeof identityDb.resolveByPartial>[0]) { return (pick<Array<{ contact: { display_name: string; job_title?: string }; confidence_score: number; match_reasons: string[] }>>(await this.post("/identity/resolve", partial), "matches") ?? []); }
+  async addContactIdentity(contactId: string, system: string, externalId: string, externalUrl?: string, confidence: "verified" | "inferred" = "inferred") { return pick(await this.post("/identity", { contact_id: contactId, system, external_id: externalId, external_url: externalUrl, confidence }), "identity"); }
+  async getContactIdentities(contactId: string) { return (pick<unknown[]>(await this.g("/identity", { contact_id: contactId }), "identities") ?? []); }
 
   async semanticSearch(): Promise<never> { return unavailable("semanticSearch"); }
   async embedContact(): Promise<never> { return unavailable("embedContact"); }
   async embedAllContacts(): Promise<never> { return unavailable("embedAllContacts"); }
 
-  async getRelationshipSignals(): Promise<never> { return unavailable("getRelationshipSignals"); }
-  async getGhostContacts(): Promise<never> { return unavailable("getGhostContacts"); }
-  async getWarmingContacts(): Promise<never> { return unavailable("getWarmingContacts"); }
-  async recomputeSignals(): Promise<never> { return unavailable("recomputeSignals"); }
+  async getRelationshipSignals(contactId: string) { return (pick<Array<{ signal_type: string; reason: string; days_since_contact: number | null }>>(await this.g("/signals", { contact_id: contactId }), "signals") ?? []); }
+  async getGhostContacts() { return (pick<Array<{ display_name: string; days_since_contact: number | null }>>(await this.g("/signals/ghost"), "signals") ?? []); }
+  async getWarmingContacts() { return (pick<Array<{ display_name: string; days_since_contact: number | null }>>(await this.g("/signals/warming"), "signals") ?? []); }
+  async recomputeSignals() { const r = await this.post("/signals/recompute") as { updated?: number }; return { updated: Number(r?.updated ?? 0) }; }
 
-  async getFreshnessScore(): Promise<never> { return unavailable("getFreshnessScore"); }
-  async getStaleContacts(): Promise<never> { return unavailable("getStaleContacts"); }
-  async markFieldVerified(): Promise<never> { return unavailable("markFieldVerified"); }
+  async getFreshnessScore(contactId: string) { return pick(await this.g(`/freshness/${this.enc(contactId)}`), "freshness") as never; }
+  async getStaleContacts(threshold: number) { return (pick<Array<{ contact_id: string; display_name: string; score: number }>>(await this.g("/freshness/stale", { threshold }), "contacts") ?? []); }
+  async markFieldVerified(contactId: string, fieldName: string, source?: string) { await this.post("/freshness/verify", { contact_id: contactId, field_name: fieldName, source }); }
 
-  async addOrgChartEdge(): Promise<never> { return unavailable("addOrgChartEdge"); }
-  async listOrgChart(): Promise<never> { return unavailable("listOrgChart"); }
-  async setDealContactRole(): Promise<never> { return unavailable("setDealContactRole"); }
-  async getDealTeam(): Promise<never> { return unavailable("getDealTeam"); }
-  async getCoverageGaps(): Promise<never> { return unavailable("getCoverageGaps"); }
+  async addOrgChartEdge(companyId: string, contactAId: string, contactBId: string, edgeType: Parameters<typeof orgChartDb.addOrgChartEdge>[3], inferred = false) { return pick(await this.post("/org-chart", { company_id: companyId, contact_a_id: contactAId, contact_b_id: contactBId, edge_type: edgeType, inferred }), "edge"); }
+  async listOrgChart(companyId: string) { return (pick<Array<{ contact_a_name: string; contact_b_name: string; edge_type: string }>>(await this.g("/org-chart", { company_id: companyId }), "edges") ?? []); }
+  async setDealContactRole(dealId: string, contactId: string, accountRole: Parameters<typeof orgChartDb.setDealContactRole>[2]) { return pick(await this.post(`/deals/${this.enc(dealId)}/roles`, { contact_id: contactId, account_role: accountRole }), "role"); }
+  async getDealTeam(dealId: string) { return (pick<Array<{ display_name: string; account_role: string; job_title?: string }>>(await this.g(`/deals/${this.enc(dealId)}/team`), "team") ?? []); }
+  async getCoverageGaps(companyId: string) { return pick(await this.g(`/org-chart/coverage/${this.enc(companyId)}`), "coverage"); }
 
-  async getRecentContactEvents(): Promise<never> { return unavailable("getRecentContactEvents"); }
+  async getRecentContactEvents(since?: string, eventTypes?: string[]) { return (pick<unknown[]>(await this.g("/recent-events", { since, types: eventTypes?.length ? eventTypes.join(",") : undefined }), "events") ?? []); }
 
+  // Documents / health are encrypted with on-box vault key material — not exposed to the cloud.
   async addDocument(): Promise<never> { return unavailable("addDocument"); }
   async getDocument(): Promise<never> { return unavailable("getDocument"); }
   async listDocuments(): Promise<never> { return unavailable("listDocuments"); }
@@ -1011,46 +1045,49 @@ class ApiStore implements Store {
   async getHealthData(): Promise<never> { return unavailable("getHealthData"); }
   async deleteHealthData(): Promise<never> { return unavailable("deleteHealthData"); }
 
-  async createAudience(): Promise<never> { return unavailable("createAudience"); }
-  async getAudience(): Promise<never> { return unavailable("getAudience"); }
-  async listAudiences(): Promise<never> { return unavailable("listAudiences"); }
-  async updateAudience(): Promise<never> { return unavailable("updateAudience"); }
-  async deleteAudience(): Promise<never> { return unavailable("deleteAudience"); }
-  async resolveAudience(): Promise<never> { return unavailable("resolveAudience"); }
-  async setContactConsent(): Promise<never> { return unavailable("setContactConsent"); }
-  async listContactConsent(): Promise<never> { return unavailable("listContactConsent"); }
-  async suppressAddress(): Promise<never> { return unavailable("suppressAddress"); }
-  async unsuppressAddress(): Promise<never> { return unavailable("unsuppressAddress"); }
-  async listSuppressions(): Promise<never> { return unavailable("listSuppressions"); }
+  async createAudience(input: Parameters<typeof audiencesDb.createAudience>[0]) { return pick(await this.post("/audiences", input), "audience") as never; }
+  async getAudience(idOrSlug: string) { return pick(await this.g(`/audiences/${this.enc(idOrSlug)}`), "audience") as never; }
+  async listAudiences() { return (pick<Array<{ audience_id: string; name: string; match: string; consent_policy: string; predicates: unknown[]; suppression_synced_at?: string | null }>>(await this.g("/audiences"), "audiences") ?? []); }
+  async updateAudience(idOrSlug: string, input: Parameters<typeof audiencesDb.updateAudience>[1]) { return pick(await this.patch(`/audiences/${this.enc(idOrSlug)}`, input), "audience"); }
+  async deleteAudience(idOrSlug: string) { await this.del(`/audiences/${this.enc(idOrSlug)}`); }
+  async resolveAudience(idOrSlug: string, channel: Parameters<typeof audiencesDb.resolveAudience>[1]) { return pick(await this.g(`/audiences/${this.enc(idOrSlug)}/resolve`, { channel }), "resolution") as never; }
+  async setContactConsent(contactId: string, channel: Parameters<typeof audiencesDb.setContactConsent>[1], status: Parameters<typeof audiencesDb.setContactConsent>[2], source?: string) { return pick(await this.post("/consent", { contact_id: contactId, channel, status, source }), "consent") as never; }
+  async listContactConsent(contactId: string) { return (pick<Array<{ channel: string; status: string; source?: string | null; updated_at: string }>>(await this.g("/consent", { contact_id: contactId }), "consent") ?? []); }
+  async suppressAddress(input: Parameters<typeof audiencesDb.suppressAddress>[0]) { return pick(await this.post("/suppressions", input), "suppression") as never; }
+  async unsuppressAddress(channel: Parameters<typeof audiencesDb.unsuppressAddress>[0], address: string) { await this.del("/suppressions", { channel: channel as unknown as string, address }); }
+  async listSuppressions(opts: Parameters<typeof audiencesDb.listSuppressions>[0] = {}) { return (pick<Array<{ address: string; channel: string; reason?: string | null; synced_at?: string | null }>>(await this.g("/suppressions", stripUndefined(opts as Record<string, unknown>) as QueryParams), "suppressions") ?? []); }
   async syncSuppressions(): Promise<never> { return unavailable("syncSuppressions"); }
 
-  async generateBrief(): Promise<never> { return unavailable("generateBrief"); }
-  async getContactCard(): Promise<never> { return unavailable("getContactCard"); }
-  async getContactBrief(): Promise<never> { return unavailable("getContactBrief"); }
-  async assembleContext(): Promise<never> { return unavailable("assembleContext"); }
-  async getUpcomingItems(): Promise<never> { return unavailable("getUpcomingItems"); }
-  async getNetworkStats(): Promise<never> { return unavailable("getNetworkStats"); }
-  async listContactAudit(): Promise<never> { return unavailable("listContactAudit"); }
-  async getContactTimeline(): Promise<never> { return unavailable("getContactTimeline"); }
+  async generateBrief(contactId: string) { const r = await this.g(`/contacts/${this.enc(contactId)}/brief-text`) as { text?: string }; return String(r?.text ?? ""); }
+  async getContactCard(contactId: string) { return pick(await this.g(`/contacts/${this.enc(contactId)}/card`), "card") as object; }
+  async getContactBrief(contactId: string, taskContext?: string) { return pick(await this.g(`/contacts/${this.enc(contactId)}/brief`, taskContext ? { context: taskContext } : undefined), "brief") as object; }
+  async assembleContext(contactIds: string[], format: Parameters<typeof contextLib.assembleContext>[1]) { return pick(await this.post("/assemble-context", { contact_ids: contactIds, format }), "context") as object; }
+  async getUpcomingItems(days: number) { return (pick<unknown[]>(await this.g("/upcoming", { days }), "items") ?? []); }
+  async getNetworkStats() { return pick(await this.g("/network-stats"), "stats") as never; }
+  async listContactAudit() { return (pick<unknown[]>(await this.g("/contact-audit"), "audit") ?? []); }
+  async getContactTimeline(contactId: string, limit: number) { return (pick<Array<{ type: string; date?: string | null; title: string; body?: string | null }>>(await this.g(`/contacts/${this.enc(contactId)}/timeline`, { limit }), "timeline") ?? []); }
   async ingestMeetingParticipants(): Promise<never> { return unavailable("ingestMeetingParticipants"); }
 
+  // Images are on-box filesystem (or S3 in cloud, not yet wired); not exposed via /v1.
   async saveImage(): Promise<never> { return unavailable("saveImage"); }
   async getImagePath(): Promise<never> { return unavailable("getImagePath"); }
   async getImageAsBase64(): Promise<never> { return unavailable("getImageAsBase64"); }
   async deleteImage(): Promise<never> { return unavailable("deleteImage"); }
   async listImages(): Promise<never> { return unavailable("listImages"); }
 
+  // Vault key material is on-box only; cloud mode has no vault to init/unlock.
   async initVault(): Promise<never> { return unavailable("initVault"); }
   async unlockVault(): Promise<never> { return unavailable("unlockVault"); }
   async lockVault(): Promise<never> { return unavailable("lockVault"); }
-  async isVaultInitialized(): Promise<never> { return unavailable("isVaultInitialized"); }
-  async isVaultUnlocked(): Promise<never> { return unavailable("isVaultUnlocked"); }
-  async vaultStatus(): Promise<never> { return unavailable("vaultStatus"); }
+  async isVaultInitialized() { return false; }
+  async isVaultUnlocked() { return false; }
+  async vaultStatus() { return (pick<{ initialized: boolean; unlocked: boolean; document_count: number }>(await this.g("/vault-status"), "vault") ?? { initialized: false, unlocked: false, document_count: 0 }); }
 
   async saveFeedback(): Promise<never> { return unavailable("saveFeedback"); }
   // No on-box tables when pointed at the cloud; transport status conveys state.
   async storageStatus(): Promise<null> { return null; }
-  async listActiveWebhooks(): Promise<never> { return unavailable("listActiveWebhooks"); }
+  // No local webhook delivery registry when pointed at the cloud.
+  async listActiveWebhooks() { return []; }
 }
 
 let cached: Store | undefined;
