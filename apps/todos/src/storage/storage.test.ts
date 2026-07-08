@@ -718,6 +718,30 @@ describe("storage adapter contracts", () => {
     expect(await adapter.tasks.count({ project_id: project.id, include_subtasks: true })).toBe(2);
   });
 
+  test("resolves a task by metadata fingerprint (POST /v1/tasks/upsert dedupe)", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({
+      client: postgres.client,
+      sourceMachineId: "spark01",
+    });
+    const project = await adapter.projects.create({ name: "Fingerprint", path: "/tmp/fp" });
+    const created = await adapter.tasks.create({
+      title: "fp task",
+      project_id: project.id,
+      metadata: { fingerprint: "loop:abc:123" },
+    });
+
+    // getByFingerprint resolves the SAME row so upsert updates instead of duplicating.
+    const found = await adapter.tasks.getByFingerprint!("loop:abc:123");
+    expect(found?.id).toBe(created.id);
+
+    // A fingerprint nobody carries resolves to null (→ upsert creates a fresh task).
+    expect(await adapter.tasks.getByFingerprint!("loop:none")).toBeNull();
+
+    // The lookup is SQL-side against the shared dataset, never an in-JS scan.
+    expect(postgres.calls.some((c) => c.sql.includes("todos:task-by-fingerprint"))).toBe(true);
+  });
+
   test("matches SQLite plan slug semantics in the direct Postgres adapter", async () => {
     const postgres = createMemoryPostgresClient();
     const adapter = createPostgresTodosStorageAdapter({
@@ -1326,6 +1350,19 @@ function createMemoryPostgresClient(): {
         const offset = sql.includes("OFFSET $") ? Number(grabScalar("OFFSET ")) : 0;
         const page = selected.slice(offset, limit === undefined ? undefined : offset + limit);
         return { rows: page.map((payload) => ({ payload })) as T[] };
+      }
+
+      if (sql.includes("todos:task-by-fingerprint")) {
+        const [service, , fingerprint] = values;
+        const matches = [...rows.values()]
+          .filter((row) => row.service === service && row.objectType === "tasks" && !row.deletedAt)
+          .map((row) => row.payload as Record<string, unknown>)
+          .filter((payload) => {
+            const meta = payload["metadata"] as Record<string, unknown> | undefined;
+            return meta?.["fingerprint"] === fingerprint;
+          })
+          .sort((a, b) => String(a["created_at"]).localeCompare(String(b["created_at"])));
+        return { rows: (matches[0] ? [{ payload: matches[0] }] : []) as T[] };
       }
 
       if (sql.includes("INSERT INTO todos_sync_records")) {

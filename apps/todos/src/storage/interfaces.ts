@@ -195,6 +195,13 @@ export interface TodosTaskStore {
   lock?(id: string, agentId: string, context?: TodosStorageContext): MaybePromise<TodosLockResult>;
   /** Release a lock. Optional — cloud adapters only. */
   unlock?(id: string, agentId?: string, context?: TodosStorageContext): MaybePromise<boolean>;
+  /**
+   * Resolve the single task carrying `metadata.fingerprint === fingerprint` in the
+   * shared dataset, or null. Backs the `/v1/tasks/upsert` idempotent create-or-update
+   * so `task upsert` dedupes against the cloud dataset instead of this machine's local
+   * sqlite (the split-brain write it previously performed). Optional — cloud adapters only.
+   */
+  getByFingerprint?(fingerprint: string, context?: TodosStorageContext): MaybePromise<Task | null>;
 }
 
 export interface TodosProjectStore {

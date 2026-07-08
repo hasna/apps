@@ -141,6 +141,59 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
           missing,
         });
       }
+      // ── POST /v1/tasks/upsert — idempotent create-or-update by fingerprint ──
+      // The CLI `task upsert` previously wrote the task to this machine's LOCAL
+      // sqlite by fingerprint, so on a flipped (cloud) machine the row was absent
+      // from the shared /v1 dataset — a split-brain write. Routing the dedupe here
+      // resolves the fingerprint against the SHARED dataset so create-or-update is
+      // authoritative for every agent.
+      if (id === "upsert" && !action) {
+        if (method !== "POST") return error(405, `method ${method} not allowed on /v1/tasks/upsert`);
+        if (typeof store.tasks.getByFingerprint !== "function") {
+          return error(501, "fingerprint upsert is not supported by this storage backend");
+        }
+        const body = ((await readJson<CreateTaskInput & { fingerprint?: string; version?: number }>(req)) ??
+          {}) as CreateTaskInput & { fingerprint?: string; version?: number };
+        const fingerprint = typeof body.fingerprint === "string" ? body.fingerprint.trim() : "";
+        if (!fingerprint) return error(400, "fingerprint is required");
+        if (typeof body.title !== "string" || !body.title.trim()) return error(400, "title is required");
+        const existing = await store.tasks.getByFingerprint(fingerprint);
+        const metadata = {
+          ...(existing?.metadata ?? {}),
+          ...(body.metadata ?? {}),
+          fingerprint,
+        };
+        // Only pass through fields the caller actually set so an update never
+        // clobbers a stored value with an accidental undefined→default.
+        const fields: Record<string, unknown> = { metadata };
+        for (const key of [
+          "title", "description", "priority", "status", "project_id", "assigned_to",
+          "working_dir", "plan_id", "task_list_id", "tags", "due_at", "estimated_minutes",
+          "sla_minutes", "requires_approval", "recurrence_rule", "task_type",
+        ] as const) {
+          const bag = body as unknown as Record<string, unknown>;
+          if (bag[key] !== undefined) fields[key] = bag[key];
+        }
+        if (!existing) {
+          const task = await store.tasks.create(
+            { ...(fields as unknown as CreateTaskInput), title: body.title },
+            contextFromPrincipal(principal, body),
+          );
+          return json({ task, created: true }, 201);
+        }
+        try {
+          const task = await store.tasks.update(
+            existing.id,
+            { ...(fields as unknown as UpdateTaskInput), version: existing.version as number },
+            contextFromPrincipal(principal, body),
+          );
+          return json({ task, created: false });
+        } catch (e) {
+          const msg = (e as Error).message || "";
+          if (msg.includes("version conflict")) return error(409, msg);
+          throw e;
+        }
+      }
       if (!id) {
         if (method === "GET") {
           const filter = {
@@ -210,6 +263,16 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
             return json({ comment }, 201);
           }
           return error(405, `method ${method} not allowed on /v1/tasks/:id/comments`);
+        }
+        // ── /v1/tasks/:id/history — per-task audit trail ──
+        // The CLI `history` command read this machine's LOCAL sqlite task_history,
+        // so a flipped (cloud) machine reported "No history" for a cloud task whose
+        // audit trail lives in the shared dataset. Serve the shared history here.
+        if (action === "history") {
+          if (method !== "GET") return error(405, `method ${method} not allowed on /v1/tasks/:id/history`);
+          if (!(await store.tasks.get(id))) return error(404, "task not found");
+          const history = await store.audit.getTaskHistory(id);
+          return json({ history, count: history.length });
         }
         // ── /v1/tasks/:id/lock and /unlock — exclusive task locking ──
         // Locking is a task-field (`locked_by`/`locked_at`) operation resolved on

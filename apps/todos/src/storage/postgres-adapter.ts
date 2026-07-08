@@ -114,6 +114,7 @@ export function createPostgresTodosStorageAdapter(
       getChangedSince: (since, filters) => getChangedSince(since, filters, store),
       lock: (id, agentId) => lockTask(id, agentId, store),
       unlock: (id, agentId) => unlockTask(id, agentId, store),
+      getByFingerprint: (fingerprint) => store.getTaskByFingerprint(fingerprint),
     },
     dependencies: {
       add: (taskId, dependsOn, context) => addDependency(taskId, dependsOn, store, context),
@@ -331,6 +332,21 @@ class PostgresJsonRecordStore {
     }
     const result = await this.options.client.query<{ payload: unknown }>(sql, params);
     return result.rows.map((row) => payloadRecord<Task>(row.payload));
+  }
+
+  async getTaskByFingerprint(fingerprint: string): Promise<Task | null> {
+    await this.ensureSchema();
+    // Dedupe key lives in the task payload metadata. Exclude tombstoned rows so a
+    // deleted task never masks a fresh upsert. LIMIT 1 — the fingerprint is unique
+    // per the local upsert contract; the oldest live match wins deterministically.
+    const sql = `/* todos:task-by-fingerprint */ SELECT payload FROM ${this.tableName}
+      WHERE service = $1 AND object_type = $2 AND deleted_at IS NULL
+        AND payload->'metadata'->>'fingerprint' = $3
+      ORDER BY payload->>'created_at' ASC
+      LIMIT 1`;
+    const result = await this.options.client.query<{ payload: unknown }>(sql, [this.service, "tasks", fingerprint]);
+    const row = result.rows[0];
+    return row ? payloadRecord<Task>(row.payload) : null;
   }
 
   async countTasks(filter: TaskFilter): Promise<number> {

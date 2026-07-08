@@ -184,6 +184,43 @@ export async function cloudAddComment(
 }
 
 /**
+ * Per-task audit trail (`GET /v1/tasks/:id/history`). The CLI `history` command
+ * read this machine's LOCAL sqlite, so a flipped machine reported "No history" for
+ * a cloud task whose trail lives in the shared dataset. Requires the
+ * `/v1/tasks/:id/history` server route (ECS redeploy).
+ */
+export async function cloudTaskHistory(client: HasnaStorageClient, taskId: string): Promise<TaskHistory[]> {
+  const raw = await client.transport.get<unknown>(`/tasks/${encodeURIComponent(taskId)}/history`);
+  const envelope = (raw ?? {}) as { history?: TaskHistory[] };
+  if (Array.isArray(envelope.history)) return envelope.history;
+  return Array.isArray(raw) ? (raw as TaskHistory[]) : [];
+}
+
+/** Result of an idempotent fingerprint upsert (`POST /v1/tasks/upsert`). */
+export interface CloudUpsertTaskResult {
+  task: Task;
+  created: boolean;
+}
+
+/**
+ * Idempotent create-or-update a task by stable fingerprint on the SHARED dataset
+ * (`POST /v1/tasks/upsert`). Fixes the split-brain write where `task upsert` wrote
+ * to this machine's LOCAL sqlite (absent from the cloud /v1 API). Requires the
+ * `/v1/tasks/upsert` server route (ECS redeploy).
+ */
+export async function cloudUpsertTaskByFingerprint(
+  client: HasnaStorageClient,
+  input: Record<string, unknown> & { fingerprint: string; title: string },
+): Promise<CloudUpsertTaskResult> {
+  const raw = await client.transport.post<unknown>("/tasks/upsert", input);
+  const envelope = (raw ?? {}) as { task?: unknown; created?: boolean };
+  return {
+    task: unwrapTask(envelope.task ?? raw),
+    created: Boolean(envelope.created),
+  };
+}
+
+/**
  * Count tasks matching a filter. The `/v1/tasks` list response now returns a
  * SQL-side `total` (full match count, independent of limit/offset), so we ask for
  * a single row and read `total` instead of pulling the whole result set into the

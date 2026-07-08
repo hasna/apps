@@ -27,6 +27,8 @@ import {
   cloudTaskAction,
   cloudLockTask,
   cloudUnlockTask,
+  cloudTaskHistory,
+  cloudUpsertTaskByFingerprint,
 } from "../cloud-router.js";
 import type { TaskPriority, TaskStatus } from "../../types/index.js";
 import {
@@ -346,7 +348,7 @@ export function registerTaskCommands(program: Command) {
     .option("--expected <json-or-text>", "Expected value metadata")
     .option("--observed <json-or-text>", "Observed value metadata")
     .option("--acceptance <json-or-text>", "Acceptance metadata")
-    .action((opts) => {
+    .action(async (opts) => {
       const globalOpts = program.opts();
       opts.tags = opts.tags || opts.tag;
       opts.list = opts.list || opts.taskList;
@@ -363,6 +365,37 @@ export function registerTaskCommands(program: Command) {
         }
         return id;
       })() : undefined;
+      // self_hosted cloud routing: dedupe-and-upsert on the SHARED dataset. The
+      // local path wrote the task to this machine's sqlite by fingerprint, so on a
+      // flipped machine the row never reached the cloud /v1 API (a split-brain write).
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        let cloudResult;
+        try {
+          cloudResult = await cloudUpsertTaskByFingerprint(cloud, {
+            fingerprint: opts.fingerprint,
+            title: opts.title,
+            description: opts.description,
+            priority: parsePriority(opts.priority),
+            status: parseStatus(opts.status),
+            task_list_id: taskListId,
+            tags: parseTags(opts.tags),
+            metadata: buildExpectationMetadata(opts),
+            working_dir: opts.workingDir ? resolve(opts.workingDir) : process.cwd(),
+            project_id: projectId,
+            assigned_to: opts.assign,
+          });
+        } catch (e) {
+          handleError(e);
+        }
+        if (globalOpts.json) {
+          output(cloudResult, true);
+        } else {
+          console.log(chalk.green(cloudResult.created ? "Task created:" : "Task updated:"));
+          console.log(formatTaskLine(cloudResult.task));
+        }
+        return;
+      }
       let result;
       try {
         result = upsertTaskByFingerprint({
@@ -889,8 +922,20 @@ export function registerTaskCommands(program: Command) {
     .action(async (id: string) => {
       const globalOpts = program.opts();
       const resolvedId = resolveTaskId(id);
-      const { getTaskHistory } = await import("../../db/audit.js");
-      const history = getTaskHistory(resolvedId);
+      // self_hosted cloud routing: read the SHARED audit trail. The local path read
+      // this machine's sqlite and reported "No history" for a cloud task.
+      const cloud = getTodosCloudClient();
+      let history;
+      if (cloud) {
+        try {
+          history = await cloudTaskHistory(cloud, resolvedId);
+        } catch (e) {
+          handleError(e);
+        }
+      } else {
+        const { getTaskHistory } = await import("../../db/audit.js");
+        history = getTaskHistory(resolvedId);
+      }
 
       if (globalOpts.json) {
         output(history, true);
@@ -1278,7 +1323,7 @@ export function registerTaskCommands(program: Command) {
     .description("Bulk operation on multiple tasks (done, start, delete, plan)")
     .option("--plan <id>", "Plan ID for the plan/move-plan action")
     .option("--clear-plan", "Remove plan assignment for the plan/move-plan action")
-    .action((action: string, ids: string[], opts: { plan?: string; clearPlan?: boolean }) => {
+    .action(async (action: string, ids: string[], opts: { plan?: string; clearPlan?: boolean }) => {
       const globalOpts = program.opts();
       const results: { id: string; success: boolean; error?: string }[] = [];
       const isPlanAction = action === "plan" || action === "move-plan";
@@ -1289,6 +1334,49 @@ export function registerTaskCommands(program: Command) {
       const planId = isPlanAction
         ? opts.plan ? resolvePlanId(opts.plan) : null
         : undefined;
+      const knownActions = new Set(["done", "complete", "start", "delete", "plan", "move-plan"]);
+      if (!knownActions.has(action)) {
+        console.error(chalk.red(`Unknown action: ${action}. Use: done, start, delete, plan`));
+        process.exit(1);
+      }
+
+      // self_hosted cloud routing: run each op against the SHARED dataset. The local
+      // path resolved ids against this machine's sqlite — `bulk done` threw
+      // "Task not found" for valid cloud task ids (while `bulk delete` silently
+      // no-op'd), a split-brain read.
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        for (const rawId of ids) {
+          try {
+            const resolvedId = resolveTaskId(rawId);
+            if (action === "done" || action === "complete") {
+              await cloudTaskAction(cloud, resolvedId, "complete", { agent_id: globalOpts.agent });
+            } else if (action === "start") {
+              await cloudTaskAction(cloud, resolvedId, "start", { agent_id: globalOpts.agent || "cli" });
+            } else if (action === "delete") {
+              await cloudDeleteTask(cloud, resolvedId);
+            } else {
+              const current = await cloudGetTask(cloud, resolvedId);
+              if (!current) throw new Error(`Task not found: ${rawId}`);
+              await cloudUpdateTask(cloud, resolvedId, { version: current.version, plan_id: planId });
+            }
+            results.push({ id: resolvedId, success: true });
+          } catch (e) {
+            results.push({ id: rawId, success: false, error: e instanceof Error ? e.message : String(e) });
+          }
+        }
+        const succeededCloud = results.filter(r => r.success).length;
+        const failedCloud = results.filter(r => !r.success).length;
+        if (globalOpts.json) {
+          output({ results, succeeded: succeededCloud, failed: failedCloud }, true);
+        } else {
+          console.log(chalk.green(`${action}: ${succeededCloud} succeeded, ${failedCloud} failed`));
+          for (const r of results.filter(r => !r.success)) {
+            console.log(chalk.red(`  ${r.id}: ${r.error}`));
+          }
+        }
+        return;
+      }
 
       for (const rawId of ids) {
         try {
