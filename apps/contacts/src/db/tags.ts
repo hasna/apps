@@ -9,6 +9,7 @@ import type {
 } from "../types/index.js";
 import { ContactNotFoundError, CompanyNotFoundError, DuplicateTagNameError, TagNotFoundError } from "../types/index.js";
 import { getDatabase, uuid } from "./database.js";
+import { recordTombstone } from "./tombstones.js";
 
 // ─── Row mapper ───────────────────────────────────────────────────────────────
 
@@ -79,6 +80,7 @@ export function deleteTag(id: string, db?: ContactsDatabase): void {
   const d = db || getDatabase();
   const row = d.query(`SELECT id FROM tags WHERE id = ?`).get(id);
   if (!row) throw new TagNotFoundError(id);
+  recordTombstone("tags", id, { db: d, reason: "tag.deleted" });
   d.run(`DELETE FROM tags WHERE id = ?`, [id]);
 }
 

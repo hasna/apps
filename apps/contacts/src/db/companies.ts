@@ -23,6 +23,7 @@ import type {
 import { CompanyNotFoundError } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
 import { logActivity } from "./activity.js";
+import { recordTombstone } from "./tombstones.js";
 
 // ─── Row mappers ──────────────────────────────────────────────────────────────
 
@@ -260,6 +261,7 @@ export function deleteCompany(id: string, db?: ContactsDatabase): void {
   if (!row) throw new CompanyNotFoundError(id);
 
   logActivity(d, { company_id: id, action: "company.deleted", details: `Deleted company: ${row.name}` });
+  recordTombstone("companies", id, { db: d, reason: "company.deleted" });
 
   d.run(`DELETE FROM companies WHERE id = ?`, [id]);
 }
