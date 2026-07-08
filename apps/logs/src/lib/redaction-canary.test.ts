@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTestDb } from "../db/index.ts";
-import { runCommand } from "./command-runner.ts";
+import { LocalRunSink, runCommand } from "./command-runner.ts";
 import {
   type EventCatalogBusEvent,
   clearTelemetryEventBusesForTests,
@@ -113,8 +113,7 @@ describe("redaction canary validation", () => {
       });
       const agentStreamEvent = await nextStreamEvent(stream);
 
-      const commandResult = await runCommand(
-        db,
+      const commandResult = await runCommand(new LocalRunSink(db),
         [
           process.execPath,
           "-e",

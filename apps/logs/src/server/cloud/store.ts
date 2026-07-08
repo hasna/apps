@@ -7,13 +7,16 @@
  * thin, stateless API in front of RDS.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { TypedQueryClient } from "../../generated/storage-kit/index.ts";
 import type { AlertRule } from "../../lib/alerts.ts";
 import type { CompareResult } from "../../lib/compare.ts";
 import type { DiagnoseInclude, DiagnosisResult } from "../../lib/diagnose.ts";
+import type { TelemetryEnvelope } from "../../lib/event-store.ts";
 import type { EventCatalogEntry, EventCatalogQuery } from "../../lib/events.ts";
 import type { Issue } from "../../lib/issues.ts";
+import { normalizeAndRedactUniversalEvent } from "../../lib/universal-ingest.ts";
+import type { UniversalEventInput } from "../../lib/universal-ingest.ts";
 import type { SessionContext } from "../../lib/session-context.ts";
 import type {
   TestReportCaseEntry,
@@ -79,6 +82,15 @@ export interface ListLogsQuery {
   trace_id?: string;
   q?: string;
   limit?: number;
+}
+
+/** Read a non-empty string attribute from a loosely-typed record, else null. */
+function strAttr(
+  record: Record<string, unknown>,
+  key: string,
+): string | null {
+  const value = record[key];
+  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 function parseMetadata(value: unknown): Record<string, unknown> | null {
@@ -704,7 +716,91 @@ export class CloudLogStore {
     );
   }
 
-  // --- events catalog (read) ----------------------------------------------
+  // --- events catalog (ingest + read) -------------------------------------
+
+  /**
+   * Ingest one universal telemetry event into the shared cloud event catalog.
+   *
+   * The input is validated + normalized + redacted by the SAME DB-agnostic pass
+   * the local SQLite store uses, so secrets never reach Postgres. Ingest is
+   * idempotent on `event_id`: a re-post returns the stored event with
+   * `inserted: false`. The raw envelope body is NOT persisted in the cloud tier
+   * (it lives only in local append-only segments), so the segment coordinates
+   * are cloud placeholders and `getEvent` always returns `raw: null`.
+   */
+  async createEvent(
+    input: UniversalEventInput,
+  ): Promise<{ inserted: boolean; event: EventCatalogEntry }> {
+    const { envelope, metadata } = normalizeAndRedactUniversalEvent(input);
+
+    const existing = await this.getEvent(envelope.event_id);
+    if (existing) return { inserted: false, event: existing };
+
+    const attrs = envelope.attributes ?? {};
+    const body = envelope.body ?? {};
+    const projectId = strAttr(attrs, "project_id");
+    const pageId = strAttr(attrs, "page_id");
+    const artifactId =
+      strAttr(attrs, "artifact_id") ?? strAttr(body, "artifact_id");
+    // Stable content hash of the redacted envelope (no raw segment in cloud).
+    const recordHash = createHash("sha256")
+      .update(JSON.stringify(envelope))
+      .digest("hex");
+
+    await this.client.execute(
+      `INSERT INTO event_records
+         (event_id, schema_version, source_event_id, event_type, event_time,
+          ingest_time, severity, source, project_id, page_id, log_id, machine_id,
+          repo_id, app_id, process_id, run_id, trace_id, span_id, parent_span_id,
+          session_id, release_id, environment, artifact_id, privacy_tier,
+          segment_id, segment_path, byte_offset, byte_length, record_hash,
+          message, metadata)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
+               $19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31)
+       ON CONFLICT (event_id) DO NOTHING`,
+      [
+        envelope.event_id,
+        envelope.schema_version,
+        envelope.source_event_id ?? null,
+        envelope.type,
+        envelope.event_time,
+        envelope.ingest_time,
+        envelope.severity ?? null,
+        envelope.source,
+        projectId,
+        pageId,
+        null,
+        envelope.machine_id ?? null,
+        envelope.repo_id ?? null,
+        envelope.app_id ?? null,
+        envelope.process_id ?? null,
+        envelope.run_id ?? null,
+        envelope.trace_id ?? null,
+        envelope.span_id ?? null,
+        envelope.parent_span_id ?? null,
+        envelope.session_id ?? null,
+        envelope.release_id ?? null,
+        envelope.environment ?? null,
+        artifactId,
+        envelope.privacy ?? null,
+        "cloud",
+        "cloud",
+        0,
+        0,
+        recordHash,
+        envelope.message ?? null,
+        JSON.stringify(metadata ?? {}),
+      ],
+    );
+
+    const event = await this.getEvent(envelope.event_id);
+    if (!event) {
+      throw new Error(
+        `Event was written but cannot be read: ${envelope.event_id}`,
+      );
+    }
+    return { inserted: true, event };
+  }
 
   async searchEvents(
     query: EventCatalogQuery = {},

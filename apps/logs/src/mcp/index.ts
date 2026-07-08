@@ -831,7 +831,6 @@ export function buildServer(): McpServer {
       attributes: z.record(z.string(), z.unknown()).optional(),
     },
     async (args) => {
-      const store = local("event_push");
       const projectId = await store.resolveProjectId(args.project_id);
       const hasExplicitIdentity = Boolean(
         args.machine_id || args.repo_id || args.app_id,
@@ -841,7 +840,7 @@ export function buildServer(): McpServer {
         project_id: projectId,
         environment: args.environment ?? process.env.NODE_ENV ?? "development",
       };
-      const result = store.pushUniversalEvent(eventInput, {
+      const result = await store.pushEvent(eventInput, {
         detectIdentity: !hasExplicitIdentity,
         projectNameOrId: args.project_id,
         environment: args.environment,

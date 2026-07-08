@@ -18,6 +18,7 @@ import {
 } from "../../generated/storage-kit/index.ts";
 import type { EventCatalogQuery } from "../../lib/events.ts";
 import type { TestReportQuery } from "../../lib/test-reports.ts";
+import type { UniversalEventInput } from "../../lib/universal-ingest.ts";
 import { buildOpenApiDocument } from "./openapi.ts";
 import { CloudLogStore, LOG_LEVELS, type LogLevel } from "./store.ts";
 
@@ -331,7 +332,44 @@ export function buildCloudApp(options: CloudAppOptions): Hono {
     return c.json(job, 201);
   });
 
-  // Events catalog (read; raw envelope is local-only)
+  // Events catalog (raw envelope is local-only)
+  // Ingest one universal telemetry event, or a `{ events: [...] }` batch — the
+  // data-plane path for `logs run` capture, `events push`, and the SDK/MCP.
+  v1.post("/events", requireScope("logs:write"), async (c) => {
+    const body = await c.req.json().catch(() => null);
+    if (!body || typeof body !== "object") {
+      return c.json({ error: "body must be a JSON object" }, 400);
+    }
+    const batch = Array.isArray((body as { events?: unknown }).events);
+    const inputs = (
+      batch ? (body as { events: unknown[] }).events : [body]
+    ) as UniversalEventInput[];
+    if (inputs.length === 0) {
+      return c.json({ error: "body must contain at least one event" }, 400);
+    }
+    try {
+      const results = [];
+      for (const event of inputs) results.push(await store.createEvent(event));
+      if (!batch) {
+        const [only] = results;
+        if (!only) return c.json({ error: "no event ingested" }, 422);
+        return c.json(only.event, only.inserted ? 201 : 200);
+      }
+      return c.json(
+        {
+          inserted: results.filter((r) => r.inserted).length,
+          events: results.map((r) => r.event),
+        },
+        201,
+      );
+    } catch (error) {
+      return c.json(
+        { error: error instanceof Error ? error.message : String(error) },
+        422,
+      );
+    }
+  });
+
   v1.get("/events", requireScope("logs:read"), async (c) =>
     c.json({
       events: await store.searchEvents(parseEventQuery(c.req.query())),

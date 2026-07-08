@@ -22,14 +22,34 @@
  */
 import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
 import type { AlertRule } from "../lib/alerts.ts";
+import {
+  ApiRunSink,
+  type CommandRunOptions,
+  type CommandRunResult,
+  runCapturedCommand,
+} from "../lib/command-runner.ts";
 import type { CompareResult } from "../lib/compare.ts";
 import type { LogCount } from "../lib/count.ts";
 import type { DiagnoseInclude, DiagnosisResult } from "../lib/diagnose.ts";
 import type { EventCatalogEntry, EventCatalogQuery } from "../lib/events.ts";
 import type { HealthResult } from "../lib/health.ts";
+import { computeRuntimeIdentity } from "../lib/identity.ts";
 import type { Issue } from "../lib/issues.ts";
 import type { SessionContext } from "../lib/session-context.ts";
+import {
+  type FollowStructuredJsonLinesOptions,
+  type FollowStructuredJsonLinesResult,
+  followStructuredJsonLines,
+} from "../lib/structured-log-follow.ts";
+import {
+  type StructuredLogOptions,
+  parseStructuredJsonLines,
+} from "../lib/structured-logs.ts";
 import type { TestReportEntry, TestReportQuery } from "../lib/test-reports.ts";
+import type {
+  UniversalEventIngestResult,
+  UniversalEventInput,
+} from "../lib/universal-ingest.ts";
 import type {
   LogEntry,
   LogLevel,
@@ -47,6 +67,8 @@ import type {
   CreateJobInput,
   CreatePageInput,
   CreateProjectInput,
+  ImportStructuredLogsResult,
+  PushEventOptions,
   Store,
   StoreMode,
 } from "./types.ts";
@@ -102,6 +124,17 @@ function levelsOf(level?: LogLevel | LogLevel[]): LogLevel[] {
   return Array.isArray(level) ? level : [level];
 }
 
+/** Drop null/undefined entries so absent optionals are omitted, not sent as null. */
+function compact(
+  value: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (item !== undefined && item !== null) out[key] = item;
+  }
+  return out;
+}
+
 /** HTTP-backed {@link Store} for `self_hosted` and `cloud` tiers. */
 export class ApiStore implements Store {
   readonly mode: StoreMode;
@@ -122,10 +155,14 @@ export class ApiStore implements Store {
   async listLogs(query: LogQuery): Promise<LogRow[]> {
     const q: Record<string, string | number | undefined> = {};
     if (query.project_id) q.project_id = query.project_id;
+    if (query.page_id) q.page_id = query.page_id;
     if (query.service) q.service = query.service;
     if (query.trace_id) q.trace_id = query.trace_id;
     if (query.text) q.q = query.text;
+    if (query.since) q.since = query.since;
+    if (query.until) q.until = query.until;
     if (query.limit !== undefined) q.limit = query.limit;
+    if (query.offset !== undefined) q.offset = query.offset;
     const levels = levelsOf(query.level);
     if (levels.length === 1) q.level = levels[0];
     const res = await this.client.list<Record<string, unknown>>(LOGS, {
@@ -158,25 +195,69 @@ export class ApiStore implements Store {
   }
 
   async ingestLog(entry: LogEntry): Promise<LogRow> {
-    const body: Record<string, unknown> = {
+    // Forward the FULL entry so cloud rows keep their run/process/identity
+    // linkage (the server's /api/logs accepts the complete LogEntry). The
+    // narrower field set here previously dropped machine/repo/app/process/run,
+    // orphaning `logs run` output from its process on a flipped machine. Nullish
+    // optionals are OMITTED (not sent as null): the server's ingest validator
+    // rejects null for typed optional fields like `source`/`privacy`/`metadata`.
+    const body = compact({
+      id: entry.id,
       level: entry.level,
       message: entry.message,
-      project_id: entry.project_id ?? null,
-      source: entry.source ?? null,
-      service: entry.service ?? null,
-      trace_id: entry.trace_id ?? null,
-      session_id: entry.session_id ?? null,
-      agent: entry.agent ?? null,
-      url: entry.url ?? null,
-      stack_trace: entry.stack_trace ?? null,
-      metadata: entry.metadata ?? null,
-      timestamp: entry.timestamp ?? null,
-    };
+      source_event_id: entry.source_event_id,
+      project_id: entry.project_id,
+      page_id: entry.page_id,
+      source: entry.source,
+      service: entry.service,
+      privacy: entry.privacy,
+      machine_id: entry.machine_id,
+      repo_id: entry.repo_id,
+      app_id: entry.app_id,
+      process_id: entry.process_id,
+      run_id: entry.run_id,
+      trace_id: entry.trace_id,
+      span_id: entry.span_id,
+      parent_span_id: entry.parent_span_id,
+      session_id: entry.session_id,
+      release_id: entry.release_id,
+      environment: entry.environment,
+      agent: entry.agent,
+      url: entry.url,
+      stack_trace: entry.stack_trace,
+      metadata: entry.metadata,
+      timestamp: entry.timestamp,
+    });
     const record = await this.client.create<Record<string, unknown>>(
       LOGS,
       body,
     );
     return toLogRow(record);
+  }
+
+  async importStructuredLogs(
+    input: string,
+    options: StructuredLogOptions,
+    source: string,
+  ): Promise<ImportStructuredLogsResult> {
+    const entries = parseStructuredJsonLines(input, options, source);
+    const ids: string[] = [];
+    for (const entry of entries) {
+      const row = await this.ingestLog(entry);
+      ids.push(row.id);
+    }
+    return { inserted: ids.length, ids };
+  }
+
+  followStructuredLogs(
+    file: string,
+    options: FollowStructuredJsonLinesOptions,
+  ): Promise<FollowStructuredJsonLinesResult> {
+    return followStructuredJsonLines(
+      (entry) => this.ingestLog(entry),
+      file,
+      options,
+    );
   }
 
   async deleteLog(id: string): Promise<boolean> {
@@ -311,6 +392,50 @@ export class ApiStore implements Store {
     });
     writeLine("]");
     return events.length;
+  }
+
+  async pushEvent(
+    input: UniversalEventInput,
+    options: PushEventOptions = {},
+  ): Promise<UniversalEventIngestResult> {
+    const enriched: UniversalEventInput = { ...input };
+    // Identity auto-detect is a pure client-side computation in api mode: the
+    // deterministic machine/repo/app IDs travel on the event and the shared
+    // server registers/indexes them (there is no on-box catalog to upsert).
+    const hasExplicitIdentity = Boolean(
+      input.machine_id || input.repo_id || input.app_id,
+    );
+    if (options.detectIdentity && !hasExplicitIdentity) {
+      const identity = computeRuntimeIdentity(process.cwd(), {
+        project_id: input.project_id ?? null,
+        environment: options.environment ?? input.environment,
+      });
+      enriched.machine_id = identity.machine_id;
+      enriched.repo_id = identity.repo_id ?? undefined;
+      enriched.app_id = identity.app_id ?? undefined;
+      enriched.environment = options.environment ?? identity.environment;
+    }
+    // POST as a single-item batch: the server's batch path returns
+    // `{ inserted, events }` (201), giving us the inserted flag + stored event
+    // without depending on the response status code.
+    const res = await this.client.transport.request<{
+      inserted?: number;
+      events?: EventCatalogEntry[];
+    }>("POST", "/events", { events: [enriched] });
+    const event = res?.events?.[0];
+    if (!event) {
+      throw new Error("event ingest returned no event record");
+    }
+    return { inserted: (res?.inserted ?? 0) > 0, event };
+  }
+
+  // ── subprocess capture (`logs run`) ─────────────────────
+
+  runCapturedCommand(
+    command: string[],
+    options: CommandRunOptions,
+  ): Promise<CommandRunResult> {
+    return runCapturedCommand(new ApiRunSink(this), command, options);
   }
 
   // ── test reports ────────────────────────────────────────

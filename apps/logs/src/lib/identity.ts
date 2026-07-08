@@ -42,6 +42,38 @@ export function detectRuntimeIdentity(
   };
 }
 
+/**
+ * Pure (db-free) runtime identity: the SAME deterministic machine/repo/app IDs
+ * as {@link detectRuntimeIdentity} but WITHOUT writing to the local catalog
+ * tables. Used by the ApiStore transport (self_hosted/cloud), where there is no
+ * on-box catalog to upsert into — the resolved IDs travel on the event and the
+ * shared cloud server indexes/registers them there.
+ */
+export function computeRuntimeIdentity(
+  cwd: string,
+  opts: IdentityDetectionOptions = {},
+): RuntimeIdentity {
+  const environment = opts.environment ?? process.env.NODE_ENV ?? "development";
+  const repo = detectRepo(cwd);
+  const app = detectApp(
+    cwd,
+    repo?.id ?? null,
+    opts.project_id ?? null,
+    environment,
+  );
+  return {
+    machine_id: machineFingerprintId(),
+    repo_id: repo?.id ?? null,
+    app_id: app?.id ?? null,
+    environment,
+  };
+}
+
+/** Deterministic machine ID from stable host facts (no db, no side effects). */
+export function machineFingerprintId(): string {
+  return `machine_${sha256(`${hostname()}:${platform()}:${arch()}`).slice(0, 16)}`;
+}
+
 function upsertMachine(db: Database): string {
   const info = {
     hostname: hostname(),
@@ -49,7 +81,7 @@ function upsertMachine(db: Database): string {
     arch: arch(),
     os_release: release(),
   };
-  const id = `machine_${sha256(`${info.hostname}:${info.platform}:${info.arch}`).slice(0, 16)}`;
+  const id = machineFingerprintId();
   db.prepare(`
     INSERT INTO machines (id, hostname, platform, arch, os_release, metadata, last_seen_at)
     VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))

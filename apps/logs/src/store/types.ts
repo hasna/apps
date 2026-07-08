@@ -13,6 +13,10 @@
  * the transport from the environment, and callers never branch on mode again.
  */
 import type { AlertRule } from "../lib/alerts.ts";
+import type {
+  CommandRunOptions,
+  CommandRunResult,
+} from "../lib/command-runner.ts";
 import type { CompareResult } from "../lib/compare.ts";
 import type { LogCount } from "../lib/count.ts";
 import type { DiagnoseInclude, DiagnosisResult } from "../lib/diagnose.ts";
@@ -20,7 +24,16 @@ import type { EventCatalogEntry, EventCatalogQuery } from "../lib/events.ts";
 import type { HealthResult } from "../lib/health.ts";
 import type { Issue } from "../lib/issues.ts";
 import type { SessionContext } from "../lib/session-context.ts";
+import type {
+  FollowStructuredJsonLinesOptions,
+  FollowStructuredJsonLinesResult,
+} from "../lib/structured-log-follow.ts";
+import type { StructuredLogOptions } from "../lib/structured-logs.ts";
 import type { TestReportEntry, TestReportQuery } from "../lib/test-reports.ts";
+import type {
+  UniversalEventIngestResult,
+  UniversalEventInput,
+} from "../lib/universal-ingest.ts";
 import type {
   LogEntry,
   LogQuery,
@@ -76,14 +89,23 @@ export interface CreateAlertRuleInput {
   webhook_url?: string;
 }
 
-/** Options for {@link LocalStore.pushUniversalEvent}. */
-export interface PushUniversalEventOptions {
+/** Options for {@link Store.pushEvent} identity auto-detection. */
+export interface PushEventOptions {
   /** Auto-detect runtime identity (machine/repo/app) when none was supplied. */
   detectIdentity?: boolean;
   /** Project name-or-id used to scope identity detection. */
   projectNameOrId?: string;
   /** Explicit environment override. */
   environment?: string;
+}
+
+/** Back-compat alias. @deprecated use {@link PushEventOptions}. */
+export type PushUniversalEventOptions = PushEventOptions;
+
+/** Result of importing structured JSONL log records through a {@link Store}. */
+export interface ImportStructuredLogsResult {
+  inserted: number;
+  ids: string[];
 }
 
 /**
@@ -102,6 +124,17 @@ export interface Store {
   /** Trace context plus an optional ±window of neighbouring logs by time. */
   getLogContextFromId(logId: string, window: number): Promise<LogRow[]>;
   ingestLog(entry: LogEntry): Promise<LogRow>;
+  /** Import newline-delimited structured JSON log records. */
+  importStructuredLogs(
+    input: string,
+    options: StructuredLogOptions,
+    source: string,
+  ): Promise<ImportStructuredLogsResult>;
+  /** Tail a JSONL file, ingesting appended records through this transport. */
+  followStructuredLogs(
+    file: string,
+    options: FollowStructuredJsonLinesOptions,
+  ): Promise<FollowStructuredJsonLinesResult>;
   deleteLog(id: string): Promise<boolean>;
   countLogs(input: CountLogsInput): Promise<LogCount>;
   summarize(
@@ -122,6 +155,18 @@ export interface Store {
     query: EventCatalogQuery,
     writeLine: (line: string) => void,
   ): Promise<number>;
+  /** Ingest one raw-first universal telemetry event. */
+  pushEvent(
+    input: UniversalEventInput,
+    options?: PushEventOptions,
+  ): Promise<UniversalEventIngestResult>;
+
+  // ── subprocess capture (`logs run`) ─────────────────────
+  /** Run a command and capture process/stdout/stderr telemetry. */
+  runCapturedCommand(
+    command: string[],
+    options: CommandRunOptions,
+  ): Promise<CommandRunResult>;
 
   // ── test reports ────────────────────────────────────────
   listTestReports(query: TestReportQuery): Promise<TestReportEntry[]>;

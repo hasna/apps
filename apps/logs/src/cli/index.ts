@@ -325,14 +325,13 @@ program
   )
   .option("--json", "Print import summary as JSON")
   .action(async (file, opts) => {
-    const local = requireLocalStore("import-jsonl");
     try {
       const metadata = parseJsonObjectOption(opts.metadata, "--metadata");
       const ingestOptions = {
         format: opts.format as StructuredLogFormat,
         source: opts.source as LogSource | undefined,
         service: opts.service,
-        project_id: await local.resolveProjectId(opts.project),
+        project_id: await store.resolveProjectId(opts.project),
         machine_id: opts.machine,
         repo_id: opts.repo,
         app_id: opts.app,
@@ -351,7 +350,7 @@ program
       };
       if (opts.follow) {
         if (file === "-") throw new Error("--follow requires a file path");
-        summary = await local.followStructuredLogs(file, {
+        summary = await store.followStructuredLogs(file, {
           ...ingestOptions,
           from_end: Boolean(opts.fromEnd),
           poll_ms: parsePositiveIntOption(opts.poll, "--poll", 250),
@@ -365,15 +364,11 @@ program
       } else {
         const input =
           file === "-" ? readFileSync(0, "utf8") : readFileSync(file, "utf8");
-        const rows = local.importStructuredLogs(
+        summary = await store.importStructuredLogs(
           input,
           ingestOptions,
           file === "-" ? "stdin" : file,
         );
-        summary = {
-          inserted: rows.length,
-          ids: rows.map((row) => row.id),
-        };
       }
       if (opts.json) {
         printJson(summary);
@@ -403,13 +398,12 @@ program
   .option("--no-tee", "Do not mirror child stdout/stderr to this terminal")
   .allowUnknownOption(true)
   .action(async (cmd: string[], opts) => {
-    const local = requireLocalStore("run");
     const runAbort = createRunAbortController();
-    let result: Awaited<ReturnType<typeof local.runCapturedCommand>>;
+    let result: Awaited<ReturnType<typeof store.runCapturedCommand>>;
     try {
-      result = await local.runCapturedCommand(cmd, {
+      result = await store.runCapturedCommand(cmd, {
         cwd: opts.cwd,
-        project_id: await local.resolveProjectId(opts.project),
+        project_id: await store.resolveProjectId(opts.project),
         service: opts.service,
         environment: opts.environment,
         tee: opts.json ? false : opts.tee !== false,
@@ -533,12 +527,17 @@ doctorCmd
   .option("--json", "Output as JSON")
   .action((opts) => {
     const local = requireLocalStore("db doctor rebuild-index");
+    // Rebuild clears and replays the SQLite projections (logs, issues, spans,
+    // test reports, …) from the raw JSONL segments. Snapshot the DB first so a
+    // pruned/damaged segment store can never silently drop rows without recourse.
+    const backup = local.backupDatabase();
     const rebuild = local.rebuildEventStoreIndex();
     const verification = local.verifyEventStore();
-    const result = { rebuild, verification };
+    const result = { backup, rebuild, verification };
     if (opts.json) {
       printJson(result);
     } else {
+      if (backup) console.log(`Backup: ${backup}`);
       console.log(`Indexed events: ${rebuild.indexed_events}`);
       console.log(`Indexed segments: ${rebuild.indexed_segments}`);
       console.log(`Skipped events: ${rebuild.skipped_events}`);
@@ -644,9 +643,8 @@ eventsCmd
   .option("--body <json>", "Event body JSON object")
   .option("--attributes <json>", "Event attributes JSON object")
   .action(async (opts) => {
-    const local = requireLocalStore("events push");
     try {
-      const projectId = await local.resolveProjectId(opts.project);
+      const projectId = await store.resolveProjectId(opts.project);
       const body = parseJsonObjectOption(opts.body, "--body");
       const attributes = parseJsonObjectOption(opts.attributes, "--attributes");
       const hasExplicitIdentity = Boolean(
@@ -677,7 +675,7 @@ eventsCmd
         body,
         attributes,
       };
-      const result = local.pushUniversalEvent(eventInput, {
+      const result = await store.pushEvent(eventInput, {
         detectIdentity: !hasExplicitIdentity,
         projectNameOrId: opts.project,
         environment: opts.environment,
@@ -1162,13 +1160,9 @@ program
       return;
     }
 
-    // Every non-server watch path tails the on-box event catalog / log rows,
-    // which are local-only (no cloud data model) — require the local store here.
-    const local = requireLocalStore("watch");
-
-    // Resolve project name → ID if needed
+    // Resolve project name → ID through the mode-resolved store.
     const projectId = opts.project
-      ? await local.resolveProjectId(opts.project)
+      ? await store.resolveProjectId(opts.project)
       : undefined;
 
     const COLORS: Record<string, string> = {
@@ -1193,6 +1187,10 @@ program
         opts.lastEventId,
     );
     if (useEventCatalog) {
+      // The event-catalog live-tail walks on-box rowid cursors in the local
+      // append-only store (no cloud data model) — require the local store. The
+      // cloud equivalent is `watch --server <url>` (SSE), handled above.
+      const local = requireLocalStore("watch --events");
       await watchLocalEventCatalog(local, opts, projectId);
       return;
     }
@@ -1211,7 +1209,7 @@ program
 
     const poll = async () => {
       const rows = (
-        await local.listLogs({
+        await store.listLogs({
           project_id: projectId,
           level: opts.level ? (opts.level.split(",") as LogLevel[]) : undefined,
           service: opts.service,
