@@ -373,6 +373,15 @@ if (!command || command === "--help" || command === "-h") {
   process.exit(0);
 }
 
+// `--help`/`-h` on ANY (sub)command prints usage and exits WITHOUT running the
+// command. Previously these tokens were ignored (or, for `-h`, treated as a
+// positional), so side-effecting subcommands (aws push/pull/sync, mcp install)
+// executed anyway. Scan raw args because `parseArgs` only recognizes `--` flags.
+if (rest.includes("--help") || rest.includes("-h")) {
+  usage();
+  process.exit(0);
+}
+
 const { flags, positional } = parseArgs(rest);
 
 // Resolve the active Store (LocalStore or ApiStore) lazily and once. Only data
