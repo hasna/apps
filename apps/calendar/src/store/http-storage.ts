@@ -3,7 +3,7 @@
 // This is the client-side piece that makes `self_hosted` mode real. When the
 // operator sets the client-flip env for this app:
 //
-//   HASNA_<APP>_STORAGE_MODE = self_hosted   (aliases: cloud | remote | hybrid)
+//   HASNA_<APP>_STORAGE_MODE = self_hosted   (or cloud — both use the ApiStore)
 //   HASNA_<APP>_API_URL      = https://<app>.hasna.xyz   (optional; default host)
 //   HASNA_<APP>_API_KEY      = <bearer key>
 //
@@ -22,18 +22,20 @@
 
 export type Env = Record<string, string | undefined>;
 
-const DEPRECATED_MODE_ALIASES = new Set(["remote", "hybrid", "self_hosted"]);
-
 function envToken(name: string): string {
   return name.toUpperCase().replace(/-/g, "_");
 }
 
-/** Normalize a raw storage-mode string to `local | cloud`. */
+/**
+ * Normalize a raw storage-mode string to the client transport it maps to.
+ * Only the canonical tiers are accepted: `local` uses the LocalStore, while
+ * `self_hosted` and `cloud` both use the ApiStore (identical client code — the
+ * distinction is server-side tenancy). Anything else is rejected.
+ */
 function normalizeMode(value: string): "local" | "cloud" | null {
   const normalized = value.trim().toLowerCase().replace(/-/g, "_");
   if (normalized === "local") return "local";
-  if (normalized === "cloud") return "cloud";
-  if (DEPRECATED_MODE_ALIASES.has(normalized)) return "cloud";
+  if (normalized === "cloud" || normalized === "self_hosted") return "cloud";
   return null;
 }
 
