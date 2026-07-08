@@ -370,7 +370,7 @@ const CLOUD_PAGE_SIZE = 500;
 const CLOUD_MAX_ROWS = 100_000;
 const PRIORITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 
-class ApiStore implements Store {
+export class ApiStore implements Store {
   readonly transport = "cloud-http" as const;
 
   constructor(private readonly c: HasnaStorageClient) {}
@@ -406,6 +406,24 @@ class ApiStore implements Store {
       if (added === 0) break; // full page, no new rows => server ignoring offset; stop, don't spin
     }
     return out;
+  }
+
+  /**
+   * Resolve a possibly-partial id (the UUID *prefix* that `list`/`create` print
+   * for resources with no dedicated shortId field — flows, workflows, agents) to
+   * the full entity. Mirrors LocalStore's {@link resolvePartialId}: an exact GET
+   * first, then a UNIQUE prefix match over the full collection. Ambiguous or
+   * absent resolves to `null` so a caller can never act on the wrong row (the
+   * cloud server does strict full-id lookups, so without this the CLI's own
+   * short ids 404).
+   */
+  private async resolvePartial<T extends { id: string }>(resource: string, id: string): Promise<T | null> {
+    const direct = await this.c.get<T>(resource, id);
+    if (direct) return direct;
+    const matches = (await this.all<T>(resource)).filter(
+      (r) => typeof r.id === "string" && r.id.startsWith(id),
+    );
+    return matches.length === 1 ? matches[0]! : null;
   }
 
   // ── scenarios ──
@@ -688,26 +706,40 @@ class ApiStore implements Store {
     return sorted;
   }
   async createFlow(input: Parameters<typeof dbFlows.createFlow>[0]) { return this.c.create<Flow>("flows", input); }
-  async getFlow(id: string) { return this.c.get<Flow>("flows", id); }
+  async getFlow(id: string) { return this.resolvePartial<Flow>("flows", id); }
   async listFlows(projectId?: string) {
     let items = await this.all<Flow>("flows");
     if (projectId) items = items.filter((f) => f.projectId === projectId);
     return items;
   }
-  async deleteFlow(id: string) { await this.c.delete("flows", id); return true; }
+  async deleteFlow(id: string) {
+    // Resolve the (possibly short/prefix) id to a real row FIRST: DELETE is
+    // idempotent server-side (404 => "already gone"), so deleting an unresolved
+    // short id would otherwise report a silent false success.
+    const flow = await this.resolvePartial<Flow>("flows", id);
+    if (!flow) return false;
+    await this.c.delete("flows", flow.id);
+    return true;
+  }
 
   // ── testing workflows ──
   async createTestingWorkflow(input: Parameters<typeof dbWorkflows.createTestingWorkflow>[0]) { return this.c.create<TestingWorkflow>("workflows", input); }
-  async getTestingWorkflow(id: string) { return this.c.get<TestingWorkflow>("workflows", id); }
+  async getTestingWorkflow(id: string) { return this.resolvePartial<TestingWorkflow>("workflows", id); }
   async listTestingWorkflows(filter?: Parameters<typeof dbWorkflows.listTestingWorkflows>[0]) {
     let items = await this.all<TestingWorkflow>("workflows");
     if (filter?.projectId) items = items.filter((w) => w.projectId === filter.projectId);
     return items;
   }
   async updateTestingWorkflow(id: string, input: Parameters<typeof dbWorkflows.updateTestingWorkflow>[1]) {
-    return this.c.update<TestingWorkflow>("workflows", id, input, { method: "PUT" });
+    const wf = await this.resolvePartial<TestingWorkflow>("workflows", id);
+    return this.c.update<TestingWorkflow>("workflows", wf?.id ?? id, input, { method: "PUT" });
   }
-  async deleteTestingWorkflow(id: string) { await this.c.delete("workflows", id); return true; }
+  async deleteTestingWorkflow(id: string) {
+    const wf = await this.resolvePartial<TestingWorkflow>("workflows", id);
+    if (!wf) return false;
+    await this.c.delete("workflows", wf.id);
+    return true;
+  }
 
   // ── environments (keyed by name; server route resolves name) ──
   async createEnvironment(input: Parameters<typeof dbEnvironments.createEnvironment>[0]) { return this.c.create<Environment>("environments", input); }
@@ -755,10 +787,14 @@ class ApiStore implements Store {
   }
   async listAgents() { return this.all("agents") as Promise<Awaited<ReturnType<typeof dbAgents.listAgents>>>; }
   async heartbeatAgent(id: string) {
-    return this.c.update("agents", id, { heartbeat: true }, { method: "PATCH" }) as Promise<Awaited<ReturnType<typeof dbAgents.heartbeatAgent>>>;
+    const agent = await this.resolvePartial<{ id: string }>("agents", id);
+    if (!agent) return null as Awaited<ReturnType<typeof dbAgents.heartbeatAgent>>;
+    return this.c.update("agents", agent.id, { heartbeat: true }, { method: "PATCH" }) as Promise<Awaited<ReturnType<typeof dbAgents.heartbeatAgent>>>;
   }
   async setAgentFocus(id: string, scenarioId: string | null) {
-    return this.c.update("agents", id, { focusScenarioId: scenarioId }, { method: "PATCH" }) as Promise<Awaited<ReturnType<typeof dbAgents.setAgentFocus>>>;
+    const agent = await this.resolvePartial<{ id: string }>("agents", id);
+    if (!agent) return null as Awaited<ReturnType<typeof dbAgents.setAgentFocus>>;
+    return this.c.update("agents", agent.id, { focusScenarioId: scenarioId }, { method: "PATCH" }) as Promise<Awaited<ReturnType<typeof dbAgents.setAgentFocus>>>;
   }
 
   // ── scan issues ──
