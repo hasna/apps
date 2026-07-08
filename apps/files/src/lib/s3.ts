@@ -50,6 +50,13 @@ export function createS3ClientConfig(source: Source): S3ClientConfig {
   validateS3CredentialConfig(cfg);
   return {
     region: source.region ?? "us-east-1",
+    // Only attach a checksum when the caller explicitly asks for one (we pass an
+    // explicit SHA256 for evidence objects). The AWS SDK default of
+    // `WHEN_SUPPORTED` auto-injects an `x-amz-sdk-checksum-algorithm` marker and
+    // hoists checksum handling in a way that breaks presigned PUT signatures
+    // (the marker is neither signed nor sent by a thin client). `WHEN_REQUIRED`
+    // keeps presigned URLs deterministic and self-consistent.
+    requestChecksumCalculation: "WHEN_REQUIRED",
     ...(cfg.endpoint ? { endpoint: cfg.endpoint } : {}),
     ...(cfg.forcePathStyle !== undefined ? { forcePathStyle: cfg.forcePathStyle } : {}),
     ...(cfg.accessKeyId
@@ -289,6 +296,17 @@ export async function getPresignedPutUrl(
 ): Promise<string> {
   if (!source.bucket) throw new Error("S3 source missing bucket");
   const client = makeClient(source);
+  // The presigner's default behavior HOISTS `content-type`, `x-amz-checksum-*`
+  // and `x-amz-meta-*` into the query string, leaving `SignedHeaders=content-length;host`.
+  // A thin client that sends those values as real HTTP headers (per the intent's
+  // `required_headers`) then trips S3's "headers present which were not signed"
+  // AccessDenied. Force every header the client will send into BOTH the signed
+  // set and the unhoistable set so the signature covers exactly what is sent.
+  const signedHeaders = new Set<string>(["content-type"]);
+  if (opts.checksumSha256) signedHeaders.add("x-amz-checksum-sha256");
+  for (const key of Object.keys(opts.metadata ?? {})) {
+    signedHeaders.add(`x-amz-meta-${key.toLowerCase()}`);
+  }
   return getSignedUrl(
     client,
     new PutObjectCommand({
@@ -301,7 +319,7 @@ export async function getPresignedPutUrl(
         : {}),
       ...(opts.metadata ? { Metadata: opts.metadata } : {}),
     }),
-    { expiresIn: opts.expiresIn ?? 600 },
+    { expiresIn: opts.expiresIn ?? 600, signableHeaders: signedHeaders, unhoistableHeaders: signedHeaders },
   );
 }
 

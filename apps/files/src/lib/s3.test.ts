@@ -1,9 +1,42 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { createS3ClientConfig, describeS3ClientConfig, setS3CredentialProviderFactoryForTests } from "./s3.js";
+import { createS3ClientConfig, describeS3ClientConfig, getPresignedPutUrl, setS3CredentialProviderFactoryForTests } from "./s3.js";
 import type { Source } from "../types/index.js";
 
 afterEach(() => {
   setS3CredentialProviderFactoryForTests();
+});
+
+describe("presigned PUT signing", () => {
+  test("signs content-type, checksum and metadata headers so a thin client's headers are covered", async () => {
+    const url = await getPresignedPutUrl(
+      s3Source({ config: { accessKeyId: "AKIAEXAMPLE", secretAccessKey: "secret" } }),
+      "quarantine/orgs/o/x.bin",
+      {
+        contentType: "application/octet-stream",
+        contentLength: 10,
+        checksumSha256: "a".repeat(64),
+        metadata: { "asset-id": "asset_x", "org-id": "o", "app": "files", "kind": "k" },
+      },
+    );
+    const signed = new URL(url).searchParams.get("X-Amz-SignedHeaders") ?? "";
+    const parts = signed.split(";");
+    // The regression: the SDK default hoists these to the query string, leaving
+    // SignedHeaders=content-length;host, which makes S3 reject the client PUT.
+    expect(parts).toContain("content-type");
+    expect(parts).toContain("x-amz-checksum-sha256");
+    expect(parts).toContain("x-amz-meta-asset-id");
+    expect(parts).toContain("x-amz-meta-org-id");
+    expect(parts).toContain("x-amz-meta-app");
+    expect(parts).toContain("x-amz-meta-kind");
+    // The client sends these as real HTTP headers, so they must be signed
+    // headers, not hoisted into the query string.
+    const query = new URL(url).searchParams;
+    expect(query.has("x-amz-checksum-sha256")).toBe(false);
+    expect(query.has("x-amz-meta-asset-id")).toBe(false);
+    // The SDK checksum marker must NOT be a signed header (the thin client never
+    // sends it); it is fine for it to ride along as a signed query param.
+    expect(parts).not.toContain("x-amz-sdk-checksum-algorithm");
+  });
 });
 
 describe("S3 client configuration", () => {

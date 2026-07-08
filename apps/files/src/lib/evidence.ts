@@ -395,9 +395,22 @@ export async function verifyEvidenceAsset(
   const diagnostics: string[] = [];
 
   if (asset.storage_provider === "s3") {
-    const head = await headS3Object(makeEvidenceSource(storage, asset), asset.object_key);
-    if (!head) diagnostics.push("object_missing");
-    else collectObjectDiagnostics(asset, head.size, head.metadata.checksum ?? head.checksum_sha256, diagnostics);
+    try {
+      const head = await headS3Object(makeEvidenceSource(storage, asset), asset.object_key);
+      if (!head) diagnostics.push("object_missing");
+      else collectObjectDiagnostics(asset, head.size, head.metadata.checksum ?? head.checksum_sha256, diagnostics);
+    } catch (error) {
+      // A HeadObject failure that is NOT a clean 404 (e.g. an S3 403
+      // AccessDenied, which the SDK surfaces on a bodyless HEAD as an opaque
+      // "UnknownError") must not crash the verify endpoint with a 500. Report
+      // it as a truthful, actionable diagnostic so verify returns ok:false.
+      const code = ((error as { name?: string; Code?: string; code?: string })?.name
+        || (error as { Code?: string })?.Code
+        || (error as { code?: string })?.code
+        || "unknown").toString();
+      const status = (error as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
+      diagnostics.push(`object_unreadable:${code}${status ? `:${status}` : ""}`);
+    }
   } else {
     const path = localObjectPath(storage, asset.object_key, asset);
     if (!existsSync(path)) diagnostics.push("object_missing");
@@ -465,16 +478,18 @@ function evidenceMetadata(asset: FileAsset): Record<string, string> {
 }
 
 function makeRequiredUploadHeaders(asset: FileAsset): Record<string, string> {
-  return {
+  // Derive from the SAME metadata map the presigner signs, so the headers the
+  // client is told to send are exactly the headers covered by the signature
+  // (otherwise an extra key like `storage-class` would diverge and S3 would
+  // reject the PUT as an unsigned header).
+  const headers: Record<string, string> = {
     "content-type": asset.content_type,
     "x-amz-checksum-sha256": Buffer.from(asset.checksum, "hex").toString("base64"),
-    "x-amz-meta-asset-id": asset.id,
-    "x-amz-meta-org-id": asset.org_id,
-    "x-amz-meta-app": asset.app,
-    "x-amz-meta-kind": asset.kind,
-    "x-amz-meta-checksum": asset.checksum,
-    "x-amz-meta-checksum-algorithm": asset.checksum_algorithm,
   };
+  for (const [key, value] of Object.entries(evidenceMetadata(asset))) {
+    headers[`x-amz-meta-${key.toLowerCase()}`] = value;
+  }
+  return headers;
 }
 
 function assertUploadedObjectMatches(asset: FileAsset, size: number, checksum?: string): void {
