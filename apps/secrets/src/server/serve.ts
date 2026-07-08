@@ -110,11 +110,23 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
         const a = await auth(req, WRITE);
         if (!a.ok) return a.res;
         const body = (await req.json().catch(() => null)) as
-          | { key?: string; value?: string; type?: string; label?: string; ttl?: string }
+          | { key?: string; value?: string; type?: string; label?: string; ttl?: string; expires_at?: string }
           | null;
         if (!body?.key || typeof body.value !== "string") return json({ error: "key and value are required" }, 400);
         const type = (body.type && SECRET_TYPES.includes(body.type as SecretType) ? body.type : "other") as SecretType;
-        const expiresAt = body.ttl ? parseTtl(body.ttl) : undefined;
+        // Accept either an absolute ISO `expires_at` (Store-contract clients) or a `ttl` duration like "30d" (raw API).
+        let expiresAt: string | undefined;
+        if (body.expires_at) {
+          const parsed = Date.parse(body.expires_at);
+          if (Number.isNaN(parsed)) return json({ error: `Invalid expires_at: ${body.expires_at}` }, 400);
+          expiresAt = new Date(parsed).toISOString();
+        } else if (body.ttl) {
+          try {
+            expiresAt = parseTtl(body.ttl);
+          } catch (err) {
+            return json({ error: err instanceof Error ? err.message : "Invalid ttl" }, 400);
+          }
+        }
         const entry = await store.setSecret(body.key, body.value, type, body.label, expiresAt, a.actor);
         const { value, ...meta } = entry;
         return json(meta, 200);

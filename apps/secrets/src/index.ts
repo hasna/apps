@@ -1082,8 +1082,13 @@ switch (command) {
     const [msg, ...restMsg] = positional;
     const message = [msg, ...restMsg.filter(r => !r.startsWith("--"))].join(" ");
     if (!message) { console.error("Usage: secrets feedback <message> [--email <email>] [--category <cat>]"); process.exit(1); }
-    await store().sendFeedback(message, flags.email || undefined, flags.category || "general");
-    console.log("✓ Feedback saved. Thank you!");
+    try {
+      await store().sendFeedback(message, flags.email || undefined, flags.category || "general");
+      console.log("✓ Feedback saved. Thank you!");
+    } catch (e: any) {
+      console.error(`Failed to send feedback: ${e?.message ?? String(e)}`);
+      process.exit(1);
+    }
     break;
   }
 

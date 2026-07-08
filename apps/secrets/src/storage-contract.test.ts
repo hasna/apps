@@ -94,6 +94,31 @@ describe("secrets storage surface contract", () => {
     expect(secrets.every((s) => !s.value.includes("bad"))).toBe(true);
   });
 
+  it("ApiStore.setSecret sends the ISO expiry as expires_at, never as a ttl duration", async () => {
+    // Regression for `set --ttl` (cloud): parseTtl() resolves --ttl "30d" into an
+    // absolute ISO string; forwarding that ISO as the server's `ttl` duration field
+    // made the server's parseTtl() reject it -> HTTP 500 and the secret was NOT stored.
+    const iso = new Date(Date.now() + 30 * 86_400_000).toISOString();
+    let captured: Record<string, unknown> | undefined;
+    const transport = {
+      baseUrl: "https://secrets.hasna.xyz/v1",
+      async post<T>(path: string, body: Record<string, unknown>): Promise<T> {
+        if (path === "/secrets") { captured = body; return {} as T; }
+        throw new Error(`unexpected POST ${path}`);
+      },
+      async get<T>(path: string, opts?: { query?: Record<string, unknown> }): Promise<T> {
+        if (path === "/secrets/get") {
+          return { key: String(opts?.query?.key), value: "v", type: "other", expires_at: iso, created_at: "", updated_at: "" } as T;
+        }
+        throw new Error(`unexpected GET ${path}`);
+      },
+    };
+    const store = new ApiStore({ transport } as unknown as HasnaStorageClient);
+    await store.setSecret("api/tok", "v", "api_key", "lbl", iso);
+    expect(captured?.expires_at).toBe(iso);
+    expect(captured).not.toHaveProperty("ttl");
+  });
+
   it("LocalStore feedback works on a pre-existing vault missing the category column", async () => {
     const dir = mkdtempSync(join(tmpdir(), "open-secrets-fb-"));
     const dbPath = join(dir, "vault.db");

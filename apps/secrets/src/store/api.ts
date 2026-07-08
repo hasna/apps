@@ -65,9 +65,11 @@ export class ApiStore implements Store {
   }
 
   // ── secrets ────────────────────────────────────────────────────────────
-  async setSecret(key: string, value: string, type: SecretType = "other", label?: string, ttl?: string): Promise<SecretEntry> {
+  async setSecret(key: string, value: string, type: SecretType = "other", label?: string, expiresAt?: string): Promise<SecretEntry> {
     assertValidSecretPath(key);
-    await this.transport.post("/secrets", { key, value, type, ...(label ? { label } : {}), ...(ttl ? { ttl } : {}) });
+    // The Store contract's 5th arg is an absolute ISO expiry (parseTtl already resolved any --ttl duration).
+    // Send it as `expires_at`; forwarding it as `ttl` makes the server try to parse an ISO string as a duration -> 500.
+    await this.transport.post("/secrets", { key, value, type, ...(label ? { label } : {}), ...(expiresAt ? { expires_at: expiresAt } : {}) });
     // POST returns metadata only; fetch the full entry to match the Store contract.
     const entry = await this.getSecret(key);
     if (entry) return entry;
