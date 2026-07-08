@@ -162,6 +162,18 @@ export class LocalStore implements LoopStore {
     this.store = store;
   }
 
+  /**
+   * The underlying on-box sqlite {@link Store}. Exposed ONLY for genuinely
+   * local-runtime operations that cannot route over HTTP — the scheduler
+   * (tick/run-now inline execution), migration import/export, and local
+   * diagnostics (doctor/health/daemon status). Callers must gate on
+   * `transport === "local"` first; the hosted ApiStore has no `raw` store, so
+   * these operations fail loudly in cloud mode instead of touching an island.
+   */
+  get raw(): Store {
+    return this.store;
+  }
+
   async close(): Promise<void> {
     this.store.close();
   }

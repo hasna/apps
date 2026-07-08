@@ -34,42 +34,42 @@ describe("loops sdk", () => {
     const store = new Store(":memory:");
     const client = new LoopsClient({ store, runnerId: "manual" });
     try {
-      const active = client.create({
+      const active = await client.create({
         name: "sdk-filter-active",
         schedule: { type: "interval", everyMs: 60_000 },
         target: { type: "command", command: "true" },
       });
-      const archived = client.create({
+      const archived = await client.create({
         name: "sdk-filter-archived",
         schedule: { type: "interval", everyMs: 60_000 },
         target: { type: "command", command: "true" },
       });
-      client.archive(archived.id);
+      await client.archive(archived.id);
 
-      expect(client.list().map((loop) => loop.id)).toEqual([active.id]);
-      expect(client.list({ status: "active" }).map((loop) => loop.id)).toEqual([active.id]);
-      expect(client.list({ status: "stopped" })).toHaveLength(0);
-      expect(client.list({ archivedOnly: true }).map((loop) => loop.id)).toEqual([archived.id]);
-      expect(client.list({ includeArchived: true })).toHaveLength(2);
-      expect(client.list({ includeArchived: true, limit: 1 })).toHaveLength(1);
+      expect((await client.list()).map((loop) => loop.id)).toEqual([active.id]);
+      expect((await client.list({ status: "active" })).map((loop) => loop.id)).toEqual([active.id]);
+      expect(await client.list({ status: "stopped" })).toHaveLength(0);
+      expect((await client.list({ archivedOnly: true })).map((loop) => loop.id)).toEqual([archived.id]);
+      expect(await client.list({ includeArchived: true })).toHaveLength(2);
+      expect(await client.list({ includeArchived: true, limit: 1 })).toHaveLength(1);
 
       const succeeded = await client.runNow(active.id);
       expect(succeeded.status).toBe("succeeded");
-      expect(client.runs("sdk-filter-active", { status: "succeeded" }).map((run) => run.id)).toEqual([succeeded.id]);
-      expect(client.runs(active.id, { status: "failed" })).toHaveLength(0);
-      expect(client.runs()).toHaveLength(1);
+      expect((await client.runs("sdk-filter-active", { status: "succeeded" })).map((run) => run.id)).toEqual([succeeded.id]);
+      expect(await client.runs(active.id, { status: "failed" })).toHaveLength(0);
+      expect(await client.runs()).toHaveLength(1);
       // v0.3.x compat: polling runs for an unknown or just-deleted loop id
       // returns [] instead of throwing LoopNotFoundError.
-      expect(client.runs("no-such-loop")).toEqual([]);
-      const deleted = client.create({
+      expect(await client.runs("no-such-loop")).toEqual([]);
+      const deleted = await client.create({
         name: "sdk-filter-deleted",
         schedule: { type: "interval", everyMs: 60_000 },
         target: { type: "command", command: "true" },
       });
-      client.delete(deleted.id);
-      expect(client.runs(deleted.id)).toEqual([]);
+      await client.delete(deleted.id);
+      expect(await client.runs(deleted.id)).toEqual([]);
       // Other loop lookups stay strict.
-      expect(() => client.get("no-such-loop")).toThrow("loop not found");
+      await expect(client.get("no-such-loop")).rejects.toThrow("loop not found");
 
       const doctor = client.doctor();
       expect(doctor.checks.map((check) => check.id)).toContain("data-dir");
@@ -91,22 +91,22 @@ describe("loops sdk", () => {
     const store = new Store(":memory:");
     const client = new LoopsClient({ store, runnerId: "manual" });
     try {
-      const loop = client.create({
+      const loop = await client.create({
         name: "sdk-archive",
         schedule: { type: "interval", everyMs: 60_000 },
         target: { type: "command", command: "true" },
       });
-      const archived = client.archive(loop.id);
+      const archived = await client.archive(loop.id);
       expect(archived.status).toBe("paused");
       expect(archived.archivedFromStatus).toBe("active");
-      expect(client.list()).toHaveLength(0);
-      expect(() => client.resume(loop.id)).toThrow("loop is archived");
+      expect(await client.list()).toHaveLength(0);
+      await expect(client.resume(loop.id)).rejects.toThrow("loop is archived");
       await expect(client.runNow(loop.id)).rejects.toThrow("loop is archived");
 
-      const restored = client.unarchive(loop.id);
+      const restored = await client.unarchive(loop.id);
       expect(restored.status).toBe("active");
       expect(restored.archivedAt).toBeUndefined();
-      expect(client.list().map((entry) => entry.id)).toEqual([loop.id]);
+      expect((await client.list()).map((entry) => entry.id)).toEqual([loop.id]);
     } finally {
       client.close();
     }
@@ -116,16 +116,16 @@ describe("loops sdk", () => {
     const store = new Store(":memory:");
     const client = new LoopsClient({ store, runnerId: "manual" });
     try {
-      const loop = client.create({
+      const loop = await client.create({
         name: "sdk-resume-stopped",
         schedule: { type: "interval", everyMs: 60_000 },
         target: { type: "command", command: "true" },
       });
-      const stopped = client.stop(loop.id);
+      const stopped = await client.stop(loop.id);
       expect(stopped.status).toBe("stopped");
       expect(stopped.nextRunAt).toBeUndefined();
 
-      const resumed = client.resume(loop.id);
+      const resumed = await client.resume(loop.id);
       expect(resumed.status).toBe("active");
       // Regression: resume used to leave nextRunAt null, so dueLoops (next_run_at
       // IS NOT NULL) never picked it up -> active but permanently dormant.
@@ -136,33 +136,33 @@ describe("loops sdk", () => {
     }
   });
 
-  test("mutation paths reject ambiguous loop names instead of touching the newest match", () => {
+  test("mutation paths reject ambiguous loop names instead of touching the newest match", async () => {
     const store = new Store(":memory:");
     const client = new LoopsClient({ store, runnerId: "manual" });
     try {
       const spec = { schedule: { type: "interval" as const, everyMs: 60_000 }, target: { type: "command" as const, command: "true" } };
-      const first = client.create({ name: "sdk-dupe", ...spec });
-      const second = client.create({ name: "sdk-dupe", ...spec });
+      const first = await client.create({ name: "sdk-dupe", ...spec });
+      const second = await client.create({ name: "sdk-dupe", ...spec });
       expect(first.id).not.toBe(second.id);
 
-      expect(() => client.pause("sdk-dupe")).toThrow("ambiguous loop name");
-      expect(() => client.resume("sdk-dupe")).toThrow("ambiguous loop name");
-      expect(() => client.stop("sdk-dupe")).toThrow("ambiguous loop name");
-      expect(() => client.delete("sdk-dupe")).toThrow("ambiguous loop name");
+      await expect(client.pause("sdk-dupe")).rejects.toThrow("ambiguous loop name");
+      await expect(client.resume("sdk-dupe")).rejects.toThrow("ambiguous loop name");
+      await expect(client.stop("sdk-dupe")).rejects.toThrow("ambiguous loop name");
+      await expect(client.delete("sdk-dupe")).rejects.toThrow("ambiguous loop name");
       // The id path still works precisely.
-      expect(client.pause(second.id).status).toBe("paused");
+      expect((await client.pause(second.id)).status).toBe("paused");
     } finally {
-      client.close();
+      await client.close();
     }
   });
 
-  test("exports, plans, and imports migration bundles through the client", () => {
+  test("exports, plans, and imports migration bundles through the client", async () => {
     const sourceStore = new Store(":memory:");
     const targetStore = new Store(":memory:");
     const source = new LoopsClient({ store: sourceStore, runnerId: "source" });
     const target = new LoopsClient({ store: targetStore, runnerId: "target" });
     try {
-      const loop = source.create({
+      const loop = await source.create({
         name: "sdk-migration-loop",
         schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
         target: { type: "command", command: "true" },
@@ -176,13 +176,13 @@ describe("loops sdk", () => {
 
       const applied = target.importBundle(bundle);
       expect(applied.applied).toEqual({ workflows: 0, loops: 1, runs: 0 });
-      expect(target.get(loop.id).name).toBe("sdk-migration-loop");
+      expect((await target.get(loop.id)).name).toBe("sdk-migration-loop");
 
       const idempotent = target.planImport(bundle);
       expect(idempotent.summary).toMatchObject({ insert: 0, skip: 1, blocked: 0, conflict: 0 });
     } finally {
-      source.close();
-      target.close();
+      await source.close();
+      await target.close();
     }
   });
 
@@ -239,7 +239,7 @@ describe("loops sdk", () => {
     const source = new LoopsClient({ store: sourceStore, runnerId: "source" });
     const target = new LoopsClient({ store: targetStore, runnerId: "target" });
     try {
-      source.create({
+      await source.create({
         name: "sdk-live-destination-source",
         schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
         target: { type: "command", command: "true" },
@@ -268,7 +268,7 @@ describe("loops sdk", () => {
     const redactedSource = new LoopsClient({ store: redactedSourceStore, runnerId: "source" });
     const redactedTarget = new LoopsClient({ store: redactedTargetStore, runnerId: "target" });
     try {
-      redactedSource.create({
+      await redactedSource.create({
         name: "sdk-redacted-source",
         schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
         target: { type: "command", command: "env", env: { PRIVATE_TOKEN: "very-secret-value" } },
@@ -292,7 +292,7 @@ describe("loops sdk", () => {
     const raceSource = new LoopsClient({ store: raceSourceStore, runnerId: "source" });
     const raceTarget = new LoopsClient({ store: raceTargetStore, runnerId: "target" });
     try {
-      raceSource.create({
+      await raceSource.create({
         name: "sdk-race-source",
         schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
         target: { type: "command", command: "true" },
@@ -323,7 +323,7 @@ describe("loops sdk", () => {
     const conflictSource = new LoopsClient({ store: conflictSourceStore, runnerId: "source" });
     const conflictTarget = new LoopsClient({ store: conflictTargetStore, runnerId: "target" });
     try {
-      conflictSource.create({
+      await conflictSource.create({
         name: "sdk-conflict-source",
         schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
         target: { type: "command", command: "true" },
@@ -375,11 +375,11 @@ describe("loops sdk", () => {
     }
   });
 
-  test("writes and reads scheduler-neutral run receipts", () => {
+  test("writes and reads scheduler-neutral run receipts", async () => {
     const store = new Store(":memory:");
     const client = new LoopsClient({ store, runnerId: "manual" });
     try {
-      const receipt = client.writeReceipt({
+      const receipt = await client.writeReceipt({
         loop_id: "loop-sdk",
         run_id: "run-sdk",
         machine: "spark01",
@@ -394,8 +394,8 @@ describe("loops sdk", () => {
       expect(receipt.digest_id).toMatch(/^sha256:/);
       expect(receipt.summary.stdout_bytes).toBe(50_000);
       expect(receipt.summary.stdout_excerpt).toContain("chars omitted");
-      expect(client.receipt("run-sdk")?.summary.text).toBe("sdk receipt");
-      expect(client.receipts({ taskId: "task-sdk" }).map((value) => value.run_id)).toEqual(["run-sdk"]);
+      expect((await client.receipt("run-sdk"))?.summary.text).toBe("sdk receipt");
+      expect((await client.receipts({ taskId: "task-sdk" })).map((value) => value.run_id)).toEqual(["run-sdk"]);
     } finally {
       client.close();
     }
@@ -405,7 +405,7 @@ describe("loops sdk", () => {
     const store = new Store(":memory:");
     const client = new LoopsClient({ store, runnerId: "manual" });
     try {
-      const loop = client.create({
+      const loop = await client.create({
         name: "sdk-terminal-due",
         schedule: { type: "interval", everyMs: 60_000 },
         target: { type: "command", command: "true" },
@@ -441,7 +441,7 @@ describe("loops sdk", () => {
     const marker = join(root, "marker");
     const gate = join(root, "gate");
     try {
-      const loop = client.create({
+      const loop = await client.create({
         name: "manual-due-loop",
         schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
         target: { type: "command", command: gatedWriteCommand(gate, marker, { text: "x", append: true }), shell: true },
