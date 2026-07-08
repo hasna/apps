@@ -65,6 +65,7 @@ import { initialNextRun } from "../recurrence.js";
 import { normalizeCreateWorkflowInput } from "../workflow-spec.js";
 import type {
   CreateLoopInput,
+  CreateWorkflowInput,
   Loop,
   LoopRun,
   LoopStatus,
@@ -1490,11 +1491,54 @@ export class PostgresLoopStorage implements LoopStorageContract {
   // sqlite Store (manifest staging, goal status rollups, step sequencing). These
   // throw loudly rather than silently no-op. Port order matches sqlite Store.
 
-  createWorkflow(): never {
-    throw new NotImplementedError("createWorkflow");
+  async createWorkflow(...args: M<"createWorkflow">["args"]): Promise<M<"createWorkflow">["result"]> {
+    const [input] = args as [CreateWorkflowInput];
+    const normalized = normalizeCreateWorkflowInput(input);
+    const now = nowIso();
+    const workflow: WorkflowSpec = {
+      id: genId(),
+      name: normalized.name,
+      description: normalized.description,
+      version: normalized.version ?? 1,
+      status: "active",
+      goal: normalized.goal,
+      steps: normalized.steps,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.client.execute(
+      `INSERT INTO workflow_specs (id, name, description, version, status, goal_json, steps_json, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9)`,
+      [
+        workflow.id,
+        workflow.name,
+        workflow.description ?? null,
+        workflow.version,
+        workflow.status,
+        workflow.goal ? JSON.stringify(workflow.goal) : null,
+        JSON.stringify(workflow.steps),
+        workflow.createdAt,
+        workflow.updatedAt,
+      ],
+    );
+    return workflow;
   }
-  archiveWorkflow(): never {
-    throw new NotImplementedError("archiveWorkflow");
+  async archiveWorkflow(...args: M<"archiveWorkflow">["args"]): Promise<M<"archiveWorkflow">["result"]> {
+    const [idOrName] = args as [string];
+    // The hosted ApiStore resolves name→id client-side before POSTing to
+    // /workflows/:id/archive, so `idOrName` is normally an id. Fall back to an
+    // active-name lookup to stay behaviour-compatible with the sqlite Store.
+    const existing =
+      (await this.loadWorkflow(this.client, idOrName)) ??
+      (await this.client
+        .get<WorkflowRow>("SELECT * FROM workflow_specs WHERE name = $1 AND status = 'active' ORDER BY updated_at DESC LIMIT 1", [idOrName])
+        .then((row) => (row ? rowToWorkflow(row) : undefined)));
+    if (!existing) throw new Error(`workflow not found: ${idOrName}`);
+    const updated = nowIso();
+    await this.client.execute("UPDATE workflow_specs SET status='archived', updated_at=$1 WHERE id=$2", [updated, existing.id]);
+    const archived = await this.getWorkflow(existing.id);
+    if (!archived) throw new Error(`workflow not found after archive: ${existing.id}`);
+    return archived;
   }
   createWorkflowInvocation(): never {
     throw new NotImplementedError("createWorkflowInvocation");

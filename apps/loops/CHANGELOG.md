@@ -5,6 +5,18 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## 0.4.26
+
+### Fixed
+
+- `PostgresLoopStorage.createWorkflow` is now implemented (ported from the sqlite
+  `Store`), so `POST /v1/workflows` on the self-hosted server persists workflow
+  specs instead of returning `500 not_implemented`. This unblocks the cloud-mode
+  CLI `workflows create` / `templates create-workflow` and the MCP workflow
+  tools. `archiveWorkflow` is likewise ported so `POST /v1/workflows/:id/archive`
+  works on the Postgres backend. Requires an ECS redeploy of the loops server
+  image for the live self-hosted API to pick up the new endpoints.
+
 ## Unreleased
 
 ### Added

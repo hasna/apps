@@ -315,8 +315,27 @@ suite("PostgresLoopStorage (live)", () => {
     expect(await storage.countWorkflows()).toBe(wfBefore); // no new row, no throw
   });
 
+  test("createWorkflow persists a spec and archiveWorkflow flips its status", async () => {
+    const created = await storage.createWorkflow({
+      name: "pg-created-wf",
+      steps: [{ id: "s1", target: { type: "command", command: "true" } }],
+    });
+    expect(created.id).toBeTruthy();
+    expect(created.status).toBe("active");
+
+    const fetched = await storage.getWorkflow(created.id);
+    expect(fetched?.name).toBe("pg-created-wf");
+    expect(fetched?.steps).toHaveLength(1);
+
+    const listed = await storage.listWorkflows({ status: "active" });
+    expect(listed.some((wf) => wf.id === created.id)).toBe(true);
+
+    const archived = await storage.archiveWorkflow(created.id);
+    expect(archived.status).toBe("archived");
+    expect((await storage.getWorkflow(created.id))?.status).toBe("archived");
+  });
+
   test("TIER-2 unported methods throw NotImplementedError (never silently no-op)", () => {
-    expect(() => storage.createWorkflow()).toThrow(NotImplementedError);
     expect(() => storage.createGoal()).toThrow(NotImplementedError);
     expect(() => storage.finalizeWorkflowRun()).toThrow(/not implemented/i);
   });
