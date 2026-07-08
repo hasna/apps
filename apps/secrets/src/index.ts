@@ -360,7 +360,7 @@ async function runSharedEventCli(args: string[]): Promise<boolean> {
   // The shared events package renamed its "webhooks" command to "channels";
   // register it under the "webhooks" name so `secrets webhooks …` (as advertised
   // in --help) keeps working against event channel subscriptions.
-  registerEventsCommands(program, { source: "secrets", channelsCommandName: "webhooks" });
+  registerEventsCommands(program, { source: "secrets", webhooksCommandName: "webhooks" });
   await program.parseAsync(["node", "secrets", ...args]);
   return true;
 }
