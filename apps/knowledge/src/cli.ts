@@ -6,6 +6,7 @@
  */
 import { defaultStorePath, ensureStore, type KnowledgeItem } from './store';
 import { resolveItemStore, type ItemStore } from './item-store';
+import { isKnowledgeApiMode } from './cloud-store';
 import { openKnowledgeDb } from './knowledge-db';
 import { createKnowledgeService } from './service';
 import { createKnowledgeProjectPanel, formatKnowledgeProjectPanel } from './project-panel';
@@ -549,7 +550,10 @@ async function run(argv: string[]): Promise<void> {
       storePath = defaultStorePath();
     }
   }
-  if (!storePathOverridden && (command === 'ask' || command === 'build')) {
+  // ask/build seed a local JSON store only in local mode. In cloud/api mode the
+  // prompt flow runs over the shared cloud item corpus, so touching a local file
+  // here would be an unnecessary local-side write while the flip is active.
+  if (!storePathOverridden && (command === 'ask' || command === 'build') && !isKnowledgeApiMode()) {
     ensureStore(storePath);
   }
 
@@ -563,11 +567,18 @@ async function run(argv: string[]): Promise<void> {
   const itemStore: ItemStore = resolveItemStore({ storePath, storePathOverridden });
 
   if (command === 'inventory') {
-    const inventory = service.inventory({
-      limit: flags.limit,
-      includeArchived: flags.includeArchived || flags.archived,
-      storePath,
-    });
+    // In cloud/api mode report the shared cloud item corpus (routes through the
+    // cloud transport); otherwise the full local inventory across json + sqlite.
+    const inventory = isKnowledgeApiMode()
+      ? await service.cloudInventory({
+          limit: flags.limit,
+          includeArchived: flags.includeArchived || flags.archived,
+        })
+      : service.inventory({
+          limit: flags.limit,
+          includeArchived: flags.includeArchived || flags.archived,
+          storePath,
+        });
     output(flags.json ? inventory : formatInventory(inventory), flags.json);
     return;
   }

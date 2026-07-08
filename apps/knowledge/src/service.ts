@@ -1724,6 +1724,115 @@ export class KnowledgeService {
     return getKnowledgeDbStats(workspace.knowledgeDbPath);
   }
 
+  /**
+   * Build a knowledge inventory from a bare item list (no local sqlite catalog).
+   * Shared by the local no-db path and the cloud path so both produce the exact
+   * same KnowledgeInventoryResult shape with empty catalog sections.
+   */
+  private itemOnlyInventory(params: {
+    items: KnowledgeItem[];
+    limit: number;
+    includeArchived: boolean;
+    storePath: string;
+    storeExists: boolean;
+    storeReadError: string | null;
+  }): KnowledgeInventoryResult {
+    const workspace = this.workspace;
+    const { items, limit, includeArchived, storePath, storeExists, storeReadError } = params;
+    const activeItems = items.filter((item) => item.archived !== true);
+    const visibleItems = includeArchived ? items : activeItems;
+    const stats = emptyKnowledgeDbStats();
+    const summary = {
+      legacy_items: items.length,
+      active_items: activeItems.length,
+      archived_items: items.length - activeItems.length,
+      schema_version: stats.schema_version,
+      sources: stats.sources,
+      source_revisions: stats.source_revisions,
+      chunks: stats.chunks,
+      wiki_pages: stats.wiki_pages,
+      citations: stats.citations,
+      indexes: stats.indexes,
+      runs: stats.runs,
+      run_events: stats.run_events,
+      storage_objects: stats.storage_objects,
+      embeddings: stats.embeddings,
+      vector_entries: stats.vector_entries,
+      reindex_queue: stats.reindex_queue,
+      redaction_findings: stats.redaction_findings,
+      audit_events: stats.audit_events,
+      approval_gates: stats.approval_gates,
+      knowledge_machines: stats.knowledge_machines,
+      sync_snapshots: stats.sync_snapshots,
+      sync_changes: stats.sync_changes,
+      sync_conflicts: stats.sync_conflicts,
+      sync_table_clocks: stats.sync_table_clocks,
+      sync_imports: stats.sync_imports,
+    };
+    return {
+      ok: true,
+      scope: this.scope,
+      home: workspace.home,
+      limit,
+      paths: {
+        json_store_path: storePath,
+        json_store_exists: storeExists,
+        knowledge_db_path: workspace.knowledgeDbPath,
+        knowledge_db_exists: false,
+        artifacts_dir: workspace.artifactsDir,
+        indexes_dir: workspace.indexesDir,
+        logs_dir: workspace.logsDir,
+        wiki_dir: workspace.wikiDir,
+      },
+      summary,
+      legacy_store: {
+        path: storePath,
+        exists: storeExists,
+        read_error: storeReadError,
+        total_items: items.length,
+        active_items: activeItems.length,
+        archived_items: items.length - activeItems.length,
+        items_returned: Math.min(visibleItems.length, limit),
+      },
+      items: visibleItems.slice(0, limit).map(legacyInventoryItem),
+      sources: [],
+      source_revisions: [],
+      chunks: [],
+      wiki_pages: [],
+      indexes: [],
+      storage_objects: [],
+      runs: [],
+      vector_indexes: [],
+      reindex_queue: [],
+      machines: [],
+      sync_conflicts: [],
+      approval_gates: [],
+      audit_events: [],
+      message: `${items.length} item(s), 0 source(s), 0 chunk(s), 0 wiki page(s), 0 artifact(s)`,
+    };
+  }
+
+  /**
+   * Cloud (api mode) inventory: reports the shared cloud knowledge-item corpus.
+   * The RAG catalog (sources/chunks/wiki/sync/machines) lives only in the local
+   * sqlite pipeline and has no cloud counterpart, so those sections are empty —
+   * this routes through the same cloud item transport every item command uses,
+   * never the local db.json or sqlite catalog.
+   */
+  async cloudInventory(options: KnowledgeInventoryOptions = {}): Promise<KnowledgeInventoryResult> {
+    const limit = inventoryLimit(options.limit);
+    const items = await this.fetchCloudItems();
+    const cloud = resolveKnowledgeCloudStore();
+    return this.itemOnlyInventory({
+      items,
+      limit,
+      includeArchived: options.includeArchived ?? false,
+      storePath: cloud?.baseUrl ?? 'cloud',
+      storeExists: true,
+      storeReadError: null,
+    });
+  }
+
   inventory(options: KnowledgeInventoryOptions = {}): KnowledgeInventoryResult {
     const workspace = this.workspace;
     const limit = inventoryLimit(options.limit);
@@ -1733,75 +1842,14 @@ export class KnowledgeService {
     const visibleItems = options.includeArchived ? legacyStore.items : activeItems;
     const dbExists = existsSync(workspace.knowledgeDbPath);
     if (!dbExists) {
-      const stats = emptyKnowledgeDbStats();
-      const summary = {
-        legacy_items: legacyStore.items.length,
-        active_items: activeItems.length,
-        archived_items: legacyStore.items.length - activeItems.length,
-        schema_version: stats.schema_version,
-        sources: stats.sources,
-        source_revisions: stats.source_revisions,
-        chunks: stats.chunks,
-        wiki_pages: stats.wiki_pages,
-        citations: stats.citations,
-        indexes: stats.indexes,
-        runs: stats.runs,
-        run_events: stats.run_events,
-        storage_objects: stats.storage_objects,
-        embeddings: stats.embeddings,
-        vector_entries: stats.vector_entries,
-        reindex_queue: stats.reindex_queue,
-        redaction_findings: stats.redaction_findings,
-        audit_events: stats.audit_events,
-        approval_gates: stats.approval_gates,
-        knowledge_machines: stats.knowledge_machines,
-        sync_snapshots: stats.sync_snapshots,
-        sync_changes: stats.sync_changes,
-        sync_conflicts: stats.sync_conflicts,
-        sync_table_clocks: stats.sync_table_clocks,
-        sync_imports: stats.sync_imports,
-      };
-      return {
-        ok: true,
-        scope: this.scope,
-        home: workspace.home,
+      return this.itemOnlyInventory({
+        items: legacyStore.items,
         limit,
-        paths: {
-          json_store_path: storePath,
-          json_store_exists: legacyStore.exists,
-          knowledge_db_path: workspace.knowledgeDbPath,
-          knowledge_db_exists: false,
-          artifacts_dir: workspace.artifactsDir,
-          indexes_dir: workspace.indexesDir,
-          logs_dir: workspace.logsDir,
-          wiki_dir: workspace.wikiDir,
-        },
-        summary,
-        legacy_store: {
-          path: storePath,
-          exists: legacyStore.exists,
-          read_error: legacyStore.read_error,
-          total_items: legacyStore.items.length,
-          active_items: activeItems.length,
-          archived_items: legacyStore.items.length - activeItems.length,
-          items_returned: Math.min(visibleItems.length, limit),
-        },
-        items: visibleItems.slice(0, limit).map(legacyInventoryItem),
-        sources: [],
-        source_revisions: [],
-        chunks: [],
-        wiki_pages: [],
-        indexes: [],
-        storage_objects: [],
-        runs: [],
-        vector_indexes: [],
-        reindex_queue: [],
-        machines: [],
-        sync_conflicts: [],
-        approval_gates: [],
-        audit_events: [],
-        message: `${legacyStore.items.length} item(s), 0 source(s), 0 chunk(s), 0 wiki page(s), 0 artifact(s)`,
-      };
+        includeArchived: options.includeArchived ?? false,
+        storePath,
+        storeExists: legacyStore.exists,
+        storeReadError: legacyStore.read_error,
+      });
     }
     migrateKnowledgeDb(workspace.knowledgeDbPath);
     const stats = getKnowledgeDbStats(workspace.knowledgeDbPath);

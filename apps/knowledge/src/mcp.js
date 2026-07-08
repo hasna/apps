@@ -7,6 +7,7 @@ import pkg from '../package.json' with { type: 'json' };
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db.ts';
 import { defaultStorePath, loadStore, withLock } from './store.ts';
 import { resolveItemStore } from './item-store.ts';
+import { isKnowledgeApiMode } from './cloud-store.ts';
 import { parseSourceRef } from './source-ref.ts';
 import { createKnowledgeService } from './service.ts';
 import { getStorageStatus as getDatabaseStorageStatus } from './storage.ts';
@@ -460,6 +461,23 @@ function decisionSnapshot(id, service = projectService()) {
 async function getKnowledgeRecord(kind, id, options = {}) {
   const normalized = kind ?? 'auto';
   const service = createKnowledgeService({ scope: options.scope });
+  // In cloud/api mode the shared corpus is the cloud knowledge-items; the local
+  // sqlite catalog record kinds (source/wiki_page/run/index/decision) have no
+  // cloud counterpart and would throw the local-catalog guard. Only the `item`
+  // kind is cloud-backed, so restrict `auto` to it and refuse an explicit
+  // catalog kind with a clear message rather than the raw sqlite refusal.
+  if (isKnowledgeApiMode()) {
+    if (normalized !== 'auto' && normalized !== 'item') {
+      throw new Error(
+        `knowledge: reading a '${normalized}' record targets the on-box sqlite RAG catalog, which is not available in cloud mode `
+          + `(HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY set). In cloud mode the shared corpus is the cloud knowledge-items; `
+          + `use kind 'item' (or 'auto'). Unset the API env to read the full local catalog.`,
+      );
+    }
+    const store = itemStoreFor(options.store_path, options.scope);
+    const item = await store.get(id);
+    return item ? { kind: 'item', item, store_path: store.location } : null;
+  }
   const attempts = normalized === 'auto'
     ? ['item', 'source', 'wiki_page', 'run', 'index', 'decision']
     : [normalized];
@@ -746,11 +764,12 @@ export function buildServer() {
   }, async ({ scope, limit, include_archived, store_path }) => {
     const service = createKnowledgeService({ scope });
     try {
-      return jsonText(service.inventory({
-        limit,
-        includeArchived: include_archived,
-        storePath: store_path,
-      }));
+      // Cloud/api mode reports the shared cloud item corpus via the cloud
+      // transport; local mode reports the full json + sqlite catalog inventory.
+      const inventory = isKnowledgeApiMode()
+        ? await service.cloudInventory({ limit, includeArchived: include_archived })
+        : service.inventory({ limit, includeArchived: include_archived, storePath: store_path });
+      return jsonText(inventory);
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }

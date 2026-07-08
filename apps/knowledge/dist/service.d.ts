@@ -389,6 +389,20 @@ export declare class KnowledgeService {
         schema_version: number;
     };
     dbStats(): import("./knowledge-db").KnowledgeDbStats;
+    /**
+     * Build a knowledge inventory from a bare item list (no local sqlite catalog).
+     * Shared by the local no-db path and the cloud path so both produce the exact
+     * same KnowledgeInventoryResult shape with empty catalog sections.
+     */
+    private itemOnlyInventory;
+    /**
+     * Cloud (api mode) inventory: reports the shared cloud knowledge-item corpus.
+     * The RAG catalog (sources/chunks/wiki/sync/machines) lives only in the local
+     * sqlite pipeline and has no cloud counterpart, so those sections are empty —
+     * this routes through the same cloud item transport every item command uses,
+     * never the local db.json or sqlite catalog.
+     */
+    cloudInventory(options?: KnowledgeInventoryOptions): Promise<KnowledgeInventoryResult>;
     inventory(options?: KnowledgeInventoryOptions): KnowledgeInventoryResult;
     private assertAppWikiWrite;
     initAppWiki(options?: KnowledgeAppWikiWriteOptions): Promise<KnowledgeAppWikiInitResult>;
