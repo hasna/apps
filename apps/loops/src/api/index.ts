@@ -1,9 +1,33 @@
 #!/usr/bin/env bun
 import { timingSafeEqual } from "node:crypto";
 import { Command } from "commander";
-import type { CreateLoopInput, Loop, LoopRun, LoopStatus, RunStatus, WorkflowSpec, WriteRunReceiptInput } from "../types.js";
+import type {
+  CreateLoopInput,
+  CreateWorkflowInput,
+  Loop,
+  LoopRun,
+  LoopStatus,
+  RunStatus,
+  WorkflowSpec,
+  WorkflowWorkItemStatus,
+  WriteRunReceiptInput,
+} from "../types.js";
+import type { GoalStatus } from "../lib/goal/types.js";
 import { LoopArchivedError, LoopNotFoundError, ValidationError } from "../lib/errors.js";
-import { publicLoop, publicRun, publicRunReceipt, redact } from "../lib/format.js";
+import {
+  publicGoal,
+  publicGoalRun,
+  publicLoop,
+  publicRun,
+  publicRunReceipt,
+  publicWorkflow,
+  publicWorkflowEvent,
+  publicWorkflowInvocation,
+  publicWorkflowRun,
+  publicWorkflowStepRun,
+  publicWorkflowWorkItem,
+  redact,
+} from "../lib/format.js";
 import { buildDeploymentStatus, deploymentStatusLine } from "../lib/mode.js";
 import { computeNextAfter, dueSlots } from "../lib/recurrence.js";
 import { scrubSecretsDeep } from "../lib/redact.js";
@@ -221,6 +245,13 @@ async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
     if (segments[1] === "loops") return await handleLoopsRequest(ctx, segments.slice(2));
     if (segments[1] === "runs") return await handleRunsRequest(ctx, segments.slice(2));
     if (segments[1] === "receipts") return await handleReceiptsRequest(ctx, segments.slice(2));
+    if (segments[1] === "workflows") return await handleWorkflowsRequest(ctx, segments.slice(2));
+    if (segments[1] === "workflow-runs") return await handleWorkflowRunsRequest(ctx, segments.slice(2));
+    if (segments[1] === "work-items") return await handleWorkItemsRequest(ctx, segments.slice(2));
+    if (segments[1] === "invocations") return await handleInvocationsRequest(ctx, segments.slice(2));
+    if (segments[1] === "goals") return await handleGoalsRequest(ctx, segments.slice(2));
+    if (segments[1] === "goal-runs") return await handleGoalRunsRequest(ctx, segments.slice(2));
+    if (segments[1] === "history") return await handleHistoryRequest(ctx, segments.slice(2));
     if (segments[1] === "runners") return await handleRunnerRequest(ctx, segments.slice(2));
     if (segments[1] === "leases" && segments[2] === "recover" && ctx.request.method === "POST") {
       return runnerProtocolPending("lease recovery is implemented in the runner protocol stage");
@@ -345,6 +376,167 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
   }
   if (segments.length === 2 && segments[1] === "unarchive" && ctx.request.method === "POST") {
     return ok({ loop: publicLoop(await storage.unarchiveLoop(id)) });
+  }
+  if (segments.length === 2 && segments[1] === "rename" && ctx.request.method === "POST") {
+    const body = await readJsonBody<{ name?: unknown }>(ctx.request, ctx.bodyLimitBytes);
+    const name = requiredString(body.name, "name");
+    return ok({ loop: publicLoop(await storage.renameLoop(id, name)) });
+  }
+  return fail("not_found", 404);
+}
+
+async function handleWorkflowsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  const storage = requireStorage(ctx.storage);
+  if (segments.length === 0 && ctx.request.method === "GET") {
+    const workflows = await storage.listWorkflows({
+      status: optionalEnum<WorkflowSpec["status"]>(ctx.url.searchParams.get("status"), ["active", "archived"]),
+      limit: optionalLimit(ctx.url.searchParams.get("limit")),
+      offset: optionalOffset(ctx.url.searchParams.get("offset")),
+    });
+    return ok({ workflows: workflows.map(publicWorkflow) });
+  }
+  if (segments.length === 0 && ctx.request.method === "POST") {
+    const body = await readJsonBody<CreateWorkflowInput>(ctx.request, ctx.bodyLimitBytes);
+    return ok({ workflow: publicWorkflow(await storage.createWorkflow(body)) }, { status: 201 });
+  }
+  if (segments.length === 1 && segments[0] === "count" && ctx.request.method === "GET") {
+    const count = await storage.countWorkflows({
+      status: optionalEnum<WorkflowSpec["status"]>(ctx.url.searchParams.get("status"), ["active", "archived"]),
+    });
+    return ok({ count });
+  }
+  const id = segments[0];
+  if (!id) return fail("not_found", 404);
+  if (segments.length === 1 && ctx.request.method === "GET") {
+    const workflow = await storage.getWorkflow(id);
+    if (!workflow) return fail("workflow_not_found", 404);
+    return ok({ workflow: publicWorkflow(workflow) });
+  }
+  if (segments.length === 2 && segments[1] === "archive" && ctx.request.method === "POST") {
+    return ok({ workflow: publicWorkflow(await storage.archiveWorkflow(id)) });
+  }
+  return fail("not_found", 404);
+}
+
+async function handleWorkflowRunsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  const storage = requireStorage(ctx.storage);
+  if (segments.length === 0 && ctx.request.method === "GET") {
+    const runs = await storage.listWorkflowRuns({
+      workflowId: ctx.url.searchParams.get("workflowId") ?? undefined,
+      loopRunId: ctx.url.searchParams.get("loopRunId") ?? undefined,
+      limit: optionalLimit(ctx.url.searchParams.get("limit")),
+    });
+    return ok({ workflowRuns: runs.map(publicWorkflowRun) });
+  }
+  const id = segments[0];
+  if (!id) return fail("not_found", 404);
+  if (segments.length === 1 && ctx.request.method === "GET") {
+    const run = await storage.getWorkflowRun(id);
+    if (!run) return fail("workflow_run_not_found", 404);
+    return ok({ workflowRun: publicWorkflowRun(run) });
+  }
+  if (segments.length === 2 && segments[1] === "steps" && ctx.request.method === "GET") {
+    const steps = await storage.listWorkflowStepRuns(id);
+    return ok({ steps: steps.map((step) => publicWorkflowStepRun(step)) });
+  }
+  if (segments.length === 2 && segments[1] === "events" && ctx.request.method === "GET") {
+    const events = await storage.listWorkflowEvents(id, optionalLimit(ctx.url.searchParams.get("limit")) ?? 200);
+    return ok({ events: events.map(publicWorkflowEvent) });
+  }
+  if (segments.length === 2 && segments[1] === "recover" && ctx.request.method === "POST") {
+    const body = await readJsonBody<{ reason?: unknown }>(ctx.request, ctx.bodyLimitBytes);
+    const reason = optionalText(body.reason);
+    const result = reason === undefined ? await storage.recoverWorkflowRun(id) : await storage.recoverWorkflowRun(id, reason);
+    return ok({
+      workflowRun: publicWorkflowRun(result.run),
+      recoveredSteps: result.recoveredSteps.map((step) => publicWorkflowStepRun(step)),
+    });
+  }
+  return fail("not_found", 404);
+}
+
+async function handleWorkItemsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  const storage = requireStorage(ctx.storage);
+  if (segments.length === 0 && ctx.request.method === "GET") {
+    const items = await storage.listWorkflowWorkItems({
+      status: optionalString(ctx.url.searchParams.get("status")) as WorkflowWorkItemStatus | undefined,
+      routeKey: ctx.url.searchParams.get("routeKey") ?? undefined,
+      limit: optionalLimit(ctx.url.searchParams.get("limit")),
+    });
+    return ok({ workItems: items.map(publicWorkflowWorkItem) });
+  }
+  const id = segments[0];
+  if (!id) return fail("not_found", 404);
+  if (segments.length === 1 && ctx.request.method === "GET") {
+    const item = await storage.getWorkflowWorkItem(id);
+    if (!item) return fail("work_item_not_found", 404);
+    return ok({ workItem: publicWorkflowWorkItem(item) });
+  }
+  return fail("not_found", 404);
+}
+
+async function handleInvocationsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  const storage = requireStorage(ctx.storage);
+  if (segments.length === 0 && ctx.request.method === "GET") {
+    const invocations = await storage.listWorkflowInvocations({ limit: optionalLimit(ctx.url.searchParams.get("limit")) });
+    return ok({ invocations: invocations.map(publicWorkflowInvocation) });
+  }
+  const id = segments[0];
+  if (!id) return fail("not_found", 404);
+  if (segments.length === 1 && ctx.request.method === "GET") {
+    const invocation = await storage.getWorkflowInvocation(id);
+    if (!invocation) return fail("invocation_not_found", 404);
+    return ok({ invocation: publicWorkflowInvocation(invocation) });
+  }
+  return fail("not_found", 404);
+}
+
+async function handleGoalsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  const storage = requireStorage(ctx.storage);
+  if (segments.length === 0 && ctx.request.method === "GET") {
+    const goals = await storage.listGoals({
+      status: optionalString(ctx.url.searchParams.get("status")) as GoalStatus | undefined,
+      limit: optionalLimit(ctx.url.searchParams.get("limit")),
+    });
+    return ok({ goals: goals.map(publicGoal) });
+  }
+  const id = segments[0];
+  if (!id) return fail("not_found", 404);
+  if (segments.length === 1 && ctx.request.method === "GET") {
+    const goal = await storage.getGoal(id);
+    if (!goal) return fail("goal_not_found", 404);
+    return ok({ goal: publicGoal(goal) });
+  }
+  if (segments.length === 2 && segments[1] === "plan-nodes" && ctx.request.method === "GET") {
+    const nodes = await storage.listGoalPlanNodes(id);
+    return ok({ nodes });
+  }
+  return fail("not_found", 404);
+}
+
+async function handleGoalRunsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  const storage = requireStorage(ctx.storage);
+  if (segments.length === 0 && ctx.request.method === "GET") {
+    const runs = await storage.listGoalRuns({
+      goalId: ctx.url.searchParams.get("goalId") ?? undefined,
+      runId: ctx.url.searchParams.get("runId") ?? undefined,
+      limit: optionalLimit(ctx.url.searchParams.get("limit")),
+    });
+    return ok({ goalRuns: runs.map(publicGoalRun) });
+  }
+  return fail("not_found", 404);
+}
+
+async function handleHistoryRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  const storage = requireStorage(ctx.storage);
+  if (segments.length === 1 && segments[0] === "prune" && ctx.request.method === "POST") {
+    const body = await readJsonBody<{ maxAgeDays?: unknown; keepPerLoop?: unknown; dryRun?: unknown }>(ctx.request, ctx.bodyLimitBytes);
+    const history = await storage.pruneHistory({
+      maxAgeDays: optionalInteger(body.maxAgeDays),
+      keepPerLoop: optionalInteger(body.keepPerLoop),
+      dryRun: body.dryRun === undefined ? undefined : Boolean(body.dryRun),
+    });
+    return ok({ history });
   }
   return fail("not_found", 404);
 }
