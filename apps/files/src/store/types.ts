@@ -63,7 +63,13 @@ export interface CreateSourceInput {
   prefix?: string;
   region?: string;
   config?: SourceConfig;
-  machine_id: string;
+  /**
+   * Owning machine. Optional at the seam: callers never need to resolve the
+   * "current machine" themselves. LocalStore stamps the on-box machine when
+   * omitted; ApiStore drops it entirely and the server assigns the owner. This
+   * is why no CLI command or MCP tool does a `/machines/current` preflight.
+   */
+  machine_id?: string;
 }
 
 /** Patch accepted by {@link FilesStore.updateSource}. Static S3 credentials are

@@ -171,15 +171,19 @@ sources
   .option("--json", "Output as JSON")
   .action(async (opts: { json?: boolean }) => {
     const files = store();
-    const machine = await files.currentMachine();
     const all = await files.listSources();
     if (opts.json) { console.log(JSON.stringify(all, null, 2)); return; }
     if (!all.length) {
       console.log(chalk.dim("No sources configured. Run: files sources add <path>"));
       return;
     }
+    // In cloud/self_hosted mode there is no single "current machine" for the
+    // client — sources are owned by many machines — so we annotate every row
+    // with its owner. In local mode we only annotate foreign machines.
+    const isCloud = files.transport === "api";
+    const currentMachineId = isCloud ? null : (await files.currentMachine()).id;
     for (const s of all) {
-      const isMine = s.machine_id === machine.id;
+      const isMine = currentMachineId === null ? false : s.machine_id === currentMachineId;
       const typeLabel = s.type === "s3"
         ? chalk.blue(`s3://${s.bucket}${s.prefix ? `/${s.prefix}` : ""}${(s.config as S3Config).profile ? ` profile:${(s.config as S3Config).profile}` : ""}`)
         : s.type === "google_drive"
@@ -213,11 +217,11 @@ sources
     forcePathStyle?: boolean;
   }) => {
     const files = store();
-    const machine = await files.currentMachine();
     const isCloud = files.transport === "api";
-    // The Store handles the transport difference (the ApiStore drops the local
-    // machine id so the cloud assigns the owning machine).
-    const persistSource = (input: Parameters<typeof createSource>[0]) => files.createSource(input);
+    // No `currentMachine()` preflight: the Store owns machine ownership. In
+    // local mode LocalStore stamps the on-box machine; in cloud mode ApiStore
+    // drops the id and the server assigns the owning machine.
+    const persistSource = (input: Parameters<typeof files.createSource>[0]) => files.createSource(input);
 
     if (pathOrS3.startsWith("s3://")) {
       const url = new URL(pathOrS3);
@@ -239,7 +243,6 @@ sources
         prefix,
         region: opts.region ?? "us-east-1",
         config,
-        machine_id: machine.id,
       });
       console.log(chalk.green(`✓ S3 source added${isCloud ? " (cloud)" : ""}: ${source.id} → s3://${bucket}${prefix ? `/${prefix}` : ""}`));
     } else {
@@ -255,7 +258,6 @@ sources
         type: "local",
         path: absPath,
         config: {},
-        machine_id: machine.id,
       });
       console.log(chalk.green(`✓ Local source added${isCloud ? " (cloud)" : ""}: ${source.id} → ${absPath}`));
     }

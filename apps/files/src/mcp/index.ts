@@ -299,9 +299,10 @@ registerTool("add_source", "Add a local folder or S3 bucket as an indexed source
     name: name ?? (type === "s3" ? bucket! : path!),
     config: (config as S3Config) ?? {},
   };
-  // The Store handles the transport difference (the ApiStore drops the local
-  // machine id so the cloud assigns the owning machine).
-  const source = await store().createSource({ ...input, machine_id: (await store().currentMachine()).id });
+  // No `currentMachine()` preflight: the Store owns machine ownership.
+  // LocalStore stamps the on-box machine; ApiStore drops the id so the cloud
+  // server assigns the owning machine.
+  const source = await store().createSource(input);
   return { content: [{ type: "text", text: JSON.stringify(source, null, 2) }] };
 });
 

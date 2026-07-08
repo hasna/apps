@@ -110,7 +110,9 @@ export class LocalStore implements FilesStore {
     return listSources(machineId);
   }
   async createSource(input: CreateSourceInput): Promise<Source> {
-    return createSource(input);
+    // machine_id is a LocalStore concern; stamp the on-box machine when the
+    // caller omits it so no command needs a `currentMachine()` preflight.
+    return createSource({ ...input, machine_id: input.machine_id ?? getCurrentMachine().id });
   }
   async getSource(id: string): Promise<Source | null> {
     const rid = resolveId(id, "sources");
