@@ -5,18 +5,11 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { getMessageById, getThreadReplies, listUnreadCounts, listUnreadCountsWithMentions, getMessagesForAgent, markMentionsRead, getReadReceipts, getMessageReadStatus, recordReadReceipt } from "../../lib/messages.js";
+import { getStore } from "../../lib/store/index.js";
 // Writes (auto-DMs) route to the cloud API in self_hosted mode so a flipped
 // fleet sees them; falls through to the local store otherwise. Read-only tools
 // below still read the local store (no cloud endpoint yet) — documented residual.
-import { sendMessage as cloudSendMessage } from "../../lib/cloud-store.js";
 import { resolveIdentity } from "../../lib/identity.js";
-import { addReaction, removeReaction, getReactions, getReactionSummary } from "../../lib/reactions.js";
-import { acquireLock, tryBulkAcquireLock, releaseLock, checkLock, listLocksEnriched, cleanExpiredLocks, releaseStaleAgentLocks } from "../../lib/locks.js";
-import { listHotSessions } from "../../lib/hot.js";
-import { getChannelTopics, getSessionTopics, getTrendingTopics } from "../../lib/topics.js";
-import { getConversationSummary } from "../../lib/summary.js";
-import { buildGraph, getRelated, getAgentNetwork, getGraphStats } from "../../lib/graph.js";
 import { pageQueriedItems, summarizeMessage, windowItems } from "../../lib/compact-output.js";
 import { jsonText, resolveMcpWindow } from "../compact.js";
 
@@ -31,9 +24,9 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
       channel: z.string().optional().describe("Channel name — if provided, also returns list of members who haven't read yet"),
     },
   }, async (args: Record<string, any>) => {
-    const receipts = getReadReceipts(args.message_id);
+    const receipts = await getStore().getReadReceipts(args.message_id);
     if (args.channel) {
-      const status = getMessageReadStatus(args.message_id, args.channel);
+      const status = await getStore().getMessageReadStatus(args.message_id, args.channel);
       return { content: [{ type: "text", text: JSON.stringify(status) }] };
     }
     return { content: [{ type: "text", text: JSON.stringify({ receipts, count: receipts.length }) }] };
@@ -46,7 +39,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
       agent: z.string(),
     },
   }, async (args: Record<string, any>) => {
-    recordReadReceipt(args.message_id, args.agent);
+    await getStore().recordReadReceipt(args.message_id, args.agent);
     return { content: [{ type: "text", text: `\u2713 Marked message #${args.message_id} as read by ${args.agent}` }] };
   });
 
@@ -57,7 +50,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     inputSchema: { message_id: z.coerce.number(), emoji: z.string(), from: z.string().optional() },
   }, async (args: Record<string, any>) => {
     const agent = resolveIdentity(args.from);
-    const reaction = addReaction(args.message_id, agent, args.emoji);
+    const reaction = await getStore().addReaction(args.message_id, agent, args.emoji);
     return { content: [{ type: "text", text: JSON.stringify(reaction) }] };
   });
 
@@ -66,7 +59,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     inputSchema: { message_id: z.coerce.number(), emoji: z.string(), from: z.string().optional() },
   }, async (args: Record<string, any>) => {
     const agent = resolveIdentity(args.from);
-    const removed = removeReaction(args.message_id, agent, args.emoji);
+    const removed = await getStore().removeReaction(args.message_id, agent, args.emoji);
     return { content: [{ type: "text", text: JSON.stringify({ removed }) }] };
   });
 
@@ -80,7 +73,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
   }, async (args: Record<string, any>) => {
     const { message_id, emoji, from: fromParam } = args;
     const agent = resolveIdentity(fromParam);
-    const reaction = addReaction(message_id, agent, emoji);
+    const reaction = await getStore().addReaction(message_id, agent, emoji);
     return { content: [{ type: "text", text: JSON.stringify(reaction) }] };
   });
 
@@ -94,7 +87,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
   }, async (args: Record<string, any>) => {
     const { message_id, emoji, from: fromParam } = args;
     const agent = resolveIdentity(fromParam);
-    const removed = removeReaction(message_id, agent, emoji);
+    const removed = await getStore().removeReaction(message_id, agent, emoji);
     return { content: [{ type: "text", text: JSON.stringify({ removed }) }] };
   });
 
@@ -104,7 +97,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
       message_id: z.coerce.number(),
     },
   }, async (args: Record<string, any>) => {
-    const reactions = getReactions(args.message_id);
+    const reactions = await getStore().getReactions(args.message_id);
     return { content: [{ type: "text", text: JSON.stringify(reactions) }] };
   });
 
@@ -114,7 +107,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
       message_id: z.coerce.number(),
     },
   }, async (args: Record<string, any>) => {
-    const summary = getReactionSummary(args.message_id);
+    const summary = await getStore().getReactionSummary(args.message_id);
     return { content: [{ type: "text", text: JSON.stringify(summary) }] };
   });
 
@@ -128,10 +121,10 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     },
   }, async (args: Record<string, any>) => {
     if (args.agent && args.include_mentions) {
-      const counts = listUnreadCountsWithMentions(args.agent as string);
+      const counts = await getStore().listUnreadCountsWithMentions(args.agent as string);
       return { content: [{ type: "text", text: JSON.stringify(counts) }] };
     }
-    const counts = listUnreadCounts(args.agent as string | undefined);
+    const counts = await getStore().listUnreadCounts(args.agent as string | undefined);
     return { content: [{ type: "text", text: JSON.stringify(counts) }] };
   });
 
@@ -148,7 +141,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
   }, async (args: Record<string, any>) => {
     const window = resolveMcpWindow(args);
     const verbose = args.verbose === true;
-    const results = getMessagesForAgent(args.agent as string, {
+    const results = await getStore().getMessagesForAgent(args.agent as string, {
       channel: args.channel,
       unread_only: args.unread_only ?? true,
       limit: verbose ? args.limit : window.offset + window.limit + 1,
@@ -179,7 +172,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
       channel: z.string().optional().describe("Clear only mentions in this channel"),
     },
   }, async (args: Record<string, any>) => {
-    const cleared = markMentionsRead(args.agent as string, args.channel);
+    const cleared = await getStore().markMentionsRead(args.agent as string, args.channel);
     return { content: [{ type: "text", text: JSON.stringify({ cleared }) }] };
   });
 
@@ -189,7 +182,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     description: "Build/rebuild the knowledge graph from messages, channels, and projects. Creates relationship edges between agents, channels, and projects.",
     inputSchema: {},
   }, async () => {
-    const result = buildGraph();
+    const result = await getStore().buildGraph();
     return { content: [{ type: "text", text: JSON.stringify(result) }] };
   });
 
@@ -200,7 +193,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
       entity_id: z.string(),
     },
   }, async (args: Record<string, any>) => {
-    const related = getRelated(args.entity_type, args.entity_id);
+    const related = await getStore().getRelated(args.entity_type, args.entity_id);
     return { content: [{ type: "text", text: JSON.stringify(related) }] };
   });
 
@@ -210,7 +203,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
       agent: z.string(),
     },
   }, async (args: Record<string, any>) => {
-    const network = getAgentNetwork(args.agent);
+    const network = await getStore().getAgentNetwork(args.agent);
     return { content: [{ type: "text", text: JSON.stringify(network) }] };
   });
 
@@ -218,7 +211,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     description: "Get knowledge graph statistics: total edges and counts by relation type.",
     inputSchema: {},
   }, async () => {
-    const stats = getGraphStats();
+    const stats = await getStore().getGraphStats();
     return { content: [{ type: "text", text: JSON.stringify(stats) }] };
   });
 
@@ -234,7 +227,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
   }, async (args: Record<string, any>) => {
     const target = args.channel || args.session_id;
     if (!target) return { content: [{ type: "text", text: "session_id or channel required" }], isError: true };
-    const summary = getConversationSummary(target, { limit: args.limit });
+    const summary = await getStore().getConversationSummary(target, { limit: args.limit });
     if (!summary) return { content: [{ type: "text", text: `No messages found for "${target}"` }], isError: true };
     return { content: [{ type: "text", text: JSON.stringify(summary) }] };
   });
@@ -250,10 +243,10 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     },
   }, async (args: Record<string, any>) => {
     const topics = args.channel
-      ? getChannelTopics(args.channel, { limit: args.limit })
+      ? await getStore().getChannelTopics(args.channel, { limit: args.limit })
       : args.session_id
-      ? getSessionTopics(args.session_id, { limit: args.limit })
-      : getTrendingTopics({ top_n: args.limit });
+      ? await getStore().getSessionTopics(args.session_id, { limit: args.limit })
+      : await getStore().getTrendingTopics({ top_n: args.limit });
     return { content: [{ type: "text", text: JSON.stringify(topics) }] };
   });
 
@@ -265,7 +258,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
       top_n: z.coerce.number().optional(),
     },
   }, async (args: Record<string, any>) => {
-    const topics = getTrendingTopics({ hours: args.hours, project_id: args.project_id, top_n: args.top_n });
+    const topics = await getStore().getTrendingTopics({ hours: args.hours, project_id: args.project_id, top_n: args.top_n });
     return { content: [{ type: "text", text: JSON.stringify(topics) }] };
   });
 
@@ -282,7 +275,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     },
   }, async (args: Record<string, any>) => {
     const window = resolveMcpWindow(args);
-    const sessions = listHotSessions({
+    const sessions = await getStore().listHotSessions({
       limit: window.offset + window.limit + 1,
       min_score: args.min_score,
       channel: args.channel,
@@ -307,11 +300,11 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
   }, async (args: Record<string, any>) => {
     const { resource_type, resource_id, lock_type, expiry_ms, from: fromParam, auto_dm } = args;
     const agent = resolveIdentity(fromParam);
-    const result = acquireLock(resource_type, resource_id, agent, lock_type ?? "advisory", expiry_ms);
+    const result = await getStore().acquireLock(resource_type, resource_id, agent, lock_type ?? "advisory", expiry_ms);
 
     if (!result.acquired && result.held_by && auto_dm !== false) {
       try {
-        await cloudSendMessage({
+        await await getStore().sendMessage({
           from: agent,
           to: result.held_by,
           content: `Lock conflict: I (@${agent}) tried to acquire ${lock_type ?? "advisory"} lock on \`${resource_type}/${resource_id}\` but you hold it. If you no longer need it, release it with \`release_lock\`.`,
@@ -335,7 +328,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
   }, async (args: Record<string, any>) => {
     const { resource_type, resource_id, from: fromParam } = args;
     const agent = resolveIdentity(fromParam);
-    const released = releaseLock(resource_type, resource_id, agent);
+    const released = await getStore().releaseLock(resource_type, resource_id, agent);
     return { content: [{ type: "text", text: JSON.stringify({ released }) }] };
   });
 
@@ -346,7 +339,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
       resource_id: z.string(),
     },
   }, async (args: Record<string, any>) => {
-    const lock = checkLock(args.resource_type, args.resource_id);
+    const lock = await getStore().checkLock(args.resource_type, args.resource_id);
     return { content: [{ type: "text", text: JSON.stringify(lock ?? { locked: false }) }] };
   });
 
@@ -359,7 +352,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
       cursor: z.coerce.number().optional(),
     },
   }, async (args: Record<string, any>) => {
-    const locks = listLocksEnriched({ resource_type: args.resource_type, agent_id: args.agent_id });
+    const locks = await getStore().listLocksEnriched({ resource_type: args.resource_type, agent_id: args.agent_id });
     const window = resolveMcpWindow(args);
     const page = windowItems(locks, window);
     return { content: [{ type: "text", text: jsonText({ locks: page.items, count: page.count, total: page.total, next_cursor: page.nextCursor, has_more: page.hasMore }) }] };
@@ -379,11 +372,11 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     },
   }, async (args: Record<string, any>) => {
     const agent = resolveIdentity(args.from);
-    const result = tryBulkAcquireLock(args.resources, agent);
+    const result = await getStore().tryBulkAcquireLock(args.resources, agent);
 
     if (!result.acquired && result.blocked_by && args.auto_dm !== false) {
       try {
-        await cloudSendMessage({
+        await await getStore().sendMessage({
           from: agent,
           to: result.blocked_by.held_by,
           content: `Bulk lock conflict: I (@${agent}) tried to atomically acquire ${args.resources.length} locks but you hold \`${result.blocked_by.resource_type}/${result.blocked_by.resource_id}\`. Release it when done.`,
@@ -401,8 +394,8 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     description: "Clean up expired locks and auto-release locks held by agents whose heartbeat has been stale for >30 minutes. Returns counts of removed locks.",
     inputSchema: {},
   }, async () => {
-    const stale = releaseStaleAgentLocks();
-    const expired = cleanExpiredLocks();
+    const stale = await getStore().releaseStaleAgentLocks();
+    const expired = await getStore().cleanExpiredLocks();
     return { content: [{ type: "text", text: JSON.stringify({ released_stale_agent: stale, released_expired: expired, total: stale + expired }) }] };
   });
 
@@ -416,9 +409,9 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
       verbose: z.coerce.boolean().optional().describe("Return full raw parent/reply message records"),
     },
   }, async (args: Record<string, any>) => {
-    let replies = getThreadReplies(args.message_id);
+    let replies = await getStore().getThreadReplies(args.message_id);
     if (args.limit) replies = replies.slice(0, args.limit);
-    const parent = getMessageById(args.message_id);
+    const parent = await getStore().getMessageById(args.message_id);
     const payload = args.verbose
       ? { parent, replies, reply_count: replies.length, compact: false }
       : {
@@ -439,9 +432,9 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
       verbose: z.coerce.boolean().optional().describe("Return full raw parent/reply message records"),
     },
   }, async (args: Record<string, any>) => {
-    let replies = getThreadReplies(args.message_id);
+    let replies = await getStore().getThreadReplies(args.message_id);
     if (args.limit) replies = replies.slice(0, args.limit);
-    const parent = getMessageById(args.message_id);
+    const parent = await getStore().getMessageById(args.message_id);
     const payload = args.verbose
       ? { parent, replies, reply_count: replies.length, compact: false }
       : {
@@ -618,8 +611,8 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     { message: z.string(), email: z.string().optional(), category: z.enum(["bug", "feature", "general"]).optional() },
     async (params) => {
       try {
-        const db = (await import("../../lib/db.js")).getDb();
-        db.prepare("INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)").run(params.message, params.email || null, params.category || "general", pkgVersion);
+        const { saveFeedback } = await import("../../lib/feedback.js");
+        saveFeedback(params.message, params.email || undefined);
         return { content: [{ type: "text" as const, text: "Feedback saved. Thank you!" }] };
       } catch (e) {
         return { content: [{ type: "text" as const, text: String(e) }], isError: true };

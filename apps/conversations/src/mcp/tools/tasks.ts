@@ -5,32 +5,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import {
-  createTask,
-  getTask,
-  listTasks,
-  startTask,
-  completeTask,
-  cancelTask,
-  blockTask,
-  unblockTask,
-  reopenTask,
-  assignTask,
-  setTaskPriority,
-  addComment,
-  getComments,
-  getSubtasks,
-  getTaskTree,
-  addDependency,
-  removeDependency,
-  getDependencies,
-  getDependents,
-  getTaskActivity,
-  deleteTask,
-  getDueTasks,
-  getTaskSummary,
-  searchTasks,
-} from "../../lib/tasks.js";
+import { getStore } from "../../lib/store/index.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { previewText, summarizeTask } from "../../lib/compact-output.js";
 import { compactQueriedTasks, jsonText, resolveMcpWindow } from "../compact.js";
@@ -80,7 +55,7 @@ export function registerTaskTools(server: McpServer): void {
     if (!args.reporter) {
       try { args.reporter = resolveIdentity(undefined); } catch { args.reporter = "unknown"; }
     }
-    const task = createTask({
+    const task = await getStore().createTask({
       subject: args.subject,
       description: args.description,
       reporter: args.reporter,
@@ -107,7 +82,7 @@ export function registerTaskTools(server: McpServer): void {
   }, async (args: Record<string, any>) => {
     const lookup = args.id ?? args.uuid;
     if (!lookup) return { content: [{ type: "text", text: "id or uuid required" }], isError: true };
-    const task = getTask(lookup);
+    const task = await getStore().getTask(lookup);
     if (!task) return { content: [{ type: "text", text: `Task not found: ${lookup}` }], isError: true };
     return { content: [{ type: "text", text: JSON.stringify(task) }] };
   });
@@ -135,7 +110,7 @@ export function registerTaskTools(server: McpServer): void {
   }, async (args: Record<string, any>) => {
     const window = resolveMcpWindow(args);
     const verbose = args.verbose === true;
-    const tasks = listTasks({
+    const tasks = await getStore().listTasks({
       ...args,
       limit: verbose ? args.limit : window.limit + 1,
       offset: verbose ? (args.offset ?? args.cursor) : window.offset,
@@ -157,7 +132,7 @@ export function registerTaskTools(server: McpServer): void {
     },
   }, async (args: Record<string, any>) => {
     const agent = args.agent ? args.agent : resolveIdentity(undefined);
-    const task = startTask(args.id, agent);
+    const task = await getStore().startTask(args.id, agent);
     if (!task) return { content: [{ type: "text", text: `Task not found: ${args.id}` }], isError: true };
     return { content: [{ type: "text", text: JSON.stringify(task) }] };
   });
@@ -172,7 +147,7 @@ export function registerTaskTools(server: McpServer): void {
     },
   }, async (args: Record<string, any>) => {
     const agent = args.agent ? args.agent : resolveIdentity(undefined);
-    const task = completeTask(args.id, agent, args.evidence ? { evidence: args.evidence } : undefined);
+    const task = await getStore().completeTask(args.id, agent, args.evidence ? { evidence: args.evidence } : undefined);
     if (!task) return { content: [{ type: "text", text: `Task not found: ${args.id}` }], isError: true };
     return { content: [{ type: "text", text: JSON.stringify(task) }] };
   });
@@ -187,7 +162,7 @@ export function registerTaskTools(server: McpServer): void {
     },
   }, async (args: Record<string, any>) => {
     const agent = args.agent ? args.agent : resolveIdentity(undefined);
-    const task = cancelTask(args.id, agent, args.reason ? { reason: args.reason } : undefined);
+    const task = await getStore().cancelTask(args.id, agent, args.reason ? { reason: args.reason } : undefined);
     if (!task) return { content: [{ type: "text", text: `Task not found: ${args.id}` }], isError: true };
     return { content: [{ type: "text", text: JSON.stringify(task) }] };
   });
@@ -202,7 +177,7 @@ export function registerTaskTools(server: McpServer): void {
     },
   }, async (args: Record<string, any>) => {
     const agent = args.agent ? args.agent : resolveIdentity(undefined);
-    const task = blockTask(args.id, agent, args.reason ? { reason: args.reason } : undefined);
+    const task = await getStore().blockTask(args.id, agent, args.reason ? { reason: args.reason } : undefined);
     if (!task) return { content: [{ type: "text", text: `Task not found: ${args.id}` }], isError: true };
     return { content: [{ type: "text", text: JSON.stringify(task) }] };
   });
@@ -216,7 +191,7 @@ export function registerTaskTools(server: McpServer): void {
     },
   }, async (args: Record<string, any>) => {
     const agent = args.agent ? args.agent : resolveIdentity(undefined);
-    const task = unblockTask(args.id, agent);
+    const task = await getStore().unblockTask(args.id, agent);
     if (!task) return { content: [{ type: "text", text: `Task not found: ${args.id}` }], isError: true };
     return { content: [{ type: "text", text: JSON.stringify(task) }] };
   });
@@ -230,7 +205,7 @@ export function registerTaskTools(server: McpServer): void {
     },
   }, async (args: Record<string, any>) => {
     const agent = args.agent ? args.agent : resolveIdentity(undefined);
-    const task = reopenTask(args.id, agent);
+    const task = await getStore().reopenTask(args.id, agent);
     if (!task) return { content: [{ type: "text", text: `Task not found: ${args.id}` }], isError: true };
     return { content: [{ type: "text", text: JSON.stringify(task) }] };
   });
@@ -245,7 +220,7 @@ export function registerTaskTools(server: McpServer): void {
     },
   }, async (args: Record<string, any>) => {
     const agent = args.agent ? args.agent : resolveIdentity(undefined);
-    const task = assignTask(args.id, args.assignee, agent);
+    const task = await getStore().assignTask(args.id, args.assignee, agent);
     if (!task) return { content: [{ type: "text", text: `Task not found: ${args.id}` }], isError: true };
     return { content: [{ type: "text", text: JSON.stringify(task) }] };
   });
@@ -260,7 +235,7 @@ export function registerTaskTools(server: McpServer): void {
     },
   }, async (args: Record<string, any>) => {
     const agent = args.agent ? args.agent : resolveIdentity(undefined);
-    const task = setTaskPriority(args.id, args.priority, agent);
+    const task = await getStore().setTaskPriority(args.id, args.priority, agent);
     if (!task) return { content: [{ type: "text", text: `Task not found: ${args.id}` }], isError: true };
     return { content: [{ type: "text", text: JSON.stringify(task) }] };
   });
@@ -274,7 +249,7 @@ export function registerTaskTools(server: McpServer): void {
     },
   }, async (args: Record<string, any>) => {
     const agent = args.agent ? args.agent : resolveIdentity(undefined);
-    const deleted = deleteTask(args.id, agent);
+    const deleted = await getStore().deleteTask(args.id, agent);
     return { content: [{ type: "text", text: JSON.stringify({ deleted, id: args.id }) }] };
   });
 
@@ -288,7 +263,7 @@ export function registerTaskTools(server: McpServer): void {
     },
   }, async (args: Record<string, any>) => {
     const agent = args.agent ? args.agent : resolveIdentity(undefined);
-    const comment = addComment(args.task_id, agent, args.content);
+    const comment = await getStore().addTaskComment(args.task_id, agent, args.content);
     return { content: [{ type: "text", text: JSON.stringify(comment) }] };
   });
 
@@ -302,7 +277,7 @@ export function registerTaskTools(server: McpServer): void {
       verbose: z.coerce.boolean().optional().describe("Return full raw comments instead of previews"),
     },
   }, async (args: Record<string, any>) => {
-    const comments = getComments(args.task_id);
+    const comments = await getStore().getTaskComments(args.task_id);
     if (args.verbose) return { content: [{ type: "text", text: jsonText({ comments, count: comments.length, compact: false }) }] };
     const window = resolveMcpWindow(args);
     const page = comments.slice(window.offset, window.offset + window.limit);
@@ -332,7 +307,7 @@ export function registerTaskTools(server: McpServer): void {
       parent_id: z.coerce.number(),
     },
   }, async (args: Record<string, any>) => {
-    const subtasks = getSubtasks(args.parent_id);
+    const subtasks = await getStore().getSubtasks(args.parent_id);
     return { content: [{ type: "text", text: JSON.stringify({ subtasks, count: subtasks.length }) }] };
   });
 
@@ -345,7 +320,7 @@ export function registerTaskTools(server: McpServer): void {
       verbose: z.coerce.boolean().optional().describe("Return full raw recursive task tree"),
     },
   }, async (args: Record<string, any>) => {
-    const tree = getTaskTree(args.parent_id, args.max_depth ?? 5);
+    const tree = await getStore().getTaskTree(args.parent_id, args.max_depth ?? 5);
     return {
       content: [{
         type: "text",
@@ -366,7 +341,7 @@ export function registerTaskTools(server: McpServer): void {
       depends_on_id: z.coerce.number(),
     },
   }, async (args: Record<string, any>) => {
-    addDependency(args.task_id, args.depends_on_id);
+    await getStore().addDependency(args.task_id, args.depends_on_id);
     return { content: [{ type: "text", text: `Task #${args.task_id} now depends on #${args.depends_on_id}` }] };
   });
 
@@ -378,7 +353,7 @@ export function registerTaskTools(server: McpServer): void {
       depends_on_id: z.coerce.number(),
     },
   }, async (args: Record<string, any>) => {
-    removeDependency(args.task_id, args.depends_on_id);
+    await getStore().removeDependency(args.task_id, args.depends_on_id);
     return { content: [{ type: "text", text: `Removed dependency: #${args.task_id} no longer depends on #${args.depends_on_id}` }] };
   });
 
@@ -389,7 +364,7 @@ export function registerTaskTools(server: McpServer): void {
       task_id: z.coerce.number(),
     },
   }, async (args: Record<string, any>) => {
-    const deps = getDependencies(args.task_id);
+    const deps = await getStore().getDependencies(args.task_id);
     return { content: [{ type: "text", text: JSON.stringify({ dependencies: deps, count: deps.length }) }] };
   });
 
@@ -400,7 +375,7 @@ export function registerTaskTools(server: McpServer): void {
       task_id: z.coerce.number(),
     },
   }, async (args: Record<string, any>) => {
-    const deps = getDependents(args.task_id);
+    const deps = await getStore().getDependents(args.task_id);
     return { content: [{ type: "text", text: JSON.stringify({ dependents: deps, count: deps.length }) }] };
   });
 
@@ -412,7 +387,7 @@ export function registerTaskTools(server: McpServer): void {
       limit: z.coerce.number().optional(),
     },
   }, async (args: Record<string, any>) => {
-    const activity = getTaskActivity(args.task_id, args.limit ?? 50);
+    const activity = await getStore().getTaskActivity(args.task_id, args.limit ?? 50);
     return { content: [{ type: "text", text: JSON.stringify({ activity, count: activity.length }) }] };
   });
 
@@ -423,7 +398,7 @@ export function registerTaskTools(server: McpServer): void {
       window_hours: z.coerce.number().optional(),
     },
   }, async (args: Record<string, any>) => {
-    const due = getDueTasks({ window_hours: args.window_hours });
+    const due = await getStore().getDueTasks({ window_hours: args.window_hours });
     return { content: [{ type: "text", text: JSON.stringify({ tasks: due, count: due.length }) }] };
   });
 
@@ -437,7 +412,7 @@ export function registerTaskTools(server: McpServer): void {
   }, async (args: Record<string, any>) => {
     const lookup = args.id ?? args.uuid;
     if (!lookup) return { content: [{ type: "text", text: "id or uuid required" }], isError: true };
-    const summary = getTaskSummary(lookup);
+    const summary = await getStore().getTaskSummary(lookup);
     if (!summary) return { content: [{ type: "text", text: `Task not found: ${lookup}` }], isError: true };
     return { content: [{ type: "text", text: JSON.stringify(summary) }] };
   });
@@ -461,7 +436,7 @@ export function registerTaskTools(server: McpServer): void {
   }, async (args: Record<string, any>) => {
     const window = resolveMcpWindow(args);
     const verbose = args.verbose === true;
-    const results = searchTasks({
+    const results = await getStore().searchTasks({
       query: args.query,
       ...args,
       limit: verbose ? args.limit : window.limit + 1,

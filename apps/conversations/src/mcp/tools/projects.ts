@@ -4,7 +4,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { createProject, listProjects, getProject, getProjectByName, updateProject, deleteProject } from "../../lib/projects.js";
+import { getStore } from "../../lib/store/index.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { compactWindowedProjects, jsonText } from "../compact.js";
 
@@ -23,6 +23,7 @@ export function registerProjectTools(server: McpServer): void {
       settings: z.string().optional(),
     },
   }, async (args: Record<string, any>) => {
+    const store = getStore();
     const { from: fromParam, name, description, path, repository, tags, metadata, settings } = args;
     const agent = resolveIdentity(fromParam);
 
@@ -63,7 +64,7 @@ export function registerProjectTools(server: McpServer): void {
     }
 
     try {
-      const project = createProject({
+      const project = await store.createProject({
         name,
         created_by: agent,
         description,
@@ -100,8 +101,9 @@ export function registerProjectTools(server: McpServer): void {
       verbose: z.coerce.boolean().optional().describe("Return legacy raw project array"),
     },
   }, async (args: Record<string, any>) => {
+    const store = getStore();
     const { status } = args;
-    const projects = listProjects(status ? { status } : undefined);
+    const projects = await store.listProjects(status ? { status } : undefined);
 
     return {
       content: [{ type: "text", text: jsonText(args.verbose ? projects : compactWindowedProjects(projects, args)) }],
@@ -114,10 +116,11 @@ export function registerProjectTools(server: McpServer): void {
       id: z.string(),
     },
   }, async ({ id }) => {
+    const store = getStore();
     // Try by ID first, then by name
-    let project = getProject(id);
+    let project = await store.getProject(id);
     if (!project) {
-      project = getProjectByName(id);
+      project = await store.getProjectByName(id);
     }
 
     if (!project) {
@@ -146,6 +149,7 @@ export function registerProjectTools(server: McpServer): void {
       settings: z.string().optional(),
     },
   }, async (args: Record<string, any>) => {
+    const store = getStore();
     const { id, name, description, path, status, repository, tags, metadata, settings } = args;
     const updates: Record<string, unknown> = {};
     if (name !== undefined) updates.name = name;
@@ -186,7 +190,7 @@ export function registerProjectTools(server: McpServer): void {
     }
 
     try {
-      const project = updateProject(id, updates as any);
+      const project = await store.updateProject(id, updates as any);
       return {
         content: [{ type: "text", text: JSON.stringify(project) }],
       };
@@ -204,8 +208,9 @@ export function registerProjectTools(server: McpServer): void {
       id: z.string(),
     },
   }, async ({ id }) => {
+    const store = getStore();
     try {
-      const deleted = deleteProject(id);
+      const deleted = await store.deleteProject(id);
       if (!deleted) {
         return {
           content: [{ type: "text", text: `project "${id}" not found` }],

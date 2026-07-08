@@ -1,14 +1,12 @@
 import type { Command } from "commander";
+import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
-import { exportMessages, getUnreadBlockers } from "../../lib/messages.js";
 import { normalizeSince } from "../../lib/since.js";
-// Routed reads/writes: cloud-store dispatches to the self_hosted API when set.
-import { readMessages, readDigest, markRead, markReadByIds, markSessionRead, markChannelRead, markAllRead, searchMessages, editMessage, pinMessage, unpinMessage, getPinnedMessages, sendMessage, getMessageById, deleteMessage } from "../../lib/cloud-store.js";
+// Reads/writes route through getStore(): ApiStore (self_hosted/cloud) or LocalStore.
 import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { renderContent } from "../../lib/terminal-markdown.js";
-import { heartbeat } from "../../lib/presence.js";
-import { buildMessagePreview, listChannelNotificationSubscriptions, markAllChannelNotificationsRead, readChannelNotifications } from "../../lib/channel-notifications.js";
+import { buildMessagePreview } from "../../lib/channel-notifications.js";
 import { previewText } from "../../lib/compact-output.js";
 import { getCliWindow, pageFromQuery, printCompactFooter, queryLimitFor } from "../compact.js";
 import { printMessageEntry } from "../message-output.js";
@@ -80,7 +78,7 @@ export function registerMessagingCommands(program: Command): void {
         }
       }
 
-      const msg = await sendMessage({
+      const msg = await await getStore().sendMessage({
         from,
         to: to || from,
         channel: channel || undefined,
@@ -121,7 +119,7 @@ export function registerMessagingCommands(program: Command): void {
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
-      const messages = await readMessages({
+      const messages = await await getStore().readMessages({
         session_id: opts.session,
         from: opts.from,
         to: opts.to,
@@ -138,7 +136,7 @@ export function registerMessagingCommands(program: Command): void {
       if (opts.markRead) {
         const reader = resolveIdentity(opts.to);
         const ids = page.items.filter((m) => !m.read_at).map((m) => m.id);
-        if (ids.length > 0) await markReadByIds(ids, reader);
+        if (ids.length > 0) await await getStore().markReadByIds(ids, reader);
       }
 
       if (opts.json) {
@@ -173,7 +171,7 @@ export function registerMessagingCommands(program: Command): void {
         process.exit(1);
       }
 
-      const msg = await getMessageById(id);
+      const msg = await await getStore().getMessageById(id);
       if (!msg) {
         console.error(chalk.red(`Message #${id} not found.`));
         process.exit(1);
@@ -225,7 +223,7 @@ export function registerMessagingCommands(program: Command): void {
 
       let result;
       try {
-        result = await readDigest({
+        result = await await getStore().readDigest({
           channel,
           session_id: opts.session,
           since: opts.since,
@@ -288,7 +286,7 @@ export function registerMessagingCommands(program: Command): void {
       }
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
 
-      const messages = await searchMessages({
+      const messages = await await getStore().searchMessages({
         query: q,
         channel: opts.channel,
         from: opts.from,
@@ -342,7 +340,7 @@ export function registerMessagingCommands(program: Command): void {
       const since = new Date(Date.now() - value * msMap[unit]).toISOString().replace("T", "T").slice(0, 23);
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
 
-      const messages = await readMessages({
+      const messages = await await getStore().readMessages({
         since,
         order: "asc",
         limit: opts.json ? (opts.limit ?? 200) : queryLimitFor(window),
@@ -382,7 +380,7 @@ export function registerMessagingCommands(program: Command): void {
     .option("--priority <level>", "Priority: low, normal, high, urgent", "normal")
     .option("-j, --json", "Output as JSON")
     .action(async (message, opts) => {
-      const original = await getMessageById(opts.to);
+      const original = await await getStore().getMessageById(opts.to);
       if (!original) {
         console.error(chalk.red(`Message #${opts.to} not found.`));
         process.exit(1);
@@ -404,7 +402,7 @@ export function registerMessagingCommands(program: Command): void {
       const to = channel
         ? channel
         : (original.from_agent === from ? original.to_agent : original.from_agent);
-      const msg = await sendMessage({
+      const msg = await await getStore().sendMessage({
         from,
         to,
         content,
@@ -436,13 +434,13 @@ export function registerMessagingCommands(program: Command): void {
       let count = 0;
 
       if (opts.all) {
-        count = await markAllRead(agent);
+        count = await await getStore().markAllRead(agent);
       } else if (opts.session) {
-        count = await markSessionRead(opts.session, agent);
+        count = await await getStore().markSessionRead(opts.session, agent);
       } else if (opts.channel) {
-        count = await markChannelRead(opts.channel, agent);
+        count = await await getStore().markChannelRead(opts.channel, agent);
       } else if (ids.length > 0) {
-        count = await markRead(ids.map(Number), agent);
+        count = await await getStore().markRead(ids.map(Number), agent);
       } else {
         console.error(chalk.red("Provide message IDs, --all, --session, or --channel flag."));
         process.exit(1);
@@ -466,9 +464,9 @@ export function registerMessagingCommands(program: Command): void {
     .option("--since <date>", "Messages after this ISO date")
     .option("--until <date>", "Messages before this ISO date")
     .option("--format <format>", "Output format: json or csv", "json")
-    .action((opts) => {
+    .action(async (opts) => {
       const format = opts.format === "csv" ? "csv" : "json";
-      const result = exportMessages({
+      const result = await getStore().exportMessages({
         channel: opts.channel,
         session_id: opts.session,
         from: opts.from,
@@ -500,7 +498,7 @@ export function registerMessagingCommands(program: Command): void {
         process.exit(1);
       }
 
-      const msg = await editMessage(id, agent, content);
+      const msg = await await getStore().editMessage(id, agent, content);
 
       if (opts.json) {
         console.log(JSON.stringify(msg, null, 2));
@@ -529,7 +527,7 @@ export function registerMessagingCommands(program: Command): void {
         process.exit(1);
       }
 
-      const result = await deleteMessage(id, agent);
+      const result = await await getStore().deleteMessage(id, agent);
 
       if (opts.json) {
         console.log(JSON.stringify({ id, deleted: result }));
@@ -551,7 +549,7 @@ export function registerMessagingCommands(program: Command): void {
     .argument("<id>", "Message ID", parseInt)
     .option("-j, --json", "Output as JSON")
     .action(async (id, opts) => {
-      const msg = await pinMessage(id);
+      const msg = await await getStore().pinMessage(id);
 
       if (opts.json) {
         console.log(JSON.stringify(msg, null, 2));
@@ -573,7 +571,7 @@ export function registerMessagingCommands(program: Command): void {
     .argument("<id>", "Message ID", parseInt)
     .option("-j, --json", "Output as JSON")
     .action(async (id, opts) => {
-      const msg = await unpinMessage(id);
+      const msg = await await getStore().unpinMessage(id);
 
       if (opts.json) {
         console.log(JSON.stringify(msg, null, 2));
@@ -600,7 +598,7 @@ export function registerMessagingCommands(program: Command): void {
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
-      const messages = await getPinnedMessages({
+      const messages = await await getStore().getPinnedMessages({
         channel: opts.channel,
         session_id: opts.session,
         limit: opts.json ? opts.limit : queryLimitFor(window),
@@ -638,10 +636,10 @@ export function registerMessagingCommands(program: Command): void {
     .option("--cursor <n>", "Skip first N blockers for pagination", parseInt)
     .option("--verbose", "Show full message bodies")
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
+    .action(async (opts) => {
       const agent = resolveIdentity(opts.from);
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
-      const blockers = getUnreadBlockers(agent, opts.json ? undefined : { limit: queryLimitFor(window), offset: window.offset });
+      const blockers = await getStore().getUnreadBlockers(agent, opts.json ? undefined : { limit: queryLimitFor(window), offset: window.offset });
       const page = opts.json
         ? { items: blockers, count: blockers.length, total: blockers.length, hasMore: false, nextCursor: null }
         : pageFromQuery(blockers, window);
@@ -679,12 +677,12 @@ export function registerMessagingCommands(program: Command): void {
     .option("--mark-read", "Mark returned notifications as read")
     .option("--clear", "Mark all matching unread notifications as read without listing")
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
+    .action(async (opts) => {
       const agent = resolveIdentity(opts.from);
-      heartbeat(agent);
+      await getStore().heartbeat(agent);
 
       if (opts.clear) {
-        const cleared = markAllChannelNotificationsRead(agent, opts.channel);
+        const cleared = await getStore().markAllChannelNotificationsRead(agent, opts.channel);
         if (opts.json) {
           console.log(JSON.stringify({ cleared, agent, channel: opts.channel || null }, null, 2));
         } else {
@@ -694,7 +692,7 @@ export function registerMessagingCommands(program: Command): void {
         return;
       }
 
-      const notifications = readChannelNotifications({
+      const notifications = await getStore().readChannelNotifications({
         agent,
         channel: opts.channel,
         since: normalizeSince(opts.since),
@@ -730,7 +728,7 @@ export function registerMessagingCommands(program: Command): void {
     .option("--verbose", "Show full message bodies")
     .action(async (opts) => {
       const agent = resolveIdentity(opts.from);
-      heartbeat(agent);
+      await getStore().heartbeat(agent);
 
       const interval = Number.isFinite(opts.interval) && opts.interval > 0 ? opts.interval : 1000;
       const cols = Math.min(process.stdout.columns || 80, 100);
@@ -738,7 +736,7 @@ export function registerMessagingCommands(program: Command): void {
       // Resolve the agent's subscribed channels when --all is used
       let agentChannels: string[] = [];
       if (opts.all) {
-        agentChannels = listChannelNotificationSubscriptions(agent).map((row) => row.channel);
+        agentChannels = (await getStore().listChannelNotificationSubscriptions(agent)).map((row) => row.channel);
       }
 
       const modeLabel = opts.all
@@ -814,13 +812,13 @@ export function registerMessagingCommands(program: Command): void {
 
       // Show recent messages first
       if (opts.all) {
-        const dmRecent = await readMessages({ to: agent, limit: 20, order: "asc" });
-        const pendingNotifications = readChannelNotifications({
+        const dmRecent = await await getStore().readMessages({ to: agent, limit: 20, order: "asc" });
+        const pendingNotifications = (await getStore().readChannelNotifications({
           agent,
           unread_only: true,
           limit: 20,
           mark_read: true,
-        }).sort((left, right) => left.created_at.localeCompare(right.created_at) || left.message_id - right.message_id);
+        })).sort((left, right) => left.created_at.localeCompare(right.created_at) || left.message_id - right.message_id);
 
         if (dmRecent.length > 0) {
           console.log(chalk.dim(`  ── Recent DMs (${dmRecent.length}) ──\n`));
@@ -834,7 +832,7 @@ export function registerMessagingCommands(program: Command): void {
           console.log(chalk.dim(`  ── Live ──\n`));
         }
       } else {
-        const recent = await readMessages({
+        const recent = await await getStore().readMessages({
           to: opts.channel ? undefined : agent,
           channel: opts.channel,
           limit: 20,
@@ -872,16 +870,16 @@ export function registerMessagingCommands(program: Command): void {
         stops.push(startPolling({ to_agent: agent, interval_ms: interval, on_messages: onNewMessages }));
 
         let inFlightNotifications = false;
-        const timer = setInterval(() => {
+        const timer = setInterval(async () => {
           if (inFlightNotifications) return;
           inFlightNotifications = true;
           try {
-            const notifications = readChannelNotifications({
+            const notifications = (await getStore().readChannelNotifications({
               agent,
               unread_only: true,
               limit: 200,
               mark_read: true,
-            }).sort((left, right) => left.created_at.localeCompare(right.created_at) || left.message_id - right.message_id);
+            })).sort((left, right) => left.created_at.localeCompare(right.created_at) || left.message_id - right.message_id);
 
             if (notifications.length > 0) {
               onNewNotifications(notifications);

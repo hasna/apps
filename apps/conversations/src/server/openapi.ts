@@ -216,6 +216,13 @@ export const openapiSpec = {
         responses: { "201": { description: "created", content: { "application/json": { schema: okObject } } } },
       },
     },
+    "/v1/channels/mine": {
+      get: {
+        operationId: "listMemberChannels",
+        parameters: [{ name: "agent", in: "query", required: true, schema: { type: "string" } }],
+        responses: { "200": { description: "member channels with unread counts", content: { "application/json": { schema: okObject } } } },
+      },
+    },
     "/v1/channels/{name}": {
       get: {
         operationId: "getChannel",

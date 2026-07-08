@@ -1,18 +1,10 @@
 import type { Command } from "commander";
+import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
-import { readMessages } from "../../lib/messages.js";
-import { listSessions } from "../../lib/sessions.js";
 import { getDb, getDbPath, closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
-import { heartbeat, listAgents } from "../../lib/presence.js";
-import { addReaction, removeReaction, getReactionSummary } from "../../lib/reactions.js";
-import { listHotSessions } from "../../lib/hot.js";
-import { getChannelTopics, getSessionTopics, getTrendingTopics } from "../../lib/topics.js";
-import { getConversationSummary } from "../../lib/summary.js";
-import { buildGraph, getAgentNetwork, getGraphStats } from "../../lib/graph.js";
-import { listChannelNotificationSubscriptions, readChannelNotifications } from "../../lib/channel-notifications.js";
 import { windowItems } from "../../lib/compact-output.js";
-import { cloudStatus } from "../../lib/cloud-store.js";
+import { cloudStatus } from "../../lib/store/index.js";
 import { getCliWindow, printCompactFooter } from "../compact.js";
 import pkg from "../../../package.json";
 
@@ -24,8 +16,8 @@ export function registerAnalyticsCommands(program: Command): void {
     .command("build")
     .description("Build/rebuild knowledge graph from messages, channels, projects")
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
-      const result = buildGraph();
+    .action(async (opts) => {
+      const result = await getStore().buildGraph();
       if (opts.json) {
         console.log(JSON.stringify(result, null, 2));
       } else {
@@ -38,8 +30,8 @@ export function registerAnalyticsCommands(program: Command): void {
     .command("stats")
     .description("Show knowledge graph statistics")
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
-      const stats = getGraphStats();
+    .action(async (opts) => {
+      const stats = await getStore().getGraphStats();
       if (opts.json) {
         console.log(JSON.stringify(stats, null, 2));
       } else {
@@ -56,8 +48,8 @@ export function registerAnalyticsCommands(program: Command): void {
     .description("Show an agent's communication network")
     .argument("<name>", "Agent name")
     .option("-j, --json", "Output as JSON")
-    .action((name, opts) => {
-      const network = getAgentNetwork(name);
+    .action(async (name, opts) => {
+      const network = await getStore().getAgentNetwork(name);
       if (opts.json) {
         console.log(JSON.stringify(network, null, 2));
       } else {
@@ -87,8 +79,8 @@ export function registerAnalyticsCommands(program: Command): void {
     .description("Get a structured summary of a conversation")
     .argument("<target>", "Session ID or channel name")
     .option("-j, --json", "Output as JSON")
-    .action((target, opts) => {
-      const summary = getConversationSummary(target);
+    .action(async (target, opts) => {
+      const summary = await getStore().getConversationSummary(target);
       if (!summary) {
         console.error(chalk.red(`No messages found for "${target}"`));
         process.exit(1);
@@ -132,14 +124,14 @@ export function registerAnalyticsCommands(program: Command): void {
     .option("--session <id>", "Topics for a specific session")
     .option("--hours <n>", "Trending topics in last N hours", parseInt)
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
+    .action(async (opts) => {
       let topics;
       if (opts.channel) {
-        topics = getChannelTopics(opts.channel);
+        topics = await getStore().getChannelTopics(opts.channel);
       } else if (opts.session) {
-        topics = getSessionTopics(opts.session);
+        topics = await getStore().getSessionTopics(opts.session);
       } else {
-        topics = getTrendingTopics({ hours: opts.hours ?? 24 });
+        topics = await getStore().getTrendingTopics({ hours: opts.hours ?? 24 });
       }
 
       if (opts.json) {
@@ -167,8 +159,8 @@ export function registerAnalyticsCommands(program: Command): void {
     .option("--min-score <n>", "Minimum hotness score", parseInt)
     .option("--channel <name>", "Filter by channel")
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
-      const sessions = listHotSessions({
+    .action(async (opts) => {
+      const sessions = await getStore().listHotSessions({
         limit: opts.limit ?? 10,
         min_score: opts.minScore,
         channel: opts.channel,
@@ -200,37 +192,30 @@ export function registerAnalyticsCommands(program: Command): void {
     .description("One-shot session boot context for agents: online agents, unread DMs, channels, recent activity")
     .option("--limit <n>", "Max rows per section", parseInt)
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
+    .action(async (opts) => {
       const agent = resolveIdentity();
-      heartbeat(agent);
-      const db = getDb();
+      const store = getStore();
+      await store.heartbeat(agent);
       const window = getCliWindow({ limit: opts.limit });
 
       // Online agents
-      const onlineAgents = listAgents({ online_only: true });
+      const onlineAgents = await store.listAgents({ online_only: true });
 
       // Unread DMs
-      const unreadDMs = readMessages({ to: agent, unread_only: true, limit: 5 });
+      const unreadDMs = await store.readMessages({ to: agent, unread_only: true, limit: 5 });
 
-      // Channels I'm in
-      const myChannels = db.prepare(`
-        SELECT s.name, s.description,
-          (SELECT COUNT(*) FROM messages m WHERE m.channel = s.name AND m.read_at IS NULL) as unread
-        FROM channels s
-        JOIN channel_members sm ON sm.channel = s.name
-        WHERE sm.agent = ?
-        ORDER BY s.name
-      `).all(agent) as { name: string; description: string | null; unread: number }[];
+      // Channels I'm in (with per-channel unread counts) — routed through the Store
+      const myChannels = await store.getMemberChannels(agent);
 
-      const subscriptions = listChannelNotificationSubscriptions(agent);
-      const channelNotifications = readChannelNotifications({
+      const subscriptions = await store.listChannelNotificationSubscriptions(agent);
+      const channelNotifications = await store.readChannelNotifications({
         agent,
         unread_only: true,
         limit: 5,
       });
 
       // Recent DMs (last 3 messages to me)
-      const recentDMs = readMessages({ to: agent, limit: 3 });
+      const recentDMs = await store.readMessages({ to: agent, limit: 3 });
 
       const context = {
         agent,
@@ -315,8 +300,8 @@ export function registerAnalyticsCommands(program: Command): void {
     .option("--limit <n>", "Max sessions to show", parseInt)
     .option("--cursor <n>", "Skip first N sessions for pagination", parseInt)
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
-      const sessions = listSessions(opts.agent);
+    .action(async (opts) => {
+      const sessions = await getStore().listSessions(opts.agent);
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
       const page = windowItems(sessions, window);
 
@@ -505,9 +490,9 @@ export function registerAnalyticsCommands(program: Command): void {
     .argument("<emoji>", "Emoji to react with")
     .option("--from <agent>", "Agent identity override")
     .option("-j, --json", "Output as JSON")
-    .action((id, emoji, opts) => {
+    .action(async (id, emoji, opts) => {
       const agent = resolveIdentity(opts.from);
-      const reaction = addReaction(id, agent, emoji);
+      const reaction = await getStore().addReaction(id, agent, emoji);
       if (opts.json) {
         console.log(JSON.stringify(reaction, null, 2));
       } else {
@@ -524,9 +509,9 @@ export function registerAnalyticsCommands(program: Command): void {
     .argument("<emoji>", "Emoji to remove")
     .option("--from <agent>", "Agent identity override")
     .option("-j, --json", "Output as JSON")
-    .action((id, emoji, opts) => {
+    .action(async (id, emoji, opts) => {
       const agent = resolveIdentity(opts.from);
-      const removed = removeReaction(id, agent, emoji);
+      const removed = await getStore().removeReaction(id, agent, emoji);
       if (opts.json) {
         console.log(JSON.stringify({ removed }, null, 2));
       } else {
@@ -545,8 +530,8 @@ export function registerAnalyticsCommands(program: Command): void {
     .description("Show emoji reactions on a message")
     .argument("<id>", "Message ID", parseInt)
     .option("-j, --json", "Output as JSON")
-    .action((id, opts) => {
-      const summary = getReactionSummary(id);
+    .action(async (id, opts) => {
+      const summary = await getStore().getReactionSummary(id);
       if (opts.json) {
         console.log(JSON.stringify(summary, null, 2));
       } else {

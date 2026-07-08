@@ -1,6 +1,6 @@
 import type { Command } from "commander";
+import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
-import { createProject, listProjects, getProject, getProjectByName, updateProject, deleteProject } from "../../lib/projects.js";
 import { createConversationsProjectPanel } from "../../lib/project-panel.js";
 import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
@@ -37,7 +37,7 @@ export function registerProjectCommands(program: Command): void {
     .option("--limit <n>", "Maximum panel items/resources", parseInt, 20)
     .option("--contract", "Emit hasna.project_panel.v1 contract JSON")
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
+    .action(async (opts) => {
       try {
         const panel = createConversationsProjectPanel(opts.project, { limit: opts.limit });
         if (opts.json || opts.contract) {
@@ -74,7 +74,7 @@ export function registerProjectCommands(program: Command): void {
     .option("--tags <json>", "JSON array of tags")
     .option("--from <agent>", "Creator agent ID")
     .option("-j, --json", "Output as JSON")
-    .action((name, opts) => {
+    .action(async (name, opts) => {
       const agent = resolveIdentity(opts.from).trim();
       const projectName = typeof name === "string" ? name.trim() : "";
       if (!agent) {
@@ -97,7 +97,7 @@ export function registerProjectCommands(program: Command): void {
       }
 
       try {
-        const p = createProject({
+        const p = await getStore().createProject({
           name: projectName,
           created_by: agent,
           description: opts.description,
@@ -129,7 +129,7 @@ export function registerProjectCommands(program: Command): void {
     .option("--offset <n>", "Skip first N results", parseInt)
     .option("--cursor <n>", "Skip first N results for pagination", parseInt)
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
+    .action(async (opts) => {
       const status = opts.status === "active" || opts.status === "archived" ? opts.status : undefined;
 
       let limit: number | undefined;
@@ -142,7 +142,7 @@ export function registerProjectCommands(program: Command): void {
       }
       const cursor = opts.cursor ?? offset;
       const window = getCliWindow({ limit, cursor });
-      const projects = listProjects({
+      const projects = await getStore().listProjects({
         ...(status ? { status } : {}),
         ...(opts.json ? (limit !== undefined ? { limit } : {}) : { limit: queryLimitFor(window) }),
         ...(opts.json ? (cursor !== undefined ? { offset: cursor } : {}) : { offset: window.offset }),
@@ -179,9 +179,9 @@ export function registerProjectCommands(program: Command): void {
     .description("Get project details")
     .argument("<id-or-name>", "Project ID or name")
     .option("-j, --json", "Output as JSON")
-    .action((idOrName, opts) => {
-      let p = getProject(idOrName);
-      if (!p) p = getProjectByName(idOrName);
+    .action(async (idOrName, opts) => {
+      let p = await getStore().getProject(idOrName);
+      if (!p) p = await getStore().getProjectByName(idOrName);
 
       if (!p) {
         console.error(chalk.red(`Project "${idOrName}" not found.`));
@@ -214,7 +214,7 @@ export function registerProjectCommands(program: Command): void {
     .option("--repository <url>", "New repository URL")
     .option("--tags <json>", "New tags (JSON array)")
     .option("-j, --json", "Output as JSON")
-    .action((id, opts) => {
+    .action(async (id, opts) => {
       const updates: Record<string, unknown> = {};
       if (opts.name) updates.name = opts.name;
       if (opts.description) updates.description = opts.description;
@@ -233,8 +233,8 @@ export function registerProjectCommands(program: Command): void {
       try {
         // Resolve by name if not a UUID
         const isUuid = /^[0-9a-f-]{36}$/i.test(id);
-        const resolvedId = isUuid ? id : (getProjectByName(id)?.id ?? id);
-        const p = updateProject(resolvedId, updates as any);
+        const resolvedId = isUuid ? id : ((await getStore().getProjectByName(id))?.id ?? id);
+        const p = await getStore().updateProject(resolvedId, updates as any);
         if (opts.json) {
           console.log(JSON.stringify(p, null, 2));
         } else {
@@ -253,12 +253,12 @@ export function registerProjectCommands(program: Command): void {
     .argument("<id-or-name>", "Project ID or name")
     .option("--yes", "Confirm project deletion")
     .option("-j, --json", "Output as JSON")
-    .action((id, opts) => {
+    .action(async (id, opts) => {
       try {
         requireDeleteConfirmation(opts.yes);
         const isUuid = /^[0-9a-f-]{36}$/i.test(id);
-        const resolvedId = isUuid ? id : (getProjectByName(id)?.id ?? id);
-        const deleted = deleteProject(resolvedId);
+        const resolvedId = isUuid ? id : ((await getStore().getProjectByName(id))?.id ?? id);
+        const deleted = await getStore().deleteProject(resolvedId);
         if (!deleted) {
           console.error(chalk.red(`Project "${id}" not found.`));
           process.exit(1);

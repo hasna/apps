@@ -102,39 +102,6 @@ export {
 } from "./lib/db.js";
 
 export {
-  CANONICAL_CONVERSATIONS_DATABASE_ENV,
-  CANONICAL_CONVERSATIONS_RDS_CLUSTER,
-  CANONICAL_CONVERSATIONS_RDS_DATABASE,
-  CANONICAL_CONVERSATIONS_RDS_SECRET_PATH,
-  CONVERSATIONS_DATABASE_FALLBACK_ENV,
-  DEFAULT_STORAGE_TABLES,
-  SYNC_EXCLUDED,
-  STORAGE_CONFIG_PATH,
-  STORAGE_DATABASE_ENV,
-  STORAGE_MODE_ENV,
-  getCanonicalConversationsRdsConfig,
-  getStorageConfig,
-  getStorageDatabaseUrl,
-  getStoragePg,
-  listConflicts,
-  listPgTables,
-  listSqliteTables,
-  resolveTables,
-  runStorageMigrations,
-  storagePull,
-  storagePush,
-  storageSync,
-} from "./lib/storage-sync.js";
-export type {
-  CanonicalConversationsRdsConfig,
-  StorageConfig,
-  StorageMode,
-  StorageSyncResult,
-  SyncConflict,
-  SyncResult,
-} from "./lib/storage-sync.js";
-
-export {
   startPolling,
   useMessages,
   useChannelMessages,

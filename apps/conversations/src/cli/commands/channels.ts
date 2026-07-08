@@ -1,9 +1,7 @@
 import type { Command } from "commander";
+import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
-// Routed reads/writes: cloud-store dispatches to the self_hosted API when set.
-import { recordReadReceiptsBatch, sendMessage, readMessages } from "../../lib/cloud-store.js";
-import { createChannel, updateChannel, renameChannel, archiveChannel, unarchiveChannel, listChannels, getChannel, joinChannel, leaveChannel, getChannelMembers } from "../../lib/channels.js";
-import { listChannelNotificationSubscriptions, markChannelNotificationsRead, subscribeToChannelNotifications, unsubscribeFromChannelNotifications } from "../../lib/channel-notifications.js";
+// Reads/writes route through getStore(): ApiStore (self_hosted/cloud) or LocalStore.
 import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { previewText, windowItems } from "../../lib/compact-output.js";
@@ -62,7 +60,7 @@ export function registerChannelCommands(program: Command): void {
     .option("--class <class>", "Channel class stored at metadata.channel_schema.class (e.g. fleet, package, product, loop-lane, initiative, personal)")
     .option("--from <agent>", "Creator agent ID")
     .option("-j, --json", "Output as JSON")
-    .action((name, opts) => {
+    .action(async (name, opts) => {
       const agent = resolveIdentity(opts.from).trim();
       const channelName = typeof name === "string" ? name.trim() : "";
       if (!agent) {
@@ -83,7 +81,7 @@ export function registerChannelCommands(program: Command): void {
         const channelClass = typeof opts.class === "string" && opts.class.trim()
           ? opts.class.trim()
           : undefined;
-        const sp = createChannel(channelName, agent, {
+        const sp = await getStore().createChannel(channelName, agent, {
           description,
           topic,
           project_id: opts.project,
@@ -114,12 +112,12 @@ export function registerChannelCommands(program: Command): void {
     .option("--limit <n>", "Max channels to show", parseInt)
     .option("--cursor <n>", "Skip first N channels for pagination", parseInt)
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
+    .action(async (opts) => {
       const listOpts: { project_id?: string; include_archived?: boolean } = {};
       if (opts.project) listOpts.project_id = opts.project;
       if (opts.archived) listOpts.include_archived = true;
 
-      const channels = listChannels(listOpts);
+      const channels = await getStore().listChannels(listOpts);
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
       const page = windowItems(channels, window);
 
@@ -160,7 +158,7 @@ export function registerChannelCommands(program: Command): void {
     .option("--project <id>", "New project ID")
     .option("--class <class>", "Set channel class at metadata.channel_schema.class (empty value clears it); other metadata keys are preserved")
     .option("-j, --json", "Output as JSON")
-    .action((name, opts) => {
+    .action(async (name, opts) => {
       const channelName = typeof name === "string" ? name.trim() : "";
       if (!channelName) {
         console.error(chalk.red("Channel name cannot be empty."));
@@ -180,7 +178,7 @@ export function registerChannelCommands(program: Command): void {
       if (opts.topic !== undefined) updates.topic = opts.topic || null;
       if (opts.project !== undefined) updates.project_id = opts.project || null;
       if (opts.class !== undefined) {
-        const existing = getChannel(channelName);
+        const existing = await getStore().getChannel(channelName);
         if (!existing) {
           console.error(chalk.red(`Channel not found: ${channelName}`));
           process.exit(1);
@@ -189,7 +187,7 @@ export function registerChannelCommands(program: Command): void {
       }
 
       try {
-        const sp = updateChannel(channelName, updates);
+        const sp = await getStore().updateChannel(channelName, updates);
         if (opts.json) {
           console.log(JSON.stringify(sp, null, 2));
         } else {
@@ -208,7 +206,7 @@ export function registerChannelCommands(program: Command): void {
     .argument("<name>", "Current channel name")
     .argument("<new-name>", "New channel name")
     .option("-j, --json", "Output as JSON")
-    .action((name, newName, opts) => {
+    .action(async (name, newName, opts) => {
       const channelName = typeof name === "string" ? name.trim() : "";
       const target = typeof newName === "string" ? newName.trim() : "";
       if (!channelName) {
@@ -221,7 +219,7 @@ export function registerChannelCommands(program: Command): void {
       }
 
       try {
-        const sp = renameChannel(channelName, target);
+        const sp = await getStore().renameChannel(channelName, target);
         if (opts.json) {
           console.log(JSON.stringify(sp, null, 2));
         } else {
@@ -239,7 +237,7 @@ export function registerChannelCommands(program: Command): void {
     .description("Archive a channel")
     .argument("<name>", "Channel name")
     .option("-j, --json", "Output as JSON")
-    .action((name, opts) => {
+    .action(async (name, opts) => {
       const channelName = typeof name === "string" ? name.trim() : "";
       if (!channelName) {
         console.error(chalk.red("Channel name cannot be empty."));
@@ -247,7 +245,7 @@ export function registerChannelCommands(program: Command): void {
       }
 
       try {
-        const sp = archiveChannel(channelName);
+        const sp = await getStore().archiveChannel(channelName);
         if (opts.json) {
           console.log(JSON.stringify(sp, null, 2));
         } else {
@@ -265,7 +263,7 @@ export function registerChannelCommands(program: Command): void {
     .description("Unarchive a channel")
     .argument("<name>", "Channel name")
     .option("-j, --json", "Output as JSON")
-    .action((name, opts) => {
+    .action(async (name, opts) => {
       const channelName = typeof name === "string" ? name.trim() : "";
       if (!channelName) {
         console.error(chalk.red("Channel name cannot be empty."));
@@ -273,7 +271,7 @@ export function registerChannelCommands(program: Command): void {
       }
 
       try {
-        const sp = unarchiveChannel(channelName);
+        const sp = await getStore().unarchiveChannel(channelName);
         if (opts.json) {
           console.log(JSON.stringify(sp, null, 2));
         } else {
@@ -312,13 +310,13 @@ export function registerChannelCommands(program: Command): void {
         process.exit(1);
       }
 
-      const sp = getChannel(channelArg);
+      const sp = await getStore().getChannel(channelArg);
       if (!sp) {
         console.error(chalk.red(`Channel #${channelArg} not found.`));
         process.exit(1);
       }
 
-      const msg = await sendMessage({
+      const msg = await await getStore().sendMessage({
         from,
         to: channelArg,
         content,
@@ -352,7 +350,7 @@ export function registerChannelCommands(program: Command): void {
         process.exit(1);
       }
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
-      const messages = await readMessages({
+      const messages = await await getStore().readMessages({
         channel: channelArg,
         since: opts.since,
         limit: opts.json ? opts.limit : queryLimitFor(window),
@@ -368,8 +366,8 @@ export function registerChannelCommands(program: Command): void {
           console.error(chalk.red("Agent identity is required."));
           process.exit(1);
         }
-        await recordReadReceiptsBatch(page.items.map((m) => m.id), agent);
-        markChannelNotificationsRead(agent, page.items.map((m) => m.id));
+        await await getStore().recordReadReceiptsBatch(page.items.map((m) => m.id), agent);
+        await getStore().markChannelNotificationsRead(agent, page.items.map((m) => m.id));
       }
 
       if (opts.json) {
@@ -397,7 +395,7 @@ export function registerChannelCommands(program: Command): void {
     .argument("<channel>", "Channel name")
     .option("--from <agent>", "Agent ID")
     .option("-j, --json", "Output as JSON")
-    .action((channelName, opts) => {
+    .action(async (channelName, opts) => {
       const agent = resolveIdentity(opts.from).trim();
       const channelArg = typeof channelName === "string" ? channelName.trim() : "";
 
@@ -410,7 +408,7 @@ export function registerChannelCommands(program: Command): void {
         process.exit(1);
       }
 
-      const ok = joinChannel(channelArg, agent);
+      const ok = await getStore().joinChannel(channelArg, agent);
 
       if (!ok) {
         console.error(chalk.red(`Channel #${channelArg} not found.`));
@@ -431,7 +429,7 @@ export function registerChannelCommands(program: Command): void {
     .argument("<channel>", "Channel name")
     .option("--from <agent>", "Agent ID")
     .option("-j, --json", "Output as JSON")
-    .action((channelName, opts) => {
+    .action(async (channelName, opts) => {
       const agent = resolveIdentity(opts.from).trim();
       const channelArg = typeof channelName === "string" ? channelName.trim() : "";
 
@@ -444,7 +442,7 @@ export function registerChannelCommands(program: Command): void {
         process.exit(1);
       }
 
-      const ok = leaveChannel(channelArg, agent);
+      const ok = await getStore().leaveChannel(channelArg, agent);
 
       if (opts.json) {
         console.log(JSON.stringify({ channel: channelArg, agent, left: ok }));
@@ -465,7 +463,7 @@ export function registerChannelCommands(program: Command): void {
     .option("--from <agent>", "Agent ID")
     .option("--preview-chars <n>", "Preview length", parseInt)
     .option("-j, --json", "Output as JSON")
-    .action((channelName, opts) => {
+    .action(async (channelName, opts) => {
       const agent = resolveIdentity(opts.from).trim();
       const channelArg = typeof channelName === "string" ? channelName.trim() : "";
 
@@ -479,7 +477,7 @@ export function registerChannelCommands(program: Command): void {
       }
 
       try {
-        const subscription = subscribeToChannelNotifications(channelArg, agent, { preview_chars: opts.previewChars });
+        const subscription = await getStore().subscribeToChannelNotifications(channelArg, agent, { preview_chars: opts.previewChars });
         if (opts.json) {
           console.log(JSON.stringify(subscription, null, 2));
         } else {
@@ -498,7 +496,7 @@ export function registerChannelCommands(program: Command): void {
     .argument("<channel>", "Channel name")
     .option("--from <agent>", "Agent ID")
     .option("-j, --json", "Output as JSON")
-    .action((channelName, opts) => {
+    .action(async (channelName, opts) => {
       const agent = resolveIdentity(opts.from).trim();
       const channelArg = typeof channelName === "string" ? channelName.trim() : "";
 
@@ -511,7 +509,7 @@ export function registerChannelCommands(program: Command): void {
         process.exit(1);
       }
 
-      const unsubscribed = unsubscribeFromChannelNotifications(channelArg, agent);
+      const unsubscribed = await getStore().unsubscribeFromChannelNotifications(channelArg, agent);
       if (opts.json) {
         console.log(JSON.stringify({ channel: channelArg, agent, unsubscribed }));
       } else if (unsubscribed) {
@@ -530,14 +528,14 @@ export function registerChannelCommands(program: Command): void {
     .option("--limit <n>", "Max subscriptions to show", parseInt)
     .option("--cursor <n>", "Skip first N subscriptions for pagination", parseInt)
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
+    .action(async (opts) => {
       const agent = resolveIdentity(opts.from).trim();
       if (!agent) {
         console.error(chalk.red("Agent identity is required."));
         process.exit(1);
       }
 
-      let subscriptions = listChannelNotificationSubscriptions(agent);
+      let subscriptions = await getStore().listChannelNotificationSubscriptions(agent);
       if (opts.channel) {
         subscriptions = subscriptions.filter((row) => row.channel === opts.channel);
       }
@@ -571,13 +569,13 @@ export function registerChannelCommands(program: Command): void {
     .option("--limit <n>", "Max members to show", parseInt)
     .option("--cursor <n>", "Skip first N members for pagination", parseInt)
     .option("-j, --json", "Output as JSON")
-    .action((channelName, opts) => {
+    .action(async (channelName, opts) => {
       const channelArg = typeof channelName === "string" ? channelName.trim() : "";
       if (!channelArg) {
         console.error(chalk.red("Channel name cannot be empty."));
         process.exit(1);
       }
-      const members = getChannelMembers(channelArg);
+      const members = await getStore().getChannelMembers(channelArg);
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
       const page = windowItems(members, window);
 

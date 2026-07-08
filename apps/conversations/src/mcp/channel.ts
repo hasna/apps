@@ -16,9 +16,8 @@
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-// Routed reads/writes: cloud-store dispatches to the self_hosted API when set.
-import { readMessages, markReadByIds } from "../lib/cloud-store.js";
-import { markChannelNotificationsRead, readChannelNotifications } from "../lib/channel-notifications.js";
+import { getStore } from "../lib/store/index.js";
+// Routed reads/writes: every read/write goes through the Store (local or cloud API).
 
 const DEFAULT_POLL_INTERVAL_MS = 1000;
 const DEFAULT_START_DELAY_MS = 2000;
@@ -100,11 +99,11 @@ export function registerChannelBridge(
 
       // Only acknowledge delivery after the channel transport accepts it.
       if (mode === "direct") {
-        try { await markReadByIds([msg.id]); } catch { /* ok */ }
+        try { await await getStore().markReadByIds([msg.id]); } catch { /* ok */ }
       } else if (mode === "channel_blurb") {
         const agent = getSessionAgent();
         if (agent) {
-          try { markChannelNotificationsRead(agent, [msg.id]); } catch { /* ok */ }
+          try { await getStore().markChannelNotificationsRead(agent, [msg.id]); } catch { /* ok */ }
         }
       }
 
@@ -123,7 +122,7 @@ export function registerChannelBridge(
 
       // Poll DMs to this agent — skip messages FROM self (no echoes)
       if (agent) {
-        const msgs = (await readMessages({ to: agent, unread_only: true, order: "asc", limit: 20 }))
+        const msgs = (await await getStore().readMessages({ to: agent, unread_only: true, order: "asc", limit: 20 }))
           .filter(m => m.id > lastAgentMsgId && m.from_agent !== agent);
         for (const msg of msgs) {
           const delivered = await pushNotification(msg, "dm");
@@ -134,7 +133,7 @@ export function registerChannelBridge(
 
       // Poll direct session-targeted messages — skip self (no echoes)
       if (sid) {
-        const msgs = (await readMessages({ to: `session:${sid}`, unread_only: true, order: "asc", limit: 20 }))
+        const msgs = (await await getStore().readMessages({ to: `session:${sid}`, unread_only: true, order: "asc", limit: 20 }))
           .filter(m => m.id > lastSessionMsgId && m.from_agent !== agent);
         for (const msg of msgs) {
           const delivered = await pushNotification(msg, "direct");
@@ -144,12 +143,12 @@ export function registerChannelBridge(
       }
 
       if (agent) {
-        const notifications = readChannelNotifications({
+        const notifications = (await getStore().readChannelNotifications({
           agent,
           unread_only: true,
           limit: 20,
           mark_read: false,
-        }).sort((left, right) => left.created_at.localeCompare(right.created_at) || left.message_id - right.message_id);
+        })).sort((left, right) => left.created_at.localeCompare(right.created_at) || left.message_id - right.message_id);
 
         for (const notification of notifications) {
           const delivered = await pushNotification({

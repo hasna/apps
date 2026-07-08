@@ -1,0 +1,419 @@
+// ── The conversations Store abstraction ──────────────────────────────────────
+//
+// ONE interface, TWO transports. EVERY CLI command, MCP tool, and SDK method that
+// reads or writes conversations DATA goes through `ConversationsStore`. There are
+// exactly two implementations:
+//
+//   • LocalStore — on-box SQLite. Delegates to the domain helpers in ../*.ts
+//     (channels, tasks, locks, presence, projects, reactions, sessions, topics,
+//     graph, channel-notifications, summary, hot, messages). Those helpers are the
+//     ONLY place that opens `bun:sqlite`; nothing else in the app may touch it.
+//   • ApiStore — the self_hosted/cloud HTTP API at `<API_URL>/v1` with a bearer
+//     key. Delegates to the vendored @hasna/contracts storage transport.
+//
+// `getStore()` resolves which transport to use from the client-flip env
+// (HASNA_CONVERSATIONS_API_URL + HASNA_CONVERSATIONS_API_KEY /
+// HASNA_CONVERSATIONS_STORAGE_MODE). Callers NEVER branch on mode themselves and
+// NEVER touch sqlite or fetch directly — that was the split-brain bug this module
+// eliminates.
+//
+// `self_hosted` and `cloud` are the SAME client code (ApiStore); only the URL and
+// key differ, and that distinction is server-side tenancy. `local` is first-class
+// and fully functional.
+//
+// SAFETY: the API key never leaves the transport; it is never logged, returned, or
+// embedded in any value produced here. Only the HTTP transport ever holds it.
+
+import { resolveStorageClient, type HasnaStorageClient } from "../contracts-client/storage.js";
+import { normalizeChannelName } from "../channel-names.js";
+import { ApiStore } from "./api-store.js";
+
+import * as channelsLib from "../channels.js";
+import * as tasksLib from "../tasks.js";
+import * as locksLib from "../locks.js";
+import * as presenceLib from "../presence.js";
+import * as projectsLib from "../projects.js";
+import * as reactionsLib from "../reactions.js";
+import * as sessionsLib from "../sessions.js";
+import * as topicsLib from "../topics.js";
+import * as graphLib from "../graph.js";
+import * as notificationsLib from "../channel-notifications.js";
+import * as summaryLib from "../summary.js";
+import * as hotLib from "../hot.js";
+import * as messagesLib from "../messages.js";
+
+const APP = "conversations";
+
+type Env = Record<string, string | undefined>;
+
+/** Lift a sync lib function's type into an async Store method signature. */
+type Async<F extends (...args: never[]) => unknown> = (
+  ...args: Parameters<F>
+) => Promise<Awaited<ReturnType<F>>>;
+
+// ── Mode resolution ───────────────────────────────────────────────────────────
+
+/**
+ * Return an env in which `self_hosted` is implied when the API url + key are
+ * present but no explicit storage mode is set. Leaves an explicit mode (including
+ * `local`) untouched, so the flip stays reversible. The fleet flip writes only the
+ * two API URL + key vars; this makes that activate cloud. Never a DSN on the
+ * client.
+ */
+export function conversationsCloudEnv(env: Env = process.env): Env {
+  const url = env.HASNA_CONVERSATIONS_API_URL ?? env.CONVERSATIONS_API_URL;
+  const key = env.HASNA_CONVERSATIONS_API_KEY ?? env.CONVERSATIONS_API_KEY;
+  const mode = env.HASNA_CONVERSATIONS_STORAGE_MODE ?? env.HASNA_CONVERSATIONS_MODE;
+  if (url && key && !mode) {
+    return { ...env, HASNA_CONVERSATIONS_STORAGE_MODE: "self_hosted" };
+  }
+  return env;
+}
+
+/** Resolve the cloud HTTP client, or `null` when the app should use local. */
+export function resolveConversationsCloud(env: Env = process.env): HasnaStorageClient | null {
+  const resolved = resolveStorageClient(APP, conversationsCloudEnv(env));
+  return resolved.transport === "cloud-http" ? resolved.client : null;
+}
+
+/** True when reads/writes are routed to the cloud API. */
+export function isCloudStore(env: Env = process.env): boolean {
+  return resolveConversationsCloud(env) !== null;
+}
+
+/** The resolved cloud API base URL when in cloud mode (else null). */
+export function cloudApiUrl(env: Env = process.env): string | null {
+  if (!isCloudStore(env)) return null;
+  return env.HASNA_CONVERSATIONS_API_URL ?? env.CONVERSATIONS_API_URL ?? null;
+}
+
+// ── The single data interface ────────────────────────────────────────────────
+
+/**
+ * The single data interface for conversations. Both {@link LocalStore} and
+ * {@link ApiStore} implement it; callers hold a `ConversationsStore` and never
+ * know (or branch on) which one. Method signatures mirror the domain helpers so
+ * the local path is a pure delegation and the cloud path is HTTP.
+ */
+export interface ConversationsStore {
+  readonly transport: "local" | "cloud-http";
+
+  // channels
+  createChannel: Async<typeof channelsLib.createChannel>;
+  listChannels: Async<typeof channelsLib.listChannels>;
+  getChannel: Async<typeof channelsLib.getChannel>;
+  joinChannel: Async<typeof channelsLib.joinChannel>;
+  leaveChannel: Async<typeof channelsLib.leaveChannel>;
+  getChannelMembers: Async<typeof channelsLib.getChannelMembers>;
+  getMemberChannels: Async<typeof channelsLib.getMemberChannels>;
+  updateChannel: Async<typeof channelsLib.updateChannel>;
+  renameChannel: Async<typeof channelsLib.renameChannel>;
+  archiveChannel: Async<typeof channelsLib.archiveChannel>;
+  unarchiveChannel: Async<typeof channelsLib.unarchiveChannel>;
+  isChannelMember: Async<typeof channelsLib.isChannelMember>;
+
+  // channel notifications
+  subscribeToChannelNotifications: Async<typeof notificationsLib.subscribeToChannelNotifications>;
+  unsubscribeFromChannelNotifications: Async<typeof notificationsLib.unsubscribeFromChannelNotifications>;
+  listChannelNotificationSubscriptions: Async<typeof notificationsLib.listChannelNotificationSubscriptions>;
+  getSubscribedChannels: Async<typeof notificationsLib.getSubscribedChannels>;
+  readChannelNotifications: Async<typeof notificationsLib.readChannelNotifications>;
+  markChannelNotificationsRead: Async<typeof notificationsLib.markChannelNotificationsRead>;
+  markAllChannelNotificationsRead: Async<typeof notificationsLib.markAllChannelNotificationsRead>;
+
+  // tasks
+  createTask: Async<typeof tasksLib.createTask>;
+  getTask: Async<typeof tasksLib.getTask>;
+  listTasks: Async<typeof tasksLib.listTasks>;
+  startTask: Async<typeof tasksLib.startTask>;
+  completeTask: Async<typeof tasksLib.completeTask>;
+  cancelTask: Async<typeof tasksLib.cancelTask>;
+  blockTask: Async<typeof tasksLib.blockTask>;
+  unblockTask: Async<typeof tasksLib.unblockTask>;
+  reopenTask: Async<typeof tasksLib.reopenTask>;
+  assignTask: Async<typeof tasksLib.assignTask>;
+  setTaskPriority: Async<typeof tasksLib.setTaskPriority>;
+  addTaskComment: Async<typeof tasksLib.addComment>;
+  getTaskComments: Async<typeof tasksLib.getComments>;
+  getSubtasks: Async<typeof tasksLib.getSubtasks>;
+  getTaskTree: Async<typeof tasksLib.getTaskTree>;
+  addDependency: Async<typeof tasksLib.addDependency>;
+  removeDependency: Async<typeof tasksLib.removeDependency>;
+  getDependencies: Async<typeof tasksLib.getDependencies>;
+  getDependents: Async<typeof tasksLib.getDependents>;
+  getTaskActivity: Async<typeof tasksLib.getTaskActivity>;
+  deleteTask: Async<typeof tasksLib.deleteTask>;
+  searchTasks: Async<typeof tasksLib.searchTasks>;
+  getDueTasks: Async<typeof tasksLib.getDueTasks>;
+  getTaskSummary: Async<typeof tasksLib.getTaskSummary>;
+
+  // locks
+  acquireLock: Async<typeof locksLib.acquireLock>;
+  bulkAcquireLock: Async<typeof locksLib.bulkAcquireLock>;
+  releaseLock: Async<typeof locksLib.releaseLock>;
+  checkLock: Async<typeof locksLib.checkLock>;
+  cleanExpiredLocks: Async<typeof locksLib.cleanExpiredLocks>;
+  releaseStaleAgentLocks: Async<typeof locksLib.releaseStaleAgentLocks>;
+  tryBulkAcquireLock: Async<typeof locksLib.tryBulkAcquireLock>;
+  listLocks: Async<typeof locksLib.listLocks>;
+  listLocksEnriched: Async<typeof locksLib.listLocksEnriched>;
+
+  // presence / agents
+  registerAgent: Async<typeof presenceLib.registerAgent>;
+  heartbeat: Async<typeof presenceLib.heartbeat>;
+  getPresence: Async<typeof presenceLib.getPresence>;
+  listAgents: Async<typeof presenceLib.listAgents>;
+  removePresence: Async<typeof presenceLib.removePresence>;
+  renameAgent: Async<typeof presenceLib.renameAgent>;
+  setPresenceProject: Async<typeof presenceLib.setPresenceProject>;
+
+  // projects
+  createProject: Async<typeof projectsLib.createProject>;
+  listProjects: Async<typeof projectsLib.listProjects>;
+  getProject: Async<typeof projectsLib.getProject>;
+  getProjectByName: Async<typeof projectsLib.getProjectByName>;
+  updateProject: Async<typeof projectsLib.updateProject>;
+  deleteProject: Async<typeof projectsLib.deleteProject>;
+
+  // reactions
+  addReaction: Async<typeof reactionsLib.addReaction>;
+  removeReaction: Async<typeof reactionsLib.removeReaction>;
+  getReactions: Async<typeof reactionsLib.getReactions>;
+  getReactionSummary: Async<typeof reactionsLib.getReactionSummary>;
+
+  // sessions
+  listSessions: Async<typeof sessionsLib.listSessions>;
+  getSession: Async<typeof sessionsLib.getSession>;
+  getSessionActivity: Async<typeof sessionsLib.getSessionActivity>;
+
+  // topics
+  getChannelTopics: Async<typeof topicsLib.getChannelTopics>;
+  getSessionTopics: Async<typeof topicsLib.getSessionTopics>;
+  getTrendingTopics: Async<typeof topicsLib.getTrendingTopics>;
+
+  // graph
+  buildGraph: Async<typeof graphLib.buildGraph>;
+  getRelated: Async<typeof graphLib.getRelated>;
+  getAgentNetwork: Async<typeof graphLib.getAgentNetwork>;
+  getGraphStats: Async<typeof graphLib.getGraphStats>;
+
+  // summary
+  getConversationSummary: Async<typeof summaryLib.getConversationSummary>;
+
+  // hot
+  computeHotness: Async<typeof hotLib.computeHotness>;
+  listHotSessions: Async<typeof hotLib.listHotSessions>;
+
+  // messages
+  sendMessage: Async<typeof messagesLib.sendMessage>;
+  getMessageById: Async<typeof messagesLib.getMessageById>;
+  deleteMessage: Async<typeof messagesLib.deleteMessage>;
+  editMessage: Async<typeof messagesLib.editMessage>;
+  readMessages: Async<typeof messagesLib.readMessages>;
+  searchMessages: Async<typeof messagesLib.searchMessages>;
+  readDigest: Async<typeof messagesLib.readDigest>;
+  exportMessages: Async<typeof messagesLib.exportMessages>;
+  getThreadReplies: Async<typeof messagesLib.getThreadReplies>;
+  getUnreadBlockers: Async<typeof messagesLib.getUnreadBlockers>;
+  getMessagesForAgent: Async<typeof messagesLib.getMessagesForAgent>;
+  getMessageReadStatus: Async<typeof messagesLib.getMessageReadStatus>;
+  markRead: Async<typeof messagesLib.markRead>;
+  markReadByIds: Async<typeof messagesLib.markReadByIds>;
+  markAllRead: Async<typeof messagesLib.markAllRead>;
+  markChannelRead: Async<typeof messagesLib.markChannelRead>;
+  markSessionRead: Async<typeof messagesLib.markSessionRead>;
+  markUnread: Async<typeof messagesLib.markUnread>;
+  markUnreadByIds: Async<typeof messagesLib.markUnreadByIds>;
+  markMentionsRead: Async<typeof messagesLib.markMentionsRead>;
+  listUnreadCounts: Async<typeof messagesLib.listUnreadCounts>;
+  listUnreadCountsWithMentions: Async<typeof messagesLib.listUnreadCountsWithMentions>;
+  pinMessage: Async<typeof messagesLib.pinMessage>;
+  unpinMessage: Async<typeof messagesLib.unpinMessage>;
+  getPinnedMessages: Async<typeof messagesLib.getPinnedMessages>;
+  recordReadReceipt: Async<typeof messagesLib.recordReadReceipt>;
+  recordReadReceiptsBatch: Async<typeof messagesLib.recordReadReceiptsBatch>;
+  getReadReceipts: Async<typeof messagesLib.getReadReceipts>;
+}
+
+// ── LocalStore ────────────────────────────────────────────────────────────────
+// Pure delegation to the domain helpers (the only sqlite-touching code). Each
+// method awaits nothing beyond wrapping the synchronous helper in a Promise so the
+// interface is uniform across transports.
+
+export class LocalStore implements ConversationsStore {
+  readonly transport = "local" as const;
+
+  // channels
+  createChannel: ConversationsStore["createChannel"] = async (...a) => channelsLib.createChannel(...a);
+  listChannels: ConversationsStore["listChannels"] = async (...a) => channelsLib.listChannels(...a);
+  getChannel: ConversationsStore["getChannel"] = async (...a) => channelsLib.getChannel(...a);
+  joinChannel: ConversationsStore["joinChannel"] = async (...a) => channelsLib.joinChannel(...a);
+  leaveChannel: ConversationsStore["leaveChannel"] = async (...a) => channelsLib.leaveChannel(...a);
+  getChannelMembers: ConversationsStore["getChannelMembers"] = async (...a) => channelsLib.getChannelMembers(...a);
+  getMemberChannels: ConversationsStore["getMemberChannels"] = async (...a) => channelsLib.getMemberChannels(...a);
+  updateChannel: ConversationsStore["updateChannel"] = async (...a) => channelsLib.updateChannel(...a);
+  renameChannel: ConversationsStore["renameChannel"] = async (...a) => channelsLib.renameChannel(...a);
+  archiveChannel: ConversationsStore["archiveChannel"] = async (...a) => channelsLib.archiveChannel(...a);
+  unarchiveChannel: ConversationsStore["unarchiveChannel"] = async (...a) => channelsLib.unarchiveChannel(...a);
+  isChannelMember: ConversationsStore["isChannelMember"] = async (...a) => channelsLib.isChannelMember(...a);
+
+  // channel notifications
+  subscribeToChannelNotifications: ConversationsStore["subscribeToChannelNotifications"] = async (...a) => notificationsLib.subscribeToChannelNotifications(...a);
+  unsubscribeFromChannelNotifications: ConversationsStore["unsubscribeFromChannelNotifications"] = async (...a) => notificationsLib.unsubscribeFromChannelNotifications(...a);
+  listChannelNotificationSubscriptions: ConversationsStore["listChannelNotificationSubscriptions"] = async (...a) => notificationsLib.listChannelNotificationSubscriptions(...a);
+  getSubscribedChannels: ConversationsStore["getSubscribedChannels"] = async (...a) => notificationsLib.getSubscribedChannels(...a);
+  readChannelNotifications: ConversationsStore["readChannelNotifications"] = async (...a) => notificationsLib.readChannelNotifications(...a);
+  markChannelNotificationsRead: ConversationsStore["markChannelNotificationsRead"] = async (...a) => notificationsLib.markChannelNotificationsRead(...a);
+  markAllChannelNotificationsRead: ConversationsStore["markAllChannelNotificationsRead"] = async (...a) => notificationsLib.markAllChannelNotificationsRead(...a);
+
+  // tasks
+  createTask: ConversationsStore["createTask"] = async (...a) => tasksLib.createTask(...a);
+  getTask: ConversationsStore["getTask"] = async (...a) => tasksLib.getTask(...a);
+  listTasks: ConversationsStore["listTasks"] = async (...a) => tasksLib.listTasks(...a);
+  startTask: ConversationsStore["startTask"] = async (...a) => tasksLib.startTask(...a);
+  completeTask: ConversationsStore["completeTask"] = async (...a) => tasksLib.completeTask(...a);
+  cancelTask: ConversationsStore["cancelTask"] = async (...a) => tasksLib.cancelTask(...a);
+  blockTask: ConversationsStore["blockTask"] = async (...a) => tasksLib.blockTask(...a);
+  unblockTask: ConversationsStore["unblockTask"] = async (...a) => tasksLib.unblockTask(...a);
+  reopenTask: ConversationsStore["reopenTask"] = async (...a) => tasksLib.reopenTask(...a);
+  assignTask: ConversationsStore["assignTask"] = async (...a) => tasksLib.assignTask(...a);
+  setTaskPriority: ConversationsStore["setTaskPriority"] = async (...a) => tasksLib.setTaskPriority(...a);
+  addTaskComment: ConversationsStore["addTaskComment"] = async (...a) => tasksLib.addComment(...a);
+  getTaskComments: ConversationsStore["getTaskComments"] = async (...a) => tasksLib.getComments(...a);
+  getSubtasks: ConversationsStore["getSubtasks"] = async (...a) => tasksLib.getSubtasks(...a);
+  getTaskTree: ConversationsStore["getTaskTree"] = async (...a) => tasksLib.getTaskTree(...a);
+  addDependency: ConversationsStore["addDependency"] = async (...a) => tasksLib.addDependency(...a);
+  removeDependency: ConversationsStore["removeDependency"] = async (...a) => tasksLib.removeDependency(...a);
+  getDependencies: ConversationsStore["getDependencies"] = async (...a) => tasksLib.getDependencies(...a);
+  getDependents: ConversationsStore["getDependents"] = async (...a) => tasksLib.getDependents(...a);
+  getTaskActivity: ConversationsStore["getTaskActivity"] = async (...a) => tasksLib.getTaskActivity(...a);
+  deleteTask: ConversationsStore["deleteTask"] = async (...a) => tasksLib.deleteTask(...a);
+  searchTasks: ConversationsStore["searchTasks"] = async (...a) => tasksLib.searchTasks(...a);
+  getDueTasks: ConversationsStore["getDueTasks"] = async (...a) => tasksLib.getDueTasks(...a);
+  getTaskSummary: ConversationsStore["getTaskSummary"] = async (...a) => tasksLib.getTaskSummary(...a);
+
+  // locks
+  acquireLock: ConversationsStore["acquireLock"] = async (...a) => locksLib.acquireLock(...a);
+  bulkAcquireLock: ConversationsStore["bulkAcquireLock"] = async (...a) => locksLib.bulkAcquireLock(...a);
+  releaseLock: ConversationsStore["releaseLock"] = async (...a) => locksLib.releaseLock(...a);
+  checkLock: ConversationsStore["checkLock"] = async (...a) => locksLib.checkLock(...a);
+  cleanExpiredLocks: ConversationsStore["cleanExpiredLocks"] = async (...a) => locksLib.cleanExpiredLocks(...a);
+  releaseStaleAgentLocks: ConversationsStore["releaseStaleAgentLocks"] = async (...a) => locksLib.releaseStaleAgentLocks(...a);
+  tryBulkAcquireLock: ConversationsStore["tryBulkAcquireLock"] = async (...a) => locksLib.tryBulkAcquireLock(...a);
+  listLocks: ConversationsStore["listLocks"] = async (...a) => locksLib.listLocks(...a);
+  listLocksEnriched: ConversationsStore["listLocksEnriched"] = async (...a) => locksLib.listLocksEnriched(...a);
+
+  // presence
+  registerAgent: ConversationsStore["registerAgent"] = async (...a) => presenceLib.registerAgent(...a);
+  heartbeat: ConversationsStore["heartbeat"] = async (...a) => presenceLib.heartbeat(...a);
+  getPresence: ConversationsStore["getPresence"] = async (...a) => presenceLib.getPresence(...a);
+  listAgents: ConversationsStore["listAgents"] = async (...a) => presenceLib.listAgents(...a);
+  removePresence: ConversationsStore["removePresence"] = async (...a) => presenceLib.removePresence(...a);
+  renameAgent: ConversationsStore["renameAgent"] = async (...a) => presenceLib.renameAgent(...a);
+  setPresenceProject: ConversationsStore["setPresenceProject"] = async (...a) => presenceLib.setPresenceProject(...a);
+
+  // projects
+  createProject: ConversationsStore["createProject"] = async (...a) => projectsLib.createProject(...a);
+  listProjects: ConversationsStore["listProjects"] = async (...a) => projectsLib.listProjects(...a);
+  getProject: ConversationsStore["getProject"] = async (...a) => projectsLib.getProject(...a);
+  getProjectByName: ConversationsStore["getProjectByName"] = async (...a) => projectsLib.getProjectByName(...a);
+  updateProject: ConversationsStore["updateProject"] = async (...a) => projectsLib.updateProject(...a);
+  deleteProject: ConversationsStore["deleteProject"] = async (...a) => projectsLib.deleteProject(...a);
+
+  // reactions
+  addReaction: ConversationsStore["addReaction"] = async (...a) => reactionsLib.addReaction(...a);
+  removeReaction: ConversationsStore["removeReaction"] = async (...a) => reactionsLib.removeReaction(...a);
+  getReactions: ConversationsStore["getReactions"] = async (...a) => reactionsLib.getReactions(...a);
+  getReactionSummary: ConversationsStore["getReactionSummary"] = async (...a) => reactionsLib.getReactionSummary(...a);
+
+  // sessions
+  listSessions: ConversationsStore["listSessions"] = async (...a) => sessionsLib.listSessions(...a);
+  getSession: ConversationsStore["getSession"] = async (...a) => sessionsLib.getSession(...a);
+  getSessionActivity: ConversationsStore["getSessionActivity"] = async (...a) => sessionsLib.getSessionActivity(...a);
+
+  // topics
+  getChannelTopics: ConversationsStore["getChannelTopics"] = async (...a) => topicsLib.getChannelTopics(...a);
+  getSessionTopics: ConversationsStore["getSessionTopics"] = async (...a) => topicsLib.getSessionTopics(...a);
+  getTrendingTopics: ConversationsStore["getTrendingTopics"] = async (...a) => topicsLib.getTrendingTopics(...a);
+
+  // graph
+  buildGraph: ConversationsStore["buildGraph"] = async (...a) => graphLib.buildGraph(...a);
+  getRelated: ConversationsStore["getRelated"] = async (...a) => graphLib.getRelated(...a);
+  getAgentNetwork: ConversationsStore["getAgentNetwork"] = async (...a) => graphLib.getAgentNetwork(...a);
+  getGraphStats: ConversationsStore["getGraphStats"] = async (...a) => graphLib.getGraphStats(...a);
+
+  // summary
+  getConversationSummary: ConversationsStore["getConversationSummary"] = async (...a) => summaryLib.getConversationSummary(...a);
+
+  // hot
+  computeHotness: ConversationsStore["computeHotness"] = async (...a) => hotLib.computeHotness(...a);
+  listHotSessions: ConversationsStore["listHotSessions"] = async (...a) => hotLib.listHotSessions(...a);
+
+  // messages
+  sendMessage: ConversationsStore["sendMessage"] = async (...a) => messagesLib.sendMessage(...a);
+  getMessageById: ConversationsStore["getMessageById"] = async (...a) => messagesLib.getMessageById(...a);
+  deleteMessage: ConversationsStore["deleteMessage"] = async (...a) => messagesLib.deleteMessage(...a);
+  editMessage: ConversationsStore["editMessage"] = async (...a) => messagesLib.editMessage(...a);
+  readMessages: ConversationsStore["readMessages"] = async (...a) => messagesLib.readMessages(...a);
+  searchMessages: ConversationsStore["searchMessages"] = async (...a) => messagesLib.searchMessages(...a);
+  readDigest: ConversationsStore["readDigest"] = async (...a) => messagesLib.readDigest(...a);
+  exportMessages: ConversationsStore["exportMessages"] = async (...a) => messagesLib.exportMessages(...a);
+  getThreadReplies: ConversationsStore["getThreadReplies"] = async (...a) => messagesLib.getThreadReplies(...a);
+  getUnreadBlockers: ConversationsStore["getUnreadBlockers"] = async (...a) => messagesLib.getUnreadBlockers(...a);
+  getMessagesForAgent: ConversationsStore["getMessagesForAgent"] = async (...a) => messagesLib.getMessagesForAgent(...a);
+  getMessageReadStatus: ConversationsStore["getMessageReadStatus"] = async (...a) => messagesLib.getMessageReadStatus(...a);
+  markRead: ConversationsStore["markRead"] = async (...a) => messagesLib.markRead(...a);
+  markReadByIds: ConversationsStore["markReadByIds"] = async (...a) => messagesLib.markReadByIds(...a);
+  markAllRead: ConversationsStore["markAllRead"] = async (...a) => messagesLib.markAllRead(...a);
+  markChannelRead: ConversationsStore["markChannelRead"] = async (...a) => messagesLib.markChannelRead(...a);
+  markSessionRead: ConversationsStore["markSessionRead"] = async (...a) => messagesLib.markSessionRead(...a);
+  markUnread: ConversationsStore["markUnread"] = async (...a) => messagesLib.markUnread(...a);
+  markUnreadByIds: ConversationsStore["markUnreadByIds"] = async (...a) => messagesLib.markUnreadByIds(...a);
+  markMentionsRead: ConversationsStore["markMentionsRead"] = async (...a) => messagesLib.markMentionsRead(...a);
+  listUnreadCounts: ConversationsStore["listUnreadCounts"] = async (...a) => messagesLib.listUnreadCounts(...a);
+  listUnreadCountsWithMentions: ConversationsStore["listUnreadCountsWithMentions"] = async (...a) => messagesLib.listUnreadCountsWithMentions(...a);
+  pinMessage: ConversationsStore["pinMessage"] = async (...a) => messagesLib.pinMessage(...a);
+  unpinMessage: ConversationsStore["unpinMessage"] = async (...a) => messagesLib.unpinMessage(...a);
+  getPinnedMessages: ConversationsStore["getPinnedMessages"] = async (...a) => messagesLib.getPinnedMessages(...a);
+  recordReadReceipt: ConversationsStore["recordReadReceipt"] = async (...a) => messagesLib.recordReadReceipt(...a);
+  recordReadReceiptsBatch: ConversationsStore["recordReadReceiptsBatch"] = async (...a) => messagesLib.recordReadReceiptsBatch(...a);
+  getReadReceipts: ConversationsStore["getReadReceipts"] = async (...a) => messagesLib.getReadReceipts(...a);
+}
+
+// ── Resolver ──────────────────────────────────────────────────────────────────
+
+let localSingleton: LocalStore | null = null;
+
+/**
+ * Resolve the active {@link ConversationsStore} for the current environment.
+ * Returns an {@link ApiStore} when the client-flip contract resolves to cloud-http
+ * (self_hosted/cloud), else a {@link LocalStore}. Throws if cloud was requested but
+ * is misconfigured, so callers can never silently read/write the wrong dataset.
+ */
+export function getStore(env: Env = process.env): ConversationsStore {
+  const client = resolveConversationsCloud(env);
+  if (client) return new ApiStore(client);
+  if (!localSingleton) localSingleton = new LocalStore();
+  return localSingleton;
+}
+
+/**
+ * Cloud-served status counts, mirroring the local `status` command but sourced
+ * from the self_hosted API so operators verifying a flip see cloud state (not the
+ * stale local db). Returns null when not in cloud mode so callers fall back to the
+ * local store.
+ */
+export async function cloudStatus(
+  env: Env = process.env,
+): Promise<{ api_url: string | null; total_messages: number; unread_messages: number } | null> {
+  const client = resolveConversationsCloud(env);
+  if (!client) return null;
+  const count = async (q: Record<string, string | number | boolean>): Promise<number> => {
+    const body = await client.transport.get<{ count?: number }>("/messages", { query: { ...q, count: 1 } });
+    return Number(body?.count ?? 0);
+  };
+  const [total, unread] = await Promise.all([count({}), count({ unread_only: true })]);
+  return { api_url: cloudApiUrl(env), total_messages: total, unread_messages: unread };
+}
+
+export { normalizeChannelName };

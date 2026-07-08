@@ -12,7 +12,8 @@
  * Exit codes:
  *   0 = always (no output if no blockers, JSON warning if blockers found)
  */
-import { getDb, closeDb } from "../lib/db.js";
+import { getStore } from "../lib/store/index.js";
+import { closeDb } from "../lib/db.js";
 import { resolveIdentity } from "../lib/identity.js";
 
 if (process.argv.includes("--help") || process.argv.includes("-h")) {
@@ -21,18 +22,9 @@ if (process.argv.includes("--help") || process.argv.includes("-h")) {
 }
 
 const agent = resolveIdentity();
-const db = getDb();
 
-const blockers = db.prepare(`
-  SELECT id, from_agent, content, channel, created_at FROM messages
-  WHERE blocking = 1 AND read_at IS NULL
-  AND (
-    to_agent = ?
-    OR channel IN (SELECT channel FROM channel_members WHERE agent = ?)
-  )
-  ORDER BY created_at ASC
-  LIMIT 10
-`).all(agent, agent) as { id: number; from_agent: string; content: string; channel: string | null; created_at: string }[];
+// Routed through the Store: local sqlite or the self_hosted/cloud API.
+const blockers = await getStore().getUnreadBlockers(agent, { limit: 10 });
 
 closeDb();
 

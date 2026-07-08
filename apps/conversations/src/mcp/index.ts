@@ -11,14 +11,13 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { getPresence } from "../lib/presence.js";
+import { getStore } from "../lib/store/index.js";
 
 import { registerMessagingTools } from "./tools/messaging.js";
 import { registerChannelTools } from "./tools/channels.js";
 import { registerProjectTools } from "./tools/projects.js";
 import { registerAgentTools } from "./tools/agents.js";
 import { registerAdvancedTools } from "./tools/advanced.js";
-import { registerStorageSyncTools } from "./tools/storage.js";
 import { registerChannelBridge } from "./channel.js";
 import { registerTelegramChannel } from "./telegram-channel.js";
 import { registerTmuxTools } from "./tools/tmux.js";
@@ -31,15 +30,17 @@ import pkg from "../../package.json";
 // Priority: per-call param > session focus > agent_presence.project_id > no filter
 const agentFocus = new Map<string, { project_id: string | null }>();
 
-function getAgentFocus(agentId: string): string | null {
+async function getAgentFocus(agentId: string): Promise<string | null> {
   if (agentFocus.has(agentId)) return agentFocus.get(agentId)!.project_id;
-  const presence = getPresence(agentId);
+  // Route presence through the Store so cloud mode reads cloud presence, not
+  // stale local sqlite.
+  const presence = await getStore().getPresence(agentId);
   return presence?.project_id ?? null;
 }
 
-function resolveProjectId(explicitProjectId: string | undefined, agentId: string): string | undefined {
+async function resolveProjectId(explicitProjectId: string | undefined, agentId: string): Promise<string | undefined> {
   if (explicitProjectId) return explicitProjectId;
-  const focused = getAgentFocus(agentId);
+  const focused = await getAgentFocus(agentId);
   return focused ?? undefined;
 }
 
@@ -56,7 +57,6 @@ export function buildServer(forHttp = false): McpServer {
   registerAdvancedTools(srv, pkg.version);
   registerTaskTools(srv);
   registerTmuxTools(srv);
-  registerStorageSyncTools(srv);
 
   if (!forHttp) {
     registerChannelBridge(srv);

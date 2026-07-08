@@ -594,6 +594,21 @@ async function handleV1(
     return json({ channel: row }, 201);
   }
 
+  if (sub === "channels/mine" && method === "GET") {
+    const who = str(url.searchParams.get("agent")) ?? agent ?? undefined;
+    if (!who) return json({ error: "agent is required" }, 400);
+    const rows = await client.many(
+      `SELECT s.name, s.description,
+              (SELECT COUNT(*) FROM messages m WHERE m.channel = s.name AND m.read_at IS NULL) AS unread
+       FROM channels s
+       JOIN channel_members sm ON sm.channel = s.name
+       WHERE sm.agent = $1
+       ORDER BY s.name`,
+      [who],
+    );
+    return json({ channels: rows });
+  }
+
   const chanMatch = sub.match(/^channels\/([^/]+)$/);
   if (chanMatch) {
     const name = decodeURIComponent(chanMatch[1]);

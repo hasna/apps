@@ -12,7 +12,7 @@ import { join } from "path";
 
 const TEST_DB = join(tmpdir(), `conversations-test-messaging-mcp-${Date.now()}.db`);
 
-function resolveProjectId(explicit: string | undefined, _agent: string): string | undefined {
+async function resolveProjectId(explicit: string | undefined, _agent: string): Promise<string | undefined> {
   return explicit;
 }
 
@@ -245,7 +245,7 @@ describe("messaging MCP tools", () => {
 
     test("applies default project resolver when project_id is omitted", async () => {
       const server = new McpServer({ name: "test-focused-digest-mcp", version: "0.0.1" });
-      registerMessagingTools(server, (explicit, _agent) => explicit ?? "focused-project");
+      registerMessagingTools(server, async (explicit, _agent) => explicit ?? "focused-project");
       const [focusedClientTransport, focusedServerTransport] = InMemoryTransport.createLinkedPair();
       const focusedClient = new Client({ name: "test-focused-client", version: "1.0.0" });
       await server.connect(focusedServerTransport);
