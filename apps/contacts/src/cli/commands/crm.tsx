@@ -549,11 +549,44 @@ program
   .option('--demo', 'Seed demo data (professional services example)')
   .option('--clear', 'Clear existing demo data first')
   .action(async (opts: { demo?: boolean; clear?: boolean }) => {
+    const store = getStore();
+
+    if (opts.clear) {
+      // Delete only the known demo records (matched by the exact names/emails
+      // this command seeds) so real data is never touched. Deleting a company
+      // or contact cascades its relationships.
+      const demoCompanyNames = [
+        'KPMG Romania', 'Escalon Services', 'Revision Legal PLLC', 'RAW Financial',
+        'Silicon Valley Bank', 'Hasna, Inc.', 'Beep Media International LLC', 'Hasna Global SRL',
+      ];
+      const demoContactEmails = [
+        'alinaturlea@kpmg.com', 'lsipos@kpmg.com', 'elizabeth.robles@escalon.services',
+        'drew@revisionlegal.com', 'DYang@svb.com',
+      ];
+      let removedCompanies = 0;
+      let removedContacts = 0;
+      const { companies } = await store.listCompanies({ limit: 500 }) as { companies: Array<{ id: string; name: string }> };
+      for (const c of companies) {
+        if (demoCompanyNames.includes(c.name)) {
+          await store.deleteCompany(c.id);
+          removedCompanies++;
+        }
+      }
+      for (const email of demoContactEmails) {
+        const contact = await store.getContactByEmail(email) as { id: string } | null;
+        if (contact) {
+          await store.deleteContact(contact.id);
+          removedContacts++;
+        }
+      }
+      console.log(chalk.green(`✓ Cleared demo data: ${removedCompanies} companies, ${removedContacts} contacts`));
+      if (!opts.demo) return;
+    }
+
     if (!opts.demo) {
-      console.log('Use --demo flag to seed demo data');
+      console.log('Use --demo flag to seed demo data (add --clear to remove previously seeded demo data)');
       return;
     }
-    const store = getStore();
     console.log(chalk.cyan('Seeding demo contacts...'));
 
     type Co = { id: string; name: string };
@@ -785,7 +818,7 @@ dealsCmd
   .command('add')
   .description('Add a new deal')
   .option('--title <title>', 'Deal title (required)')
-  .option('--stage <stage>', 'Stage: prospecting|qualified|proposal|negotiation|won|lost', 'prospecting')
+  .option('--stage <stage>', 'Stage: lead|qualified|proposal|negotiation|won|lost|cancelled', 'lead')
   .option('--value <usd>', 'Value in USD')
   .option('--contact <id>', 'Contact ID')
   .option('--company <id>', 'Company ID')
@@ -797,6 +830,11 @@ dealsCmd
     if (!title) {
       title = await prompt('Deal title (required):');
       if (!title) { console.error(chalk.red('Title is required.')); process.exit(1); }
+    }
+    const validStages = ['lead', 'qualified', 'proposal', 'negotiation', 'won', 'lost', 'cancelled'];
+    if (opts.stage && !validStages.includes(opts.stage)) {
+      console.error(chalk.red(`Invalid stage '${opts.stage}'. Valid stages: ${validStages.join(', ')}`));
+      process.exit(1);
     }
     const deal = await store.createDeal({
       title,
