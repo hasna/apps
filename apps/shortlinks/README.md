@@ -114,6 +114,12 @@ shortlinks domain add go.example.com --provider cloudflare
 
 Generated links use the default domain unless `--domain` is passed.
 
+Remove a domain (this also deletes all of its links and clicks):
+
+```bash
+shortlinks domain remove go.example.com
+```
+
 ## Cloudflare
 
 Create a dry-run plan:

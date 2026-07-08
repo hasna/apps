@@ -154,6 +154,18 @@ export class ShortlinksStore {
     return row ? domainFromRow(row) : null;
   }
 
+  deleteDomain(hostnameOrId: string): Domain {
+    const domain = this.getDomain(hostnameOrId);
+    if (!domain) throw new Error("Domain not found.");
+    // links + clicks cascade via ON DELETE CASCADE (foreign_keys pragma is ON).
+    this.database.db.query("DELETE FROM domains WHERE id = ?").run(domain.id);
+    const config = loadConfig();
+    if (config.defaultDomain && normalizeHostname(config.defaultDomain) === domain.hostname) {
+      updateConfig({ defaultDomain: undefined, publicBaseUrl: undefined });
+    }
+    return domain;
+  }
+
   getDefaultDomain(): Domain | null {
     const config = loadConfig();
     if (config.defaultDomain) {

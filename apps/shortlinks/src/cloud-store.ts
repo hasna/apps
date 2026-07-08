@@ -104,6 +104,15 @@ export class CloudShortlinksStore implements Store {
     return domains.find((d) => d.default_domain) ?? domains[0] ?? null;
   }
 
+  async deleteDomain(hostnameOrId: string): Promise<Domain> {
+    // The API's DELETE returns { deleted, hostname }; the CLI needs the full
+    // domain record, so resolve it first, then delete by hostname.
+    const domain = await this.getDomain(hostnameOrId);
+    if (!domain) throw new Error("Domain not found.");
+    await this.client.delete("domains", domain.hostname);
+    return domain;
+  }
+
   // ── Links ──────────────────────────────────────────────────────────────────
   async createLink(input: CreateLinkInput): Promise<Link> {
     return this.client.create<Link>("links", {

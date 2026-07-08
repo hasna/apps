@@ -112,4 +112,15 @@ describe("CloudShortlinksStore routes to /v1 with bearer key", () => {
     await s.addDomain({ hostname: "has.na", defaultDomain: true, originUrl: "https://o" });
     expect(calls[0].body).toMatchObject({ hostname: "has.na", default: true, origin_url: "https://o" });
   });
+
+  test("deleteDomain resolves the domain then DELETEs /v1/domains/:hostname", async () => {
+    const { s, calls } = store((c) => {
+      if (c.method === "GET") return { json: { items: [{ id: "dom_2", hostname: "has.na" }] } };
+      return { status: 200, json: { deleted: true, hostname: "has.na" } };
+    });
+    const domain = await s.deleteDomain("has.na");
+    expect(domain.hostname).toBe("has.na");
+    expect(calls.map((c) => c.method)).toEqual(["GET", "DELETE"]);
+    expect(calls[1].url).toContain("/v1/domains/has.na");
+  });
 });

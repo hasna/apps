@@ -56,6 +56,10 @@ export class LocalStore implements Store {
     return this.inner.getDefaultDomain();
   }
 
+  async deleteDomain(hostnameOrId: string): Promise<Domain> {
+    return this.inner.deleteDomain(hostnameOrId);
+  }
+
   async createLink(input: CreateLinkInput): Promise<Link> {
     return this.inner.createLink(input);
   }

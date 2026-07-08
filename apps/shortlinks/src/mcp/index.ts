@@ -122,6 +122,15 @@ const TOOLS = [
     },
   },
   {
+    name: "delete_domain",
+    description: "Delete a shortlink domain and all of its links and clicks.",
+    inputSchema: {
+      type: "object",
+      properties: { hostname: { type: "string", description: "Hostname or domain id." } },
+      required: ["hostname"],
+    },
+  },
+  {
     name: "stats",
     description: "Total domains/links/clicks counts.",
     inputSchema: { type: "object", properties: {} },
@@ -167,6 +176,8 @@ async function dispatch(name: string, args: Record<string, any>): Promise<unknow
           notes: args.notes,
         }),
       );
+    case "delete_domain":
+      return withStore((s) => s.deleteDomain(args.hostname));
     case "stats":
       return withStore((s) => s.totalStats());
     default:

@@ -228,6 +228,14 @@ export class PgShortlinksStore {
     return row ? domainFromRow(row) : null;
   }
 
+  async deleteDomain(hostnameOrId: string): Promise<Domain> {
+    const domain = await this.getDomain(hostnameOrId);
+    if (!domain) throw new Error("Domain not found.");
+    // links + clicks cascade via ON DELETE CASCADE.
+    await this.pg.run("DELETE FROM domains WHERE id = ?", domain.id);
+    return domain;
+  }
+
   async createLink(input: CreateLinkInput): Promise<Link> {
     const domain = input.domain ? await this.getDomain(input.domain) : await this.getDefaultDomain();
     if (!domain) {

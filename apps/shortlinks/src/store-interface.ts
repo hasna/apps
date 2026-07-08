@@ -58,6 +58,11 @@ export interface Store {
   listDomains(): Promise<Domain[]>;
   getDomain(hostnameOrId: string): Promise<Domain | null>;
   getDefaultDomain(): Promise<Domain | null>;
+  /**
+   * Delete a domain (by hostname or id) and, via ON DELETE CASCADE, all of its
+   * links and clicks. Returns the deleted domain. Throws when not found.
+   */
+  deleteDomain(hostnameOrId: string): Promise<Domain>;
 
   // ── Links ──────────────────────────────────────────────────────────────────
   createLink(input: CreateLinkInput): Promise<Link>;

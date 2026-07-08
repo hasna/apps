@@ -234,6 +234,24 @@ domainCmd
   });
 
 domainCmd
+  .command("remove <hostname>")
+  .alias("delete")
+  .alias("rm")
+  .description("Delete a domain and all of its links and clicks")
+  .option("-j, --json", "Output JSON")
+  .action(async (hostname, opts) => {
+    try {
+      const domain = await withRuntimeStore((store) => store.deleteDomain(hostname));
+      print({ deleted: true, hostname: domain.hostname }, opts, () => {
+        console.log(chalk.green(`Domain removed: ${domain.hostname}`));
+        console.log(chalk.dim("Its links and clicks were deleted."));
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+domainCmd
   .command("setup <hostname>")
   .description("Add a domain locally and optionally prepare Cloudflare DNS")
   .option("--default", "Make this the default domain")
