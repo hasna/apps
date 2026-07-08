@@ -14,6 +14,7 @@ import type {
   Result,
   Persona,
   ScenarioPriority,
+  PersistedScanIssue,
 } from "../types/index.js";
 
 // ─── helpers ──────────────────────────────────────────────────────────────
@@ -726,6 +727,148 @@ export async function deletePersona(db: TypedQueryClient, id: string): Promise<b
   if (!existing) return false;
   await db.execute("DELETE FROM personas WHERE id = $1", [existing.id]);
   return true;
+}
+
+// ─── scan issues ──────────────────────────────────────────────────────────────
+
+function scanIssueRow(r: any): PersistedScanIssue {
+  return {
+    id: r.id,
+    fingerprint: r.fingerprint,
+    type: r.type,
+    severity: r.severity,
+    pageUrl: r.page_url,
+    message: r.message,
+    detail: r.detail ? parse<Record<string, unknown> | null>(r.detail, null) : null,
+    status: r.status,
+    occurrenceCount: asNum(r.occurrence_count),
+    firstSeenAt: r.first_seen_at,
+    lastSeenAt: r.last_seen_at,
+    resolvedAt: r.resolved_at ?? null,
+    todoTaskId: r.todo_task_id ?? null,
+    projectId: r.project_id ?? null,
+  };
+}
+
+export type ScanIssueUpsertOutcome = "new" | "existing" | "regressed";
+
+export interface ScanIssueInput {
+  type: string;
+  severity?: string;
+  pageUrl: string;
+  message: string;
+  detail?: Record<string, unknown> | null;
+  projectId?: string | null;
+}
+
+/**
+ * djb2 fingerprint — MUST stay byte-for-byte identical to
+ * src/db/scan-issues.ts::fingerprintIssue so an issue keeps ONE identity
+ * whether it was first recorded through the local SQLite store or the cloud API.
+ */
+export function fingerprintScanIssue(issue: ScanIssueInput, projectId?: string | null): string {
+  let pagePattern = issue.pageUrl;
+  let scope = projectId ? `project:${projectId}` : "origin:unknown";
+  try {
+    const parsed = new URL(issue.pageUrl);
+    pagePattern = parsed.pathname;
+    if (!projectId) scope = `origin:${parsed.origin.toLowerCase()}`;
+  } catch {
+    // Not a valid URL — use as-is
+  }
+  const raw = `${scope}::${issue.type}::${issue.message.slice(0, 200)}::${pagePattern}`;
+  let hash = 5381;
+  for (let i = 0; i < raw.length; i++) {
+    hash = ((hash << 5) + hash) ^ raw.charCodeAt(i);
+    hash = hash >>> 0;
+  }
+  return `${issue.type}-${hash.toString(16).padStart(8, "0")}`;
+}
+
+export async function upsertScanIssue(
+  dbc: PoolQueryClient,
+  input: ScanIssueInput,
+): Promise<{ issue: PersistedScanIssue; outcome: ScanIssueUpsertOutcome }> {
+  if (!input?.type || !input?.pageUrl || !input?.message) {
+    throw new ValidationError("type, pageUrl, and message are required");
+  }
+  const projectId = input.projectId ?? null;
+  const fingerprint = fingerprintScanIssue(input, projectId);
+  const ts = nowIso();
+  const severity = input.severity ?? "medium";
+  const detail = input.detail ? j(input.detail) : null;
+  return dbc.transaction(async (db) => {
+    const existing = await db.get<{ status: string; detail: string | null }>(
+      "SELECT * FROM scan_issues WHERE fingerprint = $1",
+      [fingerprint],
+    );
+    if (!existing) {
+      const row = await db.get(
+        `INSERT INTO scan_issues
+           (id, fingerprint, type, severity, page_url, message, detail, status, occurrence_count, first_seen_at, last_seen_at, project_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'open',1,$8,$8,$9) RETURNING *`,
+        [uuid(), fingerprint, input.type, severity, input.pageUrl, input.message, detail, ts, projectId],
+      );
+      return { issue: scanIssueRow(row), outcome: "new" as const };
+    }
+    const wasResolved = existing.status === "resolved";
+    const newStatus = wasResolved ? "regressed" : "open";
+    const row = await db.get(
+      `UPDATE scan_issues
+         SET occurrence_count = occurrence_count + 1,
+             last_seen_at = $2,
+             status = $3,
+             resolved_at = CASE WHEN $3 = 'regressed' THEN NULL ELSE resolved_at END,
+             severity = $4,
+             page_url = $5,
+             message = $6,
+             detail = $7
+       WHERE fingerprint = $1 RETURNING *`,
+      [fingerprint, ts, newStatus, severity, input.pageUrl, input.message, detail ?? existing.detail],
+    );
+    return { issue: scanIssueRow(row), outcome: wasResolved ? ("regressed" as const) : ("existing" as const) };
+  });
+}
+
+export async function listScanIssues(
+  db: TypedQueryClient,
+  filter: { status?: string; type?: string; projectId?: string; limit?: number; offset?: number } = {},
+): Promise<PersistedScanIssue[]> {
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  if (filter.status) { params.push(filter.status); clauses.push(`status = $${params.length}`); }
+  if (filter.type) { params.push(filter.type); clauses.push(`type = $${params.length}`); }
+  if (filter.projectId) { params.push(filter.projectId); clauses.push(`project_id = $${params.length}`); }
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  const limit = Math.min(Math.max(filter.limit ?? 100, 1), 500);
+  const offset = Math.max(filter.offset ?? 0, 0);
+  const rows = await db.many(
+    `SELECT * FROM scan_issues ${where} ORDER BY last_seen_at DESC LIMIT ${limit} OFFSET ${offset}`,
+    params,
+  );
+  return rows.map(scanIssueRow);
+}
+
+export async function getScanIssue(db: TypedQueryClient, id: string): Promise<PersistedScanIssue | null> {
+  const row = await db.get("SELECT * FROM scan_issues WHERE id = $1", [id]);
+  return row ? scanIssueRow(row) : null;
+}
+
+export async function resolveScanIssue(db: TypedQueryClient, id: string): Promise<boolean> {
+  const row = await db.get<{ id: string }>(
+    "UPDATE scan_issues SET status = 'resolved', resolved_at = $2 WHERE id = $1 RETURNING id",
+    [id, nowIso()],
+  );
+  return !!row;
+}
+
+export async function setScanIssueTodoTaskId(
+  db: TypedQueryClient,
+  id: string,
+  todoTaskId: string,
+): Promise<PersistedScanIssue | null> {
+  const row = await db.get("UPDATE scan_issues SET todo_task_id = $2 WHERE id = $1 RETURNING *", [id, todoTaskId]);
+  return row ? scanIssueRow(row) : null;
 }
 
 // ─── errors ─────────────────────────────────────────────────────────────────

@@ -192,6 +192,8 @@ export interface Store {
   listScanIssues: A<typeof dbScanIssues.listScanIssues>;
   getScanIssue: A<typeof dbScanIssues.getScanIssue>;
   resolveScanIssue: A<typeof dbScanIssues.resolveScanIssue>;
+  upsertScanIssue: A<typeof dbScanIssues.upsertScanIssue>;
+  setScanIssueTodoTaskId: A<typeof dbScanIssues.setScanIssueTodoTaskId>;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -308,6 +310,8 @@ class LocalStore implements Store {
   async listScanIssues(...a: Parameters<typeof dbScanIssues.listScanIssues>) { return dbScanIssues.listScanIssues(...a); }
   async getScanIssue(...a: Parameters<typeof dbScanIssues.getScanIssue>) { return dbScanIssues.getScanIssue(...a); }
   async resolveScanIssue(...a: Parameters<typeof dbScanIssues.resolveScanIssue>) { return dbScanIssues.resolveScanIssue(...a); }
+  async upsertScanIssue(...a: Parameters<typeof dbScanIssues.upsertScanIssue>) { return dbScanIssues.upsertScanIssue(...a); }
+  async setScanIssueTodoTaskId(...a: Parameters<typeof dbScanIssues.setScanIssueTodoTaskId>) { return dbScanIssues.setScanIssueTodoTaskId(...a); }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -635,6 +639,20 @@ class ApiStore implements Store {
     await this.c.update<PersistedScanIssue>("scan-issues", id, { status: "resolved" }, { method: "PATCH" });
     return true;
   }
+  async upsertScanIssue(
+    issue: Parameters<typeof dbScanIssues.upsertScanIssue>[0],
+    projectId?: Parameters<typeof dbScanIssues.upsertScanIssue>[1],
+  ) {
+    // The server owns fingerprint dedup: POST /v1/scan-issues upserts by
+    // fingerprint and returns { issue, outcome }.
+    return this.c.create<Awaited<ReturnType<typeof dbScanIssues.upsertScanIssue>>>(
+      "scan-issues",
+      { ...issue, projectId: projectId ?? null },
+    );
+  }
+  async setScanIssueTodoTaskId(id: string, todoTaskId: string) {
+    await this.c.update<PersistedScanIssue>("scan-issues", id, { todoTaskId }, { method: "PATCH" });
+  }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -774,3 +792,5 @@ export const setAgentFocus: Store["setAgentFocus"] = (...a) => getStore().setAge
 export const listScanIssues: Store["listScanIssues"] = (...a) => getStore().listScanIssues(...a);
 export const getScanIssue: Store["getScanIssue"] = (...a) => getStore().getScanIssue(...a);
 export const resolveScanIssue: Store["resolveScanIssue"] = (...a) => getStore().resolveScanIssue(...a);
+export const upsertScanIssue: Store["upsertScanIssue"] = (...a) => getStore().upsertScanIssue(...a);
+export const setScanIssueTodoTaskId: Store["setScanIssueTodoTaskId"] = (...a) => getStore().setScanIssueTodoTaskId(...a);

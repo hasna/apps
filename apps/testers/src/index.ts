@@ -104,65 +104,76 @@ export {
   flowFromRow,
 } from "./types/index.js";
 
-// ─── Database ────────────────────────────────────────────────────────────────
+// ─── Storage — the single Store abstraction ──────────────────────────────────
+// The SDK's public data surface routes EXCLUSIVELY through the Store (local
+// SQLite or cloud /v1 HTTP + bearer key, resolved once from env). Raw `db/*`
+// SQLite functions and `getDatabase` are intentionally NOT part of the public
+// API — importing them would read/write on-box SQLite even in cloud mode (the
+// split-brain bug). Consumers use these async, Store-routed accessors instead.
 export {
-  getDatabase,
-  closeDatabase,
-  resetDatabase,
-  resolvePartialId,
-  now,
-  uuid,
-  shortUuid,
-} from "./db/database.js";
-
-export {
+  getStore,
+  resetStore,
+  isCloudStore,
+  TESTERS_APP,
+  // scenarios
   createScenario,
   getScenario,
   getScenarioByShortId,
   listScenarios,
   updateScenario,
   deleteScenario,
-} from "./db/scenarios.js";
-
-export {
-  createRun,
-  getRun,
-  listRuns,
-  updateRun,
-  deleteRun,
-} from "./db/runs.js";
-
-export {
-  createResult,
-  getResult,
-  listResults,
-  updateResult,
-  getResultsByRun,
-} from "./db/results.js";
-
-export {
-  createScreenshot,
-  getScreenshot,
-  listScreenshots,
-  getScreenshotsByResult,
-} from "./db/screenshots.js";
-
-export {
+  countScenarios,
+  findStaleScenarios,
+  updateScenarioPassedCache,
+  // projects
   createProject,
   getProject,
   getProjectByPath,
   listProjects,
+  updateProject,
   ensureProject,
-} from "./db/projects.js";
-
-export {
-  registerAgent,
-  getAgent,
-  getAgentByName,
-  listAgents,
-} from "./db/agents.js";
-
-export {
+  // personas
+  createPersona,
+  getPersona,
+  listPersonas,
+  countPersonas,
+  updatePersona,
+  deletePersona,
+  getGlobalPersonas,
+  listAuthenticatedPersonas,
+  savePersonaAuthCookies,
+  // runs
+  createRun,
+  getRun,
+  listRuns,
+  countRuns,
+  updateRun,
+  deleteRun,
+  // results
+  createResult,
+  getResult,
+  listResults,
+  getResultsByRun,
+  updateResult,
+  // screenshots
+  createScreenshot,
+  listScreenshots,
+  // step results
+  createStepResult,
+  getStepResult,
+  listStepResults,
+  updateStepResult,
+  // api checks
+  createApiCheck,
+  getApiCheck,
+  listApiChecks,
+  countApiChecks,
+  updateApiCheck,
+  deleteApiCheck,
+  createApiCheckResult,
+  listApiCheckResults,
+  getLatestApiCheckResult,
+  // schedules
   createSchedule,
   getSchedule,
   listSchedules,
@@ -170,59 +181,53 @@ export {
   deleteSchedule,
   getEnabledSchedules,
   updateLastRun,
-} from "./db/schedules.js";
-
-export {
+  // auth presets
+  createAuthPreset,
+  getAuthPreset,
+  listAuthPresets,
+  deleteAuthPreset,
+  // flows
+  addDependency,
+  removeDependency,
+  getDependencies,
+  getDependents,
+  createFlow,
+  getFlow,
+  listFlows,
+  deleteFlow,
+  // testing workflows
   createTestingWorkflow,
   getTestingWorkflow,
   listTestingWorkflows,
   updateTestingWorkflow,
   deleteTestingWorkflow,
-} from "./db/workflows.js";
-
-export {
-  createExecutionSubject,
-  getExecutionSubject,
-  listExecutionSubjects,
-  updateExecutionSubject,
-  createTestSpec,
-  getTestSpec,
-  listTestSpecs,
-  updateTestSpec,
-  ensureTestSpecForScenario,
-  createRunAttempt,
-  getRunAttempt,
-  listRunAttempts,
-  updateRunAttempt,
-  ensureRunAttemptForResult,
-  recordRunEvent,
-  getRunEvent,
-  listRunEvents,
-  createRunArtifact,
-  getRunArtifact,
-  listRunArtifacts,
-  createTestGoal,
-  getTestGoal,
-  listTestGoals,
-  updateTestGoal,
-  createLoopRun,
-  getLoopRun,
-  listLoopRuns,
-  updateLoopRun,
-} from "./db/execution.js";
-
-export {
-  addDependency,
-  removeDependency,
-  getDependencies,
-  getDependents,
-  getTransitiveDependencies,
-  topologicalSort,
-  createFlow,
-  getFlow,
-  listFlows,
-  deleteFlow,
-} from "./db/flows.js";
+  // environments
+  createEnvironment,
+  getEnvironment,
+  listEnvironments,
+  deleteEnvironment,
+  setDefaultEnvironment,
+  getDefaultEnvironment,
+  // sessions
+  createSession,
+  getSession,
+  listSessions,
+  deleteSession,
+  countSessions,
+  searchSessions,
+  // agents
+  registerAgent,
+  listAgents,
+  heartbeatAgent,
+  setAgentFocus,
+  // scan issues
+  listScanIssues,
+  getScanIssue,
+  resolveScanIssue,
+  upsertScanIssue,
+  setScanIssueTodoTaskId,
+} from "./store/index.js";
+export type { Store } from "./store/index.js";
 
 // ─── Library ─────────────────────────────────────────────────────────────────
 export {
@@ -372,13 +377,6 @@ export {
 } from "./lib/templates.js";
 
 export {
-  createAuthPreset,
-  getAuthPreset,
-  listAuthPresets,
-  deleteAuthPreset,
-} from "./db/auth-presets.js";
-
-export {
   generateHtmlReport,
   generateLatestReport,
   imageToBase64,
@@ -477,12 +475,4 @@ export { TestersClient, ApiError as TestersApiError } from "./sdk/client.js";
 export type { TestersClientOptions } from "./sdk/client.js";
 
 // ─── Sessions (Chrome extension import) ──────────────────────────────────────
-export {
-  createSession,
-  getSession,
-  listSessions,
-  deleteSession,
-  searchSessions,
-  countSessions,
-} from "./db/sessions.js";
 export type { Session, SessionInput } from "./db/sessions.js";

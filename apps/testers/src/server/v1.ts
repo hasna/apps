@@ -15,7 +15,7 @@ import { ValidationError } from "../db/pg-store.js";
 const CORS = {
   "Content-Type": "application/json",
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization, x-api-key",
 };
 
@@ -233,6 +233,38 @@ async function route(
       if (method === "GET") return notNull(await store.getPersona(db, id), "persona");
       if (method === "PUT") return notNull(await store.updatePersona(db, id, (await readJson(req)) as never), "persona");
       if (method === "DELETE") return json({ deleted: await store.deletePersona(db, id) });
+    }
+  }
+
+  // ── scan issues ──
+  if (resource === "scan-issues") {
+    if (!id) {
+      if (method === "GET")
+        return json(
+          await store.listScanIssues(db, {
+            status: searchParams.get("status") ?? undefined,
+            type: searchParams.get("type") ?? undefined,
+            projectId: searchParams.get("projectId") ?? undefined,
+            limit: numParam(searchParams.get("limit")),
+            offset: numParam(searchParams.get("offset")),
+          }),
+        );
+      // POST upserts by fingerprint (server owns dedup); returns { issue, outcome }.
+      if (method === "POST") return json(await store.upsertScanIssue(db, (await readJson(req)) as never), 200);
+    } else {
+      if (method === "GET") return notNull(await store.getScanIssue(db, id), "scan issue");
+      if (method === "PATCH") {
+        const body = await readJson(req);
+        if (typeof body["todoTaskId"] === "string") {
+          return notNull(await store.setScanIssueTodoTaskId(db, id, body["todoTaskId"]), "scan issue");
+        }
+        if (body["status"] === "resolved") {
+          return (await store.resolveScanIssue(db, id))
+            ? json({ id, status: "resolved" })
+            : err("scan issue not found", 404);
+        }
+        return err("unsupported scan-issue patch", 400);
+      }
     }
   }
 

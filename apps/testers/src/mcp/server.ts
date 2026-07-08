@@ -35,6 +35,7 @@ import {
   listScanIssues,
   getScanIssue,
   resolveScanIssue,
+  upsertScanIssue,
   createSchedule,
   listSchedules,
   updateSchedule,
@@ -1236,12 +1237,14 @@ server.tool(
   async ({ url, pages, projectId, headed, timeoutMs }) => {
     try {
       const { scanConsoleErrors } = await import("../lib/scanners/console.js");
-      const { upsertScanIssue } = await import("../db/scan-issues.js");
       const result = await scanConsoleErrors({ url, pages, headed, timeoutMs });
-      const deduped = result.issues.map((issue) => {
-        const { outcome } = upsertScanIssue(issue, projectId);
-        return { ...issue, outcome };
-      });
+      // Sequential upsert: two issues in one scan that share a fingerprint must
+      // fold into the same row, not race the UNIQUE(fingerprint) constraint.
+      const deduped: Array<Record<string, unknown>> = [];
+      for (const issue of result.issues) {
+        const { outcome } = await upsertScanIssue(issue, projectId);
+        deduped.push({ ...issue, outcome });
+      }
       return json({ ...result, issues: deduped });
     } catch (e) { return errorResponse(e); }
   },
@@ -1262,12 +1265,14 @@ server.tool(
   async ({ url, pages, projectId, headed, timeoutMs }) => {
     try {
       const { scanNetworkErrors } = await import("../lib/scanners/network.js");
-      const { upsertScanIssue } = await import("../db/scan-issues.js");
       const result = await scanNetworkErrors({ url, pages, headed, timeoutMs });
-      const deduped = result.issues.map((issue) => {
-        const { outcome } = upsertScanIssue(issue, projectId);
-        return { ...issue, outcome };
-      });
+      // Sequential upsert: two issues in one scan that share a fingerprint must
+      // fold into the same row, not race the UNIQUE(fingerprint) constraint.
+      const deduped: Array<Record<string, unknown>> = [];
+      for (const issue of result.issues) {
+        const { outcome } = await upsertScanIssue(issue, projectId);
+        deduped.push({ ...issue, outcome });
+      }
       return json({ ...result, issues: deduped });
     } catch (e) { return errorResponse(e); }
   },
@@ -1288,12 +1293,14 @@ server.tool(
   async ({ url, maxPages, projectId, headed, timeoutMs }) => {
     try {
       const { scanBrokenLinks } = await import("../lib/scanners/links.js");
-      const { upsertScanIssue } = await import("../db/scan-issues.js");
       const result = await scanBrokenLinks({ url, maxPages, headed, timeoutMs });
-      const deduped = result.issues.map((issue) => {
-        const { outcome } = upsertScanIssue(issue, projectId);
-        return { ...issue, outcome };
-      });
+      // Sequential upsert: two issues in one scan that share a fingerprint must
+      // fold into the same row, not race the UNIQUE(fingerprint) constraint.
+      const deduped: Array<Record<string, unknown>> = [];
+      for (const issue of result.issues) {
+        const { outcome } = await upsertScanIssue(issue, projectId);
+        deduped.push({ ...issue, outcome });
+      }
       return json({ ...result, issues: deduped });
     } catch (e) { return errorResponse(e); }
   },
@@ -1319,12 +1326,14 @@ server.tool(
   async ({ url, pages, projectId, headed, timeoutMs, thresholds }) => {
     try {
       const { scanPerformance } = await import("../lib/scanners/performance.js");
-      const { upsertScanIssue } = await import("../db/scan-issues.js");
       const result = await scanPerformance({ url, pages, headed, timeoutMs, thresholds });
-      const deduped = result.issues.map((issue) => {
-        const { outcome } = upsertScanIssue(issue, projectId);
-        return { ...issue, outcome };
-      });
+      // Sequential upsert: two issues in one scan that share a fingerprint must
+      // fold into the same row, not race the UNIQUE(fingerprint) constraint.
+      const deduped: Array<Record<string, unknown>> = [];
+      for (const issue of result.issues) {
+        const { outcome } = await upsertScanIssue(issue, projectId);
+        deduped.push({ ...issue, outcome });
+      }
       return json({ ...result, issues: deduped });
     } catch (e) { return errorResponse(e); }
   },
