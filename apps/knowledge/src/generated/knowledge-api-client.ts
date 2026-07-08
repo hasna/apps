@@ -2,7 +2,7 @@
 // DO NOT EDIT. Regenerate: bun scripts/generate-sdk.mjs
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Knowledge 0.2.77
+// Source: Knowledge 0.2.84
 
 export interface Note { "id": string; "short_id"?: string | null; "title": string; "content": string; "url"?: string | null; "tags": Array<string>; "metadata"?: Record<string, unknown>; "archived": boolean; "created_at": string; "updated_at": string }
 

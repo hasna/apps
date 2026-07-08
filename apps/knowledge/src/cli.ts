@@ -4,8 +4,8 @@
  * Copyright 2026 Hasna Inc.
  * Licensed under the Apache License, Version 2.0
  */
-import { defaultStorePath, loadStore, loadStoreIfExists, saveStore, withLock, makeId, makeShortId, ensureStore, type KnowledgeItem } from './store';
-import { resolveKnowledgeCloudStore, fetchAllCloudItems, type KnowledgeCloudStore } from './cloud-store';
+import { defaultStorePath, ensureStore, type KnowledgeItem } from './store';
+import { resolveItemStore, type ItemStore } from './item-store';
 import { openKnowledgeDb } from './knowledge-db';
 import { createKnowledgeService } from './service';
 import { createKnowledgeProjectPanel, formatKnowledgeProjectPanel } from './project-panel';
@@ -571,11 +571,14 @@ async function run(argv: string[]): Promise<void> {
     ensureStore(storePath);
   }
 
-  // Client-flip (self_hosted): when HASNA_KNOWLEDGE_STORAGE_MODE=self_hosted and
-  // HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY are set, ALL knowledge-item
-  // reads/writes go to https://knowledge.hasna.xyz/v1 (bearer key), not local.
-  // An explicit --store override always pins to the local file store.
-  const cloud: KnowledgeCloudStore | null = storePathOverridden ? null : resolveKnowledgeCloudStore();
+  // Single knowledge-item Store abstraction. When the client-flip resolves to
+  // the cloud HTTP transport (HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY,
+  // and/or *_STORAGE_MODE) ALL item reads/writes go to https://knowledge.hasna.xyz/v1
+  // with the bearer key; otherwise the on-box JSON store. An explicit --store
+  // override always pins to the local transport (fully reversible). Every item
+  // command below routes through `itemStore` — never the JSON file or HTTP
+  // client directly.
+  const itemStore: ItemStore = resolveItemStore({ storePath, storePathOverridden });
 
   if (command === 'inventory') {
     const inventory = service.inventory({
@@ -1488,28 +1491,9 @@ async function run(argv: string[]): Promise<void> {
     const title = positional[1];
     const content = positional[2];
     if (!title || !content) throw new Error('Usage: knowledge add <title> <content>');
-    if (cloud) {
-      const item = await cloud.create({ title, content, url: flags.url ?? null, tags: flags.tag ? [flags.tag] : [] });
-      log('info', 'Item added (cloud)', { id: item.id, title: item.title });
-      output({ ok: true, item, message: `Added ${item.id}` }, flags.json);
-      return;
-    }
-    withLock(storePath, () => {
-      const db = loadStore(storePath);
-      const item: KnowledgeItem = {
-        id: makeId(),
-        title,
-        content,
-        url: flags.url ?? null,
-        tags: flags.tag ? [flags.tag] : [],
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
-      db.items.push(item);
-      saveStore(storePath, db);
-      log('info', 'Item added', { id: item.id, title: item.title });
-      output({ ok: true, item, message: `Added ${item.id}` }, flags.json);
-    }, { createParent: true });
+    const item = await itemStore.create({ title, content, url: flags.url ?? null, tags: flags.tag ? [flags.tag] : [] });
+    log('info', 'Item added', { id: item.id, title: item.title, transport: itemStore.kind });
+    output({ ok: true, item, message: `Added ${item.id}` }, flags.json);
     return;
   }
 
@@ -1517,9 +1501,7 @@ async function run(argv: string[]): Promise<void> {
     if (flags.format !== undefined && flags.format !== 'table' && flags.format !== 'json') {
       throw new Error("Invalid --format value for list. Use 'table' or 'json'.");
     }
-    const db = cloud
-      ? { exists: true, items: await fetchAllCloudItems(cloud) }
-      : loadStoreIfExists(storePath);
+    const db = await itemStore.listAll();
     const page = Number.isFinite(flags.page) && (flags.page as number) > 0 ? flags.page as number : 1;
     const limit = Number.isFinite(flags.limit) && (flags.limit as number) > 0 ? flags.limit as number : 20;
     const search = flags.search ? String(flags.search).toLowerCase() : '';
@@ -1559,198 +1541,93 @@ async function run(argv: string[]): Promise<void> {
 
   if (command === 'get') {
     requireId(flags);
-    if (cloud) {
-      const item = await cloud.get(flags.id!);
-      if (!item) throw new Error(`Item not found: ${flags.id}`);
-      output({ ok: true, item, store_exists: true, message: `${item.id}: ${item.title}` }, flags.json);
-      return;
-    }
-    const db = loadStoreIfExists(storePath);
-    const item = db.items.find((x) => x.id === flags.id || x.short_id === flags.id);
+    const item = await itemStore.get(flags.id!);
     if (!item) throw new Error(`Item not found: ${flags.id}`);
-    output({ ok: true, item, store_exists: db.exists, message: `${item.id}: ${item.title}` }, flags.json);
+    output({ ok: true, item, store_exists: itemStore.exists, message: `${item.id}: ${item.title}` }, flags.json);
     return;
   }
 
   if (command === 'update') {
     requireId(flags);
-    if (cloud) {
-      const current = await cloud.get(flags.id!);
-      if (!current) throw new Error(`Item not found: ${flags.id}`);
-      const patch: Record<string, unknown> = {};
-      if (flags.title !== undefined) patch.title = flags.title;
-      if (flags.content !== undefined) patch.content = flags.content;
-      if (flags.url !== undefined) patch.url = flags.url;
-      if (flags.tag !== undefined) {
-        const tags = current.tags ?? [];
-        if (!tags.map((t) => t.toLowerCase()).includes(flags.tag!.toLowerCase())) patch.tags = [...tags, flags.tag!];
-      }
-      const item = await cloud.update(current.id, patch);
-      output({ ok: true, item, message: `Updated ${item?.id ?? current.id}` }, flags.json);
-      return;
+    const current = await itemStore.get(flags.id!);
+    if (!current) throw new Error(`Item not found: ${flags.id}`);
+    const patch: Record<string, unknown> = {};
+    if (flags.title !== undefined) patch.title = flags.title;
+    if (flags.content !== undefined) patch.content = flags.content;
+    if (flags.url !== undefined) patch.url = flags.url;
+    if (flags.tag !== undefined) {
+      const tags = current.tags ?? [];
+      if (!tags.map((t) => t.toLowerCase()).includes(flags.tag!.toLowerCase())) patch.tags = [...tags, flags.tag!];
     }
-    withLock(storePath, () => {
-      const db = loadStore(storePath);
-      const idx = db.items.findIndex((x) => x.id === flags.id || x.short_id === flags.id);
-      if (idx === -1) throw new Error(`Item not found: ${flags.id}`);
-      const item = db.items[idx];
-      if (flags.title !== undefined) item.title = flags.title;
-      if (flags.content !== undefined) item.content = flags.content;
-      if (flags.url !== undefined) item.url = flags.url;
-      if (flags.tag !== undefined) {
-        item.tags = item.tags || [];
-        if (!item.tags.map((t) => t.toLowerCase()).includes(flags.tag!.toLowerCase())) {
-          item.tags.push(flags.tag!);
-        }
-      }
-      item.updated_at = new Date().toISOString();
-      db.items[idx] = item;
-      saveStore(storePath, db);
-      output({ ok: true, item, message: `Updated ${item.id}` }, flags.json);
-    }, { createParent: true });
+    const item = await itemStore.update(current.id, patch);
+    output({ ok: true, item, message: `Updated ${item?.id ?? current.id}` }, flags.json);
     return;
   }
 
   if (command === 'archive' || command === 'restore') {
     requireId(flags);
-    if (cloud) {
-      const current = await cloud.get(flags.id!);
-      if (!current) throw new Error(`Item not found: ${flags.id}`);
-      const item = await cloud.update(current.id, { archived: command === 'archive' });
-      output({ ok: true, item, message: `${command === 'archive' ? 'Archived' : 'Restored'} ${item?.id ?? current.id}` }, flags.json);
-      return;
-    }
-    withLock(storePath, () => {
-      const db = loadStore(storePath);
-      const idx = db.items.findIndex((x) => x.id === flags.id || x.short_id === flags.id);
-      if (idx === -1) throw new Error(`Item not found: ${flags.id}`);
-      const item = db.items[idx];
-      item.archived = command === 'archive';
-      item.updated_at = new Date().toISOString();
-      db.items[idx] = item;
-      saveStore(storePath, db);
-      output({ ok: true, item, message: `${command === 'archive' ? 'Archived' : 'Restored'} ${item.id}` }, flags.json);
-    }, { createParent: true });
+    const current = await itemStore.get(flags.id!);
+    if (!current) throw new Error(`Item not found: ${flags.id}`);
+    const item = await itemStore.update(current.id, { archived: command === 'archive' });
+    output({ ok: true, item, message: `${command === 'archive' ? 'Archived' : 'Restored'} ${item?.id ?? current.id}` }, flags.json);
     return;
   }
 
   if (command === 'untag') {
     requireId(flags);
     if (!flags.tag) throw new Error('Missing required --tag. Example: knowledge untag --id <id> -t <tag>');
-    if (cloud) {
-      const current = await cloud.get(flags.id!);
-      if (!current) throw new Error(`Item not found: ${flags.id}`);
-      const before = current.tags?.length ?? 0;
-      const tags = (current.tags ?? []).filter((tag) => tag.toLowerCase() !== flags.tag!.toLowerCase());
-      const item = await cloud.update(current.id, { tags });
-      output({ ok: true, item, removed: before - tags.length, message: `Removed tag from ${item?.id ?? current.id}` }, flags.json);
-      return;
-    }
-    withLock(storePath, () => {
-      const db = loadStore(storePath);
-      const idx = db.items.findIndex((x) => x.id === flags.id || x.short_id === flags.id);
-      if (idx === -1) throw new Error(`Item not found: ${flags.id}`);
-      const item = db.items[idx];
-      const before = item.tags?.length ?? 0;
-      item.tags = (item.tags ?? []).filter((tag) => tag.toLowerCase() !== flags.tag!.toLowerCase());
-      item.updated_at = new Date().toISOString();
-      db.items[idx] = item;
-      saveStore(storePath, db);
-      output({ ok: true, item, removed: before - item.tags.length, message: `Removed tag from ${item.id}` }, flags.json);
-    }, { createParent: true });
+    const current = await itemStore.get(flags.id!);
+    if (!current) throw new Error(`Item not found: ${flags.id}`);
+    const before = current.tags?.length ?? 0;
+    const tags = (current.tags ?? []).filter((tag) => tag.toLowerCase() !== flags.tag!.toLowerCase());
+    const item = await itemStore.update(current.id, { tags });
+    output({ ok: true, item, removed: before - tags.length, message: `Removed tag from ${item?.id ?? current.id}` }, flags.json);
     return;
   }
 
   if (command === 'upsert') {
     const title = flags.title ?? positional[1];
     const content = flags.content ?? positional[2];
-    if (cloud) {
-      const existing = flags.id ? await cloud.get(flags.id) : null;
-      if (!existing) {
-        if (!title || !content) throw new Error('New item requires title and content. Example: knowledge upsert <title> <content> [--id <id>]');
-        const item = await cloud.create({ title, content, url: flags.url ?? null, tags: flags.tag ? [flags.tag] : [] });
-        output({ ok: true, created: true, item, message: `Upserted ${item.id}` }, flags.json);
-        return;
-      }
-      const patch: Record<string, unknown> = {};
-      if (title !== undefined) patch.title = title;
-      if (content !== undefined) patch.content = content;
-      if (flags.url !== undefined) patch.url = flags.url;
-      if (flags.tag !== undefined) {
-        const tags = existing.tags ?? [];
-        if (!tags.map((t) => t.toLowerCase()).includes(flags.tag.toLowerCase())) patch.tags = [...tags, flags.tag];
-      }
-      const item = await cloud.update(existing.id, patch);
-      output({ ok: true, created: false, item, message: `Upserted ${item?.id ?? existing.id}` }, flags.json);
+    const existing = flags.id ? await itemStore.get(flags.id) : null;
+    if (!existing) {
+      if (!title || !content) throw new Error('New item requires title and content. Example: knowledge upsert <title> <content> [--id <id>]');
+      const item = await itemStore.create({
+        id: flags.id,
+        title,
+        content,
+        url: flags.url ?? null,
+        tags: flags.tag ? [flags.tag] : [],
+      });
+      output({ ok: true, created: true, item, message: `Upserted ${item.id}` }, flags.json);
       return;
     }
-    withLock(storePath, () => {
-      const db = loadStore(storePath);
-      const idx = flags.id ? db.items.findIndex((x) => x.id === flags.id || x.short_id === flags.id) : -1;
-      const now = new Date().toISOString();
-      if (idx === -1) {
-        if (!title || !content) throw new Error('New item requires title and content. Example: knowledge upsert <title> <content> [--id <id>]');
-        const id = flags.id ?? makeId();
-        const item: KnowledgeItem = {
-          id,
-          short_id: makeShortId(id),
-          title,
-          content,
-          url: flags.url ?? null,
-          tags: flags.tag ? [flags.tag] : [],
-          metadata: {},
-          archived: false,
-          created_at: now,
-          updated_at: now,
-        };
-        db.items.push(item);
-        saveStore(storePath, db);
-        output({ ok: true, created: true, item, message: `Upserted ${item.id}` }, flags.json);
-        return;
-      }
-      const item = db.items[idx];
-      if (title !== undefined) item.title = title;
-      if (content !== undefined) item.content = content;
-      if (flags.url !== undefined) item.url = flags.url;
-      if (flags.tag !== undefined) {
-        item.tags = item.tags || [];
-        if (!item.tags.map((tag) => tag.toLowerCase()).includes(flags.tag.toLowerCase())) item.tags.push(flags.tag);
-      }
-      item.updated_at = now;
-      db.items[idx] = item;
-      saveStore(storePath, db);
-      output({ ok: true, created: false, item, message: `Upserted ${item.id}` }, flags.json);
-    }, { createParent: true });
+    const patch: Record<string, unknown> = {};
+    if (title !== undefined) patch.title = title;
+    if (content !== undefined) patch.content = content;
+    if (flags.url !== undefined) patch.url = flags.url;
+    if (flags.tag !== undefined) {
+      const tags = existing.tags ?? [];
+      if (!tags.map((t) => t.toLowerCase()).includes(flags.tag.toLowerCase())) patch.tags = [...tags, flags.tag];
+    }
+    const item = await itemStore.update(existing.id, patch);
+    output({ ok: true, created: false, item, message: `Upserted ${item?.id ?? existing.id}` }, flags.json);
     return;
   }
 
   if (command === 'delete') {
     requireId(flags);
     if (!flags.yes) throw new Error('Refusing delete without --yes. Re-run with: knowledge delete --id <id> --yes');
-    if (cloud) {
-      const deleted = await cloud.delete(flags.id!);
-      if (!deleted) throw new Error(`Item not found: ${flags.id}`);
-      log('info', 'Item deleted (cloud)', { id: flags.id });
-      output({ ok: true, deleted_id: flags.id, message: `Deleted ${flags.id}` }, flags.json);
-      return;
-    }
-    withLock(storePath, () => {
-      const db = loadStore(storePath);
-      const before = db.items.length;
-      db.items = db.items.filter((x) => x.id !== flags.id && x.short_id !== flags.id);
-      const deleted = before !== db.items.length;
-      saveStore(storePath, db);
-      if (!deleted) throw new Error(`Item not found: ${flags.id}`);
-      log('info', 'Item deleted', { id: flags.id });
-      output({ ok: true, deleted_id: flags.id, message: `Deleted ${flags.id}` }, flags.json);
-    }, { createParent: true });
+    const deleted = await itemStore.delete(flags.id!);
+    if (!deleted) throw new Error(`Item not found: ${flags.id}`);
+    log('info', 'Item deleted', { id: flags.id, transport: itemStore.kind });
+    output({ ok: true, deleted_id: flags.id, message: `Deleted ${flags.id}` }, flags.json);
     return;
   }
 
   if (command === 'export') {
     const format = flags.format ?? 'json';
     if (format !== 'json' && format !== 'jsonl') throw new Error("Invalid --format. Use 'json' or 'jsonl'.");
-    const db = cloud ? { exists: true, items: await fetchAllCloudItems(cloud) } : loadStoreIfExists(storePath);
+    const db = await itemStore.listAll();
     if (format === 'jsonl') {
       for (const item of db.items) console.log(JSON.stringify(item));
     } else {
@@ -1761,72 +1638,35 @@ async function run(argv: string[]): Promise<void> {
 
   if (command === 'prune') {
     if (!flags.yes) throw new Error('Refusing prune without --yes. Re-run with: knowledge prune --yes [--older-than <days>] [--empty]');
-    if (cloud) {
-      const items = await fetchAllCloudItems(cloud);
-      const cutoff = flags.olderThan !== undefined ? new Date(Date.now() - (flags.olderThan as number) * 86_400_000) : null;
-      const toDelete = items.filter((x) =>
-        (cutoff !== null && new Date(x.created_at) < cutoff) || (flags.empty && x.content.trim().length === 0));
-      for (const item of toDelete) await cloud.delete(item.id);
-      const remaining = items.length - toDelete.length;
-      log('info', 'Prune completed (cloud)', { pruned: toDelete.length, remaining });
-      output({ ok: true, pruned: toDelete.length, remaining, message: `Pruned ${toDelete.length} item(s)` }, flags.json);
-      return;
-    }
-    withLock(storePath, () => {
-      const db = loadStore(storePath);
-      const before = db.items.length;
-      if (flags.olderThan !== undefined) {
-        const cutoff = new Date();
-        cutoff.setDate(cutoff.getDate() - flags.olderThan);
-        db.items = db.items.filter((x) => new Date(x.created_at) >= cutoff);
-      }
-      if (flags.empty) {
-        db.items = db.items.filter((x) => x.content.trim().length > 0);
-      }
-      const pruned = before - db.items.length;
-      saveStore(storePath, db);
-      log('info', 'Prune completed', { pruned, remaining: db.items.length });
-      output({ ok: true, pruned, remaining: db.items.length, message: `Pruned ${pruned} item(s)` }, flags.json);
-    }, { createParent: true });
+    const { items } = await itemStore.listAll();
+    const cutoff = flags.olderThan !== undefined ? new Date(Date.now() - (flags.olderThan as number) * 86_400_000) : null;
+    const toDelete = items.filter((x) =>
+      (cutoff !== null && new Date(x.created_at) < cutoff) || (flags.empty && x.content.trim().length === 0));
+    const pruned = await itemStore.deleteMany(toDelete.map((x) => x.id));
+    const remaining = items.length - pruned;
+    log('info', 'Prune completed', { pruned, remaining, transport: itemStore.kind });
+    output({ ok: true, pruned, remaining, message: `Pruned ${pruned} item(s)` }, flags.json);
     return;
   }
 
   if (command === 'dedupe') {
     if (!flags.yes) throw new Error('Refusing dedupe without --yes. Re-run with: knowledge dedupe --yes [--json]');
-    if (cloud) {
-      const items = await fetchAllCloudItems(cloud);
-      const seen = new Set<string>();
-      const dupes: KnowledgeItem[] = [];
-      for (const x of items) {
-        const key = `${x.title} ${x.content}`;
-        if (seen.has(key)) dupes.push(x); else seen.add(key);
-      }
-      for (const item of dupes) await cloud.delete(item.id);
-      const remaining = items.length - dupes.length;
-      log('info', 'Dedupe completed (cloud)', { removed: dupes.length, remaining });
-      output({ ok: true, removed: dupes.length, remaining, message: `Dedupe removed ${dupes.length} duplicate(s)` }, flags.json);
-      return;
+    const { items } = await itemStore.listAll();
+    const seen = new Set<string>();
+    const dupes: KnowledgeItem[] = [];
+    for (const x of items) {
+      const key = `${x.title} ${x.content}`;
+      if (seen.has(key)) dupes.push(x); else seen.add(key);
     }
-    withLock(storePath, () => {
-      const db = loadStore(storePath);
-      const seen = new Set<string>();
-      const before = db.items.length;
-      db.items = db.items.filter((x) => {
-        const key = `${x.title}\u0000${x.content}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-      const removed = before - db.items.length;
-      saveStore(storePath, db);
-      log('info', 'Dedupe completed', { removed, remaining: db.items.length });
-      output({ ok: true, removed, remaining: db.items.length, message: `Dedupe removed ${removed} duplicate(s)` }, flags.json);
-    }, { createParent: true });
+    const removed = await itemStore.deleteMany(dupes.map((x) => x.id));
+    const remaining = items.length - removed;
+    log('info', 'Dedupe completed', { removed, remaining, transport: itemStore.kind });
+    output({ ok: true, removed, remaining, message: `Dedupe removed ${removed} duplicate(s)` }, flags.json);
     return;
   }
 
   if (command === 'stats') {
-    const db = cloud ? { exists: true, items: await fetchAllCloudItems(cloud) } : loadStoreIfExists(storePath);
+    const db = await itemStore.listAll();
     const activeItems = db.items.filter((x) => !x.archived);
     const total = activeItems.length;
     const archived = db.items.length - total;

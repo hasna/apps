@@ -2888,7 +2888,7 @@ var init_schemas = __esm(() => {
             })));
           }
         }
-        
+
         if (${id}.value === undefined) {
           if (${k} in input) {
             newResult[${k}] = undefined;
@@ -2896,7 +2896,7 @@ var init_schemas = __esm(() => {
         } else {
           newResult[${k}] = ${id}.value;
         }
-        
+
       `);
         } else if (!isOptionalIn) {
           doc.write(`
@@ -2933,7 +2933,7 @@ var init_schemas = __esm(() => {
             path: iss.path ? [${k}, ...iss.path] : [${k}]
           })));
         }
-        
+
         if (${id}.value === undefined) {
           if (${k} in input) {
             newResult[${k}] = undefined;
@@ -2941,7 +2941,7 @@ var init_schemas = __esm(() => {
         } else {
           newResult[${k}] = ${id}.value;
         }
-        
+
       `);
         }
       }
@@ -34227,6 +34227,9 @@ var SCHEMA_IDS = {
   appCloudManifest: "hasna.app_cloud_manifest.v1",
   noCloudEvidencePack: "hasna.no_cloud_evidence_pack.v1",
   serviceContract: "hasna.service_contract.v1",
+  commsEventEnvelope: "hasna.comms_event_envelope.v1",
+  commsChannelMetadata: "hasna.comms_channel_metadata.v1",
+  commsMessageMetadata: "hasna.comms_message_metadata.v1",
   app: "hasna.app.v1",
   release: "hasna.release.v1",
   rolloutRecord: "hasna.rollout_record.v1",
@@ -35149,7 +35152,7 @@ var ScaffoldEnvVarSchema = exports_external2.object({
   key: exports_external2.string().regex(/^[A-Z][A-Z0-9_]*$/),
   description: exports_external2.string().min(1),
   required: exports_external2.boolean().default(false),
-  secret: exports_external2.boolean().default(false),
+  ["secret"]: exports_external2.boolean().default(false),
   group: exports_external2.string().min(1).optional(),
   default: exports_external2.string().optional()
 }).strict().superRefine((value, ctx) => {
@@ -36066,6 +36069,134 @@ var ReadyResponseSchema = exports_external2.object({
 var VersionResponseSchema = exports_external2.object({
   version: exports_external2.string().min(1)
 }).strict();
+var CommsSeveritySchema = exports_external2.enum(["info", "notice", "breaking", "critical"]);
+var CommsEventTypeSchema = exports_external2.string().regex(/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){1,3}$/, "Comms event types must be 2-4 lowercase dot-separated segments (<source>.<entity>.<action>)");
+var COMMS_SEVERITY_TAGS = ["FREEZE", "UNFREEZE", "BREAKING", "CUTOVER", "POLICY", "RELEASE"];
+var CommsSeverityTagSchema = exports_external2.enum(COMMS_SEVERITY_TAGS);
+var CommsScopeSchema = exports_external2.enum(["fleet", "package", "machine"]);
+var CommsEventEnvelopeSchema = contractBaseSchema(SCHEMA_IDS.commsEventEnvelope).extend({
+  type: CommsEventTypeSchema,
+  severity: CommsSeveritySchema,
+  scope: CommsScopeSchema,
+  summary: exports_external2.string().min(1).optional(),
+  source: ActorPointerSchema.optional(),
+  affected_packages: exports_external2.array(NonEmptyStringSchema).default([]),
+  affected_machines: exports_external2.array(NonEmptyStringSchema).default([]),
+  action_required: exports_external2.boolean().default(false),
+  ack_by: TimestampSchema.optional(),
+  dedupe_key: NonEmptyStringSchema,
+  resourceRefs: exports_external2.array(ResourcePointerSchema).default([]),
+  evidenceRefs: exports_external2.array(EvidencePointerSchema).default([])
+}).strict().superRefine((value, ctx) => {
+  if (value.scope === "package" && value.affected_packages.length === 0) {
+    ctx.addIssue({
+      code: exports_external2.ZodIssueCode.custom,
+      message: "Package-scoped comms events require affected_packages",
+      path: ["affected_packages"]
+    });
+  }
+  if (value.scope === "machine" && value.affected_machines.length === 0) {
+    ctx.addIssue({
+      code: exports_external2.ZodIssueCode.custom,
+      message: "Machine-scoped comms events require affected_machines",
+      path: ["affected_machines"]
+    });
+  }
+  if (value.ack_by && !value.action_required) {
+    ctx.addIssue({
+      code: exports_external2.ZodIssueCode.custom,
+      message: "Comms events with an ack_by deadline require action_required",
+      path: ["action_required"]
+    });
+  }
+  if (value.type === "fleet.freeze" || value.type === "fleet.unfreeze") {
+    if (value.severity !== "critical") {
+      ctx.addIssue({
+        code: exports_external2.ZodIssueCode.custom,
+        message: `${value.type} events are always critical`,
+        path: ["severity"]
+      });
+    }
+    if (value.scope !== "fleet") {
+      ctx.addIssue({
+        code: exports_external2.ZodIssueCode.custom,
+        message: `${value.type} events are always fleet-scoped`,
+        path: ["scope"]
+      });
+    }
+    if (!value.action_required) {
+      ctx.addIssue({
+        code: exports_external2.ZodIssueCode.custom,
+        message: `${value.type} events require action_required`,
+        path: ["action_required"]
+      });
+    }
+  }
+});
+var CommsChannelClassSchema = exports_external2.enum(["fleet", "package", "product", "loop-lane", "initiative", "personal"]);
+var CommsChannelNoiseSchema = exports_external2.enum(["quiet", "work", "firehose"]);
+var CommsUntilHorizonSchema = NonEmptyStringSchema.refine((value) => /^(?:\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)?|gate:[0-9a-f][0-9a-f-]{7,35})$/.test(value), "until must be an ISO date (YYYY-MM-DD), a UTC timestamp, or a gate id (gate:<todos-id>)");
+var CommsChannelMetadataSchema = contractBaseSchema(SCHEMA_IDS.commsChannelMetadata).extend({
+  class: CommsChannelClassSchema,
+  noise: CommsChannelNoiseSchema.optional(),
+  owner: NonEmptyStringSchema.optional(),
+  until: CommsUntilHorizonSchema.optional(),
+  successor: NonEmptyStringSchema.optional()
+}).strict().superRefine((value, ctx) => {
+  if (value.class === "initiative") {
+    if (!value.owner) {
+      ctx.addIssue({
+        code: exports_external2.ZodIssueCode.custom,
+        message: "Initiative channels require an owner",
+        path: ["owner"]
+      });
+    }
+    if (!value.until) {
+      ctx.addIssue({
+        code: exports_external2.ZodIssueCode.custom,
+        message: "Initiative channels require an until horizon (date or gate id)",
+        path: ["until"]
+      });
+    }
+  }
+});
+var COMMS_SEVERITY_TAG_INFO = {
+  FREEZE: { defaultSeverity: "critical", allowedSeverities: ["critical"], requiredEventType: "fleet.freeze" },
+  UNFREEZE: { defaultSeverity: "critical", allowedSeverities: ["critical"], requiredEventType: "fleet.unfreeze" },
+  BREAKING: { defaultSeverity: "breaking", allowedSeverities: ["breaking"], requiredEventType: null },
+  CUTOVER: { defaultSeverity: "notice", allowedSeverities: ["notice", "breaking"], requiredEventType: null },
+  POLICY: { defaultSeverity: "breaking", allowedSeverities: ["notice", "breaking"], requiredEventType: null },
+  RELEASE: { defaultSeverity: "info", allowedSeverities: ["info", "notice"], requiredEventType: null }
+};
+var CommsMessageMetadataSchema = contractBaseSchema(SCHEMA_IDS.commsMessageMetadata).extend({
+  tag: CommsSeverityTagSchema,
+  envelope: CommsEventEnvelopeSchema
+}).strict().superRefine((value, ctx) => {
+  const info = COMMS_SEVERITY_TAG_INFO[value.tag];
+  if (!info.allowedSeverities.includes(value.envelope.severity)) {
+    ctx.addIssue({
+      code: exports_external2.ZodIssueCode.custom,
+      message: `[${value.tag}] posts allow severities ${info.allowedSeverities.join(", ")}`,
+      path: ["envelope", "severity"]
+    });
+  }
+  if (info.requiredEventType && value.envelope.type !== info.requiredEventType) {
+    ctx.addIssue({
+      code: exports_external2.ZodIssueCode.custom,
+      message: `[${value.tag}] posts require event type ${info.requiredEventType}`,
+      path: ["envelope", "type"]
+    });
+  }
+  for (const [tag, tagInfo] of Object.entries(COMMS_SEVERITY_TAG_INFO)) {
+    if (tagInfo.requiredEventType === value.envelope.type && value.tag !== tag) {
+      ctx.addIssue({
+        code: exports_external2.ZodIssueCode.custom,
+        message: `${value.envelope.type} events must use the [${tag}] tag`,
+        path: ["tag"]
+      });
+    }
+  }
+});
 var ContractSchemaRegistry = {
   [SCHEMA_IDS.actorRef]: ActorRefSchema,
   [SCHEMA_IDS.resourceRef]: ResourceRefSchema,
@@ -36089,6 +36220,9 @@ var ContractSchemaRegistry = {
   [SCHEMA_IDS.appCloudManifest]: AppCloudManifestSchema,
   [SCHEMA_IDS.noCloudEvidencePack]: NoCloudEvidencePackSchema,
   [SCHEMA_IDS.serviceContract]: ServiceContractManifestSchema,
+  [SCHEMA_IDS.commsEventEnvelope]: CommsEventEnvelopeSchema,
+  [SCHEMA_IDS.commsChannelMetadata]: CommsChannelMetadataSchema,
+  [SCHEMA_IDS.commsMessageMetadata]: CommsMessageMetadataSchema,
   [SCHEMA_IDS.app]: AppSchema,
   [SCHEMA_IDS.release]: ReleaseSchema,
   [SCHEMA_IDS.rolloutRecord]: RolloutRecordSchema,
