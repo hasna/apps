@@ -55,6 +55,7 @@ import {
   createTestingWorkflow,
   getTestingWorkflow,
   listTestingWorkflows,
+  storageStatus,
 } from "../store/index.js";
 import { getTemplate, listTemplateNames } from "../lib/templates.js";
 import { startRunAsync } from "../lib/runner.js";
@@ -965,8 +966,19 @@ server.tool(
       const scenarioCount = await countScenarios();
       const runCount = await countRuns();
       const hasApiKey = !!(config.anthropicApiKey || process.env["ANTHROPIC_API_KEY"]);
+      const storage = storageStatus();
       return json({
-        dbPath: process.env["HASNA_TESTERS_DB_PATH"] || process.env["TESTERS_DB_PATH"] || `${getTestersDir()}/testers.db`,
+        // TRUTH about where reads/writes actually go. In cloud mode there is no
+        // local db, so dbPath is null and the cloud /v1 base URL is reported.
+        storageMode: storage.mode,
+        transport: storage.transport,
+        apiBaseUrl: storage.baseUrl,
+        storageApiKey: storage.apiKeyPresent ? "configured" : "not set",
+        storageModeSource: storage.modeSource,
+        dbPath:
+          storage.transport === "cloud-http"
+            ? null
+            : storage.dbPath || `${getTestersDir()}/testers.db`,
         apiKey: hasApiKey ? "configured" : "not set",
         scenarioCount,
         runCount,

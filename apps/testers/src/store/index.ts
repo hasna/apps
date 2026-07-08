@@ -17,7 +17,7 @@
  * If cloud is requested but misconfigured, {@link getStore} throws (via the
  * resolver) so a caller can never silently read/write the wrong dataset.
  */
-import { resolveStorageClient, type HasnaStorageClient } from "../generated/storage-client/index.js";
+import { resolveStorageClient, resolveClientTransport, type HasnaStorageClient } from "../generated/storage-client/index.js";
 
 import { getDatabase } from "../db/database.js";
 
@@ -375,13 +375,35 @@ class ApiStore implements Store {
 
   constructor(private readonly c: HasnaStorageClient) {}
 
-  /** Page a collection to completion so client-side filters see the whole set. */
+  /**
+   * Page a collection to completion so client-side filters see the whole set.
+   *
+   * Termination is guarded on BOTH the normal short-page signal AND a
+   * no-progress signal: if a full page contributes zero rows we haven't already
+   * seen, the server is not honoring `offset` (e.g. an older deployed build) and
+   * would otherwise loop until CLOUD_MAX_ROWS. We stop instead of hanging —
+   * returning the rows the server is willing to give rather than spinning for
+   * minutes. Rows are de-duplicated by `id` so a non-paginating server can't
+   * inflate the result with repeats. Once the server honors offset, full
+   * pagination resumes automatically.
+   */
   private async all<T>(resource: string, query: Record<string, string | number | boolean> = {}): Promise<T[]> {
     const out: T[] = [];
+    const seen = new Set<string>();
     for (let offset = 0; offset < CLOUD_MAX_ROWS; offset += CLOUD_PAGE_SIZE) {
       const page = (await this.c.list<T>(resource, { query: { ...query, limit: CLOUD_PAGE_SIZE, offset } })).items;
-      out.push(...page);
-      if (page.length < CLOUD_PAGE_SIZE) break;
+      let added = 0;
+      for (const item of page) {
+        const key = (item as { id?: unknown })?.id;
+        if (typeof key === "string") {
+          if (seen.has(key)) continue;
+          seen.add(key);
+        }
+        out.push(item);
+        added++;
+      }
+      if (page.length < CLOUD_PAGE_SIZE) break; // last (short) page — done
+      if (added === 0) break; // full page, no new rows => server ignoring offset; stop, don't spin
     }
     return out;
   }
@@ -844,6 +866,39 @@ export function resetStore(): void {
 /** True when the resolved store routes to the cloud `/v1` API. */
 export function isCloudStore(): boolean {
   return getStore().transport === "cloud-http";
+}
+
+/**
+ * Non-secret description of where this process's Store actually reads/writes, so
+ * status commands (`status`, `get_status`) can report the TRUTH instead of a
+ * hard-coded local sqlite path. Never returns the API key value — only presence
+ * and the env-key name it came from. In cloud mode there is no local db, so
+ * `dbPath` is null. This makes routing auditable: an operator can trust it to
+ * confirm a flip landed on the cloud API.
+ */
+export function storageStatus(): {
+  mode: "local" | "cloud";
+  transport: "local" | "cloud-http";
+  baseUrl: string | null;
+  apiKeyPresent: boolean;
+  apiKeySource: string | null;
+  modeSource: string;
+  dbPath: string | null;
+} {
+  const r = resolveClientTransport(TESTERS_APP, process.env);
+  const dbPath =
+    r.transport === "cloud-http"
+      ? null
+      : process.env["HASNA_TESTERS_DB_PATH"] || process.env["TESTERS_DB_PATH"] || null;
+  return {
+    mode: r.mode,
+    transport: r.transport,
+    baseUrl: r.baseUrl,
+    apiKeyPresent: r.apiKeyPresent,
+    apiKeySource: r.apiKeySource,
+    modeSource: r.modeSource,
+    dbPath,
+  };
 }
 
 // ────────────────────────────────────────────────────────────────────────────

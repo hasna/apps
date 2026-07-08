@@ -64,6 +64,7 @@ import type { AIProvider } from "../lib/ai-client.js";
 // HTTP transport directly. See ../store/index.ts.
 import {
   isCloudStore,
+  storageStatus,
   createScenario,
   getScenario,
   getScenarioByShortId,
@@ -2670,13 +2671,23 @@ program
       const config = loadConfig();
       const hasApiKey =
         !!config.anthropicApiKey || !!process.env["ANTHROPIC_API_KEY"];
-      const dbPath = join(getTestersDir(), "testers.db");
+      const storage = storageStatus();
+      const isCloud = storage.transport === "cloud-http";
+      // TRUTH: in cloud mode reads/writes go to the /v1 API — there is no local db.
+      const dbPath = isCloud
+        ? null
+        : storage.dbPath || join(getTestersDir(), "testers.db");
 
       if (opts.json) {
         log(
           JSON.stringify(
             {
               status: hasApiKey ? "ok" : "warn",
+              storageMode: storage.mode,
+              transport: storage.transport,
+              apiBaseUrl: storage.baseUrl,
+              storageApiKey: { set: storage.apiKeyPresent, source: storage.apiKeySource },
+              storageModeSource: storage.modeSource,
               anthropicApiKey: { set: hasApiKey },
               database: { path: dbPath },
               defaultModel: config.defaultModel,
@@ -2694,9 +2705,20 @@ program
       log(chalk.bold("  Open Testers Status"));
       log("");
       log(
+        `  Storage mode:      ${isCloud ? chalk.cyan("cloud") : chalk.yellow("local")}` +
+          chalk.dim(` (${storage.modeSource})`),
+      );
+      if (isCloud) {
+        log(`  API base URL:      ${storage.baseUrl}`);
+        log(
+          `  API key:           ${storage.apiKeyPresent ? chalk.green("configured") : chalk.red("not set")}`,
+        );
+      } else {
+        log(`  Database:          ${dbPath}`);
+      }
+      log(
         `  ANTHROPIC_API_KEY: ${hasApiKey ? chalk.green("set") : chalk.red("not set")}`,
       );
-      log(`  Database:          ${dbPath}`);
       log(`  Default model:     ${config.defaultModel}`);
       log(`  Image model:       ${config.defaultImageModel}`);
       log(`  Screenshots dir:   ${config.screenshots.dir}`);
