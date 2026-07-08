@@ -15,7 +15,7 @@ import { exportEventsToJson } from "./events.ts";
 import { exportToCsv, exportToJson } from "./export.ts";
 import { ingestLog } from "./ingest.ts";
 import { REDACTED } from "./redaction.ts";
-import { STORAGE_TABLES } from "./storage-sync.ts";
+import { STORAGE_TABLES } from "./storage-tables.ts";
 import { ingestUniversalEvent } from "./universal-ingest.ts";
 
 describe("redaction canary validation", () => {

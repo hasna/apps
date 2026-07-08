@@ -1,41 +1,20 @@
 #!/usr/bin/env bun
-import type { Database } from "bun:sqlite";
 import { readFileSync } from "node:fs";
 import { registerEventsCommands } from "@hasna/events/commander";
 import { Command } from "commander";
-import { getDb } from "../db/index.ts";
-import { runCommand } from "../lib/command-runner.ts";
-import { isApiMode, resolveStore } from "../store/index.ts";
-import {
-  rebuildEventStoreIndex,
-  repairEventStoreSegments,
-  verifyEventStore,
-} from "../lib/event-store.ts";
-import {
-  type EventCatalogEntry,
-  exportEventsToJson,
-} from "../lib/events.ts";
-import { detectRuntimeIdentity } from "../lib/identity.ts";
+import type { CliEventWatchFilter, WatchEventRow } from "../lib/event-watch.ts";
+import type { EventCatalogEntry } from "../lib/events.ts";
 import { PACKAGE_VERSION } from "../lib/package-meta.ts";
-import { resolveProjectId } from "../lib/projects.ts";
-import { runJob } from "../lib/scheduler.ts";
-import {
-  getStorageStatus,
-  storagePull,
-  storagePush,
-  storageSync,
-} from "../lib/storage-sync.ts";
-import { followStructuredJsonLines } from "../lib/structured-log-follow.ts";
-import {
-  type StructuredLogFormat,
-  ingestStructuredJsonLines,
-} from "../lib/structured-logs.ts";
-import {
-  type UniversalEventInput,
-  type UniversalEventType,
-  ingestUniversalEvent,
-  validateUniversalEventInput,
+import type { StructuredLogFormat } from "../lib/structured-logs.ts";
+import type {
+  UniversalEventInput,
+  UniversalEventType,
 } from "../lib/universal-ingest.ts";
+import {
+  type LocalStore,
+  requireLocalStore,
+  resolveStore,
+} from "../store/index.ts";
 import type { LogLevel, LogSource } from "../types/index.ts";
 
 // ── Color helpers ──────────────────────────────────────────
@@ -70,55 +49,18 @@ function colorLevel(level: string): string {
   return `${lc}${C.bold}${pad(level.toUpperCase(), 5)}${C.reset}`;
 }
 
-/** Resolve a project name or ID from CLI --project flag */
-function resolveProject(nameOrId: string | undefined): string | undefined {
-  if (!nameOrId) return undefined;
-  return resolveProjectId(getDb(), nameOrId) ?? nameOrId;
-}
-
 /**
  * The unified data-plane {@link Store}: LocalStore (SQLite) or ApiStore (HTTP
  * /v1 + bearer key), resolved from the environment. Every data-plane command
  * routes through this — no per-command `cloud ? : local` branching, no `getDb()`
  * in handlers. Fully reversible: unset HASNA_LOGS_API_URL/KEY -> local.
+ *
+ * On-box maintenance/compute commands (db repair, subprocess capture, file
+ * follow, event-store diagnostics) call `requireLocalStore(cmd)` instead: it
+ * returns the concrete LocalStore (throwing in api mode), keeping `getDb()`
+ * confined to the store implementation.
  */
 const store = resolveStore();
-
-/**
- * Guard for local-only infrastructure/compute commands (db migrate, storage
- * sync, event-store repair, headless scans, subprocess capture, file follow).
- * These operate on the on-box SQLite/filesystem and have no cloud data model;
- * refuse loudly in api mode instead of silently touching a stale local db.
- */
-function requireLocalMode(command: string): void {
-  if (isApiMode()) {
-    throw new Error(
-      `'logs ${command}' is a local-only operation and cannot run in ` +
-        `self_hosted/cloud mode. Unset HASNA_LOGS_API_URL/HASNA_LOGS_API_KEY ` +
-        `to run it against the local store.`,
-    );
-  }
-}
-
-function resolveExistingProjectId(
-  db: Database,
-  nameOrId: string | undefined,
-): string | null {
-  const resolved = resolveProjectId(db, nameOrId);
-  if (!resolved) return null;
-  const row = db
-    .prepare("SELECT id FROM projects WHERE id = ?")
-    .get(resolved) as { id: string } | null;
-  return row?.id ?? null;
-}
-
-function parseStorageTables(value?: string): string[] | undefined {
-  if (!value) return undefined;
-  return value
-    .split(",")
-    .map((table) => table.trim())
-    .filter(Boolean);
-}
 
 function printJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
@@ -326,7 +268,9 @@ program
       return;
     }
     if (opts.format === "table") {
-      console.log(colorRow(row.timestamp, row.level, row.service ?? "-", row.message));
+      console.log(
+        colorRow(row.timestamp, row.level, row.service ?? "-", row.message),
+      );
       return;
     }
     console.log(JSON.stringify(row, null, 2));
@@ -380,14 +324,14 @@ program
   )
   .option("--json", "Print import summary as JSON")
   .action(async (file, opts) => {
-    requireLocalMode("import-jsonl");
+    const local = requireLocalStore("import-jsonl");
     try {
       const metadata = parseJsonObjectOption(opts.metadata, "--metadata");
       const ingestOptions = {
         format: opts.format as StructuredLogFormat,
         source: opts.source as LogSource | undefined,
         service: opts.service,
-        project_id: resolveProject(opts.project),
+        project_id: await local.resolveProjectId(opts.project),
         machine_id: opts.machine,
         repo_id: opts.repo,
         app_id: opts.app,
@@ -406,7 +350,7 @@ program
       };
       if (opts.follow) {
         if (file === "-") throw new Error("--follow requires a file path");
-        summary = await followStructuredJsonLines(getDb(), file, {
+        summary = await local.followStructuredLogs(file, {
           ...ingestOptions,
           from_end: Boolean(opts.fromEnd),
           poll_ms: parsePositiveIntOption(opts.poll, "--poll", 250),
@@ -420,8 +364,7 @@ program
       } else {
         const input =
           file === "-" ? readFileSync(0, "utf8") : readFileSync(file, "utf8");
-        const rows = ingestStructuredJsonLines(
-          getDb(),
+        const rows = local.importStructuredLogs(
           input,
           ingestOptions,
           file === "-" ? "stdin" : file,
@@ -459,13 +402,13 @@ program
   .option("--no-tee", "Do not mirror child stdout/stderr to this terminal")
   .allowUnknownOption(true)
   .action(async (cmd: string[], opts) => {
-    requireLocalMode("run");
+    const local = requireLocalStore("run");
     const runAbort = createRunAbortController();
-    let result: Awaited<ReturnType<typeof runCommand>>;
+    let result: Awaited<ReturnType<typeof local.runCapturedCommand>>;
     try {
-      result = await runCommand(getDb(), cmd, {
+      result = await local.runCapturedCommand(cmd, {
         cwd: opts.cwd,
-        project_id: resolveProject(opts.project),
+        project_id: await local.resolveProjectId(opts.project),
         service: opts.service,
         environment: opts.environment,
         tee: opts.json ? false : opts.tee !== false,
@@ -492,82 +435,10 @@ program
     }
   });
 
-// ── logs storage ──────────────────────────────────────────
-const storageCmd = program
-  .command("storage")
-  .description("Storage sync commands");
-
-storageCmd
-  .command("status")
-  .description("Show storage sync configuration")
-  .option("--json", "Output as JSON")
-  .action((opts) => {
-    const info = getStorageStatus();
-    if (opts.json) {
-      printJson(info);
-      return;
-    }
-    console.log(`Storage configured: ${info.configured ? "yes" : "no"}`);
-    console.log(`Mode: ${info.mode}`);
-    console.log(`Tables: ${info.tables.join(", ")}`);
-  });
-
-storageCmd
-  .command("push")
-  .description("Push local logs data to storage PostgreSQL")
-  .option("--tables <tables>", "Comma-separated table names (default: all)")
-  .option("--json", "Output as JSON")
-  .action(async (opts) => {
-    const result = await storagePush({
-      tables: parseStorageTables(opts.tables),
-    });
-    if (opts.json) {
-      printJson(result);
-      return;
-    }
-    console.log(`Pushed ${result.rows} row(s).`);
-  });
-
-storageCmd
-  .command("pull")
-  .description("Pull logs data from storage PostgreSQL")
-  .option("--tables <tables>", "Comma-separated table names (default: all)")
-  .option("--json", "Output as JSON")
-  .action(async (opts) => {
-    const result = await storagePull({
-      tables: parseStorageTables(opts.tables),
-    });
-    if (opts.json) {
-      printJson(result);
-      return;
-    }
-    console.log(`Pulled ${result.rows} row(s).`);
-  });
-
-storageCmd
-  .command("sync")
-  .description("Bidirectional sync: push then pull")
-  .option("--tables <tables>", "Comma-separated table names (default: all)")
-  .option("--json", "Output as JSON")
-  .action(async (opts) => {
-    const result = await storageSync({
-      tables: parseStorageTables(opts.tables),
-    });
-    if (opts.json) {
-      printJson(result);
-      return;
-    }
-    console.log(
-      `Synced ${result.push} pushed row(s), ${result.pull} pulled row(s).`,
-    );
-  });
-
-// ── cloud database (PURE REMOTE, Amendment A1) ────────────
+// ── cloud database (server-side schema admin, in-VPC only) ─
 const dbCmd = program
   .command("db")
-  .description(
-    "Server-side Postgres schema commands (in-VPC admin only)",
-  );
+  .description("Server-side Postgres schema commands (in-VPC admin only)");
 
 dbCmd
   .command("migrate")
@@ -638,7 +509,7 @@ doctorCmd
   )
   .option("--json", "Output as JSON")
   .action((opts) => {
-    const result = verifyEventStore(getDb());
+    const result = requireLocalStore("db doctor segments").verifyEventStore();
     if (opts.json) {
       printJson(result);
     } else {
@@ -660,10 +531,9 @@ doctorCmd
   )
   .option("--json", "Output as JSON")
   .action((opts) => {
-    requireLocalMode("db doctor rebuild-index");
-    const db = getDb();
-    const rebuild = rebuildEventStoreIndex(db);
-    const verification = verifyEventStore(db);
+    const local = requireLocalStore("db doctor rebuild-index");
+    const rebuild = local.rebuildEventStoreIndex();
+    const verification = local.verifyEventStore();
     const result = { rebuild, verification };
     if (opts.json) {
       printJson(result);
@@ -692,9 +562,9 @@ doctorCmd
   )
   .option("--json", "Output as JSON")
   .action((opts) => {
-    requireLocalMode("db doctor repair-segments");
-    const db = getDb();
-    const result = repairEventStoreSegments(db, { apply: opts.apply === true });
+    const result = requireLocalStore(
+      "db doctor repair-segments",
+    ).repairEventStoreSegments({ apply: opts.apply === true });
     if (opts.json) {
       printJson(result);
     } else {
@@ -772,11 +642,10 @@ eventsCmd
   .option("--environment <name>", "Environment")
   .option("--body <json>", "Event body JSON object")
   .option("--attributes <json>", "Event attributes JSON object")
-  .action((opts) => {
-    requireLocalMode("events push");
+  .action(async (opts) => {
+    const local = requireLocalStore("events push");
     try {
-      const db = getDb();
-      const projectId = resolveProject(opts.project);
+      const projectId = await local.resolveProjectId(opts.project);
       const body = parseJsonObjectOption(opts.body, "--body");
       const attributes = parseJsonObjectOption(opts.attributes, "--attributes");
       const hasExplicitIdentity = Boolean(
@@ -807,20 +676,11 @@ eventsCmd
         body,
         attributes,
       };
-      validateUniversalEventInput(eventInput);
-      const identity = hasExplicitIdentity
-        ? null
-        : detectRuntimeIdentity(db, process.cwd(), {
-            project_id: resolveExistingProjectId(db, opts.project),
-            environment: opts.environment,
-          });
-      if (identity) {
-        eventInput.machine_id = identity.machine_id;
-        eventInput.repo_id = identity.repo_id ?? undefined;
-        eventInput.app_id = identity.app_id ?? undefined;
-        eventInput.environment = opts.environment ?? identity.environment;
-      }
-      const result = ingestUniversalEvent(db, eventInput);
+      const result = local.pushUniversalEvent(eventInput, {
+        detectIdentity: !hasExplicitIdentity,
+        projectNameOrId: opts.project,
+        environment: opts.environment,
+      });
       console.log(
         `${result.inserted ? "Event logged" : "Event already exists"}: ${result.event.event_id}`,
       );
@@ -921,11 +781,12 @@ eventsCmd
   .option("--limit <n>", "Max results", "100000")
   .option("--output <file>", "Output file (default: stdout)")
   .action(async (opts) => {
+    const local = requireLocalStore("events export");
     const options = {
       event_type: opts.type,
       source: opts.source,
       severity: opts.severity,
-      project_id: resolveProject(opts.project),
+      project_id: await local.resolveProjectId(opts.project),
       trace_id: opts.trace,
       run_id: opts.run,
       text: opts.text,
@@ -937,14 +798,12 @@ eventsCmd
     if (opts.output) {
       const { createWriteStream } = await import("node:fs");
       const stream = createWriteStream(opts.output);
-      const count = exportEventsToJson(getDb(), options, (s) =>
-        stream.write(`${s}\n`),
-      );
+      const count = local.exportEvents(options, (s) => stream.write(`${s}\n`));
       stream.end();
       console.error(`Exported ${count} event(s) to ${opts.output}`);
       return;
     }
-    const count = exportEventsToJson(getDb(), options, (s) =>
+    const count = local.exportEvents(options, (s) =>
       process.stdout.write(`${s}\n`),
     );
     process.stderr.write(`Exported ${count} event(s)\n`);
@@ -1139,7 +998,9 @@ jobCmd
   .command("list")
   .option("--project <name|id>", "Project name or ID")
   .action(async (opts) => {
-    const jobs = await store.listJobs(await store.resolveProjectId(opts.project));
+    const jobs = await store.listJobs(
+      await store.resolveProjectId(opts.project),
+    );
     for (const j of jobs)
       console.log(
         `${j.id}  ${j.schedule}  enabled=${j.enabled}  last=${j.last_run_at ?? "never"}`,
@@ -1153,19 +1014,18 @@ program
   .option("--job <id>")
   .option("--project <name|id>", "Project name or ID")
   .action(async (opts) => {
-    requireLocalMode("scan");
+    const local = requireLocalStore("scan");
     if (!opts.job) {
       console.error("--job required");
       process.exit(1);
     }
-    const db = getDb();
-    const job = (await import("../lib/jobs.ts")).getJob(db, opts.job);
+    const job = local.getScanJob(opts.job);
     if (!job) {
       console.error("Job not found");
       process.exit(1);
     }
     console.log("Running scan...");
-    await runJob(db, job.id, job.project_id, job.page_id ?? undefined);
+    await local.runScanJob(job.id, job.project_id, job.page_id ?? undefined);
     console.log("Scan complete.");
   });
 
@@ -1180,14 +1040,14 @@ program
     "Comma-separated: top_errors,error_rate,failing_pages,perf",
   )
   .action(async (opts) => {
-    const { diagnose } = await import("../lib/diagnose.ts");
-    const projectId = resolveProject(opts.project);
+    const local = requireLocalStore("diagnose");
+    const projectId = await local.resolveProjectId(opts.project);
     if (!projectId) {
       console.error("--project required");
       process.exit(1);
     }
     const include = opts.include ? opts.include.split(",") : undefined;
-    const result = diagnose(getDb(), projectId, opts.since, include);
+    const result = local.diagnose(projectId, opts.since, include);
     const scoreColor =
       result.score === "green"
         ? "\x1b[32m"
@@ -1286,18 +1146,12 @@ program
   )
   .option("--since <time>", "Start from this time (default: now)")
   .action(async (opts) => {
-    requireLocalMode("watch");
-    const db = getDb();
-    const { searchLogs } = await import("../lib/query.ts");
+    const local = requireLocalStore("watch");
 
     // Resolve project name → ID if needed
-    let projectId = opts.project;
-    if (projectId) {
-      const proj = db
-        .query("SELECT id FROM projects WHERE id = ? OR name = ?")
-        .get(projectId, projectId) as { id: string } | null;
-      if (proj) projectId = proj.id;
-    }
+    const projectId = opts.project
+      ? await local.resolveProjectId(opts.project)
+      : undefined;
 
     const COLORS: Record<string, string> = {
       debug: "\x1b[90m",
@@ -1326,7 +1180,7 @@ program
       return;
     }
     if (useEventCatalog) {
-      await watchLocalEventCatalog(db, opts, projectId);
+      await watchLocalEventCatalog(local, opts, projectId);
       return;
     }
 
@@ -1342,14 +1196,16 @@ program
       `${BOLD}@hasna/logs watch${RESET} — Ctrl+C to exit${projectId ? `  [project: ${opts.project}]` : ""}\n`,
     );
 
-    const poll = () => {
-      const rows = searchLogs(db, {
-        project_id: projectId,
-        level: opts.level ? (opts.level.split(",") as LogLevel[]) : undefined,
-        service: opts.service,
-        since: lastTimestamp,
-        limit: 100,
-      }).reverse();
+    const poll = async () => {
+      const rows = (
+        await local.listLogs({
+          project_id: projectId,
+          level: opts.level ? (opts.level.split(",") as LogLevel[]) : undefined,
+          service: opts.service,
+          since: lastTimestamp,
+          limit: 100,
+        })
+      ).reverse();
 
       for (const row of rows) {
         if (row.timestamp <= lastTimestamp) continue;
@@ -1370,11 +1226,11 @@ program
     };
 
     if (opts.once) {
-      poll();
+      await poll();
       return;
     }
 
-    const interval = setInterval(poll, pollIntervalMs);
+    const interval = setInterval(() => void poll(), pollIntervalMs);
     process.on("SIGINT", () => {
       clearInterval(interval);
       console.log(`\n\nErrors: ${errorCount}  Warnings: ${warnCount}`);
@@ -1439,7 +1295,14 @@ program
     });
     let payload: string;
     if (opts.format === "csv") {
-      const cols = ["id", "timestamp", "level", "service", "message", "trace_id"];
+      const cols = [
+        "id",
+        "timestamp",
+        "level",
+        "service",
+        "message",
+        "trace_id",
+      ];
       const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
       payload = `${cols.join(",")}\n${rows
         .map((r) =>
@@ -1519,7 +1382,9 @@ program
     if (services.length) {
       console.log(`\n${C.bold}Top Services:${C.reset}`);
       for (const [svc, c] of services)
-        console.log(`  ${C.cyan}${pad(svc, 20)}${C.reset}  ${c.toLocaleString()}`);
+        console.log(
+          `  ${C.cyan}${pad(svc, 20)}${C.reset}  ${c.toLocaleString()}`,
+        );
     }
 
     const days = Object.entries(byDay).sort((a, b) => a[0].localeCompare(b[0]));
@@ -1528,7 +1393,9 @@ program
       console.log(`\n${C.bold}Last 7 Days:${C.reset}`);
       for (const [day, c] of days) {
         const bar = "█".repeat(Math.max(1, Math.round((c / maxC) * 20)));
-        console.log(`  ${day}  ${C.cyan}${bar}${C.reset}  ${c.toLocaleString()}`);
+        console.log(
+          `  ${day}  ${C.cyan}${bar}${C.reset}  ${c.toLocaleString()}`,
+        );
       }
     }
     console.log("");
@@ -1613,38 +1480,49 @@ interface WatchCommandOptions {
   since?: string;
 }
 
-type WatchEventRow = Omit<EventCatalogEntry, "metadata" | "raw"> & {
-  rowid: number;
-  metadata: Record<string, unknown> | null;
-};
-
-type WatchEventSqlRow = Omit<WatchEventRow, "metadata"> & {
-  metadata: string | null;
-};
-
 interface SseMessage {
   event: string;
   id: string | null;
   data: string;
 }
 
+/** Map CLI watch flags to a {@link CliEventWatchFilter} for the local store. */
+function toWatchFilter(
+  opts: WatchCommandOptions,
+  projectId: string | undefined,
+): CliEventWatchFilter {
+  return {
+    event_type: opts.type,
+    source: opts.source,
+    severity: opts.level,
+    project_id: projectId,
+    trace_id: opts.trace,
+    process_id: opts.process,
+    run_id: opts.run,
+    session_id: opts.session,
+    environment: opts.environment,
+    service: opts.service,
+  };
+}
+
 async function watchLocalEventCatalog(
-  db: Database,
+  local: LocalStore,
   opts: WatchCommandOptions,
   projectId: string | undefined,
 ): Promise<void> {
   const pollIntervalMs = Math.max(100, Number(opts.interval) || 500);
   const since = parseRelativeTime(opts.since);
-  let cursor = since ? 0 : latestMatchingEventRowid(db, opts, projectId);
+  const filter = toWatchFilter(opts, projectId);
+  let cursor = since ? 0 : local.latestWatchEventRowid(filter);
   let lastEventId = opts.lastEventId ?? null;
   let errorCount = 0;
   let warnCount = 0;
 
   if (opts.lastEventId) {
-    const requestedCursor = rowidForEventId(db, opts.lastEventId);
+    const requestedCursor = local.watchEventRowidForId(opts.lastEventId);
     if (requestedCursor === null) {
       writeWatchOverflow("last_event_id_unknown", opts.lastEventId);
-      cursor = latestMatchingEventRowid(db, opts, projectId);
+      cursor = local.latestWatchEventRowid(filter);
       lastEventId = null;
     } else {
       cursor = requestedCursor;
@@ -1659,7 +1537,7 @@ async function watchLocalEventCatalog(
   }
 
   const poll = () => {
-    const rows = queryWatchEventRows(db, opts, projectId, cursor, since, 100);
+    const rows = local.queryWatchEventRows(filter, cursor, since, 100);
     if (opts.once && opts.format === "json") {
       printJson(rows.map(stripWatchRow));
       return rows;
@@ -1823,123 +1701,10 @@ function buildEventStreamUrl(
   return url.toString();
 }
 
-function queryWatchEventRows(
-  db: Database,
-  opts: WatchCommandOptions,
-  projectId: string | undefined,
-  afterRowid: number,
-  since: string | undefined,
-  limit: number,
-): WatchEventRow[] {
-  const { where, params } = buildWatchEventWhere(
-    opts,
-    projectId,
-    afterRowid,
-    since,
-  );
-  const rows = db
-    .query(
-      `SELECT rowid, * FROM event_records ${where} ORDER BY rowid ASC LIMIT ?`,
-    )
-    .all(...params, limit) as WatchEventSqlRow[];
-  return rows.map((row) => ({ ...row, metadata: parseMetadata(row.metadata) }));
-}
-
-function latestMatchingEventRowid(
-  db: Database,
-  opts: WatchCommandOptions,
-  projectId: string | undefined,
-): number {
-  const { where, params } = buildWatchEventWhere(
-    opts,
-    projectId,
-    null,
-    undefined,
-  );
-  const row = db
-    .query(
-      `SELECT rowid FROM event_records ${where} ORDER BY rowid DESC LIMIT 1`,
-    )
-    .get(...params) as { rowid: number } | null;
-  return row?.rowid ?? 0;
-}
-
-function rowidForEventId(db: Database, eventId: string): number | null {
-  const row = db
-    .query("SELECT rowid FROM event_records WHERE event_id = ?")
-    .get(eventId) as { rowid: number } | null;
-  return row?.rowid ?? null;
-}
-
 function writeWatchOverflow(reason: string, lastEventId: string | null): void {
   process.stderr.write(
     `overflow ${reason}${lastEventId ? ` after ${lastEventId}` : ""}\n`,
   );
-}
-
-function buildWatchEventWhere(
-  opts: WatchCommandOptions,
-  projectId: string | undefined,
-  afterRowid: number | null,
-  since: string | undefined,
-): { where: string; params: Array<string | number> } {
-  const conditions: string[] = [];
-  const params: Array<string | number> = [];
-  if (afterRowid !== null) {
-    conditions.push("rowid > ?");
-    params.push(afterRowid);
-  }
-  addListFilter(conditions, params, "event_type", opts.type);
-  addListFilter(conditions, params, "source", opts.source);
-  addListFilter(conditions, params, "severity", opts.level);
-  addScalarFilter(conditions, params, "project_id", projectId);
-  addScalarFilter(conditions, params, "trace_id", opts.trace);
-  addScalarFilter(conditions, params, "process_id", opts.process);
-  addScalarFilter(conditions, params, "run_id", opts.run);
-  addScalarFilter(conditions, params, "session_id", opts.session);
-  addScalarFilter(conditions, params, "environment", opts.environment);
-  if (since) {
-    conditions.push("event_time >= ?");
-    params.push(since);
-  }
-  if (opts.service) {
-    conditions.push("(metadata LIKE ? OR message LIKE ?)");
-    params.push(
-      `%"service":"${escapeLikeJson(opts.service)}"%`,
-      `%${opts.service}%`,
-    );
-  }
-  return {
-    where: conditions.length ? `WHERE ${conditions.join(" AND ")}` : "",
-    params,
-  };
-}
-
-function addListFilter(
-  conditions: string[],
-  params: Array<string | number>,
-  column: string,
-  value: string | undefined,
-): void {
-  const values =
-    value
-      ?.split(",")
-      .map((item) => item.trim())
-      .filter(Boolean) ?? [];
-  if (values.length === 0) return;
-  conditions.push(`${column} IN (${values.map(() => "?").join(",")})`);
-  params.push(...values);
-}
-
-function addScalarFilter(
-  conditions: string[],
-  params: Array<string | number>,
-  column: string,
-  value: string | undefined,
-): void {
-  if (!value) return;
-  conditions.push(`${column} = ?`);
-  params.push(value);
 }
 
 function addQueryParam(
@@ -2032,22 +1797,6 @@ function parseJson(value: string): unknown {
   } catch {
     return null;
   }
-}
-
-function parseMetadata(value: string | null): Record<string, unknown> | null {
-  if (!value) return null;
-  const parsed = parseJson(value);
-  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-    ? (parsed as Record<string, unknown>)
-    : null;
-}
-
-function escapeLikeJson(value: string): string {
-  return value
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"')
-    .replace(/%/g, "\\%")
-    .replace(/_/g, "\\_");
 }
 
 function sleep(ms: number): Promise<void> {

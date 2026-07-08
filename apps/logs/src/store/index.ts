@@ -93,3 +93,32 @@ export function isApiMode(env: NodeJS.ProcessEnv = process.env): boolean {
   );
   return resolved.transport === "cloud-http";
 }
+
+/**
+ * Return the concrete {@link LocalStore} for on-box maintenance/compute
+ * operations that have no cloud data model (db repair, subprocess capture,
+ * file follow, event-store diagnostics). Throws loudly in api mode instead of
+ * silently touching a stale local db. Fully reversible: unset the API vars.
+ */
+export function requireLocalStore(
+  operation: string,
+  env: NodeJS.ProcessEnv = process.env,
+): LocalStore {
+  if (isApiMode(env)) {
+    throw new Error(
+      `'${operation}' is a local-only operation and cannot run in self_hosted/cloud mode (the cloud tier is a shared log sink). Unset HASNA_LOGS_API_URL/HASNA_LOGS_API_KEY to run it against the local store.`,
+    );
+  }
+  return new LocalStore();
+}
+
+/**
+ * Best-effort {@link LocalStore} for internal self-telemetry: returns a store
+ * when local, or `null` in api mode (where the events catalog has no home).
+ * Callers must treat telemetry as optional and never let it change behavior.
+ */
+export function localStoreIfAvailable(
+  env: NodeJS.ProcessEnv = process.env,
+): LocalStore | null {
+  return isApiMode(env) ? null : new LocalStore();
+}

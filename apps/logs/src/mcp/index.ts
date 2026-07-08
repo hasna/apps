@@ -6,38 +6,21 @@ import {
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { getDb } from "../db/index.ts";
-import { isApiMode, resolveStore } from "../store/index.ts";
-import {
-  createAlertRule,
-  deleteAlertRule,
-  listAlertRules,
-} from "../lib/alerts.ts";
-import { compare } from "../lib/compare.ts";
-import { diagnose } from "../lib/diagnose.ts";
-import { exportEventsToJson, getEvent } from "../lib/events.ts";
-import { detectRuntimeIdentity } from "../lib/identity.ts";
-import { listIssues, updateIssueStatus } from "../lib/issues.ts";
+import type { McpEventWatchArgs } from "../lib/event-watch.ts";
 import { PACKAGE_VERSION, exitIfMetadataRequest } from "../lib/package-meta.ts";
 import { parseTime } from "../lib/parse-time.ts";
-import { getLatestSnapshot, getPerfTrend, scoreLabel } from "../lib/perf.ts";
-import { resolveProjectId } from "../lib/projects.ts";
-import { getLogContextFromId } from "../lib/query.ts";
-import { getSessionContext } from "../lib/session-context.ts";
-import {
-  getStoragePg,
-  getStorageStatus,
-  storagePull,
-  storagePush,
-  storageSync,
-} from "../lib/storage-sync.ts";
+import { scoreLabel } from "../lib/perf.ts";
 import {
   UNIVERSAL_EVENT_TYPES,
   type UniversalEventInput,
   type UniversalEventType,
-  ingestUniversalEvent,
-  validateUniversalEventInput,
 } from "../lib/universal-ingest.ts";
+import {
+  type LocalStore,
+  localStoreIfAvailable,
+  requireLocalStore,
+  resolveStore,
+} from "../store/index.ts";
 import type { LogLevel, LogRow } from "../types/index.ts";
 
 exitIfMetadataRequest({
@@ -49,7 +32,11 @@ exitIfMetadataRequest({
   ],
 });
 
-const db = getDb();
+// Best-effort local store for internal self-telemetry (agent lifecycle + tool
+// calls). It is `null` in api mode — the events catalog is a local-only feature
+// (the cloud tier is a shared log sink), so telemetry is silently skipped
+// there. Telemetry must NEVER change tool behavior.
+const telemetryStore = localStoreIfAvailable();
 
 // register_agent / heartbeat / set_focus / list_agents are the canonical
 // @hasna/agent-registry implementation (persistent SQLite-backed registry)
@@ -72,7 +59,7 @@ const agentRegistryEvents: AgentEventsClient = {
         typeof data.agent_id === "string" ? data.agent_id : undefined;
       const projectId =
         typeof data.project_id === "string" ? data.project_id : undefined;
-      ingestUniversalEvent(db, {
+      telemetryStore?.ingestUniversalEvent({
         type: "agent",
         source: "mcp",
         severity: "info",
@@ -140,11 +127,6 @@ export function buildServer(): McpServer {
     }));
   }
 
-  function rp(idOrName?: string): string | undefined {
-    if (!idOrName) return undefined;
-    return resolveProjectId(db, idOrName) ?? idOrName;
-  }
-
   // The unified data-plane Store: LocalStore (SQLite) or ApiStore (HTTP /v1 +
   // bearer key), resolved from the environment. Every data-plane tool routes
   // through this — no per-tool `cloud ? : local` branching, no `getDb()` reads
@@ -155,25 +137,10 @@ export function buildServer(): McpServer {
   const rid = (idOrName?: string): Promise<string | undefined> =>
     store.resolveProjectId(idOrName);
 
-  // Guard local-only tools (analytics/telemetry backed only by the local db).
-  const requireLocalMode = (tool: string): void => {
-    if (isApiMode()) {
-      throw new Error(
-        `MCP tool '${tool}' is a local-only operation and is not available in ` +
-          `self_hosted/cloud mode (the cloud tier is a shared log sink). Unset ` +
-          `HASNA_LOGS_API_URL/HASNA_LOGS_API_KEY to use it against the local store.`,
-      );
-    }
-  };
-
-  function existingProjectId(idOrName?: string): string | null {
-    const resolved = resolveProjectId(db, idOrName);
-    if (!resolved) return null;
-    const row = db
-      .prepare("SELECT id FROM projects WHERE id = ?")
-      .get(resolved) as { id: string } | null;
-    return row?.id ?? null;
-  }
+  // On-box analytics/telemetry tools with no cloud data model reach the concrete
+  // LocalStore here; it throws loudly in api mode instead of touching a stale
+  // local db. `getDb()` stays confined to the store implementation.
+  const local = (tool: string): LocalStore => requireLocalStore(tool);
 
   // Tool registry with param signatures for discoverability
   const TOOLS: Record<string, { desc: string; params: string }> = {
@@ -309,19 +276,6 @@ export function buildServer(): McpServer {
     log_stats: {
       desc: "Aggregate DB-level log statistics for a project",
       params: "(project_id?)",
-    },
-    storage_status: { desc: "Show storage sync configuration", params: "()" },
-    storage_push: {
-      desc: "Push local logs data to storage PostgreSQL",
-      params: "(tables?)",
-    },
-    storage_pull: {
-      desc: "Pull logs data from storage PostgreSQL",
-      params: "(tables?)",
-    },
-    storage_sync: {
-      desc: "Push local logs data, then pull storage rows",
-      params: "(tables?)",
     },
     search_tools: {
       desc: "Search tools by keyword — returns names, descriptions, param signatures",
@@ -665,7 +619,10 @@ export function buildServer(): McpServer {
         {
           type: "text",
           text: JSON.stringify(
-            await store.summarize(await rid(project_id), parseTime(since) ?? since),
+            await store.summarize(
+              await rid(project_id),
+              parseTime(since) ?? since,
+            ),
           ),
         },
       ],
@@ -705,17 +662,15 @@ export function buildServer(): McpServer {
         ),
     },
     ({ log_id, brief, window }) => {
-      requireLocalMode("log_context_from_id");
+      const rows = local("log_context_from_id").logContextFromId(
+        log_id,
+        window ?? 0,
+      );
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify(
-              applyBrief(
-                getLogContextFromId(db, log_id, window ?? 0),
-                brief !== false,
-              ),
-            ),
+            text: JSON.stringify(applyBrief(rows, brief !== false)),
           },
         ],
       };
@@ -748,7 +703,14 @@ export function buildServer(): McpServer {
       });
       let text: string;
       if (args.format === "csv") {
-        const cols = ["id", "timestamp", "level", "service", "message", "trace_id"];
+        const cols = [
+          "id",
+          "timestamp",
+          "level",
+          "service",
+          "message",
+          "trace_id",
+        ];
         const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
         text = `${cols.join(",")}\n${rows
           .map((r) =>
@@ -773,15 +735,14 @@ export function buildServer(): McpServer {
         .array(z.enum(["top_errors", "error_rate", "failing_pages", "perf"]))
         .optional(),
     },
-    ({ project_id, since, include }) => {
-      requireLocalMode("log_diagnose");
+    async ({ project_id, since, include }) => {
+      const store = local("log_diagnose");
+      const resolved = (await store.resolveProjectId(project_id)) ?? project_id;
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify(
-              diagnose(db, rp(project_id) ?? project_id, since, include),
-            ),
+            text: JSON.stringify(store.diagnose(resolved, since, include)),
           },
         ],
       };
@@ -797,16 +758,16 @@ export function buildServer(): McpServer {
       b_since: z.string(),
       b_until: z.string(),
     },
-    ({ project_id, a_since, a_until, b_since, b_until }) => {
-      requireLocalMode("log_compare");
+    async ({ project_id, a_since, a_until, b_since, b_until }) => {
+      const store = local("log_compare");
+      const resolved = (await store.resolveProjectId(project_id)) ?? project_id;
       return {
         content: [
           {
             type: "text",
             text: JSON.stringify(
-              compare(
-                db,
-                rp(project_id) ?? project_id,
+              store.compareWindows(
+                resolved,
                 parseTime(a_since) ?? a_since,
                 parseTime(a_until) ?? a_until,
                 parseTime(b_since) ?? b_since,
@@ -826,8 +787,7 @@ export function buildServer(): McpServer {
       brief: z.boolean().optional(),
     },
     async ({ session_id, brief }) => {
-      requireLocalMode("log_session_context");
-      const ctx = await getSessionContext(db, session_id);
+      const ctx = await local("log_session_context").sessionContext(session_id);
       return {
         content: [
           {
@@ -873,9 +833,9 @@ export function buildServer(): McpServer {
       body: z.record(z.string(), z.unknown()).optional(),
       attributes: z.record(z.string(), z.unknown()).optional(),
     },
-    (args) => {
-      requireLocalMode("event_push");
-      const projectId = rp(args.project_id);
+    async (args) => {
+      const store = local("event_push");
+      const projectId = await store.resolveProjectId(args.project_id);
       const hasExplicitIdentity = Boolean(
         args.machine_id || args.repo_id || args.app_id,
       );
@@ -884,20 +844,11 @@ export function buildServer(): McpServer {
         project_id: projectId,
         environment: args.environment ?? process.env.NODE_ENV ?? "development",
       };
-      validateUniversalEventInput(eventInput);
-      const identity = hasExplicitIdentity
-        ? null
-        : detectRuntimeIdentity(db, process.cwd(), {
-            project_id: existingProjectId(args.project_id),
-            environment: args.environment,
-          });
-      if (identity) {
-        eventInput.machine_id = identity.machine_id;
-        eventInput.repo_id = identity.repo_id ?? undefined;
-        eventInput.app_id = identity.app_id ?? undefined;
-        eventInput.environment = args.environment ?? identity.environment;
-      }
-      const result = ingestUniversalEvent(db, eventInput);
+      const result = store.pushUniversalEvent(eventInput, {
+        detectIdentity: !hasExplicitIdentity,
+        projectNameOrId: args.project_id,
+        environment: args.environment,
+      });
       return {
         content: [
           {
@@ -987,14 +938,13 @@ export function buildServer(): McpServer {
       limit: z.number().optional(),
       include_raw: z.boolean().optional(),
     },
-    (args) => {
-      requireLocalMode("event_export");
+    async (args) => {
+      const store = local("event_export");
       const chunks: string[] = [];
-      const count = exportEventsToJson(
-        db,
+      const count = store.exportEvents(
         {
           ...args,
-          project_id: rp(args.project_id),
+          project_id: await store.resolveProjectId(args.project_id),
           since: parseTime(args.since) ?? args.since,
           until: parseTime(args.until) ?? args.until,
           limit: args.limit ?? 100_000,
@@ -1037,23 +987,25 @@ export function buildServer(): McpServer {
       from_start: z.boolean().optional(),
       include_internal: z.boolean().optional(),
     },
-    (args) => ({
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            watchEventsForMcp({
-              ...args,
-              project_id: rp(args.project_id),
-              limit: args.limit ?? 100,
-              include_raw: args.include_raw === true,
-              from_start: args.from_start === true,
-              include_internal: args.include_internal === true,
-            }),
-          ),
-        },
-      ],
-    }),
+    async (args) => {
+      const store = local("event_watch");
+      const watchArgs: McpEventWatchArgs = {
+        ...args,
+        project_id: await store.resolveProjectId(args.project_id),
+        limit: args.limit ?? 100,
+        include_raw: args.include_raw === true,
+        from_start: args.from_start === true,
+        include_internal: args.include_internal === true,
+      };
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(store.watchEventsForMcp(watchArgs)),
+          },
+        ],
+      };
+    },
   );
 
   registerTool(
@@ -1135,9 +1087,10 @@ export function buildServer(): McpServer {
       project_id: z.string(),
       page_id: z.string().optional(),
     },
-    ({ project_id, page_id }) => {
-      requireLocalMode("perf_snapshot");
-      const snap = getLatestSnapshot(db, rp(project_id) ?? project_id, page_id);
+    async ({ project_id, page_id }) => {
+      const store = local("perf_snapshot");
+      const resolved = (await store.resolveProjectId(project_id)) ?? project_id;
+      const snap = store.latestPerfSnapshot(resolved, page_id);
       return {
         content: [
           {
@@ -1159,23 +1112,23 @@ export function buildServer(): McpServer {
       since: z.string().optional(),
       limit: z.number().optional(),
     },
-    ({ project_id, page_id, since, limit }) => {
-      requireLocalMode("perf_trend");
+    async ({ project_id, page_id, since, limit }) => {
+      const store = local("perf_trend");
+      const resolved = (await store.resolveProjectId(project_id)) ?? project_id;
       return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            getPerfTrend(
-              db,
-              rp(project_id) ?? project_id,
-              page_id,
-              parseTime(since) ?? since,
-              limit ?? 50,
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              store.perfTrend(
+                resolved,
+                page_id,
+                parseTime(since) ?? since,
+                limit ?? 50,
+              ),
             ),
-          ),
-        },
-      ],
+          },
+        ],
       };
     },
   );
@@ -1196,7 +1149,9 @@ export function buildServer(): McpServer {
   );
 
   registerTool("list_projects", {}, async () => ({
-    content: [{ type: "text", text: JSON.stringify(await store.listProjects()) }],
+    content: [
+      { type: "text", text: JSON.stringify(await store.listProjects()) },
+    ],
   }));
 
   registerTool(
@@ -1221,14 +1176,15 @@ export function buildServer(): McpServer {
       status: z.string().optional(),
       limit: z.number().optional(),
     },
-    ({ project_id, status, limit }) => {
-      requireLocalMode("list_issues");
+    async ({ project_id, status, limit }) => {
+      const store = local("list_issues");
+      const resolved = await store.resolveProjectId(project_id);
       return {
         content: [
           {
             type: "text",
             text: JSON.stringify(
-              listIssues(db, rp(project_id), status, limit ?? 50),
+              store.listIssues(resolved, status, limit ?? 50),
             ),
           },
         ],
@@ -1243,12 +1199,13 @@ export function buildServer(): McpServer {
       status: z.enum(["open", "resolved", "ignored"]),
     },
     ({ id, status }) => {
-      requireLocalMode("resolve_issue");
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify(updateIssueStatus(db, id, status)),
+            text: JSON.stringify(
+              local("resolve_issue").updateIssueStatus(id, status),
+            ),
           },
         ],
       };
@@ -1267,17 +1224,16 @@ export function buildServer(): McpServer {
       action: z.enum(["webhook", "log"]).optional(),
       webhook_url: z.string().optional(),
     },
-    (args) => {
-      requireLocalMode("create_alert_rule");
+    async (args) => {
+      const store = local("create_alert_rule");
+      const resolved =
+        (await store.resolveProjectId(args.project_id)) ?? args.project_id;
       return {
         content: [
           {
             type: "text",
             text: JSON.stringify(
-              createAlertRule(db, {
-                ...args,
-                project_id: rp(args.project_id) ?? args.project_id,
-              }),
+              store.createAlertRule({ ...args, project_id: resolved }),
             ),
           },
         ],
@@ -1290,13 +1246,14 @@ export function buildServer(): McpServer {
     {
       project_id: z.string().optional(),
     },
-    ({ project_id }) => {
-      requireLocalMode("list_alert_rules");
+    async ({ project_id }) => {
+      const store = local("list_alert_rules");
+      const resolved = await store.resolveProjectId(project_id);
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify(listAlertRules(db, rp(project_id))),
+            text: JSON.stringify(store.listAlertRules(resolved)),
           },
         ],
       };
@@ -1304,8 +1261,7 @@ export function buildServer(): McpServer {
   );
 
   registerTool("delete_alert_rule", { id: z.string() }, ({ id }) => {
-    requireLocalMode("delete_alert_rule");
-    deleteAlertRule(db, id);
+    local("delete_alert_rule").deleteAlertRule(id);
     return { content: [{ type: "text", text: "deleted" }] };
   });
 
@@ -1386,14 +1342,11 @@ export function buildServer(): McpServer {
     },
     async (params) => {
       try {
-        db.run(
-          "INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)",
-          [
-            params.message,
-            params.email || null,
-            params.category || "general",
-            PACKAGE_VERSION,
-          ],
+        local("send_feedback").recordFeedback(
+          params.message,
+          params.email || null,
+          params.category || "general",
+          PACKAGE_VERSION,
         );
         return {
           content: [
@@ -1409,166 +1362,6 @@ export function buildServer(): McpServer {
     },
   );
 
-  interface McpEventWatchArgs {
-    last_event_id?: string;
-    event_type?: string;
-    source?: string;
-    severity?: string;
-    project_id?: string;
-    machine_id?: string;
-    repo_id?: string;
-    app_id?: string;
-    process_id?: string;
-    run_id?: string;
-    trace_id?: string;
-    session_id?: string;
-    environment?: string;
-    limit?: number;
-    include_raw?: boolean;
-    from_start?: boolean;
-    include_internal?: boolean;
-  }
-
-  interface McpEventCursor {
-    rowid: number;
-    event_id: string;
-  }
-
-  function watchEventsForMcp(args: McpEventWatchArgs): {
-    events: unknown[];
-    cursor: string | null;
-    has_more: boolean;
-    overflow: null | { reason: string; last_event_id: string };
-  } {
-    const limit = clampMcpWatchLimit(args.limit);
-    const latest = latestMcpEventCursor(args);
-    let afterRowid = 0;
-    let cursor = args.last_event_id ?? latest?.event_id ?? null;
-    let overflow: null | { reason: string; last_event_id: string } = null;
-
-    if (args.last_event_id) {
-      const anchor = db
-        .prepare("SELECT rowid, event_id FROM event_records WHERE event_id = ?")
-        .get(args.last_event_id) as McpEventCursor | null;
-      if (!anchor) {
-        overflow = {
-          reason: "last_event_id_unknown",
-          last_event_id: args.last_event_id,
-        };
-        return {
-          events: [],
-          cursor: latest?.event_id ?? null,
-          has_more: false,
-          overflow,
-        };
-      }
-      afterRowid = anchor.rowid;
-      cursor = anchor.event_id;
-    } else if (args.from_start !== true) {
-      return { events: [], cursor, has_more: false, overflow: null };
-    }
-
-    const rows = queryMcpEventCursors(args, afterRowid, limit + 1);
-    const visibleRows = rows.slice(0, limit);
-    const events = visibleRows
-      .map((row) => getEvent(db, row.event_id, args.include_raw === true))
-      .filter(Boolean);
-    const last = visibleRows.at(-1);
-    if (last) cursor = last.event_id;
-
-    return { events, cursor, has_more: rows.length > limit, overflow };
-  }
-
-  function latestMcpEventCursor(
-    args: McpEventWatchArgs,
-  ): McpEventCursor | null {
-    const { where, params } = buildMcpEventWhere(args, null);
-    return db
-      .prepare(
-        `SELECT rowid, event_id FROM event_records ${where} ORDER BY rowid DESC LIMIT 1`,
-      )
-      .get(...params) as McpEventCursor | null;
-  }
-
-  function queryMcpEventCursors(
-    args: McpEventWatchArgs,
-    afterRowid: number,
-    limit: number,
-  ): McpEventCursor[] {
-    const { where, params } = buildMcpEventWhere(args, afterRowid);
-    return db
-      .prepare(
-        `SELECT rowid, event_id FROM event_records ${where} ORDER BY rowid ASC LIMIT ?`,
-      )
-      .all(...params, limit) as McpEventCursor[];
-  }
-
-  function buildMcpEventWhere(
-    args: McpEventWatchArgs,
-    afterRowid: number | null,
-  ): { where: string; params: Array<string | number> } {
-    const conditions: string[] = [];
-    const params: Array<string | number> = [];
-    if (afterRowid !== null) {
-      conditions.push("rowid > ?");
-      params.push(afterRowid);
-    }
-    addMcpListFilter(conditions, params, "event_type", args.event_type);
-    addMcpListFilter(conditions, params, "source", args.source);
-    addMcpListFilter(conditions, params, "severity", args.severity);
-    addMcpScalarFilter(conditions, params, "project_id", args.project_id);
-    addMcpScalarFilter(conditions, params, "machine_id", args.machine_id);
-    addMcpScalarFilter(conditions, params, "repo_id", args.repo_id);
-    addMcpScalarFilter(conditions, params, "app_id", args.app_id);
-    addMcpScalarFilter(conditions, params, "process_id", args.process_id);
-    addMcpScalarFilter(conditions, params, "run_id", args.run_id);
-    addMcpScalarFilter(conditions, params, "trace_id", args.trace_id);
-    addMcpScalarFilter(conditions, params, "session_id", args.session_id);
-    addMcpScalarFilter(conditions, params, "environment", args.environment);
-    if (args.include_internal !== true) {
-      conditions.push(
-        "NOT (event_type = 'agent' AND source = 'mcp' AND metadata LIKE ?)",
-      );
-      params.push('%"category":"mcp_tool_call"%');
-    }
-    return {
-      where: conditions.length ? `WHERE ${conditions.join(" AND ")}` : "",
-      params,
-    };
-  }
-
-  function addMcpListFilter(
-    conditions: string[],
-    params: Array<string | number>,
-    column: string,
-    value: string | undefined,
-  ): void {
-    const values =
-      value
-        ?.split(",")
-        .map((item) => item.trim())
-        .filter(Boolean) ?? [];
-    if (values.length === 0) return;
-    conditions.push(`${column} IN (${values.map(() => "?").join(",")})`);
-    params.push(...values);
-  }
-
-  function addMcpScalarFilter(
-    conditions: string[],
-    params: Array<string | number>,
-    column: string,
-    value: string | undefined,
-  ): void {
-    if (!value) return;
-    conditions.push(`${column} = ?`);
-    params.push(value);
-  }
-
-  function clampMcpWatchLimit(value: number | undefined): number {
-    if (!Number.isFinite(value) || value === undefined) return 100;
-    return Math.min(Math.max(1, Math.floor(value)), 1_000);
-  }
-
   function recordMcpToolCall(
     toolName: string,
     args: unknown,
@@ -1581,7 +1374,7 @@ export function buildServer(): McpServer {
     const argsSummary = summarizeMcpArguments(args);
     const resultSummary = summarizeMcpResult(result);
     try {
-      ingestUniversalEvent(db, {
+      telemetryStore?.ingestUniversalEvent({
         type: "agent",
         source: "mcp",
         severity: status === "ok" ? "info" : "error",
@@ -1729,94 +1522,6 @@ export function buildServer(): McpServer {
     events: agentRegistryEvents,
     includeFeedback: false,
   });
-
-  registerTrackedTool(
-    "storage_status",
-    "Check configured logs PostgreSQL remote storage.",
-    {},
-    async () => {
-      const status = getStorageStatus();
-      if (!status.configured)
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(status) }],
-        };
-      let storage: Awaited<ReturnType<typeof getStoragePg>> | null = null;
-      try {
-        storage = await getStoragePg();
-        await storage.get("SELECT 1 as ok");
-        const remoteTables = (await storage.all(
-          "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename",
-        )) as Array<{ tablename: string }>;
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                ...status,
-                connected: true,
-                remoteTables: remoteTables.map((row) => row.tablename),
-              }),
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [{ type: "text" as const, text: String(error) }],
-          isError: true,
-        };
-      } finally {
-        if (storage) await storage.close().catch(() => {});
-      }
-    },
-  );
-
-  registerTrackedTool(
-    "storage_push",
-    "Push local logs data to storage PostgreSQL.",
-    { tables: z.array(z.string()).optional() },
-    async ({ tables }) => {
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(await storagePush({ tables })),
-          },
-        ],
-      };
-    },
-  );
-
-  registerTrackedTool(
-    "storage_pull",
-    "Pull logs data from storage PostgreSQL.",
-    { tables: z.array(z.string()).optional() },
-    async ({ tables }) => {
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(await storagePull({ tables })),
-          },
-        ],
-      };
-    },
-  );
-
-  registerTrackedTool(
-    "storage_sync",
-    "Push local logs data, then pull storage rows.",
-    { tables: z.array(z.string()).optional() },
-    async ({ tables }) => {
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(await storageSync({ tables })),
-          },
-        ],
-      };
-    },
-  );
 
   return server;
 }

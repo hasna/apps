@@ -6,22 +6,60 @@
  * The ONE place in the app allowed to call `getDb()`. Every data-plane
  * operation the CLI/MCP/SDK need is implemented here by delegating to the
  * `src/lib/*` primitives against the local SQLite database. Callers hold the
- * {@link Store} interface and never see the db handle.
+ * {@link Store} interface (or, for on-box maintenance/compute commands, a
+ * concrete {@link LocalStore} obtained via `requireLocalStore`) and never see
+ * the db handle — that is the split-brain boundary this module enforces.
  */
 import { getDb } from "../db/index.ts";
+import {
+  type AlertRule,
+  createAlertRule,
+  deleteAlertRule,
+  listAlertRules,
+} from "../lib/alerts.ts";
+import type {
+  CommandRunOptions,
+  CommandRunResult,
+} from "../lib/command-runner.ts";
+import { runCommand } from "../lib/command-runner.ts";
+import { type CompareResult, compare } from "../lib/compare.ts";
 import { countLogs } from "../lib/count.ts";
+import {
+  type DiagnoseInclude,
+  type DiagnosisResult,
+  diagnose,
+} from "../lib/diagnose.ts";
+import {
+  type EventStoreVerification,
+  type RebuildEventStoreIndexResult,
+  type RepairEventStoreSegmentsResult,
+  rebuildEventStoreIndex,
+  repairEventStoreSegments,
+  verifyEventStore,
+} from "../lib/event-store.ts";
+import {
+  type CliEventWatchFilter,
+  type McpEventWatchArgs,
+  type McpEventWatchResult,
+  type WatchEventRow,
+  latestMatchingEventRowid,
+  queryWatchEventRows,
+  rowidForEventId,
+  watchEventsForMcp,
+} from "../lib/event-watch.ts";
 import {
   type EventCatalogEntry,
   type EventCatalogQuery,
+  exportEventsToJson,
   getEvent,
   searchEvents,
 } from "../lib/events.ts";
-import { getHealth, type HealthResult } from "../lib/health.ts";
+import { type HealthResult, getHealth } from "../lib/health.ts";
+import { detectRuntimeIdentity } from "../lib/identity.ts";
 import { ingestLog } from "../lib/ingest.ts";
-import {
-  createJob,
-  listJobs,
-} from "../lib/jobs.ts";
+import { type Issue, listIssues, updateIssueStatus } from "../lib/issues.ts";
+import { createJob, getJob, listJobs } from "../lib/jobs.ts";
+import { getLatestSnapshot, getPerfTrend } from "../lib/perf.ts";
 import {
   createPage,
   createProject,
@@ -32,30 +70,54 @@ import {
 } from "../lib/projects.ts";
 import {
   getLogContext,
+  getLogContextFromId,
   searchLogs,
   tailLogs,
 } from "../lib/query.ts";
+import { runJob } from "../lib/scheduler.ts";
+import {
+  type SessionContext,
+  getSessionContext,
+} from "../lib/session-context.ts";
+import {
+  type FollowStructuredJsonLinesOptions,
+  type FollowStructuredJsonLinesResult,
+  followStructuredJsonLines,
+} from "../lib/structured-log-follow.ts";
+import {
+  type StructuredLogOptions,
+  ingestStructuredJsonLines,
+} from "../lib/structured-logs.ts";
 import { summarizeLogs } from "../lib/summarize.ts";
 import {
-  getTestReport,
-  searchTestReports,
   type TestReportEntry,
   type TestReportQuery,
+  getTestReport,
+  searchTestReports,
 } from "../lib/test-reports.ts";
+import {
+  type UniversalEventIngestResult,
+  type UniversalEventInput,
+  ingestUniversalEvent,
+  validateUniversalEventInput,
+} from "../lib/universal-ingest.ts";
 import type {
   LogEntry,
   LogQuery,
   LogRow,
   LogSummary,
   Page,
+  PerformanceSnapshot,
   Project,
   ScanJob,
 } from "../types/index.ts";
 import type {
   CountLogsInput,
+  CreateAlertRuleInput,
   CreateJobInput,
   CreatePageInput,
   CreateProjectInput,
+  PushUniversalEventOptions,
   Store,
 } from "./types.ts";
 
@@ -162,5 +224,200 @@ export class LocalStore implements Store {
 
   async createJob(input: CreateJobInput): Promise<ScanJob> {
     return createJob(getDb(), input);
+  }
+
+  // ── local-only maintenance / compute operations ─────────
+  // These have no cloud data model and run only against the on-box SQLite /
+  // filesystem. They live on the concrete LocalStore (not the Store interface),
+  // reached via `requireLocalStore()`, so `getDb()` stays confined to this file.
+
+  /** Resolve name-or-id to an id that actually exists (else null). */
+  resolveExistingProjectId(nameOrId: string | undefined): string | null {
+    const db = getDb();
+    const resolved = resolveProjectId(db, nameOrId);
+    if (!resolved) return null;
+    const row = db
+      .prepare("SELECT id FROM projects WHERE id = ?")
+      .get(resolved) as { id: string } | null;
+    return row?.id ?? null;
+  }
+
+  importStructuredLogs(
+    input: string,
+    options: StructuredLogOptions,
+    source: string,
+  ): LogRow[] {
+    return ingestStructuredJsonLines(getDb(), input, options, source);
+  }
+
+  followStructuredLogs(
+    file: string,
+    options: FollowStructuredJsonLinesOptions,
+  ): Promise<FollowStructuredJsonLinesResult> {
+    return followStructuredJsonLines(getDb(), file, options);
+  }
+
+  runCapturedCommand(
+    command: string[],
+    options: CommandRunOptions,
+  ): Promise<CommandRunResult> {
+    return runCommand(getDb(), command, options);
+  }
+
+  verifyEventStore(): EventStoreVerification {
+    return verifyEventStore(getDb());
+  }
+
+  rebuildEventStoreIndex(): RebuildEventStoreIndexResult {
+    return rebuildEventStoreIndex(getDb());
+  }
+
+  repairEventStoreSegments(options: {
+    apply?: boolean;
+  }): RepairEventStoreSegmentsResult {
+    return repairEventStoreSegments(getDb(), options);
+  }
+
+  /**
+   * Ingest a raw-first universal event, optionally auto-detecting runtime
+   * identity (machine/repo/app) when the caller did not supply one.
+   */
+  pushUniversalEvent(
+    input: UniversalEventInput,
+    options: PushUniversalEventOptions = {},
+  ): UniversalEventIngestResult {
+    const db = getDb();
+    validateUniversalEventInput(input);
+    if (options.detectIdentity) {
+      const identity = detectRuntimeIdentity(db, process.cwd(), {
+        project_id: this.resolveExistingProjectId(options.projectNameOrId),
+        environment: options.environment,
+      });
+      input.machine_id = identity.machine_id;
+      input.repo_id = identity.repo_id ?? undefined;
+      input.app_id = identity.app_id ?? undefined;
+      input.environment = options.environment ?? identity.environment;
+    }
+    return ingestUniversalEvent(db, input);
+  }
+
+  /** Best-effort self-telemetry ingest (never throws to the caller path). */
+  ingestUniversalEvent(input: UniversalEventInput): UniversalEventIngestResult {
+    return ingestUniversalEvent(getDb(), input);
+  }
+
+  exportEvents(
+    query: EventCatalogQuery,
+    writeLine: (line: string) => void,
+  ): number {
+    return exportEventsToJson(getDb(), query, writeLine);
+  }
+
+  diagnose(
+    projectId: string,
+    since?: string,
+    include?: DiagnoseInclude[],
+  ): DiagnosisResult {
+    return diagnose(getDb(), projectId, since, include);
+  }
+
+  compareWindows(
+    projectId: string,
+    aSince: string,
+    aUntil: string,
+    bSince: string,
+    bUntil: string,
+  ): CompareResult {
+    return compare(getDb(), projectId, aSince, aUntil, bSince, bUntil);
+  }
+
+  sessionContext(sessionId: string): Promise<SessionContext> {
+    return getSessionContext(getDb(), sessionId);
+  }
+
+  logContextFromId(logId: string, window: number): LogRow[] {
+    return getLogContextFromId(getDb(), logId, window);
+  }
+
+  latestPerfSnapshot(
+    projectId: string,
+    pageId?: string,
+  ): PerformanceSnapshot | null {
+    return getLatestSnapshot(getDb(), projectId, pageId);
+  }
+
+  perfTrend(
+    projectId: string,
+    pageId?: string,
+    since?: string,
+    limit?: number,
+  ): PerformanceSnapshot[] {
+    return getPerfTrend(getDb(), projectId, pageId, since, limit);
+  }
+
+  listIssues(projectId?: string, status?: string, limit?: number): Issue[] {
+    return listIssues(getDb(), projectId, status, limit);
+  }
+
+  updateIssueStatus(
+    id: string,
+    status: "open" | "resolved" | "ignored",
+  ): Issue | null {
+    return updateIssueStatus(getDb(), id, status);
+  }
+
+  createAlertRule(input: CreateAlertRuleInput): AlertRule {
+    return createAlertRule(getDb(), input);
+  }
+
+  listAlertRules(projectId?: string): AlertRule[] {
+    return listAlertRules(getDb(), projectId);
+  }
+
+  deleteAlertRule(id: string): void {
+    deleteAlertRule(getDb(), id);
+  }
+
+  recordFeedback(
+    message: string,
+    email: string | null,
+    category: string,
+    version: string,
+  ): void {
+    getDb().run(
+      "INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)",
+      [message, email, category, version],
+    );
+  }
+
+  getScanJob(id: string): ScanJob | null {
+    return getJob(getDb(), id);
+  }
+
+  runScanJob(jobId: string, projectId: string, pageId?: string): Promise<void> {
+    return runJob(getDb(), jobId, projectId, pageId);
+  }
+
+  // ── event-catalog live-tail (CLI `watch --events`) ──────
+  latestWatchEventRowid(filter: CliEventWatchFilter): number {
+    return latestMatchingEventRowid(getDb(), filter);
+  }
+
+  watchEventRowidForId(eventId: string): number | null {
+    return rowidForEventId(getDb(), eventId);
+  }
+
+  queryWatchEventRows(
+    filter: CliEventWatchFilter,
+    afterRowid: number,
+    since: string | undefined,
+    limit: number,
+  ): WatchEventRow[] {
+    return queryWatchEventRows(getDb(), filter, afterRowid, since, limit);
+  }
+
+  // ── event-catalog cursor watch (MCP `event_watch`) ──────
+  watchEventsForMcp(args: McpEventWatchArgs): McpEventWatchResult {
+    return watchEventsForMcp(getDb(), args);
   }
 }
