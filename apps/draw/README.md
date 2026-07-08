@@ -8,19 +8,19 @@ A framework agnostic board and card model with a portable, renderer free drawing
 is compatible with [Excalidraw](https://excalidraw.com) for interchange, plus optional React
 board, card, and draw surface components.
 
-- **Headless core (`@hasna/draw`)** — framework agnostic. Runs anywhere (Node, Bun, edge,
+- **Headless core (`@hasna/draw`)**: framework agnostic. Runs anywhere (Node, Bun, edge,
   browser) with no DOM and no drawing engine. Create boards, add note and drawing cards,
   pin / archive / reorder / recolor, query and count, and import / export **JSON** and
   **Excalidraw** scenes.
-- **React components (`@hasna/draw/react`)** — a Keep style `<Board>`, a `<Card>` that
+- **React components (`@hasna/draw/react`)**: a Keep style `<Board>`, a `<Card>` that
   renders notes or a read only drawing preview, a hand rolled SVG `<DrawSurface>` for
   freehand sketching, and a `<NoteEditor>`. They read and write the *same* JSON the headless
   SDK produces.
-- **CLI (`draw`)** — create boards, add cards, list, export to Excalidraw, and print stats,
+- **CLI (`draw`)**: create boards, add cards, list, export to Excalidraw, and print stats,
   all over board JSON files.
 
 The drawing scene is plain data shaped to map cleanly onto Excalidraw, so a sketch made in
-the browser round-trips through the SDK unchanged, and a platform can later feed the same
+the browser round trips through the SDK unchanged, and a platform can later feed the same
 scene to a real Excalidraw canvas through `toExcalidraw` / `fromExcalidraw`.
 
 ## Install
@@ -96,7 +96,7 @@ export function MyBoard({ initial }: { initial: BoardData }) {
 }
 ```
 
-The components ship no CSS of their own — they render semantic classes
+The components ship no CSS of their own. They render semantic classes
 (`hasna-draw-board`, `hasna-draw-card`, `hasna-draw-card[data-color]`, `hasna-draw-surface`)
 you style yourself. See [docs/react-board.md](./docs/react-board.md) and the `dashboard/` demo.
 
