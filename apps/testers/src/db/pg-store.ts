@@ -248,6 +248,7 @@ export interface CreateScenarioBody {
   requiresAuth?: boolean;
   projectId?: string | null;
   metadata?: Record<string, unknown>;
+  personaId?: string | null;
 }
 
 async function nextShortId(db: TypedQueryClient, projectId?: string | null): Promise<string> {
@@ -307,8 +308,8 @@ export async function createScenario(
     const shortId = await nextShortId(db, body.projectId ?? null);
     const row = await db.get(
       `INSERT INTO scenarios
-       (id, short_id, project_id, name, description, steps, tags, priority, model, timeout_ms, target_path, requires_auth, metadata, assertions, version, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'[]',1,$14,$14) RETURNING *`,
+       (id, short_id, project_id, name, description, steps, tags, priority, model, timeout_ms, target_path, requires_auth, metadata, persona_id, assertions, version, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'[]',1,$15,$15) RETURNING *`,
       [
         id,
         shortId,
@@ -323,6 +324,7 @@ export async function createScenario(
         body.targetPath ?? null,
         body.requiresAuth ?? false,
         body.metadata ? j(body.metadata) : null,
+        body.personaId ?? null,
         ts,
       ],
     );

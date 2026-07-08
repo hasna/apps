@@ -1,5 +1,4 @@
 #!/usr/bin/env bun
-// @ts-nocheck
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
@@ -33,14 +32,12 @@ import {
   heartbeatAgent,
   setAgentFocus,
   listScanIssues,
-  getScanIssue,
   resolveScanIssue,
   upsertScanIssue,
   createSchedule,
   listSchedules,
   updateSchedule,
   deleteSchedule,
-  getSchedule,
   createApiCheck,
   getApiCheck,
   listApiChecks,
@@ -59,7 +56,7 @@ import {
   getTestingWorkflow,
   listTestingWorkflows,
 } from "../store/index.js";
-import { getTemplate, listTemplateNames, SCENARIO_TEMPLATES } from "../lib/templates.js";
+import { getTemplate, listTemplateNames } from "../lib/templates.js";
 import { startRunAsync } from "../lib/runner.js";
 import { matchFilesToScenarios } from "../lib/affected.js";
 import { loadConfig } from "../lib/config.js";
@@ -67,7 +64,6 @@ import { importFromTodos } from "../lib/todos-connector.js";
 import { getNextRunTime } from "../lib/scheduler.js";
 import { VersionConflictError } from "../types/index.js";
 import { runApiCheck, runApiChecksByFilter } from "../lib/api-runner.js";
-import { PersonaNotFoundError } from "../types/index.js";
 import { getTestersDir } from "../lib/paths.js";
 import { createProdDebugPlan } from "../lib/prod-debug.js";
 import { runTestingWorkflow } from "../lib/workflow-runner.js";
@@ -168,8 +164,8 @@ const ID_DESC = "Accepts either the full UUID (e.g. 'abc123...') or the short ID
 const MODEL_DESC =
   "Model to use. Values: 'quick' (claude-haiku-4-5, cheapest), 'thorough' (claude-sonnet-4-6, balanced), 'deep' (claude-opus-4-6, most capable). Default: 'quick'.";
 
-function compactToolPayload<T>(
-  items: T[],
+function compactToolPayload(
+  items: readonly unknown[],
   total: number,
   detailHint: string,
   meta: Record<string, unknown> = {},
@@ -1867,7 +1863,7 @@ server.tool(
       }
       if (!resolvedUrl) {
         const { getDefaultEnvironment } = await import("../store/index.js");
-        const defaultEnv = await getDefaultEnvironment(projectId);
+        const defaultEnv = await getDefaultEnvironment();
         if (defaultEnv) resolvedUrl = defaultEnv.url;
       }
       if (!resolvedUrl) return errorResponse(new Error("No URL provided. Pass url or env parameter."));
@@ -2461,7 +2457,7 @@ server.tool(
       if (!exists) return json({ resultId, harPath, harAvailable: false, message: "HAR file was recorded but has been cleaned up." });
 
       if (!includeContent) {
-        const size = await harFile.size();
+        const size = harFile.size;
         return json({ resultId, harPath, harAvailable: true, sizeBytes: size, message: "HAR file available. Use includeContent: true to retrieve." });
       }
 

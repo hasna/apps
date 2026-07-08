@@ -35,7 +35,6 @@ import {
 import { diffRuns, formatDiffTerminal, formatDiffJSON } from "../lib/diff.js";
 import {
   setBaseline,
-  getBaseline,
   compareRunScreenshots,
   formatVisualDiffTerminal,
 } from "../lib/visual-diff.js";
@@ -124,6 +123,12 @@ import {
   deleteSession,
   countSessions,
   searchSessions,
+  registerAgent,
+  heartbeatAgent,
+  setAgentFocus,
+  listAgents,
+  listScanIssues,
+  resolveScanIssue,
 } from "../store/index.js";
 import { runApiCheck, runApiChecksByFilter } from "../lib/api-runner.js";
 import { getTemplate, listTemplateNames } from "../lib/templates.js";
@@ -752,11 +757,6 @@ function logError(...args: unknown[]) {
   if (QUIET) return;
   // eslint-disable-next-line no-console
   console.error(...args);
-}
-
-function stripAnsi(str: string): string {
-  // eslint-disable-next-line no-control-regex
-  return str.replace(/\x1B\[[0-9;]*m/g, "");
 }
 
 function cliPage<T>(items: T[], opts: { limit?: string; offset?: string }, defaultLimit = 20, maxLimit = 100) {
@@ -1667,7 +1667,7 @@ program
 
         // If --from-todos, import scenarios first
         if (opts.fromTodos) {
-          const result = importFromTodos({ projectId });
+          const result = await importFromTodos({ projectId });
           log(
             chalk.blue(
               `Imported ${result.imported} scenarios from todos (${result.skipped} skipped)`,
@@ -1704,12 +1704,8 @@ program
                 const error = validateStoredAssertion(a);
                 if (error) assertionErrors.push(error);
               }
-              // Check auth preset exists if required
-              let authOk = true;
-              if (s.authPreset) {
-                const presets = await listAuthPresets();
-                authOk = presets.some((p) => p.name === s.authPreset);
-              }
+              // Check auth is configured if the scenario requires it
+              const authOk = !s.requiresAuth || Boolean(s.authConfig);
               const statusIcon =
                 assertionErrors.length === 0 && authOk
                   ? chalk.green("✓")
@@ -1725,7 +1721,7 @@ program
                 );
               }
               if (!authOk) {
-                log(chalk.red(`      Auth preset not found: ${s.authPreset}`));
+                log(chalk.red(`      Auth required but not configured`));
               }
             }
           }
@@ -3908,8 +3904,14 @@ sessionCmd
       log("");
 
       // Show error entries if any
-      const errors = session.entries.filter(
-        (e: any) => e && e.type === "error",
+      type SessionEntry = {
+        type?: string;
+        timestamp?: string;
+        message?: string;
+        text?: string;
+      };
+      const errors = (session.entries as SessionEntry[]).filter(
+        (e) => Boolean(e) && e.type === "error",
       );
       if (errors.length > 0) {
         log(chalk.bold.red("  Errors:"));
@@ -5346,9 +5348,11 @@ flowCmd
     log(`  ID: ${chalk.dim(flow.id)}`);
     log(`  Scenarios (in order):`);
     for (let i = 0; i < flow.scenarioIds.length; i++) {
-      const s = await getScenario(flow.scenarioIds[i]);
+      const sid = flow.scenarioIds[i];
+      if (!sid) continue;
+      const s = await getScenario(sid);
       log(
-        `    ${i + 1}. ${s ? `${s.shortId}: ${s.name}` : flow.scenarioIds[i].slice(0, 8)}`,
+        `    ${i + 1}. ${s ? `${s.shortId}: ${s.name}` : sid.slice(0, 8)}`,
       );
     }
     log("");
@@ -5597,7 +5601,11 @@ envCmd
   .action(async (name: string) => {
     try {
       await setDefaultEnvironment(name);
-      const env = await getEnvironment(name)!;
+      const env = await getEnvironment(name);
+      if (!env) {
+        logError(chalk.red(`Environment not found: ${name}`));
+        process.exit(1);
+      }
       log(chalk.green(`Default environment set: ${env.name} → ${env.url}`));
     } catch (error) {
       logError(
@@ -5664,7 +5672,7 @@ program
   .action(async (spec: string, opts) => {
     try {
       const { importFromOpenAPI } = await import("../lib/openapi-import.js");
-      const { imported, scenarios } = importFromOpenAPI(
+      const { imported, scenarios } = await importFromOpenAPI(
         spec,
         await resolveProject(opts.project) ?? undefined,
       );
@@ -6225,8 +6233,7 @@ agentCmd
   .option("-r, --role <role>", "Agent role")
   .action(async (name: string, opts) => {
     try {
-      const { registerAgent } = require("../db/agents.js");
-      const agent = registerAgent({
+      const agent = await registerAgent({
         name,
         description: opts.description,
         role: opts.role,
@@ -6251,8 +6258,7 @@ agentCmd
   .description("Update agent last_seen_at timestamp")
   .action(async (id: string) => {
     try {
-      const { heartbeatAgent } = require("../db/agents.js");
-      const agent = heartbeatAgent(id);
+      const agent = await heartbeatAgent(id);
       if (!agent) {
         logError(chalk.red(`Agent not found: ${id}`));
         process.exit(1);
@@ -6275,8 +6281,7 @@ agentCmd
   .description("Set (or clear) an agent's current focus scenario")
   .action(async (agentId: string, scenarioId: string | undefined) => {
     try {
-      const { setAgentFocus } = require("../db/agents.js");
-      const agent = setAgentFocus(agentId, scenarioId ?? null);
+      const agent = await setAgentFocus(agentId, scenarioId ?? null);
       if (!agent) {
         logError(chalk.red(`Agent not found: ${agentId}`));
         process.exit(1);
@@ -6306,8 +6311,7 @@ agentCmd
   .option("--verbose", "Show full focus text", false)
   .action(async (opts) => {
     try {
-      const { listAgents } = require("../db/agents.js");
-      const agents = listAgents();
+      const agents = await listAgents();
       const page = cliPage(agents, opts, 20, 100);
       if (agents.length === 0) {
         log(chalk.dim("No agents registered."));
@@ -6559,8 +6563,7 @@ scanCmd
   .option("--json", "Output as JSON", false)
   .action(async (opts) => {
     try {
-      const { listScanIssues } = require("../db/scan-issues.js");
-      const filteredIssues = listScanIssues({
+      const filteredIssues = await listScanIssues({
         status: opts.status,
         type: opts.type,
         projectId: opts.project,
@@ -6601,8 +6604,7 @@ scanCmd
   .description("Mark a scan issue as resolved")
   .action(async (id: string) => {
     try {
-      const { resolveScanIssue } = require("../db/scan-issues.js");
-      const ok = resolveScanIssue(id);
+      const ok = await resolveScanIssue(id);
       if (!ok) {
         logError(chalk.red(`Scan issue not found: ${id}`));
         process.exit(1);
@@ -6918,9 +6920,8 @@ program
     } else {
       const dbPath = join(getTestersDir(), "testers.db");
       try {
-        const { Database } = await import("bun:sqlite");
-        const db = new Database(dbPath, { create: true });
-        db.close();
+        // Probe the local store through the Store abstraction (no raw sqlite).
+        await listProjects();
         log(chalk.green("✓") + ` Database accessible: ${dbPath}`);
       } catch (err) {
         log(
@@ -7021,18 +7022,9 @@ program
       const port = parseInt(opts.port, 10);
       const url = `http://localhost:${port}`;
 
-      // Spawn the server process
-      const serverBin = join(
-        resolve(process.execPath, ".."),
-        "..",
-        "dist",
-        "server",
-        "index.js",
-      );
-      // Fallback: try to run directly via bun
+      // Resolve the server entrypoint relative to this module
       const {
         join: pathJoin,
-        resolve: pathResolve,
         dirname,
       } = await import("node:path");
       const { fileURLToPath } = await import("node:url");
@@ -7480,7 +7472,7 @@ apiCmd
         return;
       }
 
-      const { imported, checks } = importApiChecksFromOpenAPI(spec, projectId);
+      const { imported, checks } = await importApiChecksFromOpenAPI(spec, projectId);
       log("");
       log(chalk.green(`✓ Imported ${imported} API checks from spec:`));
       log("");
@@ -8451,6 +8443,7 @@ personaCmd
   .option("--auth-password <pass>", "Login password for auth testing")
   .option("--auth-login-path <path>", "Login page path (default: /login)")
   .action(async (opts) => {
+    let rl: ReturnType<typeof createInterface> | undefined;
     try {
       // Non-interactive mode: --name and --role provided
       if (opts.name && opts.role) {
@@ -8493,12 +8486,12 @@ personaCmd
       }
 
       // Interactive mode
-      const rl = createInterface({
+      rl = createInterface({
         input: process.stdin,
         output: process.stdout,
       });
       const ask = (q: string): Promise<string> =>
-        new Promise((res) => rl.question(q, res));
+        new Promise((res) => rl!.question(q, res));
       const name = await ask("Name: ");
       if (!name.trim()) {
         logError(chalk.red("Name is required"));
@@ -8555,7 +8548,7 @@ personaCmd
       log(chalk.dim(`  Role: ${persona.role}`));
       log(chalk.dim(`  Scope: ${persona.projectId ? "project" : "global"}`));
     } catch (error) {
-      rl.close();
+      rl?.close();
       logError(
         chalk.red(
           `Error: ${error instanceof Error ? error.message : String(error)}`,
@@ -8702,8 +8695,8 @@ personaCmd
   .option("--json", "Output as JSON", false)
   .action(async (seedOpts) => {
     try {
-      const { seedDefaultPersonas } = require("../db/seed-personas.js");
-      const result = seedDefaultPersonas();
+      const { seedDefaultPersonas } = await import("../lib/seed-personas.js");
+      const result = await seedDefaultPersonas();
       if (seedOpts.json) {
         log(JSON.stringify(result, null, 2));
       } else {
@@ -8977,7 +8970,7 @@ evalCmd
         },
       });
 
-      const run = await createRun({ scenarioId: scenario.id, model: "rag-eval" });
+      const run = await createRun({ url, scenarioIds: [scenario.id], model: "rag-eval" });
       await updateRun(run.id, { status: "running" });
 
       const result = await runRagEval(scenario, {
@@ -9328,7 +9321,7 @@ program
       for (const persona of personas) {
         if (!persona) continue;
         log(chalk.dim(`  Starting run for persona: ${persona.name} ...`));
-        const { run, results } = await runByFilter({
+        const { run } = await runByFilter({
           url,
           scenarioIds: scenarios.map((s) => s.id),
           model: opts.model,
@@ -9417,7 +9410,7 @@ program
         const icon =
           result.status === "passed" ? chalk.green("PASS") : chalk.red("FAIL");
         log(
-          `${icon}  ${result.name ?? scenario.name} (${result.durationMs}ms)`,
+          `${icon}  ${result.scenarioName ?? scenario.name} (${result.durationMs}ms)`,
         );
         if (result.status !== "passed" && result.error) {
           log(chalk.dim(`     ${result.error}`));

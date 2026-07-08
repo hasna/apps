@@ -118,13 +118,13 @@ export function parseOpenAPISpec(filePathOrUrl: string): CreateScenarioInput[] {
   return scenarios;
 }
 
-export function importFromOpenAPI(
+export async function importFromOpenAPI(
   filePathOrUrl: string,
   projectId?: string,
-): { imported: number; scenarios: ReturnType<typeof createScenario>[] } {
+): Promise<{ imported: number; scenarios: Awaited<ReturnType<typeof createScenario>>[] }> {
   const inputs = parseOpenAPISpec(filePathOrUrl);
-  const scenarios = inputs.map((input) =>
-    createScenario({ ...input, projectId })
+  const scenarios = await Promise.all(
+    inputs.map((input) => createScenario({ ...input, projectId }))
   );
   return { imported: scenarios.length, scenarios };
 }
@@ -170,11 +170,13 @@ export function parseOpenAPISpecAsChecks(filePathOrUrl: string): CreateApiCheckI
   return checks;
 }
 
-export function importApiChecksFromOpenAPI(
+export async function importApiChecksFromOpenAPI(
   filePathOrUrl: string,
   projectId?: string,
-): { imported: number; checks: ReturnType<typeof createApiCheck>[] } {
+): Promise<{ imported: number; checks: Awaited<ReturnType<typeof createApiCheck>>[] }> {
   const inputs = parseOpenAPISpecAsChecks(filePathOrUrl);
-  const checks = inputs.map((input) => createApiCheck({ ...input, projectId }));
+  const checks = await Promise.all(
+    inputs.map((input) => createApiCheck({ ...input, projectId }))
+  );
   return { imported: checks.length, checks };
 }

@@ -345,6 +345,7 @@ export interface CreateScenarioInput {
   metadata?: Record<string, unknown>;
   projectId?: string;
   parameters?: Record<string, unknown>;
+  personaId?: string;
 }
 
 export interface UpdateScenarioInput {
