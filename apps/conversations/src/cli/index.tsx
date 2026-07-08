@@ -6,6 +6,7 @@ import { render } from "ink";
 import React from "react";
 import { resolveIdentity } from "../lib/identity.js";
 import { isCloudStore } from "../lib/store/index.js";
+import { HasnaHttpError } from "../lib/contracts-client/index.js";
 import { App } from "./components/App.js";
 import { registerBrainsCommand } from "./brains.js";
 import { registerMessagingCommands } from "./commands/messaging.js";
@@ -91,4 +92,27 @@ program
   });
 registerEventsCommands(program, { source: "conversations" });
 
-program.parse();
+// ---- top-level error handling ----
+// Commander actions are async; `program.parse()` returns before they settle, so a
+// rejected action would otherwise surface as an unhandled rejection with a raw
+// (minified) stack trace. Route every failure through one clean formatter instead.
+function reportCliError(err: unknown): never {
+  if (err instanceof HasnaHttpError) {
+    const body = err.body as { error?: string; message?: string } | undefined;
+    const detail = body?.error || body?.message;
+    console.error(chalk.red(`Request failed: ${err.method} ${err.path} -> ${err.status}`));
+    if (detail) console.error(chalk.dim(detail));
+    if (err.status === 404) {
+      console.error(
+        chalk.dim("The cloud API did not recognize this route. Ensure the server is up to date."),
+      );
+    }
+    process.exit(1);
+  }
+  console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+  process.exit(1);
+}
+
+process.on("unhandledRejection", reportCliError);
+
+program.parseAsync().catch(reportCliError);
