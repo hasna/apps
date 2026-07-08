@@ -4219,6 +4219,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task provider rules fall back to fixed Codewith pools and reject invalid hints", () => {
+    // Spawns ~40 CLI subprocesses serially; exceeds the 5s default under load.
     const dataDir = freshDataDir("loops-cli-event-provider-fallback-");
     const repo = createGitRepo("loops-cli-event-provider-fallback-repo-");
     const event = {
@@ -4636,7 +4637,7 @@ describe("loops CLI", () => {
     expect(invalid.status).not.toBe(0);
     expect(invalid.stderr).toContain("unsupported provider");
     expect(invalid.stderr).toContain("unsupported-provider");
-  });
+  }, 60000);
 
   test("todos task PR approval routes require non-author GitHub reviewer evidence", () => {
     const dataDir = freshDataDir("loops-cli-event-pr-review-routing-");
@@ -8965,5 +8966,45 @@ describe("loops CLI", () => {
     expect(remaining).toEqual(backupNames.slice(2));
     expect(JSON.parse(runCli(dataDir, ["--json", "runs", "gc-target"]).stdout)).toEqual([]);
     expect(JSON.parse(runCli(dataDir, ["--json", "list"]).stdout)).toHaveLength(1);
+  });
+});
+
+describe("local-only guards under a cloud-flipped client", () => {
+  // With both API vars set the client resolves to the hosted /v1 transport, so
+  // any command that can only act on this machine's local sqlite runtime must
+  // fail loudly instead of silently reading/writing the on-box island (the
+  // split-brain we forbid). No HTTP is issued: the guard fires before any call.
+  const CLOUD_ENV = {
+    HASNA_LOOPS_API_URL: "https://loops.example.test",
+    HASNA_LOOPS_API_KEY: "do-not-print-this-key",
+  } as const;
+  const FLIP_MESSAGE = "not available while flipped to the hosted OpenLoops API";
+
+  test("route admission, drain, live UI, run-now, and tick fail loudly when flipped", () => {
+    const dataDir = freshDataDir("loops-cli-cloud-guard-");
+    for (const args of [
+      ["routes", "create", "todos-task"],
+      ["routes", "drain", "todos-task"],
+      ["events", "handle", "todos-task"],
+      ["events", "drain", "todos-task"],
+      ["ui"],
+      ["run-now", "anything"],
+      ["tick"],
+    ]) {
+      const result = runCli(dataDir, args, undefined, CLOUD_ENV);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(FLIP_MESSAGE);
+      // The bearer key must never leak into output while the guard rejects.
+      expect(result.stdout).not.toContain("do-not-print-this-key");
+      expect(result.stderr).not.toContain("do-not-print-this-key");
+    }
+  });
+
+  test("route preview (dry-run) is store-free, so it is NOT blocked when flipped", () => {
+    const dataDir = freshDataDir("loops-cli-cloud-guard-preview-");
+    // Preview never opens the Store, so the local-only guard must not fire; it may
+    // still fail for missing event input, but not with the flip message.
+    const result = runCli(dataDir, ["routes", "preview", "todos-task"], undefined, CLOUD_ENV);
+    expect(result.stderr).not.toContain(FLIP_MESSAGE);
   });
 });

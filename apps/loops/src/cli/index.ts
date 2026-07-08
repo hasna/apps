@@ -1221,12 +1221,23 @@ routePolicies
   }));
 
 async function handleRouteEvent(kind: string, opts: TodosTaskRouteOptions): Promise<void> {
+  // Route admission writes invocations, work items, and loops through the local
+  // sqlite Store in one transaction and gates on this machine's live concurrency
+  // (countRunningWorkflowStepsByAuthProfile). It has no hosted /v1 equivalent, so
+  // when the client is flipped to the cloud API a real (non-dry-run) create would
+  // silently write to the on-box island — the split-brain we forbid. A dry-run
+  // preview never touches the store, so it stays available in every mode.
+  if (!opts.dryRun) assertLocalOnlyCommand("routes create");
   const event = await readEventEnvelopeInput(opts);
   const result = routeEventByKind(kind, event, opts);
   print(result.value, result.human);
 }
 
 function handleRouteDrain(kind: string, opts: TodosDrainOptions): void {
+  // Draining a source queue admits work through the same local-only Store
+  // transaction path as `routes create`, so it is a local-runtime command: fail
+  // loudly rather than write the on-box island while flipped to the hosted API.
+  assertLocalOnlyCommand("routes drain");
   if (kind !== "todos-task") throw new ValidationError("route drain currently supports kind todos-task");
   const expandedOpts = applyRoutePolicyToDrainOptions(opts, { requireExplicitSafety: true });
   const result = drainTodosTaskRoutes(expandedOpts);
@@ -1817,6 +1828,11 @@ program
   .description("open a live table of active loops")
   .option("--refresh <duration>", "refresh interval", "2s")
   .action(runAction(async (opts: { refresh?: string }) => {
+    // The live table reads this machine's local sqlite runtime directly (active
+    // loops, running runs, local counts via countRuns) on a refresh loop; it has
+    // no hosted /v1 equivalent, so it would show the on-box island's rows while
+    // flipped to the cloud API. Fail loudly instead of rendering the wrong store.
+    assertLocalOnlyCommand("ui");
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
       console.error("OpenLoops UI requires a TTY terminal.");
       console.error("Use `loops list`, `loops runs`, or `loops daemon status` non-interactively.");
