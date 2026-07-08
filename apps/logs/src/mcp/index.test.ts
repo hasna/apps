@@ -82,8 +82,10 @@ test("logs MCP lists tools over stdio", async () => {
     expect(toolNames).toContain("event_watch");
     expect(toolNames).toContain("test_report_search");
     expect(toolNames).toContain("test_report_get");
-    expect(toolNames).toContain("storage_status");
-    expect(toolNames).toContain("storage_push");
+    // The DSN-on-client storage_* tools were removed (no raw RDS DSN on clients).
+    expect(toolNames).not.toContain("storage_push");
+    expect(toolNames).not.toContain("storage_pull");
+    expect(toolNames).not.toContain("storage_sync");
     expect(toolNames).not.toContain(["cloud", "status"].join("_"));
   } finally {
     await client.close().catch(() => {});

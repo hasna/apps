@@ -58,6 +58,28 @@ export interface CountLogsInput {
   group_by?: "level" | "service";
 }
 
+/** Input for {@link LocalStore.createAlertRule}. */
+export interface CreateAlertRuleInput {
+  project_id: string;
+  name: string;
+  service?: string;
+  level?: string;
+  threshold_count?: number;
+  window_seconds?: number;
+  action?: "webhook" | "log";
+  webhook_url?: string;
+}
+
+/** Options for {@link LocalStore.pushUniversalEvent}. */
+export interface PushUniversalEventOptions {
+  /** Auto-detect runtime identity (machine/repo/app) when none was supplied. */
+  detectIdentity?: boolean;
+  /** Project name-or-id used to scope identity detection. */
+  projectNameOrId?: string;
+  /** Explicit environment override. */
+  environment?: string;
+}
+
 /**
  * The @hasna/logs data-plane. Local and API transports implement it identically,
  * so callers hold `Store` and never know (or care) which tier is live.
@@ -83,11 +105,17 @@ export interface Store {
 
   // ── events ──────────────────────────────────────────────
   listEvents(query: EventCatalogQuery): Promise<EventCatalogEntry[]>;
-  getEvent(eventId: string, includeRaw: boolean): Promise<EventCatalogEntry | null>;
+  getEvent(
+    eventId: string,
+    includeRaw: boolean,
+  ): Promise<EventCatalogEntry | null>;
 
   // ── test reports ────────────────────────────────────────
   listTestReports(query: TestReportQuery): Promise<TestReportEntry[]>;
-  getTestReport(reportId: string, includeCases: boolean): Promise<TestReportEntry | null>;
+  getTestReport(
+    reportId: string,
+    includeCases: boolean,
+  ): Promise<TestReportEntry | null>;
 
   // ── projects / pages / jobs ─────────────────────────────
   listProjects(): Promise<Project[]>;
