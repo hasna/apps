@@ -60,6 +60,7 @@ import {
   type UnreadCount,
 } from "./messages.js";
 import { normalizeChannelName } from "./channel-names.js";
+import { normalizeSince } from "./since.js";
 
 const APP = "conversations";
 const RESOURCE = "messages";
@@ -191,7 +192,10 @@ export async function readMessages(
   env: Env = process.env,
 ): Promise<Message[]> {
   const client = resolveConversationsCloud(env);
-  if (!client) return localReadMessages(opts);
+  // Convert relative durations (7d, 24h, 1w…) to an absolute ISO timestamp
+  // before forwarding; ISO/absolute values are left untouched.
+  const since = normalizeSince(opts.since);
+  if (!client) return localReadMessages({ ...opts, since });
 
   const isLatest = Boolean(opts.latest && opts.latest > 0);
   const limit = isLatest
@@ -210,7 +214,7 @@ export async function readMessages(
     to: opts.to,
     channel: opts.channel ? normalizeChannelName(opts.channel) : undefined,
     project_id: opts.project_id,
-    since: opts.since,
+    since,
     since_id: opts.since_id,
     unread_only: opts.unread_only ? true : undefined,
     threads_only: opts.threads_only ? true : undefined,
@@ -238,7 +242,8 @@ export async function searchMessages(
   env: Env = process.env,
 ): Promise<SearchResult[]> {
   const client = resolveConversationsCloud(env);
-  if (!client) return localSearchMessages(opts);
+  const since = normalizeSince(opts.since);
+  if (!client) return localSearchMessages({ ...opts, since });
 
   const query = pruneQuery({
     q: opts.query,
@@ -248,7 +253,7 @@ export async function searchMessages(
     channel: opts.channel ? normalizeChannelName(opts.channel) : undefined,
     from: opts.from,
     to: opts.to,
-    since: opts.since,
+    since,
   });
 
   const res = await client.transport.get<{ messages?: Record<string, unknown>[] }>("/messages", { query });
@@ -272,7 +277,8 @@ export async function readDigest(
   env: Env = process.env,
 ): Promise<DigestResult> {
   const client = resolveConversationsCloud(env);
-  if (!client) return localReadDigest(opts);
+  const since = normalizeSince(opts.since);
+  if (!client) return localReadDigest({ ...opts, since });
 
   const maxBytes = resolveDigestMaxBytes(opts.max_bytes);
   const limit = resolveDigestLimit(opts.limit);
@@ -283,7 +289,7 @@ export async function readDigest(
     channel: channel ?? undefined,
     session: opts.session_id,
     to: opts.to,
-    since: opts.since,
+    since,
     since_id: cursor,
     project_id: opts.project_id,
   });
@@ -307,7 +313,7 @@ export async function readDigest(
     channel,
     session_id: opts.session_id,
     to: opts.to,
-    since: opts.since,
+    since,
     cursor,
     maxBytes,
     limit,

@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import { exportMessages, getUnreadBlockers } from "../../lib/messages.js";
+import { normalizeSince } from "../../lib/since.js";
 // Routed reads/writes: cloud-store dispatches to the self_hosted API when set.
 import { readMessages, readDigest, markRead, markReadByIds, markSessionRead, markChannelRead, markAllRead, searchMessages, editMessage, pinMessage, unpinMessage, getPinnedMessages, sendMessage, getMessageById, deleteMessage } from "../../lib/cloud-store.js";
 import { closeDb } from "../../lib/db.js";
@@ -471,7 +472,7 @@ export function registerMessagingCommands(program: Command): void {
         channel: opts.channel,
         session_id: opts.session,
         from: opts.from,
-        since: opts.since,
+        since: normalizeSince(opts.since),
         until: opts.until,
         format,
       });
@@ -696,7 +697,7 @@ export function registerMessagingCommands(program: Command): void {
       const notifications = readChannelNotifications({
         agent,
         channel: opts.channel,
-        since: opts.since,
+        since: normalizeSince(opts.since),
         unread_only: !opts.all,
         limit: opts.limit,
         mark_read: opts.markRead,
