@@ -21,7 +21,7 @@
  * subnet routing — pure API-client path per the locked architecture.
  */
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
-import type { Task, TaskFilter } from "../types/index.js";
+import type { Agent, Plan, Project, Task, TaskComment, TaskFilter } from "../types/index.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -141,6 +141,46 @@ export interface CloudStats {
 export async function cloudGetStats(client: HasnaStorageClient): Promise<CloudStats> {
   const raw = await client.transport.get<unknown>("/stats");
   return (raw ?? {}) as CloudStats;
+}
+
+/** List registered agents from the cloud (`GET /v1/agents`). */
+export async function cloudListAgents(client: HasnaStorageClient): Promise<Agent[]> {
+  const res = await client.list<Agent>("agents");
+  const envelope = res.raw as { agents?: Agent[] } | undefined;
+  return Array.isArray(envelope?.agents) ? envelope!.agents : res.items;
+}
+
+/** List projects from the cloud (`GET /v1/projects`). */
+export async function cloudListProjects(client: HasnaStorageClient): Promise<Project[]> {
+  const res = await client.list<Project>("projects");
+  const envelope = res.raw as { projects?: Project[] } | undefined;
+  return Array.isArray(envelope?.projects) ? envelope!.projects : res.items;
+}
+
+/** List plans from the cloud (`GET /v1/plans`), optionally scoped to a project. */
+export async function cloudListPlans(client: HasnaStorageClient, projectId?: string): Promise<Plan[]> {
+  const query = projectId ? { project_id: projectId } : {};
+  const res = await client.list<Plan>("plans", { query });
+  const envelope = res.raw as { plans?: Plan[] } | undefined;
+  return Array.isArray(envelope?.plans) ? envelope!.plans : res.items;
+}
+
+/**
+ * Add a comment to a task in the cloud (`POST /v1/tasks/:id/comments`). The server
+ * validates that the task exists and returns 404 (surfaced as a thrown error by the
+ * transport) when it does not — so a comment on a missing cloud task fails loudly
+ * instead of silently succeeding.
+ */
+export async function cloudAddComment(
+  client: HasnaStorageClient,
+  taskId: string,
+  input: { content: string; agent_id?: string; session_id?: string; type?: string; progress_pct?: number },
+): Promise<TaskComment> {
+  const raw = await client.transport.post<unknown>(`/tasks/${encodeURIComponent(taskId)}/comments`, input);
+  if (raw && typeof raw === "object" && "comment" in (raw as Record<string, unknown>)) {
+    return (raw as { comment: TaskComment }).comment;
+  }
+  return raw as TaskComment;
 }
 
 /**

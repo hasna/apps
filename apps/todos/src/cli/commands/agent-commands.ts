@@ -6,6 +6,7 @@ import { releaseAgent, listAgents, normalizeGeneratedAgentNames, suggestAgentNam
 import { createTaskList, listTaskLists, deleteTaskList } from "../../db/task-lists.js";
 import { listTasks } from "../../db/tasks.js";
 import { getPackageVersion, handleError, autoProject, output } from "../helpers.js";
+import { getTodosCloudClient, cloudListAgents } from "../cloud-router.js";
 
 export function registerAgentCommands(program: Command) {
   // init
@@ -105,7 +106,8 @@ export function registerAgentCommands(program: Command) {
     .action(async () => {
       const globalOpts = program.opts();
       try {
-        const agents = listAgents();
+        const cloud = getTodosCloudClient();
+        const agents = cloud ? await cloudListAgents(cloud) : listAgents();
         if (globalOpts.json) {
           output(agents, true);
           return;

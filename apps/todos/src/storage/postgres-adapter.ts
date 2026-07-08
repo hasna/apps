@@ -155,6 +155,9 @@ export function createPostgresTodosStorageAdapter(
       logTaskChange: (taskId, action, field, oldValue, newValue, agentId, context) =>
         logTaskChange(taskId, action, field, oldValue, newValue, agentId, store, context),
       addComment: (input, context) => addComment(input, store, context),
+      getComments: async (taskId) => (await store.list<TaskComment>("comments"))
+        .filter((comment) => comment.task_id === taskId)
+        .sort((a, b) => a.created_at.localeCompare(b.created_at)),
       getTaskHistory: async (taskId) => (await store.list<TaskHistory>("audit_history"))
         .filter((entry) => entry.task_id === taskId)
         .sort((a, b) => a.created_at.localeCompare(b.created_at)),

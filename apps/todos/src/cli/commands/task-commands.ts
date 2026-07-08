@@ -757,9 +757,26 @@ export function registerTaskCommands(program: Command) {
         const active = lt({ status: "in_progress", assigned_to: globalOpts.agent! });
         if (active.length > 0) resolvedId = active[0]!.id;
       }
+      const cloud = getTodosCloudClient();
+
+      if (!resolvedId && cloud && globalOpts.agent) {
+        // Cloud mode: find the agent's current in-progress task from the shared store.
+        const active = await cloudListTasks(cloud, { status: "in_progress", assigned_to: globalOpts.agent, limit: 1 } as never);
+        if (active.length > 0) resolvedId = active[0]!.id;
+      }
       if (!resolvedId) { console.error(chalk.red("No task ID given and no active task found. Pass an ID or use --agent.")); process.exit(1); }
 
-      const task = getTaskWithRelations(resolvedId);
+      let task: any;
+      if (cloud) {
+        const remote = await cloudGetTask(cloud, resolvedId);
+        // The /v1 API returns the task row without relation graphs; default the
+        // relation arrays so the detail renderer below never touches undefined.
+        task = remote
+          ? { subtasks: [], dependencies: [], blocked_by: [], comments: [], checklist: [], ...remote, tags: remote.tags ?? [] }
+          : null;
+      } else {
+        task = getTaskWithRelations(resolvedId);
+      }
       if (!task) { console.error(chalk.red(`Task not found: ${id || resolvedId}`)); process.exit(1); }
 
       if (globalOpts.json) {
@@ -796,7 +813,7 @@ export function registerTaskCommands(program: Command) {
       if (task.estimated_minutes) console.log(`  ${chalk.dim("Estimate:")}  ${task.estimated_minutes}m`);
       if (task.tags.length > 0) console.log(`  ${chalk.dim("Tags:")}      ${task.tags.join(", ")}`);
 
-      const unfinishedDeps = task.dependencies.filter(d => d.status !== "completed" && d.status !== "cancelled");
+      const unfinishedDeps = task.dependencies.filter((d: any) => d.status !== "completed" && d.status !== "cancelled");
       if (task.dependencies.length > 0) {
         console.log(chalk.bold(`\n  Depends on (${task.dependencies.length}):`));
         for (const dep of task.dependencies) {

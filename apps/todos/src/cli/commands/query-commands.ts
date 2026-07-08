@@ -59,6 +59,7 @@ import {
 import { createLocalReport, renderLocalReportMarkdown } from "../../lib/local-reports.js";
 import type { BoardLane, BoardScope, CalendarEventKind, TaskPriority } from "../../types/index.js";
 import { autoProject, handleError, output, formatTaskLine, resolveTaskId, resolveExplicitProject } from "../helpers.js";
+import { getTodosCloudClient, cloudGetStats, cloudCountTasks, cloudListTasks } from "../cloud-router.js";
 import { TASK_STATUSES } from "../../types/index.js";
 
 function parseJsonObjectOption(value: string | undefined, label: string): Record<string, unknown> | undefined {
@@ -347,10 +348,45 @@ export function registerQueryCommands(program: Command) {
     .action(async (opts) => {
       const globalOpts = program.opts();
       const json = opts.json || globalOpts.json;
-      const db = getDatabase();
       const filters: Record<string, string> = {};
       if (opts.project) filters.project_id = opts.project;
-      const s = getStatus(Object.keys(filters).length ? filters : undefined, opts.agent, undefined, db);
+
+      const cloud = getTodosCloudClient();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let s: any;
+      if (cloud) {
+        // self_hosted cloud routing: build the health snapshot from the shared
+        // cloud dataset (counts + active/next lists) instead of the local mirror.
+        const baseFilter = opts.project ? { project_id: opts.project } : {};
+        const [stats, pending, in_progress, completed, activeTasks, nextTasks] = await Promise.all([
+          cloudGetStats(cloud),
+          cloudCountTasks(cloud, { ...baseFilter, status: "pending" } as never),
+          cloudCountTasks(cloud, { ...baseFilter, status: "in_progress" } as never),
+          cloudCountTasks(cloud, { ...baseFilter, status: "completed" } as never),
+          cloudListTasks(cloud, { ...baseFilter, status: "in_progress", limit: 5 } as never),
+          cloudListTasks(cloud, { ...baseFilter, status: "pending", limit: 1 } as never),
+        ]);
+        s = {
+          source: "cloud",
+          pending,
+          in_progress,
+          completed,
+          total: (stats.tasks as number | undefined) ?? pending + in_progress + completed,
+          active_work: activeTasks.map((t) => ({
+            id: t.id,
+            short_id: t.short_id ?? null,
+            title: t.title,
+            assigned_to: t.assigned_to ?? null,
+            locked_by: t.locked_by ?? null,
+          })),
+          next_task: nextTasks[0] ?? null,
+          stale_count: 0,
+          overdue_recurring: 0,
+        };
+      } else {
+        const db = getDatabase();
+        s = getStatus(Object.keys(filters).length ? filters : undefined, opts.agent, undefined, db);
+      }
       if (json) { console.log(JSON.stringify(s, null, 2)); return; }
       console.log(`Tasks: ${chalk.yellow(String(s.pending))} pending | ${chalk.blue(String(s.in_progress))} active | ${chalk.green(String(s.completed))} done | ${s.total} total`);
       if (s.stale_count > 0) console.log(chalk.red(`${s.stale_count} stale tasks (stuck in_progress)`));

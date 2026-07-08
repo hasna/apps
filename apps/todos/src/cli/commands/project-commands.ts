@@ -10,6 +10,7 @@ import {
   getProjectByPath,
 } from "../../db/projects.js";
 import { addComment } from "../../db/comments.js";
+import { getTodosCloudClient, cloudAddComment, cloudListProjects } from "../cloud-router.js";
 import { searchTasks } from "../../lib/search.js";
 import {
   deleteSearchView,
@@ -197,10 +198,11 @@ export function registerProjectCommands(program: Command) {
     .alias("log-progress")
     .description("Add a comment to a task (alias: log-progress, for recording intermediate progress)")
     .option("--pct <percent>", "Progress percentage (0-100) to record alongside the note")
-    .action((id: string, text: string, opts: { pct?: string }) => {
+    .action(async (id: string, text: string, opts: { pct?: string }) => {
       const globalOpts = program.opts();
       const resolvedId = resolveTaskId(id);
       let content = text;
+      let progressPct: number | undefined;
       if (opts.pct !== undefined) {
         const pct = parseInt(opts.pct, 10);
         if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
@@ -208,18 +210,31 @@ export function registerProjectCommands(program: Command) {
           process.exit(1);
         }
         content = `[progress ${pct}%] ${text}`;
+        progressPct = pct;
       }
-      const comment = addComment({
-        task_id: resolvedId,
-        content,
-        agent_id: globalOpts.agent,
-        session_id: globalOpts.session,
-      });
+      try {
+        const cloud = getTodosCloudClient();
+        const comment = cloud
+          ? await cloudAddComment(cloud, resolvedId, {
+              content,
+              agent_id: globalOpts.agent,
+              session_id: globalOpts.session,
+              ...(progressPct !== undefined ? { type: "progress", progress_pct: progressPct } : {}),
+            })
+          : addComment({
+              task_id: resolvedId,
+              content,
+              agent_id: globalOpts.agent,
+              session_id: globalOpts.session,
+            });
 
-      if (globalOpts.json) {
-        output(comment, true);
-      } else {
-        console.log(chalk.green("Comment added."));
+        if (globalOpts.json) {
+          output(comment, true);
+        } else {
+          console.log(chalk.green("Comment added."));
+        }
+      } catch (e) {
+        handleError(e);
       }
     });
 
@@ -579,7 +594,8 @@ export function registerProjectCommands(program: Command) {
         return;
       }
 
-      const projects = listProjects();
+      const cloud = getTodosCloudClient();
+      const projects = cloud ? await cloudListProjects(cloud) : listProjects();
       if (globalOpts.json) {
         output(projects, true);
         return;

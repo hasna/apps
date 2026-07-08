@@ -12,6 +12,7 @@ import {
 import { createTask } from "../../db/tasks.js";
 import { inspectPlanArtifact, readPlanArtifact, writePlanArtifact } from "../../lib/plan-artifacts.js";
 import { formatTaskLine, autoProject, handleError, output } from "../helpers.js";
+import { getTodosCloudClient, cloudListPlans } from "../cloud-router.js";
 
 function resolvePlanCliRef(ref: string, projectId: string | undefined): string {
   const db = getDatabase();
@@ -41,9 +42,12 @@ export function registerPlanTemplateCommands(program: Command) {
     .option("--write-artifacts", "Write local Markdown artifacts for all project-scoped plans in scope")
     .option("--delete <id>", "Delete a plan")
     .option("--complete <id>", "Mark a plan as completed")
-    .action((opts) => {
+    .action(async (opts) => {
       const globalOpts = program.opts();
-      const projectId = autoProject(globalOpts);
+      const cloud = getTodosCloudClient();
+      // In cloud mode the auto-detected project id is a LOCAL id that does not map
+      // to the shared cloud dataset, so it must not silently scope the cloud list.
+      const projectId = cloud ? undefined : autoProject(globalOpts);
 
       if (opts.add) {
         let plan: ReturnType<typeof createPlan>;
@@ -204,7 +208,7 @@ export function registerPlanTemplateCommands(program: Command) {
       }
 
       // Default: list plans
-      const plans = listPlans(projectId);
+      const plans = cloud ? await cloudListPlans(cloud, projectId) : listPlans(projectId);
 
       if (globalOpts.json) {
         output(plans, true);

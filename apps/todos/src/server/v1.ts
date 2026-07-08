@@ -7,7 +7,7 @@
  * require `todos:write` (a `todos:*` key satisfies both). This is a real wrapper
  * over the core storage lib — there are NO stubs; unimplemented routes 404.
  */
-import type { CreateProjectInput, CreateTaskInput, UpdateTaskInput } from "../types/index.js";
+import type { CreateProjectInput, CreateTaskInput, TaskComment, UpdateTaskInput } from "../types/index.js";
 import type { TodosStorageContext, TodosStorageSnapshot } from "../storage/interfaces.js";
 import { getCloudStorageAdapter, getCloudVerifier, ensureCloudSchema } from "./cloud.js";
 
@@ -172,6 +172,44 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
       }
       // /v1/tasks/:id[/action]
       if (action) {
+        // ── /v1/tasks/:id/comments — task comments (add/list) ──
+        // The comment path is the only task sub-resource that carries a richer body
+        // (content/type/progress) and must validate the parent task exists so a
+        // comment on a missing cloud task 404s loudly (parity with local, which
+        // throws TaskNotFoundError) instead of silently writing an orphan row.
+        if (action === "comments") {
+          if (method === "GET") {
+            const comments = await store.audit.getComments(id);
+            return json({ comments, count: comments.length });
+          }
+          if (method === "POST") {
+            const body = (await readJson<{
+              content?: string;
+              agent_id?: string;
+              session_id?: string;
+              type?: TaskComment["type"];
+              progress_pct?: number;
+            }>(req)) ?? {};
+            if (typeof body.content !== "string" || !body.content.trim()) {
+              return error(400, "content is required");
+            }
+            const target = await store.tasks.get(id);
+            if (!target) return error(404, "task not found");
+            const comment = await store.audit.addComment(
+              {
+                task_id: id,
+                content: body.content,
+                agent_id: body.agent_id ?? principal.agent ?? undefined,
+                session_id: body.session_id,
+                type: body.type,
+                progress_pct: body.progress_pct,
+              },
+              contextFromPrincipal(principal, body),
+            );
+            return json({ comment }, 201);
+          }
+          return error(405, `method ${method} not allowed on /v1/tasks/:id/comments`);
+        }
         const body = (await readJson<{ agent_id?: string; reason?: string }>(req)) ?? {};
         const agentId = body.agent_id || principal.agent || "todos-serve";
         if (action === "start" && method === "POST") {

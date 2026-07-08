@@ -23,7 +23,7 @@ import {
 import {
   createPlan, listPlans, getPlan, updatePlan, deletePlan,
 } from "../../db/plans.js";
-import { getTodosCloudClient, cloudTaskAction, cloudUpdateTask } from "../../cli/cloud-router.js";
+import { getTodosCloudClient, cloudTaskAction, cloudUpdateTask, cloudAddComment } from "../../cli/cloud-router.js";
 import {
   addComment, listComments, updateComment, deleteComment,
 } from "../../db/comments.js";
@@ -2656,6 +2656,14 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_id, body, author }) => {
         try {
+          // self_hosted cloud routing: comment straight against <app>.hasna.xyz/v1
+          // (skip local id-resolution which 404s cloud-only tasks). Server 404s a
+          // genuinely missing task, surfaced as isError below.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            await cloudAddComment(cloud, task_id, { content: body, agent_id: author });
+            return { content: [{ type: "text" as const, text: `Comment added to ${task_id.slice(0,8)}: ${body.slice(0, 50)}${body.length > 50 ? "..." : ""}` }] };
+          }
           const resolvedId = resolveId(task_id);
           const resolvedAuthor = author ? resolveId(author, "agents") : undefined;
           const comment = addComment({ task_id: resolvedId, content: body, agent_id: resolvedAuthor });

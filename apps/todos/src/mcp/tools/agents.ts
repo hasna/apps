@@ -3,6 +3,7 @@ import { z } from "zod";
 import { registerAgent, isAgentConflict, releaseAgent, getAgent, getAgentByName, listAgents, updateAgent, updateAgentActivity, archiveAgent, unarchiveAgent, getAvailableNamesFromPool } from "../../db/agents.js";
 import { getAgentPoolForProject } from "../../lib/config.js";
 import { getDatabase } from "../../db/database.js";
+import { getTodosCloudClient, cloudListAgents } from "../../cli/cloud-router.js";
 
 interface AgentFocus {
   agent_id: string;
@@ -192,7 +193,12 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
       },
       async ({ include_archived }) => {
         try {
-          const agents = listAgents({ include_archived: include_archived ?? false });
+          // self_hosted cloud routing: list agents from the shared <app>.hasna.xyz/v1
+          // dataset rather than this machine's local SQLite island.
+          const cloud = getTodosCloudClient();
+          const agents = cloud
+            ? await cloudListAgents(cloud)
+            : listAgents({ include_archived: include_archived ?? false });
           if (agents.length === 0) {
             return { content: [{ type: "text" as const, text: "No agents registered." }] };
           }

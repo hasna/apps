@@ -9,7 +9,7 @@ import { z } from "zod";
 import type { Task } from "../../types/index.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 import { compactHandoff, compactJson, compactStatus, compactTask } from "../token-utils.js";
-import { getTodosCloudClient, cloudTaskAction, cloudListTasks } from "../../cli/cloud-router.js";
+import { getTodosCloudClient, cloudTaskAction, cloudListTasks, cloudGetStats, cloudCountTasks } from "../../cli/cloud-router.js";
 
 interface TaskWorkflowContext {
   shouldRegisterTool: (name: string) => boolean;
@@ -262,6 +262,57 @@ export function registerTaskWorkflowTools(server: McpServer, ctx: TaskWorkflowCo
       },
       async ({ agent_id, project_id, task_list_id, explain_blocked, detail, max_description_chars }) => {
         try {
+          // self_hosted cloud routing: assemble session context from the shared
+          // cloud dataset (queue counts + active/next lists). Overdue and handoff
+          // graphs are local-only concepts and default to empty in cloud mode.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const baseFilter: Record<string, unknown> = {};
+            if (project_id) baseFilter.project_id = project_id;
+            if (task_list_id) baseFilter.task_list_id = task_list_id;
+            const [stats, pending, in_progress, completed, activeTasks, nextTasks] = await Promise.all([
+              cloudGetStats(cloud),
+              cloudCountTasks(cloud, { ...baseFilter, status: "pending" } as never),
+              cloudCountTasks(cloud, { ...baseFilter, status: "in_progress" } as never),
+              cloudCountTasks(cloud, { ...baseFilter, status: "completed" } as never),
+              cloudListTasks(cloud, { ...baseFilter, status: "in_progress", limit: 5 } as never),
+              cloudListTasks(cloud, { ...baseFilter, status: "pending", limit: 1 } as never),
+            ]);
+            const cloudStatus = {
+              source: "cloud",
+              total: (stats.tasks as number | undefined) ?? pending + in_progress + completed,
+              pending,
+              in_progress,
+              completed,
+              active_work: activeTasks,
+              next_task: nextTasks[0] ?? null,
+              stale_count: 0,
+              overdue_recurring: 0,
+            };
+            const next_task = nextTasks[0] ?? null;
+            const payload = {
+              status: cloudStatus,
+              next_task,
+              overdue_count: 0,
+              latest_handoff: null,
+              as_of: new Date().toISOString(),
+            };
+            if (detail === "full") {
+              return { content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }] };
+            }
+            return {
+              content: [{
+                type: "text" as const,
+                text: compactJson({
+                  status: compactStatus(cloudStatus),
+                  next_task: next_task ? compactTask(next_task, max_description_chars || 180) : null,
+                  overdue_count: 0,
+                  latest_handoff: null,
+                  as_of: payload.as_of,
+                }),
+              }],
+            };
+          }
           const { getStatus, getNextTask, getOverdueTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const { getLatestHandoff } = require("../../db/handoffs.js") as typeof import("../../db/handoffs.js");
           const filters: Record<string, string> = {};

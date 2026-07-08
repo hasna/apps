@@ -8,7 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Task } from "../../types/index.js";
 import { compactJson, compactStatus, compactTask, truncateText } from "../token-utils.js";
-import { getTodosCloudClient, cloudGetStats, cloudGetTask, cloudCountTasks } from "../../cli/cloud-router.js";
+import { getTodosCloudClient, cloudGetStats, cloudGetTask, cloudCountTasks, cloudAddComment } from "../../cli/cloud-router.js";
 
 interface TaskAdvContext {
   shouldRegisterTool: (name: string) => boolean;
@@ -572,6 +572,15 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
       },
       async ({ task_id, body, author }) => {
         try {
+          // self_hosted cloud routing: comment straight against <app>.hasna.xyz/v1.
+          // Skip local id-resolution (it hits local SQLite and 404s cloud-only
+          // tasks); pass the id through so the cloud dataset is authoritative. The
+          // server 404s a genuinely missing task, surfaced as isError below.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            await cloudAddComment(cloud, task_id, { content: body, agent_id: author });
+            return { content: [{ type: "text" as const, text: `Comment added to ${task_id.slice(0,8)}` }] };
+          }
           const { addComment } = require("../../db/comments.js") as typeof import("../../db/comments.js");
           const resolvedId = resolveId(task_id);
           const resolvedAuthor = author ? resolveId(author, "agents") : undefined;

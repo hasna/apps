@@ -157,6 +157,7 @@ export interface TodosAuditStore {
     context?: TodosStorageContext,
   ): MaybePromise<TaskHistory>;
   addComment(input: CreateCommentInput, context?: TodosStorageContext): MaybePromise<TaskComment>;
+  getComments(taskId: string, context?: TodosStorageContext): MaybePromise<TaskComment[]>;
   getTaskHistory(taskId: string, context?: TodosStorageContext): MaybePromise<TaskHistory[]>;
   getRecentActivity(limit?: number, context?: TodosStorageContext): MaybePromise<TaskHistory[]>;
 }

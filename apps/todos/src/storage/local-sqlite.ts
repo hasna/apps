@@ -57,7 +57,7 @@ import {
   getTaskHistory,
   getRecentActivity,
 } from "../db/audit.js";
-import { addComment } from "../db/comments.js";
+import { addComment, listComments } from "../db/comments.js";
 import { getDatabase } from "../db/database.js";
 import type { TodosStorageAdapter } from "./interfaces.js";
 import {
@@ -141,6 +141,7 @@ export function createLocalSqliteTodosStorageAdapter(
       logTaskChange: (taskId, action, field, oldValue, newValue, agentId) =>
         logTaskChange(taskId, action, field, oldValue, newValue, agentId, database()),
       addComment: (input) => addComment(input, database()),
+      getComments: (taskId) => listComments(taskId, database()),
       getTaskHistory: (taskId) => getTaskHistory(taskId, database()),
       getRecentActivity: (limit) => getRecentActivity(limit, database()),
     },
