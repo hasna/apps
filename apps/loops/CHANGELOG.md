@@ -7,6 +7,17 @@ unless noted.
 
 ## Unreleased
 
+### Added
+
+- `loops-mcp` now serves a shared Streamable HTTP transport (default
+  `http://127.0.0.1:8890/mcp`, `GET /health`) in addition to stdio. Running
+  it as one long-lived daemon with the routing env baked in (e.g.
+  `HASNA_LOOPS_API_URL` + `HASNA_LOOPS_API_KEY`) makes every connecting agent
+  route CRUD deterministically to the same backend regardless of the caller's
+  own shell environment (including non-login SSH). Select the transport with
+  `--http`/`MCP_HTTP=1` (default) or `--stdio`/`MCP_STDIO=1`; the port is set
+  via `--port` or `MCP_HTTP_PORT`.
+
 ### Changed
 
 - Documentation now names `loops-serve` as the Postgres-backed Hasna-owned

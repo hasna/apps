@@ -39,9 +39,11 @@ async function connectMcp(
 ): Promise<{ client: Client; transport: StdioClientTransport }> {
   const transport = new StdioClientTransport({
     command: "bun",
-    args: ["run", "src/mcp/index.ts"],
+    // MCP_STDIO=1: the server now defaults to shared Streamable HTTP, so these
+    // stdio integration tests must explicitly opt into the stdio transport.
+    args: ["run", "src/mcp/index.ts", "--stdio"],
     cwd: process.cwd(),
-    env: cleanEnv({ LOOPS_DATA_DIR: dataDir, ...env }),
+    env: cleanEnv({ LOOPS_DATA_DIR: dataDir, MCP_STDIO: "1", ...env }),
     stderr: "pipe",
   });
   const client = new Client({ name: "open-loops-mcp-test", version: "0.0.0" });

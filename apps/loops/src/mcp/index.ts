@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
 import { z } from "zod/v3";
 import { daemonStatus } from "../daemon/control.js";
 import { runDoctor } from "../lib/doctor.js";
@@ -1030,8 +1031,28 @@ async function main(): Promise<void> {
     console.log(JSON.stringify(listToolsForCli(), null, 2));
     return;
   }
-  const server = createLoopsMcpServer();
-  await server.connect(new StdioServerTransport());
+
+  // Explicit stdio opt-out (--stdio / MCP_STDIO=1) keeps the legacy
+  // one-process-per-agent transport for callers that need it.
+  if (isStdioMode()) {
+    const server = createLoopsMcpServer();
+    await server.connect(new StdioServerTransport());
+    return;
+  }
+
+  // Default: shared Streamable HTTP server (one process, many agents).
+  // Env (e.g. HASNA_LOOPS_API_URL/API_KEY) is baked into this long-lived
+  // daemon, so every agent that connects routes deterministically —
+  // independent of the caller's own shell environment.
+  const handle = await startMcpHttpServer(() => createLoopsMcpServer(), {
+    port: resolveMcpHttpPort(),
+  });
+  process.on("SIGINT", () => {
+    void handle.close().finally(() => process.exit(0));
+  });
+  process.on("SIGTERM", () => {
+    void handle.close().finally(() => process.exit(0));
+  });
 }
 
 if (import.meta.main) {
