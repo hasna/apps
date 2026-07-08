@@ -1,0 +1,38 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "slides",
+  "class": "library",
+  "contractVersion": "v1",
+  "kitVersion": "0.1.0",
+  "description": "Headless presentation-deck SDK: author slides in Markdown or HTML, model themes/transitions/fragments/vertical stacks, serialize to JSON, and export a self-contained reveal.js HTML deck. Primary consumer surface is the headless SDK (\".\") plus a reveal.js React viewer (\"./react\"). The CLI/MCP/HTTP-serve/Postgres surface is deferred scaffolding, tracked here for a future release.",
+  "bins": [],
+  "storage": {
+    "mode": "local",
+    "envPrefix": "HASNA_SLIDES_",
+    "aliasEnvPrefix": "SLIDES_",
+    "databaseUrlSecretRef": "hasna/oss/slides/database-url",
+    "sqlitePath": "~/.hasna/slides/slides.db"
+  },
+  "metadata": {
+    "surfaces": ["sdk", "react"],
+    "exports": {
+      ".": "Headless deck SDK — createDeck/loadDeck, slide CRUD, JSON serialize, standalone HTML export.",
+      "./react": "reveal.js-backed <Presentation>/<Deck> viewer (arrow-key nav, overview, fragments, notes)."
+    },
+    "library": "reveal.js@6.0.1 (MIT)",
+    "service": {
+      "status": "deferred",
+      "port": 19510,
+      "healthPath": "/health",
+      "readyPath": "/ready",
+      "versionPath": "/version",
+      "apiVersion": "v1",
+      "auth": "api-key",
+      "signingSecretSecretRef": "hasna/oss/slides/api-key-signing-secret"
+    },
+    "client": {
+      "apiUrlEnv": "SLIDES_API_URL",
+      "apiKeyEnv": "SLIDES_API_KEY"
+    }
+  }
+}
