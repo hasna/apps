@@ -1,16 +1,16 @@
 import type { Scenario, Run, Result, ResultStatus } from "../types/index.js";
 import { BudgetExceededError } from "../types/index.js";
 import { runEvalScenario } from "./eval-runner.js";
-import { createRun, getRun, updateRun } from "../db/runs.js";
-import { createResult, getResult, updateResult } from "../db/results.js";
+import { createRun, getRun, updateRun } from "../store/index.js";
+import { createResult, getResult, updateResult } from "../store/index.js";
 import { mkdirSync } from "fs";
 import { join } from "path";
 import { analyzeFailure } from "./failure-analyzer.js";
 import { estimateRunCostCents } from "./costs.js";
-import { createScreenshot } from "../db/screenshots.js";
-import { createStepResult, updateStepResult } from "../db/step-results.js";
-import { getScenario, listScenarios, updateScenarioPassedCache } from "../db/scenarios.js";
-import { getPersona } from "../db/personas.js";
+import { createScreenshot } from "../store/index.js";
+import { createStepResult, updateStepResult } from "../store/index.js";
+import { getScenario, listScenarios, updateScenarioPassedCache } from "../store/index.js";
+import { getPersona } from "../store/index.js";
 import { launchBrowser, getPage, closeBrowser } from "./browser.js";
 import { Screenshotter } from "./screenshotter.js";
 import { createClientForModel, resolveProviderApiKeyForModel, runAgentLoop, resolveModel } from "./ai-client.js";
@@ -256,7 +256,7 @@ export async function runSingleScenario(
   if (options.cacheMaxAgeMs && options.cacheMaxAgeMs > 0 && scenario.lastPassedAt && scenario.lastPassedUrl === options.url) {
     const age = Date.now() - new Date(scenario.lastPassedAt).getTime();
     if (age < options.cacheMaxAgeMs) {
-      const cached = createResult({ runId, scenarioId: scenario.id, model, stepsTotal: 0 });
+      const cached = await createResult({ runId, scenarioId: scenario.id, model, stepsTotal: 0 });
       return updateResult(cached.id, {
         status: "passed",
         reasoning: `Cache hit: passed ${Math.round(age / 1000)}s ago at ${options.url}`,
@@ -276,9 +276,9 @@ export async function runSingleScenario(
 
   // Resolve persona before creating result so we can store the name
   const resolvedPersonaId = options.personaId ?? scenario.personaId;
-  const persona = resolvedPersonaId ? getPersona(resolvedPersonaId) : null;
+  const persona = resolvedPersonaId ? await getPersona(resolvedPersonaId) : null;
 
-  const result = createResult({
+  const result = await createResult({
     runId,
     scenarioId: scenario.id,
     model,
@@ -368,7 +368,7 @@ export async function runSingleScenario(
     if (persona?.auth) {
       const loginResult = await ensurePersonaAuthenticated(page, persona, options.url);
       if (!loginResult.success) {
-        const updatedResult = updateResult(result.id, {
+        const updatedResult = await updateResult(result.id, {
           status: "error",
           error: `Persona auth failed (${loginResult.method}): ${loginResult.error}`,
           durationMs: Date.now() - new Date(result.createdAt).getTime(),
@@ -380,7 +380,7 @@ export async function runSingleScenario(
       // Authenticate using the scenario's authConfig (email/password or token-based)
       const loginResult = await loginWithAuthConfig(page, scenario.authConfig, options.url);
       if (!loginResult.success && loginResult.method !== "none") {
-        const updatedResult = updateResult(result.id, {
+        const updatedResult = await updateResult(result.id, {
           status: "error",
           error: `Auth failed (${loginResult.method}): ${loginResult.error}`,
           durationMs: Date.now() - new Date(result.createdAt).getTime(),
@@ -417,13 +417,13 @@ export async function runSingleScenario(
         behaviors: (persona as import("../types/index.js").Persona).behaviors,
         painPoints: (persona as import("../types/index.js").Persona).painPoints,
       } : null,
-      onStep: (stepEvent) => {
+      onStep: async (stepEvent) => {
         let stepDurationMs: number | undefined;
         if (stepEvent.type === "tool_call") {
           currentStep = stepEvent.stepNumber;
           stepStartTimes.set(stepEvent.stepNumber, Date.now());
           // Create step_result record
-          const stepResult = createStepResult({
+          const stepResult = await createStepResult({
             resultId: result.id,
             stepNumber: stepEvent.stepNumber,
             action: stepEvent.toolName ?? `step-${stepEvent.stepNumber}`,
@@ -442,7 +442,7 @@ export async function runSingleScenario(
           const stepResultId = stepResultIds.get(stepEvent.stepNumber);
           if (stepResultId) {
             const isSuccess = !stepEvent.toolResult?.toLowerCase().includes("error") && !stepEvent.toolResult?.toLowerCase().includes("failed");
-            updateStepResult(stepResultId, {
+            await updateStepResult(stepResultId, {
               status: isSuccess ? "passed" : "failed",
               toolResult: stepEvent.toolResult,
               durationMs: stepDurationMs,
@@ -468,7 +468,7 @@ export async function runSingleScenario(
     if (options.engine !== "lightpanda" && options.engine !== "bun") {
       for (const ss of agentResult.screenshots) {
         try {
-          createScreenshot({
+          await createScreenshot({
             resultId: result.id,
             stepNumber: ss.stepNumber,
             action: ss.action,
@@ -509,7 +509,7 @@ export async function runSingleScenario(
           },
         }
       : {};
-    let updatedResult = updateResult(result.id, {
+    let updatedResult = await updateResult(result.id, {
       status: assertionOutcome.status,
       reasoning: assertionOutcome.reasoning || undefined,
       stepsCompleted: agentResult.stepsCompleted,
@@ -528,14 +528,14 @@ export async function runSingleScenario(
     if (assertionOutcome.status === "failed" || assertionOutcome.status === "error") {
       const failureAnalysis = analyzeFailure(null, assertionOutcome.reasoning ?? null);
       if (failureAnalysis) {
-        updatedResult = updateResult(result.id, { failureAnalysis });
+        updatedResult = await updateResult(result.id, { failureAnalysis });
       }
     }
 
     // Update the cache when the scenario passes
     if (assertionOutcome.status === "passed") {
       try {
-        updateScenarioPassedCache(scenario.id, options.url);
+        await updateScenarioPassedCache(scenario.id, options.url);
       } catch {
         // Non-critical — don't fail the run if cache update fails
       }
@@ -549,7 +549,7 @@ export async function runSingleScenario(
     if (stopNetworkLogging) { try { stopNetworkLogging(); } catch {} }
     closeTrackedSession(result.id);
     const errorMsg = error instanceof Error ? error.message : String(error);
-    let updatedResult = updateResult(result.id, {
+    let updatedResult = await updateResult(result.id, {
       status: "error",
       error: errorMsg,
       durationMs: Date.now() - new Date(result.createdAt).getTime(),
@@ -558,7 +558,7 @@ export async function runSingleScenario(
     // Wire failure analysis for caught errors
     const failureAnalysis = analyzeFailure(errorMsg, null);
     if (failureAnalysis) {
-      updatedResult = updateResult(result.id, { failureAnalysis });
+      updatedResult = await updateResult(result.id, { failureAnalysis });
     }
 
     emit({ type: "scenario:error", scenarioId: scenario.id, scenarioName: scenario.name, error: errorMsg, runId });
@@ -567,8 +567,8 @@ export async function runSingleScenario(
     // Store HAR path on the result (even for failures — still captures useful network data)
     if (harPath) {
       try {
-        const existing = getResult(result.id);
-        updateResult(result.id, { metadata: { ...(existing?.metadata ?? {}), harPath } });
+        const existing = await getResult(result.id);
+        await updateResult(result.id, { metadata: { ...(existing?.metadata ?? {}), harPath } });
       } catch { /* ignore */ }
     }
     // Never let browser shutdown mask the underlying error or leak a process.
@@ -604,7 +604,7 @@ export async function runBatch(
     }
   }
 
-  const run = createRun({
+  const run = await createRun({
     url: options.url,
     model,
     headed: options.headed,
@@ -614,14 +614,14 @@ export async function runBatch(
     flakinessThreshold,
   });
 
-  updateRun(run.id, { status: "running", total: scenarios.length });
+  await updateRun(run.id, { status: "running", total: scenarios.length });
 
   // Try topological sort if dependencies exist, fallback to original order
   let sortedScenarios = scenarios;
   try {
-    const { topologicalSort } = await import("../db/flows.js");
+    const { topologicalSort } = await import("../store/index.js");
     const scenarioIds = scenarios.map((s) => s.id);
-    const sortedIds = topologicalSort(scenarioIds);
+    const sortedIds = await topologicalSort(scenarioIds);
     const scenarioMap = new Map(scenarios.map((s) => [s.id, s]));
     sortedScenarios = sortedIds.map((id) => scenarioMap.get(id)).filter((s): s is Scenario => s !== undefined);
     // Add any scenarios not in the sort (no deps)
@@ -638,8 +638,8 @@ export async function runBatch(
   // Check if a scenario's dependencies have all passed
   const canRun = async (scenario: Scenario): Promise<boolean> => {
     try {
-      const { getDependencies } = await import("../db/flows.js");
-      const deps = getDependencies(scenario.id);
+      const { getDependencies } = await import("../store/index.js");
+      const deps = await getDependencies(scenario.id);
       for (const depId of deps) {
         if (failedScenarioIds.has(depId)) return false;
       }
@@ -656,8 +656,8 @@ export async function runBatch(
     for (const scenario of sortedScenarios) {
       if (!(await canRun(scenario))) {
         // Skip — dependency failed
-        const result = createResult({ runId: run.id, scenarioId: scenario.id, model, stepsTotal: 0 });
-        const skipped = updateResult(result.id, { status: "skipped", error: "Skipped: dependency failed" });
+        const result = await createResult({ runId: run.id, scenarioId: scenario.id, model, stepsTotal: 0 });
+        const skipped = await updateResult(result.id, { status: "skipped", error: "Skipped: dependency failed" });
         results.push(skipped);
         failedScenarioIds.add(scenario.id);
         emit({ type: "scenario:error", scenarioId: scenario.id, scenarioName: scenario.name, error: "Dependency failed — skipped", runId: run.id });
@@ -684,19 +684,19 @@ export async function runBatch(
         const passRate = passCount / samples;
         if (passCount > 0 && passCount < samples && passRate < flakinessThreshold) {
           // Flaky: passed some but not all samples
-          result = updateResult(result.id, {
+          result = await updateResult(result.id, {
             status: "flaky",
             reasoning: `Flaky: ${passCount}/${samples} samples passed (${Math.round(passRate * 100)}% pass rate, threshold ${Math.round(flakinessThreshold * 100)}%)`,
             metadata: { samples, passCount, passRate, sampleResultIds: sampleResults.map((r) => r.id) },
           });
         } else if (passCount === 0) {
           // All failed — keep as failed but add sample info
-          result = updateResult(result.id, {
+          result = await updateResult(result.id, {
             metadata: { samples, passCount, passRate, sampleResultIds: sampleResults.map((r) => r.id) },
           });
         } else if (passCount === samples) {
           // All passed — keep as passed but add sample info
-          result = updateResult(result.id, {
+          result = await updateResult(result.id, {
             metadata: { samples, passCount, passRate, sampleResultIds: sampleResults.map((r) => r.id) },
           });
         }
@@ -717,8 +717,8 @@ export async function runBatch(
       if (!scenario) return;
 
       if (!(await canRun(scenario))) {
-        const result = createResult({ runId: run.id, scenarioId: scenario.id, model, stepsTotal: 0 });
-        const skipped = updateResult(result.id, { status: "skipped", error: "Skipped: dependency failed" });
+        const result = await createResult({ runId: run.id, scenarioId: scenario.id, model, stepsTotal: 0 });
+        const skipped = await updateResult(result.id, { status: "skipped", error: "Skipped: dependency failed" });
         results.push(skipped);
         failedScenarioIds.add(scenario.id);
         await processNext();
@@ -759,7 +759,7 @@ export async function runBatch(
   const failed = results.filter((r) => r.status === "failed" || r.status === "error").length;
   const finalStatus = failed > 0 ? "failed" : "passed";
 
-  const finalRun = updateRun(run.id, {
+  const finalRun = await updateRun(run.id, {
     status: finalStatus,
     passed,
     failed,
@@ -799,16 +799,16 @@ function findScenarioInList(scenarios: Scenario[], id: string): Scenario | null 
   ) ?? null;
 }
 
-export function resolveScenariosForRun(
+export async function resolveScenariosForRun(
   options: RunOptions & { tags?: string[]; priority?: string; scenarioIds?: string[] },
-): Scenario[] {
+): Promise<Scenario[]> {
   if (options.scenarioIds && options.scenarioIds.length > 0) {
-    const scoped = listScenarios({ projectId: options.projectId });
+    const scoped = await listScenarios({ projectId: options.projectId });
     const resolved: Scenario[] = [];
     const seen = new Set<string>();
 
     for (const id of options.scenarioIds) {
-      const scenario = findScenarioInList(scoped, id) ?? getScenario(id);
+      const scenario = findScenarioInList(scoped, id) ?? (await getScenario(id));
       if (scenario && !seen.has(scenario.id)) {
         resolved.push(scenario);
         seen.add(scenario.id);
@@ -827,14 +827,14 @@ export function resolveScenariosForRun(
 export async function runByFilter(
   options: RunOptions & { tags?: string[]; priority?: string; scenarioIds?: string[] }
 ): Promise<{ run: Run; results: Result[] }> {
-  const scenarios = resolveScenariosForRun(options);
+  const scenarios = await resolveScenariosForRun(options);
 
   if (scenarios.length === 0) {
     const config = loadConfig();
     const model = resolveModel(options.model ?? config.defaultModel);
-    const run = createRun({ url: options.url, model, projectId: options.projectId });
-    updateRun(run.id, { status: "passed", total: 0, finished_at: new Date().toISOString() });
-    return { run: getRun(run.id)!, results: [] };
+    const run = await createRun({ url: options.url, model, projectId: options.projectId });
+    await updateRun(run.id, { status: "passed", total: 0, finished_at: new Date().toISOString() });
+    return { run: (await getRun(run.id))!, results: [] };
   }
 
   return runBatch(scenarios, options);
@@ -844,13 +844,13 @@ export async function runByFilter(
  * Start a run asynchronously — creates the run record immediately and returns it,
  * then executes scenarios in the background. Poll getRun(id) to check progress.
  */
-export function startRunAsync(
+export async function startRunAsync(
   options: RunOptions & { tags?: string[]; priority?: string; scenarioIds?: string[] }
-): { runId: string; scenarioCount: number } {
+): Promise<{ runId: string; scenarioCount: number }> {
   const config = loadConfig();
   const model = resolveModel(options.model ?? config.defaultModel);
 
-  const scenarios = resolveScenariosForRun(options);
+  const scenarios = await resolveScenariosForRun(options);
 
   // Budget guard: check before creating the run record
   if (!options.skipBudgetCheck) {
@@ -865,7 +865,7 @@ export function startRunAsync(
   }
 
   const parallel = options.parallel ?? 1;
-  const run = createRun({
+  const run = await createRun({
     url: options.url,
     model,
     headed: options.headed,
@@ -874,11 +874,11 @@ export function startRunAsync(
   });
 
   if (scenarios.length === 0) {
-    updateRun(run.id, { status: "passed", total: 0, finished_at: new Date().toISOString() });
+    await updateRun(run.id, { status: "passed", total: 0, finished_at: new Date().toISOString() });
     return { runId: run.id, scenarioCount: 0 };
   }
 
-  updateRun(run.id, { status: "running", total: scenarios.length });
+  await updateRun(run.id, { status: "running", total: scenarios.length });
 
   // Fire and forget — execute in background
   (async () => {
@@ -908,7 +908,7 @@ export function startRunAsync(
 
       const passed = results.filter((r) => r.status === "passed").length;
       const failed = results.filter((r) => r.status === "failed" || r.status === "error").length;
-      updateRun(run.id, {
+      await updateRun(run.id, {
         status: failed > 0 ? "failed" : "passed",
         passed,
         failed,
@@ -916,16 +916,16 @@ export function startRunAsync(
         finished_at: new Date().toISOString(),
       });
       emit({ type: "run:complete", runId: run.id });
-      const asyncRun = getRun(run.id);
+      const asyncRun = await getRun(run.id);
       if (asyncRun) dispatchWebhooks(asyncRun.status === "failed" ? "failed" : "completed", asyncRun).catch(() => {});
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
-      updateRun(run.id, {
+      await updateRun(run.id, {
         status: "failed",
         finished_at: new Date().toISOString(),
       });
       emit({ type: "run:complete", runId: run.id, error: errorMsg });
-      const failedRun = getRun(run.id);
+      const failedRun = await getRun(run.id);
       if (failedRun) dispatchWebhooks("failed", failedRun).catch(() => {});
     }
   })();

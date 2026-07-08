@@ -19,6 +19,8 @@
  */
 import { resolveStorageClient, type HasnaStorageClient } from "../generated/storage-client/index.js";
 
+import { getDatabase } from "../db/database.js";
+
 import * as dbScenarios from "../db/scenarios.js";
 import * as dbProjects from "../db/projects.js";
 import * as dbPersonas from "../db/personas.js";
@@ -36,6 +38,7 @@ import * as dbSessions from "../db/sessions.js";
 import * as dbAgents from "../db/agents.js";
 import * as dbScanIssues from "../db/scan-issues.js";
 import * as dbWebhooks from "../db/webhooks.js";
+import * as dbGolden from "../db/golden-answers.js";
 
 import type {
   ApiCheck,
@@ -57,6 +60,7 @@ import type { Environment } from "../db/environments.js";
 import type { Session } from "../db/sessions.js";
 import type { Webhook } from "../db/webhooks.js";
 import type { ScenarioResultStats } from "../db/results.js";
+import type { GoldenAnswer, GoldenCheckResult } from "../db/golden-answers.js";
 
 export const TESTERS_APP = "testers";
 
@@ -81,6 +85,7 @@ export interface Store {
   countScenarios: A<typeof dbScenarios.countScenarios>;
   findStaleScenarios: A<typeof dbScenarios.findStaleScenarios>;
   updateScenarioPassedCache: A<typeof dbScenarios.updateScenarioPassedCache>;
+  upsertScenario: A<typeof dbScenarios.upsertScenario>;
 
   // ── projects ──
   createProject: A<typeof dbProjects.createProject>;
@@ -158,6 +163,7 @@ export interface Store {
   removeDependency: A<typeof dbFlows.removeDependency>;
   getDependencies: A<typeof dbFlows.getDependencies>;
   getDependents: A<typeof dbFlows.getDependents>;
+  topologicalSort: A<typeof dbFlows.topologicalSort>;
   createFlow: A<typeof dbFlows.createFlow>;
   getFlow: A<typeof dbFlows.getFlow>;
   listFlows: A<typeof dbFlows.listFlows>;
@@ -204,6 +210,22 @@ export interface Store {
   getWebhook: A<typeof dbWebhooks.getWebhook>;
   listWebhooks: A<typeof dbWebhooks.listWebhooks>;
   deleteWebhook: A<typeof dbWebhooks.deleteWebhook>;
+
+  // ── golden answers (LLM-response drift monitoring) ──
+  createGoldenAnswer: A<typeof dbGolden.createGoldenAnswer>;
+  listGoldenAnswers: A<typeof dbGolden.listGoldenAnswers>;
+  createGoldenCheckResult: A<typeof dbGolden.createGoldenCheckResult>;
+  listGoldenCheckResults: A<typeof dbGolden.listGoldenCheckResults>;
+
+  // ── local-only maintenance ──
+  /**
+   * Snapshot the entire local dataset to a standalone SQLite file (used to seed
+   * a sandbox with the on-box state for sandbox-target workflows). LOCAL
+   * transport ONLY — the ApiStore rejects this because a cloud/self_hosted
+   * dataset cannot be dumped to a client-side file; sandbox provisioning in that
+   * mode must hand the sandbox API credentials instead.
+   */
+  snapshotToFile(path: string): Promise<void>;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -221,6 +243,7 @@ class LocalStore implements Store {
   async countScenarios(...a: Parameters<typeof dbScenarios.countScenarios>) { return dbScenarios.countScenarios(...a); }
   async findStaleScenarios(...a: Parameters<typeof dbScenarios.findStaleScenarios>) { return dbScenarios.findStaleScenarios(...a); }
   async updateScenarioPassedCache(...a: Parameters<typeof dbScenarios.updateScenarioPassedCache>) { return dbScenarios.updateScenarioPassedCache(...a); }
+  async upsertScenario(...a: Parameters<typeof dbScenarios.upsertScenario>) { return dbScenarios.upsertScenario(...a); }
 
   async createProject(...a: Parameters<typeof dbProjects.createProject>) { return dbProjects.createProject(...a); }
   async getProject(...a: Parameters<typeof dbProjects.getProject>) { return dbProjects.getProject(...a); }
@@ -288,6 +311,7 @@ class LocalStore implements Store {
   async removeDependency(...a: Parameters<typeof dbFlows.removeDependency>) { return dbFlows.removeDependency(...a); }
   async getDependencies(...a: Parameters<typeof dbFlows.getDependencies>) { return dbFlows.getDependencies(...a); }
   async getDependents(...a: Parameters<typeof dbFlows.getDependents>) { return dbFlows.getDependents(...a); }
+  async topologicalSort(...a: Parameters<typeof dbFlows.topologicalSort>) { return dbFlows.topologicalSort(...a); }
   async createFlow(...a: Parameters<typeof dbFlows.createFlow>) { return dbFlows.createFlow(...a); }
   async getFlow(...a: Parameters<typeof dbFlows.getFlow>) { return dbFlows.getFlow(...a); }
   async listFlows(...a: Parameters<typeof dbFlows.listFlows>) { return dbFlows.listFlows(...a); }
@@ -328,6 +352,15 @@ class LocalStore implements Store {
   async getWebhook(...a: Parameters<typeof dbWebhooks.getWebhook>) { return dbWebhooks.getWebhook(...a); }
   async listWebhooks(...a: Parameters<typeof dbWebhooks.listWebhooks>) { return dbWebhooks.listWebhooks(...a); }
   async deleteWebhook(...a: Parameters<typeof dbWebhooks.deleteWebhook>) { return dbWebhooks.deleteWebhook(...a); }
+
+  async createGoldenAnswer(...a: Parameters<typeof dbGolden.createGoldenAnswer>) { return dbGolden.createGoldenAnswer(...a); }
+  async listGoldenAnswers(...a: Parameters<typeof dbGolden.listGoldenAnswers>) { return dbGolden.listGoldenAnswers(...a); }
+  async createGoldenCheckResult(...a: Parameters<typeof dbGolden.createGoldenCheckResult>) { return dbGolden.createGoldenCheckResult(...a); }
+  async listGoldenCheckResults(...a: Parameters<typeof dbGolden.listGoldenCheckResults>) { return dbGolden.listGoldenCheckResults(...a); }
+
+  async snapshotToFile(path: string): Promise<void> {
+    getDatabase().query("VACUUM INTO ?").run(path);
+  }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -401,6 +434,27 @@ class ApiStore implements Store {
   }
   async updateScenarioPassedCache(id: string, url: string) {
     await this.c.update<Scenario>("scenarios", id, { lastPassedUrl: url }, { method: "PATCH" });
+  }
+  async upsertScenario(input: Parameters<typeof dbScenarios.upsertScenario>[0]) {
+    // Mirror the local upsert semantics (dedup by name + projectId) over the
+    // cloud CRUD surface so importers see one canonical row per name/project.
+    const existing = (await this.listScenarios({ projectId: input.projectId }))
+      .find((s) => s.name === input.name && (s.projectId ?? null) === (input.projectId ?? null));
+    if (!existing) return { scenario: await this.createScenario(input), action: "created" as const };
+    const same =
+      (existing.description ?? "") === (input.description ?? "") &&
+      JSON.stringify(existing.steps ?? []) === JSON.stringify(input.steps ?? []) &&
+      JSON.stringify(existing.tags ?? []) === JSON.stringify(input.tags ?? []) &&
+      existing.priority === (input.priority ?? "medium") &&
+      (existing.targetPath ?? null) === (input.targetPath ?? null) &&
+      Boolean(existing.requiresAuth) === Boolean(input.requiresAuth);
+    if (same) return { scenario: existing, action: "deduped" as const };
+    const updated = await this.updateScenario(
+      existing.id,
+      input as Parameters<typeof dbScenarios.updateScenario>[1],
+      existing.version,
+    );
+    return { scenario: updated, action: "updated" as const };
   }
 
   // ── projects ──
@@ -579,6 +633,38 @@ class ApiStore implements Store {
   async getDependents(scenarioId: string) {
     return (await this.c.list<{ scenarioId: string }>("flow-dependencies", { query: { dependsOn: scenarioId } })).items.map((d) => d.scenarioId);
   }
+  async topologicalSort(scenarioIds: string[]) {
+    // Kahn's algorithm over the cloud dependency edges (mirrors db/flows.ts).
+    const idSet = new Set(scenarioIds);
+    const inDegree = new Map<string, number>();
+    const dependents = new Map<string, string[]>();
+    for (const id of scenarioIds) {
+      inDegree.set(id, 0);
+      dependents.set(id, []);
+    }
+    for (const id of scenarioIds) {
+      for (const dep of await this.getDependencies(id)) {
+        if (idSet.has(dep)) {
+          inDegree.set(id, (inDegree.get(id) ?? 0) + 1);
+          dependents.get(dep)!.push(id);
+        }
+      }
+    }
+    const queue: string[] = [];
+    for (const [id, deg] of inDegree) if (deg === 0) queue.push(id);
+    const sorted: string[] = [];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      sorted.push(current);
+      for (const dep of dependents.get(current) ?? []) {
+        const newDeg = (inDegree.get(dep) ?? 1) - 1;
+        inDegree.set(dep, newDeg);
+        if (newDeg === 0) queue.push(dep);
+      }
+    }
+    if (sorted.length !== scenarioIds.length) throw new Error("dependency cycle detected");
+    return sorted;
+  }
   async createFlow(input: Parameters<typeof dbFlows.createFlow>[0]) { return this.c.create<Flow>("flows", input); }
   async getFlow(id: string) { return this.c.get<Flow>("flows", id); }
   async listFlows(projectId?: string) {
@@ -703,6 +789,36 @@ class ApiStore implements Store {
     if (!webhook) return false;
     await this.c.delete("webhooks", webhook.id);
     return true;
+  }
+
+  // ── golden answers ──
+  async createGoldenAnswer(input: Parameters<typeof dbGolden.createGoldenAnswer>[0]) {
+    return this.c.create<GoldenAnswer>("golden-answers", input);
+  }
+  async listGoldenAnswers(filter?: Parameters<typeof dbGolden.listGoldenAnswers>[0]) {
+    let items = await this.all<GoldenAnswer>("golden-answers");
+    if (filter?.projectId) items = items.filter((g) => g.projectId === filter.projectId);
+    if (filter?.enabled !== undefined) items = items.filter((g) => Boolean(g.enabled) === filter.enabled);
+    return items.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+  }
+  async createGoldenCheckResult(input: Parameters<typeof dbGolden.createGoldenCheckResult>[0]) {
+    return this.c.create<GoldenCheckResult>("golden-check-results", input);
+  }
+  async listGoldenCheckResults(
+    goldenId: string,
+    options?: Parameters<typeof dbGolden.listGoldenCheckResults>[1],
+  ) {
+    let items = (await this.c.list<GoldenCheckResult>("golden-check-results", { query: { goldenId } })).items;
+    if (options?.since) items = items.filter((r) => r.createdAt >= options.since!);
+    items = [...items].sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+    if (options?.limit) items = items.slice(0, options.limit);
+    return items;
+  }
+
+  async snapshotToFile(_path: string): Promise<never> {
+    throw new Error(
+      "snapshotToFile is unavailable in cloud/self_hosted mode: a remote dataset cannot be dumped to a local SQLite file. Sandbox execution against the cloud store must provision the sandbox with API credentials (HASNA_TESTERS_API_URL/HASNA_TESTERS_API_KEY) rather than a database snapshot.",
+    );
   }
 }
 
@@ -851,3 +967,14 @@ export const createWebhook: Store["createWebhook"] = (...a) => getStore().create
 export const getWebhook: Store["getWebhook"] = (...a) => getStore().getWebhook(...a);
 export const listWebhooks: Store["listWebhooks"] = (...a) => getStore().listWebhooks(...a);
 export const deleteWebhook: Store["deleteWebhook"] = (...a) => getStore().deleteWebhook(...a);
+
+export const topologicalSort: Store["topologicalSort"] = (...a) => getStore().topologicalSort(...a);
+
+export const upsertScenario: Store["upsertScenario"] = (...a) => getStore().upsertScenario(...a);
+
+export const createGoldenAnswer: Store["createGoldenAnswer"] = (...a) => getStore().createGoldenAnswer(...a);
+export const listGoldenAnswers: Store["listGoldenAnswers"] = (...a) => getStore().listGoldenAnswers(...a);
+export const createGoldenCheckResult: Store["createGoldenCheckResult"] = (...a) => getStore().createGoldenCheckResult(...a);
+export const listGoldenCheckResults: Store["listGoldenCheckResults"] = (...a) => getStore().listGoldenCheckResults(...a);
+
+export const snapshotToFile: Store["snapshotToFile"] = (...a) => getStore().snapshotToFile(...a);

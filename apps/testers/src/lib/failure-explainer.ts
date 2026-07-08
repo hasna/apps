@@ -1,4 +1,4 @@
-import { getResult } from "../db/results.js";
+import { getResult } from "../store/index.js";
 import type { FailureAnalysis } from "../types/index.js";
 
 export interface FailureExplanation {
@@ -65,8 +65,8 @@ function extractAffectedElement(error: string | null, existingAnalysis: FailureA
   return match?.[1];
 }
 
-export function explainFailure(resultId: string): FailureExplanation {
-  const result = getResult(resultId);
+export async function explainFailure(resultId: string): Promise<FailureExplanation> {
+  const result = await getResult(resultId);
   if (!result) throw new Error(`Result not found: ${resultId}`);
 
   if (result.status === "passed") {

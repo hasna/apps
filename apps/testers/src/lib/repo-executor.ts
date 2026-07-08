@@ -5,8 +5,7 @@
 import { execSync } from "child_process";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
-import { createRun, updateRun } from "../db/runs.js";
-import { getDatabase, uuid, now } from "../db/database.js";
+import { createRun, updateRun, createResult, updateResult, createScenario, listScenarios } from "../store/index.js";
 import { getTestersDir } from "./paths.js";
 import type { RepoDiscoverySnapshot, RepoSpec } from "./repo-discovery.js";
 
@@ -249,6 +248,31 @@ function runSingleSpec(
 
 // ─── Main Runner ─────────────────────────────────────────────────────────────
 
+/**
+ * Find (or create) the synthetic scenario that repo-native spec results hang
+ * off of. Repo-native runs have no authored scenario, but the results table
+ * requires a valid scenario FK (locally AND on the cloud Postgres), so we route
+ * through the Store to keep one stable synthetic scenario per project. This
+ * replaces the old `getDatabase()` + `PRAGMA foreign_keys = OFF` raw insert,
+ * which was both a split-brain (local-only) write and impossible on the server.
+ */
+async function ensureRepoScenario(projectId?: string): Promise<string> {
+  const existing = await listScenarios({ projectId });
+  const found = existing.find(
+    (s) => (s.metadata as Record<string, unknown> | undefined)?.["repoNative"] === true,
+  );
+  if (found) return found.id;
+  const created = await createScenario({
+    name: "Repo-native Playwright tests",
+    description: "Synthetic scenario grouping results from repo-native Playwright spec runs.",
+    steps: [],
+    tags: ["repo-native"],
+    projectId,
+    metadata: { repoNative: true },
+  });
+  return created.id;
+}
+
 export async function runRepoTests(opts: RepoRunOptions): Promise<RepoRunResult> {
   const { snapshot } = opts;
   const specFiles = opts.specFiles ?? snapshot.specs.map((s) => s.file);
@@ -258,14 +282,15 @@ export async function runRepoTests(opts: RepoRunOptions): Promise<RepoRunResult>
 
   // Create run record
   const url = opts.url ?? snapshot.suggestedUrl ?? "http://localhost:3000";
-  const initialRun = createRun({
+  const repoScenarioId = await ensureRepoScenario(opts.projectId);
+  const initialRun = await createRun({
     projectId: opts.projectId,
     url,
     model: opts.model ?? "repo-native",
     headed: false,
     parallel: 1,
   });
-  const run = updateRun(initialRun.id, {
+  const run = await updateRun(initialRun.id, {
     metadata: JSON.stringify({
       runType: "repo-native",
       repoPath,
@@ -286,45 +311,32 @@ export async function runRepoTests(opts: RepoRunOptions): Promise<RepoRunResult>
     const result = runSingleSpec(repoPath, workingDir, spec, opts.extraArgs ?? [], timeout);
     specResults.push(result);
 
-    // Create result record directly (bypass FK constraint since repo-native
-    // results don't have a corresponding scenario row)
-    const resultId = uuid();
-    const timestamp = now();
-    const db = getDatabase();
-    db.exec("PRAGMA foreign_keys = OFF");
-    try {
-      const reasoning = result.status === "passed"
-        ? "All tests passed"
-        : (result.error ?? "").slice(0, 500) || null;
-      const errorStr = result.status !== "passed"
-        ? (result.error ?? null)
-        : null;
+    // Persist the spec result through the Store (routes to local SQLite or the
+    // cloud /v1 API depending on the resolved transport). Repo-native specs have
+    // no authored scenario, so they hang off the synthetic per-project scenario.
+    const reasoning = result.status === "passed"
+      ? "All tests passed"
+      : (result.error ?? "").slice(0, 500) || undefined;
+    const errorStr = result.status !== "passed" ? (result.error ?? undefined) : undefined;
 
-      db.query(`
-        INSERT INTO results (id, run_id, scenario_id, status, reasoning, error, steps_completed, steps_total, duration_ms, model, tokens_used, cost_cents, metadata, created_at, persona_id, persona_name)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, NULL, NULL)
-      `).run(
-        resultId,
-        run.id,
-        "__repo__",
-        result.status,
-        reasoning,
-        errorStr,
-        result.testResults.filter((t) => t.status === "passed").length,
-        result.testResults.length || 1,
-        result.durationMs,
-        "repo-native",
-        JSON.stringify({
-          specFile: result.specFile,
-          exitCode: result.exitCode,
-          testResults: result.testResults,
-        }),
-        timestamp,
-      );
-    } finally {
-      db.exec("PRAGMA foreign_keys = ON");
-    }
-    const resultRecord = { id: resultId };
+    const resultRecord = await createResult({
+      runId: run.id,
+      scenarioId: repoScenarioId,
+      model: "repo-native",
+      stepsTotal: result.testResults.length || 1,
+    });
+    await updateResult(resultRecord.id, {
+      status: result.status,
+      ...(reasoning !== undefined ? { reasoning } : {}),
+      ...(errorStr !== undefined ? { error: errorStr } : {}),
+      stepsCompleted: result.testResults.filter((t) => t.status === "passed").length,
+      durationMs: result.durationMs,
+      metadata: {
+        specFile: result.specFile,
+        exitCode: result.exitCode,
+        testResults: result.testResults,
+      },
+    });
 
     // Store raw output to file for later inspection
     if (result.stdout || result.stderr) {
@@ -344,7 +356,7 @@ export async function runRepoTests(opts: RepoRunOptions): Promise<RepoRunResult>
 
   // Update run with final counts (metadata is stored as JSON string)
   const runMeta = run.metadata ?? {};
-  updateRun(run.id, {
+  await updateRun(run.id, {
     status,
     total: specResults.length,
     passed,

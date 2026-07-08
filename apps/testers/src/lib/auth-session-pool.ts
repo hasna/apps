@@ -1,5 +1,5 @@
 import type { BrowserContext, Cookie } from "playwright";
-import { getPersona } from "../db/personas.js";
+import { getPersona } from "../store/index.js";
 import type { Persona } from "../types/index.js";
 import { launchBrowser, closeBrowser } from "./browser.js";
 
@@ -36,7 +36,7 @@ export class AuthenticatedSessionPool {
    * If the persona has no auth credentials, returns null.
    */
   async addPersona(personaId: string): Promise<AuthSessionEntry | null> {
-    const persona = getPersona(personaId);
+    const persona = await getPersona(personaId);
     if (!persona) throw new Error(`Persona not found: ${personaId}`);
 
     // Check if we have a valid existing session

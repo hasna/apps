@@ -4,7 +4,7 @@ import { existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import type { CreateScenarioInput, ScenarioPriority } from "../types/index.js";
-import { createScenario, listScenarios } from "../db/scenarios.js";
+import { createScenario, listScenarios } from "../store/index.js";
 import { TodosConnectionError } from "../types/index.js";
 
 interface TodosTask {
@@ -126,14 +126,14 @@ export function taskToScenarioInput(task: TodosTask, projectId?: string): Create
   };
 }
 
-export function importFromTodos(
+export async function importFromTodos(
   options: {
     projectName?: string;
     tags?: string[];
     priority?: string;
     projectId?: string;
   } = {}
-): { imported: number; skipped: number } {
+): Promise<{ imported: number; skipped: number }> {
   const tasks = pullTasks({
     projectName: options.projectName,
     tags: options.tags ?? ["qa", "test", "testing"],
@@ -141,7 +141,7 @@ export function importFromTodos(
   });
 
   // Check existing scenarios to avoid duplicates
-  const existing = listScenarios({ projectId: options.projectId });
+  const existing = await listScenarios({ projectId: options.projectId });
   const existingTodoIds = new Set(
     existing
       .filter((s) => s.metadata?.todosTaskId)
@@ -158,7 +158,7 @@ export function importFromTodos(
     }
 
     const input = taskToScenarioInput(task, options.projectId);
-    createScenario(input);
+    await createScenario(input);
     imported++;
   }
 

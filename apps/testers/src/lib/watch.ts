@@ -54,7 +54,7 @@ export async function startWatcher(options: WatchOptions): Promise<void> {
         ...runOpts,
       });
 
-      console.log(formatTerminal(run, results));
+      console.log(await formatTerminal(run, results));
 
       const exitCode = getExitCode(run);
       if (exitCode === 0) {

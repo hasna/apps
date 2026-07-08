@@ -3,9 +3,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, posix as pathPosix } from "node:path";
-import { getDatabase } from "../db/database.js";
-import { getTestingWorkflow } from "../db/workflows.js";
-import { getPersona } from "../db/personas.js";
+import { getTestingWorkflow, getPersona, snapshotToFile } from "../store/index.js";
 import { runByFilter, type RunOptions } from "./runner.js";
 import { parseCredentialEnvReference, resolveCredential } from "./secrets-resolver.js";
 import { buildSandboxAppUploadExcludes } from "./sandbox-app.js";
@@ -106,7 +104,10 @@ export interface WorkflowRunnerDependencies {
   runByFilter?: typeof runByFilter;
   sandboxes?: WorkflowSandboxesRuntime;
   createSandboxesSDK?: () => WorkflowSandboxesRuntime | Promise<WorkflowSandboxesRuntime>;
-  createDatabaseBundle?: (workflow: TestingWorkflow, plan: WorkflowRunPlan) => WorkflowDatabaseBundle;
+  createDatabaseBundle?: (
+    workflow: TestingWorkflow,
+    plan: WorkflowRunPlan,
+  ) => WorkflowDatabaseBundle | Promise<WorkflowDatabaseBundle>;
 }
 
 const MAX_CAPTURED_SANDBOX_OUTPUT = 120_000;
@@ -144,11 +145,11 @@ export async function runTestingWorkflow(
   plan: WorkflowRunPlan;
   sandboxResult?: WorkflowSandboxExecutionResult;
 }> {
-  const workflow = getTestingWorkflow(workflowId);
+  const workflow = await getTestingWorkflow(workflowId);
   if (!workflow) throw new Error(`Testing workflow not found: ${workflowId}`);
   if (!workflow.enabled) throw new Error(`Testing workflow is disabled: ${workflow.name}`);
 
-  validatePersonaIds(workflow);
+  await validatePersonaIds(workflow);
   const plan = buildWorkflowRunPlan(workflow, options);
   if (options.dryRun) return { run: null, results: [], plan };
 
@@ -162,15 +163,15 @@ export async function runTestingWorkflow(
   return { run, results, plan };
 }
 
-export function createWorkflowDatabaseBundle(
+export async function createWorkflowDatabaseBundle(
   workflow: TestingWorkflow,
   plan: WorkflowRunPlan,
-): WorkflowDatabaseBundle {
+): Promise<WorkflowDatabaseBundle> {
   if (!plan.sandbox) throw new Error(`Workflow is not configured for sandbox execution: ${workflow.name}`);
   const localDir = mkdtempSync(join(tmpdir(), `testers-workflow-${workflow.id.slice(0, 8)}-`));
   const stateDir = join(localDir, ".testers-state");
   mkdirSync(stateDir, { recursive: true });
-  writeDatabaseSnapshot(join(stateDir, "testers.db"));
+  await writeDatabaseSnapshot(join(stateDir, "testers.db"));
 
   if (plan.sandbox.appSourceDir && plan.sandbox.appRemoteDir) {
     const relativeAppDir = relativeRemotePath(plan.sandbox.remoteDir, plan.sandbox.appRemoteDir);
@@ -184,9 +185,9 @@ export function createWorkflowDatabaseBundle(
   };
 }
 
-function validatePersonaIds(workflow: TestingWorkflow): void {
+async function validatePersonaIds(workflow: TestingWorkflow): Promise<void> {
   for (const personaId of workflow.personaIds) {
-    if (!getPersona(personaId)) {
+    if (!(await getPersona(personaId))) {
       throw new Error(`Persona not found for workflow ${workflow.name}: ${personaId}`);
     }
   }
@@ -236,8 +237,8 @@ function copyAppSource(sourceDir: string, targetDir: string): void {
   }
 }
 
-function writeDatabaseSnapshot(targetPath: string): void {
-  getDatabase().query("VACUUM INTO ?").run(targetPath);
+async function writeDatabaseSnapshot(targetPath: string): Promise<void> {
+  await snapshotToFile(targetPath);
 }
 
 function buildSandboxPlan(
@@ -428,7 +429,7 @@ async function runViaSandbox(
   if (!plan.sandbox) throw new Error("Workflow does not have a sandbox plan");
   const sandboxes = await resolveSandboxesRuntime(dependencies);
   const createBundle = dependencies.createDatabaseBundle ?? createWorkflowDatabaseBundle;
-  const bundle = createBundle(plan.workflow, plan);
+  const bundle = await createBundle(plan.workflow, plan);
   const sandboxTimeoutSeconds = plan.sandbox.timeoutMs === undefined
     ? undefined
     : Math.ceil(plan.sandbox.timeoutMs / 1000);

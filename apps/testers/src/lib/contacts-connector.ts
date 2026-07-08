@@ -5,7 +5,7 @@
  * and linking personas back to their source contact via contact_id metadata.
  */
 
-import { createPersona, getPersona, listPersonas, updatePersona } from "../db/personas.js";
+import { createPersona, getPersona, listPersonas, updatePersona } from "../store/index.js";
 import type { Persona } from "../types/index.js";
 
 interface ContactsContact {
@@ -85,18 +85,18 @@ export function listContactsByTag(tags: string[]): ContactsContact[] {
  * Skips contacts that already have a persona (tracked via persona metadata.contactId).
  * Returns { imported, skipped, personas }.
  */
-export function importPersonasFromContacts(options: {
+export async function importPersonasFromContacts(options: {
   tags?: string[];
   projectId?: string;
   dryRun?: boolean;
-}): {
+}): Promise<{
   imported: number;
   skipped: number;
   personas: Array<{ contactId: string; name: string; personaId?: string }>;
   contactsAvailable: boolean;
   contactsDbPath: string;
   skippedReason?: string;
-} {
+}> {
   const tags = options.tags ?? ["test-user", "tester", "qa"];
   const availability = getContactsAvailability();
   if (!availability.available) {
@@ -117,7 +117,7 @@ export function importPersonasFromContacts(options: {
   }
 
   // Build set of existing personas linked to contacts
-  const existing = listPersonas({ projectId: options.projectId });
+  const existing = await listPersonas({ projectId: options.projectId });
   const linkedContactIds = new Set(
     existing
       .filter((p) => p.metadata?.contactId)
@@ -144,7 +144,7 @@ export function importPersonasFromContacts(options: {
       continue;
     }
 
-    const persona = createPersona({
+    const persona = await createPersona({
       name: contactName,
       role: contact.role ?? "test user",
       description: contact.notes ? contact.notes.slice(0, 200) : `Test user imported from contacts (${contactName})`,
@@ -168,8 +168,8 @@ export function importPersonasFromContacts(options: {
  * Sync a persona's details from its linked contact (if any).
  * Updates name, role, and email from the latest contact data.
  */
-export function syncPersonaFromContact(personaId: string): Persona | null {
-  const persona = getPersona(personaId);
+export async function syncPersonaFromContact(personaId: string): Promise<Persona | null> {
+  const persona = await getPersona(personaId);
   if (!persona?.metadata?.contactId) return null;
 
   const db = getContactsDb();
@@ -189,7 +189,7 @@ export function syncPersonaFromContact(personaId: string): Persona | null {
     if (contact["role"] && contact["role"] !== persona.role) updates.role = contact["role"] as string;
 
     if (Object.keys(updates).length === 0) return persona;
-    return updatePersona(personaId, updates, persona.version);
+    return await updatePersona(personaId, updates, persona.version);
   } catch {
     return null;
   } finally {

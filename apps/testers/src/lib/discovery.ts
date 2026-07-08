@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync, existsSync, statSync } from "fs";
 import { join, resolve } from "path";
-import { upsertScenario } from "../db/scenarios.js";
+import { upsertScenario } from "../store/index.js";
 
 type FileScenario = {
   name: string;
@@ -183,9 +183,9 @@ export function loadTestersConfig(configPath: string): TestersConfig {
  * Discover scenarios from files (.testers.yml or tests/scenarios/*.yaml).
  * Upserts them into the DB, returning created/updated/deduped counts.
  */
-export function discoverScenariosFromFiles(
+export async function discoverScenariosFromFiles(
   projectRoot?: string,
-): { created: number; updated: number; deduped: number; total: number } {
+): Promise<{ created: number; updated: number; deduped: number; total: number }> {
   const root = projectRoot ?? process.cwd();
   let created = 0;
   let updated = 0;
@@ -211,7 +211,7 @@ export function discoverScenariosFromFiles(
     try {
       const cfg = loadTestersConfig(file);
       for (const sc of cfg.scenarios ?? []) {
-        const result = upsertScenario({
+        const result = await upsertScenario({
           name: sc.name,
           description: sc.description ?? sc.name,
           steps: sc.steps,

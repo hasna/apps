@@ -1,7 +1,7 @@
-import { createScenario, deleteScenario } from "../db/scenarios.js";
+import { createScenario, deleteScenario } from "../store/index.js";
 import { runSingleScenario } from "./runner.js";
 import type { Run, Result } from "../types/index.js";
-import { createRun, updateRun } from "../db/runs.js";
+import { createRun, updateRun } from "../store/index.js";
 import { loadConfig } from "./config.js";
 import { resolveModel } from "./ai-client.js";
 
@@ -54,7 +54,7 @@ export async function runSmoke(options: {
   const model = resolveModel(options.model ?? config.defaultModel);
 
   // 1. Create a temporary scenario
-  const scenario = createScenario({
+  const scenario = await createScenario({
     name: "Smoke Test",
     description: SMOKE_DESCRIPTION,
     tags: ["smoke", "auto"],
@@ -63,7 +63,7 @@ export async function runSmoke(options: {
   });
 
   // 2. Create a run record
-  const run = createRun({
+  const run = await createRun({
     url: options.url,
     model,
     headed: options.headed,
@@ -71,7 +71,7 @@ export async function runSmoke(options: {
     projectId: options.projectId,
   });
 
-  updateRun(run.id, { status: "running", total: 1 });
+  await updateRun(run.id, { status: "running", total: 1 });
 
   let result: Result;
   try {
@@ -87,7 +87,7 @@ export async function runSmoke(options: {
 
     // 4. Finalize run
     const finalStatus = result.status === "passed" ? "passed" : "failed";
-    updateRun(run.id, {
+    await updateRun(run.id, {
       status: finalStatus,
       passed: result.status === "passed" ? 1 : 0,
       failed: result.status === "passed" ? 0 : 1,
@@ -95,7 +95,7 @@ export async function runSmoke(options: {
       finished_at: new Date().toISOString(),
     });
   } catch (error) {
-    updateRun(run.id, {
+    await updateRun(run.id, {
       status: "failed",
       failed: 1,
       total: 1,
@@ -104,7 +104,7 @@ export async function runSmoke(options: {
     throw error;
   } finally {
     // 5. Cleanup: delete the temporary scenario
-    deleteScenario(scenario.id);
+    await deleteScenario(scenario.id);
   }
 
   // 6. Parse issues from the AI's reasoning
@@ -112,8 +112,8 @@ export async function runSmoke(options: {
   const pagesVisited = extractPagesVisited(result.reasoning ?? "");
 
   // Fetch the final run state
-  const { getRun } = await import("../db/runs.js");
-  const finalRun = getRun(run.id)!;
+  const { getRun } = await import("../store/index.js");
+  const finalRun = (await getRun(run.id))!;
 
   return {
     run: finalRun,

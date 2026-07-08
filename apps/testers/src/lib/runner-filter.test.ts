@@ -14,14 +14,14 @@ describe("resolveScenariosForRun", () => {
     closeDatabase();
   });
 
-  test("resolves explicit scenario UUID prefixes for workflow and CLI runs", () => {
+  test("resolves explicit scenario UUID prefixes for workflow and CLI runs", async () => {
     const scenario = createScenario({
       name: "Login shell",
       description: "Test login shell",
       tags: ["alumia-smoke"],
     });
 
-    const scenarios = resolveScenariosForRun({
+    const scenarios = await resolveScenariosForRun({
       url: "https://example.com",
       scenarioIds: [scenario.id.slice(0, 8)],
     });

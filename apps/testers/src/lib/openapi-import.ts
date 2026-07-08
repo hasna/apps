@@ -1,7 +1,7 @@
 import { readFileSync } from "fs";
 import type { CreateScenarioInput, ScenarioPriority, HttpMethod } from "../types/index.js";
-import { createScenario } from "../db/scenarios.js";
-import { createApiCheck } from "../db/api-checks.js";
+import { createScenario } from "../store/index.js";
+import { createApiCheck } from "../store/index.js";
 import type { CreateApiCheckInput } from "../types/index.js";
 
 interface OpenAPISpec {

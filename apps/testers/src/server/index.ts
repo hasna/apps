@@ -650,7 +650,7 @@ async function handleRequest(req: Request): Promise<Response> {
     const id = resultExplainMatch[1]!;
     try {
       const { explainFailure } = await import("../lib/failure-explainer.js");
-      const explanation = explainFailure(id);
+      const explanation = await explainFailure(id);
       return jsonResponse(explanation);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

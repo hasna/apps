@@ -1,6 +1,6 @@
 import type { Page } from "playwright";
 import type { Persona } from "../types/index.js";
-import { savePersonaAuthCookies } from "../db/personas.js";
+import { savePersonaAuthCookies } from "../store/index.js";
 import { resolveCredential } from "./secrets-resolver.js";
 
 const COOKIE_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour

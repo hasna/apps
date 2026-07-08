@@ -1,5 +1,5 @@
 import type { Result } from "../types/index.js";
-import { getScenario } from "../db/scenarios.js";
+import { getScenario } from "../store/index.js";
 
 export interface JUnitTestSuite {
   name: string;
@@ -24,13 +24,13 @@ export interface JUnitTestCase {
 /**
  * Convert test results to JUnit XML format for CI/CD integration.
  */
-export function toJUnitXml(
+export async function toJUnitXml(
   runId: string,
   results: Result[],
   baseUrl: string,
-): string {
-  const testCases = results.map((r) => {
-    const scenario = getScenario(r.scenarioId);
+): Promise<string> {
+  const testCases = await Promise.all(results.map(async (r) => {
+    const scenario = await getScenario(r.scenarioId);
     const scenarioName = scenario?.name ?? r.scenarioId;
     const durationSec = r.durationMs ? r.durationMs / 1000 : 0;
 
@@ -53,7 +53,7 @@ export function toJUnitXml(
     }
 
     return testCase;
-  });
+  }));
 
   const failed = results.filter((r) => r.status === "failed").length;
   const errors = results.filter((r) => r.status === "error").length;

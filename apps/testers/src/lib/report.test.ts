@@ -23,14 +23,14 @@ describe("HTML report export (OPE9-00259)", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("generates HTML report for a run", () => {
+  test("generates HTML report for a run", async () => {
     const run = createRun({ url: "http://test.example", model: "quick" });
     const scenario = createScenario({ name: "Test Scenario", description: "Should work" });
     const result = createResult({ runId: run.id, scenarioId: scenario.id, model: "quick", stepsTotal: 1 });
     updateResult(result.id, { status: "passed", durationMs: 5000 });
     updateRun(run.id, { status: "passed" });
 
-    const html = generateHtmlReport(run.id);
+    const html = await generateHtmlReport(run.id);
     expect(html).toContain("<!DOCTYPE html>");
     expect(html).toContain("Test Report");
     expect(html).toContain(run.id.slice(0, 8));
@@ -39,21 +39,21 @@ describe("HTML report export (OPE9-00259)", () => {
     expect(html).toContain("PASSED");
   });
 
-  test("generates report with failed scenarios", () => {
+  test("generates report with failed scenarios", async () => {
     const run = createRun({ url: "http://fail.example", model: "quick" });
     const scenario = createScenario({ name: "Failing Test", description: "Should fail" });
     const result = createResult({ runId: run.id, scenarioId: scenario.id, model: "quick", stepsTotal: 1 });
     updateResult(result.id, { status: "failed", reasoning: "Element not found", error: "Could not locate button" });
     updateRun(run.id, { status: "failed" });
 
-    const html = generateHtmlReport(run.id);
+    const html = await generateHtmlReport(run.id);
     expect(html).toContain("Failing Test");
     expect(html).toContain("FAILED");
     expect(html).toContain("Element not found");
     expect(html).toContain("Could not locate button");
   });
 
-  test("generates report with summary counts", () => {
+  test("generates report with summary counts", async () => {
     const run = createRun({ url: "http://multi.example", model: "quick" });
 
     const s1 = createScenario({ name: "Pass 1", description: "Pass" });
@@ -70,22 +70,22 @@ describe("HTML report export (OPE9-00259)", () => {
 
     updateRun(run.id, { status: "failed" });
 
-    const html = generateHtmlReport(run.id);
+    const html = await generateHtmlReport(run.id);
     expect(html).toContain("3"); // total
     expect(html).toContain("2"); // passed count
     expect(html).toContain("1"); // failed count
   });
 
-  test("generates report for latest run", () => {
+  test("generates report for latest run", async () => {
     const run = createRun({ url: "http://latest.example", model: "quick" });
     updateRun(run.id, { status: "passed" });
 
-    const html = generateLatestReport();
+    const html = await generateLatestReport();
     expect(html).toContain("Test Report");
     expect(html).toContain("latest.example");
   });
 
-  test("imageToBase64 returns data URI for existing files", () => {
+  test("imageToBase64 returns data URI for existing files", async () => {
     mkdirSync(tmpDir, { recursive: true });
     const imgPath = join(tmpDir, "test.png");
     // Minimal 1x1 PNG
@@ -96,19 +96,19 @@ describe("HTML report export (OPE9-00259)", () => {
     expect(result).toContain("data:image/png;base64,");
   });
 
-  test("imageToBase64 returns empty string for missing files", () => {
+  test("imageToBase64 returns empty string for missing files", async () => {
     const result = imageToBase64("/nonexistent/file.png");
     expect(result).toBe("");
   });
 
-  test("includes token and cost summary in footer", () => {
+  test("includes token and cost summary in footer", async () => {
     const run = createRun({ url: "http://cost.example", model: "quick" });
     const scenario = createScenario({ name: "Costly Test", description: "Expensive" });
     const result = createResult({ runId: run.id, scenarioId: scenario.id, model: "quick", stepsTotal: 1 });
     updateResult(result.id, { status: "passed", durationMs: 1000, tokensUsed: 5000 });
     updateRun(run.id, { status: "passed" });
 
-    const html = generateHtmlReport(run.id);
+    const html = await generateHtmlReport(run.id);
     expect(html).toContain("Total tokens:");
     expect(html).toContain("5,000");
     expect(html).toContain("Total cost:");

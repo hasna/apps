@@ -1,7 +1,7 @@
-import { getTestingWorkflow } from "../db/workflows.js";
-import { getResultsByRun } from "../db/results.js";
-import { getScenario, listScenarios } from "../db/scenarios.js";
-import { listPersonas } from "../db/personas.js";
+import { getTestingWorkflow } from "../store/index.js";
+import { getResultsByRun } from "../store/index.js";
+import { getScenario, listScenarios } from "../store/index.js";
+import { listPersonas } from "../store/index.js";
 import {
   reportTesterIssueReportsToTodos,
   TESTERS_ISSUE_REPORT_SCHEMA_VERSION,
@@ -40,7 +40,7 @@ export async function runWorkflowGoalLoop(
   workflowId: string,
   options: WorkflowGoalLoopOptions,
 ): Promise<WorkflowGoalLoopResult> {
-  const workflow = getTestingWorkflow(workflowId);
+  const workflow = await getTestingWorkflow(workflowId);
   if (!workflow) throw new Error(`Testing workflow not found: ${workflowId}`);
   if (!workflow.goal) throw new Error(`Testing workflow has no goal: ${workflow.name}`);
 
@@ -65,7 +65,7 @@ export async function runWorkflowGoalLoop(
         });
 
     runs.push(run);
-    lastResults = results.length > 0 ? results : getResultsByRun(run.id);
+    lastResults = results.length > 0 ? results : await getResultsByRun(run.id);
     if (run.status === "passed") {
       return {
         workflow,
@@ -120,8 +120,8 @@ export async function generateWorkflowActionsWithAi(input: {
 }): Promise<WorkflowGoalAction[]> {
   const { jsonSchema, tool } = await loadAiSdkToolLoopHelpers();
   const actions: WorkflowGoalAction[] = [];
-  const scenarios = listScenarios({ projectId: input.workflow.projectId ?? undefined });
-  const personas = listPersonas({ projectId: input.workflow.projectId ?? undefined });
+  const scenarios = await listScenarios({ projectId: input.workflow.projectId ?? undefined });
+  const personas = await listPersonas({ projectId: input.workflow.projectId ?? undefined });
   const scenarioById = new Map(scenarios.map((scenario) => [scenario.id, scenario]));
 
   const tools = {
@@ -200,6 +200,15 @@ export async function generateWorkflowActionsWithAi(input: {
   };
 
   const failed = input.results.filter((result) => result.status === "failed" || result.status === "error" || result.status === "flaky");
+  const failureLines = await Promise.all(failed.map(async (result) => {
+    const scenario = scenarioById.get(result.scenarioId) ?? await getScenario(result.scenarioId);
+    return [
+      `- ${scenario?.shortId ?? result.scenarioId}: ${scenario?.name ?? result.scenarioId}`,
+      `  status: ${result.status}`,
+      result.error ? `  error: ${result.error}` : null,
+      result.reasoning ? `  reasoning: ${result.reasoning}` : null,
+    ].filter(Boolean).join("\n");
+  }));
   const prompt = [
     `Workflow: ${input.workflow.name}`,
     `Goal: ${input.workflow.goal?.prompt ?? "(none)"}`,
@@ -210,15 +219,7 @@ export async function generateWorkflowActionsWithAi(input: {
     `Personas: ${personas.map((persona) => `${persona.shortId}:${persona.name}(${persona.role})`).join(", ") || "(none)"}`,
     ``,
     `Failures:`,
-    ...failed.map((result) => {
-      const scenario = scenarioById.get(result.scenarioId) ?? getScenario(result.scenarioId);
-      return [
-        `- ${scenario?.shortId ?? result.scenarioId}: ${scenario?.name ?? result.scenarioId}`,
-        `  status: ${result.status}`,
-        result.error ? `  error: ${result.error}` : null,
-        result.reasoning ? `  reasoning: ${result.reasoning}` : null,
-      ].filter(Boolean).join("\n");
-    }),
+    ...failureLines,
     ``,
     `Create todos only for concrete next actions that would help satisfy the workflow goal. Finish with finish_workflow_review.`,
   ].join("\n");

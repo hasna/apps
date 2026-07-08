@@ -85,7 +85,7 @@ function buildFixture(): RunFixture {
 }
 
 describe("generateGitHubActionsWorkflow", () => {
-  it("emits a valid GitHub Actions workflow", () => {
+  it("emits a valid GitHub Actions workflow", async () => {
     const wf = generateGitHubActionsWorkflow();
     expect(wf).toContain("name: AI QA Tests");
     expect(wf).toContain("on:");
@@ -101,13 +101,13 @@ describe("generateGitHubActionsWorkflow", () => {
     expect(wf).toContain("GITHUB_TOKEN");
   });
 
-  it("requests pull-requests: write permission", () => {
+  it("requests pull-requests: write permission", async () => {
     const wf = generateGitHubActionsWorkflow();
     expect(wf).toContain("permissions:");
     expect(wf).toContain("pull-requests: write");
   });
 
-  it("uploads report + results artifact on always()", () => {
+  it("uploads report + results artifact on always()", async () => {
     const wf = generateGitHubActionsWorkflow();
     expect(wf).toContain("actions/upload-artifact@v4");
     expect(wf).toContain("if: always()");
@@ -123,27 +123,27 @@ describe("formatPRComment", () => {
     fixture = buildFixture();
   });
 
-  it("includes a pass/fail headline with counts and pass rate", () => {
-    const body = formatPRComment(fixture.run, fixture.results);
+  it("includes a pass/fail headline with counts and pass rate", async () => {
+    const body = await formatPRComment(fixture.run, fixture.results);
     expect(body).toContain("## ❌ AI QA Tests — FAILED");
     expect(body).toContain("**1/2 passed** (50%)");
   });
 
-  it("includes the preview URL", () => {
-    const body = formatPRComment(fixture.run, fixture.results);
+  it("includes the preview URL", async () => {
+    const body = await formatPRComment(fixture.run, fixture.results);
     expect(body).toContain("https://preview-pr-42.example.com");
   });
 
-  it("renders a markdown table with scenario names", () => {
-    const body = formatPRComment(fixture.run, fixture.results);
+  it("renders a markdown table with scenario names", async () => {
+    const body = await formatPRComment(fixture.run, fixture.results);
     expect(body).toContain("| Scenario | Status | Duration |");
     expect(body).toContain("Homepage loads");
     // Pipe in scenario name is escaped so it doesn't break the table
     expect(body).toContain("Login \\| with pipe in name");
   });
 
-  it("puts failed scenarios before passed ones", () => {
-    const body = formatPRComment(fixture.run, fixture.results);
+  it("puts failed scenarios before passed ones", async () => {
+    const body = await formatPRComment(fixture.run, fixture.results);
     const failedIdx = body.indexOf("Login");
     const passedIdx = body.indexOf("Homepage loads");
     expect(failedIdx).toBeGreaterThan(-1);
@@ -151,23 +151,23 @@ describe("formatPRComment", () => {
     expect(failedIdx).toBeLessThan(passedIdx);
   });
 
-  it("includes the error message for failures (truncated)", () => {
-    const body = formatPRComment(fixture.run, fixture.results);
+  it("includes the error message for failures (truncated)", async () => {
+    const body = await formatPRComment(fixture.run, fixture.results);
     expect(body).toContain("Selector [data-testid=email] not found");
   });
 
-  it("includes a dashboard link when provided", () => {
-    const body = formatPRComment(fixture.run, fixture.results, "https://dash.example.com");
+  it("includes a dashboard link when provided", async () => {
+    const body = await formatPRComment(fixture.run, fixture.results, "https://dash.example.com");
     expect(body).toContain(`[View full report →](https://dash.example.com/runs/${fixture.run.id})`);
   });
 
-  it("includes total cost when any result has a cost", () => {
-    const body = formatPRComment(fixture.run, fixture.results);
+  it("includes total cost when any result has a cost", async () => {
+    const body = await formatPRComment(fixture.run, fixture.results);
     // 0.1c + 0.3c = 0.4c → $0.0040
     expect(body).toContain("$0.0040");
   });
 
-  it("handles 0 scenarios gracefully", () => {
+  it("handles 0 scenarios gracefully", async () => {
     const emptyRun: Run = {
       ...fixture.run,
       total: 0,
@@ -175,12 +175,12 @@ describe("formatPRComment", () => {
       failed: 0,
       status: "passed",
     };
-    const body = formatPRComment(emptyRun, []);
+    const body = await formatPRComment(emptyRun, []);
     expect(body).toContain("No scenarios ran");
     expect(body).not.toContain("| Scenario | Status | Duration |");
   });
 
-  it("caps rows at 20 and adds a 'more' note", () => {
+  it("caps rows at 20 and adds a 'more' note", async () => {
     // Synthesize 25 fake results (don't persist — the function uses getScenario which may
     // fall through to the id slice when not found)
     const many: Result[] = Array.from({ length: 25 }, (_, i) => ({
@@ -202,7 +202,7 @@ describe("formatPRComment", () => {
       personaName: null,
       failureAnalysis: null,
     } as unknown as Result));
-    const body = formatPRComment(fixture.run, many);
+    const body = await formatPRComment(fixture.run, many);
     expect(body).toContain("_...and 5 more_");
   });
 });
@@ -223,22 +223,22 @@ describe("resolvePullRequestNumber", () => {
     else delete process.env["GITHUB_REF"];
   });
 
-  it("prefers the explicit argument", () => {
+  it("prefers the explicit argument", async () => {
     process.env["GITHUB_PR_NUMBER"] = "99";
     expect(resolvePullRequestNumber(42)).toBe(42);
   });
 
-  it("falls back to GITHUB_PR_NUMBER", () => {
+  it("falls back to GITHUB_PR_NUMBER", async () => {
     process.env["GITHUB_PR_NUMBER"] = "42";
     expect(resolvePullRequestNumber()).toBe(42);
   });
 
-  it("parses GITHUB_REF for pull-request refs", () => {
+  it("parses GITHUB_REF for pull-request refs", async () => {
     process.env["GITHUB_REF"] = "refs/pull/123/merge";
     expect(resolvePullRequestNumber()).toBe(123);
   });
 
-  it("returns null when nothing resolves", () => {
+  it("returns null when nothing resolves", async () => {
     process.env["GITHUB_REF"] = "refs/heads/main";
     expect(resolvePullRequestNumber()).toBeNull();
   });

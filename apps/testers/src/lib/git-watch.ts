@@ -1,6 +1,6 @@
 import { execSync } from "child_process";
 import chalk from "chalk";
-import { listScenarios } from "../db/scenarios.js";
+import { listScenarios } from "../store/index.js";
 import { matchFilesToScenarios } from "./affected.js";
 import { runBatch } from "./runner.js";
 import { formatTerminal } from "./reporter.js";
@@ -96,7 +96,7 @@ export async function startGitWatcher(options: GitWatchOptions): Promise<void> {
     }
 
     // Match changed files to scenarios
-    const allScenarios = listScenarios({ projectId, tags });
+    const allScenarios = await listScenarios({ projectId, tags });
     const matched = matchFilesToScenarios(changedFiles, allScenarios, mappings);
 
     if (matched.length === 0) {
@@ -110,7 +110,7 @@ export async function startGitWatcher(options: GitWatchOptions): Promise<void> {
 
     try {
       const { run, results } = await runBatch(matched, { url, projectId, ...runOpts });
-      console.log(formatTerminal(run, results));
+      console.log(await formatTerminal(run, results));
 
       // Notify conversations on failure
       if (run.status === "failed") {

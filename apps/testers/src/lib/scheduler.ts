@@ -1,6 +1,6 @@
 import type { Schedule } from "../types/index.js";
-import { getEnabledSchedules, updateLastRun } from "../db/schedules.js";
-import { getSchedule } from "../db/schedules.js";
+import { getEnabledSchedules, updateLastRun } from "../store/index.js";
+import { getSchedule } from "../store/index.js";
 import { runByFilter } from "./runner.js";
 import { ScheduleNotFoundError } from "../types/index.js";
 
@@ -218,7 +218,7 @@ export class Scheduler {
     // Zero out seconds/ms so we compare at minute granularity
     now.setSeconds(0, 0);
 
-    const schedules = getEnabledSchedules();
+    const schedules = await getEnabledSchedules();
 
     for (const schedule of schedules) {
       if (this.running.has(schedule.id)) continue;
@@ -235,9 +235,9 @@ export class Scheduler {
 
         // Run in background — don't block the tick loop
         this.executeSchedule(schedule)
-          .then(({ runId }) => {
+          .then(async ({ runId }) => {
             const nextRun = getNextRunTime(schedule.cronExpression, new Date());
-            updateLastRun(schedule.id, runId, nextRun.toISOString());
+            await updateLastRun(schedule.id, runId, nextRun.toISOString());
 
             this.emit({
               type: "schedule:completed",
@@ -267,7 +267,7 @@ export class Scheduler {
    * Manually trigger a schedule immediately (e.g. `testers schedule run <id>`).
    */
   async runScheduleNow(scheduleId: string): Promise<void> {
-    const schedule = getSchedule(scheduleId);
+    const schedule = await getSchedule(scheduleId);
     if (!schedule) {
       throw new ScheduleNotFoundError(scheduleId);
     }
@@ -284,7 +284,7 @@ export class Scheduler {
     try {
       const { runId } = await this.executeSchedule(schedule);
       const nextRun = getNextRunTime(schedule.cronExpression, new Date());
-      updateLastRun(schedule.id, runId, nextRun.toISOString());
+      await updateLastRun(schedule.id, runId, nextRun.toISOString());
 
       this.emit({
         type: "schedule:completed",

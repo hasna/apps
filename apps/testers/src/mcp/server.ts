@@ -491,18 +491,18 @@ server.tool(
     try {
       let resolvedUrl = url;
       if (!resolvedUrl && env) {
-        const { getEnvironment } = await import("./db/environments.js").catch(() => import("../db/environments.js"));
-        const environment = getEnvironment(env);
+        const { getEnvironment } = await import("../store/index.js");
+        const environment = await getEnvironment(env);
         if (!environment) return errorResponse(notFoundErr(env, "Environment"));
         resolvedUrl = environment.url;
       }
       if (!resolvedUrl) {
-        const { getDefaultEnvironment } = await import("./db/environments.js").catch(() => import("../db/environments.js"));
-        const defaultEnv = getDefaultEnvironment();
+        const { getDefaultEnvironment } = await import("../store/index.js");
+        const defaultEnv = await getDefaultEnvironment();
         if (defaultEnv) resolvedUrl = defaultEnv.url;
       }
       if (!resolvedUrl) return errorResponse(new Error("No URL provided and no default environment set. Pass url or env."));
-      const { runId, scenarioCount } = startRunAsync({ url: resolvedUrl, tags, scenarioIds, priority, model, headed, parallel, personaId, personaIds, samples, flakinessThreshold, maxCostCents, cacheMaxAgeMs, minimal, timeout: timeoutMs, recordVideo });
+      const { runId, scenarioCount } = await startRunAsync({ url: resolvedUrl, tags, scenarioIds, priority, model, headed, parallel, personaId, personaIds, samples, flakinessThreshold, maxCostCents, cacheMaxAgeMs, minimal, timeout: timeoutMs, recordVideo });
       return json({ runId, scenarioCount, url: resolvedUrl, status: "running", message: "Poll with get_run to check progress." });
     } catch (error) {
       return errorResponse(error);
@@ -535,7 +535,7 @@ server.tool(
       if (failedResultIds.length === 0) return errorResponse(new Error("No failed results found in this run."));
 
       const resolvedUrl = url ?? run.url;
-      const { runId: newRunId, scenarioCount } = startRunAsync({
+      const { runId: newRunId, scenarioCount } = await startRunAsync({
         url: resolvedUrl,
         scenarioIds: failedResultIds,
         model,
@@ -1168,7 +1168,7 @@ server.tool(
         return json({ runId: null, scenarioCount: 0, matchedScenarios: [], message: "No scenarios matched the provided file paths." });
       }
       const scenarioIds = matched.map((s) => s.id);
-      const { runId, scenarioCount } = startRunAsync({ url, scenarioIds, model, headed, parallel, projectId });
+      const { runId, scenarioCount } = await startRunAsync({ url, scenarioIds, model, headed, parallel, projectId });
       return json({
         runId,
         scenarioCount,
@@ -1861,13 +1861,13 @@ server.tool(
       // Resolve URL
       let resolvedUrl = url;
       if (!resolvedUrl && env) {
-        const { getEnvironment } = await import("../db/environments.js");
-        const environment = getEnvironment(env);
+        const { getEnvironment } = await import("../store/index.js");
+        const environment = await getEnvironment(env);
         if (environment) resolvedUrl = environment.url;
       }
       if (!resolvedUrl) {
-        const { getDefaultEnvironment } = await import("../db/environments.js");
-        const defaultEnv = getDefaultEnvironment(projectId);
+        const { getDefaultEnvironment } = await import("../store/index.js");
+        const defaultEnv = await getDefaultEnvironment(projectId);
         if (defaultEnv) resolvedUrl = defaultEnv.url;
       }
       if (!resolvedUrl) return errorResponse(new Error("No URL provided. Pass url or env parameter."));
@@ -1954,7 +1954,7 @@ server.tool(
   async ({ resultId }) => {
     try {
       const { explainFailure } = await import("../lib/failure-explainer.js");
-      const explanation = explainFailure(resultId);
+      const explanation = await explainFailure(resultId);
       return json(explanation);
     } catch (e) {
       return errorResponse(e);
@@ -1980,14 +1980,14 @@ server.tool(
       // Resolve URL
       let resolvedUrl = url;
       if (!resolvedUrl && env) {
-        const { getEnvironment } = await import("../db/environments.js");
-        const environment = getEnvironment(env);
+        const { getEnvironment } = await import("../store/index.js");
+        const environment = await getEnvironment(env);
         if (!environment) return errorResponse(notFoundErr(env, "Environment"));
         resolvedUrl = environment.url;
       }
       if (!resolvedUrl) {
-        const { getDefaultEnvironment } = await import("../db/environments.js");
-        const defaultEnv = getDefaultEnvironment();
+        const { getDefaultEnvironment } = await import("../store/index.js");
+        const defaultEnv = await getDefaultEnvironment();
         if (defaultEnv) resolvedUrl = defaultEnv.url;
       }
       if (!resolvedUrl) return errorResponse(new Error("No URL provided and no default environment set. Pass url or env."));
@@ -2018,7 +2018,7 @@ server.tool(
         return json({ skipped: true, reason: "No scenarios match changed files", changedFiles: filePaths });
       }
 
-      const { runId, scenarioCount } = startRunAsync({
+      const { runId, scenarioCount } = await startRunAsync({
         url: resolvedUrl,
         scenarioIds: matched.map((s) => s.id),
         model,
@@ -2267,7 +2267,7 @@ server.tool(
 
       for (const persona of personas) {
         if (!persona) continue;
-        const { runId, scenarioCount } = startRunAsync({
+        const { runId, scenarioCount } = await startRunAsync({
           url,
           scenarioIds: scenarios.map((s) => s.id),
           model,
@@ -2427,7 +2427,7 @@ server.tool(
 
       let runInfo = null;
       if (autoRun) {
-        const { runId, scenarioCount } = startRunAsync({ url, scenarioIds: [scenario.id], projectId });
+        const { runId, scenarioCount } = await startRunAsync({ url, scenarioIds: [scenario.id], projectId });
         runInfo = { runId, scenarioCount };
       }
 
@@ -2449,8 +2449,8 @@ server.tool(
   },
   async ({ resultId, includeContent }) => {
     try {
-      const { getResult } = await import("../db/results.js");
-      const result = getResult(resultId);
+      const { getResult } = await import("../store/index.js");
+      const result = await getResult(resultId);
       if (!result) return errorResponse(notFoundErr(resultId, "Result"));
 
       const harPath = (result as { harPath?: string | null }).harPath ?? (result.metadata as { harPath?: string } | null)?.harPath;
@@ -2669,7 +2669,7 @@ server.tool(
         const tasks = pullTasks({ tags: tags ?? ["qa", "test", "testing"] });
         return json({ dryRun: true, wouldImport: tasks.length, tasks: tasks.slice(0, 20) });
       }
-      const result = importFromTodos({ projectId, tags, projectName: todosProjectId });
+      const result = await importFromTodos({ projectId, tags, projectName: todosProjectId });
       return json(result);
     } catch (e) {
       return errorResponse(e);
@@ -2690,7 +2690,7 @@ server.tool(
   async ({ tags, projectId, dryRun }) => {
     try {
       const { importPersonasFromContacts } = await import("../lib/contacts-connector.js");
-      const result = importPersonasFromContacts({ tags: tags ?? ["test-user", "tester", "qa"], projectId, dryRun: dryRun ?? false });
+      const result = await importPersonasFromContacts({ tags: tags ?? ["test-user", "tester", "qa"], projectId, dryRun: dryRun ?? false });
       return json({ ...result, dryRun: dryRun ?? false });
     } catch (e) {
       return errorResponse(e);
@@ -2711,7 +2711,7 @@ server.tool(
       const persona = await getPersona(personaId);
       if (!persona) return errorResponse(notFoundErr(personaId, "Persona"));
       const { getContactsAvailability, syncPersonaFromContact } = await import("../lib/contacts-connector.js");
-      const updated = syncPersonaFromContact(persona.id);
+      const updated = await syncPersonaFromContact(persona.id);
       const contacts = getContactsAvailability();
       if (!contacts.available) {
         return json({
@@ -2805,8 +2805,8 @@ server.tool(
   },
   async ({ name, url, projectId, isDefault, variables }) => {
     try {
-      const { createEnvironment } = await import("../db/environments.js");
-      const env = createEnvironment({ name, url, projectId, isDefault, variables });
+      const { createEnvironment } = await import("../store/index.js");
+      const env = await createEnvironment({ name, url, projectId, isDefault, variables });
       return json(env);
     } catch (e) {
       return errorResponse(e);
@@ -2827,8 +2827,8 @@ server.tool(
   },
   async ({ projectId, limit, offset, verbose }) => {
     try {
-      const { listEnvironments } = await import("../db/environments.js");
-      const envs = listEnvironments(projectId);
+      const { listEnvironments } = await import("../store/index.js");
+      const envs = await listEnvironments(projectId);
       const page = pageItems(envs, { limit, offset, defaultLimit: 20, maxLimit: 100 });
       return json(compactToolPayload(
         verbose ? page.items : page.items.map(compactEnvironment),
@@ -2850,8 +2850,8 @@ server.tool(
   { name: z.string().describe("Environment name to delete") },
   async ({ name }) => {
     try {
-      const { deleteEnvironment } = await import("../db/environments.js");
-      const deleted = deleteEnvironment(name);
+      const { deleteEnvironment } = await import("../store/index.js");
+      const deleted = await deleteEnvironment(name);
       if (!deleted) return errorResponse(notFoundErr(name, "Environment"));
       return json({ deleted: true, name });
     } catch (e) {
@@ -2868,9 +2868,9 @@ server.tool(
   { name: z.string().describe("Environment name to set as default") },
   async ({ name }) => {
     try {
-      const { setDefaultEnvironment, getEnvironment } = await import("../db/environments.js");
-      setDefaultEnvironment(name);
-      return json({ default: true, name, env: getEnvironment(name) });
+      const { setDefaultEnvironment, getEnvironment } = await import("../store/index.js");
+      await setDefaultEnvironment(name);
+      return json({ default: true, name, env: await getEnvironment(name) });
     } catch (e) {
       return errorResponse(e);
     }

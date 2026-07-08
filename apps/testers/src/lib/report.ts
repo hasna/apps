@@ -1,8 +1,8 @@
 import { readFileSync, existsSync } from "fs";
-import { getRun, listRuns } from "../db/runs.js";
-import { getResultsByRun } from "../db/results.js";
-import { listScreenshots } from "../db/screenshots.js";
-import { getScenario } from "../db/scenarios.js";
+import { getRun, listRuns } from "../store/index.js";
+import { getResultsByRun } from "../store/index.js";
+import { listScreenshots } from "../store/index.js";
+import { getScenario } from "../store/index.js";
 import type { Result, Screenshot } from "../types/index.js";
 
 export function imageToBase64(filePath: string): string {
@@ -90,11 +90,11 @@ function renderScreenshots(screenshots: Screenshot[]): string {
   return html;
 }
 
-export function generateHtmlReport(runId: string): string {
-  const run = getRun(runId);
+export async function generateHtmlReport(runId: string): Promise<string> {
+  const run = await getRun(runId);
   if (!run) throw new Error(`Run not found: ${runId}`);
 
-  const results = getResultsByRun(run.id);
+  const results = await getResultsByRun(run.id);
 
   // Gather screenshots and scenario names per result
   const resultData: Array<{
@@ -105,8 +105,8 @@ export function generateHtmlReport(runId: string): string {
   }> = [];
 
   for (const result of results) {
-    const screenshots = listScreenshots(result.id);
-    const scenario = getScenario(result.scenarioId);
+    const screenshots = await listScreenshots(result.id);
+    const scenario = await getScenario(result.scenarioId);
     resultData.push({
       result,
       scenarioName: scenario?.name ?? "Unknown Scenario",
@@ -221,8 +221,8 @@ export function generateHtmlReport(runId: string): string {
 </html>`;
 }
 
-export function generateLatestReport(): string {
-  const runs = listRuns({ limit: 1 });
+export async function generateLatestReport(): Promise<string> {
+  const runs = await listRuns({ limit: 1 });
   if (runs.length === 0) throw new Error("No runs found");
   return generateHtmlReport(runs[0]!.id);
 }

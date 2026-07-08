@@ -1,5 +1,5 @@
 import type { ApiCheck, ApiCheckResult, ApiCheckFilter } from "../types/index.js";
-import { createApiCheckResult, listApiChecks } from "../db/api-checks.js";
+import { createApiCheckResult, listApiChecks } from "../store/index.js";
 import { dispatchApiCheckWebhooks } from "./webhooks.js";
 import { isAIEndpoint, profileAIEndpoint } from "./ai-profiler.js";
 import { scanForPii } from "./scanners/pii.js";
@@ -112,7 +112,7 @@ export async function runApiCheck(
     if (llmProfile) metadata.llmProfile = llmProfile;
     if (piiDetections) metadata.piiDetections = piiDetections;
 
-    const result = createApiCheckResult({
+    const result = await createApiCheckResult({
       checkId: check.id,
       runId: options?.runId,
       status: finalStatus,
@@ -142,7 +142,7 @@ export async function runApiCheck(
       errorMessage = String(error);
     }
 
-    const result = createApiCheckResult({
+    const result = await createApiCheckResult({
       checkId: check.id,
       runId: options?.runId,
       status: "error",
@@ -178,7 +178,7 @@ export async function runApiChecksByFilter(
   filter: ApiCheckFilter & { baseUrl: string; parallel?: number; runId?: string },
 ): Promise<{ results: ApiCheckResult[]; passed: number; failed: number; errors: number }> {
   const { baseUrl, parallel, runId, ...checkFilter } = filter;
-  const checks = listApiChecks({ ...checkFilter, enabled: true });
+  const checks = await listApiChecks({ ...checkFilter, enabled: true });
   const results = await runApiChecks(checks, { baseUrl, parallel, runId });
 
   const passed = results.filter((r) => r.status === "passed").length;

@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
-import { getTestingWorkflow, listTestingWorkflows } from "../db/workflows.js";
+import { getTestingWorkflow, listTestingWorkflows } from "../store/index.js";
 import { runTestingWorkflow, type WorkflowRunOptions, type WorkflowRunnerDependencies } from "./workflow-runner.js";
 import { parseCredentialEnvReference, resolveCredential } from "./secrets-resolver.js";
 import { detectProvider, resolveModel, type AIProvider } from "./ai-client.js";
@@ -249,15 +249,15 @@ export function resolveWorkflowFanoutBatchRange(
   return { batchSize, batchStart, batchEnd, totalBatches };
 }
 
-export function resolveWorkflowFanoutSelection(options: Pick<WorkflowFanoutOptions, "workflowIds" | "projectId" | "tags" | "includeDisabled">): TestingWorkflow[] {
+export async function resolveWorkflowFanoutSelection(options: Pick<WorkflowFanoutOptions, "workflowIds" | "projectId" | "tags" | "includeDisabled">): Promise<TestingWorkflow[]> {
   const ids = splitWorkflowIds(options.workflowIds);
   const workflows = ids.length > 0
-    ? ids.map((id) => {
-        const workflow = getTestingWorkflow(id);
+    ? await Promise.all(ids.map(async (id) => {
+        const workflow = await getTestingWorkflow(id);
         if (!workflow) throw new Error(`Testing workflow not found: ${id}`);
         return workflow;
-      })
-    : listTestingWorkflows({
+      }))
+    : await listTestingWorkflows({
         projectId: options.projectId,
         enabled: options.includeDisabled ? undefined : true,
       });
@@ -457,7 +457,7 @@ export async function runWorkflowFanout(
   dependencies: WorkflowFanoutDependencies = {},
 ): Promise<WorkflowFanoutResult> {
   const workers = normalizeFanoutWorkerCount(options.workers);
-  const matchedWorkflows = resolveWorkflowFanoutSelection(options);
+  const matchedWorkflows = await resolveWorkflowFanoutSelection(options);
   const { workflows, selection } = resolveWorkflowFanoutBatch(matchedWorkflows, options);
   const leases = buildWorkflowFanoutLeasePlan(workflows.length, workers, options);
   if (!options.dryRun) {
@@ -571,7 +571,7 @@ export async function runWorkflowFanoutBatches(
   }
 
   const workers = normalizeFanoutWorkerCount(options.workers);
-  const matchedWorkflows = resolveWorkflowFanoutSelection(options);
+  const matchedWorkflows = await resolveWorkflowFanoutSelection(options);
   const { batchSize, batchStart, batchEnd, totalBatches } = resolveWorkflowFanoutBatchRange(matchedWorkflows.length, options);
   const batches: WorkflowFanoutResult[] = [];
   let stoppedEarly = false;

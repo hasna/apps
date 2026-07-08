@@ -1746,7 +1746,7 @@ program
               projectId,
             });
           }
-          const { runId, scenarioCount } = startRunAsync({
+          const { runId, scenarioCount } = await startRunAsync({
             url,
             tags: opts.tag.length > 0 ? opts.tag : undefined,
             scenarioIds,
@@ -1845,7 +1845,7 @@ program
             if (finalRun) {
               log("");
               const results = await getResultsByRun(runId);
-              log(formatTerminal(finalRun, results, { verbose: opts.verbose }));
+              log(await formatTerminal(finalRun, results, { verbose: opts.verbose }));
             }
             process.exit(finalRun ? getExitCode(finalRun) : 0);
           }
@@ -1977,7 +1977,7 @@ program
           });
 
           if (opts.json || opts.output) {
-            const jsonOutput = formatJSON(run, results);
+            const jsonOutput = await formatJSON(run, results);
             if (opts.output) {
               writeFileSync(opts.output, jsonOutput, "utf-8");
               log(chalk.green(`Results written to ${opts.output}`));
@@ -1986,7 +1986,7 @@ program
               log(jsonOutput);
             }
           } else {
-            log(formatTerminal(run, results, { failedOnly: opts.failedOnly, verbose: opts.verbose }));
+            log(await formatTerminal(run, results, { failedOnly: opts.failedOnly, verbose: opts.verbose }));
           }
 
           // Post GitHub PR comment if requested
@@ -2160,7 +2160,7 @@ program
         });
 
         if (opts.json || opts.output) {
-          const jsonOutput = formatJSON(run, results);
+          const jsonOutput = await formatJSON(run, results);
           if (opts.output) {
             writeFileSync(opts.output, jsonOutput, "utf-8");
             log(chalk.green(`Results written to ${opts.output}`));
@@ -2169,7 +2169,7 @@ program
             log(jsonOutput);
           }
         } else {
-          log(formatTerminal(run, results, { failedOnly: opts.failedOnly, verbose: opts.verbose }));
+          log(await formatTerminal(run, results, { failedOnly: opts.failedOnly, verbose: opts.verbose }));
         }
 
         // Post GitHub PR comment if requested (works for the main run path too, not just ad-hoc)
@@ -2276,13 +2276,13 @@ program
 
       const results = await getResultsByRun(run.id);
       if (opts.json) {
-        log(formatJSON(run, results));
+        log(await formatJSON(run, results));
       } else {
         const filtered = opts.failedOnly
           ? results.filter((r) => r.status === "failed" || r.status === "error")
           : results;
         const page = cliPage(filtered, opts, 50, 200);
-        log(formatTerminal(run, page.items, { failedOnly: false, summaryResults: results, verbose: opts.verbose, compactFooter: false }));
+        log(await formatTerminal(run, page.items, { failedOnly: false, summaryResults: results, verbose: opts.verbose, compactFooter: false }));
         logCompactFooter(page.returned, page.total, "testers results <run-id> --json, --verbose, --failed-only, or --limit/--offset", page.offset);
       }
     } catch (error) {
@@ -3946,7 +3946,7 @@ sessionCmd
       // Accept either a single session object or an array of sessions
       const items = Array.isArray(data) ? data : [data];
 
-      const { createSession } = await import("../db/sessions.js");
+      const { createSession } = await import("../store/index.js");
 
       let imported = 0;
       for (const item of items) {
@@ -3966,7 +3966,7 @@ sessionCmd
           (e: any) => e && e.type === "navigation",
         ).length;
 
-        createSession({
+        await createSession({
           sessionId,
           tabId: item.tabId ?? 0,
           url: item.url ?? item.lastUrl ?? null,
@@ -4265,9 +4265,9 @@ scheduleCmd
       });
 
       if (opts.json) {
-        log(formatJSON(run, results));
+        log(await formatJSON(run, results));
       } else {
-        log(formatTerminal(run, results));
+        log(await formatTerminal(run, results));
       }
 
       process.exit(getExitCode(run));
@@ -4421,7 +4421,7 @@ program
   .option("-y, --yes", "Skip interactive prompts (non-interactive mode)", false)
   .action(async (opts) => {
     try {
-      const { project, scenarios, framework, url } = initProject({
+      const { project, scenarios, framework, url } = await initProject({
         name: opts.name,
         url: opts.url,
         path: opts.path,
@@ -4592,9 +4592,9 @@ program
       });
 
       if (opts.json) {
-        log(formatJSON(run, results));
+        log(await formatJSON(run, results));
       } else {
-        log(formatTerminal(run, results));
+        log(await formatTerminal(run, results));
       }
       process.exit(getExitCode(run));
     } catch (error) {
@@ -4672,9 +4672,9 @@ program
       }
 
       if (opts.json) {
-        log(formatJSON(run, results));
+        log(await formatJSON(run, results));
       } else {
-        log(formatTerminal(run, results));
+        log(await formatTerminal(run, results));
       }
       process.exit(getExitCode(run));
     } catch (error) {
@@ -4854,7 +4854,7 @@ program
   .option("--threshold <percent>", "Visual diff threshold percentage", "0.1")
   .action(async (run1: string, run2: string, opts) => {
     try {
-      const diff = diffRuns(run1, run2);
+      const diff = await diffRuns(run1, run2);
       if (opts.json) {
         log(formatDiffJSON(diff));
       } else {
@@ -4934,9 +4934,9 @@ program
       // HTML report mode
       let html: string;
       if (opts.latest || !runId) {
-        html = generateLatestReport();
+        html = await generateLatestReport();
       } else {
-        html = generateHtmlReport(runId);
+        html = await generateHtmlReport(runId);
       }
       writeFileSync(opts.output, html, "utf-8");
       const absPath = resolve(opts.output);
@@ -5398,8 +5398,8 @@ flowCmd
         parallel: 1, // flows run sequentially by design
       });
 
-      if (opts.json) log(formatJSON(run, results));
-      else log(formatTerminal(run, results));
+      if (opts.json) log(await formatJSON(run, results));
+      else log(await formatTerminal(run, results));
       process.exit(getExitCode(run));
     } catch (error) {
       logError(
@@ -5823,7 +5823,7 @@ inventoryCmd
           "--action-workflow-grouping must be route, area-kind, or action",
         );
       }
-      const result = importNextRouteInventory({
+      const result = await importNextRouteInventory({
         rootDir: root ?? process.cwd(),
         appDir: opts.appDir,
         projectId,
@@ -6140,7 +6140,7 @@ program
         log(JSON.stringify({ run, results }, null, 2));
       } else {
         const { formatTerminal } = await import("../lib/reporter.js");
-        log(formatTerminal(run, results));
+        log(await formatTerminal(run, results));
       }
 
       const { getExitCode } = await import("../lib/reporter.js");
@@ -6360,14 +6360,14 @@ SCAN_COMMON_OPTIONS(
 ).action(async (url: string, opts) => {
   try {
     const { scanConsoleErrors } = await import("../lib/scanners/console.js");
-    const { upsertScanIssue } = await import("../db/scan-issues.js");
+    const { upsertScanIssue } = await import("../store/index.js");
     const result = await scanConsoleErrors({
       url,
       pages: opts.page,
       headed: opts.headed,
       timeoutMs: parseInt(opts.timeout),
     });
-    result.issues.forEach((i) => upsertScanIssue(i, opts.project));
+    await Promise.all(result.issues.map((i) => upsertScanIssue(i, opts.project)));
     printScanResult(result, opts.json);
   } catch (e) {
     logError(chalk.red(e instanceof Error ? e.message : String(e)));
@@ -6391,14 +6391,14 @@ SCAN_COMMON_OPTIONS(
 ).action(async (url: string, opts) => {
   try {
     const { scanNetworkErrors } = await import("../lib/scanners/network.js");
-    const { upsertScanIssue } = await import("../db/scan-issues.js");
+    const { upsertScanIssue } = await import("../store/index.js");
     const result = await scanNetworkErrors({
       url,
       pages: opts.page,
       headed: opts.headed,
       timeoutMs: parseInt(opts.timeout),
     });
-    result.issues.forEach((i) => upsertScanIssue(i, opts.project));
+    await Promise.all(result.issues.map((i) => upsertScanIssue(i, opts.project)));
     printScanResult(result, opts.json);
   } catch (e) {
     logError(chalk.red(e instanceof Error ? e.message : String(e)));
@@ -6414,14 +6414,14 @@ SCAN_COMMON_OPTIONS(
 ).action(async (url: string, opts) => {
   try {
     const { scanBrokenLinks } = await import("../lib/scanners/links.js");
-    const { upsertScanIssue } = await import("../db/scan-issues.js");
+    const { upsertScanIssue } = await import("../store/index.js");
     const result = await scanBrokenLinks({
       url,
       maxPages: parseInt(opts.maxPages),
       headed: opts.headed,
       timeoutMs: parseInt(opts.timeout),
     });
-    result.issues.forEach((i) => upsertScanIssue(i, opts.project));
+    await Promise.all(result.issues.map((i) => upsertScanIssue(i, opts.project)));
     printScanResult(result, opts.json);
   } catch (e) {
     logError(chalk.red(e instanceof Error ? e.message : String(e)));
@@ -6455,7 +6455,7 @@ SCAN_COMMON_OPTIONS(
 ).action(async (url: string, opts) => {
   try {
     const { scanPerformance } = await import("../lib/scanners/performance.js");
-    const { upsertScanIssue } = await import("../db/scan-issues.js");
+    const { upsertScanIssue } = await import("../store/index.js");
     const result = await scanPerformance({
       url,
       pages: opts.page,
@@ -6466,7 +6466,7 @@ SCAN_COMMON_OPTIONS(
         loadTimeMs: parseInt(opts.loadThreshold),
       },
     });
-    result.issues.forEach((i) => upsertScanIssue(i, opts.project));
+    await Promise.all(result.issues.map((i) => upsertScanIssue(i, opts.project)));
     printScanResult(result, opts.json);
   } catch (e) {
     logError(chalk.red(e instanceof Error ? e.message : String(e)));
@@ -6633,7 +6633,7 @@ SCAN_COMMON_OPTIONS(
 ).action(async (url: string, opts) => {
   try {
     const { scanA11y } = await import("../lib/scanners/a11y.js");
-    const { upsertScanIssue } = await import("../db/scan-issues.js");
+    const { upsertScanIssue } = await import("../store/index.js");
     const result = await scanA11y({
       url,
       pages: opts.page,
@@ -6641,7 +6641,7 @@ SCAN_COMMON_OPTIONS(
       headed: opts.headed,
       timeoutMs: parseInt(opts.timeout ?? "15000"),
     });
-    result.issues.forEach((i) => upsertScanIssue(i, opts.project));
+    await Promise.all(result.issues.map((i) => upsertScanIssue(i, opts.project)));
     printScanResult(result, opts.json);
   } catch (e) {
     logError(chalk.red(e instanceof Error ? e.message : String(e)));
@@ -6678,7 +6678,7 @@ SCAN_COMMON_OPTIONS(
 ).action(async (url: string, opts) => {
   try {
     const { scanInjection } = await import("../lib/scanners/injection.js");
-    const { upsertScanIssue } = await import("../db/scan-issues.js");
+    const { upsertScanIssue } = await import("../store/index.js");
 
     log(chalk.bold(`  Injection probe: ${url}`));
     log(
@@ -6707,7 +6707,7 @@ SCAN_COMMON_OPTIONS(
       headed: opts.headed,
     });
 
-    result.issues.forEach((i) => upsertScanIssue(i, opts.project));
+    await Promise.all(result.issues.map((i) => upsertScanIssue(i, opts.project)));
 
     if (opts.json) {
       log(JSON.stringify(result, null, 2));
@@ -6769,7 +6769,7 @@ SCAN_COMMON_OPTIONS(
 ).action(async (url: string, opts) => {
   try {
     const { scanPiiEndpoint } = await import("../lib/scanners/pii-scanner.js");
-    const { upsertScanIssue } = await import("../db/scan-issues.js");
+    const { upsertScanIssue } = await import("../store/index.js");
     const seedPii = opts.seed
       ? (opts.seed as string)
           .split(",")
@@ -6786,7 +6786,7 @@ SCAN_COMMON_OPTIONS(
       timeoutMs: parseInt(opts.timeout, 10),
     });
 
-    result.issues.forEach((i) => upsertScanIssue(i, opts.project));
+    await Promise.all(result.issues.map((i) => upsertScanIssue(i, opts.project)));
 
     if (opts.json) {
       log(JSON.stringify(result, null, 2));
@@ -6902,19 +6902,33 @@ program
       allPassed = false;
     }
 
-    // 2. Check DB is accessible
-    const dbPath = join(getTestersDir(), "testers.db");
-    try {
-      const { Database } = await import("bun:sqlite");
-      const db = new Database(dbPath, { create: true });
-      db.close();
-      log(chalk.green("✓") + ` Database accessible: ${dbPath}`);
-    } catch (err) {
-      log(
-        chalk.red("✗") +
-          ` Database not accessible at ${dbPath}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      allPassed = false;
+    // 2. Check the resolved storage backend is reachable.
+    if (isCloudStore()) {
+      // Cloud/self_hosted: never touch a local sqlite file — probe the API store.
+      try {
+        await listProjects();
+        log(chalk.green("✓") + " Cloud storage API reachable (HASNA_TESTERS_API_URL)");
+      } catch (err) {
+        log(
+          chalk.red("✗") +
+            ` Cloud storage API not reachable: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        allPassed = false;
+      }
+    } else {
+      const dbPath = join(getTestersDir(), "testers.db");
+      try {
+        const { Database } = await import("bun:sqlite");
+        const db = new Database(dbPath, { create: true });
+        db.close();
+        log(chalk.green("✓") + ` Database accessible: ${dbPath}`);
+      } catch (err) {
+        log(
+          chalk.red("✗") +
+            ` Database not accessible at ${dbPath}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        allPassed = false;
+      }
     }
 
     // 3. Check Playwright/chromium is installed
@@ -8060,7 +8074,7 @@ workflowCmd
         log(JSON.stringify(output, null, 2));
         return;
       }
-      log(formatTerminal(output.run!, output.results));
+      log(await formatTerminal(output.run!, output.results));
       process.exit(getExitCode(output.run!));
     } catch (error) {
       logError(
@@ -8917,7 +8931,7 @@ evalCmd
   .action(async (url: string, opts) => {
     try {
       const { runRagEval } = await import("../lib/eval-runner.js");
-      const { createRun, updateRun } = await import("../db/runs.js");
+      const { createRun, updateRun } = await import("../store/index.js");
 
       let ragTestCases: unknown[] = [];
       if (opts.docs) {
@@ -8963,7 +8977,7 @@ evalCmd
         },
       });
 
-      const run = createRun({ scenarioId: scenario.id, model: "rag-eval" });
+      const run = await createRun({ scenarioId: scenario.id, model: "rag-eval" });
       await updateRun(run.id, { status: "running" });
 
       const result = await runRagEval(scenario, {
@@ -9050,12 +9064,12 @@ goldenCmd
   .option("--judge-model <model>", "Model to use as judge")
   .action(async (opts) => {
     try {
-      const { createGoldenAnswer } = await import("../db/golden-answers.js");
+      const { createGoldenAnswer } = await import("../store/index.js");
 
       // Non-interactive mode
       if (opts.question && opts.answer && opts.endpoint) {
         const projectId = await resolveProject(opts.project);
-        const golden = createGoldenAnswer({
+        const golden = await createGoldenAnswer({
           question: opts.question,
           goldenAnswer: opts.answer,
           endpoint: opts.endpoint,
@@ -9109,7 +9123,7 @@ goldenCmd
       const judgeModel = await ask("Judge model (leave blank for auto): ");
       const projectId = await resolveProject(opts.project);
 
-      const golden = createGoldenAnswer({
+      const golden = await createGoldenAnswer({
         question,
         goldenAnswer,
         endpoint,
@@ -9144,9 +9158,9 @@ goldenCmd
   .option("--verbose", "Show untruncated endpoint and question text", false)
   .action(async (opts) => {
     try {
-      const { listGoldenAnswers } = await import("../db/golden-answers.js");
+      const { listGoldenAnswers } = await import("../store/index.js");
       const projectId = await resolveProject(opts.project);
-      const goldens = listGoldenAnswers({ projectId });
+      const goldens = await listGoldenAnswers({ projectId });
       const page = cliPage(goldens, opts, 20, 100);
 
       if (opts.json) {

@@ -7,7 +7,7 @@
  */
 
 import type { Scenario, Result } from "../types/index.js";
-import { createResult, updateResult } from "../db/results.js";
+import { createResult, updateResult } from "../store/index.js";
 import { judge } from "./judge.js";
 import type { JudgeRubric, JudgeConfig, JudgeResult } from "./judge.js";
 import { runPipeline } from "./pipeline-runner.js";
@@ -159,7 +159,7 @@ export async function runEvalScenario(
   // Parse eval config from scenario metadata
   const evalConfig = metadata?.eval as EvalScenarioConfig | undefined;
   if (!evalConfig || !evalConfig.testCases?.length) {
-    const result = createResult({ runId: options.runId, scenarioId: scenario.id, model: "eval", stepsTotal: 0 });
+    const result = await createResult({ runId: options.runId, scenarioId: scenario.id, model: "eval", stepsTotal: 0 });
     return updateResult(result.id, { status: "error", error: "Eval scenario missing 'eval' config in metadata" });
   }
 
@@ -222,7 +222,7 @@ export async function runEvalScenario(
     durationMs,
   };
 
-  const result = createResult({
+  const result = await createResult({
     runId: options.runId,
     scenarioId: scenario.id,
     model: "eval",
@@ -296,7 +296,7 @@ export async function runRagEval(
   const ragConfig = metadata?.rag as (EvalScenarioConfig & { ragTestCases?: RagTestCase[] }) | undefined;
 
   if (!ragConfig || !ragConfig.ragTestCases?.length) {
-    const result = createResult({ runId: options.runId, scenarioId: scenario.id, model: "rag-eval", stepsTotal: 0 });
+    const result = await createResult({ runId: options.runId, scenarioId: scenario.id, model: "rag-eval", stepsTotal: 0 });
     return updateResult(result.id, { status: "error", error: "RAG eval scenario missing 'rag' config with ragTestCases in metadata" });
   }
 
@@ -412,7 +412,7 @@ export async function runRagEval(
     durationMs,
   };
 
-  const result = createResult({
+  const result = await createResult({
     runId: options.runId,
     scenarioId: scenario.id,
     model: "rag-eval",
@@ -442,14 +442,14 @@ export async function runPipelineScenario(
   const pipelineConfig = metadata?.pipeline as PipelineConfig | undefined;
 
   if (!pipelineConfig || !pipelineConfig.steps?.length) {
-    const result = createResult({ runId: options.runId, scenarioId: scenario.id, model: "pipeline", stepsTotal: 0 });
+    const result = await createResult({ runId: options.runId, scenarioId: scenario.id, model: "pipeline", stepsTotal: 0 });
     return updateResult(result.id, { status: "error", error: "Pipeline scenario missing 'pipeline' config with steps in metadata" });
   }
 
   const pipelineResult = await runPipeline(pipelineConfig, { baseUrl: options.baseUrl });
   const durationMs = Date.now() - startMs;
 
-  const result = createResult({
+  const result = await createResult({
     runId: options.runId,
     scenarioId: scenario.id,
     model: "pipeline",

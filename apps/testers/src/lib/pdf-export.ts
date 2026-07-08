@@ -35,7 +35,7 @@ export async function generatePdfReport(
   const page = await browser.newPage();
 
   try {
-    const html = generateHtmlReport(runId);
+    const html = await generateHtmlReport(runId);
     await page.setContent(html, { waitUntil: "domcontentloaded" });
 
     const pdfPath = options.outputPath;
@@ -67,8 +67,8 @@ export async function generatePdfReport(
 /**
  * Save the HTML report to a file.
  */
-export function saveHtmlReport(runId: string, outputPath: string): string {
-  const html = generateHtmlReport(runId);
+export async function saveHtmlReport(runId: string, outputPath: string): Promise<string> {
+  const html = await generateHtmlReport(runId);
   const dir = dirname(outputPath);
   mkdirSync(dir, { recursive: true });
   writeFileSync(outputPath, html, "utf-8");

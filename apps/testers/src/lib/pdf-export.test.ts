@@ -20,11 +20,11 @@ describe("PDF export (OPE9-00232)", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("saveHtmlReport writes valid HTML file", () => {
+  test("saveHtmlReport writes valid HTML file", async () => {
     const run = createRun({ url: "http://test.example", model: "quick" });
     const outputPath = join(tmpDir, "report.html");
 
-    const path = saveHtmlReport(run.id, outputPath);
+    const path = await saveHtmlReport(run.id, outputPath);
     expect(path).toBe(outputPath);
     expect(existsSync(outputPath)).toBe(true);
 
@@ -35,11 +35,11 @@ describe("PDF export (OPE9-00232)", () => {
     expect(content).toContain("http://test.example");
   });
 
-  test("saveHtmlReport creates parent directories", () => {
+  test("saveHtmlReport creates parent directories", async () => {
     const run = createRun({ url: "http://test.example", model: "quick" });
     const outputPath = join(tmpDir, "nested", "dir", "report.html");
 
-    const path = saveHtmlReport(run.id, outputPath);
+    const path = await saveHtmlReport(run.id, outputPath);
     expect(existsSync(path)).toBe(true);
   });
 

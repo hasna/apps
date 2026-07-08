@@ -1,7 +1,7 @@
 import chalk from "chalk";
 import type { Run, Result, Screenshot } from "../types/index.js";
-import { listScreenshots } from "../db/screenshots.js";
-import { getScenario } from "../db/scenarios.js";
+import { listScreenshots } from "../store/index.js";
+import { getScenario } from "../store/index.js";
 import { getScenarioResultStats } from "../store/index.js";
 import { pageItems, paginationHint, truncateText } from "./compact-output.js";
 
@@ -21,7 +21,7 @@ export interface ReportOptions {
   compactFooter?: boolean;
 }
 
-export function formatTerminal(run: Run, results: Result[], options?: ReportOptions): string {
+export async function formatTerminal(run: Run, results: Result[], options?: ReportOptions): Promise<string> {
   const lines: string[] = [];
   const failedOnly = options?.failedOnly ?? false;
   const verbose = options?.verbose ?? false;
@@ -57,11 +57,11 @@ export function formatTerminal(run: Run, results: Result[], options?: ReportOpti
   }
 
   for (const result of page.items) {
-    const scenario = getScenario(result.scenarioId);
+    const scenario = await getScenario(result.scenarioId);
     const name = scenario
       ? `${scenario.shortId}: ${verbose ? scenario.name : truncateText(scenario.name, 90)}`
       : result.scenarioId.slice(0, 8);
-    const screenshots = listScreenshots(result.id);
+    const screenshots = await listScreenshots(result.id);
     const duration = `${(result.durationMs / 1000).toFixed(1)}s`;
     const screenshotCount = screenshots.length;
 
@@ -149,7 +149,7 @@ export function formatActionableSummary(run: Run, results: Result[]): string {
   return lines.join("\n");
 }
 
-export function formatJSON(run: Run, results: Result[]): string {
+export async function formatJSON(run: Run, results: Result[]): Promise<string> {
   const output = {
     run: {
       id: run.id,
@@ -164,9 +164,9 @@ export function formatJSON(run: Run, results: Result[]): string {
       startedAt: run.startedAt,
       finishedAt: run.finishedAt,
     },
-    results: results.map((r) => {
-      const scenario = getScenario(r.scenarioId);
-      const screenshots = listScreenshots(r.id);
+    results: await Promise.all(results.map(async (r) => {
+      const scenario = await getScenario(r.scenarioId);
+      const screenshots = await listScreenshots(r.id);
       return {
         id: r.id,
         scenarioId: r.scenarioId,
@@ -187,7 +187,7 @@ export function formatJSON(run: Run, results: Result[]): string {
           filePath: s.filePath,
         })),
       };
-    }),
+    })),
     summary: {
       total: run.total,
       passed: run.passed,
@@ -321,9 +321,9 @@ export async function formatScenarioList(
   return lines.join("\n");
 }
 
-export function formatResultDetail(result: Result, screenshots: Screenshot[]): string {
+export async function formatResultDetail(result: Result, screenshots: Screenshot[]): Promise<string> {
   const lines: string[] = [];
-  const scenario = getScenario(result.scenarioId);
+  const scenario = await getScenario(result.scenarioId);
 
   lines.push("");
   lines.push(chalk.bold(`  Result ${result.id.slice(0, 8)}`));

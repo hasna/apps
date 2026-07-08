@@ -42,7 +42,7 @@ describe("next route inventory", () => {
     for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
 
-  test("discovers Next.js page and API routes with categories and methods", () => {
+  test("discovers Next.js page and API routes with categories and methods", async () => {
     const root = makeRepo();
     const inventory = discoverNextRouteInventory({ rootDir: root });
 
@@ -69,11 +69,11 @@ describe("next route inventory", () => {
     expect(topUpsApi.priority).toBe("critical");
   });
 
-  test("upserts route scenarios and grouped sandbox workflows", () => {
+  test("upserts route scenarios and grouped sandbox workflows", async () => {
     const root = makeRepo();
     const project = createProject({ name: "alumia", scenarioPrefix: "ALM" });
 
-    const result = importNextRouteInventory({
+    const result = await importNextRouteInventory({
       rootDir: root,
       projectId: project.id,
       createScenarios: true,
@@ -121,7 +121,7 @@ describe("next route inventory", () => {
     expect(workflows.every((workflow) => workflow.execution.target === "sandbox")).toBe(true);
     expect(workflows.every((workflow) => workflow.execution.env?.OPENAI_API_KEY === "$?OPENAI_API_KEY")).toBe(true);
 
-    const second = importNextRouteInventory({
+    const second = await importNextRouteInventory({
       rootDir: root,
       projectId: project.id,
       createScenarios: true,
@@ -134,11 +134,11 @@ describe("next route inventory", () => {
     expect(listTestingWorkflows({ projectId: project.id }).length).toBe(4);
   });
 
-  test("upserts action scenarios and route-scoped sandbox workflows", () => {
+  test("upserts action scenarios and route-scoped sandbox workflows", async () => {
     const root = makeRepo();
     const project = createProject({ name: "alumia", scenarioPrefix: "ALM" });
 
-    const result = importNextRouteInventory({
+    const result = await importNextRouteInventory({
       rootDir: root,
       projectId: project.id,
       createActionScenarios: true,
@@ -200,7 +200,7 @@ describe("next route inventory", () => {
     expect(billingWorkflow.execution.env?.OPENAI_API_KEY).toBe("$?OPENAI_API_KEY");
     expect(billingWorkflow.execution.env?.DATABASE_URL).toBe("$DATABASE_URL");
 
-    const second = importNextRouteInventory({
+    const second = await importNextRouteInventory({
       rootDir: root,
       projectId: project.id,
       createActionScenarios: true,
@@ -213,11 +213,11 @@ describe("next route inventory", () => {
     expect(listTestingWorkflows({ projectId: project.id }).length).toBe(3);
   });
 
-  test("can group action workflows by area and action kind", () => {
+  test("can group action workflows by area and action kind", async () => {
     const root = makeRepo();
     const project = createProject({ name: "alumia", scenarioPrefix: "ALM" });
 
-    const result = importNextRouteInventory({
+    const result = await importNextRouteInventory({
       rootDir: root,
       projectId: project.id,
       createActionWorkflows: true,
@@ -234,11 +234,11 @@ describe("next route inventory", () => {
     expect(names).toContain("Next action inventory admin api-method");
   });
 
-  test("can create one workflow per discovered action", () => {
+  test("can create one workflow per discovered action", async () => {
     const root = makeRepo();
     const project = createProject({ name: "alumia", scenarioPrefix: "ALM" });
 
-    const result = importNextRouteInventory({
+    const result = await importNextRouteInventory({
       rootDir: root,
       projectId: project.id,
       createActionScenarios: true,

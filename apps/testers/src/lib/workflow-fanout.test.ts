@@ -25,7 +25,7 @@ describe("workflow fanout", () => {
     closeDatabase();
   });
 
-  test("selects saved sandbox workflows by project and tag", () => {
+  test("selects saved sandbox workflows by project and tag", async () => {
     const project = createProject({ name: "alumia" });
     const selected = createTestingWorkflow({
       name: "projects page",
@@ -40,7 +40,7 @@ describe("workflow fanout", () => {
       execution: { target: "sandbox", provider: "e2b" },
     });
 
-    const workflows = resolveWorkflowFanoutSelection({
+    const workflows = await resolveWorkflowFanoutSelection({
       projectId: project.id,
       tags: ["projects"],
     });
@@ -48,20 +48,20 @@ describe("workflow fanout", () => {
     expect(workflows.map((workflow) => workflow.id)).toEqual([selected.id]);
   });
 
-  test("requires selected workflows to use sandbox execution", () => {
+  test("requires selected workflows to use sandbox execution", async () => {
     createTestingWorkflow({ name: "local only", execution: { target: "local" } });
 
-    expect(() => resolveWorkflowFanoutSelection({})).toThrow("requires sandbox workflows");
+    await expect(resolveWorkflowFanoutSelection({})).rejects.toThrow("requires sandbox workflows");
   });
 
-  test("bounds worker count to the supported 1-12 sandbox range", () => {
+  test("bounds worker count to the supported 1-12 sandbox range", async () => {
     expect(normalizeFanoutWorkerCount(undefined)).toBe(6);
     expect(normalizeFanoutWorkerCount(12)).toBe(12);
     expect(() => normalizeFanoutWorkerCount(0)).toThrow("between 1 and 12");
     expect(() => normalizeFanoutWorkerCount(13)).toThrow("between 1 and 12");
   });
 
-  test("models active and queued fanout leases", () => {
+  test("models active and queued fanout leases", async () => {
     expect(buildWorkflowFanoutLeasePlan(5, 3)).toEqual({
       selected: 5,
       workers: 3,
@@ -82,7 +82,7 @@ describe("workflow fanout", () => {
     expect(buildWorkflowFanoutLeasePlan(31, 6, { maxQueuedLeases: 25 }).withinLimit).toBe(true);
   });
 
-  test("resolves deterministic fanout batches and offsets", () => {
+  test("resolves deterministic fanout batches and offsets", async () => {
     const workflows = Array.from({ length: 5 }, (_, index) => createTestingWorkflow({
       name: `workflow-${index + 1}`,
       execution: { target: "sandbox", provider: "e2b" },
@@ -104,7 +104,7 @@ describe("workflow fanout", () => {
     expect(manualOffset.selection).toEqual({ matched: 5, offset: 4 });
   });
 
-  test("rejects invalid fanout batch selections", () => {
+  test("rejects invalid fanout batch selections", async () => {
     const workflows = Array.from({ length: 2 }, (_, index) => createTestingWorkflow({
       name: `workflow-${index + 1}`,
       execution: { target: "sandbox", provider: "e2b" },
@@ -115,7 +115,7 @@ describe("workflow fanout", () => {
     expect(() => resolveWorkflowFanoutBatch(workflows, { offset: 99 })).toThrow("batch selection");
   });
 
-  test("resolves validated fanout batch ranges", () => {
+  test("resolves validated fanout batch ranges", async () => {
     expect(resolveWorkflowFanoutBatchRange(5, { batchSize: 2 })).toEqual({
       batchSize: 2,
       batchStart: 1,
