@@ -132,7 +132,9 @@ describe("CloudShortlinksStore routes to /v1 with bearer key", () => {
       if (c.method === "GET") return { json: { items: [{ id: "dom_9", hostname: "gone.na" }] } };
       return { status: 404, json: { error: "Not found" } };
     });
-    await expect(s.deleteDomain("gone.na")).rejects.toThrow();
+    // Since the domain provably exists, a DELETE 404 means the deployed server
+    // lacks the route — the error must say so (actionable: redeploy), not just 404.
+    await expect(s.deleteDomain("gone.na")).rejects.toThrow(/predates the domain-delete route/);
     expect(calls.map((c) => c.method)).toEqual(["GET", "DELETE"]);
   });
 
@@ -141,6 +143,6 @@ describe("CloudShortlinksStore routes to /v1 with bearer key", () => {
       if (c.method === "GET") return { json: { id: "lnk_9", slug: "gone" } };
       return { status: 404, json: { error: "Not found" } };
     });
-    await expect(s.deleteLink("gone")).rejects.toThrow();
+    await expect(s.deleteLink("gone")).rejects.toThrow(/predates the link-delete route/);
   });
 });

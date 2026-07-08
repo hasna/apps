@@ -114,7 +114,11 @@ export class CloudShortlinksStore implements Store {
     // server lacks the route (or the row is already gone). We already proved the
     // domain exists above, so any non-2xx here — including 404 — is a real
     // failure that MUST surface, never a silent "deleted: true".
-    await this.transport.del(`/domains/${enc(domain.hostname)}`);
+    try {
+      await this.transport.del(`/domains/${enc(domain.hostname)}`);
+    } catch (error) {
+      throw missingRouteError(error, "domain", `DELETE /domains/${domain.hostname}`);
+    }
     return domain;
   }
 
@@ -184,11 +188,15 @@ export class CloudShortlinksStore implements Store {
     // Transport DELETE directly (not the generic delete(), which swallows 404)
     // so a missing route or already-gone row surfaces as an error instead of a
     // false success — same defect class as deleteDomain.
-    await this.transport.del(
-      `/links/${enc(link.slug)}`,
-      undefined,
-      maybeSlug ? { query: { domain: domainOrSlug } } : {},
-    );
+    try {
+      await this.transport.del(
+        `/links/${enc(link.slug)}`,
+        undefined,
+        maybeSlug ? { query: { domain: domainOrSlug } } : {},
+      );
+    } catch (error) {
+      throw missingRouteError(error, "link", `DELETE /links/${link.slug}`);
+    }
     return link;
   }
 
@@ -218,4 +226,23 @@ function isNotFound(error: unknown): boolean {
     "status" in error &&
     (error as { status?: number }).status === 404
   );
+}
+
+/**
+ * Turn a DELETE failure into an actionable error. The caller has already
+ * resolved the resource (proving it exists in the cloud store), so a 404 here
+ * cannot mean "not found" — it means the deployed server does not expose the
+ * delete route yet (its image predates it) and needs an ECS redeploy. Surface
+ * that explicitly instead of the cryptic raw "…-> 404", and re-throw any other
+ * transport error untouched.
+ */
+function missingRouteError(error: unknown, resource: string, request: string): Error {
+  if (isNotFound(error)) {
+    return new Error(
+      `Cloud server rejected ${request} with 404 even though the ${resource} exists. ` +
+        `The deployed shortlinks server predates the ${resource}-delete route — redeploy the ` +
+        `cloud service (ECS) to a version that exposes it, then retry.`,
+    );
+  }
+  return error instanceof Error ? error : new Error(String(error));
 }
