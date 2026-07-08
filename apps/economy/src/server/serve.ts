@@ -18,6 +18,16 @@ import { ensurePricingSeeded } from '../lib/pricing.js'
 import { AGENTS, isAgent } from '../lib/agents.js'
 import { syncAll } from '../lib/sync-all.js'
 import { querySavingsSummary } from '../lib/savings.js'
+import { buildBrief } from '../lib/brief.js'
+import {
+  queryProjectDetail,
+  queryExportRows,
+  queryRangeStats,
+  queryForecast,
+  queryModelEfficiency,
+  type ExportType,
+} from '../lib/analytics.js'
+import { queryRequestsSince } from '../db/database.js'
 import { usageSnapshotFilterForPeriod } from '../lib/periods.js'
 import { queryBillingDiff } from '../lib/billing-diff.js'
 import { queryUsageSnapshots } from '../db/database.js'
@@ -515,13 +525,14 @@ export function createHandler(db: Database, options: HandlerOptions = {}) {
 
     if (path === '/api/usage' && method === 'GET') {
       const period = (url.searchParams.get('period') ?? 'month') as Period
-      const agent = url.searchParams.get('agent') ?? undefined
+      const agentParam = url.searchParams.get('agent') ?? undefined
+      const agent = agentParam && isAgent(agentParam) ? agentParam : undefined
       return ok({
         snapshots: queryUsageSnapshots(db, {
-          agent: agent && isAgent(agent) ? agent : undefined,
+          agent,
           ...usageSnapshotFilterForPeriod(period),
         }),
-        summary: querySummary(db, period, undefined, true),
+        summary: querySummary(db, period, undefined, true, agent),
       })
     }
 
@@ -529,6 +540,57 @@ export function createHandler(db: Database, options: HandlerOptions = {}) {
       const period = (url.searchParams.get('period') ?? 'month') as Period
       const agent = url.searchParams.get('agent') ?? undefined
       return ok(querySavingsSummary(db, period, agent && isAgent(agent) ? agent : undefined))
+    }
+
+    // Fleet brief (economy brief)
+    if (path === '/api/brief' && method === 'GET') {
+      const since = url.searchParams.get('since') ?? undefined
+      const machine = url.searchParams.get('machine') ?? undefined
+      try {
+        return ok(buildBrief(db, { since, machine }))
+      } catch (e) {
+        return err(e instanceof Error ? e.message : String(e))
+      }
+    }
+
+    // Project detail (economy project show)
+    if (path === '/api/projects/detail' && method === 'GET') {
+      const q = url.searchParams.get('q')?.trim()
+      if (!q) return err('q is required')
+      return ok(queryProjectDetail(db, q))
+    }
+
+    // CSV export rows (economy export)
+    if (path === '/api/export' && method === 'GET') {
+      const type = (url.searchParams.get('type') ?? 'sessions') as ExportType
+      if (type !== 'sessions' && type !== 'requests') return err('type must be sessions or requests')
+      const period = url.searchParams.get('period') ?? 'month'
+      return ok(queryExportRows(db, type, period))
+    }
+
+    // Period comparison range stats (economy compare)
+    if (path === '/api/compare' && method === 'GET') {
+      const from = url.searchParams.get('from')?.trim()
+      const to = url.searchParams.get('to')?.trim()
+      if (!from || !to) return err('from and to are required (YYYY-MM-DD)')
+      return ok(queryRangeStats(db, from, to))
+    }
+
+    // End-of-month forecast (economy forecast)
+    if (path === '/api/forecast' && method === 'GET') {
+      return ok(queryForecast(db))
+    }
+
+    // Per-model token efficiency (economy efficiency)
+    if (path === '/api/efficiency' && method === 'GET') {
+      return ok(queryModelEfficiency(db))
+    }
+
+    // Requests since a timestamp (economy watch live stream)
+    if (path === '/api/requests' && method === 'GET') {
+      const since = url.searchParams.get('since')?.trim()
+      if (!since) return err('since is required (ISO timestamp)')
+      return ok(queryRequestsSince(db, since))
     }
 
     if (path === '/api/subscriptions' && method === 'GET') {

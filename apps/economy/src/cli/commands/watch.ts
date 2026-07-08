@@ -1,7 +1,8 @@
 import chalk from 'chalk'
 import { watch } from 'fs'
-import { openDatabase, querySummary, queryRequestsSince } from '../../db/database.js'
+import { openDatabase } from '../../db/database.js'
 import { syncAll } from '../../lib/sync-all.js'
+import { getStore, isCloudStore } from '../../lib/store/index.js'
 import { getWatchPaths } from '../../lib/watch-paths.js'
 import type { Agent } from '../../types/index.js'
 import { sendNotification } from './notification.js'
@@ -40,7 +41,11 @@ function agentLabel(agent: string): string {
 }
 
 export async function watchCosts(opts: WatchOptions): Promise<void> {
-  const db = openDatabase()
+  const store = getStore()
+  const cloud = isCloudStore()
+  // Local ingestion writes to the on-box db; self_hosted/cloud mode streams the
+  // shared dataset from the API and never ingests local files.
+  const db = cloud ? null : openDatabase()
   let lastCheck = new Date(Date.now() - opts.interval * 1000).toISOString()
   const lines: string[] = []
   const MAX_LINES = 20
@@ -50,12 +55,14 @@ export async function watchCosts(opts: WatchOptions): Promise<void> {
   let ingestPending = false
   let ingestTimer: ReturnType<typeof setTimeout> | null = null
 
-  const mode = opts.daemon ? 'daemon' : 'poll'
-  const initialSummaryToday = querySummary(db, 'today')
-  const initialSummaryWeek = querySummary(db, 'week')
+  // File-watch ingestion only applies to the local transport.
+  const daemon = opts.daemon && !cloud
+  const mode = cloud ? 'cloud' : daemon ? 'daemon' : 'poll'
+  const initialSummaryToday = await store.summary('today')
+  const initialSummaryWeek = await store.summary('week')
   renderHeader(initialSummaryToday.total_usd, initialSummaryWeek.total_usd, mode)
 
-  if (opts.daemon) {
+  if (daemon) {
     const paths = getWatchPaths()
     console.log(chalk.dim(`\n  Watching ${paths.length} paths — sync on change, refresh every ${opts.interval}s\n`))
     for (const p of paths) {
@@ -65,6 +72,8 @@ export async function watchCosts(opts: WatchOptions): Promise<void> {
         try { watch(p, () => scheduleIngest()) } catch { /* skip unreadable paths */ }
       }
     }
+  } else if (cloud) {
+    console.log(chalk.dim(`\n  Streaming from cloud API every ${opts.interval}s — Ctrl+C to exit\n`))
   } else {
     console.log(chalk.dim(`\n  Polling every ${opts.interval}s — Ctrl+C to exit\n`))
   }
@@ -80,12 +89,12 @@ export async function watchCosts(opts: WatchOptions): Promise<void> {
 
   async function poll(): Promise<void> {
     const now = new Date().toISOString()
-    const shouldSync = !opts.daemon || ingestPending
+    const shouldSync = !daemon || ingestPending
     ingestPending = false
 
-    if (shouldSync) await syncAll(db)
+    if (shouldSync && db) await syncAll(db)
 
-    const newRequests = queryRequestsSince(db, lastCheck)
+    const newRequests = await store.recentRequests(lastCheck)
     lastCheck = now
 
     for (const req of newRequests) {
@@ -112,18 +121,20 @@ export async function watchCosts(opts: WatchOptions): Promise<void> {
       }
     }
 
-    const today = querySummary(db, 'today')
-    const week = querySummary(db, 'week')
+    const today = await store.summary('today')
+    const week = await store.summary('week')
     renderHeader(today.total_usd, week.total_usd, mode)
     for (const line of lines) console.log(line)
     if (lines.length === 0) console.log(chalk.dim('  Waiting for new requests...'))
-    const suffix = opts.daemon
+    const suffix = daemon
       ? `file watch + ${opts.interval}s refresh`
-      : `polling every ${opts.interval}s`
+      : cloud
+        ? `cloud stream every ${opts.interval}s`
+        : `polling every ${opts.interval}s`
     console.log(chalk.dim(`\n  Last updated: ${new Date().toLocaleTimeString()} — ${suffix} — Ctrl+C to exit`))
   }
 
-  if (opts.daemon) ingestPending = true
+  if (daemon) ingestPending = true
   await poll()
   const timer = setInterval(poll, opts.interval * 1000)
 

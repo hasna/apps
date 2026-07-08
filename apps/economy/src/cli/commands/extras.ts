@@ -1,26 +1,18 @@
 import { Command } from 'commander'
 import chalk from 'chalk'
-import { randomUUID } from 'crypto'
 import {
   openDatabase,
   querySummary,
-  queryUsageSnapshots,
-  listSubscriptions,
-  upsertSubscription,
-  deleteSubscription,
-  listMachines,
-  listMachineRegistry,
   queryBillingSummary,
   dedupeRequests,
   queryZeroCostTokenizedModels,
 } from '../../db/database.js'
-import { querySavingsSummary } from '../../lib/savings.js'
-import { queryBillingDiff } from '../../lib/billing-diff.js'
-import { usageSnapshotFilterForPeriod } from '../../lib/periods.js'
-import { buildStatusLine } from './tui.js'
+import { buildStatusLine, gatherStatusData } from './tui.js'
+import { getStore } from '../../lib/store/index.js'
 import { computeCostFromDb, ensurePricingSeeded, getPricingFromDb } from '../../lib/pricing.js'
 import { AGENTS, parseAgent } from '../../lib/agents.js'
-import type { Period } from '../../types/index.js'
+import type { SavingsSummary } from '../../lib/savings.js'
+import type { CostSummary, Period, UsageSnapshot } from '../../types/index.js'
 import {
   getCloudDatabaseUrl,
   getCloudScheduleStatus,
@@ -58,12 +50,13 @@ export function registerExtendedCommands(program: Command): void {
     .description('Show subscription usage quotas and consumption metrics')
     .option('--agent <agent>', `Filter by agent (${AGENTS.join('|')})`)
     .option('--json', 'Output JSON')
-    .action((periodArg: string | undefined, opts: { agent?: string; json?: boolean }) => {
-      const db = openDatabase()
+    .action(async (periodArg: string | undefined, opts: { agent?: string; json?: boolean }) => {
       const period = parsePeriod(periodArg, 'month')
       const agent = parseAgent(opts.agent, '--agent')
-      const snaps = queryUsageSnapshots(db, { agent, ...usageSnapshotFilterForPeriod(period) })
-      const summary = querySummary(db, period, undefined, true, agent)
+      const { snapshots: snaps, summary } = await getStore().usage(period, agent) as {
+        snapshots: UsageSnapshot[]
+        summary: CostSummary
+      }
 
       if (opts.json) {
         console.log(JSON.stringify({ period, agent: agent ?? 'all', snapshots: snaps, summary }, null, 2))
@@ -90,11 +83,10 @@ export function registerExtendedCommands(program: Command): void {
     .description('Subscription vs API-equivalent savings breakdown')
     .option('--agent <agent>', 'Filter by agent')
     .option('--json', 'Output JSON')
-    .action((periodArg: string | undefined, opts: { agent?: string; json?: boolean }) => {
-      const db = openDatabase()
+    .action(async (periodArg: string | undefined, opts: { agent?: string; json?: boolean }) => {
       const period = parsePeriod(periodArg, 'month')
       const agent = parseAgent(opts.agent, '--agent')
-      const savings = querySavingsSummary(db, period, agent)
+      const savings = await getStore().savings(period, agent) as SavingsSummary
 
       if (opts.json) {
         console.log(JSON.stringify(savings, null, 2))
@@ -122,12 +114,9 @@ export function registerExtendedCommands(program: Command): void {
     .option('--agent <agent>', 'Agent scope')
     .option('--fee <usd>', 'Monthly fee USD', '0')
     .option('--included <usd>', 'Included usage USD', '0')
-    .action((opts: { provider: string; plan: string; agent?: string; fee?: string; included?: string }) => {
-      const db = openDatabase()
-      const now = new Date().toISOString()
+    .action(async (opts: { provider: string; plan: string; agent?: string; fee?: string; included?: string }) => {
       const agent = parseAgent(opts.agent, '--agent') ?? null
-      upsertSubscription(db, {
-        id: randomUUID(),
+      await getStore().setSubscription({
         agent,
         provider: opts.provider,
         plan: opts.plan,
@@ -136,8 +125,6 @@ export function registerExtendedCommands(program: Command): void {
         billing_cycle_start: null,
         reset_policy: 'monthly',
         active: 1,
-        created_at: now,
-        updated_at: now,
       })
       console.log(chalk.green(`✓ Subscription set: ${opts.provider} / ${opts.plan}`))
     })
@@ -146,8 +133,8 @@ export function registerExtendedCommands(program: Command): void {
     .command('list')
     .description('List subscription plans')
     .option('--json', 'Output JSON')
-    .action((opts: { json?: boolean }) => {
-      const rows = listSubscriptions(openDatabase())
+    .action(async (opts: { json?: boolean }) => {
+      const rows = await getStore().listSubscriptions()
       if (opts.json) { console.log(JSON.stringify(rows, null, 2)); return }
       if (rows.length === 0) { console.log(chalk.yellow('No subscriptions configured.')); return }
       console.log()
@@ -160,16 +147,16 @@ export function registerExtendedCommands(program: Command): void {
   subsCmd
     .command('remove <id>')
     .description('Remove subscription by id')
-    .action((id: string) => {
-      deleteSubscription(openDatabase(), id)
+    .action(async (id: string) => {
+      await getStore().removeSubscription(id)
       console.log(chalk.green('✓ Subscription removed'))
     })
 
   program
     .command('status')
     .description('One-line fleet health and spend summary')
-    .action(() => {
-      console.log(buildStatusLine(openDatabase()))
+    .action(async () => {
+      console.log(buildStatusLine(await gatherStatusData()))
     })
 
   program
@@ -264,7 +251,7 @@ export function registerExtendedCommands(program: Command): void {
     .description('Print waybar-compatible JSON status line')
     .action(async () => {
       const { printWaybarJson } = await import('./tui.js')
-      printWaybarJson()
+      await printWaybarJson()
     })
 
   const barCmd = program.command('bar').description('Status bar helpers (Linux)')
@@ -281,7 +268,7 @@ export function registerExtendedCommands(program: Command): void {
     .description('Alias for economy waybar')
     .action(async () => {
       const { printWaybarJson } = await import('./tui.js')
-      printWaybarJson()
+      await printWaybarJson()
     })
 
   program
@@ -303,10 +290,9 @@ export function registerExtendedCommands(program: Command): void {
       .command('diff')
       .description('Show estimated vs actual billing delta')
       .option('--period <p>', 'Period', 'month')
-      .action((opts: { period?: string }) => {
-        const db = openDatabase()
+      .action(async (opts: { period?: string }) => {
         const period = parsePeriod(opts.period, 'month')
-        const diff = queryBillingDiff(db, period)
+        const diff = await getStore().billingDiff(period)
 
         console.log()
         console.log(chalk.bold.cyan(`  Billing diff — ${period}`))
@@ -352,12 +338,9 @@ export function registerFleetCommands(program: Command): void {
     .description('Fleet-wide summaries across all machines')
     .option('--period <p>', 'Period', 'today')
     .option('--json', 'Output JSON')
-    .action((opts: { period?: string; json?: boolean }) => {
-      const db = openDatabase()
+    .action(async (opts: { period?: string; json?: boolean }) => {
       const period = parsePeriod(opts.period, 'today')
-      const summary = querySummary(db, period, undefined, true)
-      const machines = listMachines(db, period)
-      const registry = listMachineRegistry(db)
+      const { summary, machines, registry } = await getStore().fleet(period)
 
       if (opts.json) {
         console.log(JSON.stringify({ period, summary, machines, registry }, null, 2))

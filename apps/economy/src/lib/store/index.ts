@@ -54,8 +54,10 @@ import {
   upsertSubscription,
   deleteSubscription,
   listMachines,
+  listMachineRegistry,
   queryBillingSummary,
   queryUsageSnapshots,
+  queryRequestsSince,
   type MachineInfo,
   type SessionDetail,
   type DbModelPricing,
@@ -63,7 +65,21 @@ import {
 } from '../../db/database.js'
 import { ensurePricingSeeded } from '../pricing.js'
 import { querySavingsSummary } from '../savings.js'
+import { queryBillingDiff, type BillingDiffSummary } from '../billing-diff.js'
 import { usageSnapshotFilterForPeriod } from '../periods.js'
+import { buildBrief, type EconomyBrief } from '../brief.js'
+import {
+  queryProjectDetail,
+  queryExportRows,
+  queryRangeStats,
+  queryForecast,
+  queryModelEfficiency,
+  type ProjectDetail,
+  type RangeStats,
+  type ForecastData,
+  type ModelEfficiency,
+  type ExportType,
+} from '../analytics.js'
 import {
   economyCloudStorage,
   cloudListItems,
@@ -77,12 +93,21 @@ import type {
   Budget,
   BudgetStatus,
   CostSummary,
+  EconomyRequest,
   EconomySession,
   ModelBreakdown,
+  MachineRegistry,
   Period,
   ProjectBreakdown,
   Subscription,
 } from '../../types/index.js'
+
+/** Fleet roll-up: cross-machine summary + per-machine rows + machine registry. */
+export interface FleetSummary {
+  summary: CostSummary
+  machines: MachineInfo[]
+  registry: MachineRegistry[]
+}
 
 /** Options accepted by the breakdown reads. `since` (ISO date) wins over period. */
 export interface BreakdownQuery {
@@ -117,6 +142,15 @@ export interface PricingInput {
   cache_write_per_1m: number
   cache_write_1h_per_1m: number
   cache_storage_per_1m_hour: number
+}
+
+/** Query for the fleet brief. `currentMachineId`/`localSyncAt` only apply to the
+ * local transport (the cloud serve computes freshness from its own dataset). */
+export interface BriefQuery {
+  since?: string
+  machine?: string
+  currentMachineId?: string
+  localSyncAt?: Date
 }
 
 /** Create/update input for a subscription plan. */
@@ -160,7 +194,11 @@ export interface EconomyStore {
   accounts(period: Period): Promise<AccountBreakdown[]>
   daily(days: number, machine?: string): Promise<Array<{ date: string; cost_usd: number; agent: string }>>
   machines(): Promise<MachineInfo[]>
+  /** Cross-machine fleet roll-up (backs `economy fleet`). */
+  fleet(period: Period): Promise<FleetSummary>
   billingSummary(period: Period): Promise<{ total_usd: number; by_provider: Record<string, number> }>
+  /** Estimated vs actual (provider) billing delta (backs `economy billing diff`). */
+  billingDiff(period: Period): Promise<BillingDiffSummary>
   usage(period: Period, agent?: Agent): Promise<unknown>
   savings(period: Period, agent?: Agent): Promise<unknown>
   listBudgets(): Promise<BudgetStatus[]>
@@ -168,6 +206,22 @@ export interface EconomyStore {
   listPricing(): Promise<DbModelPricing[]>
   listSubscriptions(): Promise<Subscription[]>
   listProjects(): Promise<ProjectBreakdown[]>
+
+  // ── Analytics reads ──────────────────────────────────────────────────────────
+  /** Fleet-wide usage brief (backs `economy brief`). */
+  brief(query?: BriefQuery): Promise<EconomyBrief>
+  /** Detailed breakdown for one project by name or path substring. */
+  projectDetail(nameOrPath: string): Promise<ProjectDetail | null>
+  /** Raw rows for a CSV export of sessions or requests over a period. */
+  exportRows(type: ExportType, period: string): Promise<Array<Record<string, unknown>>>
+  /** Cost/request/token/session totals for an inclusive [from,to] date range. */
+  rangeStats(from: string, to: string): Promise<RangeStats>
+  /** End-of-month projection from the current burn rate. */
+  forecast(): Promise<ForecastData>
+  /** Per-model token efficiency (output/input, cache hit%, cost/1k out). */
+  efficiency(): Promise<ModelEfficiency[]>
+  /** Requests recorded at or after an ISO timestamp (live cost stream). */
+  recentRequests(since: string): Promise<EconomyRequest[]>
 
   // ── Writes ─────────────────────────────────────────────────────────────────
   /** Create a budget; resolves to its id ('' if the transport does not echo one). */
@@ -256,13 +310,25 @@ export class LocalStore implements EconomyStore {
     return listMachines(this.db())
   }
 
+  async fleet(period: Period): Promise<FleetSummary> {
+    return {
+      summary: querySummary(this.db(), period, undefined, true),
+      machines: listMachines(this.db(), period),
+      registry: listMachineRegistry(this.db()),
+    }
+  }
+
   async billingSummary(period: Period): Promise<{ total_usd: number; by_provider: Record<string, number> }> {
     return queryBillingSummary(this.db(), period)
   }
 
+  async billingDiff(period: Period): Promise<BillingDiffSummary> {
+    return queryBillingDiff(this.db(), period)
+  }
+
   async usage(period: Period, agent?: Agent): Promise<unknown> {
     const snapshots = queryUsageSnapshots(this.db(), { agent, ...usageSnapshotFilterForPeriod(period) })
-    const summary = querySummary(this.db(), period, undefined, true)
+    const summary = querySummary(this.db(), period, undefined, true, agent)
     return { snapshots, summary }
   }
 
@@ -288,6 +354,39 @@ export class LocalStore implements EconomyStore {
 
   async listProjects(): Promise<ProjectBreakdown[]> {
     return queryProjectBreakdown(this.db())
+  }
+
+  async brief(query: BriefQuery = {}): Promise<EconomyBrief> {
+    return buildBrief(this.db(), {
+      since: query.since,
+      machine: query.machine,
+      currentMachineId: query.currentMachineId,
+      localSyncAt: query.localSyncAt,
+    })
+  }
+
+  async projectDetail(nameOrPath: string): Promise<ProjectDetail | null> {
+    return queryProjectDetail(this.db(), nameOrPath)
+  }
+
+  async exportRows(type: ExportType, period: string): Promise<Array<Record<string, unknown>>> {
+    return queryExportRows(this.db(), type, period)
+  }
+
+  async rangeStats(from: string, to: string): Promise<RangeStats> {
+    return queryRangeStats(this.db(), from, to)
+  }
+
+  async forecast(): Promise<ForecastData> {
+    return queryForecast(this.db())
+  }
+
+  async efficiency(): Promise<ModelEfficiency[]> {
+    return queryModelEfficiency(this.db())
+  }
+
+  async recentRequests(since: string): Promise<EconomyRequest[]> {
+    return queryRequestsSince(this.db(), since)
   }
 
   async setBudget(input: BudgetInput): Promise<string> {
@@ -435,8 +534,21 @@ export class ApiStore implements EconomyStore {
     return cloudListItems<MachineInfo>(this.cloud, 'machines')
   }
 
+  async fleet(period: Period): Promise<FleetSummary> {
+    const data = await cloudObject<FleetSummary>(this.cloud, '/fleet', q({ period }))
+    return {
+      summary: data.summary,
+      machines: data.machines ?? [],
+      registry: data.registry ?? [],
+    }
+  }
+
   async billingSummary(period: Period): Promise<{ total_usd: number; by_provider: Record<string, number> }> {
     return cloudObject<{ total_usd: number; by_provider: Record<string, number> }>(this.cloud, '/billing', q({ period }))
+  }
+
+  async billingDiff(period: Period): Promise<BillingDiffSummary> {
+    return cloudObject<BillingDiffSummary>(this.cloud, '/billing/diff', q({ period }))
   }
 
   async usage(period: Period, agent?: Agent): Promise<unknown> {
@@ -465,6 +577,36 @@ export class ApiStore implements EconomyStore {
 
   async listProjects(): Promise<ProjectBreakdown[]> {
     return cloudListItems<ProjectBreakdown>(this.cloud, 'projects')
+  }
+
+  async brief(query: BriefQuery = {}): Promise<EconomyBrief> {
+    // The serve computes the brief from the shared dataset; local-only sync
+    // hints (currentMachineId/localSyncAt) do not apply and are not sent.
+    return cloudObject<EconomyBrief>(this.cloud, '/brief', q({ since: query.since, machine: query.machine }))
+  }
+
+  async projectDetail(nameOrPath: string): Promise<ProjectDetail | null> {
+    return cloudObject<ProjectDetail | null>(this.cloud, '/projects/detail', q({ q: nameOrPath }))
+  }
+
+  async exportRows(type: ExportType, period: string): Promise<Array<Record<string, unknown>>> {
+    return cloudListItems<Record<string, unknown>>(this.cloud, 'export', q({ type, period }))
+  }
+
+  async rangeStats(from: string, to: string): Promise<RangeStats> {
+    return cloudObject<RangeStats>(this.cloud, '/compare', q({ from, to }))
+  }
+
+  async forecast(): Promise<ForecastData> {
+    return cloudObject<ForecastData>(this.cloud, '/forecast')
+  }
+
+  async efficiency(): Promise<ModelEfficiency[]> {
+    return cloudListItems<ModelEfficiency>(this.cloud, 'efficiency')
+  }
+
+  async recentRequests(since: string): Promise<EconomyRequest[]> {
+    return cloudListItems<EconomyRequest>(this.cloud, 'requests', q({ since }))
   }
 
   async setBudget(input: BudgetInput): Promise<string> {

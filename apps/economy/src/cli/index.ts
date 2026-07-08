@@ -672,58 +672,33 @@ projectCmd
   .description('Detailed project breakdown with sparkline')
   .action(async (nameOrPath: string) => {
     await autoSync()
-    const db = openDatabase()
-    // Find project by name or path substring
-    const sessions = db.prepare(`SELECT * FROM sessions WHERE project_name LIKE ? OR project_path LIKE ? ORDER BY started_at DESC`).all(`%${nameOrPath}%`, `%${nameOrPath}%`) as Array<Record<string, unknown>>
-    if (sessions.length === 0) { console.log(chalk.yellow(`No sessions found for: ${nameOrPath}`)); return }
+    const detail = await getStore().projectDetail(nameOrPath)
+    if (!detail) { console.log(chalk.yellow(`No sessions found for: ${nameOrPath}`)); return }
 
-    const projectName = sessions[0]!['project_name'] as string || nameOrPath
-    const projectPath = sessions[0]!['project_path'] as string || ''
-    const totalCost = sessions.reduce((s, r) => s + (r['total_cost_usd'] as number), 0)
-    const totalTokens = sessions.reduce((s, r) => s + (r['total_tokens'] as number), 0)
-
-    // Daily sparkline
-    const daily = db.prepare(`
-      SELECT DATE(r.timestamp) as d, SUM(r.cost_usd) as cost
-      FROM requests r JOIN sessions s ON r.session_id = s.id
-      WHERE (s.project_name LIKE ? OR s.project_path LIKE ?)
-        AND r.timestamp >= DATE('now', '-14 days')
-      GROUP BY d ORDER BY d ASC
-    `).all(`%${nameOrPath}%`, `%${nameOrPath}%`) as Array<{ d: string; cost: number }>
-    const dailyValues = daily.map(d => d.cost)
-
-    // Model breakdown for project
-    const models = db.prepare(`
-      SELECT r.model, COUNT(*) as reqs, SUM(r.cost_usd) as cost
-      FROM requests r JOIN sessions s ON r.session_id = s.id
-      WHERE s.project_name LIKE ? OR s.project_path LIKE ?
-      GROUP BY r.model ORDER BY cost DESC LIMIT 5
-    `).all(`%${nameOrPath}%`, `%${nameOrPath}%`) as Array<{ model: string; reqs: number; cost: number }>
+    const dailyValues = detail.daily.map(d => d.cost_usd)
 
     console.log()
-    console.log(chalk.bold.cyan(`  ${projectName}`))
-    console.log(chalk.dim(`  ${projectPath}`))
+    console.log(chalk.bold.cyan(`  ${detail.project_name}`))
+    console.log(chalk.dim(`  ${detail.project_path}`))
     console.log()
     printTable(['Metric', 'Value'], [
-      ['Total cost', fmt(totalCost)],
-      ['Sessions', fmtCount(sessions.length)],
-      ['Total tokens', fmtTokens(totalTokens)],
+      ['Total cost', fmt(detail.total_cost_usd)],
+      ['Sessions', fmtCount(detail.sessions)],
+      ['Total tokens', fmtTokens(detail.total_tokens)],
     ])
     if (dailyValues.length > 0) {
       console.log(`\n  ${chalk.dim('14-day trend:')} ${sparkline(dailyValues)}`)
     }
-    if (models.length > 0) {
+    if (detail.models.length > 0) {
       console.log(`\n  ${chalk.dim('Model breakdown:')}`)
-      for (const m of models) {
-        console.log(`    ${chalk.white(m.model.padEnd(30))} ${fmt(m.cost)} (${fmtCount(m.reqs)} reqs)`)
+      for (const m of detail.models) {
+        console.log(`    ${chalk.white(m.model.padEnd(30))} ${fmt(m.cost_usd)} (${fmtCount(m.requests)} reqs)`)
       }
     }
-    // Top 5 sessions
-    const topSessions = sessions.sort((a, b) => (b['total_cost_usd'] as number) - (a['total_cost_usd'] as number)).slice(0, 5)
-    if (topSessions.length > 0) {
+    if (detail.top_sessions.length > 0) {
       console.log(`\n  ${chalk.dim('Top sessions:')}`)
-      for (const s of topSessions) {
-        console.log(`    ${chalk.dim((s['id'] as string).substring(0, 12))}  ${fmt(s['total_cost_usd'] as number)}  ${chalk.dim(String(s['started_at']).substring(0, 16))}`)
+      for (const s of detail.top_sessions) {
+        console.log(`    ${chalk.dim(s.id.substring(0, 12))}  ${fmt(s.total_cost_usd)}  ${chalk.dim(String(s.started_at).substring(0, 16))}`)
       }
     }
     console.log()
@@ -1103,25 +1078,17 @@ program
   .option('--output <file>', 'Output file path (default: stdout)')
   .action(async (opts: { type?: string; period?: string; output?: string }) => {
     await autoSync()
-    const db = openDatabase()
+    const type = opts.type === 'requests' ? 'requests' : 'sessions'
+    const period = opts.period ?? 'month'
+    const rows = await getStore().exportRows(type, period)
     let csv: string
 
-    if (opts.type === 'requests') {
-      const where = opts.period === 'today' ? `DATE(timestamp) = DATE('now')`
-        : opts.period === 'week' ? `timestamp >= DATE('now', '-7 days')`
-        : opts.period === 'all' ? '1=1'
-        : `timestamp >= DATE('now', '-30 days')`
-      const rows = db.prepare(`SELECT * FROM requests WHERE ${where} ORDER BY timestamp ASC`).all() as Array<Record<string, unknown>>
+    if (type === 'requests') {
       csv = 'id,agent,session_id,model,input_tokens,output_tokens,cache_read_tokens,cache_create_tokens,cost_usd,duration_ms,timestamp\n'
       for (const r of rows) {
         csv += `${r['id']},${r['agent']},${r['session_id']},${r['model']},${r['input_tokens']},${r['output_tokens']},${r['cache_read_tokens']},${r['cache_create_tokens']},${r['cost_usd']},${r['duration_ms']},${r['timestamp']}\n`
       }
     } else {
-      const where = opts.period === 'today' ? `DATE(started_at) = DATE('now')`
-        : opts.period === 'week' ? `started_at >= DATE('now', '-7 days')`
-        : opts.period === 'all' ? '1=1'
-        : `started_at >= DATE('now', '-30 days')`
-      const rows = db.prepare(`SELECT * FROM sessions WHERE ${where} ORDER BY started_at DESC`).all() as Array<Record<string, unknown>>
       csv = 'id,agent,project_path,project_name,started_at,ended_at,total_cost_usd,total_tokens,request_count\n'
       for (const r of rows) {
         csv += `${r['id']},${r['agent']},"${r['project_path']}","${r['project_name']}",${r['started_at']},${r['ended_at'] ?? ''},${r['total_cost_usd']},${r['total_tokens']},${r['request_count']}\n`
@@ -1144,7 +1111,7 @@ program
   .description('Compare two periods (today/yesterday/week/lastweek/month/lastmonth)')
   .action(async (p1: string, p2: string) => {
     await autoSync()
-    const db = openDatabase()
+    const store = getStore()
 
     function dateRange(period: string): [string, string] {
       const now = new Date()
@@ -1178,16 +1145,10 @@ program
       }
     }
 
-    function queryRange(from: string, to: string) {
-      const r = db.prepare(`SELECT COALESCE(SUM(cost_usd),0) as cost, COUNT(*) as requests, COALESCE(SUM(input_tokens+output_tokens+cache_read_tokens+cache_create_tokens),0) as tokens FROM requests WHERE DATE(timestamp) BETWEEN ? AND ?`).get(from, to) as { cost: number; requests: number; tokens: number }
-      const s = db.prepare(`SELECT COUNT(*) as sessions FROM sessions WHERE DATE(started_at) BETWEEN ? AND ?`).get(from, to) as { sessions: number }
-      return { ...r, sessions: s.sessions }
-    }
-
     const [f1, t1] = dateRange(p1)
     const [f2, t2] = dateRange(p2)
-    const a = queryRange(f1, t1)
-    const b = queryRange(f2, t2)
+    const a = await store.rangeStats(f1, t1)
+    const b = await store.rangeStats(f2, t2)
 
     function delta(v1: number, v2: number): string {
       const d = v1 - v2
@@ -1219,38 +1180,20 @@ program
   .description('Project end-of-month cost based on current burn rate')
   .action(async () => {
     await autoSync()
-    const db = openDatabase()
-
-    const now = new Date()
-    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
-    const dayOfMonth = now.getDate()
-    const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
-
-    const monthSoFar = db.prepare(`SELECT COALESCE(SUM(cost_usd),0) as cost FROM requests WHERE DATE(timestamp) >= ?`).get(monthStart) as { cost: number }
-    const dailyAvg = dayOfMonth > 0 ? monthSoFar.cost / dayOfMonth : 0
-    const projected = dailyAvg * daysInMonth
-
-    // Last 7 days rate
-    const sevenDaysAgo = new Date(now); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
-    const last7 = db.prepare(`SELECT COALESCE(SUM(cost_usd),0) as cost FROM requests WHERE DATE(timestamp) >= ?`).get(sevenDaysAgo.toISOString().substring(0, 10)) as { cost: number }
-    const last7DailyAvg = last7.cost / 7
-    const last7Projected = last7DailyAvg * daysInMonth
-
-    // Min/max day
-    const dailyCosts = db.prepare(`SELECT DATE(timestamp) as d, SUM(cost_usd) as cost FROM requests WHERE DATE(timestamp) >= ? GROUP BY d ORDER BY cost ASC`).all(monthStart) as Array<{ d: string; cost: number }>
-    const cheapest = dailyCosts[0]
-    const mostExpensive = dailyCosts[dailyCosts.length - 1]
+    const f = await getStore().forecast()
+    const cheapest = f.cheapest_day
+    const mostExpensive = f.most_expensive_day
 
     console.log()
-    console.log(chalk.bold.cyan(`  Forecast (${dayOfMonth} of ${daysInMonth} days)`))
+    console.log(chalk.bold.cyan(`  Forecast (${f.day_of_month} of ${f.days_in_month} days)`))
     console.log()
     printTable(['Metric', 'Value'], [
-      ['Spent so far', fmt(monthSoFar.cost)],
-      ['Daily average', fmt(dailyAvg)],
-      [chalk.bold('Projected total'), chalk.bold(fmt(projected).replace(chalk.green(''), ''))],
-      ['Last 7-day rate', `${fmt(last7DailyAvg)}/day → ${fmt(last7Projected)}`],
-      ['Cheapest day', cheapest ? `${fmt(cheapest.cost)} (${cheapest.d})` : '—'],
-      ['Most expensive', mostExpensive ? `${fmt(mostExpensive.cost)} (${mostExpensive.d})` : '—'],
+      ['Spent so far', fmt(f.spent_so_far_usd)],
+      ['Daily average', fmt(f.daily_avg_usd)],
+      [chalk.bold('Projected total'), chalk.bold(fmt(f.projected_usd).replace(chalk.green(''), ''))],
+      ['Last 7-day rate', `${fmt(f.last7_daily_avg_usd)}/day → ${fmt(f.last7_projected_usd)}`],
+      ['Cheapest day', cheapest ? `${fmt(cheapest.cost_usd)} (${cheapest.date})` : '—'],
+      ['Most expensive', mostExpensive ? `${fmt(mostExpensive.cost_usd)} (${mostExpensive.date})` : '—'],
     ])
     console.log()
   })
@@ -1262,13 +1205,7 @@ program
   .description('Show output/input token ratio per model')
   .action(async () => {
     await autoSync()
-    const db = openDatabase()
-    const models = db.prepare(`
-      SELECT model, SUM(input_tokens) as input, SUM(output_tokens) as output,
-             SUM(cache_read_tokens) as cache_read, SUM(cache_create_tokens) as cache_write,
-             COUNT(*) as requests, SUM(cost_usd) as cost
-      FROM requests GROUP BY model ORDER BY cost DESC
-    `).all() as Array<{ model: string; input: number; output: number; cache_read: number; cache_write: number; requests: number; cost: number }>
+    const models = await getStore().efficiency()
 
     console.log()
     console.log(chalk.bold.cyan('  Token Efficiency'))
