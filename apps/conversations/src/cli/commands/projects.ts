@@ -39,7 +39,7 @@ export function registerProjectCommands(program: Command): void {
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       try {
-        const panel = createConversationsProjectPanel(opts.project, { limit: opts.limit });
+        const panel = await createConversationsProjectPanel(opts.project, { limit: opts.limit });
         if (opts.json || opts.contract) {
           console.log(JSON.stringify(panel, null, 2));
         } else {

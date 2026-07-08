@@ -304,6 +304,70 @@ export function readMessages(opts: ReadMessagesOptions = {}): Message[] {
   return messages;
 }
 
+export interface CountMessagesOptions {
+  session_id?: string;
+  from?: string;
+  to?: string;
+  channel?: string;
+  project_id?: string;
+  since?: string;
+  since_id?: number;
+  unread_only?: boolean;
+  blocking_only?: boolean;
+}
+
+/**
+ * Authoritative COUNT of messages matching the given filters. Mirrors the filter
+ * surface of {@link readMessages} and the server `/messages?count=1` endpoint so
+ * both Store transports (LocalStore, ApiStore) return identical totals. Used by
+ * aggregation callers (e.g. the project panel) that need a total without paging
+ * every row through memory.
+ */
+export function countMessages(opts: CountMessagesOptions = {}): number {
+  const db = getDb();
+  const conditions: string[] = [];
+  const params: (string | number)[] = [];
+
+  if (opts.session_id) {
+    conditions.push("session_id = ?");
+    params.push(opts.session_id);
+  }
+  if (opts.from) {
+    conditions.push("from_agent = ?");
+    params.push(opts.from);
+  }
+  if (opts.to) {
+    conditions.push("to_agent = ?");
+    params.push(opts.to);
+  }
+  if (opts.channel) {
+    conditions.push("channel = ?");
+    params.push(normalizeChannelName(opts.channel));
+  }
+  if (opts.project_id) {
+    conditions.push("project_id = ?");
+    params.push(opts.project_id);
+  }
+  if (opts.since) {
+    conditions.push("created_at > ?");
+    params.push(opts.since);
+  }
+  if (opts.since_id !== undefined) {
+    conditions.push("id > ?");
+    params.push(opts.since_id);
+  }
+  if (opts.unread_only) {
+    conditions.push("read_at IS NULL");
+  }
+  if (opts.blocking_only) {
+    conditions.push("blocking = 1");
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const row = db.prepare(`SELECT COUNT(*) AS n FROM messages ${where}`).get(...params) as { n: number } | undefined;
+  return row?.n ?? 0;
+}
+
 export function markRead(ids: number[], reader: string): number {
   const db = getDb();
   if (ids.length === 0) return 0;

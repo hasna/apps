@@ -540,6 +540,20 @@ export class ApiStore implements ConversationsStore {
     const body = await this.get<{ count?: number }>("/messages", { ...query, count: 1 });
     return Number(body?.count ?? 0);
   }
+  countMessages: ConversationsStore["countMessages"] = async (opts) => {
+    const o = opts ?? {};
+    return (await this.messageCount({
+      session: o.session_id,
+      from: o.from,
+      to: o.to,
+      channel: o.channel ? normalizeChannelName(o.channel) : undefined,
+      project_id: o.project_id,
+      since: normalizeSince(o.since),
+      since_id: o.since_id,
+      unread_only: o.unread_only ? true : undefined,
+      blocking_only: o.blocking_only ? true : undefined,
+    })) as never;
+  };
   exportMessages: ConversationsStore["exportMessages"] = async (opts) => {
     const body = await this.get<{ export?: string }>("/messages/export", opts as Q);
     return String(body?.export ?? "") as never;

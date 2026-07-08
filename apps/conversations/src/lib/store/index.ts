@@ -210,6 +210,7 @@ export interface ConversationsStore {
   deleteMessage: Async<typeof messagesLib.deleteMessage>;
   editMessage: Async<typeof messagesLib.editMessage>;
   readMessages: Async<typeof messagesLib.readMessages>;
+  countMessages: Async<typeof messagesLib.countMessages>;
   searchMessages: Async<typeof messagesLib.searchMessages>;
   readDigest: Async<typeof messagesLib.readDigest>;
   exportMessages: Async<typeof messagesLib.exportMessages>;
@@ -355,6 +356,7 @@ export class LocalStore implements ConversationsStore {
   deleteMessage: ConversationsStore["deleteMessage"] = async (...a) => messagesLib.deleteMessage(...a);
   editMessage: ConversationsStore["editMessage"] = async (...a) => messagesLib.editMessage(...a);
   readMessages: ConversationsStore["readMessages"] = async (...a) => messagesLib.readMessages(...a);
+  countMessages: ConversationsStore["countMessages"] = async (...a) => messagesLib.countMessages(...a);
   searchMessages: ConversationsStore["searchMessages"] = async (...a) => messagesLib.searchMessages(...a);
   readDigest: ConversationsStore["readDigest"] = async (...a) => messagesLib.readDigest(...a);
   exportMessages: ConversationsStore["exportMessages"] = async (...a) => messagesLib.exportMessages(...a);

@@ -4,13 +4,8 @@ import {
   type ProjectPanel,
   type ProjectPanelInput,
 } from "@hasna/contracts";
-import { getDb } from "./db.js";
-import { listChannels } from "./channels.js";
 import { normalizeChannelName } from "./channel-names.js";
-import { readMessages } from "./messages.js";
-import { listAgents } from "./presence.js";
-import { getProject, getProjectByName, listProjects } from "./projects.js";
-import { getChannelTopics } from "./topics.js";
+import { getStore, type ConversationsStore } from "./store/index.js";
 import type { ChannelInfo, Message, ProjectInfo } from "../types.js";
 
 export interface ConversationsProjectPanelOptions {
@@ -32,11 +27,11 @@ function slugify(value: string): string {
     .replace(/-{2,}/g, "-") || "project";
 }
 
-function resolveProject(ref: string): ProjectInfo | null {
-  const direct = getProject(ref) ?? getProjectByName(ref);
+async function resolveProject(store: ConversationsStore, ref: string): Promise<ProjectInfo | null> {
+  const direct = (await store.getProject(ref)) ?? (await store.getProjectByName(ref));
   if (direct) return direct;
   const wanted = slugify(ref);
-  return listProjects().find((project) => slugify(project.name) === wanted) ?? null;
+  return (await store.listProjects()).find((project) => slugify(project.name) === wanted) ?? null;
 }
 
 function toTimestamp(value: string | null | undefined): string | undefined {
@@ -111,53 +106,39 @@ function stateForConversation(channels: ChannelInfo[], messages: Message[]): Pro
   return channels.length === 0 && messages.length === 0 ? "empty" : "ready";
 }
 
-function countMessages(projectId: string | null, channelNames: string[]): number {
-  const db = getDb();
-  const conditions: string[] = [];
-  const params: string[] = [];
-  const scope: string[] = [];
+/**
+ * Total messages in the panel's scope — the UNION of `project_id = P` and
+ * `channel IN channelNames` — counted through the Store (never raw sqlite).
+ * Computed by inclusion–exclusion so the count is exact without double-counting:
+ * a message belongs to at most one channel (per-channel counts are disjoint), so
+ * we take the project total plus, for each channel, its rows that are NOT already
+ * counted under the project_id. `blockingOnly` restricts every count to blockers.
+ */
+async function countScope(
+  store: ConversationsStore,
+  projectId: string | null,
+  channelNames: string[],
+  blockingOnly: boolean,
+): Promise<number> {
+  const base = blockingOnly ? { blocking_only: true as const } : {};
+  let total = 0;
   if (projectId) {
-    scope.push("project_id = ?");
-    params.push(projectId);
+    total += await store.countMessages({ ...base, project_id: projectId });
   }
-  if (channelNames.length > 0) {
-    scope.push(`channel IN (${channelNames.map(() => "?").join(",")})`);
-    params.push(...channelNames);
+  for (const channel of channelNames) {
+    const inChannel = await store.countMessages({ ...base, channel });
+    const alsoInProject = projectId
+      ? await store.countMessages({ ...base, channel, project_id: projectId })
+      : 0;
+    total += inChannel - alsoInProject;
   }
-  if (scope.length === 0) {
-    return 0;
-  }
-  conditions.push(`(${scope.join(" OR ")})`);
-  const where = `WHERE ${conditions.join(" AND ")}`;
-  const row = db.prepare(`SELECT COUNT(*) AS total FROM messages ${where}`).get(...params) as { total: number } | null;
-  return row?.total ?? 0;
+  return total;
 }
 
-function countBlocking(projectId: string | null, channelNames: string[]): number {
-  const db = getDb();
-  const conditions = ["blocking = 1"];
-  const params: string[] = [];
-  const scope: string[] = [];
-  if (projectId) {
-    scope.push("project_id = ?");
-    params.push(projectId);
-  }
-  if (channelNames.length > 0) {
-    scope.push(`channel IN (${channelNames.map(() => "?").join(",")})`);
-    params.push(...channelNames);
-  }
-  if (scope.length === 0) {
-    return 0;
-  }
-  conditions.push(`(${scope.join(" OR ")})`);
-  const row = db.prepare(`SELECT COUNT(*) AS total FROM messages WHERE ${conditions.join(" AND ")}`).get(...params) as { total: number } | null;
-  return row?.total ?? 0;
-}
-
-function selectMessages(projectId: string | null, channels: ChannelInfo[], limit: number): Message[] {
+async function selectMessages(store: ConversationsStore, projectId: string | null, channels: ChannelInfo[], limit: number): Promise<Message[]> {
   const messagesById = new Map<number, Message>();
   if (projectId) {
-    for (const message of readMessages({
+    for (const message of await store.readMessages({
       project_id: projectId,
       latest: limit,
       max_content_length: 200,
@@ -169,7 +150,7 @@ function selectMessages(projectId: string | null, channels: ChannelInfo[], limit
 
   const channelLimit = projectId ? limit : Math.max(1, Math.ceil(limit / Math.max(1, channels.length)));
   for (const channel of channels) {
-    for (const message of readMessages({
+    for (const message of await store.readMessages({
       channel: channel.name,
       latest: channelLimit,
       max_content_length: 200,
@@ -182,18 +163,18 @@ function selectMessages(projectId: string | null, channels: ChannelInfo[], limit
   return [...messagesById.values()].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, limit);
 }
 
-function projectChannels(project: ProjectInfo | null, projectRef: string, limit: number): ChannelInfo[] {
-  if (project) return listChannels({ project_id: project.id }).slice(0, limit);
+async function projectChannels(store: ConversationsStore, project: ProjectInfo | null, projectRef: string, limit: number): Promise<ChannelInfo[]> {
+  if (project) return (await store.listChannels({ project_id: project.id })).slice(0, limit);
   const normalized = normalizeChannelName(projectRef);
   const iproj = `iproj-${normalized.replace(/^iproj-/, "")}`;
-  const matches = listChannels().filter((channel) => channel.name === normalized || channel.name === iproj);
+  const matches = (await store.listChannels()).filter((channel) => channel.name === normalized || channel.name === iproj);
   return matches.slice(0, limit);
 }
 
-function collectTopics(channels: ChannelInfo[], limit: number): string[] {
+async function collectTopics(store: ConversationsStore, channels: ChannelInfo[], limit: number): Promise<string[]> {
   const topics = new Map<string, number>();
   for (const channel of channels.slice(0, Math.min(limit, 5))) {
-    for (const topic of getChannelTopics(channel.name, { limit: 50 }).slice(0, 5)) {
+    for (const topic of (await store.getChannelTopics(channel.name, { limit: 50 })).slice(0, 5)) {
       topics.set(topic.topic, (topics.get(topic.topic) ?? 0) + topic.count);
     }
   }
@@ -203,25 +184,26 @@ function collectTopics(channels: ChannelInfo[], limit: number): string[] {
     .map(([topic]) => topic);
 }
 
-export function createConversationsProjectPanel(projectRef: string, options: ConversationsProjectPanelOptions = {}): ProjectPanel {
+export async function createConversationsProjectPanel(projectRef: string, options: ConversationsProjectPanelOptions = {}): Promise<ProjectPanel> {
+  const store = getStore();
   const limit = clampLimit(options.limit);
   const generatedAt = new Date().toISOString();
-  const project = resolveProject(projectRef);
+  const project = await resolveProject(store, projectRef);
   const projectId = projectPanelId(project, projectRef);
-  const channels = projectChannels(project, projectRef, limit);
+  const channels = await projectChannels(store, project, projectRef, limit);
   const channelNames = channels.map((channel) => channel.name);
-  const messages = selectMessages(project?.id ?? null, channels, limit);
-  const messageCount = countMessages(project?.id ?? null, channelNames);
-  const blockingCount = countBlocking(project?.id ?? null, channelNames);
+  const messages = await selectMessages(store, project?.id ?? null, channels, limit);
+  const messageCount = await countScope(store, project?.id ?? null, channelNames, false);
+  const blockingCount = await countScope(store, project?.id ?? null, channelNames, true);
   const unreadCount = messages.filter((message) => message.read_at === null).length;
-  const onlineAgents = listAgents({ online_only: true }).filter((agent) => !project || agent.project_id === project.id || agent.project_id === null);
+  const onlineAgents = (await store.listAgents({ online_only: true })).filter((agent) => !project || agent.project_id === project.id || agent.project_id === null);
   const participants = new Set<string>(messages.flatMap((message) => [message.from_agent, message.to_agent]).filter(Boolean));
   for (const channel of channels) {
     if (channel.created_by) participants.add(channel.created_by);
   }
   const latest = messages[0] ?? null;
   const state = stateForConversation(channels, messages);
-  const topics = collectTopics(channels, limit);
+  const topics = await collectTopics(store, channels, limit);
   const warnings = project ? [] : [
     `No conversations project matched "${projectRef}"; checked direct project refs and #iproj-${normalizeChannelName(projectRef).replace(/^iproj-/, "")}.`,
   ];
