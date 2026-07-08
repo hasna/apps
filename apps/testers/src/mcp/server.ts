@@ -5,30 +5,70 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import pkg from "../../package.json";
 
-import { createScenario, getScenario, getScenarioByShortId, listScenarios, countScenarios, updateScenario, deleteScenario } from "../cloud/store.js";
-import { findStaleScenarios } from "../db/scenarios.js";
+// THE storage boundary: every MCP tool routes reads/writes through the single
+// Store (LocalStore on-box SQLite | ApiStore cloud /v1 + bearer key), resolved
+// once from the environment. No tool touches sqlite or the cloud HTTP transport
+// directly. See ../store/index.ts.
+import {
+  createScenario,
+  getScenario,
+  getScenarioByShortId,
+  listScenarios,
+  countScenarios,
+  updateScenario,
+  deleteScenario,
+  findStaleScenarios,
+  getRun,
+  listRuns,
+  countRuns,
+  updateRun,
+  listResults,
+  getResultsByRun,
+  listScreenshots,
+  createProject,
+  ensureProject,
+  listProjects,
+  registerAgent,
+  listAgents,
+  heartbeatAgent,
+  setAgentFocus,
+  listScanIssues,
+  getScanIssue,
+  resolveScanIssue,
+  createSchedule,
+  listSchedules,
+  updateSchedule,
+  deleteSchedule,
+  getSchedule,
+  createApiCheck,
+  getApiCheck,
+  listApiChecks,
+  countApiChecks,
+  updateApiCheck,
+  deleteApiCheck,
+  getLatestApiCheckResult,
+  listApiCheckResults,
+  createPersona,
+  getPersona,
+  listPersonas,
+  countPersonas,
+  updatePersona,
+  deletePersona,
+  createTestingWorkflow,
+  getTestingWorkflow,
+  listTestingWorkflows,
+} from "../store/index.js";
 import { getTemplate, listTemplateNames, SCENARIO_TEMPLATES } from "../lib/templates.js";
-import { getRun, listRuns, countRuns, updateRun } from "../db/runs.js";
-import { listResults, getResultsByRun } from "../db/results.js";
-import { listScreenshots } from "../db/screenshots.js";
-import { createProject, ensureProject, listProjects } from "../cloud/store.js";
-import { registerAgent, listAgents, heartbeatAgent, setAgentFocus } from "../db/agents.js";
 import { startRunAsync } from "../lib/runner.js";
 import { matchFilesToScenarios } from "../lib/affected.js";
-import { listScanIssues, getScanIssue, resolveScanIssue } from "../db/scan-issues.js";
 import { loadConfig } from "../lib/config.js";
 import { importFromTodos } from "../lib/todos-connector.js";
-import { createSchedule, listSchedules, updateSchedule, deleteSchedule, getSchedule } from "../db/schedules.js";
 import { getNextRunTime } from "../lib/scheduler.js";
-import { getDatabase } from "../db/database.js";
 import { VersionConflictError } from "../types/index.js";
-import { createApiCheck, getApiCheck, listApiChecks, countApiChecks, updateApiCheck, deleteApiCheck, getLatestApiCheckResult, listApiCheckResults } from "../db/api-checks.js";
 import { runApiCheck, runApiChecksByFilter } from "../lib/api-runner.js";
-import { createPersona, getPersona, listPersonas, countPersonas, updatePersona, deletePersona } from "../cloud/store.js";
 import { PersonaNotFoundError } from "../types/index.js";
 import { getTestersDir } from "../lib/paths.js";
 import { createProdDebugPlan } from "../lib/prod-debug.js";
-import { createTestingWorkflow, getTestingWorkflow, listTestingWorkflows } from "../db/workflows.js";
 import { runTestingWorkflow } from "../lib/workflow-runner.js";
 import { runWorkflowGoalLoop } from "../lib/workflow-agent.js";
 import { redactPersona, redactPersonas } from "../lib/persona-redaction.js";
@@ -485,11 +525,11 @@ server.tool(
   },
   async ({ runId, url, model, headed, parallel, maxRetries, maxCostCents }) => {
     try {
-      const run = getRun(runId);
+      const run = await getRun(runId);
       if (!run) return errorResponse(notFoundErr(runId, "Run"));
       if (run.status !== "failed") return errorResponse(new Error("Run is not in failed state. Can only retry failures from a failed run."));
 
-      const results = getResultsByRun(runId);
+      const results = await getResultsByRun(runId);
       const failedResultIds = results.filter((r: any) => r.status === "failed" || r.status === "error").map((r: any) => r.scenarioId);
       if (failedResultIds.length === 0) return errorResponse(new Error("No failed results found in this run."));
 
@@ -528,7 +568,7 @@ server.tool(
   },
   async ({ id }) => {
     try {
-      const run = getRun(id);
+      const run = await getRun(id);
       if (!run) return errorResponse(notFoundErr(id, "Run"));
       return json(run);
     } catch (error) {
@@ -557,8 +597,8 @@ server.tool(
     try {
       const effectiveLimit = compactLimit(limit, 20, 100);
       const effectiveOffset = compactOffset(offset);
-      const runs = listRuns({ projectId, status, since, until, sort, desc, limit: effectiveLimit, offset: effectiveOffset || undefined });
-      const total = countRuns({ projectId, status, since, until });
+      const runs = await listRuns({ projectId, status, since, until, sort, desc, limit: effectiveLimit, offset: effectiveOffset || undefined });
+      const total = await countRuns({ projectId, status, since, until });
       return json(compactToolPayload(
         verbose ? runs : runs.map(compactRun),
         total,
@@ -586,7 +626,7 @@ server.tool(
   },
   async ({ runId, status, scenarioId, limit, offset, verbose }) => {
     try {
-      let results = listResults(runId);
+      let results = await listResults(runId);
       if (status) {
         results = results.filter((r) => r.status === status);
       }
@@ -619,7 +659,7 @@ server.tool(
   },
   async ({ resultId }) => {
     try {
-      const screenshots = listScreenshots(resultId);
+      const screenshots = await listScreenshots(resultId);
       if (screenshots.length === 0) {
         return json({ items: [], total: 0 });
       }
@@ -758,7 +798,7 @@ server.tool(
     e2bTemplate,
   }) => {
     try {
-      return json(createTestingWorkflow({
+      return json(await createTestingWorkflow({
         name,
         description,
         projectId,
@@ -791,7 +831,7 @@ server.tool(
   },
   async ({ projectId, enabled, limit, offset, verbose }) => {
     try {
-      const workflows = listTestingWorkflows({ projectId, enabled });
+      const workflows = await listTestingWorkflows({ projectId, enabled });
       const page = pageItems(workflows, { limit, offset, defaultLimit: 20, maxLimit: 100 });
       return json(compactToolPayload(
         verbose ? page.items : page.items.map(compactWorkflow),
@@ -853,7 +893,7 @@ server.tool(
   },
   async ({ id }) => {
     try {
-      const workflow = getTestingWorkflow(id);
+      const workflow = await getTestingWorkflow(id);
       if (!workflow) return errorResponse(notFoundErr(id, "Workflow"));
       return json(workflow);
     } catch (error) {
@@ -874,7 +914,7 @@ server.tool(
   },
   async ({ name, description, role }) => {
     try {
-      const agent = registerAgent({ name, description, role });
+      const agent = await registerAgent({ name, description, role });
       return json(agent);
     } catch (error) {
       return errorResponse(error);
@@ -894,7 +934,7 @@ server.tool(
   },
   async ({ limit, offset, verbose }) => {
     try {
-      const agents = listAgents();
+      const agents = await listAgents();
       const page = pageItems(agents, { limit, offset, defaultLimit: 20, maxLimit: 100 });
       const compactAgents = page.items.map((agent) => ({
         id: agent.id,
@@ -925,9 +965,8 @@ server.tool(
   async () => {
     try {
       const config = loadConfig();
-      const db = getDatabase();
-      const scenarioCount = (db.query("SELECT COUNT(*) as count FROM scenarios").get() as { count: number }).count;
-      const runCount = (db.query("SELECT COUNT(*) as count FROM runs").get() as { count: number }).count;
+      const scenarioCount = await countScenarios();
+      const runCount = await countRuns();
       const hasApiKey = !!(config.anthropicApiKey || process.env["ANTHROPIC_API_KEY"]);
       return json({
         dbPath: process.env["HASNA_TESTERS_DB_PATH"] || process.env["TESTERS_DB_PATH"] || `${getTestersDir()}/testers.db`,
@@ -972,10 +1011,10 @@ server.tool(
   },
   async ({ runId }) => {
     try {
-      const run = getRun(runId);
+      const run = await getRun(runId);
       if (!run) return errorResponse(notFoundErr(runId, "Run"));
 
-      const results = getResultsByRun(runId);
+      const results = await getResultsByRun(runId);
       const total = results.length;
       const passed = results.filter((r) => r.status === "passed").length;
       const failed = results.filter((r) => r.status === "failed").length;
@@ -1003,10 +1042,10 @@ server.tool(
   },
   async ({ runId }) => {
     try {
-      const run = getRun(runId);
+      const run = await getRun(runId);
       if (!run) return errorResponse(notFoundErr(runId, "Run"));
 
-      const results = getResultsByRun(runId);
+      const results = await getResultsByRun(runId);
       const totalCostCents = results.reduce((sum, r) => sum + (r.costCents ?? 0), 0);
       const totalTokens = results.reduce((sum, r) => sum + (r.tokensUsed ?? 0), 0);
       const byScenario = await Promise.all(results.map(async (r) => {
@@ -1031,10 +1070,10 @@ server.tool(
   },
   async ({ runId }) => {
     try {
-      const run = getRun(runId);
+      const run = await getRun(runId);
       if (!run) return errorResponse(notFoundErr(runId, "Run"));
 
-      updateRun(runId, { status: "cancelled", finished_at: new Date().toISOString() });
+      await updateRun(runId, { status: "cancelled", finished_at: new Date().toISOString() });
       return json({ cancelled: true, runId });
     } catch (error) {
       return errorResponse(error);
@@ -1081,7 +1120,7 @@ server.tool(
   },
   async ({ days = 7, projectId, limit, offset, verbose }) => {
     try {
-      let scenarios = findStaleScenarios(days);
+      let scenarios = await findStaleScenarios(days);
       if (projectId) {
         scenarios = scenarios.filter((s) => s.projectId === projectId);
       }
@@ -1153,7 +1192,7 @@ server.tool(
   },
   async ({ agentId }) => {
     try {
-      const agent = heartbeatAgent(agentId);
+      const agent = await heartbeatAgent(agentId);
       if (!agent) return errorResponse(notFoundErr(agentId, "Agent"));
       return json({ ok: true, agentId: agent.id, lastSeenAt: agent.lastSeenAt });
     } catch (error) {
@@ -1173,7 +1212,7 @@ server.tool(
   },
   async ({ agentId, scenarioId }) => {
     try {
-      const agent = setAgentFocus(agentId, scenarioId);
+      const agent = await setAgentFocus(agentId, scenarioId);
       if (!agent) return errorResponse(notFoundErr(agentId, "Agent"));
       return json({ ok: true, agentId: agent.id, focus: (agent.metadata as Record<string, unknown> | null)?.focus ?? null });
     } catch (error) {
@@ -1330,7 +1369,7 @@ server.tool(
   },
   async ({ status, type, projectId, limit, offset, verbose }) => {
     try {
-      const issues = listScanIssues({ status, type, projectId });
+      const issues = await listScanIssues({ status, type, projectId });
       const page = pageItems(issues, { limit, offset, defaultLimit: 20, maxLimit: 100 });
       const compactIssues = page.items.map((issue) => ({
         id: issue.id,
@@ -1360,7 +1399,7 @@ server.tool(
   { id: z.string().describe("Scan issue ID") },
   async ({ id }) => {
     try {
-      const ok = resolveScanIssue(id);
+      const ok = await resolveScanIssue(id);
       if (!ok) return errorResponse(notFoundErr(id, "ScanIssue"));
       return json({ resolved: true, id });
     } catch (e) { return errorResponse(e); }
@@ -1391,7 +1430,7 @@ server.tool(
   },
   async (params) => {
     try {
-      const check = createApiCheck({
+      const check = await createApiCheck({
         name: params.name,
         url: params.url,
         method: params.method,
@@ -1431,16 +1470,16 @@ server.tool(
       const effectiveLimit = compactLimit(limit, 20, 100);
       const effectiveOffset = compactOffset(offset);
       const checks = tags && tags.length > 0
-        ? pageItems(listApiChecks({ projectId, enabled, tags }), {
+        ? pageItems(await listApiChecks({ projectId, enabled, tags }), {
             limit: effectiveLimit,
             offset: effectiveOffset,
             defaultLimit: 20,
             maxLimit: 100,
           }).items
-        : listApiChecks({ projectId, enabled, limit: effectiveLimit, offset: effectiveOffset || undefined });
+        : await listApiChecks({ projectId, enabled, limit: effectiveLimit, offset: effectiveOffset || undefined });
       const total = tags && tags.length > 0
-        ? listApiChecks({ projectId, enabled, tags }).length
-        : countApiChecks({ projectId, enabled });
+        ? (await listApiChecks({ projectId, enabled, tags })).length
+        : await countApiChecks({ projectId, enabled });
       return json(compactToolPayload(
         verbose ? checks : checks.map(compactApiCheck),
         total,
@@ -1463,9 +1502,9 @@ server.tool(
   },
   async ({ id }) => {
     try {
-      const check = getApiCheck(id);
+      const check = await getApiCheck(id);
       if (!check) return errorResponse(notFoundErr(id, "ApiCheck"));
-      const lastResult = getLatestApiCheckResult(check.id);
+      const lastResult = await getLatestApiCheckResult(check.id);
       return json({ ...check, lastResult });
     } catch (error) {
       return errorResponse(error);
@@ -1496,11 +1535,11 @@ server.tool(
   },
   async ({ id, version, ...updates }) => {
     try {
-      const check = updateApiCheck(id, updates, version);
+      const check = await updateApiCheck(id, updates, version);
       return json(check);
     } catch (error) {
       return errorResponse(error, {
-        current: getApiCheck(id),
+        current: await getApiCheck(id),
       });
     }
   },
@@ -1516,7 +1555,7 @@ server.tool(
   },
   async ({ id }) => {
     try {
-      const deleted = deleteApiCheck(id);
+      const deleted = await deleteApiCheck(id);
       if (!deleted) return errorResponse(notFoundErr(id, "ApiCheck"));
       return json({ deleted: true, id });
     } catch (error) {
@@ -1536,7 +1575,7 @@ server.tool(
   },
   async ({ id, baseUrl }) => {
     try {
-      const check = getApiCheck(id);
+      const check = await getApiCheck(id);
       if (!check) return errorResponse(notFoundErr(id, "ApiCheck"));
       const result = await runApiCheck(check, { baseUrl });
       return json(result);
@@ -1582,9 +1621,9 @@ server.tool(
   },
   async ({ checkId, limit = 10, offset, verbose }) => {
     try {
-      const check = getApiCheck(checkId);
+      const check = await getApiCheck(checkId);
       if (!check) return errorResponse(notFoundErr(checkId, "ApiCheck"));
-      const results = listApiCheckResults(check.id);
+      const results = await listApiCheckResults(check.id);
       const page = pageItems(results, { limit, offset, defaultLimit: 10, maxLimit: 100 });
       return json(compactToolPayload(
         verbose ? page.items : page.items.map(compactApiCheckResult),
@@ -1687,14 +1726,11 @@ server.tool(
       const persona = await getPersona(id);
       if (!persona) return errorResponse(notFoundErr(id, "Persona"));
 
-      const db = getDatabase();
-      const scenarioRows = db
-        .query("SELECT id, short_id, name FROM scenarios WHERE persona_id = ?")
-        .all(persona.id) as { id: string; short_id: string; name: string }[];
+      const usedBy = (await listScenarios()).filter((s) => s.personaId === persona.id);
 
       return json({
         ...redactPersona(persona),
-        usedByScenarios: scenarioRows.map((r) => ({ id: r.id, shortId: r.short_id, name: r.name })),
+        usedByScenarios: usedBy.map((s) => ({ id: s.id, shortId: s.shortId, name: s.name })),
       });
     } catch (error) {
       return errorResponse(error);
@@ -1865,7 +1901,7 @@ server.tool(
         const apiResult = await runApiChecksByFilter({ baseUrl: resolvedUrl, projectId, enabled: true });
         apiPassed = apiResult.passed;
         apiFailed = apiResult.failed + apiResult.errors;
-        const allChecks = listApiChecks({ projectId, enabled: true });
+        const allChecks = await listApiChecks({ projectId, enabled: true });
         for (const r of apiResult.results.filter((r) => r.status !== "passed")) {
           const check = allChecks.find((c) => c.id === r.checkId);
           failedApiChecks.push({
@@ -2058,9 +2094,9 @@ server.tool(
   },
   async ({ runId }) => {
     try {
-      const run = getRun(runId);
+      const run = await getRun(runId);
       if (!run) return errorResponse(notFoundErr(runId, "Run"));
-      const results = getResultsByRun(runId);
+      const results = await getResultsByRun(runId);
 
       // Group failures by type
       const failureGroups: Record<string, { count: number; examples: string[] }> = {};
@@ -2440,7 +2476,7 @@ server.tool(
   },
   async ({ runId, timeoutMs = 300000, pollIntervalMs = 2000 }) => {
     try {
-      const run = getRun(runId);
+      const run = await getRun(runId);
       if (!run) return errorResponse(notFoundErr(runId, "Run"));
 
       const deadline = Date.now() + (timeoutMs ?? 300000);
@@ -2448,19 +2484,23 @@ server.tool(
 
       const poll = (): Promise<typeof run> =>
         new Promise((resolve, reject) => {
-          const check = () => {
-            const current = getRun(runId);
-            if (!current) return reject(new Error(`Run ${runId} disappeared`));
-            const terminal = ["passed", "failed", "cancelled"].includes(current.status);
-            if (terminal) return resolve(current);
-            if (Date.now() >= deadline) return reject(new Error(`wait_for_run timed out after ${timeoutMs}ms`));
-            setTimeout(check, interval);
+          const check = async () => {
+            try {
+              const current = await getRun(runId);
+              if (!current) return reject(new Error(`Run ${runId} disappeared`));
+              const terminal = ["passed", "failed", "cancelled"].includes(current.status);
+              if (terminal) return resolve(current);
+              if (Date.now() >= deadline) return reject(new Error(`wait_for_run timed out after ${timeoutMs}ms`));
+              setTimeout(check, interval);
+            } catch (err) {
+              reject(err);
+            }
           };
-          check();
+          void check();
         });
 
       const finalRun = await poll();
-      const results = getResultsByRun(runId);
+      const results = await getResultsByRun(runId);
       const failedResults = results.filter((r) => r.status !== "passed" && r.status !== "skipped");
 
       return json({
@@ -2502,7 +2542,7 @@ server.tool(
   },
   async ({ name, cronExpression, url, tags, scenarioIds, projectId, model, parallel, timeoutMs }) => {
     try {
-      const schedule = createSchedule({
+      const schedule = await createSchedule({
         name,
         cronExpression,
         url,
@@ -2536,7 +2576,7 @@ server.tool(
     try {
       const effectiveLimit = compactLimit(limit, 20, 100);
       const effectiveOffset = compactOffset(offset);
-      const allSchedules = listSchedules({ projectId, enabled });
+      const allSchedules = await listSchedules({ projectId, enabled });
       const page = pageItems(allSchedules, { limit: effectiveLimit, offset: effectiveOffset });
       const enriched = page.items.map((s) => ({
         ...s,
@@ -2562,7 +2602,7 @@ server.tool(
   { id: z.string().describe("Schedule ID") },
   async ({ id }) => {
     try {
-      const deleted = deleteSchedule(id);
+      const deleted = await deleteSchedule(id);
       if (!deleted) return errorResponse(notFoundErr(id, "Schedule"));
       return json({ deleted: true, id });
     } catch (e) {
@@ -2579,7 +2619,7 @@ server.tool(
   { id: z.string().describe("Schedule ID") },
   async ({ id }) => {
     try {
-      const schedule = updateSchedule(id, { enabled: true });
+      const schedule = await updateSchedule(id, { enabled: true });
       return json(schedule);
     } catch (e) {
       return errorResponse(e);
@@ -2593,7 +2633,7 @@ server.tool(
   { id: z.string().describe("Schedule ID") },
   async ({ id }) => {
     try {
-      const schedule = updateSchedule(id, { enabled: false });
+      const schedule = await updateSchedule(id, { enabled: false });
       return json(schedule);
     } catch (e) {
       return errorResponse(e);

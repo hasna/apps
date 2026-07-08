@@ -5,7 +5,7 @@
 // resolves to cloud (mode=self_hosted/cloud + HASNA_TESTERS_API_URL +
 // HASNA_TESTERS_API_KEY), without depending on an unreleased contracts subpath.
 //
-// See ../../cloud/store.ts for the testers-specific resolver/facade.
+// See ../../store/index.ts for the testers-specific Store (LocalStore | ApiStore).
 export * from "./mode.js";
 export * from "./transport.js";
 export * from "./storage.js";
