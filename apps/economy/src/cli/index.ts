@@ -15,6 +15,7 @@ import { packageMetadata } from '../lib/package-metadata.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
 import { execSync } from 'child_process'
 import { getStore, isCloudStore } from '../lib/store/index.js'
+import { HasnaHttpError } from '../lib/contracts-client/transport.js'
 import type { AccountBreakdown, CostSummary, ProjectBreakdown, Period } from '../types/index.js'
 
 const program = new Command()
@@ -1392,4 +1393,24 @@ registerFleetCommands(program)
 
 registerEventsCommands(program, { source: 'economy' })
 
-program.parseAsync()
+// Render any command failure as a single clean line + exit 1 — never leak a raw
+// bundle stack trace. Cloud (self_hosted) API failures surface as HasnaHttpError;
+// a 404 there means the server is missing the endpoint (stale deploy) rather than
+// a client bug, so we say so instead of dumping the transport internals.
+function reportCliError(err: unknown): never {
+  if (err instanceof HasnaHttpError) {
+    if (err.status === 404) {
+      fail(
+        `economy: the cloud API has no endpoint for this command (${err.method} ${err.path} -> 404). ` +
+          `The self-hosted server is likely running an older build — it needs an ECS redeploy of the current version.`,
+      )
+    }
+    if (err.status === 401 || err.status === 403) {
+      fail(`economy: cloud API rejected the request (${err.status}). Check HASNA_ECONOMY_API_KEY.`)
+    }
+    fail(`economy: cloud API request failed (${err.method} ${err.path} -> ${err.status}).`)
+  }
+  fail(`economy: ${err instanceof Error ? err.message : String(err)}`)
+}
+
+program.parseAsync().catch(reportCliError)

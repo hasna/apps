@@ -136,7 +136,13 @@ export async function watchCosts(opts: WatchOptions): Promise<void> {
 
   if (daemon) ingestPending = true
   await poll()
-  const timer = setInterval(poll, opts.interval * 1000)
+  // A failed poll during the interval must not crash the watcher with an
+  // unhandled rejection — surface it as a dim line and keep streaming.
+  const timer = setInterval(() => {
+    void poll().catch((e: unknown) => {
+      console.log(chalk.dim(`\n  Poll error: ${e instanceof Error ? e.message : String(e)} — retrying next tick`))
+    })
+  }, opts.interval * 1000)
 
   process.on('SIGINT', () => {
     clearInterval(timer)
