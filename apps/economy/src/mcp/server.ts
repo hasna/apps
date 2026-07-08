@@ -15,11 +15,19 @@ export const MCP_NAME = 'economy'
 export const DEFAULT_MCP_HTTP_PORT = 8860
 
 export function buildServer(): any {
-// The local db is used only for inherently-local tools: `sync` (ingests on-box
+// The local db is used ONLY by inherently-local tools: `sync` (ingests on-box
 // agent log files, pricing its rows from the local table) and `send_feedback`
 // (writes the local feedback table). All DATA tools route through the Store.
-const db = openDatabase()
-ensurePricingSeeded(db)
+// It is opened lazily so self_hosted/cloud mode never touches (or creates) a
+// local SQLite file — in cloud mode the client reads/writes the shared API only.
+let _db: ReturnType<typeof openDatabase> | undefined
+const localDb = (): ReturnType<typeof openDatabase> => {
+  if (!_db) {
+    _db = openDatabase()
+    ensurePricingSeeded(_db)
+  }
+  return _db
+}
 
 // Every DATA tool routes through the Store. `getStore()` returns an ApiStore
 // (self_hosted/cloud HTTP /v1) when HASNA_ECONOMY_API_URL + HASNA_ECONOMY_API_KEY
@@ -475,7 +483,7 @@ server.tool(
     }
     const selected = sources ?? 'all'
     const opts = selected === 'all' ? {} : { [selected]: true } as Record<string, boolean>
-    const result = await syncAll(db, opts)
+    const result = await syncAll(localDb(), opts)
     return text(JSON.stringify(result, null, 2))
   },
 )
@@ -653,7 +661,7 @@ server.tool(
   },
   async ({ message, email, category }: { message: string; email?: string; category?: 'bug' | 'feature' | 'general' }) => {
     try {
-      db.prepare('INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)').run(
+      localDb().prepare('INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)').run(
         message,
         email ?? null,
         category ?? 'general',
