@@ -27,6 +27,11 @@ import type {
   TodosActiveWorkFilter,
   TodosAgentUpdateInput,
   CreateTodosVerificationInput,
+  CreateTodosCommitInput,
+  CreateTodosGitRefInput,
+  TodosAgentReleaseResult,
+  TodosTaskCommitRecord,
+  TodosTaskGitRefRecord,
   TodosLockResult,
   TodosStorageAdapter,
   TodosStorageContext,
@@ -49,7 +54,7 @@ import {
   type TodosPostgresSyncRecordType,
 } from "./postgres-sync.js";
 
-type RemoteObjectType = TodosPostgresSyncRecordType | "comments" | "dependencies" | "verifications";
+type RemoteObjectType = TodosPostgresSyncRecordType | "comments" | "dependencies" | "verifications" | "commits" | "refs";
 
 export interface CreatePostgresTodosStorageAdapterOptions {
   client: TodosPostgresQueryClient;
@@ -120,6 +125,16 @@ export function createPostgresTodosStorageAdapter(
       add: (input, context) => addVerification(input, store, context),
       list: (taskId) => listVerifications(taskId, store),
     },
+    commits: {
+      add: (input, context) => addCommit(input, store, context),
+      list: (taskId) => listCommits(taskId, store),
+      find: (sha) => findCommit(sha, store),
+    },
+    gitRefs: {
+      add: (input, context) => addGitRef(input, store, context),
+      list: (taskId) => listGitRefs(taskId, store),
+      find: (ref) => findGitRefs(ref, store),
+    },
     projects: {
       create: (input, context) => createProject(input, store, context),
       get: (id) => store.get<Project>("projects", id),
@@ -145,6 +160,8 @@ export function createPostgresTodosStorageAdapter(
         .filter((agent) => options?.include_archived || agent.status !== "archived")
         .sort((a, b) => a.name.localeCompare(b.name)),
       update: (id, input) => updateAgent(id, input, store),
+      heartbeat: (idOrName, context) => heartbeatAgent(idOrName, store, context),
+      release: (idOrName, sessionId, context) => releaseAgent(idOrName, sessionId, store, context),
     },
     taskLists: {
       create: (input, context) => createTaskList(input, store, context),
@@ -805,6 +822,88 @@ async function listVerifications(taskId: string, store: PostgresJsonRecordStore)
     .sort((a, b) => b.run_at.localeCompare(a.run_at));
 }
 
+/**
+ * Link a git commit to a task in the shared cloud dataset. The task must exist
+ * (parity with the local FK). The previous CLI/MCP path wrote the row to this
+ * machine's sqlite where a cloud task does not exist, tripping a FOREIGN KEY
+ * constraint failure — routing to the shared store attaches it to the real task.
+ */
+async function addCommit(
+  input: CreateTodosCommitInput,
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<TodosTaskCommitRecord> {
+  if (!(await store.get<Task>("tasks", input.task_id))) throw new Error(`Task not found: ${input.task_id}`);
+  const timestamp = new Date().toISOString();
+  const commit: TodosTaskCommitRecord = {
+    id: randomUUID(),
+    task_id: input.task_id,
+    sha: input.sha,
+    message: input.message ?? null,
+    author: input.author ?? null,
+    files_changed: input.files_changed ?? null,
+    created_at: timestamp,
+  };
+  await store.upsert("commits", { ...commit, updated_at: timestamp }, context);
+  return commit;
+}
+
+/** List commits linked to a task, newest first. */
+async function listCommits(taskId: string, store: PostgresJsonRecordStore): Promise<TodosTaskCommitRecord[]> {
+  return (await store.list<TodosTaskCommitRecord>("commits"))
+    .filter((commit) => commit.task_id === taskId)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+}
+
+/** Find the most recent commit link for a SHA (exact or prefix match). */
+async function findCommit(sha: string, store: PostgresJsonRecordStore): Promise<TodosTaskCommitRecord | null> {
+  const matches = (await store.list<TodosTaskCommitRecord>("commits"))
+    .filter((commit) => commit.sha === sha || commit.sha.startsWith(sha) || sha.startsWith(commit.sha))
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+  return matches[0] ?? null;
+}
+
+/**
+ * Link a git branch or pull request to a task in the shared cloud dataset. The
+ * task must exist (parity with the local FK) so a ref link on a missing cloud
+ * task 404s loudly instead of tripping a FOREIGN KEY constraint on local sqlite.
+ */
+async function addGitRef(
+  input: CreateTodosGitRefInput,
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<TodosTaskGitRefRecord> {
+  if (!(await store.get<Task>("tasks", input.task_id))) throw new Error(`Task not found: ${input.task_id}`);
+  const timestamp = new Date().toISOString();
+  const gitRef: TodosTaskGitRefRecord = {
+    id: randomUUID(),
+    task_id: input.task_id,
+    ref_type: input.ref_type,
+    name: input.name,
+    url: input.url ?? null,
+    provider: input.provider ?? null,
+    metadata: input.metadata ?? {},
+    created_at: timestamp,
+    updated_at: timestamp,
+  };
+  await store.upsert("refs", gitRef, context);
+  return gitRef;
+}
+
+/** List git refs linked to a task, newest first. */
+async function listGitRefs(taskId: string, store: PostgresJsonRecordStore): Promise<TodosTaskGitRefRecord[]> {
+  return (await store.list<TodosTaskGitRefRecord>("refs"))
+    .filter((ref) => ref.task_id === taskId)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+}
+
+/** Find every task linked to a branch/PR ref by name. */
+async function findGitRefs(ref: string, store: PostgresJsonRecordStore): Promise<TodosTaskGitRefRecord[]> {
+  return (await store.list<TodosTaskGitRefRecord>("refs"))
+    .filter((r) => r.name === ref)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+}
+
 // SQL fragment: order by priority rank (critical→low) then created_at, matching
 // the previous in-JS sort. Kept as a constant so listTasks/countTasks and the
 // test mock stay in lockstep.
@@ -983,6 +1082,46 @@ async function updateAgent(id: string, input: TodosAgentUpdateInput, store: Post
     metadata: input.metadata ?? agent.metadata,
     last_seen_at: new Date().toISOString(),
   });
+}
+
+/** Resolve an agent by id first, then by (active) name. */
+async function resolveAgent(idOrName: string, store: PostgresJsonRecordStore): Promise<Agent | null> {
+  const byId = await store.get<Agent>("agents", idOrName);
+  if (byId) return byId;
+  return (await store.list<Agent>("agents")).find((agent) => agent.name === idOrName) ?? null;
+}
+
+/** Refresh an agent's last_seen_at in the shared cloud roster (heartbeat). */
+async function heartbeatAgent(
+  idOrName: string,
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<Agent | null> {
+  const agent = await resolveAgent(idOrName, store);
+  if (!agent) return null;
+  return store.upsert("agents", { ...agent, last_seen_at: new Date().toISOString() }, context);
+}
+
+/** Clear an agent's session binding (release/logout) in the shared cloud roster. */
+async function releaseAgent(
+  idOrName: string,
+  sessionId: string | undefined,
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<TodosAgentReleaseResult | null> {
+  const agent = await resolveAgent(idOrName, store);
+  if (!agent) return null;
+  // Session guard: if a session id is supplied, only release when it matches the
+  // agent's current binding (prevents another session from releasing your agent).
+  if (sessionId && agent.session_id && agent.session_id !== sessionId) {
+    return { agent, released: false };
+  }
+  const updated = await store.upsert(
+    "agents",
+    { ...agent, session_id: null, last_seen_at: new Date().toISOString() },
+    context,
+  );
+  return { agent: updated, released: true };
 }
 
 async function createTaskList(input: CreateTaskListInput, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<TaskList> {

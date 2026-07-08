@@ -300,6 +300,84 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
           }
           return error(405, `method ${method} not allowed on /v1/tasks/:id/verifications`);
         }
+        // ── /v1/tasks/:id/commits — git commit links ──
+        // The previous CLI/MCP `link-commit` wrote to LOCAL sqlite where the cloud
+        // task does not exist, tripping a FOREIGN KEY constraint. Routing here
+        // attaches the link to the REAL task in the shared dataset.
+        if (action === "commits") {
+          if (!store.commits) return error(501, "commit links are not supported by this storage backend");
+          if (method === "GET") {
+            if (!(await store.tasks.get(id))) return error(404, "task not found");
+            const commits = await store.commits.list(id);
+            return json({ commits, count: commits.length });
+          }
+          if (method === "POST") {
+            const body = (await readJson<{
+              sha?: string;
+              message?: string;
+              author?: string;
+              files_changed?: string[];
+            }>(req)) ?? {};
+            if (typeof body.sha !== "string" || !body.sha.trim()) return error(400, "sha is required");
+            try {
+              const commit = await store.commits.add(
+                {
+                  task_id: id,
+                  sha: body.sha,
+                  message: body.message,
+                  author: body.author,
+                  files_changed: Array.isArray(body.files_changed) ? body.files_changed : undefined,
+                },
+                contextFromPrincipal(principal),
+              );
+              return json({ commit }, 201);
+            } catch (e) {
+              const msg = (e as Error).message || "";
+              if (msg.includes("not found")) return error(404, msg);
+              throw e;
+            }
+          }
+          return error(405, `method ${method} not allowed on /v1/tasks/:id/commits`);
+        }
+        // ── /v1/tasks/:id/refs — git branch / pull-request links ──
+        if (action === "refs") {
+          if (!store.gitRefs) return error(501, "git ref links are not supported by this storage backend");
+          if (method === "GET") {
+            if (!(await store.tasks.get(id))) return error(404, "task not found");
+            const refs = await store.gitRefs.list(id);
+            return json({ refs, count: refs.length });
+          }
+          if (method === "POST") {
+            const body = (await readJson<{
+              ref_type?: string;
+              name?: string;
+              url?: string;
+              provider?: string;
+              metadata?: Record<string, unknown>;
+            }>(req)) ?? {};
+            const refType = body.ref_type === "pull_request" || body.ref_type === "branch" ? body.ref_type : "branch";
+            if (typeof body.name !== "string" || !body.name.trim()) return error(400, "name is required");
+            try {
+              const ref = await store.gitRefs.add(
+                {
+                  task_id: id,
+                  ref_type: refType,
+                  name: body.name,
+                  url: body.url,
+                  provider: body.provider,
+                  metadata: body.metadata,
+                },
+                contextFromPrincipal(principal),
+              );
+              return json({ ref }, 201);
+            } catch (e) {
+              const msg = (e as Error).message || "";
+              if (msg.includes("not found")) return error(404, msg);
+              throw e;
+            }
+          }
+          return error(405, `method ${method} not allowed on /v1/tasks/:id/refs`);
+        }
         const body = (await readJson<{ agent_id?: string; reason?: string }>(req)) ?? {};
         const agentId = body.agent_id || principal.agent || "todos-serve";
         if (action === "start" && method === "POST") {
@@ -417,6 +495,32 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
         }
         return json({ agent: result }, 201);
       }
+      // ── /v1/agents/:id/heartbeat and /release — session lifecycle ──
+      // Resolved against the SHARED cloud roster (by id OR name) so a flipped
+      // machine heartbeats/releases the same agent every other agent sees. The
+      // previous CLI/MCP path read LOCAL sqlite and 404'd cloud-only agents
+      // ("Agent not found").
+      if (id && action === "heartbeat") {
+        if (method !== "POST") return error(405, `method ${method} not allowed on /v1/agents/:id/heartbeat`);
+        if (typeof store.agents.heartbeat !== "function") {
+          return error(501, "agent heartbeat is not supported by this storage backend");
+        }
+        const agent = await store.agents.heartbeat(id, contextFromPrincipal(principal));
+        return agent ? json({ agent }) : error(404, "agent not found");
+      }
+      if (id && action === "release") {
+        if (method !== "POST") return error(405, `method ${method} not allowed on /v1/agents/:id/release`);
+        if (typeof store.agents.release !== "function") {
+          return error(501, "agent release is not supported by this storage backend");
+        }
+        const body = (await readJson<{ session_id?: string }>(req)) ?? {};
+        const result = await store.agents.release(id, body.session_id, contextFromPrincipal(principal));
+        if (!result) return error(404, "agent not found");
+        if (!result.released) {
+          return error(409, "release denied: session_id does not match agent's current session", { released: false });
+        }
+        return json({ agent: result.agent, released: true });
+      }
       if (id && method === "GET") {
         const agent = await store.agents.get(id);
         return agent ? json({ agent }) : error(404, "agent not found");
@@ -454,6 +558,22 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
       }
       const dependencies = await store.dependencies.listAll();
       return json({ dependencies, count: dependencies.length });
+    }
+
+    // ── /v1/commits/:sha — find the task that explains a commit SHA ──
+    if (resource === "commits" && id) {
+      if (method !== "GET") return error(405, `method ${method} not allowed on /v1/commits/:sha`);
+      if (!store.commits) return error(501, "commit links are not supported by this storage backend");
+      const commit = await store.commits.find(id);
+      return json({ commit: commit ?? null });
+    }
+
+    // ── /v1/refs/:ref — find tasks linked to a branch / pull request ──
+    if (resource === "refs" && id) {
+      if (method !== "GET") return error(405, `method ${method} not allowed on /v1/refs/:ref`);
+      if (!store.gitRefs) return error(501, "git ref links are not supported by this storage backend");
+      const refs = await store.gitRefs.find(id);
+      return json({ refs, count: refs.length });
     }
 
     // ── /v1/next — the best pending task to work on next ──

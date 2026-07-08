@@ -217,6 +217,138 @@ export async function cloudRegisterAgent(client: HasnaStorageClient, input: Regi
   return raw as Agent;
 }
 
+/**
+ * Refresh an agent's `last_seen_at` in the shared cloud roster
+ * (`POST /v1/agents/:id/heartbeat`). Resolves by id OR name server-side. Returns
+ * `null` when the agent does not exist in the cloud roster. This is the fix for
+ * the heartbeat misroute: the CLI/MCP used to read LOCAL sqlite and 404 a
+ * cloud-only agent ("Agent not found") on a flipped machine.
+ */
+export async function cloudHeartbeatAgent(client: HasnaStorageClient, idOrName: string): Promise<Agent | null> {
+  const raw = await client.transport.post<unknown>(`/agents/${encodeURIComponent(idOrName)}/heartbeat`, {});
+  if (raw && typeof raw === "object" && "agent" in (raw as Record<string, unknown>)) {
+    return (raw as { agent: Agent }).agent;
+  }
+  return (raw as Agent) ?? null;
+}
+
+/** Result of a cloud agent release (`POST /v1/agents/:id/release`). */
+export interface CloudReleaseResult {
+  agent: Agent | null;
+  released: boolean;
+}
+
+/**
+ * Release/logout an agent in the shared cloud roster (`POST /v1/agents/:id/release`).
+ * Clears the agent's session binding so the name is immediately available. When
+ * `sessionId` is provided the server only releases on a match (else HTTP 409,
+ * surfaced as a thrown error by the transport).
+ */
+export async function cloudReleaseAgent(
+  client: HasnaStorageClient,
+  idOrName: string,
+  sessionId?: string,
+): Promise<CloudReleaseResult> {
+  const raw = await client.transport.post<unknown>(
+    `/agents/${encodeURIComponent(idOrName)}/release`,
+    sessionId ? { session_id: sessionId } : {},
+  );
+  const env = (raw ?? {}) as { agent?: Agent; released?: boolean };
+  return { agent: env.agent ?? null, released: env.released !== false };
+}
+
+/** A git commit link stored in the cloud. */
+export interface CloudTaskCommit {
+  id: string;
+  task_id: string;
+  sha: string;
+  message: string | null;
+  author: string | null;
+  files_changed: string[] | null;
+  created_at: string;
+}
+
+/**
+ * Link a git commit to a cloud task (`POST /v1/tasks/:id/commits`). The previous
+ * local path wrote the row to this machine's sqlite where the cloud task does not
+ * exist, tripping a FOREIGN KEY constraint; routing to the shared store attaches
+ * it to the real task.
+ */
+export async function cloudLinkCommit(
+  client: HasnaStorageClient,
+  taskId: string,
+  input: { sha: string; message?: string; author?: string; files_changed?: string[] },
+): Promise<CloudTaskCommit> {
+  const raw = await client.transport.post<unknown>(`/tasks/${encodeURIComponent(taskId)}/commits`, input);
+  if (raw && typeof raw === "object" && "commit" in (raw as Record<string, unknown>)) {
+    return (raw as { commit: CloudTaskCommit }).commit;
+  }
+  return raw as CloudTaskCommit;
+}
+
+/** Find the task that explains a commit SHA (`GET /v1/commits/:sha`); `null` if none. */
+export async function cloudFindCommit(client: HasnaStorageClient, sha: string): Promise<CloudTaskCommit | null> {
+  const raw = await client.transport.get<unknown>(`/commits/${encodeURIComponent(sha)}`);
+  const env = (raw ?? {}) as { commit?: CloudTaskCommit | null };
+  return env.commit ?? null;
+}
+
+/** A git branch/PR ref link stored in the cloud. */
+export interface CloudTaskGitRef {
+  id: string;
+  task_id: string;
+  ref_type: "branch" | "pull_request";
+  name: string;
+  url: string | null;
+  provider: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Link a git branch or pull request to a cloud task (`POST /v1/tasks/:id/refs`). */
+export async function cloudLinkRef(
+  client: HasnaStorageClient,
+  taskId: string,
+  input: { ref_type: "branch" | "pull_request"; name: string; url?: string; provider?: string; metadata?: Record<string, unknown> },
+): Promise<CloudTaskGitRef> {
+  const raw = await client.transport.post<unknown>(`/tasks/${encodeURIComponent(taskId)}/refs`, input);
+  if (raw && typeof raw === "object" && "ref" in (raw as Record<string, unknown>)) {
+    return (raw as { ref: CloudTaskGitRef }).ref;
+  }
+  return raw as CloudTaskGitRef;
+}
+
+/** Find every task linked to a branch/PR ref by name (`GET /v1/refs/:ref`). */
+export async function cloudFindRefs(client: HasnaStorageClient, ref: string): Promise<CloudTaskGitRef[]> {
+  const raw = await client.transport.get<unknown>(`/refs/${encodeURIComponent(ref)}`);
+  const env = (raw ?? {}) as { refs?: CloudTaskGitRef[] };
+  return Array.isArray(env.refs) ? env.refs : [];
+}
+
+/**
+ * Fetch one plan by id (`GET /v1/plans/:id`); `null` on 404. Also resolves a
+ * partial id / slug / name by first checking `/v1/plans` — the `plans --show`
+ * path historically resolved the ref against LOCAL sqlite (which does not carry
+ * cloud plans), so it could not open a plan its own cloud `plans` list returned.
+ */
+export async function cloudResolvePlan(client: HasnaStorageClient, ref: string, projectId?: string): Promise<Plan | null> {
+  const direct = await client.get<unknown>("plans", ref).catch(() => null);
+  if (direct) {
+    const env = direct as { plan?: Plan };
+    if (env.plan) return env.plan;
+    if ((direct as Plan).id) return direct as Plan;
+  }
+  const plans = await cloudListPlans(client, projectId);
+  return (
+    plans.find((p) => p.id === ref) ??
+    plans.find((p) => p.slug === ref) ??
+    plans.find((p) => p.name === ref) ??
+    plans.find((p) => p.id.startsWith(ref)) ??
+    null
+  );
+}
+
 /** Result of a cloud lock/unlock action (mirrors the local `LockResult` shape). */
 export interface CloudLockResult {
   success: boolean;

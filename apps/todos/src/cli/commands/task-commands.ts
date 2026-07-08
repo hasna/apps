@@ -1099,27 +1099,47 @@ export function registerTaskCommands(program: Command) {
   program
     .command("approve <id>")
     .description("Approve a task that requires approval")
-    .action((id: string) => {
+    .action(async (id: string) => {
       const globalOpts = program.opts();
-      const resolvedId = resolveTaskId(id);
-      const task = getTask(resolvedId);
-      if (!task) { console.error(chalk.red(`Task not found: ${id}`)); process.exit(1); }
-
-      if (!task.requires_approval) {
-        console.log(chalk.yellow("This task does not require approval."));
-        return;
-      }
-      if (task.approved_by) {
-        console.log(chalk.yellow(`Already approved by ${task.approved_by}.`));
-        return;
-      }
-
+      const approver = globalOpts.agent || "cli";
       try {
-        const updated = updateTask(resolvedId, { approved_by: globalOpts.agent || "cli", version: task.version });
+        // self_hosted cloud routing: resolve and approve the task on the SHARED
+        // dataset. The local path read this machine's sqlite and 404'd
+        // ("Task not found") a task that lives only in the cloud.
+        const cloud = getTodosCloudClient();
+        if (cloud) {
+          const cloudId = resolveTaskId(id);
+          const task = await cloudGetTask(cloud, cloudId);
+          if (!task) { console.error(chalk.red(`Task not found: ${id}`)); process.exit(1); }
+          if (!task.requires_approval) { console.log(chalk.yellow("This task does not require approval.")); return; }
+          if (task.approved_by) { console.log(chalk.yellow(`Already approved by ${task.approved_by}.`)); return; }
+          const updated = await cloudUpdateTask(cloud, cloudId, { approved_by: approver, version: task.version });
+          if (globalOpts.json) { output(updated, true); }
+          else {
+            console.log(chalk.green(`Task approved by ${approver}:`));
+            console.log(formatTaskLine(updated));
+          }
+          return;
+        }
+
+        const resolvedId = resolveTaskId(id);
+        const task = getTask(resolvedId);
+        if (!task) { console.error(chalk.red(`Task not found: ${id}`)); process.exit(1); }
+
+        if (!task.requires_approval) {
+          console.log(chalk.yellow("This task does not require approval."));
+          return;
+        }
+        if (task.approved_by) {
+          console.log(chalk.yellow(`Already approved by ${task.approved_by}.`));
+          return;
+        }
+
+        const updated = updateTask(resolvedId, { approved_by: approver, version: task.version });
         if (globalOpts.json) {
           output(updated, true);
         } else {
-          console.log(chalk.green(`Task approved by ${globalOpts.agent || "cli"}:`));
+          console.log(chalk.green(`Task approved by ${approver}:`));
           console.log(formatTaskLine(updated));
         }
       } catch (e) {

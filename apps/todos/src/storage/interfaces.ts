@@ -62,7 +62,62 @@ export interface TodosStorageAdapter {
   readonly dependencies?: TodosDependencyStore;
   /** Task verification records (optional; present on the Postgres adapter). */
   readonly verifications?: TodosVerificationStore;
+  /** Git commit links (optional; present on the Postgres adapter). */
+  readonly commits?: TodosCommitStore;
+  /** Git branch/PR ref links (optional; present on the Postgres adapter). */
+  readonly gitRefs?: TodosGitRefStore;
   transaction?<T>(fn: (adapter: TodosStorageAdapter) => MaybePromise<T>, context?: TodosStorageContext): MaybePromise<T>;
+}
+
+export interface TodosTaskCommitRecord {
+  id: string;
+  task_id: string;
+  sha: string;
+  message: string | null;
+  author: string | null;
+  files_changed: string[] | null;
+  created_at: string;
+}
+
+export interface CreateTodosCommitInput {
+  task_id: string;
+  sha: string;
+  message?: string | null;
+  author?: string | null;
+  files_changed?: string[] | null;
+}
+
+export interface TodosCommitStore {
+  add(input: CreateTodosCommitInput, context?: TodosStorageContext): MaybePromise<TodosTaskCommitRecord>;
+  list(taskId: string, context?: TodosStorageContext): MaybePromise<TodosTaskCommitRecord[]>;
+  find(sha: string, context?: TodosStorageContext): MaybePromise<TodosTaskCommitRecord | null>;
+}
+
+export interface TodosTaskGitRefRecord {
+  id: string;
+  task_id: string;
+  ref_type: "branch" | "pull_request";
+  name: string;
+  url: string | null;
+  provider: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateTodosGitRefInput {
+  task_id: string;
+  ref_type: "branch" | "pull_request";
+  name: string;
+  url?: string | null;
+  provider?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface TodosGitRefStore {
+  add(input: CreateTodosGitRefInput, context?: TodosStorageContext): MaybePromise<TodosTaskGitRefRecord>;
+  list(taskId: string, context?: TodosStorageContext): MaybePromise<TodosTaskGitRefRecord[]>;
+  find(ref: string, context?: TodosStorageContext): MaybePromise<TodosTaskGitRefRecord[]>;
 }
 
 export interface TodosLockResult {
@@ -159,12 +214,31 @@ export interface TodosPlanStore {
   delete(id: string, context?: TodosStorageContext): MaybePromise<boolean>;
 }
 
+export interface TodosAgentReleaseResult {
+  agent: Agent;
+  released: boolean;
+}
+
 export interface TodosAgentStore {
   register(input: RegisterAgentInput, context?: TodosStorageContext): MaybePromise<Agent | { conflict: true; message: string }>;
   get(id: string, context?: TodosStorageContext): MaybePromise<Agent | null>;
   getByName(name: string, context?: TodosStorageContext): MaybePromise<Agent | null>;
   list(options?: { include_archived?: boolean }, context?: TodosStorageContext): MaybePromise<Agent[]>;
   update(id: string, input: TodosAgentUpdateInput, context?: TodosStorageContext): MaybePromise<Agent | null>;
+  /**
+   * Refresh an agent's `last_seen_at` (heartbeat), resolving by id OR name.
+   * Optional — present on the Postgres (self_hosted) adapter so a flipped machine
+   * heartbeats the SHARED cloud roster instead of its local sqlite island (the
+   * previous CLI/MCP path 404'd cloud-only agents with "Agent not found").
+   */
+  heartbeat?(idOrName: string, context?: TodosStorageContext): MaybePromise<Agent | null>;
+  /**
+   * Release/logout an agent — clears its session binding so the name is available.
+   * Resolves by id OR name. When `sessionId` is provided the release only succeeds
+   * if it matches the agent's current session (returns `{ released: false }` on a
+   * mismatch). Optional — present on the Postgres (self_hosted) adapter.
+   */
+  release?(idOrName: string, sessionId?: string, context?: TodosStorageContext): MaybePromise<TodosAgentReleaseResult | null>;
 }
 
 export interface TodosAgentUpdateInput {

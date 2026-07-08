@@ -6,7 +6,7 @@ import { releaseAgent, listAgents, normalizeGeneratedAgentNames, suggestAgentNam
 import { createTaskList, listTaskLists, deleteTaskList } from "../../db/task-lists.js";
 import { listTasks } from "../../db/tasks.js";
 import { getPackageVersion, handleError, autoProject, output } from "../helpers.js";
-import { getTodosCloudClient, cloudListAgents, cloudRegisterAgent, cloudListTasks, cloudListTaskLists } from "../cloud-router.js";
+import { getTodosCloudClient, cloudListAgents, cloudRegisterAgent, cloudListTasks, cloudListTaskLists, cloudHeartbeatAgent, cloudReleaseAgent } from "../cloud-router.js";
 
 export function registerAgentCommands(program: Command) {
   // init
@@ -51,12 +51,27 @@ export function registerAgentCommands(program: Command) {
       const globalOpts = program.opts();
       const agentId = agent || globalOpts.agent;
       if (!agentId) { console.error(chalk.red("Agent ID required. Use --agent or pass as argument.")); process.exit(1); }
-      const { updateAgentActivity, getAgent, getAgentByName } = await import("../../db/agents.js");
-      const a = getAgent(agentId) || getAgentByName(agentId);
-      if (!a) { console.error(chalk.red(`Agent not found: ${agentId}`)); process.exit(1); }
-      updateAgentActivity(a.id);
-      if (globalOpts.json) { console.log(JSON.stringify({ agent_id: a.id, name: a.name, last_seen_at: new Date().toISOString() })); }
-      else { console.log(chalk.green(`♥ ${a.name} (${a.id.slice(0, 8)}) — heartbeat sent`)); }
+      try {
+        // self_hosted cloud routing: heartbeat the SHARED cloud roster so a flipped
+        // machine refreshes the same agent every other agent sees. The local path
+        // 404'd cloud-only agents ("Agent not found").
+        const cloud = getTodosCloudClient();
+        if (cloud) {
+          const a = await cloudHeartbeatAgent(cloud, agentId);
+          if (!a) { console.error(chalk.red(`Agent not found: ${agentId}`)); process.exit(1); }
+          if (globalOpts.json) { console.log(JSON.stringify({ agent_id: a.id, name: a.name, last_seen_at: a.last_seen_at })); }
+          else { console.log(chalk.green(`♥ ${a.name} (${a.id.slice(0, 8)}) — heartbeat sent`)); }
+          return;
+        }
+        const { updateAgentActivity, getAgent, getAgentByName } = await import("../../db/agents.js");
+        const a = getAgent(agentId) || getAgentByName(agentId);
+        if (!a) { console.error(chalk.red(`Agent not found: ${agentId}`)); process.exit(1); }
+        updateAgentActivity(a.id);
+        if (globalOpts.json) { console.log(JSON.stringify({ agent_id: a.id, name: a.name, last_seen_at: new Date().toISOString() })); }
+        else { console.log(chalk.green(`♥ ${a.name} (${a.id.slice(0, 8)}) — heartbeat sent`)); }
+      } catch (e) {
+        handleError(e);
+      }
     });
 
   // release
@@ -68,18 +83,39 @@ export function registerAgentCommands(program: Command) {
       const globalOpts = program.opts();
       const agentId = agent || globalOpts.agent;
       if (!agentId) { console.error(chalk.red("Agent ID or name required. Use --agent or pass as argument.")); process.exit(1); }
-      const { getAgent, getAgentByName } = await import("../../db/agents.js");
-      const a = getAgent(agentId) || getAgentByName(agentId);
-      if (!a) { console.error(chalk.red(`Agent not found: ${agentId}`)); process.exit(1); }
-      const released = releaseAgent(a.id, opts?.sessionId);
-      if (!released) {
-        console.error(chalk.red("Release denied: session_id does not match agent's current session."));
-        process.exit(1);
-      }
-      if (globalOpts.json) {
-        console.log(JSON.stringify({ agent_id: a.id, name: a.name, released: true }));
-      } else {
-        console.log(chalk.green(`✓ ${a.name} (${a.id}) released — name is now available.`));
+      try {
+        // self_hosted cloud routing: release in the SHARED cloud roster so the name
+        // frees up for every agent. The local path 404'd cloud-only agents.
+        const cloud = getTodosCloudClient();
+        if (cloud) {
+          const result = await cloudReleaseAgent(cloud, agentId, opts?.sessionId);
+          if (!result.agent) { console.error(chalk.red(`Agent not found: ${agentId}`)); process.exit(1); }
+          if (!result.released) {
+            console.error(chalk.red("Release denied: session_id does not match agent's current session."));
+            process.exit(1);
+          }
+          if (globalOpts.json) {
+            console.log(JSON.stringify({ agent_id: result.agent.id, name: result.agent.name, released: true }));
+          } else {
+            console.log(chalk.green(`✓ ${result.agent.name} (${result.agent.id}) released — name is now available.`));
+          }
+          return;
+        }
+        const { getAgent, getAgentByName } = await import("../../db/agents.js");
+        const a = getAgent(agentId) || getAgentByName(agentId);
+        if (!a) { console.error(chalk.red(`Agent not found: ${agentId}`)); process.exit(1); }
+        const released = releaseAgent(a.id, opts?.sessionId);
+        if (!released) {
+          console.error(chalk.red("Release denied: session_id does not match agent's current session."));
+          process.exit(1);
+        }
+        if (globalOpts.json) {
+          console.log(JSON.stringify({ agent_id: a.id, name: a.name, released: true }));
+        } else {
+          console.log(chalk.green(`✓ ${a.name} (${a.id}) released — name is now available.`));
+        }
+      } catch (e) {
+        handleError(e);
       }
     });
 

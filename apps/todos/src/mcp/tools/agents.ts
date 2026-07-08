@@ -3,7 +3,7 @@ import { z } from "zod";
 import { registerAgent, isAgentConflict, releaseAgent, getAgent, getAgentByName, listAgents, updateAgent, updateAgentActivity, archiveAgent, unarchiveAgent, getAvailableNamesFromPool } from "../../db/agents.js";
 import { getAgentPoolForProject } from "../../lib/config.js";
 import { getDatabase } from "../../db/database.js";
-import { getTodosCloudClient, cloudListAgents, cloudRegisterAgent } from "../../cli/cloud-router.js";
+import { getTodosCloudClient, cloudListAgents, cloudRegisterAgent, cloudHeartbeatAgent, cloudReleaseAgent } from "../../cli/cloud-router.js";
 
 interface AgentFocus {
   agent_id: string;
@@ -431,6 +431,22 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
       },
       async ({ agent_id }) => {
         try {
+          // self_hosted cloud routing: heartbeat the SHARED cloud roster so a
+          // flipped machine refreshes the same agent every other agent sees. The
+          // local path 404'd cloud-only agents ("Agent not found").
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const a = await cloudHeartbeatAgent(cloud, agent_id);
+            if (!a) {
+              return { content: [{ type: "text" as const, text: `Agent not found: ${agent_id}` }], isError: true };
+            }
+            return {
+              content: [{
+                type: "text" as const,
+                text: `Heartbeat: ${a.name} (${a.id}) — last_seen_at updated to ${a.last_seen_at}`,
+              }],
+            };
+          }
           const agent = getAgent(agent_id) || getAgentByName(agent_id);
           if (!agent) {
             return { content: [{ type: "text" as const, text: `Agent not found: ${agent_id}` }], isError: true };
@@ -460,6 +476,24 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
       },
       async ({ agent_id, session_id }) => {
         try {
+          // self_hosted cloud routing: release in the SHARED cloud roster so the
+          // name frees up for every agent. The local path 404'd cloud-only agents.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const result = await cloudReleaseAgent(cloud, agent_id, session_id);
+            if (!result.agent) {
+              return { content: [{ type: "text" as const, text: `Agent not found: ${agent_id}` }], isError: true };
+            }
+            if (!result.released) {
+              return { content: [{ type: "text" as const, text: `Release denied: session_id does not match agent's current session.` }], isError: true };
+            }
+            return {
+              content: [{
+                type: "text" as const,
+                text: `Agent released: ${result.agent.name} (${result.agent.id}) — session cleared, name is now available.`,
+              }],
+            };
+          }
           const agent = getAgent(agent_id) || getAgentByName(agent_id);
           if (!agent) {
             return { content: [{ type: "text" as const, text: `Agent not found: ${agent_id}` }], isError: true };

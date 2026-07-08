@@ -604,6 +604,45 @@ describe("storage adapter contracts", () => {
     await expect(Promise.resolve(adapter.verifications!.add({ task_id: "nope", command: "x" }))).rejects.toThrow(/not found/);
   });
 
+  test("cloud adapter supports agent heartbeat/release and commit/ref links on the shared dataset", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client, sourceMachineId: "spark01" });
+    const project = await adapter.projects.create({ name: "Ident", path: "/tmp/ident" });
+    const task = await adapter.tasks.create({ title: "Linkable", project_id: project.id });
+    const agent = await adapter.agents.register({ name: "cato", project_id: project.id, session_id: "sess-1" });
+    if ("conflict" in agent) throw new Error(agent.message);
+
+    // heartbeat resolves by id AND by name, refreshing last_seen_at
+    const before = agent.last_seen_at;
+    await new Promise((r) => setTimeout(r, 2));
+    const beat = await adapter.agents.heartbeat!(agent.id);
+    expect(beat?.id).toBe(agent.id);
+    expect(beat!.last_seen_at >= before).toBe(true);
+    expect((await adapter.agents.heartbeat!("cato"))?.id).toBe(agent.id);
+    expect(await adapter.agents.heartbeat!("ghost")).toBeNull();
+
+    // release with a mismatched session is denied; a matching one clears the binding
+    expect(await adapter.agents.release!(agent.id, "wrong")).toMatchObject({ released: false });
+    const released = await adapter.agents.release!("cato", "sess-1");
+    expect(released).toMatchObject({ released: true });
+    expect(released!.agent.session_id).toBeNull();
+    expect(await adapter.agents.release!("ghost")).toBeNull();
+
+    // commit links attach to the REAL cloud task (parity with the local FK)
+    const commit = await adapter.commits!.add({ task_id: task.id, sha: "abc1234def", message: "fix: thing", author: "cato" });
+    expect(commit).toMatchObject({ task_id: task.id, sha: "abc1234def" });
+    expect(await adapter.commits!.list(task.id)).toEqual([expect.objectContaining({ id: commit.id })]);
+    expect((await adapter.commits!.find("abc1234"))?.id).toBe(commit.id);
+    await expect(Promise.resolve(adapter.commits!.add({ task_id: "nope", sha: "x" }))).rejects.toThrow(/not found/);
+
+    // ref links (branch/PR) attach to the real task and are findable by name
+    const ref = await adapter.gitRefs!.add({ task_id: task.id, ref_type: "pull_request", name: "PR-7", url: "https://example/pr/7" });
+    expect(ref).toMatchObject({ task_id: task.id, ref_type: "pull_request", name: "PR-7" });
+    expect(await adapter.gitRefs!.list(task.id)).toEqual([expect.objectContaining({ id: ref.id })]);
+    expect((await adapter.gitRefs!.find("PR-7")).map((r) => r.id)).toEqual([ref.id]);
+    await expect(Promise.resolve(adapter.gitRefs!.add({ task_id: "nope", ref_type: "branch", name: "b" }))).rejects.toThrow(/not found/);
+  });
+
   test("pushes task filtering, count and pagination down to SQL (no whole-table load)", async () => {
     const postgres = createMemoryPostgresClient();
     const adapter = createPostgresTodosStorageAdapter({
