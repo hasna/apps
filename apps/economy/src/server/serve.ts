@@ -11,6 +11,7 @@ import {
   listMachines, getMachineId,
   listMachineRegistry,
   queryBillingSummary,
+  insertFeedback,
   openDatabase,
   bulkIngest,
 } from '../db/database.js'
@@ -140,6 +141,7 @@ function optionalAgent(value: unknown): Agent | null | undefined {
 
 function requiredScopesForRequest(method: string, path: string): readonly string[] | undefined {
   if (method === 'POST' && path === '/api/ingest') return [ECONOMY_WRITE_SCOPE]
+  if (method === 'POST' && path === '/api/feedback') return [ECONOMY_WRITE_SCOPE]
   return undefined
 }
 
@@ -673,6 +675,25 @@ export function createHandler(db: Database, options: HandlerOptions = {}) {
     const goalMatch = path.match(/^\/api\/goals\/(.+)$/)
     if (goalMatch && method === 'DELETE') {
       deleteGoal(db, decodeURIComponent(goalMatch[1]!))
+      return ok({ ok: true })
+    }
+
+    // Feedback — the shared write path for the CLI/MCP send_feedback tool.
+    if (path === '/api/feedback' && method === 'POST') {
+      const body = await jsonBody(req)
+      if (!body) return err('invalid JSON body')
+      const message = optionalString(body['message'])?.trim()
+      if (!message) return err('message is required')
+      const email = optionalString(body['email'])?.trim() || null
+      const rawCategory = optionalString(body['category'])?.trim() || 'general'
+      if (!['bug', 'feature', 'general'].includes(rawCategory)) return err('category must be bug, feature, or general')
+      insertFeedback(db, {
+        message,
+        email,
+        category: rawCategory,
+        version: packageMetadata.version,
+        machine_id: getMachineId(),
+      })
       return ok({ ok: true })
     }
 

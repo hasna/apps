@@ -1300,6 +1300,29 @@ export function queryRequestsSince(db: Database, since: string): EconomyRequest[
   return db.prepare(`SELECT * FROM requests WHERE timestamp > ? ORDER BY timestamp ASC`).all(since) as EconomyRequest[]
 }
 
+// ── Feedback ──────────────────────────────────────────────────────────────────
+
+export interface FeedbackRecord {
+  message: string
+  email?: string | null
+  category?: string | null
+  version?: string | null
+  machine_id?: string | null
+}
+
+/** Persist a feedback row. Used by both the LocalStore and the serve endpoint. */
+export function insertFeedback(db: Database, record: FeedbackRecord): void {
+  db.prepare(
+    `INSERT INTO feedback (message, email, category, version, machine_id) VALUES (?, ?, ?, ?, ?)`,
+  ).run(
+    record.message,
+    record.email ?? null,
+    record.category ?? 'general',
+    record.version ?? null,
+    record.machine_id ?? null,
+  )
+}
+
 // ── Billing (actual from provider admin APIs) ─────────────────────────────────
 
 export interface BillingDaily {

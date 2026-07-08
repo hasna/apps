@@ -25,6 +25,8 @@ import { randomUUID } from 'crypto'
 import { SqliteAdapter as Database } from '@hasna/cloud'
 import {
   openDatabase,
+  getMachineId,
+  insertFeedback,
   querySummary,
   querySessions,
   queryTopSessions,
@@ -64,6 +66,7 @@ import {
   type GoalStatus,
 } from '../../db/database.js'
 import { ensurePricingSeeded, estimateCostFromRows } from '../pricing.js'
+import { packageMetadata } from '../package-metadata.js'
 import { querySavingsSummary } from '../savings.js'
 import { queryBillingDiff, type BillingDiffSummary } from '../billing-diff.js'
 import { usageSnapshotFilterForPeriod } from '../periods.js'
@@ -174,6 +177,14 @@ export interface EstimateInput {
   cacheStorageTokenHours?: number
 }
 
+/** Input for a feedback submission (backs `send_feedback`). The Store stamps the
+ * package version and machine id; the caller only supplies user-provided fields. */
+export interface FeedbackInput {
+  message: string
+  email?: string | null
+  category?: 'bug' | 'feature' | 'general'
+}
+
 /** Create/update input for a subscription plan. */
 export interface SubscriptionInput {
   id?: string
@@ -259,6 +270,9 @@ export interface EconomyStore {
   addProject(path: string, name: string): Promise<void>
   renameProject(path: string, name: string): Promise<void>
   removeProject(path: string): Promise<void>
+  /** Record user feedback (LocalStore -> local `feedback` table; ApiStore ->
+   * POST /v1/feedback on the shared cloud). */
+  sendFeedback(input: FeedbackInput): Promise<void>
 }
 
 // ── LocalStore ────────────────────────────────────────────────────────────────
@@ -495,6 +509,16 @@ export class LocalStore implements EconomyStore {
 
   async removeProject(path: string): Promise<void> {
     deleteProject(this.db(), path)
+  }
+
+  async sendFeedback(input: FeedbackInput): Promise<void> {
+    insertFeedback(this.db(), {
+      message: input.message,
+      email: input.email ?? null,
+      category: input.category ?? 'general',
+      version: packageMetadata.version,
+      machine_id: getMachineId(),
+    })
   }
 }
 
@@ -733,6 +757,16 @@ export class ApiStore implements EconomyStore {
 
   async removeProject(path: string): Promise<void> {
     await this.cloud.client.delete('project-registry', path)
+  }
+
+  async sendFeedback(input: FeedbackInput): Promise<void> {
+    // POST /v1/feedback on the shared cloud — never a local SQLite file. The
+    // serve stamps its own version/machine, so only the user fields are sent.
+    await this.cloud.client.create('feedback', {
+      message: input.message,
+      ...(input.email ? { email: input.email } : {}),
+      category: input.category ?? 'general',
+    })
   }
 }
 

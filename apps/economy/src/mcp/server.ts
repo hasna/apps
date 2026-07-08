@@ -15,11 +15,12 @@ export const MCP_NAME = 'economy'
 export const DEFAULT_MCP_HTTP_PORT = 8860
 
 export function buildServer(): any {
-// The local db is used ONLY by inherently-local tools: `sync` (ingests on-box
-// agent log files, pricing its rows from the local table) and `send_feedback`
-// (writes the local feedback table). All DATA tools route through the Store.
-// It is opened lazily so self_hosted/cloud mode never touches (or creates) a
-// local SQLite file — in cloud mode the client reads/writes the shared API only.
+// The local db is used ONLY by the inherently-local `sync` tool, which ingests
+// on-box agent log files and prices its rows from the local table. Every DATA
+// tool — including `send_feedback` — routes through the Store. It is opened
+// lazily and only after `sync` has already confirmed local mode via isCloudStore,
+// so self_hosted/cloud mode never touches (or creates) a local SQLite file — in
+// cloud mode the client reads/writes the shared API only.
 let _db: ReturnType<typeof openDatabase> | undefined
 const localDb = (): ReturnType<typeof openDatabase> => {
   if (!_db) {
@@ -62,6 +63,7 @@ const TOOL_NAMES = [
   'get_session_detail',
   'get_usage',
   'get_savings',
+  'estimate_cost',
   'list_subscriptions',
   'set_subscription',
   'remove_subscription',
@@ -99,6 +101,7 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   get_session_detail: 'session_id(prefix ok) -> per-request breakdown with model, tokens, cost',
   get_usage: `period(today|week|month|year|all), agent?(${AGENTS.join('|')}) -> usage snapshots and all-machine summary`,
   get_savings: `period(today|week|month|year|all), agent?(${AGENTS.join('|')}) -> subscription/API-equivalent savings`,
+  estimate_cost: 'model, input_tokens?, output_tokens? -> pre-flight cost estimate priced from the store pricing table',
   list_subscriptions: 'no params -> configured subscription plans and included usage',
   set_subscription: `provider, plan, monthly_fee_usd?, included_usage_usd?, agent?(${AGENTS.join('|')}) -> create/update subscription plan`,
   remove_subscription: 'id -> delete subscription plan',
@@ -647,8 +650,9 @@ server.tool(
 
 // register_agent, heartbeat, set_focus, and list_agents are the canonical
 // @hasna/agent-registry implementation (persistent, shared across services)
-// rather than a hand-rolled in-memory Map. send_feedback stays local (below)
-// since it persists into economy's own `feedback` table with a category enum.
+// rather than a hand-rolled in-memory Map. economy's own send_feedback (below)
+// routes through the Store (local feedback table or POST /v1/feedback) so it
+// carries the category enum and never bypasses the cloud in self_hosted mode.
 registerAgentTools(server, { includeFeedback: false })
 
 server.tool(
@@ -661,12 +665,7 @@ server.tool(
   },
   async ({ message, email, category }: { message: string; email?: string; category?: 'bug' | 'feature' | 'general' }) => {
     try {
-      localDb().prepare('INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)').run(
-        message,
-        email ?? null,
-        category ?? 'general',
-        packageMetadata.version,
-      )
+      await store.sendFeedback({ message, email, category })
       return text('Feedback saved. Thank you!')
     } catch (error) {
       return textError(String(error))
