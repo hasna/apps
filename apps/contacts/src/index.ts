@@ -3,25 +3,6 @@ export { getDatabase, resetDatabase } from "./db/database.js";
 export { SqliteAdapter } from "./db/sqlite-adapter.js";
 export { getStorageStatus, CONTACTS_STORAGE_TABLES } from "./db/storage.js";
 export type { ContactsStorageStatus, StorageTableStatus } from "./db/storage.js";
-export {
-  CONTACTS_REMOTE_DEFAULT_TABLES,
-  CONTACTS_REMOTE_ENV,
-  CONTACTS_REMOTE_SENSITIVE_TABLES,
-  CONTACTS_REMOTE_TABLES,
-  ContactsRemoteSyncError,
-  getRemoteDatabaseUrl,
-  getRemotePg,
-  getRemoteStatus,
-  getSyncMetaAll,
-  normalizeSqliteSyncValue,
-  pullRemote,
-  pushRemote,
-  resolveRemoteTables,
-  runRemoteMigrations,
-  syncRemote,
-} from "./db/remote-sync.js";
-export type { SyncMeta, SyncResult as ContactsRemoteSyncResult } from "./db/remote-sync.js";
-export { PgAdapterAsync, buildPgPoolConfig } from "./db/remote-storage.js";
 export { saveLocalFeedback } from "./db/feedback.js";
 export type { LocalFeedbackInput, LocalFeedbackResult } from "./db/feedback.js";
 

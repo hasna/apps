@@ -19,15 +19,21 @@ describe("contacts MCP storage contract", () => {
       (server as unknown as { _registeredTools: Record<string, unknown> })._registeredTools
     );
 
+    // Read-only status + feedback only. The forbidden client-side Postgres-DSN
+    // sync tools (push/pull/sync) must NOT be registered.
     expect(registeredTools).toContain("contacts_storage_status");
-    expect(registeredTools).toContain("contacts_storage_push");
-    expect(registeredTools).toContain("contacts_storage_pull");
-    expect(registeredTools).toContain("contacts_storage_sync");
     expect(registeredTools).toContain("contacts_cloud_status");
-    expect(registeredTools).toContain("contacts_cloud_push");
-    expect(registeredTools).toContain("contacts_cloud_pull");
-    expect(registeredTools).toContain("contacts_cloud_sync");
     expect(registeredTools).toContain("contacts_cloud_feedback");
+    for (const removed of [
+      "contacts_storage_push",
+      "contacts_storage_pull",
+      "contacts_storage_sync",
+      "contacts_cloud_push",
+      "contacts_cloud_pull",
+      "contacts_cloud_sync",
+    ]) {
+      expect(registeredTools).not.toContain(removed);
+    }
     for (const term of forbidden) {
       expect(mcpSource).not.toContain(term);
       expect(storageSource).not.toContain(term);
