@@ -5,7 +5,6 @@ import { z } from 'zod'
 import { openDatabase, getMachineId } from '../db/database.js'
 import { syncAll } from '../lib/sync-all.js'
 import { AGENTS } from '../lib/agents.js'
-import { computeCostFromDb } from '../lib/pricing.js'
 import { packageMetadata } from '../lib/package-metadata.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
 import { getStore } from '../lib/store/index.js'
@@ -17,8 +16,8 @@ export const DEFAULT_MCP_HTTP_PORT = 8860
 
 export function buildServer(): any {
 // The local db is used only for inherently-local tools: `sync` (ingests on-box
-// agent log files), `estimate_cost` (pure pricing calc over the local pricing
-// table), and `send_feedback` (writes the local feedback table).
+// agent log files, pricing its rows from the local table) and `send_feedback`
+// (writes the local feedback table). All DATA tools route through the Store.
 const db = openDatabase()
 ensurePricingSeeded(db)
 
@@ -561,7 +560,7 @@ server.tool(
   'Pre-flight cost estimate for token counts',
   { model: z.string(), input_tokens: z.number().optional(), output_tokens: z.number().optional() },
   async ({ model, input_tokens, output_tokens }: { model: string; input_tokens?: number; output_tokens?: number }) => {
-    const cost = computeCostFromDb(db, model, input_tokens ?? 0, output_tokens ?? 0, 0, 0, 0)
+    const cost = await store.estimate({ model, inputTokens: input_tokens ?? 0, outputTokens: output_tokens ?? 0 })
     return text(`${model}: ${fmtUsd(cost)} (${input_tokens ?? 0} in / ${output_tokens ?? 0} out)`)
   },
 )

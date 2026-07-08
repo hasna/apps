@@ -63,7 +63,7 @@ import {
   type DbModelPricing,
   type GoalStatus,
 } from '../../db/database.js'
-import { ensurePricingSeeded } from '../pricing.js'
+import { ensurePricingSeeded, estimateCostFromRows } from '../pricing.js'
 import { querySavingsSummary } from '../savings.js'
 import { queryBillingDiff, type BillingDiffSummary } from '../billing-diff.js'
 import { usageSnapshotFilterForPeriod } from '../periods.js'
@@ -101,6 +101,14 @@ import type {
   ProjectBreakdown,
   Subscription,
 } from '../../types/index.js'
+
+// Re-export the types that appear in the public Store surface so SDK consumers
+// can name them (return/param types of EconomyStore methods) without importing
+// from the internal on-box modules.
+export type { MachineInfo, SessionDetail, DbModelPricing, GoalStatus } from '../../db/database.js'
+export type { BillingDiffSummary } from '../billing-diff.js'
+export type { EconomyBrief } from '../brief.js'
+export type { ProjectDetail, RangeStats, ForecastData, ModelEfficiency, ExportType } from '../analytics.js'
 
 /** Fleet roll-up: cross-machine summary + per-machine rows + machine registry. */
 export interface FleetSummary {
@@ -151,6 +159,19 @@ export interface BriefQuery {
   machine?: string
   currentMachineId?: string
   localSyncAt?: Date
+}
+
+/** Token counts for a pre-flight cost estimate (backs `economy estimate` /
+ * `estimate_cost`). The Store resolves pricing from its own dataset so cloud
+ * users estimate against the SAME pricing table they edit via set/get pricing. */
+export interface EstimateInput {
+  model: string
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
+  cacheWrite1hTokens?: number
+  cacheStorageTokenHours?: number
 }
 
 /** Create/update input for a subscription plan. */
@@ -222,6 +243,8 @@ export interface EconomyStore {
   efficiency(): Promise<ModelEfficiency[]>
   /** Requests recorded at or after an ISO timestamp (live cost stream). */
   recentRequests(since: string): Promise<EconomyRequest[]>
+  /** Pre-flight cost estimate for token counts, priced from this store's dataset. */
+  estimate(input: EstimateInput): Promise<number>
 
   // ── Writes ─────────────────────────────────────────────────────────────────
   /** Create a budget; resolves to its id ('' if the transport does not echo one). */
@@ -387,6 +410,19 @@ export class LocalStore implements EconomyStore {
 
   async recentRequests(since: string): Promise<EconomyRequest[]> {
     return queryRequestsSince(this.db(), since)
+  }
+
+  async estimate(input: EstimateInput): Promise<number> {
+    return estimateCostFromRows(
+      listModelPricing(this.db()),
+      input.model,
+      input.inputTokens,
+      input.outputTokens,
+      input.cacheReadTokens ?? 0,
+      input.cacheWriteTokens ?? 0,
+      input.cacheWrite1hTokens ?? 0,
+      input.cacheStorageTokenHours ?? 0,
+    )
   }
 
   async setBudget(input: BudgetInput): Promise<string> {
@@ -607,6 +643,23 @@ export class ApiStore implements EconomyStore {
 
   async recentRequests(since: string): Promise<EconomyRequest[]> {
     return cloudListItems<EconomyRequest>(this.cloud, 'requests', q({ since }))
+  }
+
+  async estimate(input: EstimateInput): Promise<number> {
+    // Price against the SHARED cloud pricing table (the same rows served to
+    // get_pricing / set_pricing), using the identical matching + tier logic as
+    // the local path — so a cloud user's estimate matches their edited pricing.
+    const rows = await this.listPricing()
+    return estimateCostFromRows(
+      rows,
+      input.model,
+      input.inputTokens,
+      input.outputTokens,
+      input.cacheReadTokens ?? 0,
+      input.cacheWriteTokens ?? 0,
+      input.cacheWrite1hTokens ?? 0,
+      input.cacheStorageTokenHours ?? 0,
+    )
   }
 
   async setBudget(input: BudgetInput): Promise<string> {

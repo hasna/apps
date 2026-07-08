@@ -9,7 +9,7 @@ import {
 } from '../../db/database.js'
 import { buildStatusLine, gatherStatusData } from './tui.js'
 import { getStore } from '../../lib/store/index.js'
-import { computeCostFromDb, ensurePricingSeeded, getPricingFromDb } from '../../lib/pricing.js'
+import { ensurePricingSeeded, getPricingFromDb } from '../../lib/pricing.js'
 import { AGENTS, parseAgent } from '../../lib/agents.js'
 import type { SavingsSummary } from '../../lib/savings.js'
 import type { CostSummary, Period, UsageSnapshot } from '../../types/index.js'
@@ -277,10 +277,12 @@ export function registerExtendedCommands(program: Command): void {
     .requiredOption('--model <model>', 'Model name')
     .option('--input <n>', 'Input tokens', '0')
     .option('--output <n>', 'Output tokens', '0')
-    .action((opts: { model: string; input?: string; output?: string }) => {
-      const db = openDatabase()
-      ensurePricingSeeded(db)
-      const cost = computeCostFromDb(db, opts.model, Number(opts.input), Number(opts.output), 0, 0, 0)
+    .action(async (opts: { model: string; input?: string; output?: string }) => {
+      const cost = await getStore().estimate({
+        model: opts.model,
+        inputTokens: Number(opts.input),
+        outputTokens: Number(opts.output),
+      })
       console.log(`${opts.model}: ${fmt(cost)} (${opts.input} in / ${opts.output} out)`)
     })
 
