@@ -667,11 +667,14 @@ switch (command) {
   }
 
   case "users": {
-    const [sub, ...userRest] = positional;
-    const { flags: uFlags, positional: uPos } = parseArgs(userRest);
+    // Flags (e.g. --type) are already extracted by the top-level parseArgs into
+    // `flags`; the subcommand args are the remaining positionals. Re-parsing
+    // `userRest` would miss --type entirely (it was consumed above), which is why
+    // `users register/list --type agent` used to silently fall back to "human".
+    const [sub, ...uPos] = positional;
     switch (sub) {
       case "list": {
-        const users = await store().listUsers(uFlags.type as any);
+        const users = await store().listUsers(flags.type as any);
         if (users.length === 0) { console.log("No users registered."); }
         else {
           for (const u of users) {
@@ -685,7 +688,12 @@ switch (command) {
       case "register": {
         const [id, name] = uPos;
         if (!id || !name) { console.error("Usage: secrets users register <id> <name> [--type human|agent]"); process.exit(1); }
-        const user = await store().registerUser(id, name, (uFlags.type as any) ?? "human");
+        const type = (flags.type as string) ?? "human";
+        if (type !== "human" && type !== "agent") {
+          console.error(`Invalid type "${type}". Valid: human, agent`);
+          process.exit(1);
+        }
+        const user = await store().registerUser(id, name, type);
         console.log(`✓ Registered: ${user.id} [${user.type}] — ${user.name}`);
         break;
       }

@@ -2,8 +2,10 @@ import { describe, expect, it } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Database } from "bun:sqlite";
 import { resolveMcpRoot } from "./mcp.js";
 import { getStore, LocalStore, ApiStore } from "./store/index.js";
+import type { HasnaStorageClient } from "./store/contracts-client/index.js";
 
 const rootDir = join(import.meta.dir, "..");
 
@@ -67,6 +69,58 @@ describe("secrets storage surface contract", () => {
     expect(source).not.toContain('"storage_pull"');
     expect(source).not.toContain('"storage_sync"');
     expect(source).not.toContain("getDb");
+  });
+
+  it("ApiStore.listSecrets skips a secret the server cannot return instead of aborting", async () => {
+    // Regression for `export-env` (cloud): one server-side-undecryptable secret
+    // used to reject the whole Promise.all and 500 the entire command.
+    const transport = {
+      baseUrl: "https://secrets.hasna.xyz/v1",
+      async get<T>(path: string, opts?: { query?: Record<string, unknown> }): Promise<T> {
+        if (path === "/secrets") {
+          return { secrets: [{ key: "ok/one" }, { key: "bad/two" }, { key: "ok/three" }] } as T;
+        }
+        if (path === "/secrets/get") {
+          const key = String(opts?.query?.key);
+          if (key === "bad/two") throw Object.assign(new Error("Unsupported state"), { status: 500 });
+          return { key, value: `v-${key}`, type: "other", created_at: "", updated_at: "" } as T;
+        }
+        throw new Error(`unexpected GET ${path}`);
+      },
+    };
+    const store = new ApiStore({ transport } as unknown as HasnaStorageClient);
+    const secrets = await store.listSecrets();
+    expect(secrets.map((s) => s.key).sort()).toEqual(["ok/one", "ok/three"]);
+    expect(secrets.every((s) => !s.value.includes("bad"))).toBe(true);
+  });
+
+  it("LocalStore feedback works on a pre-existing vault missing the category column", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "open-secrets-fb-"));
+    const dbPath = join(dir, "vault.db");
+    // Simulate an OLD vault: feedback table created before `category` existed.
+    const seed = new Database(dbPath);
+    seed.exec(
+      "CREATE TABLE feedback (id INTEGER PRIMARY KEY AUTOINCREMENT, message TEXT NOT NULL, email TEXT, version TEXT, created_at TEXT)",
+    );
+    seed.close();
+
+    const prev = process.env.HASNA_SECRETS_DB_PATH;
+    process.env.HASNA_SECRETS_DB_PATH = dbPath;
+    try {
+      const { resetDb } = await import("./db.js");
+      resetDb();
+      const store = getStore({ HASNA_SECRETS_DB_PATH: dbPath } as unknown as NodeJS.ProcessEnv);
+      await store.sendFeedback("upgrade migration works", undefined, "bug");
+      const check = new Database(dbPath);
+      const row = check.prepare("SELECT category FROM feedback").get() as { category: string };
+      check.close();
+      expect(row.category).toBe("bug");
+      resetDb();
+    } finally {
+      if (prev === undefined) delete process.env.HASNA_SECRETS_DB_PATH;
+      else process.env.HASNA_SECRETS_DB_PATH = prev;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("keeps MCP scan roots inside the real server working directory", () => {

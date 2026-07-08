@@ -45,6 +45,15 @@ function isNotFound(error: unknown): boolean {
   return typeof error === "object" && error !== null && (error as { status?: number }).status === 404;
 }
 
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "object" && error !== null) {
+    const status = (error as { status?: number }).status;
+    if (status) return `server error ${status}`;
+  }
+  return String(error);
+}
+
 export class ApiStore implements Store {
   readonly mode = "api" as const;
   private readonly client: HasnaStorageClient;
@@ -92,8 +101,7 @@ export class ApiStore implements Store {
 
   async listSecrets(namespace?: string): Promise<SecretEntry[]> {
     const meta = await this.listSecretMetadata(namespace);
-    const entries = await Promise.all(meta.map((m) => this.getSecret(m.key)));
-    return entries.filter((e): e is SecretEntry => Boolean(e));
+    return this.fetchValues(meta);
   }
 
   async searchSecretMetadata(query: string): Promise<SecretMetadata[]> {
@@ -103,8 +111,29 @@ export class ApiStore implements Store {
 
   async searchSecrets(query: string): Promise<SecretEntry[]> {
     const meta = await this.searchSecretMetadata(query);
-    const entries = await Promise.all(meta.map((m) => this.getSecret(m.key)));
-    return entries.filter((e): e is SecretEntry => Boolean(e));
+    return this.fetchValues(meta);
+  }
+
+  /**
+   * Fetch full entries for a list of metadata rows, best-effort. A single secret
+   * that the server cannot return (e.g. a value that fails server-side decryption
+   * → 500) must not abort a bulk read like `export-env` or `list --values`. Such
+   * rows are skipped with a value-free warning; 404s (deleted between calls) are
+   * dropped silently. Single-key `getSecret` stays strict.
+   */
+  private async fetchValues(meta: SecretMetadata[]): Promise<SecretEntry[]> {
+    const settled = await Promise.allSettled(meta.map((m) => this.getSecret(m.key)));
+    const entries: SecretEntry[] = [];
+    for (let i = 0; i < settled.length; i++) {
+      const result = settled[i]!;
+      if (result.status === "fulfilled") {
+        if (result.value) entries.push(result.value);
+      } else {
+        // Never log the value or the key's secret material — key path only.
+        console.warn(`⚠ Skipped unreadable secret "${meta[i]!.key}": ${errorMessage(result.reason)}`);
+      }
+    }
+    return entries;
   }
 
   async importSecrets(entries: Array<{ key: string; value: string; type?: SecretType; label?: string; expires_at?: string }>): Promise<number> {
