@@ -618,7 +618,7 @@ export interface CreateRunBody {
 
 export async function listRuns(
   db: TypedQueryClient,
-  filter: { projectId?: string; limit?: number } = {},
+  filter: { projectId?: string; limit?: number; offset?: number } = {},
 ): Promise<Run[]> {
   const clauses: string[] = [];
   const params: unknown[] = [];
@@ -628,11 +628,62 @@ export async function listRuns(
   }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const limit = Math.min(Math.max(filter.limit ?? 50, 1), 500);
-  const rows = await db.many(`SELECT * FROM runs ${where} ORDER BY started_at DESC LIMIT ${limit}`, params);
+  const offset = Math.max(filter.offset ?? 0, 0);
+  // Pagination MUST be honored: aggregate clients (cost reporting, visual
+  // baselines) page the full set via limit+offset; ignoring offset would silently
+  // cap results and undercount.
+  const rows = await db.many(
+    `SELECT * FROM runs ${where} ORDER BY started_at DESC LIMIT ${limit} OFFSET ${offset}`,
+    params,
+  );
   return rows.map(runRow);
 }
 export async function getRun(db: TypedQueryClient, id: string): Promise<Run | null> {
   const row = await db.get("SELECT * FROM runs WHERE id = $1", [id]);
+  return row ? runRow(row) : null;
+}
+
+/**
+ * Update mutable run columns. Accepts the same snake_case partial the local
+ * `db/runs.updateRun` does (status, totals, timestamps, is_baseline, ...), so
+ * the ApiStore transport can mirror the local write exactly.
+ */
+export async function updateRun(
+  db: TypedQueryClient,
+  id: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  body: Record<string, any>,
+): Promise<Run | null> {
+  const existing = await getRun(db, id);
+  if (!existing) return null;
+
+  const columns = new Map<string, unknown>();
+  const allowed: Record<string, (v: unknown) => unknown> = {
+    status: (v) => v,
+    url: (v) => v,
+    model: (v) => v,
+    headed: (v) => asBool(v),
+    parallel: (v) => Number(v),
+    total: (v) => Number(v),
+    passed: (v) => Number(v),
+    failed: (v) => Number(v),
+    started_at: (v) => v,
+    finished_at: (v) => v,
+    metadata: (v) => (typeof v === "string" ? v : j(v)),
+    is_baseline: (v) => asBool(v),
+  };
+  for (const [key, coerce] of Object.entries(allowed)) {
+    if (body[key] !== undefined) columns.set(key, coerce(body[key]));
+  }
+  if (columns.size === 0) return existing;
+
+  const sets: string[] = [];
+  const params: unknown[] = [id];
+  for (const [col, val] of columns) {
+    params.push(val);
+    sets.push(`${col} = $${params.length}`);
+  }
+  const row = await db.get(`UPDATE runs SET ${sets.join(", ")} WHERE id = $1 RETURNING *`, params);
   return row ? runRow(row) : null;
 }
 export async function createRun(db: TypedQueryClient, body: CreateRunBody): Promise<Run> {
@@ -655,6 +706,32 @@ export async function listResultsByRun(db: TypedQueryClient, runId: string): Pro
 export async function getResult(db: TypedQueryClient, id: string): Promise<Result | null> {
   const row = await db.get("SELECT * FROM results WHERE id = $1", [id]);
   return row ? resultRow(row) : null;
+}
+
+export interface ScenarioResultStats {
+  lastStatus: string | null;
+  total: number;
+  passed: number;
+}
+
+/** All-time run stats for a scenario (last status + pass counts). */
+export async function getScenarioResultStats(
+  db: TypedQueryClient,
+  scenarioId: string,
+): Promise<ScenarioResultStats> {
+  const last = await db.get<{ status: string }>(
+    "SELECT status FROM results WHERE scenario_id = $1 ORDER BY created_at DESC LIMIT 1",
+    [scenarioId],
+  );
+  const stats = await db.get<{ total: string; passed: string }>(
+    "SELECT COUNT(*)::text AS total, SUM(CASE WHEN status = 'passed' THEN 1 ELSE 0 END)::text AS passed FROM results WHERE scenario_id = $1",
+    [scenarioId],
+  );
+  return {
+    lastStatus: last?.status ?? null,
+    total: Number(stats?.total ?? 0),
+    passed: Number(stats?.passed ?? 0),
+  };
 }
 
 // ─── personas ─────────────────────────────────────────────────────────────
@@ -869,6 +946,82 @@ export async function setScanIssueTodoTaskId(
 ): Promise<PersistedScanIssue | null> {
   const row = await db.get("UPDATE scan_issues SET todo_task_id = $2 WHERE id = $1 RETURNING *", [id, todoTaskId]);
   return row ? scanIssueRow(row) : null;
+}
+
+// ─── webhooks ─────────────────────────────────────────────────────────────────
+
+export interface Webhook {
+  id: string;
+  url: string;
+  events: string[];
+  projectId: string | null;
+  secret: string | null;
+  active: boolean;
+  createdAt: string;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function webhookRow(r: any): Webhook {
+  return {
+    id: r.id,
+    url: r.url,
+    events: parse<string[]>(r.events, []),
+    projectId: r.project_id ?? null,
+    secret: r.secret ?? null,
+    active: asBool(r.active),
+    createdAt: r.created_at,
+  };
+}
+
+export interface CreateWebhookBody {
+  url: string;
+  events?: string[];
+  projectId?: string | null;
+  secret?: string;
+}
+
+export async function listWebhooks(
+  db: TypedQueryClient,
+  filter: { projectId?: string; limit?: number; offset?: number } = {},
+): Promise<Webhook[]> {
+  const clauses: string[] = ["active = TRUE"];
+  const params: unknown[] = [];
+  if (filter.projectId) {
+    params.push(filter.projectId);
+    clauses.push(`(project_id = $${params.length} OR project_id IS NULL)`);
+  }
+  const limit = Math.min(Math.max(filter.limit ?? 500, 1), 500);
+  const offset = Math.max(filter.offset ?? 0, 0);
+  const rows = await db.many(
+    `SELECT * FROM webhooks WHERE ${clauses.join(" AND ")} ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`,
+    params,
+  );
+  return rows.map(webhookRow);
+}
+
+export async function getWebhook(db: TypedQueryClient, id: string): Promise<Webhook | null> {
+  const row = await db.get("SELECT * FROM webhooks WHERE id = $1", [id]);
+  return row ? webhookRow(row) : null;
+}
+
+export async function createWebhook(db: TypedQueryClient, body: CreateWebhookBody): Promise<Webhook> {
+  if (!body?.url) throw new ValidationError("url is required");
+  const id = uuid();
+  const events = Array.isArray(body.events) && body.events.length ? body.events : ["failed"];
+  const secret = body.secret ?? uuid().replace(/-/g, "");
+  const row = await db.get(
+    `INSERT INTO webhooks (id, url, events, project_id, secret, active, created_at)
+     VALUES ($1,$2,$3,$4,$5,TRUE,$6) RETURNING *`,
+    [id, body.url, j(events), body.projectId ?? null, secret, nowIso()],
+  );
+  return webhookRow(row);
+}
+
+export async function deleteWebhook(db: TypedQueryClient, id: string): Promise<boolean> {
+  const existing = await getWebhook(db, id);
+  if (!existing) return false;
+  await db.execute("DELETE FROM webhooks WHERE id = $1", [existing.id]);
+  return true;
 }
 
 // ─── errors ─────────────────────────────────────────────────────────────────

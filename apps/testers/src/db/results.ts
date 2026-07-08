@@ -140,3 +140,33 @@ export function countResultsByRun(runId: string): number {
     .get(runId) as { count: number };
   return row.count;
 }
+
+export interface ScenarioResultStats {
+  /** Status of the most recent result for the scenario (null if never run). */
+  lastStatus: ResultStatus | null;
+  /** All-time total result count for the scenario. */
+  total: number;
+  /** All-time count of passed results for the scenario. */
+  passed: number;
+}
+
+/** All-time run stats for a single scenario (last status + pass counts). */
+export function getScenarioResultStats(scenarioId: string): ScenarioResultStats {
+  const db = getDatabase();
+
+  const lastRow = db
+    .query("SELECT status FROM results WHERE scenario_id = ? ORDER BY created_at DESC LIMIT 1")
+    .get(scenarioId) as { status: string } | null;
+
+  const statsRow = db
+    .query(
+      "SELECT COUNT(*) as total, SUM(CASE WHEN status = 'passed' THEN 1 ELSE 0 END) as passed FROM results WHERE scenario_id = ?",
+    )
+    .get(scenarioId) as { total: number; passed: number } | null;
+
+  return {
+    lastStatus: lastRow ? (lastRow.status as ResultStatus) : null,
+    total: statsRow?.total ?? 0,
+    passed: statsRow?.passed ?? 0,
+  };
+}

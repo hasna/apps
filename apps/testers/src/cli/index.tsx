@@ -1082,10 +1082,10 @@ program
           log("");
           log(chalk.bold(`  ${groupName}`) + chalk.dim(` (${items.length})`));
           log(chalk.dim("  " + "─".repeat(40)));
-          log(formatScenarioList(items, { total: items.length, verbose: opts.verbose }));
+          log(await formatScenarioList(items, { total: items.length, verbose: opts.verbose }));
         }
       } else {
-        log(formatScenarioList(scenarios, { total, limit, offset, verbose: opts.verbose }));
+        log(await formatScenarioList(scenarios, { total, limit, offset, verbose: opts.verbose }));
       }
     } catch (error) {
       logError(
@@ -1638,7 +1638,7 @@ program
 
         // Budget warning check (OPE9-00080)
         if (!opts.dryRun && !opts.background) {
-          const budgetResult = checkBudget(0); // 0 = just check daily threshold
+          const budgetResult = await checkBudget(0); // 0 = just check daily threshold
           if (budgetResult.warning) {
             log(chalk.yellow(`  ⚠️  Budget warning: ${budgetResult.warning}`));
             if (!budgetResult.allowed) {
@@ -4868,7 +4868,7 @@ program
         if (opts.json) {
           log(JSON.stringify({ visualDiff: visualResults }, null, 2));
         } else {
-          log(formatVisualDiffTerminal(visualResults, threshold));
+          log(await formatVisualDiffTerminal(visualResults, threshold));
         }
       }
 
@@ -5093,7 +5093,7 @@ program
       const period = opts.period as "day" | "week" | "month" | "all";
 
       if (opts.byScenario) {
-        const rows = getCostsByScenario({ projectId, period });
+        const rows = await getCostsByScenario({ projectId, period });
         if (opts.json) {
           log(JSON.stringify(rows, null, 2));
         } else {
@@ -5102,7 +5102,7 @@ program
         return;
       }
 
-      const summary = getCostSummary({ projectId, period });
+      const summary = await getCostSummary({ projectId, period });
       if (opts.csv) {
         log(formatCostsCsv(summary));
       } else if (opts.json) {
@@ -5638,7 +5638,7 @@ program
   .description("Set a run as the visual baseline")
   .action(async (runId: string) => {
     try {
-      setBaseline(runId);
+      await setBaseline(runId);
       const run = await getRun(runId);
       log(
         chalk.green(

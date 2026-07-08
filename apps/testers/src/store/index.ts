@@ -35,6 +35,7 @@ import * as dbEnvironments from "../db/environments.js";
 import * as dbSessions from "../db/sessions.js";
 import * as dbAgents from "../db/agents.js";
 import * as dbScanIssues from "../db/scan-issues.js";
+import * as dbWebhooks from "../db/webhooks.js";
 
 import type {
   ApiCheck,
@@ -54,6 +55,8 @@ import type { StepResult } from "../db/step-results.js";
 import type { AuthPreset } from "../db/auth-presets.js";
 import type { Environment } from "../db/environments.js";
 import type { Session } from "../db/sessions.js";
+import type { Webhook } from "../db/webhooks.js";
+import type { ScenarioResultStats } from "../db/results.js";
 
 export const TESTERS_APP = "testers";
 
@@ -112,6 +115,7 @@ export interface Store {
   listResults: A<typeof dbResults.listResults>;
   getResultsByRun: A<typeof dbResults.getResultsByRun>;
   updateResult: A<typeof dbResults.updateResult>;
+  getScenarioResultStats: A<typeof dbResults.getScenarioResultStats>;
 
   // ── screenshots ──
   createScreenshot: A<typeof dbScreenshots.createScreenshot>;
@@ -194,6 +198,12 @@ export interface Store {
   resolveScanIssue: A<typeof dbScanIssues.resolveScanIssue>;
   upsertScanIssue: A<typeof dbScanIssues.upsertScanIssue>;
   setScanIssueTodoTaskId: A<typeof dbScanIssues.setScanIssueTodoTaskId>;
+
+  // ── webhooks ──
+  createWebhook: A<typeof dbWebhooks.createWebhook>;
+  getWebhook: A<typeof dbWebhooks.getWebhook>;
+  listWebhooks: A<typeof dbWebhooks.listWebhooks>;
+  deleteWebhook: A<typeof dbWebhooks.deleteWebhook>;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -241,6 +251,7 @@ class LocalStore implements Store {
   async listResults(...a: Parameters<typeof dbResults.listResults>) { return dbResults.listResults(...a); }
   async getResultsByRun(...a: Parameters<typeof dbResults.getResultsByRun>) { return dbResults.getResultsByRun(...a); }
   async updateResult(...a: Parameters<typeof dbResults.updateResult>) { return dbResults.updateResult(...a); }
+  async getScenarioResultStats(...a: Parameters<typeof dbResults.getScenarioResultStats>) { return dbResults.getScenarioResultStats(...a); }
 
   async createScreenshot(...a: Parameters<typeof dbScreenshots.createScreenshot>) { return dbScreenshots.createScreenshot(...a); }
   async listScreenshots(...a: Parameters<typeof dbScreenshots.listScreenshots>) { return dbScreenshots.listScreenshots(...a); }
@@ -312,6 +323,11 @@ class LocalStore implements Store {
   async resolveScanIssue(...a: Parameters<typeof dbScanIssues.resolveScanIssue>) { return dbScanIssues.resolveScanIssue(...a); }
   async upsertScanIssue(...a: Parameters<typeof dbScanIssues.upsertScanIssue>) { return dbScanIssues.upsertScanIssue(...a); }
   async setScanIssueTodoTaskId(...a: Parameters<typeof dbScanIssues.setScanIssueTodoTaskId>) { return dbScanIssues.setScanIssueTodoTaskId(...a); }
+
+  async createWebhook(...a: Parameters<typeof dbWebhooks.createWebhook>) { return dbWebhooks.createWebhook(...a); }
+  async getWebhook(...a: Parameters<typeof dbWebhooks.getWebhook>) { return dbWebhooks.getWebhook(...a); }
+  async listWebhooks(...a: Parameters<typeof dbWebhooks.listWebhooks>) { return dbWebhooks.listWebhooks(...a); }
+  async deleteWebhook(...a: Parameters<typeof dbWebhooks.deleteWebhook>) { return dbWebhooks.deleteWebhook(...a); }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -470,6 +486,18 @@ class ApiStore implements Store {
   async getResultsByRun(runId: string) { return this.listResults(runId); }
   async updateResult(id: string, updates: Parameters<typeof dbResults.updateResult>[1]) {
     return this.c.update<Result>("results", id, updates, { method: "PUT" });
+  }
+  async getScenarioResultStats(scenarioId: string): Promise<ScenarioResultStats> {
+    // Server-side aggregate (GET /v1/scenarios/:id/result-stats) — avoids paging
+    // every result to the client just to count them.
+    const stats = await this.c.transport.get<ScenarioResultStats>(
+      `/scenarios/${encodeURIComponent(scenarioId)}/result-stats`,
+    );
+    return {
+      lastStatus: stats?.lastStatus ?? null,
+      total: stats?.total ?? 0,
+      passed: stats?.passed ?? 0,
+    };
   }
 
   // ── screenshots ──
@@ -653,6 +681,29 @@ class ApiStore implements Store {
   async setScanIssueTodoTaskId(id: string, todoTaskId: string) {
     await this.c.update<PersistedScanIssue>("scan-issues", id, { todoTaskId }, { method: "PATCH" });
   }
+
+  // ── webhooks ──
+  async createWebhook(input: Parameters<typeof dbWebhooks.createWebhook>[0]) {
+    return this.c.create<Webhook>("webhooks", input);
+  }
+  async getWebhook(id: string) {
+    const direct = await this.c.get<Webhook>("webhooks", id);
+    if (direct) return direct;
+    // Partial-id resolution (mirrors the local store): unique prefix match only.
+    const matches = (await this.all<Webhook>("webhooks")).filter((w) => w.id.startsWith(id));
+    return matches.length === 1 ? matches[0]! : null;
+  }
+  async listWebhooks(projectId?: string) {
+    let items = (await this.all<Webhook>("webhooks")).filter((w) => w.active);
+    if (projectId) items = items.filter((w) => w.projectId === projectId || w.projectId === null);
+    return items.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+  }
+  async deleteWebhook(id: string) {
+    const webhook = await this.getWebhook(id);
+    if (!webhook) return false;
+    await this.c.delete("webhooks", webhook.id);
+    return true;
+  }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -723,6 +774,7 @@ export const getResult: Store["getResult"] = (...a) => getStore().getResult(...a
 export const listResults: Store["listResults"] = (...a) => getStore().listResults(...a);
 export const getResultsByRun: Store["getResultsByRun"] = (...a) => getStore().getResultsByRun(...a);
 export const updateResult: Store["updateResult"] = (...a) => getStore().updateResult(...a);
+export const getScenarioResultStats: Store["getScenarioResultStats"] = (...a) => getStore().getScenarioResultStats(...a);
 
 export const createScreenshot: Store["createScreenshot"] = (...a) => getStore().createScreenshot(...a);
 export const listScreenshots: Store["listScreenshots"] = (...a) => getStore().listScreenshots(...a);
@@ -794,3 +846,8 @@ export const getScanIssue: Store["getScanIssue"] = (...a) => getStore().getScanI
 export const resolveScanIssue: Store["resolveScanIssue"] = (...a) => getStore().resolveScanIssue(...a);
 export const upsertScanIssue: Store["upsertScanIssue"] = (...a) => getStore().upsertScanIssue(...a);
 export const setScanIssueTodoTaskId: Store["setScanIssueTodoTaskId"] = (...a) => getStore().setScanIssueTodoTaskId(...a);
+
+export const createWebhook: Store["createWebhook"] = (...a) => getStore().createWebhook(...a);
+export const getWebhook: Store["getWebhook"] = (...a) => getStore().getWebhook(...a);
+export const listWebhooks: Store["listWebhooks"] = (...a) => getStore().listWebhooks(...a);
+export const deleteWebhook: Store["deleteWebhook"] = (...a) => getStore().deleteWebhook(...a);

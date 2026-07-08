@@ -182,6 +182,9 @@ async function route(
   // ── scenarios ──
   if (resource === "scenarios") {
     // Aggregate/bulk sub-routes (must precede the id-based branch).
+    if (id && sub === "result-stats" && method === "GET") {
+      return json(await store.getScenarioResultStats(db, id));
+    }
     if (id === "count" && method === "GET") {
       return json({ count: await store.countScenarios(db) });
     }
@@ -209,12 +212,20 @@ async function route(
   if (resource === "runs") {
     if (!id) {
       if (method === "GET")
-        return json(await store.listRuns(db, { projectId: searchParams.get("projectId") ?? undefined }));
+        return json(
+          await store.listRuns(db, {
+            projectId: searchParams.get("projectId") ?? undefined,
+            limit: numParam(searchParams.get("limit")),
+            offset: numParam(searchParams.get("offset")),
+          }),
+        );
       if (method === "POST") return json(await store.createRun(db, (await readJson(req)) as never), 201);
     } else if (sub === "results" && method === "GET") {
       return json(await store.listResultsByRun(db, id));
     } else if (!sub && method === "GET") {
       return notNull(await store.getRun(db, id), "run");
+    } else if (!sub && (method === "PUT" || method === "PATCH")) {
+      return notNull(await store.updateRun(db, id, (await readJson(req)) as never), "run");
     }
   }
 
@@ -265,6 +276,24 @@ async function route(
         }
         return err("unsupported scan-issue patch", 400);
       }
+    }
+  }
+
+  // ── webhooks ──
+  if (resource === "webhooks") {
+    if (!id) {
+      if (method === "GET")
+        return json(
+          await store.listWebhooks(db, {
+            projectId: searchParams.get("projectId") ?? undefined,
+            limit: numParam(searchParams.get("limit")),
+            offset: numParam(searchParams.get("offset")),
+          }),
+        );
+      if (method === "POST") return json(await store.createWebhook(db, (await readJson(req)) as never), 201);
+    } else {
+      if (method === "GET") return notNull(await store.getWebhook(db, id), "webhook");
+      if (method === "DELETE") return json({ deleted: await store.deleteWebhook(db, id) });
     }
   }
 

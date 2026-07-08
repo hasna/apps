@@ -36,25 +36,25 @@ describe("costs", () => {
   }
 
   describe("getCostSummary", () => {
-    test("returns correct totals", () => {
+    test("returns correct totals", async () => {
       seedCostData();
-      const summary = getCostSummary({ period: "all" });
+      const summary = await getCostSummary({ period: "all" });
 
       expect(summary.totalCostCents).toBe(50); // 10 + 15 + 25
       expect(summary.totalTokens).toBe(5000); // 1000 + 1500 + 2500
       expect(summary.runCount).toBe(2);
     });
 
-    test("returns correct average cost per run", () => {
+    test("returns correct average cost per run", async () => {
       seedCostData();
-      const summary = getCostSummary({ period: "all" });
+      const summary = await getCostSummary({ period: "all" });
 
       expect(summary.avgCostPerRun).toBe(25); // 50 / 2
     });
 
-    test("returns correct model breakdown", () => {
+    test("returns correct model breakdown", async () => {
       seedCostData();
-      const summary = getCostSummary({ period: "all" });
+      const summary = await getCostSummary({ period: "all" });
 
       expect(summary.byModel["claude-haiku"]).toBeDefined();
       expect(summary.byModel["claude-haiku"]!.costCents).toBe(25); // 10 + 15
@@ -65,9 +65,9 @@ describe("costs", () => {
       expect(summary.byModel["claude-sonnet"]!.tokens).toBe(2500);
     });
 
-    test("returns correct scenario breakdown", () => {
+    test("returns correct scenario breakdown", async () => {
       seedCostData();
-      const summary = getCostSummary({ period: "all" });
+      const summary = await getCostSummary({ period: "all" });
 
       expect(summary.byScenario.length).toBe(2);
       const loginScenario = summary.byScenario.find((s) => s.name === "Login test");
@@ -75,8 +75,8 @@ describe("costs", () => {
       expect(loginScenario!.costCents).toBe(35); // 10 + 25
     });
 
-    test("returns zeros when no data exists", () => {
-      const summary = getCostSummary({ period: "all" });
+    test("returns zeros when no data exists", async () => {
+      const summary = await getCostSummary({ period: "all" });
 
       expect(summary.totalCostCents).toBe(0);
       expect(summary.totalTokens).toBe(0);
@@ -84,18 +84,18 @@ describe("costs", () => {
       expect(summary.avgCostPerRun).toBe(0);
     });
 
-    test("with period filter defaults to month", () => {
+    test("with period filter defaults to month", async () => {
       seedCostData();
-      const summary = getCostSummary();
+      const summary = await getCostSummary();
 
       // Data was just inserted so it should appear in "month" period
       expect(summary.period).toBe("month");
       expect(summary.totalCostCents).toBe(50);
     });
 
-    test("calculates estimated monthly cost", () => {
+    test("calculates estimated monthly cost", async () => {
       seedCostData();
-      const summary = getCostSummary({ period: "all" });
+      const summary = await getCostSummary({ period: "all" });
 
       // period "all" uses 30 days as extrapolation base
       expect(summary.estimatedMonthlyCents).toBe((50 / 30) * 30);
@@ -103,29 +103,29 @@ describe("costs", () => {
   });
 
   describe("checkBudget", () => {
-    test("allows within budget", () => {
-      const result = checkBudget(10); // default maxPerRunCents is 50
+    test("allows within budget", async () => {
+      const result = await checkBudget(10); // default maxPerRunCents is 50
       expect(result.allowed).toBe(true);
     });
 
-    test("rejects when exceeding per-run limit", () => {
-      const result = checkBudget(100); // exceeds default 50 per run
+    test("rejects when exceeding per-run limit", async () => {
+      const result = await checkBudget(100); // exceeds default 50 per run
       expect(result.allowed).toBe(false);
       expect(result.warning).toBeDefined();
       expect(result.warning).toContain("per-run limit");
     });
 
-    test("returns no warning when well within budget", () => {
-      const result = checkBudget(1);
+    test("returns no warning when well within budget", async () => {
+      const result = await checkBudget(1);
       expect(result.allowed).toBe(true);
       expect(result.warning).toBeUndefined();
     });
   });
 
   describe("formatCostsJSON", () => {
-    test("returns valid JSON string", () => {
+    test("returns valid JSON string", async () => {
       seedCostData();
-      const summary = getCostSummary({ period: "all" });
+      const summary = await getCostSummary({ period: "all" });
       const json = formatCostsJSON(summary);
       const parsed = JSON.parse(json);
 
@@ -135,9 +135,9 @@ describe("costs", () => {
       expect(parsed.period).toBe("all");
     });
 
-    test("includes all summary fields in JSON", () => {
+    test("includes all summary fields in JSON", async () => {
       seedCostData();
-      const summary = getCostSummary({ period: "all" });
+      const summary = await getCostSummary({ period: "all" });
       const parsed = JSON.parse(formatCostsJSON(summary));
 
       expect(parsed.byModel).toBeDefined();
