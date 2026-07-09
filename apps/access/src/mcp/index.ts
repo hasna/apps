@@ -9,6 +9,7 @@ import { registerCredentialTools } from "./tools/credentials.js";
 import { registerScopeTools } from "./tools/scopes.js";
 import { registerElevationTools } from "./tools/elevations.js";
 import { registerReviewTools } from "./tools/reviews.js";
+import { registerRequestTools } from "./tools/requests.js";
 import { registerRevocationTools } from "./tools/revocations.js";
 import { registerTokenTools } from "./tools/tokens.js";
 import { registerAuditTools } from "./tools/audit.js";
@@ -36,6 +37,7 @@ export function buildServer(context: AuthorizationContext = SYSTEM_AUTHORIZATION
   registerScopeTools(server, context);
   registerElevationTools(server, context);
   registerReviewTools(server, context);
+  registerRequestTools(server, context);
   registerRevocationTools(server, context);
   registerTokenTools(server, context);
   registerAuditTools(server, context);

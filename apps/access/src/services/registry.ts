@@ -5,6 +5,7 @@ import * as credentials from "./credentials.js";
 import * as scopes from "./scopes.js";
 import * as elevations from "./elevations.js";
 import * as reviews from "./reviews.js";
+import * as requests from "./access-requests.js";
 import * as revocations from "./revocations.js";
 import * as tokens from "./tokens.js";
 import { listAuditEvents, verifyAuditChain } from "../db/audit.js";
@@ -59,6 +60,11 @@ function optArr(input: OperationInput, key: string): string[] | undefined {
   return undefined;
 }
 
+function optObj(input: OperationInput, key: string): Record<string, unknown> | undefined {
+  const v = input[key];
+  return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
+}
+
 export const OPERATIONS: OperationDef[] = [
   // identities
   { op: "identity.create", resource: "identities", kind: "write", summary: "Register a non-human identity", handler: (i, c) => identities.createIdentity({ entity_id: str(i, "entity_id"), entity_slug: optStr(i, "entity_slug") ?? null, kind: str(i, "kind") as never, name: str(i, "name"), owner_ref: optStr(i, "owner_ref") ?? null, metadata: (i.metadata as Record<string, unknown>) ?? null }, c) },
@@ -96,6 +102,15 @@ export const OPERATIONS: OperationDef[] = [
   { op: "review.start", resource: "reviews", kind: "write", summary: "Start an access review", handler: (i, c) => reviews.setReviewStatus(str(i, "id"), "in_progress", c) },
   { op: "review.complete", resource: "reviews", kind: "write", summary: "Complete an access review", handler: (i, c) => reviews.setReviewStatus(str(i, "id"), "completed", c, optStr(i, "completed_by")) },
   { op: "review.cancel", resource: "reviews", kind: "write", summary: "Cancel an access review", handler: (i, c) => reviews.setReviewStatus(str(i, "id"), "cancelled", c) },
+
+  // access requests / provisioning
+  { op: "request.create", resource: "requests", kind: "write", summary: "Create an access request", handler: (i, c) => requests.createAccessRequest({ requested_by_identity_id: optStr(i, "requested_by_identity_id") ?? str(i, "identity_id"), provider: str(i, "provider"), resource_kind: str(i, "resource_kind"), resource_ref: str(i, "resource_ref"), decision_metadata: optObj(i, "decision_metadata") ?? null }, c) },
+  { op: "request.get", resource: "requests", kind: "read", summary: "Get an access request by id", handler: (i, c) => requests.getAccessRequest(str(i, "id"), c) },
+  { op: "request.list", resource: "requests", kind: "read", summary: "List access requests", handler: (i, c) => requests.listAccessRequests({ requested_by_identity_id: optStr(i, "requested_by_identity_id") ?? optStr(i, "identity_id"), entity_id: optStr(i, "entity_id"), provider: optStr(i, "provider"), resource_kind: optStr(i, "resource_kind"), resource_ref: optStr(i, "resource_ref"), status: optStr(i, "status") as never, policy_decision: optStr(i, "policy_decision") as never, limit: optNum(i, "limit"), offset: optNum(i, "offset") }, c) },
+  { op: "request.approve", resource: "requests", kind: "write", summary: "Approve an access request", handler: (i, c) => requests.approveAccessRequest(str(i, "id"), { approved_by: optStr(i, "approved_by") ?? optStr(i, "approver") ?? null, policy_reason: optStr(i, "policy_reason") ?? null, decision_metadata: optObj(i, "decision_metadata") ?? null, expected_version: optNum(i, "expected_version") }, c) },
+  { op: "request.provision", resource: "requests", kind: "write", summary: "Mark an access request provisioned", handler: (i, c) => requests.markAccessRequestProvisioned(str(i, "id"), { provisioned_by: optStr(i, "provisioned_by") ?? optStr(i, "provisioner") ?? null, provision_metadata: optObj(i, "provision_metadata") ?? null, expected_version: optNum(i, "expected_version") }, c) },
+  { op: "request.fail", resource: "requests", kind: "write", summary: "Mark an access request failed", handler: (i, c) => requests.failAccessRequest(str(i, "id"), { reason: str(i, "reason"), failed_by: optStr(i, "failed_by") ?? null, provision_metadata: optObj(i, "provision_metadata") ?? null, expected_version: optNum(i, "expected_version") }, c) },
+  { op: "request.cancel", resource: "requests", kind: "write", summary: "Cancel an access request", handler: (i, c) => requests.cancelAccessRequest(str(i, "id"), { reason: optStr(i, "reason") ?? null, cancelled_by: optStr(i, "cancelled_by") ?? null, expected_version: optNum(i, "expected_version") }, c) },
 
   // revocations
   { op: "revocation.execute", resource: "revocations", kind: "write", summary: "One-click, audited revocation", handler: (i, c) => revocations.executeRevocation({ identity_id: str(i, "identity_id"), target_type: str(i, "target_type") as never, target_id: optStr(i, "target_id") ?? null, reason: str(i, "reason") }, c) },

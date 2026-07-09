@@ -5,6 +5,7 @@ import { registerCredentialRoutes } from "./routes/credentials.js";
 import { registerScopeRoutes } from "./routes/scopes.js";
 import { registerElevationRoutes } from "./routes/elevations.js";
 import { registerReviewRoutes } from "./routes/reviews.js";
+import { registerRequestRoutes } from "./routes/requests.js";
 import { registerRevocationRoutes } from "./routes/revocations.js";
 import { registerTokenRoutes } from "./routes/tokens.js";
 import { registerAuditRoutes } from "./routes/audit.js";
@@ -79,6 +80,7 @@ export function buildApp(): Hono {
   registerScopeRoutes(app);
   registerElevationRoutes(app);
   registerReviewRoutes(app);
+  registerRequestRoutes(app);
   registerRevocationRoutes(app);
   registerTokenRoutes(app);
   registerAuditRoutes(app);

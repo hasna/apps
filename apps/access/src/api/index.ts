@@ -52,6 +52,14 @@ const ENDPOINTS: Endpoint[] = [
   { method: "post", path: "/v1/reviews/{id}/complete", operationId: "completeReview", summary: "Complete an access review" },
   { method: "post", path: "/v1/reviews/{id}/cancel", operationId: "cancelReview", summary: "Cancel an access review" },
 
+  { method: "get", path: "/v1/requests", operationId: "listRequests", summary: "List access requests" },
+  { method: "post", path: "/v1/requests", operationId: "createRequest", summary: "Create an access request" },
+  { method: "get", path: "/v1/requests/{id}", operationId: "getRequest", summary: "Get an access request" },
+  { method: "post", path: "/v1/requests/{id}/approve", operationId: "approveRequest", summary: "Approve an access request" },
+  { method: "post", path: "/v1/requests/{id}/provision", operationId: "provisionRequest", summary: "Mark an access request provisioned" },
+  { method: "post", path: "/v1/requests/{id}/fail", operationId: "failRequest", summary: "Mark an access request failed" },
+  { method: "post", path: "/v1/requests/{id}/cancel", operationId: "cancelRequest", summary: "Cancel an access request" },
+
   { method: "get", path: "/v1/revocations", operationId: "listRevocations", summary: "List revocations" },
   { method: "post", path: "/v1/revocations", operationId: "executeRevocation", summary: "One-click revocation" },
 

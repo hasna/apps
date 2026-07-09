@@ -5,7 +5,7 @@ import { McpWriteConfirmationRequiredError, stripMcpWriteConfirmation } from "..
 import { shouldRegisterTool } from "../src/mcp/profile.js";
 import { registerStorageTools } from "../src/mcp/tools/storage.js";
 import { registerIdentityTools } from "../src/mcp/tools/identities.js";
-import { authorizeMcpRequest } from "../src/mcp/http.js";
+import { assertMcpServeSafety, authorizeMcpRequest } from "../src/mcp/http.js";
 import { SYSTEM_AUTHORIZATION_CONTEXT } from "../src/services/authorization.js";
 import type { AuthorizationContext } from "../src/services/authorization-scopes.js";
 import { createIdentity } from "../src/services/identities.js";
@@ -46,6 +46,10 @@ afterEach(() => {
   delete process.env["HASNA_ACCESS_DATABASE_URL"];
   delete process.env["HASNA_ACCESS_API_KEY"];
   delete process.env["HASNA_ACCESS_API_CREDENTIALS"];
+  delete process.env["HASNA_ACCESS_TOKEN_SIGNING_KEY"];
+  delete process.env["ACCESS_TOKEN_SIGNING_KEY"];
+  delete process.env["HASNA_ACCESS_TOKEN_SIGNING_KEY_FILE"];
+  delete process.env["ACCESS_TOKEN_SIGNING_KEY_FILE"];
 });
 
 describe("MCP write safety", () => {
@@ -85,6 +89,15 @@ describe("MCP write safety", () => {
     const outcome = authorizeMcpRequest(new Request("http://127.0.0.1/mcp", { method: "POST" }));
     expect(outcome.ok).toBe(false);
     expect(outcome.status).toBe(401);
+  });
+
+  it("exposed MCP startup requires both API credentials and a strong signing key", () => {
+    process.env["HASNA_ACCESS_API_CREDENTIALS"] = JSON.stringify([
+      { id: "owner", token: "owner-token", roles: ["owner"], entity_ids: ["entity-a"] },
+    ]);
+    expect(() => assertMcpServeSafety("0.0.0.0")).toThrow(/SIGNING_KEY/);
+    process.env["HASNA_ACCESS_TOKEN_SIGNING_KEY"] = "x".repeat(32);
+    expect(() => assertMcpServeSafety("0.0.0.0")).not.toThrow();
   });
 
   it("storage_status leaks no DSN substring", async () => {

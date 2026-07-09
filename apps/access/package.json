@@ -1,6 +1,6 @@
 {
   "name": "@hasna/access",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Non-human-identity governance: CLI + MCP + serve over a Hasna-contract store. Identity inventory, credential & MCP-scope mapping, JIT elevation, access reviews, one-click revocation, and the cohort MCP bearer-token issuer.",
   "type": "module",
   "main": "dist/index.js",
@@ -16,7 +16,15 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist", "hasna.contract.json", "openapi.json", "docker-compose.yml", "LICENSE", "README.md"],
+  "files": [
+    "dist",
+    "hasna.contract.json",
+    "openapi.json",
+    "docker-compose.yml",
+    "LICENSE",
+    "README.md",
+    "docs"
+  ],
   "scripts": {
     "build": "bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external hono --external pg && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external pg && bun build src/server/index.ts --outdir dist/server --target bun --external hono --external pg && bun build src/index.ts --outdir dist --target bun --external pg && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",

@@ -28,6 +28,7 @@ const ID_TABLES = new Set([
   "credentials",
   "scopes",
   "elevations",
+  "access_requests",
   "access_reviews",
   "revocations",
   "issued_tokens",

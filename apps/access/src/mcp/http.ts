@@ -5,6 +5,7 @@ import { authenticateApiRequest, isApiAuthConfigured, principalToContext } from 
 import { SYSTEM_AUTHORIZATION_CONTEXT } from "../services/authorization.js";
 import type { AuthorizationContext } from "../services/authorization-scopes.js";
 import { resolveStorageMode } from "../config.js";
+import { assertTokenSigningPosture } from "../services/tokens.js";
 
 /**
  * Streamable HTTP transport for the access MCP server, with MANDATORY per-caller
@@ -72,13 +73,15 @@ export function mcpAuthEnabled(host = "127.0.0.1"): boolean {
  */
 export function assertMcpServeSafety(hostname: string): void {
   const loopback = isLoopback(hostname);
-  const cloud = resolveStorageMode() === "cloud";
+  const mode = resolveStorageMode();
+  const cloud = mode === "cloud";
   if ((!loopback || cloud) && !isApiAuthConfigured()) {
     throw new Error(
       `Refusing to start access-mcp: bind=${hostname} mode=${cloud ? "cloud" : "local"} requires API credentials. ` +
         "Set HASNA_ACCESS_API_CREDENTIALS (or HASNA_ACCESS_API_KEY). Unauthenticated MCP is only allowed on 127.0.0.1 in local mode.",
     );
   }
+  assertTokenSigningPosture({ mode, exposed: !loopback });
 }
 
 // PER-PEER RATE LIMITER (§5.1a). Connection-scoped fixed-window limiter keyed on

@@ -8,10 +8,12 @@ export type IdentityStatus = "active" | "suspended" | "retired";
 export type CredentialKind = "api_key" | "oauth" | "mcp_token" | "ssh_key" | "webhook_secret";
 export type CredentialStatus = "active" | "revoked";
 export type ScopeStatus = "granted" | "revoked";
-export type ElevationStatus = "active" | "expired" | "revoked";
+export type ElevationStatus = "pending" | "active" | "expired" | "revoked";
 export type ReviewStatus = "scheduled" | "in_progress" | "completed" | "cancelled";
 export type RevocationTarget = "credential" | "scope" | "identity" | "elevation" | "token";
 export type TokenStatus = "active" | "revoked";
+export type AccessRequestStatus = "pending" | "approved" | "provisioned" | "failed" | "cancelled";
+export type AccessRequestPolicyDecision = "allow" | "deny" | "manual_review";
 
 export interface Identity {
   id: string;
@@ -110,6 +112,38 @@ export interface IssuedToken {
   revoked_at: string | null;
 }
 
+export type PublicIssuedToken = Omit<IssuedToken, "token_hash">;
+
+export interface AccessRequest {
+  id: string;
+  entity_id: string;
+  requested_by_identity_id: string;
+  provider: string;
+  resource_kind: string;
+  resource_ref: string;
+  status: AccessRequestStatus;
+  policy_mode: string;
+  policy_decision: AccessRequestPolicyDecision;
+  policy_reason: string | null;
+  decision_metadata: Record<string, unknown>;
+  approved_by: string | null;
+  approved_at: string | null;
+  secret_ref: string;
+  command_preview: Record<string, unknown>;
+  provision_metadata: Record<string, unknown> | null;
+  provisioned_at: string | null;
+  provisioned_by: string | null;
+  failure_reason: string | null;
+  failed_at: string | null;
+  failed_by: string | null;
+  cancelled_at: string | null;
+  cancelled_by: string | null;
+  cancel_reason: string | null;
+  created_at: string;
+  updated_at: string;
+  version: number;
+}
+
 export interface AuditEvent {
   id: number;
   entity_id: string | null;
@@ -192,6 +226,14 @@ export class TokenNotFoundError extends NotFoundError {
   static override readonly suggestion: string = "Use list_tokens to find the correct token id.";
   constructor(id: string) {
     super(`Issued token not found: ${id}`);
+  }
+}
+
+export class AccessRequestNotFoundError extends NotFoundError {
+  override readonly code: string = "ACCESS_REQUEST_NOT_FOUND";
+  static override readonly suggestion: string = "Use list_requests to find the correct access request id.";
+  constructor(id: string) {
+    super(`Access request not found: ${id}`);
   }
 }
 

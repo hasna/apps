@@ -95,6 +95,19 @@ const NAMESPACES: Namespace[] = [
     ],
   },
   {
+    name: "request",
+    description: "Manage access requests and provisioning",
+    ops: [
+      { name: "create", op: "request.create", description: "Create an access request", options: [IDENTITY, { flag: "--provider <provider>", key: "provider" }, { flag: "--resource-kind <kind>", key: "resource_kind" }, { flag: "--resource-ref <ref>", key: "resource_ref" }] },
+      { name: "get", op: "request.get", description: "Get an access request", options: [ID] },
+      { name: "list", op: "request.list", description: "List access requests", options: [IDENTITY, ENTITY, { flag: "--provider <provider>", key: "provider" }, { flag: "--resource-kind <kind>", key: "resource_kind" }, { flag: "--resource-ref <ref>", key: "resource_ref" }, STATUS, { flag: "--policy-decision <decision>", key: "policy_decision" }, LIMIT] },
+      { name: "approve", op: "request.approve", description: "Approve an access request", options: [ID, { flag: "--approved-by <who>", key: "approved_by" }, { flag: "--policy-reason <text>", key: "policy_reason" }] },
+      { name: "provision", op: "request.provision", description: "Mark an access request provisioned", options: [ID, { flag: "--provisioned-by <who>", key: "provisioned_by" }] },
+      { name: "fail", op: "request.fail", description: "Mark an access request failed", options: [ID, REASON, { flag: "--failed-by <who>", key: "failed_by" }] },
+      { name: "cancel", op: "request.cancel", description: "Cancel an access request", options: [ID, REASON, { flag: "--cancelled-by <who>", key: "cancelled_by" }] },
+    ],
+  },
+  {
     name: "revocation",
     description: "One-click, audited revocation",
     ops: [

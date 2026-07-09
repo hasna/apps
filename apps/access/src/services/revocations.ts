@@ -106,7 +106,7 @@ function cascadeIdentity(identityId: string, reason: string, ctx?: Authorization
     revokeScope(s.id, reason, ctx);
     affected += 1;
   }
-  const elevations = db.query("SELECT id FROM elevations WHERE identity_id = ? AND status = 'active'").all(identityId) as { id: string }[];
+  const elevations = db.query("SELECT id FROM elevations WHERE identity_id = ? AND status IN ('pending', 'active')").all(identityId) as { id: string }[];
   for (const e of elevations) {
     revokeElevation(e.id, reason, ctx);
     affected += 1;

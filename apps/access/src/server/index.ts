@@ -2,6 +2,7 @@
 import { buildApp } from "./app.js";
 import { isApiAuthConfigured } from "./auth.js";
 import { resolveStorageMode } from "../config.js";
+import { assertTokenSigningPosture } from "../services/tokens.js";
 import { APP_VERSION } from "../version.js";
 
 export const DEFAULT_SERVE_PORT = 3483;
@@ -41,6 +42,7 @@ export function startServer(): ReturnType<typeof Bun.serve> {
   const host = getBindHost();
   const mode = resolveStorageMode();
   assertAuthPosture(host, mode);
+  assertTokenSigningPosture({ mode, exposed: !isLoopback(host) });
   const app = buildApp();
   const server = Bun.serve({ port, hostname: host, fetch: app.fetch });
   console.error(`access-serve v${APP_VERSION} listening on http://${host}:${port} (mode=${mode})`);

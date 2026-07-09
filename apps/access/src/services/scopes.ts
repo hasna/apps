@@ -119,7 +119,7 @@ export function revokeScope(id: string, reason: string, ctx?: AuthorizationConte
   return getScope(id, ctx);
 }
 
-/** Effective granted scopes for an identity (permanent grants ∪ active JIT elevations). */
+/** Effective granted scopes for an identity (permanent grants ∪ approved active JIT elevations). */
 export function effectiveScopes(identityId: string, ctx?: AuthorizationContext): string[] {
   const identity = getIdentity(identityId, ctx);
   authorize("read", ctx, { entity_id: identity.entity_id, resource: "scope" });
@@ -127,7 +127,7 @@ export function effectiveScopes(identityId: string, ctx?: AuthorizationContext):
   const permanent = db.query("SELECT scope FROM scopes WHERE identity_id = ? AND status = 'granted'").all(identityId) as { scope: string }[];
   const nowTs = now();
   const elevated = db
-    .query("SELECT scope FROM elevations WHERE identity_id = ? AND status = 'active' AND expires_at > ?")
+    .query("SELECT scope FROM elevations WHERE identity_id = ? AND status = 'active' AND approver IS NOT NULL AND expires_at > ?")
     .all(identityId, nowTs) as { scope: string }[];
   return Array.from(new Set([...permanent.map((r) => r.scope), ...elevated.map((r) => r.scope)])).sort();
 }

@@ -4,6 +4,7 @@ import { clampLimit, clampOffset } from "../db/crud.js";
 import { entityScopeFilter, type AuthorizationContext } from "./authorization.js";
 import { authorize } from "./authorization-scopes.js";
 import { getIdentity } from "./identities.js";
+import { validateSecretRef } from "./secret-boundary.js";
 import {
   CredentialNotFoundError,
   ValidationError,
@@ -26,8 +27,6 @@ interface CredentialRow {
 }
 
 const CRED_KINDS = new Set<CredentialKind>(["api_key", "oauth", "mcp_token", "ssh_key", "webhook_secret"]);
-// A secret VALUE must never be stored. secret_ref points at @hasna/secrets.
-const SECRET_VALUE_HINT = /^(sk-|ghp_|gho_|github_pat_|AKIA|xai-|npm_|-----BEGIN)/;
 
 function toCredential(row: CredentialRow): Credential {
   return { ...row };
@@ -43,10 +42,7 @@ export interface RegisterCredentialInput {
 export function registerCredential(input: RegisterCredentialInput, ctx?: AuthorizationContext): Credential {
   if (!input.name?.trim()) throw new ValidationError("Credential name is required.");
   if (!CRED_KINDS.has(input.kind)) throw new ValidationError(`kind must be one of ${[...CRED_KINDS].join(", ")}.`);
-  if (!input.secret_ref?.trim()) throw new ValidationError("secret_ref (a @hasna/secrets reference) is required.");
-  if (SECRET_VALUE_HINT.test(input.secret_ref.trim())) {
-    throw new ValidationError("secret_ref looks like a raw secret value; store only a @hasna/secrets reference, never the value.");
-  }
+  const secretRef = validateSecretRef(input.secret_ref);
   const identity = getIdentity(input.identity_id, ctx);
   authorize("write", ctx, { entity_id: identity.entity_id, resource: "credential" });
 
@@ -56,12 +52,12 @@ export function registerCredential(input: RegisterCredentialInput, ctx?: Authori
   db.query(
     `INSERT INTO credentials (id, identity_id, entity_id, name, kind, secret_ref, status, created_at, updated_at, version)
      VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, 1)`,
-  ).run(id, identity.id, identity.entity_id, input.name.trim(), input.kind, input.secret_ref.trim(), ts, ts);
+  ).run(id, identity.id, identity.entity_id, input.name.trim(), input.kind, secretRef, ts, ts);
   appendAuditEvent(db, {
     entity_id: identity.entity_id,
     event_type: "credential.registered",
     actor: ctx?.actor_id ?? null,
-    payload: { credential_id: id, identity_id: identity.id, kind: input.kind, secret_ref: input.secret_ref.trim() },
+    payload: { credential_id: id, identity_id: identity.id, kind: input.kind, secret_ref: secretRef },
   });
   return getCredential(id, ctx);
 }

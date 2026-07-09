@@ -41,7 +41,7 @@ export interface RequestElevationInput {
   expires_at?: string;
 }
 
-/** Request a JIT elevation. Created in 'active' state but not yet approver-signed. */
+/** Request a JIT elevation. Pending requests are not effective until approved. */
 export function requestElevation(input: RequestElevationInput, ctx?: AuthorizationContext): Elevation {
   if (!input.scope?.trim()) throw new ValidationError("scope is required for an elevation.");
   if (!input.reason?.trim()) throw new ValidationError("reason is required for a JIT elevation (it is audited).");
@@ -56,7 +56,7 @@ export function requestElevation(input: RequestElevationInput, ctx?: Authorizati
   const ts = now();
   db.query(
     `INSERT INTO elevations (id, identity_id, entity_id, scope, reason, approver, requested_by, expires_at, status, created_at, updated_at, version)
-     VALUES (?, ?, ?, ?, ?, NULL, ?, ?, 'active', ?, ?, 1)`,
+     VALUES (?, ?, ?, ?, ?, NULL, ?, ?, 'pending', ?, ?, 1)`,
   ).run(id, identity.id, identity.entity_id, input.scope.trim(), input.reason.trim(), ctx?.actor_id ?? null, expiresAt, ts, ts);
   appendAuditEvent(db, {
     entity_id: identity.entity_id,
@@ -71,9 +71,20 @@ export function approveElevation(id: string, approver: string, ctx?: Authorizati
   const db = getDatabase();
   const existing = getElevation(id, ctx);
   authorize("approve", ctx, { entity_id: existing.entity_id, resource: "elevation" });
-  if (existing.status !== "active") throw new InvalidTransitionError(`Elevation ${id} is ${existing.status}; only active elevations can be approved.`);
+  if (existing.status !== "pending") throw new InvalidTransitionError(`Elevation ${id} is ${existing.status}; only pending elevations can be approved.`);
   if (!approver?.trim()) throw new ValidationError("approver is required.");
-  db.query("UPDATE elevations SET approver = ?, updated_at = ?, version = version + 1 WHERE id = ?").run(approver.trim(), now(), id);
+  const ts = now();
+  if (Date.parse(existing.expires_at) <= Date.now()) {
+    db.query("UPDATE elevations SET status = 'expired', updated_at = ?, version = version + 1 WHERE id = ?").run(ts, id);
+    appendAuditEvent(db, {
+      entity_id: existing.entity_id,
+      event_type: "elevation.expired",
+      actor: ctx?.actor_id ?? null,
+      payload: { elevation_id: id, scope: existing.scope, previous_status: existing.status },
+    });
+    throw new InvalidTransitionError(`Elevation ${id} is expired; only unexpired pending elevations can be approved.`);
+  }
+  db.query("UPDATE elevations SET status = 'active', approver = ?, updated_at = ?, version = version + 1 WHERE id = ?").run(approver.trim(), ts, id);
   appendAuditEvent(db, {
     entity_id: existing.entity_id,
     event_type: "elevation.approved",
@@ -142,15 +153,16 @@ export function revokeElevation(id: string, reason: string, ctx?: AuthorizationC
   return getElevation(id, ctx);
 }
 
-/** Sweep expired active elevations to 'expired'. Returns the count transitioned. */
+/** Sweep expired pending/active elevations to 'expired'. Returns the count transitioned. */
 export function expireElevations(ctx?: AuthorizationContext): { expired: number } {
   authorize("write", ctx, { resource: "elevation" });
   const db = getDatabase();
   const nowTs = now();
-  const rows = db.query("SELECT id, entity_id, scope FROM elevations WHERE status = 'active' AND expires_at <= ?").all(nowTs) as {
+  const rows = db.query("SELECT id, entity_id, scope, status FROM elevations WHERE status IN ('pending', 'active') AND expires_at <= ?").all(nowTs) as {
     id: string;
     entity_id: string;
     scope: string;
+    status: ElevationStatus;
   }[];
   for (const row of rows) {
     db.query("UPDATE elevations SET status = 'expired', updated_at = ?, version = version + 1 WHERE id = ?").run(nowTs, row.id);
@@ -158,7 +170,7 @@ export function expireElevations(ctx?: AuthorizationContext): { expired: number 
       entity_id: row.entity_id,
       event_type: "elevation.expired",
       actor: ctx?.actor_id ?? null,
-      payload: { elevation_id: row.id, scope: row.scope },
+      payload: { elevation_id: row.id, scope: row.scope, previous_status: row.status },
     });
   }
   return { expired: rows.length };

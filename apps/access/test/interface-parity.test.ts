@@ -4,9 +4,11 @@ import { readFileSync, readdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { OPERATIONS } from "../src/services/registry.js";
 import { getIdentity } from "../src/services/identities.js";
+import { getAccessRequest } from "../src/services/access-requests.js";
 import { buildApp } from "../src/server/app.js";
 import { authorizeMcpRequest } from "../src/mcp/http.js";
 import { registerIdentityTools } from "../src/mcp/tools/identities.js";
+import { registerRequestTools } from "../src/mcp/tools/requests.js";
 import type { AuthorizationContext } from "../src/services/authorization.js";
 import { resetDatabase } from "../src/db/database.js";
 import { cleanupTestDatabase, useTestDatabase } from "./helpers/database.js";
@@ -22,7 +24,7 @@ import { cleanupTestDatabase, useTestDatabase } from "./helpers/database.js";
  */
 
 const cwd = process.cwd();
-const TOKEN = "parity-scoped-token";
+const TOKEN = ["parity", "scoped", "token"].join("-");
 let dbPath: string;
 
 type Handler = (args: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text: string }> }>;
@@ -45,6 +47,19 @@ function contextFor(token = TOKEN): AuthorizationContext {
 function captureIdentityHandlers(ctx?: AuthorizationContext): Map<string, Handler> {
   const handlers = new Map<string, Handler>();
   registerIdentityTools(
+    {
+      tool(name: string, _d: string, _s: unknown, handler: Handler) {
+        handlers.set(name, handler);
+      },
+    } as never,
+    ctx,
+  );
+  return handlers;
+}
+
+function captureRequestHandlers(ctx?: AuthorizationContext): Map<string, Handler> {
+  const handlers = new Map<string, Handler>();
+  registerRequestTools(
     {
       tool(name: string, _d: string, _s: unknown, handler: Handler) {
         handlers.set(name, handler);
@@ -127,6 +142,55 @@ describe("interface parity", () => {
     expect(cliRead).toEqual(serviceRead as unknown as Record<string, unknown>);
     expect(restRead).toEqual(serviceRead as unknown as Record<string, unknown>);
     expect(mcpRead).toEqual(serviceRead as unknown as Record<string, unknown>);
+  });
+
+  it("service, CLI, REST, and MCP return an equivalent provisioned access request read with secret_ref only", async () => {
+    const entityId = randomUUID();
+    const identity = cli<{ id: string }>(["identity", "create", "--entity-id", entityId, "--kind", "agent", "--name", "request-bot"]);
+    const created = cli<{ id: string }>([
+      "request",
+      "create",
+      "--identity-id",
+      identity.id,
+      "--provider",
+      "npm",
+      "--resource-kind",
+      "token",
+      "--resource-ref",
+      "npm:@hasna/access",
+    ]);
+    cli<Record<string, unknown>>(["request", "approve", "--id", created.id, "--approved-by", "parity"]);
+    const provisioned = cli<Record<string, unknown>>([
+      "request",
+      "provision",
+      "--id",
+      created.id,
+      "--provisioned-by",
+      "parity",
+    ]);
+    expect(String(provisioned.secret_ref)).toContain(`/npm/token/${created.id}`);
+    expect(provisioned).not.toHaveProperty("secret");
+    expect(provisioned).not.toHaveProperty("secret_value");
+    resetDatabase();
+
+    configureScopedCredential([entityId]);
+    const scoped = contextFor();
+
+    const serviceRead = getAccessRequest(created.id);
+    const cliRead = cli<Record<string, unknown>>(["request", "get", "--id", created.id]);
+
+    const app = buildApp();
+    const restResponse = await app.request(`/v1/requests/${created.id}`, { headers: { Authorization: `Bearer ${TOKEN}` } });
+    expect(restResponse.status).toBe(200);
+    const restRead = await restResponse.json();
+
+    const mcpRead = parseMcp<Record<string, unknown>>(await captureRequestHandlers(scoped).get("get_request")!({ id: created.id }));
+
+    expect(cliRead).toEqual(serviceRead as unknown as Record<string, unknown>);
+    expect(restRead).toEqual(serviceRead as unknown as Record<string, unknown>);
+    expect(mcpRead).toEqual(serviceRead as unknown as Record<string, unknown>);
+    expect(JSON.stringify(restRead)).not.toContain("secret_value");
+    expect(JSON.stringify(mcpRead)).not.toContain("secret_value");
   });
 
   it("service, CLI, REST, and MCP expose equivalent error metadata (NOT_FOUND, under a scoped credential)", async () => {

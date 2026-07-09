@@ -1,8 +1,10 @@
 import { Buffer } from "node:buffer";
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { getDatabase, now, uuid } from "../db/database.js";
 import { appendAuditEvent } from "../db/audit.js";
 import { clampLimit, clampOffset } from "../db/crud.js";
+import { resolveStorageMode, type StorageMode } from "../config.js";
 import { entityScopeFilter, type AuthorizationContext } from "./authorization.js";
 import { authorize } from "./authorization-scopes.js";
 import { getIdentity } from "./identities.js";
@@ -11,7 +13,7 @@ import {
   TokenNotFoundError,
   TokenVerificationError,
   ValidationError,
-  type IssuedToken,
+  type PublicIssuedToken,
   type TokenStatus,
 } from "../types/index.js";
 
@@ -23,10 +25,66 @@ import {
  */
 
 const DEFAULT_TTL_MINUTES = 60;
+const LOCAL_MAX_TTL_MINUTES = 24 * 60;
+const HARDENED_MAX_TTL_MINUTES = 60;
+const MIN_SIGNING_KEY_LENGTH = 32;
 const DEV_SIGNING_KEY = "access-dev-signing-key-local-only-do-not-use-in-prod";
 
-function signingKey(): string {
-  return process.env["HASNA_ACCESS_TOKEN_SIGNING_KEY"]?.trim() || process.env["ACCESS_TOKEN_SIGNING_KEY"]?.trim() || DEV_SIGNING_KEY;
+export interface TokenSigningRuntimeOptions {
+  mode?: StorageMode;
+  exposed?: boolean;
+}
+
+function configuredSigningKey(): string | undefined {
+  for (const fileKey of ["HASNA_ACCESS_TOKEN_SIGNING_KEY_FILE", "ACCESS_TOKEN_SIGNING_KEY_FILE"]) {
+    const filePath = process.env[fileKey]?.trim();
+    if (filePath && existsSync(filePath)) {
+      const value = readFileSync(filePath, "utf8").trim();
+      if (value) return value;
+    }
+  }
+  return process.env["HASNA_ACCESS_TOKEN_SIGNING_KEY"]?.trim() || process.env["ACCESS_TOKEN_SIGNING_KEY"]?.trim() || undefined;
+}
+
+function isLoopbackHost(host: string): boolean {
+  return host === "127.0.0.1" || host === "::1" || host === "localhost";
+}
+
+function exposedBindHost(): string | null {
+  const hosts = [
+    process.env["HASNA_ACCESS_BIND_HOST"],
+    process.env["ACCESS_BIND_HOST"],
+    process.env["HASNA_ACCESS_MCP_BIND_HOST"],
+    process.env["ACCESS_MCP_BIND_HOST"],
+  ]
+    .map((host) => host?.trim())
+    .filter((host): host is string => Boolean(host));
+  return hosts.find((host) => !isLoopbackHost(host)) ?? null;
+}
+
+function hardenedRuntime(options: TokenSigningRuntimeOptions = {}): boolean {
+  return (options.mode ?? resolveStorageMode()) === "cloud" || options.exposed === true || exposedBindHost() !== null;
+}
+
+function isStrongSigningKey(key: string): boolean {
+  return key.length >= MIN_SIGNING_KEY_LENGTH && key !== DEV_SIGNING_KEY;
+}
+
+function signingKey(options: TokenSigningRuntimeOptions = {}): string {
+  const configured = configuredSigningKey();
+  if (hardenedRuntime(options)) {
+    if (!configured || !isStrongSigningKey(configured)) {
+      throw new ValidationError(
+        "A strong HASNA_ACCESS_TOKEN_SIGNING_KEY is required for cloud mode or exposed bind hosts.",
+      );
+    }
+    return configured;
+  }
+  return configured || DEV_SIGNING_KEY;
+}
+
+export function assertTokenSigningPosture(options: TokenSigningRuntimeOptions = {}): void {
+  void signingKey(options);
 }
 
 function b64url(input: Buffer | string): string {
@@ -56,7 +114,7 @@ interface TokenRow {
   revoked_at: string | null;
 }
 
-function toToken(row: TokenRow): IssuedToken {
+function toToken(row: TokenRow): PublicIssuedToken {
   return {
     id: row.id,
     jti: row.jti,
@@ -65,7 +123,6 @@ function toToken(row: TokenRow): IssuedToken {
     credential_id: row.credential_id,
     scopes: JSON.parse(row.scopes) as string[],
     entity_ids: JSON.parse(row.entity_ids) as string[],
-    token_hash: row.token_hash,
     status: row.status,
     issued_at: row.issued_at,
     expires_at: row.expires_at,
@@ -83,10 +140,13 @@ export interface IssueTokenInput {
 
 export interface IssuedTokenResult {
   token: string;
-  record: IssuedToken;
+  record: PublicIssuedToken;
 }
 
 export function issueToken(input: IssueTokenInput, ctx?: AuthorizationContext): IssuedTokenResult {
+  const ttlMinutes = normalizeTtlMinutes(input.ttl_minutes);
+  // Validate signing posture before any token material is created.
+  void signingKey();
   const identity = getIdentity(input.identity_id, ctx);
   authorize("issue", ctx, { entity_id: identity.entity_id, resource: "token" });
 
@@ -99,10 +159,10 @@ export function issueToken(input: IssueTokenInput, ctx?: AuthorizationContext): 
     throw new ValidationError(`Cannot issue token with un-granted scopes: ${widened.join(", ")}. Grant them or request an elevation first.`);
   }
 
-  const entityIds = input.entity_ids?.length ? input.entity_ids : [identity.entity_id];
+  const entityIds = normalizeTokenEntityIds(input.entity_ids, identity.entity_id, ctx);
   const jti = randomUUID();
   const issuedAt = now();
-  const expiresAt = new Date(Date.now() + (input.ttl_minutes ?? DEFAULT_TTL_MINUTES) * 60_000).toISOString();
+  const expiresAt = new Date(Date.now() + ttlMinutes * 60_000).toISOString();
 
   const header = b64url(JSON.stringify({ alg: "HS256", typ: "HAT", iss: "access" }));
   const payload = b64url(
@@ -151,7 +211,12 @@ export function verifyToken(token: string): VerifiedToken {
   const parts = token.split(".");
   if (parts.length !== 3) throw new TokenVerificationError("Malformed token.");
   const [header, payload, signature] = parts as [string, string, string];
-  const expected = sign(`${header}.${payload}`);
+  let expected: string;
+  try {
+    expected = sign(`${header}.${payload}`);
+  } catch {
+    throw new TokenVerificationError("Token signing key is not configured safely for this runtime.");
+  }
   if (!safeEqual(signature, expected)) throw new TokenVerificationError("Bad token signature.");
 
   let claims: { jti?: string; sub?: string; ent?: string[]; scp?: string[]; exp?: string };
@@ -179,7 +244,7 @@ export function verifyToken(token: string): VerifiedToken {
   };
 }
 
-export function getToken(id: string, ctx?: AuthorizationContext): IssuedToken {
+export function getToken(id: string, ctx?: AuthorizationContext): PublicIssuedToken {
   const db = getDatabase();
   const row = db.query("SELECT * FROM issued_tokens WHERE id = ?").get(id) as TokenRow | null;
   if (!row) throw new TokenNotFoundError(id);
@@ -195,7 +260,7 @@ export interface ListTokensFilter {
   offset?: number;
 }
 
-export function listTokens(filter: ListTokensFilter = {}, ctx?: AuthorizationContext): IssuedToken[] {
+export function listTokens(filter: ListTokensFilter = {}, ctx?: AuthorizationContext): PublicIssuedToken[] {
   authorize("read", ctx, filter.entity_id ? { entity_id: filter.entity_id, resource: "token" } : { resource: "token" });
   const db = getDatabase();
   const clauses: string[] = [];
@@ -224,7 +289,7 @@ export function listTokens(filter: ListTokensFilter = {}, ctx?: AuthorizationCon
   return rows.map(toToken);
 }
 
-export function revokeToken(id: string, reason: string, ctx?: AuthorizationContext): IssuedToken {
+export function revokeToken(id: string, reason: string, ctx?: AuthorizationContext): PublicIssuedToken {
   const db = getDatabase();
   const existing = getToken(id, ctx);
   authorize("revoke", ctx, { entity_id: existing.entity_id, resource: "token" });
@@ -242,4 +307,31 @@ function safeEqual(a: string, b: string): boolean {
   const left = Buffer.from(a);
   const right = Buffer.from(b);
   return left.length === right.length && timingSafeEqual(left, right);
+}
+
+function normalizeTtlMinutes(value: number | undefined): number {
+  const ttl = value ?? DEFAULT_TTL_MINUTES;
+  if (!Number.isFinite(ttl) || ttl <= 0 || !Number.isInteger(ttl)) {
+    throw new ValidationError("ttl_minutes must be a positive integer.");
+  }
+  const ceiling = hardenedRuntime() ? HARDENED_MAX_TTL_MINUTES : LOCAL_MAX_TTL_MINUTES;
+  if (ttl > ceiling) {
+    throw new ValidationError(`ttl_minutes must be ${ceiling} or less for this runtime.`);
+  }
+  return ttl;
+}
+
+function normalizeTokenEntityIds(entityIds: string[] | undefined, homeEntityId: string, ctx?: AuthorizationContext): string[] {
+  const ids = entityIds?.length ? entityIds.map((id) => id.trim()).filter(Boolean) : [homeEntityId];
+  if (ids.length === 0) throw new ValidationError("entity_ids must include at least one entity id.");
+  const unique = Array.from(new Set(ids));
+  const systemBypass = ctx === undefined || ctx.bypass === true;
+  if (!systemBypass) {
+    const outsideHome = unique.filter((id) => id !== homeEntityId);
+    if (outsideHome.length > 0) {
+      throw new ValidationError("Cannot issue a token for entity_ids outside the identity home entity.");
+    }
+    authorize("issue", ctx, { entity_ids: unique, resource: "token" });
+  }
+  return unique;
 }

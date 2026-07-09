@@ -5,7 +5,7 @@ import { ensureAppHome, getDefaultDbPath } from "../core/app-home.js";
 import { resolveDbPath, resolveStorageMode, type StorageMode } from "../config.js";
 import { backupDatabaseBeforeMigration, shouldBackupBeforeMigration } from "./backup.js";
 import { applySchema } from "./schema.js";
-import { pendingMigrations } from "./migration-plan.js";
+import { applyPendingMigrations, pendingMigrations } from "./migration-plan.js";
 
 /**
  * openDatabase() resolves mode via config.ts.
@@ -59,6 +59,7 @@ export function openDatabase(dbPath?: string): Database {
   _db.run("PRAGMA busy_timeout = 5000");
   _db.run("PRAGMA foreign_keys = ON");
   applySchema(_db);
+  applyPendingMigrations(_db);
   return _db;
 }
 
@@ -74,7 +75,7 @@ function willMigrate(path: string): boolean {
       probe.close();
     }
   } catch {
-    return false;
+    return true;
   }
 }
 
