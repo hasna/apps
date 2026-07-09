@@ -4727,6 +4727,7 @@ describe("loops CLI", () => {
         title: "Approve blocked PR",
         working_dir: "/tmp/open-loops",
         tags: ["auto:route"],
+        pr_state: "OPEN",
         description: [
           "GitHub PR #1 author is also andrei-hasna.",
           "reviewDecision=REVIEW_REQUIRED",
