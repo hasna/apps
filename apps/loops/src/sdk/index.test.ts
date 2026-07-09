@@ -5,9 +5,27 @@ import { describe, expect, test } from "bun:test";
 import { tick } from "../lib/scheduler.js";
 import { Store } from "../lib/store.js";
 import { gatedWriteCommand, openGate, waitUntil } from "../test-helpers.js";
+import { LoopsClient as HttpLoopsClient } from "./http.js";
 import { LoopsClient, migrationHash, openAutomationsRuntimeBinding, registerSelfHostedRunner } from "./index.js";
 
 describe("loops sdk", () => {
+  test("generated HTTP client exposes pagination and output query params", async () => {
+    const urls: string[] = [];
+    const fetchImpl = async (input: string | URL) => {
+      urls.push(String(input));
+      return Response.json({ ok: true, runs: [] });
+    };
+    const client = new HttpLoopsClient({ baseUrl: "http://127.0.0.1:8787", fetch: fetchImpl as typeof fetch });
+
+    await client.listLoops({ limit: 10, offset: 20, includeArchived: true });
+    await client.listRuns({ limit: 5, offset: 15, showOutput: true });
+    await client.getRun("run-1", { showOutput: true });
+
+    expect(urls[0]).toBe("http://127.0.0.1:8787/v1/loops?limit=10&offset=20&includeArchived=true");
+    expect(urls[1]).toBe("http://127.0.0.1:8787/v1/runs?limit=5&offset=15&showOutput=true");
+    expect(urls[2]).toBe("http://127.0.0.1:8787/v1/runs/run-1?showOutput=true");
+  });
+
   test("describes the OpenAutomations runtime handoff without claiming product ownership", () => {
     const binding = openAutomationsRuntimeBinding();
     expect(binding).toMatchObject({

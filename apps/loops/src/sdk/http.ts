@@ -283,10 +283,10 @@ export class LoopsClient {
     }
 
     /** Get a run by id */
-    async getRun(id: string, init?: RequestInit): Promise<RunResponse> {
+    async getRun(id: string, query?: { "showOutput"?: boolean }, init?: RequestInit): Promise<RunResponse> {
       return this.request("GET", `/v1/runs/${encodeURIComponent(String(id))}`, {
         body: undefined,
-        query: undefined,
+        query,
         init,
       });
     }
