@@ -1130,13 +1130,17 @@ routes
 
 routes
   .command("requeue <id>")
-  .description("requeue a terminal admission work item for the next task/event delivery")
+  .description("requeue a terminal admission work item for the next task/event delivery (resets the redispatch attempt count so the unwedge is durable; --keep-attempts preserves it)")
   .option("--reason <text>", "operator reason recorded on the work item")
+  .option("--keep-attempts", "preserve the redispatch attempt count instead of resetting it (cautious path: the item may re-cap after one more terminal run)")
   .action(runAction((id, opts) => withStore(async (store) => {
     const reason = stringField(opts.reason);
     if (!reason) throw new ValidationError("routes requeue requires --reason <text>");
-    const item = await store.requeueWorkflowWorkItem(id, { reason });
-    print(publicWorkflowWorkItem(item), `requeued route work item ${item.id} (${item.routeKey})`);
+    const item = await store.requeueWorkflowWorkItem(id, { reason, resetAttempts: !opts.keepAttempts });
+    print(
+      publicWorkflowWorkItem(item),
+      `requeued route work item ${item.id} (${item.routeKey}) - ${opts.keepAttempts ? "attempts preserved" : "attempts reset"}`,
+    );
   })));
 
 routes

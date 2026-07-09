@@ -4143,18 +4143,22 @@ describe("loops CLI", () => {
     const value = JSON.parse(result.stdout);
     expect(value.scanned).toBe(7);
     expect(value.filteredCandidates).toBe(6);
-    expect(value.considered).toBe(6);
+    // task-no-auto carries a route-disallowed TAG, so it is held out of the
+    // candidate window (excludedDisallowedTag) instead of burning a considered
+    // slot; status-based ineligibility (blocked/completed) still skips in-window.
+    expect(value.excludedDisallowedTag).toBe(1);
+    expect(value.considered).toBe(5);
     expect(value.created).toBe(0);
-    expect(value.skipped).toBe(6);
+    expect(value.skipped).toBe(5);
     expect(value.results.map((entry: { taskId?: string }) => entry.taskId).sort()).toEqual([
       "task-approval",
       "task-blocked",
       "task-completed",
       "task-manual",
-      "task-no-auto",
       "task-no-route",
     ]);
     expect(JSON.stringify(value.results)).not.toContain("task-wrong-project");
+    expect(JSON.stringify(value.results)).not.toContain("task-no-auto");
     expect(existsSync(value.evidencePath)).toBe(true);
     const store = new Store(join(dataDir, "loops.db"));
     try {
@@ -7100,13 +7104,15 @@ describe("loops CLI", () => {
 
     expect(result.status).toBe(0);
     const value = JSON.parse(result.stdout);
-    expect(value.considered).toBe(2);
+    // Route-disallowed tags are held out of the candidate window entirely
+    // (counted as excludedDisallowedTag) instead of burning a considered slot
+    // per tick just to be rejected by eligibility.
+    expect(value.excludedDisallowedTag).toBe(2);
+    expect(value.candidates).toBe(0);
+    expect(value.considered).toBe(0);
     expect(value.created).toBe(0);
-    expect(value.skipped).toBe(2);
-    expect(value.results.map((entry: { reason: string }) => entry.reason)).toEqual([
-      "task has disallowed tag: no-auto",
-      "task has disallowed tag: blocked",
-    ]);
+    expect(value.skipped).toBe(0);
+    expect(value.results).toEqual([]);
     const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
     expect(loops).toHaveLength(0);
   });
@@ -7449,9 +7455,11 @@ describe("loops CLI", () => {
     const value = JSON.parse(result.stdout);
     expect(value.filteredCandidates).toBe(1);
     expect(value.created).toBe(1);
-    expect(value.results[0].event.data.cwd).toBe(repo);
-    expect(value.results[0].event.data.project_path).toBe(repo);
-    expect(value.results[0].workflow.steps[0].target.cwd).toBe(repo);
+    // The description-derived repo is now canonicalized (macOS: /var/... ->
+    // /private/var/...) because it rides the usable-repo route path.
+    expect(value.results[0].event.data.cwd).toBe(testPath(repo));
+    expect(value.results[0].event.data.project_path).toBe(testPath(repo));
+    expect(value.results[0].workflow.steps[0].target.cwd).toBe(testPath(repo));
   });
 
   test("todos task drain uses explicit project path instead of stale task working_dir for required worktrees", () => {
@@ -7539,11 +7547,12 @@ describe("loops CLI", () => {
     expect(worker.target.cwd).toBe(worker.target.worktree.cwd);
   });
 
-  test("todos task drain reports explicit invalid project path before creating a required-worktree loop", () => {
+  test("todos task drain reports an invalid route path when no task path is a usable repository", () => {
     const dataDir = freshDataDir("loops-cli-event-drain-invalid-explicit-project-");
-    const sourceRepo = createGitRepo("loops-cli-event-drain-invalid-explicit-source-");
+    const staleWorkingDir = join(dataDir, "stale-working-dir");
     const invalidRoutePath = join(dataDir, "not-a-git-repo");
     const binDir = join(dataDir, "bin");
+    mkdirSync(staleWorkingDir, { recursive: true });
     mkdirSync(invalidRoutePath, { recursive: true });
     mkdirSync(binDir, { recursive: true });
     const todosBin = join(binDir, "todos");
@@ -7559,14 +7568,17 @@ describe("loops CLI", () => {
       ].join("\n"),
     );
     chmodSync(todosBin, 0o755);
+    // Neither the task's working_dir nor the router's --project-path is a git
+    // repository: nothing usable anywhere -> skip + mark non-routeable (the
+    // pre-existing rescue-failure behavior stays intact).
     const ready = [
       {
         id: "task-drain-invalid-explicit-project",
         project_id: "project-route",
-        title: "Route task with invalid explicit route path",
+        title: "Route task with no usable repository path anywhere",
         status: "pending",
         task_list_id: "list-route",
-        working_dir: sourceRepo,
+        working_dir: staleWorkingDir,
         tags: ["auto:route"],
       },
     ];
@@ -7606,7 +7618,7 @@ describe("loops CLI", () => {
       taskId: "task-drain-invalid-explicit-project",
       routeError: true,
       routeProjectPath: testPath(invalidRoutePath),
-      sourceTaskWorkingDir: sourceRepo,
+      sourceTaskWorkingDir: staleWorkingDir,
     });
     expect(value.results[0].reason).toContain("worktreeMode=required");
     expect(value.results[0].reason).toContain("not-a-git-repo");
@@ -7617,6 +7629,173 @@ describe("loops CLI", () => {
     });
     const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
     expect(loops).toHaveLength(0);
+  });
+
+  test("todos task drain routes to the task's own repository over an invalid explicit route path", () => {
+    // Regression flip of 8ab2664's "explicit invalid path always skips": a task
+    // whose own working_dir IS a usable git repository must route there instead
+    // of dying on the router-level path — the merge-lane wedge in miniature.
+    const dataDir = freshDataDir("loops-cli-event-drain-task-repo-wins-");
+    const sourceRepo = createGitRepo("loops-cli-event-drain-task-repo-wins-source-");
+    const invalidRoutePath = join(dataDir, "not-a-git-repo");
+    const worktreeRoot = join(dataDir, "worktrees");
+    const binDir = join(dataDir, "bin");
+    mkdirSync(invalidRoutePath, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "if [[ \"$*\" == *\"ready\"* ]]; then printf '%s' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "if [[ \"$*\" == *\"task-lists\"* ]]; then printf '%s' \"$TODOS_TASK_LISTS_JSON\"; exit 0; fi",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    const ready = [
+      {
+        id: "task-drain-task-repo-wins",
+        project_id: "project-route",
+        title: "Route task whose own working_dir is the real repository",
+        status: "pending",
+        task_list_id: "list-route",
+        working_dir: sourceRepo,
+        tags: ["auto:route"],
+      },
+    ];
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-project",
+        join(dataDir, "todos-store"),
+        "--task-list",
+        "route",
+        "--project-path",
+        invalidRoutePath,
+        "--template",
+        "task-lifecycle",
+        "--dry-run",
+        "--worktree-mode",
+        "required",
+        "--worktree-root",
+        worktreeRoot,
+      ],
+      undefined,
+      {
+        PATH: `${binDir}:/usr/bin:/bin`,
+        TODOS_TASK_LISTS_JSON: JSON.stringify([{ id: "list-route", slug: "route", name: "Route" }]),
+        TODOS_READY_JSON: JSON.stringify(ready),
+      },
+    );
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    const canonicalRepo = testPath(sourceRepo);
+    expect(value.created).toBe(1);
+    expect(value.skipped).toBe(0);
+    const routed = value.results[0];
+    expect(routed.event.data.project_path).toBe(canonicalRepo);
+    expect(routed.event.data.routeProjectPath).toBe(canonicalRepo);
+    expect(routed.invocation.scope.projectPath).toBe(canonicalRepo);
+    const worker = routed.workflow.steps.find((step: { id: string }) => step.id === "worker");
+    expect(worker.target.worktree.repoRoot).toBe(canonicalRepo);
+  });
+
+  test("todos task drain routes a merge-lane task to its description repository over the group-root project path", () => {
+    // The exact 8ab2664 regression scenario: a multi-repo drain passes
+    // --project-path as a GROUP ROOT (not a git repo, e.g. /home/hasna) while
+    // each task names its real repository only in the description
+    // ("Repository: /path/to/repo") and carries a mis-set working_dir. The task
+    // must route to ITS repository; before the fix every such task skipped with
+    // "worktreeMode=required but projectPath is not an existing git repository"
+    // and merge dispatch was zero fleet-wide.
+    const dataDir = freshDataDir("loops-cli-event-drain-group-root-");
+    const repo = createGitRepo("loops-cli-event-drain-group-root-repo-");
+    const groupRoot = join(dataDir, "group-root");
+    const staleWorkingDir = join(dataDir, "loops-data-dir");
+    const worktreeRoot = join(dataDir, "worktrees");
+    const binDir = join(dataDir, "bin");
+    mkdirSync(groupRoot, { recursive: true });
+    mkdirSync(staleWorkingDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "if [[ \"$*\" == *\"ready\"* ]]; then printf '%s' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "if [[ \"$*\" == *\"task-lists\"* ]]; then printf '%s' \"$TODOS_TASK_LISTS_JSON\"; exit 0; fi",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    const ready = [
+      {
+        id: "task-drain-group-root-merge",
+        project_id: "project-route",
+        title: "Fix the flaky connector test",
+        description: `Stabilize the retry test.\n\nRepository: ${repo}\nAcceptance: suite green.`,
+        status: "pending",
+        task_list_id: "list-route",
+        working_dir: staleWorkingDir,
+        tags: ["auto:route"],
+      },
+    ];
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-project",
+        join(dataDir, "todos-store"),
+        "--task-list",
+        "route",
+        "--project-path",
+        groupRoot,
+        "--project-group",
+        "repoops",
+        "--template",
+        "task-lifecycle",
+        "--dry-run",
+        "--worktree-mode",
+        "required",
+        "--worktree-root",
+        worktreeRoot,
+      ],
+      undefined,
+      {
+        PATH: `${binDir}:/usr/bin:/bin`,
+        TODOS_TASK_LISTS_JSON: JSON.stringify([{ id: "list-route", slug: "route", name: "Route" }]),
+        TODOS_READY_JSON: JSON.stringify(ready),
+      },
+    );
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    const canonicalRepo = testPath(repo);
+    expect(value.created).toBe(1);
+    expect(value.skipped).toBe(0);
+    const routed = value.results[0];
+    // Neutralization: without the per-task-repo preference this is a skip on
+    // "not an existing git repository: <groupRoot>" and created stays 0.
+    expect(routed.event.data.project_path).toBe(canonicalRepo);
+    expect(routed.event.data.routeProjectPath).toBe(canonicalRepo);
+    expect(routed.event.data.source_task_working_dir).toBe(staleWorkingDir);
+    expect(routed.invocation.scope.projectPath).toBe(canonicalRepo);
+    const worker = routed.workflow.steps.find((step: { id: string }) => step.id === "worker");
+    expect(worker.target.worktree.repoRoot).toBe(canonicalRepo);
+    expect(worker.target.worktree.path).toContain(worktreeRoot);
   });
 
   test("todos task drain parses large ready payloads without truncating JSON", () => {
@@ -8241,6 +8420,45 @@ describe("loops CLI", () => {
     expect(loopsAfterRequeue).toHaveLength(2);
   });
 
+  test("routes requeue resets attempts by default and preserves them with --keep-attempts", () => {
+    const dataDir = freshDataDir("loops-cli-requeue-reset-");
+    function admitFailedItem(idSuffix: string, attempts: number): string {
+      const event = {
+        id: `evt-requeue-${idSuffix}`,
+        type: "task.created",
+        source: "@hasna/todos",
+        data: { id: `task-requeue-${idSuffix}`, title: "requeue attempts", working_dir: "/tmp/open-todos", tags: ["auto:route"] },
+        timestamp: new Date().toISOString(),
+      };
+      const res = runCli(dataDir, ["--json", "events", "handle", "todos-task"], JSON.stringify(event));
+      expect(res.status).toBe(0);
+      const created = JSON.parse(res.stdout);
+      const db = new Database(join(dataDir, "loops.db"));
+      try {
+        db.query("UPDATE workflow_work_items SET status='failed', loop_id=NULL, attempts=? WHERE id=?").run(attempts, created.workItem.id);
+      } finally {
+        db.close();
+      }
+      return created.workItem.id as string;
+    }
+
+    // Default: reset — an operator unwedge is durable, not one-shot.
+    const resetId = admitFailedItem("reset", 6);
+    const reset = runCli(dataDir, ["--json", "routes", "requeue", resetId, "--reason", "durable operator unwedge"]);
+    expect(reset.status).toBe(0);
+    const resetItem = JSON.parse(reset.stdout);
+    expect(resetItem.status).toBe("queued");
+    expect(resetItem.attempts).toBe(0);
+
+    // --keep-attempts: the cautious path preserves the count.
+    const keepId = admitFailedItem("keep", 6);
+    const keep = runCli(dataDir, ["--json", "routes", "requeue", keepId, "--reason", "cautious", "--keep-attempts"]);
+    expect(keep.status).toBe(0);
+    const keepItem = JSON.parse(keep.stdout);
+    expect(keepItem.status).toBe("queued");
+    expect(keepItem.attempts).toBe(6);
+  });
+
   test("todos task event handler requeues succeeded work items with operator evidence", () => {
     const dataDir = freshDataDir("loops-cli-event-succeeded-requeue-");
     const event = {
@@ -8281,6 +8499,9 @@ describe("loops CLI", () => {
     expect(refusedActive.status).not.toBe(0);
     expect(refusedActive.stderr).toContain("--reason");
 
+    // --keep-attempts preserves the attempt count so the requeue-evidence
+    // reporting (previousAttempts/attempt) below is exercised; the default now
+    // resets attempts (covered by the dedicated reset test).
     const requeue = runCli(dataDir, [
       "--json",
       "routes",
@@ -8288,6 +8509,7 @@ describe("loops CLI", () => {
       created.workItem.id,
       "--reason",
       "dependency resolved",
+      "--keep-attempts",
     ]);
     expect(requeue.status).toBe(0);
     const requeued = JSON.parse(requeue.stdout);
@@ -8721,6 +8943,8 @@ describe("loops CLI", () => {
       db.close();
     }
 
+    // --keep-attempts preserves the attempt count so the requeue-evidence
+    // (previousAttempts/attempt) is reported; the default resets attempts.
     const requeue = runCli(dataDir, [
       "--json",
       "routes",
@@ -8728,6 +8952,7 @@ describe("loops CLI", () => {
       created.workItem.id,
       "--reason",
       "generic dependency resolved",
+      "--keep-attempts",
     ]);
     expect(requeue.status).toBe(0);
 

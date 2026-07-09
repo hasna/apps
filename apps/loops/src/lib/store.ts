@@ -66,6 +66,19 @@ const LIVE_EXPIRED_RUN_GRACE_MS = 60_000;
  * of silently misreading them (checked against PRAGMA user_version).
  */
 const SCHEMA_USER_VERSION = 8;
+/**
+ * The database-carried compatibility floor this binary writes into
+ * `schema_compat.min_compatible_user_version`: the LOWEST
+ * `SCHEMA_USER_VERSION` a binary may have and still safely open a database
+ * migrated to this binary's schema. Raise it ONLY when a migration is
+ * breaking for older readers (semantic changes older binaries would misread —
+ * e.g. 0007's run claim tokens, which alter claim-concurrency correctness).
+ * Purely additive migrations (new nullable columns, new tables, new indexes:
+ * 0008 route_scope, 0009 run receipts, 0010 work-item machine_id) must NOT
+ * raise it — that is exactly what lets an older binary keep working during a
+ * rollout instead of bricking the CLI fleet (the 2026-07-07 schema-8 lockout).
+ */
+const BREAKING_SCHEMA_FLOOR = 7;
 const TERMINAL_RUN_STATUSES = ["succeeded", "failed", "timed_out", "abandoned", "skipped"] as const;
 const PRUNE_BATCH_SIZE = 400;
 const GENERATED_ROUTE_TEMPLATE_IDS = new Set(["todos-task-worker-verifier", "task-lifecycle", "event-worker-verifier"]);
@@ -216,6 +229,8 @@ export interface WorkflowWorkItemRow {
   priority: number;
   status: string;
   attempts: number;
+  /** Nullable for rows read before migration 0011 backfills the column. */
+  gate_deaths: number | null;
   next_attempt_at: string | null;
   lease_expires_at: string | null;
   workflow_id: string | null;
@@ -480,6 +495,7 @@ export function rowToWorkflowWorkItem(row: WorkflowWorkItemRow): WorkflowWorkIte
     priority: row.priority,
     status: row.status as WorkflowWorkItemStatus,
     attempts: row.attempts,
+    gateDeaths: row.gate_deaths ?? 0,
     nextAttemptAt: row.next_attempt_at ?? undefined,
     leaseExpiresAt: row.lease_expires_at ?? undefined,
     workflowId: row.workflow_id ?? undefined,
@@ -780,6 +796,68 @@ export function workItemStatusForLoopRun(
   return undefined;
 }
 
+/**
+ * `exit(75)` = `EX_TEMPFAIL`: the sysexits.h "temporary failure, retry later"
+ * code. A gate/worker step that exits 75 (e.g. an account-quota probe that is
+ * still dry) is signalling "not now", not a real failed attempt — so it must
+ * not burn the todos-task redispatch cap and must leave the work item
+ * requeueable rather than persisting as a terminal, dedupe-forever row.
+ */
+export const WORK_ITEM_TEMPFAIL_EXIT_CODE = 75;
+
+/**
+ * Workflow step ids that run BEFORE the worker does any real work. A failure in
+ * one of these (triage/planner gate, or the pre-step worktree preparation) that
+ * dies quickly is a "gate death": the run never executed the worker, so it must
+ * not count toward the redispatch cap (otherwise a purely infrastructural fault
+ * — e.g. a stale worktree registration — silently dead-letters a task that
+ * never actually ran).
+ */
+export const GATE_STEP_IDS: ReadonlySet<string> = new Set(["triage", "planner", "plan"]);
+
+/** A gate-step failure only counts as a gate death when it dies before any real
+ *  work could have happened. Worktree-prep deaths are always gate deaths (they
+ *  fail before the agent is spawned) regardless of this bound. */
+export const GATE_DEATH_MAX_DURATION_MS = 60_000;
+
+/**
+ * Secondary ceiling for CONSECUTIVE gate deaths. Gate deaths refund their
+ * redispatch attempt (the worker never ran), which is correct for transient
+ * infrastructure faults — but a deterministic fault (e.g. a permanently broken
+ * repo path) would otherwise retry forever at the backoff floor. After this
+ * many consecutive gate deaths the work item is dead-lettered (visible in
+ * drain reports) instead of spinning; any run that reaches the worker resets
+ * the streak, and an operator requeue (attempts reset) re-arms it. At the
+ * ~2–4 minute refunded-attempts backoff this bounds a deterministic fault to
+ * roughly an hour of auto-retry before it demands an operator.
+ */
+export const GATE_DEATH_CEILING = 20;
+
+export type NonProductiveFailureKind = "tempfail" | "gate-death";
+
+type ClassifiableStepRun = Pick<WorkflowStepRun, "stepId" | "status" | "exitCode" | "durationMs" | "error">;
+
+/**
+ * Classify a just-finalized *failed* workflow run's decisive failing step. A
+ * non-productive finish (a tempfail retry-signal, or a gate death before the
+ * worker ran) must not count toward the todos-task redispatch cap. Returns the
+ * non-productive kind, or `undefined` when the run represents a real worker
+ * attempt that legitimately counts toward the cap. Pure/exported for tests.
+ */
+export function classifyNonProductiveStepFailure(steps: ClassifiableStepRun[]): NonProductiveFailureKind | undefined {
+  // Steps arrive in sequence order; the decisive step is the last one that
+  // failed or timed out (a later gate stop never reaches earlier successes).
+  const failing = [...steps].reverse().find((step) => step.status === "failed" || step.status === "timed_out");
+  if (!failing) return undefined;
+  if (failing.exitCode === WORK_ITEM_TEMPFAIL_EXIT_CODE) return "tempfail";
+  // Worktree preparation fails before the agent process is spawned, so it is a
+  // gate death by definition — no real work happened — independent of duration.
+  if (typeof failing.error === "string" && failing.error.includes("worktree preparation failed")) return "gate-death";
+  const fast = failing.durationMs === undefined || failing.durationMs < GATE_DEATH_MAX_DURATION_MS;
+  if (GATE_STEP_IDS.has(failing.stepId) && fast) return "gate-death";
+  return undefined;
+}
+
 export function scrubbedOrNull(value: string | undefined | null): string | null {
   return value == null ? null : scrubSecrets(value);
 }
@@ -889,13 +967,41 @@ export class Store {
         id TEXT PRIMARY KEY,
         applied_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS schema_compat (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        min_compatible_user_version INTEGER NOT NULL
+      );
     `);
     const versionRow = this.db.query<{ user_version: number }, []>("PRAGMA user_version").get();
     const userVersion = versionRow?.user_version ?? 0;
     if (userVersion > SCHEMA_USER_VERSION) {
-      throw new Error(
-        `loops database schema version ${userVersion} is newer than this binary supports (${SCHEMA_USER_VERSION}); upgrade open-loops before opening this database`,
-      );
+      // A newer binary migrated this database. Refusing outright bricked the
+      // CLI fleet during the 2026-07-07 schema-8 lockout even though the newer
+      // migrations were purely additive. The database itself carries the
+      // compatibility floor (`schema_compat.min_compatible_user_version`,
+      // raised only by BREAKING migrations): open when this binary meets the
+      // floor; refuse only on a known-breaking delta. A newer-version database
+      // WITHOUT the floor row predates this contract (or came from an
+      // unblessed build) — stay conservative and refuse as before.
+      const floorRow = this.db
+        .query<{ min_compatible_user_version: number }, []>(
+          "SELECT min_compatible_user_version FROM schema_compat WHERE id = 1",
+        )
+        .get();
+      if (!floorRow) {
+        throw new Error(
+          `loops database schema version ${userVersion} is newer than this binary supports (${SCHEMA_USER_VERSION}) and carries no compatibility floor; upgrade open-loops before opening this database`,
+        );
+      }
+      if (SCHEMA_USER_VERSION < floorRow.min_compatible_user_version) {
+        throw new Error(
+          `loops database schema version ${userVersion} requires a binary with schema support >= ${floorRow.min_compatible_user_version} (this binary supports ${SCHEMA_USER_VERSION}); upgrade open-loops before opening this database`,
+        );
+      }
+      // Soft-open: everything beyond this binary's knowledge is declared
+      // non-breaking by the floor. The migration loop below only re-applies
+      // idempotent baselines / already-applied ids, and the newer
+      // user_version stamp is preserved (never downgraded).
     }
     const applied = new Set(this.db.query<{ id: string }, []>("SELECT id FROM schema_migrations").all().map((row) => row.id));
     for (const migration of this.migrations()) {
@@ -913,7 +1019,16 @@ export class Store {
         this.db.query("INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)").run(migration.id, nowIso());
       }
     }
-    if (userVersion !== SCHEMA_USER_VERSION) this.db.exec(`PRAGMA user_version = ${SCHEMA_USER_VERSION}`);
+    // Stamp forward only — a soft-opened newer database keeps its newer stamp.
+    if (userVersion < SCHEMA_USER_VERSION) this.db.exec(`PRAGMA user_version = ${SCHEMA_USER_VERSION}`);
+    // Maintain the database-carried compatibility floor. MAX() so a higher
+    // floor written by a newer binary is never lowered by an older one.
+    this.db
+      .query(
+        `INSERT INTO schema_compat (id, min_compatible_user_version) VALUES (1, ?)
+         ON CONFLICT(id) DO UPDATE SET min_compatible_user_version = MAX(min_compatible_user_version, excluded.min_compatible_user_version)`,
+      )
+      .run(BREAKING_SCHEMA_FLOOR);
   }
 
   private migrations(): Array<{ id: string; baseline?: boolean; apply: () => void }> {
@@ -993,6 +1108,19 @@ export class Store {
           // lenient like route_scope: older binaries ignore the extra column.
           this.addColumnIfMissing("workflow_work_items", "machine_id", "TEXT");
           this.db.exec("CREATE INDEX IF NOT EXISTS idx_workflow_work_items_machine ON workflow_work_items(machine_id, status)");
+        },
+      },
+      {
+        id: "0011_work_item_gate_deaths",
+        apply: () => {
+          // Additive counter of CONSECUTIVE gate deaths (runs that failed
+          // before doing real work: worktree prep / fast triage-planner).
+          // Gate deaths refund their redispatch attempt, so without a second
+          // ceiling a deterministic infrastructure fault retries forever at
+          // the backoff floor; this bounds it. Older binaries ignore the
+          // column (defaults keep counting from 0 if they write rows) — no
+          // SCHEMA_USER_VERSION bump, purely additive.
+          this.addColumnIfMissing("workflow_work_items", "gate_deaths", "INTEGER NOT NULL DEFAULT 0");
         },
       },
     ];
@@ -2463,7 +2591,15 @@ export class Store {
     return counts;
   }
 
-  requeueWorkflowWorkItem(id: string, patch: { reason?: string } = {}): WorkflowWorkItem {
+  /**
+   * Requeue a terminal admission work item for the next task/event delivery.
+   * By default `attempts` is preserved (used by the bounded stale-terminal
+   * re-admission on the route path, which must keep counting toward the cap).
+   * Pass `resetAttempts: true` for the operator unwedge (`loops routes requeue`)
+   * so a manual requeue is DURABLE rather than one-shot: without the reset a
+   * capped item that finishes terminal once more re-caps instantly.
+   */
+  requeueWorkflowWorkItem(id: string, patch: { reason?: string; resetAttempts?: boolean } = {}): WorkflowWorkItem {
     const current = this.getWorkflowWorkItem(id);
     if (!current) throw new Error(`workflow work item not found: ${id}`);
     const requeueableStatuses: WorkflowWorkItemStatus[] = ["succeeded", "failed", "dead_letter", "cancelled"];
@@ -2477,6 +2613,7 @@ export class Store {
       .query(
         `UPDATE workflow_work_items
          SET status='queued', workflow_id=NULL, loop_id=NULL, workflow_run_id=NULL,
+          ${patch.resetAttempts ? "attempts=0, gate_deaths=0," : ""}
           next_attempt_at=NULL, lease_expires_at=NULL, last_reason=?, updated_at=?
          WHERE id=? AND status IN (${placeholders})`,
       )
@@ -2485,6 +2622,90 @@ export class Store {
     if (!item) throw new Error(`workflow work item not found after requeue: ${id}`);
     if (res.changes !== 1) throw new Error(`workflow work item was not requeued: ${id} status=${item.status}`);
     return item;
+  }
+
+  /**
+   * Transition a terminal admission work item to `dead_letter`. Used by the
+   * route path when a still-actionable todos task has exhausted the redispatch
+   * cap: instead of silently deduping the same terminal row forever (the "black
+   * hole" — `considered=N created=0` with no signal), the item is moved to a
+   * visible `dead_letter` state so drain reports can surface + count it and an
+   * operator can `loops routes requeue` it. Idempotent: a no-op on an item that
+   * is already dead-lettered.
+   */
+  deadLetterWorkflowWorkItem(id: string, patch: { reason?: string } = {}): WorkflowWorkItem {
+    const now = nowIso();
+    const reason = patch.reason?.trim() || "redispatch cap reached; dead-lettered";
+    this.db
+      .query(
+        `UPDATE workflow_work_items
+         SET status='dead_letter', next_attempt_at=NULL, lease_expires_at=NULL, last_reason=?, updated_at=?
+         WHERE id=? AND status IN ('succeeded','failed','cancelled')`,
+      )
+      .run(reason, now, id);
+    const item = this.getWorkflowWorkItem(id);
+    if (!item) throw new Error(`workflow work item not found after dead-letter: ${id}`);
+    return item;
+  }
+
+  /**
+   * Refund a redispatch attempt for a *failed* run that never did real work.
+   * Called from {@link finalizeWorkflowRun} the moment a work item is set
+   * `failed`, so the todos-task redispatch cap only ever counts real worker
+   * attempts. A tempfail (`exit 75`) is additionally made requeueable (dropped
+   * back to `queued`, bindings cleared) so its "retry later" contract fires on
+   * the next drain instead of persisting as a terminal, dedupe-forever row. A
+   * gate death stays `failed` (the bounded re-admission picks it up after
+   * backoff once the underlying infra fault clears). Both floor attempts at 0.
+   */
+  private demoteNonProductiveWorkItems(workflowRunId: string, finishedAt: string): void {
+    const kind = classifyNonProductiveStepFailure(this.listWorkflowStepRuns(workflowRunId));
+    if (!kind) {
+      // Productive failure: the worker ran and did real work, so any
+      // consecutive-gate-death streak is broken.
+      this.db
+        .query("UPDATE workflow_work_items SET gate_deaths=0, updated_at=? WHERE workflow_run_id=? AND status='failed' AND gate_deaths > 0")
+        .run(finishedAt, workflowRunId);
+      return;
+    }
+    if (kind === "tempfail") {
+      // A tempfail also reached the worker (it executed and said "retry
+      // later"), so it breaks the gate-death streak too.
+      this.db
+        .query(
+          `UPDATE workflow_work_items
+           SET status='queued', attempts=CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END,
+            gate_deaths=0,
+            workflow_id=NULL, loop_id=NULL, workflow_run_id=NULL,
+            next_attempt_at=NULL, lease_expires_at=NULL,
+            last_reason='worker exited 75 (tempfail): requeued for retry; attempt refunded (does not count toward redispatch cap)',
+            updated_at=?
+           WHERE workflow_run_id=? AND status='failed'`,
+        )
+        .run(finishedAt, workflowRunId);
+      return;
+    }
+    // Gate death: refund the attempt (the worker never ran) but count the
+    // consecutive streak. A deterministic infrastructure fault would otherwise
+    // retry forever at the backoff floor; at the ceiling the item is
+    // dead-lettered — visible in drain reports via the deadLettered surfacing —
+    // instead of spinning. An operator `routes requeue` (attempts reset) clears
+    // the streak and re-arms the full ceiling.
+    this.db
+      .query(
+        `UPDATE workflow_work_items
+         SET attempts=CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END,
+          gate_deaths=gate_deaths + 1,
+          status=CASE WHEN gate_deaths + 1 >= ${GATE_DEATH_CEILING} THEN 'dead_letter' ELSE status END,
+          last_reason=CASE
+            WHEN gate_deaths + 1 >= ${GATE_DEATH_CEILING}
+              THEN 'gate-death ceiling reached (' || (gate_deaths + 1) || '/${GATE_DEATH_CEILING} consecutive runs died at worktree prep / triage / planner without reaching the worker): dead-lettered — the infrastructure fault needs an operator; ''loops routes requeue'' resets and retries'
+            ELSE 'gate death before real work (worktree prep / triage / planner): attempt refunded (does not count toward redispatch cap); consecutive gate deaths: ' || (gate_deaths + 1) || '/${GATE_DEATH_CEILING}'
+          END,
+          updated_at=?
+         WHERE workflow_run_id=? AND status='failed'`,
+      )
+      .run(finishedAt, workflowRunId);
   }
 
   admitWorkflowWorkItem(id: string, patch: { workflowId: string; loopId: string; reason?: string }): WorkflowWorkItem {
@@ -3450,6 +3671,10 @@ export class Store {
         const itemStatus: WorkflowWorkItemStatus =
           status === "succeeded" ? "succeeded" : status === "cancelled" ? "cancelled" : "failed";
         this.setWorkflowWorkItemsForWorkflowRun(workflowRunId, itemStatus, error, finishedAt);
+        // A run that finished non-productively (a tempfail retry-signal, or a
+        // gate death before the worker ran) must not burn the redispatch cap:
+        // refund the attempt, and for a tempfail make the item requeueable now.
+        if (itemStatus === "failed") this.demoteNonProductiveWorkItems(workflowRunId, finishedAt);
         this.maybeArchiveTerminalGeneratedRouteWorkflow(workflowRunId, finishedAt);
       }
       this.db.exec("COMMIT");

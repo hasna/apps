@@ -118,7 +118,7 @@ export interface LoopStore {
   // ── Route work items / invocations ────────────────────────────────────────────
   listWorkflowWorkItems(opts?: { status?: WorkflowWorkItemStatus; routeKey?: string; limit?: number }): Promise<WorkflowWorkItem[]>;
   getWorkflowWorkItem(id: string): Promise<WorkflowWorkItem | undefined>;
-  requeueWorkflowWorkItem(id: string, patch?: { reason?: string }): Promise<WorkflowWorkItem>;
+  requeueWorkflowWorkItem(id: string, patch?: { reason?: string; resetAttempts?: boolean }): Promise<WorkflowWorkItem>;
   listWorkflowInvocations(opts?: { limit?: number }): Promise<WorkflowInvocation[]>;
   getWorkflowInvocation(id: string): Promise<WorkflowInvocation | undefined>;
 
@@ -268,7 +268,7 @@ export class LocalStore implements LoopStore {
   async getWorkflowWorkItem(id: string): Promise<WorkflowWorkItem | undefined> {
     return this.store.getWorkflowWorkItem(id);
   }
-  async requeueWorkflowWorkItem(id: string, patch: { reason?: string } = {}): Promise<WorkflowWorkItem> {
+  async requeueWorkflowWorkItem(id: string, patch: { reason?: string; resetAttempts?: boolean } = {}): Promise<WorkflowWorkItem> {
     return this.store.requeueWorkflowWorkItem(id, patch);
   }
   async listWorkflowInvocations(opts: Parameters<Store["listWorkflowInvocations"]>[0] = {}): Promise<WorkflowInvocation[]> {
@@ -525,7 +525,7 @@ export class ApiStore implements LoopStore {
       return undefined;
     }
   }
-  async requeueWorkflowWorkItem(_id: string, _patch: { reason?: string } = {}): Promise<WorkflowWorkItem> {
+  async requeueWorkflowWorkItem(_id: string, _patch: { reason?: string; resetAttempts?: boolean } = {}): Promise<WorkflowWorkItem> {
     // Not yet exposed by the hosted storage contract; fail loudly rather than
     // silently mutate the on-box island while flipped to cloud.
     throw new CloudUnsupportedError("routes requeue");

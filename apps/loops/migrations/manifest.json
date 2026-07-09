@@ -30,6 +30,11 @@
       "id": "0006_work_item_machine_id",
       "file": "0006_work_item_machine_id.sql",
       "checksum": "sha256:80887626208cbb3659a436e6e26c56f0b0229f0bcb8d292de51738ee99ed11d1"
+    },
+    {
+      "id": "0007_work_item_gate_deaths",
+      "file": "0007_work_item_gate_deaths.sql",
+      "checksum": "sha256:95ac3c0dfeef6f6e6d4bd8b92473d19aabae0c83ebc3b1f4409d84fc0bbfa11c"
     }
   ]
 }

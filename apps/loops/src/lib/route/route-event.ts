@@ -14,7 +14,7 @@ import type {
   WorkflowWorkItem,
   WorkflowWorkItemStatus,
 } from "../../types.js";
-import { Store } from "../store.js";
+import { GATE_DEATH_CEILING, Store } from "../store.js";
 import { ValidationError } from "../errors.js";
 import { publicLoop, publicWorkflow, publicWorkflowInvocation, publicWorkflowWorkItem } from "../format.js";
 import { listOpenMachines } from "../machines.js";
@@ -173,6 +173,19 @@ function todosTaskRouteRedispatchBackoffMs(attempts: number): number {
 }
 
 /**
+ * Decision returned by {@link reactivateStaleTodosTaskWorkItem}:
+ * - `readmit`  → the terminal item was requeued; dispatch a fresh run.
+ * - `dead-letter` → the redispatch cap was reached; the item was transitioned
+ *   to `dead_letter` (visible + counted) and the route dedupes this tick.
+ * - `dedupe`   → keep deduping (in-flight, inside backoff, or already
+ *   dead-lettered) without re-dispatching or re-escalating.
+ */
+type StaleTodosTaskReactivation =
+  | { kind: "readmit"; item: WorkflowWorkItem }
+  | { kind: "dead-letter"; item: WorkflowWorkItem }
+  | { kind: "dedupe" };
+
+/**
  * The todos-task drain only ever presents tasks that are still actionable
  * (pending + route opt-in). So when a *terminal* work item's task keeps
  * reappearing, the prior run finished (workflow `succeeded`/`failed`/`dead_letter`)
@@ -181,25 +194,47 @@ function todosTaskRouteRedispatchBackoffMs(attempts: number): number {
  * Re-admit it instead — bounded by a redispatch cap and a per-attempt backoff so
  * a task that can never complete does not spin a worker on every drain tick.
  * In-flight items (`admitted`/`running`) and items still inside their backoff
- * window keep deduping. Returns the requeued (`queued`) item when it should be
- * re-admitted, otherwise `undefined` (keep deduping).
+ * window keep deduping.
+ *
+ * When the cap is hit we do NOT silently keep deduping forever (the "black
+ * hole": `considered=N created=0` with no signal). Instead the item is
+ * dead-lettered once — a visible terminal state the drain report counts — so an
+ * operator sees it and can `loops routes requeue` (which resets attempts) to
+ * retry. Non-productive finishes (gate deaths / tempfails) never reach the cap
+ * because {@link Store.finalizeWorkflowRun} refunds their attempt.
  */
 function reactivateStaleTodosTaskWorkItem(
   store: Store,
   routeKey: string,
   item: WorkflowWorkItem,
   now: number = Date.now(),
-): WorkflowWorkItem | undefined {
-  if (routeKey !== "todos-task") return undefined;
-  if (!REACTIVATABLE_TERMINAL_STATUSES.has(item.status)) return undefined;
-  if (item.attempts >= MAX_TODOS_TASK_ROUTE_REDISPATCHES) return undefined;
+): StaleTodosTaskReactivation {
+  if (routeKey !== "todos-task") return { kind: "dedupe" };
+  if (!REACTIVATABLE_TERMINAL_STATUSES.has(item.status)) return { kind: "dedupe" };
+  // An item parked at the gate-death ceiling stays dead-lettered until an
+  // operator requeues it (which resets the streak): its attempts were refunded
+  // (typically ~0), so without this guard the bounded re-admission below would
+  // requeue it straight back into the same deterministic infrastructure fault.
+  if (item.status === "dead_letter" && item.gateDeaths >= GATE_DEATH_CEILING) {
+    return { kind: "dedupe" };
+  }
+  if (item.attempts >= MAX_TODOS_TASK_ROUTE_REDISPATCHES) {
+    if (item.status === "dead_letter") return { kind: "dedupe" };
+    const deadLettered = store.deadLetterWorkflowWorkItem(item.id, {
+      reason:
+        `redispatch cap reached (${item.attempts}/${MAX_TODOS_TASK_ROUTE_REDISPATCHES}): todos task still actionable but ` +
+        `${item.attempts} runs finished without closing it; dead-lettered. Fix the task or 'loops routes requeue' to retry (resets attempts).`,
+    });
+    return { kind: "dead-letter", item: deadLettered };
+  }
   const finishedAt = Date.parse(item.updatedAt);
   if (Number.isFinite(finishedAt) && now - finishedAt < todosTaskRouteRedispatchBackoffMs(item.attempts)) {
-    return undefined;
+    return { kind: "dedupe" };
   }
-  return store.requeueWorkflowWorkItem(item.id, {
+  const requeued = store.requeueWorkflowWorkItem(item.id, {
     reason: `re-admitted from ${item.status}: todos task still actionable after prior run (attempt ${item.attempts + 1}/${MAX_TODOS_TASK_ROUTE_REDISPATCHES})`,
   });
+  return { kind: "readmit", item: requeued };
 }
 
 function findRouteWorkItemByKeys(store: Store, routeKey: "todos-task" | "generic-event", idempotencyKeys: string[]): WorkflowWorkItem | undefined {
@@ -376,12 +411,18 @@ function dedupedRoutePrint(
   plan: Pick<RouteEventPlan, "event" | "idempotencyKey" | "dedupeValueExtras">,
   outcome: { existingItem: WorkflowWorkItem; existingLoop?: ReturnType<Store["getLoop"]>; existingWorkflow?: WorkflowSpec; invocation?: Parameters<typeof publicWorkflowInvocation>[0] },
 ): TodosTaskRoutePrint {
+  // A dedupe against a dead_letter item is the redispatch-cap black hole made
+  // visible: surface it explicitly so drain reports can count it and stop the
+  // "created=0, no signal" silence. (Terminal-but-under-cap items still just
+  // dedupe until their backoff elapses and they re-admit.)
+  const deadLettered = outcome.existingItem.status === "dead_letter";
   return {
     kind: "deduped",
     value: {
       deduped: true,
       idempotencyKey: plan.idempotencyKey,
       dedupedBy: "work-item",
+      ...(deadLettered ? { deadLettered: true, reason: outcome.existingItem.lastReason } : {}),
       event: plan.event,
       ...plan.dedupeValueExtras,
       invocation: outcome.invocation ? publicWorkflowInvocation(outcome.invocation) : undefined,
@@ -389,7 +430,9 @@ function dedupedRoutePrint(
       workflow: outcome.existingWorkflow ? publicWorkflow(outcome.existingWorkflow) : undefined,
       loop: outcome.existingLoop ? publicLoop(outcome.existingLoop) : undefined,
     },
-    human: `deduped existing work item ${outcome.existingItem.id} for event=${plan.event.id} idempotency=${plan.idempotencyKey}`,
+    human: deadLettered
+      ? `dead-lettered work item ${outcome.existingItem.id} (redispatch cap reached) for event=${plan.event.id} idempotency=${plan.idempotencyKey}`
+      : `deduped existing work item ${outcome.existingItem.id} for event=${plan.event.id} idempotency=${plan.idempotencyKey}`,
   };
 }
 
@@ -494,11 +537,14 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
       if (existingItem) {
         // A terminal work item whose todos task is still actionable is re-admitted
         // (bounded) rather than deduped forever; the requeue drops it back to
-        // `queued` so the upsert/admit path below re-dispatches a fresh run.
-        if (!reactivateStaleTodosTaskWorkItem(store, plan.routeKey, existingItem)) {
-          const existingLoop = existingItem.loopId ? store.getLoop(existingItem.loopId) : undefined;
-          const existingWorkflow = existingItem.workflowId ? store.getWorkflow(existingItem.workflowId) : undefined;
-          return { kind: "deduped" as const, existingItem, existingLoop, existingWorkflow, invocation };
+        // `queued` so the upsert/admit path below re-dispatches a fresh run. At
+        // the cap it is dead-lettered (visible) instead of silently deduped.
+        const reactivation = reactivateStaleTodosTaskWorkItem(store, plan.routeKey, existingItem);
+        if (reactivation.kind !== "readmit") {
+          const dedupeItem = reactivation.kind === "dead-letter" ? reactivation.item : existingItem;
+          const existingLoop = dedupeItem.loopId ? store.getLoop(dedupeItem.loopId) : undefined;
+          const existingWorkflow = dedupeItem.workflowId ? store.getWorkflow(dedupeItem.workflowId) : undefined;
+          return { kind: "deduped" as const, existingItem: dedupeItem, existingLoop, existingWorkflow, invocation };
         }
       }
       const throttle = hasThrottleLimits(plan.throttleLimits)
@@ -696,14 +742,17 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
       if (existingItem) {
         // Re-admit a terminal work item whose task is still actionable instead of
         // deduping it away forever; requeue drops it to `queued` so the full
-        // creation path below dispatches a fresh run. Otherwise dedupe as before.
-        if (!reactivateStaleTodosTaskWorkItem(store, "todos-task", existingItem)) {
-          const existingLoop = existingItem.loopId ? store.getLoop(existingItem.loopId) : undefined;
-          const existingWorkflow = existingItem.workflowId ? store.getWorkflow(existingItem.workflowId) : undefined;
-          const existingInvocation = store.getWorkflowInvocation(existingItem.invocationId);
+        // creation path below dispatches a fresh run. At the cap it is
+        // dead-lettered (visible) rather than silently deduped forever.
+        const reactivation = reactivateStaleTodosTaskWorkItem(store, "todos-task", existingItem);
+        if (reactivation.kind !== "readmit") {
+          const dedupeItem = reactivation.kind === "dead-letter" ? reactivation.item : existingItem;
+          const existingLoop = dedupeItem.loopId ? store.getLoop(dedupeItem.loopId) : undefined;
+          const existingWorkflow = dedupeItem.workflowId ? store.getWorkflow(dedupeItem.workflowId) : undefined;
+          const existingInvocation = store.getWorkflowInvocation(dedupeItem.invocationId);
           return dedupedRoutePrint(
             { event, idempotencyKey, dedupeValueExtras: {} },
-            { existingItem, existingLoop, existingWorkflow, invocation: existingInvocation },
+            { existingItem: dedupeItem, existingLoop, existingWorkflow, invocation: existingInvocation },
           );
         }
       }

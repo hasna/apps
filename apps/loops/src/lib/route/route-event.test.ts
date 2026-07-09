@@ -60,19 +60,20 @@ const ROUTE_OPTS: TodosTaskRouteOptions = {
 };
 
 /** Simulate a run finishing without closing the todos task by forcing the item terminal + backdating it past the redispatch backoff window. */
-function forceTerminal(status: "succeeded" | "failed" | "dead_letter" | "cancelled", opts: { attempts?: number; ageMs?: number } = {}): void {
+function forceTerminal(
+  status: "succeeded" | "failed" | "dead_letter" | "cancelled",
+  opts: { attempts?: number; ageMs?: number; gateDeaths?: number } = {},
+): void {
   const db = new Database(dbPath());
   try {
     const backdated = new Date(Date.now() - (opts.ageMs ?? 60 * 60_000)).toISOString();
-    if (opts.attempts === undefined) {
-      db.query("UPDATE workflow_work_items SET status = ?, updated_at = ? WHERE route_key = 'todos-task'").run(status, backdated);
-    } else {
-      db.query("UPDATE workflow_work_items SET status = ?, attempts = ?, updated_at = ? WHERE route_key = 'todos-task'").run(
-        status,
-        opts.attempts,
-        backdated,
-      );
-    }
+    db.query(
+      `UPDATE workflow_work_items
+       SET status = ?, updated_at = ?,
+        attempts = COALESCE(?, attempts),
+        gate_deaths = COALESCE(?, gate_deaths)
+       WHERE route_key = 'todos-task'`,
+    ).run(status, backdated, opts.attempts ?? null, opts.gateDeaths ?? null);
   } finally {
     db.close();
   }
@@ -192,10 +193,34 @@ describe("routeTodosTaskEvent dedupe re-admission", () => {
     expect(routeTodosTaskEvent(pendingTaskEvent(), ROUTE_OPTS).kind).toBe("deduped");
   });
 
-  test("stops re-admitting once the redispatch cap is reached", () => {
+  test("at the redispatch cap it dead-letters (visible) instead of silently deduping forever", () => {
     routeTodosTaskEvent(pendingTaskEvent(), ROUTE_OPTS);
     forceTerminal("failed", { attempts: 8, ageMs: 24 * 60 * 60_000 });
-    expect(routeTodosTaskEvent(pendingTaskEvent(), ROUTE_OPTS).kind).toBe("deduped");
+    const first = routeTodosTaskEvent(pendingTaskEvent(), ROUTE_OPTS);
+    // Still no new dispatch (deduped) — but now VISIBLE, not a silent black hole.
+    expect(first.kind).toBe("deduped");
+    expect(first.value.deadLettered).toBe(true);
+    expect(first.value.dedupedBy).toBe("work-item");
+    expect(workItemRow()).toEqual({ status: "dead_letter", attempts: 8 });
+    // A subsequent drain keeps deduping the dead-lettered item without churn or
+    // re-escalation; it stays dead_letter until an operator requeues it.
+    const second = routeTodosTaskEvent(pendingTaskEvent(), ROUTE_OPTS);
+    expect(second.kind).toBe("deduped");
+    expect(second.value.deadLettered).toBe(true);
+    expect(workItemRow()?.status).toBe("dead_letter");
+  });
+
+  test("a gate-death-ceiling dead-letter is NOT re-admitted even with refunded attempts", () => {
+    routeTodosTaskEvent(pendingTaskEvent(), ROUTE_OPTS);
+    // Ceiling'd item: attempts were refunded (0 — far under the redispatch
+    // cap) and it aged past every backoff window. Without the guard the
+    // bounded re-admission would requeue it straight back into the same
+    // deterministic infrastructure fault.
+    forceTerminal("dead_letter", { attempts: 0, gateDeaths: 20, ageMs: 24 * 60 * 60_000 });
+    const result = routeTodosTaskEvent(pendingTaskEvent(), ROUTE_OPTS);
+    expect(result.kind).toBe("deduped");
+    expect(result.value.deadLettered).toBe(true);
+    expect(workItemRow()?.status).toBe("dead_letter"); // parked until an operator requeues
   });
 });
 

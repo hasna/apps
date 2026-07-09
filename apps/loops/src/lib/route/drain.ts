@@ -3,12 +3,12 @@ import type { EventEnvelope } from "@hasna/events";
 import { redact } from "../format.js";
 import { ValidationError } from "../errors.js";
 import type { Loop, WorkflowSpec } from "../../types.js";
-import { objectField, stringField, tagsFromValue, taskEventField } from "./fields.js";
+import { objectField, stringField, tagsFromValue, taskEventField, taskRouteDisallowedTag } from "./fields.js";
 import { listFromRepeatedOpts, positiveInteger, splitList } from "./parse.js";
 import { providerActiveCapFromOpts } from "./provider-admission.js";
 import { routeTodosTaskEvent, todosTaskRouteTemplateId } from "./route-event.js";
 import { routePolicyEvidenceFromOptions } from "./policies.js";
-import { normalizeRoutePath } from "./throttle.js";
+import { isExistingGitProjectPath, normalizeRoutePath } from "./throttle.js";
 import { defaultLoopsProject, runLocalCommand, runLocalCommandWithStdoutFile, todosMutationSummary } from "./todos-cli.js";
 import { writeRouteEvidence } from "./cursors.js";
 import type { TodosDrainOptions, TodosReadyTask, TodosTaskRoutePrint } from "./types.js";
@@ -56,6 +56,54 @@ function taskSourceWorkingDir(task: TodosReadyTask): string | undefined {
 
 function canonicalRoutePath(path: string | undefined): string | undefined {
   return normalizeRoutePath(path) ?? (path?.trim() ? resolve(path) : undefined);
+}
+
+/**
+ * The task's own route target: the first per-task path candidate (explicit
+ * project_path field, metadata, the description's `Repository:` line, then
+ * working_dir) that is an existing git repository.
+ *
+ * Multi-repo drains (the merge lane) pass `--project-path` as a GROUP ROOT for
+ * concurrency scoping while each task names its real repository — commit
+ * 8ab2664 made the router-level path win unconditionally, which sent every
+ * merge task to the group root (a non-repo directory such as the operator's
+ * home) and skipped it ("worktreeMode=required but projectPath is not an
+ * existing git repository"), zeroing merge dispatch fleet-wide. A *usable*
+ * per-task repo therefore wins over `--project-path`;
+ * the router-level path remains the rescue fallback for tasks whose recorded
+ * path is stale or broken (8ab2664's original intent, e.g. a working_dir copied
+ * from the wrong project). `isRepo` is injected so a drain tick can memoize the
+ * `git rev-parse` probe across tasks and candidates.
+ */
+function taskUsableRepoProjectPath(
+  task: TodosReadyTask,
+  isRepo: (path: string) => boolean,
+): string | undefined {
+  const metadata = objectField(task.metadata) ?? {};
+  const candidates = [
+    taskField(task, ["project_path", "projectPath"]),
+    taskEventField(metadata, ["project_path", "projectPath", "project_canonical_path"]),
+    taskDescriptionProjectPath(task),
+    taskField(task, ["working_dir", "workingDir", "cwd"]),
+    taskEventField(metadata, ["working_dir", "workingDir", "cwd"]),
+  ];
+  for (const candidate of candidates) {
+    const canonical = canonicalRoutePath(candidate);
+    if (canonical && isRepo(canonical)) return canonical;
+  }
+  return undefined;
+}
+
+/** Per-drain-tick memoized `git rev-parse` probe (group roots and repo paths repeat across the candidate window). */
+function memoizedIsExistingGitProjectPath(): (path: string) => boolean {
+  const cache = new Map<string, boolean>();
+  return (path: string): boolean => {
+    const cached = cache.get(path);
+    if (cached !== undefined) return cached;
+    const result = isExistingGitProjectPath(path);
+    cache.set(path, result);
+    return result;
+  };
 }
 
 function taskListValues(task: TodosReadyTask): string[] {
@@ -178,6 +226,9 @@ function compactDrainResult(result: TodosTaskRoutePrint): Record<string, unknown
     routeScope: stringField(value.routeScope),
     requeue,
     queuedAtSource: value.queuedAtSource,
+    // Surface a redispatch-cap dead-letter in compact/cron output too, so a
+    // capped task is visible and not mistaken for an ordinary dedupe.
+    deadLettered: value.deadLettered === true ? true : undefined,
     // Preserve the non-skippable-error marker so compact/cron output still
     // exposes it; otherwise a fully-fatal drain looks identical to a no-op.
     fatal: value.fatal === true ? true : undefined,
@@ -534,10 +585,12 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
       scanned: 0,
       candidates: 0,
       filteredCandidates: 0,
+      excludedDisallowedTag: 0,
       scanExhausted: false,
       considered: 0,
       created: 0,
       deduped: 0,
+      deadLettered: 0,
       throttled: 0,
       skipped: 0,
       freshnessClosed: 0,
@@ -567,10 +620,12 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
           scanned: report.scanned,
           candidates: report.candidates,
           filteredCandidates: report.filteredCandidates,
+          excludedDisallowedTag: report.excludedDisallowedTag,
           scanExhausted: report.scanExhausted,
           considered: report.considered,
           created: report.created,
           deduped: report.deduped,
+          deadLettered: report.deadLettered,
           throttled: report.throttled,
           skipped: report.skipped,
           freshnessClosed: report.freshnessClosed,
@@ -597,7 +652,20 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
     projectPathPrefix: opts.projectPathPrefix,
     tags: requiredTags,
   }));
-  const candidates = filteredCandidates.slice(0, candidateLimit);
+  // Route-disallowed tasks (no-auto/blocked/manual/…) can never route; letting
+  // them occupy candidate rows burns the bounded window every tick only to be
+  // rejected by eligibility — with enough marked tasks a drain reports
+  // considered=N created=0 forever while routable work waits outside the
+  // window. Exclude them before slicing (unless the drain explicitly selects
+  // that tag). The exclusion count is reported so the memory is auditable.
+  const requiredTagSet = new Set(requiredTags.map((tag) => tag.toLowerCase()));
+  const windowCandidates = filteredCandidates.filter((task) => {
+    const disallowed = taskRouteDisallowedTag(tagsFromValue(task.tags));
+    return !disallowed || requiredTagSet.has(disallowed.toLowerCase());
+  });
+  const excludedDisallowedTag = filteredCandidates.length - windowCandidates.length;
+  const candidates = windowCandidates.slice(0, candidateLimit);
+  const isRepo = memoizedIsExistingGitProjectPath();
   const results: TodosTaskRoutePrint[] = [];
   let created = 0;
   for (const task of candidates) {
@@ -606,7 +674,16 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
     let result: TodosTaskRoutePrint;
     try {
       const sourceProject = opts.todosProjectsFromRegistry ? taskField(task, ["source_project_path", "sourceProjectPath"]) : undefined;
-      const explicitRouteProjectPath = sourceProject ? taskRoutePathFromRegistry(sourceProject) : opts.projectPath;
+      // Non-registry drains: the task's own USABLE repo path (project_path,
+      // metadata, description `Repository:` line, working_dir — first that is a
+      // real git repo) wins over the router-level --project-path, which
+      // multi-repo drains pass as a group root; the router path remains the
+      // rescue fallback for tasks whose recorded path is stale or broken.
+      // Registry drains keep the scanned source project path unconditionally
+      // (task-controlled fields must not redirect the route).
+      const explicitRouteProjectPath = sourceProject
+        ? taskRoutePathFromRegistry(sourceProject)
+        : taskUsableRepoProjectPath(task, isRepo) ?? opts.projectPath;
       event = taskDrainEvent(task, sourceProject, explicitRouteProjectPath);
       result = routeTodosTaskEvent(event, {
         ...opts,
@@ -661,10 +738,17 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
     scanned: ready.length,
     candidates: candidates.length,
     filteredCandidates: filteredCandidates.length,
-    scanExhausted: ready.length >= scanLimit && filteredCandidates.length < candidateLimit,
+    // Never-routable tasks (route-disallowed tags) held out of the candidate
+    // window so they stop burning scan slots every tick.
+    excludedDisallowedTag,
+    scanExhausted: ready.length >= scanLimit && windowCandidates.length < candidateLimit,
     considered: results.length,
     created: results.filter((result) => result.kind === "created" && !result.value.deduped).length,
     deduped: results.filter((result) => result.kind === "deduped").length,
+    // Terminal work items the route dead-lettered because they hit the
+    // redispatch cap: the black hole made visible. Surfaced + counted so a
+    // capped, still-actionable task no longer silently reports created=0.
+    deadLettered: results.filter((result) => result.kind === "deduped" && result.value.deadLettered === true).length,
     throttled: results.filter((result) => result.kind === "throttled").length,
     skipped: results.filter((result) => result.kind === "skipped").length,
     // Tasks closed out of the queue because their PR is definitively
@@ -701,10 +785,12 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
         scanned: report.scanned,
         candidates: report.candidates,
         filteredCandidates: report.filteredCandidates,
+        excludedDisallowedTag: report.excludedDisallowedTag,
         scanExhausted: report.scanExhausted,
         considered: report.considered,
         created: report.created,
         deduped: report.deduped,
+        deadLettered: report.deadLettered,
         throttled: report.throttled,
         skipped: report.skipped,
         freshnessClosed: report.freshnessClosed,
@@ -720,6 +806,6 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
     : { ...report, evidencePath };
   return {
     value,
-    human: `drained todos ready queue: considered=${report.considered} created=${report.created} deduped=${report.deduped} throttled=${report.throttled} skipped=${report.skipped} freshnessClosed=${report.freshnessClosed} fatal=${report.fatal}`,
+    human: `drained todos ready queue: considered=${report.considered} created=${report.created} deduped=${report.deduped} deadLettered=${report.deadLettered} throttled=${report.throttled} skipped=${report.skipped} freshnessClosed=${report.freshnessClosed} fatal=${report.fatal} excludedDisallowedTag=${report.excludedDisallowedTag}`,
   };
 }
