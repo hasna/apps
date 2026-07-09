@@ -6,8 +6,9 @@
 //
 // Covers the priority-1/priority-2 paths the daemon + CLI + runner exercise:
 // loop CRUD, run lifecycle (claim/heartbeat/finalize/recover), daemon lease,
-// counts, prune, and the two-connection claim race. TIER-2 unported methods are
-// asserted to throw NotImplementedError rather than silently no-op.
+// counts, route representation, prune, and the two-connection claim race.
+// Remaining TIER-2 unported methods are asserted to throw NotImplementedError
+// rather than silently no-op.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import pg from "pg";
@@ -333,6 +334,51 @@ suite("PostgresLoopStorage (live)", () => {
     const archived = await storage.archiveWorkflow(created.id);
     expect(archived.status).toBe("archived");
     expect((await storage.getWorkflow(created.id))?.status).toBe("archived");
+  });
+
+  test("route invocation and work-item upserts preserve caller ids", async () => {
+    const invocation = await storage.createWorkflowInvocation({
+      id: "pg-inv-1",
+      sourceRef: { kind: "task", id: "task-1", dedupeKey: "task-1" },
+      subjectRef: { kind: "repo", path: "/repo" },
+      intent: "route",
+    });
+    expect(invocation.id).toBe("pg-inv-1");
+    const deduped = await storage.createWorkflowInvocation({
+      id: "pg-inv-2",
+      sourceRef: { kind: "task", id: "task-1", dedupeKey: "task-1" },
+      subjectRef: { kind: "repo", path: "/repo" },
+      intent: "route",
+    });
+    expect(deduped.id).toBe("pg-inv-1");
+
+    const item = await storage.upsertWorkflowWorkItem({
+      id: "pg-wi-1",
+      routeKey: "todos-task",
+      idempotencyKey: "task-1",
+      invocationId: "pg-inv-1",
+      sourceType: "task",
+      sourceRef: "task:task-1",
+      subjectRef: "repo:/repo",
+      priority: 10,
+      status: "queued",
+    });
+    expect(item.id).toBe("pg-wi-1");
+    expect(item.routeKey).toBe("todos-task");
+    const replay = await storage.upsertWorkflowWorkItem({
+      id: "pg-wi-2",
+      routeKey: "todos-task",
+      idempotencyKey: "task-1",
+      invocationId: "pg-inv-1",
+      sourceType: "task",
+      sourceRef: "task:task-1",
+      subjectRef: "repo:/repo",
+      priority: 20,
+      status: "deferred",
+    });
+    expect(replay.id).toBe("pg-wi-1");
+    expect(replay.priority).toBe(20);
+    expect(replay.status).toBe("deferred");
   });
 
   test("TIER-2 unported methods throw NotImplementedError (never silently no-op)", () => {

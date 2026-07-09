@@ -306,6 +306,7 @@ export interface WorkflowWorkItem {
 }
 
 export interface UpsertWorkflowWorkItemInput {
+  id?: string;
   routeKey: string;
   idempotencyKey: string;
   invocationId: string;

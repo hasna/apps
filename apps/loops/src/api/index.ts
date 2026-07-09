@@ -3,11 +3,13 @@ import { timingSafeEqual } from "node:crypto";
 import { Command } from "commander";
 import type {
   CreateLoopInput,
+  CreateWorkflowInvocationInput,
   CreateWorkflowInput,
   Loop,
   LoopRun,
   LoopStatus,
   RunStatus,
+  UpsertWorkflowWorkItemInput,
   WorkflowSpec,
   WorkflowWorkItemStatus,
   WriteRunReceiptInput,
@@ -267,6 +269,17 @@ interface ImportRequestBody {
   loops?: Loop[];
   runs?: LoopRun[];
   replace?: boolean;
+  preserveLoopScheduling?: boolean;
+}
+
+function safeImportedLoop(loop: Loop, opts: { preserveLoopScheduling: boolean }): Loop {
+  if (opts.preserveLoopScheduling) return loop;
+  return {
+    ...loop,
+    status: "paused",
+    nextRunAt: undefined,
+    retryScheduledFor: undefined,
+  };
 }
 
 /**
@@ -290,6 +303,7 @@ async function handleImportRequest(ctx: V1RequestContext, segments: string[]): P
   const workflows = Array.isArray(body.workflows) ? body.workflows : [];
   const loops = Array.isArray(body.loops) ? body.loops : [];
   const runs = Array.isArray(body.runs) ? body.runs : [];
+  const preserveLoopScheduling = body.preserveLoopScheduling === true;
   const imported = { workflows: 0, loops: 0, runs: 0 };
   let skippedRunning = 0;
   // FK-safe order: workflow_specs, then loops (loop_runs.loop_id REFERENCES
@@ -299,7 +313,9 @@ async function handleImportRequest(ctx: V1RequestContext, segments: string[]): P
     imported.workflows += 1;
   }
   for (const loop of loops) {
-    await storage.upsertMigrationLoop(loop, { replace });
+    await storage.upsertMigrationLoop(safeImportedLoop(loop, { preserveLoopScheduling }), {
+      replace: replace || !preserveLoopScheduling,
+    });
     imported.loops += 1;
   }
   for (const run of runs) {
@@ -465,6 +481,10 @@ async function handleWorkItemsRequest(ctx: V1RequestContext, segments: string[])
     });
     return ok({ workItems: items.map(publicWorkflowWorkItem) });
   }
+  if (segments.length === 0 && ctx.request.method === "POST") {
+    const body = await readJsonBody<UpsertWorkflowWorkItemInput>(ctx.request, ctx.bodyLimitBytes);
+    return ok({ workItem: publicWorkflowWorkItem(await storage.upsertWorkflowWorkItem(body)) }, { status: 201 });
+  }
   const id = segments[0];
   if (!id) return fail("not_found", 404);
   if (segments.length === 1 && ctx.request.method === "GET") {
@@ -480,6 +500,10 @@ async function handleInvocationsRequest(ctx: V1RequestContext, segments: string[
   if (segments.length === 0 && ctx.request.method === "GET") {
     const invocations = await storage.listWorkflowInvocations({ limit: optionalLimit(ctx.url.searchParams.get("limit")) });
     return ok({ invocations: invocations.map(publicWorkflowInvocation) });
+  }
+  if (segments.length === 0 && ctx.request.method === "POST") {
+    const body = await readJsonBody<CreateWorkflowInvocationInput>(ctx.request, ctx.bodyLimitBytes);
+    return ok({ invocation: publicWorkflowInvocation(await storage.createWorkflowInvocation(body)) }, { status: 201 });
   }
   const id = segments[0];
   if (!id) return fail("not_found", 404);

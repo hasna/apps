@@ -2277,7 +2277,7 @@ export class Store {
 
   upsertWorkflowWorkItem(input: UpsertWorkflowWorkItemInput): WorkflowWorkItem {
     const now = nowIso();
-    const id = genId();
+    const id = input.id ?? genId();
     const status = input.status ?? "queued";
     this.db
       .query(

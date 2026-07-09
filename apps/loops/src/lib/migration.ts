@@ -296,6 +296,24 @@ function compareResource(
   };
 }
 
+function remoteRepresentationRow(
+  current: unknown | undefined,
+  incoming: unknown,
+  opts: { resource: LoopsMigrationResource; id: string; name?: string },
+): LoopsMigrationPlanRow {
+  const incomingHash = migrationHash(incoming);
+  if (!current) return { resource: opts.resource, id: opts.id, name: opts.name, action: "insert", incomingHash };
+  return {
+    resource: opts.resource,
+    id: opts.id,
+    name: opts.name,
+    action: "skip",
+    reason: "remote id is represented; self-hosted list payload is public/redacted, so exact byte comparison is reserved for import apply",
+    incomingHash,
+    currentHash: migrationHash(current),
+  };
+}
+
 export function buildImportMigrationPlan(
   store: Store,
   bundle: LoopsMigrationBundle,
@@ -514,25 +532,56 @@ async function requestJson(
   return payload;
 }
 
-async function fetchRemotePreview(opts: SelfHostedPlanOptions): Promise<{ loops: unknown[]; runs: unknown[]; warnings: string[] }> {
+function appendQuery(path: string, query: Record<string, string | number | boolean | undefined>): string {
+  const url = new URL(path.replace(/^\//, ""), "https://openloops.local/");
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined) url.searchParams.set(key, String(value));
+  }
+  return `${url.pathname}${url.search}`;
+}
+
+async function fetchRemotePages(
+  fetchImpl: typeof fetch,
+  config: { apiUrl: string; token?: string },
+  path: string,
+  key: string,
+  query: Record<string, string | number | boolean | undefined> = {},
+): Promise<unknown[]> {
+  const out: unknown[] = [];
+  const limit = 1000;
+  for (let offset = 0; ; offset += limit) {
+    const payload = await requestJson(fetchImpl, config, appendQuery(path, { ...query, limit, offset }));
+    const page = Array.isArray(payload[key]) ? payload[key] as unknown[] : [];
+    out.push(...page);
+    if (page.length < limit) break;
+  }
+  return out;
+}
+
+async function fetchRemotePreview(opts: SelfHostedPlanOptions): Promise<{ workflows: unknown[]; loops: unknown[]; runs: unknown[]; warnings: string[] }> {
   const config = resolveApiConfig(opts);
   const warnings: string[] = [];
   if (!config.apiUrl) {
     warnings.push("LOOPS_API_URL or HASNA_LOOPS_API_URL is required to inspect a self-hosted control plane");
-    return { loops: [], runs: [], warnings };
+    return { workflows: [], loops: [], runs: [], warnings };
   }
   if (!isLocalApiUrl(config.apiUrl) && !config.token) {
     warnings.push("non-local self-hosted APIs require LOOPS_API_TOKEN or HASNA_LOOPS_API_TOKEN");
-    return { loops: [], runs: [], warnings };
+    return { workflows: [], loops: [], runs: [], warnings };
   }
   const fetchImpl = opts.fetchImpl ?? fetch;
-  const loopsPayload = await requestJson(fetchImpl, { apiUrl: config.apiUrl, token: config.token }, "/v1/loops?includeArchived=true&limit=1000");
-  const runsPayload = opts.includeRuns === false
-    ? { runs: [] }
-    : await requestJson(fetchImpl, { apiUrl: config.apiUrl, token: config.token }, "/v1/runs?limit=1000");
+  const requestConfig = { apiUrl: config.apiUrl, token: config.token };
+  const [workflows, loops, runs] = await Promise.all([
+    fetchRemotePages(fetchImpl, requestConfig, "/v1/workflows", "workflows"),
+    fetchRemotePages(fetchImpl, requestConfig, "/v1/loops", "loops", { includeArchived: true }),
+    opts.includeRuns === false
+      ? Promise.resolve([])
+      : fetchRemotePages(fetchImpl, requestConfig, "/v1/runs", "runs", { showOutput: true }),
+  ]);
   return {
-    loops: Array.isArray(loopsPayload.loops) ? loopsPayload.loops : [],
-    runs: Array.isArray(runsPayload.runs) ? runsPayload.runs : [],
+    workflows,
+    loops,
+    runs,
     warnings,
   };
 }
@@ -544,8 +593,13 @@ export async function buildSelfHostedMigrationPlan(store: Store, opts: SelfHoste
   const warnings = [
     ...bundle.warnings,
     ...remote.warnings,
-    "self-hosted remote apply is preview-only until the control plane exposes id-preserving workflow/loop/run import endpoints",
+    "self-hosted import is safe-by-default: imported loops are paused and nextRunAt/retryScheduledFor are cleared unless preserveLoopScheduling is explicitly set",
   ];
+  for (const warning of remote.warnings) {
+    if (warning.includes("required") || warning.includes("require ")) {
+      pushBlocker(rows, "remote", "remote:self-hosted-api-config", warning);
+    }
+  }
   if (opts.operation === "self-hosted-pull") {
     for (const entry of remote.loops) {
       const value = entry && typeof entry === "object" ? entry as { id?: unknown; name?: unknown } : {};
@@ -582,47 +636,69 @@ export async function buildSelfHostedMigrationPlan(store: Store, opts: SelfHoste
     });
     return { ...plan, importable: false };
   }
+  const remoteWorkflowsById = new Map(
+    remote.workflows
+      .map((entry) => entry && typeof entry === "object" ? entry as { id?: unknown; name?: unknown } : undefined)
+      .filter((entry): entry is { id?: unknown; name?: unknown } => typeof entry?.id === "string")
+      .map((entry) => [String(entry.id), entry]),
+  );
+  const remoteLoopsById = new Map(
+    remote.loops
+      .map((entry) => entry && typeof entry === "object" ? entry as { id?: unknown; name?: unknown } : undefined)
+      .filter((entry): entry is { id?: unknown; name?: unknown } => typeof entry?.id === "string")
+      .map((entry) => [String(entry.id), entry]),
+  );
   const remoteLoopsByName = new Map(
     remote.loops
       .map((entry) => entry && typeof entry === "object" ? entry as { id?: unknown; name?: unknown } : undefined)
       .filter((entry): entry is { id?: unknown; name?: unknown } => typeof entry?.name === "string")
       .map((entry) => [String(entry.name), entry]),
   );
+  const remoteRunsById = new Map(
+    remote.runs
+      .map((entry) => entry && typeof entry === "object" ? entry as { id?: unknown; loopName?: unknown } : undefined)
+      .filter((entry): entry is { id?: unknown; loopName?: unknown } => typeof entry?.id === "string")
+      .map((entry) => [String(entry.id), entry]),
+  );
 
   for (const workflow of bundle.data.workflows) {
-    rows.push({
+    rows.push(remoteRepresentationRow(remoteWorkflowsById.get(workflow.id), workflow, {
       resource: "workflow",
       id: workflow.id,
       name: workflow.name,
-      action: "blocked",
-      reason: "self-hosted API does not expose id-preserving workflow import/list endpoints yet",
-      incomingHash: migrationHash(workflow),
-    });
+    }));
   }
   for (const loop of bundle.data.loops) {
+    const remoteById = remoteLoopsById.get(loop.id);
     const remoteLoop = remoteLoopsByName.get(loop.name);
-    rows.push({
-      resource: "loop",
-      id: loop.id,
-      name: loop.name,
-      action: "blocked",
-      reason: remoteLoop
-        ? `remote loop name exists (${String(remoteLoop.id ?? "unknown id")}); exact id-preserving comparison is not available`
-        : "normal self-hosted loop create would generate a new id; waiting for id-preserving import endpoint",
-      incomingHash: migrationHash(loop),
-      currentHash: remoteLoop ? migrationHash(remoteLoop) : undefined,
-    });
+    if (!remoteById && remoteLoop && remoteLoop.id !== loop.id) {
+      rows.push({
+        resource: "loop",
+        id: loop.id,
+        name: loop.name,
+        action: "insert",
+        reason: `remote loop name exists under different id ${String(remoteLoop.id ?? "unknown id")}; id-preserving import will add the missing source id paused`,
+        incomingHash: migrationHash(loop),
+        currentHash: migrationHash(remoteLoop),
+      });
+    } else {
+      rows.push(remoteRepresentationRow(remoteById, loop, { resource: "loop", id: loop.id, name: loop.name }));
+    }
   }
   if (opts.includeRuns ?? true) {
     for (const run of bundle.data.runs) {
-      rows.push({
-        resource: "run",
-        id: run.id,
-        name: run.loopName,
-        action: "blocked",
-        reason: "self-hosted API does not expose run-history import endpoints; remote runners should create new run rows",
-        incomingHash: migrationHash(run),
-      });
+      if (run.status === "running") {
+        rows.push({
+          resource: "run",
+          id: run.id,
+          name: run.loopName,
+          action: "blocked",
+          reason: "running rows carry volatile lease/process ownership and must finish before import",
+          incomingHash: migrationHash(run),
+        });
+        continue;
+      }
+      rows.push(remoteRepresentationRow(remoteRunsById.get(run.id), run, { resource: "run", id: run.id, name: run.loopName }));
     }
   }
 
@@ -631,11 +707,11 @@ export async function buildSelfHostedMigrationPlan(store: Store, opts: SelfHoste
     operation: opts.operation,
     dryRun: true,
     replace: false,
-    importable: false,
+    importable: bundle.importable && rows.every((row) => row.action !== "blocked" && row.action !== "conflict"),
     rows,
     warnings,
   });
-  return { ...plan, importable: false };
+  return { ...plan, importable: plan.summary.blocked === 0 && plan.summary.conflict === 0 };
 }
 
 export interface SelfHostedPushOptions {
@@ -669,7 +745,7 @@ interface ImportCounts {
 async function postImportBatch(
   fetchImpl: typeof fetch,
   config: { apiUrl: string; token?: string },
-  payload: { workflows?: unknown[]; loops?: unknown[]; runs?: unknown[]; replace?: boolean },
+  payload: { workflows?: unknown[]; loops?: unknown[]; runs?: unknown[]; replace?: boolean; preserveLoopScheduling?: boolean },
 ): Promise<{ imported: ImportCounts; skippedRunning: number }> {
   const body = await requestJson(fetchImpl, config, "/v1/import", { method: "POST", body: JSON.stringify(payload) });
   const imported = (body.imported ?? {}) as Partial<ImportCounts>;
@@ -711,7 +787,7 @@ export async function applySelfHostedPush(store: Store, opts: SelfHostedPushOpti
 
   for (let i = 0; i < base.workflows.length; i += batchRows) {
     const batch = base.workflows.slice(i, i + batchRows);
-    const result = await postImportBatch(fetchImpl, config, { workflows: batch, replace });
+    const result = await postImportBatch(fetchImpl, config, { workflows: batch, replace, preserveLoopScheduling: false });
     applied.workflows += result.imported.workflows;
     requests += 1;
     opts.onProgress?.({ phase: "workflows", sent: applied.workflows, requests });
@@ -719,7 +795,7 @@ export async function applySelfHostedPush(store: Store, opts: SelfHostedPushOpti
 
   for (let i = 0; i < base.loops.length; i += batchRows) {
     const batch = base.loops.slice(i, i + batchRows);
-    const result = await postImportBatch(fetchImpl, config, { loops: batch, replace });
+    const result = await postImportBatch(fetchImpl, config, { loops: batch, replace, preserveLoopScheduling: false });
     applied.loops += result.imported.loops;
     requests += 1;
     opts.onProgress?.({ phase: "loops", sent: applied.loops, requests });
@@ -731,7 +807,7 @@ export async function applySelfHostedPush(store: Store, opts: SelfHostedPushOpti
     let pendingBytes = 0;
     const flush = async (): Promise<void> => {
       if (pending.length === 0) return;
-      const result = await postImportBatch(fetchImpl, config, { runs: pending, replace });
+      const result = await postImportBatch(fetchImpl, config, { runs: pending, replace, preserveLoopScheduling: false });
       applied.runs += result.imported.runs;
       skipped.runningRuns += result.skippedRunning;
       requests += 1;

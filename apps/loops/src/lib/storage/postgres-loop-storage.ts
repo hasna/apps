@@ -65,12 +65,14 @@ import { initialNextRun } from "../recurrence.js";
 import { normalizeCreateWorkflowInput } from "../workflow-spec.js";
 import type {
   CreateLoopInput,
+  CreateWorkflowInvocationInput,
   CreateWorkflowInput,
   Loop,
   LoopRun,
   LoopStatus,
   LoopTarget,
   RunReceipt,
+  UpsertWorkflowWorkItemInput,
   WorkflowSpec,
   WorkflowWorkItemStatus,
   WriteRunReceiptInput,
@@ -1540,11 +1542,135 @@ export class PostgresLoopStorage implements LoopStorageContract {
     if (!archived) throw new Error(`workflow not found after archive: ${existing.id}`);
     return archived;
   }
-  createWorkflowInvocation(): never {
-    throw new NotImplementedError("createWorkflowInvocation");
+  async createWorkflowInvocation(
+    ...args: M<"createWorkflowInvocation">["args"]
+  ): Promise<M<"createWorkflowInvocation">["result"]> {
+    const [input] = args as [CreateWorkflowInvocationInput];
+    const now = nowIso();
+    const sourceDedupeKey = input.sourceRef.dedupeKey ?? undefined;
+    if (sourceDedupeKey) {
+      const existing = await this.client.get<WorkflowInvocationRow>(
+        "SELECT * FROM workflow_invocations WHERE source_kind = $1 AND source_dedupe_key = $2 LIMIT 1",
+        [input.sourceRef.kind, sourceDedupeKey],
+      );
+      if (existing) return rowToWorkflowInvocation(existing);
+    }
+    const id = input.id ?? genId();
+    await this.client.execute(
+      `INSERT INTO workflow_invocations (id, workflow_id, template_id, source_kind, source_id, source_dedupe_key,
+        source_json, subject_kind, subject_id, subject_path, subject_url, subject_json, intent, scope_json,
+        output_policy_json, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12::jsonb,$13,$14::jsonb,$15::jsonb,$16,$17)`,
+      [
+        id,
+        input.workflowId ?? null,
+        input.templateId ?? null,
+        input.sourceRef.kind,
+        input.sourceRef.id ?? null,
+        sourceDedupeKey ?? null,
+        JSON.stringify(input.sourceRef),
+        input.subjectRef.kind,
+        input.subjectRef.id ?? null,
+        input.subjectRef.path ?? null,
+        input.subjectRef.url ?? null,
+        JSON.stringify(input.subjectRef),
+        input.intent,
+        input.scope ? JSON.stringify(input.scope) : null,
+        input.outputPolicy ? JSON.stringify(input.outputPolicy) : null,
+        now,
+        now,
+      ],
+    );
+    const row = await this.client.get<WorkflowInvocationRow>(
+      "SELECT * FROM workflow_invocations WHERE id = $1",
+      [id],
+    );
+    if (!row) throw new Error(`workflow invocation not found after create: ${id}`);
+    return rowToWorkflowInvocation(row);
   }
-  upsertWorkflowWorkItem(): never {
-    throw new NotImplementedError("upsertWorkflowWorkItem");
+
+  async upsertWorkflowWorkItem(
+    ...args: M<"upsertWorkflowWorkItem">["args"]
+  ): Promise<M<"upsertWorkflowWorkItem">["result"]> {
+    const [input] = args as [UpsertWorkflowWorkItemInput];
+    const now = nowIso();
+    const id = input.id ?? genId();
+    const status = input.status ?? "queued";
+    await this.client.execute(
+      `INSERT INTO workflow_work_items (id, route_key, idempotency_key, invocation_id, source_type, source_ref,
+        subject_ref, project_key, project_group, machine_id, route_scope, priority, status, attempts, next_attempt_at,
+        lease_expires_at, workflow_id, loop_id, workflow_run_id, last_reason, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,0,$14,NULL,NULL,NULL,NULL,$15,$16,$17)
+       ON CONFLICT(route_key, idempotency_key) DO UPDATE SET
+        invocation_id=excluded.invocation_id,
+        source_type=excluded.source_type,
+        source_ref=excluded.source_ref,
+        subject_ref=excluded.subject_ref,
+        project_key=excluded.project_key,
+        project_group=excluded.project_group,
+        machine_id=CASE
+          WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running', 'failed', 'dead_letter', 'cancelled') THEN workflow_work_items.machine_id
+          ELSE excluded.machine_id
+        END,
+        route_scope=excluded.route_scope,
+        priority=excluded.priority,
+        status=CASE
+          WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running', 'failed', 'dead_letter', 'cancelled')
+            THEN workflow_work_items.status
+          ELSE excluded.status
+        END,
+        workflow_id=CASE
+          WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running', 'failed', 'dead_letter', 'cancelled') THEN workflow_work_items.workflow_id
+          ELSE NULL
+        END,
+        loop_id=CASE
+          WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running', 'failed', 'dead_letter', 'cancelled') THEN workflow_work_items.loop_id
+          ELSE NULL
+        END,
+        workflow_run_id=CASE
+          WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running', 'failed', 'dead_letter', 'cancelled') THEN workflow_work_items.workflow_run_id
+          ELSE NULL
+        END,
+        lease_expires_at=CASE
+          WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running', 'failed', 'dead_letter', 'cancelled') THEN workflow_work_items.lease_expires_at
+          ELSE NULL
+        END,
+        next_attempt_at=excluded.next_attempt_at,
+        last_reason=CASE
+          WHEN workflow_work_items.attempts > 0
+            AND workflow_work_items.status IN ('queued', 'deferred')
+            AND workflow_work_items.last_reason IS NOT NULL
+            AND excluded.last_reason IS NOT NULL
+            THEN workflow_work_items.last_reason || '; ' || excluded.last_reason
+          ELSE COALESCE(excluded.last_reason, workflow_work_items.last_reason)
+        END,
+        updated_at=excluded.updated_at`,
+      [
+        id,
+        input.routeKey,
+        input.idempotencyKey,
+        input.invocationId,
+        input.sourceType,
+        input.sourceRef,
+        input.subjectRef,
+        input.projectKey ?? null,
+        input.projectGroup ?? null,
+        input.machineId ?? null,
+        input.routeScope ?? null,
+        input.priority ?? 0,
+        status,
+        input.nextAttemptAt ?? null,
+        input.lastReason ?? null,
+        now,
+        now,
+      ],
+    );
+    const row = await this.client.get<WorkflowWorkItemRow>(
+      "SELECT * FROM workflow_work_items WHERE route_key = $1 AND idempotency_key = $2 LIMIT 1",
+      [input.routeKey, input.idempotencyKey],
+    );
+    if (!row) throw new Error(`workflow work item not found after upsert: ${input.routeKey}/${input.idempotencyKey}`);
+    return rowToWorkflowWorkItem(row);
   }
   admitWorkflowWorkItem(): never {
     throw new NotImplementedError("admitWorkflowWorkItem");
