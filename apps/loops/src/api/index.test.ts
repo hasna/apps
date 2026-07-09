@@ -564,6 +564,39 @@ describe("loops-api foundation", () => {
       expect(raw.run.stdout).toBe("private stdout");
       expect(raw.run.stderr).toBe("private stderr");
       expect(raw.run.error).toBe("[redacted 13 chars]");
+
+      const secondLoop = await storage.createLoop({
+        name: "api-run-output-loop-page-2",
+        schedule: { type: "once", at: "2026-01-01T00:01:00Z" },
+        target: { type: "command", command: "true" },
+      });
+      const secondClaim = await storage.claimRun(
+        secondLoop,
+        "2026-01-01T00:01:00.000Z",
+        "api-runner",
+        new Date("2026-01-01T00:01:00Z"),
+      );
+      await storage.finalizeRun(secondClaim!.run.id, {
+        status: "succeeded",
+        finishedAt: "2026-01-01T00:01:01.000Z",
+        durationMs: 1_000,
+        stdout: "second stdout",
+        stderr: "",
+      });
+
+      const firstPageResponse = await fetch(apiUrl(server, "/v1/runs?limit=1&offset=0&showOutput=true"));
+      const firstPage = (await firstPageResponse.json()) as { runs: { id: string; stdout?: string }[] };
+      const secondPageResponse = await fetch(apiUrl(server, "/v1/runs?limit=1&offset=1&showOutput=true"));
+      const secondPage = (await secondPageResponse.json()) as { runs: { id: string; stdout?: string }[] };
+      expect(firstPageResponse.status).toBe(200);
+      expect(secondPageResponse.status).toBe(200);
+      expect(firstPage.runs).toHaveLength(1);
+      expect(secondPage.runs).toHaveLength(1);
+      expect(firstPage.runs[0]?.id).not.toBe(secondPage.runs[0]?.id);
+      expect(new Set([firstPage.runs[0]?.stdout, secondPage.runs[0]?.stdout])).toEqual(new Set(["private stdout", "second stdout"]));
+
+      const badOffset = await fetch(apiUrl(server, "/v1/runs?offset=-1"));
+      expect(badOffset.status).toBe(422);
     } finally {
       server.stop(true);
       await storage.close();
