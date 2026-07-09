@@ -9,6 +9,7 @@ import type { Store, StoreMigrationChecks } from "./store.js";
 import { packageVersion } from "./version.js";
 
 export const LOOPS_MIGRATION_SCHEMA = "open-loops.migration/v1";
+export const LOOPS_SELF_HOSTED_PUSH_MANIFEST_SCHEMA = "open-loops.self-hosted-push-manifest/v1";
 
 export type LoopsMigrationResource = "workflow" | "loop" | "run" | "remote";
 export type LoopsMigrationAction = "insert" | "update" | "skip" | "conflict" | "blocked";
@@ -82,6 +83,7 @@ export interface LoopsMigrationPlan {
   summary: LoopsMigrationPlanSummary;
   rows: LoopsMigrationPlanRow[];
   warnings: string[];
+  manifest?: SelfHostedPushManifest;
 }
 
 export interface ApplyLoopsMigrationResult {
@@ -100,6 +102,7 @@ export interface SelfHostedPlanOptions {
   fetchImpl?: typeof fetch;
   env?: NodeJS.ProcessEnv;
   includeRuns?: boolean;
+  replace?: boolean;
 }
 
 export interface RunnerRegistrationOptions {
@@ -528,78 +531,231 @@ async function requestJson(
     },
   });
   const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
-  if (!response.ok) throw new Error(typeof payload.error === "string" ? payload.error : `loops-api request failed: ${response.status}`);
+  if (!response.ok) {
+    throw Object.assign(
+      new Error(typeof payload.error === "string" ? payload.error : `loops-api request failed: ${response.status}`),
+      { status: response.status, payload },
+    );
+  }
   return payload;
 }
 
-function appendQuery(path: string, query: Record<string, string | number | boolean | undefined>): string {
-  const url = new URL(path.replace(/^\//, ""), "https://openloops.local/");
-  for (const [key, value] of Object.entries(query)) {
-    if (value !== undefined) url.searchParams.set(key, String(value));
-  }
-  return `${url.pathname}${url.search}`;
+interface RemotePreview {
+  workflows: unknown[];
+  loops: unknown[];
+  runs: unknown[];
+  counts: { workflows?: number; loops?: number; runs?: number };
+  unsupported: string[];
+  warnings: string[];
 }
 
-async function fetchRemotePages(
+async function fetchPagedRows(
   fetchImpl: typeof fetch,
   config: { apiUrl: string; token?: string },
   path: string,
-  key: string,
-  query: Record<string, string | number | boolean | undefined> = {},
+  key: "workflows" | "loops" | "runs",
+  opts: { unsupported: string[]; warnings: string[] },
 ): Promise<unknown[]> {
-  const out: unknown[] = [];
+  const rows: unknown[] = [];
   const limit = 1000;
   for (let offset = 0; ; offset += limit) {
-    const payload = await requestJson(fetchImpl, config, appendQuery(path, { ...query, limit, offset }));
-    const page = Array.isArray(payload[key]) ? payload[key] as unknown[] : [];
-    out.push(...page);
-    if (page.length < limit) break;
+    try {
+      const separator = path.includes("?") ? "&" : "?";
+      const payload = await requestJson(fetchImpl, config, `${path}${separator}limit=${limit}&offset=${offset}`);
+      const page = Array.isArray(payload[key]) ? payload[key] as unknown[] : [];
+      rows.push(...page);
+      if (page.length < limit) break;
+    } catch (error) {
+      if ((error as { status?: number }).status === 404) {
+        opts.unsupported.push(path);
+        opts.warnings.push(`self-hosted control plane does not expose ${path}; exact ${key} comparison is unavailable`);
+        break;
+      }
+      throw error;
+    }
   }
-  return out;
+  return rows;
 }
 
-async function fetchRemotePreview(opts: SelfHostedPlanOptions): Promise<{ workflows: unknown[]; loops: unknown[]; runs: unknown[]; warnings: string[] }> {
+async function fetchOptionalCount(
+  fetchImpl: typeof fetch,
+  config: { apiUrl: string; token?: string },
+  path: string,
+  opts: { unsupported: string[]; warnings: string[] },
+): Promise<number | undefined> {
+  try {
+    const payload = await requestJson(fetchImpl, config, path);
+    return typeof payload.count === "number" ? payload.count : undefined;
+  } catch (error) {
+    if ((error as { status?: number }).status === 404) {
+      opts.unsupported.push(path);
+      opts.warnings.push(`self-hosted control plane does not expose ${path}; count comparison is unavailable`);
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+async function fetchRemotePreview(opts: SelfHostedPlanOptions): Promise<RemotePreview> {
   const config = resolveApiConfig(opts);
   const warnings: string[] = [];
+  const unsupported: string[] = [];
   if (!config.apiUrl) {
     warnings.push("LOOPS_API_URL or HASNA_LOOPS_API_URL is required to inspect a self-hosted control plane");
-    return { workflows: [], loops: [], runs: [], warnings };
+    return { workflows: [], loops: [], runs: [], counts: {}, unsupported, warnings };
   }
   if (!isLocalApiUrl(config.apiUrl) && !config.token) {
     warnings.push("non-local self-hosted APIs require LOOPS_API_TOKEN or HASNA_LOOPS_API_TOKEN");
-    return { workflows: [], loops: [], runs: [], warnings };
+    return { workflows: [], loops: [], runs: [], counts: {}, unsupported, warnings };
   }
   const fetchImpl = opts.fetchImpl ?? fetch;
-  const requestConfig = { apiUrl: config.apiUrl, token: config.token };
-  const [workflows, loops, runs] = await Promise.all([
-    fetchRemotePages(fetchImpl, requestConfig, "/v1/workflows", "workflows"),
-    fetchRemotePages(fetchImpl, requestConfig, "/v1/loops", "loops", { includeArchived: true }),
-    opts.includeRuns === false
-      ? Promise.resolve([])
-      : fetchRemotePages(fetchImpl, requestConfig, "/v1/runs", "runs", { showOutput: true }),
-  ]);
+  const api = { apiUrl: config.apiUrl, token: config.token };
+  const requestOpts = { unsupported, warnings };
+  const workflows = await fetchPagedRows(fetchImpl, api, "/v1/workflows", "workflows", requestOpts);
+  const loops = await fetchPagedRows(fetchImpl, api, "/v1/loops?includeArchived=true", "loops", requestOpts);
+  const runs = opts.includeRuns === false ? [] : await fetchPagedRows(fetchImpl, api, "/v1/runs?showOutput=true", "runs", requestOpts);
   return {
     workflows,
     loops,
     runs,
+    counts: {
+      workflows: await fetchOptionalCount(fetchImpl, api, "/v1/workflows/count", requestOpts),
+      loops: await fetchOptionalCount(fetchImpl, api, "/v1/loops/count?includeArchived=true", requestOpts),
+      runs: opts.includeRuns === false ? undefined : await fetchOptionalCount(fetchImpl, api, "/v1/runs/count", requestOpts),
+    },
+    unsupported,
     warnings,
   };
 }
 
+function disabledWorkflowForSelfHostedImport(workflow: WorkflowSpec): WorkflowSpec {
+  return { ...workflow, status: "archived" };
+}
+
+function pausedLoopForSelfHostedImport(loop: Loop): Loop {
+  return {
+    ...loop,
+    status: "paused",
+    nextRunAt: undefined,
+    retryScheduledFor: undefined,
+  };
+}
+
+function selfHostedDefinitionBundle(bundle: LoopsMigrationBundle): LoopsMigrationBundle {
+  const body = {
+    ...bundle,
+    data: {
+      workflows: bundle.data.workflows.map(disabledWorkflowForSelfHostedImport),
+      loops: bundle.data.loops.map(pausedLoopForSelfHostedImport),
+      runs: bundle.data.runs,
+    },
+  };
+  const { hash: _hash, ...hashBody } = body;
+  return { ...body, hash: migrationHash(hashBody) };
+}
+
+function typedRows<T extends { id: string }>(rows: unknown[]): T[] {
+  return rows.filter((row): row is T => Boolean(row && typeof row === "object" && typeof (row as { id?: unknown }).id === "string"));
+}
+
+function rowsById<T extends { id: string }>(rows: T[]): Map<string, T> {
+  return new Map(rows.map((row) => [row.id, row]));
+}
+
+function rowsByName<T extends { id?: unknown; name?: unknown }>(rows: T[]): Map<string, T> {
+  return new Map(rows.filter((row) => typeof row.name === "string").map((row) => [String(row.name), row]));
+}
+
+function rowIds(rows: LoopsMigrationPlanRow[], resource: LoopsMigrationResource, action: LoopsMigrationAction): string[] {
+  return rows.filter((row) => row.resource === resource && row.action === action).map((row) => row.id);
+}
+
+function existingRowIds(rows: LoopsMigrationPlanRow[], resource: LoopsMigrationResource): string[] {
+  return rows.filter((row) => row.resource === resource && (row.action === "skip" || row.action === "update")).map((row) => row.id);
+}
+
+function buildSelfHostedManifest(args: {
+  apiUrl?: string;
+  dryRun: boolean;
+  replace: boolean;
+  includeRuns: boolean;
+  bundle: LoopsMigrationBundle;
+  remote: RemotePreview;
+  plan: LoopsMigrationPlan;
+  applied?: { workflows: number; loops: number; runs: number };
+  skipped?: { runningRuns: number; orphanRuns: number };
+  requests?: number;
+  remoteAfter?: { workflows?: number; loops?: number; runs?: number };
+}): SelfHostedPushManifest {
+  return {
+    schema: LOOPS_SELF_HOSTED_PUSH_MANIFEST_SCHEMA,
+    generatedAt: new Date().toISOString(),
+    apiUrl: args.apiUrl,
+    dryRun: args.dryRun,
+    replace: args.replace,
+    includeRuns: args.includeRuns,
+    safety: {
+      forcedLoopStatus: "paused",
+      clearedLoopRunPointers: true,
+      forcedWorkflowStatus: "archived",
+      resumesLoops: false,
+    },
+    counts: {
+      source: args.bundle.counts,
+      remoteBefore: args.remote.counts,
+      remoteAfter: args.remoteAfter,
+      plan: args.plan.summary,
+      applied: args.applied,
+      skipped: args.skipped,
+      requests: args.requests,
+    },
+    missingIds: {
+      workflows: rowIds(args.plan.rows, "workflow", "insert"),
+      loops: rowIds(args.plan.rows, "loop", "insert"),
+      runs: rowIds(args.plan.rows, "run", "insert"),
+    },
+    existingIds: {
+      workflows: existingRowIds(args.plan.rows, "workflow"),
+      loops: existingRowIds(args.plan.rows, "loop"),
+      runs: existingRowIds(args.plan.rows, "run"),
+    },
+    unsafe: {
+      blocked: args.plan.rows.filter((row) => row.action === "blocked"),
+      conflicts: args.plan.rows.filter((row) => row.action === "conflict"),
+      unsupported: args.remote.unsupported,
+      warnings: args.plan.warnings,
+    },
+    rollback: {
+      notes: [
+        "self-hosted push imports through id-preserving upserts; no local loops are resumed or mutated",
+        "imported loops are forced to paused with nextRunAt/retryScheduledFor cleared before upload",
+        "imported workflows are forced to archived before upload",
+        "rollback is manual: archive or delete imported ids from the self-hosted control plane after reviewing this manifest",
+      ],
+      commands: [
+        "loops self-hosted push --dry-run --no-runs --manifest-file <post-rollback-check.json>",
+      ],
+    },
+  };
+}
+
 export async function buildSelfHostedMigrationPlan(store: Store, opts: SelfHostedPlanOptions): Promise<LoopsMigrationPlan> {
-  const bundle = exportLoopsMigrationBundle(store, { includeRuns: opts.includeRuns ?? true });
+  const bundle = selfHostedDefinitionBundle(exportLoopsMigrationBundle(store, { includeRuns: opts.includeRuns ?? true }));
   const remote = await fetchRemotePreview(opts);
   const rows: LoopsMigrationPlanRow[] = [...bundle.blockers.map((row) => ({ ...row, action: "blocked" as const }))];
   const warnings = [
     ...bundle.warnings,
     ...remote.warnings,
-    "self-hosted import is safe-by-default: imported loops are paused and nextRunAt/retryScheduledFor are cleared unless preserveLoopScheduling is explicitly set",
+    "self-hosted push forces imported loops to paused and imported workflows to archived until activation is explicitly approved",
   ];
-  for (const warning of remote.warnings) {
-    if (warning.includes("required") || warning.includes("require ")) {
-      pushBlocker(rows, "remote", "remote:self-hosted-api-config", warning);
-    }
+  const config = resolveApiConfig(opts);
+  const apiUrl = config.apiUrl;
+  if (!apiUrl) {
+    pushBlocker(rows, "remote", "self-hosted-api-url", "LOOPS_API_URL or HASNA_LOOPS_API_URL is required to compare a self-hosted control plane");
+  } else if (!isLocalApiUrl(apiUrl) && !config.token) {
+    pushBlocker(rows, "remote", "self-hosted-api-token", "non-local self-hosted APIs require LOOPS_API_TOKEN or HASNA_LOOPS_API_TOKEN");
   }
+  const replace = opts.replace ?? false;
   if (opts.operation === "self-hosted-pull") {
     for (const entry of remote.loops) {
       const value = entry && typeof entry === "object" ? entry as { id?: unknown; name?: unknown } : {};
@@ -629,39 +785,45 @@ export async function buildSelfHostedMigrationPlan(store: Store, opts: SelfHoste
       schema: LOOPS_MIGRATION_SCHEMA,
       operation: opts.operation,
       dryRun: true,
-      replace: false,
+      replace,
       importable: false,
       rows,
       warnings,
     });
-    return { ...plan, importable: false };
+    return {
+      ...plan,
+      importable: false,
+      manifest: buildSelfHostedManifest({
+        apiUrl,
+        dryRun: true,
+        replace,
+        includeRuns: opts.includeRuns ?? true,
+        bundle,
+        remote,
+        plan,
+      }),
+    };
   }
-  const remoteWorkflowsById = new Map(
-    remote.workflows
-      .map((entry) => entry && typeof entry === "object" ? entry as { id?: unknown; name?: unknown } : undefined)
-      .filter((entry): entry is { id?: unknown; name?: unknown } => typeof entry?.id === "string")
-      .map((entry) => [String(entry.id), entry]),
-  );
-  const remoteLoopsById = new Map(
-    remote.loops
-      .map((entry) => entry && typeof entry === "object" ? entry as { id?: unknown; name?: unknown } : undefined)
-      .filter((entry): entry is { id?: unknown; name?: unknown } => typeof entry?.id === "string")
-      .map((entry) => [String(entry.id), entry]),
-  );
-  const remoteLoopsByName = new Map(
-    remote.loops
-      .map((entry) => entry && typeof entry === "object" ? entry as { id?: unknown; name?: unknown } : undefined)
-      .filter((entry): entry is { id?: unknown; name?: unknown } => typeof entry?.name === "string")
-      .map((entry) => [String(entry.name), entry]),
-  );
-  const remoteRunsById = new Map(
-    remote.runs
-      .map((entry) => entry && typeof entry === "object" ? entry as { id?: unknown; loopName?: unknown } : undefined)
-      .filter((entry): entry is { id?: unknown; loopName?: unknown } => typeof entry?.id === "string")
-      .map((entry) => [String(entry.id), entry]),
-  );
+  const remoteWorkflows = typedRows<WorkflowSpec>(remote.workflows);
+  const remoteLoops = typedRows<Loop>(remote.loops);
+  const remoteRuns = typedRows<LoopRun>(remote.runs);
+  const remoteWorkflowsById = rowsById(remoteWorkflows);
+  const remoteLoopsById = rowsById(remoteLoops);
+  const remoteRunsById = rowsById(remoteRuns);
+  const remoteLoopsByName = rowsByName(remoteLoops);
 
   for (const workflow of bundle.data.workflows) {
+    if (remote.unsupported.some((entry) => entry.startsWith("/v1/workflows"))) {
+      rows.push({
+        resource: "workflow",
+        id: workflow.id,
+        name: workflow.name,
+        action: "blocked",
+        reason: "self-hosted API does not expose workflow list/count endpoints for safe comparison",
+        incomingHash: migrationHash(workflow),
+      });
+      continue;
+    }
     rows.push(remoteRepresentationRow(remoteWorkflowsById.get(workflow.id), workflow, {
       resource: "workflow",
       id: workflow.id,
@@ -669,21 +831,23 @@ export async function buildSelfHostedMigrationPlan(store: Store, opts: SelfHoste
     }));
   }
   for (const loop of bundle.data.loops) {
-    const remoteById = remoteLoopsById.get(loop.id);
-    const remoteLoop = remoteLoopsByName.get(loop.name);
-    if (!remoteById && remoteLoop && remoteLoop.id !== loop.id) {
-      rows.push({
-        resource: "loop",
-        id: loop.id,
-        name: loop.name,
-        action: "insert",
-        reason: `remote loop name exists under different id ${String(remoteLoop.id ?? "unknown id")}; id-preserving import will add the missing source id paused`,
-        incomingHash: migrationHash(loop),
-        currentHash: migrationHash(remoteLoop),
-      });
-    } else {
-      rows.push(remoteRepresentationRow(remoteById, loop, { resource: "loop", id: loop.id, name: loop.name }));
+    const remoteLoop = remoteLoopsById.get(loop.id);
+    if (!remoteLoop) {
+      const nameCollision = remoteLoopsByName.get(loop.name);
+      if (nameCollision && nameCollision.id !== loop.id) {
+        rows.push({
+          resource: "loop",
+          id: loop.id,
+          name: loop.name,
+          action: "insert",
+          reason: `remote loop name exists under different id ${String(nameCollision.id ?? "unknown id")}; id-preserving import will add the missing source id paused`,
+          incomingHash: migrationHash(loop),
+          currentHash: migrationHash(nameCollision),
+        });
+        continue;
+      }
     }
+    rows.push(remoteRepresentationRow(remoteLoop, loop, { resource: "loop", id: loop.id, name: loop.name }));
   }
   if (opts.includeRuns ?? true) {
     for (const run of bundle.data.runs) {
@@ -693,7 +857,7 @@ export async function buildSelfHostedMigrationPlan(store: Store, opts: SelfHoste
           id: run.id,
           name: run.loopName,
           action: "blocked",
-          reason: "running rows carry volatile lease/process ownership and must finish before import",
+          reason: "running rows carry volatile lease/process ownership and are skipped by self-hosted import",
           incomingHash: migrationHash(run),
         });
         continue;
@@ -702,16 +866,28 @@ export async function buildSelfHostedMigrationPlan(store: Store, opts: SelfHoste
     }
   }
 
-  const plan = finalizePlan({
+  let plan = finalizePlan({
     schema: LOOPS_MIGRATION_SCHEMA,
     operation: opts.operation,
     dryRun: true,
-    replace: false,
+    replace,
     importable: bundle.importable && rows.every((row) => row.action !== "blocked" && row.action !== "conflict"),
     rows,
     warnings,
   });
-  return { ...plan, importable: plan.summary.blocked === 0 && plan.summary.conflict === 0 };
+  plan = { ...plan, importable: plan.summary.blocked === 0 && plan.summary.conflict === 0 };
+  return {
+    ...plan,
+    manifest: buildSelfHostedManifest({
+      apiUrl,
+      dryRun: true,
+      replace,
+      includeRuns: opts.includeRuns ?? true,
+      bundle,
+      remote,
+      plan,
+    }),
+  };
 }
 
 export interface SelfHostedPushOptions {
@@ -734,6 +910,43 @@ export interface SelfHostedPushResult {
   applied: { workflows: number; loops: number; runs: number };
   skipped: { runningRuns: number; orphanRuns: number };
   requests: number;
+  manifest: SelfHostedPushManifest;
+}
+
+export interface SelfHostedPushManifest {
+  schema: typeof LOOPS_SELF_HOSTED_PUSH_MANIFEST_SCHEMA;
+  generatedAt: string;
+  apiUrl?: string;
+  dryRun: boolean;
+  replace: boolean;
+  includeRuns: boolean;
+  safety: {
+    forcedLoopStatus: "paused";
+    clearedLoopRunPointers: true;
+    forcedWorkflowStatus: "archived";
+    resumesLoops: false;
+  };
+  counts: {
+    source: { workflows: number; loops: number; runs: number };
+    remoteBefore: { workflows?: number; loops?: number; runs?: number };
+    remoteAfter?: { workflows?: number; loops?: number; runs?: number };
+    plan: LoopsMigrationPlanSummary;
+    applied?: { workflows: number; loops: number; runs: number };
+    skipped?: { runningRuns: number; orphanRuns: number };
+    requests?: number;
+  };
+  missingIds: { workflows: string[]; loops: string[]; runs: string[] };
+  existingIds: { workflows: string[]; loops: string[]; runs: string[] };
+  unsafe: {
+    blocked: LoopsMigrationPlanRow[];
+    conflicts: LoopsMigrationPlanRow[];
+    unsupported: string[];
+    warnings: string[];
+  };
+  rollback: {
+    notes: string[];
+    commands: string[];
+  };
 }
 
 interface ImportCounts {
@@ -773,6 +986,10 @@ export async function applySelfHostedPush(store: Store, opts: SelfHostedPushOpti
   const fetchImpl = opts.fetchImpl ?? fetch;
   const includeRuns = opts.includeRuns ?? true;
   const replace = opts.replace ?? false;
+  const plan = await buildSelfHostedMigrationPlan(store, { ...opts, operation: "self-hosted-push", includeRuns, replace });
+  if (plan.summary.blocked > 0 || plan.summary.conflict > 0 || !plan.importable) {
+    throw new ValidationError(`self-hosted push is not safe to apply: blocked=${plan.summary.blocked} conflict=${plan.summary.conflict}`);
+  }
   const batchRows = Math.max(1, opts.batchRows ?? 200);
   const runBatchBytes = Math.max(64 * 1024, opts.runBatchBytes ?? 4 * 1024 * 1024);
 
@@ -783,18 +1000,20 @@ export async function applySelfHostedPush(store: Store, opts: SelfHostedPushOpti
   // Definitions only: exportMigrationRows({includeRuns:false}) never loads run
   // output, so workflows+loops stay cheap even on a busy host.
   const base = store.exportMigrationRows({ includeRuns: false });
+  const workflows = base.workflows.map(disabledWorkflowForSelfHostedImport);
+  const loops = base.loops.map(pausedLoopForSelfHostedImport);
   const loopIds = new Set(base.loops.map((loop) => loop.id));
 
-  for (let i = 0; i < base.workflows.length; i += batchRows) {
-    const batch = base.workflows.slice(i, i + batchRows);
+  for (let i = 0; i < workflows.length; i += batchRows) {
+    const batch = workflows.slice(i, i + batchRows);
     const result = await postImportBatch(fetchImpl, config, { workflows: batch, replace, preserveLoopScheduling: false });
     applied.workflows += result.imported.workflows;
     requests += 1;
     opts.onProgress?.({ phase: "workflows", sent: applied.workflows, requests });
   }
 
-  for (let i = 0; i < base.loops.length; i += batchRows) {
-    const batch = base.loops.slice(i, i + batchRows);
+  for (let i = 0; i < loops.length; i += batchRows) {
+    const batch = loops.slice(i, i + batchRows);
     const result = await postImportBatch(fetchImpl, config, { loops: batch, replace, preserveLoopScheduling: false });
     applied.loops += result.imported.loops;
     requests += 1;
@@ -836,7 +1055,38 @@ export async function applySelfHostedPush(store: Store, opts: SelfHostedPushOpti
     await flush();
   }
 
-  return { ok: true, apiUrl: config.apiUrl, applied, skipped, requests };
+  const remoteAfter = await fetchRemotePreview({ ...opts, operation: "self-hosted-push", includeRuns: false });
+  const bundle = selfHostedDefinitionBundle(exportLoopsMigrationBundle(store, { includeRuns }));
+  const remoteBefore: RemotePreview = plan.manifest
+    ? {
+        workflows: [],
+        loops: [],
+        runs: [],
+        counts: plan.manifest.counts.remoteBefore,
+        unsupported: plan.manifest.unsafe.unsupported,
+        warnings: [],
+      }
+    : await fetchRemotePreview({ ...opts, operation: "self-hosted-push", includeRuns });
+  return {
+    ok: true,
+    apiUrl: config.apiUrl,
+    applied,
+    skipped,
+    requests,
+    manifest: buildSelfHostedManifest({
+      apiUrl: config.apiUrl,
+      dryRun: false,
+      replace,
+      includeRuns,
+      bundle,
+      remote: remoteBefore,
+      plan,
+      applied,
+      skipped,
+      requests,
+      remoteAfter: remoteAfter.counts,
+    }),
+  };
 }
 
 export async function registerSelfHostedRunner(opts: RunnerRegistrationOptions): Promise<RunnerRegistrationResult> {

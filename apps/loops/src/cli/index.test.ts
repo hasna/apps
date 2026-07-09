@@ -7,13 +7,27 @@ import { fileURLToPath } from "node:url";
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { Store } from "../lib/store.js";
+import { createSqliteLoopStorage } from "../lib/storage/sqlite.js";
+import { applySelfHostedPush } from "../lib/migration.js";
 import { RESTART_INTERRUPTED_RUN_PREFIX } from "../lib/health.js";
 
 const cliPath = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
 
 function runCli(dataDir: string, args: string[], input?: string, env: Record<string, string> = {}) {
+  const isolatedEnv = {
+    HASNA_LOOPS_STORAGE_MODE: "local",
+    LOOPS_API_URL: "",
+    HASNA_LOOPS_API_URL: "",
+    LOOPS_CLOUD_API_URL: "",
+    HASNA_LOOPS_CLOUD_API_URL: "",
+    LOOPS_API_TOKEN: "",
+    HASNA_LOOPS_API_TOKEN: "",
+    HASNA_LOOPS_API_KEY: "",
+    LOOPS_CLOUD_TOKEN: "",
+    HASNA_LOOPS_CLOUD_TOKEN: "",
+  };
   return spawnSync(process.execPath, [cliPath, ...args], {
-    env: { ...process.env, ...env, LOOPS_DATA_DIR: dataDir },
+    env: { ...process.env, ...isolatedEnv, ...env, LOOPS_DATA_DIR: dataDir },
     input,
     encoding: "utf8",
   });
@@ -432,6 +446,65 @@ describe("loops CLI", () => {
       const documented = runCli(dataDir, ["--json", "self-hosted", command, "--dry-run"]);
       expect(documented.status).toBe(0);
       expect(JSON.parse(documented.stdout).operation).toBe(`self-hosted-${command}`);
+    }
+  });
+
+  test("self-hosted push applies id-preserving definitions paused/disabled and writes a manifest", async () => {
+    const mod = await import("../api/index.js");
+    const sourceDir = freshDataDir("loops-cli-self-hosted-push-source-");
+    const remoteStorage = createSqliteLoopStorage(":memory:");
+    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage: remoteStorage });
+    let workflowId = "";
+    let loopId = "";
+
+    const source = new Store(join(sourceDir, "loops.db"));
+    try {
+      const workflow = source.createWorkflow({
+        name: "push-workflow",
+        steps: [{ id: "one", target: { type: "command", command: "true" } }],
+      });
+      const loop = source.createLoop({
+        name: "push-loop",
+        schedule: { type: "once", at: futureAt() },
+        target: { type: "workflow", workflowId: workflow.id },
+      });
+      workflowId = workflow.id;
+      loopId = loop.id;
+      expect(loop.status).toBe("active");
+    } finally {
+      source.close();
+    }
+
+    try {
+      const source = new Store(join(sourceDir, "loops.db"));
+      const output = await applySelfHostedPush(source, {
+        apiUrl: `http://${server.hostname}:${server.port}`,
+        includeRuns: false,
+      });
+      source.close();
+      expect(output.ok).toBe(true);
+      expect(output.manifest.safety).toMatchObject({
+        forcedLoopStatus: "paused",
+        clearedLoopRunPointers: true,
+        forcedWorkflowStatus: "archived",
+        resumesLoops: false,
+      });
+
+      const manifest = output.manifest;
+      expect(manifest.missingIds.workflows).toEqual([workflowId]);
+      expect(manifest.missingIds.loops).toEqual([loopId]);
+      expect(manifest.counts.applied).toMatchObject({ workflows: 1, loops: 1, runs: 0 });
+      expect(manifest.rollback.notes.join(" ")).toContain("manual");
+
+      const remoteWorkflow = await remoteStorage.getWorkflow(workflowId);
+      expect(remoteWorkflow?.status).toBe("archived");
+      const remoteLoop = await remoteStorage.getLoop(loopId);
+      expect(remoteLoop?.status).toBe("paused");
+      expect(remoteLoop?.nextRunAt).toBeUndefined();
+      expect(remoteLoop?.retryScheduledFor).toBeUndefined();
+    } finally {
+      server.stop(true);
+      await remoteStorage.close();
     }
   });
 

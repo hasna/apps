@@ -594,6 +594,12 @@ function printMigrationPlan(plan: LoopsMigrationPlan, opts: { json?: boolean } =
   }
 }
 
+function writeManifestFile(file: string | undefined, manifest: unknown): void {
+  if (!file) return;
+  if (manifest === undefined) throw new ValidationError("command did not produce a manifest");
+  writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+}
+
 /** Snapshot the database through lib/backup (VACUUM INTO, 1h per-reason debounce, keep 3). */
 function backupLoopsDatabase(reason: string): string | undefined {
   return backupDatabase({ reason, keep: 3 }).path;
@@ -862,8 +868,9 @@ selfHosted
   .option("--replace", "update existing remote rows whose id matches (default: leave existing rows unchanged)")
   .option("--dry-run", "preview only; equivalent to omitting --apply")
   .option("--no-runs", "omit loop run history")
+  .option("--manifest-file <path>", "write a self-hosted comparison/import manifest JSON file")
   .option("--json", "print JSON")
-  .action(runAction(async (opts: { apiUrl?: string; apply?: boolean; replace?: boolean; dryRun?: boolean; runs?: boolean; json?: boolean }) => {
+  .action(runAction(async (opts: { apiUrl?: string; apply?: boolean; replace?: boolean; dryRun?: boolean; runs?: boolean; manifestFile?: string; json?: boolean }) => {
     if (!opts.apply || opts.dryRun) {
       const store = new Store();
       try {
@@ -871,7 +878,9 @@ selfHosted
           operation: "self-hosted-push",
           apiUrl: opts.apiUrl,
           includeRuns: opts.runs,
+          replace: opts.replace,
         });
+        writeManifestFile(opts.manifestFile, plan.manifest);
         printMigrationPlan(plan, opts);
       } finally {
         store.close();
@@ -885,6 +894,7 @@ selfHosted
         includeRuns: opts.runs,
         replace: opts.replace,
       });
+      writeManifestFile(opts.manifestFile, result.manifest);
       if (isJson() || opts.json) console.log(JSON.stringify(result, null, 2));
       else {
         console.log(
