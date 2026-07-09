@@ -6,8 +6,9 @@
 //
 // Covers the priority-1/priority-2 paths the daemon + CLI + runner exercise:
 // loop CRUD, run lifecycle (claim/heartbeat/finalize/recover), daemon lease,
-// counts, prune, and the two-connection claim race. TIER-2 unported methods are
-// asserted to throw NotImplementedError rather than silently no-op.
+// counts, route representation, prune, and the two-connection claim race.
+// Remaining TIER-2 unported methods are asserted to throw NotImplementedError
+// rather than silently no-op.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import pg from "pg";
@@ -271,8 +272,116 @@ suite("PostgresLoopStorage (live)", () => {
     expect(await storage.countWorkflows()).toBe(1);
   });
 
+  test("fleet-union import tolerates secondary-unique collisions (skips, never aborts)", async () => {
+    // Baseline: one loop, one run occupying a schedule slot, one active workflow.
+    await storage.upsertMigrationLoop({
+      id: "u-loop-1", name: "u-migrated", status: "active",
+      schedule: { type: "interval", everyMs: 60_000, anchor: "fixed_rate" },
+      target: { type: "command", command: "echo", shell: true },
+      catchUp: "latest", catchUpLimit: 50, overlap: "skip", maxAttempts: 1,
+      retryDelayMs: 1000, leaseMs: 1000,
+      createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+    } as Loop);
+    const baseRun: LoopRun = {
+      id: "u-run-1", loopId: "u-loop-1", loopName: "u-migrated",
+      scheduledFor: "2026-02-02T00:00:00.000Z", attempt: 1, status: "succeeded",
+      finishedAt: "2026-02-02T00:00:05.000Z",
+      createdAt: "2026-02-02T00:00:00.000Z", updatedAt: "2026-02-02T00:00:05.000Z",
+    };
+    await storage.upsertMigrationRun(baseRun);
+    const runsBefore = await storage.countRuns();
+
+    // Another machine's run: NEW id, SAME (loop_id, scheduled_for). The
+    // (loop_id, scheduled_for) unique constraint can't be caught by ON
+    // CONFLICT(id); the import must skip it and return the existing occupant.
+    const collidingRun = await storage.upsertMigrationRun({ ...baseRun, id: "u-run-2-different-id" });
+    expect(collidingRun.id).toBe("u-run-1");
+    expect(await storage.countRuns()).toBe(runsBefore); // no new row, no throw
+
+    // Another machine's workflow: NEW id, SAME active name. The partial unique
+    // on (name) WHERE status='active' must be tolerated and the existing owner
+    // returned rather than aborting the batch.
+    await storage.upsertMigrationWorkflow({
+      id: "u-wf-1", name: "u-wf", version: 1, status: "active",
+      steps: [{ id: "s1", target: { type: "command", command: "true" } }],
+      createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+    } as WorkflowSpec);
+    const wfBefore = await storage.countWorkflows();
+    const collidingWf = await storage.upsertMigrationWorkflow({
+      id: "u-wf-2-different-id", name: "u-wf", version: 2, status: "active",
+      steps: [{ id: "s1", target: { type: "command", command: "true" } }],
+      createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+    } as WorkflowSpec);
+    expect(collidingWf.id).toBe("u-wf-1");
+    expect(await storage.countWorkflows()).toBe(wfBefore); // no new row, no throw
+  });
+
+  test("createWorkflow persists a spec and archiveWorkflow flips its status", async () => {
+    const created = await storage.createWorkflow({
+      name: "pg-created-wf",
+      steps: [{ id: "s1", target: { type: "command", command: "true" } }],
+    });
+    expect(created.id).toBeTruthy();
+    expect(created.status).toBe("active");
+
+    const fetched = await storage.getWorkflow(created.id);
+    expect(fetched?.name).toBe("pg-created-wf");
+    expect(fetched?.steps).toHaveLength(1);
+
+    const listed = await storage.listWorkflows({ status: "active" });
+    expect(listed.some((wf) => wf.id === created.id)).toBe(true);
+
+    const archived = await storage.archiveWorkflow(created.id);
+    expect(archived.status).toBe("archived");
+    expect((await storage.getWorkflow(created.id))?.status).toBe("archived");
+  });
+
+  test("route invocation and work-item upserts preserve caller ids", async () => {
+    const invocation = await storage.createWorkflowInvocation({
+      id: "pg-inv-1",
+      sourceRef: { kind: "task", id: "task-1", dedupeKey: "task-1" },
+      subjectRef: { kind: "repo", path: "/repo" },
+      intent: "route",
+    });
+    expect(invocation.id).toBe("pg-inv-1");
+    const deduped = await storage.createWorkflowInvocation({
+      id: "pg-inv-2",
+      sourceRef: { kind: "task", id: "task-1", dedupeKey: "task-1" },
+      subjectRef: { kind: "repo", path: "/repo" },
+      intent: "route",
+    });
+    expect(deduped.id).toBe("pg-inv-1");
+
+    const item = await storage.upsertWorkflowWorkItem({
+      id: "pg-wi-1",
+      routeKey: "todos-task",
+      idempotencyKey: "task-1",
+      invocationId: "pg-inv-1",
+      sourceType: "task",
+      sourceRef: "task:task-1",
+      subjectRef: "repo:/repo",
+      priority: 10,
+      status: "queued",
+    });
+    expect(item.id).toBe("pg-wi-1");
+    expect(item.routeKey).toBe("todos-task");
+    const replay = await storage.upsertWorkflowWorkItem({
+      id: "pg-wi-2",
+      routeKey: "todos-task",
+      idempotencyKey: "task-1",
+      invocationId: "pg-inv-1",
+      sourceType: "task",
+      sourceRef: "task:task-1",
+      subjectRef: "repo:/repo",
+      priority: 20,
+      status: "deferred",
+    });
+    expect(replay.id).toBe("pg-wi-1");
+    expect(replay.priority).toBe(20);
+    expect(replay.status).toBe("deferred");
+  });
+
   test("TIER-2 unported methods throw NotImplementedError (never silently no-op)", () => {
-    expect(() => storage.createWorkflow()).toThrow(NotImplementedError);
     expect(() => storage.createGoal()).toThrow(NotImplementedError);
     expect(() => storage.finalizeWorkflowRun()).toThrow(/not implemented/i);
   });

@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
 import { createSqliteLoopStorage } from "../lib/storage/sqlite.js";
+import type { Loop, WorkflowSpec } from "../types.js";
 
 const apiPath = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
 const jsonHeaders = { "content-type": "application/json" };
@@ -172,7 +173,7 @@ describe("loops-api foundation", () => {
     }
   });
 
-  test("POST /v1/import upserts id-preserving rows, preserves status/archived, is idempotent, and skips running runs", async () => {
+  test("POST /v1/import upserts id-preserving rows, pauses imported loops by default, is idempotent, and skips running runs", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
     const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
@@ -221,15 +222,41 @@ describe("loops-api foundation", () => {
         skippedRunning: 1,
       });
 
-      // id + status + archived state preserved exactly (not forced to "active").
+      // id + archived state preserved, but scheduling is deliberately disabled
+      // unless preserveLoopScheduling is explicitly requested.
       const fetched = await storage.getLoop("loop-import-1");
       expect(fetched?.id).toBe("loop-import-1");
-      expect(fetched?.status).toBe("stopped");
+      expect(fetched?.status).toBe("paused");
+      expect(fetched?.nextRunAt).toBeUndefined();
+      expect(fetched?.retryScheduledFor).toBeUndefined();
       expect(fetched?.archivedAt).toBe("2026-01-02T00:00:00.000Z");
       expect(fetched?.createdAt).toBe("2026-01-01T00:00:00.000Z");
       const importedRun = await storage.getRun("run-import-1");
       expect(importedRun?.status).toBe("succeeded");
       expect(await storage.getRun("run-import-running")).toBeUndefined();
+
+      // A default re-import overrides an existing active hosted row into a
+      // scheduler-neutral paused representation. This is stricter than ordinary
+      // no-replace row import because self-hosted backfill must not wake loops.
+      const activeLoop = {
+        ...loop,
+        id: "loop-import-active",
+        name: "imported-loop-active",
+        status: "active",
+        archivedAt: undefined,
+        archivedFromStatus: undefined,
+        nextRunAt: "2026-01-01T01:00:00.000Z",
+      };
+      await storage.upsertMigrationLoop(activeLoop as Loop, { replace: true });
+      const repause = await fetch(apiUrl(server, "/v1/import"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ loops: [activeLoop] }),
+      });
+      expect(repause.status).toBe(200);
+      const repaused = await storage.getLoop("loop-import-active");
+      expect(repaused?.status).toBe("paused");
+      expect(repaused?.nextRunAt).toBeUndefined();
 
       // Idempotent: a second import of the same ids never duplicates rows.
       const again = await fetch(apiUrl(server, "/v1/import"), {
@@ -246,9 +273,200 @@ describe("loops-api foundation", () => {
       // Count routes verify totals beyond the 1000-row list cap.
       const loopCount = await fetch(apiUrl(server, "/v1/loops/count?includeArchived=true"));
       expect(loopCount.status).toBe(200);
-      expect(await loopCount.json()).toMatchObject({ ok: true, count: 1 });
+      expect(await loopCount.json()).toMatchObject({ ok: true, count: 2 });
       const runCount = await fetch(apiUrl(server, "/v1/runs/count"));
       expect(await runCount.json()).toMatchObject({ ok: true, count: 1 });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("workflow definition APIs list/count/get and imported workflow-loop refs remain represented but paused", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+
+    const workflow = {
+      id: "workflow-import-1",
+      name: "imported-workflow",
+      version: 1,
+      status: "active",
+      steps: [{ id: "one", target: { type: "command", command: "true" } }],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const loop = {
+      id: "loop-workflow-import-1",
+      name: "imported-workflow-loop",
+      status: "active",
+      schedule: { type: "once", at: "2026-01-01T00:00:00.000Z" },
+      target: { type: "workflow", workflowId: "workflow-import-1" },
+      nextRunAt: "2026-01-01T00:00:00.000Z",
+      catchUp: "latest",
+      catchUpLimit: 50,
+      overlap: "skip",
+      maxAttempts: 1,
+      retryDelayMs: 60_000,
+      leaseMs: 1_800_000,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+
+    try {
+      const response = await fetch(apiUrl(server, "/v1/import"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ workflows: [workflow], loops: [loop] }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ ok: true, imported: { workflows: 1, loops: 1, runs: 0 } });
+
+      const list = await fetch(apiUrl(server, "/v1/workflows?limit=10"));
+      expect(list.status).toBe(200);
+      const listed = (await list.json()) as { workflows: Array<{ id: string; name: string }> };
+      expect(listed.workflows).toContainEqual(expect.objectContaining({ id: "workflow-import-1", name: "imported-workflow" }));
+
+      const count = await fetch(apiUrl(server, "/v1/workflows/count"));
+      expect(count.status).toBe(200);
+      expect(await count.json()).toMatchObject({ ok: true, count: 1 });
+
+      const get = await fetch(apiUrl(server, "/v1/workflows/workflow-import-1"));
+      expect(get.status).toBe(200);
+      expect(await get.json()).toMatchObject({
+        ok: true,
+        workflow: { id: "workflow-import-1", name: "imported-workflow", status: "archived" },
+      });
+      expect((await storage.getWorkflow("workflow-import-1"))?.status).toBe("archived");
+
+      const importedLoop = await storage.getLoop("loop-workflow-import-1");
+      expect(importedLoop?.target).toMatchObject({ type: "workflow", workflowId: "workflow-import-1" });
+      expect(importedLoop?.status).toBe("paused");
+      expect(importedLoop?.nextRunAt).toBeUndefined();
+
+      const existingActiveWorkflow = {
+        ...workflow,
+        id: "workflow-import-existing-active",
+        name: "imported-existing-active-workflow",
+        status: "active",
+      };
+      await storage.upsertMigrationWorkflow(existingActiveWorkflow as WorkflowSpec, { replace: true });
+      expect((await storage.getWorkflow("workflow-import-existing-active"))?.status).toBe("active");
+      const archiveExisting = await fetch(apiUrl(server, "/v1/import"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ workflows: [existingActiveWorkflow] }),
+      });
+      expect(archiveExisting.status).toBe(200);
+      expect((await storage.getWorkflow("workflow-import-existing-active"))?.status).toBe("archived");
+
+      const preserveWorkflow = {
+        ...workflow,
+        id: "workflow-import-preserve-active",
+        name: "imported-preserve-active-workflow",
+        status: "active",
+      };
+      const preserveResponse = await fetch(apiUrl(server, "/v1/import"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ workflows: [preserveWorkflow], preserveWorkflowActivation: true }),
+      });
+      expect(preserveResponse.status).toBe(200);
+      expect((await storage.getWorkflow("workflow-import-preserve-active"))?.status).toBe("active");
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("POST /v1/import can explicitly preserve imported loop scheduling", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+    const loop = {
+      id: "loop-import-preserve",
+      name: "imported-loop-preserve",
+      status: "active",
+      schedule: { type: "once", at: "2026-01-01T00:00:00.000Z" },
+      target: { type: "command", command: "true" },
+      nextRunAt: "2026-01-01T00:00:00.000Z",
+      retryScheduledFor: "2026-01-01T00:05:00.000Z",
+      catchUp: "latest",
+      catchUpLimit: 50,
+      overlap: "skip",
+      maxAttempts: 1,
+      retryDelayMs: 60_000,
+      leaseMs: 1_800_000,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    try {
+      const response = await fetch(apiUrl(server, "/v1/import"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ loops: [loop], preserveLoopScheduling: true }),
+      });
+      expect(response.status).toBe(200);
+      const fetched = await storage.getLoop("loop-import-preserve");
+      expect(fetched?.status).toBe("active");
+      expect(fetched?.nextRunAt).toBe("2026-01-01T00:00:00.000Z");
+      expect(fetched?.retryScheduledFor).toBe("2026-01-01T00:05:00.000Z");
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("route invocation and work-item POST routes preserve caller ids", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+    try {
+      const invocationResponse = await fetch(apiUrl(server, "/v1/invocations"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          id: "inv-import-1",
+          sourceRef: { kind: "task", id: "task-1", dedupeKey: "task-1" },
+          subjectRef: { kind: "repo", path: "/repo" },
+          intent: "route",
+        }),
+      });
+      expect(invocationResponse.status).toBe(201);
+      expect(await invocationResponse.json()).toMatchObject({ ok: true, invocation: { id: "inv-import-1" } });
+
+      const workItemResponse = await fetch(apiUrl(server, "/v1/work-items"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          id: "wi-import-1",
+          routeKey: "todos-task",
+          idempotencyKey: "task-1",
+          invocationId: "inv-import-1",
+          sourceType: "task",
+          sourceRef: "task:task-1",
+          subjectRef: "repo:/repo",
+          priority: 10,
+          status: "queued",
+        }),
+      });
+      expect(workItemResponse.status).toBe(201);
+      expect(await workItemResponse.json()).toMatchObject({ ok: true, workItem: { id: "wi-import-1", routeKey: "todos-task" } });
+      expect((await storage.getWorkflowWorkItem("wi-import-1"))?.id).toBe("wi-import-1");
+
+      const listedInvocations = await fetch(apiUrl(server, "/v1/invocations?limit=10"));
+      expect(listedInvocations.status).toBe(200);
+      expect(await listedInvocations.json()).toMatchObject({
+        ok: true,
+        invocations: [expect.objectContaining({ id: "inv-import-1" })],
+      });
+
+      const listedWorkItems = await fetch(apiUrl(server, "/v1/work-items?routeKey=todos-task&limit=10"));
+      expect(listedWorkItems.status).toBe(200);
+      expect(await listedWorkItems.json()).toMatchObject({
+        ok: true,
+        workItems: [expect.objectContaining({ id: "wi-import-1", routeKey: "todos-task" })],
+      });
     } finally {
       server.stop(true);
       await storage.close();
@@ -346,6 +564,39 @@ describe("loops-api foundation", () => {
       expect(raw.run.stdout).toBe("private stdout");
       expect(raw.run.stderr).toBe("private stderr");
       expect(raw.run.error).toBe("[redacted 13 chars]");
+
+      const secondLoop = await storage.createLoop({
+        name: "api-run-output-loop-page-2",
+        schedule: { type: "once", at: "2026-01-01T00:01:00Z" },
+        target: { type: "command", command: "true" },
+      });
+      const secondClaim = await storage.claimRun(
+        secondLoop,
+        "2026-01-01T00:01:00.000Z",
+        "api-runner",
+        new Date("2026-01-01T00:01:00Z"),
+      );
+      await storage.finalizeRun(secondClaim!.run.id, {
+        status: "succeeded",
+        finishedAt: "2026-01-01T00:01:01.000Z",
+        durationMs: 1_000,
+        stdout: "second stdout",
+        stderr: "",
+      });
+
+      const firstPageResponse = await fetch(apiUrl(server, "/v1/runs?limit=1&offset=0&showOutput=true"));
+      const firstPage = (await firstPageResponse.json()) as { runs: { id: string; stdout?: string }[] };
+      const secondPageResponse = await fetch(apiUrl(server, "/v1/runs?limit=1&offset=1&showOutput=true"));
+      const secondPage = (await secondPageResponse.json()) as { runs: { id: string; stdout?: string }[] };
+      expect(firstPageResponse.status).toBe(200);
+      expect(secondPageResponse.status).toBe(200);
+      expect(firstPage.runs).toHaveLength(1);
+      expect(secondPage.runs).toHaveLength(1);
+      expect(firstPage.runs[0]?.id).not.toBe(secondPage.runs[0]?.id);
+      expect(new Set([firstPage.runs[0]?.stdout, secondPage.runs[0]?.stdout])).toEqual(new Set(["private stdout", "second stdout"]));
+
+      const badOffset = await fetch(apiUrl(server, "/v1/runs?offset=-1"));
+      expect(badOffset.status).toBe(422);
     } finally {
       server.stop(true);
       await storage.close();
@@ -711,6 +962,53 @@ describe("loops-api foundation", () => {
       expect(claimed.claims).toHaveLength(1);
       expect(claimed.claims[0]).toMatchObject({ loop: { id: loop.id }, run: { status: "running" } });
       expect(await storage.listRuns({ loopId: loop.id, status: "running" })).toHaveLength(1);
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("GET /v1/loops paginates with offset, clamps oversized limit, and filters by name", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+    try {
+      for (let i = 0; i < 5; i += 1) {
+        await storage.createLoop({
+          name: `page-loop-${i}`,
+          schedule: { type: "once", at: "2030-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        });
+      }
+      // limit>1000 is clamped, NOT rejected with 422 and NOT an empty array.
+      const clamped = await fetch(apiUrl(server, "/v1/loops?limit=100000&includeArchived=true"));
+      expect(clamped.status).toBe(200);
+      const clampedBody = (await clamped.json()) as { ok: boolean; loops: Array<{ id: string }> };
+      expect(clampedBody.ok).toBe(true);
+      expect(clampedBody.loops).toHaveLength(5);
+
+      // offset actually skips rows (page 1 vs page 2 differ).
+      const page1 = (await (await fetch(apiUrl(server, "/v1/loops?limit=2&offset=0&includeArchived=true"))).json()) as {
+        loops: Array<{ id: string }>;
+      };
+      const page2 = (await (await fetch(apiUrl(server, "/v1/loops?limit=2&offset=2&includeArchived=true"))).json()) as {
+        loops: Array<{ id: string }>;
+      };
+      expect(page1.loops).toHaveLength(2);
+      expect(page2.loops).toHaveLength(2);
+      const overlap = page1.loops.filter((l) => page2.loops.some((p) => p.id === l.id));
+      expect(overlap).toHaveLength(0);
+
+      // name filter returns the single exact match (server-side name resolution).
+      const byName = (await (await fetch(apiUrl(server, "/v1/loops?name=page-loop-3&includeArchived=true"))).json()) as {
+        loops: Array<{ name: string }>;
+      };
+      expect(byName.loops).toHaveLength(1);
+      expect(byName.loops[0]?.name).toBe("page-loop-3");
+
+      // negative offset is a 422 (validation, not silent).
+      const badOffset = await fetch(apiUrl(server, "/v1/loops?offset=-1"));
+      expect(badOffset.status).toBe(422);
     } finally {
       server.stop(true);
       await storage.close();

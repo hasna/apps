@@ -65,11 +65,14 @@ import { initialNextRun } from "../recurrence.js";
 import { normalizeCreateWorkflowInput } from "../workflow-spec.js";
 import type {
   CreateLoopInput,
+  CreateWorkflowInvocationInput,
+  CreateWorkflowInput,
   Loop,
   LoopRun,
   LoopStatus,
   LoopTarget,
   RunReceipt,
+  UpsertWorkflowWorkItemInput,
   WorkflowSpec,
   WorkflowWorkItemStatus,
   WriteRunReceiptInput,
@@ -105,6 +108,23 @@ export class NotImplementedError extends Error {
 
 const TERMINAL_RUN_STATUSES = ["succeeded", "failed", "timed_out", "abandoned", "skipped"] as const;
 const PRUNE_BATCH_SIZE = 400;
+
+/**
+ * Postgres SQLSTATE 23505 = unique_violation. A migration/backfill import keys
+ * every row by its primary id (`ON CONFLICT(id)`), but some tables carry a
+ * SECONDARY unique constraint that a re-keyed row from another machine can trip:
+ *   - workflow_specs: partial unique on (name) WHERE status='active'
+ *   - loop_runs:      UNIQUE(loop_id, scheduled_for)
+ * When a fleet-union backfill pushes a row whose id is new but whose secondary
+ * key already exists (a different machine already owns that active-workflow name
+ * or that loop schedule slot), the `ON CONFLICT(id)` clause can't catch it and
+ * the whole batch would abort. The import treats that as "already represented"
+ * and keeps the existing owner instead of failing the backfill.
+ */
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "23505";
+}
+
 const DEFAULT_RECOVERY_BATCH_LIMIT = 100;
 const DEFAULT_RECOVERY_SCAN_MULTIPLIER = 5;
 
@@ -306,36 +326,44 @@ export class PostgresLoopStorage implements LoopStorageContract {
   async listLoops(...args: M<"listLoops">["args"]): Promise<M<"listLoops">["result"]> {
     const opts = args[0] ?? {};
     const limit = opts.limit ?? 200;
+    const offset = Math.max(0, Math.floor(opts.offset ?? 0));
     let rows: LoopRow[];
-    if (opts.status && opts.archived) {
+    // Exact-name lookup short-circuits every other filter: returns *all* loops
+    // (archived included) matching the name so callers can detect ambiguity.
+    if (opts.name != null) {
       rows = await this.client.many<LoopRow>(
-        "SELECT * FROM loops WHERE status = $1 AND archived_at IS NOT NULL ORDER BY next_run_at ASC LIMIT $2",
-        [opts.status, limit],
+        "SELECT * FROM loops WHERE name = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+        [opts.name, limit, offset],
+      );
+    } else if (opts.status && opts.archived) {
+      rows = await this.client.many<LoopRow>(
+        "SELECT * FROM loops WHERE status = $1 AND archived_at IS NOT NULL ORDER BY next_run_at ASC LIMIT $2 OFFSET $3",
+        [opts.status, limit, offset],
       );
     } else if (opts.status && opts.includeArchived) {
       rows = await this.client.many<LoopRow>(
-        "SELECT * FROM loops WHERE status = $1 ORDER BY next_run_at ASC LIMIT $2",
-        [opts.status, limit],
+        "SELECT * FROM loops WHERE status = $1 ORDER BY next_run_at ASC LIMIT $2 OFFSET $3",
+        [opts.status, limit, offset],
       );
     } else if (opts.status) {
       rows = await this.client.many<LoopRow>(
-        "SELECT * FROM loops WHERE status = $1 AND archived_at IS NULL ORDER BY next_run_at ASC LIMIT $2",
-        [opts.status, limit],
+        "SELECT * FROM loops WHERE status = $1 AND archived_at IS NULL ORDER BY next_run_at ASC LIMIT $2 OFFSET $3",
+        [opts.status, limit, offset],
       );
     } else if (opts.archived) {
       rows = await this.client.many<LoopRow>(
-        "SELECT * FROM loops WHERE archived_at IS NOT NULL ORDER BY archived_at DESC LIMIT $1",
-        [limit],
+        "SELECT * FROM loops WHERE archived_at IS NOT NULL ORDER BY archived_at DESC LIMIT $1 OFFSET $2",
+        [limit, offset],
       );
     } else if (opts.includeArchived) {
       rows = await this.client.many<LoopRow>(
-        "SELECT * FROM loops ORDER BY status ASC, next_run_at ASC LIMIT $1",
-        [limit],
+        "SELECT * FROM loops ORDER BY status ASC, next_run_at ASC LIMIT $1 OFFSET $2",
+        [limit, offset],
       );
     } else {
       rows = await this.client.many<LoopRow>(
-        "SELECT * FROM loops WHERE archived_at IS NULL ORDER BY status ASC, next_run_at ASC LIMIT $1",
-        [limit],
+        "SELECT * FROM loops WHERE archived_at IS NULL ORDER BY status ASC, next_run_at ASC LIMIT $1 OFFSET $2",
+        [limit, offset],
       );
     }
     return rows.map(rowToLoop);
@@ -497,30 +525,44 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const [workflow, opts = {}] = args as [WorkflowSpec, { replace?: boolean }?];
     const existing = await this.getWorkflow(workflow.id);
     if (existing && !opts.replace) return existing;
-    await this.client.execute(
-      `INSERT INTO workflow_specs (id, name, description, version, status, goal_json, steps_json, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9)
-       ON CONFLICT(id) DO UPDATE SET
-         name=EXCLUDED.name,
-         description=EXCLUDED.description,
-         version=EXCLUDED.version,
-         status=EXCLUDED.status,
-         goal_json=EXCLUDED.goal_json,
-         steps_json=EXCLUDED.steps_json,
-         created_at=EXCLUDED.created_at,
-         updated_at=EXCLUDED.updated_at`,
-      [
-        workflow.id,
-        workflow.name,
-        workflow.description ?? null,
-        workflow.version,
-        workflow.status,
-        workflow.goal ? JSON.stringify(workflow.goal) : null,
-        JSON.stringify(workflow.steps),
-        workflow.createdAt,
-        workflow.updatedAt,
-      ],
-    );
+    try {
+      await this.client.execute(
+        `INSERT INTO workflow_specs (id, name, description, version, status, goal_json, steps_json, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9)
+         ON CONFLICT(id) DO UPDATE SET
+           name=EXCLUDED.name,
+           description=EXCLUDED.description,
+           version=EXCLUDED.version,
+           status=EXCLUDED.status,
+           goal_json=EXCLUDED.goal_json,
+           steps_json=EXCLUDED.steps_json,
+           created_at=EXCLUDED.created_at,
+           updated_at=EXCLUDED.updated_at`,
+        [
+          workflow.id,
+          workflow.name,
+          workflow.description ?? null,
+          workflow.version,
+          workflow.status,
+          workflow.goal ? JSON.stringify(workflow.goal) : null,
+          JSON.stringify(workflow.steps),
+          workflow.createdAt,
+          workflow.updatedAt,
+        ],
+      );
+    } catch (error) {
+      // Secondary unique: another active workflow already owns this name (a
+      // different id from another machine). ON CONFLICT(id) can't catch it. Keep
+      // the existing active owner rather than aborting the fleet-union backfill.
+      if (isUniqueViolation(error)) {
+        const owner = await this.client.get<WorkflowRow>(
+          "SELECT * FROM workflow_specs WHERE name = $1 AND status = 'active' LIMIT 1",
+          [workflow.name],
+        );
+        if (owner) return rowToWorkflow(owner);
+      }
+      throw error;
+    }
     const imported = await this.getWorkflow(workflow.id);
     if (!imported) throw new Error(`workflow not found after migration import: ${workflow.id}`);
     return imported;
@@ -590,6 +632,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
     if (run.status === "running") throw new ValidationError(`cannot import running run ${run.id}`);
     const existing = await this.loadRun(this.client, run.id);
     if (existing && !opts.replace) return existing;
+    try {
     await this.client.execute(
       `INSERT INTO loop_runs (id, loop_id, loop_name, scheduled_for, attempt, status, started_at, finished_at,
         claimed_by, claim_token, lease_expires_at, pid, pgid, process_started_at, exit_code, duration_ms,
@@ -641,6 +684,17 @@ export class PostgresLoopStorage implements LoopStorageContract {
         run.updatedAt,
       ],
     );
+    } catch (error) {
+      // Secondary unique: a run for this (loop_id, scheduled_for) slot already
+      // exists under a different id (another machine ran the same shared loop at
+      // the same slot). ON CONFLICT(id) can't catch it; the slot can hold only
+      // one run, so keep the existing occupant rather than aborting the backfill.
+      if (isUniqueViolation(error)) {
+        const slot = await this.loadRunBySlot(this.client, run.loopId, run.scheduledFor);
+        if (slot) return slot;
+      }
+      throw error;
+    }
     const imported = await this.loadRun(this.client, run.id);
     if (!imported) throw new Error(`run not found after migration import: ${run.id}`);
     return imported;
@@ -862,24 +916,25 @@ export class PostgresLoopStorage implements LoopStorageContract {
   async listRuns(...args: M<"listRuns">["args"]): Promise<M<"listRuns">["result"]> {
     const opts = args[0] ?? {};
     const limit = opts.limit ?? 100;
+    const offset = Math.max(0, Math.floor(opts.offset ?? 0));
     let rows: RunRow[];
     if (opts.loopId && opts.status) {
       rows = await this.client.many<RunRow>(
-        "SELECT * FROM loop_runs WHERE loop_id = $1 AND status = $2 ORDER BY created_at DESC LIMIT $3",
-        [opts.loopId, opts.status, limit],
+        "SELECT * FROM loop_runs WHERE loop_id = $1 AND status = $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4",
+        [opts.loopId, opts.status, limit, offset],
       );
     } else if (opts.loopId) {
       rows = await this.client.many<RunRow>(
-        "SELECT * FROM loop_runs WHERE loop_id = $1 ORDER BY created_at DESC LIMIT $2",
-        [opts.loopId, limit],
+        "SELECT * FROM loop_runs WHERE loop_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+        [opts.loopId, limit, offset],
       );
     } else if (opts.status) {
       rows = await this.client.many<RunRow>(
-        "SELECT * FROM loop_runs WHERE status = $1 ORDER BY created_at DESC LIMIT $2",
-        [opts.status, limit],
+        "SELECT * FROM loop_runs WHERE status = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+        [opts.status, limit, offset],
       );
     } else {
-      rows = await this.client.many<RunRow>("SELECT * FROM loop_runs ORDER BY created_at DESC LIMIT $1", [limit]);
+      rows = await this.client.many<RunRow>("SELECT * FROM loop_runs ORDER BY created_at DESC LIMIT $1 OFFSET $2", [limit, offset]);
     }
     return rows.map(rowToRun);
   }
@@ -1438,17 +1493,184 @@ export class PostgresLoopStorage implements LoopStorageContract {
   // sqlite Store (manifest staging, goal status rollups, step sequencing). These
   // throw loudly rather than silently no-op. Port order matches sqlite Store.
 
-  createWorkflow(): never {
-    throw new NotImplementedError("createWorkflow");
+  async createWorkflow(...args: M<"createWorkflow">["args"]): Promise<M<"createWorkflow">["result"]> {
+    const [input] = args as [CreateWorkflowInput];
+    const normalized = normalizeCreateWorkflowInput(input);
+    const now = nowIso();
+    const workflow: WorkflowSpec = {
+      id: genId(),
+      name: normalized.name,
+      description: normalized.description,
+      version: normalized.version ?? 1,
+      status: "active",
+      goal: normalized.goal,
+      steps: normalized.steps,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.client.execute(
+      `INSERT INTO workflow_specs (id, name, description, version, status, goal_json, steps_json, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9)`,
+      [
+        workflow.id,
+        workflow.name,
+        workflow.description ?? null,
+        workflow.version,
+        workflow.status,
+        workflow.goal ? JSON.stringify(workflow.goal) : null,
+        JSON.stringify(workflow.steps),
+        workflow.createdAt,
+        workflow.updatedAt,
+      ],
+    );
+    return workflow;
   }
-  archiveWorkflow(): never {
-    throw new NotImplementedError("archiveWorkflow");
+  async archiveWorkflow(...args: M<"archiveWorkflow">["args"]): Promise<M<"archiveWorkflow">["result"]> {
+    const [idOrName] = args as [string];
+    // The hosted ApiStore resolves name→id client-side before POSTing to
+    // /workflows/:id/archive, so `idOrName` is normally an id. Fall back to an
+    // active-name lookup to stay behaviour-compatible with the sqlite Store.
+    const existing =
+      (await this.loadWorkflow(this.client, idOrName)) ??
+      (await this.client
+        .get<WorkflowRow>("SELECT * FROM workflow_specs WHERE name = $1 AND status = 'active' ORDER BY updated_at DESC LIMIT 1", [idOrName])
+        .then((row) => (row ? rowToWorkflow(row) : undefined)));
+    if (!existing) throw new Error(`workflow not found: ${idOrName}`);
+    const updated = nowIso();
+    await this.client.execute("UPDATE workflow_specs SET status='archived', updated_at=$1 WHERE id=$2", [updated, existing.id]);
+    const archived = await this.getWorkflow(existing.id);
+    if (!archived) throw new Error(`workflow not found after archive: ${existing.id}`);
+    return archived;
   }
-  createWorkflowInvocation(): never {
-    throw new NotImplementedError("createWorkflowInvocation");
+  async createWorkflowInvocation(
+    ...args: M<"createWorkflowInvocation">["args"]
+  ): Promise<M<"createWorkflowInvocation">["result"]> {
+    const [input] = args as [CreateWorkflowInvocationInput];
+    const now = nowIso();
+    const sourceDedupeKey = input.sourceRef.dedupeKey ?? undefined;
+    if (sourceDedupeKey) {
+      const existing = await this.client.get<WorkflowInvocationRow>(
+        "SELECT * FROM workflow_invocations WHERE source_kind = $1 AND source_dedupe_key = $2 LIMIT 1",
+        [input.sourceRef.kind, sourceDedupeKey],
+      );
+      if (existing) return rowToWorkflowInvocation(existing);
+    }
+    const id = input.id ?? genId();
+    await this.client.execute(
+      `INSERT INTO workflow_invocations (id, workflow_id, template_id, source_kind, source_id, source_dedupe_key,
+        source_json, subject_kind, subject_id, subject_path, subject_url, subject_json, intent, scope_json,
+        output_policy_json, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12::jsonb,$13,$14::jsonb,$15::jsonb,$16,$17)`,
+      [
+        id,
+        input.workflowId ?? null,
+        input.templateId ?? null,
+        input.sourceRef.kind,
+        input.sourceRef.id ?? null,
+        sourceDedupeKey ?? null,
+        JSON.stringify(input.sourceRef),
+        input.subjectRef.kind,
+        input.subjectRef.id ?? null,
+        input.subjectRef.path ?? null,
+        input.subjectRef.url ?? null,
+        JSON.stringify(input.subjectRef),
+        input.intent,
+        input.scope ? JSON.stringify(input.scope) : null,
+        input.outputPolicy ? JSON.stringify(input.outputPolicy) : null,
+        now,
+        now,
+      ],
+    );
+    const row = await this.client.get<WorkflowInvocationRow>(
+      "SELECT * FROM workflow_invocations WHERE id = $1",
+      [id],
+    );
+    if (!row) throw new Error(`workflow invocation not found after create: ${id}`);
+    return rowToWorkflowInvocation(row);
   }
-  upsertWorkflowWorkItem(): never {
-    throw new NotImplementedError("upsertWorkflowWorkItem");
+
+  async upsertWorkflowWorkItem(
+    ...args: M<"upsertWorkflowWorkItem">["args"]
+  ): Promise<M<"upsertWorkflowWorkItem">["result"]> {
+    const [input] = args as [UpsertWorkflowWorkItemInput];
+    const now = nowIso();
+    const id = input.id ?? genId();
+    const status = input.status ?? "queued";
+    await this.client.execute(
+      `INSERT INTO workflow_work_items (id, route_key, idempotency_key, invocation_id, source_type, source_ref,
+        subject_ref, project_key, project_group, machine_id, route_scope, priority, status, attempts, next_attempt_at,
+        lease_expires_at, workflow_id, loop_id, workflow_run_id, last_reason, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,0,$14,NULL,NULL,NULL,NULL,$15,$16,$17)
+       ON CONFLICT(route_key, idempotency_key) DO UPDATE SET
+        invocation_id=excluded.invocation_id,
+        source_type=excluded.source_type,
+        source_ref=excluded.source_ref,
+        subject_ref=excluded.subject_ref,
+        project_key=excluded.project_key,
+        project_group=excluded.project_group,
+        machine_id=CASE
+          WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running', 'failed', 'dead_letter', 'cancelled') THEN workflow_work_items.machine_id
+          ELSE excluded.machine_id
+        END,
+        route_scope=excluded.route_scope,
+        priority=excluded.priority,
+        status=CASE
+          WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running', 'failed', 'dead_letter', 'cancelled')
+            THEN workflow_work_items.status
+          ELSE excluded.status
+        END,
+        workflow_id=CASE
+          WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running', 'failed', 'dead_letter', 'cancelled') THEN workflow_work_items.workflow_id
+          ELSE NULL
+        END,
+        loop_id=CASE
+          WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running', 'failed', 'dead_letter', 'cancelled') THEN workflow_work_items.loop_id
+          ELSE NULL
+        END,
+        workflow_run_id=CASE
+          WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running', 'failed', 'dead_letter', 'cancelled') THEN workflow_work_items.workflow_run_id
+          ELSE NULL
+        END,
+        lease_expires_at=CASE
+          WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running', 'failed', 'dead_letter', 'cancelled') THEN workflow_work_items.lease_expires_at
+          ELSE NULL
+        END,
+        next_attempt_at=excluded.next_attempt_at,
+        last_reason=CASE
+          WHEN workflow_work_items.attempts > 0
+            AND workflow_work_items.status IN ('queued', 'deferred')
+            AND workflow_work_items.last_reason IS NOT NULL
+            AND excluded.last_reason IS NOT NULL
+            THEN workflow_work_items.last_reason || '; ' || excluded.last_reason
+          ELSE COALESCE(excluded.last_reason, workflow_work_items.last_reason)
+        END,
+        updated_at=excluded.updated_at`,
+      [
+        id,
+        input.routeKey,
+        input.idempotencyKey,
+        input.invocationId,
+        input.sourceType,
+        input.sourceRef,
+        input.subjectRef,
+        input.projectKey ?? null,
+        input.projectGroup ?? null,
+        input.machineId ?? null,
+        input.routeScope ?? null,
+        input.priority ?? 0,
+        status,
+        input.nextAttemptAt ?? null,
+        input.lastReason ?? null,
+        now,
+        now,
+      ],
+    );
+    const row = await this.client.get<WorkflowWorkItemRow>(
+      "SELECT * FROM workflow_work_items WHERE route_key = $1 AND idempotency_key = $2 LIMIT 1",
+      [input.routeKey, input.idempotencyKey],
+    );
+    if (!row) throw new Error(`workflow work item not found after upsert: ${input.routeKey}/${input.idempotencyKey}`);
+    return rowToWorkflowWorkItem(row);
   }
   admitWorkflowWorkItem(): never {
     throw new NotImplementedError("admitWorkflowWorkItem");

@@ -159,6 +159,12 @@ refuses to write a no-loss bundle unless the operator explicitly uses
 requires `--apply`; existing rows with the same id are updated only with
 `--replace`. The CLI creates a local SQLite backup before a safe apply.
 
+`loops self-hosted push` applies an additional self-hosted safety rule. Imported
+workflow definitions are archived, and imported loops are paused with
+`nextRunAt`/`retryScheduledFor` cleared. That safety normalization can re-archive
+or re-pause existing same-id rows even when `--replace` is not supplied; explicit
+preserve flags are reserved for deliberate activation.
+
 No-loss validation blocks unsupported or live state instead of silently
 dropping it. The current migration bundle does not preserve workflow invocation
 rows, workflow work items, workflow run/step/event history, or goal run history.

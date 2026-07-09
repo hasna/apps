@@ -103,6 +103,14 @@
             }
           },
           {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
             "name": "includeArchived",
             "in": "query",
             "required": false,
@@ -377,6 +385,22 @@
             "schema": {
               "type": "integer"
             }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "showOutput",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -433,6 +457,14 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "showOutput",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -453,7 +485,7 @@
       "post": {
         "operationId": "importRows",
         "summary": "Bulk id-preserving import (self-hosted backfill)",
-        "description": "Upsert full workflow/loop/run rows by id (idempotent; ON CONFLICT(id) DO UPDATE). Preserves id, status, archived state, and timestamps. Applied FK-safe: workflows, then loops, then runs. Volatile running runs are skipped and reported.",
+        "description": "Upsert full workflow/loop/run rows by id (idempotent; ON CONFLICT(id) DO UPDATE). Preserves ids, definitions, and timestamps while applying safe defaults: imported workflows are archived, imported loops are paused, and nextRunAt/retryScheduledFor are cleared by default so backfills never schedule immediately. Set preserveWorkflowActivation=true or preserveLoopScheduling=true only for intentional activation. Applied FK-safe: workflows, then loops, then runs. Volatile running runs are skipped and reported.",
         "requestBody": {
           "required": true,
           "content": {
@@ -471,6 +503,260 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ImportResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/workflows": {
+      "get": {
+        "operationId": "listWorkflows",
+        "summary": "List workflow specs",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "archived"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "workflow specs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowListResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createWorkflow",
+        "summary": "Create a workflow spec",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWorkflowInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "workflow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/workflows/count": {
+      "get": {
+        "operationId": "countWorkflows",
+        "summary": "Count workflow specs",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "count",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CountResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/workflows/{id}": {
+      "get": {
+        "operationId": "getWorkflow",
+        "summary": "Get a workflow spec by id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "workflow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/invocations": {
+      "get": {
+        "operationId": "listWorkflowInvocations",
+        "summary": "List workflow route invocations",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "workflow invocations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowInvocationListResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createWorkflowInvocation",
+        "summary": "Create an id-preserving workflow route invocation",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWorkflowInvocationInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "workflow invocation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowInvocationResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/work-items": {
+      "get": {
+        "operationId": "listWorkflowWorkItems",
+        "summary": "List workflow route work items",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "routeKey",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "workflow work items",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowWorkItemListResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "upsertWorkflowWorkItem",
+        "summary": "Upsert an id-preserving workflow route work item",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertWorkflowWorkItemInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "workflow work item",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowWorkItemResponse"
                 }
               }
             }
@@ -1080,6 +1366,352 @@
           "receipts"
         ]
       },
+      "Workflow": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "version": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "goal": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "version",
+          "status",
+          "steps"
+        ]
+      },
+      "CreateWorkflowInput": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "goal": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "name",
+          "steps"
+        ]
+      },
+      "WorkflowResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/Workflow"
+          }
+        },
+        "required": [
+          "ok",
+          "workflow"
+        ]
+      },
+      "WorkflowListResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "workflows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Workflow"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "workflows"
+        ]
+      },
+      "CreateWorkflowInvocationInput": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "workflowId": {
+            "type": "string"
+          },
+          "templateId": {
+            "type": "string"
+          },
+          "sourceRef": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "subjectRef": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "intent": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "outputPolicy": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "sourceRef",
+          "subjectRef",
+          "intent"
+        ]
+      },
+      "WorkflowInvocation": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/CreateWorkflowInvocationInput"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "updatedAt": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "createdAt",
+              "updatedAt"
+            ]
+          }
+        ]
+      },
+      "WorkflowInvocationResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "invocation": {
+            "$ref": "#/components/schemas/WorkflowInvocation"
+          }
+        },
+        "required": [
+          "ok",
+          "invocation"
+        ]
+      },
+      "WorkflowInvocationListResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "invocations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowInvocation"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "invocations"
+        ]
+      },
+      "WorkflowWorkItem": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "routeKey": {
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "invocationId": {
+            "type": "string"
+          },
+          "sourceType": {
+            "type": "string"
+          },
+          "sourceRef": {
+            "type": "string"
+          },
+          "subjectRef": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "integer"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "routeKey",
+          "idempotencyKey",
+          "invocationId",
+          "sourceType",
+          "sourceRef",
+          "subjectRef",
+          "status",
+          "priority"
+        ]
+      },
+      "UpsertWorkflowWorkItemInput": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "routeKey": {
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "invocationId": {
+            "type": "string"
+          },
+          "sourceType": {
+            "type": "string"
+          },
+          "sourceRef": {
+            "type": "string"
+          },
+          "subjectRef": {
+            "type": "string"
+          },
+          "projectKey": {
+            "type": "string"
+          },
+          "projectGroup": {
+            "type": "string"
+          },
+          "machineId": {
+            "type": "string"
+          },
+          "routeScope": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "deferred"
+            ]
+          },
+          "nextAttemptAt": {
+            "type": "string"
+          },
+          "lastReason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "routeKey",
+          "idempotencyKey",
+          "invocationId",
+          "sourceType",
+          "sourceRef",
+          "subjectRef"
+        ]
+      },
+      "WorkflowWorkItemResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "workItem": {
+            "$ref": "#/components/schemas/WorkflowWorkItem"
+          }
+        },
+        "required": [
+          "ok",
+          "workItem"
+        ]
+      },
+      "WorkflowWorkItemListResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "workItems": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowWorkItem"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "workItems"
+        ]
+      },
       "ImportInput": {
         "type": "object",
         "description": "Batches of full rows to upsert by id. Any array may be omitted.",
@@ -1107,7 +1739,15 @@
           },
           "replace": {
             "type": "boolean",
-            "description": "Update existing rows whose id matches (default false: existing rows are left unchanged)."
+            "description": "Update existing rows whose id matches. Default safe imports may still archive/pause same-id workflows/loops when preserve flags are false."
+          },
+          "preserveLoopScheduling": {
+            "type": "boolean",
+            "description": "Default false. When false, imported loops are written paused with nextRunAt and retryScheduledFor cleared so backfills never schedule immediately."
+          },
+          "preserveWorkflowActivation": {
+            "type": "boolean",
+            "description": "Default false. When false, imported workflows are written archived, including same-id active rows, so backfills cannot activate workflow execution unless explicitly requested."
           }
         }
       },

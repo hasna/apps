@@ -5,7 +5,42 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## 0.4.26
+
+### Fixed
+
+- `PostgresLoopStorage.createWorkflow` is now implemented (ported from the sqlite
+  `Store`), so `POST /v1/workflows` on the self-hosted server persists workflow
+  specs instead of returning `500 not_implemented`. This unblocks the cloud-mode
+  CLI `workflows create` / `templates create-workflow` and the MCP workflow
+  tools. `archiveWorkflow` is likewise ported so `POST /v1/workflows/:id/archive`
+  works on the Postgres backend. Requires an ECS redeploy of the loops server
+  image for the live self-hosted API to pick up the new endpoints.
+
 ## Unreleased
+
+### Added
+
+- `loops-mcp` now serves a shared Streamable HTTP transport (default
+  `http://127.0.0.1:8890/mcp`, `GET /health`) in addition to stdio. Running
+  it as one long-lived daemon with the routing env baked in (e.g.
+  `HASNA_LOOPS_API_URL` + `HASNA_LOOPS_API_KEY`) makes every connecting agent
+  route CRUD deterministically to the same backend regardless of the caller's
+  own shell environment (including non-login SSH). Select the transport with
+  `--http`/`MCP_HTTP=1` (default) or `--stdio`/`MCP_STDIO=1`; the port is set
+  via `--port` or `MCP_HTTP_PORT`.
+
+### Changed
+
+- Documentation now names `loops-serve` as the Postgres-backed Hasna-owned
+  self-hosted control-plane host, keeps `loops-api` as the shared embeddable API
+  contract, and reserves `cloud` wording for the hosted SaaS contract rather
+  than the Hasna-owned self-hosted deployment.
+- The cutover and migration docs now match the 0.4.14 self-hosted backend:
+  `PostgresLoopStorage`, API-key auth, HTTP SDK, ARM64 deploy artifacts, and
+  `loops-serve migrate` are shipped; long-running runner daemon mode, workflow
+  execution over the runner protocol, and id-preserving remote import remain
+  follow-up work.
 
 ## 0.4.18 (2026-07-07/08)
 
@@ -93,16 +128,6 @@ documented below.
   database whose floor it meets, preserves the newer `user_version` stamp
   (never downgrades it), and refuses only on a known-breaking delta or when the
   floor row is absent (pre-contract/unblessed databases stay conservative).
-
-- Documentation now names `loops-serve` as the Postgres-backed Hasna-owned
-  self-hosted control-plane host, keeps `loops-api` as the shared embeddable API
-  contract, and reserves `cloud` wording for the hosted SaaS contract rather
-  than the Hasna-owned self-hosted deployment.
-- The cutover and migration docs now match the 0.4.14 self-hosted backend:
-  `PostgresLoopStorage`, API-key auth, HTTP SDK, ARM64 deploy artifacts, and
-  `loops-serve migrate` are shipped; long-running runner daemon mode, workflow
-  execution over the runner protocol, and id-preserving remote import remain
-  follow-up work.
 
 ## 0.4.15 – 0.4.17 (2026-07-06/07 — unpublished; first shipped with 0.4.18)
 

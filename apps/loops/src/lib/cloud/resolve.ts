@@ -37,7 +37,15 @@ export function resolveCloudStorage(name: string, env: Env = process.env): Cloud
   const token = envToken(name);
   const modeKeys = [`HASNA_${token}_STORAGE_MODE`, `HASNA_${token}_MODE`, `${token}_STORAGE_MODE`, `${token}_MODE`];
   const apiUrlKeys = [`HASNA_${token}_API_URL`, `${token}_API_URL`];
-  const apiKeyKeys = [`HASNA_${token}_API_KEY`, `${token}_API_KEY`];
+  // Accept `_API_TOKEN` aliases too so the control-plane bearer secret
+  // (LOOPS_API_TOKEN / HASNA_LOOPS_API_TOKEN, used by doctor/import/migration)
+  // also enables read/write routing. Keep in sync with clientTransportEnvKeys().
+  const apiKeyKeys = [
+    `HASNA_${token}_API_KEY`,
+    `${token}_API_KEY`,
+    `HASNA_${token}_API_TOKEN`,
+    `${token}_API_TOKEN`,
+  ];
 
   const explicitMode = firstValue(env, modeKeys);
   // Explicit local pin wins — reversible escape hatch.

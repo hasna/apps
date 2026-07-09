@@ -7,13 +7,27 @@ import { fileURLToPath } from "node:url";
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { Store } from "../lib/store.js";
+import { createSqliteLoopStorage } from "../lib/storage/sqlite.js";
+import { applySelfHostedPush } from "../lib/migration.js";
 import { RESTART_INTERRUPTED_RUN_PREFIX } from "../lib/health.js";
 
 const cliPath = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
 
 function runCli(dataDir: string, args: string[], input?: string, env: Record<string, string> = {}) {
+  const isolatedEnv = {
+    HASNA_LOOPS_STORAGE_MODE: "local",
+    LOOPS_API_URL: "",
+    HASNA_LOOPS_API_URL: "",
+    LOOPS_CLOUD_API_URL: "",
+    HASNA_LOOPS_CLOUD_API_URL: "",
+    LOOPS_API_TOKEN: "",
+    HASNA_LOOPS_API_TOKEN: "",
+    HASNA_LOOPS_API_KEY: "",
+    LOOPS_CLOUD_TOKEN: "",
+    HASNA_LOOPS_CLOUD_TOKEN: "",
+  };
   return spawnSync(process.execPath, [cliPath, ...args], {
-    env: { ...process.env, ...env, LOOPS_DATA_DIR: dataDir },
+    env: { ...process.env, ...isolatedEnv, ...env, LOOPS_DATA_DIR: dataDir },
     input,
     encoding: "utf8",
   });
@@ -432,6 +446,65 @@ describe("loops CLI", () => {
       const documented = runCli(dataDir, ["--json", "self-hosted", command, "--dry-run"]);
       expect(documented.status).toBe(0);
       expect(JSON.parse(documented.stdout).operation).toBe(`self-hosted-${command}`);
+    }
+  });
+
+  test("self-hosted push applies id-preserving definitions paused/disabled and writes a manifest", async () => {
+    const mod = await import("../api/index.js");
+    const sourceDir = freshDataDir("loops-cli-self-hosted-push-source-");
+    const remoteStorage = createSqliteLoopStorage(":memory:");
+    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage: remoteStorage });
+    let workflowId = "";
+    let loopId = "";
+
+    const source = new Store(join(sourceDir, "loops.db"));
+    try {
+      const workflow = source.createWorkflow({
+        name: "push-workflow",
+        steps: [{ id: "one", target: { type: "command", command: "true" } }],
+      });
+      const loop = source.createLoop({
+        name: "push-loop",
+        schedule: { type: "once", at: futureAt() },
+        target: { type: "workflow", workflowId: workflow.id },
+      });
+      workflowId = workflow.id;
+      loopId = loop.id;
+      expect(loop.status).toBe("active");
+    } finally {
+      source.close();
+    }
+
+    try {
+      const source = new Store(join(sourceDir, "loops.db"));
+      const output = await applySelfHostedPush(source, {
+        apiUrl: `http://${server.hostname}:${server.port}`,
+        includeRuns: false,
+      });
+      source.close();
+      expect(output.ok).toBe(true);
+      expect(output.manifest.safety).toMatchObject({
+        forcedLoopStatus: "paused",
+        clearedLoopRunPointers: true,
+        forcedWorkflowStatus: "archived",
+        resumesLoops: false,
+      });
+
+      const manifest = output.manifest;
+      expect(manifest.missingIds.workflows).toEqual([workflowId]);
+      expect(manifest.missingIds.loops).toEqual([loopId]);
+      expect(manifest.counts.applied).toMatchObject({ workflows: 1, loops: 1, runs: 0 });
+      expect(manifest.rollback.notes.join(" ")).toContain("manual");
+
+      const remoteWorkflow = await remoteStorage.getWorkflow(workflowId);
+      expect(remoteWorkflow?.status).toBe("archived");
+      const remoteLoop = await remoteStorage.getLoop(loopId);
+      expect(remoteLoop?.status).toBe("paused");
+      expect(remoteLoop?.nextRunAt).toBeUndefined();
+      expect(remoteLoop?.retryScheduledFor).toBeUndefined();
+    } finally {
+      server.stop(true);
+      await remoteStorage.close();
     }
   });
 
@@ -4223,6 +4296,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task provider rules fall back to fixed Codewith pools and reject invalid hints", () => {
+    // Spawns ~40 CLI subprocesses serially; exceeds the 5s default under load.
     const dataDir = freshDataDir("loops-cli-event-provider-fallback-");
     const repo = createGitRepo("loops-cli-event-provider-fallback-repo-");
     const event = {
@@ -4640,7 +4714,7 @@ describe("loops CLI", () => {
     expect(invalid.status).not.toBe(0);
     expect(invalid.stderr).toContain("unsupported provider");
     expect(invalid.stderr).toContain("unsupported-provider");
-  });
+  }, 60000);
 
   test("todos task PR approval routes require non-author GitHub reviewer evidence", () => {
     const dataDir = freshDataDir("loops-cli-event-pr-review-routing-");
@@ -4653,6 +4727,7 @@ describe("loops CLI", () => {
         title: "Approve blocked PR",
         working_dir: "/tmp/open-loops",
         tags: ["auto:route"],
+        pr_state: "OPEN",
         description: [
           "GitHub PR #1 author is also andrei-hasna.",
           "reviewDecision=REVIEW_REQUIRED",
@@ -9190,5 +9265,46 @@ describe("loops CLI", () => {
     expect(remaining).toEqual(backupNames.slice(2));
     expect(JSON.parse(runCli(dataDir, ["--json", "runs", "gc-target"]).stdout)).toEqual([]);
     expect(JSON.parse(runCli(dataDir, ["--json", "list"]).stdout)).toHaveLength(1);
+  });
+});
+
+describe("local-only guards under a cloud-flipped client", () => {
+  // With both API vars set the client resolves to the hosted /v1 transport, so
+  // any command that can only act on this machine's local sqlite runtime must
+  // fail loudly instead of silently reading/writing the on-box island (the
+  // split-brain we forbid). No HTTP is issued: the guard fires before any call.
+  const CLOUD_ENV = {
+    HASNA_LOOPS_STORAGE_MODE: "",
+    HASNA_LOOPS_API_URL: "https://loops.example.test",
+    HASNA_LOOPS_API_KEY: "do-not-print-this-key",
+  } as const;
+  const FLIP_MESSAGE = "not available while flipped to the hosted OpenLoops API";
+
+  test("route admission, drain, live UI, run-now, and tick fail loudly when flipped", () => {
+    const dataDir = freshDataDir("loops-cli-cloud-guard-");
+    for (const args of [
+      ["routes", "create", "todos-task"],
+      ["routes", "drain", "todos-task"],
+      ["events", "handle", "todos-task"],
+      ["events", "drain", "todos-task"],
+      ["ui"],
+      ["run-now", "anything"],
+      ["tick"],
+    ]) {
+      const result = runCli(dataDir, args, undefined, CLOUD_ENV);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(FLIP_MESSAGE);
+      // The bearer key must never leak into output while the guard rejects.
+      expect(result.stdout).not.toContain("do-not-print-this-key");
+      expect(result.stderr).not.toContain("do-not-print-this-key");
+    }
+  });
+
+  test("route preview (dry-run) is store-free, so it is NOT blocked when flipped", () => {
+    const dataDir = freshDataDir("loops-cli-cloud-guard-preview-");
+    // Preview never opens the Store, so the local-only guard must not fire; it may
+    // still fail for missing event input, but not with the flip message.
+    const result = runCli(dataDir, ["routes", "preview", "todos-task"], undefined, CLOUD_ENV);
+    expect(result.stderr).not.toContain(FLIP_MESSAGE);
   });
 });

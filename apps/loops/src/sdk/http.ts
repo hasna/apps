@@ -35,6 +35,36 @@ export interface RunReceiptResponse { "ok": boolean; "receipt": RunReceipt }
 
 export interface RunReceiptListResponse { "ok": boolean; "receipts": Array<RunReceipt> }
 
+export interface Workflow { "id": string; "name": string; "description"?: string | null; "version": number; "status": string; "steps": Array<Record<string, unknown>>; "goal"?: Record<string, unknown>; "createdAt"?: string; "updatedAt"?: string }
+
+export interface CreateWorkflowInput { "name": string; "description"?: string; "steps": Array<Record<string, unknown>>; "goal"?: Record<string, unknown> }
+
+export interface WorkflowResponse { "ok": boolean; "workflow": Workflow }
+
+export interface WorkflowListResponse { "ok": boolean; "workflows": Array<Workflow> }
+
+export interface CreateWorkflowInvocationInput { "id"?: string; "workflowId"?: string; "templateId"?: string; "sourceRef": Record<string, unknown>; "subjectRef": Record<string, unknown>; "intent": string; "scope"?: Record<string, unknown>; "outputPolicy"?: Record<string, unknown> }
+
+export type WorkflowInvocation = CreateWorkflowInvocationInput & { "id": string; "createdAt": string; "updatedAt": string };
+
+export interface WorkflowInvocationResponse { "ok": boolean; "invocation": WorkflowInvocation }
+
+export interface WorkflowInvocationListResponse { "ok": boolean; "invocations": Array<WorkflowInvocation> }
+
+export interface WorkflowWorkItem { "id": string; "routeKey": string; "idempotencyKey": string; "invocationId": string; "sourceType": string; "sourceRef": string; "subjectRef": string; "status": string; "priority": number; "createdAt"?: string; "updatedAt"?: string }
+
+export interface UpsertWorkflowWorkItemInput { "id"?: string; "routeKey": string; "idempotencyKey": string; "invocationId": string; "sourceType": string; "sourceRef": string; "subjectRef": string; "projectKey"?: string; "projectGroup"?: string; "machineId"?: string; "routeScope"?: string; "priority"?: number; "status"?: "queued" | "deferred"; "nextAttemptAt"?: string; "lastReason"?: string }
+
+export interface WorkflowWorkItemResponse { "ok": boolean; "workItem": WorkflowWorkItem }
+
+export interface WorkflowWorkItemListResponse { "ok": boolean; "workItems": Array<WorkflowWorkItem> }
+
+export interface ImportInput { "workflows"?: Array<Record<string, unknown>>; "loops"?: Array<Record<string, unknown>>; "runs"?: Array<Record<string, unknown>>; "replace"?: boolean; "preserveLoopScheduling"?: boolean; "preserveWorkflowActivation"?: boolean }
+
+export interface ImportResponse { "ok": boolean; "imported": { "workflows": number; "loops": number; "runs": number }; "skippedRunning": number }
+
+export interface CountResponse { "ok": boolean; "count": number }
+
 export interface LoopsClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */
   baseUrl: string;
@@ -108,8 +138,35 @@ export class LoopsClient {
       });
     }
 
+    /** Bulk id-preserving import (self-hosted backfill) */
+    async importRows(body: ImportInput, init?: RequestInit): Promise<ImportResponse> {
+      return this.request("POST", `/v1/import`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List workflow route invocations */
+    async listWorkflowInvocations(query?: { "limit"?: number }, init?: RequestInit): Promise<WorkflowInvocationListResponse> {
+      return this.request("GET", `/v1/invocations`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Create an id-preserving workflow route invocation */
+    async createWorkflowInvocation(body: CreateWorkflowInvocationInput, init?: RequestInit): Promise<WorkflowInvocationResponse> {
+      return this.request("POST", `/v1/invocations`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** List loops */
-    async listLoops(query?: { "status"?: "active" | "paused" | "stopped" | "expired"; "limit"?: number; "includeArchived"?: boolean; "archived"?: boolean }, init?: RequestInit): Promise<LoopListResponse> {
+    async listLoops(query?: { "status"?: "active" | "paused" | "stopped" | "expired"; "limit"?: number; "offset"?: number; "includeArchived"?: boolean; "archived"?: boolean }, init?: RequestInit): Promise<LoopListResponse> {
       return this.request("GET", `/v1/loops`, {
         body: undefined,
         query,
@@ -122,6 +179,15 @@ export class LoopsClient {
       return this.request("POST", `/v1/loops`, {
         body,
         query: undefined,
+        init,
+      });
+    }
+
+    /** Count loops (total-row verification) */
+    async countLoops(query?: { "status"?: string; "includeArchived"?: boolean; "archived"?: boolean }, init?: RequestInit): Promise<CountResponse> {
+      return this.request("GET", `/v1/loops/count`, {
+        body: undefined,
+        query,
         init,
       });
     }
@@ -199,7 +265,7 @@ export class LoopsClient {
     }
 
     /** List runs */
-    async listRuns(query?: { "loopId"?: string; "status"?: string; "limit"?: number }, init?: RequestInit): Promise<RunListResponse> {
+    async listRuns(query?: { "loopId"?: string; "status"?: string; "limit"?: number; "offset"?: number; "showOutput"?: boolean }, init?: RequestInit): Promise<RunListResponse> {
       return this.request("GET", `/v1/runs`, {
         body: undefined,
         query,
@@ -207,9 +273,72 @@ export class LoopsClient {
       });
     }
 
+    /** Count runs (total-row verification) */
+    async countRuns(query?: { "status"?: string }, init?: RequestInit): Promise<CountResponse> {
+      return this.request("GET", `/v1/runs/count`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
     /** Get a run by id */
-    async getRun(id: string, init?: RequestInit): Promise<RunResponse> {
+    async getRun(id: string, query?: { "showOutput"?: boolean }, init?: RequestInit): Promise<RunResponse> {
       return this.request("GET", `/v1/runs/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** List workflow route work items */
+    async listWorkflowWorkItems(query?: { "status"?: string; "routeKey"?: string; "limit"?: number }, init?: RequestInit): Promise<WorkflowWorkItemListResponse> {
+      return this.request("GET", `/v1/work-items`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Upsert an id-preserving workflow route work item */
+    async upsertWorkflowWorkItem(body: UpsertWorkflowWorkItemInput, init?: RequestInit): Promise<WorkflowWorkItemResponse> {
+      return this.request("POST", `/v1/work-items`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List workflow specs */
+    async listWorkflows(query?: { "status"?: "active" | "archived"; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<WorkflowListResponse> {
+      return this.request("GET", `/v1/workflows`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Create a workflow spec */
+    async createWorkflow(body: CreateWorkflowInput, init?: RequestInit): Promise<WorkflowResponse> {
+      return this.request("POST", `/v1/workflows`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Count workflow specs */
+    async countWorkflows(query?: { "status"?: string }, init?: RequestInit): Promise<CountResponse> {
+      return this.request("GET", `/v1/workflows/count`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Get a workflow spec by id */
+    async getWorkflow(id: string, init?: RequestInit): Promise<WorkflowResponse> {
+      return this.request("GET", `/v1/workflows/${encodeURIComponent(String(id))}`, {
         body: undefined,
         query: undefined,
         init,

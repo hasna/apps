@@ -85,6 +85,12 @@ HASNA_LOOPS_DATABASE_URL=... loops-serve migrate --dry-run
 loops-runner status
 ```
 
+`loops self-hosted push` is safe by default: imported workflows are archived and
+imported loops are paused with `nextRunAt`/`retryScheduledFor` cleared. Even
+without `--replace`, the control-plane import boundary may rewrite existing
+same-id workflows/loops into that disabled representation; use explicit
+preserve flags only for an intentional activation.
+
 See [Deployment Modes](docs/DEPLOYMENT_MODES.md) for the full package boundary
 and machine-placement contract.
 

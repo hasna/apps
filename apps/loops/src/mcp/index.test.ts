@@ -39,9 +39,11 @@ async function connectMcp(
 ): Promise<{ client: Client; transport: StdioClientTransport }> {
   const transport = new StdioClientTransport({
     command: "bun",
-    args: ["run", "src/mcp/index.ts"],
+    // MCP_STDIO=1: the server now defaults to shared Streamable HTTP, so these
+    // stdio integration tests must explicitly opt into the stdio transport.
+    args: ["run", "src/mcp/index.ts", "--stdio"],
     cwd: process.cwd(),
-    env: cleanEnv({ LOOPS_DATA_DIR: dataDir, ...env }),
+    env: cleanEnv({ LOOPS_DATA_DIR: dataDir, MCP_STDIO: "1", ...env }),
     stderr: "pipe",
   });
   const client = new Client({ name: "open-loops-mcp-test", version: "0.0.0" });
@@ -437,6 +439,109 @@ describe("open-loops MCP server", () => {
       expect(workflowLoop.loop.name).toBe("created-workflow");
       expect(workflowLoop.loop.description).toContain("runs workflow");
       expect(workflowLoop.loop.target).toMatchObject({ type: "workflow", workflowId: seeded.workflowId });
+    } finally {
+      await client.close();
+      await transport.close();
+    }
+  });
+
+  // Regression: on a cloud-flipped MCP server (HASNA_LOOPS_API_URL/API_KEY set),
+  // EVERY store-backed tool must route to the hosted /v1 API — never silently to
+  // the on-box sqlite island — and the local-runtime tools (diagnose/health) must
+  // fail loudly rather than read the wrong store. These lock the split-brain bug.
+  test("cloud-flipped MCP routes receipts to the hosted API and never the local island", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-mcp-cloud-receipt-"));
+    roots.push(root);
+    const requests: Array<{ method: string; path: string }> = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        requests.push({ method: req.method, path: url.pathname });
+        if (url.pathname === "/v1/receipts" && req.method === "POST") {
+          return Response.json(
+            { receipt: { run_id: "cloud-receipt", loop_id: "cloud-loop", status: "succeeded", createdAt: new Date().toISOString() } },
+            { status: 201 },
+          );
+        }
+        if (url.pathname === "/v1/receipts" && req.method === "GET") {
+          return Response.json({ receipts: [{ run_id: "cloud-receipt", loop_id: "cloud-loop", status: "succeeded" }] });
+        }
+        return Response.json({ error: { code: "not_found", message: url.pathname } }, { status: 404 });
+      },
+    });
+    const cloudEnv = {
+      HASNA_LOOPS_API_URL: `http://127.0.0.1:${server.port}`,
+      HASNA_LOOPS_API_KEY: "test-bearer-key",
+      LOOPS_MCP_ALLOW_MUTATIONS: "true",
+    };
+    const { client, transport } = await connectMcp(root, cloudEnv);
+    try {
+      const written = textPayload(
+        await client.callTool({
+          name: "loops_receipt_write",
+          arguments: { loop_id: "cloud-loop", run_id: "cloud-receipt", status: "succeeded" },
+        }),
+      ) as { receipt: { run_id: string } };
+      // The write reached the hosted API (proves ApiStore routing, not local sqlite).
+      expect(written.receipt.run_id).toBe("cloud-receipt");
+      expect(requests).toContainEqual({ method: "POST", path: "/v1/receipts" });
+
+      const listed = textPayload(
+        await client.callTool({ name: "loops_receipts_list", arguments: {} }),
+      ) as { receipts: Array<{ run_id: string }> };
+      expect(listed.receipts.map((r) => r.run_id)).toEqual(["cloud-receipt"]);
+      expect(requests).toContainEqual({ method: "GET", path: "/v1/receipts" });
+
+      // The local on-box island was never touched by the cloud-flipped write.
+      const localReceipts = withLoopDataDir(root, () => {
+        const store = new Store();
+        try {
+          return store.listRunReceipts({});
+        } finally {
+          store.close();
+        }
+      });
+      expect(localReceipts).toEqual([]);
+    } finally {
+      await client.close();
+      await transport.close();
+      server.stop(true);
+    }
+  });
+
+  test("cloud-flipped MCP fails diagnose/health loudly instead of reading the local island", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-mcp-cloud-guard-"));
+    roots.push(root);
+    // Seed a LOCAL loop so a silent local read would (wrongly) succeed. The guard
+    // must fire before any local access, so this loop must never surface.
+    withLoopDataDir(root, () => {
+      const store = new Store();
+      try {
+        store.createLoop({
+          name: "local-only-loop",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+        });
+      } finally {
+        store.close();
+      }
+    });
+    const cloudEnv = {
+      HASNA_LOOPS_API_URL: "http://127.0.0.1:1",
+      HASNA_LOOPS_API_KEY: "test-bearer-key",
+    };
+    const { client, transport } = await connectMcp(root, cloudEnv);
+    try {
+      for (const name of ["loops_diagnose", "loops_health", "loops_health_scan"] as const) {
+        const args = name === "loops_diagnose" ? { idOrName: "local-only-loop" } : {};
+        const result = await client.callTool({ name, arguments: args });
+        expect(result.isError).toBe(true);
+        const text = JSON.stringify(result.content);
+        expect(text).toContain("not available while flipped");
+        // It must NOT have silently returned the seeded local loop.
+        expect(text).not.toContain("local-only-loop");
+      }
     } finally {
       await client.close();
       await transport.close();

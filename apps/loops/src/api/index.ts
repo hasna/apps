@@ -1,9 +1,35 @@
 #!/usr/bin/env bun
 import { timingSafeEqual } from "node:crypto";
 import { Command } from "commander";
-import type { CreateLoopInput, Loop, LoopRun, LoopStatus, RunStatus, WorkflowSpec, WriteRunReceiptInput } from "../types.js";
+import type {
+  CreateLoopInput,
+  CreateWorkflowInvocationInput,
+  CreateWorkflowInput,
+  Loop,
+  LoopRun,
+  LoopStatus,
+  RunStatus,
+  UpsertWorkflowWorkItemInput,
+  WorkflowSpec,
+  WorkflowWorkItemStatus,
+  WriteRunReceiptInput,
+} from "../types.js";
+import type { GoalStatus } from "../lib/goal/types.js";
 import { LoopArchivedError, LoopNotFoundError, ValidationError } from "../lib/errors.js";
-import { publicLoop, publicRun, publicRunReceipt, redact } from "../lib/format.js";
+import {
+  publicGoal,
+  publicGoalRun,
+  publicLoop,
+  publicRun,
+  publicRunReceipt,
+  publicWorkflow,
+  publicWorkflowEvent,
+  publicWorkflowInvocation,
+  publicWorkflowRun,
+  publicWorkflowStepRun,
+  publicWorkflowWorkItem,
+  redact,
+} from "../lib/format.js";
 import { buildDeploymentStatus, deploymentStatusLine } from "../lib/mode.js";
 import { computeNextAfter, dueSlots } from "../lib/recurrence.js";
 import { scrubSecretsDeep } from "../lib/redact.js";
@@ -221,6 +247,13 @@ async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
     if (segments[1] === "loops") return await handleLoopsRequest(ctx, segments.slice(2));
     if (segments[1] === "runs") return await handleRunsRequest(ctx, segments.slice(2));
     if (segments[1] === "receipts") return await handleReceiptsRequest(ctx, segments.slice(2));
+    if (segments[1] === "workflows") return await handleWorkflowsRequest(ctx, segments.slice(2));
+    if (segments[1] === "workflow-runs") return await handleWorkflowRunsRequest(ctx, segments.slice(2));
+    if (segments[1] === "work-items") return await handleWorkItemsRequest(ctx, segments.slice(2));
+    if (segments[1] === "invocations") return await handleInvocationsRequest(ctx, segments.slice(2));
+    if (segments[1] === "goals") return await handleGoalsRequest(ctx, segments.slice(2));
+    if (segments[1] === "goal-runs") return await handleGoalRunsRequest(ctx, segments.slice(2));
+    if (segments[1] === "history") return await handleHistoryRequest(ctx, segments.slice(2));
     if (segments[1] === "runners") return await handleRunnerRequest(ctx, segments.slice(2));
     if (segments[1] === "leases" && segments[2] === "recover" && ctx.request.method === "POST") {
       return runnerProtocolPending("lease recovery is implemented in the runner protocol stage");
@@ -236,6 +269,23 @@ interface ImportRequestBody {
   loops?: Loop[];
   runs?: LoopRun[];
   replace?: boolean;
+  preserveLoopScheduling?: boolean;
+  preserveWorkflowActivation?: boolean;
+}
+
+function safeImportedWorkflow(workflow: WorkflowSpec, opts: { preserveWorkflowActivation: boolean }): WorkflowSpec {
+  if (opts.preserveWorkflowActivation) return workflow;
+  return { ...workflow, status: "archived" };
+}
+
+function safeImportedLoop(loop: Loop, opts: { preserveLoopScheduling: boolean }): Loop {
+  if (opts.preserveLoopScheduling) return loop;
+  return {
+    ...loop,
+    status: "paused",
+    nextRunAt: undefined,
+    retryScheduledFor: undefined,
+  };
 }
 
 /**
@@ -243,13 +293,13 @@ interface ImportRequestBody {
  *
  * Accepts batches of full `workflows` / `loops` / `runs` rows (the same public
  * shapes that `loops export` emits) and upserts them by id via the storage
- * `upsertMigration*` methods — preserving id, status, archived state, and
- * timestamps exactly, and idempotent on re-run (ON CONFLICT(id) DO UPDATE, or a
- * no-op when the row exists and `replace` is not set). Rows are applied in
- * FK-safe order (workflows, then loops, then runs). Volatile `running` runs are
- * skipped (they carry lease/process ownership) and reported in `skippedRunning`
- * rather than failing the batch. This is the endpoint the migration module noted
- * as the missing "id-preserving import" surface for self-hosted push.
+ * `upsertMigration*` methods. Backfill safety is enforced at this API boundary:
+ * workflows are archived and loops are paused with scheduling pointers cleared
+ * unless explicit preserve flags are supplied. Rows are applied in FK-safe order
+ * (workflows, then loops, then runs). Volatile `running` runs are skipped (they
+ * carry lease/process ownership) and reported in `skippedRunning` rather than
+ * failing the batch. This is the endpoint the migration module noted as the
+ * missing "id-preserving import" surface for self-hosted push.
  */
 async function handleImportRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
   if (segments.length !== 0 || ctx.request.method !== "POST") return fail("not_found", 404);
@@ -259,16 +309,22 @@ async function handleImportRequest(ctx: V1RequestContext, segments: string[]): P
   const workflows = Array.isArray(body.workflows) ? body.workflows : [];
   const loops = Array.isArray(body.loops) ? body.loops : [];
   const runs = Array.isArray(body.runs) ? body.runs : [];
+  const preserveWorkflowActivation = body.preserveWorkflowActivation === true;
+  const preserveLoopScheduling = body.preserveLoopScheduling === true;
   const imported = { workflows: 0, loops: 0, runs: 0 };
   let skippedRunning = 0;
   // FK-safe order: workflow_specs, then loops (loop_runs.loop_id REFERENCES
   // loops), then loop_runs.
   for (const workflow of workflows) {
-    await storage.upsertMigrationWorkflow(workflow, { replace });
+    await storage.upsertMigrationWorkflow(safeImportedWorkflow(workflow, { preserveWorkflowActivation }), {
+      replace: replace || !preserveWorkflowActivation,
+    });
     imported.workflows += 1;
   }
   for (const loop of loops) {
-    await storage.upsertMigrationLoop(loop, { replace });
+    await storage.upsertMigrationLoop(safeImportedLoop(loop, { preserveLoopScheduling }), {
+      replace: replace || !preserveLoopScheduling,
+    });
     imported.loops += 1;
   }
   for (const run of runs) {
@@ -288,8 +344,10 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
     const loops = await storage.listLoops({
       status: optionalEnum<LoopStatus>(ctx.url.searchParams.get("status"), ["active", "paused", "stopped", "expired"]),
       limit: optionalLimit(ctx.url.searchParams.get("limit")),
+      offset: optionalOffset(ctx.url.searchParams.get("offset")),
       includeArchived: optionalBoolean(ctx.url.searchParams.get("includeArchived")),
       archived: optionalBoolean(ctx.url.searchParams.get("archived")),
+      name: optionalString(ctx.url.searchParams.get("name")),
     });
     return ok({ loops: loops.map(publicLoop) });
   }
@@ -344,6 +402,175 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
   if (segments.length === 2 && segments[1] === "unarchive" && ctx.request.method === "POST") {
     return ok({ loop: publicLoop(await storage.unarchiveLoop(id)) });
   }
+  if (segments.length === 2 && segments[1] === "rename" && ctx.request.method === "POST") {
+    const body = await readJsonBody<{ name?: unknown }>(ctx.request, ctx.bodyLimitBytes);
+    const name = requiredString(body.name, "name");
+    return ok({ loop: publicLoop(await storage.renameLoop(id, name)) });
+  }
+  return fail("not_found", 404);
+}
+
+async function handleWorkflowsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  const storage = requireStorage(ctx.storage);
+  if (segments.length === 0 && ctx.request.method === "GET") {
+    const workflows = await storage.listWorkflows({
+      status: optionalEnum<WorkflowSpec["status"]>(ctx.url.searchParams.get("status"), ["active", "archived"]),
+      limit: optionalLimit(ctx.url.searchParams.get("limit")),
+      offset: optionalOffset(ctx.url.searchParams.get("offset")),
+    });
+    return ok({ workflows: workflows.map(publicWorkflow) });
+  }
+  if (segments.length === 0 && ctx.request.method === "POST") {
+    const body = await readJsonBody<CreateWorkflowInput>(ctx.request, ctx.bodyLimitBytes);
+    return ok({ workflow: publicWorkflow(await storage.createWorkflow(body)) }, { status: 201 });
+  }
+  if (segments.length === 1 && segments[0] === "count" && ctx.request.method === "GET") {
+    const count = await storage.countWorkflows({
+      status: optionalEnum<WorkflowSpec["status"]>(ctx.url.searchParams.get("status"), ["active", "archived"]),
+    });
+    return ok({ count });
+  }
+  const id = segments[0];
+  if (!id) return fail("not_found", 404);
+  if (segments.length === 1 && ctx.request.method === "GET") {
+    const workflow = await storage.getWorkflow(id);
+    if (!workflow) return fail("workflow_not_found", 404);
+    return ok({ workflow: publicWorkflow(workflow) });
+  }
+  if (segments.length === 2 && segments[1] === "archive" && ctx.request.method === "POST") {
+    return ok({ workflow: publicWorkflow(await storage.archiveWorkflow(id)) });
+  }
+  return fail("not_found", 404);
+}
+
+async function handleWorkflowRunsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  const storage = requireStorage(ctx.storage);
+  if (segments.length === 0 && ctx.request.method === "GET") {
+    const runs = await storage.listWorkflowRuns({
+      workflowId: ctx.url.searchParams.get("workflowId") ?? undefined,
+      loopRunId: ctx.url.searchParams.get("loopRunId") ?? undefined,
+      limit: optionalLimit(ctx.url.searchParams.get("limit")),
+    });
+    return ok({ workflowRuns: runs.map(publicWorkflowRun) });
+  }
+  const id = segments[0];
+  if (!id) return fail("not_found", 404);
+  if (segments.length === 1 && ctx.request.method === "GET") {
+    const run = await storage.getWorkflowRun(id);
+    if (!run) return fail("workflow_run_not_found", 404);
+    return ok({ workflowRun: publicWorkflowRun(run) });
+  }
+  if (segments.length === 2 && segments[1] === "steps" && ctx.request.method === "GET") {
+    const steps = await storage.listWorkflowStepRuns(id);
+    return ok({ steps: steps.map((step) => publicWorkflowStepRun(step)) });
+  }
+  if (segments.length === 2 && segments[1] === "events" && ctx.request.method === "GET") {
+    const events = await storage.listWorkflowEvents(id, optionalLimit(ctx.url.searchParams.get("limit")) ?? 200);
+    return ok({ events: events.map(publicWorkflowEvent) });
+  }
+  if (segments.length === 2 && segments[1] === "recover" && ctx.request.method === "POST") {
+    const body = await readJsonBody<{ reason?: unknown }>(ctx.request, ctx.bodyLimitBytes);
+    const reason = optionalText(body.reason);
+    const result = reason === undefined ? await storage.recoverWorkflowRun(id) : await storage.recoverWorkflowRun(id, reason);
+    return ok({
+      workflowRun: publicWorkflowRun(result.run),
+      recoveredSteps: result.recoveredSteps.map((step) => publicWorkflowStepRun(step)),
+    });
+  }
+  return fail("not_found", 404);
+}
+
+async function handleWorkItemsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  const storage = requireStorage(ctx.storage);
+  if (segments.length === 0 && ctx.request.method === "GET") {
+    const items = await storage.listWorkflowWorkItems({
+      status: optionalString(ctx.url.searchParams.get("status")) as WorkflowWorkItemStatus | undefined,
+      routeKey: ctx.url.searchParams.get("routeKey") ?? undefined,
+      limit: optionalLimit(ctx.url.searchParams.get("limit")),
+    });
+    return ok({ workItems: items.map(publicWorkflowWorkItem) });
+  }
+  if (segments.length === 0 && ctx.request.method === "POST") {
+    const body = await readJsonBody<UpsertWorkflowWorkItemInput>(ctx.request, ctx.bodyLimitBytes);
+    return ok({ workItem: publicWorkflowWorkItem(await storage.upsertWorkflowWorkItem(body)) }, { status: 201 });
+  }
+  const id = segments[0];
+  if (!id) return fail("not_found", 404);
+  if (segments.length === 1 && ctx.request.method === "GET") {
+    const item = await storage.getWorkflowWorkItem(id);
+    if (!item) return fail("work_item_not_found", 404);
+    return ok({ workItem: publicWorkflowWorkItem(item) });
+  }
+  return fail("not_found", 404);
+}
+
+async function handleInvocationsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  const storage = requireStorage(ctx.storage);
+  if (segments.length === 0 && ctx.request.method === "GET") {
+    const invocations = await storage.listWorkflowInvocations({ limit: optionalLimit(ctx.url.searchParams.get("limit")) });
+    return ok({ invocations: invocations.map(publicWorkflowInvocation) });
+  }
+  if (segments.length === 0 && ctx.request.method === "POST") {
+    const body = await readJsonBody<CreateWorkflowInvocationInput>(ctx.request, ctx.bodyLimitBytes);
+    return ok({ invocation: publicWorkflowInvocation(await storage.createWorkflowInvocation(body)) }, { status: 201 });
+  }
+  const id = segments[0];
+  if (!id) return fail("not_found", 404);
+  if (segments.length === 1 && ctx.request.method === "GET") {
+    const invocation = await storage.getWorkflowInvocation(id);
+    if (!invocation) return fail("invocation_not_found", 404);
+    return ok({ invocation: publicWorkflowInvocation(invocation) });
+  }
+  return fail("not_found", 404);
+}
+
+async function handleGoalsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  const storage = requireStorage(ctx.storage);
+  if (segments.length === 0 && ctx.request.method === "GET") {
+    const goals = await storage.listGoals({
+      status: optionalString(ctx.url.searchParams.get("status")) as GoalStatus | undefined,
+      limit: optionalLimit(ctx.url.searchParams.get("limit")),
+    });
+    return ok({ goals: goals.map(publicGoal) });
+  }
+  const id = segments[0];
+  if (!id) return fail("not_found", 404);
+  if (segments.length === 1 && ctx.request.method === "GET") {
+    const goal = await storage.getGoal(id);
+    if (!goal) return fail("goal_not_found", 404);
+    return ok({ goal: publicGoal(goal) });
+  }
+  if (segments.length === 2 && segments[1] === "plan-nodes" && ctx.request.method === "GET") {
+    const nodes = await storage.listGoalPlanNodes(id);
+    return ok({ nodes });
+  }
+  return fail("not_found", 404);
+}
+
+async function handleGoalRunsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  const storage = requireStorage(ctx.storage);
+  if (segments.length === 0 && ctx.request.method === "GET") {
+    const runs = await storage.listGoalRuns({
+      goalId: ctx.url.searchParams.get("goalId") ?? undefined,
+      runId: ctx.url.searchParams.get("runId") ?? undefined,
+      limit: optionalLimit(ctx.url.searchParams.get("limit")),
+    });
+    return ok({ goalRuns: runs.map(publicGoalRun) });
+  }
+  return fail("not_found", 404);
+}
+
+async function handleHistoryRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  const storage = requireStorage(ctx.storage);
+  if (segments.length === 1 && segments[0] === "prune" && ctx.request.method === "POST") {
+    const body = await readJsonBody<{ maxAgeDays?: unknown; keepPerLoop?: unknown; dryRun?: unknown }>(ctx.request, ctx.bodyLimitBytes);
+    const history = await storage.pruneHistory({
+      maxAgeDays: optionalInteger(body.maxAgeDays),
+      keepPerLoop: optionalInteger(body.keepPerLoop),
+      dryRun: body.dryRun === undefined ? undefined : Boolean(body.dryRun),
+    });
+    return ok({ history });
+  }
   return fail("not_found", 404);
 }
 
@@ -394,6 +621,7 @@ async function handleRunsRequest(ctx: V1RequestContext, segments: string[]): Pro
       loopId: ctx.url.searchParams.get("loopId") ?? undefined,
       status: optionalEnum<RunStatus>(ctx.url.searchParams.get("status"), ["running", "succeeded", "failed", "timed_out", "abandoned", "skipped"]),
       limit: optionalLimit(ctx.url.searchParams.get("limit")),
+      offset: optionalOffset(ctx.url.searchParams.get("offset")),
     });
     return ok({ runs: runs.map((run) => publicRun(run, showOutput, { redactError: true })) });
   }
@@ -669,11 +897,24 @@ function runnerProtocolPending(message: string): Response {
   return fail("runner_protocol_pending", 501, { message });
 }
 
+// Per-request page cap. A single response never streams more than this many rows
+// into memory; larger result sets are walked with `offset` pagination. Values
+// above the cap are clamped (not rejected) so a caller asking for "everything"
+// still gets a valid first page instead of a 422 or an empty array.
+const MAX_PAGE_LIMIT = 1000;
+
 function optionalLimit(value: string | null): number | undefined {
   if (value == null || value === "") return undefined;
   const limit = Number(value);
-  if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw Object.assign(new Error("invalid_limit"), { status: 422 });
-  return limit;
+  if (!Number.isInteger(limit) || limit < 1) throw Object.assign(new Error("invalid_limit"), { status: 422 });
+  return Math.min(limit, MAX_PAGE_LIMIT);
+}
+
+function optionalOffset(value: string | null): number | undefined {
+  if (value == null || value === "") return undefined;
+  const offset = Number(value);
+  if (!Number.isInteger(offset) || offset < 0) throw Object.assign(new Error("invalid_offset"), { status: 422 });
+  return offset;
 }
 
 function optionalString(value: unknown): string | undefined {
