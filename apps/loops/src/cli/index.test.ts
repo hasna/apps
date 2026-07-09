@@ -9048,6 +9048,7 @@ describe("local-only guards under a cloud-flipped client", () => {
   // fail loudly instead of silently reading/writing the on-box island (the
   // split-brain we forbid). No HTTP is issued: the guard fires before any call.
   const CLOUD_ENV = {
+    HASNA_LOOPS_STORAGE_MODE: "",
     HASNA_LOOPS_API_URL: "https://loops.example.test",
     HASNA_LOOPS_API_KEY: "do-not-print-this-key",
   } as const;
