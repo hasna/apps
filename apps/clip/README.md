@@ -77,6 +77,18 @@ clip-serve
 
 Default bind is `127.0.0.1:3741`.
 
+When binding beyond localhost, set an auth token so only trusted clients can
+create, capture, or delete shares:
+
+```bash
+clip serve --host 0.0.0.0 --auth-token "$TOKEN"
+# or: CLIP_AUTH_TOKEN=$TOKEN clip serve --host 0.0.0.0
+```
+
+Mutating routes (`POST`/`DELETE`) then require `Authorization: Bearer <token>`.
+Read routes stay open. Uploaded artifacts are only served inline for a safe
+mime allowlist; anything else (including HTML) downloads as an attachment.
+
 Useful routes:
 
 - `GET /health`
