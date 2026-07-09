@@ -46,13 +46,20 @@ jobs:
       - run: bun run verify
       - id: package
         run: |
-          echo "name=$(bun -e 'console.log(require(\"./package.json\").name)')" >> "$GITHUB_OUTPUT"
-          echo "version=$(bun -e 'console.log(require(\"./package.json\").version)')" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          name="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          test -n "$name"
+          test -n "$version"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - id: published
         env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
         run: |
+          set -euo pipefail
           if npm view "${{ steps.package.outputs.name }}@${{ steps.package.outputs.version }}" version >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "${{ steps.package.outputs.name }}@${{ steps.package.outputs.version }} already exists; skipping publish."
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
