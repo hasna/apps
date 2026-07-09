@@ -59,7 +59,7 @@ export interface WorkflowWorkItemResponse { "ok": boolean; "workItem": WorkflowW
 
 export interface WorkflowWorkItemListResponse { "ok": boolean; "workItems": Array<WorkflowWorkItem> }
 
-export interface ImportInput { "workflows"?: Array<Record<string, unknown>>; "loops"?: Array<Record<string, unknown>>; "runs"?: Array<Record<string, unknown>>; "replace"?: boolean; "preserveLoopScheduling"?: boolean }
+export interface ImportInput { "workflows"?: Array<Record<string, unknown>>; "loops"?: Array<Record<string, unknown>>; "runs"?: Array<Record<string, unknown>>; "replace"?: boolean; "preserveLoopScheduling"?: boolean; "preserveWorkflowActivation"?: boolean }
 
 export interface ImportResponse { "ok": boolean; "imported": { "workflows": number; "loops": number; "runs": number }; "skippedRunning": number }
 
@@ -166,7 +166,7 @@ export class LoopsClient {
     }
 
     /** List loops */
-    async listLoops(query?: { "status"?: "active" | "paused" | "stopped" | "expired"; "limit"?: number; "includeArchived"?: boolean; "archived"?: boolean }, init?: RequestInit): Promise<LoopListResponse> {
+    async listLoops(query?: { "status"?: "active" | "paused" | "stopped" | "expired"; "limit"?: number; "offset"?: number; "includeArchived"?: boolean; "archived"?: boolean }, init?: RequestInit): Promise<LoopListResponse> {
       return this.request("GET", `/v1/loops`, {
         body: undefined,
         query,
@@ -265,7 +265,7 @@ export class LoopsClient {
     }
 
     /** List runs */
-    async listRuns(query?: { "loopId"?: string; "status"?: string; "limit"?: number }, init?: RequestInit): Promise<RunListResponse> {
+    async listRuns(query?: { "loopId"?: string; "status"?: string; "limit"?: number; "offset"?: number; "showOutput"?: boolean }, init?: RequestInit): Promise<RunListResponse> {
       return this.request("GET", `/v1/runs`, {
         body: undefined,
         query,

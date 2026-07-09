@@ -270,6 +270,12 @@ interface ImportRequestBody {
   runs?: LoopRun[];
   replace?: boolean;
   preserveLoopScheduling?: boolean;
+  preserveWorkflowActivation?: boolean;
+}
+
+function safeImportedWorkflow(workflow: WorkflowSpec, opts: { preserveWorkflowActivation: boolean }): WorkflowSpec {
+  if (opts.preserveWorkflowActivation) return workflow;
+  return { ...workflow, status: "archived" };
 }
 
 function safeImportedLoop(loop: Loop, opts: { preserveLoopScheduling: boolean }): Loop {
@@ -287,13 +293,13 @@ function safeImportedLoop(loop: Loop, opts: { preserveLoopScheduling: boolean })
  *
  * Accepts batches of full `workflows` / `loops` / `runs` rows (the same public
  * shapes that `loops export` emits) and upserts them by id via the storage
- * `upsertMigration*` methods — preserving id, status, archived state, and
- * timestamps exactly, and idempotent on re-run (ON CONFLICT(id) DO UPDATE, or a
- * no-op when the row exists and `replace` is not set). Rows are applied in
- * FK-safe order (workflows, then loops, then runs). Volatile `running` runs are
- * skipped (they carry lease/process ownership) and reported in `skippedRunning`
- * rather than failing the batch. This is the endpoint the migration module noted
- * as the missing "id-preserving import" surface for self-hosted push.
+ * `upsertMigration*` methods. Backfill safety is enforced at this API boundary:
+ * workflows are archived and loops are paused with scheduling pointers cleared
+ * unless explicit preserve flags are supplied. Rows are applied in FK-safe order
+ * (workflows, then loops, then runs). Volatile `running` runs are skipped (they
+ * carry lease/process ownership) and reported in `skippedRunning` rather than
+ * failing the batch. This is the endpoint the migration module noted as the
+ * missing "id-preserving import" surface for self-hosted push.
  */
 async function handleImportRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
   if (segments.length !== 0 || ctx.request.method !== "POST") return fail("not_found", 404);
@@ -303,13 +309,16 @@ async function handleImportRequest(ctx: V1RequestContext, segments: string[]): P
   const workflows = Array.isArray(body.workflows) ? body.workflows : [];
   const loops = Array.isArray(body.loops) ? body.loops : [];
   const runs = Array.isArray(body.runs) ? body.runs : [];
+  const preserveWorkflowActivation = body.preserveWorkflowActivation === true;
   const preserveLoopScheduling = body.preserveLoopScheduling === true;
   const imported = { workflows: 0, loops: 0, runs: 0 };
   let skippedRunning = 0;
   // FK-safe order: workflow_specs, then loops (loop_runs.loop_id REFERENCES
   // loops), then loop_runs.
   for (const workflow of workflows) {
-    await storage.upsertMigrationWorkflow(workflow, { replace });
+    await storage.upsertMigrationWorkflow(safeImportedWorkflow(workflow, { preserveWorkflowActivation }), {
+      replace: replace || !preserveWorkflowActivation,
+    });
     imported.workflows += 1;
   }
   for (const loop of loops) {

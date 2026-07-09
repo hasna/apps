@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
 import { createSqliteLoopStorage } from "../lib/storage/sqlite.js";
-import type { Loop } from "../types.js";
+import type { Loop, WorkflowSpec } from "../types.js";
 
 const apiPath = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
 const jsonHeaders = { "content-type": "application/json" };
@@ -333,12 +333,46 @@ describe("loops-api foundation", () => {
 
       const get = await fetch(apiUrl(server, "/v1/workflows/workflow-import-1"));
       expect(get.status).toBe(200);
-      expect(await get.json()).toMatchObject({ ok: true, workflow: { id: "workflow-import-1", name: "imported-workflow" } });
+      expect(await get.json()).toMatchObject({
+        ok: true,
+        workflow: { id: "workflow-import-1", name: "imported-workflow", status: "archived" },
+      });
+      expect((await storage.getWorkflow("workflow-import-1"))?.status).toBe("archived");
 
       const importedLoop = await storage.getLoop("loop-workflow-import-1");
       expect(importedLoop?.target).toMatchObject({ type: "workflow", workflowId: "workflow-import-1" });
       expect(importedLoop?.status).toBe("paused");
       expect(importedLoop?.nextRunAt).toBeUndefined();
+
+      const existingActiveWorkflow = {
+        ...workflow,
+        id: "workflow-import-existing-active",
+        name: "imported-existing-active-workflow",
+        status: "active",
+      };
+      await storage.upsertMigrationWorkflow(existingActiveWorkflow as WorkflowSpec, { replace: true });
+      expect((await storage.getWorkflow("workflow-import-existing-active"))?.status).toBe("active");
+      const archiveExisting = await fetch(apiUrl(server, "/v1/import"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ workflows: [existingActiveWorkflow] }),
+      });
+      expect(archiveExisting.status).toBe(200);
+      expect((await storage.getWorkflow("workflow-import-existing-active"))?.status).toBe("archived");
+
+      const preserveWorkflow = {
+        ...workflow,
+        id: "workflow-import-preserve-active",
+        name: "imported-preserve-active-workflow",
+        status: "active",
+      };
+      const preserveResponse = await fetch(apiUrl(server, "/v1/import"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ workflows: [preserveWorkflow], preserveWorkflowActivation: true }),
+      });
+      expect(preserveResponse.status).toBe(200);
+      expect((await storage.getWorkflow("workflow-import-preserve-active"))?.status).toBe("active");
     } finally {
       server.stop(true);
       await storage.close();

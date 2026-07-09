@@ -86,22 +86,25 @@ leases, running runs, leased work items). Inline command env values are not
 exported as secrets; bundles with redacted env values require
 `--allow-redacted` and are marked non-importable.
 
-Self-hosted sync commands are preview-only until the control-plane API exposes
-id-preserving import endpoints:
+Self-hosted sync commands compare local definitions with the control-plane API.
+`push` can apply through the id-preserving `/v1/import` endpoint; `migrate` and
+`pull` remain preview/blocked for remote state that lacks a full export surface:
 
 ```bash
 loops self-hosted migrate --dry-run
 loops self-hosted push --dry-run
+loops self-hosted push --apply --manifest-file ./self-hosted-push.json
 loops self-hosted pull --dry-run
 ```
 
-The preview may inspect `LOOPS_API_URL`/`HASNA_LOOPS_API_URL`, but it refuses
-remote apply because normal loop CRUD would generate new ids. Use
-`loops self-hosted runner-register` to verify runner registration against an
-API, then use `loops-runner run-once` for the current bounded non-workflow
+Self-hosted push is safe by default: workflows are archived and loops are
+paused with scheduling pointers cleared, including existing same-id rows that
+need re-neutralizing. `--replace` permits broader same-id data updates, but is
+not required for that safety normalization. Use `loops self-hosted
+runner-register` to verify runner registration against an API, then use
+`loops-runner run-once` for the current bounded non-workflow
 claim/execute/finalize protocol. `loops-serve migrate` applies the Postgres
-schema and `api_keys` table for a self-hosted control-plane host; the standalone
-CLI migration previews still do not perform id-preserving remote apply.
+schema and `api_keys` table for a self-hosted control-plane host.
 Runner registration is preview-only unless `--apply` is present.
 
 ## Install

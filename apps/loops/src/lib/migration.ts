@@ -958,7 +958,7 @@ interface ImportCounts {
 async function postImportBatch(
   fetchImpl: typeof fetch,
   config: { apiUrl: string; token?: string },
-  payload: { workflows?: unknown[]; loops?: unknown[]; runs?: unknown[]; replace?: boolean; preserveLoopScheduling?: boolean },
+  payload: { workflows?: unknown[]; loops?: unknown[]; runs?: unknown[]; replace?: boolean; preserveWorkflowActivation?: boolean; preserveLoopScheduling?: boolean },
 ): Promise<{ imported: ImportCounts; skippedRunning: number }> {
   const body = await requestJson(fetchImpl, config, "/v1/import", { method: "POST", body: JSON.stringify(payload) });
   const imported = (body.imported ?? {}) as Partial<ImportCounts>;
@@ -1006,7 +1006,7 @@ export async function applySelfHostedPush(store: Store, opts: SelfHostedPushOpti
 
   for (let i = 0; i < workflows.length; i += batchRows) {
     const batch = workflows.slice(i, i + batchRows);
-    const result = await postImportBatch(fetchImpl, config, { workflows: batch, replace, preserveLoopScheduling: false });
+    const result = await postImportBatch(fetchImpl, config, { workflows: batch, replace, preserveWorkflowActivation: false, preserveLoopScheduling: false });
     applied.workflows += result.imported.workflows;
     requests += 1;
     opts.onProgress?.({ phase: "workflows", sent: applied.workflows, requests });

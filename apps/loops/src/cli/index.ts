@@ -865,7 +865,7 @@ selfHosted
   .description("preview (default) or apply an id-preserving local->self-hosted backfill")
   .option("--api-url <url>", "self-hosted control-plane API URL")
   .option("--apply", "apply the backfill via the control-plane /v1/import endpoint (default is preview)")
-  .option("--replace", "update existing remote rows whose id matches (default: leave existing rows unchanged)")
+  .option("--replace", "update differing same-id remote rows; safe default may still archive/pause same-id definitions")
   .option("--dry-run", "preview only; equivalent to omitting --apply")
   .option("--no-runs", "omit loop run history")
   .option("--manifest-file <path>", "write a self-hosted comparison/import manifest JSON file")

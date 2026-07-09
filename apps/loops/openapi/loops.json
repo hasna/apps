@@ -103,6 +103,14 @@
             }
           },
           {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
             "name": "includeArchived",
             "in": "query",
             "required": false,
@@ -377,6 +385,22 @@
             "schema": {
               "type": "integer"
             }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "showOutput",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -453,7 +477,7 @@
       "post": {
         "operationId": "importRows",
         "summary": "Bulk id-preserving import (self-hosted backfill)",
-        "description": "Upsert full workflow/loop/run rows by id (idempotent; ON CONFLICT(id) DO UPDATE). Preserves ids, definitions, archived state, and timestamps. Imported loops are paused and nextRunAt/retryScheduledFor are cleared by default so backfills never schedule immediately; set preserveLoopScheduling=true only for an intentional activation. Applied FK-safe: workflows, then loops, then runs. Volatile running runs are skipped and reported.",
+        "description": "Upsert full workflow/loop/run rows by id (idempotent; ON CONFLICT(id) DO UPDATE). Preserves ids, definitions, and timestamps while applying safe defaults: imported workflows are archived, imported loops are paused, and nextRunAt/retryScheduledFor are cleared by default so backfills never schedule immediately. Set preserveWorkflowActivation=true or preserveLoopScheduling=true only for intentional activation. Applied FK-safe: workflows, then loops, then runs. Volatile running runs are skipped and reported.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1707,11 +1731,15 @@
           },
           "replace": {
             "type": "boolean",
-            "description": "Update existing rows whose id matches (default false: existing rows are left unchanged)."
+            "description": "Update existing rows whose id matches. Default safe imports may still archive/pause same-id workflows/loops when preserve flags are false."
           },
           "preserveLoopScheduling": {
             "type": "boolean",
             "description": "Default false. When false, imported loops are written paused with nextRunAt and retryScheduledFor cleared so backfills never schedule immediately."
+          },
+          "preserveWorkflowActivation": {
+            "type": "boolean",
+            "description": "Default false. When false, imported workflows are written archived, including same-id active rows, so backfills cannot activate workflow execution unless explicitly requested."
           }
         }
       },
