@@ -6,6 +6,76 @@ import { ClipStore } from "../storage.js";
 import { handleClipHttpRequest } from "./server.js";
 
 describe("HTTP server routes", () => {
+  it("requires a bearer token for mutating routes when authToken is set", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clip-server-auth-"));
+    try {
+      const options = { clientOptions: { homeDir: dir }, baseUrl: "http://test.local", authToken: "sekret" };
+      const denied = await handleClipHttpRequest(new Request("http://x/api/shares", {
+        method: "POST",
+        body: JSON.stringify({ text: "nope" }),
+      }), options);
+      expect(denied.status).toBe(401);
+
+      const wrongToken = await handleClipHttpRequest(new Request("http://x/api/shares", {
+        method: "POST",
+        headers: { Authorization: "Bearer wrong" },
+        body: JSON.stringify({ text: "nope" }),
+      }), options);
+      expect(wrongToken.status).toBe(401);
+
+      const allowed = await handleClipHttpRequest(new Request("http://x/api/shares", {
+        method: "POST",
+        headers: { Authorization: "Bearer sekret" },
+        body: JSON.stringify({ text: "yes" }),
+      }), options);
+      expect(allowed.status).toBe(201);
+      const record = await allowed.json() as { slug: string };
+
+      // Reads stay open.
+      const read = await handleClipHttpRequest(new Request(`http://x/s/${record.slug}`), options);
+      expect(read.status).toBe(200);
+
+      const deleteDenied = await handleClipHttpRequest(new Request(`http://x/api/shares/${record.slug}`, { method: "DELETE" }), options);
+      expect(deleteDenied.status).toBe(401);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("never serves uploaded html inline from the share origin", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clip-server-xss-"));
+    try {
+      const options = { clientOptions: { homeDir: dir }, baseUrl: "http://test.local" };
+      const created = await handleClipHttpRequest(new Request("http://x/api/shares", {
+        method: "POST",
+        body: JSON.stringify({
+          dataBase64: Buffer.from("<script>alert(1)</script>").toString("base64"),
+          mimeType: "text/html",
+        }),
+      }), options);
+      expect(created.status).toBe(201);
+      const record = await created.json() as { slug: string };
+
+      const raw = await handleClipHttpRequest(new Request(`http://x/s/${record.slug}/raw`), options);
+      expect(raw.status).toBe(200);
+      expect(raw.headers.get("Content-Type")).toBe("application/octet-stream");
+      expect(raw.headers.get("Content-Disposition")).toStartWith("attachment");
+      expect(raw.headers.get("Content-Security-Policy")).toContain("sandbox");
+
+      // Safe types stay inline.
+      const png = await handleClipHttpRequest(new Request("http://x/api/shares", {
+        method: "POST",
+        body: JSON.stringify({ dataBase64: Buffer.from([137, 80, 78, 71]).toString("base64"), mimeType: "image/png" }),
+      }), options);
+      const pngRecord = await png.json() as { slug: string };
+      const pngRaw = await handleClipHttpRequest(new Request(`http://x/s/${pngRecord.slug}/raw`), options);
+      expect(pngRaw.headers.get("Content-Type")).toBe("image/png");
+      expect(pngRaw.headers.get("Content-Disposition")).toBe("inline");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("creates, reads, previews, and deletes text shares", async () => {
     const dir = mkdtempSync(join(tmpdir(), "clip-server-"));
     try {

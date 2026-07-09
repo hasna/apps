@@ -251,19 +251,22 @@ program
   .option("--host <host>", "Bind host", process.env["HOST"] ?? "127.0.0.1")
   .option("--port <port>", "Bind port", process.env["PORT"] ?? String(DEFAULT_PORT))
   .option("--base-url <url>", "Public/self-hosted share URL base")
+  .option("--auth-token <token>", "Require Bearer token for mutating API routes (default CLIP_AUTH_TOKEN)")
   .description("Start the self-hosted HTTP API and share server")
-  .action(async (opts: { host: string; port: string; baseUrl?: string }, command: Command) => {
+  .action(async (opts: { host: string; port: string; baseUrl?: string; authToken?: string }, command: Command) => {
     try {
-      const serveOptions = commandOptions(command) as { host?: string; port?: string; baseUrl?: string };
+      const serveOptions = commandOptions(command) as { host?: string; port?: string; baseUrl?: string; authToken?: string };
       const resolvedHost = argvValue("--host") ?? serveOptions.host ?? opts.host ?? "127.0.0.1";
       const rawPort = argvValue("--port") ?? serveOptions.port ?? opts.port ?? String(DEFAULT_PORT);
       const port = Number.parseInt(rawPort, 10);
       const resolvedBaseUrl = argvValue("--base-url") ?? serveOptions.baseUrl ?? opts.baseUrl ?? globalOptions(command).baseUrl;
+      const authToken = argvValue("--auth-token") ?? serveOptions.authToken ?? opts.authToken;
       const clientOptions = rootAndCommandOptions(command);
       const server = startClipServer({
         host: resolvedHost,
         port,
         baseUrl: resolvedBaseUrl,
+        authToken,
         clientOptions,
       });
       const url = `http://${resolvedHost}:${server.port}`;

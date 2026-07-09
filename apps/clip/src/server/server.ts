@@ -5,7 +5,7 @@ import { captureScreenshot } from "../capture/index.js";
 import { shareClipboard } from "../clipboard.js";
 import { ClipStore } from "../storage.js";
 import type { CaptureMode, ClipboardKind, ClipClientOptions, ClipRecord, ClipStorageStatus } from "../types.js";
-import { extensionForMime, htmlEscape, isTextMime, normalizeLimit } from "../util.js";
+import { extensionForMime, htmlEscape, normalizeLimit } from "../util.js";
 import { DEFAULT_PORT } from "../paths.js";
 import { resolveBaseUrl } from "../share.js";
 
@@ -37,6 +37,7 @@ export interface ClipServerOptions {
   host?: string;
   port?: number;
   baseUrl?: string;
+  authToken?: string;
   clientOptions?: ClipClientOptions;
   log?: (message: string) => void;
 }
@@ -49,6 +50,56 @@ function jsonResponse(value: unknown, status = 200): Response {
       "X-Content-Type-Options": "nosniff",
     },
   });
+}
+
+function resolveAuthToken(options: ClipServerOptions): string | undefined {
+  return options.authToken ?? process.env["CLIP_AUTH_TOKEN"] ?? undefined;
+}
+
+function authorized(req: Request, options: ClipServerOptions): boolean {
+  const token = resolveAuthToken(options);
+  if (!token) return true;
+  const header = req.headers.get("authorization") ?? "";
+  return header === `Bearer ${token}`;
+}
+
+// Mime types that are safe to serve inline from the share origin. Anything
+// else (notably text/html and image/svg+xml) is forced to a download so an
+// uploaded artifact cannot run script in the server's origin. The stored mime
+// is never echoed back verbatim; only this normalized allowlisted value is.
+const INLINE_SAFE_MIME = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/avif",
+  "image/apng",
+  "text/plain",
+  "text/markdown",
+  "application/json",
+  "application/pdf",
+  "video/mp4",
+  "video/webm",
+  "audio/mpeg",
+  "audio/ogg",
+  "audio/wav",
+]);
+
+function normalizeInlineMime(mime: string): string | null {
+  const essence = mime.split(";")[0]?.trim().toLowerCase() ?? "";
+  if (!/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(essence)) return null;
+  return INLINE_SAFE_MIME.has(essence) ? essence : null;
+}
+
+function rawContentHeaders(mime: string, filename: string): Record<string, string> {
+  const safeMime = normalizeInlineMime(mime);
+  const charset = safeMime && (safeMime.startsWith("text/") || safeMime === "application/json") ? "; charset=utf-8" : "";
+  return {
+    "Content-Type": safeMime ? `${safeMime}${charset}` : "application/octet-stream",
+    "Content-Disposition": safeMime ? "inline" : `attachment; filename="${filename.replaceAll('"', "")}"`,
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "sandbox; default-src 'none'",
+  };
 }
 
 function looksLikeLocalPath(value: string): boolean {
@@ -164,7 +215,7 @@ function previewHtml(record: ClipRecord): Response {
 function rawResponse(record: ClipRecord): Response {
   if (record.text !== null) {
     return new Response(record.text, {
-      headers: { "Content-Type": record.mimeType, "X-Content-Type-Options": "nosniff" },
+      headers: rawContentHeaders(record.mimeType, `${record.slug}.txt`),
     });
   }
   if (!record.artifactPath || !existsSync(record.artifactPath)) {
@@ -173,11 +224,7 @@ function rawResponse(record: ClipRecord): Response {
   const ext = extname(record.artifactPath);
   const mime = record.mimeType || MIME_TYPES[ext] || "application/octet-stream";
   return new Response(readFileSync(record.artifactPath), {
-    headers: {
-      "Content-Type": mime,
-      "Content-Disposition": isTextMime(mime) ? "inline" : `inline; filename="${record.slug}${ext}"`,
-      "X-Content-Type-Options": "nosniff",
-    },
+    headers: rawContentHeaders(mime, `${record.slug}${ext}`),
   });
 }
 
@@ -187,6 +234,11 @@ export async function handleClipHttpRequest(req: Request, options: ClipServerOpt
   const parts = path.split("/").filter(Boolean).map((part) => decodeURIComponent(part));
 
   try {
+    const isMutation = req.method === "POST" || req.method === "DELETE";
+    if (isMutation && !authorized(req, options)) {
+      return jsonResponse({ error: "Unauthorized" }, 401);
+    }
+
     if (req.method === "GET" && (path === "/" || path === "/health")) {
       return jsonResponse({ status: "ok", name: "clip", baseUrl: resolveBaseUrl(storeOptions(options)) });
     }
