@@ -700,6 +700,99 @@ describe("official SDK guest-broker compensation bridges", () => {
     expect(delivered).toEqual([4])
   })
 
+  test("Daytona explicit close seals inbound before disconnect and keeps it sealed", async () => {
+    let sdkOnData: ((data: Uint8Array) => void | Promise<void>) | undefined
+    const delivered: number[] = []
+    let disconnectCalls = 0
+    const process = {
+      async createPty(options: { onData: (data: Uint8Array) => void | Promise<void> }) {
+        sdkOnData = options.onData
+        return {
+          async waitForConnection() {},
+          async sendInput() {},
+          async disconnect() {
+            disconnectCalls += 1
+            await sdkOnData!(new Uint8Array([8]))
+          },
+        }
+      },
+    } as unknown as DaytonaOfficialBrokerProcessV1
+
+    let retainedSession: Parameters<Parameters<typeof withDaytonaGuestBrokerSdkSession>[2]>[0] | undefined
+    await withDaytonaGuestBrokerSdkSession(
+      process,
+      (data) => {
+        delivered.push(data[0]!)
+      },
+      async (session) => {
+        retainedSession = session
+        await sdkOnData!(new Uint8Array([7]))
+        await session.closeInput()
+        await sdkOnData!(new Uint8Array([9]))
+        await expect(session.sendFrame(brokerFrame())).rejects.toThrow("guest_broker_session_closed")
+      },
+    )
+    await sdkOnData!(new Uint8Array([10]))
+
+    expect(disconnectCalls).toBe(1)
+    expect(delivered).toEqual([7])
+    await expect(retainedSession!.sendFrame(brokerFrame())).rejects.toThrow("guest_broker_session_closed")
+  })
+
+  test("Daytona failed explicit close coalesces, retries, and keeps inbound sealed", async () => {
+    let sdkOnData: ((data: Uint8Array) => void | Promise<void>) | undefined
+    const delivered: number[] = []
+    let disconnectCalls = 0
+    let sendCalls = 0
+    const process = {
+      async createPty(options: { onData: (data: Uint8Array) => void | Promise<void> }) {
+        sdkOnData = options.onData
+        return {
+          async waitForConnection() {},
+          async sendInput() {
+            sendCalls += 1
+          },
+          async disconnect() {
+            disconnectCalls += 1
+            await sdkOnData!(new Uint8Array([disconnectCalls]))
+            throw new Error("persistent disconnect failure")
+          },
+        }
+      },
+    } as unknown as DaytonaOfficialBrokerProcessV1
+
+    let retainedSession: Parameters<Parameters<typeof withDaytonaGuestBrokerSdkSession>[2]>[0] | undefined
+    await expect(
+      withDaytonaGuestBrokerSdkSession(
+        process,
+        (data) => {
+          delivered.push(data[0]!)
+        },
+        async (session) => {
+          retainedSession = session
+          await sdkOnData!(new Uint8Array([7]))
+          const firstClose = session.closeInput()
+          const concurrentClose = session.closeInput()
+          expect(concurrentClose).toBe(firstClose)
+          const settled = await Promise.allSettled([firstClose, concurrentClose])
+          expect(settled.map((result) => result.status)).toEqual(["rejected", "rejected"])
+          expect(disconnectCalls).toBe(1)
+
+          await sdkOnData!(new Uint8Array([8]))
+          await session.sendFrame(brokerFrame())
+          await expect(session.closeInput()).rejects.toThrow("persistent disconnect failure")
+          await sdkOnData!(new Uint8Array([9]))
+        },
+      ),
+    ).rejects.toThrow("persistent disconnect failure")
+    await sdkOnData!(new Uint8Array([10]))
+
+    expect(disconnectCalls).toBe(4)
+    expect(sendCalls).toBe(2)
+    expect(delivered).toEqual([7])
+    await expect(retainedSession!.sendFrame(brokerFrame())).rejects.toThrow("guest_broker_session_closed")
+  })
+
   test("Daytona drops provider callbacks before successful and failed scope finalization", async () => {
     for (const disconnectFailure of [false, true]) {
       let sdkOnData: ((data: Uint8Array) => void | Promise<void>) | undefined

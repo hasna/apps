@@ -137,12 +137,15 @@ class DaytonaGuestBrokerSdkSessionV1 implements GuestBrokerSdkSessionV1 {
   #closePromise: Promise<void> | undefined
   #scopeClosed = false
   readonly #handle: Pick<PtyHandle, "sendInput" | "disconnect">
+  readonly #sealInbound: () => void
 
   constructor(
     handle: Pick<PtyHandle, "sendInput" | "disconnect">,
+    sealInbound: () => void,
     registerFinalizer: (finalize: () => Promise<void>) => void,
   ) {
     this.#handle = handle
+    this.#sealInbound = sealInbound
     registerFinalizer(() => this.#finalizeInput())
   }
 
@@ -154,6 +157,7 @@ class DaytonaGuestBrokerSdkSessionV1 implements GuestBrokerSdkSessionV1 {
   }
 
   #closeInput(): Promise<void> {
+    this.#sealInbound()
     if (this.#closed) return Promise.resolve()
     if (this.#closePromise !== undefined) return this.#closePromise
     const closePromise = (async () => {
@@ -182,14 +186,21 @@ class DaytonaGuestBrokerSdkSessionV1 implements GuestBrokerSdkSessionV1 {
   }
 }
 
-function createDaytonaGuestBrokerSession(handle: Pick<PtyHandle, "sendInput" | "disconnect">): {
+function createDaytonaGuestBrokerSession(
+  handle: Pick<PtyHandle, "sendInput" | "disconnect">,
+  sealInbound: () => void,
+): {
   session: GuestBrokerSdkSessionV1
   finalize: () => Promise<void>
 } {
   let finalize!: () => Promise<void>
-  const session = new DaytonaGuestBrokerSdkSessionV1(handle, (registered) => {
-    finalize = registered
-  })
+  const session = new DaytonaGuestBrokerSdkSessionV1(
+    handle,
+    sealInbound,
+    (registered) => {
+      finalize = registered
+    },
+  )
   return { session, finalize }
 }
 
@@ -238,7 +249,9 @@ export async function withDaytonaGuestBrokerSdkSession(
     inboundOpen = false
     throw error
   }
-  const { session, finalize } = createDaytonaGuestBrokerSession(handle)
+  const { session, finalize } = createDaytonaGuestBrokerSession(handle, () => {
+    inboundOpen = false
+  })
   try {
     await handle.waitForConnection()
     await handle.sendInput(`${MANAGED_GUEST_BROKER_BOOTSTRAP_COMMAND}\n`)
