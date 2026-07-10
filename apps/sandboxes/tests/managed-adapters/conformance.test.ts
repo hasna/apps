@@ -534,6 +534,7 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
 
       expect((h.adapter as unknown as { constructor?: unknown }).constructor).toBeUndefined()
       expect(Object.getPrototypeOf(h.adapter)).toBeNull()
+      expect(Object.isFrozen(h.adapter)).toBe(true)
       expect(Reflect.ownKeys(h.adapter).sort()).toEqual([
         "activate",
         "cancel_exec",

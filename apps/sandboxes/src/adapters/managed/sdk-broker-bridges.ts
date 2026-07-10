@@ -9,6 +9,7 @@ import {
   MANAGED_GUEST_BROKER_BOOTSTRAP_COMMAND,
   serializeGuestBrokerRequestFrame,
 } from "./broker"
+import { adapterError } from "./errors"
 import {
   buildDaytonaCreateParams,
   buildE2bCreateOptions,
@@ -29,6 +30,7 @@ export type DaytonaOfficialBrokerProcessV1 = Pick<DaytonaProcess, "createPty">
 class E2bGuestBrokerSdkSessionV1 implements GuestBrokerSdkSessionV1 {
   #closed = false
   #closePromise: Promise<void> | undefined
+  #scopeClosed = false
   readonly #handle: Pick<CommandHandle, "sendStdin" | "closeStdin">
 
   constructor(
@@ -36,29 +38,37 @@ class E2bGuestBrokerSdkSessionV1 implements GuestBrokerSdkSessionV1 {
     registerFinalizer: (finalize: () => Promise<void>) => void,
   ) {
     this.#handle = handle
-    registerFinalizer(() => this.#closeInput())
+    registerFinalizer(() => this.#finalizeInput())
   }
 
   sendFrame(frame: GuestBrokerRequestFrameV1): Promise<void> {
-    if (this.#closed || this.#closePromise !== undefined) {
+    if (this.#closed || this.#scopeClosed || this.#closePromise !== undefined) {
       return Promise.reject(new Error("guest_broker_session_closed"))
     }
     return this.#handle.sendStdin(serializeGuestBrokerRequestFrame(frame))
   }
 
-  async #closeInput(): Promise<void> {
-    if (this.#closed) return
-    if (this.#closePromise !== undefined) {
-      await this.#closePromise
-      return
-    }
-    const closePromise = this.#handle.closeStdin()
-    this.#closePromise = closePromise
-    try {
-      await closePromise
+  #closeInput(): Promise<void> {
+    if (this.#closed) return Promise.resolve()
+    if (this.#closePromise !== undefined) return this.#closePromise
+    const closePromise = (async () => {
+      await this.#handle.closeStdin()
       this.#closed = true
-    } finally {
+    })()
+    this.#closePromise = closePromise
+    const clearClosePromise = () => {
       if (this.#closePromise === closePromise) this.#closePromise = undefined
+    }
+    void closePromise.then(clearClosePromise, clearClosePromise)
+    return closePromise
+  }
+
+  async #finalizeInput(): Promise<void> {
+    this.#scopeClosed = true
+    try {
+      await this.#closeInput()
+    } catch {
+      await this.#closeInput()
     }
   }
 
@@ -101,6 +111,7 @@ export const DAYTONA_GUEST_BROKER_PTY_ID = "hasna-sandboxes-broker-v1" as const
 class DaytonaGuestBrokerSdkSessionV1 implements GuestBrokerSdkSessionV1 {
   #closed = false
   #closePromise: Promise<void> | undefined
+  #scopeClosed = false
   readonly #handle: Pick<PtyHandle, "sendInput" | "disconnect">
 
   constructor(
@@ -108,29 +119,37 @@ class DaytonaGuestBrokerSdkSessionV1 implements GuestBrokerSdkSessionV1 {
     registerFinalizer: (finalize: () => Promise<void>) => void,
   ) {
     this.#handle = handle
-    registerFinalizer(() => this.#closeInput())
+    registerFinalizer(() => this.#finalizeInput())
   }
 
   sendFrame(frame: GuestBrokerRequestFrameV1): Promise<void> {
-    if (this.#closed || this.#closePromise !== undefined) {
+    if (this.#closed || this.#scopeClosed || this.#closePromise !== undefined) {
       return Promise.reject(new Error("guest_broker_session_closed"))
     }
     return this.#handle.sendInput(serializeGuestBrokerRequestFrame(frame))
   }
 
-  async #closeInput(): Promise<void> {
-    if (this.#closed) return
-    if (this.#closePromise !== undefined) {
-      await this.#closePromise
-      return
-    }
-    const closePromise = this.#handle.disconnect()
-    this.#closePromise = closePromise
-    try {
-      await closePromise
+  #closeInput(): Promise<void> {
+    if (this.#closed) return Promise.resolve()
+    if (this.#closePromise !== undefined) return this.#closePromise
+    const closePromise = (async () => {
+      await this.#handle.disconnect()
       this.#closed = true
-    } finally {
+    })()
+    this.#closePromise = closePromise
+    const clearClosePromise = () => {
       if (this.#closePromise === closePromise) this.#closePromise = undefined
+    }
+    void closePromise.then(clearClosePromise, clearClosePromise)
+    return closePromise
+  }
+
+  async #finalizeInput(): Promise<void> {
+    this.#scopeClosed = true
+    try {
+      await this.#closeInput()
+    } catch {
+      await this.#closeInput()
     }
   }
 
@@ -161,12 +180,20 @@ export async function withDaytonaGuestBrokerSdkSession(
     envs: {},
     cols: 80,
     rows: 24,
-    onData,
+    async onData(data) {
+      if (
+        !(data instanceof Uint8Array) ||
+        (typeof SharedArrayBuffer !== "undefined" && data.buffer instanceof SharedArrayBuffer)
+      ) {
+        throw adapterError("integrity_failed")
+      }
+      await onData(new Uint8Array(data))
+    },
   })
-  await handle.waitForConnection()
-  await handle.sendInput(`${MANAGED_GUEST_BROKER_BOOTSTRAP_COMMAND}\n`)
   const { session, finalize } = createDaytonaGuestBrokerSession(handle)
   try {
+    await handle.waitForConnection()
+    await handle.sendInput(`${MANAGED_GUEST_BROKER_BOOTSTRAP_COMMAND}\n`)
     await use(session)
   } finally {
     await finalize()

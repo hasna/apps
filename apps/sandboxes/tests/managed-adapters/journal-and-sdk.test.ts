@@ -59,9 +59,19 @@ describe("managed package boundary", () => {
       exports?: unknown
       files?: unknown
       scripts?: Record<string, unknown>
+      types?: unknown
+      dependencies?: Record<string, unknown>
     }
-    expect(manifest.exports).toEqual({ ".": "./dist/index.js" })
-    expect(manifest.files).toEqual(["dist/index.js"])
+    expect(manifest.types).toBe("./dist/types/index.d.ts")
+    expect(manifest.exports).toEqual({
+      ".": {
+        types: "./dist/types/index.d.ts",
+        import: "./dist/index.js",
+        default: "./dist/index.js",
+      },
+    })
+    expect(manifest.files).toEqual(["dist/index.js", "dist/types"])
+    expect(manifest.dependencies?.["@types/ws"]).toBe("8.18.1")
     expect(manifest.scripts?.prepack).toBe("bun run build")
 
     const build = await Bun.build({
@@ -503,6 +513,141 @@ describe("official SDK guest-broker compensation bridges", () => {
     expect(inputs[1]).toBeInstanceOf(Uint8Array)
     expect(disconnectCalls).toBe(2)
     await expect(closedSession!.sendFrame(brokerFrame())).rejects.toThrow("guest_broker_session_closed")
+  })
+
+  test("captured finalizers retry an in-flight close rejected after the callback returns", async () => {
+    let e2bCloseCalls = 0
+    const commands = {
+      async run() {
+        return {
+          async sendStdin() {},
+          closeStdin() {
+            e2bCloseCalls += 1
+            if (e2bCloseCalls === 1) {
+              return new Promise<void>((_resolve, reject) => {
+                setTimeout(() => reject(new Error("deferred close failure")), 0)
+              })
+            }
+            return Promise.resolve()
+          },
+        }
+      },
+    } as unknown as E2bOfficialBrokerCommandsV1
+    let e2bSession: Parameters<Parameters<typeof withE2bGuestBrokerSdkSession>[1]>[0] | undefined
+    await withE2bGuestBrokerSdkSession(commands, async (session) => {
+      e2bSession = session
+      void session.closeInput().catch(() => {})
+    })
+    expect(e2bCloseCalls).toBe(2)
+    await expect(e2bSession!.sendFrame(brokerFrame())).rejects.toThrow("guest_broker_session_closed")
+
+    let daytonaDisconnectCalls = 0
+    const process = {
+      async createPty() {
+        return {
+          async waitForConnection() {},
+          async sendInput() {},
+          disconnect() {
+            daytonaDisconnectCalls += 1
+            if (daytonaDisconnectCalls === 1) {
+              return new Promise<void>((_resolve, reject) => {
+                setTimeout(() => reject(new Error("deferred disconnect failure")), 0)
+              })
+            }
+            return Promise.resolve()
+          },
+        }
+      },
+    } as unknown as DaytonaOfficialBrokerProcessV1
+    let daytonaSession: Parameters<Parameters<typeof withDaytonaGuestBrokerSdkSession>[2]>[0] | undefined
+    await withDaytonaGuestBrokerSdkSession(process, () => {}, async (session) => {
+      daytonaSession = session
+      void session.closeInput().catch(() => {})
+    })
+    expect(daytonaDisconnectCalls).toBe(2)
+    await expect(daytonaSession!.sendFrame(brokerFrame())).rejects.toThrow("guest_broker_session_closed")
+  })
+
+  test("Daytona disconnects when connection or fixed-bootstrap setup fails", async () => {
+    for (const failure of ["connection", "bootstrap"] as const) {
+      let disconnectCalls = 0
+      let useCalls = 0
+      const process = {
+        async createPty() {
+          return {
+            async waitForConnection() {
+              if (failure === "connection") throw new Error("connection setup failed")
+            },
+            async sendInput() {
+              if (failure === "bootstrap") throw new Error("bootstrap setup failed")
+            },
+            async disconnect() {
+              disconnectCalls += 1
+            },
+          }
+        },
+      } as unknown as DaytonaOfficialBrokerProcessV1
+
+      await expect(
+        withDaytonaGuestBrokerSdkSession(process, () => {}, async () => {
+          useCalls += 1
+        }),
+      ).rejects.toThrow(failure === "connection" ? "connection setup failed" : "bootstrap setup failed")
+      expect(useCalls).toBe(0)
+      expect(disconnectCalls).toBe(1)
+    }
+  })
+
+  test("persistent finalization failure propagates while the retained session stays sealed", async () => {
+    let closeCalls = 0
+    let retainedSession: Parameters<Parameters<typeof withE2bGuestBrokerSdkSession>[1]>[0] | undefined
+    const commands = {
+      async run() {
+        return {
+          async sendStdin() {},
+          async closeStdin() {
+            closeCalls += 1
+            throw new Error("persistent close failure")
+          },
+        }
+      },
+    } as unknown as E2bOfficialBrokerCommandsV1
+
+    await expect(
+      withE2bGuestBrokerSdkSession(commands, async (session) => {
+        retainedSession = session
+      }),
+    ).rejects.toThrow("persistent close failure")
+    expect(closeCalls).toBe(2)
+    await expect(retainedSession!.sendFrame(brokerFrame())).rejects.toThrow("guest_broker_session_closed")
+  })
+
+  test("Daytona snapshots provider-owned output bytes before delivery", async () => {
+    let sdkOnData: ((data: Uint8Array) => void | Promise<void>) | undefined
+    let delivered: Uint8Array | undefined
+    const process = {
+      async createPty(options: { onData: (data: Uint8Array) => void | Promise<void> }) {
+        sdkOnData = options.onData
+        return {
+          async waitForConnection() {},
+          async sendInput() {},
+          async disconnect() {},
+        }
+      },
+    } as unknown as DaytonaOfficialBrokerProcessV1
+    await withDaytonaGuestBrokerSdkSession(
+      process,
+      (data) => {
+        delivered = data
+      },
+      async () => {},
+    )
+
+    const providerBytes = new Uint8Array([1])
+    await sdkOnData!(providerBytes)
+    providerBytes[0] = 2
+    expect(delivered).not.toBe(providerBytes)
+    expect(delivered?.[0]).toBe(1)
   })
 
   test("credential-bound create bridges pass only hardened provider options", async () => {

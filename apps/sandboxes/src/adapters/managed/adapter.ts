@@ -2081,9 +2081,10 @@ function createManagedProviderAdapterFacade(
     list_owned_resources: (...args: Parameters<ManagedProviderAdapterV1["list_owned_resources"]>) =>
       core.list_owned_resources(...args),
   }
-  return facade
+  return Object.freeze(facade)
 }
 
+/** @internal Package-private provider factory used only by the public provider entry points. */
 export function createProductionManagedProviderAdapter(
   identity: AdapterIdentityV1,
   dependencies: ManagedAdapterDependenciesV1,
