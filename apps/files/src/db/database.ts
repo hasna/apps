@@ -90,6 +90,7 @@ function migrate(db: Database): void {
     { version: 18, sql: migration_v18 },
     { version: 19, sql: migration_v19 },
     { version: 20, sql: migration_v20 },
+    { version: 21, sql: migration_v21 },
   ];
 
   for (const m of migrations) {
@@ -968,6 +969,14 @@ const migration_v20 = `
   BEGIN
     DELETE FROM file_search_documents_fts WHERE document_id = OLD.id;
   END;
+`;
+
+// v21: upload signing headers are ephemeral transport capabilities. Scrub any
+// legacy values; new writes retain only an empty compatibility object.
+const migration_v21 = `
+  UPDATE file_upload_intents
+  SET required_headers = '{}'
+  WHERE required_headers <> '{}';
 `;
 
 function applyMigrationV15(db: Database): void {

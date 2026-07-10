@@ -97,6 +97,10 @@ private asset ids and object keys stay in operator artifacts.
 - Require checksum algorithm and checksum on every asset.
 - Keep upload URLs short lived.
 - Treat signed URLs as bearer tokens.
+- API clients accept HTTPS upload capabilities only for AWS S3 origins by
+  default. Non-AWS S3-compatible endpoints must be explicitly allowlisted with
+  `HASNA_FILES_EVIDENCE_UPLOAD_ORIGINS` (comma-separated HTTPS origins); plain
+  HTTP is accepted only for loopback test/development transports.
 - Default CLI/MCP upload output is an opaque receipt containing asset, intent,
   checksum, and status identifiers only. Transport URLs and signing headers are
   available only inside the explicit low-level create-intent transport and must

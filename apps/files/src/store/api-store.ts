@@ -10,12 +10,13 @@
  * transport escape hatch handles the sub-resource + action routes the CRUD
  * shape cannot express, matching the `/v1` route table in `src/server/v1.ts`.
  */
-import { existsSync, readFileSync, statSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { basename } from "path";
 import { lookup as mimeLookup } from "mime-types";
+import { z } from "zod";
 import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { HasnaHttpError } from "@hasna/contracts/client";
-import { sha256File } from "../lib/hasher.js";
+import { sha256Buffer } from "../lib/hasher.js";
 import type {
   Agent,
   AgentActivity,
@@ -24,6 +25,7 @@ import type {
   DuplicateGroup,
   FileAccessEvent,
   FileAsset,
+  FileUploadIntent,
   FileLink,
   FileWithTags,
   ListFilesOptions,
@@ -37,13 +39,12 @@ import type {
   CreateEvidenceUploadInput,
   EvidenceDownloadGrant,
   EvidenceStorageOptions,
-  EvidenceUploadReceipt,
   EvidenceUploadResult,
   EvidenceVerifyResult,
   SignEvidenceDownloadInput,
   UploadEvidenceFileInput,
 } from "../lib/evidence.js";
-import { redactSensitiveTransportText, toEvidenceUploadReceipt } from "../lib/evidence.js";
+import { sanitizeEvidenceTransportError, withoutEvidenceUploadTransport } from "../lib/evidence.js";
 import type { ListFileAssetsOptions } from "../db/evidence.js";
 import type {
   ActivityQueryOptions,
@@ -62,6 +63,57 @@ import type {
 } from "./types.js";
 
 const seg = (value: string): string => encodeURIComponent(value);
+
+const fileAssetSchema = z.object({
+  id: z.string().min(1),
+  org_id: z.string().min(1),
+  company_id: z.string().min(1).optional(),
+  app: z.string().min(1),
+  kind: z.string().min(1),
+  classification: z.string().min(1),
+  original_name: z.string().min(1),
+  content_type: z.string().min(1),
+  size: z.number().int().nonnegative(),
+  checksum: z.string().regex(/^[a-f0-9]{64}$/i),
+  checksum_algorithm: z.string().min(1),
+  storage_provider: z.enum(["s3", "local"]),
+  bucket: z.string().min(1).optional(),
+  region: z.string().min(1).optional(),
+  object_key: z.string().min(1),
+  quarantine_key: z.string().min(1).optional(),
+  status: z.enum(["pending_upload", "uploaded", "verified", "archived", "deleted"]),
+  scan_status: z.enum(["pending", "clean", "skipped", "suspicious", "blocked"]),
+  retention_until: z.string().min(1).optional(),
+  retention_policy: z.string().min(1).optional(),
+  storage_class: z.string().min(1).optional(),
+  legal_hold: z.boolean(),
+  immutable: z.boolean(),
+  metadata: z.record(z.unknown()),
+  created_at: z.string().min(1),
+  updated_at: z.string().min(1),
+  verified_at: z.string().min(1).optional(),
+}).strict();
+
+const uploadIntentSchema = z.object({
+  id: z.string().min(1),
+  asset_id: z.string().min(1),
+  method: z.literal("PUT"),
+  upload_url: z.string().min(1),
+  expires_at: z.string().min(1),
+  status: z.enum(["pending", "completed", "expired", "cancelled"]),
+  expected_checksum: z.string().regex(/^[a-f0-9]{64}$/i),
+  expected_checksum_algorithm: z.string().min(1),
+  expected_size: z.number().int().nonnegative(),
+  required_headers: z.record(z.string()),
+  metadata: z.record(z.unknown()),
+  created_at: z.string().min(1),
+  completed_at: z.string().min(1).optional(),
+}).strict();
+
+const createEvidenceUploadResultSchema = z.object({
+  asset: fileAssetSchema,
+  intent: uploadIntentSchema,
+}).strict();
 
 /** Map a 404 from a raw transport route to `null` (matches storage-client get). */
 async function orNull<T>(p: Promise<T>): Promise<T | null> {
@@ -329,39 +381,61 @@ export class ApiStore implements FilesStore {
   // redirect the shared vault. Bytes go to the server-signed URL directly.
   async createEvidenceUploadIntent(input: CreateEvidenceUploadInput, _storage?: EvidenceStorageOptions): Promise<EvidenceUploadResult> {
     try {
-      return await this.http.post<EvidenceUploadResult>("/evidence/upload-intents", input);
+      const raw = await this.http.post<unknown>("/evidence/upload-intents", input);
+      return parseCreateEvidenceUploadResult(raw, input);
     } catch (error) {
-      throw safeEvidenceUploadError(error);
+      throw sanitizeEvidenceTransportError(error);
     }
   }
-  async uploadEvidenceFile(input: UploadEvidenceFileInput, _storage?: EvidenceStorageOptions): Promise<EvidenceUploadReceipt> {
+  async uploadEvidenceFile(input: UploadEvidenceFileInput, _storage?: EvidenceStorageOptions): Promise<EvidenceUploadResult> {
     try {
       if (!existsSync(input.path)) throw new Error(`File not found: ${input.path}`);
-      const stat = statSync(input.path);
+      const bytes = readFileSync(input.path);
       const { path: _path, original_name, ...rest } = input;
-      const { intent } = await this.createEvidenceUploadIntent({
+      const created = await this.createEvidenceUploadIntent({
         ...rest,
         original_name: original_name ?? basename(input.path),
         content_type: (mimeLookup(input.path) || "application/octet-stream").toString(),
-        size: stat.size,
-        checksum: sha256File(input.path),
+        size: bytes.byteLength,
+        checksum: sha256Buffer(bytes),
         checksum_algorithm: "sha256",
       });
+      const { asset: createdAsset, intent } = created;
       if (!intent.upload_url) throw new Error("Server did not return an evidence upload URL");
-      const res = await fetch(intent.upload_url, {
-        method: intent.method,
-        headers: intent.required_headers,
-        body: readFileSync(input.path),
+      let res: Response;
+      try {
+        res = await fetch(intent.upload_url, {
+          method: intent.method,
+          headers: intent.required_headers,
+          body: bytes,
+        });
+      } catch {
+        // Fetch implementations can echo rejected header values and URLs. Do
+        // not replay the external exception across an agent-facing boundary.
+        throw new Error("Evidence byte upload transport failed before completion");
+      }
+      if (!res.ok) throw new Error(`Evidence byte upload failed with HTTP ${res.status}`);
+      const completedAsset = await this.completeEvidenceUpload(intent.id);
+      assertCompletedEvidenceBinding(createdAsset, intent, completedAsset);
+      return withoutEvidenceUploadTransport({
+        asset: completedAsset,
+        intent: {
+          ...intent,
+          status: "completed",
+          completed_at: completedAsset.verified_at ?? completedAsset.updated_at,
+        },
       });
-      if (!res.ok) throw new Error(`Evidence byte upload failed: ${res.status} ${res.statusText}`);
-      const asset = await this.completeEvidenceUpload(intent.id);
-      return toEvidenceUploadReceipt({ asset, intent }, "completed");
     } catch (error) {
-      throw safeEvidenceUploadError(error);
+      throw sanitizeEvidenceTransportError(error);
     }
   }
   async completeEvidenceUpload(intentId: string, _storage?: EvidenceStorageOptions): Promise<FileAsset> {
-    return this.http.post<FileAsset>(`/evidence/upload-intents/${seg(intentId)}/complete`);
+    try {
+      const raw = await this.http.post<unknown>(`/evidence/upload-intents/${seg(intentId)}/complete`);
+      return parseCompletedEvidenceAsset(raw);
+    } catch (error) {
+      throw sanitizeEvidenceTransportError(error);
+    }
   }
   async linkEvidenceAsset(input: CreateFileLinkInput): Promise<FileLink> {
     const { asset_id, ...rest } = input;
@@ -399,7 +473,183 @@ export class ApiStore implements FilesStore {
   }
 }
 
-function safeEvidenceUploadError(error: unknown): Error {
-  const message = error instanceof Error ? error.message : String(error);
-  return new Error(redactSensitiveTransportText(message));
+function parseCreateEvidenceUploadResult(raw: unknown, input: CreateEvidenceUploadInput): EvidenceUploadResult {
+  const parsed = createEvidenceUploadResultSchema.safeParse(raw);
+  if (!parsed.success) throw new Error("Invalid evidence upload intent response");
+  const result = parsed.data as EvidenceUploadResult;
+  const { asset, intent } = result;
+  const expectedAlgorithm = input.checksum_algorithm ?? "sha256";
+  const expectedClassification = input.classification ?? "evidence";
+  const expectedContentType = input.content_type ?? (mimeLookup(input.original_name) || "application/octet-stream").toString();
+
+  if (
+    asset.status !== "pending_upload"
+    || asset.scan_status !== "pending"
+    || asset.org_id !== input.org_id
+    || asset.company_id !== input.company_id
+    || asset.app !== input.app
+    || asset.kind !== input.kind
+    || asset.classification !== expectedClassification
+    || asset.original_name !== input.original_name
+    || asset.content_type !== expectedContentType
+    || asset.size !== input.size
+    || asset.checksum !== input.checksum
+    || asset.checksum_algorithm !== expectedAlgorithm
+    || asset.storage_provider !== "s3"
+    || asset.retention_until !== input.retention_until
+    || asset.retention_policy !== input.retention_policy
+    || asset.storage_class !== input.storage_class
+    || asset.legal_hold !== (input.legal_hold ?? false)
+    || asset.immutable !== (input.immutable ?? false)
+    || !sameJson(asset.metadata, input.metadata ?? {})
+    || intent.asset_id !== asset.id
+    || intent.status !== "pending"
+    || intent.expected_size !== input.size
+    || intent.expected_checksum !== input.checksum
+    || intent.expected_checksum_algorithm !== expectedAlgorithm
+    || Object.keys(intent.metadata).length !== 0
+    || !isTimestamp(intent.created_at)
+    || !isFutureTimestamp(intent.expires_at)
+    || Date.parse(intent.expires_at) <= Date.parse(intent.created_at)
+    || !isPermittedUploadUrl(intent.upload_url!)
+  ) {
+    throw new Error("Invalid evidence upload intent response");
+  }
+
+  validateEvidenceUploadHeaders(intent.required_headers, asset);
+  return result;
+}
+
+function parseCompletedEvidenceAsset(raw: unknown): FileAsset {
+  const parsed = fileAssetSchema.safeParse(raw);
+  if (!parsed.success) throw new Error("Invalid evidence upload completion response");
+  const asset = parsed.data as FileAsset;
+  if (
+    asset.status !== "verified"
+    || (asset.scan_status !== "clean" && asset.scan_status !== "skipped")
+    || !asset.verified_at
+    || !isTimestamp(asset.created_at)
+    || !isTimestamp(asset.updated_at)
+    || !isTimestamp(asset.verified_at)
+  ) {
+    throw new Error("Invalid evidence upload completion response");
+  }
+  return asset;
+}
+
+function assertCompletedEvidenceBinding(created: FileAsset, intent: FileUploadIntent, completed: FileAsset): void {
+  if (
+    completed.id !== intent.asset_id
+    || completed.id !== created.id
+    || completed.org_id !== created.org_id
+    || completed.company_id !== created.company_id
+    || completed.app !== created.app
+    || completed.kind !== created.kind
+    || completed.classification !== created.classification
+    || completed.original_name !== created.original_name
+    || completed.content_type !== created.content_type
+    || completed.size !== intent.expected_size
+    || completed.size !== created.size
+    || completed.checksum !== intent.expected_checksum
+    || completed.checksum !== created.checksum
+    || completed.checksum_algorithm !== intent.expected_checksum_algorithm
+    || completed.checksum_algorithm !== created.checksum_algorithm
+    || completed.storage_provider !== created.storage_provider
+    || completed.bucket !== created.bucket
+    || completed.region !== created.region
+    || completed.object_key !== created.object_key
+    || completed.quarantine_key !== created.quarantine_key
+    || completed.retention_until !== created.retention_until
+    || completed.retention_policy !== created.retention_policy
+    || completed.storage_class !== created.storage_class
+    || completed.legal_hold !== created.legal_hold
+    || completed.immutable !== created.immutable
+    || !sameJson(completed.metadata, created.metadata)
+    || completed.created_at !== created.created_at
+  ) {
+    throw new Error("Invalid evidence upload completion response");
+  }
+}
+
+function validateEvidenceUploadHeaders(headers: Record<string, string>, asset: FileAsset): void {
+  const expected = new Map<string, string>([
+    ["content-type", asset.content_type],
+    ["x-amz-checksum-sha256", Buffer.from(asset.checksum, "hex").toString("base64")],
+    ["x-amz-meta-asset-id", asset.id],
+    ["x-amz-meta-org-id", asset.org_id],
+    ["x-amz-meta-app", asset.app],
+    ["x-amz-meta-kind", asset.kind],
+    ["x-amz-meta-checksum", asset.checksum],
+    ["x-amz-meta-checksum-algorithm", asset.checksum_algorithm],
+  ]);
+  const received = new Map<string, string>();
+  for (const [name, value] of Object.entries(headers)) {
+    const normalized = name.toLowerCase();
+    if (
+      received.has(normalized)
+      || !expected.has(normalized)
+      || typeof value !== "string"
+      || value.length > 4096
+      || /[\0\r\n]/.test(value)
+      || value !== expected.get(normalized)
+    ) {
+      throw new Error("Invalid evidence upload intent response");
+    }
+    received.set(normalized, value);
+  }
+  if (received.size !== expected.size) throw new Error("Invalid evidence upload intent response");
+}
+
+function isPermittedUploadUrl(value: string): boolean {
+  if (value.length > 8192 || /[\0\r\n]/.test(value)) return false;
+  try {
+    const url = new URL(value);
+    if (url.username || url.password || url.hash) return false;
+    const loopback = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+    if (url.protocol === "http:") return loopback;
+    if (url.protocol !== "https:") return false;
+    const host = url.hostname.toLowerCase();
+    if (host === "amazonaws.com" || host.endsWith(".amazonaws.com") || host.endsWith(".amazonaws.com.cn")) return true;
+    return configuredEvidenceUploadOrigins().has(url.origin);
+  } catch {
+    return false;
+  }
+}
+
+function configuredEvidenceUploadOrigins(): Set<string> {
+  const raw = process.env.HASNA_FILES_EVIDENCE_UPLOAD_ORIGINS ?? process.env.FILES_EVIDENCE_UPLOAD_ORIGINS ?? "";
+  const origins = new Set<string>();
+  for (const candidate of raw.split(",").map((entry) => entry.trim()).filter(Boolean)) {
+    try {
+      const url = new URL(candidate);
+      if (url.protocol === "https:") origins.add(url.origin);
+    } catch {}
+  }
+  return origins;
+}
+
+function isFutureTimestamp(value: string): boolean {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && timestamp > Date.now();
+}
+
+function isTimestamp(value: string): boolean {
+  return Number.isFinite(Date.parse(value));
+}
+
+function sameJson(left: unknown, right: unknown): boolean {
+  return JSON.stringify(normalizeJson(left)) === JSON.stringify(normalizeJson(right));
+}
+
+function normalizeJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(normalizeJson);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, entry]) => entry !== undefined)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, normalizeJson(entry)]),
+    );
+  }
+  return value;
 }

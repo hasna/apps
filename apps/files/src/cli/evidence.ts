@@ -4,7 +4,7 @@ import { store } from "../store/index.js";
 import {
   getEvidenceStorageOptions,
   DEFAULT_EVIDENCE_S3_BUCKET,
-  redactSensitiveTransportText,
+  sanitizeEvidenceTransportError,
   toEvidenceUploadReceipt,
   type EvidenceStorageOptions,
 } from "../lib/evidence.js";
@@ -114,7 +114,7 @@ export function registerEvidenceCommands(program: Command): void {
               kind: opts.linkKind ?? opts.kind,
             })
           : undefined;
-        printResult({ ...result, link }, opts.json, `Uploaded and verified ${result.asset.id}`);
+        printResult({ ...toEvidenceUploadReceipt(result), link }, opts.json, `Uploaded and verified ${result.asset.id}`);
       });
     });
 
@@ -345,8 +345,7 @@ async function runCli(fn: () => Promise<void>): Promise<void> {
   try {
     await fn();
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(chalk.red(redactSensitiveTransportText(message)));
+    console.error(chalk.red(sanitizeEvidenceTransportError(error).message));
     process.exit(1);
   }
 }

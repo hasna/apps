@@ -831,7 +831,8 @@ function toEvIntent(r: Record<string, unknown>): FileUploadIntent {
     expected_checksum: String(r.expected_checksum),
     expected_checksum_algorithm: String(r.expected_checksum_algorithm),
     expected_size: Number(r.expected_size),
-    required_headers: parseJson(r.required_headers, {}) as Record<string, string>,
+    // Transport headers are ephemeral and never rehydrated from Postgres.
+    required_headers: {},
     metadata: parseJson(r.metadata, {}),
     created_at: String(r.created_at),
     completed_at: r.completed_at == null ? undefined : String(r.completed_at),
@@ -925,7 +926,7 @@ export async function evCreateUploadIntent(client: TypedQueryClient, input: Crea
     [
       id, input.asset_id, input.expires_at, input.expected_checksum,
       input.expected_checksum_algorithm, input.expected_size,
-      JSON.stringify(input.required_headers ?? {}), JSON.stringify(input.metadata ?? {}),
+      "{}", JSON.stringify(input.metadata ?? {}),
     ],
   );
   return (await evGetUploadIntent(client, id))!;

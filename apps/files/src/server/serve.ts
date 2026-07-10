@@ -16,6 +16,7 @@ import {
   listFileAccessEvents,
   listFileAssets,
   listFileLinks,
+  sanitizeEvidenceTransportError,
   signEvidenceDownload,
   verifyEvidenceAsset,
   type EvidenceStorageOptions,
@@ -478,7 +479,7 @@ export function startServer(port: number): void {
           });
         }
       } catch (error) {
-        return err((error as Error).message);
+        return err(sanitizeEvidenceTransportError(error).message);
       }
 
       // ── Stats ──────────────────────────────────────────────────────────

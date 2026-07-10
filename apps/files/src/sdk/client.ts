@@ -1,7 +1,7 @@
 // @generated from src/server/openapi.ts by @hasna/contracts/sdk — DO NOT EDIT.
 // Regenerate: bun run build:sdk
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: FilesClient 1.0.0
+// Source: FilesClient 1.1.0
 
 export interface Source { "id": string; "name": string; "type": "local" | "s3" | "google_drive"; "path"?: string | null; "bucket"?: string | null; "prefix"?: string | null; "region"?: string | null; "config"?: Record<string, unknown>; "machine_id": string; "enabled": boolean; "file_count": number; "created_at": string; "updated_at": string }
 
@@ -28,6 +28,20 @@ export interface TagsBody { "tags": Array<string> }
 export interface Ok { "ok": boolean }
 
 export interface Stats { "total_files": number; "total_size": number; "by_ext"?: Array<Record<string, unknown>>; "by_source"?: Array<Record<string, unknown>> }
+
+export interface CreateEvidenceUpload { "org_id": string; "company_id"?: string; "app": string; "kind": string; "original_name": string; "content_type"?: string; "size": number; "checksum": string; "checksum_algorithm"?: "sha256"; "classification"?: string; "retention_until"?: string; "retention_policy"?: string; "storage_class"?: string; "legal_hold"?: boolean; "immutable"?: boolean; "metadata"?: Record<string, unknown>; "expires_in_seconds"?: number }
+
+export interface FileAsset { "id": string; "org_id": string; "company_id"?: string; "app": string; "kind": string; "classification": string; "original_name": string; "content_type": string; "size": number; "checksum": string; "checksum_algorithm": string; "storage_provider": "s3" | "local"; "bucket"?: string; "region"?: string; "object_key": string; "quarantine_key"?: string; "status": "pending_upload" | "uploaded" | "verified" | "archived" | "deleted"; "scan_status": "pending" | "clean" | "skipped" | "suspicious" | "blocked"; "retention_until"?: string; "retention_policy"?: string; "storage_class"?: string; "legal_hold": boolean; "immutable": boolean; "metadata": Record<string, unknown>; "created_at": string; "updated_at": string; "verified_at"?: string }
+
+export interface FileUploadIntent { "id": string; "asset_id": string; "method": "PUT"; "upload_url": string; "expires_at": string; "status": "pending" | "completed" | "expired" | "cancelled"; "expected_checksum": string; "expected_checksum_algorithm": string; "expected_size": number; "required_headers": Record<string, string>; "metadata": Record<string, unknown>; "created_at": string; "completed_at"?: string }
+
+export interface EvidenceUploadResult { "asset": FileAsset; "intent": FileUploadIntent }
+
+export interface EvidenceUploadReceiptAsset { "id": string; "status": string; "scan_status": string; "checksum": string; "checksum_algorithm": string; "size": number; "storage_provider": string; "verified_at"?: string }
+
+export interface EvidenceUploadReceiptIntent { "id": string; "asset_id": string; "expires_at": string; "status": string; "expected_checksum": string; "expected_checksum_algorithm": string; "expected_size": number; "created_at": string; "completed_at"?: string }
+
+export interface EvidenceUploadReceipt { "asset": EvidenceUploadReceiptAsset; "intent": EvidenceUploadReceiptIntent }
 
 export interface FilesClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */
@@ -114,6 +128,24 @@ export class FilesClient {
     /** Remove a file from a collection */
     async removeFromCollection(id: string, fileId: string, init?: RequestInit): Promise<Ok> {
       return this.request("DELETE", `/collections/${encodeURIComponent(String(id))}/files/${encodeURIComponent(String(fileId))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Create an explicit sensitive evidence byte-upload intent */
+    async createEvidenceUploadIntent(body: CreateEvidenceUpload, init?: RequestInit): Promise<EvidenceUploadResult> {
+      return this.request("POST", `/evidence/upload-intents`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Verify and complete an evidence byte upload */
+    async completeEvidenceUpload(intentId: string, init?: RequestInit): Promise<FileAsset> {
+      return this.request("POST", `/evidence/upload-intents/${encodeURIComponent(String(intentId))}/complete`, {
         body: undefined,
         query: undefined,
         init,

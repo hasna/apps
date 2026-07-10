@@ -14,6 +14,7 @@ import {
   completeEvidenceUpload,
   createEvidenceUploadIntent,
   linkEvidenceAsset,
+  sanitizeEvidenceTransportError,
   signEvidenceDownload,
   verifyEvidenceAsset,
 } from "../lib/evidence.js";
@@ -488,7 +489,7 @@ export function createV1Handler(): V1Handler {
 
         return err("Not found", 404);
       } catch (e) {
-        return err((e as Error).message, 500);
+        return err(sanitizeEvidenceTransportError(e).message, 500);
       }
     },
   };

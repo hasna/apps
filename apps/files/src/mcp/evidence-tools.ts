@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { store } from "../store/index.js";
 import {
-  redactSensitiveTransportText,
+  sanitizeEvidenceTransportError,
   toEvidenceUploadReceipt,
   type EvidenceStorageOptions,
 } from "../lib/evidence.js";
@@ -98,13 +98,14 @@ export function registerEvidenceTools(registerTool: RegisterTool): void {
       immutable: params.immutable,
       metadata: params.metadata,
     }, storageOptions(params));
-    return jsonResult(result);
+    return jsonResult(toEvidenceUploadReceipt(result));
   }));
 
   registerTool("complete_evidence_upload", "Complete an evidence upload intent after bytes are uploaded", {
     intent_id: z.string(),
     ...storageSchema,
-  }, async (params) => jsonResult(await store().completeEvidenceUpload(params.intent_id, storageOptions(params))));
+  }, async (params) => safeEvidenceTool(async () =>
+    jsonResult(await store().completeEvidenceUpload(params.intent_id, storageOptions(params)))));
 
   registerTool("link_evidence_asset", "Link a verified evidence asset to an app domain record", {
     asset_id: z.string(),
@@ -199,7 +200,6 @@ async function safeEvidenceTool<T>(fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(redactSensitiveTransportText(message));
+    throw sanitizeEvidenceTransportError(error);
   }
 }

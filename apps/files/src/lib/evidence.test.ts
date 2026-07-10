@@ -23,8 +23,8 @@ process.env.HASNA_FILES_DB_PATH = join(testDir, "files.db");
 process.env.HASNA_FILES_EVIDENCE_STORAGE = "local";
 process.env.HASNA_FILES_EVIDENCE_LOCAL_ROOT = join(testDir, "evidence");
 
-const { closeDb } = await import("../db/database.js");
-const { getFileAsset, getFileUploadIntent } = await import("../db/evidence.js");
+const { closeDb, getDb } = await import("../db/database.js");
+const { createFileUploadIntent, getFileAsset, getFileUploadIntent } = await import("../db/evidence.js");
 const {
   completeEvidenceUpload,
   createEvidenceUploadIntent,
@@ -87,8 +87,10 @@ describe("evidence vault", () => {
     expect(asset.storage_class).toBe("STANDARD_IA");
     expect(asset.legal_hold).toBe(true);
     expect(asset.immutable).toBe(true);
+    expect(result.asset.app).toBe("iapp-accounting");
+    expect(result.asset.kind).toBe("receipt");
     expect("upload_url" in result.intent).toBe(false);
-    expect("required_headers" in result.intent).toBe(false);
+    expect(result.intent.required_headers).toEqual({});
     expect(getFileUploadIntent(result.intent.id)?.upload_url).toBeUndefined();
     expect(existsSync(join(evidenceRoot(), asset.object_key))).toBe(true);
     expect(existsSync(join(evidenceRoot(), asset.quarantine_key!))).toBe(false);
@@ -124,6 +126,53 @@ describe("evidence vault", () => {
     expect(actions).toContain("link");
     expect(actions).toContain("sign_download");
     expect(actions).toContain("verify");
+  });
+
+  test("never retains upload headers and scrubs legacy SQLite header material", async () => {
+    const created = await createEvidenceUploadIntent({
+      org_id: "org_hasna",
+      app: "iapp-accounting",
+      kind: "receipt",
+      original_name: "synthetic.txt",
+      content_type: "application/CANARY_EPHEMERAL_CONTENT_TYPE",
+      size: 1,
+      checksum: "0".repeat(64),
+    }, { provider: "local", localRoot: evidenceRoot() });
+
+    expect(JSON.stringify(created.intent.required_headers)).toContain("CANARY_EPHEMERAL_CONTENT_TYPE");
+    const createdRow = getDb()
+      .query<{ required_headers: string }, [string]>("SELECT required_headers FROM file_upload_intents WHERE id = ?")
+      .get(created.intent.id)!;
+    expect(createdRow.required_headers).toBe("{}");
+
+    const directIntent = createFileUploadIntent({
+      asset_id: created.asset.id,
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+      expected_checksum: created.asset.checksum,
+      expected_checksum_algorithm: created.asset.checksum_algorithm,
+      expected_size: created.asset.size,
+      required_headers: {
+        Authorization: "Bearer CANARY_SQLITE_AUTHORIZATION",
+        "x-amz-security-token": "CANARY_SQLITE_SESSION",
+      },
+    });
+    const directRow = getDb()
+      .query<{ required_headers: string }, [string]>("SELECT required_headers FROM file_upload_intents WHERE id = ?")
+      .get(directIntent.id)!;
+    expect(directRow.required_headers).toBe("{}");
+
+    getDb().run(
+      "UPDATE file_upload_intents SET required_headers = ? WHERE id = ?",
+      [JSON.stringify({ Authorization: "Bearer CANARY_LEGACY_AT_REST" }), directIntent.id],
+    );
+    getDb().run("DELETE FROM schema_migrations WHERE version = 21");
+    closeDb();
+
+    const migratedRow = getDb()
+      .query<{ required_headers: string }, [string]>("SELECT required_headers FROM file_upload_intents WHERE id = ?")
+      .get(directIntent.id)!;
+    expect(migratedRow.required_headers).toBe("{}");
+    expect(migratedRow.required_headers.includes("CANARY_")).toBe(false);
   });
 
   test("rejects checksum mismatches and blocks links until verification succeeds", async () => {

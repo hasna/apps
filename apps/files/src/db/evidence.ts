@@ -147,7 +147,8 @@ function toIntent(row: UploadIntentRow, uploadUrl?: string): FileUploadIntent {
     expected_checksum: row.expected_checksum,
     expected_checksum_algorithm: row.expected_checksum_algorithm,
     expected_size: row.expected_size,
-    required_headers: parseJsonObject(row.required_headers) as Record<string, string>,
+    // Transport headers are intentionally never rehydrated from persistence.
+    required_headers: {},
     metadata: parseJsonObject(row.metadata),
     created_at: row.created_at,
     completed_at: row.completed_at ?? undefined,
@@ -266,7 +267,7 @@ export function createFileUploadIntent(input: {
       input.expected_checksum,
       input.expected_checksum_algorithm,
       input.expected_size,
-      JSON.stringify(input.required_headers ?? {}),
+      "{}",
       JSON.stringify(input.metadata ?? {}),
     ],
   );

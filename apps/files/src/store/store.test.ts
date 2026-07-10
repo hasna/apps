@@ -144,6 +144,45 @@ describe("ApiStore route mapping", () => {
 
   it("routes the shared evidence vault through /v1/evidence (never local sqlite)", async () => {
     const { transport, calls } = fakeTransport();
+    const createdAt = new Date().toISOString();
+    const asset = {
+      id: "asset_1", org_id: "org_1", app: "iapp-accounting", kind: "receipt",
+      classification: "evidence", original_name: "r.pdf", content_type: "application/pdf",
+      size: 10, checksum: "a".repeat(64), checksum_algorithm: "sha256",
+      storage_provider: "s3", bucket: "synthetic-bucket", region: "us-east-1",
+      object_key: "evidence/asset_1/r.pdf", quarantine_key: "quarantine/evidence/asset_1/r.pdf",
+      status: "pending_upload", scan_status: "pending", legal_hold: false, immutable: false,
+      metadata: {}, created_at: createdAt, updated_at: createdAt,
+    };
+    (transport as unknown as { post: (path: string, body?: unknown) => Promise<unknown> }).post = async (path, body) => {
+      calls.push({ method: "POST", path, body });
+      if (path === "/evidence/upload-intents") {
+        return {
+          asset,
+          intent: {
+            id: "upl_1", asset_id: asset.id, method: "PUT",
+            upload_url: "https://synthetic-bucket.s3.amazonaws.com/upload",
+            expires_at: new Date(Date.now() + 60_000).toISOString(), status: "pending",
+            expected_checksum: asset.checksum, expected_checksum_algorithm: "sha256", expected_size: asset.size,
+            required_headers: {
+              "content-type": asset.content_type,
+              "x-amz-checksum-sha256": Buffer.from(asset.checksum, "hex").toString("base64"),
+              "x-amz-meta-asset-id": asset.id,
+              "x-amz-meta-org-id": asset.org_id,
+              "x-amz-meta-app": asset.app,
+              "x-amz-meta-kind": asset.kind,
+              "x-amz-meta-checksum": asset.checksum,
+              "x-amz-meta-checksum-algorithm": asset.checksum_algorithm,
+            },
+            metadata: {}, created_at: createdAt,
+          },
+        };
+      }
+      if (path === "/evidence/upload-intents/upl_1/complete") {
+        return { ...asset, status: "verified", scan_status: "skipped", updated_at: new Date().toISOString(), verified_at: new Date().toISOString() };
+      }
+      return { items: [], id: "x" };
+    };
     const store = new ApiStore(createHasnaStorageClient("files", transport));
 
     await store.createEvidenceUploadIntent({

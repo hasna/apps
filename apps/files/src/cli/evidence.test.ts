@@ -46,9 +46,14 @@ describe("evidence CLI", () => {
     const credentialCanary = "CANARY_CREDENTIAL_VALUE";
     const sessionCanary = "CANARY_SESSION_VALUE";
     const signatureCanary = "CANARY_SIGNATURE_VALUE";
+    const failureCanary = "CANARY_PROPAGATED_FAILURE_PATH";
     let uploadReceived = false;
     let completionReceived = false;
-    let failUpload = false;
+    let completionAfterSuccessfulUpload = false;
+    let successfulUpload = false;
+    let uploadedBytes = "";
+    let uploadedHeaders: Headers | undefined;
+    let lastAsset: Record<string, unknown> | undefined;
 
     const server = Bun.serve({
       hostname: "127.0.0.1",
@@ -58,14 +63,14 @@ describe("evidence CLI", () => {
         if (request.method === "POST" && url.pathname === "/v1/evidence/upload-intents") {
           const body = await request.json() as Record<string, unknown>;
           const now = new Date().toISOString();
-          const asset = {
+          const asset: Record<string, unknown> = {
             id: "asset_synthetic",
             org_id: body.org_id,
             app: body.app,
             kind: body.kind,
             classification: "evidence",
             original_name: body.original_name,
-            content_type: body.content_type,
+            content_type: body.content_type ?? "text/plain",
             size: body.size,
             checksum: body.checksum,
             checksum_algorithm: "sha256",
@@ -81,6 +86,7 @@ describe("evidence CLI", () => {
             created_at: now,
             updated_at: now,
           };
+          lastAsset = asset;
           const uploadUrl = new URL("/synthetic-upload-transport", server.url);
           uploadUrl.searchParams.set("Synthetic-Credential", credentialCanary);
           uploadUrl.searchParams.set("Synthetic-Session", sessionCanary);
@@ -97,7 +103,16 @@ describe("evidence CLI", () => {
               expected_checksum: body.checksum,
               expected_checksum_algorithm: "sha256",
               expected_size: body.size,
-              required_headers: { "content-type": body.content_type },
+              required_headers: {
+                "content-type": asset.content_type,
+                "x-amz-checksum-sha256": Buffer.from(String(body.checksum), "hex").toString("base64"),
+                "x-amz-meta-asset-id": asset.id,
+                "x-amz-meta-org-id": asset.org_id,
+                "x-amz-meta-app": asset.app,
+                "x-amz-meta-kind": asset.kind,
+                "x-amz-meta-checksum": body.checksum,
+                "x-amz-meta-checksum-algorithm": "sha256",
+              },
               metadata: {},
               created_at: now,
             },
@@ -105,38 +120,19 @@ describe("evidence CLI", () => {
         }
         if (request.method === "PUT" && url.pathname === "/synthetic-upload-transport") {
           uploadReceived = true;
-          await request.arrayBuffer();
-          if (failUpload) {
-            return new Response(null, {
-              status: 503,
-              statusText: `Synthetic-Credential=${credentialCanary}`,
-            });
-          }
+          uploadedHeaders = request.headers;
+          uploadedBytes = Buffer.from(await request.arrayBuffer()).toString();
+          successfulUpload = true;
           return new Response(null, { status: 200 });
         }
         if (request.method === "POST" && url.pathname === "/v1/evidence/upload-intents/intent_synthetic/complete") {
           completionReceived = true;
+          completionAfterSuccessfulUpload = successfulUpload;
           const now = new Date().toISOString();
           return Response.json({
-            id: "asset_synthetic",
-            org_id: "org_hasna",
-            app: "iapp-accounting",
-            kind: "receipt",
-            classification: "evidence",
-            original_name: "receipt.txt",
-            content_type: "text/plain",
-            size: 23,
-            checksum: "synthetic-checksum",
-            checksum_algorithm: "sha256",
-            storage_provider: "s3",
-            bucket: "synthetic-bucket",
-            object_key: "evidence/synthetic-object",
+            ...lastAsset,
             status: "verified",
             scan_status: "skipped",
-            legal_hold: false,
-            immutable: false,
-            metadata: {},
-            created_at: now,
             updated_at: now,
             verified_at: now,
           });
@@ -213,7 +209,6 @@ describe("evidence CLI", () => {
         new Response(createProc.stderr).text(),
       ]);
 
-      failUpload = true;
       const failingProc = Bun.spawn({
         cmd: [
           "bun",
@@ -221,7 +216,7 @@ describe("evidence CLI", () => {
           cliPath,
           "evidence",
           "upload",
-          fixture,
+          `https://synthetic.invalid/transport/${failureCanary}`,
           "--org",
           "org_hasna",
           "--app",
@@ -251,6 +246,10 @@ describe("evidence CLI", () => {
       expect(failingStdout).toBe("");
       expect(uploadReceived).toBe(true);
       expect(completionReceived).toBe(true);
+      expect(completionAfterSuccessfulUpload).toBe(true);
+      expect(uploadedBytes).toBe("synthetic receipt bytes");
+      expect(uploadedHeaders?.get("content-type")).toBe("text/plain");
+      expect(uploadedHeaders?.get("x-amz-meta-asset-id")).toBe("asset_synthetic");
       const output = JSON.parse(stdout) as { intent: Record<string, unknown> };
       const createOutput = JSON.parse(createStdout) as { intent: Record<string, unknown> };
       expect("upload_url" in output.intent).toBe(false);
@@ -264,6 +263,7 @@ describe("evidence CLI", () => {
         credentialCanary,
         sessionCanary,
         signatureCanary,
+        failureCanary,
       ].some((marker) => ordinaryTranscript.includes(marker));
       expect(leaked).toBe(false);
     } finally {

@@ -48,6 +48,7 @@
     "build:lib": "bun build src/index.ts --outdir dist --target bun --external @aws-sdk/* && bun build src/lib/path.ts --outfile dist/path.js --target bun && bun build src/s3.ts --outfile dist/s3.js --target bun --external @aws-sdk/* && bun run build:types",
     "build:types": "tsc --emitDeclarationOnly --outDir dist",
     "build:dashboard": "cd dashboard && bun run build",
+    "check:evidence-package-api": "bun run scripts/check-evidence-package-api.ts",
     "prepack": "bun run build",
     "prepublishOnly": "bun run typecheck && bun test",
     "smoke:knowledge-installed": "bun run scripts/knowledge-installed-smoke.ts",

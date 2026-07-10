@@ -52,6 +52,10 @@ export interface CreateUploadIntentInput {
   expected_checksum: string;
   expected_checksum_algorithm: string;
   expected_size: number;
+  /**
+   * Compatibility-only input. Database adapters must discard transport header
+   * values; the live create-intent result carries them only in memory.
+   */
   required_headers?: Record<string, string>;
   metadata?: Record<string, unknown>;
 }
@@ -152,7 +156,6 @@ export interface EvidenceUploadReceipt {
 
 export function toEvidenceUploadReceipt(
   result: EvidenceUploadResult,
-  status: FileUploadIntent["status"] = result.intent.status,
 ): EvidenceUploadReceipt {
   const { intent } = result;
   const { asset } = result;
@@ -171,7 +174,7 @@ export function toEvidenceUploadReceipt(
       id: intent.id,
       asset_id: intent.asset_id,
       expires_at: intent.expires_at,
-      status,
+      status: intent.status,
       expected_checksum: intent.expected_checksum,
       expected_checksum_algorithm: intent.expected_checksum_algorithm,
       expected_size: intent.expected_size,
@@ -181,17 +184,106 @@ export function toEvidenceUploadReceipt(
   };
 }
 
-/** Redact query-bearing transport URLs before an error reaches a transcript. */
+/**
+ * Redact transport capabilities in unstructured text before it reaches an
+ * agent transcript. This deliberately treats every absolute HTTP/file URL in
+ * evidence errors as sensitive: opaque path capabilities are just as powerful
+ * as query-signed URLs.
+ */
 export function redactSensitiveTransportText(value: string): string {
+  const sensitiveName = "authorization|proxy-authorization|x-api-key|x-amz-[a-z0-9-]+|(?:security[-_]?|session[-_]?)?token|credential|signature|secret|password";
   return value
-    .replace(/\bhttps?:\/\/[^\s"'<>]+/gi, (candidate) => {
-      const query = candidate.indexOf("?");
-      return query === -1 ? candidate : "[REDACTED_TRANSPORT_URL]";
-    })
+    .replace(/\b(?:https?|file):(?:\\?\/){2,3}[^\s"'<>]+/gi, "[REDACTED_TRANSPORT_URL]")
+    .replace(/\b(?:https?|file)(?:%3a|%253a)(?:(?:%2f|%252f)){2,3}[^\s"'<>]*/gi, "[REDACTED_TRANSPORT_URL]")
+    .replace(new RegExp(`((?:"?)(?:${sensitiveName})"?\\s*[:=]\\s*)"[^"]*"`, "gi"), '$1"[REDACTED]"')
+    .replace(new RegExp(`((?:'?)(?:${sensitiveName})'?\\s*[:=]\\s*)'[^']*'`, "gi"), "$1'[REDACTED]'")
     .replace(
-      /(^|[?&\s])[^?&=\s]*(?:credential|signature|session|security[-_]?token)[^?&=\s]*=[^&\s]*/gi,
+      new RegExp(`(\\b(?:${sensitiveName})\\b\\s*[:=]\\s*)(?:(?:Bearer|Basic)\\s+)?[^\\s,;}\\]]+`, "gi"),
+      "$1[REDACTED]",
+    )
+    .replace(
+      new RegExp(`(\\b(?:${sensitiveName})(?:=|%3d|%253d))[^&\\s,;}\\]]+`, "gi"),
       "$1[REDACTED]",
     );
+}
+
+/** Recursively copy structured transport/error data with sensitive leaves removed. */
+export function sanitizeEvidenceTransportValue(value: unknown, seen = new WeakMap<object, unknown>()): unknown {
+  if (typeof value === "string") return redactSensitiveTransportText(value);
+  if (value === null || typeof value !== "object") return value;
+  if (value instanceof Date) return value;
+  if (seen.has(value)) return "[REDACTED_CIRCULAR]";
+
+  if (value instanceof Error) {
+    const result: Record<string, unknown> = {
+      name: value.name,
+      message: redactSensitiveTransportText(value.message),
+    };
+    seen.set(value, result);
+    for (const [key, entry] of Object.entries(value)) {
+      result[key] = isSensitiveTransportKey(key)
+        ? "[REDACTED]"
+        : sanitizeEvidenceTransportValue(entry, seen);
+    }
+    return result;
+  }
+
+  if (Array.isArray(value)) {
+    const result: unknown[] = [];
+    seen.set(value, result);
+    for (const entry of value) result.push(sanitizeEvidenceTransportValue(entry, seen));
+    return result;
+  }
+
+  const result: Record<string, unknown> = {};
+  seen.set(value, result);
+  for (const [key, entry] of Object.entries(value)) {
+    result[key] = isSensitiveTransportKey(key)
+      ? "[REDACTED]"
+      : sanitizeEvidenceTransportValue(entry, seen);
+  }
+  return result;
+}
+
+/** Preserve the original error class/status while removing every sensitive field. */
+export function sanitizeEvidenceTransportError(error: unknown): Error {
+  if (!(error instanceof Error)) return new Error(redactSensitiveTransportText(String(error)));
+
+  try { error.message = redactSensitiveTransportText(error.message); } catch {}
+  if (typeof error.stack === "string") {
+    try { error.stack = redactSensitiveTransportText(error.stack); } catch {}
+  }
+  for (const key of Object.keys(error)) {
+    const current = (error as unknown as Record<string, unknown>)[key];
+    const sanitized = isSensitiveTransportKey(key)
+      ? "[REDACTED]"
+      : sanitizeEvidenceTransportValue(current);
+    try { (error as unknown as Record<string, unknown>)[key] = sanitized; } catch {}
+  }
+  return error;
+}
+
+/** Full public result shape with all byte-transport material removed. */
+export function withoutEvidenceUploadTransport(result: EvidenceUploadResult): EvidenceUploadResult {
+  const { upload_url: _url, required_headers: _headers, ...intent } = result.intent;
+  return {
+    asset: result.asset,
+    intent: { ...intent, required_headers: {} },
+  };
+}
+
+function isSensitiveTransportKey(key: string): boolean {
+  const normalized = key.toLowerCase().replace(/_/g, "-");
+  return normalized === "url"
+    || normalized === "href"
+    || normalized.endsWith("-url")
+    || normalized === "headers"
+    || normalized === "required-headers"
+    || normalized === "authorization"
+    || normalized === "proxy-authorization"
+    || normalized === "x-api-key"
+    || normalized.startsWith("x-amz-")
+    || /(?:^|-)(?:credential|signature|token|secret|password|cookie)(?:$|-)/.test(normalized);
 }
 
 export interface EvidenceDownloadGrant {
@@ -285,7 +377,6 @@ export async function createEvidenceUploadIntent(
     expected_checksum: asset.checksum,
     expected_checksum_algorithm: asset.checksum_algorithm,
     expected_size: asset.size,
-    required_headers: requiredHeaders,
   });
 
   const uploadUrl = storage.provider === "s3"
@@ -319,7 +410,7 @@ export async function uploadEvidenceFile(
   input: UploadEvidenceFileInput,
   storageOverrides: EvidenceStorageOptions = {},
   db: EvidenceDb = sqliteEvidenceDb,
-): Promise<EvidenceUploadReceipt> {
+): Promise<EvidenceUploadResult> {
   if (!existsSync(input.path)) throw new Error(`File not found: ${input.path}`);
   const stat = statSync(input.path);
   const result = await createEvidenceUploadIntent({
@@ -350,10 +441,10 @@ export async function uploadEvidenceFile(
   }
 
   const completed = await completeEvidenceUpload(result.intent.id, storageOverrides, db);
-  return toEvidenceUploadReceipt({
+  return withoutEvidenceUploadTransport({
     asset: completed,
     intent: (await db.getFileUploadIntent(result.intent.id))!,
-  }, "completed");
+  });
 }
 
 export async function completeEvidenceUpload(
