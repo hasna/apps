@@ -19,6 +19,30 @@ import {
 } from "./sdk-pins"
 import type { GuestBrokerRequestFrameV1 } from "./types"
 
+const INTRINSIC_UINT8_ARRAY = Uint8Array
+const TYPED_ARRAY_PROTOTYPE = Object.getPrototypeOf(INTRINSIC_UINT8_ARRAY.prototype) as object
+const TYPED_ARRAY_BUFFER_GETTER = Object.getOwnPropertyDescriptor(
+  TYPED_ARRAY_PROTOTYPE,
+  "buffer",
+)!.get!
+const TYPED_ARRAY_BYTE_LENGTH_GETTER = Object.getOwnPropertyDescriptor(
+  TYPED_ARRAY_PROTOTYPE,
+  "byteLength",
+)!.get!
+const TYPED_ARRAY_BYTE_OFFSET_GETTER = Object.getOwnPropertyDescriptor(
+  TYPED_ARRAY_PROTOTYPE,
+  "byteOffset",
+)!.get!
+const TYPED_ARRAY_NAME_GETTER = Object.getOwnPropertyDescriptor(
+  TYPED_ARRAY_PROTOTYPE,
+  Symbol.toStringTag,
+)!.get!
+const ARRAY_BUFFER_BYTE_LENGTH_GETTER = Object.getOwnPropertyDescriptor(
+  ArrayBuffer.prototype,
+  "byteLength",
+)!.get!
+const TYPED_ARRAY_SET = INTRINSIC_UINT8_ARRAY.prototype.set
+
 export interface GuestBrokerSdkSessionV1 {
   sendFrame(frame: GuestBrokerRequestFrameV1): Promise<void>
   closeInput(): Promise<void>
@@ -171,14 +195,16 @@ function createDaytonaGuestBrokerSession(handle: Pick<PtyHandle, "sendInput" | "
 
 function snapshotDaytonaProviderBytes(data: Uint8Array): Uint8Array {
   try {
-    if (!(data instanceof Uint8Array)) throw new TypeError("invalid_provider_bytes")
-    const buffer = data.buffer
-    if (typeof SharedArrayBuffer !== "undefined" && buffer instanceof SharedArrayBuffer) {
-      throw new TypeError("shared_provider_bytes")
+    if (Reflect.apply(TYPED_ARRAY_NAME_GETTER, data, []) !== "Uint8Array") {
+      throw new TypeError("invalid_provider_bytes")
     }
-    const byteLength = data.byteLength
-    const snapshot = new Uint8Array(data)
-    if (snapshot.byteLength !== byteLength) throw new TypeError("unstable_provider_bytes")
+    const buffer = Reflect.apply(TYPED_ARRAY_BUFFER_GETTER, data, []) as ArrayBuffer
+    Reflect.apply(ARRAY_BUFFER_BYTE_LENGTH_GETTER, buffer, [])
+    const byteOffset = Reflect.apply(TYPED_ARRAY_BYTE_OFFSET_GETTER, data, []) as number
+    const byteLength = Reflect.apply(TYPED_ARRAY_BYTE_LENGTH_GETTER, data, []) as number
+    const cleanView = new INTRINSIC_UINT8_ARRAY(buffer, byteOffset, byteLength)
+    const snapshot = new INTRINSIC_UINT8_ARRAY(byteLength)
+    Reflect.apply(TYPED_ARRAY_SET, snapshot, [cleanView])
     return snapshot
   } catch (cause) {
     throw adapterError("integrity_failed", { cause })
@@ -190,7 +216,7 @@ export async function withDaytonaGuestBrokerSdkSession(
   onData: (data: Uint8Array) => void | Promise<void>,
   use: (session: GuestBrokerSdkSessionV1) => Promise<void>,
 ): Promise<void> {
-  let inboundOpen = true
+  let inboundOpen = false
   let handle: Awaited<ReturnType<DaytonaOfficialBrokerProcessV1["createPty"]>>
   try {
     handle = await process.createPty({
@@ -216,6 +242,7 @@ export async function withDaytonaGuestBrokerSdkSession(
   try {
     await handle.waitForConnection()
     await handle.sendInput(`${MANAGED_GUEST_BROKER_BOOTSTRAP_COMMAND}\n`)
+    inboundOpen = true
     await use(session)
   } finally {
     inboundOpen = false

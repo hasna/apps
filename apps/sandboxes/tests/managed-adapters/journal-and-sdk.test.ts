@@ -568,33 +568,48 @@ describe("official SDK guest-broker compensation bridges", () => {
     await expect(daytonaSession!.sendFrame(brokerFrame())).rejects.toThrow("guest_broker_session_closed")
   })
 
-  test("Daytona disconnects when connection or fixed-bootstrap setup fails", async () => {
+  test("Daytona disconnects and keeps inbound closed when setup fails", async () => {
     for (const failure of ["connection", "bootstrap"] as const) {
       let disconnectCalls = 0
       let useCalls = 0
+      let sdkOnData: ((data: Uint8Array) => void | Promise<void>) | undefined
+      const delivered: number[] = []
       const process = {
-        async createPty() {
+        async createPty(options: { onData: (data: Uint8Array) => void | Promise<void> }) {
+          sdkOnData = options.onData
+          await sdkOnData(new Uint8Array([1]))
           return {
             async waitForConnection() {
+              await sdkOnData!(new Uint8Array([2]))
               if (failure === "connection") throw new Error("connection setup failed")
             },
             async sendInput() {
+              await sdkOnData!(new Uint8Array([3]))
               if (failure === "bootstrap") throw new Error("bootstrap setup failed")
             },
             async disconnect() {
               disconnectCalls += 1
+              await sdkOnData!(new Uint8Array([4]))
             },
           }
         },
       } as unknown as DaytonaOfficialBrokerProcessV1
 
       await expect(
-        withDaytonaGuestBrokerSdkSession(process, () => {}, async () => {
-          useCalls += 1
-        }),
+        withDaytonaGuestBrokerSdkSession(
+          process,
+          (data) => {
+            delivered.push(data[0]!)
+          },
+          async () => {
+            useCalls += 1
+          },
+        ),
       ).rejects.toThrow(failure === "connection" ? "connection setup failed" : "bootstrap setup failed")
+      await sdkOnData!(new Uint8Array([5]))
       expect(useCalls).toBe(0)
       expect(disconnectCalls).toBe(1)
+      expect(delivered).toEqual([])
     }
   })
 
@@ -648,6 +663,41 @@ describe("official SDK guest-broker compensation bridges", () => {
     )
 
     expect(delivered?.[0]).toBe(1)
+  })
+
+  test("Daytona opens inbound only after broker bootstrap succeeds", async () => {
+    let sdkOnData: ((data: Uint8Array) => void | Promise<void>) | undefined
+    const delivered: number[] = []
+    const process = {
+      async createPty(options: { onData: (data: Uint8Array) => void | Promise<void> }) {
+        sdkOnData = options.onData
+        await sdkOnData(new Uint8Array([1]))
+        return {
+          async waitForConnection() {
+            await sdkOnData!(new Uint8Array([2]))
+          },
+          async sendInput() {
+            await sdkOnData!(new Uint8Array([3]))
+          },
+          async disconnect() {
+            await sdkOnData!(new Uint8Array([5]))
+          },
+        }
+      },
+    } as unknown as DaytonaOfficialBrokerProcessV1
+
+    await withDaytonaGuestBrokerSdkSession(
+      process,
+      (data) => {
+        delivered.push(data[0]!)
+      },
+      async () => {
+        await sdkOnData!(new Uint8Array([4]))
+      },
+    )
+    await sdkOnData!(new Uint8Array([6]))
+
+    expect(delivered).toEqual([4])
   })
 
   test("Daytona drops provider callbacks before successful and failed scope finalization", async () => {
@@ -758,6 +808,60 @@ describe("official SDK guest-broker compensation bridges", () => {
       expect(failure).toBeInstanceOf(AdapterContractError)
       expect(failure).toMatchObject({ code: "integrity_failed" })
     }
+  })
+
+  test("Daytona authenticates backing buffers despite typed-array shadows", async () => {
+    let sdkOnData: ((data: Uint8Array) => void | Promise<void>) | undefined
+    const delivered: number[] = []
+    const process = {
+      async createPty(options: { onData: (data: Uint8Array) => void | Promise<void> }) {
+        sdkOnData = options.onData
+        return {
+          async waitForConnection() {},
+          async sendInput() {},
+          async disconnect() {},
+        }
+      },
+    } as unknown as DaytonaOfficialBrokerProcessV1
+
+    await withDaytonaGuestBrokerSdkSession(
+      process,
+      (data) => {
+        delivered.push(data[0]!)
+      },
+      async () => {
+        const ownShadowed = new Uint8Array(new SharedArrayBuffer(1))
+        ownShadowed[0] = 7
+        Object.defineProperty(ownShadowed, "buffer", { value: new ArrayBuffer(1) })
+
+        const proxyTarget = new Uint8Array(new SharedArrayBuffer(1))
+        proxyTarget[0] = 8
+        const iteratorSpoof = new Proxy(proxyTarget, {
+          get(target, key, receiver) {
+            if (key === "buffer") return new ArrayBuffer(target.byteLength)
+            if (key === "byteLength") return target.byteLength
+            if (key === Symbol.iterator) return target[Symbol.iterator].bind(target)
+            return Reflect.get(target, key, receiver)
+          },
+        })
+
+        const failures: unknown[] = []
+        for (const hostile of [ownShadowed, iteratorSpoof]) {
+          try {
+            await sdkOnData!(hostile)
+          } catch (error) {
+            failures.push(error)
+          }
+        }
+        expect(failures).toHaveLength(2)
+        for (const failure of failures) {
+          expect(failure).toBeInstanceOf(AdapterContractError)
+          expect(failure).toMatchObject({ code: "integrity_failed" })
+        }
+      },
+    )
+
+    expect(delivered).toEqual([])
   })
 
   test("credential-bound create bridges pass only hardened provider options", async () => {
