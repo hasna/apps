@@ -19,6 +19,8 @@ export interface V1RequestDependencies {
 }
 
 const JSON_HEADERS = { "Content-Type": "application/json" } as const;
+const DEFAULT_COMMENT_PAGE_SIZE = 100;
+const MAX_COMMENT_PAGE_SIZE = 500;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
@@ -45,6 +47,28 @@ function contextFromPrincipal(principal: { agent: string | null }, body?: { agen
 
 function redactComment(comment: TaskComment): TaskComment {
   return { ...comment, content: redactEvidenceText(comment.content) };
+}
+
+function encodeCommentCursor(comment: Pick<TaskComment, "created_at" | "id">): string {
+  return Buffer.from(JSON.stringify({ created_at: comment.created_at, id: comment.id }), "utf8").toString("base64url");
+}
+
+function decodeCommentCursor(value: string): { created_at: string; id: string } {
+  if (value.length > 1_024) throw new Error("invalid comment cursor");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+  } catch {
+    throw new Error("invalid comment cursor");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid comment cursor");
+  const cursor = parsed as Record<string, unknown>;
+  if (typeof cursor["created_at"] !== "string" || cursor["created_at"].length > 64 ||
+      !Number.isFinite(Date.parse(cursor["created_at"])) ||
+      typeof cursor["id"] !== "string" || !cursor["id"] || cursor["id"].length > 256) {
+    throw new Error("invalid comment cursor");
+  }
+  return { created_at: cursor["created_at"], id: cursor["id"] };
 }
 
 /**
@@ -248,8 +272,34 @@ export async function handleV1Request(
         // throws TaskNotFoundError) instead of silently writing an orphan row.
         if (action === "comments") {
           if (method === "GET") {
-            const comments = (await store.audit.getComments(id)).map(redactComment);
-            return json({ comments, count: comments.length });
+            if (!(await store.tasks.get(id))) return error(404, "task not found");
+            const rawLimit = url.searchParams.get("limit");
+            const limit = rawLimit === null ? DEFAULT_COMMENT_PAGE_SIZE : Number(rawLimit);
+            if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_COMMENT_PAGE_SIZE) {
+              return error(400, `limit must be an integer between 1 and ${MAX_COMMENT_PAGE_SIZE}`);
+            }
+            let before: { created_at: string; id: string } | undefined;
+            const cursor = url.searchParams.get("cursor");
+            if (cursor) {
+              try {
+                before = decodeCommentCursor(cursor);
+              } catch {
+                return error(400, "invalid comment cursor");
+              }
+            }
+            const page = (await store.audit.getComments(
+              id,
+              { limit: limit + 1, ...(before ? { before } : {}) },
+              contextFromPrincipal(principal),
+            )).map(redactComment);
+            const hasMore = page.length > limit;
+            const comments = hasMore ? page.slice(1) : page;
+            return json({
+              comments,
+              count: comments.length,
+              has_more: hasMore,
+              next_cursor: hasMore && comments[0] ? encodeCommentCursor(comments[0]) : null,
+            });
           }
           if (method === "POST") {
             const body = (await readJson<{

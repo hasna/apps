@@ -186,12 +186,18 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
       progress_pct: null,
       created_at: "2026-07-10T00:00:00.000Z",
     };
-    const calls = installFetch(() => ({ body: { comments: [comment], count: 1 } }));
+    const calls = installFetch(() => ({ body: { comments: [comment], count: 1, has_more: false, next_cursor: null } }));
     const client = getTodosCloudClient(CLOUD_ENV)!;
 
-    await expect(cloudListComments(client, comment.task_id)).resolves.toEqual([comment]);
+    await expect(cloudListComments(client, comment.task_id)).resolves.toEqual({
+      comments: [comment],
+      count: 1,
+      has_more: false,
+      next_cursor: null,
+      limit: 100,
+    });
     expect(calls[0]!.method).toBe("GET");
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/task%2Fwith%20%3F%20reserved/comments");
+    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/task%2Fwith%20%3F%20reserved/comments?limit=100");
     expect(calls[0]!.headers["authorization"]).toBe("Bearer hasna_todos_test_key");
   });
 
@@ -226,17 +232,72 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     };
     installFetch(() => ({ body: [comment] }));
     const client = getTodosCloudClient(CLOUD_ENV)!;
-    await expect(cloudListComments(client, "t2")).resolves.toEqual([comment]);
+    await expect(cloudListComments(client, "t2")).resolves.toEqual({
+      comments: [comment],
+      count: 1,
+      has_more: false,
+      next_cursor: null,
+      limit: 100,
+    });
+  });
+
+  test("comments exposes bounded cursor pagination without silently consuming every page", async () => {
+    const comment = {
+      id: "c-page",
+      task_id: "t-page",
+      agent_id: null,
+      session_id: null,
+      content: "newest page",
+      type: "comment" as const,
+      progress_pct: null,
+      created_at: "2026-07-10T00:00:00.000Z",
+    };
+    const calls = installFetch(() => ({
+      body: { comments: [comment], count: 1, has_more: true, next_cursor: "opaque-next" },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const page = await cloudListComments(client, "t-page", { limit: 25, cursor: "opaque-current" });
+    expect(page).toMatchObject({ count: 1, has_more: true, next_cursor: "opaque-next", limit: 25 });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe(
+      "https://todos.hasna.xyz/v1/tasks/t-page/comments?limit=25&cursor=opaque-current",
+    );
   });
 
   test("comments fails closed on malformed or internally inconsistent 2xx responses", async () => {
-    const malformed = [null, {}, { comments: null }, { comments: [{}], count: 1 }, { comments: [], count: 1 }];
+    const malformed = [
+      null,
+      {},
+      { comments: null },
+      { comments: [{}], count: 1 },
+      { comments: [], count: 1 },
+      { comments: [], count: 0, has_more: true, next_cursor: null },
+      { comments: [], count: 0, has_more: false, next_cursor: "unexpected" },
+    ];
     for (const body of malformed) {
       resetTodosCloudClient();
       installFetch(() => ({ body }));
       const client = getTodosCloudClient(CLOUD_ENV)!;
-      await expect(cloudListComments(client, "t3")).rejects.toThrow(/invalid cloud comments response/i);
+      await expect(cloudListComments(client, "t3")).rejects.toThrow(/invalid cloud comments.*response/i);
     }
+  });
+
+  test("comments rejects invalid limits and server pages larger than requested", async () => {
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    for (const limit of [0, 501, 1.5, Number.NaN]) {
+      await expect(cloudListComments(client, "t-limit", { limit })).rejects.toThrow(/limit/i);
+    }
+    for (const cursor of ["", "a".repeat(1_025)]) {
+      await expect(cloudListComments(client, "t-limit", { cursor })).rejects.toThrow(/cursor/i);
+    }
+
+    resetTodosCloudClient();
+    installFetch(() => ({ body: { comments: [
+      { id: "c1", task_id: "t-limit", agent_id: null, session_id: null, content: "one", type: "comment", progress_pct: null, created_at: "2026-07-10T00:00:00.000Z" },
+      { id: "c2", task_id: "t-limit", agent_id: null, session_id: null, content: "two", type: "comment", progress_pct: null, created_at: "2026-07-10T00:00:01.000Z" },
+    ], count: 2, has_more: false, next_cursor: null } }));
+    await expect(cloudListComments(getTodosCloudClient(CLOUD_ENV)!, "t-limit", { limit: 1 }))
+      .rejects.toThrow(/exceeds requested limit/i);
   });
 
   test("comments gives an actionable compatibility error for an older server and propagates 5xx", async () => {

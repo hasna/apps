@@ -199,6 +199,28 @@ describe("storage adapter contracts", () => {
     expect(await adapter.tasks.get(task.id)).toMatchObject({ id: task.id });
   });
 
+  test("local comment cursors use portable timestamp/id order without changing default insertion order", async () => {
+    const adapter = createLocalSqliteTodosStorageAdapter({ db });
+    const task = await adapter.tasks.create({ title: "Local comment cursor" });
+    const timestamp = "2026-07-10T00:00:00.000Z";
+    for (const id of ["same-c", "same-b", "same-a"]) {
+      db.run(
+        `INSERT INTO task_comments (id, task_id, content, type, created_at)
+         VALUES (?, ?, ?, 'comment', ?)`,
+        [id, task.id, id, timestamp],
+      );
+    }
+
+    expect((await adapter.audit.getComments(task.id)).map((comment) => comment.id))
+      .toEqual(["same-c", "same-b", "same-a"]);
+    expect((await adapter.audit.getComments(task.id, { limit: 2 })).map((comment) => comment.id))
+      .toEqual(["same-b", "same-c"]);
+    expect((await adapter.audit.getComments(task.id, {
+      limit: 2,
+      before: { created_at: timestamp, id: "same-b" },
+    })).map((comment) => comment.id)).toEqual(["same-a"]);
+  });
+
   test("exports and imports local SQLite snapshots through the storage adapter", async () => {
     const source = createLocalSqliteTodosStorageAdapter({ db });
     const project = await source.projects.create({ name: "Snapshot Project", path: "/tmp/snapshot-project" });
@@ -646,11 +668,14 @@ describe("storage adapter contracts", () => {
 
     const first = await request("POST", `/v1/tasks/${task.id}/comments`, { content: "first safe comment" });
     expect(first.status).toBe(201);
+    const firstComment = (await first.json() as { comment: { id: string; content: string } }).comment;
     await Bun.sleep(2);
     const second = await request("POST", `/v1/tasks/${task.id}/comments`, {
       content: "Bearer abcdefghijklmnop should redact",
     });
     expect(second.status).toBe(201);
+    const secondComment = (await second.json() as { comment: { id: string; content: string } }).comment;
+    expect(secondComment.content).toContain("[REDACTED]");
 
     const commentWrites = calls.filter((call) => call.sql.includes("INSERT INTO todos_sync_records") && call.values?.[1] === "comments");
     expect(commentWrites).toHaveLength(2);
@@ -686,6 +711,101 @@ describe("storage adapter contracts", () => {
     const safeHistorical = historicalBody.comments.find((comment) => comment.id === historical.id);
     expect(safeHistorical?.content).toContain("[REDACTED]");
     expect(safeHistorical?.content).not.toContain("abcdefghijklmnop");
+
+    const firstPageResponse = await request("GET", `/v1/tasks/${task.id}/comments?limit=2`, undefined, reopened);
+    const firstPage = await firstPageResponse.json() as {
+      comments: Array<{ id: string }>;
+      count: number;
+      has_more: boolean;
+      next_cursor: string | null;
+    };
+    expect(firstPage).toMatchObject({ count: 2, has_more: true });
+    expect(firstPage.comments.map((comment) => comment.id)).toEqual([firstComment.id, secondComment.id]);
+    expect(firstPage.next_cursor).toEqual(expect.any(String));
+
+    const secondPageResponse = await request(
+      "GET",
+      `/v1/tasks/${task.id}/comments?limit=2&cursor=${encodeURIComponent(firstPage.next_cursor!)}`,
+      undefined,
+      reopened,
+    );
+    const secondPage = await secondPageResponse.json() as {
+      comments: Array<{ id: string }>;
+      count: number;
+      has_more: boolean;
+      next_cursor: string | null;
+    };
+    expect(secondPage.comments.map((comment) => comment.id)).toContain(historical.id);
+    expect(secondPage).toMatchObject({ count: 1, has_more: false, next_cursor: null });
+    expect(new Set([...firstPage.comments, ...secondPage.comments].map((comment) => comment.id)).size)
+      .toBe(firstPage.comments.length + secondPage.comments.length);
+
+    for (const query of [
+      "limit=0",
+      "limit=501",
+      "limit=1.5",
+      "limit=not-a-number",
+      "cursor=not-a-cursor",
+      `cursor=${"a".repeat(1_025)}`,
+    ]) {
+      const invalid = await request("GET", `/v1/tasks/${task.id}/comments?${query}`, undefined, reopened);
+      expect(invalid.status).toBe(400);
+    }
+
+    calls.length = 0;
+    await reopened.audit.getComments(task.id, { limit: 2 });
+    const listCall = calls.find((call) => call.sql.includes("todos:list-comments"));
+    expect(listCall?.sql).toContain("payload->>'task_id'");
+    expect(listCall?.sql).toContain("ORDER BY payload->>'created_at' DESC, object_id DESC");
+    expect(listCall?.sql).toContain("LIMIT");
+  });
+
+  test("Postgres comment reads use a task-scoped bounded query with deterministic timestamp/id ordering", async () => {
+    const { client, calls } = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client, service: "todos" });
+    const task = await adapter.tasks.create({ title: "Bounded comments" });
+    const timestamp = "2026-07-10T00:00:00.000Z";
+    for (const [id, taskId] of [["same-b", task.id], ["same-a", task.id], ["unrelated", "another-task"]] as const) {
+      const comment = {
+        id,
+        task_id: taskId,
+        agent_id: null,
+        session_id: null,
+        content: "safe",
+        type: "comment",
+        progress_pct: null,
+        created_at: timestamp,
+      };
+      await client.query(
+        "INSERT INTO todos_sync_records RETURNING object_id",
+        ["todos", "comments", id, comment, timestamp, null, null],
+      );
+    }
+    for (let index = 0; index < 1_000; index += 1) {
+      const id = `unrelated-${String(index).padStart(4, "0")}`;
+      await client.query(
+        "INSERT INTO todos_sync_records RETURNING object_id",
+        ["todos", "comments", id, {
+          id,
+          task_id: "another-task",
+          agent_id: null,
+          session_id: null,
+          content: "safe",
+          type: "comment",
+          progress_pct: null,
+          created_at: timestamp,
+        }, timestamp, null, null],
+      );
+    }
+
+    calls.length = 0;
+    const comments = await adapter.audit.getComments(task.id, { limit: 2 });
+    expect(comments.map((comment) => comment.id)).toEqual(["same-a", "same-b"]);
+    const listCall = calls.find((call) => call.sql.includes("todos:list-comments"));
+    expect(listCall?.sql).toContain("payload->>'task_id'");
+    expect(listCall?.sql).toContain("ORDER BY payload->>'created_at' DESC, object_id DESC");
+    expect(listCall?.sql).toContain("LIMIT");
+    expect(listCall?.values).toContain(task.id);
   });
 
   test("cloud adapter supports agent heartbeat/release and commit/ref links on the shared dataset", async () => {
@@ -1447,6 +1567,30 @@ function createMemoryPostgresClient(): {
           })
           .sort((a, b) => String(a["created_at"]).localeCompare(String(b["created_at"])));
         return { rows: (matches[0] ? [{ payload: matches[0] }] : []) as T[] };
+      }
+
+      if (sql.includes("todos:list-comments")) {
+        const service = values[0];
+        const taskId = values[1];
+        const hasBefore = sql.includes("(payload->>'created_at', object_id) <");
+        const beforeCreatedAt = hasBefore ? String(values[2]) : null;
+        const beforeId = hasBefore ? String(values[3]) : null;
+        const limit = Number(values[hasBefore ? 4 : 2]);
+        const selected = [...rows.values()]
+          .filter((row) => row.service === service && row.objectType === "comments" && !row.deletedAt)
+          .filter((row) => (row.payload as Record<string, unknown>)["task_id"] === taskId)
+          .filter((row) => {
+            if (!hasBefore) return true;
+            const createdAt = String((row.payload as Record<string, unknown>)["created_at"]);
+            return createdAt < beforeCreatedAt! || (createdAt === beforeCreatedAt && row.objectId < beforeId!);
+          })
+          .sort((left, right) => {
+            const leftCreatedAt = String((left.payload as Record<string, unknown>)["created_at"]);
+            const rightCreatedAt = String((right.payload as Record<string, unknown>)["created_at"]);
+            return rightCreatedAt.localeCompare(leftCreatedAt) || right.objectId.localeCompare(left.objectId);
+          })
+          .slice(0, limit);
+        return { rows: selected.map((row) => ({ payload: row.payload })) as T[] };
       }
 
       if (sql.includes("INSERT INTO todos_sync_records")) {

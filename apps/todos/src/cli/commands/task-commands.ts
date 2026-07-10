@@ -44,6 +44,24 @@ import {
 } from "../helpers.js";
 import { TASK_PRIORITIES, TASK_STATUSES } from "../../types/index.js";
 
+/** Render untrusted text without allowing terminal control sequences to execute. */
+export function escapeTerminalControls(value: string): string {
+  return value.replace(/[\u0000-\u001f\u007f-\u009f]/g, (character) => {
+    const code = character.charCodeAt(0);
+    if (code === 0x0a) return "\\n";
+    if (code === 0x0d) return "\\r";
+    if (code === 0x09) return "\\t";
+    return `\\x${code.toString(16).padStart(2, "0")}`;
+  });
+}
+
+function formatHumanComment(comment: { agent_id?: string | null; created_at: string; content: string }): string {
+  const agent = comment.agent_id
+    ? chalk.cyan(`[${escapeTerminalControls(comment.agent_id)}] `)
+    : "";
+  return `    ${agent}${chalk.dim(escapeTerminalControls(comment.created_at))}: ${escapeTerminalControls(comment.content)}`;
+}
+
 /**
  * Resolve a project by path, exact/partial ID, exact name, task list ID, slug,
  * and only then a name substring. Exact matches must win over substring matches
@@ -696,11 +714,20 @@ export function registerTaskCommands(program: Command) {
       let task: any;
       if (cloud) {
         const remote = await cloudGetTask(cloud, resolveTaskId(id));
-        const comments = remote ? await cloudListComments(cloud, remote.id) : [];
+        const commentPage = remote ? await cloudListComments(cloud, remote.id) : null;
         // The /v1 API returns the task row without relation graphs; default the
         // relation arrays so the detail renderer below never touches undefined.
         task = remote
-          ? { subtasks: [], dependencies: [], blocked_by: [], ...remote, tags: remote.tags ?? [], comments }
+          ? {
+              subtasks: [], dependencies: [], blocked_by: [], ...remote, tags: remote.tags ?? [],
+              comments: commentPage!.comments,
+              comments_page: {
+                count: commentPage!.count,
+                limit: commentPage!.limit,
+                has_more: commentPage!.has_more,
+                next_cursor: commentPage!.next_cursor,
+              },
+            }
           : null;
       } else {
         const resolvedId = resolveTaskId(id);
@@ -773,10 +800,10 @@ export function registerTaskCommands(program: Command) {
       }
 
       if (task.comments.length > 0) {
-        console.log(chalk.bold(`\n  Comments (${task.comments.length}):`));
+        const suffix = task.comments_page?.has_more ? ", newer page shown; older comments available" : "";
+        console.log(chalk.bold(`\n  Comments (${task.comments.length}${suffix}):`));
         for (const c of task.comments) {
-          const agent = c.agent_id ? chalk.cyan(`[${c.agent_id}] `) : "";
-          console.log(`    ${agent}${chalk.dim(c.created_at)}: ${c.content}`);
+          console.log(formatHumanComment(c));
         }
       }
     });
@@ -806,11 +833,20 @@ export function registerTaskCommands(program: Command) {
       let task: any;
       if (cloud) {
         const remote = await cloudGetTask(cloud, resolvedId);
-        const comments = remote ? await cloudListComments(cloud, remote.id) : [];
+        const commentPage = remote ? await cloudListComments(cloud, remote.id) : null;
         // The /v1 API returns the task row without relation graphs; default the
         // relation arrays so the detail renderer below never touches undefined.
         task = remote
-          ? { subtasks: [], dependencies: [], blocked_by: [], checklist: [], ...remote, tags: remote.tags ?? [], comments }
+          ? {
+              subtasks: [], dependencies: [], blocked_by: [], checklist: [], ...remote, tags: remote.tags ?? [],
+              comments: commentPage!.comments,
+              comments_page: {
+                count: commentPage!.count,
+                limit: commentPage!.limit,
+                has_more: commentPage!.has_more,
+                next_cursor: commentPage!.next_cursor,
+              },
+            }
           : null;
       } else {
         task = getTaskWithRelations(resolvedId);
@@ -899,10 +935,10 @@ export function registerTaskCommands(program: Command) {
       }
 
       if (task.comments.length > 0) {
-        console.log(chalk.bold(`\n  Comments (${task.comments.length}):`));
+        const suffix = task.comments_page?.has_more ? ", newer page shown; older comments available" : "";
+        console.log(chalk.bold(`\n  Comments (${task.comments.length}${suffix}):`));
         for (const c of task.comments) {
-          const agent = c.agent_id ? chalk.cyan(`[${c.agent_id}] `) : "";
-          console.log(`    ${agent}${chalk.dim(c.created_at)}: ${c.content}`);
+          console.log(formatHumanComment(c));
         }
       }
 

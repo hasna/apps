@@ -108,6 +108,26 @@ describe("cloud task detail comments", () => {
         expect(task.comments[1].content).not.toContain("abcdefghijklmnop");
       }
 
+      comments.push({
+        id: "comment-controls",
+        task_id: TASK_ID,
+        agent_id: "agent\u001b[31m",
+        session_id: null,
+        content: "visible\u001b]52;c;forged\u0007next\nline",
+        type: "comment",
+        progress_pct: null,
+        created_at: "2026-07-10T00:03:00.000Z",
+      });
+      for (const command of ["show", "inspect"] as const) {
+        const result = await runCli([command, TASK_ID], root, baseUrl);
+        expect(result.exitCode).toBe(0);
+        expect(result.stderr).toBe("");
+        expect(result.stdout).not.toContain("\u001b]52");
+        expect(result.stdout).not.toContain("\u0007");
+        expect(result.stdout).toContain("\\x1b]52");
+        expect(result.stdout).toContain("\\x07next\\nline");
+      }
+
       expect(requests).toEqual(expect.arrayContaining([
         { method: "POST", path: `/v1/tasks/${TASK_ID}/comments`, authorized: true },
         { method: "GET", path: `/v1/tasks/${TASK_ID}/comments`, authorized: true },

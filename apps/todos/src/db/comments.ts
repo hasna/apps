@@ -58,7 +58,10 @@ export function listComments(taskId: string, db?: Database): TaskComment[] {
   const d = db || getDatabase();
   return d
     .query(
-      "SELECT * FROM task_comments WHERE task_id = ? ORDER BY created_at",
+      // Preserve local insertion-order semantics for same-clock comments. The
+      // cloud/Postgres cursor path uses `(created_at, id)` because it cannot
+      // rely on SQLite rowid and requires a portable stable keyset.
+      "SELECT * FROM task_comments WHERE task_id = ? ORDER BY created_at, rowid",
     )
     .all(taskId) as TaskComment[];
 }

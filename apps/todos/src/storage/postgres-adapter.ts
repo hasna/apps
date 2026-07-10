@@ -30,6 +30,7 @@ import type {
   CreateTodosCommitInput,
   CreateTodosGitRefInput,
   TodosAgentReleaseResult,
+  TodosCommentListOptions,
   TodosTaskCommitRecord,
   TodosTaskGitRefRecord,
   TodosLockResult,
@@ -191,10 +192,9 @@ export function createPostgresTodosStorageAdapter(
       logTaskChange: (taskId, action, field, oldValue, newValue, agentId, context) =>
         logTaskChange(taskId, action, field, oldValue, newValue, agentId, store, context),
       addComment: (input, context) => addComment(input, store, context),
-      getComments: async (taskId) => (await store.list<TaskComment>("comments"))
-        .filter((comment) => comment.task_id === taskId)
+      getComments: async (taskId, options) => (await store.listComments(taskId, options))
         .map(redactComment)
-        .sort((a, b) => a.created_at.localeCompare(b.created_at)),
+        .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id)),
       getTaskHistory: async (taskId) => (await store.list<TaskHistory>("audit_history"))
         .filter((entry) => entry.task_id === taskId)
         .sort((a, b) => a.created_at.localeCompare(b.created_at)),
@@ -253,6 +253,31 @@ class PostgresJsonRecordStore {
 
   async list<T>(type: RemoteObjectType): Promise<T[]> {
     return (await this.listRecords<T>(type)).map((record) => record.payload);
+  }
+
+  async listComments(taskId: string, options: TodosCommentListOptions = {}): Promise<TaskComment[]> {
+    await this.ensureSchema();
+    const limit = options.limit ?? 100;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_001) {
+      throw new Error("Postgres comment limit must be an integer between 1 and 1001");
+    }
+    const params: unknown[] = [this.service, taskId];
+    let cursorPredicate = "";
+    if (options.before) {
+      params.push(options.before.created_at, options.before.id);
+      cursorPredicate = `AND (payload->>'created_at', object_id) < ($3, $4)`;
+    }
+    params.push(limit);
+    const result = await this.options.client.query<{ payload: unknown }>(
+      `/* todos:list-comments */ SELECT payload FROM ${this.tableName}
+       WHERE service = $1 AND object_type = 'comments' AND deleted_at IS NULL
+         AND payload->>'task_id' = $2
+         ${cursorPredicate}
+       ORDER BY payload->>'created_at' DESC, object_id DESC
+       LIMIT $${params.length}`,
+      params,
+    );
+    return result.rows.map((row) => payloadRecord<TaskComment>(row.payload)).reverse();
   }
 
   async listRecords<T>(type: RemoteObjectType): Promise<RemoteRecord<T>[]> {

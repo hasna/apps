@@ -302,9 +302,20 @@ export interface TodosAuditStore {
     context?: TodosStorageContext,
   ): MaybePromise<TaskHistory>;
   addComment(input: CreateCommentInput, context?: TodosStorageContext): MaybePromise<TaskComment>;
-  getComments(taskId: string, context?: TodosStorageContext): MaybePromise<TaskComment[]>;
+  getComments(
+    taskId: string,
+    options?: TodosCommentListOptions,
+    context?: TodosStorageContext,
+  ): MaybePromise<TaskComment[]>;
   getTaskHistory(taskId: string, context?: TodosStorageContext): MaybePromise<TaskHistory[]>;
   getRecentActivity(limit?: number, context?: TodosStorageContext): MaybePromise<TaskHistory[]>;
+}
+
+export interface TodosCommentListOptions {
+  /** Maximum rows returned. Remote adapters must enforce a finite bound. */
+  limit?: number;
+  /** Return comments strictly older than this stable `(created_at, id)` tuple. */
+  before?: { created_at: string; id: string };
 }
 
 export interface TodosSyncStore {

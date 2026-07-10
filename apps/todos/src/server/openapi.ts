@@ -35,6 +35,21 @@ const projectSchema = {
   },
 } as const;
 
+const taskCommentSchema = {
+  type: "object",
+  required: ["id", "task_id", "agent_id", "session_id", "content", "type", "progress_pct", "created_at"],
+  properties: {
+    id: { type: "string" },
+    task_id: { type: "string" },
+    agent_id: { type: "string", nullable: true },
+    session_id: { type: "string", nullable: true },
+    content: { type: "string" },
+    type: { type: "string", enum: ["comment", "progress", "note"] },
+    progress_pct: { type: "number", nullable: true },
+    created_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
 export function buildV1OpenApiDocument(version = getPackageVersion()) {
   return {
     openapi: "3.1.0",
@@ -52,6 +67,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
       schemas: {
         Task: taskSchema,
         Project: projectSchema,
+        TaskComment: taskCommentSchema,
         CreateTaskInput: {
           type: "object",
           required: ["title"],
@@ -85,6 +101,17 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             path: { type: "string" },
             description: { type: "string" },
             task_prefix: { type: "string" },
+          },
+        },
+        CreateTaskCommentInput: {
+          type: "object",
+          required: ["content"],
+          properties: {
+            content: { type: "string", minLength: 1 },
+            agent_id: { type: "string" },
+            session_id: { type: "string" },
+            type: { type: "string", enum: ["comment", "progress", "note"] },
+            progress_pct: { type: "number" },
           },
         },
       },
@@ -178,6 +205,59 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
               content: {
                 "application/json": {
                   schema: { type: "object", properties: { deleted: { type: "boolean" }, id: { type: "string" } } },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/v1/tasks/{id}/comments": {
+        get: {
+          operationId: "listTaskComments",
+          summary: "List a bounded page of task comments",
+          description:
+            "Returns the newest page in oldest-to-newest display order. Use next_cursor to request older pages; count is the page size, not a total.",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+            { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 500, default: 100 } },
+            { name: "cursor", in: "query", schema: { type: "string" } },
+          ],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["comments", "count", "has_more", "next_cursor"],
+                    properties: {
+                      comments: { type: "array", maxItems: 500, items: { $ref: "#/components/schemas/TaskComment" } },
+                      count: { type: "integer", minimum: 0, maximum: 500 },
+                      has_more: { type: "boolean" },
+                      next_cursor: { type: "string", nullable: true },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        post: {
+          operationId: "createTaskComment",
+          summary: "Create a task comment",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/CreateTaskCommentInput" } } },
+          },
+          responses: {
+            "201": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["comment"],
+                    properties: { comment: { $ref: "#/components/schemas/TaskComment" } },
+                  },
                 },
               },
             },

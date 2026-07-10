@@ -185,11 +185,48 @@ export async function cloudAddComment(
   return redactComment(comment);
 }
 
-/** List persisted comments for one cloud task (`GET /v1/tasks/:id/comments`). */
-export async function cloudListComments(client: HasnaStorageClient, taskId: string): Promise<TaskComment[]> {
+export interface CloudCommentPage {
+  /** Oldest-to-newest comments within this bounded page. */
+  comments: TaskComment[];
+  /** Number of comments in this page, not the total comment count. */
+  count: number;
+  /** True when an older page is available through `next_cursor`. */
+  has_more: boolean;
+  /** Opaque cursor for the next (older) page. */
+  next_cursor: string | null;
+  /** Maximum number of comments requested from the server. */
+  limit: number;
+}
+
+export interface CloudCommentPageOptions {
+  limit?: number;
+  cursor?: string;
+}
+
+/**
+ * List one bounded page of persisted comments for a cloud task. The first page
+ * contains the newest comments while preserving oldest-to-newest display order;
+ * `next_cursor` walks toward older comments. Callers must surface `has_more`
+ * rather than silently implying that this page is the complete history.
+ */
+export async function cloudListComments(
+  client: HasnaStorageClient,
+  taskId: string,
+  options: CloudCommentPageOptions = {},
+): Promise<CloudCommentPage> {
+  const limit = options.limit ?? 100;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+    throw new Error("Cloud comment limit must be an integer between 1 and 500");
+  }
+  if (options.cursor !== undefined &&
+      (typeof options.cursor !== "string" || !options.cursor || options.cursor.length > 1_024)) {
+    throw new Error("Cloud comment cursor must be a non-empty string");
+  }
   let raw: unknown;
   try {
-    raw = await client.transport.get<unknown>(`/tasks/${encodeURIComponent(taskId)}/comments`);
+    raw = await client.transport.get<unknown>(`/tasks/${encodeURIComponent(taskId)}/comments`, {
+      query: { limit, ...(options.cursor ? { cursor: options.cursor } : {}) },
+    });
   } catch (error) {
     const status = error && typeof error === "object" ? (error as { status?: unknown }).status : undefined;
     if (status === 404 || status === 405) {
@@ -202,7 +239,7 @@ export async function cloudListComments(client: HasnaStorageClient, taskId: stri
   }
 
   const envelope = raw && typeof raw === "object" && !Array.isArray(raw)
-    ? (raw as { comments?: unknown; count?: unknown })
+    ? (raw as { comments?: unknown; count?: unknown; has_more?: unknown; next_cursor?: unknown })
     : null;
   const candidate = Array.isArray(raw) ? raw : envelope?.comments;
   if (!Array.isArray(candidate) || !candidate.every(isTaskComment)) {
@@ -212,7 +249,23 @@ export async function cloudListComments(client: HasnaStorageClient, taskId: stri
       (!Number.isSafeInteger(envelope.count) || (envelope.count as number) < 0 || envelope.count !== candidate.length)) {
     throw new Error("Invalid cloud comments response count");
   }
-  return candidate.map(redactComment);
+  if (candidate.length > limit) throw new Error("Invalid cloud comments response: page exceeds requested limit");
+
+  const hasMore = envelope?.has_more ?? false;
+  const nextCursor = envelope?.next_cursor ?? null;
+  if (typeof hasMore !== "boolean" || (nextCursor !== null && (typeof nextCursor !== "string" || !nextCursor))) {
+    throw new Error("Invalid cloud comments pagination response");
+  }
+  if ((hasMore && nextCursor === null) || (!hasMore && nextCursor !== null)) {
+    throw new Error("Invalid cloud comments pagination response");
+  }
+  return {
+    comments: candidate.map(redactComment),
+    count: candidate.length,
+    has_more: hasMore,
+    next_cursor: nextCursor,
+    limit,
+  };
 }
 
 function isTaskComment(value: unknown): value is TaskComment {

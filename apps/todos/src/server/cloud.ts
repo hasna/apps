@@ -14,6 +14,11 @@ import { createTodosCloudQueryClient, type TodosCloudQueryClient } from "../stor
 import { createPostgresTodosStorageAdapter } from "../storage/postgres-adapter.js";
 import type { TodosStorageAdapter } from "../storage/interfaces.js";
 import { postgresTodosSyncSchemaSql } from "../storage/postgres-sync.js";
+import {
+  backfillPostgresCommentRedaction,
+  type CommentRedactionBackfillOptions,
+  type CommentRedactionBackfillResult,
+} from "../storage/comment-redaction-backfill.js";
 
 export const TODOS_APP_SLUG = "todos";
 
@@ -152,6 +157,17 @@ export async function normalizeCloudPayloads(): Promise<number> {
      RETURNING object_id AS id`,
   );
   return res.rows.length;
+}
+
+/**
+ * Preview or explicitly apply the historical comment redaction backfill using
+ * the service's existing Postgres pool. The underlying operation defaults to a
+ * dry run and independently enforces its apply confirmation gate.
+ */
+export function backfillCloudCommentRedaction(
+  options: CommentRedactionBackfillOptions = {},
+): Promise<CommentRedactionBackfillResult> {
+  return backfillPostgresCommentRedaction(getClient(), { ...options, service: TODOS_APP_SLUG });
 }
 
 /** Cheap readiness probe: round-trips a trivial query to RDS. */

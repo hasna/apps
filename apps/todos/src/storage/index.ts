@@ -116,6 +116,14 @@ export {
   createPostgresTodosSyncStore,
   postgresTodosSyncSchemaSql,
 } from "./postgres-sync.js";
+export {
+  COMMENT_REDACTION_BACKFILL_CONFIRMATION,
+  backfillPostgresCommentRedaction,
+} from "./comment-redaction-backfill.js";
+export type {
+  CommentRedactionBackfillOptions,
+  CommentRedactionBackfillResult,
+} from "./comment-redaction-backfill.js";
 export { createPostgresTodosStorageAdapter } from "./postgres-adapter.js";
 export type { CreatePostgresTodosStorageAdapterOptions } from "./postgres-adapter.js";
 export type {

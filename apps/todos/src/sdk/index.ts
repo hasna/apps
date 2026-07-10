@@ -18,9 +18,11 @@ export type {
   TodosV1ClientOptions,
   Task as TodosV1Task,
   Project as TodosV1Project,
+  TaskComment as TodosV1TaskComment,
   CreateTaskInput as TodosV1CreateTaskInput,
   UpdateTaskInput as TodosV1UpdateTaskInput,
   CreateProjectInput as TodosV1CreateProjectInput,
+  CreateTaskCommentInput as TodosV1CreateTaskCommentInput,
 } from "./v1.generated.js";
 
 export {
