@@ -4,9 +4,17 @@ import {
   encodeGuestBrokerRequestFrame,
   validateGuestBrokerAttestation,
 } from "./broker"
-import { AdapterContractError, adapterError } from "./errors"
-import { anchorOutcome, validateAdapterCallContext } from "./journal"
-import { managedProviderRequestSha256 } from "./request"
+import { AdapterContractError, DefinitiveProviderEffectError, adapterError } from "./errors"
+import {
+  anchorOutcome as appendOutcomeAnchor,
+  journalAnchorSha256,
+  validateAdapterCallContext,
+} from "./journal"
+import {
+  managedProviderRequestSha256,
+  providerCreationTokenSha256,
+  providerEffectTokenSha256,
+} from "./request"
 import { OFFICIAL_SDK_CONTRACT_GAPS } from "./sdk-pins"
 import type {
   ActivationDispatchAuthorizationV1,
@@ -14,13 +22,11 @@ import type {
   AdapterCallContextV1,
   AdapterDescriptorV1,
   AdapterExecHandleV1,
-  AdapterExecStreamFrameV1,
   AdapterObservationV1,
   AdapterProviderResourceV1,
   AdapterSandboxSpecV1,
   ByteChunkV1,
   CancelObservationV1,
-  CheckpointHintObservationV1,
   DestroyContextV1,
   DestroyObservationV1,
   Digest,
@@ -68,7 +74,6 @@ const MUTATING_OPERATIONS = new Set<ProviderOperationNameV1>([
   "exec_start",
   "exec_cancel",
   "file_write",
-  "checkpoint_hint",
   "expire",
   "quarantine",
   "destroy",
@@ -166,6 +171,7 @@ function validateOperation(
   if (
     !isDigest(op.target.operation_digest) ||
     !isDigest(op.target.provider_idempotency_token_sha256) ||
+    !isDigest(op.target.provider_creation_token_sha256) ||
     !isDigest(op.target.immutable_fingerprint_sha256) ||
     !isDigest(op.target.authorization_consumption_receipt_sha256) ||
     !isDigest(op.request_sha256) ||
@@ -176,6 +182,9 @@ function validateOperation(
     op.target.resource_id.length === 0
   ) {
     throw adapterError("validation_failed")
+  }
+  if (op.target.provider_idempotency_token_sha256 !== providerEffectTokenSha256(op)) {
+    throw adapterError("operation_target_mismatch")
   }
   const shouldMutate = MUTATING_OPERATIONS.has(expected)
   if (op.external_anchor_kind !== (shouldMutate ? "DISPATCHED" : "READ_PROBE")) {
@@ -307,10 +316,21 @@ function validateHandle(
     handle.adapter_version !== dependencies.adapter_version ||
     handle.installation_id !== dependencies.installation_id ||
     handle.provider_scope_ref !== dependencies.provider_scope_ref ||
+    handle.resource_kind !== "managed_sandbox" ||
+    handle.resource_lease_id !== op.fence.resource_lease_id ||
     handle.resource_id !== op.target.resource_id ||
     handle.resource_lifecycle_generation !== op.target.resource_lifecycle_generation ||
+    handle.provider_creation_token_sha256 !== op.target.provider_creation_token_sha256 ||
     handle.immutable_fingerprint_sha256 !== op.target.immutable_fingerprint_sha256 ||
-    handle.opaque_resource_id.length === 0
+    handle.opaque_resource_id.length === 0 ||
+    handle.ownership_nonce.length === 0 ||
+    handle.create_inert_operation_id.length === 0 ||
+    !isDigest(handle.provider_creation_token_sha256) ||
+    !isDigest(handle.creation_receipt_sha256) ||
+    !isDigest(handle.immutable_fingerprint_sha256) ||
+    !isDigest(handle.spec_sha256) ||
+    handle.provider_resource_version.length === 0 ||
+    Number.isNaN(Date.parse(handle.provider_created_at))
   ) {
     throw adapterError("operation_target_mismatch")
   }
@@ -321,12 +341,24 @@ function validateExecHandle(
   handle: OwnedProviderHandleV1,
   identity: AdapterIdentityV1,
 ): void {
+  const expectedFingerprint = canonicalSha256({
+    schema_version: "sandboxes.adapter-exec-handle/v1",
+    adapter_id: exec.adapter_id,
+    resource_id: exec.resource_id,
+    resource_lifecycle_generation: exec.resource_lifecycle_generation,
+    start_operation_id: exec.start_operation_id,
+    start_request_sha256: exec.start_request_sha256,
+    opaque_exec_id: exec.opaque_exec_id,
+    started_at: exec.started_at,
+  })
   if (
     exec.adapter_id !== identity.provider ||
     exec.resource_id !== handle.resource_id ||
     exec.resource_lifecycle_generation !== handle.resource_lifecycle_generation ||
     exec.opaque_exec_id.length === 0 ||
-    !isDigest(exec.immutable_exec_fingerprint_sha256)
+    !isDigest(exec.immutable_exec_fingerprint_sha256) ||
+    exec.immutable_exec_fingerprint_sha256 !== expectedFingerprint ||
+    Number.isNaN(Date.parse(exec.started_at))
   ) {
     throw adapterError("operation_target_mismatch")
   }
@@ -407,6 +439,18 @@ function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds))
 }
 
+function snapshotData<T>(value: T): T {
+  return structuredClone(value)
+}
+
+function snapshotContext<T extends AdapterCallContextV1>(ctx: T): T {
+  const { signal, ...data } = ctx
+  return {
+    ...snapshotData(data),
+    ...(signal === undefined ? {} : { signal }),
+  } as T
+}
+
 function lifecycleLockKey(
   identity: AdapterIdentityV1,
   dependencies: ManagedAdapterDependenciesV1,
@@ -424,10 +468,20 @@ function lifecycleLockKey(
 export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
   readonly #identity: AdapterIdentityV1
   readonly #dependencies: ManagedAdapterDependenciesV1
+  readonly #hermeticConformanceOnly: boolean
 
-  constructor(identity: AdapterIdentityV1, dependencies: ManagedAdapterDependenciesV1) {
-    this.#identity = identity
-    this.#dependencies = dependencies
+  constructor(
+    identity: AdapterIdentityV1,
+    dependencies: ManagedAdapterDependenciesV1,
+    hermeticConformanceOnly = false,
+  ) {
+    this.#identity = { ...identity }
+    this.#dependencies = {
+      ...dependencies,
+      admission: snapshotData(dependencies.admission),
+      read_retry_policy: snapshotData(dependencies.read_retry_policy),
+    }
+    this.#hermeticConformanceOnly = hermeticConformanceOnly
     if (dependencies.admission.exact_sdk_version !== identity.sdkVersion) {
       throw adapterError("unsupported_runtime_feature")
     }
@@ -529,10 +583,39 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     }
   }
 
+  async #anchorOutcome(
+    ctx: AdapterCallContextV1,
+    op: ProviderOperationV1,
+    safeOutcome: unknown,
+    outcomeKind: "succeeded" | "failed_effect" | "failed_no_effect" | "reconciliation_blocked" = "succeeded",
+  ): Promise<Digest> {
+    try {
+      return await appendOutcomeAnchor(
+        ctx,
+        op,
+        safeOutcome,
+        this.#dependencies.outcome_journal,
+        this.#dependencies.outcome_anchor_verifier,
+        outcomeKind,
+      )
+    } catch (cause) {
+      if (MUTATING_OPERATIONS.has(op.operation)) {
+        await this.#contain(ctx, op, "provider_effect_ambiguous")
+      }
+      if (cause instanceof AdapterContractError) throw cause
+      throw adapterError("provider_state_unknown", { quarantineRequired: true })
+    }
+  }
+
   async #assertAdmissionVerified(): Promise<void> {
     if (!this.#dependencies.admission.admitted) throw adapterError("unsupported_runtime_feature")
-    if (
-      this.#dependencies.admission.evidence_kind === "live_conformance" &&
+    const evidenceKind = this.#dependencies.admission.evidence_kind
+    if (this.#hermeticConformanceOnly) {
+      if (evidenceKind !== "hermetic_conformance") {
+        throw adapterError("unsupported_runtime_feature")
+      }
+    } else if (
+      evidenceKind !== "live_conformance" ||
       OFFICIAL_SDK_CONTRACT_GAPS[this.#identity.provider].admission === "disabled"
     ) {
       throw adapterError("unsupported_runtime_feature")
@@ -682,11 +765,11 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
         this.#dependencies.provider_scope_ref,
         ownershipNonce,
       ),
-      target.provider_idempotency_token_sha256,
+      target.provider_creation_token_sha256,
     )
     if (
       resource.state !== "inert" ||
-      !["started_locked", "paused", "stopped"].includes(resource.provider_runtime_state) ||
+      !["paused", "stopped"].includes(resource.provider_runtime_state) ||
       resource.guest_broker_bootstrapped
     ) {
       throw adapterError("provider_state_unknown", { quarantineRequired: true })
@@ -699,6 +782,23 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     // Ambiguous mutation deliberately remains DISPATCHED-without-OUTCOME.
     // Recovery may append reconciliation_blocked only after authenticated
     // provider/journal evidence; the adapter must not fabricate an outcome.
+    if (cause instanceof DefinitiveProviderEffectError) {
+      if (cause.outcome_kind === "failed_effect") {
+        await this.#contain(_ctx, _op, "provider_effect_ambiguous")
+      }
+      await this.#anchorOutcome(
+        _ctx,
+        _op,
+        {
+          observation: cause.outcome_kind,
+          provider_receipt_sha256: cause.provider_receipt_sha256,
+        },
+        cause.outcome_kind,
+      )
+      throw adapterError(cause.safe_code, {
+        quarantineRequired: cause.outcome_kind === "failed_effect",
+      })
+    }
     await this.#contain(_ctx, _op, "provider_effect_ambiguous")
     if (cause instanceof AdapterContractError && cause.code === "stale_operation_execution_epoch") {
       throw cause
@@ -719,26 +819,51 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     op: ProviderOperationV1,
     allocationKey: Digest,
   ): Promise<OwnedProviderHandleV1> {
+    ctx = snapshotContext(ctx)
+    spec = snapshotData(spec)
+    op = snapshotData(op)
     validateOperation(ctx, op, "create_inert")
     validateEffectRequest(op, { operation: "create_inert", spec, allocation_key_sha256: allocationKey })
-    if (!isDigest(allocationKey) || spec.workspace_root !== "/workspace" || spec.schema_version !== "sandboxes.runtime/v1") {
-      throw adapterError("validation_failed")
-    }
     if (
-      !isDigest(spec.spec_sha256) ||
-      !isDigest(spec.environment_image_or_snapshot_sha256) ||
+      !isDigest(allocationKey) ||
+      spec.workspace_root !== "/workspace" ||
+      spec.schema_version !== "sandboxes.runtime/v1" ||
+      spec.runtime_class !== "strong_vm" ||
+      spec.run_id !== op.fence.run_id ||
+      spec.attempt_id !== op.fence.attempt_id ||
+      spec.source.repository_ref.length === 0 ||
+      !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(spec.source.commit_sha) ||
+      !isDigest(spec.source.source_bundle_sha256) ||
+      !isDigest(spec.environment.image_or_snapshot_sha256) ||
+      !isDigest(spec.environment.toolchain_manifest_sha256) ||
       !isDigest(spec.network_policy.policy_sha256) ||
+      spec.exec_concurrency !== 1 ||
       !Number.isSafeInteger(spec.max_runtime_ms) ||
-      spec.max_runtime_ms <= 0
+      spec.max_runtime_ms <= 0 ||
+      Number.isNaN(Date.parse(spec.expires_at)) ||
+      Object.values(spec.resources).some((value) => !Number.isSafeInteger(value) || value <= 0) ||
+      spec.input_bundle_refs.some(
+        (item) => !isDigest(item.sha256) || !Number.isSafeInteger(item.size_bytes) || item.size_bytes < 0,
+      )
     ) {
       throw adapterError("validation_failed")
     }
+    const specSha256 = canonicalSha256(spec)
+    const expectedCreationToken = providerCreationTokenSha256({
+      resource_id: op.target.resource_id,
+      resource_lease_id: op.fence.resource_lease_id,
+      allocation_key_sha256: allocationKey,
+      spec_sha256: specSha256,
+    })
+    if (op.target.provider_creation_token_sha256 !== expectedCreationToken) {
+      throw adapterError("operation_target_mismatch")
+    }
     return this.#withClient(ctx, op, (client) => this.#withLifecycleLock(op, async () => {
       requireCapability(client, "creation_metadata_labels")
-      requireCapability(client, "started_locked_inert_compensation")
+      requireCapability(client, "create_stopped")
       requireCapability(client, "network_policy_readback")
       let resource = this.#selectExactCreationCandidate(
-        await this.#findByCreationToken(client, op.target.provider_idempotency_token_sha256, ctx, op),
+        await this.#findByCreationToken(client, op.target.provider_creation_token_sha256, ctx, op),
         op.target,
         allocationKey,
       )
@@ -764,11 +889,11 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
               this.#dependencies.provider_scope_ref,
               allocationKey,
             ),
-            op.target.provider_idempotency_token_sha256,
+            op.target.provider_creation_token_sha256,
           )
           if (
             resource.state !== "inert" ||
-            !["started_locked", "paused", "stopped"].includes(resource.provider_runtime_state) ||
+            !["paused", "stopped"].includes(resource.provider_runtime_state) ||
             resource.guest_broker_bootstrapped
           ) {
             throw adapterError("provider_state_unknown", { quarantineRequired: true })
@@ -779,7 +904,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
           try {
             candidates = await this.#findByCreationToken(
               client,
-              op.target.provider_idempotency_token_sha256,
+              op.target.provider_creation_token_sha256,
               ctx,
               op,
             )
@@ -799,7 +924,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
         const confirmed = this.#selectExactCreationCandidate(
           await this.#findByCreationToken(
             client,
-            op.target.provider_idempotency_token_sha256,
+            op.target.provider_creation_token_sha256,
             ctx,
             op,
           ),
@@ -828,7 +953,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
       }
 
       const providerReceiptSha256 = safeProviderReceipt(resource, op)
-      const outcomeAnchor = await anchorOutcome(ctx, op, {
+      await this.#anchorOutcome(ctx, op, {
         observation: "completed",
         provider_receipt_sha256: providerReceiptSha256,
         immutable_fingerprint_sha256: resource.immutable_fingerprint_sha256,
@@ -850,9 +975,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
         resource_lease_id: op.fence.resource_lease_id,
         resource_id: op.target.resource_id,
         resource_lifecycle_generation: op.target.resource_lifecycle_generation,
-        generation_transition_sha256: canonicalSha256(op.generation_transition),
-        spec_sha256: spec.spec_sha256,
-        provider_outcome_anchor_sha256: outcomeAnchor,
+        spec_sha256: specSha256,
       }
     }))
   }
@@ -863,6 +986,10 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     authorization: ActivationDispatchAuthorizationV1,
     op: ProviderOperationV1,
   ): Promise<ActivationReceiptV1> {
+    ctx = snapshotContext(ctx)
+    handle = snapshotData(handle)
+    authorization = snapshotData(authorization)
+    op = snapshotData(op)
     validateOperation(ctx, op, "activate")
     validateHandle(handle, op, this.#identity, this.#dependencies)
     if (
@@ -907,7 +1034,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
           return this.#anchorUnknown(ctx, op, cause)
         }
         const providerReceiptSha256 = safeProviderReceipt(activated, op)
-        const outcomeAnchor = await anchorOutcome(ctx, op, {
+        const outcomeAnchor = await this.#anchorOutcome(ctx, op, {
           observation: "active",
           provider_receipt_sha256: providerReceiptSha256,
           network_policy_sha256: activated.network_policy.policy_sha256,
@@ -932,38 +1059,42 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     handle: OwnedProviderHandleV1,
     op: ProviderOperationV1,
   ): Promise<AdapterObservationV1> {
+    ctx = snapshotContext(ctx)
+    handle = snapshotData(handle)
+    op = snapshotData(op)
     validateOperation(ctx, op, "inspect")
     validateEffectRequest(op, { operation: "inspect" })
     validateHandle(handle, op, this.#identity, this.#dependencies)
-    return this.#withClient(ctx, op, async (client) => {
+    return this.#withClient(ctx, op, (client) => this.#withLifecycleLock(op, async () => {
       const resource = await this.#retryRead(ctx, op, () => client.inspectResource(handle.opaque_resource_id))
       if (resource === "absent") {
+        const tokenInventory = await this.#findByCreationToken(
+          client,
+          handle.provider_creation_token_sha256,
+          ctx,
+          op,
+        )
+        if (tokenInventory.length !== 0) {
+          throw adapterError("provider_state_unknown", { quarantineRequired: true })
+        }
         const providerReceiptSha256 = canonicalSha256({ observation: "absent", target: canonicalSha256(op.target) })
-        const outcomeAnchor = await anchorOutcome(ctx, op, {
-          observation: "absent",
-          provider_receipt_sha256: providerReceiptSha256,
-        })
         return {
           observation: "absent",
           immutable_fingerprint_sha256: handle.immutable_fingerprint_sha256,
           provider_receipt_sha256: providerReceiptSha256,
-          provider_outcome_anchor_sha256: outcomeAnchor,
+          provider_outcome_anchor_sha256: journalAnchorSha256(ctx.invocation_anchor),
         }
       }
       validateProviderResourceForHandle(resource, handle, op.target, this.#dependencies)
       const providerReceiptSha256 = safeProviderReceipt(resource, op)
-      const outcomeAnchor = await anchorOutcome(ctx, op, {
-        observation: resource.state,
-        provider_receipt_sha256: providerReceiptSha256,
-      })
       return {
         observation: resource.state,
         immutable_fingerprint_sha256: resource.immutable_fingerprint_sha256,
         network_policy: resource.network_policy,
         provider_receipt_sha256: providerReceiptSha256,
-        provider_outcome_anchor_sha256: outcomeAnchor,
+        provider_outcome_anchor_sha256: journalAnchorSha256(ctx.invocation_anchor),
       }
-    })
+    }))
   }
 
   async start_exec(
@@ -972,6 +1103,10 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     spec: ExecSpecV1,
     op: ProviderOperationV1,
   ): Promise<AdapterExecHandleV1> {
+    ctx = snapshotContext(ctx)
+    handle = snapshotData(handle)
+    spec = snapshotData(spec)
+    op = snapshotData(op)
     validateOperation(ctx, op, "exec_start")
     validateEffectRequest(op, { operation: "exec_start", spec })
     validateHandle(handle, op, this.#identity, this.#dependencies)
@@ -987,6 +1122,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
           { operation: "exec_start", spec },
           op,
           broker,
+          this.#dependencies.guest_broker_authenticator,
         )
         await this.#beforeProviderMutation(ctx, op)
         providerExec = await client.startExec(handle.opaque_resource_id, broker, frame, op.target)
@@ -994,15 +1130,26 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
         return this.#anchorUnknown(ctx, op, cause)
       }
       const receipt = canonicalSha256({
-        immutable_exec_fingerprint_sha256: providerExec.immutable_exec_fingerprint_sha256,
+        opaque_exec_id_sha256: canonicalSha256(providerExec.opaque_exec_id),
         started_at: providerExec.started_at,
       })
-      const outcomeAnchor = await anchorOutcome(ctx, op, {
+      const outcomeAnchor = await this.#anchorOutcome(ctx, op, {
         observation: "accepted",
         provider_receipt_sha256: receipt,
       })
+      const immutableExecFingerprintSha256 = canonicalSha256({
+        schema_version: "sandboxes.adapter-exec-handle/v1",
+        adapter_id: this.#identity.provider,
+        resource_id: handle.resource_id,
+        resource_lifecycle_generation: handle.resource_lifecycle_generation,
+        start_operation_id: op.target.operation_id,
+        start_request_sha256: op.request_sha256,
+        opaque_exec_id: providerExec.opaque_exec_id,
+        started_at: providerExec.started_at,
+      })
       return {
         ...providerExec,
+        immutable_exec_fingerprint_sha256: immutableExecFingerprintSha256,
         adapter_id: this.#identity.provider,
         resource_id: handle.resource_id,
         resource_lifecycle_generation: handle.resource_lifecycle_generation,
@@ -1013,75 +1160,16 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     }))
   }
 
-  async *stream_exec(
-    ctx: AdapterCallContextV1,
-    handle: OwnedProviderHandleV1,
-    exec: AdapterExecHandleV1,
-    op: ProviderOperationV1,
-    maxBytes: number,
-  ): AsyncIterable<AdapterExecStreamFrameV1> {
-    validateOperation(ctx, op, "exec_stream")
-    validateEffectRequest(op, {
-      operation: "exec_stream",
-      exec_fingerprint_sha256: exec.immutable_exec_fingerprint_sha256,
-      max_bytes: maxBytes,
-    })
-    validateHandle(handle, op, this.#identity, this.#dependencies)
-    validateExecHandle(exec, handle, this.#identity)
-    if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw adapterError("validation_failed")
-    const frames = await this.#withClient(ctx, op, (client) => this.#withLifecycleLock(op, async () => {
-      await this.#inspectExactHandle(client, ctx, op, handle)
-      const broker = await this.#inspectGuestBroker(client, ctx, op, handle)
-      const requestFrame = encodeGuestBrokerRequestFrame(
-        { operation: "exec_stream", exec, max_bytes: maxBytes },
-        op,
-        broker,
-      )
-      const iterator = client
-        .streamExec(handle.opaque_resource_id, broker, requestFrame, op.target)
-        [Symbol.asyncIterator]()
-      const buffered: AdapterExecStreamFrameV1[] = []
-      let totalBytes = 0
-      let lastSequence = 0n
-      let completed = false
-      while (true) {
-        await this.#guard(ctx, op, "before_provider_read")
-        const next = await iterator.next()
-        if (next.done) break
-        const providerFrame = next.value
-        if (providerFrame.sequence !== lastSequence + 1n || completed) {
-          throw adapterError("integrity_failed")
-        }
-        lastSequence = providerFrame.sequence
-        if (providerFrame.stream === "stdout" || providerFrame.stream === "stderr") {
-          totalBytes += providerFrame.bytes.byteLength
-          if (totalBytes > maxBytes) {
-            await this.#contain(ctx, op, "output_limit")
-            throw adapterError("output_limit_exceeded")
-          }
-        } else {
-          completed = true
-        }
-        buffered.push(providerFrame)
-      }
-      if (!completed) throw adapterError("provider_state_unknown", { quarantineRequired: true })
-      await anchorOutcome(ctx, op, {
-        observation: "completed",
-        exec_fingerprint_sha256: exec.immutable_exec_fingerprint_sha256,
-        last_sequence: lastSequence,
-        total_bytes: totalBytes,
-      })
-      return buffered
-    }))
-    for (const frame of frames) yield frame
-  }
-
   async cancel_exec(
     ctx: AdapterCallContextV1,
     handle: OwnedProviderHandleV1,
     exec: AdapterExecHandleV1,
     op: ProviderOperationV1,
   ): Promise<CancelObservationV1> {
+    ctx = snapshotContext(ctx)
+    handle = snapshotData(handle)
+    exec = snapshotData(exec)
+    op = snapshotData(op)
     validateOperation(ctx, op, "exec_cancel")
     validateEffectRequest(op, {
       operation: "exec_cancel",
@@ -1099,6 +1187,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
           { operation: "exec_cancel", exec },
           op,
           broker,
+          this.#dependencies.guest_broker_authenticator,
         )
         await this.#beforeProviderMutation(ctx, op)
         cancellation = await client.cancelExec(handle.opaque_resource_id, broker, frame, op.target)
@@ -1113,7 +1202,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
         exec_fingerprint_sha256: exec.immutable_exec_fingerprint_sha256,
         whole_guest_scope_terminated: true,
       })
-      const outcomeAnchor = await anchorOutcome(ctx, op, {
+      const outcomeAnchor = await this.#anchorOutcome(ctx, op, {
         observation: "whole_guest_scope_terminated",
         provider_receipt_sha256: providerReceiptSha256,
       })
@@ -1132,6 +1221,9 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     path: WorkspacePath,
     op: ProviderOperationV1,
   ): Promise<FileStatV1> {
+    ctx = snapshotContext(ctx)
+    handle = snapshotData(handle)
+    op = snapshotData(op)
     const checkedPath = validateWorkspacePath(path)
     validateOperation(ctx, op, "file_stat")
     validateEffectRequest(op, { operation: "file_stat", path: checkedPath })
@@ -1144,6 +1236,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
         { operation: "file_stat", path: checkedPath },
         op,
         broker,
+        this.#dependencies.guest_broker_authenticator,
       )
       const stat = await this.#retryRead(ctx, op, () => client.statFile(handle.opaque_resource_id, broker, frame))
       if (
@@ -1156,12 +1249,25 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
       ) {
         throw adapterError("integrity_failed")
       }
-      await anchorOutcome(ctx, op, { observation: "completed", stat_sha256: canonicalSha256(stat) })
       return stat
     }))
   }
 
-  async *read_file(
+  read_file(
+    ctx: AdapterCallContextV1,
+    handle: OwnedProviderHandleV1,
+    request: FileReadV1,
+    op: ProviderOperationV1,
+  ): AsyncIterable<ByteChunkV1> {
+    return this.#readFile(
+      snapshotContext(ctx),
+      snapshotData(handle),
+      snapshotData(request),
+      snapshotData(op),
+    )
+  }
+
+  async *#readFile(
     ctx: AdapterCallContextV1,
     handle: OwnedProviderHandleV1,
     request: FileReadV1,
@@ -1175,7 +1281,12 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
       requireCapability(client, "native_bounded_files")
       await this.#inspectExactHandle(client, ctx, op, handle)
       const broker = await this.#inspectGuestBroker(client, ctx, op, handle)
-      const frame = encodeGuestBrokerRequestFrame({ operation: "file_read", request }, op, broker)
+      const frame = encodeGuestBrokerRequestFrame(
+        { operation: "file_read", request },
+        op,
+        broker,
+        this.#dependencies.guest_broker_authenticator,
+      )
       const iterator = client.readFile(handle.opaque_resource_id, broker, frame)[Symbol.asyncIterator]()
       const buffered: ByteChunkV1[] = []
       let offset = request.offset
@@ -1210,12 +1321,6 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
         })
         offset += bytes.byteLength
       }
-      await anchorOutcome(ctx, op, {
-        observation: "completed",
-        path_sha256: canonicalSha256(request.path),
-        offset: request.offset,
-        returned_bytes: total,
-      })
       return buffered
     }))
     for (const chunk of chunks) yield chunk
@@ -1227,6 +1332,10 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     request: FileWriteV1,
     op: ProviderOperationV1,
   ): Promise<FileWriteReceiptV1> {
+    ctx = snapshotContext(ctx)
+    handle = snapshotData(handle)
+    request = snapshotData(request)
+    op = snapshotData(op)
     validateFileWrite(request)
     validateOperation(ctx, op, "file_write")
     validateEffectRequest(op, { operation: "file_write", request })
@@ -1243,6 +1352,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
           { operation: "file_write", request },
           op,
           broker,
+          this.#dependencies.guest_broker_authenticator,
         )
         await this.#beforeProviderMutation(ctx, op)
         receipt = await client.writeFileAtomic(handle.opaque_resource_id, broker, frame, op.target)
@@ -1257,7 +1367,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
       ) {
         return this.#anchorUnknown(ctx, op, adapterError("integrity_failed"))
       }
-      const outcomeAnchor = await anchorOutcome(ctx, op, {
+      const outcomeAnchor = await this.#anchorOutcome(ctx, op, {
         observation: "completed",
         file_receipt_sha256: canonicalSha256(receipt),
       })
@@ -1271,6 +1381,10 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     request: FileListV1,
     op: ProviderOperationV1,
   ): Promise<FilePageV1> {
+    ctx = snapshotContext(ctx)
+    handle = snapshotData(handle)
+    request = snapshotData(request)
+    op = snapshotData(op)
     const checkedPath = validateWorkspacePath(request.path, true)
     if (!Number.isSafeInteger(request.limit) || request.limit < 1 || request.limit > 1000) {
       throw adapterError("validation_failed")
@@ -1278,7 +1392,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     validateOperation(ctx, op, "file_list")
     validateEffectRequest(op, { operation: "file_list", request: { ...request, path: checkedPath } })
     validateHandle(handle, op, this.#identity, this.#dependencies)
-    return this.#withClient(ctx, op, async (client) => {
+    return this.#withClient(ctx, op, (client) => this.#withLifecycleLock(op, async () => {
       requireCapability(client, "native_bounded_files")
       await this.#inspectExactHandle(client, ctx, op, handle)
       const broker = await this.#inspectGuestBroker(client, ctx, op, handle)
@@ -1287,6 +1401,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
         { operation: "file_list", request: brokerRequest },
         op,
         broker,
+        this.#dependencies.guest_broker_authenticator,
       )
       const page = await this.#retryRead(ctx, op, () => client.listFiles(handle.opaque_resource_id, broker, frame))
       if (page.items.length > request.limit) throw adapterError("integrity_failed")
@@ -1301,44 +1416,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
       ) {
         throw adapterError("integrity_failed")
       }
-      await anchorOutcome(ctx, op, { observation: "completed", page_sha256: canonicalSha256(page) })
       return page
-    })
-  }
-
-  async checkpoint_hint(
-    ctx: AdapterCallContextV1,
-    handle: OwnedProviderHandleV1,
-    op: ProviderOperationV1,
-  ): Promise<CheckpointHintObservationV1> {
-    validateOperation(ctx, op, "checkpoint_hint")
-    validateEffectRequest(op, { operation: "checkpoint_hint" })
-    validateHandle(handle, op, this.#identity, this.#dependencies)
-    return this.#withClient(ctx, op, (client) => this.#withLifecycleLock(op, async () => {
-      requireCapability(client, "provider_snapshot_hint")
-      let snapshot
-      try {
-        await this.#inspectExactHandle(client, ctx, op, handle)
-        await this.#beforeProviderMutation(ctx, op)
-        snapshot = await client.createSnapshotHint(handle.opaque_resource_id, op.target)
-      } catch (cause) {
-        return this.#anchorUnknown(ctx, op, cause)
-      }
-      const snapshotIdSha256 = canonicalSha256(snapshot.opaque_snapshot_id)
-      const outcomeAnchor = await anchorOutcome(ctx, op, {
-        observation: "provider_snapshot_hint",
-        provider_snapshot_id_sha256: snapshotIdSha256,
-        provider_receipt_sha256: snapshot.provider_receipt_sha256,
-        canonical_checkpoint: false,
-        cleanup_authority: false,
-      })
-      return {
-        canonical_checkpoint: false,
-        cleanup_authority: false,
-        provider_snapshot_id_sha256: snapshotIdSha256,
-        provider_receipt_sha256: snapshot.provider_receipt_sha256,
-        provider_outcome_anchor_sha256: outcomeAnchor,
-      }
     }))
   }
 
@@ -1348,6 +1426,9 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     op: ProviderOperationV1,
     expected: "expire" | "quarantine",
   ): Promise<ExpireObservationV1> {
+    ctx = snapshotContext(ctx)
+    handle = snapshotData(handle)
+    op = snapshotData(op)
     validateOperation(ctx, op, expected)
     validateEffectRequest(op, { operation: expected })
     validateHandle(handle, op, this.#identity, this.#dependencies)
@@ -1366,7 +1447,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
         return this.#anchorUnknown(ctx, op, cause)
       }
       const providerReceiptSha256 = safeProviderReceipt(stopped, op)
-      const outcomeAnchor = await anchorOutcome(ctx, op, {
+      const outcomeAnchor = await this.#anchorOutcome(ctx, op, {
         observation: "safety_stopped",
         provider_receipt_sha256: providerReceiptSha256,
       })
@@ -1401,6 +1482,9 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     handle: OwnedProviderHandleV1,
     op: ProviderOperationV1,
   ): Promise<DestroyObservationV1> {
+    ctx = snapshotContext(ctx)
+    handle = snapshotData(handle)
+    op = snapshotData(op)
     validateOperation(ctx, op, "destroy")
     validateHandle(handle, op, this.#identity, this.#dependencies)
     if (!isDigest(ctx.cleanup_grant_sha256) || !isDigest(ctx.cleanup_basis_sha256)) {
@@ -1419,6 +1503,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     })
     return this.#withClient(ctx, op, (client) => this.#withLifecycleLock(op, async () => {
       requireCapability(client, "locked_destroy_compensation")
+      requireCapability(client, "conditional_destroy")
       try {
         const enumerated = await this.#findExactHandleByCreationToken(client, ctx, op, handle)
         const inspected = await this.#inspectExactHandle(client, ctx, op, handle)
@@ -1478,7 +1563,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
         target_sha256: canonicalSha256(op.target),
         generation_transition_sha256: canonicalSha256(op.generation_transition),
       })
-      const outcomeAnchor = await anchorOutcome(ctx, op, {
+      const outcomeAnchor = await this.#anchorOutcome(ctx, op, {
         terminal_condition: "verified_absent",
         provider_receipt_sha256: providerReceiptSha256,
       })
@@ -1497,6 +1582,9 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     target: ProviderEffectTargetV1,
     handle?: OwnedProviderHandleV1,
   ): Promise<ProviderOperationObservationV1> {
+    ctx = snapshotContext(ctx)
+    target = snapshotData(target)
+    if (handle !== undefined) handle = snapshotData(handle)
     if (!safeEqual(ctx.target, target) || ctx.authorization_consumption_receipt_sha256 !== target.authorization_consumption_receipt_sha256) {
       throw adapterError("operation_target_mismatch")
     }
@@ -1507,18 +1595,18 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     validateAdapterCallContext(ctx, op)
     return this.#withClient(ctx, op, async (client) => {
       const observation = await this.#retryRead(ctx, op, () => client.lookupOperation(target))
-      const outcomeAnchor = await anchorOutcome(ctx, op, { observation, target_sha256: canonicalSha256(target) })
       return {
         observation,
         target_sha256: canonicalSha256(target),
         provider_idempotency_token_sha256: target.provider_idempotency_token_sha256,
         immutable_fingerprint_sha256: target.immutable_fingerprint_sha256,
-        provider_outcome_anchor_sha256: outcomeAnchor,
+        provider_outcome_anchor_sha256: journalAnchorSha256(ctx.invocation_anchor),
       }
     })
   }
 
   async list_owned_resources(ctx: ReconcileContextV1, cursor?: string): Promise<OwnedResourcePageV1> {
+    ctx = snapshotContext(ctx)
     const op = this.#reconcileOperation(ctx)
     validateAdapterCallContext(ctx, op)
     return this.#withClient(ctx, op, async (client) => {
@@ -1529,7 +1617,6 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
         immutable_fingerprint_sha256: resource.immutable_fingerprint_sha256,
         state: resource.state,
       }))
-      await anchorOutcome(ctx, op, { observation: "completed", inventory_sha256: canonicalSha256(items) })
       return { items, ...(page.next_cursor === undefined ? {} : { next_cursor: page.next_cursor }) }
     })
   }
@@ -1538,14 +1625,16 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     ctx: AdapterCallContextV1,
     knownFingerprints: ReadonlyMap<Digest, string>,
   ): Promise<InventoryReconciliationV1> {
+    ctx = snapshotContext(ctx)
+    knownFingerprints = new Map(knownFingerprints)
     const op: ProviderOperationV1 = {
       operation: "inspect",
       target: ctx.target,
       fence: ctx.fence,
       request_sha256: ctx.request_sha256,
-      idempotency_key_sha256: canonicalSha256({ operation_id: ctx.target.operation_id, kind: "inventory" }),
+      idempotency_key_sha256: ctx.invocation_anchor.record.idempotency_key_sha256,
       external_anchor_kind: "READ_PROBE",
-      external_anchor_receipt_sha256: ctx.invocation_anchor.record_sha256,
+      external_anchor_receipt_sha256: journalAnchorSha256(ctx.invocation_anchor),
       deadline: ctx.deadline,
     }
     validateOperation(ctx, op, "inspect")
@@ -1558,16 +1647,36 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
         const page = await this.#retryRead(ctx, op, () => client.listOwnedResources(cursor))
         resources.push(...page.items)
         if (page.next_cursor === undefined) {
+          const fingerprintCounts = new Map<Digest, number>()
+          for (const resource of resources) {
+            fingerprintCounts.set(
+              resource.immutable_fingerprint_sha256,
+              (fingerprintCounts.get(resource.immutable_fingerprint_sha256) ?? 0) + 1,
+            )
+          }
           const findings = resources.map((resource) => {
             const resourceId = knownFingerprints.get(resource.immutable_fingerprint_sha256)
+            const structurallyOwned =
+              resource.owned &&
+              !resource.source_attached &&
+              !resource.credential_attached &&
+              resource.auto_delete_disabled &&
+              !resource.ephemeral &&
+              resource.ownership.installation_id_sha256 ===
+                canonicalSha256(this.#dependencies.installation_id) &&
+              resource.ownership.provider_scope_ref_sha256 ===
+                canonicalSha256(this.#dependencies.provider_scope_ref)
+            const knownUnique =
+              resourceId !== undefined &&
+              structurallyOwned &&
+              fingerprintCounts.get(resource.immutable_fingerprint_sha256) === 1
             return {
               provider_resource_sha256: canonicalSha256(resource.opaque_resource_id),
               immutable_fingerprint_sha256: resource.immutable_fingerprint_sha256,
-              disposition: resourceId === undefined ? ("quarantine_required" as const) : ("known" as const),
-              ...(resourceId === undefined ? {} : { resource_id: resourceId }),
+              disposition: knownUnique ? ("known" as const) : ("quarantine_required" as const),
+              ...(knownUnique ? { resource_id: resourceId } : {}),
             }
           })
-          await anchorOutcome(ctx, op, { observation: "completed", findings_sha256: canonicalSha256(findings) })
           return { findings, complete: true }
         }
         if (cursors.has(page.next_cursor)) throw adapterError("integrity_failed")
@@ -1584,12 +1693,9 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
       target: ctx.target,
       fence: ctx.fence,
       request_sha256: ctx.invocation_anchor.record.request_sha256,
-      idempotency_key_sha256: canonicalSha256({
-        operation_id: ctx.target.operation_id,
-        continuation_grant_sha256: ctx.continuation_grant_sha256,
-      }),
+      idempotency_key_sha256: ctx.invocation_anchor.record.idempotency_key_sha256,
       external_anchor_kind: "READ_PROBE",
-      external_anchor_receipt_sha256: ctx.invocation_anchor.record_sha256,
+      external_anchor_receipt_sha256: journalAnchorSha256(ctx.invocation_anchor),
       deadline: ctx.fence.operation_execution_expires_at,
     }
   }

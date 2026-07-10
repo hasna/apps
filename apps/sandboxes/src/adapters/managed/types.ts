@@ -7,13 +7,11 @@ export type ProviderOperationNameV1 =
   | "activate"
   | "inspect"
   | "exec_start"
-  | "exec_stream"
   | "exec_cancel"
   | "file_stat"
   | "file_read"
   | "file_write"
   | "file_list"
-  | "checkpoint_hint"
   | "expire"
   | "quarantine"
   | "destroy"
@@ -54,6 +52,7 @@ export interface ProviderEffectTargetV1 {
   resource_id: string
   resource_lifecycle_generation: bigint
   provider_idempotency_token_sha256: Digest
+  provider_creation_token_sha256: Digest
   immutable_fingerprint_sha256: Digest
   authorization_consumption_receipt_sha256: Digest
 }
@@ -82,13 +81,16 @@ export interface JournalRecordV1 {
   operation_id: string
   operation_step_id: string
   operation_execution_epoch: bigint
-  record_kind: "INTENT" | "DISPATCHED" | "READ_PROBE" | "OUTCOME"
+  record_kind: "DISPATCHED" | "READ_PROBE" | "OUTCOME"
   resource_id: string
   resource_lifecycle_generation: bigint
   provider_idempotency_token_sha256: Digest
+  provider_creation_token_sha256: Digest
   immutable_fingerprint_sha256: Digest
   operation_digest: Digest
   request_sha256: Digest
+  idempotency_key_sha256: Digest
+  deadline: string
   target_sha256: Digest
   fence_sha256: Digest
   generation_transition_sha256: Digest
@@ -97,11 +99,15 @@ export interface JournalRecordV1 {
 }
 
 export interface JournalAnchorReceiptV1 {
-  record: JournalRecordV1
-  record_sha256: Digest
+  anchor_schema_version: "infinity.effect-journal-anchor/v1"
+  journal_sequence: bigint
+  prior_frontier_digest: Digest
+  record_digest: Digest
+  frontier_digest: Digest
   signer_principal: string
-  anchored_at: string
-  duplicate: boolean
+  signing_key_id: string
+  signature: string
+  record: JournalRecordV1
 }
 
 export interface FailedNoEffectAuthorizationV1 {
@@ -113,6 +119,7 @@ export interface FailedNoEffectAuthorizationV1 {
   request_sha256: Digest
   resource_id: string
   provider_idempotency_token_sha256: Digest
+  provider_creation_token_sha256: Digest
   operation_digest: Digest
   prior_outcome_anchor_sha256: Digest
   evidence_sha256: Digest
@@ -144,9 +151,7 @@ export interface AdapterCallContextV1 {
   request_sha256: Digest
   deadline: string
   trace_id: string
-  intent_anchor: JournalAnchorReceiptV1
   invocation_anchor: JournalAnchorReceiptV1
-  outcome_journal: OutcomeJournalPortV1
   authorization_binding_sha256: Digest
   dispatch_attempt: DispatchAttemptAuthorizationV1
   signal?: AbortSignal
@@ -174,15 +179,39 @@ export interface NetworkPolicyObservationV1 extends NetworkPolicyV1 {
   observed_at: string
 }
 
-export interface AdapterSandboxSpecV1 {
+export interface SandboxSpecV1 {
   schema_version: "sandboxes.runtime/v1"
-  spec_sha256: Digest
-  environment_image_or_snapshot_sha256: Digest
+  run_id: string
+  attempt_id: string
+  source: {
+    repository_ref: string
+    commit_sha: string
+    source_bundle_sha256: Digest
+  }
+  environment: {
+    image_or_snapshot_sha256: Digest
+    toolchain_manifest_sha256: Digest
+  }
+  runtime_class: "strong_vm"
   architecture: "arm64" | "amd64"
   workspace_root: "/workspace"
   network_policy: NetworkPolicyV1
+  resources: {
+    cpu_millis: number
+    memory_bytes: number
+    disk_bytes: number
+    pids: number
+    open_files: number
+    output_bytes: number
+  }
+  exec_concurrency: number
   max_runtime_ms: number
+  expires_at: string
+  data_class: "public" | "internal_non_sensitive" | "restricted"
+  input_bundle_refs: Array<{ sha256: Digest; size_bytes: number }>
 }
+
+export type AdapterSandboxSpecV1 = SandboxSpecV1
 
 export interface ProviderCreateInertRequestV1 {
   target: ProviderEffectTargetV1
@@ -198,7 +227,7 @@ export interface ProviderCreateInertRequestV1 {
 
 export type ProviderResourcePhysicalStateV1 = "inert" | "active" | "transitioning" | "unknown"
 
-export type ProviderRuntimeStateV1 = "started_locked" | "paused" | "stopped" | "active" | "unknown"
+export type ProviderRuntimeStateV1 = "paused" | "stopped" | "active" | "unknown"
 
 export interface ProviderOwnershipObservationV1 {
   installation_id_sha256: Digest
@@ -233,7 +262,6 @@ export interface ProviderCapabilitiesV1 {
   exact_creation_token_lookup: boolean
   create_stopped: boolean
   creation_metadata_labels: boolean
-  started_locked_inert_compensation: boolean
   network_policy_readback: boolean
   typed_argv_exec: boolean
   fixed_bootstrap_broker: boolean
@@ -246,7 +274,6 @@ export interface ProviderCapabilitiesV1 {
   stop_preserves_filesystem: boolean
   conditional_destroy: boolean
   locked_destroy_compensation: boolean
-  provider_snapshot_hint: boolean
   ownership_inventory: boolean
 }
 
@@ -283,7 +310,6 @@ export interface ProviderActivationOutcomeV1 {
 
 export type GuestBrokerRequestV1 =
   | { operation: "exec_start"; spec: ExecSpecV1 }
-  | { operation: "exec_stream"; exec: ProviderExecHandleV1; max_bytes: number }
   | { operation: "exec_cancel"; exec: ProviderExecHandleV1 }
   | { operation: "file_stat"; path: WorkspacePath }
   | { operation: "file_read"; request: FileReadV1 }
@@ -304,6 +330,7 @@ export interface GuestBrokerRequestFrameV1 {
   frame_nonce_sha256: Digest
   payload_sha256: Digest
   frame_sha256: Digest
+  authentication_tag_sha256: Digest
   payload_bytes: Uint8Array
 }
 
@@ -321,12 +348,6 @@ export interface AdapterExecHandleV1 extends ProviderExecHandleV1 {
   start_request_sha256: Digest
   provider_outcome_anchor_sha256: Digest
 }
-
-export type ProviderExecStreamEventV1 =
-  | { stream: "stdout" | "stderr"; sequence: bigint; bytes: Uint8Array }
-  | { stream: "terminal"; sequence: bigint; exit_code: number }
-
-export type AdapterExecStreamFrameV1 = ProviderExecStreamEventV1
 
 export interface CancelObservationV1 {
   observation: "whole_guest_scope_terminated"
@@ -394,13 +415,11 @@ export type ManagedProviderRequestV1 =
   | { operation: "activate"; authorization: ActivationDispatchAuthorizationV1 }
   | { operation: "inspect" }
   | { operation: "exec_start"; spec: ExecSpecV1 }
-  | { operation: "exec_stream"; exec_fingerprint_sha256: Digest; max_bytes: number }
   | { operation: "exec_cancel"; exec_fingerprint_sha256: Digest }
   | { operation: "file_stat"; path: WorkspacePath }
   | { operation: "file_read"; request: FileReadV1 }
   | { operation: "file_write"; request: FileWriteV1 }
   | { operation: "file_list"; request: FileListV1 }
-  | { operation: "checkpoint_hint" }
   | { operation: "expire" }
   | { operation: "quarantine" }
   | { operation: "destroy"; cleanup_grant_sha256: Digest; cleanup_basis_sha256: Digest }
@@ -411,20 +430,6 @@ export interface FilePageV1 {
     type: "file" | "directory" | "symlink"
   }>
   next_cursor?: string
-}
-
-export interface ProviderSnapshotHintV1 {
-  opaque_snapshot_id: string
-  created_at: string
-  provider_receipt_sha256: Digest
-}
-
-export interface CheckpointHintObservationV1 {
-  canonical_checkpoint: false
-  cleanup_authority: false
-  provider_snapshot_id_sha256: Digest
-  provider_receipt_sha256: Digest
-  provider_outcome_anchor_sha256: Digest
 }
 
 export type ProviderMutationOutcomeV1 = "not_sent" | "accepted" | "completed" | "not_found" | "unknown"
@@ -497,9 +502,7 @@ export interface OwnedProviderHandleV1 {
   resource_lease_id: string
   resource_id: string
   resource_lifecycle_generation: bigint
-  generation_transition_sha256: Digest
   spec_sha256: Digest
-  provider_outcome_anchor_sha256: Digest
 }
 
 export interface AdapterDescriptorV1 {
@@ -562,6 +565,11 @@ export interface AdapterJournalAnchorVerifierPortV1 {
   assertVerified(ctx: AdapterCallContextV1, operation: ProviderOperationV1): Promise<void>
 }
 
+/** Independent signature/frontier verification for a just-appended OUTCOME envelope. */
+export interface AdapterOutcomeAnchorVerifierPortV1 {
+  assertVerified(receipt: JournalAnchorReceiptV1, expected: JournalRecordV1): Promise<void>
+}
+
 export interface AdapterAdmissionVerifierPortV1 {
   assertAdmitted(request: {
     provider: ManagedProviderIdV1
@@ -594,6 +602,16 @@ export interface AdapterNetworkPolicyVerifierPortV1 {
   ): Promise<void>
 }
 
+/** Trusted holder of a broker-session MAC key; key bytes never enter DTOs or the guest task. */
+export interface AdapterGuestBrokerAuthenticatorPortV1 {
+  authenticate(input: {
+    frame_sha256: Digest
+    protocol_sha256: Digest
+    provider_session_binding_sha256: Digest
+    frame_nonce_sha256: Digest
+  }): Digest
+}
+
 export interface ManagedAdapterDependenciesV1 {
   credential_port: ManagedProviderCredentialPortV1
   installation_id: string
@@ -605,9 +623,12 @@ export interface ManagedAdapterDependenciesV1 {
   effect_guard: AdapterEffectGuardPortV1
   lifecycle_lock: AdapterLifecycleLockPortV1
   journal_anchor_verifier: AdapterJournalAnchorVerifierPortV1
+  outcome_journal: OutcomeJournalPortV1
+  outcome_anchor_verifier: AdapterOutcomeAnchorVerifierPortV1
   admission_verifier: AdapterAdmissionVerifierPortV1
   physical_safety_gate: AdapterPhysicalSafetyGatePortV1
   network_policy_verifier: AdapterNetworkPolicyVerifierPortV1
+  guest_broker_authenticator: AdapterGuestBrokerAuthenticatorPortV1
 }
 
 export interface ManagedProviderControlPortV1 {
@@ -640,12 +661,6 @@ export interface ManagedProviderControlPortV1 {
     frame: GuestBrokerRequestFrameV1,
     target: ProviderEffectTargetV1,
   ): Promise<ProviderExecHandleV1>
-  streamExec(
-    opaqueResourceId: string,
-    broker: GuestBrokerAttestationV1,
-    frame: GuestBrokerRequestFrameV1,
-    target: ProviderEffectTargetV1,
-  ): AsyncIterable<ProviderExecStreamEventV1>
   cancelExec(
     opaqueResourceId: string,
     broker: GuestBrokerAttestationV1,
@@ -656,7 +671,6 @@ export interface ManagedProviderControlPortV1 {
   readFile(opaqueResourceId: string, broker: GuestBrokerAttestationV1, frame: GuestBrokerRequestFrameV1): AsyncIterable<ProviderFileReadChunkV1>
   writeFileAtomic(opaqueResourceId: string, broker: GuestBrokerAttestationV1, frame: GuestBrokerRequestFrameV1, target: ProviderEffectTargetV1): Promise<FileWriteReceiptV1>
   listFiles(opaqueResourceId: string, broker: GuestBrokerAttestationV1, frame: GuestBrokerRequestFrameV1): Promise<FilePageV1>
-  createSnapshotHint(opaqueResourceId: string, target: ProviderEffectTargetV1): Promise<ProviderSnapshotHintV1>
   lookupOperation(target: ProviderEffectTargetV1): Promise<ProviderMutationOutcomeV1>
   listOwnedResources(cursor?: string): Promise<ProviderResourcePageV1>
 }
@@ -714,13 +728,6 @@ export interface ManagedProviderAdapterV1 {
     spec: ExecSpecV1,
     op: ProviderOperationV1,
   ): Promise<AdapterExecHandleV1>
-  stream_exec(
-    ctx: AdapterCallContextV1,
-    handle: OwnedProviderHandleV1,
-    exec: AdapterExecHandleV1,
-    op: ProviderOperationV1,
-    maxBytes: number,
-  ): AsyncIterable<AdapterExecStreamFrameV1>
   cancel_exec(
     ctx: AdapterCallContextV1,
     handle: OwnedProviderHandleV1,
@@ -751,11 +758,6 @@ export interface ManagedProviderAdapterV1 {
     request: FileListV1,
     op: ProviderOperationV1,
   ): Promise<FilePageV1>
-  checkpoint_hint(
-    ctx: AdapterCallContextV1,
-    handle: OwnedProviderHandleV1,
-    op: ProviderOperationV1,
-  ): Promise<CheckpointHintObservationV1>
   expire(
     ctx: AdapterCallContextV1,
     handle: OwnedProviderHandleV1,

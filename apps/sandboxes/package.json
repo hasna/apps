@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "bun test tests/managed-adapters",
+    "test": "bun run test:hermetic",
+    "test:hermetic": "tmp=$(mktemp -d); trap 'rm -rf \"$tmp\"' EXIT; env -i PATH=\"$PATH\" HOME=\"$tmp\" XDG_CONFIG_HOME=\"$tmp/config\" TMPDIR=\"$tmp\" TZ=UTC bun test tests/managed-adapters",
     "typecheck": "tsc --noEmit",
     "build": "bun build src/adapters/managed/index.ts --outdir dist --target node --format esm --external e2b --external @daytona/sdk",
     "audit": "bun audit"

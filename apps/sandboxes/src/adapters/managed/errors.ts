@@ -1,3 +1,5 @@
+import type { Digest } from "./types"
+
 export type AdapterErrorCodeV1 =
   | "validation_failed"
   | "unsupported_runtime_feature"
@@ -47,4 +49,17 @@ export function adapterError(
   options?: { retryable?: boolean; quarantineRequired?: boolean; cause?: unknown },
 ): AdapterContractError {
   return new AdapterContractError(code, options)
+}
+
+/** A trusted provider bridge may use this only when the effect outcome is definitive. */
+export class DefinitiveProviderEffectError extends Error {
+  override readonly name = "DefinitiveProviderEffectError"
+
+  constructor(
+    readonly outcome_kind: "failed_effect" | "failed_no_effect",
+    readonly provider_receipt_sha256: Digest,
+    readonly safe_code: Extract<AdapterErrorCodeV1, "provider_state_unknown" | "provider_unavailable" | "integrity_failed">,
+  ) {
+    super(safe_code)
+  }
 }

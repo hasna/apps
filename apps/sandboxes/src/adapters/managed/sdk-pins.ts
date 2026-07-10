@@ -53,6 +53,13 @@ function ownershipLabels(metadata: OwnershipMetadataV1): Record<string, string> 
   }
 }
 
+function creationLabels(metadata: OwnershipMetadataV1, networkPolicySha256: Digest): Record<string, string> {
+  return {
+    ...ownershipLabels(metadata),
+    "hasna.network_policy_sha256": networkPolicySha256,
+  }
+}
+
 export function buildE2bExactOwnershipListOptions(metadata: OwnershipMetadataV1): SandboxListOpts {
   return { query: { metadata: ownershipLabels(metadata) }, limit: 100 }
 }
@@ -64,6 +71,7 @@ export function buildDaytonaExactOwnershipListQuery(metadata: OwnershipMetadataV
 export interface E2bCreateMappingInputV1 {
   template: string
   metadata: OwnershipMetadataV1
+  network_policy_sha256: Digest
   max_runtime_ms: number
 }
 
@@ -77,7 +85,7 @@ export type SafeE2bCreateOptionsV1 = Omit<
 export function buildE2bCreateOptions(input: E2bCreateMappingInputV1): SafeE2bCreateOptionsV1 {
   const options = {
     template: input.template,
-    metadata: ownershipLabels(input.metadata),
+    metadata: creationLabels(input.metadata, input.network_policy_sha256),
     envs: {},
     timeoutMs: input.max_runtime_ms,
     secure: true,
@@ -97,6 +105,7 @@ export function buildE2bCreateOptions(input: E2bCreateMappingInputV1): SafeE2bCr
 export interface DaytonaCreateMappingInputV1 {
   image: string
   labels: OwnershipMetadataV1
+  network_policy_sha256: Digest
   resources: Resources
 }
 
@@ -104,7 +113,7 @@ export function buildDaytonaCreateParams(input: DaytonaCreateMappingInputV1): Cr
   return {
     image: input.image,
     resources: input.resources,
-    labels: ownershipLabels(input.labels),
+    labels: creationLabels(input.labels, input.network_policy_sha256),
     envVars: {},
     public: false,
     autoStopInterval: 0,
@@ -115,6 +124,7 @@ export function buildDaytonaCreateParams(input: DaytonaCreateMappingInputV1): Cr
 }
 
 export type OfficialSdkContractGapV1 =
+  | "create_stopped_unavailable_in_pinned_sdk"
   | "creation_metadata_filter_consistency_live_evidence"
   | "distributed_lifecycle_lock_coverage_live_evidence"
   | "fixed_broker_bootstrap_and_transport_live_evidence"
@@ -122,15 +132,14 @@ export type OfficialSdkContractGapV1 =
   | "whole_guest_cancel_live_evidence"
   | "pause_preserves_filesystem_live_evidence"
   | "delete_absence_consistency_live_evidence"
+  | "conditional_destroy_unavailable_in_pinned_sdk"
+  | "authenticated_broker_attestation_and_replay_evidence"
   | "broker_only_network_semantics_live_evidence"
   | "strong_vm_live_evidence"
 
 export type OfficialSdkCompensationV1 =
   | "creation_token_metadata_plus_exact_lookup_plus_lifecycle_lock"
-  | "provider_started_default_deny_source_free_infinity_inert"
   | "fixed_bootstrap_plus_typed_guest_broker_frames"
-  | "exact_incarnation_readback_plus_locked_delete_plus_absence_proof"
-  | "provider_snapshot_noncanonical"
 
 export interface OfficialApiEvidenceV1 {
   url: string
@@ -152,12 +161,10 @@ export const OFFICIAL_SDK_CONTRACT_GAPS: Readonly<
     admission: "disabled",
     compensated_in_adapter: [
       "creation_token_metadata_plus_exact_lookup_plus_lifecycle_lock",
-      "provider_started_default_deny_source_free_infinity_inert",
       "fixed_bootstrap_plus_typed_guest_broker_frames",
-      "exact_incarnation_readback_plus_locked_delete_plus_absence_proof",
-      "provider_snapshot_noncanonical",
     ],
     gaps: [
+      "create_stopped_unavailable_in_pinned_sdk",
       "creation_metadata_filter_consistency_live_evidence",
       "distributed_lifecycle_lock_coverage_live_evidence",
       "fixed_broker_bootstrap_and_transport_live_evidence",
@@ -165,6 +172,8 @@ export const OFFICIAL_SDK_CONTRACT_GAPS: Readonly<
       "whole_guest_cancel_live_evidence",
       "pause_preserves_filesystem_live_evidence",
       "delete_absence_consistency_live_evidence",
+      "conditional_destroy_unavailable_in_pinned_sdk",
+      "authenticated_broker_attestation_and_replay_evidence",
       "broker_only_network_semantics_live_evidence",
       "strong_vm_live_evidence",
     ],
@@ -183,12 +192,10 @@ export const OFFICIAL_SDK_CONTRACT_GAPS: Readonly<
     admission: "disabled",
     compensated_in_adapter: [
       "creation_token_metadata_plus_exact_lookup_plus_lifecycle_lock",
-      "provider_started_default_deny_source_free_infinity_inert",
       "fixed_bootstrap_plus_typed_guest_broker_frames",
-      "exact_incarnation_readback_plus_locked_delete_plus_absence_proof",
-      "provider_snapshot_noncanonical",
     ],
     gaps: [
+      "create_stopped_unavailable_in_pinned_sdk",
       "creation_metadata_filter_consistency_live_evidence",
       "distributed_lifecycle_lock_coverage_live_evidence",
       "fixed_broker_bootstrap_and_transport_live_evidence",
@@ -196,6 +203,8 @@ export const OFFICIAL_SDK_CONTRACT_GAPS: Readonly<
       "whole_guest_cancel_live_evidence",
       "pause_preserves_filesystem_live_evidence",
       "delete_absence_consistency_live_evidence",
+      "conditional_destroy_unavailable_in_pinned_sdk",
+      "authenticated_broker_attestation_and_replay_evidence",
       "broker_only_network_semantics_live_evidence",
       "strong_vm_live_evidence",
     ],

@@ -4,18 +4,23 @@ import {
   EFFECT_JOURNAL_OUTCOME_SCHEMA_SHA256,
   EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION,
   MANAGED_GUEST_BROKER_PROTOCOL_SHA256,
+  DefinitiveProviderEffectError,
   adapterError,
   capabilityAuthorizationBinding,
   canonicalSha256,
   decodeGuestBrokerRequestFrame,
   failedNoEffectAuthorizationPayloadSha256,
+  journalAnchorSha256,
+  providerEffectTokenSha256,
   type AdapterCallContextV1,
   type AdapterEffectGuardPortV1,
   type AdapterLifecycleLockPortV1,
   type AdapterJournalAnchorVerifierPortV1,
+  type AdapterOutcomeAnchorVerifierPortV1,
   type AdapterAdmissionVerifierPortV1,
   type AdapterPhysicalSafetyGatePortV1,
   type AdapterNetworkPolicyVerifierPortV1,
+  type AdapterGuestBrokerAuthenticatorPortV1,
   type AdapterProviderResourceV1,
   type CanonicalSandboxEffectFenceV1,
   type Digest,
@@ -37,14 +42,12 @@ import {
   type ProviderActivationOutcomeV1,
   type ProviderEffectTargetV1,
   type ProviderExecHandleV1,
-  type ProviderExecStreamEventV1,
   type ProviderEffectGuardPhaseV1,
   type ProviderOperationNameV1,
   type ProviderOperationV1,
   type PhysicalSafetyFenceReasonV1,
   type ResourceGenerationTransitionV1,
   type ProviderResourcePageV1,
-  type ProviderSnapshotHintV1,
   type ProviderMutationOutcomeV1,
   type ProviderFileReadChunkV1,
   type ReadRetryPolicyV1,
@@ -106,10 +109,9 @@ export function makeOperation(operation: ProviderOperationNameV1, overrides: Ope
       resource_id: FENCE.resource_id,
       resource_lifecycle_generation: FENCE.resource_lifecycle_generation,
       provider_idempotency_token_sha256: canonicalSha256({
-        operation,
-        operation_step_id: `${operation}-step-1`,
-        kind: "provider-effect-token",
+        placeholder: "replaced-below",
       }),
+      provider_creation_token_sha256: digest("31"),
       immutable_fingerprint_sha256: digest("32"),
       authorization_consumption_receipt_sha256: digest("33"),
     },
@@ -129,6 +131,7 @@ export function makeOperation(operation: ProviderOperationNameV1, overrides: Ope
     deadline: "2026-07-10T10:20:00.000Z",
     ...otherOverrides,
   }
+  result.target.provider_idempotency_token_sha256 = providerEffectTokenSha256(result)
   if (generationTransition !== undefined) result.generation_transition = generationTransition
   return result
 }
@@ -152,9 +155,12 @@ function anchorRecord(
     resource_id: operation.target.resource_id,
     resource_lifecycle_generation: operation.target.resource_lifecycle_generation,
     provider_idempotency_token_sha256: operation.target.provider_idempotency_token_sha256,
+    provider_creation_token_sha256: operation.target.provider_creation_token_sha256,
     immutable_fingerprint_sha256: operation.target.immutable_fingerprint_sha256,
     operation_digest: operation.target.operation_digest,
     request_sha256: operation.request_sha256,
+    idempotency_key_sha256: operation.idempotency_key_sha256,
+    deadline: operation.deadline,
     target_sha256: canonicalSha256(operation.target),
     fence_sha256: canonicalSha256({
       ...operation.fence,
@@ -164,23 +170,34 @@ function anchorRecord(
       operation.generation_transition ?? { kind: "no_generation_transition" },
     ),
     authorization_binding_sha256: capabilityAuthorizationBinding(operation.target),
-    payload_sha256: digest(recordKind === "INTENT" ? "41" : recordKind === "OUTCOME" ? "43" : "42"),
+    payload_sha256: digest(recordKind === "OUTCOME" ? "43" : "42"),
   }
 }
 
-export function makeAnchorReceipt(record: JournalRecordV1): JournalAnchorReceiptV1 {
-  return {
-    record,
-    record_sha256: canonicalSha256(record),
+export function makeAnchorReceipt(
+  record: JournalRecordV1,
+  journalSequence = 1n,
+  priorFrontierDigest = digest("f0"),
+): JournalAnchorReceiptV1 {
+  const header = {
+    anchor_schema_version: "infinity.effect-journal-anchor/v1" as const,
+    journal_sequence: journalSequence,
+    prior_frontier_digest: priorFrontierDigest,
+    record_digest: canonicalSha256(record),
     signer_principal: "journal-1",
-    anchored_at: "2026-07-10T10:00:01.000Z",
-    duplicate: false,
+    signing_key_id: "journal-key-1",
+  }
+  return {
+    ...header,
+    frontier_digest: canonicalSha256(header),
+    signature: "AA",
+    record,
   }
 }
 
 export function makeContext(
   operation: ProviderOperationV1,
-  journal: FakeJournal,
+  _journal: FakeJournal,
   options: {
     operationExecutionEpoch?: bigint
     failedNoEffect?: FailedNoEffectAuthorizationV1
@@ -189,7 +206,6 @@ export function makeContext(
   const epoch = options.operationExecutionEpoch ?? operation.fence.operation_execution_epoch
   const fence = { ...operation.fence, operation_execution_epoch: epoch }
   const op = { ...operation, fence }
-  const intent = anchorRecord(op, "INTENT", epoch)
   const failedNoEffect =
     epoch === operation.fence.operation_execution_epoch
       ? undefined
@@ -202,6 +218,7 @@ export function makeContext(
           request_sha256: operation.request_sha256,
           resource_id: operation.target.resource_id,
           provider_idempotency_token_sha256: operation.target.provider_idempotency_token_sha256,
+          provider_creation_token_sha256: operation.target.provider_creation_token_sha256,
           operation_digest: operation.target.operation_digest,
           prior_outcome_anchor_sha256: digest("a3"),
           evidence_sha256: digest("a0"),
@@ -219,16 +236,14 @@ export function makeContext(
   const invocationReceipt = makeAnchorReceipt(invocation)
   // ProviderOperationV1 carries the protected anchor receipt digest. The helper
   // fills it only after constructing the canonical record to avoid fake values.
-  operation.external_anchor_receipt_sha256 = invocationReceipt.record_sha256
+  operation.external_anchor_receipt_sha256 = journalAnchorSha256(invocationReceipt)
   return {
     fence,
     target: operation.target,
     request_sha256: operation.request_sha256,
     deadline: operation.deadline,
     trace_id: "trace-1",
-    intent_anchor: makeAnchorReceipt(intent),
     invocation_anchor: invocationReceipt,
-    outcome_journal: journal,
     authorization_binding_sha256: capabilityAuthorizationBinding(operation.target),
     dispatch_attempt:
       epoch === operation.fence.operation_execution_epoch
@@ -246,19 +261,14 @@ export function bindAuthorization(
   operation: ProviderOperationV1,
   authorizationBindingSha256: Digest,
 ): AdapterCallContextV1 {
-  const intent = makeAnchorReceipt({
-    ...ctx.intent_anchor.record,
-    authorization_binding_sha256: authorizationBindingSha256,
-  })
   const invocation = makeAnchorReceipt({
     ...ctx.invocation_anchor.record,
     authorization_binding_sha256: authorizationBindingSha256,
   })
-  operation.external_anchor_receipt_sha256 = invocation.record_sha256
+  operation.external_anchor_receipt_sha256 = journalAnchorSha256(invocation)
   return {
     ...ctx,
     authorization_binding_sha256: authorizationBindingSha256,
-    intent_anchor: intent,
     invocation_anchor: invocation,
   }
 }
@@ -266,6 +276,9 @@ export function bindAuthorization(
 export class FakeJournal {
   readonly outcomes: JournalRecordV1[] = []
   readonly #ledger = new JournalIdentityLedgerV1()
+  readonly #anchors = new Map<Digest, JournalAnchorReceiptV1>()
+  #frontier = digest("f0")
+  #sequence = 0n
   failAppend = false
 
   async appendOutcome(record: JournalRecordV1): Promise<JournalAnchorReceiptV1> {
@@ -273,9 +286,19 @@ export class FakeJournal {
       throw new Error("invalid outcome record")
     }
     const result = this.#ledger.append(record)
-    if (!result.duplicate) this.outcomes.push(record)
     if (this.failAppend) throw new Error("journal unavailable with provider details")
-    return { ...makeAnchorReceipt(record), duplicate: result.duplicate }
+    const recordDigest = canonicalSha256(record)
+    const existing = this.#anchors.get(recordDigest)
+    if (result.duplicate) {
+      if (existing === undefined) throw new Error("missing duplicate journal anchor")
+      return existing
+    }
+    this.outcomes.push(record)
+    this.#sequence += 1n
+    const receipt = makeAnchorReceipt(record, this.#sequence, this.#frontier)
+    this.#frontier = receipt.frontier_digest
+    this.#anchors.set(recordDigest, receipt)
+    return receipt
   }
 }
 
@@ -325,6 +348,30 @@ export class FakeJournalAnchorVerifier implements AdapterJournalAnchorVerifierPo
   }
 }
 
+export class FakeOutcomeAnchorVerifier implements AdapterOutcomeAnchorVerifierPortV1 {
+  calls = 0
+  reject = false
+
+  async assertVerified(receipt: JournalAnchorReceiptV1, expected: JournalRecordV1): Promise<void> {
+    this.calls += 1
+    const expectedFrontier = canonicalSha256({
+      anchor_schema_version: receipt.anchor_schema_version,
+      journal_sequence: receipt.journal_sequence,
+      prior_frontier_digest: receipt.prior_frontier_digest,
+      record_digest: receipt.record_digest,
+      signer_principal: receipt.signer_principal,
+      signing_key_id: receipt.signing_key_id,
+    })
+    if (
+      this.reject ||
+      receipt.record_digest !== canonicalSha256(expected) ||
+      receipt.frontier_digest !== expectedFrontier
+    ) {
+      throw new Error("untrusted outcome anchor")
+    }
+  }
+}
+
 export class FakeAdmissionVerifier implements AdapterAdmissionVerifierPortV1 {
   calls = 0
   reject = false
@@ -339,9 +386,11 @@ export class FakePhysicalSafetyGate implements AdapterPhysicalSafetyGatePortV1 {
   assertOpenCalls = 0
   readonly containReasons: PhysicalSafetyFenceReasonV1[] = []
   rejectOpen = false
+  onAssertOpen: (() => void) | undefined
 
   async assertOpen(): Promise<void> {
     this.assertOpenCalls += 1
+    this.onAssertOpen?.()
     if (this.rejectOpen) throw adapterError("stale_operation_execution_epoch")
   }
 
@@ -373,6 +422,12 @@ export class FakeNetworkPolicyVerifier implements AdapterNetworkPolicyVerifierPo
   }
 }
 
+export class FakeGuestBrokerAuthenticator implements AdapterGuestBrokerAuthenticatorPortV1 {
+  authenticate(input: Parameters<AdapterGuestBrokerAuthenticatorPortV1["authenticate"]>[0]): Digest {
+    return canonicalSha256({ key_id: "hermetic-broker-key", input })
+  }
+}
+
 export class FakeLifecycleLock implements AdapterLifecycleLockPortV1 {
   readonly keys: Digest[] = []
   readonly #tails = new Map<Digest, Promise<void>>()
@@ -401,7 +456,6 @@ export class FakeProviderClient implements ManagedProviderControlPortV1 {
     exact_creation_token_lookup: true,
     create_stopped: true,
     creation_metadata_labels: true,
-    started_locked_inert_compensation: true,
     network_policy_readback: true,
     typed_argv_exec: true,
     fixed_bootstrap_broker: true,
@@ -414,7 +468,6 @@ export class FakeProviderClient implements ManagedProviderControlPortV1 {
     stop_preserves_filesystem: true,
     conditional_destroy: true,
     locked_destroy_compensation: true,
-    provider_snapshot_hint: true,
     ownership_inventory: true,
   }
   readonly resources = new Map<string, AdapterProviderResourceV1>()
@@ -424,6 +477,7 @@ export class FakeProviderClient implements ManagedProviderControlPortV1 {
   readonly brokerFrames: GuestBrokerRequestFrameV1[] = []
   readonly providerCommandStrings: string[] = []
   readonly providerEvents: Array<"inspect" | "destroy"> = []
+  readonly destroyedResourceIds: string[] = []
   readonly mutationTokens: Digest[] = []
   createCalls = 0
   activateCalls = 0
@@ -432,6 +486,8 @@ export class FakeProviderClient implements ManagedProviderControlPortV1 {
   cancelCalls = 0
   lookupCalls = 0
   createError: Error | undefined
+  createDefinitiveFailure: "failed_effect" | "failed_no_effect" | undefined
+  activationDefinitiveFailure: "failed_effect" | "failed_no_effect" | undefined
   createThenThrow = false
   duplicateAfterCreate = false
   networkMismatch = false
@@ -452,12 +508,12 @@ export class FakeProviderClient implements ManagedProviderControlPortV1 {
   makeResource(target: ProviderEffectTargetV1, suffix = "1"): AdapterProviderResourceV1 {
     return {
       opaque_resource_id: `${this.provider_id}-native-${suffix}`,
-      provider_creation_token_sha256: target.provider_idempotency_token_sha256,
+      provider_creation_token_sha256: target.provider_creation_token_sha256,
       immutable_fingerprint_sha256: target.immutable_fingerprint_sha256,
       provider_created_at: "2026-07-10T10:00:02.000Z",
       provider_resource_version: `version-${suffix}`,
       state: "inert",
-      provider_runtime_state: "started_locked",
+      provider_runtime_state: "stopped",
       network_policy: this.networkObservation(DENY_ALL_POLICY),
       auto_delete_disabled: true,
       ephemeral: false,
@@ -507,6 +563,14 @@ export class FakeProviderClient implements ManagedProviderControlPortV1 {
       installation_id_sha256: canonicalSha256(request.ownership.installation_id),
       provider_scope_ref_sha256: canonicalSha256(request.ownership.provider_scope_ref),
       ownership_nonce_sha256: canonicalSha256(request.ownership.ownership_nonce),
+    }
+    if (this.createDefinitiveFailure !== undefined) {
+      if (this.createDefinitiveFailure === "failed_effect") this.seed(resource)
+      throw new DefinitiveProviderEffectError(
+        this.createDefinitiveFailure,
+        digest("c1"),
+        "provider_state_unknown",
+      )
     }
     if (this.createThenThrow) {
       this.seed(resource)
@@ -582,6 +646,7 @@ export class FakeProviderClient implements ManagedProviderControlPortV1 {
   ): Promise<void> {
     this.mutationTokens.push(target.provider_idempotency_token_sha256)
     this.providerEvents.push("destroy")
+    this.destroyedResourceIds.push(opaqueResourceId)
     this.destroyCalls += 1
     const resource = this.resources.get(opaqueResourceId)
     if (resource === undefined) return
@@ -640,6 +705,9 @@ export class FakeProviderClient implements ManagedProviderControlPortV1 {
     if (resource === undefined || resource.immutable_fingerprint_sha256 !== expectedFingerprint) {
       throw new Error("activation resource mismatch")
     }
+    if (this.activationDefinitiveFailure === "failed_no_effect") {
+      throw new DefinitiveProviderEffectError("failed_no_effect", digest("c2"), "provider_state_unknown")
+    }
     const network = this.networkObservation(policy)
     resource.network_policy = network
     if (network.policy_sha256 !== policy.policy_sha256) throw new Error("network continuation mismatch")
@@ -647,6 +715,9 @@ export class FakeProviderClient implements ManagedProviderControlPortV1 {
     resource.state = "active"
     resource.provider_runtime_state = "active"
     resource.guest_broker_bootstrapped = true
+    if (this.activationDefinitiveFailure === "failed_effect") {
+      throw new DefinitiveProviderEffectError("failed_effect", digest("c3"), "provider_state_unknown")
+    }
     this.providerCommandStrings.push(command)
     const guestBroker: GuestBrokerAttestationV1 = {
       schema_version: "sandboxes.guest-broker-attestation/v1",
@@ -701,22 +772,6 @@ export class FakeProviderClient implements ManagedProviderControlPortV1 {
       immutable_exec_fingerprint_sha256: digest("51"),
       started_at: "2026-07-10T10:00:04.000Z",
     }
-  }
-
-  async *streamExec(
-    opaqueResourceId: string,
-    broker: GuestBrokerAttestationV1,
-    frame: GuestBrokerRequestFrameV1,
-    target: ProviderEffectTargetV1,
-  ): AsyncIterable<ProviderExecStreamEventV1> {
-    const request = this.#recordBrokerFrame(opaqueResourceId, broker, frame, target)
-    if (request.operation !== "exec_stream") throw new Error("wrong broker operation")
-    this.streamPulls += 1
-    yield { stream: "stdout", sequence: 1n, bytes: new TextEncoder().encode("hello") }
-    this.streamPulls += 1
-    yield { stream: "stderr", sequence: 2n, bytes: new TextEncoder().encode("warn") }
-    this.streamPulls += 1
-    yield { stream: "terminal", sequence: 3n, exit_code: 0 }
   }
 
   async cancelExec(
@@ -813,18 +868,6 @@ export class FakeProviderClient implements ManagedProviderControlPortV1 {
     return {
       items: [...this.files.keys()].sort().map((path) => ({ path: path as WorkspacePath, type: "file" as const })),
       ...(request.cursor === undefined ? {} : { next_cursor: request.cursor }),
-    }
-  }
-
-  async createSnapshotHint(
-    _opaqueResourceId: string,
-    target: ProviderEffectTargetV1,
-  ): Promise<ProviderSnapshotHintV1> {
-    this.mutationTokens.push(target.provider_idempotency_token_sha256)
-    return {
-      opaque_snapshot_id: "provider-snapshot-secret-id",
-      created_at: "2026-07-10T10:00:05.000Z",
-      provider_receipt_sha256: digest("61"),
     }
   }
 

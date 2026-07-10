@@ -3,6 +3,7 @@ import { adapterError } from "./errors"
 import { managedProviderRequestSha256 } from "./request"
 import type {
   Digest,
+  AdapterGuestBrokerAuthenticatorPortV1,
   GuestBrokerAttestationV1,
   GuestBrokerRequestFrameV1,
   GuestBrokerRequestV1,
@@ -24,7 +25,9 @@ export const MANAGED_GUEST_BROKER_PROTOCOL_SHA256: Digest = canonicalSha256({
 const MAX_BROKER_FRAME_BYTES = 16 * 1024 * 1024
 const WIRE_LENGTH_BYTES = 4
 
-function frameBasis(frame: Omit<GuestBrokerRequestFrameV1, "frame_sha256">): object {
+function frameBasis(
+  frame: Omit<GuestBrokerRequestFrameV1, "frame_sha256" | "authentication_tag_sha256">,
+): object {
   return {
     schema_version: frame.schema_version,
     operation: frame.operation,
@@ -45,16 +48,10 @@ export function encodeGuestBrokerRequestFrame(
   request: GuestBrokerRequestV1,
   operation: ProviderOperationV1,
   broker: GuestBrokerAttestationV1,
+  authenticator: AdapterGuestBrokerAuthenticatorPortV1,
 ): GuestBrokerRequestFrameV1 {
   validateGuestBrokerAttestation(broker, operation.target.immutable_fingerprint_sha256)
   const requestBinding = (() => {
-    if (request.operation === "exec_stream") {
-      return {
-        operation: "exec_stream" as const,
-        exec_fingerprint_sha256: request.exec.immutable_exec_fingerprint_sha256,
-        max_bytes: request.max_bytes,
-      }
-    }
     if (request.operation === "exec_cancel") {
       return {
         operation: "exec_cancel" as const,
@@ -94,9 +91,16 @@ export function encodeGuestBrokerRequestFrame(
     payload_sha256: canonicalSha256(payloadBytes),
     payload_bytes: payloadBytes,
   }
+  const frameSha256 = canonicalSha256(frameBasis(withoutFrameDigest))
   return {
     ...withoutFrameDigest,
-    frame_sha256: canonicalSha256(frameBasis(withoutFrameDigest)),
+    frame_sha256: frameSha256,
+    authentication_tag_sha256: authenticator.authenticate({
+      frame_sha256: frameSha256,
+      protocol_sha256: withoutFrameDigest.protocol_sha256,
+      provider_session_binding_sha256: withoutFrameDigest.provider_session_binding_sha256,
+      frame_nonce_sha256: withoutFrameDigest.frame_nonce_sha256,
+    }),
   }
 }
 
@@ -110,6 +114,13 @@ function reviveCanonicalBytes(value: unknown): unknown {
         throw adapterError("integrity_failed")
       }
       return Uint8Array.from(Buffer.from(hex, "hex"))
+    }
+    if (entries.length === 1 && entries[0]?.[0] === "$bigint") {
+      const decimal = entries[0][1]
+      if (typeof decimal !== "string" || !/^(0|[1-9][0-9]*)$/u.test(decimal)) {
+        throw adapterError("integrity_failed")
+      }
+      return BigInt(decimal)
     }
     return Object.fromEntries(entries.map(([key, item]) => [key, reviveCanonicalBytes(item)]))
   }
@@ -136,6 +147,7 @@ export function decodeGuestBrokerRequestFrame(frame: GuestBrokerRequestFrameV1):
     }) ||
     !isDigest(frame.payload_sha256) ||
     !isDigest(frame.frame_sha256) ||
+    !isDigest(frame.authentication_tag_sha256) ||
     frame.payload_bytes.byteLength === 0 ||
     frame.payload_bytes.byteLength > MAX_BROKER_FRAME_BYTES ||
     frame.payload_sha256 !== canonicalSha256(frame.payload_bytes) ||
@@ -154,13 +166,6 @@ export function decodeGuestBrokerRequestFrame(frame: GuestBrokerRequestFrameV1):
   }
   const request = reviveCanonicalBytes(normalized) as Record<string, unknown>
   if (request.operation !== frame.operation) throw adapterError("integrity_failed")
-  if (request.operation === "file_write") {
-    const write = (request as { request?: Record<string, unknown> }).request
-    if (write !== undefined && typeof write.expected_prior_revision === "string") {
-      if (!/^(0|[1-9][0-9]*)$/u.test(write.expected_prior_revision)) throw adapterError("integrity_failed")
-      write.expected_prior_revision = BigInt(write.expected_prior_revision)
-    }
-  }
   return request as unknown as GuestBrokerRequestV1
 }
 

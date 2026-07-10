@@ -4,7 +4,7 @@ import type { Digest } from "./types"
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/
 
 function normalize(value: unknown): unknown {
-  if (typeof value === "bigint") return value.toString(10)
+  if (typeof value === "bigint") return { $bigint: value.toString(10) }
   if (value instanceof Uint8Array) return { $bytes_hex: Buffer.from(value).toString("hex") }
   if (Array.isArray(value)) return value.map(normalize)
   if (value !== null && typeof value === "object") {

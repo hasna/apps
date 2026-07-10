@@ -9,24 +9,38 @@ import {
   canonicalSha256,
   DAYTONA_SDK_PIN,
   DAYTONA_GUEST_BROKER_PTY_ID,
-  createDaytonaSourceFreeInert,
-  createE2bSourceFreeInert,
+  DaytonaOfficialSdkControlBridgeV1,
+  createDaytonaDenyAllCandidate,
+  createE2bDenyAllCandidate,
   decodeGuestBrokerRequestFrame,
   E2B_SDK_PIN,
+  E2bOfficialSdkControlBridgeV1,
   encodeGuestBrokerRequestFrame,
   managedProviderRequestSha256,
   MANAGED_GUEST_BROKER_BOOTSTRAP_COMMAND,
   MANAGED_GUEST_BROKER_PROTOCOL_SHA256,
-  openDaytonaGuestBrokerSdkSession,
-  openE2bGuestBrokerSdkSession,
+  withDaytonaGuestBrokerSdkSession,
+  withE2bGuestBrokerSdkSession,
   OFFICIAL_SDK_CONTRACT_GAPS,
   validateAdapterCallContext,
   validateWorkspacePath,
   type FailedNoEffectAuthorizationV1,
+  type DaytonaOfficialReadSdkV1,
   type DaytonaOfficialBrokerProcessV1,
+  type E2bOfficialReadSdkV1,
   type E2bOfficialBrokerCommandsV1,
+  type ManagedResourceAttestationPortV1,
 } from "../../src/adapters/managed/index"
-import { FakeJournal, digest, makeAnchorReceipt, makeContext, makeOperation } from "./fakes"
+import {
+  FakeGuestBrokerAuthenticator,
+  FakeJournal,
+  digest,
+  makeAnchorReceipt,
+  makeContext,
+  makeOperation,
+} from "./fakes"
+
+const brokerAuthenticator = new FakeGuestBrokerAuthenticator()
 
 function brokerAttestation(immutableFingerprintSha256: ReturnType<typeof digest>) {
   return {
@@ -40,6 +54,9 @@ function brokerAttestation(immutableFingerprintSha256: ReturnType<typeof digest>
 }
 
 describe("immutable journal identity", () => {
+  test("canonical bigint encoding cannot collide with a string", () => {
+    expect(canonicalSha256({ value: 1n })).not.toBe(canonicalSha256({ value: "1" }))
+  })
   test("accepts exact duplicate bytes for the full record identity", () => {
     const op = makeOperation("create_inert")
     const ctx = makeContext(op, new FakeJournal())
@@ -76,11 +93,10 @@ describe("immutable journal identity", () => {
     const initial = makeContext(op, new FakeJournal())
     const duplicate = {
       ...initial,
-      invocation_anchor: { ...initial.invocation_anchor, duplicate: true },
       dispatch_attempt: {
         kind: "exact_duplicate" as const,
         operation_execution_epoch: initial.fence.operation_execution_epoch,
-        prior_record_sha256: initial.invocation_anchor.record_sha256,
+        prior_record_sha256: canonicalSha256(initial.invocation_anchor),
       },
     }
     expect(() => validateAdapterCallContext(duplicate, op)).not.toThrow()
@@ -113,6 +129,7 @@ describe("immutable journal identity", () => {
       request_sha256: op.request_sha256,
       resource_id: op.target.resource_id,
       provider_idempotency_token_sha256: op.target.provider_idempotency_token_sha256,
+      provider_creation_token_sha256: op.target.provider_creation_token_sha256,
       operation_digest: op.target.operation_digest,
       prior_outcome_anchor_sha256: digest("a3"),
       evidence_sha256: digest("a1"),
@@ -132,6 +149,7 @@ describe("immutable journal identity", () => {
       request_sha256: op.request_sha256,
       resource_id: op.target.resource_id,
       provider_idempotency_token_sha256: op.target.provider_idempotency_token_sha256,
+      provider_creation_token_sha256: op.target.provider_creation_token_sha256,
       operation_digest: op.target.operation_digest,
       prior_outcome_anchor_sha256: digest("a3"),
       evidence_sha256: digest("a1"),
@@ -157,6 +175,7 @@ describe("immutable journal identity", () => {
       request_sha256: op.request_sha256,
       resource_id: op.target.resource_id,
       provider_idempotency_token_sha256: digest("bad"),
+      provider_creation_token_sha256: op.target.provider_creation_token_sha256,
       operation_digest: op.target.operation_digest,
       prior_outcome_anchor_sha256: digest("a3"),
       evidence_sha256: digest("a1"),
@@ -166,31 +185,6 @@ describe("immutable journal identity", () => {
     expect(() => validateAdapterCallContext(ctx, { ...op, fence: ctx.fence })).toThrowError(
       expect.objectContaining({ code: "operation_target_mismatch" }),
     )
-  })
-
-  test("a duplicate higher-epoch dispatch anchor cannot repeat a provider mutation", () => {
-    const op = makeOperation("create_inert")
-    const proof: FailedNoEffectAuthorizationV1 = {
-      schema_version: "sandboxes.failed-no-effect/v1",
-      outcome_kind: "failed_no_effect",
-      previous_operation_execution_epoch: 3n,
-      successor_operation_execution_epoch: 4n,
-      target_sha256: canonicalSha256(op.target),
-      request_sha256: op.request_sha256,
-      resource_id: op.target.resource_id,
-      provider_idempotency_token_sha256: op.target.provider_idempotency_token_sha256,
-      operation_digest: op.target.operation_digest,
-      prior_outcome_anchor_sha256: digest("a3"),
-      evidence_sha256: digest("a1"),
-    }
-    const ctx = makeContext(op, new FakeJournal(), { operationExecutionEpoch: 4n, failedNoEffect: proof })
-
-    expect(() =>
-      validateAdapterCallContext(
-        { ...ctx, invocation_anchor: { ...ctx.invocation_anchor, duplicate: true } },
-        { ...op, fence: ctx.fence },
-      ),
-    ).toThrowError(expect.objectContaining({ code: "dispatch_anchor_mismatch" }))
   })
 
   test("the signed higher-epoch dispatch anchor binds the exact failed-no-effect proof bytes", () => {
@@ -204,6 +198,7 @@ describe("immutable journal identity", () => {
       request_sha256: op.request_sha256,
       resource_id: op.target.resource_id,
       provider_idempotency_token_sha256: op.target.provider_idempotency_token_sha256,
+      provider_creation_token_sha256: op.target.provider_creation_token_sha256,
       operation_digest: op.target.operation_digest,
       prior_outcome_anchor_sha256: digest("a3"),
       evidence_sha256: digest("a1"),
@@ -229,7 +224,7 @@ describe("immutable journal identity", () => {
       ...ctx,
       invocation_anchor: {
         ...makeAnchorReceipt(ctx.invocation_anchor.record),
-        record_sha256: digest("tampered"),
+        record_digest: digest("tampered"),
       },
     }
     expect(() => validateAdapterCallContext(tampered, op)).toThrowError(
@@ -248,7 +243,7 @@ describe("immutable journal identity", () => {
       ...ctx,
       invocation_anchor: makeAnchorReceipt(record),
     }
-    op.external_anchor_receipt_sha256 = tampered.invocation_anchor.record_sha256
+    op.external_anchor_receipt_sha256 = canonicalSha256(tampered.invocation_anchor)
 
     expect(() => validateAdapterCallContext(tampered, op)).toThrowError(
       expect.objectContaining({ code: "dispatch_anchor_mismatch" }),
@@ -265,6 +260,7 @@ describe("typed guest-broker framing", () => {
       request,
       op,
       brokerAttestation(op.target.immutable_fingerprint_sha256),
+      brokerAuthenticator,
     )
     expect(decodeGuestBrokerRequestFrame(frame)).toEqual({
       operation: "file_stat",
@@ -293,6 +289,7 @@ describe("official SDK guest-broker compensation bridges", () => {
       request,
       op,
       brokerAttestation(op.target.immutable_fingerprint_sha256),
+      brokerAuthenticator,
     )
   }
 
@@ -310,13 +307,17 @@ describe("official SDK guest-broker compensation bridges", () => {
       },
     } as unknown as E2bOfficialBrokerCommandsV1
 
-    const session = await openE2bGuestBrokerSdkSession(commands)
-    await session.sendFrame(brokerFrame())
+    let closedSession: Parameters<Parameters<typeof withE2bGuestBrokerSdkSession>[1]>[0] | undefined
+    await withE2bGuestBrokerSdkSession(commands, async (session) => {
+      closedSession = session
+      await session.sendFrame(brokerFrame())
+    })
 
     expect(commandsSeen).toEqual([MANAGED_GUEST_BROKER_BOOTSTRAP_COMMAND])
     expect(JSON.stringify(commandsSeen)).not.toContain("not-a-shell")
     expect(stdin).toHaveLength(1)
     expect(new DataView(stdin[0]!.buffer).getUint32(0, false)).toBe(stdin[0]!.byteLength - 4)
+    await expect(closedSession!.sendFrame(brokerFrame())).rejects.toThrow("guest_broker_session_closed")
   })
 
   test("Daytona starts a fixed PTY and sends caller data only after the fixed bootstrap", async () => {
@@ -332,12 +333,16 @@ describe("official SDK guest-broker compensation bridges", () => {
       },
     } as unknown as DaytonaOfficialBrokerProcessV1
 
-    const session = await openDaytonaGuestBrokerSdkSession(process, () => {})
-    await session.sendFrame(brokerFrame())
+    let closedSession: Parameters<Parameters<typeof withDaytonaGuestBrokerSdkSession>[2]>[0] | undefined
+    await withDaytonaGuestBrokerSdkSession(process, () => {}, async (session) => {
+      closedSession = session
+      await session.sendFrame(brokerFrame())
+    })
 
     expect(inputs[0]).toBe(`${MANAGED_GUEST_BROKER_BOOTSTRAP_COMMAND}\n`)
     expect(typeof inputs[0] === "string" ? inputs[0] : "").not.toContain("not-a-shell")
     expect(inputs[1]).toBeInstanceOf(Uint8Array)
+    await expect(closedSession!.sendFrame(brokerFrame())).rejects.toThrow("guest_broker_session_closed")
   })
 
   test("credential-bound create bridges pass only hardened provider options", async () => {
@@ -349,26 +354,30 @@ describe("official SDK guest-broker compensation bridges", () => {
       immutable_fingerprint_sha256: digest("b5"),
     }
     let e2bOptions: unknown
-    await createE2bSourceFreeInert(
+    await createE2bDenyAllCandidate(
       async (options) => {
         e2bOptions = options
         return {} as never
       },
-      { template: "pinned-template-ref", metadata: labels, max_runtime_ms: 60_000 },
+      {
+        template: "pinned-template-ref",
+        metadata: labels,
+        network_policy_sha256: digest("b6"),
+        max_runtime_ms: 60_000,
+      },
     )
     expect(e2bOptions).toMatchObject({ envs: {}, allowInternetAccess: false, secure: true })
 
     let daytonaOptions: unknown
-    await createDaytonaSourceFreeInert(
-      {
-        async create(options: unknown) {
-          daytonaOptions = options
-          return {} as never
-        },
-      } as never,
+    await createDaytonaDenyAllCandidate(
+      async (options) => {
+        daytonaOptions = options
+        return {} as never
+      },
       {
         image: "pinned-strong-vm-image-ref",
         labels,
+        network_policy_sha256: digest("b6"),
         resources: { cpu: 2, memory: 4, disk: 20 },
       },
     )
@@ -406,7 +415,7 @@ describe("official SDK pin mappings", () => {
     expect(buildDaytonaExactOwnershipListQuery(metadata).labels).toEqual(expected)
   })
 
-  test("E2B create is source-free, credential-free, deny-all, private, and pause-not-kill on timeout", () => {
+  test("E2B candidate create requests empty inputs, deny-all, private, and pause-not-kill on timeout", () => {
     const op = makeOperation("create_inert")
     const options = buildE2bCreateOptions({
       template: "pinned-template-ref",
@@ -414,9 +423,10 @@ describe("official SDK pin mappings", () => {
         installation_sha256: digest("b1"),
         provider_scope_ref_sha256: digest("b2"),
         ownership_nonce_sha256: digest("b3"),
-        creation_token_sha256: op.target.provider_idempotency_token_sha256,
+        creation_token_sha256: op.target.provider_creation_token_sha256,
         immutable_fingerprint_sha256: op.target.immutable_fingerprint_sha256,
       },
+      network_policy_sha256: digest("b6"),
       max_runtime_ms: 60_000,
     })
 
@@ -425,8 +435,9 @@ describe("official SDK pin mappings", () => {
     expect(options.network).toMatchObject({ denyOut: ["0.0.0.0/0"], allowPublicTraffic: false })
     expect(options.lifecycle).toEqual({ onTimeout: { action: "pause", keepMemory: false }, autoResume: false })
     expect(options.metadata).toMatchObject({
-      "hasna.creation_token_sha256": op.target.provider_idempotency_token_sha256,
+      "hasna.creation_token_sha256": op.target.provider_creation_token_sha256,
       "hasna.immutable_fingerprint_sha256": op.target.immutable_fingerprint_sha256,
+      "hasna.network_policy_sha256": digest("b6"),
       "hasna.provider_scope_ref_sha256": digest("b2"),
       "hasna.ownership_nonce_sha256": digest("b3"),
     })
@@ -441,9 +452,10 @@ describe("official SDK pin mappings", () => {
         installation_sha256: digest("b1"),
         provider_scope_ref_sha256: digest("b2"),
         ownership_nonce_sha256: digest("b3"),
-        creation_token_sha256: op.target.provider_idempotency_token_sha256,
+        creation_token_sha256: op.target.provider_creation_token_sha256,
         immutable_fingerprint_sha256: op.target.immutable_fingerprint_sha256,
       },
+      network_policy_sha256: digest("b6"),
       resources: { cpu: 2, memory: 4, disk: 20 },
     })
 
@@ -454,8 +466,9 @@ describe("official SDK pin mappings", () => {
     expect(params.networkBlockAll).toBe(true)
     expect(params.resources).toEqual({ cpu: 2, memory: 4, disk: 20 })
     expect(params.labels).toMatchObject({
-      "hasna.creation_token_sha256": op.target.provider_idempotency_token_sha256,
+      "hasna.creation_token_sha256": op.target.provider_creation_token_sha256,
       "hasna.immutable_fingerprint_sha256": op.target.immutable_fingerprint_sha256,
+      "hasna.network_policy_sha256": digest("b6"),
       "hasna.provider_scope_ref_sha256": digest("b2"),
       "hasna.ownership_nonce_sha256": digest("b3"),
     })
@@ -469,21 +482,260 @@ describe("official SDK pin mappings", () => {
       expect(OFFICIAL_SDK_CONTRACT_GAPS[provider].admission).toBe("disabled")
       expect(OFFICIAL_SDK_CONTRACT_GAPS[provider].gaps).toEqual(
         expect.arrayContaining([
+          "create_stopped_unavailable_in_pinned_sdk",
           "creation_metadata_filter_consistency_live_evidence",
           "fixed_broker_bootstrap_and_transport_live_evidence",
           "delete_absence_consistency_live_evidence",
+          "conditional_destroy_unavailable_in_pinned_sdk",
+          "authenticated_broker_attestation_and_replay_evidence",
           "strong_vm_live_evidence",
         ]),
       )
       expect(OFFICIAL_SDK_CONTRACT_GAPS[provider].compensated_in_adapter).toEqual(
         expect.arrayContaining([
           "creation_token_metadata_plus_exact_lookup_plus_lifecycle_lock",
-          "provider_started_default_deny_source_free_infinity_inert",
           "fixed_bootstrap_plus_typed_guest_broker_frames",
-          "exact_incarnation_readback_plus_locked_delete_plus_absence_proof",
         ]),
       )
       expect(OFFICIAL_SDK_CONTRACT_GAPS[provider].official_api_evidence.length).toBeGreaterThan(0)
     }
+  })
+})
+
+describe("official SDK read-only control bridges", () => {
+  const installationSha256 = digest("c1")
+  const providerScopeRefSha256 = digest("c2")
+  const creationTokenSha256 = digest("c3")
+  const immutableFingerprintSha256 = digest("c4")
+  const networkPolicySha256 = digest("c5")
+  const observedAt = "2026-07-10T10:00:04.000Z"
+
+  function labels() {
+    return {
+      "hasna.installation_sha256": installationSha256,
+      "hasna.provider_scope_ref_sha256": providerScopeRefSha256,
+      "hasna.ownership_nonce_sha256": digest("c6"),
+      "hasna.creation_token_sha256": creationTokenSha256,
+      "hasna.immutable_fingerprint_sha256": immutableFingerprintSha256,
+      "hasna.network_policy_sha256": networkPolicySha256,
+    }
+  }
+
+  function attestation(): ManagedResourceAttestationPortV1 {
+    return {
+      async attest() {
+        return {
+          source_free: true,
+          credential_free: true,
+          strong_vm: true,
+          architecture: "amd64",
+          evidence_sha256: digest("c7"),
+        }
+      },
+    }
+  }
+
+  test("E2B maps exact metadata-filtered paused resources without enabling mutations", async () => {
+    let listOptions: Parameters<E2bOfficialReadSdkV1["list"]>[0] | undefined
+    const info = {
+      sandboxId: "opaque-e2b-1",
+      templateId: "template-1",
+      metadata: labels(),
+      startedAt: new Date("2026-07-10T09:00:00.000Z"),
+      endAt: new Date("2026-07-10T11:00:00.000Z"),
+      state: "paused",
+      cpuCount: 2,
+      memoryMB: 4096,
+      envdVersion: "pinned",
+      allowInternetAccess: false,
+      network: { denyOut: ["0.0.0.0/0"], allowPublicTraffic: false },
+      lifecycle: { onTimeout: "pause", autoResume: false },
+      volumeMounts: [],
+    } as const
+    const sdk: E2bOfficialReadSdkV1 = {
+      list(options) {
+        listOptions = options
+        return {
+          hasNext: true,
+          nextToken: "next-e2b-page",
+          async nextItems() {
+            return [info as never]
+          },
+        }
+      },
+      async getInfo() {
+        return info as never
+      },
+    }
+    const bridge = new E2bOfficialSdkControlBridgeV1(
+      sdk,
+      attestation(),
+      installationSha256,
+      providerScopeRefSha256,
+      () => observedAt,
+    )
+
+    const page = await bridge.findByCreationToken(creationTokenSha256, "cursor-1")
+
+    expect(listOptions).toEqual({
+      query: {
+        metadata: {
+          "hasna.installation_sha256": installationSha256,
+          "hasna.provider_scope_ref_sha256": providerScopeRefSha256,
+          "hasna.creation_token_sha256": creationTokenSha256,
+        },
+      },
+      limit: 100,
+      nextToken: "cursor-1",
+    })
+    expect(page.next_cursor).toBe("next-e2b-page")
+    expect(page.items[0]).toMatchObject({
+      opaque_resource_id: "opaque-e2b-1",
+      provider_creation_token_sha256: creationTokenSha256,
+      immutable_fingerprint_sha256: immutableFingerprintSha256,
+      state: "inert",
+      provider_runtime_state: "paused",
+      auto_delete_disabled: true,
+      ephemeral: false,
+      owned: true,
+      source_attached: false,
+      credential_attached: false,
+      network_policy: {
+        mode: "deny_all",
+        policy_sha256: networkPolicySha256,
+        enforced_outside_guest: true,
+        public_ingress: false,
+        dns_denied: true,
+        observed_at: observedAt,
+      },
+    })
+    expect(bridge.capabilities).toMatchObject({
+      exact_creation_token_lookup: true,
+      ownership_inventory: true,
+      create_stopped: false,
+      conditional_destroy: false,
+    })
+    await expect(bridge.createInert({} as never)).rejects.toMatchObject({
+      code: "unsupported_runtime_feature",
+    })
+  })
+
+  test("Daytona maps exact label-filtered stopped resources and bounds inventory", async () => {
+    let listQuery: Parameters<DaytonaOfficialReadSdkV1["list"]>[0] | undefined
+    let refreshCalls = 0
+    const sandbox = {
+      id: "opaque-daytona-1",
+      organizationId: "organization-1",
+      labels: labels(),
+      state: "stopped",
+      public: false,
+      networkBlockAll: true,
+      autoDeleteInterval: -1,
+      volumes: [],
+      env: {},
+      createdAt: "2026-07-10T09:00:00.000Z",
+      async refreshData() {
+        refreshCalls += 1
+      },
+    }
+    const sdk: DaytonaOfficialReadSdkV1 = {
+      list(query) {
+        listQuery = query
+        return (async function* () {
+          yield sandbox as never
+        })()
+      },
+      async get() {
+        return sandbox as never
+      },
+    }
+    const bridge = new DaytonaOfficialSdkControlBridgeV1(
+      sdk,
+      attestation(),
+      installationSha256,
+      providerScopeRefSha256,
+      () => observedAt,
+    )
+
+    const page = await bridge.findByCreationToken(creationTokenSha256)
+
+    expect(listQuery).toEqual({
+      labels: {
+        "hasna.installation_sha256": installationSha256,
+        "hasna.provider_scope_ref_sha256": providerScopeRefSha256,
+        "hasna.creation_token_sha256": creationTokenSha256,
+      },
+      limit: 100,
+    })
+    expect(refreshCalls).toBe(1)
+    expect(page.items[0]).toMatchObject({
+      opaque_resource_id: "opaque-daytona-1",
+      state: "inert",
+      provider_runtime_state: "stopped",
+      auto_delete_disabled: true,
+      ephemeral: false,
+      owned: true,
+      source_attached: false,
+      credential_attached: false,
+      network_policy: { policy_sha256: networkPolicySha256, observed_at: observedAt },
+    })
+    await expect(bridge.listOwnedResources("unresumable-cursor")).rejects.toMatchObject({
+      code: "unsupported_runtime_feature",
+    })
+    await expect(bridge.destroyResource("opaque-daytona-1", "version-1", {} as never)).rejects.toMatchObject({
+      code: "unsupported_runtime_feature",
+    })
+  })
+
+  test("untrusted strong-VM attestation cannot produce an adoptable owned resource", async () => {
+    const info = {
+      sandboxId: "opaque-e2b-unsafe",
+      templateId: "template-1",
+      metadata: labels(),
+      startedAt: new Date("2026-07-10T09:00:00.000Z"),
+      endAt: new Date("2026-07-10T11:00:00.000Z"),
+      state: "paused",
+      cpuCount: 2,
+      memoryMB: 4096,
+      envdVersion: "pinned",
+      allowInternetAccess: false,
+      network: { denyOut: ["0.0.0.0/0"], allowPublicTraffic: false },
+      lifecycle: { onTimeout: "pause", autoResume: false },
+      volumeMounts: [],
+    } as const
+    const sdk: E2bOfficialReadSdkV1 = {
+      list() {
+        return {
+          hasNext: true,
+          nextToken: undefined,
+          async nextItems() {
+            return [info as never]
+          },
+        }
+      },
+      async getInfo() {
+        return info as never
+      },
+    }
+    const unsafeAttestation: ManagedResourceAttestationPortV1 = {
+      async attest() {
+        return {
+          source_free: true,
+          credential_free: true,
+          strong_vm: false,
+          architecture: "amd64",
+          evidence_sha256: digest("c8"),
+        }
+      },
+    }
+    const bridge = new E2bOfficialSdkControlBridgeV1(
+      sdk,
+      unsafeAttestation,
+      installationSha256,
+      providerScopeRefSha256,
+      () => observedAt,
+    )
+
+    expect((await bridge.findByCreationToken(creationTokenSha256)).items[0]?.owned).toBe(false)
   })
 })
