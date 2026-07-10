@@ -165,6 +165,7 @@ export interface DestroyContextV1 extends AdapterCallContextV1 {
 export interface ReconcileContextV1 extends AdapterCallContextV1 {
   continuation_grant_sha256: Digest
   authorization_consumption_receipt_sha256: Digest
+  generation_transition?: ResourceGenerationTransitionV1
 }
 
 export interface NetworkPolicyV1 {
@@ -277,13 +278,23 @@ export interface ProviderCapabilitiesV1 {
   ownership_inventory: boolean
 }
 
+export interface ExecInputObjectV1 {
+  object_sha256: Digest
+  object_version: string
+  size_bytes: number
+  resource_scope_sha256: Digest
+  input_authorization_receipt_sha256: Digest
+}
+
 export interface ExecSpecV1 {
+  schema_version: "sandboxes.exec-spec/v1"
   executable: string
   argv: string[]
   cwd: WorkspacePath | ""
+  workspace_access: "read_only" | "write"
+  stdin_object?: ExecInputObjectV1
+  environment_profile_id: "minimal-v1" | "build-v1" | "test-v1"
   environment_profile_sha256: Digest
-  environment: Readonly<Record<string, string>>
-  stdin_sha256: Digest
   wall_deadline: string
   idle_timeout_ms: number
   output_limit_bytes: number
@@ -682,18 +693,6 @@ export interface ManagedProviderCredentialPortV1 {
   ): Promise<T>
 }
 
-export interface InventoryFindingV1 {
-  provider_resource_sha256: Digest
-  immutable_fingerprint_sha256: Digest
-  disposition: "known" | "quarantine_required"
-  resource_id?: string
-}
-
-export interface InventoryReconciliationV1 {
-  findings: InventoryFindingV1[]
-  complete: boolean
-}
-
 export interface OwnedResourcePageV1 {
   items: Array<{
     provider_resource_sha256: Digest
@@ -779,8 +778,4 @@ export interface ManagedProviderAdapterV1 {
     handle?: OwnedProviderHandleV1,
   ): Promise<ProviderOperationObservationV1>
   list_owned_resources(ctx: ReconcileContextV1, cursor?: string): Promise<OwnedResourcePageV1>
-  reconcile_inventory(
-    ctx: AdapterCallContextV1,
-    knownFingerprints: ReadonlyMap<Digest, string>,
-  ): Promise<InventoryReconciliationV1>
 }

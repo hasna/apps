@@ -3,6 +3,7 @@ export {
   activationAuthorizationBinding,
   capabilityAuthorizationBinding,
   cleanupAuthorizationBinding,
+  reconciliationAuthorizationBinding,
   validateWorkspacePath,
 } from "./adapter"
 export { canonicalJson, canonicalSha256, isDigest, safeEqual } from "./canonical"
@@ -26,19 +27,8 @@ export {
   managedProviderRequestSha256,
   providerCreationTokenSha256,
   providerEffectTokenSha256,
+  providerTargetFingerprintSha256,
 } from "./request"
-export {
-  DAYTONA_GUEST_BROKER_PTY_ID,
-  createDaytonaDenyAllCandidate,
-  createE2bDenyAllCandidate,
-  withDaytonaGuestBrokerSdkSession,
-  withE2bGuestBrokerSdkSession,
-  type DaytonaCredentialBoundCreateV1,
-  type DaytonaOfficialBrokerProcessV1,
-  type E2bCredentialBoundCreateV1,
-  type E2bOfficialBrokerCommandsV1,
-  type GuestBrokerSdkSessionV1,
-} from "./sdk-broker-bridges"
 export {
   DaytonaOfficialSdkControlBridgeV1,
   E2bOfficialSdkControlBridgeV1,

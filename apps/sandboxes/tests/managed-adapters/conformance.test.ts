@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { createRequire } from "node:module"
 import { ManagedProviderAdapter } from "../../src/adapters/managed/adapter"
 import {
   AdapterContractError,
@@ -12,6 +13,8 @@ import {
   managedProviderRequestSha256,
   providerCreationTokenSha256,
   providerEffectTokenSha256,
+  providerTargetFingerprintSha256,
+  reconciliationAuthorizationBinding,
   validateWorkspacePath,
   type AdapterCallContextV1,
   type ActivationDispatchAuthorizationV1,
@@ -19,6 +22,7 @@ import {
   type ManagedProviderAdapterV1,
   type ManagedProviderIdV1,
   type OwnedProviderHandleV1,
+  type ReconcileContextV1,
 } from "../../src/adapters/managed/index"
 import {
   BROKER_ONLY_POLICY,
@@ -73,12 +77,13 @@ const SPEC = {
 }
 
 const EXEC_SPEC = {
+  schema_version: "sandboxes.exec-spec/v1" as const,
   executable: "/usr/bin/git",
   argv: ["status", "--porcelain=v1", "literal;not-shell"],
   cwd: validateWorkspacePath("repo"),
+  workspace_access: "write" as const,
+  environment_profile_id: "test-v1" as const,
   environment_profile_sha256: digest("73"),
-  environment: { LANG: "C.UTF-8", PATH: "/usr/bin:/bin" },
-  stdin_sha256: digest("74"),
   wall_deadline: "2026-07-10T10:10:00.000Z",
   idle_timeout_ms: 30_000,
   output_limit_bytes: 32,
@@ -86,12 +91,27 @@ const EXEC_SPEC = {
   tty: false as const,
 }
 
-function makeOperation(...args: Parameters<typeof makeRawOperation>): ReturnType<typeof makeRawOperation> {
+type TestOperation = ReturnType<typeof makeRawOperation>
+
+function makeProviderOperation(
+  provider: ManagedProviderIdV1,
+  ...args: Parameters<typeof makeRawOperation>
+): TestOperation {
   const op = makeRawOperation(...args)
   op.target.provider_creation_token_sha256 = providerCreationTokenSha256({
     resource_id: op.target.resource_id,
     resource_lease_id: op.fence.resource_lease_id,
     allocation_key_sha256: digest("77"),
+    spec_sha256: canonicalSha256(SPEC),
+  })
+  op.target.immutable_fingerprint_sha256 = providerTargetFingerprintSha256({
+    adapter_id: provider,
+    adapter_version: "test-build",
+    installation_id: "installation-1",
+    provider_scope_ref: "provider-scope-1",
+    resource_id: op.target.resource_id,
+    resource_lease_id: op.fence.resource_lease_id,
+    provider_creation_token_sha256: op.target.provider_creation_token_sha256,
     spec_sha256: canonicalSha256(SPEC),
   })
   op.target.provider_idempotency_token_sha256 = providerEffectTokenSha256(op)
@@ -144,6 +164,30 @@ function makeOperation(...args: Parameters<typeof makeRawOperation>): ReturnType
   return op
 }
 
+function makeReconcileContext(
+  op: TestOperation,
+  journal: FakeJournal,
+): ReconcileContextV1 {
+  const continuationGrantSha256 = digest("a4")
+  const authorizationConsumptionReceiptSha256 = digest("a5")
+  const initial = makeContext(op, journal)
+  const binding = reconciliationAuthorizationBinding(
+    initial.target,
+    initial.fence,
+    continuationGrantSha256,
+    authorizationConsumptionReceiptSha256,
+  )
+  const bound = bindAuthorization(initial, op, binding)
+  return {
+    ...bound,
+    continuation_grant_sha256: continuationGrantSha256,
+    authorization_consumption_receipt_sha256: authorizationConsumptionReceiptSha256,
+    ...(op.generation_transition === undefined
+      ? {}
+      : { generation_transition: op.generation_transition }),
+  }
+}
+
 type Harness = {
   adapter: ManagedProviderAdapterV1
   client: FakeProviderClient
@@ -159,7 +203,11 @@ type Harness = {
   guestBrokerAuthenticator: FakeGuestBrokerAuthenticator
 }
 
-function harness(provider: ManagedProviderIdV1, hermeticConformanceOnly = true): Harness {
+function harness(
+  provider: ManagedProviderIdV1,
+  hermeticConformanceOnly = true,
+  evidenceKind: "hermetic_conformance" | "live_conformance" = "hermetic_conformance",
+): Harness {
   const client = new FakeProviderClient(provider)
   const credentials = new FakeCredentialPort(client)
   const journal = new FakeJournal()
@@ -181,7 +229,7 @@ function harness(provider: ManagedProviderIdV1, hermeticConformanceOnly = true):
       admitted: true,
       evidence_sha256: digest("76"),
       exact_sdk_version: provider === "e2b" ? "2.31.0" : "0.193.0",
-      evidence_kind: "hermetic_conformance",
+      evidence_kind: evidenceKind,
     },
     read_retry_policy: READ_RETRY_POLICY,
     effect_guard: effectGuard,
@@ -224,12 +272,12 @@ function harness(provider: ManagedProviderIdV1, hermeticConformanceOnly = true):
 }
 
 async function create(h: Harness): Promise<OwnedProviderHandleV1> {
-  const op = makeOperation("create_inert")
+  const op = makeProviderOperation(h.client.provider_id, "create_inert")
   return h.adapter.create_inert(makeContext(op, h.journal), SPEC, op, digest("77"))
 }
 
 async function activate(h: Harness, handle: OwnedProviderHandleV1): Promise<void> {
-  const op = makeOperation("activate")
+  const op = makeProviderOperation(h.client.provider_id, "activate")
   const authorization = activationAuthorization(op)
   await h.adapter.activate(
     bindAuthorization(
@@ -243,7 +291,7 @@ async function activate(h: Harness, handle: OwnedProviderHandleV1): Promise<void
   )
 }
 
-function activationAuthorization(op: ReturnType<typeof makeOperation>): ActivationDispatchAuthorizationV1 {
+function activationAuthorization(op: TestOperation): ActivationDispatchAuthorizationV1 {
   return {
     activation_grant_sha256: digest("81"),
     authorization_consumption_receipt_sha256: op.target.authorization_consumption_receipt_sha256,
@@ -253,7 +301,7 @@ function activationAuthorization(op: ReturnType<typeof makeOperation>): Activati
 
 function activationContext(
   h: Harness,
-  op: ReturnType<typeof makeOperation>,
+  op: TestOperation,
   authorization: ActivationDispatchAuthorizationV1,
 ): AdapterCallContextV1 {
   return bindAuthorization(
@@ -263,7 +311,7 @@ function activationContext(
   )
 }
 
-function destroyContext(h: Harness, op: ReturnType<typeof makeOperation>): DestroyContextV1 {
+function destroyContext(h: Harness, op: TestOperation): DestroyContextV1 {
   const cleanupGrant = digest("91")
   const cleanupBasis = digest("92")
   return {
@@ -279,6 +327,9 @@ function destroyContext(h: Harness, op: ReturnType<typeof makeOperation>): Destr
 
 for (const provider of ["e2b", "daytona_cloud"] as const) {
   describe(`${provider} managed adapter conformance`, () => {
+    const makeOperation = (...args: Parameters<typeof makeRawOperation>): TestOperation =>
+      makeProviderOperation(provider, ...args)
+
     test("adopts one exact creation token without dispatching a duplicate create", async () => {
       const h = harness(provider)
       const op = makeOperation("create_inert")
@@ -434,6 +485,18 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
       expect(h.client.createCalls).toBe(0)
     })
 
+    test("recomputes the provider target fingerprint before credentials", async () => {
+      const h = harness(provider)
+      const op = makeOperation("create_inert")
+      op.target.immutable_fingerprint_sha256 = digest("de")
+
+      await expect(
+        h.adapter.create_inert(makeContext(op, h.journal), SPEC, op, digest("77")),
+      ).rejects.toMatchObject({ code: "operation_target_mismatch" })
+      expect(h.credentials.acquisitions).toBe(0)
+      expect(h.client.createCalls).toBe(0)
+    })
+
     test("requires trusted signature/frontier verification before credential or SDK reachability", async () => {
       const h = harness(provider)
       h.anchorVerifier.reject = true
@@ -466,6 +529,18 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
       await expect(
         h.adapter.create_inert(makeContext(op, h.journal), SPEC, op, digest("77")),
       ).rejects.toMatchObject({ code: "unsupported_runtime_feature" })
+      expect(h.credentials.acquisitions).toBe(0)
+    })
+
+    test("production factories remain statically disabled even with claimed live evidence", async () => {
+      const h = harness(provider, false, "live_conformance")
+      const op = makeOperation("create_inert")
+
+      expect((await h.adapter.descriptor()).admission).toBe("disabled")
+      await expect(
+        h.adapter.create_inert(makeContext(op, h.journal), SPEC, op, digest("77")),
+      ).rejects.toMatchObject({ code: "unsupported_runtime_feature" })
+      expect(h.admissionVerifier.calls).toBe(0)
       expect(h.credentials.acquisitions).toBe(0)
     })
 
@@ -617,6 +692,28 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
 
     })
 
+    test("rejects expanded environment fields before provider credentials", async () => {
+      const h = harness(provider)
+      const handle = await create(h)
+      await activate(h, handle)
+      const injected = {
+        ...EXEC_SPEC,
+        environment: { PATH: "/attacker-controlled" },
+      }
+      const start = makeOperation("exec_start", { generation_transition: undefined })
+      start.request_sha256 = managedProviderRequestSha256({
+        operation: "exec_start",
+        spec: injected as never,
+      })
+      const before = h.credentials.acquisitions
+
+      await expect(
+        h.adapter.start_exec(makeContext(start, h.journal), handle, injected as never, start),
+      ).rejects.toMatchObject({ code: "validation_failed" })
+      expect(h.credentials.acquisitions).toBe(before)
+      expect(h.client.brokerFrames).toEqual([])
+    })
+
     test("fails closed when the guest-broker attestation changes after activation", async () => {
       const h = harness(provider)
       const handle = await create(h)
@@ -762,6 +859,31 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
       expect(fileRevision).toBe(1n)
       const readFrame = h.client.brokerFrames.at(-1)
       expect(readFrame).toBeDefined()
+
+      const oversizedBytes = new Uint8Array(64 * 1024 + 1)
+      const oversizedRequest = {
+        path: validateWorkspacePath("repo/oversized.bin"),
+        bytes: oversizedBytes,
+        if_absent: true as const,
+      }
+      const oversizedWrite = makeOperation("file_write", {
+        external_anchor_kind: "DISPATCHED",
+        generation_transition: undefined,
+      })
+      oversizedWrite.request_sha256 = managedProviderRequestSha256({
+        operation: "file_write",
+        request: oversizedRequest,
+      })
+      const before = h.credentials.acquisitions
+      await expect(
+        h.adapter.write_file(
+          makeContext(oversizedWrite, h.journal),
+          handle,
+          oversizedRequest,
+          oversizedWrite,
+        ),
+      ).rejects.toMatchObject({ code: "validation_failed" })
+      expect(h.credentials.acquisitions).toBe(before)
     })
 
     test("expire pauses or stops without destroying and refuses unsafe auto-delete", async () => {
@@ -936,54 +1058,6 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
       expect(h.client.destroyCalls).toBe(1)
     })
 
-    test("inventory marks unknown owned resources for quarantine and never adopts them", async () => {
-      const h = harness(provider)
-      const createOp = makeOperation("create_inert")
-      const known = h.client.makeResource(createOp.target, "known")
-      const orphan = h.client.makeResource(
-        { ...createOp.target, immutable_fingerprint_sha256: digest("0f") },
-        "orphan",
-      )
-      h.client.seed(known)
-      h.client.seed(orphan)
-      const reconcile = makeOperation("inspect", {
-        external_anchor_kind: "READ_PROBE",
-        generation_transition: undefined,
-      })
-
-      const result = await h.adapter.reconcile_inventory(
-        makeContext(reconcile, h.journal),
-        new Map([[known.immutable_fingerprint_sha256, "resource-1"]]),
-      )
-      expect(result.findings.map((finding) => finding.disposition).sort()).toEqual([
-        "known",
-        "quarantine_required",
-      ])
-      expect(result.findings).not.toContainEqual(expect.objectContaining({ disposition: "adopt" }))
-    })
-
-    test("classifies every duplicate native incarnation as quarantine-required", async () => {
-      const h = harness(provider)
-      const createOp = makeOperation("create_inert")
-      const first = h.client.makeResource(createOp.target, "duplicate-a")
-      const second = h.client.makeResource(createOp.target, "duplicate-b")
-      h.client.seed(first)
-      h.client.seed(second)
-      const reconcile = makeOperation("inspect", {
-        external_anchor_kind: "READ_PROBE",
-        generation_transition: undefined,
-      })
-
-      const result = await h.adapter.reconcile_inventory(
-        makeContext(reconcile, h.journal),
-        new Map([[first.immutable_fingerprint_sha256, "resource-1"]]),
-      )
-      expect(result.findings.map((finding) => finding.disposition)).toEqual([
-        "quarantine_required",
-        "quarantine_required",
-      ])
-    })
-
     test("a READ_PROBE never appends a mutation OUTCOME", async () => {
       const h = harness(provider)
       const handle = await create(h)
@@ -1018,6 +1092,56 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
       expect(h.credentials.acquisitions).toBe(0)
     })
 
+    test("lookup_operation uses a separately bound read-only continuation grant", async () => {
+      const h = harness(provider)
+      const handle = await create(h)
+      const probe = makeOperation("create_inert", { external_anchor_kind: "READ_PROBE" })
+      const ctx = makeReconcileContext(probe, h.journal)
+
+      const observation = await h.adapter.lookup_operation(ctx, probe.target, handle)
+
+      expect(observation).toMatchObject({
+        observation: "accepted",
+        target_sha256: canonicalSha256(probe.target),
+        provider_idempotency_token_sha256: probe.target.provider_idempotency_token_sha256,
+        immutable_fingerprint_sha256: probe.target.immutable_fingerprint_sha256,
+      })
+      const before = h.credentials.acquisitions
+      await expect(
+        h.adapter.lookup_operation(
+          { ...ctx, continuation_grant_sha256: digest("a6") },
+          probe.target,
+          handle,
+        ),
+      ).rejects.toMatchObject({ code: "dispatch_anchor_mismatch" })
+      expect(h.credentials.acquisitions).toBe(before)
+    })
+
+    test("list_owned_resources is anchored, bounded, provider-ID opaque, and preserves duplicates", async () => {
+      const h = harness(provider)
+      await create(h)
+      const probe = makeOperation("inspect", {
+        external_anchor_kind: "READ_PROBE",
+        generation_transition: undefined,
+      })
+      h.client.seed(h.client.makeResource(probe.target, "duplicate"))
+      const ctx = makeReconcileContext(probe, h.journal)
+
+      const page = await h.adapter.list_owned_resources(ctx)
+
+      expect(page.items).toHaveLength(2)
+      expect(page.items[0]).toMatchObject({
+        immutable_fingerprint_sha256: probe.target.immutable_fingerprint_sha256,
+        state: "inert",
+      })
+      expect(JSON.stringify(page)).not.toContain(`${provider}-native-`)
+      const before = h.credentials.acquisitions
+      await expect(h.adapter.list_owned_resources(ctx, "bad\0cursor")).rejects.toMatchObject({
+        code: "validation_failed",
+      })
+      expect(h.credentials.acquisitions).toBe(before)
+    })
+
     test("safe errors never serialize raw provider messages or IDs", async () => {
       const h = harness(provider)
       h.client.createError = new Error("raw-native-id raw-secret-provider-body")
@@ -1040,4 +1164,15 @@ test("ambient Hasna/provider configuration is absent and cannot route tests to a
   for (const name of Object.keys(process.env)) {
     expect(name).not.toMatch(/^(?:E2B_|DAYTONA_|SANDBOXES_|HASNA_.*(?:API|SANDBOX|ENDPOINT|BASE_URL|URL))/i)
   }
+})
+
+test("hermetic preload blocks Node network and host-process transports", () => {
+  const require = createRequire(import.meta.url)
+  const http = require("node:http") as { request: { name: string } }
+  const net = require("node:net") as { connect: { name: string } }
+  const childProcess = require("node:child_process") as { spawn: { name: string } }
+
+  expect(http.request.name).toBe("forbidHermeticIO")
+  expect(net.connect.name).toBe("forbidHermeticIO")
+  expect(childProcess.spawn.name).toBe("forbidHermeticIO")
 })

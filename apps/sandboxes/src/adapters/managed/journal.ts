@@ -56,7 +56,58 @@ export class JournalIdentityLedgerV1 {
   }
 }
 
+function hasExactKeys(value: object, keys: readonly string[]): boolean {
+  const actual = Object.keys(value).sort()
+  const expected = [...keys].sort()
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index])
+}
+
 function validateReceipt(receipt: JournalAnchorReceiptV1): void {
+  if (
+    receipt === null ||
+    typeof receipt !== "object" ||
+    receipt.record === null ||
+    typeof receipt.record !== "object" ||
+    !hasExactKeys(receipt, [
+      "anchor_schema_version",
+      "journal_sequence",
+      "prior_frontier_digest",
+      "record_digest",
+      "frontier_digest",
+      "signer_principal",
+      "signing_key_id",
+      "signature",
+      "record",
+    ]) ||
+    !hasExactKeys(receipt.record, [
+      "schema_version",
+      "outcome_schema_version",
+      "outcome_schema_sha256",
+      "outcome_kind",
+      "provider_receipt_sha256",
+      "semantic_step",
+      "operation_id",
+      "operation_step_id",
+      "operation_execution_epoch",
+      "record_kind",
+      "resource_id",
+      "resource_lifecycle_generation",
+      "provider_idempotency_token_sha256",
+      "provider_creation_token_sha256",
+      "immutable_fingerprint_sha256",
+      "operation_digest",
+      "request_sha256",
+      "idempotency_key_sha256",
+      "deadline",
+      "target_sha256",
+      "fence_sha256",
+      "generation_transition_sha256",
+      "authorization_binding_sha256",
+      "payload_sha256",
+    ])
+  ) {
+    throw adapterError("dispatch_anchor_mismatch")
+  }
   const expectedFrontierDigest = canonicalSha256({
     anchor_schema_version: receipt.anchor_schema_version,
     journal_sequence: receipt.journal_sequence,
@@ -67,6 +118,7 @@ function validateReceipt(receipt: JournalAnchorReceiptV1): void {
   })
   if (
     receipt.anchor_schema_version !== "infinity.effect-journal-anchor/v1" ||
+    typeof receipt.journal_sequence !== "bigint" ||
     receipt.journal_sequence < 1n ||
     !isDigest(receipt.prior_frontier_digest) ||
     !isDigest(receipt.record_digest) ||

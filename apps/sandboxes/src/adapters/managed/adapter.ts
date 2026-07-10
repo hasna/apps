@@ -14,8 +14,8 @@ import {
   managedProviderRequestSha256,
   providerCreationTokenSha256,
   providerEffectTokenSha256,
+  providerTargetFingerprintSha256,
 } from "./request"
-import { OFFICIAL_SDK_CONTRACT_GAPS } from "./sdk-pins"
 import type {
   ActivationDispatchAuthorizationV1,
   ActivationReceiptV1,
@@ -39,7 +39,6 @@ import type {
   FileWriteReceiptV1,
   FileWriteV1,
   GuestBrokerAttestationV1,
-  InventoryReconciliationV1,
   ManagedAdapterDependenciesV1,
   ManagedProviderRequestV1,
   ManagedProviderAdapterV1,
@@ -79,11 +78,19 @@ const MUTATING_OPERATIONS = new Set<ProviderOperationNameV1>([
   "destroy",
 ])
 
-const SAFE_GUEST_ENVIRONMENT_NAMES = new Set(["HOME", "LANG", "LC_ALL", "PATH", "TERM", "TZ"])
 const MAX_INVENTORY_PAGES = 32
 const MAX_WORKSPACE_PATH_BYTES = 4096
 const MAX_WORKSPACE_SEGMENT_BYTES = 255
+const MAX_EXEC_ARGV_ENTRIES = 1024
+const MAX_EXEC_ARGUMENT_BYTES = 128 * 1024
+const MAX_EXEC_OUTPUT_BYTES = 1024 * 1024 * 1024
+const MAX_EXEC_PROCESS_LIMIT = 65_536
+const MAX_INLINE_FILE_WRITE_BYTES = 64 * 1024
+const MAX_FILE_READ_BYTES = 1024 * 1024
+const MAX_WORKSPACE_DEPTH = 64
 const PORTABLE_DEVICE_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu
+const FORBIDDEN_PATH_UNICODE = /[\u202a-\u202e\u2066-\u2069\u2044\u2215\u29f8\uff0f\ufdd0-\ufdef]/u
+const PRODUCTION_MANAGED_ADMISSION_ENABLED = false
 
 export const INERT_DENY_ALL_POLICY: NetworkPolicyV1 = {
   mode: "deny_all",
@@ -128,6 +135,21 @@ export function cleanupAuthorizationBinding(
     cleanup_grant_sha256: cleanupGrantSha256,
     cleanup_basis_sha256: cleanupBasisSha256,
     authorization_consumption_receipt_sha256: target.authorization_consumption_receipt_sha256,
+  })
+}
+
+export function reconciliationAuthorizationBinding(
+  target: ProviderEffectTargetV1,
+  fence: AdapterCallContextV1["fence"],
+  continuationGrantSha256: Digest,
+  authorizationConsumptionReceiptSha256: Digest,
+): Digest {
+  return canonicalSha256({
+    kind: "reconciliation_continuation",
+    target_sha256: canonicalSha256(target),
+    fence_sha256: canonicalSha256(fence),
+    continuation_grant_sha256: continuationGrantSha256,
+    authorization_consumption_receipt_sha256: authorizationConsumptionReceiptSha256,
   })
 }
 
@@ -364,36 +386,104 @@ function validateExecHandle(
   }
 }
 
-function validateExecSpec(spec: ExecSpecV1): void {
+function hasExactKeys(value: object, keys: readonly string[]): boolean {
+  const actual = Object.keys(value).sort()
+  const expected = [...keys].sort()
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index])
+}
+
+function validateExecSpec(spec: ExecSpecV1, operationDeadline: string): void {
+  const specKeys = [
+    "schema_version",
+    "executable",
+    "argv",
+    "cwd",
+    "workspace_access",
+    ...(spec.stdin_object === undefined ? [] : ["stdin_object"]),
+    "environment_profile_id",
+    "environment_profile_sha256",
+    "wall_deadline",
+    "idle_timeout_ms",
+    "output_limit_bytes",
+    "process_limit",
+    "tty",
+  ]
+  const wallDeadline = Date.parse(spec.wall_deadline)
+  const providerDeadline = Date.parse(operationDeadline)
+  const argumentBytes =
+    typeof spec.executable === "string" && Array.isArray(spec.argv)
+      ? Buffer.byteLength(spec.executable, "utf8") +
+        spec.argv.reduce(
+          (total, argument) =>
+            total + (typeof argument === "string" ? Buffer.byteLength(argument, "utf8") : MAX_EXEC_ARGUMENT_BYTES + 1),
+          0,
+        )
+      : MAX_EXEC_ARGUMENT_BYTES + 1
   if (
+    !hasExactKeys(spec, specKeys) ||
+    spec.schema_version !== "sandboxes.exec-spec/v1" ||
     spec.tty !== false ||
+    !["read_only", "write"].includes(spec.workspace_access) ||
+    !["minimal-v1", "build-v1", "test-v1"].includes(spec.environment_profile_id) ||
     !isDigest(spec.environment_profile_sha256) ||
-    !isDigest(spec.stdin_sha256) ||
+    !Array.isArray(spec.argv) ||
+    spec.argv.length > MAX_EXEC_ARGV_ENTRIES ||
+    spec.argv.some((argument) => typeof argument !== "string") ||
+    argumentBytes > MAX_EXEC_ARGUMENT_BYTES ||
+    typeof spec.executable !== "string" ||
     !spec.executable.startsWith("/") ||
     spec.executable.includes("\0") ||
     spec.argv.some((argument) => argument.includes("\0")) ||
+    !Number.isSafeInteger(spec.output_limit_bytes) ||
     spec.output_limit_bytes <= 0 ||
+    spec.output_limit_bytes > MAX_EXEC_OUTPUT_BYTES ||
+    !Number.isSafeInteger(spec.process_limit) ||
     spec.process_limit <= 0 ||
+    spec.process_limit > MAX_EXEC_PROCESS_LIMIT ||
+    !Number.isSafeInteger(spec.idle_timeout_ms) ||
     spec.idle_timeout_ms < 0 ||
-    Number.isNaN(Date.parse(spec.wall_deadline))
+    Number.isNaN(wallDeadline) ||
+    Number.isNaN(providerDeadline) ||
+    wallDeadline > providerDeadline
+  ) {
+    throw adapterError("validation_failed")
+  }
+  if (
+    spec.stdin_object !== undefined &&
+    (!hasExactKeys(spec.stdin_object, [
+      "object_sha256",
+      "object_version",
+      "size_bytes",
+      "resource_scope_sha256",
+      "input_authorization_receipt_sha256",
+    ]) ||
+      !isDigest(spec.stdin_object.object_sha256) ||
+      spec.stdin_object.object_version.length === 0 ||
+      !Number.isSafeInteger(spec.stdin_object.size_bytes) ||
+      spec.stdin_object.size_bytes < 0 ||
+      !isDigest(spec.stdin_object.resource_scope_sha256) ||
+      !isDigest(spec.stdin_object.input_authorization_receipt_sha256))
   ) {
     throw adapterError("validation_failed")
   }
   if (spec.cwd !== "") validateWorkspacePath(spec.cwd)
-  for (const [name, value] of Object.entries(spec.environment)) {
-    if (!SAFE_GUEST_ENVIRONMENT_NAMES.has(name) || value.includes("\0")) {
-      throw adapterError("validation_failed")
-    }
-  }
 }
 
 export function validateWorkspacePath(path: string, allowRoot = false): WorkspacePath {
   if (allowRoot && path === "") return path as WorkspacePath
   if (
+    typeof path !== "string" ||
     path.length === 0 ||
     path.startsWith("/") ||
     path.includes("\\") ||
+    path.includes(":") ||
     /[\0-\x1f\x7f]/u.test(path) ||
+    /[\ud800-\udfff]/u.test(path) ||
+    FORBIDDEN_PATH_UNICODE.test(path) ||
+    Array.from(path).some((character) => {
+      const codePoint = character.codePointAt(0)
+      return codePoint !== undefined && (codePoint & 0xffff) >= 0xfffe
+    }) ||
     path !== path.normalize("NFC") ||
     Buffer.byteLength(path, "utf8") > MAX_WORKSPACE_PATH_BYTES
   ) {
@@ -401,6 +491,7 @@ export function validateWorkspacePath(path: string, allowRoot = false): Workspac
   }
   const segments = path.split("/")
   if (
+    segments.length > MAX_WORKSPACE_DEPTH ||
     segments.some(
       (segment) =>
         segment.length === 0 ||
@@ -420,16 +511,34 @@ export function validateWorkspacePath(path: string, allowRoot = false): Workspac
 function validateFileRead(request: FileReadV1): void {
   validateWorkspacePath(request.path)
   if (!Number.isSafeInteger(request.offset) || request.offset < 0) throw adapterError("validation_failed")
-  if (!Number.isSafeInteger(request.length) || request.length <= 0) throw adapterError("validation_failed")
+  if (
+    !Number.isSafeInteger(request.length) ||
+    request.length <= 0 ||
+    request.length > MAX_FILE_READ_BYTES
+  ) {
+    throw adapterError("validation_failed")
+  }
 }
 
 function validateFileWrite(request: FileWriteV1): void {
   validateWorkspacePath(request.path)
   const preconditions = [request.if_absent === true, request.expected_prior_sha256 !== undefined, request.expected_prior_revision !== undefined]
-  if (preconditions.filter(Boolean).length !== 1 || request.bytes.byteLength === 0) {
+  if (
+    preconditions.filter(Boolean).length !== 1 ||
+    !(request.bytes instanceof Uint8Array) ||
+    request.bytes.byteLength === 0 ||
+    request.bytes.byteLength > MAX_INLINE_FILE_WRITE_BYTES
+  ) {
     throw adapterError("validation_failed")
   }
   if (request.expected_prior_sha256 !== undefined && !isDigest(request.expected_prior_sha256)) {
+    throw adapterError("validation_failed")
+  }
+  if (
+    request.expected_prior_revision !== undefined &&
+    (typeof request.expected_prior_revision !== "bigint" ||
+      request.expected_prior_revision < 1n)
+  ) {
     throw adapterError("validation_failed")
   }
 }
@@ -616,7 +725,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
       }
     } else if (
       evidenceKind !== "live_conformance" ||
-      OFFICIAL_SDK_CONTRACT_GAPS[this.#identity.provider].admission === "disabled"
+      !PRODUCTION_MANAGED_ADMISSION_ENABLED
     ) {
       throw adapterError("unsupported_runtime_feature")
     }
@@ -856,6 +965,19 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
       spec_sha256: specSha256,
     })
     if (op.target.provider_creation_token_sha256 !== expectedCreationToken) {
+      throw adapterError("operation_target_mismatch")
+    }
+    const expectedTargetFingerprint = providerTargetFingerprintSha256({
+      adapter_id: this.#identity.provider,
+      adapter_version: this.#dependencies.adapter_version,
+      installation_id: this.#dependencies.installation_id,
+      provider_scope_ref: this.#dependencies.provider_scope_ref,
+      resource_id: op.target.resource_id,
+      resource_lease_id: op.fence.resource_lease_id,
+      provider_creation_token_sha256: expectedCreationToken,
+      spec_sha256: specSha256,
+    })
+    if (op.target.immutable_fingerprint_sha256 !== expectedTargetFingerprint) {
       throw adapterError("operation_target_mismatch")
     }
     return this.#withClient(ctx, op, (client) => this.#withLifecycleLock(op, async () => {
@@ -1110,7 +1232,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     validateOperation(ctx, op, "exec_start")
     validateEffectRequest(op, { operation: "exec_start", spec })
     validateHandle(handle, op, this.#identity, this.#dependencies)
-    validateExecSpec(spec)
+    validateExecSpec(spec, op.deadline)
     return this.#withClient(ctx, op, (client) => this.#withLifecycleLock(op, async () => {
       requireCapability(client, "typed_argv_exec")
       let providerExec
@@ -1241,8 +1363,13 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
       const stat = await this.#retryRead(ctx, op, () => client.statFile(handle.opaque_resource_id, broker, frame))
       if (
         stat.path !== checkedPath ||
+        !["file", "directory", "symlink"].includes(stat.type) ||
+        !Number.isSafeInteger(stat.size_bytes) ||
         stat.size_bytes < 0 ||
         stat.revision < 1n ||
+        !Number.isSafeInteger(stat.mode) ||
+        stat.mode < 0 ||
+        stat.mode > 0o7777 ||
         (stat.sha256 !== undefined && !isDigest(stat.sha256)) ||
         (stat.symlink_target !== undefined && validateWorkspacePath(stat.symlink_target) !== stat.symlink_target) ||
         (stat.mode & 0o6000) !== 0
@@ -1301,7 +1428,9 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
         const bytes = providerChunk.bytes
         total += bytes.byteLength
         if (
+          !(bytes instanceof Uint8Array) ||
           bytes.byteLength === 0 ||
+          bytes.byteLength > MAX_FILE_READ_BYTES ||
           total > request.length ||
           !isDigest(providerChunk.total_file_sha256) ||
           providerChunk.file_revision < 1n ||
@@ -1386,7 +1515,16 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     request = snapshotData(request)
     op = snapshotData(op)
     const checkedPath = validateWorkspacePath(request.path, true)
-    if (!Number.isSafeInteger(request.limit) || request.limit < 1 || request.limit > 1000) {
+    if (
+      !Number.isSafeInteger(request.limit) ||
+      request.limit < 1 ||
+      request.limit > 1000 ||
+      (request.cursor !== undefined &&
+        (typeof request.cursor !== "string" ||
+          request.cursor.length === 0 ||
+          request.cursor.length > 4096 ||
+          /[\0-\x1f\x7f]/u.test(request.cursor)))
+    ) {
       throw adapterError("validation_failed")
     }
     validateOperation(ctx, op, "file_list")
@@ -1405,12 +1543,19 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
       )
       const page = await this.#retryRead(ctx, op, () => client.listFiles(handle.opaque_resource_id, broker, frame))
       if (page.items.length > request.limit) throw adapterError("integrity_failed")
-      for (const item of page.items) validateWorkspacePath(item.path)
+      for (const item of page.items) {
+        validateWorkspacePath(item.path)
+        if (!["file", "directory", "symlink"].includes(item.type)) {
+          throw adapterError("integrity_failed")
+        }
+      }
       const paths = page.items.map((item) => item.path)
+      const portablePaths = paths.map((path) => path.normalize("NFKC").toLowerCase())
       const prefix = checkedPath === "" ? "" : `${checkedPath}/`
       if (
         !safeEqual(paths, [...paths].sort()) ||
         new Set(paths).size !== paths.length ||
+        new Set(portablePaths).size !== portablePaths.length ||
         paths.some((path) => checkedPath !== "" && path !== checkedPath && !path.startsWith(prefix)) ||
         (page.next_cursor !== undefined && page.next_cursor === request.cursor)
       ) {
@@ -1585,16 +1730,23 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     ctx = snapshotContext(ctx)
     target = snapshotData(target)
     if (handle !== undefined) handle = snapshotData(handle)
-    if (!safeEqual(ctx.target, target) || ctx.authorization_consumption_receipt_sha256 !== target.authorization_consumption_receipt_sha256) {
+    if (!safeEqual(ctx.target, target)) {
       throw adapterError("operation_target_mismatch")
+    }
+    this.#validateReconcileContext(ctx)
+    const op = this.#reconcileOperation(ctx)
+    validateAdapterCallContext(ctx, op)
+    if (handle !== undefined) {
+      validateHandle(handle, op, this.#identity, this.#dependencies)
     }
     if (handle !== undefined && handle.immutable_fingerprint_sha256 !== target.immutable_fingerprint_sha256) {
       throw adapterError("operation_target_mismatch")
     }
-    const op = this.#reconcileOperation(ctx)
-    validateAdapterCallContext(ctx, op)
-    return this.#withClient(ctx, op, async (client) => {
+    return this.#withClient(ctx, op, (client) => this.#withLifecycleLock(op, async () => {
       const observation = await this.#retryRead(ctx, op, () => client.lookupOperation(target))
+      if (!["not_sent", "accepted", "completed", "not_found", "unknown"].includes(observation)) {
+        throw adapterError("integrity_failed")
+      }
       return {
         observation,
         target_sha256: canonicalSha256(target),
@@ -1602,89 +1754,45 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
         immutable_fingerprint_sha256: target.immutable_fingerprint_sha256,
         provider_outcome_anchor_sha256: journalAnchorSha256(ctx.invocation_anchor),
       }
-    })
+    }))
   }
 
   async list_owned_resources(ctx: ReconcileContextV1, cursor?: string): Promise<OwnedResourcePageV1> {
     ctx = snapshotContext(ctx)
+    this.#validateReconcileContext(ctx)
+    if (
+      cursor !== undefined &&
+      (cursor.length === 0 || cursor.length > 4096 || /[\0-\x1f\x7f]/u.test(cursor))
+    ) {
+      throw adapterError("validation_failed")
+    }
     const op = this.#reconcileOperation(ctx)
     validateAdapterCallContext(ctx, op)
-    return this.#withClient(ctx, op, async (client) => {
+    return this.#withClient(ctx, op, (client) => this.#withLifecycleLock(op, async () => {
       requireCapability(client, "ownership_inventory")
       const page = await this.#retryRead(ctx, op, () => client.listOwnedResources(cursor))
+      if (
+        page.items.length > 1000 ||
+        (page.next_cursor !== undefined && page.next_cursor === cursor)
+      ) {
+        throw adapterError("integrity_failed")
+      }
+      for (const resource of page.items) {
+        if (
+          resource.opaque_resource_id.length === 0 ||
+          !isDigest(resource.immutable_fingerprint_sha256) ||
+          !isDigest(resource.provider_creation_token_sha256)
+        ) {
+          throw adapterError("integrity_failed")
+        }
+      }
       const items = page.items.map((resource) => ({
         provider_resource_sha256: canonicalSha256(resource.opaque_resource_id),
         immutable_fingerprint_sha256: resource.immutable_fingerprint_sha256,
         state: resource.state,
       }))
       return { items, ...(page.next_cursor === undefined ? {} : { next_cursor: page.next_cursor }) }
-    })
-  }
-
-  async reconcile_inventory(
-    ctx: AdapterCallContextV1,
-    knownFingerprints: ReadonlyMap<Digest, string>,
-  ): Promise<InventoryReconciliationV1> {
-    ctx = snapshotContext(ctx)
-    knownFingerprints = new Map(knownFingerprints)
-    const op: ProviderOperationV1 = {
-      operation: "inspect",
-      target: ctx.target,
-      fence: ctx.fence,
-      request_sha256: ctx.request_sha256,
-      idempotency_key_sha256: ctx.invocation_anchor.record.idempotency_key_sha256,
-      external_anchor_kind: "READ_PROBE",
-      external_anchor_receipt_sha256: journalAnchorSha256(ctx.invocation_anchor),
-      deadline: ctx.deadline,
-    }
-    validateOperation(ctx, op, "inspect")
-    return this.#withClient(ctx, op, async (client) => {
-      requireCapability(client, "ownership_inventory")
-      const resources: AdapterProviderResourceV1[] = []
-      const cursors = new Set<string>()
-      let cursor: string | undefined
-      for (let pageCount = 0; pageCount < MAX_INVENTORY_PAGES; pageCount += 1) {
-        const page = await this.#retryRead(ctx, op, () => client.listOwnedResources(cursor))
-        resources.push(...page.items)
-        if (page.next_cursor === undefined) {
-          const fingerprintCounts = new Map<Digest, number>()
-          for (const resource of resources) {
-            fingerprintCounts.set(
-              resource.immutable_fingerprint_sha256,
-              (fingerprintCounts.get(resource.immutable_fingerprint_sha256) ?? 0) + 1,
-            )
-          }
-          const findings = resources.map((resource) => {
-            const resourceId = knownFingerprints.get(resource.immutable_fingerprint_sha256)
-            const structurallyOwned =
-              resource.owned &&
-              !resource.source_attached &&
-              !resource.credential_attached &&
-              resource.auto_delete_disabled &&
-              !resource.ephemeral &&
-              resource.ownership.installation_id_sha256 ===
-                canonicalSha256(this.#dependencies.installation_id) &&
-              resource.ownership.provider_scope_ref_sha256 ===
-                canonicalSha256(this.#dependencies.provider_scope_ref)
-            const knownUnique =
-              resourceId !== undefined &&
-              structurallyOwned &&
-              fingerprintCounts.get(resource.immutable_fingerprint_sha256) === 1
-            return {
-              provider_resource_sha256: canonicalSha256(resource.opaque_resource_id),
-              immutable_fingerprint_sha256: resource.immutable_fingerprint_sha256,
-              disposition: knownUnique ? ("known" as const) : ("quarantine_required" as const),
-              ...(knownUnique ? { resource_id: resourceId } : {}),
-            }
-          })
-          return { findings, complete: true }
-        }
-        if (cursors.has(page.next_cursor)) throw adapterError("integrity_failed")
-        cursors.add(page.next_cursor)
-        cursor = page.next_cursor
-      }
-      throw adapterError("provider_state_unknown", { quarantineRequired: true })
-    })
+    }))
   }
 
   #reconcileOperation(ctx: ReconcileContextV1): ProviderOperationV1 {
@@ -1692,11 +1800,30 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
       operation: ctx.invocation_anchor.record.semantic_step,
       target: ctx.target,
       fence: ctx.fence,
-      request_sha256: ctx.invocation_anchor.record.request_sha256,
+      ...(ctx.generation_transition === undefined
+        ? {}
+        : { generation_transition: ctx.generation_transition }),
+      request_sha256: ctx.request_sha256,
       idempotency_key_sha256: ctx.invocation_anchor.record.idempotency_key_sha256,
       external_anchor_kind: "READ_PROBE",
       external_anchor_receipt_sha256: journalAnchorSha256(ctx.invocation_anchor),
-      deadline: ctx.fence.operation_execution_expires_at,
+      deadline: ctx.deadline,
+    }
+  }
+
+  #validateReconcileContext(ctx: ReconcileContextV1): void {
+    if (
+      !isDigest(ctx.continuation_grant_sha256) ||
+      !isDigest(ctx.authorization_consumption_receipt_sha256) ||
+      ctx.authorization_binding_sha256 !==
+        reconciliationAuthorizationBinding(
+          ctx.target,
+          ctx.fence,
+          ctx.continuation_grant_sha256,
+          ctx.authorization_consumption_receipt_sha256,
+        )
+    ) {
+      throw adapterError("dispatch_anchor_mismatch")
     }
   }
 }

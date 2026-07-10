@@ -8,8 +8,8 @@ import type {
 import type { Sandbox, SandboxInfo, SandboxListOpts, SandboxOpts } from "e2b"
 import type { Digest, ManagedProviderIdV1 } from "./types"
 
-export const E2B_SDK_PIN = { package: "e2b", version: "2.31.0" } as const
-export const DAYTONA_SDK_PIN = { package: "@daytona/sdk", version: "0.193.0" } as const
+export const E2B_SDK_PIN = Object.freeze({ package: "e2b", version: "2.31.0" } as const)
+export const DAYTONA_SDK_PIN = Object.freeze({ package: "@daytona/sdk", version: "0.193.0" } as const)
 
 export type E2bOfficialSdkSurfaceV1 = Pick<
   typeof Sandbox,
@@ -146,6 +146,14 @@ export interface OfficialApiEvidenceV1 {
   observation: string
 }
 
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const item of Object.values(value as Record<string, unknown>)) deepFreeze(item)
+    Object.freeze(value)
+  }
+  return value
+}
+
 export const OFFICIAL_SDK_CONTRACT_GAPS: Readonly<
   Record<
     ManagedProviderIdV1,
@@ -156,7 +164,7 @@ export const OFFICIAL_SDK_CONTRACT_GAPS: Readonly<
       official_api_evidence: readonly OfficialApiEvidenceV1[]
     }
   >
-> = {
+> = deepFreeze({
   e2b: {
     admission: "disabled",
     compensated_in_adapter: [
@@ -219,4 +227,4 @@ export const OFFICIAL_SDK_CONTRACT_GAPS: Readonly<
       },
     ],
   },
-}
+})

@@ -8,10 +8,7 @@ import {
   buildE2bExactOwnershipListOptions,
   canonicalSha256,
   DAYTONA_SDK_PIN,
-  DAYTONA_GUEST_BROKER_PTY_ID,
   DaytonaOfficialSdkControlBridgeV1,
-  createDaytonaDenyAllCandidate,
-  createE2bDenyAllCandidate,
   decodeGuestBrokerRequestFrame,
   E2B_SDK_PIN,
   E2bOfficialSdkControlBridgeV1,
@@ -19,18 +16,23 @@ import {
   managedProviderRequestSha256,
   MANAGED_GUEST_BROKER_BOOTSTRAP_COMMAND,
   MANAGED_GUEST_BROKER_PROTOCOL_SHA256,
-  withDaytonaGuestBrokerSdkSession,
-  withE2bGuestBrokerSdkSession,
   OFFICIAL_SDK_CONTRACT_GAPS,
   validateAdapterCallContext,
   validateWorkspacePath,
   type FailedNoEffectAuthorizationV1,
   type DaytonaOfficialReadSdkV1,
-  type DaytonaOfficialBrokerProcessV1,
   type E2bOfficialReadSdkV1,
-  type E2bOfficialBrokerCommandsV1,
   type ManagedResourceAttestationPortV1,
 } from "../../src/adapters/managed/index"
+import {
+  DAYTONA_GUEST_BROKER_PTY_ID,
+  createDaytonaDenyAllCandidate,
+  createE2bDenyAllCandidate,
+  withDaytonaGuestBrokerSdkSession,
+  withE2bGuestBrokerSdkSession,
+  type DaytonaOfficialBrokerProcessV1,
+  type E2bOfficialBrokerCommandsV1,
+} from "../../src/adapters/managed/sdk-broker-bridges"
 import {
   FakeGuestBrokerAuthenticator,
   FakeJournal,
@@ -56,6 +58,14 @@ function brokerAttestation(immutableFingerprintSha256: ReturnType<typeof digest>
 describe("immutable journal identity", () => {
   test("canonical bigint encoding cannot collide with a string", () => {
     expect(canonicalSha256({ value: 1n })).not.toBe(canonicalSha256({ value: "1" }))
+  })
+
+  test("canonical hashing rejects ambiguous JSON values", () => {
+    expect(() => canonicalSha256({ value: Number.NaN })).toThrow("non_canonical_value")
+    expect(() => canonicalSha256({ value: Number.POSITIVE_INFINITY })).toThrow("non_canonical_value")
+    expect(() => canonicalSha256({ value: -0 })).toThrow("non_canonical_value")
+    expect(() => canonicalSha256({ value: undefined })).toThrow("non_canonical_value")
+    expect(() => canonicalSha256({ value: new Date(0) })).toThrow("non_canonical_value")
   })
   test("accepts exact duplicate bytes for the full record identity", () => {
     const op = makeOperation("create_inert")
@@ -232,6 +242,19 @@ describe("immutable journal identity", () => {
     )
   })
 
+  test("the journal wire envelope rejects undeclared compatibility fields", () => {
+    const op = makeOperation("create_inert")
+    const ctx = makeContext(op, new FakeJournal())
+    const expanded = {
+      ...ctx,
+      invocation_anchor: { ...ctx.invocation_anchor, duplicate: false },
+    } as typeof ctx
+
+    expect(() => validateAdapterCallContext(expanded, op)).toThrowError(
+      expect.objectContaining({ code: "dispatch_anchor_mismatch" }),
+    )
+  })
+
   test("generation-changing journal records bind the exact predecessor and successor pair", () => {
     const op = makeOperation("create_inert")
     const ctx = makeContext(op, new FakeJournal())
@@ -252,6 +275,14 @@ describe("immutable journal identity", () => {
 })
 
 describe("typed guest-broker framing", () => {
+  test("rejects portable path confusables, drive syntax, and excessive depth", () => {
+    expect(() => validateWorkspacePath("repo/\u2215escape")).toThrowError(AdapterContractError)
+    expect(() => validateWorkspacePath("C:/workspace/file")).toThrowError(AdapterContractError)
+    expect(() => validateWorkspacePath(Array.from({ length: 65 }, () => "a").join("/"))).toThrowError(
+      AdapterContractError,
+    )
+  })
+
   test("binds payload bytes, operation, and immutable resource fingerprint", () => {
     const op = makeOperation("file_stat", { generation_transition: undefined })
     const request = { operation: "file_stat" as const, path: validateWorkspacePath("repo/file.txt") }
@@ -480,6 +511,8 @@ describe("official SDK pin mappings", () => {
   test("keeps both builds disabled pending live proof while recording adapter compensations", () => {
     for (const provider of ["e2b", "daytona_cloud"] as const) {
       expect(OFFICIAL_SDK_CONTRACT_GAPS[provider].admission).toBe("disabled")
+      expect(Object.isFrozen(OFFICIAL_SDK_CONTRACT_GAPS[provider])).toBe(true)
+      expect(Object.isFrozen(OFFICIAL_SDK_CONTRACT_GAPS[provider].gaps)).toBe(true)
       expect(OFFICIAL_SDK_CONTRACT_GAPS[provider].gaps).toEqual(
         expect.arrayContaining([
           "create_stopped_unavailable_in_pinned_sdk",
