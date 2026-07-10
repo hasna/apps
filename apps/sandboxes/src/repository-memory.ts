@@ -4,6 +4,8 @@ import type {
   SandboxRepositoryTxV1,
   SandboxRepositoryV1,
 } from "./repository.js";
+import { assertExternalOperationAnchorRecordV1 } from "./repository.js";
+import { canonicalDigest } from "./canonical.js";
 import type {
   OperationRecordV1,
   ExternalOperationAnchorRecordV1,
@@ -70,7 +72,7 @@ export class InMemorySandboxRepositoryV1 implements SandboxRepositoryV1 {
   health(): RepositoryHealthV1 {
     return {
       backend: "memory",
-      schema_version: 2,
+      schema_version: 3,
       integrity: "ok",
       sandbox_count: this.#state.sandboxes.size,
       operation_count: this.#state.operations.size,
@@ -81,7 +83,11 @@ export class InMemorySandboxRepositoryV1 implements SandboxRepositoryV1 {
 
   #tx(): SandboxRepositoryTxV1 {
     const state = this.#state;
+    const clock = this.#clock;
     return {
+      databaseTime() {
+        return new Date(clock().getTime());
+      },
       getSandbox(resourceId) {
         const value = state.sandboxes.get(resourceId);
         return value === undefined ? undefined : structuredClone(value);
@@ -153,22 +159,62 @@ export class InMemorySandboxRepositoryV1 implements SandboxRepositoryV1 {
         return structuredClone(next);
       },
       appendExternalAnchor(record) {
+        assertExternalOperationAnchorRecordV1(record);
         const conflict = state.externalAnchors.find(
           (candidate) =>
             candidate.operation_id === record.operation_id &&
             candidate.operation_step_id === record.operation_step_id &&
-            candidate.kind === record.kind &&
-            (record.kind === "dispatched" || candidate.anchor_sha256 === record.anchor_sha256),
+            candidate.operation_execution_epoch === record.operation_execution_epoch &&
+            candidate.record_kind === record.record_kind &&
+            (record.record_kind !== "READ_PROBE" || candidate.anchor_sha256 === record.anchor_sha256),
         );
         if (conflict !== undefined) {
-          if (
-            conflict.anchor_sha256 !== record.anchor_sha256 ||
-            conflict.frontier_sha256 !== record.frontier_sha256 ||
-            conflict.payload_sha256 !== record.payload_sha256
-          ) {
-            throw new SandboxError("integrity_failed", "External anchor frontier conflict");
+          if (canonicalDigest(conflict) !== canonicalDigest(record)) {
+            throw new SandboxError("integrity_failed", "Immutable effect journal identity changed bytes");
           }
           return;
+        }
+        if (record.record_kind === "OUTCOME") {
+          const dispatched = state.externalAnchors.find(
+            (candidate) =>
+              candidate.operation_id === record.operation_id &&
+              candidate.operation_step_id === record.operation_step_id &&
+              candidate.operation_execution_epoch === record.operation_execution_epoch &&
+              candidate.record_kind === "DISPATCHED",
+          );
+          if (dispatched === undefined) {
+            throw new SandboxError("integrity_failed", "OUTCOME has no matching immutable DISPATCHED record");
+          }
+        }
+        if (record.record_kind === "DISPATCHED") {
+          const priorDispatches = state.externalAnchors
+            .filter(
+              (candidate) =>
+                candidate.operation_id === record.operation_id &&
+                candidate.operation_step_id === record.operation_step_id &&
+                candidate.record_kind === "DISPATCHED",
+            )
+            .sort((a, b) => (a.operation_execution_epoch < b.operation_execution_epoch ? -1 : 1));
+          const prior = priorDispatches.at(-1);
+          if (prior !== undefined) {
+            if (record.operation_execution_epoch !== prior.operation_execution_epoch + 1n) {
+              throw new SandboxError("integrity_failed", "Effect execution epoch must advance by exactly one");
+            }
+            const priorOutcome = state.externalAnchors.find(
+              (candidate) =>
+                candidate.operation_id === prior.operation_id &&
+                candidate.operation_step_id === prior.operation_step_id &&
+                candidate.operation_execution_epoch === prior.operation_execution_epoch &&
+                candidate.record_kind === "OUTCOME",
+            );
+            if (
+              priorOutcome === undefined ||
+              priorOutcome.record_kind !== "OUTCOME" ||
+              priorOutcome.outcome_kind !== "failed_no_effect"
+            ) {
+              throw new SandboxError("provider_state_unknown", "Higher execution epoch requires authoritative failed_no_effect");
+            }
+          }
         }
         state.externalAnchors.push(structuredClone(record));
       },
@@ -184,6 +230,9 @@ export class InMemorySandboxRepositoryV1 implements SandboxRepositoryV1 {
         }
         state.capabilityUses.set(capabilityUseSha256, operationId);
       },
+      getCapabilityUseOperation(capabilityUseSha256) {
+        return state.capabilityUses.get(capabilityUseSha256);
+      },
       consumeActivationGrant(grantUseSha256, operationId) {
         const prior = state.activationGrantUses.get(grantUseSha256);
         if (prior !== undefined && prior !== operationId) {
@@ -191,12 +240,18 @@ export class InMemorySandboxRepositoryV1 implements SandboxRepositoryV1 {
         }
         state.activationGrantUses.set(grantUseSha256, operationId);
       },
+      getActivationGrantUseOperation(grantUseSha256) {
+        return state.activationGrantUses.get(grantUseSha256);
+      },
       consumeCleanupGrant(grantUseSha256, operationId) {
         const prior = state.cleanupGrantUses.get(grantUseSha256);
         if (prior !== undefined && prior !== operationId) {
           throw new SandboxError("cleanup_grant_mismatch", "Cleanup grant was already consumed");
         }
         state.cleanupGrantUses.set(grantUseSha256, operationId);
+      },
+      getCleanupGrantUseOperation(grantUseSha256) {
+        return state.cleanupGrantUses.get(grantUseSha256);
       },
       appendEvent(event) {
         const sequence = state.events.reduce(

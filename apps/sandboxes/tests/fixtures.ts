@@ -1,4 +1,8 @@
 import { canonicalDigest, sha256, type Digest } from "../src/canonical.js";
+import {
+  EFFECT_JOURNAL_OUTCOME_SCHEMA_DIGEST,
+  EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION,
+} from "../src/effect-journal.js";
 import { AesGcmProviderHandleSealerV1 } from "../src/handle-sealer.js";
 import { InMemorySandboxRepositoryV1 } from "../src/repository-memory.js";
 import type { SandboxRepositoryV1 } from "../src/repository.js";
@@ -154,8 +158,12 @@ export function context(
     schema_version: SCHEMA_VERSION,
     journal_anchor_id: oid("journal", seed),
     state: "dispatched" as const,
+    record_kind: "DISPATCHED" as const,
+    outcome_schema_version: EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION,
+    outcome_schema_digest: EFFECT_JOURNAL_OUTCOME_SCHEMA_DIGEST,
     operation_id: operationId,
     operation_step_id: oid("step", seed),
+    operation_execution_epoch: executionEpoch,
     operation_digest: requestSha256,
     resource_id: oid("sbx", 4),
     authority_epoch: fullFence.authority_epoch,
@@ -210,6 +218,45 @@ export function lifecycleContext(
   const { dispatch_journal: _dispatchJournal, capability, ...base } = providerContext;
   const { dispatch_journal_anchor_sha256: _dispatchAnchor, ...lifecycleCapability } = capability;
   return { ...base, capability: lifecycleCapability };
+}
+
+export function retryContext(
+  prior: MutationContextV1,
+  expectedRevision: number,
+  executionEpoch: bigint,
+  seed: number,
+): MutationContextV1 {
+  const nextFence: CanonicalSandboxEffectFenceV1 = {
+    ...prior.fence,
+    operation_execution_epoch: executionEpoch,
+  };
+  const nextCapability: CapabilityClaimsV1 = {
+    ...prior.capability,
+    capability_id: oid("cap", seed),
+    use_nonce_sha256: digest(`capability-nonce-${seed}`),
+    dispatch_journal_anchor_sha256: digest("temporary-retry-anchor"),
+    fence: nextFence,
+  };
+  const anchorBase = {
+    ...prior.dispatch_journal,
+    journal_anchor_id: oid("journal", seed),
+    operation_execution_epoch: executionEpoch,
+    frontier_sha256: digest(`journal-frontier-${seed}`),
+    fence: nextFence,
+    anchor_sha256: digest("temporary-retry-anchor"),
+  };
+  const nextDispatch = {
+    ...anchorBase,
+    anchor_sha256: dispatchedJournalAnchorDigest(anchorBase),
+  };
+  nextCapability.dispatch_journal_anchor_sha256 = nextDispatch.anchor_sha256;
+  return {
+    ...prior,
+    expected_revision: expectedRevision,
+    fence: nextFence,
+    capability: nextCapability,
+    dispatch_journal: nextDispatch,
+  };
 }
 
 export interface Harness {

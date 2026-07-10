@@ -7,6 +7,10 @@ import type {
   SandboxesAuthorityVerifierV1,
 } from "./service.js";
 import { canonicalDigest, sha256, type Digest } from "./canonical.js";
+import {
+  EFFECT_JOURNAL_OUTCOME_SCHEMA_DIGEST,
+  EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION,
+} from "./effect-journal.js";
 import type {
   ActivationGrantV1,
   CapabilityClaimsV1,
@@ -102,6 +106,7 @@ export class DeterministicTestAuthorityVerifierV1 implements SandboxesAuthorityV
 export class DeterministicTestPhysicalSafetyControllerV1 implements PhysicalSafetyControllerV1 {
   readonly calls: Array<{ resource_id: string; reason: string }> = [];
   readonly observations: SafetyFenceObservationV1[] = [];
+  readonly #fencedResources = new Set<string>();
 
   async fenceResource(input: {
     resource_id: string;
@@ -110,6 +115,7 @@ export class DeterministicTestPhysicalSafetyControllerV1 implements PhysicalSafe
     observed_at: string;
   }): Promise<SafetyFenceObservationV1> {
     this.calls.push({ resource_id: input.resource_id, reason: input.reason });
+    this.#fencedResources.add(input.resource_id);
     const observation: SafetyFenceObservationV1 = {
       schema_version: "sandboxes.safety-fence/v1",
       resource_id: input.resource_id,
@@ -124,25 +130,45 @@ export class DeterministicTestPhysicalSafetyControllerV1 implements PhysicalSafe
     this.observations.push(structuredClone(observation));
     return observation;
   }
+
+  async assertProviderDispatchAllowed(input: {
+    resource_id: string;
+    operation: import("./types.js").SandboxOperation;
+    fence: import("./types.js").CanonicalSandboxEffectFenceV1;
+    dispatch_anchor_sha256: Digest;
+  }): Promise<void> {
+    if (
+      this.#fencedResources.has(input.resource_id) &&
+      ["begin_create_inert", "begin_activate"].includes(input.operation)
+    ) {
+      throw new Error("physical safety dispatch gate is closed");
+    }
+  }
 }
 
 export class DeterministicTestProviderOutcomeJournalV1 implements ProviderOutcomeJournalV1 {
-  readonly calls: Array<{ operation_id: string; outcome: string }> = [];
+  readonly calls: Array<{ operation_id: string; outcome_kind: string }> = [];
 
   async appendOutcome(
     input: Parameters<ProviderOutcomeJournalV1["appendOutcome"]>[0],
   ): Promise<ProviderOutcomeAnchorV1> {
-    this.calls.push({ operation_id: input.operation_id, outcome: input.outcome });
+    this.calls.push({ operation_id: input.operation_id, outcome_kind: input.outcome_kind });
     const base = {
       schema_version: "sandboxes.runtime/v1" as const,
+      record_kind: "OUTCOME" as const,
+      outcome_schema_version: EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION,
+      outcome_schema_digest: EFFECT_JOURNAL_OUTCOME_SCHEMA_DIGEST,
       operation_id: input.operation_id,
       operation_step_id: input.operation_step_id,
+      operation_execution_epoch: input.operation_execution_epoch,
       dispatch_anchor_sha256: input.dispatch_anchor_sha256,
-      outcome: input.outcome,
+      outcome_kind: input.outcome_kind,
       outcome_sha256: input.outcome_sha256,
       recorded_at: input.recorded_at,
       issuer_principal: "principal_00000000000000000000000000000061",
-      frontier_sha256: sha256(`outcome-frontier:${input.operation_id}:${input.operation_step_id}:${input.outcome}`),
+      frontier_sha256: sha256(
+        `outcome-frontier:${input.operation_id}:${input.operation_step_id}:${input.operation_execution_epoch}:${input.outcome_kind}`,
+      ),
       fence: input.fence,
       target: input.target,
       anchor_sha256: sha256("temporary-outcome-anchor"),

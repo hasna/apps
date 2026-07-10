@@ -3,6 +3,7 @@ import { SandboxError } from "./errors.js";
 import {
   AmbiguousProviderEffectError,
   ProviderIdentityMismatchError,
+  ProviderRejectedNoEffectError,
   type AdapterCallContextV1,
   type DestroyContextV1,
   type ReconcileContextV1,
@@ -34,6 +35,7 @@ export interface FakeRunnerOptionsV1 {
   creation_token_mismatch?: boolean;
   activation_fingerprint_mismatch?: boolean;
   activation_policy_mismatch?: boolean;
+  reject_create_no_effect_attempts?: number;
   clock?: () => Date;
 }
 
@@ -48,6 +50,7 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
   readonly #creationTokenMismatch: boolean;
   readonly #activationFingerprintMismatch: boolean;
   readonly #activationPolicyMismatch: boolean;
+  #remainingCreateNoEffectRejections: number;
   readonly calls = { create_inert: 0, activate: 0, inspect: 0, expire: 0, destroy: 0, lookup: 0 };
   readonly observed_generations: bigint[] = [];
   readonly observed_authorization_receipts: Digest[] = [];
@@ -58,6 +61,7 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     this.#creationTokenMismatch = options.creation_token_mismatch === true;
     this.#activationFingerprintMismatch = options.activation_fingerprint_mismatch === true;
     this.#activationPolicyMismatch = options.activation_policy_mismatch === true;
+    this.#remainingCreateNoEffectRejections = options.reject_create_no_effect_attempts ?? 0;
     this.#clock = options.clock ?? (() => new Date());
   }
 
@@ -91,6 +95,10 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     this.calls.create_inert += 1;
     this.observed_generations.push(op.fence.resource_lifecycle_generation);
     if (op.operation !== "create_inert") throw new SandboxError("validation_failed", "Wrong fake operation");
+    if (this.#remainingCreateNoEffectRejections > 0) {
+      this.#remainingCreateNoEffectRejections -= 1;
+      throw new ProviderRejectedNoEffectError();
+    }
     const existing = this.#operations.get(op.fence.operation_id);
     if (existing !== undefined) return existing;
     const seed = sha256(`${allocationKey}:${op.fence.operation_id}`).slice(7, 39);

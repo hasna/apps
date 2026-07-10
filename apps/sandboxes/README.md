@@ -5,13 +5,27 @@ The package enforces Infinity-issued effect fences and exact adjacent
 Infinity-owned expected/successor lifecycle generations. It CASes and reseals
 the successor before dispatch, atomically CASes the durable operation phase to
 `dispatched`, appends a signed external `DISPATCHED` frontier, and only then
-makes the provider call. Provider outcomes stay non-canonical until a separate
+makes the provider call. The final barrier rechecks database time, cancellation,
+the exact current resource revision/state/fence, durable capability and grant
+consumption, and the physical safety gate. Mutation journal identity is
+`(operation_id, operation_step_id, operation_execution_epoch, record_kind)`;
+records are exactly `DISPATCHED` or one closed `OUTCOME`. A new execution epoch
+is allowed only after an authoritative `failed_no_effect` outcome and must keep
+the semantic step, provider target, token, request, and lifecycle generation
+unchanged. Provider outcomes stay non-canonical until a separate
 Infinity `record_*` command commits the next exact generation. Provider reads
 use separate signed `READ_PROBE` anchors. TTL and ambiguous-provider signals
 produce a typed physical safety-fence observation without autonomously changing
 canonical state or generation; only a later signed Infinity transition may
 canonicalize quarantine. Destruction still requires an exact one-use Infinity
 cleanup grant.
+
+The external outcomes are schema-bound to
+`infinity.effect-journal-outcome/v1` at digest
+`sha256:7ab380a0475ebf79d2ed925e20bcbb9303d78a56c358d09adbdce796e740bf20`.
+There is no external `unknown` or `quarantined` alias: a dispatch without an
+outcome remains unresolved, and authenticated `reconciliation_blocked` is
+mapped by Infinity to its internal quarantined state.
 
 This first slice includes the reference domain model, in-memory and SQLite
 repositories, deterministic fake runner, closed validators, and a fail-closed

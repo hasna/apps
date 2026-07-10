@@ -8,6 +8,11 @@ import {
   type Digest,
 } from "./canonical.js";
 import { SandboxError } from "./errors.js";
+import {
+  assertEffectJournalOutcomeSchema,
+  EFFECT_JOURNAL_OUTCOME_SCHEMA_DIGEST,
+  EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION,
+} from "./effect-journal.js";
 import type { ProviderHandleSealerV1 } from "./handle-sealer.js";
 import type { SandboxRepositoryTxV1, SandboxRepositoryV1 } from "./repository.js";
 import {
@@ -105,14 +110,21 @@ export interface PhysicalSafetyControllerV1 {
     reason: SafetyFenceObservationV1["reason"];
     observed_at: string;
   }): Promise<SafetyFenceObservationV1>;
+  assertProviderDispatchAllowed(input: {
+    resource_id: string;
+    operation: SandboxOperation;
+    fence: CanonicalSandboxEffectFenceV1;
+    dispatch_anchor_sha256: Digest;
+  }): Promise<void>;
 }
 
 export interface ProviderOutcomeJournalV1 {
   appendOutcome(input: {
     operation_id: string;
     operation_step_id: string;
+    operation_execution_epoch: bigint;
     dispatch_anchor_sha256: Digest;
-    outcome: "succeeded" | "failed_no_effect" | "unknown";
+    outcome_kind: ProviderOutcomeAnchorV1["outcome_kind"];
     outcome_sha256: Digest;
     recorded_at: string;
     fence: CanonicalSandboxEffectFenceV1;
@@ -268,7 +280,6 @@ export class SandboxesReferenceServiceV1 {
       throw new SandboxError("request_digest_mismatch", "Spec authority references do not match the fence");
     }
     if (
-      ctx.expected_revision !== 0 ||
       ctx.transition.expected_resource_lifecycle_generation !== 1n ||
       ctx.fence.resource_lifecycle_generation !==
         ctx.transition.successor_resource_lifecycle_generation
@@ -324,9 +335,26 @@ export class SandboxesReferenceServiceV1 {
         const replay = this.#resolveReplay(tx, ctx, "begin_create_inert", input.resource_id);
         if (replay !== undefined && replay.state === "committed") return { operation: replay, replay: true };
         if (replay !== undefined) {
-          return { operation: replay, replay: false, reconcile: true };
+          return {
+            operation: replay,
+            replay: false,
+            reconcile: replay.effect_phase !== "prepared",
+          };
+        }
+        const retry = this.#retryFailedNoEffect(
+          tx,
+          "begin_create_inert",
+          existing,
+          ctx,
+          "creating_inert",
+        );
+        if (retry !== undefined) {
+          return { operation: retry, replay: false, reconcile: false };
         }
         throw new SandboxError("stale_revision", "Resource identity is already reserved");
+      }
+      if (ctx.expected_revision !== 0) {
+        throw new SandboxError("stale_revision", "Initial inert create requires reserved revision zero");
       }
       const operation = this.#reserve(tx, "begin_create_inert", input.resource_id, ctx);
       if (operation.replay) return { ...operation, reconcile: false };
@@ -474,7 +502,24 @@ export class SandboxesReferenceServiceV1 {
       const replay = this.#resolveReplay(tx, ctx, "begin_activate", resourceId);
       if (replay !== undefined) {
         if (replay.state === "committed") return { operation: replay, replay: true, current };
+        if (replay.effect_phase === "prepared") {
+          return { operation: replay, replay: false, current };
+        }
         throw new SandboxError("provider_state_unknown", "The original activation is unresolved");
+      }
+      const retry = this.#retryFailedNoEffect(
+        tx,
+        "begin_activate",
+        current,
+        ctx,
+        "activating",
+      );
+      if (retry !== undefined) {
+        return {
+          operation: retry,
+          replay: false,
+          current: this.#mustSandbox(tx, resourceId),
+        };
       }
       this.#assertCurrentFence(
         current,
@@ -540,6 +585,10 @@ export class SandboxesReferenceServiceV1 {
       );
     } catch (error) {
       if (!providerReachable) throw error;
+      if (error instanceof ProviderRejectedNoEffectError) {
+        await this.#markFailed(resourceId, ctx.operation_id, ctx.transition.successor_resource_lifecycle_generation);
+        throw new SandboxError("provider_unavailable", "Provider rejected activation without an effect");
+      }
       return this.#markUnknown(
         resourceId,
         ctx.operation_id,
@@ -593,7 +642,18 @@ export class SandboxesReferenceServiceV1 {
       const replay = this.#resolveReplay(tx, ctx, "expire", resourceId);
       if (replay !== undefined) {
         if (replay.state === "committed") return { operation: replay, replay: true, current };
+        if (replay.effect_phase === "prepared") {
+          return { operation: replay, replay: false, current };
+        }
         throw new SandboxError("provider_state_unknown", "The original expiry operation is unresolved");
+      }
+      const retry = this.#retryFailedNoEffect(tx, "expire", current, ctx, "expiring");
+      if (retry !== undefined) {
+        return {
+          operation: retry,
+          replay: false,
+          current: this.#mustSandbox(tx, resourceId),
+        };
       }
       this.#assertCurrentFence(
         current,
@@ -651,6 +711,10 @@ export class SandboxesReferenceServiceV1 {
       );
     } catch (error) {
       if (!providerReachable) throw error;
+      if (error instanceof ProviderRejectedNoEffectError) {
+        await this.#markFailed(resourceId, ctx.operation_id, ctx.transition.successor_resource_lifecycle_generation);
+        throw new SandboxError("provider_unavailable", "Provider rejected expiry without an effect");
+      }
       return this.#markUnknown(
         resourceId,
         ctx.operation_id,
@@ -697,7 +761,24 @@ export class SandboxesReferenceServiceV1 {
       const replay = this.#resolveReplay(tx, ctx, "begin_destroy", resourceId);
       if (replay !== undefined) {
         if (replay.state === "committed") return { operation: replay, replay: true, current };
+        if (replay.effect_phase === "prepared") {
+          return { operation: replay, replay: false, current };
+        }
         throw new SandboxError("provider_state_unknown", "The original cleanup operation is unresolved");
+      }
+      const retry = this.#retryFailedNoEffect(
+        tx,
+        "begin_destroy",
+        current,
+        ctx,
+        "destroying",
+      );
+      if (retry !== undefined) {
+        return {
+          operation: retry,
+          replay: false,
+          current: this.#mustSandbox(tx, resourceId),
+        };
       }
       this.#assertCurrentFence(
         current,
@@ -786,6 +867,10 @@ export class SandboxesReferenceServiceV1 {
       observation = await this.#runner.destroy(destroyContext, handle, providerOp);
     } catch (error) {
       if (!providerReachable) throw error;
+      if (error instanceof ProviderRejectedNoEffectError) {
+        await this.#markFailed(resourceId, ctx.operation_id, ctx.transition.successor_resource_lifecycle_generation);
+        throw new SandboxError("provider_unavailable", "Provider rejected cleanup without an effect");
+      }
       return this.#quarantineCleanup(
         resourceId,
         ctx.operation_id,
@@ -808,7 +893,7 @@ export class SandboxesReferenceServiceV1 {
 
     const destroyOutcomeAnchor = await this.#anchorOutcome(
       ctx.operation_id,
-      observation.state === "absent" ? "succeeded" : "unknown",
+      observation.state === "absent" ? "succeeded" : "failed_effect",
       observation.provider_receipt_sha256,
     );
     return this.#repository.transaction((tx) => {
@@ -1358,9 +1443,20 @@ export class SandboxesReferenceServiceV1 {
   ): Promise<NormalizedMutationContext> {
     const base = await this.#authorizeLifecycle(operation, resourceId, expectedDigest, value, true);
     const dispatchJournal = validateDispatchedJournalAnchor(value.dispatch_journal);
-    const authorizationReceipt = expectedAuthorizationReceipt ?? this.#capabilityUseDigest(base.capability);
+    const priorFailedNoEffectAuthorization = this.#repository.transaction((tx) => {
+      const prior = tx.getOperation(base.operation_id);
+      return prior?.effect_phase === "failed_no_effect"
+        ? prior.provider_target?.authorization_consumption_receipt_sha256
+        : undefined;
+    });
+    const authorizationReceipt = expectedAuthorizationReceipt ??
+      priorFailedNoEffectAuthorization ??
+      this.#capabilityUseDigest(base.capability);
     if (
       dispatchJournal.operation_id !== base.fence.operation_id ||
+      dispatchJournal.outcome_schema_version !== EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION ||
+      dispatchJournal.outcome_schema_digest !== EFFECT_JOURNAL_OUTCOME_SCHEMA_DIGEST ||
+      dispatchJournal.operation_execution_epoch !== base.fence.operation_execution_epoch ||
       dispatchJournal.operation_digest !== base.fence.operation_digest ||
       dispatchJournal.resource_id !== base.fence.resource_id ||
       dispatchJournal.authority_epoch !== base.fence.authority_epoch ||
@@ -1379,9 +1475,6 @@ export class SandboxesReferenceServiceV1 {
   }
 
   async #verifyDispatched(ctx: NormalizedMutationContext): Promise<void> {
-    if (Date.parse(ctx.dispatch_journal.expires_at) <= this.#repository.databaseTime().getTime()) {
-      throw new SandboxError("lease_expired", "DISPATCHED journal anchor has expired");
-    }
     if (ctx.dispatch_journal.state !== "dispatched") {
       throw new SandboxError("capability_denied", "Provider effect lacks a DISPATCHED journal anchor");
     }
@@ -1389,10 +1482,11 @@ export class SandboxesReferenceServiceV1 {
       const current = tx.getOperation(ctx.operation_id);
       if (
         current === undefined ||
-        !["prepared", "dispatched", "unknown"].includes(current.effect_phase)
+        !["prepared", "dispatched"].includes(current.effect_phase)
       ) {
         throw new SandboxError("integrity_failed", "Provider effect has no durable operation intent");
       }
+      this.#assertProviderDispatchBarrier(tx, current, ctx);
       if (current.effect_phase === "prepared") {
         return tx.compareAndSwapOperationPhase(
           ctx.operation_id,
@@ -1418,9 +1512,12 @@ export class SandboxesReferenceServiceV1 {
     this.#repository.transaction((tx) => {
       tx.appendExternalAnchor({
         schema_version: SCHEMA_VERSION,
-        kind: "dispatched",
+        record_kind: "DISPATCHED",
+        outcome_schema_version: appended.outcome_schema_version,
+        outcome_schema_digest: appended.outcome_schema_digest,
         operation_id: appended.operation_id,
         operation_step_id: appended.operation_step_id,
+        operation_execution_epoch: appended.operation_execution_epoch,
         anchor_sha256: appended.anchor_sha256,
         frontier_sha256: appended.frontier_sha256,
         payload_sha256: canonicalDigest(appended),
@@ -1440,6 +1537,87 @@ export class SandboxesReferenceServiceV1 {
       canonicalDigest(ctx.dispatch_journal.fence) !== canonicalDigest(ctx.fence)
     ) {
       throw new SandboxError("integrity_failed", "DISPATCHED journal anchor changed before provider dispatch");
+    }
+    this.#repository.transaction((tx) => {
+      const current = tx.getOperation(ctx.operation_id);
+      if (current === undefined || current.effect_phase !== "dispatched") {
+        throw new SandboxError("integrity_failed", "Dispatched operation disappeared before provider invocation");
+      }
+      this.#assertProviderDispatchBarrier(tx, current, ctx);
+    });
+    await this.#physicalSafety.assertProviderDispatchAllowed({
+      resource_id: ctx.fence.resource_id,
+      operation: operation.operation,
+      fence: ctx.fence,
+      dispatch_anchor_sha256: ctx.dispatch_journal.anchor_sha256,
+    });
+  }
+
+  #assertProviderDispatchBarrier(
+    tx: SandboxRepositoryTxV1,
+    operation: OperationRecordV1,
+    ctx: NormalizedMutationContext,
+  ): void {
+    const now = tx.databaseTime().getTime();
+    if (
+      Date.parse(ctx.fence.lease_expires_at) <= now ||
+      Date.parse(ctx.fence.operation_execution_expires_at) <= now ||
+      Date.parse(ctx.dispatch_journal.expires_at) <= now ||
+      Date.parse(ctx.capability.expires_at) <= now ||
+      Date.parse(ctx.capability.not_before) > now
+    ) {
+      throw new SandboxError("lease_expired", "Provider dispatch barrier authorization is not current");
+    }
+    if (
+      operation.cancellation_state !== "open" ||
+      operation.dispatch_journal_anchor_sha256 !== ctx.dispatch_journal.anchor_sha256 ||
+      canonicalDigest(operation.fence) !== canonicalDigest(ctx.fence) ||
+      canonicalDigest(operation.provider_target ?? null) !== canonicalDigest(this.#effectTarget(ctx))
+    ) {
+      throw new SandboxError("integrity_failed", "Provider dispatch intent changed before invocation");
+    }
+    const current = this.#mustSandbox(tx, ctx.fence.resource_id);
+    const expectedState: Partial<Record<SandboxOperation, SandboxState>> = {
+      begin_create_inert: "creating_inert",
+      begin_activate: "activating",
+      expire: "expiring",
+      begin_destroy: "destroying",
+      resume_destroy: "destroying",
+    };
+    if (
+      current.state !== expectedState[operation.operation] ||
+      current.revision !== operation.prepared_resource_revision
+    ) {
+      throw new SandboxError("stale_revision", "Resource changed after provider dispatch preparation");
+    }
+    this.#assertCurrentFence(
+      current,
+      ctx.fence,
+      operation.successor_resource_lifecycle_generation,
+    );
+    if (
+      ["begin_create_inert", "begin_activate"].includes(operation.operation) &&
+      current.physical_safety_state !== "clear"
+    ) {
+      throw new SandboxError("policy_denied", "Physical safety fence closed provider dispatch");
+    }
+    if (tx.getCapabilityUseOperation(operation.capability_use_sha256) !== operation.operation_id) {
+      throw new SandboxError("capability_denied", "Provider dispatch capability consumption is not durable");
+    }
+    const authorizationReceipt = operation.provider_target?.authorization_consumption_receipt_sha256;
+    if (
+      operation.operation === "begin_activate" &&
+      (authorizationReceipt === undefined ||
+        tx.getActivationGrantUseOperation(authorizationReceipt) !== operation.operation_id)
+    ) {
+      throw new SandboxError("capability_denied", "Activation grant consumption is not durable");
+    }
+    if (
+      ["begin_destroy", "resume_destroy"].includes(operation.operation) &&
+      (authorizationReceipt === undefined ||
+        tx.getCleanupGrantUseOperation(authorizationReceipt) !== operation.operation_id)
+    ) {
+      throw new SandboxError("cleanup_grant_mismatch", "Cleanup grant consumption is not durable");
     }
   }
 
@@ -1687,6 +1865,8 @@ export class SandboxesReferenceServiceV1 {
       successor_resource_lifecycle_generation: ctx.transition.successor_resource_lifecycle_generation,
       fence: ctx.fence,
       expected_revision: ctx.expected_revision,
+      prepared_resource_revision: ctx.expected_revision + 1,
+      cancellation_state: "open",
       effect_phase: hasDispatchJournal(ctx) ? "prepared" : "not_applicable",
       state: "in_flight",
       created_at: now,
@@ -1695,6 +1875,127 @@ export class SandboxesReferenceServiceV1 {
     tx.insertOperation(record);
     tx.consumeCapabilityUse(capabilityUse, ctx.operation_id);
     return { operation: record, replay: false };
+  }
+
+  #retryFailedNoEffect(
+    tx: SandboxRepositoryTxV1,
+    operationName: SandboxOperation,
+    current: SandboxV1,
+    ctx: NormalizedMutationContext,
+    expectedState: SandboxState,
+  ): OperationRecordV1 | undefined {
+    const prior = tx.getOperation(ctx.operation_id);
+    if (prior?.effect_phase !== "failed_no_effect") return undefined;
+
+    const target = this.#effectTarget(ctx);
+    if (
+      prior.operation !== operationName ||
+      prior.resource_id !== current.id ||
+      prior.actor_principal !== ctx.fence.actor_principal ||
+      prior.request_sha256 !== ctx.request_sha256 ||
+      prior.idempotency_key_sha256 !== ctx.idempotency_key_sha256 ||
+      prior.operation_step_id !== ctx.dispatch_journal.operation_step_id ||
+      canonicalDigest(prior.provider_target ?? null) !== canonicalDigest(target) ||
+      prior.expected_resource_lifecycle_generation !==
+        ctx.transition.expected_resource_lifecycle_generation ||
+      prior.successor_resource_lifecycle_generation !==
+        ctx.transition.successor_resource_lifecycle_generation ||
+      ctx.fence.operation_execution_epoch !== prior.fence.operation_execution_epoch + 1n
+    ) {
+      throw new SandboxError(
+        "idempotency_key_reused",
+        "failed_no_effect retry changed its semantic step, target, request, or execution sequence",
+      );
+    }
+    if (
+      current.state !== expectedState ||
+      current.pending_provider_outcome?.source_operation_id !== ctx.operation_id ||
+      current.pending_provider_outcome.target_state !== "failed" ||
+      current.pending_provider_outcome.evidence_sha256 !== prior.outcome_anchor_sha256
+    ) {
+      throw new SandboxError(
+        "provider_state_unknown",
+        "failed_no_effect retry lacks the exact pending authoritative outcome",
+      );
+    }
+    this.#assertExpectedRevision(current, ctx.expected_revision);
+    this.#assertCurrentFence(
+      current,
+      ctx.fence,
+      prior.successor_resource_lifecycle_generation,
+    );
+
+    const records = tx.listExternalAnchors(ctx.operation_id);
+    const priorDispatch = records.find((record) =>
+      record.record_kind === "DISPATCHED" &&
+      record.operation_step_id === prior.operation_step_id &&
+      record.operation_execution_epoch === prior.fence.operation_execution_epoch
+    );
+    const priorOutcome = records.find((record) =>
+      record.record_kind === "OUTCOME" &&
+      record.operation_step_id === prior.operation_step_id &&
+      record.operation_execution_epoch === prior.fence.operation_execution_epoch
+    );
+    if (
+      priorDispatch === undefined ||
+      priorOutcome?.record_kind !== "OUTCOME" ||
+      priorOutcome.outcome_kind !== "failed_no_effect" ||
+      priorOutcome.anchor_sha256 !== prior.outcome_anchor_sha256 ||
+      records.some((record) =>
+        record.record_kind === "DISPATCHED" &&
+        record.operation_step_id === prior.operation_step_id &&
+        record.operation_execution_epoch > prior.fence.operation_execution_epoch
+      )
+    ) {
+      throw new SandboxError(
+        "provider_state_unknown",
+        "higher execution epoch requires exactly one authoritative prior failed_no_effect outcome",
+      );
+    }
+
+    const capabilityUse = this.#capabilityUseDigest(ctx.capability);
+    tx.consumeCapabilityUse(capabilityUse, ctx.operation_id);
+    const { pending_provider_outcome: _pending, ...stableSandbox } = current;
+    const preparedSandbox: SandboxV1 = {
+      ...stableSandbox,
+      revision: current.revision + 1,
+      authority_epoch: ctx.fence.authority_epoch,
+      route_lineage_id: ctx.fence.route_lineage_id,
+      route_id: ctx.fence.route_id,
+      route_epoch: ctx.fence.route_epoch,
+      attempt_lease_id: ctx.fence.attempt_lease_id,
+      lease_epoch: ctx.fence.lease_epoch,
+      resource_lease_id: ctx.fence.resource_lease_id,
+      operation_execution_epoch: ctx.fence.operation_execution_epoch,
+      actor_principal: ctx.fence.actor_principal,
+      lease_holder_principal: ctx.fence.lease_holder_principal,
+      operation_executor_principal: ctx.fence.operation_executor_principal,
+      audience: ctx.fence.audience,
+    };
+    tx.putSandbox(preparedSandbox, current.revision);
+
+    const {
+      outcome_anchor_sha256: _priorOutcomeAnchor,
+      result_sha256: _priorResult,
+      error_code: _priorError,
+      ...stableOperation
+    } = prior;
+    const preparedOperation: OperationRecordV1 = {
+      ...stableOperation,
+      dispatch_journal_anchor_sha256: ctx.dispatch_journal.anchor_sha256,
+      provider_target: target,
+      capability_use_sha256: capabilityUse,
+      fence: ctx.fence,
+      expected_revision: ctx.expected_revision,
+      prepared_resource_revision: preparedSandbox.revision,
+      cancellation_state: "open",
+      effect_phase: "prepared",
+      state: "in_flight",
+      updated_at: this.#now(),
+    };
+    tx.updateOperation(preparedOperation);
+    this.#event(tx, preparedSandbox, ctx.operation_id, "operation_reserved");
+    return preparedOperation;
   }
 
   #resolveReplay(
@@ -1793,11 +2094,6 @@ export class SandboxesReferenceServiceV1 {
       observedAt,
     );
     const safetyReceipt = canonicalDigest(safetyObservation);
-    const outcomeAnchor = await this.#anchorOutcome(
-      operationId,
-      "unknown",
-      canonicalDigest({ reason: "provider_ambiguous", resource_id: resourceId }),
-    );
     return this.#repository.transaction((tx) => {
       const current = this.#mustSandbox(tx, resourceId);
       const fenced: SandboxV1 = {
@@ -1810,7 +2106,7 @@ export class SandboxesReferenceServiceV1 {
         canonical_transition_required: "quarantined",
       };
       tx.putSandbox(fenced, current.revision);
-      this.#unknownOperation(tx, operationId, outcomeAnchor);
+      this.#unknownOperation(tx, operationId);
       this.#event(tx, fenced, operationId, "operation_unknown");
       return fenced;
     });
@@ -1845,7 +2141,7 @@ export class SandboxesReferenceServiceV1 {
         tx.updateOperation({
           ...operation,
           state: "aborted",
-          effect_phase: "failed_effect",
+          effect_phase: "failed_no_effect",
           error_code: "provider_unavailable",
           outcome_anchor_sha256: outcomeAnchor,
           updated_at: this.#now(),
@@ -1881,11 +2177,6 @@ export class SandboxesReferenceServiceV1 {
       observedAt,
     );
     const safetyReceipt = canonicalDigest(safetyObservation);
-    const outcomeAnchor = await this.#anchorOutcome(
-      operationId,
-      "unknown",
-      canonicalDigest({ reason: physicalReason, resource_id: resourceId }),
-    );
     return this.#repository.transaction((tx) => {
       const current = this.#mustSandbox(tx, resourceId);
       const fenced: SandboxV1 = {
@@ -1898,7 +2189,7 @@ export class SandboxesReferenceServiceV1 {
         canonical_transition_required: "quarantined",
       };
       tx.putSandbox(fenced, current.revision);
-      this.#unknownOperation(tx, operationId, outcomeAnchor);
+      this.#unknownOperation(tx, operationId);
       this.#event(tx, fenced, operationId, "operation_unknown");
       return fenced;
     });
@@ -2026,9 +2317,10 @@ export class SandboxesReferenceServiceV1 {
     this.#repository.transaction((tx) => {
       tx.appendExternalAnchor({
         schema_version: SCHEMA_VERSION,
-        kind: "read_probe",
+        record_kind: "READ_PROBE",
         operation_id: anchor.operation_id,
         operation_step_id: anchor.operation_step_id,
+        operation_execution_epoch: anchor.fence.operation_execution_epoch,
         anchor_sha256: anchor.anchor_sha256,
         frontier_sha256: anchor.frontier_sha256,
         payload_sha256: canonicalDigest(anchor),
@@ -2082,7 +2374,7 @@ export class SandboxesReferenceServiceV1 {
 
   async #anchorOutcome(
     operationId: string,
-    outcome: "succeeded" | "failed_no_effect" | "unknown",
+    outcomeKind: ProviderOutcomeAnchorV1["outcome_kind"],
     outcomeSha256: Digest,
   ): Promise<Digest> {
     const operation = this.#repository.transaction((tx) => tx.getOperation(operationId));
@@ -2100,22 +2392,31 @@ export class SandboxesReferenceServiceV1 {
     const anchor = await this.#outcomeJournal.appendOutcome({
       operation_id: operationId,
       operation_step_id: operation.operation_step_id,
+      operation_execution_epoch: operation.fence.operation_execution_epoch,
       dispatch_anchor_sha256: operation.dispatch_journal_anchor_sha256,
-      outcome,
+      outcome_kind: outcomeKind,
       outcome_sha256: outcomeSha256,
       recorded_at: recordedAt,
       fence: operation.fence,
       target: operation.provider_target,
     });
     assertOpaqueId(anchor.issuer_principal, "outcome_anchor.issuer_principal", "principal");
+    assertEffectJournalOutcomeSchema(
+      anchor.outcome_schema_version,
+      anchor.outcome_schema_digest,
+    );
     assertDigest(anchor.frontier_sha256, "outcome_anchor.frontier_sha256");
     assertDigest(anchor.anchor_sha256, "outcome_anchor.anchor_sha256");
     if (
       anchor.schema_version !== SCHEMA_VERSION ||
+      anchor.record_kind !== "OUTCOME" ||
+      anchor.outcome_schema_version !== EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION ||
+      anchor.outcome_schema_digest !== EFFECT_JOURNAL_OUTCOME_SCHEMA_DIGEST ||
       anchor.operation_id !== operationId ||
       anchor.operation_step_id !== operation.operation_step_id ||
+      anchor.operation_execution_epoch !== operation.fence.operation_execution_epoch ||
       anchor.dispatch_anchor_sha256 !== operation.dispatch_journal_anchor_sha256 ||
-      anchor.outcome !== outcome ||
+      anchor.outcome_kind !== outcomeKind ||
       anchor.outcome_sha256 !== outcomeSha256 ||
       anchor.recorded_at !== recordedAt ||
       canonicalDigest(anchor.fence) !== canonicalDigest(operation.fence) ||
@@ -2129,9 +2430,13 @@ export class SandboxesReferenceServiceV1 {
     this.#repository.transaction((tx) => {
       tx.appendExternalAnchor({
         schema_version: SCHEMA_VERSION,
-        kind: "outcome",
+        record_kind: "OUTCOME",
+        outcome_schema_version: anchor.outcome_schema_version,
+        outcome_schema_digest: anchor.outcome_schema_digest,
         operation_id: anchor.operation_id,
         operation_step_id: anchor.operation_step_id,
+        operation_execution_epoch: anchor.operation_execution_epoch,
+        outcome_kind: anchor.outcome_kind,
         anchor_sha256: anchor.anchor_sha256,
         frontier_sha256: anchor.frontier_sha256,
         payload_sha256: canonicalDigest(anchor),

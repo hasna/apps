@@ -119,8 +119,12 @@ export interface DispatchedJournalAnchorV1 {
   schema_version: SchemaVersion;
   journal_anchor_id: string;
   state: "dispatched";
+  record_kind: "DISPATCHED";
+  outcome_schema_version: "infinity.effect-journal-outcome/v1";
+  outcome_schema_digest: Digest;
   operation_id: string;
   operation_step_id: string;
+  operation_execution_epoch: bigint;
   operation_digest: Digest;
   resource_id: string;
   authority_epoch: bigint;
@@ -156,10 +160,14 @@ export interface ReadProbeJournalAnchorV1 {
 
 export interface ProviderOutcomeAnchorV1 {
   schema_version: SchemaVersion;
+  record_kind: "OUTCOME";
+  outcome_schema_version: "infinity.effect-journal-outcome/v1";
+  outcome_schema_digest: Digest;
   operation_id: string;
   operation_step_id: string;
+  operation_execution_epoch: bigint;
   dispatch_anchor_sha256: Digest;
-  outcome: "succeeded" | "failed_no_effect" | "unknown";
+  outcome_kind: import("./effect-journal.js").EffectJournalOutcomeKindV1;
   outcome_sha256: Digest;
   recorded_at: string;
   issuer_principal: string;
@@ -169,16 +177,32 @@ export interface ProviderOutcomeAnchorV1 {
   anchor_sha256: Digest;
 }
 
-export interface ExternalOperationAnchorRecordV1 {
+interface ExternalOperationAnchorRecordBaseV1 {
   schema_version: SchemaVersion;
-  kind: "dispatched" | "outcome" | "read_probe";
   operation_id: string;
   operation_step_id: string;
+  operation_execution_epoch: bigint;
   anchor_sha256: Digest;
   frontier_sha256: Digest;
   payload_sha256: Digest;
   recorded_at: string;
 }
+
+export type ExternalOperationAnchorRecordV1 =
+  | (ExternalOperationAnchorRecordBaseV1 & {
+      record_kind: "DISPATCHED";
+      outcome_schema_version: "infinity.effect-journal-outcome/v1";
+      outcome_schema_digest: Digest;
+    })
+  | (ExternalOperationAnchorRecordBaseV1 & {
+      record_kind: "OUTCOME";
+      outcome_schema_version: "infinity.effect-journal-outcome/v1";
+      outcome_schema_digest: Digest;
+      outcome_kind: ProviderOutcomeAnchorV1["outcome_kind"];
+    })
+  | (ExternalOperationAnchorRecordBaseV1 & {
+      record_kind: "READ_PROBE";
+    });
 
 export interface CapabilityClaimsV1 {
   schema_version: SchemaVersion;
@@ -479,6 +503,8 @@ export interface OperationRecordV1 {
   successor_resource_lifecycle_generation: bigint;
   fence: CanonicalSandboxEffectFenceV1;
   expected_revision: number;
+  prepared_resource_revision: number;
+  cancellation_state: "open" | "suppressed";
   effect_phase:
     | "not_applicable"
     | "intent_committed"
@@ -486,6 +512,7 @@ export interface OperationRecordV1 {
     | "dispatched"
     | "succeeded"
     | "failed_effect"
+    | "failed_no_effect"
     | "unknown";
   outcome_anchor_sha256?: Digest;
   state: "in_flight" | "committed" | "aborted" | "unknown";

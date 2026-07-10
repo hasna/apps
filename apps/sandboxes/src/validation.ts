@@ -7,6 +7,11 @@ import {
 } from "./canonical.js";
 import { SandboxError } from "./errors.js";
 import {
+  assertEffectJournalOutcomeSchema,
+  EFFECT_JOURNAL_OUTCOME_SCHEMA_DIGEST,
+  EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION,
+} from "./effect-journal.js";
+import {
   SCHEMA_VERSION,
   type ActivationGrantV1,
   type CanonicalSandboxEffectFenceV1,
@@ -510,8 +515,12 @@ export function validateDispatchedJournalAnchor(value: unknown): DispatchedJourn
     "schema_version",
     "journal_anchor_id",
     "state",
+    "record_kind",
+    "outcome_schema_version",
+    "outcome_schema_digest",
     "operation_id",
     "operation_step_id",
+    "operation_execution_epoch",
     "operation_digest",
     "resource_id",
     "authority_epoch",
@@ -538,12 +547,20 @@ export function validateDispatchedJournalAnchor(value: unknown): DispatchedJourn
   if (successorGeneration !== expectedGeneration + 1n) {
     throw new SandboxError("validation_failed", "Journal successor must be exactly expected plus one");
   }
+  assertEffectJournalOutcomeSchema(v.outcome_schema_version, v.outcome_schema_digest);
   return {
     schema_version: literal(v.schema_version, SCHEMA_VERSION, "dispatch_journal.schema_version"),
     journal_anchor_id: id(v.journal_anchor_id, "dispatch_journal.journal_anchor_id", "journal"),
     state: literal(v.state, "dispatched", "dispatch_journal.state"),
+    record_kind: literal(v.record_kind, "DISPATCHED", "dispatch_journal.record_kind"),
+    outcome_schema_version: EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION,
+    outcome_schema_digest: EFFECT_JOURNAL_OUTCOME_SCHEMA_DIGEST,
     operation_id: id(v.operation_id, "dispatch_journal.operation_id", "op"),
     operation_step_id: id(v.operation_step_id, "dispatch_journal.operation_step_id", "step"),
+    operation_execution_epoch: parsePositiveInt64(
+      v.operation_execution_epoch,
+      "dispatch_journal.operation_execution_epoch",
+    ),
     operation_digest: digest(v.operation_digest, "dispatch_journal.operation_digest"),
     resource_id: id(v.resource_id, "dispatch_journal.resource_id", "sbx"),
     authority_epoch: parsePositiveInt64(v.authority_epoch, "dispatch_journal.authority_epoch"),
