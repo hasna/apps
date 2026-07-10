@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { inspect } from "node:util";
 import { HasnaHttpError } from "@hasna/contracts/client";
 import {
   redactSensitiveTransportText,
@@ -145,6 +146,7 @@ describe("evidence upload output safety", () => {
       { cause: new Error("file:///tmp/CANARY_AGGREGATE_CAUSE") },
     );
     const safeAggregate = sanitizeEvidenceTransportError(aggregate) as AggregateError & { cause?: { message?: string } };
+    expect(safeAggregate).toBeInstanceOf(AggregateError);
     expect(String(safeAggregate.errors[0]?.message).includes("CANARY_AGGREGATE_ERROR")).toBe(false);
     expect(String(safeAggregate.cause?.message).includes("CANARY_AGGREGATE_CAUSE")).toBe(false);
 
@@ -196,13 +198,25 @@ describe("evidence upload output safety", () => {
       [Symbol.toPrimitive](): string {
         return "Authorization: Bearer CANARY_INHERITED_PRIMITIVE";
       }
+
+      get authorization(): string {
+        return "Bearer CANARY_INHERITED_AUTHORIZATION";
+      }
+
+      get [Symbol.toStringTag](): string {
+        return "CANARY_INHERITED_STRING_TAG";
+      }
     }
     const inheritedSerializer = new SyntheticTransportError("safe inherited message");
     const safeInheritedSerializer = sanitizeEvidenceTransportError(inheritedSerializer);
     expect(safeInheritedSerializer).not.toBe(inheritedSerializer);
-    expect(safeInheritedSerializer).toBeInstanceOf(SyntheticTransportError);
+    expect(safeInheritedSerializer).not.toBeInstanceOf(SyntheticTransportError);
+    expect(safeInheritedSerializer).toBeInstanceOf(Error);
     expect(JSON.stringify(safeInheritedSerializer).includes("CANARY_INHERITED_SERIALIZER")).toBe(false);
     expect(String(safeInheritedSerializer).includes("CANARY_INHERITED")).toBe(false);
+    expect(String((safeInheritedSerializer as Error & { authorization?: string }).authorization).includes("CANARY_INHERITED")).toBe(false);
+    expect(Object.prototype.toString.call(safeInheritedSerializer).includes("CANARY_INHERITED")).toBe(false);
+    expect(inspect(safeInheritedSerializer).includes("CANARY_INHERITED")).toBe(false);
 
     const nonError = { toString: () => "CANARY_NON_ERROR_STRINGIFIER" };
     expect(sanitizeEvidenceTransportError(nonError).message.includes("CANARY_NON_ERROR")).toBe(false);

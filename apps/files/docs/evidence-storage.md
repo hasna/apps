@@ -114,9 +114,11 @@ private asset ids and object keys stay in operator artifacts.
   checksum, and status identifiers only. Transport URLs and signing headers are
   available only inside the explicit low-level create-intent transport and must
   never be printed or logged; agents should use the one-shot upload operation.
-- Transport errors are recursively copied into a sanitized error surrogate with
-  the same prototype/status. The surrogate shadows executable serializers,
-  string coercion, and custom inspectors, and never returns the unsafe original,
+- Transport errors are recursively copied into a sanitized error surrogate.
+  Known-safe built-in and `HasnaHttpError` prototypes/status are preserved;
+  unknown subclasses fall back to `Error.prototype` so inherited accessors
+  cannot survive. The surrogate shadows executable serializers, string
+  coercion, tags, and custom inspectors, and never returns the unsafe original,
   including when fields are immutable or accessor-backed. Both property names
   and values are redacted recursively; colliding redacted names receive stable
   numeric suffixes so fields cannot overwrite one another.

@@ -2,6 +2,7 @@ import { createReadStream, copyFileSync, existsSync, mkdirSync, statSync, rename
 import { dirname, join, basename } from "path";
 import { pathToFileURL } from "url";
 import { lookup as mimeLookup } from "mime-types";
+import { HasnaHttpError } from "@hasna/contracts/client";
 import { getDataDir } from "../db/database.js";
 import {
   createFileAccessEvent,
@@ -312,11 +313,11 @@ export function sanitizeEvidenceTransportValue(value: unknown, seen = new WeakMa
   return result;
 }
 
-/** Preserve the original error class/status while removing every sensitive field. */
+/** Preserve trusted error classes/status while removing every sensitive field. */
 export function sanitizeEvidenceTransportError(error: unknown): Error {
   if (!(error instanceof Error)) return new Error("Evidence transport failed with redacted diagnostic");
   try {
-    const target = Object.create(Object.getPrototypeOf(error)) as Error;
+    const target = Object.create(trustedEvidenceErrorPrototype(error)) as Error;
     for (const { key, descriptor, sanitized } of sanitizedErrorProperties(error)) {
       Object.defineProperty(target, key, {
         configurable: true,
@@ -347,6 +348,7 @@ export function sanitizeEvidenceTransportError(error: unknown): Error {
     });
     for (const symbol of [
       Symbol.toPrimitive,
+      Symbol.toStringTag,
       Symbol.for("nodejs.util.inspect.custom"),
       Symbol.for("Bun.inspect.custom"),
       Symbol.for("Deno.customInspect"),
@@ -362,6 +364,18 @@ export function sanitizeEvidenceTransportError(error: unknown): Error {
   } catch {
     return new Error("Evidence transport failed with redacted diagnostic");
   }
+}
+
+function trustedEvidenceErrorPrototype(error: Error): object {
+  if (error instanceof HasnaHttpError) return HasnaHttpError.prototype;
+  if (error instanceof AggregateError) return AggregateError.prototype;
+  if (error instanceof EvalError) return EvalError.prototype;
+  if (error instanceof RangeError) return RangeError.prototype;
+  if (error instanceof ReferenceError) return ReferenceError.prototype;
+  if (error instanceof SyntaxError) return SyntaxError.prototype;
+  if (error instanceof TypeError) return TypeError.prototype;
+  if (error instanceof URIError) return URIError.prototype;
+  return Error.prototype;
 }
 
 function safeErrorText(value: unknown, fallback: string): PropertyDescriptor {
