@@ -86,6 +86,13 @@ export class ProviderRejectedNoEffectError extends Error {
   }
 }
 
+export class ProviderIdentityMismatchError extends Error {
+  constructor() {
+    super("Provider resource no longer matches the sealed immutable incarnation");
+    this.name = "ProviderIdentityMismatchError";
+  }
+}
+
 abstract class PendingManagedRunnerV1 implements SandboxRunnerV1 {
   abstract readonly adapterId: "e2b" | "daytona_cloud";
 

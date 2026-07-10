@@ -5,6 +5,7 @@ export {
   DaytonaCloudRunnerPendingV1,
   E2BRunnerPendingV1,
   ProviderRejectedNoEffectError,
+  ProviderIdentityMismatchError,
 } from "./runner.js";
 export type {
   AdapterCallContextV1,

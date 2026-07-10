@@ -2,6 +2,16 @@ import { expect, test } from "bun:test";
 import { E2BRunnerPendingV1, DaytonaCloudRunnerPendingV1 } from "../src/runner.js";
 import { createInert, harness } from "./fixtures.js";
 
+test("bubblewrap profile clears ambient authority and blocks host effects", async () => {
+  if (process.env.HOME !== "/nonexistent") return;
+  expect(process.env).toEqual({ HOME: "/nonexistent", PATH: "/runtime", TMPDIR: "/tmp" });
+  expect(await Bun.file("/etc/passwd").exists()).toBe(false);
+  await expect(fetch("https://example.invalid")).rejects.toThrow("hermetic isolation denied");
+  expect(() => Bun.spawn(["/usr/bin/true"])).toThrow("hermetic isolation denied");
+  expect(() => Bun.connect({ hostname: "127.0.0.1", port: 9, socket: { data() {} } }))
+    .toThrow("hermetic isolation denied");
+});
+
 test("unit lifecycle uses only explicitly injected memory, fake authority, and fake runner", async () => {
   const originalFetch = globalThis.fetch;
   let networkCalls = 0;

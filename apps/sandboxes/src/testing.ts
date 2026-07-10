@@ -1,10 +1,12 @@
 import type {
   AuthenticatedEffectBindingsV1,
   PhysicalSafetyControllerV1,
+  ProviderDispatchJournalV1,
+  ProviderReadProbeJournalV1,
   ProviderOutcomeJournalV1,
   SandboxesAuthorityVerifierV1,
 } from "./service.js";
-import { sha256, type Digest } from "./canonical.js";
+import { canonicalDigest, sha256, type Digest } from "./canonical.js";
 import type {
   ActivationGrantV1,
   CapabilityClaimsV1,
@@ -12,6 +14,9 @@ import type {
   DispatchedJournalAnchorV1,
   GitPromotionReceiptRefV1,
   InfinityCleanupGrantV1,
+  ReadProbeJournalAnchorV1,
+  ProviderOutcomeAnchorV1,
+  SafetyFenceObservationV1,
 } from "./types.js";
 
 /** Explicitly test-only verifier. Production code must inject an Infinity verifier. */
@@ -68,14 +73,28 @@ export class DeterministicTestAuthorityVerifierV1 implements SandboxesAuthorityV
 /** Hermetic stand-in for the node/gateway safety fence. */
 export class DeterministicTestPhysicalSafetyControllerV1 implements PhysicalSafetyControllerV1 {
   readonly calls: Array<{ resource_id: string; reason: string }> = [];
+  readonly observations: SafetyFenceObservationV1[] = [];
 
   async fenceResource(input: {
     resource_id: string;
-    reason: "ttl_expired" | "provider_ambiguous" | "provider_identity_mismatch" | "provider_loss";
+    resource_lifecycle_generation: bigint;
+    reason: SafetyFenceObservationV1["reason"];
     observed_at: string;
-  }): Promise<Digest> {
+  }): Promise<SafetyFenceObservationV1> {
     this.calls.push({ resource_id: input.resource_id, reason: input.reason });
-    return sha256(`physical-safety:${input.resource_id}:${input.reason}:${input.observed_at}`);
+    const observation: SafetyFenceObservationV1 = {
+      schema_version: "sandboxes.safety-fence/v1",
+      resource_id: input.resource_id,
+      resource_lifecycle_generation: input.resource_lifecycle_generation,
+      reason: input.reason,
+      installed_policy_sha256: sha256(`safety-policy:${input.resource_id}:${input.reason}`),
+      process_stop_evidence_sha256: sha256(`process-stop:${input.resource_id}:${input.observed_at}`),
+      network_close_evidence_sha256: sha256(`network-close:${input.resource_id}:${input.observed_at}`),
+      observed_at: input.observed_at,
+      signer_principal: "principal_00000000000000000000000000000063",
+    };
+    this.observations.push(structuredClone(observation));
+    return observation;
   }
 }
 
@@ -89,10 +108,61 @@ export class DeterministicTestProviderOutcomeJournalV1 implements ProviderOutcom
     outcome: "succeeded" | "failed_no_effect" | "unknown";
     outcome_sha256: Digest;
     recorded_at: string;
-  }): Promise<Digest> {
+  }): Promise<ProviderOutcomeAnchorV1> {
     this.calls.push({ operation_id: input.operation_id, outcome: input.outcome });
-    return sha256(
-      `outcome:${input.operation_id}:${input.operation_step_id}:${input.dispatch_anchor_sha256}:${input.outcome}:${input.outcome_sha256}`,
-    );
+    const base = {
+      schema_version: "sandboxes.runtime/v1" as const,
+      operation_id: input.operation_id,
+      operation_step_id: input.operation_step_id,
+      dispatch_anchor_sha256: input.dispatch_anchor_sha256,
+      outcome: input.outcome,
+      outcome_sha256: input.outcome_sha256,
+      recorded_at: input.recorded_at,
+      frontier_sha256: sha256(`outcome-frontier:${input.operation_id}:${input.operation_step_id}:${input.outcome}`),
+      anchor_sha256: sha256("temporary-outcome-anchor"),
+    };
+    const { anchor_sha256: _ignored, ...protectedBytes } = base;
+    return { ...base, anchor_sha256: canonicalDigest(protectedBytes) };
+  }
+}
+
+export class DeterministicTestProviderDispatchJournalV1 implements ProviderDispatchJournalV1 {
+  readonly calls: DispatchedJournalAnchorV1[] = [];
+  onAppend: ((anchor: DispatchedJournalAnchorV1) => void) | undefined;
+  failure: Error | undefined;
+
+  async appendDispatched(anchor: DispatchedJournalAnchorV1): Promise<DispatchedJournalAnchorV1> {
+    this.calls.push(structuredClone(anchor));
+    this.onAppend?.(anchor);
+    if (this.failure !== undefined) throw this.failure;
+    return structuredClone(anchor);
+  }
+}
+
+export class DeterministicTestProviderReadProbeJournalV1 implements ProviderReadProbeJournalV1 {
+  readonly calls: Array<{ operation_id: string; operation_step_id: string }> = [];
+
+  async appendReadProbe(
+    input: Parameters<ProviderReadProbeJournalV1["appendReadProbe"]>[0],
+  ): Promise<ReadProbeJournalAnchorV1> {
+    this.calls.push({ operation_id: input.operation_id, operation_step_id: input.operation_step_id });
+    const base = {
+      schema_version: input.fence.audience,
+      journal_anchor_id: `journal_${sha256(`read-probe-id:${input.operation_id}`).slice(7, 39)}`,
+      state: "read_probe" as const,
+      operation_id: input.operation_id,
+      operation_step_id: input.operation_step_id,
+      operation_digest: input.request_sha256,
+      resource_id: input.fence.resource_id,
+      recorded_at: input.recorded_at,
+      expires_at: input.fence.operation_execution_expires_at,
+      issuer_principal: "principal_00000000000000000000000000000062",
+      frontier_sha256: sha256(`read-probe-frontier:${input.operation_id}:${input.operation_step_id}`),
+      fence: input.fence,
+      target: input.target,
+      anchor_sha256: sha256("temporary-read-probe-anchor"),
+    };
+    const { anchor_sha256: _ignored, ...protectedBytes } = base;
+    return { ...base, anchor_sha256: canonicalDigest(protectedBytes) };
   }
 }

@@ -103,10 +103,23 @@ async function stdinJson(args: string[]): Promise<unknown> {
   if (input !== "-") {
     throw new SandboxError("validation_failed", "Structured input must use the supervisor-owned stdin pipe (--input -)");
   }
-  const text = await Bun.stdin.text();
-  if (Buffer.byteLength(text, "utf8") > 1_048_576) {
-    throw new SandboxError("resource_limit_exceeded", "Structured input exceeds the one MiB limit");
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  const reader = Bun.stdin.stream().getReader();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > 1_048_576) {
+        throw new SandboxError("resource_limit_exceeded", "Structured input exceeds the one MiB limit");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
   }
+  const text = Buffer.concat(chunks).toString("utf8");
   try {
     return JSON.parse(text) as unknown;
   } catch {

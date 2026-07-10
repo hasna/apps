@@ -10,6 +10,7 @@ import type {
 } from "./repository.js";
 import type {
   OperationRecordV1,
+  ExternalOperationAnchorRecordV1,
   SandboxEventV1,
   SandboxV1,
   SealedProviderHandleV1,
@@ -91,6 +92,28 @@ const MIGRATIONS = [
       );
     `,
   },
+  {
+    version: 2,
+    name: "recoverable_effect_frontiers_v1",
+    sql: `
+      ALTER TABLE operations ADD COLUMN effect_phase TEXT NOT NULL DEFAULT 'intent_committed';
+      ALTER TABLE operations ADD COLUMN operation_step_id TEXT;
+      ALTER TABLE operations ADD COLUMN dispatch_anchor_sha256 TEXT;
+      CREATE TABLE external_operation_anchors (
+        operation_id TEXT NOT NULL REFERENCES operations(operation_id),
+        operation_step_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('dispatched', 'outcome', 'read_probe')),
+        anchor_sha256 TEXT NOT NULL,
+        frontier_sha256 TEXT NOT NULL,
+        payload_sha256 TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        record_json TEXT NOT NULL,
+        PRIMARY KEY(operation_id, operation_step_id, kind, anchor_sha256)
+      );
+      CREATE INDEX external_operation_anchors_frontier
+        ON external_operation_anchors(frontier_sha256);
+    `,
+  },
 ] as const;
 
 export interface SqliteRepositoryOptionsV1 {
@@ -103,7 +126,20 @@ function ensureSecurePath(databasePath: string, allowUnsafe: boolean): string {
   if (databasePath === ":memory:") return databasePath;
   const absolute = resolve(databasePath);
   const parent = dirname(absolute);
+  const assertAncestry = (start: string) => {
+    let current = start;
+    for (;;) {
+      if (existsSync(current) && lstatSync(current).isSymbolicLink()) {
+        throw new SandboxError("integrity_failed", "SQLite path ancestry cannot contain symlinks");
+      }
+      const next = dirname(current);
+      if (next === current) break;
+      current = next;
+    }
+  };
+  assertAncestry(parent);
   if (!existsSync(parent)) mkdirSync(parent, { recursive: true, mode: 0o700 });
+  assertAncestry(parent);
   const info = lstatSync(parent);
   if (info.isSymbolicLink() || !info.isDirectory()) {
     throw new SandboxError("integrity_failed", "SQLite parent must be a real directory");
@@ -114,8 +150,11 @@ function ensureSecurePath(databasePath: string, allowUnsafe: boolean): string {
       throw new SandboxError("forbidden", "SQLite parent must be owner-controlled mode 0700");
     }
   }
-  if (existsSync(absolute) && lstatSync(absolute).isSymbolicLink()) {
-    throw new SandboxError("integrity_failed", "SQLite database path cannot be a symlink");
+  if (existsSync(absolute)) {
+    const databaseInfo = lstatSync(absolute);
+    if (databaseInfo.isSymbolicLink() || !databaseInfo.isFile()) {
+      throw new SandboxError("integrity_failed", "SQLite database path must be a regular non-symlink file");
+    }
   }
   return absolute;
 }
@@ -221,8 +260,24 @@ export class SqliteSandboxRepositoryV1 implements SandboxRepositoryV1 {
     const db = this.#db;
     const parseSandbox = (row: { record_json: string } | null): SandboxV1 | undefined =>
       row === null ? undefined : parseStorageJson<SandboxV1>(row.record_json);
-    const parseOperation = (row: { record_json: string } | null): OperationRecordV1 | undefined =>
-      row === null ? undefined : parseStorageJson<OperationRecordV1>(row.record_json);
+    type OperationRow = {
+      record_json: string;
+      effect_phase: string;
+      operation_step_id: string | null;
+      dispatch_anchor_sha256: string | null;
+    };
+    const parseOperation = (row: OperationRow | null): OperationRecordV1 | undefined => {
+      if (row === null) return undefined;
+      const record = parseStorageJson<OperationRecordV1>(row.record_json);
+      if (
+        record.effect_phase !== row.effect_phase ||
+        (record.operation_step_id ?? null) !== row.operation_step_id ||
+        (record.dispatch_journal_anchor_sha256 ?? null) !== row.dispatch_anchor_sha256
+      ) {
+        throw new SandboxError("integrity_failed", "Operation protected phase columns disagree with record bytes");
+      }
+      return record;
+    };
 
     return {
       getSandbox(resourceId) {
@@ -307,14 +362,17 @@ export class SqliteSandboxRepositoryV1 implements SandboxRepositoryV1 {
       },
       getOperation(operationId) {
         return parseOperation(
-          db.query<{ record_json: string }, [string]>("SELECT record_json FROM operations WHERE operation_id = ?")
+          db.query<OperationRow, [string]>(`
+            SELECT record_json, effect_phase, operation_step_id, dispatch_anchor_sha256
+            FROM operations WHERE operation_id = ?
+          `)
             .get(operationId),
         );
       },
       findIdempotentOperation(actorPrincipal, operation, resourceId, idempotencyKeySha256) {
         return parseOperation(
-          db.query<{ record_json: string }, [string, string, string, string]>(`
-            SELECT record_json FROM operations
+          db.query<OperationRow, [string, string, string, string]>(`
+            SELECT record_json, effect_phase, operation_step_id, dispatch_anchor_sha256 FROM operations
             WHERE actor_principal = ? AND operation = ? AND resource_id = ? AND idempotency_key_sha256 = ?
           `).get(actorPrincipal, operation, resourceId, idempotencyKeySha256),
         );
@@ -324,8 +382,9 @@ export class SqliteSandboxRepositoryV1 implements SandboxRepositoryV1 {
           db.query(`
             INSERT INTO operations(
               operation_id, operation, resource_id, actor_principal,
-              idempotency_key_sha256, request_sha256, state, record_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+              idempotency_key_sha256, request_sha256, state, effect_phase,
+              operation_step_id, dispatch_anchor_sha256, record_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).run(
             record.operation_id,
             record.operation,
@@ -334,6 +393,9 @@ export class SqliteSandboxRepositoryV1 implements SandboxRepositoryV1 {
             record.idempotency_key_sha256,
             record.request_sha256,
             record.state,
+            record.effect_phase,
+            record.operation_step_id ?? null,
+            record.dispatch_journal_anchor_sha256 ?? null,
             storageJson(record),
           );
         } catch {
@@ -342,9 +404,82 @@ export class SqliteSandboxRepositoryV1 implements SandboxRepositoryV1 {
       },
       updateOperation(record) {
         const result = db
-          .query("UPDATE operations SET state = ?, record_json = ? WHERE operation_id = ?")
-          .run(record.state, storageJson(record), record.operation_id);
+          .query(`
+            UPDATE operations
+            SET state = ?, effect_phase = ?, operation_step_id = ?,
+                dispatch_anchor_sha256 = ?, record_json = ?
+            WHERE operation_id = ?
+          `)
+          .run(
+            record.state,
+            record.effect_phase,
+            record.operation_step_id ?? null,
+            record.dispatch_journal_anchor_sha256 ?? null,
+            storageJson(record),
+            record.operation_id,
+          );
         if (result.changes !== 1) throw new SandboxError("not_found", "Operation does not exist");
+      },
+      compareAndSwapOperationPhase(operationId, expectedPhases, nextPhase, updatedAt) {
+        const current = parseOperation(
+          db.query<OperationRow, [string]>(
+            `SELECT record_json, effect_phase, operation_step_id, dispatch_anchor_sha256
+             FROM operations WHERE operation_id = ?`,
+          ).get(operationId),
+        );
+        if (current === undefined) throw new SandboxError("not_found", "Operation does not exist");
+        if (!expectedPhases.includes(current.effect_phase)) {
+          throw new SandboxError("stale_revision", "Operation effect phase compare-and-swap failed");
+        }
+        const next: OperationRecordV1 = { ...current, effect_phase: nextPhase, updated_at: updatedAt };
+        const result = db.query(`
+          UPDATE operations SET effect_phase = ?, record_json = ?
+          WHERE operation_id = ? AND effect_phase = ?
+        `).run(nextPhase, storageJson(next), operationId, current.effect_phase);
+        if (result.changes !== 1) {
+          throw new SandboxError("stale_revision", "Operation effect phase compare-and-swap failed");
+        }
+        return next;
+      },
+      appendExternalAnchor(record) {
+        const existing = db.query<{ record_json: string }, [string, string, string, string, string]>(`
+          SELECT record_json FROM external_operation_anchors
+          WHERE operation_id = ? AND operation_step_id = ? AND kind = ?
+            AND (? = 'dispatched' OR anchor_sha256 = ?)
+          ORDER BY recorded_at DESC LIMIT 1
+        `).get(record.operation_id, record.operation_step_id, record.kind, record.kind, record.anchor_sha256);
+        if (existing !== null) {
+          const prior = parseStorageJson<ExternalOperationAnchorRecordV1>(existing.record_json);
+          if (
+            prior.anchor_sha256 !== record.anchor_sha256 ||
+            prior.frontier_sha256 !== record.frontier_sha256 ||
+            prior.payload_sha256 !== record.payload_sha256
+          ) {
+            throw new SandboxError("integrity_failed", "External anchor frontier conflict");
+          }
+          return;
+        }
+        db.query(`
+          INSERT INTO external_operation_anchors(
+            operation_id, operation_step_id, kind, anchor_sha256,
+            frontier_sha256, payload_sha256, recorded_at, record_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          record.operation_id,
+          record.operation_step_id,
+          record.kind,
+          record.anchor_sha256,
+          record.frontier_sha256,
+          record.payload_sha256,
+          record.recorded_at,
+          storageJson(record),
+        );
+      },
+      listExternalAnchors(operationId) {
+        return db.query<{ record_json: string }, [string]>(`
+          SELECT record_json FROM external_operation_anchors
+          WHERE operation_id = ? ORDER BY recorded_at ASC, kind ASC
+        `).all(operationId).map((row) => parseStorageJson<ExternalOperationAnchorRecordV1>(row.record_json));
       },
       consumeCapabilityUse(capabilityUseSha256, operationId) {
         try {

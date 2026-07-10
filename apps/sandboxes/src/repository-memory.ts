@@ -6,6 +6,7 @@ import type {
 } from "./repository.js";
 import type {
   OperationRecordV1,
+  ExternalOperationAnchorRecordV1,
   SandboxEventV1,
   SandboxV1,
   SealedProviderHandleV1,
@@ -20,6 +21,7 @@ interface MemoryState {
   activationGrantUses: Map<string, string>;
   cleanupGrantUses: Map<string, string>;
   events: SandboxEventV1[];
+  externalAnchors: ExternalOperationAnchorRecordV1[];
 }
 
 function freshState(): MemoryState {
@@ -32,6 +34,7 @@ function freshState(): MemoryState {
     activationGrantUses: new Map(),
     cleanupGrantUses: new Map(),
     events: [],
+    externalAnchors: [],
   };
 }
 
@@ -67,7 +70,7 @@ export class InMemorySandboxRepositoryV1 implements SandboxRepositoryV1 {
   health(): RepositoryHealthV1 {
     return {
       backend: "memory",
-      schema_version: 1,
+      schema_version: 2,
       integrity: "ok",
       sandbox_count: this.#state.sandboxes.size,
       operation_count: this.#state.operations.size,
@@ -138,6 +141,41 @@ export class InMemorySandboxRepositoryV1 implements SandboxRepositoryV1 {
           throw new SandboxError("not_found", "Operation does not exist");
         }
         state.operations.set(record.operation_id, structuredClone(record));
+      },
+      compareAndSwapOperationPhase(operationId, expectedPhases, nextPhase, updatedAt) {
+        const current = state.operations.get(operationId);
+        if (current === undefined) throw new SandboxError("not_found", "Operation does not exist");
+        if (!expectedPhases.includes(current.effect_phase)) {
+          throw new SandboxError("stale_revision", "Operation effect phase compare-and-swap failed");
+        }
+        const next: OperationRecordV1 = { ...current, effect_phase: nextPhase, updated_at: updatedAt };
+        state.operations.set(operationId, structuredClone(next));
+        return structuredClone(next);
+      },
+      appendExternalAnchor(record) {
+        const conflict = state.externalAnchors.find(
+          (candidate) =>
+            candidate.operation_id === record.operation_id &&
+            candidate.operation_step_id === record.operation_step_id &&
+            candidate.kind === record.kind &&
+            (record.kind === "dispatched" || candidate.anchor_sha256 === record.anchor_sha256),
+        );
+        if (conflict !== undefined) {
+          if (
+            conflict.anchor_sha256 !== record.anchor_sha256 ||
+            conflict.frontier_sha256 !== record.frontier_sha256 ||
+            conflict.payload_sha256 !== record.payload_sha256
+          ) {
+            throw new SandboxError("integrity_failed", "External anchor frontier conflict");
+          }
+          return;
+        }
+        state.externalAnchors.push(structuredClone(record));
+      },
+      listExternalAnchors(operationId) {
+        return state.externalAnchors
+          .filter((record) => record.operation_id === operationId)
+          .map((record) => structuredClone(record));
       },
       consumeCapabilityUse(capabilityUseSha256, operationId) {
         const prior = state.capabilityUses.get(capabilityUseSha256);

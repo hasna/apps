@@ -9,10 +9,13 @@ import {
   destroyRequestDigest,
   dispatchedJournalAnchorDigest,
   expireRequestDigest,
+  lifecycleRecordRequestDigest,
   SandboxesReferenceServiceV1,
 } from "../src/service.js";
 import {
   DeterministicTestAuthorityVerifierV1,
+  DeterministicTestProviderDispatchJournalV1,
+  DeterministicTestProviderReadProbeJournalV1,
   DeterministicTestPhysicalSafetyControllerV1,
   DeterministicTestProviderOutcomeJournalV1,
 } from "../src/testing.js";
@@ -24,6 +27,7 @@ import {
   type CheckpointDurabilityReceiptV1,
   type CreateSandboxV1,
   type InfinityCleanupGrantV1,
+  type LifecycleCommandContextV1,
   type MutationContextV1,
   type SandboxOperation,
   type SandboxSpecV1,
@@ -123,6 +127,7 @@ export function context(
   executionEpoch: bigint,
   seed: number,
   immutableFingerprint = digest(`target-fingerprint-${seed}`),
+  authorizationConsumptionReceipt?: Digest,
 ): MutationContextV1 {
   const fullFence = fence(operationId, requestSha256, generation + 1n, executionEpoch);
   const capability: CapabilityClaimsV1 = {
@@ -161,7 +166,8 @@ export function context(
     issuer_principal: oid("principal", 99),
     provider_idempotency_token_sha256: digest(`provider-token-${seed}`),
     immutable_fingerprint_sha256: immutableFingerprint,
-    authorization_consumption_receipt_sha256: capabilityUseReceipt,
+    authorization_consumption_receipt_sha256:
+      authorizationConsumptionReceipt ?? capabilityUseReceipt,
     frontier_sha256: digest(`journal-frontier-${seed}`),
     fence: fullFence,
     anchor_sha256: digest("temporary-anchor"),
@@ -183,12 +189,37 @@ export function context(
   };
 }
 
+export function lifecycleContext(
+  operation: SandboxOperation,
+  operationId: string,
+  requestSha256: Digest,
+  generation: bigint,
+  expectedRevision: number,
+  executionEpoch: bigint,
+  seed: number,
+): LifecycleCommandContextV1 {
+  const providerContext = context(
+    operation,
+    operationId,
+    requestSha256,
+    generation,
+    expectedRevision,
+    executionEpoch,
+    seed,
+  );
+  const { dispatch_journal: _dispatchJournal, capability, ...base } = providerContext;
+  const { dispatch_journal_anchor_sha256: _dispatchAnchor, ...lifecycleCapability } = capability;
+  return { ...base, capability: lifecycleCapability };
+}
+
 export interface Harness {
   repository: SandboxRepositoryV1;
   runner: DeterministicFakeRunnerV1;
   verifier: DeterministicTestAuthorityVerifierV1;
   physicalSafety: DeterministicTestPhysicalSafetyControllerV1;
   outcomeJournal: DeterministicTestProviderOutcomeJournalV1;
+  dispatchJournal: DeterministicTestProviderDispatchJournalV1;
+  readProbeJournal: DeterministicTestProviderReadProbeJournalV1;
   service: SandboxesReferenceServiceV1;
 }
 
@@ -201,6 +232,8 @@ export function harness(
   const verifier = new DeterministicTestAuthorityVerifierV1();
   const physicalSafety = new DeterministicTestPhysicalSafetyControllerV1();
   const outcomeJournal = new DeterministicTestProviderOutcomeJournalV1();
+  const dispatchJournal = new DeterministicTestProviderDispatchJournalV1();
+  const readProbeJournal = new DeterministicTestProviderReadProbeJournalV1();
   const service = new SandboxesReferenceServiceV1({
     repository: selectedRepository,
     runner,
@@ -208,16 +241,32 @@ export function harness(
     authority_verifier: verifier,
     physical_safety_controller: physicalSafety,
     provider_outcome_journal: outcomeJournal,
+    provider_dispatch_journal: dispatchJournal,
+    provider_read_probe_journal: readProbeJournal,
     allow_test_runner: true,
   });
-  return { repository: selectedRepository, runner, verifier, physicalSafety, outcomeJournal, service };
+  return { repository: selectedRepository, runner, verifier, physicalSafety, outcomeJournal, dispatchJournal, readProbeJournal, service };
 }
 
 export async function createInert(h: Harness, expiresAt?: string): Promise<SandboxV1> {
   const input = createInput(expiresAt);
   const request = createRequestDigest(input);
-  const ctx = context("create_inert", oid("op", 20), request, 1n, 0, 1n, 20);
-  return h.service.create(input, ctx);
+  const ctx = context("begin_create_inert", oid("op", 20), request, 1n, 0, 1n, 20);
+  const creating = await h.service.create(input, ctx);
+  if (creating.pending_provider_outcome?.target_state !== "inert") return creating;
+  const evidence = creating.pending_provider_outcome.evidence_sha256;
+  const recordOperationId = oid("op", 120);
+  const recordRequest = lifecycleRecordRequestDigest("record_inert", creating.id, evidence);
+  const recordContext = lifecycleContext(
+    "record_inert",
+    recordOperationId,
+    recordRequest,
+    creating.resource_lifecycle_generation,
+    creating.revision,
+    2n,
+    120,
+  );
+  return h.service.recordInert(creating.id, evidence, recordContext);
 }
 
 export function activationGrant(sandbox: SandboxV1, operationId = oid("op", 21)): ActivationGrantV1 {
@@ -240,7 +289,7 @@ export async function activate(h: Harness, sandbox: SandboxV1): Promise<SandboxV
   if (sandbox.immutable_fingerprint_sha256 === undefined) throw new Error("fixture has no fingerprint");
   const grant = activationGrant(sandbox);
   const ctx = context(
-    "activate",
+    "begin_activate",
     grant.operation_id,
     grant.operation_digest,
     sandbox.resource_lifecycle_generation,
@@ -248,8 +297,23 @@ export async function activate(h: Harness, sandbox: SandboxV1): Promise<SandboxV
     2n,
     21,
     sandbox.immutable_fingerprint_sha256,
+    canonicalDigest({ id: grant.grant_id, nonce: grant.one_use_nonce_sha256 }),
   );
-  return h.service.activate(sandbox.id, grant, ctx);
+  const activating = await h.service.activate(sandbox.id, grant, ctx);
+  if (activating.pending_provider_outcome?.target_state !== "active") return activating;
+  const evidence = activating.pending_provider_outcome.evidence_sha256;
+  const recordOperationId = oid("op", 121);
+  const recordRequest = lifecycleRecordRequestDigest("record_active", activating.id, evidence);
+  const recordContext = lifecycleContext(
+    "record_active",
+    recordOperationId,
+    recordRequest,
+    activating.resource_lifecycle_generation,
+    activating.revision,
+    3n,
+    121,
+  );
+  return h.service.recordActive(activating.id, evidence, recordContext);
 }
 
 export function checkpointReceipt(sandbox: SandboxV1): CheckpointDurabilityReceiptV1 {
@@ -296,7 +360,7 @@ export function cleanupGrant(
 export function cleanupContext(sandbox: SandboxV1, grant: InfinityCleanupGrantV1): MutationContextV1 {
   if (sandbox.immutable_fingerprint_sha256 === undefined) throw new Error("fixture has no fingerprint");
   return context(
-    "destroy",
+    "begin_destroy",
     grant.operation_id,
     grant.operation_digest,
     sandbox.resource_lifecycle_generation,
@@ -304,7 +368,25 @@ export function cleanupContext(sandbox: SandboxV1, grant: InfinityCleanupGrantV1
     4n,
     40,
     sandbox.immutable_fingerprint_sha256,
+    canonicalDigest({ id: grant.grant_id, nonce: grant.one_use_nonce_sha256 }),
   );
+}
+
+export async function recordDestroyed(h: Harness, sandbox: SandboxV1): Promise<SandboxV1> {
+  const pending = sandbox.pending_provider_outcome;
+  if (pending?.target_state !== "destroyed") throw new Error("fixture has no anchored destroy outcome");
+  const operationId = oid("op", 140);
+  const request = lifecycleRecordRequestDigest("record_destroyed", sandbox.id, pending.evidence_sha256);
+  const ctx = lifecycleContext(
+    "record_destroyed",
+    operationId,
+    request,
+    sandbox.resource_lifecycle_generation,
+    sandbox.revision,
+    5n,
+    140,
+  );
+  return h.service.recordDestroyed(sandbox.id, pending.evidence_sha256, ctx);
 }
 
 export function expireContext(sandbox: SandboxV1): MutationContextV1 {

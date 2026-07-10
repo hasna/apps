@@ -23,7 +23,7 @@
     "build": "bun run clean && bun build src/cli.ts src/index.ts --outdir dist --target bun --format esm --sourcemap=external && tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "test:hermetic": "bun test tests/hermetic.test.ts tests/validation.test.ts tests/service.test.ts tests/storage-conformance.test.ts",
+    "test:hermetic": "./scripts/hermetic-test.sh",
     "pack": "bun pm pack --quiet"
   },
   "publishConfig": {

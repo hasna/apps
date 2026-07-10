@@ -306,33 +306,49 @@ export function validateCreateSandbox(value: unknown): CreateSandboxV1 {
 }
 
 export function validateCapability(value: unknown): CapabilityClaimsV1 {
-  const v = closed(value, "capability", [
+  const v = closedOptional(value, "capability", [
     "schema_version",
     "capability_id",
     "use_nonce_sha256",
     "operation",
     "target_resource_id",
     "request_sha256",
-    "dispatch_journal_anchor_sha256",
     "fence",
     "not_before",
     "expires_at",
-  ]);
+  ], ["dispatch_journal_anchor_sha256"]);
   return {
     schema_version: literal(v.schema_version, SCHEMA_VERSION, "capability.schema_version"),
     capability_id: id(v.capability_id, "capability.capability_id", "cap"),
     use_nonce_sha256: digest(v.use_nonce_sha256, "capability.use_nonce_sha256"),
     operation: enumValue(
       v.operation,
-      ["create_inert", "activate", "expire", "quarantine", "destroy"] as const,
+      [
+        "begin_create_inert",
+        "record_inert",
+        "begin_activate",
+        "record_active",
+        "expire",
+        "quarantine",
+        "record_failed",
+        "record_lost",
+        "begin_destroy",
+        "record_cleanup_failed",
+        "resume_destroy",
+        "record_destroyed",
+      ] as const,
       "capability.operation",
     ),
     target_resource_id: id(v.target_resource_id, "capability.target_resource_id", "sbx"),
     request_sha256: digest(v.request_sha256, "capability.request_sha256"),
-    dispatch_journal_anchor_sha256: digest(
-      v.dispatch_journal_anchor_sha256,
-      "capability.dispatch_journal_anchor_sha256",
-    ),
+    ...(v.dispatch_journal_anchor_sha256 === undefined
+      ? {}
+      : {
+          dispatch_journal_anchor_sha256: digest(
+            v.dispatch_journal_anchor_sha256,
+            "capability.dispatch_journal_anchor_sha256",
+          ),
+        }),
     fence: validateFence(v.fence),
     not_before: time(v.not_before, "capability.not_before"),
     expires_at: time(v.expires_at, "capability.expires_at"),

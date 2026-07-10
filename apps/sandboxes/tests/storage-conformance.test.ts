@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemorySandboxRepositoryV1 } from "../src/repository-memory.js";
@@ -57,7 +57,7 @@ describe("storage conformance", () => {
     const repository = sqlite();
     repository.migrate();
     repository.migrate();
-    expect(repository.health()).toMatchObject({ backend: "sqlite", schema_version: 1, integrity: "ok" });
+    expect(repository.health()).toMatchObject({ backend: "sqlite", schema_version: 2, integrity: "ok" });
     repository.close();
   });
 
@@ -71,5 +71,49 @@ describe("storage conformance", () => {
     repository.migrate();
     expect(repository.health().integrity).toBe("ok");
     repository.close();
+  });
+
+  test("SQLite persists protected effect phases and external frontier anchors across reopen", async () => {
+    const root = mkdtempSync(join(tmpdir(), "sandboxes-v1-recovery-"));
+    temporary.push(root);
+    chmodSync(root, 0o700);
+    const path = join(root, "sandboxes.db");
+    const first = new SqliteSandboxRepositoryV1(path, {
+      allow_unsafe_test_path: true,
+      hermetic_test_database_time: () => new Date("2030-01-01T00:00:00.000Z"),
+    });
+    const h = harness(first);
+    await createInert(h);
+    first.close();
+
+    const reopened = new SqliteSandboxRepositoryV1(path, {
+      allow_unsafe_test_path: true,
+      hermetic_test_database_time: () => new Date("2030-01-01T00:00:00.000Z"),
+    });
+    reopened.migrate();
+    const operationId = "op_00000000000000000000000000000014";
+    const operation = reopened.transaction((tx) => tx.getOperation(operationId));
+    const anchors = reopened.transaction((tx) => tx.listExternalAnchors(operationId));
+    expect(operation?.effect_phase).toBe("succeeded");
+    expect(anchors.map((anchor) => anchor.kind)).toEqual(["dispatched", "outcome"]);
+    expect(() => reopened.transaction((tx) => tx.compareAndSwapOperationPhase(
+      operationId,
+      ["prepared"],
+      "dispatched",
+      "2030-01-01T00:03:00.000Z",
+    ))).toThrow("compare-and-swap failed");
+    reopened.close();
+  });
+
+  test("SQLite rejects a symlink in any database path ancestor", () => {
+    const root = mkdtempSync(join(tmpdir(), "sandboxes-v1-path-"));
+    temporary.push(root);
+    const real = join(root, "real");
+    mkdirSync(real, { mode: 0o700 });
+    const link = join(root, "link");
+    symlinkSync(real, link, "dir");
+    expect(() => new SqliteSandboxRepositoryV1(join(link, "nested", "sandboxes.db"), {
+      allow_unsafe_test_path: true,
+    })).toThrow("ancestry cannot contain symlinks");
   });
 });

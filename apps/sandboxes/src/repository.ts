@@ -1,5 +1,6 @@
 import type {
   OperationRecordV1,
+  ExternalOperationAnchorRecordV1,
   SandboxEventV1,
   SandboxV1,
   SealedProviderHandleV1,
@@ -28,6 +29,14 @@ export interface SandboxRepositoryTxV1 {
   ): OperationRecordV1 | undefined;
   insertOperation(record: OperationRecordV1): void;
   updateOperation(record: OperationRecordV1): void;
+  compareAndSwapOperationPhase(
+    operationId: string,
+    expectedPhases: ReadonlyArray<OperationRecordV1["effect_phase"]>,
+    nextPhase: OperationRecordV1["effect_phase"],
+    updatedAt: string,
+  ): OperationRecordV1;
+  appendExternalAnchor(record: ExternalOperationAnchorRecordV1): void;
+  listExternalAnchors(operationId: string): ExternalOperationAnchorRecordV1[];
   consumeCapabilityUse(capabilityUseSha256: string, operationId: string): void;
   consumeActivationGrant(grantUseSha256: string, operationId: string): void;
   consumeCleanupGrant(grantUseSha256: string, operationId: string): void;

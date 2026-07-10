@@ -94,7 +94,21 @@ export interface CanonicalSandboxEffectFenceV1 {
   operation_execution_expires_at: string;
 }
 
-export type SandboxOperation = "create_inert" | "activate" | "expire" | "quarantine" | "destroy";
+export type SandboxOperation =
+  | "begin_create_inert"
+  | "record_inert"
+  | "begin_activate"
+  | "record_active"
+  | "expire"
+  | "quarantine"
+  | "record_failed"
+  | "record_lost"
+  | "begin_destroy"
+  | "record_cleanup_failed"
+  | "resume_destroy"
+  | "record_destroyed";
+
+export type ProviderMutationOperationV1 = "create_inert" | "activate" | "expire" | "quarantine" | "destroy";
 
 export interface LifecycleTransitionBindingV1 {
   expected_resource_lifecycle_generation: bigint;
@@ -123,6 +137,46 @@ export interface DispatchedJournalAnchorV1 {
   anchor_sha256: Digest;
 }
 
+export interface ReadProbeJournalAnchorV1 {
+  schema_version: SchemaVersion;
+  journal_anchor_id: string;
+  state: "read_probe";
+  operation_id: string;
+  operation_step_id: string;
+  operation_digest: Digest;
+  resource_id: string;
+  recorded_at: string;
+  expires_at: string;
+  issuer_principal: string;
+  frontier_sha256: Digest;
+  fence: CanonicalSandboxEffectFenceV1;
+  target: ProviderEffectTargetV1;
+  anchor_sha256: Digest;
+}
+
+export interface ProviderOutcomeAnchorV1 {
+  schema_version: SchemaVersion;
+  operation_id: string;
+  operation_step_id: string;
+  dispatch_anchor_sha256: Digest;
+  outcome: "succeeded" | "failed_no_effect" | "unknown";
+  outcome_sha256: Digest;
+  recorded_at: string;
+  frontier_sha256: Digest;
+  anchor_sha256: Digest;
+}
+
+export interface ExternalOperationAnchorRecordV1 {
+  schema_version: SchemaVersion;
+  kind: "dispatched" | "outcome" | "read_probe";
+  operation_id: string;
+  operation_step_id: string;
+  anchor_sha256: Digest;
+  frontier_sha256: Digest;
+  payload_sha256: Digest;
+  recorded_at: string;
+}
+
 export interface CapabilityClaimsV1 {
   schema_version: SchemaVersion;
   capability_id: string;
@@ -130,21 +184,53 @@ export interface CapabilityClaimsV1 {
   operation: SandboxOperation;
   target_resource_id: string;
   request_sha256: Digest;
-  dispatch_journal_anchor_sha256: Digest;
+  dispatch_journal_anchor_sha256?: Digest;
   fence: CanonicalSandboxEffectFenceV1;
   not_before: string;
   expires_at: string;
 }
 
-export interface MutationContextV1 {
+export interface LifecycleCommandContextV1 {
   operation_id: string;
   idempotency_key_sha256: Digest;
   request_sha256: Digest;
   expected_revision: number;
   transition: LifecycleTransitionBindingV1;
-  dispatch_journal: DispatchedJournalAnchorV1;
   fence: CanonicalSandboxEffectFenceV1;
   capability: CapabilityClaimsV1;
+}
+
+export interface MutationContextV1 extends LifecycleCommandContextV1 {
+  dispatch_journal: DispatchedJournalAnchorV1;
+}
+
+export interface PendingProviderOutcomeV1 {
+  source_operation_id: string;
+  target_state: "inert" | "active" | "failed" | "cleanup_failed" | "destroyed";
+  evidence_sha256: Digest;
+  provider_receipt_sha256: Digest;
+  observed_at: string;
+  terminal_disposition?:
+    | "destroyed_after_checkpoint"
+    | "destroyed_after_promotion"
+    | "discarded_uncheckpointed";
+}
+
+export interface SafetyFenceObservationV1 {
+  schema_version: "sandboxes.safety-fence/v1";
+  resource_id: string;
+  resource_lifecycle_generation: bigint;
+  reason:
+    | "lease_uncertain"
+    | "deadline"
+    | "cost_alarm"
+    | "provider_ambiguous"
+    | "containment_failure";
+  installed_policy_sha256: Digest;
+  process_stop_evidence_sha256: Digest;
+  network_close_evidence_sha256: Digest;
+  observed_at: string;
+  signer_principal: string;
 }
 
 export interface CreateSandboxV1 {
@@ -207,6 +293,12 @@ export interface CheckpointDurabilityReceiptV1 {
 
 export interface GitPromotionReceiptRefV1 {
   schema_version: SchemaVersion;
+  receipt_id: string;
+  resource_id: string;
+  run_id: string;
+  attempt_id: string;
+  resource_lifecycle_generation: bigint;
+  fence: CanonicalSandboxEffectFenceV1;
   receipt_sha256: Digest;
   checkpoint_root_sha256: Digest;
   expected_base_sha256: Digest;
@@ -252,6 +344,7 @@ export interface SandboxV1 {
   create_inert_operation_id: string;
   activation_operation_id?: string;
   immutable_fingerprint_sha256?: Digest;
+  pending_provider_outcome?: PendingProviderOutcomeV1;
   durable_checkpoint_receipt_sha256: Digest[];
   git_promotion_receipt_sha256: Digest[];
   created_at: string;
@@ -290,7 +383,7 @@ export interface SealedProviderHandleV1 {
 }
 
 export interface ProviderOperationV1 {
-  operation: SandboxOperation | "inspect";
+  operation: ProviderMutationOperationV1 | "inspect";
   target: ProviderEffectTargetV1;
   fence: CanonicalSandboxEffectFenceV1;
   generation_transition?: LifecycleTransitionBindingV1;
@@ -370,20 +463,22 @@ export interface OwnedResourcePageV1 {
 export interface OperationRecordV1 {
   schema_version: SchemaVersion;
   operation_id: string;
-  operation_step_id: string;
+  operation_step_id?: string;
   operation: SandboxOperation;
   resource_id: string;
   actor_principal: string;
   idempotency_key_sha256: Digest;
   request_sha256: Digest;
   capability_use_sha256: Digest;
-  dispatch_journal_anchor_sha256: Digest;
+  dispatch_journal_anchor_sha256?: Digest;
   expected_resource_lifecycle_generation: bigint;
   successor_resource_lifecycle_generation: bigint;
   fence: CanonicalSandboxEffectFenceV1;
   expected_revision: number;
   effect_phase:
+    | "not_applicable"
     | "intent_committed"
+    | "prepared"
     | "dispatched"
     | "succeeded"
     | "failed_effect"

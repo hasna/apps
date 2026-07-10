@@ -2,6 +2,7 @@ import { canonicalDigest, nowRfc3339, sha256, type Digest } from "./canonical.js
 import { SandboxError } from "./errors.js";
 import {
   AmbiguousProviderEffectError,
+  ProviderIdentityMismatchError,
   type AdapterCallContextV1,
   type DestroyContextV1,
   type ReconcileContextV1,
@@ -30,6 +31,9 @@ interface FakeResource {
 export interface FakeRunnerOptionsV1 {
   ambiguous_create?: "none" | "adoptable" | "unknown" | "delayed";
   destroy_result?: "absent" | "still_present" | "unknown";
+  creation_token_mismatch?: boolean;
+  activation_fingerprint_mismatch?: boolean;
+  activation_policy_mismatch?: boolean;
   clock?: () => Date;
 }
 
@@ -41,12 +45,19 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
   readonly #ambiguousCreate: "none" | "adoptable" | "unknown" | "delayed";
   readonly #delayedOperations = new Map<string, OwnedProviderHandleV1>();
   readonly #destroyResult: "absent" | "still_present" | "unknown";
+  readonly #creationTokenMismatch: boolean;
+  readonly #activationFingerprintMismatch: boolean;
+  readonly #activationPolicyMismatch: boolean;
   readonly calls = { create_inert: 0, activate: 0, inspect: 0, expire: 0, destroy: 0, lookup: 0 };
   readonly observed_generations: bigint[] = [];
+  readonly observed_authorization_receipts: Digest[] = [];
 
   constructor(options: FakeRunnerOptionsV1 = {}) {
     this.#ambiguousCreate = options.ambiguous_create ?? "none";
     this.#destroyResult = options.destroy_result ?? "absent";
+    this.#creationTokenMismatch = options.creation_token_mismatch === true;
+    this.#activationFingerprintMismatch = options.activation_fingerprint_mismatch === true;
+    this.#activationPolicyMismatch = options.activation_policy_mismatch === true;
     this.#clock = options.clock ?? (() => new Date());
   }
 
@@ -93,7 +104,9 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       opaque_resource_id: `native-${seed}`,
       ownership_nonce: `nonce-${sha256(op.fence.resource_id).slice(7, 39)}`,
       create_inert_operation_id: op.fence.operation_id,
-      provider_creation_token_sha256: sha256(`token:${op.fence.operation_id}`),
+      provider_creation_token_sha256: this.#creationTokenMismatch
+        ? sha256(`mismatched-token:${op.fence.operation_id}`)
+        : op.target.provider_idempotency_token_sha256,
       creation_receipt_sha256: sha256(`creation:${op.fence.operation_id}`),
       provider_created_at: nowRfc3339(this.#clock()),
       provider_resource_version: "1",
@@ -129,8 +142,12 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     return {
       schema_version: SCHEMA_VERSION,
       receipt_sha256: sha256(`activate:${op.fence.operation_id}`),
-      immutable_fingerprint_sha256: handle.immutable_fingerprint_sha256,
-      network_policy_sha256: grant.network_policy_sha256,
+      immutable_fingerprint_sha256: this.#activationFingerprintMismatch
+        ? sha256(`mismatched-activation-fingerprint:${handle.resource_id}`)
+        : handle.immutable_fingerprint_sha256,
+      network_policy_sha256: this.#activationPolicyMismatch
+        ? sha256(`mismatched-activation-policy:${handle.resource_id}`)
+        : grant.network_policy_sha256,
       activated_at: nowRfc3339(this.#clock()),
     };
   }
@@ -171,9 +188,9 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     op: ProviderOperationV1,
   ): Promise<DestroyObservationV1> {
     this.#assertSink(_ctx, op);
+    const resource = this.#exact(handle);
     this.calls.destroy += 1;
     this.observed_generations.push(op.fence.resource_lifecycle_generation);
-    const resource = this.#exact(handle);
     if (op.operation !== "destroy") throw new SandboxError("validation_failed", "Wrong fake destroy operation");
     if (this.#destroyResult === "absent") resource.state = "absent";
     return {
@@ -188,6 +205,9 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     op: ProviderOperationV1,
     _handle?: OwnedProviderHandleV1,
   ): Promise<ProviderOperationObservationV1> {
+    if (op.external_anchor_kind !== "READ_PROBE" || op.operation !== "inspect") {
+      throw new SandboxError("integrity_failed", "Fake reconciliation read requires a READ_PROBE anchor");
+    }
     this.calls.lookup += 1;
     const handle = this.#operations.get(op.fence.operation_id);
     if (handle !== undefined) {
@@ -244,7 +264,7 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       resource.handle.immutable_fingerprint_sha256 !== handle.immutable_fingerprint_sha256 ||
       resource.handle.provider_creation_token_sha256 !== handle.provider_creation_token_sha256
     ) {
-      throw new SandboxError("provider_state_unknown", "Fake provider identity is not exact");
+      throw new ProviderIdentityMismatchError();
     }
     return resource;
   }
@@ -260,5 +280,6 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     ) {
       throw new SandboxError("integrity_failed", "Fake adapter sink rejected mismatched protected effect bytes");
     }
+    this.observed_authorization_receipts.push(op.target.authorization_consumption_receipt_sha256);
   }
 }
