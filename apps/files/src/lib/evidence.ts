@@ -237,15 +237,19 @@ export function redactSensitiveTransportText(value: string): string {
 /** Recursively copy structured transport/error data with sensitive leaves removed. */
 export function sanitizeEvidenceTransportValue(value: unknown, seen = new WeakMap<object, unknown>()): unknown {
   if (typeof value === "string") return redactSensitiveTransportText(value);
+  if (typeof value === "function") return "[REDACTED]";
   if (value === null || typeof value !== "object") return value;
-  if (value instanceof Date) return value;
+  if (value instanceof Date) {
+    const timestamp = value.getTime();
+    return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : "[REDACTED_INVALID_DATE]";
+  }
   if (seen.has(value)) return "[REDACTED_CIRCULAR]";
 
   if (value instanceof Error) {
-    const result: Record<string, unknown> = {
+    const result = Object.assign(Object.create(null) as Record<string, unknown>, {
       name: redactSensitiveTransportText(value.name),
       message: redactSensitiveTransportText(value.message),
-    };
+    });
     seen.set(value, result);
     for (const key of Object.getOwnPropertyNames(value)) {
       if (key === "name" || key === "message" || key === "stack") continue;
@@ -269,12 +273,27 @@ export function sanitizeEvidenceTransportValue(value: unknown, seen = new WeakMa
     return result;
   }
 
-  const result: Record<string, unknown> = {};
+  const result = Object.create(null) as Record<string, unknown>;
   seen.set(value, result);
-  for (const [key, entry] of Object.entries(value)) {
-    result[key] = isSensitiveTransportKey(key)
-      ? "[REDACTED]"
-      : sanitizeEvidenceTransportValue(entry, seen);
+  for (const key of Object.getOwnPropertyNames(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !("value" in descriptor)) {
+      Object.defineProperty(result, key, {
+        configurable: true,
+        enumerable: descriptor?.enumerable ?? false,
+        value: "[REDACTED]",
+        writable: true,
+      });
+      continue;
+    }
+    Object.defineProperty(result, key, {
+      configurable: true,
+      enumerable: descriptor.enumerable,
+      value: isSensitiveTransportKey(key)
+        ? "[REDACTED]"
+        : sanitizeEvidenceTransportValue(descriptor.value, seen),
+      writable: true,
+    });
   }
   return result;
 }
@@ -282,38 +301,48 @@ export function sanitizeEvidenceTransportValue(value: unknown, seen = new WeakMa
 /** Preserve the original error class/status while removing every sensitive field. */
 export function sanitizeEvidenceTransportError(error: unknown): Error {
   if (!(error instanceof Error)) return new Error(redactSensitiveTransportText(String(error)));
+  try {
+    const properties = sanitizedErrorProperties(error);
+    const canRewriteInPlace = properties.every(({ descriptor, sanitized }) => {
+      if (!("value" in descriptor)) return descriptor.configurable;
+      return Object.is(descriptor.value, sanitized) || descriptor.writable || descriptor.configurable;
+    });
+    const target = canRewriteInPlace
+      ? error
+      : Object.create(Object.getPrototypeOf(error)) as Error;
 
-  try { error.name = redactSensitiveTransportText(error.name); } catch {}
-  try { error.message = redactSensitiveTransportText(error.message); } catch {}
-  if (typeof error.stack === "string") {
-    try { error.stack = redactSensitiveTransportText(error.stack); } catch {}
+    for (const { key, descriptor, sanitized } of properties) {
+      if (target === error && "value" in descriptor && Object.is(descriptor.value, sanitized)) continue;
+      Object.defineProperty(target, key, {
+        configurable: target === error ? descriptor.configurable : true,
+        enumerable: descriptor.enumerable,
+        value: sanitized,
+        writable: target === error ? ("value" in descriptor && descriptor.writable) : true,
+      });
+    }
+    return target;
+  } catch {
+    return new Error("Evidence transport failed with redacted diagnostic");
   }
+}
+
+function sanitizedErrorProperties(error: Error): Array<{
+  key: string;
+  descriptor: PropertyDescriptor;
+  sanitized: unknown;
+}> {
+  const properties: Array<{ key: string; descriptor: PropertyDescriptor; sanitized: unknown }> = [];
   for (const key of Object.getOwnPropertyNames(error)) {
-    if (key === "name" || key === "message" || key === "stack") continue;
     const descriptor = Object.getOwnPropertyDescriptor(error, key);
     if (!descriptor) continue;
-    if (!("value" in descriptor)) {
-      if (descriptor.configurable) {
-        try {
-          Object.defineProperty(error, key, {
-            configurable: descriptor.configurable,
-            enumerable: descriptor.enumerable,
-            value: "[REDACTED]",
-            writable: false,
-          });
-        } catch {}
-      }
-      continue;
-    }
-    const sanitized = isSensitiveTransportKey(key)
+    const sanitized = !("value" in descriptor)
       ? "[REDACTED]"
-      : sanitizeEvidenceTransportValue(descriptor.value);
-    try {
-      if (descriptor.writable) (error as unknown as Record<string, unknown>)[key] = sanitized;
-      else if (descriptor.configurable) Object.defineProperty(error, key, { ...descriptor, value: sanitized });
-    } catch {}
+      : isSensitiveTransportKey(key)
+        ? "[REDACTED]"
+        : sanitizeEvidenceTransportValue(descriptor.value);
+    properties.push({ key, descriptor, sanitized });
   }
-  return error;
+  return properties;
 }
 
 /** Full public result shape with all byte-transport material removed. */

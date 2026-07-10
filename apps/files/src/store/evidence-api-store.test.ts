@@ -73,13 +73,37 @@ describe("ApiStore evidence response boundary", () => {
         asset: { ...valid.asset, bucket: "undeclared-bucket" },
         intent: { ...valid.intent, upload_url: `https://undeclared-bucket.s3.us-east-1.amazonaws.com/${QUARANTINE_KEY}` },
       },
+      {
+        ...valid,
+        asset: { ...valid.asset, bucket: "hasna-xyz-opensource-files-prod" },
+        intent: {
+          ...valid.intent,
+          upload_url: `https://hasna-xyz-opensource-files-prod.s3.us-east-1.amazonaws.com/${QUARANTINE_KEY}`,
+        },
+      },
       { ...valid, intent: { ...valid.intent, upload_url: `https://synthetic-bucket.s3.us-east-1.amazonaws.com/wrong-key` } },
+      {
+        ...valid,
+        asset: { ...valid.asset, quarantine_key: "quarantine/unrelated-object" },
+        intent: {
+          ...valid.intent,
+          upload_url: "https://synthetic-bucket.s3.us-east-1.amazonaws.com/quarantine/unrelated-object",
+        },
+      },
       { ...valid, intent: { ...valid.intent, asset_id: "asset_other" } },
       { ...valid, asset: { ...valid.asset, id: unsafeId }, intent: { ...valid.intent, asset_id: unsafeId } },
       { ...valid, intent: { ...valid.intent, id: "https://synthetic.invalid/transport/CANARY_RECEIPT_INTENT" } },
       { ...valid, intent: { ...valid.intent, completed_at: "https://synthetic.invalid/transport/CANARY_COMPLETED_AT" } },
       { ...valid, intent: { ...valid.intent, created_at: "Fri, 10 Jul 2026 00:00:00 GMT (https://synthetic.invalid/CANARY_CREATED_AT)" } },
       { ...valid, intent: { ...valid.intent, expires_at: new Date(Date.now() + 3_600_000).toISOString() } },
+      {
+        ...valid,
+        intent: {
+          ...valid.intent,
+          created_at: "2099-01-01T00:00:00.000Z",
+          expires_at: "2099-01-01T00:01:00.000Z",
+        },
+      },
       { ...valid, intent: { ...valid.intent, expected_size: valid.intent.expected_size + 1 } },
       { ...valid, intent: { ...valid.intent, expected_checksum: "f".repeat(64) } },
       { ...valid, intent: { ...valid.intent, metadata: { upload_url: "https://synthetic.invalid/CANARY_NESTED_URL" } } },
@@ -94,6 +118,20 @@ describe("ApiStore evidence response boundary", () => {
       await expect(store.createEvidenceUploadIntent(input)).rejects.toThrow("Invalid evidence upload intent response");
       expect(uploadCalls).toBe(0);
     }
+  });
+
+  test("rejects a non-finite requested upload lifetime before calling the service", async () => {
+    let serviceCalls = 0;
+    const store = apiStore(async () => {
+      serviceCalls += 1;
+      return {};
+    });
+
+    await expect(store.createEvidenceUploadIntent({
+      ...baseInput(),
+      expires_in_seconds: Number.POSITIVE_INFINITY,
+    })).rejects.toThrow("Invalid evidence upload request");
+    expect(serviceCalls).toBe(0);
   });
 
   test("accepts an explicitly allowlisted non-AWS HTTPS upload origin", async () => {

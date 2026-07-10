@@ -147,6 +147,42 @@ describe("evidence upload output safety", () => {
     const safeAggregate = sanitizeEvidenceTransportError(aggregate) as AggregateError & { cause?: { message?: string } };
     expect(String(safeAggregate.errors[0]?.message).includes("CANARY_AGGREGATE_ERROR")).toBe(false);
     expect(String(safeAggregate.cause?.message).includes("CANARY_AGGREGATE_CAUSE")).toBe(false);
+
+    const immutable = new HasnaHttpError("PUT", opaqueUrl, 503, { safe: true });
+    Object.defineProperty(immutable, "authorization", {
+      configurable: false,
+      enumerable: true,
+      value: "Bearer CANARY_IMMUTABLE_AUTHORIZATION",
+      writable: false,
+    });
+    Object.defineProperty(immutable, "message", {
+      configurable: false,
+      enumerable: false,
+      value: "https://synthetic.invalid/CANARY_IMMUTABLE_MESSAGE",
+      writable: false,
+    });
+    const safeImmutable = sanitizeEvidenceTransportError(immutable);
+    const serializedImmutable = `${safeImmutable.message}\n${JSON.stringify(safeImmutable)}`;
+    expect(safeImmutable).not.toBe(immutable);
+    expect(safeImmutable).toBeInstanceOf(HasnaHttpError);
+    expect((safeImmutable as HasnaHttpError).status).toBe(503);
+    expect(serializedImmutable.includes("CANARY_IMMUTABLE")).toBe(false);
+    expect(serializedImmutable.includes("synthetic.invalid")).toBe(false);
+
+    const immutableAccessor = new Error("safe accessor failure");
+    Object.defineProperty(immutableAccessor, "authorization", {
+      configurable: false,
+      enumerable: true,
+      get: () => "Bearer CANARY_IMMUTABLE_ACCESSOR",
+    });
+    const safeAccessor = sanitizeEvidenceTransportError(immutableAccessor);
+    expect(safeAccessor).not.toBe(immutableAccessor);
+    expect(JSON.stringify(safeAccessor).includes("CANARY_IMMUTABLE_ACCESSOR")).toBe(false);
+
+    const customSerializer = new Error("safe outer message") as Error & { toJSON?: () => unknown };
+    customSerializer.toJSON = () => ({ authorization: "Bearer CANARY_CUSTOM_SERIALIZER" });
+    const safeCustomSerializer = sanitizeEvidenceTransportError(customSerializer);
+    expect(JSON.stringify(safeCustomSerializer).includes("CANARY_CUSTOM_SERIALIZER")).toBe(false);
   });
 
   test("preserves the public one-shot upload result contract", () => {

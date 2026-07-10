@@ -385,8 +385,12 @@ export class ApiStore implements FilesStore {
   // redirect the shared vault. Bytes go to the server-signed URL directly.
   async createEvidenceUploadIntent(input: CreateEvidenceUploadInput, _storage?: EvidenceStorageOptions): Promise<EvidenceUploadResult> {
     try {
+      if (!isValidRequestedUploadLifetime(input.expires_in_seconds)) {
+        throw new Error("Invalid evidence upload request");
+      }
+      const requestStartedAt = Date.now();
       const raw = await this.http.post<unknown>("/evidence/upload-intents", input);
-      return parseCreateEvidenceUploadResult(raw, input);
+      return parseCreateEvidenceUploadResult(raw, input, requestStartedAt, Date.now());
     } catch (error) {
       throw sanitizeEvidenceTransportError(error);
     }
@@ -478,7 +482,12 @@ export class ApiStore implements FilesStore {
   }
 }
 
-function parseCreateEvidenceUploadResult(raw: unknown, input: CreateEvidenceUploadInput): EvidenceUploadResult {
+function parseCreateEvidenceUploadResult(
+  raw: unknown,
+  input: CreateEvidenceUploadInput,
+  requestStartedAt: number,
+  responseReceivedAt: number,
+): EvidenceUploadResult {
   const parsed = createEvidenceUploadResultSchema.safeParse(raw);
   if (!parsed.success) throw new Error("Invalid evidence upload intent response");
   const result = parsed.data as EvidenceUploadResult;
@@ -487,6 +496,9 @@ function parseCreateEvidenceUploadResult(raw: unknown, input: CreateEvidenceUplo
   const expectedClassification = input.classification ?? "evidence";
   const expectedContentType = input.content_type ?? (mimeLookup(input.original_name) || "application/octet-stream").toString();
   const requestedLifetimeMs = (input.expires_in_seconds ?? 600) * 1000;
+  const clockSkewMs = 5_000;
+  const intentCreatedAt = Date.parse(intent.created_at);
+  const intentExpiresAt = Date.parse(intent.expires_at);
 
   if (
     asset.status !== "pending_upload"
@@ -507,6 +519,7 @@ function parseCreateEvidenceUploadResult(raw: unknown, input: CreateEvidenceUplo
     || !asset.quarantine_key
     || !isSafeS3ObjectKey(asset.object_key)
     || !isSafeS3ObjectKey(asset.quarantine_key)
+    || asset.quarantine_key !== `quarantine/${asset.object_key}`
     || asset.retention_until !== input.retention_until
     || asset.retention_policy !== input.retention_policy
     || asset.storage_class !== input.storage_class
@@ -524,9 +537,12 @@ function parseCreateEvidenceUploadResult(raw: unknown, input: CreateEvidenceUplo
     || Object.keys(intent.metadata).length !== 0
     || intent.completed_at !== undefined
     || !isTimestamp(intent.created_at)
-    || !isFutureTimestamp(intent.expires_at)
-    || Date.parse(intent.expires_at) <= Date.parse(intent.created_at)
-    || Date.parse(intent.expires_at) - Date.parse(intent.created_at) > requestedLifetimeMs + 5_000
+    || !isTimestamp(intent.expires_at)
+    || intentCreatedAt < requestStartedAt - clockSkewMs
+    || intentCreatedAt > responseReceivedAt + clockSkewMs
+    || intentExpiresAt <= responseReceivedAt
+    || intentExpiresAt <= intentCreatedAt
+    || intentExpiresAt > responseReceivedAt + requestedLifetimeMs + clockSkewMs
     || !isPermittedUploadUrl(intent.upload_url!, asset)
   ) {
     throw new Error("Invalid evidence upload intent response");
@@ -682,15 +698,19 @@ function configuredEvidenceUploadOrigins(): Set<string> {
 }
 
 function configuredEvidenceUploadBuckets(): Set<string> {
-  const raw = [
-    DEFAULT_EVIDENCE_S3_BUCKET,
-    process.env.HASNA_FILES_EVIDENCE_UPLOAD_BUCKETS,
-    process.env.FILES_EVIDENCE_UPLOAD_BUCKETS,
-    process.env.HASNA_FILES_S3_BUCKET,
-    process.env.FILES_S3_BUCKET,
-    process.env.HASNA_FILES_EVIDENCE_BUCKET,
-    process.env.FILES_EVIDENCE_BUCKET,
-  ].filter(Boolean).join(",");
+  const explicit = process.env.HASNA_FILES_EVIDENCE_UPLOAD_BUCKETS
+    ?? process.env.FILES_EVIDENCE_UPLOAD_BUCKETS;
+  if (explicit !== undefined) return parseEvidenceUploadBuckets(explicit);
+
+  const selected = process.env.HASNA_FILES_S3_BUCKET
+    ?? process.env.FILES_S3_BUCKET
+    ?? process.env.HASNA_FILES_EVIDENCE_BUCKET
+    ?? process.env.FILES_EVIDENCE_BUCKET;
+  const raw = selected === undefined ? DEFAULT_EVIDENCE_S3_BUCKET : selected;
+  return parseEvidenceUploadBuckets(raw);
+}
+
+function parseEvidenceUploadBuckets(raw: string): Set<string> {
   return new Set(raw.split(",").map((entry) => entry.trim().toLowerCase()).filter(Boolean));
 }
 
@@ -699,9 +719,11 @@ function allowInsecureEvidenceLoopback(): boolean {
     ?? process.env.FILES_EVIDENCE_ALLOW_INSECURE_LOOPBACK) === "1";
 }
 
-function isFutureTimestamp(value: string): boolean {
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) && timestamp > Date.now();
+function isValidRequestedUploadLifetime(value: number | undefined): boolean {
+  const seconds = value ?? 600;
+  return Number.isSafeInteger(seconds)
+    && seconds > 0
+    && seconds <= Math.floor(Number.MAX_SAFE_INTEGER / 1000);
 }
 
 function isTimestamp(value: string): boolean {

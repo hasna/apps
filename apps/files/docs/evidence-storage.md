@@ -102,13 +102,22 @@ private asset ids and object keys stay in operator artifacts.
   `HASNA_FILES_EVIDENCE_UPLOAD_ORIGINS` (comma-separated HTTPS origins); plain
   HTTP is accepted only for an explicitly listed loopback origin when
   `HASNA_FILES_EVIDENCE_ALLOW_INSECURE_LOOPBACK=1` is also set. Every accepted
-  URL is bound to an approved bucket (`HASNA_FILES_EVIDENCE_UPLOAD_BUCKETS`, or
-  the configured/default evidence bucket) and the exact quarantine object key;
-  redirects are rejected before bytes can be forwarded to another origin.
+  URL is bound to an approved bucket and the canonical
+  `quarantine/<object_key>` path. An explicit
+  `HASNA_FILES_EVIDENCE_UPLOAD_BUCKETS` allowlist is authoritative; otherwise
+  the selected configured evidence bucket is used, and the built-in default is
+  used only when neither is present. Redirects are rejected before bytes can be
+  forwarded to another origin. Intent creation and expiry timestamps must also
+  be fresh relative to the client request/response window, so a server cannot
+  extend a requested capability lifetime with future-dated timestamps.
 - Default CLI/MCP upload output is an opaque receipt containing asset, intent,
   checksum, and status identifiers only. Transport URLs and signing headers are
   available only inside the explicit low-level create-intent transport and must
   never be printed or logged; agents should use the one-shot upload operation.
+- Transport errors are recursively redacted. If an error contains immutable or
+  accessor-backed fields that cannot be rewritten safely, the client emits a
+  sanitized error surrogate with the same prototype/status instead of returning
+  the unsafe original.
 - Store access events for reads, downloads, signing, linking, and verification.
 - Track scan status even when the current implementation marks local/S3 direct uploads as `skipped`.
 - Track retention and legal hold metadata now so S3 Object Lock can be enabled without app schema changes.
