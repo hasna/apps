@@ -300,24 +300,48 @@ export function sanitizeEvidenceTransportValue(value: unknown, seen = new WeakMa
 
 /** Preserve the original error class/status while removing every sensitive field. */
 export function sanitizeEvidenceTransportError(error: unknown): Error {
-  if (!(error instanceof Error)) return new Error(redactSensitiveTransportText(String(error)));
+  if (!(error instanceof Error)) return new Error("Evidence transport failed with redacted diagnostic");
   try {
-    const properties = sanitizedErrorProperties(error);
-    const canRewriteInPlace = properties.every(({ descriptor, sanitized }) => {
-      if (!("value" in descriptor)) return descriptor.configurable;
-      return Object.is(descriptor.value, sanitized) || descriptor.writable || descriptor.configurable;
-    });
-    const target = canRewriteInPlace
-      ? error
-      : Object.create(Object.getPrototypeOf(error)) as Error;
-
-    for (const { key, descriptor, sanitized } of properties) {
-      if (target === error && "value" in descriptor && Object.is(descriptor.value, sanitized)) continue;
+    const target = Object.create(Object.getPrototypeOf(error)) as Error;
+    for (const { key, descriptor, sanitized } of sanitizedErrorProperties(error)) {
       Object.defineProperty(target, key, {
-        configurable: target === error ? descriptor.configurable : true,
+        configurable: true,
         enumerable: descriptor.enumerable,
         value: sanitized,
-        writable: target === error ? ("value" in descriptor && descriptor.writable) : true,
+        writable: true,
+      });
+    }
+    Object.defineProperties(target, {
+      name: safeErrorText(error.name, "Error"),
+      message: safeErrorText(error.message, "Evidence transport failed"),
+      stack: safeErrorText(error.stack, "Evidence transport failed with redacted diagnostic"),
+      // JSON.stringify consults inherited serializers before enumerating own
+      // fields. Shadow them so an Error subclass cannot reintroduce transport
+      // material after all own properties have been sanitized.
+      toJSON: {
+        configurable: true,
+        enumerable: false,
+        value: undefined,
+        writable: false,
+      },
+      toString: {
+        configurable: true,
+        enumerable: false,
+        value: Error.prototype.toString,
+        writable: false,
+      },
+    });
+    for (const symbol of [
+      Symbol.toPrimitive,
+      Symbol.for("nodejs.util.inspect.custom"),
+      Symbol.for("Bun.inspect.custom"),
+      Symbol.for("Deno.customInspect"),
+    ]) {
+      Object.defineProperty(target, symbol, {
+        configurable: true,
+        enumerable: false,
+        value: undefined,
+        writable: false,
       });
     }
     return target;
@@ -326,18 +350,27 @@ export function sanitizeEvidenceTransportError(error: unknown): Error {
   }
 }
 
+function safeErrorText(value: unknown, fallback: string): PropertyDescriptor {
+  return {
+    configurable: true,
+    enumerable: false,
+    value: typeof value === "string" ? redactSensitiveTransportText(value) : fallback,
+    writable: true,
+  };
+}
+
 function sanitizedErrorProperties(error: Error): Array<{
-  key: string;
+  key: PropertyKey;
   descriptor: PropertyDescriptor;
   sanitized: unknown;
 }> {
-  const properties: Array<{ key: string; descriptor: PropertyDescriptor; sanitized: unknown }> = [];
-  for (const key of Object.getOwnPropertyNames(error)) {
+  const properties: Array<{ key: PropertyKey; descriptor: PropertyDescriptor; sanitized: unknown }> = [];
+  for (const key of Reflect.ownKeys(error)) {
     const descriptor = Object.getOwnPropertyDescriptor(error, key);
     if (!descriptor) continue;
     const sanitized = !("value" in descriptor)
       ? "[REDACTED]"
-      : isSensitiveTransportKey(key)
+      : typeof key === "symbol" || isSensitiveTransportKey(key)
         ? "[REDACTED]"
         : sanitizeEvidenceTransportValue(descriptor.value);
     properties.push({ key, descriptor, sanitized });

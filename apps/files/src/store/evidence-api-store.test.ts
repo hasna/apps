@@ -374,7 +374,7 @@ describe("ApiStore evidence response boundary", () => {
       caught = error;
     }
 
-    expect(caught).toBe(original);
+    expect(caught).not.toBe(original);
     expect(caught).toBeInstanceOf(HasnaHttpError);
     expect((caught as HasnaHttpError).status).toBe(503);
     expect(JSON.stringify(caught).includes("CANARY_")).toBe(false);

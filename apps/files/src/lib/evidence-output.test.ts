@@ -110,7 +110,7 @@ describe("evidence upload output safety", () => {
     const sanitized = sanitizeEvidenceTransportError(error);
     const serialized = `${sanitized.message}\n${JSON.stringify(sanitized)}`;
 
-    expect(sanitized).toBe(error);
+    expect(sanitized).not.toBe(error);
     expect(sanitized).toBeInstanceOf(HasnaHttpError);
     expect((sanitized as HasnaHttpError).status).toBe(503);
     expect(serialized.includes("CANARY_")).toBe(false);
@@ -183,6 +183,29 @@ describe("evidence upload output safety", () => {
     customSerializer.toJSON = () => ({ authorization: "Bearer CANARY_CUSTOM_SERIALIZER" });
     const safeCustomSerializer = sanitizeEvidenceTransportError(customSerializer);
     expect(JSON.stringify(safeCustomSerializer).includes("CANARY_CUSTOM_SERIALIZER")).toBe(false);
+
+    class SyntheticTransportError extends Error {
+      toJSON(): unknown {
+        return { authorization: "Bearer CANARY_INHERITED_SERIALIZER" };
+      }
+
+      override toString(): string {
+        return "Authorization: Bearer CANARY_INHERITED_STRINGIFIER";
+      }
+
+      [Symbol.toPrimitive](): string {
+        return "Authorization: Bearer CANARY_INHERITED_PRIMITIVE";
+      }
+    }
+    const inheritedSerializer = new SyntheticTransportError("safe inherited message");
+    const safeInheritedSerializer = sanitizeEvidenceTransportError(inheritedSerializer);
+    expect(safeInheritedSerializer).not.toBe(inheritedSerializer);
+    expect(safeInheritedSerializer).toBeInstanceOf(SyntheticTransportError);
+    expect(JSON.stringify(safeInheritedSerializer).includes("CANARY_INHERITED_SERIALIZER")).toBe(false);
+    expect(String(safeInheritedSerializer).includes("CANARY_INHERITED")).toBe(false);
+
+    const nonError = { toString: () => "CANARY_NON_ERROR_STRINGIFIER" };
+    expect(sanitizeEvidenceTransportError(nonError).message.includes("CANARY_NON_ERROR")).toBe(false);
   });
 
   test("preserves the public one-shot upload result contract", () => {
