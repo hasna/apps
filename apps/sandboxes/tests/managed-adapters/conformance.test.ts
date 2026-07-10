@@ -428,6 +428,20 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
       expect(h.journal.outcomes).toHaveLength(0)
     })
 
+    test("maps malformed provider responses to safe ambiguity", async () => {
+      const h = harness(provider)
+      Object.defineProperty(h.client, "createInert", {
+        configurable: true,
+        value: async () => null,
+      })
+      const op = makeOperation("create_inert")
+
+      await expect(
+        h.adapter.create_inert(makeContext(op, h.journal), SPEC, op, digest("77")),
+      ).rejects.toMatchObject({ code: "provider_state_unknown", quarantine_required: true })
+      expect(h.physicalSafetyGate.containReasons).toContain("provider_effect_ambiguous")
+    })
+
     test("rejects duplicate or conflicting token inventory instead of choosing a resource", async () => {
       const h = harness(provider)
       const op = makeOperation("create_inert")
@@ -1156,6 +1170,29 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
       expect(JSON.stringify(error)).not.toContain("raw-native-id")
       expect(JSON.stringify(error)).not.toContain("raw-secret-provider-body")
       expect((error as Error).cause).toBeUndefined()
+    })
+
+    test("malformed JavaScript shapes fail safely before credentials", async () => {
+      const h = harness(provider)
+      const createOp = makeOperation("create_inert")
+
+      await expect(
+        h.adapter.create_inert(
+          makeContext(createOp, h.journal),
+          null as never,
+          createOp,
+          digest("77"),
+        ),
+      ).rejects.toMatchObject({ code: "validation_failed" })
+
+      const inspect = makeOperation("inspect", {
+        external_anchor_kind: "READ_PROBE",
+        generation_transition: undefined,
+      })
+      await expect(
+        h.adapter.inspect(makeContext(inspect, h.journal), null as never, inspect),
+      ).rejects.toMatchObject({ code: "operation_target_mismatch" })
+      expect(h.credentials.acquisitions).toBe(0)
     })
   })
 }

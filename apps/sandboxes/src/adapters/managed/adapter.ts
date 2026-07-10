@@ -92,6 +92,10 @@ const PORTABLE_DEVICE_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i
 const FORBIDDEN_PATH_UNICODE = /[\u202a-\u202e\u2066-\u2069\u2044\u2215\u29f8\uff0f\ufdd0-\ufdef]/u
 const PRODUCTION_MANAGED_ADMISSION_ENABLED = false
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+}
+
 export const INERT_DENY_ALL_POLICY: NetworkPolicyV1 = {
   mode: "deny_all",
   policy_sha256: canonicalSha256({
@@ -174,7 +178,9 @@ function validateGeneration(op: ProviderOperationV1): void {
   }
   const transition = op.generation_transition
   if (
-    transition === undefined ||
+    !isRecord(transition) ||
+    typeof transition.expected_resource_lifecycle_generation !== "bigint" ||
+    typeof transition.successor_resource_lifecycle_generation !== "bigint" ||
     transition.successor_resource_lifecycle_generation !== op.target.resource_lifecycle_generation ||
     transition.successor_resource_lifecycle_generation !== op.fence.resource_lifecycle_generation ||
     transition.successor_resource_lifecycle_generation !==
@@ -189,6 +195,9 @@ function validateOperation(
   op: ProviderOperationV1,
   expected: ProviderOperationNameV1,
 ): void {
+  if (!isRecord(ctx) || !isRecord(op) || !isRecord(op.target) || !isRecord(op.fence)) {
+    throw adapterError("validation_failed")
+  }
   if (op.operation !== expected) throw adapterError("operation_target_mismatch")
   if (
     !isDigest(op.target.operation_digest) ||
@@ -231,6 +240,9 @@ function validateNetworkObservation(
   expected: NetworkPolicyV1,
 ): void {
   if (
+    !isRecord(observation) ||
+    !isRecord(expected) ||
+    typeof observation.observed_at !== "string" ||
     !isDigest(expected.policy_sha256) ||
     !isDigest(observation.policy_sha256) ||
     observation.mode !== expected.mode ||
@@ -286,7 +298,26 @@ function validateProviderResource(
   expectedCreationToken?: Digest,
 ): void {
   if (
+    !isRecord(resource) ||
+    !isRecord(resource.ownership) ||
+    !isRecord(resource.network_policy) ||
+    typeof resource.opaque_resource_id !== "string" ||
     resource.opaque_resource_id.length === 0 ||
+    !isDigest(resource.provider_creation_token_sha256) ||
+    !isDigest(resource.immutable_fingerprint_sha256) ||
+    typeof resource.provider_created_at !== "string" ||
+    typeof resource.provider_resource_version !== "string" ||
+    !["inert", "active", "transitioning", "unknown"].includes(resource.state) ||
+    !["paused", "stopped", "active", "unknown"].includes(resource.provider_runtime_state) ||
+    typeof resource.owned !== "boolean" ||
+    typeof resource.auto_delete_disabled !== "boolean" ||
+    typeof resource.ephemeral !== "boolean" ||
+    typeof resource.source_attached !== "boolean" ||
+    typeof resource.credential_attached !== "boolean" ||
+    typeof resource.guest_broker_bootstrapped !== "boolean" ||
+    !isDigest(resource.ownership.installation_id_sha256) ||
+    !isDigest(resource.ownership.provider_scope_ref_sha256) ||
+    !isDigest(resource.ownership.ownership_nonce_sha256) ||
     !resource.owned ||
     (expectedCreationToken !== undefined && resource.provider_creation_token_sha256 !== expectedCreationToken) ||
     resource.immutable_fingerprint_sha256 !== target.immutable_fingerprint_sha256 ||
@@ -334,6 +365,12 @@ function validateHandle(
   dependencies: ManagedAdapterDependenciesV1,
 ): void {
   if (
+    !isRecord(handle) ||
+    typeof handle.opaque_resource_id !== "string" ||
+    typeof handle.ownership_nonce !== "string" ||
+    typeof handle.create_inert_operation_id !== "string" ||
+    typeof handle.provider_created_at !== "string" ||
+    typeof handle.provider_resource_version !== "string" ||
     handle.adapter_id !== identity.provider ||
     handle.adapter_version !== dependencies.adapter_version ||
     handle.installation_id !== dependencies.installation_id ||
@@ -363,6 +400,14 @@ function validateExecHandle(
   handle: OwnedProviderHandleV1,
   identity: AdapterIdentityV1,
 ): void {
+  if (!isRecord(exec)) throw adapterError("operation_target_mismatch")
+  if (
+    typeof exec.opaque_exec_id !== "string" ||
+    typeof exec.started_at !== "string" ||
+    typeof exec.resource_lifecycle_generation !== "bigint"
+  ) {
+    throw adapterError("operation_target_mismatch")
+  }
   const expectedFingerprint = canonicalSha256({
     schema_version: "sandboxes.adapter-exec-handle/v1",
     adapter_id: exec.adapter_id,
@@ -386,6 +431,21 @@ function validateExecHandle(
   }
 }
 
+function validateProviderPage(page: ProviderResourcePageV1): void {
+  if (
+    !isRecord(page) ||
+    !Array.isArray(page.items) ||
+    page.items.length > 1000 ||
+    (page.next_cursor !== undefined &&
+      (typeof page.next_cursor !== "string" ||
+        page.next_cursor.length === 0 ||
+        page.next_cursor.length > 4096 ||
+        /[\0-\x1f\x7f]/u.test(page.next_cursor)))
+  ) {
+    throw adapterError("provider_state_unknown", { quarantineRequired: true })
+  }
+}
+
 function hasExactKeys(value: object, keys: readonly string[]): boolean {
   const actual = Object.keys(value).sort()
   const expected = [...keys].sort()
@@ -393,6 +453,7 @@ function hasExactKeys(value: object, keys: readonly string[]): boolean {
 }
 
 function validateExecSpec(spec: ExecSpecV1, operationDeadline: string): void {
+  if (!isRecord(spec)) throw adapterError("validation_failed")
   const specKeys = [
     "schema_version",
     "executable",
@@ -509,6 +570,7 @@ export function validateWorkspacePath(path: string, allowRoot = false): Workspac
 }
 
 function validateFileRead(request: FileReadV1): void {
+  if (!isRecord(request)) throw adapterError("validation_failed")
   validateWorkspacePath(request.path)
   if (!Number.isSafeInteger(request.offset) || request.offset < 0) throw adapterError("validation_failed")
   if (
@@ -521,6 +583,7 @@ function validateFileRead(request: FileReadV1): void {
 }
 
 function validateFileWrite(request: FileWriteV1): void {
+  if (!isRecord(request)) throw adapterError("validation_failed")
   validateWorkspacePath(request.path)
   const preconditions = [request.if_absent === true, request.expected_prior_sha256 !== undefined, request.expected_prior_revision !== undefined]
   if (
@@ -549,15 +612,24 @@ function delay(milliseconds: number): Promise<void> {
 }
 
 function snapshotData<T>(value: T): T {
-  return structuredClone(value)
+  try {
+    return structuredClone(value)
+  } catch {
+    throw adapterError("validation_failed")
+  }
 }
 
 function snapshotContext<T extends AdapterCallContextV1>(ctx: T): T {
-  const { signal, ...data } = ctx
-  return {
-    ...snapshotData(data),
-    ...(signal === undefined ? {} : { signal }),
-  } as T
+  if (!isRecord(ctx)) throw adapterError("validation_failed")
+  try {
+    const { signal, ...data } = ctx
+    return {
+      ...snapshotData(data),
+      ...(signal === undefined ? {} : { signal }),
+    } as T
+  } catch {
+    throw adapterError("validation_failed")
+  }
 }
 
 function lifecycleLockKey(
@@ -797,6 +869,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
       const page: ProviderResourcePageV1 = await this.#retryRead(ctx, op, () =>
         client.findByCreationToken(token, cursor),
       )
+      validateProviderPage(page)
       resources.push(...page.items)
       if (page.next_cursor === undefined) return resources
       if (cursors.has(page.next_cursor)) throw adapterError("integrity_failed")
@@ -932,6 +1005,16 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     spec = snapshotData(spec)
     op = snapshotData(op)
     validateOperation(ctx, op, "create_inert")
+    if (
+      !isRecord(spec) ||
+      !isRecord(spec.source) ||
+      !isRecord(spec.environment) ||
+      !isRecord(spec.network_policy) ||
+      !isRecord(spec.resources) ||
+      !Array.isArray(spec.input_bundle_refs)
+    ) {
+      throw adapterError("validation_failed")
+    }
     validateEffectRequest(op, { operation: "create_inert", spec, allocation_key_sha256: allocationKey })
     if (
       !isDigest(allocationKey) ||
@@ -1115,6 +1198,8 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     validateOperation(ctx, op, "activate")
     validateHandle(handle, op, this.#identity, this.#dependencies)
     if (
+      !isRecord(authorization) ||
+      !isRecord(authorization.network_policy) ||
       authorization.authorization_consumption_receipt_sha256 !==
         op.target.authorization_consumption_receipt_sha256 ||
       !isDigest(authorization.activation_grant_sha256) ||
@@ -1145,6 +1230,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
             handle.immutable_fingerprint_sha256,
             op.target,
           )
+          if (!isRecord(activation)) throw adapterError("integrity_failed")
           activated = activation.resource
           broker = activation.guest_broker
           validateProviderResourceForHandle(activated, handle, op.target, this.#dependencies)
@@ -1230,9 +1316,9 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     spec = snapshotData(spec)
     op = snapshotData(op)
     validateOperation(ctx, op, "exec_start")
+    validateExecSpec(spec, op.deadline)
     validateEffectRequest(op, { operation: "exec_start", spec })
     validateHandle(handle, op, this.#identity, this.#dependencies)
-    validateExecSpec(spec, op.deadline)
     return this.#withClient(ctx, op, (client) => this.#withLifecycleLock(op, async () => {
       requireCapability(client, "typed_argv_exec")
       let providerExec
@@ -1248,6 +1334,15 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
         )
         await this.#beforeProviderMutation(ctx, op)
         providerExec = await client.startExec(handle.opaque_resource_id, broker, frame, op.target)
+        if (
+          !isRecord(providerExec) ||
+          typeof providerExec.opaque_exec_id !== "string" ||
+          providerExec.opaque_exec_id.length === 0 ||
+          typeof providerExec.started_at !== "string" ||
+          Number.isNaN(Date.parse(providerExec.started_at))
+        ) {
+          throw adapterError("integrity_failed")
+        }
       } catch (cause) {
         return this.#anchorUnknown(ctx, op, cause)
       }
@@ -1293,12 +1388,12 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     exec = snapshotData(exec)
     op = snapshotData(op)
     validateOperation(ctx, op, "exec_cancel")
+    validateHandle(handle, op, this.#identity, this.#dependencies)
+    validateExecHandle(exec, handle, this.#identity)
     validateEffectRequest(op, {
       operation: "exec_cancel",
       exec_fingerprint_sha256: exec.immutable_exec_fingerprint_sha256,
     })
-    validateHandle(handle, op, this.#identity, this.#dependencies)
-    validateExecHandle(exec, handle, this.#identity)
     return this.#withClient(ctx, op, (client) => this.#withLifecycleLock(op, async () => {
       requireCapability(client, "whole_guest_cancel")
       let cancellation
@@ -1313,7 +1408,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
         )
         await this.#beforeProviderMutation(ctx, op)
         cancellation = await client.cancelExec(handle.opaque_resource_id, broker, frame, op.target)
-        if (!cancellation.whole_guest_scope_terminated) {
+        if (!isRecord(cancellation) || cancellation.whole_guest_scope_terminated !== true) {
           await this.#contain(ctx, op, "whole_guest_cancel_unproven")
           throw adapterError("provider_state_unknown", { quarantineRequired: true })
         }
@@ -1362,6 +1457,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
       )
       const stat = await this.#retryRead(ctx, op, () => client.statFile(handle.opaque_resource_id, broker, frame))
       if (
+        !isRecord(stat) ||
         stat.path !== checkedPath ||
         !["file", "directory", "symlink"].includes(stat.type) ||
         !Number.isSafeInteger(stat.size_bytes) ||
@@ -1425,6 +1521,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
         const next = await iterator.next()
         if (next.done) break
         const providerChunk = next.value
+        if (!isRecord(providerChunk)) throw adapterError("integrity_failed")
         const bytes = providerChunk.bytes
         total += bytes.byteLength
         if (
@@ -1489,6 +1586,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
         return this.#anchorUnknown(ctx, op, cause)
       }
       if (
+        !isRecord(receipt) ||
         receipt.path !== request.path ||
         receipt.size_bytes !== request.bytes.byteLength ||
         receipt.sha256 !== canonicalSha256(request.bytes) ||
@@ -1496,9 +1594,11 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
       ) {
         return this.#anchorUnknown(ctx, op, adapterError("integrity_failed"))
       }
+      const providerReceiptSha256 = canonicalSha256(receipt)
       const outcomeAnchor = await this.#anchorOutcome(ctx, op, {
         observation: "completed",
-        file_receipt_sha256: canonicalSha256(receipt),
+        provider_receipt_sha256: providerReceiptSha256,
+        file_receipt_sha256: providerReceiptSha256,
       })
       return { ...receipt, provider_outcome_anchor_sha256: outcomeAnchor }
     }))
@@ -1514,6 +1614,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     handle = snapshotData(handle)
     request = snapshotData(request)
     op = snapshotData(op)
+    if (!isRecord(request)) throw adapterError("validation_failed")
     const checkedPath = validateWorkspacePath(request.path, true)
     if (
       !Number.isSafeInteger(request.limit) ||
@@ -1542,8 +1643,20 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
         this.#dependencies.guest_broker_authenticator,
       )
       const page = await this.#retryRead(ctx, op, () => client.listFiles(handle.opaque_resource_id, broker, frame))
-      if (page.items.length > request.limit) throw adapterError("integrity_failed")
+      if (
+        !isRecord(page) ||
+        !Array.isArray(page.items) ||
+        page.items.length > request.limit ||
+        (page.next_cursor !== undefined &&
+          (typeof page.next_cursor !== "string" ||
+            page.next_cursor.length === 0 ||
+            page.next_cursor.length > 4096 ||
+            /[\0-\x1f\x7f]/u.test(page.next_cursor)))
+      ) {
+        throw adapterError("integrity_failed")
+      }
       for (const item of page.items) {
+        if (!isRecord(item) || typeof item.path !== "string") throw adapterError("integrity_failed")
         validateWorkspacePath(item.path)
         if (!["file", "directory", "symlink"].includes(item.type)) {
           throw adapterError("integrity_failed")
@@ -1771,6 +1884,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     return this.#withClient(ctx, op, (client) => this.#withLifecycleLock(op, async () => {
       requireCapability(client, "ownership_inventory")
       const page = await this.#retryRead(ctx, op, () => client.listOwnedResources(cursor))
+      validateProviderPage(page)
       if (
         page.items.length > 1000 ||
         (page.next_cursor !== undefined && page.next_cursor === cursor)
