@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hasna.com/sandboxes/cleanup-grant-v1.schema.json",
+  "title": "InfinityCleanupGrantV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "grant_id",
+    "resource_id",
+    "resource_lifecycle_generation",
+    "post_resource_lifecycle_generation",
+    "provider_handle_sha256",
+    "operation_id",
+    "operation_digest",
+    "cleanup_executor_principal",
+    "basis",
+    "expires_at",
+    "one_use_nonce_sha256"
+  ],
+  "properties": {
+    "schema_version": { "const": "sandboxes.runtime/v1" },
+    "grant_id": { "$ref": "#/$defs/id" },
+    "resource_id": { "$ref": "#/$defs/id" },
+    "resource_lifecycle_generation": { "$ref": "#/$defs/epoch" },
+    "post_resource_lifecycle_generation": { "$ref": "#/$defs/epoch" },
+    "provider_handle_sha256": { "$ref": "#/$defs/digest" },
+    "operation_id": { "type": "string", "pattern": "^op_[0-9a-f]{32}$" },
+    "operation_digest": { "$ref": "#/$defs/digest" },
+    "cleanup_executor_principal": { "$ref": "#/$defs/id" },
+    "basis": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "receipt_sha256"],
+          "properties": {
+            "kind": { "enum": ["checkpoint_durable", "git_promotion"] },
+            "receipt_sha256": { "$ref": "#/$defs/digest" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "receipt_sha256",
+            "recovery_checkpoint_attempted",
+            "promotion_grants_revoked",
+            "permanent_outcome"
+          ],
+          "properties": {
+            "kind": { "const": "discard_uncheckpointed" },
+            "receipt_sha256": { "$ref": "#/$defs/digest" },
+            "recovery_checkpoint_attempted": { "const": true },
+            "promotion_grants_revoked": { "const": true },
+            "permanent_outcome": { "const": "discarded_uncheckpointed" }
+          }
+        }
+      ]
+    },
+    "expires_at": { "$ref": "#/$defs/time" },
+    "one_use_nonce_sha256": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]{1,31}_[0-9a-f]{32}$" },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "epoch": { "type": "string", "pattern": "^[1-9][0-9]{0,18}$" },
+    "time": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3,9}Z$" }
+  }
+}

@@ -1,4 +1,5 @@
 import {
+  assertDigest,
   assertOpaqueId,
   canonicalDigest,
   createOpaqueId,
@@ -22,8 +23,10 @@ import {
   type CapabilityClaimsV1,
   type CheckpointDurabilityReceiptV1,
   type CreateSandboxV1,
+  type DispatchedJournalAnchorV1,
   type GitPromotionReceiptRefV1,
   type InfinityCleanupGrantV1,
+  type LifecycleTransitionBindingV1,
   type MutationContextV1,
   type OperationRecordV1,
   type OperationResolutionV1,
@@ -42,11 +45,14 @@ import {
   validateCheckpointReceipt,
   validateCleanupGrant,
   validateCreateSandbox,
+  validateDispatchedJournalAnchor,
   validateFence,
+  validateLifecycleTransition,
 } from "./validation.js";
 
 export interface SandboxesAuthorityVerifierV1 {
   verifyCapability(claims: CapabilityClaimsV1): Promise<void>;
+  verifyDispatchedJournalAnchor(anchor: DispatchedJournalAnchorV1): Promise<void>;
   verifyActivationGrant(grant: ActivationGrantV1): Promise<void>;
   verifyCleanupGrant(grant: InfinityCleanupGrantV1): Promise<void>;
   verifyCheckpointReceipt(receipt: CheckpointDurabilityReceiptV1): Promise<void>;
@@ -67,6 +73,8 @@ interface NormalizedMutationContext {
   idempotency_key_sha256: Digest;
   request_sha256: Digest;
   expected_revision: number;
+  transition: LifecycleTransitionBindingV1;
+  dispatch_journal: DispatchedJournalAnchorV1;
   fence: CanonicalSandboxEffectFenceV1;
   capability: CapabilityClaimsV1;
 }
@@ -102,6 +110,20 @@ export function destroyRequestDigest(resourceId: string, basisReceiptSha256: Dig
   });
 }
 
+export function quarantineRequestDigest(resourceId: string, expiresAt: string): Digest {
+  return canonicalDigest({
+    schema_version: SCHEMA_VERSION,
+    operation: "quarantine",
+    resource_id: resourceId,
+    observed_expiry: expiresAt,
+  });
+}
+
+export function dispatchedJournalAnchorDigest(anchor: DispatchedJournalAnchorV1): Digest {
+  const { anchor_sha256: _ignored, ...protectedBytes } = anchor;
+  return canonicalDigest(protectedBytes);
+}
+
 export class SandboxesReferenceServiceV1 {
   readonly #repository: SandboxRepositoryV1;
   readonly #runner: SandboxRunnerV1;
@@ -127,7 +149,11 @@ export class SandboxesReferenceServiceV1 {
     if (input.spec.run_id !== ctx.fence.run_id || input.spec.attempt_id !== ctx.fence.attempt_id) {
       throw new SandboxError("request_digest_mismatch", "Spec authority references do not match the fence");
     }
-    if (ctx.expected_revision !== 0 || ctx.fence.resource_lifecycle_generation !== 1n) {
+    if (
+      ctx.expected_revision !== 0 ||
+      ctx.transition.expected_resource_lifecycle_generation !== 1n ||
+      ctx.fence.resource_lifecycle_generation !== 1n
+    ) {
       throw new SandboxError("stale_revision", "Inert create requires reserved revision zero and generation one");
     }
     const descriptor = await this.#runner.descriptor();
@@ -190,6 +216,7 @@ export class SandboxesReferenceServiceV1 {
     const op = this.#providerOperation("create_inert", ctx);
     let handle: OwnedProviderHandleV1;
     try {
+      await this.#verifyDispatched(ctx);
       handle = await this.#runner.createInert(
         this.#adapterContext(ctx),
         input.spec,
@@ -198,6 +225,7 @@ export class SandboxesReferenceServiceV1 {
       );
     } catch (error) {
       if (error instanceof AmbiguousProviderEffectError) {
+        await this.#verifyDispatched(ctx);
         const observation = await this.#runner.lookupOperation(
           { installation_id: "installation_00000000000000000000000000000001", deadline: ctx.fence.operation_execution_expires_at },
           op,
@@ -205,10 +233,15 @@ export class SandboxesReferenceServiceV1 {
         if (observation.state === "completed" && observation.handle !== undefined) {
           handle = observation.handle;
         } else {
-          return this.#markUnknown(initial.id, ctx.operation_id, "ambiguous_provider_state");
+          return this.#markUnknown(
+            initial.id,
+            ctx.operation_id,
+            "ambiguous_provider_state",
+            ctx.transition.post_resource_lifecycle_generation,
+          );
         }
       } else {
-        this.#markFailed(initial.id, ctx.operation_id);
+        this.#markFailed(initial.id, ctx.operation_id, ctx.transition.post_resource_lifecycle_generation);
         throw asSandboxError(error);
       }
     }
@@ -219,7 +252,7 @@ export class SandboxesReferenceServiceV1 {
       if (current.state !== "creating_inert" || current.revision !== 1) {
         throw new SandboxError("stale_revision", "Create receipt lost its reservation CAS");
       }
-      const generation = current.resource_lifecycle_generation + 1n;
+      const generation = ctx.transition.post_resource_lifecycle_generation;
       const sealed = this.#sealer.seal({ ...handle, resource_lifecycle_generation: generation });
       const committed: SandboxV1 = {
         ...current,
@@ -253,6 +286,7 @@ export class SandboxesReferenceServiceV1 {
     if (
       grant.resource_id !== resourceId ||
       grant.resource_lifecycle_generation !== ctx.fence.resource_lifecycle_generation ||
+      grant.post_resource_lifecycle_generation !== ctx.transition.post_resource_lifecycle_generation ||
       grant.operation_id !== ctx.operation_id ||
       grant.operation_digest !== ctx.request_sha256
     ) {
@@ -272,7 +306,7 @@ export class SandboxesReferenceServiceV1 {
       const operation = this.#reserve(tx, "activate", resourceId, ctx);
       if (operation.replay) return { ...operation, current };
       tx.consumeActivationGrant(canonicalDigest({ id: grant.grant_id, nonce: grant.one_use_nonce_sha256 }), ctx.operation_id);
-      const activating = this.#transition(current, "activating", "activation_dispatched", ctx.fence, false);
+      const activating = this.#transition(current, "activating", "activation_dispatched", ctx.fence);
       tx.putSandbox(activating, current.revision);
       this.#event(tx, activating, ctx.operation_id, "operation_reserved");
       return { ...operation, current: activating };
@@ -283,16 +317,33 @@ export class SandboxesReferenceServiceV1 {
     const handle = this.#sealer.open(sealed);
     this.#assertHandleGeneration(handle, ctx.fence);
     try {
+      await this.#verifyDispatched(ctx);
       await this.#runner.activate(this.#adapterContext(ctx), handle, grant, this.#providerOperation("activate", ctx));
     } catch (error) {
-      return this.#markUnknown(resourceId, ctx.operation_id, "ambiguous_provider_state");
+      return this.#markUnknown(
+        resourceId,
+        ctx.operation_id,
+        "ambiguous_provider_state",
+        ctx.transition.post_resource_lifecycle_generation,
+      );
     }
     return this.#repository.transaction((tx) => {
       const current = this.#mustSandbox(tx, resourceId);
       if (current.state !== "activating") throw new SandboxError("stale_revision", "Activation CAS was superseded");
-      const active = this.#transition(current, "active", "activation_receipt_committed", ctx.fence, true);
+      const transitioned = this.#transition(
+        current,
+        "active",
+        "activation_receipt_committed",
+        ctx.fence,
+        ctx.transition.post_resource_lifecycle_generation,
+      );
+      const nextHandle = this.#sealer.seal({
+        ...handle,
+        resource_lifecycle_generation: transitioned.resource_lifecycle_generation,
+      });
+      const active: SandboxV1 = { ...transitioned, provider_handle_sha256: nextHandle.provider_handle_sha256 };
       tx.putSandbox(active, current.revision);
-      tx.putHandle(this.#sealer.seal({ ...handle, resource_lifecycle_generation: active.resource_lifecycle_generation }));
+      tx.putHandle(nextHandle);
       this.#commitOperation(tx, ctx.operation_id, canonicalDigest(active));
       this.#event(tx, active, ctx.operation_id, "operation_committed");
       return active;
@@ -318,15 +369,35 @@ export class SandboxesReferenceServiceV1 {
     const handle = this.#sealer.open(sealed);
     this.#assertHandleGeneration(handle, ctx.fence);
     try {
+      await this.#verifyDispatched(ctx);
       await this.#runner.expire(this.#adapterContext(ctx), handle, this.#providerOperation("expire", ctx));
     } catch {
-      return this.#markUnknown(resourceId, ctx.operation_id, "ambiguous_provider_state");
+      return this.#markUnknown(
+        resourceId,
+        ctx.operation_id,
+        "ambiguous_provider_state",
+        ctx.transition.post_resource_lifecycle_generation,
+      );
     }
     return this.#repository.transaction((tx) => {
       const current = this.#mustSandbox(tx, resourceId);
-      const expiring = this.#transition(current, "expiring", "sandbox_expired", ctx.fence, true);
+      const transitioned = this.#transition(
+        current,
+        "expiring",
+        "sandbox_expired",
+        ctx.fence,
+        ctx.transition.post_resource_lifecycle_generation,
+      );
+      const nextHandle = this.#sealer.seal({
+        ...handle,
+        resource_lifecycle_generation: transitioned.resource_lifecycle_generation,
+      });
+      const expiring: SandboxV1 = {
+        ...transitioned,
+        provider_handle_sha256: nextHandle.provider_handle_sha256,
+      };
       tx.putSandbox(expiring, current.revision);
-      tx.putHandle(this.#sealer.seal({ ...handle, resource_lifecycle_generation: expiring.resource_lifecycle_generation }));
+      tx.putHandle(nextHandle);
       this.#commitOperation(tx, ctx.operation_id, canonicalDigest(expiring));
       this.#event(tx, expiring, ctx.operation_id, "operation_committed");
       return expiring;
@@ -364,6 +435,7 @@ export class SandboxesReferenceServiceV1 {
       if (
         grant.resource_id !== resourceId ||
         grant.resource_lifecycle_generation !== current.resource_lifecycle_generation ||
+        grant.post_resource_lifecycle_generation !== ctx.transition.post_resource_lifecycle_generation ||
         grant.provider_handle_sha256 !== current.provider_handle_sha256 ||
         grant.operation_id !== ctx.operation_id ||
         grant.operation_digest !== ctx.request_sha256 ||
@@ -375,7 +447,7 @@ export class SandboxesReferenceServiceV1 {
       const operation = this.#reserve(tx, "destroy", resourceId, ctx);
       if (operation.replay) return { ...operation, current };
       tx.consumeCleanupGrant(canonicalDigest({ id: grant.grant_id, nonce: grant.one_use_nonce_sha256 }), ctx.operation_id);
-      const destroying = this.#transition(current, "destroying", "cleanup_authorized", ctx.fence, false);
+      const destroying = this.#transition(current, "destroying", "cleanup_authorized", ctx.fence);
       tx.putSandbox(destroying, current.revision);
       this.#event(tx, destroying, ctx.operation_id, "operation_reserved");
       return { ...operation, current: destroying };
@@ -384,13 +456,19 @@ export class SandboxesReferenceServiceV1 {
 
     const sealed = this.#repository.transaction((tx) => tx.getHandle(resourceId));
     if (sealed === undefined || sealed.provider_handle_sha256 !== grant.provider_handle_sha256) {
-      return this.#quarantineCleanup(resourceId, ctx.operation_id, "provider_identity_mismatch");
+      return this.#quarantineCleanup(
+        resourceId,
+        ctx.operation_id,
+        "provider_identity_mismatch",
+        ctx.transition.post_resource_lifecycle_generation,
+      );
     }
     const handle = this.#sealer.open(sealed);
     this.#assertHandleGeneration(handle, ctx.fence);
     const providerOp = this.#providerOperation("destroy", ctx);
     let observation;
     try {
+      await this.#verifyDispatched(ctx);
       const inspected = await this.#runner.inspect(this.#adapterContext(ctx), handle, {
         ...providerOp,
         operation: "inspect",
@@ -400,7 +478,12 @@ export class SandboxesReferenceServiceV1 {
         (inspected.immutable_fingerprint_sha256 !== handle.immutable_fingerprint_sha256 ||
           inspected.provider_resource_version !== handle.provider_resource_version)
       ) {
-        return this.#quarantineCleanup(resourceId, ctx.operation_id, "provider_identity_mismatch");
+        return this.#quarantineCleanup(
+          resourceId,
+          ctx.operation_id,
+          "provider_identity_mismatch",
+          ctx.transition.post_resource_lifecycle_generation,
+        );
       }
       if (inspected.state === "absent") {
         observation = {
@@ -409,16 +492,28 @@ export class SandboxesReferenceServiceV1 {
           observed_at: this.#now(),
         };
       } else if (inspected.state === "unknown") {
-        return this.#quarantineCleanup(resourceId, ctx.operation_id, "ambiguous_provider_state");
+        return this.#quarantineCleanup(
+          resourceId,
+          ctx.operation_id,
+          "ambiguous_provider_state",
+          ctx.transition.post_resource_lifecycle_generation,
+        );
       } else {
         const destroyContext: DestroyContextV1 = {
           ...this.#adapterContext(ctx),
           cleanup_grant_sha256: canonicalDigest(grant),
         };
+        await this.#verifyDispatched(ctx);
         observation = await this.#runner.destroy(destroyContext, handle, providerOp);
       }
     } catch {
-      return this.#quarantineCleanup(resourceId, ctx.operation_id, "ambiguous_provider_state", "cleanup_failed");
+      return this.#quarantineCleanup(
+        resourceId,
+        ctx.operation_id,
+        "ambiguous_provider_state",
+        ctx.transition.post_resource_lifecycle_generation,
+        "cleanup_failed",
+      );
     }
 
     return this.#repository.transaction((tx) => {
@@ -429,7 +524,7 @@ export class SandboxesReferenceServiceV1 {
         absent ? "destroyed" : "cleanup_failed",
         absent ? "cleanup_terminal_absence" : "cleanup_unverified",
         ctx.fence,
-        true,
+        ctx.transition.post_resource_lifecycle_generation,
       );
       const completed: SandboxV1 = absent
         ? {
@@ -531,43 +626,84 @@ export class SandboxesReferenceServiceV1 {
     });
   }
 
-  reconcileExpired(): ReconcileFindingV1[] {
-    const now = this.#clock();
-    const candidates = this.list().filter(
+  expiredCandidates(): SandboxV1[] {
+    const now = this.#clock().getTime();
+    return this.list().filter(
       (sandbox) =>
-        Date.parse(sandbox.expires_at) <= now.getTime() &&
+        Date.parse(sandbox.expires_at) <= now &&
         ["creating_inert", "inert", "activating", "active", "expiring", "failed"].includes(sandbox.state),
     );
-    return candidates.map((candidate) =>
-      this.#repository.transaction((tx) => {
-        const current = this.#mustSandbox(tx, candidate.id);
-        if (!["creating_inert", "inert", "activating", "active", "expiring", "failed"].includes(current.state)) {
-          throw new SandboxError("stale_revision", "Expiry reconciliation was superseded");
-        }
-        const quarantined: SandboxV1 = {
-          ...current,
-          revision: current.revision + 1,
-          state: "quarantined",
-          state_reason_code: "sandbox_expired",
-          resource_lifecycle_generation: current.resource_lifecycle_generation + 1n,
-        };
-        tx.putSandbox(quarantined, current.revision);
-        const finding: ReconcileFindingV1 = {
+  }
+
+  async reconcileExpired(
+    resourceId: string,
+    contextValue: MutationContextV1,
+  ): Promise<ReconcileFindingV1> {
+    assertOpaqueId(resourceId, "resource_id", "sbx");
+    const snapshot = this.get(resourceId);
+    const ctx = await this.#authorize(
+      "quarantine",
+      resourceId,
+      quarantineRequestDigest(resourceId, snapshot.expires_at),
+      contextValue,
+    );
+    if (Date.parse(snapshot.expires_at) > this.#clock().getTime()) {
+      throw new SandboxError("policy_denied", "Sandbox TTL has not expired");
+    }
+    const now = this.#clock();
+    return this.#repository.transaction((tx) => {
+      const current = this.#mustSandbox(tx, resourceId);
+      this.#assertCurrentFence(current, ctx.fence);
+      this.#assertExpectedRevision(current, ctx.expected_revision);
+      if (!["creating_inert", "inert", "activating", "active", "expiring", "failed"].includes(current.state)) {
+        throw new SandboxError("stale_revision", "Expiry reconciliation was superseded");
+      }
+      const operation = this.#reserve(tx, "quarantine", resourceId, ctx);
+      if (operation.replay) {
+        return {
           schema_version: SCHEMA_VERSION,
           finding_id: createOpaqueId("finding"),
           resource_id: current.id,
           kind: "ttl_expired",
           disposition: "quarantined",
           observed_at: nowRfc3339(now),
-          evidence_sha256: canonicalDigest({
-            resource_id: current.id,
-            expires_at: current.expires_at,
-            observed_at: nowRfc3339(now),
-          }),
+          evidence_sha256: operation.operation.result_sha256 ?? canonicalDigest(current),
         };
-        return finding;
-      }),
-    );
+      }
+      const transitioned = this.#transition(
+        current,
+        "quarantined",
+        "sandbox_expired",
+        ctx.fence,
+        ctx.transition.post_resource_lifecycle_generation,
+      );
+      const nextHandleDigest = this.#advanceStoredHandle(
+        tx,
+        current.id,
+        transitioned.resource_lifecycle_generation,
+      );
+      const quarantined: SandboxV1 = nextHandleDigest === undefined
+        ? transitioned
+        : { ...transitioned, provider_handle_sha256: nextHandleDigest };
+      tx.putSandbox(quarantined, current.revision);
+      const finding: ReconcileFindingV1 = {
+        schema_version: SCHEMA_VERSION,
+        finding_id: createOpaqueId("finding"),
+        resource_id: current.id,
+        kind: "ttl_expired",
+        disposition: "quarantined",
+        observed_at: nowRfc3339(now),
+        evidence_sha256: canonicalDigest({
+          resource_id: current.id,
+          expires_at: current.expires_at,
+          observed_at: nowRfc3339(now),
+          post_resource_lifecycle_generation: ctx.transition.post_resource_lifecycle_generation,
+        }),
+      };
+      this.#commitOperation(tx, ctx.operation_id, finding.evidence_sha256);
+      this.#event(tx, quarantined, ctx.operation_id, "operation_committed");
+      return finding;
+    });
   }
 
   async #authorize(
@@ -578,7 +714,11 @@ export class SandboxesReferenceServiceV1 {
   ): Promise<NormalizedMutationContext> {
     const fence = validateFence(value.fence);
     const capability = validateCapability(value.capability);
+    const transition = validateLifecycleTransition(value.transition);
+    const dispatchJournal = validateDispatchedJournalAnchor(value.dispatch_journal);
     assertOpaqueId(value.operation_id, "context.operation_id", "op");
+    assertDigest(value.idempotency_key_sha256, "context.idempotency_key_sha256");
+    assertDigest(value.request_sha256, "context.request_sha256");
     if (!Number.isSafeInteger(value.expected_revision) || value.expected_revision < 0) {
       throw new SandboxError("validation_failed", "Expected revision must be a non-negative safe integer");
     }
@@ -590,10 +730,24 @@ export class SandboxesReferenceServiceV1 {
       throw new SandboxError("request_digest_mismatch", "Operation ID or request digest does not match the protected fence");
     }
     if (
+      transition.expected_resource_lifecycle_generation !== fence.resource_lifecycle_generation ||
+      dispatchJournal.operation_id !== fence.operation_id ||
+      dispatchJournal.operation_digest !== fence.operation_digest ||
+      dispatchJournal.resource_id !== fence.resource_id ||
+      dispatchJournal.authority_epoch !== fence.authority_epoch ||
+      dispatchJournal.expected_resource_lifecycle_generation !==
+        transition.expected_resource_lifecycle_generation ||
+      dispatchJournal.post_resource_lifecycle_generation !== transition.post_resource_lifecycle_generation ||
+      dispatchedJournalAnchorDigest(dispatchJournal) !== dispatchJournal.anchor_sha256
+    ) {
+      throw new SandboxError("integrity_failed", "DISPATCHED journal anchor does not bind the exact transition and fence");
+    }
+    if (
       capability.operation !== operation ||
       capability.target_resource_id !== resourceId ||
       capability.request_sha256 !== expectedDigest ||
-      canonicalDigest(capability.fence) !== canonicalDigest(fence)
+      canonicalDigest(capability.fence) !== canonicalDigest(fence) ||
+      capability.dispatch_journal_anchor_sha256 !== dispatchJournal.anchor_sha256
     ) {
       throw new SandboxError("capability_denied", "Capability does not bind the exact operation and full fence");
     }
@@ -605,9 +759,29 @@ export class SandboxesReferenceServiceV1 {
       idempotency_key_sha256: value.idempotency_key_sha256,
       request_sha256: expectedDigest,
       expected_revision: value.expected_revision,
+      transition,
+      dispatch_journal: dispatchJournal,
       fence,
       capability,
     };
+  }
+
+  async #verifyDispatched(ctx: NormalizedMutationContext): Promise<void> {
+    if (Date.parse(ctx.dispatch_journal.expires_at) <= this.#clock().getTime()) {
+      throw new SandboxError("lease_expired", "DISPATCHED journal anchor has expired");
+    }
+    if (ctx.dispatch_journal.state !== "dispatched") {
+      throw new SandboxError("capability_denied", "Provider effect lacks a DISPATCHED journal anchor");
+    }
+    await this.#verifier.verifyDispatchedJournalAnchor(ctx.dispatch_journal);
+    if (
+      dispatchedJournalAnchorDigest(ctx.dispatch_journal) !== ctx.dispatch_journal.anchor_sha256 ||
+      ctx.capability.dispatch_journal_anchor_sha256 !== ctx.dispatch_journal.anchor_sha256 ||
+      ctx.dispatch_journal.operation_id !== ctx.fence.operation_id ||
+      ctx.dispatch_journal.operation_digest !== ctx.fence.operation_digest
+    ) {
+      throw new SandboxError("integrity_failed", "DISPATCHED journal anchor changed before provider dispatch");
+    }
   }
 
   #assertFenceFresh(fence: CanonicalSandboxEffectFenceV1): void {
@@ -719,7 +893,10 @@ export class SandboxesReferenceServiceV1 {
       ) {
         throw new SandboxError("idempotency_key_reused", "Operation ID was reused with different protected bytes");
       }
-      return { operation: existingById, replay: existingById.state === "committed" };
+      if (existingById.state !== "committed") {
+        throw new SandboxError("provider_state_unknown", "The original operation is not durably resolved");
+      }
+      return { operation: existingById, replay: true };
     }
     const existingByKey = tx.findIdempotentOperation(
       ctx.fence.actor_principal,
@@ -731,7 +908,10 @@ export class SandboxesReferenceServiceV1 {
       if (existingByKey.request_sha256 !== ctx.request_sha256) {
         throw new SandboxError("idempotency_key_reused", "Idempotency key was reused with a different request");
       }
-      return { operation: existingByKey, replay: existingByKey.state === "committed" };
+      if (existingByKey.state !== "committed") {
+        throw new SandboxError("provider_state_unknown", "The original idempotent operation is not durably resolved");
+      }
+      return { operation: existingByKey, replay: true };
     }
     const now = this.#now();
     const capabilityUse = canonicalDigest({
@@ -801,16 +981,21 @@ export class SandboxesReferenceServiceV1 {
     resourceId: string,
     operationId: string,
     reason: SandboxStateReason,
+    postGeneration: bigint,
   ): SandboxV1 {
     return this.#repository.transaction((tx) => {
       const current = this.#mustSandbox(tx, resourceId);
-      const quarantined: SandboxV1 = {
+      let quarantined: SandboxV1 = {
         ...current,
         revision: current.revision + 1,
         state: "quarantined",
         state_reason_code: reason,
-        resource_lifecycle_generation: current.resource_lifecycle_generation + 1n,
+        resource_lifecycle_generation: postGeneration,
       };
+      const nextHandleDigest = this.#advanceStoredHandle(tx, resourceId, postGeneration);
+      if (nextHandleDigest !== undefined) {
+        quarantined = { ...quarantined, provider_handle_sha256: nextHandleDigest };
+      }
       tx.putSandbox(quarantined, current.revision);
       this.#unknownOperation(tx, operationId);
       this.#event(tx, quarantined, operationId, "operation_unknown");
@@ -818,16 +1003,20 @@ export class SandboxesReferenceServiceV1 {
     });
   }
 
-  #markFailed(resourceId: string, operationId: string): void {
+  #markFailed(resourceId: string, operationId: string, postGeneration: bigint): void {
     this.#repository.transaction((tx) => {
       const current = this.#mustSandbox(tx, resourceId);
-      const failed: SandboxV1 = {
+      let failed: SandboxV1 = {
         ...current,
         revision: current.revision + 1,
         state: "failed",
         state_reason_code: "provider_operation_failed",
-        resource_lifecycle_generation: current.resource_lifecycle_generation + 1n,
+        resource_lifecycle_generation: postGeneration,
       };
+      const nextHandleDigest = this.#advanceStoredHandle(tx, resourceId, postGeneration);
+      if (nextHandleDigest !== undefined) {
+        failed = { ...failed, provider_handle_sha256: nextHandleDigest };
+      }
       tx.putSandbox(failed, current.revision);
       const operation = tx.getOperation(operationId);
       if (operation !== undefined) {
@@ -846,17 +1035,22 @@ export class SandboxesReferenceServiceV1 {
     resourceId: string,
     operationId: string,
     reason: SandboxStateReason,
+    postGeneration: bigint,
     state: "quarantined" | "cleanup_failed" = "quarantined",
   ): SandboxV1 {
     return this.#repository.transaction((tx) => {
       const current = this.#mustSandbox(tx, resourceId);
-      const quarantined: SandboxV1 = {
+      let quarantined: SandboxV1 = {
         ...current,
         revision: current.revision + 1,
         state,
         state_reason_code: reason,
-        resource_lifecycle_generation: current.resource_lifecycle_generation + 1n,
+        resource_lifecycle_generation: postGeneration,
       };
+      const nextHandleDigest = this.#advanceStoredHandle(tx, resourceId, postGeneration);
+      if (nextHandleDigest !== undefined) {
+        quarantined = { ...quarantined, provider_handle_sha256: nextHandleDigest };
+      }
       tx.putSandbox(quarantined, current.revision);
       this.#unknownOperation(tx, operationId);
       this.#event(tx, quarantined, operationId, "operation_unknown");
@@ -869,7 +1063,7 @@ export class SandboxesReferenceServiceV1 {
     state: SandboxState,
     reason: SandboxStateReason,
     fence: CanonicalSandboxEffectFenceV1,
-    advanceGeneration: boolean,
+    postGeneration?: bigint,
   ): SandboxV1 {
     return {
       ...current,
@@ -884,9 +1078,7 @@ export class SandboxesReferenceServiceV1 {
       actor_principal: fence.actor_principal,
       lease_holder_principal: fence.lease_holder_principal,
       operation_executor_principal: fence.operation_executor_principal,
-      resource_lifecycle_generation: advanceGeneration
-        ? current.resource_lifecycle_generation + 1n
-        : current.resource_lifecycle_generation,
+      resource_lifecycle_generation: postGeneration ?? current.resource_lifecycle_generation,
       ...(state === "activating" ? { activation_operation_id: fence.operation_id } : {}),
     };
   }
@@ -915,6 +1107,19 @@ export class SandboxesReferenceServiceV1 {
     ) {
       throw new SandboxError("stale_resource_lifecycle_generation", "Sealed provider handle generation is stale");
     }
+  }
+
+  #advanceStoredHandle(
+    tx: SandboxRepositoryTxV1,
+    resourceId: string,
+    generation: bigint,
+  ): Digest | undefined {
+    const sealed = tx.getHandle(resourceId);
+    if (sealed === undefined) return undefined;
+    const handle = this.#sealer.open(sealed);
+    const next = this.#sealer.seal({ ...handle, resource_lifecycle_generation: generation });
+    tx.putHandle(next);
+    return next.provider_handle_sha256;
   }
 
   #providerOperation(operation: SandboxOperation, ctx: NormalizedMutationContext): ProviderOperationV1 {

@@ -1,9 +1,11 @@
 # `@hasna/sandboxes`
 
 Clean V1 sandbox runtime primitives for local and self-hosted Hasna systems.
-The package enforces Infinity-issued effect fences, separates inert creation
-from activation, quarantines ambiguous resources, and permits destruction only
-with an exact one-use Infinity cleanup grant.
+The package enforces Infinity-issued effect fences and exact Infinity-owned
+pre/post lifecycle generations, requires a signed external `DISPATCHED` journal
+anchor immediately before every provider call, separates inert creation from
+activation, quarantines ambiguous resources, and permits destruction only with
+an exact one-use Infinity cleanup grant.
 
 This first slice includes the reference domain model, in-memory and SQLite
 repositories, deterministic fake runner, closed validators, and a fail-closed

@@ -94,7 +94,28 @@ export interface CanonicalSandboxEffectFenceV1 {
   operation_execution_expires_at: string;
 }
 
-export type SandboxOperation = "create_inert" | "activate" | "expire" | "destroy";
+export type SandboxOperation = "create_inert" | "activate" | "expire" | "quarantine" | "destroy";
+
+export interface LifecycleTransitionBindingV1 {
+  expected_resource_lifecycle_generation: bigint;
+  post_resource_lifecycle_generation: bigint;
+}
+
+export interface DispatchedJournalAnchorV1 {
+  schema_version: SchemaVersion;
+  journal_anchor_id: string;
+  state: "dispatched";
+  operation_id: string;
+  operation_digest: Digest;
+  resource_id: string;
+  authority_epoch: bigint;
+  expected_resource_lifecycle_generation: bigint;
+  post_resource_lifecycle_generation: bigint;
+  recorded_at: string;
+  expires_at: string;
+  issuer_principal: string;
+  anchor_sha256: Digest;
+}
 
 export interface CapabilityClaimsV1 {
   schema_version: SchemaVersion;
@@ -103,6 +124,7 @@ export interface CapabilityClaimsV1 {
   operation: SandboxOperation;
   target_resource_id: string;
   request_sha256: Digest;
+  dispatch_journal_anchor_sha256: Digest;
   fence: CanonicalSandboxEffectFenceV1;
   not_before: string;
   expires_at: string;
@@ -113,6 +135,8 @@ export interface MutationContextV1 {
   idempotency_key_sha256: Digest;
   request_sha256: Digest;
   expected_revision: number;
+  transition: LifecycleTransitionBindingV1;
+  dispatch_journal: DispatchedJournalAnchorV1;
   fence: CanonicalSandboxEffectFenceV1;
   capability: CapabilityClaimsV1;
 }
@@ -129,6 +153,7 @@ export interface ActivationGrantV1 {
   grant_id: string;
   resource_id: string;
   resource_lifecycle_generation: bigint;
+  post_resource_lifecycle_generation: bigint;
   operation_id: string;
   operation_digest: Digest;
   network_policy_sha256: Digest;
@@ -149,6 +174,7 @@ export interface InfinityCleanupGrantV1 {
   grant_id: string;
   resource_id: string;
   resource_lifecycle_generation: bigint;
+  post_resource_lifecycle_generation: bigint;
   provider_handle_sha256: Digest;
   operation_id: string;
   operation_digest: Digest;
