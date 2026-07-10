@@ -65,6 +65,14 @@ export interface SandboxesAuthorityVerifierV1 {
     anchor: DispatchedJournalAnchorV1,
     fence: CanonicalSandboxEffectFenceV1,
   ): Promise<AuthenticatedEffectBindingsV1>;
+  verifyReadProbeJournalAnchor(
+    anchor: ReadProbeJournalAnchorV1,
+    fence: CanonicalSandboxEffectFenceV1,
+  ): Promise<AuthenticatedEffectBindingsV1>;
+  verifyProviderOutcomeAnchor(
+    anchor: ProviderOutcomeAnchorV1,
+    fence: CanonicalSandboxEffectFenceV1,
+  ): Promise<AuthenticatedEffectBindingsV1>;
   verifyActivationGrant(grant: ActivationGrantV1): Promise<void>;
   verifyCleanupGrant(grant: InfinityCleanupGrantV1): Promise<void>;
   verifyCheckpointReceipt(receipt: CheckpointDurabilityReceiptV1): Promise<void>;
@@ -107,6 +115,8 @@ export interface ProviderOutcomeJournalV1 {
     outcome: "succeeded" | "failed_no_effect" | "unknown";
     outcome_sha256: Digest;
     recorded_at: string;
+    fence: CanonicalSandboxEffectFenceV1;
+    target: ProviderEffectTargetV1;
   }): Promise<ProviderOutcomeAnchorV1>;
 }
 
@@ -1604,6 +1614,7 @@ export class SandboxesReferenceServiceV1 {
     const dispatchAnchorSha256 = hasDispatchJournal(ctx)
       ? ctx.dispatch_journal.anchor_sha256
       : undefined;
+    const providerTarget = hasDispatchJournal(ctx) ? this.#effectTarget(ctx) : undefined;
     const existingById = tx.getOperation(ctx.operation_id);
     if (existingById !== undefined) {
       if (
@@ -1614,6 +1625,7 @@ export class SandboxesReferenceServiceV1 {
         existingById.idempotency_key_sha256 !== ctx.idempotency_key_sha256 ||
         existingById.expected_revision !== ctx.expected_revision ||
         existingById.dispatch_journal_anchor_sha256 !== dispatchAnchorSha256 ||
+        canonicalDigest(existingById.provider_target ?? null) !== canonicalDigest(providerTarget ?? null) ||
         existingById.expected_resource_lifecycle_generation !==
           ctx.transition.expected_resource_lifecycle_generation ||
         existingById.successor_resource_lifecycle_generation !==
@@ -1638,6 +1650,7 @@ export class SandboxesReferenceServiceV1 {
         existingByKey.request_sha256 !== ctx.request_sha256 ||
         existingByKey.expected_revision !== ctx.expected_revision ||
         existingByKey.dispatch_journal_anchor_sha256 !== dispatchAnchorSha256 ||
+        canonicalDigest(existingByKey.provider_target ?? null) !== canonicalDigest(providerTarget ?? null) ||
         existingByKey.expected_resource_lifecycle_generation !==
           ctx.transition.expected_resource_lifecycle_generation ||
         existingByKey.successor_resource_lifecycle_generation !==
@@ -1660,6 +1673,7 @@ export class SandboxesReferenceServiceV1 {
         ? {
             operation_step_id: ctx.dispatch_journal.operation_step_id,
             dispatch_journal_anchor_sha256: ctx.dispatch_journal.anchor_sha256,
+            provider_target: this.#effectTarget(ctx),
           }
         : {}),
       operation,
@@ -1692,6 +1706,7 @@ export class SandboxesReferenceServiceV1 {
     const dispatchAnchorSha256 = hasDispatchJournal(ctx)
       ? ctx.dispatch_journal.anchor_sha256
       : undefined;
+    const providerTarget = hasDispatchJournal(ctx) ? this.#effectTarget(ctx) : undefined;
     const record = tx.getOperation(ctx.operation_id);
     if (
       record !== undefined &&
@@ -1702,6 +1717,7 @@ export class SandboxesReferenceServiceV1 {
       record.actor_principal === ctx.fence.actor_principal &&
       record.expected_revision === ctx.expected_revision &&
       record.dispatch_journal_anchor_sha256 === dispatchAnchorSha256 &&
+      canonicalDigest(record.provider_target ?? null) === canonicalDigest(providerTarget ?? null) &&
       record.expected_resource_lifecycle_generation ===
         ctx.transition.expected_resource_lifecycle_generation &&
       record.successor_resource_lifecycle_generation ===
@@ -2005,6 +2021,8 @@ export class SandboxesReferenceServiceV1 {
     ) {
       throw new SandboxError("integrity_failed", "READ_PROBE journal returned a mismatched signed anchor");
     }
+    const authenticated = await this.#verifier.verifyReadProbeJournalAnchor(anchor, ctx.fence);
+    this.#assertAuthenticatedBindings(authenticated, ctx.fence);
     this.#repository.transaction((tx) => {
       tx.appendExternalAnchor({
         schema_version: SCHEMA_VERSION,
@@ -2073,7 +2091,8 @@ export class SandboxesReferenceServiceV1 {
     }
     if (
       operation.operation_step_id === undefined ||
-      operation.dispatch_journal_anchor_sha256 === undefined
+      operation.dispatch_journal_anchor_sha256 === undefined ||
+      operation.provider_target === undefined
     ) {
       throw new SandboxError("integrity_failed", "Provider outcome has no dispatched operation step");
     }
@@ -2085,7 +2104,10 @@ export class SandboxesReferenceServiceV1 {
       outcome,
       outcome_sha256: outcomeSha256,
       recorded_at: recordedAt,
+      fence: operation.fence,
+      target: operation.provider_target,
     });
+    assertOpaqueId(anchor.issuer_principal, "outcome_anchor.issuer_principal", "principal");
     assertDigest(anchor.frontier_sha256, "outcome_anchor.frontier_sha256");
     assertDigest(anchor.anchor_sha256, "outcome_anchor.anchor_sha256");
     if (
@@ -2096,10 +2118,14 @@ export class SandboxesReferenceServiceV1 {
       anchor.outcome !== outcome ||
       anchor.outcome_sha256 !== outcomeSha256 ||
       anchor.recorded_at !== recordedAt ||
+      canonicalDigest(anchor.fence) !== canonicalDigest(operation.fence) ||
+      canonicalDigest(anchor.target) !== canonicalDigest(operation.provider_target) ||
       providerOutcomeAnchorDigest(anchor) !== anchor.anchor_sha256
     ) {
       throw new SandboxError("integrity_failed", "Outcome journal returned a mismatched signed frontier anchor");
     }
+    const authenticated = await this.#verifier.verifyProviderOutcomeAnchor(anchor, operation.fence);
+    this.#assertAuthenticatedBindings(authenticated, operation.fence);
     this.#repository.transaction((tx) => {
       tx.appendExternalAnchor({
         schema_version: SCHEMA_VERSION,

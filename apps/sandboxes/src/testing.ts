@@ -24,6 +24,8 @@ export class DeterministicTestAuthorityVerifierV1 implements SandboxesAuthorityV
   readonly calls = {
     capability: 0,
     dispatch_journal: 0,
+    read_probe_journal: 0,
+    outcome_journal: 0,
     activation: 0,
     cleanup: 0,
     checkpoint: 0,
@@ -45,6 +47,32 @@ export class DeterministicTestAuthorityVerifierV1 implements SandboxesAuthorityV
     fence: CapabilityClaimsV1["fence"],
   ): Promise<AuthenticatedEffectBindingsV1> {
     this.calls.dispatch_journal += 1;
+    return {
+      actor_principal: fence.actor_principal,
+      lease_holder_principal: fence.lease_holder_principal,
+      operation_executor_principal: fence.operation_executor_principal,
+      audience: fence.audience,
+    };
+  }
+
+  async verifyReadProbeJournalAnchor(
+    _anchor: ReadProbeJournalAnchorV1,
+    fence: CapabilityClaimsV1["fence"],
+  ): Promise<AuthenticatedEffectBindingsV1> {
+    this.calls.read_probe_journal += 1;
+    return {
+      actor_principal: fence.actor_principal,
+      lease_holder_principal: fence.lease_holder_principal,
+      operation_executor_principal: fence.operation_executor_principal,
+      audience: fence.audience,
+    };
+  }
+
+  async verifyProviderOutcomeAnchor(
+    _anchor: ProviderOutcomeAnchorV1,
+    fence: CapabilityClaimsV1["fence"],
+  ): Promise<AuthenticatedEffectBindingsV1> {
+    this.calls.outcome_journal += 1;
     return {
       actor_principal: fence.actor_principal,
       lease_holder_principal: fence.lease_holder_principal,
@@ -101,14 +129,9 @@ export class DeterministicTestPhysicalSafetyControllerV1 implements PhysicalSafe
 export class DeterministicTestProviderOutcomeJournalV1 implements ProviderOutcomeJournalV1 {
   readonly calls: Array<{ operation_id: string; outcome: string }> = [];
 
-  async appendOutcome(input: {
-    operation_id: string;
-    operation_step_id: string;
-    dispatch_anchor_sha256: Digest;
-    outcome: "succeeded" | "failed_no_effect" | "unknown";
-    outcome_sha256: Digest;
-    recorded_at: string;
-  }): Promise<ProviderOutcomeAnchorV1> {
+  async appendOutcome(
+    input: Parameters<ProviderOutcomeJournalV1["appendOutcome"]>[0],
+  ): Promise<ProviderOutcomeAnchorV1> {
     this.calls.push({ operation_id: input.operation_id, outcome: input.outcome });
     const base = {
       schema_version: "sandboxes.runtime/v1" as const,
@@ -118,7 +141,10 @@ export class DeterministicTestProviderOutcomeJournalV1 implements ProviderOutcom
       outcome: input.outcome,
       outcome_sha256: input.outcome_sha256,
       recorded_at: input.recorded_at,
+      issuer_principal: "principal_00000000000000000000000000000061",
       frontier_sha256: sha256(`outcome-frontier:${input.operation_id}:${input.operation_step_id}:${input.outcome}`),
+      fence: input.fence,
+      target: input.target,
       anchor_sha256: sha256("temporary-outcome-anchor"),
     };
     const { anchor_sha256: _ignored, ...protectedBytes } = base;

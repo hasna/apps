@@ -162,7 +162,10 @@ export interface ProviderOutcomeAnchorV1 {
   outcome: "succeeded" | "failed_no_effect" | "unknown";
   outcome_sha256: Digest;
   recorded_at: string;
+  issuer_principal: string;
   frontier_sha256: Digest;
+  fence: CanonicalSandboxEffectFenceV1;
+  target: ProviderEffectTargetV1;
   anchor_sha256: Digest;
 }
 
@@ -471,6 +474,7 @@ export interface OperationRecordV1 {
   request_sha256: Digest;
   capability_use_sha256: Digest;
   dispatch_journal_anchor_sha256?: Digest;
+  provider_target?: ProviderEffectTargetV1;
   expected_resource_lifecycle_generation: bigint;
   successor_resource_lifecycle_generation: bigint;
   fence: CanonicalSandboxEffectFenceV1;
