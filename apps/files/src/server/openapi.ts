@@ -10,6 +10,12 @@ export const OPENAPI_VERSION = "1.1.0";
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 const ok = (schema: unknown) => ({ content: { "application/json": { schema } } });
 const idParam = (name: string) => ({ name, in: "path" as const, required: true, schema: { type: "string" } });
+const assetId = { type: "string", pattern: "^asset_[a-f0-9]{16}$" } as const;
+const intentId = { type: "string", pattern: "^upl_[A-Za-z0-9_-]{12}$" } as const;
+const safeTimestamp = {
+  type: "string",
+  pattern: "^\\d{4}-\\d{2}-\\d{2}(?:T| )\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?(?:Z|[+-]\\d{2}(?::?\\d{2})?)?$",
+} as const;
 
 export const openApiDocument = {
   openapi: "3.0.3",
@@ -95,7 +101,7 @@ export const openApiDocument = {
         type: "object",
         additionalProperties: false,
         properties: {
-          id: { type: "string" }, org_id: { type: "string" }, company_id: { type: "string" },
+          id: assetId, org_id: { type: "string" }, company_id: { type: "string" },
           app: { type: "string" }, kind: { type: "string" }, classification: { type: "string" },
           original_name: { type: "string" }, content_type: { type: "string" },
           size: { type: "integer", minimum: 0 }, checksum: { type: "string" },
@@ -108,7 +114,7 @@ export const openApiDocument = {
           retention_until: { type: "string" }, retention_policy: { type: "string" },
           storage_class: { type: "string" }, legal_hold: { type: "boolean" }, immutable: { type: "boolean" },
           metadata: { type: "object", additionalProperties: true },
-          created_at: { type: "string" }, updated_at: { type: "string" }, verified_at: { type: "string" },
+          created_at: safeTimestamp, updated_at: safeTimestamp, verified_at: safeTimestamp,
         },
         required: [
           "id", "org_id", "app", "kind", "classification", "original_name", "content_type",
@@ -121,12 +127,12 @@ export const openApiDocument = {
         additionalProperties: false,
         "x-sensitive": true,
         properties: {
-          id: { type: "string" }, asset_id: { type: "string" }, method: { type: "string", enum: ["PUT"] },
+          id: intentId, asset_id: assetId, method: { type: "string", enum: ["PUT"] },
           upload_url: {
             type: "string", format: "password", readOnly: true, "x-sensitive": true,
             description: "One-use byte transport capability. Never log, persist, or return from ordinary CLI/MCP output.",
           },
-          expires_at: { type: "string" },
+          expires_at: safeTimestamp,
           status: { type: "string", enum: ["pending", "completed", "expired", "cancelled"] },
           expected_checksum: { type: "string" }, expected_checksum_algorithm: { type: "string" },
           expected_size: { type: "integer", minimum: 0 },
@@ -135,7 +141,7 @@ export const openApiDocument = {
             description: "Ephemeral allowlisted transport headers. Never persist or log values.",
           },
           metadata: { type: "object", additionalProperties: true },
-          created_at: { type: "string" }, completed_at: { type: "string" },
+          created_at: safeTimestamp, completed_at: safeTimestamp,
         },
         required: [
           "id", "asset_id", "method", "upload_url", "expires_at", "status", "expected_checksum",
@@ -153,9 +159,9 @@ export const openApiDocument = {
         type: "object",
         additionalProperties: false,
         properties: {
-          id: { type: "string" }, status: { type: "string" }, scan_status: { type: "string" },
+          id: assetId, status: { type: "string" }, scan_status: { type: "string" },
           checksum: { type: "string" }, checksum_algorithm: { type: "string" },
-          size: { type: "integer" }, storage_provider: { type: "string" }, verified_at: { type: "string" },
+          size: { type: "integer" }, storage_provider: { type: "string" }, verified_at: safeTimestamp,
         },
         required: ["id", "status", "scan_status", "checksum", "checksum_algorithm", "size", "storage_provider"],
       },
@@ -163,10 +169,10 @@ export const openApiDocument = {
         type: "object",
         additionalProperties: false,
         properties: {
-          id: { type: "string" }, asset_id: { type: "string" }, expires_at: { type: "string" },
+          id: intentId, asset_id: assetId, expires_at: safeTimestamp,
           status: { type: "string" }, expected_checksum: { type: "string" },
           expected_checksum_algorithm: { type: "string" }, expected_size: { type: "integer" },
-          created_at: { type: "string" }, completed_at: { type: "string" },
+          created_at: safeTimestamp, completed_at: safeTimestamp,
         },
         required: [
           "id", "asset_id", "expires_at", "status", "expected_checksum",

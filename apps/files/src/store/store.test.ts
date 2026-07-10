@@ -145,12 +145,13 @@ describe("ApiStore route mapping", () => {
   it("routes the shared evidence vault through /v1/evidence (never local sqlite)", async () => {
     const { transport, calls } = fakeTransport();
     const createdAt = new Date().toISOString();
+    const uploadAssetId = "asset_0123456789abcdef";
     const asset = {
-      id: "asset_1", org_id: "org_1", app: "iapp-accounting", kind: "receipt",
+      id: uploadAssetId, org_id: "org_1", app: "iapp-accounting", kind: "receipt",
       classification: "evidence", original_name: "r.pdf", content_type: "application/pdf",
       size: 10, checksum: "a".repeat(64), checksum_algorithm: "sha256",
-      storage_provider: "s3", bucket: "synthetic-bucket", region: "us-east-1",
-      object_key: "evidence/asset_1/r.pdf", quarantine_key: "quarantine/evidence/asset_1/r.pdf",
+      storage_provider: "s3", bucket: "hasna-xyz-opensource-files-prod", region: "us-east-1",
+      object_key: `evidence/${uploadAssetId}/r.pdf`, quarantine_key: `quarantine/evidence/${uploadAssetId}/r.pdf`,
       status: "pending_upload", scan_status: "pending", legal_hold: false, immutable: false,
       metadata: {}, created_at: createdAt, updated_at: createdAt,
     };
@@ -160,8 +161,8 @@ describe("ApiStore route mapping", () => {
         return {
           asset,
           intent: {
-            id: "upl_1", asset_id: asset.id, method: "PUT",
-            upload_url: "https://synthetic-bucket.s3.amazonaws.com/upload",
+            id: "upl_0123456789ab", asset_id: asset.id, method: "PUT",
+            upload_url: `https://hasna-xyz-opensource-files-prod.s3.amazonaws.com/${asset.quarantine_key}`,
             expires_at: new Date(Date.now() + 60_000).toISOString(), status: "pending",
             expected_checksum: asset.checksum, expected_checksum_algorithm: "sha256", expected_size: asset.size,
             required_headers: {

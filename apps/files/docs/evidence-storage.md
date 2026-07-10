@@ -100,7 +100,11 @@ private asset ids and object keys stay in operator artifacts.
 - API clients accept HTTPS upload capabilities only for AWS S3 origins by
   default. Non-AWS S3-compatible endpoints must be explicitly allowlisted with
   `HASNA_FILES_EVIDENCE_UPLOAD_ORIGINS` (comma-separated HTTPS origins); plain
-  HTTP is accepted only for loopback test/development transports.
+  HTTP is accepted only for an explicitly listed loopback origin when
+  `HASNA_FILES_EVIDENCE_ALLOW_INSECURE_LOOPBACK=1` is also set. Every accepted
+  URL is bound to an approved bucket (`HASNA_FILES_EVIDENCE_UPLOAD_BUCKETS`, or
+  the configured/default evidence bucket) and the exact quarantine object key;
+  redirects are rejected before bytes can be forwarded to another origin.
 - Default CLI/MCP upload output is an opaque receipt containing asset, intent,
   checksum, and status identifiers only. Transport URLs and signing headers are
   available only inside the explicit low-level create-intent transport and must

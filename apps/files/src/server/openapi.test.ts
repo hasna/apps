@@ -19,6 +19,9 @@ describe("evidence OpenAPI contract", () => {
     expect(uploadUrl.readOnly).toBe(true);
     expect(uploadUrl.format).toBe("password");
     expect(uploadUrl["x-sensitive"]).toBe(true);
+    expect(schemas.FileAsset.properties.id.pattern).toContain("asset_");
+    expect(schemas.FileUploadIntent.properties.id.pattern).toContain("upl_");
+    expect(schemas.FileUploadIntent.properties.expires_at.pattern).toContain("\\d{4}");
 
     const receiptText = JSON.stringify(schemas.EvidenceUploadReceipt);
     expect(receiptText.includes("upload_url")).toBe(false);

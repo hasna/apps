@@ -14,6 +14,8 @@ import {
 describe("evidence upload output safety", () => {
   test("returns an opaque receipt and redacts synthetic transport query material", () => {
     const now = new Date().toISOString();
+    const assetId = "asset_0123456789abcdef";
+    const intentId = "upl_0123456789ab";
     const transportUrl = new URL("https://synthetic.invalid/upload");
     transportUrl.searchParams.set("Synthetic-Credential", "CANARY_CREDENTIAL_VALUE");
     transportUrl.searchParams.set("Synthetic-Session", "CANARY_SESSION_VALUE");
@@ -21,7 +23,7 @@ describe("evidence upload output safety", () => {
 
     const transportResult: EvidenceUploadResult = {
       asset: {
-        id: "asset_synthetic",
+        id: assetId,
         org_id: "org_synthetic",
         app: "iapp-synthetic",
         kind: "receipt",
@@ -43,8 +45,8 @@ describe("evidence upload output safety", () => {
         updated_at: now,
       },
       intent: {
-        id: "intent_synthetic",
-        asset_id: "asset_synthetic",
+        id: intentId,
+        asset_id: assetId,
         method: "PUT",
         upload_url: transportUrl.toString(),
         expires_at: now,
@@ -64,6 +66,12 @@ describe("evidence upload output safety", () => {
     expect(receiptJson.includes("synthetic-bucket")).toBe(false);
     expect(receiptJson.includes("object_key")).toBe(false);
     expect(receiptJson.includes("CANARY_")).toBe(false);
+
+    const unsafeId = "https://synthetic.invalid/transport/CANARY_RECEIPT_ID";
+    expect(() => toEvidenceUploadReceipt({
+      asset: { ...transportResult.asset, id: unsafeId },
+      intent: { ...transportResult.intent, asset_id: unsafeId },
+    })).toThrow("Invalid evidence upload receipt");
 
     const safeError = redactSensitiveTransportText(`Upload failed: ${transportUrl.toString()}`);
     expect(safeError.includes("synthetic.invalid")).toBe(false);
@@ -124,6 +132,21 @@ describe("evidence upload output safety", () => {
     (circular as Error & { cause?: unknown }).cause = circular;
     const safeCircular = sanitizeEvidenceTransportError(circular);
     expect(`${safeCircular.message}${JSON.stringify(safeCircular)}`.includes("CANARY_CIRCULAR")).toBe(false);
+
+    const withNativeCause = new Error("outer failure", {
+      cause: new Error("https://synthetic.invalid/transport/CANARY_NATIVE_CAUSE"),
+    });
+    const safeNativeCause = sanitizeEvidenceTransportError(withNativeCause) as Error & { cause?: { message?: string } };
+    expect(String(safeNativeCause.cause?.message).includes("CANARY_NATIVE_CAUSE")).toBe(false);
+
+    const aggregate = new AggregateError(
+      [new Error("Authorization: Bearer CANARY_AGGREGATE_ERROR")],
+      "aggregate failure",
+      { cause: new Error("file:///tmp/CANARY_AGGREGATE_CAUSE") },
+    );
+    const safeAggregate = sanitizeEvidenceTransportError(aggregate) as AggregateError & { cause?: { message?: string } };
+    expect(String(safeAggregate.errors[0]?.message).includes("CANARY_AGGREGATE_ERROR")).toBe(false);
+    expect(String(safeAggregate.cause?.message).includes("CANARY_AGGREGATE_CAUSE")).toBe(false);
   });
 
   test("preserves the public one-shot upload result contract", () => {

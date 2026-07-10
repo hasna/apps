@@ -47,6 +47,9 @@ describe("evidence CLI", () => {
     const sessionCanary = "CANARY_SESSION_VALUE";
     const signatureCanary = "CANARY_SIGNATURE_VALUE";
     const failureCanary = "CANARY_PROPAGATED_FAILURE_PATH";
+    const assetId = "asset_0123456789abcdef";
+    const intentId = "upl_0123456789ab";
+    const quarantineKey = "quarantine/evidence/synthetic-object";
     let uploadReceived = false;
     let completionReceived = false;
     let completionAfterSuccessfulUpload = false;
@@ -64,7 +67,7 @@ describe("evidence CLI", () => {
           const body = await request.json() as Record<string, unknown>;
           const now = new Date().toISOString();
           const asset: Record<string, unknown> = {
-            id: "asset_synthetic",
+            id: assetId,
             org_id: body.org_id,
             app: body.app,
             kind: body.kind,
@@ -76,8 +79,9 @@ describe("evidence CLI", () => {
             checksum_algorithm: "sha256",
             storage_provider: "s3",
             bucket: "synthetic-bucket",
+            region: "us-east-1",
             object_key: "evidence/synthetic-object",
-            quarantine_key: "quarantine/evidence/synthetic-object",
+            quarantine_key: quarantineKey,
             status: "pending_upload",
             scan_status: "pending",
             legal_hold: false,
@@ -87,14 +91,14 @@ describe("evidence CLI", () => {
             updated_at: now,
           };
           lastAsset = asset;
-          const uploadUrl = new URL("/synthetic-upload-transport", server.url);
+          const uploadUrl = new URL(`/${quarantineKey}`, server.url);
           uploadUrl.searchParams.set("Synthetic-Credential", credentialCanary);
           uploadUrl.searchParams.set("Synthetic-Session", sessionCanary);
           uploadUrl.searchParams.set("Synthetic-Signature", signatureCanary);
           return Response.json({
             asset,
             intent: {
-              id: "intent_synthetic",
+              id: intentId,
               asset_id: asset.id,
               method: "PUT",
               upload_url: uploadUrl.toString(),
@@ -118,14 +122,14 @@ describe("evidence CLI", () => {
             },
           });
         }
-        if (request.method === "PUT" && url.pathname === "/synthetic-upload-transport") {
+        if (request.method === "PUT" && url.pathname === `/${quarantineKey}`) {
           uploadReceived = true;
           uploadedHeaders = request.headers;
           uploadedBytes = Buffer.from(await request.arrayBuffer()).toString();
           successfulUpload = true;
           return new Response(null, { status: 200 });
         }
-        if (request.method === "POST" && url.pathname === "/v1/evidence/upload-intents/intent_synthetic/complete") {
+        if (request.method === "POST" && url.pathname === `/v1/evidence/upload-intents/${intentId}/complete`) {
           completionReceived = true;
           completionAfterSuccessfulUpload = successfulUpload;
           const now = new Date().toISOString();
@@ -163,6 +167,9 @@ describe("evidence CLI", () => {
           HASNA_FILES_STORAGE_MODE: "self_hosted",
           HASNA_FILES_API_URL: new URL("/v1", server.url).toString(),
           HASNA_FILES_API_KEY: "test-only-api-key",
+          HASNA_FILES_EVIDENCE_UPLOAD_ORIGINS: server.url.origin,
+          HASNA_FILES_EVIDENCE_ALLOW_INSECURE_LOOPBACK: "1",
+          HASNA_FILES_EVIDENCE_UPLOAD_BUCKETS: "synthetic-bucket",
         },
         stdout: "pipe",
         stderr: "pipe",
@@ -199,6 +206,9 @@ describe("evidence CLI", () => {
           HASNA_FILES_STORAGE_MODE: "self_hosted",
           HASNA_FILES_API_URL: new URL("/v1", server.url).toString(),
           HASNA_FILES_API_KEY: "test-only-api-key",
+          HASNA_FILES_EVIDENCE_UPLOAD_ORIGINS: server.url.origin,
+          HASNA_FILES_EVIDENCE_ALLOW_INSECURE_LOOPBACK: "1",
+          HASNA_FILES_EVIDENCE_UPLOAD_BUCKETS: "synthetic-bucket",
         },
         stdout: "pipe",
         stderr: "pipe",
@@ -230,6 +240,9 @@ describe("evidence CLI", () => {
           HASNA_FILES_STORAGE_MODE: "self_hosted",
           HASNA_FILES_API_URL: new URL("/v1", server.url).toString(),
           HASNA_FILES_API_KEY: "test-only-api-key",
+          HASNA_FILES_EVIDENCE_UPLOAD_ORIGINS: server.url.origin,
+          HASNA_FILES_EVIDENCE_ALLOW_INSECURE_LOOPBACK: "1",
+          HASNA_FILES_EVIDENCE_UPLOAD_BUCKETS: "synthetic-bucket",
         },
         stdout: "pipe",
         stderr: "pipe",
@@ -249,14 +262,14 @@ describe("evidence CLI", () => {
       expect(completionAfterSuccessfulUpload).toBe(true);
       expect(uploadedBytes).toBe("synthetic receipt bytes");
       expect(uploadedHeaders?.get("content-type")).toBe("text/plain");
-      expect(uploadedHeaders?.get("x-amz-meta-asset-id")).toBe("asset_synthetic");
+      expect(uploadedHeaders?.get("x-amz-meta-asset-id")).toBe(assetId);
       const output = JSON.parse(stdout) as { intent: Record<string, unknown> };
       const createOutput = JSON.parse(createStdout) as { intent: Record<string, unknown> };
       expect("upload_url" in output.intent).toBe(false);
       expect("upload_url" in createOutput.intent).toBe(false);
       const ordinaryTranscript = `${stdout}\n${stderr}\n${createStdout}\n${createStderr}\n${failingStdout}\n${failingStderr}`;
       const leaked = [
-        "synthetic-upload-transport",
+        quarantineKey,
         "Synthetic-Credential",
         "Synthetic-Session",
         "Synthetic-Signature",

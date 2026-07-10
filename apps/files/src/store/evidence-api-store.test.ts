@@ -13,6 +13,9 @@ import { ApiStore } from "./api-store.js";
 const testDir = mkdtempSync(join(tmpdir(), "files-api-evidence-"));
 const fixture = join(testDir, "receipt.txt");
 const fixtureBytes = Buffer.from("synthetic receipt bytes");
+const ASSET_ID = "asset_0123456789abcdef";
+const INTENT_ID = "upl_0123456789ab";
+const QUARANTINE_KEY = "quarantine/evidence/synthetic-object";
 writeFileSync(fixture, fixtureBytes);
 
 let uploadStatus = 200;
@@ -20,6 +23,9 @@ let uploadCalls = 0;
 let uploadedBytes = Buffer.alloc(0);
 let uploadedHeaders: Headers | undefined;
 let server: ReturnType<typeof Bun.serve>;
+const priorUploadOrigins = process.env.HASNA_FILES_EVIDENCE_UPLOAD_ORIGINS;
+const priorLoopbackPolicy = process.env.HASNA_FILES_EVIDENCE_ALLOW_INSECURE_LOOPBACK;
+const priorUploadBuckets = process.env.HASNA_FILES_EVIDENCE_UPLOAD_BUCKETS;
 
 beforeAll(() => {
   server = Bun.serve({
@@ -32,17 +38,27 @@ beforeAll(() => {
       return new Response(null, { status: uploadStatus });
     },
   });
+  process.env.HASNA_FILES_EVIDENCE_UPLOAD_ORIGINS = server.url.origin;
+  process.env.HASNA_FILES_EVIDENCE_ALLOW_INSECURE_LOOPBACK = "1";
+  process.env.HASNA_FILES_EVIDENCE_UPLOAD_BUCKETS = "synthetic-bucket";
 });
 
 afterAll(() => {
   server.stop(true);
   rmSync(testDir, { recursive: true, force: true });
+  if (priorUploadOrigins === undefined) delete process.env.HASNA_FILES_EVIDENCE_UPLOAD_ORIGINS;
+  else process.env.HASNA_FILES_EVIDENCE_UPLOAD_ORIGINS = priorUploadOrigins;
+  if (priorLoopbackPolicy === undefined) delete process.env.HASNA_FILES_EVIDENCE_ALLOW_INSECURE_LOOPBACK;
+  else process.env.HASNA_FILES_EVIDENCE_ALLOW_INSECURE_LOOPBACK = priorLoopbackPolicy;
+  if (priorUploadBuckets === undefined) delete process.env.HASNA_FILES_EVIDENCE_UPLOAD_BUCKETS;
+  else process.env.HASNA_FILES_EVIDENCE_UPLOAD_BUCKETS = priorUploadBuckets;
 });
 
 describe("ApiStore evidence response boundary", () => {
   test("rejects malformed or contradictory create-intent payloads before byte transport", async () => {
     const input = baseInput();
-    const valid = createResponse(input, new URL("/upload", server.url).toString());
+    const valid = createResponse(input, uploadUrl(server.url));
+    const unsafeId = "https://synthetic.invalid/transport/CANARY_RECEIPT_ID";
     const invalidPayloads: unknown[] = [
       {},
       { ...valid, unexpected: true },
@@ -50,7 +66,20 @@ describe("ApiStore evidence response boundary", () => {
       { ...valid, intent: { ...valid.intent, upload_url: undefined } },
       { ...valid, intent: { ...valid.intent, upload_url: "file:///tmp/CANARY_FORBIDDEN_SCHEME" } },
       { ...valid, intent: { ...valid.intent, upload_url: "https://synthetic.invalid/CANARY_FORBIDDEN_ORIGIN" } },
+      { ...valid, intent: { ...valid.intent, upload_url: `https://sts.amazonaws.com/${QUARANTINE_KEY}` } },
+      { ...valid, intent: { ...valid.intent, upload_url: `https://other-bucket.s3.us-east-1.amazonaws.com/${QUARANTINE_KEY}` } },
+      {
+        ...valid,
+        asset: { ...valid.asset, bucket: "undeclared-bucket" },
+        intent: { ...valid.intent, upload_url: `https://undeclared-bucket.s3.us-east-1.amazonaws.com/${QUARANTINE_KEY}` },
+      },
+      { ...valid, intent: { ...valid.intent, upload_url: `https://synthetic-bucket.s3.us-east-1.amazonaws.com/wrong-key` } },
       { ...valid, intent: { ...valid.intent, asset_id: "asset_other" } },
+      { ...valid, asset: { ...valid.asset, id: unsafeId }, intent: { ...valid.intent, asset_id: unsafeId } },
+      { ...valid, intent: { ...valid.intent, id: "https://synthetic.invalid/transport/CANARY_RECEIPT_INTENT" } },
+      { ...valid, intent: { ...valid.intent, completed_at: "https://synthetic.invalid/transport/CANARY_COMPLETED_AT" } },
+      { ...valid, intent: { ...valid.intent, created_at: "Fri, 10 Jul 2026 00:00:00 GMT (https://synthetic.invalid/CANARY_CREATED_AT)" } },
+      { ...valid, intent: { ...valid.intent, expires_at: new Date(Date.now() + 3_600_000).toISOString() } },
       { ...valid, intent: { ...valid.intent, expected_size: valid.intent.expected_size + 1 } },
       { ...valid, intent: { ...valid.intent, expected_checksum: "f".repeat(64) } },
       { ...valid, intent: { ...valid.intent, metadata: { upload_url: "https://synthetic.invalid/CANARY_NESTED_URL" } } },
@@ -73,12 +102,28 @@ describe("ApiStore evidence response boundary", () => {
     process.env[key] = "https://uploads.synthetic.invalid";
     try {
       const input = baseInput();
-      const response = createResponse(input, "https://uploads.synthetic.invalid/transport");
+      const response = createResponse(input, `https://uploads.synthetic.invalid/${QUARANTINE_KEY}`);
       const store = apiStore(async () => response);
-      expect((await store.createEvidenceUploadIntent(input)).intent.id).toBe("intent_synthetic");
+      expect((await store.createEvidenceUploadIntent(input)).intent.id).toBe(INTENT_ID);
     } finally {
       if (prior === undefined) delete process.env[key];
       else process.env[key] = prior;
+    }
+  });
+
+  test("rejects loopback HTTP unless both the origin and insecure test policy are explicit", async () => {
+    const origins = process.env.HASNA_FILES_EVIDENCE_UPLOAD_ORIGINS;
+    const policy = process.env.HASNA_FILES_EVIDENCE_ALLOW_INSECURE_LOOPBACK;
+    delete process.env.HASNA_FILES_EVIDENCE_UPLOAD_ORIGINS;
+    delete process.env.HASNA_FILES_EVIDENCE_ALLOW_INSECURE_LOOPBACK;
+    try {
+      const input = baseInput();
+      const response = createResponse(input, uploadUrl(server.url));
+      const store = apiStore(async () => response);
+      await expect(store.createEvidenceUploadIntent(input)).rejects.toThrow("Invalid evidence upload intent response");
+    } finally {
+      if (origins !== undefined) process.env.HASNA_FILES_EVIDENCE_UPLOAD_ORIGINS = origins;
+      if (policy !== undefined) process.env.HASNA_FILES_EVIDENCE_ALLOW_INSECURE_LOOPBACK = policy;
     }
   });
 
@@ -87,7 +132,7 @@ describe("ApiStore evidence response boundary", () => {
     let completionCalls = 0;
     const store = apiStore(async (path, body) => {
       if (path === "/evidence/upload-intents") {
-        const response = createResponse(body as CreateEvidenceUploadInput, new URL("/upload", server.url).toString());
+        const response = createResponse(body as CreateEvidenceUploadInput, uploadUrl(server.url));
         response.intent.required_headers = {
           ...response.intent.required_headers,
           "x-amz-security-token": "CANARY_INVALID_HEADER\nVALUE",
@@ -129,7 +174,7 @@ describe("ApiStore evidence response boundary", () => {
     let created: EvidenceUploadResult | undefined;
     const store = apiStore(async (path, body) => {
       if (path === "/evidence/upload-intents") {
-        created = createResponse(body as CreateEvidenceUploadInput, new URL("/upload", server.url).toString());
+        created = createResponse(body as CreateEvidenceUploadInput, uploadUrl(server.url));
         return created;
       }
       if (path.endsWith("/complete")) {
@@ -150,7 +195,7 @@ describe("ApiStore evidence response boundary", () => {
     expect(completionCalls).toBe(1);
     expect(uploadedBytes.equals(fixtureBytes)).toBe(true);
     expect(uploadedHeaders?.get("content-type")).toBe("text/plain");
-    expect(uploadedHeaders?.get("x-amz-meta-asset-id")).toBe("asset_synthetic");
+    expect(uploadedHeaders?.get("x-amz-meta-asset-id")).toBe(ASSET_ID);
     expect(result.asset.app).toBe("iapp-synthetic");
     expect(result.asset.kind).toBe("receipt");
     expect(result.intent.status).toBe("completed");
@@ -168,13 +213,14 @@ describe("ApiStore evidence response boundary", () => {
       (asset) => ({ ...completedAsset(asset), metadata: { unexpected: true } }),
       (asset) => ({ ...completedAsset(asset), status: "uploaded" }),
       (asset) => ({ ...completedAsset(asset), scan_status: "pending" }),
+      (asset) => ({ ...completedAsset(asset), verified_at: "Fri, 10 Jul 2026 00:00:00 GMT (https://synthetic.invalid/CANARY_VERIFIED_AT)" }),
     ];
 
     for (const mutate of completionMutators) {
       let created: EvidenceUploadResult | undefined;
       const store = apiStore(async (path, body) => {
         if (path === "/evidence/upload-intents") {
-          created = createResponse(body as CreateEvidenceUploadInput, new URL("/upload", server.url).toString());
+          created = createResponse(body as CreateEvidenceUploadInput, uploadUrl(server.url));
           return created;
         }
         if (path.endsWith("/complete")) return mutate(created!.asset);
@@ -195,7 +241,7 @@ describe("ApiStore evidence response boundary", () => {
     let completionCalls = 0;
     const store = apiStore(async (path, body) => {
       if (path === "/evidence/upload-intents") {
-        return createResponse(body as CreateEvidenceUploadInput, new URL("/upload/CANARY_TRANSPORT_PATH", server.url).toString());
+        return createResponse(body as CreateEvidenceUploadInput, uploadUrl(server.url));
       }
       if (path.endsWith("/complete")) {
         completionCalls += 1;
@@ -222,6 +268,58 @@ describe("ApiStore evidence response boundary", () => {
     expect((caught as Error).message).toBe("Evidence byte upload failed with HTTP 503");
     expect((caught as Error).message.includes("CANARY_")).toBe(false);
     expect(completionCalls).toBe(0);
+  });
+
+  test("refuses byte-transport redirects without forwarding the PUT body", async () => {
+    let targetCalls = 0;
+    let completionCalls = 0;
+    const target = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        targetCalls += 1;
+        await request.arrayBuffer();
+        return new Response(null, { status: 200 });
+      },
+    });
+    const source = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch() {
+        return Response.redirect(uploadUrl(target.url), 307);
+      },
+    });
+    const priorOrigins = process.env.HASNA_FILES_EVIDENCE_UPLOAD_ORIGINS;
+    process.env.HASNA_FILES_EVIDENCE_UPLOAD_ORIGINS = [server.url.origin, source.url.origin, target.url.origin].join(",");
+
+    try {
+      let created: EvidenceUploadResult | undefined;
+      const store = apiStore(async (path, body) => {
+        if (path === "/evidence/upload-intents") {
+          created = createResponse(body as CreateEvidenceUploadInput, uploadUrl(source.url));
+          return created;
+        }
+        if (path.endsWith("/complete")) {
+          completionCalls += 1;
+          return completedAsset(created!.asset);
+        }
+        throw new Error("unexpected path");
+      });
+
+      await expect(store.uploadEvidenceFile({
+        path: fixture,
+        org_id: "org_synthetic",
+        app: "iapp-synthetic",
+        kind: "receipt",
+      })).rejects.toThrow("Evidence byte upload transport failed before completion");
+      expect(targetCalls).toBe(0);
+      expect(completionCalls).toBe(0);
+    } finally {
+      if (priorOrigins === undefined) delete process.env.HASNA_FILES_EVIDENCE_UPLOAD_ORIGINS;
+      else process.env.HASNA_FILES_EVIDENCE_UPLOAD_ORIGINS = priorOrigins;
+      source.stop(true);
+      target.stop(true);
+    }
   });
 
   test("preserves typed HTTP errors while recursively removing transport material", async () => {
@@ -275,7 +373,7 @@ function createResponse(input: CreateEvidenceUploadInput, uploadUrl: string): Ev
   const checksum = input.checksum;
   const checksumAlgorithm = input.checksum_algorithm ?? "sha256";
   const asset: FileAsset = {
-    id: "asset_synthetic",
+    id: ASSET_ID,
     org_id: input.org_id,
     company_id: input.company_id,
     app: input.app,
@@ -290,7 +388,7 @@ function createResponse(input: CreateEvidenceUploadInput, uploadUrl: string): Ev
     bucket: "synthetic-bucket",
     region: "us-east-1",
     object_key: "evidence/synthetic-object",
-    quarantine_key: "quarantine/evidence/synthetic-object",
+    quarantine_key: QUARANTINE_KEY,
     status: "pending_upload",
     scan_status: "pending",
     retention_until: input.retention_until,
@@ -305,7 +403,7 @@ function createResponse(input: CreateEvidenceUploadInput, uploadUrl: string): Ev
   return {
     asset,
     intent: {
-      id: "intent_synthetic",
+      id: INTENT_ID,
       asset_id: asset.id,
       method: "PUT",
       upload_url: uploadUrl,
@@ -328,6 +426,10 @@ function createResponse(input: CreateEvidenceUploadInput, uploadUrl: string): Ev
       created_at: now,
     },
   };
+}
+
+function uploadUrl(origin: URL): string {
+  return new URL(`/${QUARANTINE_KEY}`, origin).toString();
 }
 
 function completedAsset(asset: FileAsset): FileAsset {

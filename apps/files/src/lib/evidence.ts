@@ -159,6 +159,28 @@ export function toEvidenceUploadReceipt(
 ): EvidenceUploadReceipt {
   const { intent } = result;
   const { asset } = result;
+  if (
+    !/^asset_[a-f0-9]{16}$/.test(asset.id)
+    || !/^upl_[A-Za-z0-9_-]{12}$/.test(intent.id)
+    || intent.asset_id !== asset.id
+    || !/^[a-f0-9]{64}$/i.test(asset.checksum)
+    || asset.checksum_algorithm !== "sha256"
+    || !Number.isSafeInteger(asset.size)
+    || asset.size < 0
+    || !["s3", "local"].includes(asset.storage_provider)
+    || !["pending_upload", "uploaded", "verified", "archived", "deleted"].includes(asset.status)
+    || !["pending", "clean", "skipped", "suspicious", "blocked"].includes(asset.scan_status)
+    || !["pending", "completed", "expired", "cancelled"].includes(intent.status)
+    || intent.expected_checksum !== asset.checksum
+    || intent.expected_checksum_algorithm !== asset.checksum_algorithm
+    || intent.expected_size !== asset.size
+    || !isSafeEvidenceTimestamp(intent.expires_at)
+    || !isSafeEvidenceTimestamp(intent.created_at)
+    || (intent.completed_at !== undefined && !isSafeEvidenceTimestamp(intent.completed_at))
+    || (asset.verified_at !== undefined && !isSafeEvidenceTimestamp(asset.verified_at))
+  ) {
+    throw new Error("Invalid evidence upload receipt");
+  }
   return {
     asset: {
       id: asset.id,
@@ -182,6 +204,11 @@ export function toEvidenceUploadReceipt(
       completed_at: intent.completed_at,
     },
   };
+}
+
+function isSafeEvidenceTimestamp(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}(?:T| )\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}(?::?\d{2})?)?$/.test(value)
+    && Number.isFinite(Date.parse(value));
 }
 
 /**
@@ -216,11 +243,18 @@ export function sanitizeEvidenceTransportValue(value: unknown, seen = new WeakMa
 
   if (value instanceof Error) {
     const result: Record<string, unknown> = {
-      name: value.name,
+      name: redactSensitiveTransportText(value.name),
       message: redactSensitiveTransportText(value.message),
     };
     seen.set(value, result);
-    for (const [key, entry] of Object.entries(value)) {
+    for (const key of Object.getOwnPropertyNames(value)) {
+      if (key === "name" || key === "message" || key === "stack") continue;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !("value" in descriptor)) {
+        result[key] = "[REDACTED]";
+        continue;
+      }
+      const entry = descriptor.value;
       result[key] = isSensitiveTransportKey(key)
         ? "[REDACTED]"
         : sanitizeEvidenceTransportValue(entry, seen);
@@ -249,16 +283,35 @@ export function sanitizeEvidenceTransportValue(value: unknown, seen = new WeakMa
 export function sanitizeEvidenceTransportError(error: unknown): Error {
   if (!(error instanceof Error)) return new Error(redactSensitiveTransportText(String(error)));
 
+  try { error.name = redactSensitiveTransportText(error.name); } catch {}
   try { error.message = redactSensitiveTransportText(error.message); } catch {}
   if (typeof error.stack === "string") {
     try { error.stack = redactSensitiveTransportText(error.stack); } catch {}
   }
-  for (const key of Object.keys(error)) {
-    const current = (error as unknown as Record<string, unknown>)[key];
+  for (const key of Object.getOwnPropertyNames(error)) {
+    if (key === "name" || key === "message" || key === "stack") continue;
+    const descriptor = Object.getOwnPropertyDescriptor(error, key);
+    if (!descriptor) continue;
+    if (!("value" in descriptor)) {
+      if (descriptor.configurable) {
+        try {
+          Object.defineProperty(error, key, {
+            configurable: descriptor.configurable,
+            enumerable: descriptor.enumerable,
+            value: "[REDACTED]",
+            writable: false,
+          });
+        } catch {}
+      }
+      continue;
+    }
     const sanitized = isSensitiveTransportKey(key)
       ? "[REDACTED]"
-      : sanitizeEvidenceTransportValue(current);
-    try { (error as unknown as Record<string, unknown>)[key] = sanitized; } catch {}
+      : sanitizeEvidenceTransportValue(descriptor.value);
+    try {
+      if (descriptor.writable) (error as unknown as Record<string, unknown>)[key] = sanitized;
+      else if (descriptor.configurable) Object.defineProperty(error, key, { ...descriptor, value: sanitized });
+    } catch {}
   }
   return error;
 }

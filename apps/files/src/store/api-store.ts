@@ -44,7 +44,7 @@ import type {
   SignEvidenceDownloadInput,
   UploadEvidenceFileInput,
 } from "../lib/evidence.js";
-import { sanitizeEvidenceTransportError, withoutEvidenceUploadTransport } from "../lib/evidence.js";
+import { DEFAULT_EVIDENCE_S3_BUCKET, sanitizeEvidenceTransportError, withoutEvidenceUploadTransport } from "../lib/evidence.js";
 import type { ListFileAssetsOptions } from "../db/evidence.js";
 import type {
   ActivityQueryOptions,
@@ -63,9 +63,13 @@ import type {
 } from "./types.js";
 
 const seg = (value: string): string => encodeURIComponent(value);
+const ASSET_ID_PATTERN = /^asset_[a-f0-9]{16}$/;
+const INTENT_ID_PATTERN = /^upl_[A-Za-z0-9_-]{12}$/;
+const SAFE_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}(?:T| )\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}(?::?\d{2})?)?$/;
+const safeTimestampSchema = z.string().regex(SAFE_TIMESTAMP_PATTERN);
 
 const fileAssetSchema = z.object({
-  id: z.string().min(1),
+  id: z.string().regex(ASSET_ID_PATTERN),
   org_id: z.string().min(1),
   company_id: z.string().min(1).optional(),
   app: z.string().min(1),
@@ -89,25 +93,25 @@ const fileAssetSchema = z.object({
   legal_hold: z.boolean(),
   immutable: z.boolean(),
   metadata: z.record(z.unknown()),
-  created_at: z.string().min(1),
-  updated_at: z.string().min(1),
-  verified_at: z.string().min(1).optional(),
+  created_at: safeTimestampSchema,
+  updated_at: safeTimestampSchema,
+  verified_at: safeTimestampSchema.optional(),
 }).strict();
 
 const uploadIntentSchema = z.object({
-  id: z.string().min(1),
-  asset_id: z.string().min(1),
+  id: z.string().regex(INTENT_ID_PATTERN),
+  asset_id: z.string().regex(ASSET_ID_PATTERN),
   method: z.literal("PUT"),
   upload_url: z.string().min(1),
-  expires_at: z.string().min(1),
+  expires_at: safeTimestampSchema,
   status: z.enum(["pending", "completed", "expired", "cancelled"]),
   expected_checksum: z.string().regex(/^[a-f0-9]{64}$/i),
   expected_checksum_algorithm: z.string().min(1),
   expected_size: z.number().int().nonnegative(),
   required_headers: z.record(z.string()),
   metadata: z.record(z.unknown()),
-  created_at: z.string().min(1),
-  completed_at: z.string().min(1).optional(),
+  created_at: safeTimestampSchema,
+  completed_at: safeTimestampSchema.optional(),
 }).strict();
 
 const createEvidenceUploadResultSchema = z.object({
@@ -408,6 +412,7 @@ export class ApiStore implements FilesStore {
           method: intent.method,
           headers: intent.required_headers,
           body: bytes,
+          redirect: "error",
         });
       } catch {
         // Fetch implementations can echo rejected header values and URLs. Do
@@ -481,6 +486,7 @@ function parseCreateEvidenceUploadResult(raw: unknown, input: CreateEvidenceUplo
   const expectedAlgorithm = input.checksum_algorithm ?? "sha256";
   const expectedClassification = input.classification ?? "evidence";
   const expectedContentType = input.content_type ?? (mimeLookup(input.original_name) || "application/octet-stream").toString();
+  const requestedLifetimeMs = (input.expires_in_seconds ?? 600) * 1000;
 
   if (
     asset.status !== "pending_upload"
@@ -496,22 +502,32 @@ function parseCreateEvidenceUploadResult(raw: unknown, input: CreateEvidenceUplo
     || asset.checksum !== input.checksum
     || asset.checksum_algorithm !== expectedAlgorithm
     || asset.storage_provider !== "s3"
+    || !asset.bucket
+    || !asset.region
+    || !asset.quarantine_key
+    || !isSafeS3ObjectKey(asset.object_key)
+    || !isSafeS3ObjectKey(asset.quarantine_key)
     || asset.retention_until !== input.retention_until
     || asset.retention_policy !== input.retention_policy
     || asset.storage_class !== input.storage_class
     || asset.legal_hold !== (input.legal_hold ?? false)
     || asset.immutable !== (input.immutable ?? false)
     || !sameJson(asset.metadata, input.metadata ?? {})
+    || !isTimestamp(asset.created_at)
+    || !isTimestamp(asset.updated_at)
+    || Date.parse(asset.updated_at) < Date.parse(asset.created_at)
     || intent.asset_id !== asset.id
     || intent.status !== "pending"
     || intent.expected_size !== input.size
     || intent.expected_checksum !== input.checksum
     || intent.expected_checksum_algorithm !== expectedAlgorithm
     || Object.keys(intent.metadata).length !== 0
+    || intent.completed_at !== undefined
     || !isTimestamp(intent.created_at)
     || !isFutureTimestamp(intent.expires_at)
     || Date.parse(intent.expires_at) <= Date.parse(intent.created_at)
-    || !isPermittedUploadUrl(intent.upload_url!)
+    || Date.parse(intent.expires_at) - Date.parse(intent.created_at) > requestedLifetimeMs + 5_000
+    || !isPermittedUploadUrl(intent.upload_url!, asset)
   ) {
     throw new Error("Invalid evidence upload intent response");
   }
@@ -531,6 +547,8 @@ function parseCompletedEvidenceAsset(raw: unknown): FileAsset {
     || !isTimestamp(asset.created_at)
     || !isTimestamp(asset.updated_at)
     || !isTimestamp(asset.verified_at)
+    || Date.parse(asset.updated_at) < Date.parse(asset.created_at)
+    || Date.parse(asset.verified_at) < Date.parse(asset.created_at)
   ) {
     throw new Error("Invalid evidence upload completion response");
   }
@@ -600,17 +618,47 @@ function validateEvidenceUploadHeaders(headers: Record<string, string>, asset: F
   if (received.size !== expected.size) throw new Error("Invalid evidence upload intent response");
 }
 
-function isPermittedUploadUrl(value: string): boolean {
+function isPermittedUploadUrl(value: string, asset: FileAsset): boolean {
   if (value.length > 8192 || /[\0\r\n]/.test(value)) return false;
   try {
     const url = new URL(value);
     if (url.username || url.password || url.hash) return false;
+    if (!asset.bucket || !asset.region || !asset.quarantine_key) return false;
+    const bucket = asset.bucket.toLowerCase();
+    if (asset.bucket !== bucket || !/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket)) return false;
+    if (!configuredEvidenceUploadBuckets().has(bucket)) return false;
+    if (!/^[a-z0-9-]{3,32}$/.test(asset.region)) return false;
+    const decodedPath = decodeURIComponent(url.pathname).replace(/^\/+/, "");
+    const key = asset.quarantine_key;
+    const directPath = decodedPath === key;
+    const pathStyle = decodedPath === `${bucket}/${key}`;
     const loopback = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
-    if (url.protocol === "http:") return loopback;
+    const configured = configuredEvidenceUploadOrigins();
+    if (configured.has(url.origin)) {
+      if (url.protocol === "https:") return directPath || pathStyle;
+      return url.protocol === "http:"
+        && loopback
+        && allowInsecureEvidenceLoopback()
+        && (directPath || pathStyle);
+    }
     if (url.protocol !== "https:") return false;
+    if (url.port) return false;
     const host = url.hostname.toLowerCase();
-    if (host === "amazonaws.com" || host.endsWith(".amazonaws.com") || host.endsWith(".amazonaws.com.cn")) return true;
-    return configuredEvidenceUploadOrigins().has(url.origin);
+    const domain = asset.region.startsWith("cn-") ? "amazonaws.com.cn" : "amazonaws.com";
+    const virtualHosts = new Set([
+      `${bucket}.s3.${asset.region}.${domain}`,
+      `${bucket}.s3-${asset.region}.${domain}`,
+      `${bucket}.s3.dualstack.${asset.region}.${domain}`,
+      `${bucket}.s3.${domain}`,
+    ]);
+    if (virtualHosts.has(host)) return directPath;
+    const pathHosts = new Set([
+      `s3.${asset.region}.${domain}`,
+      `s3-${asset.region}.${domain}`,
+      `s3.dualstack.${asset.region}.${domain}`,
+      `s3.${domain}`,
+    ]);
+    return pathHosts.has(host) && pathStyle;
   } catch {
     return false;
   }
@@ -623,9 +671,32 @@ function configuredEvidenceUploadOrigins(): Set<string> {
     try {
       const url = new URL(candidate);
       if (url.protocol === "https:") origins.add(url.origin);
+      else if (
+        url.protocol === "http:"
+        && allowInsecureEvidenceLoopback()
+        && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)
+      ) origins.add(url.origin);
     } catch {}
   }
   return origins;
+}
+
+function configuredEvidenceUploadBuckets(): Set<string> {
+  const raw = [
+    DEFAULT_EVIDENCE_S3_BUCKET,
+    process.env.HASNA_FILES_EVIDENCE_UPLOAD_BUCKETS,
+    process.env.FILES_EVIDENCE_UPLOAD_BUCKETS,
+    process.env.HASNA_FILES_S3_BUCKET,
+    process.env.FILES_S3_BUCKET,
+    process.env.HASNA_FILES_EVIDENCE_BUCKET,
+    process.env.FILES_EVIDENCE_BUCKET,
+  ].filter(Boolean).join(",");
+  return new Set(raw.split(",").map((entry) => entry.trim().toLowerCase()).filter(Boolean));
+}
+
+function allowInsecureEvidenceLoopback(): boolean {
+  return (process.env.HASNA_FILES_EVIDENCE_ALLOW_INSECURE_LOOPBACK
+    ?? process.env.FILES_EVIDENCE_ALLOW_INSECURE_LOOPBACK) === "1";
 }
 
 function isFutureTimestamp(value: string): boolean {
@@ -634,7 +705,12 @@ function isFutureTimestamp(value: string): boolean {
 }
 
 function isTimestamp(value: string): boolean {
-  return Number.isFinite(Date.parse(value));
+  return SAFE_TIMESTAMP_PATTERN.test(value) && Number.isFinite(Date.parse(value));
+}
+
+function isSafeS3ObjectKey(value: string): boolean {
+  if (!value || value.length > 1024 || value.startsWith("/") || /[\0\r\n]/.test(value)) return false;
+  return value.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
 }
 
 function sameJson(left: unknown, right: unknown): boolean {
