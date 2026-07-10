@@ -42,8 +42,17 @@ function key(actor: string, operation: string, resourceId: string, digest: strin
 export class InMemorySandboxRepositoryV1 implements SandboxRepositoryV1 {
   readonly backend = "memory" as const;
   #state = freshState();
+  readonly #clock: () => Date;
+
+  constructor(clock: () => Date = () => new Date()) {
+    this.#clock = clock;
+  }
 
   migrate(): void {}
+
+  databaseTime(): Date {
+    return new Date(this.#clock().getTime());
+  }
 
   transaction<T>(fn: (tx: SandboxRepositoryTxV1) => T): T {
     const snapshot = structuredClone(this.#state);

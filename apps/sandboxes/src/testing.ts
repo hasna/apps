@@ -1,7 +1,10 @@
 import type {
   AuthenticatedEffectBindingsV1,
+  PhysicalSafetyControllerV1,
+  ProviderOutcomeJournalV1,
   SandboxesAuthorityVerifierV1,
 } from "./service.js";
+import { sha256, type Digest } from "./canonical.js";
 import type {
   ActivationGrantV1,
   CapabilityClaimsV1,
@@ -59,5 +62,37 @@ export class DeterministicTestAuthorityVerifierV1 implements SandboxesAuthorityV
 
   async verifyGitPromotionReceipt(_receipt: GitPromotionReceiptRefV1): Promise<void> {
     this.calls.promotion += 1;
+  }
+}
+
+/** Hermetic stand-in for the node/gateway safety fence. */
+export class DeterministicTestPhysicalSafetyControllerV1 implements PhysicalSafetyControllerV1 {
+  readonly calls: Array<{ resource_id: string; reason: string }> = [];
+
+  async fenceResource(input: {
+    resource_id: string;
+    reason: "ttl_expired" | "provider_ambiguous" | "provider_identity_mismatch" | "provider_loss";
+    observed_at: string;
+  }): Promise<Digest> {
+    this.calls.push({ resource_id: input.resource_id, reason: input.reason });
+    return sha256(`physical-safety:${input.resource_id}:${input.reason}:${input.observed_at}`);
+  }
+}
+
+export class DeterministicTestProviderOutcomeJournalV1 implements ProviderOutcomeJournalV1 {
+  readonly calls: Array<{ operation_id: string; outcome: string }> = [];
+
+  async appendOutcome(input: {
+    operation_id: string;
+    operation_step_id: string;
+    dispatch_anchor_sha256: Digest;
+    outcome: "succeeded" | "failed_no_effect" | "unknown";
+    outcome_sha256: Digest;
+    recorded_at: string;
+  }): Promise<Digest> {
+    this.calls.push({ operation_id: input.operation_id, outcome: input.outcome });
+    return sha256(
+      `outcome:${input.operation_id}:${input.operation_step_id}:${input.dispatch_anchor_sha256}:${input.outcome}:${input.outcome_sha256}`,
+    );
   }
 }

@@ -17,7 +17,10 @@ function sqlite(): SqliteSandboxRepositoryV1 {
   const root = mkdtempSync(join(tmpdir(), "sandboxes-v1-"));
   temporary.push(root);
   chmodSync(root, 0o700);
-  return new SqliteSandboxRepositoryV1(join(root, "sandboxes.db"));
+  return new SqliteSandboxRepositoryV1(join(root, "sandboxes.db"), {
+    allow_unsafe_test_path: true,
+    hermetic_test_database_time: () => new Date("2030-01-01T00:00:00.000Z"),
+  });
 }
 
 async function corpus(repository: SandboxRepositoryV1) {
@@ -43,7 +46,9 @@ async function corpus(repository: SandboxRepositoryV1) {
 
 describe("storage conformance", () => {
   test("in-memory and SQLite produce the same lifecycle semantics", async () => {
-    const memory = await corpus(new InMemorySandboxRepositoryV1());
+    const memory = await corpus(
+      new InMemorySandboxRepositoryV1(() => new Date("2030-01-01T00:00:00.000Z")),
+    );
     const disk = await corpus(sqlite());
     expect(disk).toEqual(memory);
   });
@@ -58,7 +63,11 @@ describe("storage conformance", () => {
 
   test("in-memory SQLite requires an explicit test-only opt in", () => {
     expect(() => new SqliteSandboxRepositoryV1(":memory:")).toThrow("explicit test authorization");
-    const repository = new SqliteSandboxRepositoryV1(":memory:", { allow_in_memory: true });
+    const repository = new SqliteSandboxRepositoryV1(":memory:", {
+      allow_in_memory: true,
+      allow_unsafe_test_path: true,
+      hermetic_test_database_time: () => new Date("2030-01-01T00:00:00.000Z"),
+    });
     repository.migrate();
     expect(repository.health().integrity).toBe("ok");
     repository.close();

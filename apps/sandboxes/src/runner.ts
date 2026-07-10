@@ -11,6 +11,7 @@ import {
   type OwnedProviderHandleV1,
   type OwnedResourcePageV1,
   type ProviderOperationObservationV1,
+  type ProviderEffectTargetV1,
   type ProviderOperationV1,
   type SandboxSpecV1,
 } from "./types.js";
@@ -19,6 +20,9 @@ export interface AdapterCallContextV1 {
   trace_id: string;
   deadline: string;
   constraints_sha256: Digest;
+  fence: import("./types.js").CanonicalSandboxEffectFenceV1;
+  target: ProviderEffectTargetV1;
+  external_anchor_receipt_sha256: Digest;
 }
 
 export interface DestroyContextV1 extends AdapterCallContextV1 {
@@ -71,6 +75,14 @@ export class AmbiguousProviderEffectError extends Error {
   constructor() {
     super("Provider effect outcome is ambiguous");
     this.name = "AmbiguousProviderEffectError";
+  }
+}
+
+/** Adapter may throw this only with durable proof that no provider effect was accepted. */
+export class ProviderRejectedNoEffectError extends Error {
+  constructor() {
+    super("Provider rejected the operation before accepting any effect");
+    this.name = "ProviderRejectedNoEffectError";
   }
 }
 

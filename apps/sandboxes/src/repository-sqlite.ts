@@ -96,6 +96,7 @@ const MIGRATIONS = [
 export interface SqliteRepositoryOptionsV1 {
   allow_in_memory?: boolean;
   allow_unsafe_test_path?: boolean;
+  hermetic_test_database_time?: () => Date;
 }
 
 function ensureSecurePath(databasePath: string, allowUnsafe: boolean): string {
@@ -123,12 +124,17 @@ export class SqliteSandboxRepositoryV1 implements SandboxRepositoryV1 {
   readonly backend = "sqlite" as const;
   readonly #db: Database;
   readonly #path: string;
+  readonly #testDatabaseTime: (() => Date) | undefined;
 
   constructor(databasePath: string, options: SqliteRepositoryOptionsV1 = {}) {
     if (databasePath === ":memory:" && options.allow_in_memory !== true) {
       throw new SandboxError("forbidden", "In-memory SQLite requires explicit test authorization");
     }
     this.#path = ensureSecurePath(databasePath, options.allow_unsafe_test_path === true);
+    if (options.hermetic_test_database_time !== undefined && options.allow_unsafe_test_path !== true) {
+      throw new SandboxError("forbidden", "A synthetic database clock is hermetic-test-only");
+    }
+    this.#testDatabaseTime = options.hermetic_test_database_time;
     this.#db = new Database(this.#path, { create: true, strict: true });
     this.#db.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
     if (this.#path !== ":memory:") {
@@ -169,6 +175,15 @@ export class SqliteSandboxRepositoryV1 implements SandboxRepositoryV1 {
       }
     });
     apply.immediate();
+  }
+
+  databaseTime(): Date {
+    if (this.#testDatabaseTime !== undefined) return new Date(this.#testDatabaseTime().getTime());
+    const row = this.#db
+      .query<{ now: string }, []>("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now') AS now")
+      .get();
+    if (row === null) throw new SandboxError("dependency_unavailable", "SQLite database time is unavailable");
+    return new Date(row.now);
   }
 
   transaction<T>(fn: (tx: SandboxRepositoryTxV1) => T): T {
@@ -224,7 +239,7 @@ export class SqliteSandboxRepositoryV1 implements SandboxRepositoryV1 {
       },
       putSandbox(record, expectedRevision) {
         const persistHighWater = () => {
-          db.query(`
+          const result = db.query(`
             INSERT INTO fence_high_watermarks(
               resource_id, authority_epoch, route_epoch, lease_epoch,
               resource_lifecycle_generation, operation_execution_epoch
@@ -235,6 +250,11 @@ export class SqliteSandboxRepositoryV1 implements SandboxRepositoryV1 {
               lease_epoch = excluded.lease_epoch,
               resource_lifecycle_generation = excluded.resource_lifecycle_generation,
               operation_execution_epoch = excluded.operation_execution_epoch
+            WHERE CAST(excluded.authority_epoch AS INTEGER) >= CAST(authority_epoch AS INTEGER)
+              AND CAST(excluded.route_epoch AS INTEGER) >= CAST(route_epoch AS INTEGER)
+              AND CAST(excluded.lease_epoch AS INTEGER) >= CAST(lease_epoch AS INTEGER)
+              AND CAST(excluded.resource_lifecycle_generation AS INTEGER) >= CAST(resource_lifecycle_generation AS INTEGER)
+              AND CAST(excluded.operation_execution_epoch AS INTEGER) >= CAST(operation_execution_epoch AS INTEGER)
           `).run(
             record.id,
             record.authority_epoch.toString(10),
@@ -243,6 +263,9 @@ export class SqliteSandboxRepositoryV1 implements SandboxRepositoryV1 {
             record.resource_lifecycle_generation.toString(10),
             record.operation_execution_epoch.toString(10),
           );
+          if (result.changes !== 1) {
+            throw new SandboxError("stale_lease_epoch", "Fence high-watermark regression was rejected");
+          }
         };
         if (expectedRevision === null) {
           if (record.revision !== 1) throw new SandboxError("stale_revision", "Initial revision must be one");

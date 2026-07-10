@@ -98,7 +98,7 @@ export type SandboxOperation = "create_inert" | "activate" | "expire" | "quarant
 
 export interface LifecycleTransitionBindingV1 {
   expected_resource_lifecycle_generation: bigint;
-  post_resource_lifecycle_generation: bigint;
+  successor_resource_lifecycle_generation: bigint;
 }
 
 export interface DispatchedJournalAnchorV1 {
@@ -106,14 +106,20 @@ export interface DispatchedJournalAnchorV1 {
   journal_anchor_id: string;
   state: "dispatched";
   operation_id: string;
+  operation_step_id: string;
   operation_digest: Digest;
   resource_id: string;
   authority_epoch: bigint;
   expected_resource_lifecycle_generation: bigint;
-  post_resource_lifecycle_generation: bigint;
+  successor_resource_lifecycle_generation: bigint;
   recorded_at: string;
   expires_at: string;
   issuer_principal: string;
+  provider_idempotency_token_sha256: Digest;
+  immutable_fingerprint_sha256: Digest;
+  authorization_consumption_receipt_sha256: Digest;
+  frontier_sha256: Digest;
+  fence: CanonicalSandboxEffectFenceV1;
   anchor_sha256: Digest;
 }
 
@@ -153,7 +159,7 @@ export interface ActivationGrantV1 {
   grant_id: string;
   resource_id: string;
   resource_lifecycle_generation: bigint;
-  post_resource_lifecycle_generation: bigint;
+  successor_resource_lifecycle_generation: bigint;
   operation_id: string;
   operation_digest: Digest;
   network_policy_sha256: Digest;
@@ -174,7 +180,7 @@ export interface InfinityCleanupGrantV1 {
   grant_id: string;
   resource_id: string;
   resource_lifecycle_generation: bigint;
-  post_resource_lifecycle_generation: bigint;
+  successor_resource_lifecycle_generation: bigint;
   provider_handle_sha256: Digest;
   operation_id: string;
   operation_digest: Digest;
@@ -216,6 +222,15 @@ export interface SandboxV1 {
   spec: SandboxSpecV1;
   state: SandboxState;
   state_reason_code: SandboxStateReason;
+  physical_safety_state: "clear" | "fenced";
+  physical_safety_reason?:
+    | "ttl_expired"
+    | "provider_ambiguous"
+    | "provider_identity_mismatch"
+    | "provider_loss";
+  safety_observation_id?: string;
+  safety_fence_receipt_sha256?: Digest;
+  canonical_transition_required?: "quarantined";
   authority_epoch: bigint;
   route_lineage_id: string;
   route_id: string;
@@ -276,10 +291,25 @@ export interface SealedProviderHandleV1 {
 
 export interface ProviderOperationV1 {
   operation: SandboxOperation | "inspect";
+  target: ProviderEffectTargetV1;
   fence: CanonicalSandboxEffectFenceV1;
+  generation_transition?: LifecycleTransitionBindingV1;
   request_sha256: Digest;
   idempotency_key_sha256: Digest;
+  external_anchor_kind: "DISPATCHED" | "READ_PROBE";
+  external_anchor_receipt_sha256: Digest;
   deadline: string;
+}
+
+export interface ProviderEffectTargetV1 {
+  operation_id: string;
+  operation_digest: Digest;
+  operation_step_id: string;
+  resource_id: string;
+  resource_lifecycle_generation: bigint;
+  provider_idempotency_token_sha256: Digest;
+  immutable_fingerprint_sha256: Digest;
+  authorization_consumption_receipt_sha256: Digest;
 }
 
 export interface AdapterDescriptorV1 {
@@ -340,6 +370,7 @@ export interface OwnedResourcePageV1 {
 export interface OperationRecordV1 {
   schema_version: SchemaVersion;
   operation_id: string;
+  operation_step_id: string;
   operation: SandboxOperation;
   resource_id: string;
   actor_principal: string;
@@ -348,8 +379,16 @@ export interface OperationRecordV1 {
   capability_use_sha256: Digest;
   dispatch_journal_anchor_sha256: Digest;
   expected_resource_lifecycle_generation: bigint;
-  post_resource_lifecycle_generation: bigint;
+  successor_resource_lifecycle_generation: bigint;
   fence: CanonicalSandboxEffectFenceV1;
+  expected_revision: number;
+  effect_phase:
+    | "intent_committed"
+    | "dispatched"
+    | "succeeded"
+    | "failed_effect"
+    | "unknown";
+  outcome_anchor_sha256?: Digest;
   state: "in_flight" | "committed" | "aborted" | "unknown";
   result_sha256?: Digest;
   error_code?: string;

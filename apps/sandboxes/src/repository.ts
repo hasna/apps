@@ -38,6 +38,7 @@ export interface SandboxRepositoryTxV1 {
 export interface SandboxRepositoryV1 {
   readonly backend: "memory" | "sqlite";
   migrate(): void;
+  databaseTime(): Date;
   transaction<T>(fn: (tx: SandboxRepositoryTxV1) => T): T;
   health(): RepositoryHealthV1;
   close(): void;

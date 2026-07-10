@@ -126,7 +126,13 @@ async function run(argv: string[]): Promise<{ envelope: Envelope; exitCode: numb
   if (mode !== "human" && mode !== "json") {
     throw new SandboxError("validation_failed", "--output must be human or json");
   }
-  const databasePath = option(args, "--database") ?? join(homedir(), ".hasna", "sandboxes", "sandboxes.db");
+  if (args.includes("--database")) {
+    throw new SandboxError(
+      "validation_failed",
+      "The CLI never accepts a caller-selected database or host path",
+    );
+  }
+  const databasePath = join(homedir(), ".hasna", "sandboxes", "sandboxes.db");
   flag(args, "--no-color");
   const group = args.shift();
   const command = args.shift();
@@ -194,24 +200,18 @@ async function run(argv: string[]): Promise<{ envelope: Envelope; exitCode: numb
       if (command === "get") {
         const id = args.shift();
         if (id === undefined || args.length !== 0) throw new SandboxError("validation_failed", "sandbox get requires one full ID");
-        const repository = openRepository(databasePath);
-        try {
-          const record = repository.transaction((tx) => tx.getSandbox(id));
-          if (record === undefined) throw new SandboxError("not_found", "Sandbox was not found");
-          return { envelope: success(operation, record), exitCode: 0 };
-        } finally {
-          repository.close();
-        }
+        if (!/^sbx_[0-9a-f]{32}$/.test(id)) throw new SandboxError("validation_failed", "Sandbox ID must be exact and full");
+        throw new SandboxError(
+          "capability_denied",
+          "Standalone reads require a configured authenticated Infinity read capability",
+        );
       }
       if (command === "list") {
         if (args.length !== 0) throw new SandboxError("validation_failed", "sandbox list takes no arguments");
-        const repository = openRepository(databasePath);
-        try {
-          const records = repository.transaction((tx) => tx.listSandboxes());
-          return { envelope: success(operation, { items: records, next_cursor: null }), exitCode: 0 };
-        } finally {
-          repository.close();
-        }
+        throw new SandboxError(
+          "capability_denied",
+          "Standalone reads require a configured authenticated Infinity read capability",
+        );
       }
       if (["create", "activate", "expire", "destroy"].includes(command ?? "")) {
         if (command === "create") {
@@ -231,22 +231,10 @@ async function run(argv: string[]): Promise<{ envelope: Envelope; exitCode: numb
         throw new SandboxError("validation_failed", "operation resolve requires one exact opaque operation ID");
       }
       if (!/^op_[0-9a-f]{32}$/.test(id)) throw new SandboxError("validation_failed", "Operation ID must be exact and full");
-      const repository = openRepository(databasePath);
-      try {
-        const record = repository.transaction((tx) => tx.getOperation(id));
-        const data = record === undefined
-          ? { schema_version: SCHEMA_VERSION, operation_id: id, state: "unknown" }
-          : {
-              schema_version: SCHEMA_VERSION,
-              operation_id: id,
-              state: record.state,
-              ...(record.result_sha256 === undefined ? {} : { result_sha256: record.result_sha256 }),
-              ...(record.error_code === undefined ? {} : { error_code: record.error_code }),
-            };
-        return { envelope: success(operation, data), exitCode: 0 };
-      } finally {
-        repository.close();
-      }
+      throw new SandboxError(
+        "capability_denied",
+        "Operation resolution requires a configured authenticated Infinity read capability",
+      );
     }
     throw new SandboxError("validation_failed", "Unknown command");
   } catch (error) {

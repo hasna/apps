@@ -28,7 +28,7 @@ interface FakeResource {
 }
 
 export interface FakeRunnerOptionsV1 {
-  ambiguous_create?: "none" | "adoptable" | "unknown";
+  ambiguous_create?: "none" | "adoptable" | "unknown" | "delayed";
   destroy_result?: "absent" | "still_present" | "unknown";
   clock?: () => Date;
 }
@@ -38,9 +38,11 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
   readonly #resources = new Map<string, FakeResource>();
   readonly #operations = new Map<string, OwnedProviderHandleV1>();
   readonly #clock: () => Date;
-  readonly #ambiguousCreate: "none" | "adoptable" | "unknown";
+  readonly #ambiguousCreate: "none" | "adoptable" | "unknown" | "delayed";
+  readonly #delayedOperations = new Map<string, OwnedProviderHandleV1>();
   readonly #destroyResult: "absent" | "still_present" | "unknown";
   readonly calls = { create_inert: 0, activate: 0, inspect: 0, expire: 0, destroy: 0, lookup: 0 };
+  readonly observed_generations: bigint[] = [];
 
   constructor(options: FakeRunnerOptionsV1 = {}) {
     this.#ambiguousCreate = options.ambiguous_create ?? "none";
@@ -74,7 +76,9 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     op: ProviderOperationV1,
     allocationKey: Digest,
   ): Promise<OwnedProviderHandleV1> {
+    this.#assertSink(_ctx, op);
     this.calls.create_inert += 1;
+    this.observed_generations.push(op.fence.resource_lifecycle_generation);
     if (op.operation !== "create_inert") throw new SandboxError("validation_failed", "Wrong fake operation");
     const existing = this.#operations.get(op.fence.operation_id);
     if (existing !== undefined) return existing;
@@ -93,7 +97,7 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       creation_receipt_sha256: sha256(`creation:${op.fence.operation_id}`),
       provider_created_at: nowRfc3339(this.#clock()),
       provider_resource_version: "1",
-      immutable_fingerprint_sha256: sha256(`fake-fingerprint:${seed}`),
+      immutable_fingerprint_sha256: op.target.immutable_fingerprint_sha256,
       resource_lease_id: op.fence.resource_lease_id,
       resource_id: op.fence.resource_id,
       resource_lifecycle_generation: op.fence.resource_lifecycle_generation,
@@ -101,6 +105,7 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     };
     this.#resources.set(handle.resource_id, { handle, state: "inert" });
     if (this.#ambiguousCreate === "adoptable") this.#operations.set(op.fence.operation_id, handle);
+    if (this.#ambiguousCreate === "delayed") this.#delayedOperations.set(op.fence.operation_id, handle);
     if (this.#ambiguousCreate !== "none") throw new AmbiguousProviderEffectError();
     this.#operations.set(op.fence.operation_id, handle);
     return handle;
@@ -112,7 +117,9 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     grant: ActivationGrantV1,
     op: ProviderOperationV1,
   ): Promise<ActivationReceiptV1> {
+    this.#assertSink(_ctx, op);
     this.calls.activate += 1;
+    this.observed_generations.push(op.fence.resource_lifecycle_generation);
     const resource = this.#exact(handle);
     if (resource.state !== "inert" || op.operation !== "activate") {
       throw new SandboxError("provider_state_unknown", "Fake resource is not provably inert");
@@ -133,6 +140,7 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     handle: OwnedProviderHandleV1,
     _op: ProviderOperationV1,
   ): Promise<AdapterObservationV1> {
+    this.#assertSink(_ctx, _op);
     this.calls.inspect += 1;
     const resource = this.#resources.get(handle.resource_id);
     if (resource === undefined || resource.state === "absent") return { state: "absent" };
@@ -148,7 +156,9 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     handle: OwnedProviderHandleV1,
     op: ProviderOperationV1,
   ): Promise<ExpireObservationV1> {
+    this.#assertSink(_ctx, op);
     this.calls.expire += 1;
+    this.observed_generations.push(op.fence.resource_lifecycle_generation);
     const resource = this.#exact(handle);
     if (op.operation !== "expire") throw new SandboxError("validation_failed", "Wrong fake expire operation");
     resource.state = "inert";
@@ -160,7 +170,9 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     handle: OwnedProviderHandleV1,
     op: ProviderOperationV1,
   ): Promise<DestroyObservationV1> {
+    this.#assertSink(_ctx, op);
     this.calls.destroy += 1;
+    this.observed_generations.push(op.fence.resource_lifecycle_generation);
     const resource = this.#exact(handle);
     if (op.operation !== "destroy") throw new SandboxError("validation_failed", "Wrong fake destroy operation");
     if (this.#destroyResult === "absent") resource.state = "absent";
@@ -183,6 +195,15 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
         state: "completed",
         handle,
         observation_sha256: sha256(`lookup:completed:${op.fence.operation_id}`),
+      };
+    }
+    const delayed = this.#delayedOperations.get(op.fence.operation_id);
+    if (delayed !== undefined) {
+      this.#delayedOperations.delete(op.fence.operation_id);
+      this.#operations.set(op.fence.operation_id, delayed);
+      return {
+        state: "unknown",
+        observation_sha256: sha256(`lookup:delayed:${op.fence.operation_id}`),
       };
     }
     return {
@@ -226,5 +247,18 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       throw new SandboxError("provider_state_unknown", "Fake provider identity is not exact");
     }
     return resource;
+  }
+
+  #assertSink(ctx: AdapterCallContextV1, op: ProviderOperationV1): void {
+    if (
+      canonicalDigest(ctx.fence) !== canonicalDigest(op.fence) ||
+      canonicalDigest(ctx.target) !== canonicalDigest(op.target) ||
+      ctx.external_anchor_receipt_sha256 !== op.external_anchor_receipt_sha256 ||
+      op.target.resource_lifecycle_generation !== op.fence.resource_lifecycle_generation ||
+      op.target.operation_id !== op.fence.operation_id ||
+      op.target.operation_digest !== op.fence.operation_digest
+    ) {
+      throw new SandboxError("integrity_failed", "Fake adapter sink rejected mismatched protected effect bytes");
+    }
   }
 }
