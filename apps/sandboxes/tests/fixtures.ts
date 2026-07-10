@@ -2,7 +2,7 @@ import { sha256, type Digest } from "../src/canonical.js";
 import { AesGcmProviderHandleSealerV1 } from "../src/handle-sealer.js";
 import { InMemorySandboxRepositoryV1 } from "../src/repository-memory.js";
 import type { SandboxRepositoryV1 } from "../src/repository.js";
-import { DeterministicFakeRunnerV1, type FakeRunnerOptionsV1 } from "../src/runner.js";
+import { DeterministicFakeRunnerV1, type FakeRunnerOptionsV1 } from "../src/testing-runner.js";
 import {
   activationRequestDigest,
   createRequestDigest,
