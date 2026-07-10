@@ -28,6 +28,7 @@ export type DaytonaOfficialBrokerProcessV1 = Pick<DaytonaProcess, "createPty">
 
 class E2bGuestBrokerSdkSessionV1 implements GuestBrokerSdkSessionV1 {
   #closed = false
+  #closePromise: Promise<void> | undefined
   readonly #handle: Pick<CommandHandle, "sendStdin" | "closeStdin">
 
   constructor(
@@ -39,14 +40,26 @@ class E2bGuestBrokerSdkSessionV1 implements GuestBrokerSdkSessionV1 {
   }
 
   sendFrame(frame: GuestBrokerRequestFrameV1): Promise<void> {
-    if (this.#closed) return Promise.reject(new Error("guest_broker_session_closed"))
+    if (this.#closed || this.#closePromise !== undefined) {
+      return Promise.reject(new Error("guest_broker_session_closed"))
+    }
     return this.#handle.sendStdin(serializeGuestBrokerRequestFrame(frame))
   }
 
   async #closeInput(): Promise<void> {
     if (this.#closed) return
-    this.#closed = true
-    await this.#handle.closeStdin()
+    if (this.#closePromise !== undefined) {
+      await this.#closePromise
+      return
+    }
+    const closePromise = this.#handle.closeStdin()
+    this.#closePromise = closePromise
+    try {
+      await closePromise
+      this.#closed = true
+    } finally {
+      if (this.#closePromise === closePromise) this.#closePromise = undefined
+    }
   }
 
   closeInput(): Promise<void> {
@@ -87,6 +100,7 @@ export const DAYTONA_GUEST_BROKER_PTY_ID = "hasna-sandboxes-broker-v1" as const
 
 class DaytonaGuestBrokerSdkSessionV1 implements GuestBrokerSdkSessionV1 {
   #closed = false
+  #closePromise: Promise<void> | undefined
   readonly #handle: Pick<PtyHandle, "sendInput" | "disconnect">
 
   constructor(
@@ -98,14 +112,26 @@ class DaytonaGuestBrokerSdkSessionV1 implements GuestBrokerSdkSessionV1 {
   }
 
   sendFrame(frame: GuestBrokerRequestFrameV1): Promise<void> {
-    if (this.#closed) return Promise.reject(new Error("guest_broker_session_closed"))
+    if (this.#closed || this.#closePromise !== undefined) {
+      return Promise.reject(new Error("guest_broker_session_closed"))
+    }
     return this.#handle.sendInput(serializeGuestBrokerRequestFrame(frame))
   }
 
   async #closeInput(): Promise<void> {
     if (this.#closed) return
-    this.#closed = true
-    await this.#handle.disconnect()
+    if (this.#closePromise !== undefined) {
+      await this.#closePromise
+      return
+    }
+    const closePromise = this.#handle.disconnect()
+    this.#closePromise = closePromise
+    try {
+      await closePromise
+      this.#closed = true
+    } finally {
+      if (this.#closePromise === closePromise) this.#closePromise = undefined
+    }
   }
 
   closeInput(): Promise<void> {

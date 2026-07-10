@@ -445,7 +445,10 @@ describe("official SDK guest-broker compensation bridges", () => {
         expect(options).toMatchObject({ background: true, cwd: "/workspace", envs: {}, stdin: true })
         return {
           async sendStdin(bytes: Uint8Array) { stdin.push(bytes) },
-          async closeStdin() { closeCalls += 1 },
+          async closeStdin() {
+            closeCalls += 1
+            if (closeCalls === 1) throw new Error("transient close failure")
+          },
         }
       },
     } as unknown as E2bOfficialBrokerCommandsV1
@@ -456,13 +459,14 @@ describe("official SDK guest-broker compensation bridges", () => {
       expect((session as unknown as Record<string, unknown>).handle).toBeUndefined()
       expect(Reflect.ownKeys(session)).not.toContain("handle")
       await session.sendFrame(brokerFrame())
+      await expect(session.closeInput()).rejects.toThrow("transient close failure")
       ;(session as { closeInput: () => Promise<void> }).closeInput = async () => {}
     })
 
     expect(commandsSeen).toEqual([MANAGED_GUEST_BROKER_BOOTSTRAP_COMMAND])
     expect(JSON.stringify(commandsSeen)).not.toContain("not-a-shell")
     expect(stdin).toHaveLength(1)
-    expect(closeCalls).toBe(1)
+    expect(closeCalls).toBe(2)
     expect(new DataView(stdin[0]!.buffer).getUint32(0, false)).toBe(stdin[0]!.byteLength - 4)
     await expect(closedSession!.sendFrame(brokerFrame())).rejects.toThrow("guest_broker_session_closed")
   })
@@ -476,7 +480,10 @@ describe("official SDK guest-broker compensation bridges", () => {
         return {
           async waitForConnection() {},
           async sendInput(input: string | Uint8Array) { inputs.push(input) },
-          async disconnect() { disconnectCalls += 1 },
+          async disconnect() {
+            disconnectCalls += 1
+            if (disconnectCalls === 1) throw new Error("transient disconnect failure")
+          },
         }
       },
     } as unknown as DaytonaOfficialBrokerProcessV1
@@ -487,13 +494,14 @@ describe("official SDK guest-broker compensation bridges", () => {
       expect((session as unknown as Record<string, unknown>).handle).toBeUndefined()
       expect(Reflect.ownKeys(session)).not.toContain("handle")
       await session.sendFrame(brokerFrame())
+      await expect(session.closeInput()).rejects.toThrow("transient disconnect failure")
       ;(session as { closeInput: () => Promise<void> }).closeInput = async () => {}
     })
 
     expect(inputs[0]).toBe(`${MANAGED_GUEST_BROKER_BOOTSTRAP_COMMAND}\n`)
     expect(typeof inputs[0] === "string" ? inputs[0] : "").not.toContain("not-a-shell")
     expect(inputs[1]).toBeInstanceOf(Uint8Array)
-    expect(disconnectCalls).toBe(1)
+    expect(disconnectCalls).toBe(2)
     await expect(closedSession!.sendFrame(brokerFrame())).rejects.toThrow("guest_broker_session_closed")
   })
 
