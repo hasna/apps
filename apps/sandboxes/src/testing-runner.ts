@@ -1,5 +1,6 @@
-import { canonicalDigest, nowRfc3339, sha256, type Digest } from "./canonical.js";
+import { assertDigest, canonicalDigest, nowRfc3339, sha256, type Digest } from "./canonical.js";
 import { SandboxError } from "./errors.js";
+import { HERMETIC_TEST_RUNNER } from "./hermetic-test-brand.js";
 import {
   AmbiguousProviderEffectError,
   ProviderIdentityMismatchError,
@@ -44,11 +45,13 @@ export interface FakeRunnerOptionsV1 {
   reject_create_no_effect_attempts?: number;
   verified_reject_create_no_effect_attempts?: number;
   atomic_delete_unsupported?: boolean;
+  resource_kind_override?: string;
   clock?: () => Date;
 }
 
 /** Hermetic-test-only runner; excluded from the production bundle and declarations. */
 export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
+  readonly [HERMETIC_TEST_RUNNER] = true as const;
   readonly #resources = new Map<string, FakeResource>();
   readonly #operations = new Map<string, OwnedProviderHandleV1>();
   readonly #clock: () => Date;
@@ -59,11 +62,16 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
   readonly #activationFingerprintMismatch: boolean;
   readonly #activationPolicyMismatch: boolean;
   readonly #atomicDeleteUnsupported: boolean;
+  readonly #resourceKindOverride: string | undefined;
   #remainingCreateNoEffectRejections: number;
   #remainingVerifiedCreateNoEffectRejections: number;
+  #lastDescriptorSha256: Digest | undefined;
   readonly calls = { create_inert: 0, activate: 0, inspect: 0, expire: 0, destroy: 0, lookup: 0 };
   readonly observed_generations: bigint[] = [];
   readonly observed_authorization_receipts: Digest[] = [];
+  readonly observed_final_barrier_receipts: Digest[] = [];
+  readonly observed_adapter_descriptor_receipts: Digest[] = [];
+  readonly observed_adapter_admission_receipts: Digest[] = [];
 
   constructor(options: FakeRunnerOptionsV1 = {}) {
     this.#ambiguousCreate = options.ambiguous_create ?? "none";
@@ -72,6 +80,7 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     this.#activationFingerprintMismatch = options.activation_fingerprint_mismatch === true;
     this.#activationPolicyMismatch = options.activation_policy_mismatch === true;
     this.#atomicDeleteUnsupported = options.atomic_delete_unsupported === true;
+    this.#resourceKindOverride = options.resource_kind_override;
     this.#remainingCreateNoEffectRejections = options.reject_create_no_effect_attempts ?? 0;
     this.#remainingVerifiedCreateNoEffectRejections =
       options.verified_reject_create_no_effect_attempts ?? 0;
@@ -86,22 +95,42 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       installation_id: "installation_00000000000000000000000000000001",
       provider_scope_ref: "fake-test-scope",
       runtime_class: "strong_vm",
+      supported_architectures: ["x86_64", "arm64"],
+      isolation_evidence_sha256: sha256("fake:isolation-evidence"),
+      guest_kernel_boundary_evidence_sha256: sha256("fake:guest-kernel-boundary"),
       network_modes: ["deny_all", "broker_only"],
+      network_enforcement_evidence_sha256: sha256("fake:network-enforcement"),
       exact_operation_lookup: true,
       inert_create: true,
       whole_scope_cancel: true,
       native_bounded_files: true,
+      read_only_workspace_enforcement: "external_read_only_mount",
       atomic_incarnation_bound_delete: !this.#atomicDeleteUnsupported,
+      ownership_reconciliation: "exact_token_and_incarnation",
+      destructive_operation_semantics: "atomic_incarnation_bound_delete",
+      provider_hard_ttl_semantics: "stop_only_no_delete",
+      output_framing: "bounded_frames_v1",
+      max_ttl_ms: 3_600_000,
+      resource_limits: {
+        max_processes: 512,
+        max_memory_bytes: 8 * 1024 * 1024 * 1024,
+        max_disk_bytes: 64 * 1024 * 1024 * 1024,
+        max_output_bytes: 64 * 1024 * 1024,
+        max_file_bytes: 64 * 1024 * 1024,
+        max_page_entries: 1_000,
+      },
     } as const;
     const protectedDescriptor = {
       ...facts,
       build_sha256: sha256("deterministic-fake-runner-v1"),
       status: "test_only" as const,
     };
-    return {
+    const descriptor: AdapterDescriptorV1 = {
       ...protectedDescriptor,
       descriptor_sha256: adapterDescriptorDigest(protectedDescriptor),
     };
+    this.#lastDescriptorSha256 = descriptor.descriptor_sha256;
+    return descriptor;
   }
 
   async createInert(
@@ -140,25 +169,22 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     }
     if (this.#remainingVerifiedCreateNoEffectRejections > 0) {
       this.#remainingVerifiedCreateNoEffectRejections -= 1;
-      const proofBytes: Omit<ProviderNonAcceptanceProofV1, "proof_sha256"> = {
-        schema_version: "sandboxes.provider-non-acceptance-proof/v1",
-        adapter_id: "fake",
-        adapter_version: "1.0.0-test",
-        installation_id: "installation_00000000000000000000000000000001",
-        provider_scope_ref: "fake-test-scope",
-        operation_id: op.target.operation_id,
-        operation_step_id: op.target.operation_step_id,
+      const proofBytes: Omit<ProviderNonAcceptanceProofV1, "proof_sha256" | "signature"> = {
+        schema_version: "sandboxes.provider-no-effect-proof/v1",
+        target: op.target,
         operation_execution_epoch: op.fence.operation_execution_epoch,
         request_sha256: op.request_sha256,
-        dispatch_anchor_sha256: op.external_anchor_receipt_sha256,
-        target: op.target,
+        provider_receipt_sha256: sha256(`provider-non-acceptance:${op.target.operation_id}`),
+        proof_kind: "token_not_accepted",
         observed_at: nowRfc3339(this.#clock()),
         expires_at: op.deadline,
-        provider_evidence_sha256: sha256(`provider-non-acceptance:${op.target.operation_id}`),
+        issuer_principal: "principal_00000000000000000000000000000066",
+        signing_key_id: "key_00000000000000000000000000000066",
       };
       throw new ProviderRejectedNoEffectError({
         ...proofBytes,
         proof_sha256: providerNonAcceptanceProofDigest(proofBytes),
+        signature: "N".repeat(86),
       });
     }
     const existing = this.#operations.get(op.fence.operation_id);
@@ -170,7 +196,7 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       adapter_version: "1.0.0-test",
       installation_id: "installation_00000000000000000000000000000001",
       provider_scope_ref: "fake-test-scope",
-      resource_kind: "strong_vm",
+      resource_kind: this.#resourceKindOverride ?? "strong_vm",
       opaque_resource_id: `native-${seed}`,
       ownership_nonce: `nonce-${sha256(op.fence.resource_id).slice(7, 39)}`,
       create_inert_operation_id: op.fence.operation_id,
@@ -392,6 +418,11 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       canonicalDigest(ctx.fence) !== canonicalDigest(op.fence) ||
       canonicalDigest(ctx.target) !== canonicalDigest(op.target) ||
       ctx.external_anchor_receipt_sha256 !== op.external_anchor_receipt_sha256 ||
+      ctx.adapter_descriptor_sha256 !== this.#lastDescriptorSha256 ||
+      ctx.adapter_admission_receipt_sha256 !== canonicalDigest({
+        schema_version: "sandboxes.hermetic-adapter-admission/v1",
+        descriptor_sha256: this.#lastDescriptorSha256,
+      }) ||
       op.target.resource_lifecycle_generation !== op.fence.resource_lifecycle_generation ||
       op.target.operation_id !== op.fence.operation_id ||
       op.target.operation_digest !== op.fence.operation_digest ||
@@ -406,6 +437,17 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     ) {
       throw new SandboxError("integrity_failed", "Fake adapter sink rejected mismatched protected effect bytes");
     }
+    assertDigest(
+      ctx.final_currentness_barrier_receipt_sha256,
+      "fake.final_currentness_barrier_receipt_sha256",
+    );
+    this.observed_final_barrier_receipts.push(
+      ctx.final_currentness_barrier_receipt_sha256,
+    );
+    this.observed_adapter_descriptor_receipts.push(ctx.adapter_descriptor_sha256);
+    this.observed_adapter_admission_receipts.push(
+      ctx.adapter_admission_receipt_sha256,
+    );
     this.observed_authorization_receipts.push(op.target.authorization_consumption_receipt_sha256);
   }
 
@@ -417,6 +459,7 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       ctx.provider_creation_token_sha256 !== op.target.provider_creation_token_sha256 ||
       ctx.immutable_fingerprint_sha256 !== op.target.immutable_fingerprint_sha256 ||
       ctx.discovery_scope_receipt_sha256 !== op.external_anchor_receipt_sha256 ||
+      ctx.complete_read_probe_envelope_sha256 !== op.external_anchor_receipt_sha256 ||
       ctx.max_pages !== 1_000 ||
       op.external_anchor_kind !== "READ_PROBE"
     ) {

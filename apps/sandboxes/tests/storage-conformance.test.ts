@@ -33,13 +33,15 @@ afterEach(() => {
   for (const path of temporary.splice(0)) rmSync(path, { recursive: true, force: true });
 });
 
-function sqlite(): SqliteSandboxRepositoryV1 {
+function sqlite(
+  databaseTime: () => Date = () => new Date("2030-01-01T00:00:00.000Z"),
+): SqliteSandboxRepositoryV1 {
   const root = mkdtempSync(join(tmpdir(), "sandboxes-v1-"));
   temporary.push(root);
   chmodSync(root, 0o700);
   return new SqliteSandboxRepositoryV1(join(root, "sandboxes.db"), {
     allow_unsafe_test_path: true,
-    hermetic_test_database_time: () => new Date("2030-01-01T00:00:00.000Z"),
+    hermetic_test_database_time: databaseTime,
   });
 }
 
@@ -64,9 +66,13 @@ async function corpus(repository: SandboxRepositoryV1) {
   };
 }
 
-async function immutableEvidenceCorpus(repository: SandboxRepositoryV1) {
+async function immutableEvidenceCorpus(
+  repository: SandboxRepositoryV1,
+  advancePastExpiry: () => void,
+) {
   const h = harness(repository);
-  const active = await activate(h, await createInert(h, "2029-12-31T23:59:59.000Z"));
+  const active = await activate(h, await createInert(h, "2030-01-01T00:01:00.000Z"));
+  advancePastExpiry();
   await h.service.observeExpired(active.id);
   const physicallyFenced = await h.service.get(active.id);
   const quarantine = lifecycleContext(
@@ -171,10 +177,16 @@ describe("storage conformance", () => {
   });
 
   test("immutable safety observations and destroy tombstones match in memory and SQLite", async () => {
+    let memoryNow = new Date("2030-01-01T00:00:00.000Z");
     const memory = await immutableEvidenceCorpus(
-      new InMemorySandboxRepositoryV1(() => new Date("2030-01-01T00:00:00.000Z")),
+      new InMemorySandboxRepositoryV1(() => memoryNow),
+      () => { memoryNow = new Date("2030-01-01T00:02:00.000Z"); },
     );
-    const disk = await immutableEvidenceCorpus(sqlite());
+    let sqliteNow = new Date("2030-01-01T00:00:00.000Z");
+    const disk = await immutableEvidenceCorpus(
+      sqlite(() => sqliteNow),
+      () => { sqliteNow = new Date("2030-01-01T00:02:00.000Z"); },
+    );
     expect(disk).toEqual(memory);
     expect(disk).toMatchObject({
       state: "destroyed",

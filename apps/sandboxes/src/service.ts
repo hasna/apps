@@ -9,6 +9,7 @@ import {
   type Digest,
 } from "./canonical.js";
 import { SandboxError } from "./errors.js";
+import { HERMETIC_TEST_RUNNER } from "./hermetic-test-brand.js";
 import {
   assertEffectJournalOutcomeSchema,
   EFFECT_JOURNAL_OUTCOME_SCHEMA_DIGEST,
@@ -16,6 +17,7 @@ import {
 } from "./effect-journal.js";
 import type { ProviderHandleSealerV1 } from "./handle-sealer.js";
 import {
+  adapterAdmissionReceiptDigest,
   adapterDescriptorDigest,
   providerHandleBinding,
   providerHandleIdentityDigest,
@@ -33,13 +35,16 @@ import {
 } from "./runner.js";
 import {
   SCHEMA_VERSION,
+  type ActivationReceiptV1,
   type ActivationGrantV1,
   type AdapterDescriptorV1,
+  type AdapterAdmissionReceiptV1,
   type CanonicalSandboxEffectFenceV1,
   type CapabilityClaimsV1,
   type CheckpointDurabilityReceiptV1,
   type CreateSandboxV1,
   type DispatchedJournalAnchorV1,
+  type DestroyObservationV1,
   type EffectJournalRecoveryRangeV1,
   type GitPromotionReceiptRefV1,
   type InfinityCleanupGrantV1,
@@ -55,6 +60,7 @@ import {
   type ProviderMutationOperationV1,
   type ProviderHandleBindingV1,
   type ProviderNonAcceptanceProofV1,
+  type ProviderNoEffectVerificationReceiptV1,
   type ProviderEffectTargetV1,
   type ProviderDiscoveryScopeV1,
   type ProviderLifecycleLockBindingV1,
@@ -114,7 +120,7 @@ export interface SandboxesAuthorityVerifierV1 {
   ): Promise<AuthenticatedJournalRecoveryRangeV1>;
   verifyProviderNonAcceptanceProof(
     proof: ProviderNonAcceptanceProofV1,
-  ): Promise<AuthenticatedProviderNonAcceptanceV1>;
+  ): Promise<ProviderNoEffectVerificationReceiptV1>;
 }
 
 export interface AuthenticatedEffectBindingsV1 {
@@ -143,49 +149,22 @@ export interface AuthenticatedJournalBindingsV1 extends AuthenticatedEffectBindi
   stored_frontier_membership: true;
 }
 
-export interface AuthenticatedAdapterAdmissionV1 {
-  adapter_id: AdapterDescriptorV1["adapter_id"];
-  adapter_version: string;
-  installation_id: string;
-  provider_scope_ref: string;
-  build_sha256: Digest;
-  descriptor_sha256: Digest;
-  conformance_manifest_sha256: Digest;
-  signed_conformance_manifest_verified: true;
-  zero_skip_gate_verified: true;
-}
+export type AuthenticatedAdapterAdmissionV1 = AdapterAdmissionReceiptV1;
 
 export interface AuthenticatedJournalRecoveryRangeV1 {
+  schema_version: "infinity.authenticated-journal-recovery-range/v1";
+  range_sha256: Digest;
   operation_id: string;
   operation_step_id: string;
   requested_from_sequence: bigint;
-  signed_head_sequence: bigint;
-  signed_head_frontier_digest: Digest;
-  completeness_proof_sha256: Digest;
-  signer_principal: string;
-  signing_key_id: string;
-  head_signature_verified: true;
-  range_completeness_verified: true;
-  stored_head_membership: true;
-  current_linearizable_head_sequence: bigint;
-  current_linearizable_head_frontier_digest: Digest;
-  current_linearizable_head_verified: true;
-}
-
-export interface AuthenticatedProviderNonAcceptanceV1 {
-  proof_sha256: Digest;
-  adapter_id: AdapterDescriptorV1["adapter_id"];
-  adapter_version: string;
-  installation_id: string;
-  provider_scope_ref: string;
-  operation_id: string;
-  operation_step_id: string;
-  operation_execution_epoch: bigint;
-  request_sha256: Digest;
-  dispatch_anchor_sha256: Digest;
-  target_sha256: Digest;
-  provider_evidence_sha256: Digest;
-  provider_non_acceptance_verified: true;
+  current_head_sequence: bigint;
+  current_head_frontier_digest: Digest;
+  current_linearizable_head: true;
+  complete_range: true;
+  trusted_signer: true;
+  verified_at: string;
+  expires_at: string;
+  verification_receipt_sha256: Digest;
 }
 
 export interface SandboxesServiceConfigV1 {
@@ -199,7 +178,6 @@ export interface SandboxesServiceConfigV1 {
   provider_read_probe_journal: ProviderReadProbeJournalV1;
   provider_lifecycle_lock: ProviderLifecycleLockV1;
   provider_journal_recovery: ProviderJournalRecoveryV1;
-  allow_test_runner?: boolean;
 }
 
 export interface ProviderLifecycleLockV1 {
@@ -244,6 +222,7 @@ export interface ProviderOutcomeJournalV1 {
     recorded_at: string;
     fence: CanonicalSandboxEffectFenceV1;
     target: ProviderEffectTargetV1;
+    provider_no_effect_verification_receipt_sha256?: Digest;
   }): Promise<ProviderOutcomeAnchorV1>;
   /** Linearizable authoritative read of the complete signed envelope. */
   readOutcome(envelopeDigest: Digest): Promise<ProviderOutcomeAnchorV1 | undefined>;
@@ -259,10 +238,11 @@ export interface ProviderDispatchJournalV1 {
    */
   recoverDispatched(input: {
     anchor: DispatchedJournalAnchorV1;
-    current_range: EffectJournalRecoveryRangeV1;
+    current_head_noninclusion_receipt_sha256: Digest;
   }): Promise<{
     disposition: "inserted" | "already_present";
     anchor: DispatchedJournalAnchorV1;
+    current_head_receipt_sha256: Digest;
   }>;
 }
 
@@ -287,6 +267,16 @@ interface NormalizedLifecycleContext {
   transition: LifecycleTransitionBindingV1;
   fence: CanonicalSandboxEffectFenceV1;
   capability: CapabilityClaimsV1;
+}
+
+interface VerifiedAdapterContextV1 {
+  descriptor: AdapterDescriptorV1;
+  admission_receipt_sha256: Digest;
+}
+
+interface VerifiedJournalRecoveryRangeV1 {
+  range: EffectJournalRecoveryRangeV1;
+  current_head_noninclusion_receipt_sha256: Digest;
 }
 
 interface NormalizedMutationContext extends NormalizedLifecycleContext {
@@ -468,7 +458,6 @@ export class SandboxesReferenceServiceV1 {
   readonly #readProbeJournal: ProviderReadProbeJournalV1;
   readonly #lifecycleLock: ProviderLifecycleLockV1;
   readonly #journalRecovery: ProviderJournalRecoveryV1;
-  readonly #allowTestRunner: boolean;
 
   constructor(config: SandboxesServiceConfigV1) {
     this.#repository = config.repository;
@@ -481,7 +470,6 @@ export class SandboxesReferenceServiceV1 {
     this.#readProbeJournal = config.provider_read_probe_journal;
     this.#lifecycleLock = config.provider_lifecycle_lock;
     this.#journalRecovery = config.provider_journal_recovery;
-    this.#allowTestRunner = config.allow_test_runner === true;
     this.#repository.migrate();
   }
 
@@ -511,26 +499,9 @@ export class SandboxesReferenceServiceV1 {
         "Provider creation token does not bind the exact allocation key, spec, lease, and resource",
       );
     }
-    const descriptor = await this.#verifiedDescriptor();
-    if (descriptor.status !== "admitted" && !(descriptor.status === "test_only" && this.#allowTestRunner)) {
-      throw new SandboxError("unsupported_runtime_feature", "Runner is not admitted for this service");
-    }
-    if (descriptor.status === "admitted") {
-      const admission = await this.#verifier.verifyAdapterAdmission(descriptor);
-      if (
-        admission.adapter_id !== descriptor.adapter_id ||
-        admission.adapter_version !== descriptor.adapter_version ||
-        admission.installation_id !== descriptor.installation_id ||
-        admission.provider_scope_ref !== descriptor.provider_scope_ref ||
-        admission.build_sha256 !== descriptor.build_sha256 ||
-        admission.descriptor_sha256 !== descriptor.descriptor_sha256 ||
-        admission.signed_conformance_manifest_verified !== true ||
-        admission.zero_skip_gate_verified !== true
-      ) {
-        throw new SandboxError("capability_denied", "Runner lacks an authenticated signed zero-skip conformance admission");
-      }
-      assertDigest(admission.conformance_manifest_sha256, "adapter_admission.conformance_manifest_sha256");
-    }
+    const adapter = await this.#verifiedDescriptor();
+    const { descriptor, admission_receipt_sha256: adapterAdmissionReceiptSha256 } = adapter;
+    await this.#assertDescriptorSupportsCreate(descriptor, input);
     if (!descriptor.inert_create || !descriptor.exact_operation_lookup) {
       throw new SandboxError("unsupported_runtime_feature", "Runner lacks mandatory inert-create reconciliation");
     }
@@ -581,6 +552,7 @@ export class SandboxesReferenceServiceV1 {
       runtime_class: "strong_vm",
       adapter_descriptor_sha256: descriptor.descriptor_sha256,
       adapter_descriptor: descriptor,
+      adapter_admission_receipt_sha256: adapterAdmissionReceiptSha256,
       provider_creation_token_sha256: expectedCreationToken,
       create_inert_operation_id: ctx.operation_id,
       durable_checkpoint_receipt_sha256: [],
@@ -636,6 +608,11 @@ export class SandboxesReferenceServiceV1 {
       if (mustReconcile) {
         const readProbe = await this.#readProbeOperation(ctx, op, descriptor);
         existingReadProbe = readProbe;
+        await this.#assertCurrentEffectGuard(ctx, readProbe);
+        await this.#assertCurrentAdapterAdmission(
+          descriptor,
+          adapterAdmissionReceiptSha256,
+        );
         const observation = await this.#runner.lookupOperation(
           this.#reconcileContext(ctx, descriptor, readProbe),
           readProbe,
@@ -649,10 +626,19 @@ export class SandboxesReferenceServiceV1 {
         let providerReachable = false;
         try {
           await this.#verifyDispatched(ctx, recoveredDispatch?.disposition === "inserted");
-          await this.#assertFinalProviderMutationBarrier(ctx, descriptor);
+          const finalBarrierReceiptSha256 = await this.#assertFinalProviderMutationBarrier(
+            ctx,
+            descriptor,
+            adapterAdmissionReceiptSha256,
+          );
           providerReachable = true;
           handle = await this.#runner.createInert(
-            this.#adapterContext(ctx),
+            this.#adapterContext(
+              ctx,
+              descriptor,
+              adapterAdmissionReceiptSha256,
+              finalBarrierReceiptSha256,
+            ),
             input.spec,
             op,
             input.allocation_key_sha256,
@@ -669,12 +655,18 @@ export class SandboxesReferenceServiceV1 {
               initial.id,
               ctx.operation_id,
               ctx.transition.successor_resource_lifecycle_generation,
-              nonAcceptanceProof,
+              nonAcceptanceProof.provider_receipt_sha256,
+              nonAcceptanceProof.verification_receipt_sha256,
             );
             throw new SandboxError("provider_unavailable", "Provider rejected inert creation without an effect");
           }
           const readProbe = await this.#readProbeOperation(ctx, op, descriptor);
           existingReadProbe = readProbe;
+          await this.#assertCurrentEffectGuard(ctx, readProbe);
+          await this.#assertCurrentAdapterAdmission(
+            descriptor,
+            adapterAdmissionReceiptSha256,
+          );
           const observation = await this.#runner.lookupOperation(
             this.#reconcileContext(ctx, descriptor, readProbe),
             readProbe,
@@ -691,6 +683,7 @@ export class SandboxesReferenceServiceV1 {
         await this.#verifyExactOwnedResource(
           ctx,
           descriptor,
+          adapterAdmissionReceiptSha256,
           handle,
           op,
           "inert",
@@ -707,12 +700,29 @@ export class SandboxesReferenceServiceV1 {
         immutable_fingerprint_sha256: handle.immutable_fingerprint_sha256,
         provider_identity_sha256: handle.provider_identity_sha256,
       });
-      const createOutcomeAnchor = await this.#anchorOutcome(
-        ctx.operation_id,
-        "succeeded",
+      const recoveredOutcome = mustReconcile
+        ? await this.#readAuthenticatedExistingOutcome(ctx)
+        : undefined;
+      if (
+        recoveredOutcome !== undefined &&
+        (
+          recoveredOutcome.record.outcome_kind !== "succeeded" ||
+          recoveredOutcome.record.outcome_sha256 !== providerReceiptSha256
+        )
+      ) {
+        return { kind: "unknown" as const, reason: "provider_identity_mismatch" as const };
+      }
+      const createOutcomeAnchor = recoveredOutcome === undefined
+        ? await this.#anchorOutcome(ctx.operation_id, "succeeded", providerReceiptSha256)
+        : providerOutcomeAnchorDigest(recoveredOutcome);
+      const sandbox = await this.#commitCreateProviderOutcome(
+        initial.id,
+        ctx,
+        handle,
         providerReceiptSha256,
+        createOutcomeAnchor,
       );
-      return { kind: "succeeded" as const, handle, providerReceiptSha256, createOutcomeAnchor };
+      return { kind: "succeeded" as const, sandbox };
     });
     if (providerResult.kind === "unknown") {
       return this.#markUnknown(
@@ -722,36 +732,7 @@ export class SandboxesReferenceServiceV1 {
         ctx.transition.successor_resource_lifecycle_generation,
       );
     }
-    const { handle, providerReceiptSha256, createOutcomeAnchor } = providerResult;
-    return await this.#repository.transaction((tx) => {
-      const current = this.#mustSandbox(tx, initial.id);
-      if (current.state !== "creating_inert") {
-        throw new SandboxError("stale_revision", "Create receipt lost its reservation CAS");
-      }
-      const generation = ctx.transition.successor_resource_lifecycle_generation;
-      const sealed = this.#sealer.seal({ ...handle, resource_lifecycle_generation: generation });
-      const outcomePending: SandboxV1 = {
-        ...current,
-        revision: current.revision + 1,
-        resource_lifecycle_generation: generation,
-        provider_handle_sha256: sealed.provider_handle_sha256,
-        provider_identity_sha256: handle.provider_identity_sha256,
-        immutable_fingerprint_sha256: handle.immutable_fingerprint_sha256,
-        allocated_at: this.#txNow(tx),
-        pending_provider_outcome: {
-          source_operation_id: ctx.operation_id,
-          target_state: "inert",
-          evidence_sha256: createOutcomeAnchor,
-          provider_receipt_sha256: providerReceiptSha256,
-          observed_at: this.#txNow(tx),
-        },
-      };
-      tx.putSandbox(outcomePending, current.revision);
-      tx.putHandle(sealed);
-      this.#commitOperation(tx, ctx.operation_id, canonicalDigest(outcomePending), createOutcomeAnchor);
-      this.#event(tx, outcomePending, ctx.operation_id, "operation_committed");
-      return outcomePending;
-    });
+    return providerResult.sandbox;
   }
 
   async activate(
@@ -782,9 +763,14 @@ export class SandboxesReferenceServiceV1 {
     ) {
       throw new SandboxError("capability_denied", "Activation grant does not bind the exact operation");
     }
-    const descriptor = await this.#verifiedDescriptor();
+    const adapter = await this.#verifiedDescriptor();
+    const { descriptor, admission_receipt_sha256: adapterAdmissionReceiptSha256 } = adapter;
     await this.#repository.transaction((tx) => {
-      this.#assertPersistedDescriptor(this.#mustSandbox(tx, resourceId), descriptor);
+      this.#assertPersistedDescriptor(
+        this.#mustSandbox(tx, resourceId),
+        descriptor,
+        adapterAdmissionReceiptSha256,
+      );
     });
 
     const reservation = await this.#repository.transaction((tx) => {
@@ -872,23 +858,72 @@ export class SandboxesReferenceServiceV1 {
     if (sealed === undefined) throw new SandboxError("integrity_failed", "Inert handle receipt is missing");
     const handle = this.#openStoredHandle(sealed, reservation.current);
     this.#assertHandleGeneration(handle, ctx);
-    this.#assertPersistedDescriptor(reservation.current, descriptor);
+    this.#assertPersistedDescriptor(
+      reservation.current,
+      descriptor,
+      adapterAdmissionReceiptSha256,
+    );
     const mutation = this.#providerOperation("activate", ctx);
     const providerResult = await this.#withProviderLifecycleLock(ctx, descriptor, handle, async () => {
       const recoveredDispatch = reservation.recover_external_dispatch
         ? await this.#recoverExternalDispatch(ctx)
         : undefined;
       if (recoveredDispatch?.disposition === "already_present") {
-        return { kind: "unknown" as const, reason: "ambiguous_provider_state" as const };
+        const recoveredOutcome = await this.#readAuthenticatedExistingOutcome(ctx);
+        if (recoveredOutcome?.record.outcome_kind !== "succeeded") {
+          return { kind: "unknown" as const, reason: "ambiguous_provider_state" as const };
+        }
+        try {
+          await this.#verifyExactOwnedResource(
+            ctx,
+            descriptor,
+            adapterAdmissionReceiptSha256,
+            handle,
+            mutation,
+            "active",
+            true,
+          );
+        } catch {
+          return { kind: "unknown" as const, reason: "provider_identity_mismatch" as const };
+        }
+        const sandbox = await this.#commitActivationProviderOutcome(
+          resourceId,
+          ctx,
+          recoveredOutcome.record.outcome_sha256,
+          providerOutcomeAnchorDigest(recoveredOutcome),
+          recoveredOutcome.record.recorded_at,
+        );
+        return { kind: "succeeded" as const, sandbox };
       }
       let providerReachable = false;
+      let activationReceipt: ActivationReceiptV1 | undefined;
+      let activationOutcomeAnchor: Digest | undefined;
       try {
         await this.#verifyDispatched(ctx, recoveredDispatch?.disposition === "inserted");
         providerReachable = true;
-        await this.#verifyExactOwnedResource(ctx, descriptor, handle, mutation, "inert", true);
-        await this.#assertFinalProviderMutationBarrier(ctx, descriptor, handle, grant.expires_at);
-        const activationReceipt = await this.#runner.activate(
-          this.#adapterContext(ctx),
+        await this.#verifyExactOwnedResource(
+          ctx,
+          descriptor,
+          adapterAdmissionReceiptSha256,
+          handle,
+          mutation,
+          "inert",
+          true,
+        );
+        const finalBarrierReceiptSha256 = await this.#assertFinalProviderMutationBarrier(
+          ctx,
+          descriptor,
+          adapterAdmissionReceiptSha256,
+          handle,
+          grant.expires_at,
+        );
+        activationReceipt = await this.#runner.activate(
+          this.#adapterContext(
+            ctx,
+            descriptor,
+            adapterAdmissionReceiptSha256,
+            finalBarrierReceiptSha256,
+          ),
           handle,
           grant,
           mutation,
@@ -900,13 +935,20 @@ export class SandboxesReferenceServiceV1 {
         ) {
           return { kind: "unknown" as const, reason: "provider_identity_mismatch" as const };
         }
-        await this.#verifyExactOwnedResource(ctx, descriptor, handle, mutation, "active", true);
-        const activationOutcomeAnchor = await this.#anchorOutcome(
+        await this.#verifyExactOwnedResource(
+          ctx,
+          descriptor,
+          adapterAdmissionReceiptSha256,
+          handle,
+          mutation,
+          "active",
+          true,
+        );
+        activationOutcomeAnchor = await this.#anchorOutcome(
           ctx.operation_id,
           "succeeded",
           activationReceipt.receipt_sha256,
         );
-        return { kind: "succeeded" as const, activationReceipt, activationOutcomeAnchor };
       } catch (error) {
         if (!providerReachable) throw error;
         const nonAcceptanceProof = await this.#verifiedProviderNonAcceptance(error, ctx, descriptor);
@@ -915,7 +957,8 @@ export class SandboxesReferenceServiceV1 {
             resourceId,
             ctx.operation_id,
             ctx.transition.successor_resource_lifecycle_generation,
-            nonAcceptanceProof,
+            nonAcceptanceProof.provider_receipt_sha256,
+            nonAcceptanceProof.verification_receipt_sha256,
           );
           throw new SandboxError("provider_unavailable", "Provider rejected activation without an effect");
         }
@@ -926,6 +969,17 @@ export class SandboxesReferenceServiceV1 {
             : "ambiguous_provider_state" as const,
         };
       }
+      if (activationReceipt === undefined || activationOutcomeAnchor === undefined) {
+        throw new SandboxError("integrity_failed", "Activation success lost its signed outcome");
+      }
+      const sandbox = await this.#commitActivationProviderOutcome(
+        resourceId,
+        ctx,
+        activationReceipt.receipt_sha256,
+        activationOutcomeAnchor,
+        activationReceipt.activated_at,
+      );
+      return { kind: "succeeded" as const, sandbox };
     });
     if (providerResult.kind === "unknown") {
       return this.#markUnknown(
@@ -935,34 +989,20 @@ export class SandboxesReferenceServiceV1 {
         ctx.transition.successor_resource_lifecycle_generation,
       );
     }
-    const { activationReceipt, activationOutcomeAnchor } = providerResult;
-    return await this.#repository.transaction((tx) => {
-      const current = this.#mustSandbox(tx, resourceId);
-      if (current.state !== "activating") throw new SandboxError("stale_revision", "Activation CAS was superseded");
-      const outcomePending: SandboxV1 = {
-        ...current,
-        revision: current.revision + 1,
-        pending_provider_outcome: {
-          source_operation_id: ctx.operation_id,
-          target_state: "active",
-          evidence_sha256: activationOutcomeAnchor,
-          provider_receipt_sha256: activationReceipt.receipt_sha256,
-          observed_at: activationReceipt.activated_at,
-        },
-      };
-      tx.putSandbox(outcomePending, current.revision);
-      this.#commitOperation(tx, ctx.operation_id, canonicalDigest(outcomePending), activationOutcomeAnchor);
-      this.#event(tx, outcomePending, ctx.operation_id, "operation_committed");
-      return outcomePending;
-    });
+    return providerResult.sandbox;
   }
 
   async expire(resourceId: string, contextValue: MutationContextV1): Promise<SandboxV1> {
     assertOpaqueId(resourceId, "resource_id", "sbx");
     const ctx = await this.#authorizeProvider("expire", resourceId, expireRequestDigest(resourceId), contextValue);
-    const descriptor = await this.#verifiedDescriptor();
+    const adapter = await this.#verifiedDescriptor();
+    const { descriptor, admission_receipt_sha256: adapterAdmissionReceiptSha256 } = adapter;
     await this.#repository.transaction((tx) => {
-      this.#assertPersistedDescriptor(this.#mustSandbox(tx, resourceId), descriptor);
+      this.#assertPersistedDescriptor(
+        this.#mustSandbox(tx, resourceId),
+        descriptor,
+        adapterAdmissionReceiptSha256,
+      );
     });
     const reservation = await this.#repository.transaction((tx) => {
       const current = this.#mustSandbox(tx, resourceId);
@@ -1036,36 +1076,88 @@ export class SandboxesReferenceServiceV1 {
     if (sealed === undefined) throw new SandboxError("integrity_failed", "Provider handle is missing");
     const handle = this.#openStoredHandle(sealed, reservation.current);
     this.#assertHandleGeneration(handle, ctx);
-    this.#assertPersistedDescriptor(reservation.current, descriptor);
+    this.#assertPersistedDescriptor(
+      reservation.current,
+      descriptor,
+      adapterAdmissionReceiptSha256,
+    );
     const mutation = this.#providerOperation("expire", ctx);
     const providerResult = await this.#withProviderLifecycleLock(ctx, descriptor, handle, async () => {
       const recoveredDispatch = reservation.recover_external_dispatch
         ? await this.#recoverExternalDispatch(ctx)
         : undefined;
       if (recoveredDispatch?.disposition === "already_present") {
-        return { kind: "unknown" as const };
+        const recoveredOutcome = await this.#readAuthenticatedExistingOutcome(ctx);
+        if (recoveredOutcome?.record.outcome_kind !== "succeeded") {
+          return { kind: "unknown" as const };
+        }
+        try {
+          await this.#verifyExactOwnedResource(
+            ctx,
+            descriptor,
+            adapterAdmissionReceiptSha256,
+            handle,
+            mutation,
+            "inert",
+            true,
+          );
+        } catch {
+          return { kind: "unknown" as const };
+        }
+        const sandbox = await this.#commitExpireProviderOutcome(
+          resourceId,
+          ctx,
+          providerOutcomeAnchorDigest(recoveredOutcome),
+        );
+        return { kind: "succeeded" as const, sandbox };
       }
       let providerReachable = false;
+      let expireOutcomeAnchor: Digest | undefined;
       try {
         await this.#verifyDispatched(ctx, recoveredDispatch?.disposition === "inserted");
         providerReachable = true;
-        await this.#verifyExactOwnedResource(ctx, descriptor, handle, mutation, "active", true);
-        await this.#assertFinalProviderMutationBarrier(ctx, descriptor, handle);
+        await this.#verifyExactOwnedResource(
+          ctx,
+          descriptor,
+          adapterAdmissionReceiptSha256,
+          handle,
+          mutation,
+          "active",
+          true,
+        );
+        const finalBarrierReceiptSha256 = await this.#assertFinalProviderMutationBarrier(
+          ctx,
+          descriptor,
+          adapterAdmissionReceiptSha256,
+          handle,
+        );
         const expireReceipt = await this.#runner.expire(
-          this.#adapterContext(ctx),
+          this.#adapterContext(
+            ctx,
+            descriptor,
+            adapterAdmissionReceiptSha256,
+            finalBarrierReceiptSha256,
+          ),
           handle,
           mutation,
         );
         if (!['inert', 'quarantined'].includes(expireReceipt.state)) {
           return { kind: "unknown" as const };
         }
-        await this.#verifyExactOwnedResource(ctx, descriptor, handle, mutation, "inert", true);
-        const expireOutcomeAnchor = await this.#anchorOutcome(
+        await this.#verifyExactOwnedResource(
+          ctx,
+          descriptor,
+          adapterAdmissionReceiptSha256,
+          handle,
+          mutation,
+          "inert",
+          true,
+        );
+        expireOutcomeAnchor = await this.#anchorOutcome(
           ctx.operation_id,
           "succeeded",
           expireReceipt.receipt_sha256,
         );
-        return { kind: "succeeded" as const, expireOutcomeAnchor };
       } catch (error) {
         if (!providerReachable) throw error;
         const nonAcceptanceProof = await this.#verifiedProviderNonAcceptance(error, ctx, descriptor);
@@ -1074,12 +1166,22 @@ export class SandboxesReferenceServiceV1 {
             resourceId,
             ctx.operation_id,
             ctx.transition.successor_resource_lifecycle_generation,
-            nonAcceptanceProof,
+            nonAcceptanceProof.provider_receipt_sha256,
+            nonAcceptanceProof.verification_receipt_sha256,
           );
           throw new SandboxError("provider_unavailable", "Provider rejected expiry without an effect");
         }
         return { kind: "unknown" as const };
       }
+      if (expireOutcomeAnchor === undefined) {
+        throw new SandboxError("integrity_failed", "Expiry success lost its signed outcome");
+      }
+      const sandbox = await this.#commitExpireProviderOutcome(
+        resourceId,
+        ctx,
+        expireOutcomeAnchor,
+      );
+      return { kind: "succeeded" as const, sandbox };
     });
     if (providerResult.kind === "unknown") {
       return this.#markUnknown(
@@ -1089,16 +1191,7 @@ export class SandboxesReferenceServiceV1 {
         ctx.transition.successor_resource_lifecycle_generation,
       );
     }
-    const { expireOutcomeAnchor } = providerResult;
-    return await this.#repository.transaction((tx) => {
-      const current = this.#mustSandbox(tx, resourceId);
-      if (current.state !== "expiring") {
-        throw new SandboxError("stale_revision", "Expiry CAS was superseded");
-      }
-      this.#commitOperation(tx, ctx.operation_id, canonicalDigest(current), expireOutcomeAnchor);
-      this.#event(tx, current, ctx.operation_id, "operation_committed");
-      return current;
-    });
+    return providerResult.sandbox;
   }
 
   async destroy(
@@ -1118,9 +1211,14 @@ export class SandboxesReferenceServiceV1 {
     );
     await this.#verifier.verifyCleanupGrant(grant);
     await this.#assertGrantFresh(grant.expires_at);
-    const descriptor = await this.#verifiedDescriptor();
+    const adapter = await this.#verifiedDescriptor();
+    const { descriptor, admission_receipt_sha256: adapterAdmissionReceiptSha256 } = adapter;
     await this.#repository.transaction((tx) => {
-      this.#assertPersistedDescriptor(this.#mustSandbox(tx, resourceId), descriptor);
+      this.#assertPersistedDescriptor(
+        this.#mustSandbox(tx, resourceId),
+        descriptor,
+        adapterAdmissionReceiptSha256,
+      );
     });
     if (!descriptor.atomic_incarnation_bound_delete) {
       throw new SandboxError(
@@ -1247,52 +1345,119 @@ export class SandboxesReferenceServiceV1 {
     const handle = this.#openStoredHandle(sealed, reservation.current);
     this.#assertHandleGeneration(handle, ctx);
     const providerOp = this.#providerOperation("destroy", ctx);
-    this.#assertPersistedDescriptor(reservation.current, descriptor);
+    this.#assertPersistedDescriptor(
+      reservation.current,
+      descriptor,
+      adapterAdmissionReceiptSha256,
+    );
     const providerResult = await this.#withProviderLifecycleLock(ctx, descriptor, handle, async () => {
       const recoveredDispatch = reservation.recover_external_dispatch
         ? await this.#recoverExternalDispatch(ctx)
         : undefined;
       if (recoveredDispatch?.disposition === "already_present") {
-        return { kind: "unknown" as const, identity_mismatch: false };
+        const recoveredOutcome = await this.#readAuthenticatedExistingOutcome(ctx);
+        if (
+          recoveredOutcome === undefined ||
+          !["succeeded", "failed_effect"].includes(recoveredOutcome.record.outcome_kind)
+        ) {
+          return { kind: "unknown" as const, identity_mismatch: false };
+        }
+        const absent = recoveredOutcome.record.outcome_kind === "succeeded";
+        try {
+          if (absent) {
+            await this.#verifyExactAbsence(
+              ctx,
+              descriptor,
+              adapterAdmissionReceiptSha256,
+              handle,
+              providerOp,
+            );
+          } else {
+            await this.#verifyExactOwnedResource(
+              ctx,
+              descriptor,
+              adapterAdmissionReceiptSha256,
+              handle,
+              providerOp,
+              ["inert", "active"],
+              true,
+            );
+          }
+        } catch {
+          return { kind: "unknown" as const, identity_mismatch: true };
+        }
+        const observation: DestroyObservationV1 = {
+          state: absent ? "absent" : "still_present",
+          provider_receipt_sha256: recoveredOutcome.record.outcome_sha256,
+          observed_at: recoveredOutcome.record.recorded_at,
+        };
+        const sandbox = await this.#commitDestroyProviderOutcome(
+          resourceId,
+          ctx,
+          grant,
+          observation,
+          providerOutcomeAnchorDigest(recoveredOutcome),
+        );
+        return { kind: "resolved" as const, sandbox };
       }
       let providerReachable = false;
+      let destroyObservation: DestroyObservationV1 | undefined;
+      let destroyOutcomeAnchor: Digest | undefined;
       try {
-        const destroyContext: DestroyContextV1 = {
-          ...this.#adapterContext(ctx),
-          cleanup_grant_sha256: canonicalDigest(grant),
-          cleanup_basis_receipt_sha256: grant.basis.receipt_sha256,
-        };
         await this.#verifyDispatched(ctx, recoveredDispatch?.disposition === "inserted");
         providerReachable = true;
         await this.#verifyExactOwnedResource(
           ctx,
           descriptor,
+          adapterAdmissionReceiptSha256,
           handle,
           providerOp,
           ["inert", "active"],
           true,
         );
-        await this.#assertFinalProviderMutationBarrier(ctx, descriptor, handle, grant.expires_at);
-        const observation = await this.#runner.destroy(destroyContext, handle, providerOp);
-        if (observation.state === "unknown") return { kind: "unknown" as const };
-        if (observation.state === "absent") {
-          await this.#verifyExactAbsence(ctx, descriptor, handle, providerOp);
+        const finalBarrierReceiptSha256 = await this.#assertFinalProviderMutationBarrier(
+          ctx,
+          descriptor,
+          adapterAdmissionReceiptSha256,
+          handle,
+          grant.expires_at,
+        );
+        const destroyContext: DestroyContextV1 = {
+          ...this.#adapterContext(
+            ctx,
+            descriptor,
+            adapterAdmissionReceiptSha256,
+            finalBarrierReceiptSha256,
+          ),
+          cleanup_grant_sha256: canonicalDigest(grant),
+          cleanup_basis_receipt_sha256: grant.basis.receipt_sha256,
+        };
+        destroyObservation = await this.#runner.destroy(destroyContext, handle, providerOp);
+        if (destroyObservation.state === "unknown") return { kind: "unknown" as const };
+        if (destroyObservation.state === "absent") {
+          await this.#verifyExactAbsence(
+            ctx,
+            descriptor,
+            adapterAdmissionReceiptSha256,
+            handle,
+            providerOp,
+          );
         } else {
           await this.#verifyExactOwnedResource(
             ctx,
             descriptor,
+            adapterAdmissionReceiptSha256,
             handle,
             providerOp,
             ["inert", "active"],
             true,
           );
         }
-        const destroyOutcomeAnchor = await this.#anchorOutcome(
+        destroyOutcomeAnchor = await this.#anchorOutcome(
           ctx.operation_id,
-          observation.state === "absent" ? "succeeded" : "failed_effect",
-          observation.provider_receipt_sha256,
+          destroyObservation.state === "absent" ? "succeeded" : "failed_effect",
+          destroyObservation.provider_receipt_sha256,
         );
-        return { kind: "resolved" as const, observation, destroyOutcomeAnchor };
       } catch (error) {
         if (!providerReachable) throw error;
         const nonAcceptanceProof = await this.#verifiedProviderNonAcceptance(error, ctx, descriptor);
@@ -1301,7 +1466,8 @@ export class SandboxesReferenceServiceV1 {
             resourceId,
             ctx.operation_id,
             ctx.transition.successor_resource_lifecycle_generation,
-            nonAcceptanceProof,
+            nonAcceptanceProof.provider_receipt_sha256,
+            nonAcceptanceProof.verification_receipt_sha256,
           );
           throw new SandboxError("provider_unavailable", "Provider rejected cleanup without an effect");
         }
@@ -1312,6 +1478,17 @@ export class SandboxesReferenceServiceV1 {
             (error instanceof SandboxError && error.code === "integrity_failed"),
         };
       }
+      if (destroyObservation === undefined || destroyOutcomeAnchor === undefined) {
+        throw new SandboxError("integrity_failed", "Cleanup success lost its signed outcome");
+      }
+      const sandbox = await this.#commitDestroyProviderOutcome(
+        resourceId,
+        ctx,
+        grant,
+        destroyObservation,
+        destroyOutcomeAnchor,
+      );
+      return { kind: "resolved" as const, sandbox };
     });
     if (providerResult.kind === "unknown") {
       return this.#quarantineCleanup(
@@ -1324,36 +1501,7 @@ export class SandboxesReferenceServiceV1 {
         "cleanup_failed",
       );
     }
-    const { observation, destroyOutcomeAnchor } = providerResult;
-    return await this.#repository.transaction((tx) => {
-      const current = this.#mustSandbox(tx, resourceId);
-      const absent = observation.state === "absent";
-      const outcomePending: SandboxV1 = {
-        ...current,
-        revision: current.revision + 1,
-        pending_provider_outcome: {
-          source_operation_id: ctx.operation_id,
-          target_state: absent ? "destroyed" : "cleanup_failed",
-          evidence_sha256: destroyOutcomeAnchor,
-          provider_receipt_sha256: observation.provider_receipt_sha256,
-          observed_at: observation.observed_at,
-          ...(absent
-            ? {
-                terminal_disposition:
-                  grant.basis.kind === "discard_uncheckpointed"
-                    ? "discarded_uncheckpointed" as const
-                    : grant.basis.kind === "git_promotion"
-                      ? "destroyed_after_promotion" as const
-                      : "destroyed_after_checkpoint" as const,
-              }
-            : {}),
-        },
-      };
-      tx.putSandbox(outcomePending, current.revision);
-      this.#commitOperation(tx, ctx.operation_id, canonicalDigest(outcomePending), destroyOutcomeAnchor);
-      this.#event(tx, outcomePending, ctx.operation_id, "operation_committed");
-      return outcomePending;
-    });
+    return providerResult.sandbox;
   }
 
   async recordInert(
@@ -1988,7 +2136,7 @@ export class SandboxesReferenceServiceV1 {
         "higher execution epoch requires one exact prior DISPATCHED and failed_no_effect OUTCOME",
       );
     }
-    const recoveryRange = await this.#verifiedJournalRecoveryRange({
+    const { range: recoveryRange } = await this.#verifiedJournalRecoveryRange({
       operation_id: prior.operation_id,
       operation_step_id: prior.operation_step_id,
       requested_from_sequence: priorDispatch.journal_sequence,
@@ -2060,7 +2208,7 @@ export class SandboxesReferenceServiceV1 {
     operation_id: string;
     operation_step_id: string;
     requested_from_sequence: bigint;
-  }): Promise<EffectJournalRecoveryRangeV1> {
+  }): Promise<VerifiedJournalRecoveryRangeV1> {
     const range = await this.#journalRecovery.readOperationStepRange(input);
     assertOpaqueId(range.operation_id, "journal_recovery.operation_id", "op");
     assertOpaqueId(range.operation_step_id, "journal_recovery.operation_step_id", "step");
@@ -2096,46 +2244,179 @@ export class SandboxesReferenceServiceV1 {
       return anchor;
     });
     const authenticated = await this.#verifier.verifyJournalRecoveryRange(range);
+    assertDigest(authenticated.range_sha256, "journal_recovery_auth.range_sha256");
+    assertDigest(
+      authenticated.current_head_frontier_digest,
+      "journal_recovery_auth.current_head_frontier_digest",
+    );
+    assertDigest(
+      authenticated.verification_receipt_sha256,
+      "journal_recovery_auth.verification_receipt_sha256",
+    );
+    assertRfc3339(authenticated.verified_at, "journal_recovery_auth.verified_at");
+    assertRfc3339(authenticated.expires_at, "journal_recovery_auth.expires_at");
+    const authKeys = new Set([
+      "schema_version",
+      "range_sha256",
+      "operation_id",
+      "operation_step_id",
+      "requested_from_sequence",
+      "current_head_sequence",
+      "current_head_frontier_digest",
+      "current_linearizable_head",
+      "complete_range",
+      "trusted_signer",
+      "verified_at",
+      "expires_at",
+      "verification_receipt_sha256",
+    ]);
+    const {
+      verification_receipt_sha256: verificationReceiptSha256,
+      ...verificationReceiptBytes
+    } = authenticated;
+    const now = (await this.#repository.databaseTime()).getTime();
     if (
+      Object.keys(authenticated).length !== authKeys.size ||
+      Object.keys(authenticated).some((key) => !authKeys.has(key)) ||
+      authenticated.schema_version !== "infinity.authenticated-journal-recovery-range/v1" ||
+      authenticated.range_sha256 !== canonicalDigest(range) ||
       authenticated.operation_id !== range.operation_id ||
       authenticated.operation_step_id !== range.operation_step_id ||
       authenticated.requested_from_sequence !== range.requested_from_sequence ||
-      authenticated.signed_head_sequence !== range.signed_head_sequence ||
-      authenticated.signed_head_frontier_digest !== range.signed_head_frontier_digest ||
-      authenticated.completeness_proof_sha256 !== range.completeness_proof_sha256 ||
-      authenticated.signer_principal !== range.signer_principal ||
-      authenticated.signing_key_id !== range.signing_key_id ||
-      authenticated.head_signature_verified !== true ||
-      authenticated.range_completeness_verified !== true ||
-      authenticated.stored_head_membership !== true ||
-      authenticated.current_linearizable_head_verified !== true ||
-      authenticated.current_linearizable_head_sequence !== range.signed_head_sequence ||
-      authenticated.current_linearizable_head_frontier_digest !==
-        range.signed_head_frontier_digest
+      authenticated.current_head_sequence !== range.signed_head_sequence ||
+      authenticated.current_head_frontier_digest !== range.signed_head_frontier_digest ||
+      authenticated.current_linearizable_head !== true ||
+      authenticated.complete_range !== true ||
+      authenticated.trusted_signer !== true ||
+      verificationReceiptSha256 !== canonicalDigest(verificationReceiptBytes) ||
+      Date.parse(authenticated.verified_at) > now ||
+      Date.parse(authenticated.expires_at) <= now
     ) {
       throw new SandboxError(
         "integrity_failed",
         "Journal recovery lacks the current linearizable signed head and completeness proof",
       );
     }
-    return { ...range, complete_operation_envelopes: normalized };
+    return {
+      range: { ...range, complete_operation_envelopes: normalized },
+      current_head_noninclusion_receipt_sha256:
+        authenticated.verification_receipt_sha256,
+    };
+  }
+
+  async #readAuthenticatedExistingOutcome(
+    ctx: NormalizedMutationContext,
+  ): Promise<ProviderOutcomeAnchorV1 | undefined> {
+    const expectedDispatchDigest = dispatchedJournalAnchorDigest(ctx.dispatch_journal);
+    const { range } = await this.#verifiedJournalRecoveryRange({
+      operation_id: ctx.operation_id,
+      operation_step_id: ctx.dispatch_journal.record.operation_step_id,
+      requested_from_sequence: ctx.dispatch_journal.journal_sequence,
+    });
+    const dispatches = range.complete_operation_envelopes.filter(
+      (anchor): anchor is DispatchedJournalAnchorV1 =>
+        "record_kind" in anchor.record &&
+        anchor.record.record_kind === "DISPATCHED" &&
+        anchor.record.operation_execution_epoch === ctx.fence.operation_execution_epoch,
+    );
+    const outcomes = range.complete_operation_envelopes.filter(
+      (anchor): anchor is ProviderOutcomeAnchorV1 =>
+        "record_kind" in anchor.record &&
+        anchor.record.record_kind === "OUTCOME" &&
+        anchor.record.operation_execution_epoch === ctx.fence.operation_execution_epoch,
+    );
+    if (
+      dispatches.length !== 1 ||
+      canonicalDigest(dispatches[0]) !== expectedDispatchDigest ||
+      range.complete_operation_envelopes.some(
+        (anchor) =>
+          "record_kind" in anchor.record &&
+          anchor.record.record_kind === "DISPATCHED" &&
+          anchor.record.operation_execution_epoch > ctx.fence.operation_execution_epoch,
+      ) ||
+      outcomes.length > 1
+    ) {
+      throw new SandboxError(
+        "provider_state_unknown",
+        "Current signed journal head does not contain one exact dispatch and at most one outcome",
+      );
+    }
+    const recovered = outcomes[0];
+    if (recovered === undefined) return undefined;
+    const record = recovered.record;
+    if (
+      record.schema_version !== SCHEMA_VERSION ||
+      record.record_kind !== "OUTCOME" ||
+      record.outcome_schema_version !== EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION ||
+      record.outcome_schema_digest !== EFFECT_JOURNAL_OUTCOME_SCHEMA_DIGEST ||
+      record.operation_id !== ctx.operation_id ||
+      record.operation_step_id !== ctx.dispatch_journal.record.operation_step_id ||
+      record.operation_execution_epoch !== ctx.fence.operation_execution_epoch ||
+      record.dispatch_anchor_sha256 !== expectedDispatchDigest ||
+      canonicalDigest(record.fence) !== canonicalDigest(ctx.fence) ||
+      canonicalDigest(record.target) !== canonicalDigest(this.#effectTarget(ctx))
+    ) {
+      throw new SandboxError(
+        "integrity_failed",
+        "Recovered signed outcome does not bind the exact current provider effect",
+      );
+    }
+    const recoveredDigest = providerOutcomeAnchorDigest(recovered);
+    const rereadValue = await this.#outcomeJournal.readOutcome(recoveredDigest);
+    if (rereadValue === undefined) {
+      throw new SandboxError(
+        "provider_state_unknown",
+        "Recovered signed outcome is unavailable from the authoritative journal",
+      );
+    }
+    const reread = validateProviderOutcomeAnchor(rereadValue);
+    if (providerOutcomeAnchorDigest(reread) !== recoveredDigest) {
+      throw new SandboxError(
+        "integrity_failed",
+        "Recovered range outcome and authoritative journal readback disagree",
+      );
+    }
+    const authenticated = await this.#verifier.verifyProviderOutcomeAnchor(reread, ctx.fence);
+    this.#assertAuthenticatedJournalBindings(authenticated, reread, ctx.fence);
+    await this.#repository.transaction((tx) => {
+      tx.appendExternalAnchor({
+        schema_version: SCHEMA_VERSION,
+        record_kind: "OUTCOME",
+        outcome_schema_version: record.outcome_schema_version,
+        outcome_schema_digest: record.outcome_schema_digest,
+        operation_id: record.operation_id,
+        operation_step_id: record.operation_step_id,
+        operation_execution_epoch: record.operation_execution_epoch,
+        outcome_kind: record.outcome_kind,
+        journal_sequence: reread.journal_sequence,
+        prior_frontier_digest: reread.prior_frontier_digest,
+        record_digest: reread.record_digest,
+        frontier_digest: reread.frontier_digest,
+        envelope_digest: recoveredDigest,
+        recorded_at: record.recorded_at,
+      });
+    });
+    return reread;
   }
 
   async #recoverExternalDispatch(
     ctx: NormalizedMutationContext,
   ): Promise<{ disposition: "inserted" | "already_present" }> {
     const dispatchRecord = ctx.dispatch_journal.record;
-    const range = await this.#verifiedJournalRecoveryRange({
+    const verifiedRange = await this.#verifiedJournalRecoveryRange({
       operation_id: dispatchRecord.operation_id,
       operation_step_id: dispatchRecord.operation_step_id,
       requested_from_sequence: ctx.dispatch_journal.journal_sequence,
     });
     const result = await this.#dispatchJournal.recoverDispatched({
       anchor: ctx.dispatch_journal,
-      current_range: range,
+      current_head_noninclusion_receipt_sha256:
+        verifiedRange.current_head_noninclusion_receipt_sha256,
     });
     if (
       !["inserted", "already_present"].includes(result.disposition) ||
+      result.current_head_receipt_sha256 !==
+        verifiedRange.current_head_noninclusion_receipt_sha256 ||
       canonicalDigest(validateDispatchedJournalAnchor(result.anchor)) !==
         canonicalDigest(ctx.dispatch_journal)
     ) {
@@ -2837,6 +3118,151 @@ export class SandboxesReferenceServiceV1 {
     return undefined;
   }
 
+  async #commitCreateProviderOutcome(
+    resourceId: string,
+    ctx: NormalizedMutationContext,
+    handle: OwnedProviderHandleV1,
+    providerReceiptSha256: Digest,
+    outcomeAnchorSha256: Digest,
+  ): Promise<SandboxV1> {
+    return await this.#repository.transaction((tx) => {
+      const current = this.#mustSandbox(tx, resourceId);
+      if (current.state !== "creating_inert") {
+        throw new SandboxError("stale_revision", "Create receipt lost its reservation CAS");
+      }
+      const generation = ctx.transition.successor_resource_lifecycle_generation;
+      const sealed = this.#sealer.seal({ ...handle, resource_lifecycle_generation: generation });
+      const outcomePending: SandboxV1 = {
+        ...current,
+        revision: current.revision + 1,
+        resource_lifecycle_generation: generation,
+        provider_handle_sha256: sealed.provider_handle_sha256,
+        provider_identity_sha256: handle.provider_identity_sha256,
+        immutable_fingerprint_sha256: handle.immutable_fingerprint_sha256,
+        allocated_at: this.#txNow(tx),
+        pending_provider_outcome: {
+          source_operation_id: ctx.operation_id,
+          target_state: "inert",
+          evidence_sha256: outcomeAnchorSha256,
+          provider_receipt_sha256: providerReceiptSha256,
+          observed_at: this.#txNow(tx),
+        },
+      };
+      tx.putSandbox(outcomePending, current.revision);
+      tx.putHandle(sealed);
+      this.#commitOperation(
+        tx,
+        ctx.operation_id,
+        canonicalDigest(outcomePending),
+        outcomeAnchorSha256,
+      );
+      this.#event(tx, outcomePending, ctx.operation_id, "operation_committed");
+      return outcomePending;
+    });
+  }
+
+  async #commitActivationProviderOutcome(
+    resourceId: string,
+    ctx: NormalizedMutationContext,
+    providerReceiptSha256: Digest,
+    outcomeAnchorSha256: Digest,
+    observedAt: string,
+  ): Promise<SandboxV1> {
+    return await this.#repository.transaction((tx) => {
+      const current = this.#mustSandbox(tx, resourceId);
+      if (current.state !== "activating") {
+        throw new SandboxError("stale_revision", "Activation CAS was superseded");
+      }
+      const outcomePending: SandboxV1 = {
+        ...current,
+        revision: current.revision + 1,
+        pending_provider_outcome: {
+          source_operation_id: ctx.operation_id,
+          target_state: "active",
+          evidence_sha256: outcomeAnchorSha256,
+          provider_receipt_sha256: providerReceiptSha256,
+          observed_at: observedAt,
+        },
+      };
+      tx.putSandbox(outcomePending, current.revision);
+      this.#commitOperation(
+        tx,
+        ctx.operation_id,
+        canonicalDigest(outcomePending),
+        outcomeAnchorSha256,
+      );
+      this.#event(tx, outcomePending, ctx.operation_id, "operation_committed");
+      return outcomePending;
+    });
+  }
+
+  async #commitExpireProviderOutcome(
+    resourceId: string,
+    ctx: NormalizedMutationContext,
+    outcomeAnchorSha256: Digest,
+  ): Promise<SandboxV1> {
+    return await this.#repository.transaction((tx) => {
+      const current = this.#mustSandbox(tx, resourceId);
+      if (current.state !== "expiring") {
+        throw new SandboxError("stale_revision", "Expiry CAS was superseded");
+      }
+      this.#commitOperation(
+        tx,
+        ctx.operation_id,
+        canonicalDigest(current),
+        outcomeAnchorSha256,
+      );
+      this.#event(tx, current, ctx.operation_id, "operation_committed");
+      return current;
+    });
+  }
+
+  async #commitDestroyProviderOutcome(
+    resourceId: string,
+    ctx: NormalizedMutationContext,
+    grant: InfinityCleanupGrantV1,
+    observation: DestroyObservationV1,
+    outcomeAnchorSha256: Digest,
+  ): Promise<SandboxV1> {
+    return await this.#repository.transaction((tx) => {
+      const current = this.#mustSandbox(tx, resourceId);
+      if (current.state !== "destroying") {
+        throw new SandboxError("stale_revision", "Cleanup CAS was superseded");
+      }
+      const absent = observation.state === "absent";
+      const outcomePending: SandboxV1 = {
+        ...current,
+        revision: current.revision + 1,
+        pending_provider_outcome: {
+          source_operation_id: ctx.operation_id,
+          target_state: absent ? "destroyed" : "cleanup_failed",
+          evidence_sha256: outcomeAnchorSha256,
+          provider_receipt_sha256: observation.provider_receipt_sha256,
+          observed_at: observation.observed_at,
+          ...(absent
+            ? {
+                terminal_disposition:
+                  grant.basis.kind === "discard_uncheckpointed"
+                    ? "discarded_uncheckpointed" as const
+                    : grant.basis.kind === "git_promotion"
+                      ? "destroyed_after_promotion" as const
+                      : "destroyed_after_checkpoint" as const,
+              }
+            : {}),
+        },
+      };
+      tx.putSandbox(outcomePending, current.revision);
+      this.#commitOperation(
+        tx,
+        ctx.operation_id,
+        canonicalDigest(outcomePending),
+        outcomeAnchorSha256,
+      );
+      this.#event(tx, outcomePending, ctx.operation_id, "operation_committed");
+      return outcomePending;
+    });
+  }
+
   #commitOperation(
     tx: SandboxRepositoryTxV1,
     operationId: string,
@@ -2926,8 +3352,11 @@ export class SandboxesReferenceServiceV1 {
   async #verifiedProviderNonAcceptance(
     error: unknown,
     ctx: NormalizedMutationContext,
-    descriptor: AdapterDescriptorV1,
-  ): Promise<Digest | undefined> {
+    _descriptor: AdapterDescriptorV1,
+  ): Promise<{
+    provider_receipt_sha256: Digest;
+    verification_receipt_sha256: Digest;
+  } | undefined> {
     if (!(error instanceof ProviderRejectedNoEffectError) || error.proof === undefined) {
       return undefined;
     }
@@ -2935,47 +3364,38 @@ export class SandboxesReferenceServiceV1 {
       const proof = error.proof;
       const allowed = new Set([
         "schema_version",
-        "adapter_id",
-        "adapter_version",
-        "installation_id",
-        "provider_scope_ref",
-        "operation_id",
-        "operation_step_id",
+        "target",
         "operation_execution_epoch",
         "request_sha256",
-        "dispatch_anchor_sha256",
-        "target",
+        "provider_receipt_sha256",
+        "proof_kind",
         "observed_at",
         "expires_at",
-        "provider_evidence_sha256",
+        "issuer_principal",
+        "signing_key_id",
         "proof_sha256",
+        "signature",
       ]);
       if (Object.keys(proof).length !== allowed.size || Object.keys(proof).some((key) => !allowed.has(key))) {
         return undefined;
       }
-      assertOpaqueId(proof.operation_id, "provider_non_acceptance.operation_id", "op");
-      assertOpaqueId(proof.operation_step_id, "provider_non_acceptance.operation_step_id", "step");
       assertDigest(proof.request_sha256, "provider_non_acceptance.request_sha256");
-      assertDigest(proof.dispatch_anchor_sha256, "provider_non_acceptance.dispatch_anchor_sha256");
-      assertDigest(proof.provider_evidence_sha256, "provider_non_acceptance.provider_evidence_sha256");
+      assertDigest(proof.provider_receipt_sha256, "provider_non_acceptance.provider_receipt_sha256");
       assertDigest(proof.proof_sha256, "provider_non_acceptance.proof_sha256");
+      assertOpaqueId(proof.issuer_principal, "provider_non_acceptance.issuer_principal", "principal");
+      assertOpaqueId(proof.signing_key_id, "provider_non_acceptance.signing_key_id", "key");
       assertRfc3339(proof.observed_at, "provider_non_acceptance.observed_at");
       assertRfc3339(proof.expires_at, "provider_non_acceptance.expires_at");
       const target = this.#effectTarget(ctx);
       const now = (await this.#repository.databaseTime()).getTime();
       if (
-        proof.schema_version !== "sandboxes.provider-non-acceptance-proof/v1" ||
-        proof.adapter_id !== descriptor.adapter_id ||
-        proof.adapter_version !== descriptor.adapter_version ||
-        proof.installation_id !== descriptor.installation_id ||
-        proof.provider_scope_ref !== descriptor.provider_scope_ref ||
-        proof.operation_id !== ctx.operation_id ||
-        proof.operation_step_id !== ctx.dispatch_journal.record.operation_step_id ||
+        proof.schema_version !== "sandboxes.provider-no-effect-proof/v1" ||
+        !["token_not_accepted", "conditional_precondition_rejected"].includes(proof.proof_kind) ||
         proof.operation_execution_epoch !== ctx.fence.operation_execution_epoch ||
         proof.request_sha256 !== ctx.request_sha256 ||
-        proof.dispatch_anchor_sha256 !== dispatchedJournalAnchorDigest(ctx.dispatch_journal) ||
         canonicalDigest(proof.target) !== canonicalDigest(target) ||
         proof.proof_sha256 !== providerNonAcceptanceProofDigest(proof) ||
+        !/^[A-Za-z0-9_-]{86}$/.test(proof.signature) ||
         Date.parse(proof.observed_at) < Date.parse(ctx.dispatch_journal.record.recorded_at) ||
         Date.parse(proof.observed_at) > now ||
         Date.parse(proof.expires_at) <= now ||
@@ -2984,24 +3404,44 @@ export class SandboxesReferenceServiceV1 {
         return undefined;
       }
       const authenticated = await this.#verifier.verifyProviderNonAcceptanceProof(proof);
+      const receiptKeys = new Set([
+        "schema_version",
+        "proof_sha256",
+        "target_sha256",
+        "operation_execution_epoch",
+        "request_sha256",
+        "provider_receipt_sha256",
+        "proof_kind",
+        "verified_at",
+        "expires_at",
+        "verifier_principal",
+        "signing_key_id",
+        "receipt_sha256",
+      ]);
+      assertDigest(authenticated.receipt_sha256, "provider_non_acceptance_verification.receipt_sha256");
+      assertRfc3339(authenticated.verified_at, "provider_non_acceptance_verification.verified_at");
+      assertRfc3339(authenticated.expires_at, "provider_non_acceptance_verification.expires_at");
+      const { receipt_sha256: receiptDigest, ...receiptBytes } = authenticated;
       if (
+        Object.keys(authenticated).length !== receiptKeys.size ||
+        Object.keys(authenticated).some((key) => !receiptKeys.has(key)) ||
+        authenticated.schema_version !== "sandboxes.provider-no-effect-verification-receipt/v1" ||
         authenticated.proof_sha256 !== proof.proof_sha256 ||
-        authenticated.adapter_id !== proof.adapter_id ||
-        authenticated.adapter_version !== proof.adapter_version ||
-        authenticated.installation_id !== proof.installation_id ||
-        authenticated.provider_scope_ref !== proof.provider_scope_ref ||
-        authenticated.operation_id !== proof.operation_id ||
-        authenticated.operation_step_id !== proof.operation_step_id ||
+        authenticated.target_sha256 !== canonicalDigest(proof.target) ||
         authenticated.operation_execution_epoch !== proof.operation_execution_epoch ||
         authenticated.request_sha256 !== proof.request_sha256 ||
-        authenticated.dispatch_anchor_sha256 !== proof.dispatch_anchor_sha256 ||
-        authenticated.target_sha256 !== canonicalDigest(proof.target) ||
-        authenticated.provider_evidence_sha256 !== proof.provider_evidence_sha256 ||
-        authenticated.provider_non_acceptance_verified !== true
+        authenticated.provider_receipt_sha256 !== proof.provider_receipt_sha256 ||
+        authenticated.proof_kind !== proof.proof_kind ||
+        receiptDigest !== canonicalDigest(receiptBytes) ||
+        Date.parse(authenticated.verified_at) > now ||
+        Date.parse(authenticated.expires_at) <= now
       ) {
         return undefined;
       }
-      return proof.proof_sha256;
+      return {
+        provider_receipt_sha256: proof.provider_receipt_sha256,
+        verification_receipt_sha256: authenticated.receipt_sha256,
+      };
     } catch {
       return undefined;
     }
@@ -3012,12 +3452,14 @@ export class SandboxesReferenceServiceV1 {
     operationId: string,
     _successorGeneration: bigint,
     providerReceiptSha256: Digest,
+    verificationReceiptSha256: Digest,
   ): Promise<void> {
     assertDigest(providerReceiptSha256, "provider_non_acceptance_receipt_sha256");
     const outcomeAnchor = await this.#anchorOutcome(
       operationId,
       "failed_no_effect",
       providerReceiptSha256,
+      verificationReceiptSha256,
     );
     await this.#repository.transaction((tx) => {
       const current = this.#mustSandbox(tx, resourceId);
@@ -3121,7 +3563,7 @@ export class SandboxesReferenceServiceV1 {
     };
   }
 
-  async #verifiedDescriptor(): Promise<AdapterDescriptorV1> {
+  async #verifiedDescriptor(): Promise<VerifiedAdapterContextV1> {
     const value = await this.#runner.descriptor();
     const allowed = new Set([
       "schema_version",
@@ -3133,18 +3575,38 @@ export class SandboxesReferenceServiceV1 {
       "provider_scope_ref",
       "status",
       "runtime_class",
+      "supported_architectures",
+      "isolation_evidence_sha256",
+      "guest_kernel_boundary_evidence_sha256",
       "network_modes",
+      "network_enforcement_evidence_sha256",
       "exact_operation_lookup",
       "inert_create",
       "whole_scope_cancel",
       "native_bounded_files",
+      "read_only_workspace_enforcement",
       "atomic_incarnation_bound_delete",
+      "ownership_reconciliation",
+      "destructive_operation_semantics",
+      "provider_hard_ttl_semantics",
+      "output_framing",
+      "max_ttl_ms",
+      "resource_limits",
     ]);
     if (Object.keys(value).length !== allowed.size || Object.keys(value).some((key) => !allowed.has(key))) {
       throw new SandboxError("integrity_failed", "Adapter descriptor is not a closed V1 document");
     }
     assertDigest(value.build_sha256, "adapter_descriptor.build_sha256");
     assertDigest(value.descriptor_sha256, "adapter_descriptor.descriptor_sha256");
+    assertDigest(value.isolation_evidence_sha256, "adapter_descriptor.isolation_evidence_sha256");
+    assertDigest(
+      value.guest_kernel_boundary_evidence_sha256,
+      "adapter_descriptor.guest_kernel_boundary_evidence_sha256",
+    );
+    assertDigest(
+      value.network_enforcement_evidence_sha256,
+      "adapter_descriptor.network_enforcement_evidence_sha256",
+    );
     const { descriptor_sha256: suppliedDigest, ...protectedDescriptor } = value;
     const booleans = [
       value.exact_operation_lookup,
@@ -3158,6 +3620,12 @@ export class SandboxesReferenceServiceV1 {
       !["fake", "e2b", "daytona_cloud"].includes(value.adapter_id) ||
       !["test_only", "pending_conformance", "admitted"].includes(value.status) ||
       value.runtime_class !== "strong_vm" ||
+      !Array.isArray(value.supported_architectures) ||
+      value.supported_architectures.length === 0 ||
+      new Set(value.supported_architectures).size !== value.supported_architectures.length ||
+      value.supported_architectures.some((architecture) =>
+        !["x86_64", "arm64"].includes(architecture)
+      ) ||
       value.adapter_version.length === 0 ||
       value.installation_id.length === 0 ||
       value.provider_scope_ref.length === 0 ||
@@ -3165,6 +3633,24 @@ export class SandboxesReferenceServiceV1 {
       value.network_modes.length === 0 ||
       new Set(value.network_modes).size !== value.network_modes.length ||
       value.network_modes.some((mode) => !["deny_all", "broker_only"].includes(mode)) ||
+      value.read_only_workspace_enforcement !== "external_read_only_mount" ||
+      value.ownership_reconciliation !== "exact_token_and_incarnation" ||
+      value.destructive_operation_semantics !== "atomic_incarnation_bound_delete" ||
+      value.provider_hard_ttl_semantics !== "stop_only_no_delete" ||
+      value.output_framing !== "bounded_frames_v1" ||
+      !Number.isSafeInteger(value.max_ttl_ms) ||
+      value.max_ttl_ms <= 0 ||
+      canonicalDigest(Object.keys(value.resource_limits).sort()) !== canonicalDigest([
+        "max_disk_bytes",
+        "max_file_bytes",
+        "max_memory_bytes",
+        "max_output_bytes",
+        "max_page_entries",
+        "max_processes",
+      ]) ||
+      Object.values(value.resource_limits).some((limit) =>
+        !Number.isSafeInteger(limit) || limit <= 0
+      ) ||
       booleans.some((flag) => typeof flag !== "boolean") ||
       suppliedDigest !== adapterDescriptorDigest(protectedDescriptor)
     ) {
@@ -3173,10 +3659,126 @@ export class SandboxesReferenceServiceV1 {
         "Adapter descriptor digest does not bind its exact closed behavior and provider identity facts",
       );
     }
-    return structuredClone(value);
+    const descriptor = structuredClone(value);
+    if (descriptor.adapter_id === "fake") {
+      if (
+        descriptor.status !== "test_only" ||
+        (this.#runner as SandboxRunnerV1 & { [HERMETIC_TEST_RUNNER]?: true })[
+          HERMETIC_TEST_RUNNER
+        ] !== true
+      ) {
+        throw new SandboxError("unsupported_runtime_feature", "Fake adapter is not a branded hermetic test runner");
+      }
+      return {
+        descriptor,
+        admission_receipt_sha256: canonicalDigest({
+          schema_version: "sandboxes.hermetic-adapter-admission/v1",
+          descriptor_sha256: descriptor.descriptor_sha256,
+        }),
+      };
+    }
+    if (descriptor.status !== "admitted") {
+      throw new SandboxError("unsupported_runtime_feature", "Managed adapter is pending signed admission");
+    }
+    const admission = await this.#verifier.verifyAdapterAdmission(descriptor);
+    const admissionKeys = new Set([
+      "schema_version",
+      "registry_id",
+      "adapter_id",
+      "adapter_version",
+      "build_sha256",
+      "descriptor_sha256",
+      "installation_id",
+      "provider_scope_ref",
+      "status",
+      "conformance_manifest_sha256",
+      "issued_at",
+      "expires_at",
+      "issuer_principal",
+      "signing_key_id",
+      "receipt_sha256",
+      "signature",
+    ]);
+    assertDigest(admission.build_sha256, "adapter_admission.build_sha256");
+    assertDigest(admission.descriptor_sha256, "adapter_admission.descriptor_sha256");
+    assertDigest(
+      admission.conformance_manifest_sha256,
+      "adapter_admission.conformance_manifest_sha256",
+    );
+    assertDigest(admission.receipt_sha256, "adapter_admission.receipt_sha256");
+    assertRfc3339(admission.issued_at, "adapter_admission.issued_at");
+    assertRfc3339(admission.expires_at, "adapter_admission.expires_at");
+    assertOpaqueId(admission.issuer_principal, "adapter_admission.issuer_principal", "principal");
+    assertOpaqueId(admission.signing_key_id, "adapter_admission.signing_key_id", "key");
+    const now = (await this.#repository.databaseTime()).getTime();
+    if (
+      Object.keys(admission).length !== admissionKeys.size ||
+      Object.keys(admission).some((key) => !admissionKeys.has(key)) ||
+      admission.schema_version !== "sandboxes.adapter-admission-receipt/v1" ||
+      admission.registry_id !== "sandboxes.managed-v1" ||
+      admission.adapter_id !== descriptor.adapter_id ||
+      admission.adapter_version !== descriptor.adapter_version ||
+      admission.build_sha256 !== descriptor.build_sha256 ||
+      admission.descriptor_sha256 !== descriptor.descriptor_sha256 ||
+      admission.installation_id !== descriptor.installation_id ||
+      admission.provider_scope_ref !== descriptor.provider_scope_ref ||
+      admission.status !== "admitted" ||
+      admission.receipt_sha256 !== adapterAdmissionReceiptDigest(admission) ||
+      !/^[A-Za-z0-9_-]{86}$/.test(admission.signature) ||
+      Date.parse(admission.issued_at) > now ||
+      Date.parse(admission.expires_at) <= now
+    ) {
+      throw new SandboxError("capability_denied", "Managed adapter admission receipt is not current and exact");
+    }
+    return { descriptor, admission_receipt_sha256: admission.receipt_sha256 };
   }
 
-  #assertPersistedDescriptor(sandbox: SandboxV1, descriptor: AdapterDescriptorV1): void {
+  async #assertCurrentAdapterAdmission(
+    descriptor: AdapterDescriptorV1,
+    admissionReceiptSha256: Digest,
+  ): Promise<void> {
+    const current = await this.#verifiedDescriptor();
+    if (
+      canonicalDigest(current.descriptor) !== canonicalDigest(descriptor) ||
+      current.admission_receipt_sha256 !== admissionReceiptSha256
+    ) {
+      throw new SandboxError(
+        "capability_denied",
+        "Adapter descriptor or signed admission changed before provider reachability",
+      );
+    }
+  }
+
+  async #assertDescriptorSupportsCreate(
+    descriptor: AdapterDescriptorV1,
+    input: CreateSandboxV1,
+  ): Promise<void> {
+    const architecture = input.spec.architecture === "amd64" ? "x86_64" : "arm64";
+    const limits = descriptor.resource_limits;
+    const ttlMs = Date.parse(input.spec.expires_at) - (await this.#repository.databaseTime()).getTime();
+    if (
+      !descriptor.supported_architectures.includes(architecture) ||
+      !descriptor.network_modes.includes(input.spec.network_policy.mode) ||
+      input.spec.max_runtime_ms > descriptor.max_ttl_ms ||
+      ttlMs <= 0 ||
+      ttlMs > descriptor.max_ttl_ms ||
+      input.spec.resources.pids > limits.max_processes ||
+      input.spec.resources.memory_bytes > limits.max_memory_bytes ||
+      input.spec.resources.disk_bytes > limits.max_disk_bytes ||
+      input.spec.resources.output_bytes > limits.max_output_bytes
+    ) {
+      throw new SandboxError(
+        "unsupported_runtime_feature",
+        "Adapter admission does not cover the requested architecture, policy, TTL, or resource limits",
+      );
+    }
+  }
+
+  #assertPersistedDescriptor(
+    sandbox: SandboxV1,
+    descriptor: AdapterDescriptorV1,
+    admissionReceiptSha256 = sandbox.adapter_admission_receipt_sha256,
+  ): void {
     const persisted = sandbox.adapter_descriptor;
     if (persisted === undefined) {
       throw new SandboxError("integrity_failed", "Sandbox lacks its exact admitted adapter descriptor");
@@ -3187,7 +3789,8 @@ export class SandboxesReferenceServiceV1 {
       persistedDigest !== adapterDescriptorDigest(persistedProtected) ||
       currentDigest !== adapterDescriptorDigest(currentProtected) ||
       sandbox.adapter_descriptor_sha256 !== persistedDigest ||
-      canonicalDigest(persisted) !== canonicalDigest(descriptor)
+      canonicalDigest(persisted) !== canonicalDigest(descriptor) ||
+      sandbox.adapter_admission_receipt_sha256 !== admissionReceiptSha256
     ) {
       throw new SandboxError("integrity_failed", "Runner descriptor changed after resource creation");
     }
@@ -3202,12 +3805,10 @@ export class SandboxesReferenceServiceV1 {
       throw new SandboxError("integrity_failed", "Sandbox lacks its protected provider handle identity");
     }
     return {
-      schema_version: "sandboxes.provider-handle-binding/v1",
       adapter_id: sandbox.adapter_descriptor.adapter_id,
       adapter_version: sandbox.adapter_descriptor.adapter_version,
       installation_id: sandbox.adapter_descriptor.installation_id,
       provider_scope_ref: sandbox.adapter_descriptor.provider_scope_ref,
-      resource_kind: sandbox.runtime_class,
       resource_id: sandbox.id,
       resource_lease_id: sandbox.resource_lease_id,
       resource_lifecycle_generation: sandbox.resource_lifecycle_generation,
@@ -3275,9 +3876,10 @@ export class SandboxesReferenceServiceV1 {
   async #assertFinalProviderMutationBarrier(
     ctx: NormalizedMutationContext,
     descriptor: AdapterDescriptorV1,
+    adapterAdmissionReceiptSha256: Digest,
     handle?: OwnedProviderHandleV1,
     grantExpiresAt?: string,
-  ): Promise<void> {
+  ): Promise<Digest> {
     const operation = await this.#repository.transaction((tx) => tx.getOperation(ctx.operation_id));
     if (operation === undefined) {
       throw new SandboxError("integrity_failed", "Final provider mutation barrier lost its operation");
@@ -3288,17 +3890,22 @@ export class SandboxesReferenceServiceV1 {
       fence: ctx.fence,
       dispatch_anchor_sha256: dispatchedJournalAnchorDigest(ctx.dispatch_journal),
     });
-    // This is the final online authorization read. Only the linearizable local
-    // database barrier below may run before the provider mutation.
-    await this.#assertCurrentEffectGuard(ctx);
-    await this.#repository.transaction((tx) => {
+    await this.#assertCurrentAdapterAdmission(descriptor, adapterAdmissionReceiptSha256);
+    // These are the final online admission and authorization reads. Only the
+    // linearizable local database barrier below may run before the mutation.
+    const currentAuthorizationReceiptSha256 = await this.#assertCurrentEffectGuard(ctx);
+    return await this.#repository.transaction((tx) => {
       const finalOperation = tx.getOperation(ctx.operation_id);
       if (finalOperation === undefined || finalOperation.effect_phase !== "dispatched") {
         throw new SandboxError("provider_state_unknown", "Provider mutation is no longer dispatched");
       }
       this.#assertProviderDispatchBarrier(tx, finalOperation, ctx);
       const current = this.#mustSandbox(tx, ctx.fence.resource_id);
-      this.#assertPersistedDescriptor(current, descriptor);
+      this.#assertPersistedDescriptor(
+        current,
+        descriptor,
+        adapterAdmissionReceiptSha256,
+      );
       const now = tx.databaseTime().getTime();
       if (grantExpiresAt !== undefined && Date.parse(grantExpiresAt) <= now) {
         throw new SandboxError("capability_denied", "Provider mutation grant expired during preflight");
@@ -3313,6 +3920,22 @@ export class SandboxesReferenceServiceV1 {
           throw new SandboxError("integrity_failed", "Final provider mutation handle identity changed");
         }
       }
+      return canonicalDigest({
+        schema_version: "sandboxes.final-currentness-barrier-receipt/v1",
+        operation_id: ctx.operation_id,
+        operation_step_id: ctx.dispatch_journal.record.operation_step_id,
+        operation_execution_epoch: ctx.fence.operation_execution_epoch,
+        request_sha256: ctx.request_sha256,
+        resource_id: current.id,
+        resource_lifecycle_generation: current.resource_lifecycle_generation,
+        dispatch_anchor_sha256: dispatchedJournalAnchorDigest(ctx.dispatch_journal),
+        current_authorization_receipt_sha256: currentAuthorizationReceiptSha256,
+        adapter_descriptor_sha256: descriptor.descriptor_sha256,
+        adapter_admission_receipt_sha256: adapterAdmissionReceiptSha256,
+        provider_handle_sha256: current.provider_handle_sha256 ?? null,
+        grant_expires_at: grantExpiresAt ?? null,
+        database_observed_at: this.#txNow(tx),
+      });
     });
   }
 
@@ -3322,13 +3945,52 @@ export class SandboxesReferenceServiceV1 {
     ctx: NormalizedMutationContext,
     descriptor: AdapterDescriptorV1,
   ): void {
+    const allowed = new Set([
+      "schema_version",
+      "adapter_id",
+      "adapter_version",
+      "installation_id",
+      "provider_scope_ref",
+      "resource_kind",
+      "opaque_resource_id",
+      "ownership_nonce",
+      "create_inert_operation_id",
+      "provider_creation_token_sha256",
+      "creation_receipt_sha256",
+      "provider_created_at",
+      "provider_resource_version",
+      "provider_identity_sha256",
+      "immutable_fingerprint_sha256",
+      "resource_lease_id",
+      "resource_id",
+      "resource_lifecycle_generation",
+      "spec_sha256",
+    ]);
+    if (Object.keys(handle).length !== allowed.size || Object.keys(handle).some((key) => !allowed.has(key))) {
+      throw new SandboxError("integrity_failed", "Provider handle is not a closed V1 document");
+    }
+    assertOpaqueId(handle.create_inert_operation_id, "provider_handle.create_inert_operation_id", "op");
+    assertOpaqueId(handle.resource_lease_id, "provider_handle.resource_lease_id", "resource_lease");
+    assertOpaqueId(handle.resource_id, "provider_handle.resource_id", "sbx");
+    assertDigest(handle.provider_creation_token_sha256, "provider_handle.provider_creation_token_sha256");
+    assertDigest(handle.creation_receipt_sha256, "provider_handle.creation_receipt_sha256");
+    assertDigest(handle.provider_identity_sha256, "provider_handle.provider_identity_sha256");
+    assertDigest(handle.immutable_fingerprint_sha256, "provider_handle.immutable_fingerprint_sha256");
+    assertDigest(handle.spec_sha256, "provider_handle.spec_sha256");
+    assertRfc3339(handle.provider_created_at, "provider_handle.provider_created_at");
     if (
+      handle.schema_version !== SCHEMA_VERSION ||
+      handle.resource_kind !== "strong_vm" ||
       handle.adapter_id !== descriptor.adapter_id ||
       handle.adapter_version !== descriptor.adapter_version ||
       handle.installation_id !== descriptor.installation_id ||
       handle.provider_scope_ref !== descriptor.provider_scope_ref ||
       handle.opaque_resource_id.length === 0 ||
+      handle.opaque_resource_id.length > 512 ||
       handle.ownership_nonce.length < 16 ||
+      handle.ownership_nonce.length > 512 ||
+      handle.provider_resource_version.length === 0 ||
+      handle.provider_resource_version.length > 512 ||
       handle.provider_identity_sha256 !== providerHandleIdentityDigest(handle) ||
       handle.resource_id !== sandbox.id ||
       handle.resource_lease_id !== sandbox.resource_lease_id ||
@@ -3347,6 +4009,7 @@ export class SandboxesReferenceServiceV1 {
   async #verifyExactOwnedResource(
     ctx: NormalizedMutationContext,
     descriptor: AdapterDescriptorV1,
+    adapterAdmissionReceiptSha256: Digest,
     handle: OwnedProviderHandleV1,
     mutation: ProviderOperationV1,
     expectedState: "inert" | "active" | ReadonlyArray<"inert" | "active">,
@@ -3357,6 +4020,7 @@ export class SandboxesReferenceServiceV1 {
     const reconcile = this.#reconcileContext(ctx, descriptor, readProbe);
     if (!operationLookupAlreadyRead) {
       await this.#assertCurrentEffectGuard(ctx, readProbe);
+      await this.#assertCurrentAdapterAdmission(descriptor, adapterAdmissionReceiptSha256);
       const operationObservation = await this.#runner.lookupOperation(reconcile, readProbe, handle);
       if (
       operationObservation.state !== "completed" ||
@@ -3366,9 +4030,16 @@ export class SandboxesReferenceServiceV1 {
         throw new SandboxError("integrity_failed", "Provider operation readback did not return the exact owned handle");
       }
     }
-    await this.#assertCurrentEffectGuard(ctx, readProbe);
+    const inspectionBarrierReceiptSha256 = await this.#assertCurrentEffectGuard(ctx, readProbe);
+    await this.#assertCurrentAdapterAdmission(descriptor, adapterAdmissionReceiptSha256);
     const observation = await this.#runner.inspect(
-      this.#adapterContextForOperation(ctx, readProbe),
+      this.#adapterContextForOperation(
+        ctx,
+        readProbe,
+        descriptor,
+        adapterAdmissionReceiptSha256,
+        inspectionBarrierReceiptSha256,
+      ),
       handle,
       readProbe,
     );
@@ -3388,6 +4059,7 @@ export class SandboxesReferenceServiceV1 {
     const seenCursors = new Set<string>();
     for (let pageCount = 0; pageCount < 1_000; pageCount += 1) {
       await this.#assertCurrentEffectGuard(ctx, readProbe);
+      await this.#assertCurrentAdapterAdmission(descriptor, adapterAdmissionReceiptSha256);
       const page = await this.#runner.listOwnedResources(reconcile, readProbe, cursor);
       matches.push(...page.resources.filter((resource) => resource.resource_id === handle.resource_id));
       if (page.next_cursor === undefined) break;
@@ -3427,14 +4099,22 @@ export class SandboxesReferenceServiceV1 {
   async #verifyExactAbsence(
     ctx: NormalizedMutationContext,
     descriptor: AdapterDescriptorV1,
+    adapterAdmissionReceiptSha256: Digest,
     handle: OwnedProviderHandleV1,
     mutation: ProviderOperationV1,
   ): Promise<void> {
     const readProbe = await this.#readProbeOperation(ctx, mutation, descriptor);
     const reconcile = this.#reconcileContext(ctx, descriptor, readProbe);
-    await this.#assertCurrentEffectGuard(ctx, readProbe);
+    const inspectionBarrierReceiptSha256 = await this.#assertCurrentEffectGuard(ctx, readProbe);
+    await this.#assertCurrentAdapterAdmission(descriptor, adapterAdmissionReceiptSha256);
     const observation = await this.#runner.inspect(
-      this.#adapterContextForOperation(ctx, readProbe),
+      this.#adapterContextForOperation(
+        ctx,
+        readProbe,
+        descriptor,
+        adapterAdmissionReceiptSha256,
+        inspectionBarrierReceiptSha256,
+      ),
       handle,
       readProbe,
     );
@@ -3445,6 +4125,7 @@ export class SandboxesReferenceServiceV1 {
     const seenCursors = new Set<string>();
     for (let pageCount = 0; pageCount < 1_000; pageCount += 1) {
       await this.#assertCurrentEffectGuard(ctx, readProbe);
+      await this.#assertCurrentAdapterAdmission(descriptor, adapterAdmissionReceiptSha256);
       const page = await this.#runner.listOwnedResources(reconcile, readProbe, cursor);
       if (page.resources.some((resource) => resource.resource_id === handle.resource_id)) {
         throw new SandboxError("provider_state_unknown", "Provider enumeration still contains the destroyed identity");
@@ -3462,7 +4143,7 @@ export class SandboxesReferenceServiceV1 {
   async #assertCurrentEffectGuard(
     ctx: NormalizedMutationContext,
     readProbe?: ProviderOperationV1,
-  ): Promise<void> {
+  ): Promise<Digest> {
     await this.#assertFenceFresh(ctx.fence);
     const authenticated = await this.#verifier.verifyCurrentEffectAuthorization(
       ctx.capability,
@@ -3494,7 +4175,7 @@ export class SandboxesReferenceServiceV1 {
       const journalBindings = await this.#verifier.verifyReadProbeJournalAnchor(anchor, ctx.fence);
       this.#assertAuthenticatedJournalBindings(journalBindings, anchor, ctx.fence);
     }
-    await this.#repository.transaction((tx) => {
+    const databaseObservedAt = await this.#repository.transaction((tx) => {
       const operation = tx.getOperation(ctx.operation_id);
       const sandbox = tx.getSandbox(ctx.fence.resource_id);
       if (
@@ -3510,6 +4191,18 @@ export class SandboxesReferenceServiceV1 {
       ) {
         throw new SandboxError("provider_state_unknown", "Provider read continuation lost the current dispatched effect");
       }
+      return this.#txNow(tx);
+    });
+    return canonicalDigest({
+      schema_version: "sandboxes.current-effect-authorization-receipt/v1",
+      operation_id: ctx.operation_id,
+      operation_step_id: ctx.dispatch_journal.record.operation_step_id,
+      operation_execution_epoch: ctx.fence.operation_execution_epoch,
+      request_sha256: ctx.request_sha256,
+      target_sha256: canonicalDigest(this.#effectTarget(ctx)),
+      dispatch_anchor_sha256: dispatchedJournalAnchorDigest(ctx.dispatch_journal),
+      read_probe_anchor_sha256: readProbe?.external_anchor_receipt_sha256 ?? null,
+      database_observed_at: databaseObservedAt,
     });
   }
 
@@ -3672,23 +4365,43 @@ export class SandboxesReferenceServiceV1 {
     };
   }
 
-  #adapterContext(ctx: NormalizedMutationContext): AdapterCallContextV1 {
+  #adapterContext(
+    ctx: NormalizedMutationContext,
+    descriptor: AdapterDescriptorV1,
+    adapterAdmissionReceiptSha256: Digest,
+    finalCurrentnessBarrierReceiptSha256: Digest,
+  ): AdapterCallContextV1 {
     return this.#adapterContextWithAnchor(
       ctx,
       dispatchedJournalAnchorDigest(ctx.dispatch_journal),
+      descriptor,
+      adapterAdmissionReceiptSha256,
+      finalCurrentnessBarrierReceiptSha256,
     );
   }
 
   #adapterContextForOperation(
     ctx: NormalizedMutationContext,
     operation: ProviderOperationV1,
+    descriptor: AdapterDescriptorV1,
+    adapterAdmissionReceiptSha256: Digest,
+    finalCurrentnessBarrierReceiptSha256: Digest,
   ): AdapterCallContextV1 {
-    return this.#adapterContextWithAnchor(ctx, operation.external_anchor_receipt_sha256);
+    return this.#adapterContextWithAnchor(
+      ctx,
+      operation.external_anchor_receipt_sha256,
+      descriptor,
+      adapterAdmissionReceiptSha256,
+      finalCurrentnessBarrierReceiptSha256,
+    );
   }
 
   #adapterContextWithAnchor(
     ctx: NormalizedMutationContext,
     externalAnchorReceiptSha256: Digest,
+    descriptor: AdapterDescriptorV1,
+    adapterAdmissionReceiptSha256: Digest,
+    finalCurrentnessBarrierReceiptSha256: Digest,
   ): AdapterCallContextV1 {
     return {
       trace_id: sha256(`trace:${ctx.operation_id}`).slice(7, 39),
@@ -3701,6 +4414,10 @@ export class SandboxesReferenceServiceV1 {
       fence: ctx.fence,
       target: this.#effectTarget(ctx),
       external_anchor_receipt_sha256: externalAnchorReceiptSha256,
+      final_currentness_barrier_receipt_sha256:
+        finalCurrentnessBarrierReceiptSha256,
+      adapter_descriptor_sha256: descriptor.descriptor_sha256,
+      adapter_admission_receipt_sha256: adapterAdmissionReceiptSha256,
     };
   }
 
@@ -3751,6 +4468,7 @@ export class SandboxesReferenceServiceV1 {
       provider_creation_token_sha256: scope.provider_creation_token_sha256,
       immutable_fingerprint_sha256: scope.immutable_fingerprint_sha256,
       discovery_scope_receipt_sha256: readProbe.external_anchor_receipt_sha256,
+      complete_read_probe_envelope_sha256: readProbe.external_anchor_receipt_sha256,
       max_pages: scope.max_pages,
       deadline: ctx.fence.operation_execution_expires_at,
     };
@@ -3767,7 +4485,23 @@ export class SandboxesReferenceServiceV1 {
     operationId: string,
     outcomeKind: ProviderOutcomeAnchorV1["record"]["outcome_kind"],
     outcomeSha256: Digest,
+    providerNoEffectVerificationReceiptSha256?: Digest,
   ): Promise<Digest> {
+    if (
+      (outcomeKind === "failed_no_effect") !==
+        (providerNoEffectVerificationReceiptSha256 !== undefined)
+    ) {
+      throw new SandboxError(
+        "integrity_failed",
+        "failed_no_effect outcome requires exactly one trusted provider-proof verification receipt",
+      );
+    }
+    if (providerNoEffectVerificationReceiptSha256 !== undefined) {
+      assertDigest(
+        providerNoEffectVerificationReceiptSha256,
+        "provider_no_effect_verification_receipt_sha256",
+      );
+    }
     const operation = await this.#repository.transaction((tx) => tx.getOperation(operationId));
     if (operation === undefined) {
       throw new SandboxError("integrity_failed", "Cannot anchor an outcome without a durable operation");
@@ -3790,6 +4524,12 @@ export class SandboxesReferenceServiceV1 {
       recorded_at: recordedAt,
       fence: operation.fence,
       target: operation.provider_target,
+      ...(providerNoEffectVerificationReceiptSha256 === undefined
+        ? {}
+        : {
+            provider_no_effect_verification_receipt_sha256:
+              providerNoEffectVerificationReceiptSha256,
+          }),
     }));
     const rereadValue = await this.#outcomeJournal.readOutcome(canonicalDigest(appendResponse));
     if (rereadValue === undefined) {

@@ -338,6 +338,8 @@ export function harness(
   const physicalSafety = new DeterministicTestPhysicalSafetyControllerV1();
   const journalLedger = new DeterministicTestJournalLedgerV1();
   verifier.current_journal_head = () => journalLedger.currentHead();
+  verifier.journal_recovery_receipt_sink = (receipt) =>
+    journalLedger.recordRecoveryReceipt(receipt);
   const outcomeJournal = new DeterministicTestProviderOutcomeJournalV1(journalLedger);
   const dispatchJournal = new DeterministicTestProviderDispatchJournalV1(journalLedger);
   const readProbeJournal = new DeterministicTestProviderReadProbeJournalV1(journalLedger);
@@ -354,7 +356,6 @@ export function harness(
     provider_read_probe_journal: readProbeJournal,
     provider_lifecycle_lock: lifecycleLock,
     provider_journal_recovery: journalRecovery,
-    allow_test_runner: true,
   });
   return { repository: selectedRepository, runner, verifier, physicalSafety, outcomeJournal, dispatchJournal, readProbeJournal, lifecycleLock, journalRecovery, service };
 }

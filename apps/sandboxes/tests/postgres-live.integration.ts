@@ -18,7 +18,7 @@ import {
   type PostgresSessionV1,
 } from "../src/repository-postgres.js";
 import { SqliteSandboxRepositoryV1 } from "../src/repository-sqlite.js";
-import type { SandboxRepositoryV1 } from "../src/repository.js";
+import type { SandboxRepositoryTxV1, SandboxRepositoryV1 } from "../src/repository.js";
 import {
   activationRequestDigest,
   createRequestDigest,
@@ -285,6 +285,41 @@ function plusMilliseconds(value: Date, milliseconds: number): string {
   return new Date(value.getTime() + milliseconds).toISOString();
 }
 
+function controlledDatabaseTime(
+  delegate: SandboxRepositoryV1,
+  initial: Date,
+): { repository: SandboxRepositoryV1; advance(milliseconds: number): void } {
+  let current = new Date(initial.getTime());
+  const readCurrent = (): Date => {
+    const value = new Date(current.getTime());
+    current = new Date(current.getTime() + 1);
+    return value;
+  };
+  const repository: SandboxRepositoryV1 = {
+    get backend() { return delegate.backend; },
+    migrate: () => delegate.migrate(),
+    databaseTime: async () => readCurrent(),
+    transaction: async <T>(fn: (tx: SandboxRepositoryTxV1) => T): Promise<T> =>
+      await delegate.transaction((tx) => fn(new Proxy(tx, {
+        get(target, property, receiver) {
+          if (property === "databaseTime") {
+            return () => readCurrent();
+          }
+          const value = Reflect.get(target, property, receiver);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      }))),
+    health: () => delegate.health(),
+    close: () => delegate.close(),
+  };
+  return {
+    repository,
+    advance(milliseconds: number) {
+      current = new Date(current.getTime() + milliseconds);
+    },
+  };
+}
+
 function journalRecords(
   operationId: string,
   operationStepId: string,
@@ -334,7 +369,7 @@ function journalRecords(
 
 async function createActive(repository: SandboxRepositoryV1, now: Date) {
   const h = harness(repository);
-  const input = createInput(plusMilliseconds(now, -60_000));
+  const input = createInput(plusMilliseconds(now, 60_000));
   const createDigest = createRequestDigest(input);
   const beginCreate = context(
     "begin_create_inert",
@@ -529,9 +564,14 @@ function rejectedCode(result: PromiseSettledResult<unknown>): string | undefined
   return typeof reason?.code === "string" ? reason.code : undefined;
 }
 
-async function conformanceCorpus(repository: SandboxRepositoryV1, now: Date) {
+async function conformanceCorpus(
+  repository: SandboxRepositoryV1,
+  now: Date,
+  advancePastExpiry: () => void,
+) {
   repository.migrate();
   const { h, active, createBinding } = await createActive(repository, now);
+  advancePastExpiry();
   const finding = await h.service.observeExpired(active.id);
   const safetyFenced = await h.service.get(active.id);
   const { destroyed, checkpointReceipt: storedCheckpoint, promotionReceipt: storedPromotion } =
@@ -1049,21 +1089,37 @@ test("isolated live Postgres matches memory and SQLite storage/failure/race sema
   expect(Number.isNaN(now.getTime())).toBe(false);
   const sqliteRoot = mkdtempSync(join(tmpdir(), "sandboxes-postgres-parity-"));
   chmodSync(sqliteRoot, 0o700);
-  const memory = new InMemorySandboxRepositoryV1(() => new Date(now.getTime()));
-  const sqlite = new SqliteSandboxRepositoryV1(join(sqliteRoot, "sandboxes.db"), {
+  const memory = controlledDatabaseTime(
+    new InMemorySandboxRepositoryV1(() => new Date(now.getTime())),
+    now,
+  );
+  const sqlite = controlledDatabaseTime(new SqliteSandboxRepositoryV1(join(sqliteRoot, "sandboxes.db"), {
     allow_unsafe_test_path: true,
     hermetic_test_database_time: () => new Date(now.getTime()),
-  });
+  }), now);
+  const controlledPostgres = controlledDatabaseTime(postgres, now);
   try {
-    const memoryResult = await conformanceCorpus(memory, now);
-    const sqliteResult = await conformanceCorpus(sqlite, now);
-    const postgresResult = await conformanceCorpus(postgres, now);
+    const memoryResult = await conformanceCorpus(
+      memory.repository,
+      now,
+      () => memory.advance(120_000),
+    );
+    const sqliteResult = await conformanceCorpus(
+      sqlite.repository,
+      now,
+      () => sqlite.advance(120_000),
+    );
+    const postgresResult = await conformanceCorpus(
+      controlledPostgres.repository,
+      now,
+      () => controlledPostgres.advance(120_000),
+    );
     expect(sqliteResult).toEqual(memoryResult);
     expect(postgresResult).toEqual(memoryResult);
   } finally {
-    await memory.close();
-    await sqlite.close();
-    await postgres.close();
+    await memory.repository.close();
+    await sqlite.repository.close();
+    await controlledPostgres.repository.close();
     rmSync(sqliteRoot, { recursive: true, force: true });
   }
 

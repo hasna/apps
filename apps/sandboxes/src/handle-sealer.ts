@@ -1,5 +1,12 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { assertDigest, assertOpaqueId, sha256, storageJson, parseStorageJson } from "./canonical.js";
+import {
+  assertDigest,
+  assertOpaqueId,
+  canonicalJson,
+  sha256,
+  storageJson,
+  parseStorageJson,
+} from "./canonical.js";
 import { SandboxError } from "./errors.js";
 import {
   providerHandleBinding,
@@ -21,6 +28,12 @@ export interface ProviderHandleSealerV1 {
   ): OwnedProviderHandleV1;
 }
 
+const PROVIDER_HANDLE_AEAD_DOMAIN = "sandboxes.resource-provider-handle/v1" as const;
+
+function providerHandleAad(binding: ProviderHandleBindingV1): Buffer {
+  return Buffer.from(`${PROVIDER_HANDLE_AEAD_DOMAIN}\0${canonicalJson(binding)}`, "utf8");
+}
+
 export class AesGcmProviderHandleSealerV1 implements ProviderHandleSealerV1 {
   readonly #key: Buffer;
 
@@ -40,12 +53,12 @@ export class AesGcmProviderHandleSealerV1 implements ProviderHandleSealerV1 {
     const bindingSha256 = providerHandleBindingDigest(binding);
     const iv = randomBytes(12);
     const cipher = createCipheriv("aes-256-gcm", this.#key, iv);
-    cipher.setAAD(Buffer.from(storageJson(binding), "utf8"));
+    cipher.setAAD(providerHandleAad(binding));
     const encrypted = Buffer.concat([cipher.update(storageJson(handle), "utf8"), cipher.final()]);
     const tag = cipher.getAuthTag();
     const packed = Buffer.concat([Buffer.from([2]), iv, tag, encrypted]).toString("base64url");
     return {
-      schema_version: SCHEMA_VERSION,
+      schema_version: "sandboxes.sealed-provider-handle/v1",
       resource_id: handle.resource_id,
       sealed_handle: packed,
       provider_handle_sha256: sha256(packed),
@@ -60,12 +73,11 @@ export class AesGcmProviderHandleSealerV1 implements ProviderHandleSealerV1 {
     assertOpaqueId(sealed.resource_id, "sealed_handle.resource_id", "sbx");
     assertDigest(sealed.provider_handle_sha256, "sealed_handle.provider_handle_sha256");
     assertDigest(sealed.binding_sha256, "sealed_handle.binding_sha256");
-    if (sealed.schema_version !== SCHEMA_VERSION) {
+    if (sealed.schema_version !== "sandboxes.sealed-provider-handle/v1") {
       throw new SandboxError("protocol_incompatible", "Provider handle envelope schema mismatch");
     }
     const expectedBindingSha256 = providerHandleBindingDigest(expectedBinding);
     if (
-      expectedBinding.schema_version !== "sandboxes.provider-handle-binding/v1" ||
       expectedBinding.resource_id !== sealed.resource_id ||
       sealed.binding_sha256 !== expectedBindingSha256
     ) {
@@ -81,7 +93,7 @@ export class AesGcmProviderHandleSealerV1 implements ProviderHandleSealerV1 {
       const tag = packed.subarray(13, 29);
       const encrypted = packed.subarray(29);
       const decipher = createDecipheriv("aes-256-gcm", this.#key, iv);
-      decipher.setAAD(Buffer.from(storageJson(expectedBinding), "utf8"));
+      decipher.setAAD(providerHandleAad(expectedBinding));
       decipher.setAuthTag(tag);
       const plaintext = Buffer.concat([decipher.update(encrypted), decipher.final()]).toString("utf8");
       const handle = parseStorageJson<OwnedProviderHandleV1>(plaintext);

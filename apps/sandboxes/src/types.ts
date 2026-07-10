@@ -443,6 +443,7 @@ export interface SandboxV1 {
   adapter_descriptor_sha256: Digest;
   /** Exact closed descriptor bytes admitted before the first durable intent. */
   adapter_descriptor: AdapterDescriptorV1;
+  adapter_admission_receipt_sha256: Digest;
   provider_creation_token_sha256: Digest;
   provider_identity_sha256?: Digest;
   provider_handle_sha256?: Digest;
@@ -482,7 +483,7 @@ export interface OwnedProviderHandleV1 {
 }
 
 export interface SealedProviderHandleV1 {
-  schema_version: SchemaVersion;
+  schema_version: "sandboxes.sealed-provider-handle/v1";
   resource_id: string;
   sealed_handle: string;
   provider_handle_sha256: Digest;
@@ -490,12 +491,10 @@ export interface SealedProviderHandleV1 {
 }
 
 export interface ProviderHandleBindingV1 {
-  schema_version: "sandboxes.provider-handle-binding/v1";
   adapter_id: AdapterDescriptorV1["adapter_id"];
   adapter_version: string;
   installation_id: string;
   provider_scope_ref: string;
-  resource_kind: string;
   resource_id: string;
   resource_lease_id: string;
   resource_lifecycle_generation: bigint;
@@ -558,40 +557,95 @@ export interface ProviderLifecycleLockBindingV1 {
   };
 }
 
-export interface AdapterDescriptorV1 {
+export interface AdapterDescriptorFactsV1 {
   schema_version: SchemaVersion;
-  adapter_id: "fake" | "e2b" | "daytona_cloud";
   adapter_version: string;
   build_sha256: Digest;
   descriptor_sha256: Digest;
   installation_id: string;
   provider_scope_ref: string;
-  status: "test_only" | "pending_conformance" | "admitted";
   runtime_class: "strong_vm";
+  supported_architectures: ReadonlyArray<"x86_64" | "arm64">;
+  isolation_evidence_sha256: Digest;
+  guest_kernel_boundary_evidence_sha256: Digest;
   network_modes: ReadonlyArray<"deny_all" | "broker_only">;
+  network_enforcement_evidence_sha256: Digest;
   exact_operation_lookup: boolean;
   inert_create: boolean;
   whole_scope_cancel: boolean;
   native_bounded_files: boolean;
+  read_only_workspace_enforcement: "external_read_only_mount";
   atomic_incarnation_bound_delete: boolean;
+  ownership_reconciliation: "exact_token_and_incarnation";
+  destructive_operation_semantics: "atomic_incarnation_bound_delete";
+  provider_hard_ttl_semantics: "stop_only_no_delete";
+  output_framing: "bounded_frames_v1";
+  max_ttl_ms: number;
+  resource_limits: {
+    max_processes: number;
+    max_memory_bytes: number;
+    max_disk_bytes: number;
+    max_output_bytes: number;
+    max_file_bytes: number;
+    max_page_entries: number;
+  };
+}
+
+export type AdapterDescriptorV1 = AdapterDescriptorFactsV1 & (
+  | { adapter_id: "fake"; status: "test_only" }
+  | {
+      adapter_id: "e2b" | "daytona_cloud";
+      status: "pending_conformance" | "admitted";
+    }
+);
+
+export interface AdapterAdmissionReceiptV1 {
+  schema_version: "sandboxes.adapter-admission-receipt/v1";
+  registry_id: "sandboxes.managed-v1";
+  adapter_id: "e2b" | "daytona_cloud";
+  adapter_version: string;
+  build_sha256: Digest;
+  descriptor_sha256: Digest;
+  installation_id: string;
+  provider_scope_ref: string;
+  status: "admitted";
+  conformance_manifest_sha256: Digest;
+  issued_at: string;
+  expires_at: string;
+  issuer_principal: string;
+  signing_key_id: string;
+  receipt_sha256: Digest;
+  signature: string;
 }
 
 export interface ProviderNonAcceptanceProofV1 {
-  schema_version: "sandboxes.provider-non-acceptance-proof/v1";
-  adapter_id: AdapterDescriptorV1["adapter_id"];
-  adapter_version: string;
-  installation_id: string;
-  provider_scope_ref: string;
-  operation_id: string;
-  operation_step_id: string;
+  schema_version: "sandboxes.provider-no-effect-proof/v1";
+  target: ProviderEffectTargetV1;
   operation_execution_epoch: bigint;
   request_sha256: Digest;
-  dispatch_anchor_sha256: Digest;
-  target: ProviderEffectTargetV1;
+  provider_receipt_sha256: Digest;
+  proof_kind: "token_not_accepted" | "conditional_precondition_rejected";
   observed_at: string;
   expires_at: string;
-  provider_evidence_sha256: Digest;
+  issuer_principal: string;
+  signing_key_id: string;
   proof_sha256: Digest;
+  signature: string;
+}
+
+export interface ProviderNoEffectVerificationReceiptV1 {
+  schema_version: "sandboxes.provider-no-effect-verification-receipt/v1";
+  proof_sha256: Digest;
+  target_sha256: Digest;
+  operation_execution_epoch: bigint;
+  request_sha256: Digest;
+  provider_receipt_sha256: Digest;
+  proof_kind: ProviderNonAcceptanceProofV1["proof_kind"];
+  verified_at: string;
+  expires_at: string;
+  verifier_principal: string;
+  signing_key_id: string;
+  receipt_sha256: Digest;
 }
 
 export interface ActivationReceiptV1 {

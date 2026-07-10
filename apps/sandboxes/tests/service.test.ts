@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { canonicalDigest } from "../src/canonical.js";
+import { AesGcmProviderHandleSealerV1 } from "../src/handle-sealer.js";
+import {
+  adapterDescriptorDigest,
+  providerHandleBindingDigest,
+} from "../src/provider-identity.js";
 import { InMemorySandboxRepositoryV1 } from "../src/repository-memory.js";
+import type { SandboxRepositoryTxV1 } from "../src/repository.js";
+import type { SandboxRunnerV1 } from "../src/runner.js";
 import {
   activationRequestDigest,
   createRequestDigest,
@@ -10,7 +17,9 @@ import {
   lifecycleRecordRequestDigest,
   providerIdempotencyTokenDigest,
   quarantineRequestDigest,
+  SandboxesReferenceServiceV1,
 } from "../src/service.js";
+import type { ProviderHandleBindingV1 } from "../src/types.js";
 import {
   activate,
   activationGrant,
@@ -22,12 +31,34 @@ import {
   createInput,
   createInert,
   digest,
+  expireContext,
   harness,
   lifecycleContext,
   oid,
   recordDestroyed,
   retryContext,
 } from "./fixtures.js";
+
+class CrashBeforeProviderProjectionRepositoryV1 extends InMemorySandboxRepositoryV1 {
+  #transactionsUntilCrash: number | undefined;
+
+  armAfterOutcomeAppend(): void {
+    // The first transaction persists the authenticated external OUTCOME anchor;
+    // the second is the local success projection that this fixture crashes.
+    this.#transactionsUntilCrash = 2;
+  }
+
+  override async transaction<T>(fn: (tx: SandboxRepositoryTxV1) => T): Promise<T> {
+    if (this.#transactionsUntilCrash !== undefined) {
+      this.#transactionsUntilCrash -= 1;
+      if (this.#transactionsUntilCrash === 0) {
+        this.#transactionsUntilCrash = undefined;
+        throw new Error("simulated crash after signed outcome before local projection");
+      }
+    }
+    return await super.transaction(fn);
+  }
+}
 
 describe("reference lifecycle and adversarial invariants", () => {
   test("provider outcomes remain non-canonical until a separate Infinity record command", async () => {
@@ -193,6 +224,10 @@ describe("reference lifecycle and adversarial invariants", () => {
     expect(failed.pending_provider_outcome?.target_state).toBe("failed");
     expect((await h.repository.transaction((tx) => tx.getOperation(begin.operation_id)))?.effect_phase)
       .toBe("failed_no_effect");
+    expect(
+      h.outcomeJournal.calls.find((call) => call.outcome_kind === "failed_no_effect")
+        ?.provider_no_effect_verification_receipt_sha256,
+    ).toMatch(/^sha256:/);
 
     const retry = retryContext(begin, failed.revision, 2n, 219);
     const creating = await h.service.create(input, retry);
@@ -344,6 +379,18 @@ describe("reference lifecycle and adversarial invariants", () => {
     expect(fenced.physical_safety_reason).toBe("provider_identity_mismatch");
   });
 
+  test("create rejects a self-consistent handle from a foreign resource kind", async () => {
+    const h = harness(undefined, { resource_kind_override: "container" });
+    const input = createInput();
+    const request = createRequestDigest(input);
+    const begin = context("begin_create_inert", oid("op", 245), request, 1n, 0, 1n, 245);
+
+    const result = await h.service.create(input, begin);
+    expect(result.physical_safety_state).toBe("fenced");
+    expect(result.pending_provider_outcome).toBeUndefined();
+    expect(h.outcomeJournal.calls).toHaveLength(0);
+  });
+
   test("create rejects a self-consistent journal token not derived from the actual allocation and spec", async () => {
     const h = harness();
     const input = createInput();
@@ -434,6 +481,15 @@ describe("reference lifecycle and adversarial invariants", () => {
       ?.bound_provider_identity?.opaque_resource_id).toMatch(/^native-/);
     expect(h.dispatchJournal.calls[0]?.record.provider_idempotency_token_sha256)
       .not.toBe(h.dispatchJournal.calls[1]?.record.provider_idempotency_token_sha256);
+    expect(h.runner.observed_final_barrier_receipts.length).toBeGreaterThan(0);
+    expect(h.runner.observed_final_barrier_receipts.every((value) => /^sha256:/.test(value)))
+      .toBe(true);
+    expect(new Set(h.runner.observed_adapter_descriptor_receipts)).toEqual(
+      new Set([active.adapter_descriptor_sha256]),
+    );
+    expect(new Set(h.runner.observed_adapter_admission_receipts)).toEqual(
+      new Set([active.adapter_admission_receipt_sha256]),
+    );
     const activationOperation = await h.repository.transaction((tx) =>
       tx.getOperation(active.activation_operation_id!),
     );
@@ -447,6 +503,80 @@ describe("reference lifecycle and adversarial invariants", () => {
       "activating",
       "active",
     ]);
+  });
+
+  test("sealed provider handles use the frozen outer schema and complete binding as AEAD AAD", async () => {
+    const h = harness();
+    const input = createInput();
+    const request = createRequestDigest(input);
+    const creating = await h.service.create(
+      input,
+      context("begin_create_inert", oid("op", 249), request, 1n, 0, 1n, 249),
+    );
+    const sealed = await h.repository.transaction((tx) => tx.getHandle(creating.id));
+    expect(sealed?.schema_version).toBe("sandboxes.sealed-provider-handle/v1");
+    const binding: ProviderHandleBindingV1 = {
+      adapter_id: creating.adapter_descriptor.adapter_id,
+      adapter_version: creating.adapter_descriptor.adapter_version,
+      installation_id: creating.adapter_descriptor.installation_id,
+      provider_scope_ref: creating.adapter_descriptor.provider_scope_ref,
+      resource_id: creating.id,
+      resource_lease_id: creating.resource_lease_id,
+      resource_lifecycle_generation: creating.resource_lifecycle_generation,
+      provider_creation_token_sha256: creating.provider_creation_token_sha256,
+      immutable_fingerprint_sha256: creating.immutable_fingerprint_sha256!,
+      provider_identity_sha256: creating.provider_identity_sha256!,
+      spec_sha256: creating.spec_sha256,
+    };
+    const sealer = new AesGcmProviderHandleSealerV1(new Uint8Array(32).fill(17));
+    expect(sealer.open(sealed!, binding).provider_identity_sha256)
+      .toBe(creating.provider_identity_sha256!);
+
+    const changedBinding = { ...binding, adapter_version: "different-adapter-version" };
+    const reboundEnvelope = {
+      ...sealed!,
+      binding_sha256: providerHandleBindingDigest(changedBinding),
+    };
+    expect(() => sealer.open(reboundEnvelope, changedBinding)).toThrow(
+      "Provider handle authentication failed",
+    );
+  });
+
+  test("an unbranded fake runner cannot enable the test-only adapter through public configuration", async () => {
+    const h = harness();
+    const source = h.runner;
+    const unbrandedRunner: SandboxRunnerV1 = {
+      descriptor: source.descriptor.bind(source),
+      createInert: source.createInert.bind(source),
+      activate: source.activate.bind(source),
+      inspect: source.inspect.bind(source),
+      expire: source.expire.bind(source),
+      destroy: source.destroy.bind(source),
+      lookupOperation: source.lookupOperation.bind(source),
+      listOwnedResources: source.listOwnedResources.bind(source),
+    };
+    const service = new SandboxesReferenceServiceV1({
+      repository: h.repository,
+      runner: unbrandedRunner,
+      handle_sealer: new AesGcmProviderHandleSealerV1(new Uint8Array(32).fill(17)),
+      authority_verifier: h.verifier,
+      physical_safety_controller: h.physicalSafety,
+      provider_outcome_journal: h.outcomeJournal,
+      provider_dispatch_journal: h.dispatchJournal,
+      provider_read_probe_journal: h.readProbeJournal,
+      provider_lifecycle_lock: h.lifecycleLock,
+      provider_journal_recovery: h.journalRecovery,
+    });
+    const input = createInput();
+    const request = createRequestDigest(input);
+    const ctx = context("begin_create_inert", oid("op", 250), request, 1n, 0, 1n, 250);
+
+    await expect(service.create(input, ctx)).rejects.toMatchObject({
+      code: "unsupported_runtime_feature",
+    });
+    expect(await h.repository.transaction((tx) => tx.getOperation(ctx.operation_id)))
+      .toBeUndefined();
+    expect(h.runner.calls.create_inert).toBe(0);
   });
 
   test("descriptor behavior or provider identity cannot drift behind a reused digest", async () => {
@@ -476,6 +606,51 @@ describe("reference lifecycle and adversarial invariants", () => {
       .rejects.toMatchObject({ code: "integrity_failed" });
     expect(await h.repository.transaction((tx) => tx.getOperation(grant.operation_id)))
       .toBeUndefined();
+    expect(h.runner.calls.activate).toBe(0);
+  });
+
+  test("adapter descriptor and admission are revalidated after provider preflight", async () => {
+    const h = harness();
+    const inert = await createInert(h);
+    const originalDescriptor = h.runner.descriptor.bind(h.runner);
+    const originalList = h.runner.listOwnedResources.bind(h.runner);
+    let admissionChanged = false;
+    h.runner.descriptor = async () => {
+      const current = await originalDescriptor();
+      if (!admissionChanged) return current;
+      const {
+        descriptor_sha256: _descriptorSha256,
+        ...changedProtectedDescriptor
+      } = {
+        ...current,
+        isolation_evidence_sha256: digest("revoked-adapter-isolation-evidence"),
+      };
+      return {
+        ...changedProtectedDescriptor,
+        descriptor_sha256: adapterDescriptorDigest(changedProtectedDescriptor),
+      };
+    };
+    h.runner.listOwnedResources = async (...args) => {
+      const page = await originalList(...args);
+      admissionChanged = true;
+      return page;
+    };
+    const grant = activationGrant(inert, oid("op", 251));
+    const ctx = context(
+      "begin_activate",
+      grant.operation_id,
+      grant.operation_digest,
+      inert.resource_lifecycle_generation,
+      inert.revision,
+      4n,
+      251,
+      inert.immutable_fingerprint_sha256!,
+      canonicalDigest({ id: grant.grant_id, nonce: grant.one_use_nonce_sha256 }),
+    );
+
+    const result = await h.service.activate(inert.id, grant, ctx);
+    expect(result.physical_safety_state).toBe("fenced");
+    expect(result.pending_provider_outcome).toBeUndefined();
     expect(h.runner.calls.activate).toBe(0);
   });
 
@@ -658,6 +833,188 @@ describe("reference lifecycle and adversarial invariants", () => {
     expect(h.runner.calls.create_inert).toBe(1);
   });
 
+  test("the provider success projection commits before the lifecycle gate releases", async () => {
+    const h = harness();
+    const input = createInput();
+    const request = createRequestDigest(input);
+    const begin = context("begin_create_inert", oid("op", 246), request, 1n, 0, 1n, 246);
+    const originalSafety = h.physicalSafety.assertProviderDispatchAllowed.bind(h.physicalSafety);
+    let enteredSafety = (): void => {};
+    const safetyEntered = new Promise<void>((resolve) => { enteredSafety = resolve; });
+    let releaseSafety = (): void => {};
+    const safetyReleased = new Promise<void>((resolve) => { releaseSafety = resolve; });
+    h.physicalSafety.assertProviderDispatchAllowed = async (value) => {
+      await originalSafety(value);
+      enteredSafety();
+      await safetyReleased;
+    };
+
+    const createPromise = h.service.create(input, begin);
+    await safetyEntered;
+    const reserved = await h.service.get(input.resource_id);
+    const evidence = digest("success-handoff-record-lost-evidence");
+    const lostRequest = lifecycleRecordRequestDigest("record_lost", reserved.id, evidence);
+    const transitionPromise = h.service.recordLost(reserved.id, evidence, lifecycleContext(
+      "record_lost",
+      oid("op", 247),
+      lostRequest,
+      reserved.resource_lifecycle_generation,
+      reserved.revision,
+      2n,
+      247,
+    ));
+    let firstRelease = true;
+    h.lifecycleLock.after_release = async () => {
+      if (!firstRelease) return;
+      firstRelease = false;
+      await transitionPromise.catch(() => undefined);
+    };
+    releaseSafety();
+
+    const creating = await createPromise;
+    await expect(transitionPromise).rejects.toMatchObject({ code: "stale_revision" });
+    expect(creating.pending_provider_outcome?.target_state).toBe("inert");
+    expect((await h.service.resolveOperation(begin.operation_id)).state).toBe("committed");
+  });
+
+  test("activation success projects before a queued canonical transition acquires the lifecycle gate", async () => {
+    const h = harness();
+    const inert = await createInert(h);
+    const grant = activationGrant(inert, oid("op", 252));
+    const ctx = context(
+      "begin_activate",
+      grant.operation_id,
+      grant.operation_digest,
+      inert.resource_lifecycle_generation,
+      inert.revision,
+      4n,
+      252,
+      inert.immutable_fingerprint_sha256!,
+      canonicalDigest({ id: grant.grant_id, nonce: grant.one_use_nonce_sha256 }),
+    );
+    const originalSafety = h.physicalSafety.assertProviderDispatchAllowed.bind(h.physicalSafety);
+    let enteredSafety = (): void => {};
+    const safetyEntered = new Promise<void>((resolve) => { enteredSafety = resolve; });
+    let releaseSafety = (): void => {};
+    const safetyReleased = new Promise<void>((resolve) => { releaseSafety = resolve; });
+    h.physicalSafety.assertProviderDispatchAllowed = async (value) => {
+      await originalSafety(value);
+      enteredSafety();
+      await safetyReleased;
+    };
+
+    const activationPromise = h.service.activate(inert.id, grant, ctx);
+    await safetyEntered;
+    const reserved = await h.service.get(inert.id);
+    const evidence = digest("activation-success-handoff-lost-evidence");
+    const request = lifecycleRecordRequestDigest("record_lost", reserved.id, evidence);
+    const transitionPromise = h.service.recordLost(reserved.id, evidence, lifecycleContext(
+      "record_lost",
+      oid("op", 253),
+      request,
+      reserved.resource_lifecycle_generation,
+      reserved.revision,
+      5n,
+      253,
+    ));
+    let firstRelease = true;
+    h.lifecycleLock.after_release = async () => {
+      if (!firstRelease) return;
+      firstRelease = false;
+      await transitionPromise.catch(() => undefined);
+    };
+    releaseSafety();
+
+    const activating = await activationPromise;
+    await expect(transitionPromise).rejects.toMatchObject({ code: "stale_revision" });
+    expect(activating.pending_provider_outcome?.target_state).toBe("active");
+    expect((await h.service.resolveOperation(ctx.operation_id)).state).toBe("committed");
+  });
+
+  test("expiry operation commits before a queued canonical transition acquires the lifecycle gate", async () => {
+    const h = harness();
+    const active = await activate(h, await createInert(h));
+    const ctx = expireContext(active);
+    const originalSafety = h.physicalSafety.assertProviderDispatchAllowed.bind(h.physicalSafety);
+    let enteredSafety = (): void => {};
+    const safetyEntered = new Promise<void>((resolve) => { enteredSafety = resolve; });
+    let releaseSafety = (): void => {};
+    const safetyReleased = new Promise<void>((resolve) => { releaseSafety = resolve; });
+    h.physicalSafety.assertProviderDispatchAllowed = async (value) => {
+      await originalSafety(value);
+      enteredSafety();
+      await safetyReleased;
+    };
+
+    const expirePromise = h.service.expire(active.id, ctx);
+    await safetyEntered;
+    const reserved = await h.service.get(active.id);
+    const evidence = digest("expiry-success-handoff-lost-evidence");
+    const request = lifecycleRecordRequestDigest("record_lost", reserved.id, evidence);
+    const transitionPromise = h.service.recordLost(reserved.id, evidence, lifecycleContext(
+      "record_lost",
+      oid("op", 254),
+      request,
+      reserved.resource_lifecycle_generation,
+      reserved.revision,
+      4n,
+      254,
+    ));
+    let firstRelease = true;
+    h.lifecycleLock.after_release = async () => {
+      if (!firstRelease) return;
+      firstRelease = false;
+      await transitionPromise.catch(() => undefined);
+    };
+    releaseSafety();
+
+    await expirePromise;
+    const lost = await transitionPromise;
+    expect(lost.state).toBe("lost");
+    expect((await h.service.resolveOperation(ctx.operation_id)).state).toBe("committed");
+  });
+
+  test("destroy success projects before a queued terminal transition acquires the lifecycle gate", async () => {
+    const h = harness();
+    const active = await activate(h, await createInert(h));
+    const grant = cleanupGrant(active, {
+      kind: "discard_uncheckpointed",
+      receipt_sha256: digest("destroy-success-handoff-passkey"),
+      recovery_checkpoint_attempted: true,
+      promotion_grants_revoked: true,
+      permanent_outcome: "discarded_uncheckpointed",
+    }, oid("op", 255));
+    const ctx = cleanupContext(active, grant);
+    let transitionPromise: ReturnType<typeof h.service.recordDestroyed> | undefined;
+    h.outcomeJournal.onAppend = async (anchor) => {
+      if (anchor.record.operation_id !== ctx.operation_id) return;
+      const reserved = await h.service.get(active.id);
+      const evidence = canonicalDigest(anchor);
+      const request = lifecycleRecordRequestDigest("record_destroyed", reserved.id, evidence);
+      transitionPromise = h.service.recordDestroyed(reserved.id, evidence, lifecycleContext(
+        "record_destroyed",
+        oid("op", 256),
+        request,
+        reserved.resource_lifecycle_generation,
+        reserved.revision,
+        5n,
+        256,
+      ));
+    };
+    let firstRelease = true;
+    h.lifecycleLock.after_release = async () => {
+      if (!firstRelease || transitionPromise === undefined) return;
+      firstRelease = false;
+      await transitionPromise.catch(() => undefined);
+    };
+
+    const destroying = await h.service.destroy(active.id, grant, ctx);
+    expect(transitionPromise).toBeDefined();
+    await expect(transitionPromise!).rejects.toMatchObject({ code: "stale_revision" });
+    expect(destroying.pending_provider_outcome?.target_state).toBe("destroyed");
+    expect((await h.service.resolveOperation(ctx.operation_id)).state).toBe("committed");
+  });
+
   test("a stale sealed handle cannot be opened and upgraded by a later lifecycle generation", async () => {
     const h = harness();
     const inert = await createInert(h);
@@ -702,6 +1059,109 @@ describe("reference lifecycle and adversarial invariants", () => {
     const replay = await h.service.activate(inert.id, grant, ctx);
     expect(replay).toEqual(first);
     expect(h.runner.calls.activate).toBe(1);
+  });
+
+  test("create replay adopts a signed successful outcome after a crash before local projection", async () => {
+    const repository = new CrashBeforeProviderProjectionRepositoryV1(() => CLOCK);
+    const h = harness(repository);
+    const input = createInput();
+    const request = createRequestDigest(input);
+    const ctx = context("begin_create_inert", oid("op", 248), request, 1n, 0, 1n, 248);
+    h.outcomeJournal.onAppend = () => repository.armAfterOutcomeAppend();
+
+    await expect(h.service.create(input, ctx)).rejects.toThrow(
+      "simulated crash after signed outcome before local projection",
+    );
+    expect(h.runner.calls.create_inert).toBe(1);
+    expect((await h.service.resolveOperation(ctx.operation_id)).state).toBe("in_flight");
+
+    h.outcomeJournal.onAppend = undefined;
+    const recovered = await h.service.create(input, ctx);
+    expect(recovered.pending_provider_outcome?.target_state).toBe("inert");
+    expect((await h.service.resolveOperation(ctx.operation_id)).state).toBe("committed");
+    expect(h.runner.calls.create_inert).toBe(1);
+    expect(h.outcomeJournal.calls).toHaveLength(1);
+  });
+
+  test("activation replay adopts a signed successful outcome after a crash before local projection", async () => {
+    const repository = new CrashBeforeProviderProjectionRepositoryV1(() => CLOCK);
+    const h = harness(repository);
+    const inert = await createInert(h);
+    const grant = activationGrant(inert);
+    const ctx = context(
+      "begin_activate",
+      grant.operation_id,
+      grant.operation_digest,
+      inert.resource_lifecycle_generation,
+      inert.revision,
+      2n,
+      21,
+      inert.immutable_fingerprint_sha256!,
+      canonicalDigest({ id: grant.grant_id, nonce: grant.one_use_nonce_sha256 }),
+    );
+    const priorOutcomeCount = h.outcomeJournal.calls.length;
+    h.outcomeJournal.onAppend = () => repository.armAfterOutcomeAppend();
+
+    await expect(h.service.activate(inert.id, grant, ctx)).rejects.toThrow(
+      "simulated crash after signed outcome before local projection",
+    );
+    expect(h.runner.calls.activate).toBe(1);
+
+    h.outcomeJournal.onAppend = undefined;
+    const recovered = await h.service.activate(inert.id, grant, ctx);
+    expect(recovered.pending_provider_outcome?.target_state).toBe("active");
+    expect((await h.service.resolveOperation(ctx.operation_id)).state).toBe("committed");
+    expect(h.runner.calls.activate).toBe(1);
+    expect(h.outcomeJournal.calls).toHaveLength(priorOutcomeCount + 1);
+  });
+
+  test("expiry replay adopts a signed successful outcome after a crash before local projection", async () => {
+    const repository = new CrashBeforeProviderProjectionRepositoryV1(() => CLOCK);
+    const h = harness(repository);
+    const active = await activate(h, await createInert(h));
+    const ctx = expireContext(active);
+    const priorOutcomeCount = h.outcomeJournal.calls.length;
+    h.outcomeJournal.onAppend = () => repository.armAfterOutcomeAppend();
+
+    await expect(h.service.expire(active.id, ctx)).rejects.toThrow(
+      "simulated crash after signed outcome before local projection",
+    );
+    expect(h.runner.calls.expire).toBe(1);
+
+    h.outcomeJournal.onAppend = undefined;
+    const recovered = await h.service.expire(active.id, ctx);
+    expect(recovered.state).toBe("expiring");
+    expect((await h.service.resolveOperation(ctx.operation_id)).state).toBe("committed");
+    expect(h.runner.calls.expire).toBe(1);
+    expect(h.outcomeJournal.calls).toHaveLength(priorOutcomeCount + 1);
+  });
+
+  test("destroy replay adopts a signed successful outcome after a crash before local projection", async () => {
+    const repository = new CrashBeforeProviderProjectionRepositoryV1(() => CLOCK);
+    const h = harness(repository);
+    const active = await activate(h, await createInert(h));
+    const grant = cleanupGrant(active, {
+      kind: "discard_uncheckpointed",
+      receipt_sha256: digest("signed-destroy-replay-passkey"),
+      recovery_checkpoint_attempted: true,
+      promotion_grants_revoked: true,
+      permanent_outcome: "discarded_uncheckpointed",
+    });
+    const ctx = cleanupContext(active, grant);
+    const priorOutcomeCount = h.outcomeJournal.calls.length;
+    h.outcomeJournal.onAppend = () => repository.armAfterOutcomeAppend();
+
+    await expect(h.service.destroy(active.id, grant, ctx)).rejects.toThrow(
+      "simulated crash after signed outcome before local projection",
+    );
+    expect(h.runner.calls.destroy).toBe(1);
+
+    h.outcomeJournal.onAppend = undefined;
+    const recovered = await h.service.destroy(active.id, grant, ctx);
+    expect(recovered.pending_provider_outcome?.target_state).toBe("destroyed");
+    expect((await h.service.resolveOperation(ctx.operation_id)).state).toBe("committed");
+    expect(h.runner.calls.destroy).toBe(1);
+    expect(h.outcomeJournal.calls).toHaveLength(priorOutcomeCount + 1);
   });
 
   test("consumed activation grant recovers only after signed head/range proves dispatch absent", async () => {
@@ -790,9 +1250,11 @@ describe("reference lifecycle and adversarial invariants", () => {
   });
 
   test("TTL expiry quarantines without granting destruction", async () => {
-    const h = harness();
-    const inert = await createInert(h, "2029-12-31T23:59:59.000Z");
+    let databaseNow = CLOCK;
+    const h = harness(new InMemorySandboxRepositoryV1(() => databaseNow));
+    const inert = await createInert(h, "2030-01-01T00:01:00.000Z");
     const active = await activate(h, inert);
+    databaseNow = new Date("2030-01-01T00:02:00.000Z");
     expect(await h.service.expiredCandidates()).toHaveLength(1);
     const observation = await h.service.observeExpired(active.id);
     expect(observation.disposition).toBe("operator_review");

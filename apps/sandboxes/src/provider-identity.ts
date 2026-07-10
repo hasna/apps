@@ -1,10 +1,33 @@
 import { canonicalDigest, type Digest } from "./canonical.js";
 import type {
   AdapterDescriptorV1,
+  AdapterAdmissionReceiptV1,
   OwnedProviderHandleV1,
   ProviderHandleBindingV1,
   ProviderNonAcceptanceProofV1,
 } from "./types.js";
+
+export function adapterAdmissionReceiptDigest(
+  receipt: Omit<AdapterAdmissionReceiptV1, "receipt_sha256" | "signature"> |
+    AdapterAdmissionReceiptV1,
+): Digest {
+  return canonicalDigest({
+    schema_version: receipt.schema_version,
+    registry_id: receipt.registry_id,
+    adapter_id: receipt.adapter_id,
+    adapter_version: receipt.adapter_version,
+    build_sha256: receipt.build_sha256,
+    descriptor_sha256: receipt.descriptor_sha256,
+    installation_id: receipt.installation_id,
+    provider_scope_ref: receipt.provider_scope_ref,
+    status: receipt.status,
+    conformance_manifest_sha256: receipt.conformance_manifest_sha256,
+    issued_at: receipt.issued_at,
+    expires_at: receipt.expires_at,
+    issuer_principal: receipt.issuer_principal,
+    signing_key_id: receipt.signing_key_id,
+  });
+}
 
 /** Core-owned digest over every closed descriptor fact except the digest itself. */
 export function adapterDescriptorDigest(
@@ -20,12 +43,25 @@ export function adapterDescriptorDigest(
     provider_scope_ref: descriptor.provider_scope_ref,
     status: descriptor.status,
     runtime_class: descriptor.runtime_class,
+    supported_architectures: descriptor.supported_architectures,
+    isolation_evidence_sha256: descriptor.isolation_evidence_sha256,
+    guest_kernel_boundary_evidence_sha256:
+      descriptor.guest_kernel_boundary_evidence_sha256,
     network_modes: descriptor.network_modes,
+    network_enforcement_evidence_sha256:
+      descriptor.network_enforcement_evidence_sha256,
     exact_operation_lookup: descriptor.exact_operation_lookup,
     inert_create: descriptor.inert_create,
     whole_scope_cancel: descriptor.whole_scope_cancel,
     native_bounded_files: descriptor.native_bounded_files,
+    read_only_workspace_enforcement: descriptor.read_only_workspace_enforcement,
     atomic_incarnation_bound_delete: descriptor.atomic_incarnation_bound_delete,
+    ownership_reconciliation: descriptor.ownership_reconciliation,
+    destructive_operation_semantics: descriptor.destructive_operation_semantics,
+    provider_hard_ttl_semantics: descriptor.provider_hard_ttl_semantics,
+    output_framing: descriptor.output_framing,
+    max_ttl_ms: descriptor.max_ttl_ms,
+    resource_limits: descriptor.resource_limits,
   });
 }
 
@@ -77,7 +113,6 @@ export function providerHandleBinding(
     | "adapter_version"
     | "installation_id"
     | "provider_scope_ref"
-    | "resource_kind"
     | "resource_id"
     | "resource_lease_id"
     | "resource_lifecycle_generation"
@@ -88,12 +123,10 @@ export function providerHandleBinding(
   >,
 ): ProviderHandleBindingV1 {
   return {
-    schema_version: "sandboxes.provider-handle-binding/v1",
     adapter_id: handle.adapter_id,
     adapter_version: handle.adapter_version,
     installation_id: handle.installation_id,
     provider_scope_ref: handle.provider_scope_ref,
-    resource_kind: handle.resource_kind,
     resource_id: handle.resource_id,
     resource_lease_id: handle.resource_lease_id,
     resource_lifecycle_generation: handle.resource_lifecycle_generation,
@@ -109,23 +142,19 @@ export function providerHandleBindingDigest(binding: ProviderHandleBindingV1): D
 }
 
 export function providerNonAcceptanceProofDigest(
-  proof: Omit<ProviderNonAcceptanceProofV1, "proof_sha256"> | ProviderNonAcceptanceProofV1,
+  proof: Omit<ProviderNonAcceptanceProofV1, "proof_sha256" | "signature"> |
+    ProviderNonAcceptanceProofV1,
 ): Digest {
   return canonicalDigest({
-    schema_version: "sandboxes.provider-non-acceptance-proof-digest/v1",
-    proof_schema_version: proof.schema_version,
-    adapter_id: proof.adapter_id,
-    adapter_version: proof.adapter_version,
-    installation_id: proof.installation_id,
-    provider_scope_ref: proof.provider_scope_ref,
-    operation_id: proof.operation_id,
-    operation_step_id: proof.operation_step_id,
+    schema_version: proof.schema_version,
+    target: proof.target,
     operation_execution_epoch: proof.operation_execution_epoch,
     request_sha256: proof.request_sha256,
-    dispatch_anchor_sha256: proof.dispatch_anchor_sha256,
-    target: proof.target,
+    provider_receipt_sha256: proof.provider_receipt_sha256,
+    proof_kind: proof.proof_kind,
     observed_at: proof.observed_at,
     expires_at: proof.expires_at,
-    provider_evidence_sha256: proof.provider_evidence_sha256,
+    issuer_principal: proof.issuer_principal,
+    signing_key_id: proof.signing_key_id,
   });
 }

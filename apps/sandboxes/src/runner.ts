@@ -25,6 +25,9 @@ export interface AdapterCallContextV1 {
   fence: import("./types.js").CanonicalSandboxEffectFenceV1;
   target: ProviderEffectTargetV1;
   external_anchor_receipt_sha256: Digest;
+  final_currentness_barrier_receipt_sha256: Digest;
+  adapter_descriptor_sha256: Digest;
+  adapter_admission_receipt_sha256: Digest;
 }
 
 export interface DestroyContextV1 extends AdapterCallContextV1 {
@@ -39,6 +42,7 @@ export interface ReconcileContextV1 {
   provider_creation_token_sha256: Digest;
   immutable_fingerprint_sha256: Digest;
   discovery_scope_receipt_sha256: Digest;
+  complete_read_probe_envelope_sha256: Digest;
   max_pages: number;
   deadline: string;
 }
@@ -120,12 +124,30 @@ abstract class PendingManagedRunnerV1 implements SandboxRunnerV1 {
       installation_id: `installation-${this.adapterId}-pending`,
       provider_scope_ref: `${this.adapterId}-pending-scope`,
       runtime_class: "strong_vm",
+      supported_architectures: ["x86_64", "arm64"],
+      isolation_evidence_sha256: sha256(`${this.adapterId}:pending:isolation`),
+      guest_kernel_boundary_evidence_sha256: sha256(`${this.adapterId}:pending:kernel`),
       network_modes: ["deny_all", "broker_only"],
+      network_enforcement_evidence_sha256: sha256(`${this.adapterId}:pending:network`),
       exact_operation_lookup: false,
       inert_create: false,
       whole_scope_cancel: false,
       native_bounded_files: false,
+      read_only_workspace_enforcement: "external_read_only_mount",
       atomic_incarnation_bound_delete: false,
+      ownership_reconciliation: "exact_token_and_incarnation",
+      destructive_operation_semantics: "atomic_incarnation_bound_delete",
+      provider_hard_ttl_semantics: "stop_only_no_delete",
+      output_framing: "bounded_frames_v1",
+      max_ttl_ms: 1,
+      resource_limits: {
+        max_processes: 1,
+        max_memory_bytes: 1,
+        max_disk_bytes: 1,
+        max_output_bytes: 1,
+        max_file_bytes: 1,
+        max_page_entries: 1,
+      },
     } as const;
     return {
       ...facts,

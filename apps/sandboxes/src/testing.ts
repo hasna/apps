@@ -3,7 +3,6 @@ import type {
   AuthenticatedJournalBindingsV1,
   AuthenticatedAdapterAdmissionV1,
   AuthenticatedJournalRecoveryRangeV1,
-  AuthenticatedProviderNonAcceptanceV1,
   PhysicalSafetyControllerV1,
   ProviderDispatchJournalV1,
   ProviderReadProbeJournalV1,
@@ -32,9 +31,13 @@ import type {
   SafetyFenceObservationV1,
   ProviderLifecycleLockBindingV1,
   ProviderNonAcceptanceProofV1,
+  ProviderNoEffectVerificationReceiptV1,
 } from "./types.js";
 import { providerLifecycleLockKey } from "./service.js";
-import { providerNonAcceptanceProofDigest } from "./provider-identity.js";
+import {
+  adapterAdmissionReceiptDigest,
+  providerNonAcceptanceProofDigest,
+} from "./provider-identity.js";
 
 /** Hermetic FIFO stand-in for the production cross-replica lifecycle lock. */
 export class DeterministicTestProviderLifecycleLockV1 implements ProviderLifecycleLockV1 {
@@ -42,6 +45,7 @@ export class DeterministicTestProviderLifecycleLockV1 implements ProviderLifecyc
   readonly #tails = new Map<Digest, Promise<void>>();
   readonly #active = new Set<Digest>();
   max_active_for_one_key = 0;
+  after_release: (() => void | Promise<void>) | undefined;
 
   async withLock<T>(
     binding: ProviderLifecycleLockBindingV1,
@@ -69,12 +73,14 @@ export class DeterministicTestProviderLifecycleLockV1 implements ProviderLifecyc
       this.#active.delete(binding.lock_key_sha256);
       release();
       if (this.#tails.get(binding.lock_key_sha256) === tail) this.#tails.delete(binding.lock_key_sha256);
+      await this.after_release?.();
     }
   }
 }
 
 export class DeterministicTestJournalLedgerV1 {
   readonly envelopes: EffectJournalEnvelopeV1[] = [];
+  readonly recovery_receipts = new Map<Digest, AuthenticatedJournalRecoveryRangeV1>();
 
   record(anchor: EffectJournalEnvelopeV1): void {
     const digest = canonicalDigest(anchor);
@@ -91,6 +97,10 @@ export class DeterministicTestJournalLedgerV1 {
       sequence: head?.journal_sequence ?? 1n,
       frontier_digest: head?.frontier_digest ?? sha256("test-journal-genesis-frontier"),
     };
+  }
+
+  recordRecoveryReceipt(receipt: AuthenticatedJournalRecoveryRangeV1): void {
+    this.recovery_receipts.set(receipt.verification_receipt_sha256, structuredClone(receipt));
   }
 }
 
@@ -141,6 +151,8 @@ export class DeterministicTestAuthorityVerifierV1 implements SandboxesAuthorityV
   stored_frontier_membership_valid = true;
   journal_range_completeness_valid = true;
   current_journal_head: (() => { sequence: bigint; frontier_digest: Digest }) | undefined;
+  journal_recovery_receipt_sink:
+    ((receipt: AuthenticatedJournalRecoveryRangeV1) => void) | undefined;
   readonly calls = {
     capability: 0,
     current_effect: 0,
@@ -243,16 +255,29 @@ export class DeterministicTestAuthorityVerifierV1 implements SandboxesAuthorityV
   async verifyAdapterAdmission(
     descriptor: AdapterDescriptorV1,
   ): Promise<AuthenticatedAdapterAdmissionV1> {
-    return {
+    if (descriptor.adapter_id === "fake" || descriptor.status !== "admitted") {
+      throw new Error("test verifier refuses non-managed adapter admission");
+    }
+    const receiptBytes = {
+      schema_version: "sandboxes.adapter-admission-receipt/v1" as const,
+      registry_id: "sandboxes.managed-v1" as const,
       adapter_id: descriptor.adapter_id,
       adapter_version: descriptor.adapter_version,
-      installation_id: descriptor.installation_id,
-      provider_scope_ref: descriptor.provider_scope_ref,
       build_sha256: descriptor.build_sha256,
       descriptor_sha256: descriptor.descriptor_sha256,
+      installation_id: descriptor.installation_id,
+      provider_scope_ref: descriptor.provider_scope_ref,
+      status: "admitted" as const,
       conformance_manifest_sha256: sha256(`conformance:${descriptor.descriptor_sha256}`),
-      signed_conformance_manifest_verified: true,
-      zero_skip_gate_verified: true,
+      issued_at: "2030-01-01T00:00:00.000Z",
+      expires_at: "2031-01-01T00:00:00.000Z",
+      issuer_principal: "principal_00000000000000000000000000000064",
+      signing_key_id: "key_00000000000000000000000000000064",
+    };
+    return {
+      ...receiptBytes,
+      receipt_sha256: adapterAdmissionReceiptDigest(receiptBytes),
+      signature: "S".repeat(86),
     };
   }
 
@@ -263,44 +288,49 @@ export class DeterministicTestAuthorityVerifierV1 implements SandboxesAuthorityV
       sequence: range.signed_head_sequence,
       frontier_digest: range.signed_head_frontier_digest,
     };
-    return {
+    const receiptBytes = {
+      schema_version: "infinity.authenticated-journal-recovery-range/v1" as const,
+      range_sha256: canonicalDigest(range),
       operation_id: range.operation_id,
       operation_step_id: range.operation_step_id,
       requested_from_sequence: range.requested_from_sequence,
-      signed_head_sequence: range.signed_head_sequence,
-      signed_head_frontier_digest: range.signed_head_frontier_digest,
-      completeness_proof_sha256: range.completeness_proof_sha256,
-      signer_principal: range.signer_principal,
-      signing_key_id: range.signing_key_id,
-      head_signature_verified: this.journal_range_completeness_valid as true,
-      range_completeness_verified: this.journal_range_completeness_valid as true,
-      stored_head_membership: this.journal_range_completeness_valid as true,
-      current_linearizable_head_sequence: currentHead.sequence,
-      current_linearizable_head_frontier_digest: currentHead.frontier_digest,
-      current_linearizable_head_verified: true,
+      current_head_sequence: currentHead.sequence,
+      current_head_frontier_digest: currentHead.frontier_digest,
+      current_linearizable_head: true as const,
+      complete_range: this.journal_range_completeness_valid as true,
+      trusted_signer: this.journal_range_completeness_valid as true,
+      verified_at: "2030-01-01T00:00:00.000Z",
+      expires_at: "2030-01-01T00:05:00.000Z",
     };
+    const receipt: AuthenticatedJournalRecoveryRangeV1 = {
+      ...receiptBytes,
+      verification_receipt_sha256: canonicalDigest(receiptBytes),
+    };
+    this.journal_recovery_receipt_sink?.(receipt);
+    return receipt;
   }
 
   async verifyProviderNonAcceptanceProof(
     proof: ProviderNonAcceptanceProofV1,
-  ): Promise<AuthenticatedProviderNonAcceptanceV1> {
+  ): Promise<ProviderNoEffectVerificationReceiptV1> {
     this.calls.provider_non_acceptance += 1;
-    return {
+    const receiptBytes = {
+      schema_version: "sandboxes.provider-no-effect-verification-receipt/v1" as const,
       proof_sha256: proof.proof_sha256,
-      adapter_id: proof.adapter_id,
-      adapter_version: proof.adapter_version,
-      installation_id: proof.installation_id,
-      provider_scope_ref: proof.provider_scope_ref,
-      operation_id: proof.operation_id,
-      operation_step_id: proof.operation_step_id,
+      target_sha256: canonicalDigest(proof.target),
       operation_execution_epoch: proof.operation_execution_epoch,
       request_sha256: proof.request_sha256,
-      dispatch_anchor_sha256: proof.dispatch_anchor_sha256,
-      target_sha256: canonicalDigest(proof.target),
-      provider_evidence_sha256: proof.provider_evidence_sha256,
-      provider_non_acceptance_verified:
-        (proof.proof_sha256 === providerNonAcceptanceProofDigest(proof)) as true,
+      provider_receipt_sha256: proof.provider_receipt_sha256,
+      proof_kind: proof.proof_kind,
+      verified_at: proof.observed_at,
+      expires_at: proof.expires_at,
+      verifier_principal: "principal_00000000000000000000000000000065",
+      signing_key_id: "key_00000000000000000000000000000065",
     };
+    if (proof.proof_sha256 !== providerNonAcceptanceProofDigest(proof)) {
+      throw new Error("test verifier rejected provider no-effect proof digest");
+    }
+    return { ...receiptBytes, receipt_sha256: canonicalDigest(receiptBytes) };
   }
 }
 
@@ -349,14 +379,34 @@ export class DeterministicTestPhysicalSafetyControllerV1 implements PhysicalSafe
 }
 
 export class DeterministicTestProviderOutcomeJournalV1 implements ProviderOutcomeJournalV1 {
-  readonly calls: Array<{ operation_id: string; outcome_kind: string }> = [];
+  readonly calls: Array<{
+    operation_id: string;
+    outcome_kind: string;
+    provider_no_effect_verification_receipt_sha256?: Digest;
+  }> = [];
   readonly #byEnvelopeDigest = new Map<Digest, ProviderOutcomeAnchorV1>();
+  onAppend: ((anchor: ProviderOutcomeAnchorV1) => void | Promise<void>) | undefined;
   constructor(readonly ledger = new DeterministicTestJournalLedgerV1()) {}
 
   async appendOutcome(
     input: Parameters<ProviderOutcomeJournalV1["appendOutcome"]>[0],
   ): Promise<ProviderOutcomeAnchorV1> {
-    this.calls.push({ operation_id: input.operation_id, outcome_kind: input.outcome_kind });
+    if (
+      (input.outcome_kind === "failed_no_effect") !==
+        (input.provider_no_effect_verification_receipt_sha256 !== undefined)
+    ) {
+      throw new Error("test journal rejected missing or extraneous provider no-effect verification receipt");
+    }
+    this.calls.push({
+      operation_id: input.operation_id,
+      outcome_kind: input.outcome_kind,
+      ...(input.provider_no_effect_verification_receipt_sha256 === undefined
+        ? {}
+        : {
+            provider_no_effect_verification_receipt_sha256:
+              input.provider_no_effect_verification_receipt_sha256,
+          }),
+    });
     const record = {
       schema_version: "sandboxes.runtime/v1" as const,
       record_kind: "OUTCOME" as const,
@@ -388,6 +438,7 @@ export class DeterministicTestProviderOutcomeJournalV1 implements ProviderOutcom
     };
     this.#byEnvelopeDigest.set(canonicalDigest(anchor), structuredClone(anchor));
     this.ledger.record(anchor);
+    await this.onAppend?.(structuredClone(anchor));
     return anchor;
   }
 
@@ -427,6 +478,20 @@ export class DeterministicTestProviderDispatchJournalV1 implements ProviderDispa
   async recoverDispatched(
     input: Parameters<ProviderDispatchJournalV1["recoverDispatched"]>[0],
   ): ReturnType<ProviderDispatchJournalV1["recoverDispatched"]> {
+    const receipt = this.ledger.recovery_receipts.get(
+      input.current_head_noninclusion_receipt_sha256,
+    );
+    if (
+      receipt === undefined ||
+      receipt.operation_id !== input.anchor.record.operation_id ||
+      receipt.operation_step_id !== input.anchor.record.operation_step_id ||
+      receipt.requested_from_sequence !== input.anchor.journal_sequence ||
+      receipt.current_linearizable_head !== true ||
+      receipt.complete_range !== true ||
+      receipt.trusted_signer !== true
+    ) {
+      throw new Error("test dispatch recovery rejected an unbound current-head receipt");
+    }
     const existing = this.ledger.envelopes.find((candidate): candidate is DispatchedJournalAnchorV1 =>
       "record_kind" in candidate.record &&
       candidate.record.record_kind === "DISPATCHED" &&
@@ -436,18 +501,26 @@ export class DeterministicTestProviderDispatchJournalV1 implements ProviderDispa
         input.anchor.record.operation_execution_epoch
     );
     if (existing !== undefined) {
-      return { disposition: "already_present", anchor: structuredClone(existing) };
+      return {
+        disposition: "already_present",
+        anchor: structuredClone(existing),
+        current_head_receipt_sha256: receipt.verification_receipt_sha256,
+      };
     }
     const currentHead = this.ledger.currentHead();
     if (
-      currentHead.sequence !== input.current_range.signed_head_sequence ||
-      currentHead.frontier_digest !== input.current_range.signed_head_frontier_digest
+      currentHead.sequence !== receipt.current_head_sequence ||
+      currentHead.frontier_digest !== receipt.current_head_frontier_digest
     ) {
       throw new Error("test dispatch recovery rejected a stale signed head");
     }
     this.calls.push(structuredClone(input.anchor));
     this.ledger.record(input.anchor);
-    return { disposition: "inserted", anchor: structuredClone(input.anchor) };
+    return {
+      disposition: "inserted",
+      anchor: structuredClone(input.anchor),
+      current_head_receipt_sha256: receipt.verification_receipt_sha256,
+    };
   }
 }
 
