@@ -337,6 +337,7 @@ export function harness(
   const verifier = new DeterministicTestAuthorityVerifierV1();
   const physicalSafety = new DeterministicTestPhysicalSafetyControllerV1();
   const journalLedger = new DeterministicTestJournalLedgerV1();
+  verifier.current_journal_head = () => journalLedger.currentHead();
   const outcomeJournal = new DeterministicTestProviderOutcomeJournalV1(journalLedger);
   const dispatchJournal = new DeterministicTestProviderDispatchJournalV1(journalLedger);
   const readProbeJournal = new DeterministicTestProviderReadProbeJournalV1(journalLedger);

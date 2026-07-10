@@ -441,6 +441,10 @@ export interface SandboxV1 {
   audience: SchemaVersion;
   runtime_class: "strong_vm";
   adapter_descriptor_sha256: Digest;
+  /** Exact closed descriptor bytes admitted before the first durable intent. */
+  adapter_descriptor: AdapterDescriptorV1;
+  provider_creation_token_sha256: Digest;
+  provider_identity_sha256?: Digest;
   provider_handle_sha256?: Digest;
   create_inert_operation_id: string;
   activation_operation_id?: string;
@@ -482,6 +486,23 @@ export interface SealedProviderHandleV1 {
   resource_id: string;
   sealed_handle: string;
   provider_handle_sha256: Digest;
+  binding_sha256: Digest;
+}
+
+export interface ProviderHandleBindingV1 {
+  schema_version: "sandboxes.provider-handle-binding/v1";
+  adapter_id: AdapterDescriptorV1["adapter_id"];
+  adapter_version: string;
+  installation_id: string;
+  provider_scope_ref: string;
+  resource_kind: string;
+  resource_id: string;
+  resource_lease_id: string;
+  resource_lifecycle_generation: bigint;
+  provider_creation_token_sha256: Digest;
+  immutable_fingerprint_sha256: Digest;
+  provider_identity_sha256: Digest;
+  spec_sha256: Digest;
 }
 
 export interface ProviderOperationV1 {
@@ -553,6 +574,24 @@ export interface AdapterDescriptorV1 {
   whole_scope_cancel: boolean;
   native_bounded_files: boolean;
   atomic_incarnation_bound_delete: boolean;
+}
+
+export interface ProviderNonAcceptanceProofV1 {
+  schema_version: "sandboxes.provider-non-acceptance-proof/v1";
+  adapter_id: AdapterDescriptorV1["adapter_id"];
+  adapter_version: string;
+  installation_id: string;
+  provider_scope_ref: string;
+  operation_id: string;
+  operation_step_id: string;
+  operation_execution_epoch: bigint;
+  request_sha256: Digest;
+  dispatch_anchor_sha256: Digest;
+  target: ProviderEffectTargetV1;
+  observed_at: string;
+  expires_at: string;
+  provider_evidence_sha256: Digest;
+  proof_sha256: Digest;
 }
 
 export interface ActivationReceiptV1 {

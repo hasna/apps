@@ -1,5 +1,6 @@
-import { canonicalDigest, sha256, type Digest } from "./canonical.js";
+import { sha256, type Digest } from "./canonical.js";
 import { SandboxError } from "./errors.js";
+import { adapterDescriptorDigest } from "./provider-identity.js";
 import {
   SCHEMA_VERSION,
   type ActivationGrantV1,
@@ -11,6 +12,7 @@ import {
   type OwnedProviderHandleV1,
   type OwnedResourcePageV1,
   type ProviderOperationObservationV1,
+  type ProviderNonAcceptanceProofV1,
   type ProviderEffectTargetV1,
   type ProviderOperationV1,
   type SandboxSpecV1,
@@ -91,9 +93,12 @@ export class AmbiguousProviderEffectError extends Error {
 
 /** Adapter may throw this only with durable proof that no provider effect was accepted. */
 export class ProviderRejectedNoEffectError extends Error {
-  constructor() {
+  readonly proof: ProviderNonAcceptanceProofV1 | undefined;
+
+  constructor(proof?: ProviderNonAcceptanceProofV1) {
     super("Provider rejected the operation before accepting any effect");
     this.name = "ProviderRejectedNoEffectError";
+    this.proof = proof === undefined ? undefined : structuredClone(proof);
   }
 }
 
@@ -109,6 +114,7 @@ abstract class PendingManagedRunnerV1 implements SandboxRunnerV1 {
 
   async descriptor(): Promise<AdapterDescriptorV1> {
     const facts = {
+      schema_version: SCHEMA_VERSION,
       adapter_id: this.adapterId,
       adapter_version: "pending",
       installation_id: `installation-${this.adapterId}-pending`,
@@ -122,11 +128,14 @@ abstract class PendingManagedRunnerV1 implements SandboxRunnerV1 {
       atomic_incarnation_bound_delete: false,
     } as const;
     return {
-      schema_version: SCHEMA_VERSION,
       ...facts,
       build_sha256: sha256(`${this.adapterId}:pending`),
-      descriptor_sha256: canonicalDigest(facts),
       status: "pending_conformance",
+      descriptor_sha256: adapterDescriptorDigest({
+        ...facts,
+        build_sha256: sha256(`${this.adapterId}:pending`),
+        status: "pending_conformance",
+      }),
     };
   }
 

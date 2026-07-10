@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { canonicalDigest } from "../src/canonical.js";
+import { InMemorySandboxRepositoryV1 } from "../src/repository-memory.js";
 import {
   activationRequestDigest,
   createRequestDigest,
@@ -13,6 +14,7 @@ import {
 import {
   activate,
   activationGrant,
+  CLOCK,
   checkpointReceipt,
   cleanupContext,
   cleanupGrant,
@@ -98,6 +100,37 @@ describe("reference lifecycle and adversarial invariants", () => {
     expect(h.runner.calls.create_inert).toBe(1);
   });
 
+  test("a stale signed empty-range replay cannot reopen a DB-dispatched operation", async () => {
+    const h = harness();
+    const input = createInput();
+    const request = createRequestDigest(input);
+    const begin = context("begin_create_inert", oid("op", 239), request, 1n, 0, 1n, 239);
+    h.dispatchJournal.failure = new Error("crash before authoritative append");
+    await expect(h.service.create(input, begin)).rejects.toThrow("crash before authoritative append");
+    const staleRange = await h.journalRecovery.readOperationStepRange({
+      operation_id: begin.operation_id,
+      operation_step_id: begin.dispatch_journal.record.operation_step_id,
+      requested_from_sequence: begin.dispatch_journal.journal_sequence,
+    });
+    const unrelated = context(
+      "begin_create_inert",
+      oid("op", 240),
+      request,
+      1n,
+      0,
+      1n,
+      240,
+    ).dispatch_journal;
+    h.journalRecovery.ledger.record(unrelated);
+    h.journalRecovery.readOperationStepRange = async () => structuredClone(staleRange);
+    h.dispatchJournal.failure = undefined;
+
+    await expect(h.service.create(input, begin)).rejects.toMatchObject({ code: "integrity_failed" });
+    expect(h.runner.calls.create_inert).toBe(0);
+    expect((await h.repository.transaction((tx) => tx.getOperation(begin.operation_id)))?.effect_phase)
+      .toBe("dispatched");
+  });
+
   test("untrusted or non-member signed frontier blocks provider reachability", async () => {
     const h = harness();
     h.verifier.stored_frontier_membership_valid = false;
@@ -150,7 +183,7 @@ describe("reference lifecycle and adversarial invariants", () => {
   });
 
   test("failed_no_effect alone permits the same semantic step at exactly epoch N plus one", async () => {
-    const h = harness(undefined, { reject_create_no_effect_attempts: 1 });
+    const h = harness(undefined, { verified_reject_create_no_effect_attempts: 1 });
     const input = createInput();
     const request = createRequestDigest(input);
     const begin = context("begin_create_inert", oid("op", 218), request, 1n, 0, 1n, 218);
@@ -178,8 +211,23 @@ describe("reference lifecycle and adversarial invariants", () => {
     ))).toEqual(["DISPATCHED:1", "OUTCOME:1", "DISPATCHED:2", "READ_PROBE:2", "OUTCOME:2"]);
   });
 
-  test("failed_no_effect retry rejects a changed immutable provider target", async () => {
+  test("an adapter-labelled rejection without trusted non-acceptance proof remains unresolved", async () => {
     const h = harness(undefined, { reject_create_no_effect_attempts: 1 });
+    const input = createInput();
+    const request = createRequestDigest(input);
+    const begin = context("begin_create_inert", oid("op", 233), request, 1n, 0, 1n, 233);
+
+    const unresolved = await h.service.create(input, begin);
+    expect(unresolved.physical_safety_state).toBe("fenced");
+    expect(unresolved.pending_provider_outcome).toBeUndefined();
+    expect((await h.repository.transaction((tx) => tx.getOperation(begin.operation_id)))?.effect_phase)
+      .toBe("unknown");
+    expect(h.outcomeJournal.calls.some((call) => call.outcome_kind === "failed_no_effect"))
+      .toBe(false);
+  });
+
+  test("failed_no_effect retry rejects a changed immutable provider target", async () => {
+    const h = harness(undefined, { verified_reject_create_no_effect_attempts: 1 });
     const input = createInput();
     const request = createRequestDigest(input);
     const begin = context("begin_create_inert", oid("op", 220), request, 1n, 0, 1n, 220);
@@ -215,7 +263,7 @@ describe("reference lifecycle and adversarial invariants", () => {
   });
 
   test("failed_no_effect retry requires an online full signed OUTCOME envelope", async () => {
-    const h = harness(undefined, { reject_create_no_effect_attempts: 1 });
+    const h = harness(undefined, { verified_reject_create_no_effect_attempts: 1 });
     const input = createInput();
     const request = createRequestDigest(input);
     const begin = context("begin_create_inert", oid("op", 223), request, 1n, 0, 1n, 223);
@@ -231,7 +279,7 @@ describe("reference lifecycle and adversarial invariants", () => {
   });
 
   test("failed_no_effect retry rejects a member without signed head/range completeness", async () => {
-    const h = harness(undefined, { reject_create_no_effect_attempts: 1 });
+    const h = harness(undefined, { verified_reject_create_no_effect_attempts: 1 });
     const input = createInput();
     const request = createRequestDigest(input);
     const begin = context("begin_create_inert", oid("op", 229), request, 1n, 0, 1n, 229);
@@ -379,10 +427,11 @@ describe("reference lifecycle and adversarial invariants", () => {
     expect(active.resource_lifecycle_generation).toBe(5n);
     expect(h.runner.calls.activate).toBe(1);
     expect(h.outcomeJournal.calls.map((call) => call.outcome_kind)).toEqual(["succeeded", "succeeded"]);
-    expect(h.lifecycleLock.bindings).toHaveLength(2);
+    expect(h.lifecycleLock.bindings).toHaveLength(4);
     expect(new Set(h.lifecycleLock.bindings.map((binding) => binding.lock_key_sha256)).size).toBe(1);
     expect(h.lifecycleLock.bindings[0]?.bound_provider_identity).toBeUndefined();
-    expect(h.lifecycleLock.bindings[1]?.bound_provider_identity?.opaque_resource_id).toMatch(/^native-/);
+    expect(h.lifecycleLock.bindings.find((binding) => binding.bound_provider_identity !== undefined)
+      ?.bound_provider_identity?.opaque_resource_id).toMatch(/^native-/);
     expect(h.dispatchJournal.calls[0]?.record.provider_idempotency_token_sha256)
       .not.toBe(h.dispatchJournal.calls[1]?.record.provider_idempotency_token_sha256);
     const activationOperation = await h.repository.transaction((tx) =>
@@ -398,6 +447,237 @@ describe("reference lifecycle and adversarial invariants", () => {
       "activating",
       "active",
     ]);
+  });
+
+  test("descriptor behavior or provider identity cannot drift behind a reused digest", async () => {
+    const h = harness();
+    const inert = await createInert(h);
+    const originalDescriptor = await h.runner.descriptor();
+    h.runner.descriptor = async () => ({
+      ...originalDescriptor,
+      provider_scope_ref: "drifted-provider-scope",
+      atomic_incarnation_bound_delete: !originalDescriptor.atomic_incarnation_bound_delete,
+      descriptor_sha256: originalDescriptor.descriptor_sha256,
+    });
+    const grant = activationGrant(inert, oid("op", 234));
+    const ctx = context(
+      "begin_activate",
+      grant.operation_id,
+      grant.operation_digest,
+      inert.resource_lifecycle_generation,
+      inert.revision,
+      4n,
+      234,
+      inert.immutable_fingerprint_sha256!,
+      canonicalDigest({ id: grant.grant_id, nonce: grant.one_use_nonce_sha256 }),
+    );
+
+    await expect(h.service.activate(inert.id, grant, ctx))
+      .rejects.toMatchObject({ code: "integrity_failed" });
+    expect(await h.repository.transaction((tx) => tx.getOperation(grant.operation_id)))
+      .toBeUndefined();
+    expect(h.runner.calls.activate).toBe(0);
+  });
+
+  test("revocation after the final ownership page blocks the provider mutation", async () => {
+    const h = harness();
+    const inert = await createInert(h);
+    const originalList = h.runner.listOwnedResources.bind(h.runner);
+    const originalVerify = h.verifier.verifyCurrentEffectAuthorization.bind(h.verifier);
+    let revoked = false;
+    h.runner.listOwnedResources = async (...args) => {
+      const page = await originalList(...args);
+      revoked = true;
+      return page;
+    };
+    h.verifier.verifyCurrentEffectAuthorization = async (...args) => {
+      const authenticated = await originalVerify(...args);
+      return revoked
+        ? { ...authenticated, actor_principal: oid("principal", 235) }
+        : authenticated;
+    };
+    const grant = activationGrant(inert, oid("op", 235));
+    const ctx = context(
+      "begin_activate",
+      grant.operation_id,
+      grant.operation_digest,
+      inert.resource_lifecycle_generation,
+      inert.revision,
+      4n,
+      235,
+      inert.immutable_fingerprint_sha256!,
+      canonicalDigest({ id: grant.grant_id, nonce: grant.one_use_nonce_sha256 }),
+    );
+
+    const result = await h.service.activate(inert.id, grant, ctx);
+    expect(result.physical_safety_state).toBe("fenced");
+    expect(result.pending_provider_outcome).toBeUndefined();
+    expect(h.runner.calls.activate).toBe(0);
+  });
+
+  test("a grant that expires during slow provider preflight is rejected at the final DB-time barrier", async () => {
+    let databaseNow = new Date(CLOCK);
+    const repository = new InMemorySandboxRepositoryV1(() => databaseNow);
+    const h = harness(repository, { clock: () => databaseNow });
+    const inert = await createInert(h);
+    const originalList = h.runner.listOwnedResources.bind(h.runner);
+    h.runner.listOwnedResources = async (...args) => {
+      const page = await originalList(...args);
+      databaseNow = new Date("2030-01-01T00:02:00.000Z");
+      return page;
+    };
+    const grant = {
+      ...activationGrant(inert, oid("op", 241)),
+      expires_at: "2030-01-01T00:01:00.000Z",
+    };
+    const ctx = context(
+      "begin_activate",
+      grant.operation_id,
+      grant.operation_digest,
+      inert.resource_lifecycle_generation,
+      inert.revision,
+      4n,
+      241,
+      inert.immutable_fingerprint_sha256!,
+      canonicalDigest({ id: grant.grant_id, nonce: grant.one_use_nonce_sha256 }),
+    );
+
+    const result = await h.service.activate(inert.id, grant, ctx);
+    expect(result.physical_safety_state).toBe("fenced");
+    expect(result.pending_provider_outcome).toBeUndefined();
+    expect(h.runner.calls.activate).toBe(0);
+  });
+
+  test("the final mutation barrier rejects a handle replay installed during provider preflight", async () => {
+    const h = harness();
+    const inert = await createInert(h);
+    const staleSealed = await h.repository.transaction((tx) => tx.getHandle(inert.id));
+    expect(staleSealed).toBeDefined();
+    const originalList = h.runner.listOwnedResources.bind(h.runner);
+    h.runner.listOwnedResources = async (...args) => {
+      const page = await originalList(...args);
+      await h.repository.transaction((tx) => tx.putHandle(staleSealed!));
+      return page;
+    };
+    const grant = activationGrant(inert, oid("op", 242));
+    const ctx = context(
+      "begin_activate",
+      grant.operation_id,
+      grant.operation_digest,
+      inert.resource_lifecycle_generation,
+      inert.revision,
+      4n,
+      242,
+      inert.immutable_fingerprint_sha256!,
+      canonicalDigest({ id: grant.grant_id, nonce: grant.one_use_nonce_sha256 }),
+    );
+
+    const result = await h.service.activate(inert.id, grant, ctx);
+    expect(result.physical_safety_state).toBe("fenced");
+    expect(result.pending_provider_outcome).toBeUndefined();
+    expect(h.runner.calls.activate).toBe(0);
+  });
+
+  test("the final mutation barrier observes cancellation and physical safety after preflight", async () => {
+    for (const closeKind of ["cancel", "physical_safety"] as const) {
+      const h = harness();
+      const inert = await createInert(h);
+      const grant = activationGrant(inert, oid("op", closeKind === "cancel" ? 243 : 244));
+      const originalList = h.runner.listOwnedResources.bind(h.runner);
+      h.runner.listOwnedResources = async (...args) => {
+        const page = await originalList(...args);
+        if (closeKind === "cancel") {
+          await h.repository.transaction((tx) => {
+            const operation = tx.getOperation(grant.operation_id)!;
+            tx.updateOperation({ ...operation, cancellation_state: "suppressed" });
+          });
+        } else {
+          await h.physicalSafety.fenceResource({
+            resource_id: inert.id,
+            resource_lifecycle_generation: inert.resource_lifecycle_generation + 1n,
+            reason: "provider_ambiguous",
+            observed_at: CLOCK.toISOString(),
+          });
+        }
+        return page;
+      };
+      const ctx = context(
+        "begin_activate",
+        grant.operation_id,
+        grant.operation_digest,
+        inert.resource_lifecycle_generation,
+        inert.revision,
+        4n,
+        closeKind === "cancel" ? 243 : 244,
+        inert.immutable_fingerprint_sha256!,
+        canonicalDigest({ id: grant.grant_id, nonce: grant.one_use_nonce_sha256 }),
+      );
+
+      const result = await h.service.activate(inert.id, grant, ctx);
+      expect(result.physical_safety_state).toBe("fenced");
+      expect(h.runner.calls.activate).toBe(0);
+    }
+  });
+
+  test("canonical lifecycle transitions cannot commit while provider mutation owns the lifecycle gate", async () => {
+    const h = harness();
+    const input = createInput();
+    const request = createRequestDigest(input);
+    const begin = context("begin_create_inert", oid("op", 236), request, 1n, 0, 1n, 236);
+    const originalSafety = h.physicalSafety.assertProviderDispatchAllowed.bind(h.physicalSafety);
+    let enteredSafety = (): void => {};
+    const safetyEntered = new Promise<void>((resolve) => { enteredSafety = resolve; });
+    let releaseSafety = (): void => {};
+    const safetyReleased = new Promise<void>((resolve) => { releaseSafety = resolve; });
+    h.physicalSafety.assertProviderDispatchAllowed = async (value) => {
+      await originalSafety(value);
+      enteredSafety();
+      await safetyReleased;
+    };
+
+    const createPromise = h.service.create(input, begin);
+    await safetyEntered;
+    const reserved = await h.service.get(input.resource_id);
+    const evidence = digest("paused-create-authoritative-lost-evidence");
+    const lostRequest = lifecycleRecordRequestDigest("record_lost", reserved.id, evidence);
+    let transitionSettled = false;
+    const transitionPromise = h.service.recordLost(reserved.id, evidence, lifecycleContext(
+      "record_lost",
+      oid("op", 237),
+      lostRequest,
+      reserved.resource_lifecycle_generation,
+      reserved.revision,
+      2n,
+      237,
+    )).finally(() => { transitionSettled = true; });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(transitionSettled).toBe(false);
+    releaseSafety();
+    await createPromise;
+    await expect(transitionPromise).rejects.toMatchObject({ code: "stale_revision" });
+    expect(h.runner.calls.create_inert).toBe(1);
+  });
+
+  test("a stale sealed handle cannot be opened and upgraded by a later lifecycle generation", async () => {
+    const h = harness();
+    const inert = await createInert(h);
+    const staleSealed = await h.repository.transaction((tx) => tx.getHandle(inert.id));
+    expect(staleSealed).toBeDefined();
+    const active = await activate(h, inert);
+    await h.repository.transaction((tx) => tx.putHandle(staleSealed!));
+    const evidence = digest("stale-sealed-handle-lost-evidence");
+    const request = lifecycleRecordRequestDigest("record_lost", active.id, evidence);
+
+    await expect(h.service.recordLost(active.id, evidence, lifecycleContext(
+      "record_lost",
+      oid("op", 238),
+      request,
+      active.resource_lifecycle_generation,
+      active.revision,
+      5n,
+      238,
+    ))).rejects.toMatchObject({ code: "integrity_failed" });
+    expect((await h.service.get(active.id)).state).toBe("active");
   });
 
   test("an exact committed operation replay returns without a second provider call", async () => {

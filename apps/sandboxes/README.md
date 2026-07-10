@@ -24,11 +24,26 @@ cleanup grant.
 Signed journal envelopes are closed and read back in full before use. Their
 record digest, contiguous frontier, trusted signer/key, Ed25519 signature, and
 stored-frontier membership are verified by the injected Infinity verifier.
+Crash recovery additionally requires the verifier to bind the range to the
+current linearizable journal head; the journal then atomically performs
+non-inclusion-plus-append and distinguishes `inserted` from
+`already_present`. A replayed or already-present dispatch never authorizes a
+new provider mutation. An adapter exception can produce `failed_no_effect`
+only when it carries a closed request/target/token/epoch-bound provider
+non-acceptance proof accepted by the trusted verifier. Otherwise the operation
+remains unresolved and reconciliation-only.
 `failed_no_effect` retry authorization is never inferred from a local digest
 row. Creation and per-effect provider tokens are separate deterministic
 bindings over the actual allocation/spec/request bytes; returned handles and
 live provider inspection/enumeration must match the exact installation, scope,
 ownership nonce, opaque ID, token, fingerprint, and spec digest.
+Core code recomputes the descriptor digest over every closed identity and
+behavior fact and persists those exact bytes. Sealed handles use
+domain-separated authenticated encryption bound to adapter, installation,
+scope, resource, lease, generation, creation token, fingerprint, provider
+identity, and spec. Canonical lifecycle transitions share the same stable gate
+as provider mutation, so they cannot commit between the final barrier and the
+provider call.
 
 The external outcomes are schema-bound to
 `infinity.effect-journal-outcome/v1` at digest

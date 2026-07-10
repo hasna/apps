@@ -3,6 +3,7 @@ import type {
   AuthenticatedJournalBindingsV1,
   AuthenticatedAdapterAdmissionV1,
   AuthenticatedJournalRecoveryRangeV1,
+  AuthenticatedProviderNonAcceptanceV1,
   PhysicalSafetyControllerV1,
   ProviderDispatchJournalV1,
   ProviderReadProbeJournalV1,
@@ -30,8 +31,10 @@ import type {
   ProviderOutcomeAnchorV1,
   SafetyFenceObservationV1,
   ProviderLifecycleLockBindingV1,
+  ProviderNonAcceptanceProofV1,
 } from "./types.js";
 import { providerLifecycleLockKey } from "./service.js";
+import { providerNonAcceptanceProofDigest } from "./provider-identity.js";
 
 /** Hermetic FIFO stand-in for the production cross-replica lifecycle lock. */
 export class DeterministicTestProviderLifecycleLockV1 implements ProviderLifecycleLockV1 {
@@ -79,6 +82,16 @@ export class DeterministicTestJournalLedgerV1 {
       this.envelopes.push(structuredClone(anchor));
     }
   }
+
+  currentHead(): { sequence: bigint; frontier_digest: Digest } {
+    const head = [...this.envelopes]
+      .sort((left, right) => left.journal_sequence < right.journal_sequence ? -1 : 1)
+      .at(-1);
+    return {
+      sequence: head?.journal_sequence ?? 1n,
+      frontier_digest: head?.frontier_digest ?? sha256("test-journal-genesis-frontier"),
+    };
+  }
 }
 
 export class DeterministicTestProviderJournalRecoveryV1 implements ProviderJournalRecoveryV1 {
@@ -95,11 +108,9 @@ export class DeterministicTestProviderJournalRecoveryV1 implements ProviderJourn
       )
       .sort((left, right) => left.journal_sequence < right.journal_sequence ? -1 : 1)
       .map((anchor) => structuredClone(anchor));
-    const head = [...this.ledger.envelopes]
-      .sort((left, right) => left.journal_sequence < right.journal_sequence ? -1 : 1)
-      .at(-1);
-    const signedHeadSequence = head?.journal_sequence ?? 1n;
-    const signedHeadFrontierDigest = head?.frontier_digest ?? sha256("test-journal-genesis-frontier");
+    const head = this.ledger.currentHead();
+    const signedHeadSequence = head.sequence;
+    const signedHeadFrontierDigest = head.frontier_digest;
     const proofBytes = {
       schema_version: "infinity.effect-journal-recovery-range/v1" as const,
       operation_id: input.operation_id,
@@ -129,6 +140,7 @@ export class DeterministicTestProviderJournalRecoveryV1 implements ProviderJourn
 export class DeterministicTestAuthorityVerifierV1 implements SandboxesAuthorityVerifierV1 {
   stored_frontier_membership_valid = true;
   journal_range_completeness_valid = true;
+  current_journal_head: (() => { sequence: bigint; frontier_digest: Digest }) | undefined;
   readonly calls = {
     capability: 0,
     current_effect: 0,
@@ -139,6 +151,7 @@ export class DeterministicTestAuthorityVerifierV1 implements SandboxesAuthorityV
     cleanup: 0,
     checkpoint: 0,
     promotion: 0,
+    provider_non_acceptance: 0,
   };
 
   async verifyCapability(claims: CapabilityClaimsV1): Promise<AuthenticatedEffectBindingsV1> {
@@ -246,6 +259,10 @@ export class DeterministicTestAuthorityVerifierV1 implements SandboxesAuthorityV
   async verifyJournalRecoveryRange(
     range: EffectJournalRecoveryRangeV1,
   ): Promise<AuthenticatedJournalRecoveryRangeV1> {
+    const currentHead = this.current_journal_head?.() ?? {
+      sequence: range.signed_head_sequence,
+      frontier_digest: range.signed_head_frontier_digest,
+    };
     return {
       operation_id: range.operation_id,
       operation_step_id: range.operation_step_id,
@@ -258,6 +275,31 @@ export class DeterministicTestAuthorityVerifierV1 implements SandboxesAuthorityV
       head_signature_verified: this.journal_range_completeness_valid as true,
       range_completeness_verified: this.journal_range_completeness_valid as true,
       stored_head_membership: this.journal_range_completeness_valid as true,
+      current_linearizable_head_sequence: currentHead.sequence,
+      current_linearizable_head_frontier_digest: currentHead.frontier_digest,
+      current_linearizable_head_verified: true,
+    };
+  }
+
+  async verifyProviderNonAcceptanceProof(
+    proof: ProviderNonAcceptanceProofV1,
+  ): Promise<AuthenticatedProviderNonAcceptanceV1> {
+    this.calls.provider_non_acceptance += 1;
+    return {
+      proof_sha256: proof.proof_sha256,
+      adapter_id: proof.adapter_id,
+      adapter_version: proof.adapter_version,
+      installation_id: proof.installation_id,
+      provider_scope_ref: proof.provider_scope_ref,
+      operation_id: proof.operation_id,
+      operation_step_id: proof.operation_step_id,
+      operation_execution_epoch: proof.operation_execution_epoch,
+      request_sha256: proof.request_sha256,
+      dispatch_anchor_sha256: proof.dispatch_anchor_sha256,
+      target_sha256: canonicalDigest(proof.target),
+      provider_evidence_sha256: proof.provider_evidence_sha256,
+      provider_non_acceptance_verified:
+        (proof.proof_sha256 === providerNonAcceptanceProofDigest(proof)) as true,
     };
   }
 }
@@ -374,8 +416,38 @@ export class DeterministicTestProviderDispatchJournalV1 implements ProviderDispa
   }
 
   async readDispatched(envelopeDigest: Digest): Promise<DispatchedJournalAnchorV1 | undefined> {
-    const anchor = this.calls.find((candidate) => canonicalDigest(candidate) === envelopeDigest);
+    const anchor = this.ledger.envelopes.find((candidate): candidate is DispatchedJournalAnchorV1 =>
+      "record_kind" in candidate.record &&
+      candidate.record.record_kind === "DISPATCHED" &&
+      canonicalDigest(candidate) === envelopeDigest
+    );
     return anchor === undefined ? undefined : structuredClone(anchor);
+  }
+
+  async recoverDispatched(
+    input: Parameters<ProviderDispatchJournalV1["recoverDispatched"]>[0],
+  ): ReturnType<ProviderDispatchJournalV1["recoverDispatched"]> {
+    const existing = this.ledger.envelopes.find((candidate): candidate is DispatchedJournalAnchorV1 =>
+      "record_kind" in candidate.record &&
+      candidate.record.record_kind === "DISPATCHED" &&
+      candidate.record.operation_id === input.anchor.record.operation_id &&
+      candidate.record.operation_step_id === input.anchor.record.operation_step_id &&
+      candidate.record.operation_execution_epoch ===
+        input.anchor.record.operation_execution_epoch
+    );
+    if (existing !== undefined) {
+      return { disposition: "already_present", anchor: structuredClone(existing) };
+    }
+    const currentHead = this.ledger.currentHead();
+    if (
+      currentHead.sequence !== input.current_range.signed_head_sequence ||
+      currentHead.frontier_digest !== input.current_range.signed_head_frontier_digest
+    ) {
+      throw new Error("test dispatch recovery rejected a stale signed head");
+    }
+    this.calls.push(structuredClone(input.anchor));
+    this.ledger.record(input.anchor);
+    return { disposition: "inserted", anchor: structuredClone(input.anchor) };
   }
 }
 

@@ -21,9 +21,14 @@ import {
   type OwnedResourcePageV1,
   type ProviderOperationObservationV1,
   type ProviderOperationV1,
+  type ProviderNonAcceptanceProofV1,
   type SandboxSpecV1,
 } from "./types.js";
-import { providerHandleIdentityDigest } from "./provider-identity.js";
+import {
+  adapterDescriptorDigest,
+  providerHandleIdentityDigest,
+  providerNonAcceptanceProofDigest,
+} from "./provider-identity.js";
 
 interface FakeResource {
   handle: OwnedProviderHandleV1;
@@ -37,6 +42,7 @@ export interface FakeRunnerOptionsV1 {
   activation_fingerprint_mismatch?: boolean;
   activation_policy_mismatch?: boolean;
   reject_create_no_effect_attempts?: number;
+  verified_reject_create_no_effect_attempts?: number;
   atomic_delete_unsupported?: boolean;
   clock?: () => Date;
 }
@@ -54,6 +60,7 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
   readonly #activationPolicyMismatch: boolean;
   readonly #atomicDeleteUnsupported: boolean;
   #remainingCreateNoEffectRejections: number;
+  #remainingVerifiedCreateNoEffectRejections: number;
   readonly calls = { create_inert: 0, activate: 0, inspect: 0, expire: 0, destroy: 0, lookup: 0 };
   readonly observed_generations: bigint[] = [];
   readonly observed_authorization_receipts: Digest[] = [];
@@ -66,11 +73,14 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     this.#activationPolicyMismatch = options.activation_policy_mismatch === true;
     this.#atomicDeleteUnsupported = options.atomic_delete_unsupported === true;
     this.#remainingCreateNoEffectRejections = options.reject_create_no_effect_attempts ?? 0;
+    this.#remainingVerifiedCreateNoEffectRejections =
+      options.verified_reject_create_no_effect_attempts ?? 0;
     this.#clock = options.clock ?? (() => new Date());
   }
 
   async descriptor(): Promise<AdapterDescriptorV1> {
     const facts = {
+      schema_version: SCHEMA_VERSION,
       adapter_id: "fake",
       adapter_version: "1.0.0-test",
       installation_id: "installation_00000000000000000000000000000001",
@@ -83,12 +93,14 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       native_bounded_files: true,
       atomic_incarnation_bound_delete: !this.#atomicDeleteUnsupported,
     } as const;
-    return {
-      schema_version: SCHEMA_VERSION,
+    const protectedDescriptor = {
       ...facts,
       build_sha256: sha256("deterministic-fake-runner-v1"),
-      descriptor_sha256: canonicalDigest(facts),
-      status: "test_only",
+      status: "test_only" as const,
+    };
+    return {
+      ...protectedDescriptor,
+      descriptor_sha256: adapterDescriptorDigest(protectedDescriptor),
     };
   }
 
@@ -125,6 +137,29 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     if (this.#remainingCreateNoEffectRejections > 0) {
       this.#remainingCreateNoEffectRejections -= 1;
       throw new ProviderRejectedNoEffectError();
+    }
+    if (this.#remainingVerifiedCreateNoEffectRejections > 0) {
+      this.#remainingVerifiedCreateNoEffectRejections -= 1;
+      const proofBytes: Omit<ProviderNonAcceptanceProofV1, "proof_sha256"> = {
+        schema_version: "sandboxes.provider-non-acceptance-proof/v1",
+        adapter_id: "fake",
+        adapter_version: "1.0.0-test",
+        installation_id: "installation_00000000000000000000000000000001",
+        provider_scope_ref: "fake-test-scope",
+        operation_id: op.target.operation_id,
+        operation_step_id: op.target.operation_step_id,
+        operation_execution_epoch: op.fence.operation_execution_epoch,
+        request_sha256: op.request_sha256,
+        dispatch_anchor_sha256: op.external_anchor_receipt_sha256,
+        target: op.target,
+        observed_at: nowRfc3339(this.#clock()),
+        expires_at: op.deadline,
+        provider_evidence_sha256: sha256(`provider-non-acceptance:${op.target.operation_id}`),
+      };
+      throw new ProviderRejectedNoEffectError({
+        ...proofBytes,
+        proof_sha256: providerNonAcceptanceProofDigest(proofBytes),
+      });
     }
     const existing = this.#operations.get(op.fence.operation_id);
     if (existing !== undefined) return existing;
