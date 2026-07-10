@@ -1,7 +1,10 @@
 import {
   INERT_DENY_ALL_POLICY,
+  adapterError,
+  capabilityAuthorizationBinding,
   canonicalSha256,
   type AdapterCallContextV1,
+  type AdapterEffectGuardPortV1,
   type AdapterProviderResourceV1,
   type CanonicalSandboxEffectFenceV1,
   type Digest,
@@ -24,6 +27,7 @@ import {
   type ProviderEffectTargetV1,
   type ProviderExecHandleV1,
   type ProviderExecStreamEventV1,
+  type ProviderEffectGuardPhaseV1,
   type ProviderOperationNameV1,
   type ProviderOperationV1,
   type ResourceGenerationTransitionV1,
@@ -135,6 +139,10 @@ function anchorRecord(
       ...operation.fence,
       operation_execution_epoch: operationExecutionEpoch,
     }),
+    generation_transition_sha256: canonicalSha256(
+      operation.generation_transition ?? { kind: "no_generation_transition" },
+    ),
+    authorization_binding_sha256: capabilityAuthorizationBinding(operation.target),
     payload_sha256: digest(recordKind === "INTENT" ? "41" : recordKind === "OUTCOME" ? "43" : "42"),
   }
 }
@@ -179,6 +187,7 @@ export function makeContext(
     intent_anchor: makeAnchorReceipt(intent),
     invocation_anchor: invocationReceipt,
     outcome_journal: journal,
+    authorization_binding_sha256: capabilityAuthorizationBinding(operation.target),
     dispatch_attempt:
       epoch === operation.fence.operation_execution_epoch
         ? { kind: "initial", operation_execution_epoch: epoch }
@@ -198,6 +207,28 @@ export function makeContext(
                 evidence_sha256: digest("missing-proof"),
               },
           },
+  }
+}
+
+export function bindAuthorization(
+  ctx: AdapterCallContextV1,
+  operation: ProviderOperationV1,
+  authorizationBindingSha256: Digest,
+): AdapterCallContextV1 {
+  const intent = makeAnchorReceipt({
+    ...ctx.intent_anchor.record,
+    authorization_binding_sha256: authorizationBindingSha256,
+  })
+  const invocation = makeAnchorReceipt({
+    ...ctx.invocation_anchor.record,
+    authorization_binding_sha256: authorizationBindingSha256,
+  })
+  operation.external_anchor_receipt_sha256 = invocation.record_sha256
+  return {
+    ...ctx,
+    authorization_binding_sha256: authorizationBindingSha256,
+    intent_anchor: intent,
+    invocation_anchor: invocation,
   }
 }
 
@@ -224,6 +255,20 @@ export class FakeCredentialPort implements ManagedProviderCredentialPortV1 {
     if (provider !== this.client.provider_id) throw new Error("wrong fake provider")
     this.acquisitions += 1
     return use(this.client)
+  }
+}
+
+export class FakeEffectGuard implements AdapterEffectGuardPortV1 {
+  readonly calls: ProviderEffectGuardPhaseV1[] = []
+  rejectPhase: ProviderEffectGuardPhaseV1 | undefined
+
+  async assertCurrent(
+    _ctx: AdapterCallContextV1,
+    _operation: ProviderOperationV1,
+    phase: ProviderEffectGuardPhaseV1,
+  ): Promise<void> {
+    this.calls.push(phase)
+    if (this.rejectPhase === phase) throw adapterError("stale_operation_execution_epoch")
   }
 }
 

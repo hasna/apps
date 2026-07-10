@@ -80,6 +80,42 @@ export const INERT_DENY_ALL_POLICY: NetworkPolicyV1 = {
   }),
 }
 
+export function capabilityAuthorizationBinding(target: ProviderEffectTargetV1): Digest {
+  return canonicalSha256({
+    kind: "capability_consumption",
+    target_sha256: canonicalSha256(target),
+    authorization_consumption_receipt_sha256: target.authorization_consumption_receipt_sha256,
+  })
+}
+
+export function activationAuthorizationBinding(
+  target: ProviderEffectTargetV1,
+  authorization: ActivationDispatchAuthorizationV1,
+): Digest {
+  return canonicalSha256({
+    kind: "activation",
+    target_sha256: canonicalSha256(target),
+    activation_grant_sha256: authorization.activation_grant_sha256,
+    authorization_consumption_receipt_sha256:
+      authorization.authorization_consumption_receipt_sha256,
+    network_policy: authorization.network_policy,
+  })
+}
+
+export function cleanupAuthorizationBinding(
+  target: ProviderEffectTargetV1,
+  cleanupGrantSha256: Digest,
+  cleanupBasisSha256: Digest,
+): Digest {
+  return canonicalSha256({
+    kind: "cleanup",
+    target_sha256: canonicalSha256(target),
+    cleanup_grant_sha256: cleanupGrantSha256,
+    cleanup_basis_sha256: cleanupBasisSha256,
+    authorization_consumption_receipt_sha256: target.authorization_consumption_receipt_sha256,
+  })
+}
+
 interface AdapterIdentityV1 {
   provider: ManagedProviderIdV1
   sdkPackage: string
@@ -123,6 +159,9 @@ function validateOperation(
   }
   validateGeneration(op)
   validateAdapterCallContext(ctx, op)
+  if (shouldMutate && ctx.dispatch_attempt.kind === "exact_duplicate") {
+    throw adapterError("dispatch_anchor_mismatch")
+  }
   if (ctx.signal?.aborted === true) throw adapterError("validation_failed")
 }
 
@@ -169,6 +208,21 @@ function validateProviderResource(
     resource.ephemeral ||
     resource.provider_resource_version.length === 0 ||
     Number.isNaN(Date.parse(resource.provider_created_at))
+  ) {
+    throw adapterError("provider_state_unknown", { quarantineRequired: true })
+  }
+}
+
+function validateProviderResourceForHandle(
+  resource: AdapterProviderResourceV1,
+  handle: OwnedProviderHandleV1,
+  target: ProviderEffectTargetV1,
+): void {
+  validateProviderResource(resource, target)
+  if (
+    resource.opaque_resource_id !== handle.opaque_resource_id ||
+    resource.provider_created_at !== handle.provider_created_at ||
+    resource.provider_resource_version !== handle.provider_resource_version
   ) {
     throw adapterError("provider_state_unknown", { quarantineRequired: true })
   }
@@ -315,21 +369,50 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     }
   }
 
-  async #withClient<T>(use: (client: ManagedProviderControlPortV1) => Promise<T>): Promise<T> {
-    if (!this.#dependencies.admission.admitted) throw adapterError("unsupported_runtime_feature")
-    return this.#dependencies.credential_port.withAuthenticatedClient(this.#identity.provider, async (client) => {
-      if (client.provider_id !== this.#identity.provider) throw adapterError("operation_target_mismatch")
-      return use(client)
-    })
+  async #guard(
+    ctx: AdapterCallContextV1,
+    op: ProviderOperationV1,
+    phase: "after_anchor" | "before_provider_read" | "before_provider_mutation",
+  ): Promise<void> {
+    try {
+      await this.#dependencies.effect_guard.assertCurrent(ctx, op, phase)
+    } catch (cause) {
+      if (cause instanceof AdapterContractError) throw cause
+      throw adapterError("stale_operation_execution_epoch")
+    }
   }
 
-  async #retryRead<T>(read: () => Promise<T>): Promise<T> {
+  async #withClient<T>(
+    ctx: AdapterCallContextV1,
+    op: ProviderOperationV1,
+    use: (client: ManagedProviderControlPortV1) => Promise<T>,
+  ): Promise<T> {
+    if (!this.#dependencies.admission.admitted) throw adapterError("unsupported_runtime_feature")
+    await this.#guard(ctx, op, "after_anchor")
+    try {
+      return await this.#dependencies.credential_port.withAuthenticatedClient(this.#identity.provider, async (client) => {
+        if (client.provider_id !== this.#identity.provider) throw adapterError("operation_target_mismatch")
+        return use(client)
+      })
+    } catch (cause) {
+      if (cause instanceof AdapterContractError) throw cause
+      throw adapterError("dependency_unavailable", { retryable: true })
+    }
+  }
+
+  async #retryRead<T>(
+    ctx: AdapterCallContextV1,
+    op: ProviderOperationV1,
+    read: () => Promise<T>,
+  ): Promise<T> {
     const policy = this.#dependencies.read_retry_policy
     let lastError: unknown
     for (let attempt = 1; attempt <= policy.max_attempts; attempt += 1) {
       try {
+        await this.#guard(ctx, op, "before_provider_read")
         return await read()
       } catch (cause) {
+        if (cause instanceof AdapterContractError) throw cause
         lastError = cause
         if (attempt === policy.max_attempts) break
         const backoff = Math.min(policy.max_delay_ms, policy.base_delay_ms * 2 ** (attempt - 1))
@@ -342,13 +425,17 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
   async #findByCreationToken(
     client: ManagedProviderControlPortV1,
     token: Digest,
+    ctx: AdapterCallContextV1,
+    op: ProviderOperationV1,
   ): Promise<AdapterProviderResourceV1[]> {
     requireCapability(client, "exact_creation_token_lookup")
     const resources: AdapterProviderResourceV1[] = []
     const cursors = new Set<string>()
     let cursor: string | undefined
     for (let pageCount = 0; pageCount < MAX_INVENTORY_PAGES; pageCount += 1) {
-      const page: ProviderResourcePageV1 = await this.#retryRead(() => client.findByCreationToken(token, cursor))
+      const page: ProviderResourcePageV1 = await this.#retryRead(ctx, op, () =>
+        client.findByCreationToken(token, cursor),
+      )
       resources.push(...page.items)
       if (page.next_cursor === undefined) return resources
       if (cursors.has(page.next_cursor)) throw adapterError("integrity_failed")
@@ -356,6 +443,18 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
       cursor = page.next_cursor
     }
     throw adapterError("provider_state_unknown", { quarantineRequired: true })
+  }
+
+  async #inspectExactHandle(
+    client: ManagedProviderControlPortV1,
+    ctx: AdapterCallContextV1,
+    op: ProviderOperationV1,
+    handle: OwnedProviderHandleV1,
+  ): Promise<AdapterProviderResourceV1> {
+    const resource = await this.#retryRead(ctx, op, () => client.inspectResource(handle.opaque_resource_id))
+    if (resource === "absent") throw adapterError("provider_state_unknown", { quarantineRequired: true })
+    validateProviderResourceForHandle(resource, handle, op.target)
+    return resource
   }
 
   #selectExactCreationCandidate(
@@ -398,14 +497,15 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     if (!isDigest(allocationKey) || spec.workspace_root !== "/workspace" || spec.schema_version !== "sandboxes.runtime/v1") {
       throw adapterError("validation_failed")
     }
-    return this.#withClient(async (client) => {
+    return this.#withClient(ctx, op, async (client) => {
       requireCapability(client, "create_stopped")
       requireCapability(client, "network_policy_readback")
       let resource = this.#selectExactCreationCandidate(
-        await this.#findByCreationToken(client, op.target.provider_idempotency_token_sha256),
+        await this.#findByCreationToken(client, op.target.provider_idempotency_token_sha256, ctx, op),
         op.target,
       )
       if (resource === undefined) {
+        await this.#guard(ctx, op, "before_provider_mutation")
         try {
           resource = await client.createInert({
             target: op.target,
@@ -424,7 +524,12 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
         } catch (cause) {
           let candidates: AdapterProviderResourceV1[]
           try {
-            candidates = await this.#findByCreationToken(client, op.target.provider_idempotency_token_sha256)
+            candidates = await this.#findByCreationToken(
+              client,
+              op.target.provider_idempotency_token_sha256,
+              ctx,
+              op,
+            )
           } catch (lookupCause) {
             return this.#anchorUnknown(ctx, op, lookupCause)
           }
@@ -481,17 +586,22 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     ) {
       throw adapterError("operation_target_mismatch")
     }
-    return this.#withClient(async (client) => {
+    if (ctx.authorization_binding_sha256 !== activationAuthorizationBinding(op.target, authorization)) {
+      throw adapterError("dispatch_anchor_mismatch")
+    }
+    return this.#withClient(ctx, op, async (client) => {
       requireCapability(client, "network_policy_readback")
       let activated: AdapterProviderResourceV1
       try {
-        const before = await this.#retryRead(() => client.inspectResource(handle.opaque_resource_id))
+        const before = await this.#retryRead(ctx, op, () => client.inspectResource(handle.opaque_resource_id))
         if (before === "absent") throw adapterError("provider_state_unknown", { quarantineRequired: true })
-        validateProviderResource(before, op.target)
+        validateProviderResourceForHandle(before, handle, op.target)
+        await this.#guard(ctx, op, "before_provider_mutation")
         const policy = await client.applyNetworkPolicy(handle.opaque_resource_id, authorization.network_policy)
         validateNetworkObservation(policy, authorization.network_policy)
+        await this.#guard(ctx, op, "before_provider_mutation")
         activated = await client.activateResource(handle.opaque_resource_id)
-        validateProviderResource(activated, op.target)
+        validateProviderResourceForHandle(activated, handle, op.target)
         validateNetworkObservation(activated.network_policy, authorization.network_policy)
         if (activated.state !== "active") throw adapterError("provider_state_unknown", { quarantineRequired: true })
       } catch (cause) {
@@ -521,8 +631,8 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
   ): Promise<AdapterObservationV1> {
     validateOperation(ctx, op, "inspect")
     validateHandle(handle, op, this.#identity, this.#dependencies)
-    return this.#withClient(async (client) => {
-      const resource = await this.#retryRead(() => client.inspectResource(handle.opaque_resource_id))
+    return this.#withClient(ctx, op, async (client) => {
+      const resource = await this.#retryRead(ctx, op, () => client.inspectResource(handle.opaque_resource_id))
       if (resource === "absent") {
         const providerReceiptSha256 = canonicalSha256({ observation: "absent", target: canonicalSha256(op.target) })
         const outcomeAnchor = await anchorOutcome(ctx, op, {
@@ -536,7 +646,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
           provider_outcome_anchor_sha256: outcomeAnchor,
         }
       }
-      validateProviderResource(resource, op.target)
+      validateProviderResourceForHandle(resource, handle, op.target)
       const providerReceiptSha256 = safeProviderReceipt(resource)
       const outcomeAnchor = await anchorOutcome(ctx, op, {
         observation: resource.state,
@@ -561,10 +671,13 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     validateOperation(ctx, op, "exec_start")
     validateHandle(handle, op, this.#identity, this.#dependencies)
     validateExecSpec(spec)
-    return this.#withClient(async (client) => {
+    return this.#withClient(ctx, op, async (client) => {
       requireCapability(client, "typed_argv_exec")
       let providerExec
       try {
+        const resource = await this.#inspectExactHandle(client, ctx, op, handle)
+        if (resource.state !== "active") throw adapterError("provider_state_unknown", { quarantineRequired: true })
+        await this.#guard(ctx, op, "before_provider_mutation")
         providerExec = await client.startExec(handle.opaque_resource_id, spec)
       } catch (cause) {
         return this.#anchorUnknown(ctx, op, cause)
@@ -600,7 +713,11 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     validateHandle(handle, op, this.#identity, this.#dependencies)
     validateExecHandle(exec, handle, this.#identity)
     if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw adapterError("validation_failed")
-    const iterable = await this.#withClient(async (client) => client.streamExec(exec))
+    const iterable = await this.#withClient(ctx, op, async (client) => {
+      await this.#inspectExactHandle(client, ctx, op, handle)
+      await this.#guard(ctx, op, "before_provider_read")
+      return client.streamExec(exec)
+    })
     let totalBytes = 0
     let lastSequence = 0n
     let completed = false
@@ -635,10 +752,12 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     validateOperation(ctx, op, "exec_cancel")
     validateHandle(handle, op, this.#identity, this.#dependencies)
     validateExecHandle(exec, handle, this.#identity)
-    return this.#withClient(async (client) => {
+    return this.#withClient(ctx, op, async (client) => {
       requireCapability(client, "whole_guest_cancel")
       let cancellation
       try {
+        await this.#inspectExactHandle(client, ctx, op, handle)
+        await this.#guard(ctx, op, "before_provider_mutation")
         cancellation = await client.cancelExec(exec)
         if (!cancellation.whole_guest_scope_terminated) {
           throw adapterError("provider_state_unknown", { quarantineRequired: true })
@@ -672,9 +791,10 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     const checkedPath = validateWorkspacePath(path)
     validateOperation(ctx, op, "file_stat")
     validateHandle(handle, op, this.#identity, this.#dependencies)
-    return this.#withClient(async (client) => {
+    return this.#withClient(ctx, op, async (client) => {
       requireCapability(client, "native_bounded_files")
-      const stat = await this.#retryRead(() => client.statFile(checkedPath))
+      await this.#inspectExactHandle(client, ctx, op, handle)
+      const stat = await this.#retryRead(ctx, op, () => client.statFile(checkedPath))
       if (stat.path !== checkedPath || stat.size_bytes < 0 || stat.revision < 1n) throw adapterError("integrity_failed")
       await anchorOutcome(ctx, op, { observation: "completed", stat_sha256: canonicalSha256(stat) })
       return stat
@@ -690,8 +810,10 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     validateFileRead(request)
     validateOperation(ctx, op, "file_read")
     validateHandle(handle, op, this.#identity, this.#dependencies)
-    const iterable = await this.#withClient(async (client) => {
+    const iterable = await this.#withClient(ctx, op, async (client) => {
       requireCapability(client, "native_bounded_files")
+      await this.#inspectExactHandle(client, ctx, op, handle)
+      await this.#guard(ctx, op, "before_provider_read")
       return client.readFile(request)
     })
     let offset = request.offset
@@ -724,11 +846,14 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     validateFileWrite(request)
     validateOperation(ctx, op, "file_write")
     validateHandle(handle, op, this.#identity, this.#dependencies)
-    return this.#withClient(async (client) => {
+    return this.#withClient(ctx, op, async (client) => {
       requireCapability(client, "native_bounded_files")
       requireCapability(client, "atomic_file_write")
       let receipt: FileWriteReceiptV1
       try {
+        const resource = await this.#inspectExactHandle(client, ctx, op, handle)
+        if (resource.state !== "active") throw adapterError("provider_state_unknown", { quarantineRequired: true })
+        await this.#guard(ctx, op, "before_provider_mutation")
         receipt = await client.writeFileAtomic(request)
       } catch (cause) {
         return this.#anchorUnknown(ctx, op, cause)
@@ -761,9 +886,10 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     }
     validateOperation(ctx, op, "file_list")
     validateHandle(handle, op, this.#identity, this.#dependencies)
-    return this.#withClient(async (client) => {
+    return this.#withClient(ctx, op, async (client) => {
       requireCapability(client, "native_bounded_files")
-      const page = await this.#retryRead(() => client.listFiles({ ...request, path: checkedPath }))
+      await this.#inspectExactHandle(client, ctx, op, handle)
+      const page = await this.#retryRead(ctx, op, () => client.listFiles({ ...request, path: checkedPath }))
       if (page.items.length > request.limit) throw adapterError("integrity_failed")
       for (const item of page.items) validateWorkspacePath(item.path)
       const paths = page.items.map((item) => item.path)
@@ -780,10 +906,12 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
   ): Promise<CheckpointHintObservationV1> {
     validateOperation(ctx, op, "checkpoint_hint")
     validateHandle(handle, op, this.#identity, this.#dependencies)
-    return this.#withClient(async (client) => {
+    return this.#withClient(ctx, op, async (client) => {
       requireCapability(client, "provider_snapshot_hint")
       let snapshot
       try {
+        await this.#inspectExactHandle(client, ctx, op, handle)
+        await this.#guard(ctx, op, "before_provider_mutation")
         snapshot = await client.createSnapshotHint(handle.opaque_resource_id)
       } catch (cause) {
         return this.#anchorUnknown(ctx, op, cause)
@@ -814,17 +942,16 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
   ): Promise<ExpireObservationV1> {
     validateOperation(ctx, op, expected)
     validateHandle(handle, op, this.#identity, this.#dependencies)
-    return this.#withClient(async (client) => {
+    return this.#withClient(ctx, op, async (client) => {
       if (!client.capabilities.non_destructive_pause && !client.capabilities.stop_preserves_filesystem) {
         throw adapterError("unsupported_runtime_feature")
       }
       let stopped: AdapterProviderResourceV1
       try {
-        const before = await this.#retryRead(() => client.inspectResource(handle.opaque_resource_id))
-        if (before === "absent") throw adapterError("provider_state_unknown", { quarantineRequired: true })
-        validateProviderResource(before, op.target)
+        await this.#inspectExactHandle(client, ctx, op, handle)
+        await this.#guard(ctx, op, "before_provider_mutation")
         stopped = await client.pauseOrStopResource(handle.opaque_resource_id)
-        validateProviderResource(stopped, op.target)
+        validateProviderResourceForHandle(stopped, handle, op.target)
         if (stopped.state !== "inert") throw adapterError("provider_state_unknown", { quarantineRequired: true })
       } catch (cause) {
         return this.#anchorUnknown(ctx, op, cause)
@@ -869,16 +996,17 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     if (!isDigest(ctx.cleanup_grant_sha256) || !isDigest(ctx.cleanup_basis_sha256)) {
       throw adapterError("cleanup_grant_mismatch")
     }
-    return this.#withClient(async (client) => {
+    if (
+      ctx.authorization_binding_sha256 !==
+      cleanupAuthorizationBinding(op.target, ctx.cleanup_grant_sha256, ctx.cleanup_basis_sha256)
+    ) {
+      throw adapterError("dispatch_anchor_mismatch")
+    }
+    return this.#withClient(ctx, op, async (client) => {
       requireCapability(client, "conditional_destroy")
-      let before: AdapterProviderResourceV1 | "absent"
       try {
-        before = await this.#retryRead(() => client.inspectResource(handle.opaque_resource_id))
-        if (before === "absent") throw adapterError("provider_state_unknown", { quarantineRequired: true })
-        validateProviderResource(before, op.target)
-        if (before.provider_resource_version !== handle.provider_resource_version) {
-          throw adapterError("provider_state_unknown", { quarantineRequired: true })
-        }
+        await this.#inspectExactHandle(client, ctx, op, handle)
+        await this.#guard(ctx, op, "before_provider_mutation")
         await client.destroyResource(handle.opaque_resource_id, handle.provider_resource_version)
       } catch (cause) {
         return this.#anchorUnknown(ctx, op, cause)
@@ -888,12 +1016,13 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
       const attempts = this.#dependencies.read_retry_policy.max_attempts
       for (let attempt = 1; attempt <= attempts; attempt += 1) {
         try {
+          await this.#guard(ctx, op, "before_provider_read")
           const observation = await client.inspectResource(handle.opaque_resource_id)
           if (observation === "absent") {
             absent = true
             break
           }
-          validateProviderResource(observation, op.target)
+          validateProviderResourceForHandle(observation, handle, op.target)
         } catch {
           // A failed read is not absence proof. The bounded loop can try another read.
         }
@@ -934,8 +1063,8 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     }
     const op = this.#reconcileOperation(ctx)
     validateAdapterCallContext(ctx, op)
-    return this.#withClient(async (client) => {
-      const observation = await this.#retryRead(() => client.lookupOperation(target))
+    return this.#withClient(ctx, op, async (client) => {
+      const observation = await this.#retryRead(ctx, op, () => client.lookupOperation(target))
       const outcomeAnchor = await anchorOutcome(ctx, op, { observation, target_sha256: canonicalSha256(target) })
       return {
         observation,
@@ -950,9 +1079,9 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
   async list_owned_resources(ctx: ReconcileContextV1, cursor?: string): Promise<OwnedResourcePageV1> {
     const op = this.#reconcileOperation(ctx)
     validateAdapterCallContext(ctx, op)
-    return this.#withClient(async (client) => {
+    return this.#withClient(ctx, op, async (client) => {
       requireCapability(client, "ownership_inventory")
-      const page = await this.#retryRead(() => client.listOwnedResources(cursor))
+      const page = await this.#retryRead(ctx, op, () => client.listOwnedResources(cursor))
       const items = page.items.map((resource) => ({
         provider_resource_sha256: canonicalSha256(resource.opaque_resource_id),
         immutable_fingerprint_sha256: resource.immutable_fingerprint_sha256,
@@ -978,13 +1107,13 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
       deadline: ctx.deadline,
     }
     validateOperation(ctx, op, "inspect")
-    return this.#withClient(async (client) => {
+    return this.#withClient(ctx, op, async (client) => {
       requireCapability(client, "ownership_inventory")
       const resources: AdapterProviderResourceV1[] = []
       const cursors = new Set<string>()
       let cursor: string | undefined
       for (let pageCount = 0; pageCount < MAX_INVENTORY_PAGES; pageCount += 1) {
-        const page = await this.#retryRead(() => client.listOwnedResources(cursor))
+        const page = await this.#retryRead(ctx, op, () => client.listOwnedResources(cursor))
         resources.push(...page.items)
         if (page.next_cursor === undefined) {
           const findings = resources.map((resource) => {

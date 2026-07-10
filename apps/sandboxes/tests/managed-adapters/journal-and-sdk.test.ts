@@ -114,6 +114,24 @@ describe("immutable journal identity", () => {
       expect.objectContaining({ code: "dispatch_anchor_mismatch" }),
     )
   })
+
+  test("generation-changing journal records bind the exact predecessor and successor pair", () => {
+    const op = makeOperation("create_inert")
+    const ctx = makeContext(op, new FakeJournal())
+    const record = {
+      ...ctx.invocation_anchor.record,
+      generation_transition_sha256: digest("wrong-generation-pair"),
+    }
+    const tampered = {
+      ...ctx,
+      invocation_anchor: makeAnchorReceipt(record),
+    }
+    op.external_anchor_receipt_sha256 = tampered.invocation_anchor.record_sha256
+
+    expect(() => validateAdapterCallContext(tampered, op)).toThrowError(
+      expect.objectContaining({ code: "dispatch_anchor_mismatch" }),
+    )
+  })
 })
 describe("official SDK pin mappings", () => {
   test("pins exact supply-chain-eligible provider SDK builds", () => {

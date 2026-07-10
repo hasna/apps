@@ -1,11 +1,15 @@
 import { describe, expect, test } from "bun:test"
 import {
   AdapterContractError,
+  activationAuthorizationBinding,
   canonicalSha256,
+  cleanupAuthorizationBinding,
   createDaytonaCloudAdapter,
   createE2bAdapter,
   validateWorkspacePath,
   type AdapterCallContextV1,
+  type ActivationDispatchAuthorizationV1,
+  type DestroyContextV1,
   type ManagedProviderAdapterV1,
   type ManagedProviderIdV1,
   type OwnedProviderHandleV1,
@@ -13,9 +17,11 @@ import {
 import {
   BROKER_ONLY_POLICY,
   FakeCredentialPort,
+  FakeEffectGuard,
   FakeJournal,
   FakeProviderClient,
   READ_RETRY_POLICY,
+  bindAuthorization,
   digest,
   makeContext,
   makeOperation,
@@ -50,12 +56,14 @@ type Harness = {
   client: FakeProviderClient
   credentials: FakeCredentialPort
   journal: FakeJournal
+  effectGuard: FakeEffectGuard
 }
 
 function harness(provider: ManagedProviderIdV1): Harness {
   const client = new FakeProviderClient(provider)
   const credentials = new FakeCredentialPort(client)
   const journal = new FakeJournal()
+  const effectGuard = new FakeEffectGuard()
   const deps = {
     credential_port: credentials,
     installation_id: "installation-1",
@@ -68,18 +76,69 @@ function harness(provider: ManagedProviderIdV1): Harness {
       exact_sdk_version: provider === "e2b" ? "2.31.0" : "0.193.0",
     },
     read_retry_policy: READ_RETRY_POLICY,
+    effect_guard: effectGuard,
   } as const
   return {
     adapter: provider === "e2b" ? createE2bAdapter(deps) : createDaytonaCloudAdapter(deps),
     client,
     credentials,
     journal,
+    effectGuard,
   }
 }
 
 async function create(h: Harness): Promise<OwnedProviderHandleV1> {
   const op = makeOperation("create_inert")
   return h.adapter.create_inert(makeContext(op, h.journal), SPEC, op, digest("77"))
+}
+
+async function activate(h: Harness, handle: OwnedProviderHandleV1): Promise<void> {
+  const op = makeOperation("activate")
+  const authorization = activationAuthorization(op)
+  await h.adapter.activate(
+    bindAuthorization(
+      makeContext(op, h.journal),
+      op,
+      activationAuthorizationBinding(op.target, authorization),
+    ),
+    handle,
+    authorization,
+    op,
+  )
+}
+
+function activationAuthorization(op: ReturnType<typeof makeOperation>): ActivationDispatchAuthorizationV1 {
+  return {
+    activation_grant_sha256: digest("81"),
+    authorization_consumption_receipt_sha256: op.target.authorization_consumption_receipt_sha256,
+    network_policy: BROKER_ONLY_POLICY,
+  }
+}
+
+function activationContext(
+  h: Harness,
+  op: ReturnType<typeof makeOperation>,
+  authorization: ActivationDispatchAuthorizationV1,
+): AdapterCallContextV1 {
+  return bindAuthorization(
+    makeContext(op, h.journal),
+    op,
+    activationAuthorizationBinding(op.target, authorization),
+  )
+}
+
+function destroyContext(h: Harness, op: ReturnType<typeof makeOperation>): DestroyContextV1 {
+  const cleanupGrant = digest("91")
+  const cleanupBasis = digest("92")
+  return {
+    ...bindAuthorization(
+      makeContext(op, h.journal),
+      op,
+      cleanupAuthorizationBinding(op.target, cleanupGrant, cleanupBasis),
+    ),
+    cleanup_grant_sha256: cleanupGrant,
+    cleanup_basis_sha256: cleanupBasis,
+  }
 }
 
 for (const provider of ["e2b", "daytona_cloud"] as const) {
@@ -153,6 +212,39 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
       expect(h.client.createCalls).toBe(0)
     })
 
+    test("an exact duplicate dispatch record never repeats the provider mutation", async () => {
+      const h = harness(provider)
+      const op = makeOperation("create_inert")
+      const initial = makeContext(op, h.journal)
+      const duplicate = {
+        ...initial,
+        invocation_anchor: { ...initial.invocation_anchor, duplicate: true },
+        dispatch_attempt: {
+          kind: "exact_duplicate" as const,
+          operation_execution_epoch: initial.fence.operation_execution_epoch,
+          prior_record_sha256: initial.invocation_anchor.record_sha256,
+        },
+      }
+
+      await expect(h.adapter.create_inert(duplicate, SPEC, op, digest("77"))).rejects.toMatchObject({
+        code: "dispatch_anchor_mismatch",
+      })
+      expect(h.client.createCalls).toBe(0)
+    })
+
+    test("rechecks current effect authority after anchoring and immediately before provider mutation", async () => {
+      const h = harness(provider)
+      h.effectGuard.rejectPhase = "before_provider_mutation"
+      const op = makeOperation("create_inert")
+
+      await expect(h.adapter.create_inert(makeContext(op, h.journal), SPEC, op, digest("77"))).rejects.toMatchObject({
+        code: "stale_operation_execution_epoch",
+      })
+      expect(h.effectGuard.calls).toContain("after_anchor")
+      expect(h.effectGuard.calls).toContain("before_provider_mutation")
+      expect(h.client.createCalls).toBe(0)
+    })
+
     test("fails closed on inert deny-all network readback mismatch", async () => {
       const h = harness(provider)
       h.client.networkMismatch = true
@@ -168,14 +260,11 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
       const h = harness(provider)
       const handle = await create(h)
       const op = makeOperation("activate")
+      const authorization = activationAuthorization(op)
       const receipt = await h.adapter.activate(
-        makeContext(op, h.journal),
+        activationContext(h, op, authorization),
         handle,
-        {
-          activation_grant_sha256: digest("81"),
-          authorization_consumption_receipt_sha256: op.target.authorization_consumption_receipt_sha256,
-          network_policy: BROKER_ONLY_POLICY,
-        },
+        authorization,
         op,
       )
 
@@ -190,25 +279,50 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
       const handle = await create(h)
       h.client.networkMismatch = true
       const op = makeOperation("activate")
+      const authorization = activationAuthorization(op)
 
       await expect(
         h.adapter.activate(
-          makeContext(op, h.journal),
+          activationContext(h, op, authorization),
           handle,
-          {
-            activation_grant_sha256: digest("81"),
-            authorization_consumption_receipt_sha256: op.target.authorization_consumption_receipt_sha256,
-            network_policy: BROKER_ONLY_POLICY,
-          },
+          authorization,
           op,
         ),
       ).rejects.toMatchObject({ code: "provider_state_unknown" })
       expect(h.client.activateCalls).toBe(0)
     })
 
+    test("activation grant bytes cannot change after the external dispatch anchor", async () => {
+      const h = harness(provider)
+      const handle = await create(h)
+      const op = makeOperation("activate")
+      const anchoredAuthorization = {
+        activation_grant_sha256: digest("81"),
+        authorization_consumption_receipt_sha256: op.target.authorization_consumption_receipt_sha256,
+        network_policy: BROKER_ONLY_POLICY,
+      }
+      const binding = canonicalSha256({
+        kind: "activation",
+        target_sha256: canonicalSha256(op.target),
+        ...anchoredAuthorization,
+      })
+      const ctx = bindAuthorization(makeContext(op, h.journal), op, binding)
+
+      await expect(
+        h.adapter.activate(
+          ctx,
+          handle,
+          { ...anchoredAuthorization, activation_grant_sha256: digest("82") },
+          op,
+        ),
+      ).rejects.toMatchObject({ code: "dispatch_anchor_mismatch" })
+      expect(h.client.activateCalls).toBe(0)
+    })
+
     test("forwards typed argv without building a command string and streams bounded frames", async () => {
       const h = harness(provider)
       const handle = await create(h)
+      await activate(h, handle)
       const start = makeOperation("exec_start", { generation_transition: undefined })
       const exec = await h.adapter.start_exec(makeContext(start, h.journal), handle, EXEC_SPEC, start)
 
@@ -229,6 +343,7 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
     test("requires whole-guest cancellation proof", async () => {
       const h = harness(provider)
       const handle = await create(h)
+      await activate(h, handle)
       const start = makeOperation("exec_start", { generation_transition: undefined })
       const exec = await h.adapter.start_exec(makeContext(start, h.journal), handle, EXEC_SPEC, start)
       h.client.cancelProof = false
@@ -259,6 +374,7 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
     test("uses native byte file operations with atomic preconditions", async () => {
       const h = harness(provider)
       const handle = await create(h)
+      await activate(h, handle)
       const bytes = new TextEncoder().encode("safe bytes")
       const writeOp = makeOperation("file_write", {
         external_anchor_kind: "DISPATCHED",
@@ -317,18 +433,36 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
       const h = harness(provider)
       const handle = await create(h)
       const op = makeOperation("destroy")
-      const observation = await h.adapter.destroy(
-        {
-          ...makeContext(op, h.journal),
-          cleanup_grant_sha256: digest("91"),
-          cleanup_basis_sha256: digest("92"),
-        },
-        handle,
-        op,
-      )
+      const observation = await h.adapter.destroy(destroyContext(h, op), handle, op)
 
       expect(observation.terminal_condition).toBe("verified_absent")
       expect(h.client.destroyCalls).toBe(1)
+    })
+
+    test("native creation-time reuse blocks destroy before the provider mutation", async () => {
+      const h = harness(provider)
+      const handle = await create(h)
+      const resource = h.client.resources.get(handle.opaque_resource_id)
+      if (resource === undefined) throw new Error("fixture resource missing")
+      resource.provider_created_at = "2026-07-10T10:00:09.000Z"
+      const op = makeOperation("destroy")
+
+      await expect(
+        h.adapter.destroy(destroyContext(h, op), handle, op),
+      ).rejects.toMatchObject({ code: "provider_state_unknown", quarantine_required: true })
+      expect(h.client.destroyCalls).toBe(0)
+    })
+
+    test("cleanup grant and basis digests cannot change after dispatch anchoring", async () => {
+      const h = harness(provider)
+      const handle = await create(h)
+      const op = makeOperation("destroy")
+      const ctx = destroyContext(h, op)
+
+      await expect(
+        h.adapter.destroy({ ...ctx, cleanup_basis_sha256: digest("93") }, handle, op),
+      ).rejects.toMatchObject({ code: "dispatch_anchor_mismatch" })
+      expect(h.client.destroyCalls).toBe(0)
     })
 
     test("never reports destroyed while provider absence remains unproven", async () => {
@@ -338,15 +472,7 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
       const op = makeOperation("destroy")
 
       await expect(
-        h.adapter.destroy(
-          {
-            ...makeContext(op, h.journal),
-            cleanup_grant_sha256: digest("91"),
-            cleanup_basis_sha256: digest("92"),
-          },
-          handle,
-          op,
-        ),
+        h.adapter.destroy(destroyContext(h, op), handle, op),
       ).rejects.toMatchObject({ code: "provider_state_unknown" })
       expect(h.client.destroyCalls).toBe(1)
     })
@@ -390,6 +516,7 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
       expect(error).toBeInstanceOf(AdapterContractError)
       expect(JSON.stringify(error)).not.toContain("raw-native-id")
       expect(JSON.stringify(error)).not.toContain("raw-secret-provider-body")
+      expect((error as Error).cause).toBeUndefined()
     })
   })
 }

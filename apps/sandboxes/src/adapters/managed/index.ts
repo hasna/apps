@@ -1,4 +1,11 @@
-export { INERT_DENY_ALL_POLICY, ManagedProviderAdapter, validateWorkspacePath } from "./adapter"
+export {
+  INERT_DENY_ALL_POLICY,
+  ManagedProviderAdapter,
+  activationAuthorizationBinding,
+  capabilityAuthorizationBinding,
+  cleanupAuthorizationBinding,
+  validateWorkspacePath,
+} from "./adapter"
 export { canonicalJson, canonicalSha256, isDigest, safeEqual } from "./canonical"
 export { createDaytonaCloudAdapter } from "./daytona-cloud"
 export { createE2bAdapter } from "./e2b"
@@ -16,6 +23,8 @@ export {
   buildDaytonaCreateParams,
   buildE2bCreateOptions,
   type DaytonaCreateMappingInputV1,
+  type DaytonaOfficialSandboxSurfaceV1,
+  type DaytonaOfficialSdkSurfaceV1,
   type E2bCreateMappingInputV1,
   type E2bOfficialSandboxInfoV1,
   type E2bOfficialSdkSurfaceV1,

@@ -64,7 +64,11 @@ function assertAnchorRecord(
     record.operation_digest !== op.target.operation_digest ||
     record.request_sha256 !== op.request_sha256 ||
     record.target_sha256 !== canonicalSha256(op.target) ||
-    record.fence_sha256 !== canonicalSha256(expectedFence)
+    record.fence_sha256 !== canonicalSha256(expectedFence) ||
+    record.generation_transition_sha256 !==
+      canonicalSha256(op.generation_transition ?? { kind: "no_generation_transition" }) ||
+    record.authorization_binding_sha256 !== ctx.authorization_binding_sha256 ||
+    !isDigest(ctx.authorization_binding_sha256)
   ) {
     throw adapterError("dispatch_anchor_mismatch")
   }
@@ -155,6 +159,10 @@ export function outcomeRecord(
     request_sha256: op.request_sha256,
     target_sha256: canonicalSha256(op.target),
     fence_sha256: canonicalSha256(ctx.fence),
+    generation_transition_sha256: canonicalSha256(
+      op.generation_transition ?? { kind: "no_generation_transition" },
+    ),
+    authorization_binding_sha256: ctx.authorization_binding_sha256,
     payload_sha256: payloadSha256,
   }
 }

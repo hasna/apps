@@ -85,6 +85,8 @@ export interface JournalRecordV1 {
   request_sha256: Digest
   target_sha256: Digest
   fence_sha256: Digest
+  generation_transition_sha256: Digest
+  authorization_binding_sha256: Digest
   payload_sha256: Digest
 }
 
@@ -136,6 +138,7 @@ export interface AdapterCallContextV1 {
   intent_anchor: JournalAnchorReceiptV1
   invocation_anchor: JournalAnchorReceiptV1
   outcome_journal: OutcomeJournalPortV1
+  authorization_binding_sha256: Digest
   dispatch_attempt: DispatchAttemptAuthorizationV1
   signal?: AbortSignal
 }
@@ -425,6 +428,19 @@ export interface ReadRetryPolicyV1 {
   max_delay_ms: number
 }
 
+export type ProviderEffectGuardPhaseV1 =
+  | "after_anchor"
+  | "before_provider_read"
+  | "before_provider_mutation"
+
+export interface AdapterEffectGuardPortV1 {
+  assertCurrent(
+    ctx: AdapterCallContextV1,
+    operation: ProviderOperationV1,
+    phase: ProviderEffectGuardPhaseV1,
+  ): Promise<void>
+}
+
 export interface ManagedAdapterDependenciesV1 {
   credential_port: ManagedProviderCredentialPortV1
   installation_id: string
@@ -433,6 +449,7 @@ export interface ManagedAdapterDependenciesV1 {
   adapter_build_sha256: Digest
   admission: ProviderAdmissionV1
   read_retry_policy: ReadRetryPolicyV1
+  effect_guard: AdapterEffectGuardPortV1
 }
 
 export interface ManagedProviderControlPortV1 {

@@ -1,4 +1,9 @@
-import type { CreateSandboxFromSnapshotParams, Resources } from "@daytona/sdk"
+import type {
+  CreateSandboxFromSnapshotParams,
+  Daytona,
+  Resources,
+  Sandbox as DaytonaSandbox,
+} from "@daytona/sdk"
 import type { Sandbox, SandboxInfo, SandboxOpts } from "e2b"
 import type { Digest, ManagedProviderIdV1 } from "./types"
 
@@ -11,6 +16,23 @@ export type E2bOfficialSdkSurfaceV1 = Pick<
 >
 
 export type E2bOfficialSandboxInfoV1 = SandboxInfo
+
+export type DaytonaOfficialSdkSurfaceV1 = Pick<
+  Daytona,
+  "create" | "delete" | "get" | "list" | "start" | "stop"
+>
+
+export type DaytonaOfficialSandboxSurfaceV1 = Pick<
+  DaytonaSandbox,
+  | "delete"
+  | "fs"
+  | "pause"
+  | "process"
+  | "refreshData"
+  | "start"
+  | "stop"
+  | "updateNetworkSettings"
+>
 
 export interface OwnershipMetadataV1 {
   installation_sha256: Digest

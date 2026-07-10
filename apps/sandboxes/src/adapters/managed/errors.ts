@@ -26,7 +26,7 @@ export class AdapterContractError extends Error {
     code: AdapterErrorCodeV1,
     options: { retryable?: boolean; quarantineRequired?: boolean; cause?: unknown } = {},
   ) {
-    super(code, options.cause === undefined ? undefined : { cause: options.cause })
+    super(code)
     this.code = code
     this.retryable = options.retryable ?? false
     this.quarantine_required = options.quarantineRequired ?? false
