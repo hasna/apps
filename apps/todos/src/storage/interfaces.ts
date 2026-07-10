@@ -302,9 +302,11 @@ export interface TodosAuditStore {
     context?: TodosStorageContext,
   ): MaybePromise<TaskHistory>;
   addComment(input: CreateCommentInput, context?: TodosStorageContext): MaybePromise<TaskComment>;
+  /** Backward-compatible pre-pagination overload. */
+  getComments(taskId: string, context?: TodosStorageContext): MaybePromise<TaskComment[]>;
   getComments(
     taskId: string,
-    options?: TodosCommentListOptions,
+    options: TodosCommentListOptions,
     context?: TodosStorageContext,
   ): MaybePromise<TaskComment[]>;
   getTaskHistory(taskId: string, context?: TodosStorageContext): MaybePromise<TaskHistory[]>;
@@ -316,6 +318,24 @@ export interface TodosCommentListOptions {
   limit?: number;
   /** Return comments strictly older than this stable `(created_at, id)` tuple. */
   before?: { created_at: string; id: string };
+}
+
+/**
+ * Resolve the positional comment-list arguments without interpreting a legacy
+ * storage context as pagination options. An empty second argument remains a
+ * legacy context; callers that need pagination should provide `limit` or
+ * `before` (or pass the context explicitly as argument three).
+ */
+export function resolveTodosCommentListArgs(
+  optionsOrContext?: TodosCommentListOptions | TodosStorageContext,
+  context?: TodosStorageContext,
+): { options: TodosCommentListOptions | undefined; context: TodosStorageContext | undefined } {
+  const hasPaginationKey = optionsOrContext !== undefined &&
+    ("limit" in optionsOrContext || "before" in optionsOrContext);
+  if (context !== undefined || hasPaginationKey) {
+    return { options: optionsOrContext as TodosCommentListOptions | undefined, context };
+  }
+  return { options: undefined, context: optionsOrContext as TodosStorageContext | undefined };
 }
 
 export interface TodosSyncStore {

@@ -39,8 +39,10 @@ import {
   signAwsV4Request,
   uploadRunArtifactsToS3,
   type HybridTodosStorageAdapter,
+  type TodosAuditStore,
   type TodosPostgresQueryClient,
   type TodosStorageAdapter,
+  type TodosStorageContext,
   type TodosStorageSnapshot,
 } from "../storage.js";
 import { s3CredentialsFromEnv } from "../cli/commands/storage-commands.js";
@@ -62,6 +64,14 @@ afterEach(() => {
 });
 
 describe("storage adapter contracts", () => {
+  test("keeps legacy getComments implementations assignable", () => {
+    const legacy = {
+      getComments: (_taskId: string, _context?: TodosStorageContext): TaskComment[] => [],
+    } satisfies Pick<TodosAuditStore, "getComments">;
+
+    expect(legacy.getComments("task", { requestId: "legacy" })).toEqual([]);
+  });
+
   test("keeps pure storage interfaces independent of SQLite modules", () => {
     const source = readFileSync(new URL("./interfaces.ts", import.meta.url), "utf8");
 
@@ -214,6 +224,8 @@ describe("storage adapter contracts", () => {
     }
 
     expect((await adapter.audit.getComments(task.id)).map((comment) => comment.id))
+      .toEqual(["same-c", "same-b", "same-a"]);
+    expect((await adapter.audit.getComments(task.id, { requestId: "legacy-context" })).map((comment) => comment.id))
       .toEqual(["same-c", "same-b", "same-a"]);
     expect((await adapter.audit.getComments(task.id, { limit: 2 })).map((comment) => comment.id))
       .toEqual(["same-b", "same-c"]);

@@ -59,7 +59,12 @@ import {
 } from "../db/audit.js";
 import { addComment, listComments } from "../db/comments.js";
 import { getDatabase } from "../db/database.js";
-import type { TodosStorageAdapter } from "./interfaces.js";
+import {
+  resolveTodosCommentListArgs,
+  type TodosCommentListOptions,
+  type TodosStorageAdapter,
+  type TodosStorageContext,
+} from "./interfaces.js";
 import {
   exportSqliteTodosStorageSnapshot,
   importSqliteTodosStorageSnapshot,
@@ -141,7 +146,12 @@ export function createLocalSqliteTodosStorageAdapter(
       logTaskChange: (taskId, action, field, oldValue, newValue, agentId) =>
         logTaskChange(taskId, action, field, oldValue, newValue, agentId, database()),
       addComment: (input) => addComment(input, database()),
-      getComments: (taskId, options) => {
+      getComments: (
+        taskId: string,
+        optionsOrContext?: TodosCommentListOptions | TodosStorageContext,
+        context?: TodosStorageContext,
+      ) => {
+        const { options } = resolveTodosCommentListArgs(optionsOrContext, context);
         if (options?.limit !== undefined &&
             (!Number.isSafeInteger(options.limit) || options.limit < 1 || options.limit > 1_001)) {
           throw new Error("Comment limit must be an integer between 1 and 1001");

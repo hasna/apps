@@ -47,6 +47,7 @@ import type {
   TodosTaskVerification,
   UpdateTemplateInput,
 } from "./interfaces.js";
+import { resolveTodosCommentListArgs } from "./interfaces.js";
 import {
   DEFAULT_TODOS_POSTGRES_CURSOR_TABLE,
   DEFAULT_TODOS_POSTGRES_SYNC_TABLE,
@@ -192,9 +193,16 @@ export function createPostgresTodosStorageAdapter(
       logTaskChange: (taskId, action, field, oldValue, newValue, agentId, context) =>
         logTaskChange(taskId, action, field, oldValue, newValue, agentId, store, context),
       addComment: (input, context) => addComment(input, store, context),
-      getComments: async (taskId, options) => (await store.listComments(taskId, options))
-        .map(redactComment)
-        .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id)),
+      getComments: async (
+        taskId: string,
+        optionsOrContext?: TodosCommentListOptions | TodosStorageContext,
+        context?: TodosStorageContext,
+      ) => {
+        const { options } = resolveTodosCommentListArgs(optionsOrContext, context);
+        return (await store.listComments(taskId, options))
+          .map(redactComment)
+          .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
+      },
       getTaskHistory: async (taskId) => (await store.list<TaskHistory>("audit_history"))
         .filter((entry) => entry.task_id === taskId)
         .sort((a, b) => a.created_at.localeCompare(b.created_at)),
