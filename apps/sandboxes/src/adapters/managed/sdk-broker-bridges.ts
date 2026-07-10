@@ -30,8 +30,12 @@ class E2bGuestBrokerSdkSessionV1 implements GuestBrokerSdkSessionV1 {
   #closed = false
   readonly #handle: Pick<CommandHandle, "sendStdin" | "closeStdin">
 
-  constructor(handle: Pick<CommandHandle, "sendStdin" | "closeStdin">) {
+  constructor(
+    handle: Pick<CommandHandle, "sendStdin" | "closeStdin">,
+    registerFinalizer: (finalize: () => Promise<void>) => void,
+  ) {
     this.#handle = handle
+    registerFinalizer(() => this.#closeInput())
   }
 
   sendFrame(frame: GuestBrokerRequestFrameV1): Promise<void> {
@@ -39,11 +43,26 @@ class E2bGuestBrokerSdkSessionV1 implements GuestBrokerSdkSessionV1 {
     return this.#handle.sendStdin(serializeGuestBrokerRequestFrame(frame))
   }
 
-  async closeInput(): Promise<void> {
+  async #closeInput(): Promise<void> {
     if (this.#closed) return
     this.#closed = true
     await this.#handle.closeStdin()
   }
+
+  closeInput(): Promise<void> {
+    return this.#closeInput()
+  }
+}
+
+function createE2bGuestBrokerSession(handle: Pick<CommandHandle, "sendStdin" | "closeStdin">): {
+  session: GuestBrokerSdkSessionV1
+  finalize: () => Promise<void>
+} {
+  let finalize!: () => Promise<void>
+  const session = new E2bGuestBrokerSdkSessionV1(handle, (registered) => {
+    finalize = registered
+  })
+  return { session, finalize }
 }
 
 export async function withE2bGuestBrokerSdkSession(
@@ -56,11 +75,11 @@ export async function withE2bGuestBrokerSdkSession(
     envs: {},
     stdin: true,
   })
-  const session = new E2bGuestBrokerSdkSessionV1(handle)
+  const { session, finalize } = createE2bGuestBrokerSession(handle)
   try {
     await use(session)
   } finally {
-    await session.closeInput()
+    await finalize()
   }
 }
 
@@ -70,8 +89,12 @@ class DaytonaGuestBrokerSdkSessionV1 implements GuestBrokerSdkSessionV1 {
   #closed = false
   readonly #handle: Pick<PtyHandle, "sendInput" | "disconnect">
 
-  constructor(handle: Pick<PtyHandle, "sendInput" | "disconnect">) {
+  constructor(
+    handle: Pick<PtyHandle, "sendInput" | "disconnect">,
+    registerFinalizer: (finalize: () => Promise<void>) => void,
+  ) {
     this.#handle = handle
+    registerFinalizer(() => this.#closeInput())
   }
 
   sendFrame(frame: GuestBrokerRequestFrameV1): Promise<void> {
@@ -79,11 +102,26 @@ class DaytonaGuestBrokerSdkSessionV1 implements GuestBrokerSdkSessionV1 {
     return this.#handle.sendInput(serializeGuestBrokerRequestFrame(frame))
   }
 
-  async closeInput(): Promise<void> {
+  async #closeInput(): Promise<void> {
     if (this.#closed) return
     this.#closed = true
     await this.#handle.disconnect()
   }
+
+  closeInput(): Promise<void> {
+    return this.#closeInput()
+  }
+}
+
+function createDaytonaGuestBrokerSession(handle: Pick<PtyHandle, "sendInput" | "disconnect">): {
+  session: GuestBrokerSdkSessionV1
+  finalize: () => Promise<void>
+} {
+  let finalize!: () => Promise<void>
+  const session = new DaytonaGuestBrokerSdkSessionV1(handle, (registered) => {
+    finalize = registered
+  })
+  return { session, finalize }
 }
 
 export async function withDaytonaGuestBrokerSdkSession(
@@ -101,11 +139,11 @@ export async function withDaytonaGuestBrokerSdkSession(
   })
   await handle.waitForConnection()
   await handle.sendInput(`${MANAGED_GUEST_BROKER_BOOTSTRAP_COMMAND}\n`)
-  const session = new DaytonaGuestBrokerSdkSessionV1(handle)
+  const { session, finalize } = createDaytonaGuestBrokerSession(handle)
   try {
     await use(session)
   } finally {
-    await session.closeInput()
+    await finalize()
   }
 }
 

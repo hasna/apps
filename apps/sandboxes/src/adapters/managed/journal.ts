@@ -57,17 +57,25 @@ export class JournalIdentityLedgerV1 {
 }
 
 function hasExactKeys(value: object, keys: readonly string[]): boolean {
-  const actual = Object.keys(value).sort()
-  const expected = [...keys].sort()
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index])
+  try {
+    const actual = Reflect.ownKeys(value)
+    return (
+      actual.length === keys.length &&
+      actual.every((key) => {
+        if (typeof key !== "string" || !keys.includes(key)) return false
+        const descriptor = Object.getOwnPropertyDescriptor(value, key)
+        return descriptor?.enumerable === true && "value" in descriptor
+      })
+    )
+  } catch {
+    return false
+  }
 }
 
 function validateReceipt(receipt: JournalAnchorReceiptV1): void {
   if (
     receipt === null ||
     typeof receipt !== "object" ||
-    receipt.record === null ||
-    typeof receipt.record !== "object" ||
     !hasExactKeys(receipt, [
       "anchor_schema_version",
       "journal_sequence",
@@ -78,8 +86,15 @@ function validateReceipt(receipt: JournalAnchorReceiptV1): void {
       "signing_key_id",
       "signature",
       "record",
-    ]) ||
-    !hasExactKeys(receipt.record, [
+    ])
+  ) {
+    throw adapterError("dispatch_anchor_mismatch")
+  }
+  const record = receipt.record
+  if (
+    record === null ||
+    typeof record !== "object" ||
+    !hasExactKeys(record, [
       "schema_version",
       "outcome_schema_version",
       "outcome_schema_sha256",
@@ -123,33 +138,33 @@ function validateReceipt(receipt: JournalAnchorReceiptV1): void {
     !isDigest(receipt.prior_frontier_digest) ||
     !isDigest(receipt.record_digest) ||
     !isDigest(receipt.frontier_digest) ||
-    receipt.record.schema_version !== "sandboxes.effect-journal/v1" ||
-    typeof receipt.record.operation_execution_epoch !== "bigint" ||
-    typeof receipt.record.resource_lifecycle_generation !== "bigint" ||
-    !isDigest(receipt.record.outcome_schema_sha256) ||
-    !isDigest(receipt.record.provider_idempotency_token_sha256) ||
-    !isDigest(receipt.record.provider_creation_token_sha256) ||
-    !isDigest(receipt.record.immutable_fingerprint_sha256) ||
-    !isDigest(receipt.record.operation_digest) ||
-    !isDigest(receipt.record.request_sha256) ||
-    !isDigest(receipt.record.idempotency_key_sha256) ||
-    !isDigest(receipt.record.target_sha256) ||
-    !isDigest(receipt.record.fence_sha256) ||
-    !isDigest(receipt.record.generation_transition_sha256) ||
-    !isDigest(receipt.record.authorization_binding_sha256) ||
-    !isDigest(receipt.record.payload_sha256) ||
-    typeof receipt.record.deadline !== "string" ||
-    Number.isNaN(Date.parse(receipt.record.deadline)) ||
-    canonicalSha256(receipt.record) !== receipt.record_digest ||
+    record.schema_version !== "sandboxes.effect-journal/v1" ||
+    typeof record.operation_execution_epoch !== "bigint" ||
+    typeof record.resource_lifecycle_generation !== "bigint" ||
+    !isDigest(record.outcome_schema_sha256) ||
+    !isDigest(record.provider_idempotency_token_sha256) ||
+    !isDigest(record.provider_creation_token_sha256) ||
+    !isDigest(record.immutable_fingerprint_sha256) ||
+    !isDigest(record.operation_digest) ||
+    !isDigest(record.request_sha256) ||
+    !isDigest(record.idempotency_key_sha256) ||
+    !isDigest(record.target_sha256) ||
+    !isDigest(record.fence_sha256) ||
+    !isDigest(record.generation_transition_sha256) ||
+    !isDigest(record.authorization_binding_sha256) ||
+    !isDigest(record.payload_sha256) ||
+    typeof record.deadline !== "string" ||
+    Number.isNaN(Date.parse(record.deadline)) ||
+    canonicalSha256(record) !== receipt.record_digest ||
     receipt.frontier_digest !== expectedFrontierDigest ||
-    receipt.record.outcome_schema_version !== EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION ||
-    receipt.record.outcome_schema_sha256 !== EFFECT_JOURNAL_OUTCOME_SCHEMA_SHA256 ||
-    (receipt.record.record_kind === "OUTCOME" &&
-      (receipt.record.outcome_kind === null ||
-        !OUTCOME_KINDS.has(receipt.record.outcome_kind) ||
-        !isDigest(receipt.record.provider_receipt_sha256))) ||
-    (receipt.record.record_kind !== "OUTCOME" &&
-      (receipt.record.outcome_kind !== null || receipt.record.provider_receipt_sha256 !== null))
+    record.outcome_schema_version !== EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION ||
+    record.outcome_schema_sha256 !== EFFECT_JOURNAL_OUTCOME_SCHEMA_SHA256 ||
+    (record.record_kind === "OUTCOME" &&
+      (record.outcome_kind === null ||
+        !OUTCOME_KINDS.has(record.outcome_kind) ||
+        !isDigest(record.provider_receipt_sha256))) ||
+    (record.record_kind !== "OUTCOME" &&
+      (record.outcome_kind !== null || record.provider_receipt_sha256 !== null))
   ) {
     throw adapterError("dispatch_anchor_mismatch")
   }
@@ -210,7 +225,20 @@ function validateHigherEpoch(ctx: AdapterCallContextV1, op: ProviderOperationV1)
     throw adapterError("dispatch_anchor_mismatch")
   }
   const attemptRecord = attempt as Record<string, unknown>
-  if (attemptRecord.kind === "initial") {
+  let kind: unknown
+  try {
+    const kindDescriptor = Object.getOwnPropertyDescriptor(attempt, "kind")
+    if (
+      kindDescriptor?.enumerable !== true ||
+      !("value" in kindDescriptor)
+    ) {
+      throw adapterError("dispatch_anchor_mismatch")
+    }
+    kind = kindDescriptor.value
+  } catch {
+    throw adapterError("dispatch_anchor_mismatch")
+  }
+  if (kind === "initial") {
     if (
       !hasExactKeys(attempt, ["kind", "operation_execution_epoch"]) ||
       typeof attemptRecord.operation_execution_epoch !== "bigint"
@@ -224,7 +252,7 @@ function validateHigherEpoch(ctx: AdapterCallContextV1, op: ProviderOperationV1)
     }
     return
   }
-  if (attemptRecord.kind === "exact_duplicate") {
+  if (kind === "exact_duplicate") {
     if (
       !hasExactKeys(attempt, ["kind", "operation_execution_epoch", "prior_record_sha256"]) ||
       typeof attemptRecord.operation_execution_epoch !== "bigint" ||
@@ -241,7 +269,7 @@ function validateHigherEpoch(ctx: AdapterCallContextV1, op: ProviderOperationV1)
     return
   }
   if (
-    attemptRecord.kind !== "higher_epoch_after_failed_no_effect" ||
+    kind !== "higher_epoch_after_failed_no_effect" ||
     !hasExactKeys(attempt, ["kind", "previous_operation_execution_epoch", "authorization"]) ||
     typeof attemptRecord.previous_operation_execution_epoch !== "bigint" ||
     attemptRecord.authorization === null ||

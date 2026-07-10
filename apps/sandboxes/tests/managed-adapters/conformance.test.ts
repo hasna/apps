@@ -533,11 +533,24 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
       const op = makeOperation("create_inert")
 
       expect((h.adapter as unknown as { constructor?: unknown }).constructor).toBeUndefined()
-      expect(Object.getOwnPropertyDescriptor(Object.getPrototypeOf(h.adapter), "constructor")).toMatchObject({
-        value: undefined,
-        writable: false,
-        configurable: false,
-      })
+      expect(Object.getPrototypeOf(h.adapter)).toBeNull()
+      expect(Reflect.ownKeys(h.adapter).sort()).toEqual([
+        "activate",
+        "cancel_exec",
+        "create_inert",
+        "descriptor",
+        "destroy",
+        "expire",
+        "inspect",
+        "list_files",
+        "list_owned_resources",
+        "lookup_operation",
+        "quarantine",
+        "read_file",
+        "start_exec",
+        "stat_file",
+        "write_file",
+      ])
 
       await expect(
         h.adapter.create_inert(makeContext(op, h.journal), SPEC, op, digest("77")),
@@ -996,6 +1009,121 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
       ).rejects.toMatchObject({ code: "provider_state_unknown", quarantine_required: true })
       expect(writeHarness.journal.outcomes).toHaveLength(outcomesBeforeWrite)
       expect(writeHarness.physicalSafetyGate.containReasons).toContain("provider_effect_ambiguous")
+
+      let revisionGetterReads = 0
+      const accessorReceipt: Record<string, unknown> = {
+        path,
+        size_bytes: bytes.byteLength,
+        sha256: canonicalSha256(bytes),
+      }
+      Object.defineProperty(accessorReceipt, "revision", {
+        enumerable: true,
+        get() {
+          revisionGetterReads += 1
+          if (revisionGetterReads > 1) throw new Error("unstable provider revision")
+          return 1n
+        },
+      })
+      writeHarness.client.writeFileAtomic = async () => accessorReceipt as never
+      const accessorWriteOp = makeOperation("file_write", {
+        external_anchor_kind: "DISPATCHED",
+        generation_transition: undefined,
+      })
+      await expect(
+        writeHarness.adapter.write_file(
+          makeContext(accessorWriteOp, writeHarness.journal),
+          writeHandle,
+          { path, bytes, if_absent: true },
+          accessorWriteOp,
+        ),
+      ).rejects.toMatchObject({ code: "provider_state_unknown", quarantine_required: true })
+      expect(revisionGetterReads).toBe(0)
+      expect(writeHarness.journal.outcomes).toHaveLength(outcomesBeforeWrite)
+    })
+
+    test("snapshots provider-owned stat, read, and write results before returning", async () => {
+      const path = validateWorkspacePath("repo/file.txt")
+
+      const statHarness = harness(provider)
+      const statHandle = await create(statHarness)
+      await activate(statHarness, statHandle)
+      const providerStat = {
+        path,
+        type: "file" as const,
+        size_bytes: 1,
+        sha256: canonicalSha256(new Uint8Array([1])),
+        revision: 1n,
+        mode: 0o600,
+      }
+      statHarness.client.statFile = async () => providerStat
+      const statOp = makeOperation("file_stat", {
+        external_anchor_kind: "READ_PROBE",
+        generation_transition: undefined,
+      })
+      const stat = await statHarness.adapter.stat_file(
+        makeContext(statOp, statHarness.journal),
+        statHandle,
+        path,
+        statOp,
+      )
+      providerStat.revision = 2n
+      expect(stat.revision).toBe(1n)
+
+      const readHarness = harness(provider)
+      const readHandle = await create(readHarness)
+      await activate(readHarness, readHandle)
+      const providerBytes = new Uint8Array([1])
+      readHarness.client.readFile = async function* () {
+        yield {
+          bytes: providerBytes,
+          total_file_sha256: canonicalSha256(providerBytes),
+          file_revision: 1n,
+        }
+      }
+      const readOp = makeOperation("file_read", {
+        external_anchor_kind: "READ_PROBE",
+        generation_transition: undefined,
+      })
+      const readChunks: Array<{ bytes: Uint8Array }> = []
+      for await (const chunk of readHarness.adapter.read_file(
+        makeContext(readOp, readHarness.journal),
+        readHandle,
+        { path, offset: 0, length: 10 },
+        readOp,
+      )) {
+        readChunks.push(chunk)
+      }
+      providerBytes[0] = 2
+      expect(readChunks[0]?.bytes[0]).toBe(1)
+
+      const writeHarness = harness(provider)
+      const writeHandle = await create(writeHarness)
+      await activate(writeHarness, writeHandle)
+      const writeBytes = new TextEncoder().encode("safe bytes")
+      const providerWriteReceipt = {
+        path,
+        size_bytes: writeBytes.byteLength,
+        sha256: canonicalSha256(writeBytes),
+        revision: 1n,
+      }
+      writeHarness.client.writeFileAtomic = async () => providerWriteReceipt
+      const appendOutcome = writeHarness.journal.appendOutcome.bind(writeHarness.journal)
+      writeHarness.journal.appendOutcome = async (record) => {
+        providerWriteReceipt.revision = 2n
+        return appendOutcome(record)
+      }
+      const writeOp = makeOperation("file_write", {
+        external_anchor_kind: "DISPATCHED",
+        generation_transition: undefined,
+      })
+      const writeReceipt = await writeHarness.adapter.write_file(
+        makeContext(writeOp, writeHarness.journal),
+        writeHandle,
+        { path, bytes: writeBytes, if_absent: true },
+        writeOp,
+      )
+      expect(providerWriteReceipt.revision).toBe(2n)
+      expect(writeReceipt.revision).toBe(1n)
     })
 
     test("expire pauses or stops without destroying and refuses unsafe auto-delete", async () => {

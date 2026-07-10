@@ -454,9 +454,47 @@ function validateProviderPage(page: ProviderResourcePageV1): void {
 }
 
 function hasExactKeys(value: object, keys: readonly string[]): boolean {
-  const actual = Object.keys(value).sort()
-  const expected = [...keys].sort()
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index])
+  try {
+    const actual = Reflect.ownKeys(value)
+    return (
+      actual.length === keys.length &&
+      actual.every((key) => {
+        if (typeof key !== "string" || !keys.includes(key)) return false
+        const descriptor = Object.getOwnPropertyDescriptor(value, key)
+        return descriptor?.enumerable === true && "value" in descriptor
+      })
+    )
+  } catch {
+    return false
+  }
+}
+
+function hasExactKeysWithOptional(
+  value: object,
+  required: readonly string[],
+  optional: readonly string[],
+): boolean {
+  try {
+    const actual = Reflect.ownKeys(value)
+    if (actual.length < required.length || actual.length > required.length + optional.length) {
+      return false
+    }
+    for (const requiredKey of required) {
+      if (!actual.includes(requiredKey)) return false
+    }
+    return actual.every((key) => {
+      if (
+        typeof key !== "string" ||
+        (!required.includes(key) && !optional.includes(key))
+      ) {
+        return false
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)
+      return descriptor?.enumerable === true && "value" in descriptor
+    })
+  } catch {
+    return false
+  }
 }
 
 function validateExecSpec(spec: ExecSpecV1, operationDeadline: string): void {
@@ -623,6 +661,14 @@ function snapshotData<T>(value: T): T {
     return structuredClone(value)
   } catch {
     throw adapterError("validation_failed")
+  }
+}
+
+function snapshotProviderData<T>(value: T): T {
+  try {
+    return structuredClone(value)
+  } catch {
+    throw adapterError("integrity_failed")
   }
 }
 
@@ -1446,18 +1492,32 @@ class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
         broker,
         this.#dependencies.guest_broker_authenticator,
       )
-      const stat = await this.#retryRead(ctx, op, () => client.statFile(handle.opaque_resource_id, broker, frame))
+      const providerStat: unknown = await this.#retryRead(ctx, op, () =>
+        client.statFile(handle.opaque_resource_id, broker, frame),
+      )
+      if (
+        !isRecord(providerStat) ||
+        !hasExactKeysWithOptional(
+          providerStat,
+          ["path", "type", "size_bytes", "revision", "mode"],
+          ["sha256", "symlink_target"],
+        )
+      ) {
+        throw adapterError("integrity_failed")
+      }
+      const stat = snapshotProviderData(providerStat) as unknown as FileStatV1
       if (
         !isRecord(stat) ||
-        !hasExactKeys(stat, [
-          "path",
-          "type",
-          "size_bytes",
-          "revision",
-          "mode",
-          ...(stat.sha256 === undefined ? [] : ["sha256"]),
-          ...(stat.symlink_target === undefined ? [] : ["symlink_target"]),
-        ]) ||
+        !hasExactKeysWithOptional(
+          stat,
+          ["path", "type", "size_bytes", "revision", "mode"],
+          ["sha256", "symlink_target"],
+        )
+      ) {
+        throw adapterError("integrity_failed")
+      }
+      const statKeys = Reflect.ownKeys(stat)
+      if (
         stat.path !== checkedPath ||
         !["file", "directory", "symlink"].includes(stat.type) ||
         !Number.isSafeInteger(stat.size_bytes) ||
@@ -1467,8 +1527,10 @@ class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
         !Number.isSafeInteger(stat.mode) ||
         stat.mode < 0 ||
         stat.mode > 0o7777 ||
-        (stat.sha256 !== undefined && !isDigest(stat.sha256)) ||
-        (stat.symlink_target !== undefined && validateWorkspacePath(stat.symlink_target) !== stat.symlink_target) ||
+        (statKeys.includes("sha256") && !isDigest(stat.sha256)) ||
+        (statKeys.includes("symlink_target") &&
+          (typeof stat.symlink_target !== "string" ||
+            validateWorkspacePath(stat.symlink_target) !== stat.symlink_target)) ||
         (stat.mode & 0o6000) !== 0
       ) {
         throw adapterError("integrity_failed")
@@ -1521,16 +1583,38 @@ class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
         await this.#guard(ctx, op, "before_provider_read")
         const next = await iterator.next()
         if (next.done) break
-        const providerChunk = next.value
-        if (!isRecord(providerChunk)) throw adapterError("integrity_failed")
+        const rawProviderChunk: unknown = next.value
+        if (
+          !isRecord(rawProviderChunk) ||
+          !hasExactKeys(rawProviderChunk, ["bytes", "total_file_sha256", "file_revision"])
+        ) {
+          throw adapterError("integrity_failed")
+        }
+        const providerChunk: unknown = snapshotProviderData(rawProviderChunk)
+        if (
+          !isRecord(providerChunk) ||
+          !hasExactKeys(providerChunk, ["bytes", "total_file_sha256", "file_revision"])
+        ) {
+          throw adapterError("integrity_failed")
+        }
         const bytes = providerChunk.bytes
         if (!(bytes instanceof Uint8Array)) throw adapterError("integrity_failed")
-        total += bytes.byteLength
         if (
-          !hasExactKeys(providerChunk, ["bytes", "total_file_sha256", "file_revision"]) ||
+          typeof SharedArrayBuffer !== "undefined" &&
+          bytes.buffer instanceof SharedArrayBuffer
+        ) {
+          throw adapterError("integrity_failed")
+        }
+        if (
           bytes.byteLength === 0 ||
           bytes.byteLength > MAX_FILE_READ_BYTES ||
-          total > request.length ||
+          total + bytes.byteLength > request.length
+        ) {
+          throw adapterError("integrity_failed")
+        }
+        const ownedBytes = bytes.slice()
+        total += ownedBytes.byteLength
+        if (
           !isDigest(providerChunk.total_file_sha256) ||
           typeof providerChunk.file_revision !== "bigint" ||
           providerChunk.file_revision < 1n ||
@@ -1543,12 +1627,12 @@ class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
         fileRevision = providerChunk.file_revision
         buffered.push({
           offset,
-          bytes,
-          sha256: canonicalSha256(bytes),
+          bytes: ownedBytes,
+          sha256: canonicalSha256(ownedBytes),
           total_file_sha256: totalFileSha256,
           file_revision: fileRevision,
         })
-        offset += bytes.byteLength
+        offset += ownedBytes.byteLength
       }
       return buffered
     }))
@@ -1572,7 +1656,8 @@ class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
     return this.#withClient(ctx, op, (client) => this.#withLifecycleLock(op, async () => {
       requireCapability(client, "native_bounded_files")
       requireCapability(client, "atomic_file_write")
-      let receipt: FileWriteReceiptV1
+      let receipt!: FileWriteReceiptV1
+      let providerReceiptSha256!: Digest
       try {
         const resource = await this.#inspectExactHandle(client, ctx, op, handle)
         if (resource.state !== "active") throw adapterError("provider_state_unknown", { quarantineRequired: true })
@@ -1584,22 +1669,35 @@ class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
           this.#dependencies.guest_broker_authenticator,
         )
         await this.#beforeProviderMutation(ctx, op)
-        receipt = await client.writeFileAtomic(handle.opaque_resource_id, broker, frame, op.target)
+        const providerReceipt: unknown = await client.writeFileAtomic(
+          handle.opaque_resource_id,
+          broker,
+          frame,
+          op.target,
+        )
+        if (
+          !isRecord(providerReceipt) ||
+          !hasExactKeys(providerReceipt, ["path", "size_bytes", "sha256", "revision"])
+        ) {
+          throw adapterError("integrity_failed")
+        }
+        const snapshot: unknown = snapshotProviderData(providerReceipt)
+        if (
+          !isRecord(snapshot) ||
+          !hasExactKeys(snapshot, ["path", "size_bytes", "sha256", "revision"]) ||
+          snapshot.path !== request.path ||
+          snapshot.size_bytes !== request.bytes.byteLength ||
+          snapshot.sha256 !== canonicalSha256(request.bytes) ||
+          typeof snapshot.revision !== "bigint" ||
+          snapshot.revision < 1n
+        ) {
+          throw adapterError("integrity_failed")
+        }
+        receipt = snapshot as unknown as FileWriteReceiptV1
+        providerReceiptSha256 = canonicalSha256(receipt)
       } catch (cause) {
         return this.#anchorUnknown(ctx, op, cause)
       }
-      if (
-        !isRecord(receipt) ||
-        !hasExactKeys(receipt, ["path", "size_bytes", "sha256", "revision"]) ||
-        receipt.path !== request.path ||
-        receipt.size_bytes !== request.bytes.byteLength ||
-        receipt.sha256 !== canonicalSha256(request.bytes) ||
-        typeof receipt.revision !== "bigint" ||
-        receipt.revision < 1n
-      ) {
-        return this.#anchorUnknown(ctx, op, adapterError("integrity_failed"))
-      }
-      const providerReceiptSha256 = canonicalSha256(receipt)
       const outcomeAnchor = await this.#anchorOutcome(ctx, op, {
         observation: "completed",
         provider_receipt_sha256: providerReceiptSha256,
@@ -1947,19 +2045,50 @@ class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
   }
 }
 
-// A factory result must not leak the otherwise module-private constructor.
-Object.defineProperty(ManagedProviderAdapter.prototype, "constructor", {
-  value: undefined,
-  writable: false,
-  enumerable: false,
-  configurable: false,
-})
+function createManagedProviderAdapterFacade(
+  core: ManagedProviderAdapter,
+): ManagedProviderAdapterV1 {
+  const facade = {
+    __proto__: null,
+    descriptor: (...args: Parameters<ManagedProviderAdapterV1["descriptor"]>) =>
+      core.descriptor(...args),
+    create_inert: (...args: Parameters<ManagedProviderAdapterV1["create_inert"]>) =>
+      core.create_inert(...args),
+    activate: (...args: Parameters<ManagedProviderAdapterV1["activate"]>) =>
+      core.activate(...args),
+    inspect: (...args: Parameters<ManagedProviderAdapterV1["inspect"]>) =>
+      core.inspect(...args),
+    start_exec: (...args: Parameters<ManagedProviderAdapterV1["start_exec"]>) =>
+      core.start_exec(...args),
+    cancel_exec: (...args: Parameters<ManagedProviderAdapterV1["cancel_exec"]>) =>
+      core.cancel_exec(...args),
+    stat_file: (...args: Parameters<ManagedProviderAdapterV1["stat_file"]>) =>
+      core.stat_file(...args),
+    read_file: (...args: Parameters<ManagedProviderAdapterV1["read_file"]>) =>
+      core.read_file(...args),
+    write_file: (...args: Parameters<ManagedProviderAdapterV1["write_file"]>) =>
+      core.write_file(...args),
+    list_files: (...args: Parameters<ManagedProviderAdapterV1["list_files"]>) =>
+      core.list_files(...args),
+    expire: (...args: Parameters<ManagedProviderAdapterV1["expire"]>) =>
+      core.expire(...args),
+    quarantine: (...args: Parameters<ManagedProviderAdapterV1["quarantine"]>) =>
+      core.quarantine(...args),
+    destroy: (...args: Parameters<ManagedProviderAdapterV1["destroy"]>) =>
+      core.destroy(...args),
+    lookup_operation: (...args: Parameters<ManagedProviderAdapterV1["lookup_operation"]>) =>
+      core.lookup_operation(...args),
+    list_owned_resources: (...args: Parameters<ManagedProviderAdapterV1["list_owned_resources"]>) =>
+      core.list_owned_resources(...args),
+  }
+  return facade
+}
 
 export function createProductionManagedProviderAdapter(
   identity: AdapterIdentityV1,
   dependencies: ManagedAdapterDependenciesV1,
 ): ManagedProviderAdapterV1 {
-  return new ManagedProviderAdapter(identity, dependencies, async (input) => {
+  const core = new ManagedProviderAdapter(identity, dependencies, async (input) => {
     const checkedDependencies = input.dependencies
     if (
       !checkedDependencies.admission.admitted ||
@@ -1980,6 +2109,7 @@ export function createProductionManagedProviderAdapter(
       throw adapterError("unsupported_runtime_feature")
     }
   })
+  return createManagedProviderAdapterFacade(core)
 }
 
 /**
@@ -1991,5 +2121,7 @@ export function __testOnlyCreateManagedProviderAdapterCore(
   dependencies: ManagedAdapterDependenciesV1,
   assertAdmission: ManagedAdmissionCheckV1,
 ): ManagedProviderAdapterV1 {
-  return new ManagedProviderAdapter(identity, dependencies, assertAdmission)
+  return createManagedProviderAdapterFacade(
+    new ManagedProviderAdapter(identity, dependencies, assertAdmission),
+  )
 }

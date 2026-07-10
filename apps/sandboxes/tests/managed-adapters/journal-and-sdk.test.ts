@@ -58,9 +58,34 @@ describe("managed package boundary", () => {
     const manifest = await Bun.file(new URL("../../package.json", import.meta.url)).json() as {
       exports?: unknown
       files?: unknown
+      scripts?: Record<string, unknown>
     }
     expect(manifest.exports).toEqual({ ".": "./dist/index.js" })
     expect(manifest.files).toEqual(["dist/index.js"])
+    expect(manifest.scripts?.prepack).toBe("bun run build")
+
+    const build = await Bun.build({
+      entrypoints: [new URL("../../src/adapters/managed/index.ts", import.meta.url).pathname],
+      external: ["e2b", "@daytona/sdk"],
+      format: "esm",
+      target: "bun",
+    })
+    expect(build.success).toBe(true)
+    const bundledSource = await build.outputs[0]!.text()
+    const originalDefineProperty = Object.defineProperty
+    let constructorMaskAttempted = false
+    const bundleUrl = URL.createObjectURL(new Blob([bundledSource], { type: "text/javascript" }))
+    Object.defineProperty = ((target: object, propertyKey: PropertyKey, attributes: PropertyDescriptor) => {
+      if (propertyKey === "constructor") constructorMaskAttempted = true
+      return originalDefineProperty(target, propertyKey, attributes)
+    }) as typeof Object.defineProperty
+    try {
+      await import(bundleUrl)
+    } finally {
+      Object.defineProperty = originalDefineProperty
+      URL.revokeObjectURL(bundleUrl)
+    }
+    expect(constructorMaskAttempted).toBe(false)
   })
 })
 
@@ -144,10 +169,34 @@ describe("immutable journal identity", () => {
   test("dispatch variants and failed-no-effect proofs are closed, typed shapes", () => {
     const op = makeOperation("create_inert")
     const initial = makeContext(op, new FakeJournal())
+    const nonEnumerableInitial = {
+      kind: "initial",
+      operation_execution_epoch: initial.fence.operation_execution_epoch,
+    }
+    Object.defineProperty(nonEnumerableInitial, "hidden", {
+      enumerable: false,
+      value: true,
+    })
+    const accessorKind: Record<string, unknown> = {
+      operation_execution_epoch: initial.fence.operation_execution_epoch,
+    }
+    Object.defineProperty(accessorKind, "kind", {
+      enumerable: true,
+      get() {
+        throw new Error("untrusted dispatch getter")
+      },
+    })
     const malformedAttempts = [
       { kind: "unrecognized" },
       { kind: "initial", operation_execution_epoch: 1n, extra: true },
       { kind: "initial", operation_execution_epoch: "1" },
+      {
+        kind: "initial",
+        operation_execution_epoch: initial.fence.operation_execution_epoch,
+        [Symbol("hidden")]: true,
+      },
+      nonEnumerableInitial,
+      accessorKind,
       { kind: "exact_duplicate", operation_execution_epoch: 1n },
       {
         kind: "higher_epoch_after_failed_no_effect",
@@ -270,6 +319,23 @@ describe("immutable journal identity", () => {
     expect(() => validateAdapterCallContext(changed, { ...op, fence: ctx.fence })).toThrowError(
       expect.objectContaining({ code: "dispatch_anchor_mismatch" }),
     )
+
+    const symbolExtendedProof = {
+      ...proof,
+      [Symbol("hidden")]: true,
+    }
+    expect(() =>
+      validateAdapterCallContext(
+        {
+          ...ctx,
+          dispatch_attempt: {
+            ...ctx.dispatch_attempt,
+            authorization: symbolExtendedProof,
+          },
+        } as never,
+        { ...op, fence: ctx.fence },
+      ),
+    ).toThrowError(expect.objectContaining({ code: "dispatch_anchor_mismatch" }))
   })
 
   test("anchor receipt digest must cover the exact record", () => {
@@ -372,13 +438,14 @@ describe("official SDK guest-broker compensation bridges", () => {
   test("E2B runs only the fixed command and sends framed bytes over stdin", async () => {
     const commandsSeen: string[] = []
     const stdin: Uint8Array[] = []
+    let closeCalls = 0
     const commands = {
       async run(command: string, options: unknown) {
         commandsSeen.push(command)
         expect(options).toMatchObject({ background: true, cwd: "/workspace", envs: {}, stdin: true })
         return {
           async sendStdin(bytes: Uint8Array) { stdin.push(bytes) },
-          async closeStdin() {},
+          async closeStdin() { closeCalls += 1 },
         }
       },
     } as unknown as E2bOfficialBrokerCommandsV1
@@ -389,24 +456,27 @@ describe("official SDK guest-broker compensation bridges", () => {
       expect((session as unknown as Record<string, unknown>).handle).toBeUndefined()
       expect(Reflect.ownKeys(session)).not.toContain("handle")
       await session.sendFrame(brokerFrame())
+      ;(session as { closeInput: () => Promise<void> }).closeInput = async () => {}
     })
 
     expect(commandsSeen).toEqual([MANAGED_GUEST_BROKER_BOOTSTRAP_COMMAND])
     expect(JSON.stringify(commandsSeen)).not.toContain("not-a-shell")
     expect(stdin).toHaveLength(1)
+    expect(closeCalls).toBe(1)
     expect(new DataView(stdin[0]!.buffer).getUint32(0, false)).toBe(stdin[0]!.byteLength - 4)
     await expect(closedSession!.sendFrame(brokerFrame())).rejects.toThrow("guest_broker_session_closed")
   })
 
   test("Daytona starts a fixed PTY and sends caller data only after the fixed bootstrap", async () => {
     const inputs: Array<string | Uint8Array> = []
+    let disconnectCalls = 0
     const process = {
       async createPty(options: { id: string; cwd?: string; envs?: Record<string, string> }) {
         expect(options).toMatchObject({ id: DAYTONA_GUEST_BROKER_PTY_ID, cwd: "/workspace", envs: {} })
         return {
           async waitForConnection() {},
           async sendInput(input: string | Uint8Array) { inputs.push(input) },
-          async disconnect() {},
+          async disconnect() { disconnectCalls += 1 },
         }
       },
     } as unknown as DaytonaOfficialBrokerProcessV1
@@ -417,11 +487,13 @@ describe("official SDK guest-broker compensation bridges", () => {
       expect((session as unknown as Record<string, unknown>).handle).toBeUndefined()
       expect(Reflect.ownKeys(session)).not.toContain("handle")
       await session.sendFrame(brokerFrame())
+      ;(session as { closeInput: () => Promise<void> }).closeInput = async () => {}
     })
 
     expect(inputs[0]).toBe(`${MANAGED_GUEST_BROKER_BOOTSTRAP_COMMAND}\n`)
     expect(typeof inputs[0] === "string" ? inputs[0] : "").not.toContain("not-a-shell")
     expect(inputs[1]).toBeInstanceOf(Uint8Array)
+    expect(disconnectCalls).toBe(1)
     await expect(closedSession!.sendFrame(brokerFrame())).rejects.toThrow("guest_broker_session_closed")
   })
 
