@@ -206,6 +206,28 @@ describe("evidence upload output safety", () => {
 
     const nonError = { toString: () => "CANARY_NON_ERROR_STRINGIFIER" };
     expect(sanitizeEvidenceTransportError(nonError).message.includes("CANARY_NON_ERROR")).toBe(false);
+
+    const firstCapabilityKey = "https://synthetic.invalid/key/CANARY_PROPERTY_KEY_ONE?Synthetic-Credential=CANARY_KEY_CREDENTIAL_ONE";
+    const secondCapabilityKey = "https://synthetic.invalid/key/CANARY_PROPERTY_KEY_TWO?Synthetic-Credential=CANARY_KEY_CREDENTIAL_TWO";
+    const keyBearingError = new Error("safe property-key failure") as Error & { body?: Record<string, unknown> };
+    Object.defineProperty(keyBearingError, firstCapabilityKey, {
+      configurable: true,
+      enumerable: true,
+      value: "safe top-level value",
+      writable: true,
+    });
+    keyBearingError.body = {
+      [firstCapabilityKey]: "safe nested value one",
+      [secondCapabilityKey]: "safe nested value two",
+    };
+    const safeKeyBearingError = sanitizeEvidenceTransportError(keyBearingError) as Error & { body?: Record<string, unknown> };
+    const safeTopLevelKeys = Object.getOwnPropertyNames(safeKeyBearingError);
+    const safeNestedKeys = Object.keys(safeKeyBearingError.body ?? {});
+    const serializedKeys = `${safeTopLevelKeys.join("|")}\n${safeNestedKeys.join("|")}\n${JSON.stringify(safeKeyBearingError)}`;
+    expect(serializedKeys.includes("CANARY_PROPERTY_KEY")).toBe(false);
+    expect(serializedKeys.includes("CANARY_KEY_CREDENTIAL")).toBe(false);
+    expect(serializedKeys.includes("synthetic.invalid")).toBe(false);
+    expect(new Set(safeNestedKeys).size).toBe(2);
   });
 
   test("preserves the public one-shot upload result contract", () => {

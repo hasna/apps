@@ -117,7 +117,9 @@ private asset ids and object keys stay in operator artifacts.
 - Transport errors are recursively copied into a sanitized error surrogate with
   the same prototype/status. The surrogate shadows executable serializers,
   string coercion, and custom inspectors, and never returns the unsafe original,
-  including when fields are immutable or accessor-backed.
+  including when fields are immutable or accessor-backed. Both property names
+  and values are redacted recursively; colliding redacted names receive stable
+  numeric suffixes so fields cannot overwrite one another.
 - Store access events for reads, downloads, signing, linking, and verification.
 - Track scan status even when the current implementation marks local/S3 direct uploads as `skipped`.
 - Track retention and legal hold metadata now so S3 Object Lock can be enabled without app schema changes.
