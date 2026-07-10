@@ -81,7 +81,6 @@ export function postgresTodosSyncSchemaSql(
     // tags/eq containment via GIN).
     `CREATE INDEX IF NOT EXISTS ${tableName}_task_status_idx ON ${tableName} ((payload->>'status')) WHERE object_type = 'tasks' AND deleted_at IS NULL`,
     `CREATE INDEX IF NOT EXISTS ${tableName}_task_project_idx ON ${tableName} ((payload->>'project_id')) WHERE object_type = 'tasks' AND deleted_at IS NULL`,
-    `CREATE INDEX IF NOT EXISTS ${tableName}_comment_task_created_idx ON ${tableName} (service, (payload->>'task_id'), (payload->>'created_at'), object_id) WHERE object_type = 'comments' AND deleted_at IS NULL`,
     `CREATE INDEX IF NOT EXISTS ${tableName}_payload_gin ON ${tableName} USING gin (payload jsonb_path_ops)`,
     `CREATE TABLE IF NOT EXISTS ${cursorTableName} (
       service text NOT NULL,
@@ -91,6 +90,20 @@ export function postgresTodosSyncSchemaSql(
       PRIMARY KEY (service, cursor_name)
     )`,
   ];
+}
+
+/**
+ * Predeploy-only comment cursor index. CONCURRENTLY avoids blocking writes on
+ * the shared sync table and must run outside a transaction before app rollout;
+ * it is deliberately excluded from request-path `ensureSchema()`.
+ */
+export function postgresTodosCommentCursorIndexSql(
+  tableName = DEFAULT_TODOS_POSTGRES_SYNC_TABLE,
+): string {
+  assertSafeIdentifier(tableName);
+  return `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${tableName}_comment_task_created_idx
+    ON ${tableName} (service, (payload->>'task_id'), (payload->>'created_at'), object_id)
+    WHERE object_type = 'comments' AND deleted_at IS NULL`;
 }
 
 export class PostgresTodosSyncStore {

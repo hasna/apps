@@ -195,6 +195,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
       has_more: false,
       next_cursor: null,
       limit: 100,
+      pagination_supported: true,
     });
     expect(calls[0]!.method).toBe("GET");
     expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/task%2Fwith%20%3F%20reserved/comments?limit=100");
@@ -238,6 +239,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
       has_more: false,
       next_cursor: null,
       limit: 100,
+      pagination_supported: false,
     });
   });
 
@@ -257,7 +259,13 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     }));
     const client = getTodosCloudClient(CLOUD_ENV)!;
     const page = await cloudListComments(client, "t-page", { limit: 25, cursor: "opaque-current" });
-    expect(page).toMatchObject({ count: 1, has_more: true, next_cursor: "opaque-next", limit: 25 });
+    expect(page).toMatchObject({
+      count: 1,
+      has_more: true,
+      next_cursor: "opaque-next",
+      limit: 25,
+      pagination_supported: true,
+    });
     expect(calls).toHaveLength(1);
     expect(calls[0]!.url).toBe(
       "https://todos.hasna.xyz/v1/tasks/t-page/comments?limit=25&cursor=opaque-current",
@@ -271,6 +279,8 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
       { comments: null },
       { comments: [{}], count: 1 },
       { comments: [], count: 1 },
+      { comments: [], count: 0, has_more: false },
+      { comments: [], count: 0, next_cursor: null },
       { comments: [], count: 0, has_more: true, next_cursor: null },
       { comments: [], count: 0, has_more: false, next_cursor: "unexpected" },
     ];
@@ -282,7 +292,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     }
   });
 
-  test("comments rejects invalid limits and server pages larger than requested", async () => {
+  test("comments rejects invalid limits and paginated server pages larger than requested", async () => {
     const client = getTodosCloudClient(CLOUD_ENV)!;
     for (const limit of [0, 501, 1.5, Number.NaN]) {
       await expect(cloudListComments(client, "t-limit", { limit })).rejects.toThrow(/limit/i);
@@ -298,6 +308,31 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     ], count: 2, has_more: false, next_cursor: null } }));
     await expect(cloudListComments(getTodosCloudClient(CLOUD_ENV)!, "t-limit", { limit: 1 }))
       .rejects.toThrow(/exceeds requested limit/i);
+  });
+
+  test("comments caps an unpaginated predecessor response and explicitly reports legacy truncation", async () => {
+    const comments = Array.from({ length: 150 }, (_, index) => ({
+      id: `legacy-${String(index).padStart(3, "0")}`,
+      task_id: "t-legacy",
+      agent_id: null,
+      session_id: null,
+      content: `legacy ${index}`,
+      type: "comment" as const,
+      progress_pct: null,
+      created_at: `2026-07-10T00:${String(Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}.000Z`,
+    }));
+    const calls = installFetch(() => ({ body: { comments, count: comments.length } }));
+    const page = await cloudListComments(getTodosCloudClient(CLOUD_ENV)!, "t-legacy", { limit: 100 });
+    expect(page.comments).toHaveLength(100);
+    expect(page.comments[0]!.id).toBe("legacy-050");
+    expect(page).toMatchObject({
+      count: 100,
+      has_more: true,
+      next_cursor: null,
+      limit: 100,
+      pagination_supported: false,
+    });
+    expect(calls).toHaveLength(1);
   });
 
   test("comments gives an actionable compatibility error for an older server and propagates 5xx", async () => {

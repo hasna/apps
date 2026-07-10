@@ -78,7 +78,14 @@ async function findFreePort(start: number): Promise<number> {
 }
 
 async function runMigrate(): Promise<void> {
-  const { ensureCloudSchema, normalizeCloudPayloads, pingCloud, resolveCloudDatabaseUrl, closeCloud } =
+  const {
+    ensureCloudSchema,
+    ensureCloudCommentCursorIndex,
+    normalizeCloudPayloads,
+    pingCloud,
+    resolveCloudDatabaseUrl,
+    closeCloud,
+  } =
     await import("./cloud.js");
   if (!resolveCloudDatabaseUrl()) {
     console.error("migrate: no database URL (HASNA_TODOS_DATABASE_URL / TODOS_DATABASE_URL / DATABASE_URL)");
@@ -91,6 +98,8 @@ async function runMigrate(): Promise<void> {
   console.log("migrate: normalizing legacy double-encoded jsonb payloads…");
   const normalized = await normalizeCloudPayloads();
   console.log(`migrate: normalized ${normalized} payload row(s)`);
+  console.log("migrate: prebuilding comment cursor index concurrently…");
+  await ensureCloudCommentCursorIndex();
   console.log("migrate: done");
   await closeCloud();
   process.exit(0);
@@ -102,7 +111,10 @@ async function runCommentRedactionBackfill(): Promise<void> {
     resolveCloudDatabaseUrl,
     closeCloud,
   } = await import("./cloud.js");
-  const { COMMENT_REDACTION_BACKFILL_CONFIRMATION } = await import("../storage/comment-redaction-backfill.js");
+  const {
+    COMMENT_REDACTION_BACKFILL_CONFIRMATION,
+    isCommentRedactionBackfillComplete,
+  } = await import("../storage/comment-redaction-backfill.js");
   if (!resolveCloudDatabaseUrl()) {
     console.error("redact-comments: no database URL (HASNA_TODOS_DATABASE_URL / TODOS_DATABASE_URL / DATABASE_URL)");
     process.exit(2);
@@ -122,7 +134,7 @@ async function runCommentRedactionBackfill(): Promise<void> {
       console.log(
         `redact-comments: ${report.dry_run ? "dry-run" : "applied"}; ` +
         `scanned=${report.scanned} candidates=${report.candidates} updated=${report.updated} ` +
-        `conflicts=${report.conflicts} batches=${report.batches}`,
+        `conflicts=${report.conflicts} remaining=${report.remaining_candidates} batches=${report.batches}`,
       );
       if (report.dry_run && report.candidates > 0) {
         console.log(
@@ -130,6 +142,12 @@ async function runCommentRedactionBackfill(): Promise<void> {
           `--apply --confirm=${COMMENT_REDACTION_BACKFILL_CONFIRMATION}`,
         );
       }
+    }
+    if (apply && !isCommentRedactionBackfillComplete(report)) {
+      console.error(
+        "redact-comments: incomplete apply; resolve conflicts and rerun until conflicts=0 and remaining=0",
+      );
+      process.exitCode = 1;
     }
   } catch (error) {
     const message = (error as Error).message.replace(/postgres(?:ql)?:\/\/[^@\s]+@/gi, "postgresql://[REDACTED]@");

@@ -21,6 +21,7 @@ export interface V1RequestDependencies {
 const JSON_HEADERS = { "Content-Type": "application/json" } as const;
 const DEFAULT_COMMENT_PAGE_SIZE = 100;
 const MAX_COMMENT_PAGE_SIZE = 500;
+const LEGACY_COMMENT_RESPONSE_LIMIT = 500;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
@@ -274,12 +275,36 @@ export async function handleV1Request(
           if (method === "GET") {
             if (!(await store.tasks.get(id))) return error(404, "task not found");
             const rawLimit = url.searchParams.get("limit");
+            const cursor = url.searchParams.get("cursor");
+            // Mixed-version bridge: predecessor clients send neither `limit`
+            // nor `cursor` and cannot understand truncation metadata. Preserve
+            // their complete response only while it remains bounded; otherwise
+            // fail loudly instead of presenting an incomplete history. Rollout
+            // upgrades clients first, then the server (see the operator runbook).
+            if (rawLimit === null && cursor === null) {
+              const legacyPage = (await store.audit.getComments(
+                id,
+                { limit: LEGACY_COMMENT_RESPONSE_LIMIT + 1 },
+                contextFromPrincipal(principal),
+              )).map(redactComment);
+              if (legacyPage.length > LEGACY_COMMENT_RESPONSE_LIMIT) {
+                return error(
+                  426,
+                  "task has too many comments for this client; upgrade @hasna/todos to use cursor pagination",
+                );
+              }
+              return json({
+                comments: legacyPage,
+                count: legacyPage.length,
+                has_more: false,
+                next_cursor: null,
+              });
+            }
             const limit = rawLimit === null ? DEFAULT_COMMENT_PAGE_SIZE : Number(rawLimit);
             if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_COMMENT_PAGE_SIZE) {
               return error(400, `limit must be an integer between 1 and ${MAX_COMMENT_PAGE_SIZE}`);
             }
             let before: { created_at: string; id: string } | undefined;
-            const cursor = url.searchParams.get("cursor");
             if (cursor) {
               try {
                 before = decodeCommentCursor(cursor);

@@ -216,10 +216,10 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           operationId: "listTaskComments",
           summary: "List a bounded page of task comments",
           description:
-            "Returns the newest page in oldest-to-newest display order. Use next_cursor to request older pages; count is the page size, not a total.",
+            "Returns the newest page in oldest-to-newest display order. Use next_cursor to request older pages; count is the page size, not a total. Pagination-aware clients must send limit during the mixed-version rollout.",
           parameters: [
             { name: "id", in: "path", required: true, schema: { type: "string" } },
-            { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 500, default: 100 } },
+            { name: "limit", in: "query", required: true, schema: { type: "integer", minimum: 1, maximum: 500, default: 100 } },
             { name: "cursor", in: "query", schema: { type: "string" } },
           ],
           responses: {
@@ -238,6 +238,9 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
                   },
                 },
               },
+            },
+            "426": {
+              description: "A predecessor client omitted limit and the complete legacy history exceeds 500 comments.",
             },
           },
         },

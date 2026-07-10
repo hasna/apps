@@ -34,6 +34,7 @@ import {
   getStorageMode,
   loadTodosStorageConfig,
   loadStorageConfig,
+  postgresTodosCommentCursorIndexSql,
   postgresTodosSyncSchemaSql,
   signAwsV4Request,
   uploadRunArtifactsToS3,
@@ -45,6 +46,7 @@ import {
 import { s3CredentialsFromEnv } from "../cli/commands/storage-commands.js";
 import { handleV1Request, type V1RequestDependencies } from "../server/v1.js";
 import type { ApiKeyVerifier } from "@hasna/contracts/auth";
+import type { TaskComment } from "../types/index.js";
 
 let db: Database;
 
@@ -707,7 +709,13 @@ describe("storage adapter contracts", () => {
       ["todos", "comments", historical.id, historical, historical.created_at, null, null],
     );
     const historicalRead = await request("GET", `/v1/tasks/${task.id}/comments`, undefined, reopened);
-    const historicalBody = await historicalRead.json() as { comments: Array<{ id: string; content: string }> };
+    const historicalBody = await historicalRead.json() as {
+      comments: Array<{ id: string; content: string }>;
+      count: number;
+      has_more?: boolean;
+    };
+    expect(historicalBody).toMatchObject({ count: 3 });
+    expect(historicalBody.has_more).toBe(false);
     const safeHistorical = historicalBody.comments.find((comment) => comment.id === historical.id);
     expect(safeHistorical?.content).toContain("[REDACTED]");
     expect(safeHistorical?.content).not.toContain("abcdefghijklmnop");
@@ -751,6 +759,26 @@ describe("storage adapter contracts", () => {
       const invalid = await request("GET", `/v1/tasks/${task.id}/comments?${query}`, undefined, reopened);
       expect(invalid.status).toBe(400);
     }
+
+    const predecessorAdapter: TodosStorageAdapter = {
+      ...reopened,
+      audit: {
+        ...reopened.audit,
+        getComments: () => Array.from({ length: 501 }, (_, index): TaskComment => ({
+          id: `legacy-${index}`,
+          task_id: task.id,
+          agent_id: null,
+          session_id: null,
+          content: "safe",
+          type: "comment",
+          progress_pct: null,
+          created_at: "2026-07-10T00:00:00.000Z",
+        })),
+      },
+    };
+    const upgradeRequired = await request("GET", `/v1/tasks/${task.id}/comments`, undefined, predecessorAdapter);
+    expect(upgradeRequired.status).toBe(426);
+    expect(await upgradeRequired.json()).toMatchObject({ error: expect.stringMatching(/upgrade/i) });
 
     calls.length = 0;
     await reopened.audit.getComments(task.id, { limit: 2 });
@@ -1146,7 +1174,11 @@ describe("storage adapter contracts", () => {
     expect(schema.join("\n")).toContain("CREATE TABLE IF NOT EXISTS todos_sync_records");
     expect(schema.join("\n")).toContain("payload jsonb NOT NULL");
     expect(schema.join("\n")).toContain("CREATE TABLE IF NOT EXISTS todos_sync_cursors");
+    expect(schema.join("\n")).not.toContain("comment_task_created_idx");
+    expect(postgresTodosCommentCursorIndexSql()).toContain("CREATE INDEX CONCURRENTLY IF NOT EXISTS");
+    expect(postgresTodosCommentCursorIndexSql()).toContain("comment_task_created_idx");
     expect(() => postgresTodosSyncSchemaSql("todos;drop")).toThrow("Unsafe Postgres identifier");
+    expect(() => postgresTodosCommentCursorIndexSql("todos;drop")).toThrow("Unsafe Postgres identifier");
   });
 
   test("pushes and pulls snapshots through a caller-provided Postgres client", async () => {

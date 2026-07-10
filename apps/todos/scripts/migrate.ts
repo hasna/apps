@@ -13,7 +13,14 @@
  * Env: HASNA_TODOS_DATABASE_URL (or TODOS_DATABASE_URL / DATABASE_URL).
  * Usage: bun run scripts/migrate.ts
  */
-import { ensureCloudSchema, pingCloud, resolveCloudDatabaseUrl, closeCloud } from "../src/server/cloud.js";
+import {
+  ensureCloudCommentCursorIndex,
+  ensureCloudSchema,
+  normalizeCloudPayloads,
+  pingCloud,
+  resolveCloudDatabaseUrl,
+  closeCloud,
+} from "../src/server/cloud.js";
 
 async function main() {
   const url = resolveCloudDatabaseUrl();
@@ -25,6 +32,11 @@ async function main() {
   await pingCloud();
   console.log("migrate: applying schema (sync tables + api_keys)…");
   await ensureCloudSchema();
+  console.log("migrate: normalizing legacy double-encoded jsonb payloads…");
+  const normalized = await normalizeCloudPayloads();
+  console.log(`migrate: normalized ${normalized} payload row(s)`);
+  console.log("migrate: prebuilding comment cursor index concurrently…");
+  await ensureCloudCommentCursorIndex();
   console.log("migrate: done");
   await closeCloud();
   process.exit(0);

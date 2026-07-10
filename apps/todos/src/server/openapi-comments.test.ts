@@ -9,6 +9,7 @@ describe("task comments OpenAPI contract", () => {
 
     expect(path.get.operationId).toBe("listTaskComments");
     expect(path.get.parameters.map((parameter) => parameter.name)).toEqual(["id", "limit", "cursor"]);
+    expect(path.get.parameters.find((parameter) => parameter.name === "limit")?.required).toBe(true);
     expect(path.get.responses["200"].content["application/json"].schema.required)
       .toEqual(["comments", "count", "has_more", "next_cursor"]);
     expect(path.post.operationId).toBe("createTaskComment");

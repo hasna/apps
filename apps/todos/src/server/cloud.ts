@@ -13,7 +13,10 @@ import { ApiKeyStore, type AuthQueryClient } from "@hasna/contracts/auth";
 import { createTodosCloudQueryClient, type TodosCloudQueryClient } from "../storage/cloud-client.js";
 import { createPostgresTodosStorageAdapter } from "../storage/postgres-adapter.js";
 import type { TodosStorageAdapter } from "../storage/interfaces.js";
-import { postgresTodosSyncSchemaSql } from "../storage/postgres-sync.js";
+import {
+  postgresTodosCommentCursorIndexSql,
+  postgresTodosSyncSchemaSql,
+} from "../storage/postgres-sync.js";
 import {
   backfillPostgresCommentRedaction,
   type CommentRedactionBackfillOptions,
@@ -137,6 +140,15 @@ export async function ensureCloudSchema(): Promise<void> {
     await getApiKeyStore().ensureSchema();
   })();
   return schemaEnsured;
+}
+
+/**
+ * Prebuild the task-comment cursor index without blocking writes. This is a
+ * deployment migration, not request-path schema work; PostgreSQL requires
+ * `CREATE INDEX CONCURRENTLY` to execute outside an explicit transaction.
+ */
+export async function ensureCloudCommentCursorIndex(): Promise<void> {
+  await getClient().query(postgresTodosCommentCursorIndexSql());
 }
 
 /**

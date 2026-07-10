@@ -164,7 +164,7 @@ export class TodosV1Client {
     }
 
     /** List a bounded page of task comments */
-    async listTaskComments(id: string, query?: { "limit"?: number; "cursor"?: string }, init?: RequestInit): Promise<{ "comments": Array<TaskComment>; "count": number; "has_more": boolean; "next_cursor": string | null }> {
+    async listTaskComments(id: string, query?: { "limit": number; "cursor"?: string }, init?: RequestInit): Promise<{ "comments": Array<TaskComment>; "count": number; "has_more": boolean; "next_cursor": string | null }> {
       return this.request("GET", `/v1/tasks/${encodeURIComponent(String(id))}/comments`, {
         body: undefined,
         query,

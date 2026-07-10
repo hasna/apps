@@ -170,3 +170,46 @@ avoiding the split-brain the council rejected.
 - Never echo the DSN password; pull from Secrets Manager and pipe directly.
 - Shadow mode is read-never: it must not introduce a cloud read path.
 - The flip is all-machines-together; per-machine flips are prohibited.
+
+## Task-comment pagination and historical-redaction rollout
+
+This change has an intentional mixed-version sequence. Do not reverse it.
+
+1. **Rotate or revoke exposed credentials first.** Redacting stored evidence is
+   not a substitute for invalidating any credential that may have appeared in a
+   historical comment.
+2. **Run the migration task before the app rollout.** `todos-serve migrate`
+   normalizes legacy JSON payloads, then builds the task-comment cursor index
+   with `CREATE INDEX CONCURRENTLY` outside a transaction. Verify the index is
+   valid in Postgres before continuing. The request path never owns this index
+   build.
+3. **Deploy clients first.** Pagination-aware clients always send `limit`. While
+   the predecessor server is still running, its unpaginated response is capped
+   locally and reported as `pagination_supported: false`; human output says
+   older comments were omitted. Confirm this warning path works before changing
+   the server.
+4. **Deploy the server second.** Requests carrying `limit` receive stable cursor
+   pages. A predecessor client sends no `limit`; the server returns its complete
+   legacy envelope only up to 500 comments and returns HTTP 426 above that bound
+   rather than silently truncating history.
+5. **Verify both compatibility paths without printing bodies.** Check a small
+   history through a predecessor client, a paginated history through the new
+   client, and a count-only projection for a task with persisted comments.
+6. **Preview the historical rewrite.** Run `todos-serve redact-comments --json`.
+   This scans active and deleted/tombstoned comment payloads in bounded batches
+   and does not mutate by default. Review only aggregate counts.
+7. **Apply only after an explicit data-change approval.** Use `--apply` with the
+   confirmation shown by `--help`. Apply uses whole-payload compare-and-set,
+   preserves tombstone state, and performs a final rescan. A nonzero conflict or
+   remaining-candidate count exits nonzero. Rerun until an apply reports
+   `conflicts=0` and `remaining=0`, then run one final dry run and require
+   `candidates=0`. Record operator signoff.
+8. **Handle immutable history separately.** The rewrite cannot alter prior RDS
+   snapshots, WAL archives, or backups. Inventory their retention/restore paths;
+   do not shorten or delete retention without separate approval. Any restored
+   database stays quarantined from agents until the redaction backfill and a
+   zero-candidate dry run have completed.
+
+Rollback the server before clients: the new client remains explicit and bounded
+against the predecessor server. Do not roll clients back while the paginated
+server is active unless every task is proven below the legacy bound.

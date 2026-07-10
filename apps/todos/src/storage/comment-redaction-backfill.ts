@@ -23,6 +23,8 @@ export interface CommentRedactionBackfillResult {
   updated: number;
   conflicts: number;
   batches: number;
+  /** Raw candidates still present after this run (or found by a dry run). */
+  remaining_candidates: number;
 }
 
 interface CommentPayloadRow {
@@ -50,11 +52,11 @@ function payloadObject(value: unknown): Record<string, unknown> | null {
 }
 
 /**
- * Scan historical Postgres comment payloads in bounded keyset batches and, only
- * after an explicit confirmation, replace secret-like content in place. The
- * update is idempotent and compare-and-set guarded so a concurrently edited
- * comment is never overwritten. Neither payload contents nor credentials are
- * returned in the report.
+ * Scan historical Postgres comment payloads (including deleted/tombstoned rows)
+ * in bounded keyset batches and, only after an explicit confirmation, replace
+ * secret-like content in place without changing tombstone state. The update is
+ * idempotent and compare-and-set guarded so a concurrently edited comment is
+ * never overwritten. Neither payload contents nor credentials are returned.
  */
 export async function backfillPostgresCommentRedaction(
   client: TodosPostgresQueryClient,
@@ -82,6 +84,7 @@ export async function backfillPostgresCommentRedaction(
     updated: 0,
     conflicts: 0,
     batches: 0,
+    remaining_candidates: 0,
   };
   let afterId = "";
 
@@ -90,7 +93,7 @@ export async function backfillPostgresCommentRedaction(
       `/* todos:comment-redaction-backfill-scan */
        SELECT object_id, payload
        FROM ${tableName}
-       WHERE service = $1 AND object_type = 'comments' AND deleted_at IS NULL
+       WHERE service = $1 AND object_type = 'comments'
          AND object_id > $2
        ORDER BY object_id ASC
        LIMIT $3`,
@@ -116,7 +119,7 @@ export async function backfillPostgresCommentRedaction(
          UPDATE ${tableName}
          SET payload = $3::jsonb
          WHERE service = $1 AND object_type = 'comments' AND object_id = $2
-           AND deleted_at IS NULL AND payload = $4::jsonb
+           AND payload = $4::jsonb
          RETURNING object_id`,
         [service, row.object_id, nextPayload, row.payload],
       );
@@ -127,5 +130,20 @@ export async function backfillPostgresCommentRedaction(
     if (page.rows.length < batchSize) break;
   }
 
+  if (!apply) {
+    result.remaining_candidates = result.candidates;
+    return result;
+  }
+  const verification = await backfillPostgresCommentRedaction(client, {
+    ...options,
+    apply: false,
+    confirmation: undefined,
+  });
+  result.remaining_candidates = verification.candidates;
   return result;
+}
+
+/** True only when an apply run had no CAS misses and the final rescan is clean. */
+export function isCommentRedactionBackfillComplete(result: CommentRedactionBackfillResult): boolean {
+  return !result.dry_run && result.conflicts === 0 && result.remaining_candidates === 0;
 }

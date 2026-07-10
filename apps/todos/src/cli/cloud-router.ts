@@ -196,6 +196,8 @@ export interface CloudCommentPage {
   next_cursor: string | null;
   /** Maximum number of comments requested from the server. */
   limit: number;
+  /** False only while talking to a predecessor server without cursor metadata. */
+  pagination_supported: boolean;
 }
 
 export interface CloudCommentPageOptions {
@@ -249,10 +251,26 @@ export async function cloudListComments(
       (!Number.isSafeInteger(envelope.count) || (envelope.count as number) < 0 || envelope.count !== candidate.length)) {
     throw new Error("Invalid cloud comments response count");
   }
+  const hasHasMore = envelope ? Object.prototype.hasOwnProperty.call(envelope, "has_more") : false;
+  const hasNextCursor = envelope ? Object.prototype.hasOwnProperty.call(envelope, "next_cursor") : false;
+  if (hasHasMore !== hasNextCursor) throw new Error("Invalid cloud comments pagination response");
+  const paginationSupported = hasHasMore && hasNextCursor;
+
+  if (!paginationSupported) {
+    const comments = candidate.slice(-limit).map(redactComment);
+    return {
+      comments,
+      count: comments.length,
+      has_more: candidate.length > limit,
+      next_cursor: null,
+      limit,
+      pagination_supported: false,
+    };
+  }
   if (candidate.length > limit) throw new Error("Invalid cloud comments response: page exceeds requested limit");
 
-  const hasMore = envelope?.has_more ?? false;
-  const nextCursor = envelope?.next_cursor ?? null;
+  const hasMore = envelope!.has_more;
+  const nextCursor = envelope!.next_cursor;
   if (typeof hasMore !== "boolean" || (nextCursor !== null && (typeof nextCursor !== "string" || !nextCursor))) {
     throw new Error("Invalid cloud comments pagination response");
   }
@@ -265,6 +283,7 @@ export async function cloudListComments(
     has_more: hasMore,
     next_cursor: nextCursor,
     limit,
+    pagination_supported: true,
   };
 }
 

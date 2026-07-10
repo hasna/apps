@@ -258,6 +258,7 @@ export function registerTaskCommands(program: Command) {
             title,
             description: opts.description,
             priority: parsePriority(opts.priority),
+            parent_id: opts.parent,
             tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
             plan_id: opts.plan,
             assigned_to: opts.assign,
@@ -726,6 +727,7 @@ export function registerTaskCommands(program: Command) {
                 limit: commentPage!.limit,
                 has_more: commentPage!.has_more,
                 next_cursor: commentPage!.next_cursor,
+                pagination_supported: commentPage!.pagination_supported,
               },
             }
           : null;
@@ -800,7 +802,11 @@ export function registerTaskCommands(program: Command) {
       }
 
       if (task.comments.length > 0) {
-        const suffix = task.comments_page?.has_more ? ", newer page shown; older comments available" : "";
+        const suffix = task.comments_page?.has_more
+          ? task.comments_page.pagination_supported
+            ? ", newer page shown; older comments available"
+            : ", newer comments shown; older comments omitted until the server is upgraded"
+          : "";
         console.log(chalk.bold(`\n  Comments (${task.comments.length}${suffix}):`));
         for (const c of task.comments) {
           console.log(formatHumanComment(c));
@@ -845,6 +851,7 @@ export function registerTaskCommands(program: Command) {
                 limit: commentPage!.limit,
                 has_more: commentPage!.has_more,
                 next_cursor: commentPage!.next_cursor,
+                pagination_supported: commentPage!.pagination_supported,
               },
             }
           : null;
@@ -935,7 +942,11 @@ export function registerTaskCommands(program: Command) {
       }
 
       if (task.comments.length > 0) {
-        const suffix = task.comments_page?.has_more ? ", newer page shown; older comments available" : "";
+        const suffix = task.comments_page?.has_more
+          ? task.comments_page.pagination_supported
+            ? ", newer page shown; older comments available"
+            : ", newer comments shown; older comments omitted until the server is upgraded"
+          : "";
         console.log(chalk.bold(`\n  Comments (${task.comments.length}${suffix}):`));
         for (const c of task.comments) {
           console.log(formatHumanComment(c));
