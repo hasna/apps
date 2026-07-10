@@ -47,7 +47,6 @@ import type {
   TodosTaskVerification,
   UpdateTemplateInput,
 } from "./interfaces.js";
-import { resolveTodosCommentListArgs } from "./interfaces.js";
 import {
   DEFAULT_TODOS_POSTGRES_CURSOR_TABLE,
   DEFAULT_TODOS_POSTGRES_SYNC_TABLE,
@@ -193,12 +192,22 @@ export function createPostgresTodosStorageAdapter(
       logTaskChange: (taskId, action, field, oldValue, newValue, agentId, context) =>
         logTaskChange(taskId, action, field, oldValue, newValue, agentId, store, context),
       addComment: (input, context) => addComment(input, store, context),
-      getComments: async (
-        taskId: string,
-        optionsOrContext?: TodosCommentListOptions | TodosStorageContext,
-        context?: TodosStorageContext,
-      ) => {
-        const { options } = resolveTodosCommentListArgs(optionsOrContext, context);
+      getComments: async (taskId) => {
+        const pages: TaskComment[][] = [];
+        let before: TodosCommentListOptions["before"];
+        while (true) {
+          const page = await store.listComments(taskId, { limit: 1_000, ...(before ? { before } : {}) });
+          if (page.length === 0) break;
+          pages.unshift(page);
+          if (page.length < 1_000) break;
+          const oldest = page[0]!;
+          before = { created_at: oldest.created_at, id: oldest.id };
+        }
+        return pages.flat()
+          .map(redactComment)
+          .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
+      },
+      getCommentsPage: async (taskId, options) => {
         return (await store.listComments(taskId, options))
           .map(redactComment)
           .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));

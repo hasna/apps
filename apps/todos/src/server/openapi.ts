@@ -240,7 +240,8 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
               },
             },
             "426": {
-              description: "A predecessor client omitted limit and the complete legacy history exceeds 500 comments.",
+              description:
+                "Upgrade required: a predecessor client omitted limit and the complete legacy history exceeds 500 comments, or the configured storage adapter lacks cursor pagination support.",
             },
           },
         },

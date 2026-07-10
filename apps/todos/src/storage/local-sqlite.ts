@@ -59,12 +59,7 @@ import {
 } from "../db/audit.js";
 import { addComment, listComments } from "../db/comments.js";
 import { getDatabase } from "../db/database.js";
-import {
-  resolveTodosCommentListArgs,
-  type TodosCommentListOptions,
-  type TodosStorageAdapter,
-  type TodosStorageContext,
-} from "./interfaces.js";
+import type { TodosStorageAdapter } from "./interfaces.js";
 import {
   exportSqliteTodosStorageSnapshot,
   importSqliteTodosStorageSnapshot,
@@ -146,23 +141,15 @@ export function createLocalSqliteTodosStorageAdapter(
       logTaskChange: (taskId, action, field, oldValue, newValue, agentId) =>
         logTaskChange(taskId, action, field, oldValue, newValue, agentId, database()),
       addComment: (input) => addComment(input, database()),
-      getComments: (
-        taskId: string,
-        optionsOrContext?: TodosCommentListOptions | TodosStorageContext,
-        context?: TodosStorageContext,
-      ) => {
-        const { options } = resolveTodosCommentListArgs(optionsOrContext, context);
+      getComments: (taskId) => listComments(taskId, database()),
+      getCommentsPage: (taskId, options) => {
         if (options?.limit !== undefined &&
             (!Number.isSafeInteger(options.limit) || options.limit < 1 || options.limit > 1_001)) {
           throw new Error("Comment limit must be an integer between 1 and 1001");
         }
         let comments = listComments(taskId, database());
-        // The public local list keeps legacy insertion order for timestamp ties;
-        // explicit storage pagination opts into the portable cloud cursor order.
-        if (options) {
-          comments = comments.sort((left, right) =>
-            left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id));
-        }
+        comments = comments.sort((left, right) =>
+          left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id));
         if (options?.before) {
           const before = options.before;
           comments = comments.filter((comment) =>

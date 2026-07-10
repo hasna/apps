@@ -302,9 +302,9 @@ export interface TodosAuditStore {
     context?: TodosStorageContext,
   ): MaybePromise<TaskHistory>;
   addComment(input: CreateCommentInput, context?: TodosStorageContext): MaybePromise<TaskComment>;
-  /** Backward-compatible pre-pagination overload. */
   getComments(taskId: string, context?: TodosStorageContext): MaybePromise<TaskComment[]>;
-  getComments(
+  /** Optional bounded cursor capability; legacy implementations need not provide it. */
+  getCommentsPage?(
     taskId: string,
     options: TodosCommentListOptions,
     context?: TodosStorageContext,
@@ -320,23 +320,16 @@ export interface TodosCommentListOptions {
   before?: { created_at: string; id: string };
 }
 
-/**
- * Resolve the positional comment-list arguments without interpreting a legacy
- * storage context as pagination options. An empty second argument remains a
- * legacy context; callers that need pagination should provide `limit` or
- * `before` (or pass the context explicitly as argument three).
- */
-export function resolveTodosCommentListArgs(
-  optionsOrContext?: TodosCommentListOptions | TodosStorageContext,
+type TodosTypeAssertion<T extends true> = T;
+type TodosLegacyGetCommentsSignature = (
+  taskId: string,
   context?: TodosStorageContext,
-): { options: TodosCommentListOptions | undefined; context: TodosStorageContext | undefined } {
-  const hasPaginationKey = optionsOrContext !== undefined &&
-    ("limit" in optionsOrContext || "before" in optionsOrContext);
-  if (context !== undefined || hasPaginationKey) {
-    return { options: optionsOrContext as TodosCommentListOptions | undefined, context };
-  }
-  return { options: undefined, context: optionsOrContext as TodosStorageContext | undefined };
-}
+) => MaybePromise<TaskComment[]>;
+
+/** Compile-time guard: pre-pagination audit-store implementations stay assignable. */
+export type TodosLegacyGetCommentsCompatibility = TodosTypeAssertion<
+  TodosLegacyGetCommentsSignature extends TodosAuditStore["getComments"] ? true : false
+>;
 
 export interface TodosSyncStore {
   getTasksChangedSince(since: string, filters?: TodosActiveWorkFilter, context?: TodosStorageContext): MaybePromise<Task[]>;

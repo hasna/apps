@@ -65,9 +65,12 @@ afterEach(() => {
 
 describe("storage adapter contracts", () => {
   test("keeps legacy getComments implementations assignable", () => {
-    const legacy = {
-      getComments: (_taskId: string, _context?: TodosStorageContext): TaskComment[] => [],
-    } satisfies Pick<TodosAuditStore, "getComments">;
+    class LegacyAuditStore implements Pick<TodosAuditStore, "getComments"> {
+      getComments(_taskId: string, _context?: TodosStorageContext): TaskComment[] {
+        return [];
+      }
+    }
+    const legacy = new LegacyAuditStore();
 
     expect(legacy.getComments("task", { requestId: "legacy" })).toEqual([]);
   });
@@ -227,9 +230,9 @@ describe("storage adapter contracts", () => {
       .toEqual(["same-c", "same-b", "same-a"]);
     expect((await adapter.audit.getComments(task.id, { requestId: "legacy-context" })).map((comment) => comment.id))
       .toEqual(["same-c", "same-b", "same-a"]);
-    expect((await adapter.audit.getComments(task.id, { limit: 2 })).map((comment) => comment.id))
+    expect((await adapter.audit.getCommentsPage!(task.id, { limit: 2 })).map((comment) => comment.id))
       .toEqual(["same-b", "same-c"]);
-    expect((await adapter.audit.getComments(task.id, {
+    expect((await adapter.audit.getCommentsPage!(task.id, {
       limit: 2,
       before: { created_at: timestamp, id: "same-b" },
     })).map((comment) => comment.id)).toEqual(["same-a"]);
@@ -786,14 +789,23 @@ describe("storage adapter contracts", () => {
           progress_pct: null,
           created_at: "2026-07-10T00:00:00.000Z",
         })),
+        getCommentsPage: undefined,
       },
     };
     const upgradeRequired = await request("GET", `/v1/tasks/${task.id}/comments`, undefined, predecessorAdapter);
     expect(upgradeRequired.status).toBe(426);
     expect(await upgradeRequired.json()).toMatchObject({ error: expect.stringMatching(/upgrade/i) });
+    const adapterUpgradeRequired = await request(
+      "GET",
+      `/v1/tasks/${task.id}/comments?limit=2`,
+      undefined,
+      predecessorAdapter,
+    );
+    expect(adapterUpgradeRequired.status).toBe(426);
+    expect(await adapterUpgradeRequired.json()).toMatchObject({ error: expect.stringMatching(/adapter.*upgrade/i) });
 
     calls.length = 0;
-    await reopened.audit.getComments(task.id, { limit: 2 });
+    await reopened.audit.getCommentsPage!(task.id, { limit: 2 });
     const listCall = calls.find((call) => call.sql.includes("todos:list-comments"));
     expect(listCall?.sql).toContain("payload->>'task_id'");
     expect(listCall?.sql).toContain("ORDER BY payload->>'created_at' DESC, object_id DESC");
@@ -839,13 +851,46 @@ describe("storage adapter contracts", () => {
     }
 
     calls.length = 0;
-    const comments = await adapter.audit.getComments(task.id, { limit: 2 });
+    const comments = await adapter.audit.getCommentsPage!(task.id, { limit: 2 });
     expect(comments.map((comment) => comment.id)).toEqual(["same-a", "same-b"]);
     const listCall = calls.find((call) => call.sql.includes("todos:list-comments"));
     expect(listCall?.sql).toContain("payload->>'task_id'");
     expect(listCall?.sql).toContain("ORDER BY payload->>'created_at' DESC, object_id DESC");
     expect(listCall?.sql).toContain("LIMIT");
     expect(listCall?.values).toContain(task.id);
+  });
+
+  test("legacy Postgres getComments remains complete through bounded task-scoped pages", async () => {
+    const { client, calls } = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client, service: "todos" });
+    const task = await adapter.tasks.create({ title: "Legacy complete comments" });
+    const start = Date.parse("2026-07-10T00:00:00.000Z");
+    for (let index = 0; index < 1_001; index += 1) {
+      const id = `legacy-page-${String(index).padStart(4, "0")}`;
+      const createdAt = new Date(start + index).toISOString();
+      await client.query(
+        "INSERT INTO todos_sync_records RETURNING object_id",
+        ["todos", "comments", id, {
+          id,
+          task_id: task.id,
+          agent_id: null,
+          session_id: null,
+          content: "safe",
+          type: "comment",
+          progress_pct: null,
+          created_at: createdAt,
+        }, createdAt, null, null],
+      );
+    }
+
+    calls.length = 0;
+    const comments = await adapter.audit.getComments(task.id, { requestId: "legacy-reader" });
+    expect(comments).toHaveLength(1_001);
+    expect(comments[0]?.id).toBe("legacy-page-0000");
+    expect(comments.at(-1)?.id).toBe("legacy-page-1000");
+    const listCalls = calls.filter((call) => call.sql.includes("todos:list-comments"));
+    expect(listCalls).toHaveLength(2);
+    expect(listCalls.every((call) => call.values.includes(task.id))).toBe(true);
   });
 
   test("cloud adapter supports agent heartbeat/release and commit/ref links on the shared dataset", async () => {

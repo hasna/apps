@@ -282,11 +282,10 @@ export async function handleV1Request(
             // fail loudly instead of presenting an incomplete history. Rollout
             // upgrades clients first, then the server (see the operator runbook).
             if (rawLimit === null && cursor === null) {
-              const legacyPage = (await store.audit.getComments(
-                id,
-                { limit: LEGACY_COMMENT_RESPONSE_LIMIT + 1 },
-                contextFromPrincipal(principal),
-              )).map(redactComment);
+              const storageContext = contextFromPrincipal(principal);
+              const legacyPage = (await (store.audit.getCommentsPage
+                ? store.audit.getCommentsPage(id, { limit: LEGACY_COMMENT_RESPONSE_LIMIT + 1 }, storageContext)
+                : store.audit.getComments(id, storageContext))).map(redactComment);
               if (legacyPage.length > LEGACY_COMMENT_RESPONSE_LIMIT) {
                 return error(
                   426,
@@ -312,7 +311,10 @@ export async function handleV1Request(
                 return error(400, "invalid comment cursor");
               }
             }
-            const page = (await store.audit.getComments(
+            if (!store.audit.getCommentsPage) {
+              return error(426, "storage adapter must be upgraded to support cursor-paginated comments");
+            }
+            const page = (await store.audit.getCommentsPage(
               id,
               { limit: limit + 1, ...(before ? { before } : {}) },
               contextFromPrincipal(principal),

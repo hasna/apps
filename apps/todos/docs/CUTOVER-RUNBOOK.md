@@ -191,7 +191,10 @@ This change has an intentional mixed-version sequence. Do not reverse it.
 4. **Deploy the server second.** Requests carrying `limit` receive stable cursor
    pages. A predecessor client sends no `limit`; the server returns its complete
    legacy envelope only up to 500 comments and returns HTTP 426 above that bound
-   rather than silently truncating history.
+   rather than silently truncating history. Third-party storage adapters remain
+   source-compatible through the unchanged `getComments(taskId, context?)`
+   contract; they must add the optional `getCommentsPage` capability before the
+   server accepts explicit cursor-page requests through them.
 5. **Verify both compatibility paths without printing bodies.** Check a small
    history through a predecessor client, a paginated history through the new
    client, and a count-only projection for a task with persisted comments.
