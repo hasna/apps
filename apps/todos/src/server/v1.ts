@@ -10,6 +10,13 @@
 import type { CreateProjectInput, CreateTaskInput, TaskComment, UpdateTaskInput } from "../types/index.js";
 import type { TodosStorageContext, TodosStorageSnapshot } from "../storage/interfaces.js";
 import { getCloudStorageAdapter, getCloudVerifier, ensureCloudSchema } from "./cloud.js";
+import { redactEvidenceText } from "../lib/redaction.js";
+
+export interface V1RequestDependencies {
+  getVerifier?: typeof getCloudVerifier;
+  ensureSchema?: typeof ensureCloudSchema;
+  getStorageAdapter?: typeof getCloudStorageAdapter;
+}
 
 const JSON_HEADERS = { "Content-Type": "application/json" } as const;
 
@@ -34,6 +41,10 @@ async function readJson<T>(req: Request): Promise<T | null> {
 function contextFromPrincipal(principal: { agent: string | null }, body?: { agent_id?: string }): TodosStorageContext {
   const agentId = body?.agent_id || principal.agent || undefined;
   return agentId ? { agentId } : {};
+}
+
+function redactComment(comment: TaskComment): TaskComment {
+  return { ...comment, content: redactEvidenceText(comment.content) };
 }
 
 /**
@@ -82,7 +93,11 @@ export function countSnapshotRecords(s: TodosStorageSnapshot): number {
  * Handle a `/v1/*` request. Returns `null` when the path is not a `/v1` route so
  * the caller can fall through to other handlers.
  */
-export async function handleV1Request(req: Request, url: URL): Promise<Response | null> {
+export async function handleV1Request(
+  req: Request,
+  url: URL,
+  dependencies: V1RequestDependencies = {},
+): Promise<Response | null> {
   const path = url.pathname;
   if (path !== "/v1" && !path.startsWith("/v1/")) return null;
 
@@ -93,7 +108,7 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
   // ── Auth (contracts API-key verifier) ──
   let verifier;
   try {
-    verifier = getCloudVerifier();
+    verifier = (dependencies.getVerifier ?? getCloudVerifier)();
   } catch (e) {
     return error(503, (e as Error).message);
   }
@@ -104,8 +119,8 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
   const principal = decision.principal;
 
   // Schema is idempotently ensured on the first authenticated request.
-  await ensureCloudSchema();
-  const store = getCloudStorageAdapter();
+  await (dependencies.ensureSchema ?? ensureCloudSchema)();
+  const store = (dependencies.getStorageAdapter ?? getCloudStorageAdapter)();
 
   const segments = path.split("/").filter(Boolean); // ["v1", resource, id?, action?, subId?]
   const resource = segments[1];
@@ -233,7 +248,7 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
         // throws TaskNotFoundError) instead of silently writing an orphan row.
         if (action === "comments") {
           if (method === "GET") {
-            const comments = await store.audit.getComments(id);
+            const comments = (await store.audit.getComments(id)).map(redactComment);
             return json({ comments, count: comments.length });
           }
           if (method === "POST") {
@@ -260,7 +275,7 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
               },
               contextFromPrincipal(principal, body),
             );
-            return json({ comment }, 201);
+            return json({ comment: redactComment(comment) }, 201);
           }
           return error(405, `method ${method} not allowed on /v1/tasks/:id/comments`);
         }

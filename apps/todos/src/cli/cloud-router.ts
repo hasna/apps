@@ -22,6 +22,7 @@
  */
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
 import type { Agent, Plan, Project, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList } from "../types/index.js";
+import { redactEvidenceText } from "../lib/redaction.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -177,20 +178,58 @@ export async function cloudAddComment(
   input: { content: string; agent_id?: string; session_id?: string; type?: string; progress_pct?: number },
 ): Promise<TaskComment> {
   const raw = await client.transport.post<unknown>(`/tasks/${encodeURIComponent(taskId)}/comments`, input);
-  if (raw && typeof raw === "object" && "comment" in (raw as Record<string, unknown>)) {
-    return (raw as { comment: TaskComment }).comment;
-  }
-  return raw as TaskComment;
+  const comment = raw && typeof raw === "object" && "comment" in (raw as Record<string, unknown>)
+    ? (raw as { comment: unknown }).comment
+    : raw;
+  if (!isTaskComment(comment)) throw new Error("Invalid cloud comment response");
+  return redactComment(comment);
 }
 
 /** List persisted comments for one cloud task (`GET /v1/tasks/:id/comments`). */
 export async function cloudListComments(client: HasnaStorageClient, taskId: string): Promise<TaskComment[]> {
-  const raw = await client.transport.get<unknown>(`/tasks/${encodeURIComponent(taskId)}/comments`);
-  if (raw && typeof raw === "object" && "comments" in (raw as Record<string, unknown>)) {
-    const comments = (raw as { comments?: unknown }).comments;
-    return Array.isArray(comments) ? (comments as TaskComment[]) : [];
+  let raw: unknown;
+  try {
+    raw = await client.transport.get<unknown>(`/tasks/${encodeURIComponent(taskId)}/comments`);
+  } catch (error) {
+    const status = error && typeof error === "object" ? (error as { status?: unknown }).status : undefined;
+    if (status === 404 || status === 405) {
+      throw new Error(
+        "Cloud task comments require a compatible @hasna/todos server; deploy the server endpoint before this CLI.",
+        { cause: error },
+      );
+    }
+    throw error;
   }
-  return Array.isArray(raw) ? (raw as TaskComment[]) : [];
+
+  const envelope = raw && typeof raw === "object" && !Array.isArray(raw)
+    ? (raw as { comments?: unknown; count?: unknown })
+    : null;
+  const candidate = Array.isArray(raw) ? raw : envelope?.comments;
+  if (!Array.isArray(candidate) || !candidate.every(isTaskComment)) {
+    throw new Error("Invalid cloud comments response");
+  }
+  if (envelope?.count !== undefined &&
+      (!Number.isSafeInteger(envelope.count) || (envelope.count as number) < 0 || envelope.count !== candidate.length)) {
+    throw new Error("Invalid cloud comments response count");
+  }
+  return candidate.map(redactComment);
+}
+
+function isTaskComment(value: unknown): value is TaskComment {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const comment = value as Record<string, unknown>;
+  return typeof comment["id"] === "string"
+    && typeof comment["task_id"] === "string"
+    && (comment["agent_id"] === null || typeof comment["agent_id"] === "string")
+    && (comment["session_id"] === null || typeof comment["session_id"] === "string")
+    && typeof comment["content"] === "string"
+    && (comment["type"] === "comment" || comment["type"] === "progress" || comment["type"] === "note")
+    && (comment["progress_pct"] === null || typeof comment["progress_pct"] === "number")
+    && typeof comment["created_at"] === "string";
+}
+
+function redactComment(comment: TaskComment): TaskComment {
+  return { ...comment, content: redactEvidenceText(comment.content) };
 }
 
 /**

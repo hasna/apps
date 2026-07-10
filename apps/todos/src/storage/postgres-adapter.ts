@@ -53,6 +53,7 @@ import {
   type TodosPostgresQueryClient,
   type TodosPostgresSyncRecordType,
 } from "./postgres-sync.js";
+import { redactEvidenceText } from "../lib/redaction.js";
 
 type RemoteObjectType = TodosPostgresSyncRecordType | "comments" | "dependencies" | "verifications" | "commits" | "refs";
 
@@ -192,6 +193,7 @@ export function createPostgresTodosStorageAdapter(
       addComment: (input, context) => addComment(input, store, context),
       getComments: async (taskId) => (await store.list<TaskComment>("comments"))
         .filter((comment) => comment.task_id === taskId)
+        .map(redactComment)
         .sort((a, b) => a.created_at.localeCompare(b.created_at)),
       getTaskHistory: async (taskId) => (await store.list<TaskHistory>("audit_history"))
         .filter((entry) => entry.task_id === taskId)
@@ -1229,12 +1231,16 @@ async function addComment(input: CreateCommentInput, store: PostgresJsonRecordSt
     task_id: input.task_id,
     agent_id: input.agent_id ?? context?.agentId ?? null,
     session_id: input.session_id ?? context?.sessionId ?? null,
-    content: input.content,
+    content: redactEvidenceText(input.content),
     type: input.type ?? "comment",
     progress_pct: input.progress_pct ?? null,
     created_at: new Date().toISOString(),
   };
   return store.upsert("comments", comment, context);
+}
+
+function redactComment(comment: TaskComment): TaskComment {
+  return { ...comment, content: redactEvidenceText(comment.content) };
 }
 
 async function exportSnapshot(store: PostgresJsonRecordStore): Promise<TodosStorageSnapshot> {

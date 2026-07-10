@@ -43,6 +43,8 @@ import {
   type TodosStorageSnapshot,
 } from "../storage.js";
 import { s3CredentialsFromEnv } from "../cli/commands/storage-commands.js";
+import { handleV1Request, type V1RequestDependencies } from "../server/v1.js";
+import type { ApiKeyVerifier } from "@hasna/contracts/auth";
 
 let db: Database;
 
@@ -602,6 +604,88 @@ describe("storage adapter contracts", () => {
     expect(await adapter.verifications!.list(a.id)).toEqual([expect.objectContaining({ id: v.id })]);
     // verification on a missing task fails loudly (parity with the local FK)
     await expect(Promise.resolve(adapter.verifications!.add({ task_id: "nope", command: "x" }))).rejects.toThrow(/not found/);
+  });
+
+  test("v1 comments persist through a reopened Postgres adapter and redact new and historical content", async () => {
+    const { client, calls } = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client, service: "todos" });
+    const task = await adapter.tasks.create({ title: "V1 comment persistence" });
+    const verifier: ApiKeyVerifier = {
+      app: "todos",
+      authenticate: async () => ({
+        ok: true as const,
+        status: 200 as const,
+        principal: {
+          kid: "test-key-id",
+          app: "todos",
+          scopes: ["todos:*"],
+          agent: "test-agent",
+          claims: { v: 1, kid: "test-key-id", app: "todos", scopes: ["todos:*"], iat: 0, exp: null },
+        },
+      }),
+    };
+    const dependencies = (storage: TodosStorageAdapter): V1RequestDependencies => ({
+      getVerifier: () => verifier,
+      ensureSchema: async () => {},
+      getStorageAdapter: () => storage,
+    });
+    const request = async (method: string, path: string, body?: Record<string, unknown>, storage = adapter) => {
+      const url = new URL(`https://todos.test${path}`);
+      const response = await handleV1Request(
+        new Request(url, {
+          method,
+          headers: { "content-type": "application/json", authorization: "Bearer synthetic-test-key" },
+          body: body ? JSON.stringify(body) : undefined,
+        }),
+        url,
+        dependencies(storage),
+      );
+      if (!response) throw new Error(`Expected ${path} to be handled by v1`);
+      return response;
+    };
+
+    const first = await request("POST", `/v1/tasks/${task.id}/comments`, { content: "first safe comment" });
+    expect(first.status).toBe(201);
+    await Bun.sleep(2);
+    const second = await request("POST", `/v1/tasks/${task.id}/comments`, {
+      content: "Bearer abcdefghijklmnop should redact",
+    });
+    expect(second.status).toBe(201);
+
+    const commentWrites = calls.filter((call) => call.sql.includes("INSERT INTO todos_sync_records") && call.values?.[1] === "comments");
+    expect(commentWrites).toHaveLength(2);
+    expect((commentWrites[1]!.values?.[3] as { content: string }).content).toContain("[REDACTED]");
+    expect((commentWrites[1]!.values?.[3] as { content: string }).content).not.toContain("abcdefghijklmnop");
+
+    const reopened = createPostgresTodosStorageAdapter({ client, service: "todos" });
+    const persisted = await request("GET", `/v1/tasks/${task.id}/comments`, undefined, reopened);
+    expect(persisted.status).toBe(200);
+    const persistedBody = await persisted.json() as { comments: Array<{ content: string }>; count: number };
+    expect(persistedBody.count).toBe(2);
+    expect(persistedBody.comments.map((comment) => comment.content)).toEqual([
+      "first safe comment",
+      "Bearer [REDACTED] should redact",
+    ]);
+
+    const historical = {
+      id: "historical-comment",
+      task_id: task.id,
+      agent_id: null,
+      session_id: null,
+      content: "Bearer abcdefghijklmnop historical",
+      type: "comment",
+      progress_pct: null,
+      created_at: "2020-01-01T00:00:00.000Z",
+    };
+    await client.query(
+      "INSERT INTO todos_sync_records RETURNING object_id",
+      ["todos", "comments", historical.id, historical, historical.created_at, null, null],
+    );
+    const historicalRead = await request("GET", `/v1/tasks/${task.id}/comments`, undefined, reopened);
+    const historicalBody = await historicalRead.json() as { comments: Array<{ id: string; content: string }> };
+    const safeHistorical = historicalBody.comments.find((comment) => comment.id === historical.id);
+    expect(safeHistorical?.content).toContain("[REDACTED]");
+    expect(safeHistorical?.content).not.toContain("abcdefghijklmnop");
   });
 
   test("cloud adapter supports agent heartbeat/release and commit/ref links on the shared dataset", async () => {

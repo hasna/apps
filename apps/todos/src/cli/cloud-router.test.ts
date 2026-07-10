@@ -9,6 +9,8 @@ import {
   cloudUpdateTask,
   cloudDeleteTask,
   cloudTaskAction,
+  cloudAddComment,
+  cloudListComments,
   cloudRegisterAgent,
   cloudLockTask,
   cloudUnlockTask,
@@ -171,6 +173,89 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     expect(task.status).toBe("in_progress");
     expect(calls[0]!.method).toBe("POST");
     expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t4/start");
+  });
+
+  test("comments -> validates the envelope, count, method, auth, and encoded task path", async () => {
+    const comment = {
+      id: "c1",
+      task_id: "task/with ? reserved",
+      agent_id: null,
+      session_id: null,
+      content: "safe comment",
+      type: "comment" as const,
+      progress_pct: null,
+      created_at: "2026-07-10T00:00:00.000Z",
+    };
+    const calls = installFetch(() => ({ body: { comments: [comment], count: 1 } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudListComments(client, comment.task_id)).resolves.toEqual([comment]);
+    expect(calls[0]!.method).toBe("GET");
+    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/task%2Fwith%20%3F%20reserved/comments");
+    expect(calls[0]!.headers["authorization"]).toBe("Bearer hasna_todos_test_key");
+  });
+
+  test("comment write responses are redacted before JSON callers can emit them", async () => {
+    const rawComment = {
+      id: "c-write",
+      task_id: "t-write",
+      agent_id: null,
+      session_id: null,
+      content: "Bearer abcdefghijklmnop should redact",
+      type: "comment" as const,
+      progress_pct: null,
+      created_at: "2026-07-10T00:00:00.000Z",
+    };
+    installFetch(() => ({ status: 201, body: { comment: rawComment } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const comment = await cloudAddComment(client, rawComment.task_id, { content: rawComment.content });
+    expect(comment.content).toContain("[REDACTED]");
+    expect(comment.content).not.toContain("abcdefghijklmnop");
+  });
+
+  test("comments accepts the legacy bare-array response", async () => {
+    const comment = {
+      id: "c2",
+      task_id: "t2",
+      agent_id: null,
+      session_id: null,
+      content: "legacy response",
+      type: "comment" as const,
+      progress_pct: null,
+      created_at: "2026-07-10T00:00:00.000Z",
+    };
+    installFetch(() => ({ body: [comment] }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudListComments(client, "t2")).resolves.toEqual([comment]);
+  });
+
+  test("comments fails closed on malformed or internally inconsistent 2xx responses", async () => {
+    const malformed = [null, {}, { comments: null }, { comments: [{}], count: 1 }, { comments: [], count: 1 }];
+    for (const body of malformed) {
+      resetTodosCloudClient();
+      installFetch(() => ({ body }));
+      const client = getTodosCloudClient(CLOUD_ENV)!;
+      await expect(cloudListComments(client, "t3")).rejects.toThrow(/invalid cloud comments response/i);
+    }
+  });
+
+  test("comments gives an actionable compatibility error for an older server and propagates 5xx", async () => {
+    for (const status of [404, 405]) {
+      resetTodosCloudClient();
+      installFetch(() => ({ status, body: { error: "unsupported" } }));
+      const client = getTodosCloudClient(CLOUD_ENV)!;
+      await expect(cloudListComments(client, "t4")).rejects.toThrow(/compatible.*server|server.*compatible/i);
+    }
+
+    resetTodosCloudClient();
+    installFetch(() => ({ status: 500, body: { error: "failed" } }));
+    const retryingClient = getTodosCloudClient(CLOUD_ENV)!;
+    try {
+      await cloudListComments(retryingClient, "t4");
+      throw new Error("expected cloudListComments to reject");
+    } catch (error) {
+      expect((error as { status?: number }).status).toBe(500);
+    }
   });
 });
 
