@@ -169,33 +169,56 @@ function createDaytonaGuestBrokerSession(handle: Pick<PtyHandle, "sendInput" | "
   return { session, finalize }
 }
 
+function snapshotDaytonaProviderBytes(data: Uint8Array): Uint8Array {
+  try {
+    if (!(data instanceof Uint8Array)) throw new TypeError("invalid_provider_bytes")
+    const buffer = data.buffer
+    if (typeof SharedArrayBuffer !== "undefined" && buffer instanceof SharedArrayBuffer) {
+      throw new TypeError("shared_provider_bytes")
+    }
+    const byteLength = data.byteLength
+    const snapshot = new Uint8Array(data)
+    if (snapshot.byteLength !== byteLength) throw new TypeError("unstable_provider_bytes")
+    return snapshot
+  } catch (cause) {
+    throw adapterError("integrity_failed", { cause })
+  }
+}
+
 export async function withDaytonaGuestBrokerSdkSession(
   process: DaytonaOfficialBrokerProcessV1,
   onData: (data: Uint8Array) => void | Promise<void>,
   use: (session: GuestBrokerSdkSessionV1) => Promise<void>,
 ): Promise<void> {
-  const handle = await process.createPty({
-    id: DAYTONA_GUEST_BROKER_PTY_ID,
-    cwd: "/workspace",
-    envs: {},
-    cols: 80,
-    rows: 24,
-    async onData(data) {
-      if (
-        !(data instanceof Uint8Array) ||
-        (typeof SharedArrayBuffer !== "undefined" && data.buffer instanceof SharedArrayBuffer)
-      ) {
-        throw adapterError("integrity_failed")
-      }
-      await onData(new Uint8Array(data))
-    },
-  })
+  let inboundOpen = true
+  let handle: Awaited<ReturnType<DaytonaOfficialBrokerProcessV1["createPty"]>>
+  try {
+    handle = await process.createPty({
+      id: DAYTONA_GUEST_BROKER_PTY_ID,
+      cwd: "/workspace",
+      envs: {},
+      cols: 80,
+      rows: 24,
+      async onData(data) {
+        if (!inboundOpen) return
+        const snapshot = snapshotDaytonaProviderBytes(data)
+        // Synchronous execution through this second check makes overlap semantics explicit:
+        // an already-started delivery may finish, but no delivery starts after finalization.
+        if (!inboundOpen) return
+        await onData(snapshot)
+      },
+    })
+  } catch (error) {
+    inboundOpen = false
+    throw error
+  }
   const { session, finalize } = createDaytonaGuestBrokerSession(handle)
   try {
     await handle.waitForConnection()
     await handle.sendInput(`${MANAGED_GUEST_BROKER_BOOTSTRAP_COMMAND}\n`)
     await use(session)
   } finally {
+    inboundOpen = false
     await finalize()
   }
 }

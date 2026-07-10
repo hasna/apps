@@ -640,14 +640,124 @@ describe("official SDK guest-broker compensation bridges", () => {
       (data) => {
         delivered = data
       },
-      async () => {},
+      async () => {
+        const providerBytes = new Uint8Array([1])
+        await sdkOnData!(providerBytes)
+        providerBytes[0] = 2
+      },
     )
 
-    const providerBytes = new Uint8Array([1])
-    await sdkOnData!(providerBytes)
-    providerBytes[0] = 2
-    expect(delivered).not.toBe(providerBytes)
     expect(delivered?.[0]).toBe(1)
+  })
+
+  test("Daytona drops provider callbacks before successful and failed scope finalization", async () => {
+    for (const disconnectFailure of [false, true]) {
+      let sdkOnData: ((data: Uint8Array) => void | Promise<void>) | undefined
+      const delivered: number[] = []
+      let disconnectCalls = 0
+      const process = {
+        async createPty(options: { onData: (data: Uint8Array) => void | Promise<void> }) {
+          sdkOnData = options.onData
+          return {
+            async waitForConnection() {},
+            async sendInput() {},
+            async disconnect() {
+              disconnectCalls += 1
+              await sdkOnData!(new Uint8Array([disconnectCalls]))
+              if (disconnectFailure) throw new Error("persistent disconnect failure")
+            },
+          }
+        },
+      } as unknown as DaytonaOfficialBrokerProcessV1
+
+      const result = withDaytonaGuestBrokerSdkSession(
+        process,
+        (data) => {
+          delivered.push(data[0]!)
+        },
+        async () => {
+          await sdkOnData!(new Uint8Array([7]))
+        },
+      )
+      if (disconnectFailure) {
+        await expect(result).rejects.toThrow("persistent disconnect failure")
+        expect(disconnectCalls).toBe(2)
+      } else {
+        await result
+        expect(disconnectCalls).toBe(1)
+      }
+
+      await sdkOnData!(new Uint8Array([9]))
+      expect(delivered).toEqual([7])
+    }
+  })
+
+  test("Daytona converts hostile typed-array access and copy failures to integrity errors", async () => {
+    let sdkOnData: ((data: Uint8Array) => void | Promise<void>) | undefined
+    const failures: unknown[] = []
+    const process = {
+      async createPty(options: { onData: (data: Uint8Array) => void | Promise<void> }) {
+        sdkOnData = options.onData
+        return {
+          async waitForConnection() {},
+          async sendInput() {},
+          async disconnect() {},
+        }
+      },
+    } as unknown as DaytonaOfficialBrokerProcessV1
+
+    await withDaytonaGuestBrokerSdkSession(process, () => {}, async () => {
+      const bufferAccessFailure = new Proxy(new Uint8Array([1]), {})
+      const lengthTarget = new Uint8Array([2])
+      const lengthAccessFailure = new Proxy(lengthTarget, {
+        get(target, key, receiver) {
+          if (key === "buffer") return target.buffer
+          return Reflect.get(target, key, receiver)
+        },
+      })
+      const revokedBuffer = Proxy.revocable(new ArrayBuffer(1), {})
+      revokedBuffer.revoke()
+      const sharedBufferCheckTarget = new Uint8Array([3])
+      const sharedBufferCheckFailure = new Proxy(sharedBufferCheckTarget, {
+        get(target, key, receiver) {
+          if (key === "buffer") return revokedBuffer.proxy
+          return Reflect.get(target, key, receiver)
+        },
+      })
+      const copyTarget = new Uint8Array([4])
+      const copyFailure = new Proxy(copyTarget, {
+        get(target, key, receiver) {
+          if (key === "buffer") return target.buffer
+          if (key === "byteLength") return target.byteLength
+          return Reflect.get(target, key, receiver)
+        },
+      })
+      const revokedInput = Proxy.revocable(new Uint8Array([5]), {})
+      revokedInput.revoke()
+      const detached = new Uint8Array([2])
+      structuredClone(detached.buffer, { transfer: [detached.buffer] })
+      const hostileInputs = [
+        bufferAccessFailure,
+        lengthAccessFailure,
+        sharedBufferCheckFailure,
+        copyFailure,
+        revokedInput.proxy,
+        detached,
+      ]
+      for (const hostile of hostileInputs) {
+        try {
+          await sdkOnData!(hostile)
+        } catch (error) {
+          failures.push(error)
+        }
+      }
+    })
+
+    expect(failures).toHaveLength(6)
+    for (const failure of failures) {
+      expect(failure).toBeInstanceOf(AdapterContractError)
+      expect(failure).toMatchObject({ code: "integrity_failed" })
+    }
   })
 
   test("credential-bound create bridges pass only hardened provider options", async () => {
