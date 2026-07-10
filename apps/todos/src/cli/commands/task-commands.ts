@@ -21,6 +21,7 @@ import {
   getTodosCloudClient,
   cloudListTasks,
   cloudGetTask,
+  cloudListComments,
   cloudCreateTask,
   cloudUpdateTask,
   cloudDeleteTask,
@@ -695,10 +696,11 @@ export function registerTaskCommands(program: Command) {
       let task: any;
       if (cloud) {
         const remote = await cloudGetTask(cloud, resolveTaskId(id));
+        const comments = remote ? await cloudListComments(cloud, remote.id) : [];
         // The /v1 API returns the task row without relation graphs; default the
         // relation arrays so the detail renderer below never touches undefined.
         task = remote
-          ? { subtasks: [], dependencies: [], blocked_by: [], comments: [], ...remote, tags: remote.tags ?? [] }
+          ? { subtasks: [], dependencies: [], blocked_by: [], ...remote, tags: remote.tags ?? [], comments }
           : null;
       } else {
         const resolvedId = resolveTaskId(id);
@@ -804,10 +806,11 @@ export function registerTaskCommands(program: Command) {
       let task: any;
       if (cloud) {
         const remote = await cloudGetTask(cloud, resolvedId);
+        const comments = remote ? await cloudListComments(cloud, remote.id) : [];
         // The /v1 API returns the task row without relation graphs; default the
         // relation arrays so the detail renderer below never touches undefined.
         task = remote
-          ? { subtasks: [], dependencies: [], blocked_by: [], comments: [], checklist: [], ...remote, tags: remote.tags ?? [] }
+          ? { subtasks: [], dependencies: [], blocked_by: [], checklist: [], ...remote, tags: remote.tags ?? [], comments }
           : null;
       } else {
         task = getTaskWithRelations(resolvedId);

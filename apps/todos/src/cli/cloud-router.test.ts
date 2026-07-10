@@ -39,7 +39,10 @@ const CLOUD_ENV = {
 
 type Call = { url: string; method: string; headers: Record<string, string>; body: unknown };
 
+let previousFetch: typeof globalThis.fetch | undefined;
+
 function installFetch(handler: (call: Call) => { status?: number; body?: unknown }): Call[] {
+  previousFetch ??= globalThis.fetch;
   const calls: Call[] = [];
   (globalThis as any).fetch = async (input: any, init: any = {}) => {
     const headers: Record<string, string> = {};
@@ -62,6 +65,10 @@ function installFetch(handler: (call: Call) => { status?: number; body?: unknown
 }
 
 afterEach(() => {
+  if (previousFetch) {
+    globalThis.fetch = previousFetch;
+    previousFetch = undefined;
+  }
   resetTodosCloudClient();
 });
 

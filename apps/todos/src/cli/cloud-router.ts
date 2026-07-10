@@ -183,6 +183,16 @@ export async function cloudAddComment(
   return raw as TaskComment;
 }
 
+/** List persisted comments for one cloud task (`GET /v1/tasks/:id/comments`). */
+export async function cloudListComments(client: HasnaStorageClient, taskId: string): Promise<TaskComment[]> {
+  const raw = await client.transport.get<unknown>(`/tasks/${encodeURIComponent(taskId)}/comments`);
+  if (raw && typeof raw === "object" && "comments" in (raw as Record<string, unknown>)) {
+    const comments = (raw as { comments?: unknown }).comments;
+    return Array.isArray(comments) ? (comments as TaskComment[]) : [];
+  }
+  return Array.isArray(raw) ? (raw as TaskComment[]) : [];
+}
+
 /**
  * Per-task audit trail (`GET /v1/tasks/:id/history`). The CLI `history` command
  * read this machine's LOCAL sqlite, so a flipped machine reported "No history" for
