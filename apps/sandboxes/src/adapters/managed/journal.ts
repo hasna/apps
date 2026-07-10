@@ -205,34 +205,85 @@ function assertAnchorRecord(
 }
 
 function validateHigherEpoch(ctx: AdapterCallContextV1, op: ProviderOperationV1): void {
-  const attempt = ctx.dispatch_attempt
-  if (attempt === null || typeof attempt !== "object") {
+  const attempt = ctx.dispatch_attempt as unknown
+  if (attempt === null || typeof attempt !== "object" || Array.isArray(attempt)) {
     throw adapterError("dispatch_anchor_mismatch")
   }
-  if (attempt.kind === "initial") {
+  const attemptRecord = attempt as Record<string, unknown>
+  if (attemptRecord.kind === "initial") {
     if (
-      attempt.operation_execution_epoch !== ctx.fence.operation_execution_epoch
+      !hasExactKeys(attempt, ["kind", "operation_execution_epoch"]) ||
+      typeof attemptRecord.operation_execution_epoch !== "bigint"
+    ) {
+      throw adapterError("dispatch_anchor_mismatch")
+    }
+    if (
+      attemptRecord.operation_execution_epoch !== ctx.fence.operation_execution_epoch
     ) {
       throw adapterError("stale_operation_execution_epoch")
     }
     return
   }
-  if (attempt.kind === "exact_duplicate") {
+  if (attemptRecord.kind === "exact_duplicate") {
     if (
-      attempt.operation_execution_epoch !== ctx.fence.operation_execution_epoch ||
-      attempt.prior_record_sha256 !== journalAnchorSha256(ctx.invocation_anchor)
+      !hasExactKeys(attempt, ["kind", "operation_execution_epoch", "prior_record_sha256"]) ||
+      typeof attemptRecord.operation_execution_epoch !== "bigint" ||
+      !isDigest(attemptRecord.prior_record_sha256)
+    ) {
+      throw adapterError("dispatch_anchor_mismatch")
+    }
+    if (
+      attemptRecord.operation_execution_epoch !== ctx.fence.operation_execution_epoch ||
+      attemptRecord.prior_record_sha256 !== journalAnchorSha256(ctx.invocation_anchor)
     ) {
       throw adapterError("dispatch_anchor_mismatch")
     }
     return
   }
-  const predecessor = attempt.previous_operation_execution_epoch
-  const proof = attempt.authorization
   if (
-    proof.schema_version !== "sandboxes.failed-no-effect/v1" ||
-    proof.outcome_kind !== "failed_no_effect" ||
-    !isDigest(proof.prior_outcome_anchor_sha256) ||
-    !isDigest(proof.evidence_sha256) ||
+    attemptRecord.kind !== "higher_epoch_after_failed_no_effect" ||
+    !hasExactKeys(attempt, ["kind", "previous_operation_execution_epoch", "authorization"]) ||
+    typeof attemptRecord.previous_operation_execution_epoch !== "bigint" ||
+    attemptRecord.authorization === null ||
+    typeof attemptRecord.authorization !== "object" ||
+    Array.isArray(attemptRecord.authorization)
+  ) {
+    throw adapterError("dispatch_anchor_mismatch")
+  }
+  const proofRecord = attemptRecord.authorization as Record<string, unknown>
+  if (
+    !hasExactKeys(proofRecord, [
+      "schema_version",
+      "outcome_kind",
+      "previous_operation_execution_epoch",
+      "successor_operation_execution_epoch",
+      "target_sha256",
+      "request_sha256",
+      "resource_id",
+      "provider_idempotency_token_sha256",
+      "provider_creation_token_sha256",
+      "operation_digest",
+      "prior_outcome_anchor_sha256",
+      "evidence_sha256",
+    ]) ||
+    proofRecord.schema_version !== "sandboxes.failed-no-effect/v1" ||
+    proofRecord.outcome_kind !== "failed_no_effect" ||
+    typeof proofRecord.previous_operation_execution_epoch !== "bigint" ||
+    typeof proofRecord.successor_operation_execution_epoch !== "bigint" ||
+    !isDigest(proofRecord.target_sha256) ||
+    !isDigest(proofRecord.request_sha256) ||
+    typeof proofRecord.resource_id !== "string" ||
+    !isDigest(proofRecord.provider_idempotency_token_sha256) ||
+    !isDigest(proofRecord.provider_creation_token_sha256) ||
+    !isDigest(proofRecord.operation_digest) ||
+    !isDigest(proofRecord.prior_outcome_anchor_sha256) ||
+    !isDigest(proofRecord.evidence_sha256)
+  ) {
+    throw adapterError("dispatch_anchor_mismatch")
+  }
+  const predecessor = attemptRecord.previous_operation_execution_epoch
+  const proof = proofRecord as unknown as FailedNoEffectAuthorizationV1
+  if (
     ctx.invocation_anchor.record.payload_sha256 !== failedNoEffectAuthorizationPayloadSha256(proof)
   ) {
     throw adapterError("dispatch_anchor_mismatch")

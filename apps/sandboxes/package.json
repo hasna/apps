@@ -3,6 +3,13 @@
   "version": "0.0.0-v1-managed-adapters",
   "private": true,
   "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist/index.js"
+  ],
   "scripts": {
     "test": "bun run test:hermetic",
     "test:hermetic": "tmp=$(mktemp -d); trap 'rm -rf \"$tmp\"' EXIT; env -i PATH=\"$PATH\" HOME=\"$tmp\" XDG_CONFIG_HOME=\"$tmp/config\" TMPDIR=\"$tmp\" TZ=UTC bun test tests/managed-adapters",

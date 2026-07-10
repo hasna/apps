@@ -1,6 +1,6 @@
 import type { ListSandboxesQuery, Sandbox as DaytonaSandbox } from "@daytona/sdk"
 import type { SandboxInfo, SandboxListOpts } from "e2b"
-import { canonicalSha256 } from "./canonical"
+import { canonicalSha256, isDigest } from "./canonical"
 import { adapterError } from "./errors"
 import type {
   AdapterProviderResourceV1,
@@ -79,6 +79,20 @@ function observationTime(observedAt: () => string): string {
   const value = observedAt()
   if (Number.isNaN(Date.parse(value))) throw adapterError("integrity_failed")
   return value
+}
+
+function validateAttestation(value: ManagedResourceAttestationV1): void {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    typeof value.source_free !== "boolean" ||
+    typeof value.credential_free !== "boolean" ||
+    typeof value.strong_vm !== "boolean" ||
+    !["arm64", "amd64"].includes(value.architecture) ||
+    !isDigest(value.evidence_sha256)
+  ) {
+    throw adapterError("integrity_failed")
+  }
 }
 
 function unknownNetworkObservation(observedAt: string): NetworkPolicyObservationV1 {
@@ -218,25 +232,43 @@ export interface E2bOfficialReadSdkV1 {
 
 export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBridge {
   readonly provider_id = "e2b" as const
+  readonly #sdk: E2bOfficialReadSdkV1
+  readonly #attestation: ManagedResourceAttestationPortV1
+  readonly #installationSha256: Digest
+  readonly #providerScopeRefSha256: Digest
+  readonly #observedAt: () => string
 
   constructor(
-    private readonly sdk: E2bOfficialReadSdkV1,
-    private readonly attestation: ManagedResourceAttestationPortV1,
-    private readonly installationSha256: Digest,
-    private readonly providerScopeRefSha256: Digest,
-    private readonly observedAt: () => string,
+    sdk: E2bOfficialReadSdkV1,
+    attestation: ManagedResourceAttestationPortV1,
+    installationSha256: Digest,
+    providerScopeRefSha256: Digest,
+    observedAt: () => string,
   ) {
     super()
+    if (
+      !isDigest(installationSha256) ||
+      !isDigest(providerScopeRefSha256) ||
+      typeof observedAt !== "function"
+    ) {
+      throw adapterError("validation_failed")
+    }
+    this.#sdk = sdk
+    this.#attestation = attestation
+    this.#installationSha256 = installationSha256
+    this.#providerScopeRefSha256 = providerScopeRefSha256
+    this.#observedAt = observedAt
   }
 
   async #map(info: SandboxInfo): Promise<AdapterProviderResourceV1> {
-    const observedAt = observationTime(this.observedAt)
+    const observedAt = observationTime(this.#observedAt)
     const fingerprint = label(info.metadata, "hasna.immutable_fingerprint_sha256")
-    const attestation = await this.attestation.attest({
+    const attestation = await this.#attestation.attest({
       provider: this.provider_id,
       opaque_resource_id: info.sandboxId,
       immutable_fingerprint_sha256: fingerprint,
     })
+    validateAttestation(attestation)
     const denyAll =
       info.allowInternetAccess === false &&
       info.network?.denyOut?.includes("0.0.0.0/0") === true &&
@@ -267,8 +299,8 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
       ephemeral: false,
       owned:
         attestation.strong_vm &&
-        label(info.metadata, "hasna.installation_sha256") === this.installationSha256 &&
-        label(info.metadata, "hasna.provider_scope_ref_sha256") === this.providerScopeRefSha256,
+        label(info.metadata, "hasna.installation_sha256") === this.#installationSha256 &&
+        label(info.metadata, "hasna.provider_scope_ref_sha256") === this.#providerScopeRefSha256,
       source_attached: !attestation.source_free || (info.volumeMounts?.length ?? 0) !== 0,
       credential_attached: !attestation.credential_free,
       guest_broker_bootstrapped: false,
@@ -277,7 +309,7 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
   }
 
   async #page(options: SandboxListOpts): Promise<ProviderResourcePageV1> {
-    const paginator = this.sdk.list(options)
+    const paginator = this.#sdk.list(options)
     if (!paginator.hasNext) return { items: [] }
     const items = await Promise.all((await paginator.nextItems()).map((info) => this.#map(info)))
     return { items, ...(paginator.nextToken === undefined ? {} : { next_cursor: paginator.nextToken }) }
@@ -287,8 +319,8 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
     return this.#page({
       query: {
         metadata: {
-          "hasna.installation_sha256": this.installationSha256,
-          "hasna.provider_scope_ref_sha256": this.providerScopeRefSha256,
+          "hasna.installation_sha256": this.#installationSha256,
+          "hasna.provider_scope_ref_sha256": this.#providerScopeRefSha256,
           "hasna.creation_token_sha256": token,
         },
       },
@@ -298,7 +330,7 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
   }
 
   async inspectResource(opaqueResourceId: string): Promise<AdapterProviderResourceV1 | "absent"> {
-    const info = await this.sdk.getInfo(opaqueResourceId)
+    const info = await this.#sdk.getInfo(opaqueResourceId)
     return info === "absent" ? "absent" : this.#map(info)
   }
 
@@ -306,8 +338,8 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
     return this.#page({
       query: {
         metadata: {
-          "hasna.installation_sha256": this.installationSha256,
-          "hasna.provider_scope_ref_sha256": this.providerScopeRefSha256,
+          "hasna.installation_sha256": this.#installationSha256,
+          "hasna.provider_scope_ref_sha256": this.#providerScopeRefSha256,
         },
       },
       limit: PAGE_LIMIT,
@@ -323,26 +355,44 @@ export interface DaytonaOfficialReadSdkV1 {
 
 export class DaytonaOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBridge {
   readonly provider_id = "daytona_cloud" as const
+  readonly #sdk: DaytonaOfficialReadSdkV1
+  readonly #attestation: ManagedResourceAttestationPortV1
+  readonly #installationSha256: Digest
+  readonly #providerScopeRefSha256: Digest
+  readonly #observedAt: () => string
 
   constructor(
-    private readonly sdk: DaytonaOfficialReadSdkV1,
-    private readonly attestation: ManagedResourceAttestationPortV1,
-    private readonly installationSha256: Digest,
-    private readonly providerScopeRefSha256: Digest,
-    private readonly observedAt: () => string,
+    sdk: DaytonaOfficialReadSdkV1,
+    attestation: ManagedResourceAttestationPortV1,
+    installationSha256: Digest,
+    providerScopeRefSha256: Digest,
+    observedAt: () => string,
   ) {
     super()
+    if (
+      !isDigest(installationSha256) ||
+      !isDigest(providerScopeRefSha256) ||
+      typeof observedAt !== "function"
+    ) {
+      throw adapterError("validation_failed")
+    }
+    this.#sdk = sdk
+    this.#attestation = attestation
+    this.#installationSha256 = installationSha256
+    this.#providerScopeRefSha256 = providerScopeRefSha256
+    this.#observedAt = observedAt
   }
 
   async #map(sandbox: DaytonaSandbox): Promise<AdapterProviderResourceV1> {
     await sandbox.refreshData()
-    const observedAt = observationTime(this.observedAt)
+    const observedAt = observationTime(this.#observedAt)
     const fingerprint = label(sandbox.labels, "hasna.immutable_fingerprint_sha256")
-    const attestation = await this.attestation.attest({
+    const attestation = await this.#attestation.attest({
       provider: this.provider_id,
       opaque_resource_id: sandbox.id,
       immutable_fingerprint_sha256: fingerprint,
     })
+    validateAttestation(attestation)
     const stopped = sandbox.state === "stopped" || sandbox.state === "paused"
     const denyAll = sandbox.networkBlockAll === true && sandbox.public === false
     return {
@@ -371,8 +421,8 @@ export class DaytonaOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkContro
       ephemeral: sandbox.autoDeleteInterval === 0,
       owned:
         attestation.strong_vm &&
-        label(sandbox.labels, "hasna.installation_sha256") === this.installationSha256 &&
-        label(sandbox.labels, "hasna.provider_scope_ref_sha256") === this.providerScopeRefSha256,
+        label(sandbox.labels, "hasna.installation_sha256") === this.#installationSha256 &&
+        label(sandbox.labels, "hasna.provider_scope_ref_sha256") === this.#providerScopeRefSha256,
       source_attached: !attestation.source_free || (sandbox.volumes?.length ?? 0) !== 0,
       credential_attached: !attestation.credential_free || Object.keys(sandbox.env ?? {}).length !== 0,
       guest_broker_bootstrapped: false,
@@ -383,7 +433,7 @@ export class DaytonaOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkContro
   async #list(query: ListSandboxesQuery, cursor?: string): Promise<ProviderResourcePageV1> {
     if (cursor !== undefined) throw adapterError("unsupported_runtime_feature")
     const items: AdapterProviderResourceV1[] = []
-    for await (const sandbox of this.sdk.list(query)) {
+    for await (const sandbox of this.#sdk.list(query)) {
       if (items.length >= PAGE_LIMIT) {
         throw adapterError("provider_state_unknown", { quarantineRequired: true })
       }
@@ -396,8 +446,8 @@ export class DaytonaOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkContro
     return this.#list(
       {
         labels: {
-          "hasna.installation_sha256": this.installationSha256,
-          "hasna.provider_scope_ref_sha256": this.providerScopeRefSha256,
+          "hasna.installation_sha256": this.#installationSha256,
+          "hasna.provider_scope_ref_sha256": this.#providerScopeRefSha256,
           "hasna.creation_token_sha256": token,
         },
         limit: PAGE_LIMIT,
@@ -407,7 +457,7 @@ export class DaytonaOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkContro
   }
 
   async inspectResource(opaqueResourceId: string): Promise<AdapterProviderResourceV1 | "absent"> {
-    const sandbox = await this.sdk.get(opaqueResourceId)
+    const sandbox = await this.#sdk.get(opaqueResourceId)
     return sandbox === "absent" ? "absent" : this.#map(sandbox)
   }
 
@@ -415,8 +465,8 @@ export class DaytonaOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkContro
     return this.#list(
       {
         labels: {
-          "hasna.installation_sha256": this.installationSha256,
-          "hasna.provider_scope_ref_sha256": this.providerScopeRefSha256,
+          "hasna.installation_sha256": this.#installationSha256,
+          "hasna.provider_scope_ref_sha256": this.#providerScopeRefSha256,
         },
         limit: PAGE_LIMIT,
       },

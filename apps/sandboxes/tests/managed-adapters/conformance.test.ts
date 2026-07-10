@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test"
 import { createRequire } from "node:module"
-import { ManagedProviderAdapter } from "../../src/adapters/managed/adapter"
 import {
   AdapterContractError,
   MANAGED_GUEST_BROKER_BOOTSTRAP_COMMAND,
@@ -43,6 +42,7 @@ import {
   makeContext,
   makeOperation as makeRawOperation,
 } from "./fakes"
+import { createHermeticManagedProviderAdapterForTest } from "./hermetic-adapter"
 
 const SPEC = {
   schema_version: "sandboxes.runtime/v1" as const,
@@ -243,15 +243,7 @@ function harness(
     guest_broker_authenticator: guestBrokerAuthenticator,
   } as const
   const adapter = hermeticConformanceOnly
-    ? new ManagedProviderAdapter(
-        {
-          provider,
-          sdkPackage: provider === "e2b" ? "e2b" : "@daytona/sdk",
-          sdkVersion: provider === "e2b" ? "2.31.0" : "0.193.0",
-        },
-        deps,
-        true,
-      )
+    ? createHermeticManagedProviderAdapterForTest(provider, deps)
     : provider === "e2b"
       ? createE2bAdapter(deps)
       : createDaytonaCloudAdapter(deps)
@@ -539,6 +531,13 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
     test("production factories never let hermetic evidence reach provider credentials", async () => {
       const h = harness(provider, false)
       const op = makeOperation("create_inert")
+
+      expect((h.adapter as unknown as { constructor?: unknown }).constructor).toBeUndefined()
+      expect(Object.getOwnPropertyDescriptor(Object.getPrototypeOf(h.adapter), "constructor")).toMatchObject({
+        value: undefined,
+        writable: false,
+        configurable: false,
+      })
 
       await expect(
         h.adapter.create_inert(makeContext(op, h.journal), SPEC, op, digest("77")),
@@ -898,6 +897,105 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
         ),
       ).rejects.toMatchObject({ code: "validation_failed" })
       expect(h.credentials.acquisitions).toBe(before)
+    })
+
+    test("rejects missing, string, and number provider file revisions", async () => {
+      const path = validateWorkspacePath("repo/file.txt")
+
+      const statHarness = harness(provider)
+      const statHandle = await create(statHarness)
+      await activate(statHarness, statHandle)
+      statHarness.client.statFile = async () => ({
+        path,
+        type: "file",
+        size_bytes: 1,
+        sha256: canonicalSha256(new Uint8Array([1])),
+        revision: undefined,
+        mode: 0o600,
+      } as never)
+      const statOp = makeOperation("file_stat", {
+        external_anchor_kind: "READ_PROBE",
+        generation_transition: undefined,
+      })
+      await expect(
+        statHarness.adapter.stat_file(makeContext(statOp, statHarness.journal), statHandle, path, statOp),
+      ).rejects.toMatchObject({ code: "integrity_failed" })
+      statHarness.client.statFile = async () => ({
+        path,
+        type: "file",
+        size_bytes: 1,
+        sha256: canonicalSha256(new Uint8Array([1])),
+        revision: 1n,
+        mode: 0o600,
+        undeclared_provider_field: true,
+      } as never)
+      const extraFieldStatOp = makeOperation("file_stat", {
+        external_anchor_kind: "READ_PROBE",
+        generation_transition: undefined,
+      })
+      await expect(
+        statHarness.adapter.stat_file(
+          makeContext(extraFieldStatOp, statHarness.journal),
+          statHandle,
+          path,
+          extraFieldStatOp,
+        ),
+      ).rejects.toMatchObject({ code: "integrity_failed" })
+      expect(statHarness.physicalSafetyGate.containReasons).toEqual([])
+
+      const readHarness = harness(provider)
+      const readHandle = await create(readHarness)
+      await activate(readHarness, readHandle)
+      readHarness.client.readFile = async function* () {
+        const bytes = new Uint8Array([1])
+        yield {
+          bytes,
+          total_file_sha256: canonicalSha256(bytes),
+          file_revision: "1",
+        } as never
+      }
+      const readOp = makeOperation("file_read", {
+        external_anchor_kind: "READ_PROBE",
+        generation_transition: undefined,
+      })
+      const consumeRead = async () => {
+        for await (const _chunk of readHarness.adapter.read_file(
+          makeContext(readOp, readHarness.journal),
+          readHandle,
+          { path, offset: 0, length: 10 },
+          readOp,
+        )) {
+          // Fully consume so stream validation executes.
+        }
+      }
+      await expect(consumeRead()).rejects.toMatchObject({ code: "integrity_failed" })
+      expect(readHarness.physicalSafetyGate.containReasons).toEqual([])
+
+      const writeHarness = harness(provider)
+      const writeHandle = await create(writeHarness)
+      await activate(writeHarness, writeHandle)
+      const bytes = new TextEncoder().encode("safe bytes")
+      writeHarness.client.writeFileAtomic = async () => ({
+        path,
+        size_bytes: bytes.byteLength,
+        sha256: canonicalSha256(bytes),
+        revision: 1,
+      } as never)
+      const writeOp = makeOperation("file_write", {
+        external_anchor_kind: "DISPATCHED",
+        generation_transition: undefined,
+      })
+      const outcomesBeforeWrite = writeHarness.journal.outcomes.length
+      await expect(
+        writeHarness.adapter.write_file(
+          makeContext(writeOp, writeHarness.journal),
+          writeHandle,
+          { path, bytes, if_absent: true },
+          writeOp,
+        ),
+      ).rejects.toMatchObject({ code: "provider_state_unknown", quarantine_required: true })
+      expect(writeHarness.journal.outcomes).toHaveLength(outcomesBeforeWrite)
+      expect(writeHarness.physicalSafetyGate.containReasons).toContain("provider_effect_ambiguous")
     })
 
     test("expire pauses or stops without destroying and refuses unsafe auto-delete", async () => {

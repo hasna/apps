@@ -163,6 +163,13 @@ interface AdapterIdentityV1 {
   sdkVersion: string
 }
 
+interface ManagedAdmissionCheckInputV1 {
+  identity: Readonly<AdapterIdentityV1>
+  dependencies: ManagedAdapterDependenciesV1
+}
+
+type ManagedAdmissionCheckV1 = (input: ManagedAdmissionCheckInputV1) => Promise<void>
+
 function requireCapability<K extends keyof ProviderCapabilitiesV1>(
   client: ManagedProviderControlPortV1,
   capability: K,
@@ -623,6 +630,9 @@ function snapshotContext<T extends AdapterCallContextV1>(ctx: T): T {
   if (!isRecord(ctx)) throw adapterError("validation_failed")
   try {
     const { signal, ...data } = ctx
+    if (signal !== undefined && !(signal instanceof AbortSignal)) {
+      throw adapterError("validation_failed")
+    }
     return {
       ...snapshotData(data),
       ...(signal === undefined ? {} : { signal }),
@@ -646,15 +656,15 @@ function lifecycleLockKey(
   })
 }
 
-export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
+class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
   readonly #identity: AdapterIdentityV1
   readonly #dependencies: ManagedAdapterDependenciesV1
-  readonly #hermeticConformanceOnly: boolean
+  readonly #assertAdmission: ManagedAdmissionCheckV1
 
   constructor(
     identity: AdapterIdentityV1,
     dependencies: ManagedAdapterDependenciesV1,
-    hermeticConformanceOnly = false,
+    assertAdmission: ManagedAdmissionCheckV1,
   ) {
     this.#identity = { ...identity }
     this.#dependencies = {
@@ -662,7 +672,7 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
       admission: snapshotData(dependencies.admission),
       read_retry_policy: snapshotData(dependencies.read_retry_policy),
     }
-    this.#hermeticConformanceOnly = hermeticConformanceOnly
+    this.#assertAdmission = assertAdmission
     if (dependencies.admission.exact_sdk_version !== identity.sdkVersion) {
       throw adapterError("unsupported_runtime_feature")
     }
@@ -789,29 +799,10 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
   }
 
   async #assertAdmissionVerified(): Promise<void> {
-    if (!this.#dependencies.admission.admitted) throw adapterError("unsupported_runtime_feature")
-    const evidenceKind = this.#dependencies.admission.evidence_kind
-    if (this.#hermeticConformanceOnly) {
-      if (evidenceKind !== "hermetic_conformance") {
-        throw adapterError("unsupported_runtime_feature")
-      }
-    } else if (
-      evidenceKind !== "live_conformance" ||
-      !PRODUCTION_MANAGED_ADMISSION_ENABLED
-    ) {
-      throw adapterError("unsupported_runtime_feature")
-    }
-    try {
-      await this.#dependencies.admission_verifier.assertAdmitted({
-        provider: this.#identity.provider,
-        sdk_version: this.#identity.sdkVersion,
-        adapter_build_sha256: this.#dependencies.adapter_build_sha256,
-        evidence_sha256: this.#dependencies.admission.evidence_sha256,
-        evidence_kind: this.#dependencies.admission.evidence_kind,
-      })
-    } catch {
-      throw adapterError("unsupported_runtime_feature")
-    }
+    await this.#assertAdmission({
+      identity: this.#identity,
+      dependencies: this.#dependencies,
+    })
   }
 
   async #withClient<T>(
@@ -1458,10 +1449,20 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
       const stat = await this.#retryRead(ctx, op, () => client.statFile(handle.opaque_resource_id, broker, frame))
       if (
         !isRecord(stat) ||
+        !hasExactKeys(stat, [
+          "path",
+          "type",
+          "size_bytes",
+          "revision",
+          "mode",
+          ...(stat.sha256 === undefined ? [] : ["sha256"]),
+          ...(stat.symlink_target === undefined ? [] : ["symlink_target"]),
+        ]) ||
         stat.path !== checkedPath ||
         !["file", "directory", "symlink"].includes(stat.type) ||
         !Number.isSafeInteger(stat.size_bytes) ||
         stat.size_bytes < 0 ||
+        typeof stat.revision !== "bigint" ||
         stat.revision < 1n ||
         !Number.isSafeInteger(stat.mode) ||
         stat.mode < 0 ||
@@ -1523,13 +1524,15 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
         const providerChunk = next.value
         if (!isRecord(providerChunk)) throw adapterError("integrity_failed")
         const bytes = providerChunk.bytes
+        if (!(bytes instanceof Uint8Array)) throw adapterError("integrity_failed")
         total += bytes.byteLength
         if (
-          !(bytes instanceof Uint8Array) ||
+          !hasExactKeys(providerChunk, ["bytes", "total_file_sha256", "file_revision"]) ||
           bytes.byteLength === 0 ||
           bytes.byteLength > MAX_FILE_READ_BYTES ||
           total > request.length ||
           !isDigest(providerChunk.total_file_sha256) ||
+          typeof providerChunk.file_revision !== "bigint" ||
           providerChunk.file_revision < 1n ||
           (totalFileSha256 !== undefined && totalFileSha256 !== providerChunk.total_file_sha256) ||
           (fileRevision !== undefined && fileRevision !== providerChunk.file_revision)
@@ -1587,9 +1590,11 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
       }
       if (
         !isRecord(receipt) ||
+        !hasExactKeys(receipt, ["path", "size_bytes", "sha256", "revision"]) ||
         receipt.path !== request.path ||
         receipt.size_bytes !== request.bytes.byteLength ||
         receipt.sha256 !== canonicalSha256(request.bytes) ||
+        typeof receipt.revision !== "bigint" ||
         receipt.revision < 1n
       ) {
         return this.#anchorUnknown(ctx, op, adapterError("integrity_failed"))
@@ -1940,4 +1945,51 @@ export class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
       throw adapterError("dispatch_anchor_mismatch")
     }
   }
+}
+
+// A factory result must not leak the otherwise module-private constructor.
+Object.defineProperty(ManagedProviderAdapter.prototype, "constructor", {
+  value: undefined,
+  writable: false,
+  enumerable: false,
+  configurable: false,
+})
+
+export function createProductionManagedProviderAdapter(
+  identity: AdapterIdentityV1,
+  dependencies: ManagedAdapterDependenciesV1,
+): ManagedProviderAdapterV1 {
+  return new ManagedProviderAdapter(identity, dependencies, async (input) => {
+    const checkedDependencies = input.dependencies
+    if (
+      !checkedDependencies.admission.admitted ||
+      checkedDependencies.admission.evidence_kind !== "live_conformance" ||
+      !PRODUCTION_MANAGED_ADMISSION_ENABLED
+    ) {
+      throw adapterError("unsupported_runtime_feature")
+    }
+    try {
+      await checkedDependencies.admission_verifier.assertAdmitted({
+        provider: input.identity.provider,
+        sdk_version: input.identity.sdkVersion,
+        adapter_build_sha256: checkedDependencies.adapter_build_sha256,
+        evidence_sha256: checkedDependencies.admission.evidence_sha256,
+        evidence_kind: checkedDependencies.admission.evidence_kind,
+      })
+    } catch {
+      throw adapterError("unsupported_runtime_feature")
+    }
+  })
+}
+
+/**
+ * @internal Shared-core test source hook. The admission check is implemented in
+ * tests, and package files/exports exclude both this hook and all test modules.
+ */
+export function __testOnlyCreateManagedProviderAdapterCore(
+  identity: AdapterIdentityV1,
+  dependencies: ManagedAdapterDependenciesV1,
+  assertAdmission: ManagedAdmissionCheckV1,
+): ManagedProviderAdapterV1 {
+  return new ManagedProviderAdapter(identity, dependencies, assertAdmission)
 }

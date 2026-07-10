@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import * as managedPublicApi from "../../src/adapters/managed/index"
 import {
   AdapterContractError,
   JournalIdentityLedgerV1,
@@ -43,6 +44,25 @@ import {
 } from "./fakes"
 
 const brokerAuthenticator = new FakeGuestBrokerAuthenticator()
+
+describe("managed package boundary", () => {
+  test("exposes no core constructor or hermetic admission hook", async () => {
+    expect((managedPublicApi as Record<string, unknown>).ManagedProviderAdapter).toBeUndefined()
+    expect(
+      (managedPublicApi as Record<string, unknown>).createProductionManagedProviderAdapter,
+    ).toBeUndefined()
+    expect(
+      (managedPublicApi as Record<string, unknown>).__testOnlyCreateManagedProviderAdapterCore,
+    ).toBeUndefined()
+
+    const manifest = await Bun.file(new URL("../../package.json", import.meta.url)).json() as {
+      exports?: unknown
+      files?: unknown
+    }
+    expect(manifest.exports).toEqual({ ".": "./dist/index.js" })
+    expect(manifest.files).toEqual(["dist/index.js"])
+  })
+})
 
 function brokerAttestation(immutableFingerprintSha256: ReturnType<typeof digest>) {
   return {
@@ -119,6 +139,31 @@ describe("immutable journal identity", () => {
         op,
       ),
     ).toThrowError(expect.objectContaining({ code: "dispatch_anchor_mismatch" }))
+  })
+
+  test("dispatch variants and failed-no-effect proofs are closed, typed shapes", () => {
+    const op = makeOperation("create_inert")
+    const initial = makeContext(op, new FakeJournal())
+    const malformedAttempts = [
+      { kind: "unrecognized" },
+      { kind: "initial", operation_execution_epoch: 1n, extra: true },
+      { kind: "initial", operation_execution_epoch: "1" },
+      { kind: "exact_duplicate", operation_execution_epoch: 1n },
+      {
+        kind: "higher_epoch_after_failed_no_effect",
+        previous_operation_execution_epoch: 0n,
+        authorization: null,
+      },
+    ]
+
+    for (const dispatchAttempt of malformedAttempts) {
+      expect(() =>
+        validateAdapterCallContext(
+          { ...initial, dispatch_attempt: dispatchAttempt } as never,
+          op,
+        ),
+      ).toThrowError(expect.objectContaining({ code: "dispatch_anchor_mismatch" }))
+    }
   })
 
   test("higher executor epoch requires authoritative failed_no_effect for unchanged target", () => {
@@ -341,6 +386,8 @@ describe("official SDK guest-broker compensation bridges", () => {
     let closedSession: Parameters<Parameters<typeof withE2bGuestBrokerSdkSession>[1]>[0] | undefined
     await withE2bGuestBrokerSdkSession(commands, async (session) => {
       closedSession = session
+      expect((session as unknown as Record<string, unknown>).handle).toBeUndefined()
+      expect(Reflect.ownKeys(session)).not.toContain("handle")
       await session.sendFrame(brokerFrame())
     })
 
@@ -367,6 +414,8 @@ describe("official SDK guest-broker compensation bridges", () => {
     let closedSession: Parameters<Parameters<typeof withDaytonaGuestBrokerSdkSession>[2]>[0] | undefined
     await withDaytonaGuestBrokerSdkSession(process, () => {}, async (session) => {
       closedSession = session
+      expect((session as unknown as Record<string, unknown>).handle).toBeUndefined()
+      expect(Reflect.ownKeys(session)).not.toContain("handle")
       await session.sendFrame(brokerFrame())
     })
 
@@ -607,6 +656,9 @@ describe("official SDK read-only control bridges", () => {
       providerScopeRefSha256,
       () => observedAt,
     )
+    expect((bridge as unknown as Record<string, unknown>).sdk).toBeUndefined()
+    expect((bridge as unknown as Record<string, unknown>).attestation).toBeUndefined()
+    expect(Reflect.ownKeys(bridge)).not.toContain("sdk")
 
     const page = await bridge.findByCreationToken(creationTokenSha256, "cursor-1")
 
@@ -689,6 +741,9 @@ describe("official SDK read-only control bridges", () => {
       providerScopeRefSha256,
       () => observedAt,
     )
+    expect((bridge as unknown as Record<string, unknown>).sdk).toBeUndefined()
+    expect((bridge as unknown as Record<string, unknown>).attestation).toBeUndefined()
+    expect(Reflect.ownKeys(bridge)).not.toContain("sdk")
 
     const page = await bridge.findByCreationToken(creationTokenSha256)
 
@@ -770,5 +825,59 @@ describe("official SDK read-only control bridges", () => {
     )
 
     expect((await bridge.findByCreationToken(creationTokenSha256)).items[0]?.owned).toBe(false)
+  })
+
+  test("malformed attestation evidence is rejected instead of becoming ownership", async () => {
+    const info = {
+      sandboxId: "opaque-e2b-malformed-attestation",
+      templateId: "template-1",
+      metadata: labels(),
+      startedAt: new Date("2026-07-10T09:00:00.000Z"),
+      endAt: new Date("2026-07-10T11:00:00.000Z"),
+      state: "paused",
+      cpuCount: 2,
+      memoryMB: 4096,
+      envdVersion: "pinned",
+      allowInternetAccess: false,
+      network: { denyOut: ["0.0.0.0/0"], allowPublicTraffic: false },
+      lifecycle: { onTimeout: "pause", autoResume: false },
+      volumeMounts: [],
+    } as const
+    const sdk: E2bOfficialReadSdkV1 = {
+      list() {
+        return {
+          hasNext: true,
+          nextToken: undefined,
+          async nextItems() {
+            return [info as never]
+          },
+        }
+      },
+      async getInfo() {
+        return info as never
+      },
+    }
+    const malformed: ManagedResourceAttestationPortV1 = {
+      async attest() {
+        return {
+          source_free: "yes",
+          credential_free: true,
+          strong_vm: "yes",
+          architecture: "amd64",
+          evidence_sha256: digest("c9"),
+        } as never
+      },
+    }
+    const bridge = new E2bOfficialSdkControlBridgeV1(
+      sdk,
+      malformed,
+      installationSha256,
+      providerScopeRefSha256,
+      () => observedAt,
+    )
+
+    await expect(bridge.findByCreationToken(creationTokenSha256)).rejects.toMatchObject({
+      code: "integrity_failed",
+    })
   })
 })

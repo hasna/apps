@@ -28,18 +28,21 @@ export type DaytonaOfficialBrokerProcessV1 = Pick<DaytonaProcess, "createPty">
 
 class E2bGuestBrokerSdkSessionV1 implements GuestBrokerSdkSessionV1 {
   #closed = false
+  readonly #handle: Pick<CommandHandle, "sendStdin" | "closeStdin">
 
-  constructor(private readonly handle: Pick<CommandHandle, "sendStdin" | "closeStdin">) {}
+  constructor(handle: Pick<CommandHandle, "sendStdin" | "closeStdin">) {
+    this.#handle = handle
+  }
 
   sendFrame(frame: GuestBrokerRequestFrameV1): Promise<void> {
     if (this.#closed) return Promise.reject(new Error("guest_broker_session_closed"))
-    return this.handle.sendStdin(serializeGuestBrokerRequestFrame(frame))
+    return this.#handle.sendStdin(serializeGuestBrokerRequestFrame(frame))
   }
 
   async closeInput(): Promise<void> {
     if (this.#closed) return
     this.#closed = true
-    await this.handle.closeStdin()
+    await this.#handle.closeStdin()
   }
 }
 
@@ -65,18 +68,21 @@ export const DAYTONA_GUEST_BROKER_PTY_ID = "hasna-sandboxes-broker-v1" as const
 
 class DaytonaGuestBrokerSdkSessionV1 implements GuestBrokerSdkSessionV1 {
   #closed = false
+  readonly #handle: Pick<PtyHandle, "sendInput" | "disconnect">
 
-  constructor(private readonly handle: Pick<PtyHandle, "sendInput" | "disconnect">) {}
+  constructor(handle: Pick<PtyHandle, "sendInput" | "disconnect">) {
+    this.#handle = handle
+  }
 
   sendFrame(frame: GuestBrokerRequestFrameV1): Promise<void> {
     if (this.#closed) return Promise.reject(new Error("guest_broker_session_closed"))
-    return this.handle.sendInput(serializeGuestBrokerRequestFrame(frame))
+    return this.#handle.sendInput(serializeGuestBrokerRequestFrame(frame))
   }
 
   async closeInput(): Promise<void> {
     if (this.#closed) return
     this.#closed = true
-    await this.handle.disconnect()
+    await this.#handle.disconnect()
   }
 }
 
