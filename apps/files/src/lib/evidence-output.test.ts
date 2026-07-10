@@ -242,6 +242,48 @@ describe("evidence upload output safety", () => {
     expect(serializedKeys.includes("CANARY_KEY_CREDENTIAL")).toBe(false);
     expect(serializedKeys.includes("synthetic.invalid")).toBe(false);
     expect(new Set(safeNestedKeys).size).toBe(2);
+
+    const whitespaceKeyError = new Error("safe whitespace-key failure") as Error & { body?: Record<string, unknown> };
+    Object.defineProperty(whitespaceKeyError, "Authorization ", {
+      configurable: true,
+      enumerable: true,
+      value: "Bearer CANARY_TRAILING_SPACE_KEY",
+      writable: true,
+    });
+    whitespaceKeyError.body = {
+      "authorization\t": "Bearer CANARY_TRAILING_TAB_KEY",
+      "Auth.orization ": "Bearer CANARY_EMBEDDED_PUNCTUATION_KEY",
+      "x\u2010amz\u2010security\u2010token": "CANARY_UNICODE_SEPARATOR_KEY",
+    };
+    const safeWhitespaceKeyError = sanitizeEvidenceTransportError(whitespaceKeyError);
+    expect(JSON.stringify(safeWhitespaceKeyError).includes("CANARY_TRAILING")).toBe(false);
+    expect(JSON.stringify(safeWhitespaceKeyError).includes("CANARY_EMBEDDED_PUNCTUATION")).toBe(false);
+    expect(JSON.stringify(safeWhitespaceKeyError).includes("CANARY_UNICODE_SEPARATOR")).toBe(false);
+
+    const proxyError = new Proxy(new Error("safe proxy failure"), {
+      getPrototypeOf() {
+        throw new Error("Authorization: Bearer CANARY_PROXY_PROTOTYPE_TRAP");
+      },
+    });
+    let safeProxyError: Error | undefined;
+    expect(() => { safeProxyError = sanitizeEvidenceTransportError(proxyError); }).not.toThrow();
+    expect(safeProxyError?.message.includes("CANARY_PROXY_PROTOTYPE_TRAP")).toBe(false);
+
+    let inheritedMessageReads = 0;
+    const hostilePrototype = Object.create(Error.prototype, {
+      message: {
+        configurable: true,
+        get() {
+          inheritedMessageReads += 1;
+          return "Authorization: Bearer CANARY_INHERITED_MESSAGE_GETTER";
+        },
+      },
+    });
+    const inheritedMessageError = new Error();
+    Object.setPrototypeOf(inheritedMessageError, hostilePrototype);
+    const safeInheritedMessageError = sanitizeEvidenceTransportError(inheritedMessageError);
+    expect(inheritedMessageReads).toBe(0);
+    expect(safeInheritedMessageError.message.includes("CANARY_INHERITED_MESSAGE_GETTER")).toBe(false);
   });
 
   test("preserves the public one-shot upload result contract", () => {

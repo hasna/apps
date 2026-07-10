@@ -120,8 +120,11 @@ private asset ids and object keys stay in operator artifacts.
   cannot survive. The surrogate shadows executable serializers, string
   coercion, tags, and custom inspectors, and never returns the unsafe original,
   including when fields are immutable or accessor-backed. Both property names
-  and values are redacted recursively; colliding redacted names receive stable
-  numeric suffixes so fields cannot overwrite one another.
+  and values are redacted recursively; sensitive names are normalized across
+  Unicode, whitespace, controls, and punctuation, while colliding redacted
+  names receive stable numeric suffixes so fields cannot overwrite one another.
+  Error text is read from own data descriptors only, never inherited accessors;
+  hostile proxy traps fail closed to a fixed diagnostic.
 - Store access events for reads, downloads, signing, linking, and verification.
 - Track scan status even when the current implementation marks local/S3 direct uploads as `skipped`.
 - Track retention and legal hold metadata now so S3 Object Lock can be enabled without app schema changes.

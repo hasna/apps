@@ -315,9 +315,10 @@ export function sanitizeEvidenceTransportValue(value: unknown, seen = new WeakMa
 
 /** Preserve trusted error classes/status while removing every sensitive field. */
 export function sanitizeEvidenceTransportError(error: unknown): Error {
-  if (!(error instanceof Error)) return new Error("Evidence transport failed with redacted diagnostic");
   try {
-    const target = Object.create(trustedEvidenceErrorPrototype(error)) as Error;
+    if (!(error instanceof Error)) return new Error("Evidence transport failed with redacted diagnostic");
+    const trustedPrototype = trustedEvidenceErrorPrototype(error);
+    const target = Object.create(trustedPrototype) as Error;
     for (const { key, descriptor, sanitized } of sanitizedErrorProperties(error)) {
       Object.defineProperty(target, key, {
         configurable: true,
@@ -327,9 +328,9 @@ export function sanitizeEvidenceTransportError(error: unknown): Error {
       });
     }
     Object.defineProperties(target, {
-      name: safeErrorText(error.name, "Error"),
-      message: safeErrorText(error.message, "Evidence transport failed"),
-      stack: safeErrorText(error.stack, "Evidence transport failed with redacted diagnostic"),
+      name: safeOwnErrorText(error, "name", trustedEvidenceErrorName(trustedPrototype)),
+      message: safeOwnErrorText(error, "message", "Evidence transport failed"),
+      stack: safeOwnErrorText(error, "stack", "Evidence transport failed with redacted diagnostic"),
       // JSON.stringify consults inherited serializers before enumerating own
       // fields. Shadow them so an Error subclass cannot reintroduce transport
       // material after all own properties have been sanitized.
@@ -378,11 +379,27 @@ function trustedEvidenceErrorPrototype(error: Error): object {
   return Error.prototype;
 }
 
-function safeErrorText(value: unknown, fallback: string): PropertyDescriptor {
+function trustedEvidenceErrorName(prototype: object): string {
+  if (prototype === HasnaHttpError.prototype) return "HasnaHttpError";
+  if (prototype === AggregateError.prototype) return "AggregateError";
+  if (prototype === EvalError.prototype) return "EvalError";
+  if (prototype === RangeError.prototype) return "RangeError";
+  if (prototype === ReferenceError.prototype) return "ReferenceError";
+  if (prototype === SyntaxError.prototype) return "SyntaxError";
+  if (prototype === TypeError.prototype) return "TypeError";
+  if (prototype === URIError.prototype) return "URIError";
+  return "Error";
+}
+
+function safeOwnErrorText(error: Error, key: "name" | "message" | "stack", fallback: string): PropertyDescriptor {
+  const descriptor = Object.getOwnPropertyDescriptor(error, key);
+  const value = descriptor && "value" in descriptor && typeof descriptor.value === "string"
+    ? redactSensitiveTransportText(descriptor.value)
+    : fallback;
   return {
     configurable: true,
     enumerable: false,
-    value: typeof value === "string" ? redactSensitiveTransportText(value) : fallback,
+    value,
     writable: true,
   };
 }
@@ -435,7 +452,13 @@ export function withoutEvidenceUploadTransport(result: EvidenceUploadResult): Ev
 }
 
 function isSensitiveTransportKey(key: string): boolean {
-  const normalized = key.toLowerCase().replace(/_/g, "-");
+  if (/[\u0000-\u001f\u007f-\u009f]/u.test(key)) return true;
+  const normalized = key
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  const compact = normalized.replace(/-/g, "");
   return normalized === "url"
     || normalized === "href"
     || normalized.endsWith("-url")
@@ -445,7 +468,15 @@ function isSensitiveTransportKey(key: string): boolean {
     || normalized === "proxy-authorization"
     || normalized === "x-api-key"
     || normalized.startsWith("x-amz-")
-    || /(?:^|-)(?:credential|signature|token|secret|password|cookie)(?:$|-)/.test(normalized);
+    || /(?:^|-)(?:credential|signature|token|secret|password|cookie)(?:$|-)/.test(normalized)
+    || compact === "href"
+    || compact.endsWith("url")
+    || compact === "headers"
+    || compact === "requiredheaders"
+    || compact.includes("authorization")
+    || compact === "xapikey"
+    || compact.startsWith("xamz")
+    || /credential|signature|token|secret|password|cookie/.test(compact);
 }
 
 export interface EvidenceDownloadGrant {
