@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { store } from "../store/index.js";
-import type { EvidenceStorageOptions } from "../lib/evidence.js";
+import {
+  redactSensitiveTransportText,
+  toEvidenceUploadReceipt,
+  type EvidenceStorageOptions,
+} from "../lib/evidence.js";
 import type { FileAssetStatus, FileStorageProvider } from "../types/index.js";
 
 type ToolHandler = (params: any) => unknown | Promise<unknown>;
@@ -23,7 +27,7 @@ const storageSchema = {
 const assetStatusSchema = z.enum(["pending_upload", "uploaded", "verified", "archived", "deleted"]);
 
 export function registerEvidenceTools(registerTool: RegisterTool): void {
-  registerTool("create_evidence_upload_intent", "Create a shared evidence asset and upload intent", {
+  registerTool("create_evidence_upload_intent", "Create a shared evidence asset and safe opaque upload handle", {
     org_id: z.string(),
     company_id: z.string().optional(),
     app: z.string().describe("Owning app, e.g. iapp-accounting"),
@@ -41,7 +45,7 @@ export function registerEvidenceTools(registerTool: RegisterTool): void {
     metadata: z.record(z.unknown()).optional(),
     expires_in_seconds: z.number().int().positive().optional(),
     ...storageSchema,
-  }, async (params) => {
+  }, async (params) => safeEvidenceTool(async () => {
     const result = await store().createEvidenceUploadIntent({
       org_id: params.org_id,
       company_id: params.company_id,
@@ -60,8 +64,8 @@ export function registerEvidenceTools(registerTool: RegisterTool): void {
       metadata: params.metadata,
       expires_in_seconds: params.expires_in_seconds,
     }, storageOptions(params));
-    return jsonResult(result);
-  });
+    return jsonResult(toEvidenceUploadReceipt(result));
+  }));
 
   registerTool("upload_evidence_file", "Upload a local file into the shared evidence vault and complete verification", {
     path: z.string(),
@@ -78,7 +82,7 @@ export function registerEvidenceTools(registerTool: RegisterTool): void {
     immutable: z.boolean().optional(),
     metadata: z.record(z.unknown()).optional(),
     ...storageSchema,
-  }, async (params) => {
+  }, async (params) => safeEvidenceTool(async () => {
     const result = await store().uploadEvidenceFile({
       path: params.path,
       org_id: params.org_id,
@@ -95,7 +99,7 @@ export function registerEvidenceTools(registerTool: RegisterTool): void {
       metadata: params.metadata,
     }, storageOptions(params));
     return jsonResult(result);
-  });
+  }));
 
   registerTool("complete_evidence_upload", "Complete an evidence upload intent after bytes are uploaded", {
     intent_id: z.string(),
@@ -189,4 +193,13 @@ function storageOptions(params: {
 
 function jsonResult(data: unknown): { content: Array<{ type: "text"; text: string }> } {
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+}
+
+async function safeEvidenceTool<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(redactSensitiveTransportText(message));
+  }
 }

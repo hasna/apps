@@ -46,6 +46,7 @@ import type {
   CreateEvidenceUploadInput,
   EvidenceDownloadGrant,
   EvidenceStorageOptions,
+  EvidenceUploadReceipt,
   EvidenceUploadResult,
   EvidenceVerifyResult,
   SignEvidenceDownloadInput,
@@ -248,7 +249,7 @@ export interface FilesStore {
    * only by the LocalStore; the ApiStore ignores them (server-owned storage).
    */
   createEvidenceUploadIntent(input: CreateEvidenceUploadInput, storage?: EvidenceStorageOptions): Promise<EvidenceUploadResult>;
-  uploadEvidenceFile(input: UploadEvidenceFileInput, storage?: EvidenceStorageOptions): Promise<EvidenceUploadResult>;
+  uploadEvidenceFile(input: UploadEvidenceFileInput, storage?: EvidenceStorageOptions): Promise<EvidenceUploadReceipt>;
   completeEvidenceUpload(intentId: string, storage?: EvidenceStorageOptions): Promise<FileAsset>;
   linkEvidenceAsset(input: CreateFileLinkInput): Promise<FileLink>;
   signEvidenceDownload(input: SignEvidenceDownloadInput, storage?: EvidenceStorageOptions): Promise<EvidenceDownloadGrant>;

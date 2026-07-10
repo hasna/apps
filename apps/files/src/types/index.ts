@@ -885,6 +885,11 @@ export interface FileUploadIntent {
   id: string;
   asset_id: string;
   method: "PUT";
+  /**
+   * Sensitive one-use transport capability. It is valid only inside explicit
+   * low-level create-intent flows and must never appear in ordinary CLI/MCP
+   * output, upload receipts, errors, logs, or persisted metadata.
+   */
   upload_url?: string;
   expires_at: string;
   status: "pending" | "completed" | "expired" | "cancelled";

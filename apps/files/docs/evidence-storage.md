@@ -29,9 +29,11 @@ Files enter the bucket under `quarantine/` and move to the final key only after 
 
 ## Required Lifecycle
 
-1. App requests an upload intent from `@hasna/files`.
+1. App requests an upload intent from `@hasna/files` through an explicit
+   low-level SDK/REST transport, or uses the one-shot upload API.
 2. `@hasna/files` creates a `file_asset` and `file_upload_intent`.
-3. Client uploads to the returned destination.
+3. The byte client uses the destination internally and never copies it into an
+   ordinary command/tool result, log, error, receipt, or persisted metadata.
 4. `@hasna/files` completes the upload by verifying the object metadata.
 5. Verified assets may be linked to app records.
 6. Downloads are signed through `@hasna/files` and recorded in `file_access_events`.
@@ -95,6 +97,10 @@ private asset ids and object keys stay in operator artifacts.
 - Require checksum algorithm and checksum on every asset.
 - Keep upload URLs short lived.
 - Treat signed URLs as bearer tokens.
+- Default CLI/MCP upload output is an opaque receipt containing asset, intent,
+  checksum, and status identifiers only. Transport URLs and signing headers are
+  available only inside the explicit low-level create-intent transport and must
+  never be printed or logged; agents should use the one-shot upload operation.
 - Store access events for reads, downloads, signing, linking, and verification.
 - Track scan status even when the current implementation marks local/S3 direct uploads as `skipped`.
 - Track retention and legal hold metadata now so S3 Object Lock can be enabled without app schema changes.

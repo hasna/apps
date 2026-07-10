@@ -122,6 +122,78 @@ export interface EvidenceUploadResult {
   intent: FileUploadIntent;
 }
 
+/**
+ * Safe receipt returned after an upload, or by agent-facing intent commands.
+ * Transport URLs and required signing headers are deliberately absent.
+ */
+export interface EvidenceUploadReceipt {
+  asset: Pick<FileAsset,
+    | "id"
+    | "status"
+    | "scan_status"
+    | "checksum"
+    | "checksum_algorithm"
+    | "size"
+    | "storage_provider"
+    | "verified_at"
+  >;
+  intent: Pick<FileUploadIntent,
+    | "id"
+    | "asset_id"
+    | "expires_at"
+    | "status"
+    | "expected_checksum"
+    | "expected_checksum_algorithm"
+    | "expected_size"
+    | "created_at"
+    | "completed_at"
+  >;
+}
+
+export function toEvidenceUploadReceipt(
+  result: EvidenceUploadResult,
+  status: FileUploadIntent["status"] = result.intent.status,
+): EvidenceUploadReceipt {
+  const { intent } = result;
+  const { asset } = result;
+  return {
+    asset: {
+      id: asset.id,
+      status: asset.status,
+      scan_status: asset.scan_status,
+      checksum: asset.checksum,
+      checksum_algorithm: asset.checksum_algorithm,
+      size: asset.size,
+      storage_provider: asset.storage_provider,
+      verified_at: asset.verified_at,
+    },
+    intent: {
+      id: intent.id,
+      asset_id: intent.asset_id,
+      expires_at: intent.expires_at,
+      status,
+      expected_checksum: intent.expected_checksum,
+      expected_checksum_algorithm: intent.expected_checksum_algorithm,
+      expected_size: intent.expected_size,
+      created_at: intent.created_at,
+      completed_at: intent.completed_at,
+    },
+  };
+}
+
+/** Redact query-bearing transport URLs before an error reaches a transcript. */
+export function redactSensitiveTransportText(value: string): string {
+  return value
+    .replace(/\bhttps?:\/\/[^\s"'<>]+/gi, (candidate) => {
+      const query = candidate.indexOf("?");
+      return query === -1 ? candidate : "[REDACTED_TRANSPORT_URL]";
+    })
+    .replace(
+      /(^|[?&\s])[^?&=\s]*(?:credential|signature|session|security[-_]?token)[^?&=\s]*=[^&\s]*/gi,
+      "$1[REDACTED]",
+    );
+}
+
 export interface EvidenceDownloadGrant {
   asset: FileAsset;
   url: string;
@@ -247,7 +319,7 @@ export async function uploadEvidenceFile(
   input: UploadEvidenceFileInput,
   storageOverrides: EvidenceStorageOptions = {},
   db: EvidenceDb = sqliteEvidenceDb,
-): Promise<EvidenceUploadResult> {
+): Promise<EvidenceUploadReceipt> {
   if (!existsSync(input.path)) throw new Error(`File not found: ${input.path}`);
   const stat = statSync(input.path);
   const result = await createEvidenceUploadIntent({
@@ -278,7 +350,10 @@ export async function uploadEvidenceFile(
   }
 
   const completed = await completeEvidenceUpload(result.intent.id, storageOverrides, db);
-  return { asset: completed, intent: (await db.getFileUploadIntent(result.intent.id))! };
+  return toEvidenceUploadReceipt({
+    asset: completed,
+    intent: (await db.getFileUploadIntent(result.intent.id))!,
+  }, "completed");
 }
 
 export async function completeEvidenceUpload(

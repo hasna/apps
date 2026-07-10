@@ -37,11 +37,13 @@ import type {
   CreateEvidenceUploadInput,
   EvidenceDownloadGrant,
   EvidenceStorageOptions,
+  EvidenceUploadReceipt,
   EvidenceUploadResult,
   EvidenceVerifyResult,
   SignEvidenceDownloadInput,
   UploadEvidenceFileInput,
 } from "../lib/evidence.js";
+import { redactSensitiveTransportText, toEvidenceUploadReceipt } from "../lib/evidence.js";
 import type { ListFileAssetsOptions } from "../db/evidence.js";
 import type {
   ActivityQueryOptions,
@@ -326,29 +328,37 @@ export class ApiStore implements FilesStore {
   // overrides are intentionally NOT forwarded — a thin api client can never
   // redirect the shared vault. Bytes go to the server-signed URL directly.
   async createEvidenceUploadIntent(input: CreateEvidenceUploadInput, _storage?: EvidenceStorageOptions): Promise<EvidenceUploadResult> {
-    return this.http.post<EvidenceUploadResult>("/evidence/upload-intents", input);
+    try {
+      return await this.http.post<EvidenceUploadResult>("/evidence/upload-intents", input);
+    } catch (error) {
+      throw safeEvidenceUploadError(error);
+    }
   }
-  async uploadEvidenceFile(input: UploadEvidenceFileInput, _storage?: EvidenceStorageOptions): Promise<EvidenceUploadResult> {
-    if (!existsSync(input.path)) throw new Error(`File not found: ${input.path}`);
-    const stat = statSync(input.path);
-    const { path: _path, original_name, ...rest } = input;
-    const { intent } = await this.createEvidenceUploadIntent({
-      ...rest,
-      original_name: original_name ?? basename(input.path),
-      content_type: (mimeLookup(input.path) || "application/octet-stream").toString(),
-      size: stat.size,
-      checksum: sha256File(input.path),
-      checksum_algorithm: "sha256",
-    });
-    if (!intent.upload_url) throw new Error("Server did not return an evidence upload URL");
-    const res = await fetch(intent.upload_url, {
-      method: intent.method,
-      headers: intent.required_headers,
-      body: readFileSync(input.path),
-    });
-    if (!res.ok) throw new Error(`Evidence byte upload failed: ${res.status} ${res.statusText}`);
-    const asset = await this.completeEvidenceUpload(intent.id);
-    return { asset, intent };
+  async uploadEvidenceFile(input: UploadEvidenceFileInput, _storage?: EvidenceStorageOptions): Promise<EvidenceUploadReceipt> {
+    try {
+      if (!existsSync(input.path)) throw new Error(`File not found: ${input.path}`);
+      const stat = statSync(input.path);
+      const { path: _path, original_name, ...rest } = input;
+      const { intent } = await this.createEvidenceUploadIntent({
+        ...rest,
+        original_name: original_name ?? basename(input.path),
+        content_type: (mimeLookup(input.path) || "application/octet-stream").toString(),
+        size: stat.size,
+        checksum: sha256File(input.path),
+        checksum_algorithm: "sha256",
+      });
+      if (!intent.upload_url) throw new Error("Server did not return an evidence upload URL");
+      const res = await fetch(intent.upload_url, {
+        method: intent.method,
+        headers: intent.required_headers,
+        body: readFileSync(input.path),
+      });
+      if (!res.ok) throw new Error(`Evidence byte upload failed: ${res.status} ${res.statusText}`);
+      const asset = await this.completeEvidenceUpload(intent.id);
+      return toEvidenceUploadReceipt({ asset, intent }, "completed");
+    } catch (error) {
+      throw safeEvidenceUploadError(error);
+    }
   }
   async completeEvidenceUpload(intentId: string, _storage?: EvidenceStorageOptions): Promise<FileAsset> {
     return this.http.post<FileAsset>(`/evidence/upload-intents/${seg(intentId)}/complete`);
@@ -387,4 +397,9 @@ export class ApiStore implements FilesStore {
   async listEvidenceAccessEvents(assetId: string, limit = 50): Promise<FileAccessEvent[]> {
     return this.http.get<FileAccessEvent[]>(`/evidence/assets/${seg(assetId)}/access-events`, { query: { limit } });
   }
+}
+
+function safeEvidenceUploadError(error: unknown): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  return new Error(redactSensitiveTransportText(message));
 }

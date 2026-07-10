@@ -4,6 +4,8 @@ import { store } from "../store/index.js";
 import {
   getEvidenceStorageOptions,
   DEFAULT_EVIDENCE_S3_BUCKET,
+  redactSensitiveTransportText,
+  toEvidenceUploadReceipt,
   type EvidenceStorageOptions,
 } from "../lib/evidence.js";
 import type { FileAssetStatus } from "../types/index.js";
@@ -33,7 +35,7 @@ export function registerEvidenceCommands(program: Command): void {
 
   evidence
     .command("create-upload")
-    .description("Create a file asset and upload intent")
+    .description("Create a file asset and safe opaque upload handle")
     .requiredOption("--org <orgId>", "Organization ID")
     .requiredOption("--app <app>", "Owning app, e.g. iapp-accounting")
     .requiredOption("--kind <kind>", "Evidence kind, e.g. receipt")
@@ -67,7 +69,7 @@ export function registerEvidenceCommands(program: Command): void {
           storage_class: opts.storageClass,
           expires_in_seconds: parseInteger(opts.expires, "expires"),
         }, storageOptions(opts));
-        printResult(result, opts.json, `Created upload intent ${result.intent.id} for ${result.asset.id}`);
+        printResult(toEvidenceUploadReceipt(result), opts.json, `Created upload intent ${result.intent.id} for ${result.asset.id}`);
       });
     });
 
@@ -343,7 +345,8 @@ async function runCli(fn: () => Promise<void>): Promise<void> {
   try {
     await fn();
   } catch (error) {
-    console.error(chalk.red((error as Error).message));
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(chalk.red(redactSensitiveTransportText(message)));
     process.exit(1);
   }
 }

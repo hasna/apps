@@ -24,6 +24,7 @@ process.env.HASNA_FILES_EVIDENCE_STORAGE = "local";
 process.env.HASNA_FILES_EVIDENCE_LOCAL_ROOT = join(testDir, "evidence");
 
 const { closeDb } = await import("../db/database.js");
+const { getFileAsset, getFileUploadIntent } = await import("../db/evidence.js");
 const {
   completeEvidenceUpload,
   createEvidenceUploadIntent,
@@ -78,15 +79,19 @@ describe("evidence vault", () => {
 
     expect(result.asset.status).toBe("verified");
     expect(result.asset.scan_status).toBe("skipped");
+    const asset = getFileAsset(result.asset.id)!;
     // The resolved local root is persisted as the asset's storage container so
     // later invocations can locate the bytes without re-passing --local-root.
-    expect(result.asset.bucket).toBe(evidenceRoot());
-    expect(result.asset.retention_policy).toBe("tax_evidence");
-    expect(result.asset.storage_class).toBe("STANDARD_IA");
-    expect(result.asset.legal_hold).toBe(true);
-    expect(result.asset.immutable).toBe(true);
-    expect(existsSync(join(evidenceRoot(), result.asset.object_key))).toBe(true);
-    expect(existsSync(join(evidenceRoot(), result.asset.quarantine_key!))).toBe(false);
+    expect(asset.bucket).toBe(evidenceRoot());
+    expect(asset.retention_policy).toBe("tax_evidence");
+    expect(asset.storage_class).toBe("STANDARD_IA");
+    expect(asset.legal_hold).toBe(true);
+    expect(asset.immutable).toBe(true);
+    expect("upload_url" in result.intent).toBe(false);
+    expect("required_headers" in result.intent).toBe(false);
+    expect(getFileUploadIntent(result.intent.id)?.upload_url).toBeUndefined();
+    expect(existsSync(join(evidenceRoot(), asset.object_key))).toBe(true);
+    expect(existsSync(join(evidenceRoot(), asset.quarantine_key!))).toBe(false);
 
     const link = await linkEvidenceAsset({
       asset_id: result.asset.id,
@@ -111,7 +116,9 @@ describe("evidence vault", () => {
     expect(verification.diagnostics).toEqual([]);
 
     expect(listFileLinks(result.asset.id)).toHaveLength(1);
-    const actions = listFileAccessEvents(result.asset.id, 20).map((event) => event.action);
+    const accessEvents = listFileAccessEvents(result.asset.id, 20);
+    expect(JSON.stringify(accessEvents).includes("upload_url")).toBe(false);
+    const actions = accessEvents.map((event) => event.action);
     expect(actions).toContain("create_upload");
     expect(actions).toContain("complete_upload");
     expect(actions).toContain("link");

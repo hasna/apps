@@ -69,6 +69,7 @@ import {
   type CreateEvidenceUploadInput,
   type EvidenceDownloadGrant,
   type EvidenceStorageOptions,
+  type EvidenceUploadReceipt,
   type EvidenceUploadResult,
   type EvidenceVerifyResult,
   type SignEvidenceDownloadInput,
@@ -297,7 +298,7 @@ export class LocalStore implements FilesStore {
   async createEvidenceUploadIntent(input: CreateEvidenceUploadInput, storage?: EvidenceStorageOptions): Promise<EvidenceUploadResult> {
     return createEvidenceUploadIntent(input, storage);
   }
-  async uploadEvidenceFile(input: UploadEvidenceFileInput, storage?: EvidenceStorageOptions): Promise<EvidenceUploadResult> {
+  async uploadEvidenceFile(input: UploadEvidenceFileInput, storage?: EvidenceStorageOptions): Promise<EvidenceUploadReceipt> {
     return uploadEvidenceFile(input, storage);
   }
   async completeEvidenceUpload(intentId: string, storage?: EvidenceStorageOptions): Promise<FileAsset> {

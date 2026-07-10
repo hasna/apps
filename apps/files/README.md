@@ -218,6 +218,11 @@ files evidence upload ./receipt.pdf \
 The future web interface can use the REST endpoints under `/evidence/*`, and
 agents can use the MCP tools such as `create_evidence_upload_intent`,
 `upload_evidence_file`, `link_evidence_asset`, and `sign_evidence_download`.
+Ordinary CLI/MCP upload JSON returns an opaque receipt and never exposes the
+short-lived byte-transport URL or signing headers. Agent workflows should use
+`upload_evidence_file`; only the explicit low-level SDK/REST create-intent flow
+may handle the sensitive transport capability, and it must remain out of logs,
+errors, receipts, and persisted metadata.
 
 See [docs/evidence-storage.md](docs/evidence-storage.md) for the storage
 boundary and object layout.
