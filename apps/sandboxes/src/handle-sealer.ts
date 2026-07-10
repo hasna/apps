@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { assertDigest, assertOpaqueId, sha256, storageJson, parseStorageJson } from "./canonical.js";
 import { SandboxError } from "./errors.js";
+import { providerHandleIdentityDigest } from "./provider-identity.js";
 import { SCHEMA_VERSION, type OwnedProviderHandleV1, type SealedProviderHandleV1 } from "./types.js";
 
 export interface ProviderHandleSealerV1 {
@@ -56,6 +57,10 @@ export class AesGcmProviderHandleSealerV1 implements ProviderHandleSealerV1 {
       }
       assertOpaqueId(handle.resource_id, "handle.resource_id", "sbx");
       assertDigest(handle.immutable_fingerprint_sha256, "handle.immutable_fingerprint_sha256");
+      assertDigest(handle.provider_identity_sha256, "handle.provider_identity_sha256");
+      if (handle.provider_identity_sha256 !== providerHandleIdentityDigest(handle)) {
+        throw new SandboxError("integrity_failed", "Provider handle identity digest mismatch");
+      }
       return handle;
     } catch (error) {
       if (error instanceof SandboxError) throw error;

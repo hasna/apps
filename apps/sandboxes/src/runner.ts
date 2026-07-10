@@ -27,10 +27,17 @@ export interface AdapterCallContextV1 {
 
 export interface DestroyContextV1 extends AdapterCallContextV1 {
   cleanup_grant_sha256: Digest;
+  cleanup_basis_receipt_sha256: Digest;
 }
 
 export interface ReconcileContextV1 {
   installation_id: string;
+  provider_scope_ref: string;
+  resource_id: string;
+  provider_creation_token_sha256: Digest;
+  immutable_fingerprint_sha256: Digest;
+  discovery_scope_receipt_sha256: Digest;
+  max_pages: number;
   deadline: string;
 }
 
@@ -68,7 +75,11 @@ export interface SandboxRunnerV1 {
     op: ProviderOperationV1,
     handle?: OwnedProviderHandleV1,
   ): Promise<ProviderOperationObservationV1>;
-  listOwnedResources(ctx: ReconcileContextV1, cursor?: string): Promise<OwnedResourcePageV1>;
+  listOwnedResources(
+    ctx: ReconcileContextV1,
+    op: ProviderOperationV1,
+    cursor?: string,
+  ): Promise<OwnedResourcePageV1>;
 }
 
 export class AmbiguousProviderEffectError extends Error {
@@ -100,12 +111,15 @@ abstract class PendingManagedRunnerV1 implements SandboxRunnerV1 {
     const facts = {
       adapter_id: this.adapterId,
       adapter_version: "pending",
+      installation_id: `installation-${this.adapterId}-pending`,
+      provider_scope_ref: `${this.adapterId}-pending-scope`,
       runtime_class: "strong_vm",
       network_modes: ["deny_all", "broker_only"],
       exact_operation_lookup: false,
       inert_create: false,
       whole_scope_cancel: false,
       native_bounded_files: false,
+      atomic_incarnation_bound_delete: false,
     } as const;
     return {
       schema_version: SCHEMA_VERSION,

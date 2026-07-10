@@ -10,6 +10,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./postgres": {
+      "types": "./dist/repository-postgres.d.ts",
+      "import": "./dist/repository-postgres.js"
     }
   },
   "files": [
@@ -20,9 +24,11 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && bun build src/cli.ts src/index.ts --outdir dist --target bun --format esm --sourcemap=external && tsc -p tsconfig.build.json",
+    "build": "bun run clean && bun build src/cli.ts src/index.ts src/repository-postgres.ts --outdir dist --target bun --format esm --sourcemap=external && tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "test:postgres": "./scripts/postgres-integration.sh",
+    "test:pack": "./scripts/package-smoke.sh",
     "test:hermetic": "./scripts/hermetic-test.sh",
     "pack": "bun pm pack --quiet"
   },

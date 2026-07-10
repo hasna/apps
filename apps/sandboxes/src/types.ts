@@ -115,9 +115,20 @@ export interface LifecycleTransitionBindingV1 {
   successor_resource_lifecycle_generation: bigint;
 }
 
-export interface DispatchedJournalAnchorV1 {
+export interface SignedEffectJournalAnchorV1<RecordV1> {
+  anchor_schema_version: "infinity.effect-journal-anchor/v1";
+  journal_sequence: bigint;
+  prior_frontier_digest: Digest;
+  record_digest: Digest;
+  frontier_digest: Digest;
+  signer_principal: string;
+  signing_key_id: string;
+  signature: string;
+  record: RecordV1;
+}
+
+export interface DispatchedJournalRecordV1 {
   schema_version: SchemaVersion;
-  journal_anchor_id: string;
   state: "dispatched";
   record_kind: "DISPATCHED";
   outcome_schema_version: "infinity.effect-journal-outcome/v1";
@@ -132,18 +143,18 @@ export interface DispatchedJournalAnchorV1 {
   successor_resource_lifecycle_generation: bigint;
   recorded_at: string;
   expires_at: string;
-  issuer_principal: string;
   provider_idempotency_token_sha256: Digest;
+  provider_creation_token_sha256: Digest;
   immutable_fingerprint_sha256: Digest;
   authorization_consumption_receipt_sha256: Digest;
-  frontier_sha256: Digest;
   fence: CanonicalSandboxEffectFenceV1;
-  anchor_sha256: Digest;
 }
 
-export interface ReadProbeJournalAnchorV1 {
+export type DispatchedJournalAnchorV1 =
+  SignedEffectJournalAnchorV1<DispatchedJournalRecordV1>;
+
+export interface ReadProbeJournalRecordV1 {
   schema_version: SchemaVersion;
-  journal_anchor_id: string;
   state: "read_probe";
   operation_id: string;
   operation_step_id: string;
@@ -151,14 +162,15 @@ export interface ReadProbeJournalAnchorV1 {
   resource_id: string;
   recorded_at: string;
   expires_at: string;
-  issuer_principal: string;
-  frontier_sha256: Digest;
   fence: CanonicalSandboxEffectFenceV1;
   target: ProviderEffectTargetV1;
-  anchor_sha256: Digest;
+  discovery_scope: ProviderDiscoveryScopeV1;
 }
 
-export interface ProviderOutcomeAnchorV1 {
+export type ReadProbeJournalAnchorV1 =
+  SignedEffectJournalAnchorV1<ReadProbeJournalRecordV1>;
+
+export interface ProviderOutcomeRecordV1 {
   schema_version: SchemaVersion;
   record_kind: "OUTCOME";
   outcome_schema_version: "infinity.effect-journal-outcome/v1";
@@ -170,11 +182,30 @@ export interface ProviderOutcomeAnchorV1 {
   outcome_kind: import("./effect-journal.js").EffectJournalOutcomeKindV1;
   outcome_sha256: Digest;
   recorded_at: string;
-  issuer_principal: string;
-  frontier_sha256: Digest;
   fence: CanonicalSandboxEffectFenceV1;
   target: ProviderEffectTargetV1;
-  anchor_sha256: Digest;
+}
+
+export type ProviderOutcomeAnchorV1 =
+  SignedEffectJournalAnchorV1<ProviderOutcomeRecordV1>;
+
+export type EffectJournalEnvelopeV1 =
+  | DispatchedJournalAnchorV1
+  | ProviderOutcomeAnchorV1
+  | ReadProbeJournalAnchorV1;
+
+export interface EffectJournalRecoveryRangeV1 {
+  schema_version: "infinity.effect-journal-recovery-range/v1";
+  operation_id: string;
+  operation_step_id: string;
+  requested_from_sequence: bigint;
+  signed_head_sequence: bigint;
+  signed_head_frontier_digest: Digest;
+  signer_principal: string;
+  signing_key_id: string;
+  signature: string;
+  complete_operation_envelopes: EffectJournalEnvelopeV1[];
+  completeness_proof_sha256: Digest;
 }
 
 interface ExternalOperationAnchorRecordBaseV1 {
@@ -182,13 +213,15 @@ interface ExternalOperationAnchorRecordBaseV1 {
   operation_id: string;
   operation_step_id: string;
   operation_execution_epoch: bigint;
-  anchor_sha256: Digest;
-  frontier_sha256: Digest;
-  payload_sha256: Digest;
+  journal_sequence: bigint;
+  prior_frontier_digest: Digest;
+  record_digest: Digest;
+  frontier_digest: Digest;
+  envelope_digest: Digest;
   recorded_at: string;
 }
 
-export type ExternalOperationAnchorRecordV1 =
+export type ExternalMutationAnchorRecordV1 =
   | (ExternalOperationAnchorRecordBaseV1 & {
       record_kind: "DISPATCHED";
       outcome_schema_version: "infinity.effect-journal-outcome/v1";
@@ -198,11 +231,17 @@ export type ExternalOperationAnchorRecordV1 =
       record_kind: "OUTCOME";
       outcome_schema_version: "infinity.effect-journal-outcome/v1";
       outcome_schema_digest: Digest;
-      outcome_kind: ProviderOutcomeAnchorV1["outcome_kind"];
-    })
-  | (ExternalOperationAnchorRecordBaseV1 & {
-      record_kind: "READ_PROBE";
+      outcome_kind: ProviderOutcomeAnchorV1["record"]["outcome_kind"];
     });
+
+export type ExternalReadProbeAnchorRecordV1 =
+  ExternalOperationAnchorRecordBaseV1 & {
+    anchor_kind: "READ_PROBE";
+  };
+
+export type ExternalOperationAnchorRecordV1 =
+  | ExternalMutationAnchorRecordV1
+  | ExternalReadProbeAnchorRecordV1;
 
 export interface CapabilityClaimsV1 {
   schema_version: SchemaVersion;
@@ -258,6 +297,41 @@ export interface SafetyFenceObservationV1 {
   network_close_evidence_sha256: Digest;
   observed_at: string;
   signer_principal: string;
+}
+
+export interface StoredSafetyFenceObservationV1 {
+  schema_version: SchemaVersion;
+  observation_id: string;
+  resource_id: string;
+  observation_sha256: Digest;
+  observation: SafetyFenceObservationV1;
+  recorded_at: string;
+}
+
+export interface SandboxDestroyTombstoneV1 {
+  schema_version: "sandboxes.destroy-tombstone/v1";
+  tombstone_id: string;
+  resource_id: string;
+  destroy_operation_id: string;
+  record_operation_id: string;
+  expected_resource_lifecycle_generation: bigint;
+  destroy_resource_lifecycle_generation: bigint;
+  terminal_resource_lifecycle_generation: bigint;
+  adapter_descriptor_sha256: Digest;
+  provider_handle_sha256: Digest;
+  cleanup_grant_sha256: Digest;
+  cleanup_basis_kind: CleanupBasisV1["kind"];
+  cleanup_basis_receipt_sha256: Digest;
+  provider_outcome_anchor_sha256: Digest;
+  provider_receipt_sha256: Digest;
+  terminal_disposition:
+    | "destroyed_after_checkpoint"
+    | "destroyed_after_promotion"
+    | "discarded_uncheckpointed";
+  destroy_fence: CanonicalSandboxEffectFenceV1;
+  record_fence: CanonicalSandboxEffectFenceV1;
+  destroyed_at: string;
+  tombstone_sha256: Digest;
 }
 
 export interface CreateSandboxV1 {
@@ -395,6 +469,7 @@ export interface OwnedProviderHandleV1 {
   creation_receipt_sha256: Digest;
   provider_created_at: string;
   provider_resource_version: string;
+  provider_identity_sha256: Digest;
   immutable_fingerprint_sha256: Digest;
   resource_lease_id: string;
   resource_id: string;
@@ -428,8 +503,38 @@ export interface ProviderEffectTargetV1 {
   resource_id: string;
   resource_lifecycle_generation: bigint;
   provider_idempotency_token_sha256: Digest;
+  provider_creation_token_sha256: Digest;
   immutable_fingerprint_sha256: Digest;
   authorization_consumption_receipt_sha256: Digest;
+}
+
+export interface ProviderDiscoveryScopeV1 {
+  schema_version: "sandboxes.provider-discovery-scope/v1";
+  read_kind: "exact_operation_and_owned_resource";
+  installation_id: string;
+  provider_scope_ref: string;
+  resource_id: string;
+  provider_creation_token_sha256: Digest;
+  immutable_fingerprint_sha256: Digest;
+  max_pages: number;
+  scope_sha256: Digest;
+}
+
+export interface ProviderLifecycleLockBindingV1 {
+  schema_version: "sandboxes.provider-lifecycle-lock/v1";
+  lock_key_sha256: Digest;
+  installation_id: string;
+  adapter_id: AdapterDescriptorV1["adapter_id"];
+  provider_scope_ref: string;
+  resource_id: string;
+  resource_lease_id: string;
+  provider_creation_token_sha256: Digest;
+  bound_provider_identity?: {
+    opaque_resource_id: string;
+    ownership_nonce: string;
+    immutable_fingerprint_sha256: Digest;
+    provider_resource_version: string;
+  };
 }
 
 export interface AdapterDescriptorV1 {
@@ -438,6 +543,8 @@ export interface AdapterDescriptorV1 {
   adapter_version: string;
   build_sha256: Digest;
   descriptor_sha256: Digest;
+  installation_id: string;
+  provider_scope_ref: string;
   status: "test_only" | "pending_conformance" | "admitted";
   runtime_class: "strong_vm";
   network_modes: ReadonlyArray<"deny_all" | "broker_only">;
@@ -445,6 +552,7 @@ export interface AdapterDescriptorV1 {
   inert_create: boolean;
   whole_scope_cancel: boolean;
   native_bounded_files: boolean;
+  atomic_incarnation_bound_delete: boolean;
 }
 
 export interface ActivationReceiptV1 {
@@ -457,6 +565,7 @@ export interface ActivationReceiptV1 {
 
 export interface AdapterObservationV1 {
   state: "inert" | "active" | "absent" | "unknown";
+  handle?: OwnedProviderHandleV1;
   immutable_fingerprint_sha256?: Digest;
   provider_resource_version?: string;
 }
@@ -481,6 +590,11 @@ export interface ProviderOperationObservationV1 {
 export interface OwnedResourcePageV1 {
   resources: Array<{
     resource_id: string;
+    installation_id: string;
+    provider_scope_ref: string;
+    opaque_resource_id: string;
+    ownership_nonce: string;
+    provider_creation_token_sha256: Digest;
     immutable_fingerprint_sha256: Digest;
     state: "inert" | "active" | "absent" | "unknown";
   }>;
@@ -499,6 +613,11 @@ export interface OperationRecordV1 {
   capability_use_sha256: Digest;
   dispatch_journal_anchor_sha256?: Digest;
   provider_target?: ProviderEffectTargetV1;
+  cleanup_authorization?: {
+    cleanup_grant_sha256: Digest;
+    basis_kind: CleanupBasisV1["kind"];
+    basis_receipt_sha256: Digest;
+  };
   expected_resource_lifecycle_generation: bigint;
   successor_resource_lifecycle_generation: bigint;
   fence: CanonicalSandboxEffectFenceV1;

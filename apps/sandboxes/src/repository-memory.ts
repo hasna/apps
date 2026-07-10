@@ -5,16 +5,20 @@ import type {
   SandboxRepositoryV1,
 } from "./repository.js";
 import { assertExternalOperationAnchorRecordV1 } from "./repository.js";
-import { canonicalDigest } from "./canonical.js";
+import { assertDigest, assertOpaqueId, canonicalDigest } from "./canonical.js";
 import type {
+  CheckpointDurabilityReceiptV1,
+  GitPromotionReceiptRefV1,
   OperationRecordV1,
   ExternalOperationAnchorRecordV1,
   SandboxEventV1,
+  SandboxDestroyTombstoneV1,
   SandboxV1,
   SealedProviderHandleV1,
+  StoredSafetyFenceObservationV1,
 } from "./types.js";
 
-interface MemoryState {
+export interface SandboxRepositoryStateV1 {
   sandboxes: Map<string, SandboxV1>;
   handles: Map<string, SealedProviderHandleV1>;
   operations: Map<string, OperationRecordV1>;
@@ -24,9 +28,13 @@ interface MemoryState {
   cleanupGrantUses: Map<string, string>;
   events: SandboxEventV1[];
   externalAnchors: ExternalOperationAnchorRecordV1[];
+  safetyObservations: Map<string, StoredSafetyFenceObservationV1>;
+  destroyTombstones: Map<string, SandboxDestroyTombstoneV1>;
+  checkpointReceipts: Map<string, CheckpointDurabilityReceiptV1>;
+  gitPromotionReceipts: Map<string, GitPromotionReceiptRefV1>;
 }
 
-function freshState(): MemoryState {
+export function createSandboxRepositoryStateV1(): SandboxRepositoryStateV1 {
   return {
     sandboxes: new Map(),
     handles: new Map(),
@@ -37,49 +45,70 @@ function freshState(): MemoryState {
     cleanupGrantUses: new Map(),
     events: [],
     externalAnchors: [],
+    safetyObservations: new Map(),
+    destroyTombstones: new Map(),
+    checkpointReceipts: new Map(),
+    gitPromotionReceipts: new Map(),
   };
 }
 
-function key(actor: string, operation: string, resourceId: string, digest: string): string {
+export function operationIdempotencyKeyV1(actor: string, operation: string, resourceId: string, digest: string): string {
   return `${actor}\u0000${operation}\u0000${resourceId}\u0000${digest}`;
 }
 
 export class InMemorySandboxRepositoryV1 implements SandboxRepositoryV1 {
   readonly backend = "memory" as const;
-  #state = freshState();
+  #state: SandboxRepositoryStateV1;
   readonly #clock: () => Date;
 
-  constructor(clock: () => Date = () => new Date()) {
+  constructor(
+    clock: () => Date = () => new Date(),
+    initialState: SandboxRepositoryStateV1 = createSandboxRepositoryStateV1(),
+  ) {
     this.#clock = clock;
+    this.#state = structuredClone(initialState);
+  }
+
+  exportPersistenceState(): SandboxRepositoryStateV1 {
+    return structuredClone(this.#state);
   }
 
   migrate(): void {}
 
-  databaseTime(): Date {
+  async databaseTime(): Promise<Date> {
     return new Date(this.#clock().getTime());
   }
 
-  transaction<T>(fn: (tx: SandboxRepositoryTxV1) => T): T {
+  async transaction<T>(fn: (tx: SandboxRepositoryTxV1) => T): Promise<T> {
     const snapshot = structuredClone(this.#state);
     try {
-      return fn(this.#tx());
+      const result = fn(this.#tx());
+      if (
+        result !== null &&
+        typeof result === "object" &&
+        "then" in result &&
+        typeof (result as { then?: unknown }).then === "function"
+      ) {
+        throw new SandboxError("validation_failed", "Repository transaction callbacks must be synchronous");
+      }
+      return result;
     } catch (error) {
       this.#state = snapshot;
       throw error;
     }
   }
 
-  health(): RepositoryHealthV1 {
+  async health(): Promise<RepositoryHealthV1> {
     return {
       backend: "memory",
-      schema_version: 3,
+      schema_version: 5,
       integrity: "ok",
       sandbox_count: this.#state.sandboxes.size,
       operation_count: this.#state.operations.size,
     };
   }
 
-  close(): void {}
+  async close(): Promise<void> {}
 
   #tx(): SandboxRepositoryTxV1 {
     const state = this.#state;
@@ -121,7 +150,7 @@ export class InMemorySandboxRepositoryV1 implements SandboxRepositoryV1 {
         return value === undefined ? undefined : structuredClone(value);
       },
       findIdempotentOperation(actorPrincipal, operation, resourceId, idempotencyKeySha256) {
-        const operationId = state.idempotency.get(key(actorPrincipal, operation, resourceId, idempotencyKeySha256));
+        const operationId = state.idempotency.get(operationIdempotencyKeyV1(actorPrincipal, operation, resourceId, idempotencyKeySha256));
         if (operationId === undefined) return undefined;
         const value = state.operations.get(operationId);
         return value === undefined ? undefined : structuredClone(value);
@@ -130,7 +159,7 @@ export class InMemorySandboxRepositoryV1 implements SandboxRepositoryV1 {
         if (state.operations.has(record.operation_id)) {
           throw new SandboxError("idempotency_key_reused", "Operation ID already exists");
         }
-        const idempotencyKey = key(
+        const idempotencyKey = operationIdempotencyKeyV1(
           record.actor_principal,
           record.operation,
           record.resource_id,
@@ -160,13 +189,29 @@ export class InMemorySandboxRepositoryV1 implements SandboxRepositoryV1 {
       },
       appendExternalAnchor(record) {
         assertExternalOperationAnchorRecordV1(record);
+        const isReadProbe = "anchor_kind" in record;
+        const sequenceRecord = state.externalAnchors.find(
+          (candidate) => candidate.journal_sequence === record.journal_sequence,
+        );
+        if (
+          sequenceRecord !== undefined &&
+          (
+            sequenceRecord.prior_frontier_digest !== record.prior_frontier_digest ||
+            sequenceRecord.record_digest !== record.record_digest ||
+            sequenceRecord.frontier_digest !== record.frontier_digest ||
+            sequenceRecord.envelope_digest !== record.envelope_digest
+          )
+        ) {
+          throw new SandboxError("integrity_failed", "External journal sequence or frontier changed bytes");
+        }
         const conflict = state.externalAnchors.find(
           (candidate) =>
             candidate.operation_id === record.operation_id &&
             candidate.operation_step_id === record.operation_step_id &&
             candidate.operation_execution_epoch === record.operation_execution_epoch &&
-            candidate.record_kind === record.record_kind &&
-            (record.record_kind !== "READ_PROBE" || candidate.anchor_sha256 === record.anchor_sha256),
+            (isReadProbe
+              ? "anchor_kind" in candidate && candidate.envelope_digest === record.envelope_digest
+              : "record_kind" in candidate && candidate.record_kind === record.record_kind),
         );
         if (conflict !== undefined) {
           if (canonicalDigest(conflict) !== canonicalDigest(record)) {
@@ -174,25 +219,25 @@ export class InMemorySandboxRepositoryV1 implements SandboxRepositoryV1 {
           }
           return;
         }
-        if (record.record_kind === "OUTCOME") {
+        if (!isReadProbe && record.record_kind === "OUTCOME") {
           const dispatched = state.externalAnchors.find(
             (candidate) =>
               candidate.operation_id === record.operation_id &&
               candidate.operation_step_id === record.operation_step_id &&
               candidate.operation_execution_epoch === record.operation_execution_epoch &&
-              candidate.record_kind === "DISPATCHED",
+              "record_kind" in candidate && candidate.record_kind === "DISPATCHED",
           );
           if (dispatched === undefined) {
             throw new SandboxError("integrity_failed", "OUTCOME has no matching immutable DISPATCHED record");
           }
         }
-        if (record.record_kind === "DISPATCHED") {
+        if (!isReadProbe && record.record_kind === "DISPATCHED") {
           const priorDispatches = state.externalAnchors
             .filter(
               (candidate) =>
                 candidate.operation_id === record.operation_id &&
                 candidate.operation_step_id === record.operation_step_id &&
-                candidate.record_kind === "DISPATCHED",
+                "record_kind" in candidate && candidate.record_kind === "DISPATCHED",
             )
             .sort((a, b) => (a.operation_execution_epoch < b.operation_execution_epoch ? -1 : 1));
           const prior = priorDispatches.at(-1);
@@ -205,10 +250,11 @@ export class InMemorySandboxRepositoryV1 implements SandboxRepositoryV1 {
                 candidate.operation_id === prior.operation_id &&
                 candidate.operation_step_id === prior.operation_step_id &&
                 candidate.operation_execution_epoch === prior.operation_execution_epoch &&
-                candidate.record_kind === "OUTCOME",
+                "record_kind" in candidate && candidate.record_kind === "OUTCOME",
             );
             if (
               priorOutcome === undefined ||
+              !("record_kind" in priorOutcome) ||
               priorOutcome.record_kind !== "OUTCOME" ||
               priorOutcome.outcome_kind !== "failed_no_effect"
             ) {
@@ -252,6 +298,101 @@ export class InMemorySandboxRepositoryV1 implements SandboxRepositoryV1 {
       },
       getCleanupGrantUseOperation(grantUseSha256) {
         return state.cleanupGrantUses.get(grantUseSha256);
+      },
+      putCheckpointReceipt(receipt) {
+        assertDigest(receipt.receipt_sha256, "checkpoint_receipt.receipt_sha256");
+        if (!state.sandboxes.has(receipt.resource_id)) {
+          throw new SandboxError("not_found", "Checkpoint receipt resource does not exist");
+        }
+        const existing = state.checkpointReceipts.get(receipt.receipt_sha256);
+        if (existing !== undefined) {
+          if (canonicalDigest(existing) !== canonicalDigest(receipt)) {
+            throw new SandboxError("integrity_failed", "Immutable checkpoint receipt changed bytes");
+          }
+          return;
+        }
+        if ([...state.checkpointReceipts.values()].some((candidate) => candidate.receipt_id === receipt.receipt_id)) {
+          throw new SandboxError("integrity_failed", "Checkpoint receipt identity conflicts with stored bytes");
+        }
+        state.checkpointReceipts.set(receipt.receipt_sha256, structuredClone(receipt));
+      },
+      getCheckpointReceipt(receiptSha256) {
+        const value = state.checkpointReceipts.get(receiptSha256);
+        return value === undefined ? undefined : structuredClone(value);
+      },
+      putGitPromotionReceipt(receipt) {
+        assertDigest(receipt.receipt_sha256, "promotion_receipt.receipt_sha256");
+        if (!state.sandboxes.has(receipt.resource_id)) {
+          throw new SandboxError("not_found", "Promotion receipt resource does not exist");
+        }
+        const existing = state.gitPromotionReceipts.get(receipt.receipt_sha256);
+        if (existing !== undefined) {
+          if (canonicalDigest(existing) !== canonicalDigest(receipt)) {
+            throw new SandboxError("integrity_failed", "Immutable promotion receipt changed bytes");
+          }
+          return;
+        }
+        if ([...state.gitPromotionReceipts.values()].some((candidate) => candidate.receipt_id === receipt.receipt_id)) {
+          throw new SandboxError("integrity_failed", "Promotion receipt identity conflicts with stored bytes");
+        }
+        state.gitPromotionReceipts.set(receipt.receipt_sha256, structuredClone(receipt));
+      },
+      getGitPromotionReceipt(receiptSha256) {
+        const value = state.gitPromotionReceipts.get(receiptSha256);
+        return value === undefined ? undefined : structuredClone(value);
+      },
+      appendSafetyFenceObservation(record) {
+        assertOpaqueId(record.observation_id, "safety_observation.observation_id", "observation");
+        assertOpaqueId(record.resource_id, "safety_observation.resource_id", "sbx");
+        assertDigest(record.observation_sha256, "safety_observation.observation_sha256");
+        if (
+          record.resource_id !== record.observation.resource_id ||
+          record.observation_sha256 !== canonicalDigest(record.observation)
+        ) {
+          throw new SandboxError("integrity_failed", "Safety observation record bytes do not match their digest");
+        }
+        if (!state.sandboxes.has(record.resource_id)) {
+          throw new SandboxError("not_found", "Safety observation resource does not exist");
+        }
+        const existing = state.safetyObservations.get(record.observation_id);
+        if (existing !== undefined) {
+          if (canonicalDigest(existing) !== canonicalDigest(record)) {
+            throw new SandboxError("integrity_failed", "Immutable safety observation changed bytes");
+          }
+          return;
+        }
+        state.safetyObservations.set(record.observation_id, structuredClone(record));
+      },
+      listSafetyFenceObservations(resourceId) {
+        return [...state.safetyObservations.values()]
+          .filter((record) => record.resource_id === resourceId)
+          .sort((a, b) => a.recorded_at.localeCompare(b.recorded_at) || a.observation_id.localeCompare(b.observation_id))
+          .map((record) => structuredClone(record));
+      },
+      putDestroyTombstone(record) {
+        assertOpaqueId(record.tombstone_id, "destroy_tombstone.tombstone_id", "tombstone");
+        assertOpaqueId(record.resource_id, "destroy_tombstone.resource_id", "sbx");
+        assertDigest(record.tombstone_sha256, "destroy_tombstone.tombstone_sha256");
+        const { tombstone_sha256: _digest, ...protectedBytes } = record;
+        if (record.tombstone_sha256 !== canonicalDigest(protectedBytes)) {
+          throw new SandboxError("integrity_failed", "Destroy tombstone digest does not match its protected bytes");
+        }
+        const sandbox = state.sandboxes.get(record.resource_id);
+        if (sandbox?.state !== "destroyed") {
+          throw new SandboxError("integrity_failed", "Destroy tombstone requires a terminal sandbox record");
+        }
+        const existing = state.destroyTombstones.get(record.resource_id);
+        if (existing !== undefined) {
+          if (canonicalDigest(existing) !== canonicalDigest(record)) {
+            throw new SandboxError("integrity_failed", "Immutable destroy tombstone changed bytes");
+          }
+          return;
+        }
+        state.destroyTombstones.set(record.resource_id, structuredClone(record));
+      },
+      getDestroyTombstone(resourceId) {
+        const value = state.destroyTombstones.get(resourceId);
+        return value === undefined ? undefined : structuredClone(value);
       },
       appendEvent(event) {
         const sequence = state.events.reduce(

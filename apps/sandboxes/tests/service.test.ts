@@ -4,7 +4,10 @@ import {
   activationRequestDigest,
   createRequestDigest,
   dispatchedJournalAnchorDigest,
+  effectJournalFrontierDigest,
+  effectJournalRecordDigest,
   lifecycleRecordRequestDigest,
+  providerIdempotencyTokenDigest,
   quarantineRequestDigest,
 } from "../src/service.js";
 import {
@@ -31,8 +34,8 @@ describe("reference lifecycle and adversarial invariants", () => {
     const request = createRequestDigest(input);
     const begin = context("begin_create_inert", oid("op", 160), request, 1n, 0, 1n, 160);
     let observedDispatchPhase = false;
-    h.dispatchJournal.onAppend = () => {
-      const operation = h.repository.transaction((tx) => tx.getOperation(begin.operation_id));
+    h.dispatchJournal.onAppend = async () => {
+      const operation = await h.repository.transaction((tx) => tx.getOperation(begin.operation_id));
       expect(operation?.effect_phase).toBe("dispatched");
       expect(h.runner.calls.create_inert).toBe(0);
       expect(h.verifier.calls.dispatch_journal).toBe(0);
@@ -45,8 +48,10 @@ describe("reference lifecycle and adversarial invariants", () => {
     expect(creating.resource_lifecycle_generation).toBe(2n);
     expect(creating.pending_provider_outcome?.target_state).toBe("inert");
     expect(h.dispatchJournal.calls).toHaveLength(1);
-    expect(h.repository.transaction((tx) => tx.listExternalAnchors(begin.operation_id).map((row) => row.record_kind)))
-      .toEqual(["DISPATCHED", "OUTCOME"]);
+    expect(await h.repository.transaction((tx) => tx.listExternalAnchors(begin.operation_id).map((row) =>
+      "record_kind" in row ? row.record_kind : row.anchor_kind
+    )))
+      .toEqual(["DISPATCHED", "READ_PROBE", "OUTCOME"]);
 
     const evidence = creating.pending_provider_outcome!.evidence_sha256;
     const recordRequest = lifecycleRecordRequestDigest("record_inert", creating.id, evidence);
@@ -75,8 +80,32 @@ describe("reference lifecycle and adversarial invariants", () => {
     await expect(h.service.create(input, begin)).rejects.toThrow("journal unavailable");
     expect(h.runner.calls.create_inert).toBe(0);
     expect(h.runner.calls.lookup).toBe(0);
-    expect(h.repository.transaction((tx) => tx.getOperation(begin.operation_id))?.effect_phase)
+    expect((await h.repository.transaction((tx) => tx.getOperation(begin.operation_id)))?.effect_phase)
       .toBe("dispatched");
+  });
+
+  test("signed head/range non-inclusion recovers a DB-dispatched crash before external append", async () => {
+    const h = harness();
+    const input = createInput();
+    const request = createRequestDigest(input);
+    const begin = context("begin_create_inert", oid("op", 227), request, 1n, 0, 1n, 227);
+    h.dispatchJournal.failure = new Error("crash before external append commit");
+    await expect(h.service.create(input, begin)).rejects.toThrow("crash before external append commit");
+    expect(h.runner.calls.create_inert).toBe(0);
+    h.dispatchJournal.failure = undefined;
+    const recovered = await h.service.create(input, begin);
+    expect(recovered.pending_provider_outcome?.target_state).toBe("inert");
+    expect(h.runner.calls.create_inert).toBe(1);
+  });
+
+  test("untrusted or non-member signed frontier blocks provider reachability", async () => {
+    const h = harness();
+    h.verifier.stored_frontier_membership_valid = false;
+    const input = createInput();
+    const request = createRequestDigest(input);
+    const begin = context("begin_create_inert", oid("op", 225), request, 1n, 0, 1n, 225);
+    await expect(h.service.create(input, begin)).rejects.toMatchObject({ code: "integrity_failed" });
+    expect(h.runner.calls.create_inert).toBe(0);
   });
 
   test("resource revision changed while DISPATCHED is appended blocks provider reachability", async () => {
@@ -84,8 +113,8 @@ describe("reference lifecycle and adversarial invariants", () => {
     const input = createInput();
     const request = createRequestDigest(input);
     const begin = context("begin_create_inert", oid("op", 216), request, 1n, 0, 1n, 216);
-    h.dispatchJournal.onAppend = () => {
-      h.repository.transaction((tx) => {
+    h.dispatchJournal.onAppend = async () => {
+      await h.repository.transaction((tx) => {
         const current = tx.getSandbox(input.resource_id)!;
         tx.putSandbox({
           ...current,
@@ -98,7 +127,7 @@ describe("reference lifecycle and adversarial invariants", () => {
 
     await expect(h.service.create(input, begin)).rejects.toMatchObject({ code: "stale_revision" });
     expect(h.runner.calls.create_inert).toBe(0);
-    expect(h.repository.transaction((tx) => tx.getOperation(begin.operation_id))?.effect_phase)
+    expect((await h.repository.transaction((tx) => tx.getOperation(begin.operation_id)))?.effect_phase)
       .toBe("dispatched");
   });
 
@@ -127,26 +156,26 @@ describe("reference lifecycle and adversarial invariants", () => {
     const begin = context("begin_create_inert", oid("op", 218), request, 1n, 0, 1n, 218);
 
     await expect(h.service.create(input, begin)).rejects.toMatchObject({ code: "provider_unavailable" });
-    const failed = h.service.get(input.resource_id);
+    const failed = await h.service.get(input.resource_id);
     expect(failed.pending_provider_outcome?.target_state).toBe("failed");
-    expect(h.repository.transaction((tx) => tx.getOperation(begin.operation_id))?.effect_phase)
+    expect((await h.repository.transaction((tx) => tx.getOperation(begin.operation_id)))?.effect_phase)
       .toBe("failed_no_effect");
 
     const retry = retryContext(begin, failed.revision, 2n, 219);
     const creating = await h.service.create(input, retry);
     expect(creating.pending_provider_outcome?.target_state).toBe("inert");
     expect(h.runner.calls.create_inert).toBe(2);
-    expect(h.dispatchJournal.calls.map((anchor) => anchor.operation_execution_epoch))
+    expect(h.dispatchJournal.calls.map((anchor) => anchor.record.operation_execution_epoch))
       .toEqual([1n, 2n]);
-    expect(h.dispatchJournal.calls[1]?.operation_step_id)
-      .toBe(h.dispatchJournal.calls[0]?.operation_step_id);
-    expect(h.dispatchJournal.calls[1]?.provider_idempotency_token_sha256)
-      .toBe(h.dispatchJournal.calls[0]?.provider_idempotency_token_sha256);
-    expect(h.dispatchJournal.calls[1]?.authorization_consumption_receipt_sha256)
-      .toBe(h.dispatchJournal.calls[0]?.authorization_consumption_receipt_sha256);
-    expect(h.repository.transaction((tx) => tx.listExternalAnchors(begin.operation_id).map((record) =>
-      `${record.record_kind}:${record.operation_execution_epoch}`
-    ))).toEqual(["DISPATCHED:1", "OUTCOME:1", "DISPATCHED:2", "OUTCOME:2"]);
+    expect(h.dispatchJournal.calls[1]?.record.operation_step_id)
+      .toBe(h.dispatchJournal.calls[0]?.record.operation_step_id);
+    expect(h.dispatchJournal.calls[1]?.record.provider_idempotency_token_sha256)
+      .toBe(h.dispatchJournal.calls[0]?.record.provider_idempotency_token_sha256);
+    expect(h.dispatchJournal.calls[1]?.record.authorization_consumption_receipt_sha256)
+      .toBe(h.dispatchJournal.calls[0]?.record.authorization_consumption_receipt_sha256);
+    expect(await h.repository.transaction((tx) => tx.listExternalAnchors(begin.operation_id).map((record) =>
+      `${"record_kind" in record ? record.record_kind : record.anchor_kind}:${record.operation_execution_epoch}`
+    ))).toEqual(["DISPATCHED:1", "OUTCOME:1", "DISPATCHED:2", "READ_PROBE:2", "OUTCOME:2"]);
   });
 
   test("failed_no_effect retry rejects a changed immutable provider target", async () => {
@@ -155,29 +184,63 @@ describe("reference lifecycle and adversarial invariants", () => {
     const request = createRequestDigest(input);
     const begin = context("begin_create_inert", oid("op", 220), request, 1n, 0, 1n, 220);
     await expect(h.service.create(input, begin)).rejects.toMatchObject({ code: "provider_unavailable" });
-    const failed = h.service.get(input.resource_id);
+    const failed = await h.service.get(input.resource_id);
     const retry = retryContext(begin, failed.revision, 2n, 221);
-    const changedBase = {
-      ...retry.dispatch_journal,
+    const changedRecord = {
+      ...retry.dispatch_journal.record,
       provider_idempotency_token_sha256: digest("changed-provider-token"),
-      anchor_sha256: digest("temporary-changed-anchor"),
+    };
+    const changedCore = {
+      ...retry.dispatch_journal,
+      record_digest: effectJournalRecordDigest(changedRecord),
+      record: changedRecord,
     };
     const changedAnchor = {
-      ...changedBase,
-      anchor_sha256: dispatchedJournalAnchorDigest(changedBase),
+      ...changedCore,
+      frontier_digest: effectJournalFrontierDigest(changedCore),
+      signature: "E".repeat(86),
     };
     const changed = {
       ...retry,
       dispatch_journal: changedAnchor,
       capability: {
         ...retry.capability,
-        dispatch_journal_anchor_sha256: changedAnchor.anchor_sha256,
+        dispatch_journal_anchor_sha256: dispatchedJournalAnchorDigest(changedAnchor),
       },
     };
 
-    await expect(h.service.create(input, changed)).rejects.toMatchObject({ code: "idempotency_key_reused" });
+    await expect(h.service.create(input, changed)).rejects.toMatchObject({ code: "integrity_failed" });
     expect(h.runner.calls.create_inert).toBe(1);
     expect(h.dispatchJournal.calls).toHaveLength(1);
+  });
+
+  test("failed_no_effect retry requires an online full signed OUTCOME envelope", async () => {
+    const h = harness(undefined, { reject_create_no_effect_attempts: 1 });
+    const input = createInput();
+    const request = createRequestDigest(input);
+    const begin = context("begin_create_inert", oid("op", 223), request, 1n, 0, 1n, 223);
+    await expect(h.service.create(input, begin)).rejects.toMatchObject({ code: "provider_unavailable" });
+    const prior = await h.repository.transaction((tx) => tx.getOperation(begin.operation_id));
+    expect(prior?.outcome_anchor_sha256).toMatch(/^sha256:/);
+    h.outcomeJournal.forgetOutcome(prior!.outcome_anchor_sha256!);
+    const failed = await h.service.get(input.resource_id);
+    const retry = retryContext(begin, failed.revision, 2n, 224);
+    await expect(h.service.create(input, retry)).rejects.toMatchObject({ code: "provider_state_unknown" });
+    expect(h.runner.calls.create_inert).toBe(1);
+    expect(h.dispatchJournal.calls).toHaveLength(1);
+  });
+
+  test("failed_no_effect retry rejects a member without signed head/range completeness", async () => {
+    const h = harness(undefined, { reject_create_no_effect_attempts: 1 });
+    const input = createInput();
+    const request = createRequestDigest(input);
+    const begin = context("begin_create_inert", oid("op", 229), request, 1n, 0, 1n, 229);
+    await expect(h.service.create(input, begin)).rejects.toMatchObject({ code: "provider_unavailable" });
+    const failed = await h.service.get(input.resource_id);
+    h.verifier.journal_range_completeness_valid = false;
+    await expect(h.service.create(input, retryContext(begin, failed.revision, 2n, 230)))
+      .rejects.toMatchObject({ code: "integrity_failed" });
+    expect(h.runner.calls.create_inert).toBe(1);
   });
 
   test("effect journal outcome schema mismatch fails before durable intent or provider contact", async () => {
@@ -185,26 +248,31 @@ describe("reference lifecycle and adversarial invariants", () => {
     const input = createInput();
     const request = createRequestDigest(input);
     const begin = context("begin_create_inert", oid("op", 222), request, 1n, 0, 1n, 222);
-    const changedBase = {
-      ...begin.dispatch_journal,
+    const changedRecord = {
+      ...begin.dispatch_journal.record,
       outcome_schema_digest: digest("foreign-outcome-schema"),
-      anchor_sha256: digest("temporary-foreign-schema-anchor"),
+    };
+    const changedCore = {
+      ...begin.dispatch_journal,
+      record_digest: effectJournalRecordDigest(changedRecord),
+      record: changedRecord,
     };
     const changedAnchor = {
-      ...changedBase,
-      anchor_sha256: dispatchedJournalAnchorDigest(changedBase),
+      ...changedCore,
+      frontier_digest: effectJournalFrontierDigest(changedCore),
+      signature: "F".repeat(86),
     };
     const changed = {
       ...begin,
       dispatch_journal: changedAnchor,
       capability: {
         ...begin.capability,
-        dispatch_journal_anchor_sha256: changedAnchor.anchor_sha256,
+        dispatch_journal_anchor_sha256: dispatchedJournalAnchorDigest(changedAnchor),
       },
     };
     await expect(h.service.create(input, changed)).rejects.toMatchObject({ code: "protocol_incompatible" });
     expect(h.runner.calls.create_inert).toBe(0);
-    expect(h.repository.transaction((tx) => tx.getOperation(begin.operation_id))).toBeUndefined();
+    expect(await h.repository.transaction((tx) => tx.getOperation(begin.operation_id))).toBeUndefined();
   });
 
   test("a future TTL is rejected before any physical safety action", async () => {
@@ -213,7 +281,7 @@ describe("reference lifecycle and adversarial invariants", () => {
     const before = h.physicalSafety.calls.length;
     await expect(h.service.observeExpired(inert.id)).rejects.toMatchObject({ code: "policy_denied" });
     expect(h.physicalSafety.calls).toHaveLength(before);
-    expect(h.service.get(inert.id).physical_safety_state).toBe("clear");
+    expect((await h.service.get(inert.id)).physical_safety_state).toBe("clear");
   });
 
   test("create exact-adoption rejects a mismatched provider creation token", async () => {
@@ -226,6 +294,48 @@ describe("reference lifecycle and adversarial invariants", () => {
     expect(fenced.pending_provider_outcome).toBeUndefined();
     expect(fenced.physical_safety_state).toBe("fenced");
     expect(fenced.physical_safety_reason).toBe("provider_identity_mismatch");
+  });
+
+  test("create rejects a self-consistent journal token not derived from the actual allocation and spec", async () => {
+    const h = harness();
+    const input = createInput();
+    const request = createRequestDigest(input);
+    const begin = context("begin_create_inert", oid("op", 226), request, 1n, 0, 1n, 226);
+    const changedCreationToken = digest("foreign-allocation-derived-creation-token");
+    const changedRecordBase = {
+      ...begin.dispatch_journal.record,
+      provider_creation_token_sha256: changedCreationToken,
+    };
+    const changedRecord = {
+      ...changedRecordBase,
+      provider_idempotency_token_sha256: providerIdempotencyTokenDigest({
+        operation_id: changedRecordBase.operation_id,
+        operation_step_id: changedRecordBase.operation_step_id,
+        operation_digest: changedRecordBase.operation_digest,
+        resource_id: changedRecordBase.resource_id,
+        provider_creation_token_sha256: changedCreationToken,
+      }),
+    };
+    const changedCore = {
+      ...begin.dispatch_journal,
+      record_digest: effectJournalRecordDigest(changedRecord),
+      record: changedRecord,
+    };
+    const changedAnchor = {
+      ...changedCore,
+      frontier_digest: effectJournalFrontierDigest(changedCore),
+      signature: "G".repeat(86),
+    };
+    await expect(h.service.create(input, {
+      ...begin,
+      dispatch_journal: changedAnchor,
+      capability: {
+        ...begin.capability,
+        dispatch_journal_anchor_sha256: dispatchedJournalAnchorDigest(changedAnchor),
+      },
+    })).rejects.toMatchObject({ code: "request_digest_mismatch" });
+    expect(h.runner.calls.create_inert).toBe(0);
+    expect(await h.repository.transaction((tx) => tx.getOperation(begin.operation_id))).toBeUndefined();
   });
 
   test("activation receipts bind both native fingerprint and network policy", async () => {
@@ -269,12 +379,18 @@ describe("reference lifecycle and adversarial invariants", () => {
     expect(active.resource_lifecycle_generation).toBe(5n);
     expect(h.runner.calls.activate).toBe(1);
     expect(h.outcomeJournal.calls.map((call) => call.outcome_kind)).toEqual(["succeeded", "succeeded"]);
-    const activationOperation = h.repository.transaction((tx) =>
+    expect(h.lifecycleLock.bindings).toHaveLength(2);
+    expect(new Set(h.lifecycleLock.bindings.map((binding) => binding.lock_key_sha256)).size).toBe(1);
+    expect(h.lifecycleLock.bindings[0]?.bound_provider_identity).toBeUndefined();
+    expect(h.lifecycleLock.bindings[1]?.bound_provider_identity?.opaque_resource_id).toMatch(/^native-/);
+    expect(h.dispatchJournal.calls[0]?.record.provider_idempotency_token_sha256)
+      .not.toBe(h.dispatchJournal.calls[1]?.record.provider_idempotency_token_sha256);
+    const activationOperation = await h.repository.transaction((tx) =>
       tx.getOperation(active.activation_operation_id!),
     );
     expect(activationOperation?.effect_phase).toBe("succeeded");
     expect(activationOperation?.outcome_anchor_sha256).toMatch(/^sha256:/);
-    expect(h.service.events(active.id).map((event) => event.state)).toEqual([
+    expect((await h.service.events(active.id)).map((event) => event.state)).toEqual([
       "creating_inert",
       "creating_inert",
       "inert",
@@ -305,6 +421,30 @@ describe("reference lifecycle and adversarial invariants", () => {
     const first = await h.service.activate(inert.id, grant, ctx);
     const replay = await h.service.activate(inert.id, grant, ctx);
     expect(replay).toEqual(first);
+    expect(h.runner.calls.activate).toBe(1);
+  });
+
+  test("consumed activation grant recovers only after signed head/range proves dispatch absent", async () => {
+    const h = harness();
+    const inert = await createInert(h);
+    const grant = activationGrant(inert, oid("op", 228));
+    const ctx = context(
+      "begin_activate",
+      grant.operation_id,
+      grant.operation_digest,
+      inert.resource_lifecycle_generation,
+      inert.revision,
+      2n,
+      228,
+      inert.immutable_fingerprint_sha256!,
+      canonicalDigest({ id: grant.grant_id, nonce: grant.one_use_nonce_sha256 }),
+    );
+    h.dispatchJournal.failure = new Error("crash after grant consumption before journal append");
+    await expect(h.service.activate(inert.id, grant, ctx)).rejects.toThrow("crash after grant consumption");
+    expect(h.runner.calls.activate).toBe(0);
+    h.dispatchJournal.failure = undefined;
+    const recovered = await h.service.activate(inert.id, grant, ctx);
+    expect(recovered.pending_provider_outcome?.target_state).toBe("active");
     expect(h.runner.calls.activate).toBe(1);
   });
 
@@ -352,9 +492,7 @@ describe("reference lifecycle and adversarial invariants", () => {
     const request = createRequestDigest(input);
     const ctx = context("begin_create_inert", oid("op", 60), request, 1n, 0, 1n, 60);
     ctx.transition.successor_resource_lifecycle_generation = 10n;
-    ctx.dispatch_journal.successor_resource_lifecycle_generation = 10n;
-    ctx.dispatch_journal.anchor_sha256 = dispatchedJournalAnchorDigest(ctx.dispatch_journal);
-    ctx.capability.dispatch_journal_anchor_sha256 = ctx.dispatch_journal.anchor_sha256;
+    ctx.dispatch_journal.record.successor_resource_lifecycle_generation = 10n;
     await expect(h.service.create(input, ctx)).rejects.toThrow("exactly expected plus one");
     expect(h.runner.calls.create_inert).toBe(0);
   });
@@ -365,7 +503,7 @@ describe("reference lifecycle and adversarial invariants", () => {
     const { createRequestDigest } = await import("../src/service.js");
     const request = createRequestDigest(input);
     const ctx = context("begin_create_inert", oid("op", 61), request, 1n, 0, 1n, 61);
-    ctx.dispatch_journal.successor_resource_lifecycle_generation = 99n;
+    ctx.dispatch_journal.record.successor_resource_lifecycle_generation = 99n;
     await expect(h.service.create(input, ctx)).rejects.toMatchObject({ code: "validation_failed" });
     expect(h.runner.calls.create_inert).toBe(0);
     expect(h.verifier.calls.dispatch_journal).toBe(0);
@@ -375,10 +513,10 @@ describe("reference lifecycle and adversarial invariants", () => {
     const h = harness();
     const inert = await createInert(h, "2029-12-31T23:59:59.000Z");
     const active = await activate(h, inert);
-    expect(h.service.expiredCandidates()).toHaveLength(1);
+    expect(await h.service.expiredCandidates()).toHaveLength(1);
     const observation = await h.service.observeExpired(active.id);
     expect(observation.disposition).toBe("operator_review");
-    const physicallyFenced = h.service.get(active.id);
+    const physicallyFenced = await h.service.get(active.id);
     expect(physicallyFenced.state).toBe("active");
     expect(physicallyFenced.resource_lifecycle_generation).toBe(active.resource_lifecycle_generation);
     expect(physicallyFenced.physical_safety_state).toBe("fenced");
@@ -390,6 +528,12 @@ describe("reference lifecycle and adversarial invariants", () => {
       reason: "deadline",
     });
     expect(physicallyFenced.safety_fence_receipt_sha256)
+      .toBe(canonicalDigest(h.physicalSafety.observations[0]!));
+    const storedSafety = await h.repository.transaction((tx) =>
+      tx.listSafetyFenceObservations(active.id)
+    );
+    expect(storedSafety).toHaveLength(1);
+    expect(storedSafety[0]?.observation_sha256)
       .toBe(canonicalDigest(h.physicalSafety.observations[0]!));
     expect(h.runner.calls.destroy).toBe(0);
     const operationId = oid("op", 52);
@@ -405,7 +549,37 @@ describe("reference lifecycle and adversarial invariants", () => {
     );
     const finding = await h.service.reconcileExpired(active.id, quarantineContext);
     expect(finding.kind).toBe("ttl_expired");
-    expect(h.service.get(active.id).state).toBe("quarantined");
+    expect((await h.service.get(active.id)).state).toBe("quarantined");
+    expect(h.runner.calls.destroy).toBe(0);
+  });
+
+  test("a recovered lost record has one closed Infinity path to quarantine before cleanup", async () => {
+    const h = harness();
+    const inert = await createInert(h);
+    const lostEvidence = digest("authoritative-provider-lost-evidence");
+    const lostRequest = lifecycleRecordRequestDigest("record_lost", inert.id, lostEvidence);
+    const lost = await h.service.recordLost(inert.id, lostEvidence, lifecycleContext(
+      "record_lost",
+      oid("op", 231),
+      lostRequest,
+      inert.resource_lifecycle_generation,
+      inert.revision,
+      3n,
+      231,
+    ));
+    expect(lost.state).toBe("lost");
+    const quarantineEvidence = digest("lost-recovery-quarantine-evidence");
+    const quarantineRequest = lifecycleRecordRequestDigest("quarantine", lost.id, quarantineEvidence);
+    const quarantined = await h.service.quarantine(lost.id, quarantineEvidence, lifecycleContext(
+      "quarantine",
+      oid("op", 232),
+      quarantineRequest,
+      lost.resource_lifecycle_generation,
+      lost.revision,
+      4n,
+      232,
+    ));
+    expect(quarantined.state).toBe("quarantined");
     expect(h.runner.calls.destroy).toBe(0);
   });
 
@@ -430,6 +604,22 @@ describe("reference lifecycle and adversarial invariants", () => {
     expect(destroyed.state).toBe("destroyed");
     expect(destroyed.terminal_disposition).toBe("destroyed_after_checkpoint");
     expect(h.runner.calls.destroy).toBe(1);
+  });
+
+  test("cleanup is unsupported without atomic incarnation-bound conditional delete", async () => {
+    const h = harness(undefined, { atomic_delete_unsupported: true });
+    const active = await activate(h, await createInert(h));
+    const grant = cleanupGrant(active, {
+      kind: "discard_uncheckpointed",
+      receipt_sha256: digest("conditional-delete-required-passkey"),
+      recovery_checkpoint_attempted: true,
+      promotion_grants_revoked: true,
+      permanent_outcome: "discarded_uncheckpointed",
+    });
+    await expect(h.service.destroy(active.id, grant, cleanupContext(active, grant)))
+      .rejects.toMatchObject({ code: "unsupported_runtime_feature" });
+    expect(h.runner.calls.destroy).toBe(0);
+    expect(await h.repository.transaction((tx) => tx.getOperation(grant.operation_id))).toBeUndefined();
   });
 
   test("checkpoint and promotion receipts bind the full current resource fence", async () => {
@@ -479,6 +669,14 @@ describe("reference lifecycle and adversarial invariants", () => {
     expect(destroyed.state).toBe("destroyed");
     expect(destroyed.terminal_disposition).toBe("discarded_uncheckpointed");
     expect(h.runner.calls.destroy).toBe(1);
+    const tombstone = await h.repository.transaction((tx) => tx.getDestroyTombstone(active.id));
+    expect(tombstone).toMatchObject({
+      schema_version: "sandboxes.destroy-tombstone/v1",
+      resource_id: active.id,
+      terminal_disposition: "discarded_uncheckpointed",
+      cleanup_basis_kind: "discard_uncheckpointed",
+    });
+    expect(tombstone?.tombstone_sha256).toMatch(/^sha256:/);
   });
 
   test("ambiguous inert creation exact-adopts by operation token without duplicate creation", async () => {
@@ -488,7 +686,9 @@ describe("reference lifecycle and adversarial invariants", () => {
     expect(h.runner.calls.create_inert).toBe(1);
     expect(h.runner.calls.lookup).toBe(1);
     expect(h.readProbeJournal.calls).toHaveLength(1);
-    expect(h.repository.transaction((tx) => tx.listExternalAnchors(oid("op", 20)).map((row) => row.record_kind)))
+    expect(await h.repository.transaction((tx) => tx.listExternalAnchors(oid("op", 20)).map((row) =>
+      "record_kind" in row ? row.record_kind : row.anchor_kind
+    )))
       .toContain("READ_PROBE");
   });
 
@@ -503,7 +703,7 @@ describe("reference lifecycle and adversarial invariants", () => {
       { resource_id: fenced.id, reason: "provider_ambiguous" },
     ]);
     expect(h.runner.calls.create_inert).toBe(1);
-    expect(h.service.resolveOperation(oid("op", 20)).state).toBe("unknown");
+    expect((await h.service.resolveOperation(oid("op", 20))).state).toBe("unknown");
   });
 
   test("restart replay reconciles a dispatched create by exact target without creating twice", async () => {

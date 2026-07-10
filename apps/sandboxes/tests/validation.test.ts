@@ -1,7 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import { SandboxError } from "../src/errors.js";
-import { validateCleanupGrant, validateFence, validateSandboxSpec } from "../src/validation.js";
-import { cleanupGrant, createInput, digest, fence, oid, spec } from "./fixtures.js";
+import { canonicalJson } from "../src/canonical.js";
+import {
+  EFFECT_JOURNAL_OUTCOME_SCHEMA_DIGEST,
+  EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION,
+  RECONCILIATION_BLOCKED_MAPPING_FIXTURE,
+} from "../src/effect-journal.js";
+import { readFileSync } from "node:fs";
+import { createRequestDigest } from "../src/service.js";
+import {
+  validateCleanupGrant,
+  validateDispatchedJournalAnchor,
+  validateFence,
+  validateSandboxSpec,
+} from "../src/validation.js";
+import { cleanupGrant, context, createInput, digest, fence, oid, spec } from "./fixtures.js";
 
 describe("closed V1 validation", () => {
   test("accepts the canonical complete fence", () => {
@@ -59,5 +72,72 @@ describe("closed V1 validation", () => {
     const invalid = structuredClone(valid) as unknown as Record<string, unknown>;
     invalid.basis = { kind: "discard_uncheckpointed", receipt_sha256: digest("generic") };
     expect(() => validateCleanupGrant(invalid)).toThrow("recovery-first");
+  });
+
+  test("exposes the exact authenticated reconciliation-blocked mapping fixture", () => {
+    expect(RECONCILIATION_BLOCKED_MAPPING_FIXTURE).toEqual({
+      mapping_schema_version: "infinity.effect-outcome-mapping/v1",
+      source_outcome_schema_version: EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION,
+      source_outcome_schema_digest: EFFECT_JOURNAL_OUTCOME_SCHEMA_DIGEST,
+      external_outcome_kind: "reconciliation_blocked",
+      infinity_operation_state: "quarantined",
+      infinity_resource_state: "quarantined",
+    });
+    expect(RECONCILIATION_BLOCKED_MAPPING_FIXTURE.external_outcome_kind)
+      .not.toBe(RECONCILIATION_BLOCKED_MAPPING_FIXTURE.infinity_operation_state);
+  });
+
+  test("signed journal envelopes are closed and bind record plus frontier bytes", () => {
+    const input = createInput();
+    const anchor = context(
+      "begin_create_inert",
+      oid("op", 94),
+      createRequestDigest(input),
+      1n,
+      0,
+      1n,
+      94,
+    ).dispatch_journal;
+    expect(validateDispatchedJournalAnchor(anchor)).toEqual(anchor);
+    expect(() => validateDispatchedJournalAnchor({ ...anchor, unknown_alias: true }))
+      .toThrow("unknown field");
+    expect(() => validateDispatchedJournalAnchor({ ...anchor, signature: "short" }))
+      .toThrow("Ed25519 base64url");
+    expect(() => validateDispatchedJournalAnchor({ ...anchor, record_digest: digest("wrong-record") }))
+      .toThrow("record digest");
+    expect(() => validateDispatchedJournalAnchor({ ...anchor, frontier_digest: digest("wrong-frontier") }))
+      .toThrow("frontier digest");
+    expect(() => validateDispatchedJournalAnchor({
+      ...anchor,
+      record: { ...anchor.record, frontier_sha256: digest("forbidden-alias") },
+    })).toThrow("unknown field");
+  });
+
+  test("all three signed journal wire schemas are closed JSON documents", () => {
+    for (const path of [
+      "schemas/dispatched-journal-anchor-v1.schema.json",
+      "schemas/provider-outcome-anchor-v1.schema.json",
+      "schemas/read-probe-anchor-v1.schema.json",
+      "schemas/effect-journal-recovery-range-v1.schema.json",
+    ]) {
+      const schema = JSON.parse(readFileSync(path, "utf8")) as {
+        additionalProperties?: boolean;
+        required?: string[];
+      };
+      expect(schema.additionalProperties).toBe(false);
+      if (path.includes("recovery-range")) {
+        expect(schema.required).toContain("complete_operation_envelopes");
+      } else {
+        expect(schema.required).toContain("record");
+      }
+      expect(schema.required).toContain("signature");
+    }
+  });
+
+  test("canonical counters above 2^53 use exact decimal strings", () => {
+    expect(canonicalJson({ journal_sequence: 9_007_199_254_740_993n }))
+      .toBe('{"journal_sequence":"9007199254740993"}');
+    expect(() => canonicalJson({ journal_sequence: 9_007_199_254_740_993 }))
+      .toThrow("safe integers");
   });
 });

@@ -1,6 +1,7 @@
 export * from "./canonical.js";
 export * from "./errors.js";
 export * from "./effect-journal.js";
+export * from "./provider-identity.js";
 export {
   AmbiguousProviderEffectError,
   DaytonaCloudRunnerPendingV1,

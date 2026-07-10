@@ -23,6 +23,7 @@ import {
   type ProviderOperationV1,
   type SandboxSpecV1,
 } from "./types.js";
+import { providerHandleIdentityDigest } from "./provider-identity.js";
 
 interface FakeResource {
   handle: OwnedProviderHandleV1;
@@ -36,6 +37,7 @@ export interface FakeRunnerOptionsV1 {
   activation_fingerprint_mismatch?: boolean;
   activation_policy_mismatch?: boolean;
   reject_create_no_effect_attempts?: number;
+  atomic_delete_unsupported?: boolean;
   clock?: () => Date;
 }
 
@@ -50,6 +52,7 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
   readonly #creationTokenMismatch: boolean;
   readonly #activationFingerprintMismatch: boolean;
   readonly #activationPolicyMismatch: boolean;
+  readonly #atomicDeleteUnsupported: boolean;
   #remainingCreateNoEffectRejections: number;
   readonly calls = { create_inert: 0, activate: 0, inspect: 0, expire: 0, destroy: 0, lookup: 0 };
   readonly observed_generations: bigint[] = [];
@@ -61,6 +64,7 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     this.#creationTokenMismatch = options.creation_token_mismatch === true;
     this.#activationFingerprintMismatch = options.activation_fingerprint_mismatch === true;
     this.#activationPolicyMismatch = options.activation_policy_mismatch === true;
+    this.#atomicDeleteUnsupported = options.atomic_delete_unsupported === true;
     this.#remainingCreateNoEffectRejections = options.reject_create_no_effect_attempts ?? 0;
     this.#clock = options.clock ?? (() => new Date());
   }
@@ -69,12 +73,15 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     const facts = {
       adapter_id: "fake",
       adapter_version: "1.0.0-test",
+      installation_id: "installation_00000000000000000000000000000001",
+      provider_scope_ref: "fake-test-scope",
       runtime_class: "strong_vm",
       network_modes: ["deny_all", "broker_only"],
       exact_operation_lookup: true,
       inert_create: true,
       whole_scope_cancel: true,
       native_bounded_files: true,
+      atomic_incarnation_bound_delete: !this.#atomicDeleteUnsupported,
     } as const;
     return {
       schema_version: SCHEMA_VERSION,
@@ -92,6 +99,26 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     allocationKey: Digest,
   ): Promise<OwnedProviderHandleV1> {
     this.#assertSink(_ctx, op);
+    const actualRequest = canonicalDigest({
+      schema_version: SCHEMA_VERSION,
+      resource_id: op.target.resource_id,
+      allocation_key_sha256: allocationKey,
+      spec,
+    });
+    const expectedCreationToken = canonicalDigest({
+      schema_version: "sandboxes.provider-creation-token/v1",
+      resource_id: op.target.resource_id,
+      resource_lease_id: op.fence.resource_lease_id,
+      allocation_key_sha256: allocationKey,
+      spec_sha256: canonicalDigest(spec),
+    });
+    if (
+      op.request_sha256 !== actualRequest ||
+      op.target.operation_digest !== actualRequest ||
+      op.target.provider_creation_token_sha256 !== expectedCreationToken
+    ) {
+      throw new SandboxError("request_digest_mismatch", "Fake create sink rejected unbound request, spec, or allocation bytes");
+    }
     this.calls.create_inert += 1;
     this.observed_generations.push(op.fence.resource_lifecycle_generation);
     if (op.operation !== "create_inert") throw new SandboxError("validation_failed", "Wrong fake operation");
@@ -102,7 +129,7 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     const existing = this.#operations.get(op.fence.operation_id);
     if (existing !== undefined) return existing;
     const seed = sha256(`${allocationKey}:${op.fence.operation_id}`).slice(7, 39);
-    const handle: OwnedProviderHandleV1 = {
+    const handleWithoutIdentity: Omit<OwnedProviderHandleV1, "provider_identity_sha256"> = {
       schema_version: SCHEMA_VERSION,
       adapter_id: "fake",
       adapter_version: "1.0.0-test",
@@ -114,7 +141,7 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       create_inert_operation_id: op.fence.operation_id,
       provider_creation_token_sha256: this.#creationTokenMismatch
         ? sha256(`mismatched-token:${op.fence.operation_id}`)
-        : op.target.provider_idempotency_token_sha256,
+        : op.target.provider_creation_token_sha256,
       creation_receipt_sha256: sha256(`creation:${op.fence.operation_id}`),
       provider_created_at: nowRfc3339(this.#clock()),
       provider_resource_version: "1",
@@ -123,6 +150,10 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       resource_id: op.fence.resource_id,
       resource_lifecycle_generation: op.fence.resource_lifecycle_generation,
       spec_sha256: canonicalDigest(spec),
+    };
+    const handle: OwnedProviderHandleV1 = {
+      ...handleWithoutIdentity,
+      provider_identity_sha256: providerHandleIdentityDigest(handleWithoutIdentity),
     };
     this.#resources.set(handle.resource_id, { handle, state: "inert" });
     if (this.#ambiguousCreate === "adoptable") this.#operations.set(op.fence.operation_id, handle);
@@ -139,6 +170,16 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     op: ProviderOperationV1,
   ): Promise<ActivationReceiptV1> {
     this.#assertSink(_ctx, op);
+    if (
+      op.request_sha256 !== canonicalDigest({
+        schema_version: SCHEMA_VERSION,
+        operation: "begin_activate",
+        resource_id: handle.resource_id,
+        network_policy_sha256: grant.network_policy_sha256,
+      })
+    ) {
+      throw new SandboxError("request_digest_mismatch", "Fake activation sink rejected unbound grant bytes");
+    }
     this.calls.activate += 1;
     this.observed_generations.push(op.fence.resource_lifecycle_generation);
     const resource = this.#exact(handle);
@@ -171,6 +212,7 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     if (resource === undefined || resource.state === "absent") return { state: "absent" };
     return {
       state: resource.state,
+      handle: structuredClone(resource.handle),
       immutable_fingerprint_sha256: resource.handle.immutable_fingerprint_sha256,
       provider_resource_version: resource.handle.provider_resource_version,
     };
@@ -182,6 +224,15 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     op: ProviderOperationV1,
   ): Promise<ExpireObservationV1> {
     this.#assertSink(_ctx, op);
+    if (
+      op.request_sha256 !== canonicalDigest({
+        schema_version: SCHEMA_VERSION,
+        operation: "expire",
+        resource_id: handle.resource_id,
+      })
+    ) {
+      throw new SandboxError("request_digest_mismatch", "Fake expiry sink rejected unbound request bytes");
+    }
     this.calls.expire += 1;
     this.observed_generations.push(op.fence.resource_lifecycle_generation);
     const resource = this.#exact(handle);
@@ -196,6 +247,16 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     op: ProviderOperationV1,
   ): Promise<DestroyObservationV1> {
     this.#assertSink(_ctx, op);
+    if (
+      op.request_sha256 !== canonicalDigest({
+        schema_version: SCHEMA_VERSION,
+        operation: "begin_destroy",
+        resource_id: handle.resource_id,
+        basis_receipt_sha256: _ctx.cleanup_basis_receipt_sha256,
+      })
+    ) {
+      throw new SandboxError("request_digest_mismatch", "Fake cleanup sink rejected unbound cleanup request bytes");
+    }
     const resource = this.#exact(handle);
     this.calls.destroy += 1;
     this.observed_generations.push(op.fence.resource_lifecycle_generation);
@@ -213,6 +274,7 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     op: ProviderOperationV1,
     _handle?: OwnedProviderHandleV1,
   ): Promise<ProviderOperationObservationV1> {
+    this.#assertDiscoveryScope(_ctx, op);
     if (op.external_anchor_kind !== "READ_PROBE" || op.operation !== "inspect") {
       throw new SandboxError("integrity_failed", "Fake reconciliation read requires a READ_PROBE anchor");
     }
@@ -240,12 +302,25 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     };
   }
 
-  async listOwnedResources(_ctx: ReconcileContextV1, cursor?: string): Promise<OwnedResourcePageV1> {
+  async listOwnedResources(
+    _ctx: ReconcileContextV1,
+    op: ProviderOperationV1,
+    cursor?: string,
+  ): Promise<OwnedResourcePageV1> {
+    this.#assertDiscoveryScope(_ctx, op);
+    if (op.external_anchor_kind !== "READ_PROBE" || op.operation !== "inspect") {
+      throw new SandboxError("integrity_failed", "Fake ownership enumeration requires a READ_PROBE anchor");
+    }
     const resources = [...this.#resources.values()]
       .filter((resource) => resource.state !== "absent")
       .sort((a, b) => a.handle.resource_id.localeCompare(b.handle.resource_id))
       .map((resource) => ({
         resource_id: resource.handle.resource_id,
+        installation_id: resource.handle.installation_id,
+        provider_scope_ref: resource.handle.provider_scope_ref,
+        opaque_resource_id: resource.handle.opaque_resource_id,
+        ownership_nonce: resource.handle.ownership_nonce,
+        provider_creation_token_sha256: resource.handle.provider_creation_token_sha256,
         immutable_fingerprint_sha256: resource.handle.immutable_fingerprint_sha256,
         state: resource.state,
       }));
@@ -284,10 +359,33 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       ctx.external_anchor_receipt_sha256 !== op.external_anchor_receipt_sha256 ||
       op.target.resource_lifecycle_generation !== op.fence.resource_lifecycle_generation ||
       op.target.operation_id !== op.fence.operation_id ||
-      op.target.operation_digest !== op.fence.operation_digest
+      op.target.operation_digest !== op.fence.operation_digest ||
+      op.target.provider_idempotency_token_sha256 !== canonicalDigest({
+        schema_version: "sandboxes.provider-effect-token/v1",
+        operation_id: op.target.operation_id,
+        operation_step_id: op.target.operation_step_id,
+        operation_digest: op.target.operation_digest,
+        resource_id: op.target.resource_id,
+        provider_creation_token_sha256: op.target.provider_creation_token_sha256,
+      })
     ) {
       throw new SandboxError("integrity_failed", "Fake adapter sink rejected mismatched protected effect bytes");
     }
     this.observed_authorization_receipts.push(op.target.authorization_consumption_receipt_sha256);
+  }
+
+  #assertDiscoveryScope(ctx: ReconcileContextV1, op: ProviderOperationV1): void {
+    if (
+      ctx.installation_id !== "installation_00000000000000000000000000000001" ||
+      ctx.provider_scope_ref !== "fake-test-scope" ||
+      ctx.resource_id !== op.target.resource_id ||
+      ctx.provider_creation_token_sha256 !== op.target.provider_creation_token_sha256 ||
+      ctx.immutable_fingerprint_sha256 !== op.target.immutable_fingerprint_sha256 ||
+      ctx.discovery_scope_receipt_sha256 !== op.external_anchor_receipt_sha256 ||
+      ctx.max_pages !== 1_000 ||
+      op.external_anchor_kind !== "READ_PROBE"
+    ) {
+      throw new SandboxError("capability_denied", "Fake provider rejected a mismatched signed discovery scope");
+    }
   }
 }

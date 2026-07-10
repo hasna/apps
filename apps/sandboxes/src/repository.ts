@@ -10,11 +10,15 @@ import {
   EFFECT_JOURNAL_OUTCOME_KINDS,
 } from "./effect-journal.js";
 import type {
+  CheckpointDurabilityReceiptV1,
+  GitPromotionReceiptRefV1,
   OperationRecordV1,
+  SandboxDestroyTombstoneV1,
   ExternalOperationAnchorRecordV1,
   SandboxEventV1,
   SandboxV1,
   SealedProviderHandleV1,
+  StoredSafetyFenceObservationV1,
 } from "./types.js";
 import { SCHEMA_VERSION } from "./types.js";
 
@@ -23,22 +27,24 @@ export function assertExternalOperationAnchorRecordV1(
 ): void {
   const base = [
     "schema_version",
-    "record_kind",
     "operation_id",
     "operation_step_id",
     "operation_execution_epoch",
-    "anchor_sha256",
-    "frontier_sha256",
-    "payload_sha256",
+    "journal_sequence",
+    "prior_frontier_digest",
+    "record_digest",
+    "frontier_digest",
+    "envelope_digest",
     "recorded_at",
   ];
   const effect = ["outcome_schema_version", "outcome_schema_digest"];
+  const isReadProbe = "anchor_kind" in record;
   const allowed = new Set(
-    record.record_kind === "OUTCOME"
-      ? [...base, ...effect, "outcome_kind"]
-      : record.record_kind === "DISPATCHED"
-        ? [...base, ...effect]
-        : base,
+    isReadProbe
+      ? [...base, "anchor_kind"]
+      : record.record_kind === "OUTCOME"
+        ? [...base, "record_kind", ...effect, "outcome_kind"]
+        : [...base, "record_kind", ...effect],
   );
   if (Object.keys(record).some((key) => !allowed.has(key))) {
     throw new SandboxError("validation_failed", "External anchor contains unknown fields");
@@ -49,17 +55,20 @@ export function assertExternalOperationAnchorRecordV1(
   assertOpaqueId(record.operation_id, "external_anchor.operation_id", "op");
   assertOpaqueId(record.operation_step_id, "external_anchor.operation_step_id", "step");
   parsePositiveInt64(record.operation_execution_epoch, "external_anchor.operation_execution_epoch");
-  assertDigest(record.anchor_sha256, "external_anchor.anchor_sha256");
-  assertDigest(record.frontier_sha256, "external_anchor.frontier_sha256");
-  assertDigest(record.payload_sha256, "external_anchor.payload_sha256");
+  parsePositiveInt64(record.journal_sequence, "external_anchor.journal_sequence");
+  assertDigest(record.prior_frontier_digest, "external_anchor.prior_frontier_digest");
+  assertDigest(record.record_digest, "external_anchor.record_digest");
+  assertDigest(record.frontier_digest, "external_anchor.frontier_digest");
+  assertDigest(record.envelope_digest, "external_anchor.envelope_digest");
   assertRfc3339(record.recorded_at, "external_anchor.recorded_at");
-  if (record.record_kind === "DISPATCHED" || record.record_kind === "OUTCOME") {
+  if (!isReadProbe) {
     assertEffectJournalOutcomeSchema(
       record.outcome_schema_version,
       record.outcome_schema_digest,
     );
   }
   if (
+    !isReadProbe &&
     record.record_kind === "OUTCOME" &&
     !EFFECT_JOURNAL_OUTCOME_KINDS.includes(record.outcome_kind)
   ) {
@@ -68,7 +77,7 @@ export function assertExternalOperationAnchorRecordV1(
 }
 
 export interface RepositoryHealthV1 {
-  backend: "memory" | "sqlite";
+  backend: "memory" | "sqlite" | "postgres";
   schema_version: number;
   integrity: "ok";
   sandbox_count: number;
@@ -105,15 +114,23 @@ export interface SandboxRepositoryTxV1 {
   getActivationGrantUseOperation(grantUseSha256: string): string | undefined;
   consumeCleanupGrant(grantUseSha256: string, operationId: string): void;
   getCleanupGrantUseOperation(grantUseSha256: string): string | undefined;
+  putCheckpointReceipt(receipt: CheckpointDurabilityReceiptV1): void;
+  getCheckpointReceipt(receiptSha256: string): CheckpointDurabilityReceiptV1 | undefined;
+  putGitPromotionReceipt(receipt: GitPromotionReceiptRefV1): void;
+  getGitPromotionReceipt(receiptSha256: string): GitPromotionReceiptRefV1 | undefined;
+  appendSafetyFenceObservation(record: StoredSafetyFenceObservationV1): void;
+  listSafetyFenceObservations(resourceId: string): StoredSafetyFenceObservationV1[];
+  putDestroyTombstone(record: SandboxDestroyTombstoneV1): void;
+  getDestroyTombstone(resourceId: string): SandboxDestroyTombstoneV1 | undefined;
   appendEvent(event: Omit<SandboxEventV1, "sequence">): SandboxEventV1;
   listEvents(resourceId: string): SandboxEventV1[];
 }
 
 export interface SandboxRepositoryV1 {
-  readonly backend: "memory" | "sqlite";
+  readonly backend: "memory" | "sqlite" | "postgres";
   migrate(): void;
-  databaseTime(): Date;
-  transaction<T>(fn: (tx: SandboxRepositoryTxV1) => T): T;
-  health(): RepositoryHealthV1;
-  close(): void;
+  databaseTime(): Promise<Date>;
+  transaction<T>(fn: (tx: SandboxRepositoryTxV1) => T): Promise<T>;
+  health(): Promise<RepositoryHealthV1>;
+  close(): Promise<void>;
 }

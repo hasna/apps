@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hasna.com/sandboxes/effect-journal-recovery-range-v1.schema.json",
+  "title": "EffectJournalRecoveryRangeV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "operation_id", "operation_step_id", "requested_from_sequence", "signed_head_sequence", "signed_head_frontier_digest", "signer_principal", "signing_key_id", "signature", "complete_operation_envelopes", "completeness_proof_sha256"],
+  "properties": {
+    "schema_version": { "const": "infinity.effect-journal-recovery-range/v1" },
+    "operation_id": { "type": "string", "pattern": "^op_[0-9a-f]{32}$" },
+    "operation_step_id": { "type": "string", "pattern": "^step_[0-9a-f]{32}$" },
+    "requested_from_sequence": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/positiveInt64" },
+    "signed_head_sequence": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/positiveInt64" },
+    "signed_head_frontier_digest": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/digest" },
+    "signer_principal": { "type": "string", "pattern": "^principal_[0-9a-f]{32}$" },
+    "signing_key_id": { "type": "string", "pattern": "^key_[0-9a-f]{32}$" },
+    "signature": { "type": "string", "pattern": "^[A-Za-z0-9_-]{86}$" },
+    "complete_operation_envelopes": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          { "$ref": "dispatched-journal-anchor-v1.schema.json" },
+          { "$ref": "provider-outcome-anchor-v1.schema.json" },
+          { "$ref": "read-probe-anchor-v1.schema.json" }
+        ]
+      }
+    },
+    "completeness_proof_sha256": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/digest" }
+  }
+}

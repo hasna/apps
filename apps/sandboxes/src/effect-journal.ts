@@ -28,6 +28,15 @@ export const EFFECT_JOURNAL_OUTCOME_SCHEMA_CANONICAL_BYTES =
 export const EFFECT_JOURNAL_OUTCOME_SCHEMA_DIGEST =
   "sha256:7ab380a0475ebf79d2ed925e20bcbb9303d78a56c358d09adbdce796e740bf20" as Digest;
 
+export const RECONCILIATION_BLOCKED_MAPPING_FIXTURE = Object.freeze({
+  mapping_schema_version: "infinity.effect-outcome-mapping/v1" as const,
+  source_outcome_schema_version: EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION,
+  source_outcome_schema_digest: EFFECT_JOURNAL_OUTCOME_SCHEMA_DIGEST,
+  external_outcome_kind: "reconciliation_blocked" as const,
+  infinity_operation_state: "quarantined" as const,
+  infinity_resource_state: "quarantined" as const,
+});
+
 if (
   canonicalJson(EFFECT_JOURNAL_OUTCOME_SCHEMA) !==
     EFFECT_JOURNAL_OUTCOME_SCHEMA_CANONICAL_BYTES ||

@@ -12,14 +12,22 @@ import {
   createRequestDigest,
   destroyRequestDigest,
   dispatchedJournalAnchorDigest,
+  effectJournalFrontierDigest,
+  effectJournalRecordDigest,
   expireRequestDigest,
   lifecycleRecordRequestDigest,
+  providerCreationTokenDigest,
+  providerIdempotencyTokenDigest,
   SandboxesReferenceServiceV1,
 } from "../src/service.js";
+import { providerTargetFingerprintDigest } from "../src/provider-identity.js";
 import {
   DeterministicTestAuthorityVerifierV1,
   DeterministicTestProviderDispatchJournalV1,
   DeterministicTestProviderReadProbeJournalV1,
+  DeterministicTestProviderLifecycleLockV1,
+  DeterministicTestJournalLedgerV1,
+  DeterministicTestProviderJournalRecoveryV1,
   DeterministicTestPhysicalSafetyControllerV1,
   DeterministicTestProviderOutcomeJournalV1,
 } from "../src/testing.js";
@@ -96,6 +104,7 @@ export function fence(
   operationDigest: Digest,
   generation: bigint,
   executionEpoch: bigint,
+  clock: Date = CLOCK,
 ): CanonicalSandboxEffectFenceV1 {
   return {
     authority_epoch: 1n,
@@ -116,9 +125,9 @@ export function fence(
     lease_holder_principal: oid("principal", 10),
     operation_executor_principal: oid("principal", 11),
     audience: SCHEMA_VERSION,
-    issued_at: "2029-12-31T23:59:00.000Z",
-    lease_expires_at: "2030-01-01T01:00:00.000Z",
-    operation_execution_expires_at: "2030-01-01T00:05:00.000Z",
+    issued_at: new Date(clock.getTime() - 60_000).toISOString(),
+    lease_expires_at: new Date(clock.getTime() + 3_600_000).toISOString(),
+    operation_execution_expires_at: new Date(clock.getTime() + 300_000).toISOString(),
   };
 }
 
@@ -130,10 +139,12 @@ export function context(
   expectedRevision: number,
   executionEpoch: bigint,
   seed: number,
-  immutableFingerprint = digest(`target-fingerprint-${seed}`),
+  immutableFingerprint?: Digest,
   authorizationConsumptionReceipt?: Digest,
+  clock: Date = CLOCK,
+  createBinding?: CreateSandboxV1,
 ): MutationContextV1 {
-  const fullFence = fence(operationId, requestSha256, generation + 1n, executionEpoch);
+  const fullFence = fence(operationId, requestSha256, generation + 1n, executionEpoch, clock);
   const capability: CapabilityClaimsV1 = {
     schema_version: SCHEMA_VERSION,
     capability_id: oid("cap", seed),
@@ -143,8 +154,8 @@ export function context(
     request_sha256: requestSha256,
     dispatch_journal_anchor_sha256: digest("temporary-anchor"),
     fence: fullFence,
-    not_before: "2029-12-31T23:59:00.000Z",
-    expires_at: "2030-01-01T00:05:00.000Z",
+    not_before: new Date(clock.getTime() - 60_000).toISOString(),
+    expires_at: new Date(clock.getTime() + 300_000).toISOString(),
   };
   const transition = {
     expected_resource_lifecycle_generation: generation,
@@ -154,9 +165,26 @@ export function context(
     capability_id: capability.capability_id,
     nonce: capability.use_nonce_sha256,
   });
-  const anchorBase = {
+  const creationInput = createBinding ?? createInput();
+  const providerCreationToken = providerCreationTokenDigest({
+    resource_id: oid("sbx", 4),
+    resource_lease_id: fullFence.resource_lease_id,
+    allocation_key_sha256: creationInput.allocation_key_sha256,
+    spec_sha256: canonicalDigest(creationInput.spec),
+  });
+  const targetFingerprint = immutableFingerprint ?? providerTargetFingerprintDigest({
+    adapter_id: "fake",
+    adapter_version: "1.0.0-test",
+    installation_id: "installation_00000000000000000000000000000001",
+    provider_scope_ref: "fake-test-scope",
+    resource_kind: "strong_vm",
+    resource_id: oid("sbx", 4),
+    resource_lease_id: fullFence.resource_lease_id,
+    provider_creation_token_sha256: providerCreationToken,
+    spec_sha256: canonicalDigest(creationInput.spec),
+  });
+  const dispatchRecordBase = {
     schema_version: SCHEMA_VERSION,
-    journal_anchor_id: oid("journal", seed),
     state: "dispatched" as const,
     record_kind: "DISPATCHED" as const,
     outcome_schema_version: EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION,
@@ -169,22 +197,39 @@ export function context(
     authority_epoch: fullFence.authority_epoch,
     expected_resource_lifecycle_generation: generation,
     successor_resource_lifecycle_generation: generation + 1n,
-    recorded_at: "2030-01-01T00:00:00.000Z",
-    expires_at: "2030-01-01T00:05:00.000Z",
-    issuer_principal: oid("principal", 99),
-    provider_idempotency_token_sha256: digest(`provider-token-${seed}`),
-    immutable_fingerprint_sha256: immutableFingerprint,
+    recorded_at: clock.toISOString(),
+    expires_at: new Date(clock.getTime() + 300_000).toISOString(),
+    provider_creation_token_sha256: providerCreationToken,
+    immutable_fingerprint_sha256: targetFingerprint,
     authorization_consumption_receipt_sha256:
       authorizationConsumptionReceipt ?? capabilityUseReceipt,
-    frontier_sha256: digest(`journal-frontier-${seed}`),
     fence: fullFence,
-    anchor_sha256: digest("temporary-anchor"),
+  };
+  const dispatchRecord = {
+    ...dispatchRecordBase,
+    provider_idempotency_token_sha256: providerIdempotencyTokenDigest({
+      operation_id: dispatchRecordBase.operation_id,
+      operation_step_id: dispatchRecordBase.operation_step_id,
+      operation_digest: dispatchRecordBase.operation_digest,
+      resource_id: dispatchRecordBase.resource_id,
+      provider_creation_token_sha256: dispatchRecordBase.provider_creation_token_sha256,
+    }),
+  };
+  const anchorCore = {
+    anchor_schema_version: "infinity.effect-journal-anchor/v1" as const,
+    journal_sequence: BigInt(seed) * 10n + executionEpoch,
+    prior_frontier_digest: digest(`journal-prior-frontier-${seed}-${executionEpoch}`),
+    record_digest: effectJournalRecordDigest(dispatchRecord),
+    signer_principal: oid("principal", 99),
+    signing_key_id: oid("key", 98),
   };
   const dispatchJournal = {
-    ...anchorBase,
-    anchor_sha256: dispatchedJournalAnchorDigest(anchorBase),
+    ...anchorCore,
+    frontier_digest: effectJournalFrontierDigest(anchorCore),
+    signature: "A".repeat(86),
+    record: dispatchRecord,
   };
-  capability.dispatch_journal_anchor_sha256 = dispatchJournal.anchor_sha256;
+  capability.dispatch_journal_anchor_sha256 = dispatchedJournalAnchorDigest(dispatchJournal);
   return {
     operation_id: operationId,
     idempotency_key_sha256: digest(`idempotency-${seed}`),
@@ -205,6 +250,7 @@ export function lifecycleContext(
   expectedRevision: number,
   executionEpoch: bigint,
   seed: number,
+  clock: Date = CLOCK,
 ): LifecycleCommandContextV1 {
   const providerContext = context(
     operation,
@@ -214,6 +260,9 @@ export function lifecycleContext(
     expectedRevision,
     executionEpoch,
     seed,
+    undefined,
+    undefined,
+    clock,
   );
   const { dispatch_journal: _dispatchJournal, capability, ...base } = providerContext;
   const { dispatch_journal_anchor_sha256: _dispatchAnchor, ...lifecycleCapability } = capability;
@@ -239,17 +288,24 @@ export function retryContext(
   };
   const anchorBase = {
     ...prior.dispatch_journal,
-    journal_anchor_id: oid("journal", seed),
-    operation_execution_epoch: executionEpoch,
-    frontier_sha256: digest(`journal-frontier-${seed}`),
-    fence: nextFence,
-    anchor_sha256: digest("temporary-retry-anchor"),
+    journal_sequence: BigInt(seed) * 10n + executionEpoch,
+    prior_frontier_digest: digest(`journal-prior-frontier-${seed}-${executionEpoch}`),
+    record: {
+      ...prior.dispatch_journal.record,
+      operation_execution_epoch: executionEpoch,
+      fence: nextFence,
+    },
   };
   const nextDispatch = {
     ...anchorBase,
-    anchor_sha256: dispatchedJournalAnchorDigest(anchorBase),
+    record_digest: effectJournalRecordDigest(anchorBase.record),
+    frontier_digest: effectJournalFrontierDigest({
+      ...anchorBase,
+      record_digest: effectJournalRecordDigest(anchorBase.record),
+    }),
+    signature: "B".repeat(86),
   };
-  nextCapability.dispatch_journal_anchor_sha256 = nextDispatch.anchor_sha256;
+  nextCapability.dispatch_journal_anchor_sha256 = dispatchedJournalAnchorDigest(nextDispatch);
   return {
     ...prior,
     expected_revision: expectedRevision,
@@ -267,6 +323,8 @@ export interface Harness {
   outcomeJournal: DeterministicTestProviderOutcomeJournalV1;
   dispatchJournal: DeterministicTestProviderDispatchJournalV1;
   readProbeJournal: DeterministicTestProviderReadProbeJournalV1;
+  lifecycleLock: DeterministicTestProviderLifecycleLockV1;
+  journalRecovery: DeterministicTestProviderJournalRecoveryV1;
   service: SandboxesReferenceServiceV1;
 }
 
@@ -278,9 +336,12 @@ export function harness(
   const runner = new DeterministicFakeRunnerV1({ clock: () => CLOCK, ...runnerOptions });
   const verifier = new DeterministicTestAuthorityVerifierV1();
   const physicalSafety = new DeterministicTestPhysicalSafetyControllerV1();
-  const outcomeJournal = new DeterministicTestProviderOutcomeJournalV1();
-  const dispatchJournal = new DeterministicTestProviderDispatchJournalV1();
-  const readProbeJournal = new DeterministicTestProviderReadProbeJournalV1();
+  const journalLedger = new DeterministicTestJournalLedgerV1();
+  const outcomeJournal = new DeterministicTestProviderOutcomeJournalV1(journalLedger);
+  const dispatchJournal = new DeterministicTestProviderDispatchJournalV1(journalLedger);
+  const readProbeJournal = new DeterministicTestProviderReadProbeJournalV1(journalLedger);
+  const journalRecovery = new DeterministicTestProviderJournalRecoveryV1(journalLedger);
+  const lifecycleLock = new DeterministicTestProviderLifecycleLockV1();
   const service = new SandboxesReferenceServiceV1({
     repository: selectedRepository,
     runner,
@@ -290,15 +351,29 @@ export function harness(
     provider_outcome_journal: outcomeJournal,
     provider_dispatch_journal: dispatchJournal,
     provider_read_probe_journal: readProbeJournal,
+    provider_lifecycle_lock: lifecycleLock,
+    provider_journal_recovery: journalRecovery,
     allow_test_runner: true,
   });
-  return { repository: selectedRepository, runner, verifier, physicalSafety, outcomeJournal, dispatchJournal, readProbeJournal, service };
+  return { repository: selectedRepository, runner, verifier, physicalSafety, outcomeJournal, dispatchJournal, readProbeJournal, lifecycleLock, journalRecovery, service };
 }
 
 export async function createInert(h: Harness, expiresAt?: string): Promise<SandboxV1> {
   const input = createInput(expiresAt);
   const request = createRequestDigest(input);
-  const ctx = context("begin_create_inert", oid("op", 20), request, 1n, 0, 1n, 20);
+  const ctx = context(
+    "begin_create_inert",
+    oid("op", 20),
+    request,
+    1n,
+    0,
+    1n,
+    20,
+    undefined,
+    undefined,
+    CLOCK,
+    input,
+  );
   const creating = await h.service.create(input, ctx);
   if (creating.pending_provider_outcome?.target_state !== "inert") return creating;
   const evidence = creating.pending_provider_outcome.evidence_sha256;
@@ -332,6 +407,15 @@ export function activationGrant(sandbox: SandboxV1, operationId = oid("op", 21))
   };
 }
 
+function creationBindingForSandbox(sandbox: SandboxV1): CreateSandboxV1 {
+  return {
+    schema_version: SCHEMA_VERSION,
+    resource_id: sandbox.id,
+    allocation_key_sha256: digest("allocation"),
+    spec: sandbox.spec,
+  };
+}
+
 export async function activate(h: Harness, sandbox: SandboxV1): Promise<SandboxV1> {
   if (sandbox.immutable_fingerprint_sha256 === undefined) throw new Error("fixture has no fingerprint");
   const grant = activationGrant(sandbox);
@@ -345,6 +429,8 @@ export async function activate(h: Harness, sandbox: SandboxV1): Promise<SandboxV
     21,
     sandbox.immutable_fingerprint_sha256,
     canonicalDigest({ id: grant.grant_id, nonce: grant.one_use_nonce_sha256 }),
+    CLOCK,
+    creationBindingForSandbox(sandbox),
   );
   const activating = await h.service.activate(sandbox.id, grant, ctx);
   if (activating.pending_provider_outcome?.target_state !== "active") return activating;
@@ -416,6 +502,8 @@ export function cleanupContext(sandbox: SandboxV1, grant: InfinityCleanupGrantV1
     40,
     sandbox.immutable_fingerprint_sha256,
     canonicalDigest({ id: grant.grant_id, nonce: grant.one_use_nonce_sha256 }),
+    CLOCK,
+    creationBindingForSandbox(sandbox),
   );
 }
 
@@ -448,5 +536,8 @@ export function expireContext(sandbox: SandboxV1): MutationContextV1 {
     3n,
     50,
     sandbox.immutable_fingerprint_sha256,
+    undefined,
+    CLOCK,
+    creationBindingForSandbox(sandbox),
   );
 }

@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hasna.com/sandboxes/read-probe-anchor-v1.schema.json",
+  "title": "ReadProbeJournalAnchorV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["anchor_schema_version", "journal_sequence", "prior_frontier_digest", "record_digest", "frontier_digest", "signer_principal", "signing_key_id", "signature", "record"],
+  "properties": {
+    "anchor_schema_version": { "const": "infinity.effect-journal-anchor/v1" },
+    "journal_sequence": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/positiveInt64" },
+    "prior_frontier_digest": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/digest" },
+    "record_digest": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/digest" },
+    "frontier_digest": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/digest" },
+    "signer_principal": { "type": "string", "pattern": "^principal_[0-9a-f]{32}$" },
+    "signing_key_id": { "type": "string", "pattern": "^key_[0-9a-f]{32}$" },
+    "signature": { "type": "string", "pattern": "^[A-Za-z0-9_-]{86}$" },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "state", "operation_id", "operation_step_id", "operation_digest", "resource_id", "recorded_at", "expires_at", "fence", "target", "discovery_scope"],
+      "properties": {
+        "schema_version": { "const": "sandboxes.runtime/v1" },
+        "state": { "const": "read_probe" },
+        "operation_id": { "type": "string", "pattern": "^op_[0-9a-f]{32}$" },
+        "operation_step_id": { "type": "string", "pattern": "^step_[0-9a-f]{32}$" },
+        "operation_digest": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/digest" },
+        "resource_id": { "type": "string", "pattern": "^sbx_[0-9a-f]{32}$" },
+        "recorded_at": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/time" },
+        "expires_at": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/time" },
+        "fence": { "$ref": "canonical-effect-fence-v1.schema.json" },
+        "target": { "$ref": "provider-outcome-anchor-v1.schema.json#/$defs/target" },
+        "discovery_scope": { "$ref": "#/$defs/discoveryScope" }
+      }
+    }
+  },
+  "$defs": {
+    "discoveryScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "read_kind", "installation_id", "provider_scope_ref", "resource_id", "provider_creation_token_sha256", "immutable_fingerprint_sha256", "max_pages", "scope_sha256"],
+      "properties": {
+        "schema_version": { "const": "sandboxes.provider-discovery-scope/v1" },
+        "read_kind": { "const": "exact_operation_and_owned_resource" },
+        "installation_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "provider_scope_ref": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "resource_id": { "type": "string", "pattern": "^sbx_[0-9a-f]{32}$" },
+        "provider_creation_token_sha256": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/digest" },
+        "immutable_fingerprint_sha256": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/digest" },
+        "max_pages": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "scope_sha256": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/digest" }
+      }
+    }
+  }
+}

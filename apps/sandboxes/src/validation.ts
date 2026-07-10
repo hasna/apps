@@ -2,6 +2,7 @@ import {
   assertDigest,
   assertOpaqueId,
   assertRfc3339,
+  canonicalDigest,
   parsePositiveInt64,
   type Digest,
 } from "./canonical.js";
@@ -9,6 +10,7 @@ import { SandboxError } from "./errors.js";
 import {
   assertEffectJournalOutcomeSchema,
   EFFECT_JOURNAL_OUTCOME_SCHEMA_DIGEST,
+  EFFECT_JOURNAL_OUTCOME_KINDS,
   EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION,
 } from "./effect-journal.js";
 import {
@@ -20,8 +22,16 @@ import {
   type CleanupBasisV1,
   type CreateSandboxV1,
   type DispatchedJournalAnchorV1,
+  type DispatchedJournalRecordV1,
   type InfinityCleanupGrantV1,
   type LifecycleTransitionBindingV1,
+  type ProviderEffectTargetV1,
+  type ProviderDiscoveryScopeV1,
+  type ProviderOutcomeAnchorV1,
+  type ProviderOutcomeRecordV1,
+  type ReadProbeJournalAnchorV1,
+  type ReadProbeJournalRecordV1,
+  type SignedEffectJournalAnchorV1,
   type SandboxSpecV1,
 } from "./types.js";
 
@@ -510,10 +520,62 @@ export function validateLifecycleTransition(value: unknown): LifecycleTransition
   };
 }
 
-export function validateDispatchedJournalAnchor(value: unknown): DispatchedJournalAnchorV1 {
-  const v = closed(value, "dispatch_journal", [
+function validateSignedJournalAnchor<RecordV1>(
+  value: unknown,
+  field: string,
+  parseRecord: (record: unknown) => RecordV1,
+): SignedEffectJournalAnchorV1<RecordV1> {
+  const v = closed(value, field, [
+    "anchor_schema_version",
+    "journal_sequence",
+    "prior_frontier_digest",
+    "record_digest",
+    "frontier_digest",
+    "signer_principal",
+    "signing_key_id",
+    "signature",
+    "record",
+  ]);
+  const recordValue = parseRecord(v.record);
+  const recordDigest = digest(v.record_digest, `${field}.record_digest`);
+  if (recordDigest !== canonicalDigest(recordValue)) {
+    throw new SandboxError("integrity_failed", `${field} record digest does not bind its canonical bytes`);
+  }
+  const anchor = {
+    anchor_schema_version: literal(
+      v.anchor_schema_version,
+      "infinity.effect-journal-anchor/v1",
+      `${field}.anchor_schema_version`,
+    ),
+    journal_sequence: parsePositiveInt64(v.journal_sequence, `${field}.journal_sequence`),
+    prior_frontier_digest: digest(v.prior_frontier_digest, `${field}.prior_frontier_digest`),
+    record_digest: recordDigest,
+    frontier_digest: digest(v.frontier_digest, `${field}.frontier_digest`),
+    signer_principal: id(v.signer_principal, `${field}.signer_principal`, "principal"),
+    signing_key_id: id(v.signing_key_id, `${field}.signing_key_id`, "key"),
+    signature: stringValue(v.signature, `${field}.signature`, 128),
+    record: recordValue,
+  } satisfies SignedEffectJournalAnchorV1<RecordV1>;
+  if (!/^[A-Za-z0-9_-]{86}$/.test(anchor.signature)) {
+    throw new SandboxError("validation_failed", `${field}.signature must be an Ed25519 base64url value`);
+  }
+  const expectedFrontier = canonicalDigest({
+    anchor_schema_version: anchor.anchor_schema_version,
+    journal_sequence: anchor.journal_sequence,
+    prior_frontier_digest: anchor.prior_frontier_digest,
+    record_digest: anchor.record_digest,
+    signer_principal: anchor.signer_principal,
+    signing_key_id: anchor.signing_key_id,
+  });
+  if (anchor.frontier_digest !== expectedFrontier) {
+    throw new SandboxError("integrity_failed", `${field} frontier digest does not bind its signed tuple`);
+  }
+  return anchor;
+}
+
+function validateDispatchedJournalRecord(value: unknown): DispatchedJournalRecordV1 {
+  const v = closed(value, "dispatch_journal.record", [
     "schema_version",
-    "journal_anchor_id",
     "state",
     "record_kind",
     "outcome_schema_version",
@@ -528,13 +590,11 @@ export function validateDispatchedJournalAnchor(value: unknown): DispatchedJourn
     "successor_resource_lifecycle_generation",
     "recorded_at",
     "expires_at",
-    "issuer_principal",
     "provider_idempotency_token_sha256",
+    "provider_creation_token_sha256",
     "immutable_fingerprint_sha256",
     "authorization_consumption_receipt_sha256",
-    "frontier_sha256",
     "fence",
-    "anchor_sha256",
   ]);
   const expectedGeneration = parsePositiveInt64(
     v.expected_resource_lifecycle_generation,
@@ -550,7 +610,6 @@ export function validateDispatchedJournalAnchor(value: unknown): DispatchedJourn
   assertEffectJournalOutcomeSchema(v.outcome_schema_version, v.outcome_schema_digest);
   return {
     schema_version: literal(v.schema_version, SCHEMA_VERSION, "dispatch_journal.schema_version"),
-    journal_anchor_id: id(v.journal_anchor_id, "dispatch_journal.journal_anchor_id", "journal"),
     state: literal(v.state, "dispatched", "dispatch_journal.state"),
     record_kind: literal(v.record_kind, "DISPATCHED", "dispatch_journal.record_kind"),
     outcome_schema_version: EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION,
@@ -568,10 +627,13 @@ export function validateDispatchedJournalAnchor(value: unknown): DispatchedJourn
     successor_resource_lifecycle_generation: successorGeneration,
     recorded_at: time(v.recorded_at, "dispatch_journal.recorded_at"),
     expires_at: time(v.expires_at, "dispatch_journal.expires_at"),
-    issuer_principal: id(v.issuer_principal, "dispatch_journal.issuer_principal", "principal"),
     provider_idempotency_token_sha256: digest(
       v.provider_idempotency_token_sha256,
       "dispatch_journal.provider_idempotency_token_sha256",
+    ),
+    provider_creation_token_sha256: digest(
+      v.provider_creation_token_sha256,
+      "dispatch_journal.provider_creation_token_sha256",
     ),
     immutable_fingerprint_sha256: digest(
       v.immutable_fingerprint_sha256,
@@ -581,10 +643,176 @@ export function validateDispatchedJournalAnchor(value: unknown): DispatchedJourn
       v.authorization_consumption_receipt_sha256,
       "dispatch_journal.authorization_consumption_receipt_sha256",
     ),
-    frontier_sha256: digest(v.frontier_sha256, "dispatch_journal.frontier_sha256"),
     fence: validateFence(v.fence),
-    anchor_sha256: digest(v.anchor_sha256, "dispatch_journal.anchor_sha256"),
   };
+}
+
+export function validateDispatchedJournalAnchor(value: unknown): DispatchedJournalAnchorV1 {
+  return validateSignedJournalAnchor(value, "dispatch_journal", validateDispatchedJournalRecord);
+}
+
+export function validateProviderEffectTarget(value: unknown): ProviderEffectTargetV1 {
+  const v = closed(value, "provider_target", [
+    "operation_id",
+    "operation_digest",
+    "operation_step_id",
+    "resource_id",
+    "resource_lifecycle_generation",
+    "provider_idempotency_token_sha256",
+    "provider_creation_token_sha256",
+    "immutable_fingerprint_sha256",
+    "authorization_consumption_receipt_sha256",
+  ]);
+  return {
+    operation_id: id(v.operation_id, "provider_target.operation_id", "op"),
+    operation_digest: digest(v.operation_digest, "provider_target.operation_digest"),
+    operation_step_id: id(v.operation_step_id, "provider_target.operation_step_id", "step"),
+    resource_id: id(v.resource_id, "provider_target.resource_id", "sbx"),
+    resource_lifecycle_generation: parsePositiveInt64(
+      v.resource_lifecycle_generation,
+      "provider_target.resource_lifecycle_generation",
+    ),
+    provider_idempotency_token_sha256: digest(
+      v.provider_idempotency_token_sha256,
+      "provider_target.provider_idempotency_token_sha256",
+    ),
+    provider_creation_token_sha256: digest(
+      v.provider_creation_token_sha256,
+      "provider_target.provider_creation_token_sha256",
+    ),
+    immutable_fingerprint_sha256: digest(
+      v.immutable_fingerprint_sha256,
+      "provider_target.immutable_fingerprint_sha256",
+    ),
+    authorization_consumption_receipt_sha256: digest(
+      v.authorization_consumption_receipt_sha256,
+      "provider_target.authorization_consumption_receipt_sha256",
+    ),
+  };
+}
+
+function validateProviderOutcomeRecord(value: unknown): ProviderOutcomeRecordV1 {
+  const v = closed(value, "outcome_anchor.record", [
+    "schema_version",
+    "record_kind",
+    "outcome_schema_version",
+    "outcome_schema_digest",
+    "operation_id",
+    "operation_step_id",
+    "operation_execution_epoch",
+    "dispatch_anchor_sha256",
+    "outcome_kind",
+    "outcome_sha256",
+    "recorded_at",
+    "fence",
+    "target",
+  ]);
+  assertEffectJournalOutcomeSchema(v.outcome_schema_version, v.outcome_schema_digest);
+  return {
+    schema_version: literal(v.schema_version, SCHEMA_VERSION, "outcome_anchor.schema_version"),
+    record_kind: literal(v.record_kind, "OUTCOME", "outcome_anchor.record_kind"),
+    outcome_schema_version: EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION,
+    outcome_schema_digest: EFFECT_JOURNAL_OUTCOME_SCHEMA_DIGEST,
+    operation_id: id(v.operation_id, "outcome_anchor.operation_id", "op"),
+    operation_step_id: id(v.operation_step_id, "outcome_anchor.operation_step_id", "step"),
+    operation_execution_epoch: parsePositiveInt64(
+      v.operation_execution_epoch,
+      "outcome_anchor.operation_execution_epoch",
+    ),
+    dispatch_anchor_sha256: digest(
+      v.dispatch_anchor_sha256,
+      "outcome_anchor.dispatch_anchor_sha256",
+    ),
+    outcome_kind: enumValue(
+      v.outcome_kind,
+      EFFECT_JOURNAL_OUTCOME_KINDS,
+      "outcome_anchor.outcome_kind",
+    ),
+    outcome_sha256: digest(v.outcome_sha256, "outcome_anchor.outcome_sha256"),
+    recorded_at: time(v.recorded_at, "outcome_anchor.recorded_at"),
+    fence: validateFence(v.fence),
+    target: validateProviderEffectTarget(v.target),
+  };
+}
+
+export function validateProviderOutcomeAnchor(value: unknown): ProviderOutcomeAnchorV1 {
+  return validateSignedJournalAnchor(value, "outcome_anchor", validateProviderOutcomeRecord);
+}
+
+function validateReadProbeJournalRecord(value: unknown): ReadProbeJournalRecordV1 {
+  const v = closed(value, "read_probe_anchor.record", [
+    "schema_version",
+    "state",
+    "operation_id",
+    "operation_step_id",
+    "operation_digest",
+    "resource_id",
+    "recorded_at",
+    "expires_at",
+    "fence",
+    "target",
+    "discovery_scope",
+  ]);
+  return {
+    schema_version: literal(v.schema_version, SCHEMA_VERSION, "read_probe_anchor.schema_version"),
+    state: literal(v.state, "read_probe", "read_probe_anchor.state"),
+    operation_id: id(v.operation_id, "read_probe_anchor.operation_id", "op"),
+    operation_step_id: id(v.operation_step_id, "read_probe_anchor.operation_step_id", "step"),
+    operation_digest: digest(v.operation_digest, "read_probe_anchor.operation_digest"),
+    resource_id: id(v.resource_id, "read_probe_anchor.resource_id", "sbx"),
+    recorded_at: time(v.recorded_at, "read_probe_anchor.recorded_at"),
+    expires_at: time(v.expires_at, "read_probe_anchor.expires_at"),
+    fence: validateFence(v.fence),
+    target: validateProviderEffectTarget(v.target),
+    discovery_scope: validateProviderDiscoveryScope(v.discovery_scope),
+  };
+}
+
+export function validateProviderDiscoveryScope(value: unknown): ProviderDiscoveryScopeV1 {
+  const v = closed(value, "provider_discovery_scope", [
+    "schema_version",
+    "read_kind",
+    "installation_id",
+    "provider_scope_ref",
+    "resource_id",
+    "provider_creation_token_sha256",
+    "immutable_fingerprint_sha256",
+    "max_pages",
+    "scope_sha256",
+  ]);
+  const protectedBytes = {
+    schema_version: literal(
+      v.schema_version,
+      "sandboxes.provider-discovery-scope/v1",
+      "provider_discovery_scope.schema_version",
+    ),
+    read_kind: literal(
+      v.read_kind,
+      "exact_operation_and_owned_resource",
+      "provider_discovery_scope.read_kind",
+    ),
+    installation_id: stringValue(v.installation_id, "provider_discovery_scope.installation_id", 256),
+    provider_scope_ref: stringValue(v.provider_scope_ref, "provider_discovery_scope.provider_scope_ref", 512),
+    resource_id: id(v.resource_id, "provider_discovery_scope.resource_id", "sbx"),
+    provider_creation_token_sha256: digest(
+      v.provider_creation_token_sha256,
+      "provider_discovery_scope.provider_creation_token_sha256",
+    ),
+    immutable_fingerprint_sha256: digest(
+      v.immutable_fingerprint_sha256,
+      "provider_discovery_scope.immutable_fingerprint_sha256",
+    ),
+    max_pages: positiveInteger(v.max_pages, "provider_discovery_scope.max_pages", 1_000),
+  };
+  const scopeSha256 = digest(v.scope_sha256, "provider_discovery_scope.scope_sha256");
+  if (scopeSha256 !== canonicalDigest(protectedBytes)) {
+    throw new SandboxError("integrity_failed", "Provider discovery scope digest does not bind its exact bytes");
+  }
+  return { ...protectedBytes, scope_sha256: scopeSha256 };
+}
+
+export function validateReadProbeJournalAnchor(value: unknown): ReadProbeJournalAnchorV1 {
+  return validateSignedJournalAnchor(value, "read_probe_anchor", validateReadProbeJournalRecord);
 }
 
 export function validateCheckpointReceipt(value: unknown): CheckpointDurabilityReceiptV1 {

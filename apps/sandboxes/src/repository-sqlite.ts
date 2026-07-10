@@ -1,7 +1,14 @@
 import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, lstatSync, mkdirSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { canonicalDigest, sha256, storageJson, parseStorageJson } from "./canonical.js";
+import {
+  assertDigest,
+  assertOpaqueId,
+  canonicalDigest,
+  sha256,
+  storageJson,
+  parseStorageJson,
+} from "./canonical.js";
 import { SandboxError } from "./errors.js";
 import type {
   RepositoryHealthV1,
@@ -10,11 +17,15 @@ import type {
 } from "./repository.js";
 import { assertExternalOperationAnchorRecordV1 } from "./repository.js";
 import type {
+  CheckpointDurabilityReceiptV1,
+  GitPromotionReceiptRefV1,
   OperationRecordV1,
   ExternalOperationAnchorRecordV1,
   SandboxEventV1,
+  SandboxDestroyTombstoneV1,
   SandboxV1,
   SealedProviderHandleV1,
+  StoredSafetyFenceObservationV1,
 } from "./types.js";
 
 const MIGRATIONS = [
@@ -100,19 +111,25 @@ const MIGRATIONS = [
       ALTER TABLE operations ADD COLUMN effect_phase TEXT NOT NULL DEFAULT 'intent_committed';
       ALTER TABLE operations ADD COLUMN operation_step_id TEXT;
       ALTER TABLE operations ADD COLUMN dispatch_anchor_sha256 TEXT;
-      CREATE TABLE external_operation_anchors (
+      CREATE TABLE external_journal_frontiers (
+        journal_sequence TEXT PRIMARY KEY,
+        prior_frontier_digest TEXT NOT NULL,
+        record_digest TEXT NOT NULL,
+        frontier_digest TEXT NOT NULL UNIQUE,
+        envelope_digest TEXT NOT NULL UNIQUE
+      );
+      CREATE TABLE external_read_probe_anchors (
         operation_id TEXT NOT NULL REFERENCES operations(operation_id),
         operation_step_id TEXT NOT NULL,
-        kind TEXT NOT NULL CHECK (kind IN ('dispatched', 'outcome', 'read_probe')),
-        anchor_sha256 TEXT NOT NULL,
-        frontier_sha256 TEXT NOT NULL,
-        payload_sha256 TEXT NOT NULL,
+        operation_execution_epoch TEXT NOT NULL,
+        journal_sequence TEXT NOT NULL REFERENCES external_journal_frontiers(journal_sequence),
+        envelope_digest TEXT NOT NULL,
         recorded_at TEXT NOT NULL,
         record_json TEXT NOT NULL,
-        PRIMARY KEY(operation_id, operation_step_id, kind, anchor_sha256)
+        PRIMARY KEY(operation_id, operation_step_id, operation_execution_epoch, envelope_digest)
       );
-      CREATE INDEX external_operation_anchors_frontier
-        ON external_operation_anchors(frontier_sha256);
+      CREATE INDEX external_read_probe_anchors_frontier
+        ON external_read_probe_anchors(journal_sequence);
     `,
   },
   {
@@ -129,15 +146,57 @@ const MIGRATIONS = [
             'succeeded', 'failed_effect', 'failed_no_effect', 'reconciliation_blocked'
           )
         ),
-        anchor_sha256 TEXT NOT NULL,
-        frontier_sha256 TEXT NOT NULL,
-        payload_sha256 TEXT NOT NULL,
+        journal_sequence TEXT NOT NULL REFERENCES external_journal_frontiers(journal_sequence),
+        envelope_digest TEXT NOT NULL,
         recorded_at TEXT NOT NULL,
         record_json TEXT NOT NULL,
         PRIMARY KEY(operation_id, operation_step_id, operation_execution_epoch, record_kind)
       );
       CREATE INDEX effect_journal_records_frontier
-        ON effect_journal_records(frontier_sha256);
+        ON effect_journal_records(journal_sequence);
+    `,
+  },
+  {
+    version: 4,
+    name: "immutable_safety_and_destroy_evidence_v1",
+    sql: `
+      CREATE TABLE safety_fence_observations (
+        observation_id TEXT PRIMARY KEY,
+        resource_id TEXT NOT NULL REFERENCES sandbox_records(resource_id),
+        observation_sha256 TEXT NOT NULL UNIQUE,
+        recorded_at TEXT NOT NULL,
+        record_json TEXT NOT NULL
+      );
+      CREATE INDEX safety_fence_observations_resource
+        ON safety_fence_observations(resource_id, recorded_at, observation_id);
+      CREATE TABLE destroy_tombstones (
+        resource_id TEXT PRIMARY KEY REFERENCES sandbox_records(resource_id),
+        destroy_operation_id TEXT NOT NULL UNIQUE,
+        tombstone_sha256 TEXT NOT NULL UNIQUE,
+        record_json TEXT NOT NULL
+      );
+    `,
+  },
+  {
+    version: 5,
+    name: "immutable_checkpoint_and_promotion_receipts_v1",
+    sql: `
+      CREATE TABLE immutable_checkpoint_receipts (
+        receipt_sha256 TEXT PRIMARY KEY,
+        receipt_id TEXT NOT NULL UNIQUE,
+        resource_id TEXT NOT NULL REFERENCES sandbox_records(resource_id),
+        record_json TEXT NOT NULL
+      );
+      CREATE INDEX immutable_checkpoint_receipts_resource
+        ON immutable_checkpoint_receipts(resource_id, receipt_id);
+      CREATE TABLE immutable_git_promotion_receipts (
+        receipt_sha256 TEXT PRIMARY KEY,
+        receipt_id TEXT NOT NULL UNIQUE,
+        resource_id TEXT NOT NULL REFERENCES sandbox_records(resource_id),
+        record_json TEXT NOT NULL
+      );
+      CREATE INDEX immutable_git_promotion_receipts_resource
+        ON immutable_git_promotion_receipts(resource_id, receipt_id);
     `,
   },
 ] as const;
@@ -242,7 +301,7 @@ export class SqliteSandboxRepositoryV1 implements SandboxRepositoryV1 {
     apply.immediate();
   }
 
-  databaseTime(): Date {
+  async databaseTime(): Promise<Date> {
     if (this.#testDatabaseTime !== undefined) return new Date(this.#testDatabaseTime().getTime());
     const row = this.#db
       .query<{ now: string }, []>("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now') AS now")
@@ -251,12 +310,23 @@ export class SqliteSandboxRepositoryV1 implements SandboxRepositoryV1 {
     return new Date(row.now);
   }
 
-  transaction<T>(fn: (tx: SandboxRepositoryTxV1) => T): T {
-    const transaction = this.#db.transaction(() => fn(this.#tx()));
+  async transaction<T>(fn: (tx: SandboxRepositoryTxV1) => T): Promise<T> {
+    const transaction = this.#db.transaction(() => {
+      const result = fn(this.#tx());
+      if (
+        result !== null &&
+        typeof result === "object" &&
+        "then" in result &&
+        typeof (result as { then?: unknown }).then === "function"
+      ) {
+        throw new SandboxError("validation_failed", "Repository transaction callbacks must be synchronous");
+      }
+      return result;
+    });
     return transaction.immediate();
   }
 
-  health(): RepositoryHealthV1 {
+  async health(): Promise<RepositoryHealthV1> {
     const integrity = this.#db.query<{ integrity_check: string }, []>("PRAGMA integrity_check").get();
     if (integrity?.integrity_check !== "ok") {
       throw new SandboxError("integrity_failed", "SQLite integrity check failed");
@@ -278,7 +348,7 @@ export class SqliteSandboxRepositoryV1 implements SandboxRepositoryV1 {
     };
   }
 
-  close(): void {
+  async close(): Promise<void> {
     this.#db.close();
   }
 
@@ -478,11 +548,48 @@ export class SqliteSandboxRepositoryV1 implements SandboxRepositoryV1 {
       },
       appendExternalAnchor(record) {
         assertExternalOperationAnchorRecordV1(record);
-        if (record.record_kind === "READ_PROBE") {
-          const existing = db.query<{ record_json: string }, [string, string, string]>(`
-            SELECT record_json FROM external_operation_anchors
-            WHERE operation_id = ? AND operation_step_id = ? AND anchor_sha256 = ?
-          `).get(record.operation_id, record.operation_step_id, record.anchor_sha256);
+        const sequence = record.journal_sequence.toString(10);
+        const frontier = db.query<{
+          prior_frontier_digest: string;
+          record_digest: string;
+          frontier_digest: string;
+          envelope_digest: string;
+        }, [string]>(`
+          SELECT prior_frontier_digest, record_digest, frontier_digest, envelope_digest
+          FROM external_journal_frontiers WHERE journal_sequence = ?
+        `).get(sequence);
+        if (frontier === null) {
+          db.query(`
+            INSERT INTO external_journal_frontiers(
+              journal_sequence, prior_frontier_digest, record_digest,
+              frontier_digest, envelope_digest
+            ) VALUES (?, ?, ?, ?, ?)
+          `).run(
+            sequence,
+            record.prior_frontier_digest,
+            record.record_digest,
+            record.frontier_digest,
+            record.envelope_digest,
+          );
+        } else if (
+          frontier.prior_frontier_digest !== record.prior_frontier_digest ||
+          frontier.record_digest !== record.record_digest ||
+          frontier.frontier_digest !== record.frontier_digest ||
+          frontier.envelope_digest !== record.envelope_digest
+        ) {
+          throw new SandboxError("integrity_failed", "External journal sequence or frontier changed bytes");
+        }
+        if ("anchor_kind" in record) {
+          const existing = db.query<{ record_json: string }, [string, string, string, string]>(`
+            SELECT record_json FROM external_read_probe_anchors
+            WHERE operation_id = ? AND operation_step_id = ?
+              AND operation_execution_epoch = ? AND envelope_digest = ?
+          `).get(
+            record.operation_id,
+            record.operation_step_id,
+            record.operation_execution_epoch.toString(10),
+            record.envelope_digest,
+          );
           if (existing !== null) {
             const prior = parseStorageJson<ExternalOperationAnchorRecordV1>(existing.record_json);
             if (canonicalDigest(prior) !== canonicalDigest(record)) {
@@ -491,16 +598,16 @@ export class SqliteSandboxRepositoryV1 implements SandboxRepositoryV1 {
             return;
           }
           db.query(`
-            INSERT INTO external_operation_anchors(
-              operation_id, operation_step_id, kind, anchor_sha256,
-              frontier_sha256, payload_sha256, recorded_at, record_json
-            ) VALUES (?, ?, 'read_probe', ?, ?, ?, ?, ?)
+            INSERT INTO external_read_probe_anchors(
+              operation_id, operation_step_id, operation_execution_epoch,
+              journal_sequence, envelope_digest, recorded_at, record_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
           `).run(
             record.operation_id,
             record.operation_step_id,
-            record.anchor_sha256,
-            record.frontier_sha256,
-            record.payload_sha256,
+            record.operation_execution_epoch.toString(10),
+            sequence,
+            record.envelope_digest,
             record.recorded_at,
             storageJson(record),
           );
@@ -552,17 +659,16 @@ export class SqliteSandboxRepositoryV1 implements SandboxRepositoryV1 {
         db.query(`
           INSERT INTO effect_journal_records(
             operation_id, operation_step_id, operation_execution_epoch, record_kind,
-            outcome_kind, anchor_sha256, frontier_sha256, payload_sha256, recorded_at, record_json
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            outcome_kind, journal_sequence, envelope_digest, recorded_at, record_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           record.operation_id,
           record.operation_step_id,
           epoch,
           record.record_kind,
           record.record_kind === "OUTCOME" ? record.outcome_kind : null,
-          record.anchor_sha256,
-          record.frontier_sha256,
-          record.payload_sha256,
+          sequence,
+          record.envelope_digest,
           record.recorded_at,
           storageJson(record),
         );
@@ -572,11 +678,16 @@ export class SqliteSandboxRepositoryV1 implements SandboxRepositoryV1 {
           SELECT record_json FROM effect_journal_records WHERE operation_id = ?
         `).all(operationId);
         const probes = db.query<{ record_json: string }, [string]>(`
-          SELECT record_json FROM external_operation_anchors WHERE operation_id = ?
+          SELECT record_json FROM external_read_probe_anchors WHERE operation_id = ?
         `).all(operationId);
         return [...mutations, ...probes]
           .map((row) => parseStorageJson<ExternalOperationAnchorRecordV1>(row.record_json))
-          .sort((a, b) => a.recorded_at.localeCompare(b.recorded_at) || a.record_kind.localeCompare(b.record_kind));
+          .sort((a, b) =>
+            a.recorded_at.localeCompare(b.recorded_at) ||
+            ("record_kind" in a ? a.record_kind : a.anchor_kind).localeCompare(
+              "record_kind" in b ? b.record_kind : b.anchor_kind,
+            )
+          );
       },
       consumeCapabilityUse(capabilityUseSha256, operationId) {
         try {
@@ -631,6 +742,143 @@ export class SqliteSandboxRepositoryV1 implements SandboxRepositoryV1 {
         return db.query<{ operation_id: string }, [string]>(
           "SELECT operation_id FROM cleanup_grant_uses WHERE use_sha256 = ?",
         ).get(grantUseSha256)?.operation_id;
+      },
+      putCheckpointReceipt(receipt) {
+        assertDigest(receipt.receipt_sha256, "checkpoint_receipt.receipt_sha256");
+        const existing = db.query<{ record_json: string }, [string]>(
+          "SELECT record_json FROM immutable_checkpoint_receipts WHERE receipt_sha256 = ?",
+        ).get(receipt.receipt_sha256);
+        if (existing !== null) {
+          const prior = parseStorageJson<CheckpointDurabilityReceiptV1>(existing.record_json);
+          if (canonicalDigest(prior) !== canonicalDigest(receipt)) {
+            throw new SandboxError("integrity_failed", "Immutable checkpoint receipt changed bytes");
+          }
+          return;
+        }
+        try {
+          db.query(`
+            INSERT INTO immutable_checkpoint_receipts(
+              receipt_sha256, receipt_id, resource_id, record_json
+            ) VALUES (?, ?, ?, ?)
+          `).run(receipt.receipt_sha256, receipt.receipt_id, receipt.resource_id, storageJson(receipt));
+        } catch {
+          throw new SandboxError("integrity_failed", "Checkpoint receipt identity conflicts with stored bytes");
+        }
+      },
+      getCheckpointReceipt(receiptSha256) {
+        const row = db.query<{ record_json: string }, [string]>(
+          "SELECT record_json FROM immutable_checkpoint_receipts WHERE receipt_sha256 = ?",
+        ).get(receiptSha256);
+        return row === null ? undefined : parseStorageJson<CheckpointDurabilityReceiptV1>(row.record_json);
+      },
+      putGitPromotionReceipt(receipt) {
+        assertDigest(receipt.receipt_sha256, "promotion_receipt.receipt_sha256");
+        const existing = db.query<{ record_json: string }, [string]>(
+          "SELECT record_json FROM immutable_git_promotion_receipts WHERE receipt_sha256 = ?",
+        ).get(receipt.receipt_sha256);
+        if (existing !== null) {
+          const prior = parseStorageJson<GitPromotionReceiptRefV1>(existing.record_json);
+          if (canonicalDigest(prior) !== canonicalDigest(receipt)) {
+            throw new SandboxError("integrity_failed", "Immutable promotion receipt changed bytes");
+          }
+          return;
+        }
+        try {
+          db.query(`
+            INSERT INTO immutable_git_promotion_receipts(
+              receipt_sha256, receipt_id, resource_id, record_json
+            ) VALUES (?, ?, ?, ?)
+          `).run(receipt.receipt_sha256, receipt.receipt_id, receipt.resource_id, storageJson(receipt));
+        } catch {
+          throw new SandboxError("integrity_failed", "Promotion receipt identity conflicts with stored bytes");
+        }
+      },
+      getGitPromotionReceipt(receiptSha256) {
+        const row = db.query<{ record_json: string }, [string]>(
+          "SELECT record_json FROM immutable_git_promotion_receipts WHERE receipt_sha256 = ?",
+        ).get(receiptSha256);
+        return row === null ? undefined : parseStorageJson<GitPromotionReceiptRefV1>(row.record_json);
+      },
+      appendSafetyFenceObservation(record) {
+        assertOpaqueId(record.observation_id, "safety_observation.observation_id", "observation");
+        assertOpaqueId(record.resource_id, "safety_observation.resource_id", "sbx");
+        assertDigest(record.observation_sha256, "safety_observation.observation_sha256");
+        if (
+          record.resource_id !== record.observation.resource_id ||
+          record.observation_sha256 !== canonicalDigest(record.observation)
+        ) {
+          throw new SandboxError("integrity_failed", "Safety observation record bytes do not match their digest");
+        }
+        const existing = db.query<{ record_json: string }, [string]>(
+          "SELECT record_json FROM safety_fence_observations WHERE observation_id = ?",
+        ).get(record.observation_id);
+        if (existing !== null) {
+          const prior = parseStorageJson<StoredSafetyFenceObservationV1>(existing.record_json);
+          if (canonicalDigest(prior) !== canonicalDigest(record)) {
+            throw new SandboxError("integrity_failed", "Immutable safety observation changed bytes");
+          }
+          return;
+        }
+        db.query(`
+          INSERT INTO safety_fence_observations(
+            observation_id, resource_id, observation_sha256, recorded_at, record_json
+          ) VALUES (?, ?, ?, ?, ?)
+        `).run(
+          record.observation_id,
+          record.resource_id,
+          record.observation_sha256,
+          record.recorded_at,
+          storageJson(record),
+        );
+      },
+      listSafetyFenceObservations(resourceId) {
+        return db.query<{ record_json: string }, [string]>(`
+          SELECT record_json FROM safety_fence_observations
+          WHERE resource_id = ? ORDER BY recorded_at, observation_id
+        `).all(resourceId).map((row) =>
+          parseStorageJson<StoredSafetyFenceObservationV1>(row.record_json)
+        );
+      },
+      putDestroyTombstone(record) {
+        assertOpaqueId(record.tombstone_id, "destroy_tombstone.tombstone_id", "tombstone");
+        assertOpaqueId(record.resource_id, "destroy_tombstone.resource_id", "sbx");
+        assertDigest(record.tombstone_sha256, "destroy_tombstone.tombstone_sha256");
+        const { tombstone_sha256: _digest, ...protectedBytes } = record;
+        if (record.tombstone_sha256 !== canonicalDigest(protectedBytes)) {
+          throw new SandboxError("integrity_failed", "Destroy tombstone digest does not match its protected bytes");
+        }
+        const sandbox = parseSandbox(db.query<{ record_json: string }, [string]>(
+          "SELECT record_json FROM sandbox_records WHERE resource_id = ?",
+        ).get(record.resource_id));
+        if (sandbox?.state !== "destroyed") {
+          throw new SandboxError("integrity_failed", "Destroy tombstone requires a terminal sandbox record");
+        }
+        const existing = db.query<{ record_json: string }, [string]>(
+          "SELECT record_json FROM destroy_tombstones WHERE resource_id = ?",
+        ).get(record.resource_id);
+        if (existing !== null) {
+          const prior = parseStorageJson<SandboxDestroyTombstoneV1>(existing.record_json);
+          if (canonicalDigest(prior) !== canonicalDigest(record)) {
+            throw new SandboxError("integrity_failed", "Immutable destroy tombstone changed bytes");
+          }
+          return;
+        }
+        db.query(`
+          INSERT INTO destroy_tombstones(
+            resource_id, destroy_operation_id, tombstone_sha256, record_json
+          ) VALUES (?, ?, ?, ?)
+        `).run(
+          record.resource_id,
+          record.destroy_operation_id,
+          record.tombstone_sha256,
+          storageJson(record),
+        );
+      },
+      getDestroyTombstone(resourceId) {
+        const row = db.query<{ record_json: string }, [string]>(
+          "SELECT record_json FROM destroy_tombstones WHERE resource_id = ?",
+        ).get(resourceId);
+        return row === null ? undefined : parseStorageJson<SandboxDestroyTombstoneV1>(row.record_json);
       },
       appendEvent(event) {
         const next = (db.query<{ sequence: number }, [string]>(

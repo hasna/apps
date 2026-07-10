@@ -26,9 +26,4 @@ exec bwrap \
   --tmpfs /tmp \
   --dir /nonexistent \
   --chdir /workspace \
-  /runtime/bun test \
-    --preload ./tests/hermetic-preload.ts \
-    tests/hermetic.test.ts \
-    tests/validation.test.ts \
-    tests/service.test.ts \
-    tests/storage-conformance.test.ts
+  /usr/bin/sh /workspace/scripts/hermetic-entry.sh

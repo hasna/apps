@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hasna.com/sandboxes/provider-outcome-anchor-v1.schema.json",
+  "title": "ProviderOutcomeAnchorV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["anchor_schema_version", "journal_sequence", "prior_frontier_digest", "record_digest", "frontier_digest", "signer_principal", "signing_key_id", "signature", "record"],
+  "properties": {
+    "anchor_schema_version": { "const": "infinity.effect-journal-anchor/v1" },
+    "journal_sequence": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/positiveInt64" },
+    "prior_frontier_digest": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/digest" },
+    "record_digest": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/digest" },
+    "frontier_digest": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/digest" },
+    "signer_principal": { "type": "string", "pattern": "^principal_[0-9a-f]{32}$" },
+    "signing_key_id": { "type": "string", "pattern": "^key_[0-9a-f]{32}$" },
+    "signature": { "type": "string", "pattern": "^[A-Za-z0-9_-]{86}$" },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "record_kind", "outcome_schema_version", "outcome_schema_digest", "operation_id", "operation_step_id", "operation_execution_epoch", "dispatch_anchor_sha256", "outcome_kind", "outcome_sha256", "recorded_at", "fence", "target"],
+      "properties": {
+        "schema_version": { "const": "sandboxes.runtime/v1" },
+        "record_kind": { "const": "OUTCOME" },
+        "outcome_schema_version": { "const": "infinity.effect-journal-outcome/v1" },
+        "outcome_schema_digest": { "const": "sha256:7ab380a0475ebf79d2ed925e20bcbb9303d78a56c358d09adbdce796e740bf20" },
+        "operation_id": { "type": "string", "pattern": "^op_[0-9a-f]{32}$" },
+        "operation_step_id": { "type": "string", "pattern": "^step_[0-9a-f]{32}$" },
+        "operation_execution_epoch": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/positiveInt64" },
+        "dispatch_anchor_sha256": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/digest" },
+        "outcome_kind": { "enum": ["succeeded", "failed_effect", "failed_no_effect", "reconciliation_blocked"] },
+        "outcome_sha256": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/digest" },
+        "recorded_at": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/time" },
+        "fence": { "$ref": "canonical-effect-fence-v1.schema.json" },
+        "target": { "$ref": "#/$defs/target" }
+      }
+    }
+  },
+  "$defs": {
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation_id", "operation_digest", "operation_step_id", "resource_id", "resource_lifecycle_generation", "provider_idempotency_token_sha256", "provider_creation_token_sha256", "immutable_fingerprint_sha256", "authorization_consumption_receipt_sha256"],
+      "properties": {
+        "operation_id": { "type": "string", "pattern": "^op_[0-9a-f]{32}$" },
+        "operation_digest": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/digest" },
+        "operation_step_id": { "type": "string", "pattern": "^step_[0-9a-f]{32}$" },
+        "resource_id": { "type": "string", "pattern": "^sbx_[0-9a-f]{32}$" },
+        "resource_lifecycle_generation": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/positiveInt64" },
+        "provider_idempotency_token_sha256": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/digest" },
+        "provider_creation_token_sha256": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/digest" },
+        "immutable_fingerprint_sha256": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/digest" },
+        "authorization_consumption_receipt_sha256": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/digest" }
+      }
+    }
+  }
+}

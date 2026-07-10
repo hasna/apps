@@ -184,7 +184,7 @@ async function run(argv: string[]): Promise<{ envelope: Envelope; exitCode: numb
       if (command !== undefined || args.length !== 0) throw new SandboxError("validation_failed", `${group} takes no arguments`);
       const repository = openRepository(databasePath);
       try {
-        const health = repository.health();
+        const health = await repository.health();
         return {
           envelope: success(group, {
             deployment_mode: "local",
@@ -195,7 +195,7 @@ async function run(argv: string[]): Promise<{ envelope: Envelope; exitCode: numb
           exitCode: 0,
         };
       } finally {
-        repository.close();
+        await repository.close();
       }
     }
     if (group === "adapter") {
