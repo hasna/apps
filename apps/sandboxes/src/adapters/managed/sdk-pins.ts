@@ -1,10 +1,11 @@
 import type {
-  CreateSandboxFromSnapshotParams,
+  CreateSandboxFromImageParams,
   Daytona,
+  ListSandboxesQuery,
   Resources,
   Sandbox as DaytonaSandbox,
 } from "@daytona/sdk"
-import type { Sandbox, SandboxInfo, SandboxOpts } from "e2b"
+import type { Sandbox, SandboxInfo, SandboxListOpts, SandboxOpts } from "e2b"
 import type { Digest, ManagedProviderIdV1 } from "./types"
 
 export const E2B_SDK_PIN = { package: "e2b", version: "2.31.0" } as const
@@ -36,8 +37,28 @@ export type DaytonaOfficialSandboxSurfaceV1 = Pick<
 
 export interface OwnershipMetadataV1 {
   installation_sha256: Digest
+  provider_scope_ref_sha256: Digest
+  ownership_nonce_sha256: Digest
   creation_token_sha256: Digest
   immutable_fingerprint_sha256: Digest
+}
+
+function ownershipLabels(metadata: OwnershipMetadataV1): Record<string, string> {
+  return {
+    "hasna.installation_sha256": metadata.installation_sha256,
+    "hasna.provider_scope_ref_sha256": metadata.provider_scope_ref_sha256,
+    "hasna.ownership_nonce_sha256": metadata.ownership_nonce_sha256,
+    "hasna.creation_token_sha256": metadata.creation_token_sha256,
+    "hasna.immutable_fingerprint_sha256": metadata.immutable_fingerprint_sha256,
+  }
+}
+
+export function buildE2bExactOwnershipListOptions(metadata: OwnershipMetadataV1): SandboxListOpts {
+  return { query: { metadata: ownershipLabels(metadata) }, limit: 100 }
+}
+
+export function buildDaytonaExactOwnershipListQuery(metadata: OwnershipMetadataV1): ListSandboxesQuery {
+  return { labels: ownershipLabels(metadata), limit: 100 }
 }
 
 export interface E2bCreateMappingInputV1 {
@@ -56,11 +77,7 @@ export type SafeE2bCreateOptionsV1 = Omit<
 export function buildE2bCreateOptions(input: E2bCreateMappingInputV1): SafeE2bCreateOptionsV1 {
   const options = {
     template: input.template,
-    metadata: {
-      "hasna.installation_sha256": input.metadata.installation_sha256,
-      "hasna.creation_token_sha256": input.metadata.creation_token_sha256,
-      "hasna.immutable_fingerprint_sha256": input.metadata.immutable_fingerprint_sha256,
-    },
+    metadata: ownershipLabels(input.metadata),
     envs: {},
     timeoutMs: input.max_runtime_ms,
     secure: true,
@@ -78,19 +95,16 @@ export function buildE2bCreateOptions(input: E2bCreateMappingInputV1): SafeE2bCr
 }
 
 export interface DaytonaCreateMappingInputV1 {
-  snapshot: string
+  image: string
   labels: OwnershipMetadataV1
   resources: Resources
 }
 
-export function buildDaytonaCreateParams(input: DaytonaCreateMappingInputV1): CreateSandboxFromSnapshotParams {
+export function buildDaytonaCreateParams(input: DaytonaCreateMappingInputV1): CreateSandboxFromImageParams {
   return {
-    snapshot: input.snapshot,
-    labels: {
-      "hasna.installation_sha256": input.labels.installation_sha256,
-      "hasna.creation_token_sha256": input.labels.creation_token_sha256,
-      "hasna.immutable_fingerprint_sha256": input.labels.immutable_fingerprint_sha256,
-    },
+    image: input.image,
+    resources: input.resources,
+    labels: ownershipLabels(input.labels),
     envVars: {},
     public: false,
     autoStopInterval: 0,

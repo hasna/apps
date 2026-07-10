@@ -70,8 +70,14 @@ export interface ProviderOperationV1 {
   deadline: string
 }
 
+export type ProviderOutcomeKindV1 = "succeeded" | "failed_effect" | "failed_no_effect" | "reconciliation_blocked"
+
 export interface JournalRecordV1 {
   schema_version: "sandboxes.effect-journal/v1"
+  outcome_schema_version: "infinity.effect-journal-outcome/v1"
+  outcome_schema_sha256: Digest
+  outcome_kind: ProviderOutcomeKindV1 | null
+  provider_receipt_sha256: Digest | null
   semantic_step: ProviderOperationNameV1
   operation_id: string
   operation_step_id: string
@@ -100,12 +106,15 @@ export interface JournalAnchorReceiptV1 {
 
 export interface FailedNoEffectAuthorizationV1 {
   schema_version: "sandboxes.failed-no-effect/v1"
+  outcome_kind: "failed_no_effect"
   previous_operation_execution_epoch: bigint
   successor_operation_execution_epoch: bigint
   target_sha256: Digest
+  request_sha256: Digest
   resource_id: string
   provider_idempotency_token_sha256: Digest
   operation_digest: Digest
+  prior_outcome_anchor_sha256: Digest
   evidence_sha256: Digest
 }
 
@@ -191,6 +200,12 @@ export type ProviderResourcePhysicalStateV1 = "inert" | "active" | "transitionin
 
 export type ProviderRuntimeStateV1 = "started_locked" | "paused" | "stopped" | "active" | "unknown"
 
+export interface ProviderOwnershipObservationV1 {
+  installation_id_sha256: Digest
+  provider_scope_ref_sha256: Digest
+  ownership_nonce_sha256: Digest
+}
+
 export interface AdapterProviderResourceV1 {
   opaque_resource_id: string
   provider_creation_token_sha256: Digest
@@ -206,6 +221,7 @@ export interface AdapterProviderResourceV1 {
   source_attached: boolean
   credential_attached: boolean
   guest_broker_bootstrapped: boolean
+  ownership: ProviderOwnershipObservationV1
 }
 
 export interface ProviderResourcePageV1 {
@@ -222,12 +238,14 @@ export interface ProviderCapabilitiesV1 {
   typed_argv_exec: boolean
   fixed_bootstrap_broker: boolean
   typed_broker_frames: boolean
+  idempotent_activation_continuation: boolean
   native_bounded_files: boolean
   atomic_file_write: boolean
   whole_guest_cancel: boolean
   non_destructive_pause: boolean
   stop_preserves_filesystem: boolean
   conditional_destroy: boolean
+  locked_destroy_compensation: boolean
   provider_snapshot_hint: boolean
   ownership_inventory: boolean
 }
@@ -257,9 +275,15 @@ export interface GuestBrokerAttestationV1 {
   attested_at: string
 }
 
+export interface ProviderActivationOutcomeV1 {
+  resource: AdapterProviderResourceV1
+  network_policy: NetworkPolicyObservationV1
+  guest_broker: GuestBrokerAttestationV1
+}
+
 export type GuestBrokerRequestV1 =
   | { operation: "exec_start"; spec: ExecSpecV1 }
-  | { operation: "exec_stream"; exec: ProviderExecHandleV1 }
+  | { operation: "exec_stream"; exec: ProviderExecHandleV1; max_bytes: number }
   | { operation: "exec_cancel"; exec: ProviderExecHandleV1 }
   | { operation: "file_stat"; path: WorkspacePath }
   | { operation: "file_read"; request: FileReadV1 }
@@ -270,6 +294,14 @@ export interface GuestBrokerRequestFrameV1 {
   schema_version: "sandboxes.guest-broker-frame/v1"
   operation: GuestBrokerRequestV1["operation"]
   immutable_fingerprint_sha256: Digest
+  target_sha256: Digest
+  fence_sha256: Digest
+  request_sha256: Digest
+  provider_idempotency_token_sha256: Digest
+  operation_execution_epoch: bigint
+  protocol_sha256: Digest
+  provider_session_binding_sha256: Digest
+  frame_nonce_sha256: Digest
   payload_sha256: Digest
   frame_sha256: Digest
   payload_bytes: Uint8Array
@@ -325,6 +357,14 @@ export interface ByteChunkV1 {
   offset: number
   bytes: Uint8Array
   sha256: Digest
+  total_file_sha256: Digest
+  file_revision: bigint
+}
+
+export interface ProviderFileReadChunkV1 {
+  bytes: Uint8Array
+  total_file_sha256: Digest
+  file_revision: bigint
 }
 
 export interface FileWriteV1 {
@@ -348,6 +388,22 @@ export interface FileListV1 {
   cursor?: string
   limit: number
 }
+
+export type ManagedProviderRequestV1 =
+  | { operation: "create_inert"; spec: AdapterSandboxSpecV1; allocation_key_sha256: Digest }
+  | { operation: "activate"; authorization: ActivationDispatchAuthorizationV1 }
+  | { operation: "inspect" }
+  | { operation: "exec_start"; spec: ExecSpecV1 }
+  | { operation: "exec_stream"; exec_fingerprint_sha256: Digest; max_bytes: number }
+  | { operation: "exec_cancel"; exec_fingerprint_sha256: Digest }
+  | { operation: "file_stat"; path: WorkspacePath }
+  | { operation: "file_read"; request: FileReadV1 }
+  | { operation: "file_write"; request: FileWriteV1 }
+  | { operation: "file_list"; request: FileListV1 }
+  | { operation: "checkpoint_hint" }
+  | { operation: "expire" }
+  | { operation: "quarantine" }
+  | { operation: "destroy"; cleanup_grant_sha256: Digest; cleanup_basis_sha256: Digest }
 
 export interface FilePageV1 {
   items: Array<{
@@ -401,6 +457,7 @@ export interface ActivationReceiptV1 {
   network_policy: NetworkPolicyObservationV1
   activation_grant_sha256: Digest
   guest_broker_attestation_sha256: Digest
+  generation_transition_sha256: Digest
   provider_receipt_sha256: Digest
   provider_outcome_anchor_sha256: Digest
 }
@@ -408,6 +465,7 @@ export interface ActivationReceiptV1 {
 export interface ExpireObservationV1 {
   observation: "safety_stopped"
   immutable_fingerprint_sha256: Digest
+  generation_transition_sha256: Digest
   provider_receipt_sha256: Digest
   provider_outcome_anchor_sha256: Digest
 }
@@ -417,6 +475,7 @@ export type QuarantineObservationV1 = ExpireObservationV1
 export interface DestroyObservationV1 {
   terminal_condition: "verified_absent"
   immutable_fingerprint_sha256: Digest
+  generation_transition_sha256: Digest
   provider_receipt_sha256: Digest
   provider_outcome_anchor_sha256: Digest
 }
@@ -438,6 +497,7 @@ export interface OwnedProviderHandleV1 {
   resource_lease_id: string
   resource_id: string
   resource_lifecycle_generation: bigint
+  generation_transition_sha256: Digest
   spec_sha256: Digest
   provider_outcome_anchor_sha256: Digest
 }
@@ -452,6 +512,15 @@ export interface AdapterDescriptorV1 {
   architecture: ReadonlyArray<"arm64" | "amd64">
   admission: "enabled" | "disabled"
   admission_evidence_sha256: Digest
+  live_capability_evidence_verified: boolean
+  mandatory_capability_claims: {
+    strong_vm: boolean
+    outside_guest_network_enforcement: boolean
+    whole_guest_cancel: boolean
+    atomic_bounded_files: boolean
+    ownership_reconciliation: boolean
+    destructive_semantics: boolean
+  }
   provider_results_are_canonical_state: false
   provider_snapshot_is_canonical_checkpoint: false
 }
@@ -460,6 +529,7 @@ export interface ProviderAdmissionV1 {
   admitted: boolean
   evidence_sha256: Digest
   exact_sdk_version: string
+  evidence_kind: "live_conformance" | "hermetic_conformance"
 }
 
 export interface ReadRetryPolicyV1 {
@@ -486,6 +556,44 @@ export interface AdapterLifecycleLockPortV1 {
   withLock<T>(lifecycleKeySha256: Digest, use: () => Promise<T>): Promise<T>
 }
 
+/** Trusted cryptographic/frontier verification for externally anchored records. */
+export interface AdapterJournalAnchorVerifierPortV1 {
+  /** Includes signature, contiguous frontier, and any prior failed-no-effect outcome proof. */
+  assertVerified(ctx: AdapterCallContextV1, operation: ProviderOperationV1): Promise<void>
+}
+
+export interface AdapterAdmissionVerifierPortV1 {
+  assertAdmitted(request: {
+    provider: ManagedProviderIdV1
+    sdk_version: string
+    adapter_build_sha256: Digest
+    evidence_sha256: Digest
+    evidence_kind: ProviderAdmissionV1["evidence_kind"]
+  }): Promise<void>
+}
+
+export type PhysicalSafetyFenceReasonV1 =
+  | "provider_effect_ambiguous"
+  | "output_limit"
+  | "whole_guest_cancel_unproven"
+
+export interface AdapterPhysicalSafetyGatePortV1 {
+  assertOpen(ctx: AdapterCallContextV1, operation: ProviderOperationV1): Promise<void>
+  contain(
+    ctx: AdapterCallContextV1,
+    operation: ProviderOperationV1,
+    reason: PhysicalSafetyFenceReasonV1,
+  ): Promise<void>
+}
+
+export interface AdapterNetworkPolicyVerifierPortV1 {
+  assertAuthorized(
+    ctx: AdapterCallContextV1,
+    operation: ProviderOperationV1,
+    observation: NetworkPolicyObservationV1,
+  ): Promise<void>
+}
+
 export interface ManagedAdapterDependenciesV1 {
   credential_port: ManagedProviderCredentialPortV1
   installation_id: string
@@ -496,6 +604,10 @@ export interface ManagedAdapterDependenciesV1 {
   read_retry_policy: ReadRetryPolicyV1
   effect_guard: AdapterEffectGuardPortV1
   lifecycle_lock: AdapterLifecycleLockPortV1
+  journal_anchor_verifier: AdapterJournalAnchorVerifierPortV1
+  admission_verifier: AdapterAdmissionVerifierPortV1
+  physical_safety_gate: AdapterPhysicalSafetyGatePortV1
+  network_policy_verifier: AdapterNetworkPolicyVerifierPortV1
 }
 
 export interface ManagedProviderControlPortV1 {
@@ -504,36 +616,47 @@ export interface ManagedProviderControlPortV1 {
   findByCreationToken(token: Digest, cursor?: string): Promise<ProviderResourcePageV1>
   createInert(request: ProviderCreateInertRequestV1): Promise<AdapterProviderResourceV1>
   inspectResource(opaqueResourceId: string): Promise<AdapterProviderResourceV1 | "absent">
-  applyNetworkPolicy(opaqueResourceId: string, policy: NetworkPolicyV1): Promise<NetworkPolicyObservationV1>
-  activateResource(opaqueResourceId: string): Promise<AdapterProviderResourceV1>
-  pauseOrStopResource(opaqueResourceId: string): Promise<AdapterProviderResourceV1>
-  destroyResource(opaqueResourceId: string, expectedVersion: string): Promise<void>
+  applyNetworkPolicy(opaqueResourceId: string, policy: NetworkPolicyV1, target: ProviderEffectTargetV1): Promise<NetworkPolicyObservationV1>
+  activateResource(opaqueResourceId: string, target: ProviderEffectTargetV1): Promise<AdapterProviderResourceV1>
+  pauseOrStopResource(opaqueResourceId: string, target: ProviderEffectTargetV1): Promise<AdapterProviderResourceV1>
+  destroyResource(opaqueResourceId: string, expectedVersion: string, target: ProviderEffectTargetV1): Promise<void>
   bootstrapGuestBroker(
     opaqueResourceId: string,
     command: ManagedGuestBrokerBootstrapCommandV1,
     expectedFingerprint: Digest,
+    target: ProviderEffectTargetV1,
   ): Promise<GuestBrokerAttestationV1>
   inspectGuestBroker(opaqueResourceId: string): Promise<GuestBrokerAttestationV1 | "absent">
+  activateCompensated(
+    opaqueResourceId: string,
+    policy: NetworkPolicyV1,
+    command: ManagedGuestBrokerBootstrapCommandV1,
+    expectedFingerprint: Digest,
+    target: ProviderEffectTargetV1,
+  ): Promise<ProviderActivationOutcomeV1>
   startExec(
     opaqueResourceId: string,
     broker: GuestBrokerAttestationV1,
     frame: GuestBrokerRequestFrameV1,
+    target: ProviderEffectTargetV1,
   ): Promise<ProviderExecHandleV1>
   streamExec(
     opaqueResourceId: string,
     broker: GuestBrokerAttestationV1,
     frame: GuestBrokerRequestFrameV1,
+    target: ProviderEffectTargetV1,
   ): AsyncIterable<ProviderExecStreamEventV1>
   cancelExec(
     opaqueResourceId: string,
     broker: GuestBrokerAttestationV1,
     frame: GuestBrokerRequestFrameV1,
+    target: ProviderEffectTargetV1,
   ): Promise<{ whole_guest_scope_terminated: boolean }>
   statFile(opaqueResourceId: string, broker: GuestBrokerAttestationV1, frame: GuestBrokerRequestFrameV1): Promise<FileStatV1>
-  readFile(opaqueResourceId: string, broker: GuestBrokerAttestationV1, frame: GuestBrokerRequestFrameV1): AsyncIterable<Uint8Array>
-  writeFileAtomic(opaqueResourceId: string, broker: GuestBrokerAttestationV1, frame: GuestBrokerRequestFrameV1): Promise<FileWriteReceiptV1>
+  readFile(opaqueResourceId: string, broker: GuestBrokerAttestationV1, frame: GuestBrokerRequestFrameV1): AsyncIterable<ProviderFileReadChunkV1>
+  writeFileAtomic(opaqueResourceId: string, broker: GuestBrokerAttestationV1, frame: GuestBrokerRequestFrameV1, target: ProviderEffectTargetV1): Promise<FileWriteReceiptV1>
   listFiles(opaqueResourceId: string, broker: GuestBrokerAttestationV1, frame: GuestBrokerRequestFrameV1): Promise<FilePageV1>
-  createSnapshotHint(opaqueResourceId: string): Promise<ProviderSnapshotHintV1>
+  createSnapshotHint(opaqueResourceId: string, target: ProviderEffectTargetV1): Promise<ProviderSnapshotHintV1>
   lookupOperation(target: ProviderEffectTargetV1): Promise<ProviderMutationOutcomeV1>
   listOwnedResources(cursor?: string): Promise<ProviderResourcePageV1>
 }

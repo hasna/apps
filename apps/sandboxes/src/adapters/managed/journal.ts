@@ -9,6 +9,10 @@ import type {
   ProviderOperationV1,
 } from "./types"
 
+export const EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION = "infinity.effect-journal-outcome/v1" as const
+export const EFFECT_JOURNAL_OUTCOME_SCHEMA_SHA256 =
+  "sha256:7ab380a0475ebf79d2ed925e20bcbb9303d78a56c358d09adbdce796e740bf20" as const
+
 export function failedNoEffectAuthorizationPayloadSha256(
   authorization: FailedNoEffectAuthorizationV1,
 ): Digest {
@@ -19,12 +23,12 @@ export function failedNoEffectAuthorizationPayloadSha256(
 }
 
 function recordIdentity(record: JournalRecordV1): string {
-  return [
-    record.operation_id,
-    record.operation_step_id,
-    record.operation_execution_epoch.toString(10),
-    record.record_kind,
-  ].join("\u001f")
+  return canonicalSha256({
+    operation_id: record.operation_id,
+    operation_step_id: record.operation_step_id,
+    operation_execution_epoch: record.operation_execution_epoch,
+    record_kind: record.record_kind,
+  })
 }
 
 export class JournalIdentityLedgerV1 {
@@ -44,7 +48,14 @@ export class JournalIdentityLedgerV1 {
 }
 
 function validateReceipt(receipt: JournalAnchorReceiptV1): void {
-  if (!isDigest(receipt.record_sha256) || canonicalSha256(receipt.record) !== receipt.record_sha256) {
+  if (
+    !isDigest(receipt.record_sha256) ||
+    canonicalSha256(receipt.record) !== receipt.record_sha256 ||
+    receipt.record.outcome_schema_version !== EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION ||
+    receipt.record.outcome_schema_sha256 !== EFFECT_JOURNAL_OUTCOME_SCHEMA_SHA256 ||
+    (receipt.record.record_kind === "OUTCOME" &&
+      (receipt.record.outcome_kind === null || !isDigest(receipt.record.provider_receipt_sha256)))
+  ) {
     throw adapterError("dispatch_anchor_mismatch")
   }
   if (receipt.signer_principal.length === 0 || Number.isNaN(Date.parse(receipt.anchored_at))) {
@@ -63,6 +74,8 @@ function assertAnchorRecord(
   const expectedFence = ctx.fence
   if (
     record.record_kind !== expectedKind ||
+    record.outcome_kind !== null ||
+    record.provider_receipt_sha256 !== null ||
     record.semantic_step !== op.operation ||
     record.operation_id !== op.target.operation_id ||
     record.operation_step_id !== op.target.operation_step_id ||
@@ -110,13 +123,15 @@ function validateHigherEpoch(ctx: AdapterCallContextV1, op: ProviderOperationV1)
   if (
     ctx.invocation_anchor.duplicate ||
     proof.schema_version !== "sandboxes.failed-no-effect/v1" ||
+    proof.outcome_kind !== "failed_no_effect" ||
+    !isDigest(proof.prior_outcome_anchor_sha256) ||
     !isDigest(proof.evidence_sha256) ||
     ctx.invocation_anchor.record.payload_sha256 !== failedNoEffectAuthorizationPayloadSha256(proof)
   ) {
     throw adapterError("dispatch_anchor_mismatch")
   }
   if (
-    predecessor >= ctx.fence.operation_execution_epoch ||
+    predecessor + 1n !== ctx.fence.operation_execution_epoch ||
     proof.previous_operation_execution_epoch !== predecessor ||
     proof.successor_operation_execution_epoch !== ctx.fence.operation_execution_epoch
   ) {
@@ -124,6 +139,7 @@ function validateHigherEpoch(ctx: AdapterCallContextV1, op: ProviderOperationV1)
   }
   if (
     proof.target_sha256 !== canonicalSha256(op.target) ||
+    proof.request_sha256 !== op.request_sha256 ||
     proof.resource_id !== op.target.resource_id ||
     proof.provider_idempotency_token_sha256 !== op.target.provider_idempotency_token_sha256 ||
     proof.operation_digest !== op.target.operation_digest
@@ -161,9 +177,14 @@ export function outcomeRecord(
   ctx: AdapterCallContextV1,
   op: ProviderOperationV1,
   payloadSha256: Digest,
+  providerReceiptSha256: Digest,
 ): JournalRecordV1 {
   return {
     schema_version: "sandboxes.effect-journal/v1",
+    outcome_schema_version: EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION,
+    outcome_schema_sha256: EFFECT_JOURNAL_OUTCOME_SCHEMA_SHA256,
+    outcome_kind: "succeeded",
+    provider_receipt_sha256: providerReceiptSha256,
     semantic_step: op.operation,
     operation_id: op.target.operation_id,
     operation_step_id: op.target.operation_step_id,
@@ -190,7 +211,13 @@ export async function anchorOutcome(
   op: ProviderOperationV1,
   safeOutcome: unknown,
 ): Promise<Digest> {
-  const record = outcomeRecord(ctx, op, canonicalSha256(safeOutcome))
+  const payloadSha256 = canonicalSha256(safeOutcome)
+  const candidate =
+    safeOutcome !== null && typeof safeOutcome === "object"
+      ? (safeOutcome as { provider_receipt_sha256?: unknown }).provider_receipt_sha256
+      : undefined
+  const providerReceiptSha256 = isDigest(candidate) ? candidate : payloadSha256
+  const record = outcomeRecord(ctx, op, payloadSha256, providerReceiptSha256)
   let receipt: JournalAnchorReceiptV1
   try {
     receipt = await ctx.outcome_journal.appendOutcome(record)

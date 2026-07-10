@@ -8,6 +8,7 @@ import {
   createDaytonaCloudAdapter,
   createE2bAdapter,
   decodeGuestBrokerRequestFrame,
+  managedProviderRequestSha256,
   validateWorkspacePath,
   type AdapterCallContextV1,
   type ActivationDispatchAuthorizationV1,
@@ -19,15 +20,19 @@ import {
 import {
   BROKER_ONLY_POLICY,
   FakeCredentialPort,
+  FakeAdmissionVerifier,
   FakeEffectGuard,
   FakeJournal,
+  FakeJournalAnchorVerifier,
+  FakePhysicalSafetyGate,
+  FakeNetworkPolicyVerifier,
   FakeLifecycleLock,
   FakeProviderClient,
   READ_RETRY_POLICY,
   bindAuthorization,
   digest,
   makeContext,
-  makeOperation,
+  makeOperation as makeRawOperation,
 } from "./fakes"
 
 const SPEC = {
@@ -54,6 +59,61 @@ const EXEC_SPEC = {
   tty: false as const,
 }
 
+function makeOperation(...args: Parameters<typeof makeRawOperation>): ReturnType<typeof makeRawOperation> {
+  const op = makeRawOperation(...args)
+  const request = (() => {
+    switch (op.operation) {
+      case "create_inert":
+        return { operation: "create_inert" as const, spec: SPEC, allocation_key_sha256: digest("77") }
+      case "activate":
+        return { operation: "activate" as const, authorization: activationAuthorization(op) }
+      case "inspect":
+        return { operation: "inspect" as const }
+      case "exec_start":
+        return { operation: "exec_start" as const, spec: EXEC_SPEC }
+      case "exec_stream":
+        return { operation: "exec_stream" as const, exec_fingerprint_sha256: digest("51"), max_bytes: 32 }
+      case "exec_cancel":
+        return { operation: "exec_cancel" as const, exec_fingerprint_sha256: digest("51") }
+      case "file_stat":
+        return { operation: "file_stat" as const, path: validateWorkspacePath("repo/file.txt") }
+      case "file_read":
+        return {
+          operation: "file_read" as const,
+          request: { path: validateWorkspacePath("repo/file.txt"), offset: 0, length: 10 },
+        }
+      case "file_write":
+        return {
+          operation: "file_write" as const,
+          request: {
+            path: validateWorkspacePath("repo/file.txt"),
+            bytes: new TextEncoder().encode("safe bytes"),
+            if_absent: true,
+          },
+        }
+      case "file_list":
+        return {
+          operation: "file_list" as const,
+          request: { path: validateWorkspacePath("repo"), limit: 100 },
+        }
+      case "checkpoint_hint":
+        return { operation: "checkpoint_hint" as const }
+      case "expire":
+        return { operation: "expire" as const }
+      case "quarantine":
+        return { operation: "quarantine" as const }
+      case "destroy":
+        return {
+          operation: "destroy" as const,
+          cleanup_grant_sha256: digest("91"),
+          cleanup_basis_sha256: digest("92"),
+        }
+    }
+  })()
+  op.request_sha256 = managedProviderRequestSha256(request)
+  return op
+}
+
 type Harness = {
   adapter: ManagedProviderAdapterV1
   client: FakeProviderClient
@@ -61,6 +121,10 @@ type Harness = {
   journal: FakeJournal
   effectGuard: FakeEffectGuard
   lifecycleLock: FakeLifecycleLock
+  anchorVerifier: FakeJournalAnchorVerifier
+  admissionVerifier: FakeAdmissionVerifier
+  physicalSafetyGate: FakePhysicalSafetyGate
+  networkPolicyVerifier: FakeNetworkPolicyVerifier
 }
 
 function harness(provider: ManagedProviderIdV1): Harness {
@@ -69,6 +133,10 @@ function harness(provider: ManagedProviderIdV1): Harness {
   const journal = new FakeJournal()
   const effectGuard = new FakeEffectGuard()
   const lifecycleLock = new FakeLifecycleLock()
+  const anchorVerifier = new FakeJournalAnchorVerifier()
+  const admissionVerifier = new FakeAdmissionVerifier()
+  const physicalSafetyGate = new FakePhysicalSafetyGate()
+  const networkPolicyVerifier = new FakeNetworkPolicyVerifier()
   const deps = {
     credential_port: credentials,
     installation_id: "installation-1",
@@ -79,10 +147,15 @@ function harness(provider: ManagedProviderIdV1): Harness {
       admitted: true,
       evidence_sha256: digest("76"),
       exact_sdk_version: provider === "e2b" ? "2.31.0" : "0.193.0",
+      evidence_kind: "hermetic_conformance",
     },
     read_retry_policy: READ_RETRY_POLICY,
     effect_guard: effectGuard,
     lifecycle_lock: lifecycleLock,
+    journal_anchor_verifier: anchorVerifier,
+    admission_verifier: admissionVerifier,
+    physical_safety_gate: physicalSafetyGate,
+    network_policy_verifier: networkPolicyVerifier,
   } as const
   return {
     adapter: provider === "e2b" ? createE2bAdapter(deps) : createDaytonaCloudAdapter(deps),
@@ -91,6 +164,10 @@ function harness(provider: ManagedProviderIdV1): Harness {
     journal,
     effectGuard,
     lifecycleLock,
+    anchorVerifier,
+    admissionVerifier,
+    physicalSafetyGate,
+    networkPolicyVerifier,
   }
 }
 
@@ -220,6 +297,21 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
       expect(h.client.createCalls).toBe(0)
     })
 
+    test("rejects exact-token resources owned by another installation or nonce", async () => {
+      const h = harness(provider)
+      const op = makeOperation("create_inert")
+      const resource = h.client.makeResource(op.target)
+      resource.ownership = { ...resource.ownership, installation_id_sha256: digest("aa") }
+      h.client.seed(resource)
+
+      await expect(h.adapter.create_inert(makeContext(op, h.journal), SPEC, op, digest("77"))).rejects.toMatchObject({
+        code: "provider_state_unknown",
+        quarantine_required: true,
+      })
+      expect(h.client.createCalls).toBe(0)
+      expect(h.journal.outcomes).toHaveLength(0)
+    })
+
     test("quarantines an ambiguous create with no exact match and never retries mutation", async () => {
       const h = harness(provider)
       h.client.createError = new Error("provider timeout with internal provider id")
@@ -230,6 +322,7 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
         quarantine_required: true,
       })
       expect(h.client.createCalls).toBe(1)
+      expect(h.journal.outcomes).toHaveLength(0)
     })
 
     test("rejects duplicate or conflicting token inventory instead of choosing a resource", async () => {
@@ -243,6 +336,19 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
         quarantine_required: true,
       })
       expect(h.client.createCalls).toBe(0)
+    })
+
+    test("re-enumerates and quarantines multiplicity before sealing a create response", async () => {
+      const h = harness(provider)
+      h.client.duplicateAfterCreate = true
+      const op = makeOperation("create_inert")
+
+      await expect(h.adapter.create_inert(makeContext(op, h.journal), SPEC, op, digest("77"))).rejects.toMatchObject({
+        code: "provider_state_unknown",
+        quarantine_required: true,
+      })
+      expect(h.client.createCalls).toBe(1)
+      expect(h.journal.outcomes).toHaveLength(0)
     })
 
     test("requires exact intent and dispatched anchors before credential or SDK reachability", async () => {
@@ -262,6 +368,43 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
       })
       expect(h.credentials.acquisitions).toBe(0)
       expect(h.client.createCalls).toBe(0)
+    })
+
+    test("recomputes actual effect arguments against the anchored request digest", async () => {
+      const h = harness(provider)
+      const op = makeOperation("create_inert")
+      const changedSpec = { ...SPEC, max_runtime_ms: SPEC.max_runtime_ms + 1 }
+
+      await expect(
+        h.adapter.create_inert(makeContext(op, h.journal), changedSpec, op, digest("77")),
+      ).rejects.toMatchObject({ code: "request_digest_mismatch" })
+      expect(h.credentials.acquisitions).toBe(0)
+      expect(h.client.createCalls).toBe(0)
+    })
+
+    test("requires trusted signature/frontier verification before credential or SDK reachability", async () => {
+      const h = harness(provider)
+      h.anchorVerifier.reject = true
+      const op = makeOperation("create_inert")
+
+      await expect(h.adapter.create_inert(makeContext(op, h.journal), SPEC, op, digest("77"))).rejects.toMatchObject({
+        code: "dispatch_anchor_mismatch",
+      })
+      expect(h.anchorVerifier.calls).toBe(1)
+      expect(h.credentials.acquisitions).toBe(0)
+      expect(h.client.createCalls).toBe(0)
+    })
+
+    test("requires trusted admission verification and never enables hermetic evidence", async () => {
+      const h = harness(provider)
+      expect((await h.adapter.descriptor()).admission).toBe("disabled")
+      h.admissionVerifier.reject = true
+      const op = makeOperation("create_inert")
+
+      await expect(h.adapter.create_inert(makeContext(op, h.journal), SPEC, op, digest("77"))).rejects.toMatchObject({
+        code: "unsupported_runtime_feature",
+      })
+      expect(h.credentials.acquisitions).toBe(0)
     })
 
     test("an exact duplicate dispatch record never repeats the provider mutation", async () => {
@@ -297,6 +440,18 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
       expect(h.client.createCalls).toBe(0)
     })
 
+    test("requires an independent physical safety gate immediately before mutation", async () => {
+      const h = harness(provider)
+      h.physicalSafetyGate.rejectOpen = true
+      const op = makeOperation("create_inert")
+
+      await expect(h.adapter.create_inert(makeContext(op, h.journal), SPEC, op, digest("77"))).rejects.toMatchObject({
+        code: "stale_operation_execution_epoch",
+      })
+      expect(h.physicalSafetyGate.assertOpenCalls).toBe(1)
+      expect(h.client.createCalls).toBe(0)
+    })
+
     test("fails closed on inert deny-all network readback mismatch", async () => {
       const h = harness(provider)
       h.client.networkMismatch = true
@@ -324,6 +479,9 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
       expect(receipt.network_policy.policy_sha256).toBe(BROKER_ONLY_POLICY.policy_sha256)
       expect(receipt).not.toHaveProperty("state_transition")
       expect(h.client.activateCalls).toBe(1)
+      expect(handle.provider_creation_token_sha256).not.toBe(op.target.provider_idempotency_token_sha256)
+      expect(new Set(h.lifecycleLock.keys).size).toBe(1)
+      expect(h.client.mutationTokens).toContain(op.target.provider_idempotency_token_sha256)
     })
 
     test("does not activate when policy readback differs", async () => {
@@ -394,6 +552,63 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
       expect(frames.map((frame) => frame.stream)).toEqual(["stdout", "stderr", "terminal"])
     })
 
+    test("rechecks current authority before every provider stream pull", async () => {
+      const h = harness(provider)
+      const handle = await create(h)
+      await activate(h, handle)
+      const start = makeOperation("exec_start", { generation_transition: undefined })
+      const exec = await h.adapter.start_exec(makeContext(start, h.journal), handle, EXEC_SPEC, start)
+      const priorReads = h.effectGuard.calls.filter((phase) => phase === "before_provider_read").length
+      h.effectGuard.rejectOnReadCall = priorReads + 4
+      const streamOp = makeOperation("exec_stream", {
+        external_anchor_kind: "READ_PROBE",
+        generation_transition: undefined,
+      })
+
+      await expect(async () => {
+        for await (const _frame of h.adapter.stream_exec(
+          makeContext(streamOp, h.journal),
+          handle,
+          exec,
+          streamOp,
+          32,
+        )) {
+          // Provider output is buffered only inside the authenticated, locked callback.
+        }
+      }).toThrowError(expect.objectContaining({ code: "stale_operation_execution_epoch" }))
+      expect(h.client.streamPulls).toBe(1)
+    })
+
+    test("trips the independent safety fence when provider output exceeds the signed bound", async () => {
+      const h = harness(provider)
+      const handle = await create(h)
+      await activate(h, handle)
+      const start = makeOperation("exec_start", { generation_transition: undefined })
+      const exec = await h.adapter.start_exec(makeContext(start, h.journal), handle, EXEC_SPEC, start)
+      const streamOp = makeOperation("exec_stream", {
+        external_anchor_kind: "READ_PROBE",
+        generation_transition: undefined,
+      })
+      streamOp.request_sha256 = managedProviderRequestSha256({
+        operation: "exec_stream",
+        exec_fingerprint_sha256: exec.immutable_exec_fingerprint_sha256,
+        max_bytes: 4,
+      })
+
+      await expect(async () => {
+        for await (const _frame of h.adapter.stream_exec(
+          makeContext(streamOp, h.journal),
+          handle,
+          exec,
+          streamOp,
+          4,
+        )) {
+          // Fully consumed inside adapter.
+        }
+      }).toThrowError(expect.objectContaining({ code: "output_limit_exceeded" }))
+      expect(h.physicalSafetyGate.containReasons).toContain("output_limit")
+    })
+
     test("fails closed when the guest-broker attestation changes after activation", async () => {
       const h = harness(provider)
       const handle = await create(h)
@@ -404,6 +619,22 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
         ...attestation,
         protocol_sha256: digest("ff"),
       })
+      const start = makeOperation("exec_start", { generation_transition: undefined })
+
+      await expect(
+        h.adapter.start_exec(makeContext(start, h.journal), handle, EXEC_SPEC, start),
+      ).rejects.toMatchObject({ code: "provider_state_unknown", quarantine_required: true })
+      expect(h.client.brokerFrames).toEqual([])
+    })
+
+    test("blocks exec when outside-guest network policy drifts after activation", async () => {
+      const h = harness(provider)
+      const handle = await create(h)
+      await activate(h, handle)
+      h.networkPolicyVerifier.expected = BROKER_ONLY_POLICY
+      const resource = h.client.resources.get(handle.opaque_resource_id)
+      if (resource === undefined) throw new Error("fixture resource missing")
+      resource.network_policy = { ...resource.network_policy, policy_sha256: digest("fe") }
       const start = makeOperation("exec_start", { generation_transition: undefined })
 
       await expect(
@@ -426,6 +657,7 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
         quarantine_required: true,
       })
       expect(h.client.cancelCalls).toBe(1)
+      expect(h.physicalSafetyGate.containReasons).toContain("whole_guest_cancel_unproven")
     })
 
     test("rejects workspace escapes before the credential port", async () => {
@@ -464,11 +696,26 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
         request: { path: "repo/file.txt", if_absent: true },
       })
 
+      const conflictingWrite = makeOperation("file_write", {
+        external_anchor_kind: "DISPATCHED",
+        generation_transition: undefined,
+      })
+      await expect(
+        h.adapter.write_file(
+          makeContext(conflictingWrite, h.journal),
+          handle,
+          { path: validateWorkspacePath("repo/file.txt"), bytes, if_absent: true },
+          conflictingWrite,
+        ),
+      ).rejects.toMatchObject({ code: "provider_state_unknown", quarantine_required: true })
+
       const readOp = makeOperation("file_read", {
         external_anchor_kind: "READ_PROBE",
         generation_transition: undefined,
       })
       const chunks = []
+      let totalFileSha256
+      let fileRevision
       for await (const chunk of h.adapter.read_file(
         makeContext(readOp, h.journal),
         handle,
@@ -476,8 +723,14 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
         readOp,
       )) {
         chunks.push(...chunk.bytes)
+        totalFileSha256 = chunk.total_file_sha256
+        fileRevision = chunk.file_revision
       }
       expect(new TextDecoder().decode(new Uint8Array(chunks))).toBe("safe bytes")
+      expect(totalFileSha256).toBe(canonicalSha256(bytes))
+      expect(fileRevision).toBe(1n)
+      const readFrame = h.client.brokerFrames.at(-1)
+      expect(readFrame).toBeDefined()
     })
 
     test("provider checkpoint is explicitly non-canonical and cannot authorize cleanup", async () => {
@@ -514,6 +767,35 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
       expect(observation.terminal_condition).toBe("verified_absent")
       expect(h.client.destroyCalls).toBe(1)
       expect(h.client.providerEvents.slice(-3)).toEqual(["inspect", "destroy", "inspect"])
+      expect(new Set(h.lifecycleLock.keys).size).toBe(1)
+    })
+
+    test("fails closed on post-delete incarnation mismatch instead of accepting later absence", async () => {
+      const h = harness(provider)
+      const handle = await create(h)
+      h.client.postDestroyMismatchThenAbsent = true
+      const op = makeOperation("destroy")
+
+      await expect(h.adapter.destroy(destroyContext(h, op), handle, op)).rejects.toMatchObject({
+        code: "provider_state_unknown",
+        quarantine_required: true,
+      })
+      expect(h.client.postDestroyMismatchServed).toBe(true)
+      expect(h.journal.outcomes).toHaveLength(1)
+    })
+
+    test("does not treat native-ID absence as cleanup when the creation token was reused", async () => {
+      const h = harness(provider)
+      const handle = await create(h)
+      h.client.replacementAfterDestroy = true
+      const op = makeOperation("destroy")
+
+      await expect(h.adapter.destroy(destroyContext(h, op), handle, op)).rejects.toMatchObject({
+        code: "provider_state_unknown",
+        quarantine_required: true,
+      })
+      expect(h.client.destroyCalls).toBe(1)
+      expect(h.journal.outcomes).toHaveLength(1)
     })
 
     test("native creation-time reuse blocks destroy before the provider mutation", async () => {
@@ -559,7 +841,7 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
       const createOp = makeOperation("create_inert")
       const known = h.client.makeResource(createOp.target, "known")
       const orphan = h.client.makeResource(
-        { ...createOp.target, immutable_fingerprint_sha256: digest("orphan") },
+        { ...createOp.target, immutable_fingerprint_sha256: digest("0f") },
         "orphan",
       )
       h.client.seed(known)

@@ -1,11 +1,13 @@
 import { canonicalJson, canonicalSha256, isDigest } from "./canonical"
 import { adapterError } from "./errors"
+import { managedProviderRequestSha256 } from "./request"
 import type {
   Digest,
   GuestBrokerAttestationV1,
   GuestBrokerRequestFrameV1,
   GuestBrokerRequestV1,
   ManagedGuestBrokerBootstrapCommandV1,
+  ProviderOperationV1,
 } from "./types"
 
 export const MANAGED_GUEST_BROKER_BOOTSTRAP_COMMAND: ManagedGuestBrokerBootstrapCommandV1 =
@@ -20,21 +22,53 @@ export const MANAGED_GUEST_BROKER_PROTOCOL_SHA256: Digest = canonicalSha256({
 })
 
 const MAX_BROKER_FRAME_BYTES = 16 * 1024 * 1024
+const WIRE_LENGTH_BYTES = 4
 
 function frameBasis(frame: Omit<GuestBrokerRequestFrameV1, "frame_sha256">): object {
   return {
     schema_version: frame.schema_version,
     operation: frame.operation,
     immutable_fingerprint_sha256: frame.immutable_fingerprint_sha256,
+    target_sha256: frame.target_sha256,
+    fence_sha256: frame.fence_sha256,
+    request_sha256: frame.request_sha256,
+    provider_idempotency_token_sha256: frame.provider_idempotency_token_sha256,
+    operation_execution_epoch: frame.operation_execution_epoch,
+    protocol_sha256: frame.protocol_sha256,
+    provider_session_binding_sha256: frame.provider_session_binding_sha256,
+    frame_nonce_sha256: frame.frame_nonce_sha256,
     payload_sha256: frame.payload_sha256,
   }
 }
 
 export function encodeGuestBrokerRequestFrame(
   request: GuestBrokerRequestV1,
-  immutableFingerprintSha256: Digest,
+  operation: ProviderOperationV1,
+  broker: GuestBrokerAttestationV1,
 ): GuestBrokerRequestFrameV1 {
-  if (!isDigest(immutableFingerprintSha256)) throw adapterError("validation_failed")
+  validateGuestBrokerAttestation(broker, operation.target.immutable_fingerprint_sha256)
+  const requestBinding = (() => {
+    if (request.operation === "exec_stream") {
+      return {
+        operation: "exec_stream" as const,
+        exec_fingerprint_sha256: request.exec.immutable_exec_fingerprint_sha256,
+        max_bytes: request.max_bytes,
+      }
+    }
+    if (request.operation === "exec_cancel") {
+      return {
+        operation: "exec_cancel" as const,
+        exec_fingerprint_sha256: request.exec.immutable_exec_fingerprint_sha256,
+      }
+    }
+    return request
+  })()
+  if (
+    request.operation !== operation.operation ||
+    operation.request_sha256 !== managedProviderRequestSha256(requestBinding)
+  ) {
+    throw adapterError("request_digest_mismatch")
+  }
   const payloadBytes = new TextEncoder().encode(canonicalJson(request))
   if (payloadBytes.byteLength === 0 || payloadBytes.byteLength > MAX_BROKER_FRAME_BYTES) {
     throw adapterError("validation_failed")
@@ -42,7 +76,21 @@ export function encodeGuestBrokerRequestFrame(
   const withoutFrameDigest = {
     schema_version: "sandboxes.guest-broker-frame/v1" as const,
     operation: request.operation,
-    immutable_fingerprint_sha256: immutableFingerprintSha256,
+    immutable_fingerprint_sha256: operation.target.immutable_fingerprint_sha256,
+    target_sha256: canonicalSha256(operation.target),
+    fence_sha256: canonicalSha256(operation.fence),
+    request_sha256: operation.request_sha256,
+    provider_idempotency_token_sha256: operation.target.provider_idempotency_token_sha256,
+    operation_execution_epoch: operation.fence.operation_execution_epoch,
+    protocol_sha256: MANAGED_GUEST_BROKER_PROTOCOL_SHA256,
+    provider_session_binding_sha256: broker.provider_session_binding_sha256,
+    frame_nonce_sha256: canonicalSha256({
+      target_sha256: canonicalSha256(operation.target),
+      request_sha256: operation.request_sha256,
+      operation_execution_epoch: operation.fence.operation_execution_epoch,
+      provider_session_binding_sha256: broker.provider_session_binding_sha256,
+      payload_sha256: canonicalSha256(payloadBytes),
+    }),
     payload_sha256: canonicalSha256(payloadBytes),
     payload_bytes: payloadBytes,
   }
@@ -72,6 +120,20 @@ export function decodeGuestBrokerRequestFrame(frame: GuestBrokerRequestFrameV1):
   if (
     frame.schema_version !== "sandboxes.guest-broker-frame/v1" ||
     !isDigest(frame.immutable_fingerprint_sha256) ||
+    !isDigest(frame.target_sha256) ||
+    !isDigest(frame.fence_sha256) ||
+    !isDigest(frame.request_sha256) ||
+    !isDigest(frame.provider_idempotency_token_sha256) ||
+    frame.protocol_sha256 !== MANAGED_GUEST_BROKER_PROTOCOL_SHA256 ||
+    !isDigest(frame.provider_session_binding_sha256) ||
+    !isDigest(frame.frame_nonce_sha256) ||
+    frame.frame_nonce_sha256 !== canonicalSha256({
+      target_sha256: frame.target_sha256,
+      request_sha256: frame.request_sha256,
+      operation_execution_epoch: frame.operation_execution_epoch,
+      provider_session_binding_sha256: frame.provider_session_binding_sha256,
+      payload_sha256: frame.payload_sha256,
+    }) ||
     !isDigest(frame.payload_sha256) ||
     !isDigest(frame.frame_sha256) ||
     frame.payload_bytes.byteLength === 0 ||
@@ -100,6 +162,17 @@ export function decodeGuestBrokerRequestFrame(frame: GuestBrokerRequestFrameV1):
     }
   }
   return request as unknown as GuestBrokerRequestV1
+}
+
+export function serializeGuestBrokerRequestFrame(frame: GuestBrokerRequestFrameV1): Uint8Array {
+  // Decode first so a corrupted or non-canonical frame can never reach an SDK transport.
+  decodeGuestBrokerRequestFrame(frame)
+  const envelope = new TextEncoder().encode(canonicalJson(frame))
+  if (envelope.byteLength > MAX_BROKER_FRAME_BYTES) throw adapterError("validation_failed")
+  const wire = new Uint8Array(WIRE_LENGTH_BYTES + envelope.byteLength)
+  new DataView(wire.buffer).setUint32(0, envelope.byteLength, false)
+  wire.set(envelope, WIRE_LENGTH_BYTES)
+  return wire
 }
 
 export function validateGuestBrokerAttestation(
