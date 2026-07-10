@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "bun test --preload ./tests/managed-adapters/hermetic-preload.ts tests/managed-adapters",
+    "test": "bun test tests/managed-adapters",
     "typecheck": "tsc --noEmit",
     "build": "bun build src/adapters/managed/index.ts --outdir dist --target node --format esm --external e2b --external @daytona/sdk",
-    "audit": "bun pm scan"
+    "audit": "bun audit"
   },
   "dependencies": {
     "@daytona/sdk": "0.193.0",
@@ -16,5 +16,9 @@
   "devDependencies": {
     "@types/bun": "1.3.5",
     "typescript": "5.9.3"
+  },
+  "overrides": {
+    "@opentelemetry/core": "2.8.0",
+    "protobufjs": "8.6.5"
   }
 }

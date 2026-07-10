@@ -4,16 +4,14 @@ import {
   canonicalSha256,
   createDaytonaCloudAdapter,
   createE2bAdapter,
+  validateWorkspacePath,
   type AdapterCallContextV1,
-  type AdapterProviderResourceV1,
   type ManagedProviderAdapterV1,
   type ManagedProviderIdV1,
   type OwnedProviderHandleV1,
-  type ProviderOperationNameV1,
 } from "../../src/adapters/managed/index"
 import {
   BROKER_ONLY_POLICY,
-  DENY_ALL_POLICY,
   FakeCredentialPort,
   FakeJournal,
   FakeProviderClient,
@@ -36,7 +34,7 @@ const SPEC = {
 const EXEC_SPEC = {
   executable: "/usr/bin/git",
   argv: ["status", "--porcelain=v1", "literal;not-shell"],
-  cwd: "repo" as const,
+  cwd: validateWorkspacePath("repo"),
   environment_profile_sha256: digest("73"),
   environment: { LANG: "C.UTF-8", PATH: "/usr/bin:/bin" },
   stdin_sha256: digest("74"),
@@ -269,7 +267,7 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
       const receipt = await h.adapter.write_file(
         makeContext(writeOp, h.journal),
         handle,
-        { path: "repo/file.txt", bytes, if_absent: true },
+        { path: validateWorkspacePath("repo/file.txt"), bytes, if_absent: true },
         writeOp,
       )
       expect(receipt.sha256).toBe(canonicalSha256(bytes))
@@ -282,7 +280,7 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
       for await (const chunk of h.adapter.read_file(
         makeContext(readOp, h.journal),
         handle,
-        { path: "repo/file.txt", offset: 0, length: 10 },
+        { path: validateWorkspacePath("repo/file.txt"), offset: 0, length: 10 },
         readOp,
       )) {
         chunks.push(...chunk.bytes)

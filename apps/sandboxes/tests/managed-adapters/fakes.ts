@@ -1,4 +1,5 @@
 import {
+  INERT_DENY_ALL_POLICY,
   canonicalSha256,
   type AdapterCallContextV1,
   type AdapterProviderResourceV1,
@@ -25,6 +26,7 @@ import {
   type ProviderExecStreamEventV1,
   type ProviderOperationNameV1,
   type ProviderOperationV1,
+  type ResourceGenerationTransitionV1,
   type ProviderResourcePageV1,
   type ProviderSnapshotHintV1,
   type ProviderMutationOutcomeV1,
@@ -34,10 +36,7 @@ import {
 
 export const digest = (hex: string): Digest => `sha256:${hex.padStart(64, "0").slice(-64)}` as Digest
 
-export const DENY_ALL_POLICY: NetworkPolicyV1 = {
-  mode: "deny_all",
-  policy_sha256: digest("11"),
-}
+export const DENY_ALL_POLICY: NetworkPolicyV1 = INERT_DENY_ALL_POLICY
 export const BROKER_ONLY_POLICY: NetworkPolicyV1 = {
   mode: "broker_only",
   policy_sha256: digest("12"),
@@ -67,7 +66,11 @@ export const FENCE: CanonicalSandboxEffectFenceV1 = {
   operation_execution_expires_at: "2026-07-10T10:30:00.000Z",
 }
 
-export function makeOperation(operation: ProviderOperationNameV1, overrides: Partial<ProviderOperationV1> = {}): ProviderOperationV1 {
+type OperationOverrides = Partial<Omit<ProviderOperationV1, "generation_transition">> & {
+  generation_transition?: ResourceGenerationTransitionV1 | undefined
+}
+
+export function makeOperation(operation: ProviderOperationNameV1, overrides: OperationOverrides = {}): ProviderOperationV1 {
   const generationChanging = new Set<ProviderOperationNameV1>([
     "create_inert",
     "activate",
@@ -75,7 +78,9 @@ export function makeOperation(operation: ProviderOperationNameV1, overrides: Par
     "quarantine",
     "destroy",
   ])
-  return {
+  const generationWasOverridden = Object.prototype.hasOwnProperty.call(overrides, "generation_transition")
+  const { generation_transition: generationTransition, ...otherOverrides } = overrides
+  const result: ProviderOperationV1 = {
     operation,
     target: {
       operation_id: FENCE.operation_id,
@@ -88,7 +93,7 @@ export function makeOperation(operation: ProviderOperationNameV1, overrides: Par
       authorization_consumption_receipt_sha256: digest("33"),
     },
     fence: FENCE,
-    ...(generationChanging
+    ...(!generationWasOverridden && generationChanging.has(operation)
       ? {
           generation_transition: {
             expected_resource_lifecycle_generation: 1n,
@@ -101,8 +106,10 @@ export function makeOperation(operation: ProviderOperationNameV1, overrides: Par
     external_anchor_kind: operation === "inspect" || operation.startsWith("file_") ? "READ_PROBE" : "DISPATCHED",
     external_anchor_receipt_sha256: digest("36"),
     deadline: "2026-07-10T10:20:00.000Z",
-    ...overrides,
+    ...otherOverrides,
   }
+  if (generationTransition !== undefined) result.generation_transition = generationTransition
+  return result
 }
 
 function anchorRecord(
@@ -159,6 +166,10 @@ export function makeContext(
     operation.external_anchor_kind === "READ_PROBE" ? "READ_PROBE" : "DISPATCHED",
     epoch,
   )
+  const invocationReceipt = makeAnchorReceipt(invocation)
+  // ProviderOperationV1 carries the protected anchor receipt digest. The helper
+  // fills it only after constructing the canonical record to avoid fake values.
+  operation.external_anchor_receipt_sha256 = invocationReceipt.record_sha256
   return {
     fence,
     target: operation.target,
@@ -166,9 +177,27 @@ export function makeContext(
     deadline: operation.deadline,
     trace_id: "trace-1",
     intent_anchor: makeAnchorReceipt(intent),
-    invocation_anchor: makeAnchorReceipt(invocation),
+    invocation_anchor: invocationReceipt,
     outcome_journal: journal,
-    ...(options.failedNoEffect === undefined ? {} : { failed_no_effect_authorization: options.failedNoEffect }),
+    dispatch_attempt:
+      epoch === operation.fence.operation_execution_epoch
+        ? { kind: "initial", operation_execution_epoch: epoch }
+        : {
+            kind: "higher_epoch_after_failed_no_effect",
+            previous_operation_execution_epoch: operation.fence.operation_execution_epoch,
+            authorization:
+              options.failedNoEffect ??
+              {
+                schema_version: "sandboxes.failed-no-effect/v1",
+                previous_operation_execution_epoch: operation.fence.operation_execution_epoch,
+                successor_operation_execution_epoch: epoch + 1n,
+                target_sha256: canonicalSha256(operation.target),
+                resource_id: operation.target.resource_id,
+                provider_idempotency_token_sha256: operation.target.provider_idempotency_token_sha256,
+                operation_digest: operation.target.operation_digest,
+                evidence_sha256: digest("missing-proof"),
+              },
+          },
   }
 }
 
@@ -278,6 +307,7 @@ export class FakeProviderClient implements ManagedProviderControlPortV1 {
   async createInert(request: ProviderCreateInertRequestV1): Promise<AdapterProviderResourceV1> {
     this.createCalls += 1
     const resource = this.makeResource(request.target)
+    resource.network_policy = this.networkObservation(request.initial_network_policy)
     if (this.createThenThrow) {
       this.seed(resource)
       throw new Error("response vanished after provider accepted create")

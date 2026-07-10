@@ -34,6 +34,30 @@ describe("immutable journal identity", () => {
     ).toThrowError(AdapterContractError)
   })
 
+  test("adapter reachability accepts only a receipt-proven exact duplicate dispatch", () => {
+    const op = makeOperation("create_inert")
+    const initial = makeContext(op, new FakeJournal())
+    const duplicate = {
+      ...initial,
+      invocation_anchor: { ...initial.invocation_anchor, duplicate: true },
+      dispatch_attempt: {
+        kind: "exact_duplicate" as const,
+        operation_execution_epoch: initial.fence.operation_execution_epoch,
+        prior_record_sha256: initial.invocation_anchor.record_sha256,
+      },
+    }
+    expect(() => validateAdapterCallContext(duplicate, op)).not.toThrow()
+    expect(() =>
+      validateAdapterCallContext(
+        {
+          ...duplicate,
+          dispatch_attempt: { ...duplicate.dispatch_attempt, prior_record_sha256: digest("changed") },
+        },
+        op,
+      ),
+    ).toThrowError(expect.objectContaining({ code: "dispatch_anchor_mismatch" }))
+  })
+
   test("higher executor epoch requires authoritative failed_no_effect for unchanged target", () => {
     const op = makeOperation("create_inert")
     const journal = new FakeJournal()
