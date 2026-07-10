@@ -3,10 +3,20 @@ import { adapterError } from "./errors"
 import type {
   AdapterCallContextV1,
   Digest,
+  FailedNoEffectAuthorizationV1,
   JournalAnchorReceiptV1,
   JournalRecordV1,
   ProviderOperationV1,
 } from "./types"
+
+export function failedNoEffectAuthorizationPayloadSha256(
+  authorization: FailedNoEffectAuthorizationV1,
+): Digest {
+  return canonicalSha256({
+    kind: "authoritative_failed_no_effect",
+    authorization,
+  })
+}
 
 function recordIdentity(record: JournalRecordV1): string {
   return [
@@ -97,6 +107,14 @@ function validateHigherEpoch(ctx: AdapterCallContextV1, op: ProviderOperationV1)
   }
   const predecessor = attempt.previous_operation_execution_epoch
   const proof = attempt.authorization
+  if (
+    ctx.invocation_anchor.duplicate ||
+    proof.schema_version !== "sandboxes.failed-no-effect/v1" ||
+    !isDigest(proof.evidence_sha256) ||
+    ctx.invocation_anchor.record.payload_sha256 !== failedNoEffectAuthorizationPayloadSha256(proof)
+  ) {
+    throw adapterError("dispatch_anchor_mismatch")
+  }
   if (
     predecessor >= ctx.fence.operation_execution_epoch ||
     proof.previous_operation_execution_epoch !== predecessor ||

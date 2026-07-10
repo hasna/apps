@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import {
   AdapterContractError,
+  MANAGED_GUEST_BROKER_BOOTSTRAP_COMMAND,
   activationAuthorizationBinding,
   canonicalSha256,
   cleanupAuthorizationBinding,
   createDaytonaCloudAdapter,
   createE2bAdapter,
+  decodeGuestBrokerRequestFrame,
   validateWorkspacePath,
   type AdapterCallContextV1,
   type ActivationDispatchAuthorizationV1,
@@ -19,6 +21,7 @@ import {
   FakeCredentialPort,
   FakeEffectGuard,
   FakeJournal,
+  FakeLifecycleLock,
   FakeProviderClient,
   READ_RETRY_POLICY,
   bindAuthorization,
@@ -57,6 +60,7 @@ type Harness = {
   credentials: FakeCredentialPort
   journal: FakeJournal
   effectGuard: FakeEffectGuard
+  lifecycleLock: FakeLifecycleLock
 }
 
 function harness(provider: ManagedProviderIdV1): Harness {
@@ -64,6 +68,7 @@ function harness(provider: ManagedProviderIdV1): Harness {
   const credentials = new FakeCredentialPort(client)
   const journal = new FakeJournal()
   const effectGuard = new FakeEffectGuard()
+  const lifecycleLock = new FakeLifecycleLock()
   const deps = {
     credential_port: credentials,
     installation_id: "installation-1",
@@ -77,6 +82,7 @@ function harness(provider: ManagedProviderIdV1): Harness {
     },
     read_retry_policy: READ_RETRY_POLICY,
     effect_guard: effectGuard,
+    lifecycle_lock: lifecycleLock,
   } as const
   return {
     adapter: provider === "e2b" ? createE2bAdapter(deps) : createDaytonaCloudAdapter(deps),
@@ -84,6 +90,7 @@ function harness(provider: ManagedProviderIdV1): Harness {
     credentials,
     journal,
     effectGuard,
+    lifecycleLock,
   }
 }
 
@@ -166,6 +173,51 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
       expect(handle.opaque_resource_id).toContain("native-1")
       expect(h.client.createCalls).toBe(1)
       expect(h.client.lookupCalls).toBeLessThanOrEqual(READ_RETRY_POLICY.max_attempts + 1)
+    })
+
+    test("serializes concurrent exact-token create attempts under one lifecycle lock", async () => {
+      const h = harness(provider)
+      const first = makeOperation("create_inert")
+      const second = makeOperation("create_inert")
+
+      const [left, right] = await Promise.all([
+        h.adapter.create_inert(makeContext(first, h.journal), SPEC, first, digest("77")),
+        h.adapter.create_inert(makeContext(second, h.journal), SPEC, second, digest("77")),
+      ])
+
+      expect(h.client.createCalls).toBe(1)
+      expect(left.opaque_resource_id).toBe(right.opaque_resource_id)
+      expect(new Set(h.lifecycleLock.keys).size).toBe(1)
+    })
+
+    test("treats a provider-started, deny-all, source-free resource as Infinity-inert", async () => {
+      const h = harness(provider)
+      const handle = await create(h)
+      const resource = h.client.resources.get(handle.opaque_resource_id)
+
+      expect(resource).toMatchObject({
+        state: "inert",
+        provider_runtime_state: "started_locked",
+        source_attached: false,
+        credential_attached: false,
+        guest_broker_bootstrapped: false,
+      })
+      expect(h.client.activateCalls).toBe(0)
+      expect(h.client.providerCommandStrings).toEqual([])
+    })
+
+    test("quarantines an adopted resource that has source or credentials attached", async () => {
+      const h = harness(provider)
+      const op = makeOperation("create_inert")
+      const resource = h.client.makeResource(op.target)
+      resource.source_attached = true
+      h.client.seed(resource)
+
+      await expect(h.adapter.create_inert(makeContext(op, h.journal), SPEC, op, digest("77"))).rejects.toMatchObject({
+        code: "provider_state_unknown",
+        quarantine_required: true,
+      })
+      expect(h.client.createCalls).toBe(0)
     })
 
     test("quarantines an ambiguous create with no exact match and never retries mutation", async () => {
@@ -319,15 +371,17 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
       expect(h.client.activateCalls).toBe(0)
     })
 
-    test("forwards typed argv without building a command string and streams bounded frames", async () => {
+    test("uses one fixed bootstrap command and sends argv only in an authenticated typed broker frame", async () => {
       const h = harness(provider)
       const handle = await create(h)
       await activate(h, handle)
       const start = makeOperation("exec_start", { generation_transition: undefined })
       const exec = await h.adapter.start_exec(makeContext(start, h.journal), handle, EXEC_SPEC, start)
 
-      expect(h.client.startExecCalls).toEqual([EXEC_SPEC])
-      expect(h.client.startExecCalls[0]?.argv[2]).toBe("literal;not-shell")
+      expect(h.client.providerCommandStrings).toEqual([MANAGED_GUEST_BROKER_BOOTSTRAP_COMMAND])
+      const request = decodeGuestBrokerRequestFrame(h.client.brokerFrames[0]!)
+      expect(request).toMatchObject({ operation: "exec_start", spec: EXEC_SPEC })
+      expect(JSON.stringify(h.client.providerCommandStrings)).not.toContain("literal;not-shell")
 
       const streamOp = makeOperation("exec_stream", {
         external_anchor_kind: "READ_PROBE",
@@ -338,6 +392,24 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
         frames.push(frame)
       }
       expect(frames.map((frame) => frame.stream)).toEqual(["stdout", "stderr", "terminal"])
+    })
+
+    test("fails closed when the guest-broker attestation changes after activation", async () => {
+      const h = harness(provider)
+      const handle = await create(h)
+      await activate(h, handle)
+      const attestation = h.client.brokerAttestations.get(handle.opaque_resource_id)
+      if (attestation === undefined) throw new Error("fixture broker attestation missing")
+      h.client.brokerAttestations.set(handle.opaque_resource_id, {
+        ...attestation,
+        protocol_sha256: digest("ff"),
+      })
+      const start = makeOperation("exec_start", { generation_transition: undefined })
+
+      await expect(
+        h.adapter.start_exec(makeContext(start, h.journal), handle, EXEC_SPEC, start),
+      ).rejects.toMatchObject({ code: "provider_state_unknown", quarantine_required: true })
+      expect(h.client.brokerFrames).toEqual([])
     })
 
     test("requires whole-guest cancellation proof", async () => {
@@ -387,6 +459,10 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
         writeOp,
       )
       expect(receipt.sha256).toBe(canonicalSha256(bytes))
+      expect(decodeGuestBrokerRequestFrame(h.client.brokerFrames.at(-1)!)).toMatchObject({
+        operation: "file_write",
+        request: { path: "repo/file.txt", if_absent: true },
+      })
 
       const readOp = makeOperation("file_read", {
         external_anchor_kind: "READ_PROBE",
@@ -437,6 +513,7 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
 
       expect(observation.terminal_condition).toBe("verified_absent")
       expect(h.client.destroyCalls).toBe(1)
+      expect(h.client.providerEvents.slice(-3)).toEqual(["inspect", "destroy", "inspect"])
     })
 
     test("native creation-time reuse blocks destroy before the provider mutation", async () => {

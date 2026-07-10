@@ -189,6 +189,8 @@ export interface ProviderCreateInertRequestV1 {
 
 export type ProviderResourcePhysicalStateV1 = "inert" | "active" | "transitioning" | "unknown"
 
+export type ProviderRuntimeStateV1 = "started_locked" | "paused" | "stopped" | "active" | "unknown"
+
 export interface AdapterProviderResourceV1 {
   opaque_resource_id: string
   provider_creation_token_sha256: Digest
@@ -196,10 +198,14 @@ export interface AdapterProviderResourceV1 {
   provider_created_at: string
   provider_resource_version: string
   state: ProviderResourcePhysicalStateV1
+  provider_runtime_state: ProviderRuntimeStateV1
   network_policy: NetworkPolicyObservationV1
   auto_delete_disabled: boolean
   ephemeral: boolean
   owned: boolean
+  source_attached: boolean
+  credential_attached: boolean
+  guest_broker_bootstrapped: boolean
 }
 
 export interface ProviderResourcePageV1 {
@@ -210,8 +216,12 @@ export interface ProviderResourcePageV1 {
 export interface ProviderCapabilitiesV1 {
   exact_creation_token_lookup: boolean
   create_stopped: boolean
+  creation_metadata_labels: boolean
+  started_locked_inert_compensation: boolean
   network_policy_readback: boolean
   typed_argv_exec: boolean
+  fixed_bootstrap_broker: boolean
+  typed_broker_frames: boolean
   native_bounded_files: boolean
   atomic_file_write: boolean
   whole_guest_cancel: boolean
@@ -234,6 +244,35 @@ export interface ExecSpecV1 {
   output_limit_bytes: number
   process_limit: number
   tty: false
+}
+
+export type ManagedGuestBrokerBootstrapCommandV1 = "/opt/hasna/bin/sandboxes-broker-v1 --stdio"
+
+export interface GuestBrokerAttestationV1 {
+  schema_version: "sandboxes.guest-broker-attestation/v1"
+  immutable_fingerprint_sha256: Digest
+  bootstrap_command_sha256: Digest
+  protocol_sha256: Digest
+  provider_session_binding_sha256: Digest
+  attested_at: string
+}
+
+export type GuestBrokerRequestV1 =
+  | { operation: "exec_start"; spec: ExecSpecV1 }
+  | { operation: "exec_stream"; exec: ProviderExecHandleV1 }
+  | { operation: "exec_cancel"; exec: ProviderExecHandleV1 }
+  | { operation: "file_stat"; path: WorkspacePath }
+  | { operation: "file_read"; request: FileReadV1 }
+  | { operation: "file_write"; request: FileWriteV1 }
+  | { operation: "file_list"; request: FileListV1 }
+
+export interface GuestBrokerRequestFrameV1 {
+  schema_version: "sandboxes.guest-broker-frame/v1"
+  operation: GuestBrokerRequestV1["operation"]
+  immutable_fingerprint_sha256: Digest
+  payload_sha256: Digest
+  frame_sha256: Digest
+  payload_bytes: Uint8Array
 }
 
 export interface ProviderExecHandleV1 {
@@ -361,6 +400,7 @@ export interface ActivationReceiptV1 {
   immutable_fingerprint_sha256: Digest
   network_policy: NetworkPolicyObservationV1
   activation_grant_sha256: Digest
+  guest_broker_attestation_sha256: Digest
   provider_receipt_sha256: Digest
   provider_outcome_anchor_sha256: Digest
 }
@@ -441,6 +481,11 @@ export interface AdapterEffectGuardPortV1 {
   ): Promise<void>
 }
 
+/** Trusted distributed serialization for one immutable sandbox lifecycle. */
+export interface AdapterLifecycleLockPortV1 {
+  withLock<T>(lifecycleKeySha256: Digest, use: () => Promise<T>): Promise<T>
+}
+
 export interface ManagedAdapterDependenciesV1 {
   credential_port: ManagedProviderCredentialPortV1
   installation_id: string
@@ -450,6 +495,7 @@ export interface ManagedAdapterDependenciesV1 {
   admission: ProviderAdmissionV1
   read_retry_policy: ReadRetryPolicyV1
   effect_guard: AdapterEffectGuardPortV1
+  lifecycle_lock: AdapterLifecycleLockPortV1
 }
 
 export interface ManagedProviderControlPortV1 {
@@ -462,13 +508,31 @@ export interface ManagedProviderControlPortV1 {
   activateResource(opaqueResourceId: string): Promise<AdapterProviderResourceV1>
   pauseOrStopResource(opaqueResourceId: string): Promise<AdapterProviderResourceV1>
   destroyResource(opaqueResourceId: string, expectedVersion: string): Promise<void>
-  startExec(opaqueResourceId: string, spec: ExecSpecV1): Promise<ProviderExecHandleV1>
-  streamExec(exec: ProviderExecHandleV1): AsyncIterable<ProviderExecStreamEventV1>
-  cancelExec(exec: ProviderExecHandleV1): Promise<{ whole_guest_scope_terminated: boolean }>
-  statFile(path: WorkspacePath): Promise<FileStatV1>
-  readFile(request: FileReadV1): AsyncIterable<Uint8Array>
-  writeFileAtomic(request: FileWriteV1): Promise<FileWriteReceiptV1>
-  listFiles(request: FileListV1): Promise<FilePageV1>
+  bootstrapGuestBroker(
+    opaqueResourceId: string,
+    command: ManagedGuestBrokerBootstrapCommandV1,
+    expectedFingerprint: Digest,
+  ): Promise<GuestBrokerAttestationV1>
+  inspectGuestBroker(opaqueResourceId: string): Promise<GuestBrokerAttestationV1 | "absent">
+  startExec(
+    opaqueResourceId: string,
+    broker: GuestBrokerAttestationV1,
+    frame: GuestBrokerRequestFrameV1,
+  ): Promise<ProviderExecHandleV1>
+  streamExec(
+    opaqueResourceId: string,
+    broker: GuestBrokerAttestationV1,
+    frame: GuestBrokerRequestFrameV1,
+  ): AsyncIterable<ProviderExecStreamEventV1>
+  cancelExec(
+    opaqueResourceId: string,
+    broker: GuestBrokerAttestationV1,
+    frame: GuestBrokerRequestFrameV1,
+  ): Promise<{ whole_guest_scope_terminated: boolean }>
+  statFile(opaqueResourceId: string, broker: GuestBrokerAttestationV1, frame: GuestBrokerRequestFrameV1): Promise<FileStatV1>
+  readFile(opaqueResourceId: string, broker: GuestBrokerAttestationV1, frame: GuestBrokerRequestFrameV1): AsyncIterable<Uint8Array>
+  writeFileAtomic(opaqueResourceId: string, broker: GuestBrokerAttestationV1, frame: GuestBrokerRequestFrameV1): Promise<FileWriteReceiptV1>
+  listFiles(opaqueResourceId: string, broker: GuestBrokerAttestationV1, frame: GuestBrokerRequestFrameV1): Promise<FilePageV1>
   createSnapshotHint(opaqueResourceId: string): Promise<ProviderSnapshotHintV1>
   lookupOperation(target: ProviderEffectTargetV1): Promise<ProviderMutationOutcomeV1>
   listOwnedResources(cursor?: string): Promise<ProviderResourcePageV1>

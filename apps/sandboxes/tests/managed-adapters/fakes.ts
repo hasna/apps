@@ -1,26 +1,29 @@
 import {
   INERT_DENY_ALL_POLICY,
+  MANAGED_GUEST_BROKER_PROTOCOL_SHA256,
   adapterError,
   capabilityAuthorizationBinding,
   canonicalSha256,
+  decodeGuestBrokerRequestFrame,
+  failedNoEffectAuthorizationPayloadSha256,
   type AdapterCallContextV1,
   type AdapterEffectGuardPortV1,
+  type AdapterLifecycleLockPortV1,
   type AdapterProviderResourceV1,
   type CanonicalSandboxEffectFenceV1,
   type Digest,
-  type ExecSpecV1,
   type FailedNoEffectAuthorizationV1,
-  type FileListV1,
   type FilePageV1,
-  type FileReadV1,
   type FileStatV1,
   type FileWriteReceiptV1,
-  type FileWriteV1,
+  type GuestBrokerAttestationV1,
+  type GuestBrokerRequestFrameV1,
   type JournalAnchorReceiptV1,
   type JournalRecordV1,
   type ManagedProviderControlPortV1,
   type ManagedProviderCredentialPortV1,
   type ManagedProviderIdV1,
+  type ManagedGuestBrokerBootstrapCommandV1,
   type NetworkPolicyObservationV1,
   type NetworkPolicyV1,
   type ProviderCreateInertRequestV1,
@@ -169,11 +172,29 @@ export function makeContext(
   const fence = { ...operation.fence, operation_execution_epoch: epoch }
   const op = { ...operation, fence }
   const intent = anchorRecord(op, "INTENT", epoch)
-  const invocation = anchorRecord(
+  const failedNoEffect =
+    epoch === operation.fence.operation_execution_epoch
+      ? undefined
+      : options.failedNoEffect ?? {
+          schema_version: "sandboxes.failed-no-effect/v1" as const,
+          previous_operation_execution_epoch: operation.fence.operation_execution_epoch,
+          successor_operation_execution_epoch: epoch + 1n,
+          target_sha256: canonicalSha256(operation.target),
+          resource_id: operation.target.resource_id,
+          provider_idempotency_token_sha256: operation.target.provider_idempotency_token_sha256,
+          operation_digest: operation.target.operation_digest,
+          evidence_sha256: digest("a0"),
+        }
+  const invocation = {
+    ...anchorRecord(
     op,
     operation.external_anchor_kind === "READ_PROBE" ? "READ_PROBE" : "DISPATCHED",
     epoch,
-  )
+    ),
+    ...(failedNoEffect === undefined
+      ? {}
+      : { payload_sha256: failedNoEffectAuthorizationPayloadSha256(failedNoEffect) }),
+  }
   const invocationReceipt = makeAnchorReceipt(invocation)
   // ProviderOperationV1 carries the protected anchor receipt digest. The helper
   // fills it only after constructing the canonical record to avoid fake values.
@@ -194,18 +215,7 @@ export function makeContext(
         : {
             kind: "higher_epoch_after_failed_no_effect",
             previous_operation_execution_epoch: operation.fence.operation_execution_epoch,
-            authorization:
-              options.failedNoEffect ??
-              {
-                schema_version: "sandboxes.failed-no-effect/v1",
-                previous_operation_execution_epoch: operation.fence.operation_execution_epoch,
-                successor_operation_execution_epoch: epoch + 1n,
-                target_sha256: canonicalSha256(operation.target),
-                resource_id: operation.target.resource_id,
-                provider_idempotency_token_sha256: operation.target.provider_idempotency_token_sha256,
-                operation_digest: operation.target.operation_digest,
-                evidence_sha256: digest("missing-proof"),
-              },
+            authorization: failedNoEffect!,
           },
   }
 }
@@ -272,12 +282,39 @@ export class FakeEffectGuard implements AdapterEffectGuardPortV1 {
   }
 }
 
+export class FakeLifecycleLock implements AdapterLifecycleLockPortV1 {
+  readonly keys: Digest[] = []
+  readonly #tails = new Map<Digest, Promise<void>>()
+
+  async withLock<T>(key: Digest, use: () => Promise<T>): Promise<T> {
+    this.keys.push(key)
+    const predecessor = this.#tails.get(key) ?? Promise.resolve()
+    let release = (): void => {}
+    const current = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const tail = predecessor.then(() => current)
+    this.#tails.set(key, tail)
+    await predecessor
+    try {
+      return await use()
+    } finally {
+      release()
+      if (this.#tails.get(key) === tail) this.#tails.delete(key)
+    }
+  }
+}
+
 export class FakeProviderClient implements ManagedProviderControlPortV1 {
   readonly capabilities = {
     exact_creation_token_lookup: true,
     create_stopped: true,
+    creation_metadata_labels: true,
+    started_locked_inert_compensation: true,
     network_policy_readback: true,
     typed_argv_exec: true,
+    fixed_bootstrap_broker: true,
+    typed_broker_frames: true,
     native_bounded_files: true,
     atomic_file_write: true,
     whole_guest_cancel: true,
@@ -289,13 +326,16 @@ export class FakeProviderClient implements ManagedProviderControlPortV1 {
   }
   readonly resources = new Map<string, AdapterProviderResourceV1>()
   readonly files = new Map<string, Uint8Array>()
+  readonly brokerAttestations = new Map<string, GuestBrokerAttestationV1>()
+  readonly brokerFrames: GuestBrokerRequestFrameV1[] = []
+  readonly providerCommandStrings: string[] = []
+  readonly providerEvents: Array<"inspect" | "destroy"> = []
   createCalls = 0
   activateCalls = 0
   pauseCalls = 0
   destroyCalls = 0
   cancelCalls = 0
   lookupCalls = 0
-  startExecCalls: ExecSpecV1[] = []
   createError: Error | undefined
   createThenThrow = false
   networkMismatch = false
@@ -316,10 +356,14 @@ export class FakeProviderClient implements ManagedProviderControlPortV1 {
       provider_created_at: "2026-07-10T10:00:02.000Z",
       provider_resource_version: `version-${suffix}`,
       state: "inert",
+      provider_runtime_state: "started_locked",
       network_policy: this.networkObservation(DENY_ALL_POLICY),
       auto_delete_disabled: true,
       ephemeral: false,
       owned: true,
+      source_attached: false,
+      credential_attached: false,
+      guest_broker_bootstrapped: false,
     }
   }
 
@@ -363,6 +407,7 @@ export class FakeProviderClient implements ManagedProviderControlPortV1 {
   }
 
   async inspectResource(opaqueResourceId: string): Promise<AdapterProviderResourceV1 | "absent"> {
+    this.providerEvents.push("inspect")
     return this.resources.get(opaqueResourceId) ?? "absent"
   }
 
@@ -379,6 +424,7 @@ export class FakeProviderClient implements ManagedProviderControlPortV1 {
     const resource = this.resources.get(opaqueResourceId)
     if (resource === undefined) throw new Error("missing")
     resource.state = "active"
+    resource.provider_runtime_state = "active"
     return resource
   }
 
@@ -387,10 +433,14 @@ export class FakeProviderClient implements ManagedProviderControlPortV1 {
     const resource = this.resources.get(opaqueResourceId)
     if (resource === undefined) throw new Error("missing")
     resource.state = "inert"
+    resource.provider_runtime_state = "paused"
+    resource.guest_broker_bootstrapped = false
+    this.brokerAttestations.delete(opaqueResourceId)
     return resource
   }
 
   async destroyResource(opaqueResourceId: string, expectedVersion: string): Promise<void> {
+    this.providerEvents.push("destroy")
     this.destroyCalls += 1
     const resource = this.resources.get(opaqueResourceId)
     if (resource === undefined) return
@@ -398,8 +448,53 @@ export class FakeProviderClient implements ManagedProviderControlPortV1 {
     if (!this.keepPresentAfterDestroy) this.resources.delete(opaqueResourceId)
   }
 
-  async startExec(_opaqueResourceId: string, spec: ExecSpecV1): Promise<ProviderExecHandleV1> {
-    this.startExecCalls.push(spec)
+  async bootstrapGuestBroker(
+    opaqueResourceId: string,
+    command: ManagedGuestBrokerBootstrapCommandV1,
+    expectedFingerprint: Digest,
+  ): Promise<GuestBrokerAttestationV1> {
+    const resource = this.resources.get(opaqueResourceId)
+    if (resource === undefined || resource.immutable_fingerprint_sha256 !== expectedFingerprint) {
+      throw new Error("broker resource mismatch")
+    }
+    this.providerCommandStrings.push(command)
+    resource.guest_broker_bootstrapped = true
+    const attestation: GuestBrokerAttestationV1 = {
+      schema_version: "sandboxes.guest-broker-attestation/v1",
+      immutable_fingerprint_sha256: expectedFingerprint,
+      bootstrap_command_sha256: canonicalSha256(command),
+      protocol_sha256: MANAGED_GUEST_BROKER_PROTOCOL_SHA256,
+      provider_session_binding_sha256: digest("b0"),
+      attested_at: "2026-07-10T10:00:03.500Z",
+    }
+    this.brokerAttestations.set(opaqueResourceId, attestation)
+    return attestation
+  }
+
+  async inspectGuestBroker(opaqueResourceId: string): Promise<GuestBrokerAttestationV1 | "absent"> {
+    return this.brokerAttestations.get(opaqueResourceId) ?? "absent"
+  }
+
+  #recordBrokerFrame(
+    opaqueResourceId: string,
+    broker: GuestBrokerAttestationV1,
+    frame: GuestBrokerRequestFrameV1,
+  ): ReturnType<typeof decodeGuestBrokerRequestFrame> {
+    if (this.brokerAttestations.get(opaqueResourceId) !== broker) throw new Error("broker session mismatch")
+    if (frame.immutable_fingerprint_sha256 !== broker.immutable_fingerprint_sha256) {
+      throw new Error("broker fingerprint mismatch")
+    }
+    this.brokerFrames.push(frame)
+    return decodeGuestBrokerRequestFrame(frame)
+  }
+
+  async startExec(
+    opaqueResourceId: string,
+    broker: GuestBrokerAttestationV1,
+    frame: GuestBrokerRequestFrameV1,
+  ): Promise<ProviderExecHandleV1> {
+    const request = this.#recordBrokerFrame(opaqueResourceId, broker, frame)
+    if (request.operation !== "exec_start") throw new Error("wrong broker operation")
     return {
       opaque_exec_id: "provider-exec-1",
       immutable_exec_fingerprint_sha256: digest("51"),
@@ -407,18 +502,37 @@ export class FakeProviderClient implements ManagedProviderControlPortV1 {
     }
   }
 
-  async *streamExec(_exec: ProviderExecHandleV1): AsyncIterable<ProviderExecStreamEventV1> {
+  async *streamExec(
+    opaqueResourceId: string,
+    broker: GuestBrokerAttestationV1,
+    frame: GuestBrokerRequestFrameV1,
+  ): AsyncIterable<ProviderExecStreamEventV1> {
+    const request = this.#recordBrokerFrame(opaqueResourceId, broker, frame)
+    if (request.operation !== "exec_stream") throw new Error("wrong broker operation")
     yield { stream: "stdout", sequence: 1n, bytes: new TextEncoder().encode("hello") }
     yield { stream: "stderr", sequence: 2n, bytes: new TextEncoder().encode("warn") }
     yield { stream: "terminal", sequence: 3n, exit_code: 0 }
   }
 
-  async cancelExec(_exec: ProviderExecHandleV1): Promise<{ whole_guest_scope_terminated: boolean }> {
+  async cancelExec(
+    opaqueResourceId: string,
+    broker: GuestBrokerAttestationV1,
+    frame: GuestBrokerRequestFrameV1,
+  ): Promise<{ whole_guest_scope_terminated: boolean }> {
+    const request = this.#recordBrokerFrame(opaqueResourceId, broker, frame)
+    if (request.operation !== "exec_cancel") throw new Error("wrong broker operation")
     this.cancelCalls += 1
     return { whole_guest_scope_terminated: this.cancelProof }
   }
 
-  async statFile(path: WorkspacePath): Promise<FileStatV1> {
+  async statFile(
+    opaqueResourceId: string,
+    broker: GuestBrokerAttestationV1,
+    frame: GuestBrokerRequestFrameV1,
+  ): Promise<FileStatV1> {
+    const request = this.#recordBrokerFrame(opaqueResourceId, broker, frame)
+    if (request.operation !== "file_stat") throw new Error("wrong broker operation")
+    const path = request.path
     const bytes = this.files.get(path)
     if (bytes === undefined) throw new Error("not found")
     return {
@@ -431,14 +545,28 @@ export class FakeProviderClient implements ManagedProviderControlPortV1 {
     }
   }
 
-  async *readFile(request: FileReadV1): AsyncIterable<Uint8Array> {
+  async *readFile(
+    opaqueResourceId: string,
+    broker: GuestBrokerAttestationV1,
+    frame: GuestBrokerRequestFrameV1,
+  ): AsyncIterable<Uint8Array> {
+    const decoded = this.#recordBrokerFrame(opaqueResourceId, broker, frame)
+    if (decoded.operation !== "file_read") throw new Error("wrong broker operation")
+    const request = decoded.request
     const bytes = this.files.get(request.path)
     if (bytes === undefined) throw new Error("not found")
     const end = Math.min(bytes.byteLength, request.offset + request.length)
     yield bytes.slice(request.offset, end)
   }
 
-  async writeFileAtomic(request: FileWriteV1): Promise<FileWriteReceiptV1> {
+  async writeFileAtomic(
+    opaqueResourceId: string,
+    broker: GuestBrokerAttestationV1,
+    frame: GuestBrokerRequestFrameV1,
+  ): Promise<FileWriteReceiptV1> {
+    const decoded = this.#recordBrokerFrame(opaqueResourceId, broker, frame)
+    if (decoded.operation !== "file_write") throw new Error("wrong broker operation")
+    const request = decoded.request
     this.files.set(request.path, request.bytes.slice())
     return {
       path: request.path,
@@ -448,7 +576,14 @@ export class FakeProviderClient implements ManagedProviderControlPortV1 {
     }
   }
 
-  async listFiles(request: FileListV1): Promise<FilePageV1> {
+  async listFiles(
+    opaqueResourceId: string,
+    broker: GuestBrokerAttestationV1,
+    frame: GuestBrokerRequestFrameV1,
+  ): Promise<FilePageV1> {
+    const decoded = this.#recordBrokerFrame(opaqueResourceId, broker, frame)
+    if (decoded.operation !== "file_list") throw new Error("wrong broker operation")
+    const request = decoded.request
     return {
       items: [...this.files.keys()].sort().map((path) => ({ path: path as WorkspacePath, type: "file" as const })),
       ...(request.cursor === undefined ? {} : { next_cursor: request.cursor }),

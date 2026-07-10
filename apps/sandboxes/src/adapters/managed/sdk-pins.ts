@@ -101,42 +101,99 @@ export function buildDaytonaCreateParams(input: DaytonaCreateMappingInputV1): Cr
 }
 
 export type OfficialSdkContractGapV1 =
-  | "atomic_creation_token"
-  | "create_stopped"
-  | "typed_argv_exec"
-  | "atomic_file_precondition"
-  | "whole_guest_cancel"
-  | "conditional_destroy"
-  | "broker_only_network_semantics"
+  | "creation_metadata_filter_consistency_live_evidence"
+  | "distributed_lifecycle_lock_coverage_live_evidence"
+  | "fixed_broker_bootstrap_and_transport_live_evidence"
+  | "atomic_file_precondition_live_evidence"
+  | "whole_guest_cancel_live_evidence"
+  | "pause_preserves_filesystem_live_evidence"
+  | "delete_absence_consistency_live_evidence"
+  | "broker_only_network_semantics_live_evidence"
   | "strong_vm_live_evidence"
 
+export type OfficialSdkCompensationV1 =
+  | "creation_token_metadata_plus_exact_lookup_plus_lifecycle_lock"
+  | "provider_started_default_deny_source_free_infinity_inert"
+  | "fixed_bootstrap_plus_typed_guest_broker_frames"
+  | "exact_incarnation_readback_plus_locked_delete_plus_absence_proof"
+  | "provider_snapshot_noncanonical"
+
+export interface OfficialApiEvidenceV1 {
+  url: string
+  observation: string
+}
+
 export const OFFICIAL_SDK_CONTRACT_GAPS: Readonly<
-  Record<ManagedProviderIdV1, { admission: "disabled"; gaps: readonly OfficialSdkContractGapV1[] }>
+  Record<
+    ManagedProviderIdV1,
+    {
+      admission: "disabled"
+      compensated_in_adapter: readonly OfficialSdkCompensationV1[]
+      gaps: readonly OfficialSdkContractGapV1[]
+      official_api_evidence: readonly OfficialApiEvidenceV1[]
+    }
+  >
 > = {
   e2b: {
     admission: "disabled",
+    compensated_in_adapter: [
+      "creation_token_metadata_plus_exact_lookup_plus_lifecycle_lock",
+      "provider_started_default_deny_source_free_infinity_inert",
+      "fixed_bootstrap_plus_typed_guest_broker_frames",
+      "exact_incarnation_readback_plus_locked_delete_plus_absence_proof",
+      "provider_snapshot_noncanonical",
+    ],
     gaps: [
-      "atomic_creation_token",
-      "create_stopped",
-      "typed_argv_exec",
-      "atomic_file_precondition",
-      "whole_guest_cancel",
-      "conditional_destroy",
-      "broker_only_network_semantics",
+      "creation_metadata_filter_consistency_live_evidence",
+      "distributed_lifecycle_lock_coverage_live_evidence",
+      "fixed_broker_bootstrap_and_transport_live_evidence",
+      "atomic_file_precondition_live_evidence",
+      "whole_guest_cancel_live_evidence",
+      "pause_preserves_filesystem_live_evidence",
+      "delete_absence_consistency_live_evidence",
+      "broker_only_network_semantics_live_evidence",
       "strong_vm_live_evidence",
+    ],
+    official_api_evidence: [
+      {
+        url: "https://e2b.dev/docs/sandbox/list",
+        observation: "The official list surface exposes metadata filtering/readback, but no atomic uniqueness constraint for a creation-token metadata value.",
+      },
+      {
+        url: "https://e2b.dev/docs/api-reference/sandboxes/get-sandbox",
+        observation: "The official get surface supports identity and network readback used by the adapter; live consistency and isolation still require conformance evidence.",
+      },
     ],
   },
   daytona_cloud: {
     admission: "disabled",
+    compensated_in_adapter: [
+      "creation_token_metadata_plus_exact_lookup_plus_lifecycle_lock",
+      "provider_started_default_deny_source_free_infinity_inert",
+      "fixed_bootstrap_plus_typed_guest_broker_frames",
+      "exact_incarnation_readback_plus_locked_delete_plus_absence_proof",
+      "provider_snapshot_noncanonical",
+    ],
     gaps: [
-      "atomic_creation_token",
-      "create_stopped",
-      "typed_argv_exec",
-      "atomic_file_precondition",
-      "whole_guest_cancel",
-      "conditional_destroy",
-      "broker_only_network_semantics",
+      "creation_metadata_filter_consistency_live_evidence",
+      "distributed_lifecycle_lock_coverage_live_evidence",
+      "fixed_broker_bootstrap_and_transport_live_evidence",
+      "atomic_file_precondition_live_evidence",
+      "whole_guest_cancel_live_evidence",
+      "pause_preserves_filesystem_live_evidence",
+      "delete_absence_consistency_live_evidence",
+      "broker_only_network_semantics_live_evidence",
       "strong_vm_live_evidence",
+    ],
+    official_api_evidence: [
+      {
+        url: "https://www.daytona.io/docs/en/typescript-sdk/",
+        observation: "The official TypeScript SDK exposes labels, lifecycle, process, and filesystem surfaces, but not an atomic uniqueness constraint for a creation-token label.",
+      },
+      {
+        url: "https://www.daytona.io/docs/en/sandboxes/",
+        observation: "The official sandbox lifecycle is the basis for locked readback/delete compensation; live isolation and consistency still require conformance evidence.",
+      },
     ],
   },
 }

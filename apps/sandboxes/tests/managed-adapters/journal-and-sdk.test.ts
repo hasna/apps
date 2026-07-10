@@ -6,9 +6,12 @@ import {
   buildE2bCreateOptions,
   canonicalSha256,
   DAYTONA_SDK_PIN,
+  decodeGuestBrokerRequestFrame,
   E2B_SDK_PIN,
+  encodeGuestBrokerRequestFrame,
   OFFICIAL_SDK_CONTRACT_GAPS,
   validateAdapterCallContext,
+  validateWorkspacePath,
   type FailedNoEffectAuthorizationV1,
 } from "../../src/adapters/managed/index"
 import { FakeJournal, digest, makeAnchorReceipt, makeContext, makeOperation } from "./fakes"
@@ -100,6 +103,54 @@ describe("immutable journal identity", () => {
     )
   })
 
+  test("a duplicate higher-epoch dispatch anchor cannot repeat a provider mutation", () => {
+    const op = makeOperation("create_inert")
+    const proof: FailedNoEffectAuthorizationV1 = {
+      schema_version: "sandboxes.failed-no-effect/v1",
+      previous_operation_execution_epoch: 3n,
+      successor_operation_execution_epoch: 4n,
+      target_sha256: canonicalSha256(op.target),
+      resource_id: op.target.resource_id,
+      provider_idempotency_token_sha256: op.target.provider_idempotency_token_sha256,
+      operation_digest: op.target.operation_digest,
+      evidence_sha256: digest("a1"),
+    }
+    const ctx = makeContext(op, new FakeJournal(), { operationExecutionEpoch: 4n, failedNoEffect: proof })
+
+    expect(() =>
+      validateAdapterCallContext(
+        { ...ctx, invocation_anchor: { ...ctx.invocation_anchor, duplicate: true } },
+        { ...op, fence: ctx.fence },
+      ),
+    ).toThrowError(expect.objectContaining({ code: "dispatch_anchor_mismatch" }))
+  })
+
+  test("the signed higher-epoch dispatch anchor binds the exact failed-no-effect proof bytes", () => {
+    const op = makeOperation("create_inert")
+    const proof: FailedNoEffectAuthorizationV1 = {
+      schema_version: "sandboxes.failed-no-effect/v1",
+      previous_operation_execution_epoch: 3n,
+      successor_operation_execution_epoch: 4n,
+      target_sha256: canonicalSha256(op.target),
+      resource_id: op.target.resource_id,
+      provider_idempotency_token_sha256: op.target.provider_idempotency_token_sha256,
+      operation_digest: op.target.operation_digest,
+      evidence_sha256: digest("a1"),
+    }
+    const ctx = makeContext(op, new FakeJournal(), { operationExecutionEpoch: 4n, failedNoEffect: proof })
+    const changed = {
+      ...ctx,
+      dispatch_attempt: {
+        ...ctx.dispatch_attempt,
+        authorization: { ...proof, evidence_sha256: digest("a2") },
+      },
+    } as typeof ctx
+
+    expect(() => validateAdapterCallContext(changed, { ...op, fence: ctx.fence })).toThrowError(
+      expect.objectContaining({ code: "dispatch_anchor_mismatch" }),
+    )
+  })
+
   test("anchor receipt digest must cover the exact record", () => {
     const op = makeOperation("create_inert")
     const ctx = makeContext(op, new FakeJournal())
@@ -133,6 +184,27 @@ describe("immutable journal identity", () => {
     )
   })
 })
+
+describe("typed guest-broker framing", () => {
+  test("binds payload bytes, operation, and immutable resource fingerprint", () => {
+    const frame = encodeGuestBrokerRequestFrame(
+      { operation: "file_stat", path: validateWorkspacePath("repo/file.txt") },
+      digest("b1"),
+    )
+    expect(decodeGuestBrokerRequestFrame(frame)).toEqual({
+      operation: "file_stat",
+      path: validateWorkspacePath("repo/file.txt"),
+    })
+
+    const changed = { ...frame, payload_bytes: frame.payload_bytes.slice() }
+    const lastByte = changed.payload_bytes.at(-1)
+    if (lastByte === undefined) throw new Error("fixture frame is empty")
+    changed.payload_bytes[changed.payload_bytes.length - 1] = lastByte ^ 1
+    expect(() => decodeGuestBrokerRequestFrame(changed)).toThrowError(
+      expect.objectContaining({ code: "integrity_failed" }),
+    )
+  })
+})
 describe("official SDK pin mappings", () => {
   test("pins exact supply-chain-eligible provider SDK builds", () => {
     expect(E2B_SDK_PIN).toEqual({ package: "e2b", version: "2.31.0" })
@@ -155,6 +227,10 @@ describe("official SDK pin mappings", () => {
     expect(options.allowInternetAccess).toBe(false)
     expect(options.network).toMatchObject({ denyOut: ["0.0.0.0/0"], allowPublicTraffic: false })
     expect(options.lifecycle).toEqual({ onTimeout: { action: "pause", keepMemory: false }, autoResume: false })
+    expect(options.metadata).toMatchObject({
+      "hasna.creation_token_sha256": op.target.provider_idempotency_token_sha256,
+      "hasna.immutable_fingerprint_sha256": op.target.immutable_fingerprint_sha256,
+    })
     expect(JSON.stringify(options)).not.toMatch(/api.?key|secret|credential/i)
   })
 
@@ -175,17 +251,35 @@ describe("official SDK pin mappings", () => {
     expect(params.ephemeral).toBe(false)
     expect(params.autoDeleteInterval).toBe(-1)
     expect(params.networkBlockAll).toBe(true)
+    expect(params.labels).toMatchObject({
+      "hasna.creation_token_sha256": op.target.provider_idempotency_token_sha256,
+      "hasna.immutable_fingerprint_sha256": op.target.immutable_fingerprint_sha256,
+    })
     expect(params).not.toHaveProperty("secrets")
     expect(params).not.toHaveProperty("linkedSandbox")
     expect(JSON.stringify(params)).not.toMatch(/api.?key|credential/i)
   })
 
-  test("keeps both exact builds disabled for unresolved mandatory contract gaps", () => {
+  test("keeps both builds disabled pending live proof while recording adapter compensations", () => {
     for (const provider of ["e2b", "daytona_cloud"] as const) {
       expect(OFFICIAL_SDK_CONTRACT_GAPS[provider].admission).toBe("disabled")
       expect(OFFICIAL_SDK_CONTRACT_GAPS[provider].gaps).toEqual(
-        expect.arrayContaining(["create_stopped", "atomic_creation_token", "typed_argv_exec", "conditional_destroy"]),
+        expect.arrayContaining([
+          "creation_metadata_filter_consistency_live_evidence",
+          "fixed_broker_bootstrap_and_transport_live_evidence",
+          "delete_absence_consistency_live_evidence",
+          "strong_vm_live_evidence",
+        ]),
       )
+      expect(OFFICIAL_SDK_CONTRACT_GAPS[provider].compensated_in_adapter).toEqual(
+        expect.arrayContaining([
+          "creation_token_metadata_plus_exact_lookup_plus_lifecycle_lock",
+          "provider_started_default_deny_source_free_infinity_inert",
+          "fixed_bootstrap_plus_typed_guest_broker_frames",
+          "exact_incarnation_readback_plus_locked_delete_plus_absence_proof",
+        ]),
+      )
+      expect(OFFICIAL_SDK_CONTRACT_GAPS[provider].official_api_evidence.length).toBeGreaterThan(0)
     }
   })
 })
