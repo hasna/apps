@@ -203,6 +203,9 @@ export class SandboxesReferenceServiceV1 {
       if (existing !== undefined) {
         const replay = this.#resolveReplay(tx, ctx, "create_inert", input.resource_id);
         if (replay !== undefined && replay.state === "committed") return { operation: replay, replay: true };
+        if (replay !== undefined) {
+          throw new SandboxError("provider_state_unknown", "The original create operation is unresolved");
+        }
         throw new SandboxError("stale_revision", "Resource identity is already reserved");
       }
       const operation = this.#reserve(tx, "create_inert", input.resource_id, ctx);
@@ -295,6 +298,11 @@ export class SandboxesReferenceServiceV1 {
 
     const reservation = this.#repository.transaction((tx) => {
       const current = this.#mustSandbox(tx, resourceId);
+      const replay = this.#resolveReplay(tx, ctx, "activate", resourceId);
+      if (replay !== undefined) {
+        if (replay.state === "committed") return { operation: replay, replay: true, current };
+        throw new SandboxError("provider_state_unknown", "The original activation is unresolved");
+      }
       this.#assertCurrentFence(current, ctx.fence);
       this.#assertExpectedRevision(current, ctx.expected_revision);
       if (current.state !== "inert") {
@@ -355,6 +363,11 @@ export class SandboxesReferenceServiceV1 {
     const ctx = await this.#authorize("expire", resourceId, expireRequestDigest(resourceId), contextValue);
     const reservation = this.#repository.transaction((tx) => {
       const current = this.#mustSandbox(tx, resourceId);
+      const replay = this.#resolveReplay(tx, ctx, "expire", resourceId);
+      if (replay !== undefined) {
+        if (replay.state === "committed") return { operation: replay, replay: true, current };
+        throw new SandboxError("provider_state_unknown", "The original expiry operation is unresolved");
+      }
       this.#assertCurrentFence(current, ctx.fence);
       this.#assertExpectedRevision(current, ctx.expected_revision);
       if (!["inert", "active", "failed", "quarantined"].includes(current.state)) {
@@ -422,11 +435,14 @@ export class SandboxesReferenceServiceV1 {
 
     const reservation = this.#repository.transaction((tx) => {
       const current = this.#mustSandbox(tx, resourceId);
+      const replay = this.#resolveReplay(tx, ctx, "destroy", resourceId);
+      if (replay !== undefined) {
+        if (replay.state === "committed") return { operation: replay, replay: true, current };
+        throw new SandboxError("provider_state_unknown", "The original cleanup operation is unresolved");
+      }
       this.#assertCurrentFence(current, ctx.fence);
       this.#assertExpectedRevision(current, ctx.expected_revision);
       if (current.state === "destroyed") {
-        const replay = this.#resolveReplay(tx, ctx, "destroy", resourceId);
-        if (replay?.state === "committed") return { operation: replay, replay: true, current };
         throw new SandboxError("stale_revision", "Destroyed tombstones cannot be mutated");
       }
       if (current.provider_handle_sha256 === undefined) {
@@ -653,13 +669,11 @@ export class SandboxesReferenceServiceV1 {
     const now = this.#clock();
     return this.#repository.transaction((tx) => {
       const current = this.#mustSandbox(tx, resourceId);
-      this.#assertCurrentFence(current, ctx.fence);
-      this.#assertExpectedRevision(current, ctx.expected_revision);
-      if (!["creating_inert", "inert", "activating", "active", "expiring", "failed"].includes(current.state)) {
-        throw new SandboxError("stale_revision", "Expiry reconciliation was superseded");
-      }
-      const operation = this.#reserve(tx, "quarantine", resourceId, ctx);
-      if (operation.replay) {
+      const replay = this.#resolveReplay(tx, ctx, "quarantine", resourceId);
+      if (replay !== undefined) {
+        if (replay.state !== "committed") {
+          throw new SandboxError("provider_state_unknown", "The original quarantine operation is unresolved");
+        }
         return {
           schema_version: SCHEMA_VERSION,
           finding_id: createOpaqueId("finding"),
@@ -667,9 +681,15 @@ export class SandboxesReferenceServiceV1 {
           kind: "ttl_expired",
           disposition: "quarantined",
           observed_at: nowRfc3339(now),
-          evidence_sha256: operation.operation.result_sha256 ?? canonicalDigest(current),
+          evidence_sha256: replay.result_sha256 ?? canonicalDigest(current),
         };
       }
+      this.#assertCurrentFence(current, ctx.fence);
+      this.#assertExpectedRevision(current, ctx.expected_revision);
+      if (!["creating_inert", "inert", "activating", "active", "expiring", "failed"].includes(current.state)) {
+        throw new SandboxError("stale_revision", "Expiry reconciliation was superseded");
+      }
+      this.#reserve(tx, "quarantine", resourceId, ctx);
       const transitioned = this.#transition(
         current,
         "quarantined",
@@ -927,6 +947,11 @@ export class SandboxesReferenceServiceV1 {
       idempotency_key_sha256: ctx.idempotency_key_sha256,
       request_sha256: ctx.request_sha256,
       capability_use_sha256: capabilityUse,
+      dispatch_journal_anchor_sha256: ctx.dispatch_journal.anchor_sha256,
+      expected_resource_lifecycle_generation:
+        ctx.transition.expected_resource_lifecycle_generation,
+      post_resource_lifecycle_generation: ctx.transition.post_resource_lifecycle_generation,
+      fence: ctx.fence,
       state: "in_flight",
       created_at: now,
       updated_at: now,

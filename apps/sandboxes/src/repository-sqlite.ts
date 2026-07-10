@@ -223,11 +223,33 @@ export class SqliteSandboxRepositoryV1 implements SandboxRepositoryV1 {
           .map((row) => parseStorageJson<SandboxV1>(row.record_json));
       },
       putSandbox(record, expectedRevision) {
+        const persistHighWater = () => {
+          db.query(`
+            INSERT INTO fence_high_watermarks(
+              resource_id, authority_epoch, route_epoch, lease_epoch,
+              resource_lifecycle_generation, operation_execution_epoch
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(resource_id) DO UPDATE SET
+              authority_epoch = excluded.authority_epoch,
+              route_epoch = excluded.route_epoch,
+              lease_epoch = excluded.lease_epoch,
+              resource_lifecycle_generation = excluded.resource_lifecycle_generation,
+              operation_execution_epoch = excluded.operation_execution_epoch
+          `).run(
+            record.id,
+            record.authority_epoch.toString(10),
+            record.route_epoch.toString(10),
+            record.lease_epoch.toString(10),
+            record.resource_lifecycle_generation.toString(10),
+            record.operation_execution_epoch.toString(10),
+          );
+        };
         if (expectedRevision === null) {
           if (record.revision !== 1) throw new SandboxError("stale_revision", "Initial revision must be one");
           try {
             db.query("INSERT INTO sandbox_records(resource_id, revision, state, record_json) VALUES (?, ?, ?, ?)")
               .run(record.id, record.revision, record.state, storageJson(record));
+            persistHighWater();
           } catch {
             throw new SandboxError("stale_revision", "Sandbox already exists");
           }
@@ -242,6 +264,7 @@ export class SqliteSandboxRepositoryV1 implements SandboxRepositoryV1 {
           )
           .run(record.revision, record.state, storageJson(record), record.id, expectedRevision);
         if (result.changes !== 1) throw new SandboxError("stale_revision", "Sandbox revision compare-and-swap failed");
+        persistHighWater();
       },
       getHandle(resourceId) {
         const row = db

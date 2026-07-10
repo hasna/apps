@@ -35,6 +35,25 @@ describe("reference lifecycle and adversarial invariants", () => {
     ]);
   });
 
+  test("an exact committed operation replay returns without a second provider call", async () => {
+    const h = harness();
+    const inert = await createInert(h);
+    const grant = activationGrant(inert);
+    const ctx = context(
+      "activate",
+      grant.operation_id,
+      grant.operation_digest,
+      inert.resource_lifecycle_generation,
+      inert.revision,
+      2n,
+      21,
+    );
+    const first = await h.service.activate(inert.id, grant, ctx);
+    const replay = await h.service.activate(inert.id, grant, ctx);
+    expect(replay).toEqual(first);
+    expect(h.runner.calls.activate).toBe(1);
+  });
+
   test("rejects a stale resource fence before the runner call", async () => {
     const h = harness();
     const inert = await createInert(h);

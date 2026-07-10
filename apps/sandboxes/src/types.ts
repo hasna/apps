@@ -346,6 +346,10 @@ export interface OperationRecordV1 {
   idempotency_key_sha256: Digest;
   request_sha256: Digest;
   capability_use_sha256: Digest;
+  dispatch_journal_anchor_sha256: Digest;
+  expected_resource_lifecycle_generation: bigint;
+  post_resource_lifecycle_generation: bigint;
+  fence: CanonicalSandboxEffectFenceV1;
   state: "in_flight" | "committed" | "aborted" | "unknown";
   result_sha256?: Digest;
   error_code?: string;
