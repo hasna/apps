@@ -1,4 +1,7 @@
-import type { SandboxesAuthorityVerifierV1 } from "./service.js";
+import type {
+  AuthenticatedEffectBindingsV1,
+  SandboxesAuthorityVerifierV1,
+} from "./service.js";
 import type {
   ActivationGrantV1,
   CapabilityClaimsV1,
@@ -19,12 +22,27 @@ export class DeterministicTestAuthorityVerifierV1 implements SandboxesAuthorityV
     promotion: 0,
   };
 
-  async verifyCapability(_claims: CapabilityClaimsV1): Promise<void> {
+  async verifyCapability(claims: CapabilityClaimsV1): Promise<AuthenticatedEffectBindingsV1> {
     this.calls.capability += 1;
+    return {
+      actor_principal: claims.fence.actor_principal,
+      lease_holder_principal: claims.fence.lease_holder_principal,
+      operation_executor_principal: claims.fence.operation_executor_principal,
+      audience: claims.fence.audience,
+    };
   }
 
-  async verifyDispatchedJournalAnchor(_anchor: DispatchedJournalAnchorV1): Promise<void> {
+  async verifyDispatchedJournalAnchor(
+    _anchor: DispatchedJournalAnchorV1,
+    fence: CapabilityClaimsV1["fence"],
+  ): Promise<AuthenticatedEffectBindingsV1> {
     this.calls.dispatch_journal += 1;
+    return {
+      actor_principal: fence.actor_principal,
+      lease_holder_principal: fence.lease_holder_principal,
+      operation_executor_principal: fence.operation_executor_principal,
+      audience: fence.audience,
+    };
   }
 
   async verifyActivationGrant(_grant: ActivationGrantV1): Promise<void> {

@@ -51,12 +51,24 @@ import {
 } from "./validation.js";
 
 export interface SandboxesAuthorityVerifierV1 {
-  verifyCapability(claims: CapabilityClaimsV1): Promise<void>;
-  verifyDispatchedJournalAnchor(anchor: DispatchedJournalAnchorV1): Promise<void>;
+  /** Returns identities taken from protected transport/PoP state, never request-body claims. */
+  verifyCapability(claims: CapabilityClaimsV1): Promise<AuthenticatedEffectBindingsV1>;
+  /** Performs the online current-fence check immediately before the provider call. */
+  verifyDispatchedJournalAnchor(
+    anchor: DispatchedJournalAnchorV1,
+    fence: CanonicalSandboxEffectFenceV1,
+  ): Promise<AuthenticatedEffectBindingsV1>;
   verifyActivationGrant(grant: ActivationGrantV1): Promise<void>;
   verifyCleanupGrant(grant: InfinityCleanupGrantV1): Promise<void>;
   verifyCheckpointReceipt(receipt: CheckpointDurabilityReceiptV1): Promise<void>;
   verifyGitPromotionReceipt(receipt: GitPromotionReceiptRefV1): Promise<void>;
+}
+
+export interface AuthenticatedEffectBindingsV1 {
+  actor_principal: string;
+  lease_holder_principal: string;
+  operation_executor_principal: string;
+  audience: typeof SCHEMA_VERSION;
 }
 
 export interface SandboxesServiceConfigV1 {
@@ -773,7 +785,8 @@ export class SandboxesReferenceServiceV1 {
     }
     this.#assertFenceFresh(fence);
     this.#assertWindow(capability.not_before, capability.expires_at, "capability_denied");
-    await this.#verifier.verifyCapability(capability);
+    const authenticated = await this.#verifier.verifyCapability(capability);
+    this.#assertAuthenticatedBindings(authenticated, fence);
     return {
       operation_id: value.operation_id,
       idempotency_key_sha256: value.idempotency_key_sha256,
@@ -793,7 +806,11 @@ export class SandboxesReferenceServiceV1 {
     if (ctx.dispatch_journal.state !== "dispatched") {
       throw new SandboxError("capability_denied", "Provider effect lacks a DISPATCHED journal anchor");
     }
-    await this.#verifier.verifyDispatchedJournalAnchor(ctx.dispatch_journal);
+    const authenticated = await this.#verifier.verifyDispatchedJournalAnchor(
+      ctx.dispatch_journal,
+      ctx.fence,
+    );
+    this.#assertAuthenticatedBindings(authenticated, ctx.fence);
     if (
       dispatchedJournalAnchorDigest(ctx.dispatch_journal) !== ctx.dispatch_journal.anchor_sha256 ||
       ctx.capability.dispatch_journal_anchor_sha256 !== ctx.dispatch_journal.anchor_sha256 ||
@@ -801,6 +818,23 @@ export class SandboxesReferenceServiceV1 {
       ctx.dispatch_journal.operation_digest !== ctx.fence.operation_digest
     ) {
       throw new SandboxError("integrity_failed", "DISPATCHED journal anchor changed before provider dispatch");
+    }
+  }
+
+  #assertAuthenticatedBindings(
+    authenticated: AuthenticatedEffectBindingsV1,
+    fence: CanonicalSandboxEffectFenceV1,
+  ): void {
+    if (
+      authenticated.actor_principal !== fence.actor_principal ||
+      authenticated.lease_holder_principal !== fence.lease_holder_principal ||
+      authenticated.operation_executor_principal !== fence.operation_executor_principal ||
+      authenticated.audience !== fence.audience
+    ) {
+      throw new SandboxError(
+        "capability_denied",
+        "Authenticated transport principals or audience do not match the protected fence",
+      );
     }
   }
 
