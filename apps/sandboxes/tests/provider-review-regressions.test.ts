@@ -496,6 +496,289 @@ describe("provider review regressions", () => {
     expect(h.runner.calls.read_exec_frames).toBe(1);
   });
 
+  test("exec start reserves its resource and exec identity before provider dispatch", async () => {
+    const h = harness();
+    const active = await activate(h, await createInert(h));
+    const start = {
+      schema_version: "sandboxes.exec-start-request/v1" as const,
+      handle: handleRef(active),
+      exec_id: oid("exec", 618),
+      executable: "/usr/bin/printf",
+      argv: ["%s", "unique-start"],
+      cwd: "/workspace" as const,
+      environment_profile_id: "minimal-v1" as const,
+      timeout_ms: 5_000,
+      max_output_bytes: 1024,
+      tty: false as const,
+    };
+    const firstContext = boundedContext(
+      active,
+      "exec.start",
+      canonicalDigest(start),
+      618,
+    );
+    const started = await h.service.startExec(start, firstContext);
+    const originalState = await h.repository.transaction((tx) =>
+      tx.getExecStreamState(active.id, start.exec_id));
+    expect(originalState).toMatchObject({
+      start_operation_id: firstContext.operation_id,
+      start_request_sha256: canonicalDigest(start),
+      phase: "started",
+      stream_root_sha256: started.stream_root_sha256,
+    });
+
+    expect(await restartedService(h).startExec(start, firstContext)).toEqual(started);
+    expect(h.runner.calls.start_exec).toBe(1);
+
+    await expect(restartedService(h).startExec(
+      start,
+      boundedContext(active, "exec.start", canonicalDigest(start), 619),
+    )).rejects.toMatchObject({ code: "idempotency_key_reused" });
+    const changed = { ...start, argv: ["%s", "replacement"] };
+    await expect(restartedService(h).startExec(
+      changed,
+      boundedContext(active, "exec.start", canonicalDigest(changed), 620),
+    )).rejects.toMatchObject({ code: "idempotency_key_reused" });
+    expect(h.runner.calls.start_exec).toBe(1);
+    expect(await h.repository.transaction((tx) =>
+      tx.getExecStreamState(active.id, start.exec_id))).toEqual(originalState);
+  });
+
+  test("an ambiguous exec start keeps its reservation and reconciles after restart", async () => {
+    const h = harness();
+    const active = await activate(h, await createInert(h));
+    const start = {
+      schema_version: "sandboxes.exec-start-request/v1" as const,
+      handle: handleRef(active),
+      exec_id: oid("exec", 621),
+      executable: "/usr/bin/printf",
+      argv: ["%s", "crash-start"],
+      cwd: "/workspace" as const,
+      environment_profile_id: "minimal-v1" as const,
+      timeout_ms: 5_000,
+      max_output_bytes: 1024,
+      tty: false as const,
+    };
+    const ctx = boundedContext(active, "exec.start", canonicalDigest(start), 621);
+    const original = h.runner.startExec.bind(h.runner);
+    let injected = false;
+    h.runner.startExec = async (...args) => {
+      const receipt = await original(...args);
+      if (!injected) {
+        injected = true;
+        throw new AmbiguousProviderEffectError();
+      }
+      return receipt;
+    };
+
+    await expect(h.service.startExec(start, ctx))
+      .rejects.toBeInstanceOf(AmbiguousProviderEffectError);
+    expect(await h.repository.transaction((tx) =>
+      tx.getExecStreamState(active.id, start.exec_id))).toMatchObject({
+      phase: "reserved",
+      start_operation_id: ctx.operation_id,
+      in_flight_operation_id: ctx.operation_id,
+    });
+    const recovered = await restartedService(h).startExec(start, ctx);
+    expect(recovered.exec_id).toBe(start.exec_id);
+    expect(h.runner.calls.start_exec).toBe(1);
+    expect(await h.repository.transaction((tx) =>
+      tx.getExecStreamState(active.id, start.exec_id))).toMatchObject({
+      phase: "started",
+      stream_root_sha256: recovered.stream_root_sha256,
+      in_flight_operation_id: null,
+    });
+  });
+
+  test("terminal exec streams reject later pages and cannot return to running", async () => {
+    const h = harness();
+    const active = await activate(h, await createInert(h));
+    const handle = handleRef(active);
+    const start = {
+      schema_version: "sandboxes.exec-start-request/v1" as const,
+      handle,
+      exec_id: oid("exec", 622),
+      executable: "/usr/bin/printf",
+      argv: ["%s", "terminal"],
+      cwd: "/workspace" as const,
+      environment_profile_id: "minimal-v1" as const,
+      timeout_ms: 5_000,
+      max_output_bytes: 1024,
+      tty: false as const,
+    };
+    const started = await h.service.startExec(
+      start,
+      boundedContext(active, "exec.start", canonicalDigest(start), 622),
+    );
+    const firstRead = {
+      schema_version: "sandboxes.exec-frame-read-request/v1" as const,
+      handle,
+      exec_id: start.exec_id,
+      cursor: started.initial_cursor,
+      prior_stream_root_sha256: started.stream_root_sha256,
+      resume_token: started.initial_resume_token,
+      resume_token_sha256: started.initial_resume_token_sha256,
+      next_expected_sequence: started.next_expected_sequence,
+      max_frames: 100,
+      max_bytes: 1024,
+      wait_ms: 0,
+    };
+    const page = await h.service.readExecFrames(
+      firstRead,
+      boundedContext(active, "exec.frames.read", canonicalDigest(firstRead), 623),
+    );
+    const postTerminalRead = {
+      ...firstRead,
+      cursor: page.next_cursor,
+      prior_stream_root_sha256: page.next_stream_root_sha256,
+      resume_token: page.next_resume_token,
+      resume_token_sha256: page.next_resume_token_sha256,
+      next_expected_sequence: page.next_expected_sequence,
+    };
+    await expect(h.service.readExecFrames(
+      postTerminalRead,
+      boundedContext(
+        active,
+        "exec.frames.read",
+        canonicalDigest(postTerminalRead),
+        624,
+      ),
+    )).rejects.toMatchObject({ code: "integrity_failed" });
+    expect(h.runner.calls.read_exec_frames).toBe(1);
+
+    const resultRequest = {
+      schema_version: "sandboxes.exec-result-request/v1" as const,
+      handle,
+      exec_id: start.exec_id,
+      prior_stream_root_sha256: page.next_stream_root_sha256,
+      resume_token: page.next_resume_token,
+      resume_token_sha256: page.next_resume_token_sha256,
+      next_expected_sequence: page.next_expected_sequence,
+    };
+    const originalResult = h.runner.readExecResult.bind(h.runner);
+    h.runner.readExecResult = async (...args) => {
+      const result = await originalResult(...args);
+      const { receipt_sha256: _receipt, ...facts } = result;
+      const runningFacts = {
+        ...facts,
+        state: "running" as const,
+        exit_code: null,
+        terminal_at: null,
+      };
+      return {
+        ...runningFacts,
+        receipt_sha256: canonicalDigest(runningFacts),
+      };
+    };
+    await expect(h.service.readExecResult(
+      resultRequest,
+      boundedContext(
+        active,
+        "exec.result.read",
+        canonicalDigest(resultRequest),
+        625,
+      ),
+    )).rejects.toMatchObject({ code: "integrity_failed" });
+    expect(await h.repository.transaction((tx) =>
+      tx.getExecStreamState(active.id, start.exec_id))).toMatchObject({ terminal: true });
+  });
+
+  test("exec page and result terminal/status flags must be internally consistent", async () => {
+    for (const corruption of ["terminal_frame", "has_more"] as const) {
+      const h = harness();
+      const active = await activate(h, await createInert(h));
+      const handle = handleRef(active);
+      const start = {
+        schema_version: "sandboxes.exec-start-request/v1" as const,
+        handle,
+        exec_id: oid("exec", corruption === "terminal_frame" ? 626 : 627),
+        executable: "/usr/bin/printf",
+        argv: ["%s", "flags"],
+        cwd: "/workspace" as const,
+        environment_profile_id: "minimal-v1" as const,
+        timeout_ms: 5_000,
+        max_output_bytes: 1024,
+        tty: false as const,
+      };
+      const seed = corruption === "terminal_frame" ? 626 : 627;
+      const started = await h.service.startExec(
+        start,
+        boundedContext(active, "exec.start", canonicalDigest(start), seed),
+      );
+      const read = {
+        schema_version: "sandboxes.exec-frame-read-request/v1" as const,
+        handle,
+        exec_id: start.exec_id,
+        cursor: started.initial_cursor,
+        prior_stream_root_sha256: started.stream_root_sha256,
+        resume_token: started.initial_resume_token,
+        resume_token_sha256: started.initial_resume_token_sha256,
+        next_expected_sequence: started.next_expected_sequence,
+        max_frames: 100,
+        max_bytes: 1024,
+        wait_ms: 0,
+      };
+      const original = h.runner.readExecFrames.bind(h.runner);
+      h.runner.readExecFrames = async (...args) => {
+        const page = await original(...args);
+        const { receipt_sha256: _receipt, ...facts } = page;
+        const corruptFacts = corruption === "terminal_frame"
+          ? { ...facts, terminal: false }
+          : { ...facts, has_more: true };
+        return {
+          ...corruptFacts,
+          receipt_sha256: canonicalDigest(corruptFacts),
+        };
+      };
+      await expect(h.service.readExecFrames(
+        read,
+        boundedContext(active, "exec.frames.read", canonicalDigest(read), seed + 10),
+      )).rejects.toMatchObject({ code: "integrity_failed" });
+    }
+
+    const h = harness();
+    const active = await activate(h, await createInert(h));
+    const start = {
+      schema_version: "sandboxes.exec-start-request/v1" as const,
+      handle: handleRef(active),
+      exec_id: oid("exec", 628),
+      executable: "/usr/bin/printf",
+      argv: ["%s", "result-flags"],
+      cwd: "/workspace" as const,
+      environment_profile_id: "minimal-v1" as const,
+      timeout_ms: 5_000,
+      max_output_bytes: 1024,
+      tty: false as const,
+    };
+    const started = await h.service.startExec(
+      start,
+      boundedContext(active, "exec.start", canonicalDigest(start), 628),
+    );
+    const resultRequest = {
+      schema_version: "sandboxes.exec-result-request/v1" as const,
+      handle: start.handle,
+      exec_id: start.exec_id,
+      prior_stream_root_sha256: started.stream_root_sha256,
+      resume_token: started.initial_resume_token,
+      resume_token_sha256: started.initial_resume_token_sha256,
+      next_expected_sequence: started.next_expected_sequence,
+    };
+    const originalResult = h.runner.readExecResult.bind(h.runner);
+    h.runner.readExecResult = async (...args) => {
+      const result = await originalResult(...args);
+      const { receipt_sha256: _receipt, ...facts } = result;
+      const corruptFacts = { ...facts, exit_code: 0 };
+      return {
+        ...corruptFacts,
+        receipt_sha256: canonicalDigest(corruptFacts),
+      };
+    };
+    await expect(h.service.readExecResult(
+      resultRequest,
+      boundedContext(active, "exec.result.read", canonicalDigest(resultRequest), 638),
+    )).rejects.toMatchObject({ code: "integrity_failed" });
+  });
+
   test("checkpoint capture requires grant, barrier, quiescence, manifest/blob and sink durability", async () => {
     const h = harness();
     const active = await activate(h, await createInert(h));

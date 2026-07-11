@@ -640,6 +640,30 @@ function validateExecFramePage(
   if (typeof v.has_more !== "boolean" || typeof v.terminal !== "boolean") {
     throw new SandboxError("validation_failed", "Exec page flags must be booleans");
   }
+  const terminalFrameIndexes = frames
+    .map((frame, index) => frame.kind === "terminal" ? index : -1)
+    .filter((index) => index >= 0);
+  if (
+    terminalFrameIndexes.length > 1 ||
+    (v.terminal && (
+      terminalFrameIndexes.length !== 1 ||
+      terminalFrameIndexes[0] !== frames.length - 1
+    )) ||
+    (!v.terminal && terminalFrameIndexes.length !== 0) ||
+    (v.terminal && v.has_more)
+  ) {
+    throw new SandboxError(
+      "integrity_failed",
+      "Exec page terminal flags and frame ordering are inconsistent",
+    );
+  }
+  const terminalFrame = frames.at(-1);
+  if (
+    terminalFrame?.kind === "terminal" &&
+    (terminalFrame.payload_length !== 0 || terminalFrame.payload_base64url !== "")
+  ) {
+    throw new SandboxError("integrity_failed", "Exec terminal frame must have an empty payload");
+  }
   const returnedFrames = integer(v.returned_frames, "exec_frame_page.returned_frames", 0, request.max_frames);
   const returnedBytes = integer(v.returned_bytes, "exec_frame_page.returned_bytes", 0, request.max_bytes);
   if (
@@ -664,7 +688,11 @@ function validateExecResult(value: unknown, request: ExecResultRequestV1): ExecR
   if (opaqueId(v.exec_id, "exec_result.exec_id", "exec") !== request.exec_id) {
     throw new SandboxError("integrity_failed", "Exec result changed exec identity");
   }
-  oneOf(v.state, ["running", "succeeded", "failed", "canceled", "timed_out", "output_limited"] as const, "exec_result.state");
+  const state = oneOf(
+    v.state,
+    ["running", "succeeded", "failed", "canceled", "timed_out", "output_limited"] as const,
+    "exec_result.state",
+  );
   if (v.exit_code !== null && (!Number.isSafeInteger(v.exit_code) || (v.exit_code as number) < -1 || (v.exit_code as number) > 255)) {
     throw new SandboxError("validation_failed", "Exec result exit_code is outside its bound");
   }
@@ -683,6 +711,20 @@ function validateExecResult(value: unknown, request: ExecResultRequestV1): ExecR
     throw new SandboxError("integrity_failed", "Exec result changed the durable final stream state");
   }
   if (v.terminal_at !== null) time(v.terminal_at, "exec_result.terminal_at");
+  if (
+    (state === "running" && (v.exit_code !== null || v.terminal_at !== null)) ||
+    (state !== "running" && v.terminal_at === null) ||
+    (state === "succeeded" && v.exit_code !== 0) ||
+    (state === "failed" && (v.exit_code === null || v.exit_code === 0)) ||
+    (["canceled", "timed_out", "output_limited"] as const).includes(
+      state as "canceled" | "timed_out" | "output_limited",
+    ) && v.exit_code !== null
+  ) {
+    throw new SandboxError(
+      "integrity_failed",
+      "Exec result state, exit code, and terminal timestamp are inconsistent",
+    );
+  }
   verifySelfDigest(v, "receipt_sha256", "exec_result");
   return value as ExecResultV1;
 }

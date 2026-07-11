@@ -12,10 +12,11 @@ import {
   operationIdempotencyKeyV1,
   type SandboxRepositoryStateV1,
 } from "./repository-memory.js";
-import type {
-  RepositoryHealthV1,
-  SandboxRepositoryTxV1,
-  SandboxRepositoryV1,
+import {
+  assertExecStreamStateTransitionV1,
+  type RepositoryHealthV1,
+  type SandboxRepositoryTxV1,
+  type SandboxRepositoryV1,
 } from "./repository.js";
 import type {
   CheckpointDurabilityReceiptV1,
@@ -370,6 +371,41 @@ const POSTGRES_MIGRATIONS = [
         record_json JSONB NOT NULL,
         PRIMARY KEY(resource_id, exec_id)
       );
+    `,
+  },
+  {
+    version: 7,
+    name: "exec_start_reservation_cas_v1",
+    sql: `
+      ALTER TABLE sandboxes.exec_stream_states
+        ADD COLUMN start_operation_id TEXT,
+        ADD COLUMN start_request_sha256 TEXT,
+        ADD COLUMN phase TEXT NOT NULL DEFAULT 'started'
+          CHECK (phase IN ('reserved', 'started')),
+        ADD COLUMN terminal BOOLEAN NOT NULL DEFAULT false,
+        ALTER COLUMN stream_root_sha256 DROP NOT NULL,
+        ALTER COLUMN next_expected_sequence DROP NOT NULL;
+      UPDATE sandboxes.exec_stream_states AS stream
+      SET start_operation_id = operation.operation_id,
+          start_request_sha256 = operation.request_sha256,
+          terminal = COALESCE((stream.record_json->>'terminal')::boolean, false),
+          record_json = stream.record_json || jsonb_build_object(
+            'start_operation_id', operation.operation_id,
+            'start_request_sha256', operation.request_sha256,
+            'phase', 'started'
+          )
+      FROM sandboxes.operations AS operation
+      WHERE operation.resource_id = stream.resource_id
+        AND operation.operation = 'exec.start'
+        AND operation.record_json #>> '{bounded_result,result_document,exec_id}' = stream.exec_id;
+      ALTER TABLE sandboxes.exec_stream_states
+        ALTER COLUMN start_operation_id SET NOT NULL,
+        ALTER COLUMN start_request_sha256 SET NOT NULL,
+        ALTER COLUMN phase DROP DEFAULT,
+        ALTER COLUMN terminal DROP DEFAULT,
+        ADD CONSTRAINT exec_stream_start_request_digest CHECK (
+          start_request_sha256 ~ '^sha256:[0-9a-f]{64}$'
+        );
     `,
   },
 ] as const;
@@ -809,21 +845,31 @@ export class PostgresSandboxRepositoryV1 implements SandboxRepositoryV1 {
     const execStreams = await session.query<{
       resource_id: string;
       exec_id: string;
-      stream_root_sha256: string;
-      next_expected_sequence: string | number | bigint;
+      start_operation_id: string;
+      start_request_sha256: string;
+      phase: string;
+      terminal: boolean;
+      stream_root_sha256: string | null;
+      next_expected_sequence: string | number | bigint | null;
       record_json: unknown;
     }>(`
-      SELECT resource_id, exec_id, stream_root_sha256, next_expected_sequence, record_json
+      SELECT resource_id, exec_id, start_operation_id, start_request_sha256,
+             phase, terminal, stream_root_sha256, next_expected_sequence, record_json
       FROM sandboxes.exec_stream_states ORDER BY resource_id, exec_id
     `);
     for (const row of execStreams) {
       const record = decodeRecord<ExecStreamStateV1>(row.record_json);
+      assertExecStreamStateTransitionV1(null, record);
       assertProtectedColumns(
         record.resource_id === row.resource_id && record.exec_id === row.exec_id &&
+          record.start_operation_id === row.start_operation_id &&
+          record.start_request_sha256 === row.start_request_sha256 &&
+          record.phase === row.phase &&
+          record.terminal === row.terminal &&
           record.stream_root_sha256 === row.stream_root_sha256 &&
-          record.next_expected_sequence === databaseBigInt(
-            row.next_expected_sequence, "exec stream next expected sequence",
-          ),
+          record.next_expected_sequence === (row.next_expected_sequence === null
+            ? null
+            : databaseBigInt(row.next_expected_sequence, "exec stream next expected sequence")),
         "exec stream state",
       );
       state.execStreamStates.set(`${record.resource_id}\u0000${record.exec_id}`, record);
@@ -1250,22 +1296,50 @@ export class PostgresSandboxRepositoryV1 implements SandboxRepositoryV1 {
 
     for (const [identity, streamState] of after.execStreamStates) {
       if (!mapChanged(before.execStreamStates, after.execStreamStates, identity)) continue;
-      await session.query(
-        `INSERT INTO sandboxes.exec_stream_states(
-           resource_id, exec_id, stream_root_sha256, next_expected_sequence, record_json
-         ) VALUES ($1, $2, $3, $4, $5::jsonb)
-         ON CONFLICT(resource_id, exec_id) DO UPDATE SET
-           stream_root_sha256 = EXCLUDED.stream_root_sha256,
-           next_expected_sequence = EXCLUDED.next_expected_sequence,
-           record_json = EXCLUDED.record_json`,
-        [
-          streamState.resource_id,
-          streamState.exec_id,
-          streamState.stream_root_sha256,
-          streamState.next_expected_sequence.toString(10),
-          encoded(streamState),
-        ],
-      );
+      const prior = before.execStreamStates.get(identity);
+      if (prior === undefined) {
+        await session.query(
+          `INSERT INTO sandboxes.exec_stream_states(
+             resource_id, exec_id, start_operation_id, start_request_sha256,
+             phase, terminal, stream_root_sha256, next_expected_sequence, record_json
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)`,
+          [
+            streamState.resource_id,
+            streamState.exec_id,
+            streamState.start_operation_id,
+            streamState.start_request_sha256,
+            streamState.phase,
+            streamState.terminal,
+            streamState.stream_root_sha256,
+            streamState.next_expected_sequence?.toString(10) ?? null,
+            encoded(streamState),
+          ],
+        );
+      } else {
+        const updated = await session.query<{ resource_id: string }>(
+          `UPDATE sandboxes.exec_stream_states SET
+             start_operation_id = $3, start_request_sha256 = $4,
+             phase = $5, terminal = $6, stream_root_sha256 = $7,
+             next_expected_sequence = $8, record_json = $9::jsonb
+           WHERE resource_id = $1 AND exec_id = $2 AND record_json = $10::jsonb
+           RETURNING resource_id`,
+          [
+            streamState.resource_id,
+            streamState.exec_id,
+            streamState.start_operation_id,
+            streamState.start_request_sha256,
+            streamState.phase,
+            streamState.terminal,
+            streamState.stream_root_sha256,
+            streamState.next_expected_sequence?.toString(10) ?? null,
+            encoded(streamState),
+            encoded(prior),
+          ],
+        );
+        if (updated.length !== 1) {
+          throw new SandboxError("stale_revision", "Postgres exec stream CAS failed");
+        }
+      }
     }
 
     for (const [operationId, record] of after.operations) {

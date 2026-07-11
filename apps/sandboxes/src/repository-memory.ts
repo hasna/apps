@@ -4,7 +4,10 @@ import type {
   SandboxRepositoryTxV1,
   SandboxRepositoryV1,
 } from "./repository.js";
-import { assertExternalOperationAnchorRecordV1 } from "./repository.js";
+import {
+  assertExecStreamStateTransitionV1,
+  assertExternalOperationAnchorRecordV1,
+} from "./repository.js";
 import { assertDigest, assertOpaqueId, canonicalDigest } from "./canonical.js";
 import type {
   CheckpointDurabilityReceiptV1,
@@ -104,7 +107,7 @@ export class InMemorySandboxRepositoryV1 implements SandboxRepositoryV1 {
   async health(): Promise<RepositoryHealthV1> {
     return {
       backend: "memory",
-      schema_version: 6,
+      schema_version: 7,
       integrity: "ok",
       sandbox_count: this.#state.sandboxes.size,
       operation_count: this.#state.operations.size,
@@ -156,11 +159,19 @@ export class InMemorySandboxRepositoryV1 implements SandboxRepositoryV1 {
         const value = state.execStreamStates.get(`${resourceId}\u0000${execId}`);
         return value === undefined ? undefined : structuredClone(value);
       },
-      putExecStreamState(streamState) {
-        state.execStreamStates.set(
-          `${streamState.resource_id}\u0000${streamState.exec_id}`,
-          structuredClone(streamState),
-        );
+      compareAndSwapExecStreamState(expected, next) {
+        assertExecStreamStateTransitionV1(expected, next);
+        const identity = `${next.resource_id}\u0000${next.exec_id}`;
+        const current = state.execStreamStates.get(identity);
+        if (
+          (expected === null && current !== undefined) ||
+          (expected !== null && (
+            current === undefined || canonicalDigest(current) !== canonicalDigest(expected)
+          ))
+        ) {
+          throw new SandboxError("stale_revision", "Exec stream state compare-and-swap failed");
+        }
+        state.execStreamStates.set(identity, structuredClone(next));
       },
       findIdempotentOperation(actorPrincipal, operation, resourceId, idempotencyKeySha256) {
         const operationId = state.idempotency.get(operationIdempotencyKeyV1(actorPrincipal, operation, resourceId, idempotencyKeySha256));

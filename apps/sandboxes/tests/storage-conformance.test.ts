@@ -204,7 +204,7 @@ describe("storage conformance", () => {
     const repository = sqlite();
     repository.migrate();
     repository.migrate();
-    expect(await repository.health()).toMatchObject({ backend: "sqlite", schema_version: 6, integrity: "ok" });
+    expect(await repository.health()).toMatchObject({ backend: "sqlite", schema_version: 7, integrity: "ok" });
     await repository.close();
   });
 
@@ -269,6 +269,9 @@ describe("storage conformance", () => {
       resource_id: active.id,
       resource_lifecycle_generation: active.resource_lifecycle_generation,
       exec_id: oid("exec", 990),
+      start_operation_id: oid("op", 991),
+      start_request_sha256: digest("durable_start_request"),
+      phase: "started" as const,
       cursor: "cursor_durable",
       cursor_sha256: digest("cursor_durable"),
       stream_root_sha256: digest("durable_stream_root"),
@@ -279,7 +282,7 @@ describe("storage conformance", () => {
       terminal: false,
       updated_at: "2030-01-01T00:00:00.000Z",
     };
-    await first.transaction((tx) => tx.putExecStreamState(state));
+    await first.transaction((tx) => tx.compareAndSwapExecStreamState(null, state));
     await first.close();
 
     const reopened = new SqliteSandboxRepositoryV1(path, {

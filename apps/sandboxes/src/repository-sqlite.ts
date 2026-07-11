@@ -15,7 +15,10 @@ import type {
   SandboxRepositoryTxV1,
   SandboxRepositoryV1,
 } from "./repository.js";
-import { assertExternalOperationAnchorRecordV1 } from "./repository.js";
+import {
+  assertExecStreamStateTransitionV1,
+  assertExternalOperationAnchorRecordV1,
+} from "./repository.js";
 import type {
   CheckpointDurabilityReceiptV1,
   ExecStreamStateV1,
@@ -212,6 +215,68 @@ const MIGRATIONS = [
         record_json TEXT NOT NULL,
         PRIMARY KEY(resource_id, exec_id)
       );
+    `,
+  },
+  {
+    version: 7,
+    name: "exec_start_reservation_cas_v1",
+    sql: `
+      ALTER TABLE exec_stream_states RENAME TO exec_stream_states_v6;
+      CREATE TABLE exec_stream_states (
+        resource_id TEXT NOT NULL REFERENCES sandbox_records(resource_id),
+        exec_id TEXT NOT NULL,
+        start_operation_id TEXT NOT NULL,
+        start_request_sha256 TEXT NOT NULL,
+        phase TEXT NOT NULL CHECK (phase IN ('reserved', 'started')),
+        stream_root_sha256 TEXT,
+        next_expected_sequence TEXT,
+        terminal INTEGER NOT NULL CHECK (terminal IN (0, 1)),
+        record_json TEXT NOT NULL,
+        PRIMARY KEY(resource_id, exec_id)
+      );
+      WITH enriched AS (
+        SELECT legacy.*,
+          (
+            SELECT operation.operation_id
+            FROM operations AS operation
+            WHERE operation.resource_id = legacy.resource_id
+              AND operation.operation = 'exec.start'
+              AND json_extract(
+                operation.record_json,
+                '$.bounded_result.result_document.exec_id'
+              ) = legacy.exec_id
+            ORDER BY operation.operation_id
+            LIMIT 1
+          ) AS start_operation_id,
+          (
+            SELECT operation.request_sha256
+            FROM operations AS operation
+            WHERE operation.resource_id = legacy.resource_id
+              AND operation.operation = 'exec.start'
+              AND json_extract(
+                operation.record_json,
+                '$.bounded_result.result_document.exec_id'
+              ) = legacy.exec_id
+            ORDER BY operation.operation_id
+            LIMIT 1
+          ) AS start_request_sha256
+        FROM exec_stream_states_v6 AS legacy
+      )
+      INSERT INTO exec_stream_states(
+        resource_id, exec_id, start_operation_id, start_request_sha256,
+        phase, stream_root_sha256, next_expected_sequence, terminal, record_json
+      )
+      SELECT resource_id, exec_id, start_operation_id, start_request_sha256,
+        'started', stream_root_sha256, next_expected_sequence,
+        json_extract(record_json, '$.terminal'),
+        json_set(
+          record_json,
+          '$.start_operation_id', start_operation_id,
+          '$.start_request_sha256', start_request_sha256,
+          '$.phase', 'started'
+        )
+      FROM enriched;
+      DROP TABLE exec_stream_states_v6;
     `,
   },
 ] as const;
@@ -491,40 +556,81 @@ export class SqliteSandboxRepositoryV1 implements SandboxRepositoryV1 {
       },
       getExecStreamState(resourceId, execId) {
         const row = db.query<{
-          stream_root_sha256: string;
-          next_expected_sequence: string;
+          start_operation_id: string;
+          start_request_sha256: string;
+          stream_root_sha256: string | null;
+          next_expected_sequence: string | null;
+          phase: string;
+          terminal: number;
           record_json: string;
         }, [string, string]>(`
-          SELECT stream_root_sha256, next_expected_sequence, record_json
+          SELECT start_operation_id, start_request_sha256, phase,
+                 stream_root_sha256, next_expected_sequence, terminal, record_json
           FROM exec_stream_states WHERE resource_id = ? AND exec_id = ?
         `).get(resourceId, execId);
         if (row === null) return undefined;
         const streamState = parseStorageJson<ExecStreamStateV1>(row.record_json);
+        assertExecStreamStateTransitionV1(null, streamState);
         if (
           streamState.resource_id !== resourceId || streamState.exec_id !== execId ||
+          streamState.start_operation_id !== row.start_operation_id ||
+          streamState.start_request_sha256 !== row.start_request_sha256 ||
+          streamState.phase !== row.phase ||
+          streamState.terminal !== (row.terminal === 1) ||
           streamState.stream_root_sha256 !== row.stream_root_sha256 ||
-          streamState.next_expected_sequence !== BigInt(row.next_expected_sequence)
+          streamState.next_expected_sequence !== (
+            row.next_expected_sequence === null ? null : BigInt(row.next_expected_sequence)
+          )
         ) {
           throw new SandboxError("integrity_failed", "SQLite exec stream protected columns differ");
         }
         return streamState;
       },
-      putExecStreamState(streamState) {
-        db.query(`
-          INSERT INTO exec_stream_states(
-            resource_id, exec_id, stream_root_sha256, next_expected_sequence, record_json
-          ) VALUES (?, ?, ?, ?, ?)
-          ON CONFLICT(resource_id, exec_id) DO UPDATE SET
-            stream_root_sha256 = excluded.stream_root_sha256,
-            next_expected_sequence = excluded.next_expected_sequence,
-            record_json = excluded.record_json
+      compareAndSwapExecStreamState(expected, next) {
+        assertExecStreamStateTransitionV1(expected, next);
+        if (expected === null) {
+          try {
+            db.query(`
+              INSERT INTO exec_stream_states(
+                resource_id, exec_id, start_operation_id, start_request_sha256,
+                phase, stream_root_sha256, next_expected_sequence, terminal, record_json
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(
+              next.resource_id,
+              next.exec_id,
+              next.start_operation_id,
+              next.start_request_sha256,
+              next.phase,
+              next.stream_root_sha256,
+              next.next_expected_sequence?.toString(10) ?? null,
+              next.terminal ? 1 : 0,
+              storageJson(next),
+            );
+          } catch {
+            throw new SandboxError("stale_revision", "Exec stream state compare-and-swap failed");
+          }
+          return;
+        }
+        const changed = db.query(`
+          UPDATE exec_stream_states SET
+            start_operation_id = ?, start_request_sha256 = ?, phase = ?,
+            stream_root_sha256 = ?, next_expected_sequence = ?, terminal = ?, record_json = ?
+          WHERE resource_id = ? AND exec_id = ? AND record_json = ?
         `).run(
-          streamState.resource_id,
-          streamState.exec_id,
-          streamState.stream_root_sha256,
-          streamState.next_expected_sequence.toString(10),
-          storageJson(streamState),
+          next.start_operation_id,
+          next.start_request_sha256,
+          next.phase,
+          next.stream_root_sha256,
+          next.next_expected_sequence?.toString(10) ?? null,
+          next.terminal ? 1 : 0,
+          storageJson(next),
+          expected.resource_id,
+          expected.exec_id,
+          storageJson(expected),
         );
+        if (changed.changes !== 1) {
+          throw new SandboxError("stale_revision", "Exec stream state compare-and-swap failed");
+        }
       },
       findIdempotentOperation(actorPrincipal, operation, resourceId, idempotencyKeySha256) {
         return parseOperation(

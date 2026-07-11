@@ -657,6 +657,74 @@ async function conformanceCorpus(
   expect(casRace.filter((result) => result.status === "rejected")).toHaveLength(1);
   expect(casRace.map(rejectedCode).filter(Boolean)).toEqual(["stale_revision"]);
 
+  const execStreamReservation = {
+    schema_version: "sandboxes.exec-stream-state/v1" as const,
+    resource_id: destroyed.id,
+    resource_lifecycle_generation: destroyed.resource_lifecycle_generation,
+    exec_id: oid("exec", 953),
+    start_operation_id: oid("op", 953),
+    start_request_sha256: digest("live-exec-start-request"),
+    phase: "reserved" as const,
+    cursor: null,
+    cursor_sha256: null,
+    stream_root_sha256: null,
+    resume_token: null,
+    resume_token_sha256: null,
+    next_expected_sequence: null,
+    in_flight_operation_id: oid("op", 953),
+    terminal: false,
+    updated_at: now.toISOString(),
+  };
+  await repository.transaction((tx) =>
+    tx.compareAndSwapExecStreamState(null, execStreamReservation));
+  const reloadedReservation = await repository.transaction((tx) =>
+    tx.getExecStreamState(destroyed.id, execStreamReservation.exec_id));
+  expect(reloadedReservation).toEqual(execStreamReservation);
+  await expect(repository.transaction((tx) =>
+    tx.compareAndSwapExecStreamState(null, execStreamReservation)))
+    .rejects.toMatchObject({ code: "stale_revision" });
+  const execStreamBase = {
+    ...execStreamReservation,
+    phase: "started" as const,
+    cursor: "cursor_live_exec_base",
+    cursor_sha256: digest("cursor_live_exec_base"),
+    stream_root_sha256: digest("live-exec-stream-base"),
+    resume_token: "resume_live_exec_base",
+    resume_token_sha256: digest("resume_live_exec_base"),
+    next_expected_sequence: 1n,
+    in_flight_operation_id: null,
+  };
+  await repository.transaction((tx) =>
+    tx.compareAndSwapExecStreamState(execStreamReservation, execStreamBase));
+  const execStreamSuccessors = [1, 2].map((seed) => ({
+    ...execStreamBase,
+    cursor: `cursor_live_exec_${seed}`,
+    cursor_sha256: digest(`cursor_live_exec_${seed}`),
+    stream_root_sha256: digest(`live-exec-stream-${seed}`),
+    resume_token: `resume_live_exec_${seed}`,
+    resume_token_sha256: digest(`resume_live_exec_${seed}`),
+    next_expected_sequence: 2n,
+  }));
+  const execStreamCasRace = await Promise.allSettled(execStreamSuccessors.map(
+    async (successor) => await repository.transaction((tx) =>
+      tx.compareAndSwapExecStreamState(execStreamBase, successor)),
+  ));
+  expect(execStreamCasRace.filter((result) => result.status === "fulfilled"))
+    .toHaveLength(1);
+  expect(execStreamCasRace.filter((result) => result.status === "rejected"))
+    .toHaveLength(1);
+  expect(execStreamCasRace.map(rejectedCode).filter(Boolean)).toEqual(["stale_revision"]);
+  const execStreamWinner = await repository.transaction((tx) =>
+    tx.getExecStreamState(destroyed.id, execStreamBase.exec_id));
+  if (execStreamWinner === undefined) throw new Error("exec stream CAS winner is missing");
+  const terminalExecStream = { ...execStreamWinner, terminal: true };
+  await repository.transaction((tx) =>
+    tx.compareAndSwapExecStreamState(execStreamWinner, terminalExecStream));
+  await expect(repository.transaction((tx) => tx.compareAndSwapExecStreamState(
+    terminalExecStream,
+    { ...terminalExecStream, terminal: false },
+  ))).rejects.toMatchObject({ code: "integrity_failed" });
+
   const beforeRollback = await repository.transaction((tx) => tx.getSandbox(destroyed.id));
   if (beforeRollback === undefined) throw new Error("rollback corpus sandbox is missing");
   await expect(repository.transaction((tx) => {
@@ -716,6 +784,7 @@ async function conformanceCorpus(
     sandboxCount: health.sandbox_count,
     operationCount: health.operation_count,
     schemaVersion: health.schema_version,
+    execStreamTerminal: terminalExecStream.terminal,
   };
 }
 
@@ -984,7 +1053,18 @@ test("isolated live Postgres matches memory and SQLite storage/failure/race sema
   ]) {
     expect(process.env[forbiddenAmbient]).toBeUndefined();
   }
-  expect(POSTGRES_SCHEMA_MIGRATIONS_V1).toHaveLength(5);
+  const expectedMigrationVersions: number[] = POSTGRES_SCHEMA_MIGRATIONS_V1.map(
+    (migration) => Number(migration.version),
+  );
+  expect(expectedMigrationVersions).toEqual(
+    Array.from(
+      { length: POSTGRES_SCHEMA_MIGRATIONS_V1.length },
+      (_, index) => index + 1,
+    ),
+  );
+  expect(new Set(POSTGRES_SCHEMA_MIGRATIONS_V1.map(
+    (migration) => migration.name,
+  )).size).toBe(POSTGRES_SCHEMA_MIGRATIONS_V1.length);
 
   const insecureRuntime = new InsecureReadyClient(config.runtimeRole, config.database);
   await expect(PostgresSandboxRepositoryV1.fromClient(insecureRuntime, {
@@ -1016,6 +1096,20 @@ test("isolated live Postgres matches memory and SQLite storage/failure/race sema
     expected_migration_role: config.migrationRole,
     expected_database: config.database,
   });
+  const persistedMigrations = await migration.query<{
+    version: number;
+    name: string;
+    checksum_sha256: string;
+  }>(`
+    SELECT version, name, checksum_sha256
+    FROM sandboxes.schema_migrations
+    ORDER BY version ASC
+  `);
+  expect(persistedMigrations.map((stored) => ({
+    version: Number(stored.version),
+    name: stored.name,
+    checksum_sha256: stored.checksum_sha256,
+  }))).toEqual(POSTGRES_SCHEMA_MIGRATIONS_V1);
   await provisionRuntimeRole(migration);
 
   const runtimeProbe = new TestPostgresClient(config.runtimeUrl, config.tlsCa);
@@ -1172,7 +1266,7 @@ test("isolated live Postgres matches memory and SQLite storage/failure/race sema
   );
   expect(await finalRepository.health()).toMatchObject({
     backend: "postgres",
-    schema_version: 5,
+    schema_version: POSTGRES_SCHEMA_MIGRATIONS_V1.length,
     integrity: "ok",
   });
   await finalRepository.close();

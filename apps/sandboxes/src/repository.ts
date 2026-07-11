@@ -3,6 +3,7 @@ import {
   assertOpaqueId,
   assertRfc3339,
   parsePositiveInt64,
+  sha256,
 } from "./canonical.js";
 import { SandboxError } from "./errors.js";
 import {
@@ -22,6 +23,67 @@ import type {
   StoredSafetyFenceObservationV1,
 } from "./types.js";
 import { SCHEMA_VERSION } from "./types.js";
+
+export function assertExecStreamStateTransitionV1(
+  expected: ExecStreamStateV1 | null,
+  next: ExecStreamStateV1,
+): void {
+  if (next.schema_version !== "sandboxes.exec-stream-state/v1") {
+    throw new SandboxError("protocol_incompatible", "Exec stream state schema version mismatch");
+  }
+  if (next.phase !== "reserved" && next.phase !== "started") {
+    throw new SandboxError("validation_failed", "Exec stream state phase is invalid");
+  }
+  assertOpaqueId(next.exec_id, "exec_stream_state.exec_id", "exec");
+  assertOpaqueId(next.start_operation_id, "exec_stream_state.start_operation_id", "op");
+  assertDigest(next.start_request_sha256, "exec_stream_state.start_request_sha256");
+  if (next.in_flight_operation_id !== null) {
+    assertOpaqueId(next.in_flight_operation_id, "exec_stream_state.in_flight_operation_id", "op");
+  }
+  assertRfc3339(next.updated_at, "exec_stream_state.updated_at");
+  const chainFields = [
+    next.cursor,
+    next.cursor_sha256,
+    next.stream_root_sha256,
+    next.resume_token,
+    next.resume_token_sha256,
+    next.next_expected_sequence,
+  ];
+  if (
+    (next.phase === "reserved" && (
+      chainFields.some((value) => value !== null) || next.terminal
+    )) ||
+    (next.phase === "started" && chainFields.some((value) => value === null))
+  ) {
+    throw new SandboxError("integrity_failed", "Exec stream phase and chain fields are inconsistent");
+  }
+  if (next.phase === "started") {
+    if (
+      sha256(next.cursor!) !== next.cursor_sha256 ||
+      sha256(next.resume_token!) !== next.resume_token_sha256 ||
+      next.next_expected_sequence! < 1n
+    ) {
+      throw new SandboxError("integrity_failed", "Exec stream chain digests or sequence differ");
+    }
+    assertDigest(next.stream_root_sha256!, "exec_stream_state.stream_root_sha256");
+  }
+  if (expected === null) return;
+  if (
+    expected.resource_id !== next.resource_id ||
+    expected.exec_id !== next.exec_id ||
+    expected.resource_lifecycle_generation !== next.resource_lifecycle_generation ||
+    expected.start_operation_id !== next.start_operation_id ||
+    expected.start_request_sha256 !== next.start_request_sha256
+  ) {
+    throw new SandboxError("integrity_failed", "Exec stream CAS changed immutable identity");
+  }
+  if (
+    (expected.phase === "started" && next.phase !== "started") ||
+    (expected.terminal && !next.terminal)
+  ) {
+    throw new SandboxError("integrity_failed", "Exec stream CAS regressed durable state");
+  }
+}
 
 export function assertExternalOperationAnchorRecordV1(
   record: ExternalOperationAnchorRecordV1,
@@ -94,7 +156,10 @@ export interface SandboxRepositoryTxV1 {
   putHandle(handle: SealedProviderHandleV1): void;
   getOperation(operationId: string): OperationRecordV1 | undefined;
   getExecStreamState(resourceId: string, execId: string): ExecStreamStateV1 | undefined;
-  putExecStreamState(state: ExecStreamStateV1): void;
+  compareAndSwapExecStreamState(
+    expected: ExecStreamStateV1 | null,
+    next: ExecStreamStateV1,
+  ): void;
   findIdempotentOperation(
     actorPrincipal: string,
     operation: string,

@@ -2272,11 +2272,18 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
                 this.#txNow(tx),
               );
             }
-            if (operation === "exec.frames.read" || operation === "exec.result.read") {
-              const execRequest = request as unknown as ExecFrameReadRequestV1 | ExecResultRequestV1;
+            if (
+              operation === "exec.start" ||
+              operation === "exec.frames.read" ||
+              operation === "exec.result.read"
+            ) {
+              const execRequest = request as unknown as
+                | ExecStartRequestV1
+                | ExecFrameReadRequestV1
+                | ExecResultRequestV1;
               const stream = tx.getExecStreamState(execRequest.handle.resource_id, execRequest.exec_id);
               if (stream?.in_flight_operation_id === ctx.operation_id) {
-                tx.putExecStreamState({
+                tx.compareAndSwapExecStreamState(stream, {
                   ...stream,
                   in_flight_operation_id: null,
                   updated_at: this.#txNow(tx),
@@ -2376,11 +2383,82 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
     operationId: string,
     updatedAt: string,
   ): void {
+    if (operation === "exec.start") {
+      const startRequest = request as ExecStartRequestV1;
+      const state = tx.getExecStreamState(
+        startRequest.handle.resource_id,
+        startRequest.exec_id,
+      );
+      const requestSha256 = canonicalDigest(startRequest);
+      if (state === undefined) {
+        tx.compareAndSwapExecStreamState(null, {
+          schema_version: "sandboxes.exec-stream-state/v1",
+          resource_id: startRequest.handle.resource_id,
+          resource_lifecycle_generation:
+            startRequest.handle.resource_lifecycle_generation,
+          exec_id: startRequest.exec_id,
+          start_operation_id: operationId,
+          start_request_sha256: requestSha256,
+          phase: "reserved",
+          cursor: null,
+          cursor_sha256: null,
+          stream_root_sha256: null,
+          resume_token: null,
+          resume_token_sha256: null,
+          next_expected_sequence: null,
+          in_flight_operation_id: operationId,
+          terminal: false,
+          updated_at: updatedAt,
+        });
+        return;
+      }
+      if (
+        state.resource_lifecycle_generation !==
+          startRequest.handle.resource_lifecycle_generation ||
+        state.start_operation_id !== operationId ||
+        state.start_request_sha256 !== requestSha256
+      ) {
+        throw new SandboxError(
+          "idempotency_key_reused",
+          "Exec ID is already bound to another durable start",
+        );
+      }
+      if (state.phase !== "reserved" || state.terminal) {
+        throw new SandboxError(
+          "integrity_failed",
+          "Exec start outcome is inconsistent with its durable operation result",
+        );
+      }
+      if (
+        state.in_flight_operation_id !== null &&
+        state.in_flight_operation_id !== operationId
+      ) {
+        throw new SandboxError(
+          "provider_state_unknown",
+          "Another operation owns the durable exec start",
+        );
+      }
+      if (state.in_flight_operation_id === null) {
+        tx.compareAndSwapExecStreamState(state, {
+          ...state,
+          in_flight_operation_id: operationId,
+          updated_at: updatedAt,
+        });
+      }
+      return;
+    }
     if (operation !== "exec.frames.read" && operation !== "exec.result.read") return;
     const streamRequest = request as ExecFrameReadRequestV1 | ExecResultRequestV1;
     const state = tx.getExecStreamState(streamRequest.handle.resource_id, streamRequest.exec_id);
     if (
       state === undefined ||
+      state.phase !== "started" ||
+      state.cursor === null ||
+      state.cursor_sha256 === null ||
+      state.stream_root_sha256 === null ||
+      state.resume_token === null ||
+      state.resume_token_sha256 === null ||
+      state.next_expected_sequence === null ||
       state.resource_lifecycle_generation !== streamRequest.handle.resource_lifecycle_generation ||
       state.stream_root_sha256 !== streamRequest.prior_stream_root_sha256 ||
       state.resume_token !== streamRequest.resume_token ||
@@ -2396,10 +2474,19 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
     ) {
       throw new SandboxError("integrity_failed", "Exec request replayed or forked its durable cursor");
     }
+    if (operation === "exec.frames.read" && state.terminal) {
+      throw new SandboxError("integrity_failed", "Exec frames cannot advance after terminal state");
+    }
     if (state.in_flight_operation_id !== null && state.in_flight_operation_id !== operationId) {
       throw new SandboxError("provider_state_unknown", "Another operation owns the durable exec stream");
     }
-    tx.putExecStreamState({ ...state, in_flight_operation_id: operationId, updated_at: updatedAt });
+    if (state.in_flight_operation_id === null) {
+      tx.compareAndSwapExecStreamState(state, {
+        ...state,
+        in_flight_operation_id: operationId,
+        updated_at: updatedAt,
+      });
+    }
   }
 
   #commitExecStreamState(
@@ -2411,12 +2498,25 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
     updatedAt: string,
   ): void {
     if (operation === "exec.start") {
+      const startRequest = request as ExecStartRequestV1;
       const start = result as ExecStartReceiptV1;
-      tx.putExecStreamState({
-        schema_version: "sandboxes.exec-stream-state/v1",
-        resource_id: start.resource_id,
-        resource_lifecycle_generation: start.resource_lifecycle_generation,
-        exec_id: start.exec_id,
+      const state = tx.getExecStreamState(start.resource_id, start.exec_id);
+      if (
+        state === undefined ||
+        state.phase !== "reserved" ||
+        state.start_operation_id !== operationId ||
+        state.start_request_sha256 !== canonicalDigest(startRequest) ||
+        state.in_flight_operation_id !== operationId ||
+        state.terminal
+      ) {
+        throw new SandboxError(
+          "integrity_failed",
+          "Exec start outcome lost its durable reservation",
+        );
+      }
+      tx.compareAndSwapExecStreamState(state, {
+        ...state,
+        phase: "started",
         cursor: start.initial_cursor,
         cursor_sha256: start.initial_cursor_sha256,
         stream_root_sha256: start.stream_root_sha256,
@@ -2432,12 +2532,15 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
     if (operation !== "exec.frames.read" && operation !== "exec.result.read") return;
     const streamRequest = request as ExecFrameReadRequestV1 | ExecResultRequestV1;
     const state = tx.getExecStreamState(streamRequest.handle.resource_id, streamRequest.exec_id);
-    if (state?.in_flight_operation_id !== operationId) {
+    if (state?.phase !== "started" || state.in_flight_operation_id !== operationId) {
       throw new SandboxError("integrity_failed", "Exec outcome lost its durable stream reservation");
     }
     if (operation === "exec.frames.read") {
       const page = result as ExecFramePageV1;
-      tx.putExecStreamState({
+      if (state.terminal) {
+        throw new SandboxError("integrity_failed", "Exec frames cannot commit after terminal state");
+      }
+      tx.compareAndSwapExecStreamState(state, {
         ...state,
         cursor: page.next_cursor,
         cursor_sha256: page.next_cursor_sha256,
@@ -2446,16 +2549,19 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
         resume_token_sha256: page.next_resume_token_sha256,
         next_expected_sequence: page.next_expected_sequence,
         in_flight_operation_id: null,
-        terminal: page.terminal,
+        terminal: state.terminal || page.terminal,
         updated_at: updatedAt,
       });
       return;
     }
     const execResult = result as ExecResultV1;
-    tx.putExecStreamState({
+    if (state.terminal && execResult.state === "running") {
+      throw new SandboxError("integrity_failed", "Terminal exec state cannot return to running");
+    }
+    tx.compareAndSwapExecStreamState(state, {
       ...state,
       in_flight_operation_id: null,
-      terminal: execResult.state !== "running",
+      terminal: state.terminal || execResult.state !== "running",
       updated_at: updatedAt,
     });
   }
