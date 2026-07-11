@@ -1,6 +1,7 @@
 import * as managed from "@hasna/sandboxes/managed"
 import {
   DAYTONA_GUEST_BROKER_PTY_ID,
+  E2bWorkspaceBootstrapBoundaryErrorV1,
   createDaytonaDenyAllCandidate,
   createE2bAdapter,
   createE2bDenyAllCandidate,
@@ -10,6 +11,7 @@ import {
   type DaytonaOfficialBrokerProcessV1,
   type E2bCredentialBoundCreateV1,
   type E2bOfficialBrokerCommandsV1,
+  type E2bWorkspaceBootstrapPhaseV1,
   type GuestBrokerSdkSessionV1,
   type ManagedAdapterDependenciesV1,
   type ManagedProviderAdapterV1,
@@ -24,6 +26,7 @@ void createDaytonaDenyAllCandidate
 void createE2bDenyAllCandidate
 void withDaytonaGuestBrokerSdkSession
 void withAuthenticatedE2bGuestBrokerDuplexSdkSession
+void E2bWorkspaceBootstrapBoundaryErrorV1
 // @ts-expect-error unauthenticated E2B session helper is intentionally not public
 void managed.withE2bGuestBrokerSdkSession
 // @ts-expect-error raw E2B duplex helper is intentionally not public
@@ -32,4 +35,5 @@ void (undefined as unknown as DaytonaCredentialBoundCreateV1)
 void (undefined as unknown as DaytonaOfficialBrokerProcessV1)
 void (undefined as unknown as E2bCredentialBoundCreateV1)
 void (undefined as unknown as E2bOfficialBrokerCommandsV1)
+void (undefined as unknown as E2bWorkspaceBootstrapPhaseV1)
 void (undefined as unknown as GuestBrokerSdkSessionV1)

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { createHash, createHmac } from "node:crypto"
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import type { Sandbox as OfficialE2bSandbox } from "e2b"
@@ -16,6 +16,12 @@ import {
   type E2bGuestBrokerExpectedResponseV1,
 } from "../../src/adapters/managed/e2b-guest-broker"
 import {
+  E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1,
+  E2B_GUEST_WORKSPACE_PROVISION_RECEIPT_V1,
+  E2B_GUEST_WORKSPACE_ROOT_V1,
+  E2B_GUEST_WORKSPACE_WRITE_PROBE_COMMAND_V1,
+  E2B_GUEST_WORKSPACE_WRITE_PROBE_RECEIPT_V1,
+  E2bWorkspaceBootstrapBoundaryErrorV1,
   installExactE2bGuestBrokerArtifactV1,
   type E2bGuestBrokerArtifactControlPortV1,
 } from "../../src/adapters/managed/e2b-broker-artifact-control"
@@ -985,6 +991,18 @@ describe("authenticated E2B guest-broker host wire", () => {
         },
         getInfo(path, options) {
           calls.push(["getInfo", path, options])
+          if (path === E2B_GUEST_WORKSPACE_ROOT_V1) {
+            return Promise.resolve({
+              name: "workspace",
+              path,
+              size: 4096,
+              mode: 0,
+              permissions: "provider-specific-directory-format",
+              owner: "provider-specific-owner-format",
+              group: "provider-specific-group-format",
+              type: "dir" as never,
+            })
+          }
           return Promise.resolve({
             name: "sandboxes-broker-v1",
             path,
@@ -1000,7 +1018,11 @@ describe("authenticated E2B guest-broker host wire", () => {
       commands: {
         run(command, options) {
           calls.push(["run", command, options])
-          return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" })
+          return Promise.resolve(command === E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1
+            ? { exitCode: 0, stdout: E2B_GUEST_WORKSPACE_PROVISION_RECEIPT_V1, stderr: "" }
+            : command === E2B_GUEST_WORKSPACE_WRITE_PROBE_COMMAND_V1
+            ? { exitCode: 0, stdout: E2B_GUEST_WORKSPACE_WRITE_PROBE_RECEIPT_V1, stderr: "" }
+            : { exitCode: 0, stdout: "", stderr: "" })
         },
       },
       destruction: {
@@ -1020,11 +1042,251 @@ describe("authenticated E2B guest-broker host wire", () => {
       owner: "root",
       group: "root",
     })
-    expect(calls.map((call) => (call as unknown[])[0])).toEqual(["write", "run", "read", "getInfo"])
-    expect(calls[0]).toEqual(["write", E2B_GUEST_BROKER_ARTIFACT_INSTALL_PATH_V1, artifact, {
+    expect(calls.map((call) => (call as unknown[])[0])).toEqual([
+      "run", "getInfo", "run", "write", "run", "read", "getInfo",
+    ])
+    expect(calls[0]).toEqual(["run", E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1, {
+      background: false,
+      cwd: "/",
+      envs: {},
+      requestTimeoutMs: 1_000,
+      timeoutMs: 1_000,
+      user: "root",
+    }])
+    expect(calls[1]).toEqual(["getInfo", E2B_GUEST_WORKSPACE_ROOT_V1, {
       requestTimeoutMs: 1_000,
       user: "root",
     }])
+    expect(calls[2]).toEqual(["run", E2B_GUEST_WORKSPACE_WRITE_PROBE_COMMAND_V1, {
+      background: false,
+      cwd: "/workspace",
+      envs: {},
+      requestTimeoutMs: 1_000,
+      timeoutMs: 1_000,
+      user: "user",
+    }])
+    expect(calls[3]).toEqual(["write", E2B_GUEST_BROKER_ARTIFACT_INSTALL_PATH_V1, artifact, {
+      requestTimeoutMs: 1_000,
+      user: "root",
+    }])
+  })
+
+  test("fixed provision source rejects existing symlink, wrong uid/gid and wrong mode without repair", () => {
+    expect(E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1).toContain("follow_symlinks=False")
+    expect(E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1).toContain("os.O_NOFOLLOW")
+    expect(E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1).toContain("if created:")
+    expect(E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1).toContain("opened.st_uid==account.pw_uid")
+    expect(E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1).toContain("opened.st_gid==account.pw_gid")
+    expect(E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1).toContain("stat.S_IMODE(opened.st_mode)==0o700")
+    const mutationStart = E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1.indexOf("if created:")
+    const attestationStart = E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1.indexOf("opened=os.fstat")
+    const createOnlyMutation = E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1.slice(
+      mutationStart,
+      attestationStart,
+    )
+    expect(createOnlyMutation).toContain("os.fchown")
+    expect(createOnlyMutation).toContain("os.fchmod")
+  })
+
+  test("both fixed embedded Python payloads parse before any provider allocation", () => {
+    const prefix = "/usr/bin/python3 -I -c "
+    const parser = "/usr/bin/python3 -I -c 'import ast,sys;ast.parse(sys.argv[1])' "
+    for (const command of [
+      E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1,
+      E2B_GUEST_WORKSPACE_WRITE_PROBE_COMMAND_V1,
+    ]) {
+      expect(command.startsWith(prefix)).toBe(true)
+      const parsed = Bun.spawnSync({
+        cmd: ["/bin/sh", "-c", command.replace(prefix, parser)],
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      expect({ exitCode: parsed.exitCode, stderr: parsed.stderr.toString() }).toEqual({
+        exitCode: 0,
+        stderr: "",
+      })
+    }
+  })
+
+  test("write-as-user probe succeeds without residue and never deletes a pre-existing path", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "e2b-workspace-write-probe-"))
+    cleanup.push(workspace)
+    const success = Bun.spawnSync({
+      cmd: ["/bin/sh", "-c", E2B_GUEST_WORKSPACE_WRITE_PROBE_COMMAND_V1],
+      cwd: workspace,
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    expect({
+      exitCode: success.exitCode,
+      stdout: success.stdout.toString(),
+      stderr: success.stderr.toString(),
+    }).toEqual({
+      exitCode: 0,
+      stdout: E2B_GUEST_WORKSPACE_WRITE_PROBE_RECEIPT_V1,
+      stderr: "",
+    })
+
+    const probePath = join(workspace, ".hasna-workspace-write-probe-v1")
+    await writeFile(probePath, "preserve-me", { mode: 0o600 })
+    const collision = Bun.spawnSync({
+      cmd: ["/bin/sh", "-c", E2B_GUEST_WORKSPACE_WRITE_PROBE_COMMAND_V1],
+      cwd: workspace,
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    expect(collision.exitCode).not.toBe(0)
+    expect(await readFile(probePath, "utf8")).toBe("preserve-me")
+  })
+
+  test("destroys before artifact installation on every unsafe workspace provision or readback", async () => {
+    const artifact = new Uint8Array(await readFile(resolve("scripts/e2b-guest-broker-v1.py")))
+    const unsafeReadbacks = [
+      { name: "workspace", path: "/workspace", type: "file", owner: "root", group: "root", mode: 0o755 },
+      { name: "workspace", path: "/workspace", type: "dir", owner: "root", group: "root", mode: 0o755, symlinkTarget: "/tmp/escape" },
+      { name: "workspace", path: "/tmp/workspace", type: "dir", owner: "root", group: "root", mode: 0o755 },
+      { name: "other", path: "/workspace", type: "dir", owner: "root", group: "root", mode: 0o755 },
+    ]
+    const cases: Array<{
+      phase: "workspace_provision" | "workspace_readback" | "workspace_write_probe"
+      run: () => Promise<{ exitCode: number; stdout: string; stderr: string }>
+      getInfo: () => Promise<Record<string, unknown>>
+    }> = [
+      {
+        phase: "workspace_provision",
+        run: () => Promise.reject(new Error("provider-secret-provision-text")),
+        getInfo: () => Promise.reject(new Error("must-not-read")),
+      },
+      {
+        phase: "workspace_provision",
+        run: () => Promise.resolve({ exitCode: 70, stdout: "provider-secret-stdout", stderr: "provider-secret-stderr" }),
+        getInfo: () => Promise.reject(new Error("must-not-read")),
+      },
+      {
+        phase: "workspace_readback",
+        run: () => Promise.resolve({ exitCode: 0, stdout: E2B_GUEST_WORKSPACE_PROVISION_RECEIPT_V1, stderr: "" }),
+        getInfo: () => Promise.reject(new Error("provider-secret-readback-text")),
+      },
+      {
+        phase: "workspace_write_probe",
+        run: (() => {
+          let call = 0
+          return () => Promise.resolve(++call === 1
+            ? { exitCode: 0, stdout: E2B_GUEST_WORKSPACE_PROVISION_RECEIPT_V1, stderr: "" }
+            : { exitCode: 70, stdout: "provider-secret-write-probe", stderr: "" })
+        })(),
+        getInfo: () => Promise.resolve({
+          name: "workspace", path: "/workspace", type: "dir", symlinkTarget: undefined,
+          owner: "lossy", group: "lossy", mode: 0, size: 4096, permissions: "lossy",
+        }),
+      },
+      ...unsafeReadbacks.map((readback) => ({
+        phase: "workspace_readback" as const,
+        run: () => Promise.resolve({ exitCode: 0, stdout: E2B_GUEST_WORKSPACE_PROVISION_RECEIPT_V1, stderr: "" }),
+        getInfo: () => Promise.resolve({
+          size: 0,
+          permissions: "rwxr-xr-x",
+          ...readback,
+        }),
+      })),
+    ]
+
+    for (const scenario of cases) {
+      const calls: string[] = []
+      let destroys = 0
+      const port = {
+        files: {
+          write() { calls.push("write"); return Promise.resolve({}) },
+          read() { calls.push("read"); return Promise.resolve(artifact) },
+          getInfo() { calls.push("getInfo"); return scenario.getInfo() },
+        },
+        commands: {
+          run() { calls.push("run"); return scenario.run() },
+        },
+        destruction: {
+          async destroyAndProveAbsent() { destroys += 1; calls.push("destroy") },
+        },
+      }
+      let failure: unknown
+      try {
+        await installExactE2bGuestBrokerArtifactV1(port as never, artifact, 1_000)
+      } catch (reason) {
+        failure = reason
+      }
+      expect(failure).toBeInstanceOf(E2bWorkspaceBootstrapBoundaryErrorV1)
+      expect(failure).toMatchObject({
+        code: "integrity_failed",
+        phase: scenario.phase,
+        quarantine_required: false,
+      })
+      expect(JSON.stringify(failure)).not.toContain("provider-secret")
+      expect(calls.at(-1)).toBe("destroy")
+      expect(calls).not.toContain("write")
+      expect(destroys).toBe(1)
+    }
+  })
+
+  test("tags an unproven workspace cleanup without retaining provider text", async () => {
+    const artifact = new Uint8Array(await readFile(resolve("scripts/e2b-guest-broker-v1.py")))
+    let destroys = 0
+    const port = {
+      files: {
+        write: () => Promise.resolve({}),
+        read: () => Promise.resolve(artifact),
+        getInfo: () => Promise.reject(new Error("provider-secret-readback-text")),
+      },
+      commands: {
+        run: () => Promise.resolve({
+          exitCode: 0,
+          stdout: E2B_GUEST_WORKSPACE_PROVISION_RECEIPT_V1,
+          stderr: "",
+        }),
+      },
+      destruction: {
+        destroyAndProveAbsent(): Promise<void> {
+          destroys += 1
+          throw new Error("provider-secret-destroy-text")
+        },
+      },
+    }
+
+    let failure: unknown
+    try {
+      await installExactE2bGuestBrokerArtifactV1(port as never, artifact, 1_000)
+    } catch (reason) {
+      failure = reason
+    }
+    expect(failure).toBeInstanceOf(E2bWorkspaceBootstrapBoundaryErrorV1)
+    expect(failure).toMatchObject({
+      code: "provider_state_unknown",
+      phase: "workspace_destroy",
+      quarantine_required: true,
+    })
+    expect(JSON.stringify(failure)).not.toContain("provider-secret")
+    expect(destroys).toBe(1)
+  })
+
+  test("destroys an allocated sandbox when reviewed artifact validation fails locally", async () => {
+    const artifact = new Uint8Array(await readFile(resolve("scripts/e2b-guest-broker-v1.py")))
+    artifact[0] = (artifact[0] ?? 0) ^ 0xff
+    const calls: string[] = []
+    const port = {
+      files: {
+        write() { calls.push("write"); return Promise.resolve({}) },
+        read() { calls.push("read"); return Promise.resolve(artifact) },
+        getInfo() { calls.push("getInfo"); return Promise.resolve({}) },
+      },
+      commands: {
+        run() { calls.push("run"); return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" }) },
+      },
+      destruction: {
+        async destroyAndProveAbsent() { calls.push("destroy") },
+      },
+    }
+
+    await expect(installExactE2bGuestBrokerArtifactV1(port as never, artifact, 1_000))
+      .rejects.toMatchObject({ code: "integrity_failed" })
+    expect(calls).toEqual(["destroy"])
   })
 
   test("destroys and proves absence on ambiguous artifact readback", async () => {
@@ -1034,9 +1296,17 @@ describe("authenticated E2B guest-broker host wire", () => {
       files: {
         write: () => Promise.resolve({}),
         read: () => Promise.resolve(Uint8Array.from([...artifact, 0])),
-        getInfo: () => Promise.resolve({}),
+        getInfo: (path: string) => Promise.resolve(path === E2B_GUEST_WORKSPACE_ROOT_V1
+          ? { name: "workspace", path, type: "dir" }
+          : {}),
       },
-      commands: { run: () => Promise.resolve({ exitCode: 0, stdout: "", stderr: "" }) },
+      commands: { run: (command: string) => Promise.resolve(
+        command === E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1
+          ? { exitCode: 0, stdout: E2B_GUEST_WORKSPACE_PROVISION_RECEIPT_V1, stderr: "" }
+          : command === E2B_GUEST_WORKSPACE_WRITE_PROBE_COMMAND_V1
+          ? { exitCode: 0, stdout: E2B_GUEST_WORKSPACE_WRITE_PROBE_RECEIPT_V1, stderr: "" }
+          : { exitCode: 0, stdout: "", stderr: "" },
+      ) },
       destruction: {
         async destroyAndProveAbsent() {
           destroyed += 1
@@ -1056,9 +1326,17 @@ describe("authenticated E2B guest-broker host wire", () => {
       files: {
         write: () => Promise.reject(new Error("write outcome unknown")),
         read: () => Promise.resolve(artifact),
-        getInfo: () => Promise.resolve({}),
+        getInfo: (path: string) => Promise.resolve(path === E2B_GUEST_WORKSPACE_ROOT_V1
+          ? { name: "workspace", path, type: "dir" }
+          : {}),
       },
-      commands: { run: () => Promise.resolve({ exitCode: 0, stdout: "", stderr: "" }) },
+      commands: { run: (command: string) => Promise.resolve(
+        command === E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1
+          ? { exitCode: 0, stdout: E2B_GUEST_WORKSPACE_PROVISION_RECEIPT_V1, stderr: "" }
+          : command === E2B_GUEST_WORKSPACE_WRITE_PROBE_COMMAND_V1
+          ? { exitCode: 0, stdout: E2B_GUEST_WORKSPACE_WRITE_PROBE_RECEIPT_V1, stderr: "" }
+          : { exitCode: 0, stdout: "", stderr: "" },
+      ) },
       destruction: {
         async destroyAndProveAbsent() {
           attempts += 1

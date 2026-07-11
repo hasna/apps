@@ -59,10 +59,12 @@ export {
   type GuestBrokerSdkSessionV1,
 } from "./sdk-broker-bridges"
 export {
+  E2bWorkspaceBootstrapBoundaryErrorV1,
   installExactE2bGuestBrokerArtifactV1,
   type E2bGuestBrokerArtifactAttestationV1,
   type E2bGuestBrokerArtifactControlPortV1,
   type E2bSandboxDestroyAndProveAbsentPortV1,
+  type E2bWorkspaceBootstrapPhaseV1,
 } from "./e2b-broker-artifact-control"
 export {
   E2B_GUEST_BROKER_ARTIFACT_INSTALL_PATH_V1,
