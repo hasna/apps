@@ -476,6 +476,7 @@ function snapshotE2bSandboxInfo(
   info: unknown,
   requireDenyAllReadback = true,
   requireTemplateMappingConsistency = true,
+  requirePositiveResourceFacts = true,
 ): E2bSandboxInfoSnapshotV1 {
   try {
     const root = snapshotExactDataObject(info, E2B_INFO_REQUIRED_KEYS, E2B_INFO_OPTIONAL_KEYS)
@@ -485,6 +486,10 @@ function snapshotE2bSandboxInfo(
     const allowInternetAccess = root.allowInternetAccess
     const startedAt = snapshotDateIso(root.startedAt)
     const endAt = snapshotDateIso(root.endAt)
+    const observedCpuMillis =
+      typeof root.cpuCount === "number" ? root.cpuCount * 1_000 : Number.NaN
+    const observedMemoryBytes =
+      typeof root.memoryMB === "number" ? root.memoryMB * 1024 * 1024 : Number.NaN
     if (
       typeof sandboxId !== "string" ||
       sandboxId.length === 0 ||
@@ -496,6 +501,11 @@ function snapshotE2bSandboxInfo(
       !Number.isFinite(root.cpuCount) ||
       typeof root.memoryMB !== "number" ||
       !Number.isFinite(root.memoryMB) ||
+      (requirePositiveResourceFacts &&
+        (!Number.isSafeInteger(observedCpuMillis) ||
+          observedCpuMillis <= 0 ||
+          !Number.isSafeInteger(observedMemoryBytes) ||
+          observedMemoryBytes <= 0)) ||
       typeof root.envdVersion !== "string" ||
       (root.name !== undefined && typeof root.name !== "string") ||
       (root.sandboxDomain !== undefined && typeof root.sandboxDomain !== "string")
@@ -1344,6 +1354,8 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
       sandbox_id: snapshot.sandboxId,
       template_id: snapshot.templateId,
       started_at: snapshot.startedAt,
+      observed_cpu_millis: snapshot.cpuCount * 1_000,
+      observed_memory_bytes: snapshot.memoryMB * 1024 * 1024,
     }
     if (
       snapshot.templateMappingSha256 === undefined ||
@@ -1522,6 +1534,7 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
     opaqueResourceId: string,
     requireDenyAllReadback = true,
     requireTemplateMappingConsistency = true,
+    requirePositiveResourceFacts = true,
   ): Promise<E2bSandboxInfoSnapshotV1 | "absent"> {
     let info: Awaited<ReturnType<E2bOfficialReadSdkV1["getInfo"]>>
     try {
@@ -1534,6 +1547,7 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
       info,
       requireDenyAllReadback,
       requireTemplateMappingConsistency,
+      requirePositiveResourceFacts,
     )
     if (snapshot.sandboxId !== opaqueResourceId) throw adapterError("integrity_failed")
     return snapshot
@@ -1573,7 +1587,7 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
   ): Promise<boolean> {
     if (this.#kill === undefined) return false
     try {
-      const snapshot = await this.#getSnapshot(opaqueResourceId, false, false)
+      const snapshot = await this.#getSnapshot(opaqueResourceId, false, false, false)
       if (snapshot === "absent") {
         return this.#creationTokenIsAbsent(request.target.provider_creation_token_sha256)
       }
@@ -1585,7 +1599,7 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
       )
       await Reflect.apply(this.#kill, this.#sdk, [opaqueResourceId])
       return (
-        (await this.#getSnapshot(opaqueResourceId, false, false)) === "absent" &&
+        (await this.#getSnapshot(opaqueResourceId, false, false, false)) === "absent" &&
         (await this.#creationTokenIsAbsent(request.target.provider_creation_token_sha256))
       )
     } catch {
@@ -1613,8 +1627,8 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
       before.templateMappingVersion !== mapping.mapping_version ||
       before.templateMappingSha256 !== mapping.mapping_sha256 ||
       label(before.metadata, "hasna.network_policy_sha256") !== request.networkPolicySha256 ||
-      before.cpuCount * 1_000 !== request.cpuMillis ||
-      before.memoryMB * 1024 * 1024 !== request.memoryBytes
+      before.cpuCount * 1_000 > request.cpuMillis ||
+      before.memoryMB * 1024 * 1024 > request.memoryBytes
     ) {
       throw adapterError("operation_target_mismatch")
     }
@@ -1656,8 +1670,8 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
       before.templateMappingVersion !== mapping.mapping_version ||
       before.templateMappingSha256 !== mapping.mapping_sha256 ||
       label(before.metadata, "hasna.network_policy_sha256") !== request.networkPolicySha256 ||
-      before.cpuCount * 1_000 !== request.cpuMillis ||
-      before.memoryMB * 1024 * 1024 !== request.memoryBytes
+      before.cpuCount * 1_000 > request.cpuMillis ||
+      before.memoryMB * 1024 * 1024 > request.memoryBytes
     ) {
       throw adapterError("provider_state_unknown", { quarantineRequired: true })
     }

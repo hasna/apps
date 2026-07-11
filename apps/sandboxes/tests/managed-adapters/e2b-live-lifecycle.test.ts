@@ -117,8 +117,8 @@ function safeInfo(request = createRequest()) {
     startedAt: new Date("2026-07-10T10:00:04.000Z"),
     endAt: new Date(request.spec.expires_at),
     state: "running" as "running" | "paused",
-    cpuCount: 2,
-    memoryMB: 4096,
+    cpuCount: 1,
+    memoryMB: 2048,
     envdVersion: "pinned",
     allowInternetAccess: false,
     network: {
@@ -242,7 +242,7 @@ function lifecycleHarness(
 }
 
 describe("E2B 2.31.0 credential-bound lifecycle mapping", () => {
-  test("creates with only supported strict controls and returns a verified paused resource", async () => {
+  test("accepts positive provider CPU and memory readback below the declared caps", async () => {
     const request = createRequest()
     const { bridge, state } = lifecycleHarness(request)
 
@@ -299,6 +299,8 @@ describe("E2B 2.31.0 credential-bound lifecycle mapping", () => {
       template_mapping_sha256: reviewedMapping(
         request.spec.environment.image_or_snapshot_sha256,
       ).mapping_sha256,
+      observed_cpu_millis: 1_000,
+      observed_memory_bytes: 2_147_483_648,
     }))
     expect(bridge.capabilities).toMatchObject({
       create_stopped: true,
@@ -440,26 +442,53 @@ describe("E2B 2.31.0 credential-bound lifecycle mapping", () => {
     expect(harness.state.info).toBe("absent")
   })
 
-  test("rejects and cleans up when template CPU or memory readback misses the strict request", async () => {
+  test("rejects and cleans up non-positive or over-cap CPU and memory readback", async () => {
     const request = createRequest()
-    const harness = lifecycleHarness(request, {
-      create(options) {
-        harness.state.createOptions = options
-        harness.state.info = {
-          ...safeInfo(request),
-          cpuCount: 4,
-          memoryMB: 8192,
-        }
-        return { sandboxId: "e2b-owned-1" }
-      },
-    })
+    for (const observed of [
+      { cpuCount: 0, memoryMB: 2048 },
+      { cpuCount: 1, memoryMB: 0 },
+      { cpuCount: 4, memoryMB: 8192 },
+    ]) {
+      const harness = lifecycleHarness(request, {
+        create(options) {
+          harness.state.createOptions = options
+          harness.state.info = { ...safeInfo(request), ...observed }
+          return { sandboxId: "e2b-owned-1" }
+        },
+      })
 
-    await expect(harness.bridge.createInert(request)).rejects.toMatchObject({
-      code: "provider_state_unknown",
-      quarantine_required: true,
-    })
-    expect(harness.state.killCalls).toBe(1)
-    expect(harness.state.info).toBe("absent")
+      await expect(harness.bridge.createInert(request)).rejects.toMatchObject({
+        code: "provider_state_unknown",
+        quarantine_required: true,
+      })
+      expect(harness.state.killCalls).toBe(1)
+      expect(harness.state.info).toBe("absent")
+    }
+  })
+
+  test("changes provider resource version when observed CPU or memory facts change", async () => {
+    const request = createRequest()
+    const { bridge, state } = lifecycleHarness(request)
+    const created = await bridge.createInert(request)
+    if (state.info === "absent") throw new Error("expected live fake resource")
+    state.info.cpuCount = 2
+    state.info.memoryMB = 4096
+
+    const inspected = await bridge.inspectResource(created.opaque_resource_id)
+    expect(inspected).not.toBe("absent")
+    if (inspected === "absent") throw new Error("expected inspected fake resource")
+    expect(inspected.provider_resource_version).not.toBe(created.provider_resource_version)
+    expect(inspected.provider_resource_version).toBe(canonicalSha256({
+      sandbox_id: "e2b-owned-1",
+      template_id: REVIEWED_TEMPLATE_ID,
+      started_at: "2026-07-10T10:00:04.000Z",
+      template_mapping_version: REVIEWED_MAPPING_VERSION,
+      template_mapping_sha256: reviewedMapping(
+        request.spec.environment.image_or_snapshot_sha256,
+      ).mapping_sha256,
+      observed_cpu_millis: 2_000,
+      observed_memory_bytes: 4_294_967_296,
+    }))
   })
 
   test("resumes with only the observed remaining TTL and pauses without preserving processes", async () => {
