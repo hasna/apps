@@ -3745,6 +3745,571 @@ describe("official SDK read-only control bridges", () => {
     })
   })
 
+  test("inspect binds the requested opaque ID before either provider is attested", async () => {
+    let attestCalls = 0
+    let daytonaRefreshCalls = 0
+    const rejectingAttestation: ManagedResourceAttestationPortV1 = {
+      async attest() {
+        attestCalls += 1
+        throw new Error("attestation must remain unreachable")
+      },
+    }
+    const e2b = new E2bOfficialSdkControlBridgeV1(
+      {
+        list() {
+          throw new Error("list must remain unreachable")
+        },
+        async getInfo() {
+          return {
+            sandboxId: "returned-e2b-id",
+            templateId: "template-a",
+            metadata: labels(),
+            startedAt: new Date("2026-07-10T09:00:00.000Z"),
+            endAt: new Date("2026-07-10T10:00:00.000Z"),
+            state: "paused",
+            cpuCount: 2,
+            memoryMB: 1024,
+            envdVersion: "pinned",
+            allowInternetAccess: false,
+            network: e2bNetwork(),
+            lifecycle: { onTimeout: "pause", autoResume: false },
+            volumeMounts: [],
+          } as never
+        },
+      },
+      rejectingAttestation,
+      installationSha256,
+      providerScopeRefSha256,
+      () => observedAt,
+    )
+    const daytona = new DaytonaOfficialSdkControlBridgeV1(
+      {
+        list() {
+          throw new Error("list must remain unreachable")
+        },
+        async get() {
+          return {
+            id: "returned-daytona-id",
+            organizationId: "organization-a",
+            labels: labels(),
+            state: "stopped",
+            public: false,
+            networkBlockAll: true,
+            autoDeleteInterval: -1,
+            volumes: [],
+            env: {},
+            createdAt: "2026-07-10T09:00:00.000Z",
+            async refreshData() {
+              daytonaRefreshCalls += 1
+            },
+          } as never
+        },
+      },
+      rejectingAttestation,
+      installationSha256,
+      providerScopeRefSha256,
+      () => observedAt,
+    )
+
+    await expect(e2b.inspectResource("requested-e2b-id")).rejects.toMatchObject({
+      code: "integrity_failed",
+    })
+    await expect(daytona.inspectResource("requested-daytona-id")).rejects.toMatchObject({
+      code: "integrity_failed",
+    })
+    expect(daytonaRefreshCalls).toBe(0)
+    expect(attestCalls).toBe(0)
+  })
+
+  test("Daytona validates the whole page and duplicate IDs before refresh or attestation", async () => {
+    let refreshCalls = 0
+    let attestCalls = 0
+    const sandbox = (id: string, sandboxLabels: Record<string, string> = labels()) => ({
+      id,
+      organizationId: "organization-a",
+      labels: sandboxLabels,
+      state: "stopped",
+      public: false,
+      networkBlockAll: true,
+      autoDeleteInterval: -1,
+      volumes: [],
+      env: {},
+      createdAt: "2026-07-10T09:00:00.000Z",
+      async refreshData() {
+        refreshCalls += 1
+      },
+    })
+    const cases = [
+      [sandbox("duplicate-daytona"), sandbox("duplicate-daytona")],
+      [sandbox("valid-daytona"), sandbox("late-malformed-daytona", {
+        ...labels(),
+        "hasna.immutable_fingerprint_sha256": "not-a-digest",
+      })],
+    ]
+
+    for (const providerItems of cases) {
+      const bridge = new DaytonaOfficialSdkControlBridgeV1(
+        {
+          list() {
+            return (async function* () {
+              for (const providerItem of providerItems) yield providerItem as never
+            })()
+          },
+          async get() {
+            throw new Error("get must remain unreachable")
+          },
+        },
+        {
+          async attest() {
+            attestCalls += 1
+            throw new Error("attestation must remain unreachable")
+          },
+        },
+        installationSha256,
+        providerScopeRefSha256,
+        () => observedAt,
+      )
+
+      await expect(bridge.listOwnedResources()).rejects.toMatchObject({
+        code: "provider_state_unknown",
+        quarantine_required: true,
+      })
+    }
+
+    expect(refreshCalls).toBe(0)
+    expect(attestCalls).toBe(0)
+  })
+
+  test("Daytona rejects late top-level accessors without invoking them", async () => {
+    let getterCalls = 0
+    let refreshCalls = 0
+    let attestCalls = 0
+    const sandbox = (id: string) => ({
+      id,
+      organizationId: "organization-a",
+      labels: labels(),
+      state: "stopped",
+      public: false,
+      networkBlockAll: true,
+      autoDeleteInterval: -1,
+      volumes: [],
+      env: {},
+      createdAt: "2026-07-10T09:00:00.000Z",
+      async refreshData() {
+        refreshCalls += 1
+      },
+    })
+    const accessorCases: Array<() => ReturnType<typeof sandbox>> = [
+      () => {
+        const value = sandbox("late-daytona-id")
+        Object.defineProperty(value, "id", {
+          enumerable: true,
+          get() {
+            getterCalls += 1
+            return "duplicate-daytona-id"
+          },
+        })
+        return value
+      },
+      () => {
+        const value = sandbox("late-daytona-field")
+        Object.defineProperty(value, "public", {
+          enumerable: true,
+          get() {
+            getterCalls += 1
+            return false
+          },
+        })
+        return value
+      },
+      () => {
+        const value = sandbox("late-daytona-refresh")
+        Object.defineProperty(value, "refreshData", {
+          enumerable: true,
+          get() {
+            getterCalls += 1
+            return async () => {
+              refreshCalls += 1
+            }
+          },
+        })
+        return value
+      },
+    ]
+
+    for (const accessorCase of accessorCases) {
+      const bridge = new DaytonaOfficialSdkControlBridgeV1(
+        {
+          list() {
+            return (async function* () {
+              yield sandbox("duplicate-daytona-id") as never
+              yield accessorCase() as never
+            })()
+          },
+          async get() {
+            throw new Error("get must remain unreachable")
+          },
+        },
+        {
+          async attest() {
+            attestCalls += 1
+            throw new Error("attestation must remain unreachable")
+          },
+        },
+        installationSha256,
+        providerScopeRefSha256,
+        () => observedAt,
+      )
+
+      await expect(bridge.listOwnedResources()).rejects.toMatchObject({
+        code: "provider_state_unknown",
+        quarantine_required: true,
+      })
+    }
+
+    expect(getterCalls).toBe(0)
+    expect(refreshCalls).toBe(0)
+    expect(attestCalls).toBe(0)
+  })
+
+  test("Daytona accepts sparse pinned list candidates only after refresh hydration", async () => {
+    let refreshCalls = 0
+    let attestCalls = 0
+    const prototype = {
+      async refreshData() {
+        refreshCalls += 1
+        Object.assign(sparse, {
+          organizationId: "organization-a",
+          state: "stopped",
+          public: false,
+          networkBlockAll: true,
+          autoDeleteInterval: -1,
+          volumes: [],
+          env: {},
+          createdAt: "2026-07-10T09:00:00.000Z",
+        })
+      },
+    }
+    const sparse = Object.assign(Object.create(prototype) as Record<string, unknown>, {
+      id: "sparse-daytona",
+      labels: labels(),
+    })
+    const bridge = new DaytonaOfficialSdkControlBridgeV1(
+      {
+        list() {
+          return (async function* () {
+            yield sparse as never
+          })()
+        },
+        async get() {
+          throw new Error("get must remain unreachable")
+        },
+      },
+      {
+        async attest() {
+          attestCalls += 1
+          return {
+            source_free: true,
+            credential_free: true,
+            strong_vm: true,
+            architecture: "amd64",
+            evidence_sha256: digest("e6"),
+          }
+        },
+      },
+      installationSha256,
+      providerScopeRefSha256,
+      () => observedAt,
+    )
+
+    await expect(bridge.listOwnedResources()).resolves.toMatchObject({
+      items: [{ opaque_resource_id: "sparse-daytona", owned: true }],
+    })
+    expect(refreshCalls).toBe(1)
+    expect(attestCalls).toBe(1)
+  })
+
+  test("Daytona drains iterator validation before refresh and rejects changed hydration before attestation", async () => {
+    let refreshCalls = 0
+    let attestCalls = 0
+    let getterCalls = 0
+    const sandbox = (id: string, mutate: (value: Record<string, unknown>) => void = () => {}) => {
+      const value: Record<string, unknown> = {
+        id,
+        organizationId: "organization-a",
+        labels: labels(),
+        state: "stopped",
+        public: false,
+        networkBlockAll: true,
+        autoDeleteInterval: -1,
+        volumes: [],
+        env: {},
+        createdAt: "2026-07-10T09:00:00.000Z",
+        async refreshData() {
+          refreshCalls += 1
+          mutate(value)
+        },
+      }
+      return value
+    }
+    const rejectingAttestation: ManagedResourceAttestationPortV1 = {
+      async attest() {
+        attestCalls += 1
+        throw new Error("attestation must remain unreachable")
+      },
+    }
+    const partialIterator = new DaytonaOfficialSdkControlBridgeV1(
+      {
+        list() {
+          return (async function* () {
+            yield sandbox("partial-daytona") as never
+            throw new Error("provider-secret-diagnostic")
+          })()
+        },
+        async get() {
+          throw new Error("get must remain unreachable")
+        },
+      },
+      rejectingAttestation,
+      installationSha256,
+      providerScopeRefSha256,
+      () => observedAt,
+    )
+    await expect(partialIterator.listOwnedResources()).rejects.toMatchObject({
+      code: "provider_unavailable",
+      retryable: true,
+    })
+    expect(refreshCalls).toBe(0)
+    expect(attestCalls).toBe(0)
+
+    const mutations: Array<(value: Record<string, unknown>) => void> = [
+      (value) => {
+        value.id = "changed-daytona-id"
+      },
+      (value) => {
+        value.labels = {
+          ...labels(),
+          "hasna.immutable_fingerprint_sha256": digest("e7"),
+        }
+      },
+      (value) => {
+        Object.defineProperty(value, "public", {
+          enumerable: true,
+          get() {
+            getterCalls += 1
+            return false
+          },
+        })
+      },
+    ]
+    for (const [index, mutation] of mutations.entries()) {
+      const bridge = new DaytonaOfficialSdkControlBridgeV1(
+        {
+          list() {
+            return (async function* () {
+              yield sandbox(`hydration-daytona-${index}`, mutation) as never
+            })()
+          },
+          async get() {
+            throw new Error("get must remain unreachable")
+          },
+        },
+        rejectingAttestation,
+        installationSha256,
+        providerScopeRefSha256,
+        () => observedAt,
+      )
+      await expect(bridge.listOwnedResources()).rejects.toMatchObject({
+        code: "provider_state_unknown",
+        quarantine_required: true,
+      })
+    }
+    expect(getterCalls).toBe(0)
+    expect(attestCalls).toBe(0)
+  })
+
+  test("list and get SDK failures become safe typed adapter failures", async () => {
+    const rawMessage = "provider-secret-diagnostic"
+    const assertSafeFailure = async (operation: Promise<unknown>) => {
+      let failure: unknown
+      try {
+        await operation
+      } catch (cause) {
+        failure = cause
+      }
+      expect(failure).toBeInstanceOf(AdapterContractError)
+      expect(failure).toMatchObject({
+        code: "provider_unavailable",
+        retryable: true,
+        quarantine_required: false,
+      })
+      expect(String(failure)).not.toContain(rawMessage)
+      expect(Object.hasOwn(failure as object, "cause")).toBe(false)
+    }
+    let attestCalls = 0
+    const unavailableAttestation: ManagedResourceAttestationPortV1 = {
+      async attest() {
+        attestCalls += 1
+        throw new Error("attestation must remain unreachable")
+      },
+    }
+    const e2bList = new E2bOfficialSdkControlBridgeV1(
+      {
+        list() {
+          throw new Error(rawMessage)
+        },
+        async getInfo() {
+          throw new Error("getInfo must remain unreachable")
+        },
+      },
+      unavailableAttestation,
+      installationSha256,
+      providerScopeRefSha256,
+      () => observedAt,
+    )
+    const e2bPage = new E2bOfficialSdkControlBridgeV1(
+      {
+        list() {
+          return {
+            hasNext: true,
+            nextToken: undefined,
+            async nextItems() {
+              throw new Error(rawMessage)
+            },
+          }
+        },
+        async getInfo() {
+          throw new Error("getInfo must remain unreachable")
+        },
+      },
+      unavailableAttestation,
+      installationSha256,
+      providerScopeRefSha256,
+      () => observedAt,
+    )
+    const hydrateCandidate = e2bListCandidate({ sandboxId: "hydrate-sdk-failure" })
+    const e2bHydrate = new E2bOfficialSdkControlBridgeV1(
+      {
+        list() {
+          return {
+            hasNext: true,
+            nextToken: undefined,
+            async nextItems() {
+              return [hydrateCandidate as never]
+            },
+          }
+        },
+        async getInfo() {
+          throw new Error(rawMessage)
+        },
+      },
+      unavailableAttestation,
+      installationSha256,
+      providerScopeRefSha256,
+      () => observedAt,
+    )
+    const e2bGet = new E2bOfficialSdkControlBridgeV1(
+      {
+        list() {
+          throw new Error("list must remain unreachable")
+        },
+        async getInfo() {
+          throw new Error(rawMessage)
+        },
+      },
+      unavailableAttestation,
+      installationSha256,
+      providerScopeRefSha256,
+      () => observedAt,
+    )
+    const daytonaSyncList = new DaytonaOfficialSdkControlBridgeV1(
+      {
+        list() {
+          throw new Error(rawMessage)
+        },
+        async get() {
+          throw new Error("get must remain unreachable")
+        },
+      },
+      unavailableAttestation,
+      installationSha256,
+      providerScopeRefSha256,
+      () => observedAt,
+    )
+    const refreshingSandbox = (id: string, fails: boolean) => ({
+      id,
+      organizationId: "organization-a",
+      labels: labels(),
+      state: "stopped",
+      public: false,
+      networkBlockAll: true,
+      autoDeleteInterval: -1,
+      volumes: [],
+      env: {},
+      createdAt: "2026-07-10T09:00:00.000Z",
+      async refreshData() {
+        if (fails) throw new Error(rawMessage)
+      },
+    })
+    const daytonaPartialRefresh = new DaytonaOfficialSdkControlBridgeV1(
+      {
+        list() {
+          return (async function* () {
+            yield refreshingSandbox("refresh-daytona-a", false) as never
+            yield refreshingSandbox("refresh-daytona-b", true) as never
+          })()
+        },
+        async get() {
+          throw new Error("get must remain unreachable")
+        },
+      },
+      unavailableAttestation,
+      installationSha256,
+      providerScopeRefSha256,
+      () => observedAt,
+    )
+    const daytonaList = new DaytonaOfficialSdkControlBridgeV1(
+      {
+        list() {
+          return (async function* () {
+            throw new Error(rawMessage)
+          })()
+        },
+        async get() {
+          throw new Error("get must remain unreachable")
+        },
+      },
+      unavailableAttestation,
+      installationSha256,
+      providerScopeRefSha256,
+      () => observedAt,
+    )
+    const daytonaGet = new DaytonaOfficialSdkControlBridgeV1(
+      {
+        list() {
+          throw new Error("list must remain unreachable")
+        },
+        async get() {
+          throw new Error(rawMessage)
+        },
+      },
+      unavailableAttestation,
+      installationSha256,
+      providerScopeRefSha256,
+      () => observedAt,
+    )
+
+    await assertSafeFailure(e2bList.listOwnedResources())
+    await assertSafeFailure(e2bPage.listOwnedResources())
+    await assertSafeFailure(e2bHydrate.listOwnedResources())
+    await assertSafeFailure(e2bGet.inspectResource("opaque-e2b"))
+    await assertSafeFailure(daytonaList.listOwnedResources())
+    await assertSafeFailure(daytonaSyncList.listOwnedResources())
+    await assertSafeFailure(daytonaPartialRefresh.listOwnedResources())
+    await assertSafeFailure(daytonaGet.inspectResource("opaque-daytona"))
+    expect(attestCalls).toBe(0)
+  })
+
   test("SDK record snapshots reject accessors and symbols without observing hidden values", async () => {
     let getterCalls = 0
     let attestCalls = 0

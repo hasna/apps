@@ -1,7 +1,7 @@
 import type { ListSandboxesQuery, Sandbox as DaytonaSandbox } from "@daytona/sdk"
 import type { SandboxInfo, SandboxListOpts } from "e2b"
 import { canonicalSha256, isDigest } from "./canonical"
-import { adapterError } from "./errors"
+import { AdapterContractError, adapterError } from "./errors"
 import type {
   AdapterProviderResourceV1,
   Digest,
@@ -569,23 +569,53 @@ interface DaytonaSandboxSnapshotV1 {
   volumeCount: number
 }
 
+const DAYTONA_SNAPSHOT_OWN_FIELDS = Object.freeze([
+  "id",
+  "organizationId",
+  "state",
+  "public",
+  "networkBlockAll",
+  "autoDeleteInterval",
+  "createdAt",
+  "volumes",
+  "env",
+  "labels",
+] as const)
+
+function snapshotDaytonaOwnDataValue(
+  sandbox: DaytonaSandbox,
+  key: typeof DAYTONA_SNAPSHOT_OWN_FIELDS[number],
+): unknown {
+  let descriptor: PropertyDescriptor | undefined
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(sandbox, key)
+  } catch (cause) {
+    throw adapterError("integrity_failed", { cause })
+  }
+  if (descriptor === undefined) return undefined
+  if (!("value" in descriptor) || descriptor.get !== undefined || descriptor.set !== undefined) {
+    throw adapterError("integrity_failed")
+  }
+  return descriptor.value
+}
+
 function snapshotDaytonaSandbox(
   sandbox: DaytonaSandbox,
-  expectedId: string,
+  expectedId?: string,
 ): DaytonaSandboxSnapshotV1 {
   try {
-    const id = sandbox.id
-    const organizationId = sandbox.organizationId
-    const state = sandbox.state
-    const isPublic = sandbox.public
-    const networkBlockAll = sandbox.networkBlockAll
-    const autoDeleteInterval = sandbox.autoDeleteInterval
-    const createdAt = sandbox.createdAt
-    const volumes = sandbox.volumes
+    const id = snapshotDaytonaOwnDataValue(sandbox, "id")
+    const organizationId = snapshotDaytonaOwnDataValue(sandbox, "organizationId")
+    const state = snapshotDaytonaOwnDataValue(sandbox, "state")
+    const isPublic = snapshotDaytonaOwnDataValue(sandbox, "public")
+    const networkBlockAll = snapshotDaytonaOwnDataValue(sandbox, "networkBlockAll")
+    const autoDeleteInterval = snapshotDaytonaOwnDataValue(sandbox, "autoDeleteInterval")
+    const createdAt = snapshotDaytonaOwnDataValue(sandbox, "createdAt")
+    const volumes = snapshotDaytonaOwnDataValue(sandbox, "volumes")
     if (
       typeof id !== "string" ||
       id.length === 0 ||
-      id !== expectedId ||
+      (expectedId !== undefined && id !== expectedId) ||
       typeof organizationId !== "string" ||
       organizationId.length === 0 ||
       (state !== undefined && typeof state !== "string") ||
@@ -599,8 +629,10 @@ function snapshotDaytonaSandbox(
     ) {
       throw adapterError("integrity_failed")
     }
-    const env = snapshotStringRecord(sandbox.env ?? {})
-    const labels = snapshotManagedResourceLabels(sandbox.labels)
+    const env = snapshotStringRecord(snapshotDaytonaOwnDataValue(sandbox, "env") ?? {})
+    const labels = snapshotManagedResourceLabels(
+      snapshotDaytonaOwnDataValue(sandbox, "labels"),
+    )
     return Object.freeze({
       autoDeleteInterval,
       createdAt,
@@ -617,6 +649,78 @@ function snapshotDaytonaSandbox(
   } catch (cause) {
     throw adapterError("integrity_failed", { cause })
   }
+}
+
+interface DaytonaSandboxCandidateSnapshotV1 {
+  expectedId: string
+  expectedLabels: Readonly<Record<string, string>>
+  refreshData: DaytonaSandbox["refreshData"]
+  sandbox: DaytonaSandbox
+}
+
+function snapshotDaytonaRefreshData(
+  sandbox: DaytonaSandbox,
+): DaytonaSandbox["refreshData"] {
+  let current: object | null = sandbox
+  for (let depth = 0; depth < 8 && current !== null; depth += 1) {
+    let descriptor: PropertyDescriptor | undefined
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(current, "refreshData")
+    } catch (cause) {
+      throw adapterError("integrity_failed", { cause })
+    }
+    if (descriptor !== undefined) {
+      if (
+        !("value" in descriptor) ||
+        descriptor.get !== undefined ||
+        descriptor.set !== undefined ||
+        typeof descriptor.value !== "function"
+      ) {
+        throw adapterError("integrity_failed")
+      }
+      return descriptor.value as DaytonaSandbox["refreshData"]
+    }
+    try {
+      current = Object.getPrototypeOf(current)
+    } catch (cause) {
+      throw adapterError("integrity_failed", { cause })
+    }
+  }
+  throw adapterError("integrity_failed")
+}
+
+function snapshotDaytonaSandboxCandidate(
+  sandbox: DaytonaSandbox,
+  expectedId?: string,
+): DaytonaSandboxCandidateSnapshotV1 {
+  try {
+    const id = snapshotDaytonaOwnDataValue(sandbox, "id")
+    if (
+      typeof id !== "string" ||
+      id.length === 0 ||
+      (expectedId !== undefined && id !== expectedId)
+    ) {
+      throw adapterError("integrity_failed")
+    }
+    const expectedLabels = snapshotManagedResourceLabels(
+      snapshotDaytonaOwnDataValue(sandbox, "labels"),
+    ).record
+    for (const key of DAYTONA_SNAPSHOT_OWN_FIELDS) {
+      snapshotDaytonaOwnDataValue(sandbox, key)
+    }
+    return Object.freeze({
+      expectedId: id,
+      expectedLabels,
+      refreshData: snapshotDaytonaRefreshData(sandbox),
+      sandbox,
+    })
+  } catch (cause) {
+    throw adapterError("integrity_failed", { cause })
+  }
+}
+
+function providerSdkUnavailable(cause: unknown): AdapterContractError {
+  return adapterError("provider_unavailable", { retryable: true, cause })
 }
 
 function unknownNetworkObservation(observedAt: string): NetworkPolicyObservationV1 {
@@ -827,12 +931,13 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
     }
   }
 
-  #map(info: unknown): Promise<AdapterProviderResourceV1> {
-    return this.#mapSnapshot(snapshotE2bSandboxInfo(info))
-  }
-
   async #page(options: SandboxListOpts): Promise<ProviderResourcePageV1> {
-    const paginator = this.#sdk.list(options)
+    let paginator: ReturnType<E2bOfficialReadSdkV1["list"]>
+    try {
+      paginator = this.#sdk.list(options)
+    } catch (cause) {
+      throw providerSdkUnavailable(cause)
+    }
     let hasNext: unknown
     let nextItems: unknown
     try {
@@ -853,7 +958,12 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
       return { items: [] }
     }
 
-    const providerResult = await Reflect.apply(nextItems, paginator, [])
+    let providerResult: unknown
+    try {
+      providerResult = await Reflect.apply(nextItems, paginator, [])
+    } catch (cause) {
+      throw providerSdkUnavailable(cause)
+    }
     let providerItems: readonly unknown[]
     let nextToken: string | undefined
     try {
@@ -879,7 +989,12 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
 
     const hydrated: E2bSandboxInfoSnapshotV1[] = []
     for (const candidate of candidates) {
-      const info = await this.#sdk.getInfo(candidate.sandboxId)
+      let info: Awaited<ReturnType<E2bOfficialReadSdkV1["getInfo"]>>
+      try {
+        info = await this.#sdk.getInfo(candidate.sandboxId)
+      } catch (cause) {
+        throw providerSdkUnavailable(cause)
+      }
       if (info === "absent") {
         throw adapterError("provider_state_unknown", { quarantineRequired: true })
       }
@@ -923,8 +1038,16 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
   }
 
   async inspectResource(opaqueResourceId: string): Promise<AdapterProviderResourceV1 | "absent"> {
-    const info = await this.#sdk.getInfo(opaqueResourceId)
-    return info === "absent" ? "absent" : this.#map(info)
+    let info: Awaited<ReturnType<E2bOfficialReadSdkV1["getInfo"]>>
+    try {
+      info = await this.#sdk.getInfo(opaqueResourceId)
+    } catch (cause) {
+      throw providerSdkUnavailable(cause)
+    }
+    if (info === "absent") return "absent"
+    const snapshot = snapshotE2bSandboxInfo(info)
+    if (snapshot.sandboxId !== opaqueResourceId) throw adapterError("integrity_failed")
+    return this.#mapSnapshot(snapshot)
   }
 
   listOwnedResources(cursor?: string): Promise<ProviderResourcePageV1> {
@@ -976,13 +1099,26 @@ export class DaytonaOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkContro
     this.#observedAt = observedAt
   }
 
-  async #map(sandbox: DaytonaSandbox): Promise<AdapterProviderResourceV1> {
-    const expectedId = sandbox.id
-    if (typeof expectedId !== "string" || expectedId.length === 0) {
+  async #refreshSnapshot(
+    candidate: DaytonaSandboxCandidateSnapshotV1,
+  ): Promise<DaytonaSandboxSnapshotV1> {
+    try {
+      await Reflect.apply(candidate.refreshData, candidate.sandbox, [])
+    } catch (cause) {
+      throw providerSdkUnavailable(cause)
+    }
+    const snapshot = snapshotDaytonaSandbox(candidate.sandbox, candidate.expectedId)
+    if (
+      MANAGED_RESOURCE_LABEL_KEYS.some(
+        (key) => snapshot.labels[key] !== candidate.expectedLabels[key],
+      )
+    ) {
       throw adapterError("integrity_failed")
     }
-    await sandbox.refreshData()
-    const snapshot = snapshotDaytonaSandbox(sandbox, expectedId)
+    return snapshot
+  }
+
+  async #mapSnapshot(snapshot: DaytonaSandboxSnapshotV1): Promise<AdapterProviderResourceV1> {
     const observedAt = observationTime(this.#observedAt)
     const fingerprint = label(snapshot.labels, "hasna.immutable_fingerprint_sha256")
     const attestation = snapshotAttestation(await this.#attestation.attest({
@@ -1032,16 +1168,59 @@ export class DaytonaOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkContro
 
   async #list(query: ListSandboxesQuery, cursor?: string): Promise<ProviderResourcePageV1> {
     if (cursor !== undefined) throw adapterError("unsupported_runtime_feature")
+    let providerIterable: AsyncIterable<DaytonaSandbox>
+    try {
+      providerIterable = this.#sdk.list(query)
+    } catch (cause) {
+      throw providerSdkUnavailable(cause)
+    }
     const providerItems: DaytonaSandbox[] = []
-    for await (const sandbox of this.#sdk.list(query)) {
-      if (providerItems.length >= PAGE_LIMIT) {
-        throw adapterError("provider_state_unknown", { quarantineRequired: true })
+    let pageLimitExceeded = false
+    try {
+      for await (const sandbox of providerIterable) {
+        if (providerItems.length >= PAGE_LIMIT) {
+          pageLimitExceeded = true
+          break
+        }
+        providerItems.push(sandbox)
       }
-      providerItems.push(sandbox)
+    } catch (cause) {
+      throw providerSdkUnavailable(cause)
+    }
+    if (pageLimitExceeded) {
+      throw adapterError("provider_state_unknown", { quarantineRequired: true })
+    }
+
+    const candidates: DaytonaSandboxCandidateSnapshotV1[] = []
+    const seenIds = new Set<string>()
+    try {
+      for (const sandbox of providerItems) {
+        const candidate = snapshotDaytonaSandboxCandidate(sandbox)
+        if (seenIds.has(candidate.expectedId)) throw adapterError("integrity_failed")
+        seenIds.add(candidate.expectedId)
+        candidates.push(candidate)
+      }
+    } catch (cause) {
+      throw adapterError("provider_state_unknown", { quarantineRequired: true, cause })
+    }
+
+    const refreshedSnapshots: DaytonaSandboxSnapshotV1[] = []
+    for (const candidate of candidates) {
+      try {
+        refreshedSnapshots.push(await this.#refreshSnapshot(candidate))
+      } catch (cause) {
+        if (
+          cause instanceof AdapterContractError &&
+          cause.code === "provider_unavailable"
+        ) {
+          throw cause
+        }
+        throw adapterError("provider_state_unknown", { quarantineRequired: true, cause })
+      }
     }
     const items: AdapterProviderResourceV1[] = []
-    for (const sandbox of providerItems) {
-      items.push(await this.#map(sandbox))
+    for (const snapshot of refreshedSnapshots) {
+      items.push(await this.#mapSnapshot(snapshot))
     }
     return { items }
   }
@@ -1061,8 +1240,15 @@ export class DaytonaOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkContro
   }
 
   async inspectResource(opaqueResourceId: string): Promise<AdapterProviderResourceV1 | "absent"> {
-    const sandbox = await this.#sdk.get(opaqueResourceId)
-    return sandbox === "absent" ? "absent" : this.#map(sandbox)
+    let sandbox: Awaited<ReturnType<DaytonaOfficialReadSdkV1["get"]>>
+    try {
+      sandbox = await this.#sdk.get(opaqueResourceId)
+    } catch (cause) {
+      throw providerSdkUnavailable(cause)
+    }
+    if (sandbox === "absent") return "absent"
+    const candidate = snapshotDaytonaSandboxCandidate(sandbox, opaqueResourceId)
+    return this.#mapSnapshot(await this.#refreshSnapshot(candidate))
   }
 
   listOwnedResources(cursor?: string): Promise<ProviderResourcePageV1> {
