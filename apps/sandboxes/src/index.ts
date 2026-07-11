@@ -1,4 +1,5 @@
 export * from "./canonical.js";
+export * from "./bounded-operations.js";
 export * from "./errors.js";
 export * from "./effect-journal.js";
 export * from "./provider-identity.js";

@@ -9,6 +9,16 @@ import {
   type Digest,
 } from "./canonical.js";
 import { SandboxError } from "./errors.js";
+import {
+  validateCheckpointExportRequest,
+  validateExecCancelRequest,
+  validateExecFrameReadRequest,
+  validateExecResultRequest,
+  validateExecStartRequest,
+  validateFileListRequest,
+  validateFileReadRequest,
+  validateFileWriteRequest,
+} from "./bounded-operations.js";
 import { HERMETIC_TEST_RUNNER } from "./hermetic-test-brand.js";
 import {
   assertEffectJournalOutcomeSchema,
@@ -17,8 +27,10 @@ import {
 } from "./effect-journal.js";
 import type { ProviderHandleSealerV1 } from "./handle-sealer.js";
 import {
+  adapterConstraintsDigest,
   adapterAdmissionReceiptDigest,
   adapterDescriptorDigest,
+  adapterTraceId,
   providerHandleBinding,
   providerHandleIdentityDigest,
   providerNonAcceptanceProofDigest,
@@ -39,15 +51,34 @@ import {
   type ActivationGrantV1,
   type AdapterDescriptorV1,
   type AdapterAdmissionReceiptV1,
+  type AuthorizedBoundedCallContextV1,
+  type BoundedOperationContextV1,
   type CanonicalSandboxEffectFenceV1,
   type CapabilityClaimsV1,
+  type CheckpointExportHandoffV1,
+  type CheckpointExportRequestV1,
   type CheckpointDurabilityReceiptV1,
   type CreateSandboxV1,
   type DispatchedJournalAnchorV1,
   type DestroyObservationV1,
   type EffectJournalRecoveryRangeV1,
+  type ExecCancelReceiptV1,
+  type ExecCancelRequestV1,
+  type ExecFramePageV1,
+  type ExecFrameReadRequestV1,
+  type ExecResultRequestV1,
+  type ExecResultV1,
+  type ExecStartReceiptV1,
+  type ExecStartRequestV1,
+  type FinalCurrentnessBarrierReceiptV1,
   type GitPromotionReceiptRefV1,
   type InfinityCleanupGrantV1,
+  type FileListPageV1,
+  type FileListRequestV1,
+  type FileReadReceiptV1,
+  type FileReadRequestV1,
+  type FileWriteReceiptV1,
+  type FileWriteRequestV1,
   type LifecycleCommandContextV1,
   type LifecycleTransitionBindingV1,
   type MutationContextV1,
@@ -67,6 +98,9 @@ import {
   type ReadProbeJournalAnchorV1,
   type ReconcileFindingV1,
   type SandboxDestroyTombstoneV1,
+  type SandboxDataPlaneOperationV1,
+  type SandboxHandleRefV1,
+  type SandboxesBoundedOperationsV1,
   type SandboxEventV1,
   type SandboxOperation,
   type SandboxState,
@@ -272,6 +306,7 @@ interface NormalizedLifecycleContext {
 interface VerifiedAdapterContextV1 {
   descriptor: AdapterDescriptorV1;
   admission_receipt_sha256: Digest;
+  admission_expires_at?: string;
 }
 
 interface VerifiedJournalRecoveryRangeV1 {
@@ -287,6 +322,25 @@ interface NormalizedMutationContext extends NormalizedLifecycleContext {
     outcome_frontier_digest: Digest;
   };
 }
+
+interface NormalizedBoundedOperationContextV1 {
+  operation_id: string;
+  idempotency_key_sha256: Digest;
+  request_sha256: Digest;
+  expected_revision: number;
+  fence: CanonicalSandboxEffectFenceV1;
+  capability: CapabilityClaimsV1;
+}
+
+type BoundedRequestV1 =
+  | ExecStartRequestV1
+  | ExecFrameReadRequestV1
+  | ExecResultRequestV1
+  | ExecCancelRequestV1
+  | FileReadRequestV1
+  | FileWriteRequestV1
+  | FileListRequestV1
+  | CheckpointExportRequestV1;
 
 function hasDispatchJournal(
   context: NormalizedLifecycleContext,
@@ -447,7 +501,7 @@ export function effectJournalFrontierDigest(
   });
 }
 
-export class SandboxesReferenceServiceV1 {
+export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1 {
   readonly #repository: SandboxRepositoryV1;
   readonly #runner: SandboxRunnerV1;
   readonly #sealer: ProviderHandleSealerV1;
@@ -881,7 +935,7 @@ export class SandboxesReferenceServiceV1 {
             handle,
             mutation,
             "active",
-            true,
+            false,
           );
         } catch {
           return { kind: "unknown" as const, reason: "provider_identity_mismatch" as const };
@@ -942,7 +996,7 @@ export class SandboxesReferenceServiceV1 {
           handle,
           mutation,
           "active",
-          true,
+          false,
         );
         activationOutcomeAnchor = await this.#anchorOutcome(
           ctx.operation_id,
@@ -1099,7 +1153,7 @@ export class SandboxesReferenceServiceV1 {
             handle,
             mutation,
             "inert",
-            true,
+            false,
           );
         } catch {
           return { kind: "unknown" as const };
@@ -1151,7 +1205,7 @@ export class SandboxesReferenceServiceV1 {
           handle,
           mutation,
           "inert",
-          true,
+          false,
         );
         expireOutcomeAnchor = await this.#anchorOutcome(
           ctx.operation_id,
@@ -1380,7 +1434,7 @@ export class SandboxesReferenceServiceV1 {
               handle,
               providerOp,
               ["inert", "active"],
-              true,
+              false,
             );
           }
         } catch {
@@ -1450,7 +1504,7 @@ export class SandboxesReferenceServiceV1 {
             handle,
             providerOp,
             ["inert", "active"],
-            true,
+            false,
           );
         }
         destroyOutcomeAnchor = await this.#anchorOutcome(
@@ -1626,6 +1680,110 @@ export class SandboxesReferenceServiceV1 {
   async get(resourceId: string): Promise<SandboxV1> {
     assertOpaqueId(resourceId, "resource_id", "sbx");
     return await this.#repository.transaction((tx) => this.#mustSandbox(tx, resourceId));
+  }
+
+  async startExec(
+    requestValue: ExecStartRequestV1,
+    contextValue: BoundedOperationContextV1,
+  ): Promise<ExecStartReceiptV1> {
+    const request = validateExecStartRequest(requestValue);
+    return await this.#dispatchBoundedOperation(
+      "exec.start",
+      request,
+      contextValue,
+      async (ctx, handle) => await this.#runner.startExec(ctx, handle, request),
+    );
+  }
+
+  async readExecFrames(
+    requestValue: ExecFrameReadRequestV1,
+    contextValue: BoundedOperationContextV1,
+  ): Promise<ExecFramePageV1> {
+    const request = validateExecFrameReadRequest(requestValue);
+    return await this.#dispatchBoundedOperation(
+      "exec.frames.read",
+      request,
+      contextValue,
+      async (ctx, handle) => await this.#runner.readExecFrames(ctx, handle, request),
+    );
+  }
+
+  async readExecResult(
+    requestValue: ExecResultRequestV1,
+    contextValue: BoundedOperationContextV1,
+  ): Promise<ExecResultV1> {
+    const request = validateExecResultRequest(requestValue);
+    return await this.#dispatchBoundedOperation(
+      "exec.result.read",
+      request,
+      contextValue,
+      async (ctx, handle) => await this.#runner.readExecResult(ctx, handle, request),
+    );
+  }
+
+  async cancelExec(
+    requestValue: ExecCancelRequestV1,
+    contextValue: BoundedOperationContextV1,
+  ): Promise<ExecCancelReceiptV1> {
+    const request = validateExecCancelRequest(requestValue);
+    return await this.#dispatchBoundedOperation(
+      "exec.cancel",
+      request,
+      contextValue,
+      async (ctx, handle) => await this.#runner.cancelExec(ctx, handle, request),
+    );
+  }
+
+  async readFile(
+    requestValue: FileReadRequestV1,
+    contextValue: BoundedOperationContextV1,
+  ): Promise<FileReadReceiptV1> {
+    const request = validateFileReadRequest(requestValue);
+    return await this.#dispatchBoundedOperation(
+      "file.read",
+      request,
+      contextValue,
+      async (ctx, handle) => await this.#runner.readFile(ctx, handle, request),
+    );
+  }
+
+  async writeFile(
+    requestValue: FileWriteRequestV1,
+    contextValue: BoundedOperationContextV1,
+  ): Promise<FileWriteReceiptV1> {
+    const request = validateFileWriteRequest(requestValue);
+    return await this.#dispatchBoundedOperation(
+      "file.write",
+      request,
+      contextValue,
+      async (ctx, handle) => await this.#runner.writeFile(ctx, handle, request),
+    );
+  }
+
+  async listFiles(
+    requestValue: FileListRequestV1,
+    contextValue: BoundedOperationContextV1,
+  ): Promise<FileListPageV1> {
+    const request = validateFileListRequest(requestValue);
+    return await this.#dispatchBoundedOperation(
+      "file.list",
+      request,
+      contextValue,
+      async (ctx, handle) => await this.#runner.listFiles(ctx, handle, request),
+    );
+  }
+
+  async exportCheckpoint(
+    requestValue: CheckpointExportRequestV1,
+    contextValue: BoundedOperationContextV1,
+  ): Promise<CheckpointExportHandoffV1> {
+    const request = validateCheckpointExportRequest(requestValue);
+    return await this.#dispatchBoundedOperation(
+      "checkpoint.export_bundle",
+      request,
+      contextValue,
+      async (ctx, handle) => await this.#runner.exportCheckpoint(ctx, handle, request),
+    );
   }
 
   async list(): Promise<SandboxV1[]> {
@@ -1885,6 +2043,259 @@ export class SandboxesReferenceServiceV1 {
     });
   }
 
+  async #dispatchBoundedOperation<RequestV1 extends { handle: SandboxHandleRefV1 }, ResultV1>(
+    operation: SandboxDataPlaneOperationV1,
+    request: RequestV1,
+    contextValue: BoundedOperationContextV1,
+    effect: (
+      ctx: AuthorizedBoundedCallContextV1,
+      handle: OwnedProviderHandleV1,
+    ) => Promise<ResultV1>,
+  ): Promise<ResultV1> {
+    const expectedDigest = canonicalDigest(request);
+    const ctx = await this.#authorizeBoundedOperation(
+      operation,
+      request.handle.resource_id,
+      expectedDigest,
+      canonicalDigest(request.handle),
+      contextValue,
+    );
+    return await this.#withSandboxLifecycleGate(request.handle.resource_id, async () => {
+      const initialDatabaseNow = (await this.#repository.databaseTime()).getTime();
+      const initial = await this.#repository.transaction((tx) => {
+        const current = this.#mustSandbox(tx, request.handle.resource_id);
+        this.#assertBoundedResourceCurrent(current, request.handle, ctx, initialDatabaseNow);
+        this.#assertBoundedRequestLimits(
+          current,
+          operation,
+          request as unknown as BoundedRequestV1,
+        );
+        const capabilityUse = this.#capabilityUseDigest(ctx.capability);
+        if (tx.getCapabilityUseOperation(capabilityUse) !== undefined) {
+          throw new SandboxError("capability_replayed", "Bounded operation capability was already consumed");
+        }
+        tx.consumeCapabilityUse(capabilityUse, ctx.operation_id);
+        const sealed = tx.getHandle(current.id);
+        if (sealed === undefined) throw new SandboxError("integrity_failed", "Bounded operation handle is missing");
+        return {
+          current,
+          handle: this.#openStoredHandle(sealed, current),
+          capability_use_receipt_sha256: capabilityUse,
+        };
+      });
+
+      await this.#assertCurrentAdapterAdmission(
+        initial.current.adapter_descriptor,
+        initial.current.adapter_admission_receipt_sha256,
+      );
+      const authenticated = await this.#verifier.verifyCurrentEffectAuthorization(
+        ctx.capability,
+        ctx.fence,
+      );
+      this.#assertAuthenticatedBindings(authenticated, ctx.fence);
+
+      const finalDatabaseNow = (await this.#repository.databaseTime()).getTime();
+      const final = await this.#repository.transaction((tx) => {
+        const current = this.#mustSandbox(tx, request.handle.resource_id);
+        this.#assertBoundedResourceCurrent(current, request.handle, ctx, finalDatabaseNow);
+        const sealed = tx.getHandle(current.id);
+        if (sealed === undefined) throw new SandboxError("integrity_failed", "Bounded operation handle disappeared");
+        const handle = this.#openStoredHandle(sealed, current);
+        if (handle.provider_identity_sha256 !== initial.handle.provider_identity_sha256) {
+          throw new SandboxError("integrity_failed", "Bounded operation handle changed during final authorization");
+        }
+        return { current, handle };
+      });
+      const adapterContext: AuthorizedBoundedCallContextV1 = {
+        schema_version: "sandboxes.authorized-bounded-call/v1",
+        operation,
+        operation_id: ctx.operation_id,
+        request_sha256: ctx.request_sha256,
+        capability_use_receipt_sha256: initial.capability_use_receipt_sha256,
+        handle: request.handle,
+        fence: ctx.fence,
+        deadline: ctx.fence.operation_execution_expires_at,
+      };
+      if (final.current.physical_safety_state !== "clear") {
+        throw new SandboxError("policy_denied", "Bounded operation is blocked by the physical safety fence");
+      }
+      return await effect(adapterContext, final.handle);
+    });
+  }
+
+  async #authorizeBoundedOperation(
+    operation: SandboxDataPlaneOperationV1,
+    resourceId: string,
+    expectedDigest: Digest,
+    expectedHandleSha256: Digest,
+    value: BoundedOperationContextV1,
+  ): Promise<NormalizedBoundedOperationContextV1> {
+    const keys = new Set([
+      "operation_id",
+      "idempotency_key_sha256",
+      "request_sha256",
+      "expected_revision",
+      "fence",
+      "capability",
+    ]);
+    if (
+      value === null ||
+      typeof value !== "object" ||
+      Object.keys(value).length !== keys.size ||
+      Object.keys(value).some((key) => !keys.has(key))
+    ) {
+      throw new SandboxError("validation_failed", "Bounded operation context is not a closed V1 document");
+    }
+    const fence = validateFence(value.fence);
+    const capability = validateCapability(value.capability);
+    assertOpaqueId(value.operation_id, "context.operation_id", "op");
+    assertDigest(value.idempotency_key_sha256, "context.idempotency_key_sha256");
+    assertDigest(value.request_sha256, "context.request_sha256");
+    if (!Number.isSafeInteger(value.expected_revision) || value.expected_revision < 0) {
+      throw new SandboxError("validation_failed", "Expected revision must be a non-negative safe integer");
+    }
+    if (
+      value.operation_id !== fence.operation_id ||
+      value.request_sha256 !== expectedDigest ||
+      fence.operation_digest !== expectedDigest ||
+      fence.resource_id !== resourceId
+    ) {
+      throw new SandboxError("request_digest_mismatch", "Bounded operation does not match its protected fence");
+    }
+    if (
+      capability.operation !== operation ||
+      capability.target_resource_id !== resourceId ||
+      capability.request_sha256 !== expectedDigest ||
+      capability.idempotency_key_sha256 !== value.idempotency_key_sha256 ||
+      capability.expected_revision !== value.expected_revision ||
+      capability.handle_sha256 !== expectedHandleSha256 ||
+      capability.dispatch_journal_anchor_sha256 !== undefined ||
+      canonicalDigest(capability.fence) !== canonicalDigest(fence)
+    ) {
+      throw new SandboxError("capability_denied", "Capability does not bind the exact bounded operation and fence");
+    }
+    await this.#assertFenceFresh(fence);
+    await this.#assertWindow(capability.not_before, capability.expires_at, "capability_denied");
+    const authenticated = await this.#verifier.verifyCapability(capability);
+    this.#assertAuthenticatedBindings(authenticated, fence);
+    return {
+      operation_id: value.operation_id,
+      idempotency_key_sha256: value.idempotency_key_sha256,
+      request_sha256: expectedDigest,
+      expected_revision: value.expected_revision,
+      fence,
+      capability,
+    };
+  }
+
+  #assertBoundedResourceCurrent(
+    current: SandboxV1,
+    handle: SandboxHandleRefV1,
+    ctx: NormalizedBoundedOperationContextV1,
+    databaseNow: number,
+  ): void {
+    this.#assertExpectedRevision(current, ctx.expected_revision);
+    this.#assertCurrentFence(current, ctx.fence, current.resource_lifecycle_generation);
+    if (
+      current.state !== "active" ||
+      current.physical_safety_state !== "clear"
+    ) {
+      throw new SandboxError("sandbox_not_active", "Bounded operation requires a physically clear active sandbox");
+    }
+    if (
+      ctx.fence.resource_lifecycle_generation !== current.resource_lifecycle_generation ||
+      ctx.fence.authority_epoch !== current.authority_epoch ||
+      ctx.fence.route_lineage_id !== current.route_lineage_id ||
+      ctx.fence.route_id !== current.route_id ||
+      ctx.fence.route_epoch !== current.route_epoch ||
+      ctx.fence.lease_epoch !== current.lease_epoch ||
+      ctx.fence.operation_execution_epoch !== current.operation_execution_epoch ||
+      ctx.fence.actor_principal !== current.actor_principal ||
+      ctx.fence.lease_holder_principal !== current.lease_holder_principal ||
+      ctx.fence.operation_executor_principal !== current.operation_executor_principal ||
+      ctx.fence.audience !== current.audience
+    ) {
+      throw new SandboxError("capability_denied", "Bounded operation does not consume the exact current fence and lease");
+    }
+    if (
+      handle.resource_id !== current.id ||
+      handle.resource_lease_id !== current.resource_lease_id ||
+      handle.resource_lifecycle_generation !== current.resource_lifecycle_generation
+    ) {
+      throw new SandboxError(
+        "stale_resource_lifecycle_generation",
+        "Bounded operation handle does not target the current resource incarnation",
+      );
+    }
+    if (
+      current.provider_handle_sha256 === undefined ||
+      current.provider_identity_sha256 === undefined ||
+      current.immutable_fingerprint_sha256 === undefined ||
+      handle.provider_handle_sha256 !== current.provider_handle_sha256 ||
+      handle.provider_identity_sha256 !== current.provider_identity_sha256 ||
+      handle.immutable_fingerprint_sha256 !== current.immutable_fingerprint_sha256
+    ) {
+      throw new SandboxError("integrity_failed", "Bounded operation handle digest does not match current sealed state");
+    }
+    if (Date.parse(current.expires_at) <= databaseNow) {
+      throw new SandboxError("lease_expired", "Sandbox TTL expired before the bounded operation");
+    }
+  }
+
+  #assertBoundedRequestLimits(
+    current: SandboxV1,
+    operation: SandboxDataPlaneOperationV1,
+    request: BoundedRequestV1,
+  ): void {
+    const limits = current.adapter_descriptor.resource_limits;
+    if (operation.startsWith("file.") || operation === "checkpoint.export_bundle") {
+      if (!current.adapter_descriptor.native_bounded_files) {
+        throw new SandboxError("unsupported_runtime_feature", "Adapter lacks native bounded workspace files");
+      }
+    }
+    switch (operation) {
+      case "exec.start": {
+        const start = request as ExecStartRequestV1;
+        if (
+          start.timeout_ms > current.spec.max_runtime_ms ||
+          start.max_output_bytes > current.spec.resources.output_bytes ||
+          start.max_output_bytes > limits.max_output_bytes
+        ) {
+          throw new SandboxError("resource_limit_exceeded", "Exec request exceeds sandbox or adapter limits");
+        }
+        break;
+      }
+      case "exec.cancel":
+        if (!current.adapter_descriptor.whole_scope_cancel) {
+          throw new SandboxError("unsupported_runtime_feature", "Adapter cannot prove whole-scope cancellation");
+        }
+        break;
+      case "file.read":
+        if ((request as FileReadRequestV1).length_bytes > limits.max_file_bytes) {
+          throw new SandboxError("resource_limit_exceeded", "File read exceeds adapter limits");
+        }
+        break;
+      case "file.write":
+        if ((request as FileWriteRequestV1).max_bytes > limits.max_file_bytes) {
+          throw new SandboxError("resource_limit_exceeded", "File write exceeds adapter limits");
+        }
+        break;
+      case "file.list":
+        if ((request as FileListRequestV1).limit > limits.max_page_entries) {
+          throw new SandboxError("resource_limit_exceeded", "File list page exceeds adapter limits");
+        }
+        break;
+      case "checkpoint.export_bundle":
+        if ((request as CheckpointExportRequestV1).maximum_bundle_bytes > current.spec.resources.disk_bytes) {
+          throw new SandboxError("resource_limit_exceeded", "Checkpoint bundle exceeds sandbox disk limit");
+        }
+        break;
+      case "exec.frames.read":
+      case "exec.result.read":
+        break;
+    }
+  }
+
   async #recordCanonicalOutcome(
     operation: RecordLifecycleOperation | "quarantine",
     resourceId: string,
@@ -2011,6 +2422,9 @@ export class SandboxesReferenceServiceV1 {
       capability.operation !== operation ||
       capability.target_resource_id !== resourceId ||
       capability.request_sha256 !== expectedDigest ||
+      capability.idempotency_key_sha256 !== value.idempotency_key_sha256 ||
+      capability.expected_revision !== value.expected_revision ||
+      capability.handle_sha256 !== undefined ||
       canonicalDigest(capability.fence) !== canonicalDigest(fence)
     ) {
       throw new SandboxError("capability_denied", "Capability does not bind the exact operation and full fence");
@@ -2210,8 +2624,23 @@ export class SandboxesReferenceServiceV1 {
     requested_from_sequence: bigint;
   }): Promise<VerifiedJournalRecoveryRangeV1> {
     const range = await this.#journalRecovery.readOperationStepRange(input);
+    const rangeKeys = new Set([
+      "schema_version",
+      "operation_id",
+      "operation_step_id",
+      "requested_from_sequence",
+      "signed_head_sequence",
+      "signed_head_frontier_digest",
+      "signer_principal",
+      "signing_key_id",
+      "signature",
+      "complete_operation_envelopes",
+      "completeness_proof_sha256",
+    ]);
     assertOpaqueId(range.operation_id, "journal_recovery.operation_id", "op");
     assertOpaqueId(range.operation_step_id, "journal_recovery.operation_step_id", "step");
+    assertOpaqueId(range.signer_principal, "journal_recovery.signer_principal", "principal");
+    assertOpaqueId(range.signing_key_id, "journal_recovery.signing_key_id", "key");
     assertDigest(range.signed_head_frontier_digest, "journal_recovery.signed_head_frontier_digest");
     assertDigest(range.completeness_proof_sha256, "journal_recovery.completeness_proof_sha256");
     if (
@@ -2219,6 +2648,8 @@ export class SandboxesReferenceServiceV1 {
       range.operation_id !== input.operation_id ||
       range.operation_step_id !== input.operation_step_id ||
       range.requested_from_sequence !== input.requested_from_sequence ||
+      Object.keys(range).length !== rangeKeys.size ||
+      Object.keys(range).some((key) => !rangeKeys.has(key)) ||
       range.requested_from_sequence < 1n ||
       range.signed_head_sequence < 1n ||
       !/^[A-Za-z0-9_-]{86}$/.test(range.signature)
@@ -2236,6 +2667,7 @@ export class SandboxesReferenceServiceV1 {
         anchor.record.operation_id !== input.operation_id ||
         anchor.record.operation_step_id !== input.operation_step_id ||
         anchor.journal_sequence < input.requested_from_sequence ||
+        anchor.journal_sequence > range.signed_head_sequence ||
         (priorSequence !== undefined && anchor.journal_sequence <= priorSequence)
       ) {
         throw new SandboxError("integrity_failed", "Journal recovery range is not a complete ordered operation-step projection");
@@ -3730,13 +4162,17 @@ export class SandboxesReferenceServiceV1 {
     ) {
       throw new SandboxError("capability_denied", "Managed adapter admission receipt is not current and exact");
     }
-    return { descriptor, admission_receipt_sha256: admission.receipt_sha256 };
+    return {
+      descriptor,
+      admission_receipt_sha256: admission.receipt_sha256,
+      admission_expires_at: admission.expires_at,
+    };
   }
 
   async #assertCurrentAdapterAdmission(
     descriptor: AdapterDescriptorV1,
     admissionReceiptSha256: Digest,
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     const current = await this.#verifiedDescriptor();
     if (
       canonicalDigest(current.descriptor) !== canonicalDigest(descriptor) ||
@@ -3747,6 +4183,7 @@ export class SandboxesReferenceServiceV1 {
         "Adapter descriptor or signed admission changed before provider reachability",
       );
     }
+    return current.admission_expires_at;
   }
 
   async #assertDescriptorSupportsCreate(
@@ -3879,21 +4316,25 @@ export class SandboxesReferenceServiceV1 {
     adapterAdmissionReceiptSha256: Digest,
     handle?: OwnedProviderHandleV1,
     grantExpiresAt?: string,
-  ): Promise<Digest> {
+  ): Promise<FinalCurrentnessBarrierReceiptV1> {
     const operation = await this.#repository.transaction((tx) => tx.getOperation(ctx.operation_id));
     if (operation === undefined) {
       throw new SandboxError("integrity_failed", "Final provider mutation barrier lost its operation");
     }
-    await this.#physicalSafety.assertProviderDispatchAllowed({
+    const physicalSafetyAssertion = {
       resource_id: ctx.fence.resource_id,
       operation: operation.operation,
       fence: ctx.fence,
       dispatch_anchor_sha256: dispatchedJournalAnchorDigest(ctx.dispatch_journal),
-    });
-    await this.#assertCurrentAdapterAdmission(descriptor, adapterAdmissionReceiptSha256);
-    // These are the final online admission and authorization reads. Only the
-    // linearizable local database barrier below may run before the mutation.
+    };
+    await this.#physicalSafety.assertProviderDispatchAllowed(physicalSafetyAssertion);
+    // These are the final online authorization and admission reads. Admission
+    // is last so a slow authorization check cannot consume its remaining TTL.
     const currentAuthorizationReceiptSha256 = await this.#assertCurrentEffectGuard(ctx);
+    const adapterAdmissionExpiresAt = await this.#assertCurrentAdapterAdmission(
+      descriptor,
+      adapterAdmissionReceiptSha256,
+    );
     return await this.#repository.transaction((tx) => {
       const finalOperation = tx.getOperation(ctx.operation_id);
       if (finalOperation === undefined || finalOperation.effect_phase !== "dispatched") {
@@ -3907,6 +4348,15 @@ export class SandboxesReferenceServiceV1 {
         adapterAdmissionReceiptSha256,
       );
       const now = tx.databaseTime().getTime();
+      if (
+        adapterAdmissionExpiresAt !== undefined &&
+        Date.parse(adapterAdmissionExpiresAt) <= now
+      ) {
+        throw new SandboxError(
+          "capability_denied",
+          "Managed adapter admission expired before the final database barrier",
+        );
+      }
       if (grantExpiresAt !== undefined && Date.parse(grantExpiresAt) <= now) {
         throw new SandboxError("capability_denied", "Provider mutation grant expired during preflight");
       }
@@ -3920,22 +4370,37 @@ export class SandboxesReferenceServiceV1 {
           throw new SandboxError("integrity_failed", "Final provider mutation handle identity changed");
         }
       }
-      return canonicalDigest({
+      const protectedReceipt = {
         schema_version: "sandboxes.final-currentness-barrier-receipt/v1",
+        trace_id: adapterTraceId(ctx.operation_id),
+        deadline: ctx.fence.operation_execution_expires_at,
+        constraints_sha256: adapterConstraintsDigest(ctx.fence),
+        fence_sha256: canonicalDigest(ctx.fence),
+        target_sha256: canonicalDigest(this.#effectTarget(ctx)),
         operation_id: ctx.operation_id,
         operation_step_id: ctx.dispatch_journal.record.operation_step_id,
         operation_execution_epoch: ctx.fence.operation_execution_epoch,
         request_sha256: ctx.request_sha256,
+        idempotency_key_sha256: ctx.idempotency_key_sha256,
         resource_id: current.id,
         resource_lifecycle_generation: current.resource_lifecycle_generation,
         dispatch_anchor_sha256: dispatchedJournalAnchorDigest(ctx.dispatch_journal),
+        physical_safety_assertion_sha256: canonicalDigest({
+          schema_version: "sandboxes.physical-safety-assertion/v1",
+          assertion: physicalSafetyAssertion,
+        }),
         current_authorization_receipt_sha256: currentAuthorizationReceiptSha256,
         adapter_descriptor_sha256: descriptor.descriptor_sha256,
         adapter_admission_receipt_sha256: adapterAdmissionReceiptSha256,
+        adapter_admission_expires_at: adapterAdmissionExpiresAt ?? null,
         provider_handle_sha256: current.provider_handle_sha256 ?? null,
         grant_expires_at: grantExpiresAt ?? null,
         database_observed_at: this.#txNow(tx),
-      });
+      } as const;
+      return {
+        ...protectedReceipt,
+        receipt_sha256: canonicalDigest(protectedReceipt),
+      };
     });
   }
 
@@ -4023,12 +4488,12 @@ export class SandboxesReferenceServiceV1 {
       await this.#assertCurrentAdapterAdmission(descriptor, adapterAdmissionReceiptSha256);
       const operationObservation = await this.#runner.lookupOperation(reconcile, readProbe, handle);
       if (
-      operationObservation.state !== "completed" ||
-      operationObservation.handle === undefined ||
-      this.#providerIdentityDigest(operationObservation.handle) !== this.#providerIdentityDigest(handle)
+        operationObservation.state !== "completed" ||
+        operationObservation.handle === undefined
       ) {
         throw new SandboxError("integrity_failed", "Provider operation readback did not return the exact owned handle");
       }
+      this.#assertExactProviderHandleReadback(operationObservation.handle, handle);
     }
     const inspectionBarrierReceiptSha256 = await this.#assertCurrentEffectGuard(ctx, readProbe);
     await this.#assertCurrentAdapterAdmission(descriptor, adapterAdmissionReceiptSha256);
@@ -4048,12 +4513,12 @@ export class SandboxesReferenceServiceV1 {
         ? expectedState.includes(observation.state as "inert" | "active")
         : observation.state === expectedState) ||
       observation.handle === undefined ||
-      this.#providerIdentityDigest(observation.handle) !== this.#providerIdentityDigest(handle) ||
       observation.immutable_fingerprint_sha256 !== handle.immutable_fingerprint_sha256 ||
       observation.provider_resource_version !== handle.provider_resource_version
     ) {
       throw new SandboxError("integrity_failed", "Provider inspection did not match the exact owned incarnation");
     }
+    this.#assertExactProviderHandleReadback(observation.handle, handle);
     const matches: OwnedResourcePageV1["resources"] = [];
     let cursor: string | undefined;
     const seenCursors = new Set<string>();
@@ -4061,6 +4526,11 @@ export class SandboxesReferenceServiceV1 {
       await this.#assertCurrentEffectGuard(ctx, readProbe);
       await this.#assertCurrentAdapterAdmission(descriptor, adapterAdmissionReceiptSha256);
       const page = await this.#runner.listOwnedResources(reconcile, readProbe, cursor);
+      await this.#assertCurrentEffectGuard(ctx, readProbe);
+      await this.#assertCurrentAdapterAdmission(
+        descriptor,
+        adapterAdmissionReceiptSha256,
+      );
       matches.push(...page.resources.filter((resource) => resource.resource_id === handle.resource_id));
       if (page.next_cursor === undefined) break;
       if (seenCursors.has(page.next_cursor)) {
@@ -4096,6 +4566,20 @@ export class SandboxesReferenceServiceV1 {
     return handle.provider_identity_sha256;
   }
 
+  #assertExactProviderHandleReadback(
+    actual: OwnedProviderHandleV1,
+    expected: OwnedProviderHandleV1,
+  ): void {
+    this.#providerIdentityDigest(actual);
+    this.#providerIdentityDigest(expected);
+    if (canonicalDigest(actual) !== canonicalDigest(expected)) {
+      throw new SandboxError(
+        "integrity_failed",
+        "Provider readback changed closed handle fields or lifecycle generation",
+      );
+    }
+  }
+
   async #verifyExactAbsence(
     ctx: NormalizedMutationContext,
     descriptor: AdapterDescriptorV1,
@@ -4105,6 +4589,23 @@ export class SandboxesReferenceServiceV1 {
   ): Promise<void> {
     const readProbe = await this.#readProbeOperation(ctx, mutation, descriptor);
     const reconcile = this.#reconcileContext(ctx, descriptor, readProbe);
+    await this.#assertCurrentEffectGuard(ctx, readProbe);
+    await this.#assertCurrentAdapterAdmission(descriptor, adapterAdmissionReceiptSha256);
+    const operationObservation = await this.#runner.lookupOperation(
+      reconcile,
+      readProbe,
+      handle,
+    );
+    if (
+      operationObservation.state !== "completed" ||
+      operationObservation.handle === undefined
+    ) {
+      throw new SandboxError(
+        "provider_state_unknown",
+        "Provider destroy lookup did not prove the exact completed operation",
+      );
+    }
+    this.#assertExactProviderHandleReadback(operationObservation.handle, handle);
     const inspectionBarrierReceiptSha256 = await this.#assertCurrentEffectGuard(ctx, readProbe);
     await this.#assertCurrentAdapterAdmission(descriptor, adapterAdmissionReceiptSha256);
     const observation = await this.#runner.inspect(
@@ -4127,6 +4628,11 @@ export class SandboxesReferenceServiceV1 {
       await this.#assertCurrentEffectGuard(ctx, readProbe);
       await this.#assertCurrentAdapterAdmission(descriptor, adapterAdmissionReceiptSha256);
       const page = await this.#runner.listOwnedResources(reconcile, readProbe, cursor);
+      await this.#assertCurrentEffectGuard(ctx, readProbe);
+      await this.#assertCurrentAdapterAdmission(
+        descriptor,
+        adapterAdmissionReceiptSha256,
+      );
       if (page.resources.some((resource) => resource.resource_id === handle.resource_id)) {
         throw new SandboxError("provider_state_unknown", "Provider enumeration still contains the destroyed identity");
       }
@@ -4369,14 +4875,15 @@ export class SandboxesReferenceServiceV1 {
     ctx: NormalizedMutationContext,
     descriptor: AdapterDescriptorV1,
     adapterAdmissionReceiptSha256: Digest,
-    finalCurrentnessBarrierReceiptSha256: Digest,
+    finalCurrentnessBarrier: FinalCurrentnessBarrierReceiptV1,
   ): AdapterCallContextV1 {
     return this.#adapterContextWithAnchor(
       ctx,
       dispatchedJournalAnchorDigest(ctx.dispatch_journal),
       descriptor,
       adapterAdmissionReceiptSha256,
-      finalCurrentnessBarrierReceiptSha256,
+      finalCurrentnessBarrier.receipt_sha256,
+      finalCurrentnessBarrier,
     );
   }
 
@@ -4402,20 +4909,20 @@ export class SandboxesReferenceServiceV1 {
     descriptor: AdapterDescriptorV1,
     adapterAdmissionReceiptSha256: Digest,
     finalCurrentnessBarrierReceiptSha256: Digest,
+    finalCurrentnessBarrier?: FinalCurrentnessBarrierReceiptV1,
   ): AdapterCallContextV1 {
     return {
-      trace_id: sha256(`trace:${ctx.operation_id}`).slice(7, 39),
+      trace_id: adapterTraceId(ctx.operation_id),
       deadline: ctx.fence.operation_execution_expires_at,
-      constraints_sha256: canonicalDigest({
-        resource_id: ctx.fence.resource_id,
-        operation_id: ctx.fence.operation_id,
-        audience: ctx.fence.audience,
-      }),
+      constraints_sha256: adapterConstraintsDigest(ctx.fence),
       fence: ctx.fence,
       target: this.#effectTarget(ctx),
       external_anchor_receipt_sha256: externalAnchorReceiptSha256,
       final_currentness_barrier_receipt_sha256:
         finalCurrentnessBarrierReceiptSha256,
+      ...(finalCurrentnessBarrier === undefined
+        ? {}
+        : { final_currentness_barrier: finalCurrentnessBarrier }),
       adapter_descriptor_sha256: descriptor.descriptor_sha256,
       adapter_admission_receipt_sha256: adapterAdmissionReceiptSha256,
     };
@@ -4555,6 +5062,12 @@ export class SandboxesReferenceServiceV1 {
       outcomeRecord.dispatch_anchor_sha256 !== operation.dispatch_journal_anchor_sha256 ||
       outcomeRecord.outcome_kind !== outcomeKind ||
       outcomeRecord.outcome_sha256 !== outcomeSha256 ||
+      (
+        outcomeKind === "failed_no_effect"
+          ? outcomeRecord.provider_no_effect_verification_receipt_sha256 !==
+            providerNoEffectVerificationReceiptSha256
+          : "provider_no_effect_verification_receipt_sha256" in outcomeRecord
+      ) ||
       outcomeRecord.recorded_at !== recordedAt ||
       canonicalDigest(outcomeRecord.fence) !== canonicalDigest(operation.fence) ||
       canonicalDigest(outcomeRecord.target) !== canonicalDigest(operation.provider_target)

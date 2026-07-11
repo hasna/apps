@@ -29,6 +29,45 @@ export interface ProviderHandleSealerV1 {
 }
 
 const PROVIDER_HANDLE_AEAD_DOMAIN = "sandboxes.resource-provider-handle/v1" as const;
+const OWNED_PROVIDER_HANDLE_KEYS = new Set([
+  "schema_version",
+  "adapter_id",
+  "adapter_version",
+  "installation_id",
+  "provider_scope_ref",
+  "resource_kind",
+  "opaque_resource_id",
+  "ownership_nonce",
+  "create_inert_operation_id",
+  "provider_creation_token_sha256",
+  "creation_receipt_sha256",
+  "provider_created_at",
+  "provider_resource_version",
+  "provider_identity_sha256",
+  "immutable_fingerprint_sha256",
+  "resource_lease_id",
+  "resource_id",
+  "resource_lifecycle_generation",
+  "spec_sha256",
+]);
+const SEALED_PROVIDER_HANDLE_KEYS = new Set([
+  "schema_version",
+  "resource_id",
+  "sealed_handle",
+  "provider_handle_sha256",
+  "binding_sha256",
+]);
+
+function assertClosedDocument(
+  value: object,
+  allowed: ReadonlySet<string>,
+  label: string,
+): void {
+  const keys = Object.keys(value);
+  if (keys.length !== allowed.size || keys.some((key) => !allowed.has(key))) {
+    throw new SandboxError("integrity_failed", `${label} is not a closed V1 document`);
+  }
+}
 
 function providerHandleAad(binding: ProviderHandleBindingV1): Buffer {
   return Buffer.from(`${PROVIDER_HANDLE_AEAD_DOMAIN}\0${canonicalJson(binding)}`, "utf8");
@@ -45,6 +84,7 @@ export class AesGcmProviderHandleSealerV1 implements ProviderHandleSealerV1 {
   }
 
   seal(handle: OwnedProviderHandleV1): SealedProviderHandleV1 {
+    assertClosedDocument(handle, OWNED_PROVIDER_HANDLE_KEYS, "Provider handle plaintext");
     assertOpaqueId(handle.resource_id, "handle.resource_id", "sbx");
     if (handle.provider_identity_sha256 !== providerHandleIdentityDigest(handle)) {
       throw new SandboxError("integrity_failed", "Provider handle identity digest mismatch");
@@ -70,6 +110,7 @@ export class AesGcmProviderHandleSealerV1 implements ProviderHandleSealerV1 {
     sealed: SealedProviderHandleV1,
     expectedBinding: ProviderHandleBindingV1,
   ): OwnedProviderHandleV1 {
+    assertClosedDocument(sealed, SEALED_PROVIDER_HANDLE_KEYS, "Sealed provider handle");
     assertOpaqueId(sealed.resource_id, "sealed_handle.resource_id", "sbx");
     assertDigest(sealed.provider_handle_sha256, "sealed_handle.provider_handle_sha256");
     assertDigest(sealed.binding_sha256, "sealed_handle.binding_sha256");
@@ -97,6 +138,7 @@ export class AesGcmProviderHandleSealerV1 implements ProviderHandleSealerV1 {
       decipher.setAuthTag(tag);
       const plaintext = Buffer.concat([decipher.update(encrypted), decipher.final()]).toString("utf8");
       const handle = parseStorageJson<OwnedProviderHandleV1>(plaintext);
+      assertClosedDocument(handle, OWNED_PROVIDER_HANDLE_KEYS, "Provider handle plaintext");
       if (handle.schema_version !== SCHEMA_VERSION || handle.resource_id !== sealed.resource_id) {
         throw new Error("binding mismatch");
       }

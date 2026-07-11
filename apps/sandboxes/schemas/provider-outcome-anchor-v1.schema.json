@@ -29,10 +29,21 @@
         "dispatch_anchor_sha256": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/digest" },
         "outcome_kind": { "enum": ["succeeded", "failed_effect", "failed_no_effect", "reconciliation_blocked"] },
         "outcome_sha256": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/digest" },
+        "provider_no_effect_verification_receipt_sha256": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/digest" },
         "recorded_at": { "$ref": "dispatched-journal-anchor-v1.schema.json#/$defs/time" },
         "fence": { "$ref": "canonical-effect-fence-v1.schema.json" },
         "target": { "$ref": "#/$defs/target" }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "outcome_kind": { "const": "failed_no_effect" } },
+            "required": ["outcome_kind"]
+          },
+          "then": { "required": ["provider_no_effect_verification_receipt_sha256"] },
+          "else": { "not": { "required": ["provider_no_effect_verification_receipt_sha256"] } }
+        }
+      ]
     }
   },
   "$defs": {

@@ -328,10 +328,12 @@ export function validateCapability(value: unknown): CapabilityClaimsV1 {
     "operation",
     "target_resource_id",
     "request_sha256",
+    "idempotency_key_sha256",
+    "expected_revision",
     "fence",
     "not_before",
     "expires_at",
-  ], ["dispatch_journal_anchor_sha256"]);
+  ], ["dispatch_journal_anchor_sha256", "handle_sha256"]);
   return {
     schema_version: literal(v.schema_version, SCHEMA_VERSION, "capability.schema_version"),
     capability_id: id(v.capability_id, "capability.capability_id", "cap"),
@@ -351,11 +353,30 @@ export function validateCapability(value: unknown): CapabilityClaimsV1 {
         "record_cleanup_failed",
         "resume_destroy",
         "record_destroyed",
+        "exec.start",
+        "exec.frames.read",
+        "exec.result.read",
+        "exec.cancel",
+        "file.read",
+        "file.write",
+        "file.list",
+        "checkpoint.export_bundle",
       ] as const,
       "capability.operation",
     ),
     target_resource_id: id(v.target_resource_id, "capability.target_resource_id", "sbx"),
     request_sha256: digest(v.request_sha256, "capability.request_sha256"),
+    idempotency_key_sha256: digest(
+      v.idempotency_key_sha256,
+      "capability.idempotency_key_sha256",
+    ),
+    expected_revision: nonNegativeInteger(
+      v.expected_revision,
+      "capability.expected_revision",
+    ),
+    ...(v.handle_sha256 === undefined
+      ? {}
+      : { handle_sha256: digest(v.handle_sha256, "capability.handle_sha256") }),
     ...(v.dispatch_journal_anchor_sha256 === undefined
       ? {}
       : {
@@ -692,7 +713,7 @@ export function validateProviderEffectTarget(value: unknown): ProviderEffectTarg
 }
 
 function validateProviderOutcomeRecord(value: unknown): ProviderOutcomeRecordV1 {
-  const v = closed(value, "outcome_anchor.record", [
+  const baseKeys = [
     "schema_version",
     "record_kind",
     "outcome_schema_version",
@@ -706,9 +727,21 @@ function validateProviderOutcomeRecord(value: unknown): ProviderOutcomeRecordV1 
     "recorded_at",
     "fence",
     "target",
-  ]);
+  ] as const;
+  const raw = record(value, "outcome_anchor.record");
+  const outcomeKind = enumValue(
+    raw.outcome_kind,
+    EFFECT_JOURNAL_OUTCOME_KINDS,
+    "outcome_anchor.outcome_kind",
+  );
+  const v = outcomeKind === "failed_no_effect"
+    ? closed(value, "outcome_anchor.record", [
+        ...baseKeys,
+        "provider_no_effect_verification_receipt_sha256",
+      ])
+    : closed(value, "outcome_anchor.record", baseKeys);
   assertEffectJournalOutcomeSchema(v.outcome_schema_version, v.outcome_schema_digest);
-  return {
+  const facts = {
     schema_version: literal(v.schema_version, SCHEMA_VERSION, "outcome_anchor.schema_version"),
     record_kind: literal(v.record_kind, "OUTCOME", "outcome_anchor.record_kind"),
     outcome_schema_version: EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION,
@@ -723,16 +756,21 @@ function validateProviderOutcomeRecord(value: unknown): ProviderOutcomeRecordV1 
       v.dispatch_anchor_sha256,
       "outcome_anchor.dispatch_anchor_sha256",
     ),
-    outcome_kind: enumValue(
-      v.outcome_kind,
-      EFFECT_JOURNAL_OUTCOME_KINDS,
-      "outcome_anchor.outcome_kind",
-    ),
     outcome_sha256: digest(v.outcome_sha256, "outcome_anchor.outcome_sha256"),
     recorded_at: time(v.recorded_at, "outcome_anchor.recorded_at"),
     fence: validateFence(v.fence),
     target: validateProviderEffectTarget(v.target),
   };
+  return outcomeKind === "failed_no_effect"
+    ? {
+        ...facts,
+        outcome_kind: outcomeKind,
+        provider_no_effect_verification_receipt_sha256: digest(
+          v.provider_no_effect_verification_receipt_sha256,
+          "outcome_anchor.provider_no_effect_verification_receipt_sha256",
+        ),
+      }
+    : { ...facts, outcome_kind: outcomeKind };
 }
 
 export function validateProviderOutcomeAnchor(value: unknown): ProviderOutcomeAnchorV1 {

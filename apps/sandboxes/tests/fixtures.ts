@@ -145,6 +145,7 @@ export function context(
   createBinding?: CreateSandboxV1,
 ): MutationContextV1 {
   const fullFence = fence(operationId, requestSha256, generation + 1n, executionEpoch, clock);
+  const idempotencyKeySha256 = digest(`idempotency-${seed}`);
   const capability: CapabilityClaimsV1 = {
     schema_version: SCHEMA_VERSION,
     capability_id: oid("cap", seed),
@@ -152,6 +153,8 @@ export function context(
     operation,
     target_resource_id: oid("sbx", 4),
     request_sha256: requestSha256,
+    idempotency_key_sha256: idempotencyKeySha256,
+    expected_revision: expectedRevision,
     dispatch_journal_anchor_sha256: digest("temporary-anchor"),
     fence: fullFence,
     not_before: new Date(clock.getTime() - 60_000).toISOString(),
@@ -232,7 +235,7 @@ export function context(
   capability.dispatch_journal_anchor_sha256 = dispatchedJournalAnchorDigest(dispatchJournal);
   return {
     operation_id: operationId,
-    idempotency_key_sha256: digest(`idempotency-${seed}`),
+    idempotency_key_sha256: idempotencyKeySha256,
     request_sha256: requestSha256,
     expected_revision: expectedRevision,
     transition,
@@ -284,6 +287,7 @@ export function retryContext(
     capability_id: oid("cap", seed),
     use_nonce_sha256: digest(`capability-nonce-${seed}`),
     dispatch_journal_anchor_sha256: digest("temporary-retry-anchor"),
+    expected_revision: expectedRevision,
     fence: nextFence,
   };
   const anchorBase = {

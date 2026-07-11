@@ -108,6 +108,22 @@ export type SandboxOperation =
   | "resume_destroy"
   | "record_destroyed";
 
+/**
+ * Provider-neutral task operations authorized by Infinity. Sandboxes consumes
+ * these capabilities but never mints their fence, lease, epoch, or nonce.
+ */
+export type SandboxDataPlaneOperationV1 =
+  | "exec.start"
+  | "exec.frames.read"
+  | "exec.result.read"
+  | "exec.cancel"
+  | "file.read"
+  | "file.write"
+  | "file.list"
+  | "checkpoint.export_bundle";
+
+export type SandboxAuthorityOperationV1 = SandboxOperation | SandboxDataPlaneOperationV1;
+
 export type ProviderMutationOperationV1 = "create_inert" | "activate" | "expire" | "quarantine" | "destroy";
 
 export interface LifecycleTransitionBindingV1 {
@@ -170,7 +186,7 @@ export interface ReadProbeJournalRecordV1 {
 export type ReadProbeJournalAnchorV1 =
   SignedEffectJournalAnchorV1<ReadProbeJournalRecordV1>;
 
-export interface ProviderOutcomeRecordV1 {
+export interface ProviderOutcomeRecordFactsV1 {
   schema_version: SchemaVersion;
   record_kind: "OUTCOME";
   outcome_schema_version: "infinity.effect-journal-outcome/v1";
@@ -179,12 +195,25 @@ export interface ProviderOutcomeRecordV1 {
   operation_step_id: string;
   operation_execution_epoch: bigint;
   dispatch_anchor_sha256: Digest;
-  outcome_kind: import("./effect-journal.js").EffectJournalOutcomeKindV1;
   outcome_sha256: Digest;
   recorded_at: string;
   fence: CanonicalSandboxEffectFenceV1;
   target: ProviderEffectTargetV1;
 }
+
+export type ProviderOutcomeRecordV1 = ProviderOutcomeRecordFactsV1 & (
+  | {
+      outcome_kind: "failed_no_effect";
+      provider_no_effect_verification_receipt_sha256: Digest;
+    }
+  | {
+      outcome_kind: Exclude<
+        import("./effect-journal.js").EffectJournalOutcomeKindV1,
+        "failed_no_effect"
+      >;
+      provider_no_effect_verification_receipt_sha256?: never;
+    }
+);
 
 export type ProviderOutcomeAnchorV1 =
   SignedEffectJournalAnchorV1<ProviderOutcomeRecordV1>;
@@ -247,9 +276,13 @@ export interface CapabilityClaimsV1 {
   schema_version: SchemaVersion;
   capability_id: string;
   use_nonce_sha256: Digest;
-  operation: SandboxOperation;
+  operation: SandboxAuthorityOperationV1;
   target_resource_id: string;
   request_sha256: Digest;
+  idempotency_key_sha256: Digest;
+  expected_revision: number;
+  /** Required for bounded data-plane calls; forbidden for lifecycle calls. */
+  handle_sha256?: Digest;
   dispatch_journal_anchor_sha256?: Digest;
   fence: CanonicalSandboxEffectFenceV1;
   not_before: string;
@@ -460,6 +493,263 @@ export interface SandboxV1 {
   terminal_disposition?: "destroyed_after_checkpoint" | "destroyed_after_promotion" | "discarded_uncheckpointed";
 }
 
+/** Safe public reference to the exact sealed provider incarnation. */
+export interface SandboxHandleRefV1 {
+  schema_version: "sandboxes.handle-ref/v1";
+  resource_id: string;
+  resource_lease_id: string;
+  resource_lifecycle_generation: bigint;
+  provider_handle_sha256: Digest;
+  provider_identity_sha256: Digest;
+  immutable_fingerprint_sha256: Digest;
+}
+
+/**
+ * Caller-supplied operation context. The verifier authenticates the protected
+ * principals; the repository atomically consumes the one-use capability.
+ */
+export interface BoundedOperationContextV1 {
+  operation_id: string;
+  idempotency_key_sha256: Digest;
+  request_sha256: Digest;
+  expected_revision: number;
+  fence: CanonicalSandboxEffectFenceV1;
+  capability: CapabilityClaimsV1;
+}
+
+export interface AuthorizedBoundedCallContextV1 {
+  schema_version: "sandboxes.authorized-bounded-call/v1";
+  operation: SandboxDataPlaneOperationV1;
+  operation_id: string;
+  request_sha256: Digest;
+  capability_use_receipt_sha256: Digest;
+  handle: SandboxHandleRefV1;
+  fence: CanonicalSandboxEffectFenceV1;
+  deadline: string;
+}
+
+export interface ExecStartRequestV1 {
+  schema_version: "sandboxes.exec-start-request/v1";
+  handle: SandboxHandleRefV1;
+  exec_id: string;
+  executable: string;
+  argv: string[];
+  cwd: "/workspace";
+  environment_profile_id: "minimal-v1" | "build-v1" | "test-v1";
+  timeout_ms: number;
+  max_output_bytes: number;
+  tty: false;
+}
+
+export interface ExecStartReceiptV1 {
+  schema_version: "sandboxes.exec-start-receipt/v1";
+  resource_id: string;
+  resource_lifecycle_generation: bigint;
+  exec_id: string;
+  request_sha256: Digest;
+  state: "running";
+  initial_cursor: string;
+  adapter_exec_fingerprint_sha256: Digest;
+  started_at: string;
+  receipt_sha256: Digest;
+}
+
+export interface ExecFrameReadRequestV1 {
+  schema_version: "sandboxes.exec-frame-read-request/v1";
+  handle: SandboxHandleRefV1;
+  exec_id: string;
+  cursor: string;
+  max_frames: number;
+  max_bytes: number;
+  wait_ms: number;
+}
+
+export interface ExecFrameV1 {
+  schema_version: "sandboxes.exec-frame/v1";
+  exec_id: string;
+  sequence: bigint;
+  kind: "stdout" | "stderr" | "status" | "heartbeat" | "terminal" | "error";
+  payload_base64url: string;
+  payload_length: number;
+  payload_sha256: Digest;
+  observed_at: string;
+  frame_sha256: Digest;
+}
+
+export interface ExecFramePageV1 {
+  schema_version: "sandboxes.exec-frame-page/v1";
+  exec_id: string;
+  from_cursor_sha256: Digest;
+  frames: ExecFrameV1[];
+  next_cursor: string;
+  next_cursor_sha256: Digest;
+  has_more: boolean;
+  terminal: boolean;
+  gap_detected: false;
+  returned_frames: number;
+  returned_bytes: number;
+  receipt_sha256: Digest;
+}
+
+export interface ExecResultRequestV1 {
+  schema_version: "sandboxes.exec-result-request/v1";
+  handle: SandboxHandleRefV1;
+  exec_id: string;
+}
+
+export interface ExecResultV1 {
+  schema_version: "sandboxes.exec-result/v1";
+  resource_id: string;
+  resource_lifecycle_generation: bigint;
+  exec_id: string;
+  state: "running" | "succeeded" | "failed" | "canceled" | "timed_out" | "output_limited";
+  exit_code: number | null;
+  stdout_sha256: Digest;
+  stderr_sha256: Digest;
+  output_bytes: number;
+  terminal_at: string | null;
+  receipt_sha256: Digest;
+}
+
+export interface ExecCancelRequestV1 {
+  schema_version: "sandboxes.exec-cancel-request/v1";
+  handle: SandboxHandleRefV1;
+  exec_id: string;
+  reason: "explicit" | "wall_deadline" | "idle_deadline" | "output_limit" | "lease_loss";
+  grace_ms: number;
+}
+
+export interface ExecCancelReceiptV1 {
+  schema_version: "sandboxes.exec-cancel-receipt/v1";
+  resource_id: string;
+  resource_lifecycle_generation: bigint;
+  exec_id: string;
+  state: "canceled" | "already_terminal";
+  whole_scope_terminated: boolean;
+  process_stop_evidence_sha256: Digest;
+  observed_at: string;
+  receipt_sha256: Digest;
+}
+
+export interface FileReadRequestV1 {
+  schema_version: "sandboxes.file-read-request/v1";
+  handle: SandboxHandleRefV1;
+  path: string;
+  offset_bytes: number;
+  length_bytes: number;
+  expected_file_sha256: Digest;
+}
+
+export interface FileReadReceiptV1 {
+  schema_version: "sandboxes.file-read-receipt/v1";
+  resource_id: string;
+  resource_lifecycle_generation: bigint;
+  workspace_revision: bigint;
+  path: string;
+  offset_bytes: number;
+  content_base64url: string;
+  returned_bytes: number;
+  total_file_sha256: Digest;
+  file_revision_sha256: Digest;
+  receipt_sha256: Digest;
+}
+
+export interface FileWriteRequestV1 {
+  schema_version: "sandboxes.file-write-request/v1";
+  handle: SandboxHandleRefV1;
+  path: string;
+  expected_prior_sha256: Digest | null;
+  content_base64url: string;
+  content_sha256: Digest;
+  max_bytes: number;
+}
+
+export interface FileWriteReceiptV1 {
+  schema_version: "sandboxes.file-write-receipt/v1";
+  resource_id: string;
+  resource_lifecycle_generation: bigint;
+  workspace_revision_before: bigint;
+  workspace_revision_after: bigint;
+  path: string;
+  prior_sha256: Digest | null;
+  content_sha256: Digest;
+  byte_length: number;
+  file_revision_sha256: Digest;
+  receipt_sha256: Digest;
+}
+
+export interface FileListRequestV1 {
+  schema_version: "sandboxes.file-list-request/v1";
+  handle: SandboxHandleRefV1;
+  root: string;
+  recursive: boolean;
+  cursor: string | null;
+  limit: number;
+}
+
+export interface FileListEntryV1 {
+  path: string;
+  type: "file";
+  size_bytes: number;
+  content_sha256: Digest;
+  file_revision_sha256: Digest;
+}
+
+export interface FileListPageV1 {
+  schema_version: "sandboxes.file-list-page/v1";
+  resource_id: string;
+  resource_lifecycle_generation: bigint;
+  workspace_revision: bigint;
+  snapshot_sha256: Digest;
+  entries: FileListEntryV1[];
+  next_cursor: string | null;
+  receipt_sha256: Digest;
+}
+
+export interface CheckpointExportRequestV1 {
+  schema_version: "sandboxes.checkpoint-export-request/v1";
+  handle: SandboxHandleRefV1;
+  checkpoint_id: string;
+  expected_workspace_revision: bigint;
+  allowed_paths: string[];
+  maximum_bundle_bytes: number;
+  sink_descriptor_sha256: Digest;
+}
+
+/** Candidate bytes only; Infinity separately seals durable checkpoint policy. */
+export interface CheckpointExportHandoffV1 {
+  schema_version: "sandboxes.checkpoint-export-handoff/v1";
+  handoff_id: string;
+  checkpoint_id: string;
+  resource_id: string;
+  resource_lifecycle_generation: bigint;
+  workspace_revision: bigint;
+  manifest_sha256: Digest;
+  workspace_root_sha256: Digest;
+  checkpoint_root_sha256: Digest;
+  bundle_sha256: Digest;
+  bundle_byte_length: number;
+  file_count: number;
+  fence_sha256: Digest;
+  sink_descriptor_sha256: Digest;
+  exported_at: string;
+  handoff_sha256: Digest;
+}
+
+export interface SandboxesBoundedOperationsV1 {
+  startExec(request: ExecStartRequestV1, ctx: BoundedOperationContextV1): Promise<ExecStartReceiptV1>;
+  readExecFrames(request: ExecFrameReadRequestV1, ctx: BoundedOperationContextV1): Promise<ExecFramePageV1>;
+  readExecResult(request: ExecResultRequestV1, ctx: BoundedOperationContextV1): Promise<ExecResultV1>;
+  cancelExec(request: ExecCancelRequestV1, ctx: BoundedOperationContextV1): Promise<ExecCancelReceiptV1>;
+  readFile(request: FileReadRequestV1, ctx: BoundedOperationContextV1): Promise<FileReadReceiptV1>;
+  writeFile(request: FileWriteRequestV1, ctx: BoundedOperationContextV1): Promise<FileWriteReceiptV1>;
+  listFiles(request: FileListRequestV1, ctx: BoundedOperationContextV1): Promise<FileListPageV1>;
+  exportCheckpoint(
+    request: CheckpointExportRequestV1,
+    ctx: BoundedOperationContextV1,
+  ): Promise<CheckpointExportHandoffV1>;
+}
+
 export interface OwnedProviderHandleV1 {
   schema_version: SchemaVersion;
   adapter_id: "fake" | "e2b" | "daytona_cloud";
@@ -645,6 +935,32 @@ export interface ProviderNoEffectVerificationReceiptV1 {
   expires_at: string;
   verifier_principal: string;
   signing_key_id: string;
+  receipt_sha256: Digest;
+}
+
+export interface FinalCurrentnessBarrierReceiptV1 {
+  schema_version: "sandboxes.final-currentness-barrier-receipt/v1";
+  trace_id: string;
+  deadline: string;
+  constraints_sha256: Digest;
+  fence_sha256: Digest;
+  target_sha256: Digest;
+  operation_id: string;
+  operation_step_id: string;
+  operation_execution_epoch: bigint;
+  request_sha256: Digest;
+  idempotency_key_sha256: Digest;
+  resource_id: string;
+  resource_lifecycle_generation: bigint;
+  dispatch_anchor_sha256: Digest;
+  physical_safety_assertion_sha256: Digest;
+  current_authorization_receipt_sha256: Digest;
+  adapter_descriptor_sha256: Digest;
+  adapter_admission_receipt_sha256: Digest;
+  adapter_admission_expires_at: string | null;
+  provider_handle_sha256: Digest | null;
+  grant_expires_at: string | null;
+  database_observed_at: string;
   receipt_sha256: Digest;
 }
 

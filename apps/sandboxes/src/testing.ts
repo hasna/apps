@@ -28,6 +28,7 @@ import type {
   InfinityCleanupGrantV1,
   ReadProbeJournalAnchorV1,
   ProviderOutcomeAnchorV1,
+  ProviderOutcomeRecordV1,
   SafetyFenceObservationV1,
   ProviderLifecycleLockBindingV1,
   ProviderNonAcceptanceProofV1,
@@ -407,7 +408,7 @@ export class DeterministicTestProviderOutcomeJournalV1 implements ProviderOutcom
               input.provider_no_effect_verification_receipt_sha256,
           }),
     });
-    const record = {
+    const recordFacts = {
       schema_version: "sandboxes.runtime/v1" as const,
       record_kind: "OUTCOME" as const,
       outcome_schema_version: EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION,
@@ -416,12 +417,19 @@ export class DeterministicTestProviderOutcomeJournalV1 implements ProviderOutcom
       operation_step_id: input.operation_step_id,
       operation_execution_epoch: input.operation_execution_epoch,
       dispatch_anchor_sha256: input.dispatch_anchor_sha256,
-      outcome_kind: input.outcome_kind,
       outcome_sha256: input.outcome_sha256,
       recorded_at: input.recorded_at,
       fence: input.fence,
       target: input.target,
     };
+    const record: ProviderOutcomeRecordV1 = input.outcome_kind === "failed_no_effect"
+      ? {
+          ...recordFacts,
+          outcome_kind: input.outcome_kind,
+          provider_no_effect_verification_receipt_sha256:
+            input.provider_no_effect_verification_receipt_sha256!,
+        }
+      : { ...recordFacts, outcome_kind: input.outcome_kind };
     const core = {
       anchor_schema_version: "infinity.effect-journal-anchor/v1" as const,
       journal_sequence: 1_000_000n + BigInt(this.calls.length),

@@ -2,12 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { canonicalDigest } from "../src/canonical.js";
 import { AesGcmProviderHandleSealerV1 } from "../src/handle-sealer.js";
 import {
+  adapterAdmissionReceiptDigest,
   adapterDescriptorDigest,
   providerHandleBindingDigest,
+  providerTargetFingerprintDigest,
 } from "../src/provider-identity.js";
 import { InMemorySandboxRepositoryV1 } from "../src/repository-memory.js";
 import type { SandboxRepositoryTxV1 } from "../src/repository.js";
-import type { SandboxRunnerV1 } from "../src/runner.js";
+import type { AdapterCallContextV1, SandboxRunnerV1 } from "../src/runner.js";
 import {
   activationRequestDigest,
   createRequestDigest,
@@ -19,7 +21,11 @@ import {
   quarantineRequestDigest,
   SandboxesReferenceServiceV1,
 } from "../src/service.js";
-import type { ProviderHandleBindingV1 } from "../src/types.js";
+import type {
+  OwnedProviderHandleV1,
+  ProviderHandleBindingV1,
+  ProviderOperationObservationV1,
+} from "../src/types.js";
 import {
   activate,
   activationGrant,
@@ -33,6 +39,7 @@ import {
   digest,
   expireContext,
   harness,
+  type Harness,
   lifecycleContext,
   oid,
   recordDestroyed,
@@ -58,6 +65,38 @@ class CrashBeforeProviderProjectionRepositoryV1 extends InMemorySandboxRepositor
     }
     return await super.transaction(fn);
   }
+}
+
+function installReplayLookupRejection(
+  h: Harness,
+  repository: CrashBeforeProviderProjectionRepositoryV1,
+  replayState: "not_found" | "unknown",
+): () => number {
+  const originalLookup = h.runner.lookupOperation.bind(h.runner);
+  let outcomeAppended = false;
+  let rejectedReplayLookups = 0;
+  h.runner.lookupOperation = async (...args): Promise<ProviderOperationObservationV1> => {
+    await originalLookup(...args);
+    const handle = args[2];
+    if (!outcomeAppended) {
+      if (handle === undefined) throw new Error("exact operation lookup fixture requires a handle");
+      return {
+        state: "completed",
+        handle: structuredClone(handle),
+        observation_sha256: digest(`lookup-completed-before-crash:${args[1].fence.operation_id}`),
+      };
+    }
+    rejectedReplayLookups += 1;
+    return {
+      state: replayState,
+      observation_sha256: digest(`lookup-${replayState}-after-crash:${args[1].fence.operation_id}`),
+    };
+  };
+  h.outcomeJournal.onAppend = () => {
+    outcomeAppended = true;
+    repository.armAfterOutcomeAppend();
+  };
+  return () => rejectedReplayLookups;
 }
 
 describe("reference lifecycle and adversarial invariants", () => {
@@ -162,6 +201,42 @@ describe("reference lifecycle and adversarial invariants", () => {
       .toBe("dispatched");
   });
 
+  test("dispatch recovery rejects unknown fields in the authenticated raw range", async () => {
+    const h = harness();
+    const input = createInput();
+    const request = createRequestDigest(input);
+    const begin = context("begin_create_inert", oid("op", 291), request, 1n, 0, 1n, 291);
+    h.dispatchJournal.failure = new Error("crash before authoritative append");
+    await expect(h.service.create(input, begin)).rejects.toThrow("crash before authoritative append");
+    const originalReadRange = h.journalRecovery.readOperationStepRange.bind(h.journalRecovery);
+    h.journalRecovery.readOperationStepRange = async (rangeInput) => ({
+      ...await originalReadRange(rangeInput),
+      unexpected_authenticated_range_field: true,
+    });
+    h.dispatchJournal.failure = undefined;
+
+    await expect(h.service.create(input, begin)).rejects.toMatchObject({ code: "integrity_failed" });
+    expect(h.runner.calls.create_inert).toBe(0);
+  });
+
+  test("dispatch recovery rejects an envelope beyond its authenticated signed head", async () => {
+    const h = harness();
+    const input = createInput();
+    const request = createRequestDigest(input);
+    const begin = context("begin_create_inert", oid("op", 292), request, 1n, 0, 1n, 292);
+    h.dispatchJournal.failure = new Error("crash before authoritative append");
+    await expect(h.service.create(input, begin)).rejects.toThrow("crash before authoritative append");
+    const originalReadRange = h.journalRecovery.readOperationStepRange.bind(h.journalRecovery);
+    h.journalRecovery.readOperationStepRange = async (rangeInput) => ({
+      ...await originalReadRange(rangeInput),
+      complete_operation_envelopes: [structuredClone(begin.dispatch_journal)],
+    });
+    h.dispatchJournal.failure = undefined;
+
+    await expect(h.service.create(input, begin)).rejects.toMatchObject({ code: "integrity_failed" });
+    expect(h.runner.calls.create_inert).toBe(0);
+  });
+
   test("untrusted or non-member signed frontier blocks provider reachability", async () => {
     const h = harness();
     h.verifier.stored_frontier_membership_valid = false;
@@ -228,6 +303,17 @@ describe("reference lifecycle and adversarial invariants", () => {
       h.outcomeJournal.calls.find((call) => call.outcome_kind === "failed_no_effect")
         ?.provider_no_effect_verification_receipt_sha256,
     ).toMatch(/^sha256:/);
+    const signedFailedNoEffect = h.journalRecovery.ledger.envelopes.find(
+      (anchor) =>
+        "record_kind" in anchor.record &&
+        anchor.record.record_kind === "OUTCOME" &&
+        anchor.record.outcome_kind === "failed_no_effect",
+    );
+    expect(signedFailedNoEffect?.record).toHaveProperty(
+      "provider_no_effect_verification_receipt_sha256",
+      h.outcomeJournal.calls.find((call) => call.outcome_kind === "failed_no_effect")
+        ?.provider_no_effect_verification_receipt_sha256,
+    );
 
     const retry = retryContext(begin, failed.revision, 2n, 219);
     const creating = await h.service.create(input, retry);
@@ -461,6 +547,57 @@ describe("reference lifecycle and adversarial invariants", () => {
     }
   });
 
+  test("exact operation readback rejects an unknown handle field or changed generation", async () => {
+    for (const corruption of ["unknown_field", "generation"] as const) {
+      const h = harness();
+      const inert = await createInert(h);
+      const originalActivate = h.runner.activate.bind(h.runner);
+      const originalLookup = h.runner.lookupOperation.bind(h.runner);
+      let mutationCompleted = false;
+      h.runner.activate = async (...args) => {
+        const receipt = await originalActivate(...args);
+        mutationCompleted = true;
+        return receipt;
+      };
+      h.runner.lookupOperation = async (...args) => {
+        const observation = await originalLookup(...args);
+        if (!mutationCompleted || observation.state !== "completed" || observation.handle === undefined) {
+          return observation;
+        }
+        return {
+          ...observation,
+          handle: corruption === "generation"
+            ? {
+                ...observation.handle,
+                resource_lifecycle_generation:
+                  observation.handle.resource_lifecycle_generation + 1n,
+              }
+            : {
+                ...observation.handle,
+                unexpected_provider_field: true,
+              } as OwnedProviderHandleV1,
+        };
+      };
+      const grant = activationGrant(inert, oid("op", corruption === "generation" ? 293 : 294));
+      const ctx = context(
+        "begin_activate",
+        grant.operation_id,
+        grant.operation_digest,
+        inert.resource_lifecycle_generation,
+        inert.revision,
+        4n,
+        corruption === "generation" ? 293 : 294,
+        inert.immutable_fingerprint_sha256!,
+        canonicalDigest({ id: grant.grant_id, nonce: grant.one_use_nonce_sha256 }),
+      );
+
+      const result = await h.service.activate(inert.id, grant, ctx);
+      expect(result.pending_provider_outcome).toBeUndefined();
+      expect(result.physical_safety_state).toBe("fenced");
+      expect(h.runner.calls.activate).toBe(1);
+    }
+  });
+
   test("create is inert until a separately fenced activation", async () => {
     const h = harness();
     const inert = await createInert(h);
@@ -529,8 +666,16 @@ describe("reference lifecycle and adversarial invariants", () => {
       spec_sha256: creating.spec_sha256,
     };
     const sealer = new AesGcmProviderHandleSealerV1(new Uint8Array(32).fill(17));
-    expect(sealer.open(sealed!, binding).provider_identity_sha256)
-      .toBe(creating.provider_identity_sha256!);
+    const opened = sealer.open(sealed!, binding);
+    expect(opened.provider_identity_sha256).toBe(creating.provider_identity_sha256!);
+    expect(() => sealer.open({
+      ...sealed!,
+      unexpected_outer_field: true,
+    } as NonNullable<typeof sealed>, binding)).toThrow("closed V1 document");
+    expect(() => sealer.seal({
+      ...opened,
+      unexpected_plaintext_field: true,
+    } as OwnedProviderHandleV1)).toThrow("closed V1 document");
 
     const changedBinding = { ...binding, adapter_version: "different-adapter-version" };
     const reboundEnvelope = {
@@ -554,6 +699,14 @@ describe("reference lifecycle and adversarial invariants", () => {
       destroy: source.destroy.bind(source),
       lookupOperation: source.lookupOperation.bind(source),
       listOwnedResources: source.listOwnedResources.bind(source),
+      startExec: source.startExec.bind(source),
+      readExecFrames: source.readExecFrames.bind(source),
+      readExecResult: source.readExecResult.bind(source),
+      cancelExec: source.cancelExec.bind(source),
+      readFile: source.readFile.bind(source),
+      writeFile: source.writeFile.bind(source),
+      listFiles: source.listFiles.bind(source),
+      exportCheckpoint: source.exportCheckpoint.bind(source),
     };
     const service = new SandboxesReferenceServiceV1({
       repository: h.repository,
@@ -652,6 +805,222 @@ describe("reference lifecycle and adversarial invariants", () => {
     expect(result.physical_safety_state).toBe("fenced");
     expect(result.pending_provider_outcome).toBeUndefined();
     expect(h.runner.calls.activate).toBe(0);
+  });
+
+  test("adapter sink rejects tampered trace, deadline, constraints, or final barrier binding", async () => {
+    for (const field of [
+      "trace_id",
+      "deadline",
+      "constraints_sha256",
+      "final_currentness_barrier_receipt_sha256",
+    ] as const) {
+      const h = harness();
+      const originalCreate = h.runner.createInert.bind(h.runner);
+      h.runner.createInert = async (adapterContext, ...args) => await originalCreate({
+        ...adapterContext,
+        ...(field === "trace_id" ? { trace_id: "tampered-trace" } : {}),
+        ...(field === "deadline" ? { deadline: "2030-01-01T00:04:59.000Z" } : {}),
+        ...(field === "constraints_sha256"
+          ? { constraints_sha256: digest("tampered-adapter-constraints") }
+          : {}),
+        ...(field === "final_currentness_barrier_receipt_sha256"
+          ? { final_currentness_barrier_receipt_sha256: digest("tampered-final-barrier") }
+          : {}),
+      }, ...args);
+      const input = createInput();
+      const request = createRequestDigest(input);
+      const ctx = context(
+        "begin_create_inert",
+        oid("op", field === "trace_id" ? 295 : field === "deadline" ? 296 :
+          field === "constraints_sha256" ? 297 : 298),
+        request,
+        1n,
+        0,
+        1n,
+        field === "trace_id" ? 295 : field === "deadline" ? 296 :
+          field === "constraints_sha256" ? 297 : 298,
+      );
+
+      const result = await h.service.create(input, ctx);
+      expect(result.pending_provider_outcome).toBeUndefined();
+      expect(result.physical_safety_state).toBe("fenced");
+      expect(h.runner.calls.create_inert).toBe(0);
+    }
+  });
+
+  test("adapter sink requires a closed full final-barrier preimage", async () => {
+    for (const [index, corruption] of ([
+      "unknown_context",
+      "missing_barrier",
+      "barrier_target",
+      "barrier_idempotency",
+      "barrier_safety",
+    ] as const).entries()) {
+      const h = harness();
+      const originalCreate = h.runner.createInert.bind(h.runner);
+      h.runner.createInert = async (adapterContext, ...args) => {
+        const barrier = adapterContext.final_currentness_barrier!;
+        const {
+          final_currentness_barrier: _finalCurrentnessBarrier,
+          ...contextWithoutBarrier
+        } = adapterContext;
+        const corruptedBarrier = {
+          ...barrier,
+          ...(corruption === "barrier_target"
+            ? { target_sha256: digest("tampered-barrier-target") }
+            : {}),
+          ...(corruption === "barrier_idempotency"
+            ? { idempotency_key_sha256: digest("tampered-barrier-idempotency") }
+            : {}),
+          ...(corruption === "barrier_safety"
+            ? { physical_safety_assertion_sha256: digest("tampered-barrier-safety") }
+            : {}),
+        };
+        const corruptedContext = corruption === "missing_barrier"
+          ? contextWithoutBarrier
+          : {
+              ...adapterContext,
+              final_currentness_barrier: corruptedBarrier,
+            };
+        return await originalCreate({
+          ...corruptedContext,
+          ...(corruption === "unknown_context" ? { unexpected_context_field: true } : {}),
+        } as AdapterCallContextV1, ...args);
+      };
+      const input = createInput();
+      const request = createRequestDigest(input);
+      const ctx = context(
+        "begin_create_inert",
+        oid("op", 300 + index),
+        request,
+        1n,
+        0,
+        1n,
+        300 + index,
+      );
+
+      const result = await h.service.create(input, ctx);
+      expect(result.pending_provider_outcome).toBeUndefined();
+      expect(result.physical_safety_state).toBe("fenced");
+      expect(h.runner.calls.create_inert).toBe(0);
+    }
+  });
+
+  test("managed admission expiry crossed by slow authorization blocks final provider reachability", async () => {
+    let databaseNow = new Date(CLOCK);
+    const repository = new InMemorySandboxRepositoryV1(() => databaseNow);
+    const h = harness(repository);
+    const fakeDescriptor = await h.runner.descriptor();
+    const {
+      descriptor_sha256: _fakeDescriptorSha256,
+      ...managedDescriptorFacts
+    } = {
+      ...fakeDescriptor,
+      adapter_id: "e2b" as const,
+      status: "admitted" as const,
+    };
+    const managedDescriptor = {
+      ...managedDescriptorFacts,
+      descriptor_sha256: adapterDescriptorDigest(managedDescriptorFacts),
+    };
+    let providerCalls = 0;
+    const unreachable = async (): Promise<never> => {
+      providerCalls += 1;
+      throw new Error("managed provider became reachable after admission expiry");
+    };
+    const managedRunner: SandboxRunnerV1 = {
+      descriptor: async () => managedDescriptor,
+      createInert: unreachable,
+      activate: unreachable,
+      inspect: unreachable,
+      expire: unreachable,
+      destroy: unreachable,
+      lookupOperation: unreachable,
+      listOwnedResources: unreachable,
+      startExec: unreachable,
+      readExecFrames: unreachable,
+      readExecResult: unreachable,
+      cancelExec: unreachable,
+      readFile: unreachable,
+      writeFile: unreachable,
+      listFiles: unreachable,
+      exportCheckpoint: unreachable,
+    };
+    const originalAdmission = h.verifier.verifyAdapterAdmission.bind(h.verifier);
+    h.verifier.verifyAdapterAdmission = async (descriptor) => {
+      const receipt = await originalAdmission(descriptor);
+      const {
+        receipt_sha256: _receiptSha256,
+        signature: _signature,
+        ...receiptFacts
+      } = {
+        ...receipt,
+        expires_at: "2030-01-01T00:01:00.000Z",
+      };
+      return {
+        ...receiptFacts,
+        receipt_sha256: adapterAdmissionReceiptDigest(receiptFacts),
+        signature: "S".repeat(86),
+      };
+    };
+    const originalCurrentAuthorization =
+      h.verifier.verifyCurrentEffectAuthorization.bind(h.verifier);
+    h.verifier.verifyCurrentEffectAuthorization = async (...args) => {
+      const authenticated = await originalCurrentAuthorization(...args);
+      databaseNow = new Date("2030-01-01T00:02:00.000Z");
+      return authenticated;
+    };
+    const service = new SandboxesReferenceServiceV1({
+      repository,
+      runner: managedRunner,
+      handle_sealer: new AesGcmProviderHandleSealerV1(new Uint8Array(32).fill(17)),
+      authority_verifier: h.verifier,
+      physical_safety_controller: h.physicalSafety,
+      provider_outcome_journal: h.outcomeJournal,
+      provider_dispatch_journal: h.dispatchJournal,
+      provider_read_probe_journal: h.readProbeJournal,
+      provider_lifecycle_lock: h.lifecycleLock,
+      provider_journal_recovery: h.journalRecovery,
+    });
+    const input = createInput();
+    const request = createRequestDigest(input);
+    const baseContext = context("begin_create_inert", oid("op", 290), request, 1n, 0, 1n, 290);
+    const managedFingerprint = providerTargetFingerprintDigest({
+      adapter_id: managedDescriptor.adapter_id,
+      adapter_version: managedDescriptor.adapter_version,
+      installation_id: managedDescriptor.installation_id,
+      provider_scope_ref: managedDescriptor.provider_scope_ref,
+      resource_kind: "strong_vm",
+      resource_id: input.resource_id,
+      resource_lease_id: baseContext.fence.resource_lease_id,
+      provider_creation_token_sha256:
+        baseContext.dispatch_journal.record.provider_creation_token_sha256,
+      spec_sha256: canonicalDigest(input.spec),
+    });
+    const managedRecord = {
+      ...baseContext.dispatch_journal.record,
+      immutable_fingerprint_sha256: managedFingerprint,
+    };
+    const managedCore = {
+      ...baseContext.dispatch_journal,
+      record_digest: effectJournalRecordDigest(managedRecord),
+      record: managedRecord,
+    };
+    const managedAnchor = {
+      ...managedCore,
+      frontier_digest: effectJournalFrontierDigest(managedCore),
+    };
+    const ctx = {
+      ...baseContext,
+      dispatch_journal: managedAnchor,
+      capability: {
+        ...baseContext.capability,
+        dispatch_journal_anchor_sha256: dispatchedJournalAnchorDigest(managedAnchor),
+      },
+    };
+
+    await expect(service.create(input, ctx)).rejects.toMatchObject({ code: "capability_denied" });
+    expect(providerCalls).toBe(0);
   });
 
   test("revocation after the final ownership page blocks the provider mutation", async () => {
@@ -1162,6 +1531,119 @@ describe("reference lifecycle and adversarial invariants", () => {
     expect((await h.service.resolveOperation(ctx.operation_id)).state).toBe("committed");
     expect(h.runner.calls.destroy).toBe(1);
     expect(h.outcomeJournal.calls).toHaveLength(priorOutcomeCount + 1);
+  });
+
+  test("activation replay rejects a signed outcome when exact operation lookup is not_found or unknown", async () => {
+    for (const [index, replayState] of (["not_found", "unknown"] as const).entries()) {
+      const repository = new CrashBeforeProviderProjectionRepositoryV1(() => CLOCK);
+      const h = harness(repository);
+      const inert = await createInert(h);
+      const grant = activationGrant(inert, oid("op", 260 + index));
+      const ctx = context(
+        "begin_activate",
+        grant.operation_id,
+        grant.operation_digest,
+        inert.resource_lifecycle_generation,
+        inert.revision,
+        4n,
+        260 + index,
+        inert.immutable_fingerprint_sha256!,
+        canonicalDigest({ id: grant.grant_id, nonce: grant.one_use_nonce_sha256 }),
+      );
+      const rejectedReplayLookups = installReplayLookupRejection(h, repository, replayState);
+
+      await expect(h.service.activate(inert.id, grant, ctx)).rejects.toThrow(
+        "simulated crash after signed outcome before local projection",
+      );
+      h.outcomeJournal.onAppend = undefined;
+      const recovered = await h.service.activate(inert.id, grant, ctx);
+
+      expect(rejectedReplayLookups()).toBe(1);
+      expect(recovered.pending_provider_outcome).toBeUndefined();
+      expect(recovered.physical_safety_state).toBe("fenced");
+      expect((await h.service.resolveOperation(ctx.operation_id)).state).toBe("unknown");
+      expect(h.runner.calls.activate).toBe(1);
+    }
+  });
+
+  test("expiry replay rejects a signed outcome when exact operation lookup is not_found or unknown", async () => {
+    for (const replayState of ["not_found", "unknown"] as const) {
+      const repository = new CrashBeforeProviderProjectionRepositoryV1(() => CLOCK);
+      const h = harness(repository);
+      const active = await activate(h, await createInert(h));
+      const ctx = expireContext(active);
+      const rejectedReplayLookups = installReplayLookupRejection(h, repository, replayState);
+
+      await expect(h.service.expire(active.id, ctx)).rejects.toThrow(
+        "simulated crash after signed outcome before local projection",
+      );
+      h.outcomeJournal.onAppend = undefined;
+      const recovered = await h.service.expire(active.id, ctx);
+
+      expect(rejectedReplayLookups()).toBe(1);
+      expect(recovered.pending_provider_outcome).toBeUndefined();
+      expect(recovered.physical_safety_state).toBe("fenced");
+      expect((await h.service.resolveOperation(ctx.operation_id)).state).toBe("unknown");
+      expect(h.runner.calls.expire).toBe(1);
+    }
+  });
+
+  test("destroy absence replay rejects a signed outcome when exact operation lookup is not_found or unknown", async () => {
+    for (const [index, replayState] of (["not_found", "unknown"] as const).entries()) {
+      const repository = new CrashBeforeProviderProjectionRepositoryV1(() => CLOCK);
+      const h = harness(repository);
+      const active = await activate(h, await createInert(h));
+      const grant = cleanupGrant(active, {
+        kind: "discard_uncheckpointed",
+        receipt_sha256: digest(`destroy-absence-lookup-${replayState}`),
+        recovery_checkpoint_attempted: true,
+        promotion_grants_revoked: true,
+        permanent_outcome: "discarded_uncheckpointed",
+      }, oid("op", 270 + index));
+      const ctx = cleanupContext(active, grant);
+      const rejectedReplayLookups = installReplayLookupRejection(h, repository, replayState);
+
+      await expect(h.service.destroy(active.id, grant, ctx)).rejects.toThrow(
+        "simulated crash after signed outcome before local projection",
+      );
+      h.outcomeJournal.onAppend = undefined;
+      const recovered = await h.service.destroy(active.id, grant, ctx);
+
+      expect(rejectedReplayLookups()).toBe(1);
+      expect(recovered.pending_provider_outcome).toBeUndefined();
+      expect(recovered.physical_safety_state).toBe("fenced");
+      expect((await h.service.resolveOperation(ctx.operation_id)).state).toBe("unknown");
+      expect(h.runner.calls.destroy).toBe(1);
+    }
+  });
+
+  test("destroy failed_effect replay rejects still-present state when exact operation lookup is not_found or unknown", async () => {
+    for (const [index, replayState] of (["not_found", "unknown"] as const).entries()) {
+      const repository = new CrashBeforeProviderProjectionRepositoryV1(() => CLOCK);
+      const h = harness(repository, { destroy_result: "still_present" });
+      const active = await activate(h, await createInert(h));
+      const grant = cleanupGrant(active, {
+        kind: "discard_uncheckpointed",
+        receipt_sha256: digest(`destroy-still-present-lookup-${replayState}`),
+        recovery_checkpoint_attempted: true,
+        promotion_grants_revoked: true,
+        permanent_outcome: "discarded_uncheckpointed",
+      }, oid("op", 280 + index));
+      const ctx = cleanupContext(active, grant);
+      const rejectedReplayLookups = installReplayLookupRejection(h, repository, replayState);
+
+      await expect(h.service.destroy(active.id, grant, ctx)).rejects.toThrow(
+        "simulated crash after signed outcome before local projection",
+      );
+      h.outcomeJournal.onAppend = undefined;
+      const recovered = await h.service.destroy(active.id, grant, ctx);
+
+      expect(rejectedReplayLookups()).toBe(1);
+      expect(recovered.pending_provider_outcome).toBeUndefined();
+      expect(recovered.physical_safety_state).toBe("fenced");
+      expect((await h.service.resolveOperation(ctx.operation_id)).state).toBe("unknown");
+      expect(h.runner.calls.destroy).toBe(1);
+    }
   });
 
   test("consumed activation grant recovers only after signed head/range proves dispatch absent", async () => {

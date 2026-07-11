@@ -1,11 +1,25 @@
-import { canonicalDigest, type Digest } from "./canonical.js";
+import { canonicalDigest, sha256, type Digest } from "./canonical.js";
 import type {
   AdapterDescriptorV1,
   AdapterAdmissionReceiptV1,
+  CanonicalSandboxEffectFenceV1,
   OwnedProviderHandleV1,
   ProviderHandleBindingV1,
   ProviderNonAcceptanceProofV1,
 } from "./types.js";
+
+export function adapterTraceId(operationId: string): string {
+  return sha256(`trace:${operationId}`).slice(7, 39);
+}
+
+export function adapterConstraintsDigest(
+  fence: CanonicalSandboxEffectFenceV1,
+): Digest {
+  return canonicalDigest({
+    schema_version: "sandboxes.adapter-call-constraints/v1",
+    fence,
+  });
+}
 
 export function adapterAdmissionReceiptDigest(
   receipt: Omit<AdapterAdmissionReceiptV1, "receipt_sha256" | "signature"> |

@@ -7,8 +7,26 @@ import {
   type ActivationReceiptV1,
   type AdapterDescriptorV1,
   type AdapterObservationV1,
+  type AuthorizedBoundedCallContextV1,
+  type CheckpointExportHandoffV1,
+  type CheckpointExportRequestV1,
   type DestroyObservationV1,
+  type ExecCancelReceiptV1,
+  type ExecCancelRequestV1,
+  type ExecFramePageV1,
+  type ExecFrameReadRequestV1,
+  type ExecResultRequestV1,
+  type ExecResultV1,
+  type ExecStartReceiptV1,
+  type ExecStartRequestV1,
   type ExpireObservationV1,
+  type FileListPageV1,
+  type FileListRequestV1,
+  type FileReadReceiptV1,
+  type FileReadRequestV1,
+  type FileWriteReceiptV1,
+  type FileWriteRequestV1,
+  type FinalCurrentnessBarrierReceiptV1,
   type OwnedProviderHandleV1,
   type OwnedResourcePageV1,
   type ProviderOperationObservationV1,
@@ -26,6 +44,7 @@ export interface AdapterCallContextV1 {
   target: ProviderEffectTargetV1;
   external_anchor_receipt_sha256: Digest;
   final_currentness_barrier_receipt_sha256: Digest;
+  final_currentness_barrier?: FinalCurrentnessBarrierReceiptV1;
   adapter_descriptor_sha256: Digest;
   adapter_admission_receipt_sha256: Digest;
 }
@@ -86,6 +105,46 @@ export interface SandboxRunnerV1 {
     op: ProviderOperationV1,
     cursor?: string,
   ): Promise<OwnedResourcePageV1>;
+  startExec(
+    ctx: AuthorizedBoundedCallContextV1,
+    handle: OwnedProviderHandleV1,
+    request: ExecStartRequestV1,
+  ): Promise<ExecStartReceiptV1>;
+  readExecFrames(
+    ctx: AuthorizedBoundedCallContextV1,
+    handle: OwnedProviderHandleV1,
+    request: ExecFrameReadRequestV1,
+  ): Promise<ExecFramePageV1>;
+  readExecResult(
+    ctx: AuthorizedBoundedCallContextV1,
+    handle: OwnedProviderHandleV1,
+    request: ExecResultRequestV1,
+  ): Promise<ExecResultV1>;
+  cancelExec(
+    ctx: AuthorizedBoundedCallContextV1,
+    handle: OwnedProviderHandleV1,
+    request: ExecCancelRequestV1,
+  ): Promise<ExecCancelReceiptV1>;
+  readFile(
+    ctx: AuthorizedBoundedCallContextV1,
+    handle: OwnedProviderHandleV1,
+    request: FileReadRequestV1,
+  ): Promise<FileReadReceiptV1>;
+  writeFile(
+    ctx: AuthorizedBoundedCallContextV1,
+    handle: OwnedProviderHandleV1,
+    request: FileWriteRequestV1,
+  ): Promise<FileWriteReceiptV1>;
+  listFiles(
+    ctx: AuthorizedBoundedCallContextV1,
+    handle: OwnedProviderHandleV1,
+    request: FileListRequestV1,
+  ): Promise<FileListPageV1>;
+  exportCheckpoint(
+    ctx: AuthorizedBoundedCallContextV1,
+    handle: OwnedProviderHandleV1,
+    request: CheckpointExportRequestV1,
+  ): Promise<CheckpointExportHandoffV1>;
 }
 
 export class AmbiguousProviderEffectError extends Error {
@@ -168,6 +227,14 @@ abstract class PendingManagedRunnerV1 implements SandboxRunnerV1 {
   async destroy(): Promise<never> { return this.#pending(); }
   async lookupOperation(): Promise<never> { return this.#pending(); }
   async listOwnedResources(): Promise<never> { return this.#pending(); }
+  async startExec(): Promise<never> { return this.#pending(); }
+  async readExecFrames(): Promise<never> { return this.#pending(); }
+  async readExecResult(): Promise<never> { return this.#pending(); }
+  async cancelExec(): Promise<never> { return this.#pending(); }
+  async readFile(): Promise<never> { return this.#pending(); }
+  async writeFile(): Promise<never> { return this.#pending(); }
+  async listFiles(): Promise<never> { return this.#pending(); }
+  async exportCheckpoint(): Promise<never> { return this.#pending(); }
 
   #pending(): never {
     throw new SandboxError(

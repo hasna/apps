@@ -10,6 +10,8 @@ fi
 exec /runtime/bun test \
   --preload ./tests/hermetic-preload.ts \
   tests/hermetic.test.ts \
+  tests/bounded-operations.test.ts \
+  tests/golden-c0dd4b-compatibility.test.ts \
   tests/validation.test.ts \
   tests/service.test.ts \
   tests/storage-conformance.test.ts \
