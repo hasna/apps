@@ -1,10 +1,11 @@
 import { Database } from "bun:sqlite";
 import { SqliteAdapter, ensureFeedbackTable } from "@hasna/cloud";
 import { cpSync, existsSync, mkdirSync, statSync } from "fs";
-import { join } from "path";
+import { dirname, join } from "path";
 import { runMigrations } from "./migrations";
 
 let instance: Database | null = null;
+let instancePath: string | null = null;
 let _adapter: SqliteAdapter | null = null;
 
 export function getDataDir(): string {
@@ -38,18 +39,23 @@ function resolveDbPath(): string {
 }
 
 export function getDb(): Database {
-  if (instance) return instance;
-
   const path = resolveDbPath();
+  if (instance && instancePath === path) return instance;
+  if (instance) closeDb();
+
+  if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   _adapter = new SqliteAdapter(path);
   const db = _adapter.raw;
 
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA foreign_keys = ON");
   db.exec("PRAGMA synchronous = NORMAL");
 
   runMigrations(db);
   ensureFeedbackTable(_adapter);
 
   instance = db;
+  instancePath = path;
   return instance;
 }
 
@@ -57,6 +63,7 @@ export function closeDb(): void {
   if (instance) {
     instance.close();
     instance = null;
+    instancePath = null;
     _adapter = null;
   }
 }

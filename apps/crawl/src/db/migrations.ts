@@ -130,6 +130,17 @@ CREATE TABLE usage_events (
 );
 CREATE INDEX idx_usage_api_key ON usage_events(api_key_id, created_at);
 CREATE INDEX idx_usage_type ON usage_events(event_type, created_at);`,
+
+  // Migration 6 — Feedback
+  `CREATE TABLE IF NOT EXISTS feedback (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  message TEXT NOT NULL,
+  email TEXT,
+  category TEXT DEFAULT 'general',
+  version TEXT,
+  machine_id TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);`,
 ];
 
 export function runMigrations(db: Database): void {

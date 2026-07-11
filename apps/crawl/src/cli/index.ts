@@ -7,6 +7,7 @@ import { createWriteStream } from "fs";
 import { getCrawl, listCrawls, getCrawlStats, deleteCrawl, getGlobalStats } from "../db/crawls.js";
 import { getPage, listPages, searchPages, getPageVersions } from "../db/pages.js";
 import { getConfig, setConfig, resetConfig, getConfigPath } from "../lib/config.js";
+import { checkExaWebSearch } from "../lib/exa.js";
 import { fetchSitemap, type SitemapEntry } from "../lib/sitemap.js";
 import { diffTexts } from "../lib/diff.js";
 import type { ExportFormat } from "../types/index.js";
@@ -45,6 +46,46 @@ program
   .name("crawl")
   .description("AI-powered web crawler — crawl, extract, search")
   .version(VERSION);
+
+// ─── doctor ──────────────────────────────────────────────────────────────────
+
+program
+  .command("doctor")
+  .description("Check local crawl configuration and provider preflight status")
+  .option("--json", "output as JSON")
+  .action(async (opts: { json?: boolean }) => {
+    try {
+      const aiProviders = checkAiProviders
+        ? ((await checkAiProviders()) as Record<string, { available: boolean; model?: string; error?: string }>)
+        : {};
+      const report = {
+        ok: true,
+        configPath: getConfigPath(),
+        providers: {
+          ai: aiProviders,
+          webSearch: {
+            exa: checkExaWebSearch(),
+          },
+        },
+      };
+
+      if (opts.json) {
+        process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+        return;
+      }
+
+      process.stderr.write(chalk.bold("Crawl Doctor\n") + chalk.gray("─".repeat(40)) + "\n");
+      process.stderr.write(`  ${chalk.cyan("Config:")} ${report.configPath}\n`);
+      const exa = report.providers.webSearch.exa;
+      process.stderr.write(
+        `  ${chalk.cyan("Exa web search:")} ${exa.available ? chalk.green("available") : chalk.yellow("missing")} ${chalk.gray(`(${exa.setup})`)}\n`,
+      );
+      process.stderr.write(`  ${chalk.cyan("AI providers:")} ${Object.keys(aiProviders).length}\n`);
+    } catch (err) {
+      process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
+      process.exit(1);
+    }
+  });
 
 // ─── crawl <url> ─────────────────────────────────────────────────────────────
 
@@ -1486,11 +1527,80 @@ function parseConfigValue(value: string): unknown {
   }
 }
 
+function parseTables(value?: string): string[] | undefined {
+  if (!value) return undefined;
+  return value.split(",").map((table) => table.trim()).filter(Boolean);
+}
+
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+// ─── storage ─────────────────────────────────────────────────────────────────
+
+program
+  .command("storage [action] [artifactAction]")
+  .description("Sync local crawl tables with configured remote Postgres storage")
+  .option("--tables <tables>", "comma-separated table list")
+  .option("--crawl-id <crawlId>", "limit screenshot artifact sync to a crawl")
+  .option("--page-id <pageId>", "limit screenshot artifact sync to a page")
+  .option("--json", "output as JSON")
+  .action(async (
+    action = "status",
+    artifactAction: string | undefined,
+    opts: { tables?: string; crawlId?: string; pageId?: string; json?: boolean },
+  ) => {
+    const {
+      getStorageStatus,
+      storageArtifactsDownload,
+      storageArtifactsUpload,
+      storagePull,
+      storagePush,
+      storageSync,
+    } = await import("../db/storage-sync.js");
+    const tables = parseTables(opts.tables);
+    try {
+      switch (action) {
+        case "status":
+          process.stdout.write(JSON.stringify(getStorageStatus(), null, 2) + "\n");
+          break;
+        case "artifacts":
+          switch (artifactAction) {
+            case "upload":
+              process.stdout.write(JSON.stringify(await storageArtifactsUpload({ crawlId: opts.crawlId, pageId: opts.pageId }), null, 2) + "\n");
+              break;
+            case "download":
+              process.stdout.write(JSON.stringify(await storageArtifactsDownload({ crawlId: opts.crawlId, pageId: opts.pageId }), null, 2) + "\n");
+              break;
+            case "status":
+            case undefined:
+              process.stdout.write(JSON.stringify(getStorageStatus().s3, null, 2) + "\n");
+              break;
+            default:
+              process.stderr.write(chalk.red(`Unknown storage artifacts action: ${artifactAction}. Valid actions: status, upload, download\n`));
+              process.exit(1);
+          }
+          break;
+        case "push":
+          process.stdout.write(JSON.stringify(await storagePush({ tables }), null, 2) + "\n");
+          break;
+        case "pull":
+          process.stdout.write(JSON.stringify(await storagePull({ tables }), null, 2) + "\n");
+          break;
+        case "sync":
+          process.stdout.write(JSON.stringify(await storageSync({ tables }), null, 2) + "\n");
+          break;
+        default:
+          process.stderr.write(chalk.red(`Unknown storage action: ${action}. Valid actions: status, push, pull, sync\n`));
+          process.exit(1);
+      }
+    } catch (err) {
+      process.stderr.write(chalk.red(`Storage ${action} failed: ${(err as Error).message}\n`));
+      process.exit(1);
+    }
+  });
 
 // ─── feedback ─────────────────────────────────────────────────────────────────
 

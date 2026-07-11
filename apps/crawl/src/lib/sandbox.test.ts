@@ -135,29 +135,27 @@ describe("sandbox command builders", () => {
 
 describe("buildSandboxEnv", () => {
   it("does not forward broad model provider API keys", () => {
-    const openAIKey = "OPENAI_" + "API_KEY";
-    const anthropicKey = "ANTHROPIC_" + "API_KEY";
-    const originalOpenAI = process.env[openAIKey];
-    const originalAnthropic = process.env[anthropicKey];
+    const originalOpenAI = process.env.OPENAI_API_KEY;
+    const originalAnthropic = process.env.ANTHROPIC_API_KEY;
 
     try {
-      process.env[openAIKey] = "q7";
-      process.env[anthropicKey] = "z9";
+      process.env.OPENAI_API_KEY = "openai-secret";
+      process.env.ANTHROPIC_API_KEY = "anthropic-secret";
 
       expect(buildSandboxEnv()).toEqual({
         CRAWL_DB_PATH: "/tmp/crawl-sandbox.db",
       });
     } finally {
       if (originalOpenAI === undefined) {
-        delete process.env[openAIKey];
+        delete process.env.OPENAI_API_KEY;
       } else {
-        process.env[openAIKey] = originalOpenAI;
+        process.env.OPENAI_API_KEY = originalOpenAI;
       }
 
       if (originalAnthropic === undefined) {
-        delete process.env[anthropicKey];
+        delete process.env.ANTHROPIC_API_KEY;
       } else {
-        process.env[anthropicKey] = originalAnthropic;
+        process.env.ANTHROPIC_API_KEY = originalAnthropic;
       }
     }
   });
@@ -165,10 +163,8 @@ describe("buildSandboxEnv", () => {
 
 describe("sandbox function E2B options", () => {
   it("creates crawl sandboxes without forwarding provider API keys", async () => {
-    const openAIKey = "OPENAI_" + "API_KEY";
-    const anthropicKey = "ANTHROPIC_" + "API_KEY";
-    const originalOpenAI = process.env[openAIKey];
-    const originalAnthropic = process.env[anthropicKey];
+    const originalOpenAI = process.env.OPENAI_API_KEY;
+    const originalAnthropic = process.env.ANTHROPIC_API_KEY;
 
     sandboxCommandResults = [
       { exitCode: 0, stdout: "", stderr: "" },
@@ -176,8 +172,8 @@ describe("sandbox function E2B options", () => {
     ];
 
     try {
-      process.env[openAIKey] = "q7";
-      process.env[anthropicKey] = "z9";
+      process.env.OPENAI_API_KEY = "openai-secret";
+      process.env.ANTHROPIC_API_KEY = "anthropic-secret";
 
       await expect(
         crawlInSandbox({ url: "https://example.com" }, { apiKey: "e2b-test-key" })
@@ -191,19 +187,19 @@ describe("sandbox function E2B options", () => {
           },
         },
       ]);
-      expect(JSON.stringify(sandboxCreateCalls)).not.toContain("q7");
-      expect(JSON.stringify(sandboxCreateCalls)).not.toContain("z9");
+      expect(JSON.stringify(sandboxCreateCalls)).not.toContain("openai-secret");
+      expect(JSON.stringify(sandboxCreateCalls)).not.toContain("anthropic-secret");
     } finally {
       if (originalOpenAI === undefined) {
-        delete process.env[openAIKey];
+        delete process.env.OPENAI_API_KEY;
       } else {
-        process.env[openAIKey] = originalOpenAI;
+        process.env.OPENAI_API_KEY = originalOpenAI;
       }
 
       if (originalAnthropic === undefined) {
-        delete process.env[anthropicKey];
+        delete process.env.ANTHROPIC_API_KEY;
       } else {
-        process.env[anthropicKey] = originalAnthropic;
+        process.env.ANTHROPIC_API_KEY = originalAnthropic;
       }
     }
   });
