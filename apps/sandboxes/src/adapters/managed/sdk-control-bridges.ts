@@ -811,7 +811,11 @@ abstract class ReadOnlyOfficialSdkControlBridge implements ManagedProviderContro
     return Promise.reject(adapterError("unsupported_runtime_feature"))
   }
 
-  activateResource(_opaqueResourceId: string, _target: ProviderEffectTargetV1): Promise<AdapterProviderResourceV1> {
+  activateResource(
+    _opaqueResourceId: string,
+    _target: ProviderEffectTargetV1,
+    _expectedOwnershipNonceSha256?: Digest,
+  ): Promise<AdapterProviderResourceV1> {
     return Promise.reject(adapterError("unsupported_runtime_feature"))
   }
 
@@ -823,6 +827,7 @@ abstract class ReadOnlyOfficialSdkControlBridge implements ManagedProviderContro
     _opaqueResourceId: string,
     _expectedVersion: string,
     _target: ProviderEffectTargetV1,
+    _expectedOwnershipNonceSha256?: Digest,
   ): Promise<void> {
     return Promise.reject(adapterError("unsupported_runtime_feature"))
   }
@@ -1806,12 +1811,13 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
   override async activateResource(
     opaqueResourceId: string,
     target: ProviderEffectTargetV1,
+    expectedOwnershipNonceSha256?: Digest,
   ): Promise<AdapterProviderResourceV1> {
     let before = await this.#getSnapshot(opaqueResourceId)
     if (before === "absent") {
       throw adapterError("provider_state_unknown", { quarantineRequired: true })
     }
-    await this.#assertExactSnapshot(before, target)
+    await this.#assertExactSnapshot(before, target, undefined, expectedOwnershipNonceSha256)
     if (before.state === "running") return this.#mapSnapshot(before)
     if (this.#connect === undefined) throw adapterError("unsupported_runtime_feature")
 
@@ -1834,7 +1840,7 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
     try {
       before = await this.#getSnapshot(opaqueResourceId)
       if (before === "absent") throw adapterError("integrity_failed")
-      await this.#assertExactSnapshot(before, target)
+      await this.#assertExactSnapshot(before, target, undefined, expectedOwnershipNonceSha256)
       if (before.state !== "running" || connectFailure instanceof AdapterContractError) {
         throw adapterError("integrity_failed")
       }
@@ -1889,6 +1895,7 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
     opaqueResourceId: string,
     expectedVersion: string,
     target: ProviderEffectTargetV1,
+    expectedOwnershipNonceSha256?: Digest,
   ): Promise<void> {
     const before = await this.#getSnapshot(opaqueResourceId)
     if (before === "absent") {
@@ -1899,7 +1906,7 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
       }
       throw adapterError("provider_state_unknown", { quarantineRequired: true })
     }
-    await this.#assertExactSnapshot(before, target, expectedVersion)
+    await this.#assertExactSnapshot(before, target, expectedVersion, expectedOwnershipNonceSha256)
     if (this.#kill === undefined) throw adapterError("unsupported_runtime_feature")
 
     try {
@@ -1919,7 +1926,7 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
       if (after === "absent") {
         throw adapterError("provider_state_unknown", { quarantineRequired: true })
       }
-      await this.#assertExactSnapshot(after, target, expectedVersion)
+      await this.#assertExactSnapshot(after, target, expectedVersion, expectedOwnershipNonceSha256)
       throw adapterError("provider_state_unknown", { quarantineRequired: true })
     } catch (cause) {
       if (
