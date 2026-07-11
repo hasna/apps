@@ -230,6 +230,32 @@ describe("provider review regressions", () => {
     expect(checks).toBe(2);
   });
 
+  test("revocation during the awaited phase CAS wins before the runner effect", async () => {
+    const h = harness();
+    const active = await activate(h, await createInert(h));
+    const request = listRequest(active);
+    const originalTransaction = h.repository.transaction.bind(h.repository);
+    let transactionCount = 0;
+    let revoked = false;
+    h.repository.transaction = async (fn) => {
+      transactionCount += 1;
+      const result = await originalTransaction(fn);
+      if (transactionCount === 3) revoked = true;
+      return result;
+    };
+    const originalAuthorization = h.verifier.verifyCurrentEffectAuthorization.bind(h.verifier);
+    h.verifier.verifyCurrentEffectAuthorization = async (...args) => {
+      if (revoked) throw new SandboxError("capability_denied", "revoked during phase CAS");
+      return await originalAuthorization(...args);
+    };
+
+    await expect(h.service.listFiles(
+      request,
+      boundedContext(active, "file.list", canonicalDigest(request), 610),
+    )).rejects.toMatchObject({ code: "capability_denied" });
+    expect(h.runner.calls.list_files).toBe(0);
+  });
+
   test("bounded operation reservation and outcome survive process restart", async () => {
     const h = harness();
     const active = await activate(h, await createInert(h));
@@ -301,6 +327,10 @@ describe("provider review regressions", () => {
       handle,
       exec_id: start.exec_id,
       cursor: started.initial_cursor,
+      prior_stream_root_sha256: started.stream_root_sha256,
+      resume_token: started.initial_resume_token,
+      resume_token_sha256: started.initial_resume_token_sha256,
+      next_expected_sequence: started.next_expected_sequence,
       max_frames: 100,
       max_bytes: 1024,
       wait_ms: 0,
@@ -319,6 +349,151 @@ describe("provider review regressions", () => {
       read,
       boundedContext(active, "exec.frames.read", canonicalDigest(read), 606),
     )).rejects.toMatchObject({ code: "integrity_failed" });
+  });
+
+  test("durable exec stream state rejects cursor replay, root forks, sequence reset, and final-root substitution", async () => {
+    const h = harness();
+    const active = await activate(h, await createInert(h));
+    const handle = handleRef(active);
+    const start = {
+      schema_version: "sandboxes.exec-start-request/v1" as const,
+      handle,
+      exec_id: oid("exec", 611),
+      executable: "/usr/bin/printf",
+      argv: ["%s", "durable-stream"],
+      cwd: "/workspace" as const,
+      environment_profile_id: "minimal-v1" as const,
+      timeout_ms: 5_000,
+      max_output_bytes: 1024,
+      tty: false as const,
+    };
+    const started = await h.service.startExec(
+      start,
+      boundedContext(active, "exec.start", canonicalDigest(start), 611),
+    );
+    const read = {
+      schema_version: "sandboxes.exec-frame-read-request/v1" as const,
+      handle,
+      exec_id: start.exec_id,
+      cursor: started.initial_cursor,
+      prior_stream_root_sha256: started.stream_root_sha256,
+      resume_token: started.initial_resume_token,
+      resume_token_sha256: started.initial_resume_token_sha256,
+      next_expected_sequence: started.next_expected_sequence,
+      max_frames: 100,
+      max_bytes: 1024,
+      wait_ms: 0,
+    };
+    const readContext = boundedContext(active, "exec.frames.read", canonicalDigest(read), 612);
+    const page = await h.service.readExecFrames(read, readContext);
+    const durable = await h.repository.transaction((tx) =>
+      tx.getExecStreamState(active.id, start.exec_id));
+    expect(durable).toMatchObject({
+      cursor: page.next_cursor,
+      stream_root_sha256: page.next_stream_root_sha256,
+      resume_token_sha256: page.next_resume_token_sha256,
+      next_expected_sequence: page.next_expected_sequence,
+      in_flight_operation_id: null,
+    });
+
+    const replay = await restartedService(h).readExecFrames(read, readContext);
+    expect(replay).toEqual(page);
+    expect(h.runner.calls.read_exec_frames).toBe(1);
+
+    const stale = { ...read, next_expected_sequence: 1n };
+    await expect(restartedService(h).readExecFrames(
+      stale,
+      boundedContext(active, "exec.frames.read", canonicalDigest(stale), 613),
+    )).rejects.toMatchObject({ code: "integrity_failed" });
+    const forked = {
+      ...read,
+      cursor: page.next_cursor,
+      prior_stream_root_sha256: digest("forked-stream-root"),
+      resume_token: page.next_resume_token,
+      resume_token_sha256: page.next_resume_token_sha256,
+      next_expected_sequence: page.next_expected_sequence,
+    };
+    await expect(restartedService(h).readExecFrames(
+      forked,
+      boundedContext(active, "exec.frames.read", canonicalDigest(forked), 614),
+    )).rejects.toMatchObject({ code: "integrity_failed" });
+    expect(h.runner.calls.read_exec_frames).toBe(1);
+
+    const resultRequest = {
+      schema_version: "sandboxes.exec-result-request/v1" as const,
+      handle,
+      exec_id: start.exec_id,
+      prior_stream_root_sha256: page.next_stream_root_sha256,
+      resume_token: page.next_resume_token,
+      resume_token_sha256: page.next_resume_token_sha256,
+      next_expected_sequence: page.next_expected_sequence,
+    };
+    const originalResult = h.runner.readExecResult.bind(h.runner);
+    h.runner.readExecResult = async (...args) => {
+      const result = await originalResult(...args);
+      const facts = { ...result, final_stream_root_sha256: digest("alternate-final-root") };
+      delete (facts as Partial<typeof result>).receipt_sha256;
+      return { ...facts, receipt_sha256: canonicalDigest(facts) } as typeof result;
+    };
+    await expect(h.service.readExecResult(
+      resultRequest,
+      boundedContext(active, "exec.result.read", canonicalDigest(resultRequest), 615),
+    )).rejects.toMatchObject({ code: "integrity_failed" });
+  });
+
+  test("crash after a frame-page effect reconciles and advances the reserved stream exactly once", async () => {
+    const h = harness();
+    const active = await activate(h, await createInert(h));
+    const handle = handleRef(active);
+    const start = {
+      schema_version: "sandboxes.exec-start-request/v1" as const,
+      handle,
+      exec_id: oid("exec", 616),
+      executable: "/usr/bin/printf",
+      argv: ["%s", "crash-page"],
+      cwd: "/workspace" as const,
+      environment_profile_id: "minimal-v1" as const,
+      timeout_ms: 5_000,
+      max_output_bytes: 1024,
+      tty: false as const,
+    };
+    const started = await h.service.startExec(
+      start,
+      boundedContext(active, "exec.start", canonicalDigest(start), 616),
+    );
+    const read = {
+      schema_version: "sandboxes.exec-frame-read-request/v1" as const,
+      handle,
+      exec_id: start.exec_id,
+      cursor: started.initial_cursor,
+      prior_stream_root_sha256: started.stream_root_sha256,
+      resume_token: started.initial_resume_token,
+      resume_token_sha256: started.initial_resume_token_sha256,
+      next_expected_sequence: started.next_expected_sequence,
+      max_frames: 100,
+      max_bytes: 1024,
+      wait_ms: 0,
+    };
+    const ctx = boundedContext(active, "exec.frames.read", canonicalDigest(read), 617);
+    const original = h.runner.readExecFrames.bind(h.runner);
+    let injected = false;
+    h.runner.readExecFrames = async (...args) => {
+      const page = await original(...args);
+      if (!injected) {
+        injected = true;
+        throw new AmbiguousProviderEffectError();
+      }
+      return page;
+    };
+    await expect(h.service.readExecFrames(read, ctx))
+      .rejects.toBeInstanceOf(AmbiguousProviderEffectError);
+    const recovered = await restartedService(h).readExecFrames(read, ctx);
+    const durable = await h.repository.transaction((tx) =>
+      tx.getExecStreamState(active.id, start.exec_id));
+    expect(durable?.stream_root_sha256).toBe(recovered.next_stream_root_sha256);
+    expect(durable?.next_expected_sequence).toBe(recovered.next_expected_sequence);
+    expect(durable?.in_flight_operation_id).toBeNull();
+    expect(h.runner.calls.read_exec_frames).toBe(1);
   });
 
   test("checkpoint capture requires grant, barrier, quiescence, manifest/blob and sink durability", async () => {
@@ -370,7 +545,90 @@ describe("provider review regressions", () => {
     expect(handoff.sink_commit_receipt_sha256).toMatch(/^sha256:/);
     expect(handoff.durability_state).toBe("durable");
     expect(h.verifier.calls.checkpoint_capture).toBe(2);
+    expect(h.verifier.calls.checkpoint_quiescence).toBe(1);
     expect(h.verifier.calls.checkpoint_sink_commit).toBe(1);
+  });
+
+  test("checkpoint handoff rejects mixed grant, authorization, quiescence, manifest, and root evidence", async () => {
+    const corruptions = ["manifest", "root", "quiescence", "sink"] as const;
+    for (const corruption of corruptions) {
+      const h = harness();
+      const active = await activate(h, await createInert(h));
+      const request = checkpointRequest(active, 620 + corruptions.indexOf(corruption));
+      const original = h.runner.exportCheckpoint.bind(h.runner);
+      h.runner.exportCheckpoint = async (...args) => {
+        const handoff = await original(...args);
+        if (corruption === "manifest") {
+          const { handoff_sha256: _old, ...facts } = {
+            ...handoff,
+            manifest_sha256: digest("invented-checkpoint-manifest"),
+            manifest_blob_sha256: digest("invented-checkpoint-manifest"),
+          };
+          return { ...facts, handoff_sha256: canonicalDigest(facts) } as typeof handoff;
+        }
+        if (corruption === "root") {
+          const { handoff_sha256: _old, ...facts } = {
+            ...handoff,
+            workspace_root_sha256: digest("mixed-workspace-root"),
+          };
+          return { ...facts, handoff_sha256: canonicalDigest(facts) } as typeof handoff;
+        }
+        if (corruption === "quiescence") {
+          const { receipt_sha256: _oldReceipt, signature, ...quiescenceFacts } = {
+            ...handoff.quiescence_receipt,
+            final_authorization_receipt_sha256: digest("foreign-final-authorization"),
+          };
+          const quiescence = {
+            ...quiescenceFacts,
+            receipt_sha256: canonicalDigest(quiescenceFacts),
+            signature,
+          };
+          const { handoff_sha256: _oldHandoff, ...facts } = {
+            ...handoff,
+            quiescence_receipt: quiescence,
+            quiescence_receipt_sha256: quiescence.receipt_sha256,
+          };
+          return { ...facts, handoff_sha256: canonicalDigest(facts) } as typeof handoff;
+        }
+        const { receipt_sha256: _oldReceipt, signature, ...sinkFacts } = {
+          ...handoff.sink_commit_receipt,
+          capture_grant_sha256: digest("foreign-capture-grant"),
+        };
+        const sink = { ...sinkFacts, receipt_sha256: canonicalDigest(sinkFacts), signature };
+        const { handoff_sha256: _oldHandoff, ...facts } = {
+          ...handoff,
+          sink_commit_receipt: sink,
+          sink_commit_receipt_sha256: sink.receipt_sha256,
+        };
+        return { ...facts, handoff_sha256: canonicalDigest(facts) } as typeof handoff;
+      };
+      await expect(h.service.exportCheckpoint(
+        request,
+        boundedContext(
+          active,
+          "checkpoint.export_bundle",
+          canonicalDigest(request),
+          620 + corruptions.indexOf(corruption),
+        ),
+      )).rejects.toMatchObject({ code: "integrity_failed" });
+      expect(h.verifier.calls.checkpoint_sink_commit).toBe(0);
+    }
+  });
+
+  test("checkpoint quiescence must pass the trusted authority verifier before sink acceptance", async () => {
+    const h = harness();
+    const active = await activate(h, await createInert(h));
+    const request = checkpointRequest(active, 623);
+    h.verifier.verifyCheckpointQuiescenceReceipt = async () => {
+      h.verifier.calls.checkpoint_quiescence += 1;
+      throw new SandboxError("integrity_failed", "untrusted quiescence signer");
+    };
+    await expect(h.service.exportCheckpoint(
+      request,
+      boundedContext(active, "checkpoint.export_bundle", canonicalDigest(request), 623),
+    )).rejects.toMatchObject({ code: "integrity_failed" });
+    expect(h.verifier.calls.checkpoint_quiescence).toBe(1);
+    expect(h.verifier.calls.checkpoint_sink_commit).toBe(0);
   });
 
   test("provider reconciliation consumes an independently signed read-only no-effect receipt", async () => {

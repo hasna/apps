@@ -8,6 +8,7 @@ import { assertExternalOperationAnchorRecordV1 } from "./repository.js";
 import { assertDigest, assertOpaqueId, canonicalDigest } from "./canonical.js";
 import type {
   CheckpointDurabilityReceiptV1,
+  ExecStreamStateV1,
   GitPromotionReceiptRefV1,
   OperationRecordV1,
   ExternalOperationAnchorRecordV1,
@@ -22,6 +23,7 @@ export interface SandboxRepositoryStateV1 {
   sandboxes: Map<string, SandboxV1>;
   handles: Map<string, SealedProviderHandleV1>;
   operations: Map<string, OperationRecordV1>;
+  execStreamStates: Map<string, ExecStreamStateV1>;
   idempotency: Map<string, string>;
   capabilityUses: Map<string, string>;
   activationGrantUses: Map<string, string>;
@@ -39,6 +41,7 @@ export function createSandboxRepositoryStateV1(): SandboxRepositoryStateV1 {
     sandboxes: new Map(),
     handles: new Map(),
     operations: new Map(),
+    execStreamStates: new Map(),
     idempotency: new Map(),
     capabilityUses: new Map(),
     activationGrantUses: new Map(),
@@ -101,7 +104,7 @@ export class InMemorySandboxRepositoryV1 implements SandboxRepositoryV1 {
   async health(): Promise<RepositoryHealthV1> {
     return {
       backend: "memory",
-      schema_version: 5,
+      schema_version: 6,
       integrity: "ok",
       sandbox_count: this.#state.sandboxes.size,
       operation_count: this.#state.operations.size,
@@ -148,6 +151,16 @@ export class InMemorySandboxRepositoryV1 implements SandboxRepositoryV1 {
       getOperation(operationId) {
         const value = state.operations.get(operationId);
         return value === undefined ? undefined : structuredClone(value);
+      },
+      getExecStreamState(resourceId, execId) {
+        const value = state.execStreamStates.get(`${resourceId}\u0000${execId}`);
+        return value === undefined ? undefined : structuredClone(value);
+      },
+      putExecStreamState(streamState) {
+        state.execStreamStates.set(
+          `${streamState.resource_id}\u0000${streamState.exec_id}`,
+          structuredClone(streamState),
+        );
       },
       findIdempotentOperation(actorPrincipal, operation, resourceId, idempotencyKeySha256) {
         const operationId = state.idempotency.get(operationIdempotencyKeyV1(actorPrincipal, operation, resourceId, idempotencyKeySha256));

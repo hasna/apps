@@ -22,6 +22,7 @@ import type {
   CapabilityClaimsV1,
   CheckpointCaptureGrantV1,
   CheckpointDurabilityReceiptV1,
+  CheckpointQuiescenceReceiptV1,
   CheckpointSinkCommitReceiptV1,
   DispatchedJournalAnchorV1,
   EffectJournalEnvelopeV1,
@@ -168,6 +169,7 @@ export class DeterministicTestAuthorityVerifierV1 implements SandboxesAuthorityV
     cleanup: 0,
     checkpoint: 0,
     checkpoint_capture: 0,
+    checkpoint_quiescence: 0,
     checkpoint_sink_commit: 0,
     promotion: 0,
     provider_non_acceptance: 0,
@@ -290,6 +292,12 @@ export class DeterministicTestAuthorityVerifierV1 implements SandboxesAuthorityV
 
   async verifyCheckpointCaptureGrant(_grant: CheckpointCaptureGrantV1): Promise<void> {
     this.calls.checkpoint_capture += 1;
+  }
+
+  async verifyCheckpointQuiescenceReceipt(
+    _receipt: CheckpointQuiescenceReceiptV1,
+  ): Promise<void> {
+    this.calls.checkpoint_quiescence += 1;
   }
 
   async verifyCheckpointSinkCommitReceipt(

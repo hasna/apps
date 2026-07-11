@@ -273,13 +273,21 @@ export function validateExecStartRequest(value: unknown): ExecStartRequestV1 {
 
 export function validateExecFrameReadRequest(value: unknown): ExecFrameReadRequestV1 {
   const v = closed(value, "exec_frames", [
-    "schema_version", "handle", "exec_id", "cursor", "max_frames", "max_bytes", "wait_ms",
+    "schema_version", "handle", "exec_id", "cursor", "prior_stream_root_sha256",
+    "resume_token", "resume_token_sha256", "next_expected_sequence",
+    "max_frames", "max_bytes", "wait_ms",
   ]);
   return {
     schema_version: literal(v.schema_version, "sandboxes.exec-frame-read-request/v1", "exec_frames.schema_version"),
     handle: validateSandboxHandleRef(v.handle),
     exec_id: opaqueId(v.exec_id, "exec_frames.exec_id", "exec"),
     cursor: text(v.cursor, "exec_frames.cursor", 512),
+    prior_stream_root_sha256: digest(v.prior_stream_root_sha256, "exec_frames.prior_stream_root_sha256"),
+    resume_token: text(v.resume_token, "exec_frames.resume_token", 512),
+    resume_token_sha256: digest(v.resume_token_sha256, "exec_frames.resume_token_sha256"),
+    next_expected_sequence: parsePositiveInt64(
+      v.next_expected_sequence, "exec_frames.next_expected_sequence",
+    ),
     max_frames: integer(v.max_frames, "exec_frames.max_frames", 1, 100),
     max_bytes: integer(v.max_bytes, "exec_frames.max_bytes", 1, 1024 * 1024),
     wait_ms: integer(v.wait_ms, "exec_frames.wait_ms", 0, 30_000),
@@ -287,11 +295,20 @@ export function validateExecFrameReadRequest(value: unknown): ExecFrameReadReque
 }
 
 export function validateExecResultRequest(value: unknown): ExecResultRequestV1 {
-  const v = closed(value, "exec_result", ["schema_version", "handle", "exec_id"]);
+  const v = closed(value, "exec_result", [
+    "schema_version", "handle", "exec_id", "prior_stream_root_sha256",
+    "resume_token", "resume_token_sha256", "next_expected_sequence",
+  ]);
   return {
     schema_version: literal(v.schema_version, "sandboxes.exec-result-request/v1", "exec_result.schema_version"),
     handle: validateSandboxHandleRef(v.handle),
     exec_id: opaqueId(v.exec_id, "exec_result.exec_id", "exec"),
+    prior_stream_root_sha256: digest(v.prior_stream_root_sha256, "exec_result.prior_stream_root_sha256"),
+    resume_token: text(v.resume_token, "exec_result.resume_token", 512),
+    resume_token_sha256: digest(v.resume_token_sha256, "exec_result.resume_token_sha256"),
+    next_expected_sequence: parsePositiveInt64(
+      v.next_expected_sequence, "exec_result.next_expected_sequence",
+    ),
   };
 }
 
@@ -451,7 +468,8 @@ function validateExecStartReceipt(
   const v = closed(value, "exec_start_receipt", [
     "schema_version", "resource_id", "resource_lifecycle_generation", "exec_id",
     "request_sha256", "state", "initial_cursor", "initial_cursor_sha256",
-    "stream_root_sha256", "adapter_exec_fingerprint_sha256", "started_at",
+    "stream_root_sha256", "initial_resume_token", "initial_resume_token_sha256",
+    "next_expected_sequence", "adapter_exec_fingerprint_sha256", "started_at",
     "receipt_sha256",
   ]);
   literal(v.schema_version, "sandboxes.exec-start-receipt/v1", "exec_start_receipt.schema_version");
@@ -467,11 +485,23 @@ function validateExecStartReceipt(
   if (digest(v.initial_cursor_sha256, "exec_start_receipt.initial_cursor_sha256") !== sha256(cursor)) {
     throw new SandboxError("integrity_failed", "Exec initial cursor digest differs");
   }
-  if (digest(v.stream_root_sha256, "exec_start_receipt.stream_root_sha256") !== canonicalDigest({
+  const resumeToken = text(v.initial_resume_token, "exec_start_receipt.initial_resume_token", 512);
+  const resumeTokenSha256 = sha256(resumeToken);
+  const streamRootSha256 = digest(v.stream_root_sha256, "exec_start_receipt.stream_root_sha256");
+  if (streamRootSha256 !== canonicalDigest({
     exec_id: request.exec_id,
     cursor_sha256: sha256(cursor),
+    resume_token_sha256: resumeTokenSha256,
+    next_expected_sequence: 1n,
   })) {
     throw new SandboxError("integrity_failed", "Exec initial stream root differs");
+  }
+  if (
+    digest(v.initial_resume_token_sha256, "exec_start_receipt.initial_resume_token_sha256") !==
+      resumeTokenSha256 ||
+    parsePositiveInt64(v.next_expected_sequence, "exec_start_receipt.next_expected_sequence") !== 1n
+  ) {
+    throw new SandboxError("integrity_failed", "Exec initial resume token or sequence differs");
   }
   digest(v.adapter_exec_fingerprint_sha256, "exec_start_receipt.adapter_exec_fingerprint_sha256");
   time(v.started_at, "exec_start_receipt.started_at");
@@ -515,9 +545,10 @@ function validateExecFramePage(
   request: ExecFrameReadRequestV1,
 ): ExecFramePageV1 {
   const v = closed(value, "exec_frame_page", [
-    "schema_version", "exec_id", "from_cursor_sha256", "prior_stream_root_sha256",
-    "frames", "page_frames_root_sha256", "next_cursor", "next_cursor_sha256",
-    "resume_token_sha256", "next_stream_root_sha256", "has_more", "terminal",
+    "schema_version", "exec_id", "from_cursor_sha256", "from_resume_token_sha256",
+    "prior_stream_root_sha256", "first_sequence", "frames", "page_frames_root_sha256",
+    "next_cursor", "next_cursor_sha256", "next_resume_token", "next_resume_token_sha256",
+    "next_expected_sequence", "next_stream_root_sha256", "has_more", "terminal",
     "gap_detected", "gap_proof_sha256", "returned_frames", "returned_bytes",
     "receipt_sha256",
   ]);
@@ -529,16 +560,29 @@ function validateExecFramePage(
   if (digest(v.from_cursor_sha256, "exec_frame_page.from_cursor_sha256") !== fromCursorSha256) {
     throw new SandboxError("integrity_failed", "Exec frame page does not bind the requested cursor");
   }
+  if (
+    request.resume_token_sha256 !== sha256(request.resume_token) ||
+    digest(v.from_resume_token_sha256, "exec_frame_page.from_resume_token_sha256") !==
+      request.resume_token_sha256
+  ) {
+    throw new SandboxError("integrity_failed", "Exec frame page does not bind the resume token");
+  }
   const priorStreamRoot = digest(v.prior_stream_root_sha256, "exec_frame_page.prior_stream_root_sha256");
-  if (priorStreamRoot !== canonicalDigest({ exec_id: request.exec_id, cursor_sha256: fromCursorSha256 })) {
-    throw new SandboxError("integrity_failed", "Exec resume cursor is not bound to its prior stream root");
+  if (priorStreamRoot !== request.prior_stream_root_sha256) {
+    throw new SandboxError("integrity_failed", "Exec page changed the persisted prior stream root");
   }
   if (!Array.isArray(v.frames) || v.frames.length > request.max_frames) {
     throw new SandboxError("resource_limit_exceeded", "Exec frame page exceeds max_frames");
   }
   const frames: ExecFrameV1[] = [];
   let prior = priorStreamRoot;
-  let priorSequence = 0n;
+  let priorSequence = request.next_expected_sequence - 1n;
+  if (
+    parsePositiveInt64(v.first_sequence, "exec_frame_page.first_sequence") !==
+      request.next_expected_sequence
+  ) {
+    throw new SandboxError("integrity_failed", "Exec page reset or skipped its first sequence");
+  }
   for (const raw of v.frames) {
     const frame = validateExecFrame(raw, request.exec_id, prior);
     if (frame.sequence !== priorSequence + 1n) {
@@ -557,19 +601,27 @@ function validateExecFramePage(
   if (digest(v.next_cursor_sha256, "exec_frame_page.next_cursor_sha256") !== nextCursorSha256) {
     throw new SandboxError("integrity_failed", "Exec next cursor digest differs");
   }
-  const expectedResume = canonicalDigest({
-    exec_id: request.exec_id,
-    prior_stream_root_sha256: priorStreamRoot,
-    page_frames_root_sha256: pageFramesRoot,
-    next_cursor_sha256: nextCursorSha256,
-  });
-  if (digest(v.resume_token_sha256, "exec_frame_page.resume_token_sha256") !== expectedResume) {
-    throw new SandboxError("integrity_failed", "Exec resume token does not bind the page roots");
+  const nextResumeToken = text(v.next_resume_token, "exec_frame_page.next_resume_token", 512);
+  const nextResumeTokenSha256 = sha256(nextResumeToken);
+  if (
+    digest(v.next_resume_token_sha256, "exec_frame_page.next_resume_token_sha256") !==
+      nextResumeTokenSha256
+  ) {
+    throw new SandboxError("integrity_failed", "Exec next resume token digest differs");
+  }
+  const nextExpectedSequence = priorSequence + 1n;
+  if (parsePositiveInt64(v.next_expected_sequence, "exec_frame_page.next_expected_sequence") !== nextExpectedSequence) {
+    throw new SandboxError("integrity_failed", "Exec next expected sequence differs");
   }
   const nextStreamRoot = canonicalDigest({
+    exec_id: request.exec_id,
     prior_stream_root_sha256: priorStreamRoot,
+    from_resume_token_sha256: request.resume_token_sha256,
+    first_sequence: request.next_expected_sequence,
     page_frames_root_sha256: pageFramesRoot,
-    resume_token_sha256: expectedResume,
+    next_cursor_sha256: nextCursorSha256,
+    next_resume_token_sha256: nextResumeTokenSha256,
+    next_expected_sequence: nextExpectedSequence,
   });
   if (digest(v.next_stream_root_sha256, "exec_frame_page.next_stream_root_sha256") !== nextStreamRoot) {
     throw new SandboxError("integrity_failed", "Exec next stream root differs");
@@ -604,7 +656,8 @@ function validateExecResult(value: unknown, request: ExecResultRequestV1): ExecR
   const v = closed(value, "exec_result", [
     "schema_version", "resource_id", "resource_lifecycle_generation", "exec_id",
     "state", "exit_code", "stdout_sha256", "stderr_sha256", "output_bytes",
-    "final_stream_root_sha256", "terminal_at", "receipt_sha256",
+    "final_stream_root_sha256", "final_resume_token_sha256",
+    "final_next_expected_sequence", "terminal_at", "receipt_sha256",
   ]);
   literal(v.schema_version, "sandboxes.exec-result/v1", "exec_result.schema_version");
   assertBoundResource(v, request, "exec_result");
@@ -618,7 +671,17 @@ function validateExecResult(value: unknown, request: ExecResultRequestV1): ExecR
   digest(v.stdout_sha256, "exec_result.stdout_sha256");
   digest(v.stderr_sha256, "exec_result.stderr_sha256");
   integer(v.output_bytes, "exec_result.output_bytes", 0, 64 * 1024 * 1024);
-  digest(v.final_stream_root_sha256, "exec_result.final_stream_root_sha256");
+  if (
+    request.resume_token_sha256 !== sha256(request.resume_token) ||
+    digest(v.final_stream_root_sha256, "exec_result.final_stream_root_sha256") !==
+      request.prior_stream_root_sha256 ||
+    digest(v.final_resume_token_sha256, "exec_result.final_resume_token_sha256") !==
+      request.resume_token_sha256 ||
+    parsePositiveInt64(v.final_next_expected_sequence, "exec_result.final_next_expected_sequence") !==
+      request.next_expected_sequence
+  ) {
+    throw new SandboxError("integrity_failed", "Exec result changed the durable final stream state");
+  }
   if (v.terminal_at !== null) time(v.terminal_at, "exec_result.terminal_at");
   verifySelfDigest(v, "receipt_sha256", "exec_result");
   return value as ExecResultV1;
@@ -745,7 +808,7 @@ function validateCheckpointHandoff(
 ): CheckpointExportHandoffV1 {
   const v = closed(value, "checkpoint_handoff", [
     "schema_version", "handoff_id", "checkpoint_id", "resource_id",
-    "resource_lifecycle_generation", "workspace_revision", "manifest_sha256",
+    "resource_lifecycle_generation", "workspace_revision", "manifest", "manifest_sha256",
     "workspace_root_sha256", "checkpoint_root_sha256", "bundle_sha256",
     "bundle_byte_length", "file_count", "fence_sha256",
     "final_authorization_receipt_sha256", "capture_grant_sha256",
@@ -768,19 +831,72 @@ function validateCheckpointHandoff(
   ) {
     throw new SandboxError("integrity_failed", "Checkpoint handoff changed its capture authorization or barrier");
   }
-  const manifestSha256 = digest(v.manifest_sha256, "checkpoint_handoff.manifest_sha256");
-  digest(v.workspace_root_sha256, "checkpoint_handoff.workspace_root_sha256");
-  digest(v.checkpoint_root_sha256, "checkpoint_handoff.checkpoint_root_sha256");
-  const bundleSha256 = digest(v.bundle_sha256, "checkpoint_handoff.bundle_sha256");
-  const bundleByteLength = integer(v.bundle_byte_length, "checkpoint_handoff.bundle_byte_length", 0, request.maximum_bundle_bytes);
-  integer(v.file_count, "checkpoint_handoff.file_count", 0, request.allowed_paths.length);
+  if (!Array.isArray(v.manifest) || v.manifest.length !== request.allowed_paths.length) {
+    throw new SandboxError("integrity_failed", "Checkpoint manifest path denominator differs");
+  }
+  const manifest = v.manifest.map((raw, index) => {
+    const entry = closed(raw, `checkpoint_handoff.manifest.${index}`, [
+      "path", "size_bytes", "content_sha256", "file_revision_sha256",
+    ]);
+    const entryPath = path(entry.path, `checkpoint_handoff.manifest.${index}.path`);
+    if (entryPath !== request.allowed_paths[index]) {
+      throw new SandboxError("integrity_failed", "Checkpoint manifest changed an allowed path");
+    }
+    return {
+      path: entryPath,
+      size_bytes: integer(
+        entry.size_bytes, `checkpoint_handoff.manifest.${index}.size_bytes`, 0,
+        request.maximum_bundle_bytes,
+      ),
+      content_sha256: digest(
+        entry.content_sha256, `checkpoint_handoff.manifest.${index}.content_sha256`,
+      ),
+      file_revision_sha256: digest(
+        entry.file_revision_sha256, `checkpoint_handoff.manifest.${index}.file_revision_sha256`,
+      ),
+    };
+  });
+  const workspaceRootSha256 = canonicalDigest({
+    resource_id: request.handle.resource_id,
+    resource_lifecycle_generation: request.handle.resource_lifecycle_generation,
+    workspace_revision: request.expected_workspace_revision,
+    entries: manifest,
+  });
+  const manifestSha256 = canonicalDigest({
+    schema_version: "sandboxes.checkpoint-manifest/v1",
+    checkpoint_id: request.checkpoint_id,
+    resource_id: request.handle.resource_id,
+    resource_lifecycle_generation: request.handle.resource_lifecycle_generation,
+    workspace_revision: request.expected_workspace_revision,
+    allowed_paths_sha256: canonicalDigest(request.allowed_paths),
+    entries: manifest,
+  });
+  if (
+    digest(v.manifest_sha256, "checkpoint_handoff.manifest_sha256") !== manifestSha256 ||
+    digest(v.workspace_root_sha256, "checkpoint_handoff.workspace_root_sha256") !==
+      workspaceRootSha256
+  ) {
+    throw new SandboxError("integrity_failed", "Checkpoint manifest or workspace root differs");
+  }
+  const bundleSha256 = canonicalDigest(manifest);
+  const bundleByteLength = manifest.reduce((total, entry) => total + entry.size_bytes, 0);
+  if (
+    digest(v.bundle_sha256, "checkpoint_handoff.bundle_sha256") !== bundleSha256 ||
+    integer(v.bundle_byte_length, "checkpoint_handoff.bundle_byte_length", 0, request.maximum_bundle_bytes) !==
+      bundleByteLength ||
+    integer(v.file_count, "checkpoint_handoff.file_count", 0, request.allowed_paths.length) !==
+      manifest.length
+  ) {
+    throw new SandboxError("integrity_failed", "Checkpoint bundle or file denominator differs");
+  }
   if (digest(v.manifest_blob_sha256, "checkpoint_handoff.manifest_blob_sha256") !== manifestSha256) {
     throw new SandboxError("integrity_failed", "Checkpoint manifest blob digest differs");
   }
   const q = closed(v.quiescence_receipt, "checkpoint_handoff.quiescence_receipt", [
     "schema_version", "checkpoint_id", "resource_id", "resource_lifecycle_generation",
     "workspace_revision", "active_exec_count", "capture_grant_sha256",
-    "final_authorization_receipt_sha256", "quiesced_at", "receipt_sha256",
+    "final_authorization_receipt_sha256", "quiesced_at", "issuer_principal",
+    "signing_key_id", "receipt_sha256", "signature",
   ]);
   literal(q.schema_version, "sandboxes.checkpoint-quiescence-receipt/v1", "checkpoint_handoff.quiescence_receipt.schema_version");
   if (
@@ -793,20 +909,56 @@ function validateCheckpointHandoff(
     throw new SandboxError("integrity_failed", "Checkpoint quiescence receipt differs");
   }
   time(q.quiesced_at, "checkpoint_handoff.quiescence_receipt.quiesced_at");
-  const quiescenceSha = verifySelfDigest(q, "receipt_sha256", "checkpoint_handoff.quiescence_receipt");
+  opaqueId(q.issuer_principal, "checkpoint_handoff.quiescence_receipt.issuer_principal", "principal");
+  opaqueId(q.signing_key_id, "checkpoint_handoff.quiescence_receipt.signing_key_id", "key");
+  canonicalSignature(q.signature, "checkpoint_handoff.quiescence_receipt.signature");
+  const quiescenceFacts = Object.fromEntries(
+    Object.entries(q).filter(([key]) => key !== "receipt_sha256" && key !== "signature"),
+  );
+  const quiescenceSha = digest(q.receipt_sha256, "checkpoint_handoff.quiescence_receipt.receipt_sha256");
+  if (quiescenceSha !== canonicalDigest(quiescenceFacts)) {
+    throw new SandboxError("integrity_failed", "Checkpoint quiescence receipt digest differs");
+  }
   if (digest(v.quiescence_receipt_sha256, "checkpoint_handoff.quiescence_receipt_sha256") !== quiescenceSha) {
     throw new SandboxError("integrity_failed", "Checkpoint quiescence receipt reference differs");
   }
+  const checkpointRootSha256 = canonicalDigest({
+    checkpoint_id: request.checkpoint_id,
+    resource_id: request.handle.resource_id,
+    resource_lifecycle_generation: request.handle.resource_lifecycle_generation,
+    workspace_revision: request.expected_workspace_revision,
+    manifest_sha256: manifestSha256,
+    workspace_root_sha256: workspaceRootSha256,
+    bundle_sha256: bundleSha256,
+    bundle_byte_length: bundleByteLength,
+    capture_grant_sha256: request.capture_grant.grant_sha256,
+    final_authorization_receipt_sha256: ctx.authorization_consumption_set_sha256,
+    quiescence_receipt_sha256: quiescenceSha,
+  });
+  if (digest(v.checkpoint_root_sha256, "checkpoint_handoff.checkpoint_root_sha256") !== checkpointRootSha256) {
+    throw new SandboxError("integrity_failed", "Checkpoint root differs from canonical capture facts");
+  }
   const sink = closed(v.sink_commit_receipt, "checkpoint_handoff.sink_commit_receipt", [
-    "schema_version", "checkpoint_id", "sink_descriptor_sha256", "manifest_blob_sha256",
-    "bundle_sha256", "bundle_byte_length", "storage_version", "committed_at",
+    "schema_version", "checkpoint_id", "resource_id", "resource_lifecycle_generation",
+    "workspace_revision", "sink_descriptor_sha256", "capture_grant_sha256",
+    "final_authorization_receipt_sha256", "quiescence_receipt_sha256",
+    "manifest_sha256", "manifest_blob_sha256", "workspace_root_sha256",
+    "checkpoint_root_sha256", "bundle_sha256", "bundle_byte_length", "storage_version", "committed_at",
     "issuer_principal", "signing_key_id", "receipt_sha256", "signature",
   ]);
   literal(sink.schema_version, "sandboxes.checkpoint-sink-commit-receipt/v1", "checkpoint_handoff.sink_commit_receipt.schema_version");
   if (
-    sink.checkpoint_id !== request.checkpoint_id || sink.sink_descriptor_sha256 !== request.sink_descriptor_sha256 ||
-    sink.manifest_blob_sha256 !== manifestSha256 || sink.bundle_sha256 !== bundleSha256 ||
-    sink.bundle_byte_length !== bundleByteLength
+    sink.checkpoint_id !== request.checkpoint_id || sink.resource_id !== request.handle.resource_id ||
+    sink.resource_lifecycle_generation !== request.handle.resource_lifecycle_generation ||
+    sink.workspace_revision !== request.expected_workspace_revision ||
+    sink.sink_descriptor_sha256 !== request.sink_descriptor_sha256 ||
+    sink.capture_grant_sha256 !== request.capture_grant.grant_sha256 ||
+    sink.final_authorization_receipt_sha256 !== ctx.authorization_consumption_set_sha256 ||
+    sink.quiescence_receipt_sha256 !== quiescenceSha ||
+    sink.manifest_sha256 !== manifestSha256 || sink.manifest_blob_sha256 !== manifestSha256 ||
+    sink.workspace_root_sha256 !== workspaceRootSha256 ||
+    sink.checkpoint_root_sha256 !== checkpointRootSha256 ||
+    sink.bundle_sha256 !== bundleSha256 || sink.bundle_byte_length !== bundleByteLength
   ) {
     throw new SandboxError("integrity_failed", "Checkpoint sink commit receipt differs");
   }

@@ -55,11 +55,20 @@ journal stores the exact parsed result, so restart replay returns the prior
 result and a crash after an accepted provider effect uses the adapter's exact
 reconciliation read instead of issuing the mutation again. Runner results are
 closed documents: core recomputes receipt, byte, frame, cursor/resume, no-gap,
-stream-root, file-revision, and checkpoint roots before committing them.
+stream-root, file-revision, and checkpoint roots before committing them. Exec
+start persists the initial cursor, opaque resume token, stream root, and next
+sequence; every page reserves and advances that state atomically with its
+durable outcome, so restart, replay, fork, reset, and alternate-chain attempts
+fail before runner reachability. The final online authorization check follows
+all awaited phase/state transactions with no await before runner invocation.
 
-Checkpoint capture additionally requires a signed capture grant, quiescence
+Checkpoint capture additionally requires a signed capture grant, signed and
+authority-verified quiescence
 receipt, final authorization barrier, content-addressed manifest/blob, and a
-signed durable sink-commit receipt. Ambiguity after upload remains
+signed durable sink-commit receipt. Core recomputes the canonical manifest,
+workspace root, bundle facts, and checkpoint root; the sink receipt binds all
+of those facts together with the grant, final authorization, and quiescence.
+Ambiguity after upload remains
 reconciliation-only until that exact sink receipt is recovered. The exact
 consumer boundary for the Infinity/checkpoint-broker owner is exported as
 `schemas/provider-boundary-v1.schema.json`.

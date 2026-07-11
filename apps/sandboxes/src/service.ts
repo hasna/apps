@@ -61,6 +61,7 @@ import {
   type CheckpointExportHandoffV1,
   type CheckpointExportRequestV1,
   type CheckpointCaptureGrantV1,
+  type CheckpointQuiescenceReceiptV1,
   type CheckpointSinkCommitReceiptV1,
   type CheckpointDurabilityReceiptV1,
   type CreateSandboxV1,
@@ -158,6 +159,7 @@ export interface SandboxesAuthorityVerifierV1 {
   verifyCleanupGrant(grant: InfinityCleanupGrantV1): Promise<void>;
   verifyCheckpointReceipt(receipt: CheckpointDurabilityReceiptV1): Promise<void>;
   verifyCheckpointCaptureGrant(grant: CheckpointCaptureGrantV1): Promise<void>;
+  verifyCheckpointQuiescenceReceipt(receipt: CheckpointQuiescenceReceiptV1): Promise<void>;
   verifyCheckpointSinkCommitReceipt(receipt: CheckpointSinkCommitReceiptV1): Promise<void>;
   verifyGitPromotionReceipt(receipt: GitPromotionReceiptRefV1): Promise<void>;
   verifyAdapterAdmission(descriptor: AdapterDescriptorV1): Promise<AuthenticatedAdapterAdmissionV1>;
@@ -2205,23 +2207,6 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
       if (final.current.physical_safety_state !== "clear") {
         throw new SandboxError("policy_denied", "Bounded operation is blocked by the physical safety fence");
       }
-      if (operation === "checkpoint.export_bundle") {
-        const checkpoint = request as unknown as CheckpointExportRequestV1;
-        await this.#assertWindow(
-          checkpoint.capture_grant.not_before,
-          checkpoint.capture_grant.expires_at,
-          "capability_denied",
-        );
-        await this.#verifier.verifyCheckpointCaptureGrant(checkpoint.capture_grant);
-      }
-      // This is deliberately after the final database/handle read and directly
-      // adjacent to the adapter call. A revocation in that interval wins.
-      const immediate = await this.#verifier.verifyCurrentEffectAuthorization(
-        ctx.capability,
-        ctx.fence,
-      );
-      this.#assertAuthenticatedBindings(immediate, ctx.fence);
-
       if (initial.operation_record.bounded_result !== undefined) {
         const replay = validateBoundedOperationResult(
           operation,
@@ -2241,12 +2226,67 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
       await this.#repository.transaction((tx) => {
         const current = tx.getOperation(ctx.operation_id);
         if (current === undefined) throw new SandboxError("integrity_failed", "Bounded reservation disappeared");
+        this.#reserveExecStreamState(
+          tx,
+          operation,
+          request as unknown as BoundedRequestV1,
+          ctx.operation_id,
+          this.#txNow(tx),
+        );
         if (current.effect_phase === "prepared") {
           tx.compareAndSwapOperationPhase(ctx.operation_id, ["prepared"], "dispatched", this.#txNow(tx));
         } else if (!["dispatched", "unknown"].includes(current.effect_phase)) {
           throw new SandboxError("provider_state_unknown", "Bounded operation is not replayable");
         }
       });
+
+      if (operation === "checkpoint.export_bundle") {
+        const checkpoint = request as unknown as CheckpointExportRequestV1;
+        await this.#assertWindow(
+          checkpoint.capture_grant.not_before,
+          checkpoint.capture_grant.expires_at,
+          "capability_denied",
+        );
+        await this.#verifier.verifyCheckpointCaptureGrant(checkpoint.capture_grant);
+      }
+
+      // Every awaited repository/CAS transition is complete before this final
+      // online check. There is deliberately no await between the check and
+      // invoking the runner/reconciler, so a revocation during phase commit wins.
+      let immediate: AuthenticatedEffectBindingsV1;
+      try {
+        immediate = await this.#verifier.verifyCurrentEffectAuthorization(
+          ctx.capability,
+          ctx.fence,
+        );
+        this.#assertAuthenticatedBindings(immediate, ctx.fence);
+      } catch (error) {
+        if (initial.operation_record.effect_phase === "prepared") {
+          await this.#repository.transaction((tx) => {
+            const current = tx.getOperation(ctx.operation_id);
+            if (current?.effect_phase === "dispatched") {
+              tx.compareAndSwapOperationPhase(
+                ctx.operation_id,
+                ["dispatched"],
+                "prepared",
+                this.#txNow(tx),
+              );
+            }
+            if (operation === "exec.frames.read" || operation === "exec.result.read") {
+              const execRequest = request as unknown as ExecFrameReadRequestV1 | ExecResultRequestV1;
+              const stream = tx.getExecStreamState(execRequest.handle.resource_id, execRequest.exec_id);
+              if (stream?.in_flight_operation_id === ctx.operation_id) {
+                tx.putExecStreamState({
+                  ...stream,
+                  in_flight_operation_id: null,
+                  updated_at: this.#txNow(tx),
+                });
+              }
+            }
+          });
+        }
+        throw error;
+      }
 
       let rawResult: unknown;
       try {
@@ -2285,6 +2325,9 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
         adapterContext,
       );
       if (operation === "checkpoint.export_bundle") {
+        await this.#verifier.verifyCheckpointQuiescenceReceipt(
+          (result as CheckpointExportHandoffV1).quiescence_receipt,
+        );
         await this.#verifier.verifyCheckpointSinkCommitReceipt(
           (result as CheckpointExportHandoffV1).sink_commit_receipt,
         );
@@ -2296,6 +2339,14 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
           throw new SandboxError("integrity_failed", "Bounded outcome lost its durable reservation");
         }
         const committedAt = this.#txNow(tx);
+        this.#commitExecStreamState(
+          tx,
+          operation,
+          request as unknown as BoundedRequestV1,
+          result,
+          ctx.operation_id,
+          committedAt,
+        );
         const { error_code: _priorError, ...withoutPriorError } = current;
         tx.updateOperation({
           ...withoutPriorError,
@@ -2315,6 +2366,97 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
         });
       });
       return result as ResultV1;
+    });
+  }
+
+  #reserveExecStreamState(
+    tx: SandboxRepositoryTxV1,
+    operation: SandboxDataPlaneOperationV1,
+    request: BoundedRequestV1,
+    operationId: string,
+    updatedAt: string,
+  ): void {
+    if (operation !== "exec.frames.read" && operation !== "exec.result.read") return;
+    const streamRequest = request as ExecFrameReadRequestV1 | ExecResultRequestV1;
+    const state = tx.getExecStreamState(streamRequest.handle.resource_id, streamRequest.exec_id);
+    if (
+      state === undefined ||
+      state.resource_lifecycle_generation !== streamRequest.handle.resource_lifecycle_generation ||
+      state.stream_root_sha256 !== streamRequest.prior_stream_root_sha256 ||
+      state.resume_token !== streamRequest.resume_token ||
+      state.resume_token_sha256 !== streamRequest.resume_token_sha256 ||
+      sha256(streamRequest.resume_token) !== streamRequest.resume_token_sha256 ||
+      state.next_expected_sequence !== streamRequest.next_expected_sequence
+    ) {
+      throw new SandboxError("integrity_failed", "Exec request does not continue the durable stream state");
+    }
+    if (
+      operation === "exec.frames.read" &&
+      state.cursor !== (streamRequest as ExecFrameReadRequestV1).cursor
+    ) {
+      throw new SandboxError("integrity_failed", "Exec request replayed or forked its durable cursor");
+    }
+    if (state.in_flight_operation_id !== null && state.in_flight_operation_id !== operationId) {
+      throw new SandboxError("provider_state_unknown", "Another operation owns the durable exec stream");
+    }
+    tx.putExecStreamState({ ...state, in_flight_operation_id: operationId, updated_at: updatedAt });
+  }
+
+  #commitExecStreamState(
+    tx: SandboxRepositoryTxV1,
+    operation: SandboxDataPlaneOperationV1,
+    request: BoundedRequestV1,
+    result: BoundedOperationResultV1,
+    operationId: string,
+    updatedAt: string,
+  ): void {
+    if (operation === "exec.start") {
+      const start = result as ExecStartReceiptV1;
+      tx.putExecStreamState({
+        schema_version: "sandboxes.exec-stream-state/v1",
+        resource_id: start.resource_id,
+        resource_lifecycle_generation: start.resource_lifecycle_generation,
+        exec_id: start.exec_id,
+        cursor: start.initial_cursor,
+        cursor_sha256: start.initial_cursor_sha256,
+        stream_root_sha256: start.stream_root_sha256,
+        resume_token: start.initial_resume_token,
+        resume_token_sha256: start.initial_resume_token_sha256,
+        next_expected_sequence: start.next_expected_sequence,
+        in_flight_operation_id: null,
+        terminal: false,
+        updated_at: updatedAt,
+      });
+      return;
+    }
+    if (operation !== "exec.frames.read" && operation !== "exec.result.read") return;
+    const streamRequest = request as ExecFrameReadRequestV1 | ExecResultRequestV1;
+    const state = tx.getExecStreamState(streamRequest.handle.resource_id, streamRequest.exec_id);
+    if (state?.in_flight_operation_id !== operationId) {
+      throw new SandboxError("integrity_failed", "Exec outcome lost its durable stream reservation");
+    }
+    if (operation === "exec.frames.read") {
+      const page = result as ExecFramePageV1;
+      tx.putExecStreamState({
+        ...state,
+        cursor: page.next_cursor,
+        cursor_sha256: page.next_cursor_sha256,
+        stream_root_sha256: page.next_stream_root_sha256,
+        resume_token: page.next_resume_token,
+        resume_token_sha256: page.next_resume_token_sha256,
+        next_expected_sequence: page.next_expected_sequence,
+        in_flight_operation_id: null,
+        terminal: page.terminal,
+        updated_at: updatedAt,
+      });
+      return;
+    }
+    const execResult = result as ExecResultV1;
+    tx.putExecStreamState({
+      ...state,
+      in_flight_operation_id: null,
+      terminal: execResult.state !== "running",
+      updated_at: updatedAt,
     });
   }
 

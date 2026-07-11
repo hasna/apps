@@ -159,6 +159,10 @@ describe("bounded public sandbox operations", () => {
       handle,
       exec_id: start.exec_id,
       cursor: started.initial_cursor,
+      prior_stream_root_sha256: started.stream_root_sha256,
+      resume_token: started.initial_resume_token,
+      resume_token_sha256: started.initial_resume_token_sha256,
+      next_expected_sequence: started.next_expected_sequence,
       max_frames: 100,
       max_bytes: 1024,
       wait_ms: 0,
@@ -176,7 +180,7 @@ describe("bounded public sandbox operations", () => {
       initial_cursor_sha256: started.initial_cursor_sha256,
     });
     expect(durableFrames?.bounded_result?.result_document).toMatchObject({
-      resume_token_sha256: framePage.resume_token_sha256,
+      next_resume_token_sha256: framePage.next_resume_token_sha256,
       next_stream_root_sha256: framePage.next_stream_root_sha256,
       gap_detected: false,
       gap_proof_sha256: framePage.gap_proof_sha256,
@@ -186,6 +190,10 @@ describe("bounded public sandbox operations", () => {
       schema_version: "sandboxes.exec-result-request/v1" as const,
       handle,
       exec_id: start.exec_id,
+      prior_stream_root_sha256: framePage.next_stream_root_sha256,
+      resume_token: framePage.next_resume_token,
+      resume_token_sha256: framePage.next_resume_token_sha256,
+      next_expected_sequence: framePage.next_expected_sequence,
     };
     const execResult = await h.service.readExecResult(
       result,

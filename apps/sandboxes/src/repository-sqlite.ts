@@ -18,6 +18,7 @@ import type {
 import { assertExternalOperationAnchorRecordV1 } from "./repository.js";
 import type {
   CheckpointDurabilityReceiptV1,
+  ExecStreamStateV1,
   GitPromotionReceiptRefV1,
   OperationRecordV1,
   ExternalOperationAnchorRecordV1,
@@ -197,6 +198,20 @@ const MIGRATIONS = [
       );
       CREATE INDEX immutable_git_promotion_receipts_resource
         ON immutable_git_promotion_receipts(resource_id, receipt_id);
+    `,
+  },
+  {
+    version: 6,
+    name: "durable_exec_stream_state_v1",
+    sql: `
+      CREATE TABLE exec_stream_states (
+        resource_id TEXT NOT NULL REFERENCES sandbox_records(resource_id),
+        exec_id TEXT NOT NULL,
+        stream_root_sha256 TEXT NOT NULL,
+        next_expected_sequence TEXT NOT NULL,
+        record_json TEXT NOT NULL,
+        PRIMARY KEY(resource_id, exec_id)
+      );
     `,
   },
 ] as const;
@@ -472,6 +487,43 @@ export class SqliteSandboxRepositoryV1 implements SandboxRepositoryV1 {
             FROM operations WHERE operation_id = ?
           `)
             .get(operationId),
+        );
+      },
+      getExecStreamState(resourceId, execId) {
+        const row = db.query<{
+          stream_root_sha256: string;
+          next_expected_sequence: string;
+          record_json: string;
+        }, [string, string]>(`
+          SELECT stream_root_sha256, next_expected_sequence, record_json
+          FROM exec_stream_states WHERE resource_id = ? AND exec_id = ?
+        `).get(resourceId, execId);
+        if (row === null) return undefined;
+        const streamState = parseStorageJson<ExecStreamStateV1>(row.record_json);
+        if (
+          streamState.resource_id !== resourceId || streamState.exec_id !== execId ||
+          streamState.stream_root_sha256 !== row.stream_root_sha256 ||
+          streamState.next_expected_sequence !== BigInt(row.next_expected_sequence)
+        ) {
+          throw new SandboxError("integrity_failed", "SQLite exec stream protected columns differ");
+        }
+        return streamState;
+      },
+      putExecStreamState(streamState) {
+        db.query(`
+          INSERT INTO exec_stream_states(
+            resource_id, exec_id, stream_root_sha256, next_expected_sequence, record_json
+          ) VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(resource_id, exec_id) DO UPDATE SET
+            stream_root_sha256 = excluded.stream_root_sha256,
+            next_expected_sequence = excluded.next_expected_sequence,
+            record_json = excluded.record_json
+        `).run(
+          streamState.resource_id,
+          streamState.exec_id,
+          streamState.stream_root_sha256,
+          streamState.next_expected_sequence.toString(10),
+          storageJson(streamState),
         );
       },
       findIdempotentOperation(actorPrincipal, operation, resourceId, idempotencyKeySha256) {

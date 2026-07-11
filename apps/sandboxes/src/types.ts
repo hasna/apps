@@ -634,6 +634,9 @@ export interface ExecStartReceiptV1 {
   initial_cursor: string;
   initial_cursor_sha256: Digest;
   stream_root_sha256: Digest;
+  initial_resume_token: string;
+  initial_resume_token_sha256: Digest;
+  next_expected_sequence: bigint;
   adapter_exec_fingerprint_sha256: Digest;
   started_at: string;
   receipt_sha256: Digest;
@@ -644,6 +647,10 @@ export interface ExecFrameReadRequestV1 {
   handle: SandboxHandleRefV1;
   exec_id: string;
   cursor: string;
+  prior_stream_root_sha256: Digest;
+  resume_token: string;
+  resume_token_sha256: Digest;
+  next_expected_sequence: bigint;
   max_frames: number;
   max_bytes: number;
   wait_ms: number;
@@ -666,12 +673,16 @@ export interface ExecFramePageV1 {
   schema_version: "sandboxes.exec-frame-page/v1";
   exec_id: string;
   from_cursor_sha256: Digest;
+  from_resume_token_sha256: Digest;
   prior_stream_root_sha256: Digest;
+  first_sequence: bigint;
   frames: ExecFrameV1[];
   page_frames_root_sha256: Digest;
   next_cursor: string;
   next_cursor_sha256: Digest;
-  resume_token_sha256: Digest;
+  next_resume_token: string;
+  next_resume_token_sha256: Digest;
+  next_expected_sequence: bigint;
   next_stream_root_sha256: Digest;
   has_more: boolean;
   terminal: boolean;
@@ -686,6 +697,10 @@ export interface ExecResultRequestV1 {
   schema_version: "sandboxes.exec-result-request/v1";
   handle: SandboxHandleRefV1;
   exec_id: string;
+  prior_stream_root_sha256: Digest;
+  resume_token: string;
+  resume_token_sha256: Digest;
+  next_expected_sequence: bigint;
 }
 
 export interface ExecResultV1 {
@@ -699,8 +714,26 @@ export interface ExecResultV1 {
   stderr_sha256: Digest;
   output_bytes: number;
   final_stream_root_sha256: Digest;
+  final_resume_token_sha256: Digest;
+  final_next_expected_sequence: bigint;
   terminal_at: string | null;
   receipt_sha256: Digest;
+}
+
+export interface ExecStreamStateV1 {
+  schema_version: "sandboxes.exec-stream-state/v1";
+  resource_id: string;
+  resource_lifecycle_generation: bigint;
+  exec_id: string;
+  cursor: string;
+  cursor_sha256: Digest;
+  stream_root_sha256: Digest;
+  resume_token: string;
+  resume_token_sha256: Digest;
+  next_expected_sequence: bigint;
+  in_flight_operation_id: string | null;
+  terminal: boolean;
+  updated_at: string;
 }
 
 export interface ExecCancelRequestV1 {
@@ -843,14 +876,33 @@ export interface CheckpointQuiescenceReceiptV1 {
   capture_grant_sha256: Digest;
   final_authorization_receipt_sha256: Digest;
   quiesced_at: string;
+  issuer_principal: string;
+  signing_key_id: string;
   receipt_sha256: Digest;
+  signature: string;
+}
+
+export interface CheckpointManifestEntryV1 {
+  path: string;
+  size_bytes: number;
+  content_sha256: Digest;
+  file_revision_sha256: Digest;
 }
 
 export interface CheckpointSinkCommitReceiptV1 {
   schema_version: "sandboxes.checkpoint-sink-commit-receipt/v1";
   checkpoint_id: string;
+  resource_id: string;
+  resource_lifecycle_generation: bigint;
+  workspace_revision: bigint;
   sink_descriptor_sha256: Digest;
+  capture_grant_sha256: Digest;
+  final_authorization_receipt_sha256: Digest;
+  quiescence_receipt_sha256: Digest;
+  manifest_sha256: Digest;
   manifest_blob_sha256: Digest;
+  workspace_root_sha256: Digest;
+  checkpoint_root_sha256: Digest;
   bundle_sha256: Digest;
   bundle_byte_length: number;
   storage_version: string;
@@ -869,6 +921,7 @@ export interface CheckpointExportHandoffV1 {
   resource_id: string;
   resource_lifecycle_generation: bigint;
   workspace_revision: bigint;
+  manifest: CheckpointManifestEntryV1[];
   manifest_sha256: Digest;
   workspace_root_sha256: Digest;
   checkpoint_root_sha256: Digest;

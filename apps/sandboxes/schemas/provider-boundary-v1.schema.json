@@ -293,7 +293,7 @@
         "schema_version", "checkpoint_id", "resource_id",
         "resource_lifecycle_generation", "workspace_revision", "active_exec_count",
         "capture_grant_sha256", "final_authorization_receipt_sha256",
-        "quiesced_at", "receipt_sha256"
+        "quiesced_at", "issuer_principal", "signing_key_id", "receipt_sha256", "signature"
       ],
       "properties": {
         "schema_version": { "const": "sandboxes.checkpoint-quiescence-receipt/v1" },
@@ -305,23 +305,38 @@
         "capture_grant_sha256": { "$ref": "#/$defs/digest" },
         "final_authorization_receipt_sha256": { "$ref": "#/$defs/digest" },
         "quiesced_at": { "$ref": "#/$defs/time" },
-        "receipt_sha256": { "$ref": "#/$defs/digest" }
+        "issuer_principal": { "$ref": "#/$defs/id" },
+        "signing_key_id": { "$ref": "#/$defs/id" },
+        "receipt_sha256": { "$ref": "#/$defs/digest" },
+        "signature": { "$ref": "#/$defs/signature" }
       }
     },
     "checkpointSinkCommitReceipt": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "schema_version", "checkpoint_id", "sink_descriptor_sha256",
-        "manifest_blob_sha256", "bundle_sha256", "bundle_byte_length",
+        "schema_version", "checkpoint_id", "resource_id", "resource_lifecycle_generation",
+        "workspace_revision", "sink_descriptor_sha256", "capture_grant_sha256",
+        "final_authorization_receipt_sha256", "quiescence_receipt_sha256",
+        "manifest_sha256", "manifest_blob_sha256", "workspace_root_sha256",
+        "checkpoint_root_sha256", "bundle_sha256", "bundle_byte_length",
         "storage_version", "committed_at", "issuer_principal", "signing_key_id",
         "receipt_sha256", "signature"
       ],
       "properties": {
         "schema_version": { "const": "sandboxes.checkpoint-sink-commit-receipt/v1" },
         "checkpoint_id": { "$ref": "#/$defs/id" },
+        "resource_id": { "$ref": "#/$defs/id" },
+        "resource_lifecycle_generation": { "$ref": "#/$defs/int64" },
+        "workspace_revision": { "$ref": "#/$defs/nonNegativeInt64" },
         "sink_descriptor_sha256": { "$ref": "#/$defs/digest" },
+        "capture_grant_sha256": { "$ref": "#/$defs/digest" },
+        "final_authorization_receipt_sha256": { "$ref": "#/$defs/digest" },
+        "quiescence_receipt_sha256": { "$ref": "#/$defs/digest" },
+        "manifest_sha256": { "$ref": "#/$defs/digest" },
         "manifest_blob_sha256": { "$ref": "#/$defs/digest" },
+        "workspace_root_sha256": { "$ref": "#/$defs/digest" },
+        "checkpoint_root_sha256": { "$ref": "#/$defs/digest" },
         "bundle_sha256": { "$ref": "#/$defs/digest" },
         "bundle_byte_length": { "type": "integer", "minimum": 0 },
         "storage_version": { "type": "string", "minLength": 1, "maxLength": 512 },
@@ -337,7 +352,7 @@
       "additionalProperties": false,
       "required": [
         "schema_version", "handoff_id", "checkpoint_id", "resource_id",
-        "resource_lifecycle_generation", "workspace_revision", "manifest_sha256",
+        "resource_lifecycle_generation", "workspace_revision", "manifest", "manifest_sha256",
         "workspace_root_sha256", "checkpoint_root_sha256", "bundle_sha256",
         "bundle_byte_length", "file_count", "fence_sha256",
         "final_authorization_receipt_sha256", "capture_grant_sha256",
@@ -352,6 +367,10 @@
         "resource_id": { "$ref": "#/$defs/id" },
         "resource_lifecycle_generation": { "$ref": "#/$defs/int64" },
         "workspace_revision": { "$ref": "#/$defs/nonNegativeInt64" },
+        "manifest": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/checkpointManifestEntry" }
+        },
         "manifest_sha256": { "$ref": "#/$defs/digest" },
         "workspace_root_sha256": { "$ref": "#/$defs/digest" },
         "checkpoint_root_sha256": { "$ref": "#/$defs/digest" },
@@ -370,6 +389,17 @@
         "durability_state": { "const": "durable" },
         "exported_at": { "$ref": "#/$defs/time" },
         "handoff_sha256": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "checkpointManifestEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "size_bytes", "content_sha256", "file_revision_sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "content_sha256": { "$ref": "#/$defs/digest" },
+        "file_revision_sha256": { "$ref": "#/$defs/digest" }
       }
     }
   }

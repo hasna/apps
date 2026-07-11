@@ -11,6 +11,7 @@ import {
 } from "./effect-journal.js";
 import type {
   CheckpointDurabilityReceiptV1,
+  ExecStreamStateV1,
   GitPromotionReceiptRefV1,
   OperationRecordV1,
   SandboxDestroyTombstoneV1,
@@ -92,6 +93,8 @@ export interface SandboxRepositoryTxV1 {
   getHandle(resourceId: string): SealedProviderHandleV1 | undefined;
   putHandle(handle: SealedProviderHandleV1): void;
   getOperation(operationId: string): OperationRecordV1 | undefined;
+  getExecStreamState(resourceId: string, execId: string): ExecStreamStateV1 | undefined;
+  putExecStreamState(state: ExecStreamStateV1): void;
   findIdempotentOperation(
     actorPrincipal: string,
     operation: string,

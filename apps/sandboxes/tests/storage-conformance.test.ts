@@ -204,7 +204,7 @@ describe("storage conformance", () => {
     const repository = sqlite();
     repository.migrate();
     repository.migrate();
-    expect(await repository.health()).toMatchObject({ backend: "sqlite", schema_version: 5, integrity: "ok" });
+    expect(await repository.health()).toMatchObject({ backend: "sqlite", schema_version: 6, integrity: "ok" });
     await repository.close();
   });
 
@@ -250,6 +250,45 @@ describe("storage conformance", () => {
       "dispatched",
       "2030-01-01T00:03:00.000Z",
     ))).rejects.toThrow("compare-and-swap failed");
+    await reopened.close();
+  });
+
+  test("SQLite persists the exact exec stream root, resume token, and next sequence across reopen", async () => {
+    const root = mkdtempSync(join(tmpdir(), "sandboxes-v1-stream-"));
+    temporary.push(root);
+    chmodSync(root, 0o700);
+    const path = join(root, "sandboxes.db");
+    const first = new SqliteSandboxRepositoryV1(path, {
+      allow_unsafe_test_path: true,
+      hermetic_test_database_time: () => new Date("2030-01-01T00:00:00.000Z"),
+    });
+    const h = harness(first);
+    const active = await activate(h, await createInert(h));
+    const state = {
+      schema_version: "sandboxes.exec-stream-state/v1" as const,
+      resource_id: active.id,
+      resource_lifecycle_generation: active.resource_lifecycle_generation,
+      exec_id: oid("exec", 990),
+      cursor: "cursor_durable",
+      cursor_sha256: digest("cursor_durable"),
+      stream_root_sha256: digest("durable_stream_root"),
+      resume_token: "resume_durable",
+      resume_token_sha256: digest("resume_durable"),
+      next_expected_sequence: 7n,
+      in_flight_operation_id: null,
+      terminal: false,
+      updated_at: "2030-01-01T00:00:00.000Z",
+    };
+    await first.transaction((tx) => tx.putExecStreamState(state));
+    await first.close();
+
+    const reopened = new SqliteSandboxRepositoryV1(path, {
+      allow_unsafe_test_path: true,
+      hermetic_test_database_time: () => new Date("2030-01-01T00:00:00.000Z"),
+    });
+    reopened.migrate();
+    expect(await reopened.transaction((tx) => tx.getExecStreamState(active.id, state.exec_id)))
+      .toEqual(state);
     await reopened.close();
   });
 

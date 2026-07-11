@@ -19,6 +19,7 @@ import type {
 } from "./repository.js";
 import type {
   CheckpointDurabilityReceiptV1,
+  ExecStreamStateV1,
   ExternalOperationAnchorRecordV1,
   GitPromotionReceiptRefV1,
   OperationRecordV1,
@@ -354,6 +355,21 @@ const POSTGRES_MIGRATIONS = [
       );
       CREATE INDEX immutable_git_promotion_receipts_resource
         ON sandboxes.immutable_git_promotion_receipts(resource_id, receipt_id);
+    `,
+  },
+  {
+    version: 6,
+    name: "durable_exec_stream_state_v1",
+    sql: `
+      CREATE TABLE sandboxes.exec_stream_states (
+        resource_id TEXT NOT NULL REFERENCES sandboxes.sandbox_records(resource_id),
+        exec_id TEXT NOT NULL,
+        stream_root_sha256 TEXT NOT NULL
+          CHECK (stream_root_sha256 ~ '^sha256:[0-9a-f]{64}$'),
+        next_expected_sequence BIGINT NOT NULL CHECK (next_expected_sequence >= 1),
+        record_json JSONB NOT NULL,
+        PRIMARY KEY(resource_id, exec_id)
+      );
     `,
   },
 ] as const;
@@ -790,6 +806,28 @@ export class PostgresSandboxRepositoryV1 implements SandboxRepositoryV1 {
       );
       state.handles.set(record.resource_id, record);
     }
+    const execStreams = await session.query<{
+      resource_id: string;
+      exec_id: string;
+      stream_root_sha256: string;
+      next_expected_sequence: string | number | bigint;
+      record_json: unknown;
+    }>(`
+      SELECT resource_id, exec_id, stream_root_sha256, next_expected_sequence, record_json
+      FROM sandboxes.exec_stream_states ORDER BY resource_id, exec_id
+    `);
+    for (const row of execStreams) {
+      const record = decodeRecord<ExecStreamStateV1>(row.record_json);
+      assertProtectedColumns(
+        record.resource_id === row.resource_id && record.exec_id === row.exec_id &&
+          record.stream_root_sha256 === row.stream_root_sha256 &&
+          record.next_expected_sequence === databaseBigInt(
+            row.next_expected_sequence, "exec stream next expected sequence",
+          ),
+        "exec stream state",
+      );
+      state.execStreamStates.set(`${record.resource_id}\u0000${record.exec_id}`, record);
+    }
     const operations = await session.query<{
       operation_id: string;
       operation: string;
@@ -1136,6 +1174,7 @@ export class PostgresSandboxRepositoryV1 implements SandboxRepositoryV1 {
     assertNoDeletion(before.sandboxes, after.sandboxes, "sandbox");
     assertNoDeletion(before.handles, after.handles, "adapter resource");
     assertNoDeletion(before.operations, after.operations, "operation");
+    assertNoDeletion(before.execStreamStates, after.execStreamStates, "exec stream state");
     assertNoDeletion(before.capabilityUses, after.capabilityUses, "capability use");
     assertNoDeletion(before.activationGrantUses, after.activationGrantUses, "activation grant use");
     assertNoDeletion(before.cleanupGrantUses, after.cleanupGrantUses, "cleanup grant use");
@@ -1206,6 +1245,26 @@ export class PostgresSandboxRepositoryV1 implements SandboxRepositoryV1 {
            provider_handle_sha256 = EXCLUDED.provider_handle_sha256,
            record_json = EXCLUDED.record_json`,
         [resourceId, handle.provider_handle_sha256, encoded(handle)],
+      );
+    }
+
+    for (const [identity, streamState] of after.execStreamStates) {
+      if (!mapChanged(before.execStreamStates, after.execStreamStates, identity)) continue;
+      await session.query(
+        `INSERT INTO sandboxes.exec_stream_states(
+           resource_id, exec_id, stream_root_sha256, next_expected_sequence, record_json
+         ) VALUES ($1, $2, $3, $4, $5::jsonb)
+         ON CONFLICT(resource_id, exec_id) DO UPDATE SET
+           stream_root_sha256 = EXCLUDED.stream_root_sha256,
+           next_expected_sequence = EXCLUDED.next_expected_sequence,
+           record_json = EXCLUDED.record_json`,
+        [
+          streamState.resource_id,
+          streamState.exec_id,
+          streamState.stream_root_sha256,
+          streamState.next_expected_sequence.toString(10),
+          encoded(streamState),
+        ],
       );
     }
 

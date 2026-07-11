@@ -74,6 +74,9 @@ interface FakeExec {
   state: ExecResultV1["state"];
   initial_cursor: string;
   next_cursor: string;
+  resume_token: string;
+  resume_token_sha256: Digest;
+  next_expected_sequence: bigint;
   adapter_exec_fingerprint_sha256: Digest;
   stdout: Uint8Array;
   frames_delivered: boolean;
@@ -488,9 +491,13 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     const initialCursor = `cursor_${sha256(`initial:${request.exec_id}`).slice(7)}`;
     const nextCursor = `cursor_${sha256(`terminal:${request.exec_id}`).slice(7)}`;
     const initialCursorSha256 = sha256(initialCursor);
+    const initialResumeToken = `resume_${sha256(`initial-resume:${request.exec_id}`).slice(7)}`;
+    const initialResumeTokenSha256 = sha256(initialResumeToken);
     const streamRootSha256 = canonicalDigest({
       exec_id: request.exec_id,
       cursor_sha256: initialCursorSha256,
+      resume_token_sha256: initialResumeTokenSha256,
+      next_expected_sequence: 1n,
     });
     const startedAt = nowRfc3339(this.#clock());
     const stdout = Buffer.from(request.argv.at(-1) ?? "", "utf8");
@@ -500,6 +507,9 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       state: "running",
       initial_cursor: initialCursor,
       next_cursor: nextCursor,
+      resume_token: initialResumeToken,
+      resume_token_sha256: initialResumeTokenSha256,
+      next_expected_sequence: 1n,
       adapter_exec_fingerprint_sha256: adapterExecFingerprint,
       stdout,
       frames_delivered: false,
@@ -518,6 +528,9 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       initial_cursor: initialCursor,
       initial_cursor_sha256: initialCursorSha256,
       stream_root_sha256: streamRootSha256,
+      initial_resume_token: initialResumeToken,
+      initial_resume_token_sha256: initialResumeTokenSha256,
+      next_expected_sequence: 1n,
       adapter_exec_fingerprint_sha256: adapterExecFingerprint,
       started_at: startedAt,
     };
@@ -532,24 +545,29 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     this.#assertBoundedSink(ctx, handle, request, "exec.frames.read");
     this.calls.read_exec_frames += 1;
     const exec = this.#mustExec(handle, request.exec_id);
-    if (request.cursor !== exec.initial_cursor || exec.frames_delivered) {
+    if (
+      request.cursor !== exec.initial_cursor || exec.frames_delivered ||
+      request.prior_stream_root_sha256 !== exec.stream_root_sha256 ||
+      request.resume_token !== exec.resume_token ||
+      request.resume_token_sha256 !== exec.resume_token_sha256 ||
+      request.next_expected_sequence !== exec.next_expected_sequence
+    ) {
       throw new SandboxError("integrity_failed", "Fake frame cursor is stale, guessed, or replayed");
     }
     const terminalAt = nowRfc3339(this.#clock());
-    const priorStreamRootSha256 = canonicalDigest({
-      exec_id: request.exec_id,
-      cursor_sha256: sha256(request.cursor),
-    });
+    const priorStreamRootSha256 = request.prior_stream_root_sha256;
     const frames: ExecFrameV1[] = [];
     let priorFrameSha256 = priorStreamRootSha256;
     if (exec.stdout.byteLength > 0) {
-      const frame = this.#frame(exec, 1n, priorFrameSha256, "stdout", exec.stdout, terminalAt);
+      const frame = this.#frame(
+        exec, request.next_expected_sequence, priorFrameSha256, "stdout", exec.stdout, terminalAt,
+      );
       frames.push(frame);
       priorFrameSha256 = frame.frame_sha256;
     }
     const terminalFrame = this.#frame(
       exec,
-      BigInt(frames.length + 1),
+      request.next_expected_sequence + BigInt(frames.length),
       priorFrameSha256,
       "terminal",
       new Uint8Array(),
@@ -566,28 +584,39 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     exec.last_frame_sha256 = terminalFrame.frame_sha256;
     const pageFramesRootSha256 = canonicalDigest(frames.map((frame) => frame.frame_sha256));
     const nextCursorSha256 = sha256(exec.next_cursor);
-    const resumeTokenSha256 = canonicalDigest({
+    const nextResumeToken = `resume_${sha256(
+      `${exec.exec_id}:${request.resume_token_sha256}:${exec.next_cursor}:${frames.length}`,
+    ).slice(7)}`;
+    const nextResumeTokenSha256 = sha256(nextResumeToken);
+    const nextExpectedSequence = request.next_expected_sequence + BigInt(frames.length);
+    const nextStreamRootSha256 = canonicalDigest({
       exec_id: exec.exec_id,
       prior_stream_root_sha256: priorStreamRootSha256,
+      from_resume_token_sha256: request.resume_token_sha256,
+      first_sequence: request.next_expected_sequence,
       page_frames_root_sha256: pageFramesRootSha256,
       next_cursor_sha256: nextCursorSha256,
-    });
-    const nextStreamRootSha256 = canonicalDigest({
-      prior_stream_root_sha256: priorStreamRootSha256,
-      page_frames_root_sha256: pageFramesRootSha256,
-      resume_token_sha256: resumeTokenSha256,
+      next_resume_token_sha256: nextResumeTokenSha256,
+      next_expected_sequence: nextExpectedSequence,
     });
     exec.stream_root_sha256 = nextStreamRootSha256;
+    exec.resume_token = nextResumeToken;
+    exec.resume_token_sha256 = nextResumeTokenSha256;
+    exec.next_expected_sequence = nextExpectedSequence;
     const facts = {
       schema_version: "sandboxes.exec-frame-page/v1" as const,
       exec_id: exec.exec_id,
       from_cursor_sha256: sha256(request.cursor),
+      from_resume_token_sha256: request.resume_token_sha256,
       prior_stream_root_sha256: priorStreamRootSha256,
+      first_sequence: request.next_expected_sequence,
       frames,
       page_frames_root_sha256: pageFramesRootSha256,
       next_cursor: exec.next_cursor,
       next_cursor_sha256: nextCursorSha256,
-      resume_token_sha256: resumeTokenSha256,
+      next_resume_token: nextResumeToken,
+      next_resume_token_sha256: nextResumeTokenSha256,
+      next_expected_sequence: nextExpectedSequence,
       next_stream_root_sha256: nextStreamRootSha256,
       has_more: false,
       terminal: true,
@@ -611,6 +640,14 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     this.#assertBoundedSink(ctx, handle, request, "exec.result.read");
     this.calls.read_exec_result += 1;
     const exec = this.#mustExec(handle, request.exec_id);
+    if (
+      request.prior_stream_root_sha256 !== exec.stream_root_sha256 ||
+      request.resume_token !== exec.resume_token ||
+      request.resume_token_sha256 !== exec.resume_token_sha256 ||
+      request.next_expected_sequence !== exec.next_expected_sequence
+    ) {
+      throw new SandboxError("integrity_failed", "Fake exec result request changed stream state");
+    }
     const facts = {
       schema_version: "sandboxes.exec-result/v1" as const,
       resource_id: handle.resource_id,
@@ -622,6 +659,8 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       stderr_sha256: sha256(new Uint8Array()),
       output_bytes: exec.stdout.byteLength,
       final_stream_root_sha256: exec.stream_root_sha256,
+      final_resume_token_sha256: exec.resume_token_sha256,
+      final_next_expected_sequence: exec.next_expected_sequence,
       terminal_at: exec.terminal_at,
     };
     return this.#rememberBounded(ctx, { ...facts, receipt_sha256: canonicalDigest(facts) });
@@ -799,18 +838,19 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       throw new SandboxError("resource_limit_exceeded", "Checkpoint candidate exceeds its bundle bound");
     }
     const manifestSha256 = canonicalDigest({
-      schema_version: "sandboxes.fake-checkpoint-manifest/v1",
+      schema_version: "sandboxes.checkpoint-manifest/v1",
+      checkpoint_id: request.checkpoint_id,
+      resource_id: handle.resource_id,
+      resource_lifecycle_generation: handle.resource_lifecycle_generation,
+      workspace_revision: workspace.revision,
+      allowed_paths_sha256: canonicalDigest(request.allowed_paths),
+      entries: manifest,
+    });
+    const workspaceRootSha256 = canonicalDigest({
       resource_id: handle.resource_id,
       resource_lifecycle_generation: handle.resource_lifecycle_generation,
       workspace_revision: workspace.revision,
       entries: manifest,
-    });
-    const workspaceRootSha256 = canonicalDigest(manifest.map((entry) => entry.content_sha256));
-    const checkpointRootSha256 = canonicalDigest({
-      checkpoint_id: request.checkpoint_id,
-      manifest_sha256: manifestSha256,
-      workspace_root_sha256: workspaceRootSha256,
-      sink_descriptor_sha256: request.sink_descriptor_sha256,
     });
     const exportedAt = nowRfc3339(this.#clock());
     if (
@@ -830,16 +870,41 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       capture_grant_sha256: request.capture_grant.grant_sha256,
       final_authorization_receipt_sha256: ctx.authorization_consumption_set_sha256,
       quiesced_at: exportedAt,
+      issuer_principal: `principal_${"6999".padStart(32, "0")}`,
+      signing_key_id: `key_${"6999".padStart(32, "0")}`,
     };
     const quiescenceReceipt = {
       ...quiescenceFacts,
       receipt_sha256: canonicalDigest(quiescenceFacts),
+      signature: "A".repeat(86),
     };
+    const checkpointRootSha256 = canonicalDigest({
+      checkpoint_id: request.checkpoint_id,
+      resource_id: handle.resource_id,
+      resource_lifecycle_generation: handle.resource_lifecycle_generation,
+      workspace_revision: workspace.revision,
+      manifest_sha256: manifestSha256,
+      workspace_root_sha256: workspaceRootSha256,
+      bundle_sha256: bundleSha256,
+      bundle_byte_length: totalBytes,
+      capture_grant_sha256: request.capture_grant.grant_sha256,
+      final_authorization_receipt_sha256: ctx.authorization_consumption_set_sha256,
+      quiescence_receipt_sha256: quiescenceReceipt.receipt_sha256,
+    });
     const sinkCommitFacts = {
       schema_version: "sandboxes.checkpoint-sink-commit-receipt/v1" as const,
       checkpoint_id: request.checkpoint_id,
+      resource_id: handle.resource_id,
+      resource_lifecycle_generation: handle.resource_lifecycle_generation,
+      workspace_revision: workspace.revision,
       sink_descriptor_sha256: request.sink_descriptor_sha256,
+      capture_grant_sha256: request.capture_grant.grant_sha256,
+      final_authorization_receipt_sha256: ctx.authorization_consumption_set_sha256,
+      quiescence_receipt_sha256: quiescenceReceipt.receipt_sha256,
+      manifest_sha256: manifestSha256,
       manifest_blob_sha256: manifestSha256,
+      workspace_root_sha256: workspaceRootSha256,
+      checkpoint_root_sha256: checkpointRootSha256,
       bundle_sha256: bundleSha256,
       bundle_byte_length: totalBytes,
       storage_version: `fake-object-${checkpointRootSha256.slice(7, 23)}`,
@@ -859,6 +924,7 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       resource_id: handle.resource_id,
       resource_lifecycle_generation: handle.resource_lifecycle_generation,
       workspace_revision: workspace.revision,
+      manifest,
       manifest_sha256: manifestSha256,
       workspace_root_sha256: workspaceRootSha256,
       checkpoint_root_sha256: checkpointRootSha256,
