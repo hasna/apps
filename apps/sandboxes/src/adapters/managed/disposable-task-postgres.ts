@@ -1,0 +1,1945 @@
+import { SQL } from "bun"
+import {
+  createHash,
+  createPrivateKey,
+  createPublicKey,
+  KeyObject,
+  randomBytes,
+  sign as cryptoSign,
+  verify as cryptoVerify,
+} from "node:crypto"
+import { readFileSync } from "node:fs"
+import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
+import { canonicalJson, canonicalSha256, isDigest, parseCanonicalJson } from "./canonical"
+import { adapterError } from "./errors"
+import type {
+  DisposableSandboxTaskExecutionReceiptV1,
+  DisposableTaskJournalCompletedV1,
+  DisposableTaskJournalAuthorizationV1,
+  DisposableTaskJournalPortV1,
+  DisposableTaskJournalPrepareInputV1,
+  DisposableTaskJournalPrepareResultV1,
+  DisposableTaskJournalQuarantinedV1,
+  DurableJournalWitnessPortV1,
+  DurableJournalWitnessReceiptV1,
+} from "./disposable-task"
+import {
+  disposableTaskCheckpointPolicySha256,
+  parseDisposableSandboxTaskExecutionReceiptV1,
+  parseDisposableSandboxTaskRequestV1,
+} from "./disposable-task"
+import type { Digest } from "./types"
+import type { PostgresClientV1, PostgresSessionV1 } from "../../repository-postgres"
+
+const MIGRATION_NAME = "0001_disposable_task_journal.sql"
+const SCHEMA = "sandboxes_disposable_task_journal"
+const SAFE_ROLE = /^[a-z_][a-z0-9_]{0,62}$/u
+const SAFE_TEXT = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
+const MAX_CANONICAL_BYTES = 2 * 1024 * 1024
+const EXPECTED_TABLES = ["events", "schema_migrations", "store", "tasks"] as const
+const EXPECTED_FUNCTIONS = [
+  "acknowledge_witness(bigint, text, bytea, text)",
+  "append_event(bigint, text, text, text, text, text, bytea, text, bytea, text)",
+  "bind_authorization_and_mark_intent(text, text, text, bigint, text, bytea, text, text, bigint, text, text, bytea, text, bytea, text)",
+  "commit_terminal(text, text, text, bigint, text, text, bytea, text, text, text, text, text, bytea, text, bigint, text, text, text, bytea, text, bytea, text)",
+  "insert_prepared(text, text, text, text, bytea, bytea, text, text, text, text, text, text, text, text, text, text, text, bigint, text, text, timestamp with time zone, bigint, text, text, bytea, text, bytea, text)",
+  "mark_dispatched(text, text, text, bigint, text, text, bigint, text, text, bytea, text, bytea, text)",
+  "mark_result_persisted(text, text, text, bigint, text, text, text, bigint, text, text, bytea, text, bytea, text)",
+  "reject_mutation()",
+  "takeover_claim(text, text, text, bigint, text, text, text, timestamp with time zone, bigint, text, text, bytea, text, bytea, text)",
+] as const
+const CATALOG_RELATIONS_SHA256 = "sha256:dd66dec7abaa145ec76c1981f31531ccea7945bed4eeb35ce5f139c80a12a329" as const
+const CATALOG_COLUMNS_SHA256 = "sha256:515bc4ff90f5a1ce6d0b2dc47660fe868e95204bf6e5347040b966d92530a139" as const
+const CATALOG_CONSTRAINTS_SHA256 = "sha256:db107f27f5fd0669522b55ac7734a3706631c4edf5bb28a5d8aca56c5442a378" as const
+const CATALOG_INDEXES_SHA256 = "sha256:e98ff7edfcc19df23895c025ee98968ef94cc117379baefdbc0f7dc600269874" as const
+const CATALOG_FUNCTIONS_SHA256 = "sha256:b83692b76cd3a8af0d8a411397694bf1b438d1b20c7aad7094c86200988a64bc" as const
+const CATALOG_TRIGGERS_SHA256 = "sha256:0a9c48c26cdca2246a06efa03b636c78f2c8853ca19f2f4e8a2bf8e0ef937cbb" as const
+
+export interface DisposableTaskJournalSignerV1 {
+  readonly signer_principal: string
+  readonly signing_key_id: string
+  readonly verification_key_sha256: Digest
+  sign(bytes: Uint8Array): Uint8Array
+}
+
+export interface DisposableTaskJournalSignatureVerifierV1 {
+  readonly signer_principal: string
+  readonly signing_key_id: string
+  readonly verification_key_sha256: Digest
+  verify(bytes: Uint8Array, signature: Uint8Array): boolean
+}
+
+export interface DisposableTaskWitnessReceiptVerifierV1 {
+  readonly witness_identity_sha256: Digest
+  readonly restore_domain_sha256: Digest
+  readonly signing_key_id: string
+  readonly verification_key_sha256: Digest
+  verify(bytes: Uint8Array, signature: Uint8Array): boolean
+}
+
+export interface PostgresDisposableTaskJournalOptionsV1 {
+  readonly expected_migration_role: string
+  readonly expected_runtime_role: string
+  readonly expected_database: string
+  readonly encrypted_at_rest: true
+  readonly journal_identity_sha256: Digest
+  readonly restore_domain_sha256: Digest
+  readonly external_head_witness: DurableJournalWitnessPortV1
+  readonly witness_receipt_verifier: DisposableTaskWitnessReceiptVerifierV1
+  /** Separate least-privilege credential; the runtime role is never allowed to acknowledge witness advancement. */
+  readonly witness_acknowledgement_client: PostgresClientV1
+  readonly expected_witness_acknowledgement_role: string
+  readonly signer: DisposableTaskJournalSignerV1
+  readonly verifier: DisposableTaskJournalSignatureVerifierV1
+}
+
+export interface PostgresDisposableTaskJournalMigrationOptionsV1 {
+  readonly expected_migration_role: string
+  readonly expected_database: string
+  readonly runtime_role: string
+  readonly witness_acknowledgement_role: string
+  readonly journal_identity_sha256: Digest
+  readonly restore_domain_sha256: Digest
+  readonly external_head_witness_sha256: Digest
+  readonly witness_verification_key_sha256: Digest
+  readonly signer_principal: string
+  readonly signing_key_id: string
+  readonly verification_key_sha256: Digest
+  readonly encrypted_at_rest: true
+  readonly migration_file?: string
+}
+
+interface StoreRow extends Record<string, unknown> {
+  journal_identity_sha256: string
+  restore_domain_sha256: string
+  external_head_witness_sha256: string
+  witness_verification_key_sha256: string
+  encrypted_at_rest: boolean
+  signer_principal: string
+  signing_key_id: string
+  verification_key_sha256: string
+  head_sequence: bigint | number | string
+  head_frontier_sha256: string | null
+  witnessed_sequence: bigint | number | string
+  witnessed_frontier_sha256: string | null
+  witness_receipt_bytes: Uint8Array | null
+  witness_receipt_sha256: string | null
+}
+
+interface TaskRow extends Record<string, unknown> {
+  idempotency_key_sha256: string
+  operation_digest: string
+  dispatch_id: string
+  request_sha256: string
+  canonical_request_bytes: Uint8Array
+  authority_consume_input_bytes: Uint8Array
+  authority_consume_input_sha256: string
+  authority_envelope_sha256: string
+  source_manifest_sha256: string
+  input_manifest_sha256: string
+  provider: string
+  provider_metadata_scope_sha256: string
+  provider_creation_token_sha256: string
+  immutable_fingerprint_sha256: string
+  ownership_nonce_sha256: string
+  allocation_lease_epoch: bigint | number | string
+  allocation_claim_fence_sha256: string
+  allocation_ownership_nonce_sha256: string
+  effect_claim_sha256: string
+  dispatch_intent_anchor_sha256: string | null
+  dispatch_anchor_sha256: string
+  state: "PREPARED" | "DISPATCH_INTENT" | "DISPATCHED" | "RESULT_PERSISTED" | "OUTCOME" | "QUARANTINED"
+  lease_epoch: bigint | number | string
+  claim_fence_sha256: string
+  lease_owner_sha256: string
+  lease_expires_at: Date | string
+  authorization_receipt_bytes: Uint8Array | null
+  authorization_consumption_receipt_sha256: string | null
+  provider_fingerprint_sha256: string | null
+  effect_lease_epoch: bigint | number | string | null
+  effect_claim_fence_sha256: string | null
+  effect_ownership_nonce_sha256: string | null
+  result_bundle_sha256: string | null
+  checkpoint_handoff_sha256: string | null
+  result_persisted_anchor_sha256: string | null
+  outcome_kind: "succeeded" | "failed_no_effect" | "failed_contained" | null
+  execution_receipt_bytes: Uint8Array | null
+  execution_receipt_sha256: string | null
+  failure_code: string | null
+  failure_evidence_sha256: string | null
+  quarantine_reason: string | null
+  quarantine_evidence_sha256: string | null
+  outcome_anchor_bytes: Uint8Array | null
+  outcome_anchor_sha256: string | null
+}
+
+interface EventRow extends Record<string, unknown> {
+  journal_sequence: bigint | number | string
+  prior_frontier_sha256: string | null
+  frontier_sha256: string
+  record_kind: string
+  dispatch_id: string
+  request_sha256: string
+  record_bytes: Uint8Array
+  record_sha256: string
+  signed_anchor_bytes: Uint8Array
+  signed_anchor_sha256: string
+}
+
+interface SignedEvent {
+  sequence: bigint
+  prior: Digest | null
+  frontier: Digest
+  kind: string
+  dispatchId: string
+  requestSha256: Digest
+  recordBytes: Uint8Array
+  recordSha256: Digest
+  anchorBytes: Uint8Array
+  anchorSha256: Digest
+}
+
+interface BunSqlLike {
+  unsafe(statement: string, parameters?: unknown[]): Promise<unknown[]>
+  begin<T>(fn: (transaction: BunSqlLike) => Promise<T>): Promise<T>
+  close(options?: { timeout?: number }): Promise<void>
+}
+
+class BunJournalSession implements PostgresSessionV1 {
+  constructor(protected readonly sql: BunSqlLike) {}
+  async query<Row extends Record<string, unknown>>(
+    statement: string,
+    parameters: readonly unknown[] = [],
+  ): Promise<Row[]> {
+    return await this.sql.unsafe(statement, [...parameters]) as Row[]
+  }
+}
+
+class BunJournalClient extends BunJournalSession implements PostgresClientV1 {
+  constructor(private readonly connection: BunSqlLike) {
+    super(connection)
+  }
+  async transaction<T>(fn: (session: PostgresSessionV1) => Promise<T>): Promise<T> {
+    return await this.connection.begin(async (transaction) => fn(new BunJournalSession(transaction)))
+  }
+  async close(): Promise<void> {
+    await this.connection.close({ timeout: 0 })
+  }
+}
+
+function digestBytes(bytes: Uint8Array): Digest {
+  return `sha256:${createHash("sha256").update(bytes).digest("hex")}`
+}
+
+function bytes(value: string): Uint8Array {
+  return new TextEncoder().encode(value)
+}
+
+function byteEqual(left: Uint8Array, right: Uint8Array): boolean {
+  return Buffer.from(left).equals(Buffer.from(right))
+}
+
+function exactKeys(value: object, expected: readonly string[]): boolean {
+  const keys = Reflect.ownKeys(value)
+  return keys.length === expected.length && keys.every((key) =>
+    typeof key === "string" && expected.includes(key) &&
+    Object.getOwnPropertyDescriptor(value, key)?.enumerable === true)
+}
+
+function exactStringSet(actual: readonly string[], expected: readonly string[]): boolean {
+  return actual.length === expected.length && [...actual].sort().every((value, index) =>
+    value === [...expected].sort()[index])
+}
+
+function asBytes(value: Uint8Array | Buffer): Uint8Array {
+  return Uint8Array.from(value)
+}
+
+function assertDigest(value: unknown): asserts value is Digest {
+  if (!isDigest(value)) throw adapterError("validation_failed")
+}
+
+function assertText(value: unknown): asserts value is string {
+  if (typeof value !== "string" || !SAFE_TEXT.test(value)) throw adapterError("validation_failed")
+}
+
+function dbBigint(value: unknown): bigint {
+  if (typeof value === "bigint" && value >= 0n) return value
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return BigInt(value)
+  if (typeof value === "string" && /^\d+$/u.test(value)) return BigInt(value)
+  throw adapterError("integrity_failed")
+}
+
+function iso(value: Date | string): string {
+  const date = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(date.getTime())) throw adapterError("integrity_failed")
+  return date.toISOString()
+}
+
+function canonicalBytes(value: unknown): Uint8Array {
+  return bytes(canonicalJson(value))
+}
+
+function parseCanonicalBytes(value: Uint8Array): unknown {
+  if (value.byteLength === 0 || value.byteLength > MAX_CANONICAL_BYTES) throw adapterError("integrity_failed")
+  let text: string
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(value)
+  } catch {
+    throw adapterError("integrity_failed")
+  }
+  try {
+    const parsed = parseCanonicalJson(text)
+    if (!byteEqual(canonicalBytes(parsed), value)) throw adapterError("integrity_failed")
+    return parsed
+  } catch {
+    throw adapterError("integrity_failed")
+  }
+}
+
+function exactExecutionReceipt(value: unknown, row: TaskRow): DisposableSandboxTaskExecutionReceiptV1 {
+  if (!isDigest(row.authorization_consumption_receipt_sha256) ||
+    !isDigest(row.effect_claim_sha256) || !isDigest(row.dispatch_intent_anchor_sha256) ||
+    !isDigest(row.effect_claim_fence_sha256) || !isDigest(row.effect_ownership_nonce_sha256) ||
+    row.effect_lease_epoch === null) throw adapterError("integrity_failed")
+  const request = parseDisposableSandboxTaskRequestV1(parseCanonicalBytes(asBytes(row.canonical_request_bytes)))
+  const parsed = parseDisposableSandboxTaskExecutionReceiptV1(value, request, {
+    dispatch_id: row.dispatch_id,
+    journal_dispatch_id_sha256: canonicalSha256(row.dispatch_id),
+    journal_dispatch_anchor_sha256: row.dispatch_anchor_sha256 as Digest,
+    journal_claim_fence_sha256: row.effect_claim_fence_sha256,
+    journal_lease_epoch: dbBigint(row.effect_lease_epoch),
+    journal_lease_expires_at: iso(row.lease_expires_at),
+    provider_metadata_scope_sha256: row.provider_metadata_scope_sha256 as Digest,
+    provider_creation_token_sha256: row.provider_creation_token_sha256 as Digest,
+    immutable_fingerprint_sha256: row.immutable_fingerprint_sha256 as Digest,
+    ownership_nonce_sha256: row.effect_ownership_nonce_sha256,
+    recovery_expected_result_bundle_sha256: row.result_bundle_sha256 as Digest | null,
+    recovery_expected_checkpoint_handoff_sha256: row.checkpoint_handoff_sha256 as Digest | null,
+    recovery_expected_provider_fingerprint_sha256: row.provider_fingerprint_sha256 as Digest | null,
+    authorization_consumption_receipt_sha256: row.authorization_consumption_receipt_sha256,
+    effect_claim_sha256: row.effect_claim_sha256,
+    dispatch_intent_anchor_sha256: row.dispatch_intent_anchor_sha256,
+    async markDispatched() { throw adapterError("integrity_failed") },
+    async markResultPersisted() { throw adapterError("integrity_failed") },
+  }) as DisposableSandboxTaskExecutionReceiptV1
+  if (parsed.provider_fingerprint_sha256 !== row.provider_fingerprint_sha256 ||
+    parsed.checkpoint_handoff_sha256 !== row.checkpoint_handoff_sha256 ||
+    parsed.result_bundle_sha256 !== row.result_bundle_sha256 ||
+    parsed.provider_ownership_binding_sha256 !== canonicalSha256(
+      `lease-${dbBigint(row.effect_lease_epoch).toString(10)}-${row.effect_ownership_nonce_sha256}`,
+    )) throw adapterError("integrity_failed")
+  return parsed
+}
+
+function validateSignerPair(
+  signer: DisposableTaskJournalSignerV1,
+  verifier: DisposableTaskJournalSignatureVerifierV1,
+): void {
+  assertText(signer.signer_principal)
+  assertText(signer.signing_key_id)
+  assertDigest(signer.verification_key_sha256)
+  if (signer.signer_principal !== verifier.signer_principal ||
+    signer.signing_key_id !== verifier.signing_key_id ||
+    signer.verification_key_sha256 !== verifier.verification_key_sha256) {
+    throw adapterError("integrity_failed")
+  }
+  const challenge = canonicalBytes({ domain: "sandboxes.disposable-task-journal.key-possession/v1" })
+  const signature = signer.sign(challenge)
+  if (!(signature instanceof Uint8Array) || signature.byteLength !== 64 || !verifier.verify(challenge, signature)) {
+    throw adapterError("integrity_failed")
+  }
+}
+
+export function createEd25519DisposableTaskJournalCryptoV1(input: Readonly<{
+  signer_principal: string
+  signing_key_id: string
+  private_key: KeyObject | string | Uint8Array
+  public_key?: KeyObject | string | Uint8Array
+}>): { signer: DisposableTaskJournalSignerV1; verifier: DisposableTaskJournalSignatureVerifierV1 } {
+  assertText(input.signer_principal)
+  assertText(input.signing_key_id)
+  const privateKey = input.private_key instanceof KeyObject
+    ? input.private_key
+    : createPrivateKey(input.private_key)
+  const publicKey = input.public_key === undefined
+    ? createPublicKey(privateKey.export({ type: "pkcs8", format: "pem" }))
+    : input.public_key instanceof KeyObject
+      ? input.public_key
+      : createPublicKey(input.public_key)
+  if (privateKey.asymmetricKeyType !== "ed25519" || publicKey.asymmetricKeyType !== "ed25519") {
+    throw adapterError("validation_failed")
+  }
+  const verificationKeySha256 = digestBytes(publicKey.export({ type: "spki", format: "der" }))
+  return {
+    signer: {
+      signer_principal: input.signer_principal,
+      signing_key_id: input.signing_key_id,
+      verification_key_sha256: verificationKeySha256,
+      sign: (message) => Uint8Array.from(cryptoSign(null, message, privateKey)),
+    },
+    verifier: {
+      signer_principal: input.signer_principal,
+      signing_key_id: input.signing_key_id,
+      verification_key_sha256: verificationKeySha256,
+      verify: (message, signature) => cryptoVerify(null, message, publicKey, signature),
+    },
+  }
+}
+
+function migrationPath(): string {
+  const here = dirname(fileURLToPath(import.meta.url))
+  return join(here, "../../../migrations/disposable-task-journal", MIGRATION_NAME)
+}
+
+function quoteIdentifier(value: string): string {
+  if (!SAFE_ROLE.test(value)) throw adapterError("validation_failed")
+  return `"${value}"`
+}
+
+async function assertSessionIdentity(
+  client: PostgresClientV1,
+  expectedRole: string,
+  expectedDatabase: string,
+): Promise<void> {
+  if (!SAFE_ROLE.test(expectedRole) || expectedDatabase.length === 0) throw adapterError("validation_failed")
+  const rows = await client.query<{
+    current_user: string
+    current_database: string
+    ssl_in_use: boolean
+    can_create_database: boolean
+    can_create_temporary: boolean
+    database_owner_member: boolean
+    is_superuser: boolean
+    can_create_db_role: boolean
+    can_create_role: boolean
+    can_replicate: boolean
+    can_bypass_rls: boolean
+    parent_memberships: bigint | number | string
+    settable_memberships: bigint | number | string
+  }>(`
+    SELECT current_user::text AS current_user, current_database()::text AS current_database,
+      COALESCE((SELECT ssl FROM pg_catalog.pg_stat_ssl WHERE pid = pg_backend_pid()), false) AS ssl_in_use,
+      has_database_privilege(current_user, current_database(), 'CREATE') AS can_create_database,
+      has_database_privilege(current_user, current_database(), 'TEMPORARY') AS can_create_temporary,
+      pg_has_role(current_user, 'pg_database_owner', 'MEMBER') AS database_owner_member,
+      role.rolsuper AS is_superuser, role.rolcreatedb AS can_create_db_role,
+      role.rolcreaterole AS can_create_role,
+      role.rolreplication AS can_replicate, role.rolbypassrls AS can_bypass_rls,
+      (SELECT count(*) FROM pg_catalog.pg_auth_members membership
+       WHERE membership.member = role.oid) AS parent_memberships,
+      (SELECT count(*) FROM pg_catalog.pg_auth_members membership
+       WHERE membership.member = role.oid AND membership.set_option) AS settable_memberships
+    FROM pg_catalog.pg_roles role WHERE role.rolname = current_user
+  `)
+  const row = rows[0]
+  if (row === undefined || row.current_user !== expectedRole || row.current_database !== expectedDatabase ||
+    row.ssl_in_use !== true || row.can_create_database || row.can_create_temporary || row.database_owner_member ||
+    row.is_superuser || row.can_create_db_role || row.can_create_role || row.can_replicate || row.can_bypass_rls ||
+    dbBigint(row.parent_memberships) !== 0n || dbBigint(row.settable_memberships) !== 0n) {
+    throw adapterError("integrity_failed")
+  }
+}
+
+export async function applyPostgresDisposableTaskJournalMigrationV1(
+  client: PostgresClientV1,
+  options: PostgresDisposableTaskJournalMigrationOptionsV1,
+): Promise<void> {
+  if (!SAFE_ROLE.test(options.expected_migration_role) || !SAFE_ROLE.test(options.runtime_role) ||
+    !SAFE_ROLE.test(options.witness_acknowledgement_role) ||
+    new Set([options.expected_migration_role, options.runtime_role, options.witness_acknowledgement_role]).size !== 3 ||
+    options.expected_database.length === 0 ||
+    options.encrypted_at_rest !== true) throw adapterError("validation_failed")
+  for (const value of [options.journal_identity_sha256, options.restore_domain_sha256,
+    options.external_head_witness_sha256, options.witness_verification_key_sha256,
+    options.verification_key_sha256]) assertDigest(value)
+  assertText(options.signer_principal)
+  assertText(options.signing_key_id)
+  const identity = await client.query<{ current_user: string; current_database: string; ssl_in_use: boolean; owner: string }>(`
+    SELECT current_user::text AS current_user, current_database()::text AS current_database,
+      COALESCE((SELECT ssl FROM pg_catalog.pg_stat_ssl WHERE pid = pg_backend_pid()), false) AS ssl_in_use,
+      owner.rolname::text AS owner FROM pg_catalog.pg_database database
+      JOIN pg_catalog.pg_roles owner ON owner.oid = database.datdba
+      WHERE database.datname = current_database()
+  `)
+  const current = identity[0]
+  if (current === undefined || current.current_user !== options.expected_migration_role ||
+    current.current_database !== options.expected_database || current.ssl_in_use !== true ||
+    current.owner !== options.expected_migration_role) throw adapterError("integrity_failed")
+  const source = readFileSync(options.migration_file ?? migrationPath(), "utf8")
+  const checksum = digestBytes(bytes(source))
+  await client.transaction(async (session) => {
+    await session.query("SELECT pg_advisory_xact_lock(36711471343122001)")
+    await session.query(`CREATE SCHEMA IF NOT EXISTS ${SCHEMA}`)
+    await session.query(`CREATE TABLE IF NOT EXISTS ${SCHEMA}.schema_migrations (
+      migration_name text PRIMARY KEY, checksum_sha256 text NOT NULL,
+      applied_at timestamptz NOT NULL DEFAULT clock_timestamp())`)
+    const existing = await session.query<{ checksum_sha256: string }>(
+      `SELECT checksum_sha256 FROM ${SCHEMA}.schema_migrations WHERE migration_name = $1`, [MIGRATION_NAME],
+    )
+    if (existing[0] !== undefined && existing[0].checksum_sha256 !== checksum) throw adapterError("integrity_failed")
+    if (existing.length === 0) {
+      await session.query(source)
+      await session.query(
+        `INSERT INTO ${SCHEMA}.schema_migrations(migration_name, checksum_sha256) VALUES ($1, $2)`,
+        [MIGRATION_NAME, checksum],
+      )
+    }
+    const store = await session.query<{
+      journal_identity_sha256: string; restore_domain_sha256: string
+      external_head_witness_sha256: string; encrypted_at_rest: boolean
+      witness_verification_key_sha256: string
+      signer_principal: string; signing_key_id: string; verification_key_sha256: string
+    }>(
+      `SELECT journal_identity_sha256, restore_domain_sha256, external_head_witness_sha256,
+        witness_verification_key_sha256,
+        encrypted_at_rest, signer_principal, signing_key_id, verification_key_sha256
+       FROM ${SCHEMA}.store WHERE singleton FOR UPDATE`,
+    )
+    if (store.length === 0) {
+      await session.query(`INSERT INTO ${SCHEMA}.store
+        (singleton, journal_identity_sha256, restore_domain_sha256,
+         external_head_witness_sha256, witness_verification_key_sha256,
+         encrypted_at_rest, signer_principal,
+         signing_key_id, verification_key_sha256)
+        VALUES (true, $1, $2, $3, $4, true, $5, $6, $7)`, [
+        options.journal_identity_sha256, options.restore_domain_sha256,
+        options.external_head_witness_sha256, options.witness_verification_key_sha256,
+        options.signer_principal,
+        options.signing_key_id, options.verification_key_sha256,
+      ])
+    } else if (store[0]?.journal_identity_sha256 !== options.journal_identity_sha256 ||
+      store[0].restore_domain_sha256 !== options.restore_domain_sha256 ||
+      store[0].external_head_witness_sha256 !== options.external_head_witness_sha256 ||
+      store[0].witness_verification_key_sha256 !== options.witness_verification_key_sha256 ||
+      store[0].encrypted_at_rest !== true || store[0].signer_principal !== options.signer_principal ||
+      store[0].signing_key_id !== options.signing_key_id ||
+      store[0].verification_key_sha256 !== options.verification_key_sha256) {
+      throw adapterError("integrity_failed")
+    }
+    const role = quoteIdentifier(options.runtime_role)
+    const witnessRole = quoteIdentifier(options.witness_acknowledgement_role)
+    const database = quoteIdentifier(options.expected_database)
+    await session.query(`REVOKE CREATE, TEMPORARY ON DATABASE ${database} FROM PUBLIC`)
+    await session.query(`REVOKE ALL ON SCHEMA ${SCHEMA} FROM PUBLIC, ${role}, ${witnessRole}`)
+    await session.query(`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA ${SCHEMA} FROM PUBLIC, ${role}, ${witnessRole}`)
+    await session.query(`REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA ${SCHEMA} FROM PUBLIC, ${role}, ${witnessRole}`)
+    await session.query(`GRANT CONNECT ON DATABASE ${database} TO ${role}`)
+    await session.query(`GRANT CONNECT ON DATABASE ${database} TO ${witnessRole}`)
+    await session.query(`GRANT USAGE ON SCHEMA ${SCHEMA} TO ${role}`)
+    await session.query(`GRANT USAGE ON SCHEMA ${SCHEMA} TO ${witnessRole}`)
+    await session.query(`GRANT SELECT ON ${SCHEMA}.schema_migrations, ${SCHEMA}.store,
+      ${SCHEMA}.tasks, ${SCHEMA}.events TO ${role}`)
+    for (const signature of [
+      "insert_prepared(text,text,text,text,bytea,bytea,text,text,text,text,text,text,text,text,text,text,text,bigint,text,text,timestamptz,bigint,text,text,bytea,text,bytea,text)",
+      "takeover_claim(text,text,text,bigint,text,text,text,timestamptz,bigint,text,text,bytea,text,bytea,text)",
+      "bind_authorization_and_mark_intent(text,text,text,bigint,text,bytea,text,text,bigint,text,text,bytea,text,bytea,text)",
+      "mark_dispatched(text,text,text,bigint,text,text,bigint,text,text,bytea,text,bytea,text)",
+      "mark_result_persisted(text,text,text,bigint,text,text,text,bigint,text,text,bytea,text,bytea,text)",
+      "commit_terminal(text,text,text,bigint,text,text,bytea,text,text,text,text,text,bytea,text,bigint,text,text,text,bytea,text,bytea,text)",
+    ]) await session.query(`GRANT EXECUTE ON FUNCTION ${SCHEMA}.${signature} TO ${role}`)
+    await session.query(`GRANT EXECUTE ON FUNCTION ${SCHEMA}.acknowledge_witness(bigint,text,bytea,text) TO ${witnessRole}`)
+  })
+}
+
+export class PostgresDisposableTaskJournalV1 implements DisposableTaskJournalPortV1 {
+  readonly #client: PostgresClientV1
+  readonly #witnessAckClient: PostgresClientV1
+  readonly #options: PostgresDisposableTaskJournalOptionsV1
+  #ready = false
+
+  private constructor(client: PostgresClientV1, options: PostgresDisposableTaskJournalOptionsV1) {
+    this.#client = client
+    this.#witnessAckClient = options.witness_acknowledgement_client
+    this.#options = options
+  }
+
+  static async connect(
+    url: string,
+    tlsCa: string | Uint8Array,
+    options: PostgresDisposableTaskJournalOptionsV1,
+  ): Promise<PostgresDisposableTaskJournalV1> {
+    const parsed = new URL(url)
+    if (!['postgres:', 'postgresql:'].includes(parsed.protocol) || parsed.searchParams.get("sslmode") !== "verify-full") {
+      throw adapterError("validation_failed")
+    }
+    const sql = new SQL({
+      url,
+      max: 2,
+      connectionTimeout: 10,
+      tls: { ca: tlsCa, serverName: parsed.hostname, rejectUnauthorized: true },
+    }) as unknown as BunSqlLike
+    const client = new BunJournalClient(sql)
+    try {
+      return await PostgresDisposableTaskJournalV1.fromClient(client, options)
+    } catch (error) {
+      await client.close().catch(() => undefined)
+      throw error
+    }
+  }
+
+  static async fromClient(
+    client: PostgresClientV1,
+    options: PostgresDisposableTaskJournalOptionsV1,
+  ): Promise<PostgresDisposableTaskJournalV1> {
+    if (options.encrypted_at_rest !== true) throw adapterError("validation_failed")
+    if (!SAFE_ROLE.test(options.expected_migration_role) || !SAFE_ROLE.test(options.expected_runtime_role) ||
+      options.expected_database.length === 0) {
+      throw adapterError("validation_failed")
+    }
+    if (!SAFE_ROLE.test(options.expected_witness_acknowledgement_role) ||
+      options.expected_witness_acknowledgement_role === options.expected_runtime_role ||
+      options.expected_witness_acknowledgement_role === options.expected_migration_role ||
+      options.expected_runtime_role === options.expected_migration_role ||
+      options.witness_acknowledgement_client === client) throw adapterError("validation_failed")
+    for (const value of [options.journal_identity_sha256, options.restore_domain_sha256]) assertDigest(value)
+    validateSignerPair(options.signer, options.verifier)
+    const witness = options.external_head_witness.describe()
+    if (witness.durability !== "durable" || witness.restore_domain_sha256 === options.restore_domain_sha256 ||
+      !isDigest(witness.restore_domain_sha256) || !isDigest(witness.witness_identity_sha256)) {
+      throw adapterError("integrity_failed")
+    }
+    const witnessVerifier = options.witness_receipt_verifier
+    if (witnessVerifier.witness_identity_sha256 !== witness.witness_identity_sha256 ||
+      witnessVerifier.restore_domain_sha256 !== witness.restore_domain_sha256 ||
+      !isDigest(witnessVerifier.verification_key_sha256) || !SAFE_TEXT.test(witnessVerifier.signing_key_id)) {
+      throw adapterError("integrity_failed")
+    }
+    const journal = new PostgresDisposableTaskJournalV1(client, options)
+    await assertSessionIdentity(client, options.expected_runtime_role, options.expected_database)
+    await assertSessionIdentity(options.witness_acknowledgement_client,
+      options.expected_witness_acknowledgement_role, options.expected_database)
+    await journal.#assertReady()
+    journal.#ready = true
+    return journal
+  }
+
+  describe() {
+    return Object.freeze({
+      durability: "durable" as const,
+      encrypted_at_rest: true as const,
+      journal_identity_sha256: this.#options.journal_identity_sha256,
+      restore_domain_sha256: this.#options.restore_domain_sha256,
+      external_head_witness_sha256: this.#options.external_head_witness.describe().witness_identity_sha256,
+      signer_principal: this.#options.signer.signer_principal,
+      signing_key_id: this.#options.signer.signing_key_id,
+    })
+  }
+
+  async assertWitnessCurrent(witness: DurableJournalWitnessPortV1): Promise<{ witness_receipt_sha256: Digest }> {
+    this.#requireReady()
+    const expected = this.#options.external_head_witness.describe()
+    const actual = witness.describe()
+    if (actual.durability !== "durable" || actual.restore_domain_sha256 !== expected.restore_domain_sha256 ||
+      actual.witness_identity_sha256 !== expected.witness_identity_sha256) throw adapterError("integrity_failed")
+    await this.#healWitness()
+    const store = await this.#store(this.#client)
+    const head = await witness.readHead(this.#options.journal_identity_sha256)
+    if ((head?.sequence ?? 0n) !== dbBigint(store.head_sequence) ||
+      (head?.frontier_sha256 ?? null) !== store.head_frontier_sha256) throw adapterError("integrity_failed")
+    return { witness_receipt_sha256: head?.receipt_sha256 ?? canonicalSha256({
+      schema_version: "sandboxes.disposable-task-journal-witness-receipt/v1",
+      journal_identity_sha256: this.#options.journal_identity_sha256,
+      witness_identity_sha256: actual.witness_identity_sha256,
+      sequence: head?.sequence ?? 0n,
+      frontier_sha256: head?.frontier_sha256 ?? null,
+    }) }
+  }
+
+  async prepareDispatch(input: Readonly<DisposableTaskJournalPrepareInputV1>): Promise<DisposableTaskJournalPrepareResultV1> {
+    this.#requireReady()
+    this.#validatePrepare(input)
+    await this.#healWitness()
+    const result = await this.#serializable(async (session) => {
+      await session.query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+      await session.query("SELECT pg_advisory_xact_lock(36711471343122002)")
+      const store = await this.#store(session)
+      this.#assertAppendable(store)
+      const rows = await session.query<TaskRow>(
+        `SELECT * FROM ${SCHEMA}.tasks WHERE idempotency_key_sha256 = $1 OR operation_digest = $2`,
+        [input.idempotency_key_sha256, input.operation_digest],
+      )
+      const row = rows[0]
+      if (row !== undefined) {
+        this.#assertExactIntent(row, input)
+        if (row.state === "OUTCOME" || row.state === "QUARANTINED") return { terminal: this.#terminal(row) }
+        const nowRows = await session.query<{ now: Date | string }>("SELECT clock_timestamp() AS now")
+        const now = new Date(nowRows[0]?.now ?? Number.NaN)
+        const expiry = new Date(row.lease_expires_at)
+        if (Number.isNaN(now.getTime()) || Number.isNaN(expiry.getTime())) throw adapterError("integrity_failed")
+        if (expiry.getTime() > now.getTime()) {
+          return { terminal: { kind: "busy" as const, request_sha256: input.request_sha256, retry_after: expiry.toISOString() } }
+        }
+        const epoch = dbBigint(row.lease_epoch) + 1n
+        const expires = new Date(now.getTime() + input.lease_duration_ms).toISOString()
+        const ownershipNonce = digestBytes(randomBytes(32))
+        const fence = canonicalSha256({
+          domain: "sandboxes.disposable-task-journal.claim-fence/v1",
+          dispatch_id: row.dispatch_id,
+          request_sha256: input.request_sha256,
+          lease_epoch: epoch,
+          lease_owner_sha256: input.lease_owner_sha256,
+          lease_expires_at: expires,
+          ownership_nonce_sha256: ownershipNonce,
+        })
+        const effectLeaseEpoch = dbBigint(row.effect_lease_epoch ?? row.allocation_lease_epoch)
+        const effectClaimFence = (row.effect_claim_fence_sha256 ?? row.allocation_claim_fence_sha256) as Digest
+        const effectOwnershipNonce = (row.effect_ownership_nonce_sha256 ??
+          row.allocation_ownership_nonce_sha256) as Digest
+        const recoveryRecord = {
+          schema_version: "sandboxes.disposable-task-recovery-anchor/v1",
+          dispatch_id: row.dispatch_id,
+          request_sha256: input.request_sha256,
+          prior_state: row.state,
+          effect_claim_sha256: row.effect_claim_sha256,
+          provider_effect_claim_fence_sha256: effectClaimFence,
+          provider_effect_lease_epoch: effectLeaseEpoch,
+          provider_effect_ownership_nonce_sha256: effectOwnershipNonce,
+          current_claim_fence_sha256: fence,
+          current_lease_epoch: epoch,
+          expected_provider_fingerprint_sha256: row.provider_fingerprint_sha256 as Digest | null,
+          expected_result_bundle_sha256: row.result_bundle_sha256 as Digest | null,
+          expected_checkpoint_handoff_sha256: row.checkpoint_handoff_sha256 as Digest | null,
+        }
+        const recoveryRecordBytes = canonicalBytes(recoveryRecord)
+        const recoveryRecordSha256 = digestBytes(recoveryRecordBytes)
+        const event = this.#event(store, "CLAIMED", row.dispatch_id, input.request_sha256, {
+          prior_state: row.state,
+          lease_epoch: epoch,
+          claim_fence_sha256: fence,
+          ownership_nonce_sha256: ownershipNonce,
+          lease_owner_sha256: input.lease_owner_sha256,
+          lease_expires_at: expires,
+          recovery_record: recoveryRecord,
+          recovery_record_sha256: recoveryRecordSha256,
+        })
+        const changed = await session.query<{ prior_state: string }>(
+          `SELECT ${SCHEMA}.takeover_claim($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) AS prior_state`,
+          [row.dispatch_id, input.request_sha256, row.claim_fence_sha256, epoch, fence,
+            ownershipNonce, input.lease_owner_sha256, expires, ...this.#eventParameters(event)],
+        )
+        const priorState = changed[0]?.prior_state
+        if (!['PREPARED', 'DISPATCH_INTENT', 'DISPATCHED', 'RESULT_PERSISTED'].includes(String(priorState))) {
+          throw adapterError("integrity_failed")
+        }
+        return { event, terminal: {
+          kind: "reconcile" as const,
+          recovery: true as const,
+          prior_state: priorState as "PREPARED" | "DISPATCH_INTENT" | "DISPATCHED" | "RESULT_PERSISTED",
+          authorization: this.#authorization(row),
+          recovery_binding: {
+            provider_effect_claim_fence_sha256: effectClaimFence,
+            provider_effect_lease_epoch: effectLeaseEpoch,
+            provider_effect_ownership_nonce_sha256: effectOwnershipNonce,
+            expected_result_bundle_sha256: row.result_bundle_sha256 as Digest | null,
+            expected_checkpoint_handoff_sha256: row.checkpoint_handoff_sha256 as Digest | null,
+            expected_provider_fingerprint_sha256: row.provider_fingerprint_sha256 as Digest | null,
+            canonical_recovery_record_bytes: recoveryRecordBytes,
+            recovery_record_sha256: recoveryRecordSha256,
+            canonical_signed_recovery_anchor_bytes: event.anchorBytes,
+            recovery_anchor_sha256: event.anchorSha256,
+          },
+          ...this.#claim(row, epoch, fence, ownershipNonce, input.lease_owner_sha256, expires),
+        } }
+      }
+      const dispatchId = `dt_${canonicalSha256({
+        domain: "sandboxes.disposable-task-journal.dispatch-id/v1",
+        idempotency_key_sha256: input.idempotency_key_sha256,
+        request_sha256: input.request_sha256,
+      }).slice(7)}`
+      const nowRows = await session.query<{ expires: Date | string }>(
+        "SELECT clock_timestamp() + ($1::bigint * interval '1 millisecond') AS expires", [input.lease_duration_ms],
+      )
+      const expires = iso(nowRows[0]?.expires ?? "")
+      const epoch = 1n
+      const ownershipNonce = digestBytes(randomBytes(32))
+      const fence = canonicalSha256({
+        domain: "sandboxes.disposable-task-journal.claim-fence/v1",
+        dispatch_id: dispatchId,
+        request_sha256: input.request_sha256,
+        lease_epoch: epoch,
+        lease_owner_sha256: input.lease_owner_sha256,
+        lease_expires_at: expires,
+        ownership_nonce_sha256: ownershipNonce,
+      })
+      const effectClaimSha256 = canonicalSha256({
+        schema_version: "sandboxes.disposable-task-effect-claim/v1",
+        dispatch_id: dispatchId,
+        request_sha256: input.request_sha256,
+        provider: input.provider,
+        provider_metadata_scope_sha256: input.provider_metadata_scope_sha256,
+        provider_creation_token_sha256: input.provider_creation_token_sha256,
+        immutable_fingerprint_sha256: input.immutable_fingerprint_sha256,
+        provider_effect_claim_fence_sha256: fence,
+        provider_effect_lease_epoch: epoch,
+        provider_effect_ownership_nonce_sha256: ownershipNonce,
+      })
+      const consumeInput = {
+        dispatch_id: dispatchId,
+        authority_envelope_sha256: input.authority_envelope_sha256,
+        canonical_request_sha256: input.request_sha256,
+        operation_digest: input.operation_digest,
+        provider: input.provider,
+        source_manifest_sha256: input.source_manifest_sha256,
+        input_manifest_sha256: input.input_manifest_sha256,
+        checkpoint_policy_sha256: input.checkpoint_policy_sha256,
+        effect_claim_sha256: effectClaimSha256,
+      }
+      const consumeInputBytes = canonicalBytes(consumeInput)
+      const consumeInputSha256 = digestBytes(consumeInputBytes)
+      const dispatchAnchor = canonicalSha256({
+        domain: "sandboxes.disposable-task-journal.dispatch-anchor/v1",
+        journal_identity_sha256: this.#options.journal_identity_sha256,
+        dispatch_id: dispatchId,
+        request_sha256: input.request_sha256,
+        operation_digest: input.operation_digest,
+        provider_metadata_scope_sha256: input.provider_metadata_scope_sha256,
+        provider_creation_token_sha256: input.provider_creation_token_sha256,
+        immutable_fingerprint_sha256: input.immutable_fingerprint_sha256,
+        authority_consume_input_sha256: consumeInputSha256,
+      })
+      const event = this.#event(store, "PREPARED", dispatchId, input.request_sha256, {
+        idempotency_key_sha256: input.idempotency_key_sha256,
+        operation_digest: input.operation_digest,
+        authority_envelope_sha256: input.authority_envelope_sha256,
+        source_manifest_sha256: input.source_manifest_sha256,
+        input_manifest_sha256: input.input_manifest_sha256,
+        provider: input.provider,
+        provider_metadata_scope_sha256: input.provider_metadata_scope_sha256,
+        provider_creation_token_sha256: input.provider_creation_token_sha256,
+        immutable_fingerprint_sha256: input.immutable_fingerprint_sha256,
+        authority_consume_input_sha256: consumeInputSha256,
+        ownership_nonce_sha256: ownershipNonce,
+        allocation_lease_epoch: epoch,
+        allocation_claim_fence_sha256: fence,
+        allocation_ownership_nonce_sha256: ownershipNonce,
+        effect_claim_sha256: effectClaimSha256,
+        dispatch_anchor_sha256: dispatchAnchor,
+        lease_epoch: epoch,
+        claim_fence_sha256: fence,
+        lease_owner_sha256: input.lease_owner_sha256,
+        lease_expires_at: expires,
+      })
+      await session.query(
+        `SELECT ${SCHEMA}.insert_prepared($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)`,
+        [input.idempotency_key_sha256, input.operation_digest, dispatchId, input.request_sha256,
+          input.canonical_request_bytes, consumeInputBytes, consumeInputSha256,
+          input.authority_envelope_sha256, input.source_manifest_sha256,
+          input.input_manifest_sha256, input.provider, input.provider_metadata_scope_sha256,
+          input.provider_creation_token_sha256, input.immutable_fingerprint_sha256,
+          ownershipNonce, effectClaimSha256, dispatchAnchor, epoch, fence, input.lease_owner_sha256, expires,
+          ...this.#eventParameters(event)],
+      )
+      return { event, terminal: {
+        kind: "prepared" as const, recovery: false as const,
+        dispatch_id: dispatchId, request_sha256: input.request_sha256,
+        lease_epoch: epoch, claim_fence_sha256: fence,
+        lease_owner_sha256: input.lease_owner_sha256, lease_expires_at: expires,
+        provider_metadata_scope_sha256: input.provider_metadata_scope_sha256,
+        provider_creation_token_sha256: input.provider_creation_token_sha256,
+        immutable_fingerprint_sha256: input.immutable_fingerprint_sha256,
+        authorization: {
+          canonical_consume_input_bytes: consumeInputBytes,
+          consume_input_sha256: consumeInputSha256,
+          consume_input: consumeInput,
+          stored_receipt: null,
+        },
+        ownership_nonce_sha256: ownershipNonce,
+        effect_claim_sha256: effectClaimSha256,
+        dispatch_intent_anchor_sha256: null,
+        dispatch_anchor_sha256: dispatchAnchor,
+      } }
+    })
+    if (result.event !== undefined) await this.#witness(result.event)
+    return result.terminal as DisposableTaskJournalPrepareResultV1
+  }
+
+  async bindAuthorizationAndMarkIntent(
+    input: Parameters<DisposableTaskJournalPortV1["bindAuthorizationAndMarkIntent"]>[0],
+  ) {
+    this.#requireReady()
+    assertText(input.dispatch_id)
+    assertDigest(input.request_sha256)
+    assertDigest(input.claim_fence_sha256)
+    assertDigest(input.effect_claim_sha256)
+    if (typeof input.lease_epoch !== "bigint" || input.lease_epoch < 1n) throw adapterError("validation_failed")
+    assertDigest(input.authorization_receipt.receipt_sha256)
+    const receiptBytes = asBytes(input.authorization_receipt.canonical_receipt_bytes)
+    parseCanonicalBytes(receiptBytes)
+    if (digestBytes(receiptBytes) !== input.authorization_receipt.receipt_sha256) throw adapterError("integrity_failed")
+    await this.#healWitness()
+    const result = await this.#serializable(async (session) => {
+      await session.query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+      await session.query("SELECT pg_advisory_xact_lock(36711471343122002)")
+      const store = await this.#store(session)
+      this.#assertAppendable(store)
+      const rows = await session.query<TaskRow>(
+        `SELECT * FROM ${SCHEMA}.tasks WHERE dispatch_id = $1
+          AND lease_expires_at > clock_timestamp()
+          AND state IN ('PREPARED', 'DISPATCH_INTENT', 'DISPATCHED', 'RESULT_PERSISTED')`, [input.dispatch_id],
+      )
+      const row = rows[0]
+      if (row === undefined || rows.length !== 1 || row.request_sha256 !== input.request_sha256 ||
+        row.claim_fence_sha256 !== input.claim_fence_sha256 || dbBigint(row.lease_epoch) !== input.lease_epoch ||
+        row.effect_claim_sha256 !== input.effect_claim_sha256) throw adapterError("integrity_failed")
+      if (row.dispatch_intent_anchor_sha256 !== null) {
+        if (row.authorization_consumption_receipt_sha256 !== input.authorization_receipt.receipt_sha256 ||
+          row.authorization_receipt_bytes === null || !byteEqual(asBytes(row.authorization_receipt_bytes), receiptBytes)) {
+          throw adapterError("integrity_failed")
+        }
+        return { event: undefined, anchor: row.dispatch_intent_anchor_sha256 as Digest }
+      }
+      if (dbBigint(row.allocation_lease_epoch) !== input.lease_epoch ||
+        row.allocation_claim_fence_sha256 !== input.claim_fence_sha256 ||
+        row.allocation_ownership_nonce_sha256 !== row.ownership_nonce_sha256) {
+        throw adapterError("integrity_failed")
+      }
+      const event = this.#event(store, "DISPATCH_INTENT", input.dispatch_id, input.request_sha256, {
+        authorization_consumption_receipt_sha256: input.authorization_receipt.receipt_sha256,
+        effect_claim_sha256: input.effect_claim_sha256,
+        effect_lease_epoch: input.lease_epoch,
+        effect_claim_fence_sha256: input.claim_fence_sha256,
+        effect_ownership_nonce_sha256: row.ownership_nonce_sha256,
+      })
+      const changed = await session.query<{ changed: number }>(
+        `SELECT ${SCHEMA}.bind_authorization_and_mark_intent($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) AS changed`,
+        [input.dispatch_id, input.request_sha256, input.claim_fence_sha256, input.lease_epoch,
+          input.effect_claim_sha256, receiptBytes, input.authorization_receipt.receipt_sha256,
+          event.anchorSha256, ...this.#eventParameters(event)],
+      )
+      if (Number(changed[0]?.changed) !== 1) throw adapterError("integrity_failed")
+      return { event, anchor: event.anchorSha256 }
+    })
+    if (result.event !== undefined) await this.#witness(result.event)
+    return {
+      authorization_consumption_receipt_sha256: input.authorization_receipt.receipt_sha256,
+      dispatch_intent_anchor_sha256: result.anchor,
+    }
+  }
+
+  async markDispatched(input: Parameters<DisposableTaskJournalPortV1["markDispatched"]>[0]) {
+    this.#requireReady()
+    for (const value of [input.request_sha256, input.claim_fence_sha256,
+      input.provider_fingerprint_sha256, input.provider_metadata_scope_sha256]) assertDigest(value)
+    assertText(input.dispatch_id)
+    if (typeof input.lease_epoch !== "bigint" || input.lease_epoch < 1n) throw adapterError("validation_failed")
+    await this.#assertClaim(input.dispatch_id, input.request_sha256, input.claim_fence_sha256, input.lease_epoch)
+    const row = await this.#task(input.dispatch_id)
+    if (row.dispatch_anchor_sha256 === undefined) throw adapterError("integrity_failed")
+    await this.#transition("DISPATCHED", input.dispatch_id, input.request_sha256,
+      input.claim_fence_sha256, {
+        provider_fingerprint_sha256: input.provider_fingerprint_sha256,
+        provider_metadata_scope_sha256: input.provider_metadata_scope_sha256,
+      }, `SELECT ${SCHEMA}.mark_dispatched($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) AS changed`,
+      [input.dispatch_id, input.request_sha256, input.claim_fence_sha256, input.lease_epoch,
+        input.provider_fingerprint_sha256, input.provider_metadata_scope_sha256])
+    return { dispatch_anchor_sha256: row.dispatch_anchor_sha256 as Digest }
+  }
+
+  async markResultPersisted(input: Parameters<DisposableTaskJournalPortV1["markResultPersisted"]>[0]) {
+    this.#requireReady()
+    for (const value of [input.request_sha256, input.claim_fence_sha256,
+      input.result_bundle_sha256, input.checkpoint_handoff_sha256]) assertDigest(value)
+    assertText(input.dispatch_id)
+    if (typeof input.lease_epoch !== "bigint" || input.lease_epoch < 1n) throw adapterError("validation_failed")
+    await this.#assertClaim(input.dispatch_id, input.request_sha256, input.claim_fence_sha256, input.lease_epoch)
+    const resultAnchor = canonicalSha256({
+      domain: "sandboxes.disposable-task-journal.result-persisted/v1",
+      dispatch_id: input.dispatch_id,
+      request_sha256: input.request_sha256,
+      result_bundle_sha256: input.result_bundle_sha256,
+      checkpoint_handoff_sha256: input.checkpoint_handoff_sha256,
+    })
+    await this.#transition("RESULT_PERSISTED", input.dispatch_id, input.request_sha256,
+      input.claim_fence_sha256, {
+        result_bundle_sha256: input.result_bundle_sha256,
+        checkpoint_handoff_sha256: input.checkpoint_handoff_sha256,
+        result_persisted_anchor_sha256: resultAnchor,
+      }, `SELECT ${SCHEMA}.mark_result_persisted($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) AS changed`,
+      [input.dispatch_id, input.request_sha256, input.claim_fence_sha256, input.lease_epoch,
+        input.result_bundle_sha256, input.checkpoint_handoff_sha256, resultAnchor])
+    return { result_persisted_anchor_sha256: resultAnchor }
+  }
+
+  async commitOutcome(input: Parameters<DisposableTaskJournalPortV1["commitOutcome"]>[0]): Promise<DisposableTaskJournalCompletedV1> {
+    this.#requireReady()
+    this.#validateTerminalInput(input)
+    await this.#assertClaim(input.dispatch_id, input.request_sha256, input.claim_fence_sha256, input.lease_epoch)
+    const existing = await this.#task(input.dispatch_id)
+    if (input.execution_receipt !== null) exactExecutionReceipt(input.execution_receipt, existing)
+    if (existing.state === "OUTCOME") {
+      const stored = this.#terminal(existing) as DisposableTaskJournalCompletedV1
+      const storedExecution = stored.execution_receipt === null ? null : canonicalJson(stored.execution_receipt)
+      const candidateExecution = input.execution_receipt === null ? null : canonicalJson(input.execution_receipt)
+      if (stored.outcome_kind !== input.outcome_kind || storedExecution !== candidateExecution ||
+        stored.failure_code !== input.failure_code || stored.failure_evidence_sha256 !== input.failure_evidence_sha256) {
+        throw adapterError("integrity_failed")
+      }
+      return stored
+    }
+    if (existing.state === "QUARANTINED") throw adapterError("integrity_failed")
+    const executionBytes = input.execution_receipt === null ? null : canonicalBytes(input.execution_receipt)
+    const executionSha = input.execution_receipt?.execution_receipt_core_sha256 ?? null
+    const completedBasis = {
+      kind: "outcome" as const,
+      request_sha256: input.request_sha256,
+      outcome_kind: input.outcome_kind,
+      execution_receipt_sha256: executionSha,
+      failure_code: input.failure_code,
+      failure_evidence_sha256: input.failure_evidence_sha256,
+    }
+    const result = await this.#terminalTransition(
+      "OUTCOME", input.dispatch_id, input.request_sha256, input.claim_fence_sha256,
+      completedBasis, [input.lease_epoch, input.outcome_kind, executionBytes, executionSha, input.failure_code,
+        input.failure_evidence_sha256, null, null],
+    )
+    return {
+      kind: "outcome", request_sha256: input.request_sha256,
+      outcome_kind: input.outcome_kind, execution_receipt: input.execution_receipt,
+      failure_code: input.failure_code, failure_evidence_sha256: input.failure_evidence_sha256,
+      canonical_anchor_bytes: result.anchorBytes, anchor_sha256: result.anchorSha256,
+    }
+  }
+
+  async quarantine(input: Parameters<DisposableTaskJournalPortV1["quarantine"]>[0]): Promise<DisposableTaskJournalQuarantinedV1> {
+    this.#requireReady()
+    assertText(input.dispatch_id)
+    assertText(input.quarantine_reason)
+    for (const value of [input.request_sha256, input.claim_fence_sha256,
+      input.quarantine_evidence_sha256]) assertDigest(value)
+    if (typeof input.lease_epoch !== "bigint" || input.lease_epoch < 1n) throw adapterError("validation_failed")
+    await this.#assertClaim(input.dispatch_id, input.request_sha256, input.claim_fence_sha256, input.lease_epoch)
+    const existing = await this.#task(input.dispatch_id)
+    if (existing.state === "QUARANTINED") {
+      const stored = this.#terminal(existing) as DisposableTaskJournalQuarantinedV1
+      if (stored.quarantine_reason !== input.quarantine_reason ||
+        stored.quarantine_evidence_sha256 !== input.quarantine_evidence_sha256) throw adapterError("integrity_failed")
+      return stored
+    }
+    if (existing.state === "OUTCOME") throw adapterError("integrity_failed")
+    const result = await this.#terminalTransition(
+      "QUARANTINED", input.dispatch_id, input.request_sha256, input.claim_fence_sha256,
+      { kind: "quarantined", request_sha256: input.request_sha256,
+        quarantine_reason: input.quarantine_reason,
+        quarantine_evidence_sha256: input.quarantine_evidence_sha256 },
+      [input.lease_epoch, null, null, null, null, null, input.quarantine_reason, input.quarantine_evidence_sha256],
+    )
+    return {
+      kind: "quarantined", request_sha256: input.request_sha256,
+      quarantine_reason: input.quarantine_reason,
+      quarantine_evidence_sha256: input.quarantine_evidence_sha256,
+      canonical_anchor_bytes: result.anchorBytes, anchor_sha256: result.anchorSha256,
+    }
+  }
+
+  async close(): Promise<void> {
+    this.#ready = false
+    await Promise.all([this.#client.close(), this.#witnessAckClient.close()]).then(() => undefined)
+  }
+
+  async #transition(
+    kind: string,
+    dispatchId: string,
+    requestSha256: Digest,
+    fence: Digest,
+    payload: unknown,
+    statement: string,
+    baseParameters: unknown[],
+  ): Promise<void> {
+    await this.#healWitness()
+    const result = await this.#serializable(async (session) => {
+      await session.query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+      await session.query("SELECT pg_advisory_xact_lock(36711471343122002)")
+      const store = await this.#store(session)
+      this.#assertAppendable(store)
+      const event = this.#event(store, kind, dispatchId, requestSha256, { claim_fence_sha256: fence, ...payload as object })
+      const rows = await session.query<{ changed: number }>(statement,
+        [...baseParameters, ...this.#eventParameters(event)])
+      const changed = Number(rows[0]?.changed)
+      return { event: changed === 1 ? event : undefined }
+    })
+    if (result.event !== undefined) await this.#witness(result.event)
+  }
+
+  async #terminalTransition(
+    state: "OUTCOME" | "QUARANTINED",
+    dispatchId: string,
+    requestSha256: Digest,
+    fence: Digest,
+    payload: unknown,
+    terminalParameters: unknown[],
+  ): Promise<SignedEvent> {
+    await this.#healWitness()
+    const event = await this.#serializable(async (session) => {
+      await session.query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+      await session.query("SELECT pg_advisory_xact_lock(36711471343122002)")
+      const store = await this.#store(session)
+      this.#assertAppendable(store)
+      const signed = this.#event(store, state, dispatchId, requestSha256,
+        { claim_fence_sha256: fence, ...payload as object })
+      const rows = await session.query<{ changed: number }>(
+        `SELECT ${SCHEMA}.commit_terminal($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) AS changed`,
+        [dispatchId, requestSha256, fence, terminalParameters[0], state, ...terminalParameters.slice(1),
+          signed.anchorBytes, signed.anchorSha256, ...this.#eventParameters(signed, true)],
+      )
+      if (Number(rows[0]?.changed) !== 1) throw adapterError("integrity_failed")
+      return signed
+    })
+    await this.#witness(event)
+    return event
+  }
+
+  #event(
+    store: StoreRow,
+    kind: string,
+    dispatchId: string,
+    requestSha256: Digest,
+    payload: unknown,
+  ): SignedEvent {
+    const sequence = dbBigint(store.head_sequence) + 1n
+    const prior = store.head_frontier_sha256 as Digest | null
+    const record = {
+      schema_version: "sandboxes.disposable-task-journal-record/v1",
+      journal_identity_sha256: this.#options.journal_identity_sha256,
+      restore_domain_sha256: this.#options.restore_domain_sha256,
+      record_kind: kind,
+      dispatch_id: dispatchId,
+      request_sha256: requestSha256,
+      payload,
+    }
+    const recordBytes = canonicalBytes(record)
+    const recordSha256 = digestBytes(recordBytes)
+    const unsigned = {
+      schema_version: "sandboxes.disposable-task-journal-anchor/v1",
+      journal_identity_sha256: this.#options.journal_identity_sha256,
+      restore_domain_sha256: this.#options.restore_domain_sha256,
+      journal_sequence: sequence,
+      prior_frontier_sha256: prior,
+      record_sha256: recordSha256,
+      signer_principal: this.#options.signer.signer_principal,
+      signing_key_id: this.#options.signer.signing_key_id,
+    }
+    const frontier = canonicalSha256(unsigned)
+    const signedBasis = { ...unsigned, frontier_sha256: frontier }
+    const signature = this.#options.signer.sign(canonicalBytes(signedBasis))
+    if (signature.byteLength !== 64) throw adapterError("integrity_failed")
+    const anchor = { ...signedBasis, signature_base64url: Buffer.from(signature).toString("base64url"), record }
+    const anchorBytes = canonicalBytes(anchor)
+    return {
+      sequence, prior, frontier, kind, dispatchId, requestSha256,
+      recordBytes, recordSha256, anchorBytes, anchorSha256: digestBytes(anchorBytes),
+    }
+  }
+
+  #eventParameters(event: SignedEvent, omitKind = false): unknown[] {
+    const all = [event.sequence, event.prior, event.frontier, event.recordBytes,
+      event.recordSha256, event.anchorBytes, event.anchorSha256]
+    return omitKind ? [event.sequence, event.prior, event.frontier, event.kind,
+      event.recordBytes, event.recordSha256, event.anchorBytes, event.anchorSha256] : all
+  }
+
+  async #witness(event: SignedEvent): Promise<void> {
+    let current: DurableJournalWitnessReceiptV1 | null
+    try {
+      current = await this.#options.external_head_witness.readHead(this.#options.journal_identity_sha256)
+    } catch {
+      throw adapterError("provider_state_unknown", { quarantineRequired: true })
+    }
+    if (current?.sequence === event.sequence && current.frontier_sha256 === event.frontier) {
+      this.#verifyWitnessReceipt(current, event)
+      await this.#ackWitness(event, current)
+      return
+    }
+    const expectedSequence = event.sequence - 1n
+    if ((current?.sequence ?? 0n) !== expectedSequence ||
+      (current?.frontier_sha256 ?? null) !== event.prior) throw adapterError("integrity_failed")
+    let advanced: DurableJournalWitnessReceiptV1
+    try {
+      advanced = await this.#options.external_head_witness.compareAndAdvance({
+        journal_identity_sha256: this.#options.journal_identity_sha256,
+        expected_sequence: expectedSequence,
+        expected_frontier_sha256: event.prior,
+        successor_sequence: event.sequence,
+        successor_frontier_sha256: event.frontier,
+        signed_anchor_bytes: event.anchorBytes,
+      })
+    } catch {
+      throw adapterError("provider_state_unknown", { quarantineRequired: true })
+    }
+    if (advanced.sequence !== event.sequence || advanced.frontier_sha256 !== event.frontier) {
+      throw adapterError("integrity_failed")
+    }
+    this.#verifyWitnessReceipt(advanced, event)
+    await this.#ackWitness(event, advanced)
+  }
+
+  #verifyWitnessReceipt(receipt: DurableJournalWitnessReceiptV1, event: SignedEvent): void {
+    const receiptBytes = asBytes(receipt.canonical_receipt_bytes)
+    if (digestBytes(receiptBytes) !== receipt.receipt_sha256 || receipt.sequence !== event.sequence ||
+      receipt.frontier_sha256 !== event.frontier) throw adapterError("integrity_failed")
+    const value = parseCanonicalBytes(receiptBytes)
+    if (value === null || typeof value !== "object" || Array.isArray(value)) throw adapterError("integrity_failed")
+    const record = value as Record<string, unknown>
+    const signatureText = record.signature_base64url
+    if (!exactKeys(record, ["schema_version", "witness_identity_sha256", "restore_domain_sha256",
+      "journal_identity_sha256", "expected_sequence", "expected_frontier_sha256", "sequence",
+      "frontier_sha256", "signed_anchor_sha256", "signing_key_id", "signature_base64url"]) ||
+      record.schema_version !== "sandboxes.durable-journal-witness-receipt/v1" ||
+      record.witness_identity_sha256 !== this.#options.external_head_witness.describe().witness_identity_sha256 ||
+      record.restore_domain_sha256 !== this.#options.external_head_witness.describe().restore_domain_sha256 ||
+      record.journal_identity_sha256 !== this.#options.journal_identity_sha256 ||
+      record.expected_sequence !== event.sequence - 1n || record.expected_frontier_sha256 !== event.prior ||
+      record.sequence !== event.sequence || record.frontier_sha256 !== event.frontier ||
+      record.signed_anchor_sha256 !== event.anchorSha256 ||
+      record.signing_key_id !== this.#options.witness_receipt_verifier.signing_key_id ||
+      typeof signatureText !== "string") throw adapterError("integrity_failed")
+    const { signature_base64url: _signature, ...unsigned } = record
+    let signature: Uint8Array
+    try {
+      signature = Uint8Array.from(Buffer.from(signatureText, "base64url"))
+      if (Buffer.from(signature).toString("base64url") !== signatureText) throw adapterError("integrity_failed")
+    } catch { throw adapterError("integrity_failed") }
+    if (signature.byteLength !== 64 ||
+      !this.#options.witness_receipt_verifier.verify(canonicalBytes(unsigned), signature)) {
+      throw adapterError("integrity_failed")
+    }
+  }
+
+  async #ackWitness(event: SignedEvent, receipt: DurableJournalWitnessReceiptV1): Promise<void> {
+    await this.#witnessAckClient.query(
+      `SELECT ${SCHEMA}.acknowledge_witness($1,$2,$3,$4)`,
+      [event.sequence, event.frontier, receipt.canonical_receipt_bytes, receipt.receipt_sha256],
+    )
+  }
+
+  async #healWitness(): Promise<void> {
+    const store = await this.#store(this.#client)
+    const head = dbBigint(store.head_sequence)
+    const witnessed = dbBigint(store.witnessed_sequence)
+    let external: DurableJournalWitnessReceiptV1 | null
+    try {
+      external = await this.#options.external_head_witness.readHead(this.#options.journal_identity_sha256)
+    } catch {
+      throw adapterError("provider_state_unknown", { quarantineRequired: true })
+    }
+    if (head === witnessed) {
+      if ((external?.sequence ?? 0n) !== witnessed ||
+        (external?.frontier_sha256 ?? null) !== store.witnessed_frontier_sha256) {
+        throw adapterError("integrity_failed")
+      }
+      if (head === 0n) {
+        if (store.witness_receipt_bytes !== null || store.witness_receipt_sha256 !== null || external !== null) {
+          throw adapterError("integrity_failed")
+        }
+      } else {
+        const eventRows = await this.#client.query<EventRow>(
+          `SELECT * FROM ${SCHEMA}.events WHERE journal_sequence = $1`, [head],
+        )
+        const row = eventRows[0]
+        if (row === undefined || external === null || store.witness_receipt_bytes === null ||
+          store.witness_receipt_sha256 !== external.receipt_sha256 ||
+          !byteEqual(asBytes(store.witness_receipt_bytes), external.canonical_receipt_bytes)) throw adapterError("integrity_failed")
+        this.#verifyEvent(row, store)
+        this.#verifyWitnessReceipt(external, {
+          sequence: head, prior: row.prior_frontier_sha256 as Digest | null,
+          frontier: row.frontier_sha256 as Digest, kind: row.record_kind,
+          dispatchId: row.dispatch_id, requestSha256: row.request_sha256 as Digest,
+          recordBytes: asBytes(row.record_bytes), recordSha256: row.record_sha256 as Digest,
+          anchorBytes: asBytes(row.signed_anchor_bytes), anchorSha256: row.signed_anchor_sha256 as Digest,
+        })
+      }
+      return
+    }
+    if (head !== witnessed + 1n) throw adapterError("integrity_failed")
+    const rows = await this.#client.query<EventRow>(
+      `SELECT * FROM ${SCHEMA}.events WHERE journal_sequence = $1`, [head],
+    )
+    const event = rows[0]
+    if (event === undefined) throw adapterError("integrity_failed")
+    this.#verifyEvent(event, store)
+    await this.#witness({
+      sequence: head,
+      prior: event.prior_frontier_sha256 as Digest | null,
+      frontier: event.frontier_sha256 as Digest,
+      kind: event.record_kind,
+      dispatchId: event.dispatch_id,
+      requestSha256: event.request_sha256 as Digest,
+      recordBytes: asBytes(event.record_bytes),
+      recordSha256: event.record_sha256 as Digest,
+      anchorBytes: asBytes(event.signed_anchor_bytes),
+      anchorSha256: event.signed_anchor_sha256 as Digest,
+    })
+  }
+
+  #verifyEvent(row: EventRow, store: StoreRow): void {
+    const recordBytes = asBytes(row.record_bytes)
+    const anchorBytes = asBytes(row.signed_anchor_bytes)
+    if (digestBytes(recordBytes) !== row.record_sha256 || digestBytes(anchorBytes) !== row.signed_anchor_sha256) {
+      throw adapterError("integrity_failed")
+    }
+    const value = parseCanonicalBytes(anchorBytes)
+    if (value === null || typeof value !== "object" || Array.isArray(value)) throw adapterError("integrity_failed")
+    const anchor = value as Record<string, unknown>
+    const signatureText = anchor.signature_base64url
+    const record = anchor.record
+    if (!exactKeys(anchor, ["schema_version", "journal_identity_sha256", "restore_domain_sha256",
+      "journal_sequence", "prior_frontier_sha256", "record_sha256", "signer_principal",
+      "signing_key_id", "frontier_sha256", "signature_base64url", "record"]) ||
+      anchor.schema_version !== "sandboxes.disposable-task-journal-anchor/v1" ||
+      typeof signatureText !== "string" || record === null || typeof record !== "object" || Array.isArray(record) ||
+      !exactKeys(record, ["schema_version", "journal_identity_sha256", "restore_domain_sha256",
+        "record_kind", "dispatch_id", "request_sha256", "payload"]) ||
+      (record as Record<string, unknown>).schema_version !== "sandboxes.disposable-task-journal-record/v1" ||
+      (record as Record<string, unknown>).record_kind !== row.record_kind ||
+      (record as Record<string, unknown>).dispatch_id !== row.dispatch_id ||
+      (record as Record<string, unknown>).request_sha256 !== row.request_sha256 ||
+      canonicalSha256(record) !== row.record_sha256 || anchor.journal_sequence !== dbBigint(row.journal_sequence) ||
+      anchor.prior_frontier_sha256 !== row.prior_frontier_sha256 || anchor.frontier_sha256 !== row.frontier_sha256 ||
+      anchor.journal_identity_sha256 !== store.journal_identity_sha256 ||
+      anchor.restore_domain_sha256 !== store.restore_domain_sha256 ||
+      anchor.signer_principal !== store.signer_principal || anchor.signing_key_id !== store.signing_key_id) {
+      throw adapterError("integrity_failed")
+    }
+    const { signature_base64url: _signature, record: _record, frontier_sha256: frontier, ...unsigned } = anchor
+    if (canonicalSha256(unsigned) !== frontier) throw adapterError("integrity_failed")
+    let signature: Uint8Array
+    try {
+      signature = Uint8Array.from(Buffer.from(signatureText, "base64url"))
+      if (Buffer.from(signature).toString("base64url") !== signatureText) throw adapterError("integrity_failed")
+    } catch { throw adapterError("integrity_failed") }
+    if (signature.byteLength !== 64 ||
+      !this.#options.verifier.verify(canonicalBytes({ ...unsigned, frontier_sha256: frontier }), signature)) {
+      throw adapterError("integrity_failed")
+    }
+  }
+
+  async #verifyCatalog(): Promise<void> {
+    const owners = await this.#client.query<{ database_owner: string; schema_owner: string }>(`
+      SELECT database_owner.rolname::text AS database_owner, schema_owner.rolname::text AS schema_owner
+      FROM pg_catalog.pg_database database
+      JOIN pg_catalog.pg_roles database_owner ON database_owner.oid = database.datdba
+      JOIN pg_catalog.pg_namespace namespace ON namespace.nspname = '${SCHEMA}'
+      JOIN pg_catalog.pg_roles schema_owner ON schema_owner.oid = namespace.nspowner
+      WHERE database.datname = current_database()`)
+    if (owners.length !== 1 || owners[0]!.database_owner !== this.#options.expected_migration_role ||
+      owners[0]!.schema_owner !== this.#options.expected_migration_role) throw adapterError("integrity_failed")
+
+    const relations = await this.#client.query(`SELECT relation.relname, relation.relkind,
+        relation.relpersistence, access_method.amname AS access_method,
+        relation.relrowsecurity, relation.relforcerowsecurity
+      FROM pg_catalog.pg_class relation
+      JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
+      JOIN pg_catalog.pg_am access_method ON access_method.oid = relation.relam
+      WHERE namespace.nspname = '${SCHEMA}' AND relation.relkind = 'r' ORDER BY relation.relname`)
+    if (digestBytes(bytes(JSON.stringify(relations))) !== CATALOG_RELATIONS_SHA256) {
+      throw adapterError("integrity_failed")
+    }
+    const relationOwners = await this.#client.query<{ relname: string; owner: string }>(`
+      SELECT relation.relname::text AS relname, owner.rolname::text AS owner
+      FROM pg_catalog.pg_class relation
+      JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
+      JOIN pg_catalog.pg_roles owner ON owner.oid = relation.relowner
+      WHERE namespace.nspname = '${SCHEMA}' AND relation.relkind = 'r' ORDER BY relation.relname`)
+    if (!exactStringSet(relationOwners.map((row) => row.relname), EXPECTED_TABLES) ||
+      relationOwners.some((row) => row.owner !== this.#options.expected_migration_role)) {
+      throw adapterError("integrity_failed")
+    }
+
+    const columns = await this.#client.query(`SELECT relation.relname, attribute.attnum,
+        attribute.attname, pg_catalog.format_type(attribute.atttypid, attribute.atttypmod) AS type,
+        attribute.attnotnull,
+        COALESCE(pg_catalog.pg_get_expr(default_value.adbin, default_value.adrelid), '') AS default_expr,
+        attribute.attidentity, attribute.attgenerated, COALESCE(attribute.attacl::text, '') AS attacl
+      FROM pg_catalog.pg_attribute attribute
+      JOIN pg_catalog.pg_class relation ON relation.oid = attribute.attrelid
+      JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
+      LEFT JOIN pg_catalog.pg_attrdef default_value
+        ON default_value.adrelid = attribute.attrelid AND default_value.adnum = attribute.attnum
+      WHERE namespace.nspname = '${SCHEMA}' AND relation.relkind = 'r'
+        AND attribute.attnum > 0 AND NOT attribute.attisdropped
+      ORDER BY relation.relname, attribute.attnum`)
+    if (digestBytes(bytes(JSON.stringify(columns))) !== CATALOG_COLUMNS_SHA256) throw adapterError("integrity_failed")
+
+    const constraints = await this.#client.query(`SELECT relation.relname, constraint_row.conname,
+        constraint_row.contype, constraint_row.condeferrable, constraint_row.condeferred,
+        constraint_row.convalidated, pg_catalog.pg_get_constraintdef(constraint_row.oid, true) AS definition
+      FROM pg_catalog.pg_constraint constraint_row
+      JOIN pg_catalog.pg_class relation ON relation.oid = constraint_row.conrelid
+      JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
+      WHERE namespace.nspname = '${SCHEMA}' ORDER BY relation.relname, constraint_row.conname`)
+    if (digestBytes(bytes(JSON.stringify(constraints))) !== CATALOG_CONSTRAINTS_SHA256) throw adapterError("integrity_failed")
+
+    const indexes = await this.#client.query(`SELECT relation.relname, index_relation.relname AS index_name,
+        index_row.indisunique, index_row.indisprimary, index_row.indisvalid, index_row.indisready,
+        pg_catalog.pg_get_indexdef(index_relation.oid) AS definition
+      FROM pg_catalog.pg_index index_row
+      JOIN pg_catalog.pg_class relation ON relation.oid = index_row.indrelid
+      JOIN pg_catalog.pg_class index_relation ON index_relation.oid = index_row.indexrelid
+      JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
+      WHERE namespace.nspname = '${SCHEMA}' ORDER BY relation.relname, index_relation.relname`)
+    if (digestBytes(bytes(JSON.stringify(indexes))) !== CATALOG_INDEXES_SHA256) throw adapterError("integrity_failed")
+
+    const functions = await this.#client.query<{ identity: string; owner: string }>(`
+      SELECT procedure.proname::text || '(' || pg_catalog.oidvectortypes(procedure.proargtypes) || ')' AS identity,
+        owner.rolname::text AS owner, language.lanname AS language, procedure.prosecdef,
+        procedure.proconfig, pg_catalog.pg_get_functiondef(procedure.oid) AS definition
+      FROM pg_catalog.pg_proc procedure
+      JOIN pg_catalog.pg_namespace namespace ON namespace.oid = procedure.pronamespace
+      JOIN pg_catalog.pg_roles owner ON owner.oid = procedure.proowner
+      JOIN pg_catalog.pg_language language ON language.oid = procedure.prolang
+      WHERE namespace.nspname = '${SCHEMA}' ORDER BY identity`)
+    if (!exactStringSet(functions.map((row) => row.identity), EXPECTED_FUNCTIONS) ||
+      functions.some((row) => row.owner !== this.#options.expected_migration_role) ||
+      digestBytes(bytes(JSON.stringify(functions.map(({ owner: _owner, ...row }) => row)))) !== CATALOG_FUNCTIONS_SHA256) {
+      throw adapterError("integrity_failed")
+    }
+
+    const triggers = await this.#client.query(`SELECT trigger.tgname, relation.relname AS relation_name,
+        trigger.tgenabled, trigger.tgisinternal, procedure.proname AS function_name,
+        pg_catalog.pg_get_triggerdef(trigger.oid, true) AS definition
+      FROM pg_catalog.pg_trigger trigger
+      JOIN pg_catalog.pg_class relation ON relation.oid = trigger.tgrelid
+      JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
+      JOIN pg_catalog.pg_proc procedure ON procedure.oid = trigger.tgfoid
+      WHERE namespace.nspname = '${SCHEMA}' AND NOT trigger.tgisinternal ORDER BY trigger.tgname`)
+    if (digestBytes(bytes(JSON.stringify(triggers))) !== CATALOG_TRIGGERS_SHA256) throw adapterError("integrity_failed")
+
+    const relationAcls = await this.#client.query<{
+      relname: string; grantee: string; privilege_type: string; is_grantable: boolean
+    }>(`SELECT relation.relname::text AS relname, COALESCE(grantee.rolname::text, 'PUBLIC') AS grantee,
+        acl.privilege_type::text AS privilege_type, acl.is_grantable
+      FROM pg_catalog.pg_class relation
+      JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
+      CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(relation.relacl,
+        pg_catalog.acldefault('r', relation.relowner))) acl
+      LEFT JOIN pg_catalog.pg_roles grantee ON grantee.oid = acl.grantee
+      WHERE namespace.nspname = '${SCHEMA}' AND relation.relkind = 'r'`)
+    const ownerPrivileges = ["DELETE", "INSERT", "REFERENCES", "SELECT", "TRIGGER", "TRUNCATE", "UPDATE"]
+    const expectedRelationAcls = EXPECTED_TABLES.flatMap((table) => [
+      ...ownerPrivileges.map((privilege) => `${table}:${this.#options.expected_migration_role}:${privilege}:false`),
+      ...(["events", "schema_migrations", "store", "tasks"].includes(table)
+        ? [`${table}:${this.#options.expected_runtime_role}:SELECT:false`] : []),
+    ])
+    if (!exactStringSet(relationAcls.map((row) =>
+      `${row.relname}:${row.grantee}:${row.privilege_type}:${String(row.is_grantable)}`), expectedRelationAcls)) {
+      throw adapterError("integrity_failed")
+    }
+
+    const schemaAcls = await this.#client.query<{ grantee: string; privilege_type: string; is_grantable: boolean }>(`
+      SELECT COALESCE(grantee.rolname::text, 'PUBLIC') AS grantee,
+        acl.privilege_type::text AS privilege_type, acl.is_grantable
+      FROM pg_catalog.pg_namespace namespace
+      CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(namespace.nspacl,
+        pg_catalog.acldefault('n', namespace.nspowner))) acl
+      LEFT JOIN pg_catalog.pg_roles grantee ON grantee.oid = acl.grantee WHERE namespace.nspname = '${SCHEMA}'`)
+    if (!exactStringSet(schemaAcls.map((row) =>
+      `${row.grantee}:${row.privilege_type}:${String(row.is_grantable)}`), [
+      `${this.#options.expected_migration_role}:CREATE:false`, `${this.#options.expected_migration_role}:USAGE:false`,
+      `${this.#options.expected_runtime_role}:USAGE:false`,
+      `${this.#options.expected_witness_acknowledgement_role}:USAGE:false`,
+    ])) throw adapterError("integrity_failed")
+
+    const functionAcls = await this.#client.query<{
+      identity: string; grantee: string; privilege_type: string; is_grantable: boolean
+    }>(`SELECT procedure.proname::text || '(' || pg_catalog.oidvectortypes(procedure.proargtypes) || ')' AS identity,
+        COALESCE(grantee.rolname::text, 'PUBLIC') AS grantee,
+        acl.privilege_type::text AS privilege_type, acl.is_grantable
+      FROM pg_catalog.pg_proc procedure
+      JOIN pg_catalog.pg_namespace namespace ON namespace.oid = procedure.pronamespace
+      CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(procedure.proacl,
+        pg_catalog.acldefault('f', procedure.proowner))) acl
+      LEFT JOIN pg_catalog.pg_roles grantee ON grantee.oid = acl.grantee WHERE namespace.nspname = '${SCHEMA}'`)
+    const runtimeFunctions = new Set(EXPECTED_FUNCTIONS.filter((identity) =>
+      !identity.startsWith("acknowledge_witness(") && !identity.startsWith("append_event(") &&
+      identity !== "reject_mutation()"))
+    const expectedFunctionAcls = EXPECTED_FUNCTIONS.flatMap((identity) => [
+      `${identity}:${this.#options.expected_migration_role}:EXECUTE:false`,
+      ...(runtimeFunctions.has(identity) ? [`${identity}:${this.#options.expected_runtime_role}:EXECUTE:false`] : []),
+      ...(identity.startsWith("acknowledge_witness(")
+        ? [`${identity}:${this.#options.expected_witness_acknowledgement_role}:EXECUTE:false`] : []),
+    ])
+    if (!exactStringSet(functionAcls.map((row) =>
+      `${row.identity}:${row.grantee}:${row.privilege_type}:${String(row.is_grantable)}`), expectedFunctionAcls)) {
+      throw adapterError("integrity_failed")
+    }
+
+    const migrations = await this.#client.query<{ migration_name: string; checksum_sha256: string }>(
+      `SELECT migration_name, checksum_sha256 FROM ${SCHEMA}.schema_migrations`,
+    )
+    const migrationChecksum = digestBytes(bytes(readFileSync(migrationPath(), "utf8")))
+    if (migrations.length !== 1 || migrations[0]!.migration_name !== MIGRATION_NAME ||
+      migrations[0]!.checksum_sha256 !== migrationChecksum) throw adapterError("integrity_failed")
+  }
+
+  async #assertReady(): Promise<void> {
+    await this.#verifyCatalog()
+    const store = await this.#store(this.#client)
+    const witness = this.#options.external_head_witness.describe()
+    if (store.journal_identity_sha256 !== this.#options.journal_identity_sha256 ||
+      store.restore_domain_sha256 !== this.#options.restore_domain_sha256 ||
+      store.external_head_witness_sha256 !== witness.witness_identity_sha256 ||
+      store.witness_verification_key_sha256 !== this.#options.witness_receipt_verifier.verification_key_sha256 ||
+      store.encrypted_at_rest !== true || store.signer_principal !== this.#options.signer.signer_principal ||
+      store.signing_key_id !== this.#options.signer.signing_key_id ||
+      store.verification_key_sha256 !== this.#options.signer.verification_key_sha256) {
+      throw adapterError("integrity_failed")
+    }
+    const privileges = await this.#client.query<{
+      schema_create: boolean; tasks_insert: boolean; tasks_update: boolean; tasks_delete: boolean
+      events_insert: boolean; events_update: boolean; events_delete: boolean
+    }>(`SELECT
+      has_schema_privilege(current_user, '${SCHEMA}', 'CREATE') AS schema_create,
+      has_table_privilege(current_user, '${SCHEMA}.tasks', 'INSERT') AS tasks_insert,
+      has_table_privilege(current_user, '${SCHEMA}.tasks', 'UPDATE') AS tasks_update,
+      has_table_privilege(current_user, '${SCHEMA}.tasks', 'DELETE') AS tasks_delete,
+      has_table_privilege(current_user, '${SCHEMA}.events', 'INSERT') AS events_insert,
+      has_table_privilege(current_user, '${SCHEMA}.events', 'UPDATE') AS events_update,
+      has_table_privilege(current_user, '${SCHEMA}.events', 'DELETE') AS events_delete`)
+    const privilege = privileges[0]
+    if (privilege === undefined || privilege.schema_create || privilege.tasks_insert || privilege.tasks_update ||
+      privilege.tasks_delete || privilege.events_insert || privilege.events_update || privilege.events_delete) {
+      throw adapterError("integrity_failed")
+    }
+    const runtimeFunctions = await this.#client.query<{
+      can_ack: boolean; can_append_internal: boolean; public_can_ack: boolean
+    }>(`SELECT
+      has_function_privilege(current_user, '${SCHEMA}.acknowledge_witness(bigint,text,bytea,text)', 'EXECUTE') AS can_ack,
+      has_function_privilege(current_user, '${SCHEMA}.append_event(bigint,text,text,text,text,text,bytea,text,bytea,text)', 'EXECUTE') AS can_append_internal,
+      has_function_privilege('public', '${SCHEMA}.acknowledge_witness(bigint,text,bytea,text)', 'EXECUTE') AS public_can_ack`)
+    if (runtimeFunctions[0]?.can_ack !== false || runtimeFunctions[0]?.can_append_internal !== false ||
+      runtimeFunctions[0]?.public_can_ack !== false) throw adapterError("integrity_failed")
+    const witnessPrivileges = await this.#witnessAckClient.query<{
+      can_ack: boolean; can_prepare: boolean; tasks_select: boolean; schema_create: boolean
+    }>(`SELECT
+      has_function_privilege(current_user, '${SCHEMA}.acknowledge_witness(bigint,text,bytea,text)', 'EXECUTE') AS can_ack,
+      has_function_privilege(current_user,
+        '${SCHEMA}.insert_prepared(text,text,text,text,bytea,bytea,text,text,text,text,text,text,text,text,text,text,text,bigint,text,text,timestamptz,bigint,text,text,bytea,text,bytea,text)',
+        'EXECUTE') AS can_prepare,
+      has_table_privilege(current_user, '${SCHEMA}.tasks', 'SELECT') AS tasks_select,
+      has_schema_privilege(current_user, '${SCHEMA}', 'CREATE') AS schema_create`)
+    if (witnessPrivileges[0]?.can_ack !== true || witnessPrivileges[0]?.can_prepare !== false ||
+      witnessPrivileges[0]?.tasks_select !== false || witnessPrivileges[0]?.schema_create !== false) {
+      throw adapterError("integrity_failed")
+    }
+    const events = await this.#client.query<EventRow>(`SELECT * FROM ${SCHEMA}.events ORDER BY journal_sequence`)
+    if (BigInt(events.length) !== dbBigint(store.head_sequence)) throw adapterError("integrity_failed")
+    let sequence = 1n
+    let prior: string | null = null
+    for (const event of events) {
+      if (dbBigint(event.journal_sequence) !== sequence || event.prior_frontier_sha256 !== prior) {
+        throw adapterError("integrity_failed")
+      }
+      this.#verifyEvent(event, store)
+      prior = event.frontier_sha256
+      sequence += 1n
+    }
+    if (prior !== store.head_frontier_sha256) throw adapterError("integrity_failed")
+    const tasks = await this.#client.query<TaskRow>(`SELECT * FROM ${SCHEMA}.tasks ORDER BY dispatch_id`)
+    const tasksByDispatch = new Map(tasks.map((task) => [task.dispatch_id, task]))
+    const projected = new Map<string, TaskRow["state"]>()
+    const bindings = new Map<string, Record<string, unknown>>()
+    for (const event of events) {
+      const task = tasksByDispatch.get(event.dispatch_id)
+      if (task === undefined || task.request_sha256 !== event.request_sha256) throw adapterError("integrity_failed")
+      const value = parseCanonicalBytes(asBytes(event.record_bytes))
+      if (value === null || typeof value !== "object" || Array.isArray(value)) throw adapterError("integrity_failed")
+      const record = value as Record<string, unknown>
+      if (record.dispatch_id !== event.dispatch_id || record.request_sha256 !== event.request_sha256 ||
+        record.record_kind !== event.record_kind) throw adapterError("integrity_failed")
+      const payload = record.payload
+      if (payload === null || typeof payload !== "object" || Array.isArray(payload)) throw adapterError("integrity_failed")
+      const eventBindings = payload as Record<string, unknown>
+      const current = projected.get(event.dispatch_id)
+      switch (event.record_kind) {
+        case "PREPARED": {
+          if (current !== undefined) throw adapterError("integrity_failed")
+          if (eventBindings.idempotency_key_sha256 !== task.idempotency_key_sha256 ||
+            eventBindings.operation_digest !== task.operation_digest || eventBindings.authority_envelope_sha256 !== task.authority_envelope_sha256 ||
+            eventBindings.source_manifest_sha256 !== task.source_manifest_sha256 || eventBindings.input_manifest_sha256 !== task.input_manifest_sha256 ||
+            eventBindings.provider !== task.provider || eventBindings.provider_metadata_scope_sha256 !== task.provider_metadata_scope_sha256 ||
+            eventBindings.provider_creation_token_sha256 !== task.provider_creation_token_sha256 ||
+            eventBindings.immutable_fingerprint_sha256 !== task.immutable_fingerprint_sha256 ||
+            eventBindings.effect_claim_sha256 !== task.effect_claim_sha256 ||
+            eventBindings.authority_consume_input_sha256 !== task.authority_consume_input_sha256 ||
+            eventBindings.dispatch_anchor_sha256 !== task.dispatch_anchor_sha256) throw adapterError("integrity_failed")
+          projected.set(event.dispatch_id, "PREPARED")
+          bindings.set(event.dispatch_id, { ...eventBindings })
+          break
+        }
+        case "CLAIMED": {
+          if (!['PREPARED', 'DISPATCH_INTENT', 'DISPATCHED', 'RESULT_PERSISTED'].includes(String(current))) {
+            throw adapterError("integrity_failed")
+          }
+          const projection = bindings.get(event.dispatch_id)
+          const recoveryRecord = eventBindings.recovery_record
+          if (projection === undefined || !exactKeys(eventBindings, [
+            "prior_state", "lease_epoch", "claim_fence_sha256", "ownership_nonce_sha256",
+            "lease_owner_sha256", "lease_expires_at", "recovery_record", "recovery_record_sha256",
+          ]) || recoveryRecord === null || typeof recoveryRecord !== "object" || Array.isArray(recoveryRecord) ||
+            eventBindings.prior_state !== current) throw adapterError("integrity_failed")
+          const expectedRecoveryRecord = {
+            schema_version: "sandboxes.disposable-task-recovery-anchor/v1",
+            dispatch_id: event.dispatch_id,
+            request_sha256: event.request_sha256,
+            prior_state: current,
+            effect_claim_sha256: projection.effect_claim_sha256,
+            provider_effect_claim_fence_sha256: projection.effect_claim_fence_sha256 ??
+              projection.allocation_claim_fence_sha256,
+            provider_effect_lease_epoch: projection.effect_lease_epoch ?? projection.allocation_lease_epoch,
+            provider_effect_ownership_nonce_sha256: projection.effect_ownership_nonce_sha256 ??
+              projection.allocation_ownership_nonce_sha256,
+            current_claim_fence_sha256: eventBindings.claim_fence_sha256,
+            current_lease_epoch: eventBindings.lease_epoch,
+            expected_provider_fingerprint_sha256: projection.provider_fingerprint_sha256 ?? null,
+            expected_result_bundle_sha256: projection.result_bundle_sha256 ?? null,
+            expected_checkpoint_handoff_sha256: projection.checkpoint_handoff_sha256 ?? null,
+          }
+          if (canonicalJson(recoveryRecord) !== canonicalJson(expectedRecoveryRecord) ||
+            eventBindings.recovery_record_sha256 !== canonicalSha256(recoveryRecord)) {
+            throw adapterError("integrity_failed")
+          }
+          Object.assign(projection, {
+            lease_epoch: eventBindings.lease_epoch,
+            claim_fence_sha256: eventBindings.claim_fence_sha256,
+            ownership_nonce_sha256: eventBindings.ownership_nonce_sha256,
+            lease_owner_sha256: eventBindings.lease_owner_sha256,
+            lease_expires_at: eventBindings.lease_expires_at,
+          })
+          break
+        }
+        case "DISPATCH_INTENT": {
+          if (current !== "PREPARED") throw adapterError("integrity_failed")
+          const projection = bindings.get(event.dispatch_id)
+          if (projection === undefined || eventBindings.effect_claim_sha256 !== projection.effect_claim_sha256) {
+            throw adapterError("integrity_failed")
+          }
+          Object.assign(projection, eventBindings, { dispatch_intent_anchor_sha256: event.signed_anchor_sha256 })
+          projected.set(event.dispatch_id, "DISPATCH_INTENT")
+          break
+        }
+        case "DISPATCHED": {
+          if (current !== "DISPATCH_INTENT") throw adapterError("integrity_failed")
+          const projection = bindings.get(event.dispatch_id)
+          if (projection === undefined) throw adapterError("integrity_failed")
+          Object.assign(projection, eventBindings)
+          projected.set(event.dispatch_id, "DISPATCHED")
+          break
+        }
+        case "RESULT_PERSISTED":
+          if (current !== "DISPATCHED") throw adapterError("integrity_failed")
+          Object.assign(bindings.get(event.dispatch_id) ?? {}, eventBindings)
+          projected.set(event.dispatch_id, "RESULT_PERSISTED")
+          break
+        case "OUTCOME":
+          if (!['PREPARED', 'DISPATCH_INTENT', 'DISPATCHED', 'RESULT_PERSISTED'].includes(String(current))) {
+            throw adapterError("integrity_failed")
+          }
+          if (task.outcome_anchor_sha256 !== event.signed_anchor_sha256) throw adapterError("integrity_failed")
+          Object.assign(bindings.get(event.dispatch_id) ?? {}, eventBindings, {
+            outcome_anchor_sha256: event.signed_anchor_sha256,
+          })
+          projected.set(event.dispatch_id, "OUTCOME")
+          break
+        case "QUARANTINED":
+          if (!['PREPARED', 'DISPATCH_INTENT', 'DISPATCHED', 'RESULT_PERSISTED'].includes(String(current))) {
+            throw adapterError("integrity_failed")
+          }
+          if (task.outcome_anchor_sha256 !== event.signed_anchor_sha256) throw adapterError("integrity_failed")
+          Object.assign(bindings.get(event.dispatch_id) ?? {}, eventBindings, {
+            outcome_anchor_sha256: event.signed_anchor_sha256,
+          })
+          projected.set(event.dispatch_id, "QUARANTINED")
+          break
+        default:
+          throw adapterError("integrity_failed")
+      }
+    }
+    if (tasks.length !== projected.size || tasks.some((task) => {
+      const value = bindings.get(task.dispatch_id)
+      if (projected.get(task.dispatch_id) !== task.state || value === undefined ||
+        digestBytes(asBytes(task.canonical_request_bytes)) !== task.request_sha256) return true
+      try { parseDisposableSandboxTaskRequestV1(parseCanonicalBytes(asBytes(task.canonical_request_bytes))) } catch { return true }
+      try { this.#authorization(task) } catch { return true }
+      if (task.effect_claim_sha256 !== canonicalSha256({
+        schema_version: "sandboxes.disposable-task-effect-claim/v1",
+        dispatch_id: task.dispatch_id,
+        request_sha256: task.request_sha256,
+        provider: task.provider,
+        provider_metadata_scope_sha256: task.provider_metadata_scope_sha256,
+        provider_creation_token_sha256: task.provider_creation_token_sha256,
+        immutable_fingerprint_sha256: task.immutable_fingerprint_sha256,
+        provider_effect_claim_fence_sha256: task.allocation_claim_fence_sha256,
+        provider_effect_lease_epoch: dbBigint(task.allocation_lease_epoch),
+        provider_effect_ownership_nonce_sha256: task.allocation_ownership_nonce_sha256,
+      })) return true
+      const exact: Array<[unknown, unknown]> = [
+        [value.lease_epoch, dbBigint(task.lease_epoch)],
+        [value.claim_fence_sha256, task.claim_fence_sha256],
+        [value.ownership_nonce_sha256, task.ownership_nonce_sha256],
+        [value.allocation_lease_epoch, dbBigint(task.allocation_lease_epoch)],
+        [value.allocation_claim_fence_sha256, task.allocation_claim_fence_sha256],
+        [value.allocation_ownership_nonce_sha256, task.allocation_ownership_nonce_sha256],
+        [value.effect_claim_sha256, task.effect_claim_sha256],
+        [value.dispatch_intent_anchor_sha256 ?? null, task.dispatch_intent_anchor_sha256],
+        [value.lease_owner_sha256, task.lease_owner_sha256],
+        [value.lease_expires_at, iso(task.lease_expires_at)],
+        [value.authorization_consumption_receipt_sha256 ?? null, task.authorization_consumption_receipt_sha256],
+        [value.provider_fingerprint_sha256 ?? null, task.provider_fingerprint_sha256],
+        [value.effect_lease_epoch ?? null, task.effect_lease_epoch === null ? null : dbBigint(task.effect_lease_epoch)],
+        [value.effect_claim_fence_sha256 ?? null, task.effect_claim_fence_sha256],
+        [value.effect_ownership_nonce_sha256 ?? null, task.effect_ownership_nonce_sha256],
+        [value.result_bundle_sha256 ?? null, task.result_bundle_sha256],
+        [value.checkpoint_handoff_sha256 ?? null, task.checkpoint_handoff_sha256],
+        [value.result_persisted_anchor_sha256 ?? null, task.result_persisted_anchor_sha256],
+        [value.outcome_kind ?? null, task.outcome_kind],
+        [value.execution_receipt_sha256 ?? null, task.execution_receipt_sha256],
+        [value.failure_code ?? null, task.failure_code],
+        [value.failure_evidence_sha256 ?? null, task.failure_evidence_sha256],
+        [value.quarantine_reason ?? null, task.quarantine_reason],
+        [value.quarantine_evidence_sha256 ?? null, task.quarantine_evidence_sha256],
+        [value.outcome_anchor_sha256 ?? null, task.outcome_anchor_sha256],
+      ]
+      if (exact.some(([left, right]) => left !== right)) return true
+      if ((task.authorization_receipt_bytes === null) !== (task.authorization_consumption_receipt_sha256 === null) ||
+        (task.authorization_receipt_bytes !== null && digestBytes(asBytes(task.authorization_receipt_bytes)) !== task.authorization_consumption_receipt_sha256) ||
+        (task.execution_receipt_bytes === null) !== (task.execution_receipt_sha256 === null)) return true
+      if (task.execution_receipt_bytes !== null) {
+        try {
+          if (exactExecutionReceipt(parseCanonicalBytes(asBytes(task.execution_receipt_bytes)), task)
+            .execution_receipt_core_sha256 !== task.execution_receipt_sha256) return true
+        } catch { return true }
+      }
+      return false
+    })) {
+      throw adapterError("integrity_failed")
+    }
+    await this.#healWitness()
+  }
+
+  async #store(session: PostgresSessionV1): Promise<StoreRow> {
+    const rows = await session.query<StoreRow>(`SELECT * FROM ${SCHEMA}.store WHERE singleton`)
+    if (rows.length !== 1 || rows[0] === undefined) throw adapterError("integrity_failed")
+    return rows[0]
+  }
+
+  #assertAppendable(store: StoreRow): void {
+    if (dbBigint(store.head_sequence) !== dbBigint(store.witnessed_sequence) ||
+      store.head_frontier_sha256 !== store.witnessed_frontier_sha256) throw adapterError("integrity_failed")
+  }
+
+  async #task(dispatchId: string): Promise<TaskRow> {
+    const rows = await this.#client.query<TaskRow>(`SELECT * FROM ${SCHEMA}.tasks WHERE dispatch_id = $1`, [dispatchId])
+    if (rows.length !== 1 || rows[0] === undefined) throw adapterError("integrity_failed")
+    return rows[0]
+  }
+
+  async #serializable<T>(use: (session: PostgresSessionV1) => Promise<T>): Promise<T> {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        return await this.#client.transaction(use)
+      } catch (error) {
+        const code = error !== null && typeof error === "object"
+          ? ((error as { errno?: unknown; code?: unknown }).errno ?? (error as { code?: unknown }).code)
+          : undefined
+        if ((code !== "40001" && code !== "40P01") || attempt === 3) throw error
+      }
+    }
+    throw adapterError("dependency_unavailable")
+  }
+
+  async #assertClaim(dispatchId: string, request: Digest, fence: Digest, epoch: bigint): Promise<TaskRow> {
+    const row = await this.#task(dispatchId)
+    if (row.request_sha256 !== request || row.claim_fence_sha256 !== fence || dbBigint(row.lease_epoch) !== epoch) {
+      throw adapterError("integrity_failed")
+    }
+    return row
+  }
+
+  #validatePrepare(input: DisposableTaskJournalPrepareInputV1): void {
+    for (const value of [input.idempotency_key_sha256, input.request_sha256, input.operation_digest,
+      input.authority_envelope_sha256, input.source_manifest_sha256, input.input_manifest_sha256,
+      input.checkpoint_policy_sha256,
+      input.provider_metadata_scope_sha256, input.provider_creation_token_sha256,
+      input.immutable_fingerprint_sha256, input.lease_owner_sha256]) assertDigest(value)
+    if (!['e2b', 'daytona_cloud'].includes(input.provider) || !Number.isSafeInteger(input.lease_duration_ms) ||
+      input.lease_duration_ms < 1_000 || input.lease_duration_ms > 3_600_000) throw adapterError("validation_failed")
+    const requestBytes = asBytes(input.canonical_request_bytes)
+    const request = parseDisposableSandboxTaskRequestV1(parseCanonicalBytes(requestBytes))
+    if (digestBytes(requestBytes) !== input.request_sha256) throw adapterError("validation_failed")
+    if (request.idempotency_key_sha256 !== input.idempotency_key_sha256 ||
+      request.operation_digest !== input.operation_digest ||
+      request.authority_envelope_sha256 !== input.authority_envelope_sha256 ||
+      request.source_manifest_sha256 !== input.source_manifest_sha256 ||
+      request.input_manifest_sha256 !== input.input_manifest_sha256 || request.provider !== input.provider) {
+      throw adapterError("validation_failed")
+    }
+    if (disposableTaskCheckpointPolicySha256(request.checkpoint) !== input.checkpoint_policy_sha256) {
+      throw adapterError("validation_failed")
+    }
+  }
+
+  #assertExactIntent(row: TaskRow, input: DisposableTaskJournalPrepareInputV1): void {
+    if (row.idempotency_key_sha256 !== input.idempotency_key_sha256 || row.operation_digest !== input.operation_digest ||
+      row.request_sha256 !== input.request_sha256 || !byteEqual(asBytes(row.canonical_request_bytes), input.canonical_request_bytes) ||
+      row.authority_envelope_sha256 !== input.authority_envelope_sha256 || row.source_manifest_sha256 !== input.source_manifest_sha256 ||
+      row.input_manifest_sha256 !== input.input_manifest_sha256 || row.provider !== input.provider ||
+      row.provider_metadata_scope_sha256 !== input.provider_metadata_scope_sha256 ||
+      row.provider_creation_token_sha256 !== input.provider_creation_token_sha256 ||
+      row.immutable_fingerprint_sha256 !== input.immutable_fingerprint_sha256) throw adapterError("validation_failed")
+    const expectedEffectClaim = canonicalSha256({
+      schema_version: "sandboxes.disposable-task-effect-claim/v1",
+      dispatch_id: row.dispatch_id,
+      request_sha256: row.request_sha256,
+      provider: row.provider,
+      provider_metadata_scope_sha256: row.provider_metadata_scope_sha256,
+      provider_creation_token_sha256: row.provider_creation_token_sha256,
+      immutable_fingerprint_sha256: row.immutable_fingerprint_sha256,
+      provider_effect_claim_fence_sha256: row.allocation_claim_fence_sha256,
+      provider_effect_lease_epoch: dbBigint(row.allocation_lease_epoch),
+      provider_effect_ownership_nonce_sha256: row.allocation_ownership_nonce_sha256,
+    })
+    if (row.effect_claim_sha256 !== expectedEffectClaim ||
+      (row.dispatch_intent_anchor_sha256 !== null && !isDigest(row.dispatch_intent_anchor_sha256)) ||
+      (row.authorization_consumption_receipt_sha256 === null) !== (row.dispatch_intent_anchor_sha256 === null) ||
+      (row.state === "PREPARED" && row.dispatch_intent_anchor_sha256 !== null) ||
+      (["DISPATCH_INTENT", "DISPATCHED", "RESULT_PERSISTED"].includes(row.state) &&
+        row.dispatch_intent_anchor_sha256 === null)) throw adapterError("integrity_failed")
+  }
+
+  #claim(row: TaskRow, epoch: bigint, fence: Digest, ownershipNonce: Digest, owner: Digest, expires: string) {
+    return {
+      dispatch_id: row.dispatch_id, request_sha256: row.request_sha256 as Digest,
+      lease_epoch: epoch, claim_fence_sha256: fence, lease_owner_sha256: owner,
+      lease_expires_at: expires,
+      provider_metadata_scope_sha256: row.provider_metadata_scope_sha256 as Digest,
+      provider_creation_token_sha256: row.provider_creation_token_sha256 as Digest,
+      immutable_fingerprint_sha256: row.immutable_fingerprint_sha256 as Digest,
+      ownership_nonce_sha256: ownershipNonce,
+      effect_claim_sha256: row.effect_claim_sha256 as Digest,
+      dispatch_intent_anchor_sha256: row.dispatch_intent_anchor_sha256 as Digest | null,
+      dispatch_anchor_sha256: row.dispatch_anchor_sha256 as Digest,
+    }
+  }
+
+  #authorization(row: TaskRow): DisposableTaskJournalAuthorizationV1 {
+    const consumeBytes = asBytes(row.authority_consume_input_bytes)
+    if (!isDigest(row.authority_consume_input_sha256) ||
+      digestBytes(consumeBytes) !== row.authority_consume_input_sha256) throw adapterError("integrity_failed")
+    const consume = parseCanonicalBytes(consumeBytes)
+    if (consume === null || typeof consume !== "object" || Array.isArray(consume)) throw adapterError("integrity_failed")
+    const request = parseDisposableSandboxTaskRequestV1(parseCanonicalBytes(asBytes(row.canonical_request_bytes)))
+    const expectedConsume = {
+      dispatch_id: row.dispatch_id,
+      authority_envelope_sha256: row.authority_envelope_sha256,
+      canonical_request_sha256: row.request_sha256,
+      operation_digest: row.operation_digest,
+      provider: row.provider,
+      source_manifest_sha256: row.source_manifest_sha256,
+      input_manifest_sha256: row.input_manifest_sha256,
+      checkpoint_policy_sha256: disposableTaskCheckpointPolicySha256(request.checkpoint),
+      effect_claim_sha256: row.effect_claim_sha256,
+    }
+    if (canonicalJson(consume) !== canonicalJson(expectedConsume)) throw adapterError("integrity_failed")
+    const storedReceipt = row.authorization_receipt_bytes === null
+      ? null
+      : {
+          canonical_receipt_bytes: asBytes(row.authorization_receipt_bytes),
+          receipt_sha256: row.authorization_consumption_receipt_sha256 as Digest,
+        }
+    if (storedReceipt !== null && (!isDigest(storedReceipt.receipt_sha256) ||
+      digestBytes(storedReceipt.canonical_receipt_bytes) !== storedReceipt.receipt_sha256)) {
+      throw adapterError("integrity_failed")
+    }
+    return {
+      canonical_consume_input_bytes: consumeBytes,
+      consume_input_sha256: row.authority_consume_input_sha256 as Digest,
+      consume_input: consume as DisposableTaskJournalAuthorizationV1["consume_input"],
+      stored_receipt: storedReceipt,
+    }
+  }
+
+  #terminal(row: TaskRow): DisposableTaskJournalCompletedV1 | DisposableTaskJournalQuarantinedV1 {
+    if (row.outcome_anchor_bytes === null || !isDigest(row.outcome_anchor_sha256)) throw adapterError("integrity_failed")
+    const anchorBytes = asBytes(row.outcome_anchor_bytes)
+    if (digestBytes(anchorBytes) !== row.outcome_anchor_sha256) throw adapterError("integrity_failed")
+    const anchorValue = parseCanonicalBytes(anchorBytes)
+    if (anchorValue === null || typeof anchorValue !== "object" || Array.isArray(anchorValue)) {
+      throw adapterError("integrity_failed")
+    }
+    const anchor = anchorValue as Record<string, unknown>
+    const recordValue = anchor.record
+    if (recordValue === null || typeof recordValue !== "object" || Array.isArray(recordValue)) {
+      throw adapterError("integrity_failed")
+    }
+    const record = recordValue as Record<string, unknown>
+    const signatureText = anchor.signature_base64url
+    if (anchor.journal_identity_sha256 !== this.#options.journal_identity_sha256 ||
+      anchor.restore_domain_sha256 !== this.#options.restore_domain_sha256 ||
+      anchor.signer_principal !== this.#options.signer.signer_principal ||
+      anchor.signing_key_id !== this.#options.signer.signing_key_id ||
+      record.dispatch_id !== row.dispatch_id || record.request_sha256 !== row.request_sha256 ||
+      record.record_kind !== row.state || typeof signatureText !== "string") throw adapterError("integrity_failed")
+    const { signature_base64url: _signature, record: _record, frontier_sha256: frontier, ...unsigned } = anchor
+    if (!isDigest(frontier) || canonicalSha256(unsigned) !== frontier) throw adapterError("integrity_failed")
+    let signature: Uint8Array
+    try { signature = Uint8Array.from(Buffer.from(signatureText, "base64url")) } catch { throw adapterError("integrity_failed") }
+    if (signature.byteLength !== 64 ||
+      !this.#options.verifier.verify(canonicalBytes({ ...unsigned, frontier_sha256: frontier }), signature)) {
+      throw adapterError("integrity_failed")
+    }
+    const payloadValue = record.payload
+    if (payloadValue === null || typeof payloadValue !== "object" || Array.isArray(payloadValue)) {
+      throw adapterError("integrity_failed")
+    }
+    const payload = payloadValue as Record<string, unknown>
+    if (row.state === "QUARANTINED") {
+      if (row.quarantine_reason === null || !isDigest(row.quarantine_evidence_sha256)) throw adapterError("integrity_failed")
+      if (payload.kind !== "quarantined" || payload.quarantine_reason !== row.quarantine_reason ||
+        payload.quarantine_evidence_sha256 !== row.quarantine_evidence_sha256) throw adapterError("integrity_failed")
+      return { kind: "quarantined", request_sha256: row.request_sha256 as Digest,
+        quarantine_reason: row.quarantine_reason,
+        quarantine_evidence_sha256: row.quarantine_evidence_sha256,
+        canonical_anchor_bytes: anchorBytes, anchor_sha256: row.outcome_anchor_sha256 }
+    }
+    if (row.state !== "OUTCOME" || row.outcome_kind === null) throw adapterError("integrity_failed")
+    const execution = row.execution_receipt_bytes === null ? null
+      : exactExecutionReceipt(parseCanonicalBytes(asBytes(row.execution_receipt_bytes)), row)
+    if (payload.kind !== "outcome" || payload.outcome_kind !== row.outcome_kind ||
+      payload.execution_receipt_sha256 !== row.execution_receipt_sha256 ||
+      payload.failure_code !== row.failure_code || payload.failure_evidence_sha256 !== row.failure_evidence_sha256) {
+      throw adapterError("integrity_failed")
+    }
+    return { kind: "outcome", request_sha256: row.request_sha256 as Digest,
+      outcome_kind: row.outcome_kind, execution_receipt: execution,
+      failure_code: row.failure_code, failure_evidence_sha256: row.failure_evidence_sha256 as Digest | null,
+      canonical_anchor_bytes: anchorBytes, anchor_sha256: row.outcome_anchor_sha256 }
+  }
+
+  #validateTerminalInput(input: Parameters<DisposableTaskJournalPortV1["commitOutcome"]>[0]): void {
+    assertText(input.dispatch_id)
+    assertDigest(input.request_sha256)
+    assertDigest(input.claim_fence_sha256)
+    if (input.outcome_kind === "succeeded") {
+      if (input.execution_receipt === null || input.failure_code !== null || input.failure_evidence_sha256 !== null) {
+        throw adapterError("validation_failed")
+      }
+      // The complete closed receipt and all request/claim bindings are verified after loading the journal row.
+    } else {
+      if (input.execution_receipt !== null || input.failure_code === null || input.failure_evidence_sha256 === null) {
+        throw adapterError("validation_failed")
+      }
+      assertText(input.failure_code)
+      assertDigest(input.failure_evidence_sha256)
+    }
+  }
+
+  #requireReady(): void {
+    if (!this.#ready) throw adapterError("dependency_unavailable")
+  }
+}
+
+export const POSTGRES_DISPOSABLE_TASK_JOURNAL_MIGRATION_V1 = Object.freeze({
+  name: MIGRATION_NAME,
+  relative_path: `migrations/disposable-task-journal/${MIGRATION_NAME}`,
+})

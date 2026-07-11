@@ -27,6 +27,7 @@
   },
   "files": [
     "dist",
+    "migrations",
     "schemas",
     "README.md",
     "LICENSE"

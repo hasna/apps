@@ -86,7 +86,7 @@ describe("managed package boundary", () => {
         default: "./dist/adapters/managed/index.js",
       },
     })
-    expect(manifest.files).toEqual(["dist", "schemas", "README.md", "LICENSE"])
+    expect(manifest.files).toEqual(["dist", "migrations", "schemas", "README.md", "LICENSE"])
     expect(manifest.dependencies?.["@types/ws"]).toBe("8.18.1")
     expect(manifest.scripts?.prepack).toBe("bun run build")
     expect(managedPublicApi.DAYTONA_GUEST_BROKER_PTY_ID).toBe("hasna-sandboxes-broker-v1")

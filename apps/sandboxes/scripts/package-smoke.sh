@@ -19,6 +19,8 @@ for required in \
   package/dist/adapters/managed/index.js \
   package/dist/adapters/managed/index.d.ts \
   package/dist/adapters/managed/e2b-guest-broker-v1.py \
+  package/migrations/disposable-task-journal/0001_disposable_task_journal.sql \
+  package/migrations/durable-journal-witness/0001_durable_journal_witness.sql \
   package/schemas/dispatched-journal-anchor-v1.schema.json \
   package/schemas/provider-outcome-anchor-v1.schema.json \
   package/schemas/read-probe-anchor-v1.schema.json \

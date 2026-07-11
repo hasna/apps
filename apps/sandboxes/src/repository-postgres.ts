@@ -1675,3 +1675,25 @@ export const POSTGRES_SCHEMA_MIGRATIONS_V1 = POSTGRES_MIGRATIONS.map((migration)
   name: migration.name,
   checksum_sha256: sha256(migration.sql),
 }));
+
+export {
+  POSTGRES_DISPOSABLE_TASK_JOURNAL_MIGRATION_V1,
+  PostgresDisposableTaskJournalV1,
+  applyPostgresDisposableTaskJournalMigrationV1,
+  createEd25519DisposableTaskJournalCryptoV1,
+  type DisposableTaskJournalSignatureVerifierV1,
+  type DisposableTaskJournalSignerV1,
+  type DisposableTaskWitnessReceiptVerifierV1,
+  type PostgresDisposableTaskJournalMigrationOptionsV1,
+  type PostgresDisposableTaskJournalOptionsV1,
+} from "./adapters/managed/disposable-task-postgres.js";
+
+export {
+  PostgresDurableJournalWitnessV1,
+  applyPostgresDurableJournalWitnessMigrationV1,
+  createEd25519DurableJournalWitnessCryptoV1,
+  type DurableJournalWitnessSignatureVerifierV1,
+  type DurableJournalWitnessSignerV1,
+  type PostgresDurableJournalWitnessMigrationOptionsV1,
+  type PostgresDurableJournalWitnessOptionsV1,
+} from "./adapters/managed/durable-journal-witness-postgres.js";
