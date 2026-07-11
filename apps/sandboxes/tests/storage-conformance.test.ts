@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { canonicalDigest } from "../src/canonical.js";
+import { canonicalDigest, storageJson } from "../src/canonical.js";
 import {
   EFFECT_JOURNAL_OUTCOME_SCHEMA_DIGEST,
   EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION,
@@ -43,6 +44,115 @@ function sqlite(
     allow_unsafe_test_path: true,
     hermetic_test_database_time: databaseTime,
   });
+}
+
+async function prepareLegacySqliteExecStream(matchCount: 0 | 1 | 2): Promise<{
+  path: string;
+  resourceId: string;
+  execId: string;
+  expectedOperationId: string;
+  expectedRequestSha256: ReturnType<typeof digest>;
+}> {
+  const root = mkdtempSync(join(tmpdir(), `sandboxes-v6-forward-${matchCount}-`));
+  temporary.push(root);
+  chmodSync(root, 0o700);
+  const path = join(root, "sandboxes.db");
+  const current = new SqliteSandboxRepositoryV1(path, {
+    allow_unsafe_test_path: true,
+    hermetic_test_database_time: () => new Date("2030-01-01T00:00:00.000Z"),
+  });
+  current.migrate();
+  await current.close();
+
+  const resourceId = oid("sbx", 980 + matchCount);
+  const execId = oid("exec", 980 + matchCount);
+  const expectedOperationId = oid("op", 980 + matchCount * 10);
+  const expectedRequestSha256 = digest(`legacy-start-request-${matchCount}-0`);
+  const cursor = `cursor_legacy_${matchCount}`;
+  const resumeToken = `resume_legacy_${matchCount}`;
+  const streamRoot = digest(`legacy-stream-root-${matchCount}`);
+  const legacyState = {
+    schema_version: "sandboxes.exec-stream-state/v1",
+    resource_id: resourceId,
+    resource_lifecycle_generation: 1n,
+    exec_id: execId,
+    cursor,
+    cursor_sha256: digest(cursor),
+    stream_root_sha256: streamRoot,
+    resume_token: resumeToken,
+    resume_token_sha256: digest(resumeToken),
+    next_expected_sequence: 1n,
+    in_flight_operation_id: null,
+    terminal: false,
+    updated_at: "2030-01-01T00:00:00.000Z",
+  };
+  const database = new Database(path, { strict: true });
+  database.exec(`
+    PRAGMA foreign_keys = ON;
+    ALTER TABLE exec_stream_states RENAME TO exec_stream_states_v7;
+    CREATE TABLE exec_stream_states (
+      resource_id TEXT NOT NULL REFERENCES sandbox_records(resource_id),
+      exec_id TEXT NOT NULL,
+      stream_root_sha256 TEXT NOT NULL,
+      next_expected_sequence TEXT NOT NULL,
+      record_json TEXT NOT NULL,
+      PRIMARY KEY(resource_id, exec_id)
+    );
+    DROP TABLE exec_stream_states_v7;
+    DELETE FROM schema_migrations WHERE version = 7;
+  `);
+  database.query(`
+    INSERT INTO sandbox_records(resource_id, revision, state, record_json)
+    VALUES (?, 1, 'active', '{}')
+  `).run(resourceId);
+  database.query(`
+    INSERT INTO exec_stream_states(
+      resource_id, exec_id, stream_root_sha256, next_expected_sequence, record_json
+    ) VALUES (?, ?, ?, '1', ?)
+  `).run(resourceId, execId, streamRoot, storageJson(legacyState));
+  for (let index = 0; index < matchCount; index += 1) {
+    const operationId = oid("op", 980 + matchCount * 10 + index);
+    const requestSha256 = digest(`legacy-start-request-${matchCount}-${index}`);
+    database.query(`
+      INSERT INTO operations(
+        operation_id, operation, resource_id, actor_principal,
+        idempotency_key_sha256, request_sha256, state, record_json,
+        effect_phase, operation_step_id, dispatch_anchor_sha256
+      ) VALUES (?, 'exec.start', ?, ?, ?, ?, 'committed', ?, 'succeeded', ?, NULL)
+    `).run(
+      operationId,
+      resourceId,
+      oid("principal", 980),
+      digest(`legacy-start-idempotency-${matchCount}-${index}`),
+      requestSha256,
+      JSON.stringify({
+        bounded_result: {
+          operation: "exec.start",
+          result_document: {
+            exec_id: execId,
+            resource_id: resourceId,
+            request_sha256: requestSha256,
+          },
+        },
+      }),
+      oid("step", 980 + matchCount * 10 + index),
+    );
+  }
+  const seeded = database.query<{
+    streams: number;
+    starts: number;
+    schema_version: number;
+  }, []>(`
+    SELECT
+      (SELECT COUNT(*) FROM exec_stream_states) AS streams,
+      (SELECT COUNT(*) FROM operations WHERE operation = 'exec.start') AS starts,
+      (SELECT MAX(version) FROM schema_migrations) AS schema_version
+  `).get();
+  if (seeded?.streams !== 1 || seeded.starts !== matchCount || seeded.schema_version !== 6) {
+    throw new Error(`legacy SQLite fixture seed mismatch: ${JSON.stringify(seeded)}`);
+  }
+  database.close();
+  return { path, resourceId, execId, expectedOperationId, expectedRequestSha256 };
 }
 
 async function corpus(repository: SandboxRepositoryV1) {
@@ -205,6 +315,60 @@ describe("storage conformance", () => {
     repository.migrate();
     repository.migrate();
     expect(await repository.health()).toMatchObject({ backend: "sqlite", schema_version: 7, integrity: "ok" });
+    await repository.close();
+  });
+
+  test("SQLite v6 to v7 requires exactly one committed legacy exec start", async () => {
+    for (const matchCount of [0, 2] as const) {
+      const legacy = await prepareLegacySqliteExecStream(matchCount);
+      const repository = new SqliteSandboxRepositoryV1(legacy.path, {
+        allow_unsafe_test_path: true,
+        hermetic_test_database_time: () => new Date("2030-01-01T00:00:00.000Z"),
+      });
+      let migrationError: unknown;
+      try {
+        repository.migrate();
+      } catch (error) {
+        migrationError = error;
+      }
+      if (migrationError === undefined) {
+        const migrated = await repository.transaction((tx) =>
+          tx.getExecStreamState(legacy.resourceId, legacy.execId));
+        throw new Error(
+          `SQLite v6 migration unexpectedly accepted ${matchCount} starts: ${String(migrated)}`,
+        );
+      }
+      expect(migrationError).toMatchObject({ code: "integrity_failed" });
+      expect(await repository.health()).toMatchObject({
+        backend: "sqlite",
+        schema_version: 6,
+        integrity: "ok",
+      });
+      await repository.close();
+      const unchanged = new Database(legacy.path, { readonly: true, strict: true });
+      expect(unchanged.query<{ count: number }, []>(
+        "SELECT COUNT(*) AS count FROM exec_stream_states",
+      ).get()?.count).toBe(1);
+      unchanged.close();
+    }
+
+    const legacy = await prepareLegacySqliteExecStream(1);
+    const repository = new SqliteSandboxRepositoryV1(legacy.path, {
+      allow_unsafe_test_path: true,
+      hermetic_test_database_time: () => new Date("2030-01-01T00:00:00.000Z"),
+    });
+    repository.migrate();
+    expect(await repository.health()).toMatchObject({
+      backend: "sqlite",
+      schema_version: 7,
+      integrity: "ok",
+    });
+    expect(await repository.transaction((tx) =>
+      tx.getExecStreamState(legacy.resourceId, legacy.execId))).toMatchObject({
+      start_operation_id: legacy.expectedOperationId,
+      start_request_sha256: legacy.expectedRequestSha256,
+      phase: "started",
+    });
     await repository.close();
   });
 

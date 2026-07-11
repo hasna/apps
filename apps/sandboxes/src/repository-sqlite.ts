@@ -234,33 +234,53 @@ const MIGRATIONS = [
         record_json TEXT NOT NULL,
         PRIMARY KEY(resource_id, exec_id)
       );
+      CREATE TABLE exec_stream_migration_matches_v7 (
+        resource_id TEXT NOT NULL,
+        exec_id TEXT NOT NULL,
+        match_count INTEGER NOT NULL CHECK (match_count = 1),
+        start_operation_id TEXT NOT NULL,
+        start_request_sha256 TEXT NOT NULL,
+        PRIMARY KEY(resource_id, exec_id)
+      );
+      INSERT INTO exec_stream_migration_matches_v7(
+        resource_id, exec_id, match_count,
+        start_operation_id, start_request_sha256
+      )
+      SELECT legacy.resource_id, legacy.exec_id,
+          COUNT(operation.operation_id) AS match_count,
+          MIN(operation.operation_id) AS start_operation_id,
+          MIN(operation.request_sha256) AS start_request_sha256
+        FROM exec_stream_states_v6 AS legacy
+        LEFT JOIN operations AS operation
+          ON operation.resource_id = legacy.resource_id
+         AND operation.operation = 'exec.start'
+         AND operation.state = 'committed'
+         AND operation.effect_phase = 'succeeded'
+         AND json_extract(
+           operation.record_json,
+           '$.bounded_result.operation'
+         ) = 'exec.start'
+         AND json_extract(
+           operation.record_json,
+           '$.bounded_result.result_document.exec_id'
+         ) = legacy.exec_id
+         AND json_extract(
+           operation.record_json,
+           '$.bounded_result.result_document.resource_id'
+         ) = legacy.resource_id
+         AND json_extract(
+           operation.record_json,
+           '$.bounded_result.result_document.request_sha256'
+         ) = operation.request_sha256
+      GROUP BY legacy.resource_id, legacy.exec_id;
       WITH enriched AS (
         SELECT legacy.*,
-          (
-            SELECT operation.operation_id
-            FROM operations AS operation
-            WHERE operation.resource_id = legacy.resource_id
-              AND operation.operation = 'exec.start'
-              AND json_extract(
-                operation.record_json,
-                '$.bounded_result.result_document.exec_id'
-              ) = legacy.exec_id
-            ORDER BY operation.operation_id
-            LIMIT 1
-          ) AS start_operation_id,
-          (
-            SELECT operation.request_sha256
-            FROM operations AS operation
-            WHERE operation.resource_id = legacy.resource_id
-              AND operation.operation = 'exec.start'
-              AND json_extract(
-                operation.record_json,
-                '$.bounded_result.result_document.exec_id'
-              ) = legacy.exec_id
-            ORDER BY operation.operation_id
-            LIMIT 1
-          ) AS start_request_sha256
+          matches.start_operation_id,
+          matches.start_request_sha256
         FROM exec_stream_states_v6 AS legacy
+        JOIN exec_stream_migration_matches_v7 AS matches
+          ON matches.resource_id = legacy.resource_id
+         AND matches.exec_id = legacy.exec_id
       )
       INSERT INTO exec_stream_states(
         resource_id, exec_id, start_operation_id, start_request_sha256,
@@ -277,6 +297,7 @@ const MIGRATIONS = [
         )
       FROM enriched;
       DROP TABLE exec_stream_states_v6;
+      DROP TABLE exec_stream_migration_matches_v7;
     `,
   },
 ] as const;
@@ -371,6 +392,46 @@ export class SqliteSandboxRepositoryV1 implements SandboxRepositoryV1 {
             });
           }
           continue;
+        }
+        if (migration.version === 7) {
+          const invalidLegacyStreams = this.#db.query<{
+            invalid_streams: number;
+          }, []>(`
+            SELECT COUNT(*) AS invalid_streams
+            FROM (
+              SELECT legacy.resource_id, legacy.exec_id
+              FROM exec_stream_states AS legacy
+              LEFT JOIN operations AS operation
+                ON operation.resource_id = legacy.resource_id
+               AND operation.operation = 'exec.start'
+               AND operation.state = 'committed'
+               AND operation.effect_phase = 'succeeded'
+               AND json_extract(
+                 operation.record_json,
+                 '$.bounded_result.operation'
+               ) = 'exec.start'
+               AND json_extract(
+                 operation.record_json,
+                 '$.bounded_result.result_document.exec_id'
+               ) = legacy.exec_id
+               AND json_extract(
+                 operation.record_json,
+                 '$.bounded_result.result_document.resource_id'
+               ) = legacy.resource_id
+               AND json_extract(
+                 operation.record_json,
+                 '$.bounded_result.result_document.request_sha256'
+               ) = operation.request_sha256
+              GROUP BY legacy.resource_id, legacy.exec_id
+              HAVING COUNT(operation.operation_id) <> 1
+            ) AS invalid
+          `).get()?.invalid_streams ?? 0;
+          if (invalidLegacyStreams !== 0) {
+            throw new SandboxError(
+              "integrity_failed",
+              "SQLite exec stream migration requires exactly one committed legacy start",
+            );
+          }
         }
         this.#db.exec(migration.sql);
         this.#db

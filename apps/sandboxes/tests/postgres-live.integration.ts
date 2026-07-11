@@ -1041,6 +1041,150 @@ async function assertProtectedColumnMismatchDetected(): Promise<void> {
   }
 }
 
+async function assertExecStreamMigrationCardinality(
+  migration: TestPostgresClient,
+): Promise<void> {
+  const resourceId = oid("sbx", 979);
+  const execId = oid("exec", 979);
+  const streamRoot = digest("postgres-legacy-stream-root");
+  const migrationOptions: PostgresMigrationOptionsV1 = {
+    expected_migration_role: config.migrationRole,
+    expected_database: config.database,
+  };
+  await migration.query(`
+    ALTER TABLE sandboxes.exec_stream_states
+      DROP CONSTRAINT exec_stream_start_request_digest,
+      DROP COLUMN start_operation_id,
+      DROP COLUMN start_request_sha256,
+      DROP COLUMN phase,
+      DROP COLUMN terminal,
+      ALTER COLUMN stream_root_sha256 SET NOT NULL,
+      ALTER COLUMN next_expected_sequence SET NOT NULL;
+    DELETE FROM sandboxes.schema_migrations WHERE version = 7;
+  `);
+
+  const seedLegacy = async (matchCount: 0 | 1 | 2): Promise<{
+    operationId: string;
+    requestSha256: ReturnType<typeof digest>;
+  }> => {
+    await migration.query(
+      `INSERT INTO sandboxes.sandbox_records(resource_id, revision, state, record_json)
+       VALUES ($1, 1, 'active', '{}'::jsonb)`,
+      [resourceId],
+    );
+    await migration.query(
+      `INSERT INTO sandboxes.exec_stream_states(
+         resource_id, exec_id, stream_root_sha256, next_expected_sequence, record_json
+       ) VALUES ($1, $2, $3, 1, jsonb_build_object('terminal', false))`,
+      [resourceId, execId, streamRoot],
+    );
+    for (let index = 0; index < matchCount; index += 1) {
+      const operationId = oid("op", 9790 + index);
+      const requestSha256 = digest(`postgres-legacy-start-request-${index}`);
+      await migration.query(
+        `INSERT INTO sandboxes.operations(
+           operation_id, operation, resource_id, actor_principal,
+           idempotency_key_sha256, request_sha256, state, effect_phase,
+           operation_step_id, dispatch_anchor_sha256,
+           expected_resource_lifecycle_generation,
+           successor_resource_lifecycle_generation, operation_execution_epoch,
+           provider_idempotency_token_sha256, provider_creation_token_sha256,
+           immutable_fingerprint_sha256, authorization_consumption_receipt_sha256,
+           record_json
+         ) VALUES (
+           $1, 'exec.start', $2, $3, $4, $5, 'committed', 'succeeded',
+           $6, NULL, 1, 1, 1, NULL, NULL, NULL, NULL,
+           jsonb_build_object(
+             'bounded_result', jsonb_build_object(
+               'operation', 'exec.start',
+               'result_document', jsonb_build_object(
+                 'exec_id', $7::text,
+                 'resource_id', $2::text,
+                 'request_sha256', $5::text
+               )
+             )
+           )
+         )`,
+        [
+          operationId,
+          resourceId,
+          oid("principal", 979),
+          digest(`postgres-legacy-idempotency-${index}`),
+          requestSha256,
+          oid("step", 9790 + index),
+          execId,
+        ],
+      );
+    }
+    const seededMatches = await migration.query<{ count: string | number }>(`
+      SELECT COUNT(operation.operation_id) AS count
+      FROM sandboxes.exec_stream_states AS stream
+      LEFT JOIN sandboxes.operations AS operation
+        ON operation.resource_id = stream.resource_id
+       AND operation.operation = 'exec.start'
+       AND operation.state = 'committed'
+       AND operation.effect_phase = 'succeeded'
+       AND operation.record_json #>> '{bounded_result,operation}' = 'exec.start'
+       AND operation.record_json #>> '{bounded_result,result_document,exec_id}' = stream.exec_id
+       AND operation.record_json #>> '{bounded_result,result_document,resource_id}' = stream.resource_id
+       AND operation.record_json #>> '{bounded_result,result_document,request_sha256}' = operation.request_sha256
+      WHERE stream.resource_id = $1 AND stream.exec_id = $2
+    `, [resourceId, execId]);
+    expect(numberValue(seededMatches[0]?.count)).toBe(matchCount);
+    return {
+      operationId: oid("op", 9790),
+      requestSha256: digest("postgres-legacy-start-request-0"),
+    };
+  };
+  const cleanupLegacy = async (): Promise<void> => {
+    await migration.query(
+      "DELETE FROM sandboxes.exec_stream_states WHERE resource_id = $1",
+      [resourceId],
+    );
+    await migration.query(
+      "DELETE FROM sandboxes.operations WHERE resource_id = $1",
+      [resourceId],
+    );
+    await migration.query(
+      "DELETE FROM sandboxes.sandbox_records WHERE resource_id = $1",
+      [resourceId],
+    );
+  };
+
+  for (const matchCount of [0, 2] as const) {
+    await seedLegacy(matchCount);
+    await expect(PostgresSandboxRepositoryV1.applyMigrations(
+      migration,
+      migrationOptions,
+    )).rejects.toBeDefined();
+    expect(await migration.query(
+      "SELECT version FROM sandboxes.schema_migrations WHERE version = 7",
+    )).toHaveLength(0);
+    const legacyRows = await migration.query<{ count: string | number }>(
+      "SELECT COUNT(*) AS count FROM sandboxes.exec_stream_states",
+    );
+    expect(numberValue(legacyRows[0]?.count)).toBe(1);
+    await cleanupLegacy();
+  }
+
+  const expected = await seedLegacy(1);
+  await PostgresSandboxRepositoryV1.applyMigrations(migration, migrationOptions);
+  expect(await migration.query<{
+    start_operation_id: string;
+    start_request_sha256: string;
+    phase: string;
+  }>(`
+    SELECT start_operation_id, start_request_sha256, phase
+    FROM sandboxes.exec_stream_states
+    WHERE resource_id = $1 AND exec_id = $2
+  `, [resourceId, execId])).toEqual([{
+    start_operation_id: expected.operationId,
+    start_request_sha256: expected.requestSha256,
+    phase: "started",
+  }]);
+  await cleanupLegacy();
+}
+
 test("isolated live Postgres matches memory and SQLite storage/failure/race semantics", async () => {
   for (const forbiddenAmbient of [
     "DATABASE_URL",
@@ -1096,6 +1240,7 @@ test("isolated live Postgres matches memory and SQLite storage/failure/race sema
     expected_migration_role: config.migrationRole,
     expected_database: config.database,
   });
+  await assertExecStreamMigrationCardinality(migration);
   const persistedMigrations = await migration.query<{
     version: number;
     name: string;
