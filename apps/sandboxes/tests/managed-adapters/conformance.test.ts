@@ -719,6 +719,45 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
 
     })
 
+    test("rejects sparse or accessor argv before cloning, hashing, or provider access", async () => {
+      const h = harness(provider)
+      const handle = await create(h)
+      await activate(h, handle)
+      const before = h.credentials.acquisitions
+
+      const sparseArgv = ["status"]
+      sparseArgv.length = 2
+      const sparseSpec = { ...EXEC_SPEC, argv: sparseArgv }
+      const sparseStart = makeOperation("exec_start", { generation_transition: undefined })
+      await expect(
+        h.adapter.start_exec(makeContext(sparseStart, h.journal), handle, sparseSpec, sparseStart),
+      ).rejects.toMatchObject({ code: "validation_failed" })
+
+      let getterCalls = 0
+      const accessorArgv: string[] = []
+      Object.defineProperty(accessorArgv, "0", {
+        enumerable: true,
+        get() {
+          getterCalls += 1
+          return "hostile"
+        },
+      })
+      const accessorSpec = { ...EXEC_SPEC, argv: accessorArgv }
+      const accessorStart = makeOperation("exec_start", { generation_transition: undefined })
+      await expect(
+        h.adapter.start_exec(
+          makeContext(accessorStart, h.journal),
+          handle,
+          accessorSpec,
+          accessorStart,
+        ),
+      ).rejects.toMatchObject({ code: "validation_failed" })
+
+      expect(getterCalls).toBe(0)
+      expect(h.credentials.acquisitions).toBe(before)
+      expect(h.client.brokerFrames).toEqual([])
+    })
+
     test("rejects expanded environment fields before provider credentials", async () => {
       const h = harness(provider)
       const handle = await create(h)

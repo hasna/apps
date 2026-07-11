@@ -1,5 +1,10 @@
 import type { Digest } from "./types"
 
+/**
+ * Safe adapter error codes. `integrity_failed` includes a trusted SDK/callback Promise contract
+ * breach; it is a fail-closed adapter result, not a claim that an already-rejected hostile native
+ * Promise can always be contained by the JavaScript host without executing its accessors.
+ */
 export type AdapterErrorCodeV1 =
   | "validation_failed"
   | "unsupported_runtime_feature"

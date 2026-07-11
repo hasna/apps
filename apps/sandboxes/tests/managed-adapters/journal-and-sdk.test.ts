@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import { runInNewContext } from "node:vm"
 import * as managedPublicApi from "../../src/adapters/managed/index"
+import { parseCanonicalJson } from "../../src/adapters/managed/canonical"
 import {
   AdapterContractError,
   JournalIdentityLedgerV1,
@@ -7,7 +9,10 @@ import {
   buildDaytonaExactOwnershipListQuery,
   buildE2bCreateOptions,
   buildE2bExactOwnershipListOptions,
+  canonicalJson,
   canonicalSha256,
+  DAYTONA_GUEST_BROKER_MAX_IN_FLIGHT_BYTES,
+  DAYTONA_GUEST_BROKER_MAX_IN_FLIGHT_DELIVERIES,
   DAYTONA_SDK_PIN,
   DaytonaOfficialSdkControlBridgeV1,
   decodeGuestBrokerRequestFrame,
@@ -16,6 +21,7 @@ import {
   encodeGuestBrokerRequestFrame,
   managedProviderRequestSha256,
   MANAGED_GUEST_BROKER_BOOTSTRAP_COMMAND,
+  MANAGED_GUEST_BROKER_MAX_FRAME_BYTES,
   MANAGED_GUEST_BROKER_PROTOCOL_SHA256,
   OFFICIAL_SDK_CONTRACT_GAPS,
   validateAdapterCallContext,
@@ -73,6 +79,18 @@ describe("managed package boundary", () => {
     expect(manifest.files).toEqual(["dist/index.js", "dist/types"])
     expect(manifest.dependencies?.["@types/ws"]).toBe("8.18.1")
     expect(manifest.scripts?.prepack).toBe("bun run build")
+    expect(managedPublicApi.DAYTONA_GUEST_BROKER_PTY_ID).toBe("hasna-sandboxes-broker-v1")
+    expect(MANAGED_GUEST_BROKER_MAX_FRAME_BYTES).toBe(16 * 1024 * 1024)
+    expect(DAYTONA_GUEST_BROKER_MAX_IN_FLIGHT_DELIVERIES).toBe(8)
+    expect(DAYTONA_GUEST_BROKER_MAX_IN_FLIGHT_BYTES).toBe(
+      MANAGED_GUEST_BROKER_MAX_FRAME_BYTES,
+    )
+    expect(managedPublicApi.createDaytonaDenyAllCandidate).toBe(createDaytonaDenyAllCandidate)
+    expect(managedPublicApi.createE2bDenyAllCandidate).toBe(createE2bDenyAllCandidate)
+    expect(managedPublicApi.withDaytonaGuestBrokerSdkSession).toBe(
+      withDaytonaGuestBrokerSdkSession,
+    )
+    expect(managedPublicApi.withE2bGuestBrokerSdkSession).toBe(withE2bGuestBrokerSdkSession)
 
     const build = await Bun.build({
       entrypoints: [new URL("../../src/adapters/managed/index.ts", import.meta.url).pathname],
@@ -115,6 +133,33 @@ describe("immutable journal identity", () => {
     expect(canonicalSha256({ value: 1n })).not.toBe(canonicalSha256({ value: "1" }))
   })
 
+  test("canonical domains are injective across scalars, bytes, arrays, and records", () => {
+    const collisionCorpus: unknown[] = [
+      null,
+      false,
+      0,
+      1,
+      "1",
+      1n,
+      new Uint8Array([1]),
+      [],
+      ["record"],
+      {},
+      { $bigint: "1" },
+      { $bytes_hex: "01" },
+      { 0: "record" },
+    ]
+    expect(new Set(collisionCorpus.map(canonicalSha256)).size).toBe(collisionCorpus.length)
+    expect(canonicalSha256(1n)).not.toBe(canonicalSha256({ $bigint: "1" }))
+    expect(canonicalSha256(new Uint8Array([1]))).not.toBe(
+      canonicalSha256({ $bytes_hex: "01" }),
+    )
+    expect(canonicalSha256(new TextEncoder().encode(canonicalJson({ value: 1 })))).not.toBe(
+      canonicalSha256({ value: 1 }),
+    )
+    expect(canonicalSha256(["record"])).not.toBe(canonicalSha256({ 0: "record" }))
+  })
+
   test("canonical hashing rejects ambiguous JSON values", () => {
     expect(() => canonicalSha256({ value: Number.NaN })).toThrow("non_canonical_value")
     expect(() => canonicalSha256({ value: Number.POSITIVE_INFINITY })).toThrow("non_canonical_value")
@@ -122,6 +167,76 @@ describe("immutable journal identity", () => {
     expect(() => canonicalSha256({ value: undefined })).toThrow("non_canonical_value")
     expect(() => canonicalSha256({ value: new Date(0) })).toThrow("non_canonical_value")
   })
+
+  test("canonical records preserve special own keys and reject hidden behavior", () => {
+    const special = JSON.parse(
+      '{"__proto__":"proto-entry","constructor":"constructor-entry","prototype":"prototype-entry"}',
+    )
+    expect(canonicalJson(special)).toBe(
+      '["record",[["__proto__",["string","proto-entry"]],["constructor",["string","constructor-entry"]],["prototype",["string","prototype-entry"]]]]',
+    )
+    expect(Object.getPrototypeOf(special)).toBe(Object.prototype)
+    const decodedSpecial = parseCanonicalJson(canonicalJson(special)) as Record<string, unknown>
+    expect(Object.getPrototypeOf(decodedSpecial)).toBeNull()
+    expect(decodedSpecial).toEqual(special)
+    expect(Object.hasOwn(decodedSpecial, "__proto__")).toBe(true)
+
+    let getterCalls = 0
+    const accessor = {}
+    Object.defineProperty(accessor, "value", {
+      enumerable: true,
+      get() {
+        getterCalls += 1
+        return "hostile"
+      },
+    })
+    expect(() => canonicalJson(accessor)).toThrow("non_canonical_value")
+    expect(getterCalls).toBe(0)
+
+    const symbolRecord = { value: "safe" }
+    Object.defineProperty(symbolRecord, Symbol("hostile"), {
+      enumerable: true,
+      value: "hidden",
+    })
+    expect(() => canonicalJson(symbolRecord)).toThrow("non_canonical_value")
+
+    const nonEnumerable = { value: "safe" }
+    Object.defineProperty(nonEnumerable, "hidden", { value: "hidden" })
+    expect(() => canonicalJson(nonEnumerable)).toThrow("non_canonical_value")
+  })
+
+  test("canonical arrays require dense own data indexes without invoking accessors", () => {
+    expect(canonicalJson(runInNewContext('["safe"]'))).toBe(canonicalJson(["safe"]))
+
+    const sparse = ["safe"]
+    sparse.length = 2
+    expect(() => canonicalJson(sparse)).toThrow("non_canonical_value")
+
+    let getterCalls = 0
+    const accessor: string[] = []
+    Object.defineProperty(accessor, "0", {
+      enumerable: true,
+      get() {
+        getterCalls += 1
+        return "hostile"
+      },
+    })
+    expect(() => canonicalJson(accessor)).toThrow("non_canonical_value")
+    expect(getterCalls).toBe(0)
+
+    const nonEnumerable = ["safe"]
+    Object.defineProperty(nonEnumerable, "0", { enumerable: false, value: "hidden" })
+    expect(() => canonicalJson(nonEnumerable)).toThrow("non_canonical_value")
+
+    const extraStringKey = ["safe"]
+    Object.defineProperty(extraStringKey, "extra", { enumerable: true, value: "hidden" })
+    expect(() => canonicalJson(extraStringKey)).toThrow("non_canonical_value")
+
+    const extraSymbolKey = ["safe"]
+    Object.defineProperty(extraSymbolKey, Symbol("extra"), { enumerable: true, value: "hidden" })
+    expect(() => canonicalJson(extraSymbolKey)).toThrow("non_canonical_value")
+  })
+
   test("accepts exact duplicate bytes for the full record identity", () => {
     const op = makeOperation("create_inert")
     const ctx = makeContext(op, new FakeJournal())
@@ -462,12 +577,13 @@ describe("official SDK guest-broker compensation bridges", () => {
     provider: "e2b" | "daytona",
     close: () => Promise<void>,
     use: (session: BrokerSession) => Promise<void>,
+    send: (bytes: Uint8Array) => Promise<void> = async () => {},
   ): Promise<void> {
     if (provider === "e2b") {
       const commands = {
         async run() {
           return {
-            async sendStdin() {},
+            sendStdin: send,
             closeStdin: close,
           }
         },
@@ -479,7 +595,7 @@ describe("official SDK guest-broker compensation bridges", () => {
       async createPty() {
         return {
           async waitForConnection() {},
-          async sendInput() {},
+          sendInput: send,
           disconnect: close,
         }
       },
@@ -519,6 +635,205 @@ describe("official SDK guest-broker compensation bridges", () => {
         promiseConstructor.reject = originalReject
       },
     }
+  }
+
+  function replacePromiseSpecies(
+    mode: "invalid_species" | "substitute_species",
+  ): { restore: () => void } {
+    const promiseConstructor = Promise
+    const speciesDescriptor = Object.getOwnPropertyDescriptor(
+      promiseConstructor,
+      Symbol.species,
+    )!
+
+    if (mode === "invalid_species") {
+      Object.defineProperty(promiseConstructor, Symbol.species, {
+        configurable: true,
+        value: {},
+      })
+    } else {
+      const replacementSpecies = function ReplacementPromiseSpecies() {
+        throw new Error("replacement Promise species invoked")
+      }
+      Object.defineProperty(promiseConstructor, Symbol.species, {
+        configurable: true,
+        value: replacementSpecies,
+      })
+    }
+
+    return {
+      restore() {
+        Object.defineProperty(promiseConstructor, Symbol.species, speciesDescriptor)
+      },
+    }
+  }
+
+  function replaceGlobalPromiseConstructor(): { restore: () => void } {
+    const intrinsicPromise = globalThis.Promise
+    const replacement = function ReplacementPromiseConstructor() {
+      throw new Error("replacement Promise constructor invoked")
+    } as unknown as PromiseConstructor
+    replacement.resolve = (() => {
+      throw new Error("replacement Promise.resolve invoked")
+    }) as PromiseConstructor["resolve"]
+    replacement.reject = (() => {
+      throw new Error("replacement Promise.reject invoked")
+    }) as PromiseConstructor["reject"]
+    replacement.all = (() => {
+      throw new Error("replacement Promise.all invoked")
+    }) as PromiseConstructor["all"]
+    replacement.allSettled = (() => {
+      throw new Error("replacement Promise.allSettled invoked")
+    }) as PromiseConstructor["allSettled"]
+    replacement.any = (() => {
+      throw new Error("replacement Promise.any invoked")
+    }) as PromiseConstructor["any"]
+    replacement.race = (() => {
+      throw new Error("replacement Promise.race invoked")
+    }) as PromiseConstructor["race"]
+    replacement.withResolvers = (() => {
+      throw new Error("replacement Promise.withResolvers invoked")
+    }) as PromiseConstructor["withResolvers"]
+    Object.defineProperty(replacement, Symbol.species, {
+      configurable: true,
+      value: replacement,
+    })
+    globalThis.Promise = replacement
+    return {
+      restore() {
+        globalThis.Promise = intrinsicPromise
+      },
+    }
+  }
+
+  type PromisePrototypeAttackMode =
+    | "throwing_constructor"
+    | "substitute_constructor"
+    | "constructor_then_species"
+
+  function replacePromisePrototype(
+    mode: PromisePrototypeAttackMode,
+  ): { restore: () => void; thenCalls: () => number } {
+    const promiseConstructor = Promise
+    const promisePrototype = promiseConstructor.prototype
+    const constructorDescriptor = Object.getOwnPropertyDescriptor(
+      promisePrototype,
+      "constructor",
+    )!
+    const thenDescriptor = Object.getOwnPropertyDescriptor(promisePrototype, "then")!
+    const speciesDescriptor = Object.getOwnPropertyDescriptor(
+      promiseConstructor,
+      Symbol.species,
+    )!
+    const originalApply = Reflect.apply
+    const originalResolve = promiseConstructor.resolve
+    let replacementThenCalls = 0
+
+    if (mode === "throwing_constructor") {
+      Object.defineProperty(promisePrototype, "constructor", {
+        configurable: true,
+        get() {
+          throw new Error("replacement Promise constructor getter invoked")
+        },
+      })
+    } else {
+      const substituteConstructor = function SubstitutePromiseConstructor() {
+        throw new Error("substitute Promise constructor invoked")
+      } as unknown as PromiseConstructor
+      const substituteSpecies = function SubstitutePromiseSpecies() {
+        throw new Error("substitute Promise species invoked")
+      }
+      Object.defineProperty(substituteConstructor, Symbol.species, {
+        configurable: true,
+        value: substituteSpecies,
+      })
+      Object.defineProperty(promisePrototype, "constructor", {
+        configurable: true,
+        value: substituteConstructor,
+        writable: true,
+      })
+    }
+
+    if (mode === "constructor_then_species") {
+      promisePrototype.then = (function replacementThen() {
+        replacementThenCalls += 1
+        return originalApply(originalResolve, promiseConstructor, [undefined])
+      }) as typeof promisePrototype.then
+      Object.defineProperty(promiseConstructor, Symbol.species, {
+        configurable: true,
+        value: {},
+      })
+    }
+
+    return {
+      restore() {
+        Object.defineProperty(promiseConstructor, Symbol.species, speciesDescriptor)
+        Object.defineProperty(promisePrototype, "then", thenDescriptor)
+        Object.defineProperty(promisePrototype, "constructor", constructorDescriptor)
+      },
+      thenCalls() {
+        return replacementThenCalls
+      },
+    }
+  }
+
+  type ProviderPromiseShape =
+    | "cross_realm"
+    | "frozen"
+    | "non_extensible"
+    | "own_nonconfig"
+
+  function shapeProviderPromise<T>(
+    shape: ProviderPromiseShape,
+    outcome: { status: "fulfilled"; value: T } | { status: "rejected"; reason: unknown },
+    preobserveRejection = true,
+  ): Promise<T> {
+    const promise = shape === "cross_realm"
+      ? runInNewContext(
+          outcome.status === "fulfilled"
+            ? "Promise.resolve(value)"
+            : "Promise.reject(reason)",
+          outcome.status === "fulfilled" ? { value: outcome.value } : { reason: outcome.reason },
+        ) as Promise<T>
+      : outcome.status === "fulfilled"
+        ? Promise.resolve(outcome.value)
+        : Promise.reject(outcome.reason)
+
+    if (outcome.status === "rejected" && preobserveRejection) {
+      void promise.then(undefined, () => undefined)
+    }
+    if (shape === "frozen") Object.freeze(promise)
+    if (shape === "non_extensible") Object.preventExtensions(promise)
+    if (shape === "own_nonconfig") {
+      Object.defineProperty(promise, "constructor", {
+        configurable: false,
+        value: promise.constructor,
+        writable: false,
+      })
+      Object.defineProperty(promise, "then", {
+        configurable: false,
+        value: promise.then,
+        writable: false,
+      })
+    }
+    return promise
+  }
+
+  function promiseSurface(promise: Promise<unknown>): object {
+    return {
+      constructor: Object.getOwnPropertyDescriptor(promise, "constructor"),
+      extensible: Object.isExtensible(promise),
+      frozen: Object.isFrozen(promise),
+      keys: Reflect.ownKeys(promise),
+      then: Object.getOwnPropertyDescriptor(promise, "then"),
+    }
+  }
+
+  function expectNativeOwnedPromise(promise: Promise<unknown>): void {
+    expect(Object.hasOwn(promise, "constructor")).toBe(false)
+    expect(Object.hasOwn(promise, "then")).toBe(false)
+    expect(promise.constructor).toBe(Promise)
+    expect(Promise.resolve(promise)).toBe(promise)
   }
 
   test("E2B runs only the fixed command and sends framed bytes over stdin", async () => {
@@ -756,6 +1071,1089 @@ describe("official SDK guest-broker compensation bridges", () => {
     }
   })
 
+  test("Promise species replacements do not interrupt transient close observation", async () => {
+    const results: Array<{
+      closeCalls: number
+      closeReturned: boolean
+      provider: "e2b" | "daytona"
+      mode: "invalid_species" | "substitute_species"
+      synchronousFailure: unknown
+      wrapper: Settled<void> | undefined
+    }> = []
+
+    for (const provider of ["e2b", "daytona"] as const) {
+      for (const mode of ["invalid_species", "substitute_species"] as const) {
+        let closeCalls = 0
+        let closeReturned = false
+        let synchronousFailure: unknown
+        let wrapper: Settled<void> | undefined
+        const replacement = replacePromiseSpecies(mode)
+        try {
+          wrapper = await settle(() =>
+            runBrokerSession(
+              provider,
+              async () => {
+                closeCalls += 1
+                if (closeCalls === 1) {
+                  await new Promise<void>((_resolve, reject) => {
+                    setTimeout(() => reject(new Error("transient close failure")), 0)
+                  })
+                }
+              },
+              async (session) => {
+                try {
+                  session.closeInput()
+                  closeReturned = true
+                } catch (error) {
+                  synchronousFailure = error
+                }
+              },
+            ),
+          )
+        } finally {
+          replacement.restore()
+        }
+        results.push({ closeCalls, closeReturned, provider, mode, synchronousFailure, wrapper })
+      }
+    }
+
+    for (const result of results) {
+      expect(result.closeCalls).toBe(2)
+      expect(result.closeReturned).toBe(true)
+      expect(result.synchronousFailure).toBeUndefined()
+      expect(result.wrapper).toEqual({ status: "fulfilled", value: undefined })
+    }
+  })
+
+  test("Promise species replacements preserve persistent failure and sealing", async () => {
+    const results: Array<{
+      closeCalls: number
+      closedSend: Settled<void> | undefined
+      provider: "e2b" | "daytona"
+      mode: "invalid_species" | "substitute_species"
+      wrapper: Settled<void> | undefined
+    }> = []
+
+    for (const provider of ["e2b", "daytona"] as const) {
+      for (const mode of ["invalid_species", "substitute_species"] as const) {
+        let closeCalls = 0
+        let retainedSession: BrokerSession | undefined
+        let wrapper: Settled<void> | undefined
+        let closedSend: Settled<void> | undefined
+        const replacement = replacePromiseSpecies(mode)
+        try {
+          wrapper = await settle(() =>
+            runBrokerSession(
+              provider,
+              async () => {
+                closeCalls += 1
+                throw new Error("persistent close failure")
+              },
+              async (session) => {
+                retainedSession = session
+              },
+            ),
+          )
+          closedSend = await settle(() => retainedSession!.sendFrame(brokerFrame()))
+        } finally {
+          replacement.restore()
+        }
+        results.push({ closeCalls, closedSend, provider, mode, wrapper })
+      }
+    }
+
+    for (const result of results) {
+      expect(result.closeCalls).toBe(2)
+      expect(result.wrapper?.status).toBe("rejected")
+      if (result.wrapper?.status === "rejected") {
+        expect(result.wrapper.reason).toBeInstanceOf(Error)
+        expect((result.wrapper.reason as Error).message).toBe("persistent close failure")
+      }
+      expect(result.closedSend?.status).toBe("rejected")
+      if (result.closedSend?.status === "rejected") {
+        expect(result.closedSend.reason).toBeInstanceOf(Error)
+        expect((result.closedSend.reason as Error).message).toBe("guest_broker_session_closed")
+      }
+    }
+  })
+
+  test("Promise species replacements preserve send, joined close, retry, and finalization", async () => {
+    for (const provider of ["e2b", "daytona"] as const) {
+      for (const mode of ["invalid_species", "substitute_species"] as const) {
+        let closeCalls = 0
+        let sendCalls = 0
+        let joined = false
+        let firstClose: Settled<void> | undefined
+        let joinedClose: Settled<void> | undefined
+        let resumedSend: Settled<void> | undefined
+        let retryClose: Settled<void> | undefined
+        let closedSend: Settled<void> | undefined
+        let wrapper: Settled<void> | undefined
+        const replacement = replacePromiseSpecies(mode)
+        try {
+          wrapper = await settle(() =>
+            runBrokerSession(
+              provider,
+              async () => {
+                closeCalls += 1
+                if (closeCalls === 1) throw new Error("transient close failure")
+              },
+              async (session) => {
+                await session.sendFrame(brokerFrame())
+                const first = session.closeInput()
+                const concurrent = session.closeInput()
+                joined = first === concurrent
+                firstClose = await settle(() => first)
+                joinedClose = await settle(() => concurrent)
+                resumedSend = await settle(() => session.sendFrame(brokerFrame()))
+                retryClose = await settle(() => session.closeInput())
+                closedSend = await settle(() => session.sendFrame(brokerFrame()))
+              },
+              async () => {
+                sendCalls += 1
+              },
+            ),
+          )
+        } finally {
+          replacement.restore()
+        }
+
+        expect(sendCalls).toBe(provider === "daytona" ? 3 : 2)
+        expect(closeCalls).toBe(2)
+        expect(joined).toBe(true)
+        expect(firstClose?.status).toBe("rejected")
+        expect(joinedClose?.status).toBe("rejected")
+        expect(resumedSend).toEqual({ status: "fulfilled", value: undefined })
+        expect(retryClose).toEqual({ status: "fulfilled", value: undefined })
+        expect(closedSend?.status).toBe("rejected")
+        expect(wrapper).toEqual({ status: "fulfilled", value: undefined })
+      }
+    }
+  })
+
+  test("post-import Promise constructor replacement cannot redirect broker promises", async () => {
+    for (const provider of ["e2b", "daytona"] as const) {
+      let closeCalls = 0
+      let closedSend: Settled<void> | undefined
+      let wrapper: Settled<void> | undefined
+      const replacement = replaceGlobalPromiseConstructor()
+      try {
+        wrapper = await settle(() =>
+          runBrokerSession(
+            provider,
+            async () => {
+              closeCalls += 1
+            },
+            async (session) => {
+              await session.sendFrame(brokerFrame())
+              await session.closeInput()
+              closedSend = await settle(() => session.sendFrame(brokerFrame()))
+            },
+          ),
+        )
+      } finally {
+        replacement.restore()
+      }
+
+      expect(closeCalls).toBe(1)
+      expect(closedSend?.status).toBe("rejected")
+      if (closedSend?.status === "rejected") {
+        expect(closedSend.reason).toBeInstanceOf(Error)
+        expect((closedSend.reason as Error).message).toBe("guest_broker_session_closed")
+      }
+      expect(wrapper).toEqual({ status: "fulfilled", value: undefined })
+    }
+  })
+
+  test("owned scope wrappers never mutate supported frozen, non-extensible, or own-nonconfig setup promises", async () => {
+    for (const provider of ["e2b", "daytona"] as const) {
+      for (const shape of ["frozen", "non_extensible", "own_nonconfig"] as const) {
+        const handle = provider === "e2b"
+          ? {
+              async sendStdin() {},
+              async closeStdin() {},
+            }
+          : {
+              async waitForConnection() {},
+              async sendInput() {},
+              async disconnect() {},
+            }
+        const rawSetup = shapeProviderPromise(shape, { status: "fulfilled", value: handle })
+        const before = promiseSurface(rawSetup)
+        const wrapper = provider === "e2b"
+          ? withE2bGuestBrokerSdkSession(
+              { run: () => rawSetup } as unknown as E2bOfficialBrokerCommandsV1,
+              async () => {},
+            )
+          : withDaytonaGuestBrokerSdkSession(
+              { createPty: () => rawSetup } as unknown as DaytonaOfficialBrokerProcessV1,
+              () => {},
+              async () => {},
+            )
+        const result = await settle(() => wrapper)
+
+        expect(result).toEqual({ status: "fulfilled", value: undefined })
+        expect(promiseSurface(rawSetup)).toEqual(before)
+        expectNativeOwnedPromise(wrapper)
+      }
+    }
+  })
+
+  test("scope wrappers reject cross-realm setup promises without observing hostile own fields", async () => {
+    for (const provider of ["e2b", "daytona"] as const) {
+      let thenGetterCalls = 0
+      let thenCalls = 0
+      const handle = provider === "e2b"
+        ? {
+            async sendStdin() {},
+            async closeStdin() {},
+          }
+        : {
+            async waitForConnection() {},
+            async sendInput() {},
+            async disconnect() {},
+          }
+      const rawSetup = shapeProviderPromise("cross_realm", {
+        status: "fulfilled",
+        value: handle,
+      })
+      let constructorGetterCalls = 0
+      Object.defineProperty(rawSetup, "constructor", {
+        configurable: false,
+        get() {
+          constructorGetterCalls += 1
+          return Promise
+        },
+      })
+      Object.defineProperty(rawSetup, "then", {
+        configurable: false,
+        get() {
+          thenGetterCalls += 1
+          return (resolve: (value: unknown) => void) => {
+            thenCalls += 1
+            resolve(handle)
+          }
+        },
+      })
+      const before = promiseSurface(rawSetup)
+      const wrapper = provider === "e2b"
+        ? withE2bGuestBrokerSdkSession(
+            { run: () => rawSetup } as unknown as E2bOfficialBrokerCommandsV1,
+            async () => {},
+          )
+        : withDaytonaGuestBrokerSdkSession(
+            { createPty: () => rawSetup } as unknown as DaytonaOfficialBrokerProcessV1,
+            () => {},
+            async () => {},
+          )
+      const result = await settle(() => wrapper)
+
+      expect(result.status).toBe("rejected")
+      if (result.status === "rejected") {
+        expect(result.reason).toBeInstanceOf(AdapterContractError)
+        expect(result.reason).toMatchObject({ code: "integrity_failed" })
+      }
+      expect(constructorGetterCalls).toBe(0)
+      expect(thenGetterCalls).toBe(0)
+      expect(thenCalls).toBe(0)
+      expect(promiseSurface(rawSetup)).toEqual(before)
+      expectNativeOwnedPromise(wrapper)
+    }
+  })
+
+  test("owned scope wrappers preserve frozen rejected use promises and exact errors", async () => {
+    for (const provider of ["e2b", "daytona"] as const) {
+      const useFailure = new Error(`${provider} use failure`)
+      const rawUse = shapeProviderPromise<void>("frozen", {
+        status: "rejected",
+        reason: useFailure,
+      })
+      const before = promiseSurface(rawUse)
+      const use = () => rawUse
+      const wrapper = provider === "e2b"
+        ? withE2bGuestBrokerSdkSession(
+            {
+              async run() {
+                return { async sendStdin() {}, async closeStdin() {} }
+              },
+            } as unknown as E2bOfficialBrokerCommandsV1,
+            use,
+          )
+        : withDaytonaGuestBrokerSdkSession(
+            {
+              async createPty() {
+                return {
+                  async waitForConnection() {},
+                  async sendInput() {},
+                  async disconnect() {},
+                }
+              },
+            } as unknown as DaytonaOfficialBrokerProcessV1,
+            () => {},
+            use,
+          )
+      const result = await settle(() => wrapper)
+
+      expect(result).toEqual({ status: "rejected", reason: useFailure })
+      expect(promiseSurface(rawUse)).toEqual(before)
+      expectNativeOwnedPromise(wrapper)
+    }
+  })
+
+  test("send and close use fresh native wrappers without mutating frozen rejected provider promises", async () => {
+    for (const provider of ["e2b", "daytona"] as const) {
+      const sendFailure = new Error(`${provider} frozen send failure`)
+      const closeFailure = new Error(`${provider} frozen close failure`)
+      const rawSend = shapeProviderPromise<void>("frozen", {
+        status: "rejected",
+        reason: sendFailure,
+      })
+      const rawClose = shapeProviderPromise<void>("frozen", {
+        status: "rejected",
+        reason: closeFailure,
+      })
+      const sendBefore = promiseSurface(rawSend)
+      const closeBefore = promiseSurface(rawClose)
+      let sendCalls = 0
+      let closeCalls = 0
+      let sendSynchronousFailure: unknown
+      let sendWrapper: Promise<void> | undefined
+      let closeWrapper: Promise<void> | undefined
+      let joinedClose: Promise<void> | undefined
+      let sendResult: Settled<void> | undefined
+      let closeResult: Settled<void> | undefined
+
+      const send = () => {
+        sendCalls += 1
+        return rawSend
+      }
+      const close = () => {
+        closeCalls += 1
+        return closeCalls === 1 ? rawClose : Promise.resolve()
+      }
+      const use = async (session: BrokerSession) => {
+        try {
+          sendWrapper = session.sendFrame(brokerFrame())
+        } catch (reason) {
+          sendSynchronousFailure = reason
+        }
+        if (sendWrapper !== undefined) sendResult = await settle(() => sendWrapper!)
+        closeWrapper = session.closeInput()
+        joinedClose = session.closeInput()
+        closeResult = await settle(() => closeWrapper!)
+        await session.closeInput()
+      }
+      const wrapper = provider === "e2b"
+        ? withE2bGuestBrokerSdkSession(
+            {
+              async run() {
+                return { sendStdin: send, closeStdin: close }
+              },
+            } as unknown as E2bOfficialBrokerCommandsV1,
+            use,
+          )
+        : withDaytonaGuestBrokerSdkSession(
+            {
+              async createPty() {
+                return {
+                  async waitForConnection() {},
+                  sendInput(input: string | Uint8Array) {
+                    return typeof input === "string" ? Promise.resolve() : send()
+                  },
+                  disconnect: close,
+                }
+              },
+            } as unknown as DaytonaOfficialBrokerProcessV1,
+            () => {},
+            use,
+          )
+      const wrapperResult = await settle(() => wrapper)
+
+      expect(wrapperResult).toEqual({ status: "fulfilled", value: undefined })
+      expect(sendSynchronousFailure).toBeUndefined()
+      expect(sendResult).toEqual({ status: "rejected", reason: sendFailure })
+      expect(closeResult).toEqual({ status: "rejected", reason: closeFailure })
+      expect(joinedClose).toBe(closeWrapper)
+      expect(sendCalls).toBe(1)
+      expect(closeCalls).toBe(2)
+      expect(promiseSurface(rawSend)).toEqual(sendBefore)
+      expect(promiseSurface(rawClose)).toEqual(closeBefore)
+      expect(sendWrapper).toBeDefined()
+      expect(closeWrapper).toBeDefined()
+      expectNativeOwnedPromise(sendWrapper!)
+      expectNativeOwnedPromise(closeWrapper!)
+      expectNativeOwnedPromise(wrapper)
+    }
+  })
+
+  test("observes a frozen rejected SDK promise before it can become unhandled", async () => {
+    const providerFailure = new Error("frozen setup rejection")
+    const rawSetup = shapeProviderPromise<never>(
+      "frozen",
+      { status: "rejected", reason: providerFailure },
+      false,
+    )
+    const before = promiseSurface(rawSetup)
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason)
+    }
+    process.on("unhandledRejection", onUnhandled)
+    try {
+      const commands = {
+        run() {
+          return rawSetup
+        },
+      } as unknown as E2bOfficialBrokerCommandsV1
+      const wrapper = withE2bGuestBrokerSdkSession(commands, async () => {})
+      const result = await settle(() => wrapper)
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+      expect(result).toEqual({ status: "rejected", reason: providerFailure })
+      expect(unhandled).toEqual([])
+      expect(promiseSurface(rawSetup)).toEqual(before)
+      expectNativeOwnedPromise(wrapper)
+    } finally {
+      process.off("unhandledRejection", onUnhandled)
+    }
+  })
+
+  test("rejects out-of-contract PromiseLike setup without invoking or rewriting it", async () => {
+    let thenCalls = 0
+    const thenable = {
+      then() {
+        thenCalls += 1
+      },
+    }
+    const before = Reflect.ownKeys(thenable)
+    const commands = {
+      run() {
+        return thenable
+      },
+    } as unknown as E2bOfficialBrokerCommandsV1
+
+    const result = await settle(() => withE2bGuestBrokerSdkSession(commands, async () => {}))
+    expect(result.status).toBe("rejected")
+    if (result.status === "rejected") {
+      expect(result.reason).toBeInstanceOf(AdapterContractError)
+      expect(result.reason).toMatchObject({ code: "integrity_failed" })
+    }
+    expect(thenCalls).toBe(0)
+    expect(Reflect.ownKeys(thenable)).toEqual(before)
+  })
+
+  test("does not retry an out-of-contract PromiseLike close after provider reachability", async () => {
+    for (const provider of ["e2b", "daytona"] as const) {
+      let closeCalls = 0
+      let thenCalls = 0
+      const thenable = {
+        then() {
+          thenCalls += 1
+        },
+      }
+      const close = () => {
+        closeCalls += 1
+        return thenable
+      }
+      let firstClose: Promise<void> | undefined
+      let joinedClose: Promise<void> | undefined
+      const use = async (session: BrokerSession) => {
+        firstClose = session.closeInput()
+        joinedClose = session.closeInput()
+        await settle(() => firstClose!)
+      }
+      const wrapper = provider === "e2b"
+        ? withE2bGuestBrokerSdkSession(
+            {
+              async run() {
+                return { async sendStdin() {}, closeStdin: close }
+              },
+            } as unknown as E2bOfficialBrokerCommandsV1,
+            use,
+          )
+        : withDaytonaGuestBrokerSdkSession(
+            {
+              async createPty() {
+                return {
+                  async waitForConnection() {},
+                  async sendInput() {},
+                  disconnect: close,
+                }
+              },
+            } as unknown as DaytonaOfficialBrokerProcessV1,
+            () => {},
+            use,
+          )
+      const result = await settle(() => wrapper)
+
+      expect(result.status).toBe("rejected")
+      if (result.status === "rejected") {
+        expect(result.reason).toBeInstanceOf(AdapterContractError)
+        expect(result.reason).toMatchObject({ code: "integrity_failed" })
+      }
+      expect(closeCalls).toBe(1)
+      expect(joinedClose).toBe(firstClose)
+      expect(thenCalls).toBe(0)
+      expect(Reflect.ownKeys(thenable)).toEqual(["then"])
+    }
+  })
+
+  test("seals outbound after an out-of-contract PromiseLike send", async () => {
+    for (const provider of ["e2b", "daytona"] as const) {
+      let sendCalls = 0
+      let thenCalls = 0
+      let firstSend: Settled<void> | undefined
+      let secondSend: Settled<void> | undefined
+      const thenable = {
+        then() {
+          thenCalls += 1
+        },
+      }
+      const send = () => {
+        sendCalls += 1
+        return thenable
+      }
+      const use = async (session: BrokerSession) => {
+        firstSend = await settle(() => session.sendFrame(brokerFrame()))
+        secondSend = await settle(() => session.sendFrame(brokerFrame()))
+      }
+      const wrapper = provider === "e2b"
+        ? withE2bGuestBrokerSdkSession(
+            {
+              async run() {
+                return { sendStdin: send, async closeStdin() {} }
+              },
+            } as unknown as E2bOfficialBrokerCommandsV1,
+            use,
+          )
+        : withDaytonaGuestBrokerSdkSession(
+            {
+              async createPty() {
+                return {
+                  async waitForConnection() {},
+                  sendInput(input: string | Uint8Array) {
+                    return typeof input === "string" ? Promise.resolve() : send()
+                  },
+                  async disconnect() {},
+                }
+              },
+            } as unknown as DaytonaOfficialBrokerProcessV1,
+            () => {},
+            use,
+          )
+      await wrapper
+
+      expect(firstSend?.status).toBe("rejected")
+      if (firstSend?.status === "rejected") {
+        expect(firstSend.reason).toBeInstanceOf(AdapterContractError)
+        expect(firstSend.reason).toMatchObject({ code: "integrity_failed" })
+      }
+      expect(secondSend?.status).toBe("rejected")
+      if (secondSend?.status === "rejected") {
+        expect(secondSend.reason).toBeInstanceOf(Error)
+        expect((secondSend.reason as Error).message).toBe("guest_broker_session_closed")
+      }
+      expect(sendCalls).toBe(1)
+      expect(thenCalls).toBe(0)
+    }
+  })
+
+  test("Daytona SDK-facing callbacks fulfill while the scope preserves handler rejection", async () => {
+    let sdkOnData: ((data: Uint8Array) => void | Promise<void>) | undefined
+    let deliveryWrapper: void | Promise<void> = undefined
+    let deliveryResult: Settled<void> | undefined
+    const handlerFailure = new Error("frozen Daytona handler failure")
+    const rawHandler = shapeProviderPromise<void>("frozen", {
+      status: "rejected",
+      reason: handlerFailure,
+    })
+    const before = promiseSurface(rawHandler)
+    const process = {
+      async createPty(options: { onData: (data: Uint8Array) => void | Promise<void> }) {
+        sdkOnData = options.onData
+        return {
+          async waitForConnection() {},
+          async sendInput() {},
+          async disconnect() {},
+        }
+      },
+    } as unknown as DaytonaOfficialBrokerProcessV1
+
+    const wrapper = withDaytonaGuestBrokerSdkSession(
+      process,
+      () => rawHandler,
+      async () => {
+        deliveryWrapper = sdkOnData!(new Uint8Array([1]))
+        if (deliveryWrapper !== undefined) {
+          deliveryResult = await settle(() => deliveryWrapper as Promise<void>)
+        }
+      },
+    )
+    const wrapperResult = await settle(() => wrapper)
+
+    expect(deliveryWrapper).toBeDefined()
+    expect(deliveryResult).toEqual({ status: "fulfilled", value: undefined })
+    expect(wrapperResult).toEqual({ status: "rejected", reason: handlerFailure })
+    expect(promiseSurface(rawHandler)).toEqual(before)
+    if (deliveryWrapper === undefined) throw new Error("missing Daytona delivery wrapper")
+    expectNativeOwnedPromise(deliveryWrapper)
+    expectNativeOwnedPromise(wrapper)
+  })
+
+  test("Daytona scope drains an accepted callback even when the SDK ignores its promise", async () => {
+    let sdkOnData: ((data: Uint8Array) => void | Promise<void>) | undefined
+    let releaseDelivery!: () => void
+    const rawDelivery = new Promise<void>((resolve) => {
+      releaseDelivery = resolve
+    })
+    const before = promiseSurface(rawDelivery)
+    let deliveryWrapper: void | Promise<void> = undefined
+    let wrapperSettled = false
+    const process = {
+      async createPty(options: { onData: (data: Uint8Array) => void | Promise<void> }) {
+        sdkOnData = options.onData
+        return {
+          async waitForConnection() {},
+          async sendInput() {},
+          async disconnect() {},
+        }
+      },
+    } as unknown as DaytonaOfficialBrokerProcessV1
+    const wrapper = withDaytonaGuestBrokerSdkSession(
+      process,
+      () => rawDelivery,
+      async () => {
+        deliveryWrapper = sdkOnData!(new Uint8Array([1]))
+      },
+    )
+    void wrapper.then(
+      () => {
+        wrapperSettled = true
+      },
+      () => {
+        wrapperSettled = true
+      },
+    )
+    await Promise.resolve()
+    await Promise.resolve()
+    const settledBeforeRelease = wrapperSettled
+    releaseDelivery()
+    const result = await settle(() => wrapper)
+
+    expect(settledBeforeRelease).toBe(false)
+    expect(result).toEqual({ status: "fulfilled", value: undefined })
+    expect(deliveryWrapper).toBeDefined()
+    expect(promiseSurface(rawDelivery)).toEqual(before)
+    if (deliveryWrapper === undefined) throw new Error("missing Daytona delivery wrapper")
+    expectNativeOwnedPromise(deliveryWrapper)
+    expectNativeOwnedPromise(wrapper)
+  })
+
+  test("Daytona reports handler failures in callback acceptance order", async () => {
+    let sdkOnData: ((data: Uint8Array) => void | Promise<void>) | undefined
+    let rejectFirst!: (reason: unknown) => void
+    const firstFailure = new Error("first accepted handler failure")
+    const secondFailure = new Error("second accepted handler failure")
+    const firstDelivery = new Promise<void>((_resolve, reject) => {
+      rejectFirst = reject
+    })
+    const process = {
+      async createPty(options: { onData: (data: Uint8Array) => void | Promise<void> }) {
+        sdkOnData = options.onData
+        return {
+          async waitForConnection() {},
+          async sendInput() {},
+          async disconnect() {},
+        }
+      },
+    } as unknown as DaytonaOfficialBrokerProcessV1
+    const wrapper = withDaytonaGuestBrokerSdkSession(
+      process,
+      (data) => data[0] === 1 ? firstDelivery : Promise.reject(secondFailure),
+      async () => {
+        void sdkOnData!(new Uint8Array([1]))
+        void sdkOnData!(new Uint8Array([2]))
+        await Promise.resolve()
+        rejectFirst(firstFailure)
+      },
+    )
+
+    expect(await settle(() => wrapper)).toEqual({ status: "rejected", reason: firstFailure })
+  })
+
+  test("Daytona enforces frame, in-flight count, and in-flight byte bounds before delivery", async () => {
+    const maxFrameBytes = MANAGED_GUEST_BROKER_MAX_FRAME_BYTES
+
+    {
+      let sdkOnData: ((data: Uint8Array) => void | Promise<void>) | undefined
+      let deliveries = 0
+      let callbackResult: Settled<void> | undefined
+      const wrapper = withDaytonaGuestBrokerSdkSession(
+        {
+          async createPty(options: { onData: (data: Uint8Array) => void | Promise<void> }) {
+            sdkOnData = options.onData
+            return {
+              async waitForConnection() {},
+              async sendInput() {},
+              async disconnect() {},
+            }
+          },
+        } as unknown as DaytonaOfficialBrokerProcessV1,
+        () => {
+          deliveries += 1
+        },
+        async () => {
+          callbackResult = await settle(async () => {
+            await sdkOnData!(new Uint8Array(maxFrameBytes + 1))
+          })
+        },
+      )
+      const result = await settle(() => wrapper)
+
+      expect(callbackResult).toEqual({ status: "fulfilled", value: undefined })
+      expect(result.status).toBe("rejected")
+      if (result.status === "rejected") {
+        expect(result.reason).toMatchObject({ code: "output_limit_exceeded" })
+      }
+      expect(deliveries).toBe(0)
+    }
+
+    {
+      let sdkOnData: ((data: Uint8Array) => void | Promise<void>) | undefined
+      const releases: Array<() => void> = []
+      let deliveries = 0
+      const callbackResults: Settled<void>[] = []
+      const wrapper = withDaytonaGuestBrokerSdkSession(
+        {
+          async createPty(options: { onData: (data: Uint8Array) => void | Promise<void> }) {
+            sdkOnData = options.onData
+            return {
+              async waitForConnection() {},
+              async sendInput() {},
+              async disconnect() {},
+            }
+          },
+        } as unknown as DaytonaOfficialBrokerProcessV1,
+        () => {
+          deliveries += 1
+          return new Promise<void>((resolve) => releases.push(resolve))
+        },
+        async () => {
+          const callbacks = Array.from({ length: 9 }, () =>
+            sdkOnData!(new Uint8Array([1])) as Promise<void>,
+          )
+          for (const release of releases) release()
+          for (const callback of callbacks) {
+            callbackResults.push(await settle(() => callback))
+          }
+        },
+      )
+      const result = await settle(() => wrapper)
+
+      expect(deliveries).toBe(8)
+      expect(callbackResults).toHaveLength(9)
+      expect(callbackResults.every((entry) => entry.status === "fulfilled")).toBe(true)
+      expect(result.status).toBe("rejected")
+      if (result.status === "rejected") {
+        expect(result.reason).toMatchObject({ code: "output_limit_exceeded" })
+      }
+    }
+
+    {
+      let sdkOnData: ((data: Uint8Array) => void | Promise<void>) | undefined
+      let release!: () => void
+      let deliveries = 0
+      const frameBytes = Math.floor(maxFrameBytes / 2) + 1
+      const wrapper = withDaytonaGuestBrokerSdkSession(
+        {
+          async createPty(options: { onData: (data: Uint8Array) => void | Promise<void> }) {
+            sdkOnData = options.onData
+            return {
+              async waitForConnection() {},
+              async sendInput() {},
+              async disconnect() {},
+            }
+          },
+        } as unknown as DaytonaOfficialBrokerProcessV1,
+        () => {
+          deliveries += 1
+          return new Promise<void>((resolve) => {
+            release = resolve
+          })
+        },
+        async () => {
+          const first = sdkOnData!(new Uint8Array(frameBytes)) as Promise<void>
+          const second = sdkOnData!(new Uint8Array(frameBytes)) as Promise<void>
+          release()
+          expect(await settle(() => first)).toEqual({ status: "fulfilled", value: undefined })
+          expect(await settle(() => second)).toEqual({ status: "fulfilled", value: undefined })
+        },
+      )
+      const result = await settle(() => wrapper)
+
+      expect(deliveries).toBe(1)
+      expect(result.status).toBe("rejected")
+      if (result.status === "rejected") {
+        expect(result.reason).toMatchObject({ code: "output_limit_exceeded" })
+      }
+    }
+  })
+
+  test("Daytona releases successful delivery capacity across the session lifetime", async () => {
+    let sdkOnData: ((data: Uint8Array) => void | Promise<void>) | undefined
+    let deliveries = 0
+    const process = {
+      async createPty(options: { onData: (data: Uint8Array) => void | Promise<void> }) {
+        sdkOnData = options.onData
+        return {
+          async waitForConnection() {},
+          async sendInput() {},
+          async disconnect() {},
+        }
+      },
+    } as unknown as DaytonaOfficialBrokerProcessV1
+
+    await withDaytonaGuestBrokerSdkSession(
+      process,
+      async () => {
+        deliveries += 1
+      },
+      async () => {
+        for (let index = 0; index < 32; index += 1) {
+          await sdkOnData!(new Uint8Array([index]))
+        }
+      },
+    )
+
+    expect(deliveries).toBe(32)
+  })
+
+  test("Daytona late callbacks return harmlessly before Promise or byte validation", async () => {
+    let sdkOnData: ((data: Uint8Array) => void | Promise<void>) | undefined
+    let deliveries = 0
+    const process = {
+      async createPty(options: { onData: (data: Uint8Array) => void | Promise<void> }) {
+        sdkOnData = options.onData
+        return {
+          async waitForConnection() {},
+          async sendInput() {},
+          async disconnect() {},
+        }
+      },
+    } as unknown as DaytonaOfficialBrokerProcessV1
+
+    await withDaytonaGuestBrokerSdkSession(
+      process,
+      () => {
+        deliveries += 1
+      },
+      async () => {},
+    )
+
+    let lateResult: void | Promise<void> = undefined
+    const attack = replacePromisePrototype("throwing_constructor")
+    try {
+      lateResult = sdkOnData!({} as Uint8Array)
+    } finally {
+      attack.restore()
+    }
+    if (lateResult !== undefined) await settle(() => lateResult as Promise<void>)
+
+    expect(lateResult).toBeUndefined()
+    expect(deliveries).toBe(0)
+  })
+
+  test("Daytona tracks active callback validation failures ignored by the SDK", async () => {
+    for (const mode of ["promise_integrity", "byte_snapshot"] as const) {
+      let sdkOnData: ((data: Uint8Array) => void | Promise<void>) | undefined
+      let deliveries = 0
+      const unhandled: unknown[] = []
+      const onUnhandled = (reason: unknown) => {
+        unhandled.push(reason)
+      }
+      const providerProcess = {
+        async createPty(options: { onData: (data: Uint8Array) => void | Promise<void> }) {
+          sdkOnData = options.onData
+          return {
+            async waitForConnection() {},
+            async sendInput() {},
+            async disconnect() {},
+          }
+        },
+      } as unknown as DaytonaOfficialBrokerProcessV1
+      process.on("unhandledRejection", onUnhandled)
+      try {
+        const wrapper = withDaytonaGuestBrokerSdkSession(
+          providerProcess,
+          () => {
+            deliveries += 1
+          },
+          async () => {
+            if (mode === "promise_integrity") {
+              const attack = replacePromisePrototype("throwing_constructor")
+              try {
+                void sdkOnData!(new Uint8Array([1]))
+              } finally {
+                attack.restore()
+              }
+            } else {
+              void sdkOnData!({} as Uint8Array)
+            }
+          },
+        )
+        const result = await settle(() => wrapper)
+        await new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+        expect(result.status).toBe("rejected")
+        if (result.status === "rejected") {
+          expect(result.reason).toBeInstanceOf(AdapterContractError)
+          expect(result.reason).toMatchObject({ code: "integrity_failed" })
+        }
+        expect(deliveries).toBe(0)
+        expect(unhandled).toEqual([])
+      } finally {
+        process.off("unhandledRejection", onUnhandled)
+      }
+    }
+  })
+
+  test("Promise prototype attacks fail closed before provider reachability and always restore", async () => {
+    for (const provider of ["e2b", "daytona"] as const) {
+      for (const mode of [
+        "throwing_constructor",
+        "substitute_constructor",
+        "constructor_then_species",
+      ] as const) {
+        let providerCalls = 0
+        let wrapper: Promise<void> | undefined
+        const attack = replacePromisePrototype(mode)
+        try {
+          if (provider === "e2b") {
+            const commands = {
+              async run() {
+                providerCalls += 1
+                throw new Error("provider must remain unreachable")
+              },
+            } as unknown as E2bOfficialBrokerCommandsV1
+            wrapper = withE2bGuestBrokerSdkSession(commands, async () => {})
+          } else {
+            const process = {
+              async createPty() {
+                providerCalls += 1
+                throw new Error("provider must remain unreachable")
+              },
+            } as unknown as DaytonaOfficialBrokerProcessV1
+            wrapper = withDaytonaGuestBrokerSdkSession(process, () => {}, async () => {})
+          }
+        } finally {
+          attack.restore()
+        }
+
+        expect(wrapper).toBeDefined()
+        const result = await settle(() => wrapper!)
+        expect(result.status).toBe("rejected")
+        if (result.status === "rejected") {
+          expect(result.reason).toBeInstanceOf(AdapterContractError)
+          expect(result.reason).toMatchObject({ code: "integrity_failed" })
+        }
+        expect(providerCalls).toBe(0)
+      }
+    }
+  })
+
+  test("session and Daytona callback boundaries restore globals before observing fail-closed results", async () => {
+    for (const provider of ["e2b", "daytona"] as const) {
+      let sdkOnData: ((data: Uint8Array) => void | Promise<void>) | undefined
+      let sendCalls = 0
+      let closeCalls = 0
+      let onDataCalls = 0
+      let explicitCloseCalls = -1
+      let sendResult: Settled<void> | undefined
+      let closeResult: Settled<void> | undefined
+      let deliveryResult: Settled<void> | undefined
+      const use = async (session: BrokerSession) => {
+        let sendPromise: Promise<void> | undefined
+        let closePromise: Promise<void> | undefined
+        let deliveryPromise: void | Promise<void> = undefined
+        const attack = replacePromisePrototype("throwing_constructor")
+        try {
+          if (provider === "daytona") deliveryPromise = sdkOnData!(new Uint8Array([1]))
+          sendPromise = session.sendFrame(brokerFrame())
+          closePromise = session.closeInput()
+        } finally {
+          attack.restore()
+        }
+        if (provider === "daytona") {
+          deliveryResult = await settle(async () => {
+            await deliveryPromise
+          })
+        }
+        sendResult = await settle(() => sendPromise!)
+        closeResult = await settle(() => closePromise!)
+        explicitCloseCalls = closeCalls
+      }
+      const wrapper = provider === "e2b"
+        ? withE2bGuestBrokerSdkSession(
+            {
+              async run() {
+                return {
+                  async sendStdin() {
+                    sendCalls += 1
+                  },
+                  async closeStdin() {
+                    closeCalls += 1
+                  },
+                }
+              },
+            } as unknown as E2bOfficialBrokerCommandsV1,
+            use,
+          )
+        : withDaytonaGuestBrokerSdkSession(
+            {
+              async createPty(options: { onData: (data: Uint8Array) => void | Promise<void> }) {
+                sdkOnData = options.onData
+                return {
+                  async waitForConnection() {},
+                  async sendInput(input: string | Uint8Array) {
+                    if (typeof input !== "string") sendCalls += 1
+                  },
+                  async disconnect() {
+                    closeCalls += 1
+                  },
+                }
+              },
+            } as unknown as DaytonaOfficialBrokerProcessV1,
+            () => {
+              onDataCalls += 1
+            },
+            use,
+          )
+      const wrapperResult = await settle(() => wrapper)
+
+      for (const result of [sendResult, closeResult]) {
+        expect(result?.status).toBe("rejected")
+        if (result?.status === "rejected") {
+          expect(result.reason).toBeInstanceOf(AdapterContractError)
+          expect(result.reason).toMatchObject({ code: "integrity_failed" })
+        }
+      }
+      if (provider === "daytona") {
+        expect(wrapperResult.status).toBe("rejected")
+        if (wrapperResult.status === "rejected") {
+          expect(wrapperResult.reason).toBeInstanceOf(AdapterContractError)
+          expect(wrapperResult.reason).toMatchObject({ code: "integrity_failed" })
+        }
+        expect(deliveryResult).toEqual({ status: "fulfilled", value: undefined })
+      } else {
+        expect(wrapperResult).toEqual({ status: "fulfilled", value: undefined })
+      }
+      expect(sendCalls).toBe(0)
+      expect(explicitCloseCalls).toBe(0)
+      expect(closeCalls).toBe(1)
+      expect(onDataCalls).toBe(0)
+    }
+  })
+
   test("Daytona disconnects and keeps inbound closed when setup fails", async () => {
     for (const failure of ["connection", "bootstrap"] as const) {
       let disconnectCalls = 0
@@ -851,6 +2249,90 @@ describe("official SDK guest-broker compensation bridges", () => {
     )
 
     expect(delivered?.[0]).toBe(1)
+  })
+
+  test("Daytona copies foreign-realm bytes and rejects shared or detached active input", async () => {
+    let sdkOnData: ((data: Uint8Array) => void | Promise<void>) | undefined
+    const delivered: Uint8Array[] = []
+    const callbackResults: Settled<void>[] = []
+    const process = {
+      async createPty(options: { onData: (data: Uint8Array) => void | Promise<void> }) {
+        sdkOnData = options.onData
+        return {
+          async waitForConnection() {},
+          async sendInput() {},
+          async disconnect() {},
+        }
+      },
+    } as unknown as DaytonaOfficialBrokerProcessV1
+
+    const wrapperResult = await settle(() =>
+      withDaytonaGuestBrokerSdkSession(
+        process,
+        (data) => {
+          delivered.push(data)
+        },
+        async () => {
+          const foreignBytes = runInNewContext("new Uint8Array([11, 12])") as Uint8Array
+          await sdkOnData!(foreignBytes)
+          foreignBytes[0] = 99
+
+          const sharedBytes = new Uint8Array(new SharedArrayBuffer(1))
+          const foreignSharedBytes = runInNewContext(
+            "new Uint8Array(new SharedArrayBuffer(1))",
+          ) as Uint8Array
+          const detachedBytes = new Uint8Array([13])
+          structuredClone(detachedBytes.buffer, { transfer: [detachedBytes.buffer] })
+          for (const input of [sharedBytes, foreignSharedBytes, detachedBytes]) {
+            callbackResults.push(await settle(async () => {
+              await sdkOnData!(input)
+            }))
+          }
+        },
+      ),
+    )
+
+    expect(wrapperResult.status).toBe("rejected")
+    if (wrapperResult.status === "rejected") {
+      expect(wrapperResult.reason).toBeInstanceOf(AdapterContractError)
+      expect(wrapperResult.reason).toMatchObject({ code: "integrity_failed" })
+    }
+    expect(delivered).toHaveLength(1)
+    expect(delivered[0]).toBeInstanceOf(Uint8Array)
+    expect(Array.from(delivered[0]!)).toEqual([11, 12])
+    expect(callbackResults).toHaveLength(3)
+    expect(callbackResults.every((entry) => entry.status === "fulfilled")).toBe(true)
+  })
+
+  test("Daytona ignores invalid late callbacks without inspecting provider bytes", async () => {
+    let sdkOnData: ((data: Uint8Array) => void | Promise<void>) | undefined
+    let deliveries = 0
+    const process = {
+      async createPty(options: { onData: (data: Uint8Array) => void | Promise<void> }) {
+        sdkOnData = options.onData
+        return {
+          async waitForConnection() {},
+          async sendInput() {},
+          async disconnect() {},
+        }
+      },
+    } as unknown as DaytonaOfficialBrokerProcessV1
+
+    await withDaytonaGuestBrokerSdkSession(
+      process,
+      () => {
+        deliveries += 1
+      },
+      async () => {},
+    )
+
+    const sharedBytes = new Uint8Array(new SharedArrayBuffer(1))
+    const detachedBytes = new Uint8Array([1])
+    structuredClone(detachedBytes.buffer, { transfer: [detachedBytes.buffer] })
+    await sdkOnData!(sharedBytes)
+    await sdkOnData!(detachedBytes)
+    await sdkOnData!(runInNewContext("new Uint8Array(new SharedArrayBuffer(1))") as Uint8Array)
+    expect(deliveries).toBe(0)
   })
 
   test("Daytona opens inbound only after broker bootstrap succeeds", async () => {
@@ -1025,7 +2507,7 @@ describe("official SDK guest-broker compensation bridges", () => {
 
   test("Daytona converts hostile typed-array access and copy failures to integrity errors", async () => {
     let sdkOnData: ((data: Uint8Array) => void | Promise<void>) | undefined
-    const failures: unknown[] = []
+    const callbackResults: Settled<void>[] = []
     const process = {
       async createPty(options: { onData: (data: Uint8Array) => void | Promise<void> }) {
         sdkOnData = options.onData
@@ -1037,58 +2519,60 @@ describe("official SDK guest-broker compensation bridges", () => {
       },
     } as unknown as DaytonaOfficialBrokerProcessV1
 
-    await withDaytonaGuestBrokerSdkSession(process, () => {}, async () => {
-      const bufferAccessFailure = new Proxy(new Uint8Array([1]), {})
-      const lengthTarget = new Uint8Array([2])
-      const lengthAccessFailure = new Proxy(lengthTarget, {
-        get(target, key, receiver) {
-          if (key === "buffer") return target.buffer
-          return Reflect.get(target, key, receiver)
-        },
-      })
-      const revokedBuffer = Proxy.revocable(new ArrayBuffer(1), {})
-      revokedBuffer.revoke()
-      const sharedBufferCheckTarget = new Uint8Array([3])
-      const sharedBufferCheckFailure = new Proxy(sharedBufferCheckTarget, {
-        get(target, key, receiver) {
-          if (key === "buffer") return revokedBuffer.proxy
-          return Reflect.get(target, key, receiver)
-        },
-      })
-      const copyTarget = new Uint8Array([4])
-      const copyFailure = new Proxy(copyTarget, {
-        get(target, key, receiver) {
-          if (key === "buffer") return target.buffer
-          if (key === "byteLength") return target.byteLength
-          return Reflect.get(target, key, receiver)
-        },
-      })
-      const revokedInput = Proxy.revocable(new Uint8Array([5]), {})
-      revokedInput.revoke()
-      const detached = new Uint8Array([2])
-      structuredClone(detached.buffer, { transfer: [detached.buffer] })
-      const hostileInputs = [
-        bufferAccessFailure,
-        lengthAccessFailure,
-        sharedBufferCheckFailure,
-        copyFailure,
-        revokedInput.proxy,
-        detached,
-      ]
-      for (const hostile of hostileInputs) {
-        try {
-          await sdkOnData!(hostile)
-        } catch (error) {
-          failures.push(error)
+    const wrapperResult = await settle(() =>
+      withDaytonaGuestBrokerSdkSession(process, () => {}, async () => {
+        const bufferAccessFailure = new Proxy(new Uint8Array([1]), {})
+        const lengthTarget = new Uint8Array([2])
+        const lengthAccessFailure = new Proxy(lengthTarget, {
+          get(target, key, receiver) {
+            if (key === "buffer") return target.buffer
+            return Reflect.get(target, key, receiver)
+          },
+        })
+        const revokedBuffer = Proxy.revocable(new ArrayBuffer(1), {})
+        revokedBuffer.revoke()
+        const sharedBufferCheckTarget = new Uint8Array([3])
+        const sharedBufferCheckFailure = new Proxy(sharedBufferCheckTarget, {
+          get(target, key, receiver) {
+            if (key === "buffer") return revokedBuffer.proxy
+            return Reflect.get(target, key, receiver)
+          },
+        })
+        const copyTarget = new Uint8Array([4])
+        const copyFailure = new Proxy(copyTarget, {
+          get(target, key, receiver) {
+            if (key === "buffer") return target.buffer
+            if (key === "byteLength") return target.byteLength
+            return Reflect.get(target, key, receiver)
+          },
+        })
+        const revokedInput = Proxy.revocable(new Uint8Array([5]), {})
+        revokedInput.revoke()
+        const detached = new Uint8Array([2])
+        structuredClone(detached.buffer, { transfer: [detached.buffer] })
+        const hostileInputs = [
+          bufferAccessFailure,
+          lengthAccessFailure,
+          sharedBufferCheckFailure,
+          copyFailure,
+          revokedInput.proxy,
+          detached,
+        ]
+        for (const hostile of hostileInputs) {
+          callbackResults.push(await settle(async () => {
+            await sdkOnData!(hostile)
+          }))
         }
-      }
-    })
+      }),
+    )
 
-    expect(failures).toHaveLength(6)
-    for (const failure of failures) {
-      expect(failure).toBeInstanceOf(AdapterContractError)
-      expect(failure).toMatchObject({ code: "integrity_failed" })
+    expect(wrapperResult.status).toBe("rejected")
+    if (wrapperResult.status === "rejected") {
+      expect(wrapperResult.reason).toBeInstanceOf(AdapterContractError)
+      expect(wrapperResult.reason).toMatchObject({ code: "integrity_failed" })
     }
+    expect(callbackResults).toHaveLength(6)
+    expect(callbackResults.every((entry) => entry.status === "fulfilled")).toBe(true)
   })
 
   test("Daytona authenticates backing buffers despite typed-array shadows", async () => {
@@ -1105,50 +2589,52 @@ describe("official SDK guest-broker compensation bridges", () => {
       },
     } as unknown as DaytonaOfficialBrokerProcessV1
 
-    await withDaytonaGuestBrokerSdkSession(
-      process,
-      (data) => {
-        delivered.push(data[0]!)
-      },
-      async () => {
-        const ownShadowed = new Uint8Array(new SharedArrayBuffer(1))
-        ownShadowed[0] = 7
-        Object.defineProperty(ownShadowed, "buffer", { value: new ArrayBuffer(1) })
+    const wrapperResult = await settle(() =>
+      withDaytonaGuestBrokerSdkSession(
+        process,
+        (data) => {
+          delivered.push(data[0]!)
+        },
+        async () => {
+          const ownShadowed = new Uint8Array(new SharedArrayBuffer(1))
+          ownShadowed[0] = 7
+          Object.defineProperty(ownShadowed, "buffer", { value: new ArrayBuffer(1) })
 
-        const proxyTarget = new Uint8Array(new SharedArrayBuffer(1))
-        proxyTarget[0] = 8
-        const iteratorSpoof = new Proxy(proxyTarget, {
-          get(target, key, receiver) {
-            if (key === "buffer") return new ArrayBuffer(target.byteLength)
-            if (key === "byteLength") return target.byteLength
-            if (key === Symbol.iterator) return target[Symbol.iterator].bind(target)
-            return Reflect.get(target, key, receiver)
-          },
-        })
+          const proxyTarget = new Uint8Array(new SharedArrayBuffer(1))
+          proxyTarget[0] = 8
+          const iteratorSpoof = new Proxy(proxyTarget, {
+            get(target, key, receiver) {
+              if (key === "buffer") return new ArrayBuffer(target.byteLength)
+              if (key === "byteLength") return target.byteLength
+              if (key === Symbol.iterator) return target[Symbol.iterator].bind(target)
+              return Reflect.get(target, key, receiver)
+            },
+          })
 
-        const failures: unknown[] = []
-        for (const hostile of [ownShadowed, iteratorSpoof]) {
-          try {
-            await sdkOnData!(hostile)
-          } catch (error) {
-            failures.push(error)
+          const callbackResults: Settled<void>[] = []
+          for (const hostile of [ownShadowed, iteratorSpoof]) {
+            callbackResults.push(await settle(async () => {
+              await sdkOnData!(hostile)
+            }))
           }
-        }
-        expect(failures).toHaveLength(2)
-        for (const failure of failures) {
-          expect(failure).toBeInstanceOf(AdapterContractError)
-          expect(failure).toMatchObject({ code: "integrity_failed" })
-        }
-      },
+          expect(callbackResults).toHaveLength(2)
+          expect(callbackResults.every((entry) => entry.status === "fulfilled")).toBe(true)
+        },
+      ),
     )
 
+    expect(wrapperResult.status).toBe("rejected")
+    if (wrapperResult.status === "rejected") {
+      expect(wrapperResult.reason).toBeInstanceOf(AdapterContractError)
+      expect(wrapperResult.reason).toMatchObject({ code: "integrity_failed" })
+    }
     expect(delivered).toEqual([])
   })
 
   test("Daytona ignores post-import Reflect.apply replacement", async () => {
     let sdkOnData: ((data: Uint8Array) => void | Promise<void>) | undefined
     const delivered: number[] = []
-    let failure: unknown
+    let callbackResult: Settled<void> | undefined
     let replacementApplyCalls = 0
     const process = {
       async createPty(options: { onData: (data: Uint8Array) => void | Promise<void> }) {
@@ -1161,51 +2647,55 @@ describe("official SDK guest-broker compensation bridges", () => {
       },
     } as unknown as DaytonaOfficialBrokerProcessV1
 
-    await withDaytonaGuestBrokerSdkSession(
-      process,
-      (data) => {
-        delivered.push(data[0]!)
-      },
-      async () => {
-        const originalApply = Reflect.apply
-        const forgedBuffer = new ArrayBuffer(1)
-        const replacementApply = ((_target: Function, thisArgument: unknown) => {
-          replacementApplyCalls += 1
-          switch (replacementApplyCalls) {
-            case 1:
-              return "Uint8Array"
-            case 2:
-              return forgedBuffer
-            case 3:
-              return 1
-            case 4:
-              return 0
-            case 5:
-              return 1
-            case 6:
-              ;(thisArgument as Uint8Array)[0] = 42
-              return undefined
-            default:
-              throw new Error("unexpected replacement Reflect.apply call")
-          }
-        }) as typeof Reflect.apply
+    const wrapperResult = await settle(() =>
+      withDaytonaGuestBrokerSdkSession(
+        process,
+        (data) => {
+          delivered.push(data[0]!)
+        },
+        async () => {
+          const originalApply = Reflect.apply
+          const forgedBuffer = new ArrayBuffer(1)
+          const replacementApply = ((_target: Function, thisArgument: unknown) => {
+            replacementApplyCalls += 1
+            switch (replacementApplyCalls) {
+              case 1:
+                return "Uint8Array"
+              case 2:
+                return forgedBuffer
+              case 3:
+                return 1
+              case 4:
+                return 0
+              case 5:
+                return 1
+              case 6:
+                ;(thisArgument as Uint8Array)[0] = 42
+                return undefined
+              default:
+                throw new Error("unexpected replacement Reflect.apply call")
+            }
+          }) as typeof Reflect.apply
 
-        try {
-          Reflect.apply = replacementApply
           try {
-            await sdkOnData!({} as Uint8Array)
-          } catch (error) {
-            failure = error
+            Reflect.apply = replacementApply
+            callbackResult = await settle(async () => {
+              await sdkOnData!({} as Uint8Array)
+            })
+          } finally {
+            Reflect.apply = originalApply
           }
-        } finally {
-          Reflect.apply = originalApply
-        }
-      },
+        },
+      ),
     )
 
+    expect(wrapperResult.status).toBe("rejected")
+    if (wrapperResult.status === "rejected") {
+      expect(wrapperResult.reason).toBeInstanceOf(AdapterContractError)
+      expect(wrapperResult.reason).toMatchObject({ code: "integrity_failed" })
+    }
     expect(replacementApplyCalls).toBe(0)
-    expect(failure).toBeInstanceOf(AdapterContractError)
-    expect(failure).toMatchObject({ code: "integrity_failed" })
+    expect(callbackResult).toEqual({ status: "fulfilled", value: undefined })
     expect(delivered).toEqual([])
   })
 
@@ -1387,6 +2877,58 @@ describe("official SDK read-only control bridges", () => {
     }
   }
 
+  type E2bNetworkFixture = {
+    allowOut: string[] | undefined
+    denyOut: string[] | undefined
+    rules: Record<string, Array<{ transform?: { headers?: Record<string, string> } }>> | undefined
+    allowPublicTraffic: boolean | undefined
+    maskRequestHost: string | undefined
+  }
+
+  function e2bNetwork(
+    overrides: Partial<E2bNetworkFixture> = {},
+  ): E2bNetworkFixture {
+    return {
+      allowOut: undefined,
+      denyOut: ["0.0.0.0/0"],
+      rules: undefined,
+      allowPublicTraffic: false,
+      maskRequestHost: undefined,
+      ...overrides,
+    }
+  }
+
+  type E2bListCandidateFixture = {
+    sandboxId: string
+    templateId: string
+    metadata: Record<string, string>
+    startedAt: Date
+    endAt: Date
+    state: "paused" | "running"
+    cpuCount: number
+    memoryMB: number
+    envdVersion: string
+    volumeMounts: Array<{ name: string; path: string }>
+  }
+
+  function e2bListCandidate(
+    overrides: Partial<E2bListCandidateFixture> = {},
+  ): E2bListCandidateFixture {
+    return {
+      sandboxId: "opaque-e2b-list-candidate",
+      templateId: "template-1",
+      metadata: labels(),
+      startedAt: new Date("2026-07-10T09:00:00.000Z"),
+      endAt: new Date("2026-07-10T11:00:00.000Z"),
+      state: "paused",
+      cpuCount: 2,
+      memoryMB: 4096,
+      envdVersion: "pinned",
+      volumeMounts: [],
+      ...overrides,
+    }
+  }
+
   function attestation(): ManagedResourceAttestationPortV1 {
     return {
       async attest() {
@@ -1403,6 +2945,7 @@ describe("official SDK read-only control bridges", () => {
 
   test("E2B maps exact metadata-filtered paused resources without enabling mutations", async () => {
     let listOptions: Parameters<E2bOfficialReadSdkV1["list"]>[0] | undefined
+    let getInfoCalls = 0
     const info = {
       sandboxId: "opaque-e2b-1",
       templateId: "template-1",
@@ -1414,7 +2957,7 @@ describe("official SDK read-only control bridges", () => {
       memoryMB: 4096,
       envdVersion: "pinned",
       allowInternetAccess: false,
-      network: { denyOut: ["0.0.0.0/0"], allowPublicTraffic: false },
+      network: e2bNetwork({ allowOut: [], rules: {}, maskRequestHost: "" }),
       lifecycle: { onTimeout: "pause", autoResume: false },
       volumeMounts: [],
     } as const
@@ -1425,11 +2968,23 @@ describe("official SDK read-only control bridges", () => {
           hasNext: true,
           nextToken: "next-e2b-page",
           async nextItems() {
-            return [info as never]
+            return [e2bListCandidate({
+              sandboxId: info.sandboxId,
+              templateId: info.templateId,
+              metadata: info.metadata,
+              startedAt: info.startedAt,
+              endAt: info.endAt,
+              state: info.state,
+              cpuCount: info.cpuCount,
+              memoryMB: info.memoryMB,
+              envdVersion: info.envdVersion,
+              volumeMounts: [...info.volumeMounts],
+            }) as never]
           },
         }
       },
       async getInfo() {
+        getInfoCalls += 1
         return info as never
       },
     }
@@ -1458,6 +3013,7 @@ describe("official SDK read-only control bridges", () => {
       nextToken: "cursor-1",
     })
     expect(page.next_cursor).toBe("next-e2b-page")
+    expect(getInfoCalls).toBe(1)
     expect(page.items[0]).toMatchObject({
       opaque_resource_id: "opaque-e2b-1",
       provider_creation_token_sha256: creationTokenSha256,
@@ -1559,6 +3115,724 @@ describe("official SDK read-only control bridges", () => {
     })
   })
 
+  test("E2B attests and returns one immutable DTO snapshot", async () => {
+    const originalLabels = labels()
+    const info = {
+      sandboxId: "opaque-e2b-snapshot-a",
+      templateId: "template-a",
+      metadata: originalLabels,
+      startedAt: new Date("2026-07-10T09:00:00.000Z"),
+      endAt: new Date("2026-07-10T11:00:00.000Z"),
+      state: "paused" as "paused" | "running",
+      cpuCount: 2,
+      memoryMB: 4096,
+      envdVersion: "pinned",
+      allowInternetAccess: false,
+      network: e2bNetwork(),
+      lifecycle: { onTimeout: "pause" as "pause" | "kill", autoResume: false },
+      volumeMounts: [] as Array<{ name: string; path: string }>,
+    }
+    let attestationInput: Parameters<ManagedResourceAttestationPortV1["attest"]>[0] | undefined
+    const mutatingAttestation: ManagedResourceAttestationPortV1 = {
+      async attest(input) {
+        attestationInput = input
+        info.sandboxId = "opaque-e2b-snapshot-b"
+        info.templateId = "template-b"
+        info.metadata = {
+          ...labels(),
+          "hasna.installation_sha256": digest("d1"),
+          "hasna.provider_scope_ref_sha256": digest("d2"),
+          "hasna.creation_token_sha256": digest("d3"),
+          "hasna.immutable_fingerprint_sha256": digest("d4"),
+        }
+        info.startedAt = new Date("2026-07-10T12:00:00.000Z")
+        info.state = "running"
+        info.allowInternetAccess = true
+        info.network = e2bNetwork({ denyOut: [], allowPublicTraffic: true })
+        info.lifecycle = { onTimeout: "kill", autoResume: true }
+        info.volumeMounts = [{ name: "hostile-volume", path: "/workspace" }]
+        return {
+          source_free: true,
+          credential_free: true,
+          strong_vm: true,
+          architecture: "amd64",
+          evidence_sha256: digest("d5"),
+        }
+      },
+    }
+    const bridge = new E2bOfficialSdkControlBridgeV1(
+      {
+        list() {
+          throw new Error("list must remain unreachable")
+        },
+        async getInfo() {
+          return info as never
+        },
+      },
+      mutatingAttestation,
+      installationSha256,
+      providerScopeRefSha256,
+      () => observedAt,
+    )
+
+    const resource = await bridge.inspectResource("opaque-e2b-snapshot-a")
+
+    expect(attestationInput).toEqual({
+      provider: "e2b",
+      opaque_resource_id: "opaque-e2b-snapshot-a",
+      immutable_fingerprint_sha256: immutableFingerprintSha256,
+    })
+    expect(resource).toMatchObject({
+      opaque_resource_id: "opaque-e2b-snapshot-a",
+      provider_creation_token_sha256: creationTokenSha256,
+      immutable_fingerprint_sha256: immutableFingerprintSha256,
+      provider_created_at: "2026-07-10T09:00:00.000Z",
+      state: "inert",
+      provider_runtime_state: "paused",
+      auto_delete_disabled: true,
+      owned: true,
+      source_attached: false,
+      ownership: {
+        installation_id_sha256: installationSha256,
+        provider_scope_ref_sha256: providerScopeRefSha256,
+        ownership_nonce_sha256: originalLabels["hasna.ownership_nonce_sha256"],
+      },
+      network_policy: { policy_sha256: networkPolicySha256 },
+    })
+  })
+
+  test("E2B rejects two-value denyOut accessors without invoking them", async () => {
+    let getterCalls = 0
+    let attestCalls = 0
+    const denyOut: string[] = []
+    Object.defineProperty(denyOut, "0", {
+      enumerable: true,
+      get() {
+        getterCalls += 1
+        return getterCalls === 1 ? "0.0.0.0/0" : "203.0.113.0/24"
+      },
+    })
+    const bridge = new E2bOfficialSdkControlBridgeV1(
+      {
+        list() {
+          throw new Error("list must remain unreachable")
+        },
+        async getInfo() {
+          return {
+            sandboxId: "accessor-network-e2b",
+            templateId: "template-a",
+            metadata: labels(),
+            startedAt: new Date("2026-07-10T09:00:00.000Z"),
+            endAt: new Date("2026-07-10T10:00:00.000Z"),
+            state: "paused",
+            cpuCount: 2,
+            memoryMB: 1024,
+            envdVersion: "pinned",
+            allowInternetAccess: false,
+            network: e2bNetwork({ denyOut }),
+            lifecycle: { onTimeout: "pause", autoResume: false },
+            volumeMounts: [],
+          } as never
+        },
+      },
+      {
+        async attest() {
+          attestCalls += 1
+          throw new Error("attestation must remain unreachable")
+        },
+      },
+      installationSha256,
+      providerScopeRefSha256,
+      () => observedAt,
+    )
+
+    await expect(bridge.inspectResource("accessor-network-e2b")).rejects.toMatchObject({
+      code: "integrity_failed",
+    })
+    expect(getterCalls).toBe(0)
+    expect(attestCalls).toBe(0)
+  })
+
+  test("E2B rejects malformed nested network descriptors before attestation", async () => {
+    const sparseDenyOut = ["0.0.0.0/0"]
+    sparseDenyOut.length = 2
+    const hiddenDenyOut = ["0.0.0.0/0"]
+    Object.defineProperty(hiddenDenyOut, "0", { enumerable: false, value: "0.0.0.0/0" })
+    const extraArrayKey = ["0.0.0.0/0"]
+    Object.defineProperty(extraArrayKey, "extra", { enumerable: true, value: "hidden" })
+    const symbolNetwork = e2bNetwork()
+    Object.defineProperty(symbolNetwork, Symbol("hidden"), { enumerable: true, value: "hidden" })
+    const extraNetworkKey = {
+      ...e2bNetwork(),
+      unexpected: "hidden",
+    }
+    const malformedNetworks = [
+      e2bNetwork({ denyOut: sparseDenyOut }),
+      e2bNetwork({ denyOut: hiddenDenyOut }),
+      e2bNetwork({ denyOut: extraArrayKey }),
+      symbolNetwork,
+      extraNetworkKey,
+    ]
+    let attestCalls = 0
+
+    for (const network of malformedNetworks) {
+      const bridge = new E2bOfficialSdkControlBridgeV1(
+        {
+          list() {
+            throw new Error("list must remain unreachable")
+          },
+          async getInfo() {
+            return {
+              sandboxId: "malformed-network-e2b",
+              templateId: "template-a",
+              metadata: labels(),
+              startedAt: new Date("2026-07-10T09:00:00.000Z"),
+              endAt: new Date("2026-07-10T10:00:00.000Z"),
+              state: "paused",
+              cpuCount: 2,
+              memoryMB: 1024,
+              envdVersion: "pinned",
+              allowInternetAccess: false,
+              network,
+              lifecycle: { onTimeout: "pause", autoResume: false },
+              volumeMounts: [],
+            } as never
+          },
+        },
+        {
+          async attest() {
+            attestCalls += 1
+            throw new Error("attestation must remain unreachable")
+          },
+        },
+        installationSha256,
+        providerScopeRefSha256,
+        () => observedAt,
+      )
+      await expect(bridge.inspectResource("malformed-network-e2b")).rejects.toMatchObject({
+        code: "integrity_failed",
+      })
+    }
+    expect(attestCalls).toBe(0)
+  })
+
+  test("E2B rejects permissive official network combinations before attestation", async () => {
+    const unsafeNetworks: E2bNetworkFixture[] = [
+      e2bNetwork({ allowOut: ["198.51.100.0/24"] }),
+      e2bNetwork({
+        rules: {
+          "api.example.test": [{ transform: { headers: { "x-test": "unsafe" } } }],
+        },
+      }),
+      e2bNetwork({ allowPublicTraffic: true }),
+      e2bNetwork({ maskRequestHost: "masked.example.test" }),
+    ]
+    let attestCalls = 0
+
+    for (const network of unsafeNetworks) {
+      const bridge = new E2bOfficialSdkControlBridgeV1(
+        {
+          list() {
+            throw new Error("list must remain unreachable")
+          },
+          async getInfo() {
+            return {
+              sandboxId: "unsafe-network-e2b",
+              templateId: "template-a",
+              metadata: labels(),
+              startedAt: new Date("2026-07-10T09:00:00.000Z"),
+              endAt: new Date("2026-07-10T10:00:00.000Z"),
+              state: "paused",
+              cpuCount: 2,
+              memoryMB: 1024,
+              envdVersion: "pinned",
+              allowInternetAccess: false,
+              network,
+              lifecycle: { onTimeout: "pause", autoResume: false },
+              volumeMounts: [],
+            } as never
+          },
+        },
+        {
+          async attest() {
+            attestCalls += 1
+            throw new Error("attestation must remain unreachable")
+          },
+        },
+        installationSha256,
+        providerScopeRefSha256,
+        () => observedAt,
+      )
+
+      await expect(bridge.inspectResource("unsafe-network-e2b")).rejects.toMatchObject({
+        code: "integrity_failed",
+      })
+    }
+    expect(attestCalls).toBe(0)
+  })
+
+  test("E2B rejects oversized and malformed provider pages before attestation", async () => {
+    const info = {
+      sandboxId: "page-e2b",
+      templateId: "template-a",
+      metadata: labels(),
+      startedAt: new Date("2026-07-10T09:00:00.000Z"),
+      endAt: new Date("2026-07-10T10:00:00.000Z"),
+      state: "paused",
+      cpuCount: 2,
+      memoryMB: 1024,
+      envdVersion: "pinned",
+      allowInternetAccess: false,
+      network: e2bNetwork(),
+      lifecycle: { onTimeout: "pause", autoResume: false },
+      volumeMounts: [],
+    } as const
+    const candidate = e2bListCandidate({
+      sandboxId: info.sandboxId,
+      templateId: info.templateId,
+      metadata: info.metadata,
+      startedAt: info.startedAt,
+      endAt: info.endAt,
+      state: info.state,
+      cpuCount: info.cpuCount,
+      memoryMB: info.memoryMB,
+      envdVersion: info.envdVersion,
+      volumeMounts: [],
+    })
+    let attestCalls = 0
+    let getInfoCalls = 0
+    const pageCases = [
+      {
+        nextToken: undefined,
+        items: Array.from({ length: 101 }, () => candidate),
+      },
+      {
+        nextToken: "x".repeat(4097),
+        items: [candidate],
+      },
+      {
+        nextToken: undefined,
+        items: (() => {
+          const sparse = [candidate]
+          sparse.length = 2
+          return sparse
+        })(),
+      },
+    ]
+
+    for (const pageCase of pageCases) {
+      const bridge = new E2bOfficialSdkControlBridgeV1(
+        {
+          list() {
+            return {
+              hasNext: true,
+              nextToken: pageCase.nextToken,
+              async nextItems() {
+                return pageCase.items as never
+              },
+            }
+          },
+          async getInfo() {
+            getInfoCalls += 1
+            return info as never
+          },
+        },
+        {
+          async attest() {
+            attestCalls += 1
+            return {
+              source_free: true,
+              credential_free: true,
+              strong_vm: true,
+              architecture: "amd64",
+              evidence_sha256: digest("d6"),
+            }
+          },
+        },
+        installationSha256,
+        providerScopeRefSha256,
+        () => observedAt,
+      )
+
+      await expect(bridge.listOwnedResources()).rejects.toMatchObject({
+        code: "provider_state_unknown",
+        quarantine_required: true,
+      })
+    }
+    expect(attestCalls).toBe(0)
+    expect(getInfoCalls).toBe(0)
+  })
+
+  test("E2B rejects missing, mismatched, or duplicate hydrated list identities before attestation", async () => {
+    const candidate = e2bListCandidate({ sandboxId: "hydrate-e2b" })
+    const fullInfo = {
+      ...candidate,
+      allowInternetAccess: false,
+      network: e2bNetwork(),
+      lifecycle: { onTimeout: "pause" as const, autoResume: false },
+    }
+    const mismatches = [
+      { ...fullInfo, sandboxId: "hydrate-e2b-other" },
+      {
+        ...fullInfo,
+        metadata: {
+          ...fullInfo.metadata,
+          "hasna.immutable_fingerprint_sha256": digest("d8"),
+        },
+      },
+      {
+        ...fullInfo,
+        metadata: {
+          ...fullInfo.metadata,
+          "hasna.creation_token_sha256": digest("d9"),
+        },
+      },
+      "absent" as const,
+    ]
+    let attestCalls = 0
+    let getInfoCalls = 0
+
+    for (const mismatch of mismatches) {
+      const bridge = new E2bOfficialSdkControlBridgeV1(
+        {
+          list() {
+            return {
+              hasNext: true,
+              nextToken: undefined,
+              async nextItems() {
+                return [candidate as never]
+              },
+            }
+          },
+          async getInfo(opaqueResourceId) {
+            getInfoCalls += 1
+            expect(opaqueResourceId).toBe(candidate.sandboxId)
+            return mismatch as never
+          },
+        },
+        {
+          async attest() {
+            attestCalls += 1
+            throw new Error("attestation must remain unreachable")
+          },
+        },
+        installationSha256,
+        providerScopeRefSha256,
+        () => observedAt,
+      )
+
+      await expect(bridge.listOwnedResources()).rejects.toMatchObject({
+        code: "provider_state_unknown",
+        quarantine_required: true,
+      })
+    }
+
+    const duplicateBridge = new E2bOfficialSdkControlBridgeV1(
+      {
+        list() {
+          return {
+            hasNext: true,
+            nextToken: undefined,
+            async nextItems() {
+              return [candidate, candidate] as never
+            },
+          }
+        },
+        async getInfo() {
+          getInfoCalls += 1
+          return fullInfo as never
+        },
+      },
+      {
+        async attest() {
+          attestCalls += 1
+          throw new Error("attestation must remain unreachable")
+        },
+      },
+      installationSha256,
+      providerScopeRefSha256,
+      () => observedAt,
+    )
+    await expect(duplicateBridge.listOwnedResources()).rejects.toMatchObject({
+      code: "provider_state_unknown",
+      quarantine_required: true,
+    })
+
+    const secondCandidate = e2bListCandidate({ sandboxId: "hydrate-e2b-second" })
+    let multiGetInfoCalls = 0
+    const laterMismatchBridge = new E2bOfficialSdkControlBridgeV1(
+      {
+        list() {
+          return {
+            hasNext: true,
+            nextToken: undefined,
+            async nextItems() {
+              return [candidate, secondCandidate] as never
+            },
+          }
+        },
+        async getInfo(opaqueResourceId) {
+          multiGetInfoCalls += 1
+          if (opaqueResourceId === candidate.sandboxId) return fullInfo as never
+          return {
+            ...fullInfo,
+            sandboxId: secondCandidate.sandboxId,
+            metadata: {
+              ...secondCandidate.metadata,
+              "hasna.creation_token_sha256": digest("da"),
+            },
+          } as never
+        },
+      },
+      {
+        async attest() {
+          attestCalls += 1
+          throw new Error("attestation must remain unreachable")
+        },
+      },
+      installationSha256,
+      providerScopeRefSha256,
+      () => observedAt,
+    )
+    await expect(laterMismatchBridge.listOwnedResources()).rejects.toMatchObject({
+      code: "provider_state_unknown",
+      quarantine_required: true,
+    })
+
+    expect(getInfoCalls).toBe(mismatches.length)
+    expect(multiGetInfoCalls).toBe(2)
+    expect(attestCalls).toBe(0)
+  })
+
+  test("Daytona rejects a 101-item inventory before refresh or attestation", async () => {
+    let refreshCalls = 0
+    let attestCalls = 0
+    const sandbox = {
+      id: "page-daytona",
+      organizationId: "organization-a",
+      labels: labels(),
+      state: "stopped",
+      public: false,
+      networkBlockAll: true,
+      autoDeleteInterval: -1,
+      volumes: [],
+      env: {},
+      createdAt: "2026-07-10T09:00:00.000Z",
+      async refreshData() {
+        refreshCalls += 1
+      },
+    }
+    const bridge = new DaytonaOfficialSdkControlBridgeV1(
+      {
+        list() {
+          return (async function* () {
+            for (let index = 0; index < 101; index += 1) yield sandbox as never
+          })()
+        },
+        async get() {
+          throw new Error("get must remain unreachable")
+        },
+      },
+      {
+        async attest() {
+          attestCalls += 1
+          return {
+            source_free: true,
+            credential_free: true,
+            strong_vm: true,
+            architecture: "amd64",
+            evidence_sha256: digest("d7"),
+          }
+        },
+      },
+      installationSha256,
+      providerScopeRefSha256,
+      () => observedAt,
+    )
+
+    await expect(bridge.listOwnedResources()).rejects.toMatchObject({
+      code: "provider_state_unknown",
+      quarantine_required: true,
+    })
+    expect(refreshCalls).toBe(0)
+    expect(attestCalls).toBe(0)
+  })
+
+  test("Daytona attests and returns one immutable refreshed object snapshot", async () => {
+    const originalLabels = labels()
+    const sandbox = {
+      id: "opaque-daytona-snapshot-a",
+      organizationId: "organization-a",
+      labels: originalLabels,
+      state: "stopped" as string,
+      public: false,
+      networkBlockAll: true,
+      autoDeleteInterval: -1,
+      volumes: [] as Array<{ id: string }>,
+      env: {} as Record<string, string>,
+      createdAt: "2026-07-10T09:00:00.000Z",
+      async refreshData() {},
+    }
+    let attestationInput: Parameters<ManagedResourceAttestationPortV1["attest"]>[0] | undefined
+    const mutatingAttestation: ManagedResourceAttestationPortV1 = {
+      async attest(input) {
+        attestationInput = input
+        sandbox.id = "opaque-daytona-snapshot-b"
+        sandbox.organizationId = "organization-b"
+        sandbox.labels = {
+          ...labels(),
+          "hasna.installation_sha256": digest("e1"),
+          "hasna.provider_scope_ref_sha256": digest("e2"),
+          "hasna.creation_token_sha256": digest("e3"),
+          "hasna.immutable_fingerprint_sha256": digest("e4"),
+        }
+        sandbox.state = "started"
+        sandbox.public = true
+        sandbox.networkBlockAll = false
+        sandbox.autoDeleteInterval = 0
+        sandbox.volumes = [{ id: "hostile-volume" }]
+        sandbox.env = { HOSTILE_ENV: "present" }
+        sandbox.createdAt = "2026-07-10T12:00:00.000Z"
+        return {
+          source_free: true,
+          credential_free: true,
+          strong_vm: true,
+          architecture: "amd64",
+          evidence_sha256: digest("e5"),
+        }
+      },
+    }
+    const bridge = new DaytonaOfficialSdkControlBridgeV1(
+      {
+        list() {
+          throw new Error("list must remain unreachable")
+        },
+        async get() {
+          return sandbox as never
+        },
+      },
+      mutatingAttestation,
+      installationSha256,
+      providerScopeRefSha256,
+      () => observedAt,
+    )
+
+    const resource = await bridge.inspectResource("opaque-daytona-snapshot-a")
+
+    expect(attestationInput).toEqual({
+      provider: "daytona_cloud",
+      opaque_resource_id: "opaque-daytona-snapshot-a",
+      immutable_fingerprint_sha256: immutableFingerprintSha256,
+    })
+    expect(resource).toMatchObject({
+      opaque_resource_id: "opaque-daytona-snapshot-a",
+      provider_creation_token_sha256: creationTokenSha256,
+      immutable_fingerprint_sha256: immutableFingerprintSha256,
+      provider_created_at: "2026-07-10T09:00:00.000Z",
+      state: "inert",
+      provider_runtime_state: "stopped",
+      auto_delete_disabled: true,
+      ephemeral: false,
+      owned: true,
+      source_attached: false,
+      credential_attached: false,
+      ownership: {
+        installation_id_sha256: installationSha256,
+        provider_scope_ref_sha256: providerScopeRefSha256,
+        ownership_nonce_sha256: originalLabels["hasna.ownership_nonce_sha256"],
+      },
+      network_policy: { policy_sha256: networkPolicySha256 },
+    })
+  })
+
+  test("SDK record snapshots reject accessors and symbols without observing hidden values", async () => {
+    let getterCalls = 0
+    let attestCalls = 0
+    const e2bMetadata = labels()
+    Object.defineProperty(e2bMetadata, "hostile", {
+      enumerable: true,
+      get() {
+        getterCalls += 1
+        return "hidden"
+      },
+    })
+    const rejectingAttestation: ManagedResourceAttestationPortV1 = {
+      async attest() {
+        attestCalls += 1
+        throw new Error("attestation must remain unreachable")
+      },
+    }
+    const e2b = new E2bOfficialSdkControlBridgeV1(
+      {
+        list() {
+          throw new Error("list must remain unreachable")
+        },
+        async getInfo() {
+          return {
+            sandboxId: "accessor-e2b",
+            templateId: "template-a",
+            metadata: e2bMetadata,
+            startedAt: new Date("2026-07-10T09:00:00.000Z"),
+            endAt: new Date("2026-07-10T10:00:00.000Z"),
+            state: "paused",
+            cpuCount: 2,
+            memoryMB: 1024,
+            envdVersion: "pinned",
+            allowInternetAccess: false,
+            network: e2bNetwork(),
+            lifecycle: { onTimeout: "pause", autoResume: false },
+            volumeMounts: [],
+          } as never
+        },
+      },
+      rejectingAttestation,
+      installationSha256,
+      providerScopeRefSha256,
+      () => observedAt,
+    )
+    await expect(e2b.inspectResource("accessor-e2b")).rejects.toMatchObject({
+      code: "integrity_failed",
+    })
+
+    const daytonaEnv = { SAFE: "value" }
+    Object.defineProperty(daytonaEnv, Symbol("hidden"), {
+      enumerable: true,
+      value: "hidden",
+    })
+    const daytona = new DaytonaOfficialSdkControlBridgeV1(
+      {
+        list() {
+          throw new Error("list must remain unreachable")
+        },
+        async get() {
+          return {
+            id: "symbol-daytona",
+            organizationId: "organization-a",
+            labels: labels(),
+            state: "stopped",
+            public: false,
+            networkBlockAll: true,
+            autoDeleteInterval: -1,
+            volumes: [],
+            env: daytonaEnv,
+            createdAt: "2026-07-10T09:00:00.000Z",
+            async refreshData() {},
+          } as never
+        },
+      },
+      rejectingAttestation,
+      installationSha256,
+      providerScopeRefSha256,
+      () => observedAt,
+    )
+    await expect(daytona.inspectResource("symbol-daytona")).rejects.toMatchObject({
+      code: "integrity_failed",
+    })
+
+    expect(getterCalls).toBe(0)
+    expect(attestCalls).toBe(0)
+  })
+
   test("untrusted strong-VM attestation cannot produce an adoptable owned resource", async () => {
     const info = {
       sandboxId: "opaque-e2b-unsafe",
@@ -1571,7 +3845,7 @@ describe("official SDK read-only control bridges", () => {
       memoryMB: 4096,
       envdVersion: "pinned",
       allowInternetAccess: false,
-      network: { denyOut: ["0.0.0.0/0"], allowPublicTraffic: false },
+      network: e2bNetwork(),
       lifecycle: { onTimeout: "pause", autoResume: false },
       volumeMounts: [],
     } as const
@@ -1581,7 +3855,11 @@ describe("official SDK read-only control bridges", () => {
           hasNext: true,
           nextToken: undefined,
           async nextItems() {
-            return [info as never]
+            return [e2bListCandidate({
+              sandboxId: info.sandboxId,
+              templateId: info.templateId,
+              metadata: info.metadata,
+            }) as never]
           },
         }
       },
@@ -1623,7 +3901,7 @@ describe("official SDK read-only control bridges", () => {
       memoryMB: 4096,
       envdVersion: "pinned",
       allowInternetAccess: false,
-      network: { denyOut: ["0.0.0.0/0"], allowPublicTraffic: false },
+      network: e2bNetwork(),
       lifecycle: { onTimeout: "pause", autoResume: false },
       volumeMounts: [],
     } as const
@@ -1633,7 +3911,11 @@ describe("official SDK read-only control bridges", () => {
           hasNext: true,
           nextToken: undefined,
           async nextItems() {
-            return [info as never]
+            return [e2bListCandidate({
+              sandboxId: info.sandboxId,
+              templateId: info.templateId,
+              metadata: info.metadata,
+            }) as never]
           },
         }
       },

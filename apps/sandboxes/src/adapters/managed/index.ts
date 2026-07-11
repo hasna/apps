@@ -9,6 +9,7 @@ export {
 export { canonicalJson, canonicalSha256, isDigest, safeEqual } from "./canonical"
 export {
   MANAGED_GUEST_BROKER_BOOTSTRAP_COMMAND,
+  MANAGED_GUEST_BROKER_MAX_FRAME_BYTES,
   MANAGED_GUEST_BROKER_PROTOCOL_SHA256,
   decodeGuestBrokerRequestFrame,
   encodeGuestBrokerRequestFrame,
@@ -37,6 +38,20 @@ export {
   type ManagedResourceAttestationPortV1,
   type ManagedResourceAttestationV1,
 } from "./sdk-control-bridges"
+export {
+  DAYTONA_GUEST_BROKER_PTY_ID,
+  DAYTONA_GUEST_BROKER_MAX_IN_FLIGHT_BYTES,
+  DAYTONA_GUEST_BROKER_MAX_IN_FLIGHT_DELIVERIES,
+  createDaytonaDenyAllCandidate,
+  createE2bDenyAllCandidate,
+  withDaytonaGuestBrokerSdkSession,
+  withE2bGuestBrokerSdkSession,
+  type DaytonaCredentialBoundCreateV1,
+  type DaytonaOfficialBrokerProcessV1,
+  type E2bCredentialBoundCreateV1,
+  type E2bOfficialBrokerCommandsV1,
+  type GuestBrokerSdkSessionV1,
+} from "./sdk-broker-bridges"
 export {
   JournalIdentityLedgerV1,
   EFFECT_JOURNAL_OUTCOME_SCHEMA_SHA256,

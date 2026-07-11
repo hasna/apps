@@ -1,4 +1,9 @@
-import { canonicalSha256, isDigest, safeEqual } from "./canonical"
+import {
+  canonicalSha256,
+  isDigest,
+  safeEqual,
+  snapshotCanonicalDenseArray,
+} from "./canonical"
 import {
   MANAGED_GUEST_BROKER_BOOTSTRAP_COMMAND,
   encodeGuestBrokerRequestFrame,
@@ -497,6 +502,30 @@ function hasExactKeysWithOptional(
   }
 }
 
+function validateExecArgvBeforeSnapshot(spec: unknown): void {
+  if (!isRecord(spec)) throw adapterError("validation_failed")
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(spec, "argv")
+    if (
+      descriptor === undefined ||
+      !("value" in descriptor) ||
+      !descriptor.enumerable
+    ) {
+      throw adapterError("validation_failed")
+    }
+    const argv = snapshotCanonicalDenseArray(descriptor.value)
+    if (
+      argv.length > MAX_EXEC_ARGV_ENTRIES ||
+      argv.some((argument) => typeof argument !== "string" || argument.includes("\0"))
+    ) {
+      throw adapterError("validation_failed")
+    }
+  } catch (cause) {
+    if (cause instanceof AdapterContractError) throw cause
+    throw adapterError("validation_failed")
+  }
+}
+
 function validateExecSpec(spec: ExecSpecV1, operationDeadline: string): void {
   if (!isRecord(spec)) throw adapterError("validation_failed")
   const specKeys = [
@@ -516,10 +545,16 @@ function validateExecSpec(spec: ExecSpecV1, operationDeadline: string): void {
   ]
   const wallDeadline = Date.parse(spec.wall_deadline)
   const providerDeadline = Date.parse(operationDeadline)
+  let argv: unknown[]
+  try {
+    argv = snapshotCanonicalDenseArray(spec.argv)
+  } catch {
+    throw adapterError("validation_failed")
+  }
   const argumentBytes =
-    typeof spec.executable === "string" && Array.isArray(spec.argv)
+    typeof spec.executable === "string"
       ? Buffer.byteLength(spec.executable, "utf8") +
-        spec.argv.reduce(
+        argv.reduce<number>(
           (total, argument) =>
             total + (typeof argument === "string" ? Buffer.byteLength(argument, "utf8") : MAX_EXEC_ARGUMENT_BYTES + 1),
           0,
@@ -532,14 +567,13 @@ function validateExecSpec(spec: ExecSpecV1, operationDeadline: string): void {
     !["read_only", "write"].includes(spec.workspace_access) ||
     !["minimal-v1", "build-v1", "test-v1"].includes(spec.environment_profile_id) ||
     !isDigest(spec.environment_profile_sha256) ||
-    !Array.isArray(spec.argv) ||
-    spec.argv.length > MAX_EXEC_ARGV_ENTRIES ||
-    spec.argv.some((argument) => typeof argument !== "string") ||
+    argv.length > MAX_EXEC_ARGV_ENTRIES ||
+    argv.some((argument) => typeof argument !== "string") ||
     argumentBytes > MAX_EXEC_ARGUMENT_BYTES ||
     typeof spec.executable !== "string" ||
     !spec.executable.startsWith("/") ||
     spec.executable.includes("\0") ||
-    spec.argv.some((argument) => argument.includes("\0")) ||
+    argv.some((argument) => typeof argument === "string" && argument.includes("\0")) ||
     !Number.isSafeInteger(spec.output_limit_bytes) ||
     spec.output_limit_bytes <= 0 ||
     spec.output_limit_bytes > MAX_EXEC_OUTPUT_BYTES ||
@@ -1350,6 +1384,7 @@ class ManagedProviderAdapter implements ManagedProviderAdapterV1 {
   ): Promise<AdapterExecHandleV1> {
     ctx = snapshotContext(ctx)
     handle = snapshotData(handle)
+    validateExecArgvBeforeSnapshot(spec)
     spec = snapshotData(spec)
     op = snapshotData(op)
     validateOperation(ctx, op, "exec_start")

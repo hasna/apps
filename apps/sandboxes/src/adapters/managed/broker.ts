@@ -1,4 +1,4 @@
-import { canonicalJson, canonicalSha256, isDigest } from "./canonical"
+import { canonicalJson, canonicalSha256, isDigest, parseCanonicalJson } from "./canonical"
 import { adapterError } from "./errors"
 import { managedProviderRequestSha256 } from "./request"
 import type {
@@ -18,11 +18,11 @@ export const MANAGED_GUEST_BROKER_PROTOCOL_SHA256: Digest = canonicalSha256({
   schema_version: "sandboxes.guest-broker/v1",
   bootstrap_command_sha256: canonicalSha256(MANAGED_GUEST_BROKER_BOOTSTRAP_COMMAND),
   request_frame_schema: "sandboxes.guest-broker-frame/v1",
-  encoding: "canonical-json-utf8",
+  encoding: "canonical-tagged-json-utf8/v1",
   shell_interpolation: false,
 })
 
-const MAX_BROKER_FRAME_BYTES = 16 * 1024 * 1024
+export const MANAGED_GUEST_BROKER_MAX_FRAME_BYTES = 16 * 1024 * 1024
 const WIRE_LENGTH_BYTES = 4
 
 function frameBasis(
@@ -67,7 +67,10 @@ export function encodeGuestBrokerRequestFrame(
     throw adapterError("request_digest_mismatch")
   }
   const payloadBytes = new TextEncoder().encode(canonicalJson(request))
-  if (payloadBytes.byteLength === 0 || payloadBytes.byteLength > MAX_BROKER_FRAME_BYTES) {
+  if (
+    payloadBytes.byteLength === 0 ||
+    payloadBytes.byteLength > MANAGED_GUEST_BROKER_MAX_FRAME_BYTES
+  ) {
     throw adapterError("validation_failed")
   }
   const withoutFrameDigest = {
@@ -104,29 +107,6 @@ export function encodeGuestBrokerRequestFrame(
   }
 }
 
-function reviveCanonicalBytes(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(reviveCanonicalBytes)
-  if (value !== null && typeof value === "object") {
-    const entries = Object.entries(value as Record<string, unknown>)
-    if (entries.length === 1 && entries[0]?.[0] === "$bytes_hex") {
-      const hex = entries[0][1]
-      if (typeof hex !== "string" || hex.length % 2 !== 0 || !/^[0-9a-f]*$/u.test(hex)) {
-        throw adapterError("integrity_failed")
-      }
-      return Uint8Array.from(Buffer.from(hex, "hex"))
-    }
-    if (entries.length === 1 && entries[0]?.[0] === "$bigint") {
-      const decimal = entries[0][1]
-      if (typeof decimal !== "string" || !/^(0|[1-9][0-9]*)$/u.test(decimal)) {
-        throw adapterError("integrity_failed")
-      }
-      return BigInt(decimal)
-    }
-    return Object.fromEntries(entries.map(([key, item]) => [key, reviveCanonicalBytes(item)]))
-  }
-  return value
-}
-
 export function decodeGuestBrokerRequestFrame(frame: GuestBrokerRequestFrameV1): GuestBrokerRequestV1 {
   if (
     frame.schema_version !== "sandboxes.guest-broker-frame/v1" ||
@@ -149,23 +129,25 @@ export function decodeGuestBrokerRequestFrame(frame: GuestBrokerRequestFrameV1):
     !isDigest(frame.frame_sha256) ||
     !isDigest(frame.authentication_tag_sha256) ||
     frame.payload_bytes.byteLength === 0 ||
-    frame.payload_bytes.byteLength > MAX_BROKER_FRAME_BYTES ||
+    frame.payload_bytes.byteLength > MANAGED_GUEST_BROKER_MAX_FRAME_BYTES ||
     frame.payload_sha256 !== canonicalSha256(frame.payload_bytes) ||
     frame.frame_sha256 !== canonicalSha256(frameBasis(frame))
   ) {
     throw adapterError("integrity_failed")
   }
-  let normalized: unknown
+  let request: unknown
   try {
-    normalized = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(frame.payload_bytes))
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(frame.payload_bytes)
+    request = parseCanonicalJson(text)
   } catch {
     throw adapterError("integrity_failed")
   }
-  if (canonicalJson(normalized) !== new TextDecoder().decode(frame.payload_bytes)) {
+  if (request === null || typeof request !== "object" || Array.isArray(request)) {
     throw adapterError("integrity_failed")
   }
-  const request = reviveCanonicalBytes(normalized) as Record<string, unknown>
-  if (request.operation !== frame.operation) throw adapterError("integrity_failed")
+  if ((request as Record<string, unknown>).operation !== frame.operation) {
+    throw adapterError("integrity_failed")
+  }
   return request as unknown as GuestBrokerRequestV1
 }
 
@@ -173,7 +155,9 @@ export function serializeGuestBrokerRequestFrame(frame: GuestBrokerRequestFrameV
   // Decode first so a corrupted or non-canonical frame can never reach an SDK transport.
   decodeGuestBrokerRequestFrame(frame)
   const envelope = new TextEncoder().encode(canonicalJson(frame))
-  if (envelope.byteLength > MAX_BROKER_FRAME_BYTES) throw adapterError("validation_failed")
+  if (envelope.byteLength > MANAGED_GUEST_BROKER_MAX_FRAME_BYTES) {
+    throw adapterError("validation_failed")
+  }
   const wire = new Uint8Array(WIRE_LENGTH_BYTES + envelope.byteLength)
   new DataView(wire.buffer).setUint32(0, envelope.byteLength, false)
   wire.set(envelope, WIRE_LENGTH_BYTES)

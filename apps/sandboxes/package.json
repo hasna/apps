@@ -19,6 +19,7 @@
   "scripts": {
     "test": "bun run test:hermetic",
     "test:hermetic": "tmp=$(mktemp -d); trap 'rm -rf \"$tmp\"' EXIT; env -i PATH=\"$PATH\" HOME=\"$tmp\" XDG_CONFIG_HOME=\"$tmp/config\" TMPDIR=\"$tmp\" TZ=UTC bun test tests/managed-adapters",
+    "test:node": "bun run build && node tests/node/managed-promise-boundary.mjs",
     "test:types": "bun run build && tsc -p tests/types/tsconfig.json",
     "typecheck": "tsc --noEmit",
     "build": "bun build src/adapters/managed/index.ts --outdir dist --target node --format esm --external e2b --external @daytona/sdk && tsc -p tsconfig.build.json && bun scripts/fix-declaration-imports.ts",

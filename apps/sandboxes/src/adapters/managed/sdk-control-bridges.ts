@@ -81,17 +81,541 @@ function observationTime(observedAt: () => string): string {
   return value
 }
 
-function validateAttestation(value: ManagedResourceAttestationV1): void {
+function snapshotAttestation(
+  value: ManagedResourceAttestationV1,
+): ManagedResourceAttestationV1 {
+  try {
+    const snapshot = {
+      source_free: value?.source_free,
+      credential_free: value?.credential_free,
+      strong_vm: value?.strong_vm,
+      architecture: value?.architecture,
+      evidence_sha256: value?.evidence_sha256,
+    }
+    if (
+      value === null ||
+      typeof value !== "object" ||
+      typeof snapshot.source_free !== "boolean" ||
+      typeof snapshot.credential_free !== "boolean" ||
+      typeof snapshot.strong_vm !== "boolean" ||
+      !["arm64", "amd64"].includes(snapshot.architecture) ||
+      !isDigest(snapshot.evidence_sha256)
+    ) {
+      throw adapterError("integrity_failed")
+    }
+    return Object.freeze(snapshot) as ManagedResourceAttestationV1
+  } catch (cause) {
+    throw adapterError("integrity_failed", { cause })
+  }
+}
+
+interface StringRecordSnapshotV1 {
+  ownKeyCount: number
+  record: Readonly<Record<string, string>>
+}
+
+function snapshotStringRecord(value: unknown): StringRecordSnapshotV1 {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw adapterError("integrity_failed")
+  }
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw adapterError("integrity_failed")
+  }
+  const keys = Reflect.ownKeys(value)
+  const snapshot = Object.create(null) as Record<string, string>
+  for (const key of keys) {
+    if (typeof key !== "string") throw adapterError("integrity_failed")
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    if (
+      descriptor === undefined ||
+      !descriptor.enumerable ||
+      descriptor.get !== undefined ||
+      descriptor.set !== undefined ||
+      typeof descriptor.value !== "string"
+    ) {
+      throw adapterError("integrity_failed")
+    }
+    Object.defineProperty(snapshot, key, {
+      enumerable: true,
+      value: descriptor.value,
+    })
+  }
+  return Object.freeze({
+    ownKeyCount: keys.length,
+    record: Object.freeze(snapshot),
+  })
+}
+
+const MANAGED_RESOURCE_LABEL_KEYS = Object.freeze([
+  "hasna.installation_sha256",
+  "hasna.provider_scope_ref_sha256",
+  "hasna.ownership_nonce_sha256",
+  "hasna.creation_token_sha256",
+  "hasna.immutable_fingerprint_sha256",
+  "hasna.network_policy_sha256",
+] as const)
+
+function snapshotManagedResourceLabels(
+  value: unknown,
+): StringRecordSnapshotV1 {
+  const snapshot = snapshotStringRecord(value)
+  for (const key of MANAGED_RESOURCE_LABEL_KEYS) {
+    if (!isDigest(snapshot.record[key])) throw adapterError("integrity_failed")
+  }
+  return snapshot
+}
+
+function snapshotExactDataObject(
+  value: unknown,
+  requiredKeys: readonly string[],
+  optionalKeys: readonly string[] = [],
+): Readonly<Record<string, unknown>> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw adapterError("integrity_failed")
+  }
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw adapterError("integrity_failed")
+  }
+  const keys = Reflect.ownKeys(value)
   if (
-    value === null ||
-    typeof value !== "object" ||
-    typeof value.source_free !== "boolean" ||
-    typeof value.credential_free !== "boolean" ||
-    typeof value.strong_vm !== "boolean" ||
-    !["arm64", "amd64"].includes(value.architecture) ||
-    !isDigest(value.evidence_sha256)
+    keys.length < requiredKeys.length ||
+    keys.length > requiredKeys.length + optionalKeys.length
   ) {
     throw adapterError("integrity_failed")
+  }
+  const snapshot = Object.create(null) as Record<string, unknown>
+  for (const key of keys) {
+    if (
+      typeof key !== "string" ||
+      (!requiredKeys.includes(key) && !optionalKeys.includes(key))
+    ) {
+      throw adapterError("integrity_failed")
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    if (
+      descriptor === undefined ||
+      !("value" in descriptor) ||
+      !descriptor.enumerable
+    ) {
+      throw adapterError("integrity_failed")
+    }
+    Object.defineProperty(snapshot, key, {
+      enumerable: true,
+      value: descriptor.value,
+    })
+  }
+  if (requiredKeys.some((key) => !Object.hasOwn(snapshot, key))) {
+    throw adapterError("integrity_failed")
+  }
+  return Object.freeze(snapshot)
+}
+
+function snapshotBoundedDenseArray(value: unknown, maxLength: number): readonly unknown[] {
+  if (!Array.isArray(value)) throw adapterError("integrity_failed")
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length")
+  if (
+    lengthDescriptor === undefined ||
+    !("value" in lengthDescriptor) ||
+    lengthDescriptor.enumerable ||
+    typeof lengthDescriptor.value !== "number" ||
+    !Number.isSafeInteger(lengthDescriptor.value) ||
+    lengthDescriptor.value < 0 ||
+    lengthDescriptor.value > maxLength
+  ) {
+    throw adapterError("integrity_failed")
+  }
+  const length = lengthDescriptor.value
+  const keys = Reflect.ownKeys(value)
+  if (keys.length !== length + 1 || !keys.includes("length")) {
+    throw adapterError("integrity_failed")
+  }
+  const snapshot = new Array<unknown>(length)
+  for (let index = 0; index < length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+    if (
+      descriptor === undefined ||
+      !("value" in descriptor) ||
+      !descriptor.enumerable
+    ) {
+      throw adapterError("integrity_failed")
+    }
+    snapshot[index] = descriptor.value
+  }
+  return Object.freeze(snapshot)
+}
+
+function snapshotBoundedDataRecord(
+  value: unknown,
+  maxEntries: number,
+): Readonly<Record<string, unknown>> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw adapterError("integrity_failed")
+  }
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw adapterError("integrity_failed")
+  }
+  const keys = Reflect.ownKeys(value)
+  if (keys.length > maxEntries) throw adapterError("integrity_failed")
+  const snapshot = Object.create(null) as Record<string, unknown>
+  for (const key of keys) {
+    if (
+      typeof key !== "string" ||
+      key.length === 0 ||
+      key.length > 4096 ||
+      /[\0-\x1f\x7f]/u.test(key)
+    ) {
+      throw adapterError("integrity_failed")
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    if (
+      descriptor === undefined ||
+      !("value" in descriptor) ||
+      !descriptor.enumerable
+    ) {
+      throw adapterError("integrity_failed")
+    }
+    Object.defineProperty(snapshot, key, {
+      enumerable: true,
+      value: descriptor.value,
+    })
+  }
+  return Object.freeze(snapshot)
+}
+
+function snapshotOptionalBoundedStrings(value: unknown): readonly string[] {
+  if (value === undefined) return Object.freeze([])
+  const values = snapshotBoundedDenseArray(value, PAGE_LIMIT)
+  const snapshot: string[] = []
+  for (const entry of values) {
+    if (
+      typeof entry !== "string" ||
+      entry.length === 0 ||
+      entry.length > 4096 ||
+      /[\0-\x1f\x7f]/u.test(entry)
+    ) {
+      throw adapterError("integrity_failed")
+    }
+    snapshot.push(entry)
+  }
+  return Object.freeze(snapshot)
+}
+
+interface E2bNetworkRuleSnapshotV1 {
+  readonly transformHeaders: Readonly<Record<string, string>> | undefined
+}
+
+interface E2bNetworkRulesEntrySnapshotV1 {
+  readonly destination: string
+  readonly rules: readonly E2bNetworkRuleSnapshotV1[]
+}
+
+function snapshotE2bNetworkRules(value: unknown): readonly E2bNetworkRulesEntrySnapshotV1[] {
+  if (value === undefined) return Object.freeze([])
+  const record = snapshotBoundedDataRecord(value, PAGE_LIMIT)
+  const entries: E2bNetworkRulesEntrySnapshotV1[] = []
+  for (const destination of Object.keys(record).sort()) {
+    const ruleValues = snapshotBoundedDenseArray(record[destination], PAGE_LIMIT)
+    const rules: E2bNetworkRuleSnapshotV1[] = []
+    for (const ruleValue of ruleValues) {
+      const rule = snapshotExactDataObject(ruleValue, [], ["transform"])
+      let transformHeaders: Readonly<Record<string, string>> | undefined
+      if (rule.transform !== undefined) {
+        const transform = snapshotExactDataObject(rule.transform, [], ["headers"])
+        if (transform.headers !== undefined) {
+          const headerValues = snapshotBoundedDataRecord(transform.headers, PAGE_LIMIT)
+          const headers = Object.create(null) as Record<string, string>
+          for (const header of Object.keys(headerValues).sort()) {
+            const headerValue = headerValues[header]
+            if (typeof headerValue !== "string" || headerValue.length > 4096) {
+              throw adapterError("integrity_failed")
+            }
+            Object.defineProperty(headers, header, {
+              enumerable: true,
+              value: headerValue,
+            })
+          }
+          transformHeaders = Object.freeze(headers)
+        }
+      }
+      rules.push(Object.freeze({ transformHeaders }))
+    }
+    entries.push(Object.freeze({ destination, rules: Object.freeze(rules) }))
+  }
+  return Object.freeze(entries)
+}
+
+function validateProviderNextToken(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > 4096 ||
+    /[\0-\x1f\x7f]/u.test(value)
+  ) {
+    throw adapterError("integrity_failed")
+  }
+  return value
+}
+
+function snapshotDateIso(value: unknown): string {
+  if (value === null || typeof value !== "object" || Reflect.ownKeys(value).length !== 0) {
+    throw adapterError("integrity_failed")
+  }
+  return Date.prototype.toISOString.call(value)
+}
+
+const E2B_INFO_REQUIRED_KEYS = Object.freeze([
+  "sandboxId",
+  "templateId",
+  "metadata",
+  "startedAt",
+  "endAt",
+  "state",
+  "cpuCount",
+  "memoryMB",
+  "envdVersion",
+] as const)
+
+const E2B_INFO_OPTIONAL_KEYS = Object.freeze([
+  "name",
+  "allowInternetAccess",
+  "network",
+  "lifecycle",
+  "volumeMounts",
+  "sandboxDomain",
+] as const)
+
+const E2B_NETWORK_KEYS = Object.freeze([
+  "allowOut",
+  "denyOut",
+  "rules",
+  "allowPublicTraffic",
+  "maskRequestHost",
+] as const)
+
+const E2B_LIST_CANDIDATE_REQUIRED_KEYS = Object.freeze([
+  "sandboxId",
+  "templateId",
+  "metadata",
+  "startedAt",
+  "endAt",
+  "state",
+  "cpuCount",
+  "memoryMB",
+  "envdVersion",
+  "volumeMounts",
+] as const)
+
+const E2B_LIST_CANDIDATE_OPTIONAL_KEYS = Object.freeze(["name"] as const)
+
+interface E2bListCandidateSnapshotV1 {
+  metadata: Readonly<Record<string, string>>
+  sandboxId: string
+  templateId: string
+}
+
+function snapshotE2bListCandidate(value: unknown): E2bListCandidateSnapshotV1 {
+  const candidate = snapshotExactDataObject(
+    value,
+    E2B_LIST_CANDIDATE_REQUIRED_KEYS,
+    E2B_LIST_CANDIDATE_OPTIONAL_KEYS,
+  )
+  if (
+    typeof candidate.sandboxId !== "string" ||
+    candidate.sandboxId.length === 0 ||
+    candidate.sandboxId.length > 4096 ||
+    /[\0-\x1f\x7f]/u.test(candidate.sandboxId) ||
+    typeof candidate.templateId !== "string" ||
+    candidate.templateId.length === 0 ||
+    candidate.templateId.length > 4096 ||
+    /[\0-\x1f\x7f]/u.test(candidate.templateId) ||
+    (candidate.name !== undefined &&
+      (typeof candidate.name !== "string" ||
+        candidate.name.length > 4096 ||
+        /[\0-\x1f\x7f]/u.test(candidate.name)))
+  ) {
+    throw adapterError("integrity_failed")
+  }
+  return Object.freeze({
+    metadata: snapshotManagedResourceLabels(candidate.metadata).record,
+    sandboxId: candidate.sandboxId,
+    templateId: candidate.templateId,
+  })
+}
+
+interface E2bSandboxInfoSnapshotV1 {
+  allowInternetAccess: boolean | undefined
+  lifecycleAutoResume: boolean | undefined
+  lifecycleOnTimeout: "pause" | "kill" | undefined
+  metadata: Readonly<Record<string, string>>
+  networkDenyOut: readonly string[]
+  sandboxId: string
+  startedAt: string
+  state: "running" | "paused"
+  templateId: string
+  volumeMountCount: number
+}
+
+function snapshotE2bSandboxInfo(info: unknown): E2bSandboxInfoSnapshotV1 {
+  try {
+    const root = snapshotExactDataObject(info, E2B_INFO_REQUIRED_KEYS, E2B_INFO_OPTIONAL_KEYS)
+    const sandboxId = root.sandboxId
+    const templateId = root.templateId
+    const state = root.state
+    const allowInternetAccess = root.allowInternetAccess
+    const startedAt = snapshotDateIso(root.startedAt)
+    snapshotDateIso(root.endAt)
+    if (
+      typeof sandboxId !== "string" ||
+      sandboxId.length === 0 ||
+      typeof templateId !== "string" ||
+      typeof state !== "string" ||
+      !["running", "paused"].includes(state) ||
+      (allowInternetAccess !== undefined && typeof allowInternetAccess !== "boolean") ||
+      typeof root.cpuCount !== "number" ||
+      !Number.isFinite(root.cpuCount) ||
+      typeof root.memoryMB !== "number" ||
+      !Number.isFinite(root.memoryMB) ||
+      typeof root.envdVersion !== "string" ||
+      (root.name !== undefined && typeof root.name !== "string") ||
+      (root.sandboxDomain !== undefined && typeof root.sandboxDomain !== "string")
+    ) {
+      throw adapterError("integrity_failed")
+    }
+
+    const network = snapshotExactDataObject(root.network, E2B_NETWORK_KEYS)
+    const networkAllowOut = snapshotOptionalBoundedStrings(network.allowOut)
+    const networkDenyOut = snapshotOptionalBoundedStrings(network.denyOut)
+    const networkRules = snapshotE2bNetworkRules(network.rules)
+    const networkAllowPublicTraffic = network.allowPublicTraffic
+    const networkMaskRequestHost = network.maskRequestHost
+    if (
+      (networkAllowPublicTraffic !== undefined &&
+        typeof networkAllowPublicTraffic !== "boolean") ||
+      (networkMaskRequestHost !== undefined &&
+        (typeof networkMaskRequestHost !== "string" ||
+          networkMaskRequestHost.length > 4096 ||
+          /[\0-\x1f\x7f]/u.test(networkMaskRequestHost)))
+    ) {
+      throw adapterError("integrity_failed")
+    }
+    if (
+      allowInternetAccess !== false ||
+      !networkDenyOut.includes("0.0.0.0/0") ||
+      networkAllowOut.length !== 0 ||
+      networkRules.length !== 0 ||
+      networkAllowPublicTraffic !== false ||
+      (networkMaskRequestHost !== undefined && networkMaskRequestHost.length !== 0)
+    ) {
+      throw adapterError("integrity_failed")
+    }
+
+    const lifecycle = root.lifecycle === undefined
+      ? undefined
+      : snapshotExactDataObject(root.lifecycle, ["onTimeout", "autoResume"])
+    const lifecycleOnTimeout = lifecycle?.onTimeout
+    const lifecycleAutoResume = lifecycle?.autoResume
+    if (
+      (lifecycleOnTimeout !== undefined &&
+        (typeof lifecycleOnTimeout !== "string" ||
+          !["pause", "kill"].includes(lifecycleOnTimeout))) ||
+      (lifecycleAutoResume !== undefined && typeof lifecycleAutoResume !== "boolean")
+    ) {
+      throw adapterError("integrity_failed")
+    }
+
+    const volumeMountValues = root.volumeMounts === undefined
+      ? Object.freeze([])
+      : snapshotBoundedDenseArray(root.volumeMounts, PAGE_LIMIT)
+    const volumeMounts: Array<Readonly<{ name: string; path: string }>> = []
+    for (const value of volumeMountValues) {
+      const mount = snapshotExactDataObject(value, ["name", "path"])
+      if (typeof mount.name !== "string" || typeof mount.path !== "string") {
+        throw adapterError("integrity_failed")
+      }
+      volumeMounts.push(Object.freeze({ name: mount.name, path: mount.path }))
+    }
+    return Object.freeze({
+      allowInternetAccess,
+      lifecycleAutoResume: lifecycleAutoResume as boolean | undefined,
+      lifecycleOnTimeout: lifecycleOnTimeout as "pause" | "kill" | undefined,
+      metadata: snapshotManagedResourceLabels(root.metadata).record,
+      networkDenyOut,
+      sandboxId,
+      startedAt,
+      state: state as "running" | "paused",
+      templateId,
+      volumeMountCount: volumeMounts.length,
+    })
+  } catch (cause) {
+    throw adapterError("integrity_failed", { cause })
+  }
+}
+
+interface DaytonaSandboxSnapshotV1 {
+  autoDeleteInterval: number | undefined
+  createdAt: string
+  env: Readonly<Record<string, string>>
+  envEntryCount: number
+  id: string
+  labels: Readonly<Record<string, string>>
+  networkBlockAll: boolean | undefined
+  organizationId: string
+  public: boolean
+  state: string | undefined
+  volumeCount: number
+}
+
+function snapshotDaytonaSandbox(
+  sandbox: DaytonaSandbox,
+  expectedId: string,
+): DaytonaSandboxSnapshotV1 {
+  try {
+    const id = sandbox.id
+    const organizationId = sandbox.organizationId
+    const state = sandbox.state
+    const isPublic = sandbox.public
+    const networkBlockAll = sandbox.networkBlockAll
+    const autoDeleteInterval = sandbox.autoDeleteInterval
+    const createdAt = sandbox.createdAt
+    const volumes = sandbox.volumes
+    if (
+      typeof id !== "string" ||
+      id.length === 0 ||
+      id !== expectedId ||
+      typeof organizationId !== "string" ||
+      organizationId.length === 0 ||
+      (state !== undefined && typeof state !== "string") ||
+      typeof isPublic !== "boolean" ||
+      (networkBlockAll !== undefined && typeof networkBlockAll !== "boolean") ||
+      (autoDeleteInterval !== undefined &&
+        (typeof autoDeleteInterval !== "number" || !Number.isFinite(autoDeleteInterval))) ||
+      typeof createdAt !== "string" ||
+      Number.isNaN(Date.parse(createdAt)) ||
+      (volumes !== undefined && !Array.isArray(volumes))
+    ) {
+      throw adapterError("integrity_failed")
+    }
+    const env = snapshotStringRecord(sandbox.env ?? {})
+    const labels = snapshotManagedResourceLabels(sandbox.labels)
+    return Object.freeze({
+      autoDeleteInterval,
+      createdAt,
+      env: env.record,
+      envEntryCount: env.ownKeyCount,
+      id,
+      labels: labels.record,
+      networkBlockAll,
+      organizationId,
+      public: isPublic,
+      state,
+      volumeCount: volumes?.length ?? 0,
+    })
+  } catch (cause) {
+    throw adapterError("integrity_failed", { cause })
   }
 }
 
@@ -260,59 +784,128 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
     this.#observedAt = observedAt
   }
 
-  async #map(info: SandboxInfo): Promise<AdapterProviderResourceV1> {
+  async #mapSnapshot(snapshot: E2bSandboxInfoSnapshotV1): Promise<AdapterProviderResourceV1> {
     const observedAt = observationTime(this.#observedAt)
-    const fingerprint = label(info.metadata, "hasna.immutable_fingerprint_sha256")
-    const attestation = await this.#attestation.attest({
+    const fingerprint = label(snapshot.metadata, "hasna.immutable_fingerprint_sha256")
+    const attestation = snapshotAttestation(await this.#attestation.attest({
       provider: this.provider_id,
-      opaque_resource_id: info.sandboxId,
+      opaque_resource_id: snapshot.sandboxId,
       immutable_fingerprint_sha256: fingerprint,
-    })
-    validateAttestation(attestation)
-    const denyAll =
-      info.allowInternetAccess === false &&
-      info.network?.denyOut?.includes("0.0.0.0/0") === true &&
-      info.network.allowPublicTraffic === false
+    }))
     return {
-      opaque_resource_id: info.sandboxId,
-      provider_creation_token_sha256: label(info.metadata, "hasna.creation_token_sha256"),
+      opaque_resource_id: snapshot.sandboxId,
+      provider_creation_token_sha256: label(snapshot.metadata, "hasna.creation_token_sha256"),
       immutable_fingerprint_sha256: fingerprint,
-      provider_created_at: info.startedAt.toISOString(),
+      provider_created_at: snapshot.startedAt,
       provider_resource_version: canonicalSha256({
-        sandbox_id: info.sandboxId,
-        template_id: info.templateId,
-        started_at: info.startedAt.toISOString(),
+        sandbox_id: snapshot.sandboxId,
+        template_id: snapshot.templateId,
+        started_at: snapshot.startedAt,
       }),
-      state: info.state === "paused" ? "inert" : "unknown",
-      provider_runtime_state: info.state === "paused" ? "paused" : "unknown",
-      network_policy: denyAll
-        ? {
-            mode: "deny_all",
-            policy_sha256: label(info.metadata, "hasna.network_policy_sha256"),
-            enforced_outside_guest: true,
-            public_ingress: false,
-            dns_denied: true,
-            observed_at: observedAt,
-          }
-        : unknownNetworkObservation(observedAt),
-      auto_delete_disabled: info.lifecycle?.onTimeout === "pause" && !info.lifecycle.autoResume,
+      state: snapshot.state === "paused" ? "inert" : "unknown",
+      provider_runtime_state: snapshot.state === "paused" ? "paused" : "unknown",
+      network_policy: {
+        mode: "deny_all",
+        policy_sha256: label(snapshot.metadata, "hasna.network_policy_sha256"),
+        enforced_outside_guest: true,
+        public_ingress: false,
+        dns_denied: true,
+        observed_at: observedAt,
+      },
+      auto_delete_disabled:
+        snapshot.lifecycleOnTimeout === "pause" && !snapshot.lifecycleAutoResume,
       ephemeral: false,
       owned:
         attestation.strong_vm &&
-        label(info.metadata, "hasna.installation_sha256") === this.#installationSha256 &&
-        label(info.metadata, "hasna.provider_scope_ref_sha256") === this.#providerScopeRefSha256,
-      source_attached: !attestation.source_free || (info.volumeMounts?.length ?? 0) !== 0,
+        label(snapshot.metadata, "hasna.installation_sha256") === this.#installationSha256 &&
+        label(snapshot.metadata, "hasna.provider_scope_ref_sha256") ===
+          this.#providerScopeRefSha256,
+      source_attached: !attestation.source_free || snapshot.volumeMountCount !== 0,
       credential_attached: !attestation.credential_free,
       guest_broker_bootstrapped: false,
-      ownership: ownership(info.metadata),
+      ownership: ownership(snapshot.metadata),
     }
+  }
+
+  #map(info: unknown): Promise<AdapterProviderResourceV1> {
+    return this.#mapSnapshot(snapshotE2bSandboxInfo(info))
   }
 
   async #page(options: SandboxListOpts): Promise<ProviderResourcePageV1> {
     const paginator = this.#sdk.list(options)
-    if (!paginator.hasNext) return { items: [] }
-    const items = await Promise.all((await paginator.nextItems()).map((info) => this.#map(info)))
-    return { items, ...(paginator.nextToken === undefined ? {} : { next_cursor: paginator.nextToken }) }
+    let hasNext: unknown
+    let nextItems: unknown
+    try {
+      hasNext = paginator?.hasNext
+      nextItems = paginator?.nextItems
+    } catch (cause) {
+      throw adapterError("provider_state_unknown", { quarantineRequired: true, cause })
+    }
+    if (typeof hasNext !== "boolean" || typeof nextItems !== "function") {
+      throw adapterError("provider_state_unknown", { quarantineRequired: true })
+    }
+    if (!hasNext) {
+      try {
+        validateProviderNextToken(paginator.nextToken)
+      } catch (cause) {
+        throw adapterError("provider_state_unknown", { quarantineRequired: true, cause })
+      }
+      return { items: [] }
+    }
+
+    const providerResult = await Reflect.apply(nextItems, paginator, [])
+    let providerItems: readonly unknown[]
+    let nextToken: string | undefined
+    try {
+      providerItems = snapshotBoundedDenseArray(providerResult, PAGE_LIMIT)
+      nextToken = validateProviderNextToken(paginator.nextToken)
+    } catch (cause) {
+      throw adapterError("provider_state_unknown", { quarantineRequired: true, cause })
+    }
+    const candidates: E2bListCandidateSnapshotV1[] = []
+    const seenIds = new Set<string>()
+    try {
+      for (const info of providerItems) {
+        const candidate = snapshotE2bListCandidate(info)
+        if (seenIds.has(candidate.sandboxId)) {
+          throw adapterError("integrity_failed")
+        }
+        seenIds.add(candidate.sandboxId)
+        candidates.push(candidate)
+      }
+    } catch (cause) {
+      throw adapterError("provider_state_unknown", { quarantineRequired: true, cause })
+    }
+
+    const hydrated: E2bSandboxInfoSnapshotV1[] = []
+    for (const candidate of candidates) {
+      const info = await this.#sdk.getInfo(candidate.sandboxId)
+      if (info === "absent") {
+        throw adapterError("provider_state_unknown", { quarantineRequired: true })
+      }
+      let snapshot: E2bSandboxInfoSnapshotV1
+      try {
+        snapshot = snapshotE2bSandboxInfo(info)
+      } catch (cause) {
+        throw adapterError("provider_state_unknown", { quarantineRequired: true, cause })
+      }
+      if (
+        snapshot.sandboxId !== candidate.sandboxId ||
+        snapshot.templateId !== candidate.templateId ||
+        MANAGED_RESOURCE_LABEL_KEYS.some(
+          (key) => snapshot.metadata[key] !== candidate.metadata[key],
+        )
+      ) {
+        throw adapterError("provider_state_unknown", { quarantineRequired: true })
+      }
+      hydrated.push(snapshot)
+    }
+
+    const items: AdapterProviderResourceV1[] = []
+    for (const snapshot of hydrated) {
+      items.push(await this.#mapSnapshot(snapshot))
+    }
+    return { items, ...(nextToken === undefined ? {} : { next_cursor: nextToken }) }
   }
 
   findByCreationToken(token: Digest, cursor?: string): Promise<ProviderResourcePageV1> {
@@ -384,59 +977,70 @@ export class DaytonaOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkContro
   }
 
   async #map(sandbox: DaytonaSandbox): Promise<AdapterProviderResourceV1> {
+    const expectedId = sandbox.id
+    if (typeof expectedId !== "string" || expectedId.length === 0) {
+      throw adapterError("integrity_failed")
+    }
     await sandbox.refreshData()
+    const snapshot = snapshotDaytonaSandbox(sandbox, expectedId)
     const observedAt = observationTime(this.#observedAt)
-    const fingerprint = label(sandbox.labels, "hasna.immutable_fingerprint_sha256")
-    const attestation = await this.#attestation.attest({
+    const fingerprint = label(snapshot.labels, "hasna.immutable_fingerprint_sha256")
+    const attestation = snapshotAttestation(await this.#attestation.attest({
       provider: this.provider_id,
-      opaque_resource_id: sandbox.id,
+      opaque_resource_id: snapshot.id,
       immutable_fingerprint_sha256: fingerprint,
-    })
-    validateAttestation(attestation)
-    const stopped = sandbox.state === "stopped" || sandbox.state === "paused"
-    const denyAll = sandbox.networkBlockAll === true && sandbox.public === false
+    }))
+    const stopped = snapshot.state === "stopped" || snapshot.state === "paused"
+    const denyAll = snapshot.networkBlockAll === true && snapshot.public === false
     return {
-      opaque_resource_id: sandbox.id,
-      provider_creation_token_sha256: label(sandbox.labels, "hasna.creation_token_sha256"),
+      opaque_resource_id: snapshot.id,
+      provider_creation_token_sha256: label(snapshot.labels, "hasna.creation_token_sha256"),
       immutable_fingerprint_sha256: fingerprint,
-      provider_created_at: sandbox.createdAt ?? "",
+      provider_created_at: snapshot.createdAt,
       provider_resource_version: canonicalSha256({
-        sandbox_id: sandbox.id,
-        created_at: sandbox.createdAt ?? "",
-        organization_id: sandbox.organizationId,
+        sandbox_id: snapshot.id,
+        created_at: snapshot.createdAt,
+        organization_id: snapshot.organizationId,
       }),
       state: stopped ? "inert" : "unknown",
-      provider_runtime_state: stopped ? (sandbox.state === "paused" ? "paused" : "stopped") : "unknown",
+      provider_runtime_state:
+        stopped ? (snapshot.state === "paused" ? "paused" : "stopped") : "unknown",
       network_policy: denyAll
         ? {
             mode: "deny_all",
-            policy_sha256: label(sandbox.labels, "hasna.network_policy_sha256"),
+            policy_sha256: label(snapshot.labels, "hasna.network_policy_sha256"),
             enforced_outside_guest: true,
             public_ingress: false,
             dns_denied: true,
             observed_at: observedAt,
           }
         : unknownNetworkObservation(observedAt),
-      auto_delete_disabled: (sandbox.autoDeleteInterval ?? 0) < 0,
-      ephemeral: sandbox.autoDeleteInterval === 0,
+      auto_delete_disabled: (snapshot.autoDeleteInterval ?? 0) < 0,
+      ephemeral: snapshot.autoDeleteInterval === 0,
       owned:
         attestation.strong_vm &&
-        label(sandbox.labels, "hasna.installation_sha256") === this.#installationSha256 &&
-        label(sandbox.labels, "hasna.provider_scope_ref_sha256") === this.#providerScopeRefSha256,
-      source_attached: !attestation.source_free || (sandbox.volumes?.length ?? 0) !== 0,
-      credential_attached: !attestation.credential_free || Object.keys(sandbox.env ?? {}).length !== 0,
+        label(snapshot.labels, "hasna.installation_sha256") === this.#installationSha256 &&
+        label(snapshot.labels, "hasna.provider_scope_ref_sha256") ===
+          this.#providerScopeRefSha256,
+      source_attached: !attestation.source_free || snapshot.volumeCount !== 0,
+      credential_attached:
+        !attestation.credential_free || snapshot.envEntryCount !== 0,
       guest_broker_bootstrapped: false,
-      ownership: ownership(sandbox.labels),
+      ownership: ownership(snapshot.labels),
     }
   }
 
   async #list(query: ListSandboxesQuery, cursor?: string): Promise<ProviderResourcePageV1> {
     if (cursor !== undefined) throw adapterError("unsupported_runtime_feature")
-    const items: AdapterProviderResourceV1[] = []
+    const providerItems: DaytonaSandbox[] = []
     for await (const sandbox of this.#sdk.list(query)) {
-      if (items.length >= PAGE_LIMIT) {
+      if (providerItems.length >= PAGE_LIMIT) {
         throw adapterError("provider_state_unknown", { quarantineRequired: true })
       }
+      providerItems.push(sandbox)
+    }
+    const items: AdapterProviderResourceV1[] = []
+    for (const sandbox of providerItems) {
       items.push(await this.#map(sandbox))
     }
     return { items }
