@@ -430,6 +430,11 @@ describe("typed guest-broker framing", () => {
 })
 
 describe("official SDK guest-broker compensation bridges", () => {
+  type BrokerSession = Parameters<Parameters<typeof withE2bGuestBrokerSdkSession>[1]>[0]
+  type Settled<T> =
+    | { status: "fulfilled"; value: T }
+    | { status: "rejected"; reason: unknown }
+
   function brokerFrame() {
     const op = makeOperation("file_stat", { generation_transition: undefined })
     const request = {
@@ -443,6 +448,77 @@ describe("official SDK guest-broker compensation bridges", () => {
       brokerAttestation(op.target.immutable_fingerprint_sha256),
       brokerAuthenticator,
     )
+  }
+
+  async function settle<T>(operation: () => Promise<T>): Promise<Settled<T>> {
+    try {
+      return { status: "fulfilled", value: await operation() }
+    } catch (reason) {
+      return { status: "rejected", reason }
+    }
+  }
+
+  function runBrokerSession(
+    provider: "e2b" | "daytona",
+    close: () => Promise<void>,
+    use: (session: BrokerSession) => Promise<void>,
+  ): Promise<void> {
+    if (provider === "e2b") {
+      const commands = {
+        async run() {
+          return {
+            async sendStdin() {},
+            closeStdin: close,
+          }
+        },
+      } as unknown as E2bOfficialBrokerCommandsV1
+      return withE2bGuestBrokerSdkSession(commands, use)
+    }
+
+    const process = {
+      async createPty() {
+        return {
+          async waitForConnection() {},
+          async sendInput() {},
+          disconnect: close,
+        }
+      },
+    } as unknown as DaytonaOfficialBrokerProcessV1
+    return withDaytonaGuestBrokerSdkSession(process, () => {}, use)
+  }
+
+  function replacePromiseMethods(): {
+    replacementRawRejection: string
+    replacementResult: { readonly kind: "replacement_result" }
+    restore: () => void
+  } {
+    const promiseConstructor = Promise
+    const originalApply = Reflect.apply
+    const originalThen = promiseConstructor.prototype.then
+    const originalResolve = promiseConstructor.resolve
+    const originalReject = promiseConstructor.reject
+    const replacementRawRejection = "replacement_raw_rejection"
+    const replacementResult = { kind: "replacement_result" } as const
+
+    promiseConstructor.prototype.then = (function replacementThen() {
+      return originalApply(originalResolve, promiseConstructor, [replacementResult])
+    }) as typeof originalThen
+    promiseConstructor.resolve = (function replacementResolve() {
+      return originalApply(originalReject, promiseConstructor, [replacementRawRejection])
+    }) as typeof originalResolve
+    promiseConstructor.reject = (function replacementReject() {
+      return originalApply(originalResolve, promiseConstructor, [replacementResult])
+    }) as typeof originalReject
+
+    return {
+      replacementRawRejection,
+      replacementResult,
+      restore() {
+        promiseConstructor.prototype.then = originalThen
+        promiseConstructor.resolve = originalResolve
+        promiseConstructor.reject = originalReject
+      },
+    }
   }
 
   test("E2B runs only the fixed command and sends framed bytes over stdin", async () => {
@@ -566,6 +642,118 @@ describe("official SDK guest-broker compensation bridges", () => {
     })
     expect(daytonaDisconnectCalls).toBe(2)
     await expect(daytonaSession!.sendFrame(brokerFrame())).rejects.toThrow("guest_broker_session_closed")
+  })
+
+  test("captured Promise methods preserve transient close joining and retry", async () => {
+    for (const provider of ["e2b", "daytona"] as const) {
+      let closeCalls = 0
+      let joined = false
+      let firstClose: Settled<void> | undefined
+      let joinedClose: Settled<void> | undefined
+      let retryClose: Settled<void> | undefined
+      let wrapper: Settled<void> | undefined
+      const replacements = replacePromiseMethods()
+      try {
+        wrapper = await settle(() =>
+          runBrokerSession(
+            provider,
+            async () => {
+              closeCalls += 1
+              if (closeCalls === 1) throw new Error("transient close failure")
+            },
+            async (session) => {
+              const first = session.closeInput()
+              const concurrent = session.closeInput()
+              joined = first === concurrent
+              firstClose = await settle(() => first)
+              joinedClose = await settle(() => concurrent)
+              retryClose = await settle(() => session.closeInput())
+            },
+          ),
+        )
+      } finally {
+        replacements.restore()
+      }
+
+      expect(closeCalls).toBe(2)
+      expect(joined).toBe(true)
+      expect(firstClose).toMatchObject({ status: "rejected" })
+      expect(joinedClose).toMatchObject({ status: "rejected" })
+      expect(retryClose).toEqual({ status: "fulfilled", value: undefined })
+      expect(wrapper).toEqual({ status: "fulfilled", value: undefined })
+    }
+  })
+
+  test("captured Promise methods preserve closed send and successful finalization", async () => {
+    for (const provider of ["e2b", "daytona"] as const) {
+      let closeCalls = 0
+      let closedSend: Settled<void> | undefined
+      let wrapper: Settled<void> | undefined
+      const replacements = replacePromiseMethods()
+      try {
+        wrapper = await settle(() =>
+          runBrokerSession(
+            provider,
+            async () => {
+              closeCalls += 1
+            },
+            async (session) => {
+              await session.closeInput()
+              closedSend = await settle(() => session.sendFrame(brokerFrame()))
+            },
+          ),
+        )
+      } finally {
+        replacements.restore()
+      }
+
+      expect(closeCalls).toBe(1)
+      expect(closedSend?.status).toBe("rejected")
+      if (closedSend?.status === "rejected") {
+        expect(closedSend.reason).toBeInstanceOf(Error)
+        expect((closedSend.reason as Error).message).toBe("guest_broker_session_closed")
+      }
+      expect(wrapper).toEqual({ status: "fulfilled", value: undefined })
+    }
+  })
+
+  test("captured Promise methods preserve persistent finalizer failure and sealing", async () => {
+    for (const provider of ["e2b", "daytona"] as const) {
+      let closeCalls = 0
+      let retainedSession: BrokerSession | undefined
+      let wrapper: Settled<void> | undefined
+      let closedSend: Settled<void> | undefined
+      const replacements = replacePromiseMethods()
+      try {
+        wrapper = await settle(() =>
+          runBrokerSession(
+            provider,
+            async () => {
+              closeCalls += 1
+              throw new Error("persistent close failure")
+            },
+            async (session) => {
+              retainedSession = session
+            },
+          ),
+        )
+        closedSend = await settle(() => retainedSession!.sendFrame(brokerFrame()))
+      } finally {
+        replacements.restore()
+      }
+
+      expect(closeCalls).toBe(2)
+      expect(wrapper?.status).toBe("rejected")
+      if (wrapper?.status === "rejected") {
+        expect(wrapper.reason).toBeInstanceOf(Error)
+        expect((wrapper.reason as Error).message).toBe("persistent close failure")
+      }
+      expect(closedSend?.status).toBe("rejected")
+      if (closedSend?.status === "rejected") {
+        expect(closedSend.reason).toBeInstanceOf(Error)
+        expect((closedSend.reason as Error).message).toBe("guest_broker_session_closed")
+      }
+    }
   })
 
   test("Daytona disconnects and keeps inbound closed when setup fails", async () => {

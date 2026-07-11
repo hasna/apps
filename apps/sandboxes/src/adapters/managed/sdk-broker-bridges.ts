@@ -20,6 +20,12 @@ import {
 import type { GuestBrokerRequestFrameV1 } from "./types"
 
 const INTRINSIC_REFLECT_APPLY = Reflect.apply
+const INTRINSIC_PROMISE = Promise
+const INTRINSIC_PROMISE_RESOLVE = INTRINSIC_PROMISE.resolve
+const INTRINSIC_PROMISE_REJECT = INTRINSIC_PROMISE.reject
+const INTRINSIC_PROMISE_THEN = INTRINSIC_PROMISE.prototype.then
+const INTRINSIC_ERROR = Error
+const INTRINSIC_TYPE_ERROR = TypeError
 const INTRINSIC_UINT8_ARRAY = Uint8Array
 const TYPED_ARRAY_PROTOTYPE = Object.getPrototypeOf(INTRINSIC_UINT8_ARRAY.prototype) as object
 const TYPED_ARRAY_BUFFER_GETTER = Object.getOwnPropertyDescriptor(
@@ -43,6 +49,24 @@ const ARRAY_BUFFER_BYTE_LENGTH_GETTER = Object.getOwnPropertyDescriptor(
   "byteLength",
 )!.get!
 const TYPED_ARRAY_SET = INTRINSIC_UINT8_ARRAY.prototype.set
+
+function resolvedVoidPromise(): Promise<void> {
+  return INTRINSIC_REFLECT_APPLY(
+    INTRINSIC_PROMISE_RESOLVE,
+    INTRINSIC_PROMISE,
+    [],
+  ) as Promise<void>
+}
+
+function rejectedSessionClosedPromise(): Promise<void> {
+  return INTRINSIC_REFLECT_APPLY(INTRINSIC_PROMISE_REJECT, INTRINSIC_PROMISE, [
+    new INTRINSIC_ERROR("guest_broker_session_closed"),
+  ])
+}
+
+function observePromiseSettlement(promise: Promise<void>, observer: () => void): void {
+  void INTRINSIC_REFLECT_APPLY(INTRINSIC_PROMISE_THEN, promise, [observer, observer])
+}
 
 export interface GuestBrokerSdkSessionV1 {
   sendFrame(frame: GuestBrokerRequestFrameV1): Promise<void>
@@ -68,13 +92,13 @@ class E2bGuestBrokerSdkSessionV1 implements GuestBrokerSdkSessionV1 {
 
   sendFrame(frame: GuestBrokerRequestFrameV1): Promise<void> {
     if (this.#closed || this.#scopeClosed || this.#closePromise !== undefined) {
-      return Promise.reject(new Error("guest_broker_session_closed"))
+      return rejectedSessionClosedPromise()
     }
     return this.#handle.sendStdin(serializeGuestBrokerRequestFrame(frame))
   }
 
   #closeInput(): Promise<void> {
-    if (this.#closed) return Promise.resolve()
+    if (this.#closed) return resolvedVoidPromise()
     if (this.#closePromise !== undefined) return this.#closePromise
     const closePromise = (async () => {
       await this.#handle.closeStdin()
@@ -84,7 +108,7 @@ class E2bGuestBrokerSdkSessionV1 implements GuestBrokerSdkSessionV1 {
     const clearClosePromise = () => {
       if (this.#closePromise === closePromise) this.#closePromise = undefined
     }
-    void closePromise.then(clearClosePromise, clearClosePromise)
+    observePromiseSettlement(closePromise, clearClosePromise)
     return closePromise
   }
 
@@ -152,14 +176,14 @@ class DaytonaGuestBrokerSdkSessionV1 implements GuestBrokerSdkSessionV1 {
 
   sendFrame(frame: GuestBrokerRequestFrameV1): Promise<void> {
     if (this.#closed || this.#scopeClosed || this.#closePromise !== undefined) {
-      return Promise.reject(new Error("guest_broker_session_closed"))
+      return rejectedSessionClosedPromise()
     }
     return this.#handle.sendInput(serializeGuestBrokerRequestFrame(frame))
   }
 
   #closeInput(): Promise<void> {
     this.#sealInbound()
-    if (this.#closed) return Promise.resolve()
+    if (this.#closed) return resolvedVoidPromise()
     if (this.#closePromise !== undefined) return this.#closePromise
     const closePromise = (async () => {
       await this.#handle.disconnect()
@@ -169,7 +193,7 @@ class DaytonaGuestBrokerSdkSessionV1 implements GuestBrokerSdkSessionV1 {
     const clearClosePromise = () => {
       if (this.#closePromise === closePromise) this.#closePromise = undefined
     }
-    void closePromise.then(clearClosePromise, clearClosePromise)
+    observePromiseSettlement(closePromise, clearClosePromise)
     return closePromise
   }
 
@@ -208,7 +232,7 @@ function createDaytonaGuestBrokerSession(
 function snapshotDaytonaProviderBytes(data: Uint8Array): Uint8Array {
   try {
     if (INTRINSIC_REFLECT_APPLY(TYPED_ARRAY_NAME_GETTER, data, []) !== "Uint8Array") {
-      throw new TypeError("invalid_provider_bytes")
+      throw new INTRINSIC_TYPE_ERROR("invalid_provider_bytes")
     }
     const buffer = INTRINSIC_REFLECT_APPLY(TYPED_ARRAY_BUFFER_GETTER, data, []) as ArrayBuffer
     INTRINSIC_REFLECT_APPLY(ARRAY_BUFFER_BYTE_LENGTH_GETTER, buffer, [])
