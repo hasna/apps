@@ -3,17 +3,26 @@
   "version": "1.0.0",
   "description": "Provider-neutral, fenced sandbox lifecycle primitives for local and self-hosted operation",
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "bin": {
     "sandboxes": "dist/cli.js"
   },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     },
     "./postgres": {
       "types": "./dist/repository-postgres.d.ts",
-      "import": "./dist/repository-postgres.js"
+      "import": "./dist/repository-postgres.js",
+      "default": "./dist/repository-postgres.js"
+    },
+    "./managed": {
+      "types": "./dist/adapters/managed/index.d.ts",
+      "import": "./dist/adapters/managed/index.js",
+      "default": "./dist/adapters/managed/index.js"
     }
   },
   "files": [
@@ -24,12 +33,18 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && bun build src/cli.ts src/index.ts src/repository-postgres.ts --outdir dist --target bun --format esm --sourcemap=external && tsc -p tsconfig.build.json",
-    "typecheck": "tsc --noEmit",
+    "build": "bun run clean && bun build src/cli.ts src/index.ts src/repository-postgres.ts --outdir dist --target bun --format esm --sourcemap=external && bun build src/adapters/managed/index.ts --outdir dist/adapters/managed --target node --format esm --sourcemap=external --external e2b --external @daytona/sdk && tsc -p tsconfig.build.json && bun scripts/fix-declaration-imports.ts",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.managed.json --noEmit",
     "test": "bun test",
     "test:postgres": "./scripts/postgres-integration.sh",
     "test:pack": "./scripts/package-smoke.sh",
-    "test:hermetic": "./scripts/hermetic-test.sh",
+    "test:provider:hermetic": "./scripts/hermetic-test.sh",
+    "test:managed:hermetic": "tmp=$(mktemp -d); trap 'rm -rf \"$tmp\"' EXIT; env -i PATH=\"$PATH\" HOME=\"$tmp\" XDG_CONFIG_HOME=\"$tmp/config\" TMPDIR=\"$tmp\" TZ=UTC bun test --preload ./tests/managed-adapters/hermetic-preload.ts tests/managed-adapters/conformance.test.ts tests/managed-adapters/journal-and-sdk.test.ts",
+    "test:hermetic": "bun run test:provider:hermetic && bun run test:managed:hermetic",
+    "test:node": "bun run build && node tests/node/managed-promise-boundary.mjs",
+    "test:types": "bun run build && tsc -p tests/types/tsconfig.json",
+    "audit": "bun audit",
+    "prepack": "bun run build",
     "pack": "bun pm pack --quiet"
   },
   "publishConfig": {
@@ -41,8 +56,17 @@
   "engines": {
     "bun": ">=1.2.0"
   },
+  "dependencies": {
+    "@daytona/sdk": "0.193.0",
+    "@types/ws": "8.18.1",
+    "e2b": "2.31.0"
+  },
   "devDependencies": {
     "@types/bun": "1.3.8",
     "typescript": "5.9.3"
+  },
+  "overrides": {
+    "@opentelemetry/core": "2.8.0",
+    "protobufjs": "8.6.5"
   }
 }

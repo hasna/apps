@@ -142,7 +142,7 @@ fi
 migration_url="postgresql://sandboxes_migration@localhost:$port/sandboxes_v1_test?sslmode=verify-full"
 runtime_url="postgresql://sandboxes_runtime@localhost:$port/sandboxes_v1_test?sslmode=verify-full"
 
-cd "$repo"
+cd "$runtime_home"
 env -i \
   HOME="$runtime_home" \
   TMPDIR="$runtime_tmp" \
@@ -155,4 +155,4 @@ env -i \
   SANDBOXES_POSTGRES_MIGRATION_ROLE=sandboxes_migration \
   SANDBOXES_POSTGRES_RUNTIME_ROLE=sandboxes_runtime \
   SANDBOXES_POSTGRES_TLS_CA_FILE="$cert_dir/ca.crt" \
-  "$bun_bin" test --timeout 120000 ./tests/postgres-live.integration.ts
+  "$bun_bin" test --timeout 120000 "$repo/tests/postgres-live.integration.ts"
