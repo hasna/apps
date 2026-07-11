@@ -34,9 +34,13 @@ export {
   DaytonaOfficialSdkControlBridgeV1,
   E2bOfficialSdkControlBridgeV1,
   type DaytonaOfficialReadSdkV1,
+  type E2bOfficialLifecycleSdkV1,
   type E2bOfficialReadSdkV1,
+  type E2bTemplateMappingPortV1,
+  type E2bTemplateMappingV1,
   type ManagedResourceAttestationPortV1,
   type ManagedResourceAttestationV1,
+  e2bTemplateMappingSha256,
 } from "./sdk-control-bridges"
 export {
   DAYTONA_GUEST_BROKER_PTY_ID,

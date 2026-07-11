@@ -2,6 +2,7 @@ import type { ListSandboxesQuery, Sandbox as DaytonaSandbox } from "@daytona/sdk
 import type { SandboxInfo, SandboxListOpts } from "e2b"
 import { canonicalSha256, isDigest } from "./canonical"
 import { AdapterContractError, adapterError } from "./errors"
+import { buildE2bCreateOptions, type SafeE2bCreateOptionsV1 } from "./sdk-pins"
 import type {
   AdapterProviderResourceV1,
   Digest,
@@ -154,6 +155,12 @@ const MANAGED_RESOURCE_LABEL_KEYS = Object.freeze([
   "hasna.creation_token_sha256",
   "hasna.immutable_fingerprint_sha256",
   "hasna.network_policy_sha256",
+] as const)
+
+const E2B_TEMPLATE_MAPPING_LABEL_KEYS = Object.freeze([
+  "hasna.e2b_template_id",
+  "hasna.e2b_template_mapping_version",
+  "hasna.e2b_template_mapping_sha256",
 ] as const)
 
 function snapshotManagedResourceLabels(
@@ -448,18 +455,28 @@ function snapshotE2bListCandidate(value: unknown): E2bListCandidateSnapshotV1 {
 
 interface E2bSandboxInfoSnapshotV1 {
   allowInternetAccess: boolean | undefined
+  cpuCount: number
+  endAt: string
   lifecycleAutoResume: boolean | undefined
   lifecycleOnTimeout: "pause" | "kill" | undefined
   metadata: Readonly<Record<string, string>>
+  networkDenyAll: boolean
   networkDenyOut: readonly string[]
+  memoryMB: number
   sandboxId: string
   startedAt: string
   state: "running" | "paused"
   templateId: string
+  templateMappingSha256: Digest | undefined
+  templateMappingVersion: string | undefined
   volumeMountCount: number
 }
 
-function snapshotE2bSandboxInfo(info: unknown): E2bSandboxInfoSnapshotV1 {
+function snapshotE2bSandboxInfo(
+  info: unknown,
+  requireDenyAllReadback = true,
+  requireTemplateMappingConsistency = true,
+): E2bSandboxInfoSnapshotV1 {
   try {
     const root = snapshotExactDataObject(info, E2B_INFO_REQUIRED_KEYS, E2B_INFO_OPTIONAL_KEYS)
     const sandboxId = root.sandboxId
@@ -467,7 +484,7 @@ function snapshotE2bSandboxInfo(info: unknown): E2bSandboxInfoSnapshotV1 {
     const state = root.state
     const allowInternetAccess = root.allowInternetAccess
     const startedAt = snapshotDateIso(root.startedAt)
-    snapshotDateIso(root.endAt)
+    const endAt = snapshotDateIso(root.endAt)
     if (
       typeof sandboxId !== "string" ||
       sandboxId.length === 0 ||
@@ -502,14 +519,16 @@ function snapshotE2bSandboxInfo(info: unknown): E2bSandboxInfoSnapshotV1 {
     ) {
       throw adapterError("integrity_failed")
     }
-    if (
+    const networkDenyAll =
       allowInternetAccess !== false ||
       !networkDenyOut.includes("0.0.0.0/0") ||
       networkAllowOut.length !== 0 ||
       networkRules.length !== 0 ||
       networkAllowPublicTraffic !== false ||
       (networkMaskRequestHost !== undefined && networkMaskRequestHost.length !== 0)
-    ) {
+        ? false
+        : true
+    if (requireDenyAllReadback && !networkDenyAll) {
       throw adapterError("integrity_failed")
     }
 
@@ -527,6 +546,26 @@ function snapshotE2bSandboxInfo(info: unknown): E2bSandboxInfoSnapshotV1 {
       throw adapterError("integrity_failed")
     }
 
+    const metadata = snapshotManagedResourceLabels(root.metadata).record
+    const metadataTemplateId = metadata["hasna.e2b_template_id"]
+    const templateMappingVersion = metadata["hasna.e2b_template_mapping_version"]
+    const templateMappingSha256 = metadata["hasna.e2b_template_mapping_sha256"]
+    const mappingFieldCount = [
+      metadataTemplateId,
+      templateMappingVersion,
+      templateMappingSha256,
+    ].filter((value) => value !== undefined).length
+    if (requireTemplateMappingConsistency && (
+      (mappingFieldCount !== 0 && mappingFieldCount !== 3) ||
+      (mappingFieldCount === 3 &&
+        (!safeProviderString(metadataTemplateId) ||
+          metadataTemplateId !== templateId ||
+          !safeProviderString(templateMappingVersion) ||
+          !isDigest(templateMappingSha256)))
+    )) {
+      throw adapterError("integrity_failed")
+    }
+
     const volumeMountValues = root.volumeMounts === undefined
       ? Object.freeze([])
       : snapshotBoundedDenseArray(root.volumeMounts, PAGE_LIMIT)
@@ -540,14 +579,20 @@ function snapshotE2bSandboxInfo(info: unknown): E2bSandboxInfoSnapshotV1 {
     }
     return Object.freeze({
       allowInternetAccess,
+      cpuCount: root.cpuCount as number,
+      endAt,
       lifecycleAutoResume: lifecycleAutoResume as boolean | undefined,
       lifecycleOnTimeout: lifecycleOnTimeout as "pause" | "kill" | undefined,
-      metadata: snapshotManagedResourceLabels(root.metadata).record,
+      metadata,
+      memoryMB: root.memoryMB as number,
+      networkDenyAll,
       networkDenyOut,
       sandboxId,
       startedAt,
       state: state as "running" | "paused",
       templateId,
+      templateMappingSha256: templateMappingSha256 as Digest | undefined,
+      templateMappingVersion,
       volumeMountCount: volumeMounts.length,
     })
   } catch (cause) {
@@ -736,7 +781,9 @@ function unknownNetworkObservation(observedAt: string): NetworkPolicyObservation
 
 abstract class ReadOnlyOfficialSdkControlBridge implements ManagedProviderControlPortV1 {
   abstract readonly provider_id: ManagedProviderIdV1
-  readonly capabilities: ProviderCapabilitiesV1 = DISABLED_MUTATION_CAPABILITIES
+  get capabilities(): ProviderCapabilitiesV1 {
+    return DISABLED_MUTATION_CAPABILITIES
+  }
 
   abstract findByCreationToken(token: Digest, cursor?: string): Promise<ProviderResourcePageV1>
   abstract inspectResource(opaqueResourceId: string): Promise<AdapterProviderResourceV1 | "absent">
@@ -858,20 +905,395 @@ export interface E2bOfficialReadSdkV1 {
   getInfo(opaqueResourceId: string): Promise<SandboxInfo | "absent">
 }
 
+/**
+ * Credential-bound E2B 2.31.0 control surface. Implementations bind credentials in
+ * the injected closures; the bridge deliberately has no API-key or ambient-config
+ * option on any method.
+ */
+export interface E2bOfficialLifecycleSdkV1 extends E2bOfficialReadSdkV1 {
+  create?(options: SafeE2bCreateOptionsV1): Promise<unknown>
+  connect?(opaqueResourceId: string, options: { timeoutMs: number }): Promise<unknown>
+  pause?(opaqueResourceId: string, options: { keepMemory: false }): Promise<boolean>
+  updateNetwork?(
+    opaqueResourceId: string,
+    update: { allowInternetAccess: false; denyOut: readonly ["0.0.0.0/0"] },
+  ): Promise<void>
+  kill?(opaqueResourceId: string): Promise<boolean>
+}
+
+export interface E2bTemplateMappingV1 {
+  schema_version: "sandboxes.e2b-template-mapping/v1"
+  image_or_snapshot_sha256: Digest
+  template_id: string
+  mapping_version: string
+  mapping_sha256: Digest
+}
+
+export interface E2bTemplateMappingPortV1 {
+  resolve(imageOrSnapshotSha256: Digest): E2bTemplateMappingV1 | "absent"
+}
+
+export function e2bTemplateMappingSha256(
+  mapping: Omit<E2bTemplateMappingV1, "mapping_sha256">,
+): Digest {
+  return canonicalSha256({
+    schema_version: mapping.schema_version,
+    image_or_snapshot_sha256: mapping.image_or_snapshot_sha256,
+    template_id: mapping.template_id,
+    mapping_version: mapping.mapping_version,
+  })
+}
+
+function snapshotTemplateMappingResolve(
+  port: E2bTemplateMappingPortV1 | undefined,
+): E2bTemplateMappingPortV1["resolve"] | undefined {
+  if (port === undefined) return undefined
+  let descriptor: PropertyDescriptor | undefined
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(port, "resolve")
+  } catch (cause) {
+    throw adapterError("validation_failed", { cause })
+  }
+  if (
+    descriptor === undefined ||
+    !("value" in descriptor) ||
+    descriptor.get !== undefined ||
+    descriptor.set !== undefined ||
+    typeof descriptor.value !== "function"
+  ) {
+    throw adapterError("validation_failed")
+  }
+  return descriptor.value as E2bTemplateMappingPortV1["resolve"]
+}
+
+function snapshotE2bTemplateMapping(
+  value: unknown,
+  expectedImageOrSnapshotSha256: Digest,
+): E2bTemplateMappingV1 {
+  try {
+    const mapping = snapshotExactDataObject(value, [
+      "schema_version",
+      "image_or_snapshot_sha256",
+      "template_id",
+      "mapping_version",
+      "mapping_sha256",
+    ])
+    const snapshot = Object.freeze({
+      schema_version: mapping.schema_version,
+      image_or_snapshot_sha256: mapping.image_or_snapshot_sha256,
+      template_id: mapping.template_id,
+      mapping_version: mapping.mapping_version,
+      mapping_sha256: mapping.mapping_sha256,
+    }) as E2bTemplateMappingV1
+    if (
+      snapshot.schema_version !== "sandboxes.e2b-template-mapping/v1" ||
+      snapshot.image_or_snapshot_sha256 !== expectedImageOrSnapshotSha256 ||
+      !isDigest(snapshot.image_or_snapshot_sha256) ||
+      !safeProviderString(snapshot.template_id) ||
+      !safeProviderString(snapshot.mapping_version) ||
+      !isDigest(snapshot.mapping_sha256) ||
+      snapshot.mapping_sha256 !== e2bTemplateMappingSha256({
+        schema_version: snapshot.schema_version,
+        image_or_snapshot_sha256: snapshot.image_or_snapshot_sha256,
+        template_id: snapshot.template_id,
+        mapping_version: snapshot.mapping_version,
+      })
+    ) {
+      throw adapterError("integrity_failed")
+    }
+    return snapshot
+  } catch (cause) {
+    if (cause instanceof AdapterContractError && cause.code === "integrity_failed") throw cause
+    throw adapterError("integrity_failed", { cause })
+  }
+}
+
+type E2bSdkMethodNameV1 =
+  | "list"
+  | "getInfo"
+  | "create"
+  | "connect"
+  | "pause"
+  | "updateNetwork"
+  | "kill"
+
+function snapshotOptionalOwnSdkMethod<K extends E2bSdkMethodNameV1>(
+  sdk: E2bOfficialLifecycleSdkV1,
+  key: K,
+): E2bOfficialLifecycleSdkV1[K] | undefined {
+  let descriptor: PropertyDescriptor | undefined
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(sdk, key)
+  } catch (cause) {
+    throw adapterError("validation_failed", { cause })
+  }
+  if (descriptor === undefined) return undefined
+  if (
+    !("value" in descriptor) ||
+    descriptor.get !== undefined ||
+    descriptor.set !== undefined ||
+    typeof descriptor.value !== "function"
+  ) {
+    throw adapterError("validation_failed")
+  }
+  return descriptor.value as E2bOfficialLifecycleSdkV1[K]
+}
+
+function snapshotRequiredOwnSdkMethod<K extends "list" | "getInfo">(
+  sdk: E2bOfficialLifecycleSdkV1,
+  key: K,
+): E2bOfficialLifecycleSdkV1[K] {
+  const method = snapshotOptionalOwnSdkMethod(sdk, key)
+  if (method === undefined) throw adapterError("validation_failed")
+  return method
+}
+
+function snapshotE2bCreatedSandboxId(value: unknown): string {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw adapterError("integrity_failed")
+  }
+  let descriptor: PropertyDescriptor | undefined
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(value, "sandboxId")
+  } catch (cause) {
+    throw adapterError("integrity_failed", { cause })
+  }
+  if (
+    descriptor === undefined ||
+    !("value" in descriptor) ||
+    descriptor.get !== undefined ||
+    descriptor.set !== undefined ||
+    typeof descriptor.value !== "string" ||
+    descriptor.value.length === 0 ||
+    descriptor.value.length > 4096 ||
+    /[\0-\x1f\x7f]/u.test(descriptor.value)
+  ) {
+    throw adapterError("integrity_failed")
+  }
+  return descriptor.value
+}
+
+const E2B_TARGET_KEYS = Object.freeze([
+  "operation_id",
+  "operation_digest",
+  "operation_step_id",
+  "resource_id",
+  "resource_lifecycle_generation",
+  "provider_idempotency_token_sha256",
+  "provider_creation_token_sha256",
+  "immutable_fingerprint_sha256",
+  "authorization_consumption_receipt_sha256",
+] as const)
+
+const E2B_SPEC_KEYS = Object.freeze([
+  "schema_version",
+  "run_id",
+  "attempt_id",
+  "source",
+  "environment",
+  "runtime_class",
+  "architecture",
+  "workspace_root",
+  "network_policy",
+  "resources",
+  "exec_concurrency",
+  "max_runtime_ms",
+  "expires_at",
+  "data_class",
+  "input_bundle_refs",
+] as const)
+
+interface E2bCreateRequestSnapshotV1 {
+  readonly cpuMillis: number
+  readonly imageOrSnapshotSha256: Digest
+  readonly maxRuntimeMs: number
+  readonly memoryBytes: number
+  readonly metadata: Readonly<{
+    installation_sha256: Digest
+    provider_scope_ref_sha256: Digest
+    ownership_nonce_sha256: Digest
+    creation_token_sha256: Digest
+    immutable_fingerprint_sha256: Digest
+  }>
+  readonly networkPolicySha256: Digest
+  readonly ownershipNonceSha256: Digest
+  readonly target: ProviderEffectTargetV1
+}
+
+function safeProviderString(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 4096 &&
+    !/[\0-\x1f\x7f]/u.test(value)
+  )
+}
+
+function snapshotE2bCreateRequest(
+  request: ProviderCreateInertRequestV1,
+): E2bCreateRequestSnapshotV1 {
+  try {
+    const root = snapshotExactDataObject(request, [
+      "target",
+      "spec",
+      "allocation_key_sha256",
+      "ownership",
+      "initial_network_policy",
+    ])
+    const target = snapshotExactDataObject(root.target, E2B_TARGET_KEYS)
+    const spec = snapshotExactDataObject(root.spec, E2B_SPEC_KEYS)
+    const source = snapshotExactDataObject(spec.source, [
+      "repository_ref",
+      "commit_sha",
+      "source_bundle_sha256",
+    ])
+    const environment = snapshotExactDataObject(spec.environment, [
+      "image_or_snapshot_sha256",
+      "toolchain_manifest_sha256",
+    ])
+    const resources = snapshotExactDataObject(spec.resources, [
+      "cpu_millis",
+      "memory_bytes",
+      "disk_bytes",
+      "pids",
+      "open_files",
+      "output_bytes",
+    ])
+    const ownershipValue = snapshotExactDataObject(root.ownership, [
+      "installation_id",
+      "provider_scope_ref",
+      "ownership_nonce",
+    ])
+    const initialPolicy = snapshotExactDataObject(root.initial_network_policy, [
+      "mode",
+      "policy_sha256",
+    ])
+    const requestedPolicy = snapshotExactDataObject(spec.network_policy, [
+      "mode",
+      "policy_sha256",
+    ])
+    const inputBundleRefs = snapshotBoundedDenseArray(spec.input_bundle_refs, PAGE_LIMIT)
+    for (const input of inputBundleRefs) {
+      const snapshot = snapshotExactDataObject(input, ["sha256", "size_bytes"])
+      if (
+        !isDigest(snapshot.sha256) ||
+        typeof snapshot.size_bytes !== "number" ||
+        !Number.isSafeInteger(snapshot.size_bytes) ||
+        snapshot.size_bytes < 0
+      ) {
+        throw adapterError("validation_failed")
+      }
+    }
+    const stringTargetKeys = ["operation_id", "operation_step_id", "resource_id"] as const
+    const digestTargetKeys = [
+      "operation_digest",
+      "provider_idempotency_token_sha256",
+      "provider_creation_token_sha256",
+      "immutable_fingerprint_sha256",
+      "authorization_consumption_receipt_sha256",
+    ] as const
+    if (
+      stringTargetKeys.some((key) => !safeProviderString(target[key])) ||
+      digestTargetKeys.some((key) => !isDigest(target[key])) ||
+      typeof target.resource_lifecycle_generation !== "bigint" ||
+      target.resource_lifecycle_generation < 1n ||
+      !isDigest(root.allocation_key_sha256) ||
+      !safeProviderString(ownershipValue.installation_id) ||
+      !safeProviderString(ownershipValue.provider_scope_ref) ||
+      !safeProviderString(ownershipValue.ownership_nonce) ||
+      initialPolicy.mode !== "deny_all" ||
+      !isDigest(initialPolicy.policy_sha256) ||
+      !["deny_all", "broker_only"].includes(requestedPolicy.mode as string) ||
+      !isDigest(requestedPolicy.policy_sha256) ||
+      spec.schema_version !== "sandboxes.runtime/v1" ||
+      !safeProviderString(spec.run_id) ||
+      !safeProviderString(spec.attempt_id) ||
+      !safeProviderString(source.repository_ref) ||
+      !safeProviderString(source.commit_sha) ||
+      !isDigest(source.source_bundle_sha256) ||
+      !isDigest(environment.image_or_snapshot_sha256) ||
+      !isDigest(environment.toolchain_manifest_sha256) ||
+      spec.runtime_class !== "strong_vm" ||
+      !["arm64", "amd64"].includes(spec.architecture as string) ||
+      spec.workspace_root !== "/workspace" ||
+      spec.exec_concurrency !== 1 ||
+      typeof spec.max_runtime_ms !== "number" ||
+      !Number.isSafeInteger(spec.max_runtime_ms) ||
+      spec.max_runtime_ms <= 0 ||
+      spec.max_runtime_ms > 86_400_000 ||
+      typeof spec.expires_at !== "string" ||
+      Number.isNaN(Date.parse(spec.expires_at)) ||
+      !["public", "internal_non_sensitive", "restricted"].includes(spec.data_class as string) ||
+      Object.values(resources).some(
+        (value) =>
+          typeof value !== "number" ||
+          !Number.isSafeInteger(value) ||
+          value <= 0,
+      )
+    ) {
+      throw adapterError("validation_failed")
+    }
+
+    const targetSnapshot = Object.freeze({
+      operation_id: target.operation_id,
+      operation_digest: target.operation_digest,
+      operation_step_id: target.operation_step_id,
+      resource_id: target.resource_id,
+      resource_lifecycle_generation: target.resource_lifecycle_generation,
+      provider_idempotency_token_sha256: target.provider_idempotency_token_sha256,
+      provider_creation_token_sha256: target.provider_creation_token_sha256,
+      immutable_fingerprint_sha256: target.immutable_fingerprint_sha256,
+      authorization_consumption_receipt_sha256:
+        target.authorization_consumption_receipt_sha256,
+    }) as ProviderEffectTargetV1
+    const metadata = Object.freeze({
+      installation_sha256: canonicalSha256(ownershipValue.installation_id),
+      provider_scope_ref_sha256: canonicalSha256(ownershipValue.provider_scope_ref),
+      ownership_nonce_sha256: canonicalSha256(ownershipValue.ownership_nonce),
+      creation_token_sha256: targetSnapshot.provider_creation_token_sha256,
+      immutable_fingerprint_sha256: targetSnapshot.immutable_fingerprint_sha256,
+    })
+    return Object.freeze({
+      cpuMillis: resources.cpu_millis as number,
+      imageOrSnapshotSha256: environment.image_or_snapshot_sha256 as Digest,
+      maxRuntimeMs: spec.max_runtime_ms as number,
+      memoryBytes: resources.memory_bytes as number,
+      metadata,
+      networkPolicySha256: initialPolicy.policy_sha256 as Digest,
+      ownershipNonceSha256: metadata.ownership_nonce_sha256,
+      target: targetSnapshot,
+    })
+  } catch (cause) {
+    if (cause instanceof AdapterContractError && cause.code === "validation_failed") throw cause
+    throw adapterError("validation_failed", { cause })
+  }
+}
+
 export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBridge {
   readonly provider_id = "e2b" as const
-  readonly #sdk: E2bOfficialReadSdkV1
+  readonly #sdk: E2bOfficialLifecycleSdkV1
+  readonly #list: E2bOfficialLifecycleSdkV1["list"]
+  readonly #getInfo: E2bOfficialLifecycleSdkV1["getInfo"]
+  readonly #create: E2bOfficialLifecycleSdkV1["create"]
+  readonly #connect: E2bOfficialLifecycleSdkV1["connect"]
+  readonly #pause: E2bOfficialLifecycleSdkV1["pause"]
+  readonly #updateNetwork: E2bOfficialLifecycleSdkV1["updateNetwork"]
+  readonly #kill: E2bOfficialLifecycleSdkV1["kill"]
+  readonly #templateMappingPort: E2bTemplateMappingPortV1 | undefined
+  readonly #resolveTemplate: E2bTemplateMappingPortV1["resolve"] | undefined
+  readonly #capabilities: ProviderCapabilitiesV1
   readonly #attestation: ManagedResourceAttestationPortV1
   readonly #installationSha256: Digest
   readonly #providerScopeRefSha256: Digest
   readonly #observedAt: () => string
 
   constructor(
-    sdk: E2bOfficialReadSdkV1,
+    sdk: E2bOfficialLifecycleSdkV1,
     attestation: ManagedResourceAttestationPortV1,
     installationSha256: Digest,
     providerScopeRefSha256: Digest,
     observedAt: () => string,
+    templateMappingPort?: E2bTemplateMappingPortV1,
   ) {
     super()
     if (
@@ -882,14 +1304,80 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
       throw adapterError("validation_failed")
     }
     this.#sdk = sdk
+    this.#list = snapshotRequiredOwnSdkMethod(sdk, "list")
+    this.#getInfo = snapshotRequiredOwnSdkMethod(sdk, "getInfo")
+    this.#create = snapshotOptionalOwnSdkMethod(sdk, "create")
+    this.#connect = snapshotOptionalOwnSdkMethod(sdk, "connect")
+    this.#pause = snapshotOptionalOwnSdkMethod(sdk, "pause")
+    this.#updateNetwork = snapshotOptionalOwnSdkMethod(sdk, "updateNetwork")
+    this.#kill = snapshotOptionalOwnSdkMethod(sdk, "kill")
+    this.#templateMappingPort = templateMappingPort
+    this.#resolveTemplate = snapshotTemplateMappingResolve(templateMappingPort)
+    this.#capabilities = Object.freeze({
+      ...DISABLED_MUTATION_CAPABILITIES,
+      // This port capability describes the adapter-visible postcondition. E2B
+      // has no native create-stopped call; create -> exact readback -> pause is
+      // the compensation, while OFFICIAL_SDK_CONTRACT_GAPS keeps that native
+      // provider limitation explicit and production admission remains disabled.
+      create_stopped:
+        this.#create !== undefined &&
+        this.#pause !== undefined &&
+        this.#kill !== undefined &&
+        this.#resolveTemplate !== undefined,
+      network_policy_readback: true,
+      idempotent_activation_continuation: this.#connect !== undefined,
+      stop_preserves_filesystem: this.#pause !== undefined,
+      locked_destroy_compensation: this.#kill !== undefined,
+    })
     this.#attestation = attestation
     this.#installationSha256 = installationSha256
     this.#providerScopeRefSha256 = providerScopeRefSha256
     this.#observedAt = observedAt
   }
 
-  async #mapSnapshot(snapshot: E2bSandboxInfoSnapshotV1): Promise<AdapterProviderResourceV1> {
-    const observedAt = observationTime(this.#observedAt)
+  override get capabilities(): ProviderCapabilitiesV1 {
+    return this.#capabilities
+  }
+
+  #resourceVersion(snapshot: E2bSandboxInfoSnapshotV1): string {
+    const identity = {
+      sandbox_id: snapshot.sandboxId,
+      template_id: snapshot.templateId,
+      started_at: snapshot.startedAt,
+    }
+    if (
+      snapshot.templateMappingSha256 === undefined ||
+      snapshot.templateMappingVersion === undefined
+    ) {
+      return canonicalSha256(identity)
+    }
+    return canonicalSha256({
+      ...identity,
+      template_mapping_version: snapshot.templateMappingVersion,
+      template_mapping_sha256: snapshot.templateMappingSha256,
+    })
+  }
+
+  #resolveTemplateMapping(imageOrSnapshotSha256: Digest): E2bTemplateMappingV1 {
+    if (this.#resolveTemplate === undefined || this.#templateMappingPort === undefined) {
+      throw adapterError("unsupported_runtime_feature")
+    }
+    let value: unknown
+    try {
+      value = Reflect.apply(this.#resolveTemplate, this.#templateMappingPort, [
+        imageOrSnapshotSha256,
+      ])
+    } catch (cause) {
+      throw adapterError("integrity_failed", { cause })
+    }
+    if (value === "absent") throw adapterError("validation_failed")
+    return snapshotE2bTemplateMapping(value, imageOrSnapshotSha256)
+  }
+
+  async #ownedSnapshot(snapshot: E2bSandboxInfoSnapshotV1): Promise<{
+    attestation: ManagedResourceAttestationV1
+    owned: boolean
+  }> {
     const fingerprint = label(snapshot.metadata, "hasna.immutable_fingerprint_sha256")
     const attestation = snapshotAttestation(await this.#attestation.attest({
       provider: this.provider_id,
@@ -897,17 +1385,28 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
       immutable_fingerprint_sha256: fingerprint,
     }))
     return {
+      attestation,
+      owned:
+        attestation.strong_vm &&
+        label(snapshot.metadata, "hasna.installation_sha256") === this.#installationSha256 &&
+        label(snapshot.metadata, "hasna.provider_scope_ref_sha256") ===
+          this.#providerScopeRefSha256,
+    }
+  }
+
+  async #mapSnapshot(snapshot: E2bSandboxInfoSnapshotV1): Promise<AdapterProviderResourceV1> {
+    if (!snapshot.networkDenyAll) throw adapterError("integrity_failed")
+    const observedAt = observationTime(this.#observedAt)
+    const fingerprint = label(snapshot.metadata, "hasna.immutable_fingerprint_sha256")
+    const { attestation, owned } = await this.#ownedSnapshot(snapshot)
+    return {
       opaque_resource_id: snapshot.sandboxId,
       provider_creation_token_sha256: label(snapshot.metadata, "hasna.creation_token_sha256"),
       immutable_fingerprint_sha256: fingerprint,
       provider_created_at: snapshot.startedAt,
-      provider_resource_version: canonicalSha256({
-        sandbox_id: snapshot.sandboxId,
-        template_id: snapshot.templateId,
-        started_at: snapshot.startedAt,
-      }),
-      state: snapshot.state === "paused" ? "inert" : "unknown",
-      provider_runtime_state: snapshot.state === "paused" ? "paused" : "unknown",
+      provider_resource_version: this.#resourceVersion(snapshot),
+      state: snapshot.state === "paused" ? "inert" : "active",
+      provider_runtime_state: snapshot.state === "paused" ? "paused" : "active",
       network_policy: {
         mode: "deny_all",
         policy_sha256: label(snapshot.metadata, "hasna.network_policy_sha256"),
@@ -919,11 +1418,7 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
       auto_delete_disabled:
         snapshot.lifecycleOnTimeout === "pause" && !snapshot.lifecycleAutoResume,
       ephemeral: false,
-      owned:
-        attestation.strong_vm &&
-        label(snapshot.metadata, "hasna.installation_sha256") === this.#installationSha256 &&
-        label(snapshot.metadata, "hasna.provider_scope_ref_sha256") ===
-          this.#providerScopeRefSha256,
+      owned,
       source_attached: !attestation.source_free || snapshot.volumeMountCount !== 0,
       credential_attached: !attestation.credential_free,
       guest_broker_bootstrapped: false,
@@ -934,7 +1429,7 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
   async #page(options: SandboxListOpts): Promise<ProviderResourcePageV1> {
     let paginator: ReturnType<E2bOfficialReadSdkV1["list"]>
     try {
-      paginator = this.#sdk.list(options)
+      paginator = Reflect.apply(this.#list, this.#sdk, [options])
     } catch (cause) {
       throw providerSdkUnavailable(cause)
     }
@@ -991,7 +1486,7 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
     for (const candidate of candidates) {
       let info: Awaited<ReturnType<E2bOfficialReadSdkV1["getInfo"]>>
       try {
-        info = await this.#sdk.getInfo(candidate.sandboxId)
+        info = await Reflect.apply(this.#getInfo, this.#sdk, [candidate.sandboxId])
       } catch (cause) {
         throw providerSdkUnavailable(cause)
       }
@@ -1007,7 +1502,7 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
       if (
         snapshot.sandboxId !== candidate.sandboxId ||
         snapshot.templateId !== candidate.templateId ||
-        MANAGED_RESOURCE_LABEL_KEYS.some(
+        [...MANAGED_RESOURCE_LABEL_KEYS, ...E2B_TEMPLATE_MAPPING_LABEL_KEYS].some(
           (key) => snapshot.metadata[key] !== candidate.metadata[key],
         )
       ) {
@@ -1021,6 +1516,152 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
       items.push(await this.#mapSnapshot(snapshot))
     }
     return { items, ...(nextToken === undefined ? {} : { next_cursor: nextToken }) }
+  }
+
+  async #getSnapshot(
+    opaqueResourceId: string,
+    requireDenyAllReadback = true,
+    requireTemplateMappingConsistency = true,
+  ): Promise<E2bSandboxInfoSnapshotV1 | "absent"> {
+    let info: Awaited<ReturnType<E2bOfficialReadSdkV1["getInfo"]>>
+    try {
+      info = await Reflect.apply(this.#getInfo, this.#sdk, [opaqueResourceId])
+    } catch (cause) {
+      throw providerSdkUnavailable(cause)
+    }
+    if (info === "absent") return "absent"
+    const snapshot = snapshotE2bSandboxInfo(
+      info,
+      requireDenyAllReadback,
+      requireTemplateMappingConsistency,
+    )
+    if (snapshot.sandboxId !== opaqueResourceId) throw adapterError("integrity_failed")
+    return snapshot
+  }
+
+  async #assertExactSnapshot(
+    snapshot: E2bSandboxInfoSnapshotV1,
+    target: ProviderEffectTargetV1,
+    expectedVersion?: string,
+    expectedOwnershipNonceSha256?: Digest,
+  ): Promise<void> {
+    const { owned } = await this.#ownedSnapshot(snapshot)
+    if (
+      !owned ||
+      label(snapshot.metadata, "hasna.creation_token_sha256") !==
+        target.provider_creation_token_sha256 ||
+      label(snapshot.metadata, "hasna.immutable_fingerprint_sha256") !==
+        target.immutable_fingerprint_sha256 ||
+      (expectedOwnershipNonceSha256 !== undefined &&
+        label(snapshot.metadata, "hasna.ownership_nonce_sha256") !==
+          expectedOwnershipNonceSha256) ||
+      (expectedVersion !== undefined && this.#resourceVersion(snapshot) !== expectedVersion)
+    ) {
+      throw adapterError("operation_target_mismatch")
+    }
+  }
+
+  async #creationTokenIsAbsent(token: Digest): Promise<boolean> {
+    const page = await this.findByCreationToken(token)
+    return page.items.length === 0 && page.next_cursor === undefined
+  }
+
+  async #cleanupCreatedCandidate(
+    opaqueResourceId: string,
+    request: E2bCreateRequestSnapshotV1,
+    _mapping: E2bTemplateMappingV1,
+  ): Promise<boolean> {
+    if (this.#kill === undefined) return false
+    try {
+      const snapshot = await this.#getSnapshot(opaqueResourceId, false, false)
+      if (snapshot === "absent") {
+        return this.#creationTokenIsAbsent(request.target.provider_creation_token_sha256)
+      }
+      await this.#assertExactSnapshot(
+        snapshot,
+        request.target,
+        this.#resourceVersion(snapshot),
+        request.ownershipNonceSha256,
+      )
+      await Reflect.apply(this.#kill, this.#sdk, [opaqueResourceId])
+      return (
+        (await this.#getSnapshot(opaqueResourceId, false, false)) === "absent" &&
+        (await this.#creationTokenIsAbsent(request.target.provider_creation_token_sha256))
+      )
+    } catch {
+      return false
+    }
+  }
+
+  async #finishCreateInert(
+    opaqueResourceId: string,
+    request: E2bCreateRequestSnapshotV1,
+    mapping: E2bTemplateMappingV1,
+  ): Promise<AdapterProviderResourceV1> {
+    let before = await this.#getSnapshot(opaqueResourceId)
+    if (before === "absent") {
+      throw adapterError("provider_state_unknown", { quarantineRequired: true })
+    }
+    await this.#assertExactSnapshot(
+      before,
+      request.target,
+      undefined,
+      request.ownershipNonceSha256,
+    )
+    if (
+      before.templateId !== mapping.template_id ||
+      before.templateMappingVersion !== mapping.mapping_version ||
+      before.templateMappingSha256 !== mapping.mapping_sha256 ||
+      label(before.metadata, "hasna.network_policy_sha256") !== request.networkPolicySha256 ||
+      before.cpuCount * 1_000 !== request.cpuMillis ||
+      before.memoryMB * 1024 * 1024 !== request.memoryBytes
+    ) {
+      throw adapterError("operation_target_mismatch")
+    }
+    if (before.state === "running") {
+      if (this.#pause === undefined) throw adapterError("unsupported_runtime_feature")
+      let pauseFailure: unknown
+      try {
+        const result: unknown = await Reflect.apply(this.#pause, this.#sdk, [
+          opaqueResourceId,
+          { keepMemory: false },
+        ])
+        if (typeof result !== "boolean") throw adapterError("integrity_failed")
+      } catch (cause) {
+        pauseFailure = cause
+      }
+      before = await this.#getSnapshot(opaqueResourceId)
+      if (before === "absent" || before.state !== "paused") {
+        throw adapterError("provider_state_unknown", {
+          quarantineRequired: true,
+          cause: pauseFailure,
+        })
+      }
+      if (pauseFailure instanceof AdapterContractError && pauseFailure.code === "integrity_failed") {
+        throw adapterError("provider_state_unknown", {
+          quarantineRequired: true,
+          cause: pauseFailure,
+        })
+      }
+    }
+    await this.#assertExactSnapshot(
+      before,
+      request.target,
+      undefined,
+      request.ownershipNonceSha256,
+    )
+    if (
+      before.state !== "paused" ||
+      before.templateId !== mapping.template_id ||
+      before.templateMappingVersion !== mapping.mapping_version ||
+      before.templateMappingSha256 !== mapping.mapping_sha256 ||
+      label(before.metadata, "hasna.network_policy_sha256") !== request.networkPolicySha256 ||
+      before.cpuCount * 1_000 !== request.cpuMillis ||
+      before.memoryMB * 1024 * 1024 !== request.memoryBytes
+    ) {
+      throw adapterError("provider_state_unknown", { quarantineRequired: true })
+    }
+    return this.#mapSnapshot(before)
   }
 
   findByCreationToken(token: Digest, cursor?: string): Promise<ProviderResourcePageV1> {
@@ -1037,17 +1678,245 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
     })
   }
 
-  async inspectResource(opaqueResourceId: string): Promise<AdapterProviderResourceV1 | "absent"> {
-    let info: Awaited<ReturnType<E2bOfficialReadSdkV1["getInfo"]>>
-    try {
-      info = await this.#sdk.getInfo(opaqueResourceId)
-    } catch (cause) {
-      throw providerSdkUnavailable(cause)
+  override async createInert(
+    requestValue: ProviderCreateInertRequestV1,
+  ): Promise<AdapterProviderResourceV1> {
+    if (!this.#capabilities.create_stopped || this.#create === undefined) {
+      throw adapterError("unsupported_runtime_feature")
     }
-    if (info === "absent") return "absent"
-    const snapshot = snapshotE2bSandboxInfo(info)
-    if (snapshot.sandboxId !== opaqueResourceId) throw adapterError("integrity_failed")
+    const request = snapshotE2bCreateRequest(requestValue)
+    const mapping = this.#resolveTemplateMapping(request.imageOrSnapshotSha256)
+    const baseCreateOptions = buildE2bCreateOptions({
+      template: mapping.template_id,
+      metadata: request.metadata,
+      network_policy_sha256: request.networkPolicySha256,
+      max_runtime_ms: request.maxRuntimeMs,
+    })
+    const createOptions: SafeE2bCreateOptionsV1 = {
+      ...baseCreateOptions,
+      metadata: {
+        ...baseCreateOptions.metadata,
+        "hasna.e2b_template_id": mapping.template_id,
+        "hasna.e2b_template_mapping_version": mapping.mapping_version,
+        "hasna.e2b_template_mapping_sha256": mapping.mapping_sha256,
+      },
+    }
+    let opaqueResourceId: string | undefined
+    try {
+      const created = await Reflect.apply(this.#create, this.#sdk, [createOptions])
+      opaqueResourceId = snapshotE2bCreatedSandboxId(created)
+    } catch (createCause) {
+      try {
+        const page = await this.findByCreationToken(
+          request.target.provider_creation_token_sha256,
+        )
+        if (page.next_cursor !== undefined || page.items.length !== 1) {
+          throw adapterError("provider_state_unknown", { quarantineRequired: true })
+        }
+        const candidate = page.items[0]
+        if (candidate === undefined) throw adapterError("integrity_failed")
+        if (
+          !candidate.owned ||
+          candidate.provider_creation_token_sha256 !==
+            request.target.provider_creation_token_sha256 ||
+          candidate.immutable_fingerprint_sha256 !==
+            request.target.immutable_fingerprint_sha256 ||
+          candidate.ownership.ownership_nonce_sha256 !== request.ownershipNonceSha256
+        ) {
+          throw adapterError("provider_state_unknown", { quarantineRequired: true })
+        }
+        opaqueResourceId = candidate.opaque_resource_id
+      } catch (reconcileCause) {
+        throw adapterError("provider_state_unknown", {
+          quarantineRequired: true,
+          cause: reconcileCause ?? createCause,
+        })
+      }
+    }
+
+    try {
+      return await this.#finishCreateInert(opaqueResourceId, request, mapping)
+    } catch (cause) {
+      await this.#cleanupCreatedCandidate(opaqueResourceId, request, mapping)
+      throw adapterError("provider_state_unknown", {
+        quarantineRequired: true,
+        cause,
+      })
+    }
+  }
+
+  async inspectResource(opaqueResourceId: string): Promise<AdapterProviderResourceV1 | "absent"> {
+    const snapshot = await this.#getSnapshot(opaqueResourceId)
+    if (snapshot === "absent") return "absent"
     return this.#mapSnapshot(snapshot)
+  }
+
+  override async applyNetworkPolicy(
+    opaqueResourceId: string,
+    policy: NetworkPolicyV1,
+    target: ProviderEffectTargetV1,
+  ): Promise<NetworkPolicyObservationV1> {
+    if (policy.mode !== "deny_all") throw adapterError("unsupported_runtime_feature")
+    if (!isDigest(policy.policy_sha256)) throw adapterError("validation_failed")
+    const before = await this.#getSnapshot(opaqueResourceId)
+    if (before === "absent") {
+      throw adapterError("provider_state_unknown", { quarantineRequired: true })
+    }
+    await this.#assertExactSnapshot(before, target)
+    if (label(before.metadata, "hasna.network_policy_sha256") !== policy.policy_sha256) {
+      throw adapterError("operation_target_mismatch")
+    }
+    if (this.#updateNetwork === undefined) throw adapterError("unsupported_runtime_feature")
+    try {
+      await Reflect.apply(this.#updateNetwork, this.#sdk, [
+        opaqueResourceId,
+        { allowInternetAccess: false, denyOut: ["0.0.0.0/0"] },
+      ])
+    } catch {
+      // Readback below is authoritative for the desired idempotent state.
+    }
+    let after: E2bSandboxInfoSnapshotV1 | "absent"
+    try {
+      after = await this.#getSnapshot(opaqueResourceId)
+      if (after === "absent") throw adapterError("integrity_failed")
+      await this.#assertExactSnapshot(after, target)
+    } catch (cause) {
+      throw adapterError("provider_state_unknown", { quarantineRequired: true, cause })
+    }
+    if (label(after.metadata, "hasna.network_policy_sha256") !== policy.policy_sha256) {
+      throw adapterError("provider_state_unknown", { quarantineRequired: true })
+    }
+    return (await this.#mapSnapshot(after)).network_policy
+  }
+
+  override async activateResource(
+    opaqueResourceId: string,
+    target: ProviderEffectTargetV1,
+  ): Promise<AdapterProviderResourceV1> {
+    let before = await this.#getSnapshot(opaqueResourceId)
+    if (before === "absent") {
+      throw adapterError("provider_state_unknown", { quarantineRequired: true })
+    }
+    await this.#assertExactSnapshot(before, target)
+    if (before.state === "running") return this.#mapSnapshot(before)
+    if (this.#connect === undefined) throw adapterError("unsupported_runtime_feature")
+
+    const remainingMs = Date.parse(before.endAt) - Date.parse(observationTime(this.#observedAt))
+    if (!Number.isSafeInteger(remainingMs) || remainingMs <= 0) {
+      throw adapterError("provider_state_unknown", { quarantineRequired: true })
+    }
+    let connectFailure: unknown
+    try {
+      const connected = await Reflect.apply(this.#connect, this.#sdk, [
+        opaqueResourceId,
+        { timeoutMs: remainingMs },
+      ])
+      if (snapshotE2bCreatedSandboxId(connected) !== opaqueResourceId) {
+        throw adapterError("integrity_failed")
+      }
+    } catch (cause) {
+      connectFailure = cause
+    }
+    try {
+      before = await this.#getSnapshot(opaqueResourceId)
+      if (before === "absent") throw adapterError("integrity_failed")
+      await this.#assertExactSnapshot(before, target)
+      if (before.state !== "running" || connectFailure instanceof AdapterContractError) {
+        throw adapterError("integrity_failed")
+      }
+      return await this.#mapSnapshot(before)
+    } catch (cause) {
+      throw adapterError("provider_state_unknown", {
+        quarantineRequired: true,
+        cause: connectFailure ?? cause,
+      })
+    }
+  }
+
+  override async pauseOrStopResource(
+    opaqueResourceId: string,
+    target: ProviderEffectTargetV1,
+  ): Promise<AdapterProviderResourceV1> {
+    let before = await this.#getSnapshot(opaqueResourceId)
+    if (before === "absent") {
+      throw adapterError("provider_state_unknown", { quarantineRequired: true })
+    }
+    await this.#assertExactSnapshot(before, target)
+    if (before.state === "paused") return this.#mapSnapshot(before)
+    if (this.#pause === undefined) throw adapterError("unsupported_runtime_feature")
+
+    let pauseFailure: unknown
+    try {
+      const paused: unknown = await Reflect.apply(this.#pause, this.#sdk, [
+        opaqueResourceId,
+        { keepMemory: false },
+      ])
+      if (typeof paused !== "boolean") throw adapterError("integrity_failed")
+    } catch (cause) {
+      pauseFailure = cause
+    }
+    try {
+      before = await this.#getSnapshot(opaqueResourceId)
+      if (before === "absent") throw adapterError("integrity_failed")
+      await this.#assertExactSnapshot(before, target)
+      if (before.state !== "paused" || pauseFailure instanceof AdapterContractError) {
+        throw adapterError("integrity_failed")
+      }
+      return await this.#mapSnapshot(before)
+    } catch (cause) {
+      throw adapterError("provider_state_unknown", {
+        quarantineRequired: true,
+        cause: pauseFailure ?? cause,
+      })
+    }
+  }
+
+  override async destroyResource(
+    opaqueResourceId: string,
+    expectedVersion: string,
+    target: ProviderEffectTargetV1,
+  ): Promise<void> {
+    const before = await this.#getSnapshot(opaqueResourceId)
+    if (before === "absent") {
+      try {
+        if (await this.#creationTokenIsAbsent(target.provider_creation_token_sha256)) return
+      } catch (cause) {
+        throw adapterError("provider_state_unknown", { quarantineRequired: true, cause })
+      }
+      throw adapterError("provider_state_unknown", { quarantineRequired: true })
+    }
+    await this.#assertExactSnapshot(before, target, expectedVersion)
+    if (this.#kill === undefined) throw adapterError("unsupported_runtime_feature")
+
+    try {
+      const killed: unknown = await Reflect.apply(this.#kill, this.#sdk, [opaqueResourceId])
+      if (typeof killed !== "boolean") throw adapterError("integrity_failed")
+    } catch {
+      // The unconditional SDK result is never trusted as absence proof.
+    }
+    try {
+      const after = await this.#getSnapshot(opaqueResourceId, false)
+      if (
+        after === "absent" &&
+        (await this.#creationTokenIsAbsent(target.provider_creation_token_sha256))
+      ) {
+        return
+      }
+      if (after === "absent") {
+        throw adapterError("provider_state_unknown", { quarantineRequired: true })
+      }
+      await this.#assertExactSnapshot(after, target, expectedVersion)
+      throw adapterError("provider_state_unknown", { quarantineRequired: true })
+    } catch (cause) {
+      if (
+        cause instanceof AdapterContractError &&
+        cause.code === "provider_state_unknown" &&
+        cause.quarantine_required
+      ) {
+        throw cause
+      }
+      throw adapterError("provider_state_unknown", { quarantineRequired: true, cause })
+    }
   }
 
   listOwnedResources(cursor?: string): Promise<ProviderResourcePageV1> {
