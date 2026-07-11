@@ -100,7 +100,12 @@ describe("managed package boundary", () => {
     expect(managedPublicApi.withDaytonaGuestBrokerSdkSession).toBe(
       withDaytonaGuestBrokerSdkSession,
     )
-    expect(managedPublicApi.withE2bGuestBrokerSdkSession).toBe(withE2bGuestBrokerSdkSession)
+    expect(
+      (managedPublicApi as Record<string, unknown>).withE2bGuestBrokerSdkSession,
+    ).toBeUndefined()
+    expect(
+      (managedPublicApi as Record<string, unknown>).withE2bGuestBrokerDuplexSdkSession,
+    ).toBeUndefined()
 
     const build = await Bun.build({
       entrypoints: [new URL("../../src/adapters/managed/index.ts", import.meta.url).pathname],

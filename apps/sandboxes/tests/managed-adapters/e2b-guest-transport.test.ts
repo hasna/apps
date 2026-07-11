@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import {
-  MANAGED_GUEST_BROKER_BOOTSTRAP_COMMAND,
   withE2bGuestBrokerDuplexSdkSession,
   type E2bGuestBrokerDuplexLimitsV1,
-} from "../../src/adapters/managed/index"
+} from "../../src/adapters/managed/sdk-broker-bridges"
+import { MANAGED_GUEST_BROKER_BOOTSTRAP_COMMAND } from "../../src/adapters/managed/broker"
 
 function bytes(value: string): Uint8Array {
   return new TextEncoder().encode(value)
