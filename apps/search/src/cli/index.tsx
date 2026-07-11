@@ -4,11 +4,24 @@ import { registerEventsCommands } from "@hasna/events/commander";
 import chalk from "chalk";
 import { registerStorageCommands } from "./storage.js";
 import { registerLocalCommands } from "./local.js";
-import { PROVIDER_NAMES, type SearchProviderName, type ExportFormat } from "../types/index.js";
+import {
+  PROVIDER_NAMES,
+  validateSearchProviderNames,
+  type SearchProviderName,
+  type ExportFormat,
+} from "../types/index.js";
 import { unifiedSearch, searchSingleProvider } from "../lib/search.js";
 import { youtubeDeepSearch } from "../lib/youtube-deep.js";
 import { exportResults } from "../lib/export.js";
-import { getConfig, setConfigValue, resetConfig } from "../lib/config.js";
+import {
+  getConfig,
+  getConfigDiagnostics,
+  getConfigDir,
+  getConfigPath,
+  setConfigValue,
+  resetConfig,
+  hasConfigKey,
+} from "../lib/config.js";
 import { listSearches, getSearch, deleteSearch, getSearchStats } from "../db/searches.js";
 import { listResults } from "../db/results.js";
 import {
@@ -24,6 +37,7 @@ import {
   disableProvider,
   updateProvider,
   isProviderConfigured,
+  getProviderConfigurationStatus,
 } from "../db/providers.js";
 import {
   listProfiles,
@@ -31,26 +45,169 @@ import {
   deleteProfile,
   getProfileByName,
 } from "../db/profiles.js";
+import { getIndexDbPath } from "../db/index-db.js";
+import { getDbPath } from "../db/database.js";
 import {
   DEFAULT_COMPACT_LIMIT,
   clampLimit,
   truncateMiddle,
   truncateText,
 } from "../lib/compact-output.js";
+import { getExaConfigurationStatus } from "../lib/exa.js";
+import {
+  createWebset,
+  createWebsetSearch,
+  getWebset,
+  listWebsetItems,
+  listWebsets,
+  waitForWebsetIdle,
+  type CreateWebsetInput,
+  type WebsetEntityInput,
+  type WebsetMetadata,
+  type WebsetSearchInput,
+} from "../lib/websets.js";
 
 const pkg = require("../../package.json") as { version: string };
 
 const program = new Command();
 
+function fail(message: string): void {
+  console.error(chalk.red(message));
+  process.exitCode = 1;
+}
+
+function parseProviderList(value: string | undefined): SearchProviderName[] | undefined {
+  if (!value) return undefined;
+  return validateSearchProviderNames(
+    value
+      .split(",")
+      .map((provider) => provider.trim())
+      .filter(Boolean),
+  );
+}
+
+function parseOptionalRateLimit(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`Invalid --rate-limit: ${value} (expected an integer >= 0)`);
+  }
+  return parsed;
+}
+
+function parsePositiveInteger(value: string | undefined, label: string, fallback: number): number {
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`Invalid ${label}: ${value} (expected an integer >= 1)`);
+  }
+  return parsed;
+}
+
+function collectOption(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
+}
+
+function parseMetadataOption(value: string | undefined, label: string): WebsetMetadata | undefined {
+  if (value === undefined) return undefined;
+  const parsed = JSON.parse(value) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${label} must be a JSON object`);
+  }
+  const metadata: WebsetMetadata = {};
+  for (const [key, metadataValue] of Object.entries(parsed as Record<string, unknown>)) {
+    if (typeof metadataValue !== "string") {
+      throw new Error(`${label} values must be strings`);
+    }
+    if (metadataValue.length > 1000) {
+      throw new Error(`${label}.${key} must be 1000 characters or less`);
+    }
+    metadata[key] = metadataValue;
+  }
+  return metadata;
+}
+
+function parseWebsetEntity(entity: string | undefined, description: string | undefined): WebsetEntityInput | undefined {
+  if (!entity) {
+    if (description) throw new Error("--entity-description requires --entity custom");
+    return undefined;
+  }
+  if (entity === "custom") {
+    if (!description || description.trim().length < 2) {
+      throw new Error("--entity custom requires --entity-description with at least 2 characters");
+    }
+    return { type: "custom", description: description.trim() };
+  }
+  if (description) throw new Error("--entity-description is only valid with --entity custom");
+  if (entity === "company" || entity === "person" || entity === "article" || entity === "research_paper") {
+    return { type: entity };
+  }
+  throw new Error("--entity must be one of: company, person, article, research_paper, custom");
+}
+
+function parseConfigInput(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
 program
   .name("search")
   .version(pkg.version)
+  .argument("[query...]", "Search query")
   .description("Unified search — local file index + 12 web providers, one interface");
 
 registerStorageCommands(program);
 registerEventsCommands(program, { source: "search" });
 
 registerLocalCommands(program);
+
+program
+  .command("doctor")
+  .description("Check local search configuration and storage paths")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    const diagnostics = getConfigDiagnostics();
+    const providers = listProviders().map((provider) => ({
+      name: provider.name,
+      enabled: provider.enabled,
+      ...getProviderConfigurationStatus(provider),
+    }));
+    const report = {
+      ok: diagnostics.valid,
+      dataDir: getConfigDir(),
+      configPath: getConfigPath(),
+      config: diagnostics,
+      dataDbPath: getDbPath(),
+      indexDbPath: getIndexDbPath(),
+      providers,
+    };
+
+    if (opts.json) {
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
+
+    console.log(chalk.bold("Search Doctor"));
+    console.log(`  Data dir:  ${report.dataDir}`);
+    console.log(`  Config:    ${report.configPath}`);
+    console.log(`  History DB: ${report.dataDbPath}`);
+    console.log(`  Index DB:   ${report.indexDbPath}`);
+    console.log(
+      `  Config status: ${
+        diagnostics.valid ? chalk.green("valid") : chalk.red(`invalid (${diagnostics.errors.join("; ")})`)
+      }`,
+    );
+    console.log(`  Providers enabled: ${providers.filter((provider) => provider.enabled).length}/${providers.length}`);
+    const missing = providers.filter((provider) => provider.enabled && !provider.configured);
+    if (missing.length > 0) {
+      console.log(chalk.yellow("  Missing provider configuration:"));
+      for (const provider of missing) console.log(`    ${provider.name}: ${provider.reason}`);
+    }
+    if (!diagnostics.valid) process.exitCode = 1;
+  });
 
 function printJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
@@ -99,20 +256,20 @@ program
   .option("--profile <name>", "Use a search profile")
   .option("-l, --limit <n>", "Max results per provider", "10")
   .option("-f, --format <format>", "Output format: table, json", "table")
+  .option("--smart", "Route the query to the best configured providers with the smart router")
   .option("--no-dedup", "Disable deduplication")
   .option("--verbose", "Show every returned row with untruncated URLs/snippets")
   .action(async (queryParts: string[], opts) => {
     const query = queryParts.join(" ");
-    const providers = opts.providers
-      ? (opts.providers.split(",") as SearchProviderName[])
-      : undefined;
 
     try {
+      const providers = parseProviderList(opts.providers);
       const response = await unifiedSearch(query, {
         providers,
         profile: opts.profile,
         options: { limit: parseInt(opts.limit) },
         dedup: opts.dedup,
+        smart: opts.smart,
       });
 
       if (opts.format === "json") {
@@ -224,7 +381,7 @@ history
   .action((id: string, opts) => {
     const search = getSearch(id);
     if (!search) {
-      console.error(chalk.red(`Search not found: ${id}`));
+      fail(`Search not found: ${id}`);
       return;
     }
     const limit = parseCliLimit(opts.limit, "--limit");
@@ -247,7 +404,7 @@ history
     if (deleteSearch(id)) {
       console.log(chalk.green("Search deleted"));
     } else {
-      console.error(chalk.red(`Search not found: ${id}`));
+      fail(`Search not found: ${id}`);
     }
   });
 
@@ -296,11 +453,13 @@ saved
   .option("--profile <name>", "Search profile")
   .action((name: string, queryParts: string[], opts) => {
     const query = queryParts.join(" ");
-    const providers = opts.providers
-      ? (opts.providers.split(",") as SearchProviderName[])
-      : [];
-    const s = createSavedSearch({ name, query, providers, profileId: opts.profile });
-    console.log(chalk.green(`Saved search created: ${s.id}`));
+    try {
+      const providers = parseProviderList(opts.providers) ?? [];
+      const s = createSavedSearch({ name, query, providers, profileId: opts.profile });
+      console.log(chalk.green(`Saved search created: ${s.id}`));
+    } catch (err) {
+      fail(`Error: ${err instanceof Error ? err.message : err}`);
+    }
   });
 
 saved
@@ -309,7 +468,7 @@ saved
   .action(async (id: string, opts) => {
     const s = getSavedSearch(id);
     if (!s) {
-      console.error(chalk.red(`Saved search not found: ${id}`));
+      fail(`Saved search not found: ${id}`);
       return;
     }
     updateSavedSearchLastRun(id);
@@ -326,7 +485,7 @@ saved
     if (deleteSavedSearch(id)) {
       console.log(chalk.green("Saved search deleted"));
     } else {
-      console.error(chalk.red(`Not found: ${id}`));
+      fail(`Not found: ${id}`);
     }
   });
 
@@ -340,20 +499,237 @@ providers
   .action((opts) => {
     const all = listProviders();
     if (opts.json) {
-      printJson(all.map((p) => ({ ...p, configured: isProviderConfigured(p) })));
+      printJson(all.map((p) => ({ ...p, configuration: getProviderConfigurationStatus(p) })));
       return;
     }
     console.log(chalk.bold("Search Providers"));
     console.log();
     for (const p of all) {
       const configured = isProviderConfigured(p);
+      const configuration = getProviderConfigurationStatus(p);
       const status = p.enabled
         ? configured
           ? chalk.green("enabled")
-          : chalk.yellow("enabled (no key)")
+          : chalk.yellow(`enabled (${configuration.reason})`)
         : chalk.dim("disabled");
-      const keyInfo = p.apiKeyEnv ? chalk.dim(` [${p.apiKeyEnv}]`) : chalk.dim(" [no key needed]");
+      const keyInfo = p.apiKeyEnv ? chalk.dim(` [env:${p.apiKeyEnv}]`) : chalk.dim(" [no key needed]");
       console.log(`  ${chalk.white(p.name.padEnd(14))} ${status}${keyInfo}  rate: ${p.rateLimit}/min`);
+    }
+  });
+
+// --- Exa Websets ---
+const websets = program.command("websets").description("Manage Exa Websets");
+
+websets
+  .command("status")
+  .description("Show Exa Websets configuration status")
+  .option("--json", "Output as JSON")
+  .action((opts: { json?: boolean }) => {
+    const status = getExaConfigurationStatus();
+    if (opts.json) {
+      console.log(JSON.stringify({ websets: status }, null, 2));
+      return;
+    }
+    const icon = status.configured ? chalk.green("enabled") : chalk.yellow("missing");
+    console.log(chalk.bold("Exa Websets"));
+    console.log(`  Status: ${icon}`);
+    console.log(`  Auth:   ${status.message}`);
+  });
+
+websets
+  .command("list")
+  .description("List Exa Websets")
+  .option("--limit <n>", "Number of Websets to return", "25")
+  .option("--cursor <cursor>", "Pagination cursor")
+  .option("--search <term>", "Filter by ID, external ID, or title")
+  .option("--json", "Output as JSON")
+  .action(async (opts: { limit?: string; cursor?: string; search?: string; json?: boolean }) => {
+    try {
+      const result = await listWebsets({
+        limit: parsePositiveInteger(opts.limit, "--limit", 25),
+        cursor: opts.cursor,
+        search: opts.search,
+      });
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      console.log(chalk.bold(`${result.data.length} Webset(s)`));
+      for (const webset of result.data) {
+        console.log(
+          `${chalk.cyan(webset.id)}  ${chalk.white(webset.status)}  ${chalk.dim(webset.title ?? "(untitled)")}`,
+        );
+      }
+      if (result.nextCursor) console.log(chalk.dim(`next cursor: ${result.nextCursor}`));
+    } catch (err) {
+      fail(`Error: ${err instanceof Error ? err.message : err}`);
+    }
+  });
+
+websets
+  .command("get <id>")
+  .description("Get an Exa Webset by id or externalId")
+  .option("--expand-items", "Include items in the response")
+  .option("--json", "Output as JSON")
+  .action(async (id: string, opts: { expandItems?: boolean; json?: boolean }) => {
+    try {
+      const result = await getWebset(id, { expand: opts.expandItems ? ["items"] : undefined });
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      console.log(chalk.bold(result.title ?? result.id));
+      console.log(`  ID:     ${chalk.cyan(result.id)}`);
+      console.log(`  Status: ${chalk.white(result.status)}`);
+      if (result.dashboardUrl) console.log(`  URL:    ${chalk.dim(result.dashboardUrl)}`);
+      console.log(`  Searches: ${result.searches.length}`);
+    } catch (err) {
+      fail(`Error: ${err instanceof Error ? err.message : err}`);
+    }
+  });
+
+websets
+  .command("items <id>")
+  .description("List items for an Exa Webset")
+  .option("--limit <n>", "Number of items to return", "20")
+  .option("--cursor <cursor>", "Pagination cursor")
+  .option("--source-id <id>", "Filter by source id")
+  .option("--json", "Output as JSON")
+  .action(async (id: string, opts: { limit?: string; cursor?: string; sourceId?: string; json?: boolean }) => {
+    try {
+      const result = await listWebsetItems(id, {
+        limit: parsePositiveInteger(opts.limit, "--limit", 20),
+        cursor: opts.cursor,
+        sourceId: opts.sourceId,
+      });
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      console.log(chalk.bold(`${result.data.length} item(s)`));
+      for (const item of result.data) {
+        const name = typeof item.properties.name === "string" ? item.properties.name : item.properties.url;
+        console.log(`${chalk.cyan(item.id)}  ${chalk.dim(String(name ?? ""))}`);
+      }
+      if (result.nextCursor) console.log(chalk.dim(`next cursor: ${result.nextCursor}`));
+    } catch (err) {
+      fail(`Error: ${err instanceof Error ? err.message : err}`);
+    }
+  });
+
+websets
+  .command("create <query...>")
+  .description("Create an Exa Webset with an initial search")
+  .option("--title <title>", "Webset title")
+  .option("--count <n>", "Number of items to attempt to find", "10")
+  .option("--entity <type>", "Entity type: company, person, article, research_paper, or custom")
+  .option("--entity-description <text>", "Required when --entity custom")
+  .option("--criteria <text>", "Verification criterion; repeat for multiple criteria", collectOption, [])
+  .option("--enrichment <description>", "Enrichment to extract; repeat for multiple enrichments", collectOption, [])
+  .option("--external-id <id>", "External identifier")
+  .option("--metadata <json>", "Metadata JSON object")
+  .option("--wait", "Poll until the Webset status is idle")
+  .option("--timeout-ms <n>", "Wait timeout in milliseconds", "60000")
+  .option("--poll-interval-ms <n>", "Wait polling interval in milliseconds", "2000")
+  .option("--json", "Output as JSON")
+  .action(async (queryParts: string[], opts: {
+    title?: string;
+    count?: string;
+    entity?: string;
+    entityDescription?: string;
+    criteria?: string[];
+    enrichment?: string[];
+    externalId?: string;
+    metadata?: string;
+    wait?: boolean;
+    timeoutMs?: string;
+    pollIntervalMs?: string;
+    json?: boolean;
+  }) => {
+    try {
+      const search: WebsetSearchInput = {
+        query: queryParts.join(" "),
+        count: parsePositiveInteger(opts.count, "--count", 10),
+        ...(parseWebsetEntity(opts.entity, opts.entityDescription)
+          ? { entity: parseWebsetEntity(opts.entity, opts.entityDescription) }
+          : {}),
+        ...(opts.criteria && opts.criteria.length > 0
+          ? { criteria: opts.criteria.map((description) => ({ description })) }
+          : {}),
+      };
+      const input: CreateWebsetInput = {
+        ...(opts.title ? { title: opts.title } : {}),
+        search,
+        ...(opts.enrichment && opts.enrichment.length > 0
+          ? { enrichments: opts.enrichment.map((description) => ({ description, format: "text" })) }
+          : {}),
+        ...(opts.externalId ? { externalId: opts.externalId } : {}),
+        ...(opts.metadata ? { metadata: parseMetadataOption(opts.metadata, "--metadata") } : {}),
+      };
+
+      const created = await createWebset(input);
+      const result = opts.wait
+        ? await waitForWebsetIdle(created.id, {
+            timeoutMs: parsePositiveInteger(opts.timeoutMs, "--timeout-ms", 60_000),
+            pollIntervalMs: parsePositiveInteger(opts.pollIntervalMs, "--poll-interval-ms", 2_000),
+          })
+        : created;
+
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      console.log(chalk.green("Webset created"));
+      console.log(`  ID:     ${chalk.cyan(result.id)}`);
+      console.log(`  Status: ${chalk.white(result.status)}`);
+      if (result.dashboardUrl) console.log(`  URL:    ${chalk.dim(result.dashboardUrl)}`);
+    } catch (err) {
+      fail(`Error: ${err instanceof Error ? err.message : err}`);
+    }
+  });
+
+websets
+  .command("search <id> <query...>")
+  .description("Create an additional search for an Exa Webset")
+  .option("--count <n>", "Number of items to attempt to find", "10")
+  .option("--entity <type>", "Entity type")
+  .option("--entity-description <text>", "Required when --entity custom")
+  .option("--criteria <text>", "Verification criterion; repeat for multiple criteria", collectOption, [])
+  .option("--behavior <mode>", "Search behavior: override or append", "override")
+  .option("--json", "Output as JSON")
+  .action(async (id: string, queryParts: string[], opts: {
+    count?: string;
+    entity?: string;
+    entityDescription?: string;
+    criteria?: string[];
+    behavior?: "override" | "append";
+    json?: boolean;
+  }) => {
+    try {
+      if (opts.behavior !== "override" && opts.behavior !== "append") {
+        throw new Error("--behavior must be override or append");
+      }
+      const result = await createWebsetSearch(id, {
+        query: queryParts.join(" "),
+        count: parsePositiveInteger(opts.count, "--count", 10),
+        behavior: opts.behavior,
+        ...(parseWebsetEntity(opts.entity, opts.entityDescription)
+          ? { entity: parseWebsetEntity(opts.entity, opts.entityDescription) }
+          : {}),
+        ...(opts.criteria && opts.criteria.length > 0
+          ? { criteria: opts.criteria.map((description) => ({ description })) }
+          : {}),
+      });
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      console.log(chalk.green("Webset search created"));
+      console.log(`  ID:     ${chalk.cyan(result.id)}`);
+      console.log(`  Webset: ${chalk.cyan(result.websetId)}`);
+      if (typeof result.status === "string") console.log(`  Status: ${chalk.white(result.status)}`);
+    } catch (err) {
+      fail(`Error: ${err instanceof Error ? err.message : err}`);
     }
   });
 
@@ -363,7 +739,7 @@ providers
     if (enableProvider(name)) {
       console.log(chalk.green(`Provider ${name} enabled`));
     } else {
-      console.error(chalk.red(`Provider not found: ${name}`));
+      fail(`Provider not found: ${name}`);
     }
   });
 
@@ -373,7 +749,7 @@ providers
     if (disableProvider(name)) {
       console.log(chalk.green(`Provider ${name} disabled`));
     } else {
-      console.error(chalk.red(`Provider not found: ${name}`));
+      fail(`Provider not found: ${name}`);
     }
   });
 
@@ -382,13 +758,18 @@ providers
   .option("--key-env <env>", "API key env var name")
   .option("--rate-limit <n>", "Requests per minute")
   .action((name: string, opts) => {
-    const updates: Record<string, unknown> = {};
-    if (opts.keyEnv) updates.apiKeyEnv = opts.keyEnv;
-    if (opts.rateLimit) updates.rateLimit = parseInt(opts.rateLimit);
-    if (updateProvider(name, updates)) {
-      console.log(chalk.green(`Provider ${name} updated`));
-    } else {
-      console.error(chalk.red(`Provider not found: ${name}`));
+    try {
+      const updates: { apiKeyEnv?: string; rateLimit?: number } = {};
+      if (opts.keyEnv) updates.apiKeyEnv = opts.keyEnv;
+      const rateLimit = parseOptionalRateLimit(opts.rateLimit);
+      if (rateLimit !== undefined) updates.rateLimit = rateLimit;
+      if (updateProvider(name, updates)) {
+        console.log(chalk.green(`Provider ${name} updated`));
+      } else {
+        fail(`Provider not found: ${name}`);
+      }
+    } catch (err) {
+      fail(`Error: ${err instanceof Error ? err.message : err}`);
     }
   });
 
@@ -420,11 +801,13 @@ profiles
   .option("-p, --providers <providers>", "Comma-separated providers")
   .option("-d, --description <desc>", "Description")
   .action((name: string, opts) => {
-    const providerList = opts.providers
-      ? (opts.providers.split(",") as SearchProviderName[])
-      : [];
-    const p = createProfile({ name, providers: providerList, description: opts.description });
-    console.log(chalk.green(`Profile created: ${p.id}`));
+    try {
+      const providerList = parseProviderList(opts.providers) ?? [];
+      const p = createProfile({ name, providers: providerList, description: opts.description });
+      console.log(chalk.green(`Profile created: ${p.id}`));
+    } catch (err) {
+      fail(`Error: ${err instanceof Error ? err.message : err}`);
+    }
   });
 
 profiles
@@ -433,7 +816,7 @@ profiles
     if (deleteProfile(id)) {
       console.log(chalk.green("Profile deleted"));
     } else {
-      console.error(chalk.red(`Profile not found: ${id}`));
+      fail(`Profile not found: ${id}`);
     }
   });
 
@@ -444,7 +827,7 @@ profiles
     const query = queryParts.join(" ");
     const profile = getProfileByName(name);
     if (!profile) {
-      console.error(chalk.red(`Profile not found: ${name}`));
+      fail(`Profile not found: ${name}`);
       return;
     }
     const response = await unifiedSearch(query, { profile: name });
@@ -467,6 +850,7 @@ program
       }
     } catch (err) {
       console.error(chalk.red(`Error: ${err instanceof Error ? err.message : err}`));
+      process.exitCode = 1;
     }
   });
 
@@ -474,10 +858,18 @@ program
 const config = program.command("config").description("Configuration");
 
 config.command("get [key]").action((key?: string) => {
+  const diagnostics = getConfigDiagnostics();
+  if (!diagnostics.valid) {
+    console.error(chalk.yellow(`Warning: invalid config at ${diagnostics.path}; using defaults.`));
+    for (const error of diagnostics.errors) console.error(chalk.yellow(`  ${error}`));
+  }
   const cfg = getConfig();
   if (key) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const value = (cfg as any)[key];
+    if (!hasConfigKey(key)) {
+      fail(`Unknown config key: ${key}`);
+      return;
+    }
+    const value = cfg[key];
     console.log(JSON.stringify(value, null, 2));
   } else {
     console.log(JSON.stringify(cfg, null, 2));
@@ -488,12 +880,14 @@ config
   .command("set <key> <value>")
   .action((key: string, value: string) => {
     try {
-      const parsed = JSON.parse(value);
-      setConfigValue(key as keyof typeof import("../types/index.js").DEFAULT_CONFIG, parsed);
-    } catch {
-      setConfigValue(key as keyof typeof import("../types/index.js").DEFAULT_CONFIG, value);
+      if (!hasConfigKey(key)) {
+        throw new Error(`Unknown config key: ${key}`);
+      }
+      setConfigValue(key, parseConfigInput(value));
+      console.log(chalk.green(`Config ${key} updated`));
+    } catch (err) {
+      fail(`Error: ${err instanceof Error ? err.message : err}`);
     }
-    console.log(chalk.green(`Config ${key} updated`));
   });
 
 config.command("reset").action(() => {
@@ -563,17 +957,16 @@ function printResults(
     }
   }
 
-  if (!opts.verbose && visible.length < total) {
+  if (!opts.verbose && offset + visible.length < total) {
     console.log(chalk.dim("More results available. Use --verbose or a narrower --limit/filter for more detail."));
   }
 }
 
 // Default action: if first arg isn't a known command, treat it as a search query
-program.action(async (_, cmd) => {
-  const args = cmd.args;
-  if (args.length > 0) {
+program.action(async (queryParts: string[] = []) => {
+  if (queryParts.length > 0) {
     // Treat as search query
-    const query = args.join(" ");
+    const query = queryParts.join(" ");
     try {
       const response = await unifiedSearch(query);
       printResults(response.results, response.search.duration, response.errors);

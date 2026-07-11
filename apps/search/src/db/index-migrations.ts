@@ -77,6 +77,31 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 2,
+    description: "Local file index filter indexes",
+    up: (db) => {
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_files_root_ext ON files(root_id, ext);
+        CREATE INDEX IF NOT EXISTS idx_files_root_dir ON files(root_id, dir);
+      `);
+    },
+  },
+  {
+    version: 3,
+    description: "Local content short-token filter grams",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS file_content_grams (
+          file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+          gram TEXT NOT NULL,
+          PRIMARY KEY (file_id, gram)
+        );
+        CREATE INDEX IF NOT EXISTS idx_file_content_grams_gram_file
+          ON file_content_grams(gram, file_id);
+      `);
+    },
+  },
 ];
 
 export function runIndexMigrations(db: Database): void {

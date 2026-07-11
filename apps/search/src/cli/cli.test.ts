@@ -5,6 +5,9 @@ import { join } from "node:path";
 import pkg from "../../package.json";
 import { closeDb } from "../db/database.js";
 import { createSearch } from "../db/searches.js";
+import { EXA_API_KEY_ENV } from "../lib/exa.js";
+
+const fixtureExaKey = "fixture-token";
 
 async function runCli(args: string[], dbPath: string): Promise<string> {
   const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
@@ -47,11 +50,13 @@ describe("CLI", () => {
     await proc.exited;
     expect(output).toContain("Unified search");
     expect(output).toContain("query");
+    expect(output).toContain("events");
     expect(output).toContain("find");
     expect(output).toContain("index");
     expect(output).toContain("history");
     expect(output).toContain("providers");
     expect(output).toContain("profiles");
+    expect(output).toContain("webhooks");
   });
 
   it("should show version with --version", async () => {
@@ -76,6 +81,46 @@ describe("CLI", () => {
     expect(output).toContain("google");
     expect(output).toContain("arxiv");
     expect(output).toContain("hackernews");
+  });
+
+  it("should show Exa Websets status without exposing the key", async () => {
+    const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", "websets", "status", "--json"], {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, SEARCH_DB_PATH: ":memory:", [EXA_API_KEY_ENV]: fixtureExaKey },
+    });
+    const output = await new Response(proc.stdout).text();
+    await proc.exited;
+    const status = JSON.parse(output);
+    expect(status.websets.configured).toBe(true);
+    expect(output).not.toContain(fixtureExaKey);
+  });
+
+  it("should validate custom Websets entities before calling Exa", async () => {
+    const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", "websets", "create", "test", "--entity", "custom"], {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, SEARCH_DB_PATH: ":memory:", [EXA_API_KEY_ENV]: "" },
+    });
+    const stderr = await new Response(proc.stderr).text();
+    await proc.exited;
+    expect(proc.exitCode).toBe(1);
+    expect(stderr).toContain("--entity custom requires --entity-description");
+  });
+
+  it("should validate Websets metadata values before calling Exa", async () => {
+    const proc = Bun.spawn(
+      ["bun", "run", "src/cli/index.tsx", "websets", "create", "test", "--metadata", "{\"x\":1}"],
+      {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, SEARCH_DB_PATH: ":memory:", [EXA_API_KEY_ENV]: "" },
+      },
+    );
+    const stderr = await new Response(proc.stderr).text();
+    await proc.exited;
+    expect(proc.exitCode).toBe(1);
+    expect(stderr).toContain("--metadata values must be strings");
   });
 
   it("should list profiles", async () => {

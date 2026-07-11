@@ -118,10 +118,22 @@ describe("scanRoot", () => {
     expect(rels).toContain("src/keep.ts");
   });
 
-  test("per-root exclude negation CAN re-include defaults (explicit user config)", () => {
+  test("per-root exclude negation cannot re-include protected defaults", () => {
     write("dist/out.js");
     const rels = scanRoot(root, ["!dist/"]).files.map((f) => f.relPath);
-    expect(rels).toContain("dist/out.js");
+    expect(rels).not.toContain("dist/out.js");
+  });
+
+  test("skips protected secrets, provider DBs, and sqlite sidecars", () => {
+    write(".ssh/id_rsa", "secret");
+    write(".aws/credentials", "secret");
+    write(".codewith/logs_2.sqlite-wal", "wal");
+    write("data/mail.db-wal", "wal");
+    write("data/mail.db-shm", "shm");
+    write("safe/readme.md", "ok");
+
+    const rels = scanRoot(root).files.map((f) => f.relPath);
+    expect(rels).toEqual(["safe/readme.md"]);
   });
 
   test("unreadable root throws instead of returning empty", () => {

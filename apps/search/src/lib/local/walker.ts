@@ -82,7 +82,9 @@ export function extOf(name: string): string {
  * mtime-preserving copies) is not detected as changed — use a force reindex.
  */
 export function scanRoot(rootPath: string, extraExcludes: string[] = []): ScanResult {
-  const stack = new IgnoreStack(new IgnoreMatcher([...DEFAULT_EXCLUDES, ...extraExcludes]));
+  const hardMatchers = [new IgnoreMatcher(DEFAULT_EXCLUDES)];
+  if (extraExcludes.length > 0) hardMatchers.push(new IgnoreMatcher(extraExcludes));
+  const stack = new IgnoreStack(hardMatchers);
   const files: ScannedFile[] = [];
   const skippedDirs: string[] = [];
 

@@ -20,13 +20,15 @@ search index add ~/workspace          # register + index (gitignore-aware, incre
 search find storage-config            # by file name/path
 search find "deduplicate results"     # by content, with line numbers
 search find dedup -k file -e ts       # filters: kind, extension, dir, root
+search bench local -q dedup -q router # repeated warm-cache local latency report
 search index status                   # roots, file counts, staleness
 search index update                   # incremental reindex (auto-runs when stale)
 ```
 
 The index lives in SQLite (`~/.hasna/search/index.db`) using trigram FTS5 for substring
 matching. Re-indexing only touches changed files; stale roots refresh automatically
-before serving results. `node_modules`, `.git`, build output, binaries, and anything
+in the background for ordinary searches (`search find --sync-refresh` forces a
+fresh synchronous pass). `node_modules`, `.git`, build output, binaries, and anything
 in `.gitignore` are excluded.
 
 Local results also join unified search as the `files` and `content` providers
@@ -63,6 +65,20 @@ roots regardless of the caller's working directory.
 ```bash
 search query "bun sqlite fts5" --profile research
 search exa "semantic search"          # any provider directly
+```
+
+Exa-backed features use `EXA_API_KEY` from the process environment. The package
+does not read local vaults directly; inject secrets through your shell, process
+manager, or deployment secret provider.
+
+```bash
+# Set EXA_API_KEY in your shell or process manager first.
+search doctor                         # reports missing provider env vars
+search websets status                 # Exa Websets preflight
+search websets create "AI research labs in Europe" --count 10 --criteria "Focuses on LLMs"
+search websets create "specialized blogs" --entity custom --entity-description "Independent technical blog"
+search websets list --limit 10
+search websets items <webset-id> --limit 20
 ```
 
 ## CLI Usage
@@ -128,7 +144,26 @@ MCP_HTTP=1 search-mcp
 search-serve
 ```
 
-`/api/find`, `/api/index`, `/api/search`, and the dashboard (with a Local tab) on port 19800.
+`/api/find`, `/api/index`, `/api/search`, `/mcp`, and the dashboard (with a Local tab) on port 19800.
+The server binds to `127.0.0.1` by default; use `search-serve --host <host>`
+or `SEARCH_HOST` only when you intentionally want another bind address. Browser
+CORS is limited to same-origin, loopback origins, and exact origins listed in
+`HASNA_SEARCH_ALLOWED_ORIGINS` or `SEARCH_ALLOWED_ORIGINS`. Local-file APIs
+(`/api/find` and `/api/index`) and the MCP HTTP transport reject untrusted
+browser origins. When `search-serve` is bound to a non-loopback host, those
+sensitive routes require `Authorization: Bearer <token>` for
+`HASNA_SEARCH_API_TOKEN` or `SEARCH_API_TOKEN` regardless of the request `Host`
+header.
+
+## Diagnostics
+
+```bash
+search doctor
+search config get
+```
+
+`doctor` reports the data directory, config path, history DB, index DB, provider
+configuration status, and whether the config file parses cleanly.
 
 ## Storage Sync
 
@@ -145,7 +180,8 @@ Set `HASNA_SEARCH_DATABASE_URL` or `SEARCH_DATABASE_URL` to run in hybrid/remote
 
 ## Data Directory
 
-Data is stored in `~/.hasna/search/`.
+Data is stored in `~/.hasna/search/` by default. Set `HASNA_SEARCH_DIR` (or
+`SEARCH_DATA_DIR`) to isolate a local install or run machine-specific copies.
 
 ## License
 

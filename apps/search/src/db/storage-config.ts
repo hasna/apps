@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { getConfigDir } from "../lib/config.js";
 
 export type StorageMode = "local" | "hybrid" | "remote";
 
@@ -19,13 +19,16 @@ export interface StorageEnv {
   name: string;
 }
 
-const STORAGE_CONFIG_PATH = join(homedir(), ".hasna", "search", "storage", "config.json");
 export const SEARCH_STORAGE_ENV = "HASNA_SEARCH_DATABASE_URL";
 export const SEARCH_STORAGE_FALLBACK_ENV = "SEARCH_DATABASE_URL";
 export const SEARCH_STORAGE_MODE_ENV = "HASNA_SEARCH_STORAGE_MODE";
 export const SEARCH_STORAGE_MODE_FALLBACK_ENV = "SEARCH_STORAGE_MODE";
 export const STORAGE_DATABASE_ENV = [SEARCH_STORAGE_ENV, SEARCH_STORAGE_FALLBACK_ENV] as const;
 export const STORAGE_MODE_ENV = [SEARCH_STORAGE_MODE_ENV, SEARCH_STORAGE_MODE_FALLBACK_ENV] as const;
+
+export function getStorageConfigPath(): string {
+  return join(getConfigDir(), "storage", "config.json");
+}
 
 function readEnv(name: string): string | undefined {
   const value = process.env[name]?.trim();
@@ -67,9 +70,10 @@ export function getStorageConfig(): StorageConfig {
     },
   };
 
-  if (existsSync(STORAGE_CONFIG_PATH)) {
+  const storageConfigPath = getStorageConfigPath();
+  if (existsSync(storageConfigPath)) {
     try {
-      const raw = JSON.parse(readFileSync(STORAGE_CONFIG_PATH, "utf-8")) as Partial<StorageConfig>;
+      const raw = JSON.parse(readFileSync(storageConfigPath, "utf-8")) as Partial<StorageConfig>;
       config.mode = normalizeMode(raw.mode) ?? config.mode;
       config.rds = { ...config.rds, ...(raw.rds ?? {}) };
     } catch {
@@ -95,7 +99,7 @@ export function getStorageConnectionString(dbName = "search"): string {
   const config = getStorageConfig();
   const { host, port, username, password_env, ssl } = config.rds;
   if (!host || !username) {
-    throw new Error("Storage database is not configured. Set HASNA_SEARCH_DATABASE_URL or configure ~/.hasna/search/storage/config.json.");
+    throw new Error(`Storage database is not configured. Set HASNA_SEARCH_DATABASE_URL or configure ${getStorageConfigPath()}.`);
   }
 
   const password = process.env[password_env];
@@ -106,4 +110,3 @@ export function getStorageConnectionString(dbName = "search"): string {
   const sslParam = ssl ? "?sslmode=require" : "";
   return `postgres://${username}:${encodeURIComponent(password)}@${host}:${port}/${dbName}${sslParam}`;
 }
-

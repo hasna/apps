@@ -1,6 +1,8 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import { findLocal, type FindKind } from "../lib/local/find.js";
+import { benchmarkLocalSearch } from "../lib/local/benchmark.js";
+import { evaluateRouterHeuristic } from "../lib/router-eval.js";
 import {
   addRoot,
   getRoot,
@@ -31,6 +33,15 @@ function parsePositiveInt(value: string, label: string): number {
   return n;
 }
 
+function parseNonNegativeInt(value: string, label: string): number {
+  const n = parseInt(value, 10);
+  if (!Number.isInteger(n) || n < 0) {
+    console.error(chalk.red(`Invalid ${label}: ${value} (expected an integer >= 0)`));
+    process.exit(1);
+  }
+  return n;
+}
+
 function parseOptionalLimit(value: string | undefined, label: string): number {
   if (value === undefined) return DEFAULT_COMPACT_LIMIT;
   return clampLimit(parsePositiveInt(value, label));
@@ -44,6 +55,11 @@ function parseOffset(value: string | undefined): number {
     process.exit(1);
   }
   return n;
+}
+
+function collectQuery(value: string, previous: string[]): string[] {
+  previous.push(value);
+  return previous;
 }
 
 function printPageHint(shown: number, total: number, offset: number, command: string, detailHint?: string): void {
@@ -83,7 +99,8 @@ export function registerLocalCommands(program: Command): void {
     .option("-l, --limit <n>", "Max results", "20")
     .option("-x, --regex", "Treat the query as a regular expression (grep-style)")
     .option("--case-sensitive", "Case-sensitive matching (regex mode)")
-    .option("--no-refresh", "Skip stale-index refresh before searching")
+    .option("--sync-refresh", "Synchronously refresh stale roots before searching")
+    .option("--no-refresh", "Do not schedule stale-index refresh before searching")
     .option("--json", "Output as JSON")
     .option("--verbose", "Show full paths, snippets, and match lines")
     .action((queryParts: string[], opts) => {
@@ -96,7 +113,7 @@ export function registerLocalCommands(program: Command): void {
           ext: opts.ext,
           dir: opts.dir,
           limit: parsePositiveInt(opts.limit, "--limit"),
-          refresh: opts.refresh,
+          refresh: opts.refresh === false ? false : opts.syncRefresh ? true : undefined,
           regex: opts.regex,
           caseSensitive: opts.caseSensitive,
         });
@@ -293,5 +310,81 @@ export function registerLocalCommands(program: Command): void {
         console.error(chalk.red(`Index root not found: ${idOrPath}`));
         process.exitCode = 1;
       }
+    });
+
+  const bench = program
+    .command("bench")
+    .alias("benchmark")
+    .description("Benchmark local search performance");
+
+  bench
+    .command("local")
+    .description("Run repeated local find queries and report warm-cache timings")
+    .option("-q, --query <query>", "Benchmark query (repeatable)", collectQuery, [])
+    .option("-k, --kind <kind>", "Match kind: file, content, both", "both")
+    .option("-r, --root <root>", "Limit to one index root")
+    .option("-e, --ext <ext>", "Filter by file extension")
+    .option("-d, --dir <dir>", "Filter by directory substring")
+    .option("-l, --limit <n>", "Max results", "20")
+    .option("-i, --iterations <n>", "Measured iterations per query", "5")
+    .option("-w, --warmups <n>", "Warmup iterations per query", "1")
+    .option("--refresh", "Synchronously refresh stale roots before each measured query")
+    .option("--json", "Output as JSON")
+    .action((opts) => {
+      try {
+        const report = benchmarkLocalSearch(
+          opts.query.length > 0 ? opts.query : ["config", "index", "router"],
+          {
+            kind: opts.kind as FindKind,
+            root: opts.root,
+            ext: opts.ext,
+            dir: opts.dir,
+            limit: parsePositiveInt(opts.limit, "--limit"),
+            iterations: parsePositiveInt(opts.iterations, "--iterations"),
+            warmups: parseNonNegativeInt(opts.warmups, "--warmups"),
+            refresh: Boolean(opts.refresh),
+          },
+        );
+
+        if (opts.json) {
+          printJson(report);
+          return;
+        }
+
+        console.log(chalk.bold(`Local Search Benchmark`) + chalk.dim(` (${report.files} files, ${report.roots} roots)`));
+        for (const row of report.rows) {
+          console.log(
+            `${chalk.yellow(row.query.padEnd(28))} ${String(row.resultCount).padStart(3)} results  ` +
+              `p50 ${String(row.p50Ms).padStart(7)}ms  p95 ${String(row.p95Ms).padStart(7)}ms  max ${String(row.maxMs).padStart(7)}ms`,
+          );
+        }
+      } catch (err) {
+        console.error(chalk.red(`Error: ${err instanceof Error ? err.message : err}`));
+        process.exitCode = 1;
+      }
+    });
+
+  bench
+    .command("router")
+    .description("Run built-in heuristic router regression scenarios")
+    .option("--json", "Output as JSON")
+    .action((opts) => {
+      const report = evaluateRouterHeuristic();
+      if (opts.json) {
+        printJson(report);
+        return;
+      }
+
+      const status = report.failed === 0 ? chalk.green("PASS") : chalk.red("FAIL");
+      console.log(chalk.bold("Router Eval ") + status + chalk.dim(` (${report.passed}/${report.total})`));
+      for (const result of report.results) {
+        const marker = result.passed ? chalk.green("✓") : chalk.red("✗");
+        console.log(
+          `${marker} ${result.case.name.padEnd(28)} -> ${result.route.selectedProviders.join(", ")} ` +
+            chalk.dim(`(${result.route.strategy}, ${result.route.confidence})`),
+        );
+        for (const failure of result.failures) console.log(chalk.red(`    ${failure}`));
+      }
+      if (report.failed > 0) process.exitCode = 1;
     });
 }

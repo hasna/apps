@@ -102,6 +102,18 @@ describe("searchFilePaths", () => {
     expect(hits[0]!.relPath).toBe("src/db/storage.ts");
   });
 
+  test("mixed short and long tokens are filtered before candidate limit", () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 400; i++) {
+      files[`src/lib/storage-${i}.ts`] = "a";
+    }
+    files["src/db/storage.ts"] = "b";
+    setup(files);
+
+    const hits = searchFilePaths("db storage", { limit: 5 }, db);
+    expect(hits.some((hit) => hit.relPath === "src/db/storage.ts")).toBe(true);
+  });
+
   test("ext filter", () => {
     setup({ "a/readme.md": "x", "b/readme.txt": "y" });
     const hits = searchFilePaths("readme", { ext: ".md" }, db);
@@ -240,6 +252,19 @@ describe("ranking quality (round-2 regressions)", () => {
     const hits = searchFileContent("db config", {}, db);
     expect(hits.length).toBe(1);
     expect(hits[0]!.relPath).toBe("with-db.txt");
+  });
+
+  test("content search pages broad candidates until short tokens are verified", () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 120; i++) {
+      files[`config-only-${i}.txt`] = "config value only";
+    }
+    files["with-db-config.txt"] = "db config target";
+    setup(files);
+
+    const hits = searchFileContent("db config", { limit: 5 }, db);
+    expect(hits.length).toBe(1);
+    expect(hits[0]!.relPath).toBe("with-db-config.txt");
   });
 
   test("deleted files do not ghost in file results", () => {

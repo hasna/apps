@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "fs";
+import { getConfigDir } from "../lib/config.js";
 import { runMigrations } from "./migrations";
 
 let instance: Database | null = null;
@@ -23,10 +23,7 @@ export function getDbPath(): string {
   const envPath = Bun.env.HASNA_SEARCH_DB_PATH ?? Bun.env.SEARCH_DB_PATH;
   if (envPath) return envPath;
 
-  const home = Bun.env.HOME ?? "/tmp";
-  const dir = `${home}/.hasna/search`;
-  mkdirSync(dir, { recursive: true });
-  return `${dir}/data.db`;
+  return `${getConfigDir()}/data.db`;
 }
 
 export function getDb(): Database {

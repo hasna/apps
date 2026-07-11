@@ -23,6 +23,18 @@ export type SearchProviderName = (typeof PROVIDER_NAMES)[number];
 
 export const SearchProviderNameSchema = z.enum(PROVIDER_NAMES);
 
+export function isSearchProviderName(value: string): value is SearchProviderName {
+  return (PROVIDER_NAMES as readonly string[]).includes(value);
+}
+
+export function validateSearchProviderNames(values: readonly string[]): SearchProviderName[] {
+  const invalid = values.filter((value) => !isSearchProviderName(value));
+  if (invalid.length > 0) {
+    throw new Error(`Unknown search provider(s): ${invalid.join(", ")}`);
+  }
+  return values as SearchProviderName[];
+}
+
 /** Providers that search the local file index instead of the web. */
 export const LOCAL_PROVIDER_NAMES: ReadonlySet<SearchProviderName> = new Set([
   "files",
@@ -131,12 +143,15 @@ export interface SearchConfig {
   defaultLimit: number;
   defaultProviders: SearchProviderName[];
   defaultProfile: string | null;
+  router: SearchRouterConfig;
   transcriber: {
     baseUrl: string;
     fallbackCli: string;
   };
   dedup: boolean;
   maxConcurrent: number;
+  /** Per-provider timeout for unified search, in milliseconds. */
+  providerTimeoutMs: number;
   /** Re-index roots older than this many minutes before serving local results. */
   indexStaleMinutes: number;
   /** Automatically refresh stale index roots on local searches. */
@@ -145,16 +160,34 @@ export interface SearchConfig {
   recordLocalResults: boolean;
 }
 
+export interface SearchRouterConfig {
+  /** Route provider selection before search when no explicit provider/profile is supplied. */
+  enabled: boolean;
+  /** Cerebras model used for LLM routing when CEREBRAS_API_KEY is available. */
+  model: string;
+  /** Maximum providers selected by the router. */
+  maxProviders: number;
+  /** Router request timeout in milliseconds. */
+  timeoutMs: number;
+}
+
 export const DEFAULT_CONFIG: SearchConfig = {
   defaultLimit: 10,
   defaultProviders: [],
   defaultProfile: null,
+  router: {
+    enabled: false,
+    model: "gpt-oss-120b",
+    maxProviders: 3,
+    timeoutMs: 1200,
+  },
   transcriber: {
     baseUrl: "http://localhost:19600",
     fallbackCli: "microservice-transcriber",
   },
   dedup: true,
   maxConcurrent: 5,
+  providerTimeoutMs: 15_000,
   indexStaleMinutes: 5,
   indexAutoRefresh: true,
   recordLocalResults: false,
@@ -166,6 +199,17 @@ export interface UnifiedSearchResponse {
   search: Search;
   results: SearchResult[];
   errors: Array<{ provider: SearchProviderName; error: string }>;
+  routing?: SearchRouting;
+}
+
+export interface SearchRouting {
+  strategy: "heuristic" | "cerebras";
+  selectedProviders: SearchProviderName[];
+  candidates: SearchProviderName[];
+  reason: string;
+  confidence: number;
+  cached?: boolean;
+  error?: string;
 }
 
 // --- ID generation ---

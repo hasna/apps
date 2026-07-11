@@ -55,6 +55,15 @@ const pkg = require("../../package.json") as { version: string };
 export const MCP_NAME = "search";
 export const VERSION = pkg.version;
 
+interface AgentRegistration {
+  id: string;
+  name: string;
+  last_seen_at: string;
+  project_id?: string;
+}
+
+const agentRegistry = new Map<string, AgentRegistration>();
+
 function jsonText(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value) }] };
 }
@@ -253,14 +262,16 @@ server.tool(
     profile: z.string().optional().describe("Search profile name (e.g. research, social, code)"),
     limit: z.number().int().min(1).max(100).optional().describe("Max results per provider"),
     dedup: z.boolean().optional().describe("Deduplicate results by URL (default: true)"),
+    smart: z.boolean().optional().describe("Route to the best configured providers before searching"),
     verbose: z.boolean().optional().describe("Return full result records instead of compact rows"),
   },
-  async ({ query, providers, profile, limit, dedup, verbose }) => {
+  async ({ query, providers, profile, limit, dedup, smart, verbose }) => {
     const response = await unifiedSearch(query, {
       providers,
       profile,
       options: limit ? { limit } : undefined,
       dedup,
+      smart,
     });
     const results = compactSearchResults(response.results, verbose);
     return jsonText({
@@ -271,6 +282,7 @@ server.tool(
       duration: response.search.duration,
       results,
       errors: response.errors,
+      routing: response.routing,
       hint: verbose
         ? undefined
         : searchHint(response.results.length, results.length, "Use provider filters or a narrower query to reduce rows."),
@@ -573,7 +585,7 @@ server.tool(
   {
     name: SearchProviderNameSchema.describe("Provider name"),
     api_key_env: z.string().optional().describe("Environment variable for API key"),
-    rate_limit: z.number().int().optional().describe("Requests per minute"),
+    rate_limit: z.number().int().min(0).optional().describe("Requests per minute"),
   },
   async ({ name, api_key_env, rate_limit }) => {
     const updates: Record<string, unknown> = {};
@@ -730,6 +742,7 @@ server.tool(
         content: [
           { type: "text" as const, text: `Error: ${err instanceof Error ? err.message : err}` },
         ],
+        isError: true,
       };
     }
   },
@@ -761,9 +774,10 @@ server.tool(
   "set_config",
   "Update search configuration",
   {
-    default_limit: z.number().int().optional(),
+    default_limit: z.number().int().min(1).optional(),
     dedup: z.boolean().optional(),
-    max_concurrent: z.number().int().optional(),
+    max_concurrent: z.number().int().min(1).optional(),
+    provider_timeout_ms: z.number().int().min(1).optional(),
     default_profile: z.string().nullable().optional(),
   },
   async (updates) => {
@@ -771,6 +785,7 @@ server.tool(
       ...(updates.default_limit !== undefined && { defaultLimit: updates.default_limit }),
       ...(updates.dedup !== undefined && { dedup: updates.dedup }),
       ...(updates.max_concurrent !== undefined && { maxConcurrent: updates.max_concurrent }),
+      ...(updates.provider_timeout_ms !== undefined && { providerTimeoutMs: updates.provider_timeout_ms }),
       ...(updates.default_profile !== undefined && { defaultProfile: updates.default_profile }),
     });
     return jsonText(config);
@@ -779,18 +794,16 @@ server.tool(
 
 // --- Agent Tools ---
 
-const _agentReg = new Map<string, { id: string; name: string; last_seen_at: string; project_id?: string }>();
-
 server.tool(
   "register_agent",
   "Register an agent session (idempotent). Auto-updates last_seen_at on re-register.",
   { name: z.string(), session_id: z.string().optional() },
   async (a: { name: string; session_id?: string }) => {
-    const existing = [..._agentReg.values()].find(x => x.name === a.name);
+    const existing = [...agentRegistry.values()].find(x => x.name === a.name);
     if (existing) { existing.last_seen_at = new Date().toISOString(); return jsonText(existing); }
     const id = Math.random().toString(36).slice(2, 10);
     const ag = { id, name: a.name, last_seen_at: new Date().toISOString() };
-    _agentReg.set(id, ag);
+    agentRegistry.set(id, ag);
     return jsonText(ag);
   },
 );
@@ -800,7 +813,7 @@ server.tool(
   "Update last_seen_at to signal agent is active.",
   { agent_id: z.string() },
   async (a: { agent_id: string }) => {
-    const ag = _agentReg.get(a.agent_id);
+    const ag = agentRegistry.get(a.agent_id);
     if (!ag) return plainText(`Agent not found: ${a.agent_id}`, true);
     ag.last_seen_at = new Date().toISOString();
     return jsonText({ id: ag.id, name: ag.name, last_seen_at: ag.last_seen_at });
@@ -812,9 +825,9 @@ server.tool(
   "Set active project context for this agent session.",
   { agent_id: z.string(), project_id: z.string().nullable().optional() },
   async (a: { agent_id: string; project_id?: string | null }) => {
-    const ag = _agentReg.get(a.agent_id);
+    const ag = agentRegistry.get(a.agent_id);
     if (!ag) return plainText(`Agent not found: ${a.agent_id}`, true);
-    (ag as any).project_id = a.project_id ?? undefined;
+    ag.project_id = a.project_id ?? undefined;
     return plainText(a.project_id ? `Focus: ${a.project_id}` : "Focus cleared");
   },
 );
@@ -827,7 +840,7 @@ server.tool(
     offset: z.number().int().min(0).optional(),
   },
   async ({ limit, offset }) => {
-    const agents = [..._agentReg.values()];
+    const agents = [...agentRegistry.values()];
     if (agents.length === 0) return plainText("No agents registered.");
     const pageOffset = mcpOffset(offset);
     const page = agents.slice(pageOffset, pageOffset + mcpLimit(limit));

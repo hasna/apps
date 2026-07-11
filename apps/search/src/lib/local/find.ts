@@ -1,5 +1,10 @@
 import type { Database } from "bun:sqlite";
-import { hasReadyRoot, autoRefreshStaleRoots, listRoots } from "./indexer.js";
+import {
+  hasReadyRoot,
+  autoRefreshStaleRoots,
+  scheduleAutoRefreshStaleRoots,
+  listRoots,
+} from "./indexer.js";
 import {
   searchFilePaths,
   searchFileContent,
@@ -26,7 +31,7 @@ export interface FindMatch {
 
 export interface FindOptions extends LocalQueryOptions {
   kind?: FindKind;
-  /** Refresh stale roots before searching (default: config-driven). */
+  /** true refreshes synchronously, false skips refresh scheduling, undefined schedules async refresh. */
   refresh?: boolean;
   /** Treat the query as a regular expression (grep-style, line-based). */
   regex?: boolean;
@@ -60,7 +65,8 @@ export function findLocal(query: string, opts: FindOptions = {}, db?: Database):
     return { query, kind, indexed: false, roots: roots.length, total: 0, results: [] };
   }
 
-  if (opts.refresh !== false) autoRefreshStaleRoots(db);
+  if (opts.refresh === true) autoRefreshStaleRoots(db);
+  else if (opts.refresh !== false) scheduleAutoRefreshStaleRoots(db);
 
   const queryOpts: LocalQueryOptions = {
     root: opts.root,

@@ -3,6 +3,15 @@ import { getDb } from "./database.js";
 import { hasReadyRoot } from "../lib/local/indexer.js";
 import { type ProviderConfig, type SearchProviderName, LOCAL_PROVIDER_NAMES } from "../types/index.js";
 
+export type ProviderConfigurationSource = "env" | "local-index" | "none";
+
+export interface ProviderConfigurationStatus {
+  configured: boolean;
+  source: ProviderConfigurationSource;
+  env?: string;
+  reason: string;
+}
+
 interface ProviderRow {
   name: string;
   enabled: number;
@@ -61,6 +70,9 @@ export function updateProvider(
     params.push(updates.apiKeyEnv);
   }
   if (updates.rateLimit !== undefined) {
+    if (!Number.isInteger(updates.rateLimit) || updates.rateLimit < 0) {
+      throw new Error("rateLimit must be an integer >= 0");
+    }
     sets.push("rate_limit = ?");
     params.push(updates.rateLimit);
   }
@@ -84,8 +96,33 @@ export function updateProviderLastUsed(name: string, db?: Database): void {
   d.prepare("UPDATE providers SET last_used_at = ? WHERE name = ?").run(now, name);
 }
 
+export function getProviderConfigurationStatus(provider: ProviderConfig): ProviderConfigurationStatus {
+  if (LOCAL_PROVIDER_NAMES.has(provider.name)) {
+    const configured = hasReadyRoot();
+    return {
+      configured,
+      source: "local-index",
+      reason: configured ? "local index has at least one ready root" : "no index roots ready",
+    };
+  }
+
+  if (!provider.apiKeyEnv) {
+    return {
+      configured: true,
+      source: "none",
+      reason: "no API key required",
+    };
+  }
+
+  const configured = Boolean(Bun.env[provider.apiKeyEnv]?.trim());
+  return {
+    configured,
+    source: "env",
+    env: provider.apiKeyEnv,
+    reason: configured ? `configured via ${provider.apiKeyEnv}` : `missing ${provider.apiKeyEnv}`,
+  };
+}
+
 export function isProviderConfigured(provider: ProviderConfig): boolean {
-  if (LOCAL_PROVIDER_NAMES.has(provider.name)) return hasReadyRoot();
-  if (!provider.apiKeyEnv) return true; // No key needed (e.g., hackernews, arxiv)
-  return !!Bun.env[provider.apiKeyEnv];
+  return getProviderConfigurationStatus(provider).configured;
 }

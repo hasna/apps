@@ -165,11 +165,11 @@ export class IgnoreMatcher {
  * (nested .gitignore files), deeper matchers take precedence.
  */
 export class IgnoreStack {
-  private hard: IgnoreMatcher | null;
+  private hard: IgnoreMatcher[];
   private stack: IgnoreMatcher[] = [];
 
-  constructor(hard: IgnoreMatcher | null = null) {
-    this.hard = hard;
+  constructor(hard: IgnoreMatcher | IgnoreMatcher[] | null = null) {
+    this.hard = hard ? (Array.isArray(hard) ? hard : [hard]) : [];
   }
 
   push(matcher: IgnoreMatcher): void {
@@ -181,8 +181,10 @@ export class IgnoreStack {
   }
 
   ignores(relPath: string, isDir: boolean): boolean {
-    const hardResult = this.hard?.ignores(relPath, isDir);
-    if (hardResult !== undefined) return hardResult;
+    for (const matcher of this.hard) {
+      const hardResult = matcher.ignores(relPath, isDir);
+      if (hardResult !== undefined) return hardResult;
+    }
 
     // Deepest soft matcher with an opinion wins.
     for (let i = this.stack.length - 1; i >= 0; i--) {
@@ -196,6 +198,8 @@ export class IgnoreStack {
 /** Directories and files that are never worth indexing, regardless of .gitignore. */
 export const DEFAULT_EXCLUDES = [
   ".git/",
+  ".hg/",
+  ".svn/",
   "node_modules/",
   "__pycache__/",
   ".venv/",
@@ -208,9 +212,39 @@ export const DEFAULT_EXCLUDES = [
   ".nuxt/",
   ".cache/",
   ".turbo/",
+  ".parcel-cache/",
+  ".pytest_cache/",
+  ".mypy_cache/",
+  ".ruff_cache/",
   "target/",
   "coverage/",
   ".pnpm-store/",
   ".bun/",
+  ".npm/",
+  ".yarn/cache/",
+  ".ssh/",
+  ".aws/",
+  ".azure/",
+  ".gnupg/",
+  ".gpg/",
+  ".password-store/",
+  ".kube/",
+  ".docker/",
+  ".codewith/logs/",
+  ".codewith/logs_*.sqlite",
+  ".codewith/**/*.sqlite",
+  ".codewith/**/*.sqlite-*",
+  ".codewith/**/*.db",
+  ".codewith/**/*.db-*",
+  "*.sqlite-wal",
+  "*.sqlite-shm",
+  "*.db-wal",
+  "*.db-shm",
+  "*.env",
+  ".env.*",
+  "*.pem",
+  "*.key",
+  "*.p12",
+  "*.pfx",
   ".DS_Store",
 ];

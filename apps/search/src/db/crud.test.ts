@@ -4,8 +4,12 @@ import { runMigrations } from "./migrations";
 import { createSearch, getSearch, listSearches, deleteSearch, getSearchStats } from "./searches";
 import { createResult, createResults, getResult, listResults, searchResultsFts } from "./results";
 import { createSavedSearch, getSavedSearch, listSavedSearches, deleteSavedSearch, updateSavedSearchLastRun } from "./saved-searches";
-import { getProvider, listProviders, enableProvider, disableProvider, updateProvider } from "./providers";
+import { getProvider, listProviders, enableProvider, disableProvider, updateProvider, getProviderConfigurationStatus } from "./providers";
 import { getProfile, getProfileByName, listProfiles, createProfile, deleteProfile } from "./profiles";
+import { EXA_API_KEY_ENV } from "../lib/exa.js";
+
+const fixtureExaKey = "fixture-token";
+const providerReadyEnv = "SEARCH_TEST_PROVIDER_READY";
 
 let db: Database;
 
@@ -167,6 +171,33 @@ describe("providers CRUD", () => {
   it("should update provider config", () => {
     updateProvider("google", { rateLimit: 200 }, db);
     expect(getProvider("google", db)!.rateLimit).toBe(200);
+  });
+
+  it("reports missing API key env without exposing values", () => {
+    const original = Bun.env[EXA_API_KEY_ENV];
+    const originalProviderReady = Bun.env[providerReadyEnv];
+    try {
+      delete Bun.env[EXA_API_KEY_ENV];
+      delete Bun.env[providerReadyEnv];
+      const status = getProviderConfigurationStatus(getProvider("exa", db)!);
+      expect(status).toMatchObject({
+        configured: false,
+        source: "env",
+        env: "EXA_API_KEY",
+        reason: "missing EXA_API_KEY",
+      });
+
+      updateProvider("exa", { apiKeyEnv: providerReadyEnv }, db);
+      Bun.env[providerReadyEnv] = fixtureExaKey;
+      const configured = getProviderConfigurationStatus(getProvider("exa", db)!);
+      expect(configured.configured).toBe(true);
+      expect(JSON.stringify(configured)).not.toContain(fixtureExaKey);
+    } finally {
+      if (original === undefined) delete Bun.env[EXA_API_KEY_ENV];
+      else Bun.env[EXA_API_KEY_ENV] = original;
+      if (originalProviderReady === undefined) delete Bun.env[providerReadyEnv];
+      else Bun.env[providerReadyEnv] = originalProviderReady;
+    }
   });
 });
 

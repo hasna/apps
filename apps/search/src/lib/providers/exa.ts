@@ -1,4 +1,5 @@
 import type { SearchOptions } from "../../types/index.js";
+import { getExaApiKey, requireExaApiKey } from "../exa.js";
 import type { SearchProvider, RawSearchResult } from "./types.js";
 
 interface ExaResult {
@@ -21,12 +22,11 @@ export class ExaProvider implements SearchProvider {
   displayName = "Exa.ai";
 
   isConfigured(): boolean {
-    return !!Bun.env.EXA_API_KEY;
+    return !!getExaApiKey();
   }
 
   async search(query: string, options?: SearchOptions): Promise<RawSearchResult[]> {
-    const apiKey = Bun.env.EXA_API_KEY;
-    if (!apiKey) throw new Error("EXA_API_KEY not configured");
+    const apiKey = requireExaApiKey();
 
     const body: Record<string, unknown> = {
       query,

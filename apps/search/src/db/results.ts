@@ -38,6 +38,7 @@ function rowToResult(row: ResultRow): SearchResult {
 
 export function createResult(
   data: {
+    id?: string;
     searchId: string;
     title: string;
     url: string;
@@ -53,7 +54,7 @@ export function createResult(
   db?: Database,
 ): SearchResult {
   const d = db ?? getDb();
-  const id = generateId();
+  const id = data.id ?? generateId();
   const now = new Date().toISOString();
 
   d.prepare(
@@ -94,6 +95,7 @@ export function createResult(
 
 export function createResults(
   results: Array<{
+    id?: string;
     searchId: string;
     title: string;
     url: string;
@@ -118,10 +120,10 @@ export function createResults(
 
   const now = new Date().toISOString();
 
-  d.exec("BEGIN");
+    d.exec("BEGIN");
   try {
     for (const data of results) {
-      const id = generateId();
+      const id = data.id ?? generateId();
       stmt.run(
         id,
         data.searchId,
