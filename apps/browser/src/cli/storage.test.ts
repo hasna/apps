@@ -24,7 +24,7 @@ describe("browser storage CLI", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("storage");
-    expect(result.stdout).not.toContain("cloud");
+    expect(result.stdout).not.toMatch(/\n\s+cloud\b/);
   });
 
   test("storage status reports local mode as JSON", () => {

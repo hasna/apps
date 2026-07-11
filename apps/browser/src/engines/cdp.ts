@@ -4,10 +4,10 @@ import { BrowserError } from "../types/index.js";
 
 // ─── Connect to existing browser via CDP ─────────────────────────────────────
 
-export async function connectToExistingBrowser(cdpUrl: string, opts: { timeoutMs?: number } = {}): Promise<Browser> {
+export async function connectToExistingBrowser(cdpUrl: string, options: { timeoutMs?: number } = {}): Promise<Browser> {
   const { chromium } = await import("playwright");
   try {
-    return await chromium.connectOverCDP(cdpUrl, { timeout: opts.timeoutMs ?? 30000 });
+    return await chromium.connectOverCDP(cdpUrl, { timeout: options.timeoutMs ?? 30_000 });
   } catch (err) {
     throw new BrowserError(
       `Failed to connect to browser at ${cdpUrl}: ${err instanceof Error ? err.message : String(err)}. Start Chrome with: google-chrome --remote-debugging-port=9222`,

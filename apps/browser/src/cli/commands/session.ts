@@ -5,6 +5,7 @@ import chalk from "chalk";
 import { createSession, closeSession, getSession, listSessions, getSessionPage } from "../../lib/session.js";
 import type { BrowserEngine, Session } from "../../types/index.js";
 import { formatDate, limited, parseLimit, printHint, printListFooter, shortId, truncate } from "../output.js";
+import { addKernelOptions, kernelSessionOptionsFromCli, type KernelCliOptions } from "./kernel.js";
 
 function printSessionSummary(session: Session, opts: { verbose?: boolean } = {}): void {
   const label = session.name ? `${session.name} ` : "";
@@ -18,16 +19,21 @@ export function register(program: Command) {
 
 const sessionCmd = program.command("session").description("Manage browser sessions");
 
-sessionCmd
+addKernelOptions(sessionCmd
   .command("create")
   .description("Create a new browser session")
   .option("--engine <engine>", "Browser engine", "auto")
   .option("--url <url>", "Start URL")
   .option("--headed", "Run in headed (visible) mode")
   .option("--json", "Output full session as JSON")
-  .option("--verbose", "Show the full session object")
-  .action(async (opts: { engine: string; url?: string; headed?: boolean; json?: boolean; verbose?: boolean }) => {
-    const { session } = await createSession({ engine: opts.engine as BrowserEngine, startUrl: opts.url, headless: !opts.headed });
+  .option("--verbose", "Show the full session object"))
+  .action(async (opts: KernelCliOptions & { engine: string; url?: string; headed?: boolean; json?: boolean; verbose?: boolean }) => {
+    const { session } = await createSession({
+      engine: opts.engine as BrowserEngine,
+      startUrl: opts.url,
+      headless: !opts.headed,
+      ...kernelSessionOptionsFromCli(opts),
+    });
     if (opts.json) {
       console.log(JSON.stringify(session, null, 2));
       return;

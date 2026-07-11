@@ -10,6 +10,8 @@ let testServer: ReturnType<typeof Bun.serve>;
 
 const HTML = `<!DOCTYPE html><html><body>
   <button id="btn" onclick="this.textContent='clicked!'">Click Me</button>
+  <button id="book-first" onclick="document.getElementById('status').textContent='first-book'">Book</button>
+  <button id="book-second" onclick="document.getElementById('status').textContent='second-book'">Book</button>
   <a href="#" onclick="event.preventDefault(); document.getElementById('status').textContent='linked!'">Go Link</a>
   <input type="text" aria-label="Name" />
   <input type="email" aria-label="Email" />
@@ -37,6 +39,12 @@ function findRef(refs: Record<string, { name: string }>, name: string): string {
   return entry[0];
 }
 
+function findRefs(refs: Record<string, { name: string }>, name: string): string[] {
+  return Object.entries(refs)
+    .filter(([_, r]) => r.name === name)
+    .map(([ref]) => ref);
+}
+
 describe("ref-based actions", () => {
   it("clickRef clicks the correct button", async () => {
     await page.goto(`http://localhost:${testServer.port}`);
@@ -45,6 +53,18 @@ describe("ref-based actions", () => {
     await clickRef(page, "ref-click-test", ref);
     const text = await page.textContent("#btn");
     expect(text).toBe("clicked!");
+  });
+
+  it("clickRef preserves duplicate target identity by ref ordinal", async () => {
+    await page.goto(`http://localhost:${testServer.port}`);
+    const snap = await takeSnapshot(page, "ref-duplicate-click-test");
+    const refs = findRefs(snap.refs, "Book");
+    expect(refs).toHaveLength(2);
+
+    await clickRef(page, "ref-duplicate-click-test", refs[1]);
+
+    const text = await page.textContent("#status");
+    expect(text).toBe("second-book");
   });
 
   it("typeRef types into the correct input", async () => {

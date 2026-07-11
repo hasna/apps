@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { resetDatabase } from "../db/schema.js";
@@ -119,6 +119,8 @@ describe("CLI — help flags", () => {
     expect(stdout).toContain("observe");
     expect(stdout).toContain("page-map");
     expect(stdout).toContain("validate");
+    expect(stdout).toContain("kernel");
+    expect(stdout).toContain("workflow");
     expect(stdout).toContain("agent");
     expect(stdout).toContain("events");
     expect(stdout).toContain("project");
@@ -134,6 +136,30 @@ describe("CLI — help flags", () => {
     expect(stdout).toContain("create");
     expect(stdout).toContain("list");
     expect(stdout).toContain("close");
+  });
+
+  it("browser kernel --help shows Kernel operations", async () => {
+    const { stdout, code } = await runCli("kernel", "--help");
+    expect(code).toBe(0);
+    expect(stdout).toContain("status");
+    expect(stdout).toContain("sessions");
+    expect(stdout).toContain("files");
+    expect(stdout).toContain("replays");
+  });
+
+  it("browser navigate --help shows Kernel session flags", async () => {
+    const { stdout, code } = await runCli("navigate", "--help");
+    expect(code).toBe(0);
+    expect(stdout).toContain("--kernel-persistence-id");
+    expect(stdout).toContain("--kernel-profile-id");
+    expect(stdout).toContain("--kernel-stealth");
+    expect(stdout).toContain("--kernel-env-secret");
+  });
+
+  it("browser kernel open --help shows stealth mode", async () => {
+    const { stdout, code } = await runCli("kernel", "open", "--help");
+    expect(code).toBe(0);
+    expect(stdout).toContain("--kernel-stealth");
   });
 
   it("browser extension --help shows subcommands", async () => {
@@ -225,6 +251,15 @@ describe("CLI — help flags", () => {
     expect(stdout).toContain("--no-ai");
     expect(stdout).toContain("--max-actions");
   });
+
+  it("browser workflow --help shows subcommands", async () => {
+    const { stdout, code } = await runCli("workflow", "--help");
+    expect(code).toBe(0);
+    expect(stdout).toContain("dir");
+    expect(stdout).toContain("list");
+    expect(stdout).toContain("validate");
+    expect(stdout).toContain("run");
+  });
 });
 
 describe("CLI — semantic browser tools", () => {
@@ -283,6 +318,34 @@ describe("CLI — semantic browser tools", () => {
     expect(parsed.acted.action.selector).toBe("#email");
   }, 15_000);
 
+  it("semantic commands reject invalid numeric options before running", async () => {
+    const observe = await runCliWithTimeout([
+      "observe",
+      "data:text/html,<title>Bad Number</title><button>Book</button>",
+      "click book",
+      "--max-actions",
+      "0",
+      "--no-ai",
+      "--json",
+    ], 5_000);
+    expect(observe.timedOut).toBe(false);
+    expect(observe.code).not.toBe(0);
+    expect(observe.stderr).toContain("--max-actions must be a positive integer");
+
+    const act = await runCliWithTimeout([
+      "act",
+      "data:text/html,<title>Bad Timeout</title><button>Book</button>",
+      "click book",
+      "--action-timeout",
+      "abc",
+      "--no-ai",
+      "--json",
+    ], 5_000);
+    expect(act.timedOut).toBe(false);
+    expect(act.code).not.toBe(0);
+    expect(act.stderr).toContain("--action-timeout must be a positive integer");
+  }, 15_000);
+
   it("validate checks assertions without requiring a model", async () => {
     const result = await runCliWithTimeout([
       "validate",
@@ -298,6 +361,139 @@ describe("CLI — semantic browser tools", () => {
     expect(parsed.ok).toBe(true);
     expect(parsed.method).toBe("text");
   }, 15_000);
+});
+
+describe("CLI — workflow manifests", () => {
+  beforeEach(setupDb);
+  afterEach(teardownDb);
+
+  function writeDemoWorkflow() {
+    const workflowDir = join(tmpDir, "workflows", "demo");
+    const actionDir = join(workflowDir, "actions");
+    mkdirSync(actionDir, { recursive: true });
+    writeFileSync(join(actionDir, "smoke.js"), `
+const title = await page.title();
+const text = await helpers.pageText(120);
+const screenshot = await helpers.screenshot("home", { format: "png" });
+return { status: "completed", title, text, screenshot };
+`);
+    writeFileSync(join(workflowDir, "manifest.json"), JSON.stringify({
+      name: "demo",
+      site: "example.test",
+      runner: "playwright",
+      startUrl: "data:text/html,<title>Workflow Demo</title><main>hello workflow</main>",
+      actions: {
+        smoke: {
+          description: "Open a local demo page and capture evidence.",
+          scriptFile: "actions/smoke.js",
+          mutatesExternalAccount: false,
+        },
+      },
+      kernel: {
+        closeAfterRun: true,
+        timeoutSeconds: 60,
+        stealth: false,
+        authMode: "off",
+      },
+      stopConditions: ["interactive-captcha", "mfa", "payment", "purchase", "identity-verification"],
+      secrets: {
+        password: "demo-secret-should-redact-123456789",
+      },
+      evidence: {
+        captureBeforeClose: true,
+        verifySessionCleanup: true,
+      },
+      safety: {
+        redactSecrets: true,
+        stopBeforeSensitiveActions: true,
+        allowCustomCaptchaSolving: false,
+      },
+    }, null, 2));
+  }
+
+  it("workflow dir/list/validate uses the Browser data directory", async () => {
+    writeDemoWorkflow();
+
+    const dir = await runCli("workflow", "dir", "--json");
+    expect(dir.code).toBe(0);
+    expect(JSON.parse(dir.stdout).dir).toBe(join(tmpDir, "workflows"));
+
+    const list = await runCli("workflow", "list", "--json");
+    expect(list.code).toBe(0);
+    const listed = JSON.parse(list.stdout);
+    expect(listed[0].manifest.name).toBe("demo");
+    expect(list.stdout).not.toContain("demo-secret-should-redact");
+    expect(listed[0].manifest.secrets).toBe("[redacted]");
+
+    const validate = await runCli("workflow", "validate", "demo", "--json");
+    expect(validate.code).toBe(0);
+    expect(JSON.parse(validate.stdout).ok).toBe(true);
+  });
+
+  it("workflow run saves evidence and closes the created session", async () => {
+    writeDemoWorkflow();
+
+    const run = await runCliWithTimeout(["workflow", "run", "demo", "smoke", "--json"], 15_000);
+    expect(run.timedOut).toBe(false);
+    expect(run.code).toBe(0);
+    const parsed = JSON.parse(run.stdout);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.result.title).toBe("Workflow Demo");
+    expect(parsed.cleanup.closed).toBe(true);
+    expect(parsed.screenshots.length).toBe(1);
+    expect(existsSync(parsed.evidencePath)).toBe(true);
+    expect(existsSync(parsed.screenshots[0].path)).toBe(true);
+  }, 20_000);
+
+  it("workflow validate rejects external manifests and scriptFile path escapes", async () => {
+    writeDemoWorkflow();
+    const externalManifest = join(tmpDir, "external.workflow.json");
+    writeFileSync(externalManifest, JSON.stringify({
+      name: "external",
+      site: "example.test",
+      runner: "playwright",
+      actions: {},
+      kernel: { closeAfterRun: true, timeoutSeconds: 60 },
+      stopConditions: ["interactive-captcha", "mfa", "payment", "purchase", "identity-verification"],
+      secrets: {},
+      evidence: { captureBeforeClose: true, verifySessionCleanup: true },
+      safety: { redactSecrets: true, stopBeforeSensitiveActions: true, allowCustomCaptchaSolving: false },
+    }));
+
+    const external = await runCli("workflow", "validate", externalManifest, "--json");
+    expect(external.code).not.toBe(0);
+
+    const manifestPath = join(tmpDir, "workflows", "demo", "manifest.json");
+    const manifest = JSON.parse(await Bun.file(manifestPath).text());
+    manifest.actions.smoke.scriptFile = "../escape.js";
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+    const escaped = await runCli("workflow", "validate", "demo", "--json");
+    expect(escaped.code).not.toBe(0);
+    expect(escaped.stdout).toContain("scriptFile");
+  });
+
+  it("workflow show rejects traversal-shaped names before reading manifests", async () => {
+    writeDemoWorkflow();
+
+    const result = await runCliWithTimeout(["workflow", "show", "../demo", "--json"], 8_000);
+
+    expect(result.timedOut).toBe(false);
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).not.toContain("demo");
+  });
+
+  it("workflow run rejects invalid engine and timeout overrides before launch", async () => {
+    writeDemoWorkflow();
+
+    const badEngine = await runCliWithTimeout(["workflow", "run", "demo", "smoke", "--engine", "definitely-not-engine", "--json"], 8_000);
+    expect(badEngine.timedOut).toBe(false);
+    expect(badEngine.code).not.toBe(0);
+
+    const badTimeout = await runCliWithTimeout(["workflow", "run", "demo", "smoke", "--timeout-seconds", "999", "--json"], 8_000);
+    expect(badTimeout.timedOut).toBe(false);
+    expect(badTimeout.code).not.toBe(0);
+  });
 });
 
 describe("CLI — session commands (DB-only)", () => {

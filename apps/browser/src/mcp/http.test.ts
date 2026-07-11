@@ -102,6 +102,8 @@ describe("mcp buildServer stdio registration", () => {
     ]) {
       expect(tools.tools.some((tool) => tool.name === removed)).toBe(false);
     }
+    expect(tools.tools.some((tool) => tool.name === "browser_kernel_status")).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === "browser_kernel_playwright_execute")).toBe(true);
 
     await client.close();
     await server.close();

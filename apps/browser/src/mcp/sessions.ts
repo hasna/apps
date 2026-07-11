@@ -83,12 +83,25 @@ TIPS:
     tui_method: z.enum(["buffer", "dom"]).optional().default("buffer")
       .describe("TUI engine only: how terminal state is read. 'buffer' reads xterm's internal buffer; 'dom' reads rendered DOM rows for a more structured browser-native view."),
     kernel_persistence_id: z.string().optional().describe("Kernel engine only: reusable Kernel profile/persistence name"),
+    kernel_profile_id: z.string().optional().describe("Kernel engine only: reusable Kernel profile id"),
+    kernel_profile_name: z.string().optional().describe("Kernel engine only: reusable Kernel profile name"),
+    kernel_save_profile_changes: z.boolean().optional().default(true).describe("Kernel engine only: save profile changes when the Kernel browser is deleted or times out"),
     kernel_timeout_seconds: z.number().optional().describe("Kernel engine only: remote browser inactivity timeout"),
+    kernel_project_id: z.string().optional().describe("Kernel engine only: Kernel project id"),
+    kernel_base_url: z.string().optional().describe("Kernel engine only: custom Kernel API base URL"),
+    kernel_request_timeout_ms: z.number().optional().describe("Kernel engine only: SDK request timeout in milliseconds"),
+    kernel_proxy_id: z.string().optional().describe("Kernel engine only: Kernel proxy id"),
+    kernel_gpu: z.boolean().optional().describe("Kernel engine only: enable GPU acceleration"),
+    kernel_kiosk_mode: z.boolean().optional().describe("Kernel engine only: hide address bar and tabs in live view"),
+    kernel_tags: z.record(z.string()).optional().describe("Kernel engine only: Kernel session tags"),
+    kernel_telemetry: z.union([z.boolean(), z.record(z.unknown())]).optional().describe("Kernel engine only: Kernel telemetry config"),
+    kernel_chrome_policy: z.record(z.unknown()).optional().describe("Kernel engine only: Chrome enterprise policy overrides"),
+    kernel_env: z.record(z.string()).optional().describe("Kernel engine only: non-secret env values for sandbox creation"),
     kernel_env_secrets: z.record(z.string()).optional().describe("Kernel engine only: env var name -> @hasna/secrets key to inject at sandbox creation"),
     kernel_auth_mode: z.enum(["managed", "cdp_autofill", "auto", "off"]).optional().default("managed")
       .describe("Kernel engine only: managed auth keeps passwords out of model-visible page/tool results"),
   },
-  async ({ engine, use_case, project_id, agent_id, start_url, headless, viewport_width, viewport_height, stealth, auto_gallery, storage_state, force_new, tags, cdp_url, approval_token, tui_theme, tui_font_size, tui_method, kernel_persistence_id, kernel_timeout_seconds, kernel_env_secrets, kernel_auth_mode }) => {
+  async ({ engine, use_case, project_id, agent_id, start_url, headless, viewport_width, viewport_height, stealth, auto_gallery, storage_state, force_new, tags, cdp_url, approval_token, tui_theme, tui_font_size, tui_method, kernel_persistence_id, kernel_profile_id, kernel_profile_name, kernel_save_profile_changes, kernel_timeout_seconds, kernel_project_id, kernel_base_url, kernel_request_timeout_ms, kernel_proxy_id, kernel_gpu, kernel_kiosk_mode, kernel_tags, kernel_telemetry, kernel_chrome_policy, kernel_env, kernel_env_secrets, kernel_auth_mode }) => {
     try {
       // Auto-reuse: if agent already has an active session, return it
       if (agent_id && !force_new) {
@@ -112,7 +125,20 @@ TIPS:
         tuiFontSize: tui_font_size,
         tuiMethod: tui_method as "buffer" | "dom" | undefined,
         kernelPersistenceId: kernel_persistence_id,
+        kernelProfileId: kernel_profile_id,
+        kernelProfileName: kernel_profile_name,
+        kernelSaveProfileChanges: kernel_save_profile_changes,
         kernelTimeoutSeconds: kernel_timeout_seconds,
+        kernelProjectId: kernel_project_id,
+        kernelBaseUrl: kernel_base_url,
+        kernelRequestTimeoutMs: kernel_request_timeout_ms,
+        kernelProxyId: kernel_proxy_id,
+        kernelGpu: kernel_gpu,
+        kernelKioskMode: kernel_kiosk_mode,
+        kernelTags: kernel_tags,
+        kernelTelemetry: kernel_telemetry,
+        kernelChromePolicy: kernel_chrome_policy,
+        kernelEnv: kernel_env,
         kernelEnvSecrets: kernel_env_secrets,
         kernelAuthMode: kernel_auth_mode,
       });

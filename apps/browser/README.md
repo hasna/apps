@@ -68,6 +68,53 @@ stop conditions. Browser owns the page map, refs, actions, screenshots,
 recordings, downloads, evidence, and session cleanup. Site-specific JavaScript
 and durable site-specific manifests are not the primary automation model.
 
+## Choose The Control Lane
+
+Use the narrowest browser lane that can finish the job:
+
+| Lane | Use it for | Boundary |
+|------|------------|----------|
+| Browser-native automation | Owned sites, local fixtures, staging apps, CI, extraction, screenshots, audits, forms, and repeatable workflows in controlled browser sessions. | Use Playwright, CDP, Bun, or Lightpanda through the CLI, SDK, MCP, or REST API. `--headed` makes the automation browser visible; it does not turn automation into user-trusted hardware input. |
+| Extension engine | Authorized workflows inside an operator-paired visible Chrome profile that is already logged in. | Use `--engine extension` only after `browser-serve` and `browser extension pair`. Extension sessions are explicit-only, policy-gated, and never selected by `auto`. |
+| Pixel computer control | Browser chrome, OS dialogs, cross-app workflows, or visual-only UI that browser APIs cannot reach. | Use `@hasna/computer` for display-level mouse, keyboard, and screenshot control, then keep browser page work in this package when possible. |
+
+Do not use browser automation, headed mode, CDP, stealth settings, or the
+extension engine to bypass CAPTCHA, MFA, bot detection, rate limits, paywalls,
+access controls, website terms, or anti-abuse systems. Prefer official APIs.
+Use automation only on domains, accounts, and data you are authorized to
+operate, and stop for manual approval when a site presents authentication,
+CAPTCHA, MFA, payment, or account-safety challenges.
+
+## Workflow Ownership
+
+Reusable browser workflows are Browser-owned runtime assets. Local workflow
+manifests belong under the Browser data directory:
+
+```text
+~/.hasna/browser/workflows/
+```
+
+Project folders may contain source notes, tests, and run evidence, but they
+should not become separate workflow registries. Use the first-class workflow
+CLI surface for file-backed manifests:
+
+```bash
+browser workflow dir
+browser workflow list
+browser workflow show farfetch
+browser workflow validate farfetch
+browser workflow run farfetch public-smoke --json
+```
+
+Workflow bundles can either be single `*.workflow.json` files or directories
+with `manifest.json` plus action scripts. Relative `scriptFile` paths are
+resolved from the manifest directory, so site-specific executable workflow code
+stays under the Browser workflow directory.
+
+Workflow runs that use Kernel, Secrets, Mailery, or agentic decision steps
+should keep Browser as the authority for safety gates, evidence capture, secret
+redaction, and session cleanup.
+
 ## MCP Server
 
 ```bash
@@ -95,11 +142,83 @@ Stdio remains the default when no `--http` / `MCP_HTTP=1` is set.
 browser-serve
 ```
 
+## Kernel Cloud Browsers
+
+The `kernel` engine is explicit-only unless `OPEN_BROWSER_BACKEND=kernel` or
+`OPEN_BROWSER_REMOTE=1` is set. Local fallback remains unchanged for `auto`:
+open-browser still picks Bun, Lightpanda, or Playwright locally unless you ask
+for Kernel.
+
+Configure Kernel with the established secret first. open-browser checks the
+vault key before `KERNEL_API_KEY` and never prints the key:
+
+```bash
+secrets set hasna/xyz/opensource/browser/prod/kernel_api_key <kernel-api-key>
+# or provide KERNEL_API_KEY in the process environment for one process
+browser kernel status --remote
+```
+
+Create an autonomous remote browser:
+
+```bash
+browser kernel open --url https://example.com --headed --kernel-profile-name example-agent
+browser navigate https://example.com --engine kernel --kernel-profile-name example-agent --screenshot
+browser session create --engine kernel --url https://example.com --kernel-timeout-seconds 600
+```
+
+Kernel session options are available through CLI, SDK, MCP, and REST:
+
+- Profiles: `--kernel-profile-name`, `--kernel-profile-id`, or
+  `--kernel-persistence-id`; named profiles are created when the SDK supports
+  it. Profile state is saved when the Kernel browser is explicitly deleted or
+  times out.
+- Runtime: `--kernel-timeout-seconds`, `--kernel-proxy-id`, `--kernel-gpu`,
+  `--kernel-kiosk-mode`, `--kernel-tag key=value`, `--kernel-project-id`, and
+  `--kernel-base-url`.
+- Secrets/env: `--kernel-env KEY=VALUE` for non-secrets and
+  `--kernel-env-secret ENV_VAR=secret/key` for values resolved from
+  `@hasna/secrets`.
+- Auth: `--kernel-auth-mode managed|auto|cdp_autofill|off`. Managed auth uses
+  Kernel connections/credentials when a matching vault login exists; `auto`
+  falls back to CDP autofill if managed auth cannot start.
+
+Remote operations:
+
+```bash
+browser kernel sessions --json
+browser kernel exec <session> "await page.goto('https://example.com'); return await page.title();"
+browser kernel computer screenshot <session>
+browser kernel files list <session> --path /tmp
+browser kernel files download <session> /tmp/report.pdf
+browser kernel replays start <session>
+browser kernel replays stop <session> <replay_id>
+browser kernel replays download <session> <replay_id>
+browser kernel close <session>
+```
+
+MCP tools include `browser_kernel_status`, `browser_kernel_sessions`,
+`browser_kernel_playwright_execute`, `browser_kernel_computer_action`,
+`browser_kernel_computer_screenshot`, `browser_kernel_files_*`, and
+`browser_kernel_replay_*`. REST endpoints are exposed under
+`/api/kernel/...`. SDK methods are available on `BrowserSDK`, for example
+`sdk.executeKernel(session, code)`, `sdk.kernelFiles(session, "/tmp")`, and
+`sdk.downloadKernelReplay(session, replayId)`.
+
+Kernel create-time `start_url` is best-effort, so open-browser performs an
+explicit navigation after attaching through CDP when `startUrl` is provided.
+Use headful sessions (`--headed`) when live view or computer controls matter;
+headless is still useful for fast script-only work. Kernel File I/O artifacts
+are available only while the remote session is active, so download files or
+replays before closing or allowing the session to time out.
+
 ## Chrome Extension Engine
 
 The `extension` engine is explicit-only: it is never auto-selected. It runs
 jobs inside a paired, user-loaded Chrome MV3 extension, so actions execute in
 the user's real logged-in browser session and network context.
+Creating extension sessions requires explicit operator approval through
+`BROWSER_ALLOW_EXTENSION_SESSION=1` for a trusted local session, or
+`BROWSER_CAPABILITY_TOKEN` plus the matching approval token.
 
 ```bash
 bun run build:extension
@@ -126,8 +245,8 @@ Security defaults:
   cookie export should be added only behind an explicit opt-in build/scope.
 - DOM actions are injected into the real tab, but synthetic DOM events are not
   browser-trusted user input (`Event.isTrusted` stays false). Use the extension
-  engine for real-profile/session automation, not as a claim of hardware-level
-  human input.
+  engine for authorized real-profile/session automation, not as a claim of
+  hardware-level human input or a way around site anti-abuse controls.
 
 ## Video Recording
 

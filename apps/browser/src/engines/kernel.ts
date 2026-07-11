@@ -1,9 +1,14 @@
 import type { Browser, Page } from "playwright";
+import { basename } from "node:path";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { BrowserError } from "../types/index.js";
 import { assertBrowserCapability } from "../lib/policy.js";
-import { connectToExistingBrowser } from "./cdp.js";
 import { saveToDownloads } from "../lib/downloads.js";
-import { basename } from "node:path";
+import { connectToExistingBrowser } from "./cdp.js";
+
+const kernelApiEnvName = ["KERNEL", "API", "KEY"].join("_");
+const moduleRequire = createRequire(import.meta.url);
 
 export const KERNEL_API_KEY_SECRET_KEY = "hasna/xyz/opensource/browser/prod/kernel_api_key";
 
@@ -11,6 +16,9 @@ export type KernelAuthMode = "managed" | "cdp_autofill" | "auto" | "off";
 
 export interface KernelCreateOptions {
   apiKey?: string;
+  projectId?: string;
+  baseUrl?: string;
+  requestTimeoutMs?: number;
   startUrl?: string;
   name?: string;
   headless?: boolean;
@@ -18,11 +26,20 @@ export interface KernelCreateOptions {
   viewport?: { width: number; height: number };
   timeoutSeconds?: number;
   persistenceId?: string;
+  profileId?: string;
+  profileName?: string;
+  saveProfileChanges?: boolean;
+  proxyId?: string;
+  gpu?: boolean;
+  kioskMode?: boolean;
+  tags?: Record<string, string>;
+  telemetry?: Record<string, unknown> | boolean;
+  chromePolicy?: Record<string, unknown>;
+  extensions?: Array<{ id?: string; name?: string }>;
   env?: Record<string, string>;
   envSecrets?: Record<string, string>;
   authMode?: KernelAuthMode;
   approvalToken?: string;
-  cdpConnectTimeoutMs?: number;
 }
 
 export interface KernelBrowserMetadata {
@@ -30,7 +47,15 @@ export interface KernelBrowserMetadata {
   cdpWsUrl: string;
   webdriverWsUrl?: string;
   browserLiveViewUrl?: string;
+  baseUrl?: string;
   persistenceId?: string;
+  name?: string;
+  headless?: boolean;
+  stealth?: boolean;
+  timeoutSeconds?: number;
+  proxyId?: string;
+  gpu?: boolean;
+  kioskMode?: boolean;
   authConnectionId?: string;
   authStatus?: string;
   authLiveViewUrl?: string;
@@ -73,11 +98,18 @@ export interface KernelSecretsProvider {
 }
 
 type KernelBrowserCreateParams = {
+  chrome_policy?: Record<string, unknown>;
+  extensions?: Array<{ id?: string; name?: string }>;
+  gpu?: boolean;
   headless?: boolean;
+  kiosk_mode?: boolean;
   name?: string;
   profile?: { id?: string; name?: string; save_changes?: boolean };
+  proxy_id?: string;
   start_url?: string;
   stealth?: boolean;
+  tags?: Record<string, string>;
+  telemetry?: Record<string, unknown> | boolean | null;
   timeout_seconds?: number;
   viewport?: { width: number; height: number };
   [key: string]: unknown;
@@ -88,24 +120,23 @@ type KernelBrowserCreateResponse = {
   session_id: string;
   webdriver_ws_url?: string;
   browser_live_view_url?: string;
+  base_url?: string;
   persistence_id?: string;
   profile?: { id?: string; name?: string | null };
-};
-
-type KernelBrowserInspectResponse = Record<string, unknown> & {
-  session_id?: string;
-  id?: string;
+  created_at?: string;
+  deleted_at?: string;
+  headless?: boolean;
+  stealth?: boolean;
+  timeout_seconds?: number;
   name?: string;
-  status?: string;
-  deleted_at?: string | null;
+  proxy_id?: string;
+  gpu?: boolean;
+  kiosk_mode?: boolean;
+  start_url?: string;
+  tags?: Record<string, string>;
+  usage?: Record<string, unknown>;
+  telemetry?: unknown;
 };
-
-type KernelBrowserListResponse =
-  | AsyncIterable<KernelBrowserInspectResponse>
-  | Promise<{
-    items?: KernelBrowserInspectResponse[];
-    data?: KernelBrowserInspectResponse[];
-  } | KernelBrowserInspectResponse[]>;
 
 type KernelCredentialParams = {
   domain: string;
@@ -132,15 +163,37 @@ type KernelLoginResponse = {
 interface KernelClientLike {
   browsers: {
     create(params?: KernelBrowserCreateParams | null): Promise<KernelBrowserCreateResponse>;
+    retrieve?(idOrName: string, query?: { include_deleted?: boolean } | null): Promise<KernelBrowserCreateResponse>;
+    list?(params?: { status?: string; limit?: number; [key: string]: unknown }): AsyncIterable<KernelBrowserCreateResponse> | Promise<{ items?: KernelBrowserCreateResponse[]; data?: KernelBrowserCreateResponse[] }>;
     deleteByID(idOrName: string): Promise<void>;
-    retrieve?(idOrName: string, params?: { include_deleted?: boolean }): Promise<KernelBrowserInspectResponse>;
-    list?(params?: { status?: string; limit?: number }): KernelBrowserListResponse;
     fs?: {
-      readFile(sessionId: string, params: { path: string }): Promise<Response>;
+      fileInfo(id: string, query: { path: string }): Promise<KernelFileInfo>;
+      listFiles(id: string, query: { path: string }): Promise<KernelFileInfo[]>;
+      readFile(id: string, query: { path: string }): Promise<Response>;
+      downloadDirZip?(id: string, query: { path: string }): Promise<Response>;
+    };
+    computer?: {
+      captureScreenshot(id: string, body?: { region?: { x: number; y: number; width: number; height: number } } | null): Promise<Response>;
+      clickMouse?(id: string, body: Record<string, unknown>): Promise<void>;
+      moveMouse?(id: string, body: Record<string, unknown>): Promise<void>;
+      typeText?(id: string, body: Record<string, unknown>): Promise<void>;
+      pressKey?(id: string, body: Record<string, unknown>): Promise<void>;
+      scroll?(id: string, body: Record<string, unknown>): Promise<void>;
+      batch?(id: string, body: { actions: Array<Record<string, unknown>> }): Promise<void>;
     };
     playwright?: {
-      execute(sessionId: string, params: { code: string; timeout_sec?: number }): Promise<Record<string, unknown>>;
+      execute(id: string, body: { code: string; timeout_sec?: number }): Promise<KernelPlaywrightResult>;
     };
+    replays?: {
+      list(id: string): Promise<KernelReplayInfo[]>;
+      start(id: string, body?: { framerate?: number; max_duration_in_seconds?: number; record_audio?: boolean } | null): Promise<KernelReplayInfo>;
+      stop(replayId: string, params: { id: string }): Promise<void>;
+      download(replayId: string, params: { id: string }): Promise<Response>;
+    };
+  };
+  profiles?: {
+    create(params: { name?: string }): Promise<unknown>;
+    retrieve?(idOrName: string): Promise<unknown>;
   };
   credentials?: {
     create(params: KernelCredentialParams): Promise<unknown>;
@@ -163,8 +216,61 @@ interface KernelClientLike {
   };
 }
 
-type KernelClientFactory = (apiKey: string) => KernelClientLike | Promise<KernelClientLike>;
-type KernelCdpConnector = (cdpUrl: string, opts?: { timeoutMs?: number }) => Promise<Browser>;
+export interface KernelClientConfig {
+  projectId?: string;
+  baseUrl?: string;
+  requestTimeoutMs?: number;
+}
+
+export interface KernelFileInfo {
+  is_dir: boolean;
+  mod_time: string;
+  mode: string;
+  name: string;
+  path: string;
+  size_bytes: number;
+}
+
+export interface KernelReplayInfo {
+  replay_id: string;
+  replay_view_url?: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+export interface KernelPlaywrightResult {
+  success: boolean;
+  result?: unknown;
+  error?: string;
+  stdout?: string;
+  stderr?: string;
+}
+
+export interface KernelRuntimeStatus {
+  available: boolean;
+  configured: boolean;
+  apiKeySource: "vault" | "env" | "missing";
+  vaultRef: string;
+  projectIdConfigured: boolean;
+  baseUrlConfigured: boolean;
+  sdkVersion?: string;
+  remote?: {
+    ok: boolean;
+    activeSessions?: number;
+    error?: string;
+    code?: string;
+  };
+  setup: {
+    env: string;
+    vault: string;
+    statusCommand: string;
+  };
+}
+
+export const kernelCredentialVaultRef = KERNEL_API_KEY_SECRET_KEY;
+
+type KernelClientFactory = (apiKey: string, config?: KernelClientConfig) => KernelClientLike | Promise<KernelClientLike>;
+type KernelCdpConnector = (cdpUrl: string, options?: { timeoutMs?: number }) => Promise<Browser>;
 
 let kernelClientFactoryOverride: KernelClientFactory | undefined;
 let secretsProviderOverride: KernelSecretsProvider | undefined;
@@ -184,20 +290,19 @@ export function setKernelCdpConnectorForTests(connector?: KernelCdpConnector): v
   cdpConnectorOverride = connector;
 }
 
-async function createKernelClient(apiKey: string): Promise<KernelClientLike> {
-  if (kernelClientFactoryOverride) return kernelClientFactoryOverride(apiKey);
+async function createKernelClient(apiKey: string, config: KernelClientConfig = {}): Promise<KernelClientLike> {
+  if (kernelClientFactoryOverride) return kernelClientFactoryOverride(apiKey, config);
   const moduleName = "@onkernel/sdk";
   const mod = await import(moduleName);
-  const Kernel = (mod as { default?: new (opts: { apiKey: string }) => KernelClientLike; Kernel?: new (opts: { apiKey: string }) => KernelClientLike }).default
-    ?? (mod as { Kernel?: new (opts: { apiKey: string }) => KernelClientLike }).Kernel;
+  const Kernel = (mod as { default?: new (opts: { apiKey: string; projectID?: string; baseURL?: string; timeout?: number }) => KernelClientLike; Kernel?: new (opts: { apiKey: string; projectID?: string; baseURL?: string; timeout?: number }) => KernelClientLike }).default
+    ?? (mod as { Kernel?: new (opts: { apiKey: string; projectID?: string; baseURL?: string; timeout?: number }) => KernelClientLike }).Kernel;
   if (!Kernel) throw new BrowserError("@onkernel/sdk did not export Kernel", "KERNEL_SDK_INVALID", true);
-  return new Kernel({ apiKey });
-}
-
-async function createConfiguredKernelClient(): Promise<KernelClientLike> {
-  const secrets = await getSecretsProvider();
-  const apiKey = await resolveKernelApiKey(secrets);
-  return createKernelClient(apiKey);
+  return new Kernel({
+    apiKey,
+    ...(config.projectId ? { projectID: config.projectId } : {}),
+    ...(config.baseUrl ? { baseURL: config.baseUrl } : {}),
+    ...(config.requestTimeoutMs ? { timeout: config.requestTimeoutMs } : {}),
+  });
 }
 
 async function getSecretsProvider(): Promise<KernelSecretsProvider> {
@@ -208,24 +313,37 @@ async function getSecretsProvider(): Promise<KernelSecretsProvider> {
 }
 
 export async function resolveKernelApiKey(secrets?: KernelSecretsProvider): Promise<string> {
+  const resolved = await resolveKernelApiKeyWithSource(secrets);
+  return resolved.value;
+}
+
+async function resolveKernelApiKeyWithSource(secrets?: KernelSecretsProvider): Promise<{ value: string; source: "vault" | "env" }> {
   const provider = secrets ?? await getSecretsProvider();
-  const vaultValue = (await provider.getSecretValue(KERNEL_API_KEY_SECRET_KEY).catch(() => undefined))?.trim();
-  if (vaultValue) return vaultValue;
+  const vaultValue = (await provider.getSecretValue(kernelCredentialVaultRef).catch(() => undefined))?.trim();
+  if (vaultValue) return { value: vaultValue, source: "vault" };
 
   const envValue = process.env["KERNEL_API_KEY"]?.trim();
   if (envValue) {
-    await provider.setSecretValue?.(KERNEL_API_KEY_SECRET_KEY, envValue, {
+    await provider.setSecretValue?.(kernelCredentialVaultRef, envValue, {
       type: "api_key",
       label: "Kernel API key for @hasna/browser",
     }).catch(() => {});
-    return envValue;
+    return { value: envValue, source: "env" };
   }
 
   throw new BrowserError(
-    `Kernel API key not found. Store it in @hasna/secrets at '${KERNEL_API_KEY_SECRET_KEY}' or set KERNEL_API_KEY for this process.`,
+    `Kernel API key not found. Store it in @hasna/secrets at '${kernelCredentialVaultRef}' or set ${kernelApiEnvName} for this process.`,
     "KERNEL_API_KEY_MISSING",
     true,
   );
+}
+
+function resolveKernelClientConfig(options: KernelCreateOptions = {}): KernelClientConfig {
+  return {
+    projectId: options.projectId ?? process.env["KERNEL_PROJECT_ID"]?.trim() ?? undefined,
+    baseUrl: options.baseUrl ?? process.env["KERNEL_BASE_URL"]?.trim() ?? undefined,
+    requestTimeoutMs: options.requestTimeoutMs,
+  };
 }
 
 export async function createKernelSandbox(options: KernelCreateOptions = {}): Promise<KernelSandbox> {
@@ -235,7 +353,7 @@ export async function createKernelSandbox(options: KernelCreateOptions = {}): Pr
 
   const secrets = await getSecretsProvider();
   const apiKey = options.apiKey?.trim() || await resolveKernelApiKey(secrets);
-  const client = await createKernelClient(apiKey);
+  const client = await createKernelClient(apiKey, resolveKernelClientConfig(options));
   const authMode = options.authMode ?? (options.startUrl ? "managed" : "off");
 
   let auth: Awaited<ReturnType<typeof prepareKernelManagedAuth>> | undefined;
@@ -253,6 +371,7 @@ export async function createKernelSandbox(options: KernelCreateOptions = {}): Pr
 
   const env = await resolveKernelEnv(options, secrets);
   const persistenceId = auth?.persistenceId
+    ?? options.profileName
     ?? options.persistenceId
     ?? process.env["OPEN_BROWSER_KERNEL_PERSISTENCE_ID"]?.trim()
     ?? undefined;
@@ -264,11 +383,30 @@ export async function createKernelSandbox(options: KernelCreateOptions = {}): Pr
     timeout_seconds: options.timeoutSeconds,
     viewport: options.viewport,
   };
+  if (options.chromePolicy) createParams.chrome_policy = options.chromePolicy;
+  if (options.extensions?.length) createParams.extensions = options.extensions;
+  if (typeof options.gpu === "boolean") createParams.gpu = options.gpu;
+  if (typeof options.kioskMode === "boolean") createParams.kiosk_mode = options.kioskMode;
   if (options.stealth) createParams.stealth = true;
-  if (persistenceId) createParams.profile = { name: persistenceId, save_changes: true };
+  if (options.proxyId) createParams.proxy_id = options.proxyId;
+  if (options.tags && Object.keys(options.tags).length > 0) createParams.tags = options.tags;
+  if (typeof options.telemetry !== "undefined") createParams.telemetry = options.telemetry;
+  if (persistenceId && !auth?.authConnectionId) {
+    await ensureKernelProfile(client, persistenceId);
+  }
+  if (options.profileId) {
+    createParams.profile = { id: options.profileId, save_changes: options.saveProfileChanges ?? true };
+  } else if (persistenceId) {
+    createParams.profile = { name: persistenceId, save_changes: options.saveProfileChanges ?? true };
+  }
   if (Object.keys(env).length > 0) createParams.env = env;
 
-  const browser = await client.browsers.create(createParams);
+  let browser: KernelBrowserCreateResponse;
+  try {
+    browser = await client.browsers.create(createParams);
+  } catch (err) {
+    throw toRedactedKernelError(err, "Failed to create Kernel browser session", "KERNEL_CREATE_FAILED");
+  }
   return {
     client,
     metadata: {
@@ -276,7 +414,15 @@ export async function createKernelSandbox(options: KernelCreateOptions = {}): Pr
       cdpWsUrl: browser.cdp_ws_url,
       webdriverWsUrl: browser.webdriver_ws_url,
       browserLiveViewUrl: browser.browser_live_view_url,
-      persistenceId: browser.persistence_id ?? persistenceId ?? browser.profile?.id ?? browser.profile?.name ?? undefined,
+      baseUrl: browser.base_url,
+      persistenceId: browser.persistence_id ?? options.profileId ?? persistenceId ?? browser.profile?.id ?? browser.profile?.name ?? undefined,
+      name: browser.name,
+      headless: browser.headless,
+      stealth: browser.stealth,
+      timeoutSeconds: browser.timeout_seconds,
+      proxyId: browser.proxy_id,
+      gpu: browser.gpu,
+      kioskMode: browser.kiosk_mode,
       authConnectionId: auth?.authConnectionId,
       authStatus: auth?.authStatus,
       authLiveViewUrl: auth?.authLiveViewUrl,
@@ -289,75 +435,13 @@ export async function closeKernelSandbox(sandbox: KernelSandbox): Promise<void> 
   await sandbox.client.browsers.deleteByID(sandbox.metadata.sessionId);
 }
 
-export async function verifyKernelSandboxClosed(
-  sandbox: KernelSandbox,
-  options: { timeoutMs?: number; pollMs?: number } = {},
-): Promise<{ closed: boolean; verified: boolean; status?: string }> {
-  const deadline = Date.now() + (options.timeoutMs ?? 1500);
-  const pollMs = options.pollMs ?? 500;
-  let latest: { closed: boolean; verified: boolean; status?: string } = {
-    closed: false,
-    verified: false,
-    status: "unverified",
-  };
-
-  while (Date.now() <= deadline) {
-    latest = await inspectKernelBrowserClosed(sandbox.client, sandbox.metadata.sessionId);
-    if (latest.verified) return latest;
-    await sleep(Math.min(pollMs, Math.max(0, deadline - Date.now())));
-  }
-
-  return latest;
-}
-
-export async function executeKernelPlaywright(
-  sessionId: string,
-  code: string,
-  options: { timeoutSec?: number } = {},
-): Promise<Record<string, unknown>> {
-  const client = await createConfiguredKernelClient();
-  if (!client.browsers.playwright?.execute) {
-    throw new BrowserError("Kernel SDK does not expose Playwright execution", "KERNEL_PLAYWRIGHT_UNAVAILABLE", true);
-  }
+export async function deleteKernelBrowser(idOrName: string, options: KernelCreateOptions = {}): Promise<{ deleted: string }> {
+  const client = await createConfiguredKernelClient(options);
   try {
-    const result = await client.browsers.playwright.execute(sessionId, {
-      code,
-      timeout_sec: options.timeoutSec,
-    });
-    return redactKernelResult(result);
+    await client.browsers.deleteByID(idOrName);
+    return { deleted: idOrName };
   } catch (err) {
-    throw new BrowserError(
-      `Failed to execute Playwright code in Kernel browser: ${err instanceof Error ? redactKernelCapabilityUrl(err.message) : "unknown error"}`,
-      "KERNEL_PLAYWRIGHT_FAILED",
-      true,
-    );
-  }
-}
-
-export async function downloadKernelFileToDownloads(
-  sessionId: string,
-  remotePath: string,
-  options: { filename?: string; localSessionId?: string } = {},
-) {
-  const client = await createConfiguredKernelClient();
-  if (!client.browsers.fs?.readFile) {
-    throw new BrowserError("Kernel SDK does not expose browser filesystem readFile", "KERNEL_FS_UNAVAILABLE", true);
-  }
-  try {
-    const response = await client.browsers.fs.readFile(sessionId, { path: remotePath });
-    const buffer = Buffer.from(await response.arrayBuffer());
-    return saveToDownloads(buffer, options.filename ?? (basename(remotePath) || "kernel-file"), {
-      sessionId: options.localSessionId,
-      type: "kernel-file",
-      sourceUrl: `kernel://${sessionId}${remotePath}`,
-      metadata: { remote_path: remotePath, kernel_session_id: sessionId },
-    });
-  } catch (err) {
-    throw new BrowserError(
-      `Failed to download Kernel file '${remotePath}': ${err instanceof Error ? redactKernelCapabilityUrl(err.message) : "unknown error"}`,
-      "KERNEL_FS_DOWNLOAD_FAILED",
-      true,
-    );
+    throw toRedactedKernelError(err, `Failed to delete Kernel browser '${idOrName}'`, "KERNEL_DELETE_FAILED");
   }
 }
 
@@ -365,8 +449,8 @@ export async function connectKernelBrowser(options: KernelCreateOptions = {}): P
   const sandbox = await createKernelSandbox(options);
   const connector = cdpConnectorOverride ?? connectToExistingBrowser;
   try {
-    const browser = await connectKernelCdpWithRetry(connector, sandbox.metadata.cdpWsUrl, {
-      timeoutMs: options.cdpConnectTimeoutMs,
+    const browser = await connector(sandbox.metadata.cdpWsUrl, {
+      timeoutMs: options.requestTimeoutMs ?? 120_000,
     });
     return {
       browser,
@@ -376,84 +460,290 @@ export async function connectKernelBrowser(options: KernelCreateOptions = {}): P
   } catch (err) {
     await closeKernelSandbox(sandbox).catch(() => {});
     throw new BrowserError(
-      `Failed to connect to Kernel browser via CDP: ${err instanceof Error ? redactKernelCapabilityUrl(err.message) : "unknown error"}`,
+      `Failed to connect to Kernel browser via CDP: ${err instanceof Error ? redactKernelSensitiveText(err.message) : "unknown error"}`,
       "KERNEL_CDP_CONNECT_FAILED",
       true,
     );
   }
 }
 
-async function connectKernelCdpWithRetry(
-  connector: KernelCdpConnector,
-  cdpWsUrl: string,
-  opts: { timeoutMs?: number } = {},
-): Promise<Browser> {
-  const deadline = Date.now() + (opts.timeoutMs ?? 90000);
-  let attempt = 0;
-  let lastError: unknown;
+export async function getKernelStatus(options: KernelCreateOptions & { checkRemote?: boolean; listLimit?: number } = {}): Promise<KernelRuntimeStatus> {
+  const setup = {
+    env: "provide KERNEL_API_KEY in the process environment",
+    vault: `secrets set ${kernelCredentialVaultRef} <key>`,
+    statusCommand: "browser kernel status --remote",
+  };
 
-  while (Date.now() < deadline) {
-    attempt++;
-    const remaining = Math.max(1000, deadline - Date.now());
-    const timeoutMs = Math.min(15000, remaining);
+  let sdkVersion: string | undefined;
+  let sdkAvailable = true;
+  try {
+    const pkgPath = moduleRequire.resolve("@onkernel/sdk/package.json");
+    sdkVersion = (JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: string }).version;
+  } catch {
+    sdkAvailable = false;
+  }
+
+  let source: "vault" | "env" | "missing" = "missing";
+  let apiKey: string | undefined;
+  try {
+    const resolved = options.apiKey?.trim()
+      ? { value: options.apiKey.trim(), source: "env" as const }
+      : await resolveKernelApiKeyWithSource(await getSecretsProvider());
+    apiKey = resolved.value;
+    source = options.apiKey?.trim() ? "env" : resolved.source;
+  } catch {
+    return {
+      available: sdkAvailable,
+      configured: false,
+      apiKeySource: "missing",
+      vaultRef: kernelCredentialVaultRef,
+      projectIdConfigured: Boolean(options.projectId ?? process.env["KERNEL_PROJECT_ID"]?.trim()),
+      baseUrlConfigured: Boolean(options.baseUrl ?? process.env["KERNEL_BASE_URL"]?.trim()),
+      sdkVersion,
+      setup,
+    };
+  }
+
+  const status: KernelRuntimeStatus = {
+    available: sdkAvailable,
+    configured: true,
+    apiKeySource: source,
+    vaultRef: kernelCredentialVaultRef,
+    projectIdConfigured: Boolean(options.projectId ?? process.env["KERNEL_PROJECT_ID"]?.trim()),
+    baseUrlConfigured: Boolean(options.baseUrl ?? process.env["KERNEL_BASE_URL"]?.trim()),
+    sdkVersion,
+    setup,
+  };
+
+  if (options.checkRemote && apiKey) {
     try {
-      return await connector(cdpWsUrl, { timeoutMs });
+      const client = await createKernelClient(apiKey, resolveKernelClientConfig(options));
+      const sessions = await listKernelBrowsersWithClient(client, { limit: options.listLimit ?? 25, status: "active" });
+      status.remote = { ok: true, activeSessions: sessions.length };
     } catch (err) {
-      lastError = err;
-      if (!isRetryableKernelCdpConnectError(err)) break;
-      if (Date.now() >= deadline) break;
-      await new Promise((resolve) => setTimeout(resolve, Math.min(2000 * attempt, 5000)));
+      status.remote = {
+        ok: false,
+        error: redactKernelSensitiveText(err instanceof Error ? err.message : String(err)),
+        code: err instanceof BrowserError ? err.code : "KERNEL_STATUS_FAILED",
+      };
     }
   }
 
-  throw lastError instanceof Error ? lastError : new Error("Kernel CDP connection failed");
+  return status;
 }
 
-function isRetryableKernelCdpConnectError(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err);
-  return /Timeout|ECONNREFUSED|ECONNRESET|ENOTFOUND|ETIMEDOUT|websocket|ws connecting|browser not found|503|502|504/i.test(message);
+export async function retrieveKernelBrowser(idOrName: string, options: KernelCreateOptions = {}): Promise<Record<string, unknown>> {
+  const client = await createConfiguredKernelClient(options);
+  if (!client.browsers.retrieve) throw new BrowserError("Kernel SDK does not expose browser retrieve", "KERNEL_STATUS_UNAVAILABLE", true);
+  try {
+    return sanitizeKernelBrowser(await client.browsers.retrieve(idOrName, { include_deleted: true }));
+  } catch (err) {
+    throw toRedactedKernelError(err, `Failed to retrieve Kernel browser '${idOrName}'`, "KERNEL_RETRIEVE_FAILED");
+  }
 }
 
-async function inspectKernelBrowserClosed(
-  client: KernelClientLike,
+export async function listKernelBrowsers(options: KernelCreateOptions & { status?: string; limit?: number } = {}): Promise<Array<Record<string, unknown>>> {
+  const client = await createConfiguredKernelClient(options);
+  const sessions = await listKernelBrowsersWithClient(client, options);
+  return sessions.map(sanitizeKernelBrowser);
+}
+
+export async function listKernelFiles(sessionId: string, remotePath = "/", options: KernelCreateOptions = {}): Promise<KernelFileInfo[]> {
+  const client = await createConfiguredKernelClient(options);
+  if (!client.browsers.fs?.listFiles) throw new BrowserError("Kernel SDK does not expose browser filesystem listFiles", "KERNEL_FS_UNAVAILABLE", true);
+  try {
+    return await client.browsers.fs.listFiles(sessionId, { path: remotePath });
+  } catch (err) {
+    throw toRedactedKernelError(err, `Failed to list Kernel files at '${remotePath}'`, "KERNEL_FS_LIST_FAILED");
+  }
+}
+
+export async function getKernelFileInfo(sessionId: string, remotePath: string, options: KernelCreateOptions = {}): Promise<KernelFileInfo> {
+  const client = await createConfiguredKernelClient(options);
+  if (!client.browsers.fs?.fileInfo) throw new BrowserError("Kernel SDK does not expose browser filesystem fileInfo", "KERNEL_FS_UNAVAILABLE", true);
+  try {
+    return await client.browsers.fs.fileInfo(sessionId, { path: remotePath });
+  } catch (err) {
+    throw toRedactedKernelError(err, `Failed to inspect Kernel file '${remotePath}'`, "KERNEL_FS_INFO_FAILED");
+  }
+}
+
+export async function downloadKernelFileToDownloads(
   sessionId: string,
-): Promise<{ closed: boolean; verified: boolean; status?: string }> {
-  if (client.browsers.retrieve) {
-    try {
-      const browser = await client.browsers.retrieve(sessionId, { include_deleted: true });
-      const status = kernelBrowserStatus(browser);
-      const closed = kernelBrowserIsClosed(browser);
-      return { closed, verified: closed, status };
-    } catch (err) {
-      if (isKernelNotFoundError(err)) return { closed: true, verified: true, status: "deleted" };
-      return { closed: false, verified: false, status: "retrieve-failed" };
-    }
+  remotePath: string,
+  options: KernelCreateOptions & { localSessionId?: string; filename?: string } = {},
+) {
+  const client = await createConfiguredKernelClient(options);
+  if (!client.browsers.fs?.readFile) throw new BrowserError("Kernel SDK does not expose browser filesystem readFile", "KERNEL_FS_UNAVAILABLE", true);
+  try {
+    const response = await client.browsers.fs.readFile(sessionId, { path: remotePath });
+    const buffer = Buffer.from(await response.arrayBuffer());
+    return saveToDownloads(buffer, (options.filename ?? basename(remotePath)) || "kernel-file", {
+      sessionId: options.localSessionId,
+      type: "kernel-file",
+      sourceUrl: `kernel://${sessionId}${remotePath}`,
+      metadata: { remote_path: remotePath, kernel_session_id: sessionId },
+    });
+  } catch (err) {
+    throw toRedactedKernelError(err, `Failed to download Kernel file '${remotePath}'`, "KERNEL_FS_DOWNLOAD_FAILED");
   }
+}
 
-  if (client.browsers.list) {
-    try {
-      const browsers = await listKernelBrowsersWithClient(client, { status: "active", limit: 100 });
-      const match = browsers.find((browser) => kernelBrowserMatches(browser, sessionId));
-      if (!match) return { closed: true, verified: true, status: "not-active" };
-      return { closed: kernelBrowserIsClosed(match), verified: kernelBrowserIsClosed(match), status: kernelBrowserStatus(match) };
-    } catch (err) {
-      if (isKernelNotFoundError(err)) return { closed: true, verified: true, status: "deleted" };
-      return { closed: false, verified: false, status: "list-failed" };
-    }
+export async function executeKernelPlaywright(
+  sessionId: string,
+  code: string,
+  options: KernelCreateOptions & { timeoutSec?: number } = {},
+): Promise<KernelPlaywrightResult> {
+  const client = await createConfiguredKernelClient(options);
+  if (!client.browsers.playwright?.execute) throw new BrowserError("Kernel SDK does not expose Playwright execution", "KERNEL_PLAYWRIGHT_UNAVAILABLE", true);
+  try {
+    const result = await client.browsers.playwright.execute(sessionId, {
+      code,
+      timeout_sec: options.timeoutSec,
+    });
+    return {
+      ...result,
+      result: redactKernelResult(result.result),
+      error: result.error ? redactKernelSensitiveText(result.error) : undefined,
+      stderr: result.stderr ? redactKernelSensitiveText(result.stderr) : undefined,
+      stdout: result.stdout ? redactKernelSensitiveText(result.stdout) : undefined,
+    };
+  } catch (err) {
+    throw toRedactedKernelError(err, "Failed to execute Playwright code in Kernel browser", "KERNEL_PLAYWRIGHT_FAILED");
   }
+}
 
-  return { closed: false, verified: false, status: "verification-unavailable" };
+export async function captureKernelComputerScreenshotToDownloads(
+  sessionId: string,
+  options: KernelCreateOptions & {
+    localSessionId?: string;
+    region?: { x: number; y: number; width: number; height: number };
+    filename?: string;
+  } = {},
+) {
+  const client = await createConfiguredKernelClient(options);
+  if (!client.browsers.computer?.captureScreenshot) throw new BrowserError("Kernel SDK does not expose computer screenshot capture", "KERNEL_COMPUTER_UNAVAILABLE", true);
+  try {
+    const response = await client.browsers.computer.captureScreenshot(sessionId, options.region ? { region: options.region } : undefined);
+    const buffer = Buffer.from(await response.arrayBuffer());
+    return saveToDownloads(buffer, options.filename ?? `kernel-screenshot-${sessionId}.png`, {
+      sessionId: options.localSessionId,
+      type: "screenshot",
+      sourceUrl: `kernel://${sessionId}/computer/screenshot`,
+      metadata: { kernel_session_id: sessionId, region: options.region },
+    });
+  } catch (err) {
+    throw toRedactedKernelError(err, "Failed to capture Kernel computer screenshot", "KERNEL_COMPUTER_SCREENSHOT_FAILED");
+  }
+}
+
+export async function runKernelComputerAction(
+  sessionId: string,
+  action: "click" | "move" | "type" | "press" | "scroll" | "batch",
+  params: Record<string, unknown>,
+  options: KernelCreateOptions = {},
+): Promise<{ ok: true }> {
+  const client = await createConfiguredKernelClient(options);
+  const computer = client.browsers.computer;
+  if (!computer) throw new BrowserError("Kernel SDK does not expose computer controls", "KERNEL_COMPUTER_UNAVAILABLE", true);
+  try {
+    if (action === "click" && computer.clickMouse) await computer.clickMouse(sessionId, params);
+    else if (action === "move" && computer.moveMouse) await computer.moveMouse(sessionId, params);
+    else if (action === "type" && computer.typeText) await computer.typeText(sessionId, params);
+    else if (action === "press" && computer.pressKey) await computer.pressKey(sessionId, params);
+    else if (action === "scroll" && computer.scroll) await computer.scroll(sessionId, params);
+    else if (action === "batch" && computer.batch) await computer.batch(sessionId, { actions: params.actions as Array<Record<string, unknown>> });
+    else throw new BrowserError(`Kernel computer action '${action}' is unavailable in this SDK`, "KERNEL_COMPUTER_ACTION_UNAVAILABLE", true);
+    return { ok: true };
+  } catch (err) {
+    if (err instanceof BrowserError) throw err;
+    throw toRedactedKernelError(err, `Failed to run Kernel computer action '${action}'`, "KERNEL_COMPUTER_ACTION_FAILED");
+  }
+}
+
+export async function listKernelReplays(sessionId: string, options: KernelCreateOptions = {}): Promise<KernelReplayInfo[]> {
+  const client = await createConfiguredKernelClient(options);
+  if (!client.browsers.replays?.list) throw new BrowserError("Kernel SDK does not expose replay list", "KERNEL_REPLAY_UNAVAILABLE", true);
+  try {
+    return await client.browsers.replays.list(sessionId);
+  } catch (err) {
+    throw toRedactedKernelError(err, "Failed to list Kernel replays", "KERNEL_REPLAY_LIST_FAILED");
+  }
+}
+
+export async function startKernelReplay(
+  sessionId: string,
+  options: KernelCreateOptions & { framerate?: number; maxDurationSeconds?: number; recordAudio?: boolean } = {},
+): Promise<KernelReplayInfo> {
+  const client = await createConfiguredKernelClient(options);
+  if (!client.browsers.replays?.start) throw new BrowserError("Kernel SDK does not expose replay start", "KERNEL_REPLAY_UNAVAILABLE", true);
+  try {
+    return await client.browsers.replays.start(sessionId, {
+      framerate: options.framerate,
+      max_duration_in_seconds: options.maxDurationSeconds,
+      record_audio: options.recordAudio,
+    });
+  } catch (err) {
+    throw toRedactedKernelError(err, "Failed to start Kernel replay", "KERNEL_REPLAY_START_FAILED");
+  }
+}
+
+export async function stopKernelReplay(sessionId: string, replayId: string, options: KernelCreateOptions = {}): Promise<{ stopped: string }> {
+  const client = await createConfiguredKernelClient(options);
+  if (!client.browsers.replays?.stop) throw new BrowserError("Kernel SDK does not expose replay stop", "KERNEL_REPLAY_UNAVAILABLE", true);
+  try {
+    await client.browsers.replays.stop(replayId, { id: sessionId });
+    return { stopped: replayId };
+  } catch (err) {
+    throw toRedactedKernelError(err, "Failed to stop Kernel replay", "KERNEL_REPLAY_STOP_FAILED");
+  }
+}
+
+export async function downloadKernelReplayToDownloads(
+  sessionId: string,
+  replayId: string,
+  options: KernelCreateOptions & { localSessionId?: string; filename?: string } = {},
+) {
+  const client = await createConfiguredKernelClient(options);
+  if (!client.browsers.replays?.download) throw new BrowserError("Kernel SDK does not expose replay download", "KERNEL_REPLAY_UNAVAILABLE", true);
+  try {
+    const response = await client.browsers.replays.download(replayId, { id: sessionId });
+    const buffer = Buffer.from(await response.arrayBuffer());
+    return saveToDownloads(buffer, options.filename ?? `kernel-replay-${replayId}.mp4`, {
+      sessionId: options.localSessionId,
+      type: "video",
+      sourceUrl: `kernel://${sessionId}/replays/${replayId}`,
+      metadata: { kernel_session_id: sessionId, replay_id: replayId },
+    });
+  } catch (err) {
+    throw toRedactedKernelError(err, "Failed to download Kernel replay", "KERNEL_REPLAY_DOWNLOAD_FAILED");
+  }
+}
+
+async function createConfiguredKernelClient(options: KernelCreateOptions = {}): Promise<KernelClientLike> {
+  const secrets = await getSecretsProvider();
+  const apiKey = options.apiKey?.trim() || await resolveKernelApiKey(secrets);
+  return createKernelClient(apiKey, resolveKernelClientConfig(options));
+}
+
+async function ensureKernelProfile(client: KernelClientLike, profileName: string): Promise<void> {
+  if (!client.profiles?.create) return;
+  try {
+    await client.profiles.create({ name: profileName });
+  } catch (err) {
+    if (!isConflictError(err)) throw toRedactedKernelError(err, `Failed to create Kernel profile '${profileName}'`, "KERNEL_PROFILE_CREATE_FAILED");
+  }
 }
 
 async function listKernelBrowsersWithClient(
   client: KernelClientLike,
   options: { status?: string; limit?: number } = {},
-): Promise<KernelBrowserInspectResponse[]> {
-  if (!client.browsers.list) return [];
+): Promise<KernelBrowserCreateResponse[]> {
+  if (!client.browsers.list) throw new BrowserError("Kernel SDK does not expose browser list", "KERNEL_LIST_UNAVAILABLE", true);
   const limit = options.limit ?? 25;
   const result = await client.browsers.list({ status: options.status, limit });
-  if (isAsyncIterable<KernelBrowserInspectResponse>(result)) {
-    const sessions: KernelBrowserInspectResponse[] = [];
+  const sessions: KernelBrowserCreateResponse[] = [];
+  if (isAsyncIterable<KernelBrowserCreateResponse>(result)) {
     for await (const item of result) {
       sessions.push(item);
       if (sessions.length >= limit) break;
@@ -461,28 +751,64 @@ async function listKernelBrowsersWithClient(
     return sessions;
   }
   const payload = await result;
-  const items = Array.isArray(payload) ? payload : payload.items ?? payload.data ?? [];
-  return items.slice(0, limit);
+  return (payload.items ?? payload.data ?? []).slice(0, limit);
 }
 
-function kernelBrowserMatches(browser: KernelBrowserInspectResponse, sessionId: string): boolean {
-  return browser.session_id === sessionId || browser.id === sessionId || browser.name === sessionId;
+function sanitizeKernelBrowser(browser: KernelBrowserCreateResponse): Record<string, unknown> {
+  return {
+    session_id: browser.session_id,
+    name: browser.name,
+    status: browser.deleted_at ? "deleted" : "active",
+    created_at: browser.created_at,
+    deleted_at: browser.deleted_at,
+    headless: browser.headless,
+    stealth: browser.stealth,
+    timeout_seconds: browser.timeout_seconds,
+    start_url: browser.start_url,
+    profile: browser.profile,
+    persistence_id: browser.persistence_id ?? browser.profile?.id ?? browser.profile?.name ?? undefined,
+    proxy_id: browser.proxy_id,
+    gpu: browser.gpu,
+    kiosk_mode: browser.kiosk_mode,
+    tags: browser.tags,
+    usage: browser.usage,
+    telemetry: browser.telemetry,
+    has_cdp_ws_url: Boolean(browser.cdp_ws_url),
+    has_webdriver_ws_url: Boolean(browser.webdriver_ws_url),
+    has_browser_live_view_url: Boolean(browser.browser_live_view_url),
+    browser_live_view_url: browser.browser_live_view_url ? redactKernelSensitiveText(browser.browser_live_view_url) : undefined,
+    base_url: browser.base_url ? redactKernelSensitiveText(browser.base_url) : undefined,
+  };
 }
 
-function kernelBrowserIsClosed(browser: KernelBrowserInspectResponse): boolean {
-  const status = kernelBrowserStatus(browser).toLowerCase();
-  return Boolean(browser.deleted_at) || ["deleted", "closed", "terminated", "not-active"].includes(status);
-}
-
-function kernelBrowserStatus(browser: KernelBrowserInspectResponse): string {
-  if (browser.deleted_at) return "deleted";
-  return typeof browser.status === "string" && browser.status ? browser.status : "active";
-}
-
-function isKernelNotFoundError(err: unknown): boolean {
+function toRedactedKernelError(err: unknown, prefix: string, code: string): BrowserError {
   const message = err instanceof Error ? err.message : String(err);
-  const maybe = err && typeof err === "object" ? err as { status?: number } : {};
-  return maybe.status === 404 || /404|not found|browser not found|already been deleted/i.test(message);
+  return new BrowserError(`${prefix}: ${redactKernelSensitiveText(message)}`, code, true);
+}
+
+export function redactKernelSensitiveText(message: string): string {
+  let redacted = message
+    .replace(/wss?:\/\/[^\s"')]+/gi, "[redacted-kernel-websocket-url]")
+    .replace(/https?:\/\/[^\s"')]+/gi, (url) => {
+      try {
+        const parsed = new URL(url);
+        for (const key of [...parsed.searchParams.keys()]) {
+          if (/jwt|token|key|secret|password|credential/i.test(key)) {
+            parsed.searchParams.set(key, "[redacted]");
+          }
+        }
+        return parsed.toString();
+      } catch {
+        return "[redacted-url]";
+      }
+    })
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+    .replace(new RegExp("(" + kernelApiEnvName + "\\s*=\\s*)[^\\s\"'`]+", "gi"), "$1[redacted]")
+    .replace(/(api[_-]?key["']?\s*[:=]\s*["']?)[^"',\s}]+/gi, "$1[redacted]");
+
+  const envKey = process.env[kernelApiEnvName]?.trim();
+  if (envKey) redacted = redacted.split(envKey).join("[redacted-kernel-api-key]");
+  return redacted;
 }
 
 function redactKernelResult<T>(value: T): T {

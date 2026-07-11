@@ -167,6 +167,7 @@ import { BrowserError as _BrowserError } from "../types/index.js";
 import { getSessionPage as _getSessionPage, getDefaultSession as _getDefaultSession, countActiveSessions as _countActiveSessions } from "../lib/session.js";
 import { takeScreenshot as _takeScreenshot } from "../lib/screenshot.js";
 import { startHAR as _startHAR } from "../lib/network.js";
+import { redactKernelSensitiveText as _redactKernelSensitiveText } from "../engines/kernel.js";
 
 // ─── Shared state ────────────────────────────────────────────────────────────
 
@@ -197,7 +198,7 @@ export function registerTool(
 }
 
 export function err(e: unknown) {
-  const msg = e instanceof Error ? e.message : String(e);
+  const msg = _redactKernelSensitiveText(e instanceof Error ? e.message : String(e));
   const code = e instanceof _BrowserError ? e.code : "ERROR";
   return {
     content: [{ type: "text" as const, text: JSON.stringify({ error: msg, code }) }],
@@ -207,7 +208,7 @@ export function err(e: unknown) {
 
 /** Like err() but attempts to capture a screenshot for context. */
 export async function errWithScreenshot(e: unknown, sessionId?: string) {
-  const msg = e instanceof Error ? e.message : String(e);
+  const msg = _redactKernelSensitiveText(e instanceof Error ? e.message : String(e));
   const code = e instanceof _BrowserError ? e.code : "ERROR";
   let screenshot_path: string | undefined;
   if (sessionId) {

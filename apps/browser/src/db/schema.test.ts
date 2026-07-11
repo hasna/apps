@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { getDatabase, resetDatabase } from "./schema.js";
+import { getDataDir, getDatabase, resetDatabase } from "./schema.js";
 
 let tmpDir: string;
 
@@ -95,5 +95,38 @@ describe("DB schema", () => {
     resetDatabase();
     const db2 = getDatabase();
     expect(db1).not.toBe(db2);
+  });
+
+  it("migrates legacy ~/.browser files into ~/.hasna/browser", () => {
+    const originalHome = process.env["HOME"];
+    const originalUserProfile = process.env["USERPROFILE"];
+    const oldDir = join(tmpDir, ".browser");
+    const newDir = join(tmpDir, ".hasna", "browser");
+
+    mkdirSync(oldDir, { recursive: true });
+    writeFileSync(join(oldDir, "browser.db"), "legacy-db");
+
+    delete process.env["BROWSER_DB_PATH"];
+    delete process.env["BROWSER_DATA_DIR"];
+    process.env["HOME"] = tmpDir;
+    delete process.env["USERPROFILE"];
+    resetDatabase();
+
+    try {
+      expect(getDataDir()).toBe(newDir);
+      expect(existsSync(newDir)).toBe(true);
+      expect(readFileSync(join(newDir, "browser.db"), "utf8")).toBe("legacy-db");
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env["HOME"];
+      } else {
+        process.env["HOME"] = originalHome;
+      }
+      if (originalUserProfile === undefined) {
+        delete process.env["USERPROFILE"];
+      } else {
+        process.env["USERPROFILE"] = originalUserProfile;
+      }
+    }
   });
 });

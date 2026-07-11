@@ -14,6 +14,8 @@ import { register as registerBrowse } from "./commands/browse.js";
 import { register as registerSession } from "./commands/session.js";
 import { register as registerTools } from "./commands/tools.js";
 import { register as registerExtension } from "./commands/extension.js";
+import { register as registerKernel } from "./commands/kernel.js";
+import { register as registerWorkflow } from "./commands/workflow.js";
 
 async function registerSharedEvents(program: Command): Promise<void> {
   try {
@@ -31,6 +33,8 @@ registerBrowse(program);
 registerSession(program);
 registerTools(program);
 registerExtension(program);
+registerKernel(program);
+registerWorkflow(program);
 registerStorageCommands(program);
 await registerSharedEvents(program);
 

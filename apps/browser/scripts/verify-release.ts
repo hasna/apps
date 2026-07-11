@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, extname, join, relative } from "node:path";
 import packageJson from "../package.json" assert { type: "json" };
 
 const PACKAGE_NAME = "@hasna/browser";
@@ -42,6 +42,49 @@ const FORBIDDEN_PATTERNS = [
   /^package\/.*\.env$/,
   /^package\/.*(?:secret|token|credential|password)/i,
 ];
+const SCANNABLE_EXTENSIONS = new Set([
+  ".css",
+  ".html",
+  ".js",
+  ".json",
+  ".md",
+  ".mjs",
+  ".sh",
+  ".toml",
+  ".ts",
+  ".txt",
+  ".yaml",
+  ".yml",
+]);
+const SCANNABLE_BASENAMES = new Set(["LICENSE"]);
+const RETIRED_CONTENT_PATTERNS = [
+  { label: "retired package import", pattern: rx(["@hasna/", "cloud"]) },
+  { label: "retired package name", pattern: rx(["open", "-cloud"]) },
+  { label: "retired MCP binary", pattern: rx(["cloud", "-mcp"]) },
+  { label: "retired MCP registrar", pattern: rx(["register", "Cloud", "Tools"]) },
+  { label: "retired CLI registrar", pattern: rx(["register", "Cloud", "Commands"]) },
+  { label: "retired service env", pattern: rx(["HASNA", "_CLOUD"]) },
+  { label: "retired open env", pattern: rx(["OPEN", "_CLOUD"]) },
+  { label: "retired data path", pattern: rx(["\\.hasna/", "cloud"]) },
+  { label: "retired sync command", pattern: rx(["cloud", " sync"]) },
+  { label: "retired database shorthand", pattern: rx(["\\br", "ds\\b"]) },
+];
+const TOKEN_CONTENT_PATTERNS = [
+  { label: "Anthropic-style API token", pattern: rx(["sk-", "ant-"]) },
+  { label: "OpenAI-style project token", pattern: rx(["sk-", "proj-"]) },
+  { label: "npm token", pattern: rx(["npm", "_[a-zA-Z]"], "") },
+  { label: "GitHub OAuth token", pattern: rx(["gh", "o_"]) },
+  { label: "GitHub PAT", pattern: rx(["gh", "p_"]) },
+  { label: "generic secret token", pattern: rx(["secret", "-token:"]) },
+  { label: "Context7 token", pattern: rx(["ctx7", "sk-"]) },
+  { label: "xAI token", pattern: rx(["x", "ai-"]) },
+  { label: "Google API key", pattern: rx(["AI", "za[a-zA-Z0-9]"], "") },
+  { label: "AWS access key", pattern: rx(["AK", "IA[A-Z0-9]"], "") },
+];
+
+function rx(parts: string[], flags = "i"): RegExp {
+  return new RegExp(parts.join(""), flags);
+}
 
 async function main(): Promise<void> {
   assertExtensionVersions();
@@ -51,11 +94,15 @@ async function main(): Promise<void> {
     const packed = await pack(tmp);
     const files = await listTarball(packed);
     await assertPackageContents(files, packed);
+    const extractDir = join(tmp, "packed");
+    mkdirSync(extractDir, { recursive: true });
+    await run(["tar", "-xzf", packed, "-C", extractDir], { quiet: true });
+    assertPackedContentClean(extractDir);
 
     const appDir = join(tmp, "app");
     mkdirSync(appDir, { recursive: true });
     await Bun.write(join(appDir, "package.json"), JSON.stringify({ type: "module", private: true }, null, 2));
-    await run(["npm", "install", "--omit=dev", "--ignore-scripts", packed], { cwd: appDir, quiet: true });
+    await run(["npm", "install", "--omit=dev", "--ignore-scripts", packed, "--dry-run=false"], { cwd: appDir, quiet: true });
     await smokeInstalledPackage(appDir);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
@@ -85,7 +132,7 @@ function assertExtensionVersions(): void {
 }
 
 async function pack(destination: string): Promise<string> {
-  const result = await run(["npm", "pack", "--json", "--pack-destination", destination], { quiet: true });
+  const result = await run(["npm", "pack", "--json", "--pack-destination", destination, "--dry-run=false"], { quiet: true });
   const parsed = JSON.parse(result.stdout) as Array<{ filename: string }>;
   const filename = parsed[0]?.filename;
   assert(filename, "npm pack did not return a filename");
@@ -124,6 +171,36 @@ async function getPackStats(): Promise<{ fileCount: number; unpackedSize: number
     fileCount: Array.isArray(metadata.files) ? metadata.files.length : 0,
     unpackedSize: typeof metadata.unpackedSize === "number" ? metadata.unpackedSize : 0,
   };
+}
+
+function assertPackedContentClean(extractDir: string): void {
+  for (const file of walkFiles(extractDir)) {
+    if (!shouldScanContent(file)) continue;
+    const content = readFileSync(file, "utf8");
+    const rel = relative(extractDir, file);
+    for (const { label, pattern } of [...RETIRED_CONTENT_PATTERNS, ...TOKEN_CONTENT_PATTERNS]) {
+      assert(!pattern.test(content), `packed artifact contains ${label} in ${rel}`);
+    }
+  }
+}
+
+function walkFiles(dir: string): string[] {
+  const entries = readdirSync(dir);
+  const files: string[] = [];
+  for (const entry of entries) {
+    const path = join(dir, entry);
+    const stat = statSync(path);
+    if (stat.isDirectory()) {
+      files.push(...walkFiles(path));
+    } else if (stat.isFile()) {
+      files.push(path);
+    }
+  }
+  return files;
+}
+
+function shouldScanContent(path: string): boolean {
+  return SCANNABLE_EXTENSIONS.has(extname(path).toLowerCase()) || SCANNABLE_BASENAMES.has(basename(path));
 }
 
 async function smokeInstalledPackage(appDir: string): Promise<void> {

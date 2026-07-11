@@ -5,6 +5,7 @@ import {
   getCachedSemanticAction,
   getSemanticActionCacheScope,
   observeSemanticActions,
+  runSemanticActionCandidates,
   runSemanticAction,
   type SemanticAction,
   type SemanticPageMap,
@@ -58,6 +59,42 @@ describe("semantic actions", () => {
     await runSemanticAction(page, "semantic-test-duplicates", action, { value: "Smith" });
     const values = await page.$$eval("input", (inputs) => inputs.map((input) => (input as HTMLInputElement).value));
     expect(values).toEqual(["", "Smith"]);
+  });
+
+  it("excludes disabled executable elements from observed click actions", async () => {
+    await page.setContent(`
+      <main>
+        <button disabled>Book Now</button>
+        <button id="book" onclick="document.getElementById('status').textContent='booked'">Book Now</button>
+        <span id="status">ready</span>
+      </main>
+    `);
+
+    const observed = await observeSemanticActions(page, "semantic-test-disabled-click", "click book now", {
+      maxActions: 8,
+      useModel: false,
+    });
+
+    expect(observed.actions.filter((action) => action.kind === "click" && action.label === "Book Now")).toHaveLength(1);
+    await runSemanticAction(page, "semantic-test-disabled-click", observed.actions[0], { allowRisk: true, timeout: 500 });
+    expect(await page.textContent("#status")).toBe("booked");
+  });
+
+  it("prefers exact book word matches over booking substrings", async () => {
+    await page.setContent(`
+      <main>
+        <button id="manage">Manage my booking</button>
+        <button id="book">BOOK</button>
+      </main>
+    `);
+
+    const observed = await observeSemanticActions(page, "semantic-test-book-word", "click BOOK", {
+      maxActions: 4,
+      useModel: false,
+    });
+
+    expect(observed.actions[0].label).toBe("BOOK");
+    expect(observed.actions.findIndex((action) => action.label === "Manage my booking")).toBeGreaterThan(0);
   });
 
   it("ignores arbitrary model selectors when a valid ref target is present", () => {
@@ -218,6 +255,157 @@ describe("semantic actions", () => {
     };
 
     await expect(runSemanticAction(page, "semantic-test-fail-closed", action)).rejects.toThrow(/requires approval/);
+  });
+
+  it("falls back to the next action candidate when the top candidate is not actionable", async () => {
+    await page.setContent(`
+      <main>
+        <button id="book" onclick="document.getElementById('status').textContent='booked'">Book</button>
+        <span id="status">ready</span>
+      </main>
+    `);
+
+    const observed = await observeSemanticActions(page, "semantic-test-candidate-fallback", "click book", {
+      useModel: false,
+    });
+    const valid = observed.actions[0];
+    const stale: SemanticAction = { ...valid, id: "act_click_stale", ref: "@e999" };
+
+    const acted = await runSemanticActionCandidates(page, "semantic-test-candidate-fallback", [stale, valid], {
+      allowRisk: true,
+      timeout: 500,
+    });
+
+    expect(acted.action.id).toBe(valid.id);
+    expect(acted.skippedCandidates).toHaveLength(1);
+    expect(acted.skippedCandidates?.[0].action.id).toBe("act_click_stale");
+    expect(await page.textContent("#status")).toBe("booked");
+  });
+
+  it("dismisses a generic visible consent overlay before retrying a blocked click", async () => {
+    await page.setContent(`
+      <main>
+        <button id="book" onclick="document.getElementById('status').textContent='booked'">Book</button>
+        <span id="status">ready</span>
+      </main>
+      <section
+        id="cookie-banner"
+        role="dialog"
+        aria-modal="true"
+        style="position: fixed; inset: 0; z-index: 9999; background: rgba(255,255,255,0.9); display: flex; align-items: center; justify-content: center;"
+      >
+        <div>
+          <p>We use cookies and privacy preferences to improve this site.</p>
+          <button id="reject-cookies" onclick="document.getElementById('cookie-banner').remove()">Reject all</button>
+        </div>
+      </section>
+    `);
+
+    const observed = await observeSemanticActions(page, "semantic-test-consent-overlay", "click book", {
+      useModel: false,
+    });
+
+    const acted = await runSemanticActionCandidates(page, "semantic-test-consent-overlay", observed.actions, {
+      allowRisk: true,
+      timeout: 500,
+    });
+
+    expect(acted.action.label).toBe("Book");
+    expect(acted.recoveries?.[0]).toMatchObject({ type: "consent_overlay", label: "Reject all" });
+    expect(await page.textContent("#status")).toBe("booked");
+  });
+
+  it("does not accept an accept-only consent dialog during automatic overlay recovery", async () => {
+    await page.setContent(`
+      <main>
+        <button id="book" onclick="document.getElementById('status').textContent='booked'">Book</button>
+        <span id="status">ready</span>
+      </main>
+      <section
+        id="cookie-banner"
+        role="dialog"
+        aria-modal="true"
+        style="position: fixed; inset: 0; z-index: 9999; background: rgba(255,255,255,0.9); display: flex; align-items: center; justify-content: center;"
+      >
+        <div>
+          <p>We use cookies and tracking consent to personalize this site.</p>
+          <button id="accept-cookies" onclick="window.__acceptedCookies = true; document.getElementById('cookie-banner').remove()">Accept all</button>
+        </div>
+      </section>
+    `);
+
+    const observed = await observeSemanticActions(page, "semantic-test-accept-only-consent", "click book", {
+      useModel: false,
+    });
+
+    await expect(runSemanticActionCandidates(page, "semantic-test-accept-only-consent", observed.actions, {
+      allowRisk: true,
+      timeout: 500,
+    })).rejects.toThrow(/blocked by visible consent overlay/i);
+
+    expect(await page.evaluate(() => Boolean((window as any).__acceptedCookies))).toBe(false);
+    expect(await page.textContent("#status")).toBe("ready");
+  });
+
+  it("does not claim success when an inert parent container intercepts a visible child button click", async () => {
+    await page.setContent(`
+      <main>
+        <div
+          id="btn-container"
+          style="display: inline-block; padding: 24px; background: #eee;"
+        >
+          <button id="book" onclick="document.getElementById('status').textContent='booked'" style="pointer-events: none;">Book</button>
+        </div>
+        <span id="status">ready</span>
+      </main>
+    `);
+
+    const observed = await observeSemanticActions(page, "semantic-test-inert-parent-intercept", "click book", {
+      useModel: false,
+    });
+
+    await expect(runSemanticActionCandidates(page, "semantic-test-inert-parent-intercept", observed.actions, {
+      allowRisk: true,
+      timeout: 500,
+    })).rejects.toThrow(/parent container interception/i);
+
+    expect(await page.textContent("#status")).toBe("ready");
+  });
+
+  it("does not treat an inert role button parent as successful parent-container recovery", async () => {
+    await page.setContent(`
+      <main>
+        <div
+          role="button"
+          id="wrapper"
+          style="display: inline-block; padding: 24px; background: #eee;"
+        >
+          <button id="book" onclick="document.getElementById('status').textContent='booked'" style="pointer-events: none;">Book</button>
+        </div>
+        <span id="status">ready</span>
+      </main>
+    `);
+
+    await observeSemanticActions(page, "semantic-test-role-button-parent-intercept", "click book", {
+      useModel: false,
+    });
+    const action: SemanticAction = {
+      id: "act_click_selector_book",
+      kind: "click",
+      ref: "selector:#book",
+      selector: "#book",
+      label: "Book",
+      confidence: 1,
+      risk: "external_mutation",
+      requiresApproval: true,
+    };
+
+    await expect(runSemanticActionCandidates(page, "semantic-test-role-button-parent-intercept", [action], {
+      allowRisk: true,
+      timeout: 500,
+    })).rejects.toThrow(/parent container interception/i);
+
+    expect(await page.textContent("#status")).toBe("ready");
   });
 
   it("omits readonly fields from semantic form candidates", async () => {

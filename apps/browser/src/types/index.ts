@@ -158,7 +158,19 @@ export interface SessionOptions {
   extensionServerUrl?: string;             // Extension engine only: browser-serve URL for out-of-process SDK/CLI dispatch
   extensionTokenId?: string;               // Extension engine only: target a specific paired extension token id
   kernelPersistenceId?: string;             // Kernel engine only: reusable profile/persistence name
+  kernelProfileId?: string;                 // Kernel engine only: reusable profile id
+  kernelProfileName?: string;               // Kernel engine only: reusable profile name
+  kernelSaveProfileChanges?: boolean;       // Kernel engine only: persist cookies/local storage on Kernel delete/timeout
   kernelTimeoutSeconds?: number;            // Kernel engine only: remote browser inactivity timeout
+  kernelProjectId?: string;                 // Kernel engine only: Kernel project id
+  kernelBaseUrl?: string;                   // Kernel engine only: custom Kernel API base URL
+  kernelRequestTimeoutMs?: number;          // Kernel engine only: SDK request timeout
+  kernelProxyId?: string;                   // Kernel engine only: Kernel proxy id
+  kernelGpu?: boolean;                      // Kernel engine only: GPU browser session
+  kernelKioskMode?: boolean;                // Kernel engine only: hide address bar/tabs in live view
+  kernelTags?: Record<string, string>;      // Kernel engine only: Kernel session tags
+  kernelTelemetry?: Record<string, unknown> | boolean; // Kernel engine only: telemetry config
+  kernelChromePolicy?: Record<string, unknown>; // Kernel engine only: Chrome enterprise policy overrides
   kernelEnv?: Record<string, string>;       // Kernel engine only: non-secret env values for sandbox creation
   kernelEnvSecrets?: Record<string, string>; // Kernel engine only: env var name -> @hasna/secrets key
   kernelAuthMode?: "managed" | "cdp_autofill" | "auto" | "off"; // Kernel engine only
@@ -413,6 +425,7 @@ export interface CrawlOptions {
   filter?: (url: string) => boolean;
   projectId?: string;
   engine?: BrowserEngine;
+  sessionOptions?: SessionOptions;
 }
 
 // ─── Extraction ──────────────────────────────────────────────────────────────

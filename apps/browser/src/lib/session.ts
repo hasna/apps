@@ -187,6 +187,9 @@ export async function createSession(opts: SessionOptions = {}): Promise<CreateSe
   if (resolvedEngine === "kernel") {
     const { connectKernelBrowser, autofillLoginFromVault } = await import("../engines/kernel.js");
     const kernelBrowser = await connectKernelBrowser({
+      projectId: opts.kernelProjectId,
+      baseUrl: opts.kernelBaseUrl,
+      requestTimeoutMs: opts.kernelRequestTimeoutMs,
       startUrl: opts.startUrl,
       name: opts.name,
       headless: opts.headless ?? true,
@@ -194,6 +197,15 @@ export async function createSession(opts: SessionOptions = {}): Promise<CreateSe
       viewport: opts.viewport,
       timeoutSeconds: opts.kernelTimeoutSeconds,
       persistenceId: opts.kernelPersistenceId,
+      profileId: opts.kernelProfileId,
+      profileName: opts.kernelProfileName,
+      saveProfileChanges: opts.kernelSaveProfileChanges,
+      proxyId: opts.kernelProxyId,
+      gpu: opts.kernelGpu,
+      kioskMode: opts.kernelKioskMode,
+      tags: opts.kernelTags,
+      telemetry: opts.kernelTelemetry,
+      chromePolicy: opts.kernelChromePolicy,
       env: opts.kernelEnv,
       envSecrets: opts.kernelEnvSecrets,
       authMode: opts.kernelAuthMode,
@@ -210,6 +222,9 @@ export async function createSession(opts: SessionOptions = {}): Promise<CreateSe
         browserLiveViewUrl: kernelBrowser.metadata.browserLiveViewUrl,
         deferListeners: shouldAutofill,
       });
+      if (opts.startUrl) {
+        await result.page.goto(opts.startUrl, { waitUntil: "domcontentloaded" }).catch(() => undefined);
+      }
       if (shouldAutofill && opts.startUrl) {
         await autofillLoginFromVault(result.page, opts.startUrl).catch(() => false);
         const handle = handles.get(result.session.id);
@@ -331,16 +346,20 @@ export async function createSession(opts: SessionOptions = {}): Promise<CreateSe
     if (opts.storageState) {
       const { loadStatePath } = await import("./storage-state.js");
       const statePath = loadStatePath(opts.storageState);
-      if (statePath) {
-        const context = await browser.newContext({
-          viewport: opts.viewport ?? { width: 1280, height: 720 },
-          userAgent: opts.userAgent,
-          storageState: statePath,
-        });
-        page = await context.newPage();
-      } else {
-        page = await getPlaywrightPage(browser, { viewport: opts.viewport, userAgent: opts.userAgent });
+      if (!statePath) {
+        // Silently proceeding unauthenticated would make callers believe they
+        // are testing a logged-in page when they are not — fail loudly instead.
+        throw new BrowserError(
+          `Storage state '${opts.storageState}' not found. Save one first (browser login --save-as, or browser session save-state) or check: browser session list-states`,
+          "BROWSER_STORAGE_STATE_NOT_FOUND",
+        );
       }
+      const context = await browser.newContext({
+        viewport: opts.viewport ?? { width: 1280, height: 720 },
+        userAgent: opts.userAgent,
+        storageState: statePath,
+      });
+      page = await context.newPage();
     } else {
       page = await getPlaywrightPage(browser, { viewport: opts.viewport, userAgent: opts.userAgent });
     }
@@ -518,6 +537,14 @@ export async function closeSession(sessionId: string): Promise<Session> {
 
 export function getSession(sessionId: string): Session {
   return dbGetSession(sessionId);
+}
+
+export function resolveKernelRemoteSessionId(sessionIdOrRemoteId: string): string {
+  try {
+    const session = dbGetSession(sessionIdOrRemoteId);
+    if (session.engine === "kernel" && session.remote_session_id) return session.remote_session_id;
+  } catch {}
+  return sessionIdOrRemoteId;
 }
 
 export function listSessions(filter?: { status?: SessionStatus; projectId?: string }): Session[] {

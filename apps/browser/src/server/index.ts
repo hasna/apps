@@ -3,7 +3,7 @@
 import { join, resolve } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { ZodError, type ZodSchema } from "zod";
-import { createSession, closeSession, listSessions, getSessionPage } from "../lib/session.js";
+import { createSession, closeSession, listSessions, getSessionPage, resolveKernelRemoteSessionId } from "../lib/session.js";
 import { navigate, click, type as typeAction, scroll } from "../lib/actions.js";
 import { getText, getHTML, getLinks, extract } from "../lib/extractor.js";
 import { takeScreenshot, generatePDF } from "../lib/screenshot.js";
@@ -24,7 +24,32 @@ import { listDownloads, getDownload, deleteDownload, cleanStaleDownloads } from 
 import { diffImages } from "../lib/gallery-diff.js";
 import type { BrowserEngine } from "../types/index.js";
 import { authenticate, corsHeaders, resolveSecurityConfig } from "./security.js";
-import { createSessionRequestSchema, extensionDispatchRequestSchema, extensionPairRequestSchema, formatZodError, videoStartRequestSchema } from "./schemas.js";
+import {
+  createSessionRequestSchema,
+  extensionDispatchRequestSchema,
+  extensionPairRequestSchema,
+  formatZodError,
+  kernelComputerScreenshotRequestSchema,
+  kernelPlaywrightRequestSchema,
+  kernelReplayStartRequestSchema,
+  videoStartRequestSchema,
+} from "./schemas.js";
+import {
+  captureKernelComputerScreenshotToDownloads,
+  deleteKernelBrowser,
+  downloadKernelFileToDownloads,
+  downloadKernelReplayToDownloads,
+  executeKernelPlaywright,
+  getKernelFileInfo,
+  getKernelStatus,
+  listKernelBrowsers,
+  listKernelFiles,
+  listKernelReplays,
+  redactKernelSensitiveText,
+  retrieveKernelBrowser,
+  startKernelReplay,
+  stopKernelReplay,
+} from "../engines/kernel.js";
 
 const PORT = resolveServerPort();
 const SECURITY = resolveSecurityConfig();
@@ -120,7 +145,7 @@ function badRequest(msg: string, extraHeaders?: Record<string, string>): Respons
 }
 
 function serverError(e: unknown, extraHeaders?: Record<string, string>): Response {
-  const msg = e instanceof Error ? e.message : String(e);
+  const msg = redactKernelSensitiveText(e instanceof Error ? e.message : String(e));
   return new Response(JSON.stringify({ error: msg }), {
     status: 500,
     headers: { "Content-Type": "application/json", ...(extraHeaders ?? {}) },
@@ -159,7 +184,7 @@ const server = Bun.serve<ExtensionSocketData>({
       headers: { "Content-Type": "application/json", ...(extraHeaders ?? {}) },
     }));
     const serverError = (error: unknown, extraHeaders?: Record<string, string>) => {
-      const msg = error instanceof Error ? error.message : String(error);
+      const msg = redactKernelSensitiveText(error instanceof Error ? error.message : String(error));
       return withHeaders(new Response(JSON.stringify({ error: msg }), {
         status: 500,
         headers: { "Content-Type": "application/json", ...(extraHeaders ?? {}) },
@@ -217,9 +242,131 @@ const server = Bun.serve<ExtensionSocketData>({
         const activeSessions = listSessions({ status: "active" });
         return ok({
           status: "ok",
+          name: "browser",
           active_sessions: activeSessions.length,
           uptime_ms: Date.now() - startTime,
         });
+      }
+
+      // ── Kernel status and remote session controls ───────────────────────
+      if (path === "/api/kernel/status" && method === "GET") {
+        return ok(await getKernelStatus({
+          checkRemote: url.searchParams.get("remote") === "true" || url.searchParams.get("remote") === "1",
+          listLimit: parseInt(url.searchParams.get("limit") ?? "25"),
+        }));
+      }
+
+      if (path === "/api/kernel/sessions" && method === "GET") {
+        return ok({
+          sessions: await listKernelBrowsers({
+            status: url.searchParams.get("status") ?? undefined,
+            limit: parseInt(url.searchParams.get("limit") ?? "25"),
+          }),
+        });
+      }
+
+      const kernelSessionMatch = path.match(/^\/api\/kernel\/sessions\/([^/]+)$/);
+      if (kernelSessionMatch && method === "GET") {
+        const id = resolveKernelRemoteSessionId(decodeURIComponent(kernelSessionMatch[1]));
+        return ok({ session: await retrieveKernelBrowser(id) });
+      }
+      if (kernelSessionMatch && method === "DELETE") {
+        const id = resolveKernelRemoteSessionId(decodeURIComponent(kernelSessionMatch[1]));
+        return ok(await deleteKernelBrowser(id));
+      }
+
+      const kernelFilesMatch = path.match(/^\/api\/kernel\/sessions\/([^/]+)\/files$/);
+      if (kernelFilesMatch && method === "GET") {
+        const id = resolveKernelRemoteSessionId(decodeURIComponent(kernelFilesMatch[1]));
+        const remotePath = url.searchParams.get("path") ?? "/";
+        return ok({ files: await listKernelFiles(id, remotePath), path: remotePath });
+      }
+
+      const kernelFileInfoMatch = path.match(/^\/api\/kernel\/sessions\/([^/]+)\/files\/info$/);
+      if (kernelFileInfoMatch && method === "GET") {
+        const id = resolveKernelRemoteSessionId(decodeURIComponent(kernelFileInfoMatch[1]));
+        const remotePath = url.searchParams.get("path");
+        if (!remotePath) return badRequest("path query parameter required", headers);
+        return ok({ file: await getKernelFileInfo(id, remotePath) });
+      }
+
+      const kernelFileDownloadMatch = path.match(/^\/api\/kernel\/sessions\/([^/]+)\/files\/download$/);
+      if (kernelFileDownloadMatch && method === "POST") {
+        const parsed = await safeJson(req);
+        if ("error" in parsed) return parsed.error;
+        const remotePath = parsed.body.path as string | undefined;
+        if (!remotePath) return badRequest("path required", headers);
+        const id = resolveKernelRemoteSessionId(decodeURIComponent(kernelFileDownloadMatch[1]));
+        const file = await downloadKernelFileToDownloads(id, remotePath, {
+          localSessionId: parsed.body.local_session_id as string | undefined,
+          filename: parsed.body.filename as string | undefined,
+        });
+        return ok({ download: file }, 201);
+      }
+
+      const kernelPlaywrightMatch = path.match(/^\/api\/kernel\/sessions\/([^/]+)\/playwright$/);
+      if (kernelPlaywrightMatch && method === "POST") {
+        const parsed = await safeJson(req);
+        if ("error" in parsed) return parsed.error;
+        const checked = parseBody(parsed.body, kernelPlaywrightRequestSchema, headers);
+        if ("error" in checked) return checked.error;
+        const id = resolveKernelRemoteSessionId(decodeURIComponent(kernelPlaywrightMatch[1]));
+        return ok(await executeKernelPlaywright(id, checked.value.code, { timeoutSec: checked.value.timeout_sec }));
+      }
+
+      const kernelComputerScreenshotMatch = path.match(/^\/api\/kernel\/sessions\/([^/]+)\/computer\/screenshot$/);
+      if (kernelComputerScreenshotMatch && method === "POST") {
+        const parsed = await safeJson(req);
+        if ("error" in parsed) return parsed.error;
+        const checked = parseBody(parsed.body, kernelComputerScreenshotRequestSchema, headers);
+        if ("error" in checked) return checked.error;
+        const id = resolveKernelRemoteSessionId(decodeURIComponent(kernelComputerScreenshotMatch[1]));
+        const file = await captureKernelComputerScreenshotToDownloads(id, {
+          region: checked.value.region,
+          filename: checked.value.filename,
+        });
+        return ok({ download: file }, 201);
+      }
+
+      const kernelReplaysMatch = path.match(/^\/api\/kernel\/sessions\/([^/]+)\/replays$/);
+      if (kernelReplaysMatch && method === "GET") {
+        const id = resolveKernelRemoteSessionId(decodeURIComponent(kernelReplaysMatch[1]));
+        return ok({ replays: await listKernelReplays(id) });
+      }
+      if (kernelReplaysMatch && method === "POST") {
+        const parsed = await safeJson(req);
+        if ("error" in parsed) return parsed.error;
+        const checked = parseBody(parsed.body, kernelReplayStartRequestSchema, headers);
+        if ("error" in checked) return checked.error;
+        const id = resolveKernelRemoteSessionId(decodeURIComponent(kernelReplaysMatch[1]));
+        return ok({ replay: await startKernelReplay(id, {
+          framerate: checked.value.framerate,
+          maxDurationSeconds: checked.value.max_duration_seconds,
+          recordAudio: checked.value.record_audio,
+        }) }, 201);
+      }
+
+      const kernelReplayStopMatch = path.match(/^\/api\/kernel\/sessions\/([^/]+)\/replays\/([^/]+)\/stop$/);
+      if (kernelReplayStopMatch && method === "POST") {
+        const id = resolveKernelRemoteSessionId(decodeURIComponent(kernelReplayStopMatch[1]));
+        const replayId = decodeURIComponent(kernelReplayStopMatch[2]);
+        return ok(await stopKernelReplay(id, replayId));
+      }
+
+      const kernelReplayDownloadMatch = path.match(/^\/api\/kernel\/sessions\/([^/]+)\/replays\/([^/]+)\/download$/);
+      if (kernelReplayDownloadMatch && method === "POST") {
+        const id = resolveKernelRemoteSessionId(decodeURIComponent(kernelReplayDownloadMatch[1]));
+        const replayId = decodeURIComponent(kernelReplayDownloadMatch[2]);
+        let filename: string | undefined;
+        let localSessionId: string | undefined;
+        if ((req.headers.get("content-type") ?? "").includes("application/json")) {
+          const parsed = await safeJson(req);
+          if ("error" in parsed) return parsed.error;
+          filename = parsed.body.filename as string | undefined;
+          localSessionId = parsed.body.local_session_id as string | undefined;
+        }
+        const file = await downloadKernelReplayToDownloads(id, replayId, { filename, localSessionId });
+        return ok({ download: file }, 201);
       }
 
       // ── Chrome extension pairing/status ─────────────────────────────────
@@ -293,7 +440,20 @@ const server = Bun.serve<ExtensionSocketData>({
           extensionServerUrl: body.extension_server_url,
           extensionTokenId: body.extension_token_id,
           kernelPersistenceId: body.kernel_persistence_id,
+          kernelProfileId: body.kernel_profile_id,
+          kernelProfileName: body.kernel_profile_name,
+          kernelSaveProfileChanges: body.kernel_save_profile_changes,
           kernelTimeoutSeconds: body.kernel_timeout_seconds,
+          kernelProjectId: body.kernel_project_id,
+          kernelBaseUrl: body.kernel_base_url,
+          kernelRequestTimeoutMs: body.kernel_request_timeout_ms,
+          kernelProxyId: body.kernel_proxy_id,
+          kernelGpu: body.kernel_gpu,
+          kernelKioskMode: body.kernel_kiosk_mode,
+          kernelTags: body.kernel_tags,
+          kernelTelemetry: body.kernel_telemetry,
+          kernelChromePolicy: body.kernel_chrome_policy,
+          kernelEnv: body.kernel_env,
           kernelEnvSecrets: body.kernel_env_secrets,
           kernelAuthMode: body.kernel_auth_mode,
         });

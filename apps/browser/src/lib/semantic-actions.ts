@@ -9,7 +9,7 @@ import {
   type BrowserActionRiskClassification,
 } from "./policy.js";
 import { sanitizeText } from "./sanitize.js";
-import { setLastSnapshot, takeSnapshot, type RefInfo } from "./snapshot.js";
+import { getLastSnapshot, getRefInfo, getRefLocator, getSessionRefs, setLastSnapshot, takeSnapshot, type RefInfo } from "./snapshot.js";
 
 export type SemanticActionKind = "click" | "fill" | "select" | "check" | "hover";
 export type SemanticRisk = BrowserActionRisk;
@@ -68,6 +68,17 @@ export interface SemanticAction {
   postconditions?: string[];
 }
 
+export interface SemanticSkippedAction {
+  action: SemanticAction;
+  error: string;
+}
+
+export interface SemanticActionRecovery {
+  type: "consent_overlay" | "parent_container_interception";
+  label: string;
+  selector: string;
+}
+
 export interface SemanticObserveResult {
   instruction: string;
   url: string;
@@ -82,6 +93,8 @@ export interface SemanticActResult {
   method: "ref" | "selector";
   url: string;
   title: string;
+  skippedCandidates?: SemanticSkippedAction[];
+  recoveries?: SemanticActionRecovery[];
 }
 
 export interface SemanticActionCacheScope {
@@ -116,6 +129,11 @@ function instructionTokens(instruction: string): string[] {
     .split(" ")
     .map((token) => token.trim())
     .filter((token) => token.length > 1 && !STOPWORDS.has(token));
+}
+
+function exactWordMatchCount(terms: string[], haystack: string): number {
+  const words = new Set(haystack.split(/[\s-]+/).filter(Boolean));
+  return terms.reduce((sum, term) => sum + (words.has(term) ? 1 : 0), 0);
 }
 
 function inferKind(instruction: string, element?: SemanticPageElement): SemanticActionKind {
@@ -183,6 +201,16 @@ function stableHash(value: string): string {
   return (hash >>> 0).toString(36);
 }
 
+function isExecutableKind(kind: SemanticActionKind): boolean {
+  return kind === "click" || kind === "fill" || kind === "select" || kind === "check";
+}
+
+function isActionableElement(element: Pick<SemanticPageElement, "visible" | "enabled">, kind: SemanticActionKind): boolean {
+  if (!element.visible) return false;
+  if (isExecutableKind(kind) && !element.enabled) return false;
+  return true;
+}
+
 export function semanticPageFingerprint(pageMap: SemanticPageMap): string {
   return stableHash(JSON.stringify({
     url: pageMap.url,
@@ -222,8 +250,9 @@ function deterministicFieldActions(pageMap: SemanticPageMap, instruction: string
       const role = fieldRole(field);
       const haystack = normalizeText(`${role} ${label}`);
       const tokenScore = tokens.reduce((sum, token) => sum + (haystack.includes(token) ? 1 : 0), 0);
+      const wordScore = exactWordMatchCount(tokens, haystack);
       const roleBoost = inferKind(instruction) === "fill" && ["textbox", "searchbox", "combobox"].includes(role) ? 2 : 0;
-      return { field, label, role, score: tokenScore + roleBoost };
+      return { field, label, role, score: tokenScore + wordScore + roleBoost };
     })
     .filter(({ score }) => score > 0)
     .sort((a, b) => b.score - a.score)
@@ -255,16 +284,17 @@ function deterministicActions(pageMap: SemanticPageMap, instruction: string): Se
   const scored = pageMap.elements
     .map((element) => {
       const haystack = normalizeText(`${element.role} ${element.name} ${element.description ?? ""}`);
+      const kind = inferKind(instruction, element);
       const score = tokens.reduce((sum, token) => sum + (haystack.includes(token) ? 1 : 0), 0);
-      const roleBoost = inferKind(instruction, element) === "fill" && ["textbox", "searchbox", "combobox"].includes(element.role) ? 1 : 0;
-      return { element, score: score + roleBoost };
+      const wordScore = exactWordMatchCount(tokens, haystack);
+      const roleBoost = kind === "fill" && ["textbox", "searchbox", "combobox"].includes(element.role) ? 1 : 0;
+      return { element, kind, score: score + wordScore + roleBoost };
     })
-    .filter(({ score }) => score > 0)
+    .filter(({ element, kind, score }) => isActionableElement(element, kind) && score > 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, 8);
 
-  const elementActions = scored.map(({ element, score }) => {
-    const kind = inferKind(instruction, element);
+  const elementActions = scored.map(({ element, kind, score }) => {
     const policy = inferRisk(element.name, instruction, kind, { role: element.role });
     return {
       id: actionId(element.ref, kind),
@@ -350,6 +380,7 @@ export function coerceModelAction(
   const kind = ["click", "fill", "select", "check", "hover"].includes(String(record.kind))
     ? String(record.kind) as SemanticActionKind
     : inferKind(instruction, { ref, role: targetRole, name: targetLabel, visible: true, enabled: true });
+  if (element && !isActionableElement(element, kind)) return null;
   const policy = inferRisk(targetLabel, instruction, kind, { role: targetRole, field });
   const modelRisk = typeof record.risk === "string" && ["none", "navigation", "external_mutation", "sensitive"].includes(record.risk)
     ? record.risk as SemanticRisk
@@ -501,7 +532,13 @@ export async function getSemanticPageMap(
       const control = field as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
       if (control.disabled) return false;
       if ("readOnly" in control && control.readOnly) return false;
+      if (field.closest("fieldset[disabled]")) return false;
       if (field.getAttribute("aria-hidden") === "true") return false;
+      if (field instanceof HTMLElement) {
+        const style = window.getComputedStyle(field);
+        if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) return false;
+        if (field.getClientRects().length === 0) return false;
+      }
       return true;
     }
     function mapField(field: Element) {
@@ -606,11 +643,401 @@ export async function observeSemanticActions(
   };
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isPotentialOverlayInterception(error: unknown): boolean {
+  const message = errorMessage(error);
+  return /intercepts pointer events|receives pointer events|subtree intercepts pointer events|element is outside of the viewport|timeout .*click|waiting for locator.*click/i.test(message);
+}
+
+function isPointerInterception(error: unknown): boolean {
+  return /intercepts pointer events|receives pointer events|subtree intercepts pointer events/i.test(errorMessage(error));
+}
+
+export function isSemanticActionabilityError(error: unknown): boolean {
+  const message = errorMessage(error);
+  if (/requires approval|needs a string value|needs a boolean value|blocked by visible consent overlay/i.test(message)) return false;
+  return /ElementNotFoundError|ELEMENT_NOT_FOUND|not found|not visible|not enabled|disabled|detached|outside of the viewport|intercepts pointer events|receives pointer events|Timeout|CLICK_FAILED|CLICK_REF_FAILED|FILL_REF_FAILED|SELECT_REF_FAILED|CHECK_REF_FAILED/i.test(message);
+}
+
+async function findBlockingConsentOverlayAction(page: Page): Promise<{
+  found: boolean;
+  controls: string[];
+  action?: { label: string; selector: string };
+}> {
+  return await page.evaluate(() => {
+    const consentText = /\b(cookie|cookies|consent|privacy|gdpr|personal data|tracking|preferences)\b/i;
+    const rejectText = /\b(reject|decline|deny|refuse|disagree|opt out|do not sell|necessary only|essential only|strictly necessary only)\b/i;
+    const closeText = /\b(close|dismiss)\b/i;
+    const saveChoicesText = /\b(save choices|save choice|save preferences|save preference|confirm choices|confirm choice)\b/i;
+    const unsafeConsentText = /\b(accept|agree|allow|ok|okay|got it|continue|enable|turn on|yes)\b/i;
+    const necessaryText = /\b(necessary|essential|required|strictly necessary|always active)\b/i;
+
+    function visible(el: Element): boolean {
+      if (!(el instanceof HTMLElement)) return false;
+      const style = window.getComputedStyle(el);
+      if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) return false;
+      return el.getClientRects().length > 0;
+    }
+
+    function unique(selector: string): string | undefined {
+      try {
+        return document.querySelectorAll(selector).length === 1 ? selector : undefined;
+      } catch {
+        return undefined;
+      }
+    }
+
+    function attrValue(value: string): string {
+      return value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
+    }
+
+    function labelFor(el: Element): string {
+      const direct = el.getAttribute("aria-label") || el.getAttribute("value") || el.getAttribute("title") || "";
+      if (direct.trim()) return direct.replace(/\s+/g, " ").trim();
+      const id = el.getAttribute("id");
+      if (id) {
+        const label = document.querySelector(`label[for="${CSS.escape(id)}"]`)?.textContent;
+        if (label?.trim()) return label.replace(/\s+/g, " ").trim();
+      }
+      const wrappingLabel = el.closest("label")?.textContent;
+      if (wrappingLabel?.trim()) return wrappingLabel.replace(/\s+/g, " ").trim();
+      return (el.textContent || "").replace(/\s+/g, " ").trim();
+    }
+
+    function hasOptionalGrantedConsent(root: Element): boolean {
+      const controls = Array.from(root.querySelectorAll("input[type='checkbox'], input[type='radio'], [role='checkbox'], [role='switch']"));
+      return controls.some((control) => {
+        if (!(control instanceof HTMLElement) || !visible(control)) return false;
+        const disabled = control.hasAttribute("disabled") || control.getAttribute("aria-disabled") === "true";
+        if (disabled) return false;
+        const checked = control instanceof HTMLInputElement
+          ? control.checked
+          : control.getAttribute("aria-checked") === "true";
+        if (!checked) return false;
+        return !necessaryText.test(labelFor(control));
+      });
+    }
+
+    function cssPath(el: Element): string {
+      const id = el.getAttribute("id");
+      if (id) {
+        const selector = unique(`#${CSS.escape(id)}`);
+        if (selector) return selector;
+      }
+      for (const attr of ["aria-label", "data-testid", "data-test", "name"]) {
+        const value = el.getAttribute(attr);
+        if (!value) continue;
+        const selector = unique(`${el.tagName.toLowerCase()}[${attr}="${attrValue(value)}"]`);
+        if (selector) return selector;
+      }
+      const parts: string[] = [];
+      let node: Element | null = el;
+      while (node && node.tagName.toLowerCase() !== "html") {
+        const tag = node.tagName.toLowerCase();
+        const parent: Element | null = node.parentElement;
+        if (!parent) break;
+        const siblings = Array.from(parent.children).filter((child) => child.tagName === node!.tagName);
+        const index = siblings.indexOf(node) + 1;
+        parts.unshift(siblings.length > 1 ? `${tag}:nth-of-type(${index})` : tag);
+        const selector = unique(parts.join(" > "));
+        if (selector) return selector;
+        node = parent;
+      }
+      return parts.join(" > ") || el.tagName.toLowerCase();
+    }
+
+    function overlayScore(el: Element): number {
+      if (!(el instanceof HTMLElement) || !visible(el)) return 0;
+      const text = el.textContent?.replace(/\s+/g, " ").trim() ?? "";
+      if (!consentText.test(text)) return 0;
+      const rect = el.getBoundingClientRect();
+      const area = Math.max(0, rect.width) * Math.max(0, rect.height);
+      const viewportArea = Math.max(1, window.innerWidth * window.innerHeight);
+      const style = window.getComputedStyle(el);
+      const positionScore = style.position === "fixed" || style.position === "sticky" ? 2 : 0;
+      const dialogScore = el.getAttribute("role") === "dialog" || el.getAttribute("aria-modal") === "true" ? 2 : 0;
+      const zIndex = Number.parseInt(style.zIndex || "0", 10);
+      const zScore = Number.isFinite(zIndex) && zIndex > 10 ? 1 : 0;
+      return area / viewportArea + positionScore + dialogScore + zScore;
+    }
+
+    const roots = Array.from(document.querySelectorAll([
+      "[role='dialog']",
+      "[aria-modal='true']",
+      "[id*='cookie' i]",
+      "[class*='cookie' i]",
+      "[id*='consent' i]",
+      "[class*='consent' i]",
+      "[id*='privacy' i]",
+      "[class*='privacy' i]",
+    ].join(",")));
+
+    const broadCandidates = Array.from(document.body.querySelectorAll("*"))
+      .filter((el) => {
+        if (!(el instanceof HTMLElement) || !visible(el)) return false;
+        const style = window.getComputedStyle(el);
+        if (style.position !== "fixed" && style.position !== "sticky") return false;
+        const rect = el.getBoundingClientRect();
+        return rect.width * rect.height > window.innerWidth * window.innerHeight * 0.05;
+      });
+
+    const overlays = [...new Set([...roots, ...broadCandidates])]
+      .map((el) => ({ el, score: overlayScore(el) }))
+      .filter((entry) => entry.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3);
+
+    if (overlays.length === 0) return { found: false, controls: [] };
+
+    const controls = overlays.flatMap(({ el }) => Array.from(el.querySelectorAll("button, a[href], [role='button'], input[type='button'], input[type='submit']")))
+      .filter((el): el is HTMLElement => el instanceof HTMLElement && visible(el) && !el.hasAttribute("disabled") && el.getAttribute("aria-disabled") !== "true")
+      .map((el) => {
+        const label = labelFor(el).slice(0, 80);
+        const overlay = overlays.find(({ el: root }) => root.contains(el))?.el;
+        let priority = 99;
+        if (rejectText.test(label)) priority = 0;
+        else if (closeText.test(label)) priority = 1;
+        else if (saveChoicesText.test(label) && overlay && !hasOptionalGrantedConsent(overlay)) priority = 2;
+        if (unsafeConsentText.test(label)) priority = 99;
+        return { label, selector: cssPath(el), priority };
+      })
+      .filter((control) => control.label && control.priority < 99)
+      .sort((a, b) => a.priority - b.priority || a.label.length - b.label.length);
+
+    const labels = controls.map((control) => control.label);
+    const action = controls[0] ? { label: controls[0].label, selector: controls[0].selector } : undefined;
+    return { found: true, controls: labels.slice(0, 8), action };
+  }).catch(() => ({ found: false, controls: [] }));
+}
+
+function actionSelector(action: SemanticAction): string | undefined {
+  return action.selector ?? (action.ref.startsWith("selector:") ? action.ref.slice("selector:".length) : undefined);
+}
+
+async function getPreciseSemanticRefLocator(page: Page, sessionId: string, ref: string) {
+  const entry = getRefInfo(sessionId, ref);
+  const snapshot = getLastSnapshot(sessionId);
+  const sessionRefs = getSessionRefs(sessionId);
+  if (!entry || (!snapshot && !sessionRefs)) return getRefLocator(page, sessionId, ref);
+
+  let ordinal = 0;
+  const refEntries = snapshot
+    ? Object.entries(snapshot.refs)
+    : [...(sessionRefs ?? new Map()).entries()].map(([candidateRef, info]) => [candidateRef, info] as const);
+  for (const [candidateRef, info] of refEntries) {
+    if (candidateRef === ref) break;
+    if (info.role === entry.role && info.name === entry.name) ordinal++;
+  }
+
+  const exactLocator = page.getByRole(entry.role as any, { name: entry.name, exact: true });
+  try {
+    if (await exactLocator.count() > ordinal) return exactLocator.nth(ordinal);
+  } catch {
+    // Fall back to the legacy ref locator below.
+  }
+  return getRefLocator(page, sessionId, ref);
+}
+
+async function describeParentPointerInterceptor(
+  page: Page,
+  sessionId: string,
+  action: SemanticAction,
+): Promise<{ label: string; selector: string; nativeClickable: boolean } | null> {
+  const selector = actionSelector(action);
+  const locator = selector ? page.locator(selector).first() : await getPreciseSemanticRefLocator(page, sessionId, action.ref);
+  return await locator.evaluate((el) => {
+    if (!(el instanceof HTMLElement)) return null;
+    function unique(selector: string): string | undefined {
+      try {
+        return document.querySelectorAll(selector).length === 1 ? selector : undefined;
+      } catch {
+        return undefined;
+      }
+    }
+    function attrValue(value: string): string {
+      return value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
+    }
+    function cssPath(target: Element): string {
+      const id = target.getAttribute("id");
+      if (id) {
+        const selector = unique(`#${CSS.escape(id)}`);
+        if (selector) return selector;
+      }
+      for (const attr of ["aria-label", "data-testid", "data-test", "name"]) {
+        const value = target.getAttribute(attr);
+        if (!value) continue;
+        const selector = unique(`${target.tagName.toLowerCase()}[${attr}="${attrValue(value)}"]`);
+        if (selector) return selector;
+      }
+      const parts: string[] = [];
+      let node: Element | null = target;
+      while (node && node.tagName.toLowerCase() !== "html") {
+        const tag = node.tagName.toLowerCase();
+        const parent: Element | null = node.parentElement;
+        if (!parent) break;
+        const siblings = Array.from(parent.children).filter((child) => child.tagName === node!.tagName);
+        const index = siblings.indexOf(node) + 1;
+        parts.unshift(siblings.length > 1 ? `${tag}:nth-of-type(${index})` : tag);
+        const selector = unique(parts.join(" > "));
+        if (selector) return selector;
+        node = parent;
+      }
+      return parts.join(" > ") || target.tagName.toLowerCase();
+    }
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    const x = Math.min(Math.max(rect.left + rect.width / 2, 0), window.innerWidth - 1);
+    const y = Math.min(Math.max(rect.top + rect.height / 2, 0), window.innerHeight - 1);
+    const hit = document.elementFromPoint(x, y);
+    if (!(hit instanceof HTMLElement) || hit === el || !hit.contains(el)) return null;
+    const id = hit.id ? `#${hit.id}` : "";
+    const classes = Array.from(hit.classList).slice(0, 3).map((name) => `.${name}`).join("");
+    const role = hit.getAttribute("role");
+    const tag = hit.tagName.toLowerCase();
+    const nativeClickable = tag === "button" || tag === "summary" ||
+      (tag === "a" && hit.hasAttribute("href")) ||
+      (hit instanceof HTMLInputElement && ["button", "submit", "reset"].includes(hit.type));
+    return {
+      label: `${tag}${id}${classes}${role ? `[role="${role}"]` : ""}`,
+      selector: cssPath(hit),
+      nativeClickable,
+    };
+  }).catch(() => null);
+}
+
+async function parentRecoveryState(page: Page): Promise<string> {
+  return await page.evaluate(() => JSON.stringify({
+    url: window.location.href,
+    title: document.title,
+    body: document.body?.innerHTML.slice(0, 50000) ?? "",
+  })).catch(() => `${page.url()}::`);
+}
+
+async function isOriginalTargetUnblocked(page: Page, sessionId: string, action: SemanticAction): Promise<boolean> {
+  const selector = actionSelector(action);
+  const locator = selector ? page.locator(selector).first() : await getPreciseSemanticRefLocator(page, sessionId, action.ref);
+  return await locator.evaluate((el) => {
+    if (!(el instanceof HTMLElement)) return false;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    const x = Math.min(Math.max(rect.left + rect.width / 2, 0), window.innerWidth - 1);
+    const y = Math.min(Math.max(rect.top + rect.height / 2, 0), window.innerHeight - 1);
+    const hit = document.elementFromPoint(x, y);
+    return hit === el || (hit instanceof Element && el.contains(hit));
+  }).catch(() => true);
+}
+
+async function tryParentContainerClickRecovery(
+  page: Page,
+  sessionId: string,
+  action: SemanticAction,
+  opts: { timeout?: number } = {},
+): Promise<SemanticActionRecovery | null> {
+  const interceptor = await describeParentPointerInterceptor(page, sessionId, action);
+  if (!interceptor) return null;
+  if (!interceptor.nativeClickable) {
+    throw new Error(`Action blocked by parent container interception: ${interceptor.label}`);
+  }
+  const before = await parentRecoveryState(page);
+  await click(page, interceptor.selector, { selfHeal: false, timeout: Math.min(opts.timeout ?? 10000, 3000) });
+  await page.waitForTimeout(50).catch(() => {});
+  const after = await parentRecoveryState(page);
+  const changed = before !== after;
+  const unblocked = await isOriginalTargetUnblocked(page, sessionId, action);
+  if (!changed && !unblocked) {
+    throw new Error(`Action blocked by parent container interception: ${interceptor.label}`);
+  }
+  return {
+    type: "parent_container_interception",
+    label: interceptor.label,
+    selector: interceptor.selector,
+  };
+}
+
+async function runSemanticActionWithRecoveries(
+  page: Page,
+  sessionId: string,
+  action: SemanticAction,
+  opts: { value?: string | boolean; allowRisk?: boolean; timeout?: number } = {},
+): Promise<SemanticActResult> {
+  try {
+    return await runSemanticAction(page, sessionId, action, opts);
+  } catch (error) {
+    if (action.kind !== "click" || !isSemanticActionabilityError(error) || !isPotentialOverlayInterception(error)) {
+      throw error;
+    }
+    if (isPointerInterception(error)) {
+      const recovery = await tryParentContainerClickRecovery(page, sessionId, action, opts);
+      if (recovery) {
+        return {
+          action,
+          executed: true,
+          method: actionSelector(action) ? "selector" : "ref",
+          url: page.url(),
+          title: await page.title(),
+          recoveries: [recovery],
+        };
+      }
+    }
+    const overlay = await findBlockingConsentOverlayAction(page);
+    if (!overlay.found) throw error;
+    if (!overlay.action) {
+      throw new Error(`Action blocked by visible consent overlay; no safe visible consent control found${overlay.controls.length > 0 ? ` (controls: ${overlay.controls.join(", ")})` : ""}`);
+    }
+    await page.locator(overlay.action.selector).click({ timeout: Math.min(opts.timeout ?? 10000, 3000) });
+    const result = await runSemanticAction(page, sessionId, action, opts);
+    return {
+      ...result,
+      recoveries: [
+        ...(result.recoveries ?? []),
+        { type: "consent_overlay", label: overlay.action.label, selector: overlay.action.selector },
+      ],
+    };
+  }
+}
+
+export class SemanticActionExecutionError extends Error {
+  constructor(message: string, public readonly skippedCandidates: SemanticSkippedAction[]) {
+    super(message);
+    this.name = "SemanticActionExecutionError";
+  }
+}
+
+export async function runSemanticActionCandidates(
+  page: Page,
+  sessionId: string,
+  actions: SemanticAction[],
+  opts: { value?: string | boolean; allowRisk?: boolean; timeout?: number } = {},
+): Promise<SemanticActResult> {
+  const skippedCandidates: SemanticSkippedAction[] = [];
+  for (const action of actions) {
+    try {
+      const result = await runSemanticActionWithRecoveries(page, sessionId, action, opts);
+      return skippedCandidates.length > 0 ? { ...result, skippedCandidates } : result;
+    } catch (error) {
+      if (!isSemanticActionabilityError(error)) {
+        if (skippedCandidates.length > 0) {
+          throw new SemanticActionExecutionError(errorMessage(error), skippedCandidates);
+        }
+        throw error;
+      }
+      skippedCandidates.push({ action, error: errorMessage(error) });
+    }
+  }
+  throw new SemanticActionExecutionError(
+    `No semantic action candidate was actionable${skippedCandidates.length ? `; skipped ${skippedCandidates.length} candidate${skippedCandidates.length === 1 ? "" : "s"}` : ""}`,
+    skippedCandidates,
+  );
+}
+
 export async function runSemanticAction(
   page: Page,
   sessionId: string,
   action: SemanticAction,
-  opts: { value?: string | boolean; allowRisk?: boolean } = {},
+  opts: { value?: string | boolean; allowRisk?: boolean; timeout?: number } = {},
 ): Promise<SemanticActResult> {
   if ((action.requiresApproval || action.risk === "sensitive" || action.risk === "external_mutation") && !opts.allowRisk) {
     throw new Error(`Action '${action.id}' requires approval because risk=${action.risk}`);
@@ -621,27 +1048,27 @@ export async function runSemanticAction(
   try {
     switch (action.kind) {
       case "click":
-        if (selector) await click(page, selector);
-        else await clickRef(page, sessionId, action.ref);
+        if (selector) await click(page, selector, { timeout: opts.timeout });
+        else await clickRef(page, sessionId, action.ref, { timeout: opts.timeout });
         break;
       case "fill":
         if (typeof value !== "string") throw new Error(`Action '${action.id}' needs a string value`);
-        if (selector) await fill(page, selector, value);
-        else await fillRef(page, sessionId, action.ref, value);
+        if (selector) await fill(page, selector, value, opts.timeout);
+        else await fillRef(page, sessionId, action.ref, value, opts.timeout);
         break;
       case "select":
         if (typeof value !== "string") throw new Error(`Action '${action.id}' needs a string value`);
-        if (selector) await selectOption(page, selector, value);
-        else await selectRef(page, sessionId, action.ref, value);
+        if (selector) await selectOption(page, selector, value, opts.timeout);
+        else await selectRef(page, sessionId, action.ref, value, opts.timeout);
         break;
       case "check":
         if (typeof value !== "boolean") throw new Error(`Action '${action.id}' needs a boolean value`);
-        if (selector) await checkBox(page, selector, value);
-        else await checkRef(page, sessionId, action.ref, value);
+        if (selector) await checkBox(page, selector, value, opts.timeout);
+        else await checkRef(page, sessionId, action.ref, value, opts.timeout);
         break;
       case "hover":
-        if (selector) await hover(page, selector);
-        else await hoverRef(page, sessionId, action.ref);
+        if (selector) await hover(page, selector, opts.timeout);
+        else await hoverRef(page, sessionId, action.ref, opts.timeout);
         break;
     }
   } finally {

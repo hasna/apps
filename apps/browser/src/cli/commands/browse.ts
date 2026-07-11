@@ -7,24 +7,39 @@ import { navigate } from "../../lib/actions.js";
 import { getText, getLinks, extract } from "../../lib/extractor.js";
 import { takeScreenshot } from "../../lib/screenshot.js";
 import { crawl } from "../../lib/crawler.js";
-import { getSemanticPageMap, observeSemanticActions, runSemanticAction, validateSemanticPage } from "../../lib/semantic-actions.js";
+import {
+  getSemanticPageMap,
+  observeSemanticActions,
+  runSemanticActionCandidates,
+  SemanticActionExecutionError,
+  validateSemanticPage,
+} from "../../lib/semantic-actions.js";
 import type { BrowserEngine } from "../../types/index.js";
 import { limited, parseLimit, printHint, printListFooter, truncate } from "../output.js";
+import { addKernelOptions, kernelSessionOptionsFromCli, type KernelCliOptions } from "./kernel.js";
+
+function parsePositiveIntOption(value: string, optionName: string): number {
+  if (!/^[1-9]\d*$/.test(value)) {
+    throw new Error(`${optionName} must be a positive integer`);
+  }
+  return Number(value);
+}
 
 export function register(program: Command) {
 
 // ─── navigate ─────────────────────────────────────────────────────────────────
 
-program
+addKernelOptions(program
   .command("navigate <url>")
   .description("Navigate to a URL and optionally take a screenshot")
   .option("--engine <engine>", "Browser engine: playwright|cdp|lightpanda|bun|tui|extension|kernel|auto; auto never selects extension or kernel", "auto")
   .option("--screenshot", "Take a screenshot after navigation")
   .option("--extract", "Extract page text after navigation")
+  .option("--state <name>", "Saved auth state to load (see: browser session list-states)")
   .option("--headed", "Run in headed (visible) mode")
-  .option("--json", "Output as JSON")
-  .action(async (url: string, opts: { engine: string; screenshot?: boolean; extract?: boolean; headed?: boolean; json?: boolean }) => {
-    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed });
+  .option("--json", "Output as JSON"))
+  .action(async (url: string, opts: KernelCliOptions & { engine: string; screenshot?: boolean; extract?: boolean; state?: string; headed?: boolean; json?: boolean }) => {
+    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed, storageState: opts.state, ...kernelSessionOptionsFromCli(opts) });
     await navigate(page, url);
     const title = await page.title();
     let screenshotPath: string | undefined;
@@ -62,12 +77,14 @@ program
   .option("--max-text-chars <n>", "Maximum sanitized text characters", "4000")
   .option("--json", "Output as JSON")
   .action(async (url: string, opts: { engine: string; headed?: boolean; maxElements: string; maxTextChars: string; json?: boolean }) => {
+    const maxElements = parsePositiveIntOption(opts.maxElements, "--max-elements");
+    const maxTextChars = parsePositiveIntOption(opts.maxTextChars, "--max-text-chars");
     const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed });
     try {
       await navigate(page, url);
       const pageMap = await getSemanticPageMap(page, session.id, {
-        maxElements: parseInt(opts.maxElements, 10) || 80,
-        maxTextChars: parseInt(opts.maxTextChars, 10) || 4000,
+        maxElements,
+        maxTextChars,
       });
       if (opts.json) {
         console.log(JSON.stringify({ session_id: session.id, ...pageMap }, null, 2));
@@ -97,12 +114,14 @@ program
   .option("--json", "Output as JSON")
   .action(async (url: string, instructionParts: string[], opts: { engine: string; headed?: boolean; maxActions: string; maxElements: string; model: string; ai?: boolean; json?: boolean }) => {
     const instruction = instructionParts.join(" ");
+    const maxActions = parsePositiveIntOption(opts.maxActions, "--max-actions");
+    const maxElements = parsePositiveIntOption(opts.maxElements, "--max-elements");
     const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed });
     try {
       await navigate(page, url);
       const result = await observeSemanticActions(page, session.id, instruction, {
-        maxActions: parseInt(opts.maxActions, 10) || 8,
-        maxElements: parseInt(opts.maxElements, 10) || 80,
+        maxActions,
+        maxElements,
         useModel: opts.ai !== false,
         infer: { model: opts.model },
       });
@@ -132,25 +151,48 @@ program
   .option("--value <value>", "Value for fill/select actions")
   .option("--checked <boolean>", "Boolean value for check actions")
   .option("--allow-risk", "Allow actions that require explicit risk approval")
+  .option("--max-actions <n>", "Maximum ranked action candidates to try", "6")
+  .option("--action-timeout <ms>", "Per-candidate action timeout in milliseconds", "5000")
   .option("--screenshot", "Capture a screenshot after acting")
   .option("--json", "Output as JSON")
-  .action(async (url: string, instructionParts: string[], opts: { engine: string; headed?: boolean; model: string; ai?: boolean; value?: string; checked?: string; allowRisk?: boolean; screenshot?: boolean; json?: boolean }) => {
+  .action(async (url: string, instructionParts: string[], opts: { engine: string; headed?: boolean; model: string; ai?: boolean; value?: string; checked?: string; allowRisk?: boolean; maxActions: string; actionTimeout: string; screenshot?: boolean; json?: boolean }) => {
     const instruction = instructionParts.join(" ");
+    const maxActions = parsePositiveIntOption(opts.maxActions, "--max-actions");
+    const actionTimeout = parsePositiveIntOption(opts.actionTimeout, "--action-timeout");
     const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed });
     try {
       await navigate(page, url);
       const observed = await observeSemanticActions(page, session.id, instruction, {
-        maxActions: 1,
+        maxActions,
         useModel: opts.ai !== false,
         infer: { model: opts.model },
       });
-      const action = observed.actions[0];
-      if (!action) throw new Error(`No semantic action found for instruction: ${instruction}`);
+      if (observed.actions.length === 0) throw new Error(`No semantic action found for instruction: ${instruction}`);
       const checked = opts.checked === undefined ? undefined : opts.checked === "true";
-      const acted = await runSemanticAction(page, session.id, action, {
-        value: checked ?? opts.value,
-        allowRisk: opts.allowRisk,
-      });
+      let acted;
+      try {
+        acted = await runSemanticActionCandidates(page, session.id, observed.actions, {
+          value: checked ?? opts.value,
+          allowRisk: opts.allowRisk,
+          timeout: actionTimeout,
+        });
+      } catch (error) {
+        const failed = error instanceof SemanticActionExecutionError
+          ? { message: error.message, skippedCandidates: error.skippedCandidates }
+          : { message: error instanceof Error ? error.message : String(error) };
+        if (opts.json) {
+          console.log(JSON.stringify({ session_id: session.id, observed, acted: null, error: failed }, null, 2));
+        } else {
+          console.error(chalk.red(`✗ ${failed.message}`));
+          if ("skippedCandidates" in failed && failed.skippedCandidates) {
+            for (const skipped of failed.skippedCandidates) {
+              console.error(chalk.gray(`  skipped ${skipped.action.id} ${skipped.action.ref}: ${truncate(skipped.error, 120)}`));
+            }
+          }
+        }
+        process.exitCode = 1;
+        return;
+      }
       const screenshot = opts.screenshot ? await takeScreenshot(page, { sessionId: session.id, maxWidth: 1280, quality: 70 }) : undefined;
       const result = { session_id: session.id, observed, acted, screenshot };
       if (opts.json) {
@@ -158,6 +200,12 @@ program
       } else {
         console.log(chalk.green(`✓ ${acted.action.kind} ${acted.action.ref} ${truncate(acted.action.label, 60)}`));
         console.log(chalk.gray(`  ${acted.url}`));
+        for (const recovery of acted.recoveries ?? []) {
+          console.log(chalk.gray(`  recovered ${recovery.type}: ${truncate(recovery.label, 60)}`));
+        }
+        for (const skipped of acted.skippedCandidates ?? []) {
+          console.log(chalk.gray(`  skipped ${skipped.action.id} ${skipped.action.ref}: ${truncate(skipped.error, 100)}`));
+        }
         if (screenshot) console.log(chalk.gray(`  Screenshot: ${screenshot.path}`));
       }
     } finally {
@@ -197,14 +245,15 @@ program
 
 // ─── check ───────────────────────────────────────────────────────────────────
 
-program
+addKernelOptions(program
   .command("check <url>")
   .description("One-liner page health check: navigate, screenshot, extract info, check errors")
   .option("--engine <engine>", "Browser engine", "auto")
+  .option("--state <name>", "Saved auth state to load (see: browser session list-states)")
   .option("--headed", "Run in headed (visible) mode")
-  .option("--json", "Output as JSON")
-  .action(async (url: string, opts: { engine: string; headed?: boolean; json?: boolean }) => {
-    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed });
+  .option("--json", "Output as JSON"))
+  .action(async (url: string, opts: KernelCliOptions & { engine: string; state?: string; headed?: boolean; json?: boolean }) => {
+    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed, storageState: opts.state, ...kernelSessionOptionsFromCli(opts) });
     await navigate(page, url);
     const title = await page.title();
     const currentUrl = page.url();
@@ -234,15 +283,16 @@ program
 
 // ─── audit ───────────────────────────────────────────────────────────────────
 
-program
+addKernelOptions(program
   .command("audit <url>")
   .description("Full site audit: env detection, performance, errors, APIs, data extraction, screenshot")
   .option("--engine <engine>", "Browser engine", "auto")
+  .option("--state <name>", "Saved auth state to load (see: browser session list-states)")
   .option("--headed", "Run in headed (visible) mode")
-  .option("--json", "Output as JSON")
-  .action(async (url: string, opts: { engine: string; headed?: boolean; json?: boolean }) => {
+  .option("--json", "Output as JSON"))
+  .action(async (url: string, opts: KernelCliOptions & { engine: string; state?: string; headed?: boolean; json?: boolean }) => {
     const t0 = Date.now();
-    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed, captureNetwork: true, captureConsole: true });
+    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed, captureNetwork: true, captureConsole: true, storageState: opts.state, ...kernelSessionOptionsFromCli(opts) });
 
     if (!opts.json) console.log(chalk.gray(`Auditing: ${url}\n`));
 
@@ -360,16 +410,16 @@ program
 
 // ─── compare ─────────────────────────────────────────────────────────────────
 
-program
+addKernelOptions(program
   .command("compare <url1> <url2>")
   .description("Compare two URLs: side-by-side screenshots + pixel diff + text diff")
   .option("--engine <engine>", "Browser engine", "auto")
-  .option("--json", "Output as JSON")
-  .action(async (url1: string, url2: string, opts: { engine: string; json?: boolean }) => {
+  .option("--json", "Output as JSON"))
+  .action(async (url1: string, url2: string, opts: KernelCliOptions & { engine: string; json?: boolean }) => {
     // Create two sessions
     const [s1, s2] = await Promise.all([
-      createSession({ engine: opts.engine as BrowserEngine, headless: true }),
-      createSession({ engine: opts.engine as BrowserEngine, headless: true }),
+      createSession({ engine: opts.engine as BrowserEngine, headless: true, ...kernelSessionOptionsFromCli(opts) }),
+      createSession({ engine: opts.engine as BrowserEngine, headless: true, ...kernelSessionOptionsFromCli(opts) }),
     ]);
 
     // Navigate both in parallel
@@ -427,16 +477,17 @@ program
 
 // ─── screenshot ───────────────────────────────────────────────────────────────
 
-program
+addKernelOptions(program
   .command("screenshot <url>")
   .description("Navigate to a URL and take a screenshot")
   .option("--engine <engine>", "Browser engine", "auto")
   .option("--selector <selector>", "CSS selector for element screenshot")
   .option("--full-page", "Capture full page")
   .option("--format <format>", "Image format: png|jpeg|webp", "png")
-  .option("--headed", "Run in headed (visible) mode")
-  .action(async (url: string, opts: { engine: string; selector?: string; fullPage?: boolean; format: string; headed?: boolean }) => {
-    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed });
+  .option("--state <name>", "Saved auth state to load (see: browser session list-states)")
+  .option("--headed", "Run in headed (visible) mode"))
+  .action(async (url: string, opts: KernelCliOptions & { engine: string; selector?: string; fullPage?: boolean; format: string; state?: string; headed?: boolean }) => {
+    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed, storageState: opts.state, ...kernelSessionOptionsFromCli(opts) });
     await navigate(page, url);
     const result = await takeScreenshot(page, {
       selector: opts.selector,
@@ -450,18 +501,19 @@ program
 
 // ─── extract ──────────────────────────────────────────────────────────────────
 
-program
+addKernelOptions(program
   .command("extract <url>")
   .description("Extract content from a URL")
   .option("--engine <engine>", "Browser engine", "auto")
   .option("--selector <selector>", "CSS selector")
   .option("--format <format>", "Format: text|html|links|table|structured", "text")
+  .option("--state <name>", "Saved auth state to load (see: browser session list-states)")
   .option("--headed", "Run in headed (visible) mode")
   .option("--json", "Output as JSON")
   .option("--limit <n>", "Max links/table rows to print in compact output", "50")
-  .option("--verbose", "Print longer text/html excerpts")
-  .action(async (url: string, opts: { engine: string; selector?: string; format: string; headed?: boolean; json?: boolean; limit?: string; verbose?: boolean }) => {
-    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed });
+  .option("--verbose", "Print longer text/html excerpts"))
+  .action(async (url: string, opts: KernelCliOptions & { engine: string; selector?: string; format: string; state?: string; headed?: boolean; json?: boolean; limit?: string; verbose?: boolean }) => {
+    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed, storageState: opts.state, ...kernelSessionOptionsFromCli(opts) });
     await navigate(page, url);
     const result = await extract(page, { format: opts.format as "text" | "links" | "html" | "table" | "structured", selector: opts.selector });
     if (opts.json) {
@@ -495,20 +547,21 @@ program
 
 // ─── crawl ────────────────────────────────────────────────────────────────────
 
-program
+addKernelOptions(program
   .command("crawl <url>")
   .description("Crawl a URL recursively and list discovered pages")
   .option("--depth <n>", "Max crawl depth", "2")
   .option("--max-pages <n>", "Max pages to crawl", "50")
   .option("--engine <engine>", "Browser engine", "auto")
   .option("--limit <n>", "Max crawled pages/errors to print in compact output", "20")
-  .option("--json", "Output full crawl result as JSON")
-  .action(async (url: string, opts: { depth: string; maxPages: string; engine: string; limit?: string; json?: boolean }) => {
+  .option("--json", "Output full crawl result as JSON"))
+  .action(async (url: string, opts: KernelCliOptions & { depth: string; maxPages: string; engine: string; limit?: string; json?: boolean }) => {
     if (!opts.json) console.log(chalk.gray(`Crawling: ${url} (depth=${opts.depth}, max=${opts.maxPages})...`));
     const result = await crawl(url, {
       maxDepth: parseInt(opts.depth),
       maxPages: parseInt(opts.maxPages),
       engine: opts.engine as BrowserEngine,
+      sessionOptions: kernelSessionOptionsFromCli(opts),
     });
     if (opts.json) {
       console.log(JSON.stringify(result, null, 2));

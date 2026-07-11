@@ -203,4 +203,51 @@ describe("BrowserSDK", () => {
     expect(calls).toContain("stopVideo:video-1");
     expect(calls).toContain("listVideos");
   });
+
+  it("exposes Kernel helpers through the SDK facade", async () => {
+    const {
+      setKernelClientFactoryForTests,
+      setKernelSecretsProviderForTests,
+    } = await import("./engines/kernel.js");
+    setKernelSecretsProviderForTests({
+      async getSecretValue(key) {
+        return key.includes("kernel_api_key") ? "kernel-test-key" : undefined;
+      },
+      async matchVaultItemsForUrl() {
+        return [];
+      },
+      async getVaultItem() {
+        return undefined;
+      },
+    });
+    setKernelClientFactoryForTests(() => ({
+      browsers: {
+        async create() {
+          throw new Error("not used");
+        },
+        async deleteByID() {},
+        async list() {
+          return { items: [{ session_id: "remote-sdk", cdp_ws_url: "wss://kernel.test/cdp?jwt=secret" }] };
+        },
+        playwright: {
+          async execute() {
+            return { success: true, result: "ok" };
+          },
+        },
+      },
+    }));
+
+    try {
+      const sdk = createBrowserSDK();
+      const sessions = await sdk.kernelSessions();
+      const result = await sdk.executeKernel("remote-sdk", "return 'ok';");
+
+      expect(sessions[0].session_id).toBe("remote-sdk");
+      expect(result).toEqual({ success: true, result: "ok" });
+      expect(JSON.stringify(sessions)).not.toContain("jwt=secret");
+    } finally {
+      setKernelClientFactoryForTests(undefined);
+      setKernelSecretsProviderForTests(undefined);
+    }
+  });
 });
