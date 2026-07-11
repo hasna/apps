@@ -1,12 +1,13 @@
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { BrowserError, ElementNotFoundError, NavigationError } from "../types/index.js";
-import { getRefLocator } from "./snapshot.js";
+import { getLastSnapshot, getRefInfo, getRefLocator, getSessionRefs } from "./snapshot.js";
 import { healSelector } from "./self-heal.js";
 
 export interface ClickOptions {
   button?: "left" | "right" | "middle";
   clickCount?: number;
   delay?: number;
+  force?: boolean;
   timeout?: number;
 }
 
@@ -27,6 +28,7 @@ export async function click(page: Page, selector: string, opts?: ClickOptions & 
       button: opts?.button ?? "left",
       clickCount: opts?.clickCount ?? 1,
       delay: opts?.delay,
+      force: opts?.force,
       timeout: opts?.timeout ?? 10000,
     });
     return {};
@@ -37,6 +39,7 @@ export async function click(page: Page, selector: string, opts?: ClickOptions & 
       if (result.found && result.locator) {
         await result.locator.click({
           button: opts?.button ?? "left",
+          force: opts?.force,
           timeout: opts?.timeout ?? 10000,
         });
         return { healed: true, method: result.method, attempts: result.attempts };
@@ -373,84 +376,41 @@ export async function waitForText(
   }
 }
 
-// ─── QoL: watch page for DOM changes ─────────────────────────────────────────
-
-export interface WatchHandle {
-  id: string;
-  stop: () => void;
-}
-
-const activeWatches = new Map<string, { interval: ReturnType<typeof setInterval>; changes: string[]; sessionId?: string }>();
-
-export function watchPage(
-  page: Page,
-  opts?: { selector?: string; intervalMs?: number; maxChanges?: number; sessionId?: string }
-): WatchHandle {
-  const id = `watch-${Date.now()}`;
-  const changes: string[] = [];
-  const intervalMs = opts?.intervalMs ?? 500;
-  const maxChanges = opts?.maxChanges ?? 50;
-  const sessionId = opts?.sessionId;
-
-  const interval = setInterval(async () => {
-    if (changes.length >= maxChanges) return;
-    try {
-      const change = await page.evaluate((sel) => {
-        const el = sel ? document.querySelector(sel) : document.body;
-        return el ? `${new Date().toISOString()}:${el.textContent?.slice(0, 100)}` : null;
-      }, opts?.selector ?? null);
-      if (change && (changes.length === 0 || changes[changes.length - 1] !== change)) {
-        changes.push(change);
-      }
-    } catch {
-      // Page might be navigating
-    }
-  }, intervalMs);
-
-  activeWatches.set(id, { interval, changes, sessionId });
-
-  return {
-    id,
-    stop: () => {
-      clearInterval(interval);
-      activeWatches.delete(id);
-    },
-  };
-}
-
-export function getWatchChanges(watchId: string): string[] {
-  return activeWatches.get(watchId)?.changes ?? [];
-}
-
-export function stopWatch(watchId: string): void {
-  const w = activeWatches.get(watchId);
-  if (w) {
-    clearInterval(w.interval);
-    activeWatches.delete(watchId);
-  }
-}
-
-export function stopAllWatchesForSession(sessionId?: string): void {
-  for (const [id, w] of [...activeWatches]) {
-    // If sessionId provided, only stop that session's watches; otherwise stop all
-    if (!sessionId || w.sessionId === sessionId) {
-      clearInterval(w.interval);
-      activeWatches.delete(id);
-    }
-  }
-}
-
 // ─── Ref-based actions ────────────────────────────────────────────────────────
+
+async function getPreciseRefLocator(page: Page, sessionId: string, ref: string): Promise<Locator> {
+  const entry = getRefInfo(sessionId, ref);
+  const snapshot = getLastSnapshot(sessionId);
+  const sessionRefs = getSessionRefs(sessionId);
+  if (!entry || (!snapshot && !sessionRefs)) return getRefLocator(page, sessionId, ref);
+
+  let ordinal = 0;
+  const refEntries = snapshot
+    ? Object.entries(snapshot.refs)
+    : [...(sessionRefs ?? new Map()).entries()].map(([candidateRef, info]) => [candidateRef, info] as const);
+  for (const [candidateRef, info] of refEntries) {
+    if (candidateRef === ref) break;
+    if (info.role === entry.role && info.name === entry.name) ordinal++;
+  }
+
+  const exactLocator = page.getByRole(entry.role as any, { name: entry.name, exact: true });
+  try {
+    if (await exactLocator.count() > ordinal) return exactLocator.nth(ordinal);
+  } catch {
+    // Fall back to the legacy role/name locator below.
+  }
+  return getRefLocator(page, sessionId, ref);
+}
 
 export async function clickRef(
   page: Page,
   sessionId: string,
   ref: string,
-  opts?: { timeout?: number }
+  opts?: { force?: boolean; timeout?: number }
 ): Promise<void> {
   try {
-    const locator = getRefLocator(page, sessionId, ref);
-    await locator.click({ timeout: opts?.timeout ?? 10000 });
+    const locator = await getPreciseRefLocator(page, sessionId, ref);
+    await locator.click({ force: opts?.force, timeout: opts?.timeout ?? 10000 });
   } catch (err) {
     if (err instanceof Error && err.message.includes("Ref ")) throw new ElementNotFoundError(ref);
     if (err instanceof Error && err.message.includes("No snapshot")) throw new BrowserError(err.message, "NO_SNAPSHOT");
@@ -466,7 +426,7 @@ export async function typeRef(
   opts?: { delay?: number; clear?: boolean; timeout?: number }
 ): Promise<void> {
   try {
-    const locator = getRefLocator(page, sessionId, ref);
+    const locator = await getPreciseRefLocator(page, sessionId, ref);
     if (opts?.clear) await locator.fill("", { timeout: opts.timeout ?? 10000 });
     await locator.pressSequentially(text, { delay: opts?.delay, timeout: opts?.timeout ?? 10000 });
   } catch (err) {
@@ -483,7 +443,7 @@ export async function fillRef(
   timeout = 10000
 ): Promise<void> {
   try {
-    const locator = getRefLocator(page, sessionId, ref);
+    const locator = await getPreciseRefLocator(page, sessionId, ref);
     await locator.fill(value, { timeout });
   } catch (err) {
     if (err instanceof Error && err.message.includes("Ref ")) throw new ElementNotFoundError(ref);
@@ -499,7 +459,7 @@ export async function selectRef(
   timeout = 10000
 ): Promise<string[]> {
   try {
-    const locator = getRefLocator(page, sessionId, ref);
+    const locator = await getPreciseRefLocator(page, sessionId, ref);
     return await locator.selectOption(value, { timeout });
   } catch (err) {
     if (err instanceof Error && err.message.includes("Ref ")) throw new ElementNotFoundError(ref);
@@ -515,7 +475,7 @@ export async function checkRef(
   timeout = 10000
 ): Promise<void> {
   try {
-    const locator = getRefLocator(page, sessionId, ref);
+    const locator = await getPreciseRefLocator(page, sessionId, ref);
     if (checked) await locator.check({ timeout });
     else await locator.uncheck({ timeout });
   } catch (err) {
@@ -531,7 +491,7 @@ export async function hoverRef(
   timeout = 10000
 ): Promise<void> {
   try {
-    const locator = getRefLocator(page, sessionId, ref);
+    const locator = await getPreciseRefLocator(page, sessionId, ref);
     await locator.hover({ timeout });
   } catch (err) {
     if (err instanceof Error && err.message.includes("Ref ")) throw new ElementNotFoundError(ref);

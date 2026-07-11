@@ -526,7 +526,7 @@ export async function closeSession(sessionId: string): Promise<Session> {
 
     // Clean up per-session in-memory caches to prevent leaks
     try { const { clearLastSnapshot, clearSessionRefs } = await import("./snapshot.js"); clearLastSnapshot(sessionId); clearSessionRefs(sessionId); } catch {}
-    try { const { stopAllWatchesForSession } = await import("./actions.js"); stopAllWatchesForSession(sessionId); } catch {}
+    try { const { clearCachedSemanticActions } = await import("./semantic-actions.js"); clearCachedSemanticActions(sessionId); } catch {}
     try { const { clearDialogs } = await import("./dialogs.js"); clearDialogs(sessionId); } catch {}
   } finally {
     handles.delete(sessionId);

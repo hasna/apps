@@ -6,6 +6,7 @@ import {
   storageSync,
   type SyncResult,
 } from "../../db/storage-sync.js";
+import { limited, parseLimit, printListFooter } from "../output.js";
 
 function parseTables(value?: string): string[] | undefined {
   if (!value) return undefined;
@@ -32,7 +33,9 @@ export function registerStorageCommands(program: Command): void {
     .command("status")
     .description("Show storage config and local sync state")
     .option("--json", "Output as JSON")
-    .action((opts: { json?: boolean }) => {
+    .option("--limit <n>", "Max sync history rows to print in compact output", String(20))
+    .option("--verbose", "Show all configured table names")
+    .action((opts: { json?: boolean; limit?: string; verbose?: boolean }) => {
       const info = getStorageStatus();
 
       if (opts.json) {
@@ -41,11 +44,13 @@ export function registerStorageCommands(program: Command): void {
       }
 
       console.log(`Storage configured: ${info.configured ? "yes" : "no"}`);
-      console.log(`Tables: ${info.tables.join(", ")}`);
+      console.log(`Tables: ${info.tables.length}${opts.verbose ? ` (${info.tables.join(", ")})` : ""}`);
       if (info.sync.length === 0) console.log("Sync: no local sync history");
-      for (const entry of info.sync) {
+      const { visible } = limited(info.sync, parseLimit(opts.limit));
+      for (const entry of visible) {
         console.log(`  ${entry.table_name} ${entry.direction}: ${entry.last_synced_at ?? "never"}`);
       }
+      if (info.sync.length > 0) printListFooter(info.sync.length, visible.length, "Use --limit N, --verbose, or --json for full storage status.");
     });
 
   storageCmd

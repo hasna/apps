@@ -116,12 +116,18 @@ describe("CLI — help flags", () => {
     expect(stdout).toContain("navigate");
     expect(stdout).toContain("session");
     expect(stdout).toContain("extension");
+    expect(stdout).toContain("observe");
+    expect(stdout).toContain("page-map");
+    expect(stdout).toContain("validate");
     expect(stdout).toContain("kernel");
     expect(stdout).toContain("workflow");
     expect(stdout).toContain("agent");
     expect(stdout).toContain("events");
     expect(stdout).toContain("project");
     expect(stdout).toContain("webhooks");
+    expect(stdout).not.toMatch(/^\s+script\b/m);
+    expect(stdout).not.toMatch(/^\s+eval\b/m);
+    expect(stdout).not.toMatch(/^\s+watch\b/m);
   });
 
   it("browser session --help shows subcommands", async () => {
@@ -238,6 +244,14 @@ describe("CLI — help flags", () => {
     expect(stderr).toContain("Unknown --format");
   });
 
+  it("browser observe --help documents semantic actions", async () => {
+    const { stdout, code } = await runCli("observe", "--help");
+    expect(code).toBe(0);
+    expect(stdout).toContain("structured actions");
+    expect(stdout).toContain("--no-ai");
+    expect(stdout).toContain("--max-actions");
+  });
+
   it("browser workflow --help shows subcommands", async () => {
     const { stdout, code } = await runCli("workflow", "--help");
     expect(code).toBe(0);
@@ -246,6 +260,107 @@ describe("CLI — help flags", () => {
     expect(stdout).toContain("validate");
     expect(stdout).toContain("run");
   });
+});
+
+describe("CLI — semantic browser tools", () => {
+  beforeEach(setupDb);
+  afterEach(teardownDb);
+
+  it("observe returns structured actions from a sanitized page map", async () => {
+    const result = await runCliWithTimeout([
+      "observe",
+      "data:text/html,<title>Semantic Demo</title><button>Sign in</button>",
+      "find the sign in button",
+      "--no-ai",
+      "--json",
+    ], 10_000);
+
+    expect(result.timedOut).toBe(false);
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.stdout);
+    expect(parsed.title).toBe("Semantic Demo");
+    expect(parsed.actions[0].kind).toBe("click");
+    expect(parsed.actions[0].label).toContain("Sign in");
+  }, 15_000);
+
+  it("observe can target form fields extracted from the sanitized form map", async () => {
+    const result = await runCliWithTimeout([
+      "observe",
+      "data:text/html,<title>Form Demo</title><form><label for=email>Email Address</label><input id=email name=email type=email placeholder=user@domain.com><button disabled>Continue</button></form>",
+      "find the email field",
+      "--no-ai",
+      "--json",
+    ], 10_000);
+
+    expect(result.timedOut).toBe(false);
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.stdout);
+    expect(parsed.actions[0].kind).toBe("fill");
+    expect(parsed.actions[0].ref).toBe("selector:#email");
+    expect(parsed.actions[0].selector).toBe("#email");
+  }, 15_000);
+
+  it("act can execute deterministic semantic field actions without a model", async () => {
+    const result = await runCliWithTimeout([
+      "act",
+      "data:text/html,<title>Act Demo</title><label for=email>Email Address</label><input id=email type=email>",
+      "find the email field",
+      "--no-ai",
+      "--value",
+      "user@example.com",
+      "--json",
+    ], 10_000);
+
+    expect(result.timedOut).toBe(false);
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.stdout);
+    expect(parsed.acted.method).toBe("selector");
+    expect(parsed.acted.action.selector).toBe("#email");
+  }, 15_000);
+
+  it("semantic commands reject invalid numeric options before running", async () => {
+    const observe = await runCliWithTimeout([
+      "observe",
+      "data:text/html,<title>Bad Number</title><button>Book</button>",
+      "click book",
+      "--max-actions",
+      "0",
+      "--no-ai",
+      "--json",
+    ], 5_000);
+    expect(observe.timedOut).toBe(false);
+    expect(observe.code).not.toBe(0);
+    expect(observe.stderr).toContain("--max-actions must be a positive integer");
+
+    const act = await runCliWithTimeout([
+      "act",
+      "data:text/html,<title>Bad Timeout</title><button>Book</button>",
+      "click book",
+      "--action-timeout",
+      "abc",
+      "--no-ai",
+      "--json",
+    ], 5_000);
+    expect(act.timedOut).toBe(false);
+    expect(act.code).not.toBe(0);
+    expect(act.stderr).toContain("--action-timeout must be a positive integer");
+  }, 15_000);
+
+  it("validate checks assertions without requiring a model", async () => {
+    const result = await runCliWithTimeout([
+      "validate",
+      "data:text/html,<title>Semantic Demo</title><main>cart drawer is open</main>",
+      "cart drawer open",
+      "--no-ai",
+      "--json",
+    ], 10_000);
+
+    expect(result.timedOut).toBe(false);
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.stdout);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.method).toBe("text");
+  }, 15_000);
 });
 
 describe("CLI — workflow manifests", () => {
@@ -282,7 +397,7 @@ return { status: "completed", title, text, screenshot };
       },
       stopConditions: ["interactive-captcha", "mfa", "payment", "purchase", "identity-verification"],
       secrets: {
-        password: "sk-demo-should-redact-123456789",
+        password: "demo-secret-should-redact-123456789",
       },
       evidence: {
         captureBeforeClose: true,
@@ -307,7 +422,7 @@ return { status: "completed", title, text, screenshot };
     expect(list.code).toBe(0);
     const listed = JSON.parse(list.stdout);
     expect(listed[0].manifest.name).toBe("demo");
-    expect(list.stdout).not.toContain("sk-demo-should-redact");
+    expect(list.stdout).not.toContain("demo-secret-should-redact");
     expect(listed[0].manifest.secrets).toBe("[redacted]");
 
     const validate = await runCli("workflow", "validate", "demo", "--json");
@@ -390,17 +505,60 @@ describe("CLI — session commands (DB-only)", () => {
     expect(code).toBe(0);
     expect(stdout).toContain("No sessions");
   });
+
+  it("session list is compact by default and preserves full JSON output", async () => {
+    const { createSession } = await import("../db/sessions.js");
+    const longUrl = `https://example.com/${"a".repeat(140)}`;
+    createSession({ engine: "playwright", startUrl: `${longUrl}/1` });
+    createSession({ engine: "playwright", startUrl: `${longUrl}/2` });
+    createSession({ engine: "playwright", startUrl: `${longUrl}/3` });
+
+    const compact = await runCli("session", "list", "--limit", "2");
+    expect(compact.code).toBe(0);
+    expect(compact.stdout).toContain("2/3 shown");
+    expect(compact.stdout).toContain("browser session show");
+    expect(compact.stdout).not.toContain(`${longUrl}/1`);
+
+    const full = await runCli("session", "list", "--json");
+    expect(full.code).toBe(0);
+    const parsed = JSON.parse(full.stdout);
+    expect(parsed).toHaveLength(3);
+    expect(parsed.some((session: { start_url?: string }) => session.start_url === `${longUrl}/1`)).toBe(true);
+  });
+});
+
+describe("CLI — removed workflow-like commands", () => {
+  beforeEach(setupDb);
+  afterEach(teardownDb);
+
+  it("does not expose durable script recipes or raw page eval as CLI commands", async () => {
+    const script = await runCli("script", "list");
+    expect(script.code).not.toBe(0);
+    expect(script.stderr).toContain("unknown command");
+
+    const evalCommand = await runCli("eval", "data:text/html,<main></main>", "document.title");
+    expect(evalCommand.code).not.toBe(0);
+    expect(evalCommand.stderr).toContain("unknown command");
+
+    const watch = await runCli("watch", "https://example.test");
+    expect(watch.code).not.toBe(0);
+    expect(watch.stderr).toContain("unknown command");
+  });
 });
 
 describe("CLI — agent commands", () => {
   beforeEach(setupDb);
   afterEach(teardownDb);
 
-  it("agent register creates agent and shows JSON", async () => {
+  it("agent register is compact by default and supports JSON", async () => {
     const { stdout, code } = await runCli("agent", "register", "testbot", "--description", "my bot");
     expect(code).toBe(0);
     expect(stdout).toContain("testbot");
-    expect(stdout).toContain("my bot");
+    expect(stdout).not.toContain("{");
+
+    const json = await runCli("agent", "register", "jsonbot", "--description", "json bot", "--json");
+    expect(json.code).toBe(0);
+    expect(JSON.parse(json.stdout).description).toBe("json bot");
   });
 
   it("agent list shows registered agent", async () => {
@@ -420,11 +578,16 @@ describe("CLI — project commands", () => {
   beforeEach(setupDb);
   afterEach(teardownDb);
 
-  it("project create creates project and shows JSON", async () => {
+  it("project create is compact by default and supports JSON", async () => {
     const { stdout, code } = await runCli("project", "create", "myapp", "/tmp/myapp");
     expect(code).toBe(0);
     expect(stdout).toContain("myapp");
     expect(stdout).toContain("/tmp/myapp");
+    expect(stdout).not.toContain("{");
+
+    const json = await runCli("project", "create", "jsonapp", "/tmp/jsonapp", "--json");
+    expect(json.code).toBe(0);
+    expect(JSON.parse(json.stdout).path).toBe("/tmp/jsonapp");
   });
 
   it("project list shows created project", async () => {

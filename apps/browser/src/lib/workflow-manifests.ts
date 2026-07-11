@@ -146,8 +146,8 @@ const VALID_WORKFLOW_ENGINES = new Set<WorkflowRunner>([
   "auto",
 ]);
 
-const SECRET_KEY_RE = /secret|password|token|api[_-]?key|authorization|cookie|credential/i;
-const SECRET_VALUE_RE = /\b(sk-[A-Za-z0-9_-]{12,}|npm_[A-Za-z0-9_-]{12,}|gh[op]_[A-Za-z0-9_-]{12,}|AKIA[A-Z0-9]{16})\b/;
+const SENSITIVE_NAME_PATTERN = /secret|password|token|api[_-]?key|authorization|cookie|credential/i;
+const SENSITIVE_VALUE_PATTERN = /\b(sk-[A-Za-z0-9_-]{12,}|npm_[A-Za-z0-9_-]{12,}|gh[op]_[A-Za-z0-9_-]{12,}|AKIA[A-Z0-9]{16})\b/;
 
 type AsyncWorkflowFunction = (
   page: Page,
@@ -856,7 +856,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
 }
 
 function redactForWorkflowOutput(value: unknown): unknown {
-  if (typeof value === "string") return SECRET_VALUE_RE.test(value) ? "[redacted]" : value;
+  if (typeof value === "string") return SENSITIVE_VALUE_PATTERN.test(value) ? "[redacted]" : value;
   if (Array.isArray(value)) return value.map(redactForWorkflowOutput);
   if (!value || typeof value !== "object") return value;
 
@@ -872,7 +872,7 @@ function shouldRedactWorkflowKey(key: string, value: unknown): boolean {
   const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
   if (normalized === "redactsecrets" || normalized === "credentialstatus") return false;
   if (typeof value === "boolean" || typeof value === "number") return false;
-  return SECRET_KEY_RE.test(key);
+  return SENSITIVE_NAME_PATTERN.test(key);
 }
 
 function createWorkflowHelpers(

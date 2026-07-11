@@ -1,6 +1,7 @@
 // ─── Network, storage, performance, console tools ────────────────────────────
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { clampLimit, compactList, truncateText } from "./compact.js";
 import {
   registerTool,
   z,
@@ -40,13 +41,31 @@ export function register(server: McpServer) {
 
 registerTool(server,
   "browser_cookies_get",
-  "Get cookies from the current session",
-  { session_id: z.string().optional(), name: z.string().optional(), domain: z.string().optional() },
-  async ({ session_id, name, domain }) => {
+  "Get cookies from the current session. Compact by default; set verbose=true for full cookie values.",
+  { session_id: z.string().optional(), name: z.string().optional(), domain: z.string().optional(), limit: z.number().optional().default(25), offset: z.number().optional().default(0), verbose: z.boolean().optional().default(false) },
+  async ({ session_id, name, domain, limit, offset, verbose }) => {
     try {
       const sid = resolveSessionId(session_id);
       const page = getSessionPage(sid);
-      return json({ cookies: await getCookies(page, { name, domain }) });
+      const cookies = await getCookies(page, { name, domain });
+      if (verbose) {
+        const page = compactList(cookies, limit, (cookie) => cookie, { offset });
+        return json({ cookies: page.items, count: page.count, total: page.total, limit: page.limit, truncated: page.truncated, next_offset: page.next_offset });
+      }
+      const compact = compactList(cookies, limit, (cookie) => ({
+        name: cookie.name,
+        domain: cookie.domain,
+        path: cookie.path,
+        expires: cookie.expires,
+        httpOnly: cookie.httpOnly,
+        secure: cookie.secure,
+        sameSite: cookie.sameSite,
+        has_value: !!cookie.value,
+      }), {
+        offset,
+        hint: "Set verbose=true to include full cookie values.",
+      });
+      return json({ cookies: compact.items, count: compact.count, total: compact.total, limit: compact.limit, truncated: compact.truncated, next_offset: compact.next_offset, hint: compact.hint });
     } catch (e) { return err(e); }
   }
 );
@@ -134,9 +153,9 @@ registerTool(server,
 
 registerTool(server,
   "browser_network_log",
-  "Get captured network requests for a session",
-  { session_id: z.string().optional() },
-  async ({ session_id }) => {
+  "Get captured network requests for a session. Compact by default; set verbose=true for headers/bodies.",
+  { session_id: z.string().optional(), limit: z.number().optional().default(50), offset: z.number().optional().default(0), verbose: z.boolean().optional().default(false) },
+  async ({ session_id, limit, offset, verbose }) => {
     try {
       const sid = resolveSessionId(session_id);
       // Start logging if not already
@@ -146,7 +165,24 @@ registerTool(server,
         networkLogCleanup.set(sid, cleanup);
       }
       const log = getNetworkLog(sid);
-      return json({ requests: log, count: log.length });
+      if (verbose) {
+        const page = compactList(log, limit, (request) => request, { offset });
+        return json({ requests: page.items, count: page.count, total: page.total, limit: page.limit, truncated: page.truncated, next_offset: page.next_offset });
+      }
+      const compact = compactList(log, limit, (request) => ({
+        id: request.id,
+        method: request.method,
+        url: truncateText(request.url, 180),
+        status_code: request.status_code,
+        resource_type: request.resource_type,
+        duration_ms: request.duration_ms,
+        body_size: request.body_size,
+        timestamp: request.timestamp,
+      }), {
+        offset,
+        hint: "Set verbose=true for headers/bodies or use browser_har_stop with include_har=true for a full HAR.",
+      });
+      return json({ requests: compact.items, count: compact.count, total: compact.total, limit: compact.limit, truncated: compact.truncated, next_offset: compact.next_offset, hint: compact.hint });
     } catch (e) { return err(e); }
   }
 );
@@ -194,9 +230,9 @@ registerTool(server,
 
 registerTool(server,
   "browser_har_stop",
-  "Stop HAR capture and return the HAR data",
-  { session_id: z.string().optional() },
-  async ({ session_id }) => {
+  "Stop HAR capture. Saves HAR to downloads and omits full HAR unless include_har=true.",
+  { session_id: z.string().optional(), include_har: z.boolean().optional().default(false) },
+  async ({ session_id, include_har }) => {
     try {
       const sid = resolveSessionId(session_id);
       const capture = harCaptures.get(sid);
@@ -210,7 +246,12 @@ registerTool(server,
         const dl = saveToDownloads(harBuf, `capture-${Date.now()}.har`, { sessionId: sid, type: "har" });
         download_id = dl.id;
       } catch { /* non-fatal */ }
-      return json({ har, entry_count: har.log.entries.length, download_id });
+      return json({
+        entry_count: har.log.entries.length,
+        download_id,
+        har: include_har ? har : undefined,
+        hint: include_har ? undefined : "Full HAR omitted by default. Set include_har=true or fetch the saved download for the full payload.",
+      });
     } catch (e) { return err(e); }
   }
 );
@@ -381,9 +422,9 @@ registerTool(server,
 
 registerTool(server,
   "browser_console_log",
-  "Get captured console messages for a session",
-  { session_id: z.string().optional(), level: z.enum(["log", "warn", "error", "debug", "info"]).optional() },
-  async ({ session_id, level }) => {
+  "Get captured console messages for a session. Compact by default; set verbose=true for full messages.",
+  { session_id: z.string().optional(), level: z.enum(["log", "warn", "error", "debug", "info"]).optional(), limit: z.number().optional().default(50), offset: z.number().optional().default(0), verbose: z.boolean().optional().default(false) },
+  async ({ session_id, level, limit, offset, verbose }) => {
     try {
       const sid = resolveSessionId(session_id);
       if (!consoleCaptureCleanup.has(sid)) {
@@ -392,7 +433,21 @@ registerTool(server,
         consoleCaptureCleanup.set(sid, cleanup);
       }
       const messages = getConsoleLog(sid, level as import("../types/index.js").ConsoleLevel | undefined);
-      return json({ messages, count: messages.length });
+      if (verbose) {
+        const page = compactList(messages, limit, (message) => message, { offset });
+        return json({ messages: page.items, count: page.count, total: page.total, limit: page.limit, truncated: page.truncated, next_offset: page.next_offset });
+      }
+      const compact = compactList(messages, limit, (message) => ({
+        id: message.id,
+        level: message.level,
+        message: truncateText(message.message, 240),
+        source: truncateText(message.source, 120) || undefined,
+        timestamp: message.timestamp,
+      }), {
+        offset,
+        hint: "Set verbose=true for full console messages.",
+      });
+      return json({ messages: compact.items, count: compact.count, total: compact.total, limit: compact.limit, truncated: compact.truncated, next_offset: compact.next_offset, hint: compact.hint });
     } catch (e) { return err(e); }
   }
 );
@@ -400,12 +455,19 @@ registerTool(server,
 registerTool(server,
   "browser_has_errors",
   "Quick check: does the session have any console errors?",
-  { session_id: z.string().optional() },
-  async ({ session_id }) => {
+  { session_id: z.string().optional(), limit: z.number().optional().default(5), verbose: z.boolean().optional().default(false) },
+  async ({ session_id, limit, verbose }) => {
     try {
+      const rowLimit = clampLimit(limit, 5);
       const sid = resolveSessionId(session_id);
       const errors = getConsoleLog(sid, "error");
-      return json({ has_errors: errors.length > 0, error_count: errors.length, errors });
+      const sample = verbose ? errors : errors.slice(0, rowLimit).map((error) => ({
+        id: error.id,
+        level: error.level,
+        message: truncateText(error.message, 240),
+        timestamp: error.timestamp,
+      }));
+      return json({ has_errors: errors.length > 0, error_count: errors.length, errors: sample, limit: rowLimit, truncated: !verbose && errors.length > rowLimit, hint: !verbose && errors.length > rowLimit ? "Set verbose=true or a larger limit for more errors." : undefined });
     } catch (e) { return err(e); }
   }
 );
@@ -460,11 +522,26 @@ registerTool(server,
 
 registerTool(server,
   "browser_profile_list",
-  "List all saved browser profiles",
-  {},
-  async () => {
+  "List saved browser profiles. Compact by default; set verbose=true for full metadata.",
+  { limit: z.number().optional().default(25), offset: z.number().optional().default(0), verbose: z.boolean().optional().default(false) },
+  async ({ limit, offset, verbose }) => {
     try {
-      return json({ profiles: listProfilesFn() });
+      const profiles = listProfilesFn();
+      if (verbose) {
+        const page = compactList(profiles, limit, (profile) => profile, { offset });
+        return json({ profiles: page.items, count: page.count, total: page.total, limit: page.limit, truncated: page.truncated, next_offset: page.next_offset });
+      }
+      const compact = compactList(profiles, limit, (profile: any) => ({
+        name: profile.name,
+        domain: profile.domain,
+        cookies: profile.cookies_count ?? profile.cookies?.length,
+        storage_keys: profile.storage_keys ?? (profile.localStorage ? Object.keys(profile.localStorage).length : undefined),
+        updated_at: profile.updated_at ?? profile.modified,
+      }), {
+        offset,
+        hint: "Set verbose=true for full profile metadata.",
+      });
+      return json({ profiles: compact.items, count: compact.count, total: compact.total, limit: compact.limit, truncated: compact.truncated, next_offset: compact.next_offset, hint: compact.hint });
     } catch (e) { return err(e); }
   }
 );
@@ -478,19 +555,6 @@ registerTool(server,
       const deleted = deleteProfile(name);
       if (!deleted) return err(new Error(`Profile not found: ${name}`));
       return json({ deleted: name });
-    } catch (e) { return err(e); }
-  }
-);
-
-registerTool(server,
-  "browser_profile_auto_refresh",
-  "Schedule automatic cookie refresh to keep a profile session alive.",
-  { name: z.string(), refresh_url: z.string(), schedule: z.string().optional().default("0 */6 * * *") },
-  async ({ name, refresh_url, schedule }) => {
-    try {
-      const { createCronJob } = await import("../lib/cron-manager.js");
-      const job = createCronJob(schedule, { url: refresh_url }, `profile-refresh:${name}`);
-      return json({ scheduled: true, profile: name, schedule, job_id: job.id });
     } catch (e) { return err(e); }
   }
 );

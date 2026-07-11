@@ -17,18 +17,10 @@ export const STORAGE_TABLES = [
   "session_events",
   "session_tags",
   "auth_flows",
-  "workflows",
   "datasets",
   "api_endpoints",
-  "scripts",
-  "script_steps",
-  "script_runs",
   "feedback",
   "video_recordings",
-  "watch_jobs",
-  "watch_events",
-  "cron_jobs",
-  "cron_events",
 ] as const;
 
 export const BROWSER_STORAGE_TABLES = STORAGE_TABLES;
@@ -51,18 +43,10 @@ const PRIMARY_KEYS: Record<StorageTable, string[]> = {
   session_events: ["id"],
   session_tags: ["session_id", "tag"],
   auth_flows: ["id"],
-  workflows: ["id"],
   datasets: ["id"],
   api_endpoints: ["id"],
-  scripts: ["id"],
-  script_steps: ["id"],
-  script_runs: ["id"],
   feedback: ["id"],
   video_recordings: ["id"],
-  watch_jobs: ["id"],
-  watch_events: ["id"],
-  cron_jobs: ["id"],
-  cron_events: ["id"],
 };
 
 export interface SyncResult {
@@ -342,48 +326,13 @@ function ensureSyncMetaTable(db: TypedDb): void {
 
 function ensureOptionalLocalTables(db: TypedDb): void {
   db.exec(`
-    CREATE TABLE IF NOT EXISTS watch_jobs (
-      id         TEXT PRIMARY KEY,
-      name       TEXT,
-      url        TEXT NOT NULL,
-      schedule   TEXT NOT NULL,
-      selector   TEXT,
-      extract_schema TEXT,
-      last_hash  TEXT,
-      last_content TEXT,
-      last_check TEXT,
-      enabled    INTEGER NOT NULL DEFAULT 1,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE IF NOT EXISTS watch_events (
-      id         TEXT PRIMARY KEY,
-      watch_id   TEXT NOT NULL REFERENCES watch_jobs(id) ON DELETE CASCADE,
-      checked_at TEXT NOT NULL,
-      changed    INTEGER NOT NULL DEFAULT 0,
-      old_content TEXT,
-      new_content TEXT,
-      diff_summary TEXT
-    );
-    CREATE TABLE IF NOT EXISTS cron_jobs (
-      id          TEXT PRIMARY KEY,
-      name        TEXT,
-      schedule    TEXT NOT NULL,
-      task_json   TEXT NOT NULL,
-      last_run    TEXT,
-      next_run    TEXT,
-      enabled     INTEGER NOT NULL DEFAULT 1,
-      run_count   INTEGER NOT NULL DEFAULT 0,
-      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE IF NOT EXISTS cron_events (
-      id         TEXT PRIMARY KEY,
-      job_id     TEXT NOT NULL REFERENCES cron_jobs(id) ON DELETE CASCADE,
-      started_at TEXT NOT NULL,
-      ended_at   TEXT,
-      success    INTEGER,
-      result     TEXT,
-      error      TEXT
-    );
+    DROP TABLE IF EXISTS watch_events;
+    DROP TABLE IF EXISTS watch_jobs;
+    DROP TABLE IF EXISTS cron_events;
+    DROP TABLE IF EXISTS cron_jobs;
+    DROP TABLE IF EXISTS script_runs;
+    DROP TABLE IF EXISTS script_steps;
+    DROP TABLE IF EXISTS scripts;
   `);
 }
 

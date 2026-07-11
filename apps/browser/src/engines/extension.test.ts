@@ -60,7 +60,6 @@ afterEach(() => {
   try { rmSync(tmpDir, { recursive: true, force: true }); } catch {}
   delete process.env["BROWSER_DB_PATH"];
   delete process.env["BROWSER_DATA_DIR"];
-  delete process.env["BROWSER_EXTENSION_ALLOW_EVAL"];
 });
 
 describe("extension engine selection", () => {
@@ -103,20 +102,22 @@ describe("ExtensionPage proxy", () => {
     expect(await (page as any).extractLinks()).toEqual(["https://example.test/a"]);
   });
 
-  it("blocks arbitrary evaluate unless explicitly enabled", async () => {
+  it("does not expose arbitrary evaluate dispatch", async () => {
     const { page } = setupPage();
-    await expect(page.evaluate(() => 1)).rejects.toThrow(/disabled/);
+    await expect(page.evaluate(() => 1)).rejects.toThrow(/not supported/);
   });
 
-  it("allows evaluate when BROWSER_EXTENSION_ALLOW_EVAL=1", async () => {
-    process.env["BROWSER_EXTENSION_ALLOW_EVAL"] = "1";
-    const { page, jobs } = setupPage(() => 42);
-    expect(await page.evaluate(() => 42)).toBe(42);
-    expect(jobs[0].type).toBe("evaluate");
+  it("selectOption uses the closed select job without enabling arbitrary evaluate", async () => {
+    const { page, jobs } = setupPage(() => ({ value: "US" }));
+    expect(await page.selectOption("#country", "US")).toEqual(["US"]);
+    expect(jobs[0].type).toBe("select");
+    expect((jobs[0] as Extract<ExtJob, { type: "select" }>).payload).toEqual({
+      selector: "#country",
+      value: "US",
+    });
   });
 
   it("omits blank token ids and forwards approval tokens to remote dispatchers", async () => {
-    process.env["BROWSER_EXTENSION_ALLOW_EVAL"] = "1";
     const dispatches: Array<{ tokenId?: string; approvalToken?: string }> = [];
     const page = new ExtensionPage({ token_id: "" }, {
       approvalToken: "approved",
@@ -126,7 +127,7 @@ describe("ExtensionPage proxy", () => {
       },
     });
 
-    expect(await page.evaluate(() => 7)).toBe(7);
+    expect(await page.dispatch("ping")).toBe(7);
     expect(dispatches).toEqual([{ tokenId: undefined, approvalToken: "approved" }]);
   });
 });

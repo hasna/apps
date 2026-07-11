@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
+import { limited, parseLimit, printListFooter, shortId } from "../output.js";
 
 const DEFAULT_SERVER_URL = `http://127.0.0.1:${process.env["BROWSER_SERVER_PORT"] ?? "7030"}`;
 
@@ -92,7 +93,9 @@ export function register(program: Command) {
     .description("Show extension pairing and connection status")
     .option("--server <url>", "browser-serve URL", DEFAULT_SERVER_URL)
     .option("--json", "Output as JSON")
-    .action(async (opts: { server: string; json?: boolean }) => {
+    .option("--limit <n>", "Max extension rows to print in compact output", String(20))
+    .option("--verbose", "Show full token ids")
+    .action(async (opts: { server: string; json?: boolean; limit?: string; verbose?: boolean }) => {
       const status = await request<unknown>(opts.server, "/api/extension/status");
       if (opts.json) {
         console.log(JSON.stringify(status, null, 2));
@@ -101,9 +104,13 @@ export function register(program: Command) {
       const typed = status as { paired?: boolean; connected?: boolean; extensions?: Array<{ token_id: string; connected: boolean; last_seen_at?: string }> };
       console.log(`Paired: ${typed.paired ? chalk.green("yes") : chalk.gray("no")}`);
       console.log(`Connected: ${typed.connected ? chalk.green("yes") : chalk.gray("no")}`);
-      for (const ext of typed.extensions ?? []) {
-        console.log(`  ${ext.token_id} ${ext.connected ? chalk.green("connected") : chalk.gray("offline")} ${ext.last_seen_at ?? ""}`);
+      const extensions = typed.extensions ?? [];
+      const { visible } = limited(extensions, parseLimit(opts.limit));
+      for (const ext of visible) {
+        const token = opts.verbose ? ext.token_id : shortId(ext.token_id);
+        console.log(`  ${token} ${ext.connected ? chalk.green("connected") : chalk.gray("offline")} ${ext.last_seen_at ?? ""}`);
       }
+      if (extensions.length > 0) printListFooter(extensions.length, visible.length, "Use --limit N, --verbose, or --json for full extension token details.");
     });
 
   extension

@@ -1,4 +1,4 @@
-// ─── Tool commands: record, agent, project, gallery, downloads, login, attach, watch, daemon, install-browser, mcp, serve ───
+// ─── Tool commands: record, agent, project, gallery, downloads, login, attach, daemon, install-browser, mcp, serve ───
 
 import type { Command } from "commander";
 import chalk from "chalk";
@@ -16,6 +16,7 @@ import { listRecordings } from "../../db/recordings.js";
 import { isLightpandaAvailable } from "../../engines/lightpanda.js";
 import type { BrowserEngine, VideoRecordingCaptureMode, VideoRecordingCodec, VideoRecordingEncoding, VideoRecordingOptions, VideoRecordingPreset } from "../../types/index.js";
 import { UseCase } from "../../types/index.js";
+import { formatBytes, formatDate, limited, parseLimit, printHint, printListFooter, printPageFooter, shortId, truncate } from "../output.js";
 
 export function register(program: Command) {
 
@@ -64,12 +65,23 @@ recordCmd
 recordCmd
   .command("list")
   .description("List all recordings")
-  .action(() => {
+  .option("--json", "Output as JSON")
+  .option("--limit <n>", "Max rows to print in compact output", String(20))
+  .option("--verbose", "Show full ids and longer URLs")
+  .action((opts: { json?: boolean; limit?: string; verbose?: boolean }) => {
     const recordings = listRecordings();
-    if (recordings.length === 0) {
+    if (opts.json) {
+      console.log(JSON.stringify({ recordings }, null, 2));
+    } else if (recordings.length === 0) {
       console.log(chalk.gray("No recordings found"));
     } else {
-      recordings.forEach((r) => console.log(`${r.id} "${r.name}" (${r.steps.length} steps) ${r.created_at}`));
+      const { visible } = limited(recordings, parseLimit(opts.limit));
+      visible.forEach((r) => {
+        const id = opts.verbose ? r.id : shortId(r.id);
+        const url = r.start_url ? ` ${chalk.gray(truncate(r.start_url, opts.verbose ? 100 : 48))}` : "";
+        console.log(`${id} "${truncate(r.name, 40)}" ${r.steps.length} steps ${formatDate(r.created_at)}${url}`);
+      });
+      printListFooter(recordings.length, visible.length, "Use --limit N, --verbose, or --json for full recording records.");
     }
   });
 
@@ -264,17 +276,22 @@ videoCmd
   .command("list")
   .description("List saved video recordings")
   .option("--json", "Output JSON")
-  .action((opts: { json?: boolean }) => {
+  .option("--limit <n>", "Max rows to print in compact output", String(20))
+  .option("--verbose", "Show full ids and paths")
+  .action((opts: { json?: boolean; limit?: string; verbose?: boolean }) => {
     const recordings = listVideos();
     if (opts.json) {
       console.log(JSON.stringify({ recordings }, null, 2));
     } else if (recordings.length === 0) {
       console.log(chalk.gray("No video recordings found"));
     } else {
-      recordings.forEach((r) => {
-        const size = r.size_bytes ? `${(r.size_bytes / 1024 / 1024).toFixed(2)} MB` : "pending";
-        console.log(`${r.id} "${r.name}" ${r.status} ${r.format} ${r.width}x${r.height} ${size}`);
+      const { visible } = limited(recordings, parseLimit(opts.limit));
+      visible.forEach((r) => {
+        const id = opts.verbose ? r.id : shortId(r.id);
+        const path = opts.verbose && r.path ? ` ${chalk.gray(truncate(r.path, 80))}` : "";
+        console.log(`${id} "${truncate(r.name ?? "", 36)}" ${r.status} ${r.format} ${r.width}x${r.height} ${formatBytes(r.size_bytes)}${path}`);
       });
+      printListFooter(recordings.length, visible.length, "Use --limit N, --verbose, or --json for full video records.");
     }
   });
 
@@ -295,21 +312,39 @@ agentCmd
   .description("Register an agent")
   .option("--description <desc>", "Agent description")
   .option("--project <id>", "Project ID")
-  .action((name: string, opts: { description?: string; project?: string }) => {
+  .option("--json", "Output full agent as JSON")
+  .action((name: string, opts: { description?: string; project?: string; json?: boolean }) => {
     const agent = registerAgent(name, { description: opts.description, projectId: opts.project });
+    if (opts.json) {
+      console.log(JSON.stringify(agent, null, 2));
+      return;
+    }
     console.log(chalk.green(`✓ Agent registered: ${agent.name}`));
-    console.log(JSON.stringify(agent, null, 2));
+    console.log(chalk.gray(`  ID: ${agent.id}`));
+    if (agent.project_id) console.log(chalk.gray(`  Project: ${agent.project_id}`));
+    printHint("Use --json for the full agent record.");
   });
 
 agentCmd
   .command("list")
   .description("List all registered agents")
-  .action(() => {
+  .option("--json", "Output as JSON")
+  .option("--limit <n>", "Max rows to print in compact output", String(20))
+  .option("--verbose", "Show descriptions and full ids")
+  .action((opts: { json?: boolean; limit?: string; verbose?: boolean }) => {
     const agents = listAgents();
-    if (agents.length === 0) {
+    if (opts.json) {
+      console.log(JSON.stringify({ agents }, null, 2));
+    } else if (agents.length === 0) {
       console.log(chalk.gray("No agents found"));
     } else {
-      agents.forEach((a) => console.log(`${a.id} "${a.name}" last_seen=${a.last_seen}`));
+      const { visible } = limited(agents, parseLimit(opts.limit));
+      visible.forEach((a) => {
+        const id = opts.verbose ? a.id : shortId(a.id);
+        const description = opts.verbose && a.description ? ` ${chalk.gray(truncate(a.description, 80))}` : "";
+        console.log(`${id} "${truncate(a.name, 36)}" last_seen=${formatDate(a.last_seen)}${description}`);
+      });
+      printListFooter(agents.length, visible.length, "Use --limit N, --verbose, or --json for full agent records.");
     }
   });
 
@@ -329,21 +364,39 @@ projectCmd
   .command("create <name> <path>")
   .description("Create a new project")
   .option("--description <desc>", "Description")
-  .action((name: string, path: string, opts: { description?: string }) => {
+  .option("--json", "Output full project as JSON")
+  .action((name: string, path: string, opts: { description?: string; json?: boolean }) => {
     const project = ensureProject(name, path, opts.description);
+    if (opts.json) {
+      console.log(JSON.stringify(project, null, 2));
+      return;
+    }
     console.log(chalk.green(`✓ Project: ${project.name}`));
-    console.log(JSON.stringify(project, null, 2));
+    console.log(chalk.gray(`  ID: ${project.id}`));
+    console.log(chalk.gray(`  Path: ${project.path}`));
+    printHint("Use --json for the full project record.");
   });
 
 projectCmd
   .command("list")
   .description("List all projects")
-  .action(() => {
+  .option("--json", "Output as JSON")
+  .option("--limit <n>", "Max rows to print in compact output", String(20))
+  .option("--verbose", "Show descriptions and full paths")
+  .action((opts: { json?: boolean; limit?: string; verbose?: boolean }) => {
     const projects = listProjects();
-    if (projects.length === 0) {
+    if (opts.json) {
+      console.log(JSON.stringify({ projects }, null, 2));
+    } else if (projects.length === 0) {
       console.log(chalk.gray("No projects found"));
     } else {
-      projects.forEach((p) => console.log(`${p.id} "${p.name}" ${p.path}`));
+      const { visible } = limited(projects, parseLimit(opts.limit));
+      visible.forEach((p) => {
+        const path = opts.verbose ? p.path : truncate(p.path, 64);
+        const description = opts.verbose && p.description ? ` ${chalk.gray(truncate(p.description, 80))}` : "";
+        console.log(`${shortId(p.id)} "${truncate(p.name, 36)}" ${chalk.gray(path)}${description}`);
+      });
+      printListFooter(projects.length, visible.length, "Use --limit N, --verbose, or --json for full project records.");
     }
   });
 
@@ -486,28 +539,49 @@ galleryCmd
   .option("--tag <tag>", "Filter by tag")
   .option("--favorite", "Show only favorites")
   .option("--limit <n>", "Max entries", "20")
-  .action(async (opts: { project?: string; tag?: string; favorite?: boolean; limit: string }) => {
+  .option("--json", "Output as JSON")
+  .option("--verbose", "Show titles and full URLs")
+  .action(async (opts: { project?: string; tag?: string; favorite?: boolean; limit: string; json?: boolean; verbose?: boolean }) => {
     const { listEntries } = await import("../../db/gallery.js");
-    const entries = listEntries({ projectId: opts.project, tag: opts.tag, isFavorite: opts.favorite, limit: parseInt(opts.limit) });
+    const limit = parseLimit(opts.limit);
+    const entries = listEntries({ projectId: opts.project, tag: opts.tag, isFavorite: opts.favorite, limit: limit + 1 });
+    const visible = entries.slice(0, limit);
+    if (opts.json) {
+      console.log(JSON.stringify({ entries: visible, count: visible.length, limit, truncated: entries.length > limit }, null, 2));
+      return;
+    }
     if (entries.length === 0) { console.log(chalk.gray("No gallery entries found")); return; }
-    entries.forEach((e) => {
+    visible.forEach((e) => {
       const fav = e.is_favorite ? chalk.yellow("★") : " ";
       const tags = e.tags.length ? chalk.blue(` [${e.tags.join(",")}]`) : "";
-      const size = e.compressed_size_bytes ? chalk.gray(` ${(e.compressed_size_bytes / 1024).toFixed(1)}KB`) : "";
+      const size = e.compressed_size_bytes ? chalk.gray(` ${formatBytes(e.compressed_size_bytes)}`) : "";
       const ratio = e.compression_ratio != null ? chalk.green(` ${(e.compression_ratio * 100).toFixed(0)}%`) : "";
-      console.log(`${fav} ${e.id.slice(0, 8)} ${chalk.cyan(e.format ?? "?")}${size}${ratio}${tags} ${chalk.gray(e.url?.slice(0, 60) ?? "")}`);
+      const title = opts.verbose && e.title ? ` "${truncate(e.title, 48)}"` : "";
+      console.log(`${fav} ${shortId(e.id)} ${chalk.cyan(e.format ?? "?")}${size}${ratio}${tags}${title} ${chalk.gray(truncate(e.url, opts.verbose ? 120 : 60))}`);
     });
-    console.log(chalk.gray(`\n${entries.length} entries`));
+    printPageFooter(visible.length, entries.length > limit, "Use --limit N, --verbose, --json, or browser gallery get <id> for details.");
   });
 
 galleryCmd
   .command("get <id>")
   .description("Show gallery entry details")
-  .action(async (id: string) => {
+  .option("--json", "Output full entry as JSON")
+  .action(async (id: string, opts: { json?: boolean }) => {
     const { getEntry } = await import("../../db/gallery.js");
     const entry = getEntry(id);
     if (!entry) { console.log(chalk.red(`Not found: ${id}`)); return; }
-    console.log(JSON.stringify(entry, null, 2));
+    if (opts.json) {
+      console.log(JSON.stringify(entry, null, 2));
+      return;
+    }
+    console.log(`${entry.id} ${chalk.cyan(entry.format ?? "?")} ${entry.width ?? "?"}x${entry.height ?? "?"}`);
+    if (entry.title) console.log(chalk.gray(`  Title: ${truncate(entry.title, 120)}`));
+    if (entry.url) console.log(chalk.gray(`  URL: ${entry.url}`));
+    console.log(chalk.gray(`  Path: ${entry.path}`));
+    if (entry.thumbnail_path) console.log(chalk.gray(`  Thumbnail: ${entry.thumbnail_path}`));
+    if (entry.tags.length) console.log(chalk.gray(`  Tags: ${entry.tags.join(", ")}`));
+    if (entry.notes) console.log(chalk.gray(`  Notes: ${truncate(entry.notes, 180)}`));
+    printHint("Use --json for the full gallery record.");
   });
 
 galleryCmd
@@ -523,11 +597,20 @@ galleryCmd
   .command("search <query>")
   .description("Search gallery by URL, title, notes, or tags")
   .option("--limit <n>", "Max results", "10")
-  .action(async (query: string, opts: { limit: string }) => {
+  .option("--json", "Output as JSON")
+  .option("--verbose", "Show full URLs")
+  .action(async (query: string, opts: { limit: string; json?: boolean; verbose?: boolean }) => {
     const { searchEntries } = await import("../../db/gallery.js");
-    const results = searchEntries(query, parseInt(opts.limit));
+    const limit = parseLimit(opts.limit, 10);
+    const results = searchEntries(query, limit + 1);
+    const visible = results.slice(0, limit);
+    if (opts.json) {
+      console.log(JSON.stringify({ entries: visible, count: visible.length, limit, truncated: results.length > limit }, null, 2));
+      return;
+    }
     if (results.length === 0) { console.log(chalk.gray("No results")); return; }
-    results.forEach((e) => console.log(`${e.id.slice(0, 8)} ${e.title ?? ""} ${chalk.gray(e.url ?? "")}`));
+    visible.forEach((e) => console.log(`${shortId(e.id)} ${truncate(e.title, 48)} ${chalk.gray(truncate(e.url, opts.verbose ? 120 : 64))}`));
+    printPageFooter(visible.length, results.length > limit, "Use --limit N, --verbose, --json, or browser gallery get <id> for details.");
   });
 
 galleryCmd
@@ -584,11 +667,23 @@ const downloadsCmd = program.command("downloads").description("Manage downloads 
 downloadsCmd
   .command("list")
   .description("List downloaded files")
-  .action(async () => {
+  .option("--json", "Output as JSON")
+  .option("--limit <n>", "Max rows to print in compact output", String(20))
+  .option("--verbose", "Show full paths")
+  .action(async (opts: { json?: boolean; limit?: string; verbose?: boolean }) => {
     const { listDownloads } = await import("../../lib/downloads.js");
     const files = listDownloads();
+    if (opts.json) {
+      console.log(JSON.stringify({ downloads: files, count: files.length }, null, 2));
+      return;
+    }
     if (files.length === 0) { console.log(chalk.gray("No downloads")); return; }
-    files.forEach((f) => console.log(`${f.id.slice(0, 8)} ${chalk.cyan(f.type)} ${chalk.gray((f.size_bytes / 1024).toFixed(1) + "KB")} ${f.filename}`));
+    const { visible } = limited(files, parseLimit(opts.limit));
+    visible.forEach((f) => {
+      const path = opts.verbose ? ` ${chalk.gray(truncate(f.path, 90))}` : "";
+      console.log(`${shortId(f.id)} ${chalk.cyan(f.type)} ${chalk.gray(formatBytes(f.size_bytes))} ${truncate(f.filename, 64)}${path}`);
+    });
+    printListFooter(files.length, visible.length, "Use --limit N, --verbose, --json, or browser downloads export <id> <target> for details.");
   });
 
 downloadsCmd
@@ -719,77 +814,6 @@ daemonCmd
     }
   });
 
-// ─── watch ───────────────────────────────────────────────────────────────────
-
-program
-  .command("watch <url>")
-  .description("Monitor a URL for changes — periodic screenshot + diff")
-  .option("--engine <engine>", "Browser engine", "auto")
-  .option("--interval <seconds>", "Check interval in seconds", "30")
-  .option("--threshold <percent>", "Change threshold percent to report", "5")
-  .option("--headed", "Run in headed mode")
-  .option("--json", "Output as JSON")
-  .action(async (url: string, opts: { engine: string; interval: string; threshold: string; headed?: boolean; json?: boolean }) => {
-    const intervalMs = parseInt(opts.interval) * 1000;
-    const threshold = parseFloat(opts.threshold);
-
-    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed });
-    console.log(chalk.gray(`Watching: ${url} (every ${opts.interval}s, threshold ${opts.threshold}%)`));
-    console.log(chalk.gray(`Session: ${session.id} — Press Ctrl+C to stop\n`));
-
-    await navigate(page, url);
-    let baselineResult = await takeScreenshot(page, { format: "png" });
-    let baselinePath = baselineResult.path;
-    let checkCount = 0;
-
-    if (!opts.json) console.log(chalk.blue(`[${new Date().toISOString()}] Baseline captured: ${baselinePath}`));
-
-    const check = async () => {
-      checkCount++;
-      try {
-        await page.reload({ waitUntil: "domcontentloaded" });
-        await new Promise(r => setTimeout(r, 2000)); // Wait for render
-        const newResult = await takeScreenshot(page, { format: "png" });
-
-        // Diff
-        const { diffImages } = await import("../../lib/gallery-diff.js");
-        const diff = await diffImages(baselinePath, newResult.path);
-
-        const changed = diff.changed_percent > threshold;
-        const timestamp = new Date().toISOString();
-
-        if (opts.json) {
-          console.log(JSON.stringify({ timestamp, check: checkCount, changed_percent: diff.changed_percent, changed, screenshot: newResult.path, diff_path: changed ? diff.diff_path : undefined }));
-        } else if (changed) {
-          console.log(chalk.red(`[${timestamp}] CHANGED: ${diff.changed_percent.toFixed(2)}% (${diff.changed_pixels} pixels)`));
-          console.log(chalk.gray(`  Screenshot: ${newResult.path}`));
-          console.log(chalk.gray(`  Diff: ${diff.diff_path}`));
-          // Update baseline
-          baselinePath = newResult.path;
-        } else {
-          console.log(chalk.green(`[${timestamp}] No change (${diff.changed_percent.toFixed(2)}%)`));
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (opts.json) {
-          console.log(JSON.stringify({ timestamp: new Date().toISOString(), check: checkCount, error: msg }));
-        } else {
-          console.log(chalk.red(`[${new Date().toISOString()}] Error: ${msg}`));
-        }
-      }
-    };
-
-    const timer = setInterval(check, intervalMs);
-
-    // Handle Ctrl+C gracefully
-    process.on("SIGINT", async () => {
-      clearInterval(timer);
-      console.log(chalk.gray(`\nStopping watch. ${checkCount} checks performed.`));
-      await closeSession(session.id);
-      process.exit(0);
-    });
-  });
-
 // ─── mcp ─────────────────────────────────────────────────────────────────────
 
 program
@@ -828,15 +852,25 @@ feedbackCmd
 feedbackCmd
   .command("list")
   .description("List saved feedback")
-  .action(async () => {
+  .option("--json", "Output as JSON")
+  .option("--limit <n>", "Max rows to print in compact output", "20")
+  .option("--verbose", "Show longer messages")
+  .action(async (opts: { json?: boolean; limit: string; verbose?: boolean }) => {
     const { getDatabase } = await import("../../db/schema.js");
     const db = getDatabase();
     try {
-      const rows = db.prepare("SELECT id, message, email, created_at FROM feedback ORDER BY created_at DESC LIMIT 50").all() as Array<{ id: string; message: string; email?: string; created_at: string }>;
+      const limit = parseLimit(opts.limit);
+      const rows = db.prepare("SELECT id, message, email, created_at FROM feedback ORDER BY created_at DESC LIMIT ?").all(limit + 1) as Array<{ id: string; message: string; email?: string; created_at: string }>;
+      if (opts.json) {
+        console.log(JSON.stringify({ feedback: rows.slice(0, limit), count: Math.min(rows.length, limit), truncated: rows.length > limit }, null, 2));
+        return;
+      }
       if (rows.length === 0) { console.log(chalk.gray("No feedback entries")); return; }
-      rows.forEach((r) => {
-        console.log(`${r.message}${r.email ? chalk.gray(` <${r.email}>`) : ""} ${chalk.gray(r.created_at)}`);
+      const visible = rows.slice(0, limit);
+      visible.forEach((r) => {
+        console.log(`${shortId(r.id)} ${truncate(r.message, opts.verbose ? 180 : 80)}${r.email ? chalk.gray(` <${truncate(r.email, 36)}>`): ""} ${chalk.gray(formatDate(r.created_at))}`);
       });
+      printPageFooter(visible.length, rows.length > limit, "Use --limit N, --verbose, or --json for more feedback detail.");
     } catch {
       console.log(chalk.gray("No feedback entries"));
     }

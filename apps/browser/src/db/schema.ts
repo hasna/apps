@@ -320,24 +320,6 @@ function runMigrations(db: TypedDb): void {
       `,
     },
     {
-      version: 7,
-      sql: `
-        CREATE TABLE IF NOT EXISTS workflows (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL UNIQUE,
-          description TEXT,
-          steps TEXT NOT NULL DEFAULT '[]',
-          start_url TEXT,
-          last_run TEXT,
-          last_heal TEXT,
-          heal_count INTEGER DEFAULT 0,
-          run_count INTEGER DEFAULT 0,
-          created_at TEXT DEFAULT (datetime('now')),
-          updated_at TEXT DEFAULT (datetime('now'))
-        );
-      `,
-    },
-    {
       version: 8,
       sql: `
         CREATE TABLE IF NOT EXISTS datasets (
@@ -370,45 +352,9 @@ function runMigrations(db: TypedDb): void {
     {
       version: 9,
       sql: `
-        CREATE TABLE IF NOT EXISTS scripts (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL UNIQUE,
-          domain TEXT NOT NULL DEFAULT '',
-          description TEXT DEFAULT '',
-          variables TEXT NOT NULL DEFAULT '{}',
-          created_at TEXT DEFAULT (datetime('now')),
-          updated_at TEXT DEFAULT (datetime('now')),
-          last_run TEXT,
-          run_count INTEGER DEFAULT 0
-        );
-
-        CREATE TABLE IF NOT EXISTS script_steps (
-          id TEXT PRIMARY KEY,
-          script_id TEXT NOT NULL REFERENCES scripts(id) ON DELETE CASCADE,
-          step_order INTEGER NOT NULL,
-          type TEXT NOT NULL,
-          config TEXT NOT NULL DEFAULT '{}',
-          description TEXT DEFAULT '',
-          ai_enabled INTEGER DEFAULT 0,
-          ai_config TEXT DEFAULT '{}'
-        );
-        CREATE INDEX IF NOT EXISTS idx_script_steps_order ON script_steps(script_id, step_order);
-
-        CREATE TABLE IF NOT EXISTS script_runs (
-          id TEXT PRIMARY KEY,
-          script_id TEXT NOT NULL REFERENCES scripts(id) ON DELETE CASCADE,
-          status TEXT NOT NULL DEFAULT 'running',
-          current_step INTEGER DEFAULT 0,
-          total_steps INTEGER DEFAULT 0,
-          current_description TEXT DEFAULT '',
-          variables TEXT DEFAULT '{}',
-          steps_log TEXT DEFAULT '[]',
-          errors TEXT DEFAULT '[]',
-          started_at TEXT DEFAULT (datetime('now')),
-          completed_at TEXT,
-          duration_ms INTEGER
-        );
-        CREATE INDEX IF NOT EXISTS idx_script_runs_script ON script_runs(script_id, status);
+        DROP TABLE IF EXISTS script_runs;
+        DROP TABLE IF EXISTS script_steps;
+        DROP TABLE IF EXISTS scripts;
       `,
     },
     {
@@ -462,6 +408,24 @@ function runMigrations(db: TypedDb): void {
         ALTER TABLE sessions ADD COLUMN browser_live_view_url TEXT;
         CREATE INDEX IF NOT EXISTS idx_sessions_remote_session ON sessions(remote_session_id);
         CREATE INDEX IF NOT EXISTS idx_sessions_persistence ON sessions(persistence_id);
+      `,
+    },
+    {
+      version: 13,
+      sql: `
+        DROP TABLE IF EXISTS workflows;
+      `,
+    },
+    {
+      version: 14,
+      sql: `
+        DROP TABLE IF EXISTS script_runs;
+        DROP TABLE IF EXISTS script_steps;
+        DROP TABLE IF EXISTS scripts;
+        DROP TABLE IF EXISTS cron_events;
+        DROP TABLE IF EXISTS cron_jobs;
+        DROP TABLE IF EXISTS watch_events;
+        DROP TABLE IF EXISTS watch_jobs;
       `,
     },
   ];

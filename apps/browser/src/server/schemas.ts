@@ -65,7 +65,7 @@ export const extensionDispatchRequestSchema = z.object({
   approval_token: z.string().min(1).optional(),
   job: z.object({
     id: z.string().min(1),
-    type: z.enum(["ping", "navigate", "click", "type", "fill", "press", "wait", "scroll", "extract", "screenshot", "evaluate"]),
+    type: z.enum(["ping", "navigate", "click", "type", "fill", "select", "press", "wait", "scroll", "extract", "screenshot"]),
   }).passthrough(),
 }).passthrough();
 

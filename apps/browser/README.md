@@ -17,6 +17,57 @@ npm install -g @hasna/browser
 browser --help
 ```
 
+CLI output is compact by default so agent terminals do not fill context with
+large records. List and status commands show essential fields, cap row counts,
+truncate long text/URLs, and print a hint for the detail path.
+
+Use gradual disclosure when you need more:
+
+```bash
+browser session list --limit 50 --verbose
+browser session show <id>
+browser gallery get <id> --json
+browser downloads list --json
+```
+
+`--json` is the machine-readable path and returns full records where the command
+previously exposed them. MCP list tools follow the same rule: compact summaries
+by default, `limit`/`offset` for pagination, `verbose=true` for full records in
+the selected page, and explicit payload flags such as `include_base64=true`,
+`include_thumbnail=true`, or `include_har=true` for large binary or HAR data.
+
+## Semantic Browser Tools
+
+Browser is the substrate for agents and skills, not a recipe registry. Agents
+should use Browser to inspect a sanitized page model, choose from structured
+actions, execute refs deterministically, validate results, and record evidence.
+
+```bash
+browser page-map https://example.com --json
+browser observe https://example.com "find the login form" --json
+browser act https://example.com "click the login button" --screenshot --json
+browser validate https://example.com "the cart drawer is open" --json
+```
+
+The same surface is exposed through MCP as `browser_page_map`,
+`browser_observe`, `browser_act`, and `browser_validate`.
+
+`observe` builds deterministic candidate actions first. Model assistance, when
+enabled, ranks those bounded candidate IDs; it cannot invent selectors, refs,
+JavaScript, or new actions. `act` refreshes the current page map before running
+cached or direct actions and reclassifies the target against generic policy
+tags such as `account_creation`, `credential_entry`, `legal_acceptance`,
+`captcha`, `mfa`, `payment`, and `external_mutation`.
+
+Actions tagged as sensitive or externally mutating require explicit approval.
+This is intentionally generic: the policy is based on DOM/form semantics and
+labels, not website-specific scripts.
+
+Skills should describe the task, risk policy, model prompts, output schema, and
+stop conditions. Browser owns the page map, refs, actions, screenshots,
+recordings, downloads, evidence, and session cleanup. Site-specific JavaScript
+and durable site-specific manifests are not the primary automation model.
+
 ## Choose The Control Lane
 
 Use the narrowest browser lane that can finish the job:
@@ -72,16 +123,16 @@ browser-mcp
 
 ## HTTP mode
 
-Run a long-lived Streamable HTTP MCP server on `127.0.0.1` (default port **8802**):
+Run a long-lived Streamable HTTP MCP server on `127.0.0.1` (default port **8851**):
 
 ```bash
 browser-mcp --http
 # or: MCP_HTTP=1 browser-mcp
-# port override: --port 8802  or  MCP_HTTP_PORT=8802
+# port override: --port 8851  or  MCP_HTTP_PORT=8851
 ```
 
-- Health: `GET http://127.0.0.1:8802/health` → `{"status":"ok","name":"browser"}`
-- MCP: `http://127.0.0.1:8802/mcp`
+- Health: `GET http://127.0.0.1:8851/health` → `{"status":"ok","name":"browser"}`
+- MCP: `http://127.0.0.1:8851/mcp`
 
 Stdio remains the default when no `--http` / `MCP_HTTP=1` is set.
 
@@ -103,8 +154,7 @@ vault key before `KERNEL_API_KEY` and never prints the key:
 
 ```bash
 secrets set hasna/xyz/opensource/browser/prod/kernel_api_key <kernel-api-key>
-# or for one process:
-export KERNEL_API_KEY=<kernel-api-key>
+# or provide KERNEL_API_KEY in the process environment for one process
 browser kernel status --remote
 ```
 
@@ -188,8 +238,7 @@ Security defaults:
 - No server-side website credentials are stored; the user's Chrome session is
   the auth.
 - The bridge accepts only explicit, token-authenticated jobs.
-- Arbitrary JavaScript `evaluate` jobs are disabled unless
-  `BROWSER_EXTENSION_ALLOW_EVAL=1`.
+- Arbitrary JavaScript jobs are not part of the extension dispatch protocol.
 - Pairing codes are short-lived and single-use; tokens can be revoked with
   `browser extension unpair`.
 - The default extension does not request `chrome.cookies`; provider-specific

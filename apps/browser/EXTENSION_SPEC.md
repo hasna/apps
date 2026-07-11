@@ -26,7 +26,7 @@ Add `extension/dist/` to package `files`; add `build:extension` to the `build` c
 prints `.../dist` for "Load unpacked". Produce a `.zip` for the Web Store later (Postiz pattern).
 
 ## (b) Channel — extension SW dials OUT to browser-serve (inverted from Postiz)
-- SW opens `ws://127.0.0.1:7030/extension/ws?token=<pairing_token>` (loopback only). The local server is the
+- SW opens the loopback extension WebSocket with a pairing token query parameter. The local server is the
   controller; the extension is the worker. Avoids `externally_connectable`.
 - **MV3 SW keepalive (critical):** since Chrome 116 an active WebSocket + messages reset the SW idle timer;
   add a ~20s ping + a `chrome.alarms` (min 1 min) safety re-wake + exponential-backoff reconnect. Hence
@@ -73,7 +73,7 @@ prints `.../dist` for "Load unpacked". Produce a `.zip` for the Web Store later 
   MFA, rate-limit, bot-detection, paywall, access-control, or terms-of-service bypass.
 - Active-tab DOM jobs only: no browser chrome control, no WebAuthn or MFA bypass, no hardware-trusted clicks/keys,
   and no cookie export by default.
-- Closed action enum; **`evaluate` (arbitrary JS) disabled by default**, behind `BROWSER_EXTENSION_ALLOW_EVAL=1`
+- Closed action enum; **`evaluate` (arbitrary JS) disabled by default**, behind an explicit `BROWSER_EXTENSION_ALLOW_EVAL` opt-in
   (mirrors `BROWSER_ENABLE_BUN_WEBVIEW`).
 - Host scoping: ship `<all_urls>` but document per-provider narrowing. Full audit: log every job+result via the existing
   event/timeline (`src/db/timeline.ts`, `logEvent`) with origin/tab URL/selector/outcome. No silent auto-pairing (human enters code).
@@ -84,7 +84,7 @@ prints `.../dist` for "Load unpacked". Produce a `.zip` for the Web Store later 
    clear error when unpaired). Mock WS with in-memory duplex.
 2. Unit executor (jsdom/happy-dom): `extension/src/executor.test.ts` — injected funcs click right node, set value + fire
    input/change, extract text/links/snapshot.
-3. **E2E (gated `BROWSER_E2E=1`, a real test):** build `extension/dist`; launch headed Chromium via Playwright with
+3. **E2E (gated by `BROWSER_E2E`, a real test):** build `extension/dist`; launch headed Chromium via Playwright with
    `--load-extension=extension/dist --disable-extensions-except=… --user-data-dir=…`; start browser-serve on ephemeral port;
    pair (inject token into `chrome.storage.local` or drive popup); assert WS connects (`status`→paired); then
    `BrowserSDK.open({engine:"extension"})` → navigate to a local fixture → `extract text` → assert text matches AND a

@@ -12,12 +12,12 @@ export type ExtJob =
   | { id: string; type: "click"; session_id?: string; tab_id?: number; payload: { selector: string; button?: "left" | "right" | "middle"; clickCount?: number }; timeout_ms?: number }
   | { id: string; type: "type"; session_id?: string; tab_id?: number; payload: { selector: string; text: string; delay?: number; clear?: boolean }; timeout_ms?: number }
   | { id: string; type: "fill"; session_id?: string; tab_id?: number; payload: { selector: string; value: string }; timeout_ms?: number }
+  | { id: string; type: "select"; session_id?: string; tab_id?: number; payload: { selector: string; value: string }; timeout_ms?: number }
   | { id: string; type: "press"; session_id?: string; tab_id?: number; payload: { key: string }; timeout_ms?: number }
   | { id: string; type: "wait"; session_id?: string; tab_id?: number; payload: { selector: string; state?: "attached" | "detached" | "visible" | "hidden" }; timeout_ms?: number }
   | { id: string; type: "scroll"; session_id?: string; tab_id?: number; payload: { x: number; y: number }; timeout_ms?: number }
   | { id: string; type: "extract"; session_id?: string; tab_id?: number; payload: { format: ExtExtractFormat; selector?: string; baseUrl?: string }; timeout_ms?: number }
-  | { id: string; type: "screenshot"; session_id?: string; tab_id?: number; payload: { fullPage?: boolean }; timeout_ms?: number }
-  | { id: string; type: "evaluate"; session_id?: string; tab_id?: number; payload: { expression: string; args?: unknown[] }; timeout_ms?: number };
+  | { id: string; type: "screenshot"; session_id?: string; tab_id?: number; payload: { fullPage?: boolean }; timeout_ms?: number };
 
 export type ExtResult =
   | {
@@ -83,7 +83,6 @@ export enum UseCase {
   NETWORK_MONITOR = "network_monitor",
   HAR_CAPTURE = "har_capture",
   PERF_PROFILE = "perf_profile",
-  SCRIPT_INJECT = "script_inject",
   COVERAGE = "coverage",
   RECORD_REPLAY = "record_replay",
   TERMINAL_TEST = "terminal_test",
@@ -292,9 +291,7 @@ export type RecordingStepType =
   | "hover"
   | "select"
   | "check"
-  | "upload"
-  | "wait"
-  | "evaluate";
+  | "wait";
 
 export interface RecordingStep {
   type: RecordingStepType;

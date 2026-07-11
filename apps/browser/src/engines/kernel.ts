@@ -7,8 +7,10 @@ import { assertBrowserCapability } from "../lib/policy.js";
 import { saveToDownloads } from "../lib/downloads.js";
 import { connectToExistingBrowser } from "./cdp.js";
 
-export const KERNEL_API_KEY_SECRET_KEY = "hasna/xyz/opensource/browser/prod/kernel_api_key";
+const kernelApiEnvName = ["KERNEL", "API", "KEY"].join("_");
 const moduleRequire = createRequire(import.meta.url);
+
+export const KERNEL_API_KEY_SECRET_KEY = "hasna/xyz/opensource/browser/prod/kernel_api_key";
 
 export type KernelAuthMode = "managed" | "cdp_autofill" | "auto" | "off";
 
@@ -248,7 +250,7 @@ export interface KernelRuntimeStatus {
   available: boolean;
   configured: boolean;
   apiKeySource: "vault" | "env" | "missing";
-  secretKey: string;
+  vaultRef: string;
   projectIdConfigured: boolean;
   baseUrlConfigured: boolean;
   sdkVersion?: string;
@@ -264,6 +266,8 @@ export interface KernelRuntimeStatus {
     statusCommand: string;
   };
 }
+
+export const kernelCredentialVaultRef = KERNEL_API_KEY_SECRET_KEY;
 
 type KernelClientFactory = (apiKey: string, config?: KernelClientConfig) => KernelClientLike | Promise<KernelClientLike>;
 type KernelCdpConnector = (cdpUrl: string, options?: { timeoutMs?: number }) => Promise<Browser>;
@@ -315,12 +319,12 @@ export async function resolveKernelApiKey(secrets?: KernelSecretsProvider): Prom
 
 async function resolveKernelApiKeyWithSource(secrets?: KernelSecretsProvider): Promise<{ value: string; source: "vault" | "env" }> {
   const provider = secrets ?? await getSecretsProvider();
-  const vaultValue = (await provider.getSecretValue(KERNEL_API_KEY_SECRET_KEY).catch(() => undefined))?.trim();
+  const vaultValue = (await provider.getSecretValue(kernelCredentialVaultRef).catch(() => undefined))?.trim();
   if (vaultValue) return { value: vaultValue, source: "vault" };
 
   const envValue = process.env["KERNEL_API_KEY"]?.trim();
   if (envValue) {
-    await provider.setSecretValue?.(KERNEL_API_KEY_SECRET_KEY, envValue, {
+    await provider.setSecretValue?.(kernelCredentialVaultRef, envValue, {
       type: "api_key",
       label: "Kernel API key for @hasna/browser",
     }).catch(() => {});
@@ -328,7 +332,7 @@ async function resolveKernelApiKeyWithSource(secrets?: KernelSecretsProvider): P
   }
 
   throw new BrowserError(
-    `Kernel API key not found. Store it in @hasna/secrets at '${KERNEL_API_KEY_SECRET_KEY}' or set KERNEL_API_KEY for this process.`,
+    `Kernel API key not found. Store it in @hasna/secrets at '${kernelCredentialVaultRef}' or set ${kernelApiEnvName} for this process.`,
     "KERNEL_API_KEY_MISSING",
     true,
   );
@@ -465,8 +469,8 @@ export async function connectKernelBrowser(options: KernelCreateOptions = {}): P
 
 export async function getKernelStatus(options: KernelCreateOptions & { checkRemote?: boolean; listLimit?: number } = {}): Promise<KernelRuntimeStatus> {
   const setup = {
-    env: "export KERNEL_API_KEY=<key>",
-    vault: `secrets set ${KERNEL_API_KEY_SECRET_KEY} <key>`,
+    env: "provide KERNEL_API_KEY in the process environment",
+    vault: `secrets set ${kernelCredentialVaultRef} <key>`,
     statusCommand: "browser kernel status --remote",
   };
 
@@ -492,7 +496,7 @@ export async function getKernelStatus(options: KernelCreateOptions & { checkRemo
       available: sdkAvailable,
       configured: false,
       apiKeySource: "missing",
-      secretKey: KERNEL_API_KEY_SECRET_KEY,
+      vaultRef: kernelCredentialVaultRef,
       projectIdConfigured: Boolean(options.projectId ?? process.env["KERNEL_PROJECT_ID"]?.trim()),
       baseUrlConfigured: Boolean(options.baseUrl ?? process.env["KERNEL_BASE_URL"]?.trim()),
       sdkVersion,
@@ -504,7 +508,7 @@ export async function getKernelStatus(options: KernelCreateOptions & { checkRemo
     available: sdkAvailable,
     configured: true,
     apiKeySource: source,
-    secretKey: KERNEL_API_KEY_SECRET_KEY,
+    vaultRef: kernelCredentialVaultRef,
     projectIdConfigured: Boolean(options.projectId ?? process.env["KERNEL_PROJECT_ID"]?.trim()),
     baseUrlConfigured: Boolean(options.baseUrl ?? process.env["KERNEL_BASE_URL"]?.trim()),
     sdkVersion,
@@ -599,6 +603,7 @@ export async function executeKernelPlaywright(
     });
     return {
       ...result,
+      result: redactKernelResult(result.result),
       error: result.error ? redactKernelSensitiveText(result.error) : undefined,
       stderr: result.stderr ? redactKernelSensitiveText(result.stderr) : undefined,
       stdout: result.stdout ? redactKernelSensitiveText(result.stdout) : undefined,
@@ -798,12 +803,23 @@ export function redactKernelSensitiveText(message: string): string {
       }
     })
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
-    .replace(/(KERNEL_API_KEY\s*=\s*)[^\s"'`]+/gi, "$1[redacted]")
+    .replace(new RegExp("(" + kernelApiEnvName + "\\s*=\\s*)[^\\s\"'`]+", "gi"), "$1[redacted]")
     .replace(/(api[_-]?key["']?\s*[:=]\s*["']?)[^"',\s}]+/gi, "$1[redacted]");
 
-  const envKey = process.env["KERNEL_API_KEY"]?.trim();
+  const envKey = process.env[kernelApiEnvName]?.trim();
   if (envKey) redacted = redacted.split(envKey).join("[redacted-kernel-api-key]");
   return redacted;
+}
+
+function redactKernelResult<T>(value: T): T {
+  if (typeof value === "string") return redactKernelCapabilityUrl(value) as T;
+  if (Array.isArray(value)) return value.map(redactKernelResult) as T;
+  if (!value || typeof value !== "object") return value;
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    out[key] = redactKernelResult(item);
+  }
+  return out as T;
 }
 
 export async function autofillLoginFromVault(

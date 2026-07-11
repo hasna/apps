@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { join, resolve } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { ZodError, type ZodSchema } from "zod";
 import { createSession, closeSession, listSessions, getSessionPage, resolveKernelRemoteSessionId } from "../lib/session.js";
 import { navigate, click, type as typeAction, scroll } from "../lib/actions.js";
@@ -51,9 +51,45 @@ import {
   stopKernelReplay,
 } from "../engines/kernel.js";
 
-const PORT = parseInt(process.env["BROWSER_SERVER_PORT"] ?? "7030");
+const PORT = resolveServerPort();
 const SECURITY = resolveSecurityConfig();
 const startTime = Date.now();
+const PKG = JSON.parse(readFileSync(join(import.meta.dir, "../../package.json"), "utf8")) as { version: string };
+
+function hasFlag(...flags: string[]): boolean {
+  return process.argv.some((arg) => flags.includes(arg));
+}
+
+function resolveServerPort(): number {
+  const index = process.argv.indexOf("--port");
+  const fromArg = index >= 0 ? Number(process.argv[index + 1]) : NaN;
+  if (Number.isInteger(fromArg) && fromArg > 0) return fromArg;
+  return parseInt(process.env["BROWSER_SERVER_PORT"] ?? "7030", 10);
+}
+
+function printHelp(): void {
+  process.stdout.write(
+    `Usage: browser-serve [options]
+
+@hasna/browser REST server
+
+Options:
+  --port <number>  Port to serve on (default: ${PORT}, env: BROWSER_SERVER_PORT)
+  -h, --help       Show help
+  -V, --version    Show version
+`,
+  );
+}
+
+if (import.meta.main && hasFlag("--help", "-h")) {
+  printHelp();
+  process.exit(0);
+}
+
+if (import.meta.main && hasFlag("--version", "-V")) {
+  process.stdout.write(`${PKG.version}\n`);
+  process.exit(0);
+}
 
 // ─── Active state ─────────────────────────────────────────────────────────────
 const networkCleanup = new Map<string, () => void>();

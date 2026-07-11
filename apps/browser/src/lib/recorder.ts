@@ -102,14 +102,25 @@ export async function replayRecording(
             if (el) await el.hover();
           }
           break;
-        case "evaluate":
-          if (step.value) await page.evaluate(step.value);
+        case "select":
+          if (step.selector && step.value) await page.selectOption(step.selector, step.value);
+          break;
+        case "check":
+          if (step.selector) {
+            if (step.value === "false") {
+              await page.uncheck(step.selector);
+            } else {
+              await page.check(step.selector);
+            }
+          }
           break;
         case "wait":
           if (step.selector) {
             await page.waitForSelector(step.selector, { timeout: 10000 }).catch(() => {});
           }
           break;
+        default:
+          throw new BrowserError(`Unsupported recording step type: ${String(step.type)}`, "RECORDING_STEP_UNSUPPORTED");
       }
       executed++;
     } catch (err) {
@@ -156,10 +167,21 @@ export function exportRecording(recordingId: string, format: "json" | "playwrigh
           lines.push(`  await page.type('${step.selector}', '${step.value}');`);
           break;
         case "scroll":
-          lines.push(`  await page.evaluate(() => window.scrollBy(0, 300));`);
+          lines.push(`  await page.mouse.wheel(0, 300);`);
           break;
-        case "evaluate":
-          lines.push(`  await page.evaluate(${step.value});`);
+        case "hover":
+          lines.push(`  await page.hover('${step.selector}');`);
+          break;
+        case "select":
+          lines.push(`  await page.selectOption('${step.selector}', '${step.value}');`);
+          break;
+        case "check":
+          lines.push(step.value === "false"
+            ? `  await page.uncheck('${step.selector}');`
+            : `  await page.check('${step.selector}');`);
+          break;
+        case "wait":
+          lines.push(`  await page.waitForSelector('${step.selector}');`);
           break;
       }
     }
@@ -180,6 +202,11 @@ export function exportRecording(recordingId: string, format: "json" | "playwrigh
       case "navigate": lines.push(`  await page.goto('${step.url}');`); break;
       case "click": lines.push(`  await page.click('${step.selector}');`); break;
       case "type": lines.push(`  await page.type('${step.selector}', '${step.value}');`); break;
+      case "scroll": lines.push(`  await page.mouse.wheel({ deltaY: 300 });`); break;
+      case "hover": lines.push(`  await page.hover('${step.selector}');`); break;
+      case "select": lines.push(`  await page.select('${step.selector}', '${step.value}');`); break;
+      case "check": lines.push(`  await page.click('${step.selector}');`); break;
+      case "wait": lines.push(`  await page.waitForSelector('${step.selector}');`); break;
     }
   }
   lines.push(`  await browser.close();`, `})();`);

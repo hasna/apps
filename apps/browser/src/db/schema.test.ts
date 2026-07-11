@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -38,6 +39,13 @@ describe("DB schema", () => {
     expect(tables).toContain("agents");
     expect(tables).toContain("projects");
     expect(tables).toContain("heartbeats");
+    expect(tables).not.toContain("scripts");
+    expect(tables).not.toContain("script_steps");
+    expect(tables).not.toContain("script_runs");
+    expect(tables).not.toContain("watch_jobs");
+    expect(tables).not.toContain("watch_events");
+    expect(tables).not.toContain("cron_jobs");
+    expect(tables).not.toContain("cron_events");
   });
 
   it("WAL mode is enabled", () => {
@@ -50,6 +58,30 @@ describe("DB schema", () => {
     const db = getDatabase();
     const row = db.query<{ timeout: number }, []>("PRAGMA busy_timeout").get();
     expect(row?.timeout).toBe(5000);
+  });
+
+  it("drops removed workflow-like storage tables on upgraded installs", () => {
+    const dbPath = join(tmpDir, "test.db");
+    const oldDb = new Database(dbPath);
+    oldDb.exec(`
+      CREATE TABLE workflows (id TEXT PRIMARY KEY);
+      CREATE TABLE scripts (id TEXT PRIMARY KEY);
+      CREATE TABLE script_steps (id TEXT PRIMARY KEY);
+      CREATE TABLE script_runs (id TEXT PRIMARY KEY);
+      CREATE TABLE watch_jobs (id TEXT PRIMARY KEY);
+      CREATE TABLE watch_events (id TEXT PRIMARY KEY);
+      CREATE TABLE cron_jobs (id TEXT PRIMARY KEY);
+      CREATE TABLE cron_events (id TEXT PRIMARY KEY);
+    `);
+    oldDb.close();
+
+    const db = getDatabase();
+    for (const table of ["workflows", "scripts", "script_steps", "script_runs", "watch_jobs", "watch_events", "cron_jobs", "cron_events"]) {
+      const row = db
+        .query<{ name: string }, [string]>("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
+        .get(table);
+      expect(row).toBeNull();
+    }
   });
 
   it("returns same instance on repeated calls", () => {

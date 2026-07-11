@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { getDataDir } from "../db/schema.js";
 import { logEvent } from "../db/timeline.js";
 import { BrowserError, type ConnectedExtensionStatus, type ExtBridgeMessage, type ExtJob, type ExtensionBridgeStatus, type ExtensionPairing, type ExtResult } from "../types/index.js";
-import { allowedDomains, assertBrowserCapability, assertBrowserNavigationAllowed, isBrowserCapabilityApproved } from "./policy.js";
+import { allowedDomains, assertBrowserNavigationAllowed } from "./policy.js";
 
 const DEFAULT_PAIRING_TTL_MS = 5 * 60_000;
 const MAX_PAIRING_TTL_MS = 15 * 60_000;
@@ -15,12 +15,12 @@ const EXTENSION_JOB_TYPES = new Set<ExtJob["type"]>([
   "click",
   "type",
   "fill",
+  "select",
   "press",
   "wait",
   "scroll",
   "extract",
   "screenshot",
-  "evaluate",
 ]);
 
 interface PairingRecord {
@@ -414,19 +414,6 @@ export function validateExtensionDispatchJob(job: ExtJob, opts: { approvalToken?
       );
     }
     assertBrowserNavigationAllowed(opts.currentUrl);
-  }
-  if (
-    job.type === "evaluate"
-    && process.env["BROWSER_EXTENSION_ALLOW_EVAL"] !== "1"
-    && !isBrowserCapabilityApproved("extension_evaluate", { approvalToken: opts.approvalToken })
-  ) {
-    throw new BrowserError(
-      "Extension evaluate dispatch is disabled by default. Set BROWSER_EXTENSION_ALLOW_EVAL=1 or pass an approved browser capability token to allow arbitrary JavaScript jobs.",
-      "EXTENSION_EVAL_DISABLED",
-    );
-  }
-  if (job.type === "evaluate" && process.env["BROWSER_EXTENSION_ALLOW_EVAL"] !== "1") {
-    assertBrowserCapability("extension_evaluate", { approvalToken: opts.approvalToken });
   }
 }
 

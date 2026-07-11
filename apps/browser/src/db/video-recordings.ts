@@ -89,6 +89,7 @@ export interface VideoRecordingFilter {
   sessionId?: string;
   status?: VideoRecordingStatus;
   limit?: number;
+  offset?: number;
 }
 
 export function listVideoRecordings(filter?: VideoRecordingFilter): VideoRecording[] {
@@ -102,9 +103,10 @@ export function listVideoRecordings(filter?: VideoRecordingFilter): VideoRecordi
 
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const limit = filter?.limit ?? 100;
+  const offset = filter?.offset ?? 0;
   const rows = db.query<RawVideoRecording, (string | number)[]>(
-    `SELECT * FROM video_recordings ${where} ORDER BY started_at DESC LIMIT ?`
-  ).all(...values, limit);
+    `SELECT * FROM video_recordings ${where} ORDER BY started_at DESC LIMIT ? OFFSET ?`
+  ).all(...values, limit, offset);
 
   return rows.map(deserialize);
 }

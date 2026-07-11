@@ -44,6 +44,19 @@ import {
   logEvent,
 } from "./helpers.js";
 import { assertBrowserCapability } from "../lib/policy.js";
+import {
+  clearCachedSemanticActions,
+  coerceModelAction,
+  getCachedSemanticAction,
+  getSemanticActionCacheScope,
+  getSemanticPageMap,
+  observeSemanticActions,
+  runSemanticAction,
+  validateSemanticPage,
+  type SemanticAction,
+  type SemanticActionCacheScope,
+  type SemanticPageMap,
+} from "../lib/semantic-actions.js";
 
 export function register(server: McpServer) {
 
@@ -72,6 +85,7 @@ registerTool(server,
       } else {
         await navigate(page, url, timeout);
       }
+      clearCachedSemanticActions(sid);
       // Use property access for Bun (no evaluate call), page.title()/url() for Playwright
       const title = await getTitle(page);
       const current_url = await getUrl(page);
@@ -163,6 +177,7 @@ registerTool(server,
       const sid = resolveSessionId(session_id);
       const page = getSessionPage(sid);
       await goBack(page);
+      clearCachedSemanticActions(sid);
       return json({ url: page.url() });
     } catch (e) { return err(e); }
   }
@@ -177,6 +192,7 @@ registerTool(server,
       const sid = resolveSessionId(session_id);
       const page = getSessionPage(sid);
       await goForward(page);
+      clearCachedSemanticActions(sid);
       return json({ url: page.url() });
     } catch (e) { return err(e); }
   }
@@ -191,7 +207,137 @@ registerTool(server,
       const sid = resolveSessionId(session_id);
       const page = getSessionPage(sid);
       await reload(page);
+      clearCachedSemanticActions(sid);
       return json({ url: page.url() });
+    } catch (e) { return err(e); }
+  }
+);
+
+// ── Semantic Agent Tools ─────────────────────────────────────────────────────
+
+registerTool(server,
+  "browser_page_map",
+  "Return a sanitized semantic page map: title, URL, interactive refs, forms, and visible text for agent planning.",
+  {
+    session_id: z.string().optional(),
+    max_elements: z.number().optional().default(80),
+    max_text_chars: z.number().optional().default(4000),
+  },
+  async ({ session_id, max_elements, max_text_chars }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+      const pageMap = await getSemanticPageMap(page, sid, { maxElements: max_elements, maxTextChars: max_text_chars });
+      logEvent(sid, "page_map", { elements: pageMap.elements.length, forms: pageMap.forms.length });
+      return json(pageMap);
+    } catch (e) { return err(e); }
+  }
+);
+
+registerTool(server,
+  "browser_observe",
+  "Find structured page actions for an instruction. This does not execute; use browser_act with action_id or action.",
+  {
+    session_id: z.string().optional(),
+    instruction: z.string(),
+    max_actions: z.number().optional().default(8),
+    max_elements: z.number().optional().default(80),
+    use_model: z.boolean().optional().default(true),
+    model: z.string().optional().default("fast"),
+  },
+  async ({ session_id, instruction, max_actions, max_elements, use_model, model }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+      const result = await observeSemanticActions(page, sid, instruction, {
+        maxActions: max_actions,
+        maxElements: max_elements,
+        useModel: use_model,
+        infer: { model },
+      });
+      logEvent(sid, "observe", { instruction, actions: result.actions.length, modelUsed: result.modelUsed });
+      return json(result);
+    } catch (e) { return err(e); }
+  }
+);
+
+const semanticActionSchema = z.object({
+  id: z.string(),
+  kind: z.enum(["click", "fill", "select", "check", "hover"]),
+  ref: z.string(),
+  selector: z.string().optional(),
+  label: z.string(),
+  confidence: z.number(),
+  risk: z.enum(["none", "navigation", "external_mutation", "sensitive"]),
+  requiresApproval: z.boolean(),
+  policyTags: z.array(z.string()).optional(),
+  policyReason: z.string().optional(),
+  reason: z.string().optional(),
+  value: z.union([z.string(), z.boolean()]).optional(),
+  preconditions: z.array(z.string()).optional(),
+  postconditions: z.array(z.string()).optional(),
+});
+
+registerTool(server,
+  "browser_act",
+  "Execute a structured semantic action by action_id/action, or observe an instruction and execute the best action when risk policy allows.",
+  {
+    session_id: z.string().optional(),
+    action_id: z.string().optional(),
+    action: semanticActionSchema.optional(),
+    instruction: z.string().optional(),
+    value: z.union([z.string(), z.boolean()]).optional(),
+    allow_risk: z.boolean().optional().default(false),
+    screenshot: z.boolean().optional().default(false),
+  },
+  async ({ session_id, action_id, action, instruction, value, allow_risk, screenshot }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+      let resolved = action as SemanticAction | undefined;
+      let pageMap: SemanticPageMap | undefined;
+      let scope: Required<SemanticActionCacheScope> | undefined;
+      if (action || action_id) {
+        const current = await getSemanticActionCacheScope(page, sid);
+        pageMap = current.pageMap;
+        scope = current.scope;
+      }
+      if (resolved && pageMap) {
+        resolved = coerceModelAction(resolved, pageMap, instruction ?? resolved.label) ?? undefined;
+      }
+      if (!resolved && action_id && scope) resolved = getCachedSemanticAction(sid, action_id, scope) ?? undefined;
+      if (!resolved && instruction) {
+        const observed = await observeSemanticActions(page, sid, instruction, { maxActions: 1 });
+        resolved = observed.actions[0];
+      }
+      if (!resolved) return err(new Error("Provide action, action_id from browser_observe, or instruction."));
+      const result = await runSemanticAction(page, sid, resolved, { value, allowRisk: allow_risk });
+      const output: Record<string, unknown> = { ...result };
+      if (screenshot) {
+        output.screenshot = await takeScreenshot(page, { maxWidth: 1280, quality: 70, track: false });
+      }
+      logEvent(sid, "act", { action: resolved.id, kind: resolved.kind, risk: resolved.risk });
+      return json(output);
+    } catch (e) { return errWithScreenshot(e, session_id); }
+  }
+);
+
+registerTool(server,
+  "browser_validate",
+  "Validate a page assertion from sanitized page content and optional fast structured model reasoning.",
+  {
+    session_id: z.string().optional(),
+    assertion: z.string(),
+    use_model: z.boolean().optional().default(true),
+    model: z.string().optional().default("fast"),
+  },
+  async ({ session_id, assertion, use_model, model }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+      const result = await validateSemanticPage(page, assertion, { useModel: use_model, infer: { model } });
+      logEvent(sid, "validate", { assertion, ok: result.ok, confidence: result.confidence });
+      return json(result);
     } catch (e) { return err(e); }
   }
 );
@@ -481,28 +627,20 @@ registerTool(server,
 
 registerTool(server,
   "browser_find_visual",
-  "Find an element using AI vision when selectors and a11y refs fail. Useful for canvas, images, custom widgets. Takes a screenshot and asks a vision model to locate the element.",
+  "Find an element using AI vision when selectors and a11y refs fail. Returns coordinates only; use semantic refs/actions for execution.",
   {
     session_id: z.string().optional(),
     description: z.string().describe("Natural language description of the element to find (e.g. 'the blue Submit button', 'the search icon in the top right')"),
-    click: z.boolean().optional().default(false).describe("Click the element after finding it"),
     model: z.string().optional().describe("Vision model to use (default: claude-sonnet-4-5-20250929)"),
   },
-  async ({ session_id, description, click: doClick, model }) => {
+  async ({ session_id, description, model }) => {
     try {
       const sid = resolveSessionId(session_id);
       const page = getSessionPage(sid);
-      if (doClick) {
-        const { clickByVision } = await import("../lib/vision-fallback.js");
-        const result = await clickByVision(page, description, { model });
-        logEvent(sid, "vision_click", { query: description, ...result });
-        return json(result);
-      } else {
-        const { findElementByVision } = await import("../lib/vision-fallback.js");
-        const result = await findElementByVision(page, description, { model });
-        logEvent(sid, "vision_find", { query: description, ...result });
-        return json(result);
-      }
+      const { findElementByVision } = await import("../lib/vision-fallback.js");
+      const result = await findElementByVision(page, description, { model });
+      logEvent(sid, "vision_find", { query: description, ...result });
+      return json(result);
     } catch (e) { return err(e); }
   }
 );

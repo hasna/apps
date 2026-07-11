@@ -49,7 +49,7 @@ Browser MCP server (stdio transport by default)
 
 Options:
   --http           Serve MCP over Streamable HTTP (127.0.0.1)
-  --port <number>  HTTP port (default: 8802, env: MCP_HTTP_PORT)
+  --port <number>  HTTP port (default: 8851, env: MCP_HTTP_PORT)
   -h, --help       Show help
   -V, --version    Show version
 `,

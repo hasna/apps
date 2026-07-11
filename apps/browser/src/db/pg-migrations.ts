@@ -2,7 +2,7 @@
  * PostgreSQL migrations for open-browser storage sync.
  *
  * Equivalent to the SQLite schema in schema.ts plus lazy tables from
- * url-watcher.ts and cron-manager.ts, translated for PostgreSQL.
+ * SQLite schema migrations translated for PostgreSQL.
  */
 
 export const PG_MIGRATIONS: string[] = [
@@ -183,21 +183,6 @@ export const PG_MIGRATIONS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_auth_flows_domain ON auth_flows(domain)`,
   `CREATE INDEX IF NOT EXISTS idx_auth_flows_name ON auth_flows(name)`,
 
-  // Migration 7: Workflows
-  `CREATE TABLE IF NOT EXISTS workflows (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE,
-    description TEXT,
-    steps TEXT NOT NULL DEFAULT '[]',
-    start_url TEXT,
-    last_run TEXT,
-    last_heal TEXT,
-    heal_count INTEGER DEFAULT 0,
-    run_count INTEGER DEFAULT 0,
-    created_at TEXT DEFAULT NOW()::text,
-    updated_at TEXT DEFAULT NOW()::text
-  )`,
-
   // Migration 8: Datasets + API endpoints
   `CREATE TABLE IF NOT EXISTS datasets (
     id TEXT PRIMARY KEY,
@@ -226,48 +211,10 @@ export const PG_MIGRATIONS: string[] = [
 
   `CREATE INDEX IF NOT EXISTS idx_api_endpoints_session ON api_endpoints(session_id)`,
 
-  // Migration 9: Scripts and script execution
-  `CREATE TABLE IF NOT EXISTS scripts (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE,
-    domain TEXT NOT NULL DEFAULT '',
-    description TEXT DEFAULT '',
-    variables TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT DEFAULT NOW()::text,
-    updated_at TEXT DEFAULT NOW()::text,
-    last_run TEXT,
-    run_count INTEGER DEFAULT 0
-  )`,
-
-  `CREATE TABLE IF NOT EXISTS script_steps (
-    id TEXT PRIMARY KEY,
-    script_id TEXT NOT NULL REFERENCES scripts(id) ON DELETE CASCADE,
-    step_order INTEGER NOT NULL,
-    type TEXT NOT NULL,
-    config TEXT NOT NULL DEFAULT '{}',
-    description TEXT DEFAULT '',
-    ai_enabled BOOLEAN DEFAULT FALSE,
-    ai_config TEXT DEFAULT '{}'
-  )`,
-
-  `CREATE INDEX IF NOT EXISTS idx_script_steps_order ON script_steps(script_id, step_order)`,
-
-  `CREATE TABLE IF NOT EXISTS script_runs (
-    id TEXT PRIMARY KEY,
-    script_id TEXT NOT NULL REFERENCES scripts(id) ON DELETE CASCADE,
-    status TEXT NOT NULL DEFAULT 'running',
-    current_step INTEGER DEFAULT 0,
-    total_steps INTEGER DEFAULT 0,
-    current_description TEXT DEFAULT '',
-    variables TEXT DEFAULT '{}',
-    steps_log TEXT DEFAULT '[]',
-    errors TEXT DEFAULT '[]',
-    started_at TEXT DEFAULT NOW()::text,
-    completed_at TEXT,
-    duration_ms INTEGER
-  )`,
-
-  `CREATE INDEX IF NOT EXISTS idx_script_runs_script ON script_runs(script_id, status)`,
+  // Migration 9: remove saved script recipe storage.
+  `DROP TABLE IF EXISTS script_runs`,
+  `DROP TABLE IF EXISTS script_steps`,
+  `DROP TABLE IF EXISTS scripts`,
 
   // Migration 10: Feedback table
   `CREATE TABLE IF NOT EXISTS feedback (
@@ -313,51 +260,13 @@ export const PG_MIGRATIONS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_sessions_remote_session ON sessions(remote_session_id)`,
   `CREATE INDEX IF NOT EXISTS idx_sessions_persistence ON sessions(persistence_id)`,
 
-  // Lazy tables from url-watcher.ts
-  `CREATE TABLE IF NOT EXISTS watch_jobs (
-    id         TEXT PRIMARY KEY,
-    name       TEXT,
-    url        TEXT NOT NULL,
-    schedule   TEXT NOT NULL,
-    selector   TEXT,
-    extract_schema TEXT,
-    last_hash  TEXT,
-    last_content TEXT,
-    last_check TEXT,
-    enabled    BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
+  // Drop legacy workflow storage. The workflow product surface was removed.
+  `DROP TABLE IF EXISTS workflows`,
 
-  `CREATE TABLE IF NOT EXISTS watch_events (
-    id         TEXT PRIMARY KEY,
-    watch_id   TEXT NOT NULL REFERENCES watch_jobs(id) ON DELETE CASCADE,
-    checked_at TEXT NOT NULL,
-    changed    BOOLEAN NOT NULL DEFAULT FALSE,
-    old_content TEXT,
-    new_content TEXT,
-    diff_summary TEXT
-  )`,
-
-  // Lazy tables from cron-manager.ts
-  `CREATE TABLE IF NOT EXISTS cron_jobs (
-    id          TEXT PRIMARY KEY,
-    name        TEXT,
-    schedule    TEXT NOT NULL,
-    task_json   TEXT NOT NULL,
-    last_run    TEXT,
-    next_run    TEXT,
-    enabled     BOOLEAN NOT NULL DEFAULT TRUE,
-    run_count   INTEGER NOT NULL DEFAULT 0,
-    created_at  TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-
-  `CREATE TABLE IF NOT EXISTS cron_events (
-    id         TEXT PRIMARY KEY,
-    job_id     TEXT NOT NULL REFERENCES cron_jobs(id) ON DELETE CASCADE,
-    started_at TEXT NOT NULL,
-    ended_at   TEXT,
-    success    BOOLEAN,
-    result     TEXT,
-    error      TEXT
-  )`,
+  // Drop legacy workflow and scheduler storage.
+  `DROP TABLE IF EXISTS workflows`,
+  `DROP TABLE IF EXISTS watch_events`,
+  `DROP TABLE IF EXISTS watch_jobs`,
+  `DROP TABLE IF EXISTS cron_events`,
+  `DROP TABLE IF EXISTS cron_jobs`,
 ];

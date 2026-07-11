@@ -1,6 +1,7 @@
 // ─── Session lifecycle + tab tools ───────────────────────────────────────────
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { compactList, truncateText } from "./compact.js";
 import {
   registerTool,
   z,
@@ -44,7 +45,7 @@ registerTool(server,
 ENGINES:
 - "auto" (default): picks the best engine for your use case automatically
 - "playwright": full browser automation — forms, SPAs, auth flows, multi-tab
-- "cdp": Chrome DevTools Protocol — network monitoring, perf profiling, script injection
+- "cdp": Chrome DevTools Protocol — network monitoring, perf profiling, coverage
 - "lightpanda": fast headless for static pages
 - "bun": native Bun.WebView — fastest for screenshots and scraping
 - "tui": terminal UI testing — launches a CLI/TUI app (Ink, Blessed, Bubbletea, etc.) via ttyd and connects Playwright to it. Pass the shell command as start_url (e.g. "htop", "bun run app.tsx"). All browser tools (screenshot, click, type, wait) work on the terminal. Use tui_theme to control dark/light appearance and tui_method to choose between buffer-based reads and DOM-row reads.
@@ -154,15 +155,40 @@ TIPS:
 
 registerTool(server,
   "browser_session_list",
-  "List all browser sessions. Optionally filter by tag.",
-  { status: z.enum(["active", "closed", "error"]).optional(), project_id: z.string().optional(), tag: z.string().optional() },
-  async ({ status, project_id, tag }) => {
+  "List browser sessions. Compact by default; set verbose=true for full session records.",
+  {
+    status: z.enum(["active", "closed", "error"]).optional(),
+    project_id: z.string().optional(),
+    tag: z.string().optional(),
+    limit: z.number().optional().default(25),
+    offset: z.number().optional().default(0),
+    verbose: z.boolean().optional().default(false),
+  },
+  async ({ status, project_id, tag, limit, offset, verbose }) => {
     try {
-      if (tag) {
-        const { listSessionsByTag } = await import("../db/sessions.js");
-        return json({ sessions: listSessionsByTag(tag) });
+      const sessions = tag
+        ? await (async () => {
+          const { listSessionsByTag } = await import("../db/sessions.js");
+          return listSessionsByTag(tag);
+        })()
+        : listSessions({ status, projectId: project_id });
+      if (verbose) {
+        const page = compactList(sessions, limit, (session) => session, { offset });
+        return json({ sessions: page.items, count: page.count, total: page.total, limit: page.limit, truncated: page.truncated, next_offset: page.next_offset });
       }
-      return json({ sessions: listSessions({ status, projectId: project_id }) });
+      const compact = compactList(sessions, limit, (session) => ({
+        id: session.id,
+        name: session.name,
+        status: session.status,
+        engine: session.engine,
+        start_url: truncateText(session.start_url, 120) || undefined,
+        created_at: session.created_at,
+        closed_at: session.closed_at,
+      }), {
+        offset,
+        hint: "Set verbose=true for full session records or call browser_session_stats for one session.",
+      });
+      return json({ sessions: compact.items, count: compact.count, total: compact.total, limit: compact.limit, truncated: compact.truncated, next_offset: compact.next_offset, hint: compact.hint });
     } catch (e) { return err(e); }
   }
 );
@@ -335,13 +361,24 @@ registerTool(server,
 
 registerTool(server,
   "browser_session_list_states",
-  "List all saved storage states (auth snapshots)",
-  {},
-  async () => {
+  "List saved storage states (auth snapshots). Compact by default; set verbose=true for paths.",
+  { limit: z.number().optional().default(25), offset: z.number().optional().default(0), verbose: z.boolean().optional().default(false) },
+  async ({ limit, offset, verbose }) => {
     try {
       const { listStates } = await import("../lib/storage-state.js");
       const states = listStates();
-      return json({ states, count: states.length });
+      if (verbose) {
+        const page = compactList(states, limit, (state) => state, { offset });
+        return json({ states: page.items, count: page.count, total: page.total, limit: page.limit, truncated: page.truncated, next_offset: page.next_offset });
+      }
+      const compact = compactList(states, limit, (state) => ({
+        name: state.name,
+        modified: state.modified,
+      }), {
+        offset,
+        hint: "Set verbose=true to include storage-state file paths.",
+      });
+      return json({ states: compact.items, count: compact.count, total: compact.total, limit: compact.limit, truncated: compact.truncated, next_offset: compact.next_offset, hint: compact.hint });
     } catch (e) { return err(e); }
   }
 );

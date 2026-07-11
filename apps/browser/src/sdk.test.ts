@@ -134,7 +134,7 @@ describe("BrowserSDK", () => {
     expect(calls).toEqual(["createSession", "navigate:https://example.com/dashboard"]);
   });
 
-  it("runs workflow steps and auto-closes sessions it owns", async () => {
+  it("runs ordered SDK steps and auto-closes sessions it owns", async () => {
     const { calls, deps } = createDeps();
     const sdk = createBrowserSDK({ dependencies: deps });
 

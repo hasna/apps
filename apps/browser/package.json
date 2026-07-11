@@ -1,6 +1,6 @@
 {
   "name": "@hasna/browser",
-  "version": "0.5.14",
+  "version": "0.5.15",
   "description": "General-purpose browser agent toolkit — Playwright, Chrome DevTools Protocol, Lightpanda with auto engine selection. CLI + MCP + REST + SDK.",
   "type": "module",
   "main": "dist/index.js",
@@ -52,7 +52,7 @@
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
     "prepublishOnly": "bun run verify:release",
-    "postinstall": "mkdir -p $HOME/.hasna/browser/{screenshots,pdfs,states,downloads,videos,profiles,persistent,diffs,exports,scripts,workflows,workflows/evidence} 2>/dev/null || true"
+    "postinstall": "sh -c 'base=\"$HOME/.hasna/browser\"; for dir in screenshots pdfs states downloads videos profiles persistent diffs exports recordings action-cache evidence scripts workflows workflows/evidence; do mkdir -p \"$base/$dir\"; done' 2>/dev/null || true"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.104.1",

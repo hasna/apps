@@ -1,6 +1,7 @@
 // ─── Video recording tools ───────────────────────────────────────────────────
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { clampLimit, clampOffset, compactList, truncateText } from "./compact.js";
 import {
   registerTool,
   z,
@@ -94,23 +95,48 @@ registerTool(server,
 
 registerTool(server,
   "browser_videos_list",
-  "List saved browser video recordings",
+  "List saved browser video recordings. Compact by default; set verbose=true for full records.",
   {
     session_id: z.string().optional(),
     project_id: z.string().optional(),
     status: z.enum(["recording", "completed", "failed"]).optional(),
-    limit: z.number().optional().default(100),
+    limit: z.number().optional().default(25),
+    offset: z.number().optional().default(0),
+    verbose: z.boolean().optional().default(false),
   },
-  async ({ session_id, project_id, status, limit }) => {
+  async ({ session_id, project_id, status, limit, offset, verbose }) => {
     try {
-      return json({
-        recordings: listVideos({
+      const safeLimit = clampLimit(limit, 25);
+      const safeOffset = clampOffset(offset);
+      const recordings = listVideos({
           sessionId: session_id,
           projectId: project_id,
           status,
-          limit,
-        }),
+          limit: safeLimit + 1,
+          offset: safeOffset,
+        });
+      const pageRecordings = recordings.slice(0, safeLimit);
+      const hasMore = recordings.length > safeLimit;
+      if (verbose) return json({
+        recordings: pageRecordings,
+        count: pageRecordings.length,
+        limit: safeLimit,
+        truncated: hasMore,
+        next_offset: hasMore ? safeOffset + safeLimit : undefined,
       });
+      const compact = compactList(pageRecordings, safeLimit, (recording) => ({
+        id: recording.id,
+        name: truncateText(recording.name, 100),
+        status: recording.status,
+        format: recording.format,
+        dimensions: recording.width && recording.height ? `${recording.width}x${recording.height}` : undefined,
+        size_bytes: recording.size_bytes,
+        path: recording.path ? truncateText(recording.path, 140) : undefined,
+        started_at: recording.started_at,
+      }), {
+        hint: "Set verbose=true for full video recording metadata.",
+      });
+      return json({ recordings: compact.items, count: compact.count, limit: safeLimit, truncated: hasMore, next_offset: hasMore ? safeOffset + safeLimit : undefined, hint: compact.hint });
     } catch (e) { return err(e); }
   }
 );

@@ -1,6 +1,7 @@
 // ─── Agent and Project tools ─────────────────────────────────────────────────
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { compactList, truncateText } from "./compact.js";
 import {
   registerTool,
   z,
@@ -49,11 +50,27 @@ registerTool(server,
 
 registerTool(server,
   "list_agents",
-  "List all registered agents.",
-  { project_id: z.string().optional() },
-  async ({ project_id }) => {
+  "List registered agents. Compact by default; set verbose=true for full records.",
+  { project_id: z.string().optional(), limit: z.number().optional().default(25), offset: z.number().optional().default(0), verbose: z.boolean().optional().default(false) },
+  async ({ project_id, limit, offset, verbose }) => {
     try {
-      return json({ agents: listAgents(project_id) });
+      const agents = listAgents(project_id);
+      if (verbose) {
+        const page = compactList(agents, limit, (agent) => agent, { offset });
+        return json({ agents: page.items, count: page.count, total: page.total, limit: page.limit, truncated: page.truncated, next_offset: page.next_offset });
+      }
+      const compact = compactList(agents, limit, (agent) => ({
+        id: agent.id,
+        name: agent.name,
+        description: truncateText(agent.description, 120) || undefined,
+        session_id: agent.session_id,
+        project_id: agent.project_id,
+        last_seen: agent.last_seen,
+      }), {
+        offset,
+        hint: "Set verbose=true for full agent records.",
+      });
+      return json({ agents: compact.items, count: compact.count, total: compact.total, limit: compact.limit, truncated: compact.truncated, next_offset: compact.next_offset, hint: compact.hint });
     } catch (e) { return err(e); }
   }
 );
@@ -87,11 +104,26 @@ registerTool(server,
 
 registerTool(server,
   "browser_project_list",
-  "List all registered projects",
-  {},
-  async () => {
+  "List registered projects. Compact by default; set verbose=true for full records.",
+  { limit: z.number().optional().default(25), offset: z.number().optional().default(0), verbose: z.boolean().optional().default(false) },
+  async ({ limit, offset, verbose }) => {
     try {
-      return json({ projects: listProjects() });
+      const projects = listProjects();
+      if (verbose) {
+        const page = compactList(projects, limit, (project) => project, { offset });
+        return json({ projects: page.items, count: page.count, total: page.total, limit: page.limit, truncated: page.truncated, next_offset: page.next_offset });
+      }
+      const compact = compactList(projects, limit, (project) => ({
+        id: project.id,
+        name: project.name,
+        path: truncateText(project.path, 140),
+        description: truncateText(project.description, 120) || undefined,
+        created_at: project.created_at,
+      }), {
+        offset,
+        hint: "Set verbose=true for full project paths and descriptions.",
+      });
+      return json({ projects: compact.items, count: compact.count, total: compact.total, limit: compact.limit, truncated: compact.truncated, next_offset: compact.next_offset, hint: compact.hint });
     } catch (e) { return err(e); }
   }
 );

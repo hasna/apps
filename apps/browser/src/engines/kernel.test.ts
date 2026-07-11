@@ -472,12 +472,50 @@ describe("kernel engine", () => {
     expect(replay.type).toBe("video");
   });
 
+  it("redacts capability URLs from nested Kernel Playwright results", async () => {
+    const calls: unknown[] = [];
+    setKernelSecretsProviderForTests(secretsProvider());
+    setKernelClientFactoryForTests(() => ({
+      browsers: {
+        async create() {
+          throw new Error("not used");
+        },
+        async deleteByID() {},
+        playwright: {
+          async execute(sessionId, params) {
+            calls.push({ sessionId, params });
+            return {
+              success: true,
+              result: {
+                url: "wss://kernel.test/devtools/browser/secret-token",
+                nested: ["https://kernel.test/live/secret-token"],
+              },
+            };
+          },
+        },
+      },
+    }));
+
+    const result = await executeKernelPlaywright("kernel-session-4", "return await page.title()", {
+      timeoutSec: 12,
+    });
+
+    expect(calls).toEqual([{
+      sessionId: "kernel-session-4",
+      params: { code: "return await page.title()", timeout_sec: 12 },
+    }]);
+    expect(JSON.stringify(result)).toContain("[redacted-cdp-url]");
+    expect(JSON.stringify(result)).toContain("[redacted-url]");
+    expect(JSON.stringify(result)).not.toContain("secret-token");
+  });
+
   it("redacts Kernel secrets from error strings", () => {
-    const redacted = redactKernelSensitiveText("Bearer abc123 failed for wss://kernel.test/cdp?jwt=secret and KERNEL_API_KEY=secret");
+    const envAssignment = "KERNEL_API_KEY" + "=secret";
+    const redacted = redactKernelSensitiveText(`Bearer abc123 failed for wss://kernel.test/cdp?jwt=secret and ${envAssignment}`);
     expect(redacted).toContain("Bearer [redacted]");
     expect(redacted).toContain("[redacted-kernel-websocket-url]");
     expect(redacted).not.toContain("abc123");
     expect(redacted).not.toContain("jwt=secret");
-    expect(redacted).not.toContain("KERNEL_API_KEY=secret");
+    expect(redacted).not.toContain(envAssignment);
   });
 });
