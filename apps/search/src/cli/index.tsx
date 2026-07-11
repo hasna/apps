@@ -37,6 +37,7 @@ import {
   disableProvider,
   updateProvider,
   isProviderConfigured,
+  getProviderConfigurationStatus,
 } from "../db/providers.js";
 import {
   listProfiles,
@@ -46,6 +47,25 @@ import {
 } from "../db/profiles.js";
 import { getIndexDbPath } from "../db/index-db.js";
 import { getDbPath } from "../db/database.js";
+import {
+  DEFAULT_COMPACT_LIMIT,
+  clampLimit,
+  truncateMiddle,
+  truncateText,
+} from "../lib/compact-output.js";
+import { getExaConfigurationStatus } from "../lib/exa.js";
+import {
+  createWebset,
+  createWebsetSearch,
+  getWebset,
+  listWebsetItems,
+  listWebsets,
+  waitForWebsetIdle,
+  type CreateWebsetInput,
+  type WebsetEntityInput,
+  type WebsetMetadata,
+  type WebsetSearchInput,
+} from "../lib/websets.js";
 
 const pkg = require("../../package.json") as { version: string };
 
@@ -75,6 +95,56 @@ function parseOptionalRateLimit(value: string | undefined): number | undefined {
   return parsed;
 }
 
+function parsePositiveInteger(value: string | undefined, label: string, fallback: number): number {
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`Invalid ${label}: ${value} (expected an integer >= 1)`);
+  }
+  return parsed;
+}
+
+function collectOption(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
+}
+
+function parseMetadataOption(value: string | undefined, label: string): WebsetMetadata | undefined {
+  if (value === undefined) return undefined;
+  const parsed = JSON.parse(value) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${label} must be a JSON object`);
+  }
+  const metadata: WebsetMetadata = {};
+  for (const [key, metadataValue] of Object.entries(parsed as Record<string, unknown>)) {
+    if (typeof metadataValue !== "string") {
+      throw new Error(`${label} values must be strings`);
+    }
+    if (metadataValue.length > 1000) {
+      throw new Error(`${label}.${key} must be 1000 characters or less`);
+    }
+    metadata[key] = metadataValue;
+  }
+  return metadata;
+}
+
+function parseWebsetEntity(entity: string | undefined, description: string | undefined): WebsetEntityInput | undefined {
+  if (!entity) {
+    if (description) throw new Error("--entity-description requires --entity custom");
+    return undefined;
+  }
+  if (entity === "custom") {
+    if (!description || description.trim().length < 2) {
+      throw new Error("--entity custom requires --entity-description with at least 2 characters");
+    }
+    return { type: "custom", description: description.trim() };
+  }
+  if (description) throw new Error("--entity-description is only valid with --entity custom");
+  if (entity === "company" || entity === "person" || entity === "article" || entity === "research_paper") {
+    return { type: entity };
+  }
+  throw new Error("--entity must be one of: company, person, article, research_paper, custom");
+}
+
 function parseConfigInput(value: string): unknown {
   try {
     return JSON.parse(value);
@@ -90,8 +160,9 @@ program
   .description("Unified search — local file index + 12 web providers, one interface");
 
 registerStorageCommands(program);
-registerLocalCommands(program);
 registerEventsCommands(program, { source: "search" });
+
+registerLocalCommands(program);
 
 program
   .command("doctor")
@@ -102,7 +173,7 @@ program
     const providers = listProviders().map((provider) => ({
       name: provider.name,
       enabled: provider.enabled,
-      configured: isProviderConfigured(provider),
+      ...getProviderConfigurationStatus(provider),
     }));
     const report = {
       ok: diagnostics.valid,
@@ -130,8 +201,51 @@ program
       }`,
     );
     console.log(`  Providers enabled: ${providers.filter((provider) => provider.enabled).length}/${providers.length}`);
+    const missing = providers.filter((provider) => provider.enabled && !provider.configured);
+    if (missing.length > 0) {
+      console.log(chalk.yellow("  Missing provider configuration:"));
+      for (const provider of missing) console.log(`    ${provider.name}: ${provider.reason}`);
+    }
     if (!diagnostics.valid) process.exitCode = 1;
   });
+
+function printJson(value: unknown): void {
+  console.log(JSON.stringify(value, null, 2));
+}
+
+function parseCliLimit(value: string | undefined, label: string, fallback = DEFAULT_COMPACT_LIMIT): number {
+  if (value === undefined) return fallback;
+  const limit = Number(value);
+  if (!Number.isInteger(limit) || limit < 1) {
+    console.error(chalk.red(`Invalid ${label}: ${value} (expected a positive integer)`));
+    process.exit(1);
+  }
+  return clampLimit(limit, fallback);
+}
+
+function parseCliOffset(value: string | undefined): number {
+  if (value === undefined) return 0;
+  const offset = Number(value);
+  if (!Number.isInteger(offset) || offset < 0) {
+    console.error(chalk.red(`Invalid --offset: ${value} (expected an integer >= 0)`));
+    process.exit(1);
+  }
+  return offset;
+}
+
+function printPaginationHint(
+  shown: number,
+  total: number,
+  offset: number,
+  nextCommand: string,
+  detailHint?: string,
+): void {
+  const nextOffset = offset + shown;
+  const hints: string[] = [];
+  if (nextOffset < total) hints.push(`more: ${nextCommand} --offset ${nextOffset}`);
+  if (detailHint) hints.push(detailHint);
+  if (hints.length > 0) console.log(chalk.dim(hints.join(" | ")));
+}
 
 // --- Main search command ---
 program
@@ -144,6 +258,7 @@ program
   .option("-f, --format <format>", "Output format: table, json", "table")
   .option("--smart", "Route the query to the best configured providers with the smart router")
   .option("--no-dedup", "Disable deduplication")
+  .option("--verbose", "Show every returned row with untruncated URLs/snippets")
   .action(async (queryParts: string[], opts) => {
     const query = queryParts.join(" ");
 
@@ -162,7 +277,7 @@ program
         return;
       }
 
-      printResults(response.results, response.search.duration, response.errors);
+      printResults(response.results, response.search.duration, response.errors, { verbose: opts.verbose });
     } catch (err) {
       console.error(chalk.red(`Error: ${err instanceof Error ? err.message : err}`));
       process.exit(1);
@@ -177,6 +292,7 @@ for (const providerName of PROVIDER_NAMES) {
     .option("-l, --limit <n>", "Max results", "10")
     .option("-f, --format <format>", "Output: table, json", "table")
     .option("--transcribe", "Transcribe top YouTube results (youtube only)")
+    .option("--verbose", "Show every returned row with untruncated URLs/snippets")
     .action(async (queryParts: string[], opts) => {
       const query = queryParts.join(" ");
 
@@ -186,7 +302,7 @@ for (const providerName of PROVIDER_NAMES) {
             limit: parseInt(opts.limit),
             transcribeTop: 3,
           });
-          printResults(deep.videoResults, 0, []);
+          printResults(deep.videoResults, 0, [], { verbose: opts.verbose });
           if (deep.transcriptMatches.length > 0) {
             console.log(chalk.cyan("\n--- Transcript Matches ---"));
             for (const m of deep.transcriptMatches) {
@@ -209,7 +325,7 @@ for (const providerName of PROVIDER_NAMES) {
           return;
         }
 
-        printResults(response.results, response.search.duration, response.errors);
+        printResults(response.results, response.search.duration, response.errors, { verbose: opts.verbose });
       } catch (err) {
         console.error(chalk.red(`Error: ${err instanceof Error ? err.message : err}`));
         process.exit(1);
@@ -224,35 +340,62 @@ history
   .command("list")
   .alias("ls")
   .option("-l, --limit <n>", "Max items", "20")
+  .option("--offset <n>", "Start offset for pagination", "0")
   .option("-q, --query <query>", "Filter by query")
+  .option("--json", "Output full records as JSON")
+  .option("--verbose", "Show full query text")
   .action((opts) => {
+    const limit = parseCliLimit(opts.limit, "--limit");
+    const offset = parseCliOffset(opts.offset);
     const { searches, total } = listSearches({
-      limit: parseInt(opts.limit),
+      limit,
+      offset,
       query: opts.query,
     });
-    console.log(chalk.bold(`Search History (${total} total)`));
+    if (opts.json) {
+      printJson({ total, limit, offset, searches });
+      return;
+    }
+    console.log(chalk.bold(`Search History (showing ${searches.length} of ${total})`));
     console.log();
     for (const s of searches) {
       console.log(
-        `${chalk.dim(s.id.substring(0, 8))}  ${chalk.white(s.query)}  ${chalk.cyan(s.providers.join(","))}  ${chalk.green(String(s.resultCount) + " results")}  ${chalk.dim(s.createdAt)}`,
+        `${chalk.dim(s.id)}  ${chalk.white(opts.verbose ? s.query : truncateText(s.query, 88))}  ${chalk.cyan(s.providers.join(","))}  ${chalk.green(String(s.resultCount) + " results")}  ${chalk.dim(s.createdAt)}`,
       );
     }
+    printPaginationHint(
+      searches.length,
+      total,
+      offset,
+      "search history list",
+      "details: search history show <id> --verbose",
+    );
   });
 
 history
   .command("show <id>")
-  .action((id: string) => {
+  .option("-l, --limit <n>", "Max result rows to show", "20")
+  .option("--offset <n>", "Start offset for result pagination", "0")
+  .option("--json", "Output details as JSON")
+  .option("--verbose", "Show full result URLs/snippets")
+  .action((id: string, opts) => {
     const search = getSearch(id);
     if (!search) {
       fail(`Search not found: ${id}`);
       return;
     }
+    const limit = parseCliLimit(opts.limit, "--limit");
+    const offset = parseCliOffset(opts.offset);
+    const results = listResults(search.id, { limit, offset });
+    if (opts.json) {
+      printJson({ search, results, limit, offset });
+      return;
+    }
     console.log(chalk.bold(`Query: ${search.query}`));
     console.log(`Providers: ${search.providers.join(", ")}`);
-    console.log(`Results: ${search.resultCount} | Duration: ${search.duration}ms`);
+    console.log(`Results: ${search.resultCount} | Showing: ${results.length} | Duration: ${search.duration}ms`);
     console.log();
-    const results = listResults(search.id);
-    printResults(results, search.duration, []);
+    printResults(results, search.duration, [], { verbose: opts.verbose, total: search.resultCount, offset });
   });
 
 history
@@ -268,18 +411,41 @@ history
 // --- Saved searches ---
 const saved = program.command("saved").description("Saved searches");
 
-saved.command("list").alias("ls").action(() => {
-  const items = listSavedSearches();
-  if (items.length === 0) {
-    console.log(chalk.dim("No saved searches"));
-    return;
-  }
-  for (const s of items) {
-    console.log(
-      `${chalk.dim(s.id.substring(0, 8))}  ${chalk.yellow(s.name)}  ${chalk.white(s.query)}  ${chalk.cyan(s.providers.join(","))}  ${chalk.dim(s.lastRunAt ?? "never run")}`,
+saved
+  .command("list")
+  .alias("ls")
+  .option("-l, --limit <n>", "Max items", "20")
+  .option("--offset <n>", "Start offset for pagination", "0")
+  .option("--json", "Output full records as JSON")
+  .option("--verbose", "Show full query text")
+  .action((opts) => {
+    const items = listSavedSearches();
+    const limit = parseCliLimit(opts.limit, "--limit");
+    const offset = parseCliOffset(opts.offset);
+    const page = items.slice(offset, offset + limit);
+    if (opts.json) {
+      printJson({ total: items.length, limit, offset, savedSearches: page });
+      return;
+    }
+    if (items.length === 0) {
+      console.log(chalk.dim("No saved searches"));
+      return;
+    }
+    console.log(chalk.bold(`Saved Searches (showing ${page.length} of ${items.length})`));
+    console.log();
+    for (const s of page) {
+      console.log(
+        `${chalk.dim(s.id)}  ${chalk.yellow(truncateText(s.name, 40))}  ${chalk.white(opts.verbose ? s.query : truncateText(s.query, 88))}  ${chalk.cyan(s.providers.join(",") || "all")}  ${chalk.dim(s.lastRunAt ?? "never run")}`,
+      );
+    }
+    printPaginationHint(
+      page.length,
+      items.length,
+      offset,
+      "search saved list",
+      "details: search saved run <id> --verbose",
     );
-  }
-});
+  });
 
 saved
   .command("add <name> <query...>")
@@ -298,7 +464,8 @@ saved
 
 saved
   .command("run <id>")
-  .action(async (id: string) => {
+  .option("--verbose", "Show every returned row with untruncated URLs/snippets")
+  .action(async (id: string, opts) => {
     const s = getSavedSearch(id);
     if (!s) {
       fail(`Saved search not found: ${id}`);
@@ -309,7 +476,7 @@ saved
       providers: s.providers.length > 0 ? s.providers : undefined,
       options: s.options,
     });
-    printResults(response.results, response.search.duration, response.errors);
+    printResults(response.results, response.search.duration, response.errors, { verbose: opts.verbose });
   });
 
 saved
@@ -325,21 +492,246 @@ saved
 // --- Providers ---
 const providers = program.command("providers").description("Manage search providers");
 
-providers.command("list").alias("ls").action(() => {
-  const all = listProviders();
-  console.log(chalk.bold("Search Providers"));
-  console.log();
-  for (const p of all) {
-    const configured = isProviderConfigured(p);
-    const status = p.enabled
-      ? configured
-        ? chalk.green("enabled")
-        : chalk.yellow("enabled (no key)")
-      : chalk.dim("disabled");
-    const keyInfo = p.apiKeyEnv ? chalk.dim(` [${p.apiKeyEnv}]`) : chalk.dim(" [no key needed]");
-    console.log(`  ${chalk.white(p.name.padEnd(14))} ${status}${keyInfo}  rate: ${p.rateLimit}/min`);
-  }
-});
+providers
+  .command("list")
+  .alias("ls")
+  .option("--json", "Output full records as JSON")
+  .action((opts) => {
+    const all = listProviders();
+    if (opts.json) {
+      printJson(all.map((p) => ({ ...p, configuration: getProviderConfigurationStatus(p) })));
+      return;
+    }
+    console.log(chalk.bold("Search Providers"));
+    console.log();
+    for (const p of all) {
+      const configured = isProviderConfigured(p);
+      const configuration = getProviderConfigurationStatus(p);
+      const status = p.enabled
+        ? configured
+          ? chalk.green("enabled")
+          : chalk.yellow(`enabled (${configuration.reason})`)
+        : chalk.dim("disabled");
+      const keyInfo = p.apiKeyEnv ? chalk.dim(` [env:${p.apiKeyEnv}]`) : chalk.dim(" [no key needed]");
+      console.log(`  ${chalk.white(p.name.padEnd(14))} ${status}${keyInfo}  rate: ${p.rateLimit}/min`);
+    }
+  });
+
+// --- Exa Websets ---
+const websets = program.command("websets").description("Manage Exa Websets");
+
+websets
+  .command("status")
+  .description("Show Exa Websets configuration status")
+  .option("--json", "Output as JSON")
+  .action((opts: { json?: boolean }) => {
+    const status = getExaConfigurationStatus();
+    if (opts.json) {
+      console.log(JSON.stringify({ websets: status }, null, 2));
+      return;
+    }
+    const icon = status.configured ? chalk.green("enabled") : chalk.yellow("missing");
+    console.log(chalk.bold("Exa Websets"));
+    console.log(`  Status: ${icon}`);
+    console.log(`  Auth:   ${status.message}`);
+  });
+
+websets
+  .command("list")
+  .description("List Exa Websets")
+  .option("--limit <n>", "Number of Websets to return", "25")
+  .option("--cursor <cursor>", "Pagination cursor")
+  .option("--search <term>", "Filter by ID, external ID, or title")
+  .option("--json", "Output as JSON")
+  .action(async (opts: { limit?: string; cursor?: string; search?: string; json?: boolean }) => {
+    try {
+      const result = await listWebsets({
+        limit: parsePositiveInteger(opts.limit, "--limit", 25),
+        cursor: opts.cursor,
+        search: opts.search,
+      });
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      console.log(chalk.bold(`${result.data.length} Webset(s)`));
+      for (const webset of result.data) {
+        console.log(
+          `${chalk.cyan(webset.id)}  ${chalk.white(webset.status)}  ${chalk.dim(webset.title ?? "(untitled)")}`,
+        );
+      }
+      if (result.nextCursor) console.log(chalk.dim(`next cursor: ${result.nextCursor}`));
+    } catch (err) {
+      fail(`Error: ${err instanceof Error ? err.message : err}`);
+    }
+  });
+
+websets
+  .command("get <id>")
+  .description("Get an Exa Webset by id or externalId")
+  .option("--expand-items", "Include items in the response")
+  .option("--json", "Output as JSON")
+  .action(async (id: string, opts: { expandItems?: boolean; json?: boolean }) => {
+    try {
+      const result = await getWebset(id, { expand: opts.expandItems ? ["items"] : undefined });
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      console.log(chalk.bold(result.title ?? result.id));
+      console.log(`  ID:     ${chalk.cyan(result.id)}`);
+      console.log(`  Status: ${chalk.white(result.status)}`);
+      if (result.dashboardUrl) console.log(`  URL:    ${chalk.dim(result.dashboardUrl)}`);
+      console.log(`  Searches: ${result.searches.length}`);
+    } catch (err) {
+      fail(`Error: ${err instanceof Error ? err.message : err}`);
+    }
+  });
+
+websets
+  .command("items <id>")
+  .description("List items for an Exa Webset")
+  .option("--limit <n>", "Number of items to return", "20")
+  .option("--cursor <cursor>", "Pagination cursor")
+  .option("--source-id <id>", "Filter by source id")
+  .option("--json", "Output as JSON")
+  .action(async (id: string, opts: { limit?: string; cursor?: string; sourceId?: string; json?: boolean }) => {
+    try {
+      const result = await listWebsetItems(id, {
+        limit: parsePositiveInteger(opts.limit, "--limit", 20),
+        cursor: opts.cursor,
+        sourceId: opts.sourceId,
+      });
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      console.log(chalk.bold(`${result.data.length} item(s)`));
+      for (const item of result.data) {
+        const name = typeof item.properties.name === "string" ? item.properties.name : item.properties.url;
+        console.log(`${chalk.cyan(item.id)}  ${chalk.dim(String(name ?? ""))}`);
+      }
+      if (result.nextCursor) console.log(chalk.dim(`next cursor: ${result.nextCursor}`));
+    } catch (err) {
+      fail(`Error: ${err instanceof Error ? err.message : err}`);
+    }
+  });
+
+websets
+  .command("create <query...>")
+  .description("Create an Exa Webset with an initial search")
+  .option("--title <title>", "Webset title")
+  .option("--count <n>", "Number of items to attempt to find", "10")
+  .option("--entity <type>", "Entity type: company, person, article, research_paper, or custom")
+  .option("--entity-description <text>", "Required when --entity custom")
+  .option("--criteria <text>", "Verification criterion; repeat for multiple criteria", collectOption, [])
+  .option("--enrichment <description>", "Enrichment to extract; repeat for multiple enrichments", collectOption, [])
+  .option("--external-id <id>", "External identifier")
+  .option("--metadata <json>", "Metadata JSON object")
+  .option("--wait", "Poll until the Webset status is idle")
+  .option("--timeout-ms <n>", "Wait timeout in milliseconds", "60000")
+  .option("--poll-interval-ms <n>", "Wait polling interval in milliseconds", "2000")
+  .option("--json", "Output as JSON")
+  .action(async (queryParts: string[], opts: {
+    title?: string;
+    count?: string;
+    entity?: string;
+    entityDescription?: string;
+    criteria?: string[];
+    enrichment?: string[];
+    externalId?: string;
+    metadata?: string;
+    wait?: boolean;
+    timeoutMs?: string;
+    pollIntervalMs?: string;
+    json?: boolean;
+  }) => {
+    try {
+      const search: WebsetSearchInput = {
+        query: queryParts.join(" "),
+        count: parsePositiveInteger(opts.count, "--count", 10),
+        ...(parseWebsetEntity(opts.entity, opts.entityDescription)
+          ? { entity: parseWebsetEntity(opts.entity, opts.entityDescription) }
+          : {}),
+        ...(opts.criteria && opts.criteria.length > 0
+          ? { criteria: opts.criteria.map((description) => ({ description })) }
+          : {}),
+      };
+      const input: CreateWebsetInput = {
+        ...(opts.title ? { title: opts.title } : {}),
+        search,
+        ...(opts.enrichment && opts.enrichment.length > 0
+          ? { enrichments: opts.enrichment.map((description) => ({ description, format: "text" })) }
+          : {}),
+        ...(opts.externalId ? { externalId: opts.externalId } : {}),
+        ...(opts.metadata ? { metadata: parseMetadataOption(opts.metadata, "--metadata") } : {}),
+      };
+
+      const created = await createWebset(input);
+      const result = opts.wait
+        ? await waitForWebsetIdle(created.id, {
+            timeoutMs: parsePositiveInteger(opts.timeoutMs, "--timeout-ms", 60_000),
+            pollIntervalMs: parsePositiveInteger(opts.pollIntervalMs, "--poll-interval-ms", 2_000),
+          })
+        : created;
+
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      console.log(chalk.green("Webset created"));
+      console.log(`  ID:     ${chalk.cyan(result.id)}`);
+      console.log(`  Status: ${chalk.white(result.status)}`);
+      if (result.dashboardUrl) console.log(`  URL:    ${chalk.dim(result.dashboardUrl)}`);
+    } catch (err) {
+      fail(`Error: ${err instanceof Error ? err.message : err}`);
+    }
+  });
+
+websets
+  .command("search <id> <query...>")
+  .description("Create an additional search for an Exa Webset")
+  .option("--count <n>", "Number of items to attempt to find", "10")
+  .option("--entity <type>", "Entity type")
+  .option("--entity-description <text>", "Required when --entity custom")
+  .option("--criteria <text>", "Verification criterion; repeat for multiple criteria", collectOption, [])
+  .option("--behavior <mode>", "Search behavior: override or append", "override")
+  .option("--json", "Output as JSON")
+  .action(async (id: string, queryParts: string[], opts: {
+    count?: string;
+    entity?: string;
+    entityDescription?: string;
+    criteria?: string[];
+    behavior?: "override" | "append";
+    json?: boolean;
+  }) => {
+    try {
+      if (opts.behavior !== "override" && opts.behavior !== "append") {
+        throw new Error("--behavior must be override or append");
+      }
+      const result = await createWebsetSearch(id, {
+        query: queryParts.join(" "),
+        count: parsePositiveInteger(opts.count, "--count", 10),
+        behavior: opts.behavior,
+        ...(parseWebsetEntity(opts.entity, opts.entityDescription)
+          ? { entity: parseWebsetEntity(opts.entity, opts.entityDescription) }
+          : {}),
+        ...(opts.criteria && opts.criteria.length > 0
+          ? { criteria: opts.criteria.map((description) => ({ description })) }
+          : {}),
+      });
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      console.log(chalk.green("Webset search created"));
+      console.log(`  ID:     ${chalk.cyan(result.id)}`);
+      console.log(`  Webset: ${chalk.cyan(result.websetId)}`);
+      if (typeof result.status === "string") console.log(`  Status: ${chalk.white(result.status)}`);
+    } catch (err) {
+      fail(`Error: ${err instanceof Error ? err.message : err}`);
+    }
+  });
 
 providers
   .command("enable <name>")
@@ -384,14 +776,25 @@ providers
 // --- Profiles ---
 const profiles = program.command("profiles").description("Search profiles");
 
-profiles.command("list").alias("ls").action(() => {
-  const all = listProfiles();
-  for (const p of all) {
-    console.log(
-      `${chalk.dim(p.id.substring(0, 12))}  ${chalk.yellow(p.name.padEnd(12))} ${chalk.white(p.providers.join(", "))}  ${chalk.dim(p.description ?? "")}`,
-    );
-  }
-});
+profiles
+  .command("list")
+  .alias("ls")
+  .option("--json", "Output full records as JSON")
+  .option("--verbose", "Show full descriptions")
+  .action((opts) => {
+    const all = listProfiles();
+    if (opts.json) {
+      printJson(all);
+      return;
+    }
+    console.log(chalk.bold(`Search Profiles (${all.length})`));
+    console.log();
+    for (const p of all) {
+      console.log(
+        `${chalk.dim(p.id)}  ${chalk.yellow(p.name.padEnd(12))} ${chalk.white(truncateText(p.providers.join(", "), 72))}  ${chalk.dim(opts.verbose ? (p.description ?? "") : truncateText(p.description ?? "", 88))}`,
+      );
+    }
+  });
 
 profiles
   .command("create <name>")
@@ -419,7 +822,8 @@ profiles
 
 profiles
   .command("use <name> <query...>")
-  .action(async (name: string, queryParts: string[]) => {
+  .option("--verbose", "Show every returned row with untruncated URLs/snippets")
+  .action(async (name: string, queryParts: string[], opts) => {
     const query = queryParts.join(" ");
     const profile = getProfileByName(name);
     if (!profile) {
@@ -427,7 +831,7 @@ profiles
       return;
     }
     const response = await unifiedSearch(query, { profile: name });
-    printResults(response.results, response.search.duration, response.errors);
+    printResults(response.results, response.search.duration, response.errors, { verbose: opts.verbose });
   });
 
 // --- Export ---
@@ -511,6 +915,7 @@ function printResults(
   results: import("../types/index.js").SearchResult[],
   duration: number,
   errors: Array<{ provider: SearchProviderName; error: string }>,
+  opts: { verbose?: boolean; total?: number; offset?: number } = {},
 ): void {
   if (results.length === 0) {
     console.log(chalk.yellow("No results found"));
@@ -520,15 +925,24 @@ function printResults(
     return;
   }
 
-  console.log(chalk.bold(`${results.length} results`) + chalk.dim(` (${duration}ms)`));
+  const total = opts.total ?? results.length;
+  const offset = opts.offset ?? 0;
+  const visible = opts.verbose ? results : results.slice(0, DEFAULT_COMPACT_LIMIT);
+  console.log(
+    chalk.bold(`${total} results`) +
+      chalk.dim(` (${duration}ms, showing ${visible.length}${offset ? ` from offset ${offset}` : ""})`),
+  );
   console.log();
 
-  for (const r of results) {
+  for (const r of visible) {
     const badge = chalk.bgCyan.black(` ${r.source} `);
-    console.log(`${chalk.dim(String(r.rank).padStart(3))} ${badge} ${chalk.bold.blue(r.title)}`);
-    console.log(`     ${chalk.dim(r.url)}`);
+    const title = opts.verbose ? r.title : truncateText(r.title, 110);
+    const url = opts.verbose ? r.url : truncateMiddle(r.url, 120);
+    const snippet = opts.verbose ? r.snippet : truncateText(r.snippet, 160);
+    console.log(`${chalk.dim(String(r.rank).padStart(3))} ${badge} ${chalk.bold.blue(title)}`);
+    console.log(`     ${chalk.dim(url)}`);
     if (r.snippet) {
-      console.log(`     ${r.snippet.substring(0, 200)}`);
+      console.log(`     ${snippet}`);
     }
     if (r.score !== null) {
       console.log(`     ${chalk.dim(`score: ${r.score.toFixed(3)}`)}`);
@@ -541,6 +955,10 @@ function printResults(
     for (const e of errors) {
       console.log(`  ${chalk.red(e.provider)}: ${e.error}`);
     }
+  }
+
+  if (!opts.verbose && offset + visible.length < total) {
+    console.log(chalk.dim("More results available. Use --verbose or a narrower --limit/filter for more detail."));
   }
 }
 

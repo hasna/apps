@@ -67,11 +67,45 @@ search query "bun sqlite fts5" --profile research
 search exa "semantic search"          # any provider directly
 ```
 
+Exa-backed features use `EXA_API_KEY` from the process environment. The package
+does not read local vaults directly; inject secrets through your shell, process
+manager, or deployment secret provider.
+
+```bash
+# Set EXA_API_KEY in your shell or process manager first.
+search doctor                         # reports missing provider env vars
+search websets status                 # Exa Websets preflight
+search websets create "AI research labs in Europe" --count 10 --criteria "Focuses on LLMs"
+search websets create "specialized blogs" --entity custom --entity-description "Independent technical blog"
+search websets list --limit 10
+search websets items <webset-id> --limit 20
+```
+
 ## CLI Usage
 
 ```bash
 search --help
 ```
+
+### Compact output and detail flags
+
+CLI commands that can return many rows are compact by default. Search results,
+history, saved searches, local `find`, and index list/status views show capped
+rows, shortened long text, totals, and a hint for the next detail command.
+
+Use these flags when you need more:
+
+```bash
+search history list --limit 20 --offset 20
+search history show <id> --verbose
+search history list --json
+search find "storage config" --verbose
+search index status --json
+```
+
+Human-readable output is optimized for agent terminals and keeps large records
+out of context by default. `--json` keeps full machine-readable records for CLI
+commands, while `--verbose` expands human output where available.
 
 ## MCP Server
 
@@ -82,6 +116,16 @@ search-mcp
 Agent-facing tools include `find` (one-call local file lookup), `index_add` /
 `index_update` / `index_status` / `index_remove`, unified `search`, per-provider
 `search_*` tools, history, saved searches, profiles, and export.
+
+MCP list/search tools also return compact JSON envelopes by default:
+
+```json
+{"kind":"results","total":25,"returned":20,"offset":0,"nextOffset":20,"items":[],"hint":"Use get_result for one full record, or verbose:true for full listed records."}
+```
+
+Pass `verbose:true` for full listed records, use `limit` and `offset` for paging,
+and use detail tools such as `get_search` or `get_result` when you only need one
+complete object.
 
 ## HTTP mode
 

@@ -10,7 +10,7 @@ import {
 } from "../db/storage-sync.js";
 
 function ok(data: unknown) {
-  return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+  return { content: [{ type: "text" as const, text: JSON.stringify(data) }] };
 }
 
 function err(error: unknown) {
