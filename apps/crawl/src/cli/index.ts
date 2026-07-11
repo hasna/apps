@@ -1,12 +1,13 @@
 #!/usr/bin/env bun
-import { Command } from "commander";
 import { registerEventsCommands } from "@hasna/events/commander";
+import { Command } from "commander";
 import chalk from "chalk";
 import { execSync } from "child_process";
 import { createWriteStream } from "fs";
 import { getCrawl, listCrawls, getCrawlStats, deleteCrawl, getGlobalStats } from "../db/crawls.js";
 import { getPage, listPages, searchPages, getPageVersions } from "../db/pages.js";
 import { getConfig, setConfig, resetConfig, getConfigPath } from "../lib/config.js";
+import { checkExaWebSearch } from "../lib/exa.js";
 import { fetchSitemap, type SitemapEntry } from "../lib/sitemap.js";
 import { diffTexts } from "../lib/diff.js";
 import type { ExportFormat } from "../types/index.js";
@@ -14,7 +15,7 @@ import { createWebhook, getWebhook, listWebhooks, deleteWebhook, listDeliveries,
 import { deliverWebhook } from "../lib/webhooks.js";
 import { createApiKey, listApiKeys, revokeApiKey } from "../db/api-keys.js";
 import { getUsageSummary } from "../db/usage.js";
-import { PACKAGE_VERSION } from "../version.js";
+import { VERSION } from "../version.js";
 
 // These modules exist at runtime but are not yet written; typed as any to avoid type errors.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -44,7 +45,47 @@ const program = new Command();
 program
   .name("crawl")
   .description("AI-powered web crawler — crawl, extract, search")
-  .version(PACKAGE_VERSION);
+  .version(VERSION);
+
+// ─── doctor ──────────────────────────────────────────────────────────────────
+
+program
+  .command("doctor")
+  .description("Check local crawl configuration and provider preflight status")
+  .option("--json", "output as JSON")
+  .action(async (opts: { json?: boolean }) => {
+    try {
+      const aiProviders = checkAiProviders
+        ? ((await checkAiProviders()) as Record<string, { available: boolean; model?: string; error?: string }>)
+        : {};
+      const report = {
+        ok: true,
+        configPath: getConfigPath(),
+        providers: {
+          ai: aiProviders,
+          webSearch: {
+            exa: checkExaWebSearch(),
+          },
+        },
+      };
+
+      if (opts.json) {
+        process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+        return;
+      }
+
+      process.stderr.write(chalk.bold("Crawl Doctor\n") + chalk.gray("─".repeat(40)) + "\n");
+      process.stderr.write(`  ${chalk.cyan("Config:")} ${report.configPath}\n`);
+      const exa = report.providers.webSearch.exa;
+      process.stderr.write(
+        `  ${chalk.cyan("Exa web search:")} ${exa.available ? chalk.green("available") : chalk.yellow("missing")} ${chalk.gray(`(${exa.setup})`)}\n`,
+      );
+      process.stderr.write(`  ${chalk.cyan("AI providers:")} ${Object.keys(aiProviders).length}\n`);
+    } catch (err) {
+      process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
+      process.exit(1);
+    }
+  });
 
 // ─── crawl <url> ─────────────────────────────────────────────────────────────
 
@@ -994,9 +1035,9 @@ program
     try {
       const port = parseInt(opts.port, 10);
       process.stderr.write(chalk.cyan(`Starting server on port ${port}...\n`));
-      // The server entrypoint starts itself from process.env.PORT when imported.
-      process.env.PORT = String(port);
-      await import("../server/index.js");
+      const { startCrawlServer } = await import("../server/index.js");
+      startCrawlServer({ port });
+      await new Promise(() => {});
     } catch (err) {
       process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
       process.exit(1);
@@ -1587,7 +1628,6 @@ if (firstArg && (firstArg.startsWith("http://") || firstArg.startsWith("https://
   process.argv.splice(2, 0, "crawl");
 }
 registerEventsCommands(program, { source: "crawl" });
-
 
 program.parseAsync(process.argv).catch((err) => {
   process.stderr.write(chalk.red(`Fatal: ${(err as Error).message}\n`));

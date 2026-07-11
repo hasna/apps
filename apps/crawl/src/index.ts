@@ -80,7 +80,7 @@ export type {
 } from "./db/storage-sync.js";
 
 // Package metadata
-export { PACKAGE_VERSION } from "./version.js";
+export { PACKAGE_VERSION, VERSION } from "./version.js";
 
 // Lib — Config
 export { getConfig, setConfig, resetConfig, getConfigPath } from "./lib/config.js";
@@ -123,6 +123,8 @@ export { extractBranding } from "./lib/branding.js";
 
 // Lib — Web Search
 export { searchWeb } from "./lib/search-web.js";
+export { EXA_API_KEY_ENV, checkExaWebSearch, getExaApiKey, requireExaApiKey } from "./lib/exa.js";
+export type { ExaAuthOptions, ExaWebSearchStatus } from "./lib/exa.js";
 
 // Lib — Crawler (main entry points)
 export { crawlUrl, startCrawl, batchCrawl, recrawl } from "./lib/crawler.js";

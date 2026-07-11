@@ -26,6 +26,7 @@ function parseRobotsTxt(
   const sitemaps: string[] = [];
   const entries: RulesEntry[] = [];
   let currentEntry: RulesEntry | null = null;
+  let currentEntryHasRules = false;
   let globalCrawlDelay = 0;
 
   const ua = requestingUserAgent.toLowerCase().split("/")[0]?.trim() ?? "*";
@@ -33,15 +34,10 @@ function parseRobotsTxt(
   const lines = text.split(/\r?\n/);
 
   for (const rawLine of lines) {
-    const line = rawLine.trim();
+    const line = rawLine.split("#", 1)[0]?.trim() ?? "";
 
-    // Skip comments and empty lines
-    if (!line || line.startsWith("#")) {
-      // End of block when empty line encountered and we have an entry
-      if (!line && currentEntry) {
-        entries.push(currentEntry);
-        currentEntry = null;
-      }
+    // Blank and comment-only lines do not terminate a group.
+    if (!line) {
       continue;
     }
 
@@ -52,19 +48,31 @@ function parseRobotsTxt(
     const value = line.slice(colonIdx + 1).trim();
 
     if (field === "user-agent") {
+      if (currentEntry && currentEntryHasRules) {
+        entries.push(currentEntry);
+        currentEntry = null;
+        currentEntryHasRules = false;
+      }
       if (!currentEntry) {
         currentEntry = { userAgents: [], disallow: [], allow: [], crawlDelay: 0 };
       }
       currentEntry.userAgents.push(value.toLowerCase());
     } else if (field === "disallow") {
-      if (currentEntry) currentEntry.disallow.push(value);
+      if (currentEntry) {
+        currentEntry.disallow.push(value);
+        currentEntryHasRules = true;
+      }
     } else if (field === "allow") {
-      if (currentEntry) currentEntry.allow.push(value);
+      if (currentEntry) {
+        currentEntry.allow.push(value);
+        currentEntryHasRules = true;
+      }
     } else if (field === "crawl-delay") {
       const delay = parseFloat(value);
       if (!isNaN(delay)) {
         if (currentEntry) {
           currentEntry.crawlDelay = delay * 1000; // convert to ms
+          currentEntryHasRules = true;
         } else {
           globalCrawlDelay = delay * 1000;
         }
@@ -79,21 +87,13 @@ function parseRobotsTxt(
     entries.push(currentEntry);
   }
 
-  // Find applicable rules: prefer exact ua match, fall back to wildcard
-  const matchingEntries = entries.filter(
-    (e) =>
-      e.userAgents.includes(ua) ||
-      e.userAgents.includes("*")
-  );
+  // Find applicable rules: exact user-agent groups win, wildcard is fallback.
+  const exactMatches = entries.filter((e) => e.userAgents.includes(ua));
+  const matchingEntries = exactMatches.length > 0
+    ? exactMatches
+    : entries.filter((e) => e.userAgents.includes("*"));
 
-  // Sort so specific matches come before wildcards
-  matchingEntries.sort((a, b) => {
-    const aSpecific = a.userAgents.includes(ua) ? 1 : 0;
-    const bSpecific = b.userAgents.includes(ua) ? 1 : 0;
-    return bSpecific - aSpecific;
-  });
-
-  // Merge rules: specific user-agent wins over wildcard
+  // Merge rules from all groups selected for this user-agent.
   const disallowRules: string[] = [];
   const allowRules: string[] = [];
   let crawlDelay = globalCrawlDelay;

@@ -21,6 +21,7 @@ crawl --help
 - `crawl list`
 - `crawl stats`
 - `crawl search <query>`
+- `crawl search-web <query>` (Exa-backed web search; requires `EXA_API_KEY`)
 - `crawl sitemap <url>`
 - `crawl map <url>`
 - `crawl export`
@@ -32,6 +33,33 @@ crawl-mcp
 ```
 
 30 tools available.
+
+## HTTP mode
+
+Long-lived Streamable HTTP transport for shared agent sessions (binds `127.0.0.1` only):
+
+```bash
+crawl-mcp --http              # default port 8812
+crawl-mcp --http --port 8812
+MCP_HTTP=1 MCP_HTTP_PORT=8812 crawl-mcp
+```
+
+- `GET /health` → `{"status":"ok","name":"crawl"}`
+- `POST /mcp` — Streamable HTTP MCP endpoint (also mounted on `crawl-serve`)
+
+Stdio remains the default transport for gradual rollout.
+
+## Exa Web Search
+
+`crawl search-web` and the MCP `search_web` tool use Exa's Search API. They read
+`EXA_API_KEY` from the process environment and do not read local vaults directly.
+Inject secrets through your shell, process manager, or deployment secret provider.
+
+```bash
+export EXA_API_KEY=...
+crawl doctor
+crawl search-web "recent web crawling research" --limit 5
+```
 
 ## REST API
 

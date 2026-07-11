@@ -17,7 +17,7 @@ import { getConfig, setConfig } from "../lib/config.js";
 import { fetchSitemap, type SitemapEntry } from "../lib/sitemap.js";
 import type { ExportFormat } from "../types/index.js";
 import { createWebhook, getWebhook, listWebhooks, deleteWebhook, listDeliveries } from "../db/webhooks.js";
-import { PACKAGE_VERSION } from "../version.js";
+import { VERSION } from "../version.js";
 
 // These modules exist at runtime but are not yet implemented.
 // Using dynamic imports with .catch fallbacks so TypeScript infers `any` at call sites.
@@ -40,9 +40,10 @@ const _crawlAgents = new Map<string, _CrawlAgent>();
 
 // ─── Server Setup ────────────────────────────────────────────────────────────
 
+export function buildServer(): McpServer {
 const server = new McpServer({
   name: "open-crawl",
-  version: PACKAGE_VERSION,
+  version: VERSION,
 });
 
 const STORAGE_TABLE_SCHEMA = z.enum(STORAGE_TABLES);
@@ -1017,7 +1018,7 @@ server.tool(
     const db = getDb();
     db.run(
       "INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)",
-      [params.message, params.email || null, params.category || "general", PACKAGE_VERSION]
+      [params.message, params.email || null, params.category || "general", VERSION]
     );
     return { content: [{ type: "text" as const, text: "Feedback saved. Thank you!" }] };
   }
@@ -1131,14 +1132,30 @@ server.tool("list_agents", "List all registered agents.", {}, async () => {
   return { content: [{ type: "text" as const, text: JSON.stringify([..._crawlAgents.values()]) }] };
 });
 
+return server;
+}
+
 // ─── Start ───────────────────────────────────────────────────────────────────
 
 async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  const argv = process.argv.slice(2);
+  const { isStdioMode } = await import("./http.js");
+  if (isStdioMode(argv)) {
+    const transport = new StdioServerTransport();
+    await buildServer().connect(transport);
+    return;
+  }
+  // Default: shared Streamable HTTP server (one process per MCP, many agents).
+  const { resolveMcpHttpPort } = await import("./http.js");
+  const { startCrawlServer } = await import("../server/index.js");
+  const port = resolveMcpHttpPort(argv);
+  await startCrawlServer({ port, hostname: "127.0.0.1" });
+  await new Promise(() => {});
 }
 
-main().catch((err) => {
-  process.stderr.write(`Fatal: ${(err as Error).message}\n`);
-  process.exit(1);
-});
+if (import.meta.main) {
+  main().catch((err) => {
+    process.stderr.write(`Fatal: ${(err as Error).message}\n`);
+    process.exit(1);
+  });
+}

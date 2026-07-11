@@ -1,4 +1,5 @@
 import type { Page } from "../types/index.js";
+import { requireExaApiKey, type ExaAuthOptions } from "./exa.js";
 
 export interface WebSearchResult {
   url: string;
@@ -10,10 +11,9 @@ export interface WebSearchResult {
 
 export async function searchWeb(
   query: string,
-  options?: { limit?: number; scrape?: boolean; category?: string }
+  options?: { limit?: number; scrape?: boolean; category?: string } & ExaAuthOptions
 ): Promise<WebSearchResult[]> {
-  const apiKey = process.env.EXA_API_KEY;
-  if (!apiKey) throw new Error("EXA_API_KEY not set");
+  const apiKey = requireExaApiKey(options);
 
   const body: Record<string, unknown> = {
     query,
@@ -28,7 +28,7 @@ export async function searchWeb(
     body: JSON.stringify(body),
   });
 
-  if (!res.ok) throw new Error(`Exa API error: ${res.status}`);
+  if (!res.ok) throw new Error(`Exa API error: ${res.status} ${res.statusText}`);
   const data = await res.json() as { results?: Array<{ url: string; title?: string; text?: string; publishedDate?: string }> };
 
   const results: WebSearchResult[] = (data.results ?? []).map(r => ({

@@ -1,12 +1,7 @@
-import { describe, expect, it } from "bun:test";
-import { PACKAGE_VERSION } from "./version";
+import { expect, test } from "bun:test";
+import packageJson from "../package.json";
+import { VERSION } from "./version.js";
 
-describe("package version metadata", () => {
-  it("matches package.json", async () => {
-    const packageJson = await Bun.file(new URL("../package.json", import.meta.url)).json() as {
-      version: string;
-    };
-
-    expect(PACKAGE_VERSION).toBe(packageJson.version);
-  });
+test("exported runtime version matches package version", () => {
+  expect(VERSION).toBe(packageJson.version);
 });
