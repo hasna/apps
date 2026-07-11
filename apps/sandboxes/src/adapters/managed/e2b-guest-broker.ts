@@ -8,8 +8,8 @@ export const E2B_GUEST_BROKER_ARTIFACT_INSTALL_PATH_V1 =
 
 /** Updated only after byte-for-byte review of scripts/e2b-guest-broker-v1.py. */
 export const E2B_GUEST_BROKER_ARTIFACT_SHA256_V1 =
-  "sha256:0726f74c5cdad2158b7e626b81c94d74c2d80ec764bf7dabb98dcedfc59fe041" as E2bGuestBrokerDigestV1
-export const E2B_GUEST_BROKER_ARTIFACT_SIZE_V1 = 64_951
+  "sha256:9b82572d115e0642100c232b3a0abc73545ab3430dc964832abee5ef459dd83b" as E2bGuestBrokerDigestV1
+export const E2B_GUEST_BROKER_ARTIFACT_SIZE_V1 = 65_714
 
 export const E2B_GUEST_BROKER_MAX_FRAME_BYTES_V1 = 1024 * 1024
 export const E2B_GUEST_BROKER_PRODUCTION_ADMISSION_V1 = false as const

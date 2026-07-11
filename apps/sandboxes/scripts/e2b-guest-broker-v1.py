@@ -711,6 +711,7 @@ class Broker:
         task_uid: int,
         task_gid: int,
         descendants_only_baseline: bool,
+        executed_artifact_fd: int | None,
     ) -> None:
         self.session_binding = session_binding
         self.mac_key = mac_key
@@ -725,6 +726,7 @@ class Broker:
         self.known_exec: set[str] = set()
         self.pending_operations = threading.BoundedSemaphore(MAX_PENDING_OPERATIONS)
         self.descendants_only_baseline = descendants_only_baseline
+        self.executed_artifact_fd = executed_artifact_fd
         self.process_baseline = process_snapshot(descendants_only_baseline)
         self.process_baseline_sha256 = process_snapshot_sha256(self.process_baseline)
         self.exec_consumed = False
@@ -926,16 +928,25 @@ class Broker:
         status_read, status_write = os.pipe2(O_CLOEXEC)
         helper_argv = [
             sys.executable,
-            os.path.realpath(__file__),
+            (
+                f"/proc/self/fd/{self.executed_artifact_fd}"
+                if self.executed_artifact_fd is not None
+                else os.path.realpath(__file__)
+            ),
             "--exec-child",
             str(cwd_fd),
             str(self.task_uid),
             str(self.task_gid),
             str(payload["pids_limit"]),
             str(status_write),
+            str(self.executed_artifact_fd if self.executed_artifact_fd is not None else -1),
             "--",
             *payload["argv"],
         ]
+        inherited_fds = [cwd_fd, status_write]
+        if self.executed_artifact_fd is not None:
+            os.lseek(self.executed_artifact_fd, 0, os.SEEK_SET)
+            inherited_fds.append(self.executed_artifact_fd)
         try:
             process = subprocess.Popen(
                 helper_argv,
@@ -944,7 +955,7 @@ class Broker:
                 stderr=subprocess.PIPE,
                 env=safe_environment,
                 close_fds=True,
-                pass_fds=(cwd_fd, status_write),
+                pass_fds=tuple(inherited_fds),
             )
         except (OSError, subprocess.SubprocessError):
             os.close(cwd_fd)
@@ -1328,7 +1339,7 @@ def resolve_task_identity(allow_non_root: bool) -> tuple[int, int]:
 
 
 def exec_child(arguments: list[str]) -> int:
-    if len(arguments) < 7 or arguments[5] != "--":
+    if len(arguments) < 8 or arguments[6] != "--":
         return 64
     try:
         cwd_fd = int(arguments[0], 10)
@@ -1336,9 +1347,10 @@ def exec_child(arguments: list[str]) -> int:
         task_gid = int(arguments[2], 10)
         pids_limit = int(arguments[3], 10)
         status_fd = int(arguments[4], 10)
+        artifact_fd = int(arguments[5], 10)
     except ValueError:
         return 64
-    task_argv = arguments[6:]
+    task_argv = arguments[7:]
 
     def child_failure(code: int) -> int:
         try:
@@ -1347,9 +1359,11 @@ def exec_child(arguments: list[str]) -> int:
             pass
         return code
 
-    if not task_argv or not task_argv[0].startswith("/") or not 1 <= pids_limit <= 256:
+    if (artifact_fd != -1 and artifact_fd < 3) or not task_argv or not task_argv[0].startswith("/") or not 1 <= pids_limit <= 256:
         return child_failure(64)
     try:
+        if artifact_fd >= 3:
+            os.close(artifact_fd)
         libc = ctypes.CDLL(None, use_errno=True)
         if libc.prctl(38, 1, 0, 0, 0) != 0:  # PR_SET_NO_NEW_PRIVS
             return child_failure(71)
@@ -1466,6 +1480,7 @@ def run() -> int:
         task_uid,
         task_gid,
         descendants_only_baseline=args.allow_non_root_for_test,
+        executed_artifact_fd=args.executed_fd,
     )
     try:
         broker.startup(artifact)

@@ -178,7 +178,11 @@ class BrokerHarness {
   }
 }
 
-async function createBroker(): Promise<{ broker: BrokerHarness; workspace: string }> {
+async function createBroker(): Promise<{
+  artifactPath: string
+  broker: BrokerHarness
+  workspace: string
+}> {
   const workspace = await mkdtemp(join(tmpdir(), "e2b-guest-broker-"))
   temporaryDirectories.push(workspace)
   await chmod(workspace, 0o700)
@@ -213,7 +217,7 @@ async function createBroker(): Promise<{ broker: BrokerHarness; workspace: strin
       checkpoint_eligible: false,
     },
   })
-  return { broker, workspace }
+  return { artifactPath, broker, workspace }
 }
 
 function requestLine(
@@ -356,6 +360,29 @@ describe("E2B guest broker artifact and host codec", () => {
 })
 
 describe("local Python E2B guest broker", () => {
+  test("exec helper reuses the verified artifact FD after the installed path disappears", async () => {
+    const { artifactPath, broker } = await createBroker()
+    await rm(artifactPath)
+    const result = await exchange(broker, 0, "exec", {
+      argv: ["/bin/true"],
+      cwd: ".",
+      exec_id: "verified-fd-helper",
+      wall_timeout_ms: 2_000,
+      idle_timeout_ms: 2_000,
+      output_limit_bytes: 4_096,
+      pids_limit: 4,
+    })
+    expect(result).toMatchObject({
+      ok: true,
+      result: {
+        status: "exited",
+        exit_code: 0,
+        destroy_required: false,
+        checkpoint_eligible: true,
+      },
+    })
+  })
+
   test("executes harmless argv shell-free and performs bounded files plus deterministic checkpoint", async () => {
     const { broker } = await createBroker()
     const write = await exchange(broker, 0, "file_write", {

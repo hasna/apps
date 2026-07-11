@@ -202,8 +202,34 @@ describe("authenticated E2B guest-broker host wire", () => {
       finish = resolve
     })
     const commands = {
-      run(command: string, options: { onStdout?: (data: string) => void | Promise<void> }) {
+      run(command: string, options: {
+        background: boolean
+        cwd: string
+        envs: Record<string, unknown>
+        stdin: boolean
+        user?: string
+        requestTimeoutMs: number
+        timeoutMs: number
+        onStdout?: (data: string) => void | Promise<void>
+      }) {
         expect(command).toBe(e2bGuestBrokerBootstrapCommandV1())
+        expect({
+          background: options.background,
+          cwd: options.cwd,
+          envs: options.envs,
+          stdin: options.stdin,
+          user: options.user,
+          requestTimeoutMs: options.requestTimeoutMs,
+          timeoutMs: options.timeoutMs,
+        }).toEqual({
+          background: true,
+          cwd: "/workspace",
+          envs: {},
+          stdin: true,
+          user: "root",
+          requestTimeoutMs: LIMITS.request_timeout_ms,
+          timeoutMs: LIMITS.session_timeout_ms,
+        })
         return Promise.resolve({
           async sendStdin(data: Uint8Array) {
             writes.push(data.slice())

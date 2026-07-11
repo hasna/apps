@@ -639,6 +639,7 @@ function runE2bGuestBrokerDuplexSdkSession(
           cwd: "/workspace",
           envs: {},
           stdin: true,
+          user: "root",
           requestTimeoutMs: limits.request_timeout_ms,
           timeoutMs: limits.session_timeout_ms,
           onStdout(data) {
