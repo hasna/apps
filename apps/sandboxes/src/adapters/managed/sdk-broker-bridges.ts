@@ -19,6 +19,7 @@ import {
 } from "./sdk-pins"
 import type { GuestBrokerRequestFrameV1 } from "./types"
 
+const INTRINSIC_REFLECT_APPLY = Reflect.apply
 const INTRINSIC_UINT8_ARRAY = Uint8Array
 const TYPED_ARRAY_PROTOTYPE = Object.getPrototypeOf(INTRINSIC_UINT8_ARRAY.prototype) as object
 const TYPED_ARRAY_BUFFER_GETTER = Object.getOwnPropertyDescriptor(
@@ -206,16 +207,24 @@ function createDaytonaGuestBrokerSession(
 
 function snapshotDaytonaProviderBytes(data: Uint8Array): Uint8Array {
   try {
-    if (Reflect.apply(TYPED_ARRAY_NAME_GETTER, data, []) !== "Uint8Array") {
+    if (INTRINSIC_REFLECT_APPLY(TYPED_ARRAY_NAME_GETTER, data, []) !== "Uint8Array") {
       throw new TypeError("invalid_provider_bytes")
     }
-    const buffer = Reflect.apply(TYPED_ARRAY_BUFFER_GETTER, data, []) as ArrayBuffer
-    Reflect.apply(ARRAY_BUFFER_BYTE_LENGTH_GETTER, buffer, [])
-    const byteOffset = Reflect.apply(TYPED_ARRAY_BYTE_OFFSET_GETTER, data, []) as number
-    const byteLength = Reflect.apply(TYPED_ARRAY_BYTE_LENGTH_GETTER, data, []) as number
+    const buffer = INTRINSIC_REFLECT_APPLY(TYPED_ARRAY_BUFFER_GETTER, data, []) as ArrayBuffer
+    INTRINSIC_REFLECT_APPLY(ARRAY_BUFFER_BYTE_LENGTH_GETTER, buffer, [])
+    const byteOffset = INTRINSIC_REFLECT_APPLY(
+      TYPED_ARRAY_BYTE_OFFSET_GETTER,
+      data,
+      [],
+    ) as number
+    const byteLength = INTRINSIC_REFLECT_APPLY(
+      TYPED_ARRAY_BYTE_LENGTH_GETTER,
+      data,
+      [],
+    ) as number
     const cleanView = new INTRINSIC_UINT8_ARRAY(buffer, byteOffset, byteLength)
     const snapshot = new INTRINSIC_UINT8_ARRAY(byteLength)
-    Reflect.apply(TYPED_ARRAY_SET, snapshot, [cleanView])
+    INTRINSIC_REFLECT_APPLY(TYPED_ARRAY_SET, snapshot, [cleanView])
     return snapshot
   } catch (cause) {
     throw adapterError("integrity_failed", { cause })

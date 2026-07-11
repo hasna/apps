@@ -957,6 +957,70 @@ describe("official SDK guest-broker compensation bridges", () => {
     expect(delivered).toEqual([])
   })
 
+  test("Daytona ignores post-import Reflect.apply replacement", async () => {
+    let sdkOnData: ((data: Uint8Array) => void | Promise<void>) | undefined
+    const delivered: number[] = []
+    let failure: unknown
+    let replacementApplyCalls = 0
+    const process = {
+      async createPty(options: { onData: (data: Uint8Array) => void | Promise<void> }) {
+        sdkOnData = options.onData
+        return {
+          async waitForConnection() {},
+          async sendInput() {},
+          async disconnect() {},
+        }
+      },
+    } as unknown as DaytonaOfficialBrokerProcessV1
+
+    await withDaytonaGuestBrokerSdkSession(
+      process,
+      (data) => {
+        delivered.push(data[0]!)
+      },
+      async () => {
+        const originalApply = Reflect.apply
+        const forgedBuffer = new ArrayBuffer(1)
+        const replacementApply = ((_target: Function, thisArgument: unknown) => {
+          replacementApplyCalls += 1
+          switch (replacementApplyCalls) {
+            case 1:
+              return "Uint8Array"
+            case 2:
+              return forgedBuffer
+            case 3:
+              return 1
+            case 4:
+              return 0
+            case 5:
+              return 1
+            case 6:
+              ;(thisArgument as Uint8Array)[0] = 42
+              return undefined
+            default:
+              throw new Error("unexpected replacement Reflect.apply call")
+          }
+        }) as typeof Reflect.apply
+
+        try {
+          Reflect.apply = replacementApply
+          try {
+            await sdkOnData!({} as Uint8Array)
+          } catch (error) {
+            failure = error
+          }
+        } finally {
+          Reflect.apply = originalApply
+        }
+      },
+    )
+
+    expect(replacementApplyCalls).toBe(0)
+    expect(failure).toBeInstanceOf(AdapterContractError)
+    expect(failure).toMatchObject({ code: "integrity_failed" })
+    expect(delivered).toEqual([])
+  })
+
   test("credential-bound create bridges pass only hardened provider options", async () => {
     const labels = {
       installation_sha256: digest("b1"),
