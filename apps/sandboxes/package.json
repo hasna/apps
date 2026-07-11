@@ -33,7 +33,7 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && bun build src/cli.ts src/index.ts src/repository-postgres.ts --outdir dist --target bun --format esm --sourcemap=external && bun build src/adapters/managed/index.ts --outdir dist/adapters/managed --target node --format esm --sourcemap=external --external e2b --external @daytona/sdk && tsc -p tsconfig.build.json && bun scripts/fix-declaration-imports.ts",
+    "build": "bun run clean && bun build src/cli.ts src/index.ts src/repository-postgres.ts --outdir dist --target bun --format esm --sourcemap=external && bun build src/adapters/managed/index.ts --outdir dist/adapters/managed --target node --format esm --sourcemap=external --external e2b --external @daytona/sdk && tsc -p tsconfig.build.json && bun scripts/fix-declaration-imports.ts && cp scripts/e2b-guest-broker-v1.py dist/adapters/managed/e2b-guest-broker-v1.py",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.managed.json --noEmit",
     "test": "bun test",
     "test:postgres": "./scripts/postgres-integration.sh",

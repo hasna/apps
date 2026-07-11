@@ -1,4 +1,5 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto"
+import { readFile } from "node:fs/promises"
 
 export type E2bGuestBrokerDigestV1 = `sha256:${string}`
 
@@ -416,6 +417,18 @@ export function encodeE2bGuestBrokerSessionKeyInitV1(
 
 export function verifyE2bGuestBrokerArtifactV1(bytes: Uint8Array): boolean {
   return equalDigest(digestBytes(bytes), E2B_GUEST_BROKER_ARTIFACT_SHA256_V1)
+}
+
+/** Loads the exact broker artifact shipped beside the managed package bundle. */
+export async function loadE2bGuestBrokerArtifactV1(): Promise<Uint8Array> {
+  const bytes = new Uint8Array(await readFile(
+    new URL("./e2b-guest-broker-v1.py", import.meta.url),
+  ))
+  if (bytes.byteLength !== E2B_GUEST_BROKER_ARTIFACT_SIZE_V1 ||
+    !verifyE2bGuestBrokerArtifactV1(bytes)) {
+    fail("artifact_not_pinned")
+  }
+  return bytes
 }
 
 export function encodeE2bGuestBrokerRequestLineV1(
