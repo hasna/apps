@@ -49,10 +49,13 @@ export {
   createDaytonaDenyAllCandidate,
   createE2bDenyAllCandidate,
   withDaytonaGuestBrokerSdkSession,
+  withE2bGuestBrokerDuplexSdkSession,
   withE2bGuestBrokerSdkSession,
   type DaytonaCredentialBoundCreateV1,
   type DaytonaOfficialBrokerProcessV1,
   type E2bCredentialBoundCreateV1,
+  type E2bGuestBrokerDuplexLimitsV1,
+  type E2bGuestBrokerDuplexSdkSessionV1,
   type E2bOfficialBrokerCommandsV1,
   type GuestBrokerSdkSessionV1,
 } from "./sdk-broker-bridges"

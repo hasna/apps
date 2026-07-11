@@ -189,6 +189,22 @@ export interface GuestBrokerSdkSessionV1 {
   closeInput(): Promise<void>
 }
 
+export interface E2bGuestBrokerDuplexLimitsV1 {
+  request_timeout_ms: number
+  session_timeout_ms: number
+  receive_timeout_ms: number
+  max_request_frame_bytes: number
+  max_response_frame_bytes: number
+  max_response_frames: number
+  max_response_bytes: number
+}
+
+export interface E2bGuestBrokerDuplexSdkSessionV1 {
+  sendRequestLine(line: Uint8Array): Promise<void>
+  receiveResponseLine(): Promise<Uint8Array>
+  closeInput(): Promise<void>
+}
+
 /**
  * Control-plane TCB port backed by the exact pinned official E2B SDK in this Node realm.
  * Every returned async value must be a same-realm intrinsic Promise with unmodified lookup fields.
@@ -321,6 +337,277 @@ export function withE2bGuestBrokerSdkSession(
       await runPromiseOperation(() => use(session))
     } finally {
       await finalize()
+    }
+  })()
+}
+
+interface InboundWaiterV1 {
+  resolve(value: Uint8Array): void
+  reject(reason: unknown): void
+  timeout: ReturnType<typeof setTimeout>
+}
+
+class BoundedE2bBrokerInboundV1 {
+  readonly #limits: E2bGuestBrokerDuplexLimitsV1
+  readonly #frames: Uint8Array[] = []
+  readonly #waiters: InboundWaiterV1[] = []
+  #text = ""
+  #frameCount = 0
+  #byteCount = 0
+  #ended = false
+  #failure: unknown
+
+  constructor(limits: E2bGuestBrokerDuplexLimitsV1) {
+    this.#limits = limits
+  }
+
+  push(chunk: string): void {
+    if (this.#ended || this.#failure !== undefined) throw adapterError("integrity_failed")
+    if (typeof chunk !== "string" || /[\0-\x09\x0b-\x1f\x7f]/u.test(chunk)) {
+      return this.fail(adapterError("integrity_failed"))
+    }
+    this.#text += chunk
+    if (
+      Buffer.byteLength(this.#text, "utf8") > this.#limits.max_response_frame_bytes &&
+      !this.#text.includes("\n")
+    ) {
+      return this.fail(adapterError("integrity_failed"))
+    }
+    while (true) {
+      const newline = this.#text.indexOf("\n")
+      if (newline < 0) break
+      const encoded = this.#text.slice(0, newline)
+      this.#text = this.#text.slice(newline + 1)
+      if (encoded.length === 0) {
+        return this.fail(adapterError("integrity_failed"))
+      }
+      const decoded = new TextEncoder().encode(`${encoded}\n`)
+      if (
+        decoded.byteLength > this.#limits.max_response_frame_bytes ||
+        this.#frameCount + 1 > this.#limits.max_response_frames ||
+        this.#byteCount + decoded.byteLength > this.#limits.max_response_bytes
+      ) {
+        return this.fail(adapterError("integrity_failed"))
+      }
+      this.#frameCount += 1
+      this.#byteCount += decoded.byteLength
+      const owned = decoded.slice()
+      const waiter = this.#waiters.shift()
+      if (waiter === undefined) {
+        this.#frames.push(owned)
+      } else {
+        clearTimeout(waiter.timeout)
+        waiter.resolve(owned)
+      }
+    }
+    if (Buffer.byteLength(this.#text, "utf8") > this.#limits.max_response_frame_bytes) {
+      this.fail(adapterError("integrity_failed"))
+    }
+  }
+
+  fail(reason: unknown): never {
+    if (this.#failure === undefined) this.#failure = reason
+    for (const waiter of this.#waiters.splice(0)) {
+      clearTimeout(waiter.timeout)
+      waiter.reject(this.#failure)
+    }
+    throw this.#failure
+  }
+
+  end(): void {
+    if (this.#ended) return
+    this.#ended = true
+    if (this.#text.length !== 0) {
+      try {
+        this.fail(adapterError("integrity_failed"))
+      } catch {
+        // Stored failure is observed by receiveFrame or the session finalizer.
+      }
+    }
+    if (this.#frames.length === 0 && this.#failure === undefined) {
+      for (const waiter of this.#waiters.splice(0)) {
+        clearTimeout(waiter.timeout)
+        waiter.reject(adapterError("provider_state_unknown", { quarantineRequired: true }))
+      }
+    }
+  }
+
+  receiveFrame(): Promise<Uint8Array> {
+    if (this.#failure !== undefined) return rejectedOwnedPromise(this.#failure)
+    const frame = this.#frames.shift()
+    if (frame !== undefined) return new INTRINSIC_PROMISE((resolve) => resolve(frame))
+    if (this.#ended) {
+      return rejectedOwnedPromise(adapterError("provider_state_unknown", { quarantineRequired: true }))
+    }
+    return new INTRINSIC_PROMISE<Uint8Array>((resolve, reject) => {
+      const waiter: InboundWaiterV1 = {
+        resolve,
+        reject,
+        timeout: setTimeout(() => {
+          const index = this.#waiters.indexOf(waiter)
+          if (index >= 0) this.#waiters.splice(index, 1)
+          reject(adapterError("provider_state_unknown", { quarantineRequired: true }))
+        }, this.#limits.receive_timeout_ms),
+      }
+      this.#waiters.push(waiter)
+    })
+  }
+
+  assertCleanEnd(): void {
+    if (this.#failure !== undefined) throw this.#failure
+    if (this.#text.length !== 0 || this.#frames.length !== 0 || this.#waiters.length !== 0) {
+      throw adapterError("integrity_failed")
+    }
+  }
+}
+
+function snapshotDuplexLimits(value: E2bGuestBrokerDuplexLimitsV1): E2bGuestBrokerDuplexLimitsV1 {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Reflect.ownKeys(value).length !== 7 ||
+    !["request_timeout_ms", "session_timeout_ms", "receive_timeout_ms", "max_request_frame_bytes", "max_response_frame_bytes", "max_response_frames", "max_response_bytes"]
+      .every((key) => Object.hasOwn(value, key))
+  ) {
+    throw adapterError("validation_failed")
+  }
+  const snapshot = { ...value }
+  for (const amount of Object.values(snapshot)) {
+    if (!Number.isSafeInteger(amount) || amount <= 0) throw adapterError("validation_failed")
+  }
+  if (
+    snapshot.request_timeout_ms > snapshot.session_timeout_ms ||
+    snapshot.receive_timeout_ms > snapshot.session_timeout_ms ||
+    snapshot.max_request_frame_bytes > MANAGED_GUEST_BROKER_MAX_FRAME_BYTES ||
+    snapshot.max_response_frame_bytes > MANAGED_GUEST_BROKER_MAX_FRAME_BYTES ||
+    snapshot.max_response_bytes < snapshot.max_response_frame_bytes ||
+    snapshot.max_response_frames > 10_000 ||
+    snapshot.max_response_bytes > 1024 * 1024 * 1024
+  ) {
+    throw adapterError("validation_failed")
+  }
+  return Object.freeze(snapshot)
+}
+
+function snapshotGuestBrokerRequestLine(value: Uint8Array, maximum: number): Uint8Array {
+  if (!(value instanceof Uint8Array)) throw adapterError("validation_failed")
+  if (
+    typeof SharedArrayBuffer !== "undefined" &&
+    value.buffer instanceof SharedArrayBuffer
+  ) {
+    throw adapterError("validation_failed")
+  }
+  const owned = value.slice()
+  if (
+    owned.byteLength < 3 ||
+    owned.byteLength > maximum ||
+    owned.at(-1) !== 0x0a ||
+    owned.slice(0, -1).includes(0x0a) ||
+    owned.slice(0, -1).includes(0x0d) ||
+    owned.slice(0, -1).includes(0)
+  ) {
+    throw adapterError("validation_failed")
+  }
+  return owned
+}
+
+/**
+ * Bounded duplex E2B transport for the reviewed guest broker only. Task output
+ * remains broker-framed; raw task stdout/stderr never reaches CommandHandle.
+ */
+export function withE2bGuestBrokerDuplexSdkSession(
+  commands: E2bOfficialBrokerCommandsV1,
+  limitsValue: E2bGuestBrokerDuplexLimitsV1,
+  use: (session: E2bGuestBrokerDuplexSdkSessionV1) => Promise<void>,
+): Promise<void> {
+  let limits: E2bGuestBrokerDuplexLimitsV1
+  try {
+    assertPromiseRuntimeIntegrity()
+    limits = snapshotDuplexLimits(limitsValue)
+  } catch (reason) {
+    return rejectedOwnedPromise(reason)
+  }
+  return (async () => {
+    const inbound = new BoundedE2bBrokerInboundV1(limits)
+    let handle: Pick<CommandHandle, "sendStdin" | "closeStdin" | "wait" | "kill" | "disconnect"> | undefined
+    let mustKill = false
+    let killPromise: Promise<boolean> | undefined
+    const requestKill = (): Promise<boolean> => {
+      if (killPromise !== undefined) return killPromise
+      if (handle === undefined) return new INTRINSIC_PROMISE((resolve) => resolve(false))
+      killPromise = runPromiseOperation(() => handle!.kill())
+      return killPromise
+    }
+    const failInbound = (reason: unknown): Promise<void> => {
+      try {
+        inbound.fail(reason)
+      } catch (failure) {
+        mustKill = true
+        if (handle !== undefined) void requestKill()
+        return rejectedOwnedPromise(failure)
+      }
+      return rejectedOwnedPromise(adapterError("integrity_failed"))
+    }
+    const connectedHandle = await runPromiseOperation<
+      Pick<CommandHandle, "sendStdin" | "closeStdin" | "wait" | "kill" | "disconnect">
+    >(() =>
+      commands.run(MANAGED_GUEST_BROKER_BOOTSTRAP_COMMAND, {
+        background: true,
+        cwd: "/workspace",
+        envs: {},
+        stdin: true,
+        requestTimeoutMs: limits.request_timeout_ms,
+        timeoutMs: limits.session_timeout_ms,
+        onStdout(data) {
+          try {
+            inbound.push(data)
+            return resolvedVoidPromise()
+          } catch (reason) {
+            return failInbound(reason)
+          }
+        },
+        onStderr(data) {
+          return data.length === 0
+            ? resolvedVoidPromise()
+            : failInbound(adapterError("integrity_failed"))
+        },
+      }),
+    )
+    handle = connectedHandle
+    const { session, finalize } = createE2bGuestBrokerSession(connectedHandle)
+    const duplex: E2bGuestBrokerDuplexSdkSessionV1 = {
+      sendRequestLine(line) {
+        let owned: Uint8Array
+        try {
+          owned = snapshotGuestBrokerRequestLine(line, limits.max_request_frame_bytes)
+        } catch (reason) {
+          return rejectedOwnedPromise(reason)
+        }
+        return runPromiseOperation(() => connectedHandle.sendStdin(owned))
+      },
+      closeInput: () => session.closeInput(),
+      receiveResponseLine: () => inbound.receiveFrame(),
+    }
+    let useFailed = false
+    try {
+      await runPromiseOperation(() => use(duplex))
+    } catch (reason) {
+      useFailed = true
+      mustKill = true
+      throw reason
+    } finally {
+      try {
+        await finalize()
+        if (mustKill) await requestKill()
+        if (!useFailed) {
+          const result = await runPromiseOperation<Awaited<ReturnType<CommandHandle["wait"]>>>(() => connectedHandle.wait())
+          inbound.end()
+          if (result.exitCode !== 0) throw adapterError("provider_state_unknown", { quarantineRequired: true })
+          inbound.assertCleanEnd()
+        }
+      } finally {
+        await runPromiseOperation(() => connectedHandle.disconnect())
+      }
     }
   })()
 }
