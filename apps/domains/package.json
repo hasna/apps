@@ -1,6 +1,6 @@
 {
   "name": "@hasna/domains",
-  "version": "0.0.34",
+  "version": "0.0.35",
   "description": "Domain portfolio, registrar, marketplace, and DNS management for AI agents — CLI + MCP + HTTP API + SDK, local SQLite or cloud Postgres",
   "type": "module",
   "main": "dist/index.js",
@@ -51,7 +51,7 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && bun build src/cli/index.ts --outdir dist/cli --target bun --external ink --external react --external chalk --external ink-text-input --external @modelcontextprotocol/sdk --external pg && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external pg && bun build src/server/index.ts --outdir dist/server --target bun --external pg && bun build src/sdk/index.ts --outdir dist/sdk --target bun && bun build src/index.ts --outdir dist --target bun --external pg && bun build src/lib/capability.ts src/lib/cloudflare.ts src/lib/cloudflare-auth.ts src/lib/delegate.ts src/lib/registrar.ts src/lib/route53.ts --outdir dist/lib --target node --packages external && tsc --emitDeclarationOnly --outDir dist",
+    "build": "bun run clean && bun build src/cli/index.ts --outdir dist/cli --target bun --external ink --external react --external chalk --external ink-text-input --external @modelcontextprotocol/sdk --external @hasna/contacts --external pg && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external pg && bun build src/server/index.ts --outdir dist/server --target bun --external pg && bun build src/sdk/index.ts --outdir dist/sdk --target bun && bun build src/index.ts --outdir dist --target bun --external pg && bun build src/lib/capability.ts src/lib/cloudflare.ts src/lib/cloudflare-auth.ts src/lib/delegate.ts src/lib/registrar.ts src/lib/route53.ts --outdir dist/lib --target node --packages external && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "sdk:gen": "bun run scripts/gen-sdk.ts",
@@ -106,11 +106,18 @@
     "zod": "^3.24.2"
   },
   "optionalDependencies": {
-    "@hasna/contacts": "^0.6.19",
     "@hasna/events": "^0.1.7"
   },
+  "peerDependencies": {
+    "@hasna/contacts": "^0.6.19"
+  },
+  "peerDependenciesMeta": {
+    "@hasna/contacts": {
+      "optional": true
+    }
+  },
   "devDependencies": {
-    "@hasna/mcp-harness": "file:../open-mcp",
+    "@hasna/mcp-harness": "0.1.0",
     "@types/bun": "^1.3.14",
     "@types/pg": "^8.20.0",
     "@types/react": "^18.3.18",

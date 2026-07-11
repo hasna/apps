@@ -296,8 +296,8 @@ export function registerOwnerCommand(program: Command): void {
 
       if (opts.auto) {
         try {
-          // Dynamically import open-contacts
-          const contacts = require("@hasna/contacts");
+          const contactsPackage = "@hasna/contacts";
+          const contacts = await import(contactsPackage);
           const contactId = await linkOwnerToContacts(details.domain.id, {
             createContact: (input) => contacts.createContact(input),
             getContactByEmail: (email) => contacts.getContactByEmail(email),
@@ -309,7 +309,15 @@ export function registerOwnerCommand(program: Command): void {
           if (opts.json) { console.log(JSON.stringify({ domain: details.domain.name, contact_id: contactId }, null, 2)); return; }
           console.log(`Created/linked contact ${contactId} for ${details.domain.name}`);
         } catch (e) {
-          console.error(`Failed to link to open-contacts: ${e instanceof Error ? e.message : String(e)}`);
+          const message = e instanceof Error ? e.message : String(e);
+          if (
+            (typeof e === "object" && e !== null && "code" in e && (e as { code?: unknown }).code === "MODULE_NOT_FOUND") ||
+            message.includes("@hasna/contacts")
+          ) {
+            console.error("@hasna/contacts is not installed. Install it alongside @hasna/domains, or pass --contact-id to link an existing contact ID.");
+          } else {
+            console.error(`Failed to link to open-contacts: ${message}`);
+          }
           process.exit(1);
         }
         return;
