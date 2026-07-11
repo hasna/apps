@@ -6,12 +6,14 @@ import { canonicalJson, canonicalSha256, parseCanonicalJson } from "../../src/ad
 import {
   PostgresDisposableTaskJournalV1,
   applyPostgresDisposableTaskJournalMigrationV1,
+  applyPostgresDisposableTaskJournalMigrationV2,
   createEd25519DisposableTaskJournalCryptoV1,
   type DisposableTaskJournalSignerV1,
 } from "../../src/adapters/managed/disposable-task-postgres"
 import type {
   DisposableSandboxTaskExecutionReceiptV1,
   DisposableTaskJournalClaimV1,
+  DisposableTaskJournalPrepareIntentInputV2,
   DisposableTaskJournalPrepareInputV1,
   DisposableTaskJournalRecoveryV1,
   DurableJournalWitnessReceiptV1,
@@ -21,6 +23,8 @@ import {
   __testOnlyRunDisposableSandboxTaskCandidateV1,
   disposableTaskBundleSha256,
   disposableTaskAbsenceEvidenceSha256,
+  disposableSandboxTaskIntentSha256V2,
+  disposableTaskCheckpointPolicySha256,
   disposableTaskInputManifestSha256,
   disposableTaskOperationDigest,
   parseDisposableSandboxTaskRequestV1,
@@ -209,6 +213,64 @@ function prepare(seed: string, overrides: Partial<DisposableTaskJournalPrepareIn
   }
 }
 
+function prepareIntentV2(
+  seed: string,
+  overrides: Partial<DisposableTaskJournalPrepareIntentInputV2> = {},
+): DisposableTaskJournalPrepareIntentInputV2 {
+  const content = Buffer.from(`export const v2 = ${JSON.stringify(seed)}\n`, "utf8")
+  const files = [{
+    path: "src/task.ts", content_base64: content.toString("base64"),
+    content_sha256: d(content), mode: 0o600 as const,
+  }]
+  const intent = {
+    schema_version: "sandboxes.disposable-task-intent/v2" as const,
+    provider: "e2b" as const,
+    idempotency_key_sha256: overrides.idempotency_key_sha256 ?? d(`v2-idempotency:${seed}`),
+    operation_digest: d("placeholder"),
+    source_manifest_sha256: d(`v2-source:${seed}`),
+    input_manifest_sha256: disposableTaskInputManifestSha256(files),
+    environment_image_sha256: d("e2b-template-image-v2"),
+    task_bundle_sha256: d("placeholder"),
+    network_policy: "deny_all" as const,
+    maximum_allocations: 1 as const,
+    max_runtime_ms: 60_000,
+    files,
+    exec: { argv: ["/usr/bin/true"], cwd: "." as const, wall_timeout_ms: 5_000,
+      idle_timeout_ms: 5_000, output_limit_bytes: 4_096, pids_limit: 4 },
+    checkpoint: {
+      allowed_path_prefixes: ["src"], allow_file_addition: true, allow_file_modification: true,
+      allow_file_deletion: false, max_changed_files: 32, forbidden_content_markers_base64: [],
+      max_depth: 4, max_duration_ms: 10_000, max_file_bytes: 65_536, max_files: 32,
+      max_total_bytes: 131_072,
+    },
+  }
+  intent.task_bundle_sha256 = disposableTaskBundleSha256(intent)
+  intent.operation_digest = disposableTaskOperationDigest(intent)
+  const canonical = new TextEncoder().encode(canonicalJson(intent))
+  const intentSha256 = disposableSandboxTaskIntentSha256V2(intent)
+  return {
+    idempotency_key_sha256: intent.idempotency_key_sha256,
+    canonical_intent_sha256: intentSha256,
+    canonical_intent_bytes: canonical,
+    operation_digest: intent.operation_digest,
+    source_manifest_sha256: intent.source_manifest_sha256,
+    input_manifest_sha256: intent.input_manifest_sha256,
+    checkpoint_policy_sha256: disposableTaskCheckpointPolicySha256(intent.checkpoint),
+    provider: intent.provider,
+    provider_metadata_scope_sha256: canonicalSha256({
+      schema_version: "sandboxes.disposable-task-provider-scope/v2",
+      provider: intent.provider,
+      canonical_intent_sha256: intentSha256,
+      idempotency_key_sha256: intent.idempotency_key_sha256,
+    }),
+    provider_creation_token_sha256: d(`v2-creation:${seed}`),
+    immutable_fingerprint_sha256: d(`v2-fingerprint:${seed}`),
+    lease_owner_sha256: d(`v2-owner:${seed}`),
+    lease_duration_ms: 60_000,
+    ...overrides,
+  }
+}
+
 function execution(
   request: DisposableTaskJournalPrepareInputV1,
   claim: Extract<Awaited<ReturnType<PostgresDisposableTaskJournalV1["prepareDispatch"]>>, { kind: "prepared" }>,
@@ -347,6 +409,34 @@ test.skipIf(!POSTGRES_ENABLED)("real PostgreSQL disposable journal is fenced, du
       verification_key_sha256: crypto.signer.verification_key_sha256,
       encrypted_at_rest: true,
     })
+    await applyPostgresDisposableTaskJournalMigrationV2(migration, {
+      expected_migration_role: config.migrationRole,
+      expected_database: config.database,
+      runtime_role: config.runtimeRole,
+      witness_acknowledgement_role: config.witnessAckRole,
+      journal_identity_sha256: journalIdentity,
+      restore_domain_sha256: restoreDomain,
+      external_head_witness_sha256: witness.identity,
+      witness_verification_key_sha256: witnessCrypto.verifier.verification_key_sha256,
+      signer_principal: crypto.signer.signer_principal,
+      signing_key_id: crypto.signer.signing_key_id,
+      verification_key_sha256: crypto.signer.verification_key_sha256,
+      encrypted_at_rest: true,
+    })
+    await applyPostgresDisposableTaskJournalMigrationV2(migration, {
+      expected_migration_role: config.migrationRole,
+      expected_database: config.database,
+      runtime_role: config.runtimeRole,
+      witness_acknowledgement_role: config.witnessAckRole,
+      journal_identity_sha256: journalIdentity,
+      restore_domain_sha256: restoreDomain,
+      external_head_witness_sha256: witness.identity,
+      witness_verification_key_sha256: witnessCrypto.verifier.verification_key_sha256,
+      signer_principal: crypto.signer.signer_principal,
+      signing_key_id: crypto.signer.signing_key_id,
+      verification_key_sha256: crypto.signer.verification_key_sha256,
+      encrypted_at_rest: true,
+    })
     const a = await PostgresDisposableTaskJournalV1.fromClient(runtimeA, options)
     const b = await PostgresDisposableTaskJournalV1.fromClient(runtimeB, options)
     const expectCatalogRestartRejected = async (): Promise<void> => {
@@ -361,6 +451,354 @@ test.skipIf(!POSTGRES_ENABLED)("real PostgreSQL disposable journal is fenced, du
         await Promise.allSettled([runtime.close(), acknowledgement.close()])
       }
     }
+
+    // V2 prepares an auth-free intent and binds both exact authorization artifacts only later.
+    const v2Input = prepareIntentV2("late-bind")
+    const v2Prepared = await a.prepareIntentV2(v2Input)
+    if (v2Prepared.kind !== "prepared") throw new Error("missing v2 prepared claim")
+    expect(v2Prepared.recovery).toBeFalse()
+    expect(v2Prepared.dispatch_id).toBe(`dt2_${canonicalSha256({
+      domain: "sandboxes.disposable-task-journal.dispatch-id/v2",
+      journal_identity_sha256: journalIdentity,
+      idempotency_key_sha256: v2Input.idempotency_key_sha256,
+      canonical_intent_sha256: v2Input.canonical_intent_sha256,
+    }).slice(7)}`)
+    expect(v2Prepared.prepared).toEqual({
+      schema_version: "sandboxes.disposable-task-prepared/v2",
+      dispatch_id: v2Prepared.dispatch_id,
+      canonical_intent_sha256: v2Input.canonical_intent_sha256,
+      sandbox_prepare_anchor_sha256: v2Prepared.sandbox_prepare_anchor_sha256,
+      operation_digest: v2Input.operation_digest,
+      provider: v2Input.provider,
+      source_manifest_sha256: v2Input.source_manifest_sha256,
+      input_manifest_sha256: v2Input.input_manifest_sha256,
+      checkpoint_policy_sha256: v2Input.checkpoint_policy_sha256,
+      effect_claim_sha256: v2Prepared.effect_claim_sha256,
+      prepared_sha256: canonicalSha256({
+        schema_version: "sandboxes.disposable-task-prepared/v2",
+        dispatch_id: v2Prepared.dispatch_id,
+        canonical_intent_sha256: v2Input.canonical_intent_sha256,
+        sandbox_prepare_anchor_sha256: v2Prepared.sandbox_prepare_anchor_sha256,
+        operation_digest: v2Input.operation_digest,
+        provider: v2Input.provider,
+        source_manifest_sha256: v2Input.source_manifest_sha256,
+        input_manifest_sha256: v2Input.input_manifest_sha256,
+        checkpoint_policy_sha256: v2Input.checkpoint_policy_sha256,
+        effect_claim_sha256: v2Prepared.effect_claim_sha256,
+      }),
+    })
+    expect(v2Prepared.stored_authorization).toBeNull()
+    const preparedEventV2 = await migration.query<{ signed_anchor_bytes: Uint8Array; signed_anchor_sha256: string }>(
+      `SELECT signed_anchor_bytes, signed_anchor_sha256
+       FROM sandboxes_disposable_task_journal.events_v2
+       WHERE dispatch_id = $1 AND record_kind = 'PREPARED'`, [v2Prepared.dispatch_id],
+    )
+    expect(preparedEventV2).toHaveLength(1)
+    expect(d(preparedEventV2[0]!.signed_anchor_bytes)).toBe(v2Prepared.sandbox_prepare_anchor_sha256)
+    expect(preparedEventV2[0]!.signed_anchor_sha256).toBe(v2Prepared.sandbox_prepare_anchor_sha256)
+    expect(await a.prepareIntentV2(structuredClone(v2Input))).toEqual(v2Prepared)
+    expect(await b.prepareIntentV2({
+      ...v2Input,
+      lease_owner_sha256: d("v2-competing-live-owner"),
+    })).toMatchObject({ kind: "busy", canonical_intent_sha256: v2Input.canonical_intent_sha256 })
+
+    await migration.query(`UPDATE sandboxes_disposable_task_journal.tasks_v2
+      SET lease_expires_at = clock_timestamp() - interval '1 second' WHERE dispatch_id = $1`,
+      [v2Prepared.dispatch_id])
+    const v2Takeover = await b.prepareIntentV2({
+      ...v2Input,
+      lease_owner_sha256: d("v2-takeover-owner"),
+      lease_duration_ms: 1_000,
+    })
+    if (v2Takeover.kind !== "reconcile") throw new Error("missing v2 PREPARED takeover")
+    expect(v2Takeover.prior_state).toBe("PREPARED")
+    expect(v2Takeover.prepared).toEqual(v2Prepared.prepared)
+    expect(v2Takeover.effect_claim_sha256).toBe(v2Prepared.effect_claim_sha256)
+    expect(v2Takeover.provider_effect_claim_fence_sha256)
+      .toBe(v2Prepared.provider_effect_claim_fence_sha256)
+    expect(v2Takeover.provider_effect_lease_epoch).toBe(v2Prepared.provider_effect_lease_epoch)
+    expect(v2Takeover.provider_effect_ownership_nonce_sha256)
+      .toBe(v2Prepared.provider_effect_ownership_nonce_sha256)
+    expect(v2Takeover.claim_fence_sha256).not.toBe(v2Prepared.claim_fence_sha256)
+    expect(v2Takeover.ownership_nonce_sha256).not.toBe(v2Prepared.ownership_nonce_sha256)
+
+    const authorityEnvelopeBytes = new TextEncoder().encode(canonicalJson({
+      schema_version: "infinity.sandbox-dispatch-authorization/v2",
+      dispatch_id: v2Takeover.dispatch_id,
+      canonical_intent_sha256: v2Takeover.canonical_intent_sha256,
+    }))
+    const authorityEnvelopeSha256 = d(authorityEnvelopeBytes)
+    const consumeInput = {
+      dispatch_id: v2Takeover.dispatch_id,
+      canonical_intent_sha256: v2Takeover.canonical_intent_sha256,
+      sandbox_prepare_anchor_sha256: v2Takeover.sandbox_prepare_anchor_sha256,
+      authority_envelope_sha256: authorityEnvelopeSha256,
+      operation_digest: v2Input.operation_digest,
+      provider: v2Input.provider,
+      source_manifest_sha256: v2Input.source_manifest_sha256,
+      input_manifest_sha256: v2Input.input_manifest_sha256,
+      checkpoint_policy_sha256: v2Input.checkpoint_policy_sha256,
+      effect_claim_sha256: v2Takeover.effect_claim_sha256,
+    }
+    const consumeInputBytes = new TextEncoder().encode(canonicalJson(consumeInput))
+    const receiptBytes = new TextEncoder().encode(canonicalJson({
+      schema_version: "sandboxes.disposable-task-authorization-consumption/v2",
+      ...consumeInput,
+      authority_epoch: "1",
+      run_id: "run-v2",
+      attempt_id: "attempt-v2",
+      attempt_lease_id: "attempt-lease-v2",
+      lease_epoch: "1",
+      model_operation_id: "model-operation-v2",
+      audience: "hasna:sandboxes:disposable-task-provider-contact/v2",
+      issued_at: "2026-07-12T00:00:00.000Z",
+      consumed_at: "2026-07-12T00:00:01.000Z",
+      expires_at: "2026-07-12T00:05:01.000Z",
+      signer_ref: "infinity-authority",
+      signer_incarnation: "incarnation-v2",
+      key_id: "authority-key-v2",
+      signature: "A".repeat(86),
+    }))
+    const v2BindInput = {
+      dispatch_id: v2Takeover.dispatch_id,
+      canonical_intent_sha256: v2Takeover.canonical_intent_sha256,
+      sandbox_prepare_anchor_sha256: v2Takeover.sandbox_prepare_anchor_sha256,
+      claim_fence_sha256: v2Takeover.claim_fence_sha256,
+      lease_epoch: v2Takeover.lease_epoch,
+      effect_claim_sha256: v2Takeover.effect_claim_sha256,
+      canonical_consume_input_bytes: consumeInputBytes,
+      consume_input_sha256: d(consumeInputBytes),
+      authorization: {
+        canonical_authority_envelope_bytes: authorityEnvelopeBytes,
+        authority_envelope_sha256: authorityEnvelopeSha256,
+        canonical_receipt_bytes: receiptBytes,
+        receipt_sha256: d(receiptBytes),
+      },
+    }
+    await expect(a.bindAuthorizationAndMarkIntentV2({
+      ...v2BindInput,
+      claim_fence_sha256: v2Prepared.claim_fence_sha256,
+      lease_epoch: v2Prepared.lease_epoch,
+    })).rejects.toBeDefined()
+    const [v2BoundA, v2BoundB] = await Promise.all([
+      a.bindAuthorizationAndMarkIntentV2(v2BindInput),
+      b.bindAuthorizationAndMarkIntentV2(structuredClone(v2BindInput)),
+    ])
+    expect(v2BoundA).toEqual(v2BoundB)
+    expect(v2BoundA).toMatchObject({
+      authority_envelope_sha256: authorityEnvelopeSha256,
+      authorization_consumption_receipt_sha256: d(receiptBytes),
+    })
+    const v2BoundHead = witness.head?.sequence
+    expect(await a.bindAuthorizationAndMarkIntentV2(structuredClone(v2BindInput))).toEqual(v2BoundA)
+    expect(witness.head?.sequence).toBe(v2BoundHead)
+    await expect(a.bindAuthorizationAndMarkIntentV2({
+      ...v2BindInput,
+      authorization: {
+        ...v2BindInput.authorization,
+        canonical_authority_envelope_bytes: new TextEncoder().encode(canonicalJson({ changed: true })),
+        authority_envelope_sha256: d(new TextEncoder().encode(canonicalJson({ changed: true }))),
+      },
+    })).rejects.toBeDefined()
+    const storedV2 = await migration.query<Record<string, unknown>>(
+      `SELECT state, canonical_consume_input_bytes, consume_input_sha256,
+        canonical_authority_envelope_bytes, authority_envelope_sha256,
+        canonical_authorization_receipt_bytes, authorization_consumption_receipt_sha256,
+        dispatch_intent_anchor_sha256,
+        (SELECT count(*) FROM sandboxes_disposable_task_journal.events_v2 event
+         WHERE event.dispatch_id = task.dispatch_id AND event.record_kind = 'DISPATCH_INTENT') AS intent_events
+       FROM sandboxes_disposable_task_journal.tasks_v2 task WHERE dispatch_id = $1`, [v2Takeover.dispatch_id],
+    )
+    expect(storedV2).toHaveLength(1)
+    expect(storedV2[0]).toMatchObject({
+      state: "DISPATCH_INTENT",
+      consume_input_sha256: d(consumeInputBytes),
+      authority_envelope_sha256: authorityEnvelopeSha256,
+      authorization_consumption_receipt_sha256: d(receiptBytes),
+      dispatch_intent_anchor_sha256: v2BoundA.dispatch_intent_anchor_sha256,
+    })
+    expect(Buffer.from(storedV2[0]!.canonical_consume_input_bytes as Uint8Array))
+      .toEqual(Buffer.from(consumeInputBytes))
+    expect(Buffer.from(storedV2[0]!.canonical_authority_envelope_bytes as Uint8Array))
+      .toEqual(Buffer.from(authorityEnvelopeBytes))
+    expect(Buffer.from(storedV2[0]!.canonical_authorization_receipt_bytes as Uint8Array))
+      .toEqual(Buffer.from(receiptBytes))
+    expect(BigInt(storedV2[0]!.intent_events as string | bigint)).toBe(1n)
+    expect(witness.head?.sequence).toBe(v2BoundHead)
+
+    const quarantineEvidence = d("expired-v2-authorization")
+    await a.quarantineAuthorizationV2({
+      dispatch_id: v2Takeover.dispatch_id,
+      canonical_intent_sha256: v2Takeover.canonical_intent_sha256,
+      claim_fence_sha256: v2Takeover.claim_fence_sha256,
+      lease_epoch: v2Takeover.lease_epoch,
+      quarantine_reason: "authorization_expired_before_provider_contact",
+      quarantine_evidence_sha256: quarantineEvidence,
+    })
+    const quarantineHead = witness.head?.sequence
+    await Bun.sleep(1_100)
+    await b.quarantineAuthorizationV2({
+      dispatch_id: v2Takeover.dispatch_id,
+      canonical_intent_sha256: v2Takeover.canonical_intent_sha256,
+      claim_fence_sha256: v2Takeover.claim_fence_sha256,
+      lease_epoch: v2Takeover.lease_epoch,
+      quarantine_reason: "authorization_expired_before_provider_contact",
+      quarantine_evidence_sha256: quarantineEvidence,
+    })
+    expect(witness.head?.sequence).toBe(quarantineHead)
+    expect(await a.prepareIntentV2(v2Input)).toEqual({
+      kind: "quarantined",
+      canonical_intent_sha256: v2Input.canonical_intent_sha256,
+      quarantine_evidence_sha256: quarantineEvidence,
+    })
+
+    witness.unavailable = true
+    const v2CrashInput = prepareIntentV2("witness-crash-v2")
+    await expect(a.prepareIntentV2(v2CrashInput)).rejects.toMatchObject({
+      code: "provider_state_unknown", quarantine_required: true,
+    })
+    witness.unavailable = false
+    await a.assertWitnessCurrent(witness)
+    const v2CrashReplay = await a.prepareIntentV2(v2CrashInput)
+    expect(v2CrashReplay.kind).toBe("prepared")
+    const v2CrashEvents = await migration.query<{ count: bigint | string }>(
+      `SELECT count(*) AS count FROM sandboxes_disposable_task_journal.events_v2
+       WHERE dispatch_id = $1 AND record_kind = 'PREPARED'`,
+      [v2CrashReplay.kind === "prepared" ? v2CrashReplay.dispatch_id : "missing"],
+    )
+    expect(BigInt(v2CrashEvents[0]?.count ?? -1)).toBe(1n)
+    if (v2CrashReplay.kind !== "prepared") throw new Error("missing v2 crash replay claim")
+    const splitConsume = new TextEncoder().encode(canonicalJson({ direct: "consume" }))
+    const splitEnvelope = new TextEncoder().encode(canonicalJson({ direct: "envelope" }))
+    const splitReceipt = new TextEncoder().encode(canonicalJson({ direct: "receipt" }))
+    const splitRecord = new TextEncoder().encode(canonicalJson({ direct: "record" }))
+    const splitAnchor = new TextEncoder().encode(canonicalJson({ direct: "anchor" }))
+    const splitStore = await migration.query<{
+      head_sequence: bigint | string; head_frontier_sha256: string | null
+    }>(`SELECT head_sequence, head_frontier_sha256
+       FROM sandboxes_disposable_task_journal.store WHERE singleton`)
+    await expect(runtimeA.query(
+      `SELECT sandboxes_disposable_task_journal.bind_authorization_and_mark_intent_v2(
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+      [v2CrashReplay.dispatch_id, v2CrashReplay.canonical_intent_sha256,
+        v2CrashReplay.sandbox_prepare_anchor_sha256, v2CrashReplay.claim_fence_sha256,
+        v2CrashReplay.lease_epoch, v2CrashReplay.effect_claim_sha256,
+        splitConsume, d(splitConsume), splitEnvelope, d(splitEnvelope), splitReceipt, d(splitReceipt),
+        d("split-stored-intent-anchor"), BigInt(splitStore[0]!.head_sequence) + 1n,
+        splitStore[0]!.head_frontier_sha256, d("split-frontier"), splitRecord, d(splitRecord),
+        splitAnchor, d(splitAnchor)],
+    )).rejects.toBeDefined()
+    const splitRejected = await migration.query<{ state: string; intent_events: bigint | string }>(
+      `SELECT task.state,
+        (SELECT count(*) FROM sandboxes_disposable_task_journal.events_v2 event
+         WHERE event.dispatch_id = task.dispatch_id AND event.record_kind = 'DISPATCH_INTENT') AS intent_events
+       FROM sandboxes_disposable_task_journal.tasks_v2 task WHERE task.dispatch_id = $1`,
+      [v2CrashReplay.dispatch_id],
+    )
+    expect(splitRejected[0]?.state).toBe("PREPARED")
+    expect(BigInt(splitRejected[0]?.intent_events ?? -1)).toBe(0n)
+
+    const legacyCollision = prepare("legacy-v2-collision")
+    const legacyPrepared = await a.prepareDispatch(legacyCollision)
+    expect(legacyPrepared.kind).toBe("prepared")
+    await expect(a.prepareIntentV2(prepareIntentV2("legacy-v2-collision", {
+      idempotency_key_sha256: legacyCollision.idempotency_key_sha256,
+    }))).rejects.toMatchObject({ code: "provider_state_unknown", quarantine_required: true })
+
+    const nonreuseAInput = prepareIntentV2("nonreuse-a")
+    const nonreuseBInput = prepareIntentV2("nonreuse-b")
+    const nonreuseA = await a.prepareIntentV2(nonreuseAInput)
+    const nonreuseB = await a.prepareIntentV2(nonreuseBInput)
+    if (nonreuseA.kind !== "prepared" || nonreuseB.kind !== "prepared") {
+      throw new Error("missing distinct-D v2 fixtures")
+    }
+    expect(nonreuseA.canonical_intent_sha256).not.toBe(nonreuseB.canonical_intent_sha256)
+    expect(nonreuseA.dispatch_id).not.toBe(nonreuseB.dispatch_id)
+    expect(nonreuseA.effect_claim_sha256).not.toBe(nonreuseB.effect_claim_sha256)
+    expect(nonreuseA.sandbox_prepare_anchor_sha256).not.toBe(nonreuseB.sandbox_prepare_anchor_sha256)
+    const nonreuseEnvelope = new TextEncoder().encode(canonicalJson({ envelope: "nonreuse-a" }))
+    const nonreuseConsume = new TextEncoder().encode(canonicalJson({
+      dispatch_id: nonreuseA.dispatch_id,
+      canonical_intent_sha256: nonreuseA.canonical_intent_sha256,
+      sandbox_prepare_anchor_sha256: nonreuseA.sandbox_prepare_anchor_sha256,
+      authority_envelope_sha256: d(nonreuseEnvelope),
+      operation_digest: nonreuseAInput.operation_digest,
+      provider: nonreuseAInput.provider,
+      source_manifest_sha256: nonreuseAInput.source_manifest_sha256,
+      input_manifest_sha256: nonreuseAInput.input_manifest_sha256,
+      checkpoint_policy_sha256: nonreuseAInput.checkpoint_policy_sha256,
+      effect_claim_sha256: nonreuseA.effect_claim_sha256,
+    }))
+    const nonreuseReceipt = new TextEncoder().encode(canonicalJson({ receipt: "nonreuse-a" }))
+    await expect(a.bindAuthorizationAndMarkIntentV2({
+      dispatch_id: nonreuseA.dispatch_id,
+      canonical_intent_sha256: nonreuseA.canonical_intent_sha256,
+      sandbox_prepare_anchor_sha256: nonreuseB.sandbox_prepare_anchor_sha256,
+      claim_fence_sha256: nonreuseA.claim_fence_sha256,
+      lease_epoch: nonreuseA.lease_epoch,
+      effect_claim_sha256: nonreuseB.effect_claim_sha256,
+      canonical_consume_input_bytes: nonreuseConsume,
+      consume_input_sha256: d(nonreuseConsume),
+      authorization: {
+        canonical_authority_envelope_bytes: nonreuseEnvelope,
+        authority_envelope_sha256: d(nonreuseEnvelope),
+        canonical_receipt_bytes: nonreuseReceipt,
+        receipt_sha256: d(nonreuseReceipt),
+      },
+    })).rejects.toBeDefined()
+    const nonreuseState = await migration.query<{ state: string; intent_events: bigint | string }>(
+      `SELECT task.state,
+        (SELECT count(*) FROM sandboxes_disposable_task_journal.events_v2 event
+         WHERE event.dispatch_id = task.dispatch_id AND event.record_kind = 'DISPATCH_INTENT') AS intent_events
+       FROM sandboxes_disposable_task_journal.tasks_v2 task WHERE task.dispatch_id = $1`,
+      [nonreuseA.dispatch_id],
+    )
+    expect(nonreuseState[0]?.state).toBe("PREPARED")
+    expect(BigInt(nonreuseState[0]?.intent_events ?? -1)).toBe(0n)
+
+    const expiredInput = prepareIntentV2("expired-first-bind", { lease_duration_ms: 1_000 })
+    const expiredClaim = await a.prepareIntentV2(expiredInput)
+    if (expiredClaim.kind !== "prepared") throw new Error("missing expired first-bind fixture")
+    const expiredEnvelope = new TextEncoder().encode(canonicalJson({ envelope: "expired" }))
+    const expiredConsume = new TextEncoder().encode(canonicalJson({
+      dispatch_id: expiredClaim.dispatch_id,
+      canonical_intent_sha256: expiredClaim.canonical_intent_sha256,
+      sandbox_prepare_anchor_sha256: expiredClaim.sandbox_prepare_anchor_sha256,
+      authority_envelope_sha256: d(expiredEnvelope),
+      operation_digest: expiredInput.operation_digest,
+      provider: expiredInput.provider,
+      source_manifest_sha256: expiredInput.source_manifest_sha256,
+      input_manifest_sha256: expiredInput.input_manifest_sha256,
+      checkpoint_policy_sha256: expiredInput.checkpoint_policy_sha256,
+      effect_claim_sha256: expiredClaim.effect_claim_sha256,
+    }))
+    const expiredReceipt = new TextEncoder().encode(canonicalJson({ receipt: "expired" }))
+    await Bun.sleep(1_100)
+    await expect(a.bindAuthorizationAndMarkIntentV2({
+      dispatch_id: expiredClaim.dispatch_id,
+      canonical_intent_sha256: expiredClaim.canonical_intent_sha256,
+      sandbox_prepare_anchor_sha256: expiredClaim.sandbox_prepare_anchor_sha256,
+      claim_fence_sha256: expiredClaim.claim_fence_sha256,
+      lease_epoch: expiredClaim.lease_epoch,
+      effect_claim_sha256: expiredClaim.effect_claim_sha256,
+      canonical_consume_input_bytes: expiredConsume,
+      consume_input_sha256: d(expiredConsume),
+      authorization: {
+        canonical_authority_envelope_bytes: expiredEnvelope,
+        authority_envelope_sha256: d(expiredEnvelope),
+        canonical_receipt_bytes: expiredReceipt,
+        receipt_sha256: d(expiredReceipt),
+      },
+    })).rejects.toBeDefined()
+    const expiredState = await migration.query<{ state: string; intent_events: bigint | string }>(
+      `SELECT task.state,
+        (SELECT count(*) FROM sandboxes_disposable_task_journal.events_v2 event
+         WHERE event.dispatch_id = task.dispatch_id AND event.record_kind = 'DISPATCH_INTENT') AS intent_events
+       FROM sandboxes_disposable_task_journal.tasks_v2 task WHERE task.dispatch_id = $1`,
+      [expiredClaim.dispatch_id],
+    )
+    expect(expiredState[0]?.state).toBe("PREPARED")
+    expect(BigInt(expiredState[0]?.intent_events ?? -1)).toBe(0n)
 
     // A paused caller cannot mutate after another process takes the expired lease.
     const staleInput = prepare("stale-claim", { lease_duration_ms: 1_000 })
@@ -939,6 +1377,10 @@ test.skipIf(!POSTGRES_ENABLED)("real PostgreSQL disposable journal is fenced, du
     await expectCatalogRestartRejected()
     await migration.query("ALTER TABLE sandboxes_disposable_task_journal.events ENABLE TRIGGER events_immutable")
 
+    await migration.query("ALTER TABLE sandboxes_disposable_task_journal.events_v2 DISABLE TRIGGER events_v2_immutable")
+    await expectCatalogRestartRejected()
+    await migration.query("ALTER TABLE sandboxes_disposable_task_journal.events_v2 ENABLE TRIGGER events_v2_immutable")
+
     await migration.query(`ALTER TABLE sandboxes_disposable_task_journal.store
       ALTER COLUMN signer_principal TYPE varchar(128)`)
     await expectCatalogRestartRejected()
@@ -967,6 +1409,16 @@ test.skipIf(!POSTGRES_ENABLED)("real PostgreSQL disposable journal is fenced, du
     await migration.query(`UPDATE sandboxes_disposable_task_journal.schema_migrations
       SET checksum_sha256 = $1 WHERE migration_name = '0001_disposable_task_journal.sql'`,
       [migrationChecksum[0]!.checksum_sha256])
+    const migrationV2Checksum = await migration.query<{ checksum_sha256: string }>(`
+      SELECT checksum_sha256 FROM sandboxes_disposable_task_journal.schema_migrations
+      WHERE migration_name = '0002_disposable_task_intent_v2.sql'`)
+    await migration.query(`UPDATE sandboxes_disposable_task_journal.schema_migrations
+      SET checksum_sha256 = $1 WHERE migration_name = '0002_disposable_task_intent_v2.sql'`,
+      [d("forged-journal-v2-migration-checksum")])
+    await expectCatalogRestartRejected()
+    await migration.query(`UPDATE sandboxes_disposable_task_journal.schema_migrations
+      SET checksum_sha256 = $1 WHERE migration_name = '0002_disposable_task_intent_v2.sql'`,
+      [migrationV2Checksum[0]!.checksum_sha256])
 
     // A crash after the DB append but before external acknowledgement is healed without re-appending.
     witness.unavailable = true
@@ -998,6 +1450,9 @@ test.skipIf(!POSTGRES_ENABLED)("real PostgreSQL disposable journal is fenced, du
     // Runtime role can execute narrow transitions but has no raw table mutation capability.
     await expect(runtimeA.query(`UPDATE sandboxes_disposable_task_journal.tasks SET state = 'OUTCOME'`)).rejects.toBeDefined()
     await expect(runtimeA.query(`DELETE FROM sandboxes_disposable_task_journal.events`)).rejects.toBeDefined()
+    await expect(runtimeA.query(`UPDATE sandboxes_disposable_task_journal.tasks_v2
+      SET state = 'QUARANTINED'`)).rejects.toBeDefined()
+    await expect(runtimeA.query(`DELETE FROM sandboxes_disposable_task_journal.events_v2`)).rejects.toBeDefined()
     await expect(runtimeA.query(`SELECT sandboxes_disposable_task_journal.acknowledge_witness(1, $1, $2, $3)`,
       [d("forged-witness"), new Uint8Array([1]), d("forged-receipt")])).rejects.toBeDefined()
 

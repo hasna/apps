@@ -20,6 +20,7 @@ for required in \
   package/dist/adapters/managed/index.d.ts \
   package/dist/adapters/managed/e2b-guest-broker-v1.py \
   package/migrations/disposable-task-journal/0001_disposable_task_journal.sql \
+  package/migrations/disposable-task-journal/0002_disposable_task_intent_v2.sql \
   package/migrations/durable-journal-witness/0001_durable_journal_witness.sql \
   package/schemas/dispatched-journal-anchor-v1.schema.json \
   package/schemas/provider-outcome-anchor-v1.schema.json \

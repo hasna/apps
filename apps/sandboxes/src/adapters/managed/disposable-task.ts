@@ -1489,3 +1489,577 @@ export function __testOnlyRunDisposableSandboxTaskCandidateV1(
 ): Promise<Readonly<DisposableSandboxTaskReceiptV1>> {
   return execute(request, dependencies, false)
 }
+
+// ---------------------------------------------------------------------------
+// Acyclic disposable-task protocol v2
+// ---------------------------------------------------------------------------
+
+export const DISPOSABLE_SANDBOX_TASK_PRODUCTION_ADMISSION_V2 = false as const
+export const DISPOSABLE_SANDBOX_TASK_INTENT_SCHEMA_V2 =
+  "sandboxes.disposable-task-intent/v2" as const
+export const DISPOSABLE_TASK_PREPARED_SCHEMA_V2 =
+  "sandboxes.disposable-task-prepared/v2" as const
+export const DISPOSABLE_TASK_AUTHORIZATION_CONSUMPTION_SCHEMA_V2 =
+  "sandboxes.disposable-task-authorization-consumption/v2" as const
+export const DISPOSABLE_TASK_PROVIDER_CONTACT_AUDIENCE_V2 =
+  "hasna:sandboxes:disposable-task-provider-contact/v2" as const
+export const DISPOSABLE_TASK_BOUND_AUTHORIZATION_SCHEMA_V2 =
+  "sandboxes.disposable-task-bound-authorization/v2" as const
+
+const DISPATCH_ID_V2 = /^dt2_[0-9a-f]{64}$/u
+const INTENT_V2_KEYS = [
+  "checkpoint", "environment_image_sha256", "exec", "files", "idempotency_key_sha256",
+  "input_manifest_sha256", "max_runtime_ms", "maximum_allocations", "network_policy",
+  "operation_digest", "provider", "schema_version", "source_manifest_sha256", "task_bundle_sha256",
+] as const
+const PREPARED_V2_KEYS = [
+  "canonical_intent_sha256", "checkpoint_policy_sha256", "dispatch_id", "effect_claim_sha256",
+  "input_manifest_sha256", "operation_digest", "prepared_sha256", "provider",
+  "sandbox_prepare_anchor_sha256", "schema_version", "source_manifest_sha256",
+] as const
+const AUTHORITY_CONSUME_V2_KEYS = [
+  "dispatch_id", "canonical_intent_sha256", "sandbox_prepare_anchor_sha256",
+  "authority_envelope_sha256", "operation_digest", "provider", "source_manifest_sha256",
+  "input_manifest_sha256", "checkpoint_policy_sha256", "effect_claim_sha256",
+] as const
+const AUTHORIZATION_RECEIPT_V2_KEYS = [
+  "schema_version", ...AUTHORITY_CONSUME_V2_KEYS,
+  "authority_epoch", "run_id", "attempt_id", "attempt_lease_id", "lease_epoch",
+  "model_operation_id", "audience", "issued_at", "consumed_at", "expires_at",
+  "signer_ref", "signer_incarnation", "key_id", "signature",
+] as const
+
+export interface DisposableSandboxTaskIntentV2 {
+  schema_version: typeof DISPOSABLE_SANDBOX_TASK_INTENT_SCHEMA_V2
+  provider: ManagedProviderIdV1
+  idempotency_key_sha256: Digest
+  operation_digest: Digest
+  source_manifest_sha256: Digest
+  input_manifest_sha256: Digest
+  environment_image_sha256: Digest
+  task_bundle_sha256: Digest
+  network_policy: "deny_all"
+  maximum_allocations: 1
+  max_runtime_ms: number
+  files: DisposableTaskFileV1[]
+  exec: DisposableTaskExecV1
+  checkpoint: DisposableTaskCheckpointLimitsV1
+}
+
+export interface DisposableTaskPreparedIntentV2 {
+  schema_version: typeof DISPOSABLE_TASK_PREPARED_SCHEMA_V2
+  dispatch_id: string
+  canonical_intent_sha256: Digest
+  sandbox_prepare_anchor_sha256: Digest
+  operation_digest: Digest
+  provider: ManagedProviderIdV1
+  source_manifest_sha256: Digest
+  input_manifest_sha256: Digest
+  checkpoint_policy_sha256: Digest
+  effect_claim_sha256: Digest
+  prepared_sha256: Digest
+}
+
+export interface DisposableTaskAuthorityConsumeInputV2 {
+  dispatch_id: string
+  canonical_intent_sha256: Digest
+  sandbox_prepare_anchor_sha256: Digest
+  authority_envelope_sha256: Digest
+  operation_digest: Digest
+  provider: ManagedProviderIdV1
+  source_manifest_sha256: Digest
+  input_manifest_sha256: Digest
+  checkpoint_policy_sha256: Digest
+  effect_claim_sha256: Digest
+}
+
+/** Both exact signed artifacts returned by the deployment-pinned Infinity port. */
+export interface DisposableTaskAuthorizationArtifactsV2 {
+  canonical_authority_envelope_bytes: Uint8Array
+  authority_envelope_sha256: Digest
+  canonical_receipt_bytes: Uint8Array
+  receipt_sha256: Digest
+}
+
+export interface DisposableTaskJournalPrepareIntentInputV2 {
+  idempotency_key_sha256: Digest
+  canonical_intent_sha256: Digest
+  canonical_intent_bytes: Uint8Array
+  operation_digest: Digest
+  source_manifest_sha256: Digest
+  input_manifest_sha256: Digest
+  checkpoint_policy_sha256: Digest
+  provider: ManagedProviderIdV1
+  provider_metadata_scope_sha256: Digest
+  provider_creation_token_sha256: Digest
+  immutable_fingerprint_sha256: Digest
+  lease_owner_sha256: Digest
+  lease_duration_ms: number
+}
+
+export interface DisposableTaskJournalClaimV2 {
+  dispatch_id: string
+  canonical_intent_sha256: Digest
+  lease_epoch: bigint
+  claim_fence_sha256: Digest
+  lease_owner_sha256: Digest
+  lease_expires_at: string
+  provider_metadata_scope_sha256: Digest
+  provider_creation_token_sha256: Digest
+  immutable_fingerprint_sha256: Digest
+  ownership_nonce_sha256: Digest
+  provider_effect_claim_fence_sha256: Digest
+  provider_effect_lease_epoch: bigint
+  provider_effect_ownership_nonce_sha256: Digest
+  effect_claim_sha256: Digest
+  sandbox_prepare_anchor_sha256: Digest
+  dispatch_intent_anchor_sha256: Digest | null
+}
+
+export type DisposableTaskJournalPrepareIntentResultV2 =
+  | ({
+    kind: "prepared"
+    recovery: false
+    prepared: DisposableTaskPreparedIntentV2
+    stored_authorization: DisposableTaskAuthorizationArtifactsV2 | null
+  } & DisposableTaskJournalClaimV2)
+  | ({
+    kind: "reconcile"
+    recovery: true
+    prior_state: "PREPARED" | "DISPATCH_INTENT" | "DISPATCHED" | "RESULT_PERSISTED"
+    prepared: DisposableTaskPreparedIntentV2
+    stored_authorization: DisposableTaskAuthorizationArtifactsV2 | null
+  } & DisposableTaskJournalClaimV2)
+  | { kind: "busy"; canonical_intent_sha256: Digest; retry_after: string }
+  | { kind: "quarantined"; canonical_intent_sha256: Digest; quarantine_evidence_sha256: Digest }
+
+export interface DisposableTaskJournalPortV2 {
+  describe(): DisposableTaskJournalDescriptionV1
+  assertWitnessCurrent(witness: DurableJournalWitnessPortV1): Promise<{ witness_receipt_sha256: Digest }>
+  prepareIntentV2(input: Readonly<DisposableTaskJournalPrepareIntentInputV2>): Promise<DisposableTaskJournalPrepareIntentResultV2>
+  bindAuthorizationAndMarkIntentV2(input: Readonly<{
+    dispatch_id: string
+    canonical_intent_sha256: Digest
+    sandbox_prepare_anchor_sha256: Digest
+    claim_fence_sha256: Digest
+    lease_epoch: bigint
+    effect_claim_sha256: Digest
+    canonical_consume_input_bytes: Uint8Array
+    consume_input_sha256: Digest
+    authorization: DisposableTaskAuthorizationArtifactsV2
+  }>): Promise<Readonly<{
+    authority_envelope_sha256: Digest
+    authorization_consumption_receipt_sha256: Digest
+    dispatch_intent_anchor_sha256: Digest
+  }>>
+  quarantineAuthorizationV2(input: Readonly<{
+    dispatch_id: string
+    canonical_intent_sha256: Digest
+    claim_fence_sha256: Digest
+    lease_epoch: bigint
+    quarantine_reason: "authorization_expired_before_provider_contact"
+    quarantine_evidence_sha256: Digest
+  }>): Promise<void>
+}
+
+export interface DisposableSandboxTaskAuthorityPortV2 {
+  describe(): {
+    durability: "durable" | "volatile"
+    implementation_sha256: Digest
+    trust_root_sha256: Digest
+  }
+  /** Exact replay returns byte-identical signed authorization and consumption artifacts. */
+  consumeOnceV2(input: Readonly<DisposableTaskAuthorityConsumeInputV2>): Promise<Readonly<DisposableTaskAuthorizationArtifactsV2>>
+}
+
+export interface DisposableSandboxTaskPreparationDependenciesV2 {
+  journal: DisposableTaskJournalPortV2
+  witness: DurableJournalWitnessPortV1
+  lease_owner_sha256: Digest
+}
+
+export interface DisposableSandboxTaskDispatchDependenciesV2 extends DisposableSandboxTaskPreparationDependenciesV2 {
+  authority: DisposableSandboxTaskAuthorityPortV2
+  expected_authority_trust_root_sha256: Digest
+}
+
+export interface DisposableSandboxTaskDispatchInputV2 {
+  intent: DisposableSandboxTaskIntentV2
+  prepared: DisposableTaskPreparedIntentV2
+  authority_envelope_sha256: Digest
+}
+
+export interface DisposableTaskBoundAuthorizationV2 {
+  schema_version: typeof DISPOSABLE_TASK_BOUND_AUTHORIZATION_SCHEMA_V2
+  dispatch_id: string
+  canonical_intent_sha256: Digest
+  sandbox_prepare_anchor_sha256: Digest
+  effect_claim_sha256: Digest
+  authority_envelope_sha256: Digest
+  authorization_consumption_receipt_sha256: Digest
+  dispatch_intent_anchor_sha256: Digest
+}
+
+function parseDisposableSandboxTaskIntentV2(value: unknown): Readonly<DisposableSandboxTaskIntentV2> {
+  if (!closedRecord(value, INTENT_V2_KEYS) || value.schema_version !== DISPOSABLE_SANDBOX_TASK_INTENT_SCHEMA_V2 ||
+    !["e2b", "daytona_cloud"].includes(String(value.provider)) || value.maximum_allocations !== 1 ||
+    value.network_policy !== "deny_all" || !safeInteger(value.max_runtime_ms, 1, 3_600_000) ||
+    !Array.isArray(value.files) || value.files.length < 1 || value.files.length > MAX_FILES ||
+    [value.idempotency_key_sha256, value.operation_digest, value.source_manifest_sha256,
+      value.input_manifest_sha256, value.environment_image_sha256, value.task_bundle_sha256]
+      .some((item) => !isDigest(item))) throw adapterError("validation_failed")
+  const files = snapshotCanonicalDenseArray(value.files).map(validateFile)
+  const totalBytes = files.reduce((total, file) => total + Buffer.from(file.content_base64, "base64").byteLength, 0)
+  if (new Set(files.map((file) => file.path)).size !== files.length || totalBytes > MAX_TOTAL_BYTES) {
+    throw adapterError("validation_failed")
+  }
+  const parsed = Object.freeze({
+    schema_version: DISPOSABLE_SANDBOX_TASK_INTENT_SCHEMA_V2,
+    provider: value.provider as ManagedProviderIdV1,
+    idempotency_key_sha256: value.idempotency_key_sha256 as Digest,
+    operation_digest: value.operation_digest as Digest,
+    source_manifest_sha256: value.source_manifest_sha256 as Digest,
+    input_manifest_sha256: value.input_manifest_sha256 as Digest,
+    environment_image_sha256: value.environment_image_sha256 as Digest,
+    task_bundle_sha256: value.task_bundle_sha256 as Digest,
+    network_policy: "deny_all" as const,
+    maximum_allocations: 1 as const,
+    max_runtime_ms: value.max_runtime_ms as number,
+    files: Object.freeze(files.slice()) as unknown as DisposableTaskFileV1[],
+    exec: validateExec(value.exec),
+    checkpoint: validateCheckpoint(value.checkpoint),
+  })
+  if (parsed.input_manifest_sha256 !== disposableTaskInputManifestSha256(parsed.files) ||
+    parsed.files.some((file) => !outputPathAllowed(file.path, parsed.checkpoint.allowed_path_prefixes)) ||
+    parsed.task_bundle_sha256 !== disposableTaskBundleSha256(parsed) ||
+    parsed.operation_digest !== disposableTaskOperationDigest(parsed)) throw adapterError("validation_failed")
+  return parsed
+}
+
+export function disposableSandboxTaskIntentSha256V2(value: unknown): Digest {
+  return canonicalSha256(parseDisposableSandboxTaskIntentV2(value))
+}
+
+function preparedCoreV2(value: DisposableTaskPreparedIntentV2): Omit<DisposableTaskPreparedIntentV2, "prepared_sha256"> {
+  return {
+    schema_version: value.schema_version,
+    dispatch_id: value.dispatch_id,
+    canonical_intent_sha256: value.canonical_intent_sha256,
+    sandbox_prepare_anchor_sha256: value.sandbox_prepare_anchor_sha256,
+    operation_digest: value.operation_digest,
+    provider: value.provider,
+    source_manifest_sha256: value.source_manifest_sha256,
+    input_manifest_sha256: value.input_manifest_sha256,
+    checkpoint_policy_sha256: value.checkpoint_policy_sha256,
+    effect_claim_sha256: value.effect_claim_sha256,
+  }
+}
+
+function parsePreparedIntentV2(value: unknown, intent: DisposableSandboxTaskIntentV2): DisposableTaskPreparedIntentV2 {
+  if (!closedRecord(value, PREPARED_V2_KEYS) || value.schema_version !== DISPOSABLE_TASK_PREPARED_SCHEMA_V2 ||
+    typeof value.dispatch_id !== "string" || !DISPATCH_ID_V2.test(value.dispatch_id) ||
+    ![value.canonical_intent_sha256, value.sandbox_prepare_anchor_sha256, value.operation_digest,
+      value.source_manifest_sha256, value.input_manifest_sha256, value.checkpoint_policy_sha256,
+      value.effect_claim_sha256, value.prepared_sha256].every(isDigest) ||
+    value.provider !== intent.provider || value.canonical_intent_sha256 !== disposableSandboxTaskIntentSha256V2(intent) ||
+    value.operation_digest !== intent.operation_digest || value.source_manifest_sha256 !== intent.source_manifest_sha256 ||
+    value.input_manifest_sha256 !== intent.input_manifest_sha256 ||
+    value.checkpoint_policy_sha256 !== disposableTaskCheckpointPolicySha256(intent.checkpoint)) {
+    throw adapterError("integrity_failed")
+  }
+  const parsed = Object.freeze({
+    schema_version: DISPOSABLE_TASK_PREPARED_SCHEMA_V2,
+    dispatch_id: value.dispatch_id,
+    canonical_intent_sha256: value.canonical_intent_sha256 as Digest,
+    sandbox_prepare_anchor_sha256: value.sandbox_prepare_anchor_sha256 as Digest,
+    operation_digest: value.operation_digest as Digest,
+    provider: value.provider as ManagedProviderIdV1,
+    source_manifest_sha256: value.source_manifest_sha256 as Digest,
+    input_manifest_sha256: value.input_manifest_sha256 as Digest,
+    checkpoint_policy_sha256: value.checkpoint_policy_sha256 as Digest,
+    effect_claim_sha256: value.effect_claim_sha256 as Digest,
+    prepared_sha256: value.prepared_sha256 as Digest,
+  })
+  if (canonicalSha256(preparedCoreV2(parsed)) !== parsed.prepared_sha256) throw adapterError("integrity_failed")
+  return parsed
+}
+
+function providerBindingV2(intent: DisposableSandboxTaskIntentV2, intentSha256: Digest) {
+  const providerMetadataScopeSha256 = canonicalSha256({
+    schema_version: "sandboxes.disposable-task-provider-scope/v2",
+    provider: intent.provider,
+    canonical_intent_sha256: intentSha256,
+    idempotency_key_sha256: intent.idempotency_key_sha256,
+  })
+  return Object.freeze({
+    provider_metadata_scope_sha256: providerMetadataScopeSha256,
+    provider_creation_token_sha256: canonicalSha256({
+      schema_version: "sandboxes.disposable-task-creation-token/v2",
+      provider_metadata_scope_sha256: providerMetadataScopeSha256,
+    }),
+    immutable_fingerprint_sha256: canonicalSha256({
+      schema_version: "sandboxes.disposable-task-provider-fingerprint/v2",
+      provider_metadata_scope_sha256: providerMetadataScopeSha256,
+      environment_image_sha256: intent.environment_image_sha256,
+      source_manifest_sha256: intent.source_manifest_sha256,
+      input_manifest_sha256: intent.input_manifest_sha256,
+    }),
+  })
+}
+
+function validateV2Descriptions(
+  dependencies: DisposableSandboxTaskPreparationDependenciesV2,
+): DisposableTaskJournalDescriptionV1 {
+  if (!isDigest(dependencies.lease_owner_sha256)) throw adapterError("validation_failed")
+  const journal = dependencies.journal.describe()
+  validateJournalDescription(journal, true)
+  const witness = dependencies.witness.describe()
+  if (!closedRecord(witness, ["durability", "restore_domain_sha256", "witness_identity_sha256"]) ||
+    witness.durability !== "durable" || !isDigest(witness.restore_domain_sha256) ||
+    !isDigest(witness.witness_identity_sha256) ||
+    journal.external_head_witness_sha256 !== witness.witness_identity_sha256) {
+    throw adapterError("integrity_failed")
+  }
+  return Object.freeze({ ...journal })
+}
+
+function recomputeEffectClaimV2(
+  intent: DisposableSandboxTaskIntentV2,
+  claim: DisposableTaskJournalClaimV2,
+  journal: DisposableTaskJournalDescriptionV1,
+): Digest {
+  return canonicalSha256({
+    schema_version: "sandboxes.disposable-task-effect-claim/v2",
+    journal_identity_sha256: journal.journal_identity_sha256,
+    restore_domain_sha256: journal.restore_domain_sha256,
+    dispatch_id: claim.dispatch_id,
+    canonical_intent_sha256: claim.canonical_intent_sha256,
+    provider: intent.provider,
+    provider_metadata_scope_sha256: claim.provider_metadata_scope_sha256,
+    provider_creation_token_sha256: claim.provider_creation_token_sha256,
+    immutable_fingerprint_sha256: claim.immutable_fingerprint_sha256,
+    provider_effect_claim_fence_sha256: claim.provider_effect_claim_fence_sha256,
+    provider_effect_lease_epoch: claim.provider_effect_lease_epoch,
+    provider_effect_ownership_nonce_sha256: claim.provider_effect_ownership_nonce_sha256,
+  })
+}
+
+function parsePrepareResultV2(
+  value: DisposableTaskJournalPrepareIntentResultV2,
+  intent: DisposableSandboxTaskIntentV2,
+  journal: DisposableTaskJournalDescriptionV1,
+): Exclude<DisposableTaskJournalPrepareIntentResultV2, { kind: "busy" | "quarantined" }> {
+  if (value.kind === "busy") throw adapterError("dependency_unavailable", { retryable: true })
+  if (value.kind === "quarantined") throw adapterError("provider_state_unknown", { quarantineRequired: true })
+  const digests = [value.canonical_intent_sha256, value.claim_fence_sha256, value.lease_owner_sha256,
+    value.provider_metadata_scope_sha256, value.provider_creation_token_sha256, value.immutable_fingerprint_sha256,
+    value.ownership_nonce_sha256, value.provider_effect_claim_fence_sha256,
+    value.provider_effect_ownership_nonce_sha256, value.effect_claim_sha256,
+    value.sandbox_prepare_anchor_sha256]
+  if (!DISPATCH_ID_V2.test(value.dispatch_id) || !digests.every(isDigest) || typeof value.lease_epoch !== "bigint" ||
+    value.lease_epoch < 1n || typeof value.provider_effect_lease_epoch !== "bigint" ||
+    value.provider_effect_lease_epoch < 1n || new Date(value.lease_expires_at).toISOString() !== value.lease_expires_at ||
+    (value.dispatch_intent_anchor_sha256 !== null && !isDigest(value.dispatch_intent_anchor_sha256))) {
+    throw adapterError("integrity_failed")
+  }
+  if ((value.kind === "prepared" && (value.recovery !== false || value.stored_authorization !== null ||
+      value.dispatch_intent_anchor_sha256 !== null)) ||
+    (value.kind === "reconcile" && (value.recovery !== true ||
+      (value.prior_state === "PREPARED"
+        ? value.stored_authorization !== null || value.dispatch_intent_anchor_sha256 !== null
+        : value.stored_authorization === null || value.dispatch_intent_anchor_sha256 === null)))) {
+    throw adapterError("integrity_failed")
+  }
+  const expectedDispatch = `dt2_${canonicalSha256({
+    domain: "sandboxes.disposable-task-journal.dispatch-id/v2",
+    journal_identity_sha256: journal.journal_identity_sha256,
+    idempotency_key_sha256: intent.idempotency_key_sha256,
+    canonical_intent_sha256: disposableSandboxTaskIntentSha256V2(intent),
+  }).slice(7)}`
+  const providerBinding = providerBindingV2(intent, disposableSandboxTaskIntentSha256V2(intent))
+  if (value.dispatch_id !== expectedDispatch || value.canonical_intent_sha256 !== disposableSandboxTaskIntentSha256V2(intent) ||
+    value.provider_metadata_scope_sha256 !== providerBinding.provider_metadata_scope_sha256 ||
+    value.provider_creation_token_sha256 !== providerBinding.provider_creation_token_sha256 ||
+    value.immutable_fingerprint_sha256 !== providerBinding.immutable_fingerprint_sha256 ||
+    value.effect_claim_sha256 !== recomputeEffectClaimV2(intent, value, journal) ||
+    value.sandbox_prepare_anchor_sha256 !== value.prepared.sandbox_prepare_anchor_sha256) {
+    throw adapterError("integrity_failed")
+  }
+  const prepared = parsePreparedIntentV2(value.prepared, intent)
+  if (prepared.dispatch_id !== value.dispatch_id || prepared.effect_claim_sha256 !== value.effect_claim_sha256) {
+    throw adapterError("integrity_failed")
+  }
+  return Object.freeze({ ...value, prepared }) as Exclude<DisposableTaskJournalPrepareIntentResultV2, { kind: "busy" | "quarantined" }>
+}
+
+async function prepareIntentV2(
+  intentValue: DisposableSandboxTaskIntentV2,
+  dependencies: DisposableSandboxTaskPreparationDependenciesV2,
+) {
+  const intent = parseDisposableSandboxTaskIntentV2(intentValue)
+  const journalDescription = validateV2Descriptions(dependencies)
+  const witness = await dependencies.journal.assertWitnessCurrent(dependencies.witness)
+  if (!closedRecord(witness, ["witness_receipt_sha256"]) || !isDigest(witness.witness_receipt_sha256)) {
+    throw adapterError("integrity_failed")
+  }
+  const canonicalIntentSha256 = disposableSandboxTaskIntentSha256V2(intent)
+  const result = await dependencies.journal.prepareIntentV2({
+    idempotency_key_sha256: intent.idempotency_key_sha256,
+    canonical_intent_sha256: canonicalIntentSha256,
+    canonical_intent_bytes: new TextEncoder().encode(canonicalJson(intent)),
+    operation_digest: intent.operation_digest,
+    source_manifest_sha256: intent.source_manifest_sha256,
+    input_manifest_sha256: intent.input_manifest_sha256,
+    checkpoint_policy_sha256: disposableTaskCheckpointPolicySha256(intent.checkpoint),
+    provider: intent.provider,
+    ...providerBindingV2(intent, canonicalIntentSha256),
+    lease_owner_sha256: dependencies.lease_owner_sha256,
+    lease_duration_ms: Math.min(3_600_000, intent.max_runtime_ms + 60_000),
+  })
+  return { intent, result: parsePrepareResultV2(result, intent, journalDescription) }
+}
+
+/** Safe inert phase one: no authority or provider is reachable. */
+export async function prepareDisposableSandboxTaskIntentV2(
+  intent: DisposableSandboxTaskIntentV2,
+  dependencies: DisposableSandboxTaskPreparationDependenciesV2,
+): Promise<Readonly<DisposableTaskPreparedIntentV2>> {
+  return (await prepareIntentV2(intent, dependencies)).result.prepared
+}
+
+function parseAuthorizationBundleV2(
+  value: DisposableTaskAuthorizationArtifactsV2,
+  expected: DisposableTaskAuthorityConsumeInputV2,
+): DisposableTaskAuthorizationArtifactsV2 {
+  if (!closedRecord(value, ["authority_envelope_sha256", "canonical_authority_envelope_bytes",
+    "canonical_receipt_bytes", "receipt_sha256"]) ||
+    !(value.canonical_authority_envelope_bytes instanceof Uint8Array) ||
+    !(value.canonical_receipt_bytes instanceof Uint8Array) ||
+    value.canonical_authority_envelope_bytes.byteLength < 1 || value.canonical_authority_envelope_bytes.byteLength > 64 * 1024 ||
+    value.canonical_receipt_bytes.byteLength < 1 || value.canonical_receipt_bytes.byteLength > 16 * 1024 ||
+    !isDigest(value.authority_envelope_sha256) || !isDigest(value.receipt_sha256) ||
+    directDigest(value.canonical_authority_envelope_bytes) !== value.authority_envelope_sha256 ||
+    value.authority_envelope_sha256 !== expected.authority_envelope_sha256 ||
+    directDigest(value.canonical_receipt_bytes) !== value.receipt_sha256) throw adapterError("integrity_failed")
+  let receipt: unknown
+  let text: string
+  try {
+    const authorityText = new TextDecoder("utf-8", { fatal: true }).decode(value.canonical_authority_envelope_bytes)
+    const authorityEnvelope = parseCanonicalJson(authorityText)
+    if (canonicalJson(authorityEnvelope) !== authorityText) throw adapterError("integrity_failed")
+    text = new TextDecoder("utf-8", { fatal: true }).decode(value.canonical_receipt_bytes)
+    receipt = parseCanonicalJson(text)
+  } catch {
+    throw adapterError("integrity_failed")
+  }
+  if (!closedRecord(receipt, AUTHORIZATION_RECEIPT_V2_KEYS) || canonicalJson(receipt) !== text ||
+    receipt.schema_version !== DISPOSABLE_TASK_AUTHORIZATION_CONSUMPTION_SCHEMA_V2 ||
+    AUTHORITY_CONSUME_V2_KEYS.some((key) => receipt[key] !== expected[key]) ||
+    receipt.audience !== DISPOSABLE_TASK_PROVIDER_CONTACT_AUDIENCE_V2 ||
+    !validPositiveSignedInt64(receipt.authority_epoch) || !validPositiveSignedInt64(receipt.lease_epoch) ||
+    ![receipt.run_id, receipt.attempt_id, receipt.attempt_lease_id, receipt.model_operation_id,
+      receipt.signer_ref, receipt.signer_incarnation, receipt.key_id].every(validAuthorizationContextId) ||
+    !validEd25519Base64Url(receipt.signature) ||
+    ![receipt.issued_at, receipt.consumed_at, receipt.expires_at].every(validCanonicalTimestamp) ||
+    Date.parse(receipt.issued_at as string) > Date.parse(receipt.consumed_at as string) ||
+    Date.parse(receipt.consumed_at as string) > Date.now() + MAX_AUTHORITY_CLOCK_SKEW_MS ||
+    Date.parse(receipt.consumed_at as string) >= Date.parse(receipt.expires_at as string) ||
+    Date.parse(receipt.expires_at as string) - Date.parse(receipt.consumed_at as string) > MAX_PROVIDER_CONTACT_AUTH_MS) {
+    throw adapterError("integrity_failed")
+  }
+  return Object.freeze({
+    canonical_authority_envelope_bytes: value.canonical_authority_envelope_bytes.slice(),
+    authority_envelope_sha256: value.authority_envelope_sha256,
+    canonical_receipt_bytes: value.canonical_receipt_bytes.slice(),
+    receipt_sha256: value.receipt_sha256,
+  })
+}
+
+function authorizationExpiresAtV2(value: DisposableTaskAuthorizationArtifactsV2): number {
+  const receipt = parseCanonicalJson(new TextDecoder("utf-8", { fatal: true }).decode(value.canonical_receipt_bytes))
+  if (!isPlainRecord(receipt) || typeof receipt.expires_at !== "string") throw adapterError("integrity_failed")
+  return Date.parse(receipt.expires_at)
+}
+
+/** Internal protocol/persistence composition entry; never exported from the package barrel. */
+export async function __testOnlyDispatchPreparedDisposableSandboxTaskCandidateV2(
+  input: DisposableSandboxTaskDispatchInputV2,
+  dependencies: DisposableSandboxTaskDispatchDependenciesV2,
+): Promise<Readonly<DisposableTaskBoundAuthorizationV2>> {
+  if (!closedRecord(input, ["authority_envelope_sha256", "intent", "prepared"]) ||
+    !isDigest(input.authority_envelope_sha256)) throw adapterError("validation_failed")
+  const authorityDescription = dependencies.authority.describe()
+  validateAuthorityDescription(authorityDescription, true)
+  if (!isDigest(dependencies.expected_authority_trust_root_sha256) ||
+    authorityDescription.trust_root_sha256 !== dependencies.expected_authority_trust_root_sha256) {
+    throw adapterError("integrity_failed")
+  }
+  const { intent, result } = await prepareIntentV2(input.intent, dependencies)
+  const requestedPrepared = parsePreparedIntentV2(input.prepared, intent)
+  if (requestedPrepared.prepared_sha256 !== result.prepared.prepared_sha256 ||
+    canonicalJson(requestedPrepared) !== canonicalJson(result.prepared)) throw adapterError("integrity_failed")
+  const consumeInput: DisposableTaskAuthorityConsumeInputV2 = Object.freeze({
+    dispatch_id: result.dispatch_id,
+    canonical_intent_sha256: result.canonical_intent_sha256,
+    sandbox_prepare_anchor_sha256: result.sandbox_prepare_anchor_sha256,
+    authority_envelope_sha256: input.authority_envelope_sha256,
+    operation_digest: intent.operation_digest,
+    provider: intent.provider,
+    source_manifest_sha256: intent.source_manifest_sha256,
+    input_manifest_sha256: intent.input_manifest_sha256,
+    checkpoint_policy_sha256: disposableTaskCheckpointPolicySha256(intent.checkpoint),
+    effect_claim_sha256: result.effect_claim_sha256,
+  })
+  const authorization = result.stored_authorization === null
+    ? parseAuthorizationBundleV2(await dependencies.authority.consumeOnceV2(consumeInput), consumeInput)
+    : parseAuthorizationBundleV2(result.stored_authorization, consumeInput)
+  const consumeBytes = new TextEncoder().encode(canonicalJson(consumeInput))
+  const bound = await dependencies.journal.bindAuthorizationAndMarkIntentV2({
+    dispatch_id: result.dispatch_id,
+    canonical_intent_sha256: result.canonical_intent_sha256,
+    sandbox_prepare_anchor_sha256: result.sandbox_prepare_anchor_sha256,
+    claim_fence_sha256: result.claim_fence_sha256,
+    lease_epoch: result.lease_epoch,
+    effect_claim_sha256: result.effect_claim_sha256,
+    canonical_consume_input_bytes: consumeBytes,
+    consume_input_sha256: directDigest(consumeBytes),
+    authorization,
+  })
+  if (!closedRecord(bound, ["authority_envelope_sha256", "authorization_consumption_receipt_sha256",
+    "dispatch_intent_anchor_sha256"]) ||
+    bound.authority_envelope_sha256 !== authorization.authority_envelope_sha256 ||
+    bound.authorization_consumption_receipt_sha256 !== authorization.receipt_sha256 ||
+    !isDigest(bound.dispatch_intent_anchor_sha256)) throw adapterError("integrity_failed")
+  if (authorizationExpiresAtV2(authorization) <= Date.now()) {
+    await dependencies.journal.quarantineAuthorizationV2({
+      dispatch_id: result.dispatch_id,
+      canonical_intent_sha256: result.canonical_intent_sha256,
+      claim_fence_sha256: result.claim_fence_sha256,
+      lease_epoch: result.lease_epoch,
+      quarantine_reason: "authorization_expired_before_provider_contact",
+      quarantine_evidence_sha256: authorization.receipt_sha256,
+    })
+    throw adapterError("dependency_unavailable")
+  }
+  return Object.freeze({
+    schema_version: DISPOSABLE_TASK_BOUND_AUTHORIZATION_SCHEMA_V2,
+    dispatch_id: result.dispatch_id,
+    canonical_intent_sha256: result.canonical_intent_sha256,
+    sandbox_prepare_anchor_sha256: result.sandbox_prepare_anchor_sha256,
+    effect_claim_sha256: result.effect_claim_sha256,
+    authority_envelope_sha256: authorization.authority_envelope_sha256,
+    authorization_consumption_receipt_sha256: authorization.receipt_sha256,
+    dispatch_intent_anchor_sha256: bound.dispatch_intent_anchor_sha256,
+  })
+}
+
+/** Production v2 dispatch remains closed until the real provider proof is reviewed. */
+export function dispatchPreparedDisposableSandboxTaskV2(
+  input: DisposableSandboxTaskDispatchInputV2,
+  dependencies: DisposableSandboxTaskDispatchDependenciesV2,
+): Promise<Readonly<DisposableTaskBoundAuthorizationV2>> {
+  if (!Boolean(DISPOSABLE_SANDBOX_TASK_PRODUCTION_ADMISSION_V2)) {
+    return Promise.reject(adapterError("unsupported_runtime_feature"))
+  }
+  return __testOnlyDispatchPreparedDisposableSandboxTaskCandidateV2(input, dependencies)
+}
