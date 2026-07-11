@@ -17,7 +17,12 @@ import {
   SCHEMA_VERSION,
   type ActivationGrantV1,
   type CanonicalSandboxEffectFenceV1,
+  type AuthorizationConsumptionReceiptSetV1,
+  type AuthorizationConsumptionReceiptV1,
   type CapabilityClaimsV1,
+  type CapabilityConstraintsV1,
+  type CapabilitySenderProofV1,
+  type CapabilityTargetV1,
   type CheckpointDurabilityReceiptV1,
   type CleanupBasisV1,
   type CreateSandboxV1,
@@ -31,6 +36,7 @@ import {
   type ProviderOutcomeRecordV1,
   type ReadProbeJournalAnchorV1,
   type ReadProbeJournalRecordV1,
+  type ReadProbeNoEffectReceiptV1,
   type SignedEffectJournalAnchorV1,
   type SandboxSpecV1,
 } from "./types.js";
@@ -127,6 +133,207 @@ function nonNegativeInteger(value: unknown, field: string): number {
 function digest(value: unknown, field: string): Digest {
   assertDigest(value, field);
   return value;
+}
+
+function signature(value: unknown, field: string): string {
+  const parsed = stringValue(value, field, 128);
+  if (!/^[A-Za-z0-9_-]{86}$/u.test(parsed) || Buffer.from(parsed, "base64url").toString("base64url") !== parsed) {
+    throw new SandboxError("validation_failed", `${field} must be canonical Ed25519 base64url`, { field });
+  }
+  return parsed;
+}
+
+function validateCapabilitySenderProof(value: unknown): CapabilitySenderProofV1 {
+  const v = closed(value, "capability.sender_proof", [
+    "schema_version", "sender_principal", "confirmation_key_id",
+    "transport_session_sha256", "proof_nonce_sha256", "issued_at",
+    "proof_sha256", "signature",
+  ]);
+  const facts = {
+    schema_version: literal(
+      v.schema_version,
+      "infinity.capability-sender-proof/v1",
+      "capability.sender_proof.schema_version",
+    ),
+    sender_principal: id(v.sender_principal, "capability.sender_proof.sender_principal", "principal"),
+    confirmation_key_id: id(v.confirmation_key_id, "capability.sender_proof.confirmation_key_id", "key"),
+    transport_session_sha256: digest(
+      v.transport_session_sha256,
+      "capability.sender_proof.transport_session_sha256",
+    ),
+    proof_nonce_sha256: digest(v.proof_nonce_sha256, "capability.sender_proof.proof_nonce_sha256"),
+    issued_at: time(v.issued_at, "capability.sender_proof.issued_at"),
+  };
+  const proofSha256 = digest(v.proof_sha256, "capability.sender_proof.proof_sha256");
+  if (proofSha256 !== canonicalDigest(facts)) {
+    throw new SandboxError("integrity_failed", "Capability sender proof digest does not bind its closed facts");
+  }
+  return {
+    ...facts,
+    proof_sha256: proofSha256,
+    signature: signature(v.signature, "capability.sender_proof.signature"),
+  };
+}
+
+function validateCapabilityTarget(value: unknown): CapabilityTargetV1 {
+  const v = closed(value, "capability.target", [
+    "schema_version", "operation", "operation_id", "operation_step_id",
+    "resource_id", "request_sha256", "idempotency_key_sha256",
+    "expected_revision", "handle_sha256", "fence_sha256", "target_sha256",
+  ]);
+  const facts = {
+    schema_version: literal(v.schema_version, "infinity.capability-target/v1", "capability.target.schema_version"),
+    operation: enumValue(
+      v.operation,
+      [
+        "begin_create_inert", "record_inert", "begin_activate", "record_active",
+        "expire", "quarantine", "record_failed", "record_lost", "begin_destroy",
+        "record_cleanup_failed", "resume_destroy", "record_destroyed", "exec.start",
+        "exec.frames.read", "exec.result.read", "exec.cancel", "file.read", "file.write",
+        "file.list", "checkpoint.export_bundle",
+      ] as const,
+      "capability.target.operation",
+    ),
+    operation_id: id(v.operation_id, "capability.target.operation_id", "op"),
+    operation_step_id: id(v.operation_step_id, "capability.target.operation_step_id", "step"),
+    resource_id: id(v.resource_id, "capability.target.resource_id", "sbx"),
+    request_sha256: digest(v.request_sha256, "capability.target.request_sha256"),
+    idempotency_key_sha256: digest(v.idempotency_key_sha256, "capability.target.idempotency_key_sha256"),
+    expected_revision: nonNegativeInteger(v.expected_revision, "capability.target.expected_revision"),
+    handle_sha256: v.handle_sha256 === null ? null : digest(v.handle_sha256, "capability.target.handle_sha256"),
+    fence_sha256: digest(v.fence_sha256, "capability.target.fence_sha256"),
+  };
+  const targetSha256 = digest(v.target_sha256, "capability.target.target_sha256");
+  if (targetSha256 !== canonicalDigest(facts)) {
+    throw new SandboxError("integrity_failed", "Capability target digest does not bind its closed facts");
+  }
+  return { ...facts, target_sha256: targetSha256 };
+}
+
+function validateCapabilityConstraints(value: unknown): CapabilityConstraintsV1 {
+  const v = closed(value, "capability.constraints", [
+    "schema_version", "not_before", "expires_at", "use_mode", "max_uses",
+    "constraints_sha256",
+  ]);
+  const facts = {
+    schema_version: literal(
+      v.schema_version,
+      "infinity.capability-constraints/v1",
+      "capability.constraints.schema_version",
+    ),
+    not_before: time(v.not_before, "capability.constraints.not_before"),
+    expires_at: time(v.expires_at, "capability.constraints.expires_at"),
+    use_mode: literal(v.use_mode, "once", "capability.constraints.use_mode"),
+    max_uses: v.max_uses === 1
+      ? 1 as const
+      : (() => { throw new SandboxError("validation_failed", "Capability max_uses must be one"); })(),
+  };
+  const constraintsSha256 = digest(v.constraints_sha256, "capability.constraints.constraints_sha256");
+  if (constraintsSha256 !== canonicalDigest(facts)) {
+    throw new SandboxError("integrity_failed", "Capability constraints digest does not bind its closed facts");
+  }
+  return { ...facts, constraints_sha256: constraintsSha256 };
+}
+
+function validateAuthorizationConsumptionReceipt(value: unknown): AuthorizationConsumptionReceiptV1 {
+  const v = closed(value, "authorization_consumption_receipt", [
+    "schema_version", "receipt_id", "capability_sha256", "use_nonce_sha256",
+    "operation_id", "operation_step_id", "target_sha256", "fence_sha256",
+    "consumer_principal", "transaction_id", "commit_sequence", "use_ordinal",
+    "max_uses", "committed_at", "issuer_principal", "signing_key_id",
+    "receipt_sha256", "signature",
+  ]);
+  const facts = {
+    schema_version: literal(
+      v.schema_version,
+      "infinity.authorization-consumption-receipt/v1",
+      "authorization_consumption_receipt.schema_version",
+    ),
+    receipt_id: id(v.receipt_id, "authorization_consumption_receipt.receipt_id", "receipt"),
+    capability_sha256: digest(v.capability_sha256, "authorization_consumption_receipt.capability_sha256"),
+    use_nonce_sha256: digest(v.use_nonce_sha256, "authorization_consumption_receipt.use_nonce_sha256"),
+    operation_id: id(v.operation_id, "authorization_consumption_receipt.operation_id", "op"),
+    operation_step_id: id(v.operation_step_id, "authorization_consumption_receipt.operation_step_id", "step"),
+    target_sha256: digest(v.target_sha256, "authorization_consumption_receipt.target_sha256"),
+    fence_sha256: digest(v.fence_sha256, "authorization_consumption_receipt.fence_sha256"),
+    consumer_principal: id(v.consumer_principal, "authorization_consumption_receipt.consumer_principal", "principal"),
+    transaction_id: id(v.transaction_id, "authorization_consumption_receipt.transaction_id", "tx"),
+    commit_sequence: parsePositiveInt64(v.commit_sequence, "authorization_consumption_receipt.commit_sequence"),
+    use_ordinal: v.use_ordinal === 1
+      ? 1 as const
+      : (() => { throw new SandboxError("validation_failed", "Authorization use ordinal must be one"); })(),
+    max_uses: v.max_uses === 1
+      ? 1 as const
+      : (() => { throw new SandboxError("validation_failed", "Authorization max_uses must be one"); })(),
+    committed_at: time(v.committed_at, "authorization_consumption_receipt.committed_at"),
+    issuer_principal: id(v.issuer_principal, "authorization_consumption_receipt.issuer_principal", "principal"),
+    signing_key_id: id(v.signing_key_id, "authorization_consumption_receipt.signing_key_id", "key"),
+  };
+  const receiptSha256 = digest(v.receipt_sha256, "authorization_consumption_receipt.receipt_sha256");
+  if (receiptSha256 !== canonicalDigest(facts)) {
+    throw new SandboxError("integrity_failed", "Authorization consumption receipt digest differs");
+  }
+  return {
+    ...facts,
+    receipt_sha256: receiptSha256,
+    signature: signature(v.signature, "authorization_consumption_receipt.signature"),
+  };
+}
+
+export function validateAuthorizationConsumptionSet(
+  value: unknown,
+): AuthorizationConsumptionReceiptSetV1 {
+  const v = closed(value, "authorization_consumption_set", [
+    "schema_version", "capability_sha256", "operation_id", "operation_step_id",
+    "target_sha256", "fence_sha256", "consumer_principal",
+    "first_commit_sequence", "last_commit_sequence", "receipts", "set_sha256",
+    "issuer_principal", "signing_key_id", "signature",
+  ]);
+  if (!Array.isArray(v.receipts) || v.receipts.length !== 1) {
+    throw new SandboxError("validation_failed", "Authorization consumption set must contain exactly one receipt");
+  }
+  const receipt = validateAuthorizationConsumptionReceipt(v.receipts[0]);
+  const facts = {
+    schema_version: literal(
+      v.schema_version,
+      "infinity.authorization-consumption-set/v1",
+      "authorization_consumption_set.schema_version",
+    ),
+    capability_sha256: digest(v.capability_sha256, "authorization_consumption_set.capability_sha256"),
+    operation_id: id(v.operation_id, "authorization_consumption_set.operation_id", "op"),
+    operation_step_id: id(v.operation_step_id, "authorization_consumption_set.operation_step_id", "step"),
+    target_sha256: digest(v.target_sha256, "authorization_consumption_set.target_sha256"),
+    fence_sha256: digest(v.fence_sha256, "authorization_consumption_set.fence_sha256"),
+    consumer_principal: id(v.consumer_principal, "authorization_consumption_set.consumer_principal", "principal"),
+    first_commit_sequence: parsePositiveInt64(v.first_commit_sequence, "authorization_consumption_set.first_commit_sequence"),
+    last_commit_sequence: parsePositiveInt64(v.last_commit_sequence, "authorization_consumption_set.last_commit_sequence"),
+    receipts: [receipt] as [AuthorizationConsumptionReceiptV1],
+    issuer_principal: id(v.issuer_principal, "authorization_consumption_set.issuer_principal", "principal"),
+    signing_key_id: id(v.signing_key_id, "authorization_consumption_set.signing_key_id", "key"),
+  };
+  if (
+    facts.first_commit_sequence !== facts.last_commit_sequence ||
+    receipt.commit_sequence !== facts.first_commit_sequence ||
+    receipt.capability_sha256 !== facts.capability_sha256 ||
+    receipt.operation_id !== facts.operation_id ||
+    receipt.operation_step_id !== facts.operation_step_id ||
+    receipt.target_sha256 !== facts.target_sha256 ||
+    receipt.fence_sha256 !== facts.fence_sha256 ||
+    receipt.consumer_principal !== facts.consumer_principal ||
+    receipt.issuer_principal !== facts.issuer_principal ||
+    receipt.signing_key_id !== facts.signing_key_id
+  ) {
+    throw new SandboxError("integrity_failed", "Authorization consumption set facts are not contiguous and exact");
+  }
+  const setSha256 = digest(v.set_sha256, "authorization_consumption_set.set_sha256");
+  if (setSha256 !== canonicalDigest(facts)) {
+    throw new SandboxError("integrity_failed", "Authorization consumption set digest differs");
+  }
+  return {
+    ...facts,
+    set_sha256: setSha256,
+    signature: signature(v.signature, "authorization_consumption_set.signature"),
+  };
 }
 
 function id(value: unknown, field: string, prefix: string): string {
@@ -333,8 +540,20 @@ export function validateCapability(value: unknown): CapabilityClaimsV1 {
     "fence",
     "not_before",
     "expires_at",
-  ], ["dispatch_journal_anchor_sha256", "handle_sha256"]);
-  return {
+    "issuer_principal",
+    "subject_principal",
+    "audience",
+    "sender_proof",
+    "target",
+    "constraints",
+    "use_mode",
+    "max_uses",
+    "authorization_consumption_set",
+    "capability_sha256",
+    "signing_key_id",
+    "signature",
+  ], ["handle_sha256"]);
+  const base = {
     schema_version: literal(v.schema_version, SCHEMA_VERSION, "capability.schema_version"),
     capability_id: id(v.capability_id, "capability.capability_id", "cap"),
     use_nonce_sha256: digest(v.use_nonce_sha256, "capability.use_nonce_sha256"),
@@ -377,17 +596,64 @@ export function validateCapability(value: unknown): CapabilityClaimsV1 {
     ...(v.handle_sha256 === undefined
       ? {}
       : { handle_sha256: digest(v.handle_sha256, "capability.handle_sha256") }),
-    ...(v.dispatch_journal_anchor_sha256 === undefined
-      ? {}
-      : {
-          dispatch_journal_anchor_sha256: digest(
-            v.dispatch_journal_anchor_sha256,
-            "capability.dispatch_journal_anchor_sha256",
-          ),
-        }),
     fence: validateFence(v.fence),
     not_before: time(v.not_before, "capability.not_before"),
     expires_at: time(v.expires_at, "capability.expires_at"),
+    issuer_principal: id(v.issuer_principal, "capability.issuer_principal", "principal"),
+    subject_principal: id(v.subject_principal, "capability.subject_principal", "principal"),
+    audience: literal(v.audience, SCHEMA_VERSION, "capability.audience"),
+    sender_proof: validateCapabilitySenderProof(v.sender_proof),
+    target: validateCapabilityTarget(v.target),
+    constraints: validateCapabilityConstraints(v.constraints),
+    use_mode: literal(v.use_mode, "once", "capability.use_mode"),
+    max_uses: v.max_uses === 1
+      ? 1 as const
+      : (() => { throw new SandboxError("validation_failed", "Capability max_uses must be one"); })(),
+  };
+  const capabilitySha256 = digest(v.capability_sha256, "capability.capability_sha256");
+  const signingKeyId = id(v.signing_key_id, "capability.signing_key_id", "key");
+  const capabilityFacts = { ...base, signing_key_id: signingKeyId };
+  if (capabilitySha256 !== canonicalDigest(capabilityFacts)) {
+    throw new SandboxError("integrity_failed", "Capability digest does not bind its closed signed claims");
+  }
+  const consumptionSet = validateAuthorizationConsumptionSet(v.authorization_consumption_set);
+  if (
+    base.target.operation !== base.operation ||
+    base.target.operation_id !== base.fence.operation_id ||
+    base.target.resource_id !== base.target_resource_id ||
+    base.target.request_sha256 !== base.request_sha256 ||
+    base.target.idempotency_key_sha256 !== base.idempotency_key_sha256 ||
+    base.target.expected_revision !== base.expected_revision ||
+    base.target.handle_sha256 !== (base.handle_sha256 ?? null) ||
+    base.target.fence_sha256 !== canonicalDigest(base.fence) ||
+    base.constraints.not_before !== base.not_before ||
+    base.constraints.expires_at !== base.expires_at ||
+    base.constraints.use_mode !== base.use_mode ||
+    base.constraints.max_uses !== base.max_uses ||
+    base.sender_proof.sender_principal !== base.subject_principal ||
+    Date.parse(base.sender_proof.issued_at) > Date.parse(base.not_before) ||
+    base.subject_principal !== base.fence.operation_executor_principal ||
+    base.audience !== base.fence.audience ||
+    consumptionSet.capability_sha256 !== capabilitySha256 ||
+    consumptionSet.operation_id !== base.target.operation_id ||
+    consumptionSet.operation_step_id !== base.target.operation_step_id ||
+    consumptionSet.target_sha256 !== base.target.target_sha256 ||
+    consumptionSet.fence_sha256 !== base.target.fence_sha256 ||
+    consumptionSet.consumer_principal !== base.subject_principal ||
+    consumptionSet.issuer_principal !== base.issuer_principal ||
+    consumptionSet.signing_key_id !== signingKeyId ||
+    consumptionSet.receipts[0].use_nonce_sha256 !== base.use_nonce_sha256 ||
+    Date.parse(consumptionSet.receipts[0].committed_at) < Date.parse(base.not_before) ||
+    Date.parse(consumptionSet.receipts[0].committed_at) >= Date.parse(base.expires_at)
+  ) {
+    throw new SandboxError("capability_denied", "Capability signed target, sender, constraints, or consumption set differs");
+  }
+  return {
+    ...base,
+    authorization_consumption_set: consumptionSet,
+    capability_sha256: capabilitySha256,
+    signing_key_id: signingKeyId,
+    signature: signature(v.signature, "capability.signature"),
   };
 }
 
@@ -851,6 +1117,53 @@ export function validateProviderDiscoveryScope(value: unknown): ProviderDiscover
 
 export function validateReadProbeJournalAnchor(value: unknown): ReadProbeJournalAnchorV1 {
   return validateSignedJournalAnchor(value, "read_probe_anchor", validateReadProbeJournalRecord);
+}
+
+export function validateReadProbeNoEffectReceipt(
+  value: unknown,
+): ReadProbeNoEffectReceiptV1 {
+  const v = closed(value, "read_probe_no_effect_receipt", [
+    "schema_version", "read_probe_anchor_sha256", "operation_id",
+    "operation_step_id", "target_sha256", "discovery_scope_sha256",
+    "proof_kind", "observed_at", "expires_at", "issuer_principal",
+    "signing_key_id", "receipt_sha256", "signature",
+  ]);
+  const facts = {
+    schema_version: literal(
+      v.schema_version,
+      "sandboxes.read-probe-no-effect-receipt/v1",
+      "read_probe_no_effect_receipt.schema_version",
+    ),
+    read_probe_anchor_sha256: digest(
+      v.read_probe_anchor_sha256,
+      "read_probe_no_effect_receipt.read_probe_anchor_sha256",
+    ),
+    operation_id: id(v.operation_id, "read_probe_no_effect_receipt.operation_id", "op"),
+    operation_step_id: id(v.operation_step_id, "read_probe_no_effect_receipt.operation_step_id", "step"),
+    target_sha256: digest(v.target_sha256, "read_probe_no_effect_receipt.target_sha256"),
+    discovery_scope_sha256: digest(
+      v.discovery_scope_sha256,
+      "read_probe_no_effect_receipt.discovery_scope_sha256",
+    ),
+    proof_kind: literal(
+      v.proof_kind,
+      "independent_read_only_no_effect",
+      "read_probe_no_effect_receipt.proof_kind",
+    ),
+    observed_at: time(v.observed_at, "read_probe_no_effect_receipt.observed_at"),
+    expires_at: time(v.expires_at, "read_probe_no_effect_receipt.expires_at"),
+    issuer_principal: id(v.issuer_principal, "read_probe_no_effect_receipt.issuer_principal", "principal"),
+    signing_key_id: id(v.signing_key_id, "read_probe_no_effect_receipt.signing_key_id", "key"),
+  };
+  const receiptSha256 = digest(v.receipt_sha256, "read_probe_no_effect_receipt.receipt_sha256");
+  if (receiptSha256 !== canonicalDigest(facts)) {
+    throw new SandboxError("integrity_failed", "Read-probe no-effect receipt digest differs");
+  }
+  return {
+    ...facts,
+    receipt_sha256: receiptSha256,
+    signature: signature(v.signature, "read_probe_no_effect_receipt.signature"),
+  };
 }
 
 export function validateCheckpointReceipt(value: unknown): CheckpointDurabilityReceiptV1 {

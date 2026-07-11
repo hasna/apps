@@ -17,6 +17,7 @@ import {
   type AdapterDescriptorV1,
   type AdapterObservationV1,
   type AuthorizedBoundedCallContextV1,
+  type BoundedOperationResultV1,
   type CheckpointExportHandoffV1,
   type CheckpointExportRequestV1,
   type DestroyObservationV1,
@@ -78,6 +79,8 @@ interface FakeExec {
   frames_delivered: boolean;
   started_at: string;
   terminal_at: string | null;
+  stream_root_sha256: Digest;
+  last_frame_sha256: Digest;
 }
 
 export interface FakeRunnerOptionsV1 {
@@ -103,6 +106,7 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
   readonly #delayedOperations = new Map<string, OwnedProviderHandleV1>();
   readonly #workspaces = new Map<string, FakeWorkspace>();
   readonly #execs = new Map<string, FakeExec>();
+  readonly #boundedOutcomes = new Map<string, BoundedOperationResultV1>();
   readonly #destroyResult: "absent" | "still_present" | "unknown";
   readonly #creationTokenMismatch: boolean;
   readonly #activationFingerprintMismatch: boolean;
@@ -133,6 +137,7 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
   readonly observed_final_barrier_receipts: Digest[] = [];
   readonly observed_adapter_descriptor_receipts: Digest[] = [];
   readonly observed_adapter_admission_receipts: Digest[] = [];
+  readonly observed_read_probe_no_effect_receipts: Digest[] = [];
 
   constructor(options: FakeRunnerOptionsV1 = {}) {
     this.#ambiguousCreate = options.ambiguous_create ?? "none";
@@ -482,6 +487,11 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     });
     const initialCursor = `cursor_${sha256(`initial:${request.exec_id}`).slice(7)}`;
     const nextCursor = `cursor_${sha256(`terminal:${request.exec_id}`).slice(7)}`;
+    const initialCursorSha256 = sha256(initialCursor);
+    const streamRootSha256 = canonicalDigest({
+      exec_id: request.exec_id,
+      cursor_sha256: initialCursorSha256,
+    });
     const startedAt = nowRfc3339(this.#clock());
     const stdout = Buffer.from(request.argv.at(-1) ?? "", "utf8");
     this.#execs.set(request.exec_id, {
@@ -495,6 +505,8 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       frames_delivered: false,
       started_at: startedAt,
       terminal_at: null,
+      stream_root_sha256: streamRootSha256,
+      last_frame_sha256: streamRootSha256,
     });
     const facts = {
       schema_version: "sandboxes.exec-start-receipt/v1" as const,
@@ -504,10 +516,12 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       request_sha256: ctx.request_sha256,
       state: "running" as const,
       initial_cursor: initialCursor,
+      initial_cursor_sha256: initialCursorSha256,
+      stream_root_sha256: streamRootSha256,
       adapter_exec_fingerprint_sha256: adapterExecFingerprint,
       started_at: startedAt,
     };
-    return { ...facts, receipt_sha256: canonicalDigest(facts) };
+    return this.#rememberBounded(ctx, { ...facts, receipt_sha256: canonicalDigest(facts) });
   }
 
   async readExecFrames(
@@ -522,11 +536,26 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       throw new SandboxError("integrity_failed", "Fake frame cursor is stale, guessed, or replayed");
     }
     const terminalAt = nowRfc3339(this.#clock());
+    const priorStreamRootSha256 = canonicalDigest({
+      exec_id: request.exec_id,
+      cursor_sha256: sha256(request.cursor),
+    });
     const frames: ExecFrameV1[] = [];
+    let priorFrameSha256 = priorStreamRootSha256;
     if (exec.stdout.byteLength > 0) {
-      frames.push(this.#frame(exec, 1n, "stdout", exec.stdout, terminalAt));
+      const frame = this.#frame(exec, 1n, priorFrameSha256, "stdout", exec.stdout, terminalAt);
+      frames.push(frame);
+      priorFrameSha256 = frame.frame_sha256;
     }
-    frames.push(this.#frame(exec, BigInt(frames.length + 1), "terminal", new Uint8Array(), terminalAt));
+    const terminalFrame = this.#frame(
+      exec,
+      BigInt(frames.length + 1),
+      priorFrameSha256,
+      "terminal",
+      new Uint8Array(),
+      terminalAt,
+    );
+    frames.push(terminalFrame);
     const returnedBytes = frames.reduce((total, frame) => total + frame.payload_length, 0);
     if (frames.length > request.max_frames || returnedBytes > request.max_bytes) {
       throw new SandboxError("resource_limit_exceeded", "Fake frame page exceeds the caller bound");
@@ -534,20 +563,44 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     exec.frames_delivered = true;
     exec.state = "succeeded";
     exec.terminal_at = terminalAt;
+    exec.last_frame_sha256 = terminalFrame.frame_sha256;
+    const pageFramesRootSha256 = canonicalDigest(frames.map((frame) => frame.frame_sha256));
+    const nextCursorSha256 = sha256(exec.next_cursor);
+    const resumeTokenSha256 = canonicalDigest({
+      exec_id: exec.exec_id,
+      prior_stream_root_sha256: priorStreamRootSha256,
+      page_frames_root_sha256: pageFramesRootSha256,
+      next_cursor_sha256: nextCursorSha256,
+    });
+    const nextStreamRootSha256 = canonicalDigest({
+      prior_stream_root_sha256: priorStreamRootSha256,
+      page_frames_root_sha256: pageFramesRootSha256,
+      resume_token_sha256: resumeTokenSha256,
+    });
+    exec.stream_root_sha256 = nextStreamRootSha256;
     const facts = {
       schema_version: "sandboxes.exec-frame-page/v1" as const,
       exec_id: exec.exec_id,
       from_cursor_sha256: sha256(request.cursor),
+      prior_stream_root_sha256: priorStreamRootSha256,
       frames,
+      page_frames_root_sha256: pageFramesRootSha256,
       next_cursor: exec.next_cursor,
-      next_cursor_sha256: sha256(exec.next_cursor),
+      next_cursor_sha256: nextCursorSha256,
+      resume_token_sha256: resumeTokenSha256,
+      next_stream_root_sha256: nextStreamRootSha256,
       has_more: false,
       terminal: true,
       gap_detected: false as const,
+      gap_proof_sha256: canonicalDigest({
+        gap_detected: false,
+        prior_stream_root_sha256: priorStreamRootSha256,
+        next_stream_root_sha256: nextStreamRootSha256,
+      }),
       returned_frames: frames.length,
       returned_bytes: returnedBytes,
     };
-    return { ...facts, receipt_sha256: canonicalDigest(facts) };
+    return this.#rememberBounded(ctx, { ...facts, receipt_sha256: canonicalDigest(facts) });
   }
 
   async readExecResult(
@@ -568,9 +621,10 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       stdout_sha256: sha256(exec.stdout),
       stderr_sha256: sha256(new Uint8Array()),
       output_bytes: exec.stdout.byteLength,
+      final_stream_root_sha256: exec.stream_root_sha256,
       terminal_at: exec.terminal_at,
     };
-    return { ...facts, receipt_sha256: canonicalDigest(facts) };
+    return this.#rememberBounded(ctx, { ...facts, receipt_sha256: canonicalDigest(facts) });
   }
 
   async cancelExec(
@@ -597,7 +651,7 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       process_stop_evidence_sha256: sha256(`cancel:${exec.exec_id}:${wasRunning}`),
       observed_at: observedAt,
     };
-    return { ...facts, receipt_sha256: canonicalDigest(facts) };
+    return this.#rememberBounded(ctx, { ...facts, receipt_sha256: canonicalDigest(facts) });
   }
 
   async readFile(
@@ -623,10 +677,17 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       offset_bytes: request.offset_bytes,
       content_base64url: Buffer.from(bytes).toString("base64url"),
       returned_bytes: bytes.byteLength,
+      content_sha256: sha256(bytes),
       total_file_sha256: file.content_sha256,
+      range_proof_sha256: canonicalDigest({
+        total_file_sha256: file.content_sha256,
+        offset_bytes: request.offset_bytes,
+        content_sha256: sha256(bytes),
+        returned_bytes: bytes.byteLength,
+      }),
       file_revision_sha256: file.file_revision_sha256,
     };
-    return { ...facts, receipt_sha256: canonicalDigest(facts) };
+    return this.#rememberBounded(ctx, { ...facts, receipt_sha256: canonicalDigest(facts) });
   }
 
   async writeFile(
@@ -673,7 +734,7 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       byte_length: bytes.byteLength,
       file_revision_sha256: fileRevision,
     };
-    return { ...facts, receipt_sha256: canonicalDigest(facts) };
+    return this.#rememberBounded(ctx, { ...facts, receipt_sha256: canonicalDigest(facts) });
   }
 
   async listFiles(
@@ -709,7 +770,7 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       entries,
       next_cursor: null,
     };
-    return { ...facts, receipt_sha256: canonicalDigest(facts) };
+    return this.#rememberBounded(ctx, { ...facts, receipt_sha256: canonicalDigest(facts) });
   }
 
   async exportCheckpoint(
@@ -752,6 +813,45 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       sink_descriptor_sha256: request.sink_descriptor_sha256,
     });
     const exportedAt = nowRfc3339(this.#clock());
+    if (
+      request.capture_grant.operation_id !== ctx.operation_id ||
+      request.capture_mode !== "quiesced"
+    ) {
+      throw new SandboxError("capability_denied", "Fake checkpoint capture grant does not bind the operation");
+    }
+    const bundleSha256 = canonicalDigest(manifest);
+    const quiescenceFacts = {
+      schema_version: "sandboxes.checkpoint-quiescence-receipt/v1" as const,
+      checkpoint_id: request.checkpoint_id,
+      resource_id: handle.resource_id,
+      resource_lifecycle_generation: handle.resource_lifecycle_generation,
+      workspace_revision: workspace.revision,
+      active_exec_count: 0 as const,
+      capture_grant_sha256: request.capture_grant.grant_sha256,
+      final_authorization_receipt_sha256: ctx.authorization_consumption_set_sha256,
+      quiesced_at: exportedAt,
+    };
+    const quiescenceReceipt = {
+      ...quiescenceFacts,
+      receipt_sha256: canonicalDigest(quiescenceFacts),
+    };
+    const sinkCommitFacts = {
+      schema_version: "sandboxes.checkpoint-sink-commit-receipt/v1" as const,
+      checkpoint_id: request.checkpoint_id,
+      sink_descriptor_sha256: request.sink_descriptor_sha256,
+      manifest_blob_sha256: manifestSha256,
+      bundle_sha256: bundleSha256,
+      bundle_byte_length: totalBytes,
+      storage_version: `fake-object-${checkpointRootSha256.slice(7, 23)}`,
+      committed_at: exportedAt,
+      issuer_principal: `principal_${"7000".padStart(32, "0")}`,
+      signing_key_id: `key_${"7000".padStart(32, "0")}`,
+    };
+    const sinkCommitReceipt = {
+      ...sinkCommitFacts,
+      receipt_sha256: canonicalDigest(sinkCommitFacts),
+      signature: "A".repeat(86),
+    };
     const facts = {
       schema_version: "sandboxes.checkpoint-export-handoff/v1" as const,
       handoff_id: `handoff_${checkpointRootSha256.slice(7, 39)}`,
@@ -762,14 +862,33 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       manifest_sha256: manifestSha256,
       workspace_root_sha256: workspaceRootSha256,
       checkpoint_root_sha256: checkpointRootSha256,
-      bundle_sha256: canonicalDigest(manifest),
+      bundle_sha256: bundleSha256,
       bundle_byte_length: totalBytes,
       file_count: manifest.length,
       fence_sha256: canonicalDigest(ctx.fence),
+      final_authorization_receipt_sha256: ctx.authorization_consumption_set_sha256,
+      capture_grant_sha256: request.capture_grant.grant_sha256,
+      quiescence_receipt: quiescenceReceipt,
+      quiescence_receipt_sha256: quiescenceReceipt.receipt_sha256,
+      manifest_blob_sha256: manifestSha256,
       sink_descriptor_sha256: request.sink_descriptor_sha256,
+      sink_commit_receipt: sinkCommitReceipt,
+      sink_commit_receipt_sha256: sinkCommitReceipt.receipt_sha256,
+      durability_state: "durable" as const,
       exported_at: exportedAt,
     };
-    return { ...facts, handoff_sha256: canonicalDigest(facts) };
+    return this.#rememberBounded(ctx, { ...facts, handoff_sha256: canonicalDigest(facts) });
+  }
+
+  async reconcileBoundedOperation(
+    ctx: AuthorizedBoundedCallContextV1,
+    handle: OwnedProviderHandleV1,
+    operation: AuthorizedBoundedCallContextV1["operation"],
+    request: Parameters<SandboxRunnerV1["reconcileBoundedOperation"]>[3],
+  ): Promise<BoundedOperationResultV1 | undefined> {
+    this.#assertBoundedSink(ctx, handle, request, operation);
+    const result = this.#boundedOutcomes.get(ctx.operation_id);
+    return result === undefined ? undefined : structuredClone(result);
   }
 
   replaceFingerprint(resourceId: string): void {
@@ -811,6 +930,7 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
   #frame(
     exec: FakeExec,
     sequence: bigint,
+    priorFrameSha256: Digest,
     kind: ExecFrameV1["kind"],
     payload: Uint8Array,
     observedAt: string,
@@ -819,6 +939,7 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       schema_version: "sandboxes.exec-frame/v1" as const,
       exec_id: exec.exec_id,
       sequence,
+      prior_frame_sha256: priorFrameSha256,
       kind,
       payload_base64url: Buffer.from(payload).toString("base64url"),
       payload_length: payload.byteLength,
@@ -826,6 +947,14 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       observed_at: observedAt,
     };
     return { ...facts, frame_sha256: canonicalDigest(facts) };
+  }
+
+  #rememberBounded<T extends BoundedOperationResultV1>(
+    ctx: AuthorizedBoundedCallContextV1,
+    result: T,
+  ): T {
+    this.#boundedOutcomes.set(ctx.operation_id, structuredClone(result));
+    return result;
   }
 
   #assertBoundedSink(
@@ -836,7 +965,7 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
   ): void {
     const keys = new Set([
       "schema_version", "operation", "operation_id", "request_sha256",
-      "capability_use_receipt_sha256", "handle", "fence", "deadline",
+      "authorization_consumption_set_sha256", "handle", "fence", "deadline",
     ]);
     if (
       Object.keys(ctx).length !== keys.size ||
@@ -856,7 +985,10 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
     ) {
       throw new SandboxError("integrity_failed", "Fake bounded sink rejected a mismatched closed call context");
     }
-    assertDigest(ctx.capability_use_receipt_sha256, "bounded.capability_use_receipt_sha256");
+    assertDigest(
+      ctx.authorization_consumption_set_sha256,
+      "bounded.authorization_consumption_set_sha256",
+    );
     this.#exact(handle);
   }
 
@@ -1041,10 +1173,15 @@ export class DeterministicFakeRunnerV1 implements SandboxRunnerV1 {
       ctx.immutable_fingerprint_sha256 !== op.target.immutable_fingerprint_sha256 ||
       ctx.discovery_scope_receipt_sha256 !== op.external_anchor_receipt_sha256 ||
       ctx.complete_read_probe_envelope_sha256 !== op.external_anchor_receipt_sha256 ||
+      ctx.read_probe_no_effect_receipt_sha256 !==
+        op.read_probe_no_effect_receipt_sha256 ||
       ctx.max_pages !== 1_000 ||
       op.external_anchor_kind !== "READ_PROBE"
     ) {
       throw new SandboxError("capability_denied", "Fake provider rejected a mismatched signed discovery scope");
     }
+    this.observed_read_probe_no_effect_receipts.push(
+      ctx.read_probe_no_effect_receipt_sha256,
+    );
   }
 }

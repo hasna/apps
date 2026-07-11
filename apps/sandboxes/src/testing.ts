@@ -20,13 +20,16 @@ import type {
   ActivationGrantV1,
   AdapterDescriptorV1,
   CapabilityClaimsV1,
+  CheckpointCaptureGrantV1,
   CheckpointDurabilityReceiptV1,
+  CheckpointSinkCommitReceiptV1,
   DispatchedJournalAnchorV1,
   EffectJournalEnvelopeV1,
   EffectJournalRecoveryRangeV1,
   GitPromotionReceiptRefV1,
   InfinityCleanupGrantV1,
   ReadProbeJournalAnchorV1,
+  ReadProbeNoEffectReceiptV1,
   ProviderOutcomeAnchorV1,
   ProviderOutcomeRecordV1,
   SafetyFenceObservationV1,
@@ -159,10 +162,13 @@ export class DeterministicTestAuthorityVerifierV1 implements SandboxesAuthorityV
     current_effect: 0,
     dispatch_journal: 0,
     read_probe_journal: 0,
+    read_probe_no_effect: 0,
     outcome_journal: 0,
     activation: 0,
     cleanup: 0,
     checkpoint: 0,
+    checkpoint_capture: 0,
+    checkpoint_sink_commit: 0,
     promotion: 0,
     provider_non_acceptance: 0,
   };
@@ -174,6 +180,9 @@ export class DeterministicTestAuthorityVerifierV1 implements SandboxesAuthorityV
       lease_holder_principal: claims.fence.lease_holder_principal,
       operation_executor_principal: claims.fence.operation_executor_principal,
       audience: claims.fence.audience,
+      capability_signature_verified: true,
+      sender_proof_verified: true,
+      authorization_consumption_set_verified: true,
     };
   }
 
@@ -187,6 +196,9 @@ export class DeterministicTestAuthorityVerifierV1 implements SandboxesAuthorityV
       lease_holder_principal: fence.lease_holder_principal,
       operation_executor_principal: fence.operation_executor_principal,
       audience: fence.audience,
+      capability_signature_verified: true,
+      sender_proof_verified: true,
+      authorization_consumption_set_verified: true,
     };
   }
 
@@ -206,6 +218,30 @@ export class DeterministicTestAuthorityVerifierV1 implements SandboxesAuthorityV
     return this.#journalBindings(anchor, fence);
   }
 
+  async verifyReadProbeNoEffect(
+    anchor: ReadProbeJournalAnchorV1,
+  ): Promise<ReadProbeNoEffectReceiptV1> {
+    this.calls.read_probe_no_effect += 1;
+    const facts = {
+      schema_version: "sandboxes.read-probe-no-effect-receipt/v1" as const,
+      read_probe_anchor_sha256: canonicalDigest(anchor),
+      operation_id: anchor.record.operation_id,
+      operation_step_id: anchor.record.operation_step_id,
+      target_sha256: canonicalDigest(anchor.record.target),
+      discovery_scope_sha256: anchor.record.discovery_scope.scope_sha256,
+      proof_kind: "independent_read_only_no_effect" as const,
+      observed_at: anchor.record.recorded_at,
+      expires_at: anchor.record.expires_at,
+      issuer_principal: "principal_00000000000000000000000000000071",
+      signing_key_id: "key_00000000000000000000000000000071",
+    };
+    return {
+      ...facts,
+      receipt_sha256: canonicalDigest(facts),
+      signature: "A".repeat(86),
+    };
+  }
+
   async verifyProviderOutcomeAnchor(
     anchor: ProviderOutcomeAnchorV1,
     fence: CapabilityClaimsV1["fence"],
@@ -223,6 +259,9 @@ export class DeterministicTestAuthorityVerifierV1 implements SandboxesAuthorityV
       lease_holder_principal: fence.lease_holder_principal,
       operation_executor_principal: fence.operation_executor_principal,
       audience: fence.audience,
+      capability_signature_verified: true,
+      sender_proof_verified: true,
+      authorization_consumption_set_verified: true,
       anchor_schema_version: anchor.anchor_schema_version,
       journal_sequence: anchor.journal_sequence,
       prior_frontier_digest: anchor.prior_frontier_digest,
@@ -247,6 +286,16 @@ export class DeterministicTestAuthorityVerifierV1 implements SandboxesAuthorityV
 
   async verifyCheckpointReceipt(_receipt: CheckpointDurabilityReceiptV1): Promise<void> {
     this.calls.checkpoint += 1;
+  }
+
+  async verifyCheckpointCaptureGrant(_grant: CheckpointCaptureGrantV1): Promise<void> {
+    this.calls.checkpoint_capture += 1;
+  }
+
+  async verifyCheckpointSinkCommitReceipt(
+    _receipt: CheckpointSinkCommitReceiptV1,
+  ): Promise<void> {
+    this.calls.checkpoint_sink_commit += 1;
   }
 
   async verifyGitPromotionReceipt(_receipt: GitPromotionReceiptRefV1): Promise<void> {

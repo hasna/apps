@@ -272,6 +272,78 @@ export type ExternalOperationAnchorRecordV1 =
   | ExternalMutationAnchorRecordV1
   | ExternalReadProbeAnchorRecordV1;
 
+export interface CapabilitySenderProofV1 {
+  schema_version: "infinity.capability-sender-proof/v1";
+  sender_principal: string;
+  confirmation_key_id: string;
+  transport_session_sha256: Digest;
+  proof_nonce_sha256: Digest;
+  issued_at: string;
+  proof_sha256: Digest;
+  signature: string;
+}
+
+export interface CapabilityTargetV1 {
+  schema_version: "infinity.capability-target/v1";
+  operation: SandboxAuthorityOperationV1;
+  operation_id: string;
+  operation_step_id: string;
+  resource_id: string;
+  request_sha256: Digest;
+  idempotency_key_sha256: Digest;
+  expected_revision: number;
+  handle_sha256: Digest | null;
+  fence_sha256: Digest;
+  target_sha256: Digest;
+}
+
+export interface CapabilityConstraintsV1 {
+  schema_version: "infinity.capability-constraints/v1";
+  not_before: string;
+  expires_at: string;
+  use_mode: "once";
+  max_uses: 1;
+  constraints_sha256: Digest;
+}
+
+export interface AuthorizationConsumptionReceiptV1 {
+  schema_version: "infinity.authorization-consumption-receipt/v1";
+  receipt_id: string;
+  capability_sha256: Digest;
+  use_nonce_sha256: Digest;
+  operation_id: string;
+  operation_step_id: string;
+  target_sha256: Digest;
+  fence_sha256: Digest;
+  consumer_principal: string;
+  transaction_id: string;
+  commit_sequence: bigint;
+  use_ordinal: 1;
+  max_uses: 1;
+  committed_at: string;
+  issuer_principal: string;
+  signing_key_id: string;
+  receipt_sha256: Digest;
+  signature: string;
+}
+
+export interface AuthorizationConsumptionReceiptSetV1 {
+  schema_version: "infinity.authorization-consumption-set/v1";
+  capability_sha256: Digest;
+  operation_id: string;
+  operation_step_id: string;
+  target_sha256: Digest;
+  fence_sha256: Digest;
+  consumer_principal: string;
+  first_commit_sequence: bigint;
+  last_commit_sequence: bigint;
+  receipts: [AuthorizationConsumptionReceiptV1];
+  set_sha256: Digest;
+  issuer_principal: string;
+  signing_key_id: string;
+  signature: string;
+}
+
 export interface CapabilityClaimsV1 {
   schema_version: SchemaVersion;
   capability_id: string;
@@ -283,10 +355,21 @@ export interface CapabilityClaimsV1 {
   expected_revision: number;
   /** Required for bounded data-plane calls; forbidden for lifecycle calls. */
   handle_sha256?: Digest;
-  dispatch_journal_anchor_sha256?: Digest;
   fence: CanonicalSandboxEffectFenceV1;
   not_before: string;
   expires_at: string;
+  issuer_principal: string;
+  subject_principal: string;
+  audience: SchemaVersion;
+  sender_proof: CapabilitySenderProofV1;
+  target: CapabilityTargetV1;
+  constraints: CapabilityConstraintsV1;
+  use_mode: "once";
+  max_uses: 1;
+  authorization_consumption_set: AuthorizationConsumptionReceiptSetV1;
+  capability_sha256: Digest;
+  signing_key_id: string;
+  signature: string;
 }
 
 export interface LifecycleCommandContextV1 {
@@ -522,7 +605,7 @@ export interface AuthorizedBoundedCallContextV1 {
   operation: SandboxDataPlaneOperationV1;
   operation_id: string;
   request_sha256: Digest;
-  capability_use_receipt_sha256: Digest;
+  authorization_consumption_set_sha256: Digest;
   handle: SandboxHandleRefV1;
   fence: CanonicalSandboxEffectFenceV1;
   deadline: string;
@@ -549,6 +632,8 @@ export interface ExecStartReceiptV1 {
   request_sha256: Digest;
   state: "running";
   initial_cursor: string;
+  initial_cursor_sha256: Digest;
+  stream_root_sha256: Digest;
   adapter_exec_fingerprint_sha256: Digest;
   started_at: string;
   receipt_sha256: Digest;
@@ -568,6 +653,7 @@ export interface ExecFrameV1 {
   schema_version: "sandboxes.exec-frame/v1";
   exec_id: string;
   sequence: bigint;
+  prior_frame_sha256: Digest;
   kind: "stdout" | "stderr" | "status" | "heartbeat" | "terminal" | "error";
   payload_base64url: string;
   payload_length: number;
@@ -580,12 +666,17 @@ export interface ExecFramePageV1 {
   schema_version: "sandboxes.exec-frame-page/v1";
   exec_id: string;
   from_cursor_sha256: Digest;
+  prior_stream_root_sha256: Digest;
   frames: ExecFrameV1[];
+  page_frames_root_sha256: Digest;
   next_cursor: string;
   next_cursor_sha256: Digest;
+  resume_token_sha256: Digest;
+  next_stream_root_sha256: Digest;
   has_more: boolean;
   terminal: boolean;
   gap_detected: false;
+  gap_proof_sha256: Digest;
   returned_frames: number;
   returned_bytes: number;
   receipt_sha256: Digest;
@@ -607,6 +698,7 @@ export interface ExecResultV1 {
   stdout_sha256: Digest;
   stderr_sha256: Digest;
   output_bytes: number;
+  final_stream_root_sha256: Digest;
   terminal_at: string | null;
   receipt_sha256: Digest;
 }
@@ -649,7 +741,9 @@ export interface FileReadReceiptV1 {
   offset_bytes: number;
   content_base64url: string;
   returned_bytes: number;
+  content_sha256: Digest;
   total_file_sha256: Digest;
+  range_proof_sha256: Digest;
   file_revision_sha256: Digest;
   receipt_sha256: Digest;
 }
@@ -714,6 +808,57 @@ export interface CheckpointExportRequestV1 {
   allowed_paths: string[];
   maximum_bundle_bytes: number;
   sink_descriptor_sha256: Digest;
+  capture_mode: "quiesced";
+  capture_grant: CheckpointCaptureGrantV1;
+}
+
+export interface CheckpointCaptureGrantV1 {
+  schema_version: "sandboxes.checkpoint-capture-grant/v1";
+  grant_id: string;
+  checkpoint_id: string;
+  resource_id: string;
+  resource_lifecycle_generation: bigint;
+  operation_id: string;
+  handle_sha256: Digest;
+  expected_workspace_revision: bigint;
+  allowed_paths_sha256: Digest;
+  maximum_bundle_bytes: number;
+  sink_descriptor_sha256: Digest;
+  not_before: string;
+  expires_at: string;
+  one_use_nonce_sha256: Digest;
+  issuer_principal: string;
+  signing_key_id: string;
+  grant_sha256: Digest;
+  signature: string;
+}
+
+export interface CheckpointQuiescenceReceiptV1 {
+  schema_version: "sandboxes.checkpoint-quiescence-receipt/v1";
+  checkpoint_id: string;
+  resource_id: string;
+  resource_lifecycle_generation: bigint;
+  workspace_revision: bigint;
+  active_exec_count: 0;
+  capture_grant_sha256: Digest;
+  final_authorization_receipt_sha256: Digest;
+  quiesced_at: string;
+  receipt_sha256: Digest;
+}
+
+export interface CheckpointSinkCommitReceiptV1 {
+  schema_version: "sandboxes.checkpoint-sink-commit-receipt/v1";
+  checkpoint_id: string;
+  sink_descriptor_sha256: Digest;
+  manifest_blob_sha256: Digest;
+  bundle_sha256: Digest;
+  bundle_byte_length: number;
+  storage_version: string;
+  committed_at: string;
+  issuer_principal: string;
+  signing_key_id: string;
+  receipt_sha256: Digest;
+  signature: string;
 }
 
 /** Candidate bytes only; Infinity separately seals durable checkpoint policy. */
@@ -731,10 +876,28 @@ export interface CheckpointExportHandoffV1 {
   bundle_byte_length: number;
   file_count: number;
   fence_sha256: Digest;
+  final_authorization_receipt_sha256: Digest;
+  capture_grant_sha256: Digest;
+  quiescence_receipt: CheckpointQuiescenceReceiptV1;
+  quiescence_receipt_sha256: Digest;
+  manifest_blob_sha256: Digest;
   sink_descriptor_sha256: Digest;
+  sink_commit_receipt: CheckpointSinkCommitReceiptV1;
+  sink_commit_receipt_sha256: Digest;
+  durability_state: "durable";
   exported_at: string;
   handoff_sha256: Digest;
 }
+
+export type BoundedOperationResultV1 =
+  | ExecStartReceiptV1
+  | ExecFramePageV1
+  | ExecResultV1
+  | ExecCancelReceiptV1
+  | FileReadReceiptV1
+  | FileWriteReceiptV1
+  | FileListPageV1
+  | CheckpointExportHandoffV1;
 
 export interface SandboxesBoundedOperationsV1 {
   startExec(request: ExecStartRequestV1, ctx: BoundedOperationContextV1): Promise<ExecStartReceiptV1>;
@@ -803,6 +966,7 @@ export interface ProviderOperationV1 {
   idempotency_key_sha256: Digest;
   external_anchor_kind: "DISPATCHED" | "READ_PROBE";
   external_anchor_receipt_sha256: Digest;
+  read_probe_no_effect_receipt_sha256?: Digest;
   deadline: string;
 }
 
@@ -828,6 +992,22 @@ export interface ProviderDiscoveryScopeV1 {
   immutable_fingerprint_sha256: Digest;
   max_pages: number;
   scope_sha256: Digest;
+}
+
+export interface ReadProbeNoEffectReceiptV1 {
+  schema_version: "sandboxes.read-probe-no-effect-receipt/v1";
+  read_probe_anchor_sha256: Digest;
+  operation_id: string;
+  operation_step_id: string;
+  target_sha256: Digest;
+  discovery_scope_sha256: Digest;
+  proof_kind: "independent_read_only_no_effect";
+  observed_at: string;
+  expires_at: string;
+  issuer_principal: string;
+  signing_key_id: string;
+  receipt_sha256: Digest;
+  signature: string;
 }
 
 export interface ProviderLifecycleLockBindingV1 {
@@ -1014,12 +1194,14 @@ export interface OperationRecordV1 {
   schema_version: SchemaVersion;
   operation_id: string;
   operation_step_id?: string;
-  operation: SandboxOperation;
+  operation: SandboxAuthorityOperationV1;
   resource_id: string;
   actor_principal: string;
   idempotency_key_sha256: Digest;
   request_sha256: Digest;
   capability_use_sha256: Digest;
+  authorization_consumption_set_sha256: Digest;
+  authorization_consumption_set: AuthorizationConsumptionReceiptSetV1;
   dispatch_journal_anchor_sha256?: Digest;
   provider_target?: ProviderEffectTargetV1;
   cleanup_authorization?: {
@@ -1045,6 +1227,14 @@ export interface OperationRecordV1 {
   outcome_anchor_sha256?: Digest;
   state: "in_flight" | "committed" | "aborted" | "unknown";
   result_sha256?: Digest;
+  bounded_result?: {
+    schema_version: "sandboxes.bounded-operation-outcome/v1";
+    operation: SandboxDataPlaneOperationV1;
+    result_sha256: Digest;
+    result_document: BoundedOperationResultV1;
+    commit_sequence: bigint;
+    committed_at: string;
+  };
   error_code?: string;
   created_at: string;
   updated_at: string;

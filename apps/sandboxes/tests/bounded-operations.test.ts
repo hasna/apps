@@ -8,6 +8,7 @@ import type {
 } from "../src/types.js";
 import {
   activate,
+  capabilityClaims,
   CLOCK,
   createInert,
   digest,
@@ -70,20 +71,18 @@ function boundedContext(
     request_sha256: requestSha256,
     expected_revision: sandbox.revision,
     fence: operationFence,
-    capability: {
-      schema_version: "sandboxes.runtime/v1",
-      capability_id: oid("cap", seed),
-      use_nonce_sha256: digest(`bounded-capability-${seed}`),
+    capability: capabilityClaims({
       operation,
+      operation_id: operationId,
+      operation_step_id: oid("step", seed),
       target_resource_id: sandbox.id,
       request_sha256: requestSha256,
       idempotency_key_sha256: idempotencyKeySha256,
       expected_revision: sandbox.revision,
       handle_sha256: canonicalDigest(handleRef(sandbox)),
       fence: operationFence,
-      not_before: "2029-12-31T23:59:00.000Z",
-      expires_at: "2030-01-01T00:05:00.000Z",
-    },
+      seed,
+    }),
   };
 }
 
@@ -170,6 +169,18 @@ describe("bounded public sandbox operations", () => {
     );
     expect(framePage.terminal).toBe(true);
     expect(framePage.frames.at(-1)?.kind).toBe("terminal");
+    const durableStart = await h.repository.transaction((tx) => tx.getOperation(oid("op", 204)));
+    const durableFrames = await h.repository.transaction((tx) => tx.getOperation(oid("op", 205)));
+    expect(durableStart?.bounded_result?.result_document).toMatchObject({
+      stream_root_sha256: started.stream_root_sha256,
+      initial_cursor_sha256: started.initial_cursor_sha256,
+    });
+    expect(durableFrames?.bounded_result?.result_document).toMatchObject({
+      resume_token_sha256: framePage.resume_token_sha256,
+      next_stream_root_sha256: framePage.next_stream_root_sha256,
+      gap_detected: false,
+      gap_proof_sha256: framePage.gap_proof_sha256,
+    });
 
     const result = {
       schema_version: "sandboxes.exec-result-request/v1" as const,
@@ -202,6 +213,24 @@ describe("bounded public sandbox operations", () => {
     expect(canceled.state).toBe("canceled");
     expect(canceled.whole_scope_terminated).toBe(true);
 
+    const checkpointGrantFacts = {
+      schema_version: "sandboxes.checkpoint-capture-grant/v1" as const,
+      grant_id: oid("grant", 209),
+      checkpoint_id: oid("checkpoint", 209),
+      resource_id: active.id,
+      resource_lifecycle_generation: active.resource_lifecycle_generation,
+      operation_id: oid("op", 209),
+      handle_sha256: canonicalDigest(handle),
+      expected_workspace_revision: writeReceipt.workspace_revision_after,
+      allowed_paths_sha256: canonicalDigest(["result.txt"]),
+      maximum_bundle_bytes: 4096,
+      sink_descriptor_sha256: digest("checkpoint-sink"),
+      not_before: "2029-12-31T23:59:00.000Z",
+      expires_at: "2030-01-01T00:05:00.000Z",
+      one_use_nonce_sha256: digest("checkpoint-capture-209"),
+      issuer_principal: oid("principal", 209),
+      signing_key_id: oid("key", 209),
+    };
     const checkpoint = {
       schema_version: "sandboxes.checkpoint-export-request/v1" as const,
       handle,
@@ -210,6 +239,12 @@ describe("bounded public sandbox operations", () => {
       allowed_paths: ["result.txt"],
       maximum_bundle_bytes: 4096,
       sink_descriptor_sha256: digest("checkpoint-sink"),
+      capture_mode: "quiesced" as const,
+      capture_grant: {
+        ...checkpointGrantFacts,
+        grant_sha256: canonicalDigest(checkpointGrantFacts),
+        signature: "A".repeat(86),
+      },
     };
     const handoff = await h.service.exportCheckpoint(
       checkpoint,
@@ -222,7 +257,7 @@ describe("bounded public sandbox operations", () => {
     ));
   });
 
-  test("a stale handle or replayed one-use capability never reaches the adapter", async () => {
+  test("a stale handle never reaches the adapter and an exact replay returns the durable outcome", async () => {
     const h = harness();
     const active = await activate(h, await createInert(h));
     const request = {
@@ -249,12 +284,12 @@ describe("bounded public sandbox operations", () => {
     const changedHandleBinding = boundedContext(active, "file.list", canonicalDigest(request), 219);
     changedHandleBinding.capability.handle_sha256 = digest("different-handle-ref");
     await expect(h.service.listFiles(request, changedHandleBinding)).rejects.toMatchObject({
-      code: "capability_denied",
+      code: "integrity_failed",
     });
 
     const ctx = boundedContext(active, "file.list", canonicalDigest(request), 220);
-    await h.service.listFiles(request, ctx);
-    await expect(h.service.listFiles(request, ctx)).rejects.toMatchObject({ code: "capability_replayed" });
+    const first = await h.service.listFiles(request, ctx);
+    expect(await h.service.listFiles(request, ctx)).toEqual(first);
 
     const stale = {
       ...request,
@@ -266,14 +301,14 @@ describe("bounded public sandbox operations", () => {
     const staleContext = boundedContext(active, "file.list", canonicalDigest(stale), 221);
     staleContext.capability.handle_sha256 = canonicalDigest(stale.handle);
     await expect(h.service.listFiles(stale, staleContext)).rejects.toMatchObject({
-      code: "stale_resource_lifecycle_generation",
+      code: "integrity_failed",
     });
 
     const wrongLease = boundedContext(active, "file.list", canonicalDigest(request), 222);
     wrongLease.fence.resource_lease_id = oid("resource_lease", 222);
     wrongLease.capability.fence.resource_lease_id = wrongLease.fence.resource_lease_id;
     await expect(h.service.listFiles(request, wrongLease)).rejects.toMatchObject({
-      code: "capability_denied",
+      code: "integrity_failed",
     });
 
     await expect(h.service.listFiles(

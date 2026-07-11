@@ -372,10 +372,6 @@ describe("reference lifecycle and adversarial invariants", () => {
     const changed = {
       ...retry,
       dispatch_journal: changedAnchor,
-      capability: {
-        ...retry.capability,
-        dispatch_journal_anchor_sha256: dispatchedJournalAnchorDigest(changedAnchor),
-      },
     };
 
     await expect(h.service.create(input, changed)).rejects.toMatchObject({ code: "integrity_failed" });
@@ -434,10 +430,6 @@ describe("reference lifecycle and adversarial invariants", () => {
     const changed = {
       ...begin,
       dispatch_journal: changedAnchor,
-      capability: {
-        ...begin.capability,
-        dispatch_journal_anchor_sha256: dispatchedJournalAnchorDigest(changedAnchor),
-      },
     };
     await expect(h.service.create(input, changed)).rejects.toMatchObject({ code: "protocol_incompatible" });
     expect(h.runner.calls.create_inert).toBe(0);
@@ -510,10 +502,6 @@ describe("reference lifecycle and adversarial invariants", () => {
     await expect(h.service.create(input, {
       ...begin,
       dispatch_journal: changedAnchor,
-      capability: {
-        ...begin.capability,
-        dispatch_journal_anchor_sha256: dispatchedJournalAnchorDigest(changedAnchor),
-      },
     })).rejects.toMatchObject({ code: "request_digest_mismatch" });
     expect(h.runner.calls.create_inert).toBe(0);
     expect(await h.repository.transaction((tx) => tx.getOperation(begin.operation_id))).toBeUndefined();
@@ -543,7 +531,8 @@ describe("reference lifecycle and adversarial invariants", () => {
       expect(fenced.state).toBe("activating");
       expect(fenced.pending_provider_outcome).toBeUndefined();
       expect(fenced.physical_safety_state).toBe("fenced");
-      expect(h.runner.observed_authorization_receipts.at(-1)).toBe(grantUse);
+      expect(h.runner.observed_authorization_receipts.at(-1))
+        .toBe(begin.capability.authorization_consumption_set.set_sha256);
     }
   });
 
@@ -707,6 +696,7 @@ describe("reference lifecycle and adversarial invariants", () => {
       writeFile: source.writeFile.bind(source),
       listFiles: source.listFiles.bind(source),
       exportCheckpoint: source.exportCheckpoint.bind(source),
+      reconcileBoundedOperation: source.reconcileBoundedOperation.bind(source),
     };
     const service = new SandboxesReferenceServiceV1({
       repository: h.repository,
@@ -945,6 +935,7 @@ describe("reference lifecycle and adversarial invariants", () => {
       writeFile: unreachable,
       listFiles: unreachable,
       exportCheckpoint: unreachable,
+      reconcileBoundedOperation: unreachable,
     };
     const originalAdmission = h.verifier.verifyAdapterAdmission.bind(h.verifier);
     h.verifier.verifyAdapterAdmission = async (descriptor) => {
@@ -1013,10 +1004,6 @@ describe("reference lifecycle and adversarial invariants", () => {
     const ctx = {
       ...baseContext,
       dispatch_journal: managedAnchor,
-      capability: {
-        ...baseContext.capability,
-        dispatch_journal_anchor_sha256: dispatchedJournalAnchorDigest(managedAnchor),
-      },
     };
 
     await expect(service.create(input, ctx)).rejects.toMatchObject({ code: "capability_denied" });

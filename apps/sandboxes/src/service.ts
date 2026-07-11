@@ -11,6 +11,7 @@ import {
 import { SandboxError } from "./errors.js";
 import {
   validateCheckpointExportRequest,
+  validateBoundedOperationResult,
   validateExecCancelRequest,
   validateExecFrameReadRequest,
   validateExecResultRequest,
@@ -38,6 +39,7 @@ import {
 } from "./provider-identity.js";
 import type { SandboxRepositoryTxV1, SandboxRepositoryV1 } from "./repository.js";
 import {
+  AmbiguousProviderEffectError,
   ProviderRejectedNoEffectError,
   ProviderIdentityMismatchError,
   type AdapterCallContextV1,
@@ -52,11 +54,14 @@ import {
   type AdapterDescriptorV1,
   type AdapterAdmissionReceiptV1,
   type AuthorizedBoundedCallContextV1,
+  type BoundedOperationResultV1,
   type BoundedOperationContextV1,
   type CanonicalSandboxEffectFenceV1,
   type CapabilityClaimsV1,
   type CheckpointExportHandoffV1,
   type CheckpointExportRequestV1,
+  type CheckpointCaptureGrantV1,
+  type CheckpointSinkCommitReceiptV1,
   type CheckpointDurabilityReceiptV1,
   type CreateSandboxV1,
   type DispatchedJournalAnchorV1,
@@ -96,6 +101,7 @@ import {
   type ProviderDiscoveryScopeV1,
   type ProviderLifecycleLockBindingV1,
   type ReadProbeJournalAnchorV1,
+  type ReadProbeNoEffectReceiptV1,
   type ReconcileFindingV1,
   type SandboxDestroyTombstoneV1,
   type SandboxDataPlaneOperationV1,
@@ -121,6 +127,7 @@ import {
   validateProviderOutcomeAnchor,
   validateProviderDiscoveryScope,
   validateReadProbeJournalAnchor,
+  validateReadProbeNoEffectReceipt,
 } from "./validation.js";
 
 export interface SandboxesAuthorityVerifierV1 {
@@ -140,6 +147,9 @@ export interface SandboxesAuthorityVerifierV1 {
     anchor: ReadProbeJournalAnchorV1,
     fence: CanonicalSandboxEffectFenceV1,
   ): Promise<AuthenticatedJournalBindingsV1>;
+  verifyReadProbeNoEffect(
+    anchor: ReadProbeJournalAnchorV1,
+  ): Promise<ReadProbeNoEffectReceiptV1>;
   verifyProviderOutcomeAnchor(
     anchor: ProviderOutcomeAnchorV1,
     fence: CanonicalSandboxEffectFenceV1,
@@ -147,6 +157,8 @@ export interface SandboxesAuthorityVerifierV1 {
   verifyActivationGrant(grant: ActivationGrantV1): Promise<void>;
   verifyCleanupGrant(grant: InfinityCleanupGrantV1): Promise<void>;
   verifyCheckpointReceipt(receipt: CheckpointDurabilityReceiptV1): Promise<void>;
+  verifyCheckpointCaptureGrant(grant: CheckpointCaptureGrantV1): Promise<void>;
+  verifyCheckpointSinkCommitReceipt(receipt: CheckpointSinkCommitReceiptV1): Promise<void>;
   verifyGitPromotionReceipt(receipt: GitPromotionReceiptRefV1): Promise<void>;
   verifyAdapterAdmission(descriptor: AdapterDescriptorV1): Promise<AuthenticatedAdapterAdmissionV1>;
   verifyJournalRecoveryRange(
@@ -162,6 +174,9 @@ export interface AuthenticatedEffectBindingsV1 {
   lease_holder_principal: string;
   operation_executor_principal: string;
   audience: typeof SCHEMA_VERSION;
+  capability_signature_verified: true;
+  sender_proof_verified: true;
+  authorization_consumption_set_verified: true;
 }
 
 /**
@@ -316,6 +331,7 @@ interface VerifiedJournalRecoveryRangeV1 {
 
 interface NormalizedMutationContext extends NormalizedLifecycleContext {
   dispatch_journal: DispatchedJournalAnchorV1;
+  provider_grant_use_sha256?: Digest;
   failed_no_effect_retry_proof?: {
     prior_execution_epoch: bigint;
     outcome_envelope_digest: Digest;
@@ -685,6 +701,7 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
             descriptor,
             adapterAdmissionReceiptSha256,
           );
+          await this.#assertImmediateProviderEffectAuthorization(ctx);
           providerReachable = true;
           handle = await this.#runner.createInert(
             this.#adapterContext(
@@ -971,6 +988,7 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
           handle,
           grant.expires_at,
         );
+        await this.#assertImmediateProviderEffectAuthorization(ctx);
         activationReceipt = await this.#runner.activate(
           this.#adapterContext(
             ctx,
@@ -1185,6 +1203,7 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
           adapterAdmissionReceiptSha256,
           handle,
         );
+        await this.#assertImmediateProviderEffectAuthorization(ctx);
         const expireReceipt = await this.#runner.expire(
           this.#adapterContext(
             ctx,
@@ -1476,6 +1495,7 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
           handle,
           grant.expires_at,
         );
+        await this.#assertImmediateProviderEffectAuthorization(ctx);
         const destroyContext: DestroyContextV1 = {
           ...this.#adapterContext(
             ctx,
@@ -1778,6 +1798,15 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
     contextValue: BoundedOperationContextV1,
   ): Promise<CheckpointExportHandoffV1> {
     const request = validateCheckpointExportRequest(requestValue);
+    if (request.capture_grant.operation_id !== contextValue.operation_id) {
+      throw new SandboxError("capability_denied", "Checkpoint capture grant changed operation identity");
+    }
+    await this.#assertWindow(
+      request.capture_grant.not_before,
+      request.capture_grant.expires_at,
+      "capability_denied",
+    );
+    await this.#verifier.verifyCheckpointCaptureGrant(request.capture_grant);
     return await this.#dispatchBoundedOperation(
       "checkpoint.export_bundle",
       request,
@@ -2071,16 +2100,72 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
           request as unknown as BoundedRequestV1,
         );
         const capabilityUse = this.#capabilityUseDigest(ctx.capability);
-        if (tx.getCapabilityUseOperation(capabilityUse) !== undefined) {
-          throw new SandboxError("capability_replayed", "Bounded operation capability was already consumed");
+        const existing = tx.getOperation(ctx.operation_id);
+        if (existing !== undefined) {
+          if (
+            existing.operation !== operation ||
+            existing.resource_id !== current.id ||
+            existing.actor_principal !== ctx.fence.actor_principal ||
+            existing.idempotency_key_sha256 !== ctx.idempotency_key_sha256 ||
+            existing.request_sha256 !== ctx.request_sha256 ||
+            existing.capability_use_sha256 !== capabilityUse ||
+            existing.authorization_consumption_set_sha256 !==
+              ctx.capability.authorization_consumption_set.set_sha256 ||
+            existing.operation_step_id !== ctx.capability.target.operation_step_id ||
+            canonicalDigest(existing.fence) !== canonicalDigest(ctx.fence)
+          ) {
+            throw new SandboxError("idempotency_key_reused", "Bounded operation ID changed protected bytes");
+          }
+        } else {
+          const existingByKey = tx.findIdempotentOperation(
+            ctx.fence.actor_principal,
+            operation,
+            current.id,
+            ctx.idempotency_key_sha256,
+          );
+          if (existingByKey !== undefined) {
+            throw new SandboxError("idempotency_key_reused", "Bounded idempotency key belongs to another operation");
+          }
+          if (tx.getCapabilityUseOperation(capabilityUse) !== undefined) {
+            throw new SandboxError("capability_replayed", "Bounded operation capability was already consumed");
+          }
+          const now = this.#txNow(tx);
+          const record: OperationRecordV1 = {
+            schema_version: SCHEMA_VERSION,
+            operation_id: ctx.operation_id,
+            operation_step_id: ctx.capability.target.operation_step_id,
+            operation,
+            resource_id: current.id,
+            actor_principal: ctx.fence.actor_principal,
+            idempotency_key_sha256: ctx.idempotency_key_sha256,
+            request_sha256: ctx.request_sha256,
+            capability_use_sha256: capabilityUse,
+            authorization_consumption_set_sha256:
+              ctx.capability.authorization_consumption_set.set_sha256,
+            authorization_consumption_set:
+              ctx.capability.authorization_consumption_set,
+            expected_resource_lifecycle_generation: current.resource_lifecycle_generation,
+            successor_resource_lifecycle_generation: current.resource_lifecycle_generation,
+            fence: ctx.fence,
+            expected_revision: ctx.expected_revision,
+            prepared_resource_revision: current.revision,
+            cancellation_state: "open",
+            effect_phase: "prepared",
+            state: "in_flight",
+            created_at: now,
+            updated_at: now,
+          };
+          tx.insertOperation(record);
+          tx.consumeCapabilityUse(capabilityUse, ctx.operation_id);
         }
-        tx.consumeCapabilityUse(capabilityUse, ctx.operation_id);
         const sealed = tx.getHandle(current.id);
         if (sealed === undefined) throw new SandboxError("integrity_failed", "Bounded operation handle is missing");
         return {
           current,
           handle: this.#openStoredHandle(sealed, current),
-          capability_use_receipt_sha256: capabilityUse,
+          operation_record: existing ?? tx.getOperation(ctx.operation_id)!,
+          authorization_consumption_set_sha256:
+            ctx.capability.authorization_consumption_set.set_sha256,
         };
       });
 
@@ -2111,7 +2196,8 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
         operation,
         operation_id: ctx.operation_id,
         request_sha256: ctx.request_sha256,
-        capability_use_receipt_sha256: initial.capability_use_receipt_sha256,
+        authorization_consumption_set_sha256:
+          initial.authorization_consumption_set_sha256,
         handle: request.handle,
         fence: ctx.fence,
         deadline: ctx.fence.operation_execution_expires_at,
@@ -2119,7 +2205,116 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
       if (final.current.physical_safety_state !== "clear") {
         throw new SandboxError("policy_denied", "Bounded operation is blocked by the physical safety fence");
       }
-      return await effect(adapterContext, final.handle);
+      if (operation === "checkpoint.export_bundle") {
+        const checkpoint = request as unknown as CheckpointExportRequestV1;
+        await this.#assertWindow(
+          checkpoint.capture_grant.not_before,
+          checkpoint.capture_grant.expires_at,
+          "capability_denied",
+        );
+        await this.#verifier.verifyCheckpointCaptureGrant(checkpoint.capture_grant);
+      }
+      // This is deliberately after the final database/handle read and directly
+      // adjacent to the adapter call. A revocation in that interval wins.
+      const immediate = await this.#verifier.verifyCurrentEffectAuthorization(
+        ctx.capability,
+        ctx.fence,
+      );
+      this.#assertAuthenticatedBindings(immediate, ctx.fence);
+
+      if (initial.operation_record.bounded_result !== undefined) {
+        const replay = validateBoundedOperationResult(
+          operation,
+          initial.operation_record.bounded_result.result_document,
+          request as unknown as BoundedRequestV1,
+          adapterContext,
+        );
+        if (canonicalDigest(replay) !== initial.operation_record.result_sha256) {
+          throw new SandboxError("integrity_failed", "Durable bounded result digest changed");
+        }
+        return replay as ResultV1;
+      }
+
+      const needsReconciliation = ["dispatched", "unknown"].includes(
+        initial.operation_record.effect_phase,
+      );
+      await this.#repository.transaction((tx) => {
+        const current = tx.getOperation(ctx.operation_id);
+        if (current === undefined) throw new SandboxError("integrity_failed", "Bounded reservation disappeared");
+        if (current.effect_phase === "prepared") {
+          tx.compareAndSwapOperationPhase(ctx.operation_id, ["prepared"], "dispatched", this.#txNow(tx));
+        } else if (!["dispatched", "unknown"].includes(current.effect_phase)) {
+          throw new SandboxError("provider_state_unknown", "Bounded operation is not replayable");
+        }
+      });
+
+      let rawResult: unknown;
+      try {
+        rawResult = needsReconciliation
+          ? await this.#runner.reconcileBoundedOperation(
+              adapterContext,
+              final.handle,
+              operation,
+              request as unknown as BoundedRequestV1,
+            )
+          : await effect(adapterContext, final.handle);
+      } catch (error) {
+        if (error instanceof AmbiguousProviderEffectError) {
+          await this.#repository.transaction((tx) => {
+            const current = tx.getOperation(ctx.operation_id);
+            if (current !== undefined) {
+              tx.updateOperation({
+                ...current,
+                effect_phase: "unknown",
+                state: "unknown",
+                error_code: "provider_state_unknown",
+                updated_at: this.#txNow(tx),
+              });
+            }
+          });
+        }
+        throw error;
+      }
+      if (rawResult === undefined) {
+        throw new SandboxError("provider_state_unknown", "Bounded operation reconciliation has no exact outcome");
+      }
+      const result = validateBoundedOperationResult(
+        operation,
+        rawResult,
+        request as unknown as BoundedRequestV1,
+        adapterContext,
+      );
+      if (operation === "checkpoint.export_bundle") {
+        await this.#verifier.verifyCheckpointSinkCommitReceipt(
+          (result as CheckpointExportHandoffV1).sink_commit_receipt,
+        );
+      }
+      const resultSha256 = canonicalDigest(result);
+      await this.#repository.transaction((tx) => {
+        const current = tx.getOperation(ctx.operation_id);
+        if (current === undefined || !["dispatched", "unknown"].includes(current.effect_phase)) {
+          throw new SandboxError("integrity_failed", "Bounded outcome lost its durable reservation");
+        }
+        const committedAt = this.#txNow(tx);
+        const { error_code: _priorError, ...withoutPriorError } = current;
+        tx.updateOperation({
+          ...withoutPriorError,
+          bounded_result: {
+            schema_version: "sandboxes.bounded-operation-outcome/v1",
+            operation,
+            result_sha256: resultSha256,
+            result_document: result,
+            commit_sequence:
+              ctx.capability.authorization_consumption_set.last_commit_sequence,
+            committed_at: committedAt,
+          },
+          result_sha256: resultSha256,
+          effect_phase: "succeeded",
+          state: "committed",
+          updated_at: committedAt,
+        });
+      });
+      return result as ResultV1;
     });
   }
 
@@ -2169,7 +2364,6 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
       capability.idempotency_key_sha256 !== value.idempotency_key_sha256 ||
       capability.expected_revision !== value.expected_revision ||
       capability.handle_sha256 !== expectedHandleSha256 ||
-      capability.dispatch_journal_anchor_sha256 !== undefined ||
       canonicalDigest(capability.fence) !== canonicalDigest(fence)
     ) {
       throw new SandboxError("capability_denied", "Capability does not bind the exact bounded operation and fence");
@@ -2401,7 +2595,7 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
     }
     if (
       !allowProviderDispatch &&
-      ("dispatch_journal" in value || capability.dispatch_journal_anchor_sha256 !== undefined)
+      "dispatch_journal" in value
     ) {
       throw new SandboxError("validation_failed", "Non-provider lifecycle commands cannot carry a DISPATCHED anchor");
     }
@@ -2449,7 +2643,7 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
     resourceId: string,
     expectedDigest: Digest,
     value: MutationContextV1,
-    expectedAuthorizationReceipt?: Digest,
+    providerGrantUseSha256?: Digest,
   ): Promise<NormalizedMutationContext> {
     const base = await this.#authorizeLifecycle(operation, resourceId, expectedDigest, value, true);
     const dispatchJournal = validateDispatchedJournalAnchor(value.dispatch_journal);
@@ -2458,9 +2652,8 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
     const priorFailedNoEffectAuthorization = priorOperation?.effect_phase === "failed_no_effect"
       ? priorOperation.provider_target?.authorization_consumption_receipt_sha256
       : undefined;
-    const authorizationReceipt = expectedAuthorizationReceipt ??
-      priorFailedNoEffectAuthorization ??
-      this.#capabilityUseDigest(base.capability);
+    const authorizationReceipt = priorFailedNoEffectAuthorization ??
+      base.capability.authorization_consumption_set.set_sha256;
     if (
       dispatchRecord.operation_id !== base.fence.operation_id ||
       dispatchRecord.outcome_schema_version !== EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION ||
@@ -2475,14 +2668,14 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
         base.transition.successor_resource_lifecycle_generation ||
       canonicalDigest(dispatchRecord.fence) !== canonicalDigest(base.fence) ||
       dispatchRecord.authorization_consumption_receipt_sha256 !== authorizationReceipt ||
+      dispatchRecord.operation_step_id !== base.capability.target.operation_step_id ||
       dispatchRecord.provider_idempotency_token_sha256 !== providerIdempotencyTokenDigest({
         operation_id: dispatchRecord.operation_id,
         operation_step_id: dispatchRecord.operation_step_id,
         operation_digest: dispatchRecord.operation_digest,
         resource_id: dispatchRecord.resource_id,
         provider_creation_token_sha256: dispatchRecord.provider_creation_token_sha256,
-      }) ||
-      base.capability.dispatch_journal_anchor_sha256 !== dispatchedJournalAnchorDigest(dispatchJournal)
+      })
     ) {
       throw new SandboxError("integrity_failed", "DISPATCHED journal anchor does not bind the exact transition, authorization, and fence");
     }
@@ -2492,6 +2685,9 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
     return {
       ...base,
       dispatch_journal: dispatchJournal,
+      ...(providerGrantUseSha256 === undefined
+        ? {}
+        : { provider_grant_use_sha256: providerGrantUseSha256 }),
       ...(failedNoEffectRetryProof === undefined
         ? {}
         : { failed_no_effect_retry_proof: failedNoEffectRetryProof }),
@@ -2897,7 +3093,6 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
       await this.#readVerifyStoreDispatched(appendResponse, ctx);
     }
     if (
-      ctx.capability.dispatch_journal_anchor_sha256 !== dispatchedJournalAnchorDigest(ctx.dispatch_journal) ||
       dispatchRecord.operation_id !== ctx.fence.operation_id ||
       dispatchRecord.operation_digest !== ctx.fence.operation_digest ||
       canonicalDigest(dispatchRecord.fence) !== canonicalDigest(ctx.fence)
@@ -2913,7 +3108,7 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
     });
     await this.#physicalSafety.assertProviderDispatchAllowed({
       resource_id: ctx.fence.resource_id,
-      operation: operation.operation,
+      operation: operation.operation as SandboxOperation,
       fence: ctx.fence,
       dispatch_anchor_sha256: dispatchedJournalAnchorDigest(ctx.dispatch_journal),
     });
@@ -2992,7 +3187,7 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
       resume_destroy: "destroying",
     };
     if (
-      current.state !== expectedState[operation.operation] ||
+      current.state !== expectedState[operation.operation as SandboxOperation] ||
       current.revision !== operation.prepared_resource_revision
     ) {
       throw new SandboxError("stale_revision", "Resource changed after provider dispatch preparation");
@@ -3011,18 +3206,17 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
     if (tx.getCapabilityUseOperation(operation.capability_use_sha256) !== operation.operation_id) {
       throw new SandboxError("capability_denied", "Provider dispatch capability consumption is not durable");
     }
-    const authorizationReceipt = operation.provider_target?.authorization_consumption_receipt_sha256;
     if (
       operation.operation === "begin_activate" &&
-      (authorizationReceipt === undefined ||
-        tx.getActivationGrantUseOperation(authorizationReceipt) !== operation.operation_id)
+      (ctx.provider_grant_use_sha256 === undefined ||
+        tx.getActivationGrantUseOperation(ctx.provider_grant_use_sha256) !== operation.operation_id)
     ) {
       throw new SandboxError("capability_denied", "Activation grant consumption is not durable");
     }
     if (
       ["begin_destroy", "resume_destroy"].includes(operation.operation) &&
-      (authorizationReceipt === undefined ||
-        tx.getCleanupGrantUseOperation(authorizationReceipt) !== operation.operation_id)
+      (ctx.provider_grant_use_sha256 === undefined ||
+        tx.getCleanupGrantUseOperation(ctx.provider_grant_use_sha256) !== operation.operation_id)
     ) {
       throw new SandboxError("cleanup_grant_mismatch", "Cleanup grant consumption is not durable");
     }
@@ -3036,7 +3230,10 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
       authenticated.actor_principal !== fence.actor_principal ||
       authenticated.lease_holder_principal !== fence.lease_holder_principal ||
       authenticated.operation_executor_principal !== fence.operation_executor_principal ||
-      authenticated.audience !== fence.audience
+      authenticated.audience !== fence.audience ||
+      authenticated.capability_signature_verified !== true ||
+      authenticated.sender_proof_verified !== true ||
+      authenticated.authorization_consumption_set_verified !== true
     ) {
       throw new SandboxError(
         "capability_denied",
@@ -3312,6 +3509,8 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
         existingById.actor_principal !== ctx.fence.actor_principal ||
         existingById.request_sha256 !== ctx.request_sha256 ||
         existingById.idempotency_key_sha256 !== ctx.idempotency_key_sha256 ||
+        existingById.authorization_consumption_set_sha256 !==
+          ctx.capability.authorization_consumption_set.set_sha256 ||
         existingById.expected_revision !== ctx.expected_revision ||
         existingById.dispatch_journal_anchor_sha256 !== dispatchAnchorSha256 ||
         canonicalDigest(existingById.provider_target ?? null) !== canonicalDigest(providerTarget ?? null) ||
@@ -3338,6 +3537,8 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
       if (
         existingByKey.request_sha256 !== ctx.request_sha256 ||
         existingByKey.expected_revision !== ctx.expected_revision ||
+        existingByKey.authorization_consumption_set_sha256 !==
+          ctx.capability.authorization_consumption_set.set_sha256 ||
         existingByKey.dispatch_journal_anchor_sha256 !== dispatchAnchorSha256 ||
         canonicalDigest(existingByKey.provider_target ?? null) !== canonicalDigest(providerTarget ?? null) ||
         existingByKey.expected_resource_lifecycle_generation !==
@@ -3371,6 +3572,10 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
       idempotency_key_sha256: ctx.idempotency_key_sha256,
       request_sha256: ctx.request_sha256,
       capability_use_sha256: capabilityUse,
+      authorization_consumption_set_sha256:
+        ctx.capability.authorization_consumption_set.set_sha256,
+      authorization_consumption_set:
+        ctx.capability.authorization_consumption_set,
       expected_resource_lifecycle_generation:
         ctx.transition.expected_resource_lifecycle_generation,
       successor_resource_lifecycle_generation: ctx.transition.successor_resource_lifecycle_generation,
@@ -3505,6 +3710,10 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
       dispatch_journal_anchor_sha256: dispatchedJournalAnchorDigest(ctx.dispatch_journal),
       provider_target: target,
       capability_use_sha256: capabilityUse,
+      authorization_consumption_set_sha256:
+        ctx.capability.authorization_consumption_set.set_sha256,
+      authorization_consumption_set:
+        ctx.capability.authorization_consumption_set,
       fence: ctx.fence,
       expected_revision: ctx.expected_revision,
       prepared_resource_revision: preparedSandbox.revision,
@@ -4323,7 +4532,7 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
     }
     const physicalSafetyAssertion = {
       resource_id: ctx.fence.resource_id,
-      operation: operation.operation,
+      operation: operation.operation as SandboxOperation,
       fence: ctx.fence,
       dispatch_anchor_sha256: dispatchedJournalAnchorDigest(ctx.dispatch_journal),
     };
@@ -4646,6 +4855,26 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
     await this.#assertCurrentEffectGuard(ctx, readProbe);
   }
 
+  async #assertImmediateProviderEffectAuthorization(
+    ctx: NormalizedMutationContext,
+  ): Promise<void> {
+    await this.#assertFenceFresh(ctx.fence);
+    await this.#repository.transaction((tx) => {
+      const operation = tx.getOperation(ctx.operation_id);
+      if (operation === undefined || operation.effect_phase !== "dispatched") {
+        throw new SandboxError("provider_state_unknown", "Immediate provider barrier lost its dispatch");
+      }
+      this.#assertProviderDispatchBarrier(tx, operation, ctx);
+    });
+    // No database, journal, admission, or other asynchronous work may occur
+    // after this online check and before the caller invokes the runner.
+    const authenticated = await this.#verifier.verifyCurrentEffectAuthorization(
+      ctx.capability,
+      ctx.fence,
+    );
+    this.#assertAuthenticatedBindings(authenticated, ctx.fence);
+  }
+
   async #assertCurrentEffectGuard(
     ctx: NormalizedMutationContext,
     readProbe?: ProviderOperationV1,
@@ -4848,6 +5077,23 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
     }
     const authenticated = await this.#verifier.verifyReadProbeJournalAnchor(anchor, ctx.fence);
     this.#assertAuthenticatedJournalBindings(authenticated, anchor, ctx.fence);
+    const noEffectReceipt = validateReadProbeNoEffectReceipt(
+      await this.#verifier.verifyReadProbeNoEffect(anchor),
+    );
+    if (
+      noEffectReceipt.read_probe_anchor_sha256 !== readProbeJournalAnchorDigest(anchor) ||
+      noEffectReceipt.operation_id !== probeRecord.operation_id ||
+      noEffectReceipt.operation_step_id !== probeRecord.operation_step_id ||
+      noEffectReceipt.target_sha256 !== canonicalDigest(probeRecord.target) ||
+      noEffectReceipt.discovery_scope_sha256 !== probeRecord.discovery_scope.scope_sha256 ||
+      Date.parse(noEffectReceipt.expires_at) <=
+        (await this.#repository.databaseTime()).getTime()
+    ) {
+      throw new SandboxError(
+        "integrity_failed",
+        "Independent read-probe no-effect receipt does not bind the exact probe",
+      );
+    }
     await this.#repository.transaction((tx) => {
       tx.appendExternalAnchor({
         schema_version: SCHEMA_VERSION,
@@ -4868,6 +5114,7 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
       operation: "inspect",
       external_anchor_kind: "READ_PROBE",
       external_anchor_receipt_sha256: readProbeJournalAnchorDigest(anchor),
+      read_probe_no_effect_receipt_sha256: noEffectReceipt.receipt_sha256,
     };
   }
 
@@ -4968,6 +5215,9 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
     readProbe: ProviderOperationV1,
   ): ReconcileContextV1 {
     const scope = this.#providerDiscoveryScope(descriptor, readProbe.target);
+    if (readProbe.read_probe_no_effect_receipt_sha256 === undefined) {
+      throw new SandboxError("integrity_failed", "Reconciliation lacks a signed read-probe no-effect receipt");
+    }
     return {
       installation_id: scope.installation_id,
       provider_scope_ref: scope.provider_scope_ref,
@@ -4976,6 +5226,8 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
       immutable_fingerprint_sha256: scope.immutable_fingerprint_sha256,
       discovery_scope_receipt_sha256: readProbe.external_anchor_receipt_sha256,
       complete_read_probe_envelope_sha256: readProbe.external_anchor_receipt_sha256,
+      read_probe_no_effect_receipt_sha256:
+        readProbe.read_probe_no_effect_receipt_sha256,
       max_pages: scope.max_pages,
       deadline: ctx.fence.operation_execution_expires_at,
     };
@@ -4983,8 +5235,9 @@ export class SandboxesReferenceServiceV1 implements SandboxesBoundedOperationsV1
 
   #capabilityUseDigest(capability: CapabilityClaimsV1): Digest {
     return canonicalDigest({
+      issuer_principal: capability.issuer_principal,
       capability_id: capability.capability_id,
-      nonce: capability.use_nonce_sha256,
+      use_nonce_sha256: capability.use_nonce_sha256,
     });
   }
 

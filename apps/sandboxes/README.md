@@ -15,7 +15,8 @@ is allowed only after an authoritative `failed_no_effect` outcome and must keep
 the semantic step, provider target, token, request, and lifecycle generation
 unchanged. Provider outcomes stay non-canonical until a separate
 Infinity `record_*` command commits the next exact generation. Provider reads
-use separate signed `READ_PROBE` anchors. TTL and ambiguous-provider signals
+use separate signed `READ_PROBE` anchors plus an independently verified signed
+read-only/no-effect receipt. TTL and ambiguous-provider signals
 produce a typed physical safety-fence observation without autonomously changing
 canonical state or generation; only a later signed Infinity transition may
 canonicalize quarantine. Destruction still requires an exact one-use Infinity
@@ -45,6 +46,24 @@ identity, and spec. Canonical lifecycle transitions share the same stable gate
 as provider mutation, so they cannot commit between the final barrier and the
 provider call.
 
+Bounded exec, file, stream, and checkpoint calls use a full signed capability:
+sender proof, exact target and constraints, one-use mode/max-use bound, and a
+signed authorization-consumption receipt set with the operation step, fence,
+consumer, transaction, commit sequence, and ordinal. The receipt set and exact
+request are committed before provider reachability. A durable bounded-operation
+journal stores the exact parsed result, so restart replay returns the prior
+result and a crash after an accepted provider effect uses the adapter's exact
+reconciliation read instead of issuing the mutation again. Runner results are
+closed documents: core recomputes receipt, byte, frame, cursor/resume, no-gap,
+stream-root, file-revision, and checkpoint roots before committing them.
+
+Checkpoint capture additionally requires a signed capture grant, quiescence
+receipt, final authorization barrier, content-addressed manifest/blob, and a
+signed durable sink-commit receipt. Ambiguity after upload remains
+reconciliation-only until that exact sink receipt is recovered. The exact
+consumer boundary for the Infinity/checkpoint-broker owner is exported as
+`schemas/provider-boundary-v1.schema.json`.
+
 The external outcomes are schema-bound to
 `infinity.effect-journal-outcome/v1` at digest
 `sha256:7ab380a0475ebf79d2ed925e20bcbb9303d78a56c358d09adbdce796e740bf20`.
@@ -58,8 +77,9 @@ self-hosted object stores, immutable safety/checkpoint/promotion/tombstone
 evidence, closed validators/schemas, and a fail-closed CLI. E2B and Daytona
 Cloud adapters are explicit pending stubs: neither is admitted for live use
 until a signed zero-skip conformance manifest is authenticated. There is no
-local task-compute adapter. Exec, file-channel, and checkpoint-export execution
-surfaces are not implemented in this slice and therefore cannot be invoked.
+local task-compute adapter. Exec, file-channel, and checkpoint-export reference
+surfaces are implemented and adversarially exercised against the hermetic fake;
+managed provider implementations remain unreachable pending live admission.
 
 ## Checkpoint status: NO-GO outside the lifecycle slice
 
@@ -68,16 +88,16 @@ following gates are intentionally unresolved and remain **NO-GO**:
 
 - E2B and Daytona Cloud contain no production provider implementation or live
   admission evidence.
-- Exec, bounded files, quiescent export, restore, and checkpoint-broker handoff
-  are not implemented.
+- Restore and live checkpoint-broker integration are not implemented; the
+  producer-side quiescent export and exact broker boundary are present.
 - The internal object-store prototype is not exported and is not accepted as a
   checkpoint durability or cleanup-authority basis. Its create-only ambiguity
   recovery, exact-version streamed full readback, bounded I/O, local no-follow
   file-descriptor discipline, concurrency law, and scope/KMS/fence bindings
   still require the follow-on files/checkpoint implementation and review.
-- The successor exec/files/checkpoint wire contracts and their shared
-  non-lifecycle resource-effect coordinator still require exact-SHA adversarial
-  acceptance before integration.
+- The successor exec/files/checkpoint wire contracts and shared durable
+  non-lifecycle effect coordinator still require exact-SHA adversarial
+  acceptance and live-provider reproduction before integration.
 
 Do not merge this checkpoint to `main`, publish it, deploy it, enable live
 providers, or use it to authorize cleanup.

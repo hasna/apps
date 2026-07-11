@@ -19,7 +19,8 @@ for required in \
   package/schemas/dispatched-journal-anchor-v1.schema.json \
   package/schemas/provider-outcome-anchor-v1.schema.json \
   package/schemas/read-probe-anchor-v1.schema.json \
-  package/schemas/effect-journal-recovery-range-v1.schema.json
+  package/schemas/effect-journal-recovery-range-v1.schema.json \
+  package/schemas/provider-boundary-v1.schema.json
 do
   grep -Fx "$required" "$temporary/package-files.txt" >/dev/null
 done

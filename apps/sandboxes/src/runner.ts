@@ -8,6 +8,7 @@ import {
   type AdapterDescriptorV1,
   type AdapterObservationV1,
   type AuthorizedBoundedCallContextV1,
+  type BoundedOperationResultV1,
   type CheckpointExportHandoffV1,
   type CheckpointExportRequestV1,
   type DestroyObservationV1,
@@ -62,6 +63,7 @@ export interface ReconcileContextV1 {
   immutable_fingerprint_sha256: Digest;
   discovery_scope_receipt_sha256: Digest;
   complete_read_probe_envelope_sha256: Digest;
+  read_probe_no_effect_receipt_sha256: Digest;
   max_pages: number;
   deadline: string;
 }
@@ -145,6 +147,20 @@ export interface SandboxRunnerV1 {
     handle: OwnedProviderHandleV1,
     request: CheckpointExportRequestV1,
   ): Promise<CheckpointExportHandoffV1>;
+  reconcileBoundedOperation(
+    ctx: AuthorizedBoundedCallContextV1,
+    handle: OwnedProviderHandleV1,
+    operation: AuthorizedBoundedCallContextV1["operation"],
+    request:
+      | ExecStartRequestV1
+      | ExecFrameReadRequestV1
+      | ExecResultRequestV1
+      | ExecCancelRequestV1
+      | FileReadRequestV1
+      | FileWriteRequestV1
+      | FileListRequestV1
+      | CheckpointExportRequestV1,
+  ): Promise<BoundedOperationResultV1 | undefined>;
 }
 
 export class AmbiguousProviderEffectError extends Error {
@@ -235,6 +251,7 @@ abstract class PendingManagedRunnerV1 implements SandboxRunnerV1 {
   async writeFile(): Promise<never> { return this.#pending(); }
   async listFiles(): Promise<never> { return this.#pending(); }
   async exportCheckpoint(): Promise<never> { return this.#pending(); }
+  async reconcileBoundedOperation(): Promise<never> { return this.#pending(); }
 
   #pending(): never {
     throw new SandboxError(

@@ -134,6 +134,42 @@ describe("closed V1 validation", () => {
     }
   });
 
+  test("the exported provider boundary schema closes every PB-owned signed document", () => {
+    const schema = JSON.parse(
+      readFileSync("schemas/provider-boundary-v1.schema.json", "utf8"),
+    ) as {
+      $id: string;
+      $defs: Record<string, { additionalProperties?: boolean; required?: string[] }>;
+    };
+    expect(schema.$id).toBe(
+      "https://schemas.hasna.com/sandboxes/provider-boundary-v1.schema.json",
+    );
+    for (const definition of [
+      "senderProof",
+      "capabilityTarget",
+      "capabilityConstraints",
+      "authorizationConsumptionReceipt",
+      "authorizationConsumptionSet",
+      "capability",
+      "readProbeNoEffectReceipt",
+      "checkpointCaptureGrant",
+      "sandboxHandleRef",
+      "checkpointExportRequest",
+      "checkpointQuiescenceReceipt",
+      "checkpointSinkCommitReceipt",
+      "checkpointExportHandoff",
+    ]) {
+      expect(schema.$defs[definition]?.additionalProperties).toBe(false);
+      expect(schema.$defs[definition]?.required?.length).toBeGreaterThan(0);
+    }
+    expect(schema.$defs.authorizationConsumptionReceipt?.required)
+      .toContain("commit_sequence");
+    expect(schema.$defs.authorizationConsumptionReceipt?.required)
+      .toContain("use_ordinal");
+    expect(schema.$defs.checkpointExportHandoff?.required)
+      .toContain("sink_commit_receipt");
+  });
+
   test("canonical counters above 2^53 use exact decimal strings", () => {
     expect(canonicalJson({ journal_sequence: 9_007_199_254_740_993n }))
       .toBe('{"journal_sequence":"9007199254740993"}');

@@ -131,6 +131,134 @@ export function fence(
   };
 }
 
+export function capabilityClaims(input: {
+  operation: CapabilityClaimsV1["operation"];
+  operation_id: string;
+  operation_step_id: string;
+  target_resource_id: string;
+  request_sha256: Digest;
+  idempotency_key_sha256: Digest;
+  expected_revision: number;
+  fence: CanonicalSandboxEffectFenceV1;
+  seed: number;
+  handle_sha256?: Digest;
+  clock?: Date;
+}): CapabilityClaimsV1 {
+  const clock = input.clock ?? CLOCK;
+  const notBefore = new Date(clock.getTime() - 60_000).toISOString();
+  const expiresAt = new Date(clock.getTime() + 300_000).toISOString();
+  const subjectPrincipal = input.fence.operation_executor_principal;
+  const senderProofFacts = {
+    schema_version: "infinity.capability-sender-proof/v1" as const,
+    sender_principal: subjectPrincipal,
+    confirmation_key_id: oid("key", input.seed + 20_000),
+    transport_session_sha256: digest(`transport-session-${input.seed}`),
+    proof_nonce_sha256: digest(`sender-proof-nonce-${input.seed}`),
+    issued_at: notBefore,
+  };
+  const senderProof = {
+    ...senderProofFacts,
+    proof_sha256: canonicalDigest(senderProofFacts),
+    signature: "A".repeat(86),
+  };
+  const targetFacts = {
+    schema_version: "infinity.capability-target/v1" as const,
+    operation: input.operation,
+    operation_id: input.operation_id,
+    operation_step_id: input.operation_step_id,
+    resource_id: input.target_resource_id,
+    request_sha256: input.request_sha256,
+    idempotency_key_sha256: input.idempotency_key_sha256,
+    expected_revision: input.expected_revision,
+    handle_sha256: input.handle_sha256 ?? null,
+    fence_sha256: canonicalDigest(input.fence),
+  };
+  const target = { ...targetFacts, target_sha256: canonicalDigest(targetFacts) };
+  const constraintFacts = {
+    schema_version: "infinity.capability-constraints/v1" as const,
+    not_before: notBefore,
+    expires_at: expiresAt,
+    use_mode: "once" as const,
+    max_uses: 1 as const,
+  };
+  const constraints = {
+    ...constraintFacts,
+    constraints_sha256: canonicalDigest(constraintFacts),
+  };
+  const signingKeyId = oid("key", input.seed + 30_000);
+  const capabilityFacts = {
+    schema_version: SCHEMA_VERSION,
+    capability_id: oid("cap", input.seed),
+    use_nonce_sha256: digest(`capability-nonce-${input.seed}`),
+    operation: input.operation,
+    target_resource_id: input.target_resource_id,
+    request_sha256: input.request_sha256,
+    idempotency_key_sha256: input.idempotency_key_sha256,
+    expected_revision: input.expected_revision,
+    ...(input.handle_sha256 === undefined ? {} : { handle_sha256: input.handle_sha256 }),
+    fence: input.fence,
+    not_before: notBefore,
+    expires_at: expiresAt,
+    issuer_principal: oid("principal", input.seed + 40_000),
+    subject_principal: subjectPrincipal,
+    audience: SCHEMA_VERSION,
+    sender_proof: senderProof,
+    target,
+    constraints,
+    use_mode: "once" as const,
+    max_uses: 1 as const,
+    signing_key_id: signingKeyId,
+  };
+  const capabilitySha256 = canonicalDigest(capabilityFacts);
+  const receiptFacts = {
+    schema_version: "infinity.authorization-consumption-receipt/v1" as const,
+    receipt_id: oid("receipt", input.seed + 50_000),
+    capability_sha256: capabilitySha256,
+    use_nonce_sha256: capabilityFacts.use_nonce_sha256,
+    operation_id: input.operation_id,
+    operation_step_id: input.operation_step_id,
+    target_sha256: target.target_sha256,
+    fence_sha256: target.fence_sha256,
+    consumer_principal: subjectPrincipal,
+    transaction_id: oid("tx", input.seed + 60_000),
+    commit_sequence: BigInt(input.seed + 1),
+    use_ordinal: 1 as const,
+    max_uses: 1 as const,
+    committed_at: clock.toISOString(),
+    issuer_principal: capabilityFacts.issuer_principal,
+    signing_key_id: signingKeyId,
+  };
+  const receipt = {
+    ...receiptFacts,
+    receipt_sha256: canonicalDigest(receiptFacts),
+    signature: "A".repeat(86),
+  };
+  const setFacts = {
+    schema_version: "infinity.authorization-consumption-set/v1" as const,
+    capability_sha256: capabilitySha256,
+    operation_id: input.operation_id,
+    operation_step_id: input.operation_step_id,
+    target_sha256: target.target_sha256,
+    fence_sha256: target.fence_sha256,
+    consumer_principal: subjectPrincipal,
+    first_commit_sequence: receipt.commit_sequence,
+    last_commit_sequence: receipt.commit_sequence,
+    receipts: [receipt] as [typeof receipt],
+    issuer_principal: capabilityFacts.issuer_principal,
+    signing_key_id: signingKeyId,
+  };
+  return {
+    ...capabilityFacts,
+    authorization_consumption_set: {
+      ...setFacts,
+      set_sha256: canonicalDigest(setFacts),
+      signature: "A".repeat(86),
+    },
+    capability_sha256: capabilitySha256,
+    signature: "A".repeat(86),
+  };
+}
+
 export function context(
   operation: SandboxOperation,
   operationId: string,
@@ -140,34 +268,29 @@ export function context(
   executionEpoch: bigint,
   seed: number,
   immutableFingerprint?: Digest,
-  authorizationConsumptionReceipt?: Digest,
+  _authorizationConsumptionReceipt?: Digest,
   clock: Date = CLOCK,
   createBinding?: CreateSandboxV1,
 ): MutationContextV1 {
   const fullFence = fence(operationId, requestSha256, generation + 1n, executionEpoch, clock);
   const idempotencyKeySha256 = digest(`idempotency-${seed}`);
-  const capability: CapabilityClaimsV1 = {
-    schema_version: SCHEMA_VERSION,
-    capability_id: oid("cap", seed),
-    use_nonce_sha256: digest(`capability-nonce-${seed}`),
+  const operationStepId = oid("step", seed);
+  const capability = capabilityClaims({
     operation,
+    operation_id: operationId,
+    operation_step_id: operationStepId,
     target_resource_id: oid("sbx", 4),
     request_sha256: requestSha256,
     idempotency_key_sha256: idempotencyKeySha256,
     expected_revision: expectedRevision,
-    dispatch_journal_anchor_sha256: digest("temporary-anchor"),
     fence: fullFence,
-    not_before: new Date(clock.getTime() - 60_000).toISOString(),
-    expires_at: new Date(clock.getTime() + 300_000).toISOString(),
-  };
+    seed,
+    clock,
+  });
   const transition = {
     expected_resource_lifecycle_generation: generation,
     successor_resource_lifecycle_generation: generation + 1n,
   };
-  const capabilityUseReceipt = canonicalDigest({
-    capability_id: capability.capability_id,
-    nonce: capability.use_nonce_sha256,
-  });
   const creationInput = createBinding ?? createInput();
   const providerCreationToken = providerCreationTokenDigest({
     resource_id: oid("sbx", 4),
@@ -193,7 +316,7 @@ export function context(
     outcome_schema_version: EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION,
     outcome_schema_digest: EFFECT_JOURNAL_OUTCOME_SCHEMA_DIGEST,
     operation_id: operationId,
-    operation_step_id: oid("step", seed),
+    operation_step_id: operationStepId,
     operation_execution_epoch: executionEpoch,
     operation_digest: requestSha256,
     resource_id: oid("sbx", 4),
@@ -205,7 +328,7 @@ export function context(
     provider_creation_token_sha256: providerCreationToken,
     immutable_fingerprint_sha256: targetFingerprint,
     authorization_consumption_receipt_sha256:
-      authorizationConsumptionReceipt ?? capabilityUseReceipt,
+      capability.authorization_consumption_set.set_sha256,
     fence: fullFence,
   };
   const dispatchRecord = {
@@ -232,7 +355,6 @@ export function context(
     signature: "A".repeat(86),
     record: dispatchRecord,
   };
-  capability.dispatch_journal_anchor_sha256 = dispatchedJournalAnchorDigest(dispatchJournal);
   return {
     operation_id: operationId,
     idempotency_key_sha256: idempotencyKeySha256,
@@ -267,9 +389,8 @@ export function lifecycleContext(
     undefined,
     clock,
   );
-  const { dispatch_journal: _dispatchJournal, capability, ...base } = providerContext;
-  const { dispatch_journal_anchor_sha256: _dispatchAnchor, ...lifecycleCapability } = capability;
-  return { ...base, capability: lifecycleCapability };
+  const { dispatch_journal: _dispatchJournal, ...base } = providerContext;
+  return base;
 }
 
 export function retryContext(
@@ -282,14 +403,17 @@ export function retryContext(
     ...prior.fence,
     operation_execution_epoch: executionEpoch,
   };
-  const nextCapability: CapabilityClaimsV1 = {
-    ...prior.capability,
-    capability_id: oid("cap", seed),
-    use_nonce_sha256: digest(`capability-nonce-${seed}`),
-    dispatch_journal_anchor_sha256: digest("temporary-retry-anchor"),
+  const nextCapability = capabilityClaims({
+    operation: prior.capability.operation,
+    operation_id: prior.operation_id,
+    operation_step_id: prior.dispatch_journal.record.operation_step_id,
+    target_resource_id: prior.capability.target_resource_id,
+    request_sha256: prior.request_sha256,
+    idempotency_key_sha256: prior.idempotency_key_sha256,
     expected_revision: expectedRevision,
     fence: nextFence,
-  };
+    seed,
+  });
   const anchorBase = {
     ...prior.dispatch_journal,
     journal_sequence: BigInt(seed) * 10n + executionEpoch,
@@ -309,7 +433,6 @@ export function retryContext(
     }),
     signature: "B".repeat(86),
   };
-  nextCapability.dispatch_journal_anchor_sha256 = dispatchedJournalAnchorDigest(nextDispatch);
   return {
     ...prior,
     expected_revision: expectedRevision,
