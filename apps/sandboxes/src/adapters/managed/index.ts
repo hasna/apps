@@ -48,6 +48,7 @@ export {
   DAYTONA_GUEST_BROKER_MAX_IN_FLIGHT_DELIVERIES,
   createDaytonaDenyAllCandidate,
   createE2bDenyAllCandidate,
+  withAuthenticatedE2bGuestBrokerDuplexSdkSession,
   withDaytonaGuestBrokerSdkSession,
   withE2bGuestBrokerDuplexSdkSession,
   withE2bGuestBrokerSdkSession,
@@ -56,9 +57,16 @@ export {
   type E2bCredentialBoundCreateV1,
   type E2bGuestBrokerDuplexLimitsV1,
   type E2bGuestBrokerDuplexSdkSessionV1,
+  type E2bGuestBrokerSandboxDestroyPortV1,
   type E2bOfficialBrokerCommandsV1,
   type GuestBrokerSdkSessionV1,
 } from "./sdk-broker-bridges"
+export {
+  installExactE2bGuestBrokerArtifactV1,
+  type E2bGuestBrokerArtifactAttestationV1,
+  type E2bGuestBrokerArtifactControlPortV1,
+  type E2bSandboxDestroyAndProveAbsentPortV1,
+} from "./e2b-broker-artifact-control"
 export {
   JournalIdentityLedgerV1,
   EFFECT_JOURNAL_OUTCOME_SCHEMA_SHA256,
