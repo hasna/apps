@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
+import { createHash, createHmac } from "node:crypto"
 import { EventEmitter } from "node:events"
 import { fileURLToPath } from "node:url"
 import { runInNewContext } from "node:vm"
@@ -7,11 +8,15 @@ import { PtyHandle } from "@daytona/sdk"
 import {
   AdapterContractError,
   DaytonaOfficialSdkControlBridgeV1,
+  E2B_GUEST_BROKER_ARTIFACT_INSTALL_PATH_V1,
+  E2B_GUEST_BROKER_ARTIFACT_SHA256_V1,
+  E2B_GUEST_BROKER_ARTIFACT_SIZE_V1,
+  E2B_GUEST_BROKER_PROTOCOL_SHA256_V1,
   E2bOfficialSdkControlBridgeV1,
   canonicalJson,
   canonicalSha256,
+  withAuthenticatedE2bGuestBrokerDuplexSdkSession,
   withDaytonaGuestBrokerSdkSession,
-  withE2bGuestBrokerSdkSession,
 } from "../../dist/adapters/managed/index.js"
 
 async function settle(promise) {
@@ -35,6 +40,107 @@ function brokerHandle() {
   }
 }
 
+const BROKER_SESSION_BINDING = `sha256:${"11".repeat(32)}`
+const BROKER_MAC_KEY = Uint8Array.from({ length: 32 }, (_, index) => index + 1)
+const BROKER_LIMITS = Object.freeze({
+  request_timeout_ms: 1_000,
+  session_timeout_ms: 5_000,
+  receive_timeout_ms: 1_000,
+  max_request_frame_bytes: 1024 * 1024,
+  max_response_frame_bytes: 1024 * 1024,
+  max_response_frames: 4,
+  max_response_bytes: 1024 * 1024,
+})
+const BROKER_ARTIFACT_ATTESTATION = Object.freeze({
+  path: E2B_GUEST_BROKER_ARTIFACT_INSTALL_PATH_V1,
+  artifact_sha256: E2B_GUEST_BROKER_ARTIFACT_SHA256_V1,
+  byte_length: E2B_GUEST_BROKER_ARTIFACT_SIZE_V1,
+  mode: 0o500,
+  owner: "root",
+  group: "root",
+})
+
+function canonicalWireJson(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(canonicalWireJson).join(",")}]`
+  return `{${Object.entries(value)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, item]) => `${JSON.stringify(key)}:${canonicalWireJson(item)}`)
+    .join(",")}}`
+}
+
+function brokerStartupResponse() {
+  const nonce = `sha256:${createHash("sha256")
+    .update(`startup:${BROKER_SESSION_BINDING}`)
+    .digest("hex")}`
+  const basis = {
+    nonce_sha256: nonce,
+    ok: true,
+    operation: "startup",
+    protocol_sha256: E2B_GUEST_BROKER_PROTOCOL_SHA256_V1,
+    request_id: "startup",
+    result: {
+      artifact_sha256: E2B_GUEST_BROKER_ARTIFACT_SHA256_V1,
+      checkpoint_eligible: false,
+      device: 1,
+      exec_cancel: false,
+      exec_limit: 1,
+      gid: 0,
+      inode: 1,
+      mode: 0o500,
+      path: E2B_GUEST_BROKER_ARTIFACT_INSTALL_PATH_V1,
+      process_baseline_sha256: digest("b1"),
+      production_admission: false,
+      resume: false,
+      destroy_required: false,
+      size: E2B_GUEST_BROKER_ARTIFACT_SIZE_V1,
+      uid: 0,
+      unexpected_process_count: 0,
+      verified_fd: true,
+    },
+    schema_version: "sandboxes.e2b-guest-broker-response/v1",
+    sequence: 0,
+    session_binding_sha256: BROKER_SESSION_BINDING,
+  }
+  const mac = `sha256:${createHmac("sha256", BROKER_MAC_KEY)
+    .update(canonicalWireJson(basis))
+    .digest("hex")}`
+  return `${canonicalWireJson({ ...basis, mac_sha256: mac })}\n`
+}
+
+function authenticatedBrokerHandle(options) {
+  let finish
+  const wait = new Promise((resolve) => { finish = resolve })
+  let initialized = false
+  return {
+    async sendStdin() {
+      assert.equal(initialized, false)
+      initialized = true
+      await options.onStdout?.(brokerStartupResponse())
+    },
+    async closeStdin() {
+      finish({ exitCode: 0, stdout: "", stderr: "" })
+    },
+    wait: () => wait,
+    async kill() {
+      throw new Error("process kill must remain unreachable")
+    },
+    async disconnect() {},
+  }
+}
+
+function runAuthenticatedPromiseBoundary(commands, use = async () => {}) {
+  return withAuthenticatedE2bGuestBrokerDuplexSdkSession(
+    commands,
+    { async destroyAndProveAbsent() {} },
+    BROKER_ARTIFACT_ATTESTATION,
+    BROKER_LIMITS,
+    BROKER_SESSION_BINDING,
+    BROKER_MAC_KEY,
+    use,
+  )
+}
+
 function digest(suffix) {
   return `sha256:${suffix.padStart(64, "0")}`
 }
@@ -56,7 +162,7 @@ function digest(suffix) {
   })
 
   const result = await settle(
-    withE2bGuestBrokerSdkSession({ run: () => rawSetup }, async () => {}),
+    runAuthenticatedPromiseBoundary({ run: () => rawSetup }),
   )
   assertIntegrityFailure(result)
   assert.equal(thenGetterCalls, 0)
@@ -78,7 +184,7 @@ function digest(suffix) {
   })
 
   const result = await settle(
-    withE2bGuestBrokerSdkSession({ run: () => rawSetup }, async () => {}),
+    runAuthenticatedPromiseBoundary({ run: () => rawSetup }),
   )
   assertIntegrityFailure(result)
   assert.equal(thenGetterCalls, 0)
@@ -105,7 +211,7 @@ function digest(suffix) {
     })
 
     const result = await settle(
-      withE2bGuestBrokerSdkSession({ run: () => rawSetup }, async () => {}),
+      runAuthenticatedPromiseBoundary({ run: () => rawSetup }),
     )
     await new Promise((resolve) => setImmediate(resolve))
 
@@ -130,17 +236,23 @@ function digest(suffix) {
   })
 
   const result = await settle(
-    withE2bGuestBrokerSdkSession({ run: () => rawSetup }, async () => {}),
+    runAuthenticatedPromiseBoundary({ run: () => rawSetup }),
   )
   assertIntegrityFailure(result)
   assert.equal(constructorGetterCalls, 0)
 }
 
 {
-  const handle = brokerHandle()
-  const rawSetup = Object.freeze(Promise.resolve(handle))
-  const beforeKeys = Reflect.ownKeys(rawSetup)
-  const wrapper = withE2bGuestBrokerSdkSession({ run: () => rawSetup }, async () => {})
+  let rawSetup
+  let beforeKeys
+  const wrapper = runAuthenticatedPromiseBoundary({
+    run(_command, options) {
+      const handle = authenticatedBrokerHandle(options)
+      rawSetup = Object.freeze(Promise.resolve(handle))
+      beforeKeys = Reflect.ownKeys(rawSetup)
+      return rawSetup
+    },
+  })
 
   assert.equal(wrapper.constructor, Promise)
   assert.equal(Promise.resolve(wrapper), wrapper)

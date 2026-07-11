@@ -1,5 +1,30 @@
 import { runInNewContext } from "node:vm"
-import { withE2bGuestBrokerSdkSession } from "../../dist/adapters/managed/index.js"
+import {
+  E2B_GUEST_BROKER_ARTIFACT_INSTALL_PATH_V1,
+  E2B_GUEST_BROKER_ARTIFACT_SHA256_V1,
+  E2B_GUEST_BROKER_ARTIFACT_SIZE_V1,
+  withAuthenticatedE2bGuestBrokerDuplexSdkSession,
+} from "../../dist/adapters/managed/index.js"
+
+const limits = {
+  request_timeout_ms: 1_000,
+  session_timeout_ms: 5_000,
+  receive_timeout_ms: 1_000,
+  max_request_frame_bytes: 1024 * 1024,
+  max_response_frame_bytes: 1024 * 1024,
+  max_response_frames: 4,
+  max_response_bytes: 1024 * 1024,
+}
+const attestation = {
+  path: E2B_GUEST_BROKER_ARTIFACT_INSTALL_PATH_V1,
+  artifact_sha256: E2B_GUEST_BROKER_ARTIFACT_SHA256_V1,
+  byte_length: E2B_GUEST_BROKER_ARTIFACT_SIZE_V1,
+  mode: 0o500,
+  owner: "root",
+  group: "root",
+}
+const sessionBinding = `sha256:${"11".repeat(32)}`
+const macKey = Uint8Array.from({ length: 32 }, (_, index) => index + 1)
 
 async function observeContractBreach(rawSetup) {
   const unhandled = []
@@ -10,7 +35,15 @@ async function observeContractBreach(rawSetup) {
   try {
     let errorCode
     try {
-      await withE2bGuestBrokerSdkSession({ run: () => rawSetup }, async () => {})
+      await withAuthenticatedE2bGuestBrokerDuplexSdkSession(
+        { run: () => rawSetup },
+        { async destroyAndProveAbsent() {} },
+        attestation,
+        limits,
+        sessionBinding,
+        macKey,
+        async () => {},
+      )
     } catch (reason) {
       errorCode = reason?.code
     }

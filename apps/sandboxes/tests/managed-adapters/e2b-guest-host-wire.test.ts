@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { createHash, createHmac } from "node:crypto"
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import type { Sandbox as OfficialE2bSandbox } from "e2b"
@@ -17,12 +17,14 @@ import {
 } from "../../src/adapters/managed/e2b-guest-broker"
 import {
   E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1,
-  E2B_GUEST_WORKSPACE_PROVISION_RECEIPT_V1,
+  E2B_GUEST_WORKSPACE_PROVISION_SOURCE_V1,
   E2B_GUEST_WORKSPACE_ROOT_V1,
-  E2B_GUEST_WORKSPACE_WRITE_PROBE_COMMAND_V1,
-  E2B_GUEST_WORKSPACE_WRITE_PROBE_RECEIPT_V1,
+  E2B_GUEST_WORKSPACE_WRITE_PROBE_SOURCE_V1,
   E2bWorkspaceBootstrapBoundaryErrorV1,
+  e2bGuestWorkspaceWriteProbeCommandV1,
+  e2bGuestWorkspaceWriteProbeReceiptV1,
   installExactE2bGuestBrokerArtifactV1,
+  parseE2bGuestWorkspaceProvisionReceiptV1,
   type E2bGuestBrokerArtifactControlPortV1,
 } from "../../src/adapters/managed/e2b-broker-artifact-control"
 import {
@@ -43,6 +45,11 @@ const LIMITS: E2bGuestBrokerDuplexLimitsV1 = {
 const SESSION_BINDING = `sha256:${"11".repeat(32)}` as const
 const NONCE = `sha256:${"22".repeat(32)}` as const
 const MAC_KEY = Uint8Array.from({ length: 32 }, (_, index) => index + 1)
+const WORKSPACE_IDENTITY = Object.freeze({ uid: 1000, gid: 1000, dev: 41, ino: 73 })
+const WORKSPACE_PROVISION_RECEIPT =
+  "sandboxes.e2b-workspace/v1 path=/workspace type=dir uid=1000 gid=1000 dev=41 ino=73 mode=0700 nofollow=true\n"
+const WORKSPACE_WRITE_PROBE_COMMAND = e2bGuestWorkspaceWriteProbeCommandV1(WORKSPACE_IDENTITY)
+const WORKSPACE_WRITE_PROBE_RECEIPT = e2bGuestWorkspaceWriteProbeReceiptV1(WORKSPACE_IDENTITY)
 const NO_DESTRUCTION = {
   async destroyAndProveAbsent(): Promise<void> {
     throw new Error("unexpected_sandbox_destruction")
@@ -1019,9 +1026,9 @@ describe("authenticated E2B guest-broker host wire", () => {
         run(command, options) {
           calls.push(["run", command, options])
           return Promise.resolve(command === E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1
-            ? { exitCode: 0, stdout: E2B_GUEST_WORKSPACE_PROVISION_RECEIPT_V1, stderr: "" }
-            : command === E2B_GUEST_WORKSPACE_WRITE_PROBE_COMMAND_V1
-            ? { exitCode: 0, stdout: E2B_GUEST_WORKSPACE_WRITE_PROBE_RECEIPT_V1, stderr: "" }
+            ? { exitCode: 0, stdout: WORKSPACE_PROVISION_RECEIPT, stderr: "" }
+            : command === WORKSPACE_WRITE_PROBE_COMMAND
+            ? { exitCode: 0, stdout: WORKSPACE_WRITE_PROBE_RECEIPT, stderr: "" }
             : { exitCode: 0, stdout: "", stderr: "" })
         },
       },
@@ -1057,7 +1064,7 @@ describe("authenticated E2B guest-broker host wire", () => {
       requestTimeoutMs: 1_000,
       user: "root",
     }])
-    expect(calls[2]).toEqual(["run", E2B_GUEST_WORKSPACE_WRITE_PROBE_COMMAND_V1, {
+    expect(calls[2]).toEqual(["run", WORKSPACE_WRITE_PROBE_COMMAND, {
       background: false,
       cwd: "/workspace",
       envs: {},
@@ -1072,15 +1079,15 @@ describe("authenticated E2B guest-broker host wire", () => {
   })
 
   test("fixed provision source rejects existing symlink, wrong uid/gid and wrong mode without repair", () => {
-    expect(E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1).toContain("follow_symlinks=False")
-    expect(E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1).toContain("os.O_NOFOLLOW")
-    expect(E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1).toContain("if created:")
-    expect(E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1).toContain("opened.st_uid==account.pw_uid")
-    expect(E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1).toContain("opened.st_gid==account.pw_gid")
-    expect(E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1).toContain("stat.S_IMODE(opened.st_mode)==0o700")
-    const mutationStart = E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1.indexOf("if created:")
-    const attestationStart = E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1.indexOf("opened=os.fstat")
-    const createOnlyMutation = E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1.slice(
+    expect(E2B_GUEST_WORKSPACE_PROVISION_SOURCE_V1).toContain("follow_symlinks=False")
+    expect(E2B_GUEST_WORKSPACE_PROVISION_SOURCE_V1).toContain("os.O_NOFOLLOW")
+    expect(E2B_GUEST_WORKSPACE_PROVISION_SOURCE_V1).toContain("if created:")
+    expect(E2B_GUEST_WORKSPACE_PROVISION_SOURCE_V1).toContain("opened.st_uid==account.pw_uid")
+    expect(E2B_GUEST_WORKSPACE_PROVISION_SOURCE_V1).toContain("opened.st_gid==account.pw_gid")
+    expect(E2B_GUEST_WORKSPACE_PROVISION_SOURCE_V1).toContain("stat.S_IMODE(opened.st_mode)==0o700")
+    const mutationStart = E2B_GUEST_WORKSPACE_PROVISION_SOURCE_V1.indexOf("if created:")
+    const attestationStart = E2B_GUEST_WORKSPACE_PROVISION_SOURCE_V1.indexOf("opened=os.fstat")
+    const createOnlyMutation = E2B_GUEST_WORKSPACE_PROVISION_SOURCE_V1.slice(
       mutationStart,
       attestationStart,
     )
@@ -1088,16 +1095,29 @@ describe("authenticated E2B guest-broker host wire", () => {
     expect(createOnlyMutation).toContain("os.fchmod")
   })
 
-  test("both fixed embedded Python payloads parse before any provider allocation", () => {
-    const prefix = "/usr/bin/python3 -I -c "
-    const parser = "/usr/bin/python3 -I -c 'import ast,sys;ast.parse(sys.argv[1])' "
-    for (const command of [
-      E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1,
-      E2B_GUEST_WORKSPACE_WRITE_PROBE_COMMAND_V1,
+  test("strictly parses numeric workspace identity and rejects unsafe receipt integers", () => {
+    expect(parseE2bGuestWorkspaceProvisionReceiptV1(WORKSPACE_PROVISION_RECEIPT))
+      .toEqual(WORKSPACE_IDENTITY)
+    for (const receipt of [
+      WORKSPACE_PROVISION_RECEIPT.replace("uid=1000", "uid=0"),
+      WORKSPACE_PROVISION_RECEIPT.replace("uid=1000", "uid=-1"),
+      WORKSPACE_PROVISION_RECEIPT.replace("gid=1000", "gid=1.5"),
+      WORKSPACE_PROVISION_RECEIPT.replace("dev=41", `dev=${Number.MAX_SAFE_INTEGER + 1}`),
+      WORKSPACE_PROVISION_RECEIPT.replace("ino=73", "ino=0"),
+      WORKSPACE_PROVISION_RECEIPT.replace(" mode=0700", " extra=1 mode=0700"),
+      `${WORKSPACE_PROVISION_RECEIPT}${"0".repeat(257)}`,
     ]) {
-      expect(command.startsWith(prefix)).toBe(true)
+      expect(() => parseE2bGuestWorkspaceProvisionReceiptV1(receipt)).toThrow("workspace_receipt_invalid")
+    }
+  })
+
+  test("both fixed embedded Python payloads parse before any provider allocation", () => {
+    for (const source of [
+      E2B_GUEST_WORKSPACE_PROVISION_SOURCE_V1,
+      E2B_GUEST_WORKSPACE_WRITE_PROBE_SOURCE_V1,
+    ]) {
       const parsed = Bun.spawnSync({
-        cmd: ["/bin/sh", "-c", command.replace(prefix, parser)],
+        cmd: ["/usr/bin/python3", "-I", "-c", "import ast,sys;ast.parse(sys.argv[1])", source],
         stdout: "pipe",
         stderr: "pipe",
       })
@@ -1108,35 +1128,23 @@ describe("authenticated E2B guest-broker host wire", () => {
     }
   })
 
-  test("write-as-user probe succeeds without residue and never deletes a pre-existing path", async () => {
-    const workspace = await mkdtemp(join(tmpdir(), "e2b-workspace-write-probe-"))
-    cleanup.push(workspace)
-    const success = Bun.spawnSync({
-      cmd: ["/bin/sh", "-c", E2B_GUEST_WORKSPACE_WRITE_PROBE_COMMAND_V1],
-      cwd: workspace,
-      stdout: "pipe",
-      stderr: "pipe",
-    })
-    expect({
-      exitCode: success.exitCode,
-      stdout: success.stdout.toString(),
-      stderr: success.stderr.toString(),
-    }).toEqual({
-      exitCode: 0,
-      stdout: E2B_GUEST_WORKSPACE_WRITE_PROBE_RECEIPT_V1,
-      stderr: "",
-    })
-
-    const probePath = join(workspace, ".hasna-workspace-write-probe-v1")
-    await writeFile(probePath, "preserve-me", { mode: 0o600 })
-    const collision = Bun.spawnSync({
-      cmd: ["/bin/sh", "-c", E2B_GUEST_WORKSPACE_WRITE_PROBE_COMMAND_V1],
-      cwd: workspace,
-      stdout: "pipe",
-      stderr: "pipe",
-    })
-    expect(collision.exitCode).not.toBe(0)
-    expect(await readFile(probePath, "utf8")).toBe("preserve-me")
+  test("write-as-user probe binds literal identity and inode using unnamed O_TMPFILE only", () => {
+    expect(E2B_GUEST_WORKSPACE_WRITE_PROBE_SOURCE_V1).toContain("pwd.getpwnam('user')")
+    expect(E2B_GUEST_WORKSPACE_WRITE_PROBE_SOURCE_V1).toContain("grp.getgrgid(account.pw_gid)")
+    expect(E2B_GUEST_WORKSPACE_WRITE_PROBE_SOURCE_V1).toContain("os.geteuid()")
+    expect(E2B_GUEST_WORKSPACE_WRITE_PROBE_SOURCE_V1).toContain("os.getegid()")
+    expect(E2B_GUEST_WORKSPACE_WRITE_PROBE_SOURCE_V1).toContain("os.open('/workspace'")
+    expect(E2B_GUEST_WORKSPACE_WRITE_PROBE_SOURCE_V1).toContain("os.O_DIRECTORY|os.O_NOFOLLOW")
+    expect(E2B_GUEST_WORKSPACE_WRITE_PROBE_SOURCE_V1).toContain("os.O_TMPFILE")
+    expect(E2B_GUEST_WORKSPACE_WRITE_PROBE_SOURCE_V1).toContain("os.O_WRONLY|os.O_TMPFILE")
+    expect(E2B_GUEST_WORKSPACE_WRITE_PROBE_SOURCE_V1).toContain("info.st_nlink==0")
+    expect(E2B_GUEST_WORKSPACE_WRITE_PROBE_SOURCE_V1).not.toContain("os.O_RDWR")
+    expect(E2B_GUEST_WORKSPACE_WRITE_PROBE_SOURCE_V1).not.toContain("os.O_CREAT")
+    expect(E2B_GUEST_WORKSPACE_WRITE_PROBE_SOURCE_V1).not.toContain("os.unlink")
+    expect(WORKSPACE_WRITE_PROBE_COMMAND.endsWith(" 1000 1000 41 73")).toBe(true)
+    expect(WORKSPACE_WRITE_PROBE_RECEIPT).toBe(
+      "sandboxes.e2b-workspace-write/v1 uid=1000 gid=1000 dev=41 ino=73 unnamed=true\n",
+    )
   })
 
   test("destroys before artifact installation on every unsafe workspace provision or readback", async () => {
@@ -1164,7 +1172,7 @@ describe("authenticated E2B guest-broker host wire", () => {
       },
       {
         phase: "workspace_readback",
-        run: () => Promise.resolve({ exitCode: 0, stdout: E2B_GUEST_WORKSPACE_PROVISION_RECEIPT_V1, stderr: "" }),
+        run: () => Promise.resolve({ exitCode: 0, stdout: WORKSPACE_PROVISION_RECEIPT, stderr: "" }),
         getInfo: () => Promise.reject(new Error("provider-secret-readback-text")),
       },
       {
@@ -1172,7 +1180,7 @@ describe("authenticated E2B guest-broker host wire", () => {
         run: (() => {
           let call = 0
           return () => Promise.resolve(++call === 1
-            ? { exitCode: 0, stdout: E2B_GUEST_WORKSPACE_PROVISION_RECEIPT_V1, stderr: "" }
+            ? { exitCode: 0, stdout: WORKSPACE_PROVISION_RECEIPT, stderr: "" }
             : { exitCode: 70, stdout: "provider-secret-write-probe", stderr: "" })
         })(),
         getInfo: () => Promise.resolve({
@@ -1182,7 +1190,7 @@ describe("authenticated E2B guest-broker host wire", () => {
       },
       ...unsafeReadbacks.map((readback) => ({
         phase: "workspace_readback" as const,
-        run: () => Promise.resolve({ exitCode: 0, stdout: E2B_GUEST_WORKSPACE_PROVISION_RECEIPT_V1, stderr: "" }),
+        run: () => Promise.resolve({ exitCode: 0, stdout: WORKSPACE_PROVISION_RECEIPT, stderr: "" }),
         getInfo: () => Promise.resolve({
           size: 0,
           permissions: "rwxr-xr-x",
@@ -1238,7 +1246,7 @@ describe("authenticated E2B guest-broker host wire", () => {
       commands: {
         run: () => Promise.resolve({
           exitCode: 0,
-          stdout: E2B_GUEST_WORKSPACE_PROVISION_RECEIPT_V1,
+          stdout: WORKSPACE_PROVISION_RECEIPT,
           stderr: "",
         }),
       },
@@ -1289,6 +1297,39 @@ describe("authenticated E2B guest-broker host wire", () => {
     expect(calls).toEqual(["destroy"])
   })
 
+  test("captures destruction before timeout validation and quarantines missing authority", async () => {
+    const artifact = new Uint8Array(await readFile(resolve("scripts/e2b-guest-broker-v1.py")))
+    let destroys = 0
+    let providerCalls = 0
+    const control = {
+      files: {
+        write() { providerCalls += 1; return Promise.resolve({}) },
+        read() { providerCalls += 1; return Promise.resolve(artifact) },
+        getInfo() { providerCalls += 1; return Promise.resolve({}) },
+      },
+      commands: {
+        run() { providerCalls += 1; return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" }) },
+      },
+      destruction: {
+        async destroyAndProveAbsent() { destroys += 1 },
+      },
+    }
+    await expect(installExactE2bGuestBrokerArtifactV1(control as never, artifact, 0))
+      .rejects.toMatchObject({ code: "validation_failed", quarantine_required: false })
+    expect({ destroys, providerCalls }).toEqual({ destroys: 1, providerCalls: 0 })
+
+    for (const destruction of [undefined, null, {}, { other() {} }]) {
+      await expect(installExactE2bGuestBrokerArtifactV1({
+        ...control,
+        destruction,
+      } as never, artifact, 1_000)).rejects.toMatchObject({
+        code: "provider_state_unknown",
+        quarantine_required: true,
+      })
+    }
+    expect({ destroys, providerCalls }).toEqual({ destroys: 1, providerCalls: 0 })
+  })
+
   test("destroys and proves absence on ambiguous artifact readback", async () => {
     const artifact = new Uint8Array(await readFile(resolve("scripts/e2b-guest-broker-v1.py")))
     let destroyed = 0
@@ -1302,9 +1343,9 @@ describe("authenticated E2B guest-broker host wire", () => {
       },
       commands: { run: (command: string) => Promise.resolve(
         command === E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1
-          ? { exitCode: 0, stdout: E2B_GUEST_WORKSPACE_PROVISION_RECEIPT_V1, stderr: "" }
-          : command === E2B_GUEST_WORKSPACE_WRITE_PROBE_COMMAND_V1
-          ? { exitCode: 0, stdout: E2B_GUEST_WORKSPACE_WRITE_PROBE_RECEIPT_V1, stderr: "" }
+          ? { exitCode: 0, stdout: WORKSPACE_PROVISION_RECEIPT, stderr: "" }
+          : command === WORKSPACE_WRITE_PROBE_COMMAND
+          ? { exitCode: 0, stdout: WORKSPACE_WRITE_PROBE_RECEIPT, stderr: "" }
           : { exitCode: 0, stdout: "", stderr: "" },
       ) },
       destruction: {
@@ -1332,9 +1373,9 @@ describe("authenticated E2B guest-broker host wire", () => {
       },
       commands: { run: (command: string) => Promise.resolve(
         command === E2B_GUEST_WORKSPACE_PROVISION_COMMAND_V1
-          ? { exitCode: 0, stdout: E2B_GUEST_WORKSPACE_PROVISION_RECEIPT_V1, stderr: "" }
-          : command === E2B_GUEST_WORKSPACE_WRITE_PROBE_COMMAND_V1
-          ? { exitCode: 0, stdout: E2B_GUEST_WORKSPACE_WRITE_PROBE_RECEIPT_V1, stderr: "" }
+          ? { exitCode: 0, stdout: WORKSPACE_PROVISION_RECEIPT, stderr: "" }
+          : command === WORKSPACE_WRITE_PROBE_COMMAND
+          ? { exitCode: 0, stdout: WORKSPACE_WRITE_PROBE_RECEIPT, stderr: "" }
           : { exitCode: 0, stdout: "", stderr: "" },
       ) },
       destruction: {
