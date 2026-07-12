@@ -652,6 +652,29 @@ function intentV2(): DisposableSandboxTaskIntentV2 {
   }
 }
 
+function materializedRequestV2(
+  intent: DisposableSandboxTaskIntentV2,
+  authorityEnvelopeSha256: `sha256:${string}`,
+): DisposableSandboxTaskRequestV1 {
+  return {
+    schema_version: "sandboxes.disposable-task-request/v1",
+    provider: intent.provider,
+    idempotency_key_sha256: intent.idempotency_key_sha256,
+    operation_digest: intent.operation_digest,
+    authority_envelope_sha256: authorityEnvelopeSha256,
+    source_manifest_sha256: intent.source_manifest_sha256,
+    input_manifest_sha256: intent.input_manifest_sha256,
+    environment_image_sha256: intent.environment_image_sha256,
+    task_bundle_sha256: intent.task_bundle_sha256,
+    network_policy: intent.network_policy,
+    maximum_allocations: intent.maximum_allocations,
+    max_runtime_ms: intent.max_runtime_ms,
+    files: intent.files,
+    exec: intent.exec,
+    checkpoint: intent.checkpoint,
+  }
+}
+
 function v2Harness(
   receiptOverrides: Record<string, unknown> = {},
   wire: { authority_label?: string; duplicate_authority_key?: boolean } = {},
@@ -953,12 +976,31 @@ describe("acyclic disposable task v2 preparation and authorization", () => {
       prepared: harness.prepared,
       authority_envelope_sha256: harness.authorityEnvelopeSha256,
     }, dependencies)
+    const executionClaim = {
+      ...harness.claim,
+      dispatch_intent_anchor_sha256: boundAuthorization.dispatch_intent_anchor_sha256,
+    }
+    const sandboxPrepareAnchorSha256 = harness.prepared.sandbox_prepare_anchor_sha256
+    const claimFenceSha256 = executionClaim.claim_fence_sha256
     const context = createDisposableSandboxTaskExecutionContextV2({
+      intent: harness.intent,
+      request: materializedRequestV2(harness.intent, harness.authorityEnvelopeSha256),
       prepared: harness.prepared,
       boundAuthorization,
-      claim: { ...harness.claim, dispatch_intent_anchor_sha256: boundAuthorization.dispatch_intent_anchor_sha256 },
+      claim: executionClaim,
       journal: harness.journal,
     })
+    expect(() => createDisposableSandboxTaskExecutionContextV2({
+      intent: harness.intent,
+      request: materializedRequestV2(harness.intent, harness.authorityEnvelopeSha256),
+      prepared: harness.prepared,
+      boundAuthorization,
+      claim: executionClaim,
+      journal: harness.journal,
+    })).toThrow()
+    ;(harness.prepared as { sandbox_prepare_anchor_sha256: `sha256:${string}` })
+      .sandbox_prepare_anchor_sha256 = d("mutated-prepared")
+    ;(executionClaim as { claim_fence_sha256: `sha256:${string}` }).claim_fence_sha256 = d("mutated-claim")
     const providerFingerprintSha256 = d("provider-fingerprint-v2")
     const dispatchAnchor = await context.markDispatched(providerFingerprintSha256)
     const resultAnchor = await context.markResultPersisted({
@@ -972,11 +1014,11 @@ describe("acyclic disposable task v2 preparation and authorization", () => {
       expected_state: "DISPATCH_INTENT",
       dispatch_id: harness.prepared.dispatch_id,
       canonical_intent_sha256: harness.prepared.canonical_intent_sha256,
-      sandbox_prepare_anchor_sha256: harness.prepared.sandbox_prepare_anchor_sha256,
+      sandbox_prepare_anchor_sha256: sandboxPrepareAnchorSha256,
       effect_claim_sha256: harness.prepared.effect_claim_sha256,
       dispatch_intent_anchor_sha256: boundAuthorization.dispatch_intent_anchor_sha256,
       authorization_consumption_receipt_sha256: boundAuthorization.authorization_consumption_receipt_sha256,
-      claim_fence_sha256: harness.claim.claim_fence_sha256,
+      claim_fence_sha256: claimFenceSha256,
       lease_epoch: harness.claim.lease_epoch,
       provider_fingerprint_sha256: providerFingerprintSha256,
       provider_metadata_scope_sha256: harness.claim.provider_metadata_scope_sha256,
@@ -985,11 +1027,11 @@ describe("acyclic disposable task v2 preparation and authorization", () => {
       expected_state: "DISPATCHED",
       dispatch_id: harness.prepared.dispatch_id,
       canonical_intent_sha256: harness.prepared.canonical_intent_sha256,
-      sandbox_prepare_anchor_sha256: harness.prepared.sandbox_prepare_anchor_sha256,
+      sandbox_prepare_anchor_sha256: sandboxPrepareAnchorSha256,
       effect_claim_sha256: harness.prepared.effect_claim_sha256,
       dispatch_intent_anchor_sha256: boundAuthorization.dispatch_intent_anchor_sha256,
       authorization_consumption_receipt_sha256: boundAuthorization.authorization_consumption_receipt_sha256,
-      claim_fence_sha256: harness.claim.claim_fence_sha256,
+      claim_fence_sha256: claimFenceSha256,
       lease_epoch: harness.claim.lease_epoch,
       provider_fingerprint_sha256: providerFingerprintSha256,
       provider_dispatch_anchor_sha256: d("dispatch-anchor-v2"),
@@ -1018,6 +1060,8 @@ describe("acyclic disposable task v2 preparation and authorization", () => {
         lease_owner_sha256: d("lease-owner-v2"),
       })
       expect(() => createDisposableSandboxTaskExecutionContextV2({
+        intent: harness.intent,
+        request: materializedRequestV2(harness.intent, harness.authorityEnvelopeSha256),
         prepared: harness.prepared,
         boundAuthorization,
         claim: {

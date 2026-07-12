@@ -35,6 +35,7 @@ import {
   disposableSandboxTaskRequestSha256,
   disposableTaskAbsenceEvidenceSha256,
   disposableTaskInputManifestSha256,
+  consumeDisposableSandboxTaskExecutionContextV2,
   parseDisposableSandboxTaskRequestV1,
   type CheckpointHandoffPortV1,
   type CheckpointHandoffReceiptV1,
@@ -572,8 +573,13 @@ class E2bDisposableTaskRunner implements DisposableSandboxTaskRunnerV1 {
     context: Readonly<DisposableSandboxTaskExecutionContextV1>,
   ): Promise<DisposableSandboxTaskExecutionReceiptV1> {
     const request = parseDisposableSandboxTaskRequestV1(requestValue)
-    if (request.provider !== this.provider) throw adapterError("validation_failed")
     const requestSha256 = disposableSandboxTaskRequestSha256(request)
+    if (context.dispatch_id.startsWith("dt2_") || "journal_version" in context ||
+      "materialized_request_sha256" in context || "canonical_intent_sha256" in context ||
+      "sandbox_prepare_anchor_sha256" in context) {
+      consumeDisposableSandboxTaskExecutionContextV2(context, requestSha256)
+    }
+    if (request.provider !== this.provider) throw adapterError("validation_failed")
     const create = createRequest(request, context, this.config)
     const destroyTarget = target(request, context, "destroy")
     const destruction = new Destruction(

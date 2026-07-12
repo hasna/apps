@@ -1507,6 +1507,10 @@ export const DISPOSABLE_TASK_BOUND_AUTHORIZATION_SCHEMA_V2 =
   "sandboxes.disposable-task-bound-authorization/v2" as const
 
 const DISPATCH_ID_V2 = /^dt2_[0-9a-f]{64}$/u
+const DISPOSABLE_TASK_EXECUTION_CONTEXTS_V2 = new WeakMap<object, Readonly<{
+  materialized_request_sha256: Digest
+  provider_contact_expires_at_ms: number
+}>>()
 const INTENT_V2_KEYS = [
   "checkpoint", "environment_image_sha256", "exec", "files", "idempotency_key_sha256",
   "input_manifest_sha256", "max_runtime_ms", "maximum_allocations", "network_policy",
@@ -1760,6 +1764,61 @@ export interface DisposableSandboxTaskExecutionContextV2 extends DisposableSandb
   journal_version: 2
   canonical_intent_sha256: Digest
   sandbox_prepare_anchor_sha256: Digest
+  materialized_request_sha256: Digest
+}
+
+const AUTHORIZED_DISPOSABLE_TASK_EXECUTIONS_V2 = new WeakMap<object, Readonly<{
+  journal: DisposableTaskJournalPortV2
+  claim: Readonly<Record<string, unknown>>
+  provider_contact_expires_at_ms: number
+}>>()
+
+function providerExecutionClaimSnapshotV2(value: DisposableTaskJournalProviderExecutionClaimV2 | Exclude<
+  DisposableTaskJournalPrepareIntentResultV2,
+  { kind: "busy" | "quarantined" }
+>): Readonly<Record<string, unknown>> {
+  return Object.freeze({
+    kind: value.kind,
+    recovery: value.recovery,
+    ...(value.kind === "reconcile" ? { prior_state: value.prior_state } : {}),
+    dispatch_id: value.dispatch_id,
+    canonical_intent_sha256: value.canonical_intent_sha256,
+    lease_epoch: value.lease_epoch,
+    claim_fence_sha256: value.claim_fence_sha256,
+    lease_owner_sha256: value.lease_owner_sha256,
+    lease_expires_at: value.lease_expires_at,
+    provider_metadata_scope_sha256: value.provider_metadata_scope_sha256,
+    provider_creation_token_sha256: value.provider_creation_token_sha256,
+    immutable_fingerprint_sha256: value.immutable_fingerprint_sha256,
+    ownership_nonce_sha256: value.ownership_nonce_sha256,
+    provider_effect_claim_fence_sha256: value.provider_effect_claim_fence_sha256,
+    provider_effect_lease_epoch: value.provider_effect_lease_epoch,
+    provider_effect_ownership_nonce_sha256: value.provider_effect_ownership_nonce_sha256,
+    effect_claim_sha256: value.effect_claim_sha256,
+    sandbox_prepare_anchor_sha256: value.sandbox_prepare_anchor_sha256,
+    dispatch_intent_anchor_sha256: value.dispatch_intent_anchor_sha256,
+    expected_provider_fingerprint_sha256: value.expected_provider_fingerprint_sha256,
+    expected_provider_dispatch_anchor_sha256: value.expected_provider_dispatch_anchor_sha256,
+    expected_provider_allocation_sha256: value.expected_provider_allocation_sha256,
+    expected_result_bundle_sha256: value.expected_result_bundle_sha256,
+    expected_checkpoint_handoff_sha256: value.expected_checkpoint_handoff_sha256,
+    expected_result_persisted_anchor_sha256: value.expected_result_persisted_anchor_sha256,
+  })
+}
+
+/** Package-internal atomic admission used by managed runners before provider allocation. */
+export function consumeDisposableSandboxTaskExecutionContextV2(
+  value: DisposableSandboxTaskExecutionContextV1,
+  materializedRequestSha256: Digest,
+): asserts value is DisposableSandboxTaskExecutionContextV2 {
+  const admission = DISPOSABLE_TASK_EXECUTION_CONTEXTS_V2.get(value)
+  if (admission === undefined) throw adapterError("integrity_failed")
+  DISPOSABLE_TASK_EXECUTION_CONTEXTS_V2.delete(value)
+  if (!isDigest(materializedRequestSha256) ||
+    admission.materialized_request_sha256 !== materializedRequestSha256 ||
+    (value as Partial<DisposableSandboxTaskExecutionContextV2>).materialized_request_sha256 !==
+      materializedRequestSha256 ||
+    Date.now() >= admission.provider_contact_expires_at_ms) throw adapterError("integrity_failed")
 }
 
 function parseDisposableSandboxTaskIntentV2(value: unknown): Readonly<DisposableSandboxTaskIntentV2> {
@@ -2318,7 +2377,8 @@ export async function authorizePreparedDisposableSandboxTaskV2(
     bound.authority_envelope_sha256 !== authorization.authority_envelope_sha256 ||
     bound.authorization_consumption_receipt_sha256 !== authorization.receipt_sha256 ||
     !isDigest(bound.dispatch_intent_anchor_sha256)) throw adapterError("integrity_failed")
-  if (authorizationExpiresAtV2(authorization) <= Date.now()) {
+  const providerContactExpiresAtMs = authorizationExpiresAtV2(authorization)
+  if (providerContactExpiresAtMs <= Date.now()) {
     await dependencies.journal.quarantineAuthorizationV2({
       dispatch_id: result.dispatch_id,
       canonical_intent_sha256: result.canonical_intent_sha256,
@@ -2331,7 +2391,7 @@ export async function authorizePreparedDisposableSandboxTaskV2(
     })
     throw adapterError("dependency_unavailable")
   }
-  return Object.freeze({
+  const boundAuthorization = Object.freeze({
     schema_version: DISPOSABLE_TASK_BOUND_AUTHORIZATION_SCHEMA_V2,
     dispatch_id: result.dispatch_id,
     canonical_intent_sha256: result.canonical_intent_sha256,
@@ -2341,6 +2401,15 @@ export async function authorizePreparedDisposableSandboxTaskV2(
     authorization_consumption_receipt_sha256: authorization.receipt_sha256,
     dispatch_intent_anchor_sha256: bound.dispatch_intent_anchor_sha256,
   })
+  AUTHORIZED_DISPOSABLE_TASK_EXECUTIONS_V2.set(boundAuthorization, Object.freeze({
+    journal: dependencies.journal,
+    provider_contact_expires_at_ms: providerContactExpiresAtMs,
+    claim: providerExecutionClaimSnapshotV2({
+      ...result,
+      dispatch_intent_anchor_sha256: bound.dispatch_intent_anchor_sha256,
+    }),
+  }))
+  return boundAuthorization
 }
 
 /**
@@ -2348,12 +2417,38 @@ export async function authorizePreparedDisposableSandboxTaskV2(
  * routing either provider-effect transition through the V1 journal tables.
  */
 export function createDisposableSandboxTaskExecutionContextV2(input: Readonly<{
+  intent: DisposableSandboxTaskIntentV2
+  request: DisposableSandboxTaskRequestV1
   prepared: DisposableTaskPreparedIntentV2
   boundAuthorization: DisposableTaskBoundAuthorizationV2
   claim: DisposableTaskJournalProviderExecutionClaimV2
   journal: DisposableTaskJournalPortV2
 }>): Readonly<DisposableSandboxTaskExecutionContextV2> {
-  const { prepared, boundAuthorization: bound, claim, journal } = input
+  const boundInput = input.boundAuthorization
+  const authorizedExecution = AUTHORIZED_DISPOSABLE_TASK_EXECUTIONS_V2.get(boundInput)
+  const prepared = Object.freeze({ ...input.prepared }) as DisposableTaskPreparedIntentV2
+  const bound = Object.freeze({ ...boundInput }) as DisposableTaskBoundAuthorizationV2
+  const claim = Object.freeze({ ...input.claim }) as DisposableTaskJournalProviderExecutionClaimV2
+  const journal = input.journal
+  const intent = parseDisposableSandboxTaskIntentV2(input.intent)
+  const request = parseDisposableSandboxTaskRequestV1(input.request)
+  const expectedRequest: DisposableSandboxTaskRequestV1 = {
+    schema_version: DISPOSABLE_SANDBOX_TASK_REQUEST_SCHEMA_V1,
+    provider: intent.provider,
+    idempotency_key_sha256: intent.idempotency_key_sha256,
+    operation_digest: intent.operation_digest,
+    authority_envelope_sha256: bound.authority_envelope_sha256,
+    source_manifest_sha256: intent.source_manifest_sha256,
+    input_manifest_sha256: intent.input_manifest_sha256,
+    environment_image_sha256: intent.environment_image_sha256,
+    task_bundle_sha256: intent.task_bundle_sha256,
+    network_policy: intent.network_policy,
+    maximum_allocations: intent.maximum_allocations,
+    max_runtime_ms: intent.max_runtime_ms,
+    files: intent.files,
+    exec: intent.exec,
+    checkpoint: intent.checkpoint,
+  }
   const preparedDigests = [prepared.canonical_intent_sha256, prepared.sandbox_prepare_anchor_sha256,
     prepared.operation_digest, prepared.source_manifest_sha256, prepared.input_manifest_sha256,
     prepared.checkpoint_policy_sha256, prepared.effect_claim_sha256, prepared.prepared_sha256]
@@ -2376,6 +2471,8 @@ export function createDisposableSandboxTaskExecutionContextV2(input: Readonly<{
       : !(claim.kind === "reconcile" && claim.recovery === true && claim.prior_state === "PREPARED")) ||
     new Date(claim.lease_expires_at).toISOString() !== claim.lease_expires_at ||
     canonicalSha256(preparedCoreV2(prepared)) !== prepared.prepared_sha256 ||
+    disposableSandboxTaskIntentSha256V2(intent) !== prepared.canonical_intent_sha256 ||
+    canonicalJson(request) !== canonicalJson(expectedRequest) ||
     claim.canonical_intent_sha256 !== prepared.canonical_intent_sha256 ||
     claim.sandbox_prepare_anchor_sha256 !== prepared.sandbox_prepare_anchor_sha256 ||
     claim.effect_claim_sha256 !== prepared.effect_claim_sha256 ||
@@ -2388,18 +2485,22 @@ export function createDisposableSandboxTaskExecutionContextV2(input: Readonly<{
     bound.canonical_intent_sha256 !== prepared.canonical_intent_sha256 ||
     bound.sandbox_prepare_anchor_sha256 !== prepared.sandbox_prepare_anchor_sha256 ||
     bound.effect_claim_sha256 !== prepared.effect_claim_sha256 ||
-    claim.dispatch_intent_anchor_sha256 !== bound.dispatch_intent_anchor_sha256) {
+    claim.dispatch_intent_anchor_sha256 !== bound.dispatch_intent_anchor_sha256 ||
+    authorizedExecution?.journal !== journal ||
+    canonicalJson(providerExecutionClaimSnapshotV2(claim)) !== canonicalJson(authorizedExecution.claim)) {
     throw adapterError("integrity_failed")
   }
+  AUTHORIZED_DISPOSABLE_TASK_EXECUTIONS_V2.delete(boundInput)
   let providerAllocation: Readonly<{
     provider_fingerprint_sha256: Digest
     provider_dispatch_anchor_sha256: Digest
     provider_allocation_sha256: Digest
   }> | null = null
-  return Object.freeze({
+  const context = {
     journal_version: 2 as const,
     canonical_intent_sha256: prepared.canonical_intent_sha256,
     sandbox_prepare_anchor_sha256: prepared.sandbox_prepare_anchor_sha256,
+    materialized_request_sha256: disposableSandboxTaskRequestSha256(request),
     dispatch_id: prepared.dispatch_id,
     journal_dispatch_id_sha256: canonicalSha256(prepared.dispatch_id),
     journal_dispatch_anchor_sha256: prepared.sandbox_prepare_anchor_sha256,
@@ -2467,7 +2568,16 @@ export function createDisposableSandboxTaskExecutionContextV2(input: Readonly<{
         !isDigest(result.result_persisted_anchor_sha256)) throw adapterError("integrity_failed")
       return result.result_persisted_anchor_sha256
     },
-  })
+  }
+  const frozenContext = Object.freeze(context) as Readonly<DisposableSandboxTaskExecutionContextV2>
+  DISPOSABLE_TASK_EXECUTION_CONTEXTS_V2.set(frozenContext, Object.freeze({
+    materialized_request_sha256: context.materialized_request_sha256,
+    provider_contact_expires_at_ms: Math.min(
+      authorizedExecution.provider_contact_expires_at_ms,
+      Date.parse(claim.lease_expires_at),
+    ),
+  }))
+  return frozenContext
 }
 
 /** Production v2 dispatch remains closed until the real provider proof is reviewed. */

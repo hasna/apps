@@ -2677,6 +2677,8 @@ export class PostgresDisposableTaskJournalV1 implements DisposableTaskJournalPor
             payload.effect_claim_sha256 !== task.effect_claim_sha256 ||
             payload.dispatch_intent_anchor_sha256 !== task.dispatch_intent_anchor_sha256 ||
             payload.authorization_consumption_receipt_sha256 !== task.authorization_consumption_receipt_sha256 ||
+            payload.claim_fence_sha256 !== projection.claim_fence_sha256 ||
+            payload.lease_epoch !== projection.lease_epoch ||
             payload.provider_effect_claim_fence_sha256 !== task.allocation_claim_fence_sha256 ||
             payload.provider_effect_lease_epoch !== dbBigint(task.allocation_lease_epoch) ||
             payload.provider_effect_ownership_nonce_sha256 !== task.allocation_ownership_nonce_sha256 ||
@@ -2706,6 +2708,8 @@ export class PostgresDisposableTaskJournalV1 implements DisposableTaskJournalPor
             payload.effect_claim_sha256 !== task.effect_claim_sha256 ||
             payload.dispatch_intent_anchor_sha256 !== task.dispatch_intent_anchor_sha256 ||
             payload.authorization_consumption_receipt_sha256 !== task.authorization_consumption_receipt_sha256 ||
+            payload.claim_fence_sha256 !== projection.claim_fence_sha256 ||
+            payload.lease_epoch !== projection.lease_epoch ||
             payload.provider_fingerprint_sha256 !== task.provider_fingerprint_sha256 ||
             payload.provider_dispatch_anchor_sha256 !== task.provider_dispatch_anchor_sha256 ||
             payload.provider_allocation_sha256 !== task.provider_allocation_sha256 ||

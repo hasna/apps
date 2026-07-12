@@ -18,13 +18,19 @@ import {
   type E2bDisposableControlPortV1,
 } from "../../src/adapters/managed/e2b-disposable-task"
 import {
+  DISPOSABLE_TASK_AUTHORIZATION_CONSUMPTION_SCHEMA_V2,
+  DISPOSABLE_TASK_PROVIDER_CONTACT_AUDIENCE_V2,
+  authorizePreparedDisposableSandboxTaskV2,
+  disposableSandboxTaskIntentSha256V2,
   disposableTaskBundleSha256,
+  disposableTaskCheckpointPolicySha256,
   disposableTaskInputManifestSha256,
   disposableTaskOperationDigest,
   createDisposableSandboxTaskExecutionContextV2,
   type CheckpointHandoffInputV1,
   type CheckpointHandoffPortV1,
   type DisposableSandboxTaskExecutionContextV1,
+  type DisposableSandboxTaskIntentV2,
   type DisposableSandboxTaskRequestV1,
   type DisposableTaskJournalPortV2,
 } from "../../src/adapters/managed/disposable-task"
@@ -36,6 +42,19 @@ import {
 } from "../../src/adapters/managed/daytona-disposable-task"
 
 const d = (value: string | Uint8Array) => `sha256:${createHash("sha256").update(value).digest("hex")}` as const
+
+function authorityEnvelopeBytes(provider: DisposableSandboxTaskRequestV1["provider"]): Uint8Array {
+  return new TextEncoder().encode(infinityCanonicalJson({ proof: canonicalSha256({ provider }) }))
+}
+
+function infinityCanonicalJson(value: unknown): string {
+  if (value === null || typeof value === "boolean" || typeof value === "string") return JSON.stringify(value)
+  if (typeof value === "number") return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(infinityCanonicalJson).join(",")}]`
+  if (typeof value !== "object") throw new TypeError("unsafe fixture")
+  return `{${Object.keys(value).sort().map((key) =>
+    `${JSON.stringify(key)}:${infinityCanonicalJson((value as Record<string, unknown>)[key])}`).join(",")}}`
+}
 
 function request(
   checkpointOverrides: Partial<DisposableSandboxTaskRequestV1["checkpoint"]> = {},
@@ -55,7 +74,7 @@ function request(
     provider,
     idempotency_key_sha256: d("idem"),
     operation_digest: d("placeholder"),
-    authority_envelope_sha256: d("opaque-authority-envelope"),
+    authority_envelope_sha256: d(authorityEnvelopeBytes(provider)),
     source_manifest_sha256: d("descendant-package-and-source-manifest"),
     input_manifest_sha256: disposableTaskInputManifestSha256(files),
     environment_image_sha256: d("base-template-mapping"),
@@ -93,53 +112,103 @@ function context(events: string[]): DisposableSandboxTaskExecutionContextV1 {
   }
 }
 
-function v2Context(events: string[], provider: "e2b" | "daytona_cloud") {
-  const dispatchId = `dt2_${"a".repeat(64)}`
-  const canonicalIntentSha256 = d(`v2-intent-${provider}`)
+async function v2Context(
+  events: string[],
+  requestValue: DisposableSandboxTaskRequestV1,
+  leaseExpiresAt = "2099-01-01T00:10:00.000Z",
+) {
+  const provider = requestValue.provider
+  const intent: DisposableSandboxTaskIntentV2 = {
+    schema_version: "sandboxes.disposable-task-intent/v2",
+    provider,
+    idempotency_key_sha256: requestValue.idempotency_key_sha256,
+    operation_digest: requestValue.operation_digest,
+    source_manifest_sha256: requestValue.source_manifest_sha256,
+    input_manifest_sha256: requestValue.input_manifest_sha256,
+    environment_image_sha256: requestValue.environment_image_sha256,
+    task_bundle_sha256: requestValue.task_bundle_sha256,
+    network_policy: requestValue.network_policy,
+    maximum_allocations: requestValue.maximum_allocations,
+    max_runtime_ms: requestValue.max_runtime_ms,
+    files: requestValue.files,
+    exec: requestValue.exec,
+    checkpoint: requestValue.checkpoint,
+  }
+  const journalIdentitySha256 = d(`v2-journal-${provider}`)
+  const restoreDomainSha256 = d(`v2-restore-${provider}`)
+  const canonicalIntentSha256 = disposableSandboxTaskIntentSha256V2(intent)
+  const dispatchId = `dt2_${canonicalSha256({
+    domain: "sandboxes.disposable-task-journal.dispatch-id/v2",
+    journal_identity_sha256: journalIdentitySha256,
+    idempotency_key_sha256: intent.idempotency_key_sha256,
+    canonical_intent_sha256: canonicalIntentSha256,
+  }).slice(7)}`
   const sandboxPrepareAnchorSha256 = d(`v2-prepare-${provider}`)
-  const effectClaimSha256 = d(`v2-effect-${provider}`)
+  const claimFenceSha256 = d(`v2-claim-fence-${provider}`)
+  const effectOwnershipNonceSha256 = d("ownership-nonce")
+  const providerMetadataScopeSha256 = canonicalSha256({
+    schema_version: "sandboxes.disposable-task-provider-scope/v2",
+    provider,
+    canonical_intent_sha256: canonicalIntentSha256,
+    idempotency_key_sha256: intent.idempotency_key_sha256,
+  })
+  const providerCreationTokenSha256 = canonicalSha256({
+    schema_version: "sandboxes.disposable-task-creation-token/v2",
+    provider_metadata_scope_sha256: providerMetadataScopeSha256,
+  })
+  const immutableFingerprintSha256 = canonicalSha256({
+    schema_version: "sandboxes.disposable-task-provider-fingerprint/v2",
+    provider_metadata_scope_sha256: providerMetadataScopeSha256,
+    environment_image_sha256: intent.environment_image_sha256,
+    source_manifest_sha256: intent.source_manifest_sha256,
+    input_manifest_sha256: intent.input_manifest_sha256,
+  })
+  const effectClaimSha256 = canonicalSha256({
+    schema_version: "sandboxes.disposable-task-effect-claim/v2",
+    journal_identity_sha256: journalIdentitySha256,
+    restore_domain_sha256: restoreDomainSha256,
+    dispatch_id: dispatchId,
+    canonical_intent_sha256: canonicalIntentSha256,
+    provider,
+    provider_metadata_scope_sha256: providerMetadataScopeSha256,
+    provider_creation_token_sha256: providerCreationTokenSha256,
+    immutable_fingerprint_sha256: immutableFingerprintSha256,
+    provider_effect_claim_fence_sha256: claimFenceSha256,
+    provider_effect_lease_epoch: 1n,
+    provider_effect_ownership_nonce_sha256: effectOwnershipNonceSha256,
+  })
   const preparedCore = {
     schema_version: "sandboxes.disposable-task-prepared/v2" as const,
     dispatch_id: dispatchId,
     canonical_intent_sha256: canonicalIntentSha256,
     sandbox_prepare_anchor_sha256: sandboxPrepareAnchorSha256,
-    operation_digest: d(`v2-operation-${provider}`),
+    operation_digest: intent.operation_digest,
     provider,
-    source_manifest_sha256: d(`v2-source-${provider}`),
-    input_manifest_sha256: d(`v2-input-${provider}`),
-    checkpoint_policy_sha256: d(`v2-checkpoint-policy-${provider}`),
+    source_manifest_sha256: intent.source_manifest_sha256,
+    input_manifest_sha256: intent.input_manifest_sha256,
+    checkpoint_policy_sha256: disposableTaskCheckpointPolicySha256(intent.checkpoint),
     effect_claim_sha256: effectClaimSha256,
   }
   const prepared = { ...preparedCore, prepared_sha256: canonicalSha256(preparedCore) }
-  const boundAuthorization = {
-    schema_version: "sandboxes.disposable-task-bound-authorization/v2" as const,
-    dispatch_id: dispatchId,
-    canonical_intent_sha256: canonicalIntentSha256,
-    sandbox_prepare_anchor_sha256: sandboxPrepareAnchorSha256,
-    effect_claim_sha256: effectClaimSha256,
-    authority_envelope_sha256: d(`v2-authority-${provider}`),
-    authorization_consumption_receipt_sha256: d(`v2-consumption-${provider}`),
-    dispatch_intent_anchor_sha256: d(`v2-intent-anchor-${provider}`),
-  }
   const claim = {
     kind: "prepared" as const,
     recovery: false as const,
     dispatch_id: dispatchId,
     canonical_intent_sha256: canonicalIntentSha256,
     lease_epoch: 1n,
-    claim_fence_sha256: d(`v2-claim-fence-${provider}`),
+    claim_fence_sha256: claimFenceSha256,
     lease_owner_sha256: d(`v2-lease-owner-${provider}`),
-    lease_expires_at: "2099-01-01T00:10:00.000Z",
-    provider_metadata_scope_sha256: d("metadata-scope"),
-    provider_creation_token_sha256: d("creation-token"),
-    immutable_fingerprint_sha256: d("immutable-fingerprint"),
+    lease_expires_at: leaseExpiresAt,
+    provider_metadata_scope_sha256: providerMetadataScopeSha256,
+    provider_creation_token_sha256: providerCreationTokenSha256,
+    immutable_fingerprint_sha256: immutableFingerprintSha256,
     ownership_nonce_sha256: d(`v2-current-ownership-${provider}`),
-    provider_effect_claim_fence_sha256: d(`v2-claim-fence-${provider}`),
+    provider_effect_claim_fence_sha256: claimFenceSha256,
     provider_effect_lease_epoch: 1n,
-    provider_effect_ownership_nonce_sha256: d("ownership-nonce"),
+    provider_effect_ownership_nonce_sha256: effectOwnershipNonceSha256,
     effect_claim_sha256: effectClaimSha256,
     sandbox_prepare_anchor_sha256: sandboxPrepareAnchorSha256,
-    dispatch_intent_anchor_sha256: boundAuthorization.dispatch_intent_anchor_sha256,
+    dispatch_intent_anchor_sha256: null,
     expected_provider_fingerprint_sha256: null,
     expected_provider_dispatch_anchor_sha256: null,
     expected_provider_allocation_sha256: null,
@@ -152,13 +221,21 @@ function v2Context(events: string[], provider: "e2b" | "daytona_cloud") {
   const journal = {
     describe: () => ({
       durability: "durable" as const, encrypted_at_rest: true,
-      journal_identity_sha256: d("v2-journal"), restore_domain_sha256: d("v2-restore"),
+      journal_identity_sha256: journalIdentitySha256, restore_domain_sha256: restoreDomainSha256,
       external_head_witness_sha256: d("v2-witness"), signer_principal: "v2-journal",
       signing_key_id: "v2-key",
     }),
     async assertWitnessCurrent() { return { witness_receipt_sha256: d("v2-witness-receipt") } },
-    async prepareIntentV2() { throw new Error("unused V2 prepare") },
-    async bindAuthorizationAndMarkIntentV2() { throw new Error("unused V2 bind") },
+    async prepareIntentV2() {
+      return { ...claim, prepared, stored_authorization: null }
+    },
+    async bindAuthorizationAndMarkIntentV2(input: Parameters<DisposableTaskJournalPortV2["bindAuthorizationAndMarkIntentV2"]>[0]) {
+      return {
+        authority_envelope_sha256: requestValue.authority_envelope_sha256,
+        authorization_consumption_receipt_sha256: input.authorization.receipt_sha256,
+        dispatch_intent_anchor_sha256: d(`v2-intent-anchor-${provider}`),
+      }
+    },
     async quarantineAuthorizationV2() { throw new Error("unused V2 quarantine") },
     async markDispatchedIntentV2(input: Parameters<DisposableTaskJournalPortV2["markDispatchedIntentV2"]>[0]) {
       events.push("mark-dispatched")
@@ -174,8 +251,72 @@ function v2Context(events: string[], provider: "e2b" | "daytona_cloud") {
       return { result_persisted_anchor_sha256: d(`v2-result-anchor-${provider}`) }
     },
   } satisfies DisposableTaskJournalPortV2
+  const envelopeBytes = authorityEnvelopeBytes(provider)
+  if (d(envelopeBytes) !== requestValue.authority_envelope_sha256) throw new Error("invalid V2 request fixture")
+  const authority = {
+    describe: () => ({
+      durability: "durable" as const,
+      implementation_sha256: d("v2-authority-implementation"),
+      trust_root_sha256: d("v2-authority-trust-root"),
+    }),
+    async consumeOnceV2(input: Record<string, unknown>) {
+      const now = Date.now()
+      const receipt = {
+        schema_version: DISPOSABLE_TASK_AUTHORIZATION_CONSUMPTION_SCHEMA_V2,
+        ...input,
+        authority_epoch: "1",
+        run_id: "run-v2",
+        attempt_id: "attempt-v2",
+        attempt_lease_id: "attempt-lease-v2",
+        lease_epoch: "1",
+        model_operation_id: "model-operation-v2",
+        audience: DISPOSABLE_TASK_PROVIDER_CONTACT_AUDIENCE_V2,
+        issued_at: new Date(now - 1_000).toISOString(),
+        consumed_at: new Date(now).toISOString(),
+        expires_at: new Date(now + 10_000).toISOString(),
+        signer_ref: "infinity-authority-v2",
+        signer_incarnation: "incarnation-v2",
+        key_id: "authority-key-v2",
+        signature: "A".repeat(86),
+      }
+      const canonicalReceiptBytes = new TextEncoder().encode(infinityCanonicalJson(receipt))
+      return {
+        canonical_authority_envelope_bytes: envelopeBytes,
+        authority_envelope_sha256: requestValue.authority_envelope_sha256,
+        canonical_receipt_bytes: canonicalReceiptBytes,
+        receipt_sha256: d(canonicalReceiptBytes),
+      }
+    },
+  }
+  const witness = {
+    describe: () => ({
+      durability: "durable" as const,
+      restore_domain_sha256: d("v2-witness-restore"),
+      witness_identity_sha256: d("v2-witness"),
+    }),
+    async readHead() { return null },
+    async compareAndAdvance() { throw new Error("unused") },
+  }
+  const boundAuthorization = await authorizePreparedDisposableSandboxTaskV2({
+    intent,
+    prepared,
+    authority_envelope_sha256: requestValue.authority_envelope_sha256,
+  }, {
+    journal,
+    authority,
+    expected_authority_trust_root_sha256: d("v2-authority-trust-root"),
+    witness,
+    lease_owner_sha256: claim.lease_owner_sha256,
+  })
   return {
-    context: createDisposableSandboxTaskExecutionContextV2({ prepared, boundAuthorization, claim, journal }),
+    context: createDisposableSandboxTaskExecutionContextV2({
+      intent,
+      request: requestValue,
+      prepared,
+      boundAuthorization,
+      claim: { ...claim, dispatch_intent_anchor_sha256: boundAuthorization.dispatch_intent_anchor_sha256 },
+      journal,
+    }),
     get dispatchedInput() { return dispatchedInput },
     get resultInput() { return resultInput },
   }
@@ -435,8 +576,9 @@ describe("E2B disposable task candidate", () => {
 
   test("routes provider allocation and persisted result through the V2 journal port", async () => {
     const { events, runner } = make()
-    const v2 = v2Context(events, "e2b")
-    await runner.run(request(), v2.context)
+    const requestValue = request()
+    const v2 = await v2Context(events, requestValue)
+    await runner.run(requestValue, v2.context)
     expect(v2.dispatchedInput).toMatchObject({
       expected_state: "DISPATCH_INTENT",
       dispatch_id: v2.context.dispatch_id,
@@ -453,6 +595,51 @@ describe("E2B disposable task candidate", () => {
     expect(events.indexOf("mark-dispatched")).toBeLessThan(events.indexOf("activate"))
     expect(events.indexOf("handoff")).toBeLessThan(events.indexOf("mark-result"))
     expect(events.indexOf("mark-result")).toBeLessThan(events.indexOf("destroy"))
+  })
+
+  test("rejects a changed V1 request or copied V2 context before provider allocation", async () => {
+    const { events, control, runner } = make()
+    const requestValue = request()
+    const v2 = await v2Context(events, requestValue)
+    const changedRequest = request({ max_total_bytes: requestValue.checkpoint.max_total_bytes - 1 })
+
+    await expect(runner.run(changedRequest, v2.context)).rejects.toMatchObject({ code: "integrity_failed" })
+    expect(control.createCalls).toBe(0)
+
+    await expect(runner.run(requestValue, { ...v2.context })).rejects.toMatchObject({ code: "integrity_failed" })
+    expect(control.createCalls).toBe(0)
+    expect(events).not.toContain("create")
+  })
+
+  test("atomically consumes one V2 provider-allocation admission", async () => {
+    const sequential = make()
+    const sequentialRequest = request()
+    const sequentialV2 = await v2Context(sequential.events, sequentialRequest)
+    await sequential.runner.run(sequentialRequest, sequentialV2.context)
+    await expect(sequential.runner.run(sequentialRequest, sequentialV2.context))
+      .rejects.toMatchObject({ code: "integrity_failed" })
+    expect(sequential.control.createCalls).toBe(1)
+
+    const concurrent = make()
+    const concurrentRequest = request()
+    const concurrentV2 = await v2Context(concurrent.events, concurrentRequest)
+    const results = await Promise.allSettled([
+      concurrent.runner.run(concurrentRequest, concurrentV2.context),
+      concurrent.runner.run(concurrentRequest, concurrentV2.context),
+    ])
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1)
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1)
+    expect(concurrent.control.createCalls).toBe(1)
+  })
+
+  test("rejects an expired V2 journal claim before provider allocation", async () => {
+    const { events, control, runner } = make()
+    const requestValue = request()
+    const v2 = await v2Context(events, requestValue, new Date(Date.now() - 1).toISOString())
+
+    await expect(runner.run(requestValue, v2.context)).rejects.toMatchObject({ code: "integrity_failed" })
+    expect(control.createCalls).toBe(0)
+    expect(events).not.toContain("create")
   })
 
   test("contains and proves absence when durable handoff fails", async () => {
@@ -617,8 +804,9 @@ describe("E2B disposable task candidate", () => {
 describe("Daytona disposable task candidate", () => {
   test("routes provider allocation and persisted result through the V2 journal port", async () => {
     const { events, runner } = makeDaytona()
-    const v2 = v2Context(events, "daytona_cloud")
-    await runner.run(request({}, "daytona_cloud"), v2.context)
+    const requestValue = request({}, "daytona_cloud")
+    const v2 = await v2Context(events, requestValue)
+    await runner.run(requestValue, v2.context)
     expect(v2.dispatchedInput).toMatchObject({
       expected_state: "DISPATCH_INTENT",
       canonical_intent_sha256: v2.context.canonical_intent_sha256,
