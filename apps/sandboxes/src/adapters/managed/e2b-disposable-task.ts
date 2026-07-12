@@ -671,7 +671,14 @@ class E2bDisposableTaskRunner implements DisposableSandboxTaskRunnerV1 {
   ): Promise<Omit<DisposableSandboxTaskExecutionReceiptCoreV1,
     "schema_version" | "allocation_count" | "destroy_execution_count" | "get_absent" | "list_absent" | "deletion_proven" | "absence_evidence_sha256">> {
     const artifact = await this.broker.loadArtifact()
-    const attestation = await this.broker.install({ ...surface, destruction }, artifact, REQUEST_TIMEOUT_MS)
+    const destructionPort = Object.freeze({
+      destroyAndProveAbsent: (): Promise<void> => destruction.destroyAndProveAbsent(),
+    })
+    const attestation = await this.broker.install(
+      { ...surface, destruction: destructionPort },
+      artifact,
+      REQUEST_TIMEOUT_MS,
+    )
     artifact.fill(0)
     const bindingBytes = this.random(32)
     const key = this.random(32)
@@ -698,7 +705,7 @@ class E2bDisposableTaskRunner implements DisposableSandboxTaskRunnerV1 {
     try {
       let output: Omit<DisposableSandboxTaskExecutionReceiptCoreV1,
         "schema_version" | "allocation_count" | "destroy_execution_count" | "get_absent" | "list_absent" | "deletion_proven" | "absence_evidence_sha256"> | undefined
-      await this.broker.withSession(surface.commands, destruction, attestation, sessionBinding, key, async (session, startup) => {
+      await this.broker.withSession(surface.commands, destructionPort, attestation, sessionBinding, key, async (session, startup) => {
         if (startup.ok !== true || startup.result?.uid !== 0 || startup.result?.gid !== 0 ||
           startup.result?.verified_fd !== true || startup.result?.artifact_sha256 !== E2B_GUEST_BROKER_ARTIFACT_SHA256_V1 ||
           startup.result?.production_admission !== false) throw adapterError("integrity_failed")

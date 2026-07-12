@@ -1,5 +1,8 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto"
-import { readFile } from "node:fs/promises"
+import { constants } from "node:fs"
+import { lstat, open, readFile, realpath } from "node:fs/promises"
+import { dirname, join, relative } from "node:path"
+import { fileURLToPath } from "node:url"
 
 export type E2bGuestBrokerDigestV1 = `sha256:${string}`
 
@@ -419,16 +422,73 @@ export function verifyE2bGuestBrokerArtifactV1(bytes: Uint8Array): boolean {
   return equalDigest(digestBytes(bytes), E2B_GUEST_BROKER_ARTIFACT_SHA256_V1)
 }
 
-/** Loads the exact broker artifact shipped beside the managed package bundle. */
-export async function loadE2bGuestBrokerArtifactV1(): Promise<Uint8Array> {
-  const bytes = new Uint8Array(await readFile(
-    new URL("./e2b-guest-broker-v1.py", import.meta.url),
-  ))
-  if (bytes.byteLength !== E2B_GUEST_BROKER_ARTIFACT_SIZE_V1 ||
-    !verifyE2bGuestBrokerArtifactV1(bytes)) {
+async function e2bGuestBrokerPackageRootV1(): Promise<string> {
+  const modulePath = fileURLToPath(import.meta.url)
+  if (await realpath(modulePath) !== modulePath) fail("artifact_not_pinned")
+  let current = dirname(modulePath)
+  for (let depth = 0; depth < 6; depth += 1) {
+    const manifestPath = join(current, "package.json")
+    try {
+      const manifestStat = await lstat(manifestPath)
+      if (!manifestStat.isFile() || manifestStat.isSymbolicLink() || await realpath(manifestPath) !== manifestPath ||
+        await realpath(current) !== current) fail("artifact_not_pinned")
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as unknown
+      if (manifest === null || typeof manifest !== "object" || Array.isArray(manifest) ||
+        (manifest as Record<string, unknown>).name !== "@hasna/sandboxes") fail("artifact_not_pinned")
+      return current
+    } catch (cause) {
+      if (cause === null || typeof cause !== "object" || Reflect.get(cause, "code") !== "ENOENT") {
+        fail("artifact_not_pinned")
+      }
+    }
+    const parent = dirname(current)
+    if (parent === current) break
+    current = parent
+  }
+  return fail("artifact_not_pinned")
+}
+
+async function readPinnedBrokerArtifactV1(path: string, root: string): Promise<Uint8Array | null> {
+  const local = relative(root, path)
+  if (local.length === 0 || local === ".." || local.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) {
     fail("artifact_not_pinned")
   }
-  return bytes
+  let handle
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+  } catch (cause) {
+    if (cause !== null && typeof cause === "object" && Reflect.get(cause, "code") === "ENOENT") return null
+    return fail("artifact_not_pinned")
+  }
+  try {
+    if (await realpath(path) !== path) fail("artifact_not_pinned")
+    const before = await handle.stat()
+    if (!before.isFile() || before.size !== E2B_GUEST_BROKER_ARTIFACT_SIZE_V1) fail("artifact_not_pinned")
+    const bytes = new Uint8Array(await handle.readFile())
+    const after = await handle.stat()
+    if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size ||
+      before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs ||
+      !verifyE2bGuestBrokerArtifactV1(bytes)) fail("artifact_not_pinned")
+    return bytes
+  } finally {
+    await handle.close()
+  }
+}
+
+/** Loads the pinned artifact from the exact source or built package layout. */
+export async function loadE2bGuestBrokerArtifactV1(): Promise<Uint8Array> {
+  const root = await e2bGuestBrokerPackageRootV1()
+  let selected: Uint8Array | null = null
+  for (const candidate of [
+    join(root, "scripts", "e2b-guest-broker-v1.py"),
+    join(root, "dist", "adapters", "managed", "e2b-guest-broker-v1.py"),
+  ]) {
+    const bytes = await readPinnedBrokerArtifactV1(candidate, root)
+    if (bytes === null) continue
+    if (selected !== null && !timingSafeEqual(selected, bytes)) fail("artifact_not_pinned")
+    selected = bytes
+  }
+  return selected ?? fail("artifact_not_pinned")
 }
 
 export function encodeE2bGuestBrokerRequestLineV1(

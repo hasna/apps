@@ -21,6 +21,7 @@ import {
   e2bGuestBrokerBootstrapArgvV1,
   encodeE2bGuestBrokerSessionKeyInitV1,
   encodeE2bGuestBrokerRequestLineV1,
+  loadE2bGuestBrokerArtifactV1,
   verifyE2bGuestBrokerArtifactV1,
   type E2bGuestBrokerOperationV1,
   type E2bGuestBrokerResponseFrameV1,
@@ -301,8 +302,9 @@ async function exchangeRaw(
 }
 
 describe("E2B guest broker artifact and host codec", () => {
-  test("pins the exact artifact and keeps production admission closed", async () => {
+  test("loads the pinned artifact from the exact source package root and keeps production admission closed", async () => {
     const artifact = new Uint8Array(await readFile(SCRIPT))
+    expect(await loadE2bGuestBrokerArtifactV1()).toEqual(artifact)
     expect(verifyE2bGuestBrokerArtifactV1(artifact)).toBe(true)
     expect(E2B_GUEST_BROKER_ARTIFACT_SHA256_V1).toBe(`sha256:${createHash("sha256").update(artifact).digest("hex")}`)
     expect(E2B_GUEST_BROKER_ARTIFACT_SIZE_V1).toBe(artifact.byteLength)

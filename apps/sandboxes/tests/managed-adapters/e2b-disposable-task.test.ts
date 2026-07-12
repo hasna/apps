@@ -212,13 +212,26 @@ type WorkspaceMutation = "none" | "modify-add" | "chmod" | "delete" | "deep" | "
 
 function broker(events: string[], mutation: WorkspaceMutation): E2bDisposableBrokerPortV1 {
   const files = new Map<string, Buffer>()
+  let exactDestructionPort: object | undefined
+  const assertExactDestructionPort = (value: object): void => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, "destroyAndProveAbsent")
+    if (Reflect.ownKeys(value).length !== 1 || descriptor?.get !== undefined ||
+      descriptor?.set !== undefined || typeof descriptor?.value !== "function") {
+      throw new Error("broker received an ambient destruction object")
+    }
+  }
   return {
     async loadArtifact() { events.push("artifact-load"); return new Uint8Array([1, 2, 3]) },
-    async install(_control, artifact) {
+    async install(control, artifact) {
+      assertExactDestructionPort(control.destruction)
+      exactDestructionPort = control.destruction
+      events.push("destruction-port-exact")
       events.push("artifact-install"); artifact.fill(0)
       return { path: "/opt/hasna/bin/sandboxes-broker-v1", artifact_sha256: E2B_GUEST_BROKER_ARTIFACT_SHA256_V1, byte_length: 65_714, mode: 0o500, owner: "root", group: "root" }
     },
-    async withSession(_commands, _destruction, _attestation, _binding, _key, use) {
+    async withSession(_commands, destruction, _attestation, _binding, _key, use) {
+      assertExactDestructionPort(destruction)
+      if (destruction !== exactDestructionPort) throw new Error("broker destruction capability changed")
       events.push("session")
       return use({ exchangeAuthenticatedLine: async () => new Uint8Array() }, { schema_version: "sandboxes.e2b-guest-broker-response/v1", protocol_sha256: E2B_GUEST_BROKER_PROTOCOL_SHA256_V1, session_binding_sha256: d("session"), request_id: "startup", sequence: 0, nonce_sha256: d("nonce"), operation: "startup", ok: true, result: { uid: 0, gid: 0, verified_fd: true, artifact_sha256: E2B_GUEST_BROKER_ARTIFACT_SHA256_V1, production_admission: false }, mac_sha256: d("mac") })
     },
@@ -286,6 +299,7 @@ describe("E2B disposable task candidate", () => {
     expect(events.indexOf("handoff")).toBeLessThan(events.indexOf("destroy"))
     expect(events).toContain("mark-dispatched")
     expect(events).toContain("mark-result")
+    expect(events).toContain("destruction-port-exact")
     expect(result).toMatchObject({ allocation_count: 1, network_policy: "deny_all", broker_artifact_sha256: E2B_GUEST_BROKER_ARTIFACT_SHA256_V1, checkpoint_readback_sha256: result.checkpoint_sha256, destroy_execution_count: 1, get_absent: true, list_absent: true, deletion_proven: true })
     const text = JSON.stringify(result)
     for (const forbidden of ["raw-provider-id", "stdout", "stderr", "apiKey", "provider_resource_id"]) expect(text).not.toContain(forbidden)
