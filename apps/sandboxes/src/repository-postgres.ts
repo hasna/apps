@@ -1679,11 +1679,13 @@ export const POSTGRES_SCHEMA_MIGRATIONS_V1 = POSTGRES_MIGRATIONS.map((migration)
 export {
   POSTGRES_DISPOSABLE_TASK_JOURNAL_MIGRATION_V1,
   POSTGRES_DISPOSABLE_TASK_JOURNAL_MIGRATION_V2,
+  POSTGRES_DISPOSABLE_TASK_JOURNAL_EFFECT_TRANSITIONS_MIGRATION_V2,
   PostgresDisposableTaskJournalV1,
   applyPostgresDisposableTaskJournalMigrationV1,
   applyPostgresDisposableTaskJournalMigrationV2,
   loadPostgresDisposableTaskJournalMigrationSourceV1,
   loadPostgresDisposableTaskJournalMigrationSourceV2,
+  loadPostgresDisposableTaskJournalEffectTransitionsMigrationSourceV2,
   createEd25519DisposableTaskJournalCryptoV1,
   type DisposableTaskJournalSignatureVerifierV1,
   type DisposableTaskJournalSignerV1,

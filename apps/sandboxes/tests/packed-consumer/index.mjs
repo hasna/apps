@@ -25,12 +25,14 @@ for (const exported of [
   postgres.applyPostgresDisposableTaskJournalMigrationV2,
   postgres.loadPostgresDisposableTaskJournalMigrationSourceV1,
   postgres.loadPostgresDisposableTaskJournalMigrationSourceV2,
+  postgres.loadPostgresDisposableTaskJournalEffectTransitionsMigrationSourceV2,
   postgres.loadPostgresDurableJournalWitnessMigrationSourceV1,
   managed.parseDisposableSandboxTaskRequestV1,
   managed.createEncryptedLocalCheckpointHandoffPortV1,
   managed.disposableSandboxTaskIntentSha256V2,
   managed.prepareDisposableSandboxTaskIntentV2,
   managed.authorizePreparedDisposableSandboxTaskV2,
+  managed.createDisposableSandboxTaskExecutionContextV2,
   managed.dispatchPreparedDisposableSandboxTaskV2,
 ]) {
   if (typeof exported !== "function") throw new Error("packed SDK export is unreachable");
@@ -51,11 +53,17 @@ if (postgres.POSTGRES_DISPOSABLE_TASK_JOURNAL_MIGRATION_V2.relative_path !==
     "migrations/disposable-task-journal/0002_disposable_task_intent_v2.sql") {
   throw new Error("packed disposable task v2 migration descriptor is missing or changed");
 }
+if (postgres.POSTGRES_DISPOSABLE_TASK_JOURNAL_EFFECT_TRANSITIONS_MIGRATION_V2.relative_path !==
+    "migrations/disposable-task-journal/0003_disposable_task_effect_transitions_v2.sql") {
+  throw new Error("packed disposable task v2 effect migration descriptor is missing or changed");
+}
 const journalMigrationV1 = postgres.loadPostgresDisposableTaskJournalMigrationSourceV1();
 const journalMigrationV2 = postgres.loadPostgresDisposableTaskJournalMigrationSourceV2();
+const journalEffectsMigrationV2 = postgres.loadPostgresDisposableTaskJournalEffectTransitionsMigrationSourceV2();
 const witnessMigrationV1 = postgres.loadPostgresDurableJournalWitnessMigrationSourceV1();
 if (!journalMigrationV1.includes("CREATE TABLE sandboxes_disposable_task_journal.tasks (") ||
     !journalMigrationV2.includes("CREATE TABLE sandboxes_disposable_task_journal.tasks_v2 (") ||
+    !journalEffectsMigrationV2.includes("mark_result_persisted_intent_v2") ||
     !witnessMigrationV1.includes("CREATE TABLE sandboxes_durable_journal_witness.heads (")) {
   throw new Error("packed migration sources are unreachable or changed");
 }

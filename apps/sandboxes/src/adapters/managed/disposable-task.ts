@@ -1614,7 +1614,52 @@ export interface DisposableTaskJournalClaimV2 {
   effect_claim_sha256: Digest
   sandbox_prepare_anchor_sha256: Digest
   dispatch_intent_anchor_sha256: Digest | null
+  expected_provider_fingerprint_sha256: Digest | null
+  expected_provider_dispatch_anchor_sha256: Digest | null
+  expected_provider_allocation_sha256: Digest | null
+  expected_result_bundle_sha256: Digest | null
+  expected_checkpoint_handoff_sha256: Digest | null
+  expected_result_persisted_anchor_sha256: Digest | null
 }
+
+export interface DisposableTaskJournalMarkDispatchedIntentInputV2 {
+  expected_state: "DISPATCH_INTENT"
+  dispatch_id: string
+  canonical_intent_sha256: Digest
+  sandbox_prepare_anchor_sha256: Digest
+  effect_claim_sha256: Digest
+  dispatch_intent_anchor_sha256: Digest
+  authorization_consumption_receipt_sha256: Digest
+  claim_fence_sha256: Digest
+  lease_epoch: bigint
+  provider_fingerprint_sha256: Digest
+  provider_metadata_scope_sha256: Digest
+}
+
+export interface DisposableTaskJournalMarkResultPersistedIntentInputV2 {
+  expected_state: "DISPATCHED"
+  dispatch_id: string
+  canonical_intent_sha256: Digest
+  sandbox_prepare_anchor_sha256: Digest
+  effect_claim_sha256: Digest
+  dispatch_intent_anchor_sha256: Digest
+  authorization_consumption_receipt_sha256: Digest
+  claim_fence_sha256: Digest
+  lease_epoch: bigint
+  provider_fingerprint_sha256: Digest
+  provider_dispatch_anchor_sha256: Digest
+  provider_allocation_sha256: Digest
+  result_bundle_sha256: Digest
+  checkpoint_handoff_sha256: Digest
+}
+
+export type DisposableTaskJournalProviderExecutionClaimV2 =
+  | (DisposableTaskJournalClaimV2 & { kind: "prepared"; recovery: false })
+  | (DisposableTaskJournalClaimV2 & {
+    kind: "reconcile"
+    recovery: true
+    prior_state: "PREPARED"
+  })
 
 export type DisposableTaskJournalPrepareIntentResultV2 =
   | ({
@@ -1655,11 +1700,22 @@ export interface DisposableTaskJournalPortV2 {
   quarantineAuthorizationV2(input: Readonly<{
     dispatch_id: string
     canonical_intent_sha256: Digest
+    sandbox_prepare_anchor_sha256: Digest
+    effect_claim_sha256: Digest
     claim_fence_sha256: Digest
     lease_epoch: bigint
     quarantine_reason: "authorization_expired_before_provider_contact"
     quarantine_evidence_sha256: Digest
   }>): Promise<void>
+  markDispatchedIntentV2(
+    input: Readonly<DisposableTaskJournalMarkDispatchedIntentInputV2>,
+  ): Promise<Readonly<{
+    provider_dispatch_anchor_sha256: Digest
+    provider_allocation_sha256: Digest
+  }>>
+  markResultPersistedIntentV2(
+    input: Readonly<DisposableTaskJournalMarkResultPersistedIntentInputV2>,
+  ): Promise<Readonly<{ result_persisted_anchor_sha256: Digest }>>
 }
 
 export interface DisposableSandboxTaskAuthorityPortV2 {
@@ -1698,6 +1754,12 @@ export interface DisposableTaskBoundAuthorizationV2 {
   authority_envelope_sha256: Digest
   authorization_consumption_receipt_sha256: Digest
   dispatch_intent_anchor_sha256: Digest
+}
+
+export interface DisposableSandboxTaskExecutionContextV2 extends DisposableSandboxTaskExecutionContextV1 {
+  journal_version: 2
+  canonical_intent_sha256: Digest
+  sandbox_prepare_anchor_sha256: Digest
 }
 
 function parseDisposableSandboxTaskIntentV2(value: unknown): Readonly<DisposableSandboxTaskIntentV2> {
@@ -1862,6 +1924,30 @@ function parsePrepareResultV2(
     (value.dispatch_intent_anchor_sha256 !== null && !isDigest(value.dispatch_intent_anchor_sha256))) {
     throw adapterError("integrity_failed")
   }
+  const recoveryDigests = [value.expected_provider_fingerprint_sha256,
+    value.expected_provider_dispatch_anchor_sha256, value.expected_provider_allocation_sha256,
+    value.expected_result_bundle_sha256, value.expected_checkpoint_handoff_sha256,
+    value.expected_result_persisted_anchor_sha256]
+  if (!recoveryDigests.every((entry) => entry === null || isDigest(entry))) throw adapterError("integrity_failed")
+  const providerRecoveryPresent = value.expected_provider_fingerprint_sha256 !== null &&
+    value.expected_provider_dispatch_anchor_sha256 !== null && value.expected_provider_allocation_sha256 !== null
+  const resultRecoveryPresent = value.expected_result_bundle_sha256 !== null &&
+    value.expected_checkpoint_handoff_sha256 !== null && value.expected_result_persisted_anchor_sha256 !== null
+  if ((value.expected_provider_fingerprint_sha256 === null) !==
+      (value.expected_provider_dispatch_anchor_sha256 === null) ||
+    (value.expected_provider_fingerprint_sha256 === null) !==
+      (value.expected_provider_allocation_sha256 === null) ||
+    (value.expected_result_bundle_sha256 === null) !==
+      (value.expected_checkpoint_handoff_sha256 === null) ||
+    (value.expected_result_bundle_sha256 === null) !==
+      (value.expected_result_persisted_anchor_sha256 === null) ||
+    (value.kind === "prepared" && (providerRecoveryPresent || resultRecoveryPresent)) ||
+    (value.kind === "reconcile" && value.prior_state === "DISPATCH_INTENT" &&
+      (providerRecoveryPresent || resultRecoveryPresent)) ||
+    (value.kind === "reconcile" && value.prior_state === "DISPATCHED" &&
+      (!providerRecoveryPresent || resultRecoveryPresent)) ||
+    (value.kind === "reconcile" && value.prior_state === "RESULT_PERSISTED" &&
+      (!providerRecoveryPresent || !resultRecoveryPresent))) throw adapterError("integrity_failed")
   if ((value.kind === "prepared" && (value.recovery !== false || value.stored_authorization !== null ||
       value.dispatch_intent_anchor_sha256 !== null)) ||
     (value.kind === "reconcile" && (value.recovery !== true ||
@@ -2236,6 +2322,8 @@ export async function authorizePreparedDisposableSandboxTaskV2(
     await dependencies.journal.quarantineAuthorizationV2({
       dispatch_id: result.dispatch_id,
       canonical_intent_sha256: result.canonical_intent_sha256,
+      sandbox_prepare_anchor_sha256: result.sandbox_prepare_anchor_sha256,
+      effect_claim_sha256: result.effect_claim_sha256,
       claim_fence_sha256: result.claim_fence_sha256,
       lease_epoch: result.lease_epoch,
       quarantine_reason: "authorization_expired_before_provider_contact",
@@ -2252,6 +2340,133 @@ export async function authorizePreparedDisposableSandboxTaskV2(
     authority_envelope_sha256: authorization.authority_envelope_sha256,
     authorization_consumption_receipt_sha256: authorization.receipt_sha256,
     dispatch_intent_anchor_sha256: bound.dispatch_intent_anchor_sha256,
+  })
+}
+
+/**
+ * Adapts a witnessed V2 authorization to the managed provider runner without
+ * routing either provider-effect transition through the V1 journal tables.
+ */
+export function createDisposableSandboxTaskExecutionContextV2(input: Readonly<{
+  prepared: DisposableTaskPreparedIntentV2
+  boundAuthorization: DisposableTaskBoundAuthorizationV2
+  claim: DisposableTaskJournalProviderExecutionClaimV2
+  journal: DisposableTaskJournalPortV2
+}>): Readonly<DisposableSandboxTaskExecutionContextV2> {
+  const { prepared, boundAuthorization: bound, claim, journal } = input
+  const preparedDigests = [prepared.canonical_intent_sha256, prepared.sandbox_prepare_anchor_sha256,
+    prepared.operation_digest, prepared.source_manifest_sha256, prepared.input_manifest_sha256,
+    prepared.checkpoint_policy_sha256, prepared.effect_claim_sha256, prepared.prepared_sha256]
+  const claimDigests = [claim.canonical_intent_sha256, claim.claim_fence_sha256, claim.lease_owner_sha256,
+    claim.provider_metadata_scope_sha256, claim.provider_creation_token_sha256, claim.immutable_fingerprint_sha256,
+    claim.ownership_nonce_sha256, claim.provider_effect_claim_fence_sha256,
+    claim.provider_effect_ownership_nonce_sha256, claim.effect_claim_sha256,
+    claim.sandbox_prepare_anchor_sha256, claim.dispatch_intent_anchor_sha256]
+  const boundDigests = [bound.canonical_intent_sha256, bound.sandbox_prepare_anchor_sha256,
+    bound.effect_claim_sha256, bound.authority_envelope_sha256,
+    bound.authorization_consumption_receipt_sha256, bound.dispatch_intent_anchor_sha256]
+  if (prepared.schema_version !== DISPOSABLE_TASK_PREPARED_SCHEMA_V2 ||
+    bound.schema_version !== DISPOSABLE_TASK_BOUND_AUTHORIZATION_SCHEMA_V2 ||
+    !DISPATCH_ID_V2.test(prepared.dispatch_id) || claim.dispatch_id !== prepared.dispatch_id ||
+    bound.dispatch_id !== prepared.dispatch_id || !preparedDigests.every(isDigest) ||
+    !claimDigests.every(isDigest) || !boundDigests.every(isDigest) ||
+    typeof claim.lease_epoch !== "bigint" || claim.lease_epoch < 1n ||
+    typeof claim.provider_effect_lease_epoch !== "bigint" || claim.provider_effect_lease_epoch < 1n ||
+    (claim.kind === "prepared" ? claim.recovery !== false
+      : !(claim.kind === "reconcile" && claim.recovery === true && claim.prior_state === "PREPARED")) ||
+    new Date(claim.lease_expires_at).toISOString() !== claim.lease_expires_at ||
+    canonicalSha256(preparedCoreV2(prepared)) !== prepared.prepared_sha256 ||
+    claim.canonical_intent_sha256 !== prepared.canonical_intent_sha256 ||
+    claim.sandbox_prepare_anchor_sha256 !== prepared.sandbox_prepare_anchor_sha256 ||
+    claim.effect_claim_sha256 !== prepared.effect_claim_sha256 ||
+    claim.expected_provider_fingerprint_sha256 !== null ||
+    claim.expected_provider_dispatch_anchor_sha256 !== null ||
+    claim.expected_provider_allocation_sha256 !== null ||
+    claim.expected_result_bundle_sha256 !== null ||
+    claim.expected_checkpoint_handoff_sha256 !== null ||
+    claim.expected_result_persisted_anchor_sha256 !== null ||
+    bound.canonical_intent_sha256 !== prepared.canonical_intent_sha256 ||
+    bound.sandbox_prepare_anchor_sha256 !== prepared.sandbox_prepare_anchor_sha256 ||
+    bound.effect_claim_sha256 !== prepared.effect_claim_sha256 ||
+    claim.dispatch_intent_anchor_sha256 !== bound.dispatch_intent_anchor_sha256) {
+    throw adapterError("integrity_failed")
+  }
+  let providerAllocation: Readonly<{
+    provider_fingerprint_sha256: Digest
+    provider_dispatch_anchor_sha256: Digest
+    provider_allocation_sha256: Digest
+  }> | null = null
+  return Object.freeze({
+    journal_version: 2 as const,
+    canonical_intent_sha256: prepared.canonical_intent_sha256,
+    sandbox_prepare_anchor_sha256: prepared.sandbox_prepare_anchor_sha256,
+    dispatch_id: prepared.dispatch_id,
+    journal_dispatch_id_sha256: canonicalSha256(prepared.dispatch_id),
+    journal_dispatch_anchor_sha256: prepared.sandbox_prepare_anchor_sha256,
+    journal_claim_fence_sha256: claim.provider_effect_claim_fence_sha256,
+    journal_lease_epoch: claim.provider_effect_lease_epoch,
+    journal_lease_expires_at: claim.lease_expires_at,
+    provider_metadata_scope_sha256: claim.provider_metadata_scope_sha256,
+    provider_creation_token_sha256: claim.provider_creation_token_sha256,
+    immutable_fingerprint_sha256: claim.immutable_fingerprint_sha256,
+    ownership_nonce_sha256: claim.provider_effect_ownership_nonce_sha256,
+    recovery_expected_result_bundle_sha256: null,
+    recovery_expected_checkpoint_handoff_sha256: null,
+    recovery_expected_provider_fingerprint_sha256: null,
+    authorization_consumption_receipt_sha256: bound.authorization_consumption_receipt_sha256,
+    effect_claim_sha256: prepared.effect_claim_sha256,
+    dispatch_intent_anchor_sha256: bound.dispatch_intent_anchor_sha256,
+    async markDispatched(providerFingerprintSha256: Digest) {
+      if (!isDigest(providerFingerprintSha256)) throw adapterError("integrity_failed")
+      const result = await journal.markDispatchedIntentV2({
+        expected_state: "DISPATCH_INTENT",
+        dispatch_id: prepared.dispatch_id,
+        canonical_intent_sha256: prepared.canonical_intent_sha256,
+        sandbox_prepare_anchor_sha256: prepared.sandbox_prepare_anchor_sha256,
+        effect_claim_sha256: prepared.effect_claim_sha256,
+        dispatch_intent_anchor_sha256: bound.dispatch_intent_anchor_sha256,
+        authorization_consumption_receipt_sha256: bound.authorization_consumption_receipt_sha256,
+        claim_fence_sha256: claim.claim_fence_sha256,
+        lease_epoch: claim.lease_epoch,
+        provider_fingerprint_sha256: providerFingerprintSha256,
+        provider_metadata_scope_sha256: claim.provider_metadata_scope_sha256,
+      })
+      if (!closedRecord(result, ["provider_allocation_sha256", "provider_dispatch_anchor_sha256"]) ||
+        !isDigest(result.provider_dispatch_anchor_sha256) || !isDigest(result.provider_allocation_sha256)) {
+        throw adapterError("integrity_failed")
+      }
+      providerAllocation = Object.freeze({
+        provider_fingerprint_sha256: providerFingerprintSha256,
+        provider_dispatch_anchor_sha256: result.provider_dispatch_anchor_sha256,
+        provider_allocation_sha256: result.provider_allocation_sha256,
+      })
+      return result.provider_dispatch_anchor_sha256
+    },
+    async markResultPersisted(resultInput: Readonly<{
+      result_bundle_sha256: Digest
+      checkpoint_handoff_sha256: Digest
+    }>) {
+      if (!isDigest(resultInput.result_bundle_sha256) || !isDigest(resultInput.checkpoint_handoff_sha256)) {
+        throw adapterError("integrity_failed")
+      }
+      if (providerAllocation === null) throw adapterError("integrity_failed")
+      const result = await journal.markResultPersistedIntentV2({
+        expected_state: "DISPATCHED",
+        dispatch_id: prepared.dispatch_id,
+        canonical_intent_sha256: prepared.canonical_intent_sha256,
+        sandbox_prepare_anchor_sha256: prepared.sandbox_prepare_anchor_sha256,
+        effect_claim_sha256: prepared.effect_claim_sha256,
+        dispatch_intent_anchor_sha256: bound.dispatch_intent_anchor_sha256,
+        authorization_consumption_receipt_sha256: bound.authorization_consumption_receipt_sha256,
+        claim_fence_sha256: claim.claim_fence_sha256,
+        lease_epoch: claim.lease_epoch,
+        ...providerAllocation,
+        ...resultInput,
+      })
+      if (!closedRecord(result, ["result_persisted_anchor_sha256"]) ||
+        !isDigest(result.result_persisted_anchor_sha256)) throw adapterError("integrity_failed")
+      return result.result_persisted_anchor_sha256
+    },
   })
 }
 

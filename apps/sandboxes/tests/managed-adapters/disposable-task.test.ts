@@ -11,6 +11,7 @@ import {
   DISPOSABLE_TASK_PROVIDER_CONTACT_AUDIENCE_V1,
   __testOnlyRunDisposableSandboxTaskCandidateV1,
   authorizePreparedDisposableSandboxTaskV2,
+  createDisposableSandboxTaskExecutionContextV2,
   dispatchPreparedDisposableSandboxTaskV2,
   disposableSandboxTaskIntentSha256V2,
   disposableSandboxTaskExecutionReceiptSha256,
@@ -732,12 +733,20 @@ function v2Harness(
     effect_claim_sha256: prepared.effect_claim_sha256,
     sandbox_prepare_anchor_sha256: prepared.sandbox_prepare_anchor_sha256,
     dispatch_intent_anchor_sha256: null,
+    expected_provider_fingerprint_sha256: null,
+    expected_provider_dispatch_anchor_sha256: null,
+    expected_provider_allocation_sha256: null,
+    expected_result_bundle_sha256: null,
+    expected_checkpoint_handoff_sha256: null,
+    expected_result_persisted_anchor_sha256: null,
   }
   let prepareInput: Record<string, unknown> | undefined
   let consumeInput: Record<string, unknown> | undefined
   let bindInput: Record<string, unknown> | undefined
   let storedAuthorization: DisposableTaskAuthorizationArtifactsV2 | null = null
-  let state: "PREPARED" | "DISPATCH_INTENT" | "QUARANTINED" = "PREPARED"
+  let state: "PREPARED" | "DISPATCH_INTENT" | "DISPATCHED" | "RESULT_PERSISTED" | "QUARANTINED" = "PREPARED"
+  let markDispatchedInput: Record<string, unknown> | undefined
+  let markResultPersistedInput: Record<string, unknown> | undefined
   const envelopeRecord = {
     schema_version: "infinity.sandbox-dispatch-authorization/v2",
     dispatch_id: prepared.dispatch_id,
@@ -793,6 +802,21 @@ function v2Harness(
       events.push("quarantine")
       state = "QUARANTINED"
     },
+    async markDispatchedIntentV2(input: Record<string, unknown>) {
+      events.push("mark-dispatched-v2")
+      markDispatchedInput = input
+      state = "DISPATCHED"
+      return {
+        provider_dispatch_anchor_sha256: d("dispatch-anchor-v2"),
+        provider_allocation_sha256: d("provider-allocation-v2"),
+      }
+    },
+    async markResultPersistedIntentV2(input: Record<string, unknown>) {
+      events.push("mark-result-persisted-v2")
+      markResultPersistedInput = input
+      state = "RESULT_PERSISTED"
+      return { result_persisted_anchor_sha256: d("result-persisted-anchor-v2") }
+    },
   }
   const authority = {
     describe: () => ({
@@ -842,10 +866,13 @@ function v2Harness(
     async compareAndAdvance() { throw new Error("unused") },
   }
   return {
-    events, intent, prepared, authorityEnvelopeSha256, journal, authority, witness,
+    events, intent, prepared, claim: { ...claim, kind: "prepared" as const, recovery: false as const },
+    authorityEnvelopeSha256, journal, authority, witness,
     get prepareInput() { return prepareInput },
     get consumeInput() { return consumeInput },
     get bindInput() { return bindInput },
+    get markDispatchedInput() { return markDispatchedInput },
+    get markResultPersistedInput() { return markResultPersistedInput },
     get state() { return state },
   }
 }
@@ -910,6 +937,100 @@ describe("acyclic disposable task v2 preparation and authorization", () => {
       canonical_intent_sha256: harness.prepared.canonical_intent_sha256,
       authority_envelope_sha256: harness.authorityEnvelopeSha256,
     })
+  })
+
+  test("the managed runner context advances V2 D/I/E/P without any V1 journal fallback", async () => {
+    const harness = v2Harness()
+    const dependencies = {
+      journal: harness.journal,
+      authority: harness.authority,
+      expected_authority_trust_root_sha256: d("infinity-trust-v2"),
+      witness: harness.witness,
+      lease_owner_sha256: d("lease-owner-v2"),
+    }
+    const boundAuthorization = await authorizePreparedDisposableSandboxTaskV2({
+      intent: harness.intent,
+      prepared: harness.prepared,
+      authority_envelope_sha256: harness.authorityEnvelopeSha256,
+    }, dependencies)
+    const context = createDisposableSandboxTaskExecutionContextV2({
+      prepared: harness.prepared,
+      boundAuthorization,
+      claim: { ...harness.claim, dispatch_intent_anchor_sha256: boundAuthorization.dispatch_intent_anchor_sha256 },
+      journal: harness.journal,
+    })
+    const providerFingerprintSha256 = d("provider-fingerprint-v2")
+    const dispatchAnchor = await context.markDispatched(providerFingerprintSha256)
+    const resultAnchor = await context.markResultPersisted({
+      result_bundle_sha256: d("result-bundle-v2"),
+      checkpoint_handoff_sha256: d("checkpoint-handoff-v2"),
+    })
+
+    expect(dispatchAnchor).toBe(d("dispatch-anchor-v2"))
+    expect(resultAnchor).toBe(d("result-persisted-anchor-v2"))
+    expect(harness.markDispatchedInput).toEqual({
+      expected_state: "DISPATCH_INTENT",
+      dispatch_id: harness.prepared.dispatch_id,
+      canonical_intent_sha256: harness.prepared.canonical_intent_sha256,
+      sandbox_prepare_anchor_sha256: harness.prepared.sandbox_prepare_anchor_sha256,
+      effect_claim_sha256: harness.prepared.effect_claim_sha256,
+      dispatch_intent_anchor_sha256: boundAuthorization.dispatch_intent_anchor_sha256,
+      authorization_consumption_receipt_sha256: boundAuthorization.authorization_consumption_receipt_sha256,
+      claim_fence_sha256: harness.claim.claim_fence_sha256,
+      lease_epoch: harness.claim.lease_epoch,
+      provider_fingerprint_sha256: providerFingerprintSha256,
+      provider_metadata_scope_sha256: harness.claim.provider_metadata_scope_sha256,
+    })
+    expect(harness.markResultPersistedInput).toEqual({
+      expected_state: "DISPATCHED",
+      dispatch_id: harness.prepared.dispatch_id,
+      canonical_intent_sha256: harness.prepared.canonical_intent_sha256,
+      sandbox_prepare_anchor_sha256: harness.prepared.sandbox_prepare_anchor_sha256,
+      effect_claim_sha256: harness.prepared.effect_claim_sha256,
+      dispatch_intent_anchor_sha256: boundAuthorization.dispatch_intent_anchor_sha256,
+      authorization_consumption_receipt_sha256: boundAuthorization.authorization_consumption_receipt_sha256,
+      claim_fence_sha256: harness.claim.claim_fence_sha256,
+      lease_epoch: harness.claim.lease_epoch,
+      provider_fingerprint_sha256: providerFingerprintSha256,
+      provider_dispatch_anchor_sha256: d("dispatch-anchor-v2"),
+      provider_allocation_sha256: d("provider-allocation-v2"),
+      result_bundle_sha256: d("result-bundle-v2"),
+      checkpoint_handoff_sha256: d("checkpoint-handoff-v2"),
+    })
+    expect(harness.events).toEqual([
+      "prepare", "consume", "bind", "mark-dispatched-v2", "mark-result-persisted-v2",
+    ])
+    expect(harness.state).toBe("RESULT_PERSISTED")
+  })
+
+  test("the V2 runner context rejects every post-intent recovery claim before provider reachability", async () => {
+    for (const priorState of ["DISPATCH_INTENT", "DISPATCHED", "RESULT_PERSISTED"] as const) {
+      const harness = v2Harness()
+      const boundAuthorization = await authorizePreparedDisposableSandboxTaskV2({
+        intent: harness.intent,
+        prepared: harness.prepared,
+        authority_envelope_sha256: harness.authorityEnvelopeSha256,
+      }, {
+        journal: harness.journal,
+        authority: harness.authority,
+        expected_authority_trust_root_sha256: d("infinity-trust-v2"),
+        witness: harness.witness,
+        lease_owner_sha256: d("lease-owner-v2"),
+      })
+      expect(() => createDisposableSandboxTaskExecutionContextV2({
+        prepared: harness.prepared,
+        boundAuthorization,
+        claim: {
+          ...harness.claim,
+          kind: "reconcile",
+          recovery: true,
+          prior_state: priorState,
+          dispatch_intent_anchor_sha256: boundAuthorization.dispatch_intent_anchor_sha256,
+        } as never,
+        journal: harness.journal,
+      })).toThrow()
+      expect(harness.events).toEqual(["prepare", "consume", "bind"])
+    }
   })
 
   test("rejects a receipt with a changed prepare anchor before the journal bind", async () => {

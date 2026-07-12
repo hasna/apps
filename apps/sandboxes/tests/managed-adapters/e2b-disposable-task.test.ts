@@ -21,10 +21,12 @@ import {
   disposableTaskBundleSha256,
   disposableTaskInputManifestSha256,
   disposableTaskOperationDigest,
+  createDisposableSandboxTaskExecutionContextV2,
   type CheckpointHandoffInputV1,
   type CheckpointHandoffPortV1,
   type DisposableSandboxTaskExecutionContextV1,
   type DisposableSandboxTaskRequestV1,
+  type DisposableTaskJournalPortV2,
 } from "../../src/adapters/managed/disposable-task"
 import type { AdapterProviderResourceV1, ProviderEffectTargetV1 } from "../../src/adapters/managed/types"
 import {
@@ -88,6 +90,94 @@ function context(events: string[]): DisposableSandboxTaskExecutionContextV1 {
     dispatch_intent_anchor_sha256: d("dispatch-intent"),
     async markDispatched() { events.push("mark-dispatched"); return d("dispatched") },
     async markResultPersisted() { events.push("mark-result"); return d("result-persisted") },
+  }
+}
+
+function v2Context(events: string[], provider: "e2b" | "daytona_cloud") {
+  const dispatchId = `dt2_${"a".repeat(64)}`
+  const canonicalIntentSha256 = d(`v2-intent-${provider}`)
+  const sandboxPrepareAnchorSha256 = d(`v2-prepare-${provider}`)
+  const effectClaimSha256 = d(`v2-effect-${provider}`)
+  const preparedCore = {
+    schema_version: "sandboxes.disposable-task-prepared/v2" as const,
+    dispatch_id: dispatchId,
+    canonical_intent_sha256: canonicalIntentSha256,
+    sandbox_prepare_anchor_sha256: sandboxPrepareAnchorSha256,
+    operation_digest: d(`v2-operation-${provider}`),
+    provider,
+    source_manifest_sha256: d(`v2-source-${provider}`),
+    input_manifest_sha256: d(`v2-input-${provider}`),
+    checkpoint_policy_sha256: d(`v2-checkpoint-policy-${provider}`),
+    effect_claim_sha256: effectClaimSha256,
+  }
+  const prepared = { ...preparedCore, prepared_sha256: canonicalSha256(preparedCore) }
+  const boundAuthorization = {
+    schema_version: "sandboxes.disposable-task-bound-authorization/v2" as const,
+    dispatch_id: dispatchId,
+    canonical_intent_sha256: canonicalIntentSha256,
+    sandbox_prepare_anchor_sha256: sandboxPrepareAnchorSha256,
+    effect_claim_sha256: effectClaimSha256,
+    authority_envelope_sha256: d(`v2-authority-${provider}`),
+    authorization_consumption_receipt_sha256: d(`v2-consumption-${provider}`),
+    dispatch_intent_anchor_sha256: d(`v2-intent-anchor-${provider}`),
+  }
+  const claim = {
+    kind: "prepared" as const,
+    recovery: false as const,
+    dispatch_id: dispatchId,
+    canonical_intent_sha256: canonicalIntentSha256,
+    lease_epoch: 1n,
+    claim_fence_sha256: d(`v2-claim-fence-${provider}`),
+    lease_owner_sha256: d(`v2-lease-owner-${provider}`),
+    lease_expires_at: "2099-01-01T00:10:00.000Z",
+    provider_metadata_scope_sha256: d("metadata-scope"),
+    provider_creation_token_sha256: d("creation-token"),
+    immutable_fingerprint_sha256: d("immutable-fingerprint"),
+    ownership_nonce_sha256: d(`v2-current-ownership-${provider}`),
+    provider_effect_claim_fence_sha256: d(`v2-claim-fence-${provider}`),
+    provider_effect_lease_epoch: 1n,
+    provider_effect_ownership_nonce_sha256: d("ownership-nonce"),
+    effect_claim_sha256: effectClaimSha256,
+    sandbox_prepare_anchor_sha256: sandboxPrepareAnchorSha256,
+    dispatch_intent_anchor_sha256: boundAuthorization.dispatch_intent_anchor_sha256,
+    expected_provider_fingerprint_sha256: null,
+    expected_provider_dispatch_anchor_sha256: null,
+    expected_provider_allocation_sha256: null,
+    expected_result_bundle_sha256: null,
+    expected_checkpoint_handoff_sha256: null,
+    expected_result_persisted_anchor_sha256: null,
+  }
+  let dispatchedInput: Parameters<DisposableTaskJournalPortV2["markDispatchedIntentV2"]>[0] | undefined
+  let resultInput: Parameters<DisposableTaskJournalPortV2["markResultPersistedIntentV2"]>[0] | undefined
+  const journal = {
+    describe: () => ({
+      durability: "durable" as const, encrypted_at_rest: true,
+      journal_identity_sha256: d("v2-journal"), restore_domain_sha256: d("v2-restore"),
+      external_head_witness_sha256: d("v2-witness"), signer_principal: "v2-journal",
+      signing_key_id: "v2-key",
+    }),
+    async assertWitnessCurrent() { return { witness_receipt_sha256: d("v2-witness-receipt") } },
+    async prepareIntentV2() { throw new Error("unused V2 prepare") },
+    async bindAuthorizationAndMarkIntentV2() { throw new Error("unused V2 bind") },
+    async quarantineAuthorizationV2() { throw new Error("unused V2 quarantine") },
+    async markDispatchedIntentV2(input: Parameters<DisposableTaskJournalPortV2["markDispatchedIntentV2"]>[0]) {
+      events.push("mark-dispatched")
+      dispatchedInput = input
+      return {
+        provider_dispatch_anchor_sha256: d(`v2-dispatch-anchor-${provider}`),
+        provider_allocation_sha256: d(`v2-allocation-${provider}`),
+      }
+    },
+    async markResultPersistedIntentV2(input: Parameters<DisposableTaskJournalPortV2["markResultPersistedIntentV2"]>[0]) {
+      events.push("mark-result")
+      resultInput = input
+      return { result_persisted_anchor_sha256: d(`v2-result-anchor-${provider}`) }
+    },
+  } satisfies DisposableTaskJournalPortV2
+  return {
+    context: createDisposableSandboxTaskExecutionContextV2({ prepared, boundAuthorization, claim, journal }),
+    get dispatchedInput() { return dispatchedInput },
+    get resultInput() { return resultInput },
   }
 }
 
@@ -343,6 +433,28 @@ describe("E2B disposable task candidate", () => {
     for (const forbidden of ["raw-provider-id", "stdout", "stderr", "apiKey", "provider_resource_id"]) expect(text).not.toContain(forbidden)
   })
 
+  test("routes provider allocation and persisted result through the V2 journal port", async () => {
+    const { events, runner } = make()
+    const v2 = v2Context(events, "e2b")
+    await runner.run(request(), v2.context)
+    expect(v2.dispatchedInput).toMatchObject({
+      expected_state: "DISPATCH_INTENT",
+      dispatch_id: v2.context.dispatch_id,
+      canonical_intent_sha256: v2.context.canonical_intent_sha256,
+      sandbox_prepare_anchor_sha256: v2.context.sandbox_prepare_anchor_sha256,
+      effect_claim_sha256: v2.context.effect_claim_sha256,
+    })
+    expect(v2.resultInput).toMatchObject({
+      expected_state: "DISPATCHED",
+      provider_dispatch_anchor_sha256: d("v2-dispatch-anchor-e2b"),
+      provider_allocation_sha256: d("v2-allocation-e2b"),
+    })
+    expect(events.indexOf("create")).toBeLessThan(events.indexOf("mark-dispatched"))
+    expect(events.indexOf("mark-dispatched")).toBeLessThan(events.indexOf("activate"))
+    expect(events.indexOf("handoff")).toBeLessThan(events.indexOf("mark-result"))
+    expect(events.indexOf("mark-result")).toBeLessThan(events.indexOf("destroy"))
+  })
+
   test("contains and proves absence when durable handoff fails", async () => {
     const { control, handoff, runner } = make(); handoff.fail = true
     await expect(runner.run(request(), context([]))).rejects.toMatchObject({ code: "provider_state_unknown", quarantine_required: true })
@@ -503,6 +615,26 @@ describe("E2B disposable task candidate", () => {
 })
 
 describe("Daytona disposable task candidate", () => {
+  test("routes provider allocation and persisted result through the V2 journal port", async () => {
+    const { events, runner } = makeDaytona()
+    const v2 = v2Context(events, "daytona_cloud")
+    await runner.run(request({}, "daytona_cloud"), v2.context)
+    expect(v2.dispatchedInput).toMatchObject({
+      expected_state: "DISPATCH_INTENT",
+      canonical_intent_sha256: v2.context.canonical_intent_sha256,
+      sandbox_prepare_anchor_sha256: v2.context.sandbox_prepare_anchor_sha256,
+    })
+    expect(v2.resultInput).toMatchObject({
+      expected_state: "DISPATCHED",
+      provider_dispatch_anchor_sha256: d("v2-dispatch-anchor-daytona_cloud"),
+      provider_allocation_sha256: d("v2-allocation-daytona_cloud"),
+    })
+    expect(events.indexOf("create")).toBeLessThan(events.indexOf("mark-dispatched"))
+    expect(events.indexOf("mark-dispatched")).toBeLessThan(events.indexOf("activate"))
+    expect(events.indexOf("handoff")).toBeLessThan(events.indexOf("mark-result"))
+    expect(events.indexOf("mark-result")).toBeLessThan(events.indexOf("destroy"))
+  })
+
   test("maps Daytona directory metadata to the exact workspace control type", async () => {
     const commands: string[] = []
     const sdkCwds: Array<string | undefined> = []

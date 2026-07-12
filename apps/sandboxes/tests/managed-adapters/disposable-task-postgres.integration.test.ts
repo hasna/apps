@@ -460,6 +460,54 @@ test.skipIf(!POSTGRES_ENABLED)("real PostgreSQL disposable journal is fenced, du
         await Promise.allSettled([runtime.close(), acknowledgement.close()])
       }
     }
+    const bindFreshIntentV2 = async (seed: string, journal = a) => {
+      const input = prepareIntentV2(seed)
+      const claim = await journal.prepareIntentV2(input)
+      if (claim.kind !== "prepared") throw new Error(`missing fresh V2 claim for ${seed}`)
+      const authorityEnvelopeBytes = new TextEncoder().encode(infinityCanonicalJson({
+        schema_version: "infinity.sandbox-dispatch-authorization/v2",
+        dispatch_id: claim.dispatch_id,
+        canonical_intent_sha256: claim.canonical_intent_sha256,
+        sandbox_prepare_anchor_sha256: claim.sandbox_prepare_anchor_sha256,
+        effect_claim_sha256: claim.effect_claim_sha256,
+      }))
+      const authorityEnvelopeSha256 = d(authorityEnvelopeBytes)
+      const consumeInput = {
+        dispatch_id: claim.dispatch_id,
+        canonical_intent_sha256: claim.canonical_intent_sha256,
+        sandbox_prepare_anchor_sha256: claim.sandbox_prepare_anchor_sha256,
+        authority_envelope_sha256: authorityEnvelopeSha256,
+        operation_digest: input.operation_digest,
+        provider: input.provider,
+        source_manifest_sha256: input.source_manifest_sha256,
+        input_manifest_sha256: input.input_manifest_sha256,
+        checkpoint_policy_sha256: input.checkpoint_policy_sha256,
+        effect_claim_sha256: claim.effect_claim_sha256,
+      }
+      const canonicalConsumeInputBytes = new TextEncoder().encode(canonicalJson(consumeInput))
+      const receiptBytes = new TextEncoder().encode(infinityCanonicalJson({
+        schema_version: "sandboxes.disposable-task-authorization-consumption/v2",
+        ...consumeInput,
+        seed,
+      }))
+      const bound = await journal.bindAuthorizationAndMarkIntentV2({
+        dispatch_id: claim.dispatch_id,
+        canonical_intent_sha256: claim.canonical_intent_sha256,
+        sandbox_prepare_anchor_sha256: claim.sandbox_prepare_anchor_sha256,
+        claim_fence_sha256: claim.claim_fence_sha256,
+        lease_epoch: claim.lease_epoch,
+        effect_claim_sha256: claim.effect_claim_sha256,
+        canonical_consume_input_bytes: canonicalConsumeInputBytes,
+        consume_input_sha256: d(canonicalConsumeInputBytes),
+        authorization: {
+          canonical_authority_envelope_bytes: authorityEnvelopeBytes,
+          authority_envelope_sha256: authorityEnvelopeSha256,
+          canonical_receipt_bytes: receiptBytes,
+          receipt_sha256: d(receiptBytes),
+        },
+      })
+      return { input, claim, bound }
+    }
 
     // V2 prepares an auth-free intent and binds both exact authorization artifacts only later.
     const v2Input = prepareIntentV2("late-bind")
@@ -535,19 +583,21 @@ test.skipIf(!POSTGRES_ENABLED)("real PostgreSQL disposable journal is fenced, du
       schema_version: "infinity.sandbox-dispatch-authorization/v2",
       dispatch_id: v2Takeover.dispatch_id,
       canonical_intent_sha256: v2Takeover.canonical_intent_sha256,
+      sandbox_prepare_anchor_sha256: v2Takeover.sandbox_prepare_anchor_sha256,
+      effect_claim_sha256: v2Takeover.effect_claim_sha256,
     }))
     const authorityEnvelopeSha256 = d(authorityEnvelopeBytes)
     const consumeInput = {
       dispatch_id: v2Takeover.dispatch_id,
       canonical_intent_sha256: v2Takeover.canonical_intent_sha256,
       sandbox_prepare_anchor_sha256: v2Takeover.sandbox_prepare_anchor_sha256,
+      effect_claim_sha256: v2Takeover.effect_claim_sha256,
       authority_envelope_sha256: authorityEnvelopeSha256,
       operation_digest: v2Input.operation_digest,
       provider: v2Input.provider,
       source_manifest_sha256: v2Input.source_manifest_sha256,
       input_manifest_sha256: v2Input.input_manifest_sha256,
       checkpoint_policy_sha256: v2Input.checkpoint_policy_sha256,
-      effect_claim_sha256: v2Takeover.effect_claim_sha256,
     }
     const consumeInputBytes = new TextEncoder().encode(canonicalJson(consumeInput))
     const receiptBytes = new TextEncoder().encode(infinityCanonicalJson({
@@ -639,6 +689,8 @@ test.skipIf(!POSTGRES_ENABLED)("real PostgreSQL disposable journal is fenced, du
     await a.quarantineAuthorizationV2({
       dispatch_id: v2Takeover.dispatch_id,
       canonical_intent_sha256: v2Takeover.canonical_intent_sha256,
+      sandbox_prepare_anchor_sha256: v2Takeover.sandbox_prepare_anchor_sha256,
+      effect_claim_sha256: v2Takeover.effect_claim_sha256,
       claim_fence_sha256: v2Takeover.claim_fence_sha256,
       lease_epoch: v2Takeover.lease_epoch,
       quarantine_reason: "authorization_expired_before_provider_contact",
@@ -649,6 +701,8 @@ test.skipIf(!POSTGRES_ENABLED)("real PostgreSQL disposable journal is fenced, du
     await b.quarantineAuthorizationV2({
       dispatch_id: v2Takeover.dispatch_id,
       canonical_intent_sha256: v2Takeover.canonical_intent_sha256,
+      sandbox_prepare_anchor_sha256: v2Takeover.sandbox_prepare_anchor_sha256,
+      effect_claim_sha256: v2Takeover.effect_claim_sha256,
       claim_fence_sha256: v2Takeover.claim_fence_sha256,
       lease_epoch: v2Takeover.lease_epoch,
       quarantine_reason: "authorization_expired_before_provider_contact",
@@ -660,6 +714,170 @@ test.skipIf(!POSTGRES_ENABLED)("real PostgreSQL disposable journal is fenced, du
       canonical_intent_sha256: v2Input.canonical_intent_sha256,
       quarantine_evidence_sha256: quarantineEvidence,
     })
+
+    // V2 provider effects stay on tasks_v2 and chain the signed allocation into the durable result.
+    const effect = await bindFreshIntentV2("effect-transitions")
+    const providerFingerprintSha256 = d("v2-provider-fingerprint")
+    const dispatchInput = {
+      expected_state: "DISPATCH_INTENT" as const,
+      dispatch_id: effect.claim.dispatch_id,
+      canonical_intent_sha256: effect.claim.canonical_intent_sha256,
+      sandbox_prepare_anchor_sha256: effect.claim.sandbox_prepare_anchor_sha256,
+      effect_claim_sha256: effect.claim.effect_claim_sha256,
+      dispatch_intent_anchor_sha256: effect.bound.dispatch_intent_anchor_sha256,
+      authorization_consumption_receipt_sha256: effect.bound.authorization_consumption_receipt_sha256,
+      claim_fence_sha256: effect.claim.claim_fence_sha256,
+      lease_epoch: effect.claim.lease_epoch,
+      provider_fingerprint_sha256: providerFingerprintSha256,
+      provider_metadata_scope_sha256: effect.claim.provider_metadata_scope_sha256,
+    }
+    const [providerAllocationA, providerAllocationB] = await Promise.all([
+      a.markDispatchedIntentV2(dispatchInput),
+      b.markDispatchedIntentV2(structuredClone(dispatchInput)),
+    ])
+    expect(providerAllocationA).toEqual(providerAllocationB)
+    const dispatchHead = witness.head?.sequence
+    expect(await a.markDispatchedIntentV2(structuredClone(dispatchInput))).toEqual(providerAllocationA)
+    expect(witness.head?.sequence).toBe(dispatchHead)
+    await expect(a.markDispatchedIntentV2({
+      ...dispatchInput,
+      provider_fingerprint_sha256: d("conflicting-v2-provider-fingerprint"),
+    })).rejects.toMatchObject({ code: "integrity_failed" })
+    for (const changed of [
+      { dispatch_id: `${dispatchInput.dispatch_id.slice(0, -1)}0` },
+      { canonical_intent_sha256: d("changed-v2-I") },
+      { effect_claim_sha256: d("changed-v2-E") },
+      { sandbox_prepare_anchor_sha256: d("changed-v2-P") },
+    ]) {
+      await expect(a.markDispatchedIntentV2({ ...dispatchInput, ...changed }))
+        .rejects.toMatchObject({ code: "integrity_failed" })
+    }
+    const resultInput = {
+      expected_state: "DISPATCHED" as const,
+      dispatch_id: effect.claim.dispatch_id,
+      canonical_intent_sha256: effect.claim.canonical_intent_sha256,
+      sandbox_prepare_anchor_sha256: effect.claim.sandbox_prepare_anchor_sha256,
+      effect_claim_sha256: effect.claim.effect_claim_sha256,
+      dispatch_intent_anchor_sha256: effect.bound.dispatch_intent_anchor_sha256,
+      authorization_consumption_receipt_sha256: effect.bound.authorization_consumption_receipt_sha256,
+      claim_fence_sha256: effect.claim.claim_fence_sha256,
+      lease_epoch: effect.claim.lease_epoch,
+      provider_fingerprint_sha256: providerFingerprintSha256,
+      ...providerAllocationA,
+      result_bundle_sha256: d("v2-result-bundle"),
+      checkpoint_handoff_sha256: d("v2-checkpoint-handoff"),
+    }
+    const persistedResult = await a.markResultPersistedIntentV2(resultInput)
+    const resultHead = witness.head?.sequence
+    expect(await b.markResultPersistedIntentV2(structuredClone(resultInput))).toEqual(persistedResult)
+    expect(await b.markDispatchedIntentV2(structuredClone(dispatchInput))).toEqual(providerAllocationA)
+    expect(witness.head?.sequence).toBe(resultHead)
+    await expect(a.markResultPersistedIntentV2({
+      ...resultInput,
+      provider_allocation_sha256: d("cross-allocation"),
+    })).rejects.toMatchObject({ code: "integrity_failed" })
+    await expect(a.markResultPersistedIntentV2({
+      ...resultInput,
+      result_bundle_sha256: d("conflicting-v2-result"),
+    })).rejects.toMatchObject({ code: "integrity_failed" })
+    const storedEffects = await migration.query<Record<string, unknown>>(`SELECT state,
+      provider_fingerprint_sha256, provider_dispatch_anchor_sha256, provider_allocation_sha256,
+      result_bundle_sha256, checkpoint_handoff_sha256, result_persisted_anchor_sha256,
+      (SELECT count(*) FROM sandboxes_disposable_task_journal.events_v2 event
+       WHERE event.dispatch_id = task.dispatch_id AND event.record_kind = 'DISPATCHED') AS dispatched_events,
+      (SELECT count(*) FROM sandboxes_disposable_task_journal.events_v2 event
+       WHERE event.dispatch_id = task.dispatch_id AND event.record_kind = 'RESULT_PERSISTED') AS result_events
+      FROM sandboxes_disposable_task_journal.tasks_v2 task WHERE dispatch_id = $1`, [effect.claim.dispatch_id])
+    expect(storedEffects).toHaveLength(1)
+    expect(storedEffects[0]).toMatchObject({
+      state: "RESULT_PERSISTED",
+      provider_fingerprint_sha256: providerFingerprintSha256,
+      provider_dispatch_anchor_sha256: providerAllocationA.provider_dispatch_anchor_sha256,
+      provider_allocation_sha256: providerAllocationA.provider_allocation_sha256,
+      result_bundle_sha256: resultInput.result_bundle_sha256,
+      checkpoint_handoff_sha256: resultInput.checkpoint_handoff_sha256,
+      result_persisted_anchor_sha256: persistedResult.result_persisted_anchor_sha256,
+    })
+    expect(BigInt(storedEffects[0]!.dispatched_events as string | bigint)).toBe(1n)
+    expect(BigInt(storedEffects[0]!.result_events as string | bigint)).toBe(1n)
+
+    // A committed row/event whose witness call failed heals on exact replay without a duplicate event.
+    const witnessCrash = await bindFreshIntentV2("effect-witness-crash")
+    const witnessCrashDispatch = {
+      ...dispatchInput,
+      dispatch_id: witnessCrash.claim.dispatch_id,
+      canonical_intent_sha256: witnessCrash.claim.canonical_intent_sha256,
+      sandbox_prepare_anchor_sha256: witnessCrash.claim.sandbox_prepare_anchor_sha256,
+      effect_claim_sha256: witnessCrash.claim.effect_claim_sha256,
+      dispatch_intent_anchor_sha256: witnessCrash.bound.dispatch_intent_anchor_sha256,
+      authorization_consumption_receipt_sha256: witnessCrash.bound.authorization_consumption_receipt_sha256,
+      claim_fence_sha256: witnessCrash.claim.claim_fence_sha256,
+      lease_epoch: witnessCrash.claim.lease_epoch,
+      provider_metadata_scope_sha256: witnessCrash.claim.provider_metadata_scope_sha256,
+      provider_fingerprint_sha256: d("v2-witness-crash-fingerprint"),
+    }
+    witness.unavailable = true
+    await expect(a.markDispatchedIntentV2(witnessCrashDispatch)).rejects.toMatchObject({
+      code: "provider_state_unknown", quarantine_required: true,
+    })
+    witness.unavailable = false
+    const healedAllocation = await a.markDispatchedIntentV2(witnessCrashDispatch)
+    const witnessCrashResult = {
+      ...resultInput,
+      dispatch_id: witnessCrash.claim.dispatch_id,
+      canonical_intent_sha256: witnessCrash.claim.canonical_intent_sha256,
+      sandbox_prepare_anchor_sha256: witnessCrash.claim.sandbox_prepare_anchor_sha256,
+      effect_claim_sha256: witnessCrash.claim.effect_claim_sha256,
+      dispatch_intent_anchor_sha256: witnessCrash.bound.dispatch_intent_anchor_sha256,
+      authorization_consumption_receipt_sha256: witnessCrash.bound.authorization_consumption_receipt_sha256,
+      claim_fence_sha256: witnessCrash.claim.claim_fence_sha256,
+      lease_epoch: witnessCrash.claim.lease_epoch,
+      provider_fingerprint_sha256: witnessCrashDispatch.provider_fingerprint_sha256,
+      ...healedAllocation,
+      result_bundle_sha256: d("v2-witness-crash-result"),
+      checkpoint_handoff_sha256: d("v2-witness-crash-handoff"),
+    }
+    witness.unavailable = true
+    await expect(a.markResultPersistedIntentV2(witnessCrashResult)).rejects.toMatchObject({
+      code: "provider_state_unknown", quarantine_required: true,
+    })
+    witness.unavailable = false
+    await expect(a.markResultPersistedIntentV2(witnessCrashResult)).resolves.toMatchObject({
+      result_persisted_anchor_sha256: expect.any(String),
+    })
+    const crashEventCounts = await migration.query<{ dispatched: bigint | string; persisted: bigint | string }>(`
+      SELECT count(*) FILTER (WHERE record_kind = 'DISPATCHED') AS dispatched,
+        count(*) FILTER (WHERE record_kind = 'RESULT_PERSISTED') AS persisted
+      FROM sandboxes_disposable_task_journal.events_v2 WHERE dispatch_id = $1`, [witnessCrash.claim.dispatch_id])
+    expect(BigInt(crashEventCounts[0]?.dispatched ?? -1)).toBe(1n)
+    expect(BigInt(crashEventCounts[0]?.persisted ?? -1)).toBe(1n)
+
+    // A stale claim cannot dispatch after a lease takeover, and recovery carries exact prior-state bindings.
+    const staleEffect = await bindFreshIntentV2("effect-stale-claim")
+    await migration.query(`UPDATE sandboxes_disposable_task_journal.tasks_v2
+      SET lease_expires_at = clock_timestamp() - interval '1 second' WHERE dispatch_id = $1`,
+    [staleEffect.claim.dispatch_id])
+    const recoveredEffect = await b.prepareIntentV2({
+      ...staleEffect.input,
+      lease_owner_sha256: d("v2-effect-recovery-owner"),
+    })
+    expect(recoveredEffect).toMatchObject({
+      kind: "reconcile", prior_state: "DISPATCH_INTENT",
+      expected_provider_allocation_sha256: null,
+      expected_result_bundle_sha256: null,
+    })
+    await expect(a.markDispatchedIntentV2({
+      ...dispatchInput,
+      dispatch_id: staleEffect.claim.dispatch_id,
+      canonical_intent_sha256: staleEffect.claim.canonical_intent_sha256,
+      sandbox_prepare_anchor_sha256: staleEffect.claim.sandbox_prepare_anchor_sha256,
+      effect_claim_sha256: staleEffect.claim.effect_claim_sha256,
+      dispatch_intent_anchor_sha256: staleEffect.bound.dispatch_intent_anchor_sha256,
+      authorization_consumption_receipt_sha256: staleEffect.bound.authorization_consumption_receipt_sha256,
+      claim_fence_sha256: staleEffect.claim.claim_fence_sha256,
+      lease_epoch: staleEffect.claim.lease_epoch,
+      provider_metadata_scope_sha256: staleEffect.claim.provider_metadata_scope_sha256,
+    })).rejects.toMatchObject({ code: "integrity_failed" })
 
     witness.unavailable = true
     const v2CrashInput = prepareIntentV2("witness-crash-v2")
