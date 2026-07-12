@@ -54,13 +54,6 @@ export {
   type DaytonaOfficialResourceSdkV1,
 } from "./daytona-disposable-task"
 export {
-  createE2bDisposableSandboxTaskRunnerV1,
-  type E2bDisposableBrokerPortV1,
-  type E2bDisposableControlPortV1,
-  type E2bDisposableResourceAccessPortV1,
-  type E2bDisposableResourceSurfaceV1,
-} from "./e2b-disposable-task"
-export {
   DAYTONA_GUEST_BROKER_PTY_ID,
   DAYTONA_GUEST_BROKER_MAX_IN_FLIGHT_BYTES,
   DAYTONA_GUEST_BROKER_MAX_IN_FLIGHT_DELIVERIES,

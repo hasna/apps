@@ -2298,6 +2298,34 @@ export class DaytonaOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkContro
     const snapshot = await this.#refreshSnapshot(candidate)
     this.#assertExact(snapshot, target, expectedVersion, expectedOwnershipNonceSha256)
     await Reflect.apply(this.#delete, this.#sdk, [candidate.sandbox])
+    let getAbsent = false
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      try {
+        if (await this.inspectResource(opaqueResourceId) === "absent") {
+          getAbsent = true
+          break
+        }
+      } catch (cause) {
+        if (!(cause instanceof AdapterContractError) || cause.code !== "provider_unavailable") throw cause
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1_000))
+    }
+    if (!getAbsent) throw adapterError("provider_state_unknown", { quarantineRequired: true })
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      try {
+        const byToken = await this.findByCreationToken(target.provider_creation_token_sha256)
+        const exactMatches = byToken.items.filter((item) =>
+          item.opaque_resource_id === opaqueResourceId &&
+          item.immutable_fingerprint_sha256 === target.immutable_fingerprint_sha256 &&
+          (expectedOwnershipNonceSha256 === undefined ||
+            item.ownership.ownership_nonce_sha256 === expectedOwnershipNonceSha256))
+        if (exactMatches.length === 0 && byToken.next_cursor === undefined) return
+      } catch (cause) {
+        if (!(cause instanceof AdapterContractError) || cause.code !== "provider_unavailable") throw cause
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1_000))
+    }
+    throw adapterError("provider_state_unknown", { quarantineRequired: true })
   }
 
   async #list(query: ListSandboxesQuery, cursor?: string): Promise<ProviderResourcePageV1> {
@@ -2341,15 +2369,20 @@ export class DaytonaOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkContro
     const refreshedSnapshots: DaytonaSandboxSnapshotV1[] = []
     for (const candidate of candidates) {
       try {
-        refreshedSnapshots.push(await this.#refreshSnapshot(candidate))
+        const snapshot = await this.#refreshSnapshot(candidate)
+        if (snapshot.state !== "destroyed") refreshedSnapshots.push(snapshot)
       } catch (cause) {
-        if (
-          cause instanceof AdapterContractError &&
-          cause.code === "provider_unavailable"
-        ) {
-          throw cause
+        if (!(cause instanceof AdapterContractError) || cause.code !== "provider_unavailable") {
+          throw adapterError("provider_state_unknown", { quarantineRequired: true, cause })
         }
-        throw adapterError("provider_state_unknown", { quarantineRequired: true, cause })
+        let current: DaytonaSandbox | "absent"
+        try {
+          current = await this.#sdk.get(candidate.expectedId)
+        } catch (getCause) {
+          throw providerSdkUnavailable(getCause)
+        }
+        if (current === "absent") continue
+        throw cause
       }
     }
     const items: AdapterProviderResourceV1[] = []
@@ -2382,7 +2415,9 @@ export class DaytonaOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkContro
     }
     if (sandbox === "absent") return "absent"
     const candidate = snapshotDaytonaSandboxCandidate(sandbox, opaqueResourceId)
-    return this.#mapSnapshot(await this.#refreshSnapshot(candidate))
+    const snapshot = await this.#refreshSnapshot(candidate)
+    if (snapshot.state === "destroyed") return "absent"
+    return this.#mapSnapshot(snapshot)
   }
 
   listOwnedResources(cursor?: string): Promise<ProviderResourcePageV1> {

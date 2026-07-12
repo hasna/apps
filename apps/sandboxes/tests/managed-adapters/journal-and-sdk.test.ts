@@ -3171,7 +3171,7 @@ describe("official SDK read-only control bridges", () => {
       },
       async start(value) { (value as unknown as Record<string, unknown>).state = "started" },
       async stop(value) { (value as unknown as Record<string, unknown>).state = "stopped" },
-      async delete() { alive = false },
+      async delete(value) { (value as unknown as Record<string, unknown>).state = "destroyed" },
       async get() { return alive ? sandbox as never : "absent" },
       list() {
         return (async function* () { if (alive) yield sandbox as never })()
