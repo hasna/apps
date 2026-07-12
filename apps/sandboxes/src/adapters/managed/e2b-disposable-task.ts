@@ -43,6 +43,7 @@ import type {
   AdapterProviderResourceV1,
   AdapterSandboxSpecV1,
   Digest,
+  ManagedProviderIdV1,
   NetworkPolicyV1,
   ProviderCreateInertRequestV1,
   ProviderEffectTargetV1,
@@ -110,7 +111,8 @@ export interface E2bDisposableBrokerPortV1 {
   ): Promise<E2bGuestBrokerResponseFrameV1>
 }
 
-interface E2bDisposableRunnerConfigV1 {
+export interface ManagedDisposableRunnerConfigV1 {
+  provider: ManagedProviderIdV1
   control: E2bDisposableControlPortV1
   resource_access: E2bDisposableResourceAccessPortV1
   checkpoint_handoff: CheckpointHandoffPortV1
@@ -129,7 +131,7 @@ interface E2bDisposableRunnerConfigV1 {
   }>
 }
 
-interface E2bDisposableRunnerTestConfigV1 extends E2bDisposableRunnerConfigV1 {
+export interface ManagedDisposableRunnerTestConfigV1 extends ManagedDisposableRunnerConfigV1 {
   broker: E2bDisposableBrokerPortV1
   random_bytes: (length: number) => Uint8Array
 }
@@ -142,9 +144,12 @@ function safeId(value: string): string {
   return `disposable-${value.slice(7, 31)}`
 }
 
-function providerOwnershipBinding(context: DisposableSandboxTaskExecutionContextV1): string {
+function providerOwnershipBinding(
+  provider: ManagedProviderIdV1,
+  context: DisposableSandboxTaskExecutionContextV1,
+): string {
   return canonicalJson({
-    schema_version: "sandboxes.e2b-disposable-provider-ownership/v1",
+    schema_version: `sandboxes.${provider}-disposable-provider-ownership/v1`,
     effect_claim_sha256: context.effect_claim_sha256,
     dispatch_intent_anchor_sha256: context.dispatch_intent_anchor_sha256,
     authorization_consumption_receipt_sha256: context.authorization_consumption_receipt_sha256,
@@ -153,8 +158,11 @@ function providerOwnershipBinding(context: DisposableSandboxTaskExecutionContext
   })
 }
 
-function providerOwnershipBindingSha256(context: DisposableSandboxTaskExecutionContextV1): Digest {
-  return canonicalSha256(providerOwnershipBinding(context))
+function providerOwnershipBindingSha256(
+  provider: ManagedProviderIdV1,
+  context: DisposableSandboxTaskExecutionContextV1,
+): Digest {
+  return canonicalSha256(providerOwnershipBinding(provider, context))
 }
 
 function exactDataRecord(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
@@ -324,7 +332,7 @@ function target(
 function createRequest(
   request: DisposableSandboxTaskRequestV1,
   context: DisposableSandboxTaskExecutionContextV1,
-  config: E2bDisposableRunnerConfigV1,
+  config: ManagedDisposableRunnerConfigV1,
 ): ProviderCreateInertRequestV1 {
   const operationTarget = target(request, context, "create")
   const initialNetworkPolicy: NetworkPolicyV1 = {
@@ -368,7 +376,7 @@ function createRequest(
     ownership: {
       installation_id: config.installation_id,
       provider_scope_ref: config.provider_scope_ref,
-      ownership_nonce: providerOwnershipBinding(context),
+      ownership_nonce: providerOwnershipBinding(config.provider, context),
     },
     initial_network_policy: initialNetworkPolicy,
   })
@@ -483,12 +491,14 @@ const productionBroker: E2bDisposableBrokerPortV1 = Object.freeze({
 })
 
 class E2bDisposableTaskRunner implements DisposableSandboxTaskRunnerV1 {
-  readonly provider = "e2b" as const
+  readonly provider: ManagedProviderIdV1
   constructor(
-    private readonly config: E2bDisposableRunnerConfigV1,
+    private readonly config: ManagedDisposableRunnerConfigV1,
     private readonly broker: E2bDisposableBrokerPortV1,
     private readonly random: (length: number) => Uint8Array,
-  ) {}
+  ) {
+    this.provider = config.provider
+  }
 
   describe() {
     const handoff = this.config.checkpoint_handoff.describe()
@@ -505,7 +515,7 @@ class E2bDisposableTaskRunner implements DisposableSandboxTaskRunnerV1 {
     context: Readonly<DisposableSandboxTaskExecutionContextV1>,
   ): Promise<DisposableSandboxTaskExecutionReceiptV1> {
     const request = parseDisposableSandboxTaskRequestV1(requestValue)
-    if (request.provider !== "e2b") throw adapterError("validation_failed")
+    if (request.provider !== this.provider) throw adapterError("validation_failed")
     const requestSha256 = disposableSandboxTaskRequestSha256(request)
     const create = createRequest(request, context, this.config)
     const destroyTarget = target(request, context, "destroy")
@@ -513,7 +523,7 @@ class E2bDisposableTaskRunner implements DisposableSandboxTaskRunnerV1 {
       this.config.control,
       destroyTarget,
       context.provider_creation_token_sha256,
-      providerOwnershipBindingSha256(context),
+      providerOwnershipBindingSha256(this.provider, context),
     )
     let failure: unknown
     let resource: AdapterProviderResourceV1 | undefined
@@ -524,7 +534,7 @@ class E2bDisposableTaskRunner implements DisposableSandboxTaskRunnerV1 {
       destruction.setKnown(resource)
       if (resource.immutable_fingerprint_sha256 !== context.immutable_fingerprint_sha256 ||
         resource.provider_creation_token_sha256 !== context.provider_creation_token_sha256 || !resource.owned ||
-        resource.ownership.ownership_nonce_sha256 !== providerOwnershipBindingSha256(context) ||
+        resource.ownership.ownership_nonce_sha256 !== providerOwnershipBindingSha256(this.provider, context) ||
         resource.source_attached || resource.credential_attached || resource.state !== "inert" ||
         resource.network_policy.mode !== "deny_all" || !resource.network_policy.enforced_outside_guest ||
         resource.network_policy.public_ingress || !resource.network_policy.dns_denied) {
@@ -536,11 +546,11 @@ class E2bDisposableTaskRunner implements DisposableSandboxTaskRunnerV1 {
       const activated = await this.config.control.activateResource(
         resource.opaque_resource_id,
         target(request, context, "activate"),
-        providerOwnershipBindingSha256(context),
+        providerOwnershipBindingSha256(this.provider, context),
       )
       if (activated.state !== "active" || activated.immutable_fingerprint_sha256 !== context.immutable_fingerprint_sha256 ||
         !activated.owned || activated.provider_creation_token_sha256 !== context.provider_creation_token_sha256 ||
-        activated.ownership.ownership_nonce_sha256 !== providerOwnershipBindingSha256(context) ||
+        activated.ownership.ownership_nonce_sha256 !== providerOwnershipBindingSha256(this.provider, context) ||
         activated.source_attached || activated.credential_attached || activated.network_policy.mode !== "deny_all" ||
         !activated.network_policy.enforced_outside_guest || activated.network_policy.public_ingress ||
         !activated.network_policy.dns_denied) {
@@ -572,7 +582,7 @@ class E2bDisposableTaskRunner implements DisposableSandboxTaskRunnerV1 {
       absence_evidence_sha256: disposableTaskAbsenceEvidenceSha256({
         dispatch_id_sha256: context.journal_dispatch_id_sha256,
         request_sha256: requestSha256,
-        provider: "e2b",
+        provider: this.provider,
         provider_creation_token_sha256: context.provider_creation_token_sha256,
         immutable_fingerprint_sha256: context.immutable_fingerprint_sha256,
         provider_fingerprint_sha256: preCleanup.provider_fingerprint_sha256,
@@ -607,7 +617,7 @@ class E2bDisposableTaskRunner implements DisposableSandboxTaskRunnerV1 {
       this.config.control,
       target(request, context, "destroy"),
       context.provider_creation_token_sha256,
-      providerOwnershipBindingSha256(context),
+      providerOwnershipBindingSha256(this.provider, context),
       context.recovery_expected_provider_fingerprint_sha256 ??
         (handoff === "absent" ? undefined : handoff.provider_fingerprint_sha256),
     )
@@ -636,7 +646,7 @@ class E2bDisposableTaskRunner implements DisposableSandboxTaskRunnerV1 {
       this.config.control,
       target(request, context, "contain"),
       context.provider_creation_token_sha256,
-      providerOwnershipBindingSha256(context),
+      providerOwnershipBindingSha256(this.provider, context),
       context.recovery_expected_provider_fingerprint_sha256 ?? undefined,
     )
     try {
@@ -648,14 +658,14 @@ class E2bDisposableTaskRunner implements DisposableSandboxTaskRunnerV1 {
       absence_evidence_sha256: disposableTaskAbsenceEvidenceSha256({
         dispatch_id_sha256: context.journal_dispatch_id_sha256,
         request_sha256: requestSha256,
-        provider: "e2b",
+        provider: this.provider,
         provider_creation_token_sha256: context.provider_creation_token_sha256,
         immutable_fingerprint_sha256: context.immutable_fingerprint_sha256,
         provider_fingerprint_sha256: expectedProviderFingerprint,
         provider_effect_claim_fence_sha256: context.journal_claim_fence_sha256,
         provider_effect_lease_epoch: context.journal_lease_epoch,
         provider_effect_ownership_nonce_sha256: context.ownership_nonce_sha256,
-        provider_ownership_binding_sha256: providerOwnershipBindingSha256(context),
+        provider_ownership_binding_sha256: providerOwnershipBindingSha256(this.provider, context),
         effect_claim_sha256: context.effect_claim_sha256,
         dispatch_intent_anchor_sha256: context.dispatch_intent_anchor_sha256,
         destroy_execution_count: 1,
@@ -815,7 +825,7 @@ class E2bDisposableTaskRunner implements DisposableSandboxTaskRunnerV1 {
           journal_claim_fence_sha256: context.journal_claim_fence_sha256,
           journal_lease_epoch: context.journal_lease_epoch,
           provider_effect_ownership_nonce_sha256: context.ownership_nonce_sha256,
-          provider_ownership_binding_sha256: providerOwnershipBindingSha256(context),
+          provider_ownership_binding_sha256: providerOwnershipBindingSha256(this.provider, context),
           authorization_consumption_receipt_sha256: context.authorization_consumption_receipt_sha256,
           provider_fingerprint_sha256: providerFingerprint,
           broker_artifact_sha256: E2B_GUEST_BROKER_ARTIFACT_SHA256_V1,
@@ -838,7 +848,7 @@ class E2bDisposableTaskRunner implements DisposableSandboxTaskRunnerV1 {
           checkpoint_handoff_sha256: handoff.handoff_receipt_sha256,
         })
         output = {
-          provider: "e2b" as const,
+          provider: this.provider,
           request_sha256: requestSha256,
           idempotency_key_sha256: request.idempotency_key_sha256,
           operation_digest: request.operation_digest,
@@ -853,7 +863,7 @@ class E2bDisposableTaskRunner implements DisposableSandboxTaskRunnerV1 {
           journal_claim_fence_sha256: context.journal_claim_fence_sha256,
           journal_lease_epoch: context.journal_lease_epoch.toString(10),
           provider_effect_ownership_nonce_sha256: context.ownership_nonce_sha256,
-          provider_ownership_binding_sha256: providerOwnershipBindingSha256(context),
+          provider_ownership_binding_sha256: providerOwnershipBindingSha256(this.provider, context),
           network_policy: "deny_all" as const,
           provider_fingerprint_sha256: providerFingerprint,
           broker_artifact_sha256: E2B_GUEST_BROKER_ARTIFACT_SHA256_V1,
@@ -907,7 +917,7 @@ class E2bDisposableTaskRunner implements DisposableSandboxTaskRunnerV1 {
       value.journal_claim_fence_sha256 !== context.journal_claim_fence_sha256 ||
       value.journal_lease_epoch !== context.journal_lease_epoch.toString(10) ||
       value.provider_effect_ownership_nonce_sha256 !== context.ownership_nonce_sha256 ||
-      value.provider_ownership_binding_sha256 !== providerOwnershipBindingSha256(context) ||
+      value.provider_ownership_binding_sha256 !== providerOwnershipBindingSha256(this.provider, context) ||
       value.checkpoint_sha256 !== checkpointSha256 || value.checkpoint_readback_sha256 !== checkpointSha256 ||
       value.checkpoint_manifest_sha256 !== manifestSha256 ||
       value.output_manifest_sha256 !== outputManifestSha256 || value.output_diff_sha256 !== outputDiffSha256 ||
@@ -943,7 +953,7 @@ class E2bDisposableTaskRunner implements DisposableSandboxTaskRunnerV1 {
     }
     const core: DisposableSandboxTaskExecutionReceiptCoreV1 = {
       schema_version: DISPOSABLE_SANDBOX_TASK_EXECUTION_RECEIPT_SCHEMA_V1,
-      provider: "e2b",
+      provider: this.provider,
       request_sha256: requestSha256,
       idempotency_key_sha256: request.idempotency_key_sha256,
       operation_digest: request.operation_digest,
@@ -958,7 +968,7 @@ class E2bDisposableTaskRunner implements DisposableSandboxTaskRunnerV1 {
       journal_claim_fence_sha256: context.journal_claim_fence_sha256,
       journal_lease_epoch: context.journal_lease_epoch.toString(10),
       provider_effect_ownership_nonce_sha256: context.ownership_nonce_sha256,
-      provider_ownership_binding_sha256: providerOwnershipBindingSha256(context),
+      provider_ownership_binding_sha256: providerOwnershipBindingSha256(this.provider, context),
       allocation_count: 1,
       network_policy: "deny_all",
       provider_fingerprint_sha256: handoff.provider_fingerprint_sha256,
@@ -983,14 +993,14 @@ class E2bDisposableTaskRunner implements DisposableSandboxTaskRunnerV1 {
       absence_evidence_sha256: disposableTaskAbsenceEvidenceSha256({
         dispatch_id_sha256: context.journal_dispatch_id_sha256,
         request_sha256: requestSha256,
-        provider: "e2b",
+        provider: this.provider,
         provider_creation_token_sha256: context.provider_creation_token_sha256,
         immutable_fingerprint_sha256: context.immutable_fingerprint_sha256,
         provider_fingerprint_sha256: handoff.provider_fingerprint_sha256,
         provider_effect_claim_fence_sha256: context.journal_claim_fence_sha256,
         provider_effect_lease_epoch: context.journal_lease_epoch,
         provider_effect_ownership_nonce_sha256: context.ownership_nonce_sha256,
-        provider_ownership_binding_sha256: providerOwnershipBindingSha256(context),
+        provider_ownership_binding_sha256: providerOwnershipBindingSha256(this.provider, context),
         effect_claim_sha256: context.effect_claim_sha256,
         dispatch_intent_anchor_sha256: context.dispatch_intent_anchor_sha256,
         destroy_execution_count: 1,
@@ -1005,19 +1015,45 @@ class E2bDisposableTaskRunner implements DisposableSandboxTaskRunnerV1 {
 
 /** Production constructor requires the reviewed official lifecycle bridge class. */
 export function createE2bDisposableSandboxTaskRunnerV1(
-  config: E2bDisposableRunnerConfigV1,
+  config: Omit<ManagedDisposableRunnerConfigV1, "provider">,
 ): DisposableSandboxTaskRunnerV1 {
   if (!(config.control instanceof E2bOfficialSdkControlBridgeV1) || config.template_mapping_attested !== true) {
     throw adapterError("integrity_failed")
   }
-  return new E2bDisposableTaskRunner(config, productionBroker, (length) => new Uint8Array(randomBytes(length)))
+  return new E2bDisposableTaskRunner(
+    { ...config, provider: "e2b" },
+    productionBroker,
+    (length) => new Uint8Array(randomBytes(length)),
+  )
 }
 
 /** Package-internal hermetic constructor; intentionally omitted from package exports. */
 export function __testOnlyCreateE2bDisposableSandboxTaskRunnerV1(
-  config: E2bDisposableRunnerTestConfigV1,
+  config: Omit<ManagedDisposableRunnerTestConfigV1, "provider">,
+): DisposableSandboxTaskRunnerV1 {
+  return new E2bDisposableTaskRunner(
+    { ...config, provider: "e2b" },
+    config.broker,
+    config.random_bytes,
+  )
+}
+
+/** Package-internal candidate constructor shared by provider-specific adapters. */
+export function __testOnlyCreateManagedDisposableSandboxTaskRunnerV1(
+  config: ManagedDisposableRunnerTestConfigV1,
 ): DisposableSandboxTaskRunnerV1 {
   return new E2bDisposableTaskRunner(config, config.broker, config.random_bytes)
+}
+
+/** Provider-specific candidate constructor; public dispatch remains closed by the V2 admission gate. */
+export function createManagedDisposableSandboxTaskRunnerCandidateV1(
+  config: ManagedDisposableRunnerConfigV1,
+): DisposableSandboxTaskRunnerV1 {
+  return new E2bDisposableTaskRunner(
+    config,
+    productionBroker,
+    (length) => new Uint8Array(randomBytes(length)),
+  )
 }
 
 void AdapterContractError

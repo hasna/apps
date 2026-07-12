@@ -1,8 +1,16 @@
-import type { ListSandboxesQuery, Sandbox as DaytonaSandbox } from "@daytona/sdk"
+import type {
+  CreateSandboxFromImageParams,
+  ListSandboxesQuery,
+  Sandbox as DaytonaSandbox,
+} from "@daytona/sdk"
 import type { SandboxInfo, SandboxListOpts } from "e2b"
 import { canonicalSha256, isDigest } from "./canonical"
 import { AdapterContractError, adapterError } from "./errors"
-import { buildE2bCreateOptions, type SafeE2bCreateOptionsV1 } from "./sdk-pins"
+import {
+  buildDaytonaCreateParams,
+  buildE2bCreateOptions,
+  type SafeE2bCreateOptionsV1,
+} from "./sdk-pins"
 import type {
   AdapterProviderResourceV1,
   Digest,
@@ -1132,6 +1140,7 @@ const E2B_SPEC_KEYS = Object.freeze([
 
 interface E2bCreateRequestSnapshotV1 {
   readonly cpuMillis: number
+  readonly diskBytes: number
   readonly imageOrSnapshotSha256: Digest
   readonly maxRuntimeMs: number
   readonly memoryBytes: number
@@ -1282,6 +1291,7 @@ function snapshotE2bCreateRequest(
     })
     return Object.freeze({
       cpuMillis: resources.cpu_millis as number,
+      diskBytes: resources.disk_bytes as number,
       imageOrSnapshotSha256: environment.image_or_snapshot_sha256 as Digest,
       maxRuntimeMs: spec.max_runtime_ms as number,
       memoryBytes: resources.memory_bytes as number,
@@ -1975,20 +1985,100 @@ export interface DaytonaOfficialReadSdkV1 {
   get(opaqueResourceId: string): Promise<DaytonaSandbox | "absent">
 }
 
+export interface DaytonaOfficialLifecycleSdkV1 extends DaytonaOfficialReadSdkV1 {
+  create?(params: CreateSandboxFromImageParams): Promise<DaytonaSandbox>
+  start?(sandbox: DaytonaSandbox): Promise<void>
+  stop?(sandbox: DaytonaSandbox): Promise<void>
+  delete?(sandbox: DaytonaSandbox): Promise<void>
+}
+
+export interface DaytonaImageMappingV1 {
+  schema_version: "sandboxes.daytona-image-mapping/v1"
+  image_or_snapshot_sha256: Digest
+  image: string
+  mapping_version: string
+  mapping_sha256: Digest
+}
+
+export interface DaytonaImageMappingPortV1 {
+  resolve(imageOrSnapshotSha256: Digest): DaytonaImageMappingV1 | "absent"
+}
+
+export function daytonaImageMappingSha256(
+  mapping: Omit<DaytonaImageMappingV1, "mapping_sha256">,
+): Digest {
+  return canonicalSha256(mapping)
+}
+
+type DaytonaLifecycleMethodV1 = "create" | "start" | "stop" | "delete"
+
+function snapshotOptionalDaytonaSdkMethod<K extends DaytonaLifecycleMethodV1>(
+  sdk: DaytonaOfficialLifecycleSdkV1,
+  key: K,
+): DaytonaOfficialLifecycleSdkV1[K] | undefined {
+  let descriptor: PropertyDescriptor | undefined
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(sdk, key)
+  } catch (cause) {
+    throw adapterError("validation_failed", { cause })
+  }
+  if (descriptor === undefined) return undefined
+  if (!('value' in descriptor) || descriptor.get !== undefined ||
+    descriptor.set !== undefined || typeof descriptor.value !== "function") {
+    throw adapterError("validation_failed")
+  }
+  return descriptor.value as DaytonaOfficialLifecycleSdkV1[K]
+}
+
+function snapshotDaytonaImageMapping(
+  value: DaytonaImageMappingV1,
+  expectedDigest: Digest,
+): DaytonaImageMappingV1 {
+  const mapping = snapshotExactDataObject(value, [
+    "schema_version", "image_or_snapshot_sha256", "image", "mapping_version", "mapping_sha256",
+  ])
+  if (mapping.schema_version !== "sandboxes.daytona-image-mapping/v1" ||
+    mapping.image_or_snapshot_sha256 !== expectedDigest || !safeProviderString(mapping.image) ||
+    !safeProviderString(mapping.mapping_version) || !isDigest(mapping.mapping_sha256)) {
+    throw adapterError("validation_failed")
+  }
+  const expected = daytonaImageMappingSha256({
+    schema_version: "sandboxes.daytona-image-mapping/v1",
+    image_or_snapshot_sha256: expectedDigest,
+    image: mapping.image,
+    mapping_version: mapping.mapping_version,
+  })
+  if (mapping.mapping_sha256 !== expected) throw adapterError("validation_failed")
+  return Object.freeze({
+    schema_version: "sandboxes.daytona-image-mapping/v1",
+    image_or_snapshot_sha256: expectedDigest,
+    image: mapping.image,
+    mapping_version: mapping.mapping_version,
+    mapping_sha256: mapping.mapping_sha256,
+  }) as DaytonaImageMappingV1
+}
+
 export class DaytonaOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBridge {
   readonly provider_id = "daytona_cloud" as const
-  readonly #sdk: DaytonaOfficialReadSdkV1
+  readonly #sdk: DaytonaOfficialLifecycleSdkV1
+  readonly #create: DaytonaOfficialLifecycleSdkV1["create"]
+  readonly #start: DaytonaOfficialLifecycleSdkV1["start"]
+  readonly #stop: DaytonaOfficialLifecycleSdkV1["stop"]
+  readonly #delete: DaytonaOfficialLifecycleSdkV1["delete"]
+  readonly #imageMapping: DaytonaImageMappingPortV1 | undefined
+  readonly #capabilities: ProviderCapabilitiesV1
   readonly #attestation: ManagedResourceAttestationPortV1
   readonly #installationSha256: Digest
   readonly #providerScopeRefSha256: Digest
   readonly #observedAt: () => string
 
   constructor(
-    sdk: DaytonaOfficialReadSdkV1,
+    sdk: DaytonaOfficialLifecycleSdkV1,
     attestation: ManagedResourceAttestationPortV1,
     installationSha256: Digest,
     providerScopeRefSha256: Digest,
     observedAt: () => string,
+    imageMapping?: DaytonaImageMappingPortV1,
   ) {
     super()
     if (
@@ -1999,10 +2089,28 @@ export class DaytonaOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkContro
       throw adapterError("validation_failed")
     }
     this.#sdk = sdk
+    this.#create = snapshotOptionalDaytonaSdkMethod(sdk, "create")
+    this.#start = snapshotOptionalDaytonaSdkMethod(sdk, "start")
+    this.#stop = snapshotOptionalDaytonaSdkMethod(sdk, "stop")
+    this.#delete = snapshotOptionalDaytonaSdkMethod(sdk, "delete")
+    this.#imageMapping = imageMapping
+    this.#capabilities = Object.freeze({
+      ...DISABLED_MUTATION_CAPABILITIES,
+      create_stopped: this.#create !== undefined && this.#stop !== undefined &&
+        this.#delete !== undefined && imageMapping !== undefined,
+      network_policy_readback: true,
+      idempotent_activation_continuation: this.#start !== undefined,
+      stop_preserves_filesystem: this.#stop !== undefined,
+      locked_destroy_compensation: this.#delete !== undefined,
+    })
     this.#attestation = attestation
     this.#installationSha256 = installationSha256
     this.#providerScopeRefSha256 = providerScopeRefSha256
     this.#observedAt = observedAt
+  }
+
+  override get capabilities(): ProviderCapabilitiesV1 {
+    return this.#capabilities
   }
 
   async #refreshSnapshot(
@@ -2033,6 +2141,7 @@ export class DaytonaOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkContro
       immutable_fingerprint_sha256: fingerprint,
     }))
     const stopped = snapshot.state === "stopped" || snapshot.state === "paused"
+    const active = snapshot.state === "started"
     const denyAll = snapshot.networkBlockAll === true && snapshot.public === false
     return {
       opaque_resource_id: snapshot.id,
@@ -2044,9 +2153,9 @@ export class DaytonaOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkContro
         created_at: snapshot.createdAt,
         organization_id: snapshot.organizationId,
       }),
-      state: stopped ? "inert" : "unknown",
+      state: stopped ? "inert" : active ? "active" : "unknown",
       provider_runtime_state:
-        stopped ? (snapshot.state === "paused" ? "paused" : "stopped") : "unknown",
+        stopped ? (snapshot.state === "paused" ? "paused" : "stopped") : active ? "active" : "unknown",
       network_policy: denyAll
         ? {
             mode: "deny_all",
@@ -2070,6 +2179,125 @@ export class DaytonaOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkContro
       guest_broker_bootstrapped: false,
       ownership: ownership(snapshot.labels),
     }
+  }
+
+  #resolveImage(imageOrSnapshotSha256: Digest): DaytonaImageMappingV1 {
+    if (this.#imageMapping === undefined) throw adapterError("unsupported_runtime_feature")
+    let value: DaytonaImageMappingV1 | "absent"
+    try {
+      value = this.#imageMapping.resolve(imageOrSnapshotSha256)
+    } catch (cause) {
+      throw adapterError("integrity_failed", { cause })
+    }
+    if (value === "absent") throw adapterError("validation_failed")
+    return snapshotDaytonaImageMapping(value, imageOrSnapshotSha256)
+  }
+
+  #assertExact(
+    snapshot: DaytonaSandboxSnapshotV1,
+    target: ProviderEffectTargetV1,
+    expectedVersion?: string,
+    expectedOwnershipNonceSha256?: Digest,
+  ): void {
+    const version = canonicalSha256({
+      sandbox_id: snapshot.id,
+      created_at: snapshot.createdAt,
+      organization_id: snapshot.organizationId,
+    })
+    if (label(snapshot.labels, "hasna.installation_sha256") !== this.#installationSha256 ||
+      label(snapshot.labels, "hasna.provider_scope_ref_sha256") !== this.#providerScopeRefSha256 ||
+      label(snapshot.labels, "hasna.creation_token_sha256") !== target.provider_creation_token_sha256 ||
+      label(snapshot.labels, "hasna.immutable_fingerprint_sha256") !== target.immutable_fingerprint_sha256 ||
+      (expectedOwnershipNonceSha256 !== undefined &&
+        label(snapshot.labels, "hasna.ownership_nonce_sha256") !== expectedOwnershipNonceSha256) ||
+      (expectedVersion !== undefined && version !== expectedVersion)) {
+      throw adapterError("operation_target_mismatch")
+    }
+  }
+
+  override async createInert(requestValue: ProviderCreateInertRequestV1): Promise<AdapterProviderResourceV1> {
+    if (!this.#capabilities.create_stopped || this.#create === undefined ||
+      this.#stop === undefined || this.#delete === undefined) {
+      throw adapterError("unsupported_runtime_feature")
+    }
+    const request = snapshotE2bCreateRequest(requestValue)
+    const mapping = this.#resolveImage(request.imageOrSnapshotSha256)
+    const gib = 1024 ** 3
+    if (request.cpuMillis % 1_000 !== 0 || request.memoryBytes % gib !== 0 ||
+      request.diskBytes % gib !== 0) throw adapterError("validation_failed")
+    const params = buildDaytonaCreateParams({
+      image: mapping.image,
+      labels: request.metadata,
+      network_policy_sha256: request.networkPolicySha256,
+      resources: {
+        cpu: request.cpuMillis / 1_000,
+        memory: request.memoryBytes / gib,
+        disk: request.diskBytes / gib,
+      },
+    })
+    let candidate: DaytonaSandboxCandidateSnapshotV1 | undefined
+    try {
+      const sandbox = await Reflect.apply(this.#create, this.#sdk, [params])
+      candidate = snapshotDaytonaSandboxCandidate(sandbox)
+      let snapshot = await this.#refreshSnapshot(candidate)
+      this.#assertExact(snapshot, request.target, undefined, request.ownershipNonceSha256)
+      if (snapshot.state !== "stopped" && snapshot.state !== "paused") {
+        await Reflect.apply(this.#stop, this.#sdk, [candidate.sandbox])
+        snapshot = await this.#refreshSnapshot(candidate)
+      }
+      this.#assertExact(snapshot, request.target, undefined, request.ownershipNonceSha256)
+      if ((snapshot.state !== "stopped" && snapshot.state !== "paused") ||
+        snapshot.networkBlockAll !== true || snapshot.public !== false ||
+        (snapshot.autoDeleteInterval ?? 0) >= 0 || snapshot.volumeCount !== 0 ||
+        snapshot.envEntryCount !== 0) {
+        throw adapterError("provider_state_unknown", { quarantineRequired: true })
+      }
+      return await this.#mapSnapshot(snapshot)
+    } catch (cause) {
+      if (candidate !== undefined) {
+        try { await Reflect.apply(this.#delete, this.#sdk, [candidate.sandbox]) } catch { /* containment verified by caller */ }
+      }
+      if (cause instanceof AdapterContractError) throw cause
+      throw adapterError("provider_state_unknown", { quarantineRequired: true, cause })
+    }
+  }
+
+  override async activateResource(
+    opaqueResourceId: string,
+    target: ProviderEffectTargetV1,
+    expectedOwnershipNonceSha256?: Digest,
+  ): Promise<AdapterProviderResourceV1> {
+    if (this.#start === undefined) throw adapterError("unsupported_runtime_feature")
+    const sandbox = await this.#sdk.get(opaqueResourceId)
+    if (sandbox === "absent") throw adapterError("provider_state_unknown", { quarantineRequired: true })
+    const candidate = snapshotDaytonaSandboxCandidate(sandbox, opaqueResourceId)
+    let snapshot = await this.#refreshSnapshot(candidate)
+    this.#assertExact(snapshot, target, undefined, expectedOwnershipNonceSha256)
+    if (snapshot.state !== "started") {
+      await Reflect.apply(this.#start, this.#sdk, [candidate.sandbox])
+      snapshot = await this.#refreshSnapshot(candidate)
+    }
+    this.#assertExact(snapshot, target, undefined, expectedOwnershipNonceSha256)
+    const mapped = await this.#mapSnapshot(snapshot)
+    if (mapped.state !== "active" || !mapped.network_policy.enforced_outside_guest) {
+      throw adapterError("provider_state_unknown", { quarantineRequired: true })
+    }
+    return mapped
+  }
+
+  override async destroyResource(
+    opaqueResourceId: string,
+    expectedVersion: string,
+    target: ProviderEffectTargetV1,
+    expectedOwnershipNonceSha256?: Digest,
+  ): Promise<void> {
+    if (this.#delete === undefined) throw adapterError("unsupported_runtime_feature")
+    const sandbox = await this.#sdk.get(opaqueResourceId)
+    if (sandbox === "absent") return
+    const candidate = snapshotDaytonaSandboxCandidate(sandbox, opaqueResourceId)
+    const snapshot = await this.#refreshSnapshot(candidate)
+    this.#assertExact(snapshot, target, expectedVersion, expectedOwnershipNonceSha256)
+    await Reflect.apply(this.#delete, this.#sdk, [candidate.sandbox])
   }
 
   async #list(query: ListSandboxesQuery, cursor?: string): Promise<ProviderResourcePageV1> {

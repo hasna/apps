@@ -32,7 +32,11 @@ export {
 } from "./request"
 export {
   DaytonaOfficialSdkControlBridgeV1,
+  daytonaImageMappingSha256,
   E2bOfficialSdkControlBridgeV1,
+  type DaytonaImageMappingPortV1,
+  type DaytonaImageMappingV1,
+  type DaytonaOfficialLifecycleSdkV1,
   type DaytonaOfficialReadSdkV1,
   type E2bOfficialLifecycleSdkV1,
   type E2bOfficialReadSdkV1,
@@ -42,6 +46,20 @@ export {
   type ManagedResourceAttestationV1,
   e2bTemplateMappingSha256,
 } from "./sdk-control-bridges"
+export {
+  DAYTONA_DISPOSABLE_TASK_PRODUCTION_ADMISSION_V1,
+  DaytonaOfficialResourceAccessBridgeV1,
+  createDaytonaDisposableSandboxTaskRunnerV1,
+  type DaytonaDisposableRunnerConfigV1,
+  type DaytonaOfficialResourceSdkV1,
+} from "./daytona-disposable-task"
+export {
+  createE2bDisposableSandboxTaskRunnerV1,
+  type E2bDisposableBrokerPortV1,
+  type E2bDisposableControlPortV1,
+  type E2bDisposableResourceAccessPortV1,
+  type E2bDisposableResourceSurfaceV1,
+} from "./e2b-disposable-task"
 export {
   DAYTONA_GUEST_BROKER_PTY_ID,
   DAYTONA_GUEST_BROKER_MAX_IN_FLIGHT_BYTES,

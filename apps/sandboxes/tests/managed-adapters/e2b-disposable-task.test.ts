@@ -8,6 +8,7 @@ import {
 } from "../../src/adapters/managed/e2b-guest-broker"
 import {
   __testOnlyCreateE2bDisposableSandboxTaskRunnerV1,
+  __testOnlyCreateManagedDisposableSandboxTaskRunnerV1,
   type E2bDisposableBrokerPortV1,
   type E2bDisposableControlPortV1,
 } from "../../src/adapters/managed/e2b-disposable-task"
@@ -24,7 +25,10 @@ import type { AdapterProviderResourceV1, ProviderEffectTargetV1 } from "../../sr
 
 const d = (value: string | Uint8Array) => `sha256:${createHash("sha256").update(value).digest("hex")}` as const
 
-function request(checkpointOverrides: Partial<DisposableSandboxTaskRequestV1["checkpoint"]> = {}): DisposableSandboxTaskRequestV1 {
+function request(
+  checkpointOverrides: Partial<DisposableSandboxTaskRequestV1["checkpoint"]> = {},
+  provider: DisposableSandboxTaskRequestV1["provider"] = "e2b",
+): DisposableSandboxTaskRequestV1 {
   const content = Buffer.from("bounded-live-proof\n", "utf8")
   const files = [{ path: "proof.txt", content_base64: content.toString("base64"), content_sha256: d(content), mode: 0o600 as const }]
   const exec = { argv: ["/usr/bin/true"], cwd: "." as const, wall_timeout_ms: 5_000, idle_timeout_ms: 5_000, output_limit_bytes: 4_096, pids_limit: 4 }
@@ -36,7 +40,7 @@ function request(checkpointOverrides: Partial<DisposableSandboxTaskRequestV1["ch
   }
   const value = {
     schema_version: "sandboxes.disposable-task-request/v1" as const,
-    provider: "e2b" as const,
+    provider,
     idempotency_key_sha256: d("idem"),
     operation_digest: d("placeholder"),
     authority_envelope_sha256: d("opaque-authority-envelope"),
@@ -292,6 +296,22 @@ function make(mutation: WorkspaceMutation = "none") {
   return { events, control, handoff, runner }
 }
 
+function makeDaytona(mutation: WorkspaceMutation = "none") {
+  const events: string[] = []
+  const control = new FakeControl(events)
+  const handoff = new FakeHandoff(events)
+  const runner = __testOnlyCreateManagedDisposableSandboxTaskRunnerV1({
+    provider: "daytona_cloud",
+    control, checkpoint_handoff: handoff, broker: broker(events, mutation),
+    resource_access: { async withResource(_id, use) { events.push("with-resource"); return use({ files: {} as never, commands: {} as never }) } },
+    template_mapping_attested: true,
+    installation_id: "installation-v1", provider_scope_ref: "scope-v1", implementation_sha256: d("descendant-package"),
+    architecture: "amd64", resources: { cpu_millis: 1_000, memory_bytes: 512 * 1024 * 1024, disk_bytes: 1024 * 1024 * 1024, pids: 64, open_files: 256, output_bytes: 128 * 1024 },
+    random_bytes: (length) => new Uint8Array(length).fill(7),
+  })
+  return { events, control, handoff, runner }
+}
+
 describe("E2B disposable task candidate", () => {
   test("uses reviewed lifecycle, persists result before exact-once dual absence, and sanitizes receipt", async () => {
     const { events, control, handoff, runner } = make()
@@ -465,5 +485,26 @@ describe("E2B disposable task candidate", () => {
       })
       expect(control.alive).toBe(false)
     }
+  })
+})
+
+describe("Daytona disposable task candidate", () => {
+  test("preserves exact D/I/E/P bindings through checkpoint handoff and dual absence", async () => {
+    const { events, control, handoff, runner } = makeDaytona()
+    const result = await runner.run(request({}, "daytona_cloud"), context(events))
+    expect(runner.describe().provider).toBe("daytona_cloud")
+    expect(result).toMatchObject({
+      provider: "daytona_cloud",
+      allocation_count: 1,
+      destroy_execution_count: 1,
+      get_absent: true,
+      list_absent: true,
+      deletion_proven: true,
+    })
+    expect(control.createCalls).toBe(1)
+    expect(control.destroyCalls).toBe(1)
+    expect(handoff.calls).toBe(1)
+    expect(events.indexOf("handoff")).toBeLessThan(events.indexOf("destroy"))
+    expect(JSON.stringify(result)).not.toContain("raw-provider-id")
   })
 })
