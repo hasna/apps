@@ -3,6 +3,7 @@ import { canonicalJson, canonicalSha256, isDigest } from "./canonical"
 import {
   E2B_GUEST_BROKER_ARTIFACT_SHA256_V1,
   E2B_GUEST_BROKER_PROTOCOL_SHA256_V1,
+  e2bGuestBrokerCheckpointHashesV1,
   exchangeE2bGuestBrokerRequestV1,
   loadE2bGuestBrokerArtifactV1,
   type E2bGuestBrokerRequestInputV1,
@@ -172,6 +173,7 @@ function outputPathAllowed(path: string, prefixes: readonly string[]): boolean {
 function verifyCheckpointPostState(
   value: Record<string, unknown>,
   request: DisposableSandboxTaskRequestV1,
+  expectedProcessQuiescenceSha256: unknown,
 ): Readonly<{
   files: Array<{ path: string; size: number; sha256: Digest; content_base64: string }>
   manifest: Array<{ path: string; size: number; mode: number; sha256: Digest }>
@@ -192,8 +194,14 @@ function verifyCheckpointPostState(
 }> {
   if (!exactDataRecord(value, [
     "checkpoint_sha256", "file_count", "files", "manifest", "manifest_sha256",
-    "provider_snapshot_is_canonical", "total_bytes",
+    "process_baseline_sha256", "process_quiescence_sha256", "provider_snapshot_is_canonical",
+    "total_bytes", "unexpected_process_count",
   ]) || !isDigest(value.checkpoint_sha256) || !isDigest(value.manifest_sha256) ||
+    !isDigest(value.process_baseline_sha256) || !isDigest(value.process_quiescence_sha256) ||
+    !isDigest(expectedProcessQuiescenceSha256) ||
+    value.process_baseline_sha256 !== expectedProcessQuiescenceSha256 ||
+    value.process_quiescence_sha256 !== expectedProcessQuiescenceSha256 ||
+    value.unexpected_process_count !== 0 ||
     value.provider_snapshot_is_canonical !== false || !Number.isSafeInteger(value.file_count) ||
     !Number.isSafeInteger(value.total_bytes) || !Array.isArray(value.files) || !Array.isArray(value.manifest) ||
     (value.file_count as number) < 0 || (value.file_count as number) > request.checkpoint.max_files ||
@@ -275,10 +283,10 @@ function verifyCheckpointPostState(
     (!request.checkpoint.allow_file_deletion && changes.some((item) => item.kind === "deleted"))) {
     throw adapterError("integrity_failed")
   }
-  const manifestSha256 = canonicalSha256(manifest)
   const fileBasis = files.map(({ path, sha256, size }) => ({ path, sha256, size }))
-  if (manifestSha256 !== value.manifest_sha256 ||
-    canonicalSha256({ manifest_sha256: manifestSha256, files: fileBasis }) !== value.checkpoint_sha256) {
+  const brokerHashes = e2bGuestBrokerCheckpointHashesV1(manifest, fileBasis)
+  if (brokerHashes.manifest_sha256 !== value.manifest_sha256 ||
+    brokerHashes.checkpoint_sha256 !== value.checkpoint_sha256) {
     throw adapterError("integrity_failed")
   }
   return Object.freeze({
@@ -756,7 +764,11 @@ class E2bDisposableTaskRunner implements DisposableSandboxTaskRunnerV1 {
         })
         const result = checkpoint.result
         if (checkpoint.ok !== true || result === undefined) throw adapterError("integrity_failed")
-        const postState = verifyCheckpointPostState(result, request)
+        const postState = verifyCheckpointPostState(
+          result,
+          request,
+          exec.result.process_quiescence_sha256,
+        )
         const executionReceiptSha256 = canonicalSha256({
           request_sha256: requestSha256,
           status: exec.result.status,

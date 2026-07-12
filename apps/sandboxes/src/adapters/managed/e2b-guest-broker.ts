@@ -243,6 +243,21 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(canonicalValue(value))
 }
 
+/** Package-internal checkpoint hashes defined by the broker's plain JSON wire. */
+export function e2bGuestBrokerCheckpointHashesV1(
+  manifest: readonly unknown[],
+  files: readonly unknown[],
+): Readonly<{ manifest_sha256: E2bGuestBrokerDigestV1; checkpoint_sha256: E2bGuestBrokerDigestV1 }> {
+  const manifestSha256 = digestBytes(new TextEncoder().encode(canonicalJson(manifest)))
+  return Object.freeze({
+    manifest_sha256: manifestSha256,
+    checkpoint_sha256: digestBytes(new TextEncoder().encode(canonicalJson({
+      files,
+      manifest_sha256: manifestSha256,
+    }))),
+  })
+}
+
 function mac(frameWithoutMac: Record<string, unknown>, key: Uint8Array): E2bGuestBrokerDigestV1 {
   if (key.byteLength !== 32) fail("invalid_mac_key")
   return `sha256:${createHmac("sha256", key).update(canonicalJson(frameWithoutMac), "utf8").digest("hex")}`
@@ -371,16 +386,13 @@ function validateResult(operation: E2bGuestBrokerOperationV1 | "protocol_error" 
         total += file.size
       }
       if (total !== value.total_bytes) return false
-      const manifestSha256 = digestBytes(new TextEncoder().encode(canonicalJson(value.manifest)))
-      if (manifestSha256 !== value.manifest_sha256) return false
       const fileBasis = value.files.map((file) => {
         const item = file as Record<string, unknown>
         return { path: item.path, sha256: item.sha256, size: item.size }
       })
-      return value.checkpoint_sha256 === digestBytes(new TextEncoder().encode(canonicalJson({
-        files: fileBasis,
-        manifest_sha256: manifestSha256,
-      })))
+      const hashes = e2bGuestBrokerCheckpointHashesV1(value.manifest, fileBasis)
+      return hashes.manifest_sha256 === value.manifest_sha256 &&
+        hashes.checkpoint_sha256 === value.checkpoint_sha256
   }
 }
 

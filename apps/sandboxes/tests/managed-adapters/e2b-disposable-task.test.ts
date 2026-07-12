@@ -4,6 +4,7 @@ import { canonicalSha256, parseCanonicalJson } from "../../src/adapters/managed/
 import {
   E2B_GUEST_BROKER_ARTIFACT_SHA256_V1,
   E2B_GUEST_BROKER_PROTOCOL_SHA256_V1,
+  e2bGuestBrokerCheckpointHashesV1,
 } from "../../src/adapters/managed/e2b-guest-broker"
 import {
   __testOnlyCreateE2bDisposableSandboxTaskRunnerV1,
@@ -263,8 +264,11 @@ function broker(events: string[], mutation: WorkspaceMutation): E2bDisposableBro
         path, size, sha256,
         mode: mutation === "chmod" && path === "proof.txt" ? 0o644 : 0o600,
       }))
-      const manifestSha256 = canonicalSha256(manifest)
-      return response(input, { checkpoint_sha256: canonicalSha256({ files: checkpointFiles.map(({ path, size, sha256 }) => ({ path, size, sha256 })), manifest_sha256: manifestSha256 }), manifest_sha256: manifestSha256, files: checkpointFiles, manifest, file_count: checkpointFiles.length, total_bytes: checkpointFiles.reduce((n, f) => n + f.size, 0), provider_snapshot_is_canonical: false })
+      const hashes = e2bGuestBrokerCheckpointHashesV1(
+        manifest,
+        checkpointFiles.map(({ path, size, sha256 }) => ({ path, size, sha256 })),
+      )
+      return response(input, { checkpoint_sha256: hashes.checkpoint_sha256, manifest_sha256: hashes.manifest_sha256, files: checkpointFiles, manifest, file_count: checkpointFiles.length, total_bytes: checkpointFiles.reduce((n, f) => n + f.size, 0), process_baseline_sha256: d("process"), process_quiescence_sha256: d("process"), unexpected_process_count: 0, provider_snapshot_is_canonical: false })
     },
   }
 }
