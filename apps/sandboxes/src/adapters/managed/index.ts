@@ -153,6 +153,7 @@ export {
   parseDisposableSandboxTaskRequestV1,
   runDisposableSandboxTask,
   prepareDisposableSandboxTaskIntentV2,
+  authorizePreparedDisposableSandboxTaskV2,
   dispatchPreparedDisposableSandboxTaskV2,
   type CheckpointHandoffDescriptionV1,
   type CheckpointHandoffInputV1,

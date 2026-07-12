@@ -1981,8 +1981,11 @@ function authorizationExpiresAtV2(value: DisposableTaskAuthorizationArtifactsV2)
   return Date.parse(receipt.expires_at)
 }
 
-/** Internal protocol/persistence composition entry; never exported from the package barrel. */
-export async function __testOnlyDispatchPreparedDisposableSandboxTaskCandidateV2(
+/**
+ * Authorizes one prepared task and durably witnesses DISPATCH_INTENT.
+ * This boundary has no provider dependency and cannot execute the task.
+ */
+export async function authorizePreparedDisposableSandboxTaskV2(
   input: DisposableSandboxTaskDispatchInputV2,
   dependencies: DisposableSandboxTaskDispatchDependenciesV2,
 ): Promise<Readonly<DisposableTaskBoundAuthorizationV2>> {
@@ -2061,5 +2064,5 @@ export function dispatchPreparedDisposableSandboxTaskV2(
   if (!Boolean(DISPOSABLE_SANDBOX_TASK_PRODUCTION_ADMISSION_V2)) {
     return Promise.reject(adapterError("unsupported_runtime_feature"))
   }
-  return __testOnlyDispatchPreparedDisposableSandboxTaskCandidateV2(input, dependencies)
+  return authorizePreparedDisposableSandboxTaskV2(input, dependencies)
 }

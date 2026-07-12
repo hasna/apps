@@ -10,7 +10,7 @@ import {
   DISPOSABLE_TASK_AUTHORIZATION_CONSUMPTION_SCHEMA_V1,
   DISPOSABLE_TASK_PROVIDER_CONTACT_AUDIENCE_V1,
   __testOnlyRunDisposableSandboxTaskCandidateV1,
-  __testOnlyDispatchPreparedDisposableSandboxTaskCandidateV2,
+  authorizePreparedDisposableSandboxTaskV2,
   dispatchPreparedDisposableSandboxTaskV2,
   disposableSandboxTaskIntentSha256V2,
   disposableSandboxTaskExecutionReceiptSha256,
@@ -722,6 +722,7 @@ function v2Harness(receiptOverrides: Record<string, unknown> = {}) {
   let consumeInput: Record<string, unknown> | undefined
   let bindInput: Record<string, unknown> | undefined
   let storedAuthorization: DisposableTaskAuthorizationArtifactsV2 | null = null
+  let state: "PREPARED" | "DISPATCH_INTENT" | "QUARANTINED" = "PREPARED"
   const envelopeBytes = new TextEncoder().encode(canonicalJson({
     schema_version: "infinity.sandbox-dispatch-authorization/v2",
     dispatch_id: prepared.dispatch_id,
@@ -759,6 +760,7 @@ function v2Harness(receiptOverrides: Record<string, unknown> = {}) {
       events.push("bind")
       bindInput = input
       storedAuthorization = input.authorization as DisposableTaskAuthorizationArtifactsV2
+      state = "DISPATCH_INTENT"
       return {
         authority_envelope_sha256: authorityEnvelopeSha256,
         authorization_consumption_receipt_sha256:
@@ -766,7 +768,10 @@ function v2Harness(receiptOverrides: Record<string, unknown> = {}) {
         dispatch_intent_anchor_sha256: d("dispatch-intent-v2"),
       }
     },
-    async quarantineAuthorizationV2() { events.push("quarantine") },
+    async quarantineAuthorizationV2() {
+      events.push("quarantine")
+      state = "QUARANTINED"
+    },
   }
   const authority = {
     describe: () => ({
@@ -820,6 +825,7 @@ function v2Harness(receiptOverrides: Record<string, unknown> = {}) {
     get prepareInput() { return prepareInput },
     get consumeInput() { return consumeInput },
     get bindInput() { return bindInput },
+    get state() { return state },
   }
 }
 
@@ -840,20 +846,25 @@ describe("acyclic disposable task v2 preparation and authorization", () => {
     expect(harness.events).toEqual(["prepare"])
   })
 
-  test("binds exact D/I/E/P plus authority artifacts before returning the witnessed dispatch intent", async () => {
+  test("public authorization binds exact D/I/E/P and stops at witnessed DISPATCH_INTENT", async () => {
     const harness = v2Harness()
-    const result = await __testOnlyDispatchPreparedDisposableSandboxTaskCandidateV2({
-      intent: harness.intent,
-      prepared: harness.prepared,
-      authority_envelope_sha256: harness.authorityEnvelopeSha256,
-    }, {
+    let providerCalls = 0
+    const dependencies = {
       journal: harness.journal,
       authority: harness.authority,
       expected_authority_trust_root_sha256: d("infinity-trust-v2"),
       witness: harness.witness,
       lease_owner_sha256: d("lease-owner-v2"),
-    })
+      provider: { run: () => { providerCalls += 1 } },
+    }
+    const result = await authorizePreparedDisposableSandboxTaskV2({
+      intent: harness.intent,
+      prepared: harness.prepared,
+      authority_envelope_sha256: harness.authorityEnvelopeSha256,
+    }, dependencies)
     expect(harness.events).toEqual(["prepare", "consume", "bind"])
+    expect(harness.state).toBe("DISPATCH_INTENT")
+    expect(providerCalls).toBe(0)
     expect(harness.consumeInput).toEqual({
       dispatch_id: harness.prepared.dispatch_id,
       canonical_intent_sha256: harness.prepared.canonical_intent_sha256,
@@ -882,7 +893,7 @@ describe("acyclic disposable task v2 preparation and authorization", () => {
 
   test("rejects a receipt with a changed prepare anchor before the journal bind", async () => {
     const harness = v2Harness({ sandbox_prepare_anchor_sha256: d("wrong-prepare-anchor") })
-    await expect(__testOnlyDispatchPreparedDisposableSandboxTaskCandidateV2({
+    await expect(authorizePreparedDisposableSandboxTaskV2({
       intent: harness.intent,
       prepared: harness.prepared,
       authority_envelope_sha256: harness.authorityEnvelopeSha256,
@@ -910,8 +921,8 @@ describe("acyclic disposable task v2 preparation and authorization", () => {
       witness: harness.witness,
       lease_owner_sha256: d("lease-owner-v2"),
     }
-    const first = await __testOnlyDispatchPreparedDisposableSandboxTaskCandidateV2(dispatch, dependencies)
-    const replay = await __testOnlyDispatchPreparedDisposableSandboxTaskCandidateV2(dispatch, dependencies)
+    const first = await authorizePreparedDisposableSandboxTaskV2(dispatch, dependencies)
+    const replay = await authorizePreparedDisposableSandboxTaskV2(dispatch, dependencies)
     expect(replay).toEqual(first)
     expect(harness.events.filter((event) => event === "consume")).toHaveLength(1)
     expect(harness.events.filter((event) => event === "bind")).toHaveLength(2)
@@ -924,7 +935,7 @@ describe("acyclic disposable task v2 preparation and authorization", () => {
       consumed_at: new Date(consumed).toISOString(),
       expires_at: new Date(consumed + 10_000).toISOString(),
     })
-    await expect(__testOnlyDispatchPreparedDisposableSandboxTaskCandidateV2({
+    await expect(authorizePreparedDisposableSandboxTaskV2({
       intent: harness.intent,
       prepared: harness.prepared,
       authority_envelope_sha256: harness.authorityEnvelopeSha256,
@@ -940,7 +951,7 @@ describe("acyclic disposable task v2 preparation and authorization", () => {
 
   test("rejects a deployment trust-root mismatch before Infinity consumption", async () => {
     const harness = v2Harness()
-    await expect(__testOnlyDispatchPreparedDisposableSandboxTaskCandidateV2({
+    await expect(authorizePreparedDisposableSandboxTaskV2({
       intent: harness.intent,
       prepared: harness.prepared,
       authority_envelope_sha256: harness.authorityEnvelopeSha256,

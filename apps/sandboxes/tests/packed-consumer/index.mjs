@@ -29,6 +29,7 @@ for (const exported of [
   managed.createEncryptedLocalCheckpointHandoffPortV1,
   managed.disposableSandboxTaskIntentSha256V2,
   managed.prepareDisposableSandboxTaskIntentV2,
+  managed.authorizePreparedDisposableSandboxTaskV2,
   managed.dispatchPreparedDisposableSandboxTaskV2,
 ]) {
   if (typeof exported !== "function") throw new Error("packed SDK export is unreachable");
