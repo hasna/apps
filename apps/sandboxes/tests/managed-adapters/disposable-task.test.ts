@@ -35,6 +35,18 @@ import { AdapterContractError } from "../../src/adapters/managed/errors"
 
 const d = (value: string | Uint8Array) => `sha256:${createHash("sha256").update(value).digest("hex")}` as const
 
+function infinityCanonicalJson(value: unknown): string {
+  if (value === null || typeof value === "boolean" || typeof value === "string") return JSON.stringify(value)
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || (Number.isInteger(value) && !Number.isSafeInteger(value))) throw new TypeError("unsafe fixture")
+    return JSON.stringify(value)
+  }
+  if (Array.isArray(value)) return `[${value.map(infinityCanonicalJson).join(",")}]`
+  if (typeof value !== "object") throw new TypeError("unsafe fixture")
+  return `{${Object.keys(value).sort().map((key) =>
+    `${JSON.stringify(key)}:${infinityCanonicalJson((value as Record<string, unknown>)[key])}`).join(",")}}`
+}
+
 function request(overrides: Partial<DisposableSandboxTaskRequestV1> = {}): DisposableSandboxTaskRequestV1 {
   const content = Buffer.from("export const answer = 42\n", "utf8")
   const files = [{
@@ -639,7 +651,10 @@ function intentV2(): DisposableSandboxTaskIntentV2 {
   }
 }
 
-function v2Harness(receiptOverrides: Record<string, unknown> = {}) {
+function v2Harness(
+  receiptOverrides: Record<string, unknown> = {},
+  wire: { authority_label?: string; duplicate_authority_key?: boolean } = {},
+) {
   const events: string[] = []
   const intent = intentV2()
   const canonicalIntentSha256 = disposableSandboxTaskIntentSha256V2(intent)
@@ -723,13 +738,19 @@ function v2Harness(receiptOverrides: Record<string, unknown> = {}) {
   let bindInput: Record<string, unknown> | undefined
   let storedAuthorization: DisposableTaskAuthorizationArtifactsV2 | null = null
   let state: "PREPARED" | "DISPATCH_INTENT" | "QUARANTINED" = "PREPARED"
-  const envelopeBytes = new TextEncoder().encode(canonicalJson({
+  const envelopeRecord = {
     schema_version: "infinity.sandbox-dispatch-authorization/v2",
     dispatch_id: prepared.dispatch_id,
     canonical_intent_sha256: prepared.canonical_intent_sha256,
     effect_claim_sha256: prepared.effect_claim_sha256,
     sandbox_prepare_anchor_sha256: prepared.sandbox_prepare_anchor_sha256,
-  }))
+    ...(wire.authority_label === undefined ? {} : { label: wire.authority_label }),
+  }
+  let envelopeText = infinityCanonicalJson(envelopeRecord)
+  if (wire.duplicate_authority_key) {
+    envelopeText = `{"canonical_intent_sha256":${JSON.stringify(prepared.canonical_intent_sha256)},${envelopeText.slice(1)}`
+  }
+  const envelopeBytes = new TextEncoder().encode(envelopeText)
   const authorityEnvelopeSha256 = d(envelopeBytes)
   const journal = {
     describe: () => ({
@@ -802,7 +823,7 @@ function v2Harness(receiptOverrides: Record<string, unknown> = {}) {
         signature: "A".repeat(86),
         ...receiptOverrides,
       }
-      const canonicalReceiptBytes = new TextEncoder().encode(canonicalJson(receiptCore))
+      const canonicalReceiptBytes = new TextEncoder().encode(infinityCanonicalJson(receiptCore))
       return {
         canonical_authority_envelope_bytes: envelopeBytes,
         authority_envelope_sha256: authorityEnvelopeSha256,
@@ -905,6 +926,35 @@ describe("acyclic disposable task v2 preparation and authorization", () => {
       lease_owner_sha256: d("lease-owner-v2"),
     })).rejects.toMatchObject({ code: "integrity_failed" })
     expect(harness.events).toEqual(["prepare", "consume"])
+  })
+
+  test("accepts NFC Unicode but rejects duplicate keys and non-NFC Infinity wire bytes", async () => {
+    const dependencies = (harness: ReturnType<typeof v2Harness>) => ({
+      journal: harness.journal,
+      authority: harness.authority,
+      expected_authority_trust_root_sha256: d("infinity-trust-v2"),
+      witness: harness.witness,
+      lease_owner_sha256: d("lease-owner-v2"),
+    })
+    const valid = v2Harness({}, { authority_label: "Café 😀" })
+    await expect(authorizePreparedDisposableSandboxTaskV2({
+      intent: valid.intent,
+      prepared: valid.prepared,
+      authority_envelope_sha256: valid.authorityEnvelopeSha256,
+    }, dependencies(valid))).resolves.toMatchObject({ dispatch_id: valid.prepared.dispatch_id })
+    expect(valid.events).toEqual(["prepare", "consume", "bind"])
+
+    for (const invalid of [
+      v2Harness({}, { duplicate_authority_key: true }),
+      v2Harness({}, { authority_label: "e\u0301" }),
+    ]) {
+      await expect(authorizePreparedDisposableSandboxTaskV2({
+        intent: invalid.intent,
+        prepared: invalid.prepared,
+        authority_envelope_sha256: invalid.authorityEnvelopeSha256,
+      }, dependencies(invalid))).rejects.toMatchObject({ code: "integrity_failed" })
+      expect(invalid.events).toEqual(["prepare", "consume"])
+    }
   })
 
   test("replays stored authorization without consuming Infinity twice", async () => {

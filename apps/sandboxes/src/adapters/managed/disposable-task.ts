@@ -1927,6 +1927,203 @@ export async function prepareDisposableSandboxTaskIntentV2(
   return (await prepareIntentV2(intent, dependencies)).result.prepared
 }
 
+type InfinityJsonValueV2 = null | boolean | string | number | bigint |
+  InfinityJsonValueV2[] | { [key: string]: InfinityJsonValueV2 }
+
+function hasUnpairedSurrogateV2(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const unit = value.charCodeAt(index)
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1)
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true
+      index += 1
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      return true
+    }
+  }
+  return false
+}
+
+function infinityCanonicalJsonV2(value: InfinityJsonValueV2): string {
+  if (value === null) return "null"
+  if (typeof value === "boolean") return value ? "true" : "false"
+  if (typeof value === "string") {
+    if (value.normalize("NFC") !== value || hasUnpairedSurrogateV2(value)) throw adapterError("integrity_failed")
+    return JSON.stringify(value)
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || Object.is(value, -0) ||
+      (Number.isInteger(value) && !Number.isSafeInteger(value))) throw adapterError("integrity_failed")
+    return JSON.stringify(value)
+  }
+  if (typeof value === "bigint") return value.toString(10)
+  if (Array.isArray(value)) return `[${value.map((entry) => infinityCanonicalJsonV2(entry)).join(",")}]`
+  const entries = Object.keys(value).sort().map((key) => {
+    if (key.normalize("NFC") !== key || hasUnpairedSurrogateV2(key)) throw adapterError("integrity_failed")
+    return `${JSON.stringify(key)}:${infinityCanonicalJsonV2(value[key]!)}`
+  })
+  return `{${entries.join(",")}}`
+}
+
+class InfinityCanonicalJsonParserV2 {
+  #index = 0
+
+  constructor(readonly source: string) {}
+
+  parse(): InfinityJsonValueV2 {
+    this.#skipWhitespace()
+    const value = this.#parseValue()
+    this.#skipWhitespace()
+    if (this.#index !== this.source.length || infinityCanonicalJsonV2(value) !== this.source) {
+      throw adapterError("integrity_failed")
+    }
+    return value
+  }
+
+  #parseValue(): InfinityJsonValueV2 {
+    this.#skipWhitespace()
+    const character = this.source[this.#index]
+    if (character === "{") return this.#parseObject()
+    if (character === "[") return this.#parseArray()
+    if (character === '"') return this.#parseString()
+    if (character === "t") return this.#parseLiteral("true", true)
+    if (character === "f") return this.#parseLiteral("false", false)
+    if (character === "n") return this.#parseLiteral("null", null)
+    if (character === "-" || (character !== undefined && character >= "0" && character <= "9")) {
+      return this.#parseNumber()
+    }
+    throw adapterError("integrity_failed")
+  }
+
+  #parseObject(): { [key: string]: InfinityJsonValueV2 } {
+    this.#index += 1
+    const result = Object.create(null) as { [key: string]: InfinityJsonValueV2 }
+    const seen = new Set<string>()
+    this.#skipWhitespace()
+    if (this.source[this.#index] === "}") {
+      this.#index += 1
+      return result
+    }
+    while (true) {
+      this.#skipWhitespace()
+      if (this.source[this.#index] !== '"') throw adapterError("integrity_failed")
+      const key = this.#parseString()
+      if (seen.has(key)) throw adapterError("integrity_failed")
+      seen.add(key)
+      this.#skipWhitespace()
+      if (this.source[this.#index] !== ":") throw adapterError("integrity_failed")
+      this.#index += 1
+      Object.defineProperty(result, key, {
+        configurable: false,
+        enumerable: true,
+        value: this.#parseValue(),
+        writable: false,
+      })
+      this.#skipWhitespace()
+      const delimiter = this.source[this.#index]
+      if (delimiter === "}") {
+        this.#index += 1
+        return result
+      }
+      if (delimiter !== ",") throw adapterError("integrity_failed")
+      this.#index += 1
+    }
+  }
+
+  #parseArray(): InfinityJsonValueV2[] {
+    this.#index += 1
+    const result: InfinityJsonValueV2[] = []
+    this.#skipWhitespace()
+    if (this.source[this.#index] === "]") {
+      this.#index += 1
+      return result
+    }
+    while (true) {
+      result.push(this.#parseValue())
+      this.#skipWhitespace()
+      const delimiter = this.source[this.#index]
+      if (delimiter === "]") {
+        this.#index += 1
+        return result
+      }
+      if (delimiter !== ",") throw adapterError("integrity_failed")
+      this.#index += 1
+    }
+  }
+
+  #parseString(): string {
+    const start = this.#index
+    this.#index += 1
+    let escaped = false
+    while (this.#index < this.source.length) {
+      const character = this.source[this.#index]
+      if (escaped) {
+        escaped = false
+        this.#index += 1
+        continue
+      }
+      if (character === "\\") {
+        escaped = true
+        this.#index += 1
+        continue
+      }
+      if (character === '"') {
+        this.#index += 1
+        let value: unknown
+        try {
+          value = JSON.parse(this.source.slice(start, this.#index))
+        } catch {
+          throw adapterError("integrity_failed")
+        }
+        if (typeof value !== "string" || value.normalize("NFC") !== value || hasUnpairedSurrogateV2(value)) {
+          throw adapterError("integrity_failed")
+        }
+        return value
+      }
+      if (character !== undefined && character.charCodeAt(0) < 0x20) throw adapterError("integrity_failed")
+      this.#index += 1
+    }
+    throw adapterError("integrity_failed")
+  }
+
+  #parseNumber(): number | bigint {
+    const token = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/u.exec(this.source.slice(this.#index))?.[0]
+    if (token === undefined) throw adapterError("integrity_failed")
+    this.#index += token.length
+    if (!/[.eE]/u.test(token)) {
+      if (token === "-0") throw adapterError("integrity_failed")
+      const integer = BigInt(token)
+      if (integer >= BigInt(Number.MIN_SAFE_INTEGER) && integer <= BigInt(Number.MAX_SAFE_INTEGER)) {
+        return Number(integer)
+      }
+      return integer
+    }
+    const value = Number(token)
+    const significand = token.split(/[eE]/u, 1)[0] ?? token
+    if (!Number.isFinite(value) || Object.is(value, -0) ||
+      (value === 0 && /[1-9]/u.test(significand)) || JSON.stringify(value) !== token) {
+      throw adapterError("integrity_failed")
+    }
+    return value
+  }
+
+  #parseLiteral<T extends null | boolean>(token: string, value: T): T {
+    if (!this.source.startsWith(token, this.#index)) throw adapterError("integrity_failed")
+    this.#index += token.length
+    return value
+  }
+
+  #skipWhitespace(): void {
+    while (this.#index < this.source.length && /[\t\n\r ]/u.test(this.source[this.#index] ?? "")) {
+      this.#index += 1
+    }
+  }
+}
+
+function parseInfinityCanonicalJsonV2(source: string): InfinityJsonValueV2 {
+  return new InfinityCanonicalJsonParserV2(source).parse()
+}
+
 function parseAuthorizationBundleV2(
   value: DisposableTaskAuthorizationArtifactsV2,
   expected: DisposableTaskAuthorityConsumeInputV2,
@@ -1945,14 +2142,13 @@ function parseAuthorizationBundleV2(
   let text: string
   try {
     const authorityText = new TextDecoder("utf-8", { fatal: true }).decode(value.canonical_authority_envelope_bytes)
-    const authorityEnvelope = parseCanonicalJson(authorityText)
-    if (canonicalJson(authorityEnvelope) !== authorityText) throw adapterError("integrity_failed")
+    parseInfinityCanonicalJsonV2(authorityText)
     text = new TextDecoder("utf-8", { fatal: true }).decode(value.canonical_receipt_bytes)
-    receipt = parseCanonicalJson(text)
+    receipt = parseInfinityCanonicalJsonV2(text)
   } catch {
     throw adapterError("integrity_failed")
   }
-  if (!closedRecord(receipt, AUTHORIZATION_RECEIPT_V2_KEYS) || canonicalJson(receipt) !== text ||
+  if (!closedRecord(receipt, AUTHORIZATION_RECEIPT_V2_KEYS) ||
     receipt.schema_version !== DISPOSABLE_TASK_AUTHORIZATION_CONSUMPTION_SCHEMA_V2 ||
     AUTHORITY_CONSUME_V2_KEYS.some((key) => receipt[key] !== expected[key]) ||
     receipt.audience !== DISPOSABLE_TASK_PROVIDER_CONTACT_AUDIENCE_V2 ||
@@ -1976,7 +2172,9 @@ function parseAuthorizationBundleV2(
 }
 
 function authorizationExpiresAtV2(value: DisposableTaskAuthorizationArtifactsV2): number {
-  const receipt = parseCanonicalJson(new TextDecoder("utf-8", { fatal: true }).decode(value.canonical_receipt_bytes))
+  const receipt = parseInfinityCanonicalJsonV2(
+    new TextDecoder("utf-8", { fatal: true }).decode(value.canonical_receipt_bytes),
+  )
   if (!isPlainRecord(receipt) || typeof receipt.expires_at !== "string") throw adapterError("integrity_failed")
   return Date.parse(receipt.expires_at)
 }
