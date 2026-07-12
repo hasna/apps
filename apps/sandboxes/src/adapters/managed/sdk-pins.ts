@@ -115,6 +115,7 @@ export interface DaytonaCreateMappingInputV1 {
 export function buildDaytonaCreateParams(input: DaytonaCreateMappingInputV1): CreateSandboxFromImageParams {
   return {
     image: input.image,
+    user: "daytona",
     resources: input.resources,
     labels: creationLabels(input.labels, input.network_policy_sha256),
     envVars: {},

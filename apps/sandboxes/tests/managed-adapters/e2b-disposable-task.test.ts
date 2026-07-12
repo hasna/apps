@@ -4,8 +4,13 @@ import { canonicalSha256, parseCanonicalJson } from "../../src/adapters/managed/
 import {
   E2B_GUEST_BROKER_ARTIFACT_SHA256_V1,
   E2B_GUEST_BROKER_PROTOCOL_SHA256_V1,
+  e2bGuestBrokerBootstrapCommandV1,
   e2bGuestBrokerCheckpointHashesV1,
 } from "../../src/adapters/managed/e2b-guest-broker"
+import {
+  DaytonaMailboxBoundaryErrorV1,
+  E2bWorkspaceBootstrapBoundaryErrorV1,
+} from "../../src/adapters/managed/e2b-broker-artifact-control"
 import {
   __testOnlyCreateE2bDisposableSandboxTaskRunnerV1,
   __testOnlyCreateManagedDisposableSandboxTaskRunnerV1,
@@ -22,6 +27,11 @@ import {
   type DisposableSandboxTaskRequestV1,
 } from "../../src/adapters/managed/disposable-task"
 import type { AdapterProviderResourceV1, ProviderEffectTargetV1 } from "../../src/adapters/managed/types"
+import {
+  DAYTONA_EXECUTION_IDENTITY_ATTESTATION_COMMAND_V1,
+  DaytonaOfficialResourceAccessBridgeV1,
+  daytonaRoleCommandV1,
+} from "../../src/adapters/managed/daytona-disposable-task"
 
 const d = (value: string | Uint8Array) => `sha256:${createHash("sha256").update(value).digest("hex")}` as const
 
@@ -296,13 +306,17 @@ function make(mutation: WorkspaceMutation = "none") {
   return { events, control, handoff, runner }
 }
 
-function makeDaytona(mutation: WorkspaceMutation = "none") {
+function makeDaytona(
+  mutation: WorkspaceMutation = "none",
+  brokerFactory: (events: string[]) => E2bDisposableBrokerPortV1 =
+    (events) => broker(events, mutation),
+) {
   const events: string[] = []
   const control = new FakeControl(events)
   const handoff = new FakeHandoff(events)
   const runner = __testOnlyCreateManagedDisposableSandboxTaskRunnerV1({
     provider: "daytona_cloud",
-    control, checkpoint_handoff: handoff, broker: broker(events, mutation),
+    control, checkpoint_handoff: handoff, broker: brokerFactory(events),
     resource_access: { async withResource(_id, use) { events.push("with-resource"); return use({ files: {} as never, commands: {} as never }) } },
     template_mapping_attested: true,
     installation_id: "installation-v1", provider_scope_ref: "scope-v1", implementation_sha256: d("descendant-package"),
@@ -489,6 +503,137 @@ describe("E2B disposable task candidate", () => {
 })
 
 describe("Daytona disposable task candidate", () => {
+  test("maps Daytona directory metadata to the exact workspace control type", async () => {
+    const commands: string[] = []
+    const sdkCwds: Array<string | undefined> = []
+    const brokerOutput: string[] = []
+    const sessions: string[] = []
+    const sessionCommands: string[] = []
+    const uploads: Uint8Array[] = []
+    const uploadReferences: Uint8Array[] = []
+    const mailboxFiles = new Map<string, Buffer>()
+    let deletedSessions = 0
+    const bridge = new DaytonaOfficialResourceAccessBridgeV1({
+      async get() {
+        return {
+          id: "daytona-directory-mapping",
+          fs: {
+            async uploadFile(value: Uint8Array, path: string) {
+              uploadReferences.push(value)
+              uploads.push(Uint8Array.from(value))
+              if (path.includes("/request-")) {
+                mailboxFiles.set(path.replace("/request-", "/response-"), Buffer.from('{"schema_version":"test"}\n'))
+              } else if (path.includes("/close-")) {
+                mailboxFiles.set(path.replace("/close-", "/closed-"), Buffer.from("sandboxes.daytona-mailbox/v1 closed=true\n"))
+              }
+            },
+            async downloadFile(path: string) { return Buffer.from(mailboxFiles.get(path)!) },
+            async deleteFile(path: string) { mailboxFiles.delete(path) },
+            async getFileDetails(path: string) {
+              const mailbox = mailboxFiles.get(path)
+              if (mailbox !== undefined) {
+                return {
+                  name: path.split("/").at(-1)!, isDir: false, mode: "-rw-------",
+                  permissions: "0600", owner: "daytona", group: "daytona", size: mailbox.byteLength,
+                }
+              }
+              if (path.startsWith("/tmp/.hasna-daytona-upload-v1/")) {
+                throw Object.assign(new Error("not found"), { statusCode: 404 })
+              }
+              return path === "/workspace"
+                ? {
+                    name: "workspace", isDir: true, mode: "drwx------", permissions: "0700",
+                    owner: "65534", group: "65534", size: 4096,
+                  }
+                : {
+                    name: "sandboxes-broker-v1", isDir: false, mode: "-r-x------", permissions: "0500",
+                    owner: "0", group: "0", size: 65_714,
+                  }
+            },
+          },
+          process: {
+            async executeCommand(command: string, cwd?: string) {
+              commands.push(command)
+              sdkCwds.push(cwd)
+              if (command.includes("sandboxes.daytona-account/v1")) {
+                return {
+                  exitCode: 0,
+                  result: "sandboxes.daytona-account/v1 uid=1000 gid=1000\n",
+                }
+              }
+              return { exitCode: 0, result: "" }
+            },
+            async createSession(value: string) { sessions.push(value) },
+            async executeSessionCommand(_sessionId: string, value: { command: string }) {
+              sessionCommands.push(value.command)
+              return { cmdId: "mailbox-command-v1", stdout: "", stderr: "" }
+            },
+            async getSessionCommand() { return { exitCode: 0 } },
+            async deleteSession() { deletedSessions += 1 },
+          },
+        } as never
+      },
+    })
+    const info = await bridge.withResource("daytona-directory-mapping", async (surface) => {
+      const value = await surface.files.getInfo("/workspace", {
+        requestTimeoutMs: 20_000,
+        user: "root",
+      })
+      const artifact = await surface.files.getInfo("/opt/hasna/bin/sandboxes-broker-v1", {
+        requestTimeoutMs: 20_000,
+        user: "root",
+      })
+      expect(artifact).toMatchObject({ mode: 0o500, owner: "root", group: "root" })
+      await surface.commands.run("/usr/bin/true", {
+        background: false, cwd: "/", envs: {}, requestTimeoutMs: 20_000,
+        timeoutMs: 20_000, user: "root",
+      })
+      await surface.commands.run("/usr/bin/true", {
+        background: false, cwd: "/workspace", envs: {}, requestTimeoutMs: 20_000,
+        timeoutMs: 20_000, user: "user",
+      })
+      const background = await surface.commands.run(e2bGuestBrokerBootstrapCommandV1(), {
+        background: true, cwd: "/workspace", envs: {}, requestTimeoutMs: 20_000,
+        timeoutMs: 20_000, user: "root", stdin: true,
+        onStdout(value: string) { brokerOutput.push(value) }, onStderr() {},
+      } as never) as unknown as {
+        sendStdin(value: Uint8Array): Promise<void>
+        closeStdin(): Promise<void>
+        wait(): Promise<{ exitCode: number }>
+        disconnect(): Promise<void>
+      }
+      await background.sendStdin(new Uint8Array(72).fill(0xa5))
+      await background.closeStdin()
+      expect((await background.wait()).exitCode).toBe(0)
+      await background.disconnect()
+      return value
+    })
+    expect(commands.slice(0, 4)).toEqual([
+      DAYTONA_EXECUTION_IDENTITY_ATTESTATION_COMMAND_V1,
+      expect.stringContaining("sandboxes.daytona-account/v1"),
+      daytonaRoleCommandV1("/usr/bin/true", "root"),
+      daytonaRoleCommandV1("/usr/bin/true", "user", "/workspace"),
+    ])
+    expect(commands).toHaveLength(5)
+    expect(commands[4]).toContain("sandboxes.daytona-mailbox/v1 ready=true")
+    expect(sdkCwds).toEqual(["/", "/", "/", "/", "/"])
+    expect(sessions).toEqual(["hasna-sandboxes-mailbox-v1"])
+    expect(sessionCommands).toHaveLength(1)
+    expect(sessionCommands[0]).toContain("/opt/hasna/bin/daytona-broker-v1")
+    expect(sessionCommands[0]).toContain("/proc/self/fd/%d")
+    expect(sessionCommands[0]).toContain("os.O_NOFOLLOW")
+    expect(uploads[0]).toEqual(new Uint8Array(72).fill(0xa5))
+    expect(new TextDecoder().decode(uploads[1])).toBe("sandboxes.daytona-mailbox/v1 close=true\n")
+    expect(uploadReferences[0]).toEqual(new Uint8Array(72))
+    expect(uploadReferences[1]).toEqual(new Uint8Array(Buffer.byteLength("sandboxes.daytona-mailbox/v1 close=true\n")))
+    expect(brokerOutput).toEqual(['{"schema_version":"test"}\n'])
+    expect(deletedSessions).toBe(0)
+    expect(info).toMatchObject({
+      path: "/workspace", name: "workspace", type: "dir", mode: 0o700,
+      owner: "nobody", group: "nogroup",
+    })
+  })
+
   test("preserves exact D/I/E/P bindings through checkpoint handoff and dual absence", async () => {
     const { events, control, handoff, runner } = makeDaytona()
     const result = await runner.run(request({}, "daytona_cloud"), context(events))
@@ -506,5 +651,70 @@ describe("Daytona disposable task candidate", () => {
     expect(handoff.calls).toBe(1)
     expect(events.indexOf("handoff")).toBeLessThan(events.indexOf("destroy"))
     expect(JSON.stringify(result)).not.toContain("raw-provider-id")
+  })
+
+  test("preserves only a bounded guest failure phase and safe cause code after cleanup", async () => {
+    const providerDiagnostic = "provider-secret-workspace-diagnostic"
+    const { control, runner } = makeDaytona("none", (events) => ({
+      ...broker(events, "none"),
+      async install() {
+        const unsafe = new E2bWorkspaceBootstrapBoundaryErrorV1(
+          "integrity_failed",
+          "workspace_provision",
+        )
+        Object.defineProperty(unsafe, "provider_detail", {
+          enumerable: true,
+          value: providerDiagnostic,
+        })
+        throw unsafe
+      },
+    }))
+    let failure: unknown
+    try {
+      await runner.run(request({}, "daytona_cloud"), context([]))
+    } catch (cause) {
+      failure = cause
+    }
+    expect(failure).toMatchObject({
+      code: "provider_state_unknown",
+      quarantine_required: true,
+      phase: "workspace_provision",
+      safe_cause_code: "integrity_failed",
+    })
+    expect(JSON.stringify(failure)).not.toContain(providerDiagnostic)
+    expect((failure as Error).cause).toBeUndefined()
+    expect(control.destroyCalls).toBe(1)
+    expect(control.alive).toBe(false)
+  })
+
+  test("preserves a sanitized mailbox phase through exact cleanup", async () => {
+    const providerDiagnostic = "provider-secret-mailbox-diagnostic"
+    const { control, runner } = makeDaytona("none", (events) => ({
+      ...broker(events, "none"),
+      async withSession() {
+        const unsafe = new DaytonaMailboxBoundaryErrorV1("mailbox_exchange")
+        Object.defineProperty(unsafe, "provider_detail", {
+          enumerable: true,
+          value: providerDiagnostic,
+        })
+        throw unsafe
+      },
+    }))
+    let failure: unknown
+    try {
+      await runner.run(request({}, "daytona_cloud"), context([]))
+    } catch (cause) {
+      failure = cause
+    }
+    expect(failure).toMatchObject({
+      code: "provider_state_unknown",
+      quarantine_required: true,
+      phase: "mailbox_exchange",
+      safe_cause_code: "integrity_failed",
+    })
+    expect(JSON.stringify(failure)).not.toContain(providerDiagnostic)
+    expect((failure as Error).cause).toBeUndefined()
+    expect(control.destroyCalls).toBe(1)
+    expect(control.alive).toBe(false)
   })
 })

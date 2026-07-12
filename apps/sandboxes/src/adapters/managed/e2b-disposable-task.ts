@@ -11,10 +11,15 @@ import {
   type E2bGuestBrokerAuthenticatedLineExchangePortV1,
 } from "./e2b-guest-broker"
 import {
+  E2bWorkspaceBootstrapBoundaryErrorV1,
+  DaytonaMailboxBoundaryErrorV1,
+  installExactDaytonaGuestBrokerArtifactV1,
   installExactE2bGuestBrokerArtifactV1,
   type E2bGuestBrokerArtifactAttestationV1,
   type E2bGuestBrokerArtifactControlPortV1,
   type E2bSandboxDestroyAndProveAbsentPortV1,
+  type E2bWorkspaceBootstrapPhaseV1,
+  type DaytonaMailboxBoundaryPhaseV1,
 } from "./e2b-broker-artifact-control"
 import {
   withAuthenticatedE2bGuestBrokerDuplexSdkSession,
@@ -59,6 +64,47 @@ const SESSION_LIMITS: E2bGuestBrokerDuplexLimitsV1 = Object.freeze({
   max_response_frames: 64,
   max_response_bytes: 1024 * 1024,
 })
+
+export type ManagedDisposableTaskFailurePhaseV1 =
+  | "create_inert"
+  | "mark_dispatched"
+  | "activate"
+  | "resource_access"
+  | "cleanup"
+  | E2bWorkspaceBootstrapPhaseV1
+  | DaytonaMailboxBoundaryPhaseV1
+
+/** Bounded failure evidence. It never retains the provider error object or text. */
+export class ManagedDisposableTaskBoundaryErrorV1 extends AdapterContractError {
+  constructor(
+    readonly phase: ManagedDisposableTaskFailurePhaseV1,
+    readonly safe_cause_code: AdapterContractError["code"],
+  ) {
+    super("provider_state_unknown", { quarantineRequired: true })
+  }
+
+  override toJSON(): Record<string, unknown> {
+    return {
+      ...super.toJSON(),
+      phase: this.phase,
+      safe_cause_code: this.safe_cause_code,
+    }
+  }
+}
+
+function disposableTaskBoundaryError(
+  phase: ManagedDisposableTaskFailurePhaseV1,
+  failure?: unknown,
+): ManagedDisposableTaskBoundaryErrorV1 {
+  if (failure instanceof E2bWorkspaceBootstrapBoundaryErrorV1 ||
+    failure instanceof DaytonaMailboxBoundaryErrorV1) {
+    return new ManagedDisposableTaskBoundaryErrorV1(failure.phase, failure.code)
+  }
+  return new ManagedDisposableTaskBoundaryErrorV1(
+    phase,
+    failure instanceof AdapterContractError ? failure.code : "provider_state_unknown",
+  )
+}
 
 export interface E2bDisposableResourceSurfaceV1 {
   files: E2bGuestBrokerArtifactControlPortV1["files"]
@@ -490,6 +536,17 @@ const productionBroker: E2bDisposableBrokerPortV1 = Object.freeze({
   exchange: exchangeE2bGuestBrokerRequestV1,
 })
 
+const daytonaProductionBroker: E2bDisposableBrokerPortV1 = Object.freeze({
+  ...productionBroker,
+  install(
+    control: E2bGuestBrokerArtifactControlPortV1,
+    artifact: Uint8Array,
+    requestTimeoutMs: number,
+  ) {
+    return installExactDaytonaGuestBrokerArtifactV1(control, artifact, requestTimeoutMs)
+  },
+})
+
 class E2bDisposableTaskRunner implements DisposableSandboxTaskRunnerV1 {
   readonly provider: ManagedProviderIdV1
   constructor(
@@ -526,6 +583,8 @@ class E2bDisposableTaskRunner implements DisposableSandboxTaskRunnerV1 {
       providerOwnershipBindingSha256(this.provider, context),
     )
     let failure: unknown
+    let failurePhase: ManagedDisposableTaskFailurePhaseV1 = "create_inert"
+    let cleanupFailure: unknown
     let resource: AdapterProviderResourceV1 | undefined
     let preCleanup: Omit<DisposableSandboxTaskExecutionReceiptCoreV1,
       "schema_version" | "allocation_count" | "destroy_execution_count" | "get_absent" | "list_absent" | "deletion_proven" | "absence_evidence_sha256"> | undefined
@@ -542,7 +601,9 @@ class E2bDisposableTaskRunner implements DisposableSandboxTaskRunnerV1 {
       }
       const providerFingerprint = destruction.providerFingerprint
       if (providerFingerprint === undefined) throw adapterError("integrity_failed")
+      failurePhase = "mark_dispatched"
       await context.markDispatched(providerFingerprint)
+      failurePhase = "activate"
       const activated = await this.config.control.activateResource(
         resource.opaque_resource_id,
         target(request, context, "activate"),
@@ -556,6 +617,7 @@ class E2bDisposableTaskRunner implements DisposableSandboxTaskRunnerV1 {
         !activated.network_policy.dns_denied) {
         throw adapterError("provider_state_unknown", { quarantineRequired: true })
       }
+      failurePhase = "resource_access"
       preCleanup = await this.config.resource_access.withResource(resource.opaque_resource_id, (surface) =>
         this.#executeGuest(request, context, requestSha256, providerFingerprint, surface, destruction))
     } catch (cause) {
@@ -564,13 +626,15 @@ class E2bDisposableTaskRunner implements DisposableSandboxTaskRunnerV1 {
       try {
         await destruction.destroyAndProveAbsent()
       } catch (cleanupCause) {
-        failure ??= cleanupCause
+        cleanupFailure = cleanupCause
       }
     }
-    if (failure !== undefined || preCleanup === undefined || destruction.runs !== 1 ||
+    if (cleanupFailure !== undefined || destruction.runs !== 1 ||
       !destruction.getAbsent || !destruction.listAbsent) {
-      throw adapterError("provider_state_unknown", { quarantineRequired: true })
+      throw disposableTaskBoundaryError("cleanup", cleanupFailure)
     }
+    if (failure !== undefined) throw disposableTaskBoundaryError(failurePhase, failure)
+    if (preCleanup === undefined) throw disposableTaskBoundaryError("resource_access")
     const core: DisposableSandboxTaskExecutionReceiptCoreV1 = {
       schema_version: DISPOSABLE_SANDBOX_TASK_EXECUTION_RECEIPT_SCHEMA_V1,
       ...preCleanup,
@@ -1051,7 +1115,7 @@ export function createManagedDisposableSandboxTaskRunnerCandidateV1(
 ): DisposableSandboxTaskRunnerV1 {
   return new E2bDisposableTaskRunner(
     config,
-    productionBroker,
+    config.provider === "daytona_cloud" ? daytonaProductionBroker : productionBroker,
     (length) => new Uint8Array(randomBytes(length)),
   )
 }

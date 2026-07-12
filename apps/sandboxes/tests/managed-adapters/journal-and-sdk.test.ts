@@ -2831,6 +2831,7 @@ describe("official SDK pin mappings", () => {
     })
 
     expect(params.envVars).toEqual({})
+    expect(params.user).toBe("daytona")
     expect(params.public).toBe(false)
     expect(params.ephemeral).toBe(false)
     expect(params.autoDeleteInterval).toBe(-1)
@@ -3070,6 +3071,7 @@ describe("official SDK read-only control bridges", () => {
       organizationId: "organization-1",
       labels: labels(),
       state: "stopped",
+      user: "daytona",
       public: false,
       networkBlockAll: true,
       autoDeleteInterval: -1,
@@ -3159,6 +3161,7 @@ describe("official SDK read-only control bridges", () => {
           organizationId: "organization-1",
           labels: params.labels,
           state: "started",
+          user: "daytona",
           public: params.public,
           networkBlockAll: params.networkBlockAll,
           autoDeleteInterval: params.autoDeleteInterval,
@@ -3730,6 +3733,7 @@ describe("official SDK read-only control bridges", () => {
       organizationId: "organization-a",
       labels: labels(),
       state: "stopped",
+      user: "daytona",
       public: false,
       networkBlockAll: true,
       autoDeleteInterval: -1,
@@ -3783,6 +3787,7 @@ describe("official SDK read-only control bridges", () => {
       organizationId: "organization-a",
       labels: originalLabels,
       state: "stopped" as string,
+      user: "daytona",
       public: false,
       networkBlockAll: true,
       autoDeleteInterval: -1,
@@ -3805,6 +3810,7 @@ describe("official SDK read-only control bridges", () => {
           "hasna.immutable_fingerprint_sha256": digest("e4"),
         }
         sandbox.state = "started"
+        sandbox.user = "root"
         sandbox.public = true
         sandbox.networkBlockAll = false
         sandbox.autoDeleteInterval = 0
@@ -3911,6 +3917,7 @@ describe("official SDK read-only control bridges", () => {
             organizationId: "organization-a",
             labels: labels(),
             state: "stopped",
+            user: "daytona",
             public: false,
             networkBlockAll: true,
             autoDeleteInterval: -1,
@@ -3947,6 +3954,7 @@ describe("official SDK read-only control bridges", () => {
       organizationId: "organization-a",
       labels: sandboxLabels,
       state: "stopped",
+      user: "daytona",
       public: false,
       networkBlockAll: true,
       autoDeleteInterval: -1,
@@ -4007,6 +4015,7 @@ describe("official SDK read-only control bridges", () => {
       organizationId: "organization-a",
       labels: labels(),
       state: "stopped",
+      user: "daytona",
       public: false,
       networkBlockAll: true,
       autoDeleteInterval: -1,
@@ -4099,6 +4108,7 @@ describe("official SDK read-only control bridges", () => {
         Object.assign(sparse, {
           organizationId: "organization-a",
           state: "stopped",
+          user: "daytona",
           public: false,
           networkBlockAll: true,
           autoDeleteInterval: -1,
@@ -4157,6 +4167,7 @@ describe("official SDK read-only control bridges", () => {
         organizationId: "organization-a",
         labels: labels(),
         state: "stopped",
+        user: "daytona",
         public: false,
         networkBlockAll: true,
         autoDeleteInterval: -1,
@@ -4359,6 +4370,7 @@ describe("official SDK read-only control bridges", () => {
       organizationId: "organization-a",
       labels: labels(),
       state: "stopped",
+      user: "daytona",
       public: false,
       networkBlockAll: true,
       autoDeleteInterval: -1,
@@ -4493,6 +4505,7 @@ describe("official SDK read-only control bridges", () => {
             organizationId: "organization-a",
             labels: labels(),
             state: "stopped",
+            user: "daytona",
             public: false,
             networkBlockAll: true,
             autoDeleteInterval: -1,

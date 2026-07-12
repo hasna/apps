@@ -641,6 +641,7 @@ interface DaytonaSandboxSnapshotV1 {
   organizationId: string
   public: boolean
   state: string | undefined
+  user: string
   volumeCount: number
 }
 
@@ -648,6 +649,7 @@ const DAYTONA_SNAPSHOT_OWN_FIELDS = Object.freeze([
   "id",
   "organizationId",
   "state",
+  "user",
   "public",
   "networkBlockAll",
   "autoDeleteInterval",
@@ -682,6 +684,7 @@ function snapshotDaytonaSandbox(
     const id = snapshotDaytonaOwnDataValue(sandbox, "id")
     const organizationId = snapshotDaytonaOwnDataValue(sandbox, "organizationId")
     const state = snapshotDaytonaOwnDataValue(sandbox, "state")
+    const user = snapshotDaytonaOwnDataValue(sandbox, "user")
     const isPublic = snapshotDaytonaOwnDataValue(sandbox, "public")
     const networkBlockAll = snapshotDaytonaOwnDataValue(sandbox, "networkBlockAll")
     const autoDeleteInterval = snapshotDaytonaOwnDataValue(sandbox, "autoDeleteInterval")
@@ -694,6 +697,8 @@ function snapshotDaytonaSandbox(
       typeof organizationId !== "string" ||
       organizationId.length === 0 ||
       (state !== undefined && typeof state !== "string") ||
+      typeof user !== "string" ||
+      user.length === 0 ||
       typeof isPublic !== "boolean" ||
       (networkBlockAll !== undefined && typeof networkBlockAll !== "boolean") ||
       (autoDeleteInterval !== undefined &&
@@ -719,6 +724,7 @@ function snapshotDaytonaSandbox(
       organizationId,
       public: isPublic,
       state,
+      user,
       volumeCount: volumes?.length ?? 0,
     })
   } catch (cause) {
@@ -2133,6 +2139,7 @@ export class DaytonaOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkContro
   }
 
   async #mapSnapshot(snapshot: DaytonaSandboxSnapshotV1): Promise<AdapterProviderResourceV1> {
+    if (snapshot.user !== "daytona") throw adapterError("integrity_failed")
     const observedAt = observationTime(this.#observedAt)
     const fingerprint = label(snapshot.labels, "hasna.immutable_fingerprint_sha256")
     const attestation = snapshotAttestation(await this.#attestation.attest({
