@@ -161,6 +161,7 @@ const E2B_TEMPLATE_MAPPING_LABEL_KEYS = Object.freeze([
   "hasna.e2b_template_id",
   "hasna.e2b_template_mapping_version",
   "hasna.e2b_template_mapping_sha256",
+  "hasna.e2b_max_runtime_ms",
 ] as const)
 
 function snapshotManagedResourceLabels(
@@ -459,6 +460,7 @@ interface E2bSandboxInfoSnapshotV1 {
   endAt: string
   lifecycleAutoResume: boolean | undefined
   lifecycleOnTimeout: "pause" | "kill" | undefined
+  maxRuntimeMs: number | undefined
   metadata: Readonly<Record<string, string>>
   networkDenyAll: boolean
   networkDenyOut: readonly string[]
@@ -560,6 +562,7 @@ function snapshotE2bSandboxInfo(
     const metadataTemplateId = metadata["hasna.e2b_template_id"]
     const templateMappingVersion = metadata["hasna.e2b_template_mapping_version"]
     const templateMappingSha256 = metadata["hasna.e2b_template_mapping_sha256"]
+    const maxRuntimeMsText = metadata["hasna.e2b_max_runtime_ms"]
     const mappingFieldCount = [
       metadataTemplateId,
       templateMappingVersion,
@@ -573,6 +576,14 @@ function snapshotE2bSandboxInfo(
           !safeProviderString(templateMappingVersion) ||
           !isDigest(templateMappingSha256)))
     )) {
+      throw adapterError("integrity_failed")
+    }
+    const maxRuntimeMs = maxRuntimeMsText === undefined ? undefined : Number(maxRuntimeMsText)
+    if (maxRuntimeMsText !== undefined &&
+      (typeof maxRuntimeMsText !== "string" || !/^[1-9][0-9]{0,6}$/u.test(maxRuntimeMsText) ||
+        maxRuntimeMs === undefined || !Number.isSafeInteger(maxRuntimeMs) ||
+        maxRuntimeMs < 1 || maxRuntimeMs > 3_600_000 ||
+        String(maxRuntimeMs) !== maxRuntimeMsText)) {
       throw adapterError("integrity_failed")
     }
 
@@ -593,6 +604,7 @@ function snapshotE2bSandboxInfo(
       endAt,
       lifecycleAutoResume: lifecycleAutoResume as boolean | undefined,
       lifecycleOnTimeout: lifecycleOnTimeout as "pause" | "kill" | undefined,
+      maxRuntimeMs,
       metadata,
       memoryMB: root.memoryMB as number,
       networkDenyAll,
@@ -1372,6 +1384,7 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
       ...identity,
       template_mapping_version: snapshot.templateMappingVersion,
       template_mapping_sha256: snapshot.templateMappingSha256,
+      configured_max_runtime_ms: snapshot.maxRuntimeMs,
     })
   }
 
@@ -1631,6 +1644,7 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
       before.templateId !== mapping.template_id ||
       before.templateMappingVersion !== mapping.mapping_version ||
       before.templateMappingSha256 !== mapping.mapping_sha256 ||
+      before.maxRuntimeMs !== request.maxRuntimeMs ||
       label(before.metadata, "hasna.network_policy_sha256") !== request.networkPolicySha256 ||
       before.cpuCount * 1_000 > request.cpuMillis ||
       before.memoryMB * 1024 * 1024 > request.memoryBytes
@@ -1674,6 +1688,7 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
       before.templateId !== mapping.template_id ||
       before.templateMappingVersion !== mapping.mapping_version ||
       before.templateMappingSha256 !== mapping.mapping_sha256 ||
+      before.maxRuntimeMs !== request.maxRuntimeMs ||
       label(before.metadata, "hasna.network_policy_sha256") !== request.networkPolicySha256 ||
       before.cpuCount * 1_000 > request.cpuMillis ||
       before.memoryMB * 1024 * 1024 > request.memoryBytes
@@ -1821,15 +1836,16 @@ export class E2bOfficialSdkControlBridgeV1 extends ReadOnlyOfficialSdkControlBri
     if (before.state === "running") return this.#mapSnapshot(before)
     if (this.#connect === undefined) throw adapterError("unsupported_runtime_feature")
 
-    const remainingMs = Date.parse(before.endAt) - Date.parse(observationTime(this.#observedAt))
-    if (!Number.isSafeInteger(remainingMs) || remainingMs <= 0) {
+    const activationTimeoutMs = before.maxRuntimeMs
+    if (activationTimeoutMs === undefined || !Number.isSafeInteger(activationTimeoutMs) ||
+      activationTimeoutMs < 1 || activationTimeoutMs > 3_600_000) {
       throw adapterError("provider_state_unknown", { quarantineRequired: true })
     }
     let connectFailure: unknown
     try {
       const connected = await Reflect.apply(this.#connect, this.#sdk, [
         opaqueResourceId,
-        { timeoutMs: remainingMs },
+        { timeoutMs: activationTimeoutMs },
       ])
       if (snapshotE2bCreatedSandboxId(connected) !== opaqueResourceId) {
         throw adapterError("integrity_failed")

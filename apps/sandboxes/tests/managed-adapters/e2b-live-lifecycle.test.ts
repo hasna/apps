@@ -113,6 +113,7 @@ function safeInfo(request = createRequest()) {
       "hasna.e2b_template_id": mapping.template_id,
       "hasna.e2b_template_mapping_version": mapping.mapping_version,
       "hasna.e2b_template_mapping_sha256": mapping.mapping_sha256,
+      "hasna.e2b_max_runtime_ms": String(request.spec.max_runtime_ms),
     },
     startedAt: new Date("2026-07-10T10:00:04.000Z"),
     endAt: new Date(request.spec.expires_at),
@@ -262,6 +263,7 @@ describe("E2B 2.31.0 credential-bound lifecycle mapping", () => {
         "hasna.e2b_template_mapping_sha256": reviewedMapping(
           request.spec.environment.image_or_snapshot_sha256,
         ).mapping_sha256,
+        "hasna.e2b_max_runtime_ms": String(request.spec.max_runtime_ms),
       },
       envs: {},
       timeoutMs: 60_000,
@@ -301,6 +303,7 @@ describe("E2B 2.31.0 credential-bound lifecycle mapping", () => {
       ).mapping_sha256,
       observed_cpu_millis: 1_000,
       observed_memory_bytes: 2_147_483_648,
+      configured_max_runtime_ms: 60_000,
     }))
     expect(bridge.capabilities).toMatchObject({
       create_stopped: true,
@@ -368,6 +371,9 @@ describe("E2B 2.31.0 credential-bound lifecycle mapping", () => {
       },
       (info: FakeInfo) => {
         info.metadata["hasna.e2b_template_mapping_version"] = "changed-version"
+      },
+      (info: FakeInfo) => {
+        info.metadata["hasna.e2b_max_runtime_ms"] = "60001"
       },
     ]
 
@@ -488,13 +494,16 @@ describe("E2B 2.31.0 credential-bound lifecycle mapping", () => {
       ).mapping_sha256,
       observed_cpu_millis: 2_000,
       observed_memory_bytes: 4_294_967_296,
+      configured_max_runtime_ms: 60_000,
     }))
   })
 
-  test("resumes with only the observed remaining TTL and pauses without preserving processes", async () => {
+  test("resumes a paused sandbox with the exact metadata-bound runtime and never trusts stale endAt", async () => {
     const request = createRequest()
     const { bridge, state } = lifecycleHarness(request)
     const created = await bridge.createInert(request)
+    if (state.info === "absent") throw new Error("expected live fake resource")
+    state.info.endAt = new Date("2026-07-10T10:00:03.000Z")
 
     const active = await bridge.activateResource(created.opaque_resource_id, request.target)
     expect(state.connectOptions).toEqual({ timeoutMs: 60_000 })
