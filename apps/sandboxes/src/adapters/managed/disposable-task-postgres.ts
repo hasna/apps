@@ -33,6 +33,7 @@ import {
   DISPOSABLE_TASK_PREPARED_SCHEMA_V2,
   disposableSandboxTaskIntentSha256V2,
   disposableTaskCheckpointPolicySha256,
+  parseInfinityCanonicalJsonV2,
   parseDisposableSandboxTaskExecutionReceiptV1,
   parseDisposableSandboxTaskRequestV1,
 } from "./disposable-task"
@@ -362,6 +363,15 @@ function parseCanonicalBytes(value: Uint8Array): unknown {
     const parsed = parseCanonicalJson(text)
     if (!byteEqual(canonicalBytes(parsed), value)) throw adapterError("integrity_failed")
     return parsed
+  } catch {
+    throw adapterError("integrity_failed")
+  }
+}
+
+function parseInfinityCanonicalBytesV2(value: Uint8Array): unknown {
+  if (value.byteLength === 0 || value.byteLength > MAX_CANONICAL_BYTES) throw adapterError("integrity_failed")
+  try {
+    return parseInfinityCanonicalJsonV2(new TextDecoder("utf-8", { fatal: true }).decode(value))
   } catch {
     throw adapterError("integrity_failed")
   }
@@ -1238,7 +1248,9 @@ export class PostgresDisposableTaskJournalV1 implements DisposableTaskJournalPor
     const consumeBytes = asBytes(input.canonical_consume_input_bytes)
     const envelopeBytes = asBytes(input.authorization.canonical_authority_envelope_bytes)
     const receiptBytes = asBytes(input.authorization.canonical_receipt_bytes)
-    for (const artifact of [consumeBytes, envelopeBytes, receiptBytes]) parseCanonicalBytes(artifact)
+    parseCanonicalBytes(consumeBytes)
+    parseInfinityCanonicalBytesV2(envelopeBytes)
+    parseInfinityCanonicalBytesV2(receiptBytes)
     if (digestBytes(consumeBytes) !== input.consume_input_sha256 ||
       digestBytes(envelopeBytes) !== input.authorization.authority_envelope_sha256 ||
       digestBytes(receiptBytes) !== input.authorization.receipt_sha256) throw adapterError("integrity_failed")
@@ -2631,8 +2643,8 @@ export class PostgresDisposableTaskJournalV1 implements DisposableTaskJournalPor
     }
     const envelopeBytes = asBytes(row.canonical_authority_envelope_bytes)
     const receiptBytes = asBytes(row.canonical_authorization_receipt_bytes)
-    parseCanonicalBytes(envelopeBytes)
-    parseCanonicalBytes(receiptBytes)
+    parseInfinityCanonicalBytesV2(envelopeBytes)
+    parseInfinityCanonicalBytesV2(receiptBytes)
     if (digestBytes(envelopeBytes) !== row.authority_envelope_sha256 ||
       digestBytes(receiptBytes) !== row.authorization_consumption_receipt_sha256) {
       throw adapterError("integrity_failed")

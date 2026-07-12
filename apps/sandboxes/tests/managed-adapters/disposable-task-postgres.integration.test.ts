@@ -32,6 +32,15 @@ import {
 import type { Digest } from "../../src/adapters/managed/types"
 import type { PostgresClientV1, PostgresSessionV1 } from "../../src/repository-postgres"
 
+function infinityCanonicalJson(value: unknown): string {
+  if (value === null || typeof value === "boolean" || typeof value === "string") return JSON.stringify(value)
+  if (typeof value === "number") return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(infinityCanonicalJson).join(",")}]`
+  if (typeof value !== "object") throw new TypeError("invalid Infinity JSON fixture")
+  return `{${Object.keys(value).sort().map((key) =>
+    `${JSON.stringify(key)}:${infinityCanonicalJson((value as Record<string, unknown>)[key])}`).join(",")}}`
+}
+
 function required(name: string): string {
   const value = process.env[name]
   if (value === undefined || value.length === 0) throw new Error(`${name} is required`)
@@ -522,7 +531,7 @@ test.skipIf(!POSTGRES_ENABLED)("real PostgreSQL disposable journal is fenced, du
     expect(v2Takeover.claim_fence_sha256).not.toBe(v2Prepared.claim_fence_sha256)
     expect(v2Takeover.ownership_nonce_sha256).not.toBe(v2Prepared.ownership_nonce_sha256)
 
-    const authorityEnvelopeBytes = new TextEncoder().encode(canonicalJson({
+    const authorityEnvelopeBytes = new TextEncoder().encode(infinityCanonicalJson({
       schema_version: "infinity.sandbox-dispatch-authorization/v2",
       dispatch_id: v2Takeover.dispatch_id,
       canonical_intent_sha256: v2Takeover.canonical_intent_sha256,
@@ -541,7 +550,7 @@ test.skipIf(!POSTGRES_ENABLED)("real PostgreSQL disposable journal is fenced, du
       effect_claim_sha256: v2Takeover.effect_claim_sha256,
     }
     const consumeInputBytes = new TextEncoder().encode(canonicalJson(consumeInput))
-    const receiptBytes = new TextEncoder().encode(canonicalJson({
+    const receiptBytes = new TextEncoder().encode(infinityCanonicalJson({
       schema_version: "sandboxes.disposable-task-authorization-consumption/v2",
       ...consumeInput,
       authority_epoch: "1",
@@ -596,8 +605,8 @@ test.skipIf(!POSTGRES_ENABLED)("real PostgreSQL disposable journal is fenced, du
       ...v2BindInput,
       authorization: {
         ...v2BindInput.authorization,
-        canonical_authority_envelope_bytes: new TextEncoder().encode(canonicalJson({ changed: true })),
-        authority_envelope_sha256: d(new TextEncoder().encode(canonicalJson({ changed: true }))),
+        canonical_authority_envelope_bytes: new TextEncoder().encode(infinityCanonicalJson({ changed: true })),
+        authority_envelope_sha256: d(new TextEncoder().encode(infinityCanonicalJson({ changed: true }))),
       },
     })).rejects.toBeDefined()
     const storedV2 = await migration.query<Record<string, unknown>>(
@@ -716,7 +725,7 @@ test.skipIf(!POSTGRES_ENABLED)("real PostgreSQL disposable journal is fenced, du
     expect(nonreuseA.dispatch_id).not.toBe(nonreuseB.dispatch_id)
     expect(nonreuseA.effect_claim_sha256).not.toBe(nonreuseB.effect_claim_sha256)
     expect(nonreuseA.sandbox_prepare_anchor_sha256).not.toBe(nonreuseB.sandbox_prepare_anchor_sha256)
-    const nonreuseEnvelope = new TextEncoder().encode(canonicalJson({ envelope: "nonreuse-a" }))
+    const nonreuseEnvelope = new TextEncoder().encode(infinityCanonicalJson({ envelope: "nonreuse-a" }))
     const nonreuseConsume = new TextEncoder().encode(canonicalJson({
       dispatch_id: nonreuseA.dispatch_id,
       canonical_intent_sha256: nonreuseA.canonical_intent_sha256,
@@ -729,7 +738,7 @@ test.skipIf(!POSTGRES_ENABLED)("real PostgreSQL disposable journal is fenced, du
       checkpoint_policy_sha256: nonreuseAInput.checkpoint_policy_sha256,
       effect_claim_sha256: nonreuseA.effect_claim_sha256,
     }))
-    const nonreuseReceipt = new TextEncoder().encode(canonicalJson({ receipt: "nonreuse-a" }))
+    const nonreuseReceipt = new TextEncoder().encode(infinityCanonicalJson({ receipt: "nonreuse-a" }))
     await expect(a.bindAuthorizationAndMarkIntentV2({
       dispatch_id: nonreuseA.dispatch_id,
       canonical_intent_sha256: nonreuseA.canonical_intent_sha256,
@@ -759,7 +768,7 @@ test.skipIf(!POSTGRES_ENABLED)("real PostgreSQL disposable journal is fenced, du
     const expiredInput = prepareIntentV2("expired-first-bind", { lease_duration_ms: 1_000 })
     const expiredClaim = await a.prepareIntentV2(expiredInput)
     if (expiredClaim.kind !== "prepared") throw new Error("missing expired first-bind fixture")
-    const expiredEnvelope = new TextEncoder().encode(canonicalJson({ envelope: "expired" }))
+    const expiredEnvelope = new TextEncoder().encode(infinityCanonicalJson({ envelope: "expired" }))
     const expiredConsume = new TextEncoder().encode(canonicalJson({
       dispatch_id: expiredClaim.dispatch_id,
       canonical_intent_sha256: expiredClaim.canonical_intent_sha256,
@@ -772,7 +781,7 @@ test.skipIf(!POSTGRES_ENABLED)("real PostgreSQL disposable journal is fenced, du
       checkpoint_policy_sha256: expiredInput.checkpoint_policy_sha256,
       effect_claim_sha256: expiredClaim.effect_claim_sha256,
     }))
-    const expiredReceipt = new TextEncoder().encode(canonicalJson({ receipt: "expired" }))
+    const expiredReceipt = new TextEncoder().encode(infinityCanonicalJson({ receipt: "expired" }))
     await Bun.sleep(1_100)
     await expect(a.bindAuthorizationAndMarkIntentV2({
       dispatch_id: expiredClaim.dispatch_id,

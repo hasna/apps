@@ -2120,7 +2120,8 @@ class InfinityCanonicalJsonParserV2 {
   }
 }
 
-function parseInfinityCanonicalJsonV2(source: string): InfinityJsonValueV2 {
+/** Package-internal parser for exact Infinity-owned V2 wire bytes. */
+export function parseInfinityCanonicalJsonV2(source: string): InfinityJsonValueV2 {
   return new InfinityCanonicalJsonParserV2(source).parse()
 }
 
