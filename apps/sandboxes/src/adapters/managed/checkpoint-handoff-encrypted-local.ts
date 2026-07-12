@@ -22,6 +22,7 @@ import {
 } from "node:crypto"
 import { dirname, isAbsolute, parse, resolve, sep } from "node:path"
 import { canonicalJson, canonicalSha256, isDigest, parseCanonicalJson } from "./canonical"
+import { e2bGuestBrokerCheckpointHashesV1 } from "./e2b-guest-broker"
 import { validateWorkspacePath } from "./adapter"
 import { AdapterContractError, adapterError } from "./errors"
 import type {
@@ -915,11 +916,12 @@ function parseCheckpointBundle(bytes: Uint8Array): ParsedCheckpointBundle {
     throw adapterError("integrity_failed")
   }
 
-  const manifestSha256 = canonicalSha256(manifest)
-  const checkpointSha256 = canonicalSha256({
-    manifest_sha256: manifestSha256,
-    files: files.map(({ path, size, sha256 }) => ({ path, sha256, size })),
-  })
+  const brokerHashes = e2bGuestBrokerCheckpointHashesV1(
+    manifest,
+    files.map(({ path, size, sha256 }) => ({ path, sha256, size })),
+  )
+  const manifestSha256 = brokerHashes.manifest_sha256
+  const checkpointSha256 = brokerHashes.checkpoint_sha256
   const outputManifestSha256 = canonicalSha256({ schema_version: OUTPUT_MANIFEST_SCHEMA, files: manifest })
   const outputDiffSha256 = canonicalSha256({ schema_version: OUTPUT_DIFF_SCHEMA, changes })
   if (value.manifest_sha256 !== manifestSha256 || value.checkpoint_sha256 !== checkpointSha256 ||

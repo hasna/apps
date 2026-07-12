@@ -25,6 +25,7 @@ import { mkdirSync, readFileSync, renameSync, unlinkSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { canonicalJson, canonicalSha256, parseCanonicalJson } from "../../src/adapters/managed/canonical"
+import { e2bGuestBrokerCheckpointHashesV1 } from "../../src/adapters/managed/e2b-guest-broker"
 import {
   createEncryptedLocalCheckpointHandoffPortV1,
   type CheckpointHandoffReceiptSignerV1,
@@ -86,11 +87,12 @@ function checkpointBundle(
     content_base64: Buffer.from(content).toString("base64"),
   }]
   const manifest = [{ path: "result.txt", size: content.byteLength, mode: 0o600, sha256 }]
-  const manifestSha256 = canonicalSha256(manifest)
-  const checkpointSha256 = canonicalSha256({
-    manifest_sha256: manifestSha256,
-    files: files.map(({ path, size, sha256: digest }) => ({ path, size, sha256: digest })),
-  })
+  const brokerHashes = e2bGuestBrokerCheckpointHashesV1(
+    manifest,
+    files.map(({ path, size, sha256: digest }) => ({ path, size, sha256: digest })),
+  )
+  const manifestSha256 = brokerHashes.manifest_sha256
+  const checkpointSha256 = brokerHashes.checkpoint_sha256
   const outputManifestSha256 = canonicalSha256({
     schema_version: "sandboxes.disposable-task-output-manifest/v1",
     files: manifest,
