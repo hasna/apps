@@ -25,6 +25,7 @@ for (const exported of [
   postgres.applyPostgresDisposableTaskJournalMigrationV2,
   postgres.loadPostgresDisposableTaskJournalMigrationSourceV1,
   postgres.loadPostgresDisposableTaskJournalMigrationSourceV2,
+  postgres.loadPostgresDurableJournalWitnessMigrationSourceV1,
   managed.parseDisposableSandboxTaskRequestV1,
   managed.createEncryptedLocalCheckpointHandoffPortV1,
   managed.disposableSandboxTaskIntentSha256V2,
@@ -52,9 +53,11 @@ if (postgres.POSTGRES_DISPOSABLE_TASK_JOURNAL_MIGRATION_V2.relative_path !==
 }
 const journalMigrationV1 = postgres.loadPostgresDisposableTaskJournalMigrationSourceV1();
 const journalMigrationV2 = postgres.loadPostgresDisposableTaskJournalMigrationSourceV2();
+const witnessMigrationV1 = postgres.loadPostgresDurableJournalWitnessMigrationSourceV1();
 if (!journalMigrationV1.includes("CREATE TABLE sandboxes_disposable_task_journal.tasks (") ||
-    !journalMigrationV2.includes("CREATE TABLE sandboxes_disposable_task_journal.tasks_v2 (")) {
-  throw new Error("packed disposable task migration sources are unreachable or changed");
+    !journalMigrationV2.includes("CREATE TABLE sandboxes_disposable_task_journal.tasks_v2 (") ||
+    !witnessMigrationV1.includes("CREATE TABLE sandboxes_durable_journal_witness.heads (")) {
+  throw new Error("packed migration sources are unreachable or changed");
 }
 const descriptor = await new E2BRunnerPendingV1().descriptor();
 if (descriptor.status !== "pending_conformance") {

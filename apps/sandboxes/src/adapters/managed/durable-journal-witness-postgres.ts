@@ -267,9 +267,28 @@ function isAdapterError(value: unknown): value is AdapterContractError {
     typeof (value as { code?: unknown }).code === "string"
 }
 
-function migrationPath(): string {
-  return join(dirname(fileURLToPath(import.meta.url)),
-    "../../../migrations/durable-journal-witness", MIGRATION_NAME)
+function packageRoot(): string {
+  let current = dirname(fileURLToPath(import.meta.url))
+  for (let depth = 0; depth < 6; depth += 1) {
+    try {
+      const manifest = JSON.parse(readFileSync(join(current, "package.json"), "utf8")) as unknown
+      if (manifest !== null && typeof manifest === "object" && !Array.isArray(manifest) &&
+        (manifest as Record<string, unknown>).name === "@hasna/sandboxes") return current
+    } catch (error) {
+      const code = error !== null && typeof error === "object" ? (error as { code?: unknown }).code : undefined
+      if (code !== "ENOENT") throw adapterError("integrity_failed")
+    }
+    const parent = dirname(current)
+    if (parent === current) break
+    current = parent
+  }
+  throw adapterError("integrity_failed")
+}
+
+export function loadPostgresDurableJournalWitnessMigrationSourceV1(): string {
+  const source = readFileSync(join(packageRoot(), "migrations/durable-journal-witness", MIGRATION_NAME), "utf8")
+  if (digestBytes(bytes(source)) !== MIGRATION_SHA256) throw adapterError("integrity_failed")
+  return source
 }
 
 function quoteIdentifier(value: string): string {
@@ -417,8 +436,7 @@ export async function applyPostgresDurableJournalWitnessMigrationV1(
     throw adapterError("integrity_failed")
   }
 
-  const source = readFileSync(migrationPath(), "utf8")
-  if (digestBytes(bytes(source)) !== MIGRATION_SHA256) throw adapterError("integrity_failed")
+  const source = loadPostgresDurableJournalWitnessMigrationSourceV1()
   const reader = quoteIdentifier(options.reader_role)
   const acknowledgement = quoteIdentifier(options.witness_acknowledgement_role)
   const database = quoteIdentifier(options.expected_database)

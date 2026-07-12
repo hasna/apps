@@ -1696,6 +1696,7 @@ export {
 export {
   PostgresDurableJournalWitnessV1,
   applyPostgresDurableJournalWitnessMigrationV1,
+  loadPostgresDurableJournalWitnessMigrationSourceV1,
   createEd25519DurableJournalWitnessCryptoV1,
   type DurableJournalWitnessSignatureVerifierV1,
   type DurableJournalWitnessSignerV1,
