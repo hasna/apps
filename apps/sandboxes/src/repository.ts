@@ -140,7 +140,7 @@ export function assertExternalOperationAnchorRecordV1(
 }
 
 export interface RepositoryHealthV1 {
-  backend: "memory" | "sqlite" | "postgres";
+  backend: "memory" | "postgres";
   schema_version: number;
   integrity: "ok";
   sandbox_count: number;
@@ -195,7 +195,7 @@ export interface SandboxRepositoryTxV1 {
 }
 
 export interface SandboxRepositoryV1 {
-  readonly backend: "memory" | "sqlite" | "postgres";
+  readonly backend: "memory" | "postgres";
   migrate(): void;
   databaseTime(): Promise<Date>;
   transaction<T>(fn: (tx: SandboxRepositoryTxV1) => T): Promise<T>;

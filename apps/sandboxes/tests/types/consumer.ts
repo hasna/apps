@@ -1,39 +1,38 @@
-import * as managed from "@hasna/sandboxes/managed"
-import {
-  DAYTONA_GUEST_BROKER_PTY_ID,
-  E2bWorkspaceBootstrapBoundaryErrorV1,
-  createDaytonaDenyAllCandidate,
-  createE2bAdapter,
-  createE2bDenyAllCandidate,
-  withAuthenticatedE2bGuestBrokerDuplexSdkSession,
-  withDaytonaGuestBrokerSdkSession,
-  type DaytonaCredentialBoundCreateV1,
-  type DaytonaOfficialBrokerProcessV1,
-  type E2bCredentialBoundCreateV1,
-  type E2bOfficialBrokerCommandsV1,
-  type E2bWorkspaceBootstrapPhaseV1,
-  type GuestBrokerSdkSessionV1,
-  type ManagedAdapterDependenciesV1,
-  type ManagedProviderAdapterV1,
-} from "@hasna/sandboxes/managed"
+// Type-level smoke for the published SDK surface of @hasnaxyz/sandboxes.
+import SandboxesClientDefault, {
+  SandboxesClient,
+  SandboxesApiError,
+  type Allocation,
+  type AllocationState,
+  type AdapterId,
+  type Checkpoint,
+  type WhoAmI,
+  type SandboxesClientOptions,
+} from "@hasnaxyz/sandboxes"
 
-const factory: (dependencies: ManagedAdapterDependenciesV1) => ManagedProviderAdapterV1 =
-  createE2bAdapter
+const options: SandboxesClientOptions = { apiUrl: "https://sandboxes.hasna.xyz/v1", apiKey: "k" }
+const client: SandboxesClient = new SandboxesClientDefault(options)
+void client
 
-void factory
-void DAYTONA_GUEST_BROKER_PTY_ID
-void createDaytonaDenyAllCandidate
-void createE2bDenyAllCandidate
-void withDaytonaGuestBrokerSdkSession
-void withAuthenticatedE2bGuestBrokerDuplexSdkSession
-void E2bWorkspaceBootstrapBoundaryErrorV1
-// @ts-expect-error unauthenticated E2B session helper is intentionally not public
-void managed.withE2bGuestBrokerSdkSession
-// @ts-expect-error raw E2B duplex helper is intentionally not public
-void managed.withE2bGuestBrokerDuplexSdkSession
-void (undefined as unknown as DaytonaCredentialBoundCreateV1)
-void (undefined as unknown as DaytonaOfficialBrokerProcessV1)
-void (undefined as unknown as E2bCredentialBoundCreateV1)
-void (undefined as unknown as E2bOfficialBrokerCommandsV1)
-void (undefined as unknown as E2bWorkspaceBootstrapPhaseV1)
-void (undefined as unknown as GuestBrokerSdkSessionV1)
+const state: AllocationState = "active"
+const adapter: AdapterId = "e2b"
+void state
+void adapter
+
+async function usage(): Promise<void> {
+  const { allocation }: { allocation: Allocation } = await client.allocate({
+    adapter: "fake",
+    spec: {} as never,
+  })
+  void allocation.tenant_id
+  const list: { checkpoints: Checkpoint[]; count: number } = await client.listCheckpoints("sbx_x")
+  void list.count
+  const who: WhoAmI = await client.whoami()
+  void who.tenant_id
+  try {
+    await client.getSandbox("sbx_missing")
+  } catch (error) {
+    if (error instanceof SandboxesApiError) void error.code
+  }
+}
+void usage

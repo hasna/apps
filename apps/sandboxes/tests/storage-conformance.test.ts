@@ -1,15 +1,10 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { canonicalDigest, storageJson } from "../src/canonical.js";
+import { describe, expect, test } from "bun:test";
+import { canonicalDigest } from "../src/canonical.js";
 import {
   EFFECT_JOURNAL_OUTCOME_SCHEMA_DIGEST,
   EFFECT_JOURNAL_OUTCOME_SCHEMA_VERSION,
 } from "../src/effect-journal.js";
 import { InMemorySandboxRepositoryV1 } from "../src/repository-memory.js";
-import { SqliteSandboxRepositoryV1 } from "../src/repository-sqlite.js";
 import type { SandboxRepositoryV1 } from "../src/repository.js";
 import { createRequestDigest, quarantineRequestDigest } from "../src/service.js";
 import { SCHEMA_VERSION, type ExternalOperationAnchorRecordV1 } from "../src/types.js";
@@ -28,132 +23,12 @@ import {
   recordDestroyed,
 } from "./fixtures.js";
 
-const temporary: string[] = [];
-
-afterEach(() => {
-  for (const path of temporary.splice(0)) rmSync(path, { recursive: true, force: true });
-});
-
-function sqlite(
-  databaseTime: () => Date = () => new Date("2030-01-01T00:00:00.000Z"),
-): SqliteSandboxRepositoryV1 {
-  const root = mkdtempSync(join(tmpdir(), "sandboxes-v1-"));
-  temporary.push(root);
-  chmodSync(root, 0o700);
-  return new SqliteSandboxRepositoryV1(join(root, "sandboxes.db"), {
-    allow_unsafe_test_path: true,
-    hermetic_test_database_time: databaseTime,
-  });
-}
-
-async function prepareLegacySqliteExecStream(matchCount: 0 | 1 | 2): Promise<{
-  path: string;
-  resourceId: string;
-  execId: string;
-  expectedOperationId: string;
-  expectedRequestSha256: ReturnType<typeof digest>;
-}> {
-  const root = mkdtempSync(join(tmpdir(), `sandboxes-v6-forward-${matchCount}-`));
-  temporary.push(root);
-  chmodSync(root, 0o700);
-  const path = join(root, "sandboxes.db");
-  const current = new SqliteSandboxRepositoryV1(path, {
-    allow_unsafe_test_path: true,
-    hermetic_test_database_time: () => new Date("2030-01-01T00:00:00.000Z"),
-  });
-  current.migrate();
-  await current.close();
-
-  const resourceId = oid("sbx", 980 + matchCount);
-  const execId = oid("exec", 980 + matchCount);
-  const expectedOperationId = oid("op", 980 + matchCount * 10);
-  const expectedRequestSha256 = digest(`legacy-start-request-${matchCount}-0`);
-  const cursor = `cursor_legacy_${matchCount}`;
-  const resumeToken = `resume_legacy_${matchCount}`;
-  const streamRoot = digest(`legacy-stream-root-${matchCount}`);
-  const legacyState = {
-    schema_version: "sandboxes.exec-stream-state/v1",
-    resource_id: resourceId,
-    resource_lifecycle_generation: 1n,
-    exec_id: execId,
-    cursor,
-    cursor_sha256: digest(cursor),
-    stream_root_sha256: streamRoot,
-    resume_token: resumeToken,
-    resume_token_sha256: digest(resumeToken),
-    next_expected_sequence: 1n,
-    in_flight_operation_id: null,
-    terminal: false,
-    updated_at: "2030-01-01T00:00:00.000Z",
-  };
-  const database = new Database(path, { strict: true });
-  database.exec(`
-    PRAGMA foreign_keys = ON;
-    ALTER TABLE exec_stream_states RENAME TO exec_stream_states_v7;
-    CREATE TABLE exec_stream_states (
-      resource_id TEXT NOT NULL REFERENCES sandbox_records(resource_id),
-      exec_id TEXT NOT NULL,
-      stream_root_sha256 TEXT NOT NULL,
-      next_expected_sequence TEXT NOT NULL,
-      record_json TEXT NOT NULL,
-      PRIMARY KEY(resource_id, exec_id)
-    );
-    DROP TABLE exec_stream_states_v7;
-    DELETE FROM schema_migrations WHERE version = 7;
-  `);
-  database.query(`
-    INSERT INTO sandbox_records(resource_id, revision, state, record_json)
-    VALUES (?, 1, 'active', '{}')
-  `).run(resourceId);
-  database.query(`
-    INSERT INTO exec_stream_states(
-      resource_id, exec_id, stream_root_sha256, next_expected_sequence, record_json
-    ) VALUES (?, ?, ?, '1', ?)
-  `).run(resourceId, execId, streamRoot, storageJson(legacyState));
-  for (let index = 0; index < matchCount; index += 1) {
-    const operationId = oid("op", 980 + matchCount * 10 + index);
-    const requestSha256 = digest(`legacy-start-request-${matchCount}-${index}`);
-    database.query(`
-      INSERT INTO operations(
-        operation_id, operation, resource_id, actor_principal,
-        idempotency_key_sha256, request_sha256, state, record_json,
-        effect_phase, operation_step_id, dispatch_anchor_sha256
-      ) VALUES (?, 'exec.start', ?, ?, ?, ?, 'committed', ?, 'succeeded', ?, NULL)
-    `).run(
-      operationId,
-      resourceId,
-      oid("principal", 980),
-      digest(`legacy-start-idempotency-${matchCount}-${index}`),
-      requestSha256,
-      JSON.stringify({
-        bounded_result: {
-          operation: "exec.start",
-          result_document: {
-            exec_id: execId,
-            resource_id: resourceId,
-            request_sha256: requestSha256,
-          },
-        },
-      }),
-      oid("step", 980 + matchCount * 10 + index),
-    );
-  }
-  const seeded = database.query<{
-    streams: number;
-    starts: number;
-    schema_version: number;
-  }, []>(`
-    SELECT
-      (SELECT COUNT(*) FROM exec_stream_states) AS streams,
-      (SELECT COUNT(*) FROM operations WHERE operation = 'exec.start') AS starts,
-      (SELECT MAX(version) FROM schema_migrations) AS schema_version
-  `).get();
-  if (seeded?.streams !== 1 || seeded.starts !== matchCount || seeded.schema_version !== 6) {
-    throw new Error(`legacy SQLite fixture seed mismatch: ${JSON.stringify(seeded)}`);
-  }
-  database.close();
-  return { path, resourceId, execId, expectedOperationId, expectedRequestSha256 };
-}
+/**
+ * Storage conformance for the domain repository. The self-hosted serve path uses
+ * Postgres; the in-memory backend is the test/local path and MUST preserve the
+ * exact same lifecycle + immutable-journal semantics. (The former SQLite backend
+ * was removed in the R1 iapp migration — clients no longer own a local DB.)
+ */
 
 async function corpus(repository: SandboxRepositoryV1) {
   const h = harness(repository);
@@ -278,27 +153,21 @@ function journalRecords(operationId: string, operationStepId: string) {
 }
 
 describe("storage conformance", () => {
-  test("in-memory and SQLite produce the same lifecycle semantics", async () => {
+  test("in-memory lifecycle semantics are stable", async () => {
     const memory = await corpus(
       new InMemorySandboxRepositoryV1(() => new Date("2030-01-01T00:00:00.000Z")),
     );
-    const disk = await corpus(sqlite());
-    expect(disk).toEqual(memory);
+    expect(memory).toMatchObject({ state: "active", operation: "committed" });
+    expect(memory.schemaVersion).toBeGreaterThan(0);
   });
 
-  test("immutable safety observations and destroy tombstones match in memory and SQLite", async () => {
+  test("immutable safety observations and destroy tombstones are recorded in memory", async () => {
     let memoryNow = new Date("2030-01-01T00:00:00.000Z");
     const memory = await immutableEvidenceCorpus(
       new InMemorySandboxRepositoryV1(() => memoryNow),
       () => { memoryNow = new Date("2030-01-01T00:02:00.000Z"); },
     );
-    let sqliteNow = new Date("2030-01-01T00:00:00.000Z");
-    const disk = await immutableEvidenceCorpus(
-      sqlite(() => sqliteNow),
-      () => { sqliteNow = new Date("2030-01-01T00:02:00.000Z"); },
-    );
-    expect(disk).toEqual(memory);
-    expect(disk).toMatchObject({
+    expect(memory).toMatchObject({
       state: "destroyed",
       observationCount: 1,
       observationReasons: ["deadline"],
@@ -310,256 +179,80 @@ describe("storage conformance", () => {
     });
   });
 
-  test("SQLite migrations are idempotent and integrity-checked", async () => {
-    const repository = sqlite();
+  test("immutable journal identity, exact replay, and failed_no_effect retry gate hold in memory", async () => {
+    const repository = new InMemorySandboxRepositoryV1(() => new Date("2030-01-01T00:00:00.000Z"));
     repository.migrate();
-    repository.migrate();
-    expect(await repository.health()).toMatchObject({ backend: "sqlite", schema_version: 7, integrity: "ok" });
+    const h = harness(repository);
+    const input = createInput();
+    const begin = context(
+      "begin_create_inert",
+      oid("op", 900),
+      createRequestDigest(input),
+      1n,
+      0,
+      1n,
+      900,
+    );
+    h.dispatchJournal.failure = new Error("intent-only fixture");
+    await expect(h.service.create(input, begin)).rejects.toThrow("intent-only fixture");
+    const { dispatched, outcome, next } = journalRecords(
+      begin.operation_id,
+      begin.dispatch_journal.record.operation_step_id,
+    );
+    await repository.transaction((tx) => tx.appendExternalAnchor(dispatched));
+    await repository.transaction((tx) => tx.appendExternalAnchor(structuredClone(dispatched)));
+    expect(await repository.transaction((tx) => tx.listExternalAnchors(dispatched.operation_id))).toHaveLength(1);
+
+    const changedBytes = { ...dispatched, recorded_at: "2030-01-01T00:00:00.001Z" };
+    await expect(repository.transaction((tx) => tx.appendExternalAnchor(changedBytes)))
+      .rejects.toThrow("changed bytes");
+    await expect(repository.transaction((tx) => tx.appendExternalAnchor(next)))
+      .rejects.toThrow("failed_no_effect");
+
+    await repository.transaction((tx) => tx.appendExternalAnchor(outcome));
+    await repository.transaction((tx) => tx.appendExternalAnchor(next));
+    expect(await repository.transaction((tx) => tx.listExternalAnchors(dispatched.operation_id))).toHaveLength(3);
+
+    const invalidAlias = {
+      ...outcome,
+      operation_execution_epoch: 2n,
+      outcome_kind: "quarantined",
+      journal_sequence: 9_004n,
+      prior_frontier_digest: next.frontier_digest,
+      record_digest: canonicalDigest({ invalid: "quarantined" }),
+      frontier_digest: digest("invalid-alias-frontier"),
+      envelope_digest: digest("invalid-alias-envelope"),
+    } as unknown as ExternalOperationAnchorRecordV1;
+    await expect(repository.transaction((tx) => tx.appendExternalAnchor(invalidAlias)))
+      .rejects.toThrow("OUTCOME kind is not allowed");
     await repository.close();
   });
 
-  test("SQLite v6 to v7 requires exactly one committed legacy exec start", async () => {
-    for (const matchCount of [0, 2] as const) {
-      const legacy = await prepareLegacySqliteExecStream(matchCount);
-      const repository = new SqliteSandboxRepositoryV1(legacy.path, {
-        allow_unsafe_test_path: true,
-        hermetic_test_database_time: () => new Date("2030-01-01T00:00:00.000Z"),
-      });
-      let migrationError: unknown;
-      try {
-        repository.migrate();
-      } catch (error) {
-        migrationError = error;
-      }
-      if (migrationError === undefined) {
-        const migrated = await repository.transaction((tx) =>
-          tx.getExecStreamState(legacy.resourceId, legacy.execId));
-        throw new Error(
-          `SQLite v6 migration unexpectedly accepted ${matchCount} starts: ${String(migrated)}`,
-        );
-      }
-      expect(migrationError).toMatchObject({ code: "integrity_failed" });
-      expect(await repository.health()).toMatchObject({
-        backend: "sqlite",
-        schema_version: 6,
-        integrity: "ok",
-      });
-      await repository.close();
-      const unchanged = new Database(legacy.path, { readonly: true, strict: true });
-      expect(unchanged.query<{ count: number }, []>(
-        "SELECT COUNT(*) AS count FROM exec_stream_states",
-      ).get()?.count).toBe(1);
-      unchanged.close();
-    }
-
-    const legacy = await prepareLegacySqliteExecStream(1);
-    const repository = new SqliteSandboxRepositoryV1(legacy.path, {
-      allow_unsafe_test_path: true,
-      hermetic_test_database_time: () => new Date("2030-01-01T00:00:00.000Z"),
-    });
+  test("the repository rejects asynchronous transaction callbacks before atomicity can be lost", async () => {
+    const repository = new InMemorySandboxRepositoryV1(() => new Date("2030-01-01T00:00:00.000Z"));
     repository.migrate();
-    expect(await repository.health()).toMatchObject({
-      backend: "sqlite",
-      schema_version: 7,
-      integrity: "ok",
-    });
-    expect(await repository.transaction((tx) =>
-      tx.getExecStreamState(legacy.resourceId, legacy.execId))).toMatchObject({
-      start_operation_id: legacy.expectedOperationId,
-      start_request_sha256: legacy.expectedRequestSha256,
-      phase: "started",
-    });
+    await expect(repository.transaction(async () => "not-atomic"))
+      .rejects.toThrow("callbacks must be synchronous");
     await repository.close();
   });
 
-  test("in-memory SQLite requires an explicit test-only opt in", async () => {
-    expect(() => new SqliteSandboxRepositoryV1(":memory:")).toThrow("explicit test authorization");
-    const repository = new SqliteSandboxRepositoryV1(":memory:", {
-      allow_in_memory: true,
-      allow_unsafe_test_path: true,
-      hermetic_test_database_time: () => new Date("2030-01-01T00:00:00.000Z"),
-    });
+  test("memory preserves full immutable checkpoint receipts, not digest arrays alone", async () => {
+    const repository = new InMemorySandboxRepositoryV1(() => new Date("2030-01-01T00:00:00.000Z"));
     repository.migrate();
-    expect((await repository.health()).integrity).toBe("ok");
-    await repository.close();
-  });
-
-  test("SQLite persists protected effect phases and external frontier anchors across reopen", async () => {
-    const root = mkdtempSync(join(tmpdir(), "sandboxes-v1-recovery-"));
-    temporary.push(root);
-    chmodSync(root, 0o700);
-    const path = join(root, "sandboxes.db");
-    const first = new SqliteSandboxRepositoryV1(path, {
-      allow_unsafe_test_path: true,
-      hermetic_test_database_time: () => new Date("2030-01-01T00:00:00.000Z"),
-    });
-    const h = harness(first);
-    await createInert(h);
-    await first.close();
-
-    const reopened = new SqliteSandboxRepositoryV1(path, {
-      allow_unsafe_test_path: true,
-      hermetic_test_database_time: () => new Date("2030-01-01T00:00:00.000Z"),
-    });
-    reopened.migrate();
-    const operationId = "op_00000000000000000000000000000014";
-    const operation = await reopened.transaction((tx) => tx.getOperation(operationId));
-    const anchors = await reopened.transaction((tx) => tx.listExternalAnchors(operationId));
-    expect(operation?.effect_phase).toBe("succeeded");
-    expect(anchors.map((anchor) => "record_kind" in anchor ? anchor.record_kind : anchor.anchor_kind))
-      .toEqual(["DISPATCHED", "OUTCOME", "READ_PROBE"]);
-    await expect(reopened.transaction((tx) => tx.compareAndSwapOperationPhase(
-      operationId,
-      ["prepared"],
-      "dispatched",
-      "2030-01-01T00:03:00.000Z",
-    ))).rejects.toThrow("compare-and-swap failed");
-    await reopened.close();
-  });
-
-  test("SQLite persists the exact exec stream root, resume token, and next sequence across reopen", async () => {
-    const root = mkdtempSync(join(tmpdir(), "sandboxes-v1-stream-"));
-    temporary.push(root);
-    chmodSync(root, 0o700);
-    const path = join(root, "sandboxes.db");
-    const first = new SqliteSandboxRepositoryV1(path, {
-      allow_unsafe_test_path: true,
-      hermetic_test_database_time: () => new Date("2030-01-01T00:00:00.000Z"),
-    });
-    const h = harness(first);
+    const h = harness(repository);
     const active = await activate(h, await createInert(h));
-    const state = {
-      schema_version: "sandboxes.exec-stream-state/v1" as const,
-      resource_id: active.id,
-      resource_lifecycle_generation: active.resource_lifecycle_generation,
-      exec_id: oid("exec", 990),
-      start_operation_id: oid("op", 991),
-      start_request_sha256: digest("durable_start_request"),
-      phase: "started" as const,
-      cursor: "cursor_durable",
-      cursor_sha256: digest("cursor_durable"),
-      stream_root_sha256: digest("durable_stream_root"),
-      resume_token: "resume_durable",
-      resume_token_sha256: digest("resume_durable"),
-      next_expected_sequence: 7n,
-      in_flight_operation_id: null,
-      terminal: false,
-      updated_at: "2030-01-01T00:00:00.000Z",
-    };
-    await first.transaction((tx) => tx.compareAndSwapExecStreamState(null, state));
-    await first.close();
-
-    const reopened = new SqliteSandboxRepositoryV1(path, {
-      allow_unsafe_test_path: true,
-      hermetic_test_database_time: () => new Date("2030-01-01T00:00:00.000Z"),
-    });
-    reopened.migrate();
-    expect(await reopened.transaction((tx) => tx.getExecStreamState(active.id, state.exec_id)))
-      .toEqual(state);
-    await reopened.close();
-  });
-
-  test("SQLite rejects a symlink in any database path ancestor", () => {
-    const root = mkdtempSync(join(tmpdir(), "sandboxes-v1-path-"));
-    temporary.push(root);
-    const real = join(root, "real");
-    mkdirSync(real, { mode: 0o700 });
-    const link = join(root, "link");
-    symlinkSync(real, link, "dir");
-    expect(() => new SqliteSandboxRepositoryV1(join(link, "nested", "sandboxes.db"), {
-      allow_unsafe_test_path: true,
-    })).toThrow("ancestry cannot contain symlinks");
-  });
-
-  test("immutable journal identity, exact replay, and failed_no_effect retry gate match in memory and SQLite", async () => {
-    for (const repository of [
-      new InMemorySandboxRepositoryV1(() => new Date("2030-01-01T00:00:00.000Z")),
-      sqlite(),
-    ]) {
-      repository.migrate();
-      const h = harness(repository);
-      const input = createInput();
-      const begin = context(
-        "begin_create_inert",
-        oid("op", 900),
-        createRequestDigest(input),
-        1n,
-        0,
-        1n,
-        900,
-      );
-      h.dispatchJournal.failure = new Error("intent-only fixture");
-      await expect(h.service.create(input, begin)).rejects.toThrow("intent-only fixture");
-      const { dispatched, outcome, next } = journalRecords(
-        begin.operation_id,
-        begin.dispatch_journal.record.operation_step_id,
-      );
-      await repository.transaction((tx) => tx.appendExternalAnchor(dispatched));
-      await repository.transaction((tx) => tx.appendExternalAnchor(structuredClone(dispatched)));
-      expect(await repository.transaction((tx) => tx.listExternalAnchors(dispatched.operation_id))).toHaveLength(1);
-
-      const changedBytes = {
-        ...dispatched,
-        recorded_at: "2030-01-01T00:00:00.001Z",
-      };
-      await expect(repository.transaction((tx) => tx.appendExternalAnchor(changedBytes)))
-        .rejects.toThrow("changed bytes");
-      await expect(repository.transaction((tx) => tx.appendExternalAnchor(next)))
-        .rejects.toThrow("failed_no_effect");
-
-      await repository.transaction((tx) => tx.appendExternalAnchor(outcome));
-      await repository.transaction((tx) => tx.appendExternalAnchor(next));
-      expect(await repository.transaction((tx) => tx.listExternalAnchors(dispatched.operation_id))).toHaveLength(3);
-
-      const invalidAlias = {
-        ...outcome,
-        operation_execution_epoch: 2n,
-        outcome_kind: "quarantined",
-        journal_sequence: 9_004n,
-        prior_frontier_digest: next.frontier_digest,
-        record_digest: canonicalDigest({ invalid: "quarantined" }),
-        frontier_digest: digest("invalid-alias-frontier"),
-        envelope_digest: digest("invalid-alias-envelope"),
-      } as unknown as ExternalOperationAnchorRecordV1;
-      await expect(repository.transaction((tx) => tx.appendExternalAnchor(invalidAlias)))
-        .rejects.toThrow("OUTCOME kind is not allowed");
-      await repository.close();
-    }
-  });
-
-  test("all repositories reject asynchronous transaction callbacks before atomicity can be lost", async () => {
-    for (const repository of [
-      new InMemorySandboxRepositoryV1(() => new Date("2030-01-01T00:00:00.000Z")),
-      sqlite(),
-    ]) {
-      repository.migrate();
-      await expect(repository.transaction(async () => "not-atomic"))
-        .rejects.toThrow("callbacks must be synchronous");
-      await repository.close();
-    }
-  });
-
-  test("memory and SQLite preserve full immutable checkpoint receipts, not digest arrays alone", async () => {
-    for (const repository of [
-      new InMemorySandboxRepositoryV1(() => new Date("2030-01-01T00:00:00.000Z")),
-      sqlite(),
-    ]) {
-      repository.migrate();
-      const h = harness(repository);
-      const active = await activate(h, await createInert(h));
-      const receipt = checkpointReceipt(active);
-      await h.service.recordCheckpointReceipt(active.id, receipt);
-      expect(await repository.transaction((tx) => tx.getCheckpointReceipt(receipt.receipt_sha256)))
-        .toEqual(receipt);
-      await expect(repository.transaction((tx) => tx.putCheckpointReceipt({
-        ...receipt,
-        storage_version: "changed-version",
-      }))).rejects.toThrow("Immutable checkpoint receipt changed bytes");
-      await expect(repository.transaction((tx) => tx.putCheckpointReceipt({
-        ...receipt,
-        receipt_sha256: digest("different-digest-same-receipt-id"),
-      }))).rejects.toThrow("identity conflicts");
-      await repository.close();
-    }
+    const receipt = checkpointReceipt(active);
+    await h.service.recordCheckpointReceipt(active.id, receipt);
+    expect(await repository.transaction((tx) => tx.getCheckpointReceipt(receipt.receipt_sha256)))
+      .toEqual(receipt);
+    await expect(repository.transaction((tx) => tx.putCheckpointReceipt({
+      ...receipt,
+      storage_version: "changed-version",
+    }))).rejects.toThrow("Immutable checkpoint receipt changed bytes");
+    await expect(repository.transaction((tx) => tx.putCheckpointReceipt({
+      ...receipt,
+      receipt_sha256: digest("different-digest-same-receipt-id"),
+    }))).rejects.toThrow("identity conflicts");
+    await repository.close();
   });
 });

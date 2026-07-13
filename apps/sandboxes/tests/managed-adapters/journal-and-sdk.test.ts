@@ -71,21 +71,19 @@ describe("managed package boundary", () => {
       dependencies?: Record<string, unknown>
     }
     expect(manifest.types).toBe("./dist/index.d.ts")
+    // R1 iapp migration: the published surface is the SDK (`.`) + MCP (`./mcp`).
+    // The domain repository + managed adapters are now SERVER-INTERNAL (used by
+    // sandboxes-serve) and are intentionally not client package exports.
     expect(manifest.exports).toEqual({
       ".": {
         types: "./dist/index.d.ts",
         import: "./dist/index.js",
         default: "./dist/index.js",
       },
-      "./postgres": {
-        types: "./dist/repository-postgres.d.ts",
-        import: "./dist/repository-postgres.js",
-        default: "./dist/repository-postgres.js",
-      },
-      "./managed": {
-        types: "./dist/adapters/managed/index.d.ts",
-        import: "./dist/adapters/managed/index.js",
-        default: "./dist/adapters/managed/index.js",
+      "./mcp": {
+        types: "./dist/mcp.d.ts",
+        import: "./dist/mcp.js",
+        default: "./dist/mcp.js",
       },
     })
     expect(manifest.files).toEqual(["dist", "migrations", "schemas", "README.md", "LICENSE"])

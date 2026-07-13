@@ -1,0 +1,13 @@
+node_modules
+dist
+.git
+tests
+*.tgz
+*.db
+*.db-shm
+*.db-wal
+.env
+.secrets
+coverage
+.DS_Store
+MIGRATION.md

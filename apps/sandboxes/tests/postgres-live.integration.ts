@@ -17,7 +17,6 @@ import {
   type PostgresRepositoryConnectOptionsV1,
   type PostgresSessionV1,
 } from "../src/repository-postgres.js";
-import { SqliteSandboxRepositoryV1 } from "../src/repository-sqlite.js";
 import type { SandboxRepositoryTxV1, SandboxRepositoryV1 } from "../src/repository.js";
 import {
   activationRequestDigest,
@@ -1326,16 +1325,10 @@ test("isolated live Postgres matches memory and SQLite storage/failure/race sema
   });
   const now = await postgres.databaseTime();
   expect(Number.isNaN(now.getTime())).toBe(false);
-  const sqliteRoot = mkdtempSync(join(tmpdir(), "sandboxes-postgres-parity-"));
-  chmodSync(sqliteRoot, 0o700);
   const memory = controlledDatabaseTime(
     new InMemorySandboxRepositoryV1(() => new Date(now.getTime())),
     now,
   );
-  const sqlite = controlledDatabaseTime(new SqliteSandboxRepositoryV1(join(sqliteRoot, "sandboxes.db"), {
-    allow_unsafe_test_path: true,
-    hermetic_test_database_time: () => new Date(now.getTime()),
-  }), now);
   const controlledPostgres = controlledDatabaseTime(postgres, now);
   try {
     const memoryResult = await conformanceCorpus(
@@ -1343,23 +1336,15 @@ test("isolated live Postgres matches memory and SQLite storage/failure/race sema
       now,
       () => memory.advance(120_000),
     );
-    const sqliteResult = await conformanceCorpus(
-      sqlite.repository,
-      now,
-      () => sqlite.advance(120_000),
-    );
     const postgresResult = await conformanceCorpus(
       controlledPostgres.repository,
       now,
       () => controlledPostgres.advance(120_000),
     );
-    expect(sqliteResult).toEqual(memoryResult);
     expect(postgresResult).toEqual(memoryResult);
   } finally {
     await memory.repository.close();
-    await sqlite.repository.close();
     await controlledPostgres.repository.close();
-    rmSync(sqliteRoot, { recursive: true, force: true });
   }
 
   const reopened = await PostgresSandboxRepositoryV1.connect(config.runtimeUrl, {

@@ -273,7 +273,7 @@ function packageRoot(): string {
     try {
       const manifest = JSON.parse(readFileSync(join(current, "package.json"), "utf8")) as unknown
       if (manifest !== null && typeof manifest === "object" && !Array.isArray(manifest) &&
-        (manifest as Record<string, unknown>).name === "@hasna/sandboxes") return current
+        (manifest as Record<string, unknown>).name === "@hasnaxyz/sandboxes") return current
     } catch (error) {
       const code = error !== null && typeof error === "object" ? (error as { code?: unknown }).code : undefined
       if (code !== "ENOENT") throw adapterError("integrity_failed")

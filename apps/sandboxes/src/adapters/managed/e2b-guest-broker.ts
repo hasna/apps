@@ -446,7 +446,7 @@ async function e2bGuestBrokerPackageRootV1(): Promise<string> {
         await realpath(current) !== current) fail("artifact_not_pinned")
       const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as unknown
       if (manifest === null || typeof manifest !== "object" || Array.isArray(manifest) ||
-        (manifest as Record<string, unknown>).name !== "@hasna/sandboxes") fail("artifact_not_pinned")
+        (manifest as Record<string, unknown>).name !== "@hasnaxyz/sandboxes") fail("artifact_not_pinned")
       return current
     } catch (cause) {
       if (cause === null || typeof cause !== "object" || Reflect.get(cause, "code") !== "ENOENT") {

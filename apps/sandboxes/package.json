@@ -1,12 +1,14 @@
 {
-  "name": "@hasna/sandboxes",
-  "version": "1.0.0",
-  "description": "Provider-neutral, fenced sandbox lifecycle primitives for local and self-hosted operation",
+  "name": "@hasnaxyz/sandboxes",
+  "version": "1.0.0-rc.1",
+  "description": "Self-hosted, tenant-scoped disposable sandbox provisioning (Daytona/E2B) — HTTP /v1 API + CLI + SDK + MCP",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "sandboxes": "dist/cli.js"
+    "sandboxes": "dist/cli.js",
+    "sandboxes-mcp": "dist/mcp.js",
+    "sandboxes-serve": "dist/http/server.js"
   },
   "exports": {
     ".": {
@@ -14,15 +16,10 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
-    "./postgres": {
-      "types": "./dist/repository-postgres.d.ts",
-      "import": "./dist/repository-postgres.js",
-      "default": "./dist/repository-postgres.js"
-    },
-    "./managed": {
-      "types": "./dist/adapters/managed/index.d.ts",
-      "import": "./dist/adapters/managed/index.js",
-      "default": "./dist/adapters/managed/index.js"
+    "./mcp": {
+      "types": "./dist/mcp.d.ts",
+      "import": "./dist/mcp.js",
+      "default": "./dist/mcp.js"
     }
   },
   "files": [
@@ -34,7 +31,7 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && bun build src/cli.ts src/index.ts src/repository-postgres.ts --outdir dist --target bun --format esm --sourcemap=external && bun build src/adapters/managed/index.ts --outdir dist/adapters/managed --target node --format esm --sourcemap=external --external e2b --external @daytona/sdk && tsc -p tsconfig.build.json && bun scripts/fix-declaration-imports.ts && cp scripts/e2b-guest-broker-v1.py dist/adapters/managed/e2b-guest-broker-v1.py",
+    "build": "bun run clean && bun build src/cli.ts src/index.ts src/mcp.ts src/http/server.ts --root src --outdir dist --target bun --format esm --sourcemap=external --external @modelcontextprotocol/sdk --external e2b --external @daytona/sdk && bun build src/adapters/managed/index.ts --outdir dist/adapters/managed --target node --format esm --sourcemap=external --external e2b --external @daytona/sdk && tsc -p tsconfig.build.json && bun scripts/fix-declaration-imports.ts && cp scripts/e2b-guest-broker-v1.py dist/adapters/managed/e2b-guest-broker-v1.py",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.managed.json --noEmit",
     "test": "bun test",
     "test:postgres": "./scripts/postgres-integration.sh",
@@ -42,23 +39,26 @@
     "test:provider:hermetic": "./scripts/hermetic-test.sh",
     "test:managed:hermetic": "tmp=$(mktemp -d); trap 'rm -rf \"$tmp\"' EXIT; env -i PATH=\"$PATH\" HOME=\"$tmp\" XDG_CONFIG_HOME=\"$tmp/config\" TMPDIR=\"$tmp\" TZ=UTC bun test --preload ./tests/managed-adapters/hermetic-preload.ts tests/managed-adapters/conformance.test.ts tests/managed-adapters/journal-and-sdk.test.ts",
     "test:hermetic": "bun run test:provider:hermetic && bun run test:managed:hermetic",
-    "test:node": "bun run build && node tests/node/managed-promise-boundary.mjs",
-    "test:types": "bun run build && tsc -p tests/types/tsconfig.json",
+    "serve": "bun run src/http/server.ts",
+    "start": "bun dist/http/server.js",
+    "dev": "bun run src/http/server.ts",
+    "migrate": "bun run src/http/server.ts migrate",
     "audit": "bun audit",
     "prepack": "bun run build",
     "pack": "bun pm pack --quiet"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
-    "access": "public"
+    "access": "restricted"
   },
-  "license": "Apache-2.0",
+  "license": "UNLICENSED",
   "author": "Andrei Hasna <andrei@hasna.com>",
   "engines": {
     "bun": ">=1.2.0"
   },
   "dependencies": {
     "@daytona/sdk": "0.193.0",
+    "@modelcontextprotocol/sdk": "^1.12.1",
     "@types/ws": "8.18.1",
     "e2b": "2.31.0"
   },

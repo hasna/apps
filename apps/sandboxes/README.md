@@ -1,166 +1,70 @@
-# `@hasna/sandboxes`
+# `@hasnaxyz/sandboxes`
 
-Clean V1 sandbox runtime primitives for local and self-hosted Hasna systems.
-The package enforces Infinity-issued effect fences and exact adjacent
-Infinity-owned expected/successor lifecycle generations. It CASes and reseals
-the successor before dispatch, atomically CASes the durable operation phase to
-`dispatched`, appends a signed external `DISPATCHED` frontier, and only then
-makes the provider call under one stable installation/scope/resource lifecycle
-lock. The final barrier rechecks database time, cancellation,
-the exact current resource revision/state/fence, durable capability and grant
-consumption, and the physical safety gate. Mutation journal identity is
-`(operation_id, operation_step_id, operation_execution_epoch, record_kind)`;
-records are exactly `DISPATCHED` or one closed `OUTCOME`. A new execution epoch
-is allowed only after an authoritative `failed_no_effect` outcome and must keep
-the semantic step, provider target, token, request, and lifecycle generation
-unchanged. Provider outcomes stay non-canonical until a separate
-Infinity `record_*` command commits the next exact generation. Provider reads
-use separate signed `READ_PROBE` anchors plus an independently verified signed
-read-only/no-effect receipt. TTL and ambiguous-provider signals
-produce a typed physical safety-fence observation without autonomously changing
-canonical state or generation; only a later signed Infinity transition may
-canonicalize quarantine. Destruction still requires an exact one-use Infinity
-cleanup grant.
+Self-hosted, tenant-scoped disposable **sandbox provisioning** for the Hasna fleet
+(Daytona / E2B). Private internal app. Four surfaces, one shared cloud service:
 
-Signed journal envelopes are closed and read back in full before use. Their
-record digest, contiguous frontier, trusted signer/key, Ed25519 signature, and
-stored-frontier membership are verified by the injected Infinity verifier.
-Crash recovery additionally requires the verifier to bind the range to the
-current linearizable journal head; the journal then atomically performs
-non-inclusion-plus-append and distinguishes `inserted` from
-`already_present`. A replayed or already-present dispatch never authorizes a
-new provider mutation. An adapter exception can produce `failed_no_effect`
-only when it carries a closed request/target/token/epoch-bound provider
-non-acceptance proof accepted by the trusted verifier. Otherwise the operation
-remains unresolved and reconciliation-only.
-`failed_no_effect` retry authorization is never inferred from a local digest
-row. Creation and per-effect provider tokens are separate deterministic
-bindings over the actual allocation/spec/request bytes; returned handles and
-live provider inspection/enumeration must match the exact installation, scope,
-ownership nonce, opaque ID, token, fingerprint, and spec digest.
-Core code recomputes the descriptor digest over every closed identity and
-behavior fact and persists those exact bytes. Sealed handles use
-domain-separated authenticated encryption bound to adapter, installation,
-scope, resource, lease, generation, creation token, fingerprint, provider
-identity, and spec. Canonical lifecycle transitions share the same stable gate
-as provider mutation, so they cannot commit between the final barrier and the
-provider call.
+| Surface | Entry | What it is |
+|---|---|---|
+| **API** | `sandboxes-serve` (`dist/http/server.js`) | HTTP `/v1` + public `/health`, API-key auth, tenant-scoped, Postgres control plane + tenant-prefixed S3 blobs. |
+| **CLI** | `sandboxes` | Thin `/v1` API client (no local DB). |
+| **SDK** | default export of the package | Typed `fetch` client, `import SandboxesClient from "@hasnaxyz/sandboxes"`. |
+| **MCP** | `sandboxes-mcp` (`./mcp`) | stdio MCP server, every tool proxies `/v1`. |
 
-Bounded exec, file, stream, and checkpoint calls use a full signed capability:
-sender proof, exact target and constraints, one-use mode/max-use bound, and a
-signed authorization-consumption receipt set with the operation step, fence,
-consumer, transaction, commit sequence, and ordinal. The receipt set and exact
-request are committed before provider reachability. A durable bounded-operation
-journal stores the exact parsed result, so restart replay returns the prior
-result and a crash after an accepted provider effect uses the adapter's exact
-reconciliation read instead of issuing the mutation again. Runner results are
-closed documents: core recomputes receipt, byte, frame, cursor/resume, no-gap,
-stream-root, file-revision, and checkpoint roots before committing them. Exec
-start persists the initial cursor, opaque resume token, stream root, and next
-sequence; every page reserves and advances that state atomically with its
-durable outcome, so restart, replay, fork, reset, and alternate-chain attempts
-fail before runner reachability. The final online authorization check follows
-all awaited phase/state transactions with no await before runner invocation.
+All clients talk to `https://sandboxes.hasna.xyz/v1` with an API key — never a
+database DSN, never a provider credential (those live server-side only).
 
-Checkpoint capture additionally requires a signed capture grant, signed and
-authority-verified quiescence
-receipt, final authorization barrier, content-addressed manifest/blob, and a
-signed durable sink-commit receipt. Core recomputes the canonical manifest,
-workspace root, bundle facts, and checkpoint root; the sink receipt binds all
-of those facts together with the grant, final authorization, and quiescence.
-Ambiguity after upload remains
-reconciliation-only until that exact sink receipt is recovered. The exact
-consumer boundary for the Infinity/checkpoint-broker owner is exported as
-`schemas/provider-boundary-v1.schema.json`.
+## Configuration
 
-The external outcomes are schema-bound to
-`infinity.effect-journal-outcome/v1` at digest
-`sha256:7ab380a0475ebf79d2ed925e20bcbb9303d78a56c358d09adbdce796e740bf20`.
-There is no external `unknown` or `quarantined` alias: a dispatch without an
-outcome remains unresolved, and authenticated `reconciliation_blocked` is
-mapped by Infinity to its internal quarantined state.
+Clients:
 
-This lifecycle/persistence slice includes the reference domain model, in-memory,
-SQLite, and TLS Postgres repositories, encrypted local and narrow versioned
-self-hosted object stores, immutable safety/checkpoint/promotion/tombstone
-evidence, closed validators/schemas, and a fail-closed CLI. The core E2B and
-Daytona Cloud runner classes remain explicit pending stubs. Production managed
-adapter implementations and pinned official-SDK bridges are exported from
-`@hasna/sandboxes/managed`, but they are not wired into those core runners or
-admitted for live use until a signed zero-skip conformance manifest is
-authenticated. There is no local task-compute adapter. Exec, file-channel, and
-checkpoint-export reference surfaces are implemented and adversarially
-exercised against hermetic fakes.
+- `HASNA_SANDBOXES_API_URL` — base URL (with or without a trailing `/v1`).
+- `HASNA_SANDBOXES_API_KEY` — bearer key.
 
-## Checkpoint status: NO-GO outside the lifecycle slice
+Server (`sandboxes-serve`):
 
-This branch is a preservation checkpoint, not a V1 release candidate. The
-following gates are intentionally unresolved and remain **NO-GO**:
+- `HASNA_SANDBOXES_DATABASE_URL` — Postgres (control plane). Absent ⇒ in-memory (local/test).
+- `HASNA_SANDBOXES_API_KEY` — static bootstrap admin key (maps to the root tenant).
+- `HASNA_IDENTITIES_JWKS_URL` — enables v2 identities-JWS verification (dormant until identities v2 is live).
+- `HASNA_SANDBOXES_S3_BUCKET` — checkpoint blob bucket (keys are `sandboxes/<tenant_id>/…`).
+- `PORT` (default 8080), `HOST` (default 0.0.0.0).
 
-- E2B and Daytona Cloud managed implementations are present, but have no live
-  admission evidence and remain disconnected from the core pending runners.
-- Restore and live checkpoint-broker integration are not implemented; the
-  producer-side quiescent export and exact broker boundary are present.
-- The internal object-store prototype is not exported and is not accepted as a
-  checkpoint durability or cleanup-authority basis. Its create-only ambiguity
-  recovery, exact-version streamed full readback, bounded I/O, local no-follow
-  file-descriptor discipline, concurrency law, and scope/KMS/fence bindings
-  still require the follow-on files/checkpoint implementation and review.
-- The successor exec/files/checkpoint wire contracts and shared durable
-  non-lifecycle effect coordinator still require exact-SHA adversarial
-  acceptance and live-provider reproduction before integration.
+## Tenancy (fail-closed)
 
-Do not merge this checkpoint to `main`, publish it, deploy it, enable live
-providers, or use it to authorize cleanup.
+Every `/v1` request is bound to a `(tenant_id, user_id, scopes)` derived **server-side**
+from the verified credential — never from the request body. Missing/unresolvable tenant ⇒
+`403`. Cross-tenant ids ⇒ `404` (existence is not leaked). The fixed fleet root tenant is
+`adfd95c7-ee8b-52cb-ae47-4ae65dae3313` (slug `hasna`). Auth resolves via (1) the static
+bootstrap key, (2) an identities-signed v2 JWS (JWKS), or (3) a minted API key whose SHA-256
+hash resolves a `sandboxes.api_keys` row carrying the tenant (the kid→tenant bridge).
 
-```sh
-bun install
-bun test
-bun run test:hermetic
-bun run test:node
-bun run test:types
-bun run typecheck
-bun run build
-./scripts/package-smoke.sh
-./scripts/postgres-integration.sh
-bun run src/cli.ts doctor --output json
+Schema: `sandboxes.{tenants,users,memberships,tenant_provider_quota,tenant_provider_credentials,api_keys,allocations,checkpoints}`
+(`migrations/self-hosted/0001_control_plane_tenancy.sql`, applied by `sandboxes-serve migrate`).
+
+## `/v1` endpoints
+
+```
+GET  /health                              (public)          GET  /version                 (public)
+GET  /v1/health   GET /v1/whoami          POST /v1/validate/:kind      GET /v1/adapters
+POST /v1/sandboxes  (allocate)            GET  /v1/sandboxes           GET /v1/sandboxes/:id
+POST /v1/sandboxes/:id/destroy            POST /v1/sandboxes/:id/checkpoints
+GET  /v1/sandboxes/:id/checkpoints        GET  /v1/checkpoints/:id
+POST /v1/admin/tenants  POST /v1/admin/quota  POST /v1/admin/api-keys  POST /v1/admin/api-keys/:kid/revoke
 ```
 
-The CLI accepts structured operation input only from stdin (`--input -`). It
-does not accept secrets, provider IDs, host content paths, provider selection,
-raw capability material, or a caller-selected database path. Lifecycle and
-record reads require an Infinity integration and fail closed in the standalone
-CLI; only health/migration diagnostics open the fixed local state root. The SDK
-reference service is exercised with explicitly injected hermetic fakes.
-The hermetic suite runs inside a read-only bubblewrap filesystem with a cleared
-environment and an isolated network namespace; fetch, sockets, DNS, and
-subprocess APIs are denied by a preload guard.
+## Provider allocation is gated (R1)
 
-Deployment modes are exactly `local` and `self_hosted`. This repository does
-not contain tenants, signup, billing, a provider marketplace, or a hosted SaaS
-surface.
-## Managed-adapter trust boundary
+Live provider dispatch (Daytona/E2B) is **not** enabled in R1 — the STOP boundary. The
+`fake` adapter drives the allocation record lifecycle for tests/dev; real adapters record a
+`requested` allocation but are never dispatched (fail-closed, never faked). The cryptographic
+effect-journal domain (`src/service.ts`, `src/adapters/managed/*`) is the server-internal
+substrate the R2 live path wires into. It is not part of the client SDK surface.
 
-The exact pinned official SDK modules (`e2b@2.31.0` and `@daytona/sdk@0.193.0`),
-their broker handles, and the in-package callbacks passed to these bridges are control-plane
-trusted computing base (TCB). Production ports must execute in the adapter's Node realm and
-return genuine same-realm intrinsic `Promise` instances with unmodified `constructor` and
-`then` lookup behavior. The bridge enforces that contract and fails closed with
-`integrity_failed` when it can do so safely.
+## Develop
 
-Sandbox-controlled bytes and provider DTO values are **not** trusted by that exception. They
-remain hostile input and are authenticated, bounded, validated, and copied before use.
-Daytona inbound chunks are limited to the 16 MiB broker-frame ceiling, eight concurrent
-deliveries, and 16 MiB total in-flight bytes before allocation/copy. The SDK-facing callback
-always fulfills so the pinned SDK cannot rethrow an ignored listener rejection; the session
-drain preserves and throws the first original failure after sealing/finalization. Read-only SDK
-DTOs are copied into validated owned primitives before attestation, and both attestation input
-and returned ownership are derived from that one snapshot.
-
-JavaScript has no public operation that can mark every rejected native Promise handled without
-consulting either its `constructor` or `then`. Consequently, a TCB port that returns an already
-rejected cross-realm Promise or a Promise with a hostile non-configurable `constructor` accessor
-has already violated the V1 boundary: the bridge rejects it without executing the accessor, but
-the host may still report the original rejection. Provider-SDK Worker/subprocess isolation is a
-future hardening capability, not a V1 containment claim. Such untrusted SDK ports must not be
-admitted to production.
+```
+bun install
+bun test            # domain + http/auth/tenancy + sdk/mcp
+bun run typecheck
+bun run build
+bun run serve       # in-memory unless HASNA_SANDBOXES_DATABASE_URL is set
+```
