@@ -140,11 +140,17 @@ async function verifyJws(token: string, config: AuthConfig): Promise<AuthContext
   if (config.issuer && claims.iss !== config.issuer) {
     throw new HttpError(401, "unauthenticated", "Untrusted token issuer");
   }
+  // Assert the token was minted FOR this app (§1.3): a missing/empty audience
+  // is rejected, never treated as "audience-less, therefore ok".
   const aud = Array.isArray(claims.aud) ? claims.aud : claims.aud ? [claims.aud] : [];
-  if (aud.length > 0 && !aud.includes(APP_NAME)) {
+  if (!aud.includes(APP_NAME)) {
     throw new HttpError(403, "forbidden", "Token audience does not include sandboxes");
   }
-  if (typeof claims.exp === "number" && claims.exp * 1000 < Date.now()) {
+  // v2 access tokens are short-lived (≤24h); a token with no exp is rejected.
+  if (typeof claims.exp !== "number") {
+    throw new HttpError(401, "unauthenticated", "Access token has no expiry");
+  }
+  if (claims.exp * 1000 < Date.now()) {
     throw new HttpError(401, "unauthenticated", "Access token expired");
   }
   if (!claims.tid) throw new HttpError(403, "tenant_unresolved", "Token carries no tenant");

@@ -151,6 +151,39 @@ describe("sandboxes /v1 auth + tenancy", () => {
     expect(crossTenant.status).toBe(403);
   });
 
+  test("revoke hides another tenant's key existence: cross-tenant kid is 404, not 403", async () => {
+    // A root-tenant key to be targeted.
+    const rootKey = await call(deps, "POST", "/v1/admin/api-keys", {
+      token: BOOTSTRAP,
+      body: { scopes: ["sandboxes:read"] },
+    });
+    const rootKid = rootKey.body.data?.["kid"] as string;
+
+    // A non-root tenant B with its own admin key.
+    const tenantB = "cccccccc-dddd-eeee-ffff-000000000000";
+    await call(deps, "POST", "/v1/admin/tenants", { token: BOOTSTRAP, body: { tenant_id: tenantB, slug: "b-revoke" } });
+    const bAdmin = (
+      await call(deps, "POST", "/v1/admin/api-keys", {
+        token: BOOTSTRAP,
+        body: { tenant_id: tenantB, scopes: ["sandboxes:admin"] },
+      })
+    ).body.data?.["api_key"] as string;
+
+    // B's admin trying to revoke a ROOT key must not learn it exists: 404, never 403.
+    const crossRevoke = await call(deps, "POST", `/v1/admin/api-keys/${rootKid}/revoke`, { token: bAdmin });
+    expect(crossRevoke.status).toBe(404);
+    expect(crossRevoke.body.error?.code).toBe("not_found");
+
+    // A truly unknown kid is likewise 404 (indistinguishable from the cross-tenant case).
+    const unknownRevoke = await call(deps, "POST", "/v1/admin/api-keys/key_does_not_exist/revoke", { token: bAdmin });
+    expect(unknownRevoke.status).toBe(404);
+
+    // Root can still revoke the key it owns.
+    const rootRevoke = await call(deps, "POST", `/v1/admin/api-keys/${rootKid}/revoke`, { token: BOOTSTRAP });
+    expect(rootRevoke.status).toBe(200);
+    expect(rootRevoke.body.data?.["revoked"]).toBe(true);
+  });
+
   test("scope is enforced: a read-only key cannot allocate (403 insufficient_scope)", async () => {
     const keyRO = (
       await call(deps, "POST", "/v1/admin/api-keys", { token: BOOTSTRAP, body: { scopes: ["sandboxes:read"] } })

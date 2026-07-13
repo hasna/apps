@@ -372,8 +372,13 @@ async function handleV1(
     // POST /v1/admin/api-keys/:kid/revoke
     if (id === "api-keys" && sub !== undefined && subId === "revoke" && method === "POST") {
       const existing = await store.getApiKeyByKid(sub);
-      if (!existing) throw new SandboxError("not_found", "Key not found");
-      assertAdminTenantScope(ctx, existing.tenant_id);
+      // A cross-tenant kid must look identical to a non-existent one (404,
+      // never 403) so a non-root admin cannot probe another tenant's key ids
+      // (fail-closed existence hiding, _AUTH-TENANCY-STANDARD-v2 §11.3). The
+      // root/fleet tenant is the only caller allowed to revoke across tenants.
+      if (!existing || (existing.tenant_id !== ctx.tenantId && ctx.tenantId !== ROOT_TENANT_ID)) {
+        throw new SandboxError("not_found", "Key not found");
+      }
       await store.revokeApiKey(sub, nowRfc3339());
       return ok("v1.admin.api-keys.revoke", { kid: sub, revoked: true });
     }
