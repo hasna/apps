@@ -1,0 +1,92 @@
+name: Deploy (self-hosted prod)
+
+# Builds the ARM64 image, pushes to ECR, runs the additive control-plane
+# migration as a one-shot task, and rolls the sandboxes-prod ECS service.
+# Auth is GitHub OIDC -> arn:aws:iam::789877399345:role/sandboxes-prod-gha-deploy
+# (trust pinned to repo:hasnaxyz/iapp-sandboxes:environment:production).
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**/*.md"
+
+concurrency:
+  group: sandboxes-prod-deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  CLUSTER: oss-fleet-prod
+  SERVICE: sandboxes-prod
+  FAMILY: sandboxes-prod
+  CONTAINER: sandboxes
+  ECR: 789877399345.dkr.ecr.us-east-1.amazonaws.com/sandboxes
+  SUBNETS: subnet-071d0976c9451555c,subnet-02e3e73395e33b0e4,subnet-054c8e751cf671b36
+  SGS: sg-05c3bad33125468b4
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::789877399345:role/sandboxes-prod-gha-deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        run: aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${ECR%/*}"
+
+      - name: Set up buildx (arm64)
+        uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@v3
+
+      - name: Build & push arm64 image
+        id: image
+        run: |
+          TAG="r1-${GITHUB_SHA::7}"
+          docker buildx build --platform linux/arm64 -t "$ECR:$TAG" --push .
+          DIGEST=$(aws ecr describe-images --repository-name sandboxes --image-ids imageTag="$TAG" --query 'imageDetails[0].imageDigest' --output text)
+          echo "ref=$ECR@$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Register new task definition
+        id: taskdef
+        run: |
+          aws ecs describe-task-definition --task-definition "$FAMILY" --query 'taskDefinition' --output json > cur.json
+          jq --arg IMG "${{ steps.image.outputs.ref }}" '
+            .containerDefinitions[0].image=$IMG
+            | {family,cpu,memory,networkMode,requiresCompatibilities,runtimePlatform,executionRoleArn,taskRoleArn,containerDefinitions}
+          ' cur.json > new.json
+          ARN=$(aws ecs register-task-definition --cli-input-json file://new.json --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "arn=$ARN" >> "$GITHUB_OUTPUT"
+
+      - name: Run control-plane migration (one-shot, additive)
+        run: |
+          TASK=$(aws ecs run-task --cluster "$CLUSTER" --task-definition "${{ steps.taskdef.outputs.arn }}" --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SGS],assignPublicIp=ENABLED}" \
+            --overrides '{"containerOverrides":[{"name":"'"$CONTAINER"'","command":["bun","dist/http/server.js","migrate"]}]}' \
+            --query 'tasks[0].taskArn' --output text)
+          aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$TASK"
+          CODE=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK" --query 'tasks[0].containers[0].exitCode' --output text)
+          echo "migrate exit code: $CODE"; test "$CODE" = "0"
+
+      - name: Deploy service
+        run: |
+          aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --task-definition "${{ steps.taskdef.outputs.arn }}" >/dev/null
+          aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
+
+      - name: Verify
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" https://sandboxes.hasna.xyz/health)
+          echo "/health -> $code"; test "$code" = "200"
+          v1=$(curl -s -o /dev/null -w "%{http_code}" https://sandboxes.hasna.xyz/v1/health)
+          echo "/v1/health (no auth) -> $v1"; test "$v1" = "401"
