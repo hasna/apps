@@ -11,9 +11,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ApiKeyStore } from "@hasna/contracts/auth";
 import { createPgPool, createQueryClient } from "../generated/storage-kit/index.js";
-import { ProjectsPgStore } from "./pg-store.js";
 import { createFetchHandler } from "./app.js";
 import { runProjectsMigrations } from "./migrations.js";
+import { resolveTenantContext } from "./tenancy.js";
 
 const APP = "projects";
 
@@ -86,12 +86,12 @@ async function main(): Promise<void> {
   // --- server ---
   const signingSecret = resolveSigningSecret();
   const keyStore = new ApiKeyStore(client);
-  const store = new ProjectsPgStore(client);
   const port = resolvePort(argv);
   const hostname = process.env.HOST || "0.0.0.0";
 
   const handler = createFetchHandler({
-    store,
+    db: client,
+    resolveTenant: (principal) => resolveTenantContext(client, principal),
     version,
     app: APP,
     signingSecret,

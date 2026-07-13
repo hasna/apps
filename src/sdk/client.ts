@@ -1,7 +1,7 @@
 // @generated from the projects-serve OpenAPI document by scripts/generate-sdk.ts.
 // DO NOT EDIT BY HAND. Regenerate: bun run sdk:generate
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Projects API 0.1.79
+// Source: Projects API 1.0.0-rc.1
 
 export interface Root { "id": string; "slug": string; "name": string; "base_path": string; "tags"?: Array<string>; "default_kind"?: string | null; "repo_visibility"?: string | null; "allowed_recipes"?: Array<string>; "allowed_agents"?: Array<string>; "metadata"?: Record<string, unknown>; "created_at"?: string; "updated_at"?: string }
 
@@ -40,6 +40,64 @@ export interface DeleteResult { "deleted": boolean; "hard"?: boolean; "id"?: str
 export interface Health { "status": string; "version": string; "mode": string }
 
 export interface Error { "error": string; "reason"?: string }
+
+export interface AgentRun { "id": string; "agent_id"?: string | null; "workspace_id"?: string | null; "provider"?: string | null; "model"?: string | null; "prompt": string; "status": "planned" | "running" | "completed" | "failed"; "plan_json"?: Record<string, unknown> | null; "tool_calls_json"?: Array<Record<string, unknown>>; "result_json"?: Record<string, unknown> | null; "error"?: string | null; "metadata"?: Record<string, unknown>; "started_at"?: string; "completed_at"?: string | null }
+
+export interface CreateAgentRun { "agent_id"?: string; "workspace_id"?: string; "provider"?: string; "model"?: string; "prompt": string; "status"?: "planned" | "running" | "completed" | "failed"; "plan"?: Record<string, unknown>; "tool_calls"?: Array<Record<string, unknown>>; "result"?: Record<string, unknown>; "error"?: string; "metadata"?: Record<string, unknown> }
+
+export interface UpdateAgentRun { "status"?: "planned" | "running" | "completed" | "failed"; "provider"?: string; "model"?: string; "plan"?: Record<string, unknown>; "tool_calls"?: Array<Record<string, unknown>>; "result"?: Record<string, unknown>; "error"?: string; "metadata"?: Record<string, unknown>; "completed_at"?: string }
+
+export interface AgentRunList { "runs": Array<AgentRun>; "count": number }
+
+export interface Budget { "id": string; "scope_type": "project" | "run"; "scope_id": string; "window": "daily" | "monthly" | "lifetime"; "mode": "hard" | "soft"; "max_usd"?: number | null; "max_input_tokens"?: number | null; "max_output_tokens"?: number | null; "max_total_tokens"?: number | null; "warning_threshold"?: number | null; "reset_at"?: string | null; "metadata"?: Record<string, unknown>; "created_at"?: string; "updated_at"?: string }
+
+export interface CreateBudget { "scope_type": "project" | "run"; "scope_id": string; "window": "daily" | "monthly" | "lifetime"; "mode"?: "hard" | "soft"; "max_usd"?: number; "max_input_tokens"?: number; "max_output_tokens"?: number; "max_total_tokens"?: number; "warning_threshold"?: number; "reset_at"?: string; "metadata"?: Record<string, unknown> }
+
+export interface BudgetList { "budgets": Array<Budget>; "count": number }
+
+export interface Spend { "id": string; "workspace_id"?: string | null; "run_id"?: string | null; "provider"?: string | null; "model"?: string | null; "usd": number; "input_tokens"?: number; "output_tokens"?: number; "total_tokens"?: number; "metadata"?: Record<string, unknown>; "created_at"?: string }
+
+export interface RecordSpend { "workspace_id"?: string; "run_id"?: string; "provider"?: string; "model"?: string; "usd"?: number; "input_tokens"?: number; "output_tokens"?: number; "total_tokens"?: number; "metadata"?: Record<string, unknown> }
+
+export interface SpendList { "spend": Array<Spend>; "count": number }
+
+export interface WorkspaceLocation { "id": string; "workspace_id": string; "path": string; "machine_id": string; "label"?: string; "kind"?: string; "is_primary"?: boolean; "exists_at_create"?: boolean; "metadata"?: Record<string, unknown>; "created_at"?: string }
+
+export interface AddWorkspaceLocation { "path": string; "machine_id": string; "label"?: string; "kind"?: string; "is_primary"?: boolean; "exists_at_create"?: boolean; "metadata"?: Record<string, unknown> }
+
+export interface LocationList { "locations": Array<WorkspaceLocation>; "count": number }
+
+export interface WorkspaceAgentAssignment { "id": string; "workspace_id": string; "agent_id": string; "role": string; "assigned_by"?: string | null; "metadata"?: Record<string, unknown>; "created_at"?: string }
+
+export interface AssignWorkspaceAgent { "agent_id": string; "role"?: string; "assigned_by"?: string; "metadata"?: Record<string, unknown> }
+
+export interface WorkspaceAgentList { "agents": Array<WorkspaceAgentAssignment>; "count": number }
+
+export interface TmuxProfileWindow { "id": string; "profile_id": string; "window_name_template": string; "path_template"?: string | null; "command"?: string | null; "window_index"?: number | null; "detached"?: boolean; "env"?: Record<string, unknown>; "revive"?: boolean; "created_at"?: string }
+
+export interface CreateTmuxProfileWindow { "window_name_template": string; "path_template"?: string; "command"?: string; "window_index"?: number; "detached"?: boolean; "env"?: Record<string, unknown>; "revive"?: boolean }
+
+export interface TmuxProfileWindowList { "windows": Array<TmuxProfileWindow>; "count": number }
+
+export interface TmuxProfile { "id": string; "slug": string; "name": string; "description"?: string | null; "session_template"?: string; "attach"?: boolean; "metadata"?: Record<string, unknown>; "created_at"?: string; "updated_at"?: string }
+
+export interface CreateTmuxProfile { "name": string; "slug"?: string; "description"?: string; "session_template"?: string; "attach"?: boolean; "metadata"?: Record<string, unknown>; "windows"?: Array<CreateTmuxProfileWindow> }
+
+export interface TmuxProfileList { "profiles": Array<TmuxProfile>; "count": number }
+
+export interface WorkspaceTmuxSession { "id": string; "workspace_id": string; "profile_id"?: string | null; "session_name": string; "metadata"?: Record<string, unknown>; "created_at"?: string }
+
+export interface RecordWorkspaceTmuxSession { "profile_id"?: string; "session_name": string; "metadata"?: Record<string, unknown> }
+
+export interface SessionList { "sessions": Array<WorkspaceTmuxSession>; "count": number }
+
+export interface WorkspaceLock { "id": string; "lock_key": string; "workspace_id"?: string | null; "agent_id"?: string | null; "reason"?: string | null; "created_at"?: string; "expires_at"?: string | null }
+
+export interface AcquireWorkspaceLock { "lock_key": string; "workspace_id"?: string; "agent_id"?: string; "reason"?: string; "expires_at"?: string }
+
+export interface LockList { "locks": Array<WorkspaceLock>; "count": number }
+
+export interface ReleaseResult { "released": boolean; "lock_key"?: string }
 
 export interface ProjectsClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */
@@ -141,6 +199,78 @@ export class ProjectsClient {
       });
     }
 
+    /** List budgets */
+    async listBudgets(query?: { "scope_type"?: string; "scope_id"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<BudgetList> {
+      return this.request("GET", `/v1/budgets`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Create a budget */
+    async createBudget(body: CreateBudget, init?: RequestInit): Promise<Budget> {
+      return this.request("POST", `/v1/budgets`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Get a budget */
+    async getBudget(id: string, init?: RequestInit): Promise<Budget> {
+      return this.request("GET", `/v1/budgets/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Delete a budget */
+    async deleteBudget(id: string, init?: RequestInit): Promise<DeleteResult> {
+      return this.request("DELETE", `/v1/budgets/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Delete a project location */
+    async deleteLocation(id: string, init?: RequestInit): Promise<DeleteResult> {
+      return this.request("DELETE", `/v1/locations/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List locks */
+    async listLocks(query?: { "workspace_id"?: string }, init?: RequestInit): Promise<LockList> {
+      return this.request("GET", `/v1/locks`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Acquire a lock */
+    async acquireLock(body: AcquireWorkspaceLock, init?: RequestInit): Promise<WorkspaceLock> {
+      return this.request("POST", `/v1/locks`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Release a lock by lock_key */
+    async releaseLock(id: string, init?: RequestInit): Promise<ReleaseResult> {
+      return this.request("DELETE", `/v1/locks/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
     /** List projects (workspaces) */
     async listProjects(query?: { "status"?: string; "kind"?: string; "root_id"?: string; "query"?: string; "tag"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<WorkspaceList> {
       return this.request("GET", `/v1/projects`, {
@@ -186,6 +316,24 @@ export class ProjectsClient {
       });
     }
 
+    /** List a project's assigned agents */
+    async listProjectAgents(id: string, init?: RequestInit): Promise<WorkspaceAgentList> {
+      return this.request("GET", `/v1/projects/${encodeURIComponent(String(id))}/agents`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Assign an agent to a project */
+    async assignProjectAgent(id: string, body: AssignWorkspaceAgent, init?: RequestInit): Promise<WorkspaceAgentAssignment> {
+      return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/agents`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Archive a project */
     async archiveProject(id: string, init?: RequestInit): Promise<Workspace> {
       return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/archive`, {
@@ -200,6 +348,51 @@ export class ProjectsClient {
       return this.request("GET", `/v1/projects/${encodeURIComponent(String(id))}/events`, {
         body: undefined,
         query,
+        init,
+      });
+    }
+
+    /** List a project's on-machine locations */
+    async listProjectLocations(id: string, init?: RequestInit): Promise<LocationList> {
+      return this.request("GET", `/v1/projects/${encodeURIComponent(String(id))}/locations`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Register a project location (machine-local path persisted centrally) */
+    async addProjectLocation(id: string, body: AddWorkspaceLocation, init?: RequestInit): Promise<WorkspaceLocation> {
+      return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/locations`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List a project's locks */
+    async listProjectLocks(id: string, init?: RequestInit): Promise<LockList> {
+      return this.request("GET", `/v1/projects/${encodeURIComponent(String(id))}/locks`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List a project's recorded tmux sessions */
+    async listProjectSessions(id: string, init?: RequestInit): Promise<SessionList> {
+      return this.request("GET", `/v1/projects/${encodeURIComponent(String(id))}/sessions`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Record a project tmux session (machine-local execution state) */
+    async recordProjectSession(id: string, body: RecordWorkspaceTmuxSession, init?: RequestInit): Promise<WorkspaceTmuxSession> {
+      return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/sessions`, {
+        body,
+        query: undefined,
         init,
       });
     }
@@ -280,6 +473,123 @@ export class ProjectsClient {
     async updateRoot(id: string, body: UpdateRoot, init?: RequestInit): Promise<Root> {
       return this.request("PATCH", `/v1/roots/${encodeURIComponent(String(id))}`, {
         body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List agent runs */
+    async listRuns(query?: { "workspace_id"?: string; "agent_id"?: string; "status"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<AgentRunList> {
+      return this.request("GET", `/v1/runs`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Create an agent run */
+    async createRun(body: CreateAgentRun, init?: RequestInit): Promise<AgentRun> {
+      return this.request("POST", `/v1/runs`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Get an agent run */
+    async getRun(id: string, init?: RequestInit): Promise<AgentRun> {
+      return this.request("GET", `/v1/runs/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Update an agent run (status/result/tool calls) */
+    async updateRun(id: string, body: UpdateAgentRun, init?: RequestInit): Promise<AgentRun> {
+      return this.request("PATCH", `/v1/runs/${encodeURIComponent(String(id))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Delete a recorded tmux session */
+    async deleteSession(id: string, init?: RequestInit): Promise<DeleteResult> {
+      return this.request("DELETE", `/v1/sessions/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List budget spend records */
+    async listSpend(query?: { "workspace_id"?: string; "run_id"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<SpendList> {
+      return this.request("GET", `/v1/spend`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Record a budget spend entry */
+    async recordSpend(body: RecordSpend, init?: RequestInit): Promise<Spend> {
+      return this.request("POST", `/v1/spend`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List tmux profiles */
+    async listTmuxProfiles(init?: RequestInit): Promise<TmuxProfileList> {
+      return this.request("GET", `/v1/tmux-profiles`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Create a tmux profile */
+    async createTmuxProfile(body: CreateTmuxProfile, init?: RequestInit): Promise<TmuxProfile> {
+      return this.request("POST", `/v1/tmux-profiles`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Get a tmux profile by id or slug */
+    async getTmuxProfile(id: string, init?: RequestInit): Promise<TmuxProfile> {
+      return this.request("GET", `/v1/tmux-profiles/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List a tmux profile's windows */
+    async listTmuxProfileWindows(id: string, init?: RequestInit): Promise<TmuxProfileWindowList> {
+      return this.request("GET", `/v1/tmux-profiles/${encodeURIComponent(String(id))}/windows`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Add a window to a tmux profile */
+    async addTmuxProfileWindow(id: string, body: CreateTmuxProfileWindow, init?: RequestInit): Promise<TmuxProfileWindow> {
+      return this.request("POST", `/v1/tmux-profiles/${encodeURIComponent(String(id))}/windows`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Remove a project agent assignment */
+    async removeProjectAgent(id: string, init?: RequestInit): Promise<DeleteResult> {
+      return this.request("DELETE", `/v1/workspace-agents/${encodeURIComponent(String(id))}`, {
+        body: undefined,
         query: undefined,
         init,
       });

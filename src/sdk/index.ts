@@ -11,6 +11,12 @@ export const PROJECTS_API_URL_ENV = "PROJECTS_API_URL";
 export const PROJECTS_API_KEY_ENV = "PROJECTS_API_KEY";
 
 /**
+ * Default export: the typed `/v1` client class. Import as
+ * `import ProjectsClient from "@hasnaxyz/projects/sdk"`.
+ */
+export default ProjectsClient;
+
+/**
  * Build a ProjectsClient from the environment (self_hosted convention):
  *   PROJECTS_API_URL  — base URL of projects-serve (behind the ALB)
  *   PROJECTS_API_KEY  — issued API key (hasna_projects_…)

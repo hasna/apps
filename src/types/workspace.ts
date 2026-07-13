@@ -498,3 +498,178 @@ export interface WorkspaceLockRow {
   created_at: string;
   expires_at: string | null;
 }
+
+// --- /v1-expanded input types (R1) -----------------------------------------
+
+export interface CreateAgentRunInput {
+  agent_id?: string | null;
+  workspace_id?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  prompt: string;
+  status?: AgentRunStatus;
+  plan?: JsonObject | null;
+  tool_calls?: JsonObject[];
+  result?: JsonObject | null;
+  error?: string | null;
+  metadata?: JsonObject;
+}
+
+export interface UpdateAgentRunInput {
+  status?: AgentRunStatus;
+  provider?: string | null;
+  model?: string | null;
+  plan?: JsonObject | null;
+  tool_calls?: JsonObject[];
+  result?: JsonObject | null;
+  error?: string | null;
+  metadata?: JsonObject;
+  completed_at?: string | null;
+}
+
+export const BUDGET_SCOPE_TYPES = ["project", "run"] as const;
+export type BudgetScopeType = (typeof BUDGET_SCOPE_TYPES)[number];
+export const BUDGET_WINDOWS = ["daily", "monthly", "lifetime"] as const;
+export type BudgetWindow = (typeof BUDGET_WINDOWS)[number];
+export const BUDGET_MODES = ["hard", "soft"] as const;
+export type BudgetMode = (typeof BUDGET_MODES)[number];
+
+export interface Budget {
+  id: string;
+  scope_type: BudgetScopeType;
+  scope_id: string;
+  window: BudgetWindow;
+  mode: BudgetMode;
+  max_usd: number | null;
+  max_input_tokens: number | null;
+  max_output_tokens: number | null;
+  max_total_tokens: number | null;
+  warning_threshold: number | null;
+  reset_at: string | null;
+  metadata: JsonObject;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BudgetRow {
+  id: string;
+  scope_type: string;
+  scope_id: string;
+  window: string;
+  mode: string;
+  max_usd: number | null;
+  max_input_tokens: number | null;
+  max_output_tokens: number | null;
+  max_total_tokens: number | null;
+  warning_threshold: number | null;
+  reset_at: string | null;
+  metadata: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateBudgetInput {
+  scope_type: BudgetScopeType;
+  scope_id: string;
+  window: BudgetWindow;
+  mode?: BudgetMode;
+  max_usd?: number | null;
+  max_input_tokens?: number | null;
+  max_output_tokens?: number | null;
+  max_total_tokens?: number | null;
+  warning_threshold?: number | null;
+  reset_at?: string | null;
+  metadata?: JsonObject;
+}
+
+export interface BudgetSpend {
+  id: string;
+  workspace_id: string | null;
+  run_id: string | null;
+  provider: string | null;
+  model: string | null;
+  usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  metadata: JsonObject;
+  created_at: string;
+}
+
+export interface BudgetSpendRow {
+  id: string;
+  workspace_id: string | null;
+  run_id: string | null;
+  provider: string | null;
+  model: string | null;
+  usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  metadata: string;
+  created_at: string;
+}
+
+export interface RecordBudgetSpendInput {
+  workspace_id?: string | null;
+  run_id?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  usd?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  metadata?: JsonObject;
+}
+
+export interface AddWorkspaceLocationInput {
+  workspace_id: string;
+  path: string;
+  machine_id: string;
+  label?: string;
+  kind?: string;
+  is_primary?: boolean;
+  exists_at_create?: boolean;
+  metadata?: JsonObject;
+}
+
+export interface AssignWorkspaceAgentInput {
+  workspace_id: string;
+  agent_id: string;
+  role?: string;
+  assigned_by?: string | null;
+  metadata?: JsonObject;
+}
+
+export interface AcquireWorkspaceLockInput {
+  lock_key: string;
+  workspace_id?: string | null;
+  agent_id?: string | null;
+  reason?: string | null;
+  expires_at?: string | null;
+}
+
+export interface RecordWorkspaceTmuxSessionInput {
+  workspace_id: string;
+  profile_id?: string | null;
+  session_name: string;
+  metadata?: JsonObject;
+}
+
+export interface WorkspaceTmuxSession {
+  id: string;
+  workspace_id: string;
+  profile_id: string | null;
+  session_name: string;
+  metadata: JsonObject;
+  created_at: string;
+}
+
+export interface WorkspaceTmuxSessionRow {
+  id: string;
+  workspace_id: string;
+  profile_id: string | null;
+  session_name: string;
+  metadata: string;
+  created_at: string;
+}

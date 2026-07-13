@@ -1,6 +1,6 @@
 {
-  "name": "@hasna/projects",
-  "version": "0.1.84",
+  "name": "@hasnaxyz/projects",
+  "version": "1.0.0-rc.1",
   "description": "High-level project management CLI, MCP server, SDK, and AI SDK agent loop for coding agents",
   "type": "module",
   "main": "dist/index.js",
@@ -75,15 +75,15 @@
   ],
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
-    "access": "public"
+    "access": "restricted"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/projects.git"
+    "url": "git+https://github.com/hasnaxyz/iapp-projects.git"
   },
-  "homepage": "https://github.com/hasna/projects",
+  "homepage": "https://github.com/hasnaxyz/iapp-projects",
   "bugs": {
-    "url": "https://github.com/hasna/projects/issues"
+    "url": "https://github.com/hasnaxyz/iapp-projects/issues"
   },
   "engines": {
     "bun": ">=1.0.0"
