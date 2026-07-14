@@ -1,6 +1,6 @@
 {
   "name": "@hasna/todos",
-  "version": "0.11.76",
+  "version": "0.11.86",
   "description": "Universal task management for AI coding agents - CLI + MCP server + interactive TUI",
   "type": "module",
   "main": "dist/index.js",
@@ -42,6 +42,7 @@
   "files": [
     "dist",
     "dashboard/dist",
+    "vendor",
     "LICENSE",
     "README.md"
   ],
@@ -49,6 +50,7 @@
     "build": "rm -rf dist dashboard/dist && cd dashboard && bun install --frozen-lockfile && bun run build && cd .. && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/sdk/index.ts --outdir dist/sdk --target bun && bun build src/index.ts src/mcp.ts src/registry.ts src/contracts.ts src/storage.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
     "build:server": "rm -rf dist && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/sdk/index.ts --outdir dist/sdk --target bun && bun build src/index.ts src/mcp.ts src/registry.ts src/contracts.ts src/storage.ts --outdir dist --target bun",
     "migrate": "bun run src/server/index.ts migrate",
+    "backfill:comment-redaction": "bun run src/server/index.ts redact-comments",
     "generate:sdk": "bun run scripts/generate-sdk.ts",
     "build:dashboard": "cd dashboard && bun install --frozen-lockfile && bun run build",
     "typecheck": "tsc --noEmit",
@@ -92,7 +94,7 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/contracts": "^0.5.0",
+    "@hasna/contracts": "0.5.2",
     "@hasna/events": "^0.1.11",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",

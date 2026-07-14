@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { LockError } from "../types/index.js";
 import type {
   Agent,
   CreateCommentInput,
@@ -12,10 +13,10 @@ import type {
   RegisterAgentInput,
   Task,
   TaskComment,
+  TaskDependency,
   TaskFilter,
   TaskHistory,
   TaskList,
-  TaskPriority,
   TaskTemplate,
   TemplateWithTasks,
   UpdatePlanInput,
@@ -26,6 +27,14 @@ import type {
   ActiveWorkItem,
   TodosActiveWorkFilter,
   TodosAgentUpdateInput,
+  CreateTodosVerificationInput,
+  CreateTodosCommitInput,
+  CreateTodosGitRefInput,
+  TodosAgentReleaseResult,
+  TodosCommentListOptions,
+  TodosTaskCommitRecord,
+  TodosTaskGitRefRecord,
+  TodosLockResult,
   TodosStorageAdapter,
   TodosStorageContext,
   TodosStorageImportResult,
@@ -33,8 +42,10 @@ import type {
   TodosStorageTombstone,
   TodosTaskClaimFilter,
   TodosTaskCompletionOptions,
+  TodosTaskDependencies,
   TodosTaskFailureOptions,
   TodosTaskFailureResult,
+  TodosTaskVerification,
   UpdateTemplateInput,
 } from "./interfaces.js";
 import {
@@ -44,8 +55,9 @@ import {
   type TodosPostgresQueryClient,
   type TodosPostgresSyncRecordType,
 } from "./postgres-sync.js";
+import { redactEvidenceText } from "../lib/redaction.js";
 
-type RemoteObjectType = TodosPostgresSyncRecordType | "comments";
+type RemoteObjectType = TodosPostgresSyncRecordType | "comments" | "dependencies" | "verifications" | "commits" | "refs";
 
 export interface CreatePostgresTodosStorageAdapterOptions {
   client: TodosPostgresQueryClient;
@@ -92,8 +104,8 @@ export function createPostgresTodosStorageAdapter(
     tasks: {
       create: (input, context) => createTask(input, store, context),
       get: (id) => store.get<Task>("tasks", id),
-      list: (filter = {}) => listTasks(filter, store),
-      count: async (filter = {}) => (await listTasks(filter, store)).length,
+      list: (filter = {}) => store.listTasks(filter),
+      count: (filter = {}) => store.countTasks(filter),
       update: (id, input) => updateTask(id, input, store),
       delete: (id, context) => store.delete("tasks", id, context),
       start: (id, agentId) => startTask(id, agentId, store),
@@ -103,6 +115,29 @@ export function createPostgresTodosStorageAdapter(
       getNext: (_agentId, filters) => getNextTask(filters, store),
       getActiveWork: (filters) => getActiveWork(filters, store),
       getChangedSince: (since, filters) => getChangedSince(since, filters, store),
+      lock: (id, agentId) => lockTask(id, agentId, store),
+      unlock: (id, agentId) => unlockTask(id, agentId, store),
+      getByFingerprint: (fingerprint) => store.getTaskByFingerprint(fingerprint),
+    },
+    dependencies: {
+      add: (taskId, dependsOn, context) => addDependency(taskId, dependsOn, store, context),
+      remove: (taskId, dependsOn) => removeDependency(taskId, dependsOn, store),
+      list: (taskId) => listDependencies(taskId, store),
+      listAll: () => store.list<TaskDependency>("dependencies"),
+    },
+    verifications: {
+      add: (input, context) => addVerification(input, store, context),
+      list: (taskId) => listVerifications(taskId, store),
+    },
+    commits: {
+      add: (input, context) => addCommit(input, store, context),
+      list: (taskId) => listCommits(taskId, store),
+      find: (sha) => findCommit(sha, store),
+    },
+    gitRefs: {
+      add: (input, context) => addGitRef(input, store, context),
+      list: (taskId) => listGitRefs(taskId, store),
+      find: (ref) => findGitRefs(ref, store),
     },
     projects: {
       create: (input, context) => createProject(input, store, context),
@@ -129,6 +164,8 @@ export function createPostgresTodosStorageAdapter(
         .filter((agent) => options?.include_archived || agent.status !== "archived")
         .sort((a, b) => a.name.localeCompare(b.name)),
       update: (id, input) => updateAgent(id, input, store),
+      heartbeat: (idOrName, context) => heartbeatAgent(idOrName, store, context),
+      release: (idOrName, sessionId, context) => releaseAgent(idOrName, sessionId, store, context),
     },
     taskLists: {
       create: (input, context) => createTaskList(input, store, context),
@@ -156,6 +193,26 @@ export function createPostgresTodosStorageAdapter(
       logTaskChange: (taskId, action, field, oldValue, newValue, agentId, context) =>
         logTaskChange(taskId, action, field, oldValue, newValue, agentId, store, context),
       addComment: (input, context) => addComment(input, store, context),
+      getComments: async (taskId) => {
+        const pages: TaskComment[][] = [];
+        let before: TodosCommentListOptions["before"];
+        while (true) {
+          const page = await store.listComments(taskId, { limit: 1_000, ...(before ? { before } : {}) });
+          if (page.length === 0) break;
+          pages.unshift(page);
+          if (page.length < 1_000) break;
+          const oldest = page[0]!;
+          before = { created_at: oldest.created_at, id: oldest.id };
+        }
+        return pages.flat()
+          .map(redactComment)
+          .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
+      },
+      getCommentsPage: async (taskId, options) => {
+        return (await store.listComments(taskId, options))
+          .map(redactComment)
+          .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
+      },
       getTaskHistory: async (taskId) => (await store.list<TaskHistory>("audit_history"))
         .filter((entry) => entry.task_id === taskId)
         .sort((a, b) => a.created_at.localeCompare(b.created_at)),
@@ -216,6 +273,31 @@ class PostgresJsonRecordStore {
     return (await this.listRecords<T>(type)).map((record) => record.payload);
   }
 
+  async listComments(taskId: string, options: TodosCommentListOptions = {}): Promise<TaskComment[]> {
+    await this.ensureSchema();
+    const limit = options.limit ?? 100;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_001) {
+      throw new Error("Postgres comment limit must be an integer between 1 and 1001");
+    }
+    const params: unknown[] = [this.service, taskId];
+    let cursorPredicate = "";
+    if (options.before) {
+      params.push(options.before.created_at, options.before.id);
+      cursorPredicate = `AND (payload->>'created_at', object_id) < ($3, $4)`;
+    }
+    params.push(limit);
+    const result = await this.options.client.query<{ payload: unknown }>(
+      `/* todos:list-comments */ SELECT payload FROM ${this.tableName}
+       WHERE service = $1 AND object_type = 'comments' AND deleted_at IS NULL
+         AND payload->>'task_id' = $2
+         ${cursorPredicate}
+       ORDER BY payload->>'created_at' DESC, object_id DESC
+       LIMIT $${params.length}`,
+      params,
+    );
+    return result.rows.map((row) => payloadRecord<TaskComment>(row.payload)).reverse();
+  }
+
   async listRecords<T>(type: RemoteObjectType): Promise<RemoteRecord<T>[]> {
     await this.ensureSchema();
     const result = await this.options.client.query<RemoteRecordRow>(
@@ -230,6 +312,94 @@ class PostgresJsonRecordStore {
       payload: payloadRecord<T>(row.payload),
       updatedAt: stringValue(row.updated_at) ?? new Date().toISOString(),
     }));
+  }
+
+  /**
+   * SQL-side task filtering, sorting, pagination and counting over the jsonb
+   * payload. Historically the adapter materialized the ENTIRE tasks table into JS
+   * on every list/count/stats call and filtered in memory — with ~38k tasks that
+   * O(n) heap load OOM crash-looped the serve task (it now runs at 4GB). Pushing
+   * the TaskFilter, priority sort, LIMIT/OFFSET and COUNT down to Postgres means a
+   * request only materializes the page it returns.
+   *
+   * KEEP IN SYNC with the in-memory mock in storage.test.ts
+   * (createMemoryPostgresClient): the condition emission order below is decoded
+   * positionally there.
+   */
+  private buildTaskFilterSql(filter: TaskFilter): { where: string; params: unknown[] } {
+    const params: unknown[] = [this.service, "tasks"];
+    const conds: string[] = ["service = $1", "object_type = $2", "deleted_at IS NULL"];
+    const p = (value: unknown): string => {
+      params.push(value);
+      return `$${params.length}`;
+    };
+    // Expand a set filter into scalar IN placeholders rather than a bound array
+    // (`= ANY($n::text[])`). The production driver is Bun.SQL (sql.unsafe), which
+    // does not bind a JS array to a Postgres array — it flattens it and PG throws
+    // "malformed array literal". Individual scalar params are driver-agnostic.
+    const inClause = (column: string, values: readonly unknown[]): string => {
+      if (values.length === 0) return "1=0";
+      return `${column} IN (${values.map((v) => p(v)).join(", ")})`;
+    };
+    if (filter.ids) conds.push(inClause("payload->>'id'", filter.ids));
+    if (filter.project_id !== undefined) conds.push(`payload->>'project_id' = ${p(filter.project_id)}`);
+    if (filter.parent_id !== undefined) conds.push(`payload->>'parent_id' IS NOT DISTINCT FROM ${p(filter.parent_id)}`);
+    if (filter.plan_id !== undefined) conds.push(`payload->>'plan_id' = ${p(filter.plan_id)}`);
+    if (filter.task_list_id !== undefined) conds.push(`payload->>'task_list_id' = ${p(filter.task_list_id)}`);
+    if (filter.status !== undefined) conds.push(inClause("payload->>'status'", toFilterArray(filter.status)));
+    if (filter.priority !== undefined) conds.push(inClause("payload->>'priority'", toFilterArray(filter.priority)));
+    if (filter.assigned_to !== undefined) conds.push(`payload->>'assigned_to' = ${p(filter.assigned_to)}`);
+    if (filter.agent_id !== undefined) conds.push(`payload->>'agent_id' = ${p(filter.agent_id)}`);
+    if (filter.session_id !== undefined) conds.push(`payload->>'session_id' = ${p(filter.session_id)}`);
+    if (filter.tags?.length) conds.push(`payload->'tags' @> ${p(filter.tags)}::jsonb`);
+    if (filter.has_recurrence !== undefined) {
+      conds.push(`(COALESCE(payload->>'recurrence_rule', '') <> '') = ${p(filter.has_recurrence)}`);
+    }
+    if (filter.task_type !== undefined) {
+      conds.push(inClause("COALESCE(payload->>'task_type', '')", toFilterArray(filter.task_type)));
+    }
+    // include_subtasks defaults to false: exclude tasks that have a parent.
+    if (filter.include_subtasks !== true) conds.push(`(payload->>'parent_id' IS NULL OR payload->>'parent_id' = '')`);
+    return { where: conds.join(" AND "), params };
+  }
+
+  async listTasks(filter: TaskFilter): Promise<Task[]> {
+    await this.ensureSchema();
+    const { where, params } = this.buildTaskFilterSql(filter);
+    let sql = `/* todos:list-tasks */ SELECT payload FROM ${this.tableName} WHERE ${where} ${TASK_ORDER_BY}`;
+    if (filter.limit !== undefined) {
+      params.push(filter.limit);
+      sql += ` LIMIT $${params.length}`;
+    }
+    if (filter.offset) {
+      params.push(filter.offset);
+      sql += ` OFFSET $${params.length}`;
+    }
+    const result = await this.options.client.query<{ payload: unknown }>(sql, params);
+    return result.rows.map((row) => payloadRecord<Task>(row.payload));
+  }
+
+  async getTaskByFingerprint(fingerprint: string): Promise<Task | null> {
+    await this.ensureSchema();
+    // Dedupe key lives in the task payload metadata. Exclude tombstoned rows so a
+    // deleted task never masks a fresh upsert. LIMIT 1 — the fingerprint is unique
+    // per the local upsert contract; the oldest live match wins deterministically.
+    const sql = `/* todos:task-by-fingerprint */ SELECT payload FROM ${this.tableName}
+      WHERE service = $1 AND object_type = $2 AND deleted_at IS NULL
+        AND payload->'metadata'->>'fingerprint' = $3
+      ORDER BY payload->>'created_at' ASC
+      LIMIT 1`;
+    const result = await this.options.client.query<{ payload: unknown }>(sql, [this.service, "tasks", fingerprint]);
+    const row = result.rows[0];
+    return row ? payloadRecord<Task>(row.payload) : null;
+  }
+
+  async countTasks(filter: TaskFilter): Promise<number> {
+    await this.ensureSchema();
+    const { where, params } = this.buildTaskFilterSql(filter);
+    const sql = `/* todos:count-tasks */ SELECT COUNT(*)::int AS count FROM ${this.tableName} WHERE ${where}`;
+    const result = await this.options.client.query<{ count: number | string }>(sql, params);
+    return Number(result.rows[0]?.count ?? 0);
   }
 
   async listTombstones(): Promise<TodosStorageTombstone[]> {
@@ -287,7 +457,12 @@ class PostgresJsonRecordStore {
         this.service,
         type,
         value.id,
-        JSON.stringify(value),
+        // Bind the object directly (not JSON.stringify) so the driver stores a
+        // real jsonb OBJECT. Passing a JSON string to a $::jsonb param makes
+        // Bun.SQL double-encode it into a jsonb STRING scalar, which breaks every
+        // server-side payload->>'field' filter and jsonb_set (the short-id
+        // counter). See migrations/…normalize-payload.
+        jsonbParam(value),
         updatedAt,
         context.requestId ?? this.sourceMachineId ?? null,
         numberValue(value.version),
@@ -373,7 +548,7 @@ class PostgresJsonRecordStore {
         this.service,
         tombstone.object_type,
         tombstone.object_id,
-        JSON.stringify(tombstone.payload ?? { id: tombstone.object_id, deleted_at: deletedAt }),
+        jsonbParam(tombstone.payload ?? { id: tombstone.object_id, deleted_at: deletedAt }),
         updatedAt,
         deletedAt,
         tombstone.source_machine_id ?? context.requestId ?? this.sourceMachineId ?? null,
@@ -582,13 +757,233 @@ async function patchTask(task: Task, patch: Partial<Task>, store: PostgresJsonRe
   return updated;
 }
 
+// Lock lease TTL — keep in lockstep with the local sqlite path (LOCK_EXPIRY_MINUTES).
+const CLOUD_LOCK_EXPIRY_MINUTES = 30;
+
+function cloudLockExpired(lockedAt: string | null | undefined): boolean {
+  if (!lockedAt) return true;
+  return new Date(lockedAt).getTime() + CLOUD_LOCK_EXPIRY_MINUTES * 60 * 1000 < Date.now();
+}
+
+function cloudLockExpiresAt(lockedAt: string): string {
+  return new Date(new Date(lockedAt).getTime() + CLOUD_LOCK_EXPIRY_MINUTES * 60 * 1000).toISOString();
+}
+
+/**
+ * Acquire an exclusive lock on a cloud task by setting `locked_by`/`locked_at` on
+ * the shared record. Mirrors the local sqlite semantics: completed/cancelled tasks
+ * cannot be locked, a same-agent re-lock renews the lease, and a live lock held by
+ * a DIFFERENT agent is reported (not stolen). No transactions on this adapter, so
+ * this is best-effort last-writer-wins — the same guarantee `start`/`claim` give.
+ */
+async function lockTask(id: string, agentId: string, store: PostgresJsonRecordStore): Promise<TodosLockResult> {
+  const task = await requireRecord<Task>("tasks", id, store);
+  if (task.status === "completed" || task.status === "cancelled") {
+    return { success: false, error: `Task is ${task.status} and cannot be locked` };
+  }
+  if (task.locked_by && task.locked_by !== agentId && !cloudLockExpired(task.locked_at)) {
+    return { success: false, locked_by: task.locked_by, locked_at: task.locked_at ?? undefined, error: `Task is locked by ${task.locked_by}` };
+  }
+  const timestamp = new Date().toISOString();
+  await patchTask(task, { locked_by: agentId, locked_at: timestamp }, store);
+  return { success: true, locked_by: agentId, locked_at: timestamp, expires_at: cloudLockExpiresAt(timestamp) };
+}
+
+/** Release a lock on a cloud task. A non-matching agent is rejected (parity with local). */
+async function unlockTask(id: string, agentId: string | undefined, store: PostgresJsonRecordStore): Promise<boolean> {
+  const task = await requireRecord<Task>("tasks", id, store);
+  if (agentId && task.locked_by && task.locked_by !== agentId) {
+    throw new LockError(id, task.locked_by);
+  }
+  await patchTask(task, { locked_by: null, locked_at: null }, store);
+  return true;
+}
+
+function dependencyId(taskId: string, dependsOn: string): string {
+  return `${taskId}::${dependsOn}`;
+}
+
+/** Add a dependency edge (taskId depends on dependsOn). Both tasks must exist; cycles are rejected. */
+async function addDependency(
+  taskId: string,
+  dependsOn: string,
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<TaskDependency> {
+  if (taskId === dependsOn) throw new Error("A task cannot depend on itself");
+  if (!(await store.get<Task>("tasks", taskId))) throw new Error(`Task not found: ${taskId}`);
+  if (!(await store.get<Task>("tasks", dependsOn))) throw new Error(`Task not found: ${dependsOn}`);
+  // Cycle guard: adding taskId->dependsOn creates a cycle if dependsOn can already
+  // reach taskId through the existing edges. BFS over the current dependency set.
+  const edges = await store.list<TaskDependency & { id?: string }>("dependencies");
+  const adjacency = new Map<string, string[]>();
+  for (const edge of edges) {
+    if (!adjacency.has(edge.task_id)) adjacency.set(edge.task_id, []);
+    adjacency.get(edge.task_id)!.push(edge.depends_on);
+  }
+  const queue = [dependsOn];
+  const seen = new Set<string>();
+  while (queue.length) {
+    const node = queue.shift()!;
+    if (node === taskId) throw new Error(`Adding dependency ${taskId} -> ${dependsOn} would create a cycle`);
+    if (seen.has(node)) continue;
+    seen.add(node);
+    for (const next of adjacency.get(node) ?? []) queue.push(next);
+  }
+  const timestamp = new Date().toISOString();
+  const record = { id: dependencyId(taskId, dependsOn), task_id: taskId, depends_on: dependsOn, created_at: timestamp, updated_at: timestamp };
+  await store.upsert("dependencies", record, context);
+  return { task_id: taskId, depends_on: dependsOn };
+}
+
+/** Remove a dependency edge. Returns false when the edge did not exist. */
+async function removeDependency(taskId: string, dependsOn: string, store: PostgresJsonRecordStore): Promise<boolean> {
+  const existing = await store.get<unknown>("dependencies", dependencyId(taskId, dependsOn));
+  if (!existing) return false;
+  await store.delete("dependencies", dependencyId(taskId, dependsOn));
+  return true;
+}
+
+/** List a task's outgoing (dependencies) and incoming (blocked_by) dependency edges. */
+async function listDependencies(taskId: string, store: PostgresJsonRecordStore): Promise<TodosTaskDependencies> {
+  const edges = await store.list<TaskDependency>("dependencies");
+  return {
+    dependencies: edges.filter((edge) => edge.task_id === taskId).map((edge) => ({ task_id: edge.task_id, depends_on: edge.depends_on })),
+    blocked_by: edges.filter((edge) => edge.depends_on === taskId).map((edge) => ({ task_id: edge.task_id, depends_on: edge.depends_on })),
+  };
+}
+
+/** Record a verification against a task. The task must exist (parity with the local FK). */
+async function addVerification(
+  input: CreateTodosVerificationInput,
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<TodosTaskVerification> {
+  if (!(await store.get<Task>("tasks", input.task_id))) throw new Error(`Task not found: ${input.task_id}`);
+  const timestamp = new Date().toISOString();
+  const verification: TodosTaskVerification = {
+    id: randomUUID(),
+    task_id: input.task_id,
+    command: input.command,
+    status: input.status ?? "unknown",
+    output_summary: input.output_summary ?? null,
+    artifact_path: input.artifact_path ?? null,
+    agent_id: input.agent_id ?? context?.agentId ?? null,
+    run_at: timestamp,
+    created_at: timestamp,
+  };
+  await store.upsert("verifications", { ...verification, updated_at: timestamp }, context);
+  return verification;
+}
+
+/** List verifications recorded for a task, newest first. */
+async function listVerifications(taskId: string, store: PostgresJsonRecordStore): Promise<TodosTaskVerification[]> {
+  return (await store.list<TodosTaskVerification>("verifications"))
+    .filter((verification) => verification.task_id === taskId)
+    .sort((a, b) => b.run_at.localeCompare(a.run_at));
+}
+
+/**
+ * Link a git commit to a task in the shared cloud dataset. The task must exist
+ * (parity with the local FK). The previous CLI/MCP path wrote the row to this
+ * machine's sqlite where a cloud task does not exist, tripping a FOREIGN KEY
+ * constraint failure — routing to the shared store attaches it to the real task.
+ */
+async function addCommit(
+  input: CreateTodosCommitInput,
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<TodosTaskCommitRecord> {
+  if (!(await store.get<Task>("tasks", input.task_id))) throw new Error(`Task not found: ${input.task_id}`);
+  const timestamp = new Date().toISOString();
+  const commit: TodosTaskCommitRecord = {
+    id: randomUUID(),
+    task_id: input.task_id,
+    sha: input.sha,
+    message: input.message ?? null,
+    author: input.author ?? null,
+    files_changed: input.files_changed ?? null,
+    created_at: timestamp,
+  };
+  await store.upsert("commits", { ...commit, updated_at: timestamp }, context);
+  return commit;
+}
+
+/** List commits linked to a task, newest first. */
+async function listCommits(taskId: string, store: PostgresJsonRecordStore): Promise<TodosTaskCommitRecord[]> {
+  return (await store.list<TodosTaskCommitRecord>("commits"))
+    .filter((commit) => commit.task_id === taskId)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+}
+
+/** Find the most recent commit link for a SHA (exact or prefix match). */
+async function findCommit(sha: string, store: PostgresJsonRecordStore): Promise<TodosTaskCommitRecord | null> {
+  const matches = (await store.list<TodosTaskCommitRecord>("commits"))
+    .filter((commit) => commit.sha === sha || commit.sha.startsWith(sha) || sha.startsWith(commit.sha))
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+  return matches[0] ?? null;
+}
+
+/**
+ * Link a git branch or pull request to a task in the shared cloud dataset. The
+ * task must exist (parity with the local FK) so a ref link on a missing cloud
+ * task 404s loudly instead of tripping a FOREIGN KEY constraint on local sqlite.
+ */
+async function addGitRef(
+  input: CreateTodosGitRefInput,
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<TodosTaskGitRefRecord> {
+  if (!(await store.get<Task>("tasks", input.task_id))) throw new Error(`Task not found: ${input.task_id}`);
+  const timestamp = new Date().toISOString();
+  const gitRef: TodosTaskGitRefRecord = {
+    id: randomUUID(),
+    task_id: input.task_id,
+    ref_type: input.ref_type,
+    name: input.name,
+    url: input.url ?? null,
+    provider: input.provider ?? null,
+    metadata: input.metadata ?? {},
+    created_at: timestamp,
+    updated_at: timestamp,
+  };
+  await store.upsert("refs", gitRef, context);
+  return gitRef;
+}
+
+/** List git refs linked to a task, newest first. */
+async function listGitRefs(taskId: string, store: PostgresJsonRecordStore): Promise<TodosTaskGitRefRecord[]> {
+  return (await store.list<TodosTaskGitRefRecord>("refs"))
+    .filter((ref) => ref.task_id === taskId)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+}
+
+/** Find every task linked to a branch/PR ref by name. */
+async function findGitRefs(ref: string, store: PostgresJsonRecordStore): Promise<TodosTaskGitRefRecord[]> {
+  return (await store.list<TodosTaskGitRefRecord>("refs"))
+    .filter((r) => r.name === ref)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+}
+
+// SQL fragment: order by priority rank (critical→low) then created_at, matching
+// the previous in-JS sort. Kept as a constant so listTasks/countTasks and the
+// test mock stay in lockstep.
+const TASK_ORDER_BY =
+  "ORDER BY CASE payload->>'priority' WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END ASC, payload->>'created_at' ASC, payload->>'id' ASC";
+
+function toFilterArray<T>(value: T | T[]): T[] {
+  return Array.isArray(value) ? value : [value];
+}
+
+// Bind a value to a $::jsonb param. The driver (Bun.SQL / node-pg) serializes a
+// JS object/array to jsonb natively — pre-encoding with JSON.stringify would
+// make Bun.SQL store a double-encoded jsonb STRING scalar instead.
+function jsonbParam(value: unknown): unknown {
+  return value;
+}
+
 async function listTasks(filter: TaskFilter, store: PostgresJsonRecordStore): Promise<Task[]> {
-  let tasks = await store.list<Task>("tasks");
-  tasks = tasks.filter((task) => taskMatchesFilter(task, filter));
-  tasks.sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority) || a.created_at.localeCompare(b.created_at));
-  const offset = filter.offset ?? 0;
-  const limit = filter.limit ?? tasks.length;
-  return tasks.slice(offset, offset + limit);
+  return store.listTasks(filter);
 }
 
 async function getNextTask(filters: TodosTaskClaimFilter | undefined, store: PostgresJsonRecordStore): Promise<Task | null> {
@@ -750,6 +1145,46 @@ async function updateAgent(id: string, input: TodosAgentUpdateInput, store: Post
   });
 }
 
+/** Resolve an agent by id first, then by (active) name. */
+async function resolveAgent(idOrName: string, store: PostgresJsonRecordStore): Promise<Agent | null> {
+  const byId = await store.get<Agent>("agents", idOrName);
+  if (byId) return byId;
+  return (await store.list<Agent>("agents")).find((agent) => agent.name === idOrName) ?? null;
+}
+
+/** Refresh an agent's last_seen_at in the shared cloud roster (heartbeat). */
+async function heartbeatAgent(
+  idOrName: string,
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<Agent | null> {
+  const agent = await resolveAgent(idOrName, store);
+  if (!agent) return null;
+  return store.upsert("agents", { ...agent, last_seen_at: new Date().toISOString() }, context);
+}
+
+/** Clear an agent's session binding (release/logout) in the shared cloud roster. */
+async function releaseAgent(
+  idOrName: string,
+  sessionId: string | undefined,
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<TodosAgentReleaseResult | null> {
+  const agent = await resolveAgent(idOrName, store);
+  if (!agent) return null;
+  // Session guard: if a session id is supplied, only release when it matches the
+  // agent's current binding (prevents another session from releasing your agent).
+  if (sessionId && agent.session_id && agent.session_id !== sessionId) {
+    return { agent, released: false };
+  }
+  const updated = await store.upsert(
+    "agents",
+    { ...agent, session_id: null, last_seen_at: new Date().toISOString() },
+    context,
+  );
+  return { agent: updated, released: true };
+}
+
 async function createTaskList(input: CreateTaskListInput, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<TaskList> {
   const timestamp = new Date().toISOString();
   return store.upsert("task_lists", {
@@ -839,12 +1274,16 @@ async function addComment(input: CreateCommentInput, store: PostgresJsonRecordSt
     task_id: input.task_id,
     agent_id: input.agent_id ?? context?.agentId ?? null,
     session_id: input.session_id ?? context?.sessionId ?? null,
-    content: input.content,
+    content: redactEvidenceText(input.content),
     type: input.type ?? "comment",
     progress_pct: input.progress_pct ?? null,
     created_at: new Date().toISOString(),
   };
   return store.upsert("comments", comment, context);
+}
+
+function redactComment(comment: TaskComment): TaskComment {
+  return { ...comment, content: redactEvidenceText(comment.content) };
 }
 
 async function exportSnapshot(store: PostgresJsonRecordStore): Promise<TodosStorageSnapshot> {
@@ -938,32 +1377,6 @@ async function generateProjectPrefix(name: string, store: PostgresJsonRecordStor
     candidate = `${base}${suffix}`;
   }
   return candidate;
-}
-
-function taskMatchesFilter(task: Task, filter: TaskFilter): boolean {
-  if (filter.ids && !filter.ids.includes(task.id)) return false;
-  if (filter.project_id !== undefined && task.project_id !== filter.project_id) return false;
-  if (filter.parent_id !== undefined && task.parent_id !== filter.parent_id) return false;
-  if (filter.plan_id !== undefined && task.plan_id !== filter.plan_id) return false;
-  if (filter.task_list_id !== undefined && task.task_list_id !== filter.task_list_id) return false;
-  if (filter.status !== undefined && !matchesOne(task.status, filter.status)) return false;
-  if (filter.priority !== undefined && !matchesOne(task.priority, filter.priority)) return false;
-  if (filter.assigned_to !== undefined && task.assigned_to !== filter.assigned_to) return false;
-  if (filter.agent_id !== undefined && task.agent_id !== filter.agent_id) return false;
-  if (filter.session_id !== undefined && task.session_id !== filter.session_id) return false;
-  if (filter.tags?.length && !filter.tags.every((tag) => task.tags.includes(tag))) return false;
-  if (filter.has_recurrence !== undefined && Boolean(task.recurrence_rule) !== filter.has_recurrence) return false;
-  if (filter.include_subtasks !== true && task.parent_id) return false;
-  if (filter.task_type !== undefined && !matchesOne(task.task_type ?? "", filter.task_type)) return false;
-  return true;
-}
-
-function matchesOne<T extends string>(value: T, expected: T | T[]): boolean {
-  return Array.isArray(expected) ? expected.includes(value) : value === expected;
-}
-
-function priorityRank(priority: TaskPriority): number {
-  return ({ critical: 0, high: 1, medium: 2, low: 3 } satisfies Record<TaskPriority, number>)[priority];
 }
 
 function slugifyRaw(value: string): string {

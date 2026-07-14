@@ -25,8 +25,8 @@
       "signingSecretSecretRef": "hasna/oss/todos/api-key-signing-secret"
     },
     "client": {
-      "apiUrlEnv": "TODOS_API_URL",
-      "apiKeyEnv": "TODOS_API_KEY"
+      "apiUrlEnv": "HASNA_TODOS_API_URL",
+      "apiKeyEnv": "HASNA_TODOS_API_KEY"
     }
   }
 }

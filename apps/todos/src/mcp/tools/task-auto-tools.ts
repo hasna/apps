@@ -7,6 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Task } from "../../types/index.js";
+import { getTodosCloudClient, cloudGetStats, cloudCountTasks, cloudListProjects, cloudListAgents } from "../../cli/cloud-router.js";
 
 interface TaskAutoContext {
   shouldRegisterTool: (name: string) => boolean;
@@ -323,6 +324,28 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
       "Get system health: task counts by status, active agents, project summary.",
       async () => {
         try {
+          // self_hosted cloud routing: report health from the shared cloud dataset.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const [stats, pending, inProgress, completed, cancelled, projects, agents] = await Promise.all([
+              cloudGetStats(cloud),
+              cloudCountTasks(cloud, { status: "pending" } as never),
+              cloudCountTasks(cloud, { status: "in_progress" } as never),
+              cloudCountTasks(cloud, { status: "completed" } as never),
+              cloudCountTasks(cloud, { status: "cancelled" } as never),
+              cloudListProjects(cloud),
+              cloudListAgents(cloud),
+            ]);
+            const projectCount = (stats.projects as number | undefined) ?? projects.length;
+            const lines = [
+              `=== System Health (cloud) ===`,
+              `Tasks: ${pending} pending | ${inProgress} in progress | ${completed} completed | ${cancelled} cancelled`,
+              `Projects: ${projectCount} total`,
+              `Agents: ${agents.length} registered`,
+            ];
+            return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+          }
+
           const { countTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const { listProjects } = require("../../db/projects.js") as typeof import("../../db/projects.js");
           const { listAgents } = require("../../db/agents.js") as typeof import("../../db/agents.js");

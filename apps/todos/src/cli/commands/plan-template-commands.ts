@@ -12,6 +12,7 @@ import {
 import { createTask } from "../../db/tasks.js";
 import { inspectPlanArtifact, readPlanArtifact, writePlanArtifact } from "../../lib/plan-artifacts.js";
 import { formatTaskLine, autoProject, handleError, output } from "../helpers.js";
+import { getTodosCloudClient, cloudListPlans, cloudResolvePlan, cloudListTasks } from "../cloud-router.js";
 
 function resolvePlanCliRef(ref: string, projectId: string | undefined): string {
   const db = getDatabase();
@@ -41,9 +42,12 @@ export function registerPlanTemplateCommands(program: Command) {
     .option("--write-artifacts", "Write local Markdown artifacts for all project-scoped plans in scope")
     .option("--delete <id>", "Delete a plan")
     .option("--complete <id>", "Mark a plan as completed")
-    .action((opts) => {
+    .action(async (opts) => {
       const globalOpts = program.opts();
-      const projectId = autoProject(globalOpts);
+      const cloud = getTodosCloudClient();
+      // In cloud mode the auto-detected project id is a LOCAL id that does not map
+      // to the shared cloud dataset, so it must not silently scope the cloud list.
+      const projectId = cloud ? undefined : autoProject(globalOpts);
 
       if (opts.add) {
         let plan: ReturnType<typeof createPlan>;
@@ -123,6 +127,37 @@ export function registerPlanTemplateCommands(program: Command) {
       }
 
       if (opts.show) {
+        // self_hosted cloud routing: resolve the plan and its tasks from the SHARED
+        // dataset. The local path resolved the ref against this machine's sqlite
+        // (which does not carry cloud plans), so it could not open a plan its own
+        // cloud `plans` list had just returned.
+        if (cloud) {
+          const plan = await cloudResolvePlan(cloud, opts.show, projectId);
+          if (!plan) {
+            console.error(chalk.red(`Plan not found: ${opts.show}`));
+            process.exit(1);
+          }
+          const tasks = await cloudListTasks(cloud, { plan_id: plan.id } as never);
+          if (globalOpts.json) {
+            output({ plan, tasks, artifact: null }, true);
+            return;
+          }
+          console.log(chalk.bold("Plan Details:\n"));
+          console.log(`  ${chalk.dim("ID:")}       ${plan.id}`);
+          if (plan.slug) console.log(`  ${chalk.dim("Slug:")}     ${plan.slug}`);
+          console.log(`  ${chalk.dim("Name:")}     ${plan.name}`);
+          console.log(`  ${chalk.dim("Status:")}   ${chalk.cyan(plan.status)}`);
+          if (plan.description) console.log(`  ${chalk.dim("Desc:")}     ${plan.description}`);
+          if (plan.project_id) console.log(`  ${chalk.dim("Project:")}  ${plan.project_id}`);
+          console.log(`  ${chalk.dim("Created:")}  ${plan.created_at}`);
+          if (tasks.length > 0) {
+            console.log(chalk.bold(`\n  Tasks (${tasks.length}):`));
+            for (const t of tasks) console.log(`    ${formatTaskLine(t)}`);
+          } else {
+            console.log(chalk.dim("\n  No tasks in this plan."));
+          }
+          return;
+        }
         const db = getDatabase();
         const resolvedId = resolvePlanCliRef(opts.show, projectId);
         const plan = getPlan(resolvedId);
@@ -204,7 +239,7 @@ export function registerPlanTemplateCommands(program: Command) {
       }
 
       // Default: list plans
-      const plans = listPlans(projectId);
+      const plans = cloud ? await cloudListPlans(cloud, projectId) : listPlans(projectId);
 
       if (globalOpts.json) {
         output(plans, true);

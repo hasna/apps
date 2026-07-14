@@ -5,6 +5,7 @@ export type {
   TodosAgentUpdateInput,
   TodosAgentStore,
   TodosAuditStore,
+  TodosCommentListOptions,
   TodosPlanStore,
   TodosProjectStore,
   TodosStorageAdapter,
@@ -59,6 +60,10 @@ export {
   createPostgresTodosStorageAdapter,
   createPostgresTodosSyncStore,
   createTodosS3ArtifactStore,
+  COMMENT_REDACTION_BACKFILL_CONFIRMATION,
+  backfillPostgresCommentRedaction,
+  isCommentRedactionBackfillComplete,
+  postgresTodosCommentCursorIndexSql,
   postgresTodosSyncSchemaSql,
   signAwsV4Request,
   uploadRunArtifactsToS3,
@@ -89,6 +94,8 @@ export type {
 } from "./storage/index.js";
 export type {
   CanonicalTodosRdsConfig,
+  CommentRedactionBackfillOptions,
+  CommentRedactionBackfillResult,
   CreateHybridTodosStorageAdapterOptions,
   CreatePostgresTodosStorageAdapterOptions,
   CreatePostgresTodosSyncStoreOptions,

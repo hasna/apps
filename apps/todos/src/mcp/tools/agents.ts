@@ -3,6 +3,7 @@ import { z } from "zod";
 import { registerAgent, isAgentConflict, releaseAgent, getAgent, getAgentByName, listAgents, updateAgent, updateAgentActivity, archiveAgent, unarchiveAgent, getAvailableNamesFromPool } from "../../db/agents.js";
 import { getAgentPoolForProject } from "../../lib/config.js";
 import { getDatabase } from "../../db/database.js";
+import { getTodosCloudClient, cloudListAgents, cloudRegisterAgent, cloudHeartbeatAgent, cloudReleaseAgent } from "../../cli/cloud-router.js";
 
 interface AgentFocus {
   agent_id: string;
@@ -107,6 +108,22 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
       },
       async ({ name, description, role, title, level, permissions, capabilities, session_id, working_dir, force }) => {
         try {
+          // self_hosted cloud routing: register into the SHARED cloud roster so the
+          // agent lands in /v1/agents (not this machine's local sqlite island),
+          // fixing the identity misroute where list_agents/tasks read cloud but the
+          // agent existed only locally.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const agent = await cloudRegisterAgent(cloud, {
+              name, description, role, title, level, permissions, capabilities, session_id, working_dir, force,
+            });
+            return {
+              content: [{
+                type: "text" as const,
+                text: `Agent registered:\nID: ${agent.id}\nName: ${agent.name}${agent.description ? `\nDescription: ${agent.description}` : ""}\nSession: ${agent.session_id ?? "unbound"}\nCreated: ${agent.created_at}\nLast seen: ${agent.last_seen_at}`,
+              }],
+            };
+          }
           // Look up the pool for this project (from config, based on working_dir) — null = no restriction
           const pool = getAgentPoolForProject(working_dir);
           const result = registerAgent({ name, description, role, title, level, permissions, capabilities, session_id, working_dir, force, pool: pool || undefined });
@@ -192,7 +209,12 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
       },
       async ({ include_archived }) => {
         try {
-          const agents = listAgents({ include_archived: include_archived ?? false });
+          // self_hosted cloud routing: list agents from the shared <app>.hasna.xyz/v1
+          // dataset rather than this machine's local SQLite island.
+          const cloud = getTodosCloudClient();
+          const agents = cloud
+            ? await cloudListAgents(cloud)
+            : listAgents({ include_archived: include_archived ?? false });
           if (agents.length === 0) {
             return { content: [{ type: "text" as const, text: "No agents registered." }] };
           }
@@ -409,6 +431,22 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
       },
       async ({ agent_id }) => {
         try {
+          // self_hosted cloud routing: heartbeat the SHARED cloud roster so a
+          // flipped machine refreshes the same agent every other agent sees. The
+          // local path 404'd cloud-only agents ("Agent not found").
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const a = await cloudHeartbeatAgent(cloud, agent_id);
+            if (!a) {
+              return { content: [{ type: "text" as const, text: `Agent not found: ${agent_id}` }], isError: true };
+            }
+            return {
+              content: [{
+                type: "text" as const,
+                text: `Heartbeat: ${a.name} (${a.id}) — last_seen_at updated to ${a.last_seen_at}`,
+              }],
+            };
+          }
           const agent = getAgent(agent_id) || getAgentByName(agent_id);
           if (!agent) {
             return { content: [{ type: "text" as const, text: `Agent not found: ${agent_id}` }], isError: true };
@@ -438,6 +476,24 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
       },
       async ({ agent_id, session_id }) => {
         try {
+          // self_hosted cloud routing: release in the SHARED cloud roster so the
+          // name frees up for every agent. The local path 404'd cloud-only agents.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const result = await cloudReleaseAgent(cloud, agent_id, session_id);
+            if (!result.agent) {
+              return { content: [{ type: "text" as const, text: `Agent not found: ${agent_id}` }], isError: true };
+            }
+            if (!result.released) {
+              return { content: [{ type: "text" as const, text: `Release denied: session_id does not match agent's current session.` }], isError: true };
+            }
+            return {
+              content: [{
+                type: "text" as const,
+                text: `Agent released: ${result.agent.name} (${result.agent.id}) — session cleared, name is now available.`,
+              }],
+            };
+          }
           const agent = getAgent(agent_id) || getAgentByName(agent_id);
           if (!agent) {
             return { content: [{ type: "text" as const, text: `Agent not found: ${agent_id}` }], isError: true };

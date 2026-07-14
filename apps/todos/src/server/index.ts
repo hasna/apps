@@ -23,11 +23,19 @@ function printHelp(): void {
 
 Start the @hasna/todos dashboard server.
 
+Commands:
+  migrate                 Apply idempotent schema migrations
+  redact-comments         Preview historical comment redaction (dry-run by default)
+
 Options:
   --port <port>     HTTP port to bind. Defaults to ${DEFAULT_PORT}
   --host <host>     Hostname to bind. Defaults to 127.0.0.1
   --api-key <key>   Require this API key for dashboard/API requests
   --no-open         Do not open the dashboard in a browser
+  --batch-size <n>  redact-comments batch size, 1-500 (default: 100)
+  --apply           Apply redact-comments changes (default is dry-run)
+  --confirm <value> Explicit confirmation required with --apply
+  --json            Emit redact-comments aggregate JSON
   -V, --version     output the version number
   -h, --help        display help for command
 
@@ -70,7 +78,15 @@ async function findFreePort(start: number): Promise<number> {
 }
 
 async function runMigrate(): Promise<void> {
-  const { ensureCloudSchema, pingCloud, resolveCloudDatabaseUrl, closeCloud } = await import("./cloud.js");
+  const {
+    ensureCloudSchema,
+    ensureCloudCommentCursorIndex,
+    normalizeCloudPayloads,
+    pingCloud,
+    resolveCloudDatabaseUrl,
+    closeCloud,
+  } =
+    await import("./cloud.js");
   if (!resolveCloudDatabaseUrl()) {
     console.error("migrate: no database URL (HASNA_TODOS_DATABASE_URL / TODOS_DATABASE_URL / DATABASE_URL)");
     process.exit(2);
@@ -79,24 +95,86 @@ async function runMigrate(): Promise<void> {
   await pingCloud();
   console.log("migrate: applying schema (sync tables + api_keys)…");
   await ensureCloudSchema();
+  console.log("migrate: normalizing legacy double-encoded jsonb payloads…");
+  const normalized = await normalizeCloudPayloads();
+  console.log(`migrate: normalized ${normalized} payload row(s)`);
+  console.log("migrate: prebuilding comment cursor index concurrently…");
+  await ensureCloudCommentCursorIndex();
   console.log("migrate: done");
   await closeCloud();
   process.exit(0);
 }
 
-async function main() {
-  // One-shot schema migration (used by the ECS migration task):
-  //   todos-serve migrate
-  if (process.argv.includes("migrate")) {
-    await runMigrate();
-    return;
+async function runCommentRedactionBackfill(): Promise<void> {
+  const {
+    backfillCloudCommentRedaction,
+    resolveCloudDatabaseUrl,
+    closeCloud,
+  } = await import("./cloud.js");
+  const {
+    COMMENT_REDACTION_BACKFILL_CONFIRMATION,
+    isCommentRedactionBackfillComplete,
+  } = await import("../storage/comment-redaction-backfill.js");
+  if (!resolveCloudDatabaseUrl()) {
+    console.error("redact-comments: no database URL (HASNA_TODOS_DATABASE_URL / TODOS_DATABASE_URL / DATABASE_URL)");
+    process.exit(2);
   }
+
+  const apply = process.argv.includes("--apply");
+  const rawBatchSize = parseStringArg("--batch-size");
+  try {
+    const report = await backfillCloudCommentRedaction({
+      apply,
+      confirmation: parseStringArg("--confirm"),
+      batchSize: rawBatchSize === undefined ? 100 : Number(rawBatchSize),
+    });
+    if (process.argv.includes("--json")) {
+      console.log(JSON.stringify(report));
+    } else {
+      console.log(
+        `redact-comments: ${report.dry_run ? "dry-run" : "applied"}; ` +
+        `scanned=${report.scanned} candidates=${report.candidates} updated=${report.updated} ` +
+        `conflicts=${report.conflicts} remaining=${report.remaining_candidates} batches=${report.batches}`,
+      );
+      if (report.dry_run && report.candidates > 0) {
+        console.log(
+          `redact-comments: obtain approval before using ` +
+          `--apply --confirm=${COMMENT_REDACTION_BACKFILL_CONFIRMATION}`,
+        );
+      }
+    }
+    if (apply && !isCommentRedactionBackfillComplete(report)) {
+      console.error(
+        "redact-comments: incomplete apply; resolve conflicts and rerun until conflicts=0 and remaining=0",
+      );
+      process.exitCode = 1;
+    }
+  } catch (error) {
+    const message = (error as Error).message.replace(/postgres(?:ql)?:\/\/[^@\s]+@/gi, "postgresql://[REDACTED]@");
+    console.error(`redact-comments: failed: ${message}`);
+    process.exitCode = 1;
+  } finally {
+    await closeCloud();
+  }
+}
+
+async function main() {
   if (hasVersionFlag()) {
     console.log(getPackageVersion());
     return;
   }
   if (hasHelpFlag()) {
     printHelp();
+    return;
+  }
+  // One-shot schema migration (used by the ECS migration task):
+  //   todos-serve migrate
+  if (process.argv.includes("migrate")) {
+    await runMigrate();
+    return;
+  }
+  if (process.argv.includes("redact-comments")) {
+    await runCommentRedactionBackfill();
     return;
   }
   // When PORT is set (container/service deployment) bind it EXACTLY — never scan

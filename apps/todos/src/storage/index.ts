@@ -5,6 +5,7 @@ export type {
   TodosAgentUpdateInput,
   TodosAgentStore,
   TodosAuditStore,
+  TodosCommentListOptions,
   TodosPlanStore,
   TodosProjectStore,
   TodosStorageAdapter,
@@ -114,8 +115,18 @@ export {
   DEFAULT_TODOS_POSTGRES_SYNC_TABLE,
   PostgresTodosSyncStore,
   createPostgresTodosSyncStore,
+  postgresTodosCommentCursorIndexSql,
   postgresTodosSyncSchemaSql,
 } from "./postgres-sync.js";
+export {
+  COMMENT_REDACTION_BACKFILL_CONFIRMATION,
+  backfillPostgresCommentRedaction,
+  isCommentRedactionBackfillComplete,
+} from "./comment-redaction-backfill.js";
+export type {
+  CommentRedactionBackfillOptions,
+  CommentRedactionBackfillResult,
+} from "./comment-redaction-backfill.js";
 export { createPostgresTodosStorageAdapter } from "./postgres-adapter.js";
 export type { CreatePostgresTodosStorageAdapterOptions } from "./postgres-adapter.js";
 export type {

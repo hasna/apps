@@ -2,17 +2,21 @@
 // Regenerate: bun run scripts/generate-sdk.ts
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Todos V1 API 0.11.75
+// Source: Todos V1 API 0.11.86
 
 export interface Task { "id"?: string; "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "project_id"?: string | null; "assigned_to"?: string | null; "agent_id"?: string | null; "tags"?: Array<string>; "version"?: number; "created_at"?: string; "updated_at"?: string }
 
 export interface Project { "id"?: string; "name"?: string; "path"?: string; "description"?: string | null; "created_at"?: string; "updated_at"?: string }
+
+export interface TaskComment { "id": string; "task_id": string; "agent_id": string | null; "session_id": string | null; "content": string; "type": "comment" | "progress" | "note"; "progress_pct": number | null; "created_at": string }
 
 export interface CreateTaskInput { "title": string; "description"?: string; "status"?: string; "priority"?: string; "project_id"?: string; "assigned_to"?: string; "agent_id"?: string; "tags"?: Array<string> }
 
 export interface UpdateTaskInput { "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "assigned_to"?: string; "version"?: number }
 
 export interface CreateProjectInput { "name": string; "path": string; "description"?: string; "task_prefix"?: string }
+
+export interface CreateTaskCommentInput { "content": string; "agent_id"?: string; "session_id"?: string; "type"?: "comment" | "progress" | "note"; "progress_pct"?: number }
 
 export interface TodosV1ClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */
@@ -68,6 +72,15 @@ export class TodosV1Client {
     }
     return data as T;
   }
+
+    /** Bulk-ingest a full or partial snapshot (idempotent upsert by id) */
+    async importSnapshot(body: { "exportedAt"?: string; "source"?: string; "tasks"?: Array<Task>; "projects"?: Array<Project>; "projectMachinePaths"?: Array<Record<string, unknown>>; "plans"?: Array<Record<string, unknown>>; "agents"?: Array<Record<string, unknown>>; "taskLists"?: Array<Record<string, unknown>>; "templates"?: Array<Record<string, unknown>>; "auditHistory"?: Array<Record<string, unknown>>; "tombstones"?: Array<Record<string, unknown>> }, init?: RequestInit): Promise<{ "received"?: number; "result"?: { "inserted"?: number; "updated"?: number; "deleted"?: number; "skipped"?: number; "errors"?: Array<string> } }> {
+      return this.request("POST", `/v1/import`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
 
     /** List projects */
     async listProjects(init?: RequestInit): Promise<{ "projects"?: Array<Project>; "count"?: number }> {
@@ -144,6 +157,24 @@ export class TodosV1Client {
     /** Update a task */
     async updateTask(id: string, body: UpdateTaskInput, init?: RequestInit): Promise<{ "task"?: Task }> {
       return this.request("PATCH", `/v1/tasks/${encodeURIComponent(String(id))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List a bounded page of task comments */
+    async listTaskComments(id: string, query?: { "limit": number; "cursor"?: string }, init?: RequestInit): Promise<{ "comments": Array<TaskComment>; "count": number; "has_more": boolean; "next_cursor": string | null }> {
+      return this.request("GET", `/v1/tasks/${encodeURIComponent(String(id))}/comments`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Create a task comment */
+    async createTaskComment(id: string, body: CreateTaskCommentInput, init?: RequestInit): Promise<{ "comment": TaskComment }> {
+      return this.request("POST", `/v1/tasks/${encodeURIComponent(String(id))}/comments`, {
         body,
         query: undefined,
         init,

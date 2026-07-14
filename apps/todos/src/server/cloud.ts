@@ -13,7 +13,15 @@ import { ApiKeyStore, type AuthQueryClient } from "@hasna/contracts/auth";
 import { createTodosCloudQueryClient, type TodosCloudQueryClient } from "../storage/cloud-client.js";
 import { createPostgresTodosStorageAdapter } from "../storage/postgres-adapter.js";
 import type { TodosStorageAdapter } from "../storage/interfaces.js";
-import { postgresTodosSyncSchemaSql } from "../storage/postgres-sync.js";
+import {
+  postgresTodosCommentCursorIndexSql,
+  postgresTodosSyncSchemaSql,
+} from "../storage/postgres-sync.js";
+import {
+  backfillPostgresCommentRedaction,
+  type CommentRedactionBackfillOptions,
+  type CommentRedactionBackfillResult,
+} from "../storage/comment-redaction-backfill.js";
 
 export const TODOS_APP_SLUG = "todos";
 
@@ -132,6 +140,46 @@ export async function ensureCloudSchema(): Promise<void> {
     await getApiKeyStore().ensureSchema();
   })();
   return schemaEnsured;
+}
+
+/**
+ * Prebuild the task-comment cursor index without blocking writes. This is a
+ * deployment migration, not request-path schema work; PostgreSQL requires
+ * `CREATE INDEX CONCURRENTLY` to execute outside an explicit transaction.
+ */
+export async function ensureCloudCommentCursorIndex(): Promise<void> {
+  await getClient().query(postgresTodosCommentCursorIndexSql());
+}
+
+/**
+ * Repair legacy double-encoded payloads. Earlier writes bound `JSON.stringify(value)`
+ * to a `$::jsonb` param, which Bun.SQL stores as a jsonb STRING scalar rather than
+ * an object — so every server-side `payload->>'field'` filter (and jsonb_set for the
+ * short-id counter) silently failed. This converts those rows back to real jsonb
+ * objects. Idempotent: only touches rows where `jsonb_typeof(payload) = 'string'`,
+ * so it is safe to run repeatedly and a no-op once migrated. Returns the row count
+ * that was normalized.
+ */
+export async function normalizeCloudPayloads(): Promise<number> {
+  const client = getClient();
+  const res = await client.query<{ id: string }>(
+    `UPDATE todos_sync_records
+       SET payload = (payload #>> '{}')::jsonb
+     WHERE jsonb_typeof(payload) = 'string'
+     RETURNING object_id AS id`,
+  );
+  return res.rows.length;
+}
+
+/**
+ * Preview or explicitly apply the historical comment redaction backfill using
+ * the service's existing Postgres pool. The underlying operation defaults to a
+ * dry run and independently enforces its apply confirmation gate.
+ */
+export function backfillCloudCommentRedaction(
+  options: CommentRedactionBackfillOptions = {},
+): Promise<CommentRedactionBackfillResult> {
+  return backfillPostgresCommentRedaction(getClient(), { ...options, service: TODOS_APP_SLUG });
 }
 
 /** Cheap readiness probe: round-trips a trivial query to RDS. */

@@ -10,6 +10,14 @@ import type { Task } from "../../types/index.js";
 import { createTask, listTasks, getTask, updateTask, upsertTaskByFingerprint, deleteTask } from "../../db/tasks.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 import { compactJson, compactTask, truncateText } from "../token-utils.js";
+import {
+  getTodosCloudClient,
+  cloudCreateTask,
+  cloudListTasks,
+  cloudGetTask,
+  cloudUpdateTask,
+  cloudDeleteTask,
+} from "../../cli/cloud-router.js";
 
 interface TaskCrudContext {
   shouldRegisterTool: (name: string) => boolean;
@@ -74,6 +82,24 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
       async (params) => {
         try {
           const { depends_on, assigned_to, project_id, task_list_id, tags, estimate, confidence, retry_count, deadline, ...rest } = params;
+          // self_hosted cloud routing: create straight against <app>.hasna.xyz/v1.
+          // Skip local id-resolution (it hits local SQLite); pass ids through so the
+          // cloud dataset is authoritative. Reversible: unset the flip env -> local.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const payload: Record<string, unknown> = { ...rest };
+            if (assigned_to) payload.assigned_to = assigned_to;
+            if (project_id) payload.project_id = project_id;
+            if (task_list_id) payload.task_list_id = task_list_id;
+            if (depends_on) payload.depends_on = depends_on;
+            if (tags) payload.tags = tags;
+            if (estimate !== undefined) payload.estimated_minutes = estimate;
+            if (confidence !== undefined) payload.confidence = confidence;
+            if (retry_count !== undefined) payload.max_retries = retry_count;
+            if (deadline) payload.due_at = deadline;
+            const created = await cloudCreateTask(cloud, payload);
+            return { content: [{ type: "text" as const, text: mutationTaskResponse(created) }] };
+          }
           const resolved: Record<string, unknown> = { ...rest };
           if (assigned_to) resolved.assigned_to = resolveAssignee(assigned_to);
           if (project_id) resolved.project_id = resolveId(project_id, "projects");
@@ -167,6 +193,13 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
       },
       async (params) => {
         try {
+          // self_hosted cloud routing: list from <app>.hasna.xyz/v1 (no local id-resolve).
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const tasks = await cloudListTasks(cloud, params as any);
+            if (tasks.length === 0) return { content: [{ type: "text" as const, text: "No tasks found." }] };
+            return { content: [{ type: "text" as const, text: tasks.map(formatTask).join("\n") }] };
+          }
           const resolved: Record<string, unknown> = { ...params };
           if (params.project_id) resolved.project_id = resolveId(params.project_id, "projects");
           if (params.task_list_id) resolved.task_list_id = resolveId(params.task_list_id, "task_lists");
@@ -196,8 +229,9 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
       },
       async ({ task_id, detail, max_description_chars, include_metadata }) => {
         try {
-          const resolvedId = resolveId(task_id);
-          const task = getTask(resolvedId);
+          // self_hosted cloud routing: fetch the task from <app>.hasna.xyz/v1.
+          const cloud = getTodosCloudClient();
+          const task = cloud ? await cloudGetTask(cloud, task_id) : getTask(resolveId(task_id));
           if (!task) throw new TaskNotFoundError(task_id);
           const focus = ctx.getAgentFocus(task.assigned_to || "");
           if (detail !== "full") {
@@ -271,6 +305,18 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
       },
       async (params) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            // self_hosted cloud routing: PATCH straight against <app>.hasna.xyz/v1.
+            const { task_id, version, estimate, deadline, ...updates } = params;
+            const patch: Record<string, unknown> = { ...updates };
+            if (patch.assigned_to === "") patch.assigned_to = null;
+            if (estimate !== undefined) patch.estimated_minutes = estimate;
+            if (deadline !== undefined) patch.due_at = deadline;
+            if (version !== undefined) patch.version = version;
+            const updated = await cloudUpdateTask(cloud, task_id, patch);
+            return { content: [{ type: "text" as const, text: mutationTaskResponse(updated) }] };
+          }
           const resolvedId = resolveId(params.task_id);
           const { task_id, version, ...updates } = params;
           const resolved: Record<string, unknown> = { ...updates };
@@ -309,6 +355,11 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
       },
       async ({ task_id, force }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            await cloudDeleteTask(cloud, task_id);
+            return { content: [{ type: "text" as const, text: `Task ${task_id.slice(0, 8)} deleted.` }] };
+          }
           const resolvedId = resolveId(task_id);
           deleteTask(resolvedId, force);
           return { content: [{ type: "text" as const, text: `Task ${task_id.slice(0, 8)} deleted.` }] };

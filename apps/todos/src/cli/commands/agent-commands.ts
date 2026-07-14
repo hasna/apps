@@ -6,6 +6,18 @@ import { releaseAgent, listAgents, normalizeGeneratedAgentNames, suggestAgentNam
 import { createTaskList, listTaskLists, deleteTaskList } from "../../db/task-lists.js";
 import { listTasks } from "../../db/tasks.js";
 import { getPackageVersion, handleError, autoProject, output } from "../helpers.js";
+import {
+  getTodosCloudClient,
+  cloudCreateTaskList,
+  cloudDeleteTaskList,
+  cloudHeartbeatAgent,
+  cloudListAgents,
+  cloudListTaskLists,
+  cloudListTasks,
+  cloudRegisterAgent,
+  cloudReleaseAgent,
+  cloudResolveTaskListRef,
+} from "../cloud-router.js";
 
 export function registerAgentCommands(program: Command) {
   // init
@@ -16,8 +28,15 @@ export function registerAgentCommands(program: Command) {
     .action(async (name: string, opts) => {
       const globalOpts = program.opts();
       try {
-        const { registerAgent, isAgentConflict } = await import("../../db/agents.js");
-        const result = registerAgent({ name, description: opts.description });
+        // self_hosted cloud routing: register into the SHARED cloud roster so the
+        // agent identity lives in /v1/agents (not this machine's local sqlite).
+        // This is the agent-identity misroute fix — a flipped machine's `init`
+        // used to write the agent locally only, invisible to the cloud fleet.
+        const cloud = getTodosCloudClient();
+        const result = cloud
+          ? await cloudRegisterAgent(cloud, { name, description: opts.description })
+          : (await import("../../db/agents.js")).registerAgent({ name, description: opts.description });
+        const { isAgentConflict } = await import("../../db/agents.js");
         if (isAgentConflict(result)) {
           console.error(chalk.red("CONFLICT:"), result.message);
           process.exit(1);
@@ -43,12 +62,27 @@ export function registerAgentCommands(program: Command) {
       const globalOpts = program.opts();
       const agentId = agent || globalOpts.agent;
       if (!agentId) { console.error(chalk.red("Agent ID required. Use --agent or pass as argument.")); process.exit(1); }
-      const { updateAgentActivity, getAgent, getAgentByName } = await import("../../db/agents.js");
-      const a = getAgent(agentId) || getAgentByName(agentId);
-      if (!a) { console.error(chalk.red(`Agent not found: ${agentId}`)); process.exit(1); }
-      updateAgentActivity(a.id);
-      if (globalOpts.json) { console.log(JSON.stringify({ agent_id: a.id, name: a.name, last_seen_at: new Date().toISOString() })); }
-      else { console.log(chalk.green(`♥ ${a.name} (${a.id.slice(0, 8)}) — heartbeat sent`)); }
+      try {
+        // self_hosted cloud routing: heartbeat the SHARED cloud roster so a flipped
+        // machine refreshes the same agent every other agent sees. The local path
+        // 404'd cloud-only agents ("Agent not found").
+        const cloud = getTodosCloudClient();
+        if (cloud) {
+          const a = await cloudHeartbeatAgent(cloud, agentId);
+          if (!a) { console.error(chalk.red(`Agent not found: ${agentId}`)); process.exit(1); }
+          if (globalOpts.json) { console.log(JSON.stringify({ agent_id: a.id, name: a.name, last_seen_at: a.last_seen_at })); }
+          else { console.log(chalk.green(`♥ ${a.name} (${a.id.slice(0, 8)}) — heartbeat sent`)); }
+          return;
+        }
+        const { updateAgentActivity, getAgent, getAgentByName } = await import("../../db/agents.js");
+        const a = getAgent(agentId) || getAgentByName(agentId);
+        if (!a) { console.error(chalk.red(`Agent not found: ${agentId}`)); process.exit(1); }
+        updateAgentActivity(a.id);
+        if (globalOpts.json) { console.log(JSON.stringify({ agent_id: a.id, name: a.name, last_seen_at: new Date().toISOString() })); }
+        else { console.log(chalk.green(`♥ ${a.name} (${a.id.slice(0, 8)}) — heartbeat sent`)); }
+      } catch (e) {
+        handleError(e);
+      }
     });
 
   // release
@@ -60,18 +94,39 @@ export function registerAgentCommands(program: Command) {
       const globalOpts = program.opts();
       const agentId = agent || globalOpts.agent;
       if (!agentId) { console.error(chalk.red("Agent ID or name required. Use --agent or pass as argument.")); process.exit(1); }
-      const { getAgent, getAgentByName } = await import("../../db/agents.js");
-      const a = getAgent(agentId) || getAgentByName(agentId);
-      if (!a) { console.error(chalk.red(`Agent not found: ${agentId}`)); process.exit(1); }
-      const released = releaseAgent(a.id, opts?.sessionId);
-      if (!released) {
-        console.error(chalk.red("Release denied: session_id does not match agent's current session."));
-        process.exit(1);
-      }
-      if (globalOpts.json) {
-        console.log(JSON.stringify({ agent_id: a.id, name: a.name, released: true }));
-      } else {
-        console.log(chalk.green(`✓ ${a.name} (${a.id}) released — name is now available.`));
+      try {
+        // self_hosted cloud routing: release in the SHARED cloud roster so the name
+        // frees up for every agent. The local path 404'd cloud-only agents.
+        const cloud = getTodosCloudClient();
+        if (cloud) {
+          const result = await cloudReleaseAgent(cloud, agentId, opts?.sessionId);
+          if (!result.agent) { console.error(chalk.red(`Agent not found: ${agentId}`)); process.exit(1); }
+          if (!result.released) {
+            console.error(chalk.red("Release denied: session_id does not match agent's current session."));
+            process.exit(1);
+          }
+          if (globalOpts.json) {
+            console.log(JSON.stringify({ agent_id: result.agent.id, name: result.agent.name, released: true }));
+          } else {
+            console.log(chalk.green(`✓ ${result.agent.name} (${result.agent.id}) released — name is now available.`));
+          }
+          return;
+        }
+        const { getAgent, getAgentByName } = await import("../../db/agents.js");
+        const a = getAgent(agentId) || getAgentByName(agentId);
+        if (!a) { console.error(chalk.red(`Agent not found: ${agentId}`)); process.exit(1); }
+        const released = releaseAgent(a.id, opts?.sessionId);
+        if (!released) {
+          console.error(chalk.red("Release denied: session_id does not match agent's current session."));
+          process.exit(1);
+        }
+        if (globalOpts.json) {
+          console.log(JSON.stringify({ agent_id: a.id, name: a.name, released: true }));
+        } else {
+          console.log(chalk.green(`✓ ${a.name} (${a.id}) released — name is now available.`));
+        }
+      } catch (e) {
+        handleError(e);
       }
     });
 
@@ -105,7 +160,8 @@ export function registerAgentCommands(program: Command) {
     .action(async () => {
       const globalOpts = program.opts();
       try {
-        const agents = listAgents();
+        const cloud = getTodosCloudClient();
+        const agents = cloud ? await cloudListAgents(cloud) : listAgents();
         if (globalOpts.json) {
           output(agents, true);
           return;
@@ -189,16 +245,22 @@ export function registerAgentCommands(program: Command) {
     .option("-j, --json", "Output as JSON")
     .action(async (name: string, opts) => {
       const globalOpts = program.opts();
+      const cloud = getTodosCloudClient();
       const { getAgentByName: findByName } = await import("../../db/agents.js");
-      const agent = findByName(name);
+      // In cloud mode resolve the agent from the SHARED /v1/agents roster (a
+      // cloud-only agent is invisible to this box's local sqlite), then read that
+      // agent's tasks from the cloud too.
+      const agent = cloud
+        ? (await cloudListAgents(cloud)).find((a) => a.name === name || a.id === name) ?? null
+        : findByName(name);
 
       if (!agent) {
         console.error(chalk.red(`Agent not found: ${name}`));
         process.exit(1);
       }
 
-      const byAssigned = listTasks({ assigned_to: agent.name });
-      const byId = listTasks({ agent_id: agent.id });
+      const byAssigned = cloud ? await cloudListTasks(cloud, { assigned_to: agent.name }) : listTasks({ assigned_to: agent.name });
+      const byId = cloud ? await cloudListTasks(cloud, { agent_id: agent.id }) : listTasks({ agent_id: agent.id });
       const seen = new Set<string>();
       const allTasks = [...byAssigned, ...byId].filter(t => {
         if (seen.has(t.id)) return false;
@@ -323,10 +385,12 @@ export function registerAgentCommands(program: Command) {
     .action(async (opts) => {
       try {
         const globalOpts = program.opts();
-        const projectId = autoProject(globalOpts);
+        const cloud = getTodosCloudClient();
+        const projectId = cloud ? globalOpts.project : autoProject(globalOpts);
 
         if (opts.add) {
-          const list = createTaskList({ name: opts.add, slug: opts.slug, description: opts.description, project_id: projectId });
+          const input = { name: opts.add, slug: opts.slug, description: opts.description, project_id: projectId };
+          const list = cloud ? await cloudCreateTaskList(cloud, input) : createTaskList(input);
           if (globalOpts.json) {
             output(list, true);
             return;
@@ -339,6 +403,13 @@ export function registerAgentCommands(program: Command) {
         }
 
         if (opts.delete) {
+          if (cloud) {
+            const resolved = await cloudResolveTaskListRef(cloud, opts.delete, projectId ?? undefined);
+            if (!resolved) throw new Error(`Task list not found or ambiguous: ${opts.delete}`);
+            await cloudDeleteTaskList(cloud, resolved);
+            console.log(chalk.green("Task list deleted."));
+            return;
+          }
           const db = getDatabase();
           const resolved = resolvePartialId(db, "task_lists", opts.delete);
           if (!resolved) {
@@ -350,7 +421,7 @@ export function registerAgentCommands(program: Command) {
           return;
         }
 
-        const lists = listTaskLists(projectId);
+        const lists = cloud ? await cloudListTaskLists(cloud, projectId ?? undefined) : listTaskLists(projectId);
         if (globalOpts.json) {
           output(lists, true);
           return;

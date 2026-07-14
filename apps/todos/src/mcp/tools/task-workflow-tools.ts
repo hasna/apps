@@ -9,6 +9,7 @@ import { z } from "zod";
 import type { Task } from "../../types/index.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 import { compactHandoff, compactJson, compactStatus, compactTask } from "../token-utils.js";
+import { getTodosCloudClient, cloudTaskAction, cloudListTasks, cloudGetStats, cloudCountTasks } from "../../cli/cloud-router.js";
 
 interface TaskWorkflowContext {
   shouldRegisterTool: (name: string) => boolean;
@@ -74,6 +75,15 @@ export function registerTaskWorkflowTools(server: McpServer, ctx: TaskWorkflowCo
       },
       async ({ task_id, reason, agent_id, version }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const body: Record<string, unknown> = {};
+            if (reason !== undefined) body.reason = reason;
+            if (agent_id !== undefined) body.agent_id = agent_id;
+            const task = await cloudTaskAction(cloud, task_id, "fail", body);
+            const rc = (task as any)?.retry_count ?? (task as any)?.task?.retry_count ?? "?";
+            return { content: [{ type: "text" as const, text: `Task ${task_id.slice(0,8)} marked failed. Retry count: ${rc}` }] };
+          }
           const { failTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const resolvedId = resolveId(task_id);
           versionFor(resolvedId, version);
@@ -100,10 +110,19 @@ export function registerTaskWorkflowTools(server: McpServer, ctx: TaskWorkflowCo
       },
       async ({ agent_id, status, project_id, limit }) => {
         try {
-          const { listTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const focus = ctx.getAgentFocus(agent_id || "");
           const effectiveAgentId = focus ? focus.agent_id : agent_id || "";
           const effectiveProjectId = focus?.project_id || project_id;
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const q: Record<string, unknown> = { assigned_to: effectiveAgentId, limit: limit || 50 };
+            if (status) q.status = status;
+            if (effectiveProjectId) q.project_id = effectiveProjectId;
+            const tasks = await cloudListTasks(cloud, q as any);
+            if (tasks.length === 0) return { content: [{ type: "text" as const, text: "No tasks found." }] };
+            return { content: [{ type: "text" as const, text: tasks.map(formatTask).join("\n") }] };
+          }
+          const { listTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const tasks = listTasks({
             assigned_to: effectiveAgentId,
             status,
@@ -133,6 +152,18 @@ export function registerTaskWorkflowTools(server: McpServer, ctx: TaskWorkflowCo
       },
       async ({ agent_id, project_id, task_list_id, plan_id, tags }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            // No dedicated cloud next endpoint: the /v1 list is priority-ordered,
+            // so the first pending task IS the next task.
+            const q: Record<string, unknown> = { status: "pending", limit: 1 };
+            if (project_id) q.project_id = project_id;
+            if (task_list_id) q.task_list_id = task_list_id;
+            if (plan_id) q.plan_id = plan_id;
+            if (tags) q.tags = tags;
+            const next = (await cloudListTasks(cloud, q as any))[0];
+            return { content: [{ type: "text" as const, text: next ? formatTask(next) : "No available task." }] };
+          }
           const { getNextTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const filters: Record<string, unknown> = {};
           if (project_id) filters.project_id = resolveId(project_id, "projects");
@@ -163,6 +194,13 @@ export function registerTaskWorkflowTools(server: McpServer, ctx: TaskWorkflowCo
       },
       async ({ agent_id, project_id, task_list_id, plan_id, tags, steal_stale, stale_minutes }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            // /v1/tasks/:id/claim claims the next available task server-side
+            // (the :id segment is a required-but-ignored placeholder).
+            const task = await cloudTaskAction(cloud, "next", "claim", { agent_id });
+            return { content: [{ type: "text" as const, text: task ? `Claimed: ${formatTask(task)}` : "No available task to claim." }] };
+          }
           const { claimNextTask, claimOrSteal } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const filters: Record<string, unknown> = {};
           if (project_id) filters.project_id = resolveId(project_id, "projects");
@@ -224,6 +262,57 @@ export function registerTaskWorkflowTools(server: McpServer, ctx: TaskWorkflowCo
       },
       async ({ agent_id, project_id, task_list_id, explain_blocked, detail, max_description_chars }) => {
         try {
+          // self_hosted cloud routing: assemble session context from the shared
+          // cloud dataset (queue counts + active/next lists). Overdue and handoff
+          // graphs are local-only concepts and default to empty in cloud mode.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const baseFilter: Record<string, unknown> = {};
+            if (project_id) baseFilter.project_id = project_id;
+            if (task_list_id) baseFilter.task_list_id = task_list_id;
+            const [stats, pending, in_progress, completed, activeTasks, nextTasks] = await Promise.all([
+              cloudGetStats(cloud),
+              cloudCountTasks(cloud, { ...baseFilter, status: "pending" } as never),
+              cloudCountTasks(cloud, { ...baseFilter, status: "in_progress" } as never),
+              cloudCountTasks(cloud, { ...baseFilter, status: "completed" } as never),
+              cloudListTasks(cloud, { ...baseFilter, status: "in_progress", limit: 5 } as never),
+              cloudListTasks(cloud, { ...baseFilter, status: "pending", limit: 1 } as never),
+            ]);
+            const cloudStatus = {
+              source: "cloud",
+              total: (stats.tasks as number | undefined) ?? pending + in_progress + completed,
+              pending,
+              in_progress,
+              completed,
+              active_work: activeTasks,
+              next_task: nextTasks[0] ?? null,
+              stale_count: 0,
+              overdue_recurring: 0,
+            };
+            const next_task = nextTasks[0] ?? null;
+            const payload = {
+              status: cloudStatus,
+              next_task,
+              overdue_count: 0,
+              latest_handoff: null,
+              as_of: new Date().toISOString(),
+            };
+            if (detail === "full") {
+              return { content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }] };
+            }
+            return {
+              content: [{
+                type: "text" as const,
+                text: compactJson({
+                  status: compactStatus(cloudStatus),
+                  next_task: next_task ? compactTask(next_task, max_description_chars || 180) : null,
+                  overdue_count: 0,
+                  latest_handoff: null,
+                  as_of: payload.as_of,
+                }),
+              }],
+            };
+          }
           const { getStatus, getNextTask, getOverdueTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const { getLatestHandoff } = require("../../db/handoffs.js") as typeof import("../../db/handoffs.js");
           const filters: Record<string, string> = {};

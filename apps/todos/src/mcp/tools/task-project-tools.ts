@@ -23,6 +23,7 @@ import {
 import {
   createPlan, listPlans, getPlan, updatePlan, deletePlan,
 } from "../../db/plans.js";
+import { getTodosCloudClient, cloudTaskAction, cloudUpdateTask, cloudAddComment } from "../../cli/cloud-router.js";
 import {
   addComment, listComments, updateComment, deleteComment,
 } from "../../db/comments.js";
@@ -1096,6 +1097,11 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_id, version }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const task = await cloudTaskAction(cloud, task_id, "start", version !== undefined ? { version } : {});
+            return { content: [{ type: "text" as const, text: formatTask(task) }] };
+          }
           const resolvedId = resolveId(task_id);
           if (version !== undefined) versionFor(resolvedId, version);
           const current = getTask(resolvedId);
@@ -1180,6 +1186,15 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_id, confidence, completed_at, version }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const body: Record<string, unknown> = {};
+            if (confidence !== undefined) body.confidence = confidence;
+            if (completed_at !== undefined) body.completed_at = completed_at;
+            if (version !== undefined) body.version = version;
+            const task = await cloudTaskAction(cloud, task_id, "complete", body);
+            return { content: [{ type: "text" as const, text: formatTask(task) }] };
+          }
           const resolvedId = resolveId(task_id);
           if (version !== undefined) versionFor(resolvedId, version);
           const current = getTask(resolvedId);
@@ -1203,6 +1218,13 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_id, version }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const patch: Record<string, unknown> = { status: "cancelled" };
+            if (version !== undefined) patch.version = version;
+            const task = await cloudUpdateTask(cloud, task_id, patch);
+            return { content: [{ type: "text" as const, text: formatTask(task) }] };
+          }
           const resolvedId = resolveId(task_id);
           const task = version === undefined
             ? setTaskStatus(resolvedId, "cancelled")
@@ -1226,6 +1248,13 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_id, new_assignee, version }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const patch: Record<string, unknown> = { assigned_to: new_assignee };
+            if (version !== undefined) patch.version = version;
+            const task = await cloudUpdateTask(cloud, task_id, patch);
+            return { content: [{ type: "text" as const, text: formatTask(task) }] };
+          }
           const resolvedId = resolveId(task_id);
           const resolvedAssignee = resolveId(new_assignee, "agents");
           const task = updateWithOptionalVersion(resolvedId, { assigned_to: resolvedAssignee }, version);
@@ -2627,6 +2656,14 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_id, body, author }) => {
         try {
+          // self_hosted cloud routing: comment straight against <app>.hasna.xyz/v1
+          // (skip local id-resolution which 404s cloud-only tasks). Server 404s a
+          // genuinely missing task, surfaced as isError below.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            await cloudAddComment(cloud, task_id, { content: body, agent_id: author });
+            return { content: [{ type: "text" as const, text: `Comment added to ${task_id.slice(0,8)}: ${body.slice(0, 50)}${body.length > 50 ? "..." : ""}` }] };
+          }
           const resolvedId = resolveId(task_id);
           const resolvedAuthor = author ? resolveId(author, "agents") : undefined;
           const comment = addComment({ task_id: resolvedId, content: body, agent_id: resolvedAuthor });

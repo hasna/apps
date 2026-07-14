@@ -5,6 +5,7 @@ import {
   listTasks,
   countTasks,
   updateTask,
+  unlockTask,
   deleteTask,
   startTask,
   completeTask,
@@ -57,7 +58,7 @@ import {
   getTaskHistory,
   getRecentActivity,
 } from "../db/audit.js";
-import { addComment } from "../db/comments.js";
+import { addComment, listComments } from "../db/comments.js";
 import { getDatabase } from "../db/database.js";
 import type { TodosStorageAdapter } from "./interfaces.js";
 import {
@@ -90,6 +91,10 @@ export function createLocalSqliteTodosStorageAdapter(
       list: (filter = {}) => listTasks(filter, database()),
       count: (filter = {}) => countTasks(filter, database()),
       update: (id, input) => updateTask(id, input, database()),
+      unlock: (id, agentId) => {
+        unlockTask(id, agentId, database());
+        return true;
+      },
       delete: (id) => deleteTask(id, database()),
       start: (id, agentId) => startTask(id, agentId, database()),
       complete: (id, agentId, options) => completeTask(id, agentId, database(), options),
@@ -141,6 +146,24 @@ export function createLocalSqliteTodosStorageAdapter(
       logTaskChange: (taskId, action, field, oldValue, newValue, agentId) =>
         logTaskChange(taskId, action, field, oldValue, newValue, agentId, database()),
       addComment: (input) => addComment(input, database()),
+      getComments: (taskId) => listComments(taskId, database()),
+      getCommentsPage: (taskId, options) => {
+        if (options?.limit !== undefined &&
+            (!Number.isSafeInteger(options.limit) || options.limit < 1 || options.limit > 1_001)) {
+          throw new Error("Comment limit must be an integer between 1 and 1001");
+        }
+        let comments = listComments(taskId, database());
+        comments = comments.sort((left, right) =>
+          left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id));
+        if (options?.before) {
+          const before = options.before;
+          comments = comments.filter((comment) =>
+            comment.created_at < before.created_at ||
+            (comment.created_at === before.created_at && comment.id < before.id));
+        }
+        if (options?.limit !== undefined) comments = comments.slice(-options.limit);
+        return comments;
+      },
       getTaskHistory: (taskId) => getTaskHistory(taskId, database()),
       getRecentActivity: (limit) => getRecentActivity(limit, database()),
     },

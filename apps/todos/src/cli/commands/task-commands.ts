@@ -21,10 +21,16 @@ import {
   getTodosCloudClient,
   cloudListTasks,
   cloudGetTask,
+  cloudListComments,
   cloudCreateTask,
   cloudUpdateTask,
   cloudDeleteTask,
   cloudTaskAction,
+  cloudLockTask,
+  cloudUnlockTask,
+  cloudTaskHistory,
+  cloudUpsertTaskByFingerprint,
+  cloudResolveTaskListRef,
 } from "../cloud-router.js";
 import type { TaskPriority, TaskStatus } from "../../types/index.js";
 import {
@@ -38,6 +44,24 @@ import {
   priorityColors,
 } from "../helpers.js";
 import { TASK_PRIORITIES, TASK_STATUSES } from "../../types/index.js";
+
+/** Render untrusted text without allowing terminal control sequences to execute. */
+export function escapeTerminalControls(value: string): string {
+  return value.replace(/[\u0000-\u001f\u007f-\u009f]/g, (character) => {
+    const code = character.charCodeAt(0);
+    if (code === 0x0a) return "\\n";
+    if (code === 0x0d) return "\\r";
+    if (code === 0x09) return "\\t";
+    return `\\x${code.toString(16).padStart(2, "0")}`;
+  });
+}
+
+function formatHumanComment(comment: { agent_id?: string | null; created_at: string; content: string }): string {
+  const agent = comment.agent_id
+    ? chalk.cyan(`[${escapeTerminalControls(comment.agent_id)}] `)
+    : "";
+  return `    ${agent}${chalk.dim(escapeTerminalControls(comment.created_at))}: ${escapeTerminalControls(comment.content)}`;
+}
 
 /**
  * Resolve a project by path, exact/partial ID, exact name, task list ID, slug,
@@ -231,18 +255,26 @@ export function registerTaskCommands(program: Command) {
       if (cloud) {
         let task;
         try {
+          const cloudProjectId = opts.project || globalOpts.project;
+          const cloudTaskListId = opts.list
+            ? await cloudResolveTaskListRef(cloud, opts.list, cloudProjectId)
+            : undefined;
+          if (opts.list && !cloudTaskListId) {
+            throw new Error(`Could not resolve task list ID or slug: ${opts.list}`);
+          }
           task = await cloudCreateTask(cloud, {
             title,
             description: opts.description,
             priority: parsePriority(opts.priority),
+            parent_id: opts.parent,
             tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
             plan_id: opts.plan,
             assigned_to: opts.assign,
             status: parseStatus(opts.status),
-            task_list_id: opts.list,
+            task_list_id: cloudTaskListId,
             agent_id: globalOpts.agent,
             session_id: globalOpts.session,
-            project_id: opts.project || globalOpts.project,
+            project_id: cloudProjectId,
             estimated_minutes: opts.estimated !== undefined ? parseIntOption(opts.estimated, "--estimated") : undefined,
             sla_minutes: opts.slaMinutes !== undefined || opts.sla !== undefined ? parseIntOption(opts.slaMinutes ?? opts.sla, "--sla-minutes") : undefined,
             requires_approval: opts.approval || undefined,
@@ -344,7 +376,7 @@ export function registerTaskCommands(program: Command) {
     .option("--expected <json-or-text>", "Expected value metadata")
     .option("--observed <json-or-text>", "Observed value metadata")
     .option("--acceptance <json-or-text>", "Acceptance metadata")
-    .action((opts) => {
+    .action(async (opts) => {
       const globalOpts = program.opts();
       opts.tags = opts.tags || opts.tag;
       opts.list = opts.list || opts.taskList;
@@ -361,6 +393,37 @@ export function registerTaskCommands(program: Command) {
         }
         return id;
       })() : undefined;
+      // self_hosted cloud routing: dedupe-and-upsert on the SHARED dataset. The
+      // local path wrote the task to this machine's sqlite by fingerprint, so on a
+      // flipped machine the row never reached the cloud /v1 API (a split-brain write).
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        let cloudResult;
+        try {
+          cloudResult = await cloudUpsertTaskByFingerprint(cloud, {
+            fingerprint: opts.fingerprint,
+            title: opts.title,
+            description: opts.description,
+            priority: parsePriority(opts.priority),
+            status: parseStatus(opts.status),
+            task_list_id: taskListId,
+            tags: parseTags(opts.tags),
+            metadata: buildExpectationMetadata(opts),
+            working_dir: opts.workingDir ? resolve(opts.workingDir) : process.cwd(),
+            project_id: projectId,
+            assigned_to: opts.assign,
+          });
+        } catch (e) {
+          handleError(e);
+        }
+        if (globalOpts.json) {
+          output(cloudResult, true);
+        } else {
+          console.log(chalk.green(cloudResult.created ? "Task created:" : "Task updated:"));
+          console.log(formatTaskLine(cloudResult.task));
+        }
+        return;
+      }
       let result;
       try {
         result = upsertTaskByFingerprint({
@@ -659,11 +722,22 @@ export function registerTaskCommands(program: Command) {
       const cloud = getTodosCloudClient();
       let task: any;
       if (cloud) {
-        const remote = await cloudGetTask(cloud, id);
+        const remote = await cloudGetTask(cloud, resolveTaskId(id));
+        const commentPage = remote ? await cloudListComments(cloud, remote.id) : null;
         // The /v1 API returns the task row without relation graphs; default the
         // relation arrays so the detail renderer below never touches undefined.
         task = remote
-          ? { subtasks: [], dependencies: [], blocked_by: [], comments: [], ...remote, tags: remote.tags ?? [] }
+          ? {
+              subtasks: [], dependencies: [], blocked_by: [], ...remote, tags: remote.tags ?? [],
+              comments: commentPage!.comments,
+              comments_page: {
+                count: commentPage!.count,
+                limit: commentPage!.limit,
+                has_more: commentPage!.has_more,
+                next_cursor: commentPage!.next_cursor,
+                pagination_supported: commentPage!.pagination_supported,
+              },
+            }
           : null;
       } else {
         const resolvedId = resolveTaskId(id);
@@ -736,10 +810,14 @@ export function registerTaskCommands(program: Command) {
       }
 
       if (task.comments.length > 0) {
-        console.log(chalk.bold(`\n  Comments (${task.comments.length}):`));
+        const suffix = task.comments_page?.has_more
+          ? task.comments_page.pagination_supported
+            ? ", newer page shown; older comments available"
+            : ", newer comments shown; older comments omitted until the server is upgraded"
+          : "";
+        console.log(chalk.bold(`\n  Comments (${task.comments.length}${suffix}):`));
         for (const c of task.comments) {
-          const agent = c.agent_id ? chalk.cyan(`[${c.agent_id}] `) : "";
-          console.log(`    ${agent}${chalk.dim(c.created_at)}: ${c.content}`);
+          console.log(formatHumanComment(c));
         }
       }
     });
@@ -757,9 +835,37 @@ export function registerTaskCommands(program: Command) {
         const active = lt({ status: "in_progress", assigned_to: globalOpts.agent! });
         if (active.length > 0) resolvedId = active[0]!.id;
       }
+      const cloud = getTodosCloudClient();
+
+      if (!resolvedId && cloud && globalOpts.agent) {
+        // Cloud mode: find the agent's current in-progress task from the shared store.
+        const active = await cloudListTasks(cloud, { status: "in_progress", assigned_to: globalOpts.agent, limit: 1 } as never);
+        if (active.length > 0) resolvedId = active[0]!.id;
+      }
       if (!resolvedId) { console.error(chalk.red("No task ID given and no active task found. Pass an ID or use --agent.")); process.exit(1); }
 
-      const task = getTaskWithRelations(resolvedId);
+      let task: any;
+      if (cloud) {
+        const remote = await cloudGetTask(cloud, resolvedId);
+        const commentPage = remote ? await cloudListComments(cloud, remote.id) : null;
+        // The /v1 API returns the task row without relation graphs; default the
+        // relation arrays so the detail renderer below never touches undefined.
+        task = remote
+          ? {
+              subtasks: [], dependencies: [], blocked_by: [], checklist: [], ...remote, tags: remote.tags ?? [],
+              comments: commentPage!.comments,
+              comments_page: {
+                count: commentPage!.count,
+                limit: commentPage!.limit,
+                has_more: commentPage!.has_more,
+                next_cursor: commentPage!.next_cursor,
+                pagination_supported: commentPage!.pagination_supported,
+              },
+            }
+          : null;
+      } else {
+        task = getTaskWithRelations(resolvedId);
+      }
       if (!task) { console.error(chalk.red(`Task not found: ${id || resolvedId}`)); process.exit(1); }
 
       if (globalOpts.json) {
@@ -796,7 +902,7 @@ export function registerTaskCommands(program: Command) {
       if (task.estimated_minutes) console.log(`  ${chalk.dim("Estimate:")}  ${task.estimated_minutes}m`);
       if (task.tags.length > 0) console.log(`  ${chalk.dim("Tags:")}      ${task.tags.join(", ")}`);
 
-      const unfinishedDeps = task.dependencies.filter(d => d.status !== "completed" && d.status !== "cancelled");
+      const unfinishedDeps = task.dependencies.filter((d: any) => d.status !== "completed" && d.status !== "cancelled");
       if (task.dependencies.length > 0) {
         console.log(chalk.bold(`\n  Depends on (${task.dependencies.length}):`));
         for (const dep of task.dependencies) {
@@ -844,10 +950,14 @@ export function registerTaskCommands(program: Command) {
       }
 
       if (task.comments.length > 0) {
-        console.log(chalk.bold(`\n  Comments (${task.comments.length}):`));
+        const suffix = task.comments_page?.has_more
+          ? task.comments_page.pagination_supported
+            ? ", newer page shown; older comments available"
+            : ", newer comments shown; older comments omitted until the server is upgraded"
+          : "";
+        console.log(chalk.bold(`\n  Comments (${task.comments.length}${suffix}):`));
         for (const c of task.comments) {
-          const agent = c.agent_id ? chalk.cyan(`[${c.agent_id}] `) : "";
-          console.log(`    ${agent}${chalk.dim(c.created_at)}: ${c.content}`);
+          console.log(formatHumanComment(c));
         }
       }
 
@@ -870,8 +980,20 @@ export function registerTaskCommands(program: Command) {
     .action(async (id: string) => {
       const globalOpts = program.opts();
       const resolvedId = resolveTaskId(id);
-      const { getTaskHistory } = await import("../../db/audit.js");
-      const history = getTaskHistory(resolvedId);
+      // self_hosted cloud routing: read the SHARED audit trail. The local path read
+      // this machine's sqlite and reported "No history" for a cloud task.
+      const cloud = getTodosCloudClient();
+      let history;
+      if (cloud) {
+        try {
+          history = await cloudTaskHistory(cloud, resolvedId);
+        } catch (e) {
+          handleError(e);
+        }
+      } else {
+        const { getTaskHistory } = await import("../../db/audit.js");
+        history = getTaskHistory(resolvedId);
+      }
 
       if (globalOpts.json) {
         output(history, true);
@@ -927,7 +1049,7 @@ export function registerTaskCommands(program: Command) {
       if (cloud) {
         let task;
         try {
-          task = await cloudUpdateTask(cloud, id, {
+          task = await cloudUpdateTask(cloud, resolveTaskId(id), {
             title: opts.title,
             description: opts.description,
             status: parseStatus(opts.status),
@@ -1035,7 +1157,7 @@ export function registerTaskCommands(program: Command) {
       if (cloud) {
         let task;
         try {
-          task = await cloudTaskAction(cloud, id, "complete", { agent_id: globalOpts.agent });
+          task = await cloudTaskAction(cloud, resolveTaskId(id), "complete", { agent_id: globalOpts.agent });
         } catch (e) {
           handleError(e);
         }
@@ -1080,27 +1202,47 @@ export function registerTaskCommands(program: Command) {
   program
     .command("approve <id>")
     .description("Approve a task that requires approval")
-    .action((id: string) => {
+    .action(async (id: string) => {
       const globalOpts = program.opts();
-      const resolvedId = resolveTaskId(id);
-      const task = getTask(resolvedId);
-      if (!task) { console.error(chalk.red(`Task not found: ${id}`)); process.exit(1); }
-
-      if (!task.requires_approval) {
-        console.log(chalk.yellow("This task does not require approval."));
-        return;
-      }
-      if (task.approved_by) {
-        console.log(chalk.yellow(`Already approved by ${task.approved_by}.`));
-        return;
-      }
-
+      const approver = globalOpts.agent || "cli";
       try {
-        const updated = updateTask(resolvedId, { approved_by: globalOpts.agent || "cli", version: task.version });
+        // self_hosted cloud routing: resolve and approve the task on the SHARED
+        // dataset. The local path read this machine's sqlite and 404'd
+        // ("Task not found") a task that lives only in the cloud.
+        const cloud = getTodosCloudClient();
+        if (cloud) {
+          const cloudId = resolveTaskId(id);
+          const task = await cloudGetTask(cloud, cloudId);
+          if (!task) { console.error(chalk.red(`Task not found: ${id}`)); process.exit(1); }
+          if (!task.requires_approval) { console.log(chalk.yellow("This task does not require approval.")); return; }
+          if (task.approved_by) { console.log(chalk.yellow(`Already approved by ${task.approved_by}.`)); return; }
+          const updated = await cloudUpdateTask(cloud, cloudId, { approved_by: approver, version: task.version });
+          if (globalOpts.json) { output(updated, true); }
+          else {
+            console.log(chalk.green(`Task approved by ${approver}:`));
+            console.log(formatTaskLine(updated));
+          }
+          return;
+        }
+
+        const resolvedId = resolveTaskId(id);
+        const task = getTask(resolvedId);
+        if (!task) { console.error(chalk.red(`Task not found: ${id}`)); process.exit(1); }
+
+        if (!task.requires_approval) {
+          console.log(chalk.yellow("This task does not require approval."));
+          return;
+        }
+        if (task.approved_by) {
+          console.log(chalk.yellow(`Already approved by ${task.approved_by}.`));
+          return;
+        }
+
+        const updated = updateTask(resolvedId, { approved_by: approver, version: task.version });
         if (globalOpts.json) {
           output(updated, true);
         } else {
-          console.log(chalk.green(`Task approved by ${globalOpts.agent || "cli"}:`));
+          console.log(chalk.green(`Task approved by ${approver}:`));
           console.log(formatTaskLine(updated));
         }
       } catch (e) {
@@ -1119,7 +1261,7 @@ export function registerTaskCommands(program: Command) {
       let task;
       if (cloud) {
         try {
-          task = await cloudTaskAction(cloud, id, "start", { agent_id: agentId });
+          task = await cloudTaskAction(cloud, resolveTaskId(id), "start", { agent_id: agentId });
         } catch (e) {
           handleError(e);
         }
@@ -1150,13 +1292,16 @@ export function registerTaskCommands(program: Command) {
   program
     .command("lock <id>")
     .description("Acquire exclusive lock on a task")
-    .action((id: string) => {
+    .action(async (id: string) => {
       const globalOpts = program.opts();
       const agentId = globalOpts.agent || "cli";
+      const cloud = getTodosCloudClient();
       const resolvedId = resolveTaskId(id);
       let result;
       try {
-        result = lockTask(resolvedId, agentId);
+        // self_hosted cloud routing: lock on the SHARED dataset so every agent
+        // coordinates on the same lock. Local lookup 404'd cloud tasks before.
+        result = cloud ? await cloudLockTask(cloud, resolvedId, agentId) : lockTask(resolvedId, agentId);
       } catch (e) {
         handleError(e);
       }
@@ -1175,11 +1320,13 @@ export function registerTaskCommands(program: Command) {
   program
     .command("unlock <id>")
     .description("Release lock on a task")
-    .action((id: string) => {
+    .action(async (id: string) => {
       const globalOpts = program.opts();
+      const cloud = getTodosCloudClient();
       const resolvedId = resolveTaskId(id);
       try {
-        unlockTask(resolvedId, globalOpts.agent);
+        if (cloud) await cloudUnlockTask(cloud, resolvedId, globalOpts.agent, !globalOpts.agent);
+        else unlockTask(resolvedId, globalOpts.agent);
       } catch (e) {
         handleError(e);
       }
@@ -1198,7 +1345,7 @@ export function registerTaskCommands(program: Command) {
     .action(async (id: string) => {
       const globalOpts = program.opts();
       const cloud = getTodosCloudClient();
-      const deleted = cloud ? await cloudDeleteTask(cloud, id) : deleteTask(resolveTaskId(id));
+      const deleted = cloud ? await cloudDeleteTask(cloud, resolveTaskId(id)) : deleteTask(resolveTaskId(id));
 
       if (globalOpts.json) {
         output({ deleted }, true);
@@ -1234,7 +1381,7 @@ export function registerTaskCommands(program: Command) {
     .description("Bulk operation on multiple tasks (done, start, delete, plan)")
     .option("--plan <id>", "Plan ID for the plan/move-plan action")
     .option("--clear-plan", "Remove plan assignment for the plan/move-plan action")
-    .action((action: string, ids: string[], opts: { plan?: string; clearPlan?: boolean }) => {
+    .action(async (action: string, ids: string[], opts: { plan?: string; clearPlan?: boolean }) => {
       const globalOpts = program.opts();
       const results: { id: string; success: boolean; error?: string }[] = [];
       const isPlanAction = action === "plan" || action === "move-plan";
@@ -1245,6 +1392,49 @@ export function registerTaskCommands(program: Command) {
       const planId = isPlanAction
         ? opts.plan ? resolvePlanId(opts.plan) : null
         : undefined;
+      const knownActions = new Set(["done", "complete", "start", "delete", "plan", "move-plan"]);
+      if (!knownActions.has(action)) {
+        console.error(chalk.red(`Unknown action: ${action}. Use: done, start, delete, plan`));
+        process.exit(1);
+      }
+
+      // self_hosted cloud routing: run each op against the SHARED dataset. The local
+      // path resolved ids against this machine's sqlite — `bulk done` threw
+      // "Task not found" for valid cloud task ids (while `bulk delete` silently
+      // no-op'd), a split-brain read.
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        for (const rawId of ids) {
+          try {
+            const resolvedId = resolveTaskId(rawId);
+            if (action === "done" || action === "complete") {
+              await cloudTaskAction(cloud, resolvedId, "complete", { agent_id: globalOpts.agent });
+            } else if (action === "start") {
+              await cloudTaskAction(cloud, resolvedId, "start", { agent_id: globalOpts.agent || "cli" });
+            } else if (action === "delete") {
+              await cloudDeleteTask(cloud, resolvedId);
+            } else {
+              const current = await cloudGetTask(cloud, resolvedId);
+              if (!current) throw new Error(`Task not found: ${rawId}`);
+              await cloudUpdateTask(cloud, resolvedId, { version: current.version, plan_id: planId });
+            }
+            results.push({ id: resolvedId, success: true });
+          } catch (e) {
+            results.push({ id: rawId, success: false, error: e instanceof Error ? e.message : String(e) });
+          }
+        }
+        const succeededCloud = results.filter(r => r.success).length;
+        const failedCloud = results.filter(r => !r.success).length;
+        if (globalOpts.json) {
+          output({ results, succeeded: succeededCloud, failed: failedCloud }, true);
+        } else {
+          console.log(chalk.green(`${action}: ${succeededCloud} succeeded, ${failedCloud} failed`));
+          for (const r of results.filter(r => !r.success)) {
+            console.log(chalk.red(`  ${r.id}: ${r.error}`));
+          }
+        }
+        return;
+      }
 
       for (const rawId of ids) {
         try {

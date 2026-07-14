@@ -112,16 +112,14 @@ describe("listComments", () => {
     expect(comments).toHaveLength(0);
   });
 
-  it("should order comments by created_at ascending", () => {
+  it("should order comments by created_at and preserve insertion order on ties", () => {
     const task = createTask({ title: "Test Task" }, db);
     const c1 = addComment({ task_id: task.id, content: "First" }, db);
     const c2 = addComment({ task_id: task.id, content: "Second" }, db);
     const c3 = addComment({ task_id: task.id, content: "Third" }, db);
 
     const comments = listComments(task.id, db);
-    expect(comments[0]!.content).toBe("First");
-    expect(comments[1]!.content).toBe("Second");
-    expect(comments[2]!.content).toBe("Third");
+    expect(comments.map((comment) => comment.id)).toEqual([c1.id, c2.id, c3.id]);
   });
 
   it("should only return comments for the specified task", () => {
