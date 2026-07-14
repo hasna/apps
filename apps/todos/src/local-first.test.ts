@@ -124,13 +124,15 @@ describe("OSS local-first runtime defaults", () => {
     try {
       // Both HASNA_TODOS_* and bare TODOS_* forms of URL+KEY, but no mode var.
       const noModeEnv = {
+        HASNA_TODOS_STORAGE_MODE: "",
+        TODOS_STORAGE_MODE: "",
         HASNA_TODOS_API_URL: String(server.url).replace(/\/$/, ""),
         HASNA_TODOS_API_KEY: "remote-token",
         TODOS_API_URL: String(server.url).replace(/\/$/, ""),
         TODOS_API_KEY: "remote-token",
       };
       const created = await runCli(["--json", "add", "Local CLI task"], noModeEnv);
-      expect(created.exitCode).toBe(0);
+      expect(created.exitCode, created.stderr || created.stdout).toBe(0);
       expect(JSON.parse(created.stdout).title).toBe("Local CLI task");
 
       const listed = await runCli(["--json", "list"], noModeEnv);

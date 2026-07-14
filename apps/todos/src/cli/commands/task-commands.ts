@@ -30,6 +30,7 @@ import {
   cloudUnlockTask,
   cloudTaskHistory,
   cloudUpsertTaskByFingerprint,
+  cloudResolveTaskListRef,
 } from "../cloud-router.js";
 import type { TaskPriority, TaskStatus } from "../../types/index.js";
 import {
@@ -254,6 +255,13 @@ export function registerTaskCommands(program: Command) {
       if (cloud) {
         let task;
         try {
+          const cloudProjectId = opts.project || globalOpts.project;
+          const cloudTaskListId = opts.list
+            ? await cloudResolveTaskListRef(cloud, opts.list, cloudProjectId)
+            : undefined;
+          if (opts.list && !cloudTaskListId) {
+            throw new Error(`Could not resolve task list ID or slug: ${opts.list}`);
+          }
           task = await cloudCreateTask(cloud, {
             title,
             description: opts.description,
@@ -263,10 +271,10 @@ export function registerTaskCommands(program: Command) {
             plan_id: opts.plan,
             assigned_to: opts.assign,
             status: parseStatus(opts.status),
-            task_list_id: opts.list,
+            task_list_id: cloudTaskListId,
             agent_id: globalOpts.agent,
             session_id: globalOpts.session,
-            project_id: opts.project || globalOpts.project,
+            project_id: cloudProjectId,
             estimated_minutes: opts.estimated !== undefined ? parseIntOption(opts.estimated, "--estimated") : undefined,
             sla_minutes: opts.slaMinutes !== undefined || opts.sla !== undefined ? parseIntOption(opts.slaMinutes ?? opts.sla, "--sla-minutes") : undefined,
             requires_approval: opts.approval || undefined,
@@ -1317,7 +1325,7 @@ export function registerTaskCommands(program: Command) {
       const cloud = getTodosCloudClient();
       const resolvedId = resolveTaskId(id);
       try {
-        if (cloud) await cloudUnlockTask(cloud, resolvedId, globalOpts.agent);
+        if (cloud) await cloudUnlockTask(cloud, resolvedId, globalOpts.agent, !globalOpts.agent);
         else unlockTask(resolvedId, globalOpts.agent);
       } catch (e) {
         handleError(e);

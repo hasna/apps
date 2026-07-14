@@ -21,7 +21,7 @@
  * subnet routing — pure API-client path per the locked architecture.
  */
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
-import type { Agent, Plan, Project, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList } from "../types/index.js";
+import type { Agent, CreateTaskListInput, Plan, Project, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList } from "../types/index.js";
 import { redactEvidenceText } from "../lib/redaction.js";
 
 type Env = Record<string, string | undefined>;
@@ -74,10 +74,12 @@ function unwrapTask(raw: unknown): Task {
 /** Map a local TaskFilter onto the query params the `/v1/tasks` list route honors. */
 function toListQuery(filter: TaskFilter = {}): Record<string, string | number> {
   const query: Record<string, string | number> = {};
-  if (typeof filter.status === "string") query["status"] = filter.status;
-  if (typeof filter.priority === "string") query["priority"] = filter.priority;
+  if (filter.status) query["status"] = Array.isArray(filter.status) ? filter.status.join(",") : filter.status;
+  if (filter.priority) query["priority"] = Array.isArray(filter.priority) ? filter.priority.join(",") : filter.priority;
   if (filter.project_id) query["project_id"] = filter.project_id;
+  if (filter.parent_id !== undefined) query["parent_id"] = filter.parent_id ?? "";
   if (filter.plan_id) query["plan_id"] = filter.plan_id;
+  if (filter.task_list_id) query["task_list_id"] = filter.task_list_id;
   if (filter.assigned_to) query["assigned_to"] = filter.assigned_to;
   if (filter.agent_id) query["agent_id"] = filter.agent_id;
   if (typeof filter.limit === "number") query["limit"] = filter.limit;
@@ -531,10 +533,15 @@ export async function cloudLockTask(client: HasnaStorageClient, id: string, agen
 }
 
 /** Release a lock on a cloud task (`POST /v1/tasks/:id/unlock`). */
-export async function cloudUnlockTask(client: HasnaStorageClient, id: string, agentId?: string): Promise<boolean> {
+export async function cloudUnlockTask(
+  client: HasnaStorageClient,
+  id: string,
+  agentId?: string,
+  force = false,
+): Promise<boolean> {
   const raw = await client.transport.post<unknown>(
     `/tasks/${encodeURIComponent(id)}/unlock`,
-    agentId ? { agent_id: agentId } : {},
+    { ...(agentId ? { agent_id: agentId } : {}), ...(force ? { force: true } : {}) },
   );
   if (raw && typeof raw === "object" && "success" in (raw as Record<string, unknown>)) {
     return Boolean((raw as { success: unknown }).success);
@@ -768,6 +775,37 @@ export async function cloudListTaskLists(client: HasnaStorageClient, projectId?:
   if (Array.isArray(envelope.task_lists)) return envelope.task_lists;
   if (Array.isArray(envelope.taskLists)) return envelope.taskLists;
   return Array.isArray(raw) ? (raw as TaskList[]) : [];
+}
+
+/** Resolve a cloud task-list UUID, unique UUID prefix, or slug. */
+export async function cloudResolveTaskListRef(
+  client: HasnaStorageClient,
+  ref: string,
+  projectId?: string,
+): Promise<string | null> {
+  const lists = await cloudListTaskLists(client, projectId);
+  const exact = lists.find((list) => list.id === ref || list.slug === ref);
+  if (exact) return exact.id;
+  const prefixes = lists.filter((list) => list.id.startsWith(ref));
+  return prefixes.length === 1 ? prefixes[0]!.id : null;
+}
+
+/** Create a task list in the cloud (`POST /v1/task-lists`). */
+export async function cloudCreateTaskList(
+  client: HasnaStorageClient,
+  input: CreateTaskListInput,
+): Promise<TaskList> {
+  const raw = await client.transport.post<unknown>("/task-lists", input as unknown as Record<string, unknown>);
+  if (raw && typeof raw === "object" && "task_list" in (raw as Record<string, unknown>)) {
+    return (raw as { task_list: TaskList }).task_list;
+  }
+  return raw as TaskList;
+}
+
+/** Delete a task list in the cloud (`DELETE /v1/task-lists/:id`). */
+export async function cloudDeleteTaskList(client: HasnaStorageClient, id: string): Promise<boolean> {
+  await client.delete("task-lists", id);
+  return true;
 }
 
 /**

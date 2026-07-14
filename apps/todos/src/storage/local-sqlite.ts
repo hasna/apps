@@ -5,6 +5,7 @@ import {
   listTasks,
   countTasks,
   updateTask,
+  unlockTask,
   deleteTask,
   startTask,
   completeTask,
@@ -90,6 +91,10 @@ export function createLocalSqliteTodosStorageAdapter(
       list: (filter = {}) => listTasks(filter, database()),
       count: (filter = {}) => countTasks(filter, database()),
       update: (id, input) => updateTask(id, input, database()),
+      unlock: (id, agentId) => {
+        unlockTask(id, agentId, database());
+        return true;
+      },
       delete: (id) => deleteTask(id, database()),
       start: (id, agentId) => startTask(id, agentId, database()),
       complete: (id, agentId, options) => completeTask(id, agentId, database(), options),

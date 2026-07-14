@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { LockError } from "../types/index.js";
 import type {
   Agent,
   CreateCommentInput,
@@ -792,7 +793,7 @@ async function lockTask(id: string, agentId: string, store: PostgresJsonRecordSt
 async function unlockTask(id: string, agentId: string | undefined, store: PostgresJsonRecordStore): Promise<boolean> {
   const task = await requireRecord<Task>("tasks", id, store);
   if (agentId && task.locked_by && task.locked_by !== agentId) {
-    throw new Error(`Task ${id} is locked by ${task.locked_by}, not ${agentId}`);
+    throw new LockError(id, task.locked_by);
   }
   await patchTask(task, { locked_by: null, locked_at: null }, store);
   return true;

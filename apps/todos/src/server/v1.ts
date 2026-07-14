@@ -7,7 +7,8 @@
  * require `todos:write` (a `todos:*` key satisfies both). This is a real wrapper
  * over the core storage lib — there are NO stubs; unimplemented routes 404.
  */
-import type { CreateProjectInput, CreateTaskInput, TaskComment, UpdateTaskInput } from "../types/index.js";
+import { LockError } from "../types/index.js";
+import type { CreateProjectInput, CreateTaskInput, CreateTaskListInput, TaskComment, UpdateTaskInput } from "../types/index.js";
 import type { TodosStorageContext, TodosStorageSnapshot } from "../storage/interfaces.js";
 import { getCloudStorageAdapter, getCloudVerifier, ensureCloudSchema } from "./cloud.js";
 import { redactEvidenceText } from "../lib/redaction.js";
@@ -237,10 +238,20 @@ export async function handleV1Request(
       if (!id) {
         if (method === "GET") {
           const filter = {
-            ...(url.searchParams.get("status") ? { status: url.searchParams.get("status") as never } : {}),
-            ...(url.searchParams.get("priority") ? { priority: url.searchParams.get("priority") as never } : {}),
+            ...(url.searchParams.get("status") ? {
+              status: (url.searchParams.get("status")!.includes(",")
+                ? url.searchParams.get("status")!.split(",")
+                : url.searchParams.get("status")) as never,
+            } : {}),
+            ...(url.searchParams.get("priority") ? {
+              priority: (url.searchParams.get("priority")!.includes(",")
+                ? url.searchParams.get("priority")!.split(",")
+                : url.searchParams.get("priority")) as never,
+            } : {}),
             ...(url.searchParams.get("project_id") ? { project_id: url.searchParams.get("project_id")! } : {}),
+            ...(url.searchParams.has("parent_id") ? { parent_id: url.searchParams.get("parent_id") || null, include_subtasks: true } : {}),
             ...(url.searchParams.get("plan_id") ? { plan_id: url.searchParams.get("plan_id")! } : {}),
+            ...(url.searchParams.get("task_list_id") ? { task_list_id: url.searchParams.get("task_list_id")! } : {}),
             ...(url.searchParams.get("assigned_to") ? { assigned_to: url.searchParams.get("assigned_to")! } : {}),
             ...(url.searchParams.get("agent_id") ? { agent_id: url.searchParams.get("agent_id")! } : {}),
             ...(url.searchParams.get("limit") ? { limit: Number(url.searchParams.get("limit")) } : {}),
@@ -373,16 +384,25 @@ export async function handleV1Request(
         // and 404'd cloud tasks ("Task not found").
         if (action === "lock" || action === "unlock") {
           if (method !== "POST") return error(405, `method ${method} not allowed on /v1/tasks/:id/${action}`);
-          if (typeof store.tasks.lock !== "function" || typeof store.tasks.unlock !== "function") {
-            return error(501, "task locking is not supported by this storage backend");
-          }
-          const body = (await readJson<{ agent_id?: string }>(req)) ?? {};
+          const body = (await readJson<{ agent_id?: string; force?: boolean }>(req)) ?? {};
           if (!(await store.tasks.get(id))) return error(404, "task not found");
           if (action === "lock") {
+            if (typeof store.tasks.lock !== "function") return error(501, "task locking is not supported by this storage backend");
             const agentId = body.agent_id || principal.agent || "todos-serve";
             return json({ result: await store.tasks.lock(id, agentId) });
           }
-          const released = await store.tasks.unlock(id, body.agent_id || principal.agent || undefined);
+          if (typeof store.tasks.unlock !== "function") return error(501, "task unlocking is not supported by this storage backend");
+          if (body.force === true) {
+            if (!principal.scopes.includes("todos:*")) return error(403, "force unlock requires todos:* scope");
+            const released = await store.tasks.unlock(id);
+            return json({ success: released });
+          }
+          if (body.agent_id && principal.agent && body.agent_id !== principal.agent && !principal.scopes.includes("todos:*")) {
+            return error(403, "unlock agent_id must match the authenticated agent");
+          }
+          const agentId = principal.agent || body.agent_id;
+          if (!agentId) return error(403, "unlock requires an agent-bound key or force=true");
+          const released = await store.tasks.unlock(id, agentId);
           return json({ success: released });
         }
         // ── /v1/tasks/:id/dependencies[/:dep] — dependency edges ──
@@ -695,11 +715,27 @@ export async function handleV1Request(
     }
 
     // ── /v1/task-lists — task lists (optionally scoped to a project) ──
-    if (resource === "task-lists" && !id) {
-      if (method !== "GET") return error(405, `method ${method} not allowed on /v1/task-lists`);
-      const projectId = url.searchParams.get("project_id") ?? undefined;
-      const taskLists = await store.taskLists.list(projectId);
-      return json({ task_lists: taskLists, count: taskLists.length });
+    if (resource === "task-lists") {
+      if (!id && method === "GET") {
+        const projectId = url.searchParams.get("project_id") ?? undefined;
+        const taskLists = await store.taskLists.list(projectId);
+        return json({ task_lists: taskLists, count: taskLists.length });
+      }
+      if (!id && method === "POST") {
+        const body = await readJson<CreateTaskListInput>(req);
+        if (!body || typeof body.name !== "string" || !body.name.trim()) return error(400, "name is required");
+        const taskList = await store.taskLists.create(body, contextFromPrincipal(principal));
+        return json({ task_list: taskList }, 201);
+      }
+      if (id && method === "GET") {
+        const taskList = await store.taskLists.get(id);
+        return taskList ? json({ task_list: taskList }) : error(404, "task list not found");
+      }
+      if (id && method === "DELETE") {
+        const deleted = await store.taskLists.delete(id, contextFromPrincipal(principal));
+        return deleted ? json({ deleted: true, id }) : error(404, "task list not found");
+      }
+      return error(405, `method ${method} not allowed on /v1/task-lists${id ? "/:id" : ""}`);
     }
 
     // ── /v1/dependencies — every dependency edge in the dataset ──
@@ -784,6 +820,7 @@ export async function handleV1Request(
 
     return error(404, `unknown /v1 resource: ${resource ?? "(root)"}`);
   } catch (e) {
+    if (e instanceof LockError) return error(409, e.message, { code: LockError.code });
     return error(500, (e as Error).message || "internal error");
   }
 }

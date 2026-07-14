@@ -6,7 +6,18 @@ import { releaseAgent, listAgents, normalizeGeneratedAgentNames, suggestAgentNam
 import { createTaskList, listTaskLists, deleteTaskList } from "../../db/task-lists.js";
 import { listTasks } from "../../db/tasks.js";
 import { getPackageVersion, handleError, autoProject, output } from "../helpers.js";
-import { getTodosCloudClient, cloudListAgents, cloudRegisterAgent, cloudListTasks, cloudListTaskLists, cloudHeartbeatAgent, cloudReleaseAgent } from "../cloud-router.js";
+import {
+  getTodosCloudClient,
+  cloudCreateTaskList,
+  cloudDeleteTaskList,
+  cloudHeartbeatAgent,
+  cloudListAgents,
+  cloudListTaskLists,
+  cloudListTasks,
+  cloudRegisterAgent,
+  cloudReleaseAgent,
+  cloudResolveTaskListRef,
+} from "../cloud-router.js";
 
 export function registerAgentCommands(program: Command) {
   // init
@@ -374,10 +385,12 @@ export function registerAgentCommands(program: Command) {
     .action(async (opts) => {
       try {
         const globalOpts = program.opts();
-        const projectId = autoProject(globalOpts);
+        const cloud = getTodosCloudClient();
+        const projectId = cloud ? globalOpts.project : autoProject(globalOpts);
 
         if (opts.add) {
-          const list = createTaskList({ name: opts.add, slug: opts.slug, description: opts.description, project_id: projectId });
+          const input = { name: opts.add, slug: opts.slug, description: opts.description, project_id: projectId };
+          const list = cloud ? await cloudCreateTaskList(cloud, input) : createTaskList(input);
           if (globalOpts.json) {
             output(list, true);
             return;
@@ -390,6 +403,13 @@ export function registerAgentCommands(program: Command) {
         }
 
         if (opts.delete) {
+          if (cloud) {
+            const resolved = await cloudResolveTaskListRef(cloud, opts.delete, projectId ?? undefined);
+            if (!resolved) throw new Error(`Task list not found or ambiguous: ${opts.delete}`);
+            await cloudDeleteTaskList(cloud, resolved);
+            console.log(chalk.green("Task list deleted."));
+            return;
+          }
           const db = getDatabase();
           const resolved = resolvePartialId(db, "task_lists", opts.delete);
           if (!resolved) {
@@ -401,7 +421,6 @@ export function registerAgentCommands(program: Command) {
           return;
         }
 
-        const cloud = getTodosCloudClient();
         const lists = cloud ? await cloudListTaskLists(cloud, projectId ?? undefined) : listTaskLists(projectId);
         if (globalOpts.json) {
           output(lists, true);

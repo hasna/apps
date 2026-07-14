@@ -31,6 +31,9 @@ import {
   cloudBlockingDepsMap,
   cloudRecap,
   cloudTimeline,
+  cloudCreateTaskList,
+  cloudDeleteTaskList,
+  cloudResolveTaskListRef,
 } from "./cloud-router.js";
 
 const CLOUD_ENV = {
@@ -638,5 +641,45 @@ describe("cloud read/analytics routing reads the shared cloud dataset", () => {
     const client = getTodosCloudClient(CLOUD_ENV)!;
     const page = await cloudTimeline(client, { entity_type: "project", entity_id: "p1" });
     expect(page.total).toBe(0);
+  });
+});
+
+describe("cloud task-list, filter, and force-unlock parity", () => {
+  test("list forwards task-list, parent, and multi-status filters", async () => {
+    const calls = installFetch(() => ({ body: { tasks: [] } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await cloudListTasks(client, {
+      task_list_id: "list-1",
+      parent_id: "parent-1",
+      status: ["pending", "in_progress"],
+    });
+    expect(calls[0]!.url).toContain("task_list_id=list-1");
+    expect(calls[0]!.url).toContain("parent_id=parent-1");
+    expect(calls[0]!.url).toContain("status=pending%2Cin_progress");
+  });
+
+  test("task-list create/delete and slug/prefix resolution use /v1/task-lists", async () => {
+    const calls = installFetch((call) => {
+      if (call.method === "POST") {
+        return { status: 201, body: { task_list: { id: "12345678-full", slug: "todos-open-emails", name: "Open Emails" } } };
+      }
+      if (call.method === "DELETE") return { status: 204 };
+      return { body: { task_lists: [{ id: "12345678-full", slug: "todos-open-emails", name: "Open Emails" }] } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudCreateTaskList(client, { name: "Open Emails", slug: "todos-open-emails" }))
+      .resolves.toMatchObject({ id: "12345678-full" });
+    await expect(cloudResolveTaskListRef(client, "todos-open-emails")).resolves.toBe("12345678-full");
+    await expect(cloudResolveTaskListRef(client, "12345678")).resolves.toBe("12345678-full");
+    await expect(cloudDeleteTaskList(client, "12345678-full")).resolves.toBe(true);
+    expect(calls.some((call) => call.method === "POST" && call.url.endsWith("/v1/task-lists"))).toBe(true);
+    expect(calls.some((call) => call.method === "DELETE" && call.url.endsWith("/v1/task-lists/12345678-full"))).toBe(true);
+  });
+
+  test("force unlock sends an explicit force flag instead of spoofing the lock holder", async () => {
+    const calls = installFetch(() => ({ body: { success: true } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudUnlockTask(client, "task-1", undefined, true)).resolves.toBe(true);
+    expect(calls[0]!.body).toEqual({ force: true });
   });
 });
