@@ -33,23 +33,21 @@ OpenLoops has three deployment modes:
   shared by serve, SDK, and tests. This release exposes status, storage-backed
   `/v1` loop CRUD and run listing, runner claim/heartbeat/finalize protocol
   endpoints, a one-shot `loops-runner run-once` execution path for embedded
-  control-plane hosts, id-preserving local export/import, and preview-only
-  self-hosted migration/sync commands; full fleet rollout and id-preserving
-  remote apply are follow-up work.
-- `cloud`: a hosted control-plane contract. This release exposes client/runner status only; hosted tenant auth and infrastructure live outside this package.
+  control-plane hosts, id-preserving local export/import, tenant-bound API-key
+  authentication, and forced Postgres row-level tenant isolation.
+- `cloud`: a hosted control-plane contract using the same tenant-bound API.
 
 `local` is the default and requires no network, token, Postgres, or hosted
-service. Set `LOOPS_MODE` or `HASNA_LOOPS_MODE` to `local`, `self_hosted`, or
-`cloud` to choose explicitly. Without an explicit mode, `LOOPS_CLOUD_API_URL`
-selects `cloud`, while `LOOPS_API_URL` or `LOOPS_DATABASE_URL` selects
+service. Set `HASNA_LOOPS_STORAGE_MODE` to `local`, `self_hosted`, or
+`cloud` to choose explicitly. Without an explicit mode, `HASNA_LOOPS_CLOUD_API_URL`
+selects `cloud`, while `HASNA_LOOPS_API_URL` or `HASNA_LOOPS_DATABASE_URL` selects
 `self_hosted`.
 
 The public `@hasna/loops` package owns the local runtime, mode resolver,
-self-hosted API contract, runner contract, SDK, MCP server, and CLI. Hosted
-tenant auth, account administration, and infrastructure live outside this
-package. Cloud mode is a public contract until a cloud-specific hosted URL and
-cloud token are configured through `LOOPS_CLOUD_API_URL` plus
-`LOOPS_CLOUD_TOKEN` or `HASNA_LOOPS_CLOUD_TOKEN`.
+self-hosted API contract, tenant authentication and authorization, runner
+contract, SDK, MCP server, and CLI. Account provisioning and infrastructure
+deployment remain operator responsibilities. Cloud clients use
+`HASNA_LOOPS_CLOUD_API_URL` plus `HASNA_LOOPS_API_KEY`.
 
 Scheduler state is explicit in status JSON. `schedulerState.localStore` is
 SQLite plus local run artifact files: authoritative in `local`, cache/spool in
@@ -81,7 +79,7 @@ loops import ./loops-export.json --apply
 loops cloud status
 loops-api status
 loops-serve version
-HASNA_LOOPS_DATABASE_URL=... loops-serve migrate --dry-run
+HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --dry-run
 loops-runner status
 ```
 

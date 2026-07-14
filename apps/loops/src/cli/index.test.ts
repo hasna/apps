@@ -16,15 +16,9 @@ const cliPath = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
 function runCli(dataDir: string, args: string[], input?: string, env: Record<string, string> = {}) {
   const isolatedEnv = {
     HASNA_LOOPS_STORAGE_MODE: "local",
-    LOOPS_API_URL: "",
     HASNA_LOOPS_API_URL: "",
-    LOOPS_CLOUD_API_URL: "",
     HASNA_LOOPS_CLOUD_API_URL: "",
-    LOOPS_API_TOKEN: "",
-    HASNA_LOOPS_API_TOKEN: "",
     HASNA_LOOPS_API_KEY: "",
-    LOOPS_CLOUD_TOKEN: "",
-    HASNA_LOOPS_CLOUD_TOKEN: "",
   };
   return spawnSync(process.execPath, [cliPath, ...args], {
     env: { ...process.env, ...isolatedEnv, ...env, LOOPS_DATA_DIR: dataDir },
@@ -240,13 +234,9 @@ describe("loops CLI", () => {
   test("reports local deployment mode by default", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-mode-local-"));
     const mode = runCli(dataDir, ["--json", "mode"], undefined, {
-      LOOPS_MODE: "",
-      HASNA_LOOPS_MODE: "",
-      LOOPS_API_URL: "",
+      HASNA_LOOPS_STORAGE_MODE: "",
       HASNA_LOOPS_API_URL: "",
-      LOOPS_CLOUD_API_URL: "",
       HASNA_LOOPS_CLOUD_API_URL: "",
-      LOOPS_DATABASE_URL: "",
       HASNA_LOOPS_DATABASE_URL: "",
     });
 
@@ -268,9 +258,9 @@ describe("loops CLI", () => {
   test("reports self-hosted and cloud contract perspectives without exposing tokens", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-mode-cloud-"));
     const selfHosted = runCli(dataDir, ["--json", "self-hosted", "status"], undefined, {
-      LOOPS_MODE: "self-hosted",
-      LOOPS_API_URL: "http://127.0.0.1:8787",
-      LOOPS_API_TOKEN: "do-not-print-this-token",
+      HASNA_LOOPS_STORAGE_MODE: "self-hosted",
+      HASNA_LOOPS_API_URL: "http://127.0.0.1:8787",
+      HASNA_LOOPS_API_KEY: "do-not-print-this-token",
     });
     expect(selfHosted.status).toBe(0);
     expect(selfHosted.stdout).not.toContain("do-not-print-this-token");
@@ -282,7 +272,7 @@ describe("loops CLI", () => {
         kind: "self_hosted",
         configured: true,
         apiUrl: "http://127.0.0.1:8787",
-        authTokenPresent: true,
+        apiKeyPresent: true,
       },
       schedulerState: {
         authority: "self_hosted_control_plane",
@@ -293,9 +283,9 @@ describe("loops CLI", () => {
     });
 
     const cloud = runCli(dataDir, ["--json", "cloud", "status"], undefined, {
-      LOOPS_MODE: "local",
-      LOOPS_CLOUD_API_URL: "https://loops.example.test",
-      LOOPS_CLOUD_TOKEN: "do-not-print-this-cloud-token",
+      HASNA_LOOPS_STORAGE_MODE: "local",
+      HASNA_LOOPS_CLOUD_API_URL: "https://loops.example.test",
+      HASNA_LOOPS_API_KEY: "do-not-print-this-cloud-token",
     });
     expect(cloud.status).toBe(0);
     expect(cloud.stdout).not.toContain("do-not-print-this-cloud-token");
@@ -309,7 +299,7 @@ describe("loops CLI", () => {
         kind: "cloud",
         configured: true,
         apiUrl: "https://loops.example.test",
-        authTokenPresent: true,
+        apiKeyPresent: true,
       },
       schedulerState: {
         authority: "cloud_control_plane",
@@ -430,8 +420,7 @@ describe("loops CLI", () => {
     expect(create.status).toBe(0);
 
     const preview = runCli(dataDir, ["--json", "self-hosted", "migrate", "--dry-run"], undefined, {
-      LOOPS_API_TOKEN: "do-not-print-this-token",
-      HASNA_LOOPS_API_TOKEN: "",
+      HASNA_LOOPS_API_KEY: "do-not-print-this-token",
     });
     expect(preview.status).toBe(0);
     expect(preview.stdout).not.toContain("do-not-print-this-token");
@@ -440,7 +429,7 @@ describe("loops CLI", () => {
     expect(plan.dryRun).toBe(true);
     expect(plan.importable).toBe(false);
     expect(plan.summary.blocked).toBeGreaterThan(0);
-    expect(plan.warnings.join(" ")).toContain("LOOPS_API_URL");
+    expect(plan.warnings.join(" ")).toContain("HASNA_LOOPS_API_URL");
 
     for (const command of ["push", "pull"]) {
       const documented = runCli(dataDir, ["--json", "self-hosted", command, "--dry-run"]);
@@ -453,7 +442,18 @@ describe("loops CLI", () => {
     const mod = await import("../api/index.js");
     const sourceDir = freshDataDir("loops-cli-self-hosted-push-source-");
     const remoteStorage = createSqliteLoopStorage(":memory:");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage: remoteStorage });
+    const principal = {
+      tenantId: "tenant-test", principalId: "principal-test", requestId: "request-test",
+      kid: "kid-test", agent: "principal-test", scopes: ["loops:import"],
+      roles: ["admin" as const], tokenKind: "api_key" as const,
+      claims: { v: 1, kid: "kid-test", app: "loops", agent: "principal-test", scopes: ["loops:import"], iat: 1, exp: null },
+    };
+    const server = mod.createLoopsApiServer({
+      host: "127.0.0.1",
+      port: 0,
+      authenticator: { authenticate: async () => ({ ok: true as const, status: 200 as const, principal }) },
+      withTenantStorage: (_principal, fn) => fn(remoteStorage),
+    });
     let workflowId = "";
     let loopId = "";
 

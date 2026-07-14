@@ -177,7 +177,7 @@ export interface SchemaMigrationStorage {
   readonly backend: LoopStorageBackend;
   readonly migrations: readonly StorageMigration[];
   listAppliedMigrations(): Promise<AppliedStorageMigration[]>;
-  migrate(opts?: { dryRun?: boolean }): Promise<StorageMigrationResult>;
+  migrate(opts?: { dryRun?: boolean; through?: string }): Promise<StorageMigrationResult>;
   close(): Promise<void>;
 }
 

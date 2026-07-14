@@ -37,23 +37,29 @@ curl -fsS http://127.0.0.1:8787/ready
 curl -fsS http://127.0.0.1:8787/openapi.json
 ```
 
-`loops-serve` may bind to loopback without an API signing secret for local
-development. A non-local bind must set `HASNA_LOOPS_API_SIGNING_KEY`,
-`HASNA_API_SIGNING_KEY`, or `API_KEY_SIGNING_SECRET`; otherwise the service
-fails closed before exposing `/v1`.
+`loops-serve` always requires `HASNA_LOOPS_API_SIGNING_KEY`. There is no
+loopback authentication bypass.
 
 ## AWS Self-Hosted Gates
 
-1. Apply migrations with the ECS one-shot task or an operator command:
-   `HASNA_LOOPS_DATABASE_URL=... loops-serve migrate --dry-run`, then
-   `HASNA_LOOPS_DATABASE_URL=... loops-serve migrate`.
-2. Start `loops-serve` with `HASNA_LOOPS_MODE=self_hosted`,
+1. Provision separate database logins. The migrator login must be a member of
+   `open_loops_owner`, `open_loops_migrator`, and
+   `open_loops_authenticator`; the service login must be a member only of
+   `open_loops_runtime`. Never reuse the migrator DSN in `loops-serve`.
+2. Prepare the tenant schema with the ECS one-shot task or an operator command:
+   `HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --dry-run`, then
+   `HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate`.
+3. Load the reviewed explicit ownership bundle with
+   `HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve tenant-backfill --input <bundle>`.
+4. Enforce tenant keys, composite foreign keys, and forced RLS with
+   `HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --enforce-tenancy`.
+5. Start `loops-serve` with `HASNA_LOOPS_STORAGE_MODE=self_hosted`,
    `HASNA_LOOPS_DATABASE_URL`, and the API signing secret from the approved
    vault item. Do not log or copy the secret value into task evidence.
-3. Verify `/health`, `/ready`, `/version`, and `/openapi.json`.
-4. Verify an authenticated `/v1` read/write smoke against a throwaway loop and
+6. Verify `/health`, `/ready`, `/version`, and `/openapi.json`.
+7. Verify an authenticated `/v1` read/write smoke against a throwaway loop and
    a runner registration/claim/finalize smoke if a runner API URL is configured.
-5. Record package version, git SHA, image tag, database migration plan/result,
+8. Record package version, git SHA, image tag, database migration plan/result,
    redacted API URL, health/readiness responses, and rollback handle.
 
 ## Still Pending Before Daemon Cutover
@@ -73,6 +79,5 @@ fails closed before exposing `/v1`.
 For the self-hosted service, roll back by moving traffic to the previous image
 or stopping the new `loops-serve` task. Local scheduled execution remains on
 SQLite unless operators explicitly configure a runner/control-plane cutover, so
-removing `LOOPS_API_URL`, `HASNA_LOOPS_API_URL`, `LOOPS_DATABASE_URL`, or
-`HASNA_LOOPS_DATABASE_URL` returns the standalone CLI/daemon perspective to
+removing `HASNA_LOOPS_API_URL` and `HASNA_LOOPS_DATABASE_URL` returns the standalone CLI/daemon perspective to
 `local`.

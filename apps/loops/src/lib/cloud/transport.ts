@@ -60,19 +60,8 @@ export function clientTransportEnvKeys(name: string): ClientTransportEnvKeys {
       `${token}_STORAGE_MODE`,
       `${token}_MODE`,
     ],
-    apiUrlKeys: [`HASNA_${token}_API_URL`, `${token}_API_URL`],
-    // `_API_KEY` is the canonical client-flip key. `_API_TOKEN` is accepted as a
-    // lower-precedence alias so the SAME bearer secret used by the control-plane
-    // paths (doctor / self-hosted import / migration read `LOOPS_API_TOKEN` /
-    // `HASNA_LOOPS_API_TOKEN`) also enables read/write routing. Without this, an
-    // operator who wires only `_API_TOKEN` gets a doctor that reports
-    // "authenticated" while list/create silently keep reading local sqlite.
-    apiKeyKeys: [
-      `HASNA_${token}_API_KEY`,
-      `${token}_API_KEY`,
-      `HASNA_${token}_API_TOKEN`,
-      `${token}_API_TOKEN`,
-    ],
+    apiUrlKeys: [`HASNA_${token}_API_URL`],
+    apiKeyKeys: [`HASNA_${token}_API_KEY`],
   };
 }
 

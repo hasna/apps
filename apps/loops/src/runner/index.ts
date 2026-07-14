@@ -20,28 +20,19 @@ program
   .option("-j, --json", "print JSON");
 
 function configuredApiUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  return env.LOOPS_API_URL?.trim() || env.HASNA_LOOPS_API_URL?.trim() || env.LOOPS_CLOUD_API_URL?.trim() || env.HASNA_LOOPS_CLOUD_API_URL?.trim();
+  return env.HASNA_LOOPS_API_URL?.trim() || env.HASNA_LOOPS_CLOUD_API_URL?.trim();
 }
 
-function configuredApiToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  return env.LOOPS_API_TOKEN?.trim() || env.HASNA_LOOPS_API_TOKEN?.trim() || env.LOOPS_CLOUD_TOKEN?.trim() || env.HASNA_LOOPS_CLOUD_TOKEN?.trim();
-}
-
-function isLocalApiUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return ["127.0.0.1", "localhost", "::1"].includes(url.hostname);
-  } catch {
-    return false;
-  }
+function configuredApiKey(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return env.HASNA_LOOPS_API_KEY?.trim();
 }
 
 export function runnerStatus(machineId = process.env.LOOPS_RUNNER_MACHINE_ID || process.env.HASNA_MACHINE_ID) {
   const deployment = buildDeploymentStatus();
   const local = deployment.deploymentMode === "local";
   const apiUrl = configuredApiUrl();
-  const token = configuredApiToken();
-  const apiReady = Boolean(apiUrl && (isLocalApiUrl(apiUrl) || token));
+  const token = configuredApiKey();
+  const apiReady = Boolean(apiUrl && token);
   return {
     ok: local || apiReady,
     service: "loops-runner",
@@ -71,7 +62,7 @@ export interface RunnerOnceResult {
 
 export interface RunRunnerOnceOptions {
   apiUrl?: string;
-  apiToken?: string;
+  apiKey?: string;
   runnerId?: string;
   machineId?: string;
   now?: Date;
@@ -84,9 +75,9 @@ export interface RunRunnerOnceOptions {
 function resolveRunnerConfig(opts: RunRunnerOnceOptions): { apiUrl: string; token?: string; runnerId: string; machineId?: string } {
   const env = opts.env ?? process.env;
   const apiUrl = opts.apiUrl ?? configuredApiUrl(env);
-  if (!apiUrl) throw new Error("loops-runner requires LOOPS_API_URL or HASNA_LOOPS_API_URL");
-  const token = opts.apiToken ?? configuredApiToken(env);
-  if (!isLocalApiUrl(apiUrl) && !token) throw new Error("non-local loops-runner requires LOOPS_API_TOKEN or HASNA_LOOPS_API_TOKEN");
+  if (!apiUrl) throw new Error("loops-runner requires HASNA_LOOPS_API_URL");
+  const token = opts.apiKey ?? configuredApiKey(env);
+  if (!token) throw new Error("loops-runner requires HASNA_LOOPS_API_KEY");
   return {
     apiUrl,
     token,

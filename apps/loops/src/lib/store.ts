@@ -4321,7 +4321,7 @@ export class Store {
       });
   }
 
-  recoverExpiredRunLeases(now: Date = new Date(), opts: DaemonLeaseFence & { limit?: number; scanLimit?: number } = {}): LoopRun[] {
+  recoverExpiredRunLeases(now: Date = new Date(), opts: DaemonLeaseFence & { limit?: number; scanLimit?: number; runId?: string } = {}): LoopRun[] {
     return this.recoverExpiredRunLeasesDetailed(now, opts).abandoned;
   }
 
@@ -4333,18 +4333,19 @@ export class Store {
    */
   recoverExpiredRunLeasesDetailed(
     now: Date = new Date(),
-    opts: DaemonLeaseFence & { limit?: number; scanLimit?: number } = {},
+    opts: DaemonLeaseFence & { limit?: number; scanLimit?: number; runId?: string } = {},
   ): RecoverExpiredRunLeasesResult {
     const limit = Math.max(1, Math.min(1_000, Math.floor(opts.limit ?? DEFAULT_RECOVERY_BATCH_LIMIT)));
     const scanLimit = Math.max(limit, Math.min(5_000, Math.floor(opts.scanLimit ?? limit * DEFAULT_RECOVERY_SCAN_MULTIPLIER)));
     const rows = this.db
-      .query<RunRow, [string, number]>(
+      .query<RunRow, [string, string | null, string | null, number]>(
         `SELECT * FROM loop_runs
          WHERE status = 'running' AND lease_expires_at <= ?
+           AND (? IS NULL OR id = ?)
          ORDER BY lease_expires_at ASC
          LIMIT ?`,
       )
-      .all(now.toISOString(), scanLimit);
+      .all(now.toISOString(), opts.runId ?? null, opts.runId ?? null, scanLimit);
     const recovered: LoopRun[] = [];
     const deferred: LoopRun[] = [];
     for (const row of rows) {

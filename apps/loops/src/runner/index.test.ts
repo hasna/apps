@@ -3,9 +3,26 @@ import { createLoopsApiServer } from "../api/index.js";
 import { createSqliteLoopStorage } from "../lib/storage/sqlite.js";
 import { runRunnerOnce, runnerStatus } from "./index.js";
 
+function createRunnerServer(storage: ReturnType<typeof createSqliteLoopStorage>, principalId: string, now?: () => Date) {
+  const principal = {
+    tenantId: "tenant-test", principalId, requestId: "request-test", kid: "kid-test", agent: principalId,
+    scopes: ["loops:runner"], roles: ["worker" as const], tokenKind: "machine" as const,
+    claims: { v: 1, kid: "kid-test", app: "loops", agent: principalId, scopes: ["loops:runner"], iat: 1, exp: null },
+  };
+  return createLoopsApiServer({
+    host: "127.0.0.1", port: 0, now,
+    authenticator: { authenticate: async () => ({ ok: true as const, status: 200 as const, principal }) },
+    withTenantStorage: (_principal, fn) => fn(storage),
+  });
+}
+
 describe("loops-runner foundation", () => {
   test("reports local daemon authority by default", () => {
+    const previous = process.env.HASNA_LOOPS_STORAGE_MODE;
+    process.env.HASNA_LOOPS_STORAGE_MODE = "local";
     const status = runnerStatus();
+    if (previous === undefined) delete process.env.HASNA_LOOPS_STORAGE_MODE;
+    else process.env.HASNA_LOOPS_STORAGE_MODE = previous;
 
     expect(status.ok).toBe(true);
     expect(status.service).toBe("loops-runner");
@@ -14,12 +31,12 @@ describe("loops-runner foundation", () => {
   });
 
   test("fails closed for configured self-hosted mode without an API URL", () => {
-    const previousMode = process.env.LOOPS_MODE;
-    const previousDatabaseUrl = process.env.LOOPS_DATABASE_URL;
-    const previousApiUrl = process.env.LOOPS_API_URL;
-    process.env.LOOPS_MODE = "self_hosted";
-    process.env.LOOPS_DATABASE_URL = "postgres://loops.example.test/openloops";
-    delete process.env.LOOPS_API_URL;
+    const previousMode = process.env.HASNA_LOOPS_STORAGE_MODE;
+    const previousDatabaseUrl = process.env.HASNA_LOOPS_DATABASE_URL;
+    const previousApiUrl = process.env.HASNA_LOOPS_API_URL;
+    process.env.HASNA_LOOPS_STORAGE_MODE = "self_hosted";
+    process.env.HASNA_LOOPS_DATABASE_URL = "postgres://loops.example.test/openloops";
+    delete process.env.HASNA_LOOPS_API_URL;
 
     try {
       const status = runnerStatus("machine-test");
@@ -30,22 +47,22 @@ describe("loops-runner foundation", () => {
       expect(status.deployment.controlPlane.configured).toBe(true);
       expect(status.state).toBe("missing_control_plane_api_url");
     } finally {
-      if (previousMode === undefined) delete process.env.LOOPS_MODE;
-      else process.env.LOOPS_MODE = previousMode;
-      if (previousDatabaseUrl === undefined) delete process.env.LOOPS_DATABASE_URL;
-      else process.env.LOOPS_DATABASE_URL = previousDatabaseUrl;
-      if (previousApiUrl === undefined) delete process.env.LOOPS_API_URL;
-      else process.env.LOOPS_API_URL = previousApiUrl;
+      if (previousMode === undefined) delete process.env.HASNA_LOOPS_STORAGE_MODE;
+      else process.env.HASNA_LOOPS_STORAGE_MODE = previousMode;
+      if (previousDatabaseUrl === undefined) delete process.env.HASNA_LOOPS_DATABASE_URL;
+      else process.env.HASNA_LOOPS_DATABASE_URL = previousDatabaseUrl;
+      if (previousApiUrl === undefined) delete process.env.HASNA_LOOPS_API_URL;
+      else process.env.HASNA_LOOPS_API_URL = previousApiUrl;
     }
   });
 
   test("reports ready when a self-hosted API URL and token are configured", () => {
-    const previousMode = process.env.LOOPS_MODE;
-    const previousApiUrl = process.env.LOOPS_API_URL;
-    const previousToken = process.env.LOOPS_API_TOKEN;
-    process.env.LOOPS_MODE = "self_hosted";
-    process.env.LOOPS_API_URL = "https://loops.example.test";
-    process.env.LOOPS_API_TOKEN = "token-present";
+    const previousMode = process.env.HASNA_LOOPS_STORAGE_MODE;
+    const previousApiUrl = process.env.HASNA_LOOPS_API_URL;
+    const previousToken = process.env.HASNA_LOOPS_API_KEY;
+    process.env.HASNA_LOOPS_STORAGE_MODE = "self_hosted";
+    process.env.HASNA_LOOPS_API_URL = "https://loops.example.test";
+    process.env.HASNA_LOOPS_API_KEY = "token-present";
 
     try {
       const status = runnerStatus("machine-test");
@@ -53,18 +70,18 @@ describe("loops-runner foundation", () => {
       expect(status.ok).toBe(true);
       expect(status.state).toBe("control_plane_ready");
     } finally {
-      if (previousMode === undefined) delete process.env.LOOPS_MODE;
-      else process.env.LOOPS_MODE = previousMode;
-      if (previousApiUrl === undefined) delete process.env.LOOPS_API_URL;
-      else process.env.LOOPS_API_URL = previousApiUrl;
-      if (previousToken === undefined) delete process.env.LOOPS_API_TOKEN;
-      else process.env.LOOPS_API_TOKEN = previousToken;
+      if (previousMode === undefined) delete process.env.HASNA_LOOPS_STORAGE_MODE;
+      else process.env.HASNA_LOOPS_STORAGE_MODE = previousMode;
+      if (previousApiUrl === undefined) delete process.env.HASNA_LOOPS_API_URL;
+      else process.env.HASNA_LOOPS_API_URL = previousApiUrl;
+      if (previousToken === undefined) delete process.env.HASNA_LOOPS_API_KEY;
+      else process.env.HASNA_LOOPS_API_KEY = previousToken;
     }
   });
 
   test("runRunnerOnce claims, executes, and finalizes one API run", async () => {
     const storage = createSqliteLoopStorage(":memory:");
-    const server = createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+    const server = createRunnerServer(storage, "runner-once");
     try {
       const loop = await storage.createLoop(
         {
@@ -103,7 +120,7 @@ describe("loops-runner foundation", () => {
   test("runRunnerOnce heartbeats while executing so another runner cannot steal the claim", async () => {
     const storage = createSqliteLoopStorage(":memory:");
     let serverNow = new Date("2026-01-01T00:00:00Z");
-    const server = createLoopsApiServer({ host: "127.0.0.1", port: 0, storage, now: () => serverNow });
+    const server = createRunnerServer(storage, "runner-a", () => serverNow);
     let releaseExecution!: () => void;
     const executionReleased = new Promise<void>((resolve) => {
       releaseExecution = resolve;
@@ -153,8 +170,8 @@ describe("loops-runner foundation", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ runnerId: "runner-b", maxClaims: 1 }),
       });
-      expect(duplicate.status).toBe(200);
-      expect(await duplicate.json()).toMatchObject({ ok: true, claims: [] });
+      expect(duplicate.status).toBe(403);
+      expect(await duplicate.json()).toMatchObject({ ok: false, error: "runner_identity_mismatch" });
 
       releaseExecution();
       const result = await runner;
@@ -169,7 +186,7 @@ describe("loops-runner foundation", () => {
   });
 
   test("runRunnerOnce rejects non-local API URLs without a token", async () => {
-    await expect(runRunnerOnce({ apiUrl: "https://loops.example.test", runnerId: "runner" })).rejects.toThrow("non-local loops-runner requires");
+    await expect(runRunnerOnce({ apiUrl: "https://loops.example.test", runnerId: "runner", env: {} })).rejects.toThrow("requires HASNA_LOOPS_API_KEY");
   });
 
   // Regression (MEDIUM 4): if control-plane heartbeats keep failing, the lease is

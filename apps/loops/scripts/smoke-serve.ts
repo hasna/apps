@@ -1,33 +1,48 @@
 #!/usr/bin/env bun
 // LOCAL smoke test: assemble the real loops-serve server (createLoopsApiServer +
-// PostgresLoopStorage + contracts verifyApiKey) against the tunnelled RDS, mint
+// PostgresLoopStorage + TenantApiAuthenticator) against the tunnelled RDS, mint
 // a real API key into the api_keys table, then drive an authenticated CRUD
 // roundtrip through the generated LoopsClient. Tunnel-only relaxed TLS.
 import { Pool } from "pg";
-import { ApiKeyStore, mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
-import { createLoopsApiServer, type ApiAuthenticator } from "../src/api/index.js";
+import { mintApiKey } from "@hasna/contracts/auth";
+import { createLoopsApiServer } from "../src/api/index.js";
 import { createQueryClient } from "../src/generated/storage-kit/query.js";
+import { TenantApiAuthenticator } from "../src/lib/auth/tenant-auth.js";
+import { PgPoolExecutor } from "../src/lib/storage/pg-executor.js";
 import { createPostgresLoopStorage } from "../src/lib/storage/postgres-loop-storage.js";
 import { LoopsClient } from "../src/sdk/http.js";
 
 const dsn = process.env.TUNNEL_DATABASE_URL?.trim();
 if (!dsn) throw new Error("set TUNNEL_DATABASE_URL");
-const signingSecret = process.env.SMOKE_SIGNING_SECRET?.trim();
-if (!signingSecret) throw new Error("set SMOKE_SIGNING_SECRET");
+const signingSecret = process.env.HASNA_LOOPS_API_SIGNING_KEY?.trim();
+if (!signingSecret) throw new Error("set HASNA_LOOPS_API_SIGNING_KEY");
 
 const pool = new Pool({ connectionString: dsn.split("?")[0], ssl: { rejectUnauthorized: false }, max: 3 });
 const client = createQueryClient(pool);
-const storage = createPostgresLoopStorage(client);
-const keys = new ApiKeyStore(client);
-await keys.ensureSchema();
+const executor = new PgPoolExecutor(client);
+const tenantId = process.env.HASNA_LOOPS_TENANT_ID?.trim();
+if (!tenantId) throw new Error("set HASNA_LOOPS_TENANT_ID");
+const principalId = process.env.HASNA_LOOPS_PRINCIPAL_ID?.trim();
+if (!principalId) throw new Error("set HASNA_LOOPS_PRINCIPAL_ID");
 
-const authenticator = verifyApiKey({
-  app: "loops",
-  signingSecret,
-  isRevoked: keys.statusChecker(),
-}) as unknown as ApiAuthenticator;
+const authenticator = new TenantApiAuthenticator(client, signingSecret);
 
-const server = createLoopsApiServer({ host: "127.0.0.1", port: 18795, storage, authenticator });
+const server = createLoopsApiServer({
+  host: "127.0.0.1",
+  port: 18795,
+  authenticator,
+  withTenantStorage: (principal, fn) =>
+    executor.withRequestContext(principal, (transactionClient) =>
+      fn(createPostgresLoopStorage(transactionClient, principal, { contextAlreadyBound: true }))),
+  readyCheck: async () => {
+    try {
+      await client.get("SELECT 1 AS ready");
+      return { ready: true };
+    } catch (error) {
+      return { ready: false, detail: error instanceof Error ? error.message : "storage_unreachable" };
+    }
+  },
+});
 const base = `http://127.0.0.1:${server.port}`;
 
 function assert(cond: unknown, msg: string) {
@@ -48,8 +63,21 @@ const noauth = await fetch(`${base}/v1/loops`);
 assert(noauth.status === 401, `unauth /v1 -> ${noauth.status} (expected 401)`);
 
 // Mint + persist a real API key
-const minted = await mintApiKey({ app: "loops", agent: "smoke", scopes: ["loops:*"], signingSecret });
-await keys.insertMinted(minted, "smoke");
+const minted = await mintApiKey({ app: "loops", agent: principalId, scopes: ["loops:*"], signingSecret });
+await client.transaction(async (tx) => {
+  await tx.execute("SET LOCAL ROLE open_loops_owner");
+  await tx.get("SELECT set_config('open_loops.tenant_id', $1, true)", [tenantId]);
+  await tx.execute(
+    `INSERT INTO api_keys(kid, app, agent, scopes, token_hash, issued_at, expires_at, created_by,
+       tenant_id, principal_id, token_kind)
+     VALUES ($1, 'loops', $2, $3::jsonb, $4, $5, $6, $2, $7, $2, 'api_key')`,
+    [
+      minted.kid, principalId, JSON.stringify(minted.claims.scopes), minted.tokenHash,
+      new Date(minted.claims.iat * 1000).toISOString(),
+      minted.claims.exp === null ? null : new Date(minted.claims.exp * 1000).toISOString(), tenantId,
+    ],
+  );
+});
 
 // Drive CRUD through the generated client
 const api = new LoopsClient({ baseUrl: base, apiKey: minted.token });
@@ -70,7 +98,11 @@ const deleted = await api.deleteLoop(id);
 assert(deleted.deleted === true, "deleteLoop");
 
 // Revocation takes effect
-await keys.revoke(minted.kid, "smoke-cleanup");
+await client.transaction(async (tx) => {
+  await tx.execute("SET LOCAL ROLE open_loops_owner");
+  await tx.get("SELECT set_config('open_loops.tenant_id', $1, true)", [tenantId]);
+  await tx.execute("UPDATE api_keys SET revoked_at=now(), revoked_reason='smoke-cleanup' WHERE tenant_id=$1 AND kid=$2", [tenantId, minted.kid]);
+});
 const afterRevoke = await fetch(`${base}/v1/loops`, { headers: { "x-api-key": minted.token } });
 assert(afterRevoke.status === 403 || afterRevoke.status === 401, `revoked key -> ${afterRevoke.status}`);
 

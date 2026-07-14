@@ -19,14 +19,20 @@ baked RDS CA bundle when applicable). Local development can use a disposable
 Postgres DSN with `sslmode=disable`:
 
 ```
-HASNA_LOOPS_DATABASE_URL=... loops-serve migrate   # or the ECS one-shot migration task
+HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate   # prepare through 0008
+HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve tenant-backfill --input ./tenant-backfill.json
+HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --enforce-tenancy
 ```
 
 Out-of-band (operator, owner role through an SSM tunnel):
 
 ```
 TUNNEL_DATABASE_URL=... bun run scripts/db-migrate-tunnel.ts
+TUNNEL_DATABASE_URL=... bun run scripts/db-migrate-tunnel.ts --enforce-tenancy
 ```
 
-The `api_keys` table (@hasna/contracts auth) is ensured by the same `migrate`
-command after the storage migrations.
+Both standalone runners stop after migration 0008 by default. The enforcement
+flag is required after the reviewed tenant backfill bundle has been loaded.
+
+The tenant-bound `api_keys` table is owned by migrations 0008-0010; no second
+schema bootstrap path exists.

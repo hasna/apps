@@ -29,29 +29,29 @@ the Postgres storage adapter, migrations, HTTP SDK, and runner contract for this
 mode.
 
 `cloud` is the hosted control-plane contract. The public package exposes the
-client and runner contract, but tenant auth, account administration, and hosted
-infrastructure stay outside this package. The public package must not depend on
+client and runner contract, tenant authentication, and tenant isolation; account
+provisioning and hosted infrastructure stay outside this package. The public package must not depend on
 private hosted packages or resource names. This release exposes status
 surfaces only.
 
 ## Mode Resolution
 
-`LOOPS_MODE` or `HASNA_LOOPS_MODE` may be set to `local`, `self_hosted`, or
+`HASNA_LOOPS_STORAGE_MODE` may be set to `local`, `self_hosted`, or
 `cloud`. Hyphenated `self-hosted` is normalized to `self_hosted`.
 
 When no explicit mode is set, OpenLoops resolves the mode from configuration:
 
-1. `LOOPS_CLOUD_API_URL` or `HASNA_LOOPS_CLOUD_API_URL` selects `cloud`.
-2. `LOOPS_API_URL`, `HASNA_LOOPS_API_URL`, `LOOPS_DATABASE_URL`, or
+1. `HASNA_LOOPS_CLOUD_API_URL` selects `cloud`.
+2. `HASNA_LOOPS_API_URL` or
    `HASNA_LOOPS_DATABASE_URL` selects `self_hosted`.
 3. Otherwise OpenLoops uses `local`.
 
-`LOOPS_API_URL` and `HASNA_LOOPS_API_URL` belong to `self_hosted`.
-`cloud` uses only `LOOPS_CLOUD_API_URL` or `HASNA_LOOPS_CLOUD_API_URL`.
+`HASNA_LOOPS_API_URL` belong to `self_hosted`.
+`cloud` uses only `HASNA_LOOPS_CLOUD_API_URL`.
 
 Tokens are represented only as presence signals in status output. Self-hosted
-status uses `LOOPS_API_TOKEN` or `HASNA_LOOPS_API_TOKEN`. Cloud status uses
-`LOOPS_CLOUD_TOKEN` or `HASNA_LOOPS_CLOUD_TOKEN`. URL credentials, query
+status uses `HASNA_LOOPS_API_KEY`. Cloud status uses
+`HASNA_LOOPS_API_KEY`. URL credentials, query
 strings, and fragments are not returned in status output.
 
 ## Commands
@@ -68,7 +68,7 @@ loops self-hosted runner-register --runner-id <id> --machine-id <machine> --appl
 loops cloud status
 loops-api status
 loops-serve version
-HASNA_LOOPS_DATABASE_URL=... loops-serve migrate --dry-run
+HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --dry-run
 loops-runner status
 loops export --file ./loops-export.json --dry-run
 loops export --file ./loops-export.json
@@ -118,14 +118,13 @@ JSON uses these field names:
 package. It reads and writes Postgres directly, serves open foundation probes
 (`GET /health`, `/ready`, `/version`, `/openapi.json`), gates `/v1` loop/run and
 runner-protocol routes with API-key auth on non-local binds, and applies the
-Postgres migrations plus the shared `api_keys` table with `loops-serve migrate`.
+Postgres migrations, including the tenant-bound `api_keys` table, with the
+prepare/backfill/enforce `loops-serve migrate` sequence.
 
-`loops-api` is the embeddable API contract and local/dev foundation server in
-the same public package. It is not a separate package because self-hosted users
-and the hosted service must share the same public contract. The standalone
-`loops-api serve` path still fails closed for storage-backed routes unless an
-embedding host injects a storage adapter; `loops-serve` is the shipped
-Postgres-backed self-hosted host.
+`loops-api` is the embeddable API contract in the same public package. It is not
+a separate service because self-hosted users and the hosted service must share
+the same public contract. `loops-serve` is the only shipped Postgres-backed
+self-hosted host.
 
 `loops-runner` is the process that connects a machine to a non-local control
 plane. The current public package supports a bounded one-shot protocol:
@@ -181,7 +180,7 @@ loops self-hosted push --dry-run
 loops self-hosted pull --dry-run
 ```
 
-They inspect local state, optionally inspect `LOOPS_API_URL`, and report the
+They inspect local state, optionally inspect `HASNA_LOOPS_API_URL`, and report the
 rows that would need to move. Remote apply is intentionally blocked because the
 current self-hosted API exposes normal loop CRUD and run listing, not
 id-preserving workflow/loop/run import endpoints. A normal remote loop create
@@ -189,11 +188,11 @@ would generate new ids, so it is not a no-loss migration. Local SQLite remains
 authoritative until a safe import is applied; in non-local modes it may remain
 a cache, offline spool, and audit copy.
 
-`LOOPS_DATABASE_URL` or `HASNA_LOOPS_DATABASE_URL` selects the self-hosted
+`HASNA_LOOPS_DATABASE_URL` selects the self-hosted
 Postgres scheduler-state contract and is required by `loops-serve`. It does not
 make the standalone `loops` CLI mutate a remote database by itself. Remote
 execution still flows through a configured control-plane API and runner
-protocol. `loops-runner` needs `LOOPS_API_URL` or `HASNA_LOOPS_API_URL` to claim
+protocol. `loops-runner` needs `HASNA_LOOPS_API_URL` to claim
 work; a database URL alone is migration/readiness configuration.
 
 `loops self-hosted runner-register` is also preview-only unless `--apply` is

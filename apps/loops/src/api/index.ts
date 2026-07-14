@@ -1,5 +1,4 @@
 #!/usr/bin/env bun
-import { timingSafeEqual } from "node:crypto";
 import { Command } from "commander";
 import type {
   CreateLoopInput,
@@ -34,6 +33,8 @@ import { buildDeploymentStatus, deploymentStatusLine } from "../lib/mode.js";
 import { computeNextAfter, dueSlots } from "../lib/recurrence.js";
 import { scrubSecretsDeep } from "../lib/redact.js";
 import type { LoopStorageContract } from "../lib/storage/contract.js";
+import { routePolicy, type RoutePolicy } from "../lib/auth/route-policy.js";
+import type { TenantAuthContext, TenantAuthDecision } from "../lib/auth/tenant-auth.js";
 import { packageVersion } from "../lib/version.js";
 import openApiSpec from "../../openapi/loops.json" with { type: "json" };
 
@@ -67,31 +68,6 @@ function printStatus(opts?: { json?: boolean }): void {
   else console.log(deploymentStatusLine(status));
 }
 
-function configuredAuthToken(): string | undefined {
-  return process.env.LOOPS_API_TOKEN?.trim() || process.env.HASNA_LOOPS_API_TOKEN?.trim();
-}
-
-function isLocalBind(host: string): boolean {
-  return ["127.0.0.1", "localhost", "::1"].includes(host);
-}
-
-function bearerTokenMatches(authorization: string, token: string): boolean {
-  const expected = `Bearer ${token}`;
-  const a = new TextEncoder().encode(authorization);
-  const b = new TextEncoder().encode(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
-function authorizeRequest(request: Request, host: string): Response | undefined {
-  if (isLocalBind(host)) return undefined;
-  const token = configuredAuthToken();
-  if (!token) return Response.json({ ok: false, error: "auth_required" }, { status: 401 });
-  const authorization = request.headers.get("authorization") ?? "";
-  return bearerTokenMatches(authorization, token)
-    ? undefined
-    : Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
-}
-
 function ok(payload: Record<string, unknown> = {}, init?: ResponseInit): Response {
   return Response.json({ ok: true, ...payload }, init);
 }
@@ -108,17 +84,11 @@ export function apiStatus() {
   };
 }
 
-/**
- * Framework-agnostic API-key verifier shape (matches
- * `@hasna/contracts/auth` `ApiKeyVerifier`). Kept structural so the api module
- * has no hard dependency on the auth package: the serve entry injects the real
- * verifier built from the vendored kit's client + the HMAC signing secret.
- */
 export interface ApiAuthenticator {
   authenticate(
     headers: Headers,
-    context?: { method?: string | null; path?: string | null; requiredScopes?: readonly string[] },
-  ): Promise<{ ok: boolean; status: number; reason?: string; message?: string }>;
+    context: { method: string; path: string; policy: RoutePolicy },
+  ): Promise<TenantAuthDecision>;
 }
 
 export interface LoopsApiServerOptions {
@@ -132,10 +102,14 @@ export interface LoopsApiServerOptions {
   /**
    * API-key verifier (from `@hasna/contracts/auth`). When present, every
    * request outside the open foundation probes (`/health`, `/ready`,
-   * `/version`, `/status`) must present a valid `loops:*` scoped key. This is
+   * `/version`, `/openapi.json`) must present a valid `loops:*` scoped key. This is
    * the internet-facing auth path (no bearer token, no loopback bypass).
    */
   authenticator?: ApiAuthenticator;
+  withTenantStorage?: <T>(
+    principal: TenantAuthContext,
+    fn: (storage: LoopStorageContract) => Promise<T>,
+  ) => Promise<T>;
   /**
    * Readiness probe. Should prove the storage backend is reachable AND fully
    * migrated. Returns `{ ready, detail? }`. Defaults to a storage list probe.
@@ -156,12 +130,11 @@ function foundationEnvelope(status: string, extra: Record<string, unknown> = {})
 export function createLoopsApiServer(opts: LoopsApiServerOptions = {}) {
   const host = opts.host ?? "127.0.0.1";
   const port = opts.port ?? 8787;
-  // A non-local bind must be gated by EITHER the contracts API-key verifier
-  // (internet-facing path) OR the legacy bearer token (local/dev path). Never
-  // expose the control plane unauthenticated.
-  if (!isLocalBind(host) && !opts.authenticator && !configuredAuthToken()) {
-    throw new Error("non-local loops-serve binds require an API-key authenticator or LOOPS_API_TOKEN");
+  if (!opts.authenticator || !opts.withTenantStorage) {
+    throw new Error("loops-api requires a tenant authenticator and request-scoped tenant storage");
   }
+  const authenticator = opts.authenticator;
+  const withTenantStorage = opts.withTenantStorage;
   const defaultReady = async (): Promise<{ ready: boolean; detail?: string }> => {
     if (!opts.storage) return { ready: false, detail: "storage_unconfigured" };
     try {
@@ -195,34 +168,34 @@ export function createLoopsApiServer(opts: LoopsApiServerOptions = {}) {
       if (request.method === "GET" && url.pathname === "/openapi.json") {
         return Response.json(openApiDocument());
       }
-      // ── Authenticated control plane (/status included) ───────────────────
-      if (opts.authenticator) {
-        const decision = await opts.authenticator.authenticate(request.headers, {
-          method: request.method,
-          path: url.pathname,
-        });
-        if (!decision.ok) {
-          return Response.json(
-            { ok: false, error: decision.reason ?? "unauthorized", message: decision.message },
-            { status: decision.status || 401 },
-          );
-        }
-      } else {
-        const unauthorized = authorizeRequest(request, host);
-        if (unauthorized) return unauthorized;
+      const policy = routePolicy(request.method, url.pathname);
+      if (!policy) return fail("route_policy_missing", 403);
+      const decision = await authenticator.authenticate(request.headers, {
+        method: request.method,
+        path: url.pathname,
+        policy,
+      });
+      if (!decision.ok) {
+        return Response.json(
+          { ok: false, error: decision.reason, message: decision.message, requestId: decision.requestId },
+          { status: decision.status },
+        );
       }
+      const principal = decision.principal;
       if (request.method === "GET" && url.pathname === "/status") {
         return Response.json(apiStatus());
       }
-      return handleV1Request({
-        request,
-        url,
-        storage: opts.storage,
-        bodyLimitBytes: opts.bodyLimitBytes ?? DEFAULT_BODY_LIMIT_BYTES,
-        evidenceLimitBytes: opts.evidenceLimitBytes ?? DEFAULT_EVIDENCE_LIMIT_BYTES,
-        importLimitBytes: opts.importLimitBytes ?? DEFAULT_IMPORT_LIMIT_BYTES,
-        now: opts.now ?? (() => new Date()),
-      });
+      const execute = (storage?: LoopStorageContract) => handleV1Request({
+          request,
+          url,
+          storage,
+          auth: principal,
+          bodyLimitBytes: opts.bodyLimitBytes ?? DEFAULT_BODY_LIMIT_BYTES,
+          evidenceLimitBytes: opts.evidenceLimitBytes ?? DEFAULT_EVIDENCE_LIMIT_BYTES,
+          importLimitBytes: opts.importLimitBytes ?? DEFAULT_IMPORT_LIMIT_BYTES,
+          now: opts.now ?? (() => new Date()),
+        });
+      return withTenantStorage(principal, (storage) => execute(storage));
     },
   });
 }
@@ -231,6 +204,7 @@ interface V1RequestContext {
   request: Request;
   url: URL;
   storage?: LoopStorageContract;
+  auth: TenantAuthContext;
   bodyLimitBytes: number;
   evidenceLimitBytes: number;
   importLimitBytes: number;
@@ -256,7 +230,12 @@ async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
     if (segments[1] === "history") return await handleHistoryRequest(ctx, segments.slice(2));
     if (segments[1] === "runners") return await handleRunnerRequest(ctx, segments.slice(2));
     if (segments[1] === "leases" && segments[2] === "recover" && ctx.request.method === "POST") {
-      return runnerProtocolPending("lease recovery is implemented in the runner protocol stage");
+      const storage = requireStorage(ctx.storage);
+      const recovered = await storage.recoverExpiredRunLeasesDetailed(ctx.now());
+      return ok({
+        abandoned: recovered.abandoned.map((run) => publicRun(run, false, { redactError: true })),
+        deferred: recovered.deferred.map((run) => publicRun(run, false, { redactError: true })),
+      });
     }
     return fail("not_found", 404);
   } catch (error) {
@@ -468,15 +447,6 @@ async function handleWorkflowRunsRequest(ctx: V1RequestContext, segments: string
     const events = await storage.listWorkflowEvents(id, optionalLimit(ctx.url.searchParams.get("limit")) ?? 200);
     return ok({ events: events.map(publicWorkflowEvent) });
   }
-  if (segments.length === 2 && segments[1] === "recover" && ctx.request.method === "POST") {
-    const body = await readJsonBody<{ reason?: unknown }>(ctx.request, ctx.bodyLimitBytes);
-    const reason = optionalText(body.reason);
-    const result = reason === undefined ? await storage.recoverWorkflowRun(id) : await storage.recoverWorkflowRun(id, reason);
-    return ok({
-      workflowRun: publicWorkflowRun(result.run),
-      recoveredSteps: result.recoveredSteps.map((step) => publicWorkflowStepRun(step)),
-    });
-  }
   return fail("not_found", 404);
 }
 
@@ -580,22 +550,18 @@ async function handleRunsRequest(ctx: V1RequestContext, segments: string[]): Pro
     const storage = requireStorage(ctx.storage);
     const action = segments[1];
     const now = ctx.now();
-    if (action === "heartbeat") return heartbeatRun(storage, id, await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes), now);
-    if (action === "finalize") return finalizeRun(storage, id, await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes), now);
-    return acceptRunEvidence(storage, id, await readJsonBody<Record<string, unknown>>(ctx.request, ctx.evidenceLimitBytes), now);
+    if (action === "heartbeat") return heartbeatRun(storage, ctx.auth.principalId, id, await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes), now);
+    if (action === "finalize") return finalizeRun(storage, ctx.auth.principalId, id, await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes), now);
+    return acceptRunEvidence(storage, ctx.auth.principalId, id, await readJsonBody<Record<string, unknown>>(ctx.request, ctx.evidenceLimitBytes), now);
   }
   if (segments.length === 2 && id && segments[1] === "recover" && ctx.request.method === "POST") {
     const storage = requireStorage(ctx.storage);
     const now = ctx.now();
-    // Scope to the requested run: the route is POST /v1/runs/:id/recover, so the
-    // response and loop advancement must reflect only that run, not every
-    // lease-expired run in the store. (The underlying store only exposes a
-    // global lease sweep; we filter its result to :id.)
     const target = await storage.getRun(id);
     if (!target) return fail("run_not_found", 404);
-    const recovered = await storage.recoverExpiredRunLeasesDetailed(now);
-    const abandoned = recovered.abandoned.filter((run) => run.id === id);
-    const deferred = recovered.deferred.filter((run) => run.id === id);
+    const recovered = await storage.recoverExpiredRunLeasesDetailed(now, { runId: id, limit: 1, scanLimit: 1 });
+    const abandoned = recovered.abandoned;
+    const deferred = recovered.deferred;
     for (const run of abandoned) {
       const loop = await storage.getLoop(run.loopId);
       if (loop) await advanceLoopAfterRun(storage, loop, run, new Date(run.finishedAt ?? now), false);
@@ -663,15 +629,19 @@ async function handleReceiptsRequest(ctx: V1RequestContext, segments: string[]):
 
 async function handleRunnerRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
   if (ctx.request.method !== "POST") return fail("not_found", 404);
-  const action = segments.length === 1 ? segments[0] : segments[1];
+  if (segments.length !== 1) return fail("not_found", 404);
+  const action = segments[0];
   if (action === "register" || action === "heartbeat") {
     const body = await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes);
-    return ok({ runner: runnerRecord(body) });
+    const runner = runnerRecord(body);
+    requireBoundRunner(ctx.auth, runner);
+    return ok({ runner });
   }
   if (action === "poll" || action === "claim") {
     const storage = requireStorage(ctx.storage);
     const body = await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes);
     const runner = runnerRecord(body);
+    requireBoundRunner(ctx.auth, runner);
     const claims = await claimRuns(storage, runner, {
       now: ctx.now(),
       maxClaims: optionalPositiveInteger(body.maxClaims, 1, 100) ?? 1,
@@ -679,6 +649,12 @@ async function handleRunnerRequest(ctx: V1RequestContext, segments: string[]): P
     return ok({ runner, claims });
   }
   return fail("not_found", 404);
+}
+
+function requireBoundRunner(auth: TenantAuthContext, runner: RunnerRecord): void {
+  if (runner.id !== auth.principalId) {
+    throw Object.assign(new Error("runner_identity_mismatch"), { status: 403 });
+  }
 }
 
 interface RunnerRecord {
@@ -744,11 +720,12 @@ function runnerMatchesLoop(machine: { id?: string; requestedId?: string } | unde
   return candidates.has(machine.id) || (machine.requestedId ? candidates.has(machine.requestedId) : false);
 }
 
-async function heartbeatRun(storage: LoopStorageContract, runId: string, body: Record<string, unknown>, now: Date): Promise<Response> {
+async function heartbeatRun(storage: LoopStorageContract, principalId: string, runId: string, body: Record<string, unknown>, now: Date): Promise<Response> {
   const claimToken = requiredString(body.claimToken, "claimToken");
   const run = await storage.getRun(runId);
   if (!run) return fail("run_not_found", 404);
   if (run.status !== "running" || !run.claimedBy) return fail("run_not_running", 409);
+  if (run.claimedBy !== principalId) return fail("runner_identity_mismatch", 403);
   const loop = await storage.getLoop(run.loopId);
   if (!loop) return fail("loop_not_found", 404);
   const heartbeat = await storage.heartbeatRunLease(
@@ -762,7 +739,7 @@ async function heartbeatRun(storage: LoopStorageContract, runId: string, body: R
   return ok({ run: publicRun(heartbeat, false, { redactError: true }) });
 }
 
-async function finalizeRun(storage: LoopStorageContract, runId: string, body: Record<string, unknown>, now: Date): Promise<Response> {
+async function finalizeRun(storage: LoopStorageContract, principalId: string, runId: string, body: Record<string, unknown>, now: Date): Promise<Response> {
   const claimToken = requiredString(body.claimToken, "claimToken");
   const status = optionalEnum<"succeeded" | "failed" | "timed_out">(
     optionalString(body.status) ?? null,
@@ -772,6 +749,7 @@ async function finalizeRun(storage: LoopStorageContract, runId: string, body: Re
   const existing = await storage.getRun(runId);
   if (!existing) return fail("run_not_found", 404);
   if (existing.status !== "running" || !existing.claimedBy) return fail("run_not_running", 409);
+  if (existing.claimedBy !== principalId) return fail("runner_identity_mismatch", 403);
   const loop = await storage.getLoop(existing.loopId);
   if (!loop) return fail("loop_not_found", 404);
   const finishedAt = optionalIsoString(body.finishedAt) ?? new Date().toISOString();
@@ -796,8 +774,8 @@ async function finalizeRun(storage: LoopStorageContract, runId: string, body: Re
   return ok({ run: publicRun(finalized, false, { redactError: true }) });
 }
 
-async function acceptRunEvidence(storage: LoopStorageContract, runId: string, body: Record<string, unknown>, now: Date): Promise<Response> {
-  const heartbeat = await heartbeatRun(storage, runId, body, now);
+async function acceptRunEvidence(storage: LoopStorageContract, principalId: string, runId: string, body: Record<string, unknown>, now: Date): Promise<Response> {
+  const heartbeat = await heartbeatRun(storage, principalId, runId, body, now);
   if (!heartbeat.ok) return heartbeat;
   return ok({ accepted: true, evidence: scrubSecretsDeep(body.evidence ?? body) });
 }
@@ -891,10 +869,6 @@ async function readBodyText(request: Request, limitBytes: number): Promise<strin
     offset += chunk.byteLength;
   }
   return new TextDecoder().decode(bytes);
-}
-
-function runnerProtocolPending(message: string): Response {
-  return fail("runner_protocol_pending", 501, { message });
 }
 
 // Per-request page cap. A single response never streams more than this many rows
@@ -1004,18 +978,6 @@ export async function main(argv = process.argv): Promise<void> {
 program.action(() => printStatus());
 
 program.command("status").option("-j, --json", "print JSON").action((opts) => printStatus(opts));
-
-program
-  .command("serve")
-  .description("serve the foundation health/status endpoints")
-  .option("--host <host>", "host", "127.0.0.1")
-  .option("--port <port>", "port", (value) => Number(value), 8787)
-  .action((opts) => {
-    const host = String(opts.host);
-    const port = Number(opts.port);
-    const server = createLoopsApiServer({ host, port });
-    console.log(`loops-api listening on http://${server.hostname}:${server.port}`);
-  });
 
 // Only auto-run the loops-api CLI when THIS file is the direct entry. When bun
 // bundles api/index.ts into another entry (e.g. loops-serve), it inlines this

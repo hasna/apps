@@ -15,7 +15,6 @@
   "storage": {
     "mode": "local",
     "envPrefix": "HASNA_LOOPS_",
-    "aliasEnvPrefix": "LOOPS_",
     "databaseUrlSecretRef": "hasna/oss/loops/database-url",
     "sqlitePath": "~/.hasna/loops/loops.db"
   },
@@ -31,8 +30,8 @@
       "signingSecretSecretRef": "hasna/oss/loops/api-key-signing-secret"
     },
     "client": {
-      "apiUrlEnv": "LOOPS_API_URL",
-      "apiKeyEnv": "LOOPS_API_KEY"
+      "apiUrlEnv": "HASNA_LOOPS_API_URL",
+      "apiKeyEnv": "HASNA_LOOPS_API_KEY"
     }
   }
 }

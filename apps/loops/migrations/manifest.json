@@ -35,6 +35,21 @@
       "id": "0007_work_item_gate_deaths",
       "file": "0007_work_item_gate_deaths.sql",
       "checksum": "sha256:95ac3c0dfeef6f6e6d4bd8b92473d19aabae0c83ebc3b1f4409d84fc0bbfa11c"
+    },
+    {
+      "id": "0008_tenant_prepare",
+      "file": "0008_tenant_prepare.sql",
+      "checksum": "sha256:76924f61f71fa2e7d3fb7773ff372200e26d0b3e48a5d05585adaeeca8f30043"
+    },
+    {
+      "id": "0009_tenant_backfill",
+      "file": "0009_tenant_backfill.sql",
+      "checksum": "sha256:7bfd222e503736ec0bc2811f8a31d3e57820a0fa1106795e09fd26a5cf966f2c"
+    },
+    {
+      "id": "0010_tenant_enforce",
+      "file": "0010_tenant_enforce.sql",
+      "checksum": "sha256:e6f2a636203bd443b603eaad0edb6864811958a093cea465a9ed5b5e5632f16d"
     }
   ]
 }

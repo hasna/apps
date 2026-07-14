@@ -26,9 +26,15 @@ const suite = RUN_LIVE ? describe : describe.skip;
 // / lease-expired runs table-wide; running both files in one `bun test` against
 // a shared database would let each see the other's rows).
 const ISO_DB = `loops_pgstore_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
-function isolatedUrl(): string {
+const RUNTIME_LOGIN = `loops_runtime_test_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+const RUNTIME_PASSWORD = `runtime-test-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+function isolatedUrl(credentials?: { username: string; password: string }): string {
   const u = new URL(DATABASE_URL!);
   u.pathname = `/${ISO_DB}`;
+  if (credentials) {
+    u.username = credentials.username;
+    u.password = credentials.password;
+  }
   return u.toString();
 }
 async function admin(sql: string): Promise<void> {
@@ -52,18 +58,38 @@ function loopInput(name: string, over: Partial<CreateLoopInput> = {}): CreateLoo
 
 suite("PostgresLoopStorage (live)", () => {
   let executor: PgPoolExecutor;
+  let runtimeExecutor: PgPoolExecutor;
   let storage: PostgresLoopStorage;
 
   beforeAll(async () => {
     await admin(`CREATE DATABASE ${ISO_DB}`);
     executor = PgPoolExecutor.fromConnectionString({ connectionString: isolatedUrl(), applicationName: "loops-pgstore-test" });
-    await new PostgresStorage(executor).migrate();
-    storage = new PostgresLoopStorage(executor.queryClient);
+    const schema = new PostgresStorage(executor);
+    await schema.migrate({ through: "0008_tenant_prepare" });
+    await executor.queryClient.execute(
+      `INSERT INTO tenants(id, slug, name, status) VALUES ('tenant-test', 'tenant-test', 'Tenant Test', 'active');
+       INSERT INTO principals(id, kind, display_name, status) VALUES ('principal-test', 'service', 'Principal Test', 'active');
+       INSERT INTO tenant_memberships(tenant_id, principal_id, status) VALUES ('tenant-test', 'principal-test', 'active');
+       INSERT INTO tenant_membership_roles(tenant_id, principal_id, role) VALUES ('tenant-test', 'principal-test', 'service');`,
+    );
+    await schema.migrate();
+    await admin(`CREATE ROLE ${RUNTIME_LOGIN} LOGIN PASSWORD '${RUNTIME_PASSWORD}' NOBYPASSRLS; GRANT open_loops_runtime TO ${RUNTIME_LOGIN}`);
+    runtimeExecutor = PgPoolExecutor.fromConnectionString({
+      connectionString: isolatedUrl({ username: RUNTIME_LOGIN, password: RUNTIME_PASSWORD }),
+      applicationName: "loops-pgstore-runtime-test",
+    });
+    storage = new PostgresLoopStorage(executor.queryClient, {
+      tenantId: "tenant-test",
+      principalId: "principal-test",
+      requestId: "request-test",
+    });
   });
 
   afterAll(async () => {
+    await runtimeExecutor.close();
     await executor.close();
     await admin(`DROP DATABASE IF EXISTS ${ISO_DB} WITH (FORCE)`);
+    await admin(`DROP ROLE IF EXISTS ${RUNTIME_LOGIN}`);
   });
 
   beforeEach(async () => {
@@ -191,10 +217,13 @@ suite("PostgresLoopStorage (live)", () => {
   test("pruneHistory deletes old terminal runs", async () => {
     const loop = await storage.createLoop(loopInput("prune"));
     // Insert an old terminal run directly.
-    await executor.queryClient.execute(
-      `INSERT INTO loop_runs (id, loop_id, loop_name, scheduled_for, attempt, status, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,1,'succeeded',$5,$5)`,
-      ["oldrun", loop.id, "prune", "2020-01-01T00:00:00.000Z", "2020-01-01T00:00:00.000Z"],
+    await executor.withRequestContext(
+      { tenantId: "tenant-test", principalId: "principal-test", requestId: "prune-setup" },
+      (client) => client.execute(
+        `INSERT INTO loop_runs (id, loop_id, loop_name, scheduled_for, attempt, status, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,1,'succeeded',$5,$5)`,
+        ["oldrun", loop.id, "prune", "2020-01-01T00:00:00.000Z", "2020-01-01T00:00:00.000Z"],
+      ),
     );
     const summary = await storage.pruneHistory({ maxAgeDays: 30 });
     expect(summary.loopRuns).toBe(1);
@@ -388,7 +417,11 @@ suite("PostgresLoopStorage (live)", () => {
 
   test("two connections never double-claim the same slot (contract claimRun)", async () => {
     const execB = PgPoolExecutor.fromConnectionString({ connectionString: isolatedUrl(), applicationName: "loops-pgstore-test-b" });
-    const storageB = new PostgresLoopStorage(execB.queryClient);
+    const storageB = new PostgresLoopStorage(execB.queryClient, {
+      tenantId: "tenant-test",
+      principalId: "principal-test",
+      requestId: "request-test-b",
+    });
     try {
       const loop = await storage.createLoop(loopInput("race", { leaseMs: 60_000 }));
       const slot = "2026-07-06T13:00:00.000Z";
@@ -398,13 +431,129 @@ suite("PostgresLoopStorage (live)", () => {
       ]);
       const winners = [a, b].filter(Boolean);
       expect(winners.length).toBe(1);
-      const running = await executor.queryClient.get<{ count: number }>(
-        "SELECT COUNT(*)::int AS count FROM loop_runs WHERE loop_id=$1 AND status='running'",
-        [loop.id],
+      const running = await executor.withRequestContext(
+        { tenantId: "tenant-test", principalId: "principal-test", requestId: "race-count" },
+        (client) => client.get<{ count: number }>(
+          "SELECT COUNT(*)::int AS count FROM loop_runs WHERE loop_id=$1 AND status='running'",
+          [loop.id],
+        ),
       );
       expect(running?.count).toBe(1);
     } finally {
       await execB.close();
     }
+  });
+
+  test("tenant foreign keys reject an unregistered request tenant", async () => {
+    const unknown = new PostgresLoopStorage(executor.queryClient, {
+      tenantId: "tenant-does-not-exist",
+      principalId: "principal-test",
+      requestId: "unknown-tenant",
+    });
+    await expect(unknown.createLoop(loopInput("unknown"))).rejects.toMatchObject({ code: "23503" });
+  });
+
+  test("runtime requests cannot read stored API key hashes", async () => {
+    const runtimeStorage = new PostgresLoopStorage(runtimeExecutor.queryClient, {
+      tenantId: "tenant-test",
+      principalId: "principal-test",
+      requestId: "least-privilege-runtime",
+    });
+    expect((await runtimeStorage.createLoop(loopInput("least-privilege"))).name).toBe("least-privilege");
+    await expect(runtimeExecutor.withRequestContext(
+      { tenantId: "tenant-test", principalId: "principal-test", requestId: "raw-key-read" },
+      (client) => client.many("SELECT token_hash FROM api_keys"),
+    )).rejects.toMatchObject({ code: "42501" });
+  });
+
+  test("auth audit derives tenant and principal from the exact stored key", async () => {
+    await executor.queryClient.execute(
+      `INSERT INTO api_keys(
+        kid, app, agent, scopes, token_hash, issued_at, tenant_id, principal_id, token_kind
+      ) VALUES ('audit-key', 'loops', 'principal-test', '["loops:read"]', 'audit-hash', now(),
+        'tenant-test', 'principal-test', 'api_key')`,
+    );
+    await runtimeExecutor.queryClient.execute(
+      "SELECT open_loops_append_auth_audit($1,$2,$3,$4,$5,$6,$7,$8::jsonb)",
+      ["audit-event", "audit-key", "audit-hash", "audit-request", "loops.list", "allow", null, "{}"],
+    );
+    const row = await executor.queryClient.get<{ tenant_id: string; principal_id: string }>(
+      "SELECT tenant_id, principal_id FROM audit_events WHERE id='audit-event'",
+    );
+    expect(row).toEqual({ tenant_id: "tenant-test", principal_id: "principal-test" });
+  });
+
+  test("request transactions do not leak tenant context and roll back failures", async () => {
+    await executor.queryClient.execute(
+      `INSERT INTO tenants(id, slug, name, status) VALUES ('tenant-other', 'tenant-other', 'Tenant Other', 'active');
+       INSERT INTO tenant_memberships(tenant_id, principal_id, status) VALUES ('tenant-other', 'principal-test', 'active');
+       INSERT INTO tenant_membership_roles(tenant_id, principal_id, role) VALUES ('tenant-other', 'principal-test', 'service');`,
+    );
+    const other = new PostgresLoopStorage(executor.queryClient, {
+      tenantId: "tenant-other",
+      principalId: "principal-test",
+      requestId: "other-request",
+    });
+    await storage.upsertMigrationLoop({
+      id: "same-id", name: "tenant-a", status: "active",
+      schedule: { type: "interval", everyMs: 60_000 },
+      target: { type: "command", command: "true" },
+      catchUp: "latest", catchUpLimit: 50, overlap: "skip", maxAttempts: 1,
+      retryDelayMs: 1_000, leaseMs: 60_000,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    } as Loop);
+    await other.upsertMigrationLoop({
+      id: "same-id", name: "tenant-b", status: "active",
+      schedule: { type: "interval", everyMs: 60_000 },
+      target: { type: "command", command: "true" },
+      catchUp: "latest", catchUpLimit: 50, overlap: "skip", maxAttempts: 1,
+      retryDelayMs: 1_000, leaseMs: 60_000,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    } as Loop);
+    expect((await storage.getLoop("same-id"))?.name).toBe("tenant-a");
+    expect((await other.getLoop("same-id"))?.name).toBe("tenant-b");
+
+    await expect(executor.withRequestContext(
+      { tenantId: "tenant-test", principalId: "principal-test", requestId: "rollback" },
+      async (client) => {
+        await client.execute(
+          `INSERT INTO loops(id, name, status, schedule_json, target_json, catch_up, catch_up_limit,
+             overlap, max_attempts, retry_delay_ms, lease_ms, created_at, updated_at)
+           VALUES ('rolled-back', 'rolled-back', 'active', '{}', '{}', 'latest', 50,
+             'skip', 1, 1000, 60000, now(), now())`,
+        );
+        throw new Error("force rollback");
+      },
+    )).rejects.toThrow("force rollback");
+    expect(await storage.getLoop("rolled-back")).toBeUndefined();
+  });
+
+  test("runner leases require exactly one run target", async () => {
+    const loop = await storage.createLoop(loopInput("lease-xor"));
+    const claim = await storage.claimRun(loop, "2026-07-06T14:00:00.000Z", "runner-xor");
+    expect(claim).toBeTruthy();
+    await expect(executor.withRequestContext(
+      { tenantId: "tenant-test", principalId: "principal-test", requestId: "lease-xor" },
+      async (client) => {
+        await client.execute(
+          `INSERT INTO workflow_specs(id, name, version, status, steps_json, created_at, updated_at)
+           VALUES ('wf-xor', 'wf-xor', 1, 'active', '[]', now(), now())`,
+        );
+        await client.execute(
+          `INSERT INTO workflow_runs(id, workflow_id, workflow_name, status, created_at, updated_at)
+           VALUES ('wf-run-xor', 'wf-xor', 'wf-xor', 'running', now(), now())`,
+        );
+        await client.execute(
+          `INSERT INTO runner_machines(id, hostname, status, last_seen_at, created_at, updated_at)
+           VALUES ('machine-xor', 'host', 'online', now(), now(), now())`,
+        );
+        await client.execute(
+          `INSERT INTO runner_leases(id, runner_id, loop_run_id, workflow_run_id, claim_token, status,
+             heartbeat_at, expires_at, created_at, updated_at)
+           VALUES ('lease-xor', 'machine-xor', $1, 'wf-run-xor', 'claim', 'active', now(), now(), now(), now())`,
+          [claim!.run.id],
+        );
+      },
+    )).rejects.toMatchObject({ code: "23514" });
   });
 });

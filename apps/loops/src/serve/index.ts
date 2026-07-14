@@ -4,44 +4,33 @@
 // The service reads and writes self-hosted RDS/Postgres directly. There is no
 // local SQLite, no cache, and no sync engine in the
 // serve process. Storage is the vendored @hasna/contracts kit pool wrapping the
-// real `PostgresLoopStorage` backend; auth is the framework-agnostic
-// `verifyApiKey` verifier from @hasna/contracts/auth backed by the shared
-// `api_keys` table.
+// real `PostgresLoopStorage` backend. Every authenticated request gets one
+// dedicated transaction with tenant RLS context.
 import { Command } from "commander";
-import { ApiKeyStore, verifyApiKey } from "@hasna/contracts/auth";
-import { createLoopsApiServer, type ApiAuthenticator } from "../api/index.js";
+import { createLoopsApiServer } from "../api/index.js";
+import { TenantApiAuthenticator } from "../lib/auth/tenant-auth.js";
 import { PgPoolExecutor } from "../lib/storage/pg-executor.js";
 import { PostgresStorage } from "../lib/storage/postgres.js";
 import { createPostgresLoopStorage } from "../lib/storage/postgres-loop-storage.js";
+import { loadTenantBackfillBundle, parseTenantBackfillBundle } from "../lib/storage/tenant-backfill.js";
 import { packageVersion } from "../lib/version.js";
 
-const APP = "loops";
-
-function resolveDatabaseUrl(): string {
-  const dsn =
-    process.env.HASNA_LOOPS_DATABASE_URL?.trim() ||
-    process.env.LOOPS_DATABASE_URL?.trim() ||
-    process.env.DATABASE_URL?.trim();
+function resolveDatabaseUrl(purpose: "runtime" | "migrator"): string {
+  const envName = purpose === "runtime" ? "HASNA_LOOPS_DATABASE_URL" : "HASNA_LOOPS_MIGRATOR_DATABASE_URL";
+  const dsn = process.env[envName]?.trim();
   if (!dsn) {
-    throw new Error(
-      "loops-serve requires a self-hosted database URL: set HASNA_LOOPS_DATABASE_URL (or LOOPS_DATABASE_URL / DATABASE_URL)",
-    );
+    throw new Error(`loops-serve ${purpose} requires ${envName}`);
   }
   return dsn;
 }
 
 function resolveSigningSecret(): string | undefined {
-  return (
-    process.env.HASNA_LOOPS_API_SIGNING_KEY?.trim() ||
-    process.env.HASNA_API_SIGNING_KEY?.trim() ||
-    process.env.API_KEY_SIGNING_SECRET?.trim() ||
-    undefined
-  );
+  return process.env.HASNA_LOOPS_API_SIGNING_KEY?.trim() || undefined;
 }
 
-function buildExecutor(applicationName: string): PgPoolExecutor {
+function buildExecutor(applicationName: string, purpose: "runtime" | "migrator"): PgPoolExecutor {
   return PgPoolExecutor.fromConnectionString({
-    connectionString: resolveDatabaseUrl(),
+    connectionString: resolveDatabaseUrl(purpose),
     applicationName,
     max: Number(process.env.LOOPS_PG_POOL_MAX ?? "5"),
     connectionTimeoutMillis: 10_000,
@@ -57,43 +46,29 @@ function defaultPort(): number {
 
 async function runServe(opts: { host: string; port: number }): Promise<void> {
   {
-    const executor = buildExecutor("loops-serve");
+    const executor = buildExecutor("loops-serve", "runtime");
     const client = executor.queryClient;
-    const storage = createPostgresLoopStorage(client);
     const schema = new PostgresStorage(executor);
 
-    const keys = new ApiKeyStore(client);
-    // Idempotent: the api_keys table is normally created by the migration task,
-    // but ensureSchema keeps a fresh DB self-healing without a separate step.
-    await keys.ensureSchema();
-
     const signingSecret = resolveSigningSecret();
-    let authenticator: ApiAuthenticator | undefined;
-    if (signingSecret) {
-      authenticator = verifyApiKey({
-        app: APP,
-        signingSecret,
-        // Strict: unknown OR revoked kids are denied (a token must be recorded).
-        isRevoked: keys.statusChecker(),
-        audit: (event) =>
-          console.log(
-            JSON.stringify({ evt: "api_auth", outcome: event.outcome, kid: event.kid, reason: event.reason, path: event.path, status: event.status }),
-          ),
-      }) as unknown as ApiAuthenticator;
-    } else if (opts.host !== "127.0.0.1" && opts.host !== "localhost" && opts.host !== "::1") {
+    const authenticator = signingSecret ? new TenantApiAuthenticator(client, signingSecret) : undefined;
+    if (!authenticator) {
       throw new Error(
-        "loops-serve on a non-local host requires an API signing secret (HASNA_LOOPS_API_SIGNING_KEY / API_KEY_SIGNING_SECRET)",
+        "loops-serve requires HASNA_LOOPS_API_SIGNING_KEY",
       );
     }
 
     const server = createLoopsApiServer({
       host: opts.host,
       port: opts.port,
-      storage,
       authenticator,
+      withTenantStorage: (principal, fn) =>
+        executor.withRequestContext(principal, (transactionClient) =>
+          fn(createPostgresLoopStorage(transactionClient, principal, { contextAlreadyBound: true }))),
       readyCheck: async () => {
         try {
-          const applied = await schema.listAppliedMigrations();
+          const result = await schema.migrate({ dryRun: true });
+          const applied = result.applied;
           const known = new Set(schema.migrations.map((m) => m.id));
           const missing = schema.migrations.filter((m) => !applied.some((a) => a.id === m.id)).map((m) => m.id);
           const unknown = applied.filter((a) => !known.has(a.id)).map((a) => a.id);
@@ -109,7 +84,7 @@ async function runServe(opts: { host: string; port: number }): Promise<void> {
       JSON.stringify({
         evt: "loops_serve_listening",
         url: `http://${server.hostname}:${server.port}`,
-        auth: authenticator ? "api_key" : "loopback",
+        auth: "api_key",
         version: packageVersion(),
       }),
     );
@@ -131,18 +106,33 @@ program
 
 program
   .command("migrate")
-  .description("apply the Postgres schema migrations + the api_keys table, then exit")
+  .description("prepare tenant schema, or explicitly enforce a loaded tenant mapping")
   .option("--dry-run", "preview the migration plan without applying")
-  .action(async (opts: { dryRun?: boolean }) => {
-    const executor = buildExecutor("loops-migrate");
+  .option("--enforce-tenancy", "apply the explicit backfill and hard tenant/RLS enforcement")
+  .action(async (opts: { dryRun?: boolean; enforceTenancy?: boolean }) => {
+    const executor = buildExecutor("loops-migrate", "migrator");
     try {
-      const result = await new PostgresStorage(executor).migrate({ dryRun: Boolean(opts.dryRun) });
+      const result = await new PostgresStorage(executor).migrate({
+        dryRun: Boolean(opts.dryRun),
+        through: opts.enforceTenancy ? undefined : "0008_tenant_prepare",
+      });
       const pending = result.plan.filter((p) => p.state === "pending").map((p) => p.migration.id);
       console.log(JSON.stringify({ evt: "migrate", dryRun: result.dryRun, applied: result.applied.map((a) => a.id), pending }));
-      if (!opts.dryRun) {
-        await new ApiKeyStore(executor.queryClient).ensureSchema();
-        console.log(JSON.stringify({ evt: "api_keys_ensured" }));
-      }
+    } finally {
+      await executor.close();
+    }
+  });
+
+program
+  .command("tenant-backfill")
+  .description("load an explicit tenant/principal/key/row mapping bundle after migration 0008")
+  .requiredOption("--input <path>", "tenant backfill JSON bundle")
+  .action(async (opts: { input: string }) => {
+    const executor = buildExecutor("loops-tenant-backfill", "migrator");
+    try {
+      const bundle = parseTenantBackfillBundle(await Bun.file(opts.input).json());
+      const result = await loadTenantBackfillBundle(executor.queryClient, bundle);
+      console.log(JSON.stringify({ evt: "tenant_backfill_loaded", ...result }));
     } finally {
       await executor.close();
     }
@@ -157,7 +147,7 @@ if (import.meta.main) {
   // Bare `loops-serve` (no subcommand) defaults to `serve`. Commander cannot
   // combine a root action with subcommand dispatch without swallowing the
   // subcommand name, so we inject the default subcommand here instead.
-  const known = new Set(["serve", "migrate", "version", "help"]);
+  const known = new Set(["serve", "migrate", "tenant-backfill", "version", "help"]);
   const passthroughFlags = new Set(["-h", "--help", "-V", "--version"]);
   const argv = [...process.argv];
   const firstArg = argv[2];

@@ -3,6 +3,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
 import { createSqliteLoopStorage } from "../lib/storage/sqlite.js";
+import type { LoopStorageContract } from "../lib/storage/contract.js";
+import type { TenantAuthContext } from "../lib/auth/tenant-auth.js";
+import type { LoopsApiServerOptions } from "./index.js";
 import type { Loop, WorkflowSpec } from "../types.js";
 
 const apiPath = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
@@ -11,6 +14,44 @@ const jsonHeaders = { "content-type": "application/json" };
 function apiUrl(server: { port?: number }, path: string): string {
   if (typeof server.port !== "number") throw new Error("test server did not expose a port");
   return `http://127.0.0.1:${server.port}${path}`;
+}
+
+const testPrincipal = {
+  tenantId: "tenant-test",
+  principalId: "principal-test",
+  requestId: "request-test",
+  kid: "kid-test",
+  agent: "api-test",
+  scopes: ["loops:*"],
+  roles: ["admin" as const],
+  tokenKind: "api_key" as const,
+  claims: { v: 1, kid: "kid-test", app: "loops", scopes: ["loops:*"], iat: 1, exp: null },
+};
+
+function createTestServer(
+  mod: typeof import("./index.js"),
+  opts: LoopsApiServerOptions = {},
+  principal: TenantAuthContext = testPrincipal,
+) {
+  return mod.createLoopsApiServer({
+    ...opts,
+    authenticator: {
+      authenticate: async () => ({ ok: true as const, status: 200 as const, principal }),
+    },
+    withTenantStorage: (_principal, fn) => fn(opts.storage as LoopStorageContract),
+  });
+}
+
+function runnerPrincipal(principalId: string) {
+  return {
+    ...testPrincipal,
+    principalId,
+    agent: principalId,
+    scopes: ["loops:runner"],
+    roles: ["worker" as const],
+    tokenKind: "machine" as const,
+    claims: { ...testPrincipal.claims, agent: principalId, scopes: ["loops:runner"] },
+  };
 }
 
 describe("loops-api foundation", () => {
@@ -42,10 +83,10 @@ describe("loops-api foundation", () => {
   });
 
   test("status output redacts credentials embedded in API URLs", async () => {
-    const previousUrl = process.env.LOOPS_API_URL;
-    const previousToken = process.env.LOOPS_API_TOKEN;
-    process.env.LOOPS_API_URL = "https://user:fake-password@loops.example.test/api?token=fake-token";
-    process.env.LOOPS_API_TOKEN = "present-but-not-returned";
+    const previousUrl = process.env.HASNA_LOOPS_API_URL;
+    const previousToken = process.env.HASNA_LOOPS_API_KEY;
+    process.env.HASNA_LOOPS_API_URL = "https://user:fake-password@loops.example.test/api?token=fake-token";
+    process.env.HASNA_LOOPS_API_KEY = "present-but-not-returned";
     try {
       const mod = await import("./index.js");
       const status = JSON.stringify(mod.apiStatus());
@@ -54,68 +95,38 @@ describe("loops-api foundation", () => {
       expect(status).not.toContain("fake-token");
       expect(status).not.toContain("present-but-not-returned");
     } finally {
-      if (previousUrl === undefined) delete process.env.LOOPS_API_URL;
-      else process.env.LOOPS_API_URL = previousUrl;
-      if (previousToken === undefined) delete process.env.LOOPS_API_TOKEN;
-      else process.env.LOOPS_API_TOKEN = previousToken;
+      if (previousUrl === undefined) delete process.env.HASNA_LOOPS_API_URL;
+      else process.env.HASNA_LOOPS_API_URL = previousUrl;
+      if (previousToken === undefined) delete process.env.HASNA_LOOPS_API_KEY;
+      else process.env.HASNA_LOOPS_API_KEY = previousToken;
     }
   });
 
-  test("non-local serve fails closed without an API token", () => {
-    const result = spawnSync(process.execPath, [apiPath, "serve", "--host", "0.0.0.0", "--port", "0"], {
-      env: {
-        ...process.env,
-        LOOPS_API_TOKEN: "",
-        HASNA_LOOPS_API_TOKEN: "",
-      },
+  test("does not expose a dead standalone serve command", () => {
+    const result = spawnSync(process.execPath, [apiPath, "--help"], {
       encoding: "utf8",
       timeout: 5_000,
     });
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("non-local loops-serve binds require");
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toMatch(/^\s+serve\b/m);
+    expect(result.stdout).not.toContain("listening");
   });
 
-  test("non-local serve requires the configured bearer token", async () => {
-    const previousToken = process.env.LOOPS_API_TOKEN;
-    const previousHasnaToken = process.env.HASNA_LOOPS_API_TOKEN;
-    process.env.LOOPS_API_TOKEN = "test-api-token";
-    process.env.HASNA_LOOPS_API_TOKEN = "";
-
+  test("API construction requires both authentication and request-scoped storage", async () => {
     const mod = await import("./index.js");
-    const server = mod.createLoopsApiServer({ host: "0.0.0.0", port: 0 });
-    const url = `http://127.0.0.1:${server.port}/status`;
-    const v1Url = `http://127.0.0.1:${server.port}/v1/loops`;
-    try {
-      const missing = await fetch(url);
-      expect(missing.status).toBe(401);
-      const wrong = await fetch(url, { headers: { authorization: "Bearer wrong-token" } });
-      expect(wrong.status).toBe(401);
-      const ok = await fetch(url, { headers: { authorization: "Bearer test-api-token" } });
-      expect(ok.status).toBe(200);
-      const body = (await ok.json()) as { ok: boolean; service: string };
-      expect(body).toMatchObject({ ok: true, service: "loops-api" });
-
-      const missingV1 = await fetch(v1Url, { method: "POST", body: "not-json" });
-      expect(missingV1.status).toBe(401);
-      const wrongV1 = await fetch(v1Url, { headers: { authorization: "Bearer wrong-token" } });
-      expect(wrongV1.status).toBe(401);
-      const authorizedV1 = await fetch(v1Url, { headers: { authorization: "Bearer test-api-token" } });
-      expect(authorizedV1.status).toBe(503);
-      expect(await authorizedV1.json()).toMatchObject({ ok: false, error: "storage_unconfigured" });
-    } finally {
-      server.stop(true);
-      if (previousToken === undefined) delete process.env.LOOPS_API_TOKEN;
-      else process.env.LOOPS_API_TOKEN = previousToken;
-      if (previousHasnaToken === undefined) delete process.env.HASNA_LOOPS_API_TOKEN;
-      else process.env.HASNA_LOOPS_API_TOKEN = previousHasnaToken;
-    }
+    expect(() => mod.createLoopsApiServer({ host: "127.0.0.1", port: 0 })).toThrow("tenant authenticator");
+    expect(() => mod.createLoopsApiServer({
+      host: "127.0.0.1",
+      port: 0,
+      authenticator: { authenticate: async () => ({ ok: true, status: 200, principal: testPrincipal }) },
+    })).toThrow("request-scoped tenant storage");
   });
 
   test("loops routes use injected storage and redact command environments", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
 
     try {
       const createResponse = await fetch(apiUrl(server, "/v1/loops"), {
@@ -176,7 +187,7 @@ describe("loops-api foundation", () => {
   test("POST /v1/import upserts id-preserving rows, pauses imported loops by default, is idempotent, and skips running runs", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
 
     const loop = {
       id: "loop-import-1",
@@ -285,7 +296,7 @@ describe("loops-api foundation", () => {
   test("workflow definition APIs list/count/get and imported workflow-loop refs remain represented but paused", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
 
     const workflow = {
       id: "workflow-import-1",
@@ -382,7 +393,7 @@ describe("loops-api foundation", () => {
   test("POST /v1/import can explicitly preserve imported loop scheduling", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
     const loop = {
       id: "loop-import-preserve",
       name: "imported-loop-preserve",
@@ -420,7 +431,7 @@ describe("loops-api foundation", () => {
   test("route invocation and work-item POST routes preserve caller ids", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
     try {
       const invocationResponse = await fetch(apiUrl(server, "/v1/invocations"), {
         method: "POST",
@@ -476,7 +487,7 @@ describe("loops-api foundation", () => {
   test("PATCH only touches fields present in the body and never wipes omitted schedule state", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
 
     try {
       const loop = await storage.createLoop({
@@ -530,7 +541,7 @@ describe("loops-api foundation", () => {
   test("run listing redacts output unless explicitly requested", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
 
     try {
       const loop = await storage.createLoop({
@@ -606,7 +617,7 @@ describe("loops-api foundation", () => {
   test("run receipt routes write, read, and filter bounded receipts", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
 
     try {
       const writeResponse = await fetch(apiUrl(server, "/v1/receipts"), {
@@ -648,7 +659,7 @@ describe("loops-api foundation", () => {
 
   test("storage-backed routes fail closed without configured storage", async () => {
     const mod = await import("./index.js");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0 });
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0 }, runnerPrincipal("spark01"));
 
     try {
       const response = await fetch(apiUrl(server, "/v1/loops"));
@@ -661,7 +672,7 @@ describe("loops-api foundation", () => {
 
   test("mutating routes enforce JSON content type and bounded bodies", async () => {
     const mod = await import("./index.js");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, bodyLimitBytes: 8 });
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, bodyLimitBytes: 8 });
 
     try {
       const unsupported = await fetch(apiUrl(server, "/v1/runners/register"), {
@@ -693,7 +704,7 @@ describe("loops-api foundation", () => {
 
   test("runner protocol endpoints fail closed without storage except registration", async () => {
     const mod = await import("./index.js");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0 });
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0 }, runnerPrincipal("spark01"));
 
     try {
       const response = await fetch(apiUrl(server, "/v1/runners/register"), {
@@ -730,11 +741,43 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("machine credentials cannot register a different runner identity", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const machinePrincipal = {
+      ...testPrincipal,
+      principalId: "machine-bound",
+      tokenKind: "machine" as const,
+      roles: ["worker" as const],
+      scopes: ["loops:runner"],
+    };
+    const server = mod.createLoopsApiServer({
+      host: "127.0.0.1",
+      port: 0,
+      authenticator: {
+        authenticate: async () => ({ ok: true as const, status: 200 as const, principal: machinePrincipal }),
+      },
+      withTenantStorage: (_principal, fn) => fn(storage),
+    });
+    try {
+      const response = await fetch(apiUrl(server, "/v1/runners/register"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "machine-spoofed" }),
+      });
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ ok: false, error: "runner_identity_mismatch" });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
   test("runner claim and run finalization are fenced by claim token", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
     let now = new Date("2026-01-01T00:00:00Z");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage, now: () => now });
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage, now: () => now }, runnerPrincipal("runner-a"));
 
     try {
       const loop = await storage.createLoop(
@@ -769,10 +812,33 @@ describe("loops-api foundation", () => {
       expect(claimed.claims[0]!.run.status).toBe("running");
       expect(claimed.claims[0]!.claimToken).toBeString();
 
+      const otherRunner = createTestServer(
+        mod,
+        { host: "127.0.0.1", port: 0, storage, now: () => now },
+        runnerPrincipal("runner-b"),
+      );
+      try {
+        for (const [action, extra] of [
+          ["heartbeat", {}],
+          ["evidence", { evidence: { log: "stolen" } }],
+          ["finalize", { status: "succeeded", stdout: "", stderr: "" }],
+        ] as const) {
+          const response = await fetch(apiUrl(otherRunner, `/v1/runs/${claimed.claims[0]!.run.id}/${action}`), {
+            method: "POST",
+            headers: jsonHeaders,
+            body: JSON.stringify({ claimToken: claimed.claims[0]!.claimToken, ...extra }),
+          });
+          expect(response.status).toBe(403);
+          expect(await response.json()).toMatchObject({ ok: false, error: "runner_identity_mismatch" });
+        }
+      } finally {
+        otherRunner.stop(true);
+      }
+
       const duplicate = await fetch(apiUrl(server, "/v1/runners/claim"), {
         method: "POST",
         headers: jsonHeaders,
-        body: JSON.stringify({ runnerId: "runner-b", now: "2026-01-01T00:00:00.100Z", maxClaims: 1 }),
+        body: JSON.stringify({ runnerId: "runner-a", now: "2026-01-01T00:00:00.100Z", maxClaims: 1 }),
       });
       expect(duplicate.status).toBe(200);
       expect(await duplicate.json()).toMatchObject({ ok: true, claims: [] });
@@ -840,11 +906,42 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("single-run recovery never sweeps another expired run", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const claimedAt = new Date("2026-01-01T00:00:00Z");
+    const recoveredAt = new Date("2026-01-01T00:00:02Z");
+    const loops = await Promise.all(["recover-one", "recover-two"].map((name) => storage.createLoop({
+      name,
+      schedule: { type: "interval", everyMs: 60_000 },
+      target: { type: "command", command: "true" },
+      leaseMs: 1_000,
+    }, claimedAt)));
+    const first = await storage.claimRun(loops[0]!, claimedAt.toISOString(), "runner-a", claimedAt);
+    const second = await storage.claimRun(loops[1]!, claimedAt.toISOString(), "runner-b", claimedAt);
+    expect(first).toBeTruthy();
+    expect(second).toBeTruthy();
+    const server = createTestServer(
+      mod,
+      { host: "127.0.0.1", port: 0, storage, now: () => recoveredAt },
+      runnerPrincipal("runner-a"),
+    );
+    try {
+      const response = await fetch(apiUrl(server, `/v1/runs/${first!.run.id}/recover`), { method: "POST" });
+      expect(response.status).toBe(200);
+      expect(await storage.getRun(first!.run.id)).toMatchObject({ status: "abandoned" });
+      expect(await storage.getRun(second!.run.id)).toMatchObject({ status: "running" });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
   test("runner finalization uses server time for stale-claim fencing", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
     let now = new Date("2026-01-01T00:00:00Z");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage, now: () => now });
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage, now: () => now }, runnerPrincipal("runner-a"));
 
     try {
       const loop = await storage.createLoop(
@@ -891,12 +988,12 @@ describe("loops-api foundation", () => {
   test("runner claim skips workflow loops until remote workflow execution is supported", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
-    const server = mod.createLoopsApiServer({
+    const server = createTestServer(mod, {
       host: "127.0.0.1",
       port: 0,
       storage,
       now: () => new Date("2026-01-01T00:00:00Z"),
-    });
+    }, runnerPrincipal("runner-a"));
 
     try {
       const workflow = await storage.createWorkflow({
@@ -929,12 +1026,12 @@ describe("loops-api foundation", () => {
   test("runner claim returns only one running claim per overlap-skip loop per poll", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
-    const server = mod.createLoopsApiServer({
+    const server = createTestServer(mod, {
       host: "127.0.0.1",
       port: 0,
       storage,
       now: () => new Date("2026-01-01T00:00:05Z"),
-    });
+    }, runnerPrincipal("runner-a"));
 
     try {
       const loop = await storage.createLoop(
@@ -971,7 +1068,7 @@ describe("loops-api foundation", () => {
   test("GET /v1/loops paginates with offset, clamps oversized limit, and filters by name", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
     try {
       for (let i = 0; i < 5; i += 1) {
         await storage.createLoop({

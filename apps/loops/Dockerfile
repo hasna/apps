@@ -41,6 +41,7 @@ ENV NODE_ENV=production \
 COPY package.json bun.lock ./
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
+COPY --from=build /app/src/lib/storage/fixtures/empty-tenant-backfill.json ./empty-tenant-backfill.json
 EXPOSE 8787
 # Fail-closed: loops-serve refuses to start without a self-hosted DSN + signing
 # secret on a non-local bind (no silent stub). HASNA_LOOPS_STORAGE_MODE=cloud is

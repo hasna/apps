@@ -23,24 +23,16 @@ describe("doctor", () => {
     for (const key of [
       "LOOPS_DATA_DIR",
       "HASNA_MACHINES_DIR",
-      "LOOPS_MODE",
-      "HASNA_LOOPS_MODE",
-      "LOOPS_API_URL",
+      "HASNA_LOOPS_STORAGE_MODE",
       "HASNA_LOOPS_API_URL",
-      "LOOPS_CLOUD_API_URL",
       "HASNA_LOOPS_CLOUD_API_URL",
-      "LOOPS_DATABASE_URL",
       "HASNA_LOOPS_DATABASE_URL",
     ]) savedEnv[key] = process.env[key];
     process.env.LOOPS_DATA_DIR = dataDir;
     process.env.HASNA_MACHINES_DIR = machinesDir;
-    process.env.LOOPS_MODE = "";
-    process.env.HASNA_LOOPS_MODE = "";
-    process.env.LOOPS_API_URL = "";
+    process.env.HASNA_LOOPS_STORAGE_MODE = "";
     process.env.HASNA_LOOPS_API_URL = "";
-    process.env.LOOPS_CLOUD_API_URL = "";
     process.env.HASNA_LOOPS_CLOUD_API_URL = "";
-    process.env.LOOPS_DATABASE_URL = "";
     process.env.HASNA_LOOPS_DATABASE_URL = "";
   });
 
@@ -82,7 +74,7 @@ describe("doctor", () => {
   });
 
   test("warns when non-local scheduler state is selected without control-plane configuration", () => {
-    process.env.LOOPS_MODE = "cloud";
+    process.env.HASNA_LOOPS_STORAGE_MODE = "cloud";
     const store = new Store(":memory:");
     try {
       const report = runDoctor(store);

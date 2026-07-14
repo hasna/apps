@@ -6,13 +6,12 @@
 // `sslmode=require` DSN, which hard-fails the tunnel. This helper strips the
 // sslmode query param and connects with an explicit encrypt-but-do-not-verify
 // TLS config (identical crypto to what the vendored kit produces for
-// `sslmode=require`), then runs the SAME real migrate + api_keys code paths so
+// `sslmode=require`), then runs the same checksum-ledgered migration path so
 // the ledger checksums are written exactly as the in-cluster migrator would.
 //
 // NEVER used in the container. The container connects directly to the RDS
 // hostname with verify-full-capable TLS via `loops-serve migrate`.
 import { Pool } from "pg";
-import { ApiKeyStore } from "@hasna/contracts/auth";
 import { createQueryClient } from "../src/generated/storage-kit/query.js";
 import { PgPoolExecutor } from "../src/lib/storage/pg-executor.js";
 import { PostgresStorage } from "../src/lib/storage/postgres.js";
@@ -30,14 +29,19 @@ const pool = new Pool({
 const client = createQueryClient(pool);
 const executor = new PgPoolExecutor(client);
 
-const result = await new PostgresStorage(executor).migrate();
+const dryRun = process.argv.includes("--dry-run");
+const enforceTenancy = process.argv.includes("--enforce-tenancy");
+const result = await new PostgresStorage(executor).migrate({
+  dryRun,
+  through: enforceTenancy ? undefined : "0008_tenant_prepare",
+});
 console.log(
   JSON.stringify({
     step: "storage",
+    dryRun,
+    enforceTenancy,
     applied: result.applied.map((a) => a.id),
     pending: result.plan.filter((p) => p.state === "pending").map((p) => p.migration.id),
   }),
 );
-await new ApiKeyStore(client).ensureSchema();
-console.log(JSON.stringify({ step: "api_keys", ensured: true }));
 await pool.end();

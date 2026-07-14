@@ -111,13 +111,13 @@ const PRUNE_BATCH_SIZE = 400;
 
 /**
  * Postgres SQLSTATE 23505 = unique_violation. A migration/backfill import keys
- * every row by its primary id (`ON CONFLICT(id)`), but some tables carry a
+ * every row by its tenant-qualified primary id, but some tables carry a
  * SECONDARY unique constraint that a re-keyed row from another machine can trip:
- *   - workflow_specs: partial unique on (name) WHERE status='active'
- *   - loop_runs:      UNIQUE(loop_id, scheduled_for)
+ *   - workflow_specs: partial unique on (tenant_id, name) for active rows
+ *   - loop_runs:      UNIQUE(tenant_id, loop_id, scheduled_for)
  * When a fleet-union backfill pushes a row whose id is new but whose secondary
  * key already exists (a different machine already owns that active-workflow name
- * or that loop schedule slot), the `ON CONFLICT(id)` clause can't catch it and
+ * or that loop schedule slot), the primary-key conflict target cannot catch it and
  * the whole batch would abort. The import treats that as "already represented"
  * and keeps the existing owner instead of failing the backfill.
  */
@@ -138,11 +138,68 @@ interface DaemonLeaseFence {
   claimToken?: string;
 }
 
+export interface TenantStorageContext {
+  tenantId: string;
+  principalId: string;
+  requestId: string;
+}
+
+function scopedClient(client: TypedQueryClient, pool: PoolQueryClient["pool"]): PoolQueryClient {
+  return {
+    ...client,
+    pool,
+    transaction: (fn) => fn(client),
+    close: async () => {},
+  };
+}
+
+function bindTenantClient(client: PoolQueryClient, context: TenantStorageContext): PoolQueryClient {
+  const inContext = <T>(fn: (scoped: PoolQueryClient) => Promise<T>): Promise<T> =>
+    client.transaction(async (transactionClient) => {
+      await transactionClient.execute("SET LOCAL ROLE open_loops_runtime");
+      await transactionClient.get(
+        `SELECT
+          set_config('open_loops.tenant_id', $1, true),
+          set_config('open_loops.principal_id', $2, true),
+          set_config('open_loops.request_id', $3, true)`,
+        [context.tenantId, context.principalId, context.requestId],
+      );
+      return fn(scopedClient(transactionClient, client.pool));
+    });
+  return {
+    pool: client.pool,
+    query: (sql, params) => inContext((scoped) => scoped.query(sql, params)),
+    many: (sql, params) => inContext((scoped) => scoped.many(sql, params)),
+    get: (sql, params) => inContext((scoped) => scoped.get(sql, params)),
+    one: (sql, params) => inContext((scoped) => scoped.one(sql, params)),
+    execute: (sql, params) => inContext((scoped) => scoped.execute(sql, params)),
+    transaction: (fn) => inContext((scoped) => fn(scoped)),
+    close: () => client.close(),
+  };
+}
+
 export class PostgresLoopStorage implements LoopStorageContract {
   readonly backend = "postgres";
   readonly supportsRemoteRunners = true;
 
-  constructor(private readonly client: PoolQueryClient) {}
+  readonly tenantId: string;
+  readonly principalId: string;
+  readonly requestId: string;
+  private readonly client: PoolQueryClient;
+
+  constructor(client: PoolQueryClient, context: TenantStorageContext, opts: { contextAlreadyBound?: boolean } = {}) {
+    this.tenantId = context.tenantId.trim();
+    this.principalId = context.principalId.trim();
+    this.requestId = context.requestId.trim();
+    if (!this.tenantId || !this.principalId || !this.requestId) {
+      throw new Error("PostgresLoopStorage requires tenant, principal, and request ids");
+    }
+    this.client = opts.contextAlreadyBound ? client : bindTenantClient(client, {
+      tenantId: this.tenantId,
+      principalId: this.principalId,
+      requestId: this.requestId,
+    });
+  }
 
   async close(): Promise<void> {
     await this.client.close();
@@ -153,32 +210,32 @@ export class PostgresLoopStorage implements LoopStorageContract {
   private async assertDaemonLeaseFence(c: TypedQueryClient, opts: DaemonLeaseFence, now: string): Promise<void> {
     if (!opts.daemonLeaseId) return;
     const row = await c.get<{ id: string }>(
-      "SELECT id FROM daemon_lease WHERE id = $1 AND expires_at > $2",
+      "SELECT id FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id = $1 AND expires_at > $2",
       [opts.daemonLeaseId, now],
     );
     if (!row) throw new Error("daemon lease lost");
   }
 
   private async loadLoop(c: TypedQueryClient, id: string): Promise<Loop | undefined> {
-    const row = await c.get<LoopRow>("SELECT * FROM loops WHERE id = $1", [id]);
+    const row = await c.get<LoopRow>("SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND id = $1", [id]);
     return row ? rowToLoop(row) : undefined;
   }
 
   private async loadRun(c: TypedQueryClient, id: string): Promise<LoopRun | undefined> {
-    const row = await c.get<RunRow>("SELECT * FROM loop_runs WHERE id = $1", [id]);
+    const row = await c.get<RunRow>("SELECT * FROM loop_runs WHERE tenant_id = open_loops_current_tenant_id() AND id = $1", [id]);
     return row ? rowToRun(row) : undefined;
   }
 
   private async loadRunBySlot(c: TypedQueryClient, loopId: string, scheduledFor: string): Promise<LoopRun | undefined> {
     const row = await c.get<RunRow>(
-      "SELECT * FROM loop_runs WHERE loop_id = $1 AND scheduled_for = $2",
+      "SELECT * FROM loop_runs WHERE tenant_id = open_loops_current_tenant_id() AND loop_id = $1 AND scheduled_for = $2",
       [loopId, scheduledFor],
     );
     return row ? rowToRun(row) : undefined;
   }
 
   private async loadDaemonLease(c: TypedQueryClient): Promise<DaemonLease | undefined> {
-    const row = await c.get<LeaseRow>("SELECT * FROM daemon_lease LIMIT 1", []);
+    const row = await c.get<LeaseRow>("SELECT * FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() LIMIT 1", []);
     return row ? rowToLease(row) : undefined;
   }
 
@@ -194,7 +251,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
     await c.execute(
       `UPDATE workflow_work_items
        SET status=$1, lease_expires_at=NULL, last_reason=COALESCE($2, last_reason), updated_at=$3
-       WHERE loop_id = $4 AND status IN (${placeholders})`,
+       WHERE tenant_id = open_loops_current_tenant_id() AND loop_id = $4 AND status IN (${placeholders})`,
       [status, reason ?? null, updated, loopId, ...statuses],
     );
   }
@@ -211,7 +268,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
     await c.execute(
       `UPDATE workflow_work_items
        SET status=$1, lease_expires_at=NULL, last_reason=COALESCE($2, last_reason), updated_at=$3
-       WHERE workflow_run_id = $4 AND status IN (${placeholders})`,
+       WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id = $4 AND status IN (${placeholders})`,
       [status, reason ?? null, updated, workflowRunId, ...statuses],
     );
   }
@@ -278,8 +335,8 @@ export class PostgresLoopStorage implements LoopStorageContract {
     };
     await this.client.execute(
       `INSERT INTO loops (id, name, description, status, schedule_json, target_json, machine_json, next_run_at, retry_scheduled_for,
-        goal_json, catch_up, catch_up_limit, overlap, max_attempts, retry_delay_ms, lease_ms, expires_at, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8,NULL,$9::jsonb,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+        goal_json, catch_up, catch_up_limit, overlap, max_attempts, retry_delay_ms, lease_ms, expires_at, created_at, updated_at, tenant_id)
+       VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8,NULL,$9::jsonb,$10,$11,$12,$13,$14,$15,$16,$17,$18,open_loops_current_tenant_id())`,
       [
         loop.id,
         loop.name,
@@ -310,7 +367,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
 
   async findLoopByName(...args: M<"findLoopByName">["args"]): Promise<M<"findLoopByName">["result"]> {
     const row = await this.client.get<LoopRow>(
-      "SELECT * FROM loops WHERE name = $1 ORDER BY created_at DESC LIMIT 1",
+      "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND name = $1 ORDER BY created_at DESC LIMIT 1",
       [args[0]],
     );
     return row ? rowToLoop(row) : undefined;
@@ -332,37 +389,37 @@ export class PostgresLoopStorage implements LoopStorageContract {
     // (archived included) matching the name so callers can detect ambiguity.
     if (opts.name != null) {
       rows = await this.client.many<LoopRow>(
-        "SELECT * FROM loops WHERE name = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+        "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND name = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
         [opts.name, limit, offset],
       );
     } else if (opts.status && opts.archived) {
       rows = await this.client.many<LoopRow>(
-        "SELECT * FROM loops WHERE status = $1 AND archived_at IS NOT NULL ORDER BY next_run_at ASC LIMIT $2 OFFSET $3",
+        "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND status = $1 AND archived_at IS NOT NULL ORDER BY next_run_at ASC LIMIT $2 OFFSET $3",
         [opts.status, limit, offset],
       );
     } else if (opts.status && opts.includeArchived) {
       rows = await this.client.many<LoopRow>(
-        "SELECT * FROM loops WHERE status = $1 ORDER BY next_run_at ASC LIMIT $2 OFFSET $3",
+        "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND status = $1 ORDER BY next_run_at ASC LIMIT $2 OFFSET $3",
         [opts.status, limit, offset],
       );
     } else if (opts.status) {
       rows = await this.client.many<LoopRow>(
-        "SELECT * FROM loops WHERE status = $1 AND archived_at IS NULL ORDER BY next_run_at ASC LIMIT $2 OFFSET $3",
+        "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND status = $1 AND archived_at IS NULL ORDER BY next_run_at ASC LIMIT $2 OFFSET $3",
         [opts.status, limit, offset],
       );
     } else if (opts.archived) {
       rows = await this.client.many<LoopRow>(
-        "SELECT * FROM loops WHERE archived_at IS NOT NULL ORDER BY archived_at DESC LIMIT $1 OFFSET $2",
+        "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND archived_at IS NOT NULL ORDER BY archived_at DESC LIMIT $1 OFFSET $2",
         [limit, offset],
       );
     } else if (opts.includeArchived) {
       rows = await this.client.many<LoopRow>(
-        "SELECT * FROM loops ORDER BY status ASC, next_run_at ASC LIMIT $1 OFFSET $2",
+        "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() ORDER BY status ASC, next_run_at ASC LIMIT $1 OFFSET $2",
         [limit, offset],
       );
     } else {
       rows = await this.client.many<LoopRow>(
-        "SELECT * FROM loops WHERE archived_at IS NULL ORDER BY status ASC, next_run_at ASC LIMIT $1 OFFSET $2",
+        "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND archived_at IS NULL ORDER BY status ASC, next_run_at ASC LIMIT $1 OFFSET $2",
         [limit, offset],
       );
     }
@@ -373,7 +430,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const [now, limit = 500] = args as [Date, number?];
     const rows = await this.client.many<LoopRow>(
       `SELECT * FROM loops
-       WHERE status = 'active' AND archived_at IS NULL AND next_run_at IS NOT NULL AND next_run_at <= $1
+       WHERE tenant_id = open_loops_current_tenant_id() AND status = 'active' AND archived_at IS NULL AND next_run_at IS NOT NULL AND next_run_at <= $1
        ORDER BY next_run_at ASC LIMIT $2`,
       [now.toISOString(), limit],
     );
@@ -390,8 +447,8 @@ export class PostgresLoopStorage implements LoopStorageContract {
       const merged: Loop = { ...current, ...patch, updatedAt: updated };
       const res = await c.query(
         `UPDATE loops SET status=$1, next_run_at=$2, retry_scheduled_for=$3, expires_at=$4, updated_at=$5
-         WHERE id=$6
-           AND ($7::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE id=$7 AND expires_at > $8))`,
+         WHERE tenant_id = open_loops_current_tenant_id() AND id=$6
+           AND ($7::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$7 AND expires_at > $8))`,
         [
           merged.status,
           merged.nextRunAt ?? null,
@@ -423,7 +480,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const updated = (opts.now ?? new Date()).toISOString();
     await this.client.execute(
       `UPDATE loops SET name=$1, updated_at=$2
-       WHERE id=$3 AND ($4::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE id=$4 AND expires_at > $5))`,
+       WHERE tenant_id = open_loops_current_tenant_id() AND id=$3 AND ($4::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$4 AND expires_at > $5))`,
       [trimmed, updated, id, opts.daemonLeaseId ?? null, updated],
     );
     const after = await this.getLoop(id);
@@ -439,7 +496,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
       const updated = nowIso();
       const archivedStatus: LoopStatus = loop.status === "active" ? "paused" : loop.status;
       await c.execute(
-        `UPDATE loops SET status=$1, archived_at=$2, archived_from_status=$3, updated_at=$4 WHERE id=$5`,
+        `UPDATE loops SET status=$1, archived_at=$2, archived_from_status=$3, updated_at=$4 WHERE tenant_id = open_loops_current_tenant_id() AND id=$5`,
         [archivedStatus, updated, loop.status, updated, loop.id],
       );
       await this.setWorkItemsForLoop(c, loop.id, "deferred", "loop archived", updated);
@@ -456,7 +513,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const updated = nowIso();
     const restoredStatus = loop.archivedFromStatus ?? loop.status;
     await this.client.execute(
-      `UPDATE loops SET status=$1, archived_at=NULL, archived_from_status=NULL, updated_at=$2 WHERE id=$3`,
+      `UPDATE loops SET status=$1, archived_at=NULL, archived_from_status=NULL, updated_at=$2 WHERE tenant_id = open_loops_current_tenant_id() AND id=$3`,
       [restoredStatus, updated, loop.id],
     );
     const unarchived = await this.getLoop(loop.id);
@@ -470,7 +527,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
       const loop = await this.requireLoopIn(c, idOrName);
       await this.setWorkItemsForLoop(c, loop.id, "cancelled", "loop deleted", nowIso());
       // loop_runs.loop_id REFERENCES loops ON DELETE CASCADE handles children.
-      const res = await c.query(`DELETE FROM loops WHERE id = $1`, [loop.id]);
+      const res = await c.query(`DELETE FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND id = $1`, [loop.id]);
       return res.rowCount > 0;
     });
   }
@@ -479,7 +536,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const byId = await this.loadLoop(c, idOrName);
     if (byId) return byId;
     const row = await c.get<LoopRow>(
-      "SELECT * FROM loops WHERE name = $1 ORDER BY created_at DESC LIMIT 1",
+      "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND name = $1 ORDER BY created_at DESC LIMIT 1",
       [idOrName],
     );
     if (!row) throw new LoopNotFoundError(idOrName);
@@ -491,20 +548,20 @@ export class PostgresLoopStorage implements LoopStorageContract {
     let sql: string;
     const params: unknown[] = [];
     if (status && opts.archived) {
-      sql = "SELECT COUNT(*)::int AS count FROM loops WHERE status = $1 AND archived_at IS NOT NULL";
+      sql = "SELECT COUNT(*)::int AS count FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND status = $1 AND archived_at IS NOT NULL";
       params.push(status);
     } else if (status && opts.includeArchived) {
-      sql = "SELECT COUNT(*)::int AS count FROM loops WHERE status = $1";
+      sql = "SELECT COUNT(*)::int AS count FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND status = $1";
       params.push(status);
     } else if (status) {
-      sql = "SELECT COUNT(*)::int AS count FROM loops WHERE status = $1 AND archived_at IS NULL";
+      sql = "SELECT COUNT(*)::int AS count FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND status = $1 AND archived_at IS NULL";
       params.push(status);
     } else if (opts.archived) {
-      sql = "SELECT COUNT(*)::int AS count FROM loops WHERE archived_at IS NOT NULL";
+      sql = "SELECT COUNT(*)::int AS count FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND archived_at IS NOT NULL";
     } else if (opts.includeArchived) {
-      sql = "SELECT COUNT(*)::int AS count FROM loops";
+      sql = "SELECT COUNT(*)::int AS count FROM loops WHERE tenant_id = open_loops_current_tenant_id()";
     } else {
-      sql = "SELECT COUNT(*)::int AS count FROM loops WHERE archived_at IS NULL";
+      sql = "SELECT COUNT(*)::int AS count FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND archived_at IS NULL";
     }
     const row = await this.client.get<{ count: number }>(sql, params);
     return row?.count ?? 0;
@@ -514,7 +571,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
   // Postgres counterparts of the sqlite Store.upsertMigration* methods. These
   // preserve the incoming id/status/timestamps exactly (no genId, no forced
   // "active"), so a local->self-hosted backfill reproduces the source rows
-  // faithfully and idempotently (ON CONFLICT(id) DO UPDATE — re-runs never
+  // faithfully and idempotently (tenant-qualified upsert — re-runs never
   // duplicate). Without --replace an existing row is left untouched and
   // returned as-is. Run/step output is re-clamped by persistedRunOutput and
   // errors re-scrubbed, matching the sqlite import semantics exactly.
@@ -527,9 +584,9 @@ export class PostgresLoopStorage implements LoopStorageContract {
     if (existing && !opts.replace) return existing;
     try {
       await this.client.execute(
-        `INSERT INTO workflow_specs (id, name, description, version, status, goal_json, steps_json, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9)
-         ON CONFLICT(id) DO UPDATE SET
+        `INSERT INTO workflow_specs (id, name, description, version, status, goal_json, steps_json, created_at, updated_at, tenant_id)
+         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9,open_loops_current_tenant_id())
+         ON CONFLICT(tenant_id,id) DO UPDATE SET
            name=EXCLUDED.name,
            description=EXCLUDED.description,
            version=EXCLUDED.version,
@@ -552,11 +609,12 @@ export class PostgresLoopStorage implements LoopStorageContract {
       );
     } catch (error) {
       // Secondary unique: another active workflow already owns this name (a
-      // different id from another machine). ON CONFLICT(id) can't catch it. Keep
+      // different id from another machine). The primary-key conflict target
+      // cannot catch it. Keep
       // the existing active owner rather than aborting the fleet-union backfill.
       if (isUniqueViolation(error)) {
         const owner = await this.client.get<WorkflowRow>(
-          "SELECT * FROM workflow_specs WHERE name = $1 AND status = 'active' LIMIT 1",
+          "SELECT * FROM workflow_specs WHERE tenant_id = open_loops_current_tenant_id() AND name = $1 AND status = 'active' LIMIT 1",
           [workflow.name],
         );
         if (owner) return rowToWorkflow(owner);
@@ -575,9 +633,9 @@ export class PostgresLoopStorage implements LoopStorageContract {
     await this.client.execute(
       `INSERT INTO loops (id, name, description, status, archived_at, archived_from_status, schedule_json, target_json,
         goal_json, machine_json, next_run_at, retry_scheduled_for, catch_up, catch_up_limit, overlap, max_attempts,
-        retry_delay_ms, lease_ms, expires_at, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
-       ON CONFLICT(id) DO UPDATE SET
+        retry_delay_ms, lease_ms, expires_at, created_at, updated_at, tenant_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,open_loops_current_tenant_id())
+       ON CONFLICT(tenant_id,id) DO UPDATE SET
          name=EXCLUDED.name,
          description=EXCLUDED.description,
          status=EXCLUDED.status,
@@ -636,9 +694,9 @@ export class PostgresLoopStorage implements LoopStorageContract {
     await this.client.execute(
       `INSERT INTO loop_runs (id, loop_id, loop_name, scheduled_for, attempt, status, started_at, finished_at,
         claimed_by, claim_token, lease_expires_at, pid, pgid, process_started_at, exit_code, duration_ms,
-        stdout, stderr, error, goal_run_id, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
-       ON CONFLICT(id) DO UPDATE SET
+        stdout, stderr, error, goal_run_id, created_at, updated_at, tenant_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,open_loops_current_tenant_id())
+       ON CONFLICT(tenant_id,id) DO UPDATE SET
          loop_id=EXCLUDED.loop_id,
          loop_name=EXCLUDED.loop_name,
          scheduled_for=EXCLUDED.scheduled_for,
@@ -687,7 +745,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
     } catch (error) {
       // Secondary unique: a run for this (loop_id, scheduled_for) slot already
       // exists under a different id (another machine ran the same shared loop at
-      // the same slot). ON CONFLICT(id) can't catch it; the slot can hold only
+      // the same slot). The primary-key conflict target cannot catch it; the slot can hold only
       // one run, so keep the existing occupant rather than aborting the backfill.
       if (isUniqueViolation(error)) {
         const slot = await this.loadRunBySlot(this.client, run.loopId, run.scheduledFor);
@@ -710,9 +768,9 @@ export class PostgresLoopStorage implements LoopStorageContract {
       await this.assertDaemonLeaseFence(c, opts, now);
       await c.execute(
         `INSERT INTO loop_runs (id, loop_id, loop_name, scheduled_for, attempt, status, started_at, finished_at,
-          claimed_by, lease_expires_at, pid, exit_code, duration_ms, stdout, stderr, error, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,1,'skipped',NULL,$5,NULL,NULL,NULL,NULL,NULL,NULL,NULL,$6,$7,$7)
-         ON CONFLICT (loop_id, scheduled_for) DO NOTHING`,
+          claimed_by, lease_expires_at, pid, exit_code, duration_ms, stdout, stderr, error, created_at, updated_at, tenant_id)
+         VALUES ($1,$2,$3,$4,1,'skipped',NULL,$5,NULL,NULL,NULL,NULL,NULL,NULL,NULL,$6,$7,$7,open_loops_current_tenant_id())
+         ON CONFLICT (tenant_id, loop_id, scheduled_for) DO NOTHING`,
         [id, loop.id, loop.name, scheduledFor, now, reason, now],
       );
       const run = await this.loadRunBySlot(c, loop.id, scheduledFor);
@@ -768,7 +826,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
       if (loop.overlap === "skip") {
         const blocking = await c.get<{ id: string }>(
           `SELECT id FROM loop_runs
-           WHERE loop_id=$1 AND scheduled_for<>$2 AND status='running'
+           WHERE tenant_id = open_loops_current_tenant_id() AND loop_id=$1 AND scheduled_for<>$2 AND status='running'
              AND lease_expires_at IS NOT NULL AND lease_expires_at > $3
            LIMIT 1`,
           [loop.id, scheduledFor, startedAt],
@@ -778,7 +836,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
 
       // Lock the target slot row (if present) so concurrent claimers serialize.
       const existing = await c.get<RunRow>(
-        "SELECT * FROM loop_runs WHERE loop_id=$1 AND scheduled_for=$2 FOR UPDATE",
+        "SELECT * FROM loop_runs WHERE tenant_id = open_loops_current_tenant_id() AND loop_id=$1 AND scheduled_for=$2 FOR UPDATE",
         [loop.id, scheduledFor],
       );
 
@@ -791,7 +849,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
             `UPDATE loop_runs SET status='running', started_at=$2, finished_at=NULL, claimed_by=$3, claim_token=$4,
              lease_expires_at=$5, pid=NULL, pgid=NULL, process_started_at=NULL, exit_code=NULL, duration_ms=NULL,
              stdout=NULL, stderr=NULL, error=NULL, updated_at=$2
-             WHERE id=$1 AND status='running' AND lease_expires_at <= $6`,
+             WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND status='running' AND lease_expires_at <= $6`,
             [existing.id, startedAt, runnerId, claimToken, leaseExpiresAt, startedAt],
           );
           if (res.rowCount !== 1) return undefined;
@@ -805,7 +863,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
           `UPDATE loop_runs SET attempt=$2, status='running', started_at=$3, finished_at=NULL, claimed_by=$4, claim_token=$5,
            lease_expires_at=$6, pid=NULL, pgid=NULL, process_started_at=NULL, exit_code=NULL, duration_ms=NULL,
            stdout=NULL, stderr=NULL, error=NULL, updated_at=$3
-           WHERE id=$1 AND status IN ('failed','timed_out','abandoned') AND attempt < $7`,
+           WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND status IN ('failed','timed_out','abandoned') AND attempt < $7`,
           [existing.id, attempt, startedAt, runnerId, claimToken, leaseExpiresAt, loop.maxAttempts],
         );
         if (res.rowCount !== 1) return undefined;
@@ -816,9 +874,9 @@ export class PostgresLoopStorage implements LoopStorageContract {
       const id = genId();
       const res = await c.query(
         `INSERT INTO loop_runs (id, loop_id, loop_name, scheduled_for, attempt, status, started_at, finished_at,
-          claimed_by, claim_token, lease_expires_at, pid, exit_code, duration_ms, stdout, stderr, error, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,1,'running',$5,NULL,$6,$7,$8,NULL,NULL,NULL,NULL,NULL,NULL,$5,$5)
-         ON CONFLICT (loop_id, scheduled_for) DO NOTHING`,
+          claimed_by, claim_token, lease_expires_at, pid, exit_code, duration_ms, stdout, stderr, error, created_at, updated_at, tenant_id)
+         VALUES ($1,$2,$3,$4,1,'running',$5,NULL,$6,$7,$8,NULL,NULL,NULL,NULL,NULL,NULL,$5,$5,open_loops_current_tenant_id())
+         ON CONFLICT (tenant_id, loop_id, scheduled_for) DO NOTHING`,
         [id, loop.id, loop.name, scheduledFor, startedAt, runnerId, claimToken, leaseExpiresAt],
       );
       if (res.rowCount !== 1) return undefined;
@@ -838,9 +896,9 @@ export class PostgresLoopStorage implements LoopStorageContract {
         res = await c.query(
           `UPDATE loop_runs SET status=$2, finished_at=$3, claim_token=NULL, lease_expires_at=NULL, pid=$4, exit_code=$5,
            duration_ms=$6, stdout=$7, stderr=$8, error=$9, updated_at=$3
-           WHERE id=$1 AND status='running' AND claimed_by=$10 AND lease_expires_at > $11
+           WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND status='running' AND claimed_by=$10 AND lease_expires_at > $11
              AND ($12::text IS NULL OR claim_token=$12)
-             AND ($13::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE id=$13 AND expires_at > $11))`,
+             AND ($13::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$13 AND expires_at > $11))`,
           [
             id,
             patch.status,
@@ -861,7 +919,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
         res = await c.query(
           `UPDATE loop_runs SET status=$2, finished_at=$3, claim_token=NULL, lease_expires_at=NULL, pid=$4, exit_code=$5,
            duration_ms=$6, stdout=$7, stderr=$8, error=$9, updated_at=$3
-           WHERE id=$1 AND status='running'`,
+           WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND status='running'`,
           [
             id,
             patch.status,
@@ -891,9 +949,9 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const expiresAt = new Date(now.getTime() + leaseMs).toISOString();
     const res = await this.client.query(
       `UPDATE loop_runs SET lease_expires_at=$2, updated_at=$3
-       WHERE id=$1 AND status='running' AND claimed_by=$4 AND lease_expires_at > $5
+       WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND status='running' AND claimed_by=$4 AND lease_expires_at > $5
          AND ($6::text IS NULL OR claim_token=$6)
-         AND ($7::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE id=$7 AND expires_at > $5))`,
+         AND ($7::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$7 AND expires_at > $5))`,
       [id, expiresAt, nowStr, claimedBy, nowStr, opts.claimToken ?? null, opts.daemonLeaseId ?? null],
     );
     if (res.rowCount !== 1) return undefined;
@@ -905,8 +963,8 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const now = (opts.now ?? new Date()).toISOString();
     const res = await this.client.query(
       `UPDATE loop_runs SET pid=$2, pgid=$3, process_started_at=$4, updated_at=$5
-       WHERE id=$1 AND status='running'
-         AND ($6::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE id=$6 AND expires_at > $7))`,
+       WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND status='running'
+         AND ($6::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$6 AND expires_at > $7))`,
       [runId, info.pid, info.pgid ?? null, info.processStartedAt ?? now, now, opts.daemonLeaseId ?? null, now],
     );
     if (res.rowCount !== 1) return undefined;
@@ -920,21 +978,21 @@ export class PostgresLoopStorage implements LoopStorageContract {
     let rows: RunRow[];
     if (opts.loopId && opts.status) {
       rows = await this.client.many<RunRow>(
-        "SELECT * FROM loop_runs WHERE loop_id = $1 AND status = $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4",
+        "SELECT * FROM loop_runs WHERE tenant_id = open_loops_current_tenant_id() AND loop_id = $1 AND status = $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4",
         [opts.loopId, opts.status, limit, offset],
       );
     } else if (opts.loopId) {
       rows = await this.client.many<RunRow>(
-        "SELECT * FROM loop_runs WHERE loop_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+        "SELECT * FROM loop_runs WHERE tenant_id = open_loops_current_tenant_id() AND loop_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
         [opts.loopId, limit, offset],
       );
     } else if (opts.status) {
       rows = await this.client.many<RunRow>(
-        "SELECT * FROM loop_runs WHERE status = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+        "SELECT * FROM loop_runs WHERE tenant_id = open_loops_current_tenant_id() AND status = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
         [opts.status, limit, offset],
       );
     } else {
-      rows = await this.client.many<RunRow>("SELECT * FROM loop_runs ORDER BY created_at DESC LIMIT $1 OFFSET $2", [limit, offset]);
+      rows = await this.client.many<RunRow>("SELECT * FROM loop_runs WHERE tenant_id = open_loops_current_tenant_id() ORDER BY created_at DESC LIMIT $1 OFFSET $2", [limit, offset]);
     }
     return rows.map(rowToRun);
   }
@@ -948,9 +1006,9 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const receipt = normalizeRunReceipt(input, { now: opts.now, run, loop, existing });
     await this.client.execute(
       `INSERT INTO run_receipts (run_id, loop_id, machine_json, repo, task_ids_json, knowledge_ids_json, digest_id,
-        started_at, finished_at, status, exit_code, summary_json, evidence_paths_json, created_at, updated_at)
-       VALUES ($1,$2,$3::jsonb,$4,$5::jsonb,$6::jsonb,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14,$15)
-       ON CONFLICT(run_id) DO UPDATE SET
+        started_at, finished_at, status, exit_code, summary_json, evidence_paths_json, created_at, updated_at, tenant_id)
+       VALUES ($1,$2,$3::jsonb,$4,$5::jsonb,$6::jsonb,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14,$15,open_loops_current_tenant_id())
+       ON CONFLICT(tenant_id,run_id) DO UPDATE SET
         loop_id=EXCLUDED.loop_id,
         machine_json=EXCLUDED.machine_json,
         repo=EXCLUDED.repo,
@@ -986,7 +1044,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
   }
 
   async getRunReceipt(...args: M<"getRunReceipt">["args"]): Promise<M<"getRunReceipt">["result"]> {
-    const row = await this.client.get<RunReceiptRow>("SELECT * FROM run_receipts WHERE run_id = $1", [args[0]]);
+    const row = await this.client.get<RunReceiptRow>("SELECT * FROM run_receipts WHERE tenant_id = open_loops_current_tenant_id() AND run_id = $1", [args[0]]);
     return row ? rowToRunReceipt(row) : undefined;
   }
 
@@ -1023,7 +1081,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
     }
     const limitSlot = next();
     params.push(limit);
-    const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+    const where = `WHERE tenant_id = open_loops_current_tenant_id()${filters.length ? ` AND ${filters.join(" AND ")}` : ""}`;
     const rows = await this.client.many<RunReceiptRow>(
       `SELECT * FROM run_receipts ${where} ORDER BY created_at DESC LIMIT ${limitSlot}`,
       params,
@@ -1035,10 +1093,10 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const status = args[0];
     const row = status
       ? await this.client.get<{ count: number }>(
-          "SELECT COUNT(*)::int AS count FROM loop_runs WHERE status = $1",
+          "SELECT COUNT(*)::int AS count FROM loop_runs WHERE tenant_id = open_loops_current_tenant_id() AND status = $1",
           [status],
         )
-      : await this.client.get<{ count: number }>("SELECT COUNT(*)::int AS count FROM loop_runs", []);
+      : await this.client.get<{ count: number }>("SELECT COUNT(*)::int AS count FROM loop_runs WHERE tenant_id = open_loops_current_tenant_id()", []);
     return row?.count ?? 0;
   }
 
@@ -1068,8 +1126,11 @@ export class PostgresLoopStorage implements LoopStorageContract {
     );
     const finished = now.toISOString();
     const rows = await this.client.many<RunRow>(
-      `SELECT * FROM loop_runs WHERE status='running' AND lease_expires_at <= $1 ORDER BY lease_expires_at ASC LIMIT $2`,
-      [finished, scanLimit],
+      `SELECT * FROM loop_runs
+       WHERE tenant_id = open_loops_current_tenant_id() AND status='running' AND lease_expires_at <= $1
+         AND ($2::text IS NULL OR id = $2)
+       ORDER BY lease_expires_at ASC LIMIT $3`,
+      [finished, opts.runId ?? null, scanLimit],
     );
     const recovered: LoopRun[] = [];
     for (const row of rows) {
@@ -1078,27 +1139,27 @@ export class PostgresLoopStorage implements LoopStorageContract {
         const res = await c.query(
           `UPDATE loop_runs SET status='abandoned', finished_at=$2, lease_expires_at=NULL,
            error='run lease expired before completion', updated_at=$2
-           WHERE id=$1 AND status='running' AND lease_expires_at <= $3
-             AND ($4::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE id=$4 AND expires_at > $3))`,
+           WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND status='running' AND lease_expires_at <= $3
+             AND ($4::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$4 AND expires_at > $3))`,
           [row.id, finished, finished, opts.daemonLeaseId ?? null],
         );
         if (res.rowCount !== 1) return undefined;
         const workflowRows = await c.many<WorkflowRunRow>(
-          "SELECT * FROM workflow_runs WHERE loop_run_id = $1 AND status NOT IN ('succeeded','failed','timed_out','cancelled')",
+          "SELECT * FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND loop_run_id = $1 AND status NOT IN ('succeeded','failed','timed_out','cancelled')",
           [row.id],
         );
         for (const wf of workflowRows) {
           const wfRes = await c.query(
             `UPDATE workflow_runs SET status='failed', finished_at=$2,
              error='parent loop run lease expired before completion', updated_at=$2
-             WHERE id=$1 AND status NOT IN ('succeeded','failed','timed_out','cancelled')`,
+             WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND status NOT IN ('succeeded','failed','timed_out','cancelled')`,
             [wf.id, finished],
           );
           if (wfRes.rowCount !== 1) continue;
           await c.execute(
             `UPDATE workflow_step_runs SET status='skipped', finished_at=$2, pid=NULL,
              error='parent loop run lease expired before completion', updated_at=$2
-             WHERE workflow_run_id=$1 AND status IN ('pending','running')`,
+             WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$1 AND status IN ('pending','running')`,
             [wf.id, finished],
           );
           await this.setWorkItemsForWorkflowRun(
@@ -1145,10 +1206,11 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const terminal = TERMINAL_RUN_STATUSES.map((s) => `'${s}'`).join(",");
     const candidateIds = (
       await this.client.many<{ id: string }>(
-        `WITH ranked AS (
+         `WITH ranked AS (
            SELECT id, status, created_at,
              ROW_NUMBER() OVER (PARTITION BY loop_id ORDER BY created_at DESC, id DESC) AS recency
            FROM loop_runs
+           WHERE tenant_id = open_loops_current_tenant_id()
          )
          SELECT id FROM ranked
          WHERE status IN (${terminal})
@@ -1172,13 +1234,13 @@ export class PostgresLoopStorage implements LoopStorageContract {
       if (dryRun) {
         const workflowRunIds = (
           await this.client.many<{ id: string }>(
-            `SELECT id FROM workflow_runs WHERE loop_run_id = ANY($1)`,
+            `SELECT id FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND loop_run_id = ANY($1)`,
             [batch],
           )
         ).map((r) => r.id);
         summary.workflowRuns += workflowRunIds.length;
         const gr = await this.client.get<{ count: number }>(
-          `SELECT COUNT(*)::int AS count FROM goal_runs WHERE loop_run_id = ANY($1) OR workflow_run_id = ANY($2)`,
+          `SELECT COUNT(*)::int AS count FROM goal_runs WHERE tenant_id = open_loops_current_tenant_id() AND (loop_run_id = ANY($1) OR workflow_run_id = ANY($2))`,
           [batch, workflowRunIds],
         );
         summary.goalRuns += gr?.count ?? 0;
@@ -1187,27 +1249,27 @@ export class PostgresLoopStorage implements LoopStorageContract {
       await this.client.transaction(async (c) => {
         const confirmed = (
           await c.many<{ id: string }>(
-            `SELECT id FROM loop_runs WHERE id = ANY($1) AND status IN (${terminal})`,
+            `SELECT id FROM loop_runs WHERE tenant_id = open_loops_current_tenant_id() AND id = ANY($1) AND status IN (${terminal})`,
             [batch],
           )
         ).map((r) => r.id);
         if (confirmed.length === 0) return;
         const workflowRunIds = (
-          await c.many<{ id: string }>(`SELECT id FROM workflow_runs WHERE loop_run_id = ANY($1)`, [confirmed])
+          await c.many<{ id: string }>(`SELECT id FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND loop_run_id = ANY($1)`, [confirmed])
         ).map((r) => r.id);
         summary.loopRuns += confirmed.length;
         summary.workflowRuns += workflowRunIds.length;
         const gr = await c.query(
-          `DELETE FROM goal_runs WHERE loop_run_id = ANY($1) OR workflow_run_id = ANY($2)`,
+          `DELETE FROM goal_runs WHERE tenant_id = open_loops_current_tenant_id() AND (loop_run_id = ANY($1) OR workflow_run_id = ANY($2))`,
           [confirmed, workflowRunIds],
         );
         summary.goalRuns += gr.rowCount;
         // workflow_runs.loop_run_id ON DELETE SET NULL; delete them explicitly to
         // mirror sqlite pruning of orphaned workflow history.
         if (workflowRunIds.length > 0) {
-          await c.execute(`DELETE FROM workflow_runs WHERE id = ANY($1)`, [workflowRunIds]);
+          await c.execute(`DELETE FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND id = ANY($1)`, [workflowRunIds]);
         }
-        await c.execute(`DELETE FROM loop_runs WHERE id = ANY($1) AND status IN (${terminal})`, [confirmed]);
+        await c.execute(`DELETE FROM loop_runs WHERE tenant_id = open_loops_current_tenant_id() AND id = ANY($1) AND status IN (${terminal})`, [confirmed]);
       });
     }
     return summary;
@@ -1220,14 +1282,14 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const now = input.now ?? new Date();
     const expiresAt = new Date(now.getTime() + input.ttlMs).toISOString();
     return this.client.transaction(async (c) => {
-      const existing = await c.get<LeaseRow>("SELECT * FROM daemon_lease LIMIT 1 FOR UPDATE", []);
+      const existing = await c.get<LeaseRow>("SELECT * FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() LIMIT 1 FOR UPDATE", []);
       if (existing && (existing.expires_at as string) > now.toISOString() && existing.id !== input.id) {
         return undefined;
       }
-      await c.execute("DELETE FROM daemon_lease", []);
+      await c.execute("DELETE FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id()", []);
       await c.execute(
-        `INSERT INTO daemon_lease (id, pid, hostname, heartbeat_at, expires_at, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$4,$4)`,
+        `INSERT INTO daemon_lease (id, pid, hostname, heartbeat_at, expires_at, created_at, updated_at, tenant_id)
+         VALUES ($1,$2,$3,$4,$5,$4,$4,open_loops_current_tenant_id())`,
         [input.id, input.pid, input.hostname, now.toISOString(), expiresAt],
       );
       return this.loadDaemonLease(c);
@@ -1238,7 +1300,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const [id, ttlMs, now = new Date()] = args;
     const expiresAt = new Date(now.getTime() + ttlMs).toISOString();
     const res = await this.client.query(
-      `UPDATE daemon_lease SET heartbeat_at=$2, expires_at=$3, updated_at=$2 WHERE id=$1 AND expires_at > $4`,
+      `UPDATE daemon_lease SET heartbeat_at=$2, expires_at=$3, updated_at=$2 WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND expires_at > $4`,
       [id, now.toISOString(), expiresAt, now.toISOString()],
     );
     if (res.rowCount !== 1) return undefined;
@@ -1246,7 +1308,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
   }
 
   async releaseDaemonLease(...args: M<"releaseDaemonLease">["args"]): Promise<M<"releaseDaemonLease">["result"]> {
-    await this.client.execute("DELETE FROM daemon_lease WHERE id = $1", [args[0]]);
+    await this.client.execute("DELETE FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id = $1", [args[0]]);
   }
 
   async getDaemonLease(...args: M<"getDaemonLease">["args"]): Promise<M<"getDaemonLease">["result"]> {
@@ -1257,7 +1319,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
   // --------------------------------------------------------- workflows (reads)
 
   private async loadWorkflow(c: TypedQueryClient, id: string) {
-    const row = await c.get<WorkflowRow>("SELECT * FROM workflow_specs WHERE id = $1", [id]);
+    const row = await c.get<WorkflowRow>("SELECT * FROM workflow_specs WHERE tenant_id = open_loops_current_tenant_id() AND id = $1", [id]);
     return row ? rowToWorkflow(row) : undefined;
   }
 
@@ -1271,11 +1333,11 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const offset = opts.offset ?? 0;
     const rows = opts.status
       ? await this.client.many<WorkflowRow>(
-          "SELECT * FROM workflow_specs WHERE status = $1 ORDER BY status ASC, name ASC LIMIT $2 OFFSET $3",
+          "SELECT * FROM workflow_specs WHERE tenant_id = open_loops_current_tenant_id() AND status = $1 ORDER BY status ASC, name ASC LIMIT $2 OFFSET $3",
           [opts.status, limit, offset],
         )
       : await this.client.many<WorkflowRow>(
-          "SELECT * FROM workflow_specs ORDER BY status ASC, name ASC LIMIT $1 OFFSET $2",
+          "SELECT * FROM workflow_specs WHERE tenant_id = open_loops_current_tenant_id() ORDER BY status ASC, name ASC LIMIT $1 OFFSET $2",
           [limit, offset],
         );
     return rows.map(rowToWorkflow);
@@ -1285,10 +1347,10 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const opts = args[0] ?? {};
     const row = opts.status
       ? await this.client.get<{ count: number }>(
-          "SELECT COUNT(*)::int AS count FROM workflow_specs WHERE status = $1",
+          "SELECT COUNT(*)::int AS count FROM workflow_specs WHERE tenant_id = open_loops_current_tenant_id() AND status = $1",
           [opts.status],
         )
-      : await this.client.get<{ count: number }>("SELECT COUNT(*)::int AS count FROM workflow_specs", []);
+      : await this.client.get<{ count: number }>("SELECT COUNT(*)::int AS count FROM workflow_specs WHERE tenant_id = open_loops_current_tenant_id()", []);
     return row?.count ?? 0;
   }
 
@@ -1296,7 +1358,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
     ...args: M<"getWorkflowInvocation">["args"]
   ): Promise<M<"getWorkflowInvocation">["result"]> {
     const row = await this.client.get<WorkflowInvocationRow>(
-      "SELECT * FROM workflow_invocations WHERE id = $1",
+      "SELECT * FROM workflow_invocations WHERE tenant_id = open_loops_current_tenant_id() AND id = $1",
       [args[0]],
     );
     return row ? rowToWorkflowInvocation(row) : undefined;
@@ -1307,7 +1369,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
   ): Promise<M<"listWorkflowInvocations">["result"]> {
     const opts = args[0] ?? {};
     const rows = await this.client.many<WorkflowInvocationRow>(
-      "SELECT * FROM workflow_invocations ORDER BY created_at DESC LIMIT $1",
+      "SELECT * FROM workflow_invocations WHERE tenant_id = open_loops_current_tenant_id() ORDER BY created_at DESC LIMIT $1",
       [opts.limit ?? 100],
     );
     return rows.map(rowToWorkflowInvocation);
@@ -1315,7 +1377,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
 
   async getWorkflowWorkItem(...args: M<"getWorkflowWorkItem">["args"]): Promise<M<"getWorkflowWorkItem">["result"]> {
     const row = await this.client.get<WorkflowWorkItemRow>(
-      "SELECT * FROM workflow_work_items WHERE id = $1",
+      "SELECT * FROM workflow_work_items WHERE tenant_id = open_loops_current_tenant_id() AND id = $1",
       [args[0]],
     );
     return row ? rowToWorkflowWorkItem(row) : undefined;
@@ -1329,22 +1391,22 @@ export class PostgresLoopStorage implements LoopStorageContract {
     let rows: WorkflowWorkItemRow[];
     if (opts.status && opts.routeKey) {
       rows = await this.client.many<WorkflowWorkItemRow>(
-        "SELECT * FROM workflow_work_items WHERE status = $1 AND route_key = $2 ORDER BY priority DESC, created_at ASC LIMIT $3",
+        "SELECT * FROM workflow_work_items WHERE tenant_id = open_loops_current_tenant_id() AND status = $1 AND route_key = $2 ORDER BY priority DESC, created_at ASC LIMIT $3",
         [opts.status, opts.routeKey, limit],
       );
     } else if (opts.status) {
       rows = await this.client.many<WorkflowWorkItemRow>(
-        "SELECT * FROM workflow_work_items WHERE status = $1 ORDER BY priority DESC, created_at ASC LIMIT $2",
+        "SELECT * FROM workflow_work_items WHERE tenant_id = open_loops_current_tenant_id() AND status = $1 ORDER BY priority DESC, created_at ASC LIMIT $2",
         [opts.status, limit],
       );
     } else if (opts.routeKey) {
       rows = await this.client.many<WorkflowWorkItemRow>(
-        "SELECT * FROM workflow_work_items WHERE route_key = $1 ORDER BY priority DESC, created_at ASC LIMIT $2",
+        "SELECT * FROM workflow_work_items WHERE tenant_id = open_loops_current_tenant_id() AND route_key = $1 ORDER BY priority DESC, created_at ASC LIMIT $2",
         [opts.routeKey, limit],
       );
     } else {
       rows = await this.client.many<WorkflowWorkItemRow>(
-        "SELECT * FROM workflow_work_items ORDER BY priority DESC, created_at ASC LIMIT $1",
+        "SELECT * FROM workflow_work_items WHERE tenant_id = open_loops_current_tenant_id() ORDER BY priority DESC, created_at ASC LIMIT $1",
         [limit],
       );
     }
@@ -1358,7 +1420,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const active = "('admitted','running')";
     const scoped = async (col: string, val: string | undefined): Promise<number> => {
       const row = await this.client.get<{ count: number }>(
-        `SELECT COUNT(*)::int AS count FROM workflow_work_items WHERE status IN ${active} AND ${col} = $1`,
+        `SELECT COUNT(*)::int AS count FROM workflow_work_items WHERE tenant_id = open_loops_current_tenant_id() AND status IN ${active} AND ${col} = $1`,
         [val],
       );
       return row?.count ?? 0;
@@ -1370,7 +1432,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
       ? await scoped("route_scope", routeScope)
       : (
           await this.client.get<{ count: number }>(
-            `SELECT COUNT(*)::int AS count FROM workflow_work_items WHERE status IN ${active}`,
+            `SELECT COUNT(*)::int AS count FROM workflow_work_items WHERE tenant_id = open_loops_current_tenant_id() AND status IN ${active}`,
             [],
           )
         )?.count ?? 0;
@@ -1384,7 +1446,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
   }
 
   async getWorkflowRun(...args: M<"getWorkflowRun">["args"]): Promise<M<"getWorkflowRun">["result"]> {
-    const row = await this.client.get<WorkflowRunRow>("SELECT * FROM workflow_runs WHERE id = $1", [args[0]]);
+    const row = await this.client.get<WorkflowRunRow>("SELECT * FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND id = $1", [args[0]]);
     return row ? rowToWorkflowRun(row) : undefined;
   }
 
@@ -1394,22 +1456,22 @@ export class PostgresLoopStorage implements LoopStorageContract {
     let rows: WorkflowRunRow[];
     if (opts.workflowId && opts.loopRunId) {
       rows = await this.client.many<WorkflowRunRow>(
-        "SELECT * FROM workflow_runs WHERE workflow_id = $1 AND loop_run_id = $2 ORDER BY created_at DESC LIMIT $3",
+        "SELECT * FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND workflow_id = $1 AND loop_run_id = $2 ORDER BY created_at DESC LIMIT $3",
         [opts.workflowId, opts.loopRunId, limit],
       );
     } else if (opts.workflowId) {
       rows = await this.client.many<WorkflowRunRow>(
-        "SELECT * FROM workflow_runs WHERE workflow_id = $1 ORDER BY created_at DESC LIMIT $2",
+        "SELECT * FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND workflow_id = $1 ORDER BY created_at DESC LIMIT $2",
         [opts.workflowId, limit],
       );
     } else if (opts.loopRunId) {
       rows = await this.client.many<WorkflowRunRow>(
-        "SELECT * FROM workflow_runs WHERE loop_run_id = $1 ORDER BY created_at DESC LIMIT $2",
+        "SELECT * FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND loop_run_id = $1 ORDER BY created_at DESC LIMIT $2",
         [opts.loopRunId, limit],
       );
     } else {
       rows = await this.client.many<WorkflowRunRow>(
-        "SELECT * FROM workflow_runs ORDER BY created_at DESC LIMIT $1",
+        "SELECT * FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() ORDER BY created_at DESC LIMIT $1",
         [limit],
       );
     }
@@ -1418,7 +1480,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
 
   async listWorkflowStepRuns(...args: M<"listWorkflowStepRuns">["args"]): Promise<M<"listWorkflowStepRuns">["result"]> {
     const rows = await this.client.many<WorkflowStepRunRow>(
-      "SELECT * FROM workflow_step_runs WHERE workflow_run_id = $1 ORDER BY sequence ASC",
+      "SELECT * FROM workflow_step_runs WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id = $1 ORDER BY sequence ASC",
       [args[0]],
     );
     return rows.map(rowToWorkflowStepRun);
@@ -1426,7 +1488,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
 
   async getWorkflowStepRun(...args: M<"getWorkflowStepRun">["args"]): Promise<M<"getWorkflowStepRun">["result"]> {
     const row = await this.client.get<WorkflowStepRunRow>(
-      "SELECT * FROM workflow_step_runs WHERE workflow_run_id = $1 AND step_id = $2",
+      "SELECT * FROM workflow_step_runs WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id = $1 AND step_id = $2",
       [args[0], args[1]],
     );
     return row ? rowToWorkflowStepRun(row) : undefined;
@@ -1435,7 +1497,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
   async listWorkflowEvents(...args: M<"listWorkflowEvents">["args"]): Promise<M<"listWorkflowEvents">["result"]> {
     const [workflowRunId, limit = 200] = args as [string, number?];
     const rows = await this.client.many<WorkflowEventRow>(
-      "SELECT * FROM workflow_events WHERE workflow_run_id = $1 ORDER BY sequence ASC LIMIT $2",
+      "SELECT * FROM workflow_events WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id = $1 ORDER BY sequence ASC LIMIT $2",
       [workflowRunId, limit],
     );
     return rows.map(rowToWorkflowEvent);
@@ -1444,7 +1506,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
   // -------------------------------------------------------------- goals (reads)
 
   async getGoal(...args: M<"getGoal">["args"]): Promise<M<"getGoal">["result"]> {
-    const row = await this.client.get<GoalRow>("SELECT * FROM goals WHERE id = $1", [args[0]]);
+    const row = await this.client.get<GoalRow>("SELECT * FROM goals WHERE tenant_id = open_loops_current_tenant_id() AND id = $1", [args[0]]);
     return row ? rowToGoal(row) : undefined;
   }
 
@@ -1453,17 +1515,17 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const limit = opts.limit ?? 100;
     const rows = opts.status
       ? await this.client.many<GoalRow>(
-          "SELECT * FROM goals WHERE status = $1 ORDER BY updated_at DESC LIMIT $2",
+          "SELECT * FROM goals WHERE tenant_id = open_loops_current_tenant_id() AND status = $1 ORDER BY updated_at DESC LIMIT $2",
           [opts.status, limit],
         )
-      : await this.client.many<GoalRow>("SELECT * FROM goals ORDER BY updated_at DESC LIMIT $1", [limit]);
+      : await this.client.many<GoalRow>("SELECT * FROM goals WHERE tenant_id = open_loops_current_tenant_id() ORDER BY updated_at DESC LIMIT $1", [limit]);
     return rows.map(rowToGoal);
   }
 
   async listGoalPlanNodes(...args: M<"listGoalPlanNodes">["args"]): Promise<M<"listGoalPlanNodes">["result"]> {
     const idOrPlan = args[0];
     const rows = await this.client.many<GoalPlanNodeRow>(
-      "SELECT * FROM goal_plan_nodes WHERE goal_id = $1 OR plan_id = $1 ORDER BY sequence ASC",
+      "SELECT * FROM goal_plan_nodes WHERE tenant_id = open_loops_current_tenant_id() AND (goal_id = $1 OR plan_id = $1) ORDER BY sequence ASC",
       [idOrPlan],
     );
     // sqlite mapper reads `ready === 1`; pg boolean comes back true/false, so
@@ -1476,14 +1538,14 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const limit = opts.limit ?? 100;
     let rows: GoalRunRow[];
     if (opts.runId) {
-      rows = await this.client.many<GoalRunRow>("SELECT * FROM goal_runs WHERE id = $1", [opts.runId]);
+      rows = await this.client.many<GoalRunRow>("SELECT * FROM goal_runs WHERE tenant_id = open_loops_current_tenant_id() AND id = $1", [opts.runId]);
     } else if (opts.goalId) {
       rows = await this.client.many<GoalRunRow>(
-        "SELECT * FROM goal_runs WHERE goal_id = $1 ORDER BY created_at ASC LIMIT $2",
+        "SELECT * FROM goal_runs WHERE tenant_id = open_loops_current_tenant_id() AND goal_id = $1 ORDER BY created_at ASC LIMIT $2",
         [opts.goalId, limit],
       );
     } else {
-      rows = await this.client.many<GoalRunRow>("SELECT * FROM goal_runs ORDER BY created_at DESC LIMIT $1", [limit]);
+      rows = await this.client.many<GoalRunRow>("SELECT * FROM goal_runs WHERE tenant_id = open_loops_current_tenant_id() ORDER BY created_at DESC LIMIT $1", [limit]);
     }
     return rows.map(rowToGoalRun);
   }
@@ -1509,8 +1571,8 @@ export class PostgresLoopStorage implements LoopStorageContract {
       updatedAt: now,
     };
     await this.client.execute(
-      `INSERT INTO workflow_specs (id, name, description, version, status, goal_json, steps_json, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9)`,
+      `INSERT INTO workflow_specs (id, name, description, version, status, goal_json, steps_json, created_at, updated_at, tenant_id)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9,open_loops_current_tenant_id())`,
       [
         workflow.id,
         workflow.name,
@@ -1533,11 +1595,11 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const existing =
       (await this.loadWorkflow(this.client, idOrName)) ??
       (await this.client
-        .get<WorkflowRow>("SELECT * FROM workflow_specs WHERE name = $1 AND status = 'active' ORDER BY updated_at DESC LIMIT 1", [idOrName])
+        .get<WorkflowRow>("SELECT * FROM workflow_specs WHERE tenant_id = open_loops_current_tenant_id() AND name = $1 AND status = 'active' ORDER BY updated_at DESC LIMIT 1", [idOrName])
         .then((row) => (row ? rowToWorkflow(row) : undefined)));
     if (!existing) throw new Error(`workflow not found: ${idOrName}`);
     const updated = nowIso();
-    await this.client.execute("UPDATE workflow_specs SET status='archived', updated_at=$1 WHERE id=$2", [updated, existing.id]);
+    await this.client.execute("UPDATE workflow_specs SET status='archived', updated_at=$1 WHERE tenant_id = open_loops_current_tenant_id() AND id=$2", [updated, existing.id]);
     const archived = await this.getWorkflow(existing.id);
     if (!archived) throw new Error(`workflow not found after archive: ${existing.id}`);
     return archived;
@@ -1550,7 +1612,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const sourceDedupeKey = input.sourceRef.dedupeKey ?? undefined;
     if (sourceDedupeKey) {
       const existing = await this.client.get<WorkflowInvocationRow>(
-        "SELECT * FROM workflow_invocations WHERE source_kind = $1 AND source_dedupe_key = $2 LIMIT 1",
+        "SELECT * FROM workflow_invocations WHERE tenant_id = open_loops_current_tenant_id() AND source_kind = $1 AND source_dedupe_key = $2 LIMIT 1",
         [input.sourceRef.kind, sourceDedupeKey],
       );
       if (existing) return rowToWorkflowInvocation(existing);
@@ -1559,8 +1621,8 @@ export class PostgresLoopStorage implements LoopStorageContract {
     await this.client.execute(
       `INSERT INTO workflow_invocations (id, workflow_id, template_id, source_kind, source_id, source_dedupe_key,
         source_json, subject_kind, subject_id, subject_path, subject_url, subject_json, intent, scope_json,
-        output_policy_json, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12::jsonb,$13,$14::jsonb,$15::jsonb,$16,$17)`,
+        output_policy_json, created_at, updated_at, tenant_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12::jsonb,$13,$14::jsonb,$15::jsonb,$16,$17,open_loops_current_tenant_id())`,
       [
         id,
         input.workflowId ?? null,
@@ -1582,7 +1644,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
       ],
     );
     const row = await this.client.get<WorkflowInvocationRow>(
-      "SELECT * FROM workflow_invocations WHERE id = $1",
+      "SELECT * FROM workflow_invocations WHERE tenant_id = open_loops_current_tenant_id() AND id = $1",
       [id],
     );
     if (!row) throw new Error(`workflow invocation not found after create: ${id}`);
@@ -1599,9 +1661,9 @@ export class PostgresLoopStorage implements LoopStorageContract {
     await this.client.execute(
       `INSERT INTO workflow_work_items (id, route_key, idempotency_key, invocation_id, source_type, source_ref,
         subject_ref, project_key, project_group, machine_id, route_scope, priority, status, attempts, next_attempt_at,
-        lease_expires_at, workflow_id, loop_id, workflow_run_id, last_reason, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,0,$14,NULL,NULL,NULL,NULL,$15,$16,$17)
-       ON CONFLICT(route_key, idempotency_key) DO UPDATE SET
+        lease_expires_at, workflow_id, loop_id, workflow_run_id, last_reason, created_at, updated_at, tenant_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,0,$14,NULL,NULL,NULL,NULL,$15,$16,$17,open_loops_current_tenant_id())
+       ON CONFLICT(tenant_id,route_key,idempotency_key) DO UPDATE SET
         invocation_id=excluded.invocation_id,
         source_type=excluded.source_type,
         source_ref=excluded.source_ref,
@@ -1666,7 +1728,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
       ],
     );
     const row = await this.client.get<WorkflowWorkItemRow>(
-      "SELECT * FROM workflow_work_items WHERE route_key = $1 AND idempotency_key = $2 LIMIT 1",
+      "SELECT * FROM workflow_work_items WHERE tenant_id = open_loops_current_tenant_id() AND route_key = $1 AND idempotency_key = $2 LIMIT 1",
       [input.routeKey, input.idempotencyKey],
     );
     if (!row) throw new Error(`workflow work item not found after upsert: ${input.routeKey}/${input.idempotencyKey}`);
@@ -1710,6 +1772,10 @@ export class PostgresLoopStorage implements LoopStorageContract {
   }
 }
 
-export function createPostgresLoopStorage(client: PoolQueryClient): PostgresLoopStorage {
-  return new PostgresLoopStorage(client);
+export function createPostgresLoopStorage(
+  client: PoolQueryClient,
+  context: TenantStorageContext,
+  opts?: { contextAlreadyBound?: boolean },
+): PostgresLoopStorage {
+  return new PostgresLoopStorage(client, context, opts);
 }
