@@ -21,10 +21,12 @@
  * subnet routing — pure API-client path per the locked architecture.
  */
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
+import { resolve as resolvePath } from "node:path";
 import type { Agent, CreateTaskListInput, Plan, Project, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList } from "../types/index.js";
 import { redactEvidenceText } from "../lib/redaction.js";
 
 type Env = Record<string, string | undefined>;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 let _cache: { client: HasnaStorageClient | null } | undefined;
 
@@ -158,6 +160,51 @@ export async function cloudListProjects(client: HasnaStorageClient): Promise<Pro
   const res = await client.list<Project>("projects");
   const envelope = res.raw as { projects?: Project[] } | undefined;
   return Array.isArray(envelope?.projects) ? envelope!.projects : res.items;
+}
+
+function cloudProjectSlug(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+function cloudProjectPathBasename(value: string): string {
+  return value.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? value;
+}
+
+function uniqueProjectMatches(projects: Project[], predicate: (project: Project) => boolean): Project[] {
+  return [...new Map(projects.filter(predicate).map((project) => [project.id, project])).values()];
+}
+
+/** Resolve a cloud project UUID, unique UUID prefix, exact name/path, or canonical slug. */
+export async function cloudResolveProjectRef(client: HasnaStorageClient, ref: string): Promise<string> {
+  const input = ref.trim();
+  const projects = await cloudListProjects(client);
+  const normalizedRef = input.toLowerCase();
+  const pathLike = input.startsWith(".") || input.includes("/") || input.includes("\\");
+  const normalizedPath = pathLike ? resolvePath(input) : undefined;
+  const slug = cloudProjectSlug(pathLike ? cloudProjectPathBasename(input) : input);
+  const matchGroups = [
+    uniqueProjectMatches(projects, (project) => project.id.toLowerCase() === normalizedRef),
+    uniqueProjectMatches(
+      projects,
+      (project) => project.path === input ||
+        (normalizedPath !== undefined && resolvePath(project.path) === normalizedPath),
+    ),
+    uniqueProjectMatches(projects, (project) => project.name.toLowerCase() === normalizedRef),
+    uniqueProjectMatches(
+      projects,
+      (project) => project.task_list_id === input ||
+        cloudProjectSlug(project.name) === slug ||
+        cloudProjectSlug(cloudProjectPathBasename(project.path)) === slug,
+    ),
+    uniqueProjectMatches(projects, (project) => project.id.toLowerCase().startsWith(normalizedRef)),
+  ];
+
+  for (const matches of matchGroups) {
+    if (matches.length === 1) return matches[0]!.id;
+    if (matches.length > 1) throw new Error(`Project reference is ambiguous: "${input}"`);
+  }
+
+  throw new Error(`Project not found: "${input}"`);
 }
 
 /** List plans from the cloud (`GET /v1/plans`), optionally scoped to a project. */
@@ -777,17 +824,39 @@ export async function cloudListTaskLists(client: HasnaStorageClient, projectId?:
   return Array.isArray(raw) ? (raw as TaskList[]) : [];
 }
 
-/** Resolve a cloud task-list UUID, unique UUID prefix, or slug. */
+/** Resolve a cloud task-list UUID, unique UUID prefix, or project-scoped slug. */
 export async function cloudResolveTaskListRef(
   client: HasnaStorageClient,
   ref: string,
   projectId?: string,
-): Promise<string | null> {
+): Promise<string> {
+  const input = ref.trim();
+  const normalizedIdRef = input.toLowerCase();
+  // An unscoped exact UUID is already canonical. A project-scoped UUID must
+  // still be enumerated so create/delete callers cannot cross that boundary.
+  if (UUID_RE.test(input) && !projectId) return normalizedIdRef;
+
   const lists = await cloudListTaskLists(client, projectId);
-  const exact = lists.find((list) => list.id === ref || list.slug === ref);
-  if (exact) return exact.id;
-  const prefixes = lists.filter((list) => list.id.startsWith(ref));
-  return prefixes.length === 1 ? prefixes[0]!.id : null;
+
+  const exactIds = lists.filter((list) => list.id.toLowerCase() === normalizedIdRef);
+  if (exactIds.length === 1) return exactIds[0]!.id;
+  if (exactIds.length > 1) {
+    throw new Error(`Task list reference is ambiguous: "${input}"`);
+  }
+
+  const slugs = lists.filter((list) => list.slug === input);
+  if (slugs.length === 1) return slugs[0]!.id;
+  if (slugs.length > 1) {
+    throw new Error(`Task list reference is ambiguous: "${input}"`);
+  }
+
+  const prefixes = lists.filter((list) => list.id.toLowerCase().startsWith(normalizedIdRef));
+  if (prefixes.length === 1) return prefixes[0]!.id;
+  if (prefixes.length > 1) {
+    throw new Error(`Task list reference is ambiguous: "${input}"`);
+  }
+
+  throw new Error(`Task list not found: "${input}"`);
 }
 
 /** Create a task list in the cloud (`POST /v1/task-lists`). */
