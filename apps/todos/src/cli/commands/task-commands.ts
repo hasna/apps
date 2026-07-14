@@ -30,6 +30,7 @@ import {
   cloudUnlockTask,
   cloudTaskHistory,
   cloudUpsertTaskByFingerprint,
+  cloudResolveProjectRef,
   cloudResolveTaskListRef,
 } from "../cloud-router.js";
 import type { TaskPriority, TaskStatus } from "../../types/index.js";
@@ -566,7 +567,11 @@ export function registerTaskCommands(program: Command) {
       // self_hosted cloud routing: skip local-store detection and resolve explicit
       // project/list filters against the shared API before listing tasks.
       const cloud = getTodosCloudClient();
-      const projectId = cloud ? globalOpts.project : autoProject(globalOpts);
+      const projectId = cloud && globalOpts.project
+        ? await cloudResolveProjectRef(cloud, globalOpts.project)
+        : cloud
+          ? undefined
+          : autoProject(globalOpts);
       const hasAssignedFilter = Boolean(opts.assigned || opts.agentName);
       const hasExplicitProjectFilter = Boolean(globalOpts.project || opts.projectName);
       const allowedSortFields = new Set(["updated", "created", "priority", "status"]);

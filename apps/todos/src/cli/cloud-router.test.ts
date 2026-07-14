@@ -33,6 +33,7 @@ import {
   cloudTimeline,
   cloudCreateTaskList,
   cloudDeleteTaskList,
+  cloudResolveProjectRef,
   cloudResolveTaskListRef,
 } from "./cloud-router.js";
 
@@ -645,6 +646,56 @@ describe("cloud read/analytics routing reads the shared cloud dataset", () => {
 });
 
 describe("cloud task-list, filter, and force-unlock parity", () => {
+  test("project resolution preserves exact UUIDs and resolves unique prefixes, names, slugs, and paths", async () => {
+    installFetch(() => ({
+      body: {
+        projects: [
+          {
+            id: "99999999-9999-4999-8999-999999999999",
+            name: "Open Emails",
+            path: "/workspace/hasna/opensource/open-emails",
+            task_list_id: "emails-canonical",
+          },
+        ],
+      },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    for (const ref of [
+      "99999999-9999-4999-8999-999999999999",
+      "99999999",
+      "Open Emails",
+      "open-emails",
+      "emails-canonical",
+      "/workspace/hasna/opensource/open-emails",
+      "/home/hasna/workspace/hasna/opensource/open-emails",
+    ]) {
+      await expect(cloudResolveProjectRef(client, ref))
+        .resolves.toBe("99999999-9999-4999-8999-999999999999");
+    }
+  });
+
+  test("project resolution fails explicitly for missing and ambiguous references", async () => {
+    installFetch(() => ({
+      body: {
+        projects: [
+          { id: "aaaaaaaa-1111-4111-8111-111111111111", name: "Shared", path: "/one/open-emails" },
+          { id: "aaaaaaaa-2222-4222-8222-222222222222", name: "Shared", path: "/two/open-emails" },
+        ],
+      },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudResolveProjectRef(client, "missing"))
+      .rejects.toThrow('Project not found: "missing"');
+    await expect(cloudResolveProjectRef(client, "Shared"))
+      .rejects.toThrow('Project reference is ambiguous: "Shared"');
+    await expect(cloudResolveProjectRef(client, "open-emails"))
+      .rejects.toThrow('Project reference is ambiguous: "open-emails"');
+    await expect(cloudResolveProjectRef(client, "aaaaaaaa"))
+      .rejects.toThrow('Project reference is ambiguous: "aaaaaaaa"');
+  });
+
   test("list forwards task-list, parent, and multi-status filters", async () => {
     const calls = installFetch(() => ({ body: { tasks: [] } }));
     const client = getTodosCloudClient(CLOUD_ENV)!;
@@ -692,9 +743,9 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
       .resolves.toBe("12345678-1111-4111-8111-111111111111");
     await expect(cloudResolveTaskListRef(client, "12345678"))
       .resolves.toBe("12345678-1111-4111-8111-111111111111");
-    expect(calls[0]!.url).not.toContain("project_id=");
-    expect(calls[1]!.url).toContain("project_id=project-1");
-    expect(calls[2]!.url).not.toContain("project_id=");
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.url).toContain("project_id=project-1");
+    expect(calls[1]!.url).not.toContain("project_id=");
   });
 
   test("task-list resolution fails explicitly for missing and ambiguous references", async () => {
