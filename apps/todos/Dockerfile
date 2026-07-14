@@ -10,10 +10,6 @@ WORKDIR /app
 # workspace to resolve; the dashboard itself is not built in the server image).
 COPY package.json bun.lock ./
 COPY dashboard/package.json ./dashboard/package.json
-# @hasna/contracts is distributed as a vendored tarball (not on public npm),
-# referenced by a relative file: path in package.json/bun.lock so the frozen
-# install resolves inside the build container.
-COPY vendor ./vendor
 RUN bun install --frozen-lockfile --ignore-scripts
 
 FROM --platform=linux/arm64 oven/bun:1 AS build
