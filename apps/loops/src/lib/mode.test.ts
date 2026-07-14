@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { buildDeploymentStatus, normalizeLoopDeploymentMode, resolveLoopDeploymentMode } from "./mode.js";
+import { normalizeStorageMode } from "./cloud/mode.js";
+import { resolveCloudStorage } from "./cloud/resolve.js";
+import { clientTransportEnvKeys, resolveClientTransport } from "./cloud/transport.js";
 
 describe("deployment mode contract", () => {
   test("defaults to local SQLite authority", () => {
@@ -7,7 +10,6 @@ describe("deployment mode contract", () => {
       env: {
         HASNA_LOOPS_STORAGE_MODE: "",
         HASNA_LOOPS_API_URL: "",
-        HASNA_LOOPS_CLOUD_API_URL: "",
         HASNA_LOOPS_DATABASE_URL: "",
       },
     });
@@ -49,12 +51,64 @@ describe("deployment mode contract", () => {
     expect(JSON.stringify(status)).not.toContain("dbPath");
   });
 
-  test("normalizes explicit self-hosted spelling", () => {
-    expect(normalizeLoopDeploymentMode("self-hosted")).toBe("self_hosted");
+  test("accepts only canonical deployment mode spellings", () => {
+    expect(normalizeLoopDeploymentMode("self_hosted")).toBe("self_hosted");
+    for (const legacy of ["self-hosted", "selfhosted", "remote", "hybrid", "saas"]) {
+      expect(() => normalizeLoopDeploymentMode(legacy)).toThrow("unsupported OpenLoops deployment mode");
+    }
     expect(resolveLoopDeploymentMode({ HASNA_LOOPS_STORAGE_MODE: "self_hosted" })).toEqual({
       deploymentMode: "self_hosted",
       source: "HASNA_LOOPS_STORAGE_MODE",
     });
+  });
+
+  test("removes compatibility storage modes and generic environment aliases", () => {
+    expect(normalizeStorageMode("local")).toEqual({ mode: "local" });
+    expect(normalizeStorageMode("self_hosted")).toEqual({ mode: "self_hosted" });
+    expect(normalizeStorageMode("cloud")).toEqual({ mode: "cloud" });
+    for (const legacy of ["selfhosted", "self-hosted", "remote", "hybrid", "saas"]) {
+      expect(() => normalizeStorageMode(legacy)).toThrow("Unknown storage mode");
+    }
+    expect(clientTransportEnvKeys("loops").modeKeys).toEqual(["HASNA_LOOPS_STORAGE_MODE"]);
+    expect(resolveClientTransport("loops", {
+      LOOPS_MODE: "cloud",
+      LOOPS_STORAGE_MODE: "cloud",
+      HASNA_LOOPS_MODE: "cloud",
+      HASNA_LOOPS_API_URL: "https://loops.example.test",
+      HASNA_LOOPS_API_KEY: "ignored-without-canonical-mode",
+    }).transport).toBe("local");
+    expect(resolveCloudStorage("loops", {
+      HASNA_LOOPS_STORAGE_MODE: "self_hosted",
+      HASNA_LOOPS_API_URL: "https://loops.example.test",
+      HASNA_LOOPS_API_KEY: "key",
+    }).transport).toBe("cloud-http");
+    expect(() => resolveCloudStorage("loops", {
+      HASNA_LOOPS_STORAGE_MODE: "selfhosted",
+      HASNA_LOOPS_API_URL: "https://loops.example.test",
+      HASNA_LOOPS_API_KEY: "key",
+    })).toThrow("Unknown deployment mode");
+  });
+
+  test("fails closed for every partial remote client configuration", () => {
+    for (const mode of ["self_hosted", "cloud"]) {
+      expect(() => resolveCloudStorage("loops", {
+        HASNA_LOOPS_STORAGE_MODE: mode,
+      })).toThrow("requires both HASNA_LOOPS_API_URL and HASNA_LOOPS_API_KEY");
+      expect(() => resolveCloudStorage("loops", {
+        HASNA_LOOPS_STORAGE_MODE: mode,
+        HASNA_LOOPS_API_URL: "https://loops.example.test",
+      })).toThrow("requires both HASNA_LOOPS_API_URL and HASNA_LOOPS_API_KEY");
+      expect(() => resolveCloudStorage("loops", {
+        HASNA_LOOPS_STORAGE_MODE: mode,
+        HASNA_LOOPS_API_KEY: "key",
+      })).toThrow("requires both HASNA_LOOPS_API_URL and HASNA_LOOPS_API_KEY");
+    }
+    expect(() => resolveCloudStorage("loops", {
+      HASNA_LOOPS_API_URL: "https://loops.example.test",
+    })).toThrow("requires both HASNA_LOOPS_API_URL and HASNA_LOOPS_API_KEY");
+    expect(() => resolveCloudStorage("loops", {
+      HASNA_LOOPS_API_KEY: "key",
+    })).toThrow("requires both HASNA_LOOPS_API_URL and HASNA_LOOPS_API_KEY");
   });
 
   test("detects self-hosted control plane from API configuration", () => {
@@ -118,7 +172,7 @@ describe("deployment mode contract", () => {
     const status = buildDeploymentStatus({
       env: {
         HASNA_LOOPS_STORAGE_MODE: "cloud",
-        HASNA_LOOPS_CLOUD_API_URL: "https://loops.example.test",
+        HASNA_LOOPS_API_URL: "https://loops.example.test",
         HASNA_LOOPS_API_KEY: "present-but-not-returned",
       },
     });
@@ -143,22 +197,21 @@ describe("deployment mode contract", () => {
     const urlOnly = buildDeploymentStatus({
       env: {
         HASNA_LOOPS_STORAGE_MODE: "cloud",
-        HASNA_LOOPS_CLOUD_API_URL: "https://loops.example.test",
+        HASNA_LOOPS_API_URL: "https://loops.example.test",
       },
     });
     expect(urlOnly.controlPlane.configured).toBe(false);
     expect(urlOnly.warnings.join(" ")).toContain("HASNA_LOOPS_API_KEY");
 
-    const genericApiUrl = buildDeploymentStatus({
+    const configured = buildDeploymentStatus({
       env: {
         HASNA_LOOPS_STORAGE_MODE: "cloud",
-        HASNA_LOOPS_API_URL: "https://self-hosted.example.test",
-        HASNA_LOOPS_API_KEY: "self-hosted-token",
+        HASNA_LOOPS_API_URL: "https://loops.example.test",
+        HASNA_LOOPS_API_KEY: "cloud-token",
       },
     });
-    expect(genericApiUrl.controlPlane.configured).toBe(false);
-    expect(genericApiUrl.controlPlane.apiUrl).toBeUndefined();
-    expect(genericApiUrl.warnings.join(" ")).toContain("cloud mode uses HASNA_LOOPS_CLOUD_API_URL");
+    expect(configured.controlPlane.configured).toBe(true);
+    expect(configured.controlPlane.apiUrl).toBe("https://loops.example.test");
   });
 
   test("uses deploymentMode vocabulary to avoid overloaded runtime mode fields", () => {

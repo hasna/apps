@@ -15,6 +15,7 @@ import pg from "pg";
 import { PgPoolExecutor } from "./pg-executor.js";
 import { PostgresStorage } from "./postgres.js";
 import { PostgresLoopStorage, NotImplementedError } from "./postgres-loop-storage.js";
+import { isSafeServiceConnection } from "../../serve/index.js";
 import type { CreateLoopInput, Loop, LoopRun, WorkflowSpec } from "../../types.js";
 
 const DATABASE_URL = process.env.LOOPS_TEST_DATABASE_URL;
@@ -28,10 +29,20 @@ const suite = RUN_LIVE ? describe : describe.skip;
 const ISO_DB = `loops_pgstore_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
 const RUNTIME_LOGIN = `loops_runtime_test_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
 const RUNTIME_PASSWORD = `runtime-test-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+const AUTH_LOGIN = `loops_auth_test_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+const AUTH_PASSWORD = `auth-test-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+const UNSAFE_LOGIN = `loops_unsafe_test_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+const CROSS_ROLE_LOGIN = `loops_cross_test_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+const BRIDGE_ROLE = `loops_bridge_test_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+const BRIDGE_LOGIN = `loops_bridge_login_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+const EXTRA_AUTH_ROLE = `loops_auth_extra_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+const ADMIN_LOGIN = `loops_admin_option_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
 function isolatedUrl(credentials?: { username: string; password: string }): string {
   const u = new URL(DATABASE_URL!);
   u.pathname = `/${ISO_DB}`;
   if (credentials) {
+    u.searchParams.delete("host");
+    u.hostname = "127.0.0.1";
     u.username = credentials.username;
     u.password = credentials.password;
   }
@@ -59,7 +70,13 @@ function loopInput(name: string, over: Partial<CreateLoopInput> = {}): CreateLoo
 suite("PostgresLoopStorage (live)", () => {
   let executor: PgPoolExecutor;
   let runtimeExecutor: PgPoolExecutor;
+  let authExecutor: PgPoolExecutor;
   let storage: PostgresLoopStorage;
+  let unsafeMembershipRemoved = false;
+  let unsafeDirectPrivilegesRemoved = false;
+  let ownedObjectRejected = false;
+  let bridgeMembershipRemoved = false;
+  let adminMembershipRemoved = false;
 
   beforeAll(async () => {
     await admin(`CREATE DATABASE ${ISO_DB}`);
@@ -72,11 +89,107 @@ suite("PostgresLoopStorage (live)", () => {
        INSERT INTO tenant_memberships(tenant_id, principal_id, status) VALUES ('tenant-test', 'principal-test', 'active');
        INSERT INTO tenant_membership_roles(tenant_id, principal_id, role) VALUES ('tenant-test', 'principal-test', 'service');`,
     );
+    await admin(`
+      DO $roles$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='open_loops_owner') THEN CREATE ROLE open_loops_owner LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS; END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='open_loops_migrator') THEN CREATE ROLE open_loops_migrator LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS; END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='open_loops_runtime') THEN CREATE ROLE open_loops_runtime LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS; END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='open_loops_authenticator') THEN CREATE ROLE open_loops_authenticator LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS; END IF;
+      END $roles$;
+      ALTER ROLE open_loops_owner LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS;
+      ALTER ROLE open_loops_migrator LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS;
+      ALTER ROLE open_loops_runtime LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS;
+      ALTER ROLE open_loops_authenticator LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS;
+      CREATE ROLE ${UNSAFE_LOGIN} LOGIN BYPASSRLS;
+      GRANT open_loops_runtime TO ${UNSAFE_LOGIN};
+      CREATE ROLE ${CROSS_ROLE_LOGIN} LOGIN;
+      GRANT open_loops_owner, open_loops_runtime TO ${CROSS_ROLE_LOGIN};
+      CREATE ROLE ${BRIDGE_ROLE} NOLOGIN;
+      CREATE ROLE ${BRIDGE_LOGIN} LOGIN;
+      GRANT open_loops_runtime TO ${BRIDGE_ROLE};
+      GRANT ${BRIDGE_ROLE} TO ${BRIDGE_LOGIN};
+      CREATE ROLE ${ADMIN_LOGIN} LOGIN;
+      GRANT open_loops_runtime TO ${ADMIN_LOGIN} WITH ADMIN OPTION;
+      CREATE ROLE ${RUNTIME_LOGIN} LOGIN PASSWORD '${RUNTIME_PASSWORD}' NOBYPASSRLS;
+      GRANT open_loops_runtime TO ${RUNTIME_LOGIN};
+      ALTER ROLE ${RUNTIME_LOGIN} SET search_path=evil,public;
+      CREATE ROLE ${AUTH_LOGIN} LOGIN PASSWORD '${AUTH_PASSWORD}' NOBYPASSRLS;
+      GRANT open_loops_authenticator TO ${AUTH_LOGIN};
+    `);
+    await admin(`
+      GRANT CONNECT ON DATABASE ${ISO_DB} TO ${RUNTIME_LOGIN}, ${AUTH_LOGIN}, ${UNSAFE_LOGIN}, ${CROSS_ROLE_LOGIN}, ${ADMIN_LOGIN};
+      GRANT CREATE ON DATABASE ${ISO_DB} TO ${RUNTIME_LOGIN};
+    `);
+    await executor.queryClient.execute(`
+      GRANT CREATE ON SCHEMA public TO ${RUNTIME_LOGIN};
+      GRANT CREATE ON SCHEMA public TO ${AUTH_LOGIN};
+      GRANT SELECT ON tenants TO ${RUNTIME_LOGIN};
+      GRANT SELECT ON tenants TO ${UNSAFE_LOGIN};
+      CREATE FUNCTION public.open_loops_authenticate_key(TEXT, TEXT)
+      RETURNS TABLE (
+        kid TEXT, app TEXT, agent TEXT, scopes JSONB, token_hash TEXT, issued_at TIMESTAMPTZ,
+        expires_at TIMESTAMPTZ, revoked_at TIMESTAMPTZ, disabled_at TIMESTAMPTZ,
+        tenant_id TEXT, tenant_status TEXT, principal_id TEXT, principal_status TEXT,
+        membership_status TEXT, token_kind TEXT, roles TEXT[]
+      ) LANGUAGE sql AS 'SELECT NULL::TEXT, NULL::TEXT, NULL::TEXT, NULL::JSONB, NULL::TEXT,
+        NULL::TIMESTAMPTZ, NULL::TIMESTAMPTZ, NULL::TIMESTAMPTZ, NULL::TIMESTAMPTZ,
+        NULL::TEXT, NULL::TEXT, NULL::TEXT, NULL::TEXT, NULL::TEXT, NULL::TEXT, NULL::TEXT[] WHERE false';
+      CREATE FUNCTION public.open_loops_append_auth_audit(TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, JSONB)
+      RETURNS VOID LANGUAGE plpgsql AS 'BEGIN NULL; END';
+      GRANT EXECUTE ON FUNCTION public.open_loops_authenticate_key(TEXT, TEXT) TO open_loops_runtime;
+      GRANT EXECUTE ON FUNCTION public.open_loops_append_auth_audit(TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, JSONB)
+        TO open_loops_runtime;
+      SET ROLE ${RUNTIME_LOGIN};
+      CREATE SCHEMA service_owned_probe;
+      CREATE FUNCTION service_owned_probe.escalate() RETURNS INTEGER
+        LANGUAGE sql SECURITY DEFINER RETURN 1;
+      RESET ROLE;
+    `);
+    try {
+      await schema.migrate();
+    } catch (error) {
+      ownedObjectRejected = error instanceof Error && error.message.includes("owns database objects");
+    }
+    await executor.queryClient.execute(`DROP SCHEMA service_owned_probe CASCADE`);
     await schema.migrate();
-    await admin(`CREATE ROLE ${RUNTIME_LOGIN} LOGIN PASSWORD '${RUNTIME_PASSWORD}' NOBYPASSRLS; GRANT open_loops_runtime TO ${RUNTIME_LOGIN}`);
+    const unsafeMembership = await executor.queryClient.get(
+      `SELECT 1 FROM pg_auth_members membership
+        JOIN pg_roles granted ON granted.oid=membership.roleid
+        JOIN pg_roles member ON member.oid=membership.member
+       WHERE granted.rolname='open_loops_runtime' AND member.rolname=$1`, [UNSAFE_LOGIN],
+    );
+    unsafeMembershipRemoved = !unsafeMembership;
+    const crossMembership = await executor.queryClient.get(
+      `SELECT 1 FROM pg_auth_members membership
+        JOIN pg_roles granted ON granted.oid=membership.roleid
+        JOIN pg_roles member ON member.oid=membership.member
+       WHERE granted.rolname='open_loops_runtime' AND member.rolname=$1`, [CROSS_ROLE_LOGIN],
+    );
+    unsafeMembershipRemoved = unsafeMembershipRemoved && !crossMembership;
+    bridgeMembershipRemoved = !(await executor.queryClient.get<{ inherited: boolean }>(
+      "SELECT pg_has_role($1, 'open_loops_runtime', 'MEMBER') AS inherited", [BRIDGE_LOGIN],
+    ))?.inherited;
+    adminMembershipRemoved = !(await executor.queryClient.get<{ inherited: boolean }>(
+      "SELECT pg_has_role($1, 'open_loops_runtime', 'MEMBER') AS inherited", [ADMIN_LOGIN],
+    ))?.inherited;
+    unsafeDirectPrivilegesRemoved = !(await executor.queryClient.get<{ can_select: boolean }>(
+      "SELECT has_table_privilege($1, 'tenants', 'SELECT') AS can_select", [UNSAFE_LOGIN],
+    ))?.can_select;
+    await admin(`DROP ROLE ${UNSAFE_LOGIN}; DROP ROLE ${CROSS_ROLE_LOGIN}; DROP ROLE ${BRIDGE_LOGIN}; DROP ROLE ${BRIDGE_ROLE}; DROP ROLE ${ADMIN_LOGIN}`);
+    await executor.queryClient.execute(`
+      CREATE SCHEMA evil;
+      CREATE TABLE evil.loops(id TEXT PRIMARY KEY);
+      GRANT USAGE ON SCHEMA evil TO open_loops_runtime;
+      GRANT SELECT, INSERT, UPDATE, DELETE ON evil.loops TO open_loops_runtime;
+    `);
+    await admin(`ALTER ROLE ${AUTH_LOGIN} SET search_path=evil,public`);
     runtimeExecutor = PgPoolExecutor.fromConnectionString({
       connectionString: isolatedUrl({ username: RUNTIME_LOGIN, password: RUNTIME_PASSWORD }),
       applicationName: "loops-pgstore-runtime-test",
+    });
+    authExecutor = PgPoolExecutor.fromConnectionString({
+      connectionString: isolatedUrl({ username: AUTH_LOGIN, password: AUTH_PASSWORD }),
+      applicationName: "loops-pgstore-auth-test",
     });
     storage = new PostgresLoopStorage(executor.queryClient, {
       tenantId: "tenant-test",
@@ -86,10 +199,61 @@ suite("PostgresLoopStorage (live)", () => {
   });
 
   afterAll(async () => {
-    await runtimeExecutor.close();
-    await executor.close();
+    if (authExecutor) await authExecutor.close();
+    if (runtimeExecutor) await runtimeExecutor.close();
+    if (executor) await executor.close();
     await admin(`DROP DATABASE IF EXISTS ${ISO_DB} WITH (FORCE)`);
-    await admin(`DROP ROLE IF EXISTS ${RUNTIME_LOGIN}`);
+    await admin(`
+      DROP OWNED BY ${RUNTIME_LOGIN};
+      DROP OWNED BY ${AUTH_LOGIN};
+      DROP ROLE IF EXISTS ${RUNTIME_LOGIN};
+      DROP ROLE IF EXISTS ${AUTH_LOGIN};
+    `);
+    await admin(`DROP ROLE IF EXISTS ${EXTRA_AUTH_ROLE}`);
+  });
+
+  test("tenant enforcement normalizes poisoned roles and removes unsafe service members", async () => {
+    expect(unsafeMembershipRemoved).toBe(true);
+    expect(unsafeDirectPrivilegesRemoved).toBe(true);
+    expect(ownedObjectRejected).toBe(true);
+    expect(bridgeMembershipRemoved).toBe(true);
+    expect(adminMembershipRemoved).toBe(true);
+    const roles = await executor.queryClient.many<{
+      rolname: string; rolcanlogin: boolean; rolsuper: boolean; rolcreatedb: boolean;
+      rolcreaterole: boolean; rolreplication: boolean; rolbypassrls: boolean;
+    }>(`SELECT rolname, rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls
+          FROM pg_roles WHERE rolname = ANY($1::text[]) ORDER BY rolname`, [[
+      "open_loops_owner", "open_loops_migrator", "open_loops_runtime", "open_loops_authenticator",
+    ]]);
+    expect(roles).toHaveLength(4);
+    for (const role of roles) {
+      expect(role).toMatchObject({
+        rolcanlogin: false, rolsuper: false, rolcreatedb: false, rolcreaterole: false,
+        rolreplication: false, rolbypassrls: false,
+      });
+    }
+    expect(await executor.queryClient.get<{ can_create: boolean }>(
+      "SELECT has_schema_privilege($1, 'public', 'CREATE') AS can_create", [RUNTIME_LOGIN],
+    )).toEqual({ can_create: false });
+    expect(await executor.queryClient.get<{ can_create: boolean }>(
+      "SELECT has_schema_privilege($1, 'public', 'CREATE') AS can_create", [AUTH_LOGIN],
+    )).toEqual({ can_create: false });
+    expect(await executor.queryClient.get<{ can_select: boolean }>(
+      "SELECT has_table_privilege($1, 'tenants', 'SELECT') AS can_select", [RUNTIME_LOGIN],
+    )).toEqual({ can_select: false });
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
+    expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(true);
+    expect(await isSafeServiceConnection(executor.queryClient, "open_loops_runtime")).toBe(false);
+    await admin(`ALTER ROLE ${AUTH_LOGIN} NOINHERIT`);
+    expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(false);
+    await admin(`ALTER ROLE ${AUTH_LOGIN} INHERIT; CREATE ROLE ${EXTRA_AUTH_ROLE}`);
+    await executor.queryClient.execute(`GRANT SELECT ON api_keys TO ${EXTRA_AUTH_ROLE}`);
+    await admin(`GRANT ${EXTRA_AUTH_ROLE} TO ${AUTH_LOGIN}`);
+    expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(false);
+    expect(await authExecutor.queryClient.get("SELECT token_hash FROM api_keys LIMIT 1")).toBeNull();
+    await admin(`REVOKE ${EXTRA_AUTH_ROLE} FROM ${AUTH_LOGIN}`);
+    await executor.queryClient.execute(`REVOKE SELECT ON api_keys FROM ${EXTRA_AUTH_ROLE}`);
+    await admin(`DROP ROLE ${EXTRA_AUTH_ROLE}`);
   });
 
   beforeEach(async () => {
@@ -473,7 +637,12 @@ suite("PostgresLoopStorage (live)", () => {
       ) VALUES ('audit-key', 'loops', 'principal-test', '["loops:read"]', 'audit-hash', now(),
         'tenant-test', 'principal-test', 'api_key')`,
     );
-    await runtimeExecutor.queryClient.execute(
+    expect(await authExecutor.queryClient.get<{ tenant_id: string; principal_id: string }>(
+      "SELECT tenant_id, principal_id FROM open_loops_authenticate_key($1,$2)", ["audit-key", "audit-hash"],
+    )).toEqual({ tenant_id: "tenant-test", principal_id: "principal-test" });
+    await expect(authExecutor.queryClient.get("SELECT token_hash FROM api_keys LIMIT 1"))
+      .rejects.toMatchObject({ code: "42501" });
+    await authExecutor.queryClient.execute(
       "SELECT open_loops_append_auth_audit($1,$2,$3,$4,$5,$6,$7,$8::jsonb)",
       ["audit-event", "audit-key", "audit-hash", "audit-request", "loops.list", "allow", null, "{}"],
     );
@@ -481,6 +650,22 @@ suite("PostgresLoopStorage (live)", () => {
       "SELECT tenant_id, principal_id FROM audit_events WHERE id='audit-event'",
     );
     expect(row).toEqual({ tenant_id: "tenant-test", principal_id: "principal-test" });
+  });
+
+  test("runtime login cannot execute authentication functions or forge audit rows", async () => {
+    await expect(runtimeExecutor.queryClient.get(
+      "SELECT * FROM open_loops_authenticate_key($1,$2)", ["missing", "missing"],
+    )).rejects.toMatchObject({ code: "42501" });
+    await expect(runtimeExecutor.queryClient.execute(
+      "SELECT open_loops_append_auth_audit($1,$2,$3,$4,$5,$6,$7,$8::jsonb)",
+      ["forged", null, null, "request", "loops.list", "deny", "forged", "{}"],
+    )).rejects.toMatchObject({ code: "42501" });
+    await expect(runtimeExecutor.withRequestContext(
+      { tenantId: "tenant-test", principalId: "principal-test", requestId: "forge-insert" },
+      (client) => client.execute(
+        "INSERT INTO audit_events(tenant_id,id,actor,action,subject_type,subject_id,metadata_json,created_at) VALUES ('tenant-test','forged','x','auth.allow','api_request','x','{}',now())",
+      ),
+    )).rejects.toMatchObject({ code: "42501" });
   });
 
   test("request transactions do not leak tenant context and roll back failures", async () => {

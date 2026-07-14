@@ -7,39 +7,25 @@
 // Amendment A1 (PURE REMOTE): there are exactly two runtime modes.
 //   - `local` : SQLite at ~/.hasna/<name>/<name>.db is authoritative.
 //   - `cloud` : reads AND writes go directly to the app's cloud Postgres.
-// There is NO sync engine, NO cache-as-mode, and NO hybrid/remote/self_hosted
-// runtime. The legacy words `remote`, `hybrid`, and `self_hosted` are accepted
-// only as deprecated *aliases* that normalize to `cloud`.
+// There is no compatibility mode vocabulary.
 
 export const STORAGE_MODES = ["local", "cloud"] as const;
 export type StorageMode = (typeof STORAGE_MODES)[number];
-
-export const DEPRECATED_STORAGE_MODE_ALIASES = [
-  "remote",
-  "hybrid",
-  "self_hosted",
-] as const;
 
 export type Env = Record<string, string | undefined>;
 
 export interface StorageModeNormalization {
   mode: StorageMode;
-  /** The deprecated alias that was normalized to `cloud`, if any. */
-  deprecatedAlias: string | null;
 }
 
 /**
  * Normalize a raw storage-mode string to the `local | cloud` runtime enum.
- * Accepts deprecated aliases (`remote`, `hybrid`, `self_hosted`) and maps them
- * to `cloud`. Throws on any other value.
+ * Accept only the canonical local/cloud values.
  */
 export function normalizeStorageMode(value: string): StorageModeNormalization {
-  const normalized = value.trim().toLowerCase().replace(/-/g, "_");
-  if (normalized === "local") return { mode: "local", deprecatedAlias: null };
-  if (normalized === "cloud") return { mode: "cloud", deprecatedAlias: null };
-  if ((DEPRECATED_STORAGE_MODE_ALIASES as readonly string[]).includes(normalized)) {
-    return { mode: "cloud", deprecatedAlias: normalized };
-  }
+  const normalized = value.trim();
+  if (normalized === "local") return { mode: "local" };
+  if (normalized === "cloud") return { mode: "cloud" };
   throw new Error(`Unknown storage mode: ${value}. Use local or cloud.`);
 }
 
@@ -49,9 +35,9 @@ export function envToken(name: string): string {
 }
 
 export interface StorageEnvKeys {
-  /** `HASNA_<NAME>_STORAGE_MODE` then the optional `<NAME>_STORAGE_MODE` alias. */
+  /** Canonical storage mode key. */
   modeKeys: string[];
-  /** `HASNA_<NAME>_DATABASE_URL` then the optional `<NAME>_DATABASE_URL` alias. */
+  /** Canonical database URL key. */
   databaseUrlKeys: string[];
 }
 
@@ -59,8 +45,8 @@ export interface StorageEnvKeys {
 export function storageEnvKeys(name: string): StorageEnvKeys {
   const token = envToken(name);
   return {
-    modeKeys: [`HASNA_${token}_STORAGE_MODE`, `${token}_STORAGE_MODE`],
-    databaseUrlKeys: [`HASNA_${token}_DATABASE_URL`, `${token}_DATABASE_URL`],
+    modeKeys: [`HASNA_${token}_STORAGE_MODE`],
+    databaseUrlKeys: [`HASNA_${token}_DATABASE_URL`],
   };
 }
 
@@ -76,7 +62,6 @@ export interface StorageModeResolution {
   mode: StorageMode;
   /** Env key the mode came from, or `"default"`. */
   source: string;
-  deprecatedAlias: string | null;
   databaseUrlPresent: boolean;
   /** Env key the database URL came from, or `null`. */
   databaseUrlSource: string | null;
@@ -85,8 +70,7 @@ export interface StorageModeResolution {
 
 /**
  * Resolve an app's storage mode from the environment per the contract env spec.
- * Precedence: `HASNA_<NAME>_STORAGE_MODE`, then `<NAME>_STORAGE_MODE`, else
- * `local`. Never reads secret values — only detects DATABASE_URL presence.
+ * Unset mode means `local`. Never reads secret values.
  */
 export function resolveStorageMode(name: string, env: Env = process.env): StorageModeResolution {
   const { modeKeys, databaseUrlKeys } = storageEnvKeys(name);
@@ -99,31 +83,21 @@ export function resolveStorageMode(name: string, env: Env = process.env): Storag
     return {
       mode: "local",
       source: "default",
-      deprecatedAlias: null,
       databaseUrlPresent,
       databaseUrlSource,
       warning: null,
     };
   }
 
-  const { mode, deprecatedAlias } = normalizeStorageMode(modeHit.value);
+  const { mode } = normalizeStorageMode(modeHit.value);
   const warnings: string[] = [];
-  if (deprecatedAlias) {
-    warnings.push(
-      `Deprecated storage mode '${deprecatedAlias}' from ${modeHit.key} is treated as 'cloud'. Set ${modeKeys[0]}=cloud instead.`,
-    );
-  }
   if (mode === "cloud" && !databaseUrlPresent) {
     warnings.push(`cloud mode needs ${databaseUrlKeys[0]} (PURE REMOTE: reads and writes go to cloud Postgres).`);
-  }
-  if (modeHit.key !== modeKeys[0]) {
-    warnings.push(`Using alias env ${modeHit.key}; the canonical key is ${modeKeys[0]}.`);
   }
 
   return {
     mode,
     source: modeHit.key,
-    deprecatedAlias,
     databaseUrlPresent,
     databaseUrlSource,
     warning: warnings.length > 0 ? warnings.join(" ") : null,
@@ -131,8 +105,8 @@ export function resolveStorageMode(name: string, env: Env = process.env): Storag
 }
 
 /**
- * Resolve the database URL value for an app, honoring the canonical then alias
- * env keys. Returns `null` when unset. The caller is responsible for never
+ * Resolve the canonical database URL value for an app. Returns `null` when
+ * unset. The caller is responsible for never
  * logging the returned value.
  */
 export function resolveDatabaseUrl(name: string, env: Env = process.env): string | null {

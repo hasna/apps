@@ -753,7 +753,7 @@ program
   .option("--json", "print JSON")
   .action(runAction(deploymentStatusCommand()));
 
-const selfHosted = program.command("self-hosted").alias("selfhosted").description("inspect the self-hosted OpenLoops contract");
+const selfHosted = program.command("self-hosted").description("inspect the self-hosted OpenLoops contract");
 selfHosted
   .command("status")
   .option("--json", "print JSON")

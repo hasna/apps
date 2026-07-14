@@ -12,20 +12,28 @@ import { PgPoolExecutor } from "../src/lib/storage/pg-executor.js";
 import { createPostgresLoopStorage } from "../src/lib/storage/postgres-loop-storage.js";
 import { LoopsClient } from "../src/sdk/http.js";
 
-const dsn = process.env.TUNNEL_DATABASE_URL?.trim();
-if (!dsn) throw new Error("set TUNNEL_DATABASE_URL");
+const migratorDsn = process.env.TUNNEL_MIGRATOR_DATABASE_URL?.trim();
+if (!migratorDsn) throw new Error("set TUNNEL_MIGRATOR_DATABASE_URL");
+const runtimeDsn = process.env.TUNNEL_RUNTIME_DATABASE_URL?.trim();
+if (!runtimeDsn) throw new Error("set TUNNEL_RUNTIME_DATABASE_URL");
+const authDsn = process.env.TUNNEL_AUTH_DATABASE_URL?.trim();
+if (!authDsn) throw new Error("set TUNNEL_AUTH_DATABASE_URL");
 const signingSecret = process.env.HASNA_LOOPS_API_SIGNING_KEY?.trim();
 if (!signingSecret) throw new Error("set HASNA_LOOPS_API_SIGNING_KEY");
 
-const pool = new Pool({ connectionString: dsn.split("?")[0], ssl: { rejectUnauthorized: false }, max: 3 });
-const client = createQueryClient(pool);
-const executor = new PgPoolExecutor(client);
+const migratorPool = new Pool({ connectionString: migratorDsn.split("?")[0], ssl: { rejectUnauthorized: false }, max: 2 });
+const runtimePool = new Pool({ connectionString: runtimeDsn.split("?")[0], ssl: { rejectUnauthorized: false }, max: 3 });
+const authPool = new Pool({ connectionString: authDsn.split("?")[0], ssl: { rejectUnauthorized: false }, max: 2 });
+const migratorClient = createQueryClient(migratorPool);
+const runtimeClient = createQueryClient(runtimePool);
+const authClient = createQueryClient(authPool);
+const executor = new PgPoolExecutor(runtimeClient);
 const tenantId = process.env.HASNA_LOOPS_TENANT_ID?.trim();
 if (!tenantId) throw new Error("set HASNA_LOOPS_TENANT_ID");
 const principalId = process.env.HASNA_LOOPS_PRINCIPAL_ID?.trim();
 if (!principalId) throw new Error("set HASNA_LOOPS_PRINCIPAL_ID");
 
-const authenticator = new TenantApiAuthenticator(client, signingSecret);
+const authenticator = new TenantApiAuthenticator(authClient, signingSecret);
 
 const server = createLoopsApiServer({
   host: "127.0.0.1",
@@ -36,7 +44,8 @@ const server = createLoopsApiServer({
       fn(createPostgresLoopStorage(transactionClient, principal, { contextAlreadyBound: true }))),
   readyCheck: async () => {
     try {
-      await client.get("SELECT 1 AS ready");
+      await runtimeClient.get("SELECT 1 AS runtime_ready");
+      await authClient.get("SELECT 1 AS auth_ready");
       return { ready: true };
     } catch (error) {
       return { ready: false, detail: error instanceof Error ? error.message : "storage_unreachable" };
@@ -64,7 +73,7 @@ assert(noauth.status === 401, `unauth /v1 -> ${noauth.status} (expected 401)`);
 
 // Mint + persist a real API key
 const minted = await mintApiKey({ app: "loops", agent: principalId, scopes: ["loops:*"], signingSecret });
-await client.transaction(async (tx) => {
+await migratorClient.transaction(async (tx) => {
   await tx.execute("SET LOCAL ROLE open_loops_owner");
   await tx.get("SELECT set_config('open_loops.tenant_id', $1, true)", [tenantId]);
   await tx.execute(
@@ -98,7 +107,7 @@ const deleted = await api.deleteLoop(id);
 assert(deleted.deleted === true, "deleteLoop");
 
 // Revocation takes effect
-await client.transaction(async (tx) => {
+await migratorClient.transaction(async (tx) => {
   await tx.execute("SET LOCAL ROLE open_loops_owner");
   await tx.get("SELECT set_config('open_loops.tenant_id', $1, true)", [tenantId]);
   await tx.execute("UPDATE api_keys SET revoked_at=now(), revoked_reason='smoke-cleanup' WHERE tenant_id=$1 AND kid=$2", [tenantId, minted.kid]);
@@ -108,5 +117,5 @@ assert(afterRevoke.status === 403 || afterRevoke.status === 401, `revoked key ->
 
 console.log(JSON.stringify({ evt: "smoke_ok", loopId: id, kid: minted.kid }));
 server.stop();
-await pool.end();
+await Promise.all([migratorPool.end(), runtimePool.end(), authPool.end()]);
 process.exit(0);

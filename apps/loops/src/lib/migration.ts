@@ -499,7 +499,7 @@ function envValue(env: NodeJS.ProcessEnv, keys: readonly string[]): string | und
 function resolveApiConfig(opts: { apiUrl?: string; apiKey?: string; env?: NodeJS.ProcessEnv }): { apiUrl?: string; token?: string } {
   const env = opts.env ?? process.env;
   return {
-    apiUrl: opts.apiUrl ?? envValue(env, ["HASNA_LOOPS_API_URL", "HASNA_LOOPS_CLOUD_API_URL"]),
+    apiUrl: opts.apiUrl ?? envValue(env, ["HASNA_LOOPS_API_URL"]),
     token: opts.apiKey ?? envValue(env, ["HASNA_LOOPS_API_KEY"]),
   };
 }

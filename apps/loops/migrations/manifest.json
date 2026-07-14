@@ -49,7 +49,7 @@
     {
       "id": "0010_tenant_enforce",
       "file": "0010_tenant_enforce.sql",
-      "checksum": "sha256:e6f2a636203bd443b603eaad0edb6864811958a093cea465a9ed5b5e5632f16d"
+      "checksum": "sha256:eda3dfcc05d9207c18792de9c2afdfb1e004bcb92def59cdbb509d5813f9f355"
     }
   ]
 }

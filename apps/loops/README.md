@@ -39,15 +39,14 @@ OpenLoops has three deployment modes:
 
 `local` is the default and requires no network, token, Postgres, or hosted
 service. Set `HASNA_LOOPS_STORAGE_MODE` to `local`, `self_hosted`, or
-`cloud` to choose explicitly. Without an explicit mode, `HASNA_LOOPS_CLOUD_API_URL`
-selects `cloud`, while `HASNA_LOOPS_API_URL` or `HASNA_LOOPS_DATABASE_URL` selects
-`self_hosted`.
+`cloud` to choose explicitly. Without an explicit mode,
+`HASNA_LOOPS_API_URL` or `HASNA_LOOPS_DATABASE_URL` selects `self_hosted`.
 
 The public `@hasna/loops` package owns the local runtime, mode resolver,
 self-hosted API contract, tenant authentication and authorization, runner
 contract, SDK, MCP server, and CLI. Account provisioning and infrastructure
 deployment remain operator responsibilities. Cloud clients use
-`HASNA_LOOPS_CLOUD_API_URL` plus `HASNA_LOOPS_API_KEY`.
+`HASNA_LOOPS_API_URL` plus `HASNA_LOOPS_API_KEY`.
 
 Scheduler state is explicit in status JSON. `schedulerState.localStore` is
 SQLite plus local run artifact files: authoritative in `local`, cache/spool in
@@ -80,6 +79,7 @@ loops cloud status
 loops-api status
 loops-serve version
 HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --dry-run
+HASNA_LOOPS_DATABASE_URL=... HASNA_LOOPS_AUTH_DATABASE_URL=... loops-serve serve
 loops-runner status
 ```
 

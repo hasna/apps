@@ -36,6 +36,13 @@ describe("getStore resolver", () => {
     expect(store.transport).toBe("cloud-http");
     expect(isCloudStore({ HASNA_LOOPS_API_URL: "https://loops.example.test", HASNA_LOOPS_API_KEY: "k" })).toBe(true);
   });
+
+  test("rejects partial remote configuration instead of opening LocalStore", () => {
+    expect(() => getStore({ HASNA_LOOPS_API_URL: "https://loops.example.test" })).toThrow("requires both");
+    expect(() => getStore({ HASNA_LOOPS_API_KEY: "k" })).toThrow("requires both");
+    expect(() => getStore({ HASNA_LOOPS_STORAGE_MODE: "self_hosted" })).toThrow("requires both");
+    expect(() => getStore({ HASNA_LOOPS_STORAGE_MODE: "cloud" })).toThrow("requires both");
+  });
 });
 
 describe("ApiStore end-to-end against the real /v1 server", () => {

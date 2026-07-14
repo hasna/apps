@@ -68,6 +68,7 @@ export class PgPoolExecutor implements PostgresQueryExecutor {
   ): Promise<T> {
     return this.client.transaction(async (client) => {
       await client.execute("SET LOCAL ROLE open_loops_runtime");
+      await client.execute("SET LOCAL search_path = pg_catalog, public");
       await client.get(
         `SELECT
           set_config('open_loops.tenant_id', $1, true),

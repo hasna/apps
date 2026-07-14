@@ -37,17 +37,16 @@ surfaces only.
 ## Mode Resolution
 
 `HASNA_LOOPS_STORAGE_MODE` may be set to `local`, `self_hosted`, or
-`cloud`. Hyphenated `self-hosted` is normalized to `self_hosted`.
+`cloud`. Other spellings and legacy mode names are rejected.
 
 When no explicit mode is set, OpenLoops resolves the mode from configuration:
 
-1. `HASNA_LOOPS_CLOUD_API_URL` selects `cloud`.
-2. `HASNA_LOOPS_API_URL` or
+1. `HASNA_LOOPS_API_URL` or
    `HASNA_LOOPS_DATABASE_URL` selects `self_hosted`.
-3. Otherwise OpenLoops uses `local`.
+2. Otherwise OpenLoops uses `local`.
 
-`HASNA_LOOPS_API_URL` belong to `self_hosted`.
-`cloud` uses only `HASNA_LOOPS_CLOUD_API_URL`.
+Both non-local modes use the canonical `HASNA_LOOPS_API_URL`; an explicit
+`HASNA_LOOPS_STORAGE_MODE=cloud` distinguishes hosted cloud from self-hosted.
 
 Tokens are represented only as presence signals in status output. Self-hosted
 status uses `HASNA_LOOPS_API_KEY`. Cloud status uses
@@ -69,6 +68,7 @@ loops cloud status
 loops-api status
 loops-serve version
 HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --dry-run
+HASNA_LOOPS_DATABASE_URL=... HASNA_LOOPS_AUTH_DATABASE_URL=... loops-serve serve
 loops-runner status
 loops export --file ./loops-export.json --dry-run
 loops export --file ./loops-export.json
@@ -92,7 +92,7 @@ JSON uses these field names:
 - `localStore.role`: `authoritative` in local mode, `cache_and_spool` in
   non-local modes.
 - `controlPlane.configured`: true only when the current mode has enough
-  configuration to be usable. Cloud requires both a cloud URL and a cloud token
+  configuration to be usable. Cloud requires both the canonical API URL and a token
   presence signal.
 - `controlPlane.apiUrl`: a display-safe URL without credentials, query string,
   or fragment.
@@ -120,6 +120,13 @@ package. It reads and writes Postgres directly, serves open foundation probes
 runner-protocol routes with API-key auth on non-local binds, and applies the
 Postgres migrations, including the tenant-bound `api_keys` table, with the
 prepare/backfill/enforce `loops-serve migrate` sequence.
+
+The service requires separate database logins: `HASNA_LOOPS_DATABASE_URL` is
+the tenant-scoped runtime role, while `HASNA_LOOPS_AUTH_DATABASE_URL` is the
+authenticator-only role that can verify keys and append authentication audits.
+`HASNA_LOOPS_MIGRATOR_DATABASE_URL` is an offline schema-administrator login;
+tenant enforcement normalizes cluster role attributes and therefore requires
+the PostgreSQL privilege to alter role security attributes.
 
 `loops-api` is the embeddable API contract in the same public package. It is not
 a separate service because self-hosted users and the hosted service must share

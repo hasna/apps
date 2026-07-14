@@ -96,7 +96,7 @@ export class TenantApiAuthenticator {
 
     const tokenHash = hashToken(token);
     const row = await this.client.get<BoundKeyRow>(
-      "SELECT * FROM open_loops_authenticate_key($1, $2)",
+      "SELECT * FROM public.open_loops_authenticate_key($1, $2)",
       [verified.kid, tokenHash],
     );
     if (!row) return this.deny(id, context, 401, "unbound_key");
@@ -164,7 +164,7 @@ export class TenantApiAuthenticator {
     row?: BoundKeyRow,
   ): Promise<void> {
     await this.client.execute(
-      "SELECT open_loops_append_auth_audit($1,$2,$3,$4,$5,$6,$7,$8::jsonb)",
+      "SELECT public.open_loops_append_auth_audit($1,$2,$3,$4,$5,$6,$7,$8::jsonb)",
       [
         randomUUID(),
         row?.kid ?? null,

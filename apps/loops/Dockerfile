@@ -33,7 +33,7 @@ WORKDIR /app
 # succeeds (pg-connection-string escalates sslmode=require to verify-full).
 COPY docker/rds-global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
 ENV NODE_ENV=production \
-    HASNA_LOOPS_STORAGE_MODE=cloud \
+    HASNA_LOOPS_STORAGE_MODE=self_hosted \
     NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem \
     PGSSLROOTCERT=/etc/ssl/certs/rds-global-bundle.pem \
     HOST=0.0.0.0 \
@@ -43,8 +43,6 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/src/lib/storage/fixtures/empty-tenant-backfill.json ./empty-tenant-backfill.json
 EXPOSE 8787
-# Fail-closed: loops-serve refuses to start without a self-hosted DSN + signing
-# secret on a non-local bind (no silent stub). HASNA_LOOPS_STORAGE_MODE=cloud is
-# the generated storage-kit direct-Postgres flag; OpenLoops deployment mode is
-# selected from HASNA_LOOPS_MODE or from the self-hosted database/API URL env.
+# Fail-closed: loops-serve requires separate runtime/auth DSNs and a signing
+# secret. HASNA_LOOPS_STORAGE_MODE=self_hosted is the only service mode value.
 CMD ["bun", "dist/serve/index.js"]

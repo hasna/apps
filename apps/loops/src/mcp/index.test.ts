@@ -16,7 +16,6 @@ function cleanEnv(overrides: Record<string, string>): Record<string, string> {
     ...env,
     HASNA_LOOPS_STORAGE_MODE: "local",
     HASNA_LOOPS_API_URL: "",
-    HASNA_LOOPS_CLOUD_API_URL: "",
     HASNA_LOOPS_API_KEY: "",
     ...overrides,
   };

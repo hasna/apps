@@ -53,8 +53,8 @@ loopback authentication bypass.
    `HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve tenant-backfill --input <bundle>`.
 4. Enforce tenant keys, composite foreign keys, and forced RLS with
    `HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --enforce-tenancy`.
-5. Start `loops-serve` with `HASNA_LOOPS_STORAGE_MODE=self_hosted`,
-   `HASNA_LOOPS_DATABASE_URL`, and the API signing secret from the approved
+5. Start `loops-serve` with `HASNA_LOOPS_STORAGE_MODE=self_hosted`, separate
+   `HASNA_LOOPS_DATABASE_URL` and `HASNA_LOOPS_AUTH_DATABASE_URL` logins, and the API signing secret from the approved
    vault item. Do not log or copy the secret value into task evidence.
 6. Verify `/health`, `/ready`, `/version`, and `/openapi.json`.
 7. Verify an authenticated `/v1` read/write smoke against a throwaway loop and

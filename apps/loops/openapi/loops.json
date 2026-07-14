@@ -2076,17 +2076,17 @@
         },
         "x-authorization-operation": "leases.recover",
         "x-required-scopes": [
-          "loops:runner"
+          "loops:delete"
         ],
         "x-tenant-roles": [
-          "worker",
+          "admin",
           "service"
         ],
         "x-token-kinds": [
-          "machine",
+          "api_key",
           "service"
         ],
-        "x-risk": "runner"
+        "x-risk": "destructive"
       }
     },
     "/healthz": {

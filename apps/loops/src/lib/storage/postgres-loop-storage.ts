@@ -157,6 +157,7 @@ function bindTenantClient(client: PoolQueryClient, context: TenantStorageContext
   const inContext = <T>(fn: (scoped: PoolQueryClient) => Promise<T>): Promise<T> =>
     client.transaction(async (transactionClient) => {
       await transactionClient.execute("SET LOCAL ROLE open_loops_runtime");
+      await transactionClient.execute("SET LOCAL search_path = pg_catalog, public");
       await transactionClient.get(
         `SELECT
           set_config('open_loops.tenant_id', $1, true),

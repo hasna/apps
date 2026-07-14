@@ -23,7 +23,7 @@ defines `self_hosted` and `cloud` contracts for non-local control planes:
   loop CRUD and run listing, runner registration/claim/heartbeat/finalize
   foundations, and local migration previews.
 - `cloud`: hosted control-plane contract; this release exposes client/runner
-  status only, and requires `HASNA_LOOPS_CLOUD_API_URL` plus
+  status only, and requires `HASNA_LOOPS_API_URL` plus
   `HASNA_LOOPS_API_KEY` before status can report ready.
 
 Scheduler state is explicit in status JSON. `schedulerState.localStore` is
@@ -54,6 +54,7 @@ loops cloud status
 loops-api status
 loops-serve version
 HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --dry-run
+HASNA_LOOPS_DATABASE_URL=... HASNA_LOOPS_AUTH_DATABASE_URL=... loops-serve serve
 loops-runner status
 ```
 

@@ -25,14 +25,12 @@ describe("doctor", () => {
       "HASNA_MACHINES_DIR",
       "HASNA_LOOPS_STORAGE_MODE",
       "HASNA_LOOPS_API_URL",
-      "HASNA_LOOPS_CLOUD_API_URL",
       "HASNA_LOOPS_DATABASE_URL",
     ]) savedEnv[key] = process.env[key];
     process.env.LOOPS_DATA_DIR = dataDir;
     process.env.HASNA_MACHINES_DIR = machinesDir;
     process.env.HASNA_LOOPS_STORAGE_MODE = "";
     process.env.HASNA_LOOPS_API_URL = "";
-    process.env.HASNA_LOOPS_CLOUD_API_URL = "";
     process.env.HASNA_LOOPS_DATABASE_URL = "";
   });
 

@@ -17,7 +17,6 @@ function runCli(dataDir: string, args: string[], input?: string, env: Record<str
   const isolatedEnv = {
     HASNA_LOOPS_STORAGE_MODE: "local",
     HASNA_LOOPS_API_URL: "",
-    HASNA_LOOPS_CLOUD_API_URL: "",
     HASNA_LOOPS_API_KEY: "",
   };
   return spawnSync(process.execPath, [cliPath, ...args], {
@@ -236,7 +235,6 @@ describe("loops CLI", () => {
     const mode = runCli(dataDir, ["--json", "mode"], undefined, {
       HASNA_LOOPS_STORAGE_MODE: "",
       HASNA_LOOPS_API_URL: "",
-      HASNA_LOOPS_CLOUD_API_URL: "",
       HASNA_LOOPS_DATABASE_URL: "",
     });
 
@@ -258,7 +256,7 @@ describe("loops CLI", () => {
   test("reports self-hosted and cloud contract perspectives without exposing tokens", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-mode-cloud-"));
     const selfHosted = runCli(dataDir, ["--json", "self-hosted", "status"], undefined, {
-      HASNA_LOOPS_STORAGE_MODE: "self-hosted",
+      HASNA_LOOPS_STORAGE_MODE: "self_hosted",
       HASNA_LOOPS_API_URL: "http://127.0.0.1:8787",
       HASNA_LOOPS_API_KEY: "do-not-print-this-token",
     });
@@ -284,7 +282,7 @@ describe("loops CLI", () => {
 
     const cloud = runCli(dataDir, ["--json", "cloud", "status"], undefined, {
       HASNA_LOOPS_STORAGE_MODE: "local",
-      HASNA_LOOPS_CLOUD_API_URL: "https://loops.example.test",
+      HASNA_LOOPS_API_URL: "https://loops.example.test",
       HASNA_LOOPS_API_KEY: "do-not-print-this-cloud-token",
     });
     expect(cloud.status).toBe(0);

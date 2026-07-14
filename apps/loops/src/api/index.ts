@@ -112,9 +112,13 @@ export interface LoopsApiServerOptions {
   ) => Promise<T>;
   /**
    * Readiness probe. Should prove the storage backend is reachable AND fully
-   * migrated. Returns `{ ready, detail? }`. Defaults to a storage list probe.
+   * migrated. Returns a stable public code only. Defaults to a storage list probe.
    */
-  readyCheck?: () => Promise<{ ready: boolean; detail?: string }>;
+  readyCheck?: () => Promise<{
+    ready: boolean;
+    code?: "storage_unconfigured" | "storage_unreachable" | "auth_unreachable" | "unsafe_database_role" |
+      "pending_migrations" | "unknown_migrations";
+  }>;
 }
 
 /** Deployment mode for the foundation probes ({ status, version, mode }). */
@@ -127,6 +131,15 @@ function foundationEnvelope(status: string, extra: Record<string, unknown> = {})
   return { status, version: packageVersion(), mode: foundationMode(), service: "loops", ...extra };
 }
 
+const PUBLIC_READINESS_CODES = new Set([
+  "storage_unconfigured",
+  "storage_unreachable",
+  "auth_unreachable",
+  "unsafe_database_role",
+  "pending_migrations",
+  "unknown_migrations",
+]);
+
 export function createLoopsApiServer(opts: LoopsApiServerOptions = {}) {
   const host = opts.host ?? "127.0.0.1";
   const port = opts.port ?? 8787;
@@ -135,13 +148,13 @@ export function createLoopsApiServer(opts: LoopsApiServerOptions = {}) {
   }
   const authenticator = opts.authenticator;
   const withTenantStorage = opts.withTenantStorage;
-  const defaultReady = async (): Promise<{ ready: boolean; detail?: string }> => {
-    if (!opts.storage) return { ready: false, detail: "storage_unconfigured" };
+  const defaultReady = async (): Promise<{ ready: boolean; code?: string }> => {
+    if (!opts.storage) return { ready: false, code: "storage_unconfigured" };
     try {
       await opts.storage.listLoops({ limit: 1 });
       return { ready: true };
-    } catch (error) {
-      return { ready: false, detail: error instanceof Error ? error.message : "storage_unreachable" };
+    } catch {
+      return { ready: false, code: "storage_unreachable" };
     }
   };
   const readyCheck = opts.readyCheck ?? defaultReady;
@@ -160,8 +173,13 @@ export function createLoopsApiServer(opts: LoopsApiServerOptions = {}) {
       }
       if (request.method === "GET" && (url.pathname === "/ready" || url.pathname === "/readyz")) {
         const result = await readyCheck();
+        const code = result.ready
+          ? undefined
+          : PUBLIC_READINESS_CODES.has(result.code ?? "")
+            ? result.code
+            : "storage_unreachable";
         return Response.json(
-          foundationEnvelope(result.ready ? "ready" : "not_ready", result.detail ? { detail: result.detail } : {}),
+          foundationEnvelope(result.ready ? "ready" : "not_ready", code ? { code } : {}),
           { status: result.ready ? 200 : 503 },
         );
       }
@@ -230,6 +248,9 @@ async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
     if (segments[1] === "history") return await handleHistoryRequest(ctx, segments.slice(2));
     if (segments[1] === "runners") return await handleRunnerRequest(ctx, segments.slice(2));
     if (segments[1] === "leases" && segments[2] === "recover" && ctx.request.method === "POST") {
+      if (ctx.auth.tokenKind === "machine" || !ctx.auth.roles.some((role) => role === "admin" || role === "service")) {
+        return fail("maintenance_principal_required", 403);
+      }
       const storage = requireStorage(ctx.storage);
       const recovered = await storage.recoverExpiredRunLeasesDetailed(ctx.now());
       return ok({
@@ -559,6 +580,9 @@ async function handleRunsRequest(ctx: V1RequestContext, segments: string[]): Pro
     const now = ctx.now();
     const target = await storage.getRun(id);
     if (!target) return fail("run_not_found", 404);
+    if ((ctx.auth.tokenKind === "machine" || ctx.auth.roles.includes("worker")) && target.claimedBy !== ctx.auth.principalId) {
+      return fail("run_claim_owner_mismatch", 403);
+    }
     const recovered = await storage.recoverExpiredRunLeasesDetailed(now, { runId: id, limit: 1, scanLimit: 1 });
     const abandoned = recovered.abandoned;
     const deferred = recovered.deferred;

@@ -20,7 +20,7 @@ program
   .option("-j, --json", "print JSON");
 
 function configuredApiUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  return env.HASNA_LOOPS_API_URL?.trim() || env.HASNA_LOOPS_CLOUD_API_URL?.trim();
+  return env.HASNA_LOOPS_API_URL?.trim();
 }
 
 function configuredApiKey(env: NodeJS.ProcessEnv = process.env): string | undefined {

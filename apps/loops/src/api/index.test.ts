@@ -123,6 +123,28 @@ describe("loops-api foundation", () => {
     })).toThrow("request-scoped tenant storage");
   });
 
+  test("public readiness returns stable codes without backend error details", async () => {
+    const mod = await import("./index.js");
+    const failingStorage = {
+      listLoops: async () => { throw new Error("password=super-secret db.internal.example"); },
+    } as unknown as LoopStorageContract;
+    const server = createTestServer(mod, {
+      host: "127.0.0.1",
+      port: 0,
+      storage: failingStorage,
+    });
+    try {
+      const response = await fetch(apiUrl(server, "/ready"));
+      expect(response.status).toBe(503);
+      const body = JSON.stringify(await response.json());
+      expect(body).toContain('"code":"storage_unreachable"');
+      expect(body).not.toContain("detail");
+      expect(body).not.toContain("password");
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test("loops routes use injected storage and redact command environments", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
@@ -927,6 +949,24 @@ describe("loops-api foundation", () => {
       runnerPrincipal("runner-a"),
     );
     try {
+      const intruder = createTestServer(
+        mod,
+        { host: "127.0.0.1", port: 0, storage, now: () => recoveredAt },
+        runnerPrincipal("runner-b"),
+      );
+      try {
+        const denied = await fetch(apiUrl(intruder, `/v1/runs/${first!.run.id}/recover`), { method: "POST" });
+        expect(denied.status).toBe(403);
+        expect(await denied.json()).toMatchObject({ ok: false, error: "run_claim_owner_mismatch" });
+        expect(await storage.getRun(first!.run.id)).toMatchObject({ status: "running" });
+
+        const sweep = await fetch(apiUrl(intruder, "/v1/leases/recover"), { method: "POST" });
+        expect(sweep.status).toBe(403);
+        expect(await sweep.json()).toMatchObject({ ok: false, error: "maintenance_principal_required" });
+      } finally {
+        intruder.stop(true);
+      }
+
       const response = await fetch(apiUrl(server, `/v1/runs/${first!.run.id}/recover`), { method: "POST" });
       expect(response.status).toBe(200);
       expect(await storage.getRun(first!.run.id)).toMatchObject({ status: "abandoned" });

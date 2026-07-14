@@ -77,7 +77,7 @@ export const ROUTE_POLICIES: readonly RoutePolicy[] = Object.freeze([
   policy("runners.heartbeat", "POST", "/v1/runners/heartbeat", /^\/v1\/runners\/heartbeat$/, ["loops:runner"], ["worker", "service"], ["machine", "service"], "runner"),
   policy("runners.poll", "POST", "/v1/runners/poll", /^\/v1\/runners\/poll$/, ["loops:runner"], ["worker", "service"], ["machine", "service"], "runner"),
   policy("runners.claim", "POST", "/v1/runners/claim", /^\/v1\/runners\/claim$/, ["loops:runner"], ["worker", "service"], ["machine", "service"], "runner"),
-  policy("leases.recover", "POST", "/v1/leases/recover", /^\/v1\/leases\/recover$/, ["loops:runner"], ["worker", "service"], ["machine", "service"], "runner"),
+  policy("leases.recover", "POST", "/v1/leases/recover", /^\/v1\/leases\/recover$/, ["loops:delete"], ["admin", "service"], ["api_key", "service"], "destructive"),
 ]);
 
 export function routePolicy(method: string, path: string): RoutePolicy | undefined {

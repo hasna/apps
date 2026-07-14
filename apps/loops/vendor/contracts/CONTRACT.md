@@ -50,14 +50,8 @@ The runtime storage enum is **`local | cloud` ONLY**.
    local→cloud for comparison; **reads stay local** and the app **never reads
    from cloud** in shadow. Shadow is a migration step, not a runtime mode.
 
-The words `remote`, `hybrid`, and `self_hosted` are accepted **only as
-deprecated aliases** that normalize to `cloud`. The `hasna.contract.json`
-manifest and every wire schema reject them; only the runtime env normalizer
-(`normalizeStorageMode`, `src/mode.ts`) tolerates them and emits a deprecation
-warning.
-
-The reference normalizer lives in `src/mode.ts`, extracted from open-mailery's
-`normalizeMaileryMode`.
+OpenLoops uses the canonical deployment vocabulary `local`, `self_hosted`, and
+`cloud`. No compatibility aliases are accepted.
 
 ---
 
@@ -67,19 +61,13 @@ Each app with a store resolves its mode and database URL from the environment.
 
 | Key | Purpose |
 | --- | --- |
-| `HASNA_<NAME>_STORAGE_MODE` | Canonical mode selector. Value `local` or `cloud`. |
+| `HASNA_<NAME>_STORAGE_MODE` | Canonical mode selector. Value `local`, `self_hosted`, or `cloud`. |
 | `HASNA_<NAME>_DATABASE_URL` | Cloud Postgres URL. **Required when mode is `cloud`.** |
-| `<NAME>_STORAGE_MODE` | Optional short alias for the mode selector. |
-| `<NAME>_DATABASE_URL` | Optional short alias for the database URL. |
 
 `<NAME>` is the upper-snake form of the app name (e.g. `todos` → `TODOS`,
 `open-mailery` app name `mailery` → `MAILERY`).
 
-Resolution precedence (see `resolveStorageMode`):
-
-1. `HASNA_<NAME>_STORAGE_MODE`
-2. `<NAME>_STORAGE_MODE` (alias; emits a "use canonical key" warning)
-3. default → `local`
+When the canonical mode key is absent, storage defaults to `local`.
 
 An app **MUST NOT** read secret *values* to decide the mode; it only detects
 `DATABASE_URL` presence. Selecting `cloud` without a database URL is a
