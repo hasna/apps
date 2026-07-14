@@ -831,13 +831,14 @@ export async function cloudResolveTaskListRef(
   projectId?: string,
 ): Promise<string> {
   const input = ref.trim();
+  const normalizedIdRef = input.toLowerCase();
   // An unscoped exact UUID is already canonical. A project-scoped UUID must
   // still be enumerated so create/delete callers cannot cross that boundary.
-  if (UUID_RE.test(input) && !projectId) return input.toLowerCase();
+  if (UUID_RE.test(input) && !projectId) return normalizedIdRef;
 
   const lists = await cloudListTaskLists(client, projectId);
 
-  const exactIds = lists.filter((list) => list.id === input);
+  const exactIds = lists.filter((list) => list.id.toLowerCase() === normalizedIdRef);
   if (exactIds.length === 1) return exactIds[0]!.id;
   if (exactIds.length > 1) {
     throw new Error(`Task list reference is ambiguous: "${input}"`);
@@ -849,7 +850,7 @@ export async function cloudResolveTaskListRef(
     throw new Error(`Task list reference is ambiguous: "${input}"`);
   }
 
-  const prefixes = lists.filter((list) => list.id.startsWith(input));
+  const prefixes = lists.filter((list) => list.id.toLowerCase().startsWith(normalizedIdRef));
   if (prefixes.length === 1) return prefixes[0]!.id;
   if (prefixes.length > 1) {
     throw new Error(`Task list reference is ambiguous: "${input}"`);

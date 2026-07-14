@@ -663,8 +663,10 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
 
     for (const ref of [
       "99999999-9999-4999-8999-999999999999",
+      "  99999999-9999-4999-8999-999999999999  ",
       "99999999",
       "Open Emails",
+      "  OPEN EMAILS  ",
       "open-emails",
       "emails-canonical",
       "/workspace/hasna/opensource/open-emails",
@@ -728,24 +730,32 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
   });
 
   test("task-list resolution preserves exact UUIDs and resolves project-scoped slugs and unique UUID prefixes", async () => {
+    const listId = "abcdef12-1111-4111-8111-111111111111";
     const calls = installFetch(() => ({
       body: {
         task_lists: [
-          { id: "12345678-1111-4111-8111-111111111111", project_id: "project-1", slug: "release", name: "Release" },
+          { id: listId, project_id: "project-1", slug: "release", name: "Release" },
         ],
       },
     }));
     const client = getTodosCloudClient(CLOUD_ENV)!;
 
-    await expect(cloudResolveTaskListRef(client, "12345678-1111-4111-8111-111111111111"))
-      .resolves.toBe("12345678-1111-4111-8111-111111111111");
+    await expect(cloudResolveTaskListRef(client, `  ${listId.toUpperCase()}  `))
+      .resolves.toBe(listId);
     await expect(cloudResolveTaskListRef(client, "release", "project-1"))
-      .resolves.toBe("12345678-1111-4111-8111-111111111111");
-    await expect(cloudResolveTaskListRef(client, "12345678"))
-      .resolves.toBe("12345678-1111-4111-8111-111111111111");
-    expect(calls).toHaveLength(2);
+      .resolves.toBe(listId);
+    await expect(cloudResolveTaskListRef(
+      client,
+      `  ${listId.toUpperCase()}  `,
+      "project-1",
+    ))
+      .resolves.toBe(listId);
+    await expect(cloudResolveTaskListRef(client, "ABCDEF12"))
+      .resolves.toBe(listId);
+    expect(calls).toHaveLength(3);
     expect(calls[0]!.url).toContain("project_id=project-1");
-    expect(calls[1]!.url).not.toContain("project_id=");
+    expect(calls[1]!.url).toContain("project_id=project-1");
+    expect(calls[2]!.url).not.toContain("project_id=");
   });
 
   test("task-list resolution fails explicitly for missing and ambiguous references", async () => {
