@@ -777,17 +777,33 @@ export async function cloudListTaskLists(client: HasnaStorageClient, projectId?:
   return Array.isArray(raw) ? (raw as TaskList[]) : [];
 }
 
-/** Resolve a cloud task-list UUID, unique UUID prefix, or slug. */
+/** Resolve a cloud task-list UUID, unique UUID prefix, or project-scoped slug. */
 export async function cloudResolveTaskListRef(
   client: HasnaStorageClient,
   ref: string,
   projectId?: string,
-): Promise<string | null> {
+): Promise<string> {
   const lists = await cloudListTaskLists(client, projectId);
-  const exact = lists.find((list) => list.id === ref || list.slug === ref);
-  if (exact) return exact.id;
+
+  const exactIds = lists.filter((list) => list.id === ref);
+  if (exactIds.length === 1) return exactIds[0]!.id;
+  if (exactIds.length > 1) {
+    throw new Error(`Task list reference is ambiguous: "${ref}"`);
+  }
+
+  const slugs = lists.filter((list) => list.slug === ref);
+  if (slugs.length === 1) return slugs[0]!.id;
+  if (slugs.length > 1) {
+    throw new Error(`Task list reference is ambiguous: "${ref}"`);
+  }
+
   const prefixes = lists.filter((list) => list.id.startsWith(ref));
-  return prefixes.length === 1 ? prefixes[0]!.id : null;
+  if (prefixes.length === 1) return prefixes[0]!.id;
+  if (prefixes.length > 1) {
+    throw new Error(`Task list reference is ambiguous: "${ref}"`);
+  }
+
+  throw new Error(`Task list not found: "${ref}"`);
 }
 
 /** Create a task list in the cloud (`POST /v1/task-lists`). */

@@ -549,8 +549,8 @@ export function registerTaskCommands(program: Command) {
     .option("--tags <tags>", "Filter by tags (comma-separated)")
     .option("--tag <tags>", "Filter by tags (alias for --tags)")
     .option("-a, --all", "Show all tasks (including completed/cancelled)")
-    .option("--list <id>", "Filter by task list ID")
-    .option("--task-list <id>", "Filter by task list ID (alias for --list)")
+    .option("--list <ref>", "Filter by task list UUID, unique UUID prefix, or project-scoped slug")
+    .option("--task-list <ref>", "Filter by task list UUID, unique UUID prefix, or project-scoped slug (alias for --list)")
     .option("--project-name <name>", "Filter by project name")
     .option("--agent-name <name>", "Filter by agent name/assigned")
     .option("--sort <field>", "Sort by: updated, created, priority, status")
@@ -563,10 +563,10 @@ export function registerTaskCommands(program: Command) {
       const globalOpts = program.opts();
       opts.tags = opts.tags || opts.tag;
       opts.list = opts.list || opts.taskList;
-      // self_hosted cloud routing: skip all local-store project/list detection —
-      // list straight from <app>.hasna.xyz/v1 (only explicit server-side filters).
+      // self_hosted cloud routing: skip local-store detection and resolve explicit
+      // project/list filters against the shared API before listing tasks.
       const cloud = getTodosCloudClient();
-      const projectId = cloud ? undefined : autoProject(globalOpts);
+      const projectId = cloud ? globalOpts.project : autoProject(globalOpts);
       const hasAssignedFilter = Boolean(opts.assigned || opts.agentName);
       const hasExplicitProjectFilter = Boolean(globalOpts.project || opts.projectName);
       const allowedSortFields = new Set(["updated", "created", "priority", "status"]);
@@ -585,7 +585,7 @@ export function registerTaskCommands(program: Command) {
         filter["project_id"] = projectId;
       }
       if (opts.list && cloud) {
-        filter["task_list_id"] = opts.list;
+        filter["task_list_id"] = await cloudResolveTaskListRef(cloud, opts.list, projectId);
       } else if (opts.list) {
         const db = getDatabase();
         const listId = resolvePartialId(db, "task_lists", opts.list);

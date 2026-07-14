@@ -676,6 +676,46 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
     expect(calls.some((call) => call.method === "DELETE" && call.url.endsWith("/v1/task-lists/12345678-full"))).toBe(true);
   });
 
+  test("task-list resolution preserves exact UUIDs and resolves project-scoped slugs and unique UUID prefixes", async () => {
+    const calls = installFetch(() => ({
+      body: {
+        task_lists: [
+          { id: "12345678-1111-4111-8111-111111111111", project_id: "project-1", slug: "release", name: "Release" },
+        ],
+      },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudResolveTaskListRef(client, "12345678-1111-4111-8111-111111111111"))
+      .resolves.toBe("12345678-1111-4111-8111-111111111111");
+    await expect(cloudResolveTaskListRef(client, "release", "project-1"))
+      .resolves.toBe("12345678-1111-4111-8111-111111111111");
+    await expect(cloudResolveTaskListRef(client, "12345678"))
+      .resolves.toBe("12345678-1111-4111-8111-111111111111");
+    expect(calls[0]!.url).not.toContain("project_id=");
+    expect(calls[1]!.url).toContain("project_id=project-1");
+    expect(calls[2]!.url).not.toContain("project_id=");
+  });
+
+  test("task-list resolution fails explicitly for missing and ambiguous references", async () => {
+    installFetch(() => ({
+      body: {
+        task_lists: [
+          { id: "aaaaaaaa-1111-4111-8111-111111111111", project_id: "project-1", slug: "shared", name: "Shared A" },
+          { id: "aaaaaaaa-2222-4222-8222-222222222222", project_id: "project-1", slug: "shared", name: "Shared B" },
+        ],
+      },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudResolveTaskListRef(client, "missing", "project-1"))
+      .rejects.toThrow('Task list not found: "missing"');
+    await expect(cloudResolveTaskListRef(client, "shared", "project-1"))
+      .rejects.toThrow('Task list reference is ambiguous: "shared"');
+    await expect(cloudResolveTaskListRef(client, "aaaaaaaa", "project-1"))
+      .rejects.toThrow('Task list reference is ambiguous: "aaaaaaaa"');
+  });
+
   test("force unlock sends an explicit force flag instead of spoofing the lock holder", async () => {
     const calls = installFetch(() => ({ body: { success: true } }));
     const client = getTodosCloudClient(CLOUD_ENV)!;
