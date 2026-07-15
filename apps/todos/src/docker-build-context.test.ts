@@ -56,6 +56,8 @@ describe("server image build context", () => {
     const buildspec = readFileSync(join(root, "buildspec.container-candidate.yml"), "utf8");
 
     expect(buildspec).toContain("docker build --platform linux/arm64");
+    expect(buildspec).toContain('--build-arg "BUN_IMAGE=${BUN_IMAGE_OVERRIDE}"');
+    expect(buildspec).toContain("candidate post-build evidence skipped: build did not reach push");
     expect(buildspec).toContain("scanelf -n /usr/local/bin/bun");
     expect(buildspec).toContain("apk info -vv");
     expect(buildspec).toContain("container-sbom.cdx.json");

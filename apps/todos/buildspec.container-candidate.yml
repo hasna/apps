@@ -9,6 +9,7 @@ phases:
       - set -euo pipefail
       - test -n "${IMAGE_TAG:-}"
       - test -n "${SOURCE_SHA:-}"
+      - test "${BUN_IMAGE_OVERRIDE:-}" = '789877399345.dkr.ecr.us-east-1.amazonaws.com/todos@sha256:3c9ab1a521c82144dff537125695017a0480d3a13088fba7e012cfae0f63146f'
       - export REPOSITORY=789877399345.dkr.ecr.us-east-1.amazonaws.com/todos
       - export IMAGE="${REPOSITORY}:${IMAGE_TAG}"
       - aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin "${REPOSITORY%/*}"
@@ -19,7 +20,7 @@ phases:
   build:
     commands:
       - set -euo pipefail
-      - docker build --platform linux/arm64 --label "org.opencontainers.image.source=https://github.com/hasna/todos" --label "org.opencontainers.image.revision=${SOURCE_SHA}" --label "org.opencontainers.image.version=0.11.90" -t "${IMAGE}" .
+      - docker build --platform linux/arm64 --build-arg "BUN_IMAGE=${BUN_IMAGE_OVERRIDE}" --label "org.opencontainers.image.source=https://github.com/hasna/todos" --label "org.opencontainers.image.revision=${SOURCE_SHA}" --label "org.opencontainers.image.version=0.11.90" -t "${IMAGE}" .
       - test "$(docker image inspect "${IMAGE}" --format '{{.Architecture}}')" = arm64
       - test "$(docker run --rm --entrypoint bun "${IMAGE}" --version)" = 1.3.14
       - docker run --rm --entrypoint sh "${IMAGE}" -ec 'scanelf -n /usr/local/bin/bun | grep -q ld-musl; ! scanelf -n /usr/local/bin/bun | grep -q libc.so.6; apk info -e bash; ! apk info -e glibc; ! apk info -e perl; ! apk info -e sqlite-libs; ! command -v git; ! command -v tmux'
@@ -62,20 +63,19 @@ phases:
       - docker logs "${TEST_APP}" 2>&1 | tail -200
       - unset TODOS_V1_TOKEN KEY_JSON SIGNING_MATERIAL DB_CREDENTIAL POSTGRES_PASSWORD TEST_DSN
       - docker push "${IMAGE}"
+      - export BUILD_SUCCEEDED=1
   post_build:
     commands:
-      - set -euo pipefail
-      - export REPOSITORY=789877399345.dkr.ecr.us-east-1.amazonaws.com/todos
-      - export IMAGE_DIGEST=$(aws ecr describe-images --region us-east-1 --repository-name todos --image-ids imageTag="${IMAGE_TAG}" --query 'imageDetails[0].imageDigest' --output text)
-      - jq -n --arg source_sha "${SOURCE_SHA}" --arg archive_sha256 "${SOURCE_ARCHIVE_SHA256:-unknown}" --arg build_id "${CODEBUILD_BUILD_ID}" --arg image_tag "${IMAGE_TAG}" --arg image_digest "${IMAGE_DIGEST}" '{source_sha:$source_sha,source_archive_sha256:$archive_sha256,codebuild_build_id:$build_id,image_tag:$image_tag,image_digest:$image_digest,platform:"linux/arm64",builder:"todos-prod-image-builder"}' > container-provenance.json
-      - sha256sum container-apk-inventory.txt container-oci-inspect.json container-sbom.cdx.json container-provenance.json
-      - printf 'IMAGE_REF %s@%s\n' "${REPOSITORY}" "${IMAGE_DIGEST}"
-      - docker rm -f "${TEST_APP:-missing}" "${TEST_DB:-missing}" >/dev/null 2>&1 || true
-      - docker network rm "${TEST_NETWORK:-missing}" >/dev/null 2>&1 || true
-
-artifacts:
-  files:
-    - container-apk-inventory.txt
-    - container-oci-inspect.json
-    - container-sbom.cdx.json
-    - container-provenance.json
+      - |-
+        set -euo pipefail
+        docker rm -f "${TEST_APP:-missing}" "${TEST_DB:-missing}" >/dev/null 2>&1 || true
+        docker network rm "${TEST_NETWORK:-missing}" >/dev/null 2>&1 || true
+        if [ "${BUILD_SUCCEEDED:-0}" != 1 ]; then
+          echo 'candidate post-build evidence skipped: build did not reach push'
+          exit 0
+        fi
+        REPOSITORY=789877399345.dkr.ecr.us-east-1.amazonaws.com/todos
+        IMAGE_DIGEST=$(aws ecr describe-images --region us-east-1 --repository-name todos --image-ids imageTag="${IMAGE_TAG}" --query 'imageDetails[0].imageDigest' --output text)
+        jq -n --arg source_sha "${SOURCE_SHA}" --arg archive_sha256 "${SOURCE_ARCHIVE_SHA256:-unknown}" --arg build_id "${CODEBUILD_BUILD_ID}" --arg image_tag "${IMAGE_TAG}" --arg image_digest "${IMAGE_DIGEST}" '{source_sha:$source_sha,source_archive_sha256:$archive_sha256,codebuild_build_id:$build_id,image_tag:$image_tag,image_digest:$image_digest,platform:"linux/arm64",builder:"todos-prod-image-builder"}' > container-provenance.json
+        sha256sum container-apk-inventory.txt container-oci-inspect.json container-sbom.cdx.json container-provenance.json
+        printf 'IMAGE_REF %s@%s\n' "${REPOSITORY}" "${IMAGE_DIGEST}"
