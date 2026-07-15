@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hasna.dev/computers/resident-protocol-v1.json",
+  "title": "Computers resident operation envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["operationId", "attemptId", "tenantId", "computerId", "certificateId", "policyGeneration", "fence", "sequence", "nonce", "issuedAt", "expiresAt", "capability", "payloadDigest"],
+  "properties": {
+    "operationId": { "$ref": "#/$defs/id" },
+    "attemptId": { "$ref": "#/$defs/id" },
+    "tenantId": { "$ref": "#/$defs/id" },
+    "computerId": { "$ref": "#/$defs/id" },
+    "certificateId": { "$ref": "#/$defs/id" },
+    "policyGeneration": { "type": "integer", "minimum": 1 },
+    "fence": { "type": "integer", "minimum": 0 },
+    "sequence": { "type": "integer", "minimum": 0 },
+    "nonce": { "type": "string", "pattern": "^[A-Za-z0-9_-]{16,128}$" },
+    "issuedAt": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": "string", "format": "date-time" },
+    "capability": { "enum": ["exec", "install", "status", "cancel"] },
+    "payloadDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]{2,63}$" }
+  }
+}
