@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn, type ChildProcess } from "child_process";
-import { mkdtempSync, rmSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync } from "fs";
 import { createServer } from "net";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -70,5 +70,49 @@ describe("REST scan source boundary", () => {
     const scan = await response.json() as { scanner_types: ScannerType[] };
     expect(scan.scanner_types).not.toContain(ScannerType.GitHistory);
     expect(scan.scanner_types).toContain(ScannerType.Code);
+  });
+
+  test("REST project responses redact scanner-recognized paths", async () => {
+    const synthetic = `gh${"p"}_${"A_".repeat(18)}`;
+    const projectDir = join(tempDir, synthetic);
+    mkdirSync(projectDir);
+    const port = await availablePort();
+    child = spawn("bun", ["run", "src/server/index.ts"], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PORT: String(port),
+        HOME: tempDir,
+        USERPROFILE: tempDir,
+        SECURITY_DB: join(tempDir, "shield.db"),
+        CEREBRAS_API_KEY: "",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("REST test server did not start")), 5_000);
+      child!.once("exit", (code) => {
+        clearTimeout(timeout);
+        reject(new Error(`REST test server exited early (${code})`));
+      });
+      child!.stdout!.on("data", (chunk) => {
+        if (String(chunk).includes("security dashboard")) {
+          clearTimeout(timeout);
+          resolve();
+        }
+      });
+    });
+
+    const created = await fetch(`http://127.0.0.1:${port}/api/projects`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: `project-${synthetic}`, path: projectDir }),
+    }).then((response) => response.json());
+    const listed = await fetch(`http://127.0.0.1:${port}/api/projects`)
+      .then((response) => response.json());
+    for (const output of [JSON.stringify(created), JSON.stringify(listed)]) {
+      expect(output).not.toContain(synthetic);
+      expect(output).toContain("REDACTED");
+    }
   });
 });

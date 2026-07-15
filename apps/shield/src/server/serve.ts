@@ -46,7 +46,7 @@ import {
   analyzeFinding as llmAnalyze,
   isLLMAvailable,
 } from "../llm/index.js";
-import { isCredentialFinding } from "../lib/finding-safety.js";
+import { isCredentialFinding, sanitizeValueForBoundary } from "../lib/finding-safety.js";
 import {
   listAdvisories,
   getAdvisory,
@@ -80,6 +80,15 @@ function getCodeContext(filePath: string, line: number, contextLines = 10): stri
 
 export function startServer(port: number) {
   const app = express();
+
+  // REST is a trust boundary. Sanitize every response body, including legacy
+  // rows and exception messages, even when an individual route forgets to do
+  // so. Safe non-credential values are preserved byte-for-byte.
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    const sendJson = res.json.bind(res);
+    res.json = ((body: unknown) => sendJson(sanitizeValueForBoundary(body))) as Response["json"];
+    next();
+  });
   app.use(express.json({ limit: "10mb" }));
 
   // CORS — restrict to configured origins (defaults to localhost)

@@ -84,6 +84,36 @@ describe("startMcpHttpServer", () => {
     await client.close();
   });
 
+  it("redacts scanner-recognized values from successful and error MCP responses", async () => {
+    const synthetic = `gh${"o"}_${"A_".repeat(18)}`;
+    httpServer = await startMcpHttpServer({
+      port: 0,
+      healthName: "security",
+      createServer: createMcpServer,
+    });
+    const port = getListeningPort(httpServer);
+    const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`));
+    const client = new Client({ name: "test", version: "1.0.0" });
+    await client.connect(transport);
+
+    const registered = await client.callTool({
+      name: "register_agent",
+      arguments: { name: `agent-${synthetic}` },
+    });
+    const missing = await client.callTool({
+      name: "heartbeat",
+      arguments: { agent_id: synthetic },
+    });
+    const listed = await client.callTool({ name: "list_agents", arguments: {} });
+
+    for (const result of [registered, missing, listed]) {
+      const output = JSON.stringify(result);
+      expect(output).not.toContain(synthetic);
+      expect(output).toContain("REDACTED");
+    }
+    await client.close();
+  });
+
   it("serves multiple concurrent clients from one process", async () => {
     httpServer = await startMcpHttpServer({
       port: 0,

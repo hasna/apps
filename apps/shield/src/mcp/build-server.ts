@@ -6,6 +6,7 @@ import { getDb } from "../db/database.js";
 import { seedBuiltinRules } from "../db/index.js";
 import { seedAdvisories } from "../data/advisories.js";
 import { PACKAGE_VERSION } from "../lib/version.js";
+import { sanitizeTextForBoundary, sanitizeValueForBoundary } from "../lib/finding-safety.js";
 
 import { registerScanTools } from "./tools/scan.js";
 import { registerFindingTools } from "./tools/findings.js";
@@ -27,7 +28,12 @@ function ensureSeeded(): void {
 }
 
 function jsonResult(data: unknown): { content: Array<{ type: "text"; text: string }> } {
-  return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+  return {
+    content: [{
+      type: "text" as const,
+      text: JSON.stringify(sanitizeValueForBoundary(data), null, 2),
+    }],
+  };
 }
 
 function getCodeContext(filePath: string, line: number, contextLines = 10): string {
@@ -60,12 +66,16 @@ export function createMcpServer(): McpServer {
       const existing = [..._agentReg.values()].find((x) => x.name === a.name);
       if (existing) {
         existing.last_seen_at = new Date().toISOString();
-        return { content: [{ type: "text" as const, text: JSON.stringify(existing) }] };
+        return jsonResult(existing);
       }
       const id = Math.random().toString(36).slice(2, 10);
-      const ag = { id, name: a.name, last_seen_at: new Date().toISOString() };
+      const ag = {
+        id,
+        name: sanitizeTextForBoundary(a.name, 256),
+        last_seen_at: new Date().toISOString(),
+      };
       _agentReg.set(id, ag);
-      return { content: [{ type: "text" as const, text: JSON.stringify(ag) }] };
+      return jsonResult(ag);
     },
   );
 
@@ -75,9 +85,9 @@ export function createMcpServer(): McpServer {
     { agent_id: z.string() },
     async (a: { agent_id: string }) => {
       const ag = _agentReg.get(a.agent_id);
-      if (!ag) return { content: [{ type: "text" as const, text: `Agent not found: ${a.agent_id}` }], isError: true };
+      if (!ag) return { ...jsonResult({ error: `Agent not found: ${a.agent_id}` }), isError: true };
       ag.last_seen_at = new Date().toISOString();
-      return { content: [{ type: "text" as const, text: JSON.stringify({ id: ag.id, name: ag.name, last_seen_at: ag.last_seen_at }) }] };
+      return jsonResult({ id: ag.id, name: ag.name, last_seen_at: ag.last_seen_at });
     },
   );
 
@@ -87,9 +97,12 @@ export function createMcpServer(): McpServer {
     { agent_id: z.string(), project_id: z.string().nullable().optional() },
     async (a: { agent_id: string; project_id?: string | null }) => {
       const ag = _agentReg.get(a.agent_id);
-      if (!ag) return { content: [{ type: "text" as const, text: `Agent not found: ${a.agent_id}` }], isError: true };
-      (ag as { project_id?: string }).project_id = a.project_id ?? undefined;
-      return { content: [{ type: "text" as const, text: a.project_id ? `Focus: ${a.project_id}` : "Focus cleared" }] };
+      if (!ag) return { ...jsonResult({ error: `Agent not found: ${a.agent_id}` }), isError: true };
+      const safeProjectId = a.project_id == null
+        ? undefined
+        : sanitizeTextForBoundary(a.project_id, 256);
+      (ag as { project_id?: string }).project_id = safeProjectId;
+      return jsonResult({ focus: safeProjectId ?? null });
     },
   );
 
@@ -99,8 +112,8 @@ export function createMcpServer(): McpServer {
     {},
     async () => {
       const agents = [..._agentReg.values()];
-      if (agents.length === 0) return { content: [{ type: "text" as const, text: "No agents registered." }] };
-      return { content: [{ type: "text" as const, text: JSON.stringify(agents, null, 2) }] };
+      if (agents.length === 0) return jsonResult({ agents: [] });
+      return jsonResult({ agents });
     },
   );
 
@@ -111,12 +124,16 @@ export function createMcpServer(): McpServer {
     async (params: { message: string; email?: string; category?: string }) => {
       try {
         const db = getDb();
+        const safeMessage = sanitizeTextForBoundary(params.message, 12_000);
+        const safeEmail = params.email == null
+          ? null
+          : sanitizeTextForBoundary(params.email, 320);
         db.prepare("INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)").run(
-          params.message, params.email || null, params.category || "general", PACKAGE_VERSION,
+          safeMessage, safeEmail, params.category || "general", PACKAGE_VERSION,
         );
-        return { content: [{ type: "text" as const, text: "Feedback saved. Thank you!" }] };
+        return jsonResult({ status: "Feedback saved" });
       } catch (e) {
-        return { content: [{ type: "text" as const, text: String(e) }], isError: true };
+        return { ...jsonResult({ error: String(e) }), isError: true };
       }
     },
   );
