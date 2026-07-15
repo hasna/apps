@@ -132,6 +132,34 @@ describe("dual-write shadow adapter", () => {
     expect(row?.deletedAt).not.toBeNull();
   });
 
+  test("project rename mirrors the cascaded canonical task-list record", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createShadowTodosStorageAdapter({ local: { db }, postgresClient: postgres.client });
+    const project = await adapter.projects.create({
+      name: "Shadow Emails",
+      path: "/tmp/shadow-emails",
+      task_list_id: "shadow-emails",
+    });
+    const list = await adapter.taskLists.create({
+      name: "Shadow Emails",
+      slug: "shadow-emails",
+      project_id: project.id,
+    });
+    await adapter.shadow.flush();
+
+    const renamed = await adapter.projects.rename(project.id, {
+      new_slug: "shadow-emails-next",
+      name: "Shadow Emails Next",
+    });
+    await adapter.shadow.flush();
+
+    expect(renamed.task_lists_updated).toBe(1);
+    expect(postgres.rows.get(`todos:projects:${project.id}`)?.payload)
+      .toMatchObject({ task_list_id: "shadow-emails-next", name: "Shadow Emails Next" });
+    expect(postgres.rows.get(`todos:task_lists:${list.id}`)?.payload)
+      .toMatchObject({ slug: "shadow-emails-next", name: "Shadow Emails Next" });
+  });
+
   test("local write succeeds even when the mirror push fails, incrementing divergence", async () => {
     // Fail every push attempt so retries are exhausted.
     const postgres = createMemoryPostgresClient({ failFirst: Number.MAX_SAFE_INTEGER });

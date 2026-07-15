@@ -119,6 +119,8 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             name: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
             path: { type: "string", minLength: 1 },
             description: { type: "string" },
+            task_list_id: { type: "string", minLength: 1, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+            task_prefix: { type: "string", minLength: 1 },
           },
         },
         UpdateProjectInput: {

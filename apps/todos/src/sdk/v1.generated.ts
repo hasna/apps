@@ -16,7 +16,7 @@ export interface CreateTaskInput { "title": string; "description"?: string; "sta
 
 export interface UpdateTaskInput { "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "assigned_to"?: string; "version"?: number }
 
-export interface CreateProjectInput { "name": string; "path": string; "description"?: string }
+export interface CreateProjectInput { "name": string; "path": string; "description"?: string; "task_list_id"?: string; "task_prefix"?: string }
 
 export interface UpdateProjectInput { "name"?: string; "path"?: string; "description"?: string | null }
 

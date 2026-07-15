@@ -3,7 +3,14 @@ import type {
   TodosStorageContext,
   TodosStorageSnapshot,
 } from "./interfaces.js";
-import { isCanonicalSlug, isValidTaskListProjectScope } from "../lib/slugs.js";
+import {
+  isCanonicalSlug,
+  isValidTaskListProjectScope,
+  type ProjectRoutingRecord,
+  type TaskListRoutingRecord,
+  validateSnapshotRoutingDestinationConflicts,
+  validateSnapshotRoutingRecords,
+} from "../lib/slugs.js";
 
 export type TodosPostgresSyncRecordType =
   | "tasks"
@@ -160,7 +167,7 @@ export function postgresTodosScopedSlugPreflightSql(
       OR slug IS NULL OR slug = '' OR normalized_slug = '' OR slug IS DISTINCT FROM normalized_slug
       OR (object_type = 'task_lists' AND (
         (scope_type IS NOT NULL AND scope_type NOT IN ('string', 'null'))
-        OR (scope_type = 'string' AND scope = '')
+        OR (scope_type = 'string' AND btrim(scope) = '')
       ))
   ), duplicates AS (
     SELECT service, object_type, scope, slug,
@@ -276,6 +283,32 @@ export class PostgresTodosSyncStore {
     snapshot: TodosStorageSnapshot,
     context: TodosStorageContext = {},
   ): Promise<PostgresTodosSyncPushResult> {
+    const routingErrors = validateSnapshotRoutingRecords(snapshot.projects, snapshot.taskLists);
+    if (routingErrors.length > 0) {
+      throw new Error(`Invalid snapshot routing metadata: ${routingErrors.join("; ")}`);
+    }
+    const existing = await this.client.query<TodosPostgresSyncRecordRow>(
+      `SELECT object_type, object_id, payload, updated_at, deleted_at, source_machine_id, version
+       FROM ${this.tableName}
+       WHERE service = $1 AND object_type = ANY($2::text[]) AND deleted_at IS NULL`,
+      [this.service, ["projects", "task_lists"]],
+    );
+    const existingProjects: ProjectRoutingRecord[] = [];
+    const existingTaskLists: TaskListRoutingRecord[] = [];
+    for (const row of existing.rows) {
+      const payload = payloadRecord(row.payload);
+      if (row.object_type === "projects") existingProjects.push(payload as unknown as ProjectRoutingRecord);
+      if (row.object_type === "task_lists") existingTaskLists.push(payload as unknown as TaskListRoutingRecord);
+    }
+    const destinationErrors = validateSnapshotRoutingDestinationConflicts(
+      snapshot.projects,
+      snapshot.taskLists,
+      existingProjects,
+      existingTaskLists,
+    );
+    if (destinationErrors.length > 0) {
+      throw new Error(`Snapshot routing conflicts with destination: ${destinationErrors.join("; ")}`);
+    }
     const result: PostgresTodosSyncPushResult = { records: 0, objectTypes: {} };
     const sourceMachineId = context.requestId ?? this.sourceMachineId ?? null;
     for (const entry of snapshotEntries(snapshot)) {

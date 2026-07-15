@@ -108,20 +108,36 @@ describe("/v1 task-list cloud parity", () => {
 });
 
 describe("/v1 project mutation", () => {
-  test("generic create and patch cannot bypass canonical project slug handling", async () => {
-    const injected = await request("/v1/projects", "POST", {
+  test("create preserves explicit canonical routing fields while patch cannot mutate them", async () => {
+    const explicit = await request("/v1/projects", "POST", {
       name: "Injected",
       path: "/tmp/injected",
-      task_list_id: "arbitrary",
+      task_list_id: "injected-explicit",
+      task_prefix: "INJ",
     });
-    expect(injected?.status).toBe(400);
+    expect(explicit?.status).toBe(201);
+    expect(await explicit!.json()).toMatchObject({
+      project: { task_list_id: "injected-explicit", task_prefix: "INJ" },
+    });
+    expect((await request("/v1/projects", "POST", {
+      name: "Invalid Explicit",
+      path: "/tmp/invalid-explicit",
+      task_list_id: "Not Canonical !!",
+    }))?.status).toBe(400);
 
     const first = await request("/v1/projects", "POST", { name: "Open Emails", path: "/tmp/open-emails" });
     expect(first?.status).toBe(201);
     const firstProject = (await first!.json() as { project: { id: string; task_list_id: string } }).project;
     expect(firstProject.task_list_id).toBe("todos-open-emails");
 
-    const duplicate = await request("/v1/projects", "POST", { name: "Open Emails", path: "/tmp/open-emails-2" });
+    const distinct = await request("/v1/projects", "POST", {
+      name: "Open Emails",
+      path: "/tmp/open-emails-2",
+      task_list_id: "open-emails-secondary",
+    });
+    expect(distinct?.status).toBe(201);
+
+    const duplicate = await request("/v1/projects", "POST", { name: "Open Emails", path: "/tmp/open-emails-3" });
     expect(duplicate?.status).toBe(409);
     expect(await duplicate!.json()).toMatchObject({ code: "PROJECT_SLUG_CONFLICT", conflict: true });
 

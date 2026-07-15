@@ -311,7 +311,7 @@ describe("CLI QoL commands", () => {
 
     const before = JSON.parse(run("--json projects"));
     const out = execSync(
-      `HOME=${fakeHome} TODOS_DB_PATH=${dbPath} TODOS_AUTO_PROJECT=true bun run ${join(CWD, "src/cli/index.tsx")} --json add 'Temp worktree task'`,
+      `HOME=${fakeHome} TODOS_DB_PATH=${dbPath} TODOS_AUTO_PROJECT=true HASNA_TODOS_STORAGE_MODE=local TODOS_STORAGE_MODE=local HASNA_TODOS_API_URL= HASNA_TODOS_API_KEY= TODOS_API_URL= TODOS_API_KEY= bun run ${join(CWD, "src/cli/index.tsx")} --json add 'Temp worktree task'`,
       { encoding: "utf-8", cwd: repo, timeout: 15000 },
     ).trim();
     const task = JSON.parse(out);
@@ -328,7 +328,7 @@ describe("CLI QoL commands", () => {
       execSync("git init -q", { cwd: repo });
 
       const out = execSync(
-        `HOME=${fakeHome} TODOS_DB_PATH=${dbPath} TODOS_AUTO_PROJECT=true bun run ${join(CWD, "src/cli/index.tsx")} --json add 'Non-temp worktree task'`,
+        `HOME=${fakeHome} TODOS_DB_PATH=${dbPath} TODOS_AUTO_PROJECT=true HASNA_TODOS_STORAGE_MODE=local TODOS_STORAGE_MODE=local HASNA_TODOS_API_URL= HASNA_TODOS_API_KEY= TODOS_API_URL= TODOS_API_KEY= bun run ${join(CWD, "src/cli/index.tsx")} --json add 'Non-temp worktree task'`,
         { encoding: "utf-8", cwd: repo, timeout: 15000 },
       ).trim();
       const task = JSON.parse(out);
@@ -368,7 +368,7 @@ describe("CLI QoL commands", () => {
     expect(created.assigned_to).toBe("cross-agent");
 
     const out = execSync(
-      `HOME=${fakeHome} TODOS_DB_PATH=${dbPath} TODOS_AUTO_PROJECT=true bun run ${join(CWD, "src/cli/index.tsx")} --json list --assigned cross-agent`,
+      `HOME=${fakeHome} TODOS_DB_PATH=${dbPath} TODOS_AUTO_PROJECT=true HASNA_TODOS_STORAGE_MODE=local TODOS_STORAGE_MODE=local HASNA_TODOS_API_URL= HASNA_TODOS_API_KEY= TODOS_API_URL= TODOS_API_KEY= bun run ${join(CWD, "src/cli/index.tsx")} --json list --assigned cross-agent`,
       { encoding: "utf-8", cwd: repoA, timeout: 15000 },
     ).trim();
     const tasks = JSON.parse(out);
@@ -390,7 +390,7 @@ describe("CLI QoL commands", () => {
     expect(created.assigned_to).toBe("mine-cross-agent");
 
     const out = execSync(
-      `HOME=${fakeHome} TODOS_DB_PATH=${dbPath} TODOS_AUTO_PROJECT=true bun run ${join(CWD, "src/cli/index.tsx")} --json mine mine-cross-agent`,
+      `HOME=${fakeHome} TODOS_DB_PATH=${dbPath} TODOS_AUTO_PROJECT=true HASNA_TODOS_STORAGE_MODE=local TODOS_STORAGE_MODE=local HASNA_TODOS_API_URL= HASNA_TODOS_API_KEY= TODOS_API_URL= TODOS_API_KEY= bun run ${join(CWD, "src/cli/index.tsx")} --json mine mine-cross-agent`,
       { encoding: "utf-8", cwd: repoA, timeout: 15000 },
     ).trim();
     const tasks = JSON.parse(out);

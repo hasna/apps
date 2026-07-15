@@ -57,7 +57,13 @@ import {
   type TodosPostgresSyncRecordType,
 } from "./postgres-sync.js";
 import { redactEvidenceText } from "../lib/redaction.js";
-import { isCanonicalSlug, isValidTaskListProjectScope, normalizeSlug } from "../lib/slugs.js";
+import {
+  isCanonicalSlug,
+  isValidTaskListProjectScope,
+  normalizeSlug,
+  validateSnapshotRoutingDestinationConflicts,
+  validateSnapshotRoutingRecords,
+} from "../lib/slugs.js";
 
 type RemoteObjectType = TodosPostgresSyncRecordType | "comments" | "dependencies" | "verifications" | "commits" | "refs";
 
@@ -1464,6 +1470,19 @@ async function importSnapshot(
   context?: TodosStorageContext,
 ): Promise<TodosStorageImportResult> {
   const result: TodosStorageImportResult = { inserted: 0, updated: 0, deleted: 0, skipped: 0, errors: [] };
+  result.errors.push(...validateSnapshotRoutingRecords(snapshot.projects, snapshot.taskLists));
+  if (result.errors.length > 0) return result;
+  const [existingProjects, existingTaskLists] = await Promise.all([
+    store.list<Project>("projects"),
+    store.list<TaskList>("task_lists"),
+  ]);
+  result.errors.push(...validateSnapshotRoutingDestinationConflicts(
+    snapshot.projects,
+    snapshot.taskLists,
+    existingProjects,
+    existingTaskLists,
+  ));
+  if (result.errors.length > 0) return result;
   const entries: ReadonlyArray<readonly [
     RemoteObjectType,
     { id: string; updated_at?: string; created_at?: string; version?: number },

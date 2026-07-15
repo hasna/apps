@@ -282,6 +282,7 @@ describe("storage adapter contracts", () => {
     } finally {
       targetDb.close();
     }
+
   });
 
   test("fails closed before importing malformed SQLite project and task-list slugs", async () => {
@@ -308,6 +309,127 @@ describe("storage adapter contracts", () => {
     } finally {
       targetDb.close();
     }
+
+    const postgres = createMemoryPostgresClient();
+    const postgresAdapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+    const postgresImport = await postgresAdapter.sync.importSnapshot!(snapshot);
+    expect(postgresImport).toMatchObject({ inserted: 0, updated: 0, deleted: 0 });
+    expect(postgresImport.errors).toHaveLength(2);
+    expect(postgres.calls.some((call) => call.sql.includes("INSERT INTO todos_sync_records"))).toBe(false);
+
+    const syncCalls: string[] = [];
+    const syncStore = createPostgresTodosSyncStore({
+      async query<T = Record<string, unknown>>(sql: string) {
+        syncCalls.push(sql);
+        return { rows: [] as T[] };
+      },
+    });
+    await expect(syncStore.pushSnapshot(snapshot)).rejects.toThrow("Invalid snapshot routing metadata");
+    expect(syncCalls).toEqual([]);
+  });
+
+  test("fails closed on duplicate snapshot routing slugs across SQLite and Postgres imports", async () => {
+    const source = createLocalSqliteTodosStorageAdapter({ db });
+    const firstProject = await source.projects.create({ name: "Duplicate One", path: "/tmp/duplicate-one" });
+    const secondProject = await source.projects.create({ name: "Duplicate Two", path: "/tmp/duplicate-two" });
+    const firstList = await source.taskLists.create({ name: "First Inbox", slug: "inbox", project_id: firstProject.id });
+    const secondList = await source.taskLists.create({ name: "Second Inbox", slug: "inbox", project_id: secondProject.id });
+    const task = await source.tasks.create({ title: "Must remain unimported", project_id: firstProject.id });
+    const snapshot = await source.sync.exportSnapshot!();
+    snapshot.projects = snapshot.projects.map((project) => project.id === secondProject.id
+      ? { ...project, task_list_id: firstProject.task_list_id }
+      : project);
+    snapshot.taskLists = snapshot.taskLists.map((list) => ({ ...list, project_id: null }));
+
+    const targetDb = new Database(":memory:");
+    targetDb.run("PRAGMA foreign_keys = ON");
+    runMigrations(targetDb);
+    try {
+      const target = createLocalSqliteTodosStorageAdapter({ db: targetDb });
+      const imported = await target.sync.importSnapshot!(snapshot);
+      expect(imported).toMatchObject({ inserted: 0, updated: 0, deleted: 0 });
+      expect(imported.errors.join("\n")).toContain("task_list_id duplicates project");
+      expect(imported.errors.join("\n")).toContain("slug duplicates task list");
+      expect(await target.projects.get(firstProject.id)).toBeNull();
+      expect(await target.projects.get(secondProject.id)).toBeNull();
+      expect(await target.taskLists.get(firstList.id)).toBeNull();
+      expect(await target.taskLists.get(secondList.id)).toBeNull();
+      expect(await target.tasks.get(task.id)).toBeNull();
+    } finally {
+      targetDb.close();
+    }
+
+    const postgres = createMemoryPostgresClient();
+    const postgresAdapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+    const postgresImport = await postgresAdapter.sync.importSnapshot!(snapshot);
+    expect(postgresImport).toMatchObject({ inserted: 0, updated: 0, deleted: 0 });
+    expect(postgresImport.errors.join("\n")).toContain("task_list_id duplicates project");
+    expect(postgresImport.errors.join("\n")).toContain("slug duplicates task list");
+    expect(postgres.calls.some((call) => call.sql.includes("INSERT INTO todos_sync_records"))).toBe(false);
+
+    const syncCalls: string[] = [];
+    const syncStore = createPostgresTodosSyncStore({
+      async query<T = Record<string, unknown>>(sql: string) {
+        syncCalls.push(sql);
+        return { rows: [] as T[] };
+      },
+    });
+    await expect(syncStore.pushSnapshot(snapshot)).rejects.toThrow("duplicates");
+    expect(syncCalls).toEqual([]);
+  });
+
+  test("SQLite import preflights later destination routing conflicts before prefix writes", async () => {
+    const source = createLocalSqliteTodosStorageAdapter({ db });
+    const sourceProject = await source.projects.create({
+      name: "Incoming Occupied",
+      path: "/tmp/incoming-occupied",
+      task_list_id: "occupied-project",
+    });
+    const sourceList = await source.taskLists.create({ name: "Incoming List", slug: "occupied-list" });
+    const sourceTask = await source.tasks.create({ title: "Valid prefix row must not import" });
+    const snapshot = await source.sync.exportSnapshot!();
+
+    const targetDb = new Database(":memory:");
+    targetDb.run("PRAGMA foreign_keys = ON");
+    runMigrations(targetDb);
+    try {
+      const target = createLocalSqliteTodosStorageAdapter({ db: targetDb });
+      await target.projects.create({
+        name: "Existing Occupied",
+        path: "/tmp/existing-occupied",
+        task_list_id: "occupied-project",
+      });
+      await target.taskLists.create({ name: "Existing List", slug: "occupied-list" });
+
+      const imported = await target.sync.importSnapshot!(snapshot);
+      expect(imported).toMatchObject({ inserted: 0, updated: 0, deleted: 0 });
+      expect(imported.errors.join("\n")).toContain("conflicts with existing project");
+      expect(imported.errors.join("\n")).toContain("conflicts with existing task list");
+      expect(await target.projects.get(sourceProject.id)).toBeNull();
+      expect(await target.taskLists.get(sourceList.id)).toBeNull();
+      expect(await target.tasks.get(sourceTask.id)).toBeNull();
+    } finally {
+      targetDb.close();
+    }
+
+    const postgres = createMemoryPostgresClient();
+    const postgresAdapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+    await postgresAdapter.projects.create({
+      name: "Existing PG Occupied",
+      path: "/tmp/existing-pg-occupied",
+      task_list_id: "occupied-project",
+    });
+    await postgresAdapter.taskLists.create({ name: "Existing PG List", slug: "occupied-list" });
+    const insertsBeforeImport = postgres.calls.filter((call) => call.sql.includes("INSERT INTO todos_sync_records")).length;
+    const postgresImport = await postgresAdapter.sync.importSnapshot!(snapshot);
+    expect(postgresImport).toMatchObject({ inserted: 0, updated: 0, deleted: 0 });
+    expect(postgresImport.errors.join("\n")).toContain("conflicts with existing project");
+    expect(postgresImport.errors.join("\n")).toContain("conflicts with existing task list");
+    expect(postgres.calls.filter((call) => call.sql.includes("INSERT INTO todos_sync_records"))).toHaveLength(insertsBeforeImport);
+
+    const syncStore = createPostgresTodosSyncStore(postgres.client);
+    await expect(syncStore.pushSnapshot(snapshot)).rejects.toThrow("conflicts with destination");
+    expect(postgres.calls.filter((call) => call.sql.includes("INSERT INTO todos_sync_records"))).toHaveLength(insertsBeforeImport);
   });
 
   test("propagates local hard deletes through explicit storage tombstones", async () => {
@@ -731,7 +853,7 @@ describe("storage adapter contracts", () => {
   test("rejects malformed Postgres task-list project scopes before direct or sync writes", async () => {
     const postgres = createMemoryPostgresClient();
     const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
-    const malformedScopes: unknown[] = ["", 1, true, { id: "project-1" }, ["project-1"]];
+    const malformedScopes: unknown[] = ["", "   ", 1, true, { id: "project-1" }, ["project-1"]];
 
     for (const [index, projectId] of malformedScopes.entries()) {
       await expect(adapter.taskLists.create({
@@ -785,7 +907,7 @@ describe("storage adapter contracts", () => {
     await expect(syncStore.pushSnapshot(scopeSnapshot(undefined, false))).resolves.toMatchObject({ records: 1 });
     await expect(syncStore.pushSnapshot(scopeSnapshot(null))).resolves.toMatchObject({ records: 1 });
     await expect(syncStore.pushSnapshot(scopeSnapshot("project-1"))).resolves.toMatchObject({ records: 1 });
-    expect(syncCalls).toHaveLength(3);
+    expect(syncCalls).toHaveLength(6);
   });
 
   test("maps task-list update preflight and project unique violations to stable conflicts", async () => {
@@ -1503,7 +1625,7 @@ describe("storage adapter contracts", () => {
     expect(preflight).toContain("NULL::text AS scope_type");
     expect(preflight).toContain("slug_type IS DISTINCT FROM 'string'");
     expect(preflight).toContain("scope_type IS NOT NULL AND scope_type NOT IN ('string', 'null')");
-    expect(preflight).toContain("scope_type = 'string' AND scope = ''");
+    expect(preflight).toContain("scope_type = 'string' AND btrim(scope) = ''");
     expect(preflight).toContain("'invalid'::text AS issue");
     expect(indexes).toHaveLength(2);
     expect(indexes.every((sql) => sql.includes("CREATE UNIQUE INDEX CONCURRENTLY"))).toBe(true);

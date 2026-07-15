@@ -12,7 +12,7 @@ import type { CreateProjectInput, CreateTaskInput, CreateTaskListInput, RenamePr
 import type { TodosStorageContext, TodosStorageSnapshot } from "../storage/interfaces.js";
 import { getCloudStorageAdapter, getCloudVerifier, ensureCloudSchema } from "./cloud.js";
 import { redactEvidenceText } from "../lib/redaction.js";
-import { normalizeSlug } from "../lib/slugs.js";
+import { isCanonicalSlug, normalizeSlug } from "../lib/slugs.js";
 
 export interface V1RequestDependencies {
   getVerifier?: typeof getCloudVerifier;
@@ -49,17 +49,23 @@ function validateProjectPatch(value: unknown):
 }
 
 function validateProjectCreate(value: unknown):
-  | { ok: true; input: Pick<CreateProjectInput, "name" | "path" | "description"> }
+  | { ok: true; input: Pick<CreateProjectInput, "name" | "path" | "description" | "task_list_id" | "task_prefix"> }
   | { ok: false; message: string } {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "project body must be an object" };
   const body = value as Record<string, unknown>;
-  const allowed = new Set(["name", "path", "description"]);
+  const allowed = new Set(["name", "path", "description", "task_list_id", "task_prefix"]);
   const unknown = Object.keys(body).find((key) => !allowed.has(key));
   if (unknown) return { ok: false, message: `unknown project field: ${unknown}` };
   if (typeof body["name"] !== "string" || !body["name"].trim()) return { ok: false, message: "name must be a non-empty string" };
   if (!normalizeSlug(body["name"])) return { ok: false, message: "name must produce a non-empty canonical slug" };
   if (typeof body["path"] !== "string" || !body["path"].trim()) return { ok: false, message: "path must be a non-empty string" };
   if (body["description"] !== undefined && typeof body["description"] !== "string") return { ok: false, message: "description must be a string" };
+  if (body["task_list_id"] !== undefined && !isCanonicalSlug(body["task_list_id"])) {
+    return { ok: false, message: "task_list_id must be non-empty canonical kebab-case" };
+  }
+  if (body["task_prefix"] !== undefined && (typeof body["task_prefix"] !== "string" || !body["task_prefix"].trim())) {
+    return { ok: false, message: "task_prefix must be a non-empty string" };
+  }
   return { ok: true, input: body as never };
 }
 

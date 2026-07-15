@@ -398,8 +398,18 @@ export function createShadowTodosStorageAdapter(
         return project;
       },
       async rename(id, input, context) {
+        const projectBefore = await local.projects.get(id, context);
+        const cascadeCandidates = projectBefore?.task_list_id
+          ? (await local.taskLists.list(id, context)).filter((list) => list.slug === projectBefore.task_list_id)
+          : [];
         const result = await local.projects.rename(id, input, context);
         mirror.enqueueUpsert("projects", result.project, context);
+        for (const candidate of cascadeCandidates) {
+          const changed = await local.taskLists.get(candidate.id, context);
+          if (changed && (changed.slug !== candidate.slug || changed.name !== candidate.name)) {
+            mirror.enqueueUpsert("taskLists", changed, context);
+          }
+        }
         return result;
       },
       async delete(id, context) {
