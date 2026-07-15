@@ -326,6 +326,7 @@ export interface CreateTaskListInput {
 }
 
 export interface UpdateTaskListInput {
+  slug?: string;
   name?: string;
   description?: string;
   metadata?: Record<string, unknown>;

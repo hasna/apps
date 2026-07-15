@@ -22,7 +22,7 @@
  */
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { resolve as resolvePath } from "node:path";
-import type { Agent, CreateTaskListInput, Plan, Project, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList } from "../types/index.js";
+import type { Agent, CreateTaskListInput, Plan, Project, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, UpdateTaskListInput } from "../types/index.js";
 import { redactEvidenceText } from "../lib/redaction.js";
 
 type Env = Record<string, string | undefined>;
@@ -175,9 +175,8 @@ function uniqueProjectMatches(projects: Project[], predicate: (project: Project)
 }
 
 /** Resolve a cloud project UUID, unique UUID prefix, exact name/path, or canonical slug. */
-export async function cloudResolveProjectRef(client: HasnaStorageClient, ref: string): Promise<string> {
+function resolveCloudProjectRef(projects: Project[], ref: string): string {
   const input = ref.trim();
-  const projects = await cloudListProjects(client);
   const normalizedRef = input.toLowerCase();
   const pathLike = input.startsWith(".") || input.includes("/") || input.includes("\\");
   const normalizedPath = pathLike ? resolvePath(input) : undefined;
@@ -205,6 +204,23 @@ export async function cloudResolveProjectRef(client: HasnaStorageClient, ref: st
   }
 
   throw new Error(`Project not found: "${input}"`);
+}
+
+export async function cloudResolveProjectRef(client: HasnaStorageClient, ref: string): Promise<string> {
+  return resolveCloudProjectRef(await cloudListProjects(client), ref);
+}
+
+/** Update one cloud project by exact UUID (`PATCH /v1/projects/:id`). */
+export async function cloudUpdateProject(
+  client: HasnaStorageClient,
+  id: string,
+  patch: Record<string, unknown>,
+): Promise<Project> {
+  const raw = await client.update<unknown>("projects", id, patch);
+  if (raw && typeof raw === "object" && "project" in (raw as Record<string, unknown>)) {
+    return (raw as { project: Project }).project;
+  }
+  return raw as Project;
 }
 
 /** List plans from the cloud (`GET /v1/plans`), optionally scoped to a project. */
@@ -869,6 +885,83 @@ export async function cloudCreateTaskList(
     return (raw as { task_list: TaskList }).task_list;
   }
   return raw as TaskList;
+}
+
+/** Update one cloud task list by exact UUID (`PATCH /v1/task-lists/:id`). */
+export async function cloudUpdateTaskList(
+  client: HasnaStorageClient,
+  id: string,
+  patch: UpdateTaskListInput,
+): Promise<TaskList> {
+  const raw = await client.update<unknown>("task-lists", id, patch as unknown as Record<string, unknown>);
+  if (raw && typeof raw === "object" && "task_list" in (raw as Record<string, unknown>)) {
+    return (raw as { task_list: TaskList }).task_list;
+  }
+  return raw as TaskList;
+}
+
+/**
+ * Rename a cloud project and cascade its canonical task-list slug. The project
+ * and matching task-list rows are resolved before any mutation. If the final
+ * project update fails, previously changed task lists are restored before the
+ * original error is rethrown. A rollback failure is reported explicitly.
+ */
+export async function cloudRenameProject(
+  client: HasnaStorageClient,
+  ref: string,
+  newSlug: string,
+  name?: string,
+): Promise<{ project: Project; task_lists_updated: number }> {
+  const projects = await cloudListProjects(client);
+  const id = resolveCloudProjectRef(projects, ref);
+  const project = projects.find((candidate) => candidate.id === id)!;
+  const normalizedSlug = cloudProjectSlug(newSlug);
+  if (!normalizedSlug) throw new Error("Invalid slug — must be non-empty kebab-case");
+  if (projects.some((candidate) => candidate.id !== id && candidate.task_list_id === normalizedSlug)) {
+    throw new Error(`Slug "${normalizedSlug}" is already used by another project`);
+  }
+
+  const lists = await cloudListTaskLists(client, id);
+  const matching = project.task_list_id
+    ? lists.filter((list) => list.slug === project.task_list_id)
+    : [];
+  const conflictingList = lists.find((list) =>
+    list.slug === normalizedSlug && !matching.some((candidate) => candidate.id === list.id)
+  );
+  if (conflictingList) {
+    throw new Error(`Task-list slug "${normalizedSlug}" is already used in project "${project.name}"`);
+  }
+  const changed: TaskList[] = [];
+  try {
+    for (const list of matching) {
+      await cloudUpdateTaskList(client, list.id, {
+        slug: normalizedSlug,
+        ...(name !== undefined ? { name } : {}),
+      });
+      changed.push(list);
+    }
+    const updatedProject = await cloudUpdateProject(client, id, {
+      task_list_id: normalizedSlug,
+      ...(name !== undefined ? { name } : {}),
+    });
+    return { project: updatedProject, task_lists_updated: changed.length };
+  } catch (error) {
+    const rollbackErrors: unknown[] = [];
+    for (const list of changed.reverse()) {
+      try {
+        await cloudUpdateTaskList(client, list.id, { slug: list.slug, name: list.name });
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError);
+      }
+    }
+    if (rollbackErrors.length > 0) {
+      throw new AggregateError(
+        [error, ...rollbackErrors],
+        `Project rename failed and ${rollbackErrors.length} task-list rollback operation(s) also failed`,
+      );
+    }
+    throw error;
+  }
 }
 
 /** Delete a task list in the cloud (`DELETE /v1/task-lists/:id`). */

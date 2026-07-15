@@ -256,7 +256,10 @@ export function registerTaskCommands(program: Command) {
       if (cloud) {
         let task;
         try {
-          const cloudProjectId = opts.project || globalOpts.project;
+          const cloudProjectRef = opts.project || globalOpts.project;
+          const cloudProjectId = cloudProjectRef
+            ? await cloudResolveProjectRef(cloud, cloudProjectRef)
+            : undefined;
           const cloudTaskListId = opts.list
             ? await cloudResolveTaskListRef(cloud, opts.list, cloudProjectId)
             : undefined;

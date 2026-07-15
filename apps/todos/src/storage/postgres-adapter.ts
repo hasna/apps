@@ -1203,9 +1203,19 @@ async function createTaskList(input: CreateTaskListInput, store: PostgresJsonRec
 
 async function updateTaskList(id: string, input: UpdateTaskListInput, store: PostgresJsonRecordStore): Promise<TaskList> {
   const list = await requireRecord<TaskList>("task_lists", id, store);
+  const patch = definedPatch(input);
+  if (input.slug !== undefined) {
+    const slug = slugify(input.slug);
+    if (!slug) throw new Error("Invalid task-list slug — must be non-empty kebab-case");
+    const duplicate = (await store.list<TaskList>("task_lists")).find((candidate) =>
+      candidate.id !== id && candidate.project_id === list.project_id && candidate.slug === slug
+    );
+    if (duplicate) throw new Error(`Task list with slug "${slug}" already exists in this scope`);
+    patch.slug = slug;
+  }
   return store.upsert("task_lists", {
     ...list,
-    ...definedPatch(input),
+    ...patch,
     metadata: input.metadata ?? list.metadata,
     updated_at: new Date().toISOString(),
   });

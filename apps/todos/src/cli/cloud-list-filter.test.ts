@@ -50,6 +50,170 @@ function project(id = PROJECT_ID, name = "Open Emails", path = PROJECT_PATH) {
 
 describe("cloud CLI task-list filtering", () => {
   test.each([
+    ["global project option", ["--project", PROJECT_SLUG, "--json", "add", "Cloud task", "--list", "release"]],
+    ["add project option", ["--json", "add", "Cloud task", "--project", PROJECT_SLUG, "--list", "release"]],
+  ])("resolves the project before cloud add scopes a task-list slug via %s", async (_label, args) => {
+    const requests: Array<{ method: string; path: string; query: string; body?: unknown }> = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        const body = request.method === "POST" ? await request.json() : undefined;
+        requests.push({ method: request.method, path: url.pathname, query: url.searchParams.toString(), body });
+        if (url.pathname === "/v1/projects") return Response.json({ projects: [project()] });
+        if (url.pathname === "/v1/task-lists") {
+          expect(url.searchParams.get("project_id")).toBe(PROJECT_ID);
+          return Response.json({ task_lists: [taskList(LIST_ID, "release")] });
+        }
+        if (url.pathname === "/v1/tasks" && request.method === "POST") {
+          return Response.json({ task: { id: TASK_ID, ...(body as object) } }, { status: 201 });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-add-project-filter-"));
+    tempRoots.push(root);
+    try {
+      const result = await runCli(args, root, `http://127.0.0.1:${server.port}`);
+      expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        id: TASK_ID,
+        project_id: PROJECT_ID,
+        task_list_id: LIST_ID,
+      });
+      expect(requests.map((entry) => `${entry.method} ${entry.path}?${entry.query}`)).toEqual([
+        "GET /v1/projects?",
+        `GET /v1/task-lists?project_id=${PROJECT_ID}`,
+        "POST /v1/tasks?",
+      ]);
+      expect(requests[2]!.body).toMatchObject({ project_id: PROJECT_ID, task_list_id: LIST_ID });
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("routes project-rename through cloud and cascades the matching task-list slug", async () => {
+    const requests: Array<{ method: string; path: string; body?: unknown }> = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        const body = request.method === "PATCH" ? await request.json() : undefined;
+        requests.push({ method: request.method, path: url.pathname, body });
+        if (url.pathname === "/v1/projects") return Response.json({ projects: [project()] });
+        if (url.pathname === "/v1/task-lists") {
+          return Response.json({ task_lists: [taskList(LIST_ID, "emails-canonical")] });
+        }
+        if (url.pathname === `/v1/task-lists/${LIST_ID}` && request.method === "PATCH") {
+          return Response.json({ task_list: { ...taskList(LIST_ID, "emails-next"), ...(body as object) } });
+        }
+        if (url.pathname === `/v1/projects/${PROJECT_ID}` && request.method === "PATCH") {
+          return Response.json({ project: { ...project(), ...(body as object) } });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-project-rename-"));
+    tempRoots.push(root);
+    try {
+      const result = await runCli(
+        ["--json", "project-rename", PROJECT_SLUG, "emails-next", "--name", "Emails Next"],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        project: { id: PROJECT_ID, name: "Emails Next", task_list_id: "emails-next" },
+        task_lists_updated: 1,
+      });
+      expect(requests).toEqual([
+        { method: "GET", path: "/v1/projects", body: undefined },
+        { method: "GET", path: "/v1/task-lists", body: undefined },
+        { method: "PATCH", path: `/v1/task-lists/${LIST_ID}`, body: { slug: "emails-next", name: "Emails Next" } },
+        { method: "PATCH", path: `/v1/projects/${PROJECT_ID}`, body: { task_list_id: "emails-next", name: "Emails Next" } },
+      ]);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("project-rename rejects a task-list slug conflict before any mutation", async () => {
+    const methods: string[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        methods.push(`${request.method} ${url.pathname}`);
+        if (url.pathname === "/v1/projects") return Response.json({ projects: [project()] });
+        if (url.pathname === "/v1/task-lists") {
+          return Response.json({ task_lists: [
+            taskList(LIST_ID, "emails-canonical"),
+            taskList("44444444-4444-4444-8444-444444444444", "emails-next"),
+          ] });
+        }
+        return Response.json({ error: "mutation must not run" }, { status: 500 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-project-rename-conflict-"));
+    tempRoots.push(root);
+    try {
+      const result = await runCli(
+        ["--json", "project-rename", PROJECT_SLUG, "emails-next"],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("already used");
+      expect(methods).toEqual(["GET /v1/projects", "GET /v1/task-lists"]);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("project-rename reports an incomplete rollback", async () => {
+    let listPatchCount = 0;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === "/v1/projects") return Response.json({ projects: [project()] });
+        if (url.pathname === "/v1/task-lists") {
+          return Response.json({ task_lists: [taskList(LIST_ID, "emails-canonical")] });
+        }
+        if (url.pathname === `/v1/task-lists/${LIST_ID}` && request.method === "PATCH") {
+          listPatchCount++;
+          if (listPatchCount === 1) {
+            return Response.json({ task_list: taskList(LIST_ID, "emails-next") });
+          }
+          return Response.json({ error: "rollback unavailable" }, { status: 503 });
+        }
+        if (url.pathname === `/v1/projects/${PROJECT_ID}` && request.method === "PATCH") {
+          return Response.json({ error: "project update unavailable" }, { status: 503 });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-project-rename-rollback-"));
+    tempRoots.push(root);
+    try {
+      const result = await runCli(
+        ["--json", "project-rename", PROJECT_SLUG, "emails-next"],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("rollback operation");
+      expect(listPatchCount).toBe(2);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test.each([
     ["project-scoped slug", "release", PROJECT_SLUG],
     ["exact UUID", LIST_ID, false],
     ["unique UUID prefix", "12345678", false],

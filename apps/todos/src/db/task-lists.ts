@@ -72,6 +72,18 @@ export function updateTaskList(id: string, input: UpdateTaskListInput, db?: Data
   const sets: string[] = ["updated_at = ?"];
   const params: (string | null)[] = [now()];
 
+  if (input.slug !== undefined) {
+    const slug = slugify(input.slug);
+    if (!slug) throw new Error("Invalid task-list slug — must be non-empty kebab-case");
+    if (!existing.project_id) {
+      const duplicate = d.query(
+        "SELECT id FROM task_lists WHERE project_id IS NULL AND slug = ? AND id != ?",
+      ).get(slug, id) as { id: string } | null;
+      if (duplicate) throw new Error(`Standalone task list with slug "${slug}" already exists`);
+    }
+    sets.push("slug = ?");
+    params.push(slug);
+  }
   if (input.name !== undefined) {
     sets.push("name = ?");
     params.push(input.name);

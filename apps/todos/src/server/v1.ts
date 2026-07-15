@@ -8,7 +8,7 @@
  * over the core storage lib — there are NO stubs; unimplemented routes 404.
  */
 import { LockError } from "../types/index.js";
-import type { CreateProjectInput, CreateTaskInput, CreateTaskListInput, TaskComment, UpdateTaskInput } from "../types/index.js";
+import type { CreateProjectInput, CreateTaskInput, CreateTaskListInput, TaskComment, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
 import type { TodosStorageContext, TodosStorageSnapshot } from "../storage/interfaces.js";
 import { getCloudStorageAdapter, getCloudVerifier, ensureCloudSchema } from "./cloud.js";
 import { redactEvidenceText } from "../lib/redaction.js";
@@ -730,6 +730,21 @@ export async function handleV1Request(
       if (id && method === "GET") {
         const taskList = await store.taskLists.get(id);
         return taskList ? json({ task_list: taskList }) : error(404, "task list not found");
+      }
+      if (id && (method === "PATCH" || method === "PUT")) {
+        const body = await readJson<UpdateTaskListInput>(req);
+        if (!body) return error(400, "invalid JSON body");
+        const unknownField = Object.keys(body).find((key) => !["slug", "name", "description", "metadata"].includes(key));
+        if (unknownField) return error(400, `unsupported task-list update field: ${unknownField}`);
+        if (body.slug !== undefined && typeof body.slug !== "string") return error(400, "slug must be a string");
+        if (body.name !== undefined && typeof body.name !== "string") return error(400, "name must be a string");
+        if (body.description !== undefined && typeof body.description !== "string") return error(400, "description must be a string");
+        if (body.metadata !== undefined && (!body.metadata || typeof body.metadata !== "object" || Array.isArray(body.metadata))) {
+          return error(400, "metadata must be an object");
+        }
+        if (!await store.taskLists.get(id)) return error(404, "task list not found");
+        const taskList = await store.taskLists.update(id, body);
+        return json({ task_list: taskList });
       }
       if (id && method === "DELETE") {
         const deleted = await store.taskLists.delete(id, contextFromPrincipal(principal));

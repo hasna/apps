@@ -36,7 +36,7 @@ beforeEach(() => {
 afterEach(() => resetDatabase());
 
 describe("/v1 task-list cloud parity", () => {
-  test("create, project-scoped enumeration, get, and delete share one canonical id", async () => {
+  test("create, project-scoped enumeration, get, update, and delete share one canonical id", async () => {
     const project = await store.projects.create({ name: "Open Emails", path: "/tmp/open-emails" });
     await store.taskLists.create({ name: "Other", slug: "other" });
     const created = await request("/v1/task-lists", "POST", {
@@ -52,6 +52,17 @@ describe("/v1 task-list cloud parity", () => {
     expect(listedBody.task_lists.map((list) => list.id)).toEqual([createdBody.task_list.id]);
 
     expect((await request(`/v1/task-lists/${createdBody.task_list.id}`))?.status).toBe(200);
+    const updated = await request(`/v1/task-lists/${createdBody.task_list.id}`, "PATCH", {
+      slug: "emails-next",
+      name: "Emails Next",
+    });
+    expect(updated?.status).toBe(200);
+    expect(await updated!.json()).toMatchObject({
+      task_list: { id: createdBody.task_list.id, slug: "emails-next", name: "Emails Next" },
+    });
+    expect((await request(`/v1/task-lists/${createdBody.task_list.id}`, "PATCH", { slug: 42 }))?.status).toBe(400);
+    expect((await request(`/v1/task-lists/${createdBody.task_list.id}`, "PATCH", { metadata: [] }))?.status).toBe(400);
+    expect((await request(`/v1/task-lists/${createdBody.task_list.id}`, "PATCH", { project_id: null }))?.status).toBe(400);
     expect((await request(`/v1/task-lists/${createdBody.task_list.id}`, "DELETE"))?.status).toBe(200);
     expect((await request(`/v1/task-lists/${createdBody.task_list.id}`))?.status).toBe(404);
   });
