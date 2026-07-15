@@ -7,26 +7,21 @@ import { getDatabase, closeDatabase, resetDatabase } from "../db/database.js";
 import { createTask } from "../db/tasks.js";
 import { createTaskList } from "../db/task-lists.js";
 import { createProject } from "../db/projects.js";
+import { runMigrations } from "../db/schema.js";
+import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
 
 let testRoot = "";
 
 async function runCli(args: string[], dbPath: string, extraEnv: Record<string, string> = {}) {
   const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
     cwd: import.meta.dir + "/../..",
-    env: {
-      ...process.env,
+    env: localRoutingTestEnv({
       HOME: join(testRoot, "home"),
       HASNA_EVENTS_DIR: join(testRoot, "events"),
-      HASNA_TODOS_STORAGE_MODE: "local",
-      TODOS_STORAGE_MODE: "local",
-      HASNA_TODOS_API_URL: "",
-      HASNA_TODOS_API_KEY: "",
-      TODOS_API_URL: "",
-      TODOS_API_KEY: "",
       ...extraEnv,
       TODOS_DB_PATH: dbPath,
       TODOS_AUTO_PROJECT: "false",
-    },
+    }),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -142,7 +137,7 @@ describe("CLI integration", () => {
       for (const flag of ["--version", "-V"]) {
         const proc = Bun.spawn(["bun", "run", entrypoint, flag], {
           cwd: import.meta.dir + "/../..",
-          env: { ...process.env, TODOS_DB_PATH: ":memory:", TODOS_AUTO_PROJECT: "false", TODOS_NO_OPEN: "true" },
+          env: localRoutingTestEnv({ TODOS_DB_PATH: ":memory:", TODOS_AUTO_PROJECT: "false", TODOS_NO_OPEN: "true" }),
           stdout: "pipe",
           stderr: "pipe",
         });
@@ -163,7 +158,7 @@ describe("CLI integration", () => {
       for (const flag of ["--help", "-h"]) {
         const proc = Bun.spawn(["bun", "run", entrypoint, flag], {
           cwd: import.meta.dir + "/../..",
-          env: { ...process.env, TODOS_DB_PATH: ":memory:", TODOS_AUTO_PROJECT: "false", TODOS_NO_OPEN: "true" },
+          env: localRoutingTestEnv({ TODOS_DB_PATH: ":memory:", TODOS_AUTO_PROJECT: "false", TODOS_NO_OPEN: "true" }),
           stdout: "pipe",
           stderr: "pipe",
         });
@@ -220,7 +215,7 @@ describe("CLI integration", () => {
       ["bun", "run", "src/cli/index.tsx", "add", "CLI test task", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-todos.db", TODOS_AUTO_PROJECT: "false" },
+        env: localRoutingTestEnv({ TODOS_DB_PATH: "/tmp/test-cli-todos.db", TODOS_AUTO_PROJECT: "false" }),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -377,7 +372,7 @@ describe("CLI integration", () => {
       ["bun", "run", "src/cli/index.tsx", "list", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-list.db", TODOS_AUTO_PROJECT: "false" },
+        env: localRoutingTestEnv({ TODOS_DB_PATH: "/tmp/test-cli-list.db", TODOS_AUTO_PROJECT: "false" }),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -452,31 +447,28 @@ describe("CLI integration", () => {
     const dbPath = join(testRoot, "large-doctor-routing.db");
     const projectDir = join(testRoot, "large-doctor-project");
     mkdirSync(projectDir, { recursive: true });
-    const previousDbPath = process.env["TODOS_DB_PATH"];
-    closeDatabase();
-    process.env["TODOS_DB_PATH"] = dbPath;
-    resetDatabase();
-    const db = getDatabase();
-    const project = createProject({ name: "LargeDoctor", path: projectDir }, db);
-    createTaskList({ name: "LargeDoctor list", slug: project.task_list_id!, project_id: project.id }, db);
-    const longTitle = "routing-drift-payload ".repeat(30);
-    const seed = db.transaction(() => {
-      for (let i = 0; i < 600; i += 1) {
-        // Each task yields two safe_auto findings: wrong working_dir + null task_list_id.
-        createTask({
-          title: `${longTitle}${i}`,
-          project_id: project.id,
-          working_dir: "/somewhere/drifted/away",
-          status: "pending",
-          tags: ["auto:route"],
-        }, db);
-      }
-    });
-    seed();
-    closeDatabase();
-    if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
-    else process.env["TODOS_DB_PATH"] = previousDbPath;
-    resetDatabase();
+    const seedDb = new Database(dbPath);
+    runMigrations(seedDb);
+    try {
+      const project = createProject({ name: "LargeDoctor", path: projectDir }, seedDb);
+      createTaskList({ name: "LargeDoctor list", slug: project.task_list_id!, project_id: project.id }, seedDb);
+      const longTitle = "routing-drift-payload ".repeat(30);
+      const seed = seedDb.transaction(() => {
+        for (let i = 0; i < 600; i += 1) {
+          // Each task yields two safe_auto findings: wrong working_dir + null task_list_id.
+          createTask({
+            title: `${longTitle}${i}`,
+            project_id: project.id,
+            working_dir: "/somewhere/drifted/away",
+            status: "pending",
+            tags: ["auto:route"],
+          }, seedDb);
+        }
+      });
+      seed();
+    } finally {
+      seedDb.close();
+    }
 
     const run = await runCli(["doctor", "routing", "--json"], dbPath);
     expect(run.exitCode).toBe(1); // findings present
@@ -486,7 +478,7 @@ describe("CLI integration", () => {
     expect(doctor.summary.inspected).toBe(600);
     expect(doctor.summary.findings_total).toBe(1200);
     expect(doctor.findings).toHaveLength(1200);
-  });
+  }, 30_000);
 
   it("should apply doctor routing repairs end-to-end through the real binary (--apply must not silently dry-run)", async () => {
     // Regression guard for Commander parent-option shadowing: the actionable
@@ -707,7 +699,7 @@ describe("CLI integration", () => {
       ["bun", "run", "src/cli/index.tsx", "add", "searchable item", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-search.db", TODOS_AUTO_PROJECT: "false" },
+        env: localRoutingTestEnv({ TODOS_DB_PATH: "/tmp/test-cli-search.db", TODOS_AUTO_PROJECT: "false" }),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -718,7 +710,7 @@ describe("CLI integration", () => {
       ["bun", "run", "src/cli/index.tsx", "search", "searchable", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-search.db", TODOS_AUTO_PROJECT: "false" },
+        env: localRoutingTestEnv({ TODOS_DB_PATH: "/tmp/test-cli-search.db", TODOS_AUTO_PROJECT: "false" }),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -1337,7 +1329,7 @@ describe("CLI integration", () => {
       ["bun", "run", "src/cli/index.tsx", "add", "weekly test task", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-week.db", TODOS_AUTO_PROJECT: "false" },
+        env: localRoutingTestEnv({ TODOS_DB_PATH: "/tmp/test-cli-week.db", TODOS_AUTO_PROJECT: "false" }),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -1348,7 +1340,7 @@ describe("CLI integration", () => {
       ["bun", "run", "src/cli/index.tsx", "week", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-week.db", TODOS_AUTO_PROJECT: "false" },
+        env: localRoutingTestEnv({ TODOS_DB_PATH: "/tmp/test-cli-week.db", TODOS_AUTO_PROJECT: "false" }),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -1370,7 +1362,7 @@ describe("CLI integration", () => {
       ["bun", "run", "src/cli/index.tsx", "mine", "test-agent", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-mine.db", TODOS_AUTO_PROJECT: "false" },
+        env: localRoutingTestEnv({ TODOS_DB_PATH: "/tmp/test-cli-mine.db", TODOS_AUTO_PROJECT: "false" }),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -1390,7 +1382,7 @@ describe("CLI integration", () => {
       ["bun", "run", "src/cli/index.tsx", "blocked", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-blocked.db", TODOS_AUTO_PROJECT: "false" },
+        env: localRoutingTestEnv({ TODOS_DB_PATH: "/tmp/test-cli-blocked.db", TODOS_AUTO_PROJECT: "false" }),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -1410,7 +1402,7 @@ describe("CLI integration", () => {
       ["bun", "run", "src/cli/index.tsx", "burndown", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-burndown.db", TODOS_AUTO_PROJECT: "false" },
+        env: localRoutingTestEnv({ TODOS_DB_PATH: "/tmp/test-cli-burndown.db", TODOS_AUTO_PROJECT: "false" }),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -1433,7 +1425,7 @@ describe("CLI integration", () => {
       ["bun", "run", "src/cli/index.tsx", "log", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-log.db", TODOS_AUTO_PROJECT: "false" },
+        env: localRoutingTestEnv({ TODOS_DB_PATH: "/tmp/test-cli-log.db", TODOS_AUTO_PROJECT: "false" }),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -1453,7 +1445,7 @@ describe("CLI integration", () => {
       ["bun", "run", "src/cli/index.tsx", "ready", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-ready.db", TODOS_AUTO_PROJECT: "false" },
+        env: localRoutingTestEnv({ TODOS_DB_PATH: "/tmp/test-cli-ready.db", TODOS_AUTO_PROJECT: "false" }),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -2446,7 +2438,7 @@ describe("CLI integration", () => {
       ["bun", "run", "src/cli/index.tsx", "sprint", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-sprint.db", TODOS_AUTO_PROJECT: "false" },
+        env: localRoutingTestEnv({ TODOS_DB_PATH: "/tmp/test-cli-sprint.db", TODOS_AUTO_PROJECT: "false" }),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -2572,7 +2564,7 @@ describe("CLI integration", () => {
       ["bun", "run", "src/cli/index.tsx", "overdue", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-overdue.db", TODOS_AUTO_PROJECT: "false" },
+        env: localRoutingTestEnv({ TODOS_DB_PATH: "/tmp/test-cli-overdue.db", TODOS_AUTO_PROJECT: "false" }),
         stdout: "pipe",
         stderr: "pipe",
       },

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
 
 const CWD = join(import.meta.dir, "../..");
 
@@ -13,8 +14,13 @@ let fakeHome: string;
 
 function run(args: string): string {
   return execSync(
-    `HOME=${fakeHome} TODOS_DB_PATH=${dbPath} TODOS_AUTO_PROJECT=false HASNA_TODOS_STORAGE_MODE=local TODOS_STORAGE_MODE=local HASNA_TODOS_API_URL= HASNA_TODOS_API_KEY= bun run src/cli/index.tsx ${args}`,
-    { encoding: "utf-8", cwd: CWD, timeout: 15000 },
+    `bun run src/cli/index.tsx ${args}`,
+    {
+      encoding: "utf-8",
+      cwd: CWD,
+      timeout: 15000,
+      env: localRoutingTestEnv({ HOME: fakeHome, TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false" }),
+    },
   ).trim();
 }
 

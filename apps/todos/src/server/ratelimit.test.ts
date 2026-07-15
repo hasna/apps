@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
 
 // ── M6: the rate limiter must key on the real socket peer, not spoofable
 // client headers. Bun.serve never sets x-forwarded-for for direct connections,
@@ -42,15 +43,14 @@ beforeAll(async () => {
   proc = Bun.spawn({
     cmd: ["bun", "run", "src/server/index.ts", `--port=${port}`, "--no-open"],
     cwd: join(import.meta.dir, "..", ".."),
-    env: {
-      ...process.env,
+    env: localRoutingTestEnv({
       TODOS_DB_PATH: dbPath,
       TODOS_AUTO_PROJECT: "false",
       TODOS_NO_OPEN: "true",
       TODOS_RATE_LIMIT_MAX: String(RATE_LIMIT_MAX),
       // Ensure proxy header trust is OFF (default), so XFF must be ignored.
       TODOS_TRUST_PROXY: "0",
-    },
+    }),
     stdout: "pipe",
     stderr: "pipe",
   });

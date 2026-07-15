@@ -7,6 +7,7 @@ import { linkTaskToCommit, addTaskVerification } from "../db/task-commits.js";
 import { createTask } from "../db/task-crud.js";
 import { generateReleaseNotes, renderReleaseNotesMarkdown } from "./release-notes.js";
 import { validateJsonContract } from "../json-contracts.js";
+import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
 
 const dbPath = "/tmp/todos-release-notes-test.db";
 
@@ -117,7 +118,7 @@ describe("local release notes generation", () => {
         "--json",
       ],
       cwd: `${import.meta.dir}/../..`,
-      env: { ...process.env, TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false" },
+      env: localRoutingTestEnv({ TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false" }),
       stdout: "pipe",
       stderr: "pipe",
     });

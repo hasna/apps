@@ -9,6 +9,7 @@ import {
   writeEnvironmentSnapshot,
 } from "./environment-snapshots.js";
 import { validateJsonContract } from "../json-contracts.js";
+import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
 
 function makeProject(): string {
   const root = mkdtempSync(join(tmpdir(), "todos-env-snapshot-"));
@@ -86,11 +87,10 @@ describe("environment snapshots", () => {
       cwd: join(import.meta.dir, "..", ".."),
       stdout: "pipe",
       stderr: "pipe",
-      env: {
-        ...process.env,
+      env: localRoutingTestEnv({
         TODOS_DB_PATH: ":memory:",
         OPENAI_API_KEY: ["sk", "test-secret-value"].join("-"),
-      },
+      }),
     });
 
     expect(result.exitCode).toBe(0);

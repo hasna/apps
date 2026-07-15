@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
 
 let port: number;
 let proc: ReturnType<typeof Bun.spawn>;
@@ -60,7 +61,7 @@ beforeAll(async () => {
   proc = Bun.spawn({
     cmd: ["bun", "run", "src/server/index.ts", `--port=${port}`, "--no-open"],
     cwd: join(import.meta.dir, "..", ".."),
-    env: { ...process.env, TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false", TODOS_NO_OPEN: "true", TODOS_RATE_LIMIT_MAX: "1000" },
+    env: localRoutingTestEnv({ TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false", TODOS_NO_OPEN: "true", TODOS_RATE_LIMIT_MAX: "1000" }),
     stdout: "pipe",
     stderr: "pipe",
   });
