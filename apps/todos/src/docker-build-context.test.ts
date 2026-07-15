@@ -73,7 +73,9 @@ describe("server image build context", () => {
     const buildspec = readFileSync(join(root, "buildspec.container-candidate.yml"), "utf8");
 
     expect(buildspec).toContain("docker build --platform linux/arm64");
-    expect(buildspec).toContain('docker run --rm "${IMAGE}" --version)" = 0.11.91');
+    expect(buildspec).toContain(
+      'docker run --rm --entrypoint bun "${IMAGE}" dist/server/index.js --version)" = 0.11.91',
+    );
     expect(buildspec).toContain('--build-arg "BUN_IMAGE=${BUN_IMAGE_OVERRIDE}"');
     expect(buildspec).toContain('BASE_IMAGE_ARCHIVE_VERSION');
     expect(buildspec).toContain('BASE_IMAGE_ARCHIVE_SHA256');
