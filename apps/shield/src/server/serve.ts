@@ -45,6 +45,7 @@ import {
   analyzeFinding as llmAnalyze,
   isLLMAvailable,
 } from "../llm/index.js";
+import { isCredentialFinding } from "../lib/finding-safety.js";
 import {
   listAdvisories,
   getAdvisory,
@@ -185,6 +186,7 @@ export function startServer(port: number) {
                 const batch = findings.slice(i, i + BATCH_SIZE);
                 await Promise.allSettled(
                   batch.map(async (finding) => {
+                    if (isCredentialFinding(finding)) return;
                     const context = getCodeContext(finding.file, finding.line);
                     if (context) {
                       const analysis = await llmAnalyze(finding, context);
@@ -327,6 +329,11 @@ export function startServer(port: number) {
         return;
       }
 
+      if (isCredentialFinding(finding)) {
+        res.status(409).json({ error: "LLM features are disabled for credential findings" });
+        return;
+      }
+
       if (!isLLMAvailable()) {
         res.status(503).json({ error: "LLM not available. Set CEREBRAS_API_KEY." });
         return;
@@ -364,6 +371,11 @@ export function startServer(port: number) {
 
       if (finding.llm_fix) {
         res.json({ finding_id: finding.id, fix: finding.llm_fix });
+        return;
+      }
+
+      if (isCredentialFinding(finding)) {
+        res.status(409).json({ error: "LLM features are disabled for credential findings" });
         return;
       }
 

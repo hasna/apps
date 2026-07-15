@@ -83,6 +83,8 @@ export function getCodeSnippet(content: string, line: number, context: number = 
     .join("\n");
 }
 
+const REDACTED_CODE_SNIPPET = "[REDACTED]";
+
 const SECURITY_IGNORE = "security-ignore";
 const SLASH_COMMENT_EXTENSIONS = new Set([
   ".c",
@@ -695,7 +697,7 @@ function detectUnquotedEnvApiKeys(
       line,
       column: match.index + 1,
       message: "Generic API Key detected",
-      code_snippet: getCodeSnippet(content, line),
+      code_snippet: REDACTED_CODE_SNIPPET,
     });
   }
 
@@ -723,8 +725,8 @@ function detectHighEntropyStrings(
         severity: Severity.Medium,
         file: filePath,
         line,
-        message: `High-entropy hex string detected (possible secret): ${token.substring(0, 16)}...`,
-        code_snippet: getCodeSnippet(content, line),
+        message: "High-entropy hex string detected (possible secret)",
+        code_snippet: REDACTED_CODE_SNIPPET,
       });
     }
   }
@@ -741,8 +743,8 @@ function detectHighEntropyStrings(
         severity: Severity.Medium,
         file: filePath,
         line,
-        message: `High-entropy base64 string detected (possible secret): ${token.substring(0, 16)}...`,
-        code_snippet: getCodeSnippet(content, line),
+        message: "High-entropy base64 string detected (possible secret)",
+        code_snippet: REDACTED_CODE_SNIPPET,
       });
     }
   }
@@ -790,7 +792,7 @@ export function scanFile(filePath: string, content: string): FindingInput[] {
           line: lineNum,
           column: match.index + 1,
           message: `${sp.name} detected`,
-          code_snippet: getCodeSnippet(content, lineNum),
+          code_snippet: REDACTED_CODE_SNIPPET,
         });
       }
     }

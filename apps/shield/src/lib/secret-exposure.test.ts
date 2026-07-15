@@ -40,16 +40,36 @@ describe("secret exposure", () => {
 
     const result = await scanSecretExposure({
       path: tempDir,
+      include_git_history: true,
       include_processes: false,
       include_tmux: false,
     });
 
     expect(result.findings.some((finding) => finding.file === ".env")).toBe(true);
     expect(result.findings.some((finding) => finding.scanner_type === ScannerType.GitHistory)).toBe(true);
+    expect(JSON.stringify(result.findings)).not.toContain(githubToken);
 
     const summary = summarizeSecretExposure(result.findings);
     expect(summary.total).toBe(result.findings.length);
     expect(summary.critical).toBeGreaterThan(0);
+  });
+
+  test("scanSecretExposure defaults to repository files without invoking ambient sources", async () => {
+    const githubToken = "ghp_" + "SYNTHETICONLYABCDEFGHIJKLMNOPQRSTUVWXYZ12";
+    writeFileSync(join(tempDir, ".env"), `CURRENT_TOKEN=${githubToken}\n`, "utf-8");
+
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const runner: CommandRunner = (command, args) => {
+      calls.push({ command, args });
+      return `123 GITHUB_TOKEN=${githubToken} node server.js\n`;
+    };
+
+    const result = await scanSecretExposure({ path: tempDir }, runner);
+
+    expect(calls).toEqual([]);
+    expect(result.findings.length).toBeGreaterThan(0);
+    expect(result.findings.every((finding) => !finding.file.startsWith("process:") && !finding.file.startsWith("tmux:"))).toBe(true);
+    expect(JSON.stringify(result.findings)).not.toContain(githubToken);
   });
 
   test("scanRunningProcesses inspects process environment snapshots", () => {
@@ -60,6 +80,8 @@ describe("secret exposure", () => {
     expect(findings.length).toBeGreaterThan(0);
     expect(findings[0].file).toBe("process:123");
     expect(findings[0].message).toContain("running process 123");
+    expect(JSON.stringify(findings)).not.toContain(githubToken);
+    expect(findings[0].code_snippet).toBe("[REDACTED]");
   });
 
   test("scanTmuxPanes inspects pane metadata and history", () => {
@@ -79,5 +101,7 @@ describe("secret exposure", () => {
     expect(findings.length).toBeGreaterThan(0);
     expect(findings[0].file).toBe("tmux:workspace:0.0:meta");
     expect(findings[0].message).toContain("tmux pane metadata workspace:0.0");
+    expect(JSON.stringify(findings)).not.toContain(awsKey);
+    expect(findings[0].code_snippet).toBe("[REDACTED]");
   });
 });

@@ -1,4 +1,5 @@
 import type { Finding } from "../types/index.js";
+import { isCredentialFinding } from "../lib/finding-safety.js";
 import { chat } from "./client.js";
 import { ANALYZER_PROMPT } from "./prompts.js";
 
@@ -15,6 +16,7 @@ export async function analyzeFinding(
   is_true_positive: boolean;
   confidence: number;
 } | null> {
+  if (isCredentialFinding(finding)) return null;
   const cacheKey = finding.fingerprint;
   if (cache.has(cacheKey)) return cache.get(cacheKey)!;
 

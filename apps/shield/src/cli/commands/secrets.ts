@@ -12,6 +12,29 @@ import { parseSeverity } from "../helpers.js";
 
 type SecretCommandFormat = "terminal" | "json";
 
+export interface SecretExposureSourceFlags {
+  filesOnly?: boolean;
+  repoOnly?: boolean;
+  gitHistory?: boolean;
+  processes?: boolean;
+  tmux?: boolean;
+}
+
+export function resolveSecretExposureSources(options: SecretExposureSourceFlags): {
+  include_git_history: boolean;
+  include_processes: boolean;
+  include_tmux: boolean;
+} {
+  const filesOnly = options.filesOnly === true;
+  const liveSourcesAllowed = !filesOnly && options.repoOnly !== true;
+
+  return {
+    include_git_history: !filesOnly && options.gitHistory === true,
+    include_processes: liveSourcesAllowed && options.processes === true,
+    include_tmux: liveSourcesAllowed && options.tmux === true,
+  };
+}
+
 function parseSecretCommandFormat(value: string): SecretCommandFormat {
   const normalized = value.toLowerCase();
   if (normalized === "terminal" || normalized === "json") return normalized;
@@ -69,16 +92,20 @@ function printTerminalSummary(
 export function registerSecretsCommand(program: Command): void {
   program
     .command("secrets")
-    .description("Scan repo files, git history, running processes, and tmux panes for exposed secrets")
+    .description("Scan repository files for exposed secrets; ambient and historical sources require explicit opt-in")
     .argument("[path]", "Path to scan", ".")
     .option("--format <format>", "Output format (terminal/json)", "terminal")
     .option("-j, --json", "Shortcut for --format json")
     .option("--severity <level>", "Minimum severity threshold to display", "info")
     .option("--fail-on <level>", "Exit non-zero when findings meet or exceed this severity", "high")
-    .option("--no-git-history", "Skip git history scanning")
-    .option("--no-processes", "Skip running process environment scanning")
-    .option("--no-tmux", "Skip tmux metadata/history scanning")
-    .option("--repo-only", "Only scan repository files and git history")
+    .option("--git-history", "Also scan git history (explicit opt-in)", false)
+    .option("--processes", "Also inspect running process command/environment snapshots (sensitive explicit opt-in)", false)
+    .option("--tmux", "Also inspect tmux metadata/history (sensitive explicit opt-in)", false)
+    .option("--no-git-history", "Compatibility flag; git history is disabled by default")
+    .option("--no-processes", "Compatibility flag; process inspection is disabled by default")
+    .option("--no-tmux", "Compatibility flag; tmux inspection is disabled by default")
+    .option("--files-only", "Force file-only scanning even when ambient-source flags are present")
+    .option("--repo-only", "Disable live process and tmux sources; git history still requires --git-history")
     .action(async (pathArg: string, options) => {
       const scanPath = resolve(pathArg);
       if (!existsSync(scanPath)) {
@@ -90,22 +117,19 @@ export function registerSecretsCommand(program: Command): void {
         const format = options.json ? "json" : parseSecretCommandFormat(options.format);
         const severityThreshold = parseSeverity(options.severity);
         const failThreshold = parseSeverity(options.failOn);
-        const includeProcesses = options.repoOnly ? false : options.processes;
-        const includeTmux = options.repoOnly ? false : options.tmux;
+        const sources = resolveSecretExposureSources(options);
 
         const result = await scanSecretExposure({
           path: scanPath,
-          include_git_history: options.gitHistory,
-          include_processes: includeProcesses,
-          include_tmux: includeTmux,
+          ...sources,
         });
 
         const filtered = filterSecretExposureBySeverity(result.findings, severityThreshold);
         const enabledSources = [
           "files",
-          options.gitHistory ? "git-history" : null,
-          includeProcesses ? "processes" : null,
-          includeTmux ? "tmux" : null,
+          sources.include_git_history ? "git-history" : null,
+          sources.include_processes ? "processes" : null,
+          sources.include_tmux ? "tmux" : null,
         ].filter(Boolean) as string[];
 
         if (format === "json") {
@@ -125,9 +149,8 @@ export function registerSecretsCommand(program: Command): void {
         if (result.findings.some((finding) => SEVERITY_ORDER[finding.severity] <= failOrder)) {
           process.exit(1);
         }
-      } catch (error) {
-        const errMsg = error instanceof Error ? error.message : String(error);
-        console.error(chalk.red(`\n  Secret exposure scan failed: ${errMsg}\n`));
+      } catch {
+        console.error(chalk.red("\n  Secret exposure scan failed. Details were withheld to protect scanned source context.\n"));
         process.exit(1);
       }
     });

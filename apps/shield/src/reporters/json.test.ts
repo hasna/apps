@@ -119,22 +119,25 @@ describe("JSON reporter", () => {
     expect(parsed.summary.score).toBe(100);
   });
 
-  test("preserves all finding fields", () => {
+  test("redacts code snippets and sensitive analysis fields", () => {
+    const syntheticSecret = "ghp_" + "SYNTHETICONLYABCDEFGHIJKLMNOPQRSTUVWXYZ12";
     const finding = makeFinding({
       column: 10,
       end_line: 45,
-      code_snippet: "const key = 'secret';",
-      llm_explanation: "This is a hardcoded key",
-      llm_fix: "Use env vars",
+      code_snippet: `const key = '${syntheticSecret}';`,
+      llm_explanation: `This is a hardcoded key: ${syntheticSecret}`,
+      llm_fix: `Remove ${syntheticSecret}`,
       llm_exploitability: 0.9,
     });
-    const parsed = JSON.parse(reportFindings([finding]));
+    const output = reportFindings([finding]);
+    const parsed = JSON.parse(output);
     const f = parsed.findings[0];
     expect(f.column).toBe(10);
     expect(f.end_line).toBe(45);
-    expect(f.code_snippet).toBe("const key = 'secret';");
-    expect(f.llm_explanation).toBe("This is a hardcoded key");
-    expect(f.llm_fix).toBe("Use env vars");
+    expect(f.code_snippet).toBe("[REDACTED]");
+    expect(f.llm_explanation).toBe("[REDACTED]");
+    expect(f.llm_fix).toBe("[REDACTED]");
     expect(f.llm_exploitability).toBe(0.9);
+    expect(output).not.toContain(syntheticSecret);
   });
 });

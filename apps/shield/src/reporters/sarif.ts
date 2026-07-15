@@ -1,5 +1,6 @@
 import type { Finding, Scan } from "../types/index.js";
 import { Severity } from "../types/index.js";
+import { sanitizeFindingForOutput } from "../lib/finding-safety.js";
 
 const SEVERITY_TO_LEVEL: Record<Severity, string> = {
   [Severity.Critical]: "error",
@@ -36,7 +37,8 @@ export function reportFindings(findings: Finding[], scan?: Scan): string {
   const rulesMap = new Map<string, SarifRule>();
   const results: SarifResult[] = [];
 
-  for (const finding of findings) {
+  for (const rawFinding of findings) {
+    const finding = sanitizeFindingForOutput(rawFinding);
     if (!rulesMap.has(finding.rule_id)) {
       rulesMap.set(finding.rule_id, {
         id: finding.rule_id,

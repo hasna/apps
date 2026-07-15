@@ -10,6 +10,7 @@ import { runScanner, getScanner } from "../../scanners/index.js";
 import { isLLMAvailable, analyzeFinding as llmAnalyzeFinding } from "../../llm/index.js";
 import { getReporter } from "../../reporters/index.js";
 import { loadConfig } from "../../lib/index.js";
+import { isCredentialFinding } from "../../lib/finding-safety.js";
 import {
   parseFormat, parseSeverity, resolveScannerTypes, filterBySeverity,
   ensureProject, getCodeContext,
@@ -89,6 +90,10 @@ export function registerScanCommand(program: Command): void {
             const batch = storedFindings.slice(i, i + BATCH_SIZE);
             await Promise.allSettled(
               batch.map(async (finding) => {
+                if (isCredentialFinding(finding)) {
+                  analyzed++;
+                  return;
+                }
                 const codeContext = getCodeContext(resolve(scanPath, finding.file), finding.line);
                 const analysis = await llmAnalyzeFinding(finding, codeContext);
                 if (analysis) finding.llm_exploitability = analysis.exploitability;

@@ -157,4 +157,19 @@ describe("SARIF reporter", () => {
     expect(parsed.runs[0].results).toEqual([]);
     expect(parsed.runs[0].tool.driver.rules).toEqual([]);
   });
+
+  test("does not serialize a credential value embedded in a secret finding", () => {
+    const syntheticSecret = "ghp_" + "SYNTHETICONLYABCDEFGHIJKLMNOPQRSTUVWXYZ12";
+    const output = reportFindings([
+      makeFinding({
+        scanner_type: ScannerType.Secrets,
+        rule_id: "github-token",
+        message: `GitHub token detected: ${syntheticSecret}`,
+        code_snippet: `GITHUB_TOKEN=${syntheticSecret}`,
+      }),
+    ]);
+
+    expect(output).not.toContain(syntheticSecret);
+    expect(JSON.parse(output).runs[0].results[0].message.text).toContain("Potential credential exposure");
+  });
 });

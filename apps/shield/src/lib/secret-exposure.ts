@@ -4,6 +4,7 @@ import { resolve } from "path";
 import { gitHistoryScanner } from "../scanners/git-history.js";
 import { scanFile, secretsScanner } from "../scanners/secrets.js";
 import { SEVERITY_ORDER, Severity, type FindingInput } from "../types/index.js";
+import { sanitizeFindingForOutput } from "./finding-safety.js";
 
 type RunnerOptions = {
   cwd?: string;
@@ -259,19 +260,19 @@ export async function scanSecretExposure(
     })),
   );
 
-  if (options.include_git_history ?? true) {
+  if (options.include_git_history === true) {
     findings.push(...(await gitHistoryScanner.scan(scanPath)));
   }
 
-  if (options.include_processes ?? true) {
+  if (options.include_processes === true) {
     findings.push(...scanRunningProcesses(runner));
   }
 
-  if (options.include_tmux ?? true) {
+  if (options.include_tmux === true) {
     findings.push(...scanTmuxPanes(runner));
   }
 
-  const deduped = dedupeFindings(findings);
+  const deduped = dedupeFindings(findings).map(sanitizeFindingForOutput);
   return {
     path: scanPath,
     findings: deduped,

@@ -83,14 +83,15 @@ describe("findings", () => {
     expect(f1.fingerprint).not.toBe(f2.fingerprint);
   });
 
-  test("createFinding stores optional fields (column, end_line, code_snippet)", () => {
+  test("createFinding stores optional location fields but redacts secret snippets", () => {
     const finding = createFinding(
       scanId,
       makeInput({ column: 10, end_line: 45, code_snippet: "let x = 1;" }),
     );
     expect(finding.column).toBe(10);
     expect(finding.end_line).toBe(45);
-    expect(finding.code_snippet).toBe("let x = 1;");
+    expect(finding.code_snippet).toBe("[REDACTED]");
+    expect(finding.message).toContain("Potential credential exposure");
   });
 
   test("createFinding defaults optional fields to null", () => {
@@ -106,6 +107,22 @@ describe("findings", () => {
     expect(fetched).not.toBeNull();
     expect(fetched!.id).toBe(created.id);
     expect(fetched!.suppressed).toBe(false);
+  });
+
+  test("getFinding redacts legacy credential-bearing rows on read", () => {
+    const syntheticSecret = "ghp_" + "SYNTHETICONLYABCDEFGHIJKLMNOPQRSTUVWXYZ12";
+    const created = createFinding(scanId, makeInput());
+    const db = getCurrentTestDb();
+    db.prepare("UPDATE findings SET message = ?, code_snippet = ? WHERE id = ?").run(
+      `GitHub token detected: ${syntheticSecret}`,
+      `GITHUB_TOKEN=${syntheticSecret}`,
+      created.id,
+    );
+
+    const fetched = getFinding(created.id);
+    expect(JSON.stringify(fetched)).not.toContain(syntheticSecret);
+    expect(fetched?.message).toContain("Potential credential exposure");
+    expect(fetched?.code_snippet).toBe("[REDACTED]");
   });
 
   test("getFinding returns null for unknown id", () => {
@@ -193,11 +210,15 @@ describe("findings", () => {
 
     const updated = getFinding(finding.id);
     expect(updated!.suppressed).toBe(true);
-    expect(updated!.suppressed_reason).toBe("Known false positive");
+    expect(updated!.suppressed_reason).toBe("[REDACTED]");
   });
 
   test("updateFinding updates LLM fields", () => {
-    const finding = createFinding(scanId, makeInput());
+    const finding = createFinding(scanId, makeInput({
+      rule_id: "code-rule",
+      scanner_type: ScannerType.Code,
+      message: "Unsafe code path",
+    }));
     updateFinding(finding.id, {
       llm_explanation: "This is a test explanation",
       llm_fix: "Use env vars instead",
@@ -208,6 +229,21 @@ describe("findings", () => {
     expect(updated!.llm_explanation).toBe("This is a test explanation");
     expect(updated!.llm_fix).toBe("Use env vars instead");
     expect(updated!.llm_exploitability).toBe(0.8);
+  });
+
+  test("updateFinding cannot persist analysis text for credential findings", () => {
+    const syntheticSecret = "ghp_" + "SYNTHETICONLYABCDEFGHIJKLMNOPQRSTUVWXYZ12";
+    const finding = createFinding(scanId, makeInput());
+    updateFinding(finding.id, {
+      llm_explanation: `Credential ${syntheticSecret} is exposed`,
+      llm_fix: `Remove ${syntheticSecret}`,
+      llm_exploitability: 0.8,
+    });
+
+    const updated = getFinding(finding.id);
+    expect(updated?.llm_explanation).toBe("[REDACTED]");
+    expect(updated?.llm_fix).toBe("[REDACTED]");
+    expect(JSON.stringify(updated)).not.toContain(syntheticSecret);
   });
 
   test("countFindings counts all findings", () => {

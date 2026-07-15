@@ -3,6 +3,12 @@ import { createHash } from "crypto";
 import { getDb } from "./database.js";
 import type { Finding, FindingInput, SecurityScore } from "../types/index.js";
 import { Severity, type ScannerType } from "../types/index.js";
+import {
+  isCredentialFinding,
+  REDACTED_FINDING_TEXT,
+  sanitizeFindingForOutput,
+  sanitizeFindingForPersistence,
+} from "../lib/finding-safety.js";
 
 interface FindingRow {
   id: string;
@@ -26,12 +32,12 @@ interface FindingRow {
 }
 
 function rowToFinding(row: FindingRow): Finding {
-  return {
+  return sanitizeFindingForOutput({
     ...row,
     scanner_type: row.scanner_type as ScannerType,
     severity: row.severity as Severity,
     suppressed: row.suppressed === 1,
-  };
+  });
 }
 
 function generateFingerprint(rule_id: string, file: string, line: number, message: string): string {
@@ -43,9 +49,10 @@ function generateFingerprint(rule_id: string, file: string, line: number, messag
 
 export function createFinding(scan_id: string, input: FindingInput): Finding {
   const db = getDb();
+  const safeInput = sanitizeFindingForPersistence(input);
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  const fingerprint = generateFingerprint(input.rule_id, input.file, input.line, input.message);
+  const fingerprint = generateFingerprint(safeInput.rule_id, safeInput.file, safeInput.line, safeInput.message);
 
   const stmt = db.prepare(
     `INSERT INTO findings (id, scan_id, rule_id, scanner_type, severity, file, line, "column", end_line, message, code_snippet, fingerprint, suppressed, created_at)
@@ -54,15 +61,15 @@ export function createFinding(scan_id: string, input: FindingInput): Finding {
   stmt.run(
     id,
     scan_id,
-    input.rule_id,
-    input.scanner_type,
-    input.severity,
-    input.file,
-    input.line,
-    input.column ?? null,
-    input.end_line ?? null,
-    input.message,
-    input.code_snippet ?? null,
+    safeInput.rule_id,
+    safeInput.scanner_type,
+    safeInput.severity,
+    safeInput.file,
+    safeInput.line,
+    safeInput.column ?? null,
+    safeInput.end_line ?? null,
+    safeInput.message,
+    safeInput.code_snippet ?? null,
     fingerprint,
     now
   );
@@ -70,15 +77,15 @@ export function createFinding(scan_id: string, input: FindingInput): Finding {
   return {
     id,
     scan_id,
-    rule_id: input.rule_id,
-    scanner_type: input.scanner_type,
-    severity: input.severity,
-    file: input.file,
-    line: input.line,
-    column: input.column ?? null,
-    end_line: input.end_line ?? null,
-    message: input.message,
-    code_snippet: input.code_snippet ?? null,
+    rule_id: safeInput.rule_id,
+    scanner_type: safeInput.scanner_type,
+    severity: safeInput.severity,
+    file: safeInput.file,
+    line: safeInput.line,
+    column: safeInput.column ?? null,
+    end_line: safeInput.end_line ?? null,
+    message: safeInput.message,
+    code_snippet: safeInput.code_snippet ?? null,
     fingerprint,
     suppressed: false,
     suppressed_reason: null,
@@ -149,6 +156,8 @@ export function updateFinding(
   updates: Partial<Pick<Finding, "suppressed" | "suppressed_reason" | "llm_explanation" | "llm_fix" | "llm_exploitability">>
 ): void {
   const db = getDb();
+  const existing = getFinding(id);
+  const sensitive = existing ? isCredentialFinding(existing) : false;
   const sets: string[] = [];
   const params: unknown[] = [];
 
@@ -158,15 +167,15 @@ export function updateFinding(
   }
   if (updates.suppressed_reason !== undefined) {
     sets.push("suppressed_reason = ?");
-    params.push(updates.suppressed_reason);
+    params.push(sensitive && updates.suppressed_reason != null ? REDACTED_FINDING_TEXT : updates.suppressed_reason);
   }
   if (updates.llm_explanation !== undefined) {
     sets.push("llm_explanation = ?");
-    params.push(updates.llm_explanation);
+    params.push(sensitive && updates.llm_explanation != null ? REDACTED_FINDING_TEXT : updates.llm_explanation);
   }
   if (updates.llm_fix !== undefined) {
     sets.push("llm_fix = ?");
-    params.push(updates.llm_fix);
+    params.push(sensitive && updates.llm_fix != null ? REDACTED_FINDING_TEXT : updates.llm_fix);
   }
   if (updates.llm_exploitability !== undefined) {
     sets.push("llm_exploitability = ?");

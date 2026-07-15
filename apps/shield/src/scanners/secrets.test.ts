@@ -379,12 +379,13 @@ function greet() { return "hi"; }
       expect(awsFinding!.column).toBeGreaterThan(0);
     });
 
-    test("includes code snippet in findings", () => {
+    test("redacts code snippets in secret findings", () => {
       const content = "line 1\nline 2\nconst key = \"AKIAIOSFODNN7EXAMPLE\";\nline 4";
       const findings = scanFile("test.ts", content);
       const awsFinding = findings.find((f) => f.rule_id === "aws-access-key");
       expect(awsFinding!.code_snippet).toBeDefined();
-      expect(awsFinding!.code_snippet).toContain("AKIAIOSFODNN7EXAMPLE");
+      expect(awsFinding!.code_snippet).toBe("[REDACTED]");
+      expect(JSON.stringify(awsFinding)).not.toContain("AKIAIOSFODNN7EXAMPLE");
     });
   });
 

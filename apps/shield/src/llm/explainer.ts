@@ -1,4 +1,5 @@
 import type { Finding } from "../types/index.js";
+import { isCredentialFinding } from "../lib/finding-safety.js";
 import { chat } from "./client.js";
 import { EXPLAINER_PROMPT } from "./prompts.js";
 
@@ -8,6 +9,7 @@ export async function explainFinding(
   finding: Finding,
   codeContext: string,
 ): Promise<string | null> {
+  if (isCredentialFinding(finding)) return null;
   const cacheKey = finding.fingerprint;
   if (cache.has(cacheKey)) return cache.get(cacheKey)!;
 

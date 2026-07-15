@@ -100,7 +100,7 @@ function scanDiffForSecrets(entries: GitDiffEntry[]): FindingInput[] {
             file: addedLine.file,
             line: addedLine.line,
             message: `${sp.name} found in git history (commit ${entry.commitHash.substring(0, 8)} by ${entry.author} on ${entry.date})`,
-            code_snippet: addedLine.text,
+            code_snippet: "[REDACTED]",
           });
         }
       }

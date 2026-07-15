@@ -6,6 +6,7 @@ import {
   explainFinding as llmExplainFinding,
   suggestFix as llmSuggestFix,
 } from "../../llm/index.js";
+import { isCredentialFinding } from "../../lib/finding-safety.js";
 import { getCodeContext } from "../helpers.js";
 
 export function registerLLMCommands(program: Command): void {
@@ -24,6 +25,11 @@ export function registerLLMCommands(program: Command): void {
       const finding = getFinding(id);
       if (!finding) {
         console.error(chalk.red(`\n  Finding not found: ${id}\n`));
+        process.exit(1);
+      }
+
+      if (isCredentialFinding(finding)) {
+        console.error(chalk.red("\n  LLM features are disabled for credential findings.\n"));
         process.exit(1);
       }
 
@@ -61,6 +67,11 @@ export function registerLLMCommands(program: Command): void {
       const finding = getFinding(id);
       if (!finding) {
         console.error(chalk.red(`\n  Finding not found: ${id}\n`));
+        process.exit(1);
+      }
+
+      if (isCredentialFinding(finding)) {
+        console.error(chalk.red("\n  LLM features are disabled for credential findings.\n"));
         process.exit(1);
       }
 

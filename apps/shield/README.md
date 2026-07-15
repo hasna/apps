@@ -19,8 +19,11 @@ bun install -g @hasna/shield
 # Scan your repo for security issues
 shield scan .
 
-# Focused secret-exposure scan (repo files, git history, processes, tmux)
+# Focused secret-exposure scan (safe default: repository files only)
 shield secrets .
+
+# Explicit historical scan (still redacted in terminal/JSON/SARIF output)
+shield secrets . --git-history
 
 # Check if a package is compromised (axios/litellm/Trivy supply chain attacks)
 shield check-package axios 1.14.1
@@ -127,7 +130,7 @@ API endpoints:
 
 ```
 shield scan [path]              Run shield scan
-shield secrets [options] [path] Focused secret-exposure scan (files + live context)
+shield secrets [options] [path] Focused secret-exposure scan (file-only by default)
 shield findings                 List findings
 shield explain <id>             AI explanation for a finding
 shield fix <id>                 AI-suggested fix
@@ -151,20 +154,61 @@ Stored in `~/.hasna/security/` (override with `SECURITY_DB` env var).
 
 ## Secret Exposure Workflow
 
-`shield secrets` combines four sources:
+`shield secrets` scans repository files by default. The following additional
+sources exist, but each requires an explicit opt-in because it crosses a wider
+data boundary:
 
 - repository files such as `.env` files and config files
-- git history across all branches
-- running process environments
-- tmux pane/session metadata plus recent pane history
+- `--git-history` scans git history across all branches
+- `--processes` inspects running process command/environment snapshots
+- `--tmux` inspects tmux pane/session metadata plus recent pane history
+
+Secret and credential findings never emit raw code snippets. Terminal, JSON,
+and SARIF reporters retain the rule, location, severity, and fingerprint while
+replacing sensitive snippets and analysis text with `[REDACTED]`. Credential
+findings are also excluded from LLM explanation, triage, analysis, and fix
+context so source lines cannot cross a model boundary. Secret-scan error output
+also withholds underlying exception text because parser or provider errors can
+contain scanned source context.
 
 Useful flags:
 
 ```bash
-shield secrets . --repo-only
+# Safe file-only modes (the default, plus an explicit fail-closed form)
+shield secrets .
+shield secrets . --files-only --json
+
+# Historical source: explicit opt-in
+shield secrets . --git-history --json
+
+# Live sources: sensitive explicit opt-in; never use in routine CI
+shield secrets . --processes
+shield secrets . --tmux
+
+# --repo-only blocks live sources; history still requires --git-history
+shield secrets . --repo-only --git-history
 shield secrets . --json
 shield secrets . --severity high --fail-on medium
+
+# Package/archive-only validation does not inspect ambient processes or tmux
+shield fleet-package ./package.tgz --json
 ```
+
+### Migration warning for 0.1.25 and earlier
+
+Versions through 0.1.25 enabled git-history, process, and tmux sources by
+default. Structured output could therefore include credential-bearing source
+context. Upgrade before using `shield secrets` in an agent, CI job, log
+collector, or transcript-producing tool. Until the fixed version is installed,
+use `shield secrets . --repo-only --no-git-history --no-processes --no-tmux`
+or use the `secrets scan workspace` and `shield fleet-package` file/archive
+paths. If an older structured scan ran in a credential-bearing environment,
+treat the visible credential identifiers as exposed, preserve values out of
+incident channels, and follow the owning vault/provider rotation runbook.
+Existing database rows are sanitized when read but are not destructively
+rewritten by this update; purge or migration of historical local state requires
+separate incident-owner authorization. Credential-finding fingerprints may
+change once newly scanned records use the redacted persistence form.
 
 ## Storage
 
