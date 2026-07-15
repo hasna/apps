@@ -79,7 +79,7 @@ phases:
       - openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=wrong-ca -keyout /tmp/todos-tls/wrong-ca.key -out /tmp/todos-tls/wrong-ca.crt >/dev/null 2>&1
       - chown 70:70 /tmp/todos-tls/server.key /tmp/todos-tls/server.crt /tmp/todos-tls/ca.crt
       - chmod 600 /tmp/todos-tls/server.key
-      - docker run -d --name "${TEST_DB}" --network "${TEST_NETWORK}" --network-alias todos-postgres --network-alias wrong-postgres -e POSTGRES_USER=todos --env POSTGRES_PASSWORD -e POSTGRES_DB=todos -v /tmp/todos-tls:/tls:ro postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777 postgres -c ssl=on -c ssl_cert_file=/tls/server.crt -c ssl_key_file=/tls/server.key -c ssl_ca_file=/tls/ca.crt
+      - docker run -d --name "${TEST_DB}" --network "${TEST_NETWORK}" --network-alias todos-postgres --network-alias wrong-postgres -e POSTGRES_USER=todos --env POSTGRES_PASSWORD -e POSTGRES_DB=todos -v /tmp/todos-tls:/tls:ro public.ecr.aws/docker/library/postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777 postgres -c ssl=on -c ssl_cert_file=/tls/server.crt -c ssl_key_file=/tls/server.key -c ssl_ca_file=/tls/ca.crt
       - for i in $(seq 1 60); do docker exec "${TEST_DB}" pg_isready -U todos >/dev/null 2>&1 && break; sleep 1; done; docker exec "${TEST_DB}" pg_isready -U todos
       - export TEST_DSN="postgres://todos:${DB_CREDENTIAL}@todos-postgres:5432/todos?sslmode=verify-full"
       - export SIGNING_MATERIAL=$(head -c 48 /dev/urandom | base64 | tr -d '\n')
