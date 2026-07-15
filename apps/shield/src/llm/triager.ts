@@ -1,5 +1,5 @@
 import { type Finding, Severity } from "../types/index.js";
-import { isCredentialFinding } from "../lib/finding-safety.js";
+import { isCredentialFinding, sanitizeFindingForOutput, sanitizeTextForBoundary } from "../lib/finding-safety.js";
 import { chat } from "./client.js";
 import { TRIAGER_PROMPT } from "./prompts.js";
 
@@ -18,18 +18,20 @@ export async function triageFinding(
   codeContext: string,
 ): Promise<{ severity: Severity; reasoning: string } | null> {
   if (isCredentialFinding(finding)) return null;
+  const safeFinding = sanitizeFindingForOutput(finding);
+  const safeContext = sanitizeTextForBoundary(codeContext, 12_000);
   const cacheKey = finding.fingerprint;
   if (cache.has(cacheKey)) return cache.get(cacheKey)!;
 
   const userMessage = `Finding to triage:
-- Rule: ${finding.rule_id}
-- Current severity: ${finding.severity}
-- File: ${finding.file}:${finding.line}
-- Message: ${finding.message}
+- Rule: ${safeFinding.rule_id}
+- Current severity: ${safeFinding.severity}
+- File: ${safeFinding.file}:${safeFinding.line}
+- Message: ${safeFinding.message}
 
 Code context:
 \`\`\`
-${codeContext}
+${safeContext}
 \`\`\``;
 
   const response = await chat([
@@ -50,7 +52,7 @@ ${codeContext}
       SEVERITY_MAP[parsed.severity?.toLowerCase()] ?? Severity.Medium;
     const result = {
       severity,
-      reasoning: parsed.reasoning || "No reasoning provided",
+      reasoning: sanitizeTextForBoundary(parsed.reasoning || "No reasoning provided"),
     };
     cache.set(cacheKey, result);
     return result;

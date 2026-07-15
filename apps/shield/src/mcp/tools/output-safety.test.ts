@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createFinding } from "../../db/findings.js";
 import { createProject } from "../../db/projects.js";
@@ -96,5 +99,20 @@ describe("MCP credential output safety", () => {
 
     expect(output).toContain("Details were withheld");
     expect(output).not.toContain("/definitely/missing/shield-output-safety-path");
+  });
+
+  test("scan_repo defaults to file-only scanner types", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "shield-mcp-files-only-"));
+    writeFileSync(join(dir, "index.ts"), "export const safe = true;\n", "utf-8");
+    try {
+      const tools = captureTools((server) => registerScanTools(server, jsonResult, () => ""));
+      const result = await tools.get("scan_repo")?.({ path: dir });
+      const envelope = result as { content: Array<{ text: string }> };
+      const payload = JSON.parse(envelope.content[0].text);
+      expect(payload.scan.scanner_types).not.toContain(ScannerType.GitHistory);
+      expect(payload.scan.scanner_types).toContain(ScannerType.Code);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

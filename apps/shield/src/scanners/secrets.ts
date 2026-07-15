@@ -39,7 +39,7 @@ export function walkDirectory(
     try {
       entries = fs.readdirSync(currentDir, { withFileTypes: true });
     } catch {
-      return;
+      throw new Error("Unable to traverse the requested scan target");
     }
 
     for (const entry of entries) {
@@ -61,6 +61,8 @@ export function walkDirectory(
         if (isBinaryFile(fullPath)) continue;
         if (fileFilter && !fileFilter(fullPath)) continue;
         results.push(fullPath);
+      } else if (entry.isSymbolicLink()) {
+        throw new Error("Symbolic links are not included in a verified file-only scan");
       }
     }
   }
@@ -811,16 +813,29 @@ export const secretsScanner: Scanner = {
 
   async scan(scanPath: string, options?: ScannerRunOptions): Promise<FindingInput[]> {
     const ignorePatterns = options?.ignore_patterns ?? DEFAULT_CONFIG.ignore_patterns;
-    const files = walkDirectory(scanPath, ignorePatterns);
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(scanPath);
+    } catch {
+      throw new Error("Unable to stat the requested scan target");
+    }
+    if (stat.isSymbolicLink()) {
+      throw new Error("Symbolic links are not included in a verified file-only scan");
+    }
+    const files = stat.isFile()
+      ? isBinaryFile(scanPath) ? [] : [scanPath]
+      : stat.isDirectory()
+        ? walkDirectory(scanPath, ignorePatterns)
+        : (() => { throw new Error("Requested scan target is not a regular file or directory"); })();
     const findings: FindingInput[] = [];
 
     for (const file of files) {
       try {
         const content = fs.readFileSync(file, "utf-8");
-        const relativePath = path.relative(scanPath, file);
+        const relativePath = stat.isFile() ? path.basename(file) : path.relative(scanPath, file);
         findings.push(...scanFile(relativePath, content));
       } catch {
-        // Skip unreadable files
+        throw new Error("Unable to read every requested scan file");
       }
     }
 

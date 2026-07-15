@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
@@ -70,6 +70,21 @@ describe("secret exposure", () => {
     expect(result.findings.length).toBeGreaterThan(0);
     expect(result.findings.every((finding) => !finding.file.startsWith("process:") && !finding.file.startsWith("tmux:"))).toBe(true);
     expect(JSON.stringify(result.findings)).not.toContain(githubToken);
+  });
+
+  test("scans a regular-file target instead of reporting a clean directory result", async () => {
+    const syntheticSecret = "ghp_" + "SYNTHETICONLYABCDEFGHIJKLMNOPQRSTUVWXYZ12";
+    const file = join(tempDir, syntheticSecret);
+    writeFileSync(file, `TOKEN=${syntheticSecret}\n`, "utf-8");
+    const result = await scanSecretExposure({ path: file });
+    expect(result.findings.length).toBeGreaterThan(0);
+    expect(JSON.stringify(result)).not.toContain(syntheticSecret);
+  });
+
+  test("fails closed on stat/traversal errors", async () => {
+    const loop = join(tempDir, "loop");
+    symlinkSync(loop, loop);
+    await expect(scanSecretExposure({ path: loop })).rejects.toThrow("Symbolic links");
   });
 
   test("scanRunningProcesses inspects process environment snapshots", () => {

@@ -140,4 +140,17 @@ describe("JSON reporter", () => {
     expect(f.llm_exploitability).toBe(0.9);
     expect(output).not.toContain(syntheticSecret);
   });
+
+  test("redacts credential-bearing rule and path metadata for non-secret findings", () => {
+    const syntheticSecret = "sk_test_" + "SYNTHETICONLY0123456789";
+    const output = reportFindings([makeFinding({
+      scanner_type: ScannerType.Code,
+      rule_id: `rule-${syntheticSecret}`,
+      file: `src/${syntheticSecret}/app.ts`,
+      message: "Unsafe code path",
+    })]);
+    expect(output).not.toContain(syntheticSecret);
+    expect(output).toContain("REDACTED-RULE");
+    expect(output).toContain("REDACTED-LOCATION");
+  });
 });

@@ -8,6 +8,7 @@ import {
   REDACTED_FINDING_TEXT,
   sanitizeFindingForOutput,
   sanitizeFindingForPersistence,
+  sanitizeTextForBoundary,
 } from "../lib/finding-safety.js";
 
 interface FindingRow {
@@ -32,12 +33,54 @@ interface FindingRow {
 }
 
 function rowToFinding(row: FindingRow): Finding {
-  return sanitizeFindingForOutput({
+  const safe = sanitizeFindingForOutput({
     ...row,
     scanner_type: row.scanner_type as ScannerType,
     severity: row.severity as Severity,
     suppressed: row.suppressed === 1,
   });
+  // Opportunistically scrub legacy rows so direct database consumers after
+  // first read cannot recover fields written by older unsafe versions.
+  if (
+    safe.rule_id !== row.rule_id ||
+    safe.file !== row.file ||
+    safe.message !== row.message ||
+    safe.code_snippet !== row.code_snippet ||
+    safe.suppressed_reason !== row.suppressed_reason ||
+    safe.llm_explanation !== row.llm_explanation ||
+    safe.llm_fix !== row.llm_fix
+  ) {
+    try {
+      const db = getDb();
+      if (safe.rule_id !== row.rule_id) {
+        db.prepare(
+          `INSERT OR IGNORE INTO rules (id, name, description, scanner_type, severity, enabled, builtin, metadata, created_at, updated_at)
+           VALUES (?, 'Redacted legacy finding rule', 'Credential-bearing legacy rule identifier was replaced', ?, ?, 1, 0, '{}', datetime('now'), datetime('now'))`,
+        ).run(safe.rule_id, safe.scanner_type, safe.severity);
+      }
+      db.prepare(
+        `UPDATE findings SET rule_id = ?, file = ?, message = ?, code_snippet = ?, suppressed_reason = ?, llm_explanation = ?, llm_fix = ? WHERE id = ?`,
+      ).run(
+        safe.rule_id,
+        safe.file,
+        safe.message,
+        safe.code_snippet,
+        safe.suppressed_reason,
+        safe.llm_explanation,
+        safe.llm_fix,
+        row.id,
+      );
+      if (safe.rule_id !== row.rule_id) {
+        db.prepare(
+          `DELETE FROM rules WHERE id = ? AND NOT EXISTS (SELECT 1 FROM findings WHERE rule_id = ?)`,
+        ).run(row.rule_id, row.rule_id);
+      }
+    } catch {
+      // Output remains sanitized even when a legacy/read-only database cannot
+      // be rewritten in place.
+    }
+  }
+  return safe;
 }
 
 function generateFingerprint(rule_id: string, file: string, line: number, message: string): string {
@@ -50,6 +93,12 @@ function generateFingerprint(rule_id: string, file: string, line: number, messag
 export function createFinding(scan_id: string, input: FindingInput): Finding {
   const db = getDb();
   const safeInput = sanitizeFindingForPersistence(input);
+  if (safeInput.rule_id !== input.rule_id) {
+    db.prepare(
+      `INSERT OR IGNORE INTO rules (id, name, description, scanner_type, severity, enabled, builtin, metadata, created_at, updated_at)
+       VALUES (?, 'Redacted finding rule', 'Credential-bearing rule identifier was replaced before persistence', ?, ?, 1, 0, '{}', datetime('now'), datetime('now'))`,
+    ).run(safeInput.rule_id, safeInput.scanner_type, safeInput.severity);
+  }
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   const fingerprint = generateFingerprint(safeInput.rule_id, safeInput.file, safeInput.line, safeInput.message);
@@ -167,15 +216,33 @@ export function updateFinding(
   }
   if (updates.suppressed_reason !== undefined) {
     sets.push("suppressed_reason = ?");
-    params.push(sensitive && updates.suppressed_reason != null ? REDACTED_FINDING_TEXT : updates.suppressed_reason);
+    params.push(
+      updates.suppressed_reason == null
+        ? updates.suppressed_reason
+        : sensitive
+          ? REDACTED_FINDING_TEXT
+          : sanitizeTextForBoundary(updates.suppressed_reason),
+    );
   }
   if (updates.llm_explanation !== undefined) {
     sets.push("llm_explanation = ?");
-    params.push(sensitive && updates.llm_explanation != null ? REDACTED_FINDING_TEXT : updates.llm_explanation);
+    params.push(
+      updates.llm_explanation == null
+        ? updates.llm_explanation
+        : sensitive
+          ? REDACTED_FINDING_TEXT
+          : sanitizeTextForBoundary(updates.llm_explanation),
+    );
   }
   if (updates.llm_fix !== undefined) {
     sets.push("llm_fix = ?");
-    params.push(sensitive && updates.llm_fix != null ? REDACTED_FINDING_TEXT : updates.llm_fix);
+    params.push(
+      updates.llm_fix == null
+        ? updates.llm_fix
+        : sensitive
+          ? REDACTED_FINDING_TEXT
+          : sanitizeTextForBoundary(updates.llm_fix),
+    );
   }
   if (updates.llm_exploitability !== undefined) {
     sets.push("llm_exploitability = ?");

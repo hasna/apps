@@ -49,6 +49,25 @@ describe("projects", () => {
     expect(result).toBeNull();
   });
 
+  test("credential-bearing project paths are replaced before persistence and on legacy readback", () => {
+    const syntheticSecret = "ghp_" + "SYNTHETICONLYABCDEFGHIJKLMNOPQRSTUVWXYZ12";
+    const rawPath = `/tmp/${syntheticSecret}/repo`;
+    const created = createProject(`project-${syntheticSecret}`, rawPath);
+    expect(JSON.stringify(created)).not.toContain(syntheticSecret);
+    expect(getProjectByPath(rawPath)?.id).toBe(created.id);
+
+    const db = getCurrentTestDb();
+    db.prepare("UPDATE projects SET name = ?, path = ? WHERE id = ?").run(
+      `legacy-${syntheticSecret}`,
+      rawPath,
+      created.id,
+    );
+    const fetched = getProject(created.id);
+    expect(JSON.stringify(fetched)).not.toContain(syntheticSecret);
+    const raw = db.prepare("SELECT name, path FROM projects WHERE id = ?").get(created.id);
+    expect(JSON.stringify(raw)).not.toContain(syntheticSecret);
+  });
+
   test("listProjects returns all projects", () => {
     createProject("project-a", "/path/a");
     createProject("project-b", "/path/b");

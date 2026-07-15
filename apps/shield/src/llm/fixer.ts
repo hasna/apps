@@ -1,5 +1,5 @@
 import type { Finding } from "../types/index.js";
-import { isCredentialFinding } from "../lib/finding-safety.js";
+import { isCredentialFinding, sanitizeFindingForOutput, sanitizeTextForBoundary } from "../lib/finding-safety.js";
 import { chat } from "./client.js";
 import { FIXER_PROMPT } from "./prompts.js";
 
@@ -10,18 +10,20 @@ export async function suggestFix(
   codeContext: string,
 ): Promise<string | null> {
   if (isCredentialFinding(finding)) return null;
+  const safeFinding = sanitizeFindingForOutput(finding);
+  const safeContext = sanitizeTextForBoundary(codeContext, 12_000);
   const cacheKey = finding.fingerprint;
   if (cache.has(cacheKey)) return cache.get(cacheKey)!;
 
   const userMessage = `Vulnerability to fix:
-- Rule: ${finding.rule_id}
-- Severity: ${finding.severity}
-- File: ${finding.file}:${finding.line}
-- Message: ${finding.message}
+- Rule: ${safeFinding.rule_id}
+- Severity: ${safeFinding.severity}
+- File: ${safeFinding.file}:${safeFinding.line}
+- Message: ${safeFinding.message}
 
 Current code:
 \`\`\`
-${codeContext}
+${safeContext}
 \`\`\``;
 
   const response = await chat([
@@ -31,6 +33,7 @@ ${codeContext}
 
   if (!response) return null;
 
-  cache.set(cacheKey, response);
-  return response;
+  const safeResponse = sanitizeTextForBoundary(response);
+  cache.set(cacheKey, safeResponse);
+  return safeResponse;
 }

@@ -4,11 +4,15 @@ import { analyzeFinding } from "./analyzer.js";
 import { explainFinding } from "./explainer.js";
 import { suggestFix } from "./fixer.js";
 import { triageFinding } from "./triager.js";
+import { sanitizeMessagesForProvider } from "./client.js";
 
 const originalFetch = globalThis.fetch;
+const originalApiKey = process.env.CEREBRAS_API_KEY;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  if (originalApiKey === undefined) delete process.env.CEREBRAS_API_KEY;
+  else process.env.CEREBRAS_API_KEY = originalApiKey;
 });
 
 describe("credential finding LLM boundary", () => {
@@ -47,5 +51,14 @@ describe("credential finding LLM boundary", () => {
     expect(await suggestFix(credentialFinding, context)).toBeNull();
     expect(await triageFinding(credentialFinding, context)).toBeNull();
     expect(fetchCalls).toBe(0);
+  });
+
+  test("redacts adjacent credentials in the final provider payload", () => {
+    const syntheticSecret = "ghp_" + "SYNTHETICONLYABCDEFGHIJKLMNOPQRSTUVWXYZ12";
+    const payload = JSON.stringify(sanitizeMessagesForProvider([
+      { role: "user", content: `ordinary config issue\nGITHUB_TOKEN=${syntheticSecret}` },
+    ]));
+    expect(payload).not.toContain(syntheticSecret);
+    expect(payload).toContain("[REDACTED]");
   });
 });

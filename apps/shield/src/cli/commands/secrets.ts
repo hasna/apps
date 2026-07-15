@@ -122,7 +122,7 @@ export function registerSecretsCommand(program: Command): void {
     .action(async (pathArg: string, options) => {
       const scanPath = resolve(pathArg);
       if (!existsSync(scanPath)) {
-        console.error(chalk.red(`\n  Path does not exist: ${scanPath}\n`));
+        console.error(chalk.red("\n  Requested scan path does not exist.\n"));
         process.exit(1);
       }
 

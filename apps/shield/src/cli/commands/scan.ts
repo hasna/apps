@@ -10,7 +10,7 @@ import { runScanner, getScanner } from "../../scanners/index.js";
 import { isLLMAvailable, analyzeFinding as llmAnalyzeFinding } from "../../llm/index.js";
 import { getReporter } from "../../reporters/index.js";
 import { loadConfig } from "../../lib/index.js";
-import { isCredentialFinding } from "../../lib/finding-safety.js";
+import { isCredentialFinding, sanitizeLocationForOutput } from "../../lib/finding-safety.js";
 import {
   parseFormat, parseSeverity, resolveScannerTypes, filterBySeverity,
   ensureProject, getCodeContext,
@@ -23,6 +23,10 @@ export function registerScanCommand(program: Command): void {
     .argument("[path]", "Path to scan", ".")
     .option("--quick", "Quick scan (secrets + dependencies only)")
     .option("--scanner <type>", "Run specific scanner only")
+    .option("--git-history", "Explicitly include the sensitive git-history scanner", false)
+    .option("--no-git-history", "Compatibility flag; git history is disabled by default")
+    .option("--system", "Explicitly include host/system IOC locations outside the requested path", false)
+    .option("--no-system", "Compatibility flag; host/system inspection is disabled by default")
     .option("--format <format>", "Output format (terminal/json/sarif)", "terminal")
     .option("--severity <level>", "Minimum severity threshold", "info")
     .option("--llm", "Enable LLM analysis of findings")
@@ -30,7 +34,7 @@ export function registerScanCommand(program: Command): void {
     .action(async (path: string, options) => {
       const scanPath = resolve(path);
       if (!existsSync(scanPath)) {
-        console.error(chalk.red(`Path does not exist: ${scanPath}`));
+        console.error(chalk.red("Requested scan path does not exist"));
         process.exit(1);
       }
 
@@ -38,7 +42,12 @@ export function registerScanCommand(program: Command): void {
         const config = loadConfig(scanPath);
         const format = parseFormat(options.format);
         const severityThreshold = parseSeverity(options.severity);
-        const scannerTypes = resolveScannerTypes(options.scanner, options.quick, config);
+        const scannerTypes = resolveScannerTypes(
+          options.scanner,
+          options.quick,
+          config,
+          options.gitHistory === true,
+        );
         const useLLM = options.llm || config.llm_analyze;
 
         getDb();
@@ -52,7 +61,7 @@ export function registerScanCommand(program: Command): void {
           ? (msg: string) => process.stderr.write(msg + "\n")
           : console.log;
 
-        log(chalk.bold(`\n  Scanning ${chalk.cyan(scanPath)}...`));
+        log(chalk.bold(`\n  Scanning ${chalk.cyan(sanitizeLocationForOutput(scanPath))}...`));
         log(chalk.gray(`  Scanners: ${scannerTypes.join(", ")}`));
 
         const startTime = Date.now();
@@ -61,19 +70,22 @@ export function registerScanCommand(program: Command): void {
         if (scannerTypes.length === 1) {
           findingInputs = await runScanner(scannerTypes[0], scanPath, {
             ignore_patterns: config.ignore_patterns,
+            include_git_history: options.gitHistory === true,
+            include_system: options.system === true,
           });
         } else {
-          const results = await Promise.allSettled(
+          const results = await Promise.all(
             scannerTypes.map((type) => {
               const scanner = getScanner(type);
-              if (!scanner) return Promise.resolve([]);
-              return scanner.scan(scanPath, { ignore_patterns: config.ignore_patterns });
+              if (!scanner) throw new Error(`Scanner not found: ${type}`);
+              return scanner.scan(scanPath, {
+                ignore_patterns: config.ignore_patterns,
+                include_git_history: options.gitHistory === true,
+                include_system: options.system === true,
+              });
             }),
           );
-          for (const result of results) {
-            if (result.status === "fulfilled") findingInputs.push(...result.value);
-            else console.error(chalk.yellow(`  Warning: scanner failed - ${result.reason}`));
-          }
+          findingInputs = results.flat();
         }
 
         const storedFindings: Finding[] = [];
@@ -120,8 +132,7 @@ export function registerScanCommand(program: Command): void {
           process.exit(1);
         }
       } catch (error) {
-        const errMsg = error instanceof Error ? error.message : String(error);
-        console.error(chalk.red(`\n  Scan failed: ${errMsg}\n`));
+        console.error(chalk.red("\n  Scan failed. Details were withheld to protect scanned source context.\n"));
         process.exit(1);
       }
     });

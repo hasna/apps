@@ -19,6 +19,10 @@ bun install -g @hasna/shield
 # Scan your repo for security issues
 shield scan .
 
+# Wider sources are separate, per-invocation opt-ins
+shield scan . --git-history
+shield scan . --system
+
 # Focused secret-exposure scan (safe default: repository files only)
 shield secrets .
 
@@ -54,8 +58,8 @@ shield init --install-pre-push
 | `git-history` | Secrets committed in git history |
 | `config` | Insecure CORS, debug mode, missing security headers |
 | `ai-safety` | Prompt injection, PII exposure, unsafe tool use |
-| `ioc` | Supply chain attack indicators (C2 domains, RAT artifacts, malicious packages) |
-| `lockfile` | Compromised locked versions, unpinned ranges during attack windows |
+| `ioc` | In-tree C2/malicious-package indicators; host RAT/Python paths require `--system` |
+| `lockfile` | Compromised locked versions and unpinned ranges; history requires `--git-history` |
 | `supply-chain` | Typosquatting, postinstall exploits, GitHub Actions tag hijacking |
 
 ## Supply Chain Attack Detection
@@ -129,6 +133,12 @@ API endpoints:
 - `GET /api/findings` — query scan findings
 - `POST /api/scans` — trigger a new scan
 
+CLI, library, SDK, MCP, REST, and dashboard-triggered aggregate scans inspect
+only the requested filesystem tree by default. REST/SDK/MCP callers must send
+`include_git_history: true` or `include_system: true` for the corresponding
+wider source. Merely listing `git-history` in a REST/MCP scanner array does not
+authorize history access.
+
 ## All CLI Commands
 
 ```
@@ -200,18 +210,21 @@ shield fleet-package ./package.tgz --json
 
 ### Migration warning for 0.1.25 and earlier
 
-Versions through 0.1.25 enabled git-history, process, and tmux sources by
-default. Structured output could therefore include credential-bearing source
-context. Upgrade before using `shield secrets` in an agent, CI job, log
-collector, or transcript-producing tool. Until the fixed version is installed,
+Versions through 0.1.25 allowed aggregate and focused paths to cross historical
+or live-machine boundaries without a consistent per-invocation opt-in.
+Structured output could therefore include credential-bearing source context.
+Upgrade before using Shield in an agent, CI job, log collector, or
+transcript-producing tool. Until the fixed version is installed,
 use `shield secrets . --repo-only --no-git-history --no-processes --no-tmux`
 or use the `secrets scan workspace` and `shield fleet-package` file/archive
 paths. If an older structured scan ran in a credential-bearing environment,
 treat the visible credential identifiers as exposed, preserve values out of
 incident channels, and follow the owning vault/provider rotation runbook.
-Existing database rows are sanitized when read but are not destructively
-rewritten by this update; purge or migration of historical local state requires
-separate incident-owner authorization. Credential-finding fingerprints may
+Existing finding rows are sanitized on read and the sanitized fields are then
+written back when the local database is writable. Stable non-sensitive hashes
+retain correlation without retaining the credential-bearing location or rule
+identifier. A read-only database still receives sanitized API/MCP/reporter
+output, but cannot be rewritten in place. Credential-finding fingerprints may
 change once newly scanned records use the redacted persistence form.
 
 For publishable OSS packages, see

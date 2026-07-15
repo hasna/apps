@@ -12,11 +12,11 @@ import {
   updateFinding,
   getSecurityScore,
 } from "../../db/index.js";
-import { runAllScanners, runScanner } from "../../scanners/index.js";
+import { resolvePublicScannerTypes, runAllScanners, runScanner } from "../../scanners/index.js";
 import { analyzeFinding as llmAnalyze, isLLMAvailable } from "../../llm/index.js";
 import { ScannerType, ScanStatus, Severity } from "../../types/index.js";
 import type { FindingInput } from "../../types/index.js";
-import { sanitizeFindingForOutput } from "../../lib/finding-safety.js";
+import { sanitizeFindingForOutput, sanitizeLocationForOutput } from "../../lib/finding-safety.js";
 import {
   scanSecretExposure,
   filterSecretExposureBySeverity,
@@ -36,10 +36,12 @@ export function registerScanTools(
     "Run a full security scan on a repository path",
     {
       path: z.string().describe("Path to the repository to scan"),
-      scanners: z.array(z.string()).optional().describe("Scanner types to run (defaults to all)"),
+      scanners: z.array(z.string()).optional().describe("Scanner types to run (defaults to file-only scanners; git-history also requires include_git_history=true)"),
+      include_git_history: z.boolean().optional().describe("Explicitly opt in to git history (default false)"),
+      include_system: z.boolean().optional().describe("Explicitly opt in to host/system IOC locations outside path (default false)"),
       llm_analyze: z.boolean().optional().describe("Whether to run LLM analysis on findings"),
     },
-    async ({ path, scanners, llm_analyze }) => {
+    async ({ path, scanners, include_git_history, include_system, llm_analyze }) => {
       try {
         const scanPath = resolve(path);
 
@@ -49,23 +51,23 @@ export function registerScanTools(
           project = createProject(name, scanPath);
         }
 
-        const scannerTypes: ScannerType[] = scanners
-          ? scanners.filter((s) => Object.values(ScannerType).includes(s as ScannerType)) as ScannerType[]
-          : Object.values(ScannerType);
+        const scannerTypes = resolvePublicScannerTypes(scanners, include_git_history === true);
+        const runOptions = {
+          include_git_history: include_git_history === true,
+          include_system: include_system === true,
+        };
 
         const scan = createScan(project.id, scannerTypes);
         updateScanStatus(scan.id, ScanStatus.Running);
 
         let findingInputs: FindingInput[];
         if (scanners && scanners.length > 0) {
-          const results = await Promise.allSettled(
-            scannerTypes.map((t) => runScanner(t, scanPath)),
+          const results = await Promise.all(
+            scannerTypes.map((t) => runScanner(t, scanPath, runOptions)),
           );
-          findingInputs = results
-            .filter((r) => r.status === "fulfilled")
-            .flatMap((r) => (r as PromiseFulfilledResult<FindingInput[]>).value);
+          findingInputs = results.flat();
         } else {
-          findingInputs = await runAllScanners(scanPath);
+          findingInputs = await runAllScanners(scanPath, runOptions);
         }
 
         const findings = findingInputs.map((input) => createFinding(scan.id, input));
@@ -125,7 +127,7 @@ export function registerScanTools(
           (f) => f.file === absPath || f.file === filePath || f.file.endsWith(filePath),
         );
         return jsonResult({
-          file: absPath,
+          file: sanitizeLocationForOutput(absPath),
           findings: fileFindings.map(sanitizeFindingForOutput),
           count: fileFindings.length,
         });

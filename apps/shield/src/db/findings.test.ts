@@ -101,6 +101,20 @@ describe("findings", () => {
     expect(finding.code_snippet).toBeNull();
   });
 
+  test("createFinding replaces credential-bearing rule and path fields before SQLite", () => {
+    const syntheticSecret = "sk_test_" + "SYNTHETICONLY0123456789";
+    const finding = createFinding(scanId, makeInput({
+      rule_id: `unsafe-${syntheticSecret}`,
+      scanner_type: ScannerType.Code,
+      file: `src/${syntheticSecret}/app.ts`,
+      message: "Unsafe code path",
+    }));
+    const raw = getCurrentTestDb().prepare("SELECT rule_id, file, message FROM findings WHERE id = ?").get(finding.id);
+    expect(JSON.stringify(raw)).not.toContain(syntheticSecret);
+    expect(finding.rule_id).toContain("REDACTED-RULE");
+    expect(finding.file).toContain("REDACTED-LOCATION");
+  });
+
   test("getFinding retrieves a finding by id", () => {
     const created = createFinding(scanId, makeInput());
     const fetched = getFinding(created.id);
@@ -113,9 +127,16 @@ describe("findings", () => {
     const syntheticSecret = "ghp_" + "SYNTHETICONLYABCDEFGHIJKLMNOPQRSTUVWXYZ12";
     const created = createFinding(scanId, makeInput());
     const db = getCurrentTestDb();
-    db.prepare("UPDATE findings SET message = ?, code_snippet = ? WHERE id = ?").run(
+    db.prepare(
+      `INSERT INTO rules (id, name, description, scanner_type, severity, enabled, builtin, metadata, created_at, updated_at)
+       VALUES (?, 'Legacy synthetic rule', '', 'secrets', 'high', 1, 0, '{}', datetime('now'), datetime('now'))`,
+    ).run(`legacy-${syntheticSecret}`);
+    db.prepare("UPDATE findings SET rule_id = ?, file = ?, message = ?, code_snippet = ?, llm_explanation = ? WHERE id = ?").run(
+      `legacy-${syntheticSecret}`,
+      `legacy/${syntheticSecret}/config.ts`,
       `GitHub token detected: ${syntheticSecret}`,
       `GITHUB_TOKEN=${syntheticSecret}`,
+      `Adjacent context ${syntheticSecret}`,
       created.id,
     );
 
@@ -123,6 +144,8 @@ describe("findings", () => {
     expect(JSON.stringify(fetched)).not.toContain(syntheticSecret);
     expect(fetched?.message).toContain("Potential credential exposure");
     expect(fetched?.code_snippet).toBe("[REDACTED]");
+    const raw = db.prepare("SELECT rule_id, file, message, code_snippet, llm_explanation FROM findings WHERE id = ?").get(created.id);
+    expect(JSON.stringify(raw)).not.toContain(syntheticSecret);
   });
 
   test("getFinding returns null for unknown id", () => {
