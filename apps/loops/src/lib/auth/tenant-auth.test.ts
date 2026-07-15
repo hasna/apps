@@ -51,6 +51,13 @@ function headers(token?: string): Headers {
 const readPolicy = routePolicy("GET", "/v1/loops")!;
 
 describe("tenant API authentication", () => {
+  test("rejects signing keys shorter than the token minting minimum", () => {
+    const token = mintApiKey({ app: "loops", agent: "principal-a", scopes: ["loops:read"], signingSecret: secret, nowMs: now });
+    const { client } = clientFor(token);
+    expect(() => new TenantApiAuthenticator(client, "too-short")).toThrow("at least 16 bytes");
+    expect(() => new TenantApiAuthenticator(client, "1234567890abcdef")).not.toThrow();
+  });
+
   test("binds exact token hash, principal, tenant, role, and scopes", async () => {
     const token = mintApiKey({ app: "loops", agent: "principal-a", scopes: ["loops:read"], signingSecret: secret, kid: "kid-a", nowMs: now });
     const { client, audits } = clientFor(token);

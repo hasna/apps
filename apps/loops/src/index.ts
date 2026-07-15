@@ -199,7 +199,6 @@ export {
   exportLoopsMigrationBundle,
   migrationHash,
   publicMigrationBundle,
-  registerSelfHostedRunner,
   selfHostedControlPlaneSummary,
   validateLoopsMigrationBundle,
 } from "./lib/migration.js";
@@ -254,7 +253,5 @@ export type {
   LoopsMigrationPlanRow,
   LoopsMigrationPlanSummary,
   LoopsMigrationResource,
-  RunnerRegistrationOptions,
-  RunnerRegistrationResult,
   SelfHostedPlanOptions,
 } from "./lib/migration.js";

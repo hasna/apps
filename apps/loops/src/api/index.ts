@@ -27,7 +27,6 @@ import {
   publicWorkflowRun,
   publicWorkflowStepRun,
   publicWorkflowWorkItem,
-  redact,
 } from "../lib/format.js";
 import { buildDeploymentStatus, deploymentStatusLine } from "../lib/mode.js";
 import { computeNextAfter, dueSlots } from "../lib/recurrence.js";
@@ -188,11 +187,21 @@ export function createLoopsApiServer(opts: LoopsApiServerOptions = {}) {
       }
       const policy = routePolicy(request.method, url.pathname);
       if (!policy) return fail("route_policy_missing", 403);
-      const decision = await authenticator.authenticate(request.headers, {
-        method: request.method,
-        path: url.pathname,
-        policy,
-      });
+      let decision: TenantAuthDecision;
+      try {
+        decision = await authenticator.authenticate(request.headers, {
+          method: request.method,
+          path: url.pathname,
+          policy,
+        });
+      } catch (error) {
+        const requestId = requestIdentifier(request);
+        logInternalFailure(request, error, "auth_unavailable", requestId);
+        return Response.json(
+          { ok: false, error: "auth_unavailable", requestId },
+          { status: 503 },
+        );
+      }
       if (!decision.ok) {
         return Response.json(
           { ok: false, error: decision.reason, message: decision.message, requestId: decision.requestId },
@@ -213,7 +222,12 @@ export function createLoopsApiServer(opts: LoopsApiServerOptions = {}) {
           importLimitBytes: opts.importLimitBytes ?? DEFAULT_IMPORT_LIMIT_BYTES,
           now: opts.now ?? (() => new Date()),
         });
-      return withTenantStorage(principal, (storage) => execute(storage));
+      try {
+        return await withTenantStorage(principal, (storage) => execute(storage));
+      } catch (error) {
+        logInternalFailure(request, error, "internal_error", principal.requestId);
+        return errorResponse(error);
+      }
     },
   });
 }
@@ -260,6 +274,8 @@ async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
     }
     return fail("not_found", 404);
   } catch (error) {
+    const status = errorStatus(error);
+    if (status >= 500) logInternalFailure(ctx.request, error, "internal_error", ctx.auth.requestId);
     return errorResponse(error);
   }
 }
@@ -655,12 +671,6 @@ async function handleRunnerRequest(ctx: V1RequestContext, segments: string[]): P
   if (ctx.request.method !== "POST") return fail("not_found", 404);
   if (segments.length !== 1) return fail("not_found", 404);
   const action = segments[0];
-  if (action === "register" || action === "heartbeat") {
-    const body = await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes);
-    const runner = runnerRecord(body);
-    requireBoundRunner(ctx.auth, runner);
-    return ok({ runner });
-  }
   if (action === "poll" || action === "claim") {
     const storage = requireStorage(ctx.storage);
     const body = await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes);
@@ -989,10 +999,35 @@ function errorResponse(error: unknown): Response {
   if (error instanceof LoopNotFoundError) return fail("loop_not_found", 404, { message: error.message });
   if (error instanceof LoopArchivedError) return fail("loop_archived", 409, { message: error.message });
   if (error instanceof ValidationError) return fail("validation_failed", 422, { message: error.message });
-  const status = typeof error === "object" && error && "status" in error && typeof error.status === "number" ? error.status : 500;
+  const status = errorStatus(error);
   const message = error instanceof Error ? error.message : String(error);
   const code = typeof error === "object" && error && "code" in error && typeof error.code === "string" ? error.code : status === 500 ? "internal_error" : message;
-  return fail(code, status, status === 500 ? { message: redact(message, 240) } : undefined);
+  return fail(code, status);
+}
+
+function errorStatus(error: unknown): number {
+  return typeof error === "object" && error && "status" in error && typeof error.status === "number"
+    ? error.status
+    : 500;
+}
+
+function requestIdentifier(request: Request): string {
+  const supplied = request.headers.get("x-request-id")?.trim();
+  return supplied && /^[A-Za-z0-9._:-]{1,128}$/.test(supplied) ? supplied : crypto.randomUUID();
+}
+
+function logInternalFailure(request: Request, error: unknown, code: string, requestId = requestIdentifier(request)): void {
+  // Never log Error.message here: database drivers may embed credential-bearing
+  // connection strings in it. The stable code and error class are sufficient
+  // for correlation with protected infrastructure logs.
+  console.error(JSON.stringify({
+    evt: "loops_api_request_failed",
+    code,
+    requestId,
+    method: request.method,
+    path: new URL(request.url).pathname,
+    errorType: error instanceof Error ? error.name : typeof error,
+  }));
 }
 
 export async function main(argv = process.argv): Promise<void> {

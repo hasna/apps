@@ -113,7 +113,6 @@ export async function runRunnerOnce(opts: RunRunnerOnceOptions = {}): Promise<Ru
     now: (opts.now ?? new Date()).toISOString(),
     maxClaims: 1,
   };
-  await postJson(fetchImpl, config, "/v1/runners/register", runnerBody);
   const claimed = await postJson(fetchImpl, config, "/v1/runners/claim", runnerBody);
   const claims = (Array.isArray(claimed.claims) ? claimed.claims : []) as RunnerApiClaim[];
   const completed: LoopRun[] = [];

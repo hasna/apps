@@ -70,7 +70,6 @@ loops self-hosted status
 loops self-hosted migrate --dry-run
 loops self-hosted push --dry-run
 loops self-hosted pull --dry-run
-loops self-hosted runner-register --runner-id <id> --machine-id <machine> --apply
 loops export --file ./loops-export.json --dry-run
 loops export --file ./loops-export.json
 loops import ./loops-export.json

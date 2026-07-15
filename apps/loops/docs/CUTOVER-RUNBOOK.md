@@ -14,7 +14,8 @@ OpenLoops deployment mode.
 
 - `loops-serve` HTTP control plane: RDS-direct Postgres, `GET /health`,
   `/ready`, `/version`, `/openapi.json`, storage-backed `/v1` loop CRUD and run
-  listing, and runner registration/claim/heartbeat/finalize protocol routes.
+  listing, and runner claim/lease heartbeat/finalize protocol routes. Durable
+  runner registration remains a cutover gate and is not advertised as a route.
 - `@hasna/contracts` API-key auth on non-local `loops-serve` binds, backed by
   the shared `api_keys` table and a signing secret.
 - Full `PostgresLoopStorage` behind `LoopStorageContract`, plus
@@ -42,10 +43,16 @@ loopback authentication bypass.
 
 ## AWS Self-Hosted Gates
 
-1. Provision separate database logins. The migrator login must be a member of
-   `open_loops_owner`, `open_loops_migrator`, and
-   `open_loops_authenticator`; the service login must be a member only of
-   `open_loops_runtime`. Never reuse the migrator DSN in `loops-serve`.
+1. Provision separate database logins. Tenant enforcement must run through a
+   provider-level bootstrap administrator. `CREATEROLE`, control of the
+   `public` schema, and the ability to `SET ROLE` to `open_loops_owner` and
+   `open_loops_migrator` are minimum requirements; PostgreSQL 16 may require
+   stronger provider authority for exact role normalization and service-login
+   grant cleanup. The command transactionally exercises and rolls back those
+   exact operations before migration `0010`; static role flags are not accepted
+   as proof. The runtime and
+   authenticator service logins must be members only of their matching roles.
+   Never reuse the bootstrap DSN in `loops-serve`.
 2. Prepare the tenant schema with the ECS one-shot task or an operator command:
    `HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --dry-run`, then
    `HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate`.
@@ -55,10 +62,11 @@ loopback authentication bypass.
    `HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --enforce-tenancy`.
 5. Start `loops-serve` with `HASNA_LOOPS_STORAGE_MODE=self_hosted`, separate
    `HASNA_LOOPS_DATABASE_URL` and `HASNA_LOOPS_AUTH_DATABASE_URL` logins, and the API signing secret from the approved
-   vault item. Do not log or copy the secret value into task evidence.
+   vault item. The signing key must be at least 16 bytes. Do not log or copy the
+   secret value into task evidence.
 6. Verify `/health`, `/ready`, `/version`, and `/openapi.json`.
 7. Verify an authenticated `/v1` read/write smoke against a throwaway loop and
-   a runner registration/claim/finalize smoke if a runner API URL is configured.
+   a claim/finalize smoke if a runner API URL is configured.
 8. Record package version, git SHA, image tag, database migration plan/result,
    redacted API URL, health/readiness responses, and rollback handle.
 

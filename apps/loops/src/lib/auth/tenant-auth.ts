@@ -75,7 +75,11 @@ export class TenantApiAuthenticator {
     private readonly client: TypedQueryClient,
     private readonly signingSecret: string | Buffer,
     private readonly now: () => number = Date.now,
-  ) {}
+  ) {
+    if (Buffer.byteLength(signingSecret) < 16) {
+      throw new Error("loops API signing key must be at least 16 bytes");
+    }
+  }
 
   async authenticate(
     headers: Headers,

@@ -15,7 +15,7 @@ import pg from "pg";
 import { PgPoolExecutor } from "./pg-executor.js";
 import { PostgresStorage } from "./postgres.js";
 import { PostgresLoopStorage, NotImplementedError } from "./postgres-loop-storage.js";
-import { isSafeServiceConnection } from "../../serve/index.js";
+import { assertTenantEnforcementBootstrap, isSafeServiceConnection } from "../../serve/index.js";
 import type { CreateLoopInput, Loop, LoopRun, WorkflowSpec } from "../../types.js";
 
 const DATABASE_URL = process.env.LOOPS_TEST_DATABASE_URL;
@@ -37,6 +37,7 @@ const BRIDGE_ROLE = `loops_bridge_test_${Date.now()}_${Math.floor(Math.random() 
 const BRIDGE_LOGIN = `loops_bridge_login_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
 const EXTRA_AUTH_ROLE = `loops_auth_extra_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
 const ADMIN_LOGIN = `loops_admin_option_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+const HOSTILE_FUNCTION_OWNER = `loops_hostile_fn_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
 function isolatedUrl(credentials?: { username: string; password: string }): string {
   const u = new URL(DATABASE_URL!);
   u.pathname = `/${ISO_DB}`;
@@ -110,6 +111,7 @@ suite("PostgresLoopStorage (live)", () => {
       GRANT ${BRIDGE_ROLE} TO ${BRIDGE_LOGIN};
       CREATE ROLE ${ADMIN_LOGIN} LOGIN;
       GRANT open_loops_runtime TO ${ADMIN_LOGIN} WITH ADMIN OPTION;
+      CREATE ROLE ${HOSTILE_FUNCTION_OWNER} NOLOGIN;
       CREATE ROLE ${RUNTIME_LOGIN} LOGIN PASSWORD '${RUNTIME_PASSWORD}' NOBYPASSRLS;
       GRANT open_loops_runtime TO ${RUNTIME_LOGIN};
       ALTER ROLE ${RUNTIME_LOGIN} SET search_path=evil,public;
@@ -117,7 +119,7 @@ suite("PostgresLoopStorage (live)", () => {
       GRANT open_loops_authenticator TO ${AUTH_LOGIN};
     `);
     await admin(`
-      GRANT CONNECT ON DATABASE ${ISO_DB} TO ${RUNTIME_LOGIN}, ${AUTH_LOGIN}, ${UNSAFE_LOGIN}, ${CROSS_ROLE_LOGIN}, ${ADMIN_LOGIN};
+      GRANT CONNECT ON DATABASE ${ISO_DB} TO ${UNSAFE_LOGIN}, ${CROSS_ROLE_LOGIN}, ${ADMIN_LOGIN};
       GRANT CREATE ON DATABASE ${ISO_DB} TO ${RUNTIME_LOGIN};
     `);
     await executor.queryClient.execute(`
@@ -139,6 +141,10 @@ suite("PostgresLoopStorage (live)", () => {
       GRANT EXECUTE ON FUNCTION public.open_loops_authenticate_key(TEXT, TEXT) TO open_loops_runtime;
       GRANT EXECUTE ON FUNCTION public.open_loops_append_auth_audit(TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, JSONB)
         TO open_loops_runtime;
+      CREATE FUNCTION public.open_loops_current_tenant_id() RETURNS TEXT
+        LANGUAGE sql STABLE AS 'SELECT ''hostile-tenant''::TEXT';
+      ALTER FUNCTION public.open_loops_current_tenant_id() OWNER TO ${HOSTILE_FUNCTION_OWNER};
+      GRANT EXECUTE ON FUNCTION public.open_loops_current_tenant_id() TO PUBLIC, open_loops_authenticator;
       SET ROLE ${RUNTIME_LOGIN};
       CREATE SCHEMA service_owned_probe;
       CREATE FUNCTION service_owned_probe.escalate() RETURNS INTEGER
@@ -210,9 +216,11 @@ suite("PostgresLoopStorage (live)", () => {
       DROP ROLE IF EXISTS ${AUTH_LOGIN};
     `);
     await admin(`DROP ROLE IF EXISTS ${EXTRA_AUTH_ROLE}`);
+    await admin(`DROP ROLE IF EXISTS ${HOSTILE_FUNCTION_OWNER}`);
   });
 
   test("tenant enforcement normalizes poisoned roles and removes unsafe service members", async () => {
+    await expect(assertTenantEnforcementBootstrap(executor.queryClient)).resolves.toBeUndefined();
     expect(unsafeMembershipRemoved).toBe(true);
     expect(unsafeDirectPrivilegesRemoved).toBe(true);
     expect(ownedObjectRejected).toBe(true);
@@ -238,10 +246,67 @@ suite("PostgresLoopStorage (live)", () => {
     expect(await executor.queryClient.get<{ can_create: boolean }>(
       "SELECT has_schema_privilege($1, 'public', 'CREATE') AS can_create", [AUTH_LOGIN],
     )).toEqual({ can_create: false });
+    expect(await executor.queryClient.get<{ direct_connect: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM pg_database database
+         CROSS JOIN LATERAL aclexplode(COALESCE(database.datacl, acldefault('d', database.datdba))) acl
+         JOIN pg_roles grantee ON grantee.oid=acl.grantee
+         WHERE database.datname=current_database() AND grantee.rolname=$1 AND acl.privilege_type='CONNECT'
+       ) AS direct_connect`, [RUNTIME_LOGIN],
+    )).toEqual({ direct_connect: true });
+    expect(await executor.queryClient.get<{ direct_connect: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM pg_database database
+         CROSS JOIN LATERAL aclexplode(COALESCE(database.datacl, acldefault('d', database.datdba))) acl
+         JOIN pg_roles grantee ON grantee.oid=acl.grantee
+         WHERE database.datname=current_database() AND grantee.rolname=$1 AND acl.privilege_type='CONNECT'
+       ) AS direct_connect`, [AUTH_LOGIN],
+    )).toEqual({ direct_connect: true });
     expect(await executor.queryClient.get<{ can_select: boolean }>(
       "SELECT has_table_privilege($1, 'tenants', 'SELECT') AS can_select", [RUNTIME_LOGIN],
     )).toEqual({ can_select: false });
+    expect(await executor.queryClient.get<{ owner: string }>(
+      "SELECT pg_get_userbyid(proowner) AS owner FROM pg_proc WHERE oid='public.open_loops_current_tenant_id()'::regprocedure",
+    )).toEqual({ owner: "open_loops_owner" });
+    expect(await executor.queryClient.get<{ auth_execute: boolean; public_execute: boolean }>(
+      `SELECT has_function_privilege($1, 'public.open_loops_current_tenant_id()', 'EXECUTE') AS auth_execute,
+              NOT EXISTS (
+                SELECT 1 FROM aclexplode(COALESCE(proc.proacl, acldefault('f', proc.proowner))) acl
+                 WHERE acl.grantee = 0 AND acl.privilege_type = 'EXECUTE'
+              ) AS public_execute
+         FROM pg_proc proc
+        WHERE proc.oid='public.open_loops_current_tenant_id()'::regprocedure`,
+      [AUTH_LOGIN],
+    )).toEqual({ auth_execute: false, public_execute: true });
+    expect(await executor.queryClient.get<{ runtime_execute: boolean; role_execute: boolean; runtime_member: boolean; runtime_inherit: boolean }>(
+      `SELECT has_function_privilege($1, 'public.open_loops_current_tenant_id()', 'EXECUTE') AS runtime_execute,
+              has_function_privilege('open_loops_runtime', 'public.open_loops_current_tenant_id()', 'EXECUTE') AS role_execute,
+              pg_has_role($1, 'open_loops_runtime', 'MEMBER') AS runtime_member,
+              (SELECT rolinherit FROM pg_roles WHERE rolname=$1) AS runtime_inherit`,
+      [RUNTIME_LOGIN],
+    )).toEqual({ runtime_execute: true, role_execute: true, runtime_member: true, runtime_inherit: true });
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
+    await executor.queryClient.execute(`REVOKE ALL ON evil.loops FROM open_loops_runtime; REVOKE ALL ON SCHEMA evil FROM open_loops_runtime`);
     expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
+    await executor.queryClient.execute("GRANT TRUNCATE ON loops TO open_loops_runtime");
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
+    await executor.queryClient.execute("REVOKE TRUNCATE ON loops FROM open_loops_runtime");
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
+    expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(true);
+    await executor.queryClient.execute(`
+      CREATE TABLE evil.credentials(secret TEXT NOT NULL);
+      INSERT INTO evil.credentials(secret) VALUES ('cross-app-secret');
+      GRANT USAGE ON SCHEMA evil TO open_loops_authenticator;
+      GRANT SELECT ON evil.credentials TO open_loops_authenticator;
+    `);
+    expect(await authExecutor.queryClient.get<{ secret: string }>("SELECT secret FROM evil.credentials"))
+      .toEqual({ secret: "cross-app-secret" });
+    expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(false);
+    await executor.queryClient.execute(`
+      REVOKE SELECT ON evil.credentials FROM open_loops_authenticator;
+      REVOKE USAGE ON SCHEMA evil FROM open_loops_authenticator;
+      DROP TABLE evil.credentials;
+    `);
     expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(true);
     expect(await isSafeServiceConnection(executor.queryClient, "open_loops_runtime")).toBe(false);
     await admin(`ALTER ROLE ${AUTH_LOGIN} NOINHERIT`);
@@ -250,10 +315,21 @@ suite("PostgresLoopStorage (live)", () => {
     await executor.queryClient.execute(`GRANT SELECT ON api_keys TO ${EXTRA_AUTH_ROLE}`);
     await admin(`GRANT ${EXTRA_AUTH_ROLE} TO ${AUTH_LOGIN}`);
     expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(false);
-    expect(await authExecutor.queryClient.get("SELECT token_hash FROM api_keys LIMIT 1")).toBeNull();
+    await expect(authExecutor.queryClient.get("SELECT token_hash FROM api_keys LIMIT 1"))
+      .rejects.toMatchObject({ code: "42501" });
     await admin(`REVOKE ${EXTRA_AUTH_ROLE} FROM ${AUTH_LOGIN}`);
     await executor.queryClient.execute(`REVOKE SELECT ON api_keys FROM ${EXTRA_AUTH_ROLE}`);
     await admin(`DROP ROLE ${EXTRA_AUTH_ROLE}`);
+    await executor.queryClient.execute(`REVOKE UPDATE ON loops FROM open_loops_runtime`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
+    await executor.queryClient.execute(`GRANT UPDATE ON loops TO open_loops_runtime`);
+    await executor.queryClient.execute(`GRANT SELECT ON api_keys TO open_loops_runtime`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
+    await executor.queryClient.execute(`REVOKE SELECT ON api_keys FROM open_loops_runtime`);
+    await executor.queryClient.execute(`REVOKE EXECUTE ON FUNCTION open_loops_authenticate_key(TEXT, TEXT) FROM open_loops_authenticator`);
+    expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(false);
+    await executor.queryClient.execute(`GRANT EXECUTE ON FUNCTION open_loops_authenticate_key(TEXT, TEXT) TO open_loops_authenticator`);
+    expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(true);
   });
 
   beforeEach(async () => {
@@ -392,6 +468,58 @@ suite("PostgresLoopStorage (live)", () => {
     const summary = await storage.pruneHistory({ maxAgeDays: 30 });
     expect(summary.loopRuns).toBe(1);
     expect(await storage.getRun("oldrun")).toBeUndefined();
+  });
+
+  test("pruneHistory nulls work-item references to deleted workflow runs", async () => {
+    const loop = await storage.createLoop(loopInput("prune-workflow"));
+    await executor.withRequestContext(
+      { tenantId: "tenant-test", principalId: "principal-test", requestId: "prune-workflow-setup" },
+      async (client) => {
+        await client.execute(
+        `INSERT INTO loop_runs (id, loop_id, loop_name, scheduled_for, attempt, status, created_at, updated_at)
+         VALUES ('prune-loop-run',$1,'prune-workflow','2020-01-01T00:00:00Z',1,'succeeded','2020-01-01T00:00:00Z','2020-01-01T00:00:00Z')`,
+        [loop.id],
+        );
+        await client.execute(
+          `INSERT INTO workflow_specs(id,name,version,status,steps_json,created_at,updated_at)
+           VALUES ('prune-workflow-spec','prune-workflow-spec',1,'active','[]','2020-01-01T00:00:00Z','2020-01-01T00:00:00Z')`,
+        );
+        await client.execute(
+          `INSERT INTO workflow_invocations(
+           id,source_kind,source_json,subject_kind,subject_json,intent,created_at,updated_at
+           ) VALUES ('prune-invocation','manual','{}','loop','{}','test','2020-01-01T00:00:00Z','2020-01-01T00:00:00Z')`,
+        );
+        await client.execute(
+          `INSERT INTO workflow_work_items(
+           id,route_key,idempotency_key,invocation_id,source_type,source_ref,subject_ref,
+           priority,status,attempts,created_at,updated_at
+           ) VALUES (
+             'prune-work-item','test','prune-work-item','prune-invocation','manual','test','test',
+             0,'completed',0,'2020-01-01T00:00:00Z','2020-01-01T00:00:00Z'
+           )`,
+        );
+        await client.execute(
+          `INSERT INTO workflow_runs(
+           id,workflow_id,workflow_name,loop_id,loop_run_id,status,created_at,updated_at
+           ) VALUES (
+             'prune-workflow-run','prune-workflow-spec','prune-workflow-spec',$1,'prune-loop-run','succeeded',
+             '2020-01-01T00:00:00Z','2020-01-01T00:00:00Z'
+           )`,
+          [loop.id],
+        );
+        await client.execute(
+          "UPDATE workflow_work_items SET workflow_run_id='prune-workflow-run' WHERE id='prune-work-item'",
+        );
+      },
+    );
+    const summary = await storage.pruneHistory({ maxAgeDays: 30 });
+    expect(summary).toMatchObject({ loopRuns: 1, workflowRuns: 1 });
+    expect(await executor.withRequestContext(
+      { tenantId: "tenant-test", principalId: "principal-test", requestId: "prune-workflow-read" },
+      (client) => client.get<{ workflow_run_id: string | null }>(
+        "SELECT workflow_run_id FROM workflow_work_items WHERE id='prune-work-item'",
+      ),
+    )).toEqual({ workflow_run_id: null });
   });
 
   test("upsertMigrationLoop/Run/Workflow preserve id+status, are idempotent, and honor replace", async () => {

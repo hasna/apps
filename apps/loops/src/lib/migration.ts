@@ -105,22 +105,6 @@ export interface SelfHostedPlanOptions {
   replace?: boolean;
 }
 
-export interface RunnerRegistrationOptions {
-  apiUrl?: string;
-  apiKey?: string;
-  runnerId: string;
-  machineId?: string;
-  labels?: Record<string, string>;
-  capabilities?: Record<string, unknown>;
-  fetchImpl?: typeof fetch;
-  env?: NodeJS.ProcessEnv;
-}
-
-export interface RunnerRegistrationResult {
-  ok: boolean;
-  runner: Record<string, unknown>;
-}
-
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map((entry) => canonicalize(entry));
   if (value && typeof value === "object") {
@@ -1078,25 +1062,6 @@ export async function applySelfHostedPush(store: Store, opts: SelfHostedPushOpti
       requests,
       remoteAfter: remoteAfter.counts,
     }),
-  };
-}
-
-export async function registerSelfHostedRunner(opts: RunnerRegistrationOptions): Promise<RunnerRegistrationResult> {
-  const config = resolveApiConfig(opts);
-  if (!config.apiUrl) throw new ValidationError("HASNA_LOOPS_API_URL or --api-url is required");
-  if (!config.token) throw new ValidationError("self-hosted APIs require HASNA_LOOPS_API_KEY");
-  const payload = await requestJson(opts.fetchImpl ?? fetch, { apiUrl: config.apiUrl, token: config.token }, "/v1/runners/register", {
-    method: "POST",
-    body: JSON.stringify({
-      runnerId: opts.runnerId,
-      machineId: opts.machineId,
-      labels: opts.labels ?? {},
-      capabilities: opts.capabilities ?? {},
-    }),
-  });
-  return {
-    ok: payload.ok === true,
-    runner: payload.runner && typeof payload.runner === "object" ? payload.runner as Record<string, unknown> : {},
   };
 }
 

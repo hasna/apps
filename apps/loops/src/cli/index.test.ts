@@ -506,34 +506,6 @@ describe("loops CLI", () => {
     }
   });
 
-  test("self-hosted runner-register previews by default", () => {
-    const dataDir = freshDataDir("loops-cli-runner-register-dry-run-");
-    const registered = runCli(dataDir, [
-      "--json",
-      "self-hosted",
-      "runner-register",
-      "--runner-id",
-      "runner-cli-test",
-      "--machine-id",
-      "machine-cli-test",
-      "--label",
-      "role=worker",
-      "--capability",
-      "concurrency=1",
-    ]);
-    expect(registered.status).toBe(0);
-    expect(JSON.parse(registered.stdout)).toMatchObject({
-      ok: true,
-      dryRun: true,
-      runner: {
-        runnerId: "runner-cli-test",
-        machineId: "machine-cli-test",
-        labels: { role: "worker" },
-        capabilities: { concurrency: 1 },
-      },
-    });
-  });
-
   test("compiled CLI reports the package version", () => {
     const root = mkdtempSync(join(tmpdir(), "loops-cli-compiled-version-"));
     const outfile = join(root, "loops");

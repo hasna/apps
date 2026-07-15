@@ -206,7 +206,6 @@ describe("loops-runner foundation", () => {
     // subsequent one fails to simulate a lost lease.
     const fetchImpl = (async (url: string | URL) => {
       const u = String(url);
-      if (u.endsWith("/v1/runners/register")) return jsonResponse({ ok: true });
       if (u.endsWith("/v1/runners/claim")) return jsonResponse({ ok: true, claims: [claim] });
       if (u.includes("/heartbeat")) {
         heartbeatCalls += 1;

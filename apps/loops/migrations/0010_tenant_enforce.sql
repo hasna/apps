@@ -1,6 +1,6 @@
 -- @generated mirror of POSTGRES_STORAGE_MIGRATIONS["0010_tenant_enforce"] — DO NOT EDIT.
 -- Source of truth: src/lib/storage/postgres-schema.ts
--- Runner: loops-serve migrate  (checksum: sha256:eda3dfcc05d9207c18792de9c2afdfb1e004bcb92def59cdbb509d5813f9f355)
+-- Runner: loops-serve migrate  (checksum: sha256:21bbe3e59c58117041a9e5d6c787b21451c02220f70bd17887ec254213475d77)
 
 DO $roles$
 BEGIN
@@ -97,6 +97,7 @@ REVOKE open_loops_owner, open_loops_migrator, open_loops_runtime FROM open_loops
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 REVOKE ALL ON SCHEMA public FROM open_loops_runtime, open_loops_authenticator;
 GRANT USAGE ON SCHEMA public TO open_loops_runtime, open_loops_authenticator;
+GRANT USAGE, CREATE ON SCHEMA public TO open_loops_owner, open_loops_migrator;
 
 ALTER TABLE loop_runs DROP CONSTRAINT loop_runs_loop_id_fkey;
 ALTER TABLE workflow_runs DROP CONSTRAINT workflow_runs_workflow_id_fkey;
@@ -146,6 +147,24 @@ DROP INDEX idx_runner_leases_active_workflow_run;
 CREATE OR REPLACE FUNCTION public.open_loops_current_tenant_id() RETURNS TEXT
 LANGUAGE sql STABLE PARALLEL SAFE SET search_path = pg_catalog
 RETURN NULLIF(pg_catalog.current_setting('open_loops.tenant_id', true), '');
+ALTER FUNCTION public.open_loops_current_tenant_id() OWNER TO open_loops_owner;
+DO $tenant_function_acl$
+DECLARE grantee RECORD;
+BEGIN
+  FOR grantee IN
+    SELECT rolname
+      FROM pg_roles
+     WHERE rolname NOT IN ('open_loops_owner', 'open_loops_runtime')
+  LOOP
+    EXECUTE format(
+      'REVOKE ALL ON FUNCTION public.open_loops_current_tenant_id() FROM %I',
+      grantee.rolname
+    );
+  END LOOP;
+END
+$tenant_function_acl$;
+REVOKE ALL ON FUNCTION public.open_loops_current_tenant_id() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.open_loops_current_tenant_id() TO open_loops_runtime;
 
 DO $tenant_defaults$
 DECLARE table_name TEXT;
@@ -205,13 +224,13 @@ $tenant_foreign_keys$;
 
 ALTER TABLE loop_runs ADD FOREIGN KEY (tenant_id, loop_id) REFERENCES loops(tenant_id, id) ON DELETE CASCADE;
 ALTER TABLE workflow_runs ADD FOREIGN KEY (tenant_id, workflow_id) REFERENCES workflow_specs(tenant_id, id) ON DELETE CASCADE;
-ALTER TABLE workflow_runs ADD FOREIGN KEY (tenant_id, loop_id) REFERENCES loops(tenant_id, id);
-ALTER TABLE workflow_runs ADD FOREIGN KEY (tenant_id, loop_run_id) REFERENCES loop_runs(tenant_id, id);
+ALTER TABLE workflow_runs ADD FOREIGN KEY (tenant_id, loop_id) REFERENCES loops(tenant_id, id) ON DELETE SET NULL (loop_id);
+ALTER TABLE workflow_runs ADD FOREIGN KEY (tenant_id, loop_run_id) REFERENCES loop_runs(tenant_id, id) ON DELETE SET NULL (loop_run_id);
 ALTER TABLE workflow_invocations ADD FOREIGN KEY (tenant_id, workflow_id) REFERENCES workflow_specs(tenant_id, id);
 ALTER TABLE workflow_work_items ADD FOREIGN KEY (tenant_id, invocation_id) REFERENCES workflow_invocations(tenant_id, id) ON DELETE CASCADE;
-ALTER TABLE workflow_work_items ADD FOREIGN KEY (tenant_id, workflow_id) REFERENCES workflow_specs(tenant_id, id);
-ALTER TABLE workflow_work_items ADD FOREIGN KEY (tenant_id, loop_id) REFERENCES loops(tenant_id, id);
-ALTER TABLE workflow_work_items ADD FOREIGN KEY (tenant_id, workflow_run_id) REFERENCES workflow_runs(tenant_id, id);
+ALTER TABLE workflow_work_items ADD FOREIGN KEY (tenant_id, workflow_id) REFERENCES workflow_specs(tenant_id, id) ON DELETE SET NULL (workflow_id);
+ALTER TABLE workflow_work_items ADD FOREIGN KEY (tenant_id, loop_id) REFERENCES loops(tenant_id, id) ON DELETE SET NULL (loop_id);
+ALTER TABLE workflow_work_items ADD FOREIGN KEY (tenant_id, workflow_run_id) REFERENCES workflow_runs(tenant_id, id) ON DELETE SET NULL (workflow_run_id);
 ALTER TABLE workflow_step_runs ADD FOREIGN KEY (tenant_id, workflow_run_id) REFERENCES workflow_runs(tenant_id, id) ON DELETE CASCADE;
 ALTER TABLE workflow_events ADD FOREIGN KEY (tenant_id, workflow_run_id) REFERENCES workflow_runs(tenant_id, id) ON DELETE CASCADE;
 ALTER TABLE goal_plan_nodes ADD FOREIGN KEY (tenant_id, goal_id) REFERENCES goals(tenant_id, id) ON DELETE CASCADE;
@@ -241,10 +260,6 @@ CREATE UNIQUE INDEX idx_workflow_runs_idempotency ON workflow_runs(tenant_id, wo
 CREATE UNIQUE INDEX idx_workflow_invocations_dedupe ON workflow_invocations(tenant_id, source_kind, source_dedupe_key) WHERE source_dedupe_key IS NOT NULL;
 CREATE UNIQUE INDEX idx_runner_leases_active_loop_run ON runner_leases(tenant_id, loop_run_id) WHERE loop_run_id IS NOT NULL AND status = 'active';
 CREATE UNIQUE INDEX idx_runner_leases_active_workflow_run ON runner_leases(tenant_id, workflow_run_id) WHERE workflow_run_id IS NOT NULL AND status = 'active';
-
-CREATE OR REPLACE FUNCTION public.open_loops_current_tenant_id() RETURNS TEXT
-LANGUAGE sql STABLE PARALLEL SAFE SET search_path = pg_catalog
-RETURN NULLIF(pg_catalog.current_setting('open_loops.tenant_id', true), '');
 
 DO $rls$
 DECLARE table_name TEXT;
@@ -382,6 +397,64 @@ ALTER FUNCTION public.open_loops_append_auth_audit(TEXT, TEXT, TEXT, TEXT, TEXT,
 REVOKE ALL ON FUNCTION public.open_loops_append_auth_audit(TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, JSONB)
   FROM PUBLIC, open_loops_runtime, open_loops_authenticator;
 GRANT EXECUTE ON FUNCTION public.open_loops_append_auth_audit(TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, JSONB) TO open_loops_authenticator;
+
+REVOKE CREATE ON SCHEMA public FROM open_loops_owner, open_loops_migrator;
+GRANT USAGE ON SCHEMA public TO open_loops_owner, open_loops_migrator;
+
+DO $tenant_enforcement_postconditions$
+DECLARE tenant_function REGPROCEDURE := 'public.open_loops_current_tenant_id()'::regprocedure;
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_roles
+     WHERE rolname IN ('open_loops_owner', 'open_loops_migrator', 'open_loops_runtime', 'open_loops_authenticator')
+       AND (rolcanlogin OR rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls)
+  ) THEN
+    RAISE EXCEPTION 'tenant enforcement did not normalize OpenLoops database roles';
+  END IF;
+  IF (SELECT pg_get_userbyid(proowner) FROM pg_proc WHERE oid = tenant_function) <> 'open_loops_owner' THEN
+    RAISE EXCEPTION 'tenant enforcement did not secure the tenant context function owner';
+  END IF;
+  IF EXISTS (
+    SELECT 1
+      FROM pg_proc proc,
+           LATERAL aclexplode(COALESCE(proc.proacl, acldefault('f', proc.proowner))) acl
+     WHERE proc.oid = tenant_function
+       AND acl.privilege_type = 'EXECUTE'
+       AND acl.grantee NOT IN (
+         (SELECT oid FROM pg_roles WHERE rolname='open_loops_owner'),
+         (SELECT oid FROM pg_roles WHERE rolname='open_loops_runtime')
+       )
+  ) THEN
+    RAISE EXCEPTION 'tenant enforcement left an unexpected tenant context function grant';
+  END IF;
+  IF NOT has_function_privilege('open_loops_runtime', tenant_function, 'EXECUTE') OR
+     has_function_privilege('open_loops_authenticator', tenant_function, 'EXECUTE') THEN
+    RAISE EXCEPTION 'tenant enforcement tenant context function grants are incomplete';
+  END IF;
+  IF has_schema_privilege('open_loops_owner', 'public', 'CREATE') OR
+     has_schema_privilege('open_loops_migrator', 'public', 'CREATE') THEN
+    RAISE EXCEPTION 'tenant enforcement left bootstrap schema creation privileges enabled';
+  END IF;
+  IF EXISTS (
+    SELECT 1
+      FROM pg_auth_members membership
+      JOIN pg_roles granted ON granted.oid = membership.roleid
+      JOIN pg_roles member ON member.oid = membership.member
+     WHERE granted.rolname IN ('open_loops_runtime', 'open_loops_authenticator')
+       AND member.rolcanlogin
+       AND NOT EXISTS (
+         SELECT 1
+           FROM pg_database database
+           CROSS JOIN LATERAL aclexplode(COALESCE(database.datacl, acldefault('d', database.datdba))) acl
+          WHERE database.datname = current_database()
+            AND acl.grantee = member.oid
+            AND acl.privilege_type = 'CONNECT'
+       )
+  ) THEN
+    RAISE EXCEPTION 'tenant enforcement did not grant direct database CONNECT to every service login';
+  END IF;
+END
+$tenant_enforcement_postconditions$;
 
 DROP TABLE api_key_tenant_bindings;
 DROP TABLE tenant_row_assignments;

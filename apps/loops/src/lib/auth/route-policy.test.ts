@@ -3,12 +3,19 @@ import { ROUTE_POLICIES, routePolicy } from "./route-policy.js";
 import openApi from "../../../openapi/loops.json" with { type: "json" };
 
 describe("route authorization inventory", () => {
-  test.each(["register", "heartbeat", "poll", "claim"])("inventories runner %s", (action) => {
+  test.each(["poll", "claim"])("inventories runner %s", (action) => {
     expect(routePolicy("POST", `/v1/runners/${action}`)).toMatchObject({
       risk: "runner",
       scopes: ["loops:runner"],
       tokenKinds: ["machine", "service"],
     });
+  });
+
+  test("does not advertise non-durable runner registration or runner heartbeats", () => {
+    expect(routePolicy("POST", "/v1/runners/register")).toBeUndefined();
+    expect(routePolicy("POST", "/v1/runners/heartbeat")).toBeUndefined();
+    expect((openApi.paths as Record<string, unknown>)["/v1/runners/register"]).toBeUndefined();
+    expect((openApi.paths as Record<string, unknown>)["/v1/runners/heartbeat"]).toBeUndefined();
   });
 
   test("keeps machine and worker credentials out of generic CRUD", () => {

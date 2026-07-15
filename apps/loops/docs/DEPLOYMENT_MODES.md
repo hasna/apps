@@ -62,8 +62,6 @@ loops self-hosted status
 loops self-hosted migrate --dry-run
 loops self-hosted push --dry-run
 loops self-hosted pull --dry-run
-loops self-hosted runner-register --runner-id <id> --machine-id <machine>
-loops self-hosted runner-register --runner-id <id> --machine-id <machine> --apply
 loops cloud status
 loops-api status
 loops-serve version
@@ -135,11 +133,11 @@ self-hosted host.
 
 `loops-runner` is the process that connects a machine to a non-local control
 plane. The current public package supports a bounded one-shot protocol:
-registration, claim polling, claim-token fenced heartbeat/finalization, and
-`loops-runner run-once` execution for non-workflow targets. Full fleet daemon
-mode and workflow target execution over the remote protocol still need
-follow-up releases before `loops-runner` is advertised as a complete always-on
-worker.
+claim polling, claim-token fenced lease heartbeat/finalization, and
+`loops-runner run-once` execution for non-workflow targets. Durable machine
+registration, full fleet daemon mode, and workflow target execution over the
+remote protocol still need follow-up releases before `loops-runner` is
+advertised as a complete always-on worker.
 
 ## Migration And Sync
 
@@ -202,14 +200,10 @@ execution still flows through a configured control-plane API and runner
 protocol. `loops-runner` needs `HASNA_LOOPS_API_URL` to claim
 work; a database URL alone is migration/readiness configuration.
 
-`loops self-hosted runner-register` is also preview-only unless `--apply` is
-present. The dry run prints the runner id, machine id, labels, and
-capabilities that would be posted, without exposing tokens.
-
 Cross-machine rollout evidence should record: machine id/hostname, package
 version, git/build version, command run, dry-run or apply mode, redacted API
 URL, source and target store ids, backup path, bundle hash, schema version,
-row counts, conflicts, blocked rows, runner registration id, daemon/runner
+row counts, conflicts, blocked rows, runner machine record id, daemon/runner
 status, and timestamp.
 
 ## Machine Placement
@@ -227,7 +221,7 @@ distinguishable from intentional fan-out.
 This is separate from existing local OpenMachines dispatch. In `local` mode,
 `loops-daemon` can still dispatch a loop target to a configured remote machine
 through the existing OpenMachines transport. In `self_hosted` or `cloud`,
-machine execution is runner-pull: a registered `loops-runner` claims work from
+machine execution is runner-pull: `loops-runner` claims work from
 the control plane. Operators should not treat local remote dispatch as cloud
 mode.
 

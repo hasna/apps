@@ -24,6 +24,15 @@ HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve tenant-backfill --input ./tena
 HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --enforce-tenancy
 ```
 
+The `--enforce-tenancy` login must be a provider-level bootstrap administrator.
+At minimum it must control the `public` schema, have `CREATEROLE`, and be able
+to `SET ROLE` to `open_loops_owner` and `open_loops_migrator`, but PostgreSQL 16
+can require stronger provider authority to normalize all role attributes and
+clean direct service-login grants. Before applying migration `0010`, every
+supported runner transactionally exercises and rolls back the exact `ALTER
+ROLE`, schema grant, and `DROP OWNED` operations. A role-attribute approximation
+is not accepted as proof.
+
 Out-of-band (operator, owner role through an SSM tunnel):
 
 ```

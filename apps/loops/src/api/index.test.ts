@@ -145,6 +145,46 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("authentication backend failures return a stable 503 without credential details", async () => {
+    const mod = await import("./index.js");
+    const server = mod.createLoopsApiServer({
+      host: "127.0.0.1",
+      port: 0,
+      authenticator: {
+        authenticate: async () => { throw new Error("postgres://user:secret@db.internal/loops"); },
+      },
+      withTenantStorage: (_principal, fn) => fn(createSqliteLoopStorage(":memory:")),
+    });
+    try {
+      const response = await fetch(apiUrl(server, "/v1/loops"), {
+        headers: { "x-request-id": "auth-outage-test" },
+      });
+      expect(response.status).toBe(503);
+      const body = JSON.stringify(await response.json());
+      expect(body).toContain('"error":"auth_unavailable"');
+      expect(body).toContain('"requestId":"auth-outage-test"');
+      expect(body).not.toContain("postgres");
+      expect(body).not.toContain("secret");
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("internal storage failures never expose credential-bearing error messages", async () => {
+    const mod = await import("./index.js");
+    const failingStorage = {
+      listLoops: async () => { throw new Error("postgres://user:secret@db.internal/loops"); },
+    } as unknown as LoopStorageContract;
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage: failingStorage });
+    try {
+      const response = await fetch(apiUrl(server, "/v1/loops"));
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ ok: false, error: "internal_error" });
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test("loops routes use injected storage and redact command environments", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
@@ -694,17 +734,18 @@ describe("loops-api foundation", () => {
 
   test("mutating routes enforce JSON content type and bounded bodies", async () => {
     const mod = await import("./index.js");
-    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, bodyLimitBytes: 8 });
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, bodyLimitBytes: 8, storage });
 
     try {
-      const unsupported = await fetch(apiUrl(server, "/v1/runners/register"), {
+      const unsupported = await fetch(apiUrl(server, "/v1/runners/claim"), {
         method: "POST",
         body: "{}",
       });
       expect(unsupported.status).toBe(415);
       expect(await unsupported.json()).toMatchObject({ ok: false, error: "unsupported_media_type" });
 
-      const malformed = await fetch(apiUrl(server, "/v1/runners/register"), {
+      const malformed = await fetch(apiUrl(server, "/v1/runners/claim"), {
         method: "POST",
         headers: jsonHeaders,
         body: "{",
@@ -712,7 +753,7 @@ describe("loops-api foundation", () => {
       expect(malformed.status).toBe(400);
       expect(await malformed.json()).toMatchObject({ ok: false, error: "invalid_json" });
 
-      const tooLarge = await fetch(apiUrl(server, "/v1/runners/register"), {
+      const tooLarge = await fetch(apiUrl(server, "/v1/runners/claim"), {
         method: "POST",
         headers: jsonHeaders,
         body: JSON.stringify({ machineId: "spark01" }),
@@ -721,22 +762,15 @@ describe("loops-api foundation", () => {
       expect(await tooLarge.json()).toMatchObject({ ok: false, error: "body_too_large" });
     } finally {
       server.stop(true);
+      await storage.close();
     }
   });
 
-  test("runner protocol endpoints fail closed without storage except registration", async () => {
+  test("runner protocol endpoints fail closed without storage", async () => {
     const mod = await import("./index.js");
     const server = createTestServer(mod, { host: "127.0.0.1", port: 0 }, runnerPrincipal("spark01"));
 
     try {
-      const response = await fetch(apiUrl(server, "/v1/runners/register"), {
-        method: "POST",
-        headers: { "content-type": "application/vnd.open-loops+json" },
-        body: JSON.stringify({ machineId: "spark01", labels: { host: "spark01" } }),
-      });
-      expect(response.status).toBe(200);
-      expect(await response.json()).toMatchObject({ ok: true, runner: { id: "spark01", machineId: "spark01" } });
-
       for (const action of ["heartbeat", "finalize", "evidence"]) {
         const runResponse = await fetch(apiUrl(server, `/v1/runs/run-1/${action}`), {
           method: "POST",
@@ -763,7 +797,7 @@ describe("loops-api foundation", () => {
     }
   });
 
-  test("machine credentials cannot register a different runner identity", async () => {
+  test("machine credentials cannot claim as a different runner identity", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
     const machinePrincipal = {
@@ -782,7 +816,7 @@ describe("loops-api foundation", () => {
       withTenantStorage: (_principal, fn) => fn(storage),
     });
     try {
-      const response = await fetch(apiUrl(server, "/v1/runners/register"), {
+      const response = await fetch(apiUrl(server, "/v1/runners/claim"), {
         method: "POST",
         headers: jsonHeaders,
         body: JSON.stringify({ runnerId: "machine-spoofed" }),
@@ -811,14 +845,6 @@ describe("loops-api foundation", () => {
         },
         new Date("2025-12-31T00:00:00Z"),
       );
-
-      const register = await fetch(apiUrl(server, "/v1/runners/register"), {
-        method: "POST",
-        headers: jsonHeaders,
-        body: JSON.stringify({ runnerId: "runner-a", machineId: "machine-a", labels: { os: "linux" } }),
-      });
-      expect(register.status).toBe(200);
-      expect(await register.json()).toMatchObject({ ok: true, runner: { id: "runner-a", machineId: "machine-a" } });
 
       const claimResponse = await fetch(apiUrl(server, "/v1/runners/claim"), {
         method: "POST",

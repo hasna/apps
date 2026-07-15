@@ -73,8 +73,6 @@ export const ROUTE_POLICIES: readonly RoutePolicy[] = Object.freeze([
   policy("goals.planNodes", "GET", "/v1/goals/{id}/plan-nodes", /^\/v1\/goals\/[^/]+\/plan-nodes$/, ["loops:read"], READ_ROLES, ["api_key", "service"], "read"),
   policy("goalRuns.list", "GET", "/v1/goal-runs", /^\/v1\/goal-runs$/, ["loops:read"], READ_ROLES, ["api_key", "service"], "read"),
   policy("history.prune", "POST", "/v1/history/prune", /^\/v1\/history\/prune$/, ["loops:delete"], ADMIN_ROLES, ["api_key", "service"], "destructive"),
-  policy("runners.register", "POST", "/v1/runners/register", /^\/v1\/runners\/register$/, ["loops:runner"], ["worker", "service"], ["machine", "service"], "runner"),
-  policy("runners.heartbeat", "POST", "/v1/runners/heartbeat", /^\/v1\/runners\/heartbeat$/, ["loops:runner"], ["worker", "service"], ["machine", "service"], "runner"),
   policy("runners.poll", "POST", "/v1/runners/poll", /^\/v1\/runners\/poll$/, ["loops:runner"], ["worker", "service"], ["machine", "service"], "runner"),
   policy("runners.claim", "POST", "/v1/runners/claim", /^\/v1\/runners\/claim$/, ["loops:runner"], ["worker", "service"], ["machine", "service"], "runner"),
   policy("leases.recover", "POST", "/v1/leases/recover", /^\/v1\/leases\/recover$/, ["loops:delete"], ["admin", "service"], ["api_key", "service"], "destructive"),

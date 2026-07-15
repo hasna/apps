@@ -15,6 +15,7 @@ import { Pool } from "pg";
 import { createQueryClient } from "../src/generated/storage-kit/query.js";
 import { PgPoolExecutor } from "../src/lib/storage/pg-executor.js";
 import { PostgresStorage } from "../src/lib/storage/postgres.js";
+import { assertTenantEnforcementBootstrap } from "../src/serve/index.js";
 
 const raw = process.env.TUNNEL_DATABASE_URL?.trim();
 if (!raw) throw new Error("set TUNNEL_DATABASE_URL");
@@ -31,17 +32,21 @@ const executor = new PgPoolExecutor(client);
 
 const dryRun = process.argv.includes("--dry-run");
 const enforceTenancy = process.argv.includes("--enforce-tenancy");
-const result = await new PostgresStorage(executor).migrate({
-  dryRun,
-  through: enforceTenancy ? undefined : "0008_tenant_prepare",
-});
-console.log(
-  JSON.stringify({
-    step: "storage",
+try {
+  if (enforceTenancy) await assertTenantEnforcementBootstrap(client);
+  const result = await new PostgresStorage(executor).migrate({
     dryRun,
-    enforceTenancy,
-    applied: result.applied.map((a) => a.id),
-    pending: result.plan.filter((p) => p.state === "pending").map((p) => p.migration.id),
-  }),
-);
-await pool.end();
+    through: enforceTenancy ? undefined : "0008_tenant_prepare",
+  });
+  console.log(
+    JSON.stringify({
+      step: "storage",
+      dryRun,
+      enforceTenancy,
+      applied: result.applied.map((a) => a.id),
+      pending: result.plan.filter((p) => p.state === "pending").map((p) => p.migration.id),
+    }),
+  );
+} finally {
+  await pool.end();
+}
