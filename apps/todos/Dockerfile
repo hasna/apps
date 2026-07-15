@@ -7,19 +7,19 @@
 ARG BUN_IMAGE=oven/bun:1.3.14-alpine@sha256:3c9ab1a521c82144dff537125695017a0480d3a13088fba7e012cfae0f63146f
 ARG BASH_VERSION=5.2.37-r0
 
-FROM --platform=linux/arm64 ${BUN_IMAGE} AS base
+FROM ${BUN_IMAGE} AS base
 # The single-platform digest resolves directly to the official linux/arm64
 # Bun 1.3.14 Alpine manifest. Assert the musl boundary and the immutable base's
 # security-relevant package floor so an accidental digest or platform change
 # fails during the build.
-RUN test "$(bun --version)" = "1.3.14" \
-    && test "$(apk info -v musl)" = "musl-1.2.5-r12" \
-    && test "$(apk info -v libcrypto3)" = "libcrypto3-3.5.6-r0" \
-    && test "$(apk info -v libssl3)" = "libssl3-3.5.6-r0" \
-    && test "$(apk info -v ca-certificates-bundle)" = "ca-certificates-bundle-20260413-r0" \
-    && ! apk info -e glibc \
-    && ! apk info -e perl \
-    && ! apk info -e sqlite-libs
+RUN test "$(bun --version)" = "1.3.14"
+RUN apk info -vv | grep -q '^musl-1.2.5-r12 - '
+RUN apk info -vv | grep -q '^libcrypto3-3.5.6-r0 - '
+RUN apk info -vv | grep -q '^libssl3-3.5.6-r0 - '
+RUN apk info -vv | grep -q '^ca-certificates-bundle-20260413-r0 - '
+RUN ! apk info -e glibc
+RUN ! apk info -e perl
+RUN ! apk info -e sqlite-libs
 
 FROM base AS deps
 WORKDIR /app
@@ -45,7 +45,7 @@ WORKDIR /app
 # one exact Alpine package; git and tmux were not present in the predecessor
 # image and remain intentionally outside the cloud container contract.
 RUN apk add --no-cache "bash=${BASH_VERSION}" \
-    && test "$(apk info -v bash)" = "bash-${BASH_VERSION}" \
+    && apk info -vv | grep -q "^bash-${BASH_VERSION} - " \
     && ! command -v git \
     && ! command -v tmux
 # Amazon RDS global CA bundle so TLS to the shared RDS succeeds even under

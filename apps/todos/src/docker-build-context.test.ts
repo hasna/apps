@@ -24,9 +24,10 @@ describe("server image build context", () => {
     expect(dockerfile).toContain(
       "ARG BUN_IMAGE=oven/bun:1.3.14-alpine@sha256:3c9ab1a521c82144dff537125695017a0480d3a13088fba7e012cfae0f63146f",
     );
-    expect(dockerfile).toContain("FROM --platform=linux/arm64 ${BUN_IMAGE} AS base");
+    expect(dockerfile).toContain("FROM ${BUN_IMAGE} AS base");
+    expect(dockerfile).not.toContain("FROM --platform=linux/arm64");
     expect(dockerfile).toContain('test "$(bun --version)" = "1.3.14"');
-    expect(dockerfile).toContain('test "$(apk info -v musl)" = "musl-1.2.5-r12"');
+    expect(dockerfile).toContain("apk info -vv | grep -q '^musl-1.2.5-r12 - '");
     expect(dockerfile).toContain("! apk info -e glibc");
     expect(dockerfile).not.toContain("apt-get");
     expect(dockerfile).not.toContain("dpkg-query");
@@ -38,7 +39,7 @@ describe("server image build context", () => {
 
     expect(dockerfile).toContain("ARG BASH_VERSION=5.2.37-r0");
     expect(dockerfile).toContain('apk add --no-cache "bash=${BASH_VERSION}"');
-    expect(dockerfile).toContain('test "$(apk info -v bash)" = "bash-${BASH_VERSION}"');
+    expect(dockerfile).toContain('apk info -vv | grep -q "^bash-${BASH_VERSION} - "');
     expect(dockerfile).toContain("! command -v git");
     expect(dockerfile).toContain("! command -v tmux");
     expect(dockerfile).not.toMatch(/apk add[^\n]*(?:git|tmux)/);
