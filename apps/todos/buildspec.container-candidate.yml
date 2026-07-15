@@ -85,6 +85,9 @@ phases:
     commands:
       - |-
         set -euo pipefail
+        if docker inspect "${TEST_APP:-missing}" >/dev/null 2>&1; then
+          docker logs "${TEST_APP}" 2>&1 | tail -200 | sed -E 's#(postgres(ql)?://)[^@[:space:]]+@#\1[redacted]@#g' || true
+        fi
         docker rm -f "${TEST_APP:-missing}" "${TEST_DB:-missing}" >/dev/null 2>&1 || true
         docker network rm "${TEST_NETWORK:-missing}" >/dev/null 2>&1 || true
         if [ "${BUILD_SUCCEEDED:-0}" != 1 ]; then

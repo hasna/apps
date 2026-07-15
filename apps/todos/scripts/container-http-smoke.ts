@@ -13,7 +13,12 @@ const authHeaders = {
 async function expectStatus(path: string, status: number, init?: RequestInit): Promise<Response> {
   const response = await fetch(`${baseUrl}${path}`, init);
   if (response.status !== status) {
-    throw new Error(`${init?.method ?? "GET"} ${path}: expected ${status}, got ${response.status}`);
+    const boundedBody = (await response.text()).slice(0, 512)
+      .replace(/(postgres(?:ql)?:\/\/)[^@\s"]+@/gi, "$1[redacted]@")
+      .replace(/("(?:token|password|secret|api_key)"\s*:\s*")[^"]*/gi, "$1[redacted]");
+    throw new Error(
+      `${init?.method ?? "GET"} ${path}: expected ${status}, got ${response.status}; body=${boundedBody}`,
+    );
   }
   return response;
 }

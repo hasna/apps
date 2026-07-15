@@ -66,6 +66,7 @@ describe("server image build context", () => {
     expect(buildspec).toContain('sha256:bb03dc9f0724a6decf34994aac876876d1ab5e07c72371a4ed7a8466944617b2');
     expect(buildspec).toContain('sha256:3c9ab1a521c82144dff537125695017a0480d3a13088fba7e012cfae0f63146f');
     expect(buildspec).toContain("candidate post-build evidence skipped: build did not reach push");
+    expect(buildspec).toContain('docker logs "${TEST_APP}"');
     expect(buildspec).toContain("test -x /lib/ld-musl-aarch64.so.1");
     expect(buildspec).toContain("test ! -e /lib64/ld-linux-aarch64.so.1");
     expect(buildspec).toContain("openssl rand -hex 24");
