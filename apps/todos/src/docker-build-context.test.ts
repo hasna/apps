@@ -57,8 +57,16 @@ describe("server image build context", () => {
 
     expect(buildspec).toContain("docker build --platform linux/arm64");
     expect(buildspec).toContain('--build-arg "BUN_IMAGE=${BUN_IMAGE_OVERRIDE}"');
+    expect(buildspec).toContain('BASE_IMAGE_ARCHIVE_VERSION');
+    expect(buildspec).toContain('BASE_IMAGE_ARCHIVE_SHA256');
+    expect(buildspec).toContain('aws s3api get-object');
+    expect(buildspec).toContain('docker load --input /tmp/bun-base.docker.tar');
+    expect(buildspec).toContain('sha256:bb03dc9f0724a6decf34994aac876876d1ab5e07c72371a4ed7a8466944617b2');
+    expect(buildspec).toContain('sha256:3c9ab1a521c82144dff537125695017a0480d3a13088fba7e012cfae0f63146f');
     expect(buildspec).toContain("candidate post-build evidence skipped: build did not reach push");
-    expect(buildspec).toContain("scanelf -n /usr/local/bin/bun");
+    expect(buildspec).toContain("test -x /lib/ld-musl-aarch64.so.1");
+    expect(buildspec).toContain("test ! -e /lib64/ld-linux-aarch64.so.1");
+    expect(buildspec).toContain("openssl rand -hex 24");
     expect(buildspec).toContain("apk info -vv");
     expect(buildspec).toContain("container-sbom.cdx.json");
     expect(buildspec).toContain("container-provenance.json");

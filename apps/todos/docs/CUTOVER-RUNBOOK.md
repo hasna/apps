@@ -189,6 +189,17 @@ scan, and review. The OpenSSL CLI is also intentionally absent: Bun has the
 reviewed OpenSSL libraries and the image carries the system CA set plus the RDS
 CA bundle.
 
+The production CodeBuild role is intentionally push-only for ECR and cannot
+download ECR layers. Candidate builds therefore load the reviewed Bun base from
+a unique, versioned object under the private build bucket's `_build/base/`
+prefix. The object is a Docker archive produced by pinned Crane from the exact
+ECR mirror digest. The build must pin and verify the S3 bucket, key, VersionId,
+archive SHA-256, source manifest digest, image config digest, architecture, and
+root filesystem layer identities before tagging the loaded image under a local
+build-only name. The public Dockerfile default remains the official Docker Hub
+digest. Do not fall back to a mutable base tag or widen the builder's ECR policy
+without a separately reviewed infrastructure change.
+
 Before an image digest may enter Terraform, require all of the following:
 
 1. Build natively for `linux/arm64` from an exact committed source archive.
