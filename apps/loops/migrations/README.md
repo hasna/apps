@@ -19,14 +19,35 @@ baked RDS CA bundle when applicable). Local development can use a disposable
 Postgres DSN with `sslmode=disable`:
 
 ```
-HASNA_LOOPS_DATABASE_URL=... loops-serve migrate   # or the ECS one-shot migration task
+HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate   # prepare through 0008
+HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve tenant-backfill --input ./tenant-backfill.json
+HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --enforce-tenancy
 ```
+
+The target must be a dedicated OpenLoops database owned by the bootstrap login
+(or administered by a true superuser), not a database shared with
+another application. Migration `0010` removes unexpected privileges from any
+explicit grantee across every non-system schema, table, sequence, and function
+in the current database, including default `PUBLIC` function execute privileges,
+before granting the exact runtime/auth ACLs.
+The `--enforce-tenancy` login must be a provider-level bootstrap administrator.
+At minimum it must control the `public` schema, have `CREATEROLE`, and be able
+to `SET ROLE` to `open_loops_owner` and `open_loops_migrator`, but PostgreSQL 16
+can require stronger provider authority to normalize all role attributes and
+clean direct service-login grants. Before applying migration `0010`, every
+supported runner transactionally exercises and rolls back the required `ALTER
+ROLE`, schema/database grant, function/table/sequence/schema revoke, and
+`DROP OWNED` operations. A role-attribute approximation is not accepted as proof.
 
 Out-of-band (operator, owner role through an SSM tunnel):
 
 ```
 TUNNEL_DATABASE_URL=... bun run scripts/db-migrate-tunnel.ts
+TUNNEL_DATABASE_URL=... bun run scripts/db-migrate-tunnel.ts --enforce-tenancy
 ```
 
-The `api_keys` table (@hasna/contracts auth) is ensured by the same `migrate`
-command after the storage migrations.
+Both standalone runners stop after migration 0008 by default. The enforcement
+flag is required after the reviewed tenant backfill bundle has been loaded.
+
+The tenant-bound `api_keys` table is owned by migrations 0008-0010; no second
+schema bootstrap path exists.

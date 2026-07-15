@@ -1,28 +1,187 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { dbPath } from "../paths.js";
 import { drainTodosTaskRoutes } from "./drain.js";
 
 // Integration coverage for the freshness-close path: a route whose PR is
 // definitively MERGED/CLOSED must not just skip (0.4.10 behavior, which left the
 // task pending + auto:route and re-skipped it every tick) — the drain must close
-// the source todos task so it leaves the queue. Uses a real temp `todos` project
-// because the close pathway shells out to the todos CLI; skips cleanly when the
-// binary is unavailable.
+// the source todos task so it leaves the queue. The close pathway shells out to
+// `todos`, so tests install a deterministic fixture CLI on PATH instead of
+// depending on the workstation's installed Todos release.
 
-function todosAvailable(): boolean {
+function installFakeTodosBin(root: string): string {
+  const binDir = join(root, "bin");
+  mkdirSync(binDir, { recursive: true });
+  const todosBin = join(binDir, "todos");
+  writeFileSync(todosBin, `#!/usr/bin/env bun
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
+
+const rawArgs = process.argv.slice(2);
+let project = "";
+let json = false;
+const args = [];
+for (let index = 0; index < rawArgs.length; index += 1) {
+  const arg = rawArgs[index];
+  if (arg === "--project") project = rawArgs[++index] || "";
+  else if (arg === "--json") json = true;
+  else args.push(arg);
+}
+
+function valueAfter(flag) {
+  const index = args.indexOf(flag);
+  return index >= 0 ? args[index + 1] : undefined;
+}
+
+function dbFile(targetProject = project) {
+  if (!targetProject) return undefined;
+  const dir = join(targetProject, ".fake-todos");
+  mkdirSync(dir, { recursive: true });
+  return join(dir, "tasks.json");
+}
+
+function defaultDb(targetProject = project) {
+  const listId = valueAfter("--task-list-id") || "default";
+  const name = valueAfter("--name") || basename(targetProject || "default");
+  return { seq: 0, lists: [{ id: listId, slug: listId, name }], tasks: [] };
+}
+
+function readDb(targetProject = project) {
+  const file = dbFile(targetProject);
+  if (!file) return defaultDb(targetProject);
   try {
-    return spawnSync("todos", ["--version"], { encoding: "utf8", timeout: 15_000 }).status === 0;
+    return JSON.parse(readFileSync(file, "utf8"));
   } catch {
-    return false;
+    return defaultDb(targetProject);
   }
 }
 
-const HAS_TODOS = todosAvailable();
+function writeDb(db, targetProject = project) {
+  const file = dbFile(targetProject);
+  if (!file) return;
+  writeFileSync(file, JSON.stringify(db), "utf8");
+}
+
+function print(value) {
+  process.stdout.write(json ? JSON.stringify(value) : typeof value === "string" ? value : JSON.stringify(value));
+}
+
+function tagsFrom(value) {
+  return String(value || "").split(",").map((tag) => tag.trim()).filter(Boolean);
+}
+
+function taskId() {
+  return args.find((arg) => /^task-/.test(arg)) || args[1];
+}
+
+if (args[0] === "--version") {
+  print("fake-todos 0.0.0\\n");
+  process.exit(0);
+}
+
+if (args[0] === "projects") {
+  if (args.includes("--add")) {
+    const target = args[args.indexOf("--add") + 1];
+    const db = defaultDb(target);
+    writeDb(db, target);
+    print({ ok: true, path: target });
+    process.exit(0);
+  }
+  if (args.includes("--deregister")) {
+    print({ ok: true });
+    process.exit(0);
+  }
+  print([]);
+  process.exit(0);
+}
+
+const db = readDb();
+if (args[0] === "task-lists") {
+  print(db.lists);
+  process.exit(0);
+}
+
+if (args[0] === "add") {
+  const title = args[1] || "Task";
+  const description = valueAfter("-d") || valueAfter("--description") || "";
+  const tagValue = valueAfter("-t") || valueAfter("--tag") || "";
+  const listId = valueAfter("--list") || db.lists[0]?.id || "default";
+  const id = "task-" + String((db.seq || 0) + 1).padStart(4, "0");
+  db.seq = (db.seq || 0) + 1;
+  const task = {
+    id,
+    title,
+    description,
+    status: "pending",
+    tags: tagsFrom(tagValue),
+    comments: [],
+    task_list_id: listId,
+    taskListId: listId,
+    task_list: { id: listId, slug: listId, name: listId },
+  };
+  db.tasks.push(task);
+  writeDb(db);
+  print(task);
+  process.exit(0);
+}
+
+const id = taskId();
+const task = db.tasks.find((entry) => entry.id === id);
+if ((args[0] === "show" || args[0] === "inspect") && task) {
+  print(task);
+  process.exit(0);
+}
+if (args[0] === "ready") {
+  const rawLimit = Number(valueAfter("--limit") || db.tasks.length);
+  const limit = Number.isFinite(rawLimit) && rawLimit >= 0 ? rawLimit : db.tasks.length;
+  print(db.tasks.filter((entry) => entry.status === "pending").slice(0, limit));
+  process.exit(0);
+}
+if (args[0] === "done" && task) {
+  task.status = "completed";
+  writeDb(db);
+  print(task);
+  process.exit(0);
+}
+if (args[0] === "tag" && task) {
+  const tag = args[2];
+  if (tag && !task.tags.includes(tag)) task.tags.push(tag);
+  writeDb(db);
+  print(task);
+  process.exit(0);
+}
+if (args[0] === "untag" && task) {
+  const tag = args[2];
+  task.tags = task.tags.filter((entry) => entry !== tag);
+  writeDb(db);
+  print(task);
+  process.exit(0);
+}
+if (args[0] === "comment" && task) {
+  task.comments.push({ content: args.slice(2).join(" "), created_at: new Date().toISOString() });
+  writeDb(db);
+  print({ ok: true });
+  process.exit(0);
+}
+if (args[0] === "delete") {
+  const next = { ...db, tasks: db.tasks.filter((entry) => entry.id !== id) };
+  writeDb(next);
+  print({ ok: true });
+  process.exit(0);
+}
+
+console.error("unsupported fake todos command: " + rawArgs.join(" "));
+process.exit(2);
+`);
+  chmodSync(todosBin, 0o755);
+  return binDir;
+}
+
 const TODOS_INTEGRATION_TIMEOUT_MS = 15_000;
 
 const BASE_OPTS = {
@@ -38,37 +197,65 @@ const BASE_OPTS = {
 // text with no `gh` probe (hermetic, deterministic).
 const MERGED_PR_DESCRIPTION = "please merge https://github.com/hasna/example/pull/7 pr_state=MERGED";
 
-describe("drainTodosTaskRoutes freshness close", () => {
+describe.serial("drainTodosTaskRoutes freshness close", () => {
   let todosProject: string;
+  let taskListId: string;
   let dataDir: string;
   let oldDataDir: string | undefined;
+  let oldPath: string | undefined;
+  let fakeTodosRoot: string;
+  let createdTaskIds: string[];
+
+  function todosEnv(): NodeJS.ProcessEnv {
+    return { ...process.env };
+  }
 
   beforeEach(() => {
+    fakeTodosRoot = mkdtempSync(join(tmpdir(), "loops-fake-todos-"));
+    oldPath = process.env.PATH;
+    process.env.PATH = `${installFakeTodosBin(fakeTodosRoot)}${oldPath ? `:${oldPath}` : ""}`;
     todosProject = mkdtempSync(join(tmpdir(), "loops-drain-src-"));
+    taskListId = `todos-${basename(todosProject).toLowerCase()}`;
+    const registered = spawnSync(
+      "todos",
+      ["projects", "--add", todosProject, "--name", basename(todosProject), "--task-list-id", taskListId],
+      { encoding: "utf8", timeout: 30_000, env: todosEnv() },
+    );
+    if (registered.status !== 0) throw new Error(`todos project registration failed: ${registered.stderr}`);
     dataDir = mkdtempSync(join(tmpdir(), "loops-drain-data-"));
     oldDataDir = process.env.LOOPS_DATA_DIR;
     process.env.LOOPS_DATA_DIR = dataDir;
+    createdTaskIds = [];
   });
 
   afterEach(() => {
     if (oldDataDir === undefined) delete process.env.LOOPS_DATA_DIR;
     else process.env.LOOPS_DATA_DIR = oldDataDir;
+    for (const taskId of createdTaskIds) {
+      spawnSync("todos", ["--project", todosProject, "delete", taskId], { encoding: "utf8", timeout: 30_000, env: todosEnv() });
+    }
+    spawnSync("todos", ["projects", "--deregister", todosProject, "--path-prefix", tmpdir()], { encoding: "utf8", timeout: 30_000, env: todosEnv() });
+    if (oldPath === undefined) delete process.env.PATH;
+    else process.env.PATH = oldPath;
     rmSync(todosProject, { recursive: true, force: true });
     rmSync(dataDir, { recursive: true, force: true });
+    rmSync(fakeTodosRoot, { recursive: true, force: true });
   });
 
   function addTask(description: string, tags = "auto:route"): string {
     const result = spawnSync(
       "todos",
-      ["--project", todosProject, "--json", "add", "Merge the release PR", "-d", description, "-t", tags],
-      { encoding: "utf8", timeout: 30_000 },
+      ["--project", todosProject, "--json", "add", "Merge the release PR", "-d", description, "-t", tags, "--list", taskListId],
+      { encoding: "utf8", timeout: 30_000, env: todosEnv() },
     );
     if (result.status !== 0) throw new Error(`todos add failed: ${result.stderr}`);
-    return JSON.parse(result.stdout).id as string;
+    const id = JSON.parse(result.stdout).id as string;
+    createdTaskIds.push(id);
+    return id;
   }
 
   function taskState(id: string): { status: string; tags: string[] } {
-    const result = spawnSync("todos", ["--project", todosProject, "--json", "show", id], { encoding: "utf8", timeout: 30_000 });
+    const result = spawnSync("todos", ["--project", todosProject, "--json", "show", id], { encoding: "utf8", timeout: 30_000, env: todosEnv() });
     const task = JSON.parse(result.stdout);
     return { status: task.status, tags: task.tags ?? [] };
   }
@@ -77,17 +264,17 @@ describe("drainTodosTaskRoutes freshness close", () => {
     const result = spawnSync(
       "todos",
       ["--project", todosProject, "done", id, "--notes", "launch gate blocker resolved for test"],
-      { encoding: "utf8", timeout: 30_000 },
+      { encoding: "utf8", timeout: 30_000, env: todosEnv() },
     );
     if (result.status !== 0) throw new Error(`todos done failed: ${result.stderr}`);
   }
 
   function readyCount(): number {
-    const result = spawnSync("todos", ["--project", todosProject, "--json", "ready", "--limit", "20"], { encoding: "utf8", timeout: 30_000 });
+    const result = spawnSync("todos", ["--project", todosProject, "--json", "ready", "--limit", "20"], { encoding: "utf8", timeout: 30_000, env: todosEnv() });
     return (JSON.parse(result.stdout || "[]") as unknown[]).length;
   }
 
-  test.skipIf(!HAS_TODOS)("closes a merged-PR task out of the queue instead of re-skipping it", () => {
+  test("closes a merged-PR task out of the queue instead of re-skipping it", () => {
     const taskId = addTask(MERGED_PR_DESCRIPTION);
     expect(readyCount()).toBe(1);
 
@@ -108,7 +295,7 @@ describe("drainTodosTaskRoutes freshness close", () => {
     expect(readyCount()).toBe(0);
   }, TODOS_INTEGRATION_TIMEOUT_MS);
 
-  test.skipIf(!HAS_TODOS)("dry-run never mutates the source task", () => {
+  test("dry-run never mutates the source task", () => {
     const taskId = addTask(MERGED_PR_DESCRIPTION);
 
     const result = drainTodosTaskRoutes({ ...BASE_OPTS, todosProject, dryRun: true });
@@ -120,7 +307,7 @@ describe("drainTodosTaskRoutes freshness close", () => {
     expect(readyCount()).toBe(1);
   }, TODOS_INTEGRATION_TIMEOUT_MS);
 
-  test.skipIf(!HAS_TODOS)("launch gate blocks a drain before route work is created", () => {
+  test("launch gate blocks a drain before route work is created", () => {
     const blockerId = addTask("PA-19 blocker remains open", "controlled-launch");
     const candidateId = addTask("Route candidate that must wait for the launch gate");
 
@@ -146,7 +333,7 @@ describe("drainTodosTaskRoutes freshness close", () => {
     expect(candidate.tags).toContain("auto:route");
   }, TODOS_INTEGRATION_TIMEOUT_MS);
 
-  test.skipIf(!HAS_TODOS)("launch gate dry-run is non-mutating", () => {
+  test("launch gate dry-run is non-mutating", () => {
     const blockerId = addTask("PA-19 blocker remains open", "controlled-launch");
     const candidateId = addTask("Route candidate that must wait for the launch gate");
 
@@ -167,7 +354,7 @@ describe("drainTodosTaskRoutes freshness close", () => {
     expect(candidate.tags).toContain("auto:route");
   }, TODOS_INTEGRATION_TIMEOUT_MS);
 
-  test.skipIf(!HAS_TODOS)("launch gate opens when blockers are completed", () => {
+  test("launch gate opens when blockers are completed", () => {
     const blockerId = addTask("PA-19 blocker resolved", "controlled-launch");
     completeTask(blockerId);
     const candidateId = addTask("Route candidate that may run once the launch gate opens");
@@ -191,7 +378,7 @@ describe("drainTodosTaskRoutes freshness close", () => {
     expect(taskState(candidateId).status).toBe("pending");
   }, TODOS_INTEGRATION_TIMEOUT_MS);
 
-  test.skipIf(!HAS_TODOS)("holds route-disallowed tasks out of the candidate window", () => {
+  test("holds route-disallowed tasks out of the candidate window", () => {
     // A no-auto task can never route; before the fix it occupied one of the
     // bounded candidate rows every tick (rejected by eligibility only AFTER
     // taking the slot), so enough marked tasks starved the window forever.
@@ -216,7 +403,7 @@ describe("drainTodosTaskRoutes freshness close", () => {
     expect(taskState(markedId).tags).toContain("no-auto");
   }, TODOS_INTEGRATION_TIMEOUT_MS);
 
-  test.skipIf(!HAS_TODOS)("reports a redispatch-cap dead-letter instead of a silent created=0", () => {
+  test("reports a redispatch-cap dead-letter instead of a silent created=0", () => {
     const taskId = addTask("Worker keeps finishing without closing this task");
     // First drain admits the work item (attempts=1).
     const first = drainTodosTaskRoutes({ ...BASE_OPTS, todosProject });

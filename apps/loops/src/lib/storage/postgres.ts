@@ -9,7 +9,7 @@ import { POSTGRES_MIGRATION_LEDGER_TABLE, POSTGRES_STORAGE_MIGRATIONS } from "./
 export interface PostgresQueryExecutor {
   query<T extends Record<string, unknown>>(sql: string, params?: readonly unknown[]): Promise<T[]>;
   execute(sql: string, params?: readonly unknown[]): Promise<void>;
-  transaction?<T>(fn: () => Promise<T>): Promise<T>;
+  transaction?<T>(fn: (executor: PostgresQueryExecutor) => Promise<T>): Promise<T>;
   close?(): Promise<void> | void;
 }
 
@@ -35,7 +35,7 @@ export class PostgresStorage implements SchemaMigrationStorage {
     return this.readAppliedMigrations();
   }
 
-  async migrate(opts: { dryRun?: boolean } = {}): Promise<StorageMigrationResult> {
+  async migrate(opts: { dryRun?: boolean; through?: string } = {}): Promise<StorageMigrationResult> {
     const dryRun = opts.dryRun === true;
     if (!dryRun) await this.ensureLedger();
     const applied = dryRun ? await this.tryReadAppliedMigrations() : await this.readAppliedMigrations();
@@ -50,6 +50,10 @@ export class PostgresStorage implements SchemaMigrationStorage {
       migration,
       state: appliedById.has(migration.id) ? "already_applied" as const : "pending" as const,
     }));
+    const throughIndex = opts.through === undefined
+      ? this.migrations.length - 1
+      : this.migrations.findIndex((migration) => migration.id === opts.through);
+    if (throughIndex < 0) throw new Error(`Unknown Postgres migration target ${opts.through}`);
 
     for (const migration of this.migrations) {
       const existing = appliedById.get(migration.id);
@@ -59,11 +63,12 @@ export class PostgresStorage implements SchemaMigrationStorage {
     }
     if (dryRun) return { backend: this.backend, dryRun, applied, plan };
 
-    const run = async () => {
-      for (const item of plan) {
+    const run = async (executor: PostgresQueryExecutor = this.executor) => {
+      for (const [index, item] of plan.entries()) {
+        if (index > throughIndex) break;
         if (item.state === "already_applied") continue;
-        await this.executor.execute(item.migration.sql);
-        await this.executor.execute(
+        await executor.execute(item.migration.sql);
+        await executor.execute(
           `INSERT INTO ${POSTGRES_MIGRATION_LEDGER_TABLE} (id, checksum, applied_at) VALUES ($1, $2, NOW())`,
           [item.migration.id, item.migration.checksum],
         );

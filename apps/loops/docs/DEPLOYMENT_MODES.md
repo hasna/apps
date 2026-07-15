@@ -29,29 +29,28 @@ the Postgres storage adapter, migrations, HTTP SDK, and runner contract for this
 mode.
 
 `cloud` is the hosted control-plane contract. The public package exposes the
-client and runner contract, but tenant auth, account administration, and hosted
-infrastructure stay outside this package. The public package must not depend on
+client and runner contract, tenant authentication, and tenant isolation; account
+provisioning and hosted infrastructure stay outside this package. The public package must not depend on
 private hosted packages or resource names. This release exposes status
 surfaces only.
 
 ## Mode Resolution
 
-`LOOPS_MODE` or `HASNA_LOOPS_MODE` may be set to `local`, `self_hosted`, or
-`cloud`. Hyphenated `self-hosted` is normalized to `self_hosted`.
+`HASNA_LOOPS_STORAGE_MODE` may be set to `local`, `self_hosted`, or
+`cloud`. Other spellings and legacy mode names are rejected.
 
 When no explicit mode is set, OpenLoops resolves the mode from configuration:
 
-1. `LOOPS_CLOUD_API_URL` or `HASNA_LOOPS_CLOUD_API_URL` selects `cloud`.
-2. `LOOPS_API_URL`, `HASNA_LOOPS_API_URL`, `LOOPS_DATABASE_URL`, or
+1. `HASNA_LOOPS_API_URL` or
    `HASNA_LOOPS_DATABASE_URL` selects `self_hosted`.
-3. Otherwise OpenLoops uses `local`.
+2. Otherwise OpenLoops uses `local`.
 
-`LOOPS_API_URL` and `HASNA_LOOPS_API_URL` belong to `self_hosted`.
-`cloud` uses only `LOOPS_CLOUD_API_URL` or `HASNA_LOOPS_CLOUD_API_URL`.
+Both non-local modes use the canonical `HASNA_LOOPS_API_URL`; an explicit
+`HASNA_LOOPS_STORAGE_MODE=cloud` distinguishes hosted cloud from self-hosted.
 
 Tokens are represented only as presence signals in status output. Self-hosted
-status uses `LOOPS_API_TOKEN` or `HASNA_LOOPS_API_TOKEN`. Cloud status uses
-`LOOPS_CLOUD_TOKEN` or `HASNA_LOOPS_CLOUD_TOKEN`. URL credentials, query
+status uses `HASNA_LOOPS_API_KEY`. Cloud status uses
+`HASNA_LOOPS_API_KEY`. URL credentials, query
 strings, and fragments are not returned in status output.
 
 ## Commands
@@ -63,12 +62,11 @@ loops self-hosted status
 loops self-hosted migrate --dry-run
 loops self-hosted push --dry-run
 loops self-hosted pull --dry-run
-loops self-hosted runner-register --runner-id <id> --machine-id <machine>
-loops self-hosted runner-register --runner-id <id> --machine-id <machine> --apply
 loops cloud status
 loops-api status
 loops-serve version
-HASNA_LOOPS_DATABASE_URL=... loops-serve migrate --dry-run
+HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --dry-run
+HASNA_LOOPS_DATABASE_URL=... HASNA_LOOPS_AUTH_DATABASE_URL=... loops-serve serve
 loops-runner status
 loops export --file ./loops-export.json --dry-run
 loops export --file ./loops-export.json
@@ -92,7 +90,7 @@ JSON uses these field names:
 - `localStore.role`: `authoritative` in local mode, `cache_and_spool` in
   non-local modes.
 - `controlPlane.configured`: true only when the current mode has enough
-  configuration to be usable. Cloud requires both a cloud URL and a cloud token
+  configuration to be usable. Cloud requires both the canonical API URL and a token
   presence signal.
 - `controlPlane.apiUrl`: a display-safe URL without credentials, query string,
   or fragment.
@@ -101,10 +99,11 @@ JSON uses these field names:
   non-local modes it is a cache, offline spool, and audit copy.
 - `schedulerState.remoteStore`: names the non-local scheduler contract:
   `api_control_plane_contract`, `postgres_contract`,
-  `hosted_control_plane_contract`, `unconfigured`, or `none`. Remote apply is
-  `false` in the standalone CLI until the control-plane API exposes
-  id-preserving import endpoints. `loops-serve` itself wires the Postgres
-  storage adapter for normal control-plane CRUD and runner protocol routes.
+  `hosted_control_plane_contract`, `unconfigured`, or `none`. The standalone
+  CLI never mutates Postgres directly; self-hosted apply goes through the
+  configured control-plane API import contract. `loops-serve` itself wires the
+  Postgres storage adapter for normal control-plane CRUD, id-preserving import,
+  and runner protocol routes.
 - `schedulerState.remoteStore.objectArtifacts`: `object_store_contract` means
   remote artifact/object storage is a control-plane contract. The public package
   does not create or mutate S3 buckets, AWS resources, or hosted credentials.
@@ -118,22 +117,29 @@ JSON uses these field names:
 package. It reads and writes Postgres directly, serves open foundation probes
 (`GET /health`, `/ready`, `/version`, `/openapi.json`), gates `/v1` loop/run and
 runner-protocol routes with API-key auth on non-local binds, and applies the
-Postgres migrations plus the shared `api_keys` table with `loops-serve migrate`.
+Postgres migrations, including the tenant-bound `api_keys` table, with the
+prepare/backfill/enforce `loops-serve migrate` sequence.
 
-`loops-api` is the embeddable API contract and local/dev foundation server in
-the same public package. It is not a separate package because self-hosted users
-and the hosted service must share the same public contract. The standalone
-`loops-api serve` path still fails closed for storage-backed routes unless an
-embedding host injects a storage adapter; `loops-serve` is the shipped
-Postgres-backed self-hosted host.
+The service requires separate database logins: `HASNA_LOOPS_DATABASE_URL` is
+the tenant-scoped runtime role, while `HASNA_LOOPS_AUTH_DATABASE_URL` is the
+authenticator-only role that can verify keys and append authentication audits.
+`HASNA_LOOPS_MIGRATOR_DATABASE_URL` is an offline schema-administrator login;
+tenant enforcement normalizes cluster role attributes and therefore requires
+the PostgreSQL privilege to alter role security attributes.
+
+`loops-api` is the embeddable API contract in the same public package. It is not
+a separate service because self-hosted users and the hosted service must share
+the same public contract. `loops-serve` is the only shipped Postgres-backed
+self-hosted host.
 
 `loops-runner` is the process that connects a machine to a non-local control
 plane. The current public package supports a bounded one-shot protocol:
-registration, claim polling, claim-token fenced heartbeat/finalization, and
-`loops-runner run-once` execution for non-workflow targets. Full fleet daemon
-mode and workflow target execution over the remote protocol still need
-follow-up releases before `loops-runner` is advertised as a complete always-on
-worker.
+claim polling, claim-token fenced lease heartbeat/finalization, and
+`loops-runner run-once` execution for command, agent, and workflow targets.
+Workflow execution uses runner-scoped workflow and goal APIs behind the claimed
+run lease. Durable machine registration, full fleet daemon mode, and
+always-on fleet observability still need follow-up releases before
+`loops-runner` is advertised as a complete always-on worker.
 
 ## Migration And Sync
 
@@ -173,37 +179,34 @@ later release adds full table-preserving migration. Active daemon leases,
 running loop runs, running workflow runs/steps, and leased work items also
 block migration; finish or stop that work first.
 
-Self-hosted sync commands are preview-only today:
+Self-hosted sync commands use the control-plane API:
 
 ```bash
 loops self-hosted migrate --dry-run
 loops self-hosted push --dry-run
+loops self-hosted push --apply
 loops self-hosted pull --dry-run
 ```
 
-They inspect local state, optionally inspect `LOOPS_API_URL`, and report the
-rows that would need to move. Remote apply is intentionally blocked because the
-current self-hosted API exposes normal loop CRUD and run listing, not
-id-preserving workflow/loop/run import endpoints. A normal remote loop create
-would generate new ids, so it is not a no-loss migration. Local SQLite remains
-authoritative until a safe import is applied; in non-local modes it may remain
-a cache, offline spool, and audit copy.
+They inspect local state, inspect `HASNA_LOOPS_API_URL` when configured, and
+report the rows that would move. `loops self-hosted push --apply` sends the
+id-preserving workflow and loop import bundle to `/v1/import`; imported
+workflows are archived and imported loops are paused with run pointers cleared.
+Local SQLite remains authoritative until an operator applies the import and
+records the rollout evidence; in non-local modes it may remain a cache, offline
+spool, and audit copy.
 
-`LOOPS_DATABASE_URL` or `HASNA_LOOPS_DATABASE_URL` selects the self-hosted
+`HASNA_LOOPS_DATABASE_URL` selects the self-hosted
 Postgres scheduler-state contract and is required by `loops-serve`. It does not
 make the standalone `loops` CLI mutate a remote database by itself. Remote
 execution still flows through a configured control-plane API and runner
-protocol. `loops-runner` needs `LOOPS_API_URL` or `HASNA_LOOPS_API_URL` to claim
+protocol. `loops-runner` needs `HASNA_LOOPS_API_URL` to claim
 work; a database URL alone is migration/readiness configuration.
-
-`loops self-hosted runner-register` is also preview-only unless `--apply` is
-present. The dry run prints the runner id, machine id, labels, and
-capabilities that would be posted, without exposing tokens.
 
 Cross-machine rollout evidence should record: machine id/hostname, package
 version, git/build version, command run, dry-run or apply mode, redacted API
 URL, source and target store ids, backup path, bundle hash, schema version,
-row counts, conflicts, blocked rows, runner registration id, daemon/runner
+row counts, conflicts, blocked rows, runner machine record id, daemon/runner
 status, and timestamp.
 
 ## Machine Placement
@@ -221,7 +224,7 @@ distinguishable from intentional fan-out.
 This is separate from existing local OpenMachines dispatch. In `local` mode,
 `loops-daemon` can still dispatch a loop target to a configured remote machine
 through the existing OpenMachines transport. In `self_hosted` or `cloud`,
-machine execution is runner-pull: a registered `loops-runner` claims work from
+machine execution is runner-pull: `loops-runner` claims work from
 the control plane. Operators should not treat local remote dispatch as cloud
 mode.
 
@@ -231,9 +234,8 @@ Non-local execution needs these follow-up releases before it is complete:
 
 - Long-running runner daemon mode with backoff, fleet observability, and
   durable machine registration records.
-- Workflow target execution over the remote protocol.
-- Id-preserving self-hosted import endpoints for workflow specs, loop
-  definitions, run history, workflow history, work items, goals, and audit rows.
+- Id-preserving self-hosted import coverage for run history, workflow history,
+  work items, goals, and audit rows.
 - Hosted product integration outside the public package.
 
 ## Public Package Boundary

@@ -3,45 +3,39 @@
 //
 // The service reads and writes self-hosted RDS/Postgres directly. There is no
 // local SQLite, no cache, and no sync engine in the
-// serve process. Storage is the vendored @hasna/contracts kit pool wrapping the
-// real `PostgresLoopStorage` backend; auth is the framework-agnostic
-// `verifyApiKey` verifier from @hasna/contracts/auth backed by the shared
-// `api_keys` table.
+// serve process. Storage is the generated @hasna/contracts kit pool wrapping the
+// real `PostgresLoopStorage` backend. Every authenticated request gets one
+// dedicated transaction with tenant RLS context.
 import { Command } from "commander";
-import { ApiKeyStore, verifyApiKey } from "@hasna/contracts/auth";
-import { createLoopsApiServer, type ApiAuthenticator } from "../api/index.js";
+import { createLoopsApiServer } from "../api/index.js";
+import { TenantApiAuthenticator } from "../lib/auth/tenant-auth.js";
+import type { PoolQueryClient, TypedQueryClient } from "../generated/storage-kit/query.js";
 import { PgPoolExecutor } from "../lib/storage/pg-executor.js";
 import { PostgresStorage } from "../lib/storage/postgres.js";
 import { createPostgresLoopStorage } from "../lib/storage/postgres-loop-storage.js";
+import { loadTenantBackfillBundle, parseTenantBackfillBundle } from "../lib/storage/tenant-backfill.js";
 import { packageVersion } from "../lib/version.js";
 
-const APP = "loops";
-
-function resolveDatabaseUrl(): string {
-  const dsn =
-    process.env.HASNA_LOOPS_DATABASE_URL?.trim() ||
-    process.env.LOOPS_DATABASE_URL?.trim() ||
-    process.env.DATABASE_URL?.trim();
+function resolveDatabaseUrl(purpose: "runtime" | "auth" | "migrator"): string {
+  const envName = purpose === "runtime"
+    ? "HASNA_LOOPS_DATABASE_URL"
+    : purpose === "auth"
+      ? "HASNA_LOOPS_AUTH_DATABASE_URL"
+      : "HASNA_LOOPS_MIGRATOR_DATABASE_URL";
+  const dsn = process.env[envName]?.trim();
   if (!dsn) {
-    throw new Error(
-      "loops-serve requires a self-hosted database URL: set HASNA_LOOPS_DATABASE_URL (or LOOPS_DATABASE_URL / DATABASE_URL)",
-    );
+    throw new Error(`loops-serve ${purpose} requires ${envName}`);
   }
   return dsn;
 }
 
 function resolveSigningSecret(): string | undefined {
-  return (
-    process.env.HASNA_LOOPS_API_SIGNING_KEY?.trim() ||
-    process.env.HASNA_API_SIGNING_KEY?.trim() ||
-    process.env.API_KEY_SIGNING_SECRET?.trim() ||
-    undefined
-  );
+  return process.env.HASNA_LOOPS_API_SIGNING_KEY?.trim() || undefined;
 }
 
-function buildExecutor(applicationName: string): PgPoolExecutor {
+function buildExecutor(applicationName: string, purpose: "runtime" | "auth" | "migrator"): PgPoolExecutor {
   return PgPoolExecutor.fromConnectionString({
-    connectionString: resolveDatabaseUrl(),
+    connectionString: resolveDatabaseUrl(purpose),
     applicationName,
     max: Number(process.env.LOOPS_PG_POOL_MAX ?? "5"),
     connectionTimeoutMillis: 10_000,
@@ -55,61 +49,825 @@ function defaultPort(): number {
   return Number(process.env.PORT ?? process.env.LOOPS_API_PORT ?? "8787");
 }
 
+type ServiceDatabaseRole = "open_loops_runtime" | "open_loops_authenticator";
+const TENANT_ENFORCEMENT_MIGRATION_ID = "0010_tenant_enforce";
+export type ServeReadinessFailureCode =
+  | "storage_unreachable"
+  | "migration_checksum_mismatch";
+
+export function classifyMigrationReadinessError(error: unknown): ServeReadinessFailureCode {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("Postgres migration checksum mismatch")
+    ? "migration_checksum_mismatch"
+    : "storage_unreachable";
+}
+
+export async function isSafeServiceConnection(
+  client: TypedQueryClient,
+  expectedRole: ServiceDatabaseRole,
+): Promise<boolean> {
+  const forbiddenRole = expectedRole === "open_loops_runtime"
+    ? "open_loops_authenticator"
+    : "open_loops_runtime";
+  const row = await client.get<{
+    rolcanlogin: boolean;
+    rolinherit: boolean;
+    rolsuper: boolean;
+    rolcreatedb: boolean;
+    rolcreaterole: boolean;
+    rolreplication: boolean;
+    rolbypassrls: boolean;
+    expected_member: boolean;
+    expected_usage: boolean;
+    expected_direct: boolean;
+    expected_role_has_memberships: boolean;
+    expected_role_safe: boolean;
+    unexpected_membership: boolean;
+    has_members: boolean;
+    forbidden_member: boolean;
+    owner_member: boolean;
+    migrator_member: boolean;
+    required_database_privileges: boolean;
+    database_acl_safe: boolean;
+    required_schema_privileges: boolean;
+    required_table_privileges: boolean;
+    forbidden_table_privileges: boolean;
+    forbidden_column_privileges: boolean;
+    forbidden_sequence_privileges: boolean;
+    required_function_privileges: boolean;
+    required_function_security: boolean;
+    forbidden_function_privileges: boolean;
+    forbidden_grant_options: boolean;
+  }>(
+    `SELECT role.rolcanlogin, role.rolinherit, role.rolsuper, role.rolcreatedb, role.rolcreaterole,
+            role.rolreplication, role.rolbypassrls,
+            pg_has_role(role.oid, $1, 'MEMBER') AS expected_member,
+            pg_has_role(role.oid, $1, 'USAGE') AS expected_usage,
+            EXISTS (
+              SELECT 1 FROM pg_auth_members direct
+               JOIN pg_roles granted ON granted.oid=direct.roleid
+              WHERE direct.member=role.oid AND granted.rolname=$1
+                AND NOT direct.admin_option AND direct.inherit_option AND direct.set_option
+            ) AS expected_direct,
+            EXISTS (
+              SELECT 1
+                FROM pg_auth_members membership
+                JOIN pg_roles member ON member.oid=membership.member
+               WHERE member.rolname=$1
+            ) AS expected_role_has_memberships,
+            EXISTS (
+              SELECT 1
+                FROM pg_roles expected
+               WHERE expected.rolname=$1
+                 AND NOT expected.rolcanlogin
+                 AND expected.rolinherit
+                 AND NOT expected.rolsuper
+                 AND NOT expected.rolcreatedb
+                 AND NOT expected.rolcreaterole
+                 AND NOT expected.rolreplication
+                 AND NOT expected.rolbypassrls
+            ) AS expected_role_safe,
+            EXISTS (
+              SELECT 1 FROM pg_auth_members other
+               JOIN pg_roles granted ON granted.oid=other.roleid
+              WHERE other.member=role.oid AND granted.rolname<>$1
+            ) AS unexpected_membership,
+            EXISTS (SELECT 1 FROM pg_auth_members child WHERE child.roleid=role.oid) AS has_members,
+            pg_has_role(role.oid, $2, 'MEMBER') AS forbidden_member,
+            pg_has_role(role.oid, 'open_loops_owner', 'MEMBER') AS owner_member,
+            pg_has_role(role.oid, 'open_loops_migrator', 'MEMBER') AS migrator_member,
+            has_database_privilege(session_user, current_database(), 'CONNECT')
+              AND NOT has_database_privilege(session_user, current_database(), 'CREATE')
+              AND NOT has_database_privilege(session_user, current_database(), 'TEMPORARY')
+              AND EXISTS (
+                SELECT 1
+                  FROM pg_database database
+                  CROSS JOIN LATERAL aclexplode(COALESCE(database.datacl, acldefault('d', database.datdba))) acl
+                 WHERE database.datname=current_database()
+                   AND acl.grantee=role.oid
+                   AND acl.privilege_type='CONNECT'
+                   AND NOT acl.is_grantable
+              ) AS required_database_privileges,
+            NOT EXISTS (
+              SELECT 1
+                FROM pg_database database
+                CROSS JOIN LATERAL aclexplode(COALESCE(database.datacl, acldefault('d', database.datdba))) acl
+                LEFT JOIN pg_roles grantee ON grantee.oid=acl.grantee
+               WHERE database.datname=current_database()
+                 AND acl.grantee<>database.datdba
+                 AND (
+                   acl.grantee=0
+                   OR grantee.oid IS NULL
+                   OR NOT (
+                     grantee.rolcanlogin
+                     AND grantee.rolinherit
+                     AND NOT grantee.rolsuper
+                     AND NOT grantee.rolcreatedb
+                     AND NOT grantee.rolcreaterole
+                     AND NOT grantee.rolreplication
+                     AND NOT grantee.rolbypassrls
+                     AND acl.privilege_type='CONNECT'
+                     AND NOT acl.is_grantable
+                     AND EXISTS (
+                       SELECT 1
+                         FROM pg_auth_members direct
+                         JOIN pg_roles granted ON granted.oid=direct.roleid
+                        WHERE direct.member=grantee.oid
+                          AND granted.rolname IN ('open_loops_runtime', 'open_loops_authenticator')
+                          AND NOT direct.admin_option
+                          AND direct.inherit_option
+                          AND direct.set_option
+                     )
+                     AND (SELECT count(*) FROM pg_auth_members membership WHERE membership.member=grantee.oid)=1
+                     AND NOT EXISTS (
+                       SELECT 1
+                         FROM pg_auth_members membership
+                         JOIN pg_roles granted ON granted.oid=membership.roleid
+                        WHERE membership.member=grantee.oid
+                          AND granted.rolname NOT IN ('open_loops_runtime', 'open_loops_authenticator')
+                     )
+                     AND NOT EXISTS (
+                       SELECT 1 FROM pg_auth_members downstream WHERE downstream.roleid=grantee.oid
+                     )
+                   )
+                 )
+            ) AS database_acl_safe,
+            has_schema_privilege(session_user, 'public', 'USAGE')
+              AND NOT has_schema_privilege(session_user, 'public', 'CREATE')
+              AND NOT EXISTS (
+                SELECT 1
+                  FROM pg_namespace namespace
+                 WHERE namespace.nspname <> 'public'
+                   AND namespace.nspname NOT IN ('pg_catalog', 'information_schema')
+                   AND namespace.nspname NOT LIKE 'pg_toast%'
+                   AND namespace.nspname NOT LIKE 'pg_temp_%'
+                   AND has_schema_privilege(session_user, namespace.oid, 'USAGE, CREATE')
+              ) AS required_schema_privileges,
+            CASE WHEN $1 = 'open_loops_runtime' THEN
+              NOT EXISTS (
+                SELECT 1
+                  FROM unnest(ARRAY[
+                    'public.loops', 'public.loop_runs', 'public.daemon_lease',
+                    'public.workflow_specs', 'public.workflow_runs', 'public.workflow_invocations',
+                    'public.workflow_work_items', 'public.workflow_step_runs', 'public.workflow_events',
+                    'public.goals', 'public.goal_plan_nodes', 'public.goal_runs',
+                    'public.runner_machines', 'public.runner_leases', 'public.run_receipts'
+                  ]) AS required_table(name)
+                  CROSS JOIN unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE']) AS required_privilege(name)
+                 WHERE NOT has_table_privilege(session_user, required_table.name, required_privilege.name)
+              ) AND has_table_privilege(session_user, 'public.tenants', 'SELECT')
+                AND has_table_privilege(session_user, 'public.tenants', 'UPDATE')
+                AND has_table_privilege(session_user, 'public.tenants', 'REFERENCES')
+                AND has_column_privilege(session_user, 'public.tenants', 'id', 'UPDATE')
+                AND has_table_privilege(session_user, 'public.open_loops_schema_migrations', 'SELECT')
+            ELSE true END AS required_table_privileges,
+            CASE WHEN $1 = 'open_loops_runtime' THEN
+              NOT EXISTS (
+                SELECT 1
+                  FROM pg_class object
+                 JOIN pg_namespace namespace ON namespace.oid = object.relnamespace
+                 WHERE namespace.nspname NOT IN ('pg_catalog', 'information_schema')
+                   AND namespace.nspname NOT LIKE 'pg_toast%'
+                   AND namespace.nspname NOT LIKE 'pg_temp_%'
+                   AND object.relkind IN ('r', 'p', 'v', 'm', 'f')
+                   AND has_table_privilege(session_user, object.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
+                   AND NOT (
+                     namespace.nspname = 'public'
+                     AND object.relname = ANY(ARRAY[
+                       'loops', 'loop_runs', 'daemon_lease', 'workflow_specs', 'workflow_runs',
+                       'workflow_invocations', 'workflow_work_items', 'workflow_step_runs',
+                       'workflow_events', 'goals', 'goal_plan_nodes', 'goal_runs',
+                       'runner_machines', 'runner_leases', 'run_receipts',
+                       'open_loops_schema_migrations'
+                     ])
+                   )
+                   AND NOT (
+                     namespace.nspname = 'public'
+                     AND object.relname = 'tenants'
+                     AND has_table_privilege(session_user, object.oid, 'SELECT')
+                     AND has_table_privilege(session_user, object.oid, 'UPDATE')
+                     AND has_table_privilege(session_user, object.oid, 'REFERENCES')
+                     AND NOT has_table_privilege(session_user, object.oid, 'INSERT, DELETE, TRUNCATE, TRIGGER')
+                   )
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                  FROM unnest(ARRAY[
+                    'public.loops', 'public.loop_runs', 'public.daemon_lease',
+                    'public.workflow_specs', 'public.workflow_runs', 'public.workflow_invocations',
+                    'public.workflow_work_items', 'public.workflow_step_runs', 'public.workflow_events',
+                    'public.goals', 'public.goal_plan_nodes', 'public.goal_runs',
+                    'public.runner_machines', 'public.runner_leases', 'public.run_receipts',
+                    'public.open_loops_schema_migrations'
+                  ]) AS protected_table(name)
+                  CROSS JOIN unnest(ARRAY['TRUNCATE', 'REFERENCES', 'TRIGGER']) AS forbidden_privilege(name)
+                 WHERE has_table_privilege(session_user, protected_table.name, forbidden_privilege.name)
+              )
+              AND NOT has_table_privilege(session_user, 'public.open_loops_schema_migrations', 'INSERT')
+              AND NOT has_table_privilege(session_user, 'public.open_loops_schema_migrations', 'UPDATE')
+              AND NOT has_table_privilege(session_user, 'public.open_loops_schema_migrations', 'DELETE')
+            ELSE
+              NOT EXISTS (
+                SELECT 1
+                  FROM pg_class object
+                  JOIN pg_namespace namespace ON namespace.oid = object.relnamespace
+                 WHERE namespace.nspname NOT IN ('pg_catalog', 'information_schema')
+                   AND namespace.nspname NOT LIKE 'pg_toast%'
+                   AND namespace.nspname NOT LIKE 'pg_temp_%'
+                   AND object.relkind IN ('r', 'p', 'v', 'm', 'f')
+                   AND has_table_privilege(session_user, object.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
+              )
+            END AS forbidden_table_privileges,
+            CASE WHEN $1 = 'open_loops_runtime' THEN
+              NOT EXISTS (
+                SELECT 1
+                  FROM pg_class object
+                  JOIN pg_namespace namespace ON namespace.oid=object.relnamespace
+                  JOIN pg_attribute attribute ON attribute.attrelid=object.oid
+                  CROSS JOIN LATERAL aclexplode(attribute.attacl) acl
+                  LEFT JOIN pg_roles grantee ON grantee.oid=acl.grantee
+                 WHERE namespace.nspname NOT IN ('pg_catalog', 'information_schema')
+                   AND namespace.nspname NOT LIKE 'pg_toast%'
+                   AND namespace.nspname NOT LIKE 'pg_temp_%'
+                   AND object.relkind IN ('r', 'p')
+                   AND attribute.attnum > 0
+                   AND NOT attribute.attisdropped
+                   AND acl.privilege_type IS NOT NULL
+                   AND (acl.grantee = 0 OR pg_has_role(session_user, acl.grantee, 'USAGE'))
+              )
+            ELSE
+              NOT EXISTS (
+                SELECT 1
+                  FROM pg_class object
+                  JOIN pg_namespace namespace ON namespace.oid=object.relnamespace
+                  JOIN pg_attribute attribute ON attribute.attrelid=object.oid
+                  CROSS JOIN LATERAL aclexplode(attribute.attacl) acl
+                 WHERE namespace.nspname NOT IN ('pg_catalog', 'information_schema')
+                   AND namespace.nspname NOT LIKE 'pg_toast%'
+                   AND namespace.nspname NOT LIKE 'pg_temp_%'
+                   AND object.relkind IN ('r', 'p')
+                   AND attribute.attnum > 0
+                   AND NOT attribute.attisdropped
+                   AND acl.privilege_type IS NOT NULL
+                   AND (acl.grantee = 0 OR pg_has_role(session_user, acl.grantee, 'USAGE'))
+              )
+            END AS forbidden_column_privileges,
+            NOT EXISTS (
+              SELECT 1
+                FROM pg_class sequence
+                JOIN pg_namespace namespace ON namespace.oid=sequence.relnamespace
+               WHERE sequence.relkind='S'
+                 AND namespace.nspname NOT IN ('pg_catalog', 'information_schema')
+                 AND namespace.nspname NOT LIKE 'pg_toast%'
+                 AND namespace.nspname NOT LIKE 'pg_temp_%'
+                 AND has_sequence_privilege(session_user, sequence.oid, 'USAGE, SELECT, UPDATE')
+            ) AS forbidden_sequence_privileges,
+            CASE WHEN $1 = 'open_loops_runtime' THEN
+              has_function_privilege(session_user, 'public.open_loops_current_tenant_id()', 'EXECUTE')
+            ELSE
+              has_function_privilege(session_user, 'public.open_loops_authenticate_key(text,text)', 'EXECUTE')
+              AND has_function_privilege(
+                session_user,
+                'public.open_loops_append_auth_audit(text,text,text,text,text,text,text,jsonb)',
+                'EXECUTE'
+              )
+            END AS required_function_privileges,
+            NOT EXISTS (
+              SELECT 1
+                FROM pg_proc function
+               WHERE (
+                 function.oid='public.open_loops_current_tenant_id()'::regprocedure
+                 AND $1='open_loops_runtime'
+                 AND (
+                   pg_get_userbyid(function.proowner)<>'open_loops_owner'
+                   OR function.prosecdef
+                   OR function.provolatile<>'s'
+                   OR function.proparallel<>'s'
+                   OR NOT COALESCE(function.proconfig, ARRAY[]::text[]) @> ARRAY['search_path=pg_catalog']
+                 )
+               ) OR (
+                 function.oid = ANY(ARRAY[
+                   'public.open_loops_authenticate_key(text,text)'::regprocedure,
+                   'public.open_loops_append_auth_audit(text,text,text,text,text,text,text,jsonb)'::regprocedure
+                 ])
+                 AND $1='open_loops_authenticator'
+                 AND (
+                   pg_get_userbyid(function.proowner)<>'open_loops_owner'
+                   OR NOT function.prosecdef
+                   OR NOT COALESCE(function.proconfig, ARRAY[]::text[]) @> ARRAY['search_path=pg_catalog']
+                 )
+               )
+            ) AS required_function_security,
+            NOT EXISTS (
+              SELECT 1
+                FROM pg_proc function
+                JOIN pg_namespace namespace ON namespace.oid=function.pronamespace
+               WHERE namespace.nspname NOT IN ('pg_catalog', 'information_schema')
+                 AND namespace.nspname NOT LIKE 'pg_toast%'
+                 AND namespace.nspname NOT LIKE 'pg_temp_%'
+                 AND has_function_privilege(session_user, function.oid, 'EXECUTE')
+                 AND NOT (
+                   namespace.nspname='public'
+                   AND (
+                     ($1='open_loops_runtime'
+                       AND function.oid='public.open_loops_current_tenant_id()'::regprocedure)
+                     OR
+                     ($1='open_loops_authenticator'
+                       AND function.oid = ANY(ARRAY[
+                         'public.open_loops_authenticate_key(text,text)'::regprocedure,
+                         'public.open_loops_append_auth_audit(text,text,text,text,text,text,text,jsonb)'::regprocedure
+                       ]))
+                   )
+                 )
+            ) AS forbidden_function_privileges,
+            NOT has_database_privilege(session_user, current_database(), 'CONNECT WITH GRANT OPTION')
+              AND NOT has_schema_privilege(session_user, 'public', 'USAGE WITH GRANT OPTION')
+              AND NOT EXISTS (
+                SELECT 1
+                  FROM unnest(ARRAY[
+                    'public.loops', 'public.loop_runs', 'public.daemon_lease',
+                    'public.workflow_specs', 'public.workflow_runs', 'public.workflow_invocations',
+                    'public.workflow_work_items', 'public.workflow_step_runs', 'public.workflow_events',
+                    'public.goals', 'public.goal_plan_nodes', 'public.goal_runs',
+                    'public.runner_machines', 'public.runner_leases', 'public.run_receipts'
+                  ]) AS allowed_table(name)
+                  CROSS JOIN unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE']) AS allowed_privilege(name)
+                 WHERE has_table_privilege(
+                   session_user,
+                   allowed_table.name,
+                   allowed_privilege.name || ' WITH GRANT OPTION'
+                 )
+              )
+              AND NOT has_table_privilege(
+                session_user,
+                'public.open_loops_schema_migrations',
+                'SELECT WITH GRANT OPTION'
+              )
+              AND NOT has_table_privilege(
+                session_user,
+                'public.tenants',
+                'REFERENCES WITH GRANT OPTION'
+              )
+              AND NOT has_table_privilege(
+                session_user,
+                'public.tenants',
+                'SELECT WITH GRANT OPTION'
+              )
+              AND NOT has_table_privilege(
+                session_user,
+                'public.tenants',
+                'UPDATE WITH GRANT OPTION'
+              )
+              AND NOT has_column_privilege(
+                session_user,
+                'public.tenants',
+                'id',
+                'UPDATE WITH GRANT OPTION'
+              )
+              AND NOT has_function_privilege(
+                session_user,
+                'public.open_loops_current_tenant_id()',
+                'EXECUTE WITH GRANT OPTION'
+              )
+              AND NOT has_function_privilege(
+                session_user,
+                'public.open_loops_authenticate_key(text,text)',
+                'EXECUTE WITH GRANT OPTION'
+              )
+              AND NOT has_function_privilege(
+                session_user,
+                'public.open_loops_append_auth_audit(text,text,text,text,text,text,text,jsonb)',
+                'EXECUTE WITH GRANT OPTION'
+              ) AS forbidden_grant_options
+       FROM pg_roles role
+      WHERE role.rolname = session_user`,
+    [expectedRole, forbiddenRole],
+  );
+  const rolePrivilegesSafe = Boolean(
+    row?.rolcanlogin && row.rolinherit && row.expected_member && row.expected_usage && row.expected_direct &&
+    !row.expected_role_has_memberships && row.expected_role_safe &&
+    !row.rolsuper && !row.rolcreatedb && !row.rolcreaterole &&
+    !row.rolreplication && !row.rolbypassrls &&
+    !row.unexpected_membership && !row.has_members &&
+    !row.forbidden_member && !row.owner_member && !row.migrator_member &&
+    row.required_database_privileges && row.database_acl_safe && row.required_schema_privileges &&
+    row.required_table_privileges && row.forbidden_table_privileges &&
+    row.forbidden_column_privileges &&
+    row.forbidden_sequence_privileges &&
+    row.required_function_privileges && row.required_function_security && row.forbidden_function_privileges &&
+    row.forbidden_grant_options,
+  );
+  if (!rolePrivilegesSafe) return false;
+  return isTenantRlsInvariantSafe(client);
+}
+
+export async function isTenantRlsInvariantSafe(client: TypedQueryClient): Promise<boolean> {
+  const row = await client.get<{ safe: boolean }>(
+    `WITH protected(table_name, discriminator) AS (
+      VALUES
+        ('tenants', 'id'),
+        ('tenant_memberships', 'tenant_id'),
+        ('tenant_membership_roles', 'tenant_id'),
+        ('api_keys', 'tenant_id'),
+        ('loops', 'tenant_id'),
+        ('loop_runs', 'tenant_id'),
+        ('daemon_lease', 'tenant_id'),
+        ('workflow_specs', 'tenant_id'),
+        ('workflow_runs', 'tenant_id'),
+        ('workflow_invocations', 'tenant_id'),
+        ('workflow_work_items', 'tenant_id'),
+        ('workflow_step_runs', 'tenant_id'),
+        ('workflow_events', 'tenant_id'),
+        ('goals', 'tenant_id'),
+        ('goal_plan_nodes', 'tenant_id'),
+        ('goal_runs', 'tenant_id'),
+        ('runner_machines', 'tenant_id'),
+        ('runner_leases', 'tenant_id'),
+        ('audit_events', 'tenant_id'),
+        ('run_receipts', 'tenant_id')
+    ),
+    expected(table_name, policy_name, command, roles, qualifier, check_expr) AS (
+      SELECT table_name, 'tenant_isolation', '*', ARRAY['public'], discriminator, discriminator FROM protected
+      UNION ALL VALUES
+        ('tenants', 'auth_definer_tenant_lookup', '*', ARRAY['open_loops_owner'], 'true', NULL),
+        ('tenant_memberships', 'auth_definer_membership_lookup', '*', ARRAY['open_loops_owner'], 'true', NULL),
+        ('tenant_membership_roles', 'auth_definer_membership_roles_lookup', '*', ARRAY['open_loops_owner'], 'true', NULL),
+        ('api_keys', 'auth_definer_key_lookup', '*', ARRAY['open_loops_owner'], 'true', NULL),
+        ('audit_events', 'auth_definer_audit_insert', 'a', ARRAY['open_loops_owner'], NULL, 'true')
+    ),
+    table_state AS (
+      SELECT protected.table_name,
+             class.oid AS relation_oid,
+             pg_get_userbyid(class.relowner) AS owner_name,
+             class.relrowsecurity,
+             class.relforcerowsecurity
+        FROM protected
+        LEFT JOIN pg_class class ON class.oid = format('public.%I', protected.table_name)::regclass
+    ),
+    tenant_update_guard AS (
+      SELECT 1
+        FROM pg_trigger trigger
+        JOIN pg_proc proc ON proc.oid = trigger.tgfoid
+       WHERE trigger.tgrelid = 'public.tenants'::regclass
+         AND trigger.tgname = 'open_loops_reject_runtime_tenant_update'
+         AND NOT trigger.tgisinternal
+         AND trigger.tgenabled = 'O'
+         AND proc.oid = 'public.open_loops_reject_runtime_tenant_update()'::regprocedure
+         AND pg_get_userbyid(proc.proowner) = 'open_loops_owner'
+         AND NOT proc.prosecdef
+         AND COALESCE(proc.proconfig, ARRAY[]::text[]) @> ARRAY['search_path=pg_catalog']
+         AND proc.prosrc ILIKE '%pg_has_role%open_loops_runtime%USAGE%'
+    ),
+    actual AS (
+      SELECT class.relname AS table_name,
+             policy.polname AS policy_name,
+             policy.polcmd::text AS command,
+             policy.polpermissive AS permissive,
+             ARRAY(
+                SELECT CASE WHEN role_oid = 0 THEN 'public' ELSE role.rolname::text END
+                 FROM unnest(policy.polroles) role_oid
+                 LEFT JOIN pg_roles role ON role.oid = role_oid
+                ORDER BY 1
+             ) AS roles,
+             COALESCE(regexp_replace(pg_get_expr(policy.polqual, policy.polrelid), '\\s+', ' ', 'g'), '') AS qualifier,
+             COALESCE(regexp_replace(pg_get_expr(policy.polwithcheck, policy.polrelid), '\\s+', ' ', 'g'), '') AS check_expr
+        FROM pg_policy policy
+        JOIN pg_class class ON class.oid = policy.polrelid
+        JOIN pg_namespace namespace ON namespace.oid = class.relnamespace
+       WHERE namespace.nspname = 'public'
+         AND class.relname IN (SELECT table_name FROM protected)
+    ),
+    bad_table AS (
+      SELECT 1
+        FROM table_state
+       WHERE relation_oid IS NULL
+          OR owner_name <> 'open_loops_owner'
+          OR NOT relrowsecurity
+          OR NOT relforcerowsecurity
+    ),
+    missing_or_bad AS (
+      SELECT expected.*
+        FROM expected
+        LEFT JOIN actual
+          ON actual.table_name = expected.table_name
+         AND actual.policy_name = expected.policy_name
+       WHERE actual.policy_name IS NULL
+          OR NOT actual.permissive
+          OR actual.command <> expected.command
+          OR actual.roles <> expected.roles
+          OR NOT CASE expected.qualifier
+            WHEN 'tenant_id' THEN actual.qualifier = ANY(ARRAY[
+              '(tenant_id = open_loops_current_tenant_id())',
+              '(tenant_id = public.open_loops_current_tenant_id())'
+            ])
+            WHEN 'id' THEN actual.qualifier = ANY(ARRAY[
+              '(id = open_loops_current_tenant_id())',
+              '(id = public.open_loops_current_tenant_id())'
+            ])
+            WHEN 'true' THEN actual.qualifier = 'true'
+            ELSE actual.qualifier = ''
+          END
+          OR NOT CASE expected.check_expr
+            WHEN 'tenant_id' THEN actual.check_expr = ANY(ARRAY[
+              '(tenant_id = open_loops_current_tenant_id())',
+              '(tenant_id = public.open_loops_current_tenant_id())'
+            ])
+            WHEN 'id' THEN actual.check_expr = ANY(ARRAY[
+              '(id = open_loops_current_tenant_id())',
+              '(id = public.open_loops_current_tenant_id())'
+            ])
+            WHEN 'true' THEN actual.check_expr = 'true'
+            ELSE actual.check_expr = ''
+          END
+    ),
+    unexpected AS (
+      SELECT actual.*
+        FROM actual
+        LEFT JOIN expected
+          ON expected.table_name = actual.table_name
+         AND expected.policy_name = actual.policy_name
+       WHERE expected.policy_name IS NULL
+    )
+    SELECT NOT EXISTS (SELECT 1 FROM bad_table)
+       AND NOT EXISTS (SELECT 1 FROM missing_or_bad)
+       AND NOT EXISTS (SELECT 1 FROM unexpected)
+       AND EXISTS (SELECT 1 FROM tenant_update_guard) AS safe`,
+  );
+  return row?.safe === true;
+}
+
+export async function assertTenantEnforcementBootstrap(client: PoolQueryClient): Promise<void> {
+  const role = await client.get<{
+    rolcreaterole: boolean;
+    rolsuper: boolean;
+    owner_settable: boolean;
+    migrator_settable: boolean;
+    controls_database: boolean;
+    controls_public_schema: boolean;
+    controls_helper_functions: boolean;
+  }>(
+    `SELECT login.rolcreaterole, login.rolsuper,
+            EXISTS (
+              SELECT 1 FROM pg_roles target
+               WHERE target.rolname='open_loops_owner'
+                 AND pg_has_role(login.oid, target.oid, 'SET')
+            ) OR NOT EXISTS (
+              SELECT 1 FROM pg_roles target WHERE target.rolname='open_loops_owner'
+            ) AS owner_settable,
+            (EXISTS (
+              SELECT 1 FROM pg_roles target
+               WHERE target.rolname='open_loops_migrator'
+                 AND pg_has_role(login.oid, target.oid, 'SET')
+            ) OR NOT EXISTS (
+              SELECT 1 FROM pg_roles target WHERE target.rolname='open_loops_migrator'
+            )) AS migrator_settable,
+            EXISTS (
+              SELECT 1
+                FROM pg_database database
+               WHERE database.datname=current_database()
+                 AND (database.datdba=login.oid OR login.rolsuper)
+            ) AS controls_database,
+            EXISTS (
+              SELECT 1 FROM pg_namespace namespace
+               WHERE namespace.nspname='public'
+                 AND pg_has_role(login.oid, namespace.nspowner, 'USAGE')
+            ) AS controls_public_schema,
+            NOT EXISTS (
+              SELECT 1
+                FROM pg_proc helper
+               WHERE helper.oid = ANY(ARRAY[
+                 to_regprocedure('public.open_loops_current_tenant_id()'),
+                 to_regprocedure('public.open_loops_authenticate_key(text,text)'),
+                 to_regprocedure('public.open_loops_append_auth_audit(text,text,text,text,text,text,text,jsonb)')
+               ])
+                 AND helper.proowner<>login.oid
+                 AND NOT login.rolsuper
+                 AND NOT pg_has_role(login.oid, helper.proowner, 'USAGE')
+            ) AS controls_helper_functions
+       FROM pg_roles login
+      WHERE login.rolname = session_user`,
+  );
+  if (!role || (!role.rolsuper && (
+    !role.rolcreaterole || !role.owner_settable || !role.migrator_settable ||
+    !role.controls_database || !role.controls_public_schema || !role.controls_helper_functions
+  ))) {
+    throw new Error(
+      "tenant enforcement requires a database-owning bootstrap login that controls the public schema and existing OpenLoops helper functions, with CREATEROLE and SET ROLE capability for owner/migrator, or a superuser-equivalent login",
+    );
+  }
+  try {
+    await client.transaction(async (transaction) => {
+      await transaction.execute("SAVEPOINT open_loops_bootstrap_probe");
+      try {
+        await transaction.execute(`
+          DO $probe_roles$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='open_loops_owner') THEN
+              CREATE ROLE open_loops_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='open_loops_migrator') THEN
+              CREATE ROLE open_loops_migrator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='open_loops_runtime') THEN
+              CREATE ROLE open_loops_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='open_loops_authenticator') THEN
+              CREATE ROLE open_loops_authenticator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+            END IF;
+          END
+          $probe_roles$;
+        `);
+        await transaction.execute("ALTER ROLE open_loops_owner INHERIT NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS");
+        await transaction.execute("ALTER ROLE open_loops_migrator INHERIT NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS");
+        await transaction.execute("ALTER ROLE open_loops_runtime INHERIT NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS");
+        await transaction.execute("ALTER ROLE open_loops_authenticator INHERIT NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS");
+        await transaction.execute(`
+          DO $probe_service_role_memberships$
+          DECLARE membership RECORD;
+          BEGIN
+            FOR membership IN
+              SELECT granted.rolname AS granted_role, member.rolname AS member_role
+                FROM pg_auth_members relation
+                JOIN pg_roles granted ON granted.oid=relation.roleid
+                JOIN pg_roles member ON member.oid=relation.member
+               WHERE member.rolname IN ('open_loops_runtime', 'open_loops_authenticator')
+            LOOP
+              EXECUTE format('REVOKE %I FROM %I', membership.granted_role, membership.member_role);
+            END LOOP;
+          END
+          $probe_service_role_memberships$;
+        `);
+        await transaction.execute("GRANT USAGE, CREATE ON SCHEMA public TO open_loops_owner, open_loops_migrator");
+        await transaction.execute(`
+          DO $probe_database_acl$
+          DECLARE probe_role TEXT := format('open_loops_bootstrap_probe_%s', pg_backend_pid());
+          BEGIN
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = probe_role) THEN
+              RAISE EXCEPTION 'bootstrap probe role already exists';
+            END IF;
+            EXECUTE format('CREATE ROLE %I NOLOGIN', probe_role);
+            EXECUTE format('GRANT CONNECT ON DATABASE %I TO %I', current_database(), probe_role);
+            IF NOT EXISTS (
+              SELECT 1
+                FROM pg_database database
+                CROSS JOIN LATERAL aclexplode(COALESCE(database.datacl, acldefault('d', database.datdba))) acl
+                JOIN pg_roles grantee ON grantee.oid = acl.grantee
+               WHERE database.datname = current_database()
+                 AND grantee.rolname = probe_role
+                 AND acl.privilege_type = 'CONNECT'
+            ) THEN
+              RAISE EXCEPTION 'bootstrap login cannot grant direct database CONNECT';
+            END IF;
+          END
+          $probe_database_acl$;
+        `);
+        await transaction.execute(`
+          DO $probe_service_role_acl$
+          DECLARE namespace RECORD;
+          DECLARE database_grantee RECORD;
+          BEGIN
+            FOR database_grantee IN
+              SELECT DISTINCT grantee.rolname AS grantee_role
+                FROM pg_database database
+                CROSS JOIN LATERAL aclexplode(COALESCE(database.datacl, acldefault('d', database.datdba))) acl
+                JOIN pg_roles grantee ON grantee.oid=acl.grantee
+               WHERE database.datname=current_database()
+                 AND acl.grantee<>database.datdba
+            LOOP
+              EXECUTE format(
+                'REVOKE ALL PRIVILEGES ON DATABASE %I FROM %I',
+                current_database(),
+                database_grantee.grantee_role
+              );
+            END LOOP;
+            EXECUTE format(
+              'REVOKE ALL PRIVILEGES ON DATABASE %I FROM PUBLIC',
+              current_database()
+            );
+            FOR namespace IN
+              SELECT nspname
+                FROM pg_namespace
+               WHERE nspname NOT IN ('pg_catalog', 'information_schema')
+                 AND nspname NOT LIKE 'pg_toast%'
+                 AND nspname NOT LIKE 'pg_temp_%'
+            LOOP
+              EXECUTE format(
+                'REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA %I FROM PUBLIC, open_loops_runtime, open_loops_authenticator',
+                namespace.nspname
+              );
+              EXECUTE format(
+                'REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA %I FROM PUBLIC, open_loops_runtime, open_loops_authenticator',
+                namespace.nspname
+              );
+              EXECUTE format(
+                'REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA %I FROM PUBLIC, open_loops_runtime, open_loops_authenticator',
+                namespace.nspname
+              );
+              EXECUTE format(
+                'REVOKE ALL PRIVILEGES ON SCHEMA %I FROM open_loops_runtime, open_loops_authenticator',
+                namespace.nspname
+              );
+              IF namespace.nspname <> 'public' THEN
+                EXECUTE format('REVOKE ALL PRIVILEGES ON SCHEMA %I FROM PUBLIC', namespace.nspname);
+              END IF;
+            END LOOP;
+          END
+          $probe_service_role_acl$;
+        `);
+        await transaction.execute(`
+          DO $probe_service_acl$
+          DECLARE service_member RECORD;
+          BEGIN
+            FOR service_member IN
+              SELECT DISTINCT member.rolname AS member_role
+                FROM pg_auth_members membership
+                JOIN pg_roles granted ON granted.oid = membership.roleid
+                JOIN pg_roles member ON member.oid = membership.member
+               WHERE granted.rolname IN ('open_loops_runtime', 'open_loops_authenticator')
+                 AND member.rolcanlogin
+            LOOP
+              EXECUTE format('DROP OWNED BY %I', service_member.member_role);
+            END LOOP;
+          END
+          $probe_service_acl$;
+        `);
+      } finally {
+        await transaction.execute("ROLLBACK TO SAVEPOINT open_loops_bootstrap_probe");
+      }
+    });
+  } catch {
+    throw new Error(
+      "tenant enforcement bootstrap login lacks provider-level authority for exact role creation/normalization, database/schema grants, or service-login privilege cleanup",
+    );
+  }
+}
+
+export async function assertTenantEnforcementBootstrapIfPending(
+  client: PoolQueryClient,
+  schema: PostgresStorage,
+): Promise<void> {
+  const preview = await schema.migrate({ dryRun: true });
+  if (preview.plan.some((item) =>
+    item.migration.id === TENANT_ENFORCEMENT_MIGRATION_ID && item.state === "pending")) {
+    await assertTenantEnforcementBootstrap(client);
+  }
+}
+
 async function runServe(opts: { host: string; port: number }): Promise<void> {
   {
-    const executor = buildExecutor("loops-serve");
-    const client = executor.queryClient;
-    const storage = createPostgresLoopStorage(client);
+    const executor = buildExecutor("loops-serve", "runtime");
+    const authExecutor = buildExecutor("loops-auth", "auth");
     const schema = new PostgresStorage(executor);
 
-    const keys = new ApiKeyStore(client);
-    // Idempotent: the api_keys table is normally created by the migration task,
-    // but ensureSchema keeps a fresh DB self-healing without a separate step.
-    await keys.ensureSchema();
-
     const signingSecret = resolveSigningSecret();
-    let authenticator: ApiAuthenticator | undefined;
-    if (signingSecret) {
-      authenticator = verifyApiKey({
-        app: APP,
-        signingSecret,
-        // Strict: unknown OR revoked kids are denied (a token must be recorded).
-        isRevoked: keys.statusChecker(),
-        audit: (event) =>
-          console.log(
-            JSON.stringify({ evt: "api_auth", outcome: event.outcome, kid: event.kid, reason: event.reason, path: event.path, status: event.status }),
-          ),
-      }) as unknown as ApiAuthenticator;
-    } else if (opts.host !== "127.0.0.1" && opts.host !== "localhost" && opts.host !== "::1") {
+    const authenticator = signingSecret ? new TenantApiAuthenticator(authExecutor.queryClient, signingSecret) : undefined;
+    if (!authenticator) {
       throw new Error(
-        "loops-serve on a non-local host requires an API signing secret (HASNA_LOOPS_API_SIGNING_KEY / API_KEY_SIGNING_SECRET)",
+        "loops-serve requires HASNA_LOOPS_API_SIGNING_KEY",
       );
     }
 
     const server = createLoopsApiServer({
       host: opts.host,
       port: opts.port,
-      storage,
       authenticator,
+      withTenantStorage: (principal, fn) =>
+        executor.withRequestContext(principal, (transactionClient) =>
+          fn(createPostgresLoopStorage(transactionClient, principal, { contextAlreadyBound: true }))),
       readyCheck: async () => {
         try {
-          const applied = await schema.listAppliedMigrations();
+          const result = await schema.migrate({ dryRun: true });
+          const applied = result.applied;
           const known = new Set(schema.migrations.map((m) => m.id));
           const missing = schema.migrations.filter((m) => !applied.some((a) => a.id === m.id)).map((m) => m.id);
           const unknown = applied.filter((a) => !known.has(a.id)).map((a) => a.id);
-          if (missing.length) return { ready: false, detail: `pending_migrations:${missing.join(",")}` };
-          if (unknown.length) return { ready: false, detail: `unknown_migrations:${unknown.join(",")}` };
-          return { ready: true };
+          if (missing.length) return { ready: false, code: "pending_migrations" };
+          if (unknown.length) return { ready: false, code: "unknown_migrations" };
         } catch (error) {
-          return { ready: false, detail: error instanceof Error ? error.message : "storage_unreachable" };
+          return { ready: false, code: classifyMigrationReadinessError(error) };
         }
+        try {
+          if (!await isSafeServiceConnection(executor.queryClient, "open_loops_runtime")) {
+            return { ready: false, code: "unsafe_database_role" };
+          }
+        } catch {
+          return { ready: false, code: "storage_unreachable" };
+        }
+        try {
+          if (!await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")) {
+            return { ready: false, code: "unsafe_database_role" };
+          }
+        } catch {
+          return { ready: false, code: "auth_unreachable" };
+        }
+        return { ready: true };
       },
     });
     console.log(
       JSON.stringify({
         evt: "loops_serve_listening",
         url: `http://${server.hostname}:${server.port}`,
-        auth: authenticator ? "api_key" : "loopback",
+        auth: "api_key",
         version: packageVersion(),
       }),
     );
@@ -131,18 +889,35 @@ program
 
 program
   .command("migrate")
-  .description("apply the Postgres schema migrations + the api_keys table, then exit")
+  .description("prepare tenant schema, or explicitly enforce a loaded tenant mapping")
   .option("--dry-run", "preview the migration plan without applying")
-  .action(async (opts: { dryRun?: boolean }) => {
-    const executor = buildExecutor("loops-migrate");
+  .option("--enforce-tenancy", "apply the explicit backfill and hard tenant/RLS enforcement")
+  .action(async (opts: { dryRun?: boolean; enforceTenancy?: boolean }) => {
+    const executor = buildExecutor("loops-migrate", "migrator");
     try {
-      const result = await new PostgresStorage(executor).migrate({ dryRun: Boolean(opts.dryRun) });
+      const schema = new PostgresStorage(executor);
+      if (opts.enforceTenancy) await assertTenantEnforcementBootstrapIfPending(executor.queryClient, schema);
+      const result = await schema.migrate({
+        dryRun: Boolean(opts.dryRun),
+        through: opts.enforceTenancy ? undefined : "0008_tenant_prepare",
+      });
       const pending = result.plan.filter((p) => p.state === "pending").map((p) => p.migration.id);
       console.log(JSON.stringify({ evt: "migrate", dryRun: result.dryRun, applied: result.applied.map((a) => a.id), pending }));
-      if (!opts.dryRun) {
-        await new ApiKeyStore(executor.queryClient).ensureSchema();
-        console.log(JSON.stringify({ evt: "api_keys_ensured" }));
-      }
+    } finally {
+      await executor.close();
+    }
+  });
+
+program
+  .command("tenant-backfill")
+  .description("load an explicit tenant/principal/key/row mapping bundle after migration 0008")
+  .requiredOption("--input <path>", "tenant backfill JSON bundle")
+  .action(async (opts: { input: string }) => {
+    const executor = buildExecutor("loops-tenant-backfill", "migrator");
+    try {
+      const bundle = parseTenantBackfillBundle(await Bun.file(opts.input).json());
+      const result = await loadTenantBackfillBundle(executor.queryClient, bundle);
+      console.log(JSON.stringify({ evt: "tenant_backfill_loaded", ...result }));
     } finally {
       await executor.close();
     }
@@ -157,7 +932,7 @@ if (import.meta.main) {
   // Bare `loops-serve` (no subcommand) defaults to `serve`. Commander cannot
   // combine a root action with subcommand dispatch without swallowing the
   // subcommand name, so we inject the default subcommand here instead.
-  const known = new Set(["serve", "migrate", "version", "help"]);
+  const known = new Set(["serve", "migrate", "tenant-backfill", "version", "help"]);
   const passthroughFlags = new Set(["-h", "--help", "-V", "--version"]);
   const argv = [...process.argv];
   const firstArg = argv[2];
@@ -167,9 +942,16 @@ if (import.meta.main) {
     argv.splice(2, 0, "serve");
   }
   program.parseAsync(argv).catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
+    logServeCommandFailure(error);
     process.exit(1);
   });
+}
+
+export function logServeCommandFailure(error: unknown): void {
+  console.error(JSON.stringify({
+    evt: "loops_serve_command_failed",
+    errorType: error instanceof Error ? "error" : typeof error,
+  }));
 }
 
 export { program };

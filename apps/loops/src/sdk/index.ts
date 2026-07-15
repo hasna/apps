@@ -38,7 +38,6 @@ export {
   buildSelfHostedMigrationPlan,
   exportLoopsMigrationBundle,
   migrationHash,
-  registerSelfHostedRunner,
   validateLoopsMigrationBundle,
 } from "../lib/migration.js";
 export type {
@@ -51,8 +50,6 @@ export type {
   LoopsMigrationPlanRow,
   LoopsMigrationPlanSummary,
   LoopsMigrationResource,
-  RunnerRegistrationOptions,
-  RunnerRegistrationResult,
   SelfHostedPlanOptions,
 } from "../lib/migration.js";
 

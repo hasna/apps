@@ -56,7 +56,6 @@ import {
   buildSelfHostedMigrationPlan,
   exportLoopsMigrationBundle,
   publicMigrationBundle,
-  registerSelfHostedRunner,
   validateLoopsMigrationBundle,
   type LoopsMigrationPlan,
 } from "../lib/migration.js";
@@ -553,31 +552,6 @@ function parseReceiptFile(file: string): WriteRunReceiptInput {
   }
 }
 
-function parseStringMap(values: string[] | undefined, flag: string): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (const value of values ?? []) {
-    const index = value.indexOf("=");
-    if (index <= 0) throw new ValidationError(`invalid ${flag} value, expected key=value: ${value}`);
-    result[value.slice(0, index)] = value.slice(index + 1);
-  }
-  return result;
-}
-
-function parseJsonMap(values: string[] | undefined, flag: string): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  for (const value of values ?? []) {
-    const index = value.indexOf("=");
-    if (index <= 0) throw new ValidationError(`invalid ${flag} value, expected key=json-or-string: ${value}`);
-    const raw = value.slice(index + 1);
-    try {
-      result[value.slice(0, index)] = JSON.parse(raw);
-    } catch {
-      result[value.slice(0, index)] = raw;
-    }
-  }
-  return result;
-}
-
 function printMigrationPlan(plan: LoopsMigrationPlan, opts: { json?: boolean } = {}): void {
   if (isJson() || opts.json) {
     console.log(JSON.stringify(plan, null, 2));
@@ -753,7 +727,7 @@ program
   .option("--json", "print JSON")
   .action(runAction(deploymentStatusCommand()));
 
-const selfHosted = program.command("self-hosted").alias("selfhosted").description("inspect the self-hosted OpenLoops contract");
+const selfHosted = program.command("self-hosted").description("inspect the self-hosted OpenLoops contract");
 selfHosted
   .command("status")
   .option("--json", "print JSON")
@@ -915,33 +889,6 @@ selfHosted
   .option("--no-runs", "omit loop run history from the preview")
   .option("--json", "print JSON")
   .action(selfHostedMigrationCommand("self-hosted-pull"));
-
-selfHosted
-  .command("runner-register")
-  .description("register this machine as a self-hosted runner")
-  .requiredOption("--runner-id <id>", "stable runner id")
-  .option("--api-url <url>", "self-hosted control-plane API URL")
-  .option("--machine-id <id>", "OpenMachines machine id")
-  .option("--label <key=value>", "runner label; may be repeated or comma-separated", collectValues, [] as string[])
-  .option("--capability <key=json>", "runner capability; may be repeated or comma-separated", collectValues, [] as string[])
-  .option("--dry-run", "preview registration without posting")
-  .option("--apply", "post the registration to the control plane")
-  .option("--json", "print JSON")
-  .action(runAction(async (opts) => {
-    if (opts.apply && opts.dryRun) throw new ValidationError("use either --apply or --dry-run, not both");
-    const request = {
-      apiUrl: opts.apiUrl,
-      runnerId: opts.runnerId,
-      machineId: opts.machineId,
-      labels: parseStringMap(listFromRepeatedOpts(opts.label), "--label"),
-      capabilities: parseJsonMap(listFromRepeatedOpts(opts.capability), "--capability"),
-    };
-    const result = opts.apply
-      ? await registerSelfHostedRunner(request)
-      : { ok: true, dryRun: true, runner: request };
-    if (isJson() || opts.json) console.log(JSON.stringify(result, null, 2));
-    else console.log(`${opts.apply ? "registered" : "would register"} runner ${String(opts.runnerId)}`);
-  }));
 
 const cloud = program.command("cloud").description("inspect the hosted OpenLoops contract");
 cloud

@@ -80,10 +80,12 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:boundary": "bun run scripts/no-private-cloud-boundary.mjs",
+    "check:contracts": "bun run scripts/check-storage-kit.mjs",
+    "check:supply-chain": "bun audit && bun audit --production && bun run check:contracts && bun pm pack --dry-run --ignore-scripts",
     "prepare": "test -d dist || bun run build",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:daemon": "bun run src/daemon/index.ts",
-    "prepublishOnly": "bun run build && bun run typecheck && bun test && bun run test:boundary"
+    "prepublishOnly": "bun run build && bun run typecheck && bun test && bun run test:boundary && bun run check:supply-chain"
   },
   "keywords": [
     "loops",
@@ -110,7 +112,7 @@
     "bun": ">=1.0.0"
   },
   "dependencies": {
-    "@hasna/contracts": "^0.5.1",
+    "@hasna/contracts": "0.5.2",
     "@hasna/events": "^0.1.9",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@openrouter/ai-sdk-provider": "2.9.1",

@@ -98,27 +98,11 @@ export interface ApplyLoopsMigrationResult {
 export interface SelfHostedPlanOptions {
   operation: "self-hosted-push" | "self-hosted-pull" | "self-hosted-migrate";
   apiUrl?: string;
-  apiToken?: string;
+  apiKey?: string;
   fetchImpl?: typeof fetch;
   env?: NodeJS.ProcessEnv;
   includeRuns?: boolean;
   replace?: boolean;
-}
-
-export interface RunnerRegistrationOptions {
-  apiUrl?: string;
-  apiToken?: string;
-  runnerId: string;
-  machineId?: string;
-  labels?: Record<string, string>;
-  capabilities?: Record<string, unknown>;
-  fetchImpl?: typeof fetch;
-  env?: NodeJS.ProcessEnv;
-}
-
-export interface RunnerRegistrationResult {
-  ok: boolean;
-  runner: Record<string, unknown>;
 }
 
 function canonicalize(value: unknown): unknown {
@@ -496,20 +480,12 @@ function envValue(env: NodeJS.ProcessEnv, keys: readonly string[]): string | und
   return undefined;
 }
 
-function resolveApiConfig(opts: { apiUrl?: string; apiToken?: string; env?: NodeJS.ProcessEnv }): { apiUrl?: string; token?: string } {
+function resolveApiConfig(opts: { apiUrl?: string; apiKey?: string; env?: NodeJS.ProcessEnv }): { apiUrl?: string; token?: string } {
   const env = opts.env ?? process.env;
   return {
-    apiUrl: opts.apiUrl ?? envValue(env, ["LOOPS_API_URL", "HASNA_LOOPS_API_URL", "LOOPS_CLOUD_API_URL", "HASNA_LOOPS_CLOUD_API_URL"]),
-    token: opts.apiToken ?? envValue(env, ["LOOPS_API_TOKEN", "HASNA_LOOPS_API_TOKEN", "LOOPS_CLOUD_TOKEN", "HASNA_LOOPS_CLOUD_TOKEN"]),
+    apiUrl: opts.apiUrl ?? envValue(env, ["HASNA_LOOPS_API_URL"]),
+    token: opts.apiKey ?? envValue(env, ["HASNA_LOOPS_API_KEY"]),
   };
-}
-
-function isLocalApiUrl(value: string): boolean {
-  try {
-    return ["127.0.0.1", "localhost", "::1"].includes(new URL(value).hostname);
-  } catch {
-    return false;
-  }
 }
 
 function endpoint(base: string, path: string): string {
@@ -601,11 +577,11 @@ async function fetchRemotePreview(opts: SelfHostedPlanOptions): Promise<RemotePr
   const warnings: string[] = [];
   const unsupported: string[] = [];
   if (!config.apiUrl) {
-    warnings.push("LOOPS_API_URL or HASNA_LOOPS_API_URL is required to inspect a self-hosted control plane");
+    warnings.push("HASNA_LOOPS_API_URL is required to inspect a self-hosted control plane");
     return { workflows: [], loops: [], runs: [], counts: {}, unsupported, warnings };
   }
-  if (!isLocalApiUrl(config.apiUrl) && !config.token) {
-    warnings.push("non-local self-hosted APIs require LOOPS_API_TOKEN or HASNA_LOOPS_API_TOKEN");
+  if (!config.token) {
+    warnings.push("self-hosted APIs require HASNA_LOOPS_API_KEY");
     return { workflows: [], loops: [], runs: [], counts: {}, unsupported, warnings };
   }
   const fetchImpl = opts.fetchImpl ?? fetch;
@@ -751,9 +727,9 @@ export async function buildSelfHostedMigrationPlan(store: Store, opts: SelfHoste
   const config = resolveApiConfig(opts);
   const apiUrl = config.apiUrl;
   if (!apiUrl) {
-    pushBlocker(rows, "remote", "self-hosted-api-url", "LOOPS_API_URL or HASNA_LOOPS_API_URL is required to compare a self-hosted control plane");
-  } else if (!isLocalApiUrl(apiUrl) && !config.token) {
-    pushBlocker(rows, "remote", "self-hosted-api-token", "non-local self-hosted APIs require LOOPS_API_TOKEN or HASNA_LOOPS_API_TOKEN");
+    pushBlocker(rows, "remote", "self-hosted-api-url", "HASNA_LOOPS_API_URL is required to compare a self-hosted control plane");
+  } else if (!config.token) {
+    pushBlocker(rows, "remote", "self-hosted-api-key", "self-hosted APIs require HASNA_LOOPS_API_KEY");
   }
   const replace = opts.replace ?? false;
   if (opts.operation === "self-hosted-pull") {
@@ -892,7 +868,7 @@ export async function buildSelfHostedMigrationPlan(store: Store, opts: SelfHoste
 
 export interface SelfHostedPushOptions {
   apiUrl?: string;
-  apiToken?: string;
+  apiKey?: string;
   includeRuns?: boolean;
   replace?: boolean;
   fetchImpl?: typeof fetch;
@@ -978,9 +954,9 @@ async function postImportBatch(
  */
 export async function applySelfHostedPush(store: Store, opts: SelfHostedPushOptions): Promise<SelfHostedPushResult> {
   const resolved = resolveApiConfig(opts);
-  if (!resolved.apiUrl) throw new ValidationError("LOOPS_API_URL or --api-url is required for self-hosted push");
-  if (!isLocalApiUrl(resolved.apiUrl) && !resolved.token) {
-    throw new ValidationError("non-local self-hosted APIs require LOOPS_API_TOKEN or HASNA_LOOPS_API_TOKEN");
+  if (!resolved.apiUrl) throw new ValidationError("HASNA_LOOPS_API_URL or --api-url is required for self-hosted push");
+  if (!resolved.token) {
+    throw new ValidationError("self-hosted APIs require HASNA_LOOPS_API_KEY");
   }
   const config = { apiUrl: resolved.apiUrl, token: resolved.token };
   const fetchImpl = opts.fetchImpl ?? fetch;
@@ -1089,25 +1065,6 @@ export async function applySelfHostedPush(store: Store, opts: SelfHostedPushOpti
   };
 }
 
-export async function registerSelfHostedRunner(opts: RunnerRegistrationOptions): Promise<RunnerRegistrationResult> {
-  const config = resolveApiConfig(opts);
-  if (!config.apiUrl) throw new ValidationError("LOOPS_API_URL or --api-url is required");
-  if (!isLocalApiUrl(config.apiUrl) && !config.token) throw new ValidationError("non-local self-hosted APIs require LOOPS_API_TOKEN or HASNA_LOOPS_API_TOKEN");
-  const payload = await requestJson(opts.fetchImpl ?? fetch, { apiUrl: config.apiUrl, token: config.token }, "/v1/runners/register", {
-    method: "POST",
-    body: JSON.stringify({
-      runnerId: opts.runnerId,
-      machineId: opts.machineId,
-      labels: opts.labels ?? {},
-      capabilities: opts.capabilities ?? {},
-    }),
-  });
-  return {
-    ok: payload.ok === true,
-    runner: payload.runner && typeof payload.runner === "object" ? payload.runner as Record<string, unknown> : {},
-  };
-}
-
 export function publicMigrationBundle(bundle: LoopsMigrationBundle): Record<string, unknown> {
   return {
     ...bundle,
@@ -1124,6 +1081,6 @@ export function selfHostedControlPlaneSummary(env: NodeJS.ProcessEnv = process.e
   return {
     apiUrl: config.apiUrl,
     databaseUrlPresent: config.databaseUrlPresent,
-    authTokenPresent: config.apiAuthTokenPresent,
+    apiKeyPresent: config.apiKeyPresent,
   };
 }

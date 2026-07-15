@@ -6,7 +6,7 @@ import { tick } from "../lib/scheduler.js";
 import { Store } from "../lib/store.js";
 import { gatedWriteCommand, openGate, waitUntil } from "../test-helpers.js";
 import { LoopsClient as HttpLoopsClient } from "./http.js";
-import { LoopsClient, migrationHash, openAutomationsRuntimeBinding, registerSelfHostedRunner } from "./index.js";
+import { LoopsClient, migrationHash, openAutomationsRuntimeBinding } from "./index.js";
 
 describe("loops sdk", () => {
   test("generated HTTP client exposes pagination and output query params", async () => {
@@ -204,53 +204,6 @@ describe("loops sdk", () => {
     }
   });
 
-  test("registers a self-hosted runner through the migration API helper", async () => {
-    const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
-    const fetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
-      requests.push({ url: String(input), body });
-      return Response.json({
-        ok: true,
-        runner: {
-          id: body.runnerId,
-          machineId: body.machineId,
-          labels: body.labels,
-          capabilities: body.capabilities,
-        },
-      });
-    };
-
-    const registered = await registerSelfHostedRunner({
-      apiUrl: "http://127.0.0.1:8787",
-      runnerId: "runner-sdk-test",
-      machineId: "machine-sdk-test",
-      labels: { role: "worker" },
-      capabilities: { concurrency: 1 },
-      fetchImpl: fetchImpl as typeof fetch,
-    });
-
-    expect(registered).toMatchObject({
-      ok: true,
-      runner: {
-        id: "runner-sdk-test",
-        machineId: "machine-sdk-test",
-        labels: { role: "worker" },
-        capabilities: { concurrency: 1 },
-      },
-    });
-    expect(requests).toEqual([
-      {
-        url: "http://127.0.0.1:8787/v1/runners/register",
-        body: {
-          runnerId: "runner-sdk-test",
-          machineId: "machine-sdk-test",
-          labels: { role: "worker" },
-          capabilities: { concurrency: 1 },
-        },
-      },
-    ]);
-  });
-
   test("migration plans block destination live state and tampered bundles", async () => {
     const sourceStore = new Store(":memory:");
     const targetStore = new Store(":memory:");
@@ -381,6 +334,7 @@ describe("loops sdk", () => {
       const pull = await pullClient.planSelfHostedMigration({
         operation: "self-hosted-pull",
         apiUrl: "http://127.0.0.1:8787",
+        apiKey: "test-token",
         fetchImpl: fetchImpl as typeof fetch,
       });
       expect(pull.importable).toBe(false);

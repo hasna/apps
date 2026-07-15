@@ -214,8 +214,7 @@ export type ResolveStorageClientResult =
  * `name`; when it resolves to `cloud-http` (mode=cloud/self_hosted + API_URL +
  * API_KEY), returns a ready {@link HasnaStorageClient}. Otherwise returns
  * `{ transport: 'local', client: null }` so the app uses its local store.
- * Throws if cloud was requested but is misconfigured (so callers never silently
- * read the wrong dataset).
+ * Incomplete remote configuration throws so callers never read the wrong dataset.
  */
 export function resolveStorageClient(
   name: string,

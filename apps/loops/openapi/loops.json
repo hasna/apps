@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "OpenLoops",
-    "version": "0.4.14",
-    "description": "OpenLoops self-hosted control-plane HTTP API (loops-serve). RDS-direct (Amendment A1). All /v1 routes require an API key (x-api-key or Authorization: Bearer) with a loops:* scope."
+    "version": "0.4.28",
+    "description": "OpenLoops self-hosted multi-tenant control-plane HTTP API. All non-probe operations require a tenant-bound API key with the declared scope, role, and token kind."
   },
   "servers": [
     {
@@ -26,7 +26,8 @@
               }
             }
           }
-        }
+        },
+        "security": []
       }
     },
     "/ready": {
@@ -54,7 +55,8 @@
               }
             }
           }
-        }
+        },
+        "security": []
       }
     },
     "/version": {
@@ -72,7 +74,8 @@
               }
             }
           }
-        }
+        },
+        "security": []
       }
     },
     "/v1/loops": {
@@ -138,7 +141,23 @@
               }
             }
           }
-        }
+        },
+        "x-authorization-operation": "loops.list",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
       },
       "post": {
         "operationId": "createLoop",
@@ -164,7 +183,22 @@
               }
             }
           }
-        }
+        },
+        "x-authorization-operation": "loops.create",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write"
       }
     },
     "/v1/loops/count": {
@@ -208,7 +242,23 @@
               }
             }
           }
-        }
+        },
+        "x-authorization-operation": "loops.count",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
       }
     },
     "/v1/loops/{id}": {
@@ -236,7 +286,23 @@
               }
             }
           }
-        }
+        },
+        "x-authorization-operation": "loops.get",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
       },
       "patch": {
         "operationId": "updateLoop",
@@ -272,7 +338,22 @@
               }
             }
           }
-        }
+        },
+        "x-authorization-operation": "loops.update",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write"
       },
       "delete": {
         "operationId": "deleteLoop",
@@ -298,7 +379,21 @@
               }
             }
           }
-        }
+        },
+        "x-authorization-operation": "loops.delete",
+        "x-required-scopes": [
+          "loops:delete"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "destructive"
       }
     },
     "/v1/loops/{id}/archive": {
@@ -326,7 +421,22 @@
               }
             }
           }
-        }
+        },
+        "x-authorization-operation": "loops.archive",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write"
       }
     },
     "/v1/loops/{id}/unarchive": {
@@ -354,7 +464,22 @@
               }
             }
           }
-        }
+        },
+        "x-authorization-operation": "loops.unarchive",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write"
       }
     },
     "/v1/runs": {
@@ -414,7 +539,23 @@
               }
             }
           }
-        }
+        },
+        "x-authorization-operation": "runs.list",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
       }
     },
     "/v1/runs/count": {
@@ -442,7 +583,23 @@
               }
             }
           }
-        }
+        },
+        "x-authorization-operation": "runs.count",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
       }
     },
     "/v1/runs/{id}": {
@@ -478,7 +635,23 @@
               }
             }
           }
-        }
+        },
+        "x-authorization-operation": "runs.get",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
       }
     },
     "/v1/import": {
@@ -507,7 +680,21 @@
               }
             }
           }
-        }
+        },
+        "x-authorization-operation": "tenant.import",
+        "x-required-scopes": [
+          "loops:import"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "destructive"
       }
     },
     "/v1/workflows": {
@@ -555,7 +742,23 @@
               }
             }
           }
-        }
+        },
+        "x-authorization-operation": "workflows.list",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
       },
       "post": {
         "operationId": "createWorkflow",
@@ -581,7 +784,22 @@
               }
             }
           }
-        }
+        },
+        "x-authorization-operation": "workflows.create",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write"
       }
     },
     "/v1/workflows/count": {
@@ -609,7 +827,23 @@
               }
             }
           }
-        }
+        },
+        "x-authorization-operation": "workflows.count",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
       }
     },
     "/v1/workflows/{id}": {
@@ -637,7 +871,23 @@
               }
             }
           }
-        }
+        },
+        "x-authorization-operation": "workflows.get",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
       }
     },
     "/v1/invocations": {
@@ -665,7 +915,23 @@
               }
             }
           }
-        }
+        },
+        "x-authorization-operation": "invocations.list",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
       },
       "post": {
         "operationId": "createWorkflowInvocation",
@@ -691,7 +957,22 @@
               }
             }
           }
-        }
+        },
+        "x-authorization-operation": "invocations.create",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write"
       }
     },
     "/v1/work-items": {
@@ -735,7 +1016,23 @@
               }
             }
           }
-        }
+        },
+        "x-authorization-operation": "workItems.list",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
       },
       "post": {
         "operationId": "upsertWorkflowWorkItem",
@@ -761,7 +1058,22 @@
               }
             }
           }
-        }
+        },
+        "x-authorization-operation": "workItems.upsert",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write"
       }
     },
     "/v1/receipts": {
@@ -829,7 +1141,23 @@
               }
             }
           }
-        }
+        },
+        "x-authorization-operation": "receipts.list",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
       },
       "post": {
         "operationId": "writeRunReceipt",
@@ -855,7 +1183,22 @@
               }
             }
           }
-        }
+        },
+        "x-authorization-operation": "receipts.write",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write"
       }
     },
     "/v1/receipts/{runId}": {
@@ -880,6 +1223,1925 @@
                 "schema": {
                   "$ref": "#/components/schemas/RunReceiptResponse"
                 }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "receipts.get",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      }
+    },
+    "/status": {
+      "get": {
+        "operationId": "statusRead",
+        "summary": "status.read",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "status.read",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      }
+    },
+    "/v1": {
+      "get": {
+        "operationId": "apiRead",
+        "summary": "api.read",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "api.read",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      }
+    },
+    "/v1/status": {
+      "get": {
+        "operationId": "apiStatus",
+        "summary": "api.status",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "api.status",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      }
+    },
+    "/v1/loops/{id}/rename": {
+      "post": {
+        "operationId": "loopsRename",
+        "summary": "loops.rename",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "loops.rename",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/runs/{id}/heartbeat": {
+      "post": {
+        "operationId": "runsHeartbeat",
+        "summary": "runs.heartbeat",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.heartbeat",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/finalize": {
+      "post": {
+        "operationId": "runsFinalize",
+        "summary": "runs.finalize",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.finalize",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/evidence": {
+      "post": {
+        "operationId": "runsEvidence",
+        "summary": "runs.evidence",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.evidence",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/workflow-runs": {
+      "post": {
+        "operationId": "runsWorkflowRunsCreate",
+        "summary": "runs.workflowRuns.create",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.workflowRuns.create",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/workflow-runs/{workflowRunId}/get": {
+      "post": {
+        "operationId": "runsWorkflowRunsGet",
+        "summary": "runs.workflowRuns.get",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.workflowRuns.get",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workflowRunId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/workflow-runs/{workflowRunId}/steps": {
+      "post": {
+        "operationId": "runsWorkflowRunsSteps",
+        "summary": "runs.workflowRuns.steps",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.workflowRuns.steps",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workflowRunId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/workflow-runs/{workflowRunId}/recover": {
+      "post": {
+        "operationId": "runsWorkflowRunsRecover",
+        "summary": "runs.workflowRuns.recover",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.workflowRuns.recover",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workflowRunId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/workflow-runs/{workflowRunId}/finalize": {
+      "post": {
+        "operationId": "runsWorkflowRunsFinalize",
+        "summary": "runs.workflowRuns.finalize",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.workflowRuns.finalize",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workflowRunId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/workflow-runs/{workflowRunId}/steps/{stepId}/{action}": {
+      "post": {
+        "operationId": "runsWorkflowRunsStepAction",
+        "summary": "runs.workflowRuns.stepAction",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.workflowRuns.stepAction",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workflowRunId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "stepId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "action",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "get",
+                "start",
+                "pid",
+                "progress",
+                "skip",
+                "finalize"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/recover": {
+      "post": {
+        "operationId": "runsRecover",
+        "summary": "runs.recover",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.recover",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/workflows/{id}/archive": {
+      "post": {
+        "operationId": "workflowsArchive",
+        "summary": "workflows.archive",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "workflows.archive",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/workflow-runs": {
+      "get": {
+        "operationId": "workflowRunsList",
+        "summary": "workflowRuns.list",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "workflowRuns.list",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      }
+    },
+    "/v1/workflow-runs/{id}": {
+      "get": {
+        "operationId": "workflowRunsGet",
+        "summary": "workflowRuns.get",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "workflowRuns.get",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/workflow-runs/{id}/steps": {
+      "get": {
+        "operationId": "workflowRunsSteps",
+        "summary": "workflowRuns.steps",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "workflowRuns.steps",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/workflow-runs/{id}/events": {
+      "get": {
+        "operationId": "workflowRunsEvents",
+        "summary": "workflowRuns.events",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "workflowRuns.events",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/work-items/{id}": {
+      "get": {
+        "operationId": "workItemsGet",
+        "summary": "workItems.get",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "workItems.get",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/invocations/{id}": {
+      "get": {
+        "operationId": "invocationsGet",
+        "summary": "invocations.get",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "invocations.get",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/goals": {
+      "get": {
+        "operationId": "goalsList",
+        "summary": "goals.list",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "goals.list",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      }
+    },
+    "/v1/goals/{id}": {
+      "get": {
+        "operationId": "goalsGet",
+        "summary": "goals.get",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "goals.get",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/goals/{id}/plan-nodes": {
+      "get": {
+        "operationId": "goalsPlanNodes",
+        "summary": "goals.planNodes",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "goals.planNodes",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/goal-runs": {
+      "get": {
+        "operationId": "goalRunsList",
+        "summary": "goalRuns.list",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "goalRuns.list",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      }
+    },
+    "/v1/history/prune": {
+      "post": {
+        "operationId": "historyPrune",
+        "summary": "history.prune",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "history.prune",
+        "x-required-scopes": [
+          "loops:delete"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "destructive"
+      }
+    },
+    "/v1/runners/poll": {
+      "post": {
+        "operationId": "runnersPoll",
+        "summary": "runners.poll",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runners.poll",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runners/claim": {
+      "post": {
+        "operationId": "runnersClaim",
+        "summary": "runners.claim",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runners.claim",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/leases/recover": {
+      "post": {
+        "operationId": "leasesRecover",
+        "summary": "leases.recover",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "leases.recover",
+        "x-required-scopes": [
+          "loops:delete"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "destructive"
+      }
+    },
+    "/healthz": {
+      "get": {
+        "operationId": "HealthzProbe",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/readyz": {
+      "get": {
+        "operationId": "ReadyzProbe",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/v1/version": {
+      "get": {
+        "operationId": "V1VersionProbe",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "operationId": "OpenapiJsonProbe",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/v1/runs/{id}/goals/find": {
+      "post": {
+        "operationId": "runsGoalsFind",
+        "summary": "runs.Goals.Find",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.goals.find",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/goals": {
+      "post": {
+        "operationId": "runsGoalsCreate",
+        "summary": "runs.Goals.Create",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.goals.create",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/goals/{goalId}/get": {
+      "post": {
+        "operationId": "runsGoalsGet",
+        "summary": "runs.Goals.Get",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.goals.get",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "goalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/goals/{goalId}/status": {
+      "post": {
+        "operationId": "runsGoalsStatus",
+        "summary": "runs.Goals.Status",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.goals.status",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "goalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/goals/{goalId}/events": {
+      "post": {
+        "operationId": "runsGoalsEvents",
+        "summary": "runs.Goals.Events",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.goals.events",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "goalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/goals/{goalId}/plan-nodes": {
+      "post": {
+        "operationId": "runsGoalsPlanNodesCreate",
+        "summary": "runs.Goals.Plan.Nodes.Create",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.goals.planNodes.create",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "goalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/goals/{goalId}/plan-nodes/list": {
+      "post": {
+        "operationId": "runsGoalsPlanNodesList",
+        "summary": "runs.Goals.Plan.Nodes.List",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.goals.planNodes.list",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "goalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/goals/{goalId}/plan-nodes/{key}": {
+      "post": {
+        "operationId": "runsGoalsPlanNodesUpdate",
+        "summary": "runs.Goals.Plan.Nodes.Update",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.goals.planNodes.update",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "goalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
               }
             }
           }
@@ -1807,12 +4069,19 @@
         "type": "apiKey",
         "in": "header",
         "name": "x-api-key"
+      },
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
       }
     }
   },
   "security": [
     {
       "apiKey": []
+    },
+    {
+      "bearerAuth": []
     }
   ]
 }

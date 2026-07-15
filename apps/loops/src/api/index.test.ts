@@ -3,6 +3,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
 import { createSqliteLoopStorage } from "../lib/storage/sqlite.js";
+import type { LoopStorageContract } from "../lib/storage/contract.js";
+import type { TenantAuthContext } from "../lib/auth/tenant-auth.js";
+import type { LoopsApiServerOptions } from "./index.js";
 import type { Loop, WorkflowSpec } from "../types.js";
 
 const apiPath = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
@@ -11,6 +14,44 @@ const jsonHeaders = { "content-type": "application/json" };
 function apiUrl(server: { port?: number }, path: string): string {
   if (typeof server.port !== "number") throw new Error("test server did not expose a port");
   return `http://127.0.0.1:${server.port}${path}`;
+}
+
+const testPrincipal = {
+  tenantId: "tenant-test",
+  principalId: "principal-test",
+  requestId: "request-test",
+  kid: "kid-test",
+  agent: "api-test",
+  scopes: ["loops:*"],
+  roles: ["admin" as const],
+  tokenKind: "api_key" as const,
+  claims: { v: 1, kid: "kid-test", app: "loops", scopes: ["loops:*"], iat: 1, exp: null },
+};
+
+function createTestServer(
+  mod: typeof import("./index.js"),
+  opts: LoopsApiServerOptions = {},
+  principal: TenantAuthContext = testPrincipal,
+) {
+  return mod.createLoopsApiServer({
+    ...opts,
+    authenticator: {
+      authenticate: async () => ({ ok: true as const, status: 200 as const, principal }),
+    },
+    withTenantStorage: (_principal, fn) => fn(opts.storage as LoopStorageContract),
+  });
+}
+
+function runnerPrincipal(principalId: string) {
+  return {
+    ...testPrincipal,
+    principalId,
+    agent: principalId,
+    scopes: ["loops:runner"],
+    roles: ["worker" as const],
+    tokenKind: "machine" as const,
+    claims: { ...testPrincipal.claims, agent: principalId, scopes: ["loops:runner"] },
+  };
 }
 
 describe("loops-api foundation", () => {
@@ -42,10 +83,10 @@ describe("loops-api foundation", () => {
   });
 
   test("status output redacts credentials embedded in API URLs", async () => {
-    const previousUrl = process.env.LOOPS_API_URL;
-    const previousToken = process.env.LOOPS_API_TOKEN;
-    process.env.LOOPS_API_URL = "https://user:fake-password@loops.example.test/api?token=fake-token";
-    process.env.LOOPS_API_TOKEN = "present-but-not-returned";
+    const previousUrl = process.env.HASNA_LOOPS_API_URL;
+    const previousToken = process.env.HASNA_LOOPS_API_KEY;
+    process.env.HASNA_LOOPS_API_URL = "https://user:fake-password@loops.example.test/api?token=fake-token";
+    process.env.HASNA_LOOPS_API_KEY = "present-but-not-returned";
     try {
       const mod = await import("./index.js");
       const status = JSON.stringify(mod.apiStatus());
@@ -54,68 +95,163 @@ describe("loops-api foundation", () => {
       expect(status).not.toContain("fake-token");
       expect(status).not.toContain("present-but-not-returned");
     } finally {
-      if (previousUrl === undefined) delete process.env.LOOPS_API_URL;
-      else process.env.LOOPS_API_URL = previousUrl;
-      if (previousToken === undefined) delete process.env.LOOPS_API_TOKEN;
-      else process.env.LOOPS_API_TOKEN = previousToken;
+      if (previousUrl === undefined) delete process.env.HASNA_LOOPS_API_URL;
+      else process.env.HASNA_LOOPS_API_URL = previousUrl;
+      if (previousToken === undefined) delete process.env.HASNA_LOOPS_API_KEY;
+      else process.env.HASNA_LOOPS_API_KEY = previousToken;
     }
   });
 
-  test("non-local serve fails closed without an API token", () => {
-    const result = spawnSync(process.execPath, [apiPath, "serve", "--host", "0.0.0.0", "--port", "0"], {
-      env: {
-        ...process.env,
-        LOOPS_API_TOKEN: "",
-        HASNA_LOOPS_API_TOKEN: "",
-      },
+  test("does not expose a dead standalone serve command", () => {
+    const result = spawnSync(process.execPath, [apiPath, "--help"], {
       encoding: "utf8",
       timeout: 5_000,
     });
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("non-local loops-serve binds require");
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toMatch(/^\s+serve\b/m);
+    expect(result.stdout).not.toContain("listening");
   });
 
-  test("non-local serve requires the configured bearer token", async () => {
-    const previousToken = process.env.LOOPS_API_TOKEN;
-    const previousHasnaToken = process.env.HASNA_LOOPS_API_TOKEN;
-    process.env.LOOPS_API_TOKEN = "test-api-token";
-    process.env.HASNA_LOOPS_API_TOKEN = "";
-
+  test("API construction requires both authentication and request-scoped storage", async () => {
     const mod = await import("./index.js");
-    const server = mod.createLoopsApiServer({ host: "0.0.0.0", port: 0 });
-    const url = `http://127.0.0.1:${server.port}/status`;
-    const v1Url = `http://127.0.0.1:${server.port}/v1/loops`;
-    try {
-      const missing = await fetch(url);
-      expect(missing.status).toBe(401);
-      const wrong = await fetch(url, { headers: { authorization: "Bearer wrong-token" } });
-      expect(wrong.status).toBe(401);
-      const ok = await fetch(url, { headers: { authorization: "Bearer test-api-token" } });
-      expect(ok.status).toBe(200);
-      const body = (await ok.json()) as { ok: boolean; service: string };
-      expect(body).toMatchObject({ ok: true, service: "loops-api" });
+    expect(() => mod.createLoopsApiServer({ host: "127.0.0.1", port: 0 })).toThrow("tenant authenticator");
+    expect(() => mod.createLoopsApiServer({
+      host: "127.0.0.1",
+      port: 0,
+      authenticator: { authenticate: async () => ({ ok: true, status: 200, principal: testPrincipal }) },
+    })).toThrow("request-scoped tenant storage");
+  });
 
-      const missingV1 = await fetch(v1Url, { method: "POST", body: "not-json" });
-      expect(missingV1.status).toBe(401);
-      const wrongV1 = await fetch(v1Url, { headers: { authorization: "Bearer wrong-token" } });
-      expect(wrongV1.status).toBe(401);
-      const authorizedV1 = await fetch(v1Url, { headers: { authorization: "Bearer test-api-token" } });
-      expect(authorizedV1.status).toBe(503);
-      expect(await authorizedV1.json()).toMatchObject({ ok: false, error: "storage_unconfigured" });
+  test("public readiness returns stable codes without backend error details", async () => {
+    const mod = await import("./index.js");
+    const failingStorage = {
+      listLoops: async () => { throw new Error("password=super-secret db.internal.example"); },
+    } as unknown as LoopStorageContract;
+    const server = createTestServer(mod, {
+      host: "127.0.0.1",
+      port: 0,
+      storage: failingStorage,
+    });
+    try {
+      const response = await fetch(apiUrl(server, "/ready"));
+      expect(response.status).toBe(503);
+      const body = JSON.stringify(await response.json());
+      expect(body).toContain('"code":"storage_unreachable"');
+      expect(body).not.toContain("detail");
+      expect(body).not.toContain("password");
     } finally {
       server.stop(true);
-      if (previousToken === undefined) delete process.env.LOOPS_API_TOKEN;
-      else process.env.LOOPS_API_TOKEN = previousToken;
-      if (previousHasnaToken === undefined) delete process.env.HASNA_LOOPS_API_TOKEN;
-      else process.env.HASNA_LOOPS_API_TOKEN = previousHasnaToken;
+    }
+  });
+
+  test("authentication backend failures return a stable 503 without credential details", async () => {
+    const mod = await import("./index.js");
+    const server = mod.createLoopsApiServer({
+      host: "127.0.0.1",
+      port: 0,
+      authenticator: {
+        authenticate: async () => { throw new Error("postgres://user:secret@db.internal/loops"); },
+      },
+      withTenantStorage: (_principal, fn) => fn(createSqliteLoopStorage(":memory:")),
+    });
+    try {
+      const response = await fetch(apiUrl(server, "/v1/loops"), {
+        headers: { "x-request-id": "auth-outage-test" },
+      });
+      expect(response.status).toBe(503);
+      const body = JSON.stringify(await response.json());
+      expect(body).toContain('"error":"auth_unavailable"');
+      expect(body).toContain('"requestId":"auth-outage-test"');
+      expect(body).not.toContain("postgres");
+      expect(body).not.toContain("secret");
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("internal storage failures never expose credential-bearing error messages", async () => {
+    const mod = await import("./index.js");
+    let committed = false;
+    let rolledBack = false;
+    const internalError = Object.assign(new Error("postgres://user:secret@db.internal/loops"), {
+      name: "postgres://name-secret@db.internal/loops",
+      code: "postgres://code-secret@db.internal/loops",
+      status: 400,
+    });
+    const failingStorage = {
+      listLoops: async () => { throw internalError; },
+    } as unknown as LoopStorageContract;
+    const server = mod.createLoopsApiServer({
+      host: "127.0.0.1",
+      port: 0,
+      authenticator: {
+        authenticate: async () => ({ ok: true as const, status: 200 as const, principal: testPrincipal }),
+      },
+      withTenantStorage: async (_principal, fn) => {
+        try {
+          const response = await fn(failingStorage);
+          committed = true;
+          return response;
+        } catch (error) {
+          rolledBack = true;
+          throw error;
+        }
+      },
+    });
+    const logged: string[] = [];
+    const originalError = console.error;
+    console.error = (...values: unknown[]) => { logged.push(values.map(String).join(" ")); };
+    try {
+      const response = await fetch(apiUrl(server, "/v1/loops"));
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ ok: false, error: "internal_error" });
+      expect(committed).toBe(false);
+      expect(rolledBack).toBe(true);
+      expect(logged.join("\n")).not.toContain("secret");
+      expect(logged.join("\n")).not.toContain("postgres");
+      expect(logged.join("\n")).not.toContain("/v1/loops");
+    } finally {
+      console.error = originalError;
+      server.stop(true);
+    }
+  });
+
+  test("api command failures use stable logs without provider details", async () => {
+    const mod = await import("./index.js");
+    const logged: string[] = [];
+    const originalError = console.error;
+    console.error = (...values: unknown[]) => { logged.push(values.map(String).join(" ")); };
+    try {
+      mod.logApiCommandFailure(Object.assign(new Error("postgres://user:secret@db.internal/loops"), {
+        name: "postgres://name-secret@db.internal/loops",
+        code: "postgres://code-secret@db.internal/loops",
+      }));
+      expect(logged).toEqual([JSON.stringify({ evt: "loops_api_command_failed", errorType: "error" })]);
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  test("domain errors expose stable codes without echoing identifiers", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+    const secretIdentifier = "postgres://user:secret@db.internal/loops";
+    try {
+      const response = await fetch(apiUrl(server, `/v1/loops/${encodeURIComponent(secretIdentifier)}`));
+      expect(response.status).toBe(404);
+      expect(await response.json()).toEqual({ ok: false, error: "loop_not_found" });
+    } finally {
+      server.stop(true);
+      await storage.close();
     }
   });
 
   test("loops routes use injected storage and redact command environments", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
 
     try {
       const createResponse = await fetch(apiUrl(server, "/v1/loops"), {
@@ -176,7 +312,7 @@ describe("loops-api foundation", () => {
   test("POST /v1/import upserts id-preserving rows, pauses imported loops by default, is idempotent, and skips running runs", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
 
     const loop = {
       id: "loop-import-1",
@@ -285,7 +421,7 @@ describe("loops-api foundation", () => {
   test("workflow definition APIs list/count/get and imported workflow-loop refs remain represented but paused", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
 
     const workflow = {
       id: "workflow-import-1",
@@ -382,7 +518,7 @@ describe("loops-api foundation", () => {
   test("POST /v1/import can explicitly preserve imported loop scheduling", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
     const loop = {
       id: "loop-import-preserve",
       name: "imported-loop-preserve",
@@ -420,7 +556,7 @@ describe("loops-api foundation", () => {
   test("route invocation and work-item POST routes preserve caller ids", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
     try {
       const invocationResponse = await fetch(apiUrl(server, "/v1/invocations"), {
         method: "POST",
@@ -476,7 +612,7 @@ describe("loops-api foundation", () => {
   test("PATCH only touches fields present in the body and never wipes omitted schedule state", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
 
     try {
       const loop = await storage.createLoop({
@@ -530,7 +666,7 @@ describe("loops-api foundation", () => {
   test("run listing redacts output unless explicitly requested", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
 
     try {
       const loop = await storage.createLoop({
@@ -606,7 +742,7 @@ describe("loops-api foundation", () => {
   test("run receipt routes write, read, and filter bounded receipts", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
 
     try {
       const writeResponse = await fetch(apiUrl(server, "/v1/receipts"), {
@@ -648,7 +784,7 @@ describe("loops-api foundation", () => {
 
   test("storage-backed routes fail closed without configured storage", async () => {
     const mod = await import("./index.js");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0 });
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0 }, runnerPrincipal("spark01"));
 
     try {
       const response = await fetch(apiUrl(server, "/v1/loops"));
@@ -661,17 +797,18 @@ describe("loops-api foundation", () => {
 
   test("mutating routes enforce JSON content type and bounded bodies", async () => {
     const mod = await import("./index.js");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, bodyLimitBytes: 8 });
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, bodyLimitBytes: 8, storage });
 
     try {
-      const unsupported = await fetch(apiUrl(server, "/v1/runners/register"), {
+      const unsupported = await fetch(apiUrl(server, "/v1/runners/claim"), {
         method: "POST",
         body: "{}",
       });
       expect(unsupported.status).toBe(415);
       expect(await unsupported.json()).toMatchObject({ ok: false, error: "unsupported_media_type" });
 
-      const malformed = await fetch(apiUrl(server, "/v1/runners/register"), {
+      const malformed = await fetch(apiUrl(server, "/v1/runners/claim"), {
         method: "POST",
         headers: jsonHeaders,
         body: "{",
@@ -679,7 +816,7 @@ describe("loops-api foundation", () => {
       expect(malformed.status).toBe(400);
       expect(await malformed.json()).toMatchObject({ ok: false, error: "invalid_json" });
 
-      const tooLarge = await fetch(apiUrl(server, "/v1/runners/register"), {
+      const tooLarge = await fetch(apiUrl(server, "/v1/runners/claim"), {
         method: "POST",
         headers: jsonHeaders,
         body: JSON.stringify({ machineId: "spark01" }),
@@ -688,22 +825,15 @@ describe("loops-api foundation", () => {
       expect(await tooLarge.json()).toMatchObject({ ok: false, error: "body_too_large" });
     } finally {
       server.stop(true);
+      await storage.close();
     }
   });
 
-  test("runner protocol endpoints fail closed without storage except registration", async () => {
+  test("runner protocol endpoints fail closed without storage", async () => {
     const mod = await import("./index.js");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0 });
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0 }, runnerPrincipal("spark01"));
 
     try {
-      const response = await fetch(apiUrl(server, "/v1/runners/register"), {
-        method: "POST",
-        headers: { "content-type": "application/vnd.open-loops+json" },
-        body: JSON.stringify({ machineId: "spark01", labels: { host: "spark01" } }),
-      });
-      expect(response.status).toBe(200);
-      expect(await response.json()).toMatchObject({ ok: true, runner: { id: "spark01", machineId: "spark01" } });
-
       for (const action of ["heartbeat", "finalize", "evidence"]) {
         const runResponse = await fetch(apiUrl(server, `/v1/runs/run-1/${action}`), {
           method: "POST",
@@ -730,11 +860,73 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("machine credentials cannot claim as a different runner identity", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const machinePrincipal = {
+      ...testPrincipal,
+      principalId: "machine-bound",
+      tokenKind: "machine" as const,
+      roles: ["worker" as const],
+      scopes: ["loops:runner"],
+    };
+    const server = mod.createLoopsApiServer({
+      host: "127.0.0.1",
+      port: 0,
+      authenticator: {
+        authenticate: async () => ({ ok: true as const, status: 200 as const, principal: machinePrincipal }),
+      },
+      withTenantStorage: (_principal, fn) => fn(storage),
+    });
+    try {
+      const response = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "machine-spoofed" }),
+      });
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ ok: false, error: "runner_identity_mismatch" });
+
+      const machineSpoof = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "machine-bound", machineId: "machine-spoofed" }),
+      });
+      expect(machineSpoof.status).toBe(403);
+      expect(await machineSpoof.json()).toMatchObject({ ok: false, error: "runner_identity_mismatch" });
+
+      const hostnameSpoof = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "machine-bound", hostname: "machine-spoofed" }),
+      });
+      expect(hostnameSpoof.status).toBe(403);
+      expect(await hostnameSpoof.json()).toMatchObject({ ok: false, error: "runner_identity_mismatch" });
+
+      await storage.createLoop({
+        name: "alias-collision",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "command", command: "true" },
+        machine: { id: "machine-canonical", requestedId: "machine-bound" },
+      }, new Date("2025-12-31T00:00:00Z"));
+      const aliasCollision = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "machine-bound", now: "2026-01-01T00:00:00Z" }),
+      });
+      expect(aliasCollision.status).toBe(200);
+      expect(await aliasCollision.json()).toMatchObject({ ok: true, claims: [] });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
   test("runner claim and run finalization are fenced by claim token", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
-    let now = new Date("2026-01-01T00:00:00Z");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage, now: () => now });
+    let now = new Date("2026-01-01T00:00:05Z");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage, now: () => now }, runnerPrincipal("runner-a"));
 
     try {
       const loop = await storage.createLoop(
@@ -746,14 +938,6 @@ describe("loops-api foundation", () => {
         },
         new Date("2025-12-31T00:00:00Z"),
       );
-
-      const register = await fetch(apiUrl(server, "/v1/runners/register"), {
-        method: "POST",
-        headers: jsonHeaders,
-        body: JSON.stringify({ runnerId: "runner-a", machineId: "machine-a", labels: { os: "linux" } }),
-      });
-      expect(register.status).toBe(200);
-      expect(await register.json()).toMatchObject({ ok: true, runner: { id: "runner-a", machineId: "machine-a" } });
 
       const claimResponse = await fetch(apiUrl(server, "/v1/runners/claim"), {
         method: "POST",
@@ -769,10 +953,33 @@ describe("loops-api foundation", () => {
       expect(claimed.claims[0]!.run.status).toBe("running");
       expect(claimed.claims[0]!.claimToken).toBeString();
 
+      const otherRunner = createTestServer(
+        mod,
+        { host: "127.0.0.1", port: 0, storage, now: () => now },
+        runnerPrincipal("runner-b"),
+      );
+      try {
+        for (const [action, extra] of [
+          ["heartbeat", {}],
+          ["evidence", { evidence: { log: "stolen" } }],
+          ["finalize", { status: "succeeded", stdout: "", stderr: "" }],
+        ] as const) {
+          const response = await fetch(apiUrl(otherRunner, `/v1/runs/${claimed.claims[0]!.run.id}/${action}`), {
+            method: "POST",
+            headers: jsonHeaders,
+            body: JSON.stringify({ claimToken: claimed.claims[0]!.claimToken, ...extra }),
+          });
+          expect(response.status).toBe(403);
+          expect(await response.json()).toMatchObject({ ok: false, error: "runner_identity_mismatch" });
+        }
+      } finally {
+        otherRunner.stop(true);
+      }
+
       const duplicate = await fetch(apiUrl(server, "/v1/runners/claim"), {
         method: "POST",
         headers: jsonHeaders,
-        body: JSON.stringify({ runnerId: "runner-b", now: "2026-01-01T00:00:00.100Z", maxClaims: 1 }),
+        body: JSON.stringify({ runnerId: "runner-a", now: "2026-01-01T00:00:00.100Z", maxClaims: 1 }),
       });
       expect(duplicate.status).toBe(200);
       expect(await duplicate.json()).toMatchObject({ ok: true, claims: [] });
@@ -807,7 +1014,7 @@ describe("loops-api foundation", () => {
       expect(evidence.status).toBe(200);
       expect(JSON.stringify(await evidence.json())).not.toContain("abcdefghijklmnop");
 
-      now = new Date("2026-01-01T00:00:02Z");
+      now = new Date("2026-01-01T00:00:07Z");
       const wrongFinalize = await fetch(apiUrl(server, `/v1/runs/${runId}/finalize`), {
         method: "POST",
         headers: jsonHeaders,
@@ -840,11 +1047,60 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("single-run recovery never sweeps another expired run", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const claimedAt = new Date("2026-01-01T00:00:00Z");
+    const recoveredAt = new Date("2026-01-01T00:00:02Z");
+    const loops = await Promise.all(["recover-one", "recover-two"].map((name) => storage.createLoop({
+      name,
+      schedule: { type: "interval", everyMs: 60_000 },
+      target: { type: "command", command: "true" },
+      leaseMs: 1_000,
+    }, claimedAt)));
+    const first = await storage.claimRun(loops[0]!, claimedAt.toISOString(), "runner-a", claimedAt);
+    const second = await storage.claimRun(loops[1]!, claimedAt.toISOString(), "runner-b", claimedAt);
+    expect(first).toBeTruthy();
+    expect(second).toBeTruthy();
+    const server = createTestServer(
+      mod,
+      { host: "127.0.0.1", port: 0, storage, now: () => recoveredAt },
+      runnerPrincipal("runner-a"),
+    );
+    try {
+      const intruder = createTestServer(
+        mod,
+        { host: "127.0.0.1", port: 0, storage, now: () => recoveredAt },
+        runnerPrincipal("runner-b"),
+      );
+      try {
+        const denied = await fetch(apiUrl(intruder, `/v1/runs/${first!.run.id}/recover`), { method: "POST" });
+        expect(denied.status).toBe(403);
+        expect(await denied.json()).toMatchObject({ ok: false, error: "run_claim_owner_mismatch" });
+        expect(await storage.getRun(first!.run.id)).toMatchObject({ status: "running" });
+
+        const sweep = await fetch(apiUrl(intruder, "/v1/leases/recover"), { method: "POST" });
+        expect(sweep.status).toBe(403);
+        expect(await sweep.json()).toMatchObject({ ok: false, error: "maintenance_principal_required" });
+      } finally {
+        intruder.stop(true);
+      }
+
+      const response = await fetch(apiUrl(server, `/v1/runs/${first!.run.id}/recover`), { method: "POST" });
+      expect(response.status).toBe(200);
+      expect(await storage.getRun(first!.run.id)).toMatchObject({ status: "abandoned" });
+      expect(await storage.getRun(second!.run.id)).toMatchObject({ status: "running" });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
   test("runner finalization uses server time for stale-claim fencing", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
-    let now = new Date("2026-01-01T00:00:00Z");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage, now: () => now });
+    let now = new Date("2026-01-01T00:00:05Z");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage, now: () => now }, runnerPrincipal("runner-a"));
 
     try {
       const loop = await storage.createLoop(
@@ -867,7 +1123,7 @@ describe("loops-api foundation", () => {
       };
       expect(claimed.claims).toHaveLength(1);
 
-      now = new Date("2026-01-01T00:00:02Z");
+      now = new Date("2026-01-01T00:00:07Z");
       const staleFinalize = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/finalize`), {
         method: "POST",
         headers: jsonHeaders,
@@ -888,20 +1144,20 @@ describe("loops-api foundation", () => {
     }
   });
 
-  test("runner claim skips workflow loops until remote workflow execution is supported", async () => {
+  test("runner claim returns workflow loops with executable workflow payload and claim-fenced workflow APIs", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
-    const server = mod.createLoopsApiServer({
+    const server = createTestServer(mod, {
       host: "127.0.0.1",
       port: 0,
       storage,
       now: () => new Date("2026-01-01T00:00:00Z"),
-    });
+    }, runnerPrincipal("runner-a"));
 
     try {
       const workflow = await storage.createWorkflow({
-        name: "api-workflow-claim-skip",
-        steps: [{ id: "step", target: { type: "command", command: "true" } }],
+        name: "api-workflow-claim-execute",
+        steps: [{ id: "step", target: { type: "command", command: "printf workflow-ok", shell: true } }],
       });
       const loop = await storage.createLoop(
         {
@@ -918,8 +1174,187 @@ describe("loops-api foundation", () => {
         body: JSON.stringify({ runnerId: "runner-a", now: "2026-01-01T00:00:00Z", maxClaims: 1 }),
       });
       expect(response.status).toBe(200);
-      expect(await response.json()).toMatchObject({ ok: true, claims: [] });
-      expect(await storage.listRuns({ loopId: loop.id })).toHaveLength(0);
+      const claimed = (await response.json()) as {
+        claims: Array<{
+          claimToken: string;
+          loop: { id: string; target: { type: string; workflowId?: string } };
+          run: { id: string; status: string };
+          workflow?: WorkflowSpec;
+        }>;
+      };
+      expect(claimed.claims).toHaveLength(1);
+      expect(claimed.claims[0]).toMatchObject({
+        loop: { id: loop.id, target: { type: "workflow", workflowId: workflow.id } },
+        run: { status: "running" },
+        workflow: { id: workflow.id, steps: [{ id: "step", target: { type: "command", command: "printf workflow-ok" } }] },
+      });
+      expect(claimed.claims[0]!.claimToken).toBeString();
+      expect(await storage.listRuns({ loopId: loop.id })).toHaveLength(1);
+
+      const createWorkflowRun = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claimed.claims[0]!.claimToken,
+          idempotencyKey: `${claimed.claims[0]!.run.id}:workflow:${workflow.id}`,
+        }),
+      });
+      expect(createWorkflowRun.status).toBe(200);
+      const created = (await createWorkflowRun.json()) as { workflowRun: { id: string; loopRunId: string; workflowId: string; status: string } };
+      expect(created.workflowRun).toMatchObject({ loopRunId: claimed.claims[0]!.run.id, workflowId: workflow.id, status: "running" });
+
+      const staleStart = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/steps/step/start`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ claimToken: "wrong-token" }),
+      });
+      expect(staleStart.status).toBe(409);
+      expect(await staleStart.json()).toMatchObject({ ok: false, error: "stale_claim" });
+
+      const start = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/steps/step/start`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ claimToken: claimed.claims[0]!.claimToken }),
+      });
+      expect(start.status).toBe(200);
+      expect(await start.json()).toMatchObject({ step: { stepId: "step", status: "running" } });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("runner-scoped goal APIs persist workflow goal state behind the claim token", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, {
+      host: "127.0.0.1",
+      port: 0,
+      storage,
+      now: () => new Date("2026-01-01T00:00:00Z"),
+    }, runnerPrincipal("runner-a"));
+
+    try {
+      const workflow = await storage.createWorkflow({
+        name: "api-workflow-goal-state",
+        steps: [{ id: "step", target: { type: "command", command: "printf workflow-goal", shell: true } }],
+      });
+      await storage.createLoop(
+        {
+          name: "api-workflow-goal-loop",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "workflow", workflowId: workflow.id },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+
+      const claimResponse = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "runner-a", now: "2026-01-01T00:00:00Z", maxClaims: 1 }),
+      });
+      expect(claimResponse.status).toBe(200);
+      const claimed = (await claimResponse.json()) as {
+        claims: Array<{ claimToken: string; run: { id: string }; workflow?: WorkflowSpec }>;
+      };
+      expect(claimed.claims).toHaveLength(1);
+      expect(claimed.claims[0]!.workflow?.id).toBe(workflow.id);
+
+      const runId = claimed.claims[0]!.run.id;
+      const claimToken = claimed.claims[0]!.claimToken;
+      const createWorkflowRun = await fetch(apiUrl(server, `/v1/runs/${runId}/workflow-runs`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ claimToken, idempotencyKey: `${runId}:workflow:${workflow.id}` }),
+      });
+      expect(createWorkflowRun.status).toBe(200);
+      const createdWorkflowRun = (await createWorkflowRun.json()) as { workflowRun: { id: string; workflowId: string; loopRunId: string } };
+      expect(createdWorkflowRun.workflowRun).toMatchObject({ workflowId: workflow.id, loopRunId: runId });
+
+      const staleCreate = await fetch(apiUrl(server, `/v1/runs/${runId}/goals`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ claimToken: "wrong-token", objective: "must fail" }),
+      });
+      expect(staleCreate.status).toBe(409);
+      expect(await staleCreate.json()).toMatchObject({ ok: false, error: "stale_claim" });
+
+      const createGoal = await fetch(apiUrl(server, `/v1/runs/${runId}/goals`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken,
+          input: {
+            objective: "runner-scoped workflow goal",
+            workflowRunId: createdWorkflowRun.workflowRun.id,
+            workflowStepId: "step",
+          },
+        }),
+      });
+      expect(createGoal.status).toBe(200);
+      const createdGoal = (await createGoal.json()) as {
+        goal: { goalId: string; loopRunId: string; workflowId: string; workflowRunId: string; workflowStepId: string };
+      };
+      expect(createdGoal.goal).toMatchObject({
+        loopRunId: runId,
+        workflowId: workflow.id,
+        workflowRunId: createdWorkflowRun.workflowRun.id,
+        workflowStepId: "step",
+      });
+      const goalId = createdGoal.goal.goalId;
+
+      const findGoal = await fetch(apiUrl(server, `/v1/runs/${runId}/goals/find`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ claimToken, context: { workflowRunId: createdWorkflowRun.workflowRun.id, workflowStepId: "step" } }),
+      });
+      expect(findGoal.status).toBe(200);
+      expect(await findGoal.json()).toMatchObject({ goal: { goalId } });
+
+      const createNodes = await fetch(apiUrl(server, `/v1/runs/${runId}/goals/${goalId}/plan-nodes`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken,
+          nodes: [
+            { key: "plan", objective: "Plan the step", priority: 1 },
+            { key: "execute", objective: "Run the step", dependsOn: ["plan"] },
+          ],
+        }),
+      });
+      expect(createNodes.status).toBe(200);
+      expect(await createNodes.json()).toMatchObject({
+        nodes: [
+          { key: "plan", status: "pending", ready: true },
+          { key: "execute", status: "pending", ready: false },
+        ],
+      });
+
+      const updateNode = await fetch(apiUrl(server, `/v1/runs/${runId}/goals/${goalId}/plan-nodes/plan`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ claimToken, status: "complete", ready: false, tokensUsed: 12, timeUsedSeconds: 3 }),
+      });
+      expect(updateNode.status).toBe(200);
+      expect(await updateNode.json()).toMatchObject({ node: { key: "plan", status: "complete", ready: false, tokensUsed: 12, timeUsedSeconds: 3 } });
+
+      const event = await fetch(apiUrl(server, `/v1/runs/${runId}/goals/${goalId}/events`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ claimToken, phase: "execute", status: "active", nodeKey: "execute", tokensUsed: 7, evidence: { step: "started" } }),
+      });
+      expect(event.status).toBe(200);
+      expect(await event.json()).toMatchObject({
+        goalRun: { goalId, loopRunId: runId, workflowRunId: createdWorkflowRun.workflowRun.id, workflowStepId: "step", phase: "execute", status: "active" },
+      });
+
+      const status = await fetch(apiUrl(server, `/v1/runs/${runId}/goals/${goalId}/status`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ claimToken, status: "complete" }),
+      });
+      expect(status.status).toBe(200);
+      expect(await status.json()).toMatchObject({ goal: { goalId, status: "complete" } });
     } finally {
       server.stop(true);
       await storage.close();
@@ -929,12 +1364,12 @@ describe("loops-api foundation", () => {
   test("runner claim returns only one running claim per overlap-skip loop per poll", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
-    const server = mod.createLoopsApiServer({
+    const server = createTestServer(mod, {
       host: "127.0.0.1",
       port: 0,
       storage,
       now: () => new Date("2026-01-01T00:00:05Z"),
-    });
+    }, runnerPrincipal("runner-a"));
 
     try {
       const loop = await storage.createLoop(
@@ -968,10 +1403,72 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("runner claim reclaims an expired overlap-skip lease through the API", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    let now = new Date("2026-01-01T00:00:05Z");
+    const server = createTestServer(mod, {
+      host: "127.0.0.1",
+      port: 0,
+      storage,
+      now: () => now,
+    }, runnerPrincipal("runner-a"));
+
+    try {
+      const loop = await storage.createLoop(
+        {
+          name: "api-skip-expired-reclaim-loop",
+          schedule: { type: "interval", everyMs: 1_000 },
+          target: { type: "command", command: "true" },
+          catchUp: "all",
+          catchUpLimit: 3,
+          overlap: "skip",
+          leaseMs: 1_000,
+        },
+        new Date("2026-01-01T00:00:00Z"),
+      );
+
+      const first = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "runner-a", maxClaims: 1 }),
+      });
+      expect(first.status).toBe(200);
+      const firstClaimed = (await first.json()) as {
+        claims: Array<{ claimToken?: string; loop: { id: string }; run: { id: string; scheduledFor: string; status: string } }>;
+      };
+      expect(firstClaimed.claims).toHaveLength(1);
+      expect(firstClaimed.claims[0]).toMatchObject({ loop: { id: loop.id }, run: { status: "running" } });
+      const originalToken = firstClaimed.claims[0]!.claimToken;
+
+      now = new Date("2026-01-01T00:00:07Z");
+      const reclaimed = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "runner-a", maxClaims: 1 }),
+      });
+      expect(reclaimed.status).toBe(200);
+      const reclaimedClaimed = (await reclaimed.json()) as {
+        claims: Array<{ claimToken?: string; loop: { id: string }; run: { id: string; scheduledFor: string; status: string } }>;
+      };
+      expect(reclaimedClaimed.claims).toHaveLength(1);
+      expect(reclaimedClaimed.claims[0]).toMatchObject({
+        loop: { id: loop.id },
+        run: { id: firstClaimed.claims[0]!.run.id, status: "running" },
+      });
+      expect(reclaimedClaimed.claims[0]!.claimToken).toBeTruthy();
+      expect(reclaimedClaimed.claims[0]!.claimToken).not.toBe(originalToken);
+      expect(await storage.listRuns({ loopId: loop.id, status: "running" })).toHaveLength(1);
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
   test("GET /v1/loops paginates with offset, clamps oversized limit, and filters by name", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
-    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
     try {
       for (let i = 0; i < 5; i += 1) {
         await storage.createLoop({

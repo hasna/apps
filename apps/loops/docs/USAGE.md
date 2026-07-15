@@ -20,11 +20,12 @@ defines `self_hosted` and `cloud` contracts for non-local control planes:
 - `self_hosted`: the Hasna-owned AWS/RDS control-plane deployment, served by
   `loops-serve` and backed by Postgres, with the embeddable `loops-api` contract
   shared by serve, SDK, and tests. This release exposes storage-backed `/v1`
-  loop CRUD and run listing, runner registration/claim/heartbeat/finalize
-  foundations, and local migration previews.
+  loop CRUD and run listing, runner claim/lease heartbeat/finalize foundations,
+  and local migration previews. Durable runner registration is not exposed
+  until the machine-record lifecycle is implemented.
 - `cloud`: hosted control-plane contract; this release exposes client/runner
-  status only, and requires `LOOPS_CLOUD_API_URL` plus `LOOPS_CLOUD_TOKEN` or
-  `HASNA_LOOPS_CLOUD_TOKEN` before status can report ready.
+  status only, and requires `HASNA_LOOPS_API_URL` plus
+  `HASNA_LOOPS_API_KEY` before status can report ready.
 
 Scheduler state is explicit in status JSON. `schedulerState.localStore` is
 SQLite plus local run artifact files: authoritative in `local`, cache/spool in
@@ -48,12 +49,11 @@ loops self-hosted status
 loops self-hosted migrate --dry-run
 loops self-hosted push --dry-run
 loops self-hosted pull --dry-run
-loops self-hosted runner-register --runner-id <id> --machine-id <machine>
-loops self-hosted runner-register --runner-id <id> --machine-id <machine> --apply
 loops cloud status
 loops-api status
 loops-serve version
-HASNA_LOOPS_DATABASE_URL=... loops-serve migrate --dry-run
+HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --dry-run
+HASNA_LOOPS_DATABASE_URL=... HASNA_LOOPS_AUTH_DATABASE_URL=... loops-serve serve
 loops-runner status
 ```
 
@@ -100,12 +100,12 @@ loops self-hosted pull --dry-run
 Self-hosted push is safe by default: workflows are archived and loops are
 paused with scheduling pointers cleared, including existing same-id rows that
 need re-neutralizing. `--replace` permits broader same-id data updates, but is
-not required for that safety normalization. Use `loops self-hosted
-runner-register` to verify runner registration against an API, then use
-`loops-runner run-once` for the current bounded non-workflow
-claim/execute/finalize protocol. `loops-serve migrate` applies the Postgres
-schema and `api_keys` table for a self-hosted control-plane host.
-Runner registration is preview-only unless `--apply` is present.
+not required for that safety normalization. `loops-runner run-once` uses the
+current bounded non-workflow
+claim/execute/finalize protocol. Durable runner registration is intentionally
+absent until the control plane persists and verifies machine records.
+`loops-serve migrate` applies the Postgres schema and `api_keys` table for a
+self-hosted control-plane host.
 
 ## Install
 

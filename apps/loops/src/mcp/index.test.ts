@@ -12,7 +12,13 @@ function cleanEnv(overrides: Record<string, string>): Record<string, string> {
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) env[key] = value;
   }
-  return { ...env, ...overrides };
+  return {
+    ...env,
+    HASNA_LOOPS_STORAGE_MODE: "local",
+    HASNA_LOOPS_API_URL: "",
+    HASNA_LOOPS_API_KEY: "",
+    ...overrides,
+  };
 }
 
 function textPayload(result: Awaited<ReturnType<Client["callTool"]>>): unknown {
@@ -471,6 +477,7 @@ describe("open-loops MCP server", () => {
       },
     });
     const cloudEnv = {
+      HASNA_LOOPS_STORAGE_MODE: "self_hosted",
       HASNA_LOOPS_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_LOOPS_API_KEY: "test-bearer-key",
       LOOPS_MCP_ALLOW_MUTATIONS: "true",
@@ -528,6 +535,7 @@ describe("open-loops MCP server", () => {
       }
     });
     const cloudEnv = {
+      HASNA_LOOPS_STORAGE_MODE: "self_hosted",
       HASNA_LOOPS_API_URL: "http://127.0.0.1:1",
       HASNA_LOOPS_API_KEY: "test-bearer-key",
     };

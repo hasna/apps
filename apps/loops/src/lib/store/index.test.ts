@@ -36,12 +36,29 @@ describe("getStore resolver", () => {
     expect(store.transport).toBe("cloud-http");
     expect(isCloudStore({ HASNA_LOOPS_API_URL: "https://loops.example.test", HASNA_LOOPS_API_KEY: "k" })).toBe(true);
   });
+
+  test("rejects partial remote configuration instead of opening LocalStore", () => {
+    expect(() => getStore({ HASNA_LOOPS_API_URL: "https://loops.example.test" })).toThrow("requires both");
+    expect(() => getStore({ HASNA_LOOPS_API_KEY: "k" })).toThrow("requires both");
+    expect(() => getStore({ HASNA_LOOPS_STORAGE_MODE: "self_hosted" })).toThrow("requires both");
+    expect(() => getStore({ HASNA_LOOPS_STORAGE_MODE: "cloud" })).toThrow("requires both");
+  });
 });
 
 describe("ApiStore end-to-end against the real /v1 server", () => {
   test("loops + workflows + goals + receipts + history route to the hosted API, not local sqlite", async () => {
     const storage = createSqliteLoopStorage(":memory:");
-    const server = createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+    const principal = {
+      tenantId: "tenant-test", principalId: "principal-test", requestId: "request-test",
+      kid: "kid-test", agent: "principal-test", scopes: ["loops:*"],
+      roles: ["admin" as const], tokenKind: "api_key" as const,
+      claims: { v: 1, kid: "kid-test", app: "loops", agent: "principal-test", scopes: ["loops:*"], iat: 1, exp: null },
+    };
+    const server = createLoopsApiServer({
+      host: "127.0.0.1", port: 0,
+      authenticator: { authenticate: async () => ({ ok: true as const, status: 200 as const, principal }) },
+      withTenantStorage: (_principal, fn) => fn(storage),
+    });
     try {
       const port = (server as { port: number }).port;
       const store = apiStoreForServer(port);
