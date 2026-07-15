@@ -25,6 +25,9 @@ shield secrets .
 # Explicit historical scan (still redacted in terminal/JSON/SARIF output)
 shield secrets . --git-history
 
+# Publishable OSS policy check with redacted output
+shield oss-secrets-policy . --strict
+
 # Check if a package is compromised (axios/litellm/Trivy supply chain attacks)
 shield check-package axios 1.14.1
 shield check-package litellm 1.82.8 --ecosystem pypi
@@ -131,6 +134,7 @@ API endpoints:
 ```
 shield scan [path]              Run shield scan
 shield secrets [options] [path] Focused secret-exposure scan (file-only by default)
+shield oss-secrets-policy [roots...] Evaluate publishable OSS secret-scan policy
 shield findings                 List findings
 shield explain <id>             AI explanation for a finding
 shield fix <id>                 AI-suggested fix
@@ -209,6 +213,12 @@ Existing database rows are sanitized when read but are not destructively
 rewritten by this update; purge or migration of historical local state requires
 separate incident-owner authorization. Credential-finding fingerprints may
 change once newly scanned records use the redacted persistence form.
+
+For publishable OSS packages, see
+[`docs/oss-secret-scan-policy.md`](docs/oss-secret-scan-policy.md). The policy
+requires a `check:secrets` script, prepublish/prepack coverage, release or CI
+coverage, explicit vendored/upstream fixture handling, and owner/reason/expiry
+metadata plus a rule-specific fixture path for any narrow fixture allowlist.
 
 ## Storage
 

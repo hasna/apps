@@ -10,7 +10,10 @@
     "./schemas": { "import": "./dist/schemas.js", "types": "./dist/schemas.d.ts" }
   },
   "scripts": {
+    "check:secrets": "bun ../src/cli/index.tsx oss-secrets-policy . --strict",
     "build": "bun build src/index.ts src/schemas.ts --outdir dist --target node && tsc -p tsconfig.json --emitDeclarationOnly",
+    "prepublishOnly": "bun run check:secrets && bun run build",
+    "release:check": "bun run check:secrets",
     "test": "bun test"
   },
   "dependencies": {
