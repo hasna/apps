@@ -46,7 +46,10 @@ phases:
       - export TEST_DSN="postgres://todos:${DB_CREDENTIAL}@todos-postgres:5432/todos?sslmode=verify-full"
       - export SIGNING_MATERIAL=$(head -c 48 /dev/urandom | base64 | tr -d '\n')
       - docker run --rm --network "${TEST_NETWORK}" -e HASNA_TODOS_DATABASE_URL="${TEST_DSN}" -e PGSSLROOTCERT=/tls/ca.crt -v /tmp/todos-tls:/tls:ro "${IMAGE}" bun dist/server/index.js migrate
-      - docker run --rm --network "${TEST_NETWORK}" -e DATABASE_URL="${TEST_DSN}" -e PGSSLROOTCERT=/tls/ca.crt -v /tmp/todos-tls:/tls:ro --entrypoint bun "${IMAGE}" -e 'const s=new Bun.SQL(process.env.DATABASE_URL); await s`select 1`; await s.end(); console.log("TLS verify-full positive: PASS")'
+      - >-
+        docker run --rm --network "${TEST_NETWORK}" -e DATABASE_URL="${TEST_DSN}"
+        -e PGSSLROOTCERT=/tls/ca.crt -v /tmp/todos-tls:/tls:ro --entrypoint bun "${IMAGE}"
+        -e 'const s=new Bun.SQL(process.env.DATABASE_URL); await s`select 1`; await s.end(); console.log("TLS verify-full positive: PASS")'
       - set +e; docker run --rm --network "${TEST_NETWORK}" -e DATABASE_URL="${TEST_DSN}" -e PGSSLROOTCERT=/tls/wrong-ca.crt -v /tmp/todos-tls:/tls:ro --entrypoint bun "${IMAGE}" -e 'const s=new Bun.SQL(process.env.DATABASE_URL); await s`select 1`' >/tmp/wrong-ca.log 2>&1; wrong_ca_rc=$?; set -e; test "$wrong_ca_rc" -ne 0
       - set +e; docker run --rm --network "${TEST_NETWORK}" -e DATABASE_URL="postgres://todos:${DB_CREDENTIAL}@wrong-postgres:5432/todos?sslmode=verify-full" -e PGSSLROOTCERT=/tls/ca.crt -v /tmp/todos-tls:/tls:ro --entrypoint bun "${IMAGE}" -e 'const s=new Bun.SQL(process.env.DATABASE_URL); await s`select 1`' >/tmp/wrong-host.log 2>&1; wrong_host_rc=$?; set -e; test "$wrong_host_rc" -ne 0
       - set +x
