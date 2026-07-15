@@ -18,18 +18,55 @@ describe("server image build context", () => {
     expect(dockerfile).not.toContain("vendored tarball");
   });
 
-  test("pins and patches the runner base above the Debian OpenSSL security floor", () => {
+  test("pins the native ARM64 runner to the reviewed Bun musl manifest", () => {
     const dockerfile = readFileSync(join(root, "Dockerfile"), "utf8");
 
     expect(dockerfile).toContain(
-      "ARG BUN_IMAGE=oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4",
+      "ARG BUN_IMAGE=oven/bun:1.3.14-alpine@sha256:3c9ab1a521c82144dff537125695017a0480d3a13088fba7e012cfae0f63146f",
     );
-    expect(dockerfile).toContain("ARG OPENSSL_VERSION=3.5.6-1~deb13u2");
-    expect(dockerfile).toContain('"openssl=${OPENSSL_VERSION}"');
-    expect(dockerfile).toContain('"libssl3t64=${OPENSSL_VERSION}"');
-    expect(dockerfile).toContain('"openssl-provider-legacy=${OPENSSL_VERSION}"');
-    expect(dockerfile).toContain("dpkg-query -W openssl libssl3t64 openssl-provider-legacy");
+    expect(dockerfile).toContain("FROM --platform=linux/arm64 ${BUN_IMAGE} AS base");
+    expect(dockerfile).toContain('test "$(bun --version)" = "1.3.14"');
+    expect(dockerfile).toContain('test "$(apk info -v musl)" = "musl-1.2.5-r12"');
+    expect(dockerfile).toContain("! apk info -e glibc");
+    expect(dockerfile).not.toContain("apt-get");
+    expect(dockerfile).not.toContain("dpkg-query");
     expect(dockerfile).not.toMatch(/^FROM(?:\s+--platform=\S+)?\s+oven\/bun:(?:1|latest)(?:\s|$)/m);
+  });
+
+  test("preserves bash-backed runtime behavior without adding absent host tools", () => {
+    const dockerfile = readFileSync(join(root, "Dockerfile"), "utf8");
+
+    expect(dockerfile).toContain("ARG BASH_VERSION=5.2.37-r0");
+    expect(dockerfile).toContain('apk add --no-cache "bash=${BASH_VERSION}"');
+    expect(dockerfile).toContain('test "$(apk info -v bash)" = "bash-${BASH_VERSION}"');
+    expect(dockerfile).toContain("! command -v git");
+    expect(dockerfile).toContain("! command -v tmux");
+    expect(dockerfile).not.toMatch(/apk add[^\n]*(?:git|tmux)/);
+  });
+
+  test("keeps the default and migration command contracts explicit", () => {
+    const dockerfile = readFileSync(join(root, "Dockerfile"), "utf8");
+    const compose = readFileSync(join(root, "docker-compose.yml"), "utf8");
+
+    expect(dockerfile).toContain('CMD ["bun", "dist/server/index.js"]');
+    expect(compose).toContain('command: ["bun", "dist/server/index.js", "migrate"]');
+  });
+
+  test("ships a candidate build gate for architecture, TLS, API, and inventory", () => {
+    const buildspec = readFileSync(join(root, "buildspec.container-candidate.yml"), "utf8");
+
+    expect(buildspec).toContain("docker build --platform linux/arm64");
+    expect(buildspec).toContain("scanelf -n /usr/local/bin/bun");
+    expect(buildspec).toContain("apk info -vv");
+    expect(buildspec).toContain("container-sbom.cdx.json");
+    expect(buildspec).toContain("container-provenance.json");
+    expect(buildspec).toContain("sslmode=verify-full");
+    expect(buildspec).toContain("wrong-ca.crt");
+    expect(buildspec).toContain("wrong-postgres");
+    expect(buildspec).toContain("bun dist/server/index.js migrate");
+    expect(buildspec).toContain("scripts/container-http-smoke.ts");
+    expect(buildspec).not.toContain("terraform");
+    expect(buildspec).not.toContain("update-service");
   });
 
   test("publishes a readiness-based container healthcheck", () => {

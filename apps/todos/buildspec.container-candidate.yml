@@ -1,0 +1,78 @@
+version: 0.2
+
+env:
+  shell: bash
+
+phases:
+  pre_build:
+    commands:
+      - set -euo pipefail
+      - test -n "${IMAGE_TAG:-}"
+      - test -n "${SOURCE_SHA:-}"
+      - export REPOSITORY=789877399345.dkr.ecr.us-east-1.amazonaws.com/todos
+      - export IMAGE="${REPOSITORY}:${IMAGE_TAG}"
+      - aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin "${REPOSITORY%/*}"
+      - export SYFT_VERSION=1.46.0
+      - curl -fsSL -o /tmp/syft.tar.gz "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_arm64.tar.gz"
+      - echo '9fafef4db4f032ce81008d3a1529985d41ceb6ccdf2b388c9ce2f1ed7d32082e  /tmp/syft.tar.gz' | sha256sum -c -
+      - tar -xzf /tmp/syft.tar.gz -C /tmp syft
+  build:
+    commands:
+      - set -euo pipefail
+      - docker build --platform linux/arm64 --label "org.opencontainers.image.source=https://github.com/hasna/todos" --label "org.opencontainers.image.revision=${SOURCE_SHA}" --label "org.opencontainers.image.version=0.11.90" -t "${IMAGE}" .
+      - test "$(docker image inspect "${IMAGE}" --format '{{.Architecture}}')" = arm64
+      - test "$(docker run --rm --entrypoint bun "${IMAGE}" --version)" = 1.3.14
+      - docker run --rm --entrypoint sh "${IMAGE}" -ec 'scanelf -n /usr/local/bin/bun | grep -q ld-musl; ! scanelf -n /usr/local/bin/bun | grep -q libc.so.6; apk info -e bash; ! apk info -e glibc; ! apk info -e perl; ! apk info -e sqlite-libs; ! command -v git; ! command -v tmux'
+      - docker run --rm --entrypoint sh "${IMAGE}" -c 'apk info -vv | sort' > container-apk-inventory.txt
+      - docker image inspect "${IMAGE}" > container-oci-inspect.json
+      - /tmp/syft "${IMAGE}" -o cyclonedx-json=container-sbom.cdx.json
+      - test "$(jq -r '.[0].Config.Cmd | join(" ")' container-oci-inspect.json)" = 'bun dist/server/index.js'
+      - set +e; docker run --rm "${IMAGE}" bun dist/server/index.js migrate > /tmp/migrate-no-dsn.log 2>&1; rc=$?; set -e; test "$rc" -eq 2; grep -q 'no database URL' /tmp/migrate-no-dsn.log
+      - export TEST_NETWORK="todos-candidate-${CODEBUILD_BUILD_NUMBER}"
+      - export TEST_DB="todos-postgres-${CODEBUILD_BUILD_NUMBER}"
+      - export TEST_APP="todos-app-${CODEBUILD_BUILD_NUMBER}"
+      - export DB_CREDENTIAL=$(head -c 36 /dev/urandom | base64 | tr -d '\n')
+      - export POSTGRES_PASSWORD=${DB_CREDENTIAL}
+      - docker network create "${TEST_NETWORK}"
+      - mkdir -p /tmp/todos-tls
+      - openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=todos-test-ca -keyout /tmp/todos-tls/ca.key -out /tmp/todos-tls/ca.crt >/dev/null 2>&1
+      - openssl req -newkey rsa:2048 -nodes -subj /CN=todos-postgres -addext subjectAltName=DNS:todos-postgres -keyout /tmp/todos-tls/server.key -out /tmp/todos-tls/server.csr >/dev/null 2>&1
+      - openssl x509 -req -days 1 -in /tmp/todos-tls/server.csr -CA /tmp/todos-tls/ca.crt -CAkey /tmp/todos-tls/ca.key -CAcreateserial -copy_extensions copy -out /tmp/todos-tls/server.crt >/dev/null 2>&1
+      - openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=wrong-ca -keyout /tmp/todos-tls/wrong-ca.key -out /tmp/todos-tls/wrong-ca.crt >/dev/null 2>&1
+      - chown 70:70 /tmp/todos-tls/server.key /tmp/todos-tls/server.crt /tmp/todos-tls/ca.crt
+      - chmod 600 /tmp/todos-tls/server.key
+      - docker run -d --name "${TEST_DB}" --network "${TEST_NETWORK}" --network-alias todos-postgres --network-alias wrong-postgres -e POSTGRES_USER=todos --env POSTGRES_PASSWORD -e POSTGRES_DB=todos -v /tmp/todos-tls:/tls:ro postgres:16-alpine postgres -c ssl=on -c ssl_cert_file=/tls/server.crt -c ssl_key_file=/tls/server.key -c ssl_ca_file=/tls/ca.crt
+      - for i in $(seq 1 60); do docker exec "${TEST_DB}" pg_isready -U todos >/dev/null 2>&1 && break; sleep 1; done; docker exec "${TEST_DB}" pg_isready -U todos
+      - export TEST_DSN="postgres://todos:${DB_CREDENTIAL}@todos-postgres:5432/todos?sslmode=verify-full"
+      - export SIGNING_MATERIAL=$(head -c 48 /dev/urandom | base64 | tr -d '\n')
+      - docker run --rm --network "${TEST_NETWORK}" -e HASNA_TODOS_DATABASE_URL="${TEST_DSN}" -e PGSSLROOTCERT=/tls/ca.crt -v /tmp/todos-tls:/tls:ro "${IMAGE}" bun dist/server/index.js migrate
+      - docker run --rm --network "${TEST_NETWORK}" -e DATABASE_URL="${TEST_DSN}" -e PGSSLROOTCERT=/tls/ca.crt -v /tmp/todos-tls:/tls:ro --entrypoint bun "${IMAGE}" -e 'const s=new Bun.SQL(process.env.DATABASE_URL); await s`select 1`; await s.end(); console.log("TLS verify-full positive: PASS")'
+      - set +e; docker run --rm --network "${TEST_NETWORK}" -e DATABASE_URL="${TEST_DSN}" -e PGSSLROOTCERT=/tls/wrong-ca.crt -v /tmp/todos-tls:/tls:ro --entrypoint bun "${IMAGE}" -e 'const s=new Bun.SQL(process.env.DATABASE_URL); await s`select 1`' >/tmp/wrong-ca.log 2>&1; wrong_ca_rc=$?; set -e; test "$wrong_ca_rc" -ne 0
+      - set +e; docker run --rm --network "${TEST_NETWORK}" -e DATABASE_URL="postgres://todos:${DB_CREDENTIAL}@wrong-postgres:5432/todos?sslmode=verify-full" -e PGSSLROOTCERT=/tls/ca.crt -v /tmp/todos-tls:/tls:ro --entrypoint bun "${IMAGE}" -e 'const s=new Bun.SQL(process.env.DATABASE_URL); await s`select 1`' >/tmp/wrong-host.log 2>&1; wrong_host_rc=$?; set -e; test "$wrong_host_rc" -ne 0
+      - set +x
+      - KEY_JSON=$(docker run --rm --network "${TEST_NETWORK}" -e HASNA_TODOS_DATABASE_URL="${TEST_DSN}" -e HASNA_TODOS_API_SIGNING_KEY="${SIGNING_MATERIAL}" -e PGSSLROOTCERT=/tls/ca.crt -v /tmp/todos-tls:/tls:ro --entrypoint bun "${IMAGE}" node_modules/@hasna/contracts/dist/cli/index.js issue-key --app todos --scopes 'todos:*' --no-expiry --json)
+      - export TODOS_V1_TOKEN=$(printf '%s' "$KEY_JSON" | jq -r '.token')
+      - test -n "${TODOS_V1_TOKEN}"; test "${TODOS_V1_TOKEN}" != null
+      - docker run -d --name "${TEST_APP}" --network "${TEST_NETWORK}" -e HASNA_TODOS_DATABASE_URL="${TEST_DSN}" -e HASNA_TODOS_API_SIGNING_KEY="${SIGNING_MATERIAL}" -e PGSSLROOTCERT=/tls/ca.crt -v /tmp/todos-tls:/tls:ro "${IMAGE}"
+      - for i in $(seq 1 60); do docker exec "${TEST_APP}" bun -e 'const r=await fetch("http://127.0.0.1:19427/ready"); process.exit(r.ok?0:1)' >/dev/null 2>&1 && break; sleep 1; done
+      - docker run --rm --network "${TEST_NETWORK}" -e TODOS_V1_BASE_URL=http://"${TEST_APP}":19427 --env TODOS_V1_TOKEN -v "$PWD/scripts/container-http-smoke.ts:/tmp/container-http-smoke.ts:ro" --entrypoint bun "${IMAGE}" /tmp/container-http-smoke.ts
+      - docker logs "${TEST_APP}" 2>&1 | tail -200
+      - unset TODOS_V1_TOKEN KEY_JSON SIGNING_MATERIAL DB_CREDENTIAL POSTGRES_PASSWORD TEST_DSN
+      - docker push "${IMAGE}"
+  post_build:
+    commands:
+      - set -euo pipefail
+      - export REPOSITORY=789877399345.dkr.ecr.us-east-1.amazonaws.com/todos
+      - export IMAGE_DIGEST=$(aws ecr describe-images --region us-east-1 --repository-name todos --image-ids imageTag="${IMAGE_TAG}" --query 'imageDetails[0].imageDigest' --output text)
+      - jq -n --arg source_sha "${SOURCE_SHA}" --arg archive_sha256 "${SOURCE_ARCHIVE_SHA256:-unknown}" --arg build_id "${CODEBUILD_BUILD_ID}" --arg image_tag "${IMAGE_TAG}" --arg image_digest "${IMAGE_DIGEST}" '{source_sha:$source_sha,source_archive_sha256:$archive_sha256,codebuild_build_id:$build_id,image_tag:$image_tag,image_digest:$image_digest,platform:"linux/arm64",builder:"todos-prod-image-builder"}' > container-provenance.json
+      - sha256sum container-apk-inventory.txt container-oci-inspect.json container-sbom.cdx.json container-provenance.json
+      - printf 'IMAGE_REF %s@%s\n' "${REPOSITORY}" "${IMAGE_DIGEST}"
+      - docker rm -f "${TEST_APP:-missing}" "${TEST_DB:-missing}" >/dev/null 2>&1 || true
+      - docker network rm "${TEST_NETWORK:-missing}" >/dev/null 2>&1 || true
+
+artifacts:
+  files:
+    - container-apk-inventory.txt
+    - container-oci-inspect.json
+    - container-sbom.cdx.json
+    - container-provenance.json

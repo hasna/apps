@@ -4,22 +4,22 @@
 # process reads/writes RDS Postgres directly with @hasna/contracts API-key auth).
 # The ECS one-shot migration task overrides the command with `... migrate`.
 
-ARG BUN_IMAGE=oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4
-ARG OPENSSL_VERSION=3.5.6-1~deb13u2
+ARG BUN_IMAGE=oven/bun:1.3.14-alpine@sha256:3c9ab1a521c82144dff537125695017a0480d3a13088fba7e012cfae0f63146f
+ARG BASH_VERSION=5.2.37-r0
 
 FROM --platform=linux/arm64 ${BUN_IMAGE} AS base
-ARG OPENSSL_VERSION
-# Keep the Bun runtime reproducible while applying Debian's security-fixed
-# OpenSSL source package. Exact pins and the package assertion make a stale or
-# incomplete mirror fail the build instead of shipping a vulnerable image.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-      "openssl=${OPENSSL_VERSION}" \
-      "libssl3t64=${OPENSSL_VERSION}" \
-      "openssl-provider-legacy=${OPENSSL_VERSION}" \
-    && dpkg-query -W openssl libssl3t64 openssl-provider-legacy \
-      | awk -v expected="${OPENSSL_VERSION}" '$2 != expected { exit 1 } END { if (NR != 3) exit 1 }' \
-    && rm -rf /var/lib/apt/lists/*
+# The single-platform digest resolves directly to the official linux/arm64
+# Bun 1.3.14 Alpine manifest. Assert the musl boundary and the immutable base's
+# security-relevant package floor so an accidental digest or platform change
+# fails during the build.
+RUN test "$(bun --version)" = "1.3.14" \
+    && test "$(apk info -v musl)" = "musl-1.2.5-r12" \
+    && test "$(apk info -v libcrypto3)" = "libcrypto3-3.5.6-r0" \
+    && test "$(apk info -v libssl3)" = "libssl3-3.5.6-r0" \
+    && test "$(apk info -v ca-certificates-bundle)" = "ca-certificates-bundle-20260413-r0" \
+    && ! apk info -e glibc \
+    && ! apk info -e perl \
+    && ! apk info -e sqlite-libs
 
 FROM base AS deps
 WORKDIR /app
@@ -38,7 +38,16 @@ COPY scripts ./scripts
 RUN bun run build:server
 
 FROM base AS runner
+ARG BASH_VERSION
 WORKDIR /app
+# The previous Debian runtime included bash, and the bundled event-hook and
+# agent-run paths invoke bash explicitly. Preserve that supported boundary with
+# one exact Alpine package; git and tmux were not present in the predecessor
+# image and remain intentionally outside the cloud container contract.
+RUN apk add --no-cache "bash=${BASH_VERSION}" \
+    && test "$(apk info -v bash)" = "bash-${BASH_VERSION}" \
+    && ! command -v git \
+    && ! command -v tmux
 # Amazon RDS global CA bundle so TLS to the shared RDS succeeds even under
 # verify-full-capable clients.
 COPY docker/rds-global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem

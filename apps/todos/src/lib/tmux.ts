@@ -35,6 +35,12 @@ export interface SendToTmuxOptions {
   confirmBusy?: boolean;
 }
 
+function ensureTmuxAvailable(): void {
+  if (!Bun.which("tmux", { PATH: process.env.PATH ?? "" })) {
+    throw new Error("tmux is not installed or not in PATH");
+  }
+}
+
 /**
  * Parse a tmux target spec into its components.
  * Accepts: "window", "session:window", "session:window.pane"
@@ -97,6 +103,7 @@ export function formatTmuxTarget(target: TmuxTarget): string {
 export async function validateTmuxTarget(spec: string): Promise<void> {
   const target = parseTmuxTarget(spec);
   const targetStr = formatTmuxTarget(target);
+  ensureTmuxAvailable();
 
   let proc: ReturnType<typeof Bun.spawn>;
   try {
@@ -118,6 +125,7 @@ export async function validateTmuxTarget(spec: string): Promise<void> {
 }
 
 export async function inspectTmuxPane(target: string): Promise<TmuxPaneInfo> {
+  ensureTmuxAvailable();
   const proc = Bun.spawn(
     [
       "tmux",
@@ -197,6 +205,7 @@ export async function sendToTmux(
     console.log(`[dry-run] message: ${message.slice(0, 200)}`);
     return;
   }
+  ensureTmuxAvailable();
 
   if (!opts.confirmBusy) {
     const pane = await inspectTmuxPane(target);

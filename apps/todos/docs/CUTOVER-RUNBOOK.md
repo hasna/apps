@@ -171,6 +171,46 @@ avoiding the split-brain the council rejected.
 - Shadow mode is read-never: it must not introduce a cloud read path.
 - The flip is all-machines-together; per-machine flips are prohibited.
 
+## Cloud container runtime boundary
+
+The production image is an ARM64, musl-based Bun container. Its Dockerfile pins
+the exact official `oven/bun:1.3.14-alpine` ARM64 manifest digest rather than a
+mutable tag or a multi-platform index. Every build stage derives from that same
+base, and the build fails unless Bun is 1.3.14, the reviewed musl/OpenSSL/CA
+package versions are present, and glibc, Perl, and Alpine SQLite libraries are
+absent.
+
+The runner installs only the exact-pinned Alpine `bash` package needed by the
+existing event-hook and agent-run execution paths. The predecessor Debian image
+did not contain `git` or `tmux`, so those local-workstation capabilities are not
+part of the cloud container contract. They must fail clearly when unavailable;
+do not silently add them to the image without a separate runtime need, security
+scan, and review. The OpenSSL CLI is also intentionally absent: Bun has the
+reviewed OpenSSL libraries and the image carries the system CA set plus the RDS
+CA bundle.
+
+Before an image digest may enter Terraform, require all of the following:
+
+1. Build natively for `linux/arm64` from an exact committed source archive.
+2. Record OCI architecture, entrypoint, default command, Bun version, Alpine
+   release, `apk info -vv`, musl ELF linkage, SBOM, source revision, archive
+   hash, build ID, tag, and immutable digest.
+3. Prove the default command is `bun dist/server/index.js`; the migration task
+   override is the full `bun dist/server/index.js migrate` command and fails
+   closed without a database URL.
+4. Run the migration against disposable or staging Postgres, then exercise
+   `/health`, `/ready`, `/version`, unauthenticated rejection, authenticated
+   CRUD, project listing, and routing/rename/conflict behavior on the built
+   image.
+5. Prove Postgres TLS hostname and CA verification succeeds with the approved
+   CA and fails with a wrong CA and a wrong hostname.
+6. Wait for the ECR scan to reach `COMPLETE`; require zero CRITICAL and zero
+   HIGH findings without suppressions, and review every MEDIUM, LOW, and unknown
+   finding plus application dependencies before approval.
+
+Runtime `node_modules` removal and a non-root user are separate hardening items.
+Do not compound those changes with a base-image vulnerability fix.
+
 ## Task-comment pagination and historical-redaction rollout
 
 This change has an intentional mixed-version sequence. Do not reverse it.
