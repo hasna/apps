@@ -284,6 +284,32 @@ describe("storage adapter contracts", () => {
     }
   });
 
+  test("fails closed before importing malformed SQLite project and task-list slugs", async () => {
+    const source = createLocalSqliteTodosStorageAdapter({ db });
+    const project = await source.projects.create({ name: "Import Guard", path: "/tmp/import-guard" });
+    const list = await source.taskLists.create({ name: "Import Guard", slug: "import-guard", project_id: project.id });
+    const task = await source.tasks.create({ title: "Must not partially import", project_id: project.id });
+    const snapshot = await source.sync.exportSnapshot!();
+    snapshot.projects[0] = { ...snapshot.projects[0]!, task_list_id: "Bad Project Slug !!" };
+    snapshot.taskLists[0] = { ...snapshot.taskLists[0]!, slug: "Bad List Slug !!" };
+
+    const targetDb = new Database(":memory:");
+    targetDb.run("PRAGMA foreign_keys = ON");
+    runMigrations(targetDb);
+    try {
+      const target = createLocalSqliteTodosStorageAdapter({ db: targetDb });
+      const imported = await target.sync.importSnapshot!(snapshot);
+      expect(imported).toMatchObject({ inserted: 0, updated: 0, deleted: 0 });
+      expect(imported.errors).toHaveLength(2);
+      expect(imported.errors.join("\n")).toMatch(/canonical kebab-case/);
+      expect(await target.projects.get(project.id)).toBeNull();
+      expect(await target.taskLists.get(list.id)).toBeNull();
+      expect(await target.tasks.get(task.id)).toBeNull();
+    } finally {
+      targetDb.close();
+    }
+  });
+
   test("propagates local hard deletes through explicit storage tombstones", async () => {
     const source = createLocalSqliteTodosStorageAdapter({ db });
     const project = await source.projects.create({ name: "Tombstone Project", path: "/tmp/tombstone-project" });
@@ -611,6 +637,13 @@ describe("storage adapter contracts", () => {
     const adapter = createPostgresTodosStorageAdapter({ client: postgres.client, sourceMachineId: "spark01" });
     const project = await adapter.projects.create({ name: "Open Emails", path: "/tmp/open-emails", task_list_id: "emails" });
     const taskList = await adapter.taskLists.create({ name: "Open Emails", slug: "emails", project_id: project.id });
+
+    for (const taskListId of ["emails-next", "Not Canonical !!"]) {
+      await expect(adapter.projects.update(project.id, { task_list_id: taskListId } as never))
+        .rejects.toThrow("use renameProject");
+    }
+    expect(await adapter.projects.get(project.id)).toMatchObject({ task_list_id: "emails" });
+    expect(await adapter.taskLists.get(taskList.id)).toMatchObject({ slug: "emails" });
 
     const first = await adapter.projects.rename(project.id, { new_slug: "emails-next", name: "Emails Next" });
     await Bun.sleep(2);

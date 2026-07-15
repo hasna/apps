@@ -79,6 +79,13 @@ export interface CreateProjectInput {
   task_prefix?: string;
 }
 
+/** Ordinary project metadata update. Canonical slug changes require renameProject. */
+export interface UpdateProjectInput {
+  name?: string;
+  path?: string;
+  description?: string | null;
+}
+
 export interface RenameProjectInput {
   new_slug: string;
   name?: string;

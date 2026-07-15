@@ -194,6 +194,18 @@ describe("updateProject", () => {
       ProjectNotFoundError,
     );
   });
+
+  it("rejects canonical slug mutation and preserves the paired task list", () => {
+    const project = createProject({ name: "Emails", path: "/tmp/emails", task_list_id: "emails" }, db);
+    const list = createTaskList({ name: "Emails", slug: "emails", project_id: project.id }, db);
+
+    for (const taskListId of ["emails-next", "Not Canonical !!"]) {
+      expect(() => updateProject(project.id, { task_list_id: taskListId } as never, db))
+        .toThrow("use renameProject");
+    }
+    expect(getProject(project.id, db)).toMatchObject({ task_list_id: "emails" });
+    expect(db.query("SELECT slug FROM task_lists WHERE id = ?").get(list.id)).toEqual({ slug: "emails" });
+  });
 });
 
 describe("renameProject", () => {

@@ -20,6 +20,7 @@ import type {
   TodosStorageTombstone,
   TodosProjectMachinePath,
 } from "./interfaces.js";
+import { isCanonicalSlug } from "../lib/slugs.js";
 
 const PROJECT_COLUMNS = [
   "id", "name", "path", "description", "task_list_id", "task_prefix", "task_counter",
@@ -102,6 +103,19 @@ export function importSqliteTodosStorageSnapshot(
     skipped: 0,
     errors: [],
   };
+  for (const project of snapshot.projects) {
+    if (!isCanonicalSlug(project.task_list_id)) {
+      result.errors.push(`project ${project.id}: task_list_id must be non-empty canonical kebab-case`);
+    }
+  }
+  for (const taskList of snapshot.taskLists) {
+    if (!isCanonicalSlug(taskList.slug)) {
+      result.errors.push(`task list ${taskList.id}: slug must be non-empty canonical kebab-case`);
+    }
+  }
+  // Preflight the full snapshot before any write so malformed routing metadata
+  // cannot leave an otherwise-valid prefix partially imported.
+  if (result.errors.length > 0) return result;
 
   const applyRows = (
     objectType: StorageTombstoneObjectType,

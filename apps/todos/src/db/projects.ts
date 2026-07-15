@@ -1,5 +1,5 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
-import type { CreateProjectInput, CreateProjectSourceInput, Project, ProjectSource, ProjectSourceRow } from "../types/index.js";
+import type { CreateProjectInput, CreateProjectSourceInput, Project, ProjectSource, ProjectSourceRow, UpdateProjectInput } from "../types/index.js";
 import { ProjectNotFoundError, ResourceConflictError } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
 import { getMachineId } from "./machines.js";
@@ -92,12 +92,15 @@ export function listProjects(db?: Database): Project[] {
 
 export function updateProject(
   id: string,
-  input: Partial<Pick<Project, "name" | "description" | "task_list_id" | "path">>,
+  input: UpdateProjectInput,
   db?: Database,
 ): Project {
   const d = db || getDatabase();
   const project = getProject(id, d);
   if (!project) throw new ProjectNotFoundError(id);
+  if ("task_list_id" in input) {
+    throw new Error("task_list_id cannot be changed by updateProject; use renameProject for an atomic canonical rename");
+  }
 
   const sets: string[] = ["updated_at = ?"];
   const params: SQLQueryBindings[] = [now()];
@@ -109,10 +112,6 @@ export function updateProject(
   if (input.description !== undefined) {
     sets.push("description = ?");
     params.push(input.description);
-  }
-  if (input.task_list_id !== undefined) {
-    sets.push("task_list_id = ?");
-    params.push(input.task_list_id);
   }
   if (input.path !== undefined) {
     sets.push("path = ?");

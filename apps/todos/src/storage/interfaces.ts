@@ -20,6 +20,7 @@ import type {
   TaskTemplate,
   TemplateWithTasks,
   UpdatePlanInput,
+  UpdateProjectInput,
   UpdateTaskInput,
   UpdateTaskListInput,
 } from "../types/index.js";
@@ -211,7 +212,7 @@ export interface TodosProjectStore {
   get(id: string, context?: TodosStorageContext): MaybePromise<Project | null>;
   getByPath(path: string, context?: TodosStorageContext): MaybePromise<Project | null>;
   list(context?: TodosStorageContext): MaybePromise<Project[]>;
-  update(id: string, input: Partial<Pick<Project, "name" | "description" | "task_list_id" | "path">>, context?: TodosStorageContext): MaybePromise<Project>;
+  update(id: string, input: UpdateProjectInput, context?: TodosStorageContext): MaybePromise<Project>;
   rename(id: string, input: RenameProjectInput, context?: TodosStorageContext): MaybePromise<RenameProjectResult>;
   delete(id: string, context?: TodosStorageContext): MaybePromise<boolean>;
 }

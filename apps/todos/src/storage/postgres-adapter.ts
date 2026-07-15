@@ -20,6 +20,7 @@ import type {
   TaskTemplate,
   TemplateWithTasks,
   UpdatePlanInput,
+  UpdateProjectInput,
   UpdateTaskInput,
   UpdateTaskListInput,
 } from "../types/index.js";
@@ -1183,9 +1184,12 @@ async function createProject(input: CreateProjectInput, store: PostgresJsonRecor
 
 async function updateProject(
   id: string,
-  input: Partial<Pick<Project, "name" | "description" | "task_list_id" | "path">>,
+  input: UpdateProjectInput,
   store: PostgresJsonRecordStore,
 ): Promise<Project> {
+  if ("task_list_id" in input) {
+    throw new Error("task_list_id cannot be changed by updateProject; use renameProject for an atomic canonical rename");
+  }
   const project = await requireRecord<Project>("projects", id, store);
   const updated = { ...project, ...definedPatch(input), updated_at: new Date().toISOString() };
   return store.upsert("projects", updated);
