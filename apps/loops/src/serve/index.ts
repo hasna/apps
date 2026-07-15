@@ -50,6 +50,7 @@ function defaultPort(): number {
 }
 
 type ServiceDatabaseRole = "open_loops_runtime" | "open_loops_authenticator";
+const TENANT_ENFORCEMENT_MIGRATION_ID = "0010_tenant_enforce";
 
 export async function isSafeServiceConnection(
   client: TypedQueryClient,
@@ -505,6 +506,7 @@ export async function isTenantRlsInvariantSafe(client: TypedQueryClient): Promis
          AND pg_get_userbyid(proc.proowner) = 'open_loops_owner'
          AND NOT proc.prosecdef
          AND COALESCE(proc.proconfig, ARRAY[]::text[]) @> ARRAY['search_path=pg_catalog']
+         AND proc.prosrc ILIKE '%pg_has_role%open_loops_runtime%USAGE%'
     ),
     actual AS (
       SELECT class.relname AS table_name,
@@ -790,6 +792,17 @@ export async function assertTenantEnforcementBootstrap(client: PoolQueryClient):
   }
 }
 
+export async function assertTenantEnforcementBootstrapIfPending(
+  client: PoolQueryClient,
+  schema: PostgresStorage,
+): Promise<void> {
+  const preview = await schema.migrate({ dryRun: true });
+  if (preview.plan.some((item) =>
+    item.migration.id === TENANT_ENFORCEMENT_MIGRATION_ID && item.state === "pending")) {
+    await assertTenantEnforcementBootstrap(client);
+  }
+}
+
 async function runServe(opts: { host: string; port: number }): Promise<void> {
   {
     const executor = buildExecutor("loops-serve", "runtime");
@@ -872,8 +885,9 @@ program
   .action(async (opts: { dryRun?: boolean; enforceTenancy?: boolean }) => {
     const executor = buildExecutor("loops-migrate", "migrator");
     try {
-      if (opts.enforceTenancy) await assertTenantEnforcementBootstrap(executor.queryClient);
-      const result = await new PostgresStorage(executor).migrate({
+      const schema = new PostgresStorage(executor);
+      if (opts.enforceTenancy) await assertTenantEnforcementBootstrapIfPending(executor.queryClient, schema);
+      const result = await schema.migrate({
         dryRun: Boolean(opts.dryRun),
         through: opts.enforceTenancy ? undefined : "0008_tenant_prepare",
       });

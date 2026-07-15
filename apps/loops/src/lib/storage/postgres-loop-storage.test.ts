@@ -15,7 +15,7 @@ import pg from "pg";
 import { PgPoolExecutor } from "./pg-executor.js";
 import { PostgresStorage } from "./postgres.js";
 import { PostgresLoopStorage, NotImplementedError } from "./postgres-loop-storage.js";
-import { assertTenantEnforcementBootstrap, isSafeServiceConnection } from "../../serve/index.js";
+import { assertTenantEnforcementBootstrap, assertTenantEnforcementBootstrapIfPending, isSafeServiceConnection } from "../../serve/index.js";
 import type { CreateLoopInput, Loop, LoopRun, WorkflowSpec } from "../../types.js";
 
 const DATABASE_URL = process.env.LOOPS_TEST_DATABASE_URL;
@@ -72,6 +72,7 @@ function loopInput(name: string, over: Partial<CreateLoopInput> = {}): CreateLoo
 
 suite("PostgresLoopStorage (live)", () => {
   let executor: PgPoolExecutor;
+  let schema: PostgresStorage;
   let runtimeExecutor: PgPoolExecutor;
   let authExecutor: PgPoolExecutor;
   let storage: PostgresLoopStorage;
@@ -84,7 +85,7 @@ suite("PostgresLoopStorage (live)", () => {
   beforeAll(async () => {
     await admin(`CREATE DATABASE ${ISO_DB}`);
     executor = PgPoolExecutor.fromConnectionString({ connectionString: isolatedUrl(), applicationName: "loops-pgstore-test" });
-    const schema = new PostgresStorage(executor);
+    schema = new PostgresStorage(executor);
     await schema.migrate({ through: "0008_tenant_prepare" });
     await executor.queryClient.execute(
       `INSERT INTO tenants(id, slug, name, status) VALUES ('tenant-test', 'tenant-test', 'Tenant Test', 'active');
@@ -155,6 +156,7 @@ suite("PostgresLoopStorage (live)", () => {
       CREATE TABLE residual_acl.private_rows(id INTEGER PRIMARY KEY);
       CREATE SEQUENCE residual_acl.private_sequence;
       CREATE FUNCTION residual_acl.private_function() RETURNS INTEGER LANGUAGE sql RETURN 1;
+      CREATE FUNCTION residual_acl.default_public_function() RETURNS INTEGER LANGUAGE sql RETURN 1;
       GRANT USAGE ON SCHEMA residual_acl TO open_loops_runtime, open_loops_authenticator;
       GRANT SELECT ON residual_acl.private_rows TO PUBLIC, open_loops_runtime, open_loops_authenticator;
       GRANT USAGE ON SEQUENCE residual_acl.private_sequence TO PUBLIC, open_loops_runtime, open_loops_authenticator;
@@ -229,6 +231,15 @@ suite("PostgresLoopStorage (live)", () => {
       DROP ROLE IF EXISTS ${RUNTIME_LOGIN};
       DROP ROLE IF EXISTS ${AUTH_LOGIN};
     `);
+    await admin(`DO $cleanup$ BEGIN
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='open_loops_owner') THEN
+        EXECUTE format('REVOKE open_loops_owner FROM %I', current_user);
+      END IF;
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='open_loops_migrator') THEN
+        EXECUTE format('REVOKE open_loops_migrator FROM %I', current_user);
+      END IF;
+    EXCEPTION WHEN undefined_object THEN NULL;
+    END $cleanup$`);
     await admin(`DROP ROLE IF EXISTS ${EXTRA_AUTH_ROLE}`);
     await admin(`DROP ROLE IF EXISTS ${EXTRA_SERVICE_ROLE}`);
     await admin(`DROP ROLE IF EXISTS ${HOSTILE_FUNCTION_OWNER}`);
@@ -285,6 +296,11 @@ suite("PostgresLoopStorage (live)", () => {
          WHERE database.datname=current_database() AND grantee.rolname=$1 AND acl.privilege_type='CONNECT'
        ) AS direct_connect`, [AUTH_LOGIN],
     )).toEqual({ direct_connect: true });
+    await expect(assertTenantEnforcementBootstrapIfPending(executor.queryClient, schema)).resolves.toBeUndefined();
+    expect(await executor.queryClient.get<{ owner_settable: boolean; migrator_settable: boolean }>(
+      `SELECT pg_has_role(current_user, 'open_loops_owner', 'SET') AS owner_settable,
+              pg_has_role(current_user, 'open_loops_migrator', 'SET') AS migrator_settable`,
+    )).toEqual({ owner_settable: true, migrator_settable: true });
     expect(await executor.queryClient.get<{ can_select: boolean; can_reference: boolean; can_insert: boolean; can_update: boolean; can_update_id: boolean }>(
       `SELECT has_table_privilege($1, 'tenants', 'SELECT') AS can_select,
               has_table_privilege($1, 'tenants', 'REFERENCES') AS can_reference,
@@ -303,18 +319,24 @@ suite("PostgresLoopStorage (live)", () => {
       { tenantId: "tenant-test", principalId: "principal-test", requestId: "tenant-update-denied" },
       (client) => client.execute("UPDATE tenants SET name='Runtime Mutated' WHERE id='tenant-test'"),
     )).rejects.toMatchObject({ code: "42501" });
+    await expect(runtimeExecutor.queryClient.transaction(async (client) => {
+      await client.get("SELECT set_config('open_loops.tenant_id', $1, true)", ["tenant-test"]);
+      await client.execute("UPDATE tenants SET name='Raw Runtime Mutated' WHERE id='tenant-test'");
+    })).rejects.toMatchObject({ code: "42501" });
     expect(await executor.queryClient.get<{ inherited: boolean }>(
       "SELECT pg_has_role('open_loops_runtime', $1, 'MEMBER') AS inherited", [EXTRA_SERVICE_ROLE],
     )).toEqual({ inherited: false });
     expect(await executor.queryClient.get<{
       runtime_schema: boolean; runtime_table: boolean; runtime_sequence: boolean;
-      runtime_function: boolean; auth_function: boolean;
+      runtime_function: boolean; auth_function: boolean; runtime_default_function: boolean; auth_default_function: boolean;
     }>(
       `SELECT has_schema_privilege($1, 'residual_acl', 'USAGE') AS runtime_schema,
               has_table_privilege($1, 'residual_acl.private_rows', 'SELECT') AS runtime_table,
               has_sequence_privilege($1, 'residual_acl.private_sequence', 'USAGE') AS runtime_sequence,
               has_function_privilege($1, 'residual_acl.private_function()', 'EXECUTE') AS runtime_function,
-              has_function_privilege($2, 'residual_acl.private_function()', 'EXECUTE') AS auth_function`,
+              has_function_privilege($2, 'residual_acl.private_function()', 'EXECUTE') AS auth_function,
+              has_function_privilege($1, 'residual_acl.default_public_function()', 'EXECUTE') AS runtime_default_function,
+              has_function_privilege($2, 'residual_acl.default_public_function()', 'EXECUTE') AS auth_default_function`,
       [RUNTIME_LOGIN, AUTH_LOGIN],
     )).toEqual({
       runtime_schema: false,
@@ -322,6 +344,8 @@ suite("PostgresLoopStorage (live)", () => {
       runtime_sequence: false,
       runtime_function: false,
       auth_function: false,
+      runtime_default_function: false,
+      auth_default_function: false,
     });
     expect(await executor.queryClient.get<{ runtime_temp: boolean; auth_temp: boolean }>(
       `SELECT has_database_privilege($1, current_database(), 'TEMPORARY') AS runtime_temp,

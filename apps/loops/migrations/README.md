@@ -26,17 +26,18 @@ HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --enforce-tenancy
 
 The target must be a dedicated OpenLoops database owned by the bootstrap login
 (or administered by a true superuser), not a database shared with
-another application. Migration `0010` removes unexpected service-role and
-`PUBLIC` privileges across every non-system schema, table, sequence, and
-function in the current database before granting the exact runtime/auth ACLs.
+another application. Migration `0010` removes unexpected privileges from any
+explicit grantee across every non-system schema, table, sequence, and function
+in the current database, including default `PUBLIC` function execute privileges,
+before granting the exact runtime/auth ACLs.
 The `--enforce-tenancy` login must be a provider-level bootstrap administrator.
 At minimum it must control the `public` schema, have `CREATEROLE`, and be able
 to `SET ROLE` to `open_loops_owner` and `open_loops_migrator`, but PostgreSQL 16
 can require stronger provider authority to normalize all role attributes and
 clean direct service-login grants. Before applying migration `0010`, every
-supported runner transactionally exercises and rolls back the exact `ALTER
-ROLE`, schema grant, and `DROP OWNED` operations. A role-attribute approximation
-is not accepted as proof.
+supported runner transactionally exercises and rolls back the required `ALTER
+ROLE`, schema/database grant, function/table/sequence/schema revoke, and
+`DROP OWNED` operations. A role-attribute approximation is not accepted as proof.
 
 Out-of-band (operator, owner role through an SSM tunnel):
 

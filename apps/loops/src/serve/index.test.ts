@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { QueryResultRow } from "pg";
 import type { PoolQueryClient, TypedQueryClient } from "../generated/storage-kit/query.js";
-import { assertTenantEnforcementBootstrap, logServeCommandFailure } from "./index.js";
+import type { PostgresStorage } from "../lib/storage/postgres.js";
+import { assertTenantEnforcementBootstrap, assertTenantEnforcementBootstrapIfPending, logServeCommandFailure } from "./index.js";
 
 function bootstrapClient(role: {
   rolcreaterole: boolean;
@@ -34,16 +35,18 @@ function bootstrapClient(role: {
 }
 
 describe("loops-serve database bootstrap", () => {
+  const completeBootstrapRole = {
+    rolcreaterole: true,
+    rolsuper: false,
+    owner_settable: true,
+    migrator_settable: true,
+    controls_database: true,
+    controls_public_schema: true,
+    controls_helper_functions: true,
+  };
+
   test("requires CREATEROLE or superuser before tenant enforcement", async () => {
-    const complete = {
-      rolcreaterole: true,
-      rolsuper: false,
-      owner_settable: true,
-      migrator_settable: true,
-      controls_database: true,
-      controls_public_schema: true,
-      controls_helper_functions: true,
-    };
+    const complete = completeBootstrapRole;
     await expect(assertTenantEnforcementBootstrap(bootstrapClient({ ...complete, rolcreaterole: false })))
       .rejects.toThrow("CREATEROLE");
     await expect(assertTenantEnforcementBootstrap(bootstrapClient({ ...complete, owner_settable: false })))
@@ -96,6 +99,46 @@ describe("loops-serve database bootstrap", () => {
     expect(serviceAclProbe).toContain("ALL FUNCTIONS IN SCHEMA");
     const serviceMembershipProbe = statements.find((sql) => sql.includes("DO $probe_service_role_memberships$"));
     expect(serviceMembershipProbe).toContain("REVOKE %I FROM %I");
+  });
+
+  test("skips bootstrap probe when tenant enforcement migration is already applied", async () => {
+    const statements: string[] = [];
+    const schema = {
+      migrate: async () => ({
+        backend: "postgres" as const,
+        dryRun: true,
+        applied: [],
+        plan: [{
+          migration: { id: "0010_tenant_enforce", sql: "", checksum: "sha256:test" },
+          state: "already_applied" as const,
+        }],
+      }),
+    } as unknown as PostgresStorage;
+    await expect(assertTenantEnforcementBootstrapIfPending(
+      bootstrapClient(null, true, statements),
+      schema,
+    )).resolves.toBeUndefined();
+    expect(statements).toEqual([]);
+  });
+
+  test("runs bootstrap probe when tenant enforcement migration is pending", async () => {
+    const statements: string[] = [];
+    const schema = {
+      migrate: async () => ({
+        backend: "postgres" as const,
+        dryRun: true,
+        applied: [],
+        plan: [{
+          migration: { id: "0010_tenant_enforce", sql: "", checksum: "sha256:test" },
+          state: "pending" as const,
+        }],
+      }),
+    } as unknown as PostgresStorage;
+    await expect(assertTenantEnforcementBootstrapIfPending(
+      bootstrapClient(completeBootstrapRole, false, statements),
+      schema,
+    )).resolves.toBeUndefined();
+    expect(statements.some((sql) => sql.includes("DO $probe_roles$"))).toBe(true);
   });
 
   test("command failures use stable logs without provider details", () => {

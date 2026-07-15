@@ -1,6 +1,6 @@
 -- @generated mirror of POSTGRES_STORAGE_MIGRATIONS["0010_tenant_enforce"] — DO NOT EDIT.
 -- Source of truth: src/lib/storage/postgres-schema.ts
--- Runner: loops-serve migrate  (checksum: sha256:8c14c25c42697a2b9c78677e922ade1dc37aa8672e97efd0c1fa8a6176d261a2)
+-- Runner: loops-serve migrate  (checksum: sha256:ea71f66b865a6ee7dd6f2a821f89871caadabb8ba98b87953a5d5122b77fc1c7)
 
 DO $roles$
 BEGIN
@@ -113,7 +113,7 @@ BEGIN
       SELECT proc.oid::regprocedure AS function_signature,
              CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE format('%I', grantee.rolname) END AS grantee_sql
         FROM pg_proc proc
-        CROSS JOIN LATERAL aclexplode(proc.proacl) acl
+        CROSS JOIN LATERAL aclexplode(COALESCE(proc.proacl, acldefault('f', proc.proowner))) acl
         LEFT JOIN pg_roles grantee ON grantee.oid = acl.grantee
        WHERE proc.pronamespace = namespace.oid
          AND (acl.grantee = 0 OR grantee.oid IS NOT NULL)
@@ -456,7 +456,7 @@ RETURNS TRIGGER
 LANGUAGE plpgsql SECURITY INVOKER SET search_path = pg_catalog
 AS $$
 BEGIN
-  IF current_user = 'open_loops_runtime' THEN
+  IF pg_has_role(current_user, 'open_loops_runtime', 'USAGE') THEN
     RAISE EXCEPTION 'runtime role cannot update tenants' USING ERRCODE = '42501';
   END IF;
   RETURN NEW;
@@ -570,7 +570,7 @@ BEGIN
            acl.grantee,
            CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE format('%I', grantee.rolname) END AS grantee_sql
       FROM pg_proc proc
-      CROSS JOIN LATERAL aclexplode(proc.proacl) acl
+      CROSS JOIN LATERAL aclexplode(COALESCE(proc.proacl, acldefault('f', proc.proowner))) acl
       LEFT JOIN pg_roles grantee ON grantee.oid = acl.grantee
      WHERE proc.oid = ANY(ARRAY[
        'public.open_loops_current_tenant_id()'::regprocedure,
@@ -599,8 +599,15 @@ BEGIN
       FROM pg_auth_members auth_membership
       JOIN pg_roles granted ON granted.oid = auth_membership.roleid
       JOIN pg_roles member ON member.oid = auth_membership.member
-     WHERE granted.rolname IN ('open_loops_owner', 'open_loops_migrator')
-        OR member.rolname IN ('open_loops_owner', 'open_loops_migrator', 'open_loops_runtime', 'open_loops_authenticator')
+     WHERE (granted.rolname IN ('open_loops_owner', 'open_loops_migrator')
+        OR member.rolname IN ('open_loops_owner', 'open_loops_migrator', 'open_loops_runtime', 'open_loops_authenticator'))
+       AND NOT (
+         granted.rolname IN ('open_loops_owner', 'open_loops_migrator')
+         AND member.rolname = session_user
+         AND NOT auth_membership.admin_option
+         AND auth_membership.inherit_option
+         AND auth_membership.set_option
+       )
   LOOP
     EXECUTE format('REVOKE %I FROM %I', membership.granted_role, membership.member_role);
   END LOOP;
@@ -622,8 +629,15 @@ BEGIN
       FROM pg_auth_members auth_membership
       JOIN pg_roles granted ON granted.oid = auth_membership.roleid
       JOIN pg_roles member ON member.oid = auth_membership.member
-     WHERE granted.rolname IN ('open_loops_owner', 'open_loops_migrator')
-        OR member.rolname IN ('open_loops_owner', 'open_loops_migrator', 'open_loops_runtime', 'open_loops_authenticator')
+     WHERE (granted.rolname IN ('open_loops_owner', 'open_loops_migrator')
+        OR member.rolname IN ('open_loops_owner', 'open_loops_migrator', 'open_loops_runtime', 'open_loops_authenticator'))
+       AND NOT (
+         granted.rolname IN ('open_loops_owner', 'open_loops_migrator')
+         AND member.rolname = session_user
+         AND NOT auth_membership.admin_option
+         AND auth_membership.inherit_option
+         AND auth_membership.set_option
+       )
   ) THEN
     RAISE EXCEPTION 'tenant enforcement left privileged role memberships unsafe';
   END IF;
@@ -819,6 +833,7 @@ BEGIN
        AND pg_get_userbyid(proc.proowner) = 'open_loops_owner'
        AND NOT proc.prosecdef
        AND COALESCE(proc.proconfig, ARRAY[]::text[]) @> ARRAY['search_path=pg_catalog']
+       AND proc.prosrc ILIKE '%pg_has_role%open_loops_runtime%USAGE%'
   ) THEN
     RAISE EXCEPTION 'tenant enforcement did not install runtime tenant update guard';
   END IF;
@@ -846,7 +861,7 @@ BEGIN
   IF EXISTS (
     SELECT 1
       FROM pg_proc proc
-      CROSS JOIN LATERAL aclexplode(proc.proacl) acl
+      CROSS JOIN LATERAL aclexplode(COALESCE(proc.proacl, acldefault('f', proc.proowner))) acl
       LEFT JOIN pg_roles grantee ON grantee.oid = acl.grantee
      WHERE proc.oid = ANY(ARRAY[
        'public.open_loops_current_tenant_id()'::regprocedure,
@@ -869,6 +884,34 @@ BEGIN
        )
   ) THEN
     RAISE EXCEPTION 'tenant enforcement left unexpected authentication function grants';
+  END IF;
+  IF EXISTS (
+    SELECT 1
+      FROM pg_proc function
+      JOIN pg_namespace namespace ON namespace.oid=function.pronamespace
+      CROSS JOIN LATERAL aclexplode(COALESCE(function.proacl, acldefault('f', function.proowner))) acl
+      LEFT JOIN pg_roles grantee ON grantee.oid = acl.grantee
+     WHERE namespace.nspname NOT IN ('pg_catalog', 'information_schema')
+       AND namespace.nspname NOT LIKE 'pg_toast%'
+       AND namespace.nspname NOT LIKE 'pg_temp_%'
+       AND acl.privilege_type = 'EXECUTE'
+       AND NOT acl.is_grantable
+       AND acl.grantee <> function.proowner
+       AND NOT (
+         namespace.nspname='public'
+         AND function.oid = 'public.open_loops_current_tenant_id()'::regprocedure
+         AND COALESCE(grantee.rolname IN ('open_loops_owner', 'open_loops_runtime'), false)
+       )
+       AND NOT (
+         namespace.nspname='public'
+         AND function.oid = ANY(ARRAY[
+           'public.open_loops_authenticate_key(text,text)'::regprocedure,
+           'public.open_loops_append_auth_audit(text,text,text,text,text,text,text,jsonb)'::regprocedure
+         ])
+         AND COALESCE(grantee.rolname IN ('open_loops_owner', 'open_loops_authenticator'), false)
+       )
+  ) THEN
+    RAISE EXCEPTION 'tenant enforcement left unexpected function privileges outside the OpenLoops auth surface';
   END IF;
   IF EXISTS (
     SELECT 1

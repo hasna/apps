@@ -15,7 +15,7 @@ import { Pool } from "pg";
 import { createQueryClient } from "../src/generated/storage-kit/query.js";
 import { PgPoolExecutor } from "../src/lib/storage/pg-executor.js";
 import { PostgresStorage } from "../src/lib/storage/postgres.js";
-import { assertTenantEnforcementBootstrap } from "../src/serve/index.js";
+import { assertTenantEnforcementBootstrapIfPending } from "../src/serve/index.js";
 
 const raw = process.env.TUNNEL_DATABASE_URL?.trim();
 if (!raw) throw new Error("set TUNNEL_DATABASE_URL");
@@ -33,8 +33,9 @@ const executor = new PgPoolExecutor(client);
 const dryRun = process.argv.includes("--dry-run");
 const enforceTenancy = process.argv.includes("--enforce-tenancy");
 try {
-  if (enforceTenancy) await assertTenantEnforcementBootstrap(client);
-  const result = await new PostgresStorage(executor).migrate({
+  const schema = new PostgresStorage(executor);
+  if (enforceTenancy) await assertTenantEnforcementBootstrapIfPending(client, schema);
+  const result = await schema.migrate({
     dryRun,
     through: enforceTenancy ? undefined : "0008_tenant_prepare",
   });

@@ -9,7 +9,7 @@
 //
 import { PgPoolExecutor } from "../src/lib/storage/pg-executor.js";
 import { PostgresStorage } from "../src/lib/storage/postgres.js";
-import { assertTenantEnforcementBootstrap } from "../src/serve/index.js";
+import { assertTenantEnforcementBootstrapIfPending } from "../src/serve/index.js";
 
 function resolveDsn(): string {
   const dsn = process.env.HASNA_LOOPS_MIGRATOR_DATABASE_URL?.trim();
@@ -28,8 +28,8 @@ export async function runMigrations(dsn = resolveDsn()): Promise<void> {
     max: 2,
   });
   try {
-    if (enforceTenancy) await assertTenantEnforcementBootstrap(executor.queryClient);
     const schema = new PostgresStorage(executor);
+    if (enforceTenancy) await assertTenantEnforcementBootstrapIfPending(executor.queryClient, schema);
     const result = await schema.migrate({
       dryRun,
       through: enforceTenancy ? undefined : "0008_tenant_prepare",
