@@ -1,6 +1,6 @@
 -- @generated mirror of POSTGRES_STORAGE_MIGRATIONS["0010_tenant_enforce"] — DO NOT EDIT.
 -- Source of truth: src/lib/storage/postgres-schema.ts
--- Runner: loops-serve migrate  (checksum: sha256:21bbe3e59c58117041a9e5d6c787b21451c02220f70bd17887ec254213475d77)
+-- Runner: loops-serve migrate  (checksum: sha256:4de17560dde3138a6930467228ef2e6f679fbe1b8de787a052762254d920a364)
 
 DO $roles$
 BEGIN
@@ -10,10 +10,25 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'open_loops_authenticator') THEN CREATE ROLE open_loops_authenticator NOLOGIN NOBYPASSRLS; END IF;
 END
 $roles$;
-ALTER ROLE open_loops_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
-ALTER ROLE open_loops_migrator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
-ALTER ROLE open_loops_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
-ALTER ROLE open_loops_authenticator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+ALTER ROLE open_loops_owner INHERIT NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+ALTER ROLE open_loops_migrator INHERIT NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+ALTER ROLE open_loops_runtime INHERIT NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+ALTER ROLE open_loops_authenticator INHERIT NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+
+DO $service_role_memberships$
+DECLARE membership RECORD;
+BEGIN
+  FOR membership IN
+    SELECT granted.rolname AS granted_role, member.rolname AS member_role
+      FROM pg_auth_members relation
+      JOIN pg_roles granted ON granted.oid=relation.roleid
+      JOIN pg_roles member ON member.oid=relation.member
+     WHERE member.rolname IN ('open_loops_runtime', 'open_loops_authenticator')
+  LOOP
+    EXECUTE format('REVOKE %I FROM %I', membership.granted_role, membership.member_role);
+  END LOOP;
+END
+$service_role_memberships$;
 
 DO $service_member_acl$
 DECLARE service_member RECORD;
@@ -41,6 +56,54 @@ BEGIN
   END LOOP;
 END
 $service_member_acl$;
+
+DO $service_role_acl$
+DECLARE namespace RECORD;
+DECLARE database_grantee RECORD;
+BEGIN
+  FOR database_grantee IN
+    SELECT DISTINCT grantee.rolname AS grantee_role
+      FROM pg_database database
+      CROSS JOIN LATERAL aclexplode(COALESCE(database.datacl, acldefault('d', database.datdba))) acl
+      JOIN pg_roles grantee ON grantee.oid=acl.grantee
+     WHERE database.datname=current_database()
+       AND acl.grantee<>database.datdba
+  LOOP
+    EXECUTE format('REVOKE ALL PRIVILEGES ON DATABASE %I FROM %I', current_database(), database_grantee.grantee_role);
+  END LOOP;
+  EXECUTE format(
+    'REVOKE ALL PRIVILEGES ON DATABASE %I FROM PUBLIC',
+    current_database()
+  );
+  FOR namespace IN
+    SELECT nspname
+      FROM pg_namespace
+     WHERE nspname NOT IN ('pg_catalog', 'information_schema')
+       AND nspname NOT LIKE 'pg_toast%'
+       AND nspname NOT LIKE 'pg_temp_%'
+  LOOP
+    EXECUTE format(
+      'REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA %I FROM PUBLIC, open_loops_runtime, open_loops_authenticator',
+      namespace.nspname
+    );
+    EXECUTE format(
+      'REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA %I FROM PUBLIC, open_loops_runtime, open_loops_authenticator',
+      namespace.nspname
+    );
+    EXECUTE format(
+      'REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA %I FROM PUBLIC, open_loops_runtime, open_loops_authenticator',
+      namespace.nspname
+    );
+    EXECUTE format(
+      'REVOKE ALL PRIVILEGES ON SCHEMA %I FROM open_loops_runtime, open_loops_authenticator',
+      namespace.nspname
+    );
+    IF namespace.nspname <> 'public' THEN
+      EXECUTE format('REVOKE ALL PRIVILEGES ON SCHEMA %I FROM PUBLIC', namespace.nspname);
+    END IF;
+  END LOOP;
+END
+$service_role_acl$;
 
 DO $unsafe_service_members$
 DECLARE unsafe_member RECORD;
@@ -407,7 +470,7 @@ BEGIN
   IF EXISTS (
     SELECT 1 FROM pg_roles
      WHERE rolname IN ('open_loops_owner', 'open_loops_migrator', 'open_loops_runtime', 'open_loops_authenticator')
-       AND (rolcanlogin OR rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls)
+       AND (rolcanlogin OR NOT rolinherit OR rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls)
   ) THEN
     RAISE EXCEPTION 'tenant enforcement did not normalize OpenLoops database roles';
   END IF;

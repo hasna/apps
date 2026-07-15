@@ -44,7 +44,10 @@ loopback authentication bypass.
 ## AWS Self-Hosted Gates
 
 1. Provision separate database logins. Tenant enforcement must run through a
-   provider-level bootstrap administrator. `CREATEROLE`, control of the
+   provider-level bootstrap administrator against a dedicated OpenLoops
+   database owned by that bootstrap login (or use a true superuser). Do not run enforcement in a database shared with another
+   application: migration `0010` normalizes ACLs across every non-system
+   schema, table, sequence, and function in the current database. `CREATEROLE`, control of the
    `public` schema, and the ability to `SET ROLE` to `open_loops_owner` and
    `open_loops_migrator` are minimum requirements; PostgreSQL 16 may require
    stronger provider authority for exact role normalization and service-login
@@ -68,7 +71,8 @@ loopback authentication bypass.
 7. Verify an authenticated `/v1` read/write smoke against a throwaway loop and
    a claim/finalize smoke if a runner API URL is configured.
 8. Record package version, git SHA, image tag, database migration plan/result,
-   redacted API URL, health/readiness responses, and rollback handle.
+   evidence that the target database is dedicated to OpenLoops, redacted API
+   URL, health/readiness responses, and rollback handle.
 
 ## Still Pending Before Daemon Cutover
 

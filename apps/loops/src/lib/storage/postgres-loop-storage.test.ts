@@ -36,8 +36,10 @@ const CROSS_ROLE_LOGIN = `loops_cross_test_${Date.now()}_${Math.floor(Math.rando
 const BRIDGE_ROLE = `loops_bridge_test_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
 const BRIDGE_LOGIN = `loops_bridge_login_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
 const EXTRA_AUTH_ROLE = `loops_auth_extra_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+const EXTRA_SERVICE_ROLE = `loops_service_extra_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
 const ADMIN_LOGIN = `loops_admin_option_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
 const HOSTILE_FUNCTION_OWNER = `loops_hostile_fn_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+const DRIFT_DATABASE_LOGIN = `loops_db_drift_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
 function isolatedUrl(credentials?: { username: string; password: string }): string {
   const u = new URL(DATABASE_URL!);
   u.pathname = `/${ISO_DB}`;
@@ -99,8 +101,8 @@ suite("PostgresLoopStorage (live)", () => {
       END $roles$;
       ALTER ROLE open_loops_owner LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS;
       ALTER ROLE open_loops_migrator LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS;
-      ALTER ROLE open_loops_runtime LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS;
-      ALTER ROLE open_loops_authenticator LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS;
+      ALTER ROLE open_loops_runtime NOINHERIT LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS;
+      ALTER ROLE open_loops_authenticator NOINHERIT LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS;
       CREATE ROLE ${UNSAFE_LOGIN} LOGIN BYPASSRLS;
       GRANT open_loops_runtime TO ${UNSAFE_LOGIN};
       CREATE ROLE ${CROSS_ROLE_LOGIN} LOGIN;
@@ -112,6 +114,8 @@ suite("PostgresLoopStorage (live)", () => {
       CREATE ROLE ${ADMIN_LOGIN} LOGIN;
       GRANT open_loops_runtime TO ${ADMIN_LOGIN} WITH ADMIN OPTION;
       CREATE ROLE ${HOSTILE_FUNCTION_OWNER} NOLOGIN;
+      CREATE ROLE ${EXTRA_SERVICE_ROLE} NOLOGIN;
+      GRANT ${EXTRA_SERVICE_ROLE} TO open_loops_runtime;
       CREATE ROLE ${RUNTIME_LOGIN} LOGIN PASSWORD '${RUNTIME_PASSWORD}' NOBYPASSRLS;
       GRANT open_loops_runtime TO ${RUNTIME_LOGIN};
       ALTER ROLE ${RUNTIME_LOGIN} SET search_path=evil,public;
@@ -145,6 +149,14 @@ suite("PostgresLoopStorage (live)", () => {
         LANGUAGE sql STABLE AS 'SELECT ''hostile-tenant''::TEXT';
       ALTER FUNCTION public.open_loops_current_tenant_id() OWNER TO ${HOSTILE_FUNCTION_OWNER};
       GRANT EXECUTE ON FUNCTION public.open_loops_current_tenant_id() TO PUBLIC, open_loops_authenticator;
+      CREATE SCHEMA residual_acl;
+      CREATE TABLE residual_acl.private_rows(id INTEGER PRIMARY KEY);
+      CREATE SEQUENCE residual_acl.private_sequence;
+      CREATE FUNCTION residual_acl.private_function() RETURNS INTEGER LANGUAGE sql RETURN 1;
+      GRANT USAGE ON SCHEMA residual_acl TO open_loops_runtime, open_loops_authenticator;
+      GRANT SELECT ON residual_acl.private_rows TO PUBLIC, open_loops_runtime, open_loops_authenticator;
+      GRANT USAGE ON SEQUENCE residual_acl.private_sequence TO PUBLIC, open_loops_runtime, open_loops_authenticator;
+      GRANT EXECUTE ON FUNCTION residual_acl.private_function() TO open_loops_runtime, open_loops_authenticator;
       SET ROLE ${RUNTIME_LOGIN};
       CREATE SCHEMA service_owned_probe;
       CREATE FUNCTION service_owned_probe.escalate() RETURNS INTEGER
@@ -216,7 +228,9 @@ suite("PostgresLoopStorage (live)", () => {
       DROP ROLE IF EXISTS ${AUTH_LOGIN};
     `);
     await admin(`DROP ROLE IF EXISTS ${EXTRA_AUTH_ROLE}`);
+    await admin(`DROP ROLE IF EXISTS ${EXTRA_SERVICE_ROLE}`);
     await admin(`DROP ROLE IF EXISTS ${HOSTILE_FUNCTION_OWNER}`);
+    await admin(`DO $cleanup$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='${DRIFT_DATABASE_LOGIN}') THEN REVOKE open_loops_runtime FROM ${DRIFT_DATABASE_LOGIN}; DROP ROLE ${DRIFT_DATABASE_LOGIN}; END IF; END $cleanup$`);
   });
 
   test("tenant enforcement normalizes poisoned roles and removes unsafe service members", async () => {
@@ -227,16 +241,16 @@ suite("PostgresLoopStorage (live)", () => {
     expect(bridgeMembershipRemoved).toBe(true);
     expect(adminMembershipRemoved).toBe(true);
     const roles = await executor.queryClient.many<{
-      rolname: string; rolcanlogin: boolean; rolsuper: boolean; rolcreatedb: boolean;
+      rolname: string; rolcanlogin: boolean; rolinherit: boolean; rolsuper: boolean; rolcreatedb: boolean;
       rolcreaterole: boolean; rolreplication: boolean; rolbypassrls: boolean;
-    }>(`SELECT rolname, rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls
+    }>(`SELECT rolname, rolcanlogin, rolinherit, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls
           FROM pg_roles WHERE rolname = ANY($1::text[]) ORDER BY rolname`, [[
       "open_loops_owner", "open_loops_migrator", "open_loops_runtime", "open_loops_authenticator",
     ]]);
     expect(roles).toHaveLength(4);
     for (const role of roles) {
       expect(role).toMatchObject({
-        rolcanlogin: false, rolsuper: false, rolcreatedb: false, rolcreaterole: false,
+        rolcanlogin: false, rolinherit: true, rolsuper: false, rolcreatedb: false, rolcreaterole: false,
         rolreplication: false, rolbypassrls: false,
       });
     }
@@ -254,6 +268,13 @@ suite("PostgresLoopStorage (live)", () => {
          WHERE database.datname=current_database() AND grantee.rolname=$1 AND acl.privilege_type='CONNECT'
        ) AS direct_connect`, [RUNTIME_LOGIN],
     )).toEqual({ direct_connect: true });
+    expect(await executor.queryClient.get<{ public_connect: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM pg_database database
+         CROSS JOIN LATERAL aclexplode(COALESCE(database.datacl, acldefault('d', database.datdba))) acl
+         WHERE database.datname=current_database() AND acl.grantee=0 AND acl.privilege_type='CONNECT'
+       ) AS public_connect`,
+    )).toEqual({ public_connect: false });
     expect(await executor.queryClient.get<{ direct_connect: boolean }>(
       `SELECT EXISTS (
          SELECT 1 FROM pg_database database
@@ -265,6 +286,31 @@ suite("PostgresLoopStorage (live)", () => {
     expect(await executor.queryClient.get<{ can_select: boolean }>(
       "SELECT has_table_privilege($1, 'tenants', 'SELECT') AS can_select", [RUNTIME_LOGIN],
     )).toEqual({ can_select: false });
+    expect(await executor.queryClient.get<{ inherited: boolean }>(
+      "SELECT pg_has_role('open_loops_runtime', $1, 'MEMBER') AS inherited", [EXTRA_SERVICE_ROLE],
+    )).toEqual({ inherited: false });
+    expect(await executor.queryClient.get<{
+      runtime_schema: boolean; runtime_table: boolean; runtime_sequence: boolean;
+      runtime_function: boolean; auth_function: boolean;
+    }>(
+      `SELECT has_schema_privilege($1, 'residual_acl', 'USAGE') AS runtime_schema,
+              has_table_privilege($1, 'residual_acl.private_rows', 'SELECT') AS runtime_table,
+              has_sequence_privilege($1, 'residual_acl.private_sequence', 'USAGE') AS runtime_sequence,
+              has_function_privilege($1, 'residual_acl.private_function()', 'EXECUTE') AS runtime_function,
+              has_function_privilege($2, 'residual_acl.private_function()', 'EXECUTE') AS auth_function`,
+      [RUNTIME_LOGIN, AUTH_LOGIN],
+    )).toEqual({
+      runtime_schema: false,
+      runtime_table: false,
+      runtime_sequence: false,
+      runtime_function: false,
+      auth_function: false,
+    });
+    expect(await executor.queryClient.get<{ runtime_temp: boolean; auth_temp: boolean }>(
+      `SELECT has_database_privilege($1, current_database(), 'TEMPORARY') AS runtime_temp,
+              has_database_privilege($2, current_database(), 'TEMPORARY') AS auth_temp`,
+      [RUNTIME_LOGIN, AUTH_LOGIN],
+    )).toEqual({ runtime_temp: false, auth_temp: false });
     expect(await executor.queryClient.get<{ owner: string }>(
       "SELECT pg_get_userbyid(proowner) AS owner FROM pg_proc WHERE oid='public.open_loops_current_tenant_id()'::regprocedure",
     )).toEqual({ owner: "open_loops_owner" });
@@ -293,6 +339,76 @@ suite("PostgresLoopStorage (live)", () => {
     await executor.queryClient.execute("REVOKE TRUNCATE ON loops FROM open_loops_runtime");
     expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
     expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(true);
+    await admin(`GRANT ${EXTRA_SERVICE_ROLE} TO open_loops_runtime`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
+    await admin(`REVOKE ${EXTRA_SERVICE_ROLE} FROM open_loops_runtime`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
+    await admin(`ALTER ROLE open_loops_runtime BYPASSRLS`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
+    await admin(`ALTER ROLE open_loops_runtime NOBYPASSRLS`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
+    await executor.queryClient.execute(`GRANT CONNECT ON DATABASE ${ISO_DB} TO PUBLIC`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
+    expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(false);
+    await executor.queryClient.execute(`REVOKE CONNECT ON DATABASE ${ISO_DB} FROM PUBLIC`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
+    expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(true);
+    await executor.queryClient.execute(`GRANT CONNECT ON DATABASE ${ISO_DB} TO ${RUNTIME_LOGIN} WITH GRANT OPTION`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
+    await executor.queryClient.execute(`REVOKE CONNECT ON DATABASE ${ISO_DB} FROM ${RUNTIME_LOGIN}; GRANT CONNECT ON DATABASE ${ISO_DB} TO ${RUNTIME_LOGIN}`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
+    await admin(`CREATE ROLE ${DRIFT_DATABASE_LOGIN} LOGIN BYPASSRLS; GRANT open_loops_runtime TO ${DRIFT_DATABASE_LOGIN}; GRANT CONNECT ON DATABASE ${ISO_DB} TO ${DRIFT_DATABASE_LOGIN}`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
+    expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(false);
+    await admin(`REVOKE open_loops_runtime FROM ${DRIFT_DATABASE_LOGIN}; DROP OWNED BY ${DRIFT_DATABASE_LOGIN}; DROP ROLE ${DRIFT_DATABASE_LOGIN}`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
+    expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(true);
+    await executor.queryClient.execute(`ALTER FUNCTION public.open_loops_current_tenant_id() OWNER TO open_loops_runtime`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
+    await executor.queryClient.execute(`ALTER FUNCTION public.open_loops_current_tenant_id() OWNER TO open_loops_owner`);
+    await executor.queryClient.execute(`GRANT EXECUTE ON FUNCTION public.open_loops_current_tenant_id() TO open_loops_runtime`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
+    await executor.queryClient.execute(`ALTER FUNCTION public.open_loops_current_tenant_id() SECURITY DEFINER`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
+    await executor.queryClient.execute(`ALTER FUNCTION public.open_loops_current_tenant_id() SECURITY INVOKER`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
+    await executor.queryClient.execute(`ALTER FUNCTION public.open_loops_authenticate_key(TEXT, TEXT) OWNER TO open_loops_authenticator`);
+    expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(false);
+    await executor.queryClient.execute(`ALTER FUNCTION public.open_loops_authenticate_key(TEXT, TEXT) OWNER TO open_loops_owner`);
+    await executor.queryClient.execute(`GRANT EXECUTE ON FUNCTION public.open_loops_authenticate_key(TEXT, TEXT) TO open_loops_authenticator`);
+    expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(true);
+    await executor.queryClient.execute(`ALTER FUNCTION public.open_loops_authenticate_key(TEXT, TEXT) SECURITY INVOKER`);
+    expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(false);
+    await executor.queryClient.execute(`ALTER FUNCTION public.open_loops_authenticate_key(TEXT, TEXT) SECURITY DEFINER`);
+    expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(true);
+    await executor.queryClient.execute(`ALTER FUNCTION public.open_loops_authenticate_key(TEXT, TEXT) SET search_path=public`);
+    expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(false);
+    await executor.queryClient.execute(`ALTER FUNCTION public.open_loops_authenticate_key(TEXT, TEXT) SET search_path=pg_catalog`);
+    expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(true);
+    await executor.queryClient.execute(`GRANT SELECT ON loops TO open_loops_runtime WITH GRANT OPTION`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
+    await executor.queryClient.execute(`REVOKE SELECT ON loops FROM open_loops_runtime; GRANT SELECT ON loops TO open_loops_runtime`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
+    await executor.queryClient.execute(`GRANT EXECUTE ON FUNCTION public.open_loops_authenticate_key(TEXT, TEXT) TO open_loops_authenticator WITH GRANT OPTION`);
+    expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(false);
+    await executor.queryClient.execute(`REVOKE EXECUTE ON FUNCTION public.open_loops_authenticate_key(TEXT, TEXT) FROM open_loops_authenticator; GRANT EXECUTE ON FUNCTION public.open_loops_authenticate_key(TEXT, TEXT) TO open_loops_authenticator`);
+    expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(true);
+    await executor.queryClient.execute(`CREATE FUNCTION evil.public_escalate() RETURNS INTEGER LANGUAGE sql RETURN 1`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
+    expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(false);
+    await executor.queryClient.execute(`REVOKE EXECUTE ON FUNCTION evil.public_escalate() FROM PUBLIC`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
+    expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(true);
+    await executor.queryClient.execute(`GRANT USAGE ON SCHEMA evil TO open_loops_runtime`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
+    await executor.queryClient.execute(`REVOKE USAGE ON SCHEMA evil FROM open_loops_runtime`);
+    await executor.queryClient.execute(`CREATE SEQUENCE evil.runtime_sequence; GRANT USAGE ON SEQUENCE evil.runtime_sequence TO open_loops_runtime`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
+    await executor.queryClient.execute(`REVOKE USAGE ON SEQUENCE evil.runtime_sequence FROM open_loops_runtime`);
+    await executor.queryClient.execute(`GRANT TEMPORARY ON DATABASE ${ISO_DB} TO open_loops_runtime`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
+    await executor.queryClient.execute(`REVOKE TEMPORARY ON DATABASE ${ISO_DB} FROM open_loops_runtime`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
     await executor.queryClient.execute(`
       CREATE TABLE evil.credentials(secret TEXT NOT NULL);
       INSERT INTO evil.credentials(secret) VALUES ('cross-app-secret');

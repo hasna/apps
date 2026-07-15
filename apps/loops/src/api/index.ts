@@ -225,8 +225,9 @@ export function createLoopsApiServer(opts: LoopsApiServerOptions = {}) {
       try {
         return await withTenantStorage(principal, (storage) => execute(storage));
       } catch (error) {
-        logInternalFailure(request, error, "internal_error", principal.requestId);
-        return errorResponse(error);
+        const response = errorResponse(error);
+        if (response.status >= 500) logInternalFailure(request, error, "internal_error", principal.requestId);
+        return response;
       }
     },
   });
@@ -248,36 +249,30 @@ async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
   if (segments[0] !== "v1") return fail("not_found", 404);
   if (ctx.request.method === "GET" && segments.length === 1) return ok({ service: "loops-api", version: "v1" });
   if (ctx.request.method === "GET" && segments[1] === "status") return Response.json(apiStatus());
-  try {
-    if (segments[1] === "import") return await handleImportRequest(ctx, segments.slice(2));
-    if (segments[1] === "loops") return await handleLoopsRequest(ctx, segments.slice(2));
-    if (segments[1] === "runs") return await handleRunsRequest(ctx, segments.slice(2));
-    if (segments[1] === "receipts") return await handleReceiptsRequest(ctx, segments.slice(2));
-    if (segments[1] === "workflows") return await handleWorkflowsRequest(ctx, segments.slice(2));
-    if (segments[1] === "workflow-runs") return await handleWorkflowRunsRequest(ctx, segments.slice(2));
-    if (segments[1] === "work-items") return await handleWorkItemsRequest(ctx, segments.slice(2));
-    if (segments[1] === "invocations") return await handleInvocationsRequest(ctx, segments.slice(2));
-    if (segments[1] === "goals") return await handleGoalsRequest(ctx, segments.slice(2));
-    if (segments[1] === "goal-runs") return await handleGoalRunsRequest(ctx, segments.slice(2));
-    if (segments[1] === "history") return await handleHistoryRequest(ctx, segments.slice(2));
-    if (segments[1] === "runners") return await handleRunnerRequest(ctx, segments.slice(2));
-    if (segments[1] === "leases" && segments[2] === "recover" && ctx.request.method === "POST") {
-      if (ctx.auth.tokenKind === "machine" || !ctx.auth.roles.some((role) => role === "admin" || role === "service")) {
-        return fail("maintenance_principal_required", 403);
-      }
-      const storage = requireStorage(ctx.storage);
-      const recovered = await storage.recoverExpiredRunLeasesDetailed(ctx.now());
-      return ok({
-        abandoned: recovered.abandoned.map((run) => publicRun(run, false, { redactError: true })),
-        deferred: recovered.deferred.map((run) => publicRun(run, false, { redactError: true })),
-      });
+  if (segments[1] === "import") return await handleImportRequest(ctx, segments.slice(2));
+  if (segments[1] === "loops") return await handleLoopsRequest(ctx, segments.slice(2));
+  if (segments[1] === "runs") return await handleRunsRequest(ctx, segments.slice(2));
+  if (segments[1] === "receipts") return await handleReceiptsRequest(ctx, segments.slice(2));
+  if (segments[1] === "workflows") return await handleWorkflowsRequest(ctx, segments.slice(2));
+  if (segments[1] === "workflow-runs") return await handleWorkflowRunsRequest(ctx, segments.slice(2));
+  if (segments[1] === "work-items") return await handleWorkItemsRequest(ctx, segments.slice(2));
+  if (segments[1] === "invocations") return await handleInvocationsRequest(ctx, segments.slice(2));
+  if (segments[1] === "goals") return await handleGoalsRequest(ctx, segments.slice(2));
+  if (segments[1] === "goal-runs") return await handleGoalRunsRequest(ctx, segments.slice(2));
+  if (segments[1] === "history") return await handleHistoryRequest(ctx, segments.slice(2));
+  if (segments[1] === "runners") return await handleRunnerRequest(ctx, segments.slice(2));
+  if (segments[1] === "leases" && segments[2] === "recover" && ctx.request.method === "POST") {
+    if (ctx.auth.tokenKind === "machine" || !ctx.auth.roles.some((role) => role === "admin" || role === "service")) {
+      return fail("maintenance_principal_required", 403);
     }
-    return fail("not_found", 404);
-  } catch (error) {
-    const status = errorStatus(error);
-    if (status >= 500) logInternalFailure(ctx.request, error, "internal_error", ctx.auth.requestId);
-    return errorResponse(error);
+    const storage = requireStorage(ctx.storage);
+    const recovered = await storage.recoverExpiredRunLeasesDetailed(ctx.now());
+    return ok({
+      abandoned: recovered.abandoned.map((run) => publicRun(run, false, { redactError: true })),
+      deferred: recovered.deferred.map((run) => publicRun(run, false, { redactError: true })),
+    });
   }
+  return fail("not_found", 404);
 }
 
 interface ImportRequestBody {
@@ -686,8 +681,12 @@ async function handleRunnerRequest(ctx: V1RequestContext, segments: string[]): P
 }
 
 function requireBoundRunner(auth: TenantAuthContext, runner: RunnerRecord): void {
-  if (runner.id !== auth.principalId) {
-    throw Object.assign(new Error("runner_identity_mismatch"), { status: 403 });
+  if (
+    runner.id !== auth.principalId ||
+    (runner.machineId !== undefined && runner.machineId !== auth.principalId) ||
+    (runner.hostname !== undefined && runner.hostname !== auth.principalId)
+  ) {
+    throw apiError("runner_identity_mismatch", 403);
   }
 }
 
@@ -704,7 +703,7 @@ function runnerRecord(body: Record<string, unknown>): RunnerRecord {
   const machineId = optionalString(body.machineId);
   const hostname = optionalString(body.hostname);
   const id = optionalString(body.runnerId) ?? machineId ?? hostname;
-  if (!id) throw Object.assign(new Error("runner_id_required"), { status: 422 });
+  if (!id) throw apiError("runner_id_required", 422);
   return {
     id,
     machineId,
@@ -750,8 +749,7 @@ async function claimRuns(
 
 function runnerMatchesLoop(machine: { id?: string; requestedId?: string } | undefined, runner: RunnerRecord): boolean {
   if (!machine) return true;
-  const candidates = new Set([runner.id, runner.machineId, runner.hostname].filter(Boolean));
-  return candidates.has(machine.id) || (machine.requestedId ? candidates.has(machine.requestedId) : false);
+  return machine.id === runner.id;
 }
 
 async function heartbeatRun(storage: LoopStorageContract, principalId: string, runId: string, body: Record<string, unknown>, now: Date): Promise<Response> {
@@ -779,7 +777,7 @@ async function finalizeRun(storage: LoopStorageContract, principalId: string, ru
     optionalString(body.status) ?? null,
     ["succeeded", "failed", "timed_out"],
   );
-  if (!status) throw Object.assign(new Error("status_required"), { status: 422 });
+  if (!status) throw apiError("status_required", 422);
   const existing = await storage.getRun(runId);
   if (!existing) return fail("run_not_found", 404);
   if (existing.status !== "running" || !existing.claimedBy) return fail("run_not_running", 409);
@@ -851,18 +849,18 @@ function runnerLeaseMs(leaseMs: number): number {
 }
 
 function requireStorage(storage: LoopStorageContract | undefined): LoopStorageContract {
-  if (!storage) throw Object.assign(new Error("storage_unconfigured"), { status: 503, code: "storage_unconfigured" });
+  if (!storage) throw apiError("storage_unconfigured", 503);
   return storage;
 }
 
 async function readJsonBody<T>(request: Request, limitBytes: number): Promise<T> {
   const contentType = request.headers.get("content-type") ?? "";
-  if (!isJsonContentType(contentType)) throw Object.assign(new Error("unsupported_media_type"), { status: 415 });
+  if (!isJsonContentType(contentType)) throw apiError("unsupported_media_type", 415);
   const text = await readBodyText(request, limitBytes);
   try {
     return JSON.parse(text || "{}") as T;
   } catch {
-    throw Object.assign(new Error("invalid_json"), { status: 400 });
+    throw apiError("invalid_json", 400);
   }
 }
 
@@ -875,8 +873,8 @@ async function readBodyText(request: Request, limitBytes: number): Promise<strin
   const contentLength = request.headers.get("content-length");
   if (contentLength) {
     const declaredBytes = Number(contentLength);
-    if (!Number.isFinite(declaredBytes) || declaredBytes < 0) throw Object.assign(new Error("invalid_content_length"), { status: 400 });
-    if (declaredBytes > limitBytes) throw Object.assign(new Error("body_too_large"), { status: 413 });
+    if (!Number.isFinite(declaredBytes) || declaredBytes < 0) throw apiError("invalid_content_length", 400);
+    if (declaredBytes > limitBytes) throw apiError("body_too_large", 413);
   }
   if (!request.body) return "";
 
@@ -891,7 +889,7 @@ async function readBodyText(request: Request, limitBytes: number): Promise<strin
     receivedBytes += value.byteLength;
     if (receivedBytes > limitBytes) {
       await reader.cancel().catch(() => undefined);
-      throw Object.assign(new Error("body_too_large"), { status: 413 });
+      throw apiError("body_too_large", 413);
     }
     chunks.push(value);
   }
@@ -914,46 +912,46 @@ const MAX_PAGE_LIMIT = 1000;
 function optionalLimit(value: string | null): number | undefined {
   if (value == null || value === "") return undefined;
   const limit = Number(value);
-  if (!Number.isInteger(limit) || limit < 1) throw Object.assign(new Error("invalid_limit"), { status: 422 });
+  if (!Number.isInteger(limit) || limit < 1) throw apiError("invalid_limit", 422);
   return Math.min(limit, MAX_PAGE_LIMIT);
 }
 
 function optionalOffset(value: string | null): number | undefined {
   if (value == null || value === "") return undefined;
   const offset = Number(value);
-  if (!Number.isInteger(offset) || offset < 0) throw Object.assign(new Error("invalid_offset"), { status: 422 });
+  if (!Number.isInteger(offset) || offset < 0) throw apiError("invalid_offset", 422);
   return offset;
 }
 
 function optionalString(value: unknown): string | undefined {
   if (value === undefined || value === null) return undefined;
-  if (typeof value !== "string" || value.trim() === "") throw Object.assign(new Error("invalid_string"), { status: 422 });
+  if (typeof value !== "string" || value.trim() === "") throw apiError("invalid_string", 422);
   return value.trim();
 }
 
 function requiredString(value: unknown, name: string): string {
   const result = optionalString(value);
-  if (!result) throw Object.assign(new Error(`${name}_required`), { status: 422 });
+  if (!result) throw apiError(`${name}_required`, 422);
   return result;
 }
 
 function optionalText(value: unknown): string | undefined {
   if (value === undefined || value === null) return undefined;
-  if (typeof value !== "string") throw Object.assign(new Error("invalid_string"), { status: 422 });
+  if (typeof value !== "string") throw apiError("invalid_string", 422);
   return value;
 }
 
 function optionalInteger(value: unknown): number | undefined {
   if (value === undefined || value === null || value === "") return undefined;
   const result = Number(value);
-  if (!Number.isInteger(result)) throw Object.assign(new Error("invalid_integer"), { status: 422 });
+  if (!Number.isInteger(result)) throw apiError("invalid_integer", 422);
   return result;
 }
 
 function optionalPositiveInteger(value: unknown, min: number, max: number): number | undefined {
   const result = optionalInteger(value);
   if (result === undefined) return undefined;
-  if (result < min || result > max) throw Object.assign(new Error("invalid_integer_range"), { status: 422 });
+  if (result < min || result > max) throw apiError("invalid_integer_range", 422);
   return result;
 }
 
@@ -961,16 +959,16 @@ function optionalIsoString(value: unknown): string | undefined {
   const text = optionalString(value);
   if (!text) return undefined;
   const parsed = new Date(text);
-  if (Number.isNaN(parsed.getTime())) throw Object.assign(new Error("invalid_datetime"), { status: 422 });
+  if (Number.isNaN(parsed.getTime())) throw apiError("invalid_datetime", 422);
   return parsed.toISOString();
 }
 
 function stringRecord(value: unknown): Record<string, string> {
   if (value === undefined || value === null) return {};
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw Object.assign(new Error("invalid_string_record"), { status: 422 });
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw apiError("invalid_string_record", 422);
   const result: Record<string, string> = {};
   for (const [key, entry] of Object.entries(value)) {
-    if (typeof entry !== "string") throw Object.assign(new Error("invalid_string_record"), { status: 422 });
+    if (typeof entry !== "string") throw apiError("invalid_string_record", 422);
     result[key] = entry;
   }
   return result;
@@ -978,7 +976,7 @@ function stringRecord(value: unknown): Record<string, string> {
 
 function objectRecord(value: unknown): Record<string, unknown> {
   if (value === undefined || value === null) return {};
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw Object.assign(new Error("invalid_object"), { status: 422 });
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw apiError("invalid_object", 422);
   return value as Record<string, unknown>;
 }
 
@@ -986,29 +984,32 @@ function optionalBoolean(value: string | null): boolean | undefined {
   if (value == null || value === "") return undefined;
   if (["1", "true", "yes"].includes(value.toLowerCase())) return true;
   if (["0", "false", "no"].includes(value.toLowerCase())) return false;
-  throw Object.assign(new Error("invalid_boolean"), { status: 422 });
+  throw apiError("invalid_boolean", 422);
 }
 
 function optionalEnum<T extends string>(value: string | null, allowed: readonly T[]): T | undefined {
   if (value == null || value === "") return undefined;
   if ((allowed as readonly string[]).includes(value)) return value as T;
-  throw Object.assign(new Error("invalid_filter"), { status: 422 });
+  throw apiError("invalid_filter", 422);
+}
+
+class PublicApiError extends Error {
+  constructor(readonly code: string, readonly status: number) {
+    super(code);
+    this.name = "PublicApiError";
+  }
+}
+
+function apiError(code: string, status: number): PublicApiError {
+  return new PublicApiError(code, status);
 }
 
 function errorResponse(error: unknown): Response {
-  if (error instanceof LoopNotFoundError) return fail("loop_not_found", 404, { message: error.message });
-  if (error instanceof LoopArchivedError) return fail("loop_archived", 409, { message: error.message });
-  if (error instanceof ValidationError) return fail("validation_failed", 422, { message: error.message });
-  const status = errorStatus(error);
-  const message = error instanceof Error ? error.message : String(error);
-  const code = typeof error === "object" && error && "code" in error && typeof error.code === "string" ? error.code : status === 500 ? "internal_error" : message;
-  return fail(code, status);
-}
-
-function errorStatus(error: unknown): number {
-  return typeof error === "object" && error && "status" in error && typeof error.status === "number"
-    ? error.status
-    : 500;
+  if (error instanceof LoopNotFoundError) return fail("loop_not_found", 404);
+  if (error instanceof LoopArchivedError) return fail("loop_archived", 409);
+  if (error instanceof ValidationError) return fail("validation_failed", 422);
+  if (error instanceof PublicApiError) return fail(error.code, error.status);
+  return fail("internal_error", 500);
 }
 
 function requestIdentifier(request: Request): string {
@@ -1026,7 +1027,7 @@ function logInternalFailure(request: Request, error: unknown, code: string, requ
     requestId,
     method: request.method,
     path: new URL(request.url).pathname,
-    errorType: error instanceof Error ? error.name : typeof error,
+    errorType: error instanceof Error ? "error" : typeof error,
   }));
 }
 

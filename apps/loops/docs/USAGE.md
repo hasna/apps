@@ -100,8 +100,8 @@ loops self-hosted pull --dry-run
 Self-hosted push is safe by default: workflows are archived and loops are
 paused with scheduling pointers cleared, including existing same-id rows that
 need re-neutralizing. `--replace` permits broader same-id data updates, but is
-not required for that safety normalization. Use `loops self-hosted
-`loops-runner run-once` uses the current bounded non-workflow
+not required for that safety normalization. `loops-runner run-once` uses the
+current bounded non-workflow
 claim/execute/finalize protocol. Durable runner registration is intentionally
 absent until the control plane persists and verifies machine records.
 `loops-serve migrate` applies the Postgres schema and `api_keys` table for a

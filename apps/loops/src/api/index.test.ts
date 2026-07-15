@@ -172,16 +172,62 @@ describe("loops-api foundation", () => {
 
   test("internal storage failures never expose credential-bearing error messages", async () => {
     const mod = await import("./index.js");
+    let committed = false;
+    let rolledBack = false;
+    const internalError = Object.assign(new Error("postgres://user:secret@db.internal/loops"), {
+      name: "postgres://name-secret@db.internal/loops",
+      code: "postgres://code-secret@db.internal/loops",
+      status: 400,
+    });
     const failingStorage = {
-      listLoops: async () => { throw new Error("postgres://user:secret@db.internal/loops"); },
+      listLoops: async () => { throw internalError; },
     } as unknown as LoopStorageContract;
-    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage: failingStorage });
+    const server = mod.createLoopsApiServer({
+      host: "127.0.0.1",
+      port: 0,
+      authenticator: {
+        authenticate: async () => ({ ok: true as const, status: 200 as const, principal: testPrincipal }),
+      },
+      withTenantStorage: async (_principal, fn) => {
+        try {
+          const response = await fn(failingStorage);
+          committed = true;
+          return response;
+        } catch (error) {
+          rolledBack = true;
+          throw error;
+        }
+      },
+    });
+    const logged: string[] = [];
+    const originalError = console.error;
+    console.error = (...values: unknown[]) => { logged.push(values.map(String).join(" ")); };
     try {
       const response = await fetch(apiUrl(server, "/v1/loops"));
       expect(response.status).toBe(500);
       expect(await response.json()).toEqual({ ok: false, error: "internal_error" });
+      expect(committed).toBe(false);
+      expect(rolledBack).toBe(true);
+      expect(logged.join("\n")).not.toContain("secret");
+      expect(logged.join("\n")).not.toContain("postgres");
+    } finally {
+      console.error = originalError;
+      server.stop(true);
+    }
+  });
+
+  test("domain errors expose stable codes without echoing identifiers", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+    const secretIdentifier = "postgres://user:secret@db.internal/loops";
+    try {
+      const response = await fetch(apiUrl(server, `/v1/loops/${encodeURIComponent(secretIdentifier)}`));
+      expect(response.status).toBe(404);
+      expect(await response.json()).toEqual({ ok: false, error: "loop_not_found" });
     } finally {
       server.stop(true);
+      await storage.close();
     }
   });
 
@@ -823,6 +869,36 @@ describe("loops-api foundation", () => {
       });
       expect(response.status).toBe(403);
       expect(await response.json()).toMatchObject({ ok: false, error: "runner_identity_mismatch" });
+
+      const machineSpoof = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "machine-bound", machineId: "machine-spoofed" }),
+      });
+      expect(machineSpoof.status).toBe(403);
+      expect(await machineSpoof.json()).toMatchObject({ ok: false, error: "runner_identity_mismatch" });
+
+      const hostnameSpoof = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "machine-bound", hostname: "machine-spoofed" }),
+      });
+      expect(hostnameSpoof.status).toBe(403);
+      expect(await hostnameSpoof.json()).toMatchObject({ ok: false, error: "runner_identity_mismatch" });
+
+      await storage.createLoop({
+        name: "alias-collision",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "command", command: "true" },
+        machine: { id: "machine-canonical", requestedId: "machine-bound" },
+      }, new Date("2025-12-31T00:00:00Z"));
+      const aliasCollision = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "machine-bound", now: "2026-01-01T00:00:00Z" }),
+      });
+      expect(aliasCollision.status).toBe(200);
+      expect(await aliasCollision.json()).toMatchObject({ ok: true, claims: [] });
     } finally {
       server.stop(true);
       await storage.close();

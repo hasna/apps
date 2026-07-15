@@ -69,15 +69,23 @@ export async function isSafeServiceConnection(
     expected_member: boolean;
     expected_usage: boolean;
     expected_direct: boolean;
+    expected_role_has_memberships: boolean;
+    expected_role_safe: boolean;
     unexpected_membership: boolean;
     has_members: boolean;
     forbidden_member: boolean;
     owner_member: boolean;
     migrator_member: boolean;
+    required_database_privileges: boolean;
+    database_acl_safe: boolean;
+    required_schema_privileges: boolean;
     required_table_privileges: boolean;
     forbidden_table_privileges: boolean;
+    forbidden_sequence_privileges: boolean;
     required_function_privileges: boolean;
+    required_function_security: boolean;
     forbidden_function_privileges: boolean;
+    forbidden_grant_options: boolean;
   }>(
     `SELECT role.rolcanlogin, role.rolinherit, role.rolsuper, role.rolcreatedb, role.rolcreaterole,
             role.rolreplication, role.rolbypassrls,
@@ -90,6 +98,24 @@ export async function isSafeServiceConnection(
                 AND NOT direct.admin_option AND direct.inherit_option AND direct.set_option
             ) AS expected_direct,
             EXISTS (
+              SELECT 1
+                FROM pg_auth_members membership
+                JOIN pg_roles member ON member.oid=membership.member
+               WHERE member.rolname=$1
+            ) AS expected_role_has_memberships,
+            EXISTS (
+              SELECT 1
+                FROM pg_roles expected
+               WHERE expected.rolname=$1
+                 AND NOT expected.rolcanlogin
+                 AND expected.rolinherit
+                 AND NOT expected.rolsuper
+                 AND NOT expected.rolcreatedb
+                 AND NOT expected.rolcreaterole
+                 AND NOT expected.rolreplication
+                 AND NOT expected.rolbypassrls
+            ) AS expected_role_safe,
+            EXISTS (
               SELECT 1 FROM pg_auth_members other
                JOIN pg_roles granted ON granted.oid=other.roleid
               WHERE other.member=role.oid AND granted.rolname<>$1
@@ -98,6 +124,73 @@ export async function isSafeServiceConnection(
             pg_has_role(role.oid, $2, 'MEMBER') AS forbidden_member,
             pg_has_role(role.oid, 'open_loops_owner', 'MEMBER') AS owner_member,
             pg_has_role(role.oid, 'open_loops_migrator', 'MEMBER') AS migrator_member,
+            has_database_privilege(session_user, current_database(), 'CONNECT')
+              AND NOT has_database_privilege(session_user, current_database(), 'CREATE')
+              AND NOT has_database_privilege(session_user, current_database(), 'TEMPORARY')
+              AND EXISTS (
+                SELECT 1
+                  FROM pg_database database
+                  CROSS JOIN LATERAL aclexplode(COALESCE(database.datacl, acldefault('d', database.datdba))) acl
+                 WHERE database.datname=current_database()
+                   AND acl.grantee=role.oid
+                   AND acl.privilege_type='CONNECT'
+                   AND NOT acl.is_grantable
+              ) AS required_database_privileges,
+            NOT EXISTS (
+              SELECT 1
+                FROM pg_database database
+                CROSS JOIN LATERAL aclexplode(COALESCE(database.datacl, acldefault('d', database.datdba))) acl
+                LEFT JOIN pg_roles grantee ON grantee.oid=acl.grantee
+               WHERE database.datname=current_database()
+                 AND acl.grantee<>database.datdba
+                 AND (
+                   acl.grantee=0
+                   OR grantee.oid IS NULL
+                   OR NOT (
+                     grantee.rolcanlogin
+                     AND grantee.rolinherit
+                     AND NOT grantee.rolsuper
+                     AND NOT grantee.rolcreatedb
+                     AND NOT grantee.rolcreaterole
+                     AND NOT grantee.rolreplication
+                     AND NOT grantee.rolbypassrls
+                     AND acl.privilege_type='CONNECT'
+                     AND NOT acl.is_grantable
+                     AND EXISTS (
+                       SELECT 1
+                         FROM pg_auth_members direct
+                         JOIN pg_roles granted ON granted.oid=direct.roleid
+                        WHERE direct.member=grantee.oid
+                          AND granted.rolname IN ('open_loops_runtime', 'open_loops_authenticator')
+                          AND NOT direct.admin_option
+                          AND direct.inherit_option
+                          AND direct.set_option
+                     )
+                     AND (SELECT count(*) FROM pg_auth_members membership WHERE membership.member=grantee.oid)=1
+                     AND NOT EXISTS (
+                       SELECT 1
+                         FROM pg_auth_members membership
+                         JOIN pg_roles granted ON granted.oid=membership.roleid
+                        WHERE membership.member=grantee.oid
+                          AND granted.rolname NOT IN ('open_loops_runtime', 'open_loops_authenticator')
+                     )
+                     AND NOT EXISTS (
+                       SELECT 1 FROM pg_auth_members downstream WHERE downstream.roleid=grantee.oid
+                     )
+                   )
+                 )
+            ) AS database_acl_safe,
+            has_schema_privilege(session_user, 'public', 'USAGE')
+              AND NOT has_schema_privilege(session_user, 'public', 'CREATE')
+              AND NOT EXISTS (
+                SELECT 1
+                  FROM pg_namespace namespace
+                 WHERE namespace.nspname <> 'public'
+                   AND namespace.nspname NOT IN ('pg_catalog', 'information_schema')
+                   AND namespace.nspname NOT LIKE 'pg_toast%'
+                   AND namespace.nspname NOT LIKE 'pg_temp_%'
+                   AND has_schema_privilege(session_user, namespace.oid, 'USAGE, CREATE')
+              ) AS required_schema_privileges,
             CASE WHEN $1 = 'open_loops_runtime' THEN
               NOT EXISTS (
                 SELECT 1
@@ -161,6 +254,16 @@ export async function isSafeServiceConnection(
                    AND has_table_privilege(session_user, object.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
               )
             END AS forbidden_table_privileges,
+            NOT EXISTS (
+              SELECT 1
+                FROM pg_class sequence
+                JOIN pg_namespace namespace ON namespace.oid=sequence.relnamespace
+               WHERE sequence.relkind='S'
+                 AND namespace.nspname NOT IN ('pg_catalog', 'information_schema')
+                 AND namespace.nspname NOT LIKE 'pg_toast%'
+                 AND namespace.nspname NOT LIKE 'pg_temp_%'
+                 AND has_sequence_privilege(session_user, sequence.oid, 'USAGE, SELECT, UPDATE')
+            ) AS forbidden_sequence_privileges,
             CASE WHEN $1 = 'open_loops_runtime' THEN
               has_function_privilege(session_user, 'public.open_loops_current_tenant_id()', 'EXECUTE')
             ELSE
@@ -171,28 +274,108 @@ export async function isSafeServiceConnection(
                 'EXECUTE'
               )
             END AS required_function_privileges,
-            CASE WHEN $1 = 'open_loops_runtime' THEN
-              NOT has_function_privilege(session_user, 'public.open_loops_authenticate_key(text,text)', 'EXECUTE')
+            NOT EXISTS (
+              SELECT 1
+                FROM pg_proc function
+               WHERE (
+                 function.oid='public.open_loops_current_tenant_id()'::regprocedure
+                 AND $1='open_loops_runtime'
+                 AND (
+                   pg_get_userbyid(function.proowner)<>'open_loops_owner'
+                   OR function.prosecdef
+                   OR function.provolatile<>'s'
+                   OR function.proparallel<>'s'
+                   OR NOT COALESCE(function.proconfig, ARRAY[]::text[]) @> ARRAY['search_path=pg_catalog']
+                 )
+               ) OR (
+                 function.oid = ANY(ARRAY[
+                   'public.open_loops_authenticate_key(text,text)'::regprocedure,
+                   'public.open_loops_append_auth_audit(text,text,text,text,text,text,text,jsonb)'::regprocedure
+                 ])
+                 AND $1='open_loops_authenticator'
+                 AND (
+                   pg_get_userbyid(function.proowner)<>'open_loops_owner'
+                   OR NOT function.prosecdef
+                   OR NOT COALESCE(function.proconfig, ARRAY[]::text[]) @> ARRAY['search_path=pg_catalog']
+                 )
+               )
+            ) AS required_function_security,
+            NOT EXISTS (
+              SELECT 1
+                FROM pg_proc function
+                JOIN pg_namespace namespace ON namespace.oid=function.pronamespace
+               WHERE namespace.nspname NOT IN ('pg_catalog', 'information_schema')
+                 AND namespace.nspname NOT LIKE 'pg_toast%'
+                 AND namespace.nspname NOT LIKE 'pg_temp_%'
+                 AND has_function_privilege(session_user, function.oid, 'EXECUTE')
+                 AND NOT (
+                   namespace.nspname='public'
+                   AND (
+                     ($1='open_loops_runtime'
+                       AND function.oid='public.open_loops_current_tenant_id()'::regprocedure)
+                     OR
+                     ($1='open_loops_authenticator'
+                       AND function.oid = ANY(ARRAY[
+                         'public.open_loops_authenticate_key(text,text)'::regprocedure,
+                         'public.open_loops_append_auth_audit(text,text,text,text,text,text,text,jsonb)'::regprocedure
+                       ]))
+                   )
+                 )
+            ) AS forbidden_function_privileges,
+            NOT has_database_privilege(session_user, current_database(), 'CONNECT WITH GRANT OPTION')
+              AND NOT has_schema_privilege(session_user, 'public', 'USAGE WITH GRANT OPTION')
+              AND NOT EXISTS (
+                SELECT 1
+                  FROM unnest(ARRAY[
+                    'public.loops', 'public.loop_runs', 'public.daemon_lease',
+                    'public.workflow_specs', 'public.workflow_runs', 'public.workflow_invocations',
+                    'public.workflow_work_items', 'public.workflow_step_runs', 'public.workflow_events',
+                    'public.goals', 'public.goal_plan_nodes', 'public.goal_runs',
+                    'public.runner_machines', 'public.runner_leases', 'public.run_receipts'
+                  ]) AS allowed_table(name)
+                  CROSS JOIN unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE']) AS allowed_privilege(name)
+                 WHERE has_table_privilege(
+                   session_user,
+                   allowed_table.name,
+                   allowed_privilege.name || ' WITH GRANT OPTION'
+                 )
+              )
+              AND NOT has_table_privilege(
+                session_user,
+                'public.open_loops_schema_migrations',
+                'SELECT WITH GRANT OPTION'
+              )
+              AND NOT has_function_privilege(
+                session_user,
+                'public.open_loops_current_tenant_id()',
+                'EXECUTE WITH GRANT OPTION'
+              )
+              AND NOT has_function_privilege(
+                session_user,
+                'public.open_loops_authenticate_key(text,text)',
+                'EXECUTE WITH GRANT OPTION'
+              )
               AND NOT has_function_privilege(
                 session_user,
                 'public.open_loops_append_auth_audit(text,text,text,text,text,text,text,jsonb)',
-                'EXECUTE'
-              )
-            ELSE
-              NOT has_function_privilege(session_user, 'public.open_loops_current_tenant_id()', 'EXECUTE')
-            END AS forbidden_function_privileges
+                'EXECUTE WITH GRANT OPTION'
+              ) AS forbidden_grant_options
        FROM pg_roles role
       WHERE role.rolname = session_user`,
     [expectedRole, forbiddenRole],
   );
   return Boolean(
     row?.rolcanlogin && row.rolinherit && row.expected_member && row.expected_usage && row.expected_direct &&
+    !row.expected_role_has_memberships && row.expected_role_safe &&
     !row.rolsuper && !row.rolcreatedb && !row.rolcreaterole &&
     !row.rolreplication && !row.rolbypassrls &&
     !row.unexpected_membership && !row.has_members &&
     !row.forbidden_member && !row.owner_member && !row.migrator_member &&
+    row.required_database_privileges && row.database_acl_safe && row.required_schema_privileges &&
     row.required_table_privileges && row.forbidden_table_privileges &&
-    row.required_function_privileges && row.forbidden_function_privileges,
+    row.forbidden_sequence_privileges &&
+    row.required_function_privileges && row.required_function_security && row.forbidden_function_privileges &&
+    row.forbidden_grant_options,
   );
 }
 
@@ -202,7 +385,9 @@ export async function assertTenantEnforcementBootstrap(client: PoolQueryClient):
     rolsuper: boolean;
     owner_settable: boolean;
     migrator_settable: boolean;
+    controls_database: boolean;
     controls_public_schema: boolean;
+    controls_helper_functions: boolean;
   }>(
     `SELECT login.rolcreaterole, login.rolsuper,
             EXISTS (
@@ -220,18 +405,37 @@ export async function assertTenantEnforcementBootstrap(client: PoolQueryClient):
               SELECT 1 FROM pg_roles target WHERE target.rolname='open_loops_migrator'
             )) AS migrator_settable,
             EXISTS (
+              SELECT 1
+                FROM pg_database database
+               WHERE database.datname=current_database()
+                 AND (database.datdba=login.oid OR login.rolsuper)
+            ) AS controls_database,
+            EXISTS (
               SELECT 1 FROM pg_namespace namespace
                WHERE namespace.nspname='public'
                  AND pg_has_role(login.oid, namespace.nspowner, 'USAGE')
-            ) AS controls_public_schema
+            ) AS controls_public_schema,
+            NOT EXISTS (
+              SELECT 1
+                FROM pg_proc helper
+               WHERE helper.oid = ANY(ARRAY[
+                 to_regprocedure('public.open_loops_current_tenant_id()'),
+                 to_regprocedure('public.open_loops_authenticate_key(text,text)'),
+                 to_regprocedure('public.open_loops_append_auth_audit(text,text,text,text,text,text,text,jsonb)')
+               ])
+                 AND helper.proowner<>login.oid
+                 AND NOT login.rolsuper
+                 AND NOT pg_has_role(login.oid, helper.proowner, 'USAGE')
+            ) AS controls_helper_functions
        FROM pg_roles login
       WHERE login.rolname = session_user`,
   );
   if (!role || (!role.rolsuper && (
-    !role.rolcreaterole || !role.owner_settable || !role.migrator_settable || !role.controls_public_schema
+    !role.rolcreaterole || !role.owner_settable || !role.migrator_settable ||
+    !role.controls_database || !role.controls_public_schema || !role.controls_helper_functions
   ))) {
     throw new Error(
-      "tenant enforcement requires a schema-controlling bootstrap login with CREATEROLE and SET ROLE capability for owner/migrator, or a superuser-equivalent login",
+      "tenant enforcement requires a database-owning bootstrap login that controls the public schema and existing OpenLoops helper functions, with CREATEROLE and SET ROLE capability for owner/migrator, or a superuser-equivalent login",
     );
   }
   try {
@@ -256,10 +460,26 @@ export async function assertTenantEnforcementBootstrap(client: PoolQueryClient):
           END
           $probe_roles$;
         `);
-        await transaction.execute("ALTER ROLE open_loops_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS");
-        await transaction.execute("ALTER ROLE open_loops_migrator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS");
-        await transaction.execute("ALTER ROLE open_loops_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS");
-        await transaction.execute("ALTER ROLE open_loops_authenticator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS");
+        await transaction.execute("ALTER ROLE open_loops_owner INHERIT NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS");
+        await transaction.execute("ALTER ROLE open_loops_migrator INHERIT NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS");
+        await transaction.execute("ALTER ROLE open_loops_runtime INHERIT NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS");
+        await transaction.execute("ALTER ROLE open_loops_authenticator INHERIT NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS");
+        await transaction.execute(`
+          DO $probe_service_role_memberships$
+          DECLARE membership RECORD;
+          BEGIN
+            FOR membership IN
+              SELECT granted.rolname AS granted_role, member.rolname AS member_role
+                FROM pg_auth_members relation
+                JOIN pg_roles granted ON granted.oid=relation.roleid
+                JOIN pg_roles member ON member.oid=relation.member
+               WHERE member.rolname IN ('open_loops_runtime', 'open_loops_authenticator')
+            LOOP
+              EXECUTE format('REVOKE %I FROM %I', membership.granted_role, membership.member_role);
+            END LOOP;
+          END
+          $probe_service_role_memberships$;
+        `);
         await transaction.execute("GRANT USAGE, CREATE ON SCHEMA public TO open_loops_owner, open_loops_migrator");
         await transaction.execute(`
           DO $probe_database_acl$
@@ -283,6 +503,59 @@ export async function assertTenantEnforcementBootstrap(client: PoolQueryClient):
             END IF;
           END
           $probe_database_acl$;
+        `);
+        await transaction.execute(`
+          DO $probe_service_role_acl$
+          DECLARE namespace RECORD;
+          DECLARE database_grantee RECORD;
+          BEGIN
+            FOR database_grantee IN
+              SELECT DISTINCT grantee.rolname AS grantee_role
+                FROM pg_database database
+                CROSS JOIN LATERAL aclexplode(COALESCE(database.datacl, acldefault('d', database.datdba))) acl
+                JOIN pg_roles grantee ON grantee.oid=acl.grantee
+               WHERE database.datname=current_database()
+                 AND acl.grantee<>database.datdba
+            LOOP
+              EXECUTE format(
+                'REVOKE ALL PRIVILEGES ON DATABASE %I FROM %I',
+                current_database(),
+                database_grantee.grantee_role
+              );
+            END LOOP;
+            EXECUTE format(
+              'REVOKE ALL PRIVILEGES ON DATABASE %I FROM PUBLIC',
+              current_database()
+            );
+            FOR namespace IN
+              SELECT nspname
+                FROM pg_namespace
+               WHERE nspname NOT IN ('pg_catalog', 'information_schema')
+                 AND nspname NOT LIKE 'pg_toast%'
+                 AND nspname NOT LIKE 'pg_temp_%'
+            LOOP
+              EXECUTE format(
+                'REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA %I FROM PUBLIC, open_loops_runtime, open_loops_authenticator',
+                namespace.nspname
+              );
+              EXECUTE format(
+                'REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA %I FROM PUBLIC, open_loops_runtime, open_loops_authenticator',
+                namespace.nspname
+              );
+              EXECUTE format(
+                'REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA %I FROM PUBLIC, open_loops_runtime, open_loops_authenticator',
+                namespace.nspname
+              );
+              EXECUTE format(
+                'REVOKE ALL PRIVILEGES ON SCHEMA %I FROM open_loops_runtime, open_loops_authenticator',
+                namespace.nspname
+              );
+              IF namespace.nspname <> 'public' THEN
+                EXECUTE format('REVOKE ALL PRIVILEGES ON SCHEMA %I FROM PUBLIC', namespace.nspname);
+              END IF;
+            END LOOP;
+          END
+          $probe_service_role_acl$;
         `);
         await transaction.execute(`
           DO $probe_service_acl$
@@ -440,9 +713,16 @@ if (import.meta.main) {
     argv.splice(2, 0, "serve");
   }
   program.parseAsync(argv).catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
+    logServeCommandFailure(error);
     process.exit(1);
   });
+}
+
+export function logServeCommandFailure(error: unknown): void {
+  console.error(JSON.stringify({
+    evt: "loops_serve_command_failed",
+    errorType: error instanceof Error ? "error" : typeof error,
+  }));
 }
 
 export { program };
