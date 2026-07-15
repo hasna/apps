@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.tgz
+.pack-smoke/
+.test-data-*/
+*.db
+*.db-shm
+*.db-wal
+.env
+.DS_Store

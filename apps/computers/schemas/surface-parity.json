@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "package": "@hasna/computers",
+  "binaries": ["computers", "computers-serve", "computers-mcp", "computers-worker", "computers-resident", "computers-migrate"],
+  "exports": [".", "./sdk", "./contracts", "./providers", "./storage"],
+  "mcpTools": ["computers_list", "computers_get", "computers_operations", "computers_exec_request", "computers_install_plan", "computers_provider_readiness"],
+  "mcpAnnotations": {
+    "computers_list": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
+    "computers_get": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
+    "computers_operations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
+    "computers_exec_request": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": true },
+    "computers_install_plan": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false },
+    "computers_provider_readiness": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false }
+  },
+  "resources": {
+    "computers": { "rest": true, "sdk": true, "cli": true, "mcpRead": true },
+    "computerCreateGrants": { "rest": true, "sdk": true, "cli": true, "mcp": false },
+    "operations": { "rest": true, "sdk": true, "cli": true, "mcpRead": true },
+    "execRequest": { "rest": true, "sdk": true, "cli": true, "mcp": true },
+    "installPlan": { "rest": true, "sdk": true, "cli": true, "mcp": true },
+    "installApply": { "rest": true, "sdk": true, "cli": true, "mcp": false },
+    "providerReadiness": { "rest": true, "sdk": true, "cli": true, "mcp": true }
+  },
+  "forbiddenMcp": ["delete", "reassign", "restore", "policy_mutation", "sandbox_mutation"],
+  "sandbox": { "discoverable": true, "executableMutation": false, "errorCode": "sandbox_disabled" }
+}
