@@ -59,22 +59,22 @@ phases:
       - openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=wrong-ca -keyout /tmp/todos-tls/wrong-ca.key -out /tmp/todos-tls/wrong-ca.crt >/dev/null 2>&1
       - chown 70:70 /tmp/todos-tls/server.key /tmp/todos-tls/server.crt /tmp/todos-tls/ca.crt
       - chmod 600 /tmp/todos-tls/server.key
-      - docker run -d --name "${TEST_DB}" --network "${TEST_NETWORK}" --network-alias todos-postgres --network-alias wrong-postgres -e POSTGRES_USER=todos --env POSTGRES_PASSWORD -e POSTGRES_DB=todos -v /tmp/todos-tls:/tls:ro postgres:16-alpine postgres -c ssl=on -c ssl_cert_file=/tls/server.crt -c ssl_key_file=/tls/server.key -c ssl_ca_file=/tls/ca.crt
+      - docker run -d --name "${TEST_DB}" --network "${TEST_NETWORK}" --network-alias todos-postgres --network-alias wrong-postgres -e POSTGRES_USER=todos --env POSTGRES_PASSWORD -e POSTGRES_DB=todos -v /tmp/todos-tls:/tls:ro postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777 postgres -c ssl=on -c ssl_cert_file=/tls/server.crt -c ssl_key_file=/tls/server.key -c ssl_ca_file=/tls/ca.crt
       - for i in $(seq 1 60); do docker exec "${TEST_DB}" pg_isready -U todos >/dev/null 2>&1 && break; sleep 1; done; docker exec "${TEST_DB}" pg_isready -U todos
       - export TEST_DSN="postgres://todos:${DB_CREDENTIAL}@todos-postgres:5432/todos?sslmode=verify-full"
       - export SIGNING_MATERIAL=$(head -c 48 /dev/urandom | base64 | tr -d '\n')
-      - docker run --rm --network "${TEST_NETWORK}" -e HASNA_TODOS_DATABASE_URL="${TEST_DSN}" -e PGSSLROOTCERT=/tls/ca.crt -v /tmp/todos-tls:/tls:ro "${IMAGE}" bun dist/server/index.js migrate
+      - docker run --rm --network "${TEST_NETWORK}" -e HASNA_TODOS_DATABASE_URL="${TEST_DSN}" -e PGSSLROOTCERT=/tls/ca.crt -e NODE_EXTRA_CA_CERTS=/tls/ca.crt -v /tmp/todos-tls:/tls:ro "${IMAGE}" bun dist/server/index.js migrate
       - >-
         docker run --rm --network "${TEST_NETWORK}" -e DATABASE_URL="${TEST_DSN}"
-        -e PGSSLROOTCERT=/tls/ca.crt -v /tmp/todos-tls:/tls:ro --entrypoint bun "${IMAGE}"
+        -e PGSSLROOTCERT=/tls/ca.crt -e NODE_EXTRA_CA_CERTS=/tls/ca.crt -v /tmp/todos-tls:/tls:ro --entrypoint bun "${IMAGE}"
         -e 'const s=new Bun.SQL(process.env.DATABASE_URL); await s`select 1`; await s.end(); console.log("TLS verify-full positive: PASS")'
-      - set +e; docker run --rm --network "${TEST_NETWORK}" -e DATABASE_URL="${TEST_DSN}" -e PGSSLROOTCERT=/tls/wrong-ca.crt -v /tmp/todos-tls:/tls:ro --entrypoint bun "${IMAGE}" -e 'const s=new Bun.SQL(process.env.DATABASE_URL); await s`select 1`' >/tmp/wrong-ca.log 2>&1; wrong_ca_rc=$?; set -e; test "$wrong_ca_rc" -ne 0
-      - set +e; docker run --rm --network "${TEST_NETWORK}" -e DATABASE_URL="postgres://todos:${DB_CREDENTIAL}@wrong-postgres:5432/todos?sslmode=verify-full" -e PGSSLROOTCERT=/tls/ca.crt -v /tmp/todos-tls:/tls:ro --entrypoint bun "${IMAGE}" -e 'const s=new Bun.SQL(process.env.DATABASE_URL); await s`select 1`' >/tmp/wrong-host.log 2>&1; wrong_host_rc=$?; set -e; test "$wrong_host_rc" -ne 0
+      - set +e; docker run --rm --network "${TEST_NETWORK}" -e DATABASE_URL="${TEST_DSN}" -e PGSSLROOTCERT=/tls/wrong-ca.crt -e NODE_EXTRA_CA_CERTS=/tls/wrong-ca.crt -v /tmp/todos-tls:/tls:ro --entrypoint bun "${IMAGE}" -e 'const s=new Bun.SQL(process.env.DATABASE_URL); await s`select 1`' >/tmp/wrong-ca.log 2>&1; wrong_ca_rc=$?; set -e; test "$wrong_ca_rc" -ne 0
+      - set +e; docker run --rm --network "${TEST_NETWORK}" -e DATABASE_URL="postgres://todos:${DB_CREDENTIAL}@wrong-postgres:5432/todos?sslmode=verify-full" -e PGSSLROOTCERT=/tls/ca.crt -e NODE_EXTRA_CA_CERTS=/tls/ca.crt -v /tmp/todos-tls:/tls:ro --entrypoint bun "${IMAGE}" -e 'const s=new Bun.SQL(process.env.DATABASE_URL); await s`select 1`' >/tmp/wrong-host.log 2>&1; wrong_host_rc=$?; set -e; test "$wrong_host_rc" -ne 0
       - set +x
-      - KEY_JSON=$(docker run --rm --network "${TEST_NETWORK}" -e HASNA_TODOS_DATABASE_URL="${TEST_DSN}" -e HASNA_TODOS_API_SIGNING_KEY="${SIGNING_MATERIAL}" -e PGSSLROOTCERT=/tls/ca.crt -v /tmp/todos-tls:/tls:ro --entrypoint bun "${IMAGE}" node_modules/@hasna/contracts/dist/cli/index.js issue-key --app todos --scopes 'todos:*' --no-expiry --json)
+      - KEY_JSON=$(docker run --rm --network "${TEST_NETWORK}" -e HASNA_TODOS_DATABASE_URL="${TEST_DSN}" -e HASNA_TODOS_API_SIGNING_KEY="${SIGNING_MATERIAL}" -e PGSSLROOTCERT=/tls/ca.crt -e NODE_EXTRA_CA_CERTS=/tls/ca.crt -v /tmp/todos-tls:/tls:ro --entrypoint bun "${IMAGE}" node_modules/@hasna/contracts/dist/cli/index.js issue-key --app todos --scopes 'todos:*' --no-expiry --json)
       - export TODOS_V1_TOKEN=$(printf '%s' "$KEY_JSON" | jq -r '.token')
       - test -n "${TODOS_V1_TOKEN}"; test "${TODOS_V1_TOKEN}" != null
-      - docker run -d --name "${TEST_APP}" --network "${TEST_NETWORK}" -e HASNA_TODOS_DATABASE_URL="${TEST_DSN}" -e HASNA_TODOS_API_SIGNING_KEY="${SIGNING_MATERIAL}" -e PGSSLROOTCERT=/tls/ca.crt -v /tmp/todos-tls:/tls:ro "${IMAGE}"
+      - docker run -d --name "${TEST_APP}" --network "${TEST_NETWORK}" -e HASNA_TODOS_DATABASE_URL="${TEST_DSN}" -e HASNA_TODOS_API_SIGNING_KEY="${SIGNING_MATERIAL}" -e PGSSLROOTCERT=/tls/ca.crt -e NODE_EXTRA_CA_CERTS=/tls/ca.crt -v /tmp/todos-tls:/tls:ro "${IMAGE}"
       - for i in $(seq 1 60); do docker exec "${TEST_APP}" bun -e 'const r=await fetch("http://127.0.0.1:19427/ready"); process.exit(r.ok?0:1)' >/dev/null 2>&1 && break; sleep 1; done
       - docker run --rm --network "${TEST_NETWORK}" -e TODOS_V1_BASE_URL=http://"${TEST_APP}":19427 --env TODOS_V1_TOKEN -v "$PWD/scripts/container-http-smoke.ts:/tmp/container-http-smoke.ts:ro" --entrypoint bun "${IMAGE}" /tmp/container-http-smoke.ts
       - docker logs "${TEST_APP}" 2>&1 | tail -200

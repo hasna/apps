@@ -26,6 +26,7 @@ describe("server image build context", () => {
     );
     expect(dockerfile).toContain("FROM ${BUN_IMAGE} AS base");
     expect(dockerfile).not.toContain("FROM --platform=linux/arm64");
+    expect(dockerfile).not.toContain("# syntax=docker/dockerfile:");
     expect(dockerfile).toContain('test "$(bun --version)" = "1.3.14"');
     expect(dockerfile).toContain("apk info -vv | grep -q '^musl-1.2.5-r12 - '");
     expect(dockerfile).toContain("! apk info -e glibc");
@@ -72,6 +73,8 @@ describe("server image build context", () => {
     expect(buildspec).toContain("container-sbom.cdx.json");
     expect(buildspec).toContain("container-provenance.json");
     expect(buildspec).toContain("sslmode=verify-full");
+    expect(buildspec).toContain("NODE_EXTRA_CA_CERTS=/tls/ca.crt");
+    expect(buildspec).toContain("postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777");
     expect(buildspec).toContain("wrong-ca.crt");
     expect(buildspec).toContain("wrong-postgres");
     expect(buildspec).toContain("bun dist/server/index.js migrate");

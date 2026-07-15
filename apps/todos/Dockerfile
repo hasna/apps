@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 # @hasna/todos self_hosted service — ARM64 / Bun.
 # Default CMD runs todos-serve (cloud / PURE REMOTE per Amendment A1: the serve
 # process reads/writes RDS Postgres directly with @hasna/contracts API-key auth).
