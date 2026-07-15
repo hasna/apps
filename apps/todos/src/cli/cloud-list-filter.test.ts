@@ -350,6 +350,109 @@ describe("cloud CLI task-list filtering", () => {
     }
   });
 
+  test("resolves --project-name before listing cloud tasks", async () => {
+    const requests: string[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        requests.push(`${url.pathname}?${url.searchParams.toString()}`);
+        if (url.pathname === "/v1/projects") return Response.json({ projects: [project()] });
+        if (url.pathname === "/v1/tasks") {
+          return Response.json({
+            tasks: url.searchParams.get("project_id") === PROJECT_ID
+              ? [{ id: TASK_ID, project_id: PROJECT_ID, title: "Cloud project task", status: "pending", priority: "medium" }]
+              : [],
+          });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-project-name-filter-"));
+    tempRoots.push(root);
+    try {
+      const result = await runCli(
+        ["--json", "list", "--all", "--project-name", PROJECT_SLUG],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(result.stdout)).toEqual([
+        expect.objectContaining({ id: TASK_ID, project_id: PROJECT_ID }),
+      ]);
+      expect(requests).toEqual([
+        "/v1/projects?",
+        `/v1/tasks?project_id=${PROJECT_ID}`,
+      ]);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("uses --project-name to scope a cloud task-list slug", async () => {
+    const requests: string[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        requests.push(`${url.pathname}?${url.searchParams.toString()}`);
+        if (url.pathname === "/v1/projects") return Response.json({ projects: [project()] });
+        if (url.pathname === "/v1/task-lists") {
+          return Response.json({ task_lists: [taskList(LIST_ID, "release")] });
+        }
+        if (url.pathname === "/v1/tasks") return Response.json({ tasks: [] });
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-project-name-list-filter-"));
+    tempRoots.push(root);
+    try {
+      const result = await runCli(
+        ["--json", "list", "--all", "--project-name", PROJECT_SLUG, "--list", "release"],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(requests).toEqual([
+        "/v1/projects?",
+        `/v1/task-lists?project_id=${PROJECT_ID}`,
+        `/v1/tasks?project_id=${PROJECT_ID}&task_list_id=${LIST_ID}`,
+      ]);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("fails a missing cloud --project-name before listing tasks", async () => {
+    let taskRequests = 0;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === "/v1/projects") return Response.json({ projects: [project()] });
+        if (url.pathname === "/v1/tasks") taskRequests++;
+        return Response.json({ tasks: [] });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-project-name-filter-error-"));
+    tempRoots.push(root);
+    try {
+      const result = await runCli(
+        ["--json", "list", "--project-name", "missing"],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("Project not found");
+      expect(taskRequests).toBe(0);
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test.each([
     ["missing", [taskList(LIST_ID, "release")], "Task list not found"],
     [

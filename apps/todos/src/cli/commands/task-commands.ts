@@ -570,8 +570,9 @@ export function registerTaskCommands(program: Command) {
       // self_hosted cloud routing: skip local-store detection and resolve explicit
       // project/list filters against the shared API before listing tasks.
       const cloud = getTodosCloudClient();
-      const projectId = cloud && globalOpts.project
-        ? await cloudResolveProjectRef(cloud, globalOpts.project)
+      const cloudProjectRef = globalOpts.project || opts.projectName;
+      const projectId = cloud && cloudProjectRef
+        ? await cloudResolveProjectRef(cloud, cloudProjectRef)
         : cloud
           ? undefined
           : autoProject(globalOpts);
