@@ -28,11 +28,12 @@ time.
 Local-development fallbacks without the `HASNA_` prefix are accepted
 (`TODOS_SHADOW`, `TODOS_DATABASE_URL`, ...).
 
-## Canonical infrastructure
+## Deployment infrastructure
 
-- Cluster/database: `hasna-xyz-infra-apps-prod-postgres` / `todos`
-  (account `789877399345`, region `us-east-1`).
-- Runtime DSN secret (name only): `hasna/xyz/opensource/todos/prod/rds`.
+- Supply the target cluster/database, AWS account, region, ECR repository, and
+  secret reference through the private deployment environment. Do not commit
+  fleet-specific identifiers to this public repository.
+- Resolve the runtime DSN from the deployment's approved secret reference.
 - The instance is **not** publicly accessible. Reach it from outside the VPC
   only through the SSM port-forward bastion documented in the secret's `ssm`
   block (`AWS-StartPortForwardingSessionToRemoteHost`).
@@ -76,7 +77,7 @@ never reads from the cloud. Enable it per machine:
 ```
 HASNA_TODOS_STORAGE_MODE=local
 HASNA_TODOS_SHADOW=1
-HASNA_TODOS_DATABASE_URL=<DSN from hasna/xyz/opensource/todos/prod/rds>
+HASNA_TODOS_DATABASE_URL=<DSN from the approved deployment secret>
 ```
 
 Watch divergence with the read-only diagnostic (this command **does** open a DB
@@ -188,7 +189,12 @@ the candidate runtime inventory gate if either version drifts. This does not add
 the OpenSSL CLI to the application image.
 
 The runner installs only the exact-pinned Alpine `bash` package needed by the
-existing event-hook and agent-run execution paths. The predecessor Debian image
+existing event-hook and agent-run execution paths. The compiled server is
+self-contained, so the runner must not include the workspace package manifests
+or `node_modules` tree. It carries only the pre-bundled contracts CLI file used
+by the controlled API-key workflow; the candidate build proves that CLI and all
+server workflows function without package metadata or external modules. The
+predecessor Debian image
 did not contain `git` or `tmux`, so those local-workstation capabilities are not
 part of the cloud container contract. They must fail clearly when unavailable;
 do not silently add them to the image without a separate runtime need, security
@@ -196,10 +202,12 @@ scan, and review. The OpenSSL CLI is also intentionally absent: Bun has the
 reviewed OpenSSL libraries and the image carries the system CA set plus the RDS
 CA bundle.
 
-The production CodeBuild role is intentionally push-only for ECR and cannot
+The production CodeBuild role may be intentionally push-only for ECR and unable
 download ECR layers. Candidate builds therefore load the reviewed Bun base from
 a unique, versioned object under the private build bucket's `_build/base/`
-prefix. The object is a Docker archive produced by pinned Crane from the exact
+prefix. Pass the bucket, key, VersionId, repository, and region as required
+private build variables; tracked public build files must not contain fleet
+identifiers. The object is a Docker archive produced by pinned Crane from the exact
 ECR mirror digest. The build must pin and verify the S3 bucket, key, VersionId,
 archive SHA-256, source manifest digest, image config digest, architecture, and
 root filesystem layer identities before tagging the loaded image under a local
@@ -224,10 +232,16 @@ Before an image digest may enter Terraform, require all of the following:
    CA and fails with a wrong CA and a wrong hostname.
 6. Wait for the ECR scan to reach `COMPLETE`; require zero CRITICAL and zero
    HIGH findings without suppressions, and review every MEDIUM, LOW, and unknown
-   finding plus application dependencies before approval.
+   finding plus application dependencies before approval. Run exact-pinned
+   Grype against the pruned final image and require no HIGH or CRITICAL matches;
+   retain its JSON report hash with the SBOM and provenance evidence.
+7. Attach the source-tree manifest, APK inventory, OCI inspection, SBOM, Grype
+   report, and provenance as one OCI 1.1 referrer of the exact image digest with
+   checksum-pinned ORAS. Discover the referrer through the registry API and
+   record both immutable digests; log-only hashes are not durable evidence.
 
-Runtime `node_modules` removal and a non-root user are separate hardening items.
-Do not compound those changes with a base-image vulnerability fix.
+A non-root user remains a separate hardening item. Do not compound that identity
+change with the base-image vulnerability fix and runtime dependency pruning.
 
 ## Task-comment pagination and historical-redaction rollout
 

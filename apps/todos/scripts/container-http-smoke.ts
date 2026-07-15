@@ -23,8 +23,13 @@ async function expectStatus(path: string, status: number, init?: RequestInit): P
   return response;
 }
 
-for (const path of ["/health", "/ready", "/version"]) {
+for (const path of ["/health", "/ready"]) {
   await expectStatus(path, 200);
+}
+const versionResponse = await expectStatus("/version", 200);
+const versionPayload = (await versionResponse.json()) as { version?: string };
+if (versionPayload.version !== "0.11.91") {
+  throw new Error(`/version: expected 0.11.91, got ${versionPayload.version ?? "missing"}`);
 }
 await expectStatus("/v1/tasks", 401);
 

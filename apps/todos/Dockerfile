@@ -65,9 +65,11 @@ ENV NODE_ENV=production \
     TODOS_NO_OPEN=true \
     HOST=0.0.0.0 \
     PORT=19427
-COPY package.json bun.lock ./
-COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
+# The server bundle is self-contained. Keep only the standalone, pre-bundled
+# contracts CLI used to mint the ephemeral API key during controlled smoke and
+# operational workflows; do not ship the workspace dependency tree.
+COPY --from=deps /app/node_modules/@hasna/contracts/dist/cli/index.js ./bin/contracts-cli.js
 EXPOSE 19427
 # Fail-closed: todos-serve /v1 refuses to serve without a cloud DSN + signing
 # secret (503), and /ready reports DB reachability — no silent stub.
