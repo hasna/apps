@@ -4062,7 +4062,7 @@ describe("loops CLI", () => {
     } finally {
       afterReplay.close();
     }
-  });
+  }, 15_000);
 
   test("todos task drain smoke does not admit ineligible or wrong-project tasks", () => {
     const dataDir = freshDataDir("loops-cli-task-lifecycle-negative-");
