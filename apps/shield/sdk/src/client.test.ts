@@ -5,6 +5,7 @@ import { createServer } from "net";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 import { OpenSecurityClient } from "./client.js";
+import { Database } from "bun:sqlite";
 
 const originalFetch = globalThis.fetch;
 let child: ChildProcess | undefined;
@@ -93,6 +94,20 @@ describe("OpenSecurityClient scan source boundary", () => {
     const created = await client.createProject(`project-${synthetic}`, projectDir);
     const listed = await client.listProjects();
     for (const output of [JSON.stringify(created), JSON.stringify(listed)]) {
+      expect(output).not.toContain(synthetic);
+      expect(output).toContain("REDACTED");
+    }
+
+    const scan = await client.triggerScan(tempDir);
+    const db = new Database(join(tempDir, "shield.db"));
+    try {
+      db.prepare("UPDATE scans SET error = ? WHERE id = ?").run(synthetic, scan.id);
+    } finally {
+      db.close();
+    }
+    const fetchedScan = await client.getScan(scan.id);
+    const listedScans = await client.listScans();
+    for (const output of [JSON.stringify(fetchedScan), JSON.stringify(listedScans)]) {
       expect(output).not.toContain(synthetic);
       expect(output).toContain("REDACTED");
     }

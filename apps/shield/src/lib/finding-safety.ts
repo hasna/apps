@@ -1,5 +1,5 @@
 import { createHash } from "crypto";
-import { ScannerType, type Finding, type FindingInput } from "../types/index.js";
+import { ScannerType, type Finding, type FindingInput, type Scan } from "../types/index.js";
 import { containsRecognizedCredential } from "./credential-recognition.js";
 
 export const REDACTED_FINDING_TEXT = "[REDACTED]";
@@ -7,6 +7,7 @@ export const REDACTED_FINDING_TEXT = "[REDACTED]";
 const MAX_LOCATION_LENGTH = 512;
 const MAX_MESSAGE_LENGTH = 512;
 const MAX_RULE_ID_LENGTH = 128;
+const MAX_IDENTIFIER_LENGTH = 256;
 
 type FindingLike = FindingInput | Finding;
 
@@ -19,6 +20,17 @@ function boundedSingleLine(value: string, maxLength: number): string {
 function stableRedaction(value: string, kind: string): string {
   const correlation = createHash("sha256").update(value).digest("hex").slice(0, 12);
   return `[REDACTED-${kind}:${correlation}]`;
+}
+
+/** Preserve correlation without retaining a credential-bearing identifier. */
+export function sanitizeIdentifierForOutput(value: string, kind = "ID"): string {
+  return containsCredentialLikeText(value)
+    ? stableRedaction(value, kind.replace(/[^A-Z0-9_-]/gi, "-").toUpperCase())
+    : boundedSingleLine(value, MAX_IDENTIFIER_LENGTH);
+}
+
+export function sanitizeFingerprintForOutput(value: string): string {
+  return sanitizeIdentifierForOutput(value, "FINGERPRINT");
 }
 
 export function containsCredentialLikeText(value: string | null | undefined): boolean {
@@ -77,12 +89,24 @@ function sanitizeFinding<T extends FindingLike>(finding: T): T {
   const ruleId = sanitizeRuleIdForOutput(finding.rule_id);
   const result = {
     ...finding,
+    ...("id" in finding ? { id: sanitizeIdentifierForOutput(finding.id, "ID") } : {}),
+    ...("scan_id" in finding
+      ? { scan_id: sanitizeIdentifierForOutput(finding.scan_id, "SCAN-ID") }
+      : {}),
     rule_id: ruleId,
+    scanner_type: sanitizeTextForBoundary(String(finding.scanner_type), 128),
+    severity: sanitizeTextForBoundary(String(finding.severity), 128),
     file: sanitizeLocationForOutput(finding.file),
     message: sensitive
       ? `Potential credential exposure detected (${ruleId})`
       : sanitizeTextForBoundary(finding.message, MAX_MESSAGE_LENGTH),
     ...(finding.code_snippet != null ? { code_snippet: REDACTED_FINDING_TEXT } : {}),
+    ...("fingerprint" in finding
+      ? { fingerprint: sanitizeFingerprintForOutput(finding.fingerprint) }
+      : {}),
+    ...("created_at" in finding
+      ? { created_at: sanitizeTextForBoundary(finding.created_at, 128) }
+      : {}),
   } as T;
 
   if ("llm_explanation" in result && result.llm_explanation != null) {
@@ -100,7 +124,9 @@ function sanitizeFinding<T extends FindingLike>(finding: T): T {
       ? REDACTED_FINDING_TEXT
       : sanitizeTextForBoundary(result.suppressed_reason, MAX_MESSAGE_LENGTH);
   }
-  return result;
+  // This final recursive pass is intentional: a newly added string field must
+  // be safe by default until it receives a more specific correlation policy.
+  return sanitizeValueForBoundary(result);
 }
 
 export function sanitizeFindingForPersistence<T extends FindingLike>(finding: T): T {
@@ -109,4 +135,22 @@ export function sanitizeFindingForPersistence<T extends FindingLike>(finding: T)
 
 export function sanitizeFindingForOutput<T extends FindingLike>(finding: T): T {
   return sanitizeFinding(finding);
+}
+
+export function sanitizeScanForOutput(scan: Scan): Scan {
+  const safe = {
+    ...scan,
+    id: sanitizeIdentifierForOutput(scan.id, "SCAN-ID"),
+    project_id: sanitizeIdentifierForOutput(scan.project_id, "PROJECT-ID"),
+    status: sanitizeTextForBoundary(String(scan.status), 128),
+    scanner_types: scan.scanner_types.map((scannerType) =>
+      sanitizeTextForBoundary(String(scannerType), 128)),
+    started_at: sanitizeTextForBoundary(scan.started_at, 128),
+    completed_at: scan.completed_at == null
+      ? null
+      : sanitizeTextForBoundary(scan.completed_at, 128),
+    error: scan.error == null ? null : sanitizeTextForBoundary(scan.error, MAX_MESSAGE_LENGTH),
+    created_at: sanitizeTextForBoundary(scan.created_at, 128),
+  } as Scan;
+  return sanitizeValueForBoundary(safe);
 }

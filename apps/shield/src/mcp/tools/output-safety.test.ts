@@ -5,11 +5,12 @@ import { join } from "path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createFinding } from "../../db/findings.js";
 import { createProject } from "../../db/projects.js";
-import { createScan } from "../../db/scans.js";
+import { createScan, updateScanStatus } from "../../db/scans.js";
 import { getCurrentTestDb, setupTestDb } from "../../db/test-helpers.js";
-import { ScannerType, Severity } from "../../types/index.js";
+import { ScanStatus, ScannerType, Severity } from "../../types/index.js";
 import { registerFindingTools } from "./findings.js";
 import { registerScanTools } from "./scan.js";
+import { registerRulesPoliciesTools } from "./rules-policies.js";
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<unknown>;
 
@@ -113,6 +114,21 @@ describe("MCP credential output safety", () => {
       expect(payload.scan.scanner_types).toContain(ScannerType.Code);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("scan history tools never expose scanner-recognized error metadata", async () => {
+    const syntheticCredential = `gh${"s"}_${"H_".repeat(18)}`;
+    const project = createProject("mcp-scan-error", "/tmp/mcp-scan-error");
+    const scan = createScan(project.id, [ScannerType.Code]);
+    updateScanStatus(scan.id, ScanStatus.Failed, undefined, syntheticCredential);
+    const tools = captureTools((server) => registerRulesPoliciesTools(server, jsonResult));
+
+    const listed = await tools.get("list_scans")?.({ limit: 50 });
+    const fetched = await tools.get("get_scan")?.({ id: scan.id });
+    for (const output of [JSON.stringify(listed), JSON.stringify(fetched)]) {
+      expect(output).not.toContain(syntheticCredential);
+      expect(output).toContain("REDACTED");
     }
   });
 });

@@ -153,4 +153,59 @@ describe("JSON reporter", () => {
     expect(output).toContain("REDACTED-RULE");
     expect(output).toContain("REDACTED-LOCATION");
   });
+
+  test("sanitizes every string-bearing finding and scan field", () => {
+    const syntheticCredential = `gh${"s"}_${"C_".repeat(18)}`;
+    const finding = makeFinding({
+      id: syntheticCredential,
+      scan_id: syntheticCredential,
+      rule_id: syntheticCredential,
+      scanner_type: syntheticCredential as ScannerType,
+      severity: syntheticCredential as Severity,
+      file: syntheticCredential,
+      message: syntheticCredential,
+      code_snippet: syntheticCredential,
+      fingerprint: syntheticCredential,
+      suppressed_reason: syntheticCredential,
+      llm_explanation: syntheticCredential,
+      llm_fix: syntheticCredential,
+      created_at: syntheticCredential,
+    });
+    const scan: Scan = {
+      ...mockScan,
+      id: syntheticCredential,
+      project_id: syntheticCredential,
+      status: syntheticCredential as ScanStatus,
+      scanner_types: [syntheticCredential as ScannerType],
+      started_at: syntheticCredential,
+      completed_at: syntheticCredential,
+      error: syntheticCredential,
+      created_at: syntheticCredential,
+    };
+
+    const output = reportFindings([finding], scan);
+    expect(output).not.toContain(syntheticCredential);
+    expect(output).toContain("REDACTED");
+  });
+
+  test("uses stable opaque correlations for credential-bearing identifiers", () => {
+    const firstCredential = `gh${"r"}_${"D_".repeat(18)}`;
+    const secondCredential = `gh${"r"}_${"E_".repeat(18)}`;
+    const first = JSON.parse(reportFindings([
+      makeFinding({ id: firstCredential, fingerprint: firstCredential }),
+    ])).findings[0];
+    const repeated = JSON.parse(reportFindings([
+      makeFinding({ id: firstCredential, fingerprint: firstCredential }),
+    ])).findings[0];
+    const distinct = JSON.parse(reportFindings([
+      makeFinding({ id: secondCredential, fingerprint: secondCredential }),
+    ])).findings[0];
+
+    expect(first.id).toBe(repeated.id);
+    expect(first.fingerprint).toBe(repeated.fingerprint);
+    expect(first.id).not.toBe(distinct.id);
+    expect(first.fingerprint).not.toBe(distinct.fingerprint);
+    expect(first.id).toMatch(/^\[REDACTED-ID:[a-f0-9]{12}\]$/);
+    expect(first.fingerprint).toMatch(/^\[REDACTED-FINGERPRINT:[a-f0-9]{12}\]$/);
+  });
 });

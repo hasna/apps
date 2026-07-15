@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { ScannerType, Severity, type FindingInput } from "../types/index.js";
+import { ScanStatus, ScannerType, Severity, type Finding, type FindingInput, type Scan } from "../types/index.js";
 import {
   isCredentialFinding,
   sanitizeFindingForOutput,
   sanitizeFindingForPersistence,
+  sanitizeScanForOutput,
   sanitizeTextForBoundary,
 } from "./finding-safety.js";
 
@@ -81,5 +82,36 @@ describe("finding safety", () => {
     const sanitized = sanitizeTextForBoundary(`ordinary config issue; adjacent=${syntheticSecret}`, 12_000);
     expect(sanitized).not.toContain(syntheticSecret);
     expect(sanitized).toContain("[REDACTED]");
+  });
+
+  test("sanitizes every exported finding and scan string recursively", () => {
+    const syntheticCredential = `gh${"o"}_${"G_".repeat(18)}`;
+    const unsafeFinding = {
+      ...finding(),
+      id: syntheticCredential,
+      scan_id: syntheticCredential,
+      fingerprint: syntheticCredential,
+      suppressed: false,
+      suppressed_reason: syntheticCredential,
+      llm_explanation: syntheticCredential,
+      llm_fix: syntheticCredential,
+      llm_exploitability: null,
+      created_at: syntheticCredential,
+    } as Finding;
+    const unsafeScan: Scan = {
+      id: syntheticCredential,
+      project_id: syntheticCredential,
+      status: syntheticCredential as ScanStatus,
+      scanner_types: [syntheticCredential as ScannerType],
+      findings_count: 1,
+      started_at: syntheticCredential,
+      completed_at: syntheticCredential,
+      duration_ms: 1,
+      error: syntheticCredential,
+      created_at: syntheticCredential,
+    };
+
+    expect(JSON.stringify(sanitizeFindingForOutput(unsafeFinding))).not.toContain(syntheticCredential);
+    expect(JSON.stringify(sanitizeScanForOutput(unsafeScan))).not.toContain(syntheticCredential);
   });
 });

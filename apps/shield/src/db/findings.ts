@@ -43,6 +43,8 @@ function rowToFinding(row: FindingRow): Finding {
   // first read cannot recover fields written by older unsafe versions.
   if (
     safe.rule_id !== row.rule_id ||
+    safe.fingerprint !== row.fingerprint ||
+    safe.created_at !== row.created_at ||
     safe.file !== row.file ||
     safe.message !== row.message ||
     safe.code_snippet !== row.code_snippet ||
@@ -59,15 +61,17 @@ function rowToFinding(row: FindingRow): Finding {
         ).run(safe.rule_id, safe.scanner_type, safe.severity);
       }
       db.prepare(
-        `UPDATE findings SET rule_id = ?, file = ?, message = ?, code_snippet = ?, suppressed_reason = ?, llm_explanation = ?, llm_fix = ? WHERE id = ?`,
+        `UPDATE findings SET rule_id = ?, file = ?, message = ?, code_snippet = ?, fingerprint = ?, suppressed_reason = ?, llm_explanation = ?, llm_fix = ?, created_at = ? WHERE id = ?`,
       ).run(
         safe.rule_id,
         safe.file,
         safe.message,
         safe.code_snippet,
+        safe.fingerprint,
         safe.suppressed_reason,
         safe.llm_explanation,
         safe.llm_fix,
+        safe.created_at,
         row.id,
       );
       if (safe.rule_id !== row.rule_id) {

@@ -108,6 +108,43 @@ describe("scans", () => {
     expect(updated!.error).toBe("Something went wrong");
   });
 
+  test("sanitizes scanner-recognized errors before persistence", () => {
+    const syntheticCredential = `gh${"p"}_${"A_".repeat(18)}`;
+    const scan = createScan(projectId, [ScannerType.Secrets]);
+
+    updateScanStatus(
+      scan.id,
+      ScanStatus.Failed,
+      undefined,
+      `Synthetic scanner failure ${syntheticCredential}`,
+    );
+
+    const raw = getCurrentTestDb()
+      .prepare("SELECT error FROM scans WHERE id = ?")
+      .get(scan.id) as { error: string };
+    expect(raw.error).not.toContain(syntheticCredential);
+    expect(raw.error).toContain("REDACTED");
+    expect(JSON.stringify(getScan(scan.id))).not.toContain(syntheticCredential);
+  });
+
+  test("sanitizes and opportunistically scrubs legacy scan errors on read", () => {
+    const syntheticCredential = `gh${"o"}_${"B_".repeat(18)}`;
+    const scan = createScan(projectId, [ScannerType.Code]);
+    const db = getCurrentTestDb();
+    db.prepare("UPDATE scans SET error = ? WHERE id = ?").run(
+      `Legacy scanner failure ${syntheticCredential}`,
+      scan.id,
+    );
+
+    const fetched = getScan(scan.id);
+    expect(JSON.stringify(fetched)).not.toContain(syntheticCredential);
+    const raw = db.prepare("SELECT error FROM scans WHERE id = ?").get(scan.id) as {
+      error: string;
+    };
+    expect(raw.error).not.toContain(syntheticCredential);
+    expect(raw.error).toContain("REDACTED");
+  });
+
   test("completeScan sets completed status, timestamp, and duration", () => {
     const scan = createScan(projectId, [ScannerType.Secrets]);
     completeScan(scan.id, 10);

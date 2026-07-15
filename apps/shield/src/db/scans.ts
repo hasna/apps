@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { getDb } from "./database.js";
 import type { Scan } from "../types/index.js";
 import { ScanStatus, type ScannerType } from "../types/index.js";
+import { sanitizeScanForOutput, sanitizeTextForBoundary } from "../lib/finding-safety.js";
 
 interface ScanRow {
   id: string;
@@ -17,11 +18,20 @@ interface ScanRow {
 }
 
 function rowToScan(row: ScanRow): Scan {
-  return {
+  const safe = sanitizeScanForOutput({
     ...row,
     status: row.status as ScanStatus,
     scanner_types: JSON.parse(row.scanner_types) as ScannerType[],
-  };
+  });
+  if (safe.error !== row.error) {
+    try {
+      getDb().prepare("UPDATE scans SET error = ? WHERE id = ?").run(safe.error, row.id);
+    } catch {
+      // Output remains sanitized when a legacy/read-only database cannot be
+      // rewritten in place.
+    }
+  }
+  return safe;
 }
 
 export function createScan(project_id: string, scanner_types: ScannerType[]): Scan {
@@ -80,7 +90,8 @@ export function updateScanStatus(
     `UPDATE scans SET status = ?, findings_count = COALESCE(?, findings_count), error = COALESCE(?, error)
      WHERE id = ?`
   );
-  stmt.run(status, findings_count ?? null, error ?? null, id);
+  const safeError = error == null ? null : sanitizeTextForBoundary(error);
+  stmt.run(status, findings_count ?? null, safeError, id);
 }
 
 export function completeScan(id: string, findings_count: number): void {

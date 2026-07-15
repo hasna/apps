@@ -2,21 +2,22 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { createFinding, getFinding, updateFinding } from "../db/findings.js";
 import { createProject } from "../db/projects.js";
 import { createRule } from "../db/rules.js";
-import { createScan } from "../db/scans.js";
+import { createScan, getScan, updateScanStatus } from "../db/scans.js";
 import { getCurrentTestDb, setupTestDb } from "../db/test-helpers.js";
 import { sanitizeMessagesForProvider } from "../llm/client.js";
 import { reportFindings as reportJson } from "../reporters/json.js";
 import { reportFindings as reportSarif } from "../reporters/sarif.js";
 import { reportFindings as reportTerminal } from "../reporters/terminal.js";
 import { scanFile } from "../scanners/secrets.js";
-import { ScannerType, Severity, type Finding } from "../types/index.js";
-import { recognizeCredentialText } from "./credential-recognition.js";
+import { ScanStatus, ScannerType, Severity, type Finding, type Scan } from "../types/index.js";
+import { recognizeCredentialText, shannonEntropy } from "./credential-recognition.js";
 import {
   containsCredentialLikeText,
   sanitizeFindingForOutput,
   sanitizeFindingForPersistence,
   sanitizeLocationForOutput,
   sanitizeRuleIdForOutput,
+  sanitizeScanForOutput,
   sanitizeTextForBoundary,
   sanitizeValueForBoundary,
 } from "./finding-safety.js";
@@ -71,8 +72,8 @@ function syntheticScannerCorpus(): string[] {
 
 function findingWith(value: string): Finding {
   return {
-    id: "finding-safe",
-    scan_id: "scan-safe",
+    id: value,
+    scan_id: value,
     rule_id: `rule-${value}`,
     scanner_type: ScannerType.Code,
     severity: Severity.High,
@@ -82,13 +83,13 @@ function findingWith(value: string): Finding {
     end_line: null,
     message: `Adjacent value: ${value}`,
     code_snippet: `const adjacent = ${JSON.stringify(value)}`,
-    fingerprint: "safe-fingerprint",
+    fingerprint: value,
     suppressed: true,
     suppressed_reason: `Reason ${value}`,
     llm_explanation: `Analysis ${value}`,
     llm_fix: `Fix ${value}`,
     llm_exploitability: 0.5,
-    created_at: "2026-07-15T00:00:00.000Z",
+    created_at: value,
   };
 }
 
@@ -109,6 +110,18 @@ describe("scanner-to-boundary credential invariant", () => {
       expect(containsCredentialLikeText(value), value).toBe(true);
 
       const finding = findingWith(value);
+      const scan: Scan = {
+        id: value,
+        project_id: value,
+        status: value as ScanStatus,
+        scanner_types: [value as ScannerType],
+        findings_count: 1,
+        started_at: value,
+        completed_at: value,
+        duration_ms: 1,
+        error: value,
+        created_at: value,
+      };
       const rendered: string[] = [];
       console.log = (...args: unknown[]) => rendered.push(args.map(String).join(" "));
       reportTerminal([finding]);
@@ -120,8 +133,9 @@ describe("scanner-to-boundary credential invariant", () => {
         JSON.stringify(sanitizeValueForBoundary({ [value]: { nested: value } })),
         JSON.stringify(sanitizeFindingForPersistence(finding)),
         JSON.stringify(sanitizeFindingForOutput(finding)),
-        reportJson([finding]),
-        reportSarif([finding]),
+        JSON.stringify(sanitizeScanForOutput(scan)),
+        reportJson([finding], scan),
+        reportSarif([finding], scan),
         rendered.join("\n"),
         JSON.stringify(sanitizeMessagesForProvider([{ role: "user", content: value }])),
       ];
@@ -165,6 +179,7 @@ describe("scanner-to-boundary credential invariant", () => {
         llm_explanation: value,
         llm_fix: value,
       });
+      updateScanStatus(scan.id, ScanStatus.Failed, undefined, value);
 
       const rawCreated = JSON.stringify(db.prepare(
         "SELECT rule_id, file, message, code_snippet, suppressed_reason, llm_explanation, llm_fix FROM findings WHERE id = ?",
@@ -172,8 +187,13 @@ describe("scanner-to-boundary credential invariant", () => {
       const rawProject = JSON.stringify(db.prepare(
         "SELECT name, path FROM projects WHERE id = ?",
       ).get(project.id));
+      const rawScan = JSON.stringify(db.prepare(
+        "SELECT error FROM scans WHERE id = ?",
+      ).get(scan.id));
       expect(rawCreated, value).not.toContain(value);
       expect(rawProject, value).not.toContain(value);
+      expect(rawScan, value).not.toContain(value);
+      expect(JSON.stringify(getScan(scan.id)), value).not.toContain(value);
       expect(JSON.stringify(getFinding(created.id)), value).not.toContain(value);
 
       const legacyId = `legacy-${index}`;
@@ -190,15 +210,15 @@ describe("scanner-to-boundary credential invariant", () => {
         value,
         value,
         value,
-        `legacy-fingerprint-${index}`,
         value,
         value,
         value,
-        "2026-07-15T00:00:00.000Z",
+        value,
+        value,
       );
       expect(JSON.stringify(getFinding(legacyId)), value).not.toContain(value);
       expect(JSON.stringify(db.prepare(
-        "SELECT file, message, code_snippet, suppressed_reason, llm_explanation, llm_fix FROM findings WHERE id = ?",
+        "SELECT file, message, code_snippet, fingerprint, suppressed_reason, llm_explanation, llm_fix, created_at FROM findings WHERE id = ?",
       ).get(legacyId)), value).not.toContain(value);
     }
   });
@@ -218,6 +238,60 @@ describe("scanner-to-boundary credential invariant", () => {
       expect(recognizeCredentialText(value, { boundary: true }), value).toEqual([]);
       expect(sanitizeTextForBoundary(value, 12_000), value).toBe(value);
       expect(sanitizeLocationForOutput(value), value).toBe(value);
+    }
+  });
+
+  test("high-entropy hexadecimal recognition has a reachable normalized boundary", () => {
+    const balancedHex = "0123456789abcdef".repeat(8);
+    expect(shannonEntropy(balancedHex)).toBeCloseTo(4, 10);
+    expect(
+      recognizeCredentialText(balancedHex).some(({ rule }) => rule.id === "high-entropy-hex"),
+    ).toBe(true);
+    expect(containsCredentialLikeText(balancedHex)).toBe(true);
+    expect(sanitizeTextForBoundary(balancedHex)).not.toContain(balancedHex);
+  });
+
+  test("high-entropy hexadecimal recognition rejects short and structured low-entropy controls", () => {
+    const safeHexValues = [
+      "0123456789abcdef",
+      "a".repeat(128),
+      "deadbeef".repeat(16),
+      "00112233".repeat(16),
+    ];
+    for (const value of safeHexValues) {
+      expect(
+        recognizeCredentialText(value).some(({ rule }) => rule.id === "high-entropy-hex"),
+        value.length.toString(),
+      ).toBe(false);
+    }
+  });
+
+  test("only exempts 40-character hex in pinned GitHub Action syntax", () => {
+    const revision = "0123456789abcdef".repeat(3).slice(0, 40);
+    expect(
+      recognizeCredentialText(revision).some(({ rule }) => rule.id === "high-entropy-hex"),
+    ).toBe(true);
+    const actionPin = `- uses: synthetic/action@${revision}`;
+    expect(scanFile(".github/workflows/ci.yml", actionPin)).toEqual([]);
+    expect(recognizeCredentialText(actionPin)).toEqual([]);
+    expect(sanitizeTextForBoundary(actionPin, 12_000)).toBe(actionPin);
+  });
+
+  test("high-entropy hexadecimal property corpus keeps positives and false positives separated", () => {
+    const alphabet = "0123456789abcdef";
+    for (let offset = 0; offset < alphabet.length; offset++) {
+      const rotated = `${alphabet.slice(offset)}${alphabet.slice(0, offset)}`.repeat(4);
+      expect(
+        recognizeCredentialText(rotated).some(({ rule }) => rule.id === "high-entropy-hex"),
+      ).toBe(true);
+    }
+    for (let index = 0; index < 256; index++) {
+      const left = (index % 16).toString(16);
+      const right = ((index + 1) % 16).toString(16);
+      const structured = `${left.repeat(32)}${right.repeat(32)}`;
+      expect(
+        recognizeCredentialText(structured).some(({ rule }) => rule.id === "high-entropy-hex"),
+      ).toBe(false);
     }
   });
 });

@@ -151,7 +151,9 @@ const ENV_API_KEY_DEFINITION: CredentialPatternDefinition = {
 const HIGH_ENTROPY_HEX_DEFINITION: CredentialPatternDefinition = {
   id: "high-entropy-hex",
   name: "High-entropy hex string",
-  source: String.raw`\b[0-9a-fA-F]{16,}\b`,
+  // Thirty-two characters avoids treating short hexadecimal identifiers as
+  // credentials while still covering 128-bit and larger secret material.
+  source: String.raw`\b[0-9a-fA-F]{32,}\b`,
   flags: "g",
   severity: Severity.Medium,
 };
@@ -205,16 +207,45 @@ function collectPatternMatches(
   return recognitions;
 }
 
+function isPinnedGitHubActionRevision(
+  value: string,
+  index: number,
+  match: string,
+): boolean {
+  if (match.length !== 40) return false;
+  const before = value.slice(0, index).trim();
+  const after = value.slice(index + match.length);
+  return /^-?\s*uses:\s*["']?[A-Za-z0-9_.-]+\/[A-Za-z0-9_./-]+@$/.test(before)
+    && /^["']?\s*(?:#.*)?$/.test(after);
+}
+
 function collectEntropyMatches(value: string): CredentialRecognition[] {
   const recognitions: CredentialRecognition[] = [];
-  for (const [definition, threshold] of [
-    [HIGH_ENTROPY_HEX_DEFINITION, 4.5],
-    [HIGH_ENTROPY_BASE64_DEFINITION, 5.0],
+  // Normalize against each alphabet's theoretical maximum. Hex tops out at
+  // exactly 4 bits/character, so a raw threshold above 4 is unreachable.
+  for (const { definition, alphabetSize, normalizedThreshold } of [
+    {
+      definition: HIGH_ENTROPY_HEX_DEFINITION,
+      alphabetSize: 16,
+      normalizedThreshold: 0.875, // 3.5 / log2(16)
+    },
+    {
+      definition: HIGH_ENTROPY_BASE64_DEFINITION,
+      alphabetSize: 65,
+      normalizedThreshold: 5.0 / Math.log2(65),
+    },
   ] as const) {
     const rule = materialize(definition);
     let match: RegExpExecArray | null;
     while ((match = rule.pattern.exec(value)) !== null) {
-      if (shannonEntropy(match[0]) > threshold) {
+      if (
+        definition.id === HIGH_ENTROPY_HEX_DEFINITION.id
+        && isPinnedGitHubActionRevision(value, match.index, match[0])
+      ) {
+        continue;
+      }
+      const normalizedEntropy = shannonEntropy(match[0]) / Math.log2(alphabetSize);
+      if (normalizedEntropy > normalizedThreshold) {
         recognitions.push({ index: match.index, length: match[0].length, rule });
       }
       if (match[0].length === 0) rule.pattern.lastIndex++;

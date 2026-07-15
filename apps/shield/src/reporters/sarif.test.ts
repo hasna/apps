@@ -172,4 +172,28 @@ describe("SARIF reporter", () => {
     expect(output).not.toContain(syntheticSecret);
     expect(JSON.parse(output).runs[0].results[0].message.text).toContain("Potential credential exposure");
   });
+
+  test("sanitizes credential-bearing fingerprints and invocation metadata", () => {
+    const syntheticCredential = `gh${"p"}_${"F_".repeat(18)}`;
+    const scan: Scan = {
+      ...mockScan,
+      status: syntheticCredential as ScanStatus,
+      started_at: syntheticCredential,
+      completed_at: syntheticCredential,
+      error: syntheticCredential,
+    };
+    const output = reportFindings([
+      makeFinding({
+        id: syntheticCredential,
+        scan_id: syntheticCredential,
+        fingerprint: syntheticCredential,
+        created_at: syntheticCredential,
+      }),
+    ], scan);
+
+    expect(output).not.toContain(syntheticCredential);
+    const fingerprint = JSON.parse(output).runs[0].results[0]
+      .fingerprints["security/fingerprint"];
+    expect(fingerprint).toMatch(/^\[REDACTED-FINGERPRINT:[a-f0-9]{12}\]$/);
+  });
 });
