@@ -180,6 +180,13 @@ base, and the build fails unless Bun is 1.3.14, the reviewed musl/OpenSSL/CA
 package versions are present, and glibc, Perl, and Alpine SQLite libraries are
 absent.
 
+The immutable Bun base currently carries vulnerable OpenSSL 3.5.6-r0 runtime
+libraries. The shared base stage must replace `libcrypto3` and `libssl3` with
+the exact Alpine v3.22 ARM64 security release 3.5.7-r0 before dependencies or
+application output are built. Keep those package versions explicit and fail
+the candidate runtime inventory gate if either version drifts. This does not add
+the OpenSSL CLI to the application image.
+
 The runner installs only the exact-pinned Alpine `bash` package needed by the
 existing event-hook and agent-run execution paths. The predecessor Debian image
 did not contain `git` or `tmux`, so those local-workstation capabilities are not

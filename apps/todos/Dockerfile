@@ -5,20 +5,28 @@
 
 ARG BUN_IMAGE=oven/bun:1.3.14-alpine@sha256:3c9ab1a521c82144dff537125695017a0480d3a13088fba7e012cfae0f63146f
 ARG BASH_VERSION=5.2.37-r0
+ARG OPENSSL_VERSION=3.5.7-r0
 
 FROM ${BUN_IMAGE} AS base
+ARG OPENSSL_VERSION
 # The single-platform digest resolves directly to the official linux/arm64
 # Bun 1.3.14 Alpine manifest. Assert the musl boundary and the immutable base's
 # security-relevant package floor so an accidental digest or platform change
-# fails during the build.
+# fails during the build. The official immutable image contains OpenSSL
+# 3.5.6-r0; upgrade only its runtime libraries to Alpine's exact patched v3.22
+# release before any application layer is built.
 RUN test "$(bun --version)" = "1.3.14"
+RUN apk add --no-cache \
+      "libcrypto3=${OPENSSL_VERSION}" \
+      "libssl3=${OPENSSL_VERSION}"
 RUN apk info -vv | grep -q '^musl-1.2.5-r12 - '
-RUN apk info -vv | grep -q '^libcrypto3-3.5.6-r0 - '
-RUN apk info -vv | grep -q '^libssl3-3.5.6-r0 - '
+RUN apk info -vv | grep -q "^libcrypto3-${OPENSSL_VERSION} - "
+RUN apk info -vv | grep -q "^libssl3-${OPENSSL_VERSION} - "
 RUN apk info -vv | grep -q '^ca-certificates-bundle-20260413-r0 - '
 RUN ! apk info -e glibc
 RUN ! apk info -e perl
 RUN ! apk info -e sqlite-libs
+RUN ! apk info -e openssl
 
 FROM base AS deps
 WORKDIR /app

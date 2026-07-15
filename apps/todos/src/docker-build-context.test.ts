@@ -29,6 +29,12 @@ describe("server image build context", () => {
     expect(dockerfile).not.toContain("# syntax=docker/dockerfile:");
     expect(dockerfile).toContain('test "$(bun --version)" = "1.3.14"');
     expect(dockerfile).toContain("apk info -vv | grep -q '^musl-1.2.5-r12 - '");
+    expect(dockerfile).toContain("ARG OPENSSL_VERSION=3.5.7-r0");
+    expect(dockerfile).toContain('"libcrypto3=${OPENSSL_VERSION}"');
+    expect(dockerfile).toContain('"libssl3=${OPENSSL_VERSION}"');
+    expect(dockerfile).toContain('^libcrypto3-${OPENSSL_VERSION} - ');
+    expect(dockerfile).toContain('^libssl3-${OPENSSL_VERSION} - ');
+    expect(dockerfile).toContain("! apk info -e openssl");
     expect(dockerfile).toContain("! apk info -e glibc");
     expect(dockerfile).not.toContain("apt-get");
     expect(dockerfile).not.toContain("dpkg-query");
@@ -70,6 +76,9 @@ describe("server image build context", () => {
     expect(buildspec).toContain("test -x /lib/ld-musl-aarch64.so.1");
     expect(buildspec).toContain("test ! -e /lib64/ld-linux-aarch64.so.1");
     expect(buildspec).toContain("openssl rand -hex 24");
+    expect(buildspec).toContain("^libcrypto3-3.5.7-r0 - ");
+    expect(buildspec).toContain("^libssl3-3.5.7-r0 - ");
+    expect(buildspec).toContain("! command -v openssl");
     expect(buildspec).toContain("apk info -vv");
     expect(buildspec).toContain("container-sbom.cdx.json");
     expect(buildspec).toContain("container-provenance.json");
