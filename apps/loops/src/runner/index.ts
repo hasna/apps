@@ -1,7 +1,20 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
-import type { ExecutorResult, Loop, LoopRun } from "../types.js";
+import type {
+  ExecutorResult,
+  Goal,
+  GoalPlanNode,
+  GoalRun,
+  GoalStatus,
+  Loop,
+  LoopRun,
+  WorkflowRun,
+  WorkflowRunStatus,
+  WorkflowSpec,
+  WorkflowStepRun,
+} from "../types.js";
 import { executeLoop } from "../lib/executor.js";
+import { executeLoopTarget, type WorkflowExecutionStore } from "../lib/workflow-runner.js";
 import { buildDeploymentStatus, deploymentStatusLine } from "../lib/mode.js";
 import { packageVersion } from "../lib/version.js";
 
@@ -53,6 +66,7 @@ export interface RunnerApiClaim {
   loop: Loop;
   run: LoopRun;
   claimToken: string;
+  workflow?: WorkflowSpec;
 }
 
 export interface RunnerOnceResult {
@@ -120,6 +134,155 @@ async function postJson(fetchImpl: typeof fetch, config: { apiUrl: string; token
   const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
   if (!response.ok) throw new Error(typeof payload.error === "string" ? payload.error : `loops-api request failed: ${response.status}`);
   return payload;
+}
+
+class RunnerWorkflowApiStore implements WorkflowExecutionStore {
+  constructor(
+    private readonly fetchImpl: typeof fetch,
+    private readonly config: { apiUrl: string; token?: string },
+    private readonly claim: RunnerApiClaim,
+  ) {}
+
+  private workflowRunPath(workflowRunId: string, suffix = ""): string {
+    return `/v1/runs/${encodeURIComponent(this.claim.run.id)}/workflow-runs/${encodeURIComponent(workflowRunId)}${suffix}`;
+  }
+
+  private goalPath(goalId: string, suffix = ""): string {
+    return `/v1/runs/${encodeURIComponent(this.claim.run.id)}/goals/${encodeURIComponent(goalId)}${suffix}`;
+  }
+
+  private stepPath(workflowRunId: string, stepId: string, action: string): string {
+    return `${this.workflowRunPath(workflowRunId)}/steps/${encodeURIComponent(stepId)}/${action}`;
+  }
+
+  private async post(path: string, body: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+    return postJson(this.fetchImpl, this.config, path, { claimToken: this.claim.claimToken, ...body });
+  }
+
+  async requireWorkflow(idOrName: string): Promise<WorkflowSpec> {
+    if (this.claim.workflow && (this.claim.workflow.id === idOrName || this.claim.workflow.name === idOrName)) return this.claim.workflow;
+    throw new Error(`workflow not included in runner claim: ${idOrName}`);
+  }
+
+  async createWorkflowRun(input: Parameters<WorkflowExecutionStore["createWorkflowRun"]>[0]): Promise<WorkflowRun> {
+    const raw = await this.post(`/v1/runs/${encodeURIComponent(this.claim.run.id)}/workflow-runs`, {
+      scheduledFor: input.scheduledFor,
+      idempotencyKey: input.idempotencyKey,
+    });
+    return raw.workflowRun as WorkflowRun;
+  }
+
+  async getWorkflowRun(id: string): Promise<WorkflowRun | undefined> {
+    const raw = await this.post(this.workflowRunPath(id, "/get"));
+    return raw.workflowRun as WorkflowRun | undefined;
+  }
+
+  async requireWorkflowRun(id: string): Promise<WorkflowRun> {
+    const run = await this.getWorkflowRun(id);
+    if (!run) throw new Error(`workflow run not found: ${id}`);
+    return run;
+  }
+
+  async listWorkflowStepRuns(workflowRunId: string): Promise<WorkflowStepRun[]> {
+    const raw = await this.post(this.workflowRunPath(workflowRunId, "/steps"));
+    return (Array.isArray(raw.steps) ? raw.steps : []) as WorkflowStepRun[];
+  }
+
+  async getWorkflowStepRun(workflowRunId: string, stepId: string): Promise<WorkflowStepRun | undefined> {
+    const raw = await this.post(this.stepPath(workflowRunId, stepId, "get"));
+    return raw.step as WorkflowStepRun | undefined;
+  }
+
+  async isWorkflowRunTerminal(workflowRunId: string): Promise<boolean> {
+    const run = await this.getWorkflowRun(workflowRunId);
+    return Boolean(run && ["succeeded", "failed", "timed_out", "cancelled"].includes(run.status));
+  }
+
+  async startWorkflowStepRun(workflowRunId: string, stepId: string): Promise<WorkflowStepRun> {
+    return (await this.post(this.stepPath(workflowRunId, stepId, "start"))).step as WorkflowStepRun;
+  }
+
+  async recoverWorkflowRun(workflowRunId: string, reason?: string): Promise<{ run: WorkflowRun; recoveredSteps: WorkflowStepRun[] }> {
+    const raw = await this.post(this.workflowRunPath(workflowRunId, "/recover"), { reason });
+    return {
+      run: raw.workflowRun as WorkflowRun,
+      recoveredSteps: (Array.isArray(raw.recoveredSteps) ? raw.recoveredSteps : []) as WorkflowStepRun[],
+    };
+  }
+
+  async finalizeWorkflowStepRun(
+    workflowRunId: string,
+    stepId: string,
+    patch: Pick<WorkflowStepRun, "status" | "finishedAt" | "durationMs" | "stdout" | "stderr"> &
+      Partial<Pick<WorkflowStepRun, "exitCode" | "error">>,
+  ): Promise<WorkflowStepRun> {
+    return (await this.post(this.stepPath(workflowRunId, stepId, "finalize"), patch as unknown as Record<string, unknown>)).step as WorkflowStepRun;
+  }
+
+  async finalizeWorkflowRun(
+    workflowRunId: string,
+    status: WorkflowRunStatus,
+    patch: Partial<Pick<WorkflowRun, "finishedAt" | "durationMs" | "error">> = {},
+  ): Promise<WorkflowRun> {
+    return (await this.post(this.workflowRunPath(workflowRunId, "/finalize"), {
+      status,
+      ...patch,
+    })).workflowRun as WorkflowRun;
+  }
+
+  async markWorkflowStepPid(workflowRunId: string, stepId: string, pid: number): Promise<WorkflowStepRun> {
+    return (await this.post(this.stepPath(workflowRunId, stepId, "pid"), { pid })).step as WorkflowStepRun;
+  }
+
+  async recordWorkflowStepProgress(
+    workflowRunId: string,
+    stepId: string,
+    progress: { stdout?: string; stderr?: string; payload?: Record<string, unknown> },
+  ): Promise<WorkflowStepRun> {
+    return (await this.post(this.stepPath(workflowRunId, stepId, "progress"), progress)).step as WorkflowStepRun;
+  }
+
+  async skipWorkflowStepRun(workflowRunId: string, stepId: string, reason: string): Promise<WorkflowStepRun> {
+    return (await this.post(this.stepPath(workflowRunId, stepId, "skip"), { reason })).step as WorkflowStepRun;
+  }
+
+  async findGoalByContext(context: Parameters<WorkflowExecutionStore["findGoalByContext"]>[0]): Promise<Goal | undefined> {
+    return (await this.post(`/v1/runs/${encodeURIComponent(this.claim.run.id)}/goals/find`, { context })).goal as Goal | undefined;
+  }
+
+  async createGoal(input: Parameters<WorkflowExecutionStore["createGoal"]>[0]): Promise<Goal> {
+    return (await this.post(`/v1/runs/${encodeURIComponent(this.claim.run.id)}/goals`, { input })).goal as Goal;
+  }
+
+  async requireGoal(id: string): Promise<Goal> {
+    return (await this.post(this.goalPath(id, "/get"))).goal as Goal;
+  }
+
+  async createGoalPlanNodes(goalId: string, nodes: Parameters<WorkflowExecutionStore["createGoalPlanNodes"]>[1]): Promise<GoalPlanNode[]> {
+    const raw = await this.post(this.goalPath(goalId, "/plan-nodes"), { nodes });
+    return (Array.isArray(raw.nodes) ? raw.nodes : []) as GoalPlanNode[];
+  }
+
+  async listGoalPlanNodes(goalIdOrPlanId: string): Promise<GoalPlanNode[]> {
+    const raw = await this.post(this.goalPath(goalIdOrPlanId, "/plan-nodes/list"));
+    return (Array.isArray(raw.nodes) ? raw.nodes : []) as GoalPlanNode[];
+  }
+
+  async updateGoalStatus(goalId: string, status: GoalStatus): Promise<Goal> {
+    return (await this.post(this.goalPath(goalId, "/status"), { status })).goal as Goal;
+  }
+
+  async updateGoalPlanNode(
+    goalId: string,
+    key: string,
+    patch: Partial<Pick<GoalPlanNode, "status" | "tokensUsed" | "timeUsedSeconds" | "ready">>,
+  ): Promise<GoalPlanNode> {
+    return (await this.post(this.goalPath(goalId, `/plan-nodes/${encodeURIComponent(key)}`), patch as Record<string, unknown>)).node as GoalPlanNode;
+  }
+
+  async recordGoalEvent(input: Parameters<WorkflowExecutionStore["recordGoalEvent"]>[0]): Promise<GoalRun> {
+    return (await this.post(this.goalPath(input.goalId, "/events"), input as unknown as Record<string, unknown>)).goalRun as GoalRun;
+  }
 }
 
 export async function runRunnerOnce(opts: RunRunnerOnceOptions = {}): Promise<RunnerOnceResult> {
@@ -213,7 +376,15 @@ async function executeClaimWithHeartbeat(
   claim: RunnerApiClaim,
   opts: RunRunnerOnceOptions,
 ): Promise<ExecutorResult> {
-  const execute = opts.execute ?? executeLoop;
+  const execute = opts.execute ?? (
+    claim.loop.target.type === "workflow"
+      ? ((loop, run, executeOpts) => {
+          const workflowId = claim.loop.target.type === "workflow" ? claim.loop.target.workflowId : "unknown";
+          if (!claim.workflow) throw new Error(`runner claim for workflow loop ${loop.id} did not include workflow ${workflowId}`);
+          return executeLoopTarget(new RunnerWorkflowApiStore(fetchImpl, config, claim), loop, run, executeOpts);
+        })
+      : executeLoop
+  );
   const leaseMs = runnerLeaseMs(claim.loop.leaseMs);
   const heartbeatIntervalMs = runnerHeartbeatIntervalMs(leaseMs, opts.heartbeatIntervalMs);
   const heartbeat = async () => {

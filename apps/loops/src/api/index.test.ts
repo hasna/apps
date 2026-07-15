@@ -925,7 +925,7 @@ describe("loops-api foundation", () => {
   test("runner claim and run finalization are fenced by claim token", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
-    let now = new Date("2026-01-01T00:00:00Z");
+    let now = new Date("2026-01-01T00:00:05Z");
     const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage, now: () => now }, runnerPrincipal("runner-a"));
 
     try {
@@ -1014,7 +1014,7 @@ describe("loops-api foundation", () => {
       expect(evidence.status).toBe(200);
       expect(JSON.stringify(await evidence.json())).not.toContain("abcdefghijklmnop");
 
-      now = new Date("2026-01-01T00:00:02Z");
+      now = new Date("2026-01-01T00:00:07Z");
       const wrongFinalize = await fetch(apiUrl(server, `/v1/runs/${runId}/finalize`), {
         method: "POST",
         headers: jsonHeaders,
@@ -1099,7 +1099,7 @@ describe("loops-api foundation", () => {
   test("runner finalization uses server time for stale-claim fencing", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
-    let now = new Date("2026-01-01T00:00:00Z");
+    let now = new Date("2026-01-01T00:00:05Z");
     const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage, now: () => now }, runnerPrincipal("runner-a"));
 
     try {
@@ -1123,7 +1123,7 @@ describe("loops-api foundation", () => {
       };
       expect(claimed.claims).toHaveLength(1);
 
-      now = new Date("2026-01-01T00:00:02Z");
+      now = new Date("2026-01-01T00:00:07Z");
       const staleFinalize = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/finalize`), {
         method: "POST",
         headers: jsonHeaders,
@@ -1144,7 +1144,7 @@ describe("loops-api foundation", () => {
     }
   });
 
-  test("runner claim skips workflow loops until remote workflow execution is supported", async () => {
+  test("runner claim returns workflow loops with executable workflow payload and claim-fenced workflow APIs", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
     const server = createTestServer(mod, {
@@ -1156,8 +1156,8 @@ describe("loops-api foundation", () => {
 
     try {
       const workflow = await storage.createWorkflow({
-        name: "api-workflow-claim-skip",
-        steps: [{ id: "step", target: { type: "command", command: "true" } }],
+        name: "api-workflow-claim-execute",
+        steps: [{ id: "step", target: { type: "command", command: "printf workflow-ok", shell: true } }],
       });
       const loop = await storage.createLoop(
         {
@@ -1174,8 +1174,187 @@ describe("loops-api foundation", () => {
         body: JSON.stringify({ runnerId: "runner-a", now: "2026-01-01T00:00:00Z", maxClaims: 1 }),
       });
       expect(response.status).toBe(200);
-      expect(await response.json()).toMatchObject({ ok: true, claims: [] });
-      expect(await storage.listRuns({ loopId: loop.id })).toHaveLength(0);
+      const claimed = (await response.json()) as {
+        claims: Array<{
+          claimToken: string;
+          loop: { id: string; target: { type: string; workflowId?: string } };
+          run: { id: string; status: string };
+          workflow?: WorkflowSpec;
+        }>;
+      };
+      expect(claimed.claims).toHaveLength(1);
+      expect(claimed.claims[0]).toMatchObject({
+        loop: { id: loop.id, target: { type: "workflow", workflowId: workflow.id } },
+        run: { status: "running" },
+        workflow: { id: workflow.id, steps: [{ id: "step", target: { type: "command", command: "printf workflow-ok" } }] },
+      });
+      expect(claimed.claims[0]!.claimToken).toBeString();
+      expect(await storage.listRuns({ loopId: loop.id })).toHaveLength(1);
+
+      const createWorkflowRun = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claimed.claims[0]!.claimToken,
+          idempotencyKey: `${claimed.claims[0]!.run.id}:workflow:${workflow.id}`,
+        }),
+      });
+      expect(createWorkflowRun.status).toBe(200);
+      const created = (await createWorkflowRun.json()) as { workflowRun: { id: string; loopRunId: string; workflowId: string; status: string } };
+      expect(created.workflowRun).toMatchObject({ loopRunId: claimed.claims[0]!.run.id, workflowId: workflow.id, status: "running" });
+
+      const staleStart = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/steps/step/start`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ claimToken: "wrong-token" }),
+      });
+      expect(staleStart.status).toBe(409);
+      expect(await staleStart.json()).toMatchObject({ ok: false, error: "stale_claim" });
+
+      const start = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/steps/step/start`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ claimToken: claimed.claims[0]!.claimToken }),
+      });
+      expect(start.status).toBe(200);
+      expect(await start.json()).toMatchObject({ step: { stepId: "step", status: "running" } });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("runner-scoped goal APIs persist workflow goal state behind the claim token", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, {
+      host: "127.0.0.1",
+      port: 0,
+      storage,
+      now: () => new Date("2026-01-01T00:00:00Z"),
+    }, runnerPrincipal("runner-a"));
+
+    try {
+      const workflow = await storage.createWorkflow({
+        name: "api-workflow-goal-state",
+        steps: [{ id: "step", target: { type: "command", command: "printf workflow-goal", shell: true } }],
+      });
+      await storage.createLoop(
+        {
+          name: "api-workflow-goal-loop",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "workflow", workflowId: workflow.id },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+
+      const claimResponse = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "runner-a", now: "2026-01-01T00:00:00Z", maxClaims: 1 }),
+      });
+      expect(claimResponse.status).toBe(200);
+      const claimed = (await claimResponse.json()) as {
+        claims: Array<{ claimToken: string; run: { id: string }; workflow?: WorkflowSpec }>;
+      };
+      expect(claimed.claims).toHaveLength(1);
+      expect(claimed.claims[0]!.workflow?.id).toBe(workflow.id);
+
+      const runId = claimed.claims[0]!.run.id;
+      const claimToken = claimed.claims[0]!.claimToken;
+      const createWorkflowRun = await fetch(apiUrl(server, `/v1/runs/${runId}/workflow-runs`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ claimToken, idempotencyKey: `${runId}:workflow:${workflow.id}` }),
+      });
+      expect(createWorkflowRun.status).toBe(200);
+      const createdWorkflowRun = (await createWorkflowRun.json()) as { workflowRun: { id: string; workflowId: string; loopRunId: string } };
+      expect(createdWorkflowRun.workflowRun).toMatchObject({ workflowId: workflow.id, loopRunId: runId });
+
+      const staleCreate = await fetch(apiUrl(server, `/v1/runs/${runId}/goals`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ claimToken: "wrong-token", objective: "must fail" }),
+      });
+      expect(staleCreate.status).toBe(409);
+      expect(await staleCreate.json()).toMatchObject({ ok: false, error: "stale_claim" });
+
+      const createGoal = await fetch(apiUrl(server, `/v1/runs/${runId}/goals`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken,
+          input: {
+            objective: "runner-scoped workflow goal",
+            workflowRunId: createdWorkflowRun.workflowRun.id,
+            workflowStepId: "step",
+          },
+        }),
+      });
+      expect(createGoal.status).toBe(200);
+      const createdGoal = (await createGoal.json()) as {
+        goal: { goalId: string; loopRunId: string; workflowId: string; workflowRunId: string; workflowStepId: string };
+      };
+      expect(createdGoal.goal).toMatchObject({
+        loopRunId: runId,
+        workflowId: workflow.id,
+        workflowRunId: createdWorkflowRun.workflowRun.id,
+        workflowStepId: "step",
+      });
+      const goalId = createdGoal.goal.goalId;
+
+      const findGoal = await fetch(apiUrl(server, `/v1/runs/${runId}/goals/find`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ claimToken, context: { workflowRunId: createdWorkflowRun.workflowRun.id, workflowStepId: "step" } }),
+      });
+      expect(findGoal.status).toBe(200);
+      expect(await findGoal.json()).toMatchObject({ goal: { goalId } });
+
+      const createNodes = await fetch(apiUrl(server, `/v1/runs/${runId}/goals/${goalId}/plan-nodes`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken,
+          nodes: [
+            { key: "plan", objective: "Plan the step", priority: 1 },
+            { key: "execute", objective: "Run the step", dependsOn: ["plan"] },
+          ],
+        }),
+      });
+      expect(createNodes.status).toBe(200);
+      expect(await createNodes.json()).toMatchObject({
+        nodes: [
+          { key: "plan", status: "pending", ready: true },
+          { key: "execute", status: "pending", ready: false },
+        ],
+      });
+
+      const updateNode = await fetch(apiUrl(server, `/v1/runs/${runId}/goals/${goalId}/plan-nodes/plan`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ claimToken, status: "complete", ready: false, tokensUsed: 12, timeUsedSeconds: 3 }),
+      });
+      expect(updateNode.status).toBe(200);
+      expect(await updateNode.json()).toMatchObject({ node: { key: "plan", status: "complete", ready: false, tokensUsed: 12, timeUsedSeconds: 3 } });
+
+      const event = await fetch(apiUrl(server, `/v1/runs/${runId}/goals/${goalId}/events`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ claimToken, phase: "execute", status: "active", nodeKey: "execute", tokensUsed: 7, evidence: { step: "started" } }),
+      });
+      expect(event.status).toBe(200);
+      expect(await event.json()).toMatchObject({
+        goalRun: { goalId, loopRunId: runId, workflowRunId: createdWorkflowRun.workflowRun.id, workflowStepId: "step", phase: "execute", status: "active" },
+      });
+
+      const status = await fetch(apiUrl(server, `/v1/runs/${runId}/goals/${goalId}/status`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ claimToken, status: "complete" }),
+      });
+      expect(status.status).toBe(200);
+      expect(await status.json()).toMatchObject({ goal: { goalId, status: "complete" } });
     } finally {
       server.stop(true);
       await storage.close();
@@ -1217,6 +1396,68 @@ describe("loops-api foundation", () => {
       };
       expect(claimed.claims).toHaveLength(1);
       expect(claimed.claims[0]).toMatchObject({ loop: { id: loop.id }, run: { status: "running" } });
+      expect(await storage.listRuns({ loopId: loop.id, status: "running" })).toHaveLength(1);
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("runner claim reclaims an expired overlap-skip lease through the API", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    let now = new Date("2026-01-01T00:00:05Z");
+    const server = createTestServer(mod, {
+      host: "127.0.0.1",
+      port: 0,
+      storage,
+      now: () => now,
+    }, runnerPrincipal("runner-a"));
+
+    try {
+      const loop = await storage.createLoop(
+        {
+          name: "api-skip-expired-reclaim-loop",
+          schedule: { type: "interval", everyMs: 1_000 },
+          target: { type: "command", command: "true" },
+          catchUp: "all",
+          catchUpLimit: 3,
+          overlap: "skip",
+          leaseMs: 1_000,
+        },
+        new Date("2026-01-01T00:00:00Z"),
+      );
+
+      const first = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "runner-a", maxClaims: 1 }),
+      });
+      expect(first.status).toBe(200);
+      const firstClaimed = (await first.json()) as {
+        claims: Array<{ claimToken?: string; loop: { id: string }; run: { id: string; scheduledFor: string; status: string } }>;
+      };
+      expect(firstClaimed.claims).toHaveLength(1);
+      expect(firstClaimed.claims[0]).toMatchObject({ loop: { id: loop.id }, run: { status: "running" } });
+      const originalToken = firstClaimed.claims[0]!.claimToken;
+
+      now = new Date("2026-01-01T00:00:07Z");
+      const reclaimed = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "runner-a", maxClaims: 1 }),
+      });
+      expect(reclaimed.status).toBe(200);
+      const reclaimedClaimed = (await reclaimed.json()) as {
+        claims: Array<{ claimToken?: string; loop: { id: string }; run: { id: string; scheduledFor: string; status: string } }>;
+      };
+      expect(reclaimedClaimed.claims).toHaveLength(1);
+      expect(reclaimedClaimed.claims[0]).toMatchObject({
+        loop: { id: loop.id },
+        run: { id: firstClaimed.claims[0]!.run.id, status: "running" },
+      });
+      expect(reclaimedClaimed.claims[0]!.claimToken).toBeTruthy();
+      expect(reclaimedClaimed.claims[0]!.claimToken).not.toBe(originalToken);
       expect(await storage.listRuns({ loopId: loop.id, status: "running" })).toHaveLength(1);
     } finally {
       server.stop(true);

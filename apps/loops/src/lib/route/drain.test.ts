@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { dbPath } from "../paths.js";
 import { drainTodosTaskRoutes } from "./drain.js";
 
@@ -15,10 +15,39 @@ import { drainTodosTaskRoutes } from "./drain.js";
 // binary is unavailable.
 
 function todosAvailable(): boolean {
+  let todosProject: string | undefined;
+  let taskId: string | undefined;
   try {
-    return spawnSync("todos", ["--version"], { encoding: "utf8", timeout: 15_000 }).status === 0;
+    if (spawnSync("todos", ["--version"], { encoding: "utf8", timeout: 15_000 }).status !== 0) return false;
+    todosProject = mkdtempSync(join(tmpdir(), "loops-drain-probe-"));
+    const taskListId = `todos-${basename(todosProject).toLowerCase()}`;
+    const registered = spawnSync(
+      "todos",
+      ["projects", "--add", todosProject, "--name", basename(todosProject), "--task-list-id", taskListId],
+      { encoding: "utf8", timeout: 30_000 },
+    );
+    if (registered.status !== 0) return false;
+    const added = spawnSync(
+      "todos",
+      ["--project", todosProject, "--json", "add", "OpenLoops ready probe", "-d", "probe", "-t", "auto:route", "--list", taskListId],
+      { encoding: "utf8", timeout: 30_000 },
+    );
+    if (added.status !== 0) return false;
+    taskId = JSON.parse(added.stdout).id as string;
+    const ready = spawnSync("todos", ["--project", todosProject, "--json", "ready", "--limit", "20"], {
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    if (ready.status !== 0) return false;
+    return (JSON.parse(ready.stdout || "[]") as Array<{ id?: string }>).some((task) => task.id === taskId);
   } catch {
     return false;
+  } finally {
+    if (taskId) spawnSync("todos", ["delete", taskId], { encoding: "utf8", timeout: 30_000 });
+    if (todosProject) {
+      spawnSync("todos", ["projects", "--deregister", todosProject, "--path-prefix", tmpdir()], { encoding: "utf8", timeout: 30_000 });
+      rmSync(todosProject, { recursive: true, force: true });
+    }
   }
 }
 
@@ -40,19 +69,33 @@ const MERGED_PR_DESCRIPTION = "please merge https://github.com/hasna/example/pul
 
 describe("drainTodosTaskRoutes freshness close", () => {
   let todosProject: string;
+  let taskListId: string;
   let dataDir: string;
   let oldDataDir: string | undefined;
+  let createdTaskIds: string[];
 
   beforeEach(() => {
     todosProject = mkdtempSync(join(tmpdir(), "loops-drain-src-"));
+    taskListId = `todos-${basename(todosProject).toLowerCase()}`;
+    const registered = spawnSync(
+      "todos",
+      ["projects", "--add", todosProject, "--name", basename(todosProject), "--task-list-id", taskListId],
+      { encoding: "utf8", timeout: 30_000 },
+    );
+    if (registered.status !== 0) throw new Error(`todos project registration failed: ${registered.stderr}`);
     dataDir = mkdtempSync(join(tmpdir(), "loops-drain-data-"));
     oldDataDir = process.env.LOOPS_DATA_DIR;
     process.env.LOOPS_DATA_DIR = dataDir;
+    createdTaskIds = [];
   });
 
   afterEach(() => {
     if (oldDataDir === undefined) delete process.env.LOOPS_DATA_DIR;
     else process.env.LOOPS_DATA_DIR = oldDataDir;
+    for (const taskId of createdTaskIds) {
+      spawnSync("todos", ["delete", taskId], { encoding: "utf8", timeout: 30_000 });
+    }
+    spawnSync("todos", ["projects", "--deregister", todosProject, "--path-prefix", tmpdir()], { encoding: "utf8", timeout: 30_000 });
     rmSync(todosProject, { recursive: true, force: true });
     rmSync(dataDir, { recursive: true, force: true });
   });
@@ -60,11 +103,13 @@ describe("drainTodosTaskRoutes freshness close", () => {
   function addTask(description: string, tags = "auto:route"): string {
     const result = spawnSync(
       "todos",
-      ["--project", todosProject, "--json", "add", "Merge the release PR", "-d", description, "-t", tags],
+      ["--project", todosProject, "--json", "add", "Merge the release PR", "-d", description, "-t", tags, "--list", taskListId],
       { encoding: "utf8", timeout: 30_000 },
     );
     if (result.status !== 0) throw new Error(`todos add failed: ${result.stderr}`);
-    return JSON.parse(result.stdout).id as string;
+    const id = JSON.parse(result.stdout).id as string;
+    createdTaskIds.push(id);
+    return id;
   }
 
   function taskState(id: string): { status: string; tags: string[] } {

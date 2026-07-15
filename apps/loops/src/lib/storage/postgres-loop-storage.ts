@@ -13,23 +13,29 @@
 // rows.
 //
 // Concurrency-critical run claiming (runner claim/heartbeat) uses
-// `SELECT ... FOR UPDATE SKIP LOCKED` inside a transaction — the same guarantee
-// proven by `postgres-concurrency.test.ts`.
+// `SELECT ... FOR UPDATE SKIP LOCKED` inside a transaction and is covered by
+// the live two-connection claim race test in postgres-loop-storage.test.ts.
 //
-// Methods that require heavy multi-statement orchestration ported from the
-// sqlite store (workflow-run / workflow-step / goal lifecycle) are NOT silently
-// stubbed: they throw {@link NotImplementedError} with the method name so a
-// caller hitting an unported path fails loudly instead of no-oping.
+// Workflow-run, workflow-step, and goal lifecycle writes are implemented here
+// instead of falling through to sqlite-only or preview-only stubs.
 
 import pgLib from "pg";
 import type {
+  CreateGoalInput,
+  CreateGoalPlanNodeInput,
+  CreateWorkflowRunInput,
   DaemonLease,
   PruneHistorySummary,
+  RecordGoalEventInput,
   RecoverExpiredRunLeasesResult,
 } from "../store.js";
 import { Store } from "../store.js";
 import {
+  GATE_DEATH_CEILING,
+  classifyNonProductiveStepFailure,
+  isLiveStepProcess,
   persistedRunOutput,
+  persistedWorkflowEventPayload,
   rowToGoal,
   rowToGoalPlanNode,
   rowToGoalRun,
@@ -63,17 +69,23 @@ import { LoopArchivedError, LoopNotFoundError, ValidationError } from "../errors
 import { genId, nowIso } from "../ids.js";
 import { initialNextRun } from "../recurrence.js";
 import { normalizeCreateWorkflowInput } from "../workflow-spec.js";
+import { assertGoalTransition, updateReadyFlags } from "../goal/status.js";
+import { GOAL_TERMINAL, type GoalStatus } from "../goal/types.js";
 import type {
   CreateLoopInput,
   CreateWorkflowInvocationInput,
   CreateWorkflowInput,
+  GoalPlanNode,
   Loop,
   LoopRun,
   LoopStatus,
   LoopTarget,
   RunReceipt,
   UpsertWorkflowWorkItemInput,
+  WorkflowRun,
+  WorkflowRunStatus,
   WorkflowSpec,
+  WorkflowStepRun,
   WorkflowWorkItemStatus,
   WriteRunReceiptInput,
 } from "../../types.js";
@@ -93,18 +105,6 @@ pgTypes.setTypeParser(114, (v: string) => v);
 const toIso = (v: string | null): string | null => (v == null ? null : new Date(v).toISOString());
 pgTypes.setTypeParser(1184, (v) => toIso(v));
 pgTypes.setTypeParser(1114, (v) => toIso(v));
-
-/** Thrown by store methods that are not yet ported to the Postgres backend. */
-export class NotImplementedError extends Error {
-  readonly code = "not_implemented";
-  constructor(method: string) {
-    super(
-      `PostgresLoopStorage.${method} is not implemented on the Postgres backend yet. ` +
-        `This path must not silently no-op; port the sqlite Store.${method} logic.`,
-    );
-    this.name = "NotImplementedError";
-  }
-}
 
 const TERMINAL_RUN_STATUSES = ["succeeded", "failed", "timed_out", "abandoned", "skipped"] as const;
 const PRUNE_BATCH_SIZE = 400;
@@ -1170,6 +1170,11 @@ export class PostgresLoopStorage implements LoopStorageContract {
             "parent loop run lease expired before completion",
             finished,
           );
+          await this.appendWorkflowEventWithClient(c, wf.id, "failed", undefined, {
+            error: "parent loop run lease expired before completion",
+            loopRunId: row.id,
+          });
+          await this.demoteNonProductiveWorkItems(c, wf.id, finished);
         }
         const loop = await this.loadLoop(c, row.loop_id);
         const itemStatus = workItemStatusForLoopRun("abandoned", row.attempt, loop?.maxAttempts);
@@ -1735,41 +1740,706 @@ export class PostgresLoopStorage implements LoopStorageContract {
     if (!row) throw new Error(`workflow work item not found after upsert: ${input.routeKey}/${input.idempotencyKey}`);
     return rowToWorkflowWorkItem(row);
   }
-  admitWorkflowWorkItem(): never {
-    throw new NotImplementedError("admitWorkflowWorkItem");
+  async admitWorkflowWorkItem(...args: M<"admitWorkflowWorkItem">["args"]): Promise<M<"admitWorkflowWorkItem">["result"]> {
+    const [id, patch] = args;
+    const now = nowIso();
+    const res = await this.client.query(
+      `UPDATE workflow_work_items
+       SET status='admitted', attempts=attempts + 1, workflow_id=$2, loop_id=$3,
+        next_attempt_at=NULL,
+        lease_expires_at=NULL,
+        last_reason=CASE
+          WHEN last_reason IS NOT NULL AND $4::text IS NOT NULL THEN last_reason || '; ' || $4::text
+          ELSE COALESCE($4::text, last_reason)
+        END,
+        updated_at=$5
+       WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND status IN ('queued', 'deferred')`,
+      [id, patch.workflowId, patch.loopId, patch.reason ?? null, now],
+    );
+    const item = await this.getWorkflowWorkItem(id);
+    if (!item) throw new Error(`workflow work item not found after admit: ${id}`);
+    if (res.rowCount !== 1) throw new Error(`workflow work item is not claimable: ${id} status=${item.status}`);
+    return item;
   }
-  createGoal(): never {
-    throw new NotImplementedError("createGoal");
+
+  async createGoal(...args: M<"createGoal">["args"]): Promise<M<"createGoal">["result"]> {
+    const [input, opts = {}] = args as [CreateGoalInput, DaemonLeaseFence?];
+    const now = nowIso();
+    return this.client.transaction(async (c) => {
+      await this.assertDaemonLeaseFence(c, opts, now);
+      const id = genId();
+      await c.execute(
+        `INSERT INTO goals (id, plan_id, objective, status, token_budget, tokens_used, time_used_seconds, auto_execute,
+          max_tokens, source_type, source_id, loop_id, loop_run_id, workflow_id, workflow_run_id, workflow_step_id,
+          created_at, updated_at, tenant_id)
+         VALUES ($1,$1,$2,'active',$3,0,0,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13,open_loops_current_tenant_id())`,
+        [
+          id,
+          input.objective,
+          input.tokenBudget ?? null,
+          input.autoExecute ?? "readyOnly",
+          input.maxTokens ?? input.tokenBudget ?? null,
+          input.sourceType ?? null,
+          input.sourceId ?? null,
+          input.loopId ?? null,
+          input.loopRunId ?? null,
+          input.workflowId ?? null,
+          input.workflowRunId ?? null,
+          input.workflowStepId ?? null,
+          now,
+        ],
+      );
+      const row = await c.get<GoalRow>(
+        "SELECT * FROM goals WHERE tenant_id = open_loops_current_tenant_id() AND id = $1",
+        [id],
+      );
+      if (!row) throw new Error(`goal not found after create: ${id}`);
+      return rowToGoal(row);
+    });
   }
-  createGoalPlanNodes(): never {
-    throw new NotImplementedError("createGoalPlanNodes");
+
+  async requireGoal(...args: M<"requireGoal">["args"]): Promise<M<"requireGoal">["result"]> {
+    const goal = await this.getGoal(args[0]);
+    if (!goal) throw new Error(`goal not found: ${args[0]}`);
+    return goal;
   }
-  updateGoalStatus(): never {
-    throw new NotImplementedError("updateGoalStatus");
+
+  async findGoalByContext(...args: M<"findGoalByContext">["args"]): Promise<M<"findGoalByContext">["result"]> {
+    const [context] = args;
+    if (context.loopRunId) {
+      const row = await this.client.get<GoalRow>(
+        `SELECT * FROM goals
+         WHERE tenant_id = open_loops_current_tenant_id()
+           AND loop_run_id = $1
+           AND ($2::text IS NULL OR workflow_step_id = $2)
+         ORDER BY created_at DESC LIMIT 1`,
+        [context.loopRunId, context.workflowStepId ?? null],
+      );
+      if (row) return rowToGoal(row);
+    }
+    if (context.workflowRunId) {
+      const row = await this.client.get<GoalRow>(
+        `SELECT * FROM goals
+         WHERE tenant_id = open_loops_current_tenant_id()
+           AND workflow_run_id = $1
+           AND ($2::text IS NULL OR workflow_step_id = $2)
+         ORDER BY created_at DESC LIMIT 1`,
+        [context.workflowRunId, context.workflowStepId ?? null],
+      );
+      if (row) return rowToGoal(row);
+    }
+    if (context.sourceType && context.sourceId) {
+      const row = await this.client.get<GoalRow>(
+        `SELECT * FROM goals
+         WHERE tenant_id = open_loops_current_tenant_id()
+           AND source_type = $1
+           AND source_id = $2
+           AND status <> ALL($3::text[])
+         ORDER BY created_at DESC LIMIT 1`,
+        [context.sourceType, context.sourceId, [...GOAL_TERMINAL]],
+      );
+      if (row) return rowToGoal(row);
+    }
+    return undefined;
   }
-  updateGoalPlanNode(): never {
-    throw new NotImplementedError("updateGoalPlanNode");
+
+  private mapGoalPlanNode(row: GoalPlanNodeRow): GoalPlanNode {
+    return rowToGoalPlanNode({ ...row, ready: (row.ready as unknown as boolean) ? 1 : 0 });
   }
-  recordGoalEvent(): never {
-    throw new NotImplementedError("recordGoalEvent");
+
+  async createGoalPlanNodes(...args: M<"createGoalPlanNodes">["args"]): Promise<M<"createGoalPlanNodes">["result"]> {
+    const [goalId, nodes, opts = {}] = args as [string, CreateGoalPlanNodeInput[], DaemonLeaseFence?];
+    const goal = await this.requireGoal(goalId);
+    const now = nowIso();
+    const materialized: GoalPlanNode[] = nodes.map((node, sequence) => ({
+      nodeId: genId(),
+      planId: goal.planId,
+      key: node.key,
+      sequence,
+      priority: node.priority ?? 0,
+      objective: node.objective,
+      status: "pending",
+      ready: false,
+      tokenBudget: node.tokenBudget,
+      tokensUsed: 0,
+      timeUsedSeconds: 0,
+      dependsOn: node.dependsOn ?? [],
+      createdAt: now,
+      updatedAt: now,
+    }));
+    const withReady = updateReadyFlags(materialized, "active");
+    await this.client.transaction(async (c) => {
+      await this.assertDaemonLeaseFence(c, opts, now);
+      for (const node of withReady) {
+        await c.execute(
+          `INSERT INTO goal_plan_nodes (id, goal_id, plan_id, key, sequence, priority, objective, status, ready,
+            token_budget, tokens_used, time_used_seconds, depends_on_json, created_at, updated_at, tenant_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15,open_loops_current_tenant_id())
+           ON CONFLICT DO NOTHING`,
+          [
+            node.nodeId,
+            goal.goalId,
+            goal.planId,
+            node.key,
+            node.sequence,
+            node.priority,
+            node.objective,
+            node.status,
+            node.ready,
+            node.tokenBudget ?? null,
+            node.tokensUsed,
+            node.timeUsedSeconds,
+            JSON.stringify(node.dependsOn),
+            node.createdAt,
+            node.updatedAt,
+          ],
+        );
+      }
+    });
+    return await this.listGoalPlanNodes(goalId);
   }
-  createWorkflowRun(): never {
-    throw new NotImplementedError("createWorkflowRun");
+
+  async updateGoalStatus(...args: M<"updateGoalStatus">["args"]): Promise<M<"updateGoalStatus">["result"]> {
+    const [goalId, status, opts = {}] = args as [string, GoalStatus, DaemonLeaseFence?];
+    const current = await this.requireGoal(goalId);
+    assertGoalTransition(current.status, status);
+    const now = (opts.now ?? new Date()).toISOString();
+    await this.client.execute(
+      `UPDATE goals SET status=$2, updated_at=$3
+       WHERE tenant_id = open_loops_current_tenant_id() AND id=$1
+         AND ($4::text IS NULL OR EXISTS (
+           SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$4 AND expires_at > $5
+         ))`,
+      [goalId, status, now, opts.daemonLeaseId ?? null, now],
+    );
+    return await this.requireGoal(goalId);
   }
-  startWorkflowStepRun(): never {
-    throw new NotImplementedError("startWorkflowStepRun");
+
+  async updateGoalPlanNode(...args: M<"updateGoalPlanNode">["args"]): Promise<M<"updateGoalPlanNode">["result"]> {
+    const [goalId, key, patch, opts = {}] = args;
+    const now = (opts.now ?? new Date()).toISOString();
+    await this.client.execute(
+      `UPDATE goal_plan_nodes
+       SET status=COALESCE($3, status),
+        tokens_used=COALESCE($4, tokens_used),
+        time_used_seconds=COALESCE($5, time_used_seconds),
+        ready=COALESCE($6, ready),
+        updated_at=$7
+       WHERE tenant_id = open_loops_current_tenant_id() AND goal_id=$1 AND key=$2
+         AND ($8::text IS NULL OR EXISTS (
+           SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$8 AND expires_at > $9
+         ))`,
+      [
+        goalId,
+        key,
+        patch.status ?? null,
+        patch.tokensUsed ?? null,
+        patch.timeUsedSeconds ?? null,
+        patch.ready ?? null,
+        now,
+        opts.daemonLeaseId ?? null,
+        now,
+      ],
+    );
+    const node = (await this.listGoalPlanNodes(goalId)).find((entry) => entry.key === key);
+    if (!node) throw new Error(`goal node not found: ${goalId}/${key}`);
+    return node;
   }
-  recoverWorkflowRun(): never {
-    throw new NotImplementedError("recoverWorkflowRun");
+
+  async recordGoalEvent(...args: M<"recordGoalEvent">["args"]): Promise<M<"recordGoalEvent">["result"]> {
+    const [input, opts = {}] = args as [RecordGoalEventInput, DaemonLeaseFence?];
+    const now = nowIso();
+    return this.client.transaction(async (c) => {
+      await this.assertDaemonLeaseFence(c, opts, now);
+      const goalRow = await c.get<GoalRow>(
+        "SELECT * FROM goals WHERE tenant_id = open_loops_current_tenant_id() AND id = $1",
+        [input.goalId],
+      );
+      if (!goalRow) throw new Error(`goal not found: ${input.goalId}`);
+      const goal = rowToGoal(goalRow);
+      const previous = await c.get<{ turn: number | null }>(
+        "SELECT MAX(turn)::int AS turn FROM goal_runs WHERE tenant_id = open_loops_current_tenant_id() AND goal_id = $1",
+        [goal.goalId],
+      );
+      const turn = input.turn ?? (previous?.turn ?? 0) + 1;
+      const id = genId();
+      await c.execute(
+        `INSERT INTO goal_runs (id, goal_id, plan_id, loop_id, loop_run_id, workflow_id, workflow_run_id, workflow_step_id,
+          turn, phase, status, node_key, tokens_used, evidence_json, raw_response_json, created_at, updated_at, tenant_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15::jsonb,$16,$17,open_loops_current_tenant_id())`,
+        [
+          id,
+          goal.goalId,
+          goal.planId,
+          goal.loopId ?? null,
+          goal.loopRunId ?? null,
+          goal.workflowId ?? null,
+          goal.workflowRunId ?? null,
+          goal.workflowStepId ?? null,
+          turn,
+          input.phase,
+          input.status,
+          input.nodeKey ?? null,
+          input.tokensUsed ?? 0,
+          input.evidence ? scrubbedOrNull(JSON.stringify(input.evidence)) : null,
+          input.rawResponse === undefined ? null : scrubbedOrNull(JSON.stringify(input.rawResponse)),
+          now,
+          now,
+        ],
+      );
+      if (input.tokensUsed && input.tokensUsed > 0) {
+        await c.execute(
+          "UPDATE goals SET tokens_used=tokens_used + $2, updated_at=$3 WHERE tenant_id = open_loops_current_tenant_id() AND id=$1",
+          [goal.goalId, input.tokensUsed, now],
+        );
+      }
+      const event = await c.get<GoalRunRow>(
+        "SELECT * FROM goal_runs WHERE tenant_id = open_loops_current_tenant_id() AND id = $1",
+        [id],
+      );
+      if (!event) throw new Error(`goal run not found after record: ${id}`);
+      return rowToGoalRun(event);
+    });
   }
-  finalizeWorkflowStepRun(): never {
-    throw new NotImplementedError("finalizeWorkflowStepRun");
+
+  async requireWorkflow(...args: M<"requireWorkflow">["args"]): Promise<M<"requireWorkflow">["result"]> {
+    const idOrName = args[0];
+    const byId = await this.getWorkflow(idOrName);
+    if (byId) return byId;
+    const row = await this.client.get<WorkflowRow>(
+      "SELECT * FROM workflow_specs WHERE tenant_id = open_loops_current_tenant_id() AND name = $1 AND status = 'active' ORDER BY updated_at DESC LIMIT 1",
+      [idOrName],
+    );
+    if (row) return rowToWorkflow(row);
+    throw new Error(`workflow not found: ${idOrName}`);
   }
-  finalizeWorkflowRun(): never {
-    throw new NotImplementedError("finalizeWorkflowRun");
+
+  async createWorkflowRun(...args: M<"createWorkflowRun">["args"]): Promise<M<"createWorkflowRun">["result"]> {
+    const [input] = args as [CreateWorkflowRunInput];
+    const now = nowIso();
+    const targetInput = input.loop?.target.type === "workflow" ? input.loop.target.input : undefined;
+    const invocationId = input.invocationId ?? targetInput?.workflowInvocationId ?? targetInput?.invocationId;
+    const workItemId = input.workItemId ?? targetInput?.workflowWorkItemId ?? targetInput?.workItemId;
+    if (input.idempotencyKey) {
+      const existing = await this.client.get<WorkflowRunRow>(
+        "SELECT * FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND workflow_id = $1 AND idempotency_key = $2 LIMIT 1",
+        [input.workflow.id, input.idempotencyKey],
+      );
+      if (existing) {
+        await this.client.transaction((c) => this.assertDaemonLeaseFence(c, input, now));
+        return rowToWorkflowRun(existing);
+      }
+    }
+
+    return this.client.transaction(async (c) => {
+      await this.assertDaemonLeaseFence(c, input, now);
+      if (input.idempotencyKey) {
+        const existing = await c.get<WorkflowRunRow>(
+          "SELECT * FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND workflow_id = $1 AND idempotency_key = $2 LIMIT 1",
+          [input.workflow.id, input.idempotencyKey],
+        );
+        if (existing) return rowToWorkflowRun(existing);
+      }
+      const runId = genId();
+      await c.execute(
+        `INSERT INTO workflow_runs (id, workflow_id, workflow_name, loop_id, loop_run_id, invocation_id, work_item_id,
+          scheduled_for, idempotency_key, manifest_path, status, started_at, finished_at, duration_ms, error,
+          created_at, updated_at, tenant_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,'running',$10,NULL,NULL,NULL,$10,$10,open_loops_current_tenant_id())`,
+        [
+          runId,
+          input.workflow.id,
+          input.workflow.name,
+          input.loop?.id ?? null,
+          input.loopRun?.id ?? null,
+          invocationId ?? null,
+          workItemId ?? null,
+          input.scheduledFor ?? input.loopRun?.scheduledFor ?? null,
+          input.idempotencyKey ?? null,
+          now,
+        ],
+      );
+      if (workItemId) {
+        const leaseExpiresAt = input.loop ? new Date(Date.now() + input.loop.leaseMs).toISOString() : null;
+        const workItemRes = await c.query(
+          `UPDATE workflow_work_items
+           SET status='running', workflow_run_id=$2, lease_expires_at=$3, updated_at=$4
+           WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND status IN ('admitted', 'queued', 'deferred', 'running')`,
+          [workItemId, runId, leaseExpiresAt, now],
+        );
+        if (workItemRes.rowCount !== 1) {
+          const current = await c.get<WorkflowWorkItemRow>(
+            "SELECT * FROM workflow_work_items WHERE tenant_id = open_loops_current_tenant_id() AND id=$1",
+            [workItemId],
+          );
+          throw new Error(`workflow work item is not runnable: ${workItemId}${current ? ` status=${current.status}` : ""}`);
+        }
+      }
+      for (const [sequence, step] of input.workflow.steps.entries()) {
+        const account = step.account ?? step.target.account;
+        const agentTarget = step.target.type === "agent" ? step.target : undefined;
+        const resolvedProfile = account?.profile ?? agentTarget?.authProfile ?? null;
+        const resolvedTool = account?.tool ?? (agentTarget?.authProfile ? agentTarget.provider : null);
+        await c.execute(
+          `INSERT INTO workflow_step_runs (id, workflow_run_id, step_id, sequence, status, started_at, finished_at,
+            exit_code, pid, duration_ms, stdout, stderr, error, account_profile, account_tool, created_at, updated_at, tenant_id)
+           VALUES ($1,$2,$3,$4,'pending',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,$5,$6,$7,$7,open_loops_current_tenant_id())`,
+          [genId(), runId, step.id, sequence, resolvedProfile, resolvedTool, now],
+        );
+      }
+      await this.appendWorkflowEventWithClient(c, runId, "created", undefined, {
+        workflowId: input.workflow.id,
+        workflowName: input.workflow.name,
+        stepCount: input.workflow.steps.length,
+        loopId: input.loop?.id,
+        loopRunId: input.loopRun?.id,
+        invocationId,
+        workItemId,
+        manifestPath: undefined,
+      });
+      const run = await c.get<WorkflowRunRow>(
+        "SELECT * FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND id = $1",
+        [runId],
+      );
+      if (!run) throw new Error(`workflow run not found after create: ${runId}`);
+      return rowToWorkflowRun(run);
+    });
   }
-  appendWorkflowEvent(): never {
-    throw new NotImplementedError("appendWorkflowEvent");
+
+  async requireWorkflowRun(...args: M<"requireWorkflowRun">["args"]): Promise<M<"requireWorkflowRun">["result"]> {
+    const run = await this.getWorkflowRun(args[0]);
+    if (!run) throw new Error(`workflow run not found: ${args[0]}`);
+    return run;
+  }
+
+  async isWorkflowRunTerminal(...args: M<"isWorkflowRunTerminal">["args"]): Promise<M<"isWorkflowRunTerminal">["result"]> {
+    const run = await this.getWorkflowRun(args[0]);
+    return Boolean(run && ["succeeded", "failed", "timed_out", "cancelled"].includes(run.status));
+  }
+
+  async startWorkflowStepRun(...args: M<"startWorkflowStepRun">["args"]): Promise<M<"startWorkflowStepRun">["result"]> {
+    const [workflowRunId, stepId, opts = {}] = args;
+    const now = (opts.now ?? new Date()).toISOString();
+    return this.client.transaction(async (c) => {
+      const res = await c.query(
+        `UPDATE workflow_step_runs
+         SET status='running', started_at=$3, finished_at=NULL, exit_code=NULL, duration_ms=NULL,
+          pid=NULL, stdout=NULL, stderr=NULL, error=NULL, updated_at=$4
+         WHERE tenant_id = open_loops_current_tenant_id()
+           AND workflow_run_id=$1
+           AND step_id=$2
+           AND status IN ('pending', 'failed', 'timed_out')
+           AND EXISTS (
+             SELECT 1 FROM workflow_runs
+             WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND status='running'
+           )
+           AND ($5::text IS NULL OR EXISTS (
+             SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$5 AND expires_at > $6
+           ))`,
+        [workflowRunId, stepId, now, now, opts.daemonLeaseId ?? null, now],
+      );
+      const row = await c.get<WorkflowStepRunRow>(
+        "SELECT * FROM workflow_step_runs WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$1 AND step_id=$2",
+        [workflowRunId, stepId],
+      );
+      const run = row ? rowToWorkflowStepRun(row) : undefined;
+      if (!run) throw new Error(`workflow step run not found: ${workflowRunId}/${stepId}`);
+      if (res.rowCount !== 1) throw new Error(`workflow step is not claimable: ${workflowRunId}/${stepId} status=${run.status}`);
+      await this.appendWorkflowEventWithClient(c, workflowRunId, "step_started", stepId);
+      return run;
+    });
+  }
+
+  async markWorkflowStepPid(...args: M<"markWorkflowStepPid">["args"]): Promise<M<"markWorkflowStepPid">["result"]> {
+    const [workflowRunId, stepId, pid, opts = {}] = args;
+    const now = (opts.now ?? new Date()).toISOString();
+    await this.client.execute(
+      `UPDATE workflow_step_runs SET pid=$3, updated_at=$4
+       WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$1 AND step_id=$2 AND status='running'
+         AND ($5::text IS NULL OR EXISTS (
+           SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$5 AND expires_at > $6
+         ))`,
+      [workflowRunId, stepId, pid, now, opts.daemonLeaseId ?? null, now],
+    );
+    const run = await this.getWorkflowStepRun(workflowRunId, stepId);
+    if (!run) throw new Error(`workflow step run not found after pid update: ${workflowRunId}/${stepId}`);
+    return run;
+  }
+
+  async recordWorkflowStepProgress(...args: M<"recordWorkflowStepProgress">["args"]): Promise<M<"recordWorkflowStepProgress">["result"]> {
+    const [workflowRunId, stepId, progress, opts = {}] = args;
+    const now = (opts.now ?? new Date()).toISOString();
+    return this.client.transaction(async (c) => {
+      const res = await c.query(
+        `UPDATE workflow_step_runs
+         SET stdout=COALESCE($3, stdout),
+             stderr=COALESCE($4, stderr),
+             updated_at=$5
+         WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$1 AND step_id=$2 AND status='running'
+           AND ($6::text IS NULL OR EXISTS (
+             SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$6 AND expires_at > $7
+           ))`,
+        [
+          workflowRunId,
+          stepId,
+          progress.stdout === undefined ? null : persistedRunOutput(progress.stdout),
+          progress.stderr === undefined ? null : persistedRunOutput(progress.stderr),
+          now,
+          opts.daemonLeaseId ?? null,
+          now,
+        ],
+      );
+      if (res.rowCount === 1) await this.appendWorkflowEventWithClient(c, workflowRunId, "step_progress", stepId, progress.payload);
+      const row = await c.get<WorkflowStepRunRow>(
+        "SELECT * FROM workflow_step_runs WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$1 AND step_id=$2",
+        [workflowRunId, stepId],
+      );
+      const run = row ? rowToWorkflowStepRun(row) : undefined;
+      if (!run) throw new Error(`workflow step run not found after progress update: ${workflowRunId}/${stepId}`);
+      return run;
+    });
+  }
+
+  async recoverWorkflowRun(...args: M<"recoverWorkflowRun">["args"]): Promise<M<"recoverWorkflowRun">["result"]> {
+    const [workflowRunId, reason = "workflow run recovered for retry"] = args;
+    return this.client.transaction(async (c) => {
+      const now = nowIso();
+      const rows = await c.many<WorkflowStepRunRow>(
+        "SELECT * FROM workflow_step_runs WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$1 AND status='running' ORDER BY sequence ASC",
+        [workflowRunId],
+      );
+      const before = rows.map(rowToWorkflowStepRun);
+      const live = before.filter((step) => step.pid !== undefined && isLiveStepProcess(step.pid, step.startedAt));
+      if (live.length > 0) {
+        throw new Error(
+          `cannot recover workflow run while step processes are still alive: ${live
+            .map((step) => `${step.stepId} pid=${step.pid}`)
+            .join(", ")}`,
+        );
+      }
+      await c.execute(
+        `UPDATE workflow_step_runs
+         SET status='pending', started_at=NULL, finished_at=NULL, exit_code=NULL, pid=NULL, duration_ms=NULL,
+          stdout=NULL, stderr=NULL, error=$2, updated_at=$3
+         WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$1 AND status='running'`,
+        [workflowRunId, reason, now],
+      );
+      if (before.length > 0) {
+        await this.appendWorkflowEventWithClient(c, workflowRunId, "recovered", undefined, {
+          reason,
+          recoveredSteps: before.map((step) => step.stepId),
+        });
+      }
+      const runRow = await c.get<WorkflowRunRow>(
+        "SELECT * FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND id=$1",
+        [workflowRunId],
+      );
+      if (!runRow) throw new Error(`workflow run not found: ${workflowRunId}`);
+      const stepRows = await c.many<WorkflowStepRunRow>(
+        "SELECT * FROM workflow_step_runs WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$1 ORDER BY sequence ASC",
+        [workflowRunId],
+      );
+      const recoveredSteps = stepRows.map(rowToWorkflowStepRun).filter((step) => before.some((prior) => prior.stepId === step.stepId));
+      const run = rowToWorkflowRun(runRow);
+      return { run, recoveredSteps };
+    });
+  }
+
+  async finalizeWorkflowStepRun(...args: M<"finalizeWorkflowStepRun">["args"]): Promise<M<"finalizeWorkflowStepRun">["result"]> {
+    const [workflowRunId, stepId, patch, opts = {}] = args;
+    const finishedAt = patch.finishedAt ?? nowIso();
+    return this.client.transaction(async (c) => {
+      const now = (opts.now ?? new Date(finishedAt)).toISOString();
+      const error = patch.error === undefined ? undefined : scrubbedOrNull(patch.error) ?? undefined;
+      const res = await c.query(
+        `UPDATE workflow_step_runs SET status=$3, finished_at=$4, exit_code=$5, duration_ms=$6,
+          pid=NULL, stdout=$7, stderr=$8, error=$9, updated_at=$10
+         WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$1 AND step_id=$2 AND status='running'
+           AND ($11::text IS NULL OR EXISTS (
+             SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$11 AND expires_at > $12
+           ))`,
+        [
+          workflowRunId,
+          stepId,
+          patch.status,
+          finishedAt,
+          patch.exitCode ?? null,
+          patch.durationMs ?? null,
+          persistedRunOutput(patch.stdout),
+          persistedRunOutput(patch.stderr),
+          error ?? null,
+          finishedAt,
+          opts.daemonLeaseId ?? null,
+          now,
+        ],
+      );
+      if (res.rowCount === 1) {
+        await this.appendWorkflowEventWithClient(c, workflowRunId, `step_${patch.status}`, stepId, {
+          exitCode: patch.exitCode,
+          error,
+        });
+      }
+      const row = await c.get<WorkflowStepRunRow>(
+        "SELECT * FROM workflow_step_runs WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$1 AND step_id=$2",
+        [workflowRunId, stepId],
+      );
+      const run = row ? rowToWorkflowStepRun(row) : undefined;
+      if (!run) throw new Error(`workflow step run not found after finalize: ${workflowRunId}/${stepId}`);
+      return run;
+    });
+  }
+
+  async skipWorkflowStepRun(...args: M<"skipWorkflowStepRun">["args"]): Promise<M<"skipWorkflowStepRun">["result"]> {
+    const [workflowRunId, stepId, reason, opts = {}] = args;
+    const now = (opts.now ?? new Date()).toISOString();
+    return this.client.transaction(async (c) => {
+      const res = await c.query(
+        `UPDATE workflow_step_runs SET status='skipped', finished_at=$3, pid=NULL, error=$4, updated_at=$5
+         WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$1 AND step_id=$2 AND status IN ('pending', 'running')
+           AND ($6::text IS NULL OR EXISTS (
+             SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$6 AND expires_at > $7
+           ))`,
+        [workflowRunId, stepId, now, reason, now, opts.daemonLeaseId ?? null, now],
+      );
+      if (res.rowCount === 1) await this.appendWorkflowEventWithClient(c, workflowRunId, "step_skipped", stepId, { reason });
+      const row = await c.get<WorkflowStepRunRow>(
+        "SELECT * FROM workflow_step_runs WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$1 AND step_id=$2",
+        [workflowRunId, stepId],
+      );
+      const run = row ? rowToWorkflowStepRun(row) : undefined;
+      if (!run) throw new Error(`workflow step run not found after skip: ${workflowRunId}/${stepId}`);
+      return run;
+    });
+  }
+
+  private async setWorkflowWorkItemsForWorkflowRun(
+    c: TypedQueryClient,
+    workflowRunId: string,
+    status: WorkflowWorkItemStatus,
+    reason: string | undefined,
+    updated: string,
+    statuses: WorkflowWorkItemStatus[] = ["admitted", "running"],
+  ): Promise<void> {
+    await c.execute(
+      `UPDATE workflow_work_items
+       SET status=$2, lease_expires_at=NULL, last_reason=COALESCE($3, last_reason), updated_at=$4
+       WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$1 AND status = ANY($5::text[])`,
+      [workflowRunId, status, reason ?? null, updated, statuses],
+    );
+  }
+
+  private async demoteNonProductiveWorkItems(c: TypedQueryClient, workflowRunId: string, finishedAt: string): Promise<void> {
+    const rows = await c.many<WorkflowStepRunRow>(
+      "SELECT * FROM workflow_step_runs WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$1 ORDER BY sequence ASC",
+      [workflowRunId],
+    );
+    const kind = classifyNonProductiveStepFailure(rows.map(rowToWorkflowStepRun));
+    if (!kind) {
+      await c.execute(
+        "UPDATE workflow_work_items SET gate_deaths=0, updated_at=$1 WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$2 AND status='failed' AND gate_deaths > 0",
+        [finishedAt, workflowRunId],
+      );
+      return;
+    }
+    if (kind === "tempfail") {
+      await c.execute(
+        `UPDATE workflow_work_items
+         SET status='queued', attempts=GREATEST(attempts - 1, 0),
+          gate_deaths=0,
+          workflow_id=NULL, loop_id=NULL, workflow_run_id=NULL,
+          next_attempt_at=NULL, lease_expires_at=NULL,
+          last_reason='worker exited 75 (tempfail): requeued for retry; attempt refunded (does not count toward redispatch cap)',
+          updated_at=$1
+         WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$2 AND status='failed'`,
+        [finishedAt, workflowRunId],
+      );
+      return;
+    }
+    await c.execute(
+      `UPDATE workflow_work_items
+       SET attempts=GREATEST(attempts - 1, 0),
+        gate_deaths=gate_deaths + 1,
+        status=CASE WHEN gate_deaths + 1 >= ${GATE_DEATH_CEILING} THEN 'dead_letter' ELSE status END,
+        last_reason=CASE
+          WHEN gate_deaths + 1 >= ${GATE_DEATH_CEILING}
+            THEN 'gate-death ceiling reached (' || (gate_deaths + 1) || '/${GATE_DEATH_CEILING} consecutive runs died at worktree prep / triage / planner without reaching the worker): dead-lettered'
+          ELSE 'gate death before real work (worktree prep / triage / planner): attempt refunded (does not count toward redispatch cap); consecutive gate deaths: ' || (gate_deaths + 1) || '/${GATE_DEATH_CEILING}'
+        END,
+        updated_at=$1
+       WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$2 AND status='failed'`,
+      [finishedAt, workflowRunId],
+    );
+  }
+
+  async finalizeWorkflowRun(...args: M<"finalizeWorkflowRun">["args"]): Promise<M<"finalizeWorkflowRun">["result"]> {
+    const [workflowRunId, status, patch = {}, opts = {}] = args as [
+      string,
+      WorkflowRunStatus,
+      Partial<Pick<WorkflowRun, "finishedAt" | "durationMs" | "error">>?,
+      DaemonLeaseFence?,
+    ];
+    const finishedAt = patch.finishedAt ?? nowIso();
+    return this.client.transaction(async (c) => {
+      const now = (opts.now ?? new Date(finishedAt)).toISOString();
+      const res = await c.query(
+        `UPDATE workflow_runs SET status=$2, finished_at=$3, duration_ms=$4, error=$5, updated_at=$6
+         WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND status NOT IN ('succeeded', 'failed', 'timed_out', 'cancelled')
+           AND ($7::text IS NULL OR EXISTS (
+             SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$7 AND expires_at > $8
+           ))`,
+        [workflowRunId, status, finishedAt, patch.durationMs ?? null, patch.error ?? null, finishedAt, opts.daemonLeaseId ?? null, now],
+      );
+      const changed = res.rowCount === 1;
+      if (changed) {
+        await this.appendWorkflowEventWithClient(c, workflowRunId, status, undefined, { error: patch.error });
+        const itemStatus: WorkflowWorkItemStatus =
+          status === "succeeded" ? "succeeded" : status === "cancelled" ? "cancelled" : "failed";
+        await this.setWorkflowWorkItemsForWorkflowRun(c, workflowRunId, itemStatus, patch.error, finishedAt);
+        if (itemStatus === "failed") await this.demoteNonProductiveWorkItems(c, workflowRunId, finishedAt);
+      }
+      const run = await c.get<WorkflowRunRow>(
+        "SELECT * FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND id = $1",
+        [workflowRunId],
+      );
+      if (!run) throw new Error(`workflow run not found after finalize: ${workflowRunId}`);
+      return rowToWorkflowRun(run);
+    });
+  }
+
+  private async appendWorkflowEventWithClient(
+    c: TypedQueryClient,
+    workflowRunId: string,
+    eventType: string,
+    stepId?: string,
+    payload?: Record<string, unknown>,
+  ): Promise<M<"appendWorkflowEvent">["result"]> {
+    const now = nowIso();
+    await c.get(
+      "SELECT id FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND id = $1 FOR UPDATE",
+      [workflowRunId],
+    );
+    const current = await c.get<{ sequence: number | null }>(
+      "SELECT MAX(sequence)::int AS sequence FROM workflow_events WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id = $1",
+      [workflowRunId],
+    );
+    const sequence = (current?.sequence ?? 0) + 1;
+    const id = genId();
+    await c.execute(
+      `INSERT INTO workflow_events (id, workflow_run_id, sequence, event_type, step_id, payload_json, created_at, tenant_id)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,open_loops_current_tenant_id())`,
+      [id, workflowRunId, sequence, eventType, stepId ?? null, persistedWorkflowEventPayload(payload), now],
+    );
+    const event = await c.get<WorkflowEventRow>(
+      "SELECT * FROM workflow_events WHERE tenant_id = open_loops_current_tenant_id() AND id = $1",
+      [id],
+    );
+    if (!event) throw new Error(`workflow event not found after append: ${id}`);
+    return rowToWorkflowEvent(event);
+  }
+
+  async appendWorkflowEvent(...args: M<"appendWorkflowEvent">["args"]): Promise<M<"appendWorkflowEvent">["result"]> {
+    const [workflowRunId, eventType, stepId, payload] = args;
+    return this.client.transaction((c) => this.appendWorkflowEventWithClient(c, workflowRunId, eventType, stepId, payload));
   }
 }
 

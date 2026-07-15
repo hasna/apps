@@ -1,7 +1,7 @@
 // @generated from openapi/loops.json by scripts/gen-sdk.ts — DO NOT EDIT.
 // Regenerate: bun run scripts/gen-sdk.ts
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: OpenLoops 0.4.14
+// Source: OpenLoops 0.4.28
 
 export interface Foundation { "status": string; "version": string; "mode": string; "service"?: string; "detail"?: string }
 
@@ -129,9 +129,96 @@ export class LoopsClient {
       });
     }
 
+    async healthzProbe(init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("GET", `/healthz`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    async openapiJsonProbe(init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("GET", `/openapi.json`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Readiness probe (storage reachable + migrated) */
     async readyCheck(init?: RequestInit): Promise<Foundation> {
       return this.request("GET", `/ready`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    async readyzProbe(init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("GET", `/readyz`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** status.read */
+    async statusRead(init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("GET", `/status`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** api.read */
+    async apiRead(init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("GET", `/v1`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** goalRuns.list */
+    async goalRunsList(init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("GET", `/v1/goal-runs`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** goals.list */
+    async goalsList(init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("GET", `/v1/goals`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** goals.get */
+    async goalsGet(id: string, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("GET", `/v1/goals/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** goals.planNodes */
+    async goalsPlanNodes(id: string, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("GET", `/v1/goals/${encodeURIComponent(String(id))}/plan-nodes`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** history.prune */
+    async historyPrune(init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/history/prune`, {
         body: undefined,
         query: undefined,
         init,
@@ -160,6 +247,24 @@ export class LoopsClient {
     async createWorkflowInvocation(body: CreateWorkflowInvocationInput, init?: RequestInit): Promise<WorkflowInvocationResponse> {
       return this.request("POST", `/v1/invocations`, {
         body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** invocations.get */
+    async invocationsGet(id: string, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("GET", `/v1/invocations/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** leases.recover */
+    async leasesRecover(init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/leases/recover`, {
+        body: undefined,
         query: undefined,
         init,
       });
@@ -228,6 +333,15 @@ export class LoopsClient {
       });
     }
 
+    /** loops.rename */
+    async loopsRename(id: string, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/loops/${encodeURIComponent(String(id))}/rename`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Unarchive a loop */
     async unarchiveLoop(id: string, init?: RequestInit): Promise<LoopResponse> {
       return this.request("POST", `/v1/loops/${encodeURIComponent(String(id))}/unarchive`, {
@@ -264,6 +378,24 @@ export class LoopsClient {
       });
     }
 
+    /** runners.claim */
+    async runnersClaim(body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/runners/claim`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** runners.poll */
+    async runnersPoll(body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/runners/poll`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** List runs */
     async listRuns(query?: { "loopId"?: string; "status"?: string; "limit"?: number; "offset"?: number; "showOutput"?: boolean }, init?: RequestInit): Promise<RunListResponse> {
       return this.request("GET", `/v1/runs`, {
@@ -291,6 +423,185 @@ export class LoopsClient {
       });
     }
 
+    /** runs.evidence */
+    async runsEvidence(id: string, body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/runs/${encodeURIComponent(String(id))}/evidence`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** runs.finalize */
+    async runsFinalize(id: string, body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/runs/${encodeURIComponent(String(id))}/finalize`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** runs.Goals.Create */
+    async runsGoalsCreate(id: string, body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/runs/${encodeURIComponent(String(id))}/goals`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** runs.Goals.Find */
+    async runsGoalsFind(id: string, body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/runs/${encodeURIComponent(String(id))}/goals/find`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** runs.Goals.Events */
+    async runsGoalsEvents(id: string, goalId: string, body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/runs/${encodeURIComponent(String(id))}/goals/${encodeURIComponent(String(goalId))}/events`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** runs.Goals.Get */
+    async runsGoalsGet(id: string, goalId: string, body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/runs/${encodeURIComponent(String(id))}/goals/${encodeURIComponent(String(goalId))}/get`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** runs.Goals.Plan.Nodes.Create */
+    async runsGoalsPlanNodesCreate(id: string, goalId: string, body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/runs/${encodeURIComponent(String(id))}/goals/${encodeURIComponent(String(goalId))}/plan-nodes`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** runs.Goals.Plan.Nodes.List */
+    async runsGoalsPlanNodesList(id: string, goalId: string, body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/runs/${encodeURIComponent(String(id))}/goals/${encodeURIComponent(String(goalId))}/plan-nodes/list`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** runs.Goals.Plan.Nodes.Update */
+    async runsGoalsPlanNodesUpdate(id: string, goalId: string, key: string, body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/runs/${encodeURIComponent(String(id))}/goals/${encodeURIComponent(String(goalId))}/plan-nodes/${encodeURIComponent(String(key))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** runs.Goals.Status */
+    async runsGoalsStatus(id: string, goalId: string, body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/runs/${encodeURIComponent(String(id))}/goals/${encodeURIComponent(String(goalId))}/status`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** runs.heartbeat */
+    async runsHeartbeat(id: string, body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/runs/${encodeURIComponent(String(id))}/heartbeat`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** runs.recover */
+    async runsRecover(id: string, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/runs/${encodeURIComponent(String(id))}/recover`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** runs.workflowRuns.create */
+    async runsWorkflowRunsCreate(id: string, body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/runs/${encodeURIComponent(String(id))}/workflow-runs`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** runs.workflowRuns.finalize */
+    async runsWorkflowRunsFinalize(id: string, workflowRunId: string, body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/runs/${encodeURIComponent(String(id))}/workflow-runs/${encodeURIComponent(String(workflowRunId))}/finalize`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** runs.workflowRuns.get */
+    async runsWorkflowRunsGet(id: string, workflowRunId: string, body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/runs/${encodeURIComponent(String(id))}/workflow-runs/${encodeURIComponent(String(workflowRunId))}/get`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** runs.workflowRuns.recover */
+    async runsWorkflowRunsRecover(id: string, workflowRunId: string, body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/runs/${encodeURIComponent(String(id))}/workflow-runs/${encodeURIComponent(String(workflowRunId))}/recover`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** runs.workflowRuns.steps */
+    async runsWorkflowRunsSteps(id: string, workflowRunId: string, body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/runs/${encodeURIComponent(String(id))}/workflow-runs/${encodeURIComponent(String(workflowRunId))}/steps`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** runs.workflowRuns.stepAction */
+    async runsWorkflowRunsStepAction(id: string, workflowRunId: string, stepId: string, action: "get" | "start" | "pid" | "progress" | "skip" | "finalize", body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/runs/${encodeURIComponent(String(id))}/workflow-runs/${encodeURIComponent(String(workflowRunId))}/steps/${encodeURIComponent(String(stepId))}/${encodeURIComponent(String(action))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** api.status */
+    async apiStatus(init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("GET", `/v1/status`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    async v1VersionProbe(init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("GET", `/v1/version`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
     /** List workflow route work items */
     async listWorkflowWorkItems(query?: { "status"?: string; "routeKey"?: string; "limit"?: number }, init?: RequestInit): Promise<WorkflowWorkItemListResponse> {
       return this.request("GET", `/v1/work-items`, {
@@ -304,6 +615,51 @@ export class LoopsClient {
     async upsertWorkflowWorkItem(body: UpsertWorkflowWorkItemInput, init?: RequestInit): Promise<WorkflowWorkItemResponse> {
       return this.request("POST", `/v1/work-items`, {
         body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** workItems.get */
+    async workItemsGet(id: string, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("GET", `/v1/work-items/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** workflowRuns.list */
+    async workflowRunsList(init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("GET", `/v1/workflow-runs`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** workflowRuns.get */
+    async workflowRunsGet(id: string, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("GET", `/v1/workflow-runs/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** workflowRuns.events */
+    async workflowRunsEvents(id: string, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("GET", `/v1/workflow-runs/${encodeURIComponent(String(id))}/events`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** workflowRuns.steps */
+    async workflowRunsSteps(id: string, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("GET", `/v1/workflow-runs/${encodeURIComponent(String(id))}/steps`, {
+        body: undefined,
         query: undefined,
         init,
       });
@@ -339,6 +695,15 @@ export class LoopsClient {
     /** Get a workflow spec by id */
     async getWorkflow(id: string, init?: RequestInit): Promise<WorkflowResponse> {
       return this.request("GET", `/v1/workflows/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** workflows.archive */
+    async workflowsArchive(id: string, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/workflows/${encodeURIComponent(String(id))}/archive`, {
         body: undefined,
         query: undefined,
         init,

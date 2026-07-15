@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
 import { createLoopsApiServer } from "../api/index.js";
 import { createSqliteLoopStorage } from "../lib/storage/sqlite.js";
@@ -129,6 +132,57 @@ describe("loops-runner", () => {
     } finally {
       server.stop(true);
       await storage.close();
+    }
+  });
+
+  test("runRunnerOnce executes a workflow claim through runner-scoped API state", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-runner-workflow-"));
+    const marker = join(root, "marker.txt");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createRunnerServer(storage, "runner-workflow", () => new Date("2026-01-01T00:00:00Z"));
+    try {
+      const workflow = await storage.createWorkflow({
+        name: "runner-remote-workflow",
+        steps: [{
+          id: "write-marker",
+          target: { type: "command", command: `printf remote-workflow > ${JSON.stringify(marker)}`, shell: true },
+        }],
+      });
+      const loop = await storage.createLoop(
+        {
+          name: "runner-remote-workflow-loop",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "workflow", workflowId: workflow.id },
+          leaseMs: 60_000,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+
+      const result = await runRunnerOnce({
+        apiUrl: `http://127.0.0.1:${server.port}`,
+        runnerId: "runner-workflow",
+        now: new Date("2026-01-01T00:00:00Z"),
+        heartbeatIntervalMs: 10_000,
+      });
+
+      expect(result).toMatchObject({ ok: true, claimed: 1 });
+      expect(result.completed[0]).toMatchObject({ id: expect.any(String), status: "succeeded" });
+      expect(readFileSync(marker, "utf8")).toBe("remote-workflow");
+      const loopRuns = await storage.listRuns({ loopId: loop.id });
+      expect(loopRuns).toHaveLength(1);
+      expect(loopRuns[0]).toMatchObject({ status: "succeeded", claimedBy: "runner-workflow" });
+      const workflowRuns = await storage.listWorkflowRuns({ workflowId: workflow.id });
+      expect(workflowRuns).toHaveLength(1);
+      expect(workflowRuns[0]).toMatchObject({ loopRunId: loopRuns[0]!.id, status: "succeeded" });
+      expect((await storage.listWorkflowStepRuns(workflowRuns[0]!.id))[0]).toMatchObject({
+        stepId: "write-marker",
+        status: "succeeded",
+      });
+      expect(await storage.getLoop(loop.id)).toMatchObject({ status: "stopped", nextRunAt: undefined });
+    } finally {
+      server.stop(true);
+      await storage.close();
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

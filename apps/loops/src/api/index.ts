@@ -9,7 +9,9 @@ import type {
   LoopStatus,
   RunStatus,
   UpsertWorkflowWorkItemInput,
+  WorkflowRunStatus,
   WorkflowSpec,
+  WorkflowStepRunStatus,
   WorkflowWorkItemStatus,
   WriteRunReceiptInput,
 } from "../types.js";
@@ -244,6 +246,10 @@ interface V1RequestContext {
   importLimitBytes: number;
   now: () => Date;
 }
+
+type RunnerGoalInput = Parameters<LoopStorageContract["createGoal"]>[0];
+type RunnerGoalPlanNodeInput = Parameters<LoopStorageContract["createGoalPlanNodes"]>[1][number];
+type RunnerGoalEventInput = Parameters<LoopStorageContract["recordGoalEvent"]>[0];
 
 async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
   const segments = ctx.url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
@@ -579,6 +585,12 @@ async function handleHistoryRequest(ctx: V1RequestContext, segments: string[]): 
 
 async function handleRunsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
   const id = segments[0];
+  if (id && segments[1] === "workflow-runs") {
+    return await handleRunWorkflowExecutionRequest(ctx, id, segments.slice(2));
+  }
+  if (id && segments[1] === "goals") {
+    return await handleRunGoalExecutionRequest(ctx, id, segments.slice(2));
+  }
   if (segments.length === 2 && id && ["heartbeat", "finalize", "evidence"].includes(segments[1] ?? "") && ctx.request.method === "POST") {
     const storage = requireStorage(ctx.storage);
     const action = segments[1];
@@ -633,6 +645,328 @@ async function handleRunsRequest(ctx: V1RequestContext, segments: string[]): Pro
     if (!run) return fail("run_not_found", 404);
     return ok({ run: publicRun(run, showOutput, { redactError: true }) });
   }
+  return fail("not_found", 404);
+}
+
+async function authorizeRunnerClaim(
+  storage: LoopStorageContract,
+  principalId: string,
+  runId: string,
+  claimToken: string,
+  now: Date,
+): Promise<{ ok: true; run: LoopRun; loop: Loop } | { ok: false; response: Response }> {
+  const run = await storage.getRun(runId);
+  if (!run) return { ok: false, response: fail("run_not_found", 404) };
+  if (run.status !== "running" || !run.claimedBy) return { ok: false, response: fail("run_not_running", 409) };
+  if (run.claimedBy !== principalId) return { ok: false, response: fail("runner_identity_mismatch", 403) };
+  const loop = await storage.getLoop(run.loopId);
+  if (!loop) return { ok: false, response: fail("loop_not_found", 404) };
+  const heartbeat = await storage.heartbeatRunLease(
+    run.id,
+    run.claimedBy,
+    runnerLeaseMs(loop.leaseMs),
+    now,
+    { claimToken },
+  );
+  if (!heartbeat) return { ok: false, response: fail("stale_claim", 409) };
+  return { ok: true, run: heartbeat, loop };
+}
+
+async function requireClaimedWorkflowRun(
+  storage: LoopStorageContract,
+  workflowRunId: string,
+  runId: string,
+): Promise<{ ok: true; workflowRun: Awaited<ReturnType<LoopStorageContract["getWorkflowRun"]>> & {} } | { ok: false; response: Response }> {
+  const workflowRun = await storage.getWorkflowRun(workflowRunId);
+  if (!workflowRun) return { ok: false, response: fail("workflow_run_not_found", 404) };
+  if (workflowRun.loopRunId !== runId) return { ok: false, response: fail("workflow_run_claim_mismatch", 403) };
+  return { ok: true, workflowRun };
+}
+
+async function handleRunWorkflowExecutionRequest(ctx: V1RequestContext, runId: string, segments: string[]): Promise<Response> {
+  const storage = requireStorage(ctx.storage);
+  if (ctx.request.method === "POST" && segments.length === 0) {
+    const body = await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes);
+    const claimToken = requiredString(body.claimToken, "claimToken");
+    const authorized = await authorizeRunnerClaim(storage, ctx.auth.principalId, runId, claimToken, ctx.now());
+    if (!authorized.ok) return authorized.response;
+    if (authorized.loop.target.type !== "workflow") return fail("loop_not_workflow", 409);
+    const workflow = await storage.getWorkflow(authorized.loop.target.workflowId);
+    if (!workflow) return fail("workflow_not_found", 404);
+    const idempotencyKey = optionalString(body.idempotencyKey);
+    const scheduledFor = optionalIsoString(body.scheduledFor) ?? authorized.run.scheduledFor;
+    const workflowRun = await storage.createWorkflowRun({
+      workflow,
+      loop: authorized.loop,
+      loopRun: authorized.run,
+      scheduledFor,
+      idempotencyKey,
+    });
+    return ok({ workflowRun });
+  }
+
+  const workflowRunId = segments[0];
+  if (!workflowRunId) return fail("not_found", 404);
+
+  if (ctx.request.method !== "POST") return fail("not_found", 404);
+  const body = await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes);
+  const claimToken = requiredString(body.claimToken, "claimToken");
+  const authorized = await authorizeRunnerClaim(storage, ctx.auth.principalId, runId, claimToken, ctx.now());
+  if (!authorized.ok) return authorized.response;
+  const scopedRun = await requireClaimedWorkflowRun(storage, workflowRunId, runId);
+  if (!scopedRun.ok) return scopedRun.response;
+
+  if (segments.length === 2 && segments[1] === "get") return ok({ workflowRun: scopedRun.workflowRun });
+  if (segments.length === 2 && segments[1] === "steps") {
+    return ok({ steps: await storage.listWorkflowStepRuns(workflowRunId) });
+  }
+  if (segments.length === 2 && segments[1] === "recover") {
+    const recovered = await storage.recoverWorkflowRun(workflowRunId, optionalText(body.reason));
+    return ok({ workflowRun: recovered.run, recoveredSteps: recovered.recoveredSteps });
+  }
+  if (segments.length === 2 && segments[1] === "finalize") {
+    const status = optionalEnum<WorkflowRunStatus>(
+      optionalString(body.status) ?? null,
+      ["running", "succeeded", "failed", "timed_out", "cancelled"],
+    );
+    if (!status || status === "running") throw apiError("status_required", 422);
+    const workflowRun = await storage.finalizeWorkflowRun(workflowRunId, status, {
+      finishedAt: optionalIsoString(body.finishedAt),
+      durationMs: optionalPositiveInteger(body.durationMs, 0, Number.MAX_SAFE_INTEGER),
+      error: optionalText(body.error),
+    });
+    return ok({ workflowRun });
+  }
+
+  if (segments[1] !== "steps") return fail("not_found", 404);
+  const stepId = segments[2];
+  if (!stepId) return fail("not_found", 404);
+  const action = segments[3];
+  if (!action) return fail("not_found", 404);
+  if (action === "get") {
+    const step = await storage.getWorkflowStepRun(workflowRunId, stepId);
+    if (!step) return fail("workflow_step_not_found", 404);
+    return ok({ step });
+  }
+  if (action === "start") {
+    return ok({ step: await storage.startWorkflowStepRun(workflowRunId, stepId) });
+  }
+  if (action === "pid") {
+    const pid = optionalInteger(body.pid);
+    if (pid === undefined) throw apiError("pid_required", 422);
+    return ok({ step: await storage.markWorkflowStepPid(workflowRunId, stepId, pid) });
+  }
+  if (action === "progress") {
+    return ok({
+      step: await storage.recordWorkflowStepProgress(workflowRunId, stepId, {
+        stdout: optionalText(body.stdout),
+        stderr: optionalText(body.stderr),
+        payload: objectRecord(body.payload),
+      }),
+    });
+  }
+  if (action === "skip") {
+    return ok({ step: await storage.skipWorkflowStepRun(workflowRunId, stepId, requiredString(body.reason, "reason")) });
+  }
+  if (action === "finalize") {
+    const status = optionalEnum<WorkflowStepRunStatus>(
+      optionalString(body.status) ?? null,
+      ["pending", "running", "succeeded", "failed", "timed_out", "skipped", "cancelled"],
+    );
+    if (!status || status === "pending" || status === "running") throw apiError("status_required", 422);
+    return ok({
+      step: await storage.finalizeWorkflowStepRun(workflowRunId, stepId, {
+        status,
+        finishedAt: optionalIsoString(body.finishedAt) ?? new Date().toISOString(),
+        durationMs: optionalPositiveInteger(body.durationMs, 0, Number.MAX_SAFE_INTEGER) ?? 0,
+        stdout: optionalText(body.stdout) ?? "",
+        stderr: optionalText(body.stderr) ?? "",
+        exitCode: optionalInteger(body.exitCode),
+        error: optionalText(body.error),
+      }),
+    });
+  }
+  return fail("not_found", 404);
+}
+
+async function requireClaimedGoal(
+  storage: LoopStorageContract,
+  goalId: string,
+  runId: string,
+): Promise<{ ok: true; goal: Awaited<ReturnType<LoopStorageContract["getGoal"]>> & {} } | { ok: false; response: Response }> {
+  const goal = await storage.getGoal(goalId);
+  if (!goal) return { ok: false, response: fail("goal_not_found", 404) };
+  if (goal.loopRunId === runId) return { ok: true, goal };
+  if (goal.workflowRunId) {
+    const scopedRun = await requireClaimedWorkflowRun(storage, goal.workflowRunId, runId);
+    if (scopedRun.ok) return { ok: true, goal };
+  }
+  return { ok: false, response: fail("goal_claim_mismatch", 403) };
+}
+
+async function scopeRunnerGoalInput(
+  storage: LoopStorageContract,
+  authorized: { run: LoopRun; loop: Loop },
+  input: RunnerGoalInput,
+): Promise<{ ok: true; input: RunnerGoalInput } | { ok: false; response: Response }> {
+  const scoped: RunnerGoalInput = {
+    objective: input.objective,
+    tokenBudget: input.tokenBudget,
+    autoExecute: input.autoExecute,
+    maxTokens: input.maxTokens,
+    loopId: authorized.loop.id,
+    loopRunId: authorized.run.id,
+    workflowId: input.workflowId,
+    workflowRunId: input.workflowRunId,
+    workflowStepId: input.workflowStepId,
+  };
+  if (scoped.workflowRunId) {
+    const scopedRun = await requireClaimedWorkflowRun(storage, scoped.workflowRunId, authorized.run.id);
+    if (!scopedRun.ok) return scopedRun;
+    scoped.workflowId = scopedRun.workflowRun.workflowId;
+  } else if (scoped.workflowId && authorized.loop.target.type === "workflow" && scoped.workflowId !== authorized.loop.target.workflowId) {
+    return { ok: false, response: fail("workflow_claim_mismatch", 403) };
+  }
+  return { ok: true, input: scoped };
+}
+
+async function scopeRunnerGoalContext(
+  storage: LoopStorageContract,
+  runId: string,
+  context: Record<string, unknown>,
+): Promise<{
+  ok: true;
+  context: {
+    loopRunId?: string;
+    workflowRunId?: string;
+    workflowStepId?: string;
+  };
+} | { ok: false; response: Response }> {
+  const scoped = {
+    loopRunId: optionalString(context.loopRunId),
+    workflowRunId: optionalString(context.workflowRunId),
+    workflowStepId: optionalString(context.workflowStepId),
+  };
+  if (scoped.loopRunId && scoped.loopRunId !== runId) return { ok: false, response: fail("goal_context_claim_mismatch", 403) };
+  if (scoped.workflowRunId) {
+    const scopedRun = await requireClaimedWorkflowRun(storage, scoped.workflowRunId, runId);
+    if (!scopedRun.ok) return scopedRun;
+  }
+  scoped.loopRunId ??= runId;
+  return { ok: true, context: scoped };
+}
+
+function createGoalInputFromBody(value: unknown): RunnerGoalInput {
+  const input = objectRecord(value);
+  return {
+    objective: requiredString(input.objective, "objective"),
+    tokenBudget: optionalPositiveInteger(input.tokenBudget, 1, Number.MAX_SAFE_INTEGER),
+    autoExecute: optionalEnum(optionalString(input.autoExecute) ?? null, ["off", "readyOnly", "aiDirected"]),
+    maxTokens: optionalPositiveInteger(input.maxTokens, 1, Number.MAX_SAFE_INTEGER),
+    loopId: optionalString(input.loopId),
+    loopRunId: optionalString(input.loopRunId),
+    workflowId: optionalString(input.workflowId),
+    workflowRunId: optionalString(input.workflowRunId),
+    workflowStepId: optionalString(input.workflowStepId),
+  };
+}
+
+function goalPlanNodesFromBody(value: unknown): RunnerGoalPlanNodeInput[] {
+  if (!Array.isArray(value)) throw apiError("nodes_required", 422);
+  return value.map((entry) => {
+    const node = objectRecord(entry);
+    const dependsOn = node.dependsOn === undefined
+      ? undefined
+      : Array.isArray(node.dependsOn) ? node.dependsOn.map((dependency) => requiredString(dependency, "dependsOn")) : undefined;
+    if (node.dependsOn !== undefined && !dependsOn) throw apiError("invalid_dependsOn", 422);
+    return {
+      key: requiredString(node.key, "key"),
+      objective: requiredString(node.objective, "objective"),
+      dependsOn,
+      priority: optionalInteger(node.priority),
+      tokenBudget: optionalPositiveInteger(node.tokenBudget, 1, Number.MAX_SAFE_INTEGER),
+    };
+  });
+}
+
+const GOAL_RUN_STATUSES = ["pending", "active", "paused", "blocked", "usageLimited", "budgetLimited", "complete", "cancelled"] as const;
+
+function goalEventFromBody(goalId: string, value: unknown): RunnerGoalEventInput {
+  const input = objectRecord(value);
+  const phase = optionalEnum(optionalString(input.phase) ?? null, ["plan", "execute", "validate", "status"]);
+  const status = optionalEnum(optionalString(input.status) ?? null, GOAL_RUN_STATUSES);
+  if (!phase) throw apiError("phase_required", 422);
+  if (!status) throw apiError("status_required", 422);
+  return {
+    goalId,
+    turn: optionalPositiveInteger(input.turn, 0, Number.MAX_SAFE_INTEGER),
+    phase,
+    status,
+    nodeKey: optionalString(input.nodeKey),
+    tokensUsed: optionalPositiveInteger(input.tokensUsed, 0, Number.MAX_SAFE_INTEGER),
+    evidence: input.evidence === undefined ? undefined : objectRecord(input.evidence),
+    rawResponse: input.rawResponse,
+  };
+}
+
+async function handleRunGoalExecutionRequest(ctx: V1RequestContext, runId: string, segments: string[]): Promise<Response> {
+  if (ctx.request.method !== "POST") return fail("not_found", 404);
+  const storage = requireStorage(ctx.storage);
+  const body = await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes);
+  const claimToken = requiredString(body.claimToken, "claimToken");
+  const authorized = await authorizeRunnerClaim(storage, ctx.auth.principalId, runId, claimToken, ctx.now());
+  if (!authorized.ok) return authorized.response;
+
+  if (segments.length === 1 && segments[0] === "find") {
+    const context = await scopeRunnerGoalContext(storage, runId, objectRecord(body.context));
+    if (!context.ok) return context.response;
+    return ok({ goal: await storage.findGoalByContext(context.context) });
+  }
+  if (segments.length === 0) {
+    const scoped = await scopeRunnerGoalInput(storage, authorized, createGoalInputFromBody(body.input ?? body.goal ?? body));
+    if (!scoped.ok) return scoped.response;
+    return ok({ goal: await storage.createGoal(scoped.input) });
+  }
+
+  const goalId = segments[0];
+  if (!goalId) return fail("not_found", 404);
+  const scopedGoal = await requireClaimedGoal(storage, goalId, runId);
+  if (!scopedGoal.ok) return scopedGoal.response;
+
+  if (segments.length === 2 && segments[1] === "get") return ok({ goal: scopedGoal.goal });
+  if (segments.length === 2 && segments[1] === "status") {
+    const status = optionalEnum<GoalStatus>(
+      optionalString(body.status) ?? null,
+      ["active", "paused", "blocked", "usageLimited", "budgetLimited", "complete", "cancelled"],
+    );
+    if (!status) throw apiError("status_required", 422);
+    return ok({ goal: await storage.updateGoalStatus(goalId, status) });
+  }
+  if (segments.length === 2 && segments[1] === "events") {
+    return ok({ goalRun: await storage.recordGoalEvent(goalEventFromBody(goalId, body.input ?? body.event ?? body)) });
+  }
+  if (segments.length === 2 && segments[1] === "plan-nodes") {
+    return ok({ nodes: await storage.createGoalPlanNodes(goalId, goalPlanNodesFromBody(body.nodes)) });
+  }
+  if (segments.length === 3 && segments[1] === "plan-nodes" && segments[2] === "list") {
+    return ok({ nodes: await storage.listGoalPlanNodes(goalId) });
+  }
+  if (segments.length === 3 && segments[1] === "plan-nodes") {
+    const key = segments[2]!;
+    const status = optionalEnum(optionalString(body.status) ?? null, GOAL_RUN_STATUSES);
+    const ready = body.ready === undefined
+      ? undefined
+      : typeof body.ready === "boolean" ? body.ready : (() => { throw apiError("invalid_boolean", 422); })();
+    return ok({
+      node: await storage.updateGoalPlanNode(goalId, key, {
+        status,
+        tokensUsed: optionalPositiveInteger(body.tokensUsed, 0, Number.MAX_SAFE_INTEGER),
+        timeUsedSeconds: optionalPositiveInteger(body.timeUsedSeconds, 0, Number.MAX_SAFE_INTEGER),
+        ready,
+      }),
+    });
+  }
+
   return fail("not_found", 404);
 }
 
@@ -724,8 +1058,10 @@ async function claimRuns(
   for (const loop of await storage.dueLoops(opts.now)) {
     if (claims.length >= opts.maxClaims) break;
     if (!runnerMatchesLoop(loop.machine, runner)) continue;
-    if (loop.target.type === "workflow") continue;
-    if (loop.overlap === "skip" && (await storage.listRuns({ loopId: loop.id, status: "running", limit: 1 })).length > 0) continue;
+    const workflow = loop.target.type === "workflow"
+      ? await storage.getWorkflow(loop.target.workflowId)
+      : undefined;
+    if (loop.target.type === "workflow" && !workflow) continue;
     for (const slot of dueSlots(loop, opts.now).slots) {
       if (claims.length >= opts.maxClaims) break;
       const claim = await storage.claimRun(loop, slot, runner.id, opts.now);
@@ -738,9 +1074,10 @@ async function claimRuns(
         { claimToken: claim.claimToken },
       ) ?? claim.run;
       claims.push({
-        loop: publicLoop(claim.loop),
+        loop: claim.loop,
         run: publicRun(run, false, { redactError: true }),
         claimToken: claim.claimToken,
+        ...(workflow ? { workflow } : {}),
       });
       if (loop.overlap === "skip") break;
     }

@@ -78,7 +78,6 @@ loopback authentication bypass.
 
 - Long-running `loops-runner` daemon mode with backoff, fleet observability, and
   durable machine registration records.
-- Workflow target execution over the runner protocol.
 - Id-preserving self-hosted import endpoints for workflow specs, loop
   definitions, run history, workflow history, work items, goals, and audit rows.
 - A no-loss migration path from local SQLite into the self-hosted control plane.

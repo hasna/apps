@@ -46,7 +46,7 @@ describe("route authorization inventory", () => {
       expect(operation?.["x-token-kinds"]).toEqual(policy.tokenKinds);
       expect(operation?.["x-risk"]).toBe(policy.risk);
 
-      const samplePath = policy.pathTemplate.replace(/\{[^}]+\}/g, "sample-id");
+      const samplePath = policy.pathTemplate.replace(/\{([^}]+)\}/g, (_match, name: string) => name === "action" ? "start" : "sample-id");
       expect(routePolicy(policy.method, samplePath)?.operationId).toBe(policy.operationId);
     }
 

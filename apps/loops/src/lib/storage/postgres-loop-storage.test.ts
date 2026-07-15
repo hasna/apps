@@ -6,15 +6,14 @@
 //
 // Covers the priority-1/priority-2 paths the daemon + CLI + runner exercise:
 // loop CRUD, run lifecycle (claim/heartbeat/finalize/recover), daemon lease,
-// counts, route representation, prune, and the two-connection claim race.
-// Remaining TIER-2 unported methods are asserted to throw NotImplementedError
-// rather than silently no-op.
+// counts, route representation, prune, workflow lifecycle writes, and the
+// two-connection claim race.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import pg from "pg";
 import { PgPoolExecutor } from "./pg-executor.js";
 import { PostgresStorage } from "./postgres.js";
-import { PostgresLoopStorage, NotImplementedError } from "./postgres-loop-storage.js";
+import { PostgresLoopStorage } from "./postgres-loop-storage.js";
 import { assertTenantEnforcementBootstrap, assertTenantEnforcementBootstrapIfPending, isSafeServiceConnection } from "../../serve/index.js";
 import type { CreateLoopInput, Loop, LoopRun, WorkflowSpec } from "../../types.js";
 
@@ -22,10 +21,8 @@ const DATABASE_URL = process.env.LOOPS_TEST_DATABASE_URL;
 const RUN_LIVE = typeof DATABASE_URL === "string" && DATABASE_URL.length > 0;
 const suite = RUN_LIVE ? describe : describe.skip;
 
-// Isolate in a dedicated throwaway database so this file never interferes with
-// the sibling `postgres-concurrency.test.ts` (its claim path drains ALL queued
-// / lease-expired runs table-wide; running both files in one `bun test` against
-// a shared database would let each see the other's rows).
+// Isolate in a dedicated throwaway database so live claim/recovery tests never
+// interfere with rows from another concurrently running Postgres suite.
 const ISO_DB = `loops_pgstore_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
 const RUNTIME_LOGIN = `loops_runtime_test_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
 const RUNTIME_PASSWORD = `runtime-test-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
@@ -956,9 +953,112 @@ suite("PostgresLoopStorage (live)", () => {
     expect(replay.status).toBe("deferred");
   });
 
-  test("TIER-2 unported methods throw NotImplementedError (never silently no-op)", () => {
-    expect(() => storage.createGoal()).toThrow(NotImplementedError);
-    expect(() => storage.finalizeWorkflowRun()).toThrow(/not implemented/i);
+  test("workflow lifecycle writes are implemented on Postgres", async () => {
+    const workflow = await storage.createWorkflow({
+      name: "pg-workflow-lifecycle",
+      steps: [
+        { id: "first", target: { type: "command", command: "true" } },
+        { id: "second", target: { type: "command", command: "true" }, dependsOn: ["first"] },
+      ],
+    });
+    const loop = await storage.createLoop(loopInput("pg-workflow-loop", {
+      target: { type: "workflow", workflowId: workflow.id },
+    }));
+    const slot = "2026-07-06T14:00:00.000Z";
+    const claim = await storage.claimRun(loop, slot, "runner-pg-workflow");
+    expect(claim).toBeTruthy();
+    const run = claim!.run;
+
+    const workflowRun = await storage.createWorkflowRun({
+      workflow,
+      loop,
+      loopRun: run,
+      scheduledFor: slot,
+      idempotencyKey: `${loop.id}:${slot}:attempt:${run.attempt}`,
+    });
+    expect(workflowRun).toMatchObject({ workflowId: workflow.id, loopRunId: run.id, status: "running" });
+    expect(await storage.createWorkflowRun({
+      workflow,
+      loop,
+      loopRun: run,
+      scheduledFor: slot,
+      idempotencyKey: `${loop.id}:${slot}:attempt:${run.attempt}`,
+    })).toMatchObject({ id: workflowRun.id });
+
+    expect(await storage.listWorkflowStepRuns(workflowRun.id)).toHaveLength(2);
+    expect(await storage.startWorkflowStepRun(workflowRun.id, "first")).toMatchObject({ status: "running" });
+    expect(await storage.finalizeWorkflowStepRun(workflowRun.id, "first", {
+      status: "succeeded",
+      finishedAt: "2026-07-06T14:00:01.000Z",
+      durationMs: 1000,
+      stdout: "first done",
+      stderr: "",
+      exitCode: 0,
+    })).toMatchObject({ status: "succeeded" });
+    expect(await storage.startWorkflowStepRun(workflowRun.id, "second")).toMatchObject({ status: "running" });
+    expect(await storage.finalizeWorkflowStepRun(workflowRun.id, "second", {
+      status: "succeeded",
+      finishedAt: "2026-07-06T14:00:02.000Z",
+      durationMs: 1000,
+      stdout: "second done",
+      stderr: "",
+      exitCode: 0,
+    })).toMatchObject({ status: "succeeded" });
+    expect(await storage.finalizeWorkflowRun(workflowRun.id, "succeeded", {
+      finishedAt: "2026-07-06T14:00:03.000Z",
+      durationMs: 3000,
+    })).toMatchObject({ status: "succeeded" });
+
+    const events = await storage.listWorkflowEvents(workflowRun.id);
+    expect(events.map((event) => event.eventType)).toEqual([
+      "created",
+      "step_started",
+      "step_succeeded",
+      "step_started",
+      "step_succeeded",
+      "succeeded",
+    ]);
+  });
+
+  test("expired workflow leases append failed workflow events on Postgres", async () => {
+    const workflow = await storage.createWorkflow({
+      name: "pg-workflow-expired-lease",
+      steps: [{ id: "first", target: { type: "command", command: "true" } }],
+    });
+    const loop = await storage.createLoop(loopInput("pg-workflow-expired-loop", {
+      target: { type: "workflow", workflowId: workflow.id },
+      leaseMs: 1_000,
+    }));
+    const slot = "2026-07-06T15:00:00.000Z";
+    const startedAt = new Date("2026-07-06T15:00:00.000Z");
+    const claim = await storage.claimRun(loop, slot, "runner-pg-expired", startedAt);
+    expect(claim).toBeTruthy();
+    const workflowRun = await storage.createWorkflowRun({
+      workflow,
+      loop,
+      loopRun: claim!.run,
+      scheduledFor: slot,
+      idempotencyKey: `${loop.id}:${slot}:attempt:${claim!.run.attempt}`,
+    });
+    await storage.startWorkflowStepRun(workflowRun.id, "first");
+
+    const recovered = await storage.recoverExpiredRunLeases(new Date("2026-07-06T15:00:02.000Z"));
+    expect(recovered.map((run) => run.id)).toContain(claim!.run.id);
+    expect(await storage.getWorkflowRun(workflowRun.id)).toMatchObject({
+      id: workflowRun.id,
+      status: "failed",
+      error: "parent loop run lease expired before completion",
+    });
+    expect(await storage.getWorkflowStepRun(workflowRun.id, "first")).toMatchObject({
+      status: "skipped",
+      error: "parent loop run lease expired before completion",
+    });
+    const events = await storage.listWorkflowEvents(workflowRun.id);
+    expect(events.map((event) => event.eventType)).toEqual(["created", "step_started", "failed"]);
+    expect(events.at(-1)?.payload).toMatchObject({
+      error: "parent loop run lease expired before completion",
+      loopRunId: claim!.run.id,
+    });
   });
 
   test("two connections never double-claim the same slot (contract claimRun)", async () => {

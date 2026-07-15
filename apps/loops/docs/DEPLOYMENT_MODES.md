@@ -134,10 +134,11 @@ self-hosted host.
 `loops-runner` is the process that connects a machine to a non-local control
 plane. The current public package supports a bounded one-shot protocol:
 claim polling, claim-token fenced lease heartbeat/finalization, and
-`loops-runner run-once` execution for non-workflow targets. Durable machine
-registration, full fleet daemon mode, and workflow target execution over the
-remote protocol still need follow-up releases before `loops-runner` is
-advertised as a complete always-on worker.
+`loops-runner run-once` execution for command, agent, and workflow targets.
+Workflow execution uses runner-scoped workflow and goal APIs behind the claimed
+run lease. Durable machine registration, full fleet daemon mode, and
+always-on fleet observability still need follow-up releases before
+`loops-runner` is advertised as a complete always-on worker.
 
 ## Migration And Sync
 

@@ -640,7 +640,7 @@ function isoProcessStart(pid: number): string | undefined {
   return startedMs === undefined ? undefined : new Date(startedMs).toISOString();
 }
 
-function isLiveStepProcess(pid: number, stepStartedAt: string | null | undefined): boolean {
+export function isLiveStepProcess(pid: number, stepStartedAt: string | null | undefined): boolean {
   if (!isProcessAlive(pid)) return false;
   const actualMs = processStartTimeMs(pid);
   const stepStartMs = stepStartedAt ? Date.parse(stepStartedAt) : Number.NaN;
@@ -914,7 +914,7 @@ function boundedWorkflowEventPayloadJson(scrubbedJson: string): string {
   }
 }
 
-function persistedWorkflowEventPayload(payload: Record<string, unknown> | undefined | null): string | null {
+export function persistedWorkflowEventPayload(payload: Record<string, unknown> | undefined | null): string | null {
   if (payload == null) return null;
   const scrubbed = scrubSecretsDeep(payload);
   return boundedWorkflowEventPayloadJson(scrubSecrets(JSON.stringify(scrubbed)));
