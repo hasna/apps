@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createLoopsApiServer } from "../api/index.js";
 import { createSqliteLoopStorage } from "../lib/storage/sqlite.js";
-import { logRunnerCommandFailure, runRunnerOnce, runnerStatus } from "./index.js";
+import { logRunnerCommandFailure, runRunnerLoop, runRunnerOnce, runnerStatus } from "./index.js";
 
 function createRunnerServer(storage: ReturnType<typeof createSqliteLoopStorage>, principalId: string, now?: () => Date) {
   const principal = {
@@ -16,7 +16,7 @@ function createRunnerServer(storage: ReturnType<typeof createSqliteLoopStorage>,
   });
 }
 
-describe("loops-runner foundation", () => {
+describe("loops-runner", () => {
   test("command failures use stable logs without provider details", () => {
     const logged: string[] = [];
     const originalError = console.error;
@@ -202,6 +202,88 @@ describe("loops-runner foundation", () => {
 
   test("runRunnerOnce rejects non-local API URLs without a token", async () => {
     await expect(runRunnerOnce({ apiUrl: "https://loops.example.test", runnerId: "runner", env: {} })).rejects.toThrow("requires HASNA_LOOPS_API_KEY");
+  });
+
+  test("runRunnerLoop keeps polling while idle without real sleeps", async () => {
+    const claimCalls: string[] = [];
+    const sleeps: number[] = [];
+    const fetchImpl = (async (url: string | URL) => {
+      claimCalls.push(String(url));
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, claims: [] }),
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    const result = await runRunnerLoop({
+      apiUrl: "https://loops.example.test",
+      apiKey: "test-key",
+      runnerId: "runner-loop",
+      maxIterations: 3,
+      pollIntervalMs: 25,
+      fetchImpl,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, claimed: 0, completed: [], iterations: 3, errors: 0, idle: false });
+    expect(claimCalls.filter((url) => url.endsWith("/v1/runners/claim"))).toHaveLength(3);
+    expect(sleeps).toEqual([25, 25]);
+  });
+
+  test("runRunnerLoop drains a claimed run before sleeping again", async () => {
+    const claim = {
+      loop: { id: "loop-1", name: "loop-1", leaseMs: 10_000 },
+      run: { id: "run-1", loopId: "loop-1", scheduledFor: "2026-01-01T00:00:00.000Z", startedAt: "2026-01-01T00:00:00.000Z" },
+      claimToken: "claim-token",
+    };
+    let claimCalls = 0;
+    const sleeps: number[] = [];
+    const fetchImpl = (async (url: string | URL) => {
+      const text = String(url);
+      if (text.endsWith("/v1/runners/claim")) {
+        claimCalls += 1;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ ok: true, claims: claimCalls === 1 ? [claim] : [] }),
+        } as Response;
+      }
+      if (text.includes("/heartbeat")) {
+        return { ok: true, status: 200, json: async () => ({ ok: true }) } as Response;
+      }
+      if (text.includes("/finalize")) {
+        return { ok: true, status: 200, json: async () => ({ ok: true, run: { ...claim.run, status: "succeeded" } }) } as Response;
+      }
+      return { ok: false, status: 404, json: async () => ({ error: "not_found" }) } as Response;
+    }) as unknown as typeof fetch;
+
+    const result = await runRunnerLoop({
+      apiUrl: "https://loops.example.test",
+      apiKey: "test-key",
+      runnerId: "runner-loop",
+      maxIterations: 2,
+      pollIntervalMs: 25,
+      fetchImpl,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+      execute: async (_loop, run) => ({
+        status: "succeeded",
+        startedAt: run.startedAt ?? "2026-01-01T00:00:00.000Z",
+        finishedAt: "2026-01-01T00:00:01.000Z",
+        durationMs: 1_000,
+        stdout: "",
+        stderr: "",
+        exitCode: 0,
+      }),
+    });
+
+    expect(result).toMatchObject({ ok: true, claimed: 1, iterations: 2, errors: 0 });
+    expect(result.completed[0]).toMatchObject({ id: "run-1", status: "succeeded" });
+    expect(sleeps).toEqual([]);
   });
 
   // Regression (MEDIUM 4): if control-plane heartbeats keep failing, the lease is

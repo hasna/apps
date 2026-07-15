@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test";
 import type { QueryResultRow } from "pg";
 import type { PoolQueryClient, TypedQueryClient } from "../generated/storage-kit/query.js";
 import type { PostgresStorage } from "../lib/storage/postgres.js";
-import { assertTenantEnforcementBootstrap, assertTenantEnforcementBootstrapIfPending, logServeCommandFailure } from "./index.js";
+import {
+  assertTenantEnforcementBootstrap,
+  assertTenantEnforcementBootstrapIfPending,
+  classifyMigrationReadinessError,
+  logServeCommandFailure,
+} from "./index.js";
 
 function bootstrapClient(role: {
   rolcreaterole: boolean;
@@ -139,6 +144,13 @@ describe("loops-serve database bootstrap", () => {
       schema,
     )).resolves.toBeUndefined();
     expect(statements.some((sql) => sql.includes("DO $probe_roles$"))).toBe(true);
+  });
+
+  test("classifies migration checksum drift as an explicit readiness failure", () => {
+    expect(classifyMigrationReadinessError(new Error("Postgres migration checksum mismatch for 0003_remote_runners_and_audit")))
+      .toBe("migration_checksum_mismatch");
+    expect(classifyMigrationReadinessError(new Error("connect ECONNREFUSED")))
+      .toBe("storage_unreachable");
   });
 
   test("command failures use stable logs without provider details", () => {

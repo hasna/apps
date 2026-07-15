@@ -8,6 +8,7 @@ import { packageVersion } from "../lib/version.js";
 const program = new Command();
 const DEFAULT_RUNNER_ID = `runner:${process.pid}`;
 const MIN_RUNNER_LEASE_MS = 1_000;
+const DEFAULT_RUNNER_POLL_INTERVAL_MS = 5_000;
 // After this many consecutive heartbeat failures the control plane has almost
 // certainly expired our lease (and may have handed the run to another runner),
 // so we abort execution instead of racing a second executor.
@@ -15,7 +16,7 @@ const MAX_CONSECUTIVE_HEARTBEAT_FAILURES = 3;
 
 program
   .name("loops-runner")
-  .description("OpenLoops control-plane runner foundation")
+  .description("OpenLoops control-plane runner")
   .version(packageVersion())
   .option("-j, --json", "print JSON");
 
@@ -60,6 +61,13 @@ export interface RunnerOnceResult {
   completed: LoopRun[];
 }
 
+export interface RunnerLoopResult extends RunnerOnceResult {
+  iterations: number;
+  errors: number;
+  idle: boolean;
+  stopped: boolean;
+}
+
 export interface RunRunnerOnceOptions {
   apiUrl?: string;
   apiKey?: string;
@@ -70,6 +78,16 @@ export interface RunRunnerOnceOptions {
   fetchImpl?: typeof fetch;
   execute?: (loop: Loop, run: LoopRun, opts?: { signal?: AbortSignal }) => Promise<ExecutorResult>;
   env?: NodeJS.ProcessEnv;
+}
+
+export interface RunRunnerLoopOptions extends RunRunnerOnceOptions {
+  pollIntervalMs?: number;
+  maxIterations?: number;
+  idleExitAfterMs?: number;
+  signal?: AbortSignal;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  nowMs?: () => number;
+  onError?: (error: unknown) => void;
 }
 
 function resolveRunnerConfig(opts: RunRunnerOnceOptions): { apiUrl: string; token?: string; runnerId: string; machineId?: string } {
@@ -135,6 +153,60 @@ export async function runRunnerOnce(opts: RunRunnerOnceOptions = {}): Promise<Ru
   return { ok: completed.every((run) => run.status === "succeeded"), claimed: claims.length, completed };
 }
 
+export async function runRunnerLoop(opts: RunRunnerLoopOptions = {}): Promise<RunnerLoopResult> {
+  resolveRunnerConfig(opts);
+  const pollIntervalMs = normalizedInteger(opts.pollIntervalMs ?? DEFAULT_RUNNER_POLL_INTERVAL_MS, "pollIntervalMs", 1);
+  const maxIterations = opts.maxIterations === undefined
+    ? undefined
+    : normalizedInteger(opts.maxIterations, "maxIterations", 1);
+  const idleExitAfterMs = opts.idleExitAfterMs === undefined
+    ? undefined
+    : normalizedInteger(opts.idleExitAfterMs, "idleExitAfterMs", 0);
+  const sleep = opts.sleep ?? sleepMs;
+  const nowMs = opts.nowMs ?? (() => Date.now());
+  const completed: LoopRun[] = [];
+  let ok = true;
+  let iterations = 0;
+  let claimed = 0;
+  let errors = 0;
+  let idle = false;
+  let lastClaimedAt = nowMs();
+
+  while (!opts.signal?.aborted && (maxIterations === undefined || iterations < maxIterations)) {
+    iterations += 1;
+    let claimedThisIteration = 0;
+    try {
+      const result = await runRunnerOnce(opts);
+      claimedThisIteration = result.claimed;
+      claimed += result.claimed;
+      completed.push(...result.completed);
+      if (!result.ok) ok = false;
+      if (result.claimed > 0) lastClaimedAt = nowMs();
+    } catch (error) {
+      errors += 1;
+      ok = false;
+      opts.onError?.(error);
+    }
+
+    if (idleExitAfterMs !== undefined && nowMs() - lastClaimedAt >= idleExitAfterMs) {
+      idle = true;
+      break;
+    }
+    if (opts.signal?.aborted || (maxIterations !== undefined && iterations >= maxIterations)) break;
+    if (claimedThisIteration === 0) await sleep(pollIntervalMs, opts.signal);
+  }
+
+  return {
+    ok: ok && errors === 0,
+    claimed,
+    completed,
+    iterations,
+    errors,
+    idle,
+    stopped: Boolean(opts.signal?.aborted),
+  };
+}
+
 async function executeClaimWithHeartbeat(
   fetchImpl: typeof fetch,
   config: { apiUrl: string; token?: string },
@@ -188,6 +260,41 @@ function runnerHeartbeatIntervalMs(leaseMs: number, configured?: number): number
   return Math.min(30_000, safeDefault, requested);
 }
 
+function normalizedInteger(value: number, name: string, min: number): number {
+  if (!Number.isInteger(value) || value < min) throw new Error(`${name} must be an integer >= ${min}`);
+  return value;
+}
+
+function parseIntegerOption(name: string, min: number): (value: string) => number {
+  return (value) => {
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed) || parsed < min) throw new Error(`${name} must be an integer >= ${min}`);
+    return parsed;
+  };
+}
+
+function sleepMs(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0 || signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    let timer: ReturnType<typeof setTimeout>;
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
+
+function shutdownSignal(): AbortSignal {
+  const controller = new AbortController();
+  const stop = () => controller.abort();
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+  return controller.signal;
+}
+
 function wantsJson(opts?: { json?: boolean }): boolean {
   return Boolean(program.opts().json || opts?.json);
 }
@@ -222,6 +329,35 @@ program
     });
     if (wantsJson(opts)) console.log(JSON.stringify(result, null, 2));
     else console.log(`claimed=${result.claimed} completed=${result.completed.length}`);
+    if (!result.ok) process.exitCode = 1;
+  });
+
+program
+  .command("run")
+  .description("poll the control-plane and execute claimed runs until stopped")
+  .option("--api-url <url>", "control-plane API URL")
+  .option("--runner-id <id>", "runner id")
+  .option("--machine-id <id>", "machine id")
+  .option("--poll-interval-ms <ms>", "idle polling interval", parseIntegerOption("pollIntervalMs", 1))
+  .option("--max-iterations <n>", "stop after this many claim iterations", parseIntegerOption("maxIterations", 1))
+  .option("--idle-exit-after-ms <ms>", "stop after this many idle milliseconds", parseIntegerOption("idleExitAfterMs", 0))
+  .option("-j, --json", "print JSON")
+  .action(async (opts) => {
+    const result = await runRunnerLoop({
+      apiUrl: opts.apiUrl,
+      runnerId: opts.runnerId,
+      machineId: opts.machineId,
+      pollIntervalMs: opts.pollIntervalMs,
+      maxIterations: opts.maxIterations,
+      idleExitAfterMs: opts.idleExitAfterMs,
+      signal: shutdownSignal(),
+    });
+    if (wantsJson(opts)) console.log(JSON.stringify(result, null, 2));
+    else {
+      console.log(
+        `iterations=${result.iterations} claimed=${result.claimed} completed=${result.completed.length} errors=${result.errors}`,
+      );
+    }
     if (!result.ok) process.exitCode = 1;
   });
 

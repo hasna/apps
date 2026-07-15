@@ -51,6 +51,16 @@ function defaultPort(): number {
 
 type ServiceDatabaseRole = "open_loops_runtime" | "open_loops_authenticator";
 const TENANT_ENFORCEMENT_MIGRATION_ID = "0010_tenant_enforce";
+export type ServeReadinessFailureCode =
+  | "storage_unreachable"
+  | "migration_checksum_mismatch";
+
+export function classifyMigrationReadinessError(error: unknown): ServeReadinessFailureCode {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("Postgres migration checksum mismatch")
+    ? "migration_checksum_mismatch"
+    : "storage_unreachable";
+}
 
 export async function isSafeServiceConnection(
   client: TypedQueryClient,
@@ -833,8 +843,8 @@ async function runServe(opts: { host: string; port: number }): Promise<void> {
           const unknown = applied.filter((a) => !known.has(a.id)).map((a) => a.id);
           if (missing.length) return { ready: false, code: "pending_migrations" };
           if (unknown.length) return { ready: false, code: "unknown_migrations" };
-        } catch {
-          return { ready: false, code: "storage_unreachable" };
+        } catch (error) {
+          return { ready: false, code: classifyMigrationReadinessError(error) };
         }
         try {
           if (!await isSafeServiceConnection(executor.queryClient, "open_loops_runtime")) {
