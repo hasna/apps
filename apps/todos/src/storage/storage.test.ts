@@ -1404,6 +1404,9 @@ describe("storage adapter contracts", () => {
     expect(preflight).toContain("todos:scoped-slug-duplicate-audit");
     expect(preflight).toContain("array_agg(object_id ORDER BY object_id)");
     expect(preflight).toContain("regexp_replace(lower(COALESCE(slug, ''))");
+    expect(preflight).toContain("jsonb_typeof(payload->'slug') AS slug_type");
+    expect(preflight).toContain("jsonb_typeof(payload->'task_list_id') AS slug_type");
+    expect(preflight).toContain("slug_type IS DISTINCT FROM 'string'");
     expect(preflight).toContain("'invalid'::text AS issue");
     expect(indexes).toHaveLength(2);
     expect(indexes.every((sql) => sql.includes("CREATE UNIQUE INDEX CONCURRENTLY"))).toBe(true);

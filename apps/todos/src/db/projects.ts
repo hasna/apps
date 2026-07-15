@@ -5,6 +5,7 @@ import { getDatabase, now, uuid } from "./database.js";
 import { getMachineId } from "./machines.js";
 import { currentStorageMachineId, recordStorageTombstone } from "./storage-tombstones.js";
 import { normalizeSlug } from "../lib/slugs.js";
+import { claimCanonicalSlug, releaseCanonicalSlugClaims } from "./slug-claims.js";
 
 export function slugify(name: string): string {
   return normalizeSlug(name);
@@ -38,25 +39,26 @@ export function createProject(
   db?: Database,
 ): Project {
   const d = db || getDatabase();
-  const id = uuid();
-  const timestamp = now();
-  const derivedSlug = slugify(input.name);
-  const taskListId = input.task_list_id === undefined ? `todos-${derivedSlug}` : slugify(input.task_list_id);
-  if (!derivedSlug || !taskListId) throw new Error("Project name and task-list slug must be non-empty");
-  const slugConflict = d.query("SELECT id FROM projects WHERE task_list_id = ? LIMIT 1").get(taskListId);
-  if (slugConflict) {
-    throw new ResourceConflictError("PROJECT_SLUG_CONFLICT", `Project slug "${taskListId}" already exists`);
-  }
-  const taskPrefix = input.task_prefix || generatePrefix(input.name, d);
-  const machineId = currentStorageMachineId(d);
+  return d.transaction(() => {
+    const id = uuid();
+    const timestamp = now();
+    const derivedSlug = slugify(input.name);
+    const taskListId = input.task_list_id === undefined ? `todos-${derivedSlug}` : slugify(input.task_list_id);
+    if (!derivedSlug || !taskListId) throw new Error("Project name and task-list slug must be non-empty");
+    const slugConflict = d.query("SELECT id FROM projects WHERE task_list_id = ? LIMIT 1").get(taskListId);
+    if (slugConflict || !claimCanonicalSlug("project", "global", taskListId, id, d)) {
+      throw new ResourceConflictError("PROJECT_SLUG_CONFLICT", `Project slug "${taskListId}" already exists`);
+    }
+    const taskPrefix = input.task_prefix || generatePrefix(input.name, d);
+    const machineId = currentStorageMachineId(d);
 
-  d.run(
-    `INSERT INTO projects (id, name, path, description, task_list_id, task_prefix, task_counter, created_at, updated_at, machine_id)
-     VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
-    [id, input.name, input.path, input.description || null, taskListId, taskPrefix, timestamp, timestamp, machineId],
-  );
-
-  return getProject(id, d)!;
+    d.run(
+      `INSERT INTO projects (id, name, path, description, task_list_id, task_prefix, task_counter, created_at, updated_at, machine_id)
+       VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+      [id, input.name, input.path, input.description || null, taskListId, taskPrefix, timestamp, timestamp, machineId],
+    );
+    return getProject(id, d)!;
+  })();
 }
 
 export function getProject(id: string, db?: Database): Project | null {
@@ -163,14 +165,16 @@ export function renameProject(
             `Task-list slug "${normalised}" is already used in project "${project.name}"`,
           );
         }
+        releaseCanonicalSlugClaims("project", id, d);
+        if (!claimCanonicalSlug("project", "global", normalised, id, d)) {
+          throw new ResourceConflictError("PROJECT_SLUG_CONFLICT", `Slug "${normalised}" is already used by another project`);
+        }
         d.run("UPDATE projects SET task_list_id = ?, updated_at = ? WHERE id = ?", [normalised, ts, id]);
       }
       if (oldSlug && (normalised !== oldSlug || (input.name !== undefined && input.name !== project.name))) {
-        const result = d.run(
-          "UPDATE task_lists SET slug = ?, name = COALESCE(?, name), updated_at = ? WHERE project_id = ? AND slug = ?",
-          [normalised, input.name ?? null, ts, id, oldSlug],
-        );
-        taskListsUpdated = result.changes;
+        taskListsUpdated = d.query(
+          "UPDATE task_lists SET slug = ?, name = COALESCE(?, name), updated_at = ? WHERE project_id = ? AND slug = ? RETURNING id",
+        ).all(normalised, input.name ?? null, ts, id, oldSlug).length;
       }
     }
 
@@ -191,8 +195,10 @@ export function deleteProject(id: string, db?: Database): boolean {
     object_id: id,
     payload: project as unknown as Record<string, unknown>,
   }, d);
-  const result = d.run("DELETE FROM projects WHERE id = ?", [id]);
-  return result.changes > 0;
+  return d.transaction(() => {
+    releaseCanonicalSlugClaims("project", id, d);
+    return d.run("DELETE FROM projects WHERE id = ?", [id]).changes > 0;
+  })();
 }
 
 // ── Project Sources ──────────────────────────────────────────────────────────

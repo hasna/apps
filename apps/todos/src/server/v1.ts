@@ -774,7 +774,7 @@ export async function handleV1Request(
         const unknownField = Object.keys(body).find((key) => !["name", "slug", "project_id", "description", "metadata"].includes(key));
         if (unknownField) return error(400, `unsupported task-list create field: ${unknownField}`);
         if (body.slug !== undefined && typeof body.slug !== "string") return error(400, "slug must be a string");
-        if (body.project_id !== undefined && typeof body.project_id !== "string") return error(400, "project_id must be a string");
+        if (body.project_id !== undefined && (typeof body.project_id !== "string" || !body.project_id.trim())) return error(400, "project_id must be a non-empty string");
         if (body.description !== undefined && typeof body.description !== "string") return error(400, "description must be a string");
         if (body.metadata !== undefined && (!body.metadata || typeof body.metadata !== "object" || Array.isArray(body.metadata))) {
           return error(400, "metadata must be an object");

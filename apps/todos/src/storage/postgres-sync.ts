@@ -140,11 +140,12 @@ export function postgresTodosScopedSlugPreflightSql(
   assertSafeIdentifier(tableName);
   return `/* todos:scoped-slug-duplicate-audit */ WITH candidates AS (
     SELECT service, object_type, COALESCE(payload->>'project_id', '') AS scope,
-      payload->>'slug' AS slug, object_id
+      payload->>'slug' AS slug, jsonb_typeof(payload->'slug') AS slug_type, object_id
     FROM ${tableName}
     WHERE object_type = 'task_lists' AND deleted_at IS NULL
     UNION ALL
-    SELECT service, object_type, '' AS scope, payload->>'task_list_id' AS slug, object_id
+    SELECT service, object_type, '' AS scope, payload->>'task_list_id' AS slug,
+      jsonb_typeof(payload->'task_list_id') AS slug_type, object_id
     FROM ${tableName}
     WHERE object_type = 'projects' AND deleted_at IS NULL
   ), annotated AS (
@@ -154,7 +155,8 @@ export function postgresTodosScopedSlugPreflightSql(
     SELECT service, object_type, scope, COALESCE(slug, '<null>') AS slug,
       ARRAY[object_id] AS object_ids, 1::integer AS duplicate_count, 'invalid'::text AS issue
     FROM annotated
-    WHERE slug IS NULL OR slug = '' OR normalized_slug = '' OR slug IS DISTINCT FROM normalized_slug
+    WHERE slug_type IS DISTINCT FROM 'string'
+      OR slug IS NULL OR slug = '' OR normalized_slug = '' OR slug IS DISTINCT FROM normalized_slug
   ), duplicates AS (
     SELECT service, object_type, scope, slug,
       array_agg(object_id ORDER BY object_id) AS object_ids,

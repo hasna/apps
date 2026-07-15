@@ -13,6 +13,7 @@ import {
 } from "./projects.js";
 import { createTaskList } from "./task-lists.js";
 import { ProjectNotFoundError } from "../types/index.js";
+import { runMigrations } from "./schema.js";
 
 let db: Database;
 
@@ -44,6 +45,97 @@ describe("createProject", () => {
       db,
     );
     expect(project.description).toBe("A test project");
+  });
+});
+
+describe("legacy-safe canonical slug enforcement", () => {
+  it("keeps legacy duplicates readable while DB triggers reject new raw duplicates", () => {
+    for (const trigger of [
+      "claim_project_canonical_slug_insert",
+      "claim_project_canonical_slug_update",
+      "release_project_canonical_slug_delete",
+      "claim_task_list_canonical_slug_insert",
+      "claim_task_list_canonical_slug_update",
+      "release_task_list_canonical_slug_delete",
+    ]) db.exec(`DROP TRIGGER IF EXISTS ${trigger}`);
+
+    const timestamp = "2026-01-01T00:00:00.000Z";
+    for (const id of ["legacy-project-a", "legacy-project-b"]) {
+      db.run(
+        "INSERT INTO projects(id, name, path, task_list_id, task_prefix, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [id, id, `/tmp/${id}`, "legacy-duplicate", id.slice(-3).toUpperCase(), timestamp, timestamp],
+      );
+    }
+    for (const id of ["legacy-list-a", "legacy-list-b"]) {
+      db.run(
+        "INSERT INTO task_lists(id, project_id, slug, name, created_at, updated_at) VALUES (?, NULL, ?, ?, ?, ?)",
+        [id, "legacy-list-duplicate", id, timestamp, timestamp],
+      );
+    }
+
+    runMigrations(db);
+    expect(db.query("SELECT id FROM projects WHERE task_list_id = ?").all("legacy-duplicate")).toHaveLength(2);
+    expect(db.query("SELECT id FROM task_lists WHERE project_id IS NULL AND slug = ?").all("legacy-list-duplicate")).toHaveLength(2);
+    expect(db.query("SELECT * FROM canonical_slug_claims").all()).toEqual([]);
+    expect(() => createProject({ name: "Other", path: "/tmp/other", task_list_id: "legacy-duplicate" }, db))
+      .toThrow("already exists");
+
+    db.run(
+      "INSERT INTO projects(id, name, path, task_list_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ["fresh-a", "Fresh A", "/tmp/fresh-a", "fresh", timestamp, timestamp],
+    );
+    expect(() => db.run(
+      "INSERT INTO projects(id, name, path, task_list_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ["fresh-b", "Fresh B", "/tmp/fresh-b", "fresh", timestamp, timestamp],
+    )).toThrow("PROJECT_SLUG_CONFLICT");
+
+    db.run(
+      "INSERT INTO task_lists(id, project_id, slug, name, created_at, updated_at) VALUES (?, NULL, ?, ?, ?, ?)",
+      ["fresh-list-a", "fresh-list", "Fresh List A", timestamp, timestamp],
+    );
+    expect(() => db.run(
+      "INSERT INTO task_lists(id, project_id, slug, name, created_at, updated_at) VALUES (?, NULL, ?, ?, ?, ?)",
+      ["fresh-list-b", "fresh-list", "Fresh List B", timestamp, timestamp],
+    )).toThrow("TASK_LIST_SLUG_CONFLICT");
+
+    db.run("UPDATE projects SET task_list_id = NULL WHERE id = ?", ["fresh-a"]);
+    db.run(
+      "INSERT INTO projects(id, name, path, task_list_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ["fresh-c", "Fresh C", "/tmp/fresh-c", "fresh", timestamp, timestamp],
+    );
+    db.run("UPDATE task_lists SET slug = '' WHERE id = ?", ["fresh-list-a"]);
+    db.run(
+      "INSERT INTO task_lists(id, project_id, slug, name, created_at, updated_at) VALUES (?, NULL, ?, ?, ?, ?)",
+      ["fresh-list-c", "fresh-list", "Fresh List C", timestamp, timestamp],
+    );
+
+    for (const id of ["scope-p1", "scope-p2", "standalone:"]) {
+      db.run(
+        "INSERT INTO projects(id, name, path, task_list_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+        [id, id, `/tmp/${id}`, `project-${id}`, timestamp, timestamp],
+      );
+    }
+    db.run(
+      "INSERT INTO task_lists(id, project_id, slug, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ["scope-list-a", "scope-p1", "scoped", "Scope A", timestamp, timestamp],
+    );
+    db.run(
+      "INSERT INTO task_lists(id, project_id, slug, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ["scope-list-b", "scope-p2", "scoped", "Scope B", timestamp, timestamp],
+    );
+    expect(() => db.run("UPDATE task_lists SET project_id = ? WHERE id = ?", ["scope-p2", "scope-list-a"]))
+      .toThrow("TASK_LIST_SLUG_CONFLICT");
+    expect(db.query("SELECT project_id FROM task_lists WHERE id = ?").get("scope-list-a"))
+      .toEqual({ project_id: "scope-p1" });
+
+    db.run(
+      "INSERT INTO task_lists(id, project_id, slug, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ["sentinel-list", "standalone:", "fresh-list", "Sentinel", timestamp, timestamp],
+    );
+    expect(db.query("SELECT id FROM task_lists WHERE slug = ? ORDER BY id").all("fresh-list")).toHaveLength(2);
+    expect(() => db.run(
+      "INSERT INTO canonical_slug_claims(kind, scope_key, slug, object_id) VALUES ('project', 'global', 'fresh', 'racer')",
+    )).toThrow("UNIQUE constraint failed");
   });
 });
 
