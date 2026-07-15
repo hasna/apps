@@ -95,6 +95,28 @@ describe("/v1 task-list cloud parity", () => {
 });
 
 describe("/v1 project mutation", () => {
+  test("generic create and patch cannot bypass canonical project slug handling", async () => {
+    const injected = await request("/v1/projects", "POST", {
+      name: "Injected",
+      path: "/tmp/injected",
+      task_list_id: "arbitrary",
+    });
+    expect(injected?.status).toBe(400);
+
+    const first = await request("/v1/projects", "POST", { name: "Open Emails", path: "/tmp/open-emails" });
+    expect(first?.status).toBe(201);
+    const firstProject = (await first!.json() as { project: { id: string; task_list_id: string } }).project;
+    expect(firstProject.task_list_id).toBe("todos-open-emails");
+
+    const duplicate = await request("/v1/projects", "POST", { name: "Open Emails", path: "/tmp/open-emails-2" });
+    expect(duplicate?.status).toBe(409);
+    expect(await duplicate!.json()).toMatchObject({ code: "PROJECT_SLUG_CONFLICT", conflict: true });
+
+    const bypass = await request(`/v1/projects/${firstProject.id}`, "PATCH", { task_list_id: "bypass" });
+    expect(bypass?.status).toBe(400);
+    expect(await store.projects.get(firstProject.id)).toMatchObject({ task_list_id: "todos-open-emails" });
+  });
+
   test("renames a project and its canonical task list atomically", async () => {
     const project = await store.projects.create({ name: "Open Emails", path: "/tmp/open-emails", task_list_id: "emails" });
     const list = await store.taskLists.create({ name: "Open Emails", slug: "emails", project_id: project.id });

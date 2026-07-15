@@ -478,6 +478,12 @@ class PostgresJsonRecordStore {
           `Task list with slug "${String((value as { slug?: unknown }).slug ?? "")}" already exists in this scope`,
         );
       }
+      if (type === "projects" && isPostgresUniqueViolation(error)) {
+        throw new ResourceConflictError(
+          "PROJECT_SLUG_CONFLICT",
+          `Project slug "${String((value as { task_list_id?: unknown }).task_list_id ?? "")}" already exists`,
+        );
+      }
       throw error;
     }
     if (result.rows.length === 0) {
@@ -507,15 +513,13 @@ class PostgresJsonRecordStore {
         project: unknown;
         task_lists_updated: number | string;
       }>(
-        `/* todos:rename-project-atomic */ WITH slug_lock AS MATERIALIZED (
-          SELECT pg_advisory_xact_lock(hashtextextended($1 || ':project-slug:' || $3, 0))
-        ), target AS (
+        `/* todos:rename-project-atomic */ WITH target AS (
           SELECT payload, payload->>'task_list_id' AS old_slug
           FROM ${this.tableName}
           WHERE service = $1 AND object_type = 'projects' AND object_id = $2 AND deleted_at IS NULL
           FOR UPDATE
         ), project_conflict AS (
-          SELECT 1 FROM ${this.tableName}, slug_lock
+          SELECT 1 FROM ${this.tableName}
           WHERE service = $1 AND object_type = 'projects' AND object_id <> $2
             AND deleted_at IS NULL AND payload->>'task_list_id' = $3 LIMIT 1
         ), task_list_conflict AS (
@@ -568,6 +572,24 @@ class PostgresJsonRecordStore {
       };
     } catch (error) {
       if (isPostgresUniqueViolation(error)) {
+        const constraintName = postgresConstraintName(error);
+        let projectConflict = constraintName.includes("project_task_list_slug_uidx");
+        // Some Postgres clients omit constraint metadata. Re-read after the
+        // failed statement so the public error code remains deterministic.
+        if (!constraintName) {
+          const conflict = await this.options.client.query<{ project_conflict: boolean }>(
+            `/* todos:classify-project-rename-conflict */ SELECT EXISTS (
+              SELECT 1 FROM ${this.tableName}
+              WHERE service = $1 AND object_type = 'projects' AND object_id <> $2
+                AND deleted_at IS NULL AND payload->>'task_list_id' = $3
+            ) AS project_conflict`,
+            [this.service, id, normalizedSlug],
+          );
+          projectConflict = Boolean(conflict.rows[0]?.project_conflict);
+        }
+        if (projectConflict) {
+          throw new ResourceConflictError("PROJECT_SLUG_CONFLICT", `Slug "${normalizedSlug}" is already used by another project`);
+        }
         throw new ResourceConflictError("TASK_LIST_SLUG_CONFLICT", `Task-list slug "${normalizedSlug}" is already used in this project`);
       }
       throw error;
@@ -1129,12 +1151,15 @@ async function getChangedSince(since: string, filters: TodosActiveWorkFilter | u
 
 async function createProject(input: CreateProjectInput, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<Project> {
   const timestamp = new Date().toISOString();
+  const derivedSlug = slugifyRaw(input.name);
+  const taskListId = input.task_list_id === undefined ? `todos-${derivedSlug}` : slugifyRaw(input.task_list_id);
+  if (!derivedSlug || !taskListId) throw new Error("Project name and task-list slug must be non-empty");
   const project: Project = {
     id: randomUUID(),
     name: input.name,
     path: input.path,
     description: input.description ?? null,
-    task_list_id: input.task_list_id ?? `todos-${slugify(input.name)}`,
+    task_list_id: taskListId,
     task_prefix: input.task_prefix ?? await generateProjectPrefix(input.name, store),
     task_counter: 0,
     created_at: timestamp,
@@ -1309,7 +1334,9 @@ async function updateTaskList(id: string, input: UpdateTaskListInput, store: Pos
     const duplicate = (await store.list<TaskList>("task_lists")).find((candidate) =>
       candidate.id !== id && candidate.project_id === list.project_id && candidate.slug === slug
     );
-    if (duplicate) throw new Error(`Task list with slug "${slug}" already exists in this scope`);
+    if (duplicate) {
+      throw new ResourceConflictError("TASK_LIST_SLUG_CONFLICT", `Task list with slug "${slug}" already exists in this scope`);
+    }
     patch.slug = slug;
   }
   return store.upsert("task_lists", {
@@ -1562,4 +1589,11 @@ function numberValue(value: unknown): number | null {
 
 function isPostgresUniqueViolation(error: unknown): boolean {
   return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "23505";
+}
+
+function postgresConstraintName(error: unknown): string {
+  if (typeof error !== "object" || error === null) return "";
+  const candidate = error as { constraint?: unknown; constraint_name?: unknown };
+  const constraint = candidate.constraint ?? candidate.constraint_name;
+  return typeof constraint === "string" ? constraint : "";
 }

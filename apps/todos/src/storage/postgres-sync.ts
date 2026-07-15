@@ -81,9 +81,6 @@ export function postgresTodosSyncSchemaSql(
     // tags/eq containment via GIN).
     `CREATE INDEX IF NOT EXISTS ${tableName}_task_status_idx ON ${tableName} ((payload->>'status')) WHERE object_type = 'tasks' AND deleted_at IS NULL`,
     `CREATE INDEX IF NOT EXISTS ${tableName}_task_project_idx ON ${tableName} ((payload->>'project_id')) WHERE object_type = 'tasks' AND deleted_at IS NULL`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS ${tableName}_task_list_scope_slug_uidx
-      ON ${tableName} (service, COALESCE(payload->>'project_id', ''), (payload->>'slug'))
-      WHERE object_type = 'task_lists' AND deleted_at IS NULL`,
     `CREATE INDEX IF NOT EXISTS ${tableName}_payload_gin ON ${tableName} USING gin (payload jsonb_path_ops)`,
     `CREATE TABLE IF NOT EXISTS ${cursorTableName} (
       service text NOT NULL,
@@ -93,6 +90,129 @@ export function postgresTodosSyncSchemaSql(
       PRIMARY KEY (service, cursor_name)
     )`,
   ];
+}
+
+export interface PostgresScopedSlugConflict {
+  service: string;
+  object_type: "projects" | "task_lists";
+  scope: string;
+  slug: string;
+  object_ids: string[];
+  duplicate_count: number;
+}
+
+export interface PostgresScopedSlugIndexStatus {
+  index_name: string;
+  is_valid: boolean;
+  is_ready: boolean;
+}
+
+export class PostgresScopedSlugMigrationConflictError extends Error {
+  constructor(public readonly conflicts: PostgresScopedSlugConflict[]) {
+    const preview = conflicts.slice(0, 5).map((conflict) =>
+      `${conflict.object_type}:${conflict.scope || "global"}:${conflict.slug} [${conflict.object_ids.join(", ")}]`
+    ).join("; ");
+    super(
+      `Scoped slug unique-index preflight found ${conflicts.length} duplicate group(s): ${preview}. ` +
+      "Resolve these records explicitly without deleting history, then rerun todos-serve migrate.",
+    );
+    this.name = "PostgresScopedSlugMigrationConflictError";
+  }
+}
+
+export class PostgresScopedSlugIndexBuildError extends Error {
+  constructor(public readonly index_name: string, cause: unknown) {
+    super(
+      `Concurrent scoped-slug index build failed for ${index_name} after a clean duplicate audit. ` +
+      "No records were rewritten; inspect pg_index for an invalid index, resolve any concurrent duplicate, and rerun todos-serve migrate.",
+      { cause },
+    );
+    this.name = "PostgresScopedSlugIndexBuildError";
+  }
+}
+
+/** Read-only duplicate audit used before the predeploy unique-index migration. */
+export function postgresTodosScopedSlugPreflightSql(
+  tableName = DEFAULT_TODOS_POSTGRES_SYNC_TABLE,
+): string {
+  assertSafeIdentifier(tableName);
+  return `/* todos:scoped-slug-duplicate-audit */ WITH candidates AS (
+    SELECT service, object_type, COALESCE(payload->>'project_id', '') AS scope,
+      payload->>'slug' AS slug, object_id
+    FROM ${tableName}
+    WHERE object_type = 'task_lists' AND deleted_at IS NULL
+    UNION ALL
+    SELECT service, object_type, '' AS scope, payload->>'task_list_id' AS slug, object_id
+    FROM ${tableName}
+    WHERE object_type = 'projects' AND deleted_at IS NULL
+  ) SELECT service, object_type, scope, slug,
+      array_agg(object_id ORDER BY object_id) AS object_ids,
+      count(*)::integer AS duplicate_count
+    FROM candidates
+    WHERE slug IS NOT NULL AND slug <> ''
+    GROUP BY service, object_type, scope, slug
+    HAVING count(*) > 1
+    ORDER BY service, object_type, scope, slug`;
+}
+
+/** Predeploy-only unique indexes. CONCURRENTLY keeps request writes available. */
+export function postgresTodosScopedSlugUniqueIndexSql(
+  tableName = DEFAULT_TODOS_POSTGRES_SYNC_TABLE,
+): string[] {
+  assertSafeIdentifier(tableName);
+  return [
+    `CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS ${tableName}_task_list_scope_slug_uidx
+      ON ${tableName} (service, COALESCE(payload->>'project_id', ''), (payload->>'slug'))
+      WHERE object_type = 'task_lists' AND deleted_at IS NULL AND COALESCE(payload->>'slug', '') <> ''`,
+    `CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS ${tableName}_project_task_list_slug_uidx
+      ON ${tableName} (service, (payload->>'task_list_id'))
+      WHERE object_type = 'projects' AND deleted_at IS NULL AND COALESCE(payload->>'task_list_id', '') <> ''`,
+  ];
+}
+
+/** Verify IF NOT EXISTS did not hide an invalid index left by an interrupted concurrent build. */
+export function postgresTodosScopedSlugIndexStatusSql(
+  tableName = DEFAULT_TODOS_POSTGRES_SYNC_TABLE,
+): string {
+  assertSafeIdentifier(tableName);
+  return `/* todos:scoped-slug-index-status */ SELECT index_class.relname AS index_name,
+      index_meta.indisvalid AS is_valid, index_meta.indisready AS is_ready
+    FROM pg_class table_class
+    JOIN pg_index index_meta ON index_meta.indrelid = table_class.oid
+    JOIN pg_class index_class ON index_class.oid = index_meta.indexrelid
+    WHERE table_class.relname = '${tableName}'
+      AND index_class.relname IN (
+        '${tableName}_task_list_scope_slug_uidx',
+        '${tableName}_project_task_list_slug_uidx'
+      )`;
+}
+
+/** Audit first, then build both invariants outside any transaction. Never rewrites rows. */
+export async function ensurePostgresScopedSlugUniqueIndexes(
+  client: TodosPostgresQueryClient,
+  tableName = DEFAULT_TODOS_POSTGRES_SYNC_TABLE,
+): Promise<void> {
+  const audit = await client.query<PostgresScopedSlugConflict>(postgresTodosScopedSlugPreflightSql(tableName));
+  if (audit.rows.length > 0) throw new PostgresScopedSlugMigrationConflictError(audit.rows);
+  for (const sql of postgresTodosScopedSlugUniqueIndexSql(tableName)) {
+    try {
+      await client.query(sql);
+    } catch (error) {
+      const indexName = sql.match(/INDEX CONCURRENTLY IF NOT EXISTS ([a-zA-Z0-9_]+)/)?.[1] ?? "unknown_index";
+      throw new PostgresScopedSlugIndexBuildError(indexName, error);
+    }
+  }
+  const expected = new Set([
+    `${tableName}_task_list_scope_slug_uidx`,
+    `${tableName}_project_task_list_slug_uidx`,
+  ]);
+  const status = await client.query<PostgresScopedSlugIndexStatus>(postgresTodosScopedSlugIndexStatusSql(tableName));
+  for (const indexName of expected) {
+    const row = status.rows.find((candidate) => candidate.index_name === indexName);
+    if (!row?.is_valid || !row.is_ready) {
+      throw new PostgresScopedSlugIndexBuildError(indexName, new Error("index is missing, invalid, or not ready"));
+    }
+  }
 }
 
 /**

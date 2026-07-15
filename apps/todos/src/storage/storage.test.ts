@@ -34,7 +34,11 @@ import {
   getStorageMode,
   loadTodosStorageConfig,
   loadStorageConfig,
+  ensurePostgresScopedSlugUniqueIndexes,
   postgresTodosCommentCursorIndexSql,
+  postgresTodosScopedSlugIndexStatusSql,
+  postgresTodosScopedSlugPreflightSql,
+  postgresTodosScopedSlugUniqueIndexSql,
   postgresTodosSyncSchemaSql,
   signAwsV4Request,
   uploadRunArtifactsToS3,
@@ -638,6 +642,69 @@ describe("storage adapter contracts", () => {
 
     await expect(adapter.taskLists.create({ name: "Duplicate", slug: "inbox", project_id: "project-1" }))
       .rejects.toMatchObject({ code: "TASK_LIST_SLUG_CONFLICT" });
+  });
+
+  test("maps task-list update preflight and project unique violations to stable conflicts", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+    const project = await adapter.projects.create({ name: "Open Emails", path: "/tmp/open-emails" });
+    const first = await adapter.taskLists.create({ name: "Inbox", slug: "inbox", project_id: project.id });
+    const second = await adapter.taskLists.create({ name: "Archive", slug: "archive", project_id: project.id });
+    await expect(adapter.taskLists.update(second.id, { slug: first.slug }))
+      .rejects.toMatchObject({ code: "TASK_LIST_SLUG_CONFLICT" });
+
+    let projectWrites = 0;
+    const concurrent = createPostgresTodosStorageAdapter({
+      client: {
+        async query<T = Record<string, unknown>>(sql: string, values?: readonly unknown[]) {
+          if (sql.includes("INSERT INTO todos_sync_records") && values?.[1] === "projects") {
+            projectWrites += 1;
+            if (projectWrites > 1) {
+              throw Object.assign(new Error("unique violation"), {
+                code: "23505",
+                constraint: "todos_sync_records_project_task_list_slug_uidx",
+              });
+            }
+          }
+          return postgres.client.query<T>(sql, values);
+        },
+      },
+    });
+    await concurrent.projects.create({ name: "Shared", path: "/tmp/shared-a" });
+    await expect(concurrent.projects.create({ name: "Shared", path: "/tmp/shared-b" }))
+      .rejects.toMatchObject({ code: "PROJECT_SLUG_CONFLICT" });
+
+    const renameRace = createPostgresTodosStorageAdapter({
+      client: {
+        async query<T = Record<string, unknown>>(sql: string) {
+          if (sql.includes("todos:rename-project-atomic")) {
+            throw Object.assign(new Error("unique violation"), {
+              code: "23505",
+              constraint: "todos_sync_records_project_task_list_slug_uidx",
+            });
+          }
+          return { rows: [] as T[] };
+        },
+      },
+    });
+    await expect(renameRace.projects.rename("project-b", { new_slug: "shared" }))
+      .rejects.toMatchObject({ code: "PROJECT_SLUG_CONFLICT" });
+
+    const metadataLessRenameRace = createPostgresTodosStorageAdapter({
+      client: {
+        async query<T = Record<string, unknown>>(sql: string) {
+          if (sql.includes("todos:rename-project-atomic")) {
+            throw Object.assign(new Error("unique violation"), { code: "23505" });
+          }
+          if (sql.includes("todos:classify-project-rename-conflict")) {
+            return { rows: [{ project_conflict: true }] as T[] };
+          }
+          return { rows: [] as T[] };
+        },
+      },
+    });
+    await expect(metadataLessRenameRace.projects.rename("project-b", { new_slug: "shared" }))
+      .rejects.toMatchObject({ code: "PROJECT_SLUG_CONFLICT" });
   });
 
   test("cloud adapter supports lock/unlock, dependencies and verifications on the shared dataset", async () => {
@@ -1268,14 +1335,91 @@ describe("storage adapter contracts", () => {
 
     expect(schema.join("\n")).toContain("CREATE TABLE IF NOT EXISTS todos_sync_records");
     expect(schema.join("\n")).toContain("payload jsonb NOT NULL");
-    expect(schema.join("\n")).toContain("task_list_scope_slug_uidx");
-    expect(schema.join("\n")).toContain("COALESCE(payload->>'project_id', '')");
+    expect(schema.join("\n")).not.toContain("task_list_scope_slug_uidx");
+    expect(schema.join("\n")).not.toContain("project_task_list_slug_uidx");
     expect(schema.join("\n")).toContain("CREATE TABLE IF NOT EXISTS todos_sync_cursors");
     expect(schema.join("\n")).not.toContain("comment_task_created_idx");
     expect(postgresTodosCommentCursorIndexSql()).toContain("CREATE INDEX CONCURRENTLY IF NOT EXISTS");
     expect(postgresTodosCommentCursorIndexSql()).toContain("comment_task_created_idx");
     expect(() => postgresTodosSyncSchemaSql("todos;drop")).toThrow("Unsafe Postgres identifier");
     expect(() => postgresTodosCommentCursorIndexSql("todos;drop")).toThrow("Unsafe Postgres identifier");
+    expect(() => postgresTodosScopedSlugIndexStatusSql("todos;drop")).toThrow("Unsafe Postgres identifier");
+  });
+
+  test("audits scoped slug duplicates before building predeploy unique indexes", async () => {
+    const preflight = postgresTodosScopedSlugPreflightSql();
+    const indexes = postgresTodosScopedSlugUniqueIndexSql();
+    const statusSql = postgresTodosScopedSlugIndexStatusSql();
+    expect(preflight).toContain("todos:scoped-slug-duplicate-audit");
+    expect(preflight).toContain("array_agg(object_id ORDER BY object_id)");
+    expect(indexes).toHaveLength(2);
+    expect(indexes.every((sql) => sql.includes("CREATE UNIQUE INDEX CONCURRENTLY"))).toBe(true);
+    expect(indexes.join("\n")).toContain("task_list_scope_slug_uidx");
+    expect(indexes.join("\n")).toContain("project_task_list_slug_uidx");
+    expect(statusSql).toContain("todos:scoped-slug-index-status");
+
+    const calls: string[] = [];
+    const conflictClient: TodosPostgresQueryClient = {
+      async query<T = Record<string, unknown>>(sql: string) {
+        calls.push(sql);
+        return { rows: [{
+          service: "todos",
+          object_type: "task_lists",
+          scope: "project-1",
+          slug: "inbox",
+          object_ids: ["list-a", "list-b"],
+          duplicate_count: 2,
+        }] as T[] };
+      },
+    };
+    try {
+      await ensurePostgresScopedSlugUniqueIndexes(conflictClient);
+      throw new Error("expected duplicate audit to fail");
+    } catch (error) {
+      expect(error).toMatchObject({
+        name: "PostgresScopedSlugMigrationConflictError",
+        conflicts: [expect.objectContaining({ slug: "inbox", object_ids: ["list-a", "list-b"] })],
+      });
+    }
+    expect(calls).toHaveLength(1);
+
+    const cleanCalls: string[] = [];
+    await ensurePostgresScopedSlugUniqueIndexes({
+      async query<T = Record<string, unknown>>(sql: string) {
+        cleanCalls.push(sql);
+        return { rows: (sql.includes("todos:scoped-slug-index-status") ? [
+          { index_name: "todos_sync_records_task_list_scope_slug_uidx", is_valid: true, is_ready: true },
+          { index_name: "todos_sync_records_project_task_list_slug_uidx", is_valid: true, is_ready: true },
+        ] : []) as T[] };
+      },
+    });
+    expect(cleanCalls).toEqual([preflight, ...indexes, statusSql]);
+
+    let migrationCall = 0;
+    await expect(ensurePostgresScopedSlugUniqueIndexes({
+      async query<T = Record<string, unknown>>() {
+        migrationCall += 1;
+        if (migrationCall === 2) throw Object.assign(new Error("concurrent duplicate"), { code: "23505" });
+        return { rows: [] as T[] };
+      },
+    })).rejects.toMatchObject({
+      name: "PostgresScopedSlugIndexBuildError",
+      index_name: "todos_sync_records_task_list_scope_slug_uidx",
+    });
+
+    await expect(ensurePostgresScopedSlugUniqueIndexes({
+      async query<T = Record<string, unknown>>(sql: string) {
+        if (!sql.includes("todos:scoped-slug-index-status")) return { rows: [] as T[] };
+        return { rows: [{
+          index_name: "todos_sync_records_task_list_scope_slug_uidx",
+          is_valid: false,
+          is_ready: false,
+        }] as T[] };
+      },
+    })).rejects.toMatchObject({
+      name: "PostgresScopedSlugIndexBuildError",
+      index_name: "todos_sync_records_task_list_scope_slug_uidx",
+    });
   });
 
   test("pushes and pulls snapshots through a caller-provided Postgres client", async () => {

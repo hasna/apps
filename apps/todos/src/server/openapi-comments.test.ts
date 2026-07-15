@@ -61,3 +61,17 @@ describe("task comments OpenAPI contract", () => {
     ]);
   });
 });
+
+describe("project mutation OpenAPI contract", () => {
+  test("keeps slug fields out of generic create/update and exposes atomic rename", () => {
+    const document = buildV1OpenApiDocument("test");
+    const createProperties = document.components.schemas.CreateProjectInput.properties;
+    const updateProperties = document.components.schemas.UpdateProjectInput.properties;
+
+    expect(Object.keys(createProperties)).toEqual(["name", "path", "description"]);
+    expect(Object.keys(updateProperties)).toEqual(["name", "path", "description"]);
+    expect(document.paths["/v1/projects"].post.responses["409"]).toBeDefined();
+    expect(document.paths["/v1/projects/{id}/rename"].post.operationId).toBe("renameProject");
+    expect(document.paths["/v1/projects/{id}/rename"].post.responses["409"]).toBeDefined();
+  });
+});

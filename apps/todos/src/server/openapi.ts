@@ -113,13 +113,12 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         },
         CreateProjectInput: {
           type: "object",
+          additionalProperties: false,
           required: ["name", "path"],
           properties: {
-            name: { type: "string" },
-            path: { type: "string" },
+            name: { type: "string", minLength: 1 },
+            path: { type: "string", minLength: 1 },
             description: { type: "string" },
-            task_list_id: { type: "string" },
-            task_prefix: { type: "string" },
           },
         },
         UpdateProjectInput: {
@@ -127,10 +126,9 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           additionalProperties: false,
           minProperties: 1,
           properties: {
-            name: { type: "string" },
-            path: { type: "string" },
+            name: { type: "string", minLength: 1 },
+            path: { type: "string", minLength: 1 },
             description: { type: "string", nullable: true },
-            task_list_id: { type: "string", nullable: true },
           },
         },
         RenameProjectInput: {
@@ -379,7 +377,10 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             required: true,
             content: { "application/json": { schema: { $ref: "#/components/schemas/CreateProjectInput" } } },
           },
-          responses: { "201": { content: { "application/json": { schema: { type: "object", properties: { project: { $ref: "#/components/schemas/Project" } } } } } } },
+          responses: {
+            "201": { content: { "application/json": { schema: { type: "object", properties: { project: { $ref: "#/components/schemas/Project" } } } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
         },
       },
       "/v1/projects/{id}": {

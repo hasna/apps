@@ -33,19 +33,32 @@ function error(status: number, message: string, extra?: Record<string, unknown>)
 }
 
 function validateProjectPatch(value: unknown):
-  | { ok: true; patch: Partial<Pick<CreateProjectInput, "name" | "path" | "description" | "task_list_id">> }
+  | { ok: true; patch: Partial<Pick<CreateProjectInput, "name" | "path" | "description">> }
   | { ok: false; message: string } {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "project patch must be an object" };
   const body = value as Record<string, unknown>;
-  const allowed = new Set(["name", "path", "description", "task_list_id"]);
+  const allowed = new Set(["name", "path", "description"]);
   const unknown = Object.keys(body).find((key) => !allowed.has(key));
   if (unknown) return { ok: false, message: `unknown project field: ${unknown}` };
   if (Object.keys(body).length === 0) return { ok: false, message: "project patch must not be empty" };
   if (body["name"] !== undefined && (typeof body["name"] !== "string" || !body["name"].trim())) return { ok: false, message: "name must be a non-empty string" };
   if (body["path"] !== undefined && (typeof body["path"] !== "string" || !body["path"].trim())) return { ok: false, message: "path must be a non-empty string" };
   if (body["description"] !== undefined && body["description"] !== null && typeof body["description"] !== "string") return { ok: false, message: "description must be a string or null" };
-  if (body["task_list_id"] !== undefined && body["task_list_id"] !== null && typeof body["task_list_id"] !== "string") return { ok: false, message: "task_list_id must be a string or null" };
   return { ok: true, patch: body as never };
+}
+
+function validateProjectCreate(value: unknown):
+  | { ok: true; input: Pick<CreateProjectInput, "name" | "path" | "description"> }
+  | { ok: false; message: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "project body must be an object" };
+  const body = value as Record<string, unknown>;
+  const allowed = new Set(["name", "path", "description"]);
+  const unknown = Object.keys(body).find((key) => !allowed.has(key));
+  if (unknown) return { ok: false, message: `unknown project field: ${unknown}` };
+  if (typeof body["name"] !== "string" || !body["name"].trim()) return { ok: false, message: "name must be a non-empty string" };
+  if (typeof body["path"] !== "string" || !body["path"].trim()) return { ok: false, message: "path must be a non-empty string" };
+  if (body["description"] !== undefined && typeof body["description"] !== "string") return { ok: false, message: "description must be a string" };
+  return { ok: true, input: body as never };
 }
 
 async function readJson<T>(req: Request): Promise<T | null> {
@@ -624,11 +637,11 @@ export async function handleV1Request(
           return json({ projects, count: projects.length });
         }
         if (method === "POST") {
-          const body = await readJson<CreateProjectInput>(req);
-          if (!body || typeof body.name !== "string" || typeof body.path !== "string") {
-            return error(400, "name and path are required");
-          }
-          const project = await store.projects.create(body, contextFromPrincipal(principal));
+          const body = await readJson<unknown>(req);
+          if (!body) return error(400, "invalid JSON body");
+          const validated = validateProjectCreate(body);
+          if (!validated.ok) return error(400, validated.message);
+          const project = await store.projects.create(validated.input, contextFromPrincipal(principal));
           return json({ project }, 201);
         }
         return error(405, `method ${method} not allowed on /v1/projects`);

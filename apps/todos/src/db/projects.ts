@@ -39,7 +39,13 @@ export function createProject(
   const d = db || getDatabase();
   const id = uuid();
   const timestamp = now();
-  const taskListId = input.task_list_id ?? `todos-${slugify(input.name)}`;
+  const derivedSlug = slugify(input.name);
+  const taskListId = input.task_list_id === undefined ? `todos-${derivedSlug}` : slugify(input.task_list_id);
+  if (!derivedSlug || !taskListId) throw new Error("Project name and task-list slug must be non-empty");
+  const slugConflict = d.query("SELECT id FROM projects WHERE task_list_id = ? LIMIT 1").get(taskListId);
+  if (slugConflict) {
+    throw new ResourceConflictError("PROJECT_SLUG_CONFLICT", `Project slug "${taskListId}" already exists`);
+  }
   const taskPrefix = input.task_prefix || generatePrefix(input.name, d);
   const machineId = currentStorageMachineId(d);
 

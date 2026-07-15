@@ -115,8 +115,14 @@ export {
   DEFAULT_TODOS_POSTGRES_SYNC_TABLE,
   PostgresTodosSyncStore,
   createPostgresTodosSyncStore,
+  ensurePostgresScopedSlugUniqueIndexes,
   postgresTodosCommentCursorIndexSql,
+  postgresTodosScopedSlugPreflightSql,
+  postgresTodosScopedSlugIndexStatusSql,
+  postgresTodosScopedSlugUniqueIndexSql,
   postgresTodosSyncSchemaSql,
+  PostgresScopedSlugIndexBuildError,
+  PostgresScopedSlugMigrationConflictError,
 } from "./postgres-sync.js";
 export {
   COMMENT_REDACTION_BACKFILL_CONFIRMATION,
@@ -132,6 +138,8 @@ export type { CreatePostgresTodosStorageAdapterOptions } from "./postgres-adapte
 export type {
   CreatePostgresTodosSyncStoreOptions,
   PostgresTodosSyncPushResult,
+  PostgresScopedSlugConflict,
+  PostgresScopedSlugIndexStatus,
   PullPostgresTodosSnapshotOptions,
   TodosPostgresQueryClient,
   TodosPostgresQueryResult,
