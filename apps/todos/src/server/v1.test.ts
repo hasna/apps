@@ -78,6 +78,48 @@ describe("/v1 task-list cloud parity", () => {
     expect(body.tasks.map((task) => task.title)).toEqual(["in scope"]);
     expect(body.tasks.every((task) => task.task_list_id === listA.id)).toBe(true);
   });
+
+  test("returns a stable 409 for duplicate task-list create and update", async () => {
+    const project = await store.projects.create({ name: "Open Emails", path: "/tmp/open-emails" });
+    const first = await store.taskLists.create({ name: "Inbox", slug: "inbox", project_id: project.id });
+    const second = await store.taskLists.create({ name: "Archive", slug: "archive", project_id: project.id });
+
+    for (const response of [
+      await request("/v1/task-lists", "POST", { name: "Duplicate", slug: "inbox", project_id: project.id }),
+      await request(`/v1/task-lists/${second.id}`, "PATCH", { slug: first.slug }),
+    ]) {
+      expect(response?.status).toBe(409);
+      expect(await response!.json()).toMatchObject({ code: "TASK_LIST_SLUG_CONFLICT", conflict: true });
+    }
+  });
+});
+
+describe("/v1 project mutation", () => {
+  test("renames a project and its canonical task list atomically", async () => {
+    const project = await store.projects.create({ name: "Open Emails", path: "/tmp/open-emails", task_list_id: "emails" });
+    const list = await store.taskLists.create({ name: "Open Emails", slug: "emails", project_id: project.id });
+
+    const response = await request(`/v1/projects/${project.id}/rename`, "POST", {
+      new_slug: "emails-next",
+      name: "Emails Next",
+    });
+    expect(response?.status).toBe(200);
+    expect(await response!.json()).toMatchObject({
+      project: { id: project.id, name: "Emails Next", task_list_id: "emails-next" },
+      task_lists_updated: 1,
+    });
+    expect(await store.taskLists.get(list.id)).toMatchObject({ slug: "emails-next", name: "Emails Next" });
+  });
+
+  test("rejects unknown and malformed project patch fields", async () => {
+    const project = await store.projects.create({ name: "Open Emails", path: "/tmp/open-emails" });
+    for (const body of [{ task_prefix: "BAD" }, { name: "" }, { description: 42 }, {}]) {
+      const response = await request(`/v1/projects/${project.id}`, "PATCH", body);
+      expect(response?.status).toBe(400);
+    }
+    expect((await request(`/v1/projects/${project.id}/rename`, "POST", { new_slug: "next", extra: true }))?.status).toBe(400);
+    expect((await request("/v1/projects/missing", "PATCH", { name: "Missing" }))?.status).toBe(404);
+  });
 });
 
 describe("/v1 task hierarchy and lock authorization", () => {

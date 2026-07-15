@@ -9,7 +9,9 @@ import {
   updateProject,
   deleteProject,
   ensureProject,
+  renameProject,
 } from "./projects.js";
+import { createTaskList } from "./task-lists.js";
 import { ProjectNotFoundError } from "../types/index.js";
 
 let db: Database;
@@ -99,6 +101,22 @@ describe("updateProject", () => {
     expect(() => updateProject("non-existent", { name: "Test" }, db)).toThrow(
       ProjectNotFoundError,
     );
+  });
+});
+
+describe("renameProject", () => {
+  it("rolls back the project when the task-list cascade fails", () => {
+    const project = createProject({ name: "Emails", path: "/tmp/emails", task_list_id: "emails" }, db);
+    createTaskList({ name: "Emails", slug: "emails", project_id: project.id }, db);
+    db.run(`CREATE TRIGGER reject_task_list_rename BEFORE UPDATE OF slug ON task_lists
+      BEGIN SELECT RAISE(ABORT, 'forced cascade failure'); END`);
+
+    expect(() => renameProject(project.id, { new_slug: "emails-next", name: "Emails Next" }, db)).toThrow("forced cascade failure");
+    expect(getProject(project.id, db)).toMatchObject({ name: "Emails", task_list_id: "emails" });
+    expect(db.query("SELECT slug, name FROM task_lists WHERE project_id = ?").get(project.id)).toEqual({
+      slug: "emails",
+      name: "Emails",
+    });
   });
 });
 

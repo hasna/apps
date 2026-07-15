@@ -900,68 +900,20 @@ export async function cloudUpdateTaskList(
   return raw as TaskList;
 }
 
-/**
- * Rename a cloud project and cascade its canonical task-list slug. The project
- * and matching task-list rows are resolved before any mutation. If the final
- * project update fails, previously changed task lists are restored before the
- * original error is rethrown. A rollback failure is reported explicitly.
- */
+/** Rename a cloud project through the server's atomic cascade operation. */
 export async function cloudRenameProject(
   client: HasnaStorageClient,
   ref: string,
   newSlug: string,
   name?: string,
 ): Promise<{ project: Project; task_lists_updated: number }> {
-  const projects = await cloudListProjects(client);
-  const id = resolveCloudProjectRef(projects, ref);
-  const project = projects.find((candidate) => candidate.id === id)!;
+  const id = await cloudResolveProjectRef(client, ref);
   const normalizedSlug = cloudProjectSlug(newSlug);
   if (!normalizedSlug) throw new Error("Invalid slug — must be non-empty kebab-case");
-  if (projects.some((candidate) => candidate.id !== id && candidate.task_list_id === normalizedSlug)) {
-    throw new Error(`Slug "${normalizedSlug}" is already used by another project`);
-  }
-
-  const lists = await cloudListTaskLists(client, id);
-  const matching = project.task_list_id
-    ? lists.filter((list) => list.slug === project.task_list_id)
-    : [];
-  const conflictingList = lists.find((list) =>
-    list.slug === normalizedSlug && !matching.some((candidate) => candidate.id === list.id)
+  return client.transport.post<{ project: Project; task_lists_updated: number }>(
+    `/projects/${encodeURIComponent(id)}/rename`,
+    { new_slug: normalizedSlug, ...(name !== undefined ? { name } : {}) },
   );
-  if (conflictingList) {
-    throw new Error(`Task-list slug "${normalizedSlug}" is already used in project "${project.name}"`);
-  }
-  const changed: TaskList[] = [];
-  try {
-    for (const list of matching) {
-      await cloudUpdateTaskList(client, list.id, {
-        slug: normalizedSlug,
-        ...(name !== undefined ? { name } : {}),
-      });
-      changed.push(list);
-    }
-    const updatedProject = await cloudUpdateProject(client, id, {
-      task_list_id: normalizedSlug,
-      ...(name !== undefined ? { name } : {}),
-    });
-    return { project: updatedProject, task_lists_updated: changed.length };
-  } catch (error) {
-    const rollbackErrors: unknown[] = [];
-    for (const list of changed.reverse()) {
-      try {
-        await cloudUpdateTaskList(client, list.id, { slug: list.slug, name: list.name });
-      } catch (rollbackError) {
-        rollbackErrors.push(rollbackError);
-      }
-    }
-    if (rollbackErrors.length > 0) {
-      throw new AggregateError(
-        [error, ...rollbackErrors],
-        `Project rename failed and ${rollbackErrors.length} task-list rollback operation(s) also failed`,
-      );
-    }
-    throw error;
-  }
 }
 
 /** Delete a task list in the cloud (`DELETE /v1/task-lists/:id`). */

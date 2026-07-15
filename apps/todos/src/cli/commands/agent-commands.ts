@@ -16,6 +16,7 @@ import {
   cloudListTasks,
   cloudRegisterAgent,
   cloudReleaseAgent,
+  cloudResolveProjectRef,
   cloudResolveTaskListRef,
 } from "../cloud-router.js";
 
@@ -386,7 +387,9 @@ export function registerAgentCommands(program: Command) {
       try {
         const globalOpts = program.opts();
         const cloud = getTodosCloudClient();
-        const projectId = cloud ? globalOpts.project : autoProject(globalOpts);
+        const projectId = cloud
+          ? (globalOpts.project ? await cloudResolveProjectRef(cloud, globalOpts.project) : undefined)
+          : autoProject(globalOpts);
 
         if (opts.add) {
           const input = { name: opts.add, slug: opts.slug, description: opts.description, project_id: projectId };

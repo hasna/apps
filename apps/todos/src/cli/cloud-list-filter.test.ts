@@ -49,6 +49,66 @@ function project(id = PROJECT_ID, name = "Open Emails", path = PROJECT_PATH) {
 }
 
 describe("cloud CLI task-list filtering", () => {
+  test.each([PROJECT_SLUG, "Open Emails", PROJECT_PATH])(
+    "resolves project ref %s before every cloud lists operation",
+    async (projectRef) => {
+      for (const operation of ["list", "add", "delete"] as const) {
+        const requests: Array<{ method: string; path: string; query: string; body?: unknown }> = [];
+        const server = Bun.serve({
+          hostname: "127.0.0.1",
+          port: 0,
+          async fetch(request) {
+            const url = new URL(request.url);
+            const body = request.method === "POST" ? await request.json() : undefined;
+            requests.push({ method: request.method, path: url.pathname, query: url.searchParams.toString(), body });
+            if (url.pathname === "/v1/projects") return Response.json({ projects: [project()] });
+            if (url.pathname === "/v1/task-lists" && request.method === "GET") {
+              return Response.json({ task_lists: [taskList(LIST_ID, "release")] });
+            }
+            if (url.pathname === "/v1/task-lists" && request.method === "POST") {
+              return Response.json({ task_list: { ...taskList(LIST_ID, "release"), ...(body as object) } }, { status: 201 });
+            }
+            if (url.pathname === `/v1/task-lists/${LIST_ID}` && request.method === "DELETE") {
+              return Response.json({ deleted: true });
+            }
+            return Response.json({ error: "not found" }, { status: 404 });
+          },
+        });
+        const root = mkdtempSync(join(tmpdir(), "todos-cloud-lists-project-ref-"));
+        tempRoots.push(root);
+        const operationArgs = operation === "add"
+          ? ["--add", "Release", "--slug", "release"]
+          : operation === "delete"
+            ? ["--delete", "release"]
+            : [];
+        try {
+          const result = await runCli(
+            ["--project", projectRef, "--json", "lists", ...operationArgs],
+            root,
+            `http://127.0.0.1:${server.port}`,
+          );
+          expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+          expect(requests[0]).toMatchObject({ method: "GET", path: "/v1/projects" });
+          if (operation === "add") {
+            expect(requests[1]).toMatchObject({
+              method: "POST",
+              path: "/v1/task-lists",
+              body: expect.objectContaining({ project_id: PROJECT_ID }),
+            });
+          } else {
+            expect(requests[1]).toMatchObject({
+              method: "GET",
+              path: "/v1/task-lists",
+              query: `project_id=${PROJECT_ID}`,
+            });
+          }
+        } finally {
+          server.stop(true);
+        }
+      }
+    },
+  );
+
   test.each([
     ["global project option", ["--project", PROJECT_SLUG, "--json", "add", "Cloud task", "--list", "release"]],
     ["add project option", ["--json", "add", "Cloud task", "--project", PROJECT_SLUG, "--list", "release"]],
@@ -93,24 +153,21 @@ describe("cloud CLI task-list filtering", () => {
     }
   });
 
-  test("routes project-rename through cloud and cascades the matching task-list slug", async () => {
+  test("routes project-rename through one server-side atomic mutation", async () => {
     const requests: Array<{ method: string; path: string; body?: unknown }> = [];
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
-        const body = request.method === "PATCH" ? await request.json() : undefined;
+        const body = request.method === "POST" ? await request.json() : undefined;
         requests.push({ method: request.method, path: url.pathname, body });
         if (url.pathname === "/v1/projects") return Response.json({ projects: [project()] });
-        if (url.pathname === "/v1/task-lists") {
-          return Response.json({ task_lists: [taskList(LIST_ID, "emails-canonical")] });
-        }
-        if (url.pathname === `/v1/task-lists/${LIST_ID}` && request.method === "PATCH") {
-          return Response.json({ task_list: { ...taskList(LIST_ID, "emails-next"), ...(body as object) } });
-        }
-        if (url.pathname === `/v1/projects/${PROJECT_ID}` && request.method === "PATCH") {
-          return Response.json({ project: { ...project(), ...(body as object) } });
+        if (url.pathname === `/v1/projects/${PROJECT_ID}/rename` && request.method === "POST") {
+          return Response.json({
+            project: { ...project(), name: "Emails Next", task_list_id: "emails-next" },
+            task_lists_updated: 1,
+          });
         }
         return Response.json({ error: "not found" }, { status: 404 });
       },
@@ -130,16 +187,14 @@ describe("cloud CLI task-list filtering", () => {
       });
       expect(requests).toEqual([
         { method: "GET", path: "/v1/projects", body: undefined },
-        { method: "GET", path: "/v1/task-lists", body: undefined },
-        { method: "PATCH", path: `/v1/task-lists/${LIST_ID}`, body: { slug: "emails-next", name: "Emails Next" } },
-        { method: "PATCH", path: `/v1/projects/${PROJECT_ID}`, body: { task_list_id: "emails-next", name: "Emails Next" } },
+        { method: "POST", path: `/v1/projects/${PROJECT_ID}/rename`, body: { new_slug: "emails-next", name: "Emails Next" } },
       ]);
     } finally {
       server.stop(true);
     }
   });
 
-  test("project-rename rejects a task-list slug conflict before any mutation", async () => {
+  test("project-rename preserves the server's stable conflict response", async () => {
     const methods: string[] = [];
     const server = Bun.serve({
       hostname: "127.0.0.1",
@@ -148,11 +203,8 @@ describe("cloud CLI task-list filtering", () => {
         const url = new URL(request.url);
         methods.push(`${request.method} ${url.pathname}`);
         if (url.pathname === "/v1/projects") return Response.json({ projects: [project()] });
-        if (url.pathname === "/v1/task-lists") {
-          return Response.json({ task_lists: [
-            taskList(LIST_ID, "emails-canonical"),
-            taskList("44444444-4444-4444-8444-444444444444", "emails-next"),
-          ] });
+        if (url.pathname === `/v1/projects/${PROJECT_ID}/rename` && request.method === "POST") {
+          return Response.json({ error: "Task-list slug conflict", code: "TASK_LIST_SLUG_CONFLICT", conflict: true }, { status: 409 });
         }
         return Response.json({ error: "mutation must not run" }, { status: 500 });
       },
@@ -166,33 +218,24 @@ describe("cloud CLI task-list filtering", () => {
         `http://127.0.0.1:${server.port}`,
       );
       expect(result.exitCode).not.toBe(0);
-      expect(result.stderr).toContain("already used");
-      expect(methods).toEqual(["GET /v1/projects", "GET /v1/task-lists"]);
+      expect(result.stderr).toContain("-> 409");
+      expect(methods).toEqual(["GET /v1/projects", `POST /v1/projects/${PROJECT_ID}/rename`]);
     } finally {
       server.stop(true);
     }
   });
 
-  test("project-rename reports an incomplete rollback", async () => {
-    let listPatchCount = 0;
+  test("project-rename performs no client-side rollback requests after response loss", async () => {
+    const methods: string[] = [];
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
-      async fetch(request) {
+      fetch(request) {
         const url = new URL(request.url);
+        methods.push(`${request.method} ${url.pathname}`);
         if (url.pathname === "/v1/projects") return Response.json({ projects: [project()] });
-        if (url.pathname === "/v1/task-lists") {
-          return Response.json({ task_lists: [taskList(LIST_ID, "emails-canonical")] });
-        }
-        if (url.pathname === `/v1/task-lists/${LIST_ID}` && request.method === "PATCH") {
-          listPatchCount++;
-          if (listPatchCount === 1) {
-            return Response.json({ task_list: taskList(LIST_ID, "emails-next") });
-          }
-          return Response.json({ error: "rollback unavailable" }, { status: 503 });
-        }
-        if (url.pathname === `/v1/projects/${PROJECT_ID}` && request.method === "PATCH") {
-          return Response.json({ error: "project update unavailable" }, { status: 503 });
+        if (url.pathname === `/v1/projects/${PROJECT_ID}/rename` && request.method === "POST") {
+          return Response.json({ error: "response unavailable" }, { status: 503 });
         }
         return Response.json({ error: "not found" }, { status: 404 });
       },
@@ -206,8 +249,8 @@ describe("cloud CLI task-list filtering", () => {
         `http://127.0.0.1:${server.port}`,
       );
       expect(result.exitCode).not.toBe(0);
-      expect(result.stderr).toContain("rollback operation");
-      expect(listPatchCount).toBe(2);
+      expect(result.stderr).toContain("-> 503");
+      expect(methods).toEqual(["GET /v1/projects", `POST /v1/projects/${PROJECT_ID}/rename`]);
     } finally {
       server.stop(true);
     }

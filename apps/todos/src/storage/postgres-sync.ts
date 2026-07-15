@@ -81,6 +81,9 @@ export function postgresTodosSyncSchemaSql(
     // tags/eq containment via GIN).
     `CREATE INDEX IF NOT EXISTS ${tableName}_task_status_idx ON ${tableName} ((payload->>'status')) WHERE object_type = 'tasks' AND deleted_at IS NULL`,
     `CREATE INDEX IF NOT EXISTS ${tableName}_task_project_idx ON ${tableName} ((payload->>'project_id')) WHERE object_type = 'tasks' AND deleted_at IS NULL`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS ${tableName}_task_list_scope_slug_uidx
+      ON ${tableName} (service, COALESCE(payload->>'project_id', ''), (payload->>'slug'))
+      WHERE object_type = 'task_lists' AND deleted_at IS NULL`,
     `CREATE INDEX IF NOT EXISTS ${tableName}_payload_gin ON ${tableName} USING gin (payload jsonb_path_ops)`,
     `CREATE TABLE IF NOT EXISTS ${cursorTableName} (
       service text NOT NULL,

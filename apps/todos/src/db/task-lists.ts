@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import type { CreateTaskListInput, TaskList, TaskListRow, UpdateTaskListInput } from "../types/index.js";
-import { TaskListNotFoundError } from "../types/index.js";
+import { ResourceConflictError, TaskListNotFoundError } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
 import { slugify } from "./projects.js";
 import { currentStorageMachineId, recordStorageTombstone } from "./storage-tombstones.js";
@@ -19,15 +19,11 @@ export function createTaskList(input: CreateTaskListInput, db?: Database): TaskL
   const slug = input.slug || slugify(input.name);
   const machineId = currentStorageMachineId(d);
 
-  // For standalone task lists (no project), enforce slug uniqueness manually
-  // SQLite UNIQUE(project_id, slug) treats NULL project_ids as distinct
-  if (!input.project_id) {
-    const existing = d.query(
-      "SELECT id FROM task_lists WHERE project_id IS NULL AND slug = ?",
-    ).get(slug) as { id: string } | null;
-    if (existing) {
-      throw new Error(`Standalone task list with slug "${slug}" already exists`);
-    }
+  const existing = input.project_id
+    ? d.query("SELECT id FROM task_lists WHERE project_id = ? AND slug = ?").get(input.project_id, slug)
+    : d.query("SELECT id FROM task_lists WHERE project_id IS NULL AND slug = ?").get(slug);
+  if (existing) {
+    throw new ResourceConflictError("TASK_LIST_SLUG_CONFLICT", `Task list with slug "${slug}" already exists in this scope`);
   }
 
   d.run(
@@ -75,11 +71,11 @@ export function updateTaskList(id: string, input: UpdateTaskListInput, db?: Data
   if (input.slug !== undefined) {
     const slug = slugify(input.slug);
     if (!slug) throw new Error("Invalid task-list slug — must be non-empty kebab-case");
-    if (!existing.project_id) {
-      const duplicate = d.query(
-        "SELECT id FROM task_lists WHERE project_id IS NULL AND slug = ? AND id != ?",
-      ).get(slug, id) as { id: string } | null;
-      if (duplicate) throw new Error(`Standalone task list with slug "${slug}" already exists`);
+    const duplicate = existing.project_id
+      ? d.query("SELECT id FROM task_lists WHERE project_id = ? AND slug = ? AND id != ?").get(existing.project_id, slug, id)
+      : d.query("SELECT id FROM task_lists WHERE project_id IS NULL AND slug = ? AND id != ?").get(slug, id);
+    if (duplicate) {
+      throw new ResourceConflictError("TASK_LIST_SLUG_CONFLICT", `Task list with slug "${slug}" already exists in this scope`);
     }
     sets.push("slug = ?");
     params.push(slug);

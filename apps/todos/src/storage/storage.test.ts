@@ -602,6 +602,44 @@ describe("storage adapter contracts", () => {
     expect(postgres.calls.some((call) => call.values?.includes("spark01"))).toBe(true);
   });
 
+  test("renames a Postgres project and canonical list with one atomic idempotent statement", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client, sourceMachineId: "spark01" });
+    const project = await adapter.projects.create({ name: "Open Emails", path: "/tmp/open-emails", task_list_id: "emails" });
+    const taskList = await adapter.taskLists.create({ name: "Open Emails", slug: "emails", project_id: project.id });
+
+    const first = await adapter.projects.rename(project.id, { new_slug: "emails-next", name: "Emails Next" });
+    const retry = await adapter.projects.rename(project.id, { new_slug: "emails-next", name: "Emails Next" });
+
+    expect(first).toMatchObject({ project: { name: "Emails Next", task_list_id: "emails-next" }, task_lists_updated: 1 });
+    expect(retry.project).toMatchObject({ name: "Emails Next", task_list_id: "emails-next" });
+    expect(await adapter.taskLists.get(taskList.id)).toMatchObject({ name: "Emails Next", slug: "emails-next" });
+    expect(postgres.calls.filter((call) => call.sql.includes("todos:rename-project-atomic"))).toHaveLength(2);
+  });
+
+  test("maps the Postgres concurrent task-list unique violation to a stable conflict", async () => {
+    const postgres = createMemoryPostgresClient();
+    let inserted = false;
+    const adapter = createPostgresTodosStorageAdapter({
+      client: {
+        async query<T = Record<string, unknown>>(sql: string, values?: readonly unknown[]) {
+          if (sql.includes("INSERT INTO todos_sync_records") && values?.[1] === "task_lists") {
+            if (inserted) {
+              const conflict = Object.assign(new Error("unique violation"), { code: "23505" });
+              throw conflict;
+            }
+            inserted = true;
+          }
+          return postgres.client.query<T>(sql, values);
+        },
+      },
+    });
+    await adapter.taskLists.create({ name: "Inbox", slug: "inbox", project_id: "project-1" });
+
+    await expect(adapter.taskLists.create({ name: "Duplicate", slug: "inbox", project_id: "project-1" }))
+      .rejects.toMatchObject({ code: "TASK_LIST_SLUG_CONFLICT" });
+  });
+
   test("cloud adapter supports lock/unlock, dependencies and verifications on the shared dataset", async () => {
     const postgres = createMemoryPostgresClient();
     const adapter = createPostgresTodosStorageAdapter({ client: postgres.client, sourceMachineId: "spark01" });
@@ -1230,6 +1268,8 @@ describe("storage adapter contracts", () => {
 
     expect(schema.join("\n")).toContain("CREATE TABLE IF NOT EXISTS todos_sync_records");
     expect(schema.join("\n")).toContain("payload jsonb NOT NULL");
+    expect(schema.join("\n")).toContain("task_list_scope_slug_uidx");
+    expect(schema.join("\n")).toContain("COALESCE(payload->>'project_id', '')");
     expect(schema.join("\n")).toContain("CREATE TABLE IF NOT EXISTS todos_sync_cursors");
     expect(schema.join("\n")).not.toContain("comment_task_created_idx");
     expect(postgresTodosCommentCursorIndexSql()).toContain("CREATE INDEX CONCURRENTLY IF NOT EXISTS");
@@ -1680,6 +1720,45 @@ function createMemoryPostgresClient(): {
           })
           .slice(0, limit);
         return { rows: selected.map((row) => ({ payload: row.payload })) as T[] };
+      }
+
+      if (sql.includes("todos:rename-project-atomic")) {
+        const [service, projectId, newSlug, name, updatedAt] = values;
+        const projectRow = rows.get(recordKey(service, "projects", projectId));
+        if (!projectRow || projectRow.deletedAt) {
+          return { rows: [{ found: false, project_conflict: false, task_list_conflict: false, project: null, task_lists_updated: 0 }] as T[] };
+        }
+        const project = projectRow.payload as Record<string, unknown>;
+        const oldSlug = project["task_list_id"];
+        const projectConflict = [...rows.values()].some((row) =>
+          row.service === service && row.objectType === "projects" && row.objectId !== projectId && !row.deletedAt &&
+          (row.payload as Record<string, unknown>)["task_list_id"] === newSlug
+        );
+        const listConflict = [...rows.values()].some((row) =>
+          row.service === service && row.objectType === "task_lists" && !row.deletedAt &&
+          (row.payload as Record<string, unknown>)["project_id"] === projectId &&
+          (row.payload as Record<string, unknown>)["slug"] === newSlug && newSlug !== oldSlug
+        );
+        if (projectConflict || listConflict) {
+          return { rows: [{ found: true, project_conflict: projectConflict, task_list_conflict: listConflict, project: null, task_lists_updated: 0 }] as T[] };
+        }
+        let updated = 0;
+        for (const row of rows.values()) {
+          const payload = row.payload as Record<string, unknown>;
+          if (row.service === service && row.objectType === "task_lists" && !row.deletedAt &&
+              payload["project_id"] === projectId && payload["slug"] === oldSlug) {
+            payload["slug"] = newSlug;
+            if (name !== null) payload["name"] = name;
+            payload["updated_at"] = updatedAt;
+            row.updatedAt = String(updatedAt);
+            updated += 1;
+          }
+        }
+        project["task_list_id"] = newSlug;
+        if (name !== null) project["name"] = name;
+        project["updated_at"] = updatedAt;
+        projectRow.updatedAt = String(updatedAt);
+        return { rows: [{ found: true, project_conflict: false, task_list_conflict: false, project, task_lists_updated: updated }] as T[] };
       }
 
       if (sql.includes("INSERT INTO todos_sync_records")) {

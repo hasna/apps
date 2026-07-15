@@ -79,6 +79,16 @@ export interface CreateProjectInput {
   task_prefix?: string;
 }
 
+export interface RenameProjectInput {
+  new_slug: string;
+  name?: string;
+}
+
+export interface RenameProjectResult {
+  project: Project;
+  task_lists_updated: number;
+}
+
 // Org
 export interface Org {
   id: string;
@@ -1009,6 +1019,16 @@ export class ProjectNotFoundError extends Error {
   constructor(public projectId: string) {
     super(`Project not found: ${projectId}`);
     this.name = "ProjectNotFoundError";
+  }
+}
+
+export class ResourceConflictError extends Error {
+  constructor(
+    public readonly code: "PROJECT_SLUG_CONFLICT" | "TASK_LIST_SLUG_CONFLICT",
+    message: string,
+  ) {
+    super(message);
+    this.name = "ResourceConflictError";
   }
 }
 

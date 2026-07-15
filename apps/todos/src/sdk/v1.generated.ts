@@ -18,7 +18,11 @@ export interface UpdateTaskInput { "title"?: string; "description"?: string; "st
 
 export interface CreateProjectInput { "name": string; "path": string; "description"?: string; "task_list_id"?: string; "task_prefix"?: string }
 
-export interface UpdateProjectInput { "name"?: string; "path"?: string; "description"?: string; "task_list_id"?: string; "task_prefix"?: string }
+export interface UpdateProjectInput { "name"?: string; "path"?: string; "description"?: string | null; "task_list_id"?: string | null }
+
+export interface RenameProjectInput { "new_slug": string; "name"?: string }
+
+export interface ErrorResponse { "error": string; "code"?: string; "conflict"?: boolean }
 
 export interface CreateTaskListInput { "name": string; "slug"?: string; "project_id"?: string; "description"?: string; "metadata"?: Record<string, unknown> }
 
@@ -129,6 +133,15 @@ export class TodosV1Client {
     /** Update a project */
     async updateProject(id: string, body: UpdateProjectInput, init?: RequestInit): Promise<{ "project"?: Project }> {
       return this.request("PATCH", `/v1/projects/${encodeURIComponent(String(id))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Atomically rename a project and its canonical task list */
+    async renameProject(id: string, body: RenameProjectInput, init?: RequestInit): Promise<{ "project"?: Project; "task_lists_updated"?: number }> {
+      return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/rename`, {
         body,
         query: undefined,
         init,

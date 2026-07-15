@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { LockError } from "../types/index.js";
+import { LockError, ProjectNotFoundError, ResourceConflictError } from "../types/index.js";
 import type {
   Agent,
   CreateCommentInput,
@@ -145,6 +145,7 @@ export function createPostgresTodosStorageAdapter(
       getByPath: async (path) => (await store.list<Project>("projects")).find((project) => project.path === path) ?? null,
       list: async () => (await store.list<Project>("projects")).sort((a, b) => a.name.localeCompare(b.name)),
       update: (id, input) => updateProject(id, input, store),
+      rename: (id, input, context) => store.renameProject(id, input.new_slug, input.name, context),
       delete: (id, context) => store.delete("projects", id, context),
     },
     plans: {
@@ -437,7 +438,9 @@ class PostgresJsonRecordStore {
     // stale-clock write can no longer silently overwrite a newer version.
     // RETURNING lets us detect when the guard rejected the write so we can
     // surface the record that actually won instead of a phantom success.
-    const result = await this.options.client.query<{ object_id: string }>(
+    let result;
+    try {
+      result = await this.options.client.query<{ object_id: string }>(
       `INSERT INTO ${this.tableName} (
         service, object_type, object_id, payload, updated_at,
         deleted_at, source_machine_id, version
@@ -467,7 +470,16 @@ class PostgresJsonRecordStore {
         context.requestId ?? this.sourceMachineId ?? null,
         numberValue(value.version),
       ],
-    );
+      );
+    } catch (error) {
+      if (type === "task_lists" && isPostgresUniqueViolation(error)) {
+        throw new ResourceConflictError(
+          "TASK_LIST_SLUG_CONFLICT",
+          `Task list with slug "${String((value as { slug?: unknown }).slug ?? "")}" already exists in this scope`,
+        );
+      }
+      throw error;
+    }
     if (result.rows.length === 0) {
       // The write was rejected as stale by the conflict guard. Return the row
       // that actually won so the caller isn't misled into thinking it persisted.
@@ -475,6 +487,91 @@ class PostgresJsonRecordStore {
       if (current) return current;
     }
     return value;
+  }
+
+  async renameProject(
+    id: string,
+    newSlug: string,
+    name?: string,
+    context: TodosStorageContext = {},
+  ): Promise<{ project: Project; task_lists_updated: number }> {
+    await this.ensureSchema();
+    const normalizedSlug = slugifyRaw(newSlug);
+    if (!normalizedSlug) throw new Error("Invalid slug — must be non-empty kebab-case");
+    const timestamp = new Date().toISOString();
+    try {
+      const result = await this.options.client.query<{
+        found: boolean;
+        project_conflict: boolean;
+        task_list_conflict: boolean;
+        project: unknown;
+        task_lists_updated: number | string;
+      }>(
+        `/* todos:rename-project-atomic */ WITH slug_lock AS MATERIALIZED (
+          SELECT pg_advisory_xact_lock(hashtextextended($1 || ':project-slug:' || $3, 0))
+        ), target AS (
+          SELECT payload, payload->>'task_list_id' AS old_slug
+          FROM ${this.tableName}
+          WHERE service = $1 AND object_type = 'projects' AND object_id = $2 AND deleted_at IS NULL
+          FOR UPDATE
+        ), project_conflict AS (
+          SELECT 1 FROM ${this.tableName}, slug_lock
+          WHERE service = $1 AND object_type = 'projects' AND object_id <> $2
+            AND deleted_at IS NULL AND payload->>'task_list_id' = $3 LIMIT 1
+        ), task_list_conflict AS (
+          SELECT 1 FROM ${this.tableName} r, target
+          WHERE r.service = $1 AND r.object_type = 'task_lists' AND r.deleted_at IS NULL
+            AND r.payload->>'project_id' = $2 AND r.payload->>'slug' = $3
+            AND r.payload->>'slug' IS DISTINCT FROM target.old_slug LIMIT 1
+        ), updated_lists AS (
+          UPDATE ${this.tableName} r SET
+            payload = r.payload || jsonb_build_object('slug', $3::text, 'updated_at', $5::text)
+              || CASE WHEN $4::text IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('name', $4::text) END,
+            updated_at = $5::timestamptz, version = COALESCE(r.version, 0) + 1,
+            source_machine_id = COALESCE($6, r.source_machine_id)
+          FROM target
+          WHERE r.service = $1 AND r.object_type = 'task_lists' AND r.deleted_at IS NULL
+            AND r.payload->>'project_id' = $2 AND r.payload->>'slug' = target.old_slug
+            AND NOT EXISTS (SELECT 1 FROM project_conflict)
+            AND NOT EXISTS (SELECT 1 FROM task_list_conflict)
+          RETURNING 1
+        ), updated_project AS (
+          UPDATE ${this.tableName} r SET
+            payload = r.payload || jsonb_build_object('task_list_id', $3::text, 'updated_at', $5::text)
+              || CASE WHEN $4::text IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('name', $4::text) END,
+            updated_at = $5::timestamptz, version = COALESCE(r.version, 0) + 1,
+            source_machine_id = COALESCE($6, r.source_machine_id)
+          FROM target
+          WHERE r.service = $1 AND r.object_type = 'projects' AND r.object_id = $2 AND r.deleted_at IS NULL
+            AND NOT EXISTS (SELECT 1 FROM project_conflict)
+            AND NOT EXISTS (SELECT 1 FROM task_list_conflict)
+          RETURNING r.payload
+        ) SELECT
+          EXISTS (SELECT 1 FROM target) AS found,
+          EXISTS (SELECT 1 FROM project_conflict) AS project_conflict,
+          EXISTS (SELECT 1 FROM task_list_conflict) AS task_list_conflict,
+          (SELECT payload FROM updated_project) AS project,
+          (SELECT count(*) FROM updated_lists) AS task_lists_updated`,
+        [this.service, id, normalizedSlug, name ?? null, timestamp, this.machineId(context)],
+      );
+      const row = result.rows[0];
+      if (!row?.found) throw new ProjectNotFoundError(id);
+      if (row.project_conflict) {
+        throw new ResourceConflictError("PROJECT_SLUG_CONFLICT", `Slug "${normalizedSlug}" is already used by another project`);
+      }
+      if (row.task_list_conflict) {
+        throw new ResourceConflictError("TASK_LIST_SLUG_CONFLICT", `Task-list slug "${normalizedSlug}" is already used in this project`);
+      }
+      return {
+        project: payloadRecord<Project>(row.project),
+        task_lists_updated: Number(row.task_lists_updated),
+      };
+    } catch (error) {
+      if (isPostgresUniqueViolation(error)) {
+        throw new ResourceConflictError("TASK_LIST_SLUG_CONFLICT", `Task-list slug "${normalizedSlug}" is already used in this project`);
+      }
+      throw error;
+    }
   }
 
   async incrementProjectTaskCounter(
@@ -1187,10 +1284,12 @@ async function releaseAgent(
 
 async function createTaskList(input: CreateTaskListInput, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<TaskList> {
   const timestamp = new Date().toISOString();
+  const slug = input.slug === undefined ? slugify(input.name) : slugifyRaw(input.slug);
+  if (!slug) throw new Error("Invalid task-list slug — must be non-empty kebab-case");
   return store.upsert("task_lists", {
     id: randomUUID(),
     project_id: input.project_id ?? context?.projectId ?? null,
-    slug: input.slug ?? slugify(input.name),
+    slug,
     name: input.name,
     description: input.description ?? null,
     metadata: input.metadata ?? {},
@@ -1205,7 +1304,7 @@ async function updateTaskList(id: string, input: UpdateTaskListInput, store: Pos
   const list = await requireRecord<TaskList>("task_lists", id, store);
   const patch = definedPatch(input);
   if (input.slug !== undefined) {
-    const slug = slugify(input.slug);
+    const slug = slugifyRaw(input.slug);
     if (!slug) throw new Error("Invalid task-list slug — must be non-empty kebab-case");
     const duplicate = (await store.list<TaskList>("task_lists")).find((candidate) =>
       candidate.id !== id && candidate.project_id === list.project_id && candidate.slug === slug
@@ -1459,4 +1558,8 @@ function compareClock(left: string, right: string): number {
 
 function numberValue(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
+}
+
+function isPostgresUniqueViolation(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "23505";
 }

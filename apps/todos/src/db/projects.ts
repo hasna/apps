@@ -1,6 +1,6 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import type { CreateProjectInput, CreateProjectSourceInput, Project, ProjectSource, ProjectSourceRow } from "../types/index.js";
-import { ProjectNotFoundError } from "../types/index.js";
+import { ProjectNotFoundError, ResourceConflictError } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
 import { getMachineId } from "./machines.js";
 import { currentStorageMachineId, recordStorageTombstone } from "./storage-tombstones.js";
@@ -127,43 +127,52 @@ export function renameProject(
   db?: Database,
 ): { project: Project; task_lists_updated: number } {
   const d = db || getDatabase();
-  const project = getProject(id, d);
-  if (!project) throw new ProjectNotFoundError(id);
+  return d.transaction(() => {
+    const project = getProject(id, d);
+    if (!project) throw new ProjectNotFoundError(id);
+    let taskListsUpdated = 0;
+    const ts = now();
 
-  let taskListsUpdated = 0;
-  const ts = now();
+    if (input.new_slug !== undefined) {
+      // Validate slug: lowercase, kebab-case only
+      const normalised = input.new_slug.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-|-$/g, "");
+      if (!normalised) throw new Error("Invalid slug — must be non-empty kebab-case");
 
-  if (input.new_slug !== undefined) {
-    // Validate slug: lowercase, kebab-case only
-    const normalised = input.new_slug.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-|-$/g, "");
-    if (!normalised) throw new Error("Invalid slug — must be non-empty kebab-case");
+      // Check uniqueness against other projects
+      const conflict = d.query(
+        "SELECT id FROM projects WHERE task_list_id = ? AND id != ?",
+      ).get(normalised, id);
+      if (conflict) {
+        throw new ResourceConflictError("PROJECT_SLUG_CONFLICT", `Slug "${normalised}" is already used by another project`);
+      }
 
-    // Check uniqueness against other projects
-    const conflict = d.query(
-      "SELECT id FROM projects WHERE task_list_id = ? AND id != ?"
-    ).get(normalised, id);
-    if (conflict) throw new Error(`Slug "${normalised}" is already used by another project`);
-
-    const oldSlug = project.task_list_id;
-
-    // Update projects.task_list_id
-    d.run("UPDATE projects SET task_list_id = ?, updated_at = ? WHERE id = ?", [normalised, ts, id]);
-
-    // Cascade: update task_lists whose slug matched the old task_list_id
-    if (oldSlug) {
-      const result = d.run(
-        "UPDATE task_lists SET slug = ?, name = COALESCE(?, name), updated_at = ? WHERE project_id = ? AND slug = ?",
-        [normalised, input.name ?? null, ts, id, oldSlug],
-      );
-      taskListsUpdated = result.changes;
+      const oldSlug = project.task_list_id;
+      const taskListConflict = d.query(
+        "SELECT id FROM task_lists WHERE project_id = ? AND slug = ? AND slug != COALESCE(?, '') LIMIT 1",
+      ).get(id, normalised, oldSlug) as { id: string } | null;
+      if (taskListConflict) {
+        throw new ResourceConflictError(
+          "TASK_LIST_SLUG_CONFLICT",
+          `Task-list slug "${normalised}" is already used in project "${project.name}"`,
+        );
+      }
+      // Update projects.task_list_id and its matching canonical task list.
+      d.run("UPDATE projects SET task_list_id = ?, updated_at = ? WHERE id = ?", [normalised, ts, id]);
+      if (oldSlug) {
+        const result = d.run(
+          "UPDATE task_lists SET slug = ?, name = COALESCE(?, name), updated_at = ? WHERE project_id = ? AND slug = ?",
+          [normalised, input.name ?? null, ts, id, oldSlug],
+        );
+        taskListsUpdated = result.changes;
+      }
     }
-  }
 
-  if (input.name !== undefined) {
-    d.run("UPDATE projects SET name = ?, updated_at = ? WHERE id = ?", [input.name, ts, id]);
-  }
+    if (input.name !== undefined) {
+      d.run("UPDATE projects SET name = ?, updated_at = ? WHERE id = ?", [input.name, ts, id]);
+    }
 
-  return { project: getProject(id, d)!, task_lists_updated: taskListsUpdated };
+    return { project: getProject(id, d)!, task_lists_updated: taskListsUpdated };
+  })();
 }
 
 export function deleteProject(id: string, db?: Database): boolean {

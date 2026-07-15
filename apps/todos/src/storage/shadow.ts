@@ -397,6 +397,11 @@ export function createShadowTodosStorageAdapter(
         mirror.enqueueUpsert("projects", project, context);
         return project;
       },
+      async rename(id, input, context) {
+        const result = await local.projects.rename(id, input, context);
+        mirror.enqueueUpsert("projects", result.project, context);
+        return result;
+      },
       async delete(id, context) {
         const deleted = await local.projects.delete(id, context);
         if (deleted) mirror.enqueueDelete("projects", id, context);
