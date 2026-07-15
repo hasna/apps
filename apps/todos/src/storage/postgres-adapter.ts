@@ -57,7 +57,7 @@ import {
   type TodosPostgresSyncRecordType,
 } from "./postgres-sync.js";
 import { redactEvidenceText } from "../lib/redaction.js";
-import { isCanonicalSlug, normalizeSlug } from "../lib/slugs.js";
+import { isCanonicalSlug, isValidTaskListProjectScope, normalizeSlug } from "../lib/slugs.js";
 
 type RemoteObjectType = TodosPostgresSyncRecordType | "comments" | "dependencies" | "verifications" | "commits" | "refs";
 
@@ -436,8 +436,13 @@ class PostgresJsonRecordStore {
     if (type === "projects" && !isCanonicalSlug((value as { task_list_id?: unknown }).task_list_id)) {
       throw new Error("Invalid project task-list slug — imports require non-empty canonical kebab-case");
     }
-    if (type === "task_lists" && !isCanonicalSlug((value as { slug?: unknown }).slug)) {
-      throw new Error("Invalid task-list slug — imports require non-empty canonical kebab-case");
+    if (type === "task_lists") {
+      if (!isCanonicalSlug((value as { slug?: unknown }).slug)) {
+        throw new Error("Invalid task-list slug — imports require non-empty canonical kebab-case");
+      }
+      if (!isValidTaskListProjectScope((value as { project_id?: unknown }).project_id)) {
+        throw new Error("Invalid task-list project scope — project_id must be null, missing, or a non-empty string");
+      }
     }
     await this.ensureSchema();
     const updatedAt = stringValue(value.updated_at) ?? stringValue(value.created_at) ?? new Date().toISOString();

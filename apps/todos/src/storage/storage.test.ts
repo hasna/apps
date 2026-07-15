@@ -728,6 +728,66 @@ describe("storage adapter contracts", () => {
     expect(syncCalls).toEqual([]);
   });
 
+  test("rejects malformed Postgres task-list project scopes before direct or sync writes", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+    const malformedScopes: unknown[] = ["", 1, true, { id: "project-1" }, ["project-1"]];
+
+    for (const [index, projectId] of malformedScopes.entries()) {
+      await expect(adapter.taskLists.create({
+        name: `Invalid Scope ${index}`,
+        slug: `invalid-scope-${index}`,
+        project_id: projectId,
+      } as never)).rejects.toThrow("project_id must be null, missing, or a non-empty string");
+    }
+    expect(postgres.calls.some((call) => call.sql.includes("INSERT INTO todos_sync_records"))).toBe(false);
+
+    const missing = await adapter.taskLists.create({ name: "Missing Scope", slug: "missing-scope" });
+    const standalone = await adapter.taskLists.create({ name: "Null Scope", slug: "null-scope", project_id: null } as never);
+    const scoped = await adapter.taskLists.create({ name: "String Scope", slug: "string-scope", project_id: "project-1" });
+    expect([missing.project_id, standalone.project_id, scoped.project_id]).toEqual([null, null, "project-1"]);
+
+    const syncCalls: Array<readonly unknown[] | undefined> = [];
+    const syncStore = createPostgresTodosSyncStore({
+      async query<T = Record<string, unknown>>(_sql: string, values?: readonly unknown[]) {
+        syncCalls.push(values);
+        return { rows: [] as T[] };
+      },
+    });
+    const scopeSnapshot = (projectId: unknown, includeProjectId = true) => ({
+      exportedAt: "2026-07-15T00:00:00.000Z",
+      source: "sqlite",
+      tasks: [],
+      projects: [],
+      projectMachinePaths: [],
+      plans: [],
+      agents: [],
+      taskLists: [{
+        id: `sync-${String(projectId)}`,
+        ...(includeProjectId ? { project_id: projectId } : {}),
+        slug: "sync-scope",
+        name: "Sync Scope",
+        description: null,
+        metadata: null,
+        created_at: "2026-07-15T00:00:00.000Z",
+        updated_at: "2026-07-15T00:00:00.000Z",
+      }],
+      templates: [],
+      auditHistory: [],
+      tombstones: [],
+    } as unknown as TodosStorageSnapshot);
+
+    for (const projectId of malformedScopes) {
+      await expect(syncStore.pushSnapshot(scopeSnapshot(projectId)))
+        .rejects.toThrow("project_id must be null, missing, or a non-empty string");
+    }
+    expect(syncCalls).toHaveLength(0);
+    await expect(syncStore.pushSnapshot(scopeSnapshot(undefined, false))).resolves.toMatchObject({ records: 1 });
+    await expect(syncStore.pushSnapshot(scopeSnapshot(null))).resolves.toMatchObject({ records: 1 });
+    await expect(syncStore.pushSnapshot(scopeSnapshot("project-1"))).resolves.toMatchObject({ records: 1 });
+    expect(syncCalls).toHaveLength(3);
+  });
+
   test("maps task-list update preflight and project unique violations to stable conflicts", async () => {
     const postgres = createMemoryPostgresClient();
     const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
@@ -1439,7 +1499,11 @@ describe("storage adapter contracts", () => {
     expect(preflight).toContain("regexp_replace(lower(COALESCE(slug, ''))");
     expect(preflight).toContain("jsonb_typeof(payload->'slug') AS slug_type");
     expect(preflight).toContain("jsonb_typeof(payload->'task_list_id') AS slug_type");
+    expect(preflight).toContain("jsonb_typeof(payload->'project_id') AS scope_type");
+    expect(preflight).toContain("NULL::text AS scope_type");
     expect(preflight).toContain("slug_type IS DISTINCT FROM 'string'");
+    expect(preflight).toContain("scope_type IS NOT NULL AND scope_type NOT IN ('string', 'null')");
+    expect(preflight).toContain("scope_type = 'string' AND scope = ''");
     expect(preflight).toContain("'invalid'::text AS issue");
     expect(indexes).toHaveLength(2);
     expect(indexes.every((sql) => sql.includes("CREATE UNIQUE INDEX CONCURRENTLY"))).toBe(true);

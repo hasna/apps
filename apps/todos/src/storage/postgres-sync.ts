@@ -3,7 +3,7 @@ import type {
   TodosStorageContext,
   TodosStorageSnapshot,
 } from "./interfaces.js";
-import { isCanonicalSlug } from "../lib/slugs.js";
+import { isCanonicalSlug, isValidTaskListProjectScope } from "../lib/slugs.js";
 
 export type TodosPostgresSyncRecordType =
   | "tasks"
@@ -140,11 +140,12 @@ export function postgresTodosScopedSlugPreflightSql(
   assertSafeIdentifier(tableName);
   return `/* todos:scoped-slug-duplicate-audit */ WITH candidates AS (
     SELECT service, object_type, COALESCE(payload->>'project_id', '') AS scope,
+      jsonb_typeof(payload->'project_id') AS scope_type,
       payload->>'slug' AS slug, jsonb_typeof(payload->'slug') AS slug_type, object_id
     FROM ${tableName}
     WHERE object_type = 'task_lists' AND deleted_at IS NULL
     UNION ALL
-    SELECT service, object_type, '' AS scope, payload->>'task_list_id' AS slug,
+    SELECT service, object_type, '' AS scope, NULL::text AS scope_type, payload->>'task_list_id' AS slug,
       jsonb_typeof(payload->'task_list_id') AS slug_type, object_id
     FROM ${tableName}
     WHERE object_type = 'projects' AND deleted_at IS NULL
@@ -157,6 +158,10 @@ export function postgresTodosScopedSlugPreflightSql(
     FROM annotated
     WHERE slug_type IS DISTINCT FROM 'string'
       OR slug IS NULL OR slug = '' OR normalized_slug = '' OR slug IS DISTINCT FROM normalized_slug
+      OR (object_type = 'task_lists' AND (
+        (scope_type IS NOT NULL AND scope_type NOT IN ('string', 'null'))
+        OR (scope_type = 'string' AND scope = '')
+      ))
   ), duplicates AS (
     SELECT service, object_type, scope, slug,
       array_agg(object_id ORDER BY object_id) AS object_ids,
@@ -392,8 +397,13 @@ function assertCanonicalScopedSlugEntry(entry: { type: TodosPostgresSyncRecordTy
   if (entry.type === "projects" && !isCanonicalSlug(payload["task_list_id"])) {
     throw new Error("Invalid project task-list slug — sync requires non-empty canonical kebab-case");
   }
-  if (entry.type === "task_lists" && !isCanonicalSlug(payload["slug"])) {
-    throw new Error("Invalid task-list slug — sync requires non-empty canonical kebab-case");
+  if (entry.type === "task_lists") {
+    if (!isCanonicalSlug(payload["slug"])) {
+      throw new Error("Invalid task-list slug — sync requires non-empty canonical kebab-case");
+    }
+    if (!isValidTaskListProjectScope(payload["project_id"])) {
+      throw new Error("Invalid task-list project scope — project_id must be null, missing, or a non-empty string");
+    }
   }
 }
 
