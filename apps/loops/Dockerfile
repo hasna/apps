@@ -29,6 +29,7 @@ RUN bun run build
 
 FROM --platform=linux/arm64 ${BUN_IMAGE} AS runner
 WORKDIR /app
+RUN apk upgrade --no-cache libcrypto3 libssl3 openssl
 # Amazon RDS global CA bundle so the generated storage kit can verify TLS for
 # sslmode=require, verify-ca, and verify-full RDS connections.
 COPY docker/rds-global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
