@@ -27,6 +27,22 @@ describe("secrets scanner", () => {
   // --- scanFile unit tests ---
 
   describe("scanFile", () => {
+    test("verifies the real workflow path before exempting an exact action pin", async () => {
+      const revision = "0123456789abcdef".repeat(3).slice(0, 40);
+      const workflowDirectory = join(tempDir, ".github", "workflows");
+      mkdirSync(workflowDirectory, { recursive: true });
+      const workflow = join(workflowDirectory, "ci.yml");
+      const ordinary = join(tempDir, "config.yml");
+      const content = `- uses: synthetic/action@${revision}`;
+      writeFileSync(workflow, content);
+      writeFileSync(ordinary, content);
+
+      expect(await secretsScanner.scan(workflow)).toEqual([]);
+      expect((await secretsScanner.scan(ordinary)).some(
+        (finding) => finding.rule_id === "high-entropy-hex",
+      )).toBe(true);
+    });
+
     test("detects AWS access key", () => {
       const content = 'const key = "AKIAIOSFODNN7EXAMPLE";';
       const findings = scanFile("test.ts", content);

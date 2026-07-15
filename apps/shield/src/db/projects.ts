@@ -1,26 +1,25 @@
 import crypto from "crypto";
 import { getDb } from "./database.js";
 import type { Project } from "../types/index.js";
-import { sanitizeLocationForOutput, sanitizeTextForBoundary } from "../lib/finding-safety.js";
+import {
+  sanitizeIdentifierForOutput,
+  sanitizeLocationForOutput,
+  sanitizeTextForBoundary,
+} from "../lib/finding-safety.js";
+import {
+  legacyRowContainsCredential,
+  scrubLegacyCredentialRows,
+} from "./legacy-credential-scrub.js";
 
 function rowToProject(row: Project): Project {
   const safe = {
     ...row,
+    id: sanitizeIdentifierForOutput(row.id, "PROJECT-ID"),
     name: sanitizeTextForBoundary(row.name, 256),
     path: sanitizeLocationForOutput(row.path),
+    created_at: sanitizeTextForBoundary(row.created_at, 128),
+    updated_at: sanitizeTextForBoundary(row.updated_at, 128),
   };
-  if (safe.name !== row.name || safe.path !== row.path) {
-    try {
-      getDb().prepare("UPDATE projects SET name = ?, path = ?, updated_at = ? WHERE id = ?").run(
-        safe.name,
-        safe.path,
-        new Date().toISOString(),
-        row.id,
-      );
-    } catch {
-      // Read results remain sanitized when a legacy database is read-only.
-    }
-  }
   return safe;
 }
 
@@ -42,7 +41,11 @@ export function createProject(name: string, path: string): Project {
 export function getProject(id: string): Project | null {
   const db = getDb();
   const stmt = db.prepare(`SELECT * FROM projects WHERE id = ?`);
-  const row = stmt.get(id) as Project | undefined;
+  let row = stmt.get(id) as Project | undefined;
+  if (row && legacyRowContainsCredential(row as unknown as Record<string, unknown>)) {
+    const result = scrubLegacyCredentialRows(db);
+    row = stmt.get(result.projectIds.get(id) ?? id) as Project | undefined;
+  }
   return row ? rowToProject(row) : null;
 }
 
@@ -50,18 +53,33 @@ export function getProjectByPath(path: string): Project | null {
   const db = getDb();
   const safePath = sanitizeLocationForOutput(path);
   const stmt = db.prepare(`SELECT * FROM projects WHERE path = ? OR path = ? LIMIT 1`);
-  const row = stmt.get(safePath, path) as Project | undefined;
+  let row = stmt.get(safePath, path) as Project | undefined;
+  if (row && legacyRowContainsCredential(row as unknown as Record<string, unknown>)) {
+    const result = scrubLegacyCredentialRows(db);
+    row = db.prepare("SELECT * FROM projects WHERE id = ?")
+      .get(result.projectIds.get(row.id) ?? row.id) as Project | undefined;
+  }
   return row ? rowToProject(row) : null;
 }
 
 export function listProjects(): Project[] {
   const db = getDb();
   const stmt = db.prepare(`SELECT * FROM projects ORDER BY created_at DESC`);
-  return (stmt.all() as Project[]).map(rowToProject);
+  let rows = stmt.all() as Project[];
+  if (rows.some((row) => legacyRowContainsCredential(row as unknown as Record<string, unknown>))) {
+    const result = scrubLegacyCredentialRows(db);
+    rows = rows.flatMap((row) => {
+      const migrated = db.prepare("SELECT * FROM projects WHERE id = ?")
+        .get(result.projectIds.get(row.id) ?? row.id) as Project | undefined;
+      return migrated ? [migrated] : [];
+    });
+  }
+  return rows.map(rowToProject);
 }
 
 export function deleteProject(id: string): void {
   const db = getDb();
+  const project = getProject(id);
   const stmt = db.prepare(`DELETE FROM projects WHERE id = ?`);
-  stmt.run(id);
+  stmt.run(project?.id ?? id);
 }

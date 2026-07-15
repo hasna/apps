@@ -242,6 +242,17 @@ function isEnvLikeFile(filePath: string): boolean {
   return base === ".env" || base.startsWith(".env.") || base.endsWith(".env");
 }
 
+function isTrustedGitHubWorkflowFile(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, "/").toLowerCase();
+  const marker = "/.github/workflows/";
+  const relative = normalized.startsWith(".github/workflows/")
+    ? normalized.slice(".github/workflows/".length)
+    : normalized.includes(marker)
+      ? normalized.slice(normalized.lastIndexOf(marker) + marker.length)
+      : "";
+  return relative.length > 0 && !relative.includes("/") && /\.ya?ml$/.test(relative);
+}
+
 function getCommentSyntax(filePath?: string): CommentSyntax {
   if (!filePath) {
     return NO_COMMENT_SYNTAX;
@@ -587,7 +598,11 @@ export function isFindingSuppressedBySecurityIgnore(
 
 // --- Scanner ---
 
-export function scanFile(filePath: string, content: string): FindingInput[] {
+export function scanFile(
+  filePath: string,
+  content: string,
+  verifiedSourcePath?: string,
+): FindingInput[] {
   const findings: FindingInput[] = [];
   const lines = content.split("\n");
   const securityIgnoreBlockRanges = collectSecurityIgnoreBlockRanges(content, filePath);
@@ -612,7 +627,11 @@ export function scanFile(filePath: string, content: string): FindingInput[] {
     blockComment = securityIgnore.finalBlockComment;
     blockCommentHasSecurityIgnore = securityIgnore.finalBlockCommentHasSecurityIgnore;
 
-    for (const recognition of recognizeCredentialText(lineText, { envLike: isEnvLikeFile(filePath) })) {
+    for (const recognition of recognizeCredentialText(lineText, {
+      envLike: isEnvLikeFile(verifiedSourcePath ?? filePath),
+      trustedGitHubWorkflowFile:
+        verifiedSourcePath != null && isTrustedGitHubWorkflowFile(verifiedSourcePath),
+    })) {
       if (isFindingSuppressedBySecurityIgnore(securityIgnore, recognition.index)) continue;
       findings.push({
         rule_id: recognition.rule.id,
@@ -657,7 +676,7 @@ export const secretsScanner: Scanner = {
       try {
         const content = fs.readFileSync(file, "utf-8");
         const relativePath = stat.isFile() ? path.basename(file) : path.relative(scanPath, file);
-        findings.push(...scanFile(relativePath, content));
+        findings.push(...scanFile(relativePath, content, file));
       } catch {
         throw new Error("Unable to read every requested scan file");
       }

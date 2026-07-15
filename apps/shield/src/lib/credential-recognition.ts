@@ -207,22 +207,61 @@ function collectPatternMatches(
   return recognitions;
 }
 
-function isPinnedGitHubActionRevision(
+function isExactPinnedGitHubActionRevision(
   value: string,
   index: number,
   match: string,
 ): boolean {
   if (match.length !== 40) return false;
-  const before = value.slice(0, index).trim();
-  const after = value.slice(index + match.length);
-  return /^-?\s*uses:\s*["']?[A-Za-z0-9_.-]+\/[A-Za-z0-9_./-]+@$/.test(before)
-    && /^["']?\s*(?:#.*)?$/.test(after);
+  const unquoted = /^\s*(?:-\s+)?uses:\s*[A-Za-z0-9_.-]+\/[A-Za-z0-9_./-]+@([0-9a-fA-F]{40})\s*(?:#.*)?$/;
+  const quoted = /^\s*(?:-\s+)?uses:\s*(["'])[A-Za-z0-9_.-]+\/[A-Za-z0-9_./-]+@([0-9a-fA-F]{40})\1\s*(?:#.*)?$/;
+  const parsed = unquoted.exec(value);
+  const revision = parsed?.[1] ?? quoted.exec(value)?.[2];
+  return revision === match && value.indexOf(match) === index;
 }
 
-function collectEntropyMatches(value: string): CredentialRecognition[] {
+function isPlausibleBase64Token(value: string): boolean {
+  const unpadded = value.replace(/=+$/, "");
+  const paddingLength = value.length - unpadded.length;
+  if (paddingLength > 2 || unpadded.length < 22) return false;
+  if (paddingLength > 0 && value.length % 4 !== 0) return false;
+  if (paddingLength === 0 && unpadded.length % 4 === 1) return false;
+
+  // Random binary tokens almost always span at least three Base64 character
+  // classes. Requiring that diversity sharply bounds false positives from
+  // prose, identifiers, repeated fixtures, and numeric values at short sample
+  // lengths without requiring '+' or '/' to be present.
+  const uppercase = [...unpadded].filter((character) => /[A-Z]/.test(character)).length;
+  const lowercase = [...unpadded].filter((character) => /[a-z]/.test(character)).length;
+  const hasNonLetter = /[0-9+/]/.test(unpadded);
+  const letterCount = uppercase + lowercase;
+  // CamelCase source identifiers can satisfy a naive three-class check only
+  // because their names contain "64". Random Base64 has balanced letter case;
+  // requiring the minority case to make up 18% of letters rejects those
+  // identifiers while retaining >98% of random 16-byte and >99.7% of random
+  // 24/32-byte samples before the independent entropy bound.
+  const minorityCaseRatio = letterCount === 0
+    ? 0
+    : Math.min(uppercase, lowercase) / letterCount;
+  return hasNonLetter && minorityCaseRatio >= 0.18;
+}
+
+function normalizedSampleEntropy(value: string, alphabetSize: number): number {
+  const sample = value.replace(/=+$/, "");
+  const reachableAlphabetSize = Math.min(alphabetSize, sample.length);
+  if (reachableAlphabetSize <= 1) return 0;
+  return shannonEntropy(sample) / Math.log2(reachableAlphabetSize);
+}
+
+function collectEntropyMatches(
+  value: string,
+  allowPinnedGitHubActionRevision = false,
+  boundary = false,
+): CredentialRecognition[] {
   const recognitions: CredentialRecognition[] = [];
-  // Normalize against each alphabet's theoretical maximum. Hex tops out at
-  // exactly 4 bits/character, so a raw threshold above 4 is unreachable.
+  // Normalize against the maximum empirical entropy reachable by this sample,
+  // not merely the alphabet maximum. A 22-character Base64 token cannot
+  // empirically exceed log2(22), while a hexadecimal alphabet tops out at 4.
   for (const { definition, alphabetSize, normalizedThreshold } of [
     {
       definition: HIGH_ENTROPY_HEX_DEFINITION,
@@ -231,8 +270,11 @@ function collectEntropyMatches(value: string): CredentialRecognition[] {
     },
     {
       definition: HIGH_ENTROPY_BASE64_DEFINITION,
-      alphabetSize: 65,
-      normalizedThreshold: 5.0 / Math.log2(65),
+      alphabetSize: 64,
+      // Monte Carlo bounds for uniformly random 16/24/32-byte tokens place
+      // more than 99.9% above this length-aware threshold. Structured-safe
+      // controls are also required to span three character classes.
+      normalizedThreshold: 0.8,
     },
   ] as const) {
     const rule = materialize(definition);
@@ -240,12 +282,45 @@ function collectEntropyMatches(value: string): CredentialRecognition[] {
     while ((match = rule.pattern.exec(value)) !== null) {
       if (
         definition.id === HIGH_ENTROPY_HEX_DEFINITION.id
-        && isPinnedGitHubActionRevision(value, match.index, match[0])
+        && allowPinnedGitHubActionRevision
+        && isExactPinnedGitHubActionRevision(value, match.index, match[0])
       ) {
         continue;
       }
-      const normalizedEntropy = shannonEntropy(match[0]) / Math.log2(alphabetSize);
-      if (normalizedEntropy > normalizedThreshold) {
+      const plausibleBase64 =
+        definition.id !== HIGH_ENTROPY_BASE64_DEFINITION.id
+        || isPlausibleBase64Token(match[0]);
+      if (
+        definition.id === HIGH_ENTROPY_BASE64_DEFINITION.id
+        && !plausibleBase64
+      ) {
+        // A credential embedded in a path or identifier can be swallowed by
+        // the broad Base64 alphabet (notably '/'). Boundary recognition must
+        // remain a strict scanner superset, so inspect canonical common-token
+        // windows inside the greedy candidate without changing scanner noise.
+        if (boundary) {
+          for (const windowLength of [44, 43, 32, 24, 22]) {
+            if (windowLength > match[0].length) continue;
+            for (let offset = 0; offset <= match[0].length - windowLength; offset++) {
+              const window = match[0].slice(offset, offset + windowLength);
+              if (
+                isPlausibleBase64Token(window)
+                && normalizedSampleEntropy(window, alphabetSize) >= normalizedThreshold
+              ) {
+                recognitions.push({
+                  index: match.index + offset,
+                  length: windowLength,
+                  rule,
+                });
+                offset = match[0].length;
+              }
+            }
+          }
+        }
+        continue;
+      }
+      const normalizedEntropy = normalizedSampleEntropy(match[0], alphabetSize);
+      if (normalizedEntropy >= normalizedThreshold) {
         recognitions.push({ index: match.index, length: match[0].length, rule });
       }
       if (match[0].length === 0) rule.pattern.lastIndex++;
@@ -257,6 +332,8 @@ function collectEntropyMatches(value: string): CredentialRecognition[] {
 export interface CredentialRecognitionOptions {
   boundary?: boolean;
   envLike?: boolean;
+  /** Scanner-only exception after the source path is verified as a workflow. */
+  trustedGitHubWorkflowFile?: boolean;
 }
 
 /**
@@ -274,7 +351,11 @@ export function recognizeCredentialText(
   if (options.envLike || options.boundary) {
     recognitions.push(...collectPatternMatches(value, [ENV_API_KEY_DEFINITION]));
   }
-  recognitions.push(...collectEntropyMatches(value));
+  recognitions.push(...collectEntropyMatches(
+    value,
+    options.trustedGitHubWorkflowFile === true && options.boundary !== true,
+    options.boundary === true,
+  ));
   return recognitions.sort((left, right) => left.index - right.index || right.length - left.length);
 }
 

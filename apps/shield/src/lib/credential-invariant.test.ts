@@ -196,6 +196,11 @@ describe("scanner-to-boundary credential invariant", () => {
       expect(JSON.stringify(getScan(scan.id)), value).not.toContain(value);
       expect(JSON.stringify(getFinding(created.id)), value).not.toContain(value);
 
+      const runtimeScan = createScan(project.id, [value as ScannerType]);
+      updateScanStatus(runtimeScan.id, value as ScanStatus, undefined, value);
+      expect(JSON.stringify(db.prepare("SELECT * FROM scans WHERE id = ?").get(runtimeScan.id)), value)
+        .not.toContain(value);
+
       const legacyId = `legacy-${index}`;
       db.prepare(
         `INSERT INTO findings
@@ -266,15 +271,136 @@ describe("scanner-to-boundary credential invariant", () => {
     }
   });
 
-  test("only exempts 40-character hex in pinned GitHub Action syntax", () => {
+  test("only the scanner exempts an exact pinned action in a trusted workflow file", () => {
     const revision = "0123456789abcdef".repeat(3).slice(0, 40);
     expect(
       recognizeCredentialText(revision).some(({ rule }) => rule.id === "high-entropy-hex"),
     ).toBe(true);
     const actionPin = `- uses: synthetic/action@${revision}`;
-    expect(scanFile(".github/workflows/ci.yml", actionPin)).toEqual([]);
-    expect(recognizeCredentialText(actionPin)).toEqual([]);
-    expect(sanitizeTextForBoundary(actionPin, 12_000)).toBe(actionPin);
+    // The public line scanner does not trust a caller-claimed filename. The
+    // filesystem scanner's verified-path exception is exercised separately.
+    expect(scanFile(".github/workflows/ci.yml", actionPin).length).toBeGreaterThan(0);
+    expect(scanFile(
+      ".github/workflows/ci.yaml",
+      `uses: synthetic/.github/workflows/reuse.yml@${revision}`,
+    ).length).toBeGreaterThan(0);
+
+    for (const untrustedPath of [
+      ".env",
+      "config.json",
+      "src/data.yml",
+      ".github/workflows/nested/ci.yml",
+      ".github/actions/local/action.yml",
+    ]) {
+      expect(scanFile(untrustedPath, actionPin).length, untrustedPath).toBeGreaterThan(0);
+    }
+
+    expect(recognizeCredentialText(actionPin).length).toBeGreaterThan(0);
+    expect(sanitizeTextForBoundary(actionPin, 12_000)).not.toContain(revision);
+
+    const finding = findingWith(actionPin);
+    const scan: Scan = {
+      id: actionPin,
+      project_id: actionPin,
+      status: ScanStatus.Failed,
+      scanner_types: [ScannerType.Code],
+      findings_count: 1,
+      started_at: actionPin,
+      completed_at: actionPin,
+      duration_ms: 1,
+      error: actionPin,
+      created_at: actionPin,
+    };
+    for (const output of [
+      JSON.stringify(sanitizeValueForBoundary({ arbitrary: actionPin })),
+      reportJson([finding], scan),
+      reportSarif([finding], scan),
+      JSON.stringify(sanitizeMessagesForProvider([{ role: "user", content: actionPin }])),
+    ]) {
+      expect(output).not.toContain(revision);
+      expect(output).toContain("REDACTED");
+    }
+  });
+
+  test("recognizes canonical padded and unpadded base64 tokens for common byte lengths", () => {
+    for (const byteLength of [16, 24, 32]) {
+      const bytes = Uint8Array.from({ length: byteLength }, (_, index) => index);
+      const padded = Buffer.from(bytes).toString("base64");
+      const unpadded = padded.replace(/=+$/, "");
+      for (const value of new Set([padded, unpadded])) {
+        expect(
+          recognizeCredentialText(value).some(({ rule }) => rule.id === "high-entropy-base64"),
+          `${byteLength}:${value.length}`,
+        ).toBe(true);
+        expect(containsCredentialLikeText(value)).toBe(true);
+        expect(sanitizeTextForBoundary(value)).not.toContain(value);
+        expect(sanitizeLocationForOutput(`/tmp/${value}/artifact`)).not.toContain(value);
+      }
+    }
+  });
+
+  test("base64 entropy boundary rejects a bounded structured-safe corpus", () => {
+    const structured = new Set<string>();
+    structured.add("isPlausibleBase64Token");
+    structured.add("normalizedSampleEntropy");
+    structured.add("allowPinnedGitHubActionRevision");
+    for (let index = 0; index < 2_048; index++) {
+      structured.add(`component${index % 10}`.repeat(4));
+      structured.add(`${"A".repeat(8)}${String(index).padStart(8, "0")}${"b".repeat(16)}`);
+      structured.add(`${(index % 16).toString(16).repeat(16)}${((index + 1) % 16).toString(16).repeat(16)}`);
+    }
+    for (const value of structured) {
+      expect(
+        recognizeCredentialText(value).some(({ rule }) => rule.id === "high-entropy-base64"),
+        value,
+      ).toBe(false);
+    }
+  });
+
+  test("legacy Scan and Finding rows are durably scrubbed as a transaction", () => {
+    cleanupDb = setupTestDb();
+    const db = getCurrentTestDb();
+    const marker = `gh${"p"}_${"Legacy_A4_".repeat(4)}`;
+
+    db.prepare(
+      `INSERT INTO projects (id, name, path, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run(marker, marker, marker, marker, marker);
+    db.prepare(
+      `INSERT INTO scans
+        (id, project_id, status, scanner_types, findings_count, started_at, completed_at, duration_ms, error, created_at)
+       VALUES (?, ?, ?, ?, 1, ?, ?, 1, ?, ?)`,
+    ).run(marker, marker, marker, JSON.stringify([marker]), marker, marker, marker, marker);
+    db.prepare(
+      `INSERT INTO rules
+        (id, name, description, scanner_type, severity, pattern, enabled, builtin, metadata, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?)`,
+    ).run(marker, marker, marker, marker, marker, marker, JSON.stringify({ marker }), marker, marker);
+    db.prepare(
+      `INSERT INTO findings
+        (id, scan_id, rule_id, scanner_type, severity, file, line, message, code_snippet, fingerprint,
+         suppressed, suppressed_reason, llm_explanation, llm_fix, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 1, ?, ?, ?, ?)`,
+    ).run(marker, marker, marker, marker, marker, marker, marker, marker, marker, marker, marker, marker, marker);
+
+    const safeScan = getScan(marker);
+    const durableFindingId = (db.prepare("SELECT id FROM findings LIMIT 1").get() as { id: string }).id;
+    const safeFinding = getFinding(durableFindingId);
+    expect(JSON.stringify(safeScan)).not.toContain(marker);
+    expect(JSON.stringify(safeFinding)).not.toContain(marker);
+    expect(safeScan?.id).not.toBe(marker);
+    expect(safeFinding?.id).not.toBe(marker);
+
+    for (const table of ["projects", "scans", "rules", "findings"]) {
+      expect(JSON.stringify(db.prepare(`SELECT * FROM ${table}`).all()), table).not.toContain(marker);
+    }
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+
+    // The durable identifiers are queryable and a second read is a no-op.
+    expect(getScan(safeScan!.id)).toEqual(safeScan);
+    expect(getFinding(safeFinding!.id)).toEqual(safeFinding);
+    expect(JSON.stringify(db.prepare("SELECT * FROM scans").all())).not.toContain(marker);
+    expect(JSON.stringify(db.prepare("SELECT * FROM findings").all())).not.toContain(marker);
   });
 
   test("high-entropy hexadecimal property corpus keeps positives and false positives separated", () => {

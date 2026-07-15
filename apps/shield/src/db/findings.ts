@@ -10,6 +10,11 @@ import {
   sanitizeFindingForPersistence,
   sanitizeTextForBoundary,
 } from "../lib/finding-safety.js";
+import {
+  legacyRowContainsCredential,
+  scrubLegacyCredentialRows,
+} from "./legacy-credential-scrub.js";
+import { getScan } from "./scans.js";
 
 interface FindingRow {
   id: string;
@@ -33,58 +38,12 @@ interface FindingRow {
 }
 
 function rowToFinding(row: FindingRow): Finding {
-  const safe = sanitizeFindingForOutput({
+  return sanitizeFindingForOutput({
     ...row,
     scanner_type: row.scanner_type as ScannerType,
     severity: row.severity as Severity,
     suppressed: row.suppressed === 1,
   });
-  // Opportunistically scrub legacy rows so direct database consumers after
-  // first read cannot recover fields written by older unsafe versions.
-  if (
-    safe.rule_id !== row.rule_id ||
-    safe.fingerprint !== row.fingerprint ||
-    safe.created_at !== row.created_at ||
-    safe.file !== row.file ||
-    safe.message !== row.message ||
-    safe.code_snippet !== row.code_snippet ||
-    safe.suppressed_reason !== row.suppressed_reason ||
-    safe.llm_explanation !== row.llm_explanation ||
-    safe.llm_fix !== row.llm_fix
-  ) {
-    try {
-      const db = getDb();
-      if (safe.rule_id !== row.rule_id) {
-        db.prepare(
-          `INSERT OR IGNORE INTO rules (id, name, description, scanner_type, severity, enabled, builtin, metadata, created_at, updated_at)
-           VALUES (?, 'Redacted legacy finding rule', 'Credential-bearing legacy rule identifier was replaced', ?, ?, 1, 0, '{}', datetime('now'), datetime('now'))`,
-        ).run(safe.rule_id, safe.scanner_type, safe.severity);
-      }
-      db.prepare(
-        `UPDATE findings SET rule_id = ?, file = ?, message = ?, code_snippet = ?, fingerprint = ?, suppressed_reason = ?, llm_explanation = ?, llm_fix = ?, created_at = ? WHERE id = ?`,
-      ).run(
-        safe.rule_id,
-        safe.file,
-        safe.message,
-        safe.code_snippet,
-        safe.fingerprint,
-        safe.suppressed_reason,
-        safe.llm_explanation,
-        safe.llm_fix,
-        safe.created_at,
-        row.id,
-      );
-      if (safe.rule_id !== row.rule_id) {
-        db.prepare(
-          `DELETE FROM rules WHERE id = ? AND NOT EXISTS (SELECT 1 FROM findings WHERE rule_id = ?)`,
-        ).run(row.rule_id, row.rule_id);
-      }
-    } catch {
-      // Output remains sanitized even when a legacy/read-only database cannot
-      // be rewritten in place.
-    }
-  }
-  return safe;
 }
 
 function generateFingerprint(rule_id: string, file: string, line: number, message: string): string {
@@ -96,6 +55,8 @@ function generateFingerprint(rule_id: string, file: string, line: number, messag
 
 export function createFinding(scan_id: string, input: FindingInput): Finding {
   const db = getDb();
+  const scan = getScan(scan_id);
+  const targetScanId = scan?.id ?? scan_id;
   const safeInput = sanitizeFindingForPersistence(input);
   if (safeInput.rule_id !== input.rule_id) {
     db.prepare(
@@ -113,7 +74,7 @@ export function createFinding(scan_id: string, input: FindingInput): Finding {
   );
   stmt.run(
     id,
-    scan_id,
+    targetScanId,
     safeInput.rule_id,
     safeInput.scanner_type,
     safeInput.severity,
@@ -129,7 +90,7 @@ export function createFinding(scan_id: string, input: FindingInput): Finding {
 
   return {
     id,
-    scan_id,
+    scan_id: targetScanId,
     rule_id: safeInput.rule_id,
     scanner_type: safeInput.scanner_type,
     severity: safeInput.severity,
@@ -152,7 +113,11 @@ export function createFinding(scan_id: string, input: FindingInput): Finding {
 export function getFinding(id: string): Finding | null {
   const db = getDb();
   const stmt = db.prepare(`SELECT * FROM findings WHERE id = ?`);
-  const row = stmt.get(id) as FindingRow | undefined;
+  let row = stmt.get(id) as FindingRow | undefined;
+  if (row && legacyRowContainsCredential(row as unknown as Record<string, unknown>)) {
+    const result = scrubLegacyCredentialRows(db);
+    row = stmt.get(result.findingIds.get(id) ?? id) as FindingRow | undefined;
+  }
   return row ? rowToFinding(row) : null;
 }
 
@@ -201,7 +166,16 @@ export function listFindings(options: ListFindingsOptions = {}): Finding[] {
   );
   params.push(limit, offset);
 
-  return (stmt.all(...(params as any[])) as FindingRow[]).map(rowToFinding);
+  let rows = stmt.all(...(params as any[])) as FindingRow[];
+  if (rows.some((row) => legacyRowContainsCredential(row as unknown as Record<string, unknown>))) {
+    const result = scrubLegacyCredentialRows(db);
+    rows = rows.flatMap((row) => {
+      const migrated = db.prepare("SELECT * FROM findings WHERE id = ?")
+        .get(result.findingIds.get(row.id) ?? row.id) as FindingRow | undefined;
+      return migrated ? [migrated] : [];
+    });
+  }
+  return rows.map(rowToFinding);
 }
 
 export function updateFinding(
@@ -210,6 +184,7 @@ export function updateFinding(
 ): void {
   const db = getDb();
   const existing = getFinding(id);
+  const targetId = existing?.id ?? id;
   const sensitive = existing ? isCredentialFinding(existing) : false;
   const sets: string[] = [];
   const params: unknown[] = [];
@@ -255,7 +230,7 @@ export function updateFinding(
 
   if (sets.length === 0) return;
 
-  params.push(id);
+  params.push(targetId);
   const stmt = db.prepare(`UPDATE findings SET ${sets.join(", ")} WHERE id = ?`);
   stmt.run(...(params as any[]));
 }

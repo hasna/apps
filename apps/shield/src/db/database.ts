@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { copyFileSync, existsSync, mkdirSync } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
+import { scrubLegacyCredentialRows } from "./legacy-credential-scrub.js";
 
 let _db: Database | null = null;
 
@@ -73,6 +74,7 @@ export function getDb(): Database {
   _db.exec("PRAGMA foreign_keys = ON");
   _db.exec("PRAGMA busy_timeout = 5000");
   runMigrations(_db);
+  scrubLegacyCredentialRows(_db);
   if (!_initialized) {
     _initialized = true;
     for (const cb of _postInitCallbacks) cb();

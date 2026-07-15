@@ -22,6 +22,26 @@ function stableRedaction(value: string, kind: string): string {
   return `[REDACTED-${kind}:${correlation}]`;
 }
 
+/**
+ * Produce a durable opaque key for replacing a credential-bearing database
+ * identifier. Callers verify uniqueness against the destination table and
+ * deterministically retry on the theoretical 48-bit correlation collision.
+ * Keeping the visible correlation short also prevents the opaque replacement
+ * itself from being classified as a high-entropy credential.
+ */
+export function opaqueIdentifierForStorage(
+  value: string,
+  kind: string,
+  attempt = 0,
+): string {
+  const safeKind = kind.replace(/[^A-Z0-9_-]/gi, "-").toUpperCase();
+  const correlation = createHash("sha256")
+    .update(`${safeKind}\0${value}\0${attempt}`)
+    .digest("hex")
+    .slice(0, 12);
+  return `[REDACTED-${safeKind}:${correlation}]`;
+}
+
 /** Preserve correlation without retaining a credential-bearing identifier. */
 export function sanitizeIdentifierForOutput(value: string, kind = "ID"): string {
   return containsCredentialLikeText(value)
