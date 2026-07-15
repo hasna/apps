@@ -92,6 +92,19 @@ describe("/v1 task-list cloud parity", () => {
       expect(await response!.json()).toMatchObject({ code: "TASK_LIST_SLUG_CONFLICT", conflict: true });
     }
   });
+
+  test("rejects explicit and derived empty task-list slugs before storage", async () => {
+    for (const body of [
+      { name: "---" },
+      { name: "Inbox", slug: "" },
+      { name: "Inbox", slug: "---" },
+    ]) {
+      expect((await request("/v1/task-lists", "POST", body))?.status).toBe(400);
+    }
+    const list = await store.taskLists.create({ name: "Inbox", slug: "inbox" });
+    expect((await request(`/v1/task-lists/${list.id}`, "PATCH", { slug: "---" }))?.status).toBe(400);
+    expect(await store.taskLists.get(list.id)).toMatchObject({ slug: "inbox" });
+  });
 });
 
 describe("/v1 project mutation", () => {
@@ -115,6 +128,9 @@ describe("/v1 project mutation", () => {
     const bypass = await request(`/v1/projects/${firstProject.id}`, "PATCH", { task_list_id: "bypass" });
     expect(bypass?.status).toBe(400);
     expect(await store.projects.get(firstProject.id)).toMatchObject({ task_list_id: "todos-open-emails" });
+
+    const emptyCanonicalSlug = await request("/v1/projects", "POST", { name: "---", path: "/tmp/empty" });
+    expect(emptyCanonicalSlug?.status).toBe(400);
   });
 
   test("renames a project and its canonical task list atomically", async () => {
@@ -131,6 +147,10 @@ describe("/v1 project mutation", () => {
       task_lists_updated: 1,
     });
     expect(await store.taskLists.get(list.id)).toMatchObject({ slug: "emails-next", name: "Emails Next" });
+
+    const invalid = await request(`/v1/projects/${project.id}/rename`, "POST", { new_slug: "---" });
+    expect(invalid?.status).toBe(400);
+    expect(await store.projects.get(project.id)).toMatchObject({ task_list_id: "emails-next" });
   });
 
   test("rejects unknown and malformed project patch fields", async () => {

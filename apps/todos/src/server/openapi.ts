@@ -116,7 +116,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           additionalProperties: false,
           required: ["name", "path"],
           properties: {
-            name: { type: "string", minLength: 1 },
+            name: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
             path: { type: "string", minLength: 1 },
             description: { type: "string" },
           },
@@ -136,7 +136,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           additionalProperties: false,
           required: ["new_slug"],
           properties: {
-            new_slug: { type: "string", minLength: 1 },
+            new_slug: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
             name: { type: "string", minLength: 1 },
           },
         },
@@ -151,10 +151,11 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         },
         CreateTaskListInput: {
           type: "object",
+          additionalProperties: false,
           required: ["name"],
           properties: {
-            name: { type: "string" },
-            slug: { type: "string" },
+            name: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
+            slug: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
             project_id: { type: "string" },
             description: { type: "string" },
             metadata: { type: "object", additionalProperties: true },
@@ -162,8 +163,10 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         },
         UpdateTaskListInput: {
           type: "object",
+          additionalProperties: false,
+          minProperties: 1,
           properties: {
-            slug: { type: "string" },
+            slug: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
             name: { type: "string" },
             description: { type: "string" },
             metadata: { type: "object", additionalProperties: true },

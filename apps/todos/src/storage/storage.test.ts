@@ -613,10 +613,14 @@ describe("storage adapter contracts", () => {
     const taskList = await adapter.taskLists.create({ name: "Open Emails", slug: "emails", project_id: project.id });
 
     const first = await adapter.projects.rename(project.id, { new_slug: "emails-next", name: "Emails Next" });
+    await Bun.sleep(2);
     const retry = await adapter.projects.rename(project.id, { new_slug: "emails-next", name: "Emails Next" });
 
     expect(first).toMatchObject({ project: { name: "Emails Next", task_list_id: "emails-next" }, task_lists_updated: 1 });
-    expect(retry.project).toMatchObject({ name: "Emails Next", task_list_id: "emails-next" });
+    expect(retry).toMatchObject({
+      project: { name: "Emails Next", task_list_id: "emails-next", updated_at: first.project.updated_at },
+      task_lists_updated: 0,
+    });
     expect(await adapter.taskLists.get(taskList.id)).toMatchObject({ name: "Emails Next", slug: "emails-next" });
     expect(postgres.calls.filter((call) => call.sql.includes("todos:rename-project-atomic"))).toHaveLength(2);
   });
@@ -642,6 +646,53 @@ describe("storage adapter contracts", () => {
 
     await expect(adapter.taskLists.create({ name: "Duplicate", slug: "inbox", project_id: "project-1" }))
       .rejects.toMatchObject({ code: "TASK_LIST_SLUG_CONFLICT" });
+  });
+
+  test("rejects empty explicit and derived slugs consistently in Postgres storage", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+
+    await expect(adapter.projects.create({ name: "---", path: "/tmp/invalid" }))
+      .rejects.toThrow("must be non-empty");
+    await expect(adapter.taskLists.create({ name: "---" }))
+      .rejects.toThrow("must be non-empty");
+    await expect(adapter.taskLists.create({ name: "Inbox", slug: "" }))
+      .rejects.toThrow("must be non-empty");
+    await expect(adapter.taskLists.create({ name: "Inbox", slug: "---" }))
+      .rejects.toThrow("must be non-empty");
+
+    const invalidSnapshot = {
+      exportedAt: "2026-07-15T00:00:00.000Z",
+      source: "sqlite",
+      tasks: [],
+      projects: [{
+        id: "invalid-project",
+        name: "Invalid",
+        path: "/tmp/invalid-import",
+        task_list_id: "",
+        task_prefix: "INV",
+        task_counter: 0,
+        created_at: "2026-07-15T00:00:00.000Z",
+        updated_at: "2026-07-15T00:00:00.000Z",
+      }],
+      plans: [],
+      agents: [],
+      taskLists: [],
+      templates: [],
+      auditHistory: [],
+    } as TodosStorageSnapshot;
+    const imported = await adapter.sync.importSnapshot!(invalidSnapshot);
+    expect(imported).toMatchObject({ inserted: 0, errors: [expect.stringContaining("non-empty canonical")] });
+
+    const syncCalls: string[] = [];
+    const syncStore = createPostgresTodosSyncStore({
+      async query<T = Record<string, unknown>>(sql: string) {
+        syncCalls.push(sql);
+        return { rows: [] as T[] };
+      },
+    });
+    await expect(syncStore.pushSnapshot(invalidSnapshot)).rejects.toThrow("non-empty canonical");
+    expect(syncCalls).toEqual([]);
   });
 
   test("maps task-list update preflight and project unique violations to stable conflicts", async () => {
@@ -1352,11 +1403,15 @@ describe("storage adapter contracts", () => {
     const statusSql = postgresTodosScopedSlugIndexStatusSql();
     expect(preflight).toContain("todos:scoped-slug-duplicate-audit");
     expect(preflight).toContain("array_agg(object_id ORDER BY object_id)");
+    expect(preflight).toContain("regexp_replace(lower(COALESCE(slug, ''))");
+    expect(preflight).toContain("'invalid'::text AS issue");
     expect(indexes).toHaveLength(2);
     expect(indexes.every((sql) => sql.includes("CREATE UNIQUE INDEX CONCURRENTLY"))).toBe(true);
     expect(indexes.join("\n")).toContain("task_list_scope_slug_uidx");
     expect(indexes.join("\n")).toContain("project_task_list_slug_uidx");
     expect(statusSql).toContain("todos:scoped-slug-index-status");
+    expect(statusSql).toContain("index_meta.indrelid = to_regclass('todos_sync_records')");
+    expect(statusSql).not.toContain("table_class.relname");
 
     const calls: string[] = [];
     const conflictClient: TodosPostgresQueryClient = {
@@ -1369,6 +1424,7 @@ describe("storage adapter contracts", () => {
           slug: "inbox",
           object_ids: ["list-a", "list-b"],
           duplicate_count: 2,
+          issue: "duplicate",
         }] as T[] };
       },
     };
@@ -1382,6 +1438,26 @@ describe("storage adapter contracts", () => {
       });
     }
     expect(calls).toHaveLength(1);
+
+    const invalidCalls: string[] = [];
+    await expect(ensurePostgresScopedSlugUniqueIndexes({
+      async query<T = Record<string, unknown>>(sql: string) {
+        invalidCalls.push(sql);
+        return { rows: [{
+          service: "todos",
+          object_type: "projects",
+          scope: "",
+          slug: "<null>",
+          object_ids: ["project-a"],
+          duplicate_count: 1,
+          issue: "invalid",
+        }] as T[] };
+      },
+    })).rejects.toMatchObject({
+      name: "PostgresScopedSlugMigrationConflictError",
+      conflicts: [expect.objectContaining({ issue: "invalid", object_ids: ["project-a"] })],
+    });
+    expect(invalidCalls).toEqual([preflight]);
 
     const cleanCalls: string[] = [];
     await ensurePostgresScopedSlugUniqueIndexes({
@@ -1887,21 +1963,27 @@ function createMemoryPostgresClient(): {
           return { rows: [{ found: true, project_conflict: projectConflict, task_list_conflict: listConflict, project: null, task_lists_updated: 0 }] as T[] };
         }
         let updated = 0;
+        const projectChanged = oldSlug !== newSlug || (name !== null && project["name"] !== name);
         for (const row of rows.values()) {
           const payload = row.payload as Record<string, unknown>;
           if (row.service === service && row.objectType === "task_lists" && !row.deletedAt &&
-              payload["project_id"] === projectId && payload["slug"] === oldSlug) {
+              payload["project_id"] === projectId && payload["slug"] === oldSlug &&
+              (oldSlug !== newSlug || (name !== null && payload["name"] !== name))) {
             payload["slug"] = newSlug;
             if (name !== null) payload["name"] = name;
             payload["updated_at"] = updatedAt;
             row.updatedAt = String(updatedAt);
+            row.version = (row.version ?? 0) + 1;
             updated += 1;
           }
         }
-        project["task_list_id"] = newSlug;
-        if (name !== null) project["name"] = name;
-        project["updated_at"] = updatedAt;
-        projectRow.updatedAt = String(updatedAt);
+        if (projectChanged) {
+          project["task_list_id"] = newSlug;
+          if (name !== null) project["name"] = name;
+          project["updated_at"] = updatedAt;
+          projectRow.updatedAt = String(updatedAt);
+          projectRow.version = (projectRow.version ?? 0) + 1;
+        }
         return { rows: [{ found: true, project_conflict: false, task_list_conflict: false, project, task_lists_updated: updated }] as T[] };
       }
 

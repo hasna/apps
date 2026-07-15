@@ -74,4 +74,14 @@ describe("project mutation OpenAPI contract", () => {
     expect(document.paths["/v1/projects/{id}/rename"].post.operationId).toBe("renameProject");
     expect(document.paths["/v1/projects/{id}/rename"].post.responses["409"]).toBeDefined();
   });
+
+  test("documents non-empty slug-bearing inputs and closed task-list bodies", () => {
+    const schemas = buildV1OpenApiDocument("test").components.schemas;
+
+    expect(schemas.CreateProjectInput.properties.name.pattern).toBe(".*[A-Za-z0-9].*");
+    expect(schemas.RenameProjectInput.properties.new_slug.pattern).toBe(".*[A-Za-z0-9].*");
+    expect(schemas.CreateTaskListInput).toMatchObject({ additionalProperties: false });
+    expect(schemas.CreateTaskListInput.properties.slug).toMatchObject({ minLength: 1, pattern: ".*[A-Za-z0-9].*" });
+    expect(schemas.UpdateTaskListInput).toMatchObject({ additionalProperties: false, minProperties: 1 });
+  });
 });

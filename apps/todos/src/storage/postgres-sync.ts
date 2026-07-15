@@ -3,6 +3,7 @@ import type {
   TodosStorageContext,
   TodosStorageSnapshot,
 } from "./interfaces.js";
+import { isCanonicalSlug } from "../lib/slugs.js";
 
 export type TodosPostgresSyncRecordType =
   | "tasks"
@@ -99,6 +100,7 @@ export interface PostgresScopedSlugConflict {
   slug: string;
   object_ids: string[];
   duplicate_count: number;
+  issue: "duplicate" | "invalid";
 }
 
 export interface PostgresScopedSlugIndexStatus {
@@ -113,7 +115,7 @@ export class PostgresScopedSlugMigrationConflictError extends Error {
       `${conflict.object_type}:${conflict.scope || "global"}:${conflict.slug} [${conflict.object_ids.join(", ")}]`
     ).join("; ");
     super(
-      `Scoped slug unique-index preflight found ${conflicts.length} duplicate group(s): ${preview}. ` +
+      `Scoped slug unique-index preflight found ${conflicts.length} invalid or duplicate slug conflict(s): ${preview}. ` +
       "Resolve these records explicitly without deleting history, then rerun todos-serve migrate.",
     );
     this.name = "PostgresScopedSlugMigrationConflictError";
@@ -145,13 +147,24 @@ export function postgresTodosScopedSlugPreflightSql(
     SELECT service, object_type, '' AS scope, payload->>'task_list_id' AS slug, object_id
     FROM ${tableName}
     WHERE object_type = 'projects' AND deleted_at IS NULL
-  ) SELECT service, object_type, scope, slug,
-      array_agg(object_id ORDER BY object_id) AS object_ids,
-      count(*)::integer AS duplicate_count
+  ), annotated AS (
+    SELECT *, trim(both '-' from regexp_replace(lower(COALESCE(slug, '')), '[^a-z0-9]+', '-', 'g')) AS normalized_slug
     FROM candidates
-    WHERE slug IS NOT NULL AND slug <> ''
+  ), invalid AS (
+    SELECT service, object_type, scope, COALESCE(slug, '<null>') AS slug,
+      ARRAY[object_id] AS object_ids, 1::integer AS duplicate_count, 'invalid'::text AS issue
+    FROM annotated
+    WHERE slug IS NULL OR slug = '' OR normalized_slug = '' OR slug IS DISTINCT FROM normalized_slug
+  ), duplicates AS (
+    SELECT service, object_type, scope, slug,
+      array_agg(object_id ORDER BY object_id) AS object_ids,
+      count(*)::integer AS duplicate_count, 'duplicate'::text AS issue
+    FROM annotated
+    WHERE slug = normalized_slug AND slug <> ''
     GROUP BY service, object_type, scope, slug
     HAVING count(*) > 1
+  ) SELECT * FROM invalid
+    UNION ALL SELECT * FROM duplicates
     ORDER BY service, object_type, scope, slug`;
 }
 
@@ -177,10 +190,9 @@ export function postgresTodosScopedSlugIndexStatusSql(
   assertSafeIdentifier(tableName);
   return `/* todos:scoped-slug-index-status */ SELECT index_class.relname AS index_name,
       index_meta.indisvalid AS is_valid, index_meta.indisready AS is_ready
-    FROM pg_class table_class
-    JOIN pg_index index_meta ON index_meta.indrelid = table_class.oid
+    FROM pg_index index_meta
     JOIN pg_class index_class ON index_class.oid = index_meta.indexrelid
-    WHERE table_class.relname = '${tableName}'
+    WHERE index_meta.indrelid = to_regclass('${tableName}')
       AND index_class.relname IN (
         '${tableName}_task_list_scope_slug_uidx',
         '${tableName}_project_task_list_slug_uidx'
@@ -260,6 +272,7 @@ export class PostgresTodosSyncStore {
     const result: PostgresTodosSyncPushResult = { records: 0, objectTypes: {} };
     const sourceMachineId = context.requestId ?? this.sourceMachineId ?? null;
     for (const entry of snapshotEntries(snapshot)) {
+      if (entry.deletedAt === null) assertCanonicalScopedSlugEntry(entry);
       await this.client.query(
         `INSERT INTO ${this.tableName} (
           service, object_type, object_id, payload, updated_at,
@@ -369,6 +382,17 @@ function snapshotEntries(snapshot: TodosStorageSnapshot): Array<{
       version: tombstone.version ?? null,
     })),
   ];
+}
+
+function assertCanonicalScopedSlugEntry(entry: { type: TodosPostgresSyncRecordType; payload: unknown }): void {
+  if (!entry.payload || typeof entry.payload !== "object" || Array.isArray(entry.payload)) return;
+  const payload = entry.payload as Record<string, unknown>;
+  if (entry.type === "projects" && !isCanonicalSlug(payload["task_list_id"])) {
+    throw new Error("Invalid project task-list slug — sync requires non-empty canonical kebab-case");
+  }
+  if (entry.type === "task_lists" && !isCanonicalSlug(payload["slug"])) {
+    throw new Error("Invalid task-list slug — sync requires non-empty canonical kebab-case");
+  }
 }
 
 function entry(type: TodosPostgresSyncRecordType, payload: Record<string, unknown>, fallbackUpdatedAt: string) {

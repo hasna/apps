@@ -4,9 +4,10 @@ import { ProjectNotFoundError, ResourceConflictError } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
 import { getMachineId } from "./machines.js";
 import { currentStorageMachineId, recordStorageTombstone } from "./storage-tombstones.js";
+import { normalizeSlug } from "../lib/slugs.js";
 
 export function slugify(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  return normalizeSlug(name);
 }
 
 function generatePrefix(name: string, db: Database): string {
@@ -141,30 +142,30 @@ export function renameProject(
 
     if (input.new_slug !== undefined) {
       // Validate slug: lowercase, kebab-case only
-      const normalised = input.new_slug.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-|-$/g, "");
+      const normalised = normalizeSlug(input.new_slug);
       if (!normalised) throw new Error("Invalid slug — must be non-empty kebab-case");
 
-      // Check uniqueness against other projects
-      const conflict = d.query(
-        "SELECT id FROM projects WHERE task_list_id = ? AND id != ?",
-      ).get(normalised, id);
-      if (conflict) {
-        throw new ResourceConflictError("PROJECT_SLUG_CONFLICT", `Slug "${normalised}" is already used by another project`);
-      }
-
       const oldSlug = project.task_list_id;
-      const taskListConflict = d.query(
-        "SELECT id FROM task_lists WHERE project_id = ? AND slug = ? AND slug != COALESCE(?, '') LIMIT 1",
-      ).get(id, normalised, oldSlug) as { id: string } | null;
-      if (taskListConflict) {
-        throw new ResourceConflictError(
-          "TASK_LIST_SLUG_CONFLICT",
-          `Task-list slug "${normalised}" is already used in project "${project.name}"`,
-        );
+      if (normalised !== oldSlug) {
+        const conflict = d.query(
+          "SELECT id FROM projects WHERE task_list_id = ? AND id != ?",
+        ).get(normalised, id);
+        if (conflict) {
+          throw new ResourceConflictError("PROJECT_SLUG_CONFLICT", `Slug "${normalised}" is already used by another project`);
+        }
+
+        const taskListConflict = d.query(
+          "SELECT id FROM task_lists WHERE project_id = ? AND slug = ? AND slug != COALESCE(?, '') LIMIT 1",
+        ).get(id, normalised, oldSlug) as { id: string } | null;
+        if (taskListConflict) {
+          throw new ResourceConflictError(
+            "TASK_LIST_SLUG_CONFLICT",
+            `Task-list slug "${normalised}" is already used in project "${project.name}"`,
+          );
+        }
+        d.run("UPDATE projects SET task_list_id = ?, updated_at = ? WHERE id = ?", [normalised, ts, id]);
       }
-      // Update projects.task_list_id and its matching canonical task list.
-      d.run("UPDATE projects SET task_list_id = ?, updated_at = ? WHERE id = ?", [normalised, ts, id]);
-      if (oldSlug) {
+      if (oldSlug && (normalised !== oldSlug || (input.name !== undefined && input.name !== project.name))) {
         const result = d.run(
           "UPDATE task_lists SET slug = ?, name = COALESCE(?, name), updated_at = ? WHERE project_id = ? AND slug = ?",
           [normalised, input.name ?? null, ts, id, oldSlug],
@@ -173,7 +174,7 @@ export function renameProject(
       }
     }
 
-    if (input.name !== undefined) {
+    if (input.name !== undefined && input.name !== project.name) {
       d.run("UPDATE projects SET name = ?, updated_at = ? WHERE id = ?", [input.name, ts, id]);
     }
 

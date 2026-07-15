@@ -56,6 +56,7 @@ import {
   type TodosPostgresSyncRecordType,
 } from "./postgres-sync.js";
 import { redactEvidenceText } from "../lib/redaction.js";
+import { isCanonicalSlug, normalizeSlug } from "../lib/slugs.js";
 
 type RemoteObjectType = TodosPostgresSyncRecordType | "comments" | "dependencies" | "verifications" | "commits" | "refs";
 
@@ -431,6 +432,12 @@ class PostgresJsonRecordStore {
     value: T,
     context: TodosStorageContext = {},
   ): Promise<T> {
+    if (type === "projects" && !isCanonicalSlug((value as { task_list_id?: unknown }).task_list_id)) {
+      throw new Error("Invalid project task-list slug — imports require non-empty canonical kebab-case");
+    }
+    if (type === "task_lists" && !isCanonicalSlug((value as { slug?: unknown }).slug)) {
+      throw new Error("Invalid task-list slug — imports require non-empty canonical kebab-case");
+    }
     await this.ensureSchema();
     const updatedAt = stringValue(value.updated_at) ?? stringValue(value.created_at) ?? new Date().toISOString();
     // M8: resolve conflicts by (updated_at, version) rather than wall-clock only.
@@ -538,6 +545,8 @@ class PostgresJsonRecordStore {
             AND r.payload->>'project_id' = $2 AND r.payload->>'slug' = target.old_slug
             AND NOT EXISTS (SELECT 1 FROM project_conflict)
             AND NOT EXISTS (SELECT 1 FROM task_list_conflict)
+            AND (target.old_slug IS DISTINCT FROM $3
+              OR ($4::text IS NOT NULL AND r.payload->>'name' IS DISTINCT FROM $4))
           RETURNING 1
         ), updated_project AS (
           UPDATE ${this.tableName} r SET
@@ -549,12 +558,14 @@ class PostgresJsonRecordStore {
           WHERE r.service = $1 AND r.object_type = 'projects' AND r.object_id = $2 AND r.deleted_at IS NULL
             AND NOT EXISTS (SELECT 1 FROM project_conflict)
             AND NOT EXISTS (SELECT 1 FROM task_list_conflict)
+            AND (target.old_slug IS DISTINCT FROM $3
+              OR ($4::text IS NOT NULL AND target.payload->>'name' IS DISTINCT FROM $4))
           RETURNING r.payload
         ) SELECT
           EXISTS (SELECT 1 FROM target) AS found,
           EXISTS (SELECT 1 FROM project_conflict) AS project_conflict,
           EXISTS (SELECT 1 FROM task_list_conflict) AS task_list_conflict,
-          (SELECT payload FROM updated_project) AS project,
+          COALESCE((SELECT payload FROM updated_project), (SELECT payload FROM target)) AS project,
           (SELECT count(*) FROM updated_lists) AS task_lists_updated`,
         [this.service, id, normalizedSlug, name ?? null, timestamp, this.machineId(context)],
       );
@@ -1309,7 +1320,7 @@ async function releaseAgent(
 
 async function createTaskList(input: CreateTaskListInput, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<TaskList> {
   const timestamp = new Date().toISOString();
-  const slug = input.slug === undefined ? slugify(input.name) : slugifyRaw(input.slug);
+  const slug = slugifyRaw(input.slug === undefined ? input.name : input.slug);
   if (!slug) throw new Error("Invalid task-list slug — must be non-empty kebab-case");
   return store.upsert("task_lists", {
     id: randomUUID(),
@@ -1516,11 +1527,7 @@ async function generateProjectPrefix(name: string, store: PostgresJsonRecordStor
 }
 
 function slugifyRaw(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-}
-
-function slugify(value: string): string {
-  return slugifyRaw(value) || "todos";
+  return normalizeSlug(value);
 }
 
 function normalizePlanSlug(value: string): string {

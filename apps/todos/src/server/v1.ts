@@ -12,6 +12,7 @@ import type { CreateProjectInput, CreateTaskInput, CreateTaskListInput, RenamePr
 import type { TodosStorageContext, TodosStorageSnapshot } from "../storage/interfaces.js";
 import { getCloudStorageAdapter, getCloudVerifier, ensureCloudSchema } from "./cloud.js";
 import { redactEvidenceText } from "../lib/redaction.js";
+import { normalizeSlug } from "../lib/slugs.js";
 
 export interface V1RequestDependencies {
   getVerifier?: typeof getCloudVerifier;
@@ -56,6 +57,7 @@ function validateProjectCreate(value: unknown):
   const unknown = Object.keys(body).find((key) => !allowed.has(key));
   if (unknown) return { ok: false, message: `unknown project field: ${unknown}` };
   if (typeof body["name"] !== "string" || !body["name"].trim()) return { ok: false, message: "name must be a non-empty string" };
+  if (!normalizeSlug(body["name"])) return { ok: false, message: "name must produce a non-empty canonical slug" };
   if (typeof body["path"] !== "string" || !body["path"].trim()) return { ok: false, message: "path must be a non-empty string" };
   if (body["description"] !== undefined && typeof body["description"] !== "string") return { ok: false, message: "description must be a string" };
   return { ok: true, input: body as never };
@@ -649,7 +651,7 @@ export async function handleV1Request(
       if (action === "rename") {
         if (method !== "POST") return error(405, `method ${method} not allowed on /v1/projects/:id/rename`);
         const body = await readJson<RenameProjectInput>(req);
-        if (!body || typeof body.new_slug !== "string" || !body.new_slug.trim()) {
+        if (!body || typeof body.new_slug !== "string" || !body.new_slug.trim() || !normalizeSlug(body.new_slug)) {
           return error(400, "new_slug must be a non-empty string");
         }
         if (body.name !== undefined && (typeof body.name !== "string" || !body.name.trim())) {
@@ -769,6 +771,17 @@ export async function handleV1Request(
       if (!id && method === "POST") {
         const body = await readJson<CreateTaskListInput>(req);
         if (!body || typeof body.name !== "string" || !body.name.trim()) return error(400, "name is required");
+        const unknownField = Object.keys(body).find((key) => !["name", "slug", "project_id", "description", "metadata"].includes(key));
+        if (unknownField) return error(400, `unsupported task-list create field: ${unknownField}`);
+        if (body.slug !== undefined && typeof body.slug !== "string") return error(400, "slug must be a string");
+        if (body.project_id !== undefined && typeof body.project_id !== "string") return error(400, "project_id must be a string");
+        if (body.description !== undefined && typeof body.description !== "string") return error(400, "description must be a string");
+        if (body.metadata !== undefined && (!body.metadata || typeof body.metadata !== "object" || Array.isArray(body.metadata))) {
+          return error(400, "metadata must be an object");
+        }
+        if (!normalizeSlug(body.slug === undefined ? body.name : body.slug)) {
+          return error(400, "task-list slug must be non-empty kebab-case");
+        }
         const taskList = await store.taskLists.create(body, contextFromPrincipal(principal));
         return json({ task_list: taskList }, 201);
       }
@@ -781,8 +794,9 @@ export async function handleV1Request(
         if (!body) return error(400, "invalid JSON body");
         const unknownField = Object.keys(body).find((key) => !["slug", "name", "description", "metadata"].includes(key));
         if (unknownField) return error(400, `unsupported task-list update field: ${unknownField}`);
-        if (body.slug !== undefined && typeof body.slug !== "string") return error(400, "slug must be a string");
-        if (body.name !== undefined && typeof body.name !== "string") return error(400, "name must be a string");
+        if (Object.keys(body).length === 0) return error(400, "task-list update must not be empty");
+        if (body.slug !== undefined && (typeof body.slug !== "string" || !normalizeSlug(body.slug))) return error(400, "slug must be a non-empty string");
+        if (body.name !== undefined && (typeof body.name !== "string" || !body.name.trim())) return error(400, "name must be a non-empty string");
         if (body.description !== undefined && typeof body.description !== "string") return error(400, "description must be a string");
         if (body.metadata !== undefined && (!body.metadata || typeof body.metadata !== "object" || Array.isArray(body.metadata))) {
           return error(400, "metadata must be an object");

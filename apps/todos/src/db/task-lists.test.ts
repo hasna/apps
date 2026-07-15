@@ -30,6 +30,12 @@ describe("createTaskList", () => {
     expect(list.slug).toBe("sprint-1");
   });
 
+  it("rejects empty explicit and derived slugs", () => {
+    expect(() => createTaskList({ name: "---" })).toThrow("non-empty kebab-case");
+    expect(() => createTaskList({ name: "Inbox", slug: "" })).toThrow("non-empty kebab-case");
+    expect(() => createTaskList({ name: "Inbox", slug: "---" })).toThrow("non-empty kebab-case");
+  });
+
   it("should create with project_id", () => {
     const project = createProject({ name: "Test", path: "/test" });
     const list = createTaskList({ name: "Bugs", project_id: project.id });

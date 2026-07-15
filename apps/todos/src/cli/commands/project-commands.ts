@@ -6,8 +6,8 @@ import {
   createProject,
   deleteProject,
   listProjects,
-  updateProject,
   getProjectByPath,
+  renameProject,
 } from "../../db/projects.js";
 import { addComment } from "../../db/comments.js";
 import { getTodosCloudClient, cloudAddComment, cloudListProjects, cloudAddDependency, cloudRemoveDependency, cloudGetDependencies, cloudRenameProject } from "../cloud-router.js";
@@ -610,7 +610,7 @@ export function registerProjectCommands(program: Command) {
         if (existing) {
           project = existing;
           if (opts.taskListId) {
-            project = updateProject(existing.id, { task_list_id: opts.taskListId });
+            project = renameProject(existing.id, { new_slug: opts.taskListId }).project;
           }
         } else {
           project = createProject({ name, path: projectPath, task_list_id: opts.taskListId });
@@ -700,7 +700,6 @@ export function registerProjectCommands(program: Command) {
         if (cloud) {
           result = await cloudRenameProject(cloud, idOrSlug, newSlug, opts.name);
         } else {
-          const { renameProject } = await import("../../db/projects.js");
           const db = getDatabase();
           // Try resolve by ID first, then by task_list_id slug
           let resolvedId = resolvePartialId(db, "projects", idOrSlug);

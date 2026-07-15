@@ -105,6 +105,22 @@ describe("updateProject", () => {
 });
 
 describe("renameProject", () => {
+  it("normalizes consistently and keeps an identical retry idempotent", async () => {
+    const project = createProject({ name: "Emails", path: "/tmp/emails", task_list_id: "emails" }, db);
+    createTaskList({ name: "Emails", slug: "emails", project_id: project.id }, db);
+
+    const first = renameProject(project.id, { new_slug: "Emails Next", name: "Emails Next" }, db);
+    await Bun.sleep(2);
+    const retry = renameProject(project.id, { new_slug: "emails-next", name: "Emails Next" }, db);
+
+    expect(first).toMatchObject({ project: { task_list_id: "emails-next" }, task_lists_updated: 1 });
+    expect(retry).toMatchObject({
+      project: { task_list_id: "emails-next", updated_at: first.project.updated_at },
+      task_lists_updated: 0,
+    });
+    expect(() => renameProject(project.id, { new_slug: "---" }, db)).toThrow("non-empty kebab-case");
+  });
+
   it("rolls back the project when the task-list cascade fails", () => {
     const project = createProject({ name: "Emails", path: "/tmp/emails", task_list_id: "emails" }, db);
     createTaskList({ name: "Emails", slug: "emails", project_id: project.id }, db);

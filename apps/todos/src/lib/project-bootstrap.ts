@@ -6,9 +6,9 @@ import {
   addProjectSource,
   ensureProject,
   listProjectSources,
+  renameProject,
   setMachineLocalPath,
   slugify,
-  updateProject,
 } from "../db/projects.js";
 import { ensureTaskList, updateTaskList } from "../db/task-lists.js";
 import type { Project, ProjectSource, TaskList } from "../types/index.js";
@@ -168,10 +168,10 @@ export function bootstrapProject(options: ProjectBootstrapOptions = {}, db?: Dat
   const createdProject = !beforeProject;
 
   if (project.task_list_id !== taskListSlug || (options.name && project.name !== options.name)) {
-    project = updateProject(project.id, {
+    project = renameProject(project.id, {
       name: options.name ?? project.name,
-      task_list_id: taskListSlug,
-    }, d);
+      new_slug: taskListSlug,
+    }, d).project;
   }
   setMachineLocalPath(project.id, discovery.projectPath, d);
 

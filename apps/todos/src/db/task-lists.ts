@@ -4,6 +4,7 @@ import { ResourceConflictError, TaskListNotFoundError } from "../types/index.js"
 import { getDatabase, now, uuid } from "./database.js";
 import { slugify } from "./projects.js";
 import { currentStorageMachineId, recordStorageTombstone } from "./storage-tombstones.js";
+import { normalizeSlug } from "../lib/slugs.js";
 
 function rowToTaskList(row: TaskListRow): TaskList {
   return {
@@ -16,7 +17,8 @@ export function createTaskList(input: CreateTaskListInput, db?: Database): TaskL
   const d = db || getDatabase();
   const id = uuid();
   const timestamp = now();
-  const slug = input.slug || slugify(input.name);
+  const slug = normalizeSlug(input.slug === undefined ? input.name : input.slug);
+  if (!slug) throw new Error("Invalid task-list slug — must be non-empty kebab-case");
   const machineId = currentStorageMachineId(d);
 
   const existing = input.project_id

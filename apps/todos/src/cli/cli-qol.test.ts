@@ -13,7 +13,7 @@ let fakeHome: string;
 
 function run(args: string): string {
   return execSync(
-    `HOME=${fakeHome} TODOS_DB_PATH=${dbPath} TODOS_AUTO_PROJECT=false bun run src/cli/index.tsx ${args}`,
+    `HOME=${fakeHome} TODOS_DB_PATH=${dbPath} TODOS_AUTO_PROJECT=false HASNA_TODOS_STORAGE_MODE=local TODOS_STORAGE_MODE=local HASNA_TODOS_API_URL= HASNA_TODOS_API_KEY= bun run src/cli/index.tsx ${args}`,
     { encoding: "utf-8", cwd: CWD, timeout: 15000 },
   ).trim();
 }
@@ -235,6 +235,18 @@ describe("CLI QoL commands", () => {
       expect(task.project_id).toBe(proj.id);
     }
   });
+
+  it("projects --add routes task-list slug changes through the canonical cascade", () => {
+    const projectPath = join(tmpDir, "canonical-project-slug");
+    const created = JSON.parse(run(`--json projects --add ${projectPath} --name 'Canonical Project' --task-list-id original-slug`));
+    run(`--project ${created.id} --json lists --add 'Canonical List' --slug original-slug`);
+
+    const updated = JSON.parse(run(`--json projects --add ${projectPath} --task-list-id next-slug`));
+    const lists = JSON.parse(run(`--project ${created.id} --json lists`));
+
+    expect(updated.task_list_id).toBe("next-slug");
+    expect(lists).toEqual([expect.objectContaining({ slug: "next-slug" })]);
+  }, 15_000);
 
   it("project-panel --json should emit a project panel contract", () => {
     const projPath = join(tmpDir, "panel-project");
