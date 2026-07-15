@@ -113,7 +113,10 @@ describe("server image build context", () => {
     expect(buildspec).not.toContain("hasna-xyz-");
     expect(buildspec).toContain("sslmode=verify-full");
     expect(buildspec).toContain("NODE_EXTRA_CA_CERTS=/tls/ca.crt");
-    expect(buildspec).toContain("postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777");
+    expect(buildspec).toContain(
+      "public.ecr.aws/docker/library/postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777",
+    );
+    expect(buildspec).not.toMatch(/\s+postgres:16-alpine@sha256:/);
     expect(buildspec).toContain("wrong-ca.crt");
     expect(buildspec).toContain("wrong-postgres");
     expect(buildspec).toContain("bun dist/server/index.js migrate");
