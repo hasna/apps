@@ -290,8 +290,8 @@ export class PostgresTodosSyncStore {
     const existing = await this.client.query<TodosPostgresSyncRecordRow>(
       `SELECT object_type, object_id, payload, updated_at, deleted_at, source_machine_id, version
        FROM ${this.tableName}
-       WHERE service = $1 AND object_type = ANY($2::text[]) AND deleted_at IS NULL`,
-      [this.service, ["projects", "task_lists"]],
+       WHERE service = $1 AND object_type IN ($2, $3) AND deleted_at IS NULL`,
+      [this.service, "projects", "task_lists"],
     );
     const existingProjects: ProjectRoutingRecord[] = [];
     const existingTaskLists: TaskListRoutingRecord[] = [];

@@ -328,6 +328,24 @@ describe("storage adapter contracts", () => {
     expect(syncCalls).toEqual([]);
   });
 
+  test("Postgres sync routing preflight uses Bun.SQL-safe scalar parameters", async () => {
+    const snapshot = await createLocalSqliteTodosStorageAdapter({ db }).sync.exportSnapshot!();
+    const calls: Array<{ sql: string; values?: readonly unknown[] }> = [];
+    const syncStore = createPostgresTodosSyncStore({
+      async query<T = Record<string, unknown>>(sql: string, values?: readonly unknown[]) {
+        calls.push({ sql, values });
+        return { rows: [] as T[] };
+      },
+    });
+
+    await expect(syncStore.pushSnapshot(snapshot)).resolves.toMatchObject({ records: 0 });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.sql).toContain("object_type IN ($2, $3)");
+    expect(calls[0]!.sql).not.toContain("ANY(");
+    expect(calls[0]!.values).toEqual(["todos", "projects", "task_lists"]);
+    expect(calls[0]!.values!.some(Array.isArray)).toBe(false);
+  });
+
   test("fails closed on duplicate snapshot routing slugs across SQLite and Postgres imports", async () => {
     const source = createLocalSqliteTodosStorageAdapter({ db });
     const firstProject = await source.projects.create({ name: "Duplicate One", path: "/tmp/duplicate-one" });
