@@ -14,6 +14,7 @@ import { createTodosCloudQueryClient, type TodosCloudQueryClient } from "../stor
 import { createPostgresTodosStorageAdapter } from "../storage/postgres-adapter.js";
 import type { TodosStorageAdapter } from "../storage/interfaces.js";
 import {
+  ensurePostgresScopedSlugUniqueIndexes,
   postgresTodosCommentCursorIndexSql,
   postgresTodosSyncSchemaSql,
 } from "../storage/postgres-sync.js";
@@ -149,6 +150,11 @@ export async function ensureCloudSchema(): Promise<void> {
  */
 export async function ensureCloudCommentCursorIndex(): Promise<void> {
   await getClient().query(postgresTodosCommentCursorIndexSql());
+}
+
+/** Audit duplicates, then establish project/task-list slug invariants concurrently. */
+export async function ensureCloudScopedSlugUniqueIndexes(): Promise<void> {
+  await ensurePostgresScopedSlugUniqueIndexes(getClient());
 }
 
 /**

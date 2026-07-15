@@ -20,6 +20,7 @@ import type {
   TodosStorageTombstone,
   TodosProjectMachinePath,
 } from "./interfaces.js";
+import { validateSnapshotRoutingDestinationConflicts, validateSnapshotRoutingRecords } from "../lib/slugs.js";
 
 const PROJECT_COLUMNS = [
   "id", "name", "path", "description", "task_list_id", "task_prefix", "task_counter",
@@ -102,6 +103,24 @@ export function importSqliteTodosStorageSnapshot(
     skipped: 0,
     errors: [],
   };
+  result.errors.push(...validateSnapshotRoutingRecords(snapshot.projects, snapshot.taskLists));
+  if (result.errors.length === 0) {
+    const existingProjects = d.query("SELECT id, task_list_id FROM projects").all() as Array<{ id: string; task_list_id: string | null }>;
+    const existingTaskLists = d.query("SELECT id, project_id, slug FROM task_lists").all() as Array<{
+      id: string;
+      project_id: string | null;
+      slug: string;
+    }>;
+    result.errors.push(...validateSnapshotRoutingDestinationConflicts(
+      snapshot.projects,
+      snapshot.taskLists,
+      existingProjects,
+      existingTaskLists,
+    ));
+  }
+  // Preflight the full snapshot before any write so malformed routing metadata
+  // cannot leave an otherwise-valid prefix partially imported.
+  if (result.errors.length > 0) return result;
 
   const applyRows = (
     objectType: StorageTombstoneObjectType,

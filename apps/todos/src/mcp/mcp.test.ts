@@ -29,6 +29,15 @@ import { registerTodosMdTools } from "./tools/todos-md.js";
 // These validate the underlying data operations are correct.
 
 let db: ReturnType<typeof getDatabase>;
+const ROUTING_ENV_KEYS = [
+  "HASNA_TODOS_STORAGE_MODE",
+  "TODOS_STORAGE_MODE",
+  "HASNA_TODOS_API_URL",
+  "HASNA_TODOS_API_KEY",
+  "TODOS_API_URL",
+  "TODOS_API_KEY",
+] as const;
+let originalRoutingEnv: Partial<Record<(typeof ROUTING_ENV_KEYS)[number], string>> = {};
 
 type CapturedTool = {
   description: string;
@@ -77,6 +86,15 @@ async function callCapturedTool(tools: Map<string, CapturedTool>, name: string, 
 }
 
 beforeEach(() => {
+  originalRoutingEnv = {};
+  for (const key of ROUTING_ENV_KEYS) {
+    const value = process.env[key];
+    if (value !== undefined) originalRoutingEnv[key] = value;
+    delete process.env[key];
+  }
+  process.env["HASNA_TODOS_STORAGE_MODE"] = "local";
+  process.env["TODOS_STORAGE_MODE"] = "local";
+  resetConfig();
   process.env["TODOS_DB_PATH"] = ":memory:";
   resetDatabase();
   db = getDatabase();
@@ -85,6 +103,12 @@ beforeEach(() => {
 afterEach(() => {
   closeDatabase();
   delete process.env["TODOS_DB_PATH"];
+  for (const key of ROUTING_ENV_KEYS) {
+    const value = originalRoutingEnv[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  resetConfig();
 });
 
 describe("MCP tool operations", () => {

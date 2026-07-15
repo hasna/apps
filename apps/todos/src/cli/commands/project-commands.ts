@@ -6,11 +6,11 @@ import {
   createProject,
   deleteProject,
   listProjects,
-  updateProject,
   getProjectByPath,
+  renameProject,
 } from "../../db/projects.js";
 import { addComment } from "../../db/comments.js";
-import { getTodosCloudClient, cloudAddComment, cloudListProjects, cloudAddDependency, cloudRemoveDependency, cloudGetDependencies } from "../cloud-router.js";
+import { getTodosCloudClient, cloudAddComment, cloudListProjects, cloudAddDependency, cloudRemoveDependency, cloudGetDependencies, cloudRenameProject } from "../cloud-router.js";
 import { searchTasks } from "../../lib/search.js";
 import {
   deleteSearchView,
@@ -610,7 +610,7 @@ export function registerProjectCommands(program: Command) {
         if (existing) {
           project = existing;
           if (opts.taskListId) {
-            project = updateProject(existing.id, { task_list_id: opts.taskListId });
+            project = renameProject(existing.id, { new_slug: opts.taskListId }).project;
           }
         } else {
           project = createProject({ name, path: projectPath, task_list_id: opts.taskListId });
@@ -695,19 +695,24 @@ export function registerProjectCommands(program: Command) {
       const globalOpts = program.opts();
       const useJson = opts.json || globalOpts.json;
       try {
-        const { renameProject } = await import("../../db/projects.js");
-        const db = getDatabase();
-        // Try resolve by ID first, then by task_list_id slug
-        let resolvedId = resolvePartialId(db, "projects", idOrSlug);
-        if (!resolvedId) {
-          const bySlug = db.query("SELECT id FROM projects WHERE task_list_id = ?").get(idOrSlug) as { id: string } | null;
-          resolvedId = bySlug?.id ?? null;
+        const cloud = getTodosCloudClient();
+        let result;
+        if (cloud) {
+          result = await cloudRenameProject(cloud, idOrSlug, newSlug, opts.name);
+        } else {
+          const db = getDatabase();
+          // Try resolve by ID first, then by task_list_id slug
+          let resolvedId = resolvePartialId(db, "projects", idOrSlug);
+          if (!resolvedId) {
+            const bySlug = db.query("SELECT id FROM projects WHERE task_list_id = ?").get(idOrSlug) as { id: string } | null;
+            resolvedId = bySlug?.id ?? null;
+          }
+          if (!resolvedId) {
+            console.error(chalk.red(`Project not found: ${idOrSlug}`));
+            process.exit(1);
+          }
+          result = renameProject(resolvedId, { name: opts.name, new_slug: newSlug });
         }
-        if (!resolvedId) {
-          console.error(chalk.red(`Project not found: ${idOrSlug}`));
-          process.exit(1);
-        }
-        const result = renameProject(resolvedId, { name: opts.name, new_slug: newSlug });
         if (useJson) {
           output({ project: result.project, task_lists_updated: result.task_lists_updated }, true);
         } else {

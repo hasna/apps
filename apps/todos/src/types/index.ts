@@ -79,6 +79,23 @@ export interface CreateProjectInput {
   task_prefix?: string;
 }
 
+/** Ordinary project metadata update. Canonical slug changes require renameProject. */
+export interface UpdateProjectInput {
+  name?: string;
+  path?: string;
+  description?: string | null;
+}
+
+export interface RenameProjectInput {
+  new_slug: string;
+  name?: string;
+}
+
+export interface RenameProjectResult {
+  project: Project;
+  task_lists_updated: number;
+}
+
 // Org
 export interface Org {
   id: string;
@@ -326,6 +343,7 @@ export interface CreateTaskListInput {
 }
 
 export interface UpdateTaskListInput {
+  slug?: string;
   name?: string;
   description?: string;
   metadata?: Record<string, unknown>;
@@ -1008,6 +1026,16 @@ export class ProjectNotFoundError extends Error {
   constructor(public projectId: string) {
     super(`Project not found: ${projectId}`);
     this.name = "ProjectNotFoundError";
+  }
+}
+
+export class ResourceConflictError extends Error {
+  constructor(
+    public readonly code: "PROJECT_SLUG_CONFLICT" | "TASK_LIST_SLUG_CONFLICT",
+    message: string,
+  ) {
+    super(message);
+    this.name = "ResourceConflictError";
   }
 }
 

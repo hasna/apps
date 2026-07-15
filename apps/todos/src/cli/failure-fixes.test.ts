@@ -3,6 +3,7 @@ import { mkdtemp, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
+import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
 
 const CWD = join(import.meta.dir, "../..");
 const T = 30000; // generous per-test timeout: each case shells out to the CLI
@@ -13,8 +14,13 @@ let fakeHome: string;
 
 function run(args: string): string {
   return execSync(
-    `HOME=${fakeHome} TODOS_DB_PATH=${dbPath} TODOS_AUTO_PROJECT=false bun run src/cli/index.tsx ${args}`,
-    { encoding: "utf-8", cwd: CWD, timeout: 25000 },
+    `bun run src/cli/index.tsx ${args}`,
+    {
+      encoding: "utf-8",
+      cwd: CWD,
+      timeout: 25000,
+      env: localRoutingTestEnv({ HOME: fakeHome, TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false" }),
+    },
   ).trim();
 }
 
@@ -22,8 +28,13 @@ function run(args: string): string {
 function runExpectFail(args: string): { code: number; output: string } {
   try {
     execSync(
-      `HOME=${fakeHome} TODOS_DB_PATH=${dbPath} TODOS_AUTO_PROJECT=false bun run src/cli/index.tsx ${args} 2>&1`,
-      { encoding: "utf-8", cwd: CWD, timeout: 25000 },
+      `bun run src/cli/index.tsx ${args} 2>&1`,
+      {
+        encoding: "utf-8",
+        cwd: CWD,
+        timeout: 25000,
+        env: localRoutingTestEnv({ HOME: fakeHome, TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false" }),
+      },
     );
     return { code: 0, output: "" };
   } catch (e: any) {
@@ -72,8 +83,17 @@ describe("H1: global --json works on automation commands", () => {
 
   it("`--json next` emits JSON null when no task is available", () => {
     const out = execSync(
-      `HOME=${fakeHome} TODOS_DB_PATH=${join(tmpDir, "empty.db")} TODOS_AUTO_PROJECT=false bun run src/cli/index.tsx --json next`,
-      { encoding: "utf-8", cwd: CWD, timeout: 25000 },
+      `bun run src/cli/index.tsx --json next`,
+      {
+        encoding: "utf-8",
+        cwd: CWD,
+        timeout: 25000,
+        env: localRoutingTestEnv({
+          HOME: fakeHome,
+          TODOS_DB_PATH: join(tmpDir, "empty.db"),
+          TODOS_AUTO_PROJECT: "false",
+        }),
+      },
     ).trim();
     expect(JSON.parse(out)).toBeNull();
   }, T);

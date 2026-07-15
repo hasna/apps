@@ -7,11 +7,12 @@
  * require `todos:write` (a `todos:*` key satisfies both). This is a real wrapper
  * over the core storage lib — there are NO stubs; unimplemented routes 404.
  */
-import { LockError } from "../types/index.js";
-import type { CreateProjectInput, CreateTaskInput, CreateTaskListInput, TaskComment, UpdateTaskInput } from "../types/index.js";
+import { LockError, ProjectNotFoundError, ResourceConflictError } from "../types/index.js";
+import type { CreateProjectInput, CreateTaskInput, CreateTaskListInput, RenameProjectInput, TaskComment, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
 import type { TodosStorageContext, TodosStorageSnapshot } from "../storage/interfaces.js";
 import { getCloudStorageAdapter, getCloudVerifier, ensureCloudSchema } from "./cloud.js";
 import { redactEvidenceText } from "../lib/redaction.js";
+import { isCanonicalSlug, normalizeSlug } from "../lib/slugs.js";
 
 export interface V1RequestDependencies {
   getVerifier?: typeof getCloudVerifier;
@@ -30,6 +31,42 @@ function json(body: unknown, status = 200): Response {
 
 function error(status: number, message: string, extra?: Record<string, unknown>): Response {
   return json({ error: message, ...(extra ?? {}) }, status);
+}
+
+function validateProjectPatch(value: unknown):
+  | { ok: true; patch: Partial<Pick<CreateProjectInput, "name" | "path" | "description">> }
+  | { ok: false; message: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "project patch must be an object" };
+  const body = value as Record<string, unknown>;
+  const allowed = new Set(["name", "path", "description"]);
+  const unknown = Object.keys(body).find((key) => !allowed.has(key));
+  if (unknown) return { ok: false, message: `unknown project field: ${unknown}` };
+  if (Object.keys(body).length === 0) return { ok: false, message: "project patch must not be empty" };
+  if (body["name"] !== undefined && (typeof body["name"] !== "string" || !body["name"].trim())) return { ok: false, message: "name must be a non-empty string" };
+  if (body["path"] !== undefined && (typeof body["path"] !== "string" || !body["path"].trim())) return { ok: false, message: "path must be a non-empty string" };
+  if (body["description"] !== undefined && body["description"] !== null && typeof body["description"] !== "string") return { ok: false, message: "description must be a string or null" };
+  return { ok: true, patch: body as never };
+}
+
+function validateProjectCreate(value: unknown):
+  | { ok: true; input: Pick<CreateProjectInput, "name" | "path" | "description" | "task_list_id" | "task_prefix"> }
+  | { ok: false; message: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "project body must be an object" };
+  const body = value as Record<string, unknown>;
+  const allowed = new Set(["name", "path", "description", "task_list_id", "task_prefix"]);
+  const unknown = Object.keys(body).find((key) => !allowed.has(key));
+  if (unknown) return { ok: false, message: `unknown project field: ${unknown}` };
+  if (typeof body["name"] !== "string" || !body["name"].trim()) return { ok: false, message: "name must be a non-empty string" };
+  if (!normalizeSlug(body["name"])) return { ok: false, message: "name must produce a non-empty canonical slug" };
+  if (typeof body["path"] !== "string" || !body["path"].trim()) return { ok: false, message: "path must be a non-empty string" };
+  if (body["description"] !== undefined && typeof body["description"] !== "string") return { ok: false, message: "description must be a string" };
+  if (body["task_list_id"] !== undefined && !isCanonicalSlug(body["task_list_id"])) {
+    return { ok: false, message: "task_list_id must be non-empty canonical kebab-case" };
+  }
+  if (body["task_prefix"] !== undefined && (typeof body["task_prefix"] !== "string" || !body["task_prefix"].trim())) {
+    return { ok: false, message: "task_prefix must be a non-empty string" };
+  }
+  return { ok: true, input: body as never };
 }
 
 async function readJson<T>(req: Request): Promise<T | null> {
@@ -608,24 +645,40 @@ export async function handleV1Request(
           return json({ projects, count: projects.length });
         }
         if (method === "POST") {
-          const body = await readJson<CreateProjectInput>(req);
-          if (!body || typeof body.name !== "string" || typeof body.path !== "string") {
-            return error(400, "name and path are required");
-          }
-          const project = await store.projects.create(body, contextFromPrincipal(principal));
+          const body = await readJson<unknown>(req);
+          if (!body) return error(400, "invalid JSON body");
+          const validated = validateProjectCreate(body);
+          if (!validated.ok) return error(400, validated.message);
+          const project = await store.projects.create(validated.input, contextFromPrincipal(principal));
           return json({ project }, 201);
         }
         return error(405, `method ${method} not allowed on /v1/projects`);
+      }
+      if (action === "rename") {
+        if (method !== "POST") return error(405, `method ${method} not allowed on /v1/projects/:id/rename`);
+        const body = await readJson<RenameProjectInput>(req);
+        if (!body || typeof body.new_slug !== "string" || !body.new_slug.trim() || !normalizeSlug(body.new_slug)) {
+          return error(400, "new_slug must be a non-empty string");
+        }
+        if (body.name !== undefined && (typeof body.name !== "string" || !body.name.trim())) {
+          return error(400, "name must be a non-empty string");
+        }
+        const unknownField = Object.keys(body).find((key) => !["new_slug", "name"].includes(key));
+        if (unknownField) return error(400, `unknown project rename field: ${unknownField}`);
+        return json(await store.projects.rename(id, body, contextFromPrincipal(principal)));
       }
       if (method === "GET") {
         const project = await store.projects.get(id);
         return project ? json({ project }) : error(404, "project not found");
       }
       if (method === "PATCH" || method === "PUT") {
-        const body = await readJson<Partial<CreateProjectInput>>(req);
+        const body = await readJson<unknown>(req);
         if (!body) return error(400, "invalid JSON body");
-        const project = await store.projects.update(id, body);
-        return project ? json({ project }) : error(404, "project not found");
+        const validated = validateProjectPatch(body);
+        if (!validated.ok) return error(400, validated.message);
+        if (!(await store.projects.get(id))) return error(404, "project not found");
+        const project = await store.projects.update(id, validated.patch);
+        return json({ project });
       }
       if (method === "DELETE") {
         await store.projects.delete(id, contextFromPrincipal(principal));
@@ -724,12 +777,39 @@ export async function handleV1Request(
       if (!id && method === "POST") {
         const body = await readJson<CreateTaskListInput>(req);
         if (!body || typeof body.name !== "string" || !body.name.trim()) return error(400, "name is required");
+        const unknownField = Object.keys(body).find((key) => !["name", "slug", "project_id", "description", "metadata"].includes(key));
+        if (unknownField) return error(400, `unsupported task-list create field: ${unknownField}`);
+        if (body.slug !== undefined && typeof body.slug !== "string") return error(400, "slug must be a string");
+        if (body.project_id !== undefined && (typeof body.project_id !== "string" || !body.project_id.trim())) return error(400, "project_id must be a non-empty string");
+        if (body.description !== undefined && typeof body.description !== "string") return error(400, "description must be a string");
+        if (body.metadata !== undefined && (!body.metadata || typeof body.metadata !== "object" || Array.isArray(body.metadata))) {
+          return error(400, "metadata must be an object");
+        }
+        if (!normalizeSlug(body.slug === undefined ? body.name : body.slug)) {
+          return error(400, "task-list slug must be non-empty kebab-case");
+        }
         const taskList = await store.taskLists.create(body, contextFromPrincipal(principal));
         return json({ task_list: taskList }, 201);
       }
       if (id && method === "GET") {
         const taskList = await store.taskLists.get(id);
         return taskList ? json({ task_list: taskList }) : error(404, "task list not found");
+      }
+      if (id && (method === "PATCH" || method === "PUT")) {
+        const body = await readJson<UpdateTaskListInput>(req);
+        if (!body) return error(400, "invalid JSON body");
+        const unknownField = Object.keys(body).find((key) => !["slug", "name", "description", "metadata"].includes(key));
+        if (unknownField) return error(400, `unsupported task-list update field: ${unknownField}`);
+        if (Object.keys(body).length === 0) return error(400, "task-list update must not be empty");
+        if (body.slug !== undefined && (typeof body.slug !== "string" || !normalizeSlug(body.slug))) return error(400, "slug must be a non-empty string");
+        if (body.name !== undefined && (typeof body.name !== "string" || !body.name.trim())) return error(400, "name must be a non-empty string");
+        if (body.description !== undefined && typeof body.description !== "string") return error(400, "description must be a string");
+        if (body.metadata !== undefined && (!body.metadata || typeof body.metadata !== "object" || Array.isArray(body.metadata))) {
+          return error(400, "metadata must be an object");
+        }
+        if (!await store.taskLists.get(id)) return error(404, "task list not found");
+        const taskList = await store.taskLists.update(id, body);
+        return json({ task_list: taskList });
       }
       if (id && method === "DELETE") {
         const deleted = await store.taskLists.delete(id, contextFromPrincipal(principal));
@@ -821,6 +901,8 @@ export async function handleV1Request(
     return error(404, `unknown /v1 resource: ${resource ?? "(root)"}`);
   } catch (e) {
     if (e instanceof LockError) return error(409, e.message, { code: LockError.code });
+    if (e instanceof ResourceConflictError) return error(409, e.message, { code: e.code, conflict: true });
+    if (e instanceof ProjectNotFoundError) return error(404, e.message, { code: ProjectNotFoundError.code });
     return error(500, (e as Error).message || "internal error");
   }
 }

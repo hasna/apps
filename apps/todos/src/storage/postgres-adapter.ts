@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { LockError } from "../types/index.js";
+import { LockError, ProjectNotFoundError, ResourceConflictError } from "../types/index.js";
 import type {
   Agent,
   CreateCommentInput,
@@ -20,6 +20,7 @@ import type {
   TaskTemplate,
   TemplateWithTasks,
   UpdatePlanInput,
+  UpdateProjectInput,
   UpdateTaskInput,
   UpdateTaskListInput,
 } from "../types/index.js";
@@ -56,6 +57,13 @@ import {
   type TodosPostgresSyncRecordType,
 } from "./postgres-sync.js";
 import { redactEvidenceText } from "../lib/redaction.js";
+import {
+  isCanonicalSlug,
+  isValidTaskListProjectScope,
+  normalizeSlug,
+  validateSnapshotRoutingDestinationConflicts,
+  validateSnapshotRoutingRecords,
+} from "../lib/slugs.js";
 
 type RemoteObjectType = TodosPostgresSyncRecordType | "comments" | "dependencies" | "verifications" | "commits" | "refs";
 
@@ -145,6 +153,7 @@ export function createPostgresTodosStorageAdapter(
       getByPath: async (path) => (await store.list<Project>("projects")).find((project) => project.path === path) ?? null,
       list: async () => (await store.list<Project>("projects")).sort((a, b) => a.name.localeCompare(b.name)),
       update: (id, input) => updateProject(id, input, store),
+      rename: (id, input, context) => store.renameProject(id, input.new_slug, input.name, context),
       delete: (id, context) => store.delete("projects", id, context),
     },
     plans: {
@@ -430,6 +439,17 @@ class PostgresJsonRecordStore {
     value: T,
     context: TodosStorageContext = {},
   ): Promise<T> {
+    if (type === "projects" && !isCanonicalSlug((value as { task_list_id?: unknown }).task_list_id)) {
+      throw new Error("Invalid project task-list slug — imports require non-empty canonical kebab-case");
+    }
+    if (type === "task_lists") {
+      if (!isCanonicalSlug((value as { slug?: unknown }).slug)) {
+        throw new Error("Invalid task-list slug — imports require non-empty canonical kebab-case");
+      }
+      if (!isValidTaskListProjectScope((value as { project_id?: unknown }).project_id)) {
+        throw new Error("Invalid task-list project scope — project_id must be null, missing, or a non-empty string");
+      }
+    }
     await this.ensureSchema();
     const updatedAt = stringValue(value.updated_at) ?? stringValue(value.created_at) ?? new Date().toISOString();
     // M8: resolve conflicts by (updated_at, version) rather than wall-clock only.
@@ -437,7 +457,9 @@ class PostgresJsonRecordStore {
     // stale-clock write can no longer silently overwrite a newer version.
     // RETURNING lets us detect when the guard rejected the write so we can
     // surface the record that actually won instead of a phantom success.
-    const result = await this.options.client.query<{ object_id: string }>(
+    let result;
+    try {
+      result = await this.options.client.query<{ object_id: string }>(
       `INSERT INTO ${this.tableName} (
         service, object_type, object_id, payload, updated_at,
         deleted_at, source_machine_id, version
@@ -467,7 +489,22 @@ class PostgresJsonRecordStore {
         context.requestId ?? this.sourceMachineId ?? null,
         numberValue(value.version),
       ],
-    );
+      );
+    } catch (error) {
+      if (type === "task_lists" && isPostgresUniqueViolation(error)) {
+        throw new ResourceConflictError(
+          "TASK_LIST_SLUG_CONFLICT",
+          `Task list with slug "${String((value as { slug?: unknown }).slug ?? "")}" already exists in this scope`,
+        );
+      }
+      if (type === "projects" && isPostgresUniqueViolation(error)) {
+        throw new ResourceConflictError(
+          "PROJECT_SLUG_CONFLICT",
+          `Project slug "${String((value as { task_list_id?: unknown }).task_list_id ?? "")}" already exists`,
+        );
+      }
+      throw error;
+    }
     if (result.rows.length === 0) {
       // The write was rejected as stale by the conflict guard. Return the row
       // that actually won so the caller isn't misled into thinking it persisted.
@@ -475,6 +512,111 @@ class PostgresJsonRecordStore {
       if (current) return current;
     }
     return value;
+  }
+
+  async renameProject(
+    id: string,
+    newSlug: string,
+    name?: string,
+    context: TodosStorageContext = {},
+  ): Promise<{ project: Project; task_lists_updated: number }> {
+    await this.ensureSchema();
+    const normalizedSlug = slugifyRaw(newSlug);
+    if (!normalizedSlug) throw new Error("Invalid slug — must be non-empty kebab-case");
+    const timestamp = new Date().toISOString();
+    try {
+      const result = await this.options.client.query<{
+        found: boolean;
+        project_conflict: boolean;
+        task_list_conflict: boolean;
+        project: unknown;
+        task_lists_updated: number | string;
+      }>(
+        `/* todos:rename-project-atomic */ WITH target AS (
+          SELECT payload, payload->>'task_list_id' AS old_slug
+          FROM ${this.tableName}
+          WHERE service = $1 AND object_type = 'projects' AND object_id = $2 AND deleted_at IS NULL
+          FOR UPDATE
+        ), project_conflict AS (
+          SELECT 1 FROM ${this.tableName}
+          WHERE service = $1 AND object_type = 'projects' AND object_id <> $2
+            AND deleted_at IS NULL AND payload->>'task_list_id' = $3 LIMIT 1
+        ), task_list_conflict AS (
+          SELECT 1 FROM ${this.tableName} r, target
+          WHERE r.service = $1 AND r.object_type = 'task_lists' AND r.deleted_at IS NULL
+            AND r.payload->>'project_id' = $2 AND r.payload->>'slug' = $3
+            AND r.payload->>'slug' IS DISTINCT FROM target.old_slug LIMIT 1
+        ), updated_lists AS (
+          UPDATE ${this.tableName} r SET
+            payload = r.payload || jsonb_build_object('slug', $3::text, 'updated_at', $5::text)
+              || CASE WHEN $4::text IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('name', $4::text) END,
+            updated_at = $5::timestamptz, version = COALESCE(r.version, 0) + 1,
+            source_machine_id = COALESCE($6, r.source_machine_id)
+          FROM target
+          WHERE r.service = $1 AND r.object_type = 'task_lists' AND r.deleted_at IS NULL
+            AND r.payload->>'project_id' = $2 AND r.payload->>'slug' = target.old_slug
+            AND NOT EXISTS (SELECT 1 FROM project_conflict)
+            AND NOT EXISTS (SELECT 1 FROM task_list_conflict)
+            AND (target.old_slug IS DISTINCT FROM $3
+              OR ($4::text IS NOT NULL AND r.payload->>'name' IS DISTINCT FROM $4))
+          RETURNING 1
+        ), updated_project AS (
+          UPDATE ${this.tableName} r SET
+            payload = r.payload || jsonb_build_object('task_list_id', $3::text, 'updated_at', $5::text)
+              || CASE WHEN $4::text IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('name', $4::text) END,
+            updated_at = $5::timestamptz, version = COALESCE(r.version, 0) + 1,
+            source_machine_id = COALESCE($6, r.source_machine_id)
+          FROM target
+          WHERE r.service = $1 AND r.object_type = 'projects' AND r.object_id = $2 AND r.deleted_at IS NULL
+            AND NOT EXISTS (SELECT 1 FROM project_conflict)
+            AND NOT EXISTS (SELECT 1 FROM task_list_conflict)
+            AND (target.old_slug IS DISTINCT FROM $3
+              OR ($4::text IS NOT NULL AND target.payload->>'name' IS DISTINCT FROM $4))
+          RETURNING r.payload
+        ) SELECT
+          EXISTS (SELECT 1 FROM target) AS found,
+          EXISTS (SELECT 1 FROM project_conflict) AS project_conflict,
+          EXISTS (SELECT 1 FROM task_list_conflict) AS task_list_conflict,
+          COALESCE((SELECT payload FROM updated_project), (SELECT payload FROM target)) AS project,
+          (SELECT count(*) FROM updated_lists) AS task_lists_updated`,
+        [this.service, id, normalizedSlug, name ?? null, timestamp, this.machineId(context)],
+      );
+      const row = result.rows[0];
+      if (!row?.found) throw new ProjectNotFoundError(id);
+      if (row.project_conflict) {
+        throw new ResourceConflictError("PROJECT_SLUG_CONFLICT", `Slug "${normalizedSlug}" is already used by another project`);
+      }
+      if (row.task_list_conflict) {
+        throw new ResourceConflictError("TASK_LIST_SLUG_CONFLICT", `Task-list slug "${normalizedSlug}" is already used in this project`);
+      }
+      return {
+        project: payloadRecord<Project>(row.project),
+        task_lists_updated: Number(row.task_lists_updated),
+      };
+    } catch (error) {
+      if (isPostgresUniqueViolation(error)) {
+        const constraintName = postgresConstraintName(error);
+        let projectConflict = constraintName.includes("project_task_list_slug_uidx");
+        // Some Postgres clients omit constraint metadata. Re-read after the
+        // failed statement so the public error code remains deterministic.
+        if (!constraintName) {
+          const conflict = await this.options.client.query<{ project_conflict: boolean }>(
+            `/* todos:classify-project-rename-conflict */ SELECT EXISTS (
+              SELECT 1 FROM ${this.tableName}
+              WHERE service = $1 AND object_type = 'projects' AND object_id <> $2
+                AND deleted_at IS NULL AND payload->>'task_list_id' = $3
+            ) AS project_conflict`,
+            [this.service, id, normalizedSlug],
+          );
+          projectConflict = Boolean(conflict.rows[0]?.project_conflict);
+        }
+        if (projectConflict) {
+          throw new ResourceConflictError("PROJECT_SLUG_CONFLICT", `Slug "${normalizedSlug}" is already used by another project`);
+        }
+        throw new ResourceConflictError("TASK_LIST_SLUG_CONFLICT", `Task-list slug "${normalizedSlug}" is already used in this project`);
+      }
+      throw error;
+    }
   }
 
   async incrementProjectTaskCounter(
@@ -1032,12 +1174,15 @@ async function getChangedSince(since: string, filters: TodosActiveWorkFilter | u
 
 async function createProject(input: CreateProjectInput, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<Project> {
   const timestamp = new Date().toISOString();
+  const derivedSlug = slugifyRaw(input.name);
+  const taskListId = input.task_list_id === undefined ? `todos-${derivedSlug}` : slugifyRaw(input.task_list_id);
+  if (!derivedSlug || !taskListId) throw new Error("Project name and task-list slug must be non-empty");
   const project: Project = {
     id: randomUUID(),
     name: input.name,
     path: input.path,
     description: input.description ?? null,
-    task_list_id: input.task_list_id ?? `todos-${slugify(input.name)}`,
+    task_list_id: taskListId,
     task_prefix: input.task_prefix ?? await generateProjectPrefix(input.name, store),
     task_counter: 0,
     created_at: timestamp,
@@ -1050,9 +1195,12 @@ async function createProject(input: CreateProjectInput, store: PostgresJsonRecor
 
 async function updateProject(
   id: string,
-  input: Partial<Pick<Project, "name" | "description" | "task_list_id" | "path">>,
+  input: UpdateProjectInput,
   store: PostgresJsonRecordStore,
 ): Promise<Project> {
+  if ("task_list_id" in input) {
+    throw new Error("task_list_id cannot be changed by updateProject; use renameProject for an atomic canonical rename");
+  }
   const project = await requireRecord<Project>("projects", id, store);
   const updated = { ...project, ...definedPatch(input), updated_at: new Date().toISOString() };
   return store.upsert("projects", updated);
@@ -1187,10 +1335,12 @@ async function releaseAgent(
 
 async function createTaskList(input: CreateTaskListInput, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<TaskList> {
   const timestamp = new Date().toISOString();
+  const slug = slugifyRaw(input.slug === undefined ? input.name : input.slug);
+  if (!slug) throw new Error("Invalid task-list slug — must be non-empty kebab-case");
   return store.upsert("task_lists", {
     id: randomUUID(),
     project_id: input.project_id ?? context?.projectId ?? null,
-    slug: input.slug ?? slugify(input.name),
+    slug,
     name: input.name,
     description: input.description ?? null,
     metadata: input.metadata ?? {},
@@ -1203,9 +1353,21 @@ async function createTaskList(input: CreateTaskListInput, store: PostgresJsonRec
 
 async function updateTaskList(id: string, input: UpdateTaskListInput, store: PostgresJsonRecordStore): Promise<TaskList> {
   const list = await requireRecord<TaskList>("task_lists", id, store);
+  const patch = definedPatch(input);
+  if (input.slug !== undefined) {
+    const slug = slugifyRaw(input.slug);
+    if (!slug) throw new Error("Invalid task-list slug — must be non-empty kebab-case");
+    const duplicate = (await store.list<TaskList>("task_lists")).find((candidate) =>
+      candidate.id !== id && candidate.project_id === list.project_id && candidate.slug === slug
+    );
+    if (duplicate) {
+      throw new ResourceConflictError("TASK_LIST_SLUG_CONFLICT", `Task list with slug "${slug}" already exists in this scope`);
+    }
+    patch.slug = slug;
+  }
   return store.upsert("task_lists", {
     ...list,
-    ...definedPatch(input),
+    ...patch,
     metadata: input.metadata ?? list.metadata,
     updated_at: new Date().toISOString(),
   });
@@ -1308,6 +1470,19 @@ async function importSnapshot(
   context?: TodosStorageContext,
 ): Promise<TodosStorageImportResult> {
   const result: TodosStorageImportResult = { inserted: 0, updated: 0, deleted: 0, skipped: 0, errors: [] };
+  result.errors.push(...validateSnapshotRoutingRecords(snapshot.projects, snapshot.taskLists));
+  if (result.errors.length > 0) return result;
+  const [existingProjects, existingTaskLists] = await Promise.all([
+    store.list<Project>("projects"),
+    store.list<TaskList>("task_lists"),
+  ]);
+  result.errors.push(...validateSnapshotRoutingDestinationConflicts(
+    snapshot.projects,
+    snapshot.taskLists,
+    existingProjects,
+    existingTaskLists,
+  ));
+  if (result.errors.length > 0) return result;
   const entries: ReadonlyArray<readonly [
     RemoteObjectType,
     { id: string; updated_at?: string; created_at?: string; version?: number },
@@ -1380,11 +1555,7 @@ async function generateProjectPrefix(name: string, store: PostgresJsonRecordStor
 }
 
 function slugifyRaw(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-}
-
-function slugify(value: string): string {
-  return slugifyRaw(value) || "todos";
+  return normalizeSlug(value);
 }
 
 function normalizePlanSlug(value: string): string {
@@ -1449,4 +1620,15 @@ function compareClock(left: string, right: string): number {
 
 function numberValue(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
+}
+
+function isPostgresUniqueViolation(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "23505";
+}
+
+function postgresConstraintName(error: unknown): string {
+  if (typeof error !== "object" || error === null) return "";
+  const candidate = error as { constraint?: unknown; constraint_name?: unknown };
+  const constraint = candidate.constraint ?? candidate.constraint_name;
+  return typeof constraint === "string" ? constraint : "";
 }

@@ -61,3 +61,28 @@ describe("task comments OpenAPI contract", () => {
     ]);
   });
 });
+
+describe("project mutation OpenAPI contract", () => {
+  test("preserves create routing compatibility, closes generic update, and exposes atomic rename", () => {
+    const document = buildV1OpenApiDocument("test");
+    const createProperties = document.components.schemas.CreateProjectInput.properties;
+    const updateProperties = document.components.schemas.UpdateProjectInput.properties;
+
+    expect(Object.keys(createProperties)).toEqual(["name", "path", "description", "task_list_id", "task_prefix"]);
+    expect(Object.keys(updateProperties)).toEqual(["name", "path", "description"]);
+    expect(createProperties.task_list_id).toMatchObject({ minLength: 1, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" });
+    expect(document.paths["/v1/projects"].post.responses["409"]).toBeDefined();
+    expect(document.paths["/v1/projects/{id}/rename"].post.operationId).toBe("renameProject");
+    expect(document.paths["/v1/projects/{id}/rename"].post.responses["409"]).toBeDefined();
+  });
+
+  test("documents non-empty slug-bearing inputs and closed task-list bodies", () => {
+    const schemas = buildV1OpenApiDocument("test").components.schemas;
+
+    expect(schemas.CreateProjectInput.properties.name.pattern).toBe(".*[A-Za-z0-9].*");
+    expect(schemas.RenameProjectInput.properties.new_slug.pattern).toBe(".*[A-Za-z0-9].*");
+    expect(schemas.CreateTaskListInput).toMatchObject({ additionalProperties: false });
+    expect(schemas.CreateTaskListInput.properties.slug).toMatchObject({ minLength: 1, pattern: ".*[A-Za-z0-9].*" });
+    expect(schemas.UpdateTaskListInput).toMatchObject({ additionalProperties: false, minProperties: 1 });
+  });
+});

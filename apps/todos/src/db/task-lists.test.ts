@@ -30,6 +30,12 @@ describe("createTaskList", () => {
     expect(list.slug).toBe("sprint-1");
   });
 
+  it("rejects empty explicit and derived slugs", () => {
+    expect(() => createTaskList({ name: "---" })).toThrow("non-empty kebab-case");
+    expect(() => createTaskList({ name: "Inbox", slug: "" })).toThrow("non-empty kebab-case");
+    expect(() => createTaskList({ name: "Inbox", slug: "---" })).toThrow("non-empty kebab-case");
+  });
+
   it("should create with project_id", () => {
     const project = createProject({ name: "Test", path: "/test" });
     const list = createTaskList({ name: "Bugs", project_id: project.id });
@@ -138,6 +144,27 @@ describe("updateTaskList", () => {
 
   it("should throw TaskListNotFoundError for non-existent ID", () => {
     expect(() => updateTaskList("nonexist", { name: "X" })).toThrow("Task list not found");
+  });
+
+  it("normalizes a changed slug and preserves project scope", () => {
+    const project = createProject({ name: "P1", path: "/p1" });
+    const list = createTaskList({ name: "Old", slug: "old", project_id: project.id });
+    const updated = updateTaskList(list.id, { slug: "Release Queue" });
+    expect(updated.slug).toBe("release-queue");
+    expect(updated.project_id).toBe(project.id);
+  });
+
+  it("rejects a changed slug that conflicts within the same project", () => {
+    const project = createProject({ name: "P1", path: "/p1" });
+    createTaskList({ name: "Existing", slug: "release", project_id: project.id });
+    const list = createTaskList({ name: "Old", slug: "old", project_id: project.id });
+    expect(() => updateTaskList(list.id, { slug: "release" })).toThrow();
+  });
+
+  it("rejects a changed slug that conflicts between standalone lists", () => {
+    createTaskList({ name: "Existing", slug: "release" });
+    const list = createTaskList({ name: "Old", slug: "old" });
+    expect(() => updateTaskList(list.id, { slug: "release" })).toThrow("already exists");
   });
 });
 

@@ -22,7 +22,7 @@
  */
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { resolve as resolvePath } from "node:path";
-import type { Agent, CreateTaskListInput, Plan, Project, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList } from "../types/index.js";
+import type { Agent, CreateTaskListInput, Plan, Project, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, UpdateTaskListInput } from "../types/index.js";
 import { redactEvidenceText } from "../lib/redaction.js";
 
 type Env = Record<string, string | undefined>;
@@ -175,9 +175,8 @@ function uniqueProjectMatches(projects: Project[], predicate: (project: Project)
 }
 
 /** Resolve a cloud project UUID, unique UUID prefix, exact name/path, or canonical slug. */
-export async function cloudResolveProjectRef(client: HasnaStorageClient, ref: string): Promise<string> {
+function resolveCloudProjectRef(projects: Project[], ref: string): string {
   const input = ref.trim();
-  const projects = await cloudListProjects(client);
   const normalizedRef = input.toLowerCase();
   const pathLike = input.startsWith(".") || input.includes("/") || input.includes("\\");
   const normalizedPath = pathLike ? resolvePath(input) : undefined;
@@ -205,6 +204,23 @@ export async function cloudResolveProjectRef(client: HasnaStorageClient, ref: st
   }
 
   throw new Error(`Project not found: "${input}"`);
+}
+
+export async function cloudResolveProjectRef(client: HasnaStorageClient, ref: string): Promise<string> {
+  return resolveCloudProjectRef(await cloudListProjects(client), ref);
+}
+
+/** Update one cloud project by exact UUID (`PATCH /v1/projects/:id`). */
+export async function cloudUpdateProject(
+  client: HasnaStorageClient,
+  id: string,
+  patch: Record<string, unknown>,
+): Promise<Project> {
+  const raw = await client.update<unknown>("projects", id, patch);
+  if (raw && typeof raw === "object" && "project" in (raw as Record<string, unknown>)) {
+    return (raw as { project: Project }).project;
+  }
+  return raw as Project;
 }
 
 /** List plans from the cloud (`GET /v1/plans`), optionally scoped to a project. */
@@ -869,6 +885,35 @@ export async function cloudCreateTaskList(
     return (raw as { task_list: TaskList }).task_list;
   }
   return raw as TaskList;
+}
+
+/** Update one cloud task list by exact UUID (`PATCH /v1/task-lists/:id`). */
+export async function cloudUpdateTaskList(
+  client: HasnaStorageClient,
+  id: string,
+  patch: UpdateTaskListInput,
+): Promise<TaskList> {
+  const raw = await client.update<unknown>("task-lists", id, patch as unknown as Record<string, unknown>);
+  if (raw && typeof raw === "object" && "task_list" in (raw as Record<string, unknown>)) {
+    return (raw as { task_list: TaskList }).task_list;
+  }
+  return raw as TaskList;
+}
+
+/** Rename a cloud project through the server's atomic cascade operation. */
+export async function cloudRenameProject(
+  client: HasnaStorageClient,
+  ref: string,
+  newSlug: string,
+  name?: string,
+): Promise<{ project: Project; task_lists_updated: number }> {
+  const id = await cloudResolveProjectRef(client, ref);
+  const normalizedSlug = cloudProjectSlug(newSlug);
+  if (!normalizedSlug) throw new Error("Invalid slug — must be non-empty kebab-case");
+  return client.transport.post<{ project: Project; task_lists_updated: number }>(
+    `/projects/${encodeURIComponent(id)}/rename`,
+    { new_slug: normalizedSlug, ...(name !== undefined ? { name } : {}) },
+  );
 }
 
 /** Delete a task list in the cloud (`DELETE /v1/task-lists/:id`). */

@@ -2,11 +2,13 @@
 // Regenerate: bun run scripts/generate-sdk.ts
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Todos V1 API 0.11.86
+// Source: Todos V1 API 0.11.89
 
 export interface Task { "id"?: string; "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "project_id"?: string | null; "assigned_to"?: string | null; "agent_id"?: string | null; "tags"?: Array<string>; "version"?: number; "created_at"?: string; "updated_at"?: string }
 
-export interface Project { "id"?: string; "name"?: string; "path"?: string; "description"?: string | null; "created_at"?: string; "updated_at"?: string }
+export interface Project { "id"?: string; "name"?: string; "path"?: string; "description"?: string | null; "task_list_id"?: string | null; "task_prefix"?: string | null; "task_counter"?: number; "created_at"?: string; "updated_at"?: string }
+
+export interface TaskList { "id"?: string; "project_id"?: string | null; "slug"?: string; "name"?: string; "description"?: string | null; "metadata"?: Record<string, unknown>; "created_at"?: string; "updated_at"?: string }
 
 export interface TaskComment { "id": string; "task_id": string; "agent_id": string | null; "session_id": string | null; "content": string; "type": "comment" | "progress" | "note"; "progress_pct": number | null; "created_at": string }
 
@@ -14,7 +16,17 @@ export interface CreateTaskInput { "title": string; "description"?: string; "sta
 
 export interface UpdateTaskInput { "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "assigned_to"?: string; "version"?: number }
 
-export interface CreateProjectInput { "name": string; "path": string; "description"?: string; "task_prefix"?: string }
+export interface CreateProjectInput { "name": string; "path": string; "description"?: string; "task_list_id"?: string; "task_prefix"?: string }
+
+export interface UpdateProjectInput { "name"?: string; "path"?: string; "description"?: string | null }
+
+export interface RenameProjectInput { "new_slug": string; "name"?: string }
+
+export interface ErrorResponse { "error": string; "code"?: string; "conflict"?: boolean }
+
+export interface CreateTaskListInput { "name": string; "slug"?: string; "project_id"?: string; "description"?: string; "metadata"?: Record<string, unknown> }
+
+export interface UpdateTaskListInput { "slug"?: string; "name"?: string; "description"?: string; "metadata"?: Record<string, unknown> }
 
 export interface CreateTaskCommentInput { "content": string; "agent_id"?: string; "session_id"?: string; "type"?: "comment" | "progress" | "note"; "progress_pct"?: number }
 
@@ -109,10 +121,82 @@ export class TodosV1Client {
       });
     }
 
+    /** Delete a project */
+    async deleteProject(id: string, init?: RequestInit): Promise<{ "deleted"?: boolean; "id"?: string }> {
+      return this.request("DELETE", `/v1/projects/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Update a project */
+    async updateProject(id: string, body: UpdateProjectInput, init?: RequestInit): Promise<{ "project"?: Project }> {
+      return this.request("PATCH", `/v1/projects/${encodeURIComponent(String(id))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Atomically rename a project and its canonical task list */
+    async renameProject(id: string, body: RenameProjectInput, init?: RequestInit): Promise<{ "project"?: Project; "task_lists_updated"?: number }> {
+      return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/rename`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Aggregate counts */
     async getStats(init?: RequestInit): Promise<{ "tasks"?: number; "projects"?: number }> {
       return this.request("GET", `/v1/stats`, {
         body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List task lists */
+    async listTaskLists(query?: { "project_id"?: string }, init?: RequestInit): Promise<{ "task_lists"?: Array<TaskList>; "count"?: number }> {
+      return this.request("GET", `/v1/task-lists`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Create a task list */
+    async createTaskList(body: CreateTaskListInput, init?: RequestInit): Promise<{ "task_list"?: TaskList }> {
+      return this.request("POST", `/v1/task-lists`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Get a task list by id */
+    async getTaskList(id: string, init?: RequestInit): Promise<{ "task_list"?: TaskList }> {
+      return this.request("GET", `/v1/task-lists/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Delete a task list */
+    async deleteTaskList(id: string, init?: RequestInit): Promise<{ "deleted"?: boolean; "id"?: string }> {
+      return this.request("DELETE", `/v1/task-lists/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Update a task list */
+    async updateTaskList(id: string, body: UpdateTaskListInput, init?: RequestInit): Promise<{ "task_list"?: TaskList }> {
+      return this.request("PATCH", `/v1/task-lists/${encodeURIComponent(String(id))}`, {
+        body,
         query: undefined,
         init,
       });

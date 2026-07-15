@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
 
 const CWD = join(import.meta.dir, "../..");
 
@@ -16,12 +17,11 @@ async function connectAndListTools(command: string, args: string[]): Promise<str
     command,
     args,
     cwd: CWD,
-    env: {
-      ...process.env,
+    env: localRoutingTestEnv({
       HOME: fakeHome,
       TODOS_DB_PATH: dbPath,
       TODOS_AUTO_PROJECT: "false",
-    } as Record<string, string>,
+    }) as Record<string, string>,
   });
   const client = new Client({ name: "test", version: "1.0.0" });
   await client.connect(transport);

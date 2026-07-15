@@ -592,6 +592,99 @@ export function ensureSchema(db: Database): void {
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_machine_paths_project ON project_machine_paths(project_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_machine_paths_machine ON project_machine_paths(machine_id)");
 
+  // Generation registry for DB-enforced uniqueness of new/changed canonical
+  // slugs. Do not backfill: legacy duplicate rows must remain readable and be
+  // explicitly reconciled instead of making startup fail or rewriting history.
+  ensureTable("canonical_slug_claims", `
+    CREATE TABLE canonical_slug_claims (
+      kind TEXT NOT NULL CHECK(kind IN ('project', 'task_list')),
+      scope_key TEXT NOT NULL,
+      slug TEXT NOT NULL,
+      object_id TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (kind, scope_key, slug)
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_canonical_slug_claims_object ON canonical_slug_claims(kind, object_id)");
+  ensureColumn("projects", "task_list_id", "TEXT");
+  db.exec(`CREATE TRIGGER IF NOT EXISTS claim_project_canonical_slug_insert
+    BEFORE INSERT ON projects
+    WHEN NEW.task_list_id IS NOT NULL AND NEW.task_list_id <> ''
+    BEGIN
+      SELECT CASE WHEN EXISTS (
+        SELECT 1 FROM projects WHERE id <> NEW.id AND task_list_id = NEW.task_list_id
+      ) THEN RAISE(ABORT, 'PROJECT_SLUG_CONFLICT') END;
+      INSERT OR IGNORE INTO canonical_slug_claims(kind, scope_key, slug, object_id)
+        VALUES ('project', 'global', NEW.task_list_id, NEW.id);
+      SELECT CASE WHEN (
+        SELECT object_id FROM canonical_slug_claims
+        WHERE kind = 'project' AND scope_key = 'global' AND slug = NEW.task_list_id
+      ) <> NEW.id THEN RAISE(ABORT, 'PROJECT_SLUG_CONFLICT') END;
+    END`);
+  db.exec(`CREATE TRIGGER IF NOT EXISTS claim_project_canonical_slug_update
+    BEFORE UPDATE OF task_list_id ON projects
+    WHEN NEW.task_list_id IS NOT OLD.task_list_id
+    BEGIN
+      DELETE FROM canonical_slug_claims WHERE kind = 'project' AND object_id = NEW.id;
+      SELECT CASE WHEN EXISTS (
+        SELECT 1 FROM projects WHERE id <> NEW.id AND task_list_id = NEW.task_list_id
+      ) AND NEW.task_list_id IS NOT NULL AND NEW.task_list_id <> ''
+        THEN RAISE(ABORT, 'PROJECT_SLUG_CONFLICT') END;
+      INSERT OR IGNORE INTO canonical_slug_claims(kind, scope_key, slug, object_id)
+        SELECT 'project', 'global', NEW.task_list_id, NEW.id
+        WHERE NEW.task_list_id IS NOT NULL AND NEW.task_list_id <> '';
+      SELECT CASE WHEN NEW.task_list_id IS NOT NULL AND NEW.task_list_id <> '' AND (
+        SELECT object_id FROM canonical_slug_claims
+        WHERE kind = 'project' AND scope_key = 'global' AND slug = NEW.task_list_id
+      ) <> NEW.id THEN RAISE(ABORT, 'PROJECT_SLUG_CONFLICT') END;
+    END`);
+  db.exec(`CREATE TRIGGER IF NOT EXISTS release_project_canonical_slug_delete
+    AFTER DELETE ON projects
+    BEGIN
+      DELETE FROM canonical_slug_claims WHERE kind = 'project' AND object_id = OLD.id;
+    END`);
+  db.exec(`CREATE TRIGGER IF NOT EXISTS claim_task_list_canonical_slug_insert
+    BEFORE INSERT ON task_lists
+    WHEN NEW.slug IS NOT NULL AND NEW.slug <> ''
+    BEGIN
+      SELECT CASE WHEN EXISTS (
+        SELECT 1 FROM task_lists
+        WHERE id <> NEW.id AND project_id IS NEW.project_id AND slug = NEW.slug
+      ) THEN RAISE(ABORT, 'TASK_LIST_SLUG_CONFLICT') END;
+      INSERT OR IGNORE INTO canonical_slug_claims(kind, scope_key, slug, object_id)
+        VALUES ('task_list', CASE WHEN NEW.project_id IS NULL THEN 'standalone:' ELSE 'project:' || NEW.project_id END, NEW.slug, NEW.id);
+      SELECT CASE WHEN (
+        SELECT object_id FROM canonical_slug_claims
+        WHERE kind = 'task_list'
+          AND scope_key = CASE WHEN NEW.project_id IS NULL THEN 'standalone:' ELSE 'project:' || NEW.project_id END
+          AND slug = NEW.slug
+      ) <> NEW.id THEN RAISE(ABORT, 'TASK_LIST_SLUG_CONFLICT') END;
+    END`);
+  db.exec(`CREATE TRIGGER IF NOT EXISTS claim_task_list_canonical_slug_update
+    BEFORE UPDATE OF slug, project_id ON task_lists
+    WHEN NEW.slug IS NOT OLD.slug OR NEW.project_id IS NOT OLD.project_id
+    BEGIN
+      DELETE FROM canonical_slug_claims WHERE kind = 'task_list' AND object_id = NEW.id;
+      SELECT CASE WHEN EXISTS (
+        SELECT 1 FROM task_lists
+        WHERE id <> NEW.id AND project_id IS NEW.project_id AND slug = NEW.slug
+      ) AND NEW.slug IS NOT NULL AND NEW.slug <> ''
+        THEN RAISE(ABORT, 'TASK_LIST_SLUG_CONFLICT') END;
+      INSERT OR IGNORE INTO canonical_slug_claims(kind, scope_key, slug, object_id)
+        SELECT 'task_list', CASE WHEN NEW.project_id IS NULL THEN 'standalone:' ELSE 'project:' || NEW.project_id END, NEW.slug, NEW.id
+        WHERE NEW.slug IS NOT NULL AND NEW.slug <> '';
+      SELECT CASE WHEN NEW.slug IS NOT NULL AND NEW.slug <> '' AND (
+        SELECT object_id FROM canonical_slug_claims
+        WHERE kind = 'task_list'
+          AND scope_key = CASE WHEN NEW.project_id IS NULL THEN 'standalone:' ELSE 'project:' || NEW.project_id END
+          AND slug = NEW.slug
+      ) <> NEW.id THEN RAISE(ABORT, 'TASK_LIST_SLUG_CONFLICT') END;
+    END`);
+  db.exec(`CREATE TRIGGER IF NOT EXISTS release_task_list_canonical_slug_delete
+    AFTER DELETE ON task_lists
+    BEGIN
+      DELETE FROM canonical_slug_claims WHERE kind = 'task_list' AND object_id = OLD.id;
+    END`);
+
   // Local tombstones for remote/native storage sync. Core CRUD may hard-delete
   // rows locally, but sync needs a durable delete marker for the next push.
   ensureTable("storage_tombstones", `

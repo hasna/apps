@@ -9,6 +9,7 @@ import {
 import { getJsonContract, validateJsonContract } from "./json-contracts.js";
 import { getMcpToolNames } from "./mcp.js";
 import { withNoNetwork } from "./test/no-network.js";
+import { localRoutingTestEnv } from "./test/local-routing-env.fixture.test.js";
 
 const expectedDomains = [
   "tasks",
@@ -122,7 +123,7 @@ describe("CLI/MCP parity manifest", () => {
       cwd: join(import.meta.dir, ".."),
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, TODOS_DB_PATH: ":memory:" },
+      env: localRoutingTestEnv({ TODOS_DB_PATH: ":memory:" }),
     });
     expect(help.exitCode).toBe(0);
     const output = help.stdout.toString();

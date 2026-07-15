@@ -20,6 +20,7 @@ import {
   getProject,
   getProjectByPath,
   listProjects,
+  renameProject,
   updateProject,
   deleteProject,
 } from "../db/projects.js";
@@ -110,6 +111,7 @@ export function createLocalSqliteTodosStorageAdapter(
       getByPath: (path) => getProjectByPath(path, database()),
       list: () => listProjects(database()),
       update: (id, input) => updateProject(id, input, database()),
+      rename: (id, input) => renameProject(id, input, database()),
       delete: (id) => deleteProject(id, database()),
     },
     plans: {

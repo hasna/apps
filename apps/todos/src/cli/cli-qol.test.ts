@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
 
 const CWD = join(import.meta.dir, "../..");
 
@@ -13,8 +14,13 @@ let fakeHome: string;
 
 function run(args: string): string {
   return execSync(
-    `HOME=${fakeHome} TODOS_DB_PATH=${dbPath} TODOS_AUTO_PROJECT=false bun run src/cli/index.tsx ${args}`,
-    { encoding: "utf-8", cwd: CWD, timeout: 15000 },
+    `bun run src/cli/index.tsx ${args}`,
+    {
+      encoding: "utf-8",
+      cwd: CWD,
+      timeout: 15000,
+      env: localRoutingTestEnv({ HOME: fakeHome, TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false" }),
+    },
   ).trim();
 }
 
@@ -236,6 +242,18 @@ describe("CLI QoL commands", () => {
     }
   });
 
+  it("projects --add routes task-list slug changes through the canonical cascade", () => {
+    const projectPath = join(tmpDir, "canonical-project-slug");
+    const created = JSON.parse(run(`--json projects --add ${projectPath} --name 'Canonical Project' --task-list-id original-slug`));
+    run(`--project ${created.id} --json lists --add 'Canonical List' --slug original-slug`);
+
+    const updated = JSON.parse(run(`--json projects --add ${projectPath} --task-list-id next-slug`));
+    const lists = JSON.parse(run(`--project ${created.id} --json lists`));
+
+    expect(updated.task_list_id).toBe("next-slug");
+    expect(lists).toEqual([expect.objectContaining({ slug: "next-slug" })]);
+  }, 15_000);
+
   it("project-panel --json should emit a project panel contract", () => {
     const projPath = join(tmpDir, "panel-project");
     const proj = JSON.parse(run(`--json projects --add ${projPath} --name 'Panel Project'`));
@@ -299,7 +317,7 @@ describe("CLI QoL commands", () => {
 
     const before = JSON.parse(run("--json projects"));
     const out = execSync(
-      `HOME=${fakeHome} TODOS_DB_PATH=${dbPath} TODOS_AUTO_PROJECT=true bun run ${join(CWD, "src/cli/index.tsx")} --json add 'Temp worktree task'`,
+      `HOME=${fakeHome} TODOS_DB_PATH=${dbPath} TODOS_AUTO_PROJECT=true HASNA_TODOS_STORAGE_MODE=local TODOS_STORAGE_MODE=local HASNA_TODOS_API_URL= HASNA_TODOS_API_KEY= TODOS_API_URL= TODOS_API_KEY= bun run ${join(CWD, "src/cli/index.tsx")} --json add 'Temp worktree task'`,
       { encoding: "utf-8", cwd: repo, timeout: 15000 },
     ).trim();
     const task = JSON.parse(out);
@@ -316,7 +334,7 @@ describe("CLI QoL commands", () => {
       execSync("git init -q", { cwd: repo });
 
       const out = execSync(
-        `HOME=${fakeHome} TODOS_DB_PATH=${dbPath} TODOS_AUTO_PROJECT=true bun run ${join(CWD, "src/cli/index.tsx")} --json add 'Non-temp worktree task'`,
+        `HOME=${fakeHome} TODOS_DB_PATH=${dbPath} TODOS_AUTO_PROJECT=true HASNA_TODOS_STORAGE_MODE=local TODOS_STORAGE_MODE=local HASNA_TODOS_API_URL= HASNA_TODOS_API_KEY= TODOS_API_URL= TODOS_API_KEY= bun run ${join(CWD, "src/cli/index.tsx")} --json add 'Non-temp worktree task'`,
         { encoding: "utf-8", cwd: repo, timeout: 15000 },
       ).trim();
       const task = JSON.parse(out);
@@ -356,7 +374,7 @@ describe("CLI QoL commands", () => {
     expect(created.assigned_to).toBe("cross-agent");
 
     const out = execSync(
-      `HOME=${fakeHome} TODOS_DB_PATH=${dbPath} TODOS_AUTO_PROJECT=true bun run ${join(CWD, "src/cli/index.tsx")} --json list --assigned cross-agent`,
+      `HOME=${fakeHome} TODOS_DB_PATH=${dbPath} TODOS_AUTO_PROJECT=true HASNA_TODOS_STORAGE_MODE=local TODOS_STORAGE_MODE=local HASNA_TODOS_API_URL= HASNA_TODOS_API_KEY= TODOS_API_URL= TODOS_API_KEY= bun run ${join(CWD, "src/cli/index.tsx")} --json list --assigned cross-agent`,
       { encoding: "utf-8", cwd: repoA, timeout: 15000 },
     ).trim();
     const tasks = JSON.parse(out);
@@ -378,7 +396,7 @@ describe("CLI QoL commands", () => {
     expect(created.assigned_to).toBe("mine-cross-agent");
 
     const out = execSync(
-      `HOME=${fakeHome} TODOS_DB_PATH=${dbPath} TODOS_AUTO_PROJECT=true bun run ${join(CWD, "src/cli/index.tsx")} --json mine mine-cross-agent`,
+      `HOME=${fakeHome} TODOS_DB_PATH=${dbPath} TODOS_AUTO_PROJECT=true HASNA_TODOS_STORAGE_MODE=local TODOS_STORAGE_MODE=local HASNA_TODOS_API_URL= HASNA_TODOS_API_KEY= TODOS_API_URL= TODOS_API_KEY= bun run ${join(CWD, "src/cli/index.tsx")} --json mine mine-cross-agent`,
       { encoding: "utf-8", cwd: repoA, timeout: 15000 },
     ).trim();
     const tasks = JSON.parse(out);

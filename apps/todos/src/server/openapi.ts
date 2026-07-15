@@ -30,6 +30,23 @@ const projectSchema = {
     name: { type: "string" },
     path: { type: "string" },
     description: { type: "string", nullable: true },
+    task_list_id: { type: "string", nullable: true },
+    task_prefix: { type: "string", nullable: true },
+    task_counter: { type: "number" },
+    created_at: { type: "string" },
+    updated_at: { type: "string" },
+  },
+} as const;
+
+const taskListSchema = {
+  type: "object",
+  properties: {
+    id: { type: "string" },
+    project_id: { type: "string", nullable: true },
+    slug: { type: "string" },
+    name: { type: "string" },
+    description: { type: "string", nullable: true },
+    metadata: { type: "object", additionalProperties: true },
     created_at: { type: "string" },
     updated_at: { type: "string" },
   },
@@ -67,6 +84,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
       schemas: {
         Task: taskSchema,
         Project: projectSchema,
+        TaskList: taskListSchema,
         TaskComment: taskCommentSchema,
         CreateTaskInput: {
           type: "object",
@@ -95,12 +113,65 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         },
         CreateProjectInput: {
           type: "object",
+          additionalProperties: false,
           required: ["name", "path"],
           properties: {
-            name: { type: "string" },
-            path: { type: "string" },
+            name: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
+            path: { type: "string", minLength: 1 },
             description: { type: "string" },
-            task_prefix: { type: "string" },
+            task_list_id: { type: "string", minLength: 1, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+            task_prefix: { type: "string", minLength: 1 },
+          },
+        },
+        UpdateProjectInput: {
+          type: "object",
+          additionalProperties: false,
+          minProperties: 1,
+          properties: {
+            name: { type: "string", minLength: 1 },
+            path: { type: "string", minLength: 1 },
+            description: { type: "string", nullable: true },
+          },
+        },
+        RenameProjectInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["new_slug"],
+          properties: {
+            new_slug: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
+            name: { type: "string", minLength: 1 },
+          },
+        },
+        ErrorResponse: {
+          type: "object",
+          required: ["error"],
+          properties: {
+            error: { type: "string" },
+            code: { type: "string" },
+            conflict: { type: "boolean" },
+          },
+        },
+        CreateTaskListInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["name"],
+          properties: {
+            name: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
+            slug: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
+            project_id: { type: "string" },
+            description: { type: "string" },
+            metadata: { type: "object", additionalProperties: true },
+          },
+        },
+        UpdateTaskListInput: {
+          type: "object",
+          additionalProperties: false,
+          minProperties: 1,
+          properties: {
+            slug: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
+            name: { type: "string" },
+            description: { type: "string" },
+            metadata: { type: "object", additionalProperties: true },
           },
         },
         CreateTaskCommentInput: {
@@ -311,7 +382,10 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             required: true,
             content: { "application/json": { schema: { $ref: "#/components/schemas/CreateProjectInput" } } },
           },
-          responses: { "201": { content: { "application/json": { schema: { type: "object", properties: { project: { $ref: "#/components/schemas/Project" } } } } } } },
+          responses: {
+            "201": { content: { "application/json": { schema: { type: "object", properties: { project: { $ref: "#/components/schemas/Project" } } } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
         },
       },
       "/v1/projects/{id}": {
@@ -320,6 +394,86 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           summary: "Get a project by id",
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
           responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { project: { $ref: "#/components/schemas/Project" } } } } } } },
+        },
+        patch: {
+          operationId: "updateProject",
+          summary: "Update a project",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateProjectInput" } } },
+          },
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { project: { $ref: "#/components/schemas/Project" } } } } } } },
+        },
+        delete: {
+          operationId: "deleteProject",
+          summary: "Delete a project",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { deleted: { type: "boolean" }, id: { type: "string" } } } } } } },
+        },
+      },
+      "/v1/projects/{id}/rename": {
+        post: {
+          operationId: "renameProject",
+          summary: "Atomically rename a project and its canonical task list",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/RenameProjectInput" } } },
+          },
+          responses: {
+            "200": { content: { "application/json": { schema: { type: "object", properties: { project: { $ref: "#/components/schemas/Project" }, task_lists_updated: { type: "number" } } } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/task-lists": {
+        get: {
+          operationId: "listTaskLists",
+          summary: "List task lists",
+          parameters: [{ name: "project_id", in: "query", schema: { type: "string" } }],
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { task_lists: { type: "array", items: { $ref: "#/components/schemas/TaskList" } }, count: { type: "number" } } } } } } },
+        },
+        post: {
+          operationId: "createTaskList",
+          summary: "Create a task list",
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/CreateTaskListInput" } } },
+          },
+          responses: {
+            "201": { content: { "application/json": { schema: { type: "object", properties: { task_list: { $ref: "#/components/schemas/TaskList" } } } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/task-lists/{id}": {
+        get: {
+          operationId: "getTaskList",
+          summary: "Get a task list by id",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            "200": { content: { "application/json": { schema: { type: "object", properties: { task_list: { $ref: "#/components/schemas/TaskList" } } } } } },
+          },
+        },
+        patch: {
+          operationId: "updateTaskList",
+          summary: "Update a task list",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateTaskListInput" } } },
+          },
+          responses: {
+            "200": { content: { "application/json": { schema: { type: "object", properties: { task_list: { $ref: "#/components/schemas/TaskList" } } } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+        delete: {
+          operationId: "deleteTaskList",
+          summary: "Delete a task list",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { deleted: { type: "boolean" }, id: { type: "string" } } } } } } },
         },
       },
       "/v1/stats": {
