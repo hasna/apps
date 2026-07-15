@@ -179,7 +179,7 @@ export class TenantApiAuthenticator {
         reason,
         JSON.stringify({
           method: context.method,
-          path: context.path,
+          route: context.policy.operationId,
           risk: context.policy.risk,
           requiredScopes: context.policy.scopes,
           tokenKind: row?.token_kind ?? null,

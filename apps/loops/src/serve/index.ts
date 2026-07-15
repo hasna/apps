@@ -81,6 +81,7 @@ export async function isSafeServiceConnection(
     required_schema_privileges: boolean;
     required_table_privileges: boolean;
     forbidden_table_privileges: boolean;
+    forbidden_column_privileges: boolean;
     forbidden_sequence_privileges: boolean;
     required_function_privileges: boolean;
     required_function_security: boolean;
@@ -203,7 +204,11 @@ export async function isSafeServiceConnection(
                   ]) AS required_table(name)
                   CROSS JOIN unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE']) AS required_privilege(name)
                  WHERE NOT has_table_privilege(session_user, required_table.name, required_privilege.name)
-              ) AND has_table_privilege(session_user, 'public.open_loops_schema_migrations', 'SELECT')
+              ) AND has_table_privilege(session_user, 'public.tenants', 'SELECT')
+                AND has_table_privilege(session_user, 'public.tenants', 'UPDATE')
+                AND has_table_privilege(session_user, 'public.tenants', 'REFERENCES')
+                AND has_column_privilege(session_user, 'public.tenants', 'id', 'UPDATE')
+                AND has_table_privilege(session_user, 'public.open_loops_schema_migrations', 'SELECT')
             ELSE true END AS required_table_privileges,
             CASE WHEN $1 = 'open_loops_runtime' THEN
               NOT EXISTS (
@@ -224,6 +229,14 @@ export async function isSafeServiceConnection(
                        'runner_machines', 'runner_leases', 'run_receipts',
                        'open_loops_schema_migrations'
                      ])
+                   )
+                   AND NOT (
+                     namespace.nspname = 'public'
+                     AND object.relname = 'tenants'
+                     AND has_table_privilege(session_user, object.oid, 'SELECT')
+                     AND has_table_privilege(session_user, object.oid, 'UPDATE')
+                     AND has_table_privilege(session_user, object.oid, 'REFERENCES')
+                     AND NOT has_table_privilege(session_user, object.oid, 'INSERT, DELETE, TRUNCATE, TRIGGER')
                    )
               )
               AND NOT EXISTS (
@@ -254,6 +267,40 @@ export async function isSafeServiceConnection(
                    AND has_table_privilege(session_user, object.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
               )
             END AS forbidden_table_privileges,
+            CASE WHEN $1 = 'open_loops_runtime' THEN
+              NOT EXISTS (
+                SELECT 1
+                  FROM pg_class object
+                  JOIN pg_namespace namespace ON namespace.oid=object.relnamespace
+                  JOIN pg_attribute attribute ON attribute.attrelid=object.oid
+                  CROSS JOIN LATERAL aclexplode(attribute.attacl) acl
+                  LEFT JOIN pg_roles grantee ON grantee.oid=acl.grantee
+                 WHERE namespace.nspname NOT IN ('pg_catalog', 'information_schema')
+                   AND namespace.nspname NOT LIKE 'pg_toast%'
+                   AND namespace.nspname NOT LIKE 'pg_temp_%'
+                   AND object.relkind IN ('r', 'p')
+                   AND attribute.attnum > 0
+                   AND NOT attribute.attisdropped
+                   AND acl.privilege_type IS NOT NULL
+                   AND (acl.grantee = 0 OR pg_has_role(session_user, acl.grantee, 'USAGE'))
+              )
+            ELSE
+              NOT EXISTS (
+                SELECT 1
+                  FROM pg_class object
+                  JOIN pg_namespace namespace ON namespace.oid=object.relnamespace
+                  JOIN pg_attribute attribute ON attribute.attrelid=object.oid
+                  CROSS JOIN LATERAL aclexplode(attribute.attacl) acl
+                 WHERE namespace.nspname NOT IN ('pg_catalog', 'information_schema')
+                   AND namespace.nspname NOT LIKE 'pg_toast%'
+                   AND namespace.nspname NOT LIKE 'pg_temp_%'
+                   AND object.relkind IN ('r', 'p')
+                   AND attribute.attnum > 0
+                   AND NOT attribute.attisdropped
+                   AND acl.privilege_type IS NOT NULL
+                   AND (acl.grantee = 0 OR pg_has_role(session_user, acl.grantee, 'USAGE'))
+              )
+            END AS forbidden_column_privileges,
             NOT EXISTS (
               SELECT 1
                 FROM pg_class sequence
@@ -345,6 +392,27 @@ export async function isSafeServiceConnection(
                 'public.open_loops_schema_migrations',
                 'SELECT WITH GRANT OPTION'
               )
+              AND NOT has_table_privilege(
+                session_user,
+                'public.tenants',
+                'REFERENCES WITH GRANT OPTION'
+              )
+              AND NOT has_table_privilege(
+                session_user,
+                'public.tenants',
+                'SELECT WITH GRANT OPTION'
+              )
+              AND NOT has_table_privilege(
+                session_user,
+                'public.tenants',
+                'UPDATE WITH GRANT OPTION'
+              )
+              AND NOT has_column_privilege(
+                session_user,
+                'public.tenants',
+                'id',
+                'UPDATE WITH GRANT OPTION'
+              )
               AND NOT has_function_privilege(
                 session_user,
                 'public.open_loops_current_tenant_id()',
@@ -364,7 +432,7 @@ export async function isSafeServiceConnection(
       WHERE role.rolname = session_user`,
     [expectedRole, forbiddenRole],
   );
-  return Boolean(
+  const rolePrivilegesSafe = Boolean(
     row?.rolcanlogin && row.rolinherit && row.expected_member && row.expected_usage && row.expected_direct &&
     !row.expected_role_has_memberships && row.expected_role_safe &&
     !row.rolsuper && !row.rolcreatedb && !row.rolcreaterole &&
@@ -373,10 +441,147 @@ export async function isSafeServiceConnection(
     !row.forbidden_member && !row.owner_member && !row.migrator_member &&
     row.required_database_privileges && row.database_acl_safe && row.required_schema_privileges &&
     row.required_table_privileges && row.forbidden_table_privileges &&
+    row.forbidden_column_privileges &&
     row.forbidden_sequence_privileges &&
     row.required_function_privileges && row.required_function_security && row.forbidden_function_privileges &&
     row.forbidden_grant_options,
   );
+  if (!rolePrivilegesSafe) return false;
+  return isTenantRlsInvariantSafe(client);
+}
+
+export async function isTenantRlsInvariantSafe(client: TypedQueryClient): Promise<boolean> {
+  const row = await client.get<{ safe: boolean }>(
+    `WITH protected(table_name, discriminator) AS (
+      VALUES
+        ('tenants', 'id'),
+        ('tenant_memberships', 'tenant_id'),
+        ('tenant_membership_roles', 'tenant_id'),
+        ('api_keys', 'tenant_id'),
+        ('loops', 'tenant_id'),
+        ('loop_runs', 'tenant_id'),
+        ('daemon_lease', 'tenant_id'),
+        ('workflow_specs', 'tenant_id'),
+        ('workflow_runs', 'tenant_id'),
+        ('workflow_invocations', 'tenant_id'),
+        ('workflow_work_items', 'tenant_id'),
+        ('workflow_step_runs', 'tenant_id'),
+        ('workflow_events', 'tenant_id'),
+        ('goals', 'tenant_id'),
+        ('goal_plan_nodes', 'tenant_id'),
+        ('goal_runs', 'tenant_id'),
+        ('runner_machines', 'tenant_id'),
+        ('runner_leases', 'tenant_id'),
+        ('audit_events', 'tenant_id'),
+        ('run_receipts', 'tenant_id')
+    ),
+    expected(table_name, policy_name, command, roles, qualifier, check_expr) AS (
+      SELECT table_name, 'tenant_isolation', '*', ARRAY['public'], discriminator, discriminator FROM protected
+      UNION ALL VALUES
+        ('tenants', 'auth_definer_tenant_lookup', '*', ARRAY['open_loops_owner'], 'true', NULL),
+        ('tenant_memberships', 'auth_definer_membership_lookup', '*', ARRAY['open_loops_owner'], 'true', NULL),
+        ('tenant_membership_roles', 'auth_definer_membership_roles_lookup', '*', ARRAY['open_loops_owner'], 'true', NULL),
+        ('api_keys', 'auth_definer_key_lookup', '*', ARRAY['open_loops_owner'], 'true', NULL),
+        ('audit_events', 'auth_definer_audit_insert', 'a', ARRAY['open_loops_owner'], NULL, 'true')
+    ),
+    table_state AS (
+      SELECT protected.table_name,
+             class.oid AS relation_oid,
+             pg_get_userbyid(class.relowner) AS owner_name,
+             class.relrowsecurity,
+             class.relforcerowsecurity
+        FROM protected
+        LEFT JOIN pg_class class ON class.oid = format('public.%I', protected.table_name)::regclass
+    ),
+    tenant_update_guard AS (
+      SELECT 1
+        FROM pg_trigger trigger
+        JOIN pg_proc proc ON proc.oid = trigger.tgfoid
+       WHERE trigger.tgrelid = 'public.tenants'::regclass
+         AND trigger.tgname = 'open_loops_reject_runtime_tenant_update'
+         AND NOT trigger.tgisinternal
+         AND trigger.tgenabled = 'O'
+         AND proc.oid = 'public.open_loops_reject_runtime_tenant_update()'::regprocedure
+         AND pg_get_userbyid(proc.proowner) = 'open_loops_owner'
+         AND NOT proc.prosecdef
+         AND COALESCE(proc.proconfig, ARRAY[]::text[]) @> ARRAY['search_path=pg_catalog']
+    ),
+    actual AS (
+      SELECT class.relname AS table_name,
+             policy.polname AS policy_name,
+             policy.polcmd::text AS command,
+             policy.polpermissive AS permissive,
+             ARRAY(
+                SELECT CASE WHEN role_oid = 0 THEN 'public' ELSE role.rolname::text END
+                 FROM unnest(policy.polroles) role_oid
+                 LEFT JOIN pg_roles role ON role.oid = role_oid
+                ORDER BY 1
+             ) AS roles,
+             COALESCE(regexp_replace(pg_get_expr(policy.polqual, policy.polrelid), '\\s+', ' ', 'g'), '') AS qualifier,
+             COALESCE(regexp_replace(pg_get_expr(policy.polwithcheck, policy.polrelid), '\\s+', ' ', 'g'), '') AS check_expr
+        FROM pg_policy policy
+        JOIN pg_class class ON class.oid = policy.polrelid
+        JOIN pg_namespace namespace ON namespace.oid = class.relnamespace
+       WHERE namespace.nspname = 'public'
+         AND class.relname IN (SELECT table_name FROM protected)
+    ),
+    bad_table AS (
+      SELECT 1
+        FROM table_state
+       WHERE relation_oid IS NULL
+          OR owner_name <> 'open_loops_owner'
+          OR NOT relrowsecurity
+          OR NOT relforcerowsecurity
+    ),
+    missing_or_bad AS (
+      SELECT expected.*
+        FROM expected
+        LEFT JOIN actual
+          ON actual.table_name = expected.table_name
+         AND actual.policy_name = expected.policy_name
+       WHERE actual.policy_name IS NULL
+          OR NOT actual.permissive
+          OR actual.command <> expected.command
+          OR actual.roles <> expected.roles
+          OR NOT CASE expected.qualifier
+            WHEN 'tenant_id' THEN actual.qualifier = ANY(ARRAY[
+              '(tenant_id = open_loops_current_tenant_id())',
+              '(tenant_id = public.open_loops_current_tenant_id())'
+            ])
+            WHEN 'id' THEN actual.qualifier = ANY(ARRAY[
+              '(id = open_loops_current_tenant_id())',
+              '(id = public.open_loops_current_tenant_id())'
+            ])
+            WHEN 'true' THEN actual.qualifier = 'true'
+            ELSE actual.qualifier = ''
+          END
+          OR NOT CASE expected.check_expr
+            WHEN 'tenant_id' THEN actual.check_expr = ANY(ARRAY[
+              '(tenant_id = open_loops_current_tenant_id())',
+              '(tenant_id = public.open_loops_current_tenant_id())'
+            ])
+            WHEN 'id' THEN actual.check_expr = ANY(ARRAY[
+              '(id = open_loops_current_tenant_id())',
+              '(id = public.open_loops_current_tenant_id())'
+            ])
+            WHEN 'true' THEN actual.check_expr = 'true'
+            ELSE actual.check_expr = ''
+          END
+    ),
+    unexpected AS (
+      SELECT actual.*
+        FROM actual
+        LEFT JOIN expected
+          ON expected.table_name = actual.table_name
+         AND expected.policy_name = actual.policy_name
+       WHERE expected.policy_name IS NULL
+    )
+    SELECT NOT EXISTS (SELECT 1 FROM bad_table)
+       AND NOT EXISTS (SELECT 1 FROM missing_or_bad)
+       AND NOT EXISTS (SELECT 1 FROM unexpected)
+       AND EXISTS (SELECT 1 FROM tenant_update_guard) AS safe`,
+  );
+  return row?.safe === true;
 }
 
 export async function assertTenantEnforcementBootstrap(client: PoolQueryClient): Promise<void> {

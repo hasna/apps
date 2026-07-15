@@ -149,6 +149,8 @@ suite("PostgresLoopStorage (live)", () => {
         LANGUAGE sql STABLE AS 'SELECT ''hostile-tenant''::TEXT';
       ALTER FUNCTION public.open_loops_current_tenant_id() OWNER TO ${HOSTILE_FUNCTION_OWNER};
       GRANT EXECUTE ON FUNCTION public.open_loops_current_tenant_id() TO PUBLIC, open_loops_authenticator;
+      ALTER TABLE loops ENABLE ROW LEVEL SECURITY;
+      CREATE POLICY preexisting_allow_all ON loops USING (true) WITH CHECK (true);
       CREATE SCHEMA residual_acl;
       CREATE TABLE residual_acl.private_rows(id INTEGER PRIMARY KEY);
       CREATE SEQUENCE residual_acl.private_sequence;
@@ -209,7 +211,7 @@ suite("PostgresLoopStorage (live)", () => {
       connectionString: isolatedUrl({ username: AUTH_LOGIN, password: AUTH_PASSWORD }),
       applicationName: "loops-pgstore-auth-test",
     });
-    storage = new PostgresLoopStorage(executor.queryClient, {
+    storage = new PostgresLoopStorage(runtimeExecutor.queryClient, {
       tenantId: "tenant-test",
       principalId: "principal-test",
       requestId: "request-test",
@@ -283,9 +285,24 @@ suite("PostgresLoopStorage (live)", () => {
          WHERE database.datname=current_database() AND grantee.rolname=$1 AND acl.privilege_type='CONNECT'
        ) AS direct_connect`, [AUTH_LOGIN],
     )).toEqual({ direct_connect: true });
-    expect(await executor.queryClient.get<{ can_select: boolean }>(
-      "SELECT has_table_privilege($1, 'tenants', 'SELECT') AS can_select", [RUNTIME_LOGIN],
-    )).toEqual({ can_select: false });
+    expect(await executor.queryClient.get<{ can_select: boolean; can_reference: boolean; can_insert: boolean; can_update: boolean; can_update_id: boolean }>(
+      `SELECT has_table_privilege($1, 'tenants', 'SELECT') AS can_select,
+              has_table_privilege($1, 'tenants', 'REFERENCES') AS can_reference,
+              has_table_privilege($1, 'tenants', 'INSERT') AS can_insert,
+              has_table_privilege($1, 'tenants', 'UPDATE') AS can_update,
+              has_column_privilege($1, 'tenants', 'id', 'UPDATE') AS can_update_id`,
+      [RUNTIME_LOGIN],
+    )).toEqual({
+      can_select: true,
+      can_reference: true,
+      can_insert: false,
+      can_update: true,
+      can_update_id: true,
+    });
+    await expect(runtimeExecutor.withRequestContext(
+      { tenantId: "tenant-test", principalId: "principal-test", requestId: "tenant-update-denied" },
+      (client) => client.execute("UPDATE tenants SET name='Runtime Mutated' WHERE id='tenant-test'"),
+    )).rejects.toMatchObject({ code: "42501" });
     expect(await executor.queryClient.get<{ inherited: boolean }>(
       "SELECT pg_has_role('open_loops_runtime', $1, 'MEMBER') AS inherited", [EXTRA_SERVICE_ROLE],
     )).toEqual({ inherited: false });
@@ -339,6 +356,34 @@ suite("PostgresLoopStorage (live)", () => {
     await executor.queryClient.execute("REVOKE TRUNCATE ON loops FROM open_loops_runtime");
     expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
     expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(true);
+    expect(await executor.queryClient.many<{ policyname: string }>(
+      "SELECT policyname FROM pg_policies WHERE schemaname='public' AND tablename='loops' ORDER BY policyname",
+    )).toEqual([{ policyname: "tenant_isolation" }]);
+    await executor.queryClient.execute(`ALTER TABLE loops DISABLE ROW LEVEL SECURITY`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
+    await executor.queryClient.execute(`ALTER TABLE loops ENABLE ROW LEVEL SECURITY; ALTER TABLE loops FORCE ROW LEVEL SECURITY`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
+    await executor.queryClient.execute(`ALTER TABLE loops NO FORCE ROW LEVEL SECURITY`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
+    await executor.queryClient.execute(`ALTER TABLE loops FORCE ROW LEVEL SECURITY`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
+    await executor.queryClient.execute(`DROP POLICY tenant_isolation ON loops`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
+    await executor.queryClient.execute(`
+      CREATE POLICY tenant_isolation ON loops
+      USING (tenant_id = public.open_loops_current_tenant_id())
+      WITH CHECK (tenant_id = public.open_loops_current_tenant_id())
+    `);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
+    await executor.queryClient.execute(`CREATE POLICY preexisting_allow_all ON loops USING (true) WITH CHECK (true)`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
+    await executor.queryClient.execute(`DROP POLICY preexisting_allow_all ON loops`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
+    await executor.queryClient.execute(`ALTER TABLE loops OWNER TO open_loops_runtime`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
+    await executor.queryClient.execute(`ALTER TABLE loops OWNER TO open_loops_owner`);
+    await executor.queryClient.execute(`GRANT SELECT, INSERT, UPDATE, DELETE ON loops TO open_loops_runtime`);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
     await admin(`GRANT ${EXTRA_SERVICE_ROLE} TO open_loops_runtime`);
     expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
     await admin(`REVOKE ${EXTRA_SERVICE_ROLE} FROM open_loops_runtime`);
@@ -573,7 +618,7 @@ suite("PostgresLoopStorage (live)", () => {
   test("pruneHistory deletes old terminal runs", async () => {
     const loop = await storage.createLoop(loopInput("prune"));
     // Insert an old terminal run directly.
-    await executor.withRequestContext(
+    await runtimeExecutor.withRequestContext(
       { tenantId: "tenant-test", principalId: "principal-test", requestId: "prune-setup" },
       (client) => client.execute(
         `INSERT INTO loop_runs (id, loop_id, loop_name, scheduled_for, attempt, status, created_at, updated_at)
@@ -581,14 +626,54 @@ suite("PostgresLoopStorage (live)", () => {
         ["oldrun", loop.id, "prune", "2020-01-01T00:00:00.000Z", "2020-01-01T00:00:00.000Z"],
       ),
     );
+    await runtimeExecutor.withRequestContext(
+      { tenantId: "tenant-test", principalId: "principal-test", requestId: "prune-goal-setup" },
+      async (client) => {
+        await client.execute(
+          `INSERT INTO goals(
+            id, plan_id, objective, status, tokens_used, time_used_seconds, auto_execute,
+            loop_id, loop_run_id, created_at, updated_at
+          ) VALUES (
+            'goal-prune-loop-run','plan-prune','objective','complete',0,0,'ready_only',
+            $1,'oldrun','2020-01-01T00:00:00Z','2020-01-01T00:00:00Z'
+          )`,
+          [loop.id],
+        );
+        await client.execute(
+          `INSERT INTO goal_runs(
+            id, goal_id, plan_id, loop_id, loop_run_id, turn, phase, status, tokens_used,
+            created_at, updated_at
+          ) VALUES (
+            'goal-run-prune-loop-run','goal-prune-loop-run','plan-prune',$1,'oldrun',1,'run','complete',0,
+            '2020-01-01T00:00:00Z','2020-01-01T00:00:00Z'
+          )`,
+          [loop.id],
+        );
+      },
+    );
     const summary = await storage.pruneHistory({ maxAgeDays: 30 });
     expect(summary.loopRuns).toBe(1);
+    expect(summary.goalRuns).toBe(1);
     expect(await storage.getRun("oldrun")).toBeUndefined();
+    expect(await runtimeExecutor.withRequestContext(
+      { tenantId: "tenant-test", principalId: "principal-test", requestId: "prune-goal-read" },
+      (client) => client.get<{ goal_loop_run_id: string | null }>(
+        `SELECT loop_run_id AS goal_loop_run_id
+           FROM goals
+          WHERE id='goal-prune-loop-run'`,
+      ),
+    )).toEqual({ goal_loop_run_id: null });
+    expect(await runtimeExecutor.withRequestContext(
+      { tenantId: "tenant-test", principalId: "principal-test", requestId: "prune-goal-run-read" },
+      (client) => client.get<{ id: string }>(
+        `SELECT id FROM goal_runs WHERE id='goal-run-prune-loop-run'`,
+      ),
+    )).toBeNull();
   });
 
   test("pruneHistory nulls work-item references to deleted workflow runs", async () => {
     const loop = await storage.createLoop(loopInput("prune-workflow"));
-    await executor.withRequestContext(
+    await runtimeExecutor.withRequestContext(
       { tenantId: "tenant-test", principalId: "principal-test", requestId: "prune-workflow-setup" },
       async (client) => {
         await client.execute(
@@ -626,16 +711,45 @@ suite("PostgresLoopStorage (live)", () => {
         await client.execute(
           "UPDATE workflow_work_items SET workflow_run_id='prune-workflow-run' WHERE id='prune-work-item'",
         );
+        await client.execute(
+          `INSERT INTO goals(
+            id, plan_id, objective, status, tokens_used, time_used_seconds, auto_execute,
+            workflow_id, workflow_run_id, created_at, updated_at
+          ) VALUES (
+            'goal-prune-workflow-run','plan-prune-workflow','objective','complete',0,0,'ready_only',
+            'prune-workflow-spec','prune-workflow-run','2020-01-01T00:00:00Z','2020-01-01T00:00:00Z'
+          )`,
+        );
+        await client.execute(
+          `INSERT INTO goal_runs(
+            id, goal_id, plan_id, workflow_id, workflow_run_id, turn, phase, status, tokens_used,
+            created_at, updated_at
+          ) VALUES (
+            'goal-run-prune-workflow-run','goal-prune-workflow-run','plan-prune-workflow',
+            'prune-workflow-spec','prune-workflow-run',1,'run','complete',0,
+            '2020-01-01T00:00:00Z','2020-01-01T00:00:00Z'
+          )`,
+        );
       },
     );
     const summary = await storage.pruneHistory({ maxAgeDays: 30 });
-    expect(summary).toMatchObject({ loopRuns: 1, workflowRuns: 1 });
-    expect(await executor.withRequestContext(
+    expect(summary).toMatchObject({ loopRuns: 1, workflowRuns: 1, goalRuns: 1 });
+    expect(await runtimeExecutor.withRequestContext(
       { tenantId: "tenant-test", principalId: "principal-test", requestId: "prune-workflow-read" },
-      (client) => client.get<{ workflow_run_id: string | null }>(
-        "SELECT workflow_run_id FROM workflow_work_items WHERE id='prune-work-item'",
+      (client) => client.get<{ item_workflow_run_id: string | null; goal_workflow_run_id: string | null }>(
+        `SELECT item.workflow_run_id AS item_workflow_run_id,
+                goal.workflow_run_id AS goal_workflow_run_id
+           FROM workflow_work_items item
+           JOIN goals goal ON goal.id='goal-prune-workflow-run'
+          WHERE item.id='prune-work-item'`,
       ),
-    )).toEqual({ workflow_run_id: null });
+    )).toEqual({ item_workflow_run_id: null, goal_workflow_run_id: null });
+    expect(await runtimeExecutor.withRequestContext(
+      { tenantId: "tenant-test", principalId: "principal-test", requestId: "prune-workflow-goal-run-read" },
+      (client) => client.get<{ id: string }>(
+        `SELECT id FROM goal_runs WHERE id='goal-run-prune-workflow-run'`,
+      ),
+    )).toBeNull();
   });
 
   test("upsertMigrationLoop/Run/Workflow preserve id+status, are idempotent, and honor replace", async () => {
@@ -824,7 +938,7 @@ suite("PostgresLoopStorage (live)", () => {
   });
 
   test("two connections never double-claim the same slot (contract claimRun)", async () => {
-    const execB = PgPoolExecutor.fromConnectionString({ connectionString: isolatedUrl(), applicationName: "loops-pgstore-test-b" });
+    const execB = PgPoolExecutor.fromConnectionString({ connectionString: isolatedUrl({ username: RUNTIME_LOGIN, password: RUNTIME_PASSWORD }), applicationName: "loops-pgstore-test-b" });
     const storageB = new PostgresLoopStorage(execB.queryClient, {
       tenantId: "tenant-test",
       principalId: "principal-test",
@@ -839,7 +953,7 @@ suite("PostgresLoopStorage (live)", () => {
       ]);
       const winners = [a, b].filter(Boolean);
       expect(winners.length).toBe(1);
-      const running = await executor.withRequestContext(
+      const running = await runtimeExecutor.withRequestContext(
         { tenantId: "tenant-test", principalId: "principal-test", requestId: "race-count" },
         (client) => client.get<{ count: number }>(
           "SELECT COUNT(*)::int AS count FROM loop_runs WHERE loop_id=$1 AND status='running'",
@@ -853,7 +967,7 @@ suite("PostgresLoopStorage (live)", () => {
   });
 
   test("tenant foreign keys reject an unregistered request tenant", async () => {
-    const unknown = new PostgresLoopStorage(executor.queryClient, {
+    const unknown = new PostgresLoopStorage(runtimeExecutor.queryClient, {
       tenantId: "tenant-does-not-exist",
       principalId: "principal-test",
       requestId: "unknown-tenant",
@@ -918,7 +1032,7 @@ suite("PostgresLoopStorage (live)", () => {
        INSERT INTO tenant_memberships(tenant_id, principal_id, status) VALUES ('tenant-other', 'principal-test', 'active');
        INSERT INTO tenant_membership_roles(tenant_id, principal_id, role) VALUES ('tenant-other', 'principal-test', 'service');`,
     );
-    const other = new PostgresLoopStorage(executor.queryClient, {
+    const other = new PostgresLoopStorage(runtimeExecutor.queryClient, {
       tenantId: "tenant-other",
       principalId: "principal-test",
       requestId: "other-request",
@@ -942,7 +1056,7 @@ suite("PostgresLoopStorage (live)", () => {
     expect((await storage.getLoop("same-id"))?.name).toBe("tenant-a");
     expect((await other.getLoop("same-id"))?.name).toBe("tenant-b");
 
-    await expect(executor.withRequestContext(
+    await expect(runtimeExecutor.withRequestContext(
       { tenantId: "tenant-test", principalId: "principal-test", requestId: "rollback" },
       async (client) => {
         await client.execute(
@@ -961,7 +1075,7 @@ suite("PostgresLoopStorage (live)", () => {
     const loop = await storage.createLoop(loopInput("lease-xor"));
     const claim = await storage.claimRun(loop, "2026-07-06T14:00:00.000Z", "runner-xor");
     expect(claim).toBeTruthy();
-    await expect(executor.withRequestContext(
+    await expect(runtimeExecutor.withRequestContext(
       { tenantId: "tenant-test", principalId: "principal-test", requestId: "lease-xor" },
       async (client) => {
         await client.execute(

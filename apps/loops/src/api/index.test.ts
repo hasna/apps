@@ -210,9 +210,26 @@ describe("loops-api foundation", () => {
       expect(rolledBack).toBe(true);
       expect(logged.join("\n")).not.toContain("secret");
       expect(logged.join("\n")).not.toContain("postgres");
+      expect(logged.join("\n")).not.toContain("/v1/loops");
     } finally {
       console.error = originalError;
       server.stop(true);
+    }
+  });
+
+  test("api command failures use stable logs without provider details", async () => {
+    const mod = await import("./index.js");
+    const logged: string[] = [];
+    const originalError = console.error;
+    console.error = (...values: unknown[]) => { logged.push(values.map(String).join(" ")); };
+    try {
+      mod.logApiCommandFailure(Object.assign(new Error("postgres://user:secret@db.internal/loops"), {
+        name: "postgres://name-secret@db.internal/loops",
+        code: "postgres://code-secret@db.internal/loops",
+      }));
+      expect(logged).toEqual([JSON.stringify({ evt: "loops_api_command_failed", errorType: "error" })]);
+    } finally {
+      console.error = originalError;
     }
   });
 

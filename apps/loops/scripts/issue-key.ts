@@ -107,7 +107,14 @@ async function main(): Promise<void> {
 
 if (import.meta.main) {
   main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
+    logIssueKeyFailure(error);
     process.exit(1);
   });
+}
+
+export function logIssueKeyFailure(error: unknown): void {
+  console.error(JSON.stringify({
+    evt: "loops_issue_key_failed",
+    errorType: error instanceof Error ? "error" : typeof error,
+  }));
 }

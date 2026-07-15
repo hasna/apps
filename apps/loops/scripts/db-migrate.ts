@@ -52,7 +52,14 @@ export async function runMigrations(dsn = resolveDsn()): Promise<void> {
 
 if (import.meta.main) {
   runMigrations().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
+    logMigrationFailure(error);
     process.exit(1);
   });
+}
+
+export function logMigrationFailure(error: unknown): void {
+  console.error(JSON.stringify({
+    evt: "loops_migrate_failed",
+    errorType: error instanceof Error ? "error" : typeof error,
+  }));
 }

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createLoopsApiServer } from "../api/index.js";
 import { createSqliteLoopStorage } from "../lib/storage/sqlite.js";
-import { runRunnerOnce, runnerStatus } from "./index.js";
+import { logRunnerCommandFailure, runRunnerOnce, runnerStatus } from "./index.js";
 
 function createRunnerServer(storage: ReturnType<typeof createSqliteLoopStorage>, principalId: string, now?: () => Date) {
   const principal = {
@@ -17,6 +17,21 @@ function createRunnerServer(storage: ReturnType<typeof createSqliteLoopStorage>,
 }
 
 describe("loops-runner foundation", () => {
+  test("command failures use stable logs without provider details", () => {
+    const logged: string[] = [];
+    const originalError = console.error;
+    console.error = (...values: unknown[]) => { logged.push(values.map(String).join(" ")); };
+    try {
+      logRunnerCommandFailure(Object.assign(new Error("postgres://user:secret@db.internal/loops"), {
+        name: "postgres://name-secret@db.internal/loops",
+        code: "postgres://code-secret@db.internal/loops",
+      }));
+      expect(logged).toEqual([JSON.stringify({ evt: "loops_runner_command_failed", errorType: "error" })]);
+    } finally {
+      console.error = originalError;
+    }
+  });
+
   test("reports local daemon authority by default", () => {
     const previous = process.env.HASNA_LOOPS_STORAGE_MODE;
     process.env.HASNA_LOOPS_STORAGE_MODE = "local";

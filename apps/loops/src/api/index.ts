@@ -1018,15 +1018,22 @@ function requestIdentifier(request: Request): string {
 }
 
 function logInternalFailure(request: Request, error: unknown, code: string, requestId = requestIdentifier(request)): void {
-  // Never log Error.message here: database drivers may embed credential-bearing
-  // connection strings in it. The stable code and error class are sufficient
-  // for correlation with protected infrastructure logs.
+  // Never log request paths or Error fields here: both may contain credentials
+  // supplied by a client or database provider. Stable code/request/method are
+  // enough for correlation with protected infrastructure logs.
   console.error(JSON.stringify({
     evt: "loops_api_request_failed",
     code,
     requestId,
     method: request.method,
-    path: new URL(request.url).pathname,
+    route: "unknown_route",
+    errorType: error instanceof Error ? "error" : typeof error,
+  }));
+}
+
+export function logApiCommandFailure(error: unknown): void {
+  console.error(JSON.stringify({
+    evt: "loops_api_command_failed",
     errorType: error instanceof Error ? "error" : typeof error,
   }));
 }
@@ -1045,7 +1052,7 @@ program.command("status").option("-j, --json", "print JSON").action((opts) => pr
 // this CLI from double-parsing argv against the serve program.
 if (import.meta.main && (import.meta.url.endsWith("api/index.ts") || import.meta.url.endsWith("api/index.js"))) {
   main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
+    logApiCommandFailure(error);
     process.exit(1);
   });
 }

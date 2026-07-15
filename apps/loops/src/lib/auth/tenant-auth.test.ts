@@ -93,12 +93,16 @@ describe("tenant API authentication", () => {
     const { client, audits } = clientFor(token);
     const decision = await new TenantApiAuthenticator(client, secret, () => now).authenticate(
       headers(),
-      { method: "GET", path: "/v1/loops", policy: readPolicy },
+      { method: "GET", path: "/v1/loops/password=hostile-audit-secret", policy: readPolicy },
     );
 
     expect(decision).toMatchObject({ ok: false, status: 401, reason: "missing_token" });
     expect(audits[0]?.[1]).toBeNull();
     expect(audits[0]?.[5]).toBe("deny");
+    const metadata = JSON.parse(String(audits[0]?.[7]));
+    expect(metadata).toMatchObject({ route: "loops.list" });
+    expect(JSON.stringify(metadata)).not.toContain("hostile-audit-secret");
+    expect(JSON.stringify(metadata)).not.toContain("password=");
   });
 
   test.each([

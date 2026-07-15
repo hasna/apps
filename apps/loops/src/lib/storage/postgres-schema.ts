@@ -631,6 +631,7 @@ $service_member_acl$;
 DO $service_role_acl$
 DECLARE namespace RECORD;
 DECLARE database_grantee RECORD;
+DECLARE object_grantee RECORD;
 BEGIN
   FOR database_grantee IN
     SELECT DISTINCT grantee.rolname AS grantee_role
@@ -647,31 +648,63 @@ BEGIN
     current_database()
   );
   FOR namespace IN
-    SELECT nspname
+    SELECT oid, nspname
       FROM pg_namespace
      WHERE nspname NOT IN ('pg_catalog', 'information_schema')
        AND nspname NOT LIKE 'pg_toast%'
        AND nspname NOT LIKE 'pg_temp_%'
   LOOP
-    EXECUTE format(
-      'REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA %I FROM PUBLIC, open_loops_runtime, open_loops_authenticator',
-      namespace.nspname
-    );
-    EXECUTE format(
-      'REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA %I FROM PUBLIC, open_loops_runtime, open_loops_authenticator',
-      namespace.nspname
-    );
-    EXECUTE format(
-      'REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA %I FROM PUBLIC, open_loops_runtime, open_loops_authenticator',
-      namespace.nspname
-    );
-    EXECUTE format(
-      'REVOKE ALL PRIVILEGES ON SCHEMA %I FROM open_loops_runtime, open_loops_authenticator',
-      namespace.nspname
-    );
-    IF namespace.nspname <> 'public' THEN
-      EXECUTE format('REVOKE ALL PRIVILEGES ON SCHEMA %I FROM PUBLIC', namespace.nspname);
-    END IF;
+    FOR object_grantee IN
+      SELECT class.relkind, class.relname,
+             CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE format('%I', grantee.rolname) END AS grantee_sql
+        FROM pg_class class
+        CROSS JOIN LATERAL aclexplode(class.relacl) acl
+        LEFT JOIN pg_roles grantee ON grantee.oid = acl.grantee
+       WHERE class.relnamespace = namespace.oid
+         AND class.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
+         AND (acl.grantee = 0 OR grantee.oid IS NOT NULL)
+    LOOP
+      IF object_grantee.relkind = 'S' THEN
+        EXECUTE format(
+          'REVOKE ALL PRIVILEGES ON SEQUENCE %I.%I FROM %s',
+          namespace.nspname,
+          object_grantee.relname,
+          object_grantee.grantee_sql
+        );
+      ELSE
+        EXECUTE format(
+          'REVOKE ALL PRIVILEGES ON TABLE %I.%I FROM %s',
+          namespace.nspname,
+          object_grantee.relname,
+          object_grantee.grantee_sql
+        );
+      END IF;
+    END LOOP;
+    FOR object_grantee IN
+      SELECT proc.oid::regprocedure AS function_signature,
+             CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE format('%I', grantee.rolname) END AS grantee_sql
+        FROM pg_proc proc
+        CROSS JOIN LATERAL aclexplode(proc.proacl) acl
+        LEFT JOIN pg_roles grantee ON grantee.oid = acl.grantee
+       WHERE proc.pronamespace = namespace.oid
+         AND (acl.grantee = 0 OR grantee.oid IS NOT NULL)
+    LOOP
+      EXECUTE format(
+        'REVOKE ALL PRIVILEGES ON FUNCTION %s FROM %s',
+        object_grantee.function_signature,
+        object_grantee.grantee_sql
+      );
+    END LOOP;
+    FOR object_grantee IN
+      SELECT CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE format('%I', grantee.rolname) END AS grantee_sql
+        FROM pg_namespace ns
+        CROSS JOIN LATERAL aclexplode(ns.nspacl) acl
+        LEFT JOIN pg_roles grantee ON grantee.oid = acl.grantee
+       WHERE ns.oid = namespace.oid
+         AND (acl.grantee = 0 OR grantee.oid IS NOT NULL)
+    LOOP
+      EXECUTE format('REVOKE ALL PRIVILEGES ON SCHEMA %I FROM %s', namespace.nspname, object_grantee.grantee_sql);
+    END LOOP;
   END LOOP;
 END
 $service_role_acl$;
@@ -798,6 +831,7 @@ BEGIN
 END
 $tenant_function_acl$;
 REVOKE ALL ON FUNCTION public.open_loops_current_tenant_id() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.open_loops_current_tenant_id() TO open_loops_owner;
 GRANT EXECUTE ON FUNCTION public.open_loops_current_tenant_id() TO open_loops_runtime;
 
 DO $tenant_defaults$
@@ -860,7 +894,7 @@ ALTER TABLE loop_runs ADD FOREIGN KEY (tenant_id, loop_id) REFERENCES loops(tena
 ALTER TABLE workflow_runs ADD FOREIGN KEY (tenant_id, workflow_id) REFERENCES workflow_specs(tenant_id, id) ON DELETE CASCADE;
 ALTER TABLE workflow_runs ADD FOREIGN KEY (tenant_id, loop_id) REFERENCES loops(tenant_id, id) ON DELETE SET NULL (loop_id);
 ALTER TABLE workflow_runs ADD FOREIGN KEY (tenant_id, loop_run_id) REFERENCES loop_runs(tenant_id, id) ON DELETE SET NULL (loop_run_id);
-ALTER TABLE workflow_invocations ADD FOREIGN KEY (tenant_id, workflow_id) REFERENCES workflow_specs(tenant_id, id);
+ALTER TABLE workflow_invocations ADD FOREIGN KEY (tenant_id, workflow_id) REFERENCES workflow_specs(tenant_id, id) ON DELETE SET NULL (workflow_id);
 ALTER TABLE workflow_work_items ADD FOREIGN KEY (tenant_id, invocation_id) REFERENCES workflow_invocations(tenant_id, id) ON DELETE CASCADE;
 ALTER TABLE workflow_work_items ADD FOREIGN KEY (tenant_id, workflow_id) REFERENCES workflow_specs(tenant_id, id) ON DELETE SET NULL (workflow_id);
 ALTER TABLE workflow_work_items ADD FOREIGN KEY (tenant_id, loop_id) REFERENCES loops(tenant_id, id) ON DELETE SET NULL (loop_id);
@@ -875,25 +909,45 @@ ALTER TABLE runner_leases ADD FOREIGN KEY (tenant_id, workflow_run_id) REFERENCE
 ALTER TABLE runner_leases ADD CONSTRAINT runner_leases_exactly_one_run CHECK (num_nonnulls(loop_run_id, workflow_run_id) = 1);
 ALTER TABLE run_receipts ADD FOREIGN KEY (tenant_id, loop_id) REFERENCES loops(tenant_id, id);
 
-ALTER TABLE loop_runs ADD FOREIGN KEY (tenant_id, goal_run_id) REFERENCES goal_runs(tenant_id, id);
-ALTER TABLE workflow_runs ADD FOREIGN KEY (tenant_id, invocation_id) REFERENCES workflow_invocations(tenant_id, id);
-ALTER TABLE workflow_runs ADD FOREIGN KEY (tenant_id, work_item_id) REFERENCES workflow_work_items(tenant_id, id);
-ALTER TABLE workflow_runs ADD FOREIGN KEY (tenant_id, goal_run_id) REFERENCES goal_runs(tenant_id, id);
-ALTER TABLE workflow_step_runs ADD FOREIGN KEY (tenant_id, goal_run_id) REFERENCES goal_runs(tenant_id, id);
-ALTER TABLE goals ADD FOREIGN KEY (tenant_id, loop_id) REFERENCES loops(tenant_id, id);
-ALTER TABLE goals ADD FOREIGN KEY (tenant_id, loop_run_id) REFERENCES loop_runs(tenant_id, id);
-ALTER TABLE goals ADD FOREIGN KEY (tenant_id, workflow_id) REFERENCES workflow_specs(tenant_id, id);
-ALTER TABLE goals ADD FOREIGN KEY (tenant_id, workflow_run_id) REFERENCES workflow_runs(tenant_id, id);
-ALTER TABLE goal_runs ADD FOREIGN KEY (tenant_id, loop_id) REFERENCES loops(tenant_id, id);
-ALTER TABLE goal_runs ADD FOREIGN KEY (tenant_id, loop_run_id) REFERENCES loop_runs(tenant_id, id);
-ALTER TABLE goal_runs ADD FOREIGN KEY (tenant_id, workflow_id) REFERENCES workflow_specs(tenant_id, id);
-ALTER TABLE goal_runs ADD FOREIGN KEY (tenant_id, workflow_run_id) REFERENCES workflow_runs(tenant_id, id);
+ALTER TABLE loop_runs ADD FOREIGN KEY (tenant_id, goal_run_id) REFERENCES goal_runs(tenant_id, id) ON DELETE SET NULL (goal_run_id);
+ALTER TABLE workflow_runs ADD FOREIGN KEY (tenant_id, invocation_id) REFERENCES workflow_invocations(tenant_id, id) ON DELETE SET NULL (invocation_id);
+ALTER TABLE workflow_runs ADD FOREIGN KEY (tenant_id, work_item_id) REFERENCES workflow_work_items(tenant_id, id) ON DELETE SET NULL (work_item_id);
+ALTER TABLE workflow_runs ADD FOREIGN KEY (tenant_id, goal_run_id) REFERENCES goal_runs(tenant_id, id) ON DELETE SET NULL (goal_run_id);
+ALTER TABLE workflow_step_runs ADD FOREIGN KEY (tenant_id, goal_run_id) REFERENCES goal_runs(tenant_id, id) ON DELETE SET NULL (goal_run_id);
+ALTER TABLE goals ADD FOREIGN KEY (tenant_id, loop_id) REFERENCES loops(tenant_id, id) ON DELETE SET NULL (loop_id);
+ALTER TABLE goals ADD FOREIGN KEY (tenant_id, loop_run_id) REFERENCES loop_runs(tenant_id, id) ON DELETE SET NULL (loop_run_id);
+ALTER TABLE goals ADD FOREIGN KEY (tenant_id, workflow_id) REFERENCES workflow_specs(tenant_id, id) ON DELETE SET NULL (workflow_id);
+ALTER TABLE goals ADD FOREIGN KEY (tenant_id, workflow_run_id) REFERENCES workflow_runs(tenant_id, id) ON DELETE SET NULL (workflow_run_id);
+ALTER TABLE goal_runs ADD FOREIGN KEY (tenant_id, loop_id) REFERENCES loops(tenant_id, id) ON DELETE SET NULL (loop_id);
+ALTER TABLE goal_runs ADD FOREIGN KEY (tenant_id, loop_run_id) REFERENCES loop_runs(tenant_id, id) ON DELETE SET NULL (loop_run_id);
+ALTER TABLE goal_runs ADD FOREIGN KEY (tenant_id, workflow_id) REFERENCES workflow_specs(tenant_id, id) ON DELETE SET NULL (workflow_id);
+ALTER TABLE goal_runs ADD FOREIGN KEY (tenant_id, workflow_run_id) REFERENCES workflow_runs(tenant_id, id) ON DELETE SET NULL (workflow_run_id);
 
 CREATE UNIQUE INDEX idx_workflows_name_active ON workflow_specs(tenant_id, name) WHERE status = 'active';
 CREATE UNIQUE INDEX idx_workflow_runs_idempotency ON workflow_runs(tenant_id, workflow_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
 CREATE UNIQUE INDEX idx_workflow_invocations_dedupe ON workflow_invocations(tenant_id, source_kind, source_dedupe_key) WHERE source_dedupe_key IS NOT NULL;
 CREATE UNIQUE INDEX idx_runner_leases_active_loop_run ON runner_leases(tenant_id, loop_run_id) WHERE loop_run_id IS NOT NULL AND status = 'active';
 CREATE UNIQUE INDEX idx_runner_leases_active_workflow_run ON runner_leases(tenant_id, workflow_run_id) WHERE workflow_run_id IS NOT NULL AND status = 'active';
+
+DO $rls_policy_reset$
+DECLARE policy_record RECORD;
+BEGIN
+  FOR policy_record IN
+    SELECT schemaname, tablename, policyname
+      FROM pg_policies
+     WHERE schemaname = 'public'
+       AND tablename = ANY(ARRAY[
+         'tenants', 'tenant_memberships', 'tenant_membership_roles', 'api_keys',
+         'loops', 'loop_runs', 'daemon_lease', 'workflow_specs', 'workflow_runs',
+         'workflow_invocations', 'workflow_work_items', 'workflow_step_runs', 'workflow_events',
+         'goals', 'goal_plan_nodes', 'goal_runs', 'runner_machines', 'runner_leases',
+         'audit_events', 'run_receipts'
+       ])
+  LOOP
+    EXECUTE format('DROP POLICY %I ON %I.%I', policy_record.policyname, policy_record.schemaname, policy_record.tablename);
+  END LOOP;
+END
+$rls_policy_reset$;
 
 DO $rls$
 DECLARE table_name TEXT;
@@ -940,10 +994,53 @@ $owners$;
 ALTER TABLE preauth_audit_events OWNER TO open_loops_owner;
 ALTER TABLE open_loops_schema_migrations OWNER TO open_loops_migrator;
 
+GRANT SELECT, UPDATE, REFERENCES ON tenants TO open_loops_owner;
+SET ROLE open_loops_owner;
+DO $tenant_foreign_keys_owner$
+DECLARE table_name TEXT;
+BEGIN
+  FOREACH table_name IN ARRAY ARRAY[
+    'loops', 'loop_runs', 'daemon_lease', 'workflow_specs', 'workflow_runs',
+    'workflow_invocations', 'workflow_work_items', 'workflow_step_runs', 'workflow_events',
+    'goals', 'goal_plan_nodes', 'goal_runs', 'runner_machines', 'runner_leases',
+    'audit_events', 'run_receipts'
+  ] LOOP
+    EXECUTE format('ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I', table_name, table_name || '_tenant_id_fkey');
+    EXECUTE format(
+      'ALTER TABLE %I ADD CONSTRAINT %I FOREIGN KEY (tenant_id) REFERENCES tenants(id)',
+      table_name,
+      table_name || '_tenant_id_fkey'
+    );
+  END LOOP;
+END
+$tenant_foreign_keys_owner$;
+RESET ROLE;
+
 GRANT SELECT, INSERT, UPDATE, DELETE ON loops, loop_runs, daemon_lease, workflow_specs, workflow_runs, workflow_invocations,
   workflow_work_items, workflow_step_runs, workflow_events, goals, goal_plan_nodes, goal_runs,
   runner_machines, runner_leases, run_receipts TO open_loops_runtime;
+GRANT SELECT, UPDATE, REFERENCES ON tenants TO open_loops_runtime;
 GRANT SELECT ON open_loops_schema_migrations TO open_loops_runtime;
+
+CREATE OR REPLACE FUNCTION public.open_loops_reject_runtime_tenant_update()
+RETURNS TRIGGER
+LANGUAGE plpgsql SECURITY INVOKER SET search_path = pg_catalog
+AS $$
+BEGIN
+  IF current_user = 'open_loops_runtime' THEN
+    RAISE EXCEPTION 'runtime role cannot update tenants' USING ERRCODE = '42501';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+ALTER FUNCTION public.open_loops_reject_runtime_tenant_update() OWNER TO open_loops_owner;
+REVOKE ALL ON FUNCTION public.open_loops_reject_runtime_tenant_update() FROM PUBLIC, open_loops_runtime, open_loops_authenticator;
+DROP TRIGGER IF EXISTS open_loops_reject_runtime_tenant_update ON tenants;
+CREATE TRIGGER open_loops_reject_runtime_tenant_update
+  BEFORE UPDATE ON tenants
+  FOR EACH ROW
+  EXECUTE FUNCTION public.open_loops_reject_runtime_tenant_update();
+
 ALTER TABLE audit_events
   ADD CHECK (decision IS NULL OR decision IN ('allow', 'deny')),
   ADD CHECK (operation_id IS NULL OR operation_id ~ '^[A-Za-z][A-Za-z0-9.]{1,127}$'),
@@ -1032,8 +1129,54 @@ REVOKE ALL ON FUNCTION public.open_loops_append_auth_audit(TEXT, TEXT, TEXT, TEX
   FROM PUBLIC, open_loops_runtime, open_loops_authenticator;
 GRANT EXECUTE ON FUNCTION public.open_loops_append_auth_audit(TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, JSONB) TO open_loops_authenticator;
 
+DO $auth_function_acl$
+DECLARE function_acl RECORD;
+BEGIN
+  FOR function_acl IN
+    SELECT proc.oid::regprocedure AS function_signature,
+           CASE WHEN proc.oid = 'public.open_loops_current_tenant_id()'::regprocedure
+             THEN (SELECT oid FROM pg_roles WHERE rolname = 'open_loops_runtime')
+             ELSE (SELECT oid FROM pg_roles WHERE rolname = 'open_loops_authenticator')
+           END AS allowed_grantee,
+           acl.grantee,
+           CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE format('%I', grantee.rolname) END AS grantee_sql
+      FROM pg_proc proc
+      CROSS JOIN LATERAL aclexplode(proc.proacl) acl
+      LEFT JOIN pg_roles grantee ON grantee.oid = acl.grantee
+     WHERE proc.oid = ANY(ARRAY[
+       'public.open_loops_current_tenant_id()'::regprocedure,
+       'public.open_loops_authenticate_key(text,text)'::regprocedure,
+       'public.open_loops_append_auth_audit(text,text,text,text,text,text,text,jsonb)'::regprocedure
+     ])
+       AND (acl.grantee = 0 OR grantee.oid IS NOT NULL)
+       AND acl.grantee <> CASE WHEN proc.oid = 'public.open_loops_current_tenant_id()'::regprocedure
+         THEN (SELECT oid FROM pg_roles WHERE rolname = 'open_loops_runtime')
+         ELSE (SELECT oid FROM pg_roles WHERE rolname = 'open_loops_authenticator')
+       END
+  LOOP
+    EXECUTE format('REVOKE ALL PRIVILEGES ON FUNCTION %s FROM %s', function_acl.function_signature, function_acl.grantee_sql);
+  END LOOP;
+END
+$auth_function_acl$;
+
 REVOKE CREATE ON SCHEMA public FROM open_loops_owner, open_loops_migrator;
 GRANT USAGE ON SCHEMA public TO open_loops_owner, open_loops_migrator;
+
+DO $privileged_role_membership_acl$
+DECLARE membership RECORD;
+BEGIN
+  FOR membership IN
+    SELECT granted.rolname AS granted_role, member.rolname AS member_role
+      FROM pg_auth_members auth_membership
+      JOIN pg_roles granted ON granted.oid = auth_membership.roleid
+      JOIN pg_roles member ON member.oid = auth_membership.member
+     WHERE granted.rolname IN ('open_loops_owner', 'open_loops_migrator')
+        OR member.rolname IN ('open_loops_owner', 'open_loops_migrator', 'open_loops_runtime', 'open_loops_authenticator')
+  LOOP
+    EXECUTE format('REVOKE %I FROM %I', membership.granted_role, membership.member_role);
+  END LOOP;
+END
+$privileged_role_membership_acl$;
 
 DO $tenant_enforcement_postconditions$
 DECLARE tenant_function REGPROCEDURE := 'public.open_loops_current_tenant_id()'::regprocedure;
@@ -1044,6 +1187,16 @@ BEGIN
        AND (rolcanlogin OR NOT rolinherit OR rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls)
   ) THEN
     RAISE EXCEPTION 'tenant enforcement did not normalize OpenLoops database roles';
+  END IF;
+  IF EXISTS (
+    SELECT 1
+      FROM pg_auth_members auth_membership
+      JOIN pg_roles granted ON granted.oid = auth_membership.roleid
+      JOIN pg_roles member ON member.oid = auth_membership.member
+     WHERE granted.rolname IN ('open_loops_owner', 'open_loops_migrator')
+        OR member.rolname IN ('open_loops_owner', 'open_loops_migrator', 'open_loops_runtime', 'open_loops_authenticator')
+  ) THEN
+    RAISE EXCEPTION 'tenant enforcement left privileged role memberships unsafe';
   END IF;
   IF (SELECT pg_get_userbyid(proowner) FROM pg_proc WHERE oid = tenant_function) <> 'open_loops_owner' THEN
     RAISE EXCEPTION 'tenant enforcement did not secure the tenant context function owner';
@@ -1068,6 +1221,225 @@ BEGIN
   IF has_schema_privilege('open_loops_owner', 'public', 'CREATE') OR
      has_schema_privilege('open_loops_migrator', 'public', 'CREATE') THEN
     RAISE EXCEPTION 'tenant enforcement left bootstrap schema creation privileges enabled';
+  END IF;
+  IF EXISTS (
+    SELECT 1
+      FROM unnest(ARRAY[
+        'tenants', 'tenant_memberships', 'tenant_membership_roles', 'api_keys',
+        'loops', 'loop_runs', 'daemon_lease', 'workflow_specs', 'workflow_runs',
+        'workflow_invocations', 'workflow_work_items', 'workflow_step_runs', 'workflow_events',
+        'goals', 'goal_plan_nodes', 'goal_runs', 'runner_machines', 'runner_leases',
+        'audit_events', 'run_receipts'
+      ]) AS protected_table(name)
+      JOIN pg_class class ON class.oid = format('public.%I', protected_table.name)::regclass
+     WHERE pg_get_userbyid(class.relowner) <> 'open_loops_owner'
+        OR NOT class.relrowsecurity
+        OR NOT class.relforcerowsecurity
+  ) THEN
+    RAISE EXCEPTION 'tenant enforcement did not secure protected table ownership and RLS flags';
+  END IF;
+  IF EXISTS (
+    WITH protected(table_name, discriminator) AS (
+      VALUES
+        ('tenants', 'id'),
+        ('tenant_memberships', 'tenant_id'),
+        ('tenant_membership_roles', 'tenant_id'),
+        ('api_keys', 'tenant_id'),
+        ('loops', 'tenant_id'),
+        ('loop_runs', 'tenant_id'),
+        ('daemon_lease', 'tenant_id'),
+        ('workflow_specs', 'tenant_id'),
+        ('workflow_runs', 'tenant_id'),
+        ('workflow_invocations', 'tenant_id'),
+        ('workflow_work_items', 'tenant_id'),
+        ('workflow_step_runs', 'tenant_id'),
+        ('workflow_events', 'tenant_id'),
+        ('goals', 'tenant_id'),
+        ('goal_plan_nodes', 'tenant_id'),
+        ('goal_runs', 'tenant_id'),
+        ('runner_machines', 'tenant_id'),
+        ('runner_leases', 'tenant_id'),
+        ('audit_events', 'tenant_id'),
+        ('run_receipts', 'tenant_id')
+    ),
+    expected(table_name, policy_name, command, roles, qualifier, check_expr) AS (
+      SELECT table_name, 'tenant_isolation', '*', ARRAY['public'], discriminator, discriminator FROM protected
+      UNION ALL VALUES
+        ('tenants', 'auth_definer_tenant_lookup', '*', ARRAY['open_loops_owner'], 'true', NULL),
+        ('tenant_memberships', 'auth_definer_membership_lookup', '*', ARRAY['open_loops_owner'], 'true', NULL),
+        ('tenant_membership_roles', 'auth_definer_membership_roles_lookup', '*', ARRAY['open_loops_owner'], 'true', NULL),
+        ('api_keys', 'auth_definer_key_lookup', '*', ARRAY['open_loops_owner'], 'true', NULL),
+        ('audit_events', 'auth_definer_audit_insert', 'a', ARRAY['open_loops_owner'], NULL, 'true')
+    ),
+    actual AS (
+      SELECT class.relname AS table_name,
+             policy.polname AS policy_name,
+             policy.polcmd::text AS command,
+             policy.polpermissive AS permissive,
+             ARRAY(
+               SELECT CASE WHEN role_oid = 0 THEN 'public' ELSE role.rolname::text END
+                 FROM unnest(policy.polroles) role_oid
+                 LEFT JOIN pg_roles role ON role.oid = role_oid
+                ORDER BY 1
+             ) AS roles,
+             COALESCE(regexp_replace(pg_get_expr(policy.polqual, policy.polrelid), '\\s+', ' ', 'g'), '') AS qualifier,
+             COALESCE(regexp_replace(pg_get_expr(policy.polwithcheck, policy.polrelid), '\\s+', ' ', 'g'), '') AS check_expr
+        FROM pg_policy policy
+        JOIN pg_class class ON class.oid = policy.polrelid
+        JOIN pg_namespace namespace ON namespace.oid = class.relnamespace
+       WHERE namespace.nspname = 'public'
+         AND class.relname IN (SELECT table_name FROM protected)
+    ),
+    missing_or_bad AS (
+      SELECT expected.*
+        FROM expected
+        LEFT JOIN actual
+          ON actual.table_name = expected.table_name
+         AND actual.policy_name = expected.policy_name
+       WHERE actual.policy_name IS NULL
+          OR NOT actual.permissive
+          OR actual.command <> expected.command
+          OR actual.roles <> expected.roles
+          OR NOT CASE expected.qualifier
+            WHEN 'tenant_id' THEN actual.qualifier = ANY(ARRAY[
+              '(tenant_id = open_loops_current_tenant_id())',
+              '(tenant_id = public.open_loops_current_tenant_id())'
+            ])
+            WHEN 'id' THEN actual.qualifier = ANY(ARRAY[
+              '(id = open_loops_current_tenant_id())',
+              '(id = public.open_loops_current_tenant_id())'
+            ])
+            WHEN 'true' THEN actual.qualifier = 'true'
+            ELSE actual.qualifier = ''
+          END
+          OR NOT CASE expected.check_expr
+            WHEN 'tenant_id' THEN actual.check_expr = ANY(ARRAY[
+              '(tenant_id = open_loops_current_tenant_id())',
+              '(tenant_id = public.open_loops_current_tenant_id())'
+            ])
+            WHEN 'id' THEN actual.check_expr = ANY(ARRAY[
+              '(id = open_loops_current_tenant_id())',
+              '(id = public.open_loops_current_tenant_id())'
+            ])
+            WHEN 'true' THEN actual.check_expr = 'true'
+            ELSE actual.check_expr = ''
+          END
+    ),
+    unexpected AS (
+      SELECT actual.*
+        FROM actual
+        LEFT JOIN expected
+          ON expected.table_name = actual.table_name
+         AND expected.policy_name = actual.policy_name
+       WHERE expected.policy_name IS NULL
+    )
+    SELECT 1 FROM missing_or_bad
+    UNION ALL
+    SELECT 1 FROM unexpected
+  ) THEN
+    RAISE EXCEPTION 'tenant enforcement did not install the exact protected-table RLS policy inventory';
+  END IF;
+  IF EXISTS (
+    WITH runtime_tables(table_name) AS (
+      VALUES
+        ('loops'), ('loop_runs'), ('daemon_lease'), ('workflow_specs'), ('workflow_runs'),
+        ('workflow_invocations'), ('workflow_work_items'), ('workflow_step_runs'), ('workflow_events'),
+        ('goals'), ('goal_plan_nodes'), ('goal_runs'), ('runner_machines'), ('runner_leases'), ('run_receipts')
+    ),
+    protected_tables(table_name) AS (
+      VALUES
+        ('tenants'), ('tenant_memberships'), ('tenant_membership_roles'), ('api_keys'), ('audit_events'),
+        ('loops'), ('loop_runs'), ('daemon_lease'), ('workflow_specs'), ('workflow_runs'),
+        ('workflow_invocations'), ('workflow_work_items'), ('workflow_step_runs'), ('workflow_events'),
+        ('goals'), ('goal_plan_nodes'), ('goal_runs'), ('runner_machines'), ('runner_leases'), ('run_receipts')
+    )
+    SELECT 1
+      FROM protected_tables protected
+      JOIN pg_class class ON class.oid = format('public.%I', protected.table_name)::regclass
+      CROSS JOIN LATERAL aclexplode(class.relacl) acl
+      LEFT JOIN pg_roles grantee ON grantee.oid = acl.grantee
+     WHERE acl.privilege_type IS NOT NULL
+       AND NOT (
+         protected.table_name IN (SELECT table_name FROM runtime_tables)
+         AND COALESCE(grantee.rolname = 'open_loops_runtime', false)
+         AND acl.privilege_type IN ('SELECT', 'INSERT', 'UPDATE', 'DELETE')
+         AND NOT acl.is_grantable
+       )
+       AND NOT (
+         protected.table_name = 'tenants'
+         AND COALESCE(grantee.rolname = 'open_loops_runtime', false)
+         AND acl.privilege_type IN ('SELECT', 'UPDATE', 'REFERENCES')
+         AND NOT acl.is_grantable
+       )
+       AND NOT COALESCE(grantee.rolname = 'open_loops_owner', false)
+  ) THEN
+    RAISE EXCEPTION 'tenant enforcement left unexpected protected table grants';
+  END IF;
+  IF NOT has_column_privilege('open_loops_runtime', 'public.tenants', 'id', 'UPDATE') THEN
+    RAISE EXCEPTION 'tenant enforcement did not grant runtime tenant key lock privilege';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+      FROM pg_trigger trigger
+      JOIN pg_proc proc ON proc.oid = trigger.tgfoid
+     WHERE trigger.tgrelid = 'public.tenants'::regclass
+       AND trigger.tgname = 'open_loops_reject_runtime_tenant_update'
+       AND NOT trigger.tgisinternal
+       AND trigger.tgenabled = 'O'
+       AND proc.oid = 'public.open_loops_reject_runtime_tenant_update()'::regprocedure
+       AND pg_get_userbyid(proc.proowner) = 'open_loops_owner'
+       AND NOT proc.prosecdef
+       AND COALESCE(proc.proconfig, ARRAY[]::text[]) @> ARRAY['search_path=pg_catalog']
+  ) THEN
+    RAISE EXCEPTION 'tenant enforcement did not install runtime tenant update guard';
+  END IF;
+  IF EXISTS (
+    SELECT 1
+      FROM pg_class class
+      JOIN pg_namespace namespace ON namespace.oid = class.relnamespace
+      JOIN pg_attribute attribute ON attribute.attrelid = class.oid
+      CROSS JOIN LATERAL aclexplode(attribute.attacl) acl
+      LEFT JOIN pg_roles grantee ON grantee.oid = acl.grantee
+     WHERE namespace.nspname = 'public'
+       AND class.relname = ANY(ARRAY[
+         'tenants', 'tenant_memberships', 'tenant_membership_roles', 'api_keys',
+         'loops', 'loop_runs', 'daemon_lease', 'workflow_specs', 'workflow_runs',
+         'workflow_invocations', 'workflow_work_items', 'workflow_step_runs', 'workflow_events',
+         'goals', 'goal_plan_nodes', 'goal_runs', 'runner_machines', 'runner_leases',
+         'audit_events', 'run_receipts'
+       ])
+       AND attribute.attnum > 0
+       AND NOT attribute.attisdropped
+       AND acl.privilege_type IS NOT NULL
+  ) THEN
+    RAISE EXCEPTION 'tenant enforcement left unexpected protected column grants';
+  END IF;
+  IF EXISTS (
+    SELECT 1
+      FROM pg_proc proc
+      CROSS JOIN LATERAL aclexplode(proc.proacl) acl
+      LEFT JOIN pg_roles grantee ON grantee.oid = acl.grantee
+     WHERE proc.oid = ANY(ARRAY[
+       'public.open_loops_current_tenant_id()'::regprocedure,
+       'public.open_loops_authenticate_key(text,text)'::regprocedure,
+       'public.open_loops_append_auth_audit(text,text,text,text,text,text,text,jsonb)'::regprocedure
+     ])
+       AND acl.privilege_type = 'EXECUTE'
+       AND NOT (
+         proc.oid = 'public.open_loops_current_tenant_id()'::regprocedure
+         AND grantee.rolname = 'open_loops_runtime'
+         AND NOT acl.is_grantable
+       )
+       AND NOT (
+         proc.oid = ANY(ARRAY[
+           'public.open_loops_authenticate_key(text,text)'::regprocedure,
+           'public.open_loops_append_auth_audit(text,text,text,text,text,text,text,jsonb)'::regprocedure
+         ])
+         AND grantee.rolname = 'open_loops_authenticator'
+         AND NOT acl.is_grantable
+       )
+  ) THEN
+    RAISE EXCEPTION 'tenant enforcement left unexpected authentication function grants';
   END IF;
   IF EXISTS (
     SELECT 1

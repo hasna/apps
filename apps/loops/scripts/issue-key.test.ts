@@ -1,6 +1,6 @@
 import { readFileSync, statSync, symlinkSync, unlinkSync } from "node:fs";
 import { afterEach, describe, expect, test } from "bun:test";
-import { writeTokenFile } from "./issue-key.js";
+import { logIssueKeyFailure, writeTokenFile } from "./issue-key.js";
 
 const paths: string[] = [];
 
@@ -32,5 +32,20 @@ describe("issue-key token output", () => {
     writeTokenFile(target, "target-token");
     symlinkSync(target, link);
     expect(() => writeTokenFile(link, "secret-token")).toThrow();
+  });
+
+  test("logs command failures without provider details", () => {
+    const logged: string[] = [];
+    const originalError = console.error;
+    console.error = (...values: unknown[]) => { logged.push(values.map(String).join(" ")); };
+    try {
+      logIssueKeyFailure(Object.assign(new Error("postgres://user:secret@db.internal/loops"), {
+        name: "postgres://name-secret@db.internal/loops",
+        code: "postgres://code-secret@db.internal/loops",
+      }));
+      expect(logged).toEqual([JSON.stringify({ evt: "loops_issue_key_failed", errorType: "error" })]);
+    } finally {
+      console.error = originalError;
+    }
   });
 });

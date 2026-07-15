@@ -227,7 +227,14 @@ program
 
 if (import.meta.main) {
   main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
+    logRunnerCommandFailure(error);
     process.exit(1);
   });
+}
+
+export function logRunnerCommandFailure(error: unknown): void {
+  console.error(JSON.stringify({
+    evt: "loops_runner_command_failed",
+    errorType: error instanceof Error ? "error" : typeof error,
+  }));
 }
