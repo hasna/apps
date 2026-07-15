@@ -4,7 +4,7 @@
 # Postgres directly with @hasna/contracts API-key auth.
 # The ECS one-shot migration task overrides the command with `... migrate`.
 
-ARG BUN_IMAGE=oven/bun:1.3.13@sha256:87416c977a612a204eb54ab9f3927023c2a3c971f4f345a01da08ea6262ae30e
+ARG BUN_IMAGE=oven/bun:1.3.13-alpine@sha256:588e1fb0d80ee1c09cc6e2d7d1ff8e3502191fba9cad12a4a77cb93d4d7f84f9
 
 FROM --platform=linux/arm64 ${BUN_IMAGE} AS deps
 WORKDIR /app
@@ -29,9 +29,7 @@ RUN bun run build
 
 FROM --platform=linux/arm64 ${BUN_IMAGE} AS runner
 WORKDIR /app
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends libcap2 libssl3t64 openssl openssl-provider-legacy \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk upgrade --no-cache libcrypto3 libssl3 openssl
 # Amazon RDS global CA bundle so the generated storage kit can verify TLS for
 # sslmode=require, verify-ca, and verify-full RDS connections.
 COPY docker/rds-global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
