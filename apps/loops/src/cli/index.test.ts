@@ -477,6 +477,7 @@ describe("loops CLI", () => {
       const source = new Store(join(sourceDir, "loops.db"));
       const output = await applySelfHostedPush(source, {
         apiUrl: `http://${server.hostname}:${server.port}`,
+        apiKey: "test-token",
         includeRuns: false,
       });
       source.close();

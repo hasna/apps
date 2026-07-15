@@ -99,10 +99,11 @@ JSON uses these field names:
   non-local modes it is a cache, offline spool, and audit copy.
 - `schedulerState.remoteStore`: names the non-local scheduler contract:
   `api_control_plane_contract`, `postgres_contract`,
-  `hosted_control_plane_contract`, `unconfigured`, or `none`. Remote apply is
-  `false` in the standalone CLI until the control-plane API exposes
-  id-preserving import endpoints. `loops-serve` itself wires the Postgres
-  storage adapter for normal control-plane CRUD and runner protocol routes.
+  `hosted_control_plane_contract`, `unconfigured`, or `none`. The standalone
+  CLI never mutates Postgres directly; self-hosted apply goes through the
+  configured control-plane API import contract. `loops-serve` itself wires the
+  Postgres storage adapter for normal control-plane CRUD, id-preserving import,
+  and runner protocol routes.
 - `schedulerState.remoteStore.objectArtifacts`: `object_store_contract` means
   remote artifact/object storage is a control-plane contract. The public package
   does not create or mutate S3 buckets, AWS resources, or hosted credentials.
@@ -178,21 +179,22 @@ later release adds full table-preserving migration. Active daemon leases,
 running loop runs, running workflow runs/steps, and leased work items also
 block migration; finish or stop that work first.
 
-Self-hosted sync commands are preview-only today:
+Self-hosted sync commands use the control-plane API:
 
 ```bash
 loops self-hosted migrate --dry-run
 loops self-hosted push --dry-run
+loops self-hosted push --apply
 loops self-hosted pull --dry-run
 ```
 
-They inspect local state, optionally inspect `HASNA_LOOPS_API_URL`, and report the
-rows that would need to move. Remote apply is intentionally blocked because the
-current self-hosted API exposes normal loop CRUD and run listing, not
-id-preserving workflow/loop/run import endpoints. A normal remote loop create
-would generate new ids, so it is not a no-loss migration. Local SQLite remains
-authoritative until a safe import is applied; in non-local modes it may remain
-a cache, offline spool, and audit copy.
+They inspect local state, inspect `HASNA_LOOPS_API_URL` when configured, and
+report the rows that would move. `loops self-hosted push --apply` sends the
+id-preserving workflow and loop import bundle to `/v1/import`; imported
+workflows are archived and imported loops are paused with run pointers cleared.
+Local SQLite remains authoritative until an operator applies the import and
+records the rollout evidence; in non-local modes it may remain a cache, offline
+spool, and audit copy.
 
 `HASNA_LOOPS_DATABASE_URL` selects the self-hosted
 Postgres scheduler-state contract and is required by `loops-serve`. It does not
@@ -232,9 +234,8 @@ Non-local execution needs these follow-up releases before it is complete:
 
 - Long-running runner daemon mode with backoff, fleet observability, and
   durable machine registration records.
-- Workflow target execution over the remote protocol.
-- Id-preserving self-hosted import endpoints for workflow specs, loop
-  definitions, run history, workflow history, work items, goals, and audit rows.
+- Id-preserving self-hosted import coverage for run history, workflow history,
+  work items, goals, and audit rows.
 - Hosted product integration outside the public package.
 
 ## Public Package Boundary

@@ -5,10 +5,7 @@ complete.** Do not flip scheduled production execution away from local SQLite
 until the runner and migration follow-ups below are green.
 
 Deployment vocabulary: `self_hosted` is the Hasna-owned AWS/RDS control-plane
-deployment. `cloud` is the future hosted SaaS contract for outside users. The
-vendored `@hasna/contracts` storage kit still calls direct Postgres storage
-mode `cloud`; treat that as a storage-kit implementation term, not the
-OpenLoops deployment mode.
+deployment. `cloud` is the future hosted SaaS contract for outside users.
 
 ## What Shipped
 
@@ -24,7 +21,7 @@ OpenLoops deployment mode.
   and ensures the `api_keys` table.
 - `@hasna/loops/sdk/http`, generated from `openapi/loops.json`.
 - ARM64/Bun `Dockerfile`, local `docker-compose.yml`, `hasna.contract.json`,
-  and a generated `migrations/` mirror for review.
+  generated storage kit, and a generated `migrations/` mirror for review.
 
 ## Local Postgres Smoke For loops-serve
 
@@ -63,32 +60,61 @@ loopback authentication bypass.
    `HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve tenant-backfill --input <bundle>`.
 4. Enforce tenant keys, composite foreign keys, and forced RLS with
    `HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --enforce-tenancy`.
-5. Start `loops-serve` with `HASNA_LOOPS_STORAGE_MODE=self_hosted`, separate
+5. Build and deploy an image from this repository's pinned Bun base-image
+   digest. The runner image must pass the CI high/critical vulnerability scan
+   and must not replace the locked `@hasna/contracts` package with a vendored
+   overlay.
+6. Configure the ECS service before traffic is shifted:
+   - desired count at least `2`;
+   - tasks spread across at least two private subnets/AZs;
+   - capacity provider strategy with an on-demand Fargate base of at least one
+     task before any Spot capacity;
+   - deployment circuit breaker with rollback enabled;
+   - ALB target group health check path `/ready`;
+   - CloudWatch log retention at least 30 days with KMS encryption;
+   - alarm actions wired to the approved incident notification target.
+7. Store runtime values in Secrets Manager or the approved vault surface:
+   `HASNA_LOOPS_DATABASE_URL`, `HASNA_LOOPS_AUTH_DATABASE_URL`,
+   `HASNA_LOOPS_MIGRATOR_DATABASE_URL`, and
+   `HASNA_LOOPS_API_SIGNING_KEY`. Enable rotation for the signing secret and
+   database credentials where the provider supports it. Do not put secret values
+   in task definitions, task comments, logs, or rollout evidence.
+8. Wire minimum alarms before cutover: ALB unhealthy hosts, ALB 5xx, ALB target
+   latency, ECS running count below desired count, ECS task exits, RDS CPU,
+   RDS connections, RDS free storage, and log error-rate/auth-anomaly signals.
+9. Start `loops-serve` with `HASNA_LOOPS_STORAGE_MODE=self_hosted`, separate
    `HASNA_LOOPS_DATABASE_URL` and `HASNA_LOOPS_AUTH_DATABASE_URL` logins, and the API signing secret from the approved
    vault item. The signing key must be at least 16 bytes. Do not log or copy the
    secret value into task evidence.
-6. Verify `/health`, `/ready`, `/version`, and `/openapi.json`.
-7. Verify an authenticated `/v1` read/write smoke against a throwaway loop and
+10. Verify `/health`, `/ready`, `/version`, and `/openapi.json`.
+11. Verify an authenticated `/v1` read/write smoke against a throwaway loop and
    a claim/finalize smoke if a runner API URL is configured.
-8. Record package version, git SHA, image tag, database migration plan/result,
-   evidence that the target database is dedicated to OpenLoops, redacted API
-   URL, health/readiness responses, and rollback handle.
+12. Record package version, git SHA, image tag and digest, database migration
+   plan/result, evidence that the target database is dedicated to OpenLoops,
+   redacted API URL, health/readiness responses, capacity-provider strategy,
+   desired/running task counts, alarm action ARNs/names, log retention/KMS
+   identifiers, rotation status, and rollback handle.
 
 ## Still Pending Before Daemon Cutover
 
 - Long-running `loops-runner` daemon mode with backoff, fleet observability, and
   durable machine registration records.
-- Id-preserving self-hosted import endpoints for workflow specs, loop
-  definitions, run history, workflow history, work items, goals, and audit rows.
-- A no-loss migration path from local SQLite into the self-hosted control plane.
-  Current `loops export`/`loops import` are local-store tools, and
-  `loops self-hosted migrate|push|pull` remain previews.
+- Id-preserving self-hosted import coverage for run history, workflow history,
+  work items, goals, and audit rows.
+- A full-history no-loss migration path from local SQLite into the self-hosted
+  control plane. Current `loops export`/`loops import` and
+  `loops self-hosted push --apply` cover workflow specs and loop definitions
+  with safe paused/archived defaults; they intentionally block unsupported live
+  history.
 - Hosted SaaS integration outside this public package.
 
 ## Rollback
 
-For the self-hosted service, roll back by moving traffic to the previous image
-or stopping the new `loops-serve` task. Local scheduled execution remains on
-SQLite unless operators explicitly configure a runner/control-plane cutover, so
-removing `HASNA_LOOPS_API_URL` and `HASNA_LOOPS_DATABASE_URL` returns the standalone CLI/daemon perspective to
+For the self-hosted service, roll back by redeploying the previous image digest
+or shifting the ALB target group back to the previous service revision. After
+rollback, prove `/ready`, authenticated loop CRUD, runner claim/finalize, and
+`loops self-hosted push --dry-run --no-runs` against the redacted API URL.
+Local scheduled execution remains on SQLite unless operators explicitly
+configure a runner/control-plane cutover, so removing `HASNA_LOOPS_API_URL` and
+`HASNA_LOOPS_DATABASE_URL` returns the standalone CLI/daemon perspective to
 `local`.

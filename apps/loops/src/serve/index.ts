@@ -3,7 +3,7 @@
 //
 // The service reads and writes self-hosted RDS/Postgres directly. There is no
 // local SQLite, no cache, and no sync engine in the
-// serve process. Storage is the vendored @hasna/contracts kit pool wrapping the
+// serve process. Storage is the generated @hasna/contracts kit pool wrapping the
 // real `PostgresLoopStorage` backend. Every authenticated request gets one
 // dedicated transaction with tenant RLS context.
 import { Command } from "commander";

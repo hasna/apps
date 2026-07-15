@@ -2,7 +2,8 @@
 // LOCAL smoke test: assemble the real loops-serve server (createLoopsApiServer +
 // PostgresLoopStorage + TenantApiAuthenticator) against the tunnelled RDS, mint
 // a real API key into the api_keys table, then drive an authenticated CRUD
-// roundtrip through the generated LoopsClient. Tunnel-only relaxed TLS.
+// roundtrip through the generated LoopsClient. Tunnel-only relaxed TLS after
+// proving each DSN targets a loopback SSM tunnel host.
 import { Pool } from "pg";
 import { mintApiKey } from "@hasna/contracts/auth";
 import { createLoopsApiServer } from "../src/api/index.js";
@@ -21,9 +22,33 @@ if (!authDsn) throw new Error("set TUNNEL_AUTH_DATABASE_URL");
 const signingSecret = process.env.HASNA_LOOPS_API_SIGNING_KEY?.trim();
 if (!signingSecret) throw new Error("set HASNA_LOOPS_API_SIGNING_KEY");
 
-const migratorPool = new Pool({ connectionString: migratorDsn.split("?")[0], ssl: { rejectUnauthorized: false }, max: 2 });
-const runtimePool = new Pool({ connectionString: runtimeDsn.split("?")[0], ssl: { rejectUnauthorized: false }, max: 3 });
-const authPool = new Pool({ connectionString: authDsn.split("?")[0], ssl: { rejectUnauthorized: false }, max: 2 });
+function localTunnelConnectionString(value: string, label: string): string {
+  const parsed = new URL(value);
+  if (parsed.protocol !== "postgres:" && parsed.protocol !== "postgresql:") {
+    throw new Error(`${label} must be a Postgres connection string`);
+  }
+  if (!["127.0.0.1", "localhost", "::1"].includes(parsed.hostname.toLowerCase())) {
+    throw new Error(`${label} must target a loopback SSM tunnel host`);
+  }
+  parsed.search = "";
+  return parsed.toString();
+}
+
+const migratorPool = new Pool({
+  connectionString: localTunnelConnectionString(migratorDsn, "TUNNEL_MIGRATOR_DATABASE_URL"),
+  ssl: { rejectUnauthorized: false },
+  max: 2,
+});
+const runtimePool = new Pool({
+  connectionString: localTunnelConnectionString(runtimeDsn, "TUNNEL_RUNTIME_DATABASE_URL"),
+  ssl: { rejectUnauthorized: false },
+  max: 3,
+});
+const authPool = new Pool({
+  connectionString: localTunnelConnectionString(authDsn, "TUNNEL_AUTH_DATABASE_URL"),
+  ssl: { rejectUnauthorized: false },
+  max: 2,
+});
 const migratorClient = createQueryClient(migratorPool);
 const runtimeClient = createQueryClient(runtimePool);
 const authClient = createQueryClient(authPool);

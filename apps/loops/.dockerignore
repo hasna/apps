@@ -4,5 +4,3 @@ dist
 *.tgz
 .hasna
 coverage
-# NOTE: vendor/ is intentionally NOT ignored — the image build COPYs
-# vendor/contracts (the unpublished @hasna/contracts 0.5.1) into node_modules.

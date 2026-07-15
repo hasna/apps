@@ -112,6 +112,7 @@ describe("loops-runner", () => {
 
       const result = await runRunnerOnce({
         apiUrl: `http://127.0.0.1:${server.port}`,
+        apiKey: "test-token",
         runnerId: "runner-once",
         now: new Date("2026-01-01T00:00:00Z"),
         execute: async (_loop, run) => ({
@@ -160,6 +161,7 @@ describe("loops-runner", () => {
 
       const result = await runRunnerOnce({
         apiUrl: `http://127.0.0.1:${server.port}`,
+        apiKey: "test-token",
         runnerId: "runner-workflow",
         now: new Date("2026-01-01T00:00:00Z"),
         heartbeatIntervalMs: 10_000,
@@ -213,6 +215,7 @@ describe("loops-runner", () => {
 
       const runner = runRunnerOnce({
         apiUrl: `http://127.0.0.1:${server.port}`,
+        apiKey: "test-token",
         runnerId: "runner-a",
         execute: async (_loop, run) => {
           executionStarted();
@@ -369,6 +372,7 @@ describe("loops-runner", () => {
     let sawAbort = false;
     await runRunnerOnce({
       apiUrl: "http://127.0.0.1:1/",
+      apiKey: "test-token",
       runnerId: "runner-hb",
       heartbeatIntervalMs: 5,
       fetchImpl,

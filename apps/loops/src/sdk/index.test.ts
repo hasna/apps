@@ -334,6 +334,7 @@ describe("loops sdk", () => {
       const pull = await pullClient.planSelfHostedMigration({
         operation: "self-hosted-pull",
         apiUrl: "http://127.0.0.1:8787",
+        apiKey: "test-token",
         fetchImpl: fetchImpl as typeof fetch,
       });
       expect(pull.importable).toBe(false);

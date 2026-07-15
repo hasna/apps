@@ -1,6 +1,6 @@
 // Live Postgres executor for the loops storage backend.
 //
-// Adapts the vendored @hasna/contracts storage kit (`createQueryClient` over a
+// Adapts the generated @hasna/contracts storage kit (`createQueryClient` over a
 // `pg.Pool`) to the `PostgresQueryExecutor` contract consumed by
 // `PostgresStorage`. A pool is only ever built when a self-hosted database URL
 // is present; there is no local/hybrid Postgres path.
@@ -19,7 +19,7 @@ export interface PgExecutorOptions {
 }
 
 /**
- * `PostgresQueryExecutor` backed by a live `pg.Pool` via the vendored kit.
+ * `PostgresQueryExecutor` backed by a live `pg.Pool` via the generated kit.
  *
  * Transactions bind every statement to one dedicated pool client. This is
  * required both for atomic migration+ledger writes and request-scoped RLS

@@ -1,13 +1,11 @@
 #!/usr/bin/env bun
 // LOCAL-ONLY migration applier for use through an SSM port-forward tunnel.
 //
-// The tunnel terminates at 127.0.0.1 so the RDS server certificate hostname
-// never matches; `pg-connection-string` now forces verify-full from a
-// `sslmode=require` DSN, which hard-fails the tunnel. This helper strips the
-// sslmode query param and connects with an explicit encrypt-but-do-not-verify
-// TLS config (identical crypto to what the vendored kit produces for
-// `sslmode=require`), then runs the same checksum-ledgered migration path so
-// the ledger checksums are written exactly as the in-cluster migrator would.
+// The tunnel must terminate at a loopback host so the RDS server certificate
+// hostname never matches. This helper strips the sslmode query param only after
+// proving the target is loopback, then connects with explicit encrypted but
+// unverified TLS for that local tunnel. The in-cluster migrator uses verified
+// TLS through the generated storage kit.
 //
 // NEVER used in the container. The container connects directly to the RDS
 // hostname with verify-full-capable TLS via `loops-serve migrate`.
@@ -19,7 +17,20 @@ import { assertTenantEnforcementBootstrapIfPending } from "../src/serve/index.js
 
 const raw = process.env.TUNNEL_DATABASE_URL?.trim();
 if (!raw) throw new Error("set TUNNEL_DATABASE_URL");
-const noQuery = raw.split("?")[0];
+
+function localTunnelConnectionString(value: string, label: string): string {
+  const parsed = new URL(value);
+  if (parsed.protocol !== "postgres:" && parsed.protocol !== "postgresql:") {
+    throw new Error(`${label} must be a Postgres connection string`);
+  }
+  if (!["127.0.0.1", "localhost", "::1"].includes(parsed.hostname.toLowerCase())) {
+    throw new Error(`${label} must target a loopback SSM tunnel host`);
+  }
+  parsed.search = "";
+  return parsed.toString();
+}
+
+const noQuery = localTunnelConnectionString(raw, "TUNNEL_DATABASE_URL");
 
 const pool = new Pool({
   connectionString: noQuery,

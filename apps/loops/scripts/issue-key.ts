@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
 // Issue a tenant-bound loops API key using the @hasna/contracts minting
 // primitive, then persist its immutable tenant/principal binding through the
-// SSM tunnel with relaxed TLS (the tunnel terminates
-// at localhost so the RDS cert hostname never matches; the in-cluster issuer
-// path uses verify-full). Prints ONLY the kid to stdout; the secret token is
-// written to $TOKEN_OUT (a /dev/shm file), never logged.
+// SSM tunnel with relaxed TLS only after proving the DSN targets loopback (the
+// tunnel terminates at localhost so the RDS cert hostname never matches; the
+// in-cluster issuer path uses verified TLS). Prints ONLY the kid to stdout; the
+// secret token is written to $TOKEN_OUT (a /dev/shm file), never logged.
 import { Pool } from "pg";
 import { closeSync, constants, openSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
@@ -28,6 +28,18 @@ export function writeTokenFile(tokenOut: string, token: string): void {
   }
 }
 
+function localTunnelConnectionString(value: string, label: string): string {
+  const parsed = new URL(value);
+  if (parsed.protocol !== "postgres:" && parsed.protocol !== "postgresql:") {
+    throw new Error(`${label} must be a Postgres connection string`);
+  }
+  if (!["127.0.0.1", "localhost", "::1"].includes(parsed.hostname.toLowerCase())) {
+    throw new Error(`${label} must target a loopback SSM tunnel host`);
+  }
+  parsed.search = "";
+  return parsed.toString();
+}
+
 async function main(): Promise<void> {
   const signingSecret = process.env.HASNA_LOOPS_API_SIGNING_KEY?.trim();
   const dsn = process.env.TUNNEL_DATABASE_URL?.trim();
@@ -44,7 +56,11 @@ async function main(): Promise<void> {
     throw new Error("set KEY_TOKEN_KIND to api_key, service, or machine");
   }
 
-  const pool = new Pool({ connectionString: dsn.split("?")[0], ssl: { rejectUnauthorized: false }, max: 2 });
+  const pool = new Pool({
+    connectionString: localTunnelConnectionString(dsn, "TUNNEL_DATABASE_URL"),
+    ssl: { rejectUnauthorized: false },
+    max: 2,
+  });
   try {
     const client = createQueryClient(pool);
     const minted = await mintApiKey({
