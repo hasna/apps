@@ -3,10 +3,24 @@ import {
   parseTmuxTarget,
   calculateDelay,
   formatTmuxTarget,
+  validateTmuxTarget,
   tmuxPaneBusyStatus,
   DELAY_MIN,
   DELAY_MAX,
 } from "./tmux.ts";
+
+test("missing tmux fails with an explicit unsupported-runtime error", async () => {
+  const originalPath = process.env.PATH;
+  process.env.PATH = "/todos-container-no-host-tools";
+  try {
+    await expect(validateTmuxTarget("main")).rejects.toThrow(
+      "tmux is not installed or not in PATH",
+    );
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  }
+});
 
 describe("parseTmuxTarget", () => {
   test("parses bare window name", () => {

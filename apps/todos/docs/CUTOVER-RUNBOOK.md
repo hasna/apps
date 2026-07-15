@@ -28,11 +28,12 @@ time.
 Local-development fallbacks without the `HASNA_` prefix are accepted
 (`TODOS_SHADOW`, `TODOS_DATABASE_URL`, ...).
 
-## Canonical infrastructure
+## Deployment infrastructure
 
-- Cluster/database: `hasna-xyz-infra-apps-prod-postgres` / `todos`
-  (account `789877399345`, region `us-east-1`).
-- Runtime DSN secret (name only): `hasna/xyz/opensource/todos/prod/rds`.
+- Supply the target cluster/database, AWS account, region, ECR repository, and
+  secret reference through the private deployment environment. Do not commit
+  fleet-specific identifiers to this public repository.
+- Resolve the runtime DSN from the deployment's approved secret reference.
 - The instance is **not** publicly accessible. Reach it from outside the VPC
   only through the SSM port-forward bastion documented in the secret's `ssm`
   block (`AWS-StartPortForwardingSessionToRemoteHost`).
@@ -76,7 +77,7 @@ never reads from the cloud. Enable it per machine:
 ```
 HASNA_TODOS_STORAGE_MODE=local
 HASNA_TODOS_SHADOW=1
-HASNA_TODOS_DATABASE_URL=<DSN from hasna/xyz/opensource/todos/prod/rds>
+HASNA_TODOS_DATABASE_URL=<DSN from the approved deployment secret>
 ```
 
 Watch divergence with the read-only diagnostic (this command **does** open a DB
@@ -170,6 +171,77 @@ avoiding the split-brain the council rejected.
 - Never echo the DSN password; pull from Secrets Manager and pipe directly.
 - Shadow mode is read-never: it must not introduce a cloud read path.
 - The flip is all-machines-together; per-machine flips are prohibited.
+
+## Cloud container runtime boundary
+
+The production image is an ARM64, musl-based Bun container. Its Dockerfile pins
+the exact official `oven/bun:1.3.14-alpine` ARM64 manifest digest rather than a
+mutable tag or a multi-platform index. Every build stage derives from that same
+base, and the build fails unless Bun is 1.3.14, the reviewed musl/OpenSSL/CA
+package versions are present, and glibc, Perl, and Alpine SQLite libraries are
+absent.
+
+The immutable Bun base currently carries vulnerable OpenSSL 3.5.6-r0 runtime
+libraries. The shared base stage must replace `libcrypto3` and `libssl3` with
+the exact Alpine v3.22 ARM64 security release 3.5.7-r0 before dependencies or
+application output are built. Keep those package versions explicit and fail
+the candidate runtime inventory gate if either version drifts. This does not add
+the OpenSSL CLI to the application image.
+
+The runner installs only the exact-pinned Alpine `bash` package needed by the
+existing event-hook and agent-run execution paths. The compiled server is
+self-contained, so the runner must not include the workspace package manifests
+or `node_modules` tree. It carries only the pre-bundled contracts CLI file used
+by the controlled API-key workflow; the candidate build proves that CLI and all
+server workflows function without package metadata or external modules. The
+predecessor Debian image
+did not contain `git` or `tmux`, so those local-workstation capabilities are not
+part of the cloud container contract. They must fail clearly when unavailable;
+do not silently add them to the image without a separate runtime need, security
+scan, and review. The OpenSSL CLI is also intentionally absent: Bun has the
+reviewed OpenSSL libraries and the image carries the system CA set plus the RDS
+CA bundle.
+
+The production CodeBuild role may be intentionally push-only for ECR and unable
+download ECR layers. Candidate builds therefore load the reviewed Bun base from
+a unique, versioned object under the private build bucket's `_build/base/`
+prefix. Pass the bucket, key, VersionId, repository, and region as required
+private build variables; tracked public build files must not contain fleet
+identifiers. The object is a Docker archive produced by pinned Crane from the exact
+ECR mirror digest. The build must pin and verify the S3 bucket, key, VersionId,
+archive SHA-256, source manifest digest, image config digest, architecture, and
+root filesystem layer identities before tagging the loaded image under a local
+build-only name. The public Dockerfile default remains the official Docker Hub
+digest. Do not fall back to a mutable base tag or widen the builder's ECR policy
+without a separately reviewed infrastructure change.
+
+Before an image digest may enter Terraform, require all of the following:
+
+1. Build natively for `linux/arm64` from an exact committed source archive.
+2. Record OCI architecture, entrypoint, default command, Bun version, Alpine
+   release, `apk info -vv`, musl ELF linkage, SBOM, source revision, archive
+   hash, build ID, tag, and immutable digest.
+3. Prove the default command is `bun dist/server/index.js`; the migration task
+   override is the full `bun dist/server/index.js migrate` command and fails
+   closed without a database URL.
+4. Run the migration against disposable or staging Postgres, then exercise
+   `/health`, `/ready`, `/version`, unauthenticated rejection, authenticated
+   CRUD, project listing, and routing/rename/conflict behavior on the built
+   image.
+5. Prove Postgres TLS hostname and CA verification succeeds with the approved
+   CA and fails with a wrong CA and a wrong hostname.
+6. Wait for the ECR scan to reach `COMPLETE`; require zero CRITICAL and zero
+   HIGH findings without suppressions, and review every MEDIUM, LOW, and unknown
+   finding plus application dependencies before approval. Run exact-pinned
+   Grype against the pruned final image and require no HIGH or CRITICAL matches;
+   retain its JSON report hash with the SBOM and provenance evidence.
+7. Attach the source-tree manifest, APK inventory, OCI inspection, SBOM, Grype
+   report, and provenance as one OCI 1.1 referrer of the exact image digest with
+   checksum-pinned ORAS. Discover the referrer through the registry API and
+   record both immutable digests; log-only hashes are not durable evidence.
+
+A non-root user remains a separate hardening item. Do not compound that identity
+change with the base-image vulnerability fix and runtime dependency pruning.
 
 ## Task-comment pagination and historical-redaction rollout
 

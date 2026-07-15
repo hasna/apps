@@ -806,7 +806,10 @@ describe("storage adapter contracts", () => {
         async query<T = Record<string, unknown>>(sql: string, values?: readonly unknown[]) {
           if (sql.includes("INSERT INTO todos_sync_records") && values?.[1] === "task_lists") {
             if (inserted) {
-              const conflict = Object.assign(new Error("unique violation"), { code: "23505" });
+              const conflict = Object.assign(new Error("unique violation"), {
+                code: "ERR_POSTGRES_SERVER_ERROR",
+                errno: "23505",
+              });
               throw conflict;
             }
             inserted = true;
@@ -819,6 +822,25 @@ describe("storage adapter contracts", () => {
 
     await expect(adapter.taskLists.create({ name: "Duplicate", slug: "inbox", project_id: "project-1" }))
       .rejects.toMatchObject({ code: "TASK_LIST_SLUG_CONFLICT" });
+  });
+
+  test("does not map non-unique Bun Postgres server errors to a slug conflict", async () => {
+    const adapter = createPostgresTodosStorageAdapter({
+      client: {
+        async query<T = Record<string, unknown>>(sql: string, values?: readonly unknown[]) {
+          if (sql.includes("INSERT INTO todos_sync_records") && values?.[1] === "projects") {
+            throw Object.assign(new Error("foreign key violation"), {
+              code: "ERR_POSTGRES_SERVER_ERROR",
+              errno: "23503",
+            });
+          }
+          return { rows: [] as T[] };
+        },
+      },
+    });
+
+    await expect(adapter.projects.create({ name: "Unrelated", path: "/tmp/unrelated" }))
+      .rejects.toMatchObject({ code: "ERR_POSTGRES_SERVER_ERROR", errno: "23503" });
   });
 
   test("rejects empty explicit and derived slugs consistently in Postgres storage", async () => {
@@ -945,8 +967,11 @@ describe("storage adapter contracts", () => {
             projectWrites += 1;
             if (projectWrites > 1) {
               throw Object.assign(new Error("unique violation"), {
-                code: "23505",
-                constraint: "todos_sync_records_project_task_list_slug_uidx",
+                code: "ERR_POSTGRES_SERVER_ERROR",
+                cause: {
+                  sqlState: "23505",
+                  constraint: "todos_sync_records_project_task_list_slug_uidx",
+                },
               });
             }
           }

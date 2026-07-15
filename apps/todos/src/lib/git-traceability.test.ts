@@ -84,6 +84,21 @@ describe("task commit traceability fields", () => {
 });
 
 describe("git capture helpers", () => {
+  it("fails clearly when git is unavailable", () => {
+    const project = createProject({ name: "no-git-project", path: tempDir });
+    const task = createTask({ title: "No git task", project_id: project.id });
+    const originalPath = process.env.PATH;
+    process.env.PATH = "/todos-container-no-host-tools";
+    try {
+      expect(() => linkTaskGitTrace({ task_id: task.id, cwd: tempDir })).toThrow(
+        "Could not resolve git commit SHA",
+      );
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+    }
+  });
+
   it("loads CI snapshot from path", () => {
     const path = join(tempDir, "ci.json");
     writeFileSync(path, JSON.stringify({ status: "passed", provider: "test" }));

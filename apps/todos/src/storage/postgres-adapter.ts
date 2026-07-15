@@ -1623,12 +1623,28 @@ function numberValue(value: unknown): number | null {
 }
 
 function isPostgresUniqueViolation(error: unknown): boolean {
-  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "23505";
+  if (typeof error !== "object" || error === null) return false;
+  const candidate = error as {
+    code?: unknown;
+    errno?: unknown;
+    sqlState?: unknown;
+    sqlstate?: unknown;
+    cause?: unknown;
+  };
+  const states = [candidate.code, candidate.errno, candidate.sqlState, candidate.sqlstate];
+  if (typeof candidate.cause === "object" && candidate.cause !== null) {
+    const cause = candidate.cause as { code?: unknown; errno?: unknown; sqlState?: unknown; sqlstate?: unknown };
+    states.push(cause.code, cause.errno, cause.sqlState, cause.sqlstate);
+  }
+  return states.some((state) => String(state) === "23505");
 }
 
 function postgresConstraintName(error: unknown): string {
   if (typeof error !== "object" || error === null) return "";
-  const candidate = error as { constraint?: unknown; constraint_name?: unknown };
-  const constraint = candidate.constraint ?? candidate.constraint_name;
+  const candidate = error as { constraint?: unknown; constraint_name?: unknown; cause?: unknown };
+  const cause = typeof candidate.cause === "object" && candidate.cause !== null
+    ? candidate.cause as { constraint?: unknown; constraint_name?: unknown }
+    : undefined;
+  const constraint = candidate.constraint ?? candidate.constraint_name ?? cause?.constraint ?? cause?.constraint_name;
   return typeof constraint === "string" ? constraint : "";
 }
