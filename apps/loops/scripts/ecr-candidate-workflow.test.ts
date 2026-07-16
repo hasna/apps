@@ -69,11 +69,16 @@ describe("ECR candidate workflow contract", () => {
     expect(workflow).toContain("ECS/latest mutation: \\`none\\`");
   });
 
-  test("pins every third-party action to a full commit SHA", () => {
+  test("pins every third-party action to an approved commit SHA", () => {
     const uses = [...workflow.matchAll(/^\s*uses:\s*([^\s#]+)(?:\s+#.*)?$/gm)].map((match) => match[1]);
-    expect(uses.length).toBeGreaterThanOrEqual(6);
-    for (const action of uses) {
-      expect(action).toMatch(/^[^@\s]+@[0-9a-f]{40}$/);
-    }
+    expect(uses).toEqual([
+      "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+      "docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f",
+      "aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25",
+      "aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25",
+      "aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a",
+      "aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64",
+      "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+    ]);
   });
 });
