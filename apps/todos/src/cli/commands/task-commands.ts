@@ -37,6 +37,7 @@ import type { TaskPriority, TaskStatus } from "../../types/index.js";
 import {
   formatTaskLine,
   resolveTaskId,
+  cacheCloudTaskForIdResolution,
   normalizeStatus,
   autoProject,
   handleError,
@@ -286,6 +287,7 @@ export function registerTaskCommands(program: Command) {
             due_at: opts.due ? (opts.due.length === 10 ? opts.due + "T00:00:00.000Z" : opts.due) : undefined,
             reason: opts.reason,
           });
+          cacheCloudTaskForIdResolution(task);
         } catch (e) {
           handleError(e);
         }
