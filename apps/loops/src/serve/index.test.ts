@@ -246,4 +246,13 @@ describe("loops-serve database bootstrap", () => {
     expect(localCommand!.options.map((option) => ({ flags: option.flags, required: option.required })))
       .toContainEqual({ flags: "--input <path>", required: true });
   });
+
+  test("exposes the fixed db-credentials reconcile command without operator-supplied secret flags", () => {
+    const dbCredentials = program.commands.find((command) => command.name() === "db-credentials");
+    expect(dbCredentials).toBeDefined();
+    expect(dbCredentials!.options).toHaveLength(0);
+    const reconcile = dbCredentials!.commands.find((command) => command.name() === "reconcile");
+    expect(reconcile).toBeDefined();
+    expect(reconcile!.options).toHaveLength(0);
+  });
 });

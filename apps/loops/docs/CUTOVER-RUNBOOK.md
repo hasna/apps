@@ -136,17 +136,27 @@ Before step 1, satisfy and preserve evidence for these hard gates:
    `HASNA_LOOPS_API_SIGNING_KEY`. Enable rotation for the signing secret and
    database credentials where the provider supports it. Do not put secret values
    in task definitions, task comments, logs, or rollout evidence.
-8. Wire minimum alarms before cutover: ALB unhealthy hosts, ALB 5xx, ALB target
+8. When provider-managed RDS credentials are used, run
+   `loops-serve db-credentials reconcile` from the in-cluster task role before
+   starting the service. Required inputs are secret ARNs and expected RDS
+   metadata only, not secret values. The command reads the RDS-managed master
+   secret through AWS Secrets Manager, writes app DSNs through `AWSPENDING`,
+   changes each login password transactionally, verifies a fresh
+   `sslmode=verify-full` connection, and promotes `AWSCURRENT` only after the
+   fresh connection succeeds. It logs only bounded status metadata. Before
+   migration `0010_tenant_enforce`, runtime/authenticator logins remain detached;
+   after `0010`, they attach only to their matching NOLOGIN roles.
+9. Wire minimum alarms before cutover: ALB unhealthy hosts, ALB 5xx, ALB target
    latency, ECS running count below desired count, ECS task exits, RDS CPU,
    RDS connections, RDS free storage, and log error-rate/auth-anomaly signals.
-9. Start `loops-serve` with `HASNA_LOOPS_STORAGE_MODE=self_hosted`, separate
+10. Start `loops-serve` with `HASNA_LOOPS_STORAGE_MODE=self_hosted`, separate
    `HASNA_LOOPS_DATABASE_URL` and `HASNA_LOOPS_AUTH_DATABASE_URL` logins, and the API signing secret from the approved
    vault item. The signing key must be at least 16 bytes. Do not log or copy the
    secret value into task evidence.
-10. Verify `/health`, `/ready`, `/version`, and `/openapi.json`.
-11. Verify an authenticated `/v1` read/write smoke against a throwaway loop and
+11. Verify `/health`, `/ready`, `/version`, and `/openapi.json`.
+12. Verify an authenticated `/v1` read/write smoke against a throwaway loop and
    a claim/finalize smoke if a runner API URL is configured.
-12. Record package version, git SHA, image tag and digest, database migration
+13. Record package version, git SHA, image tag and digest, database migration
    plan/result, evidence that the target database is dedicated to OpenLoops,
    redacted API URL, health/readiness responses, capacity-provider strategy,
    desired/running task counts, alarm action ARNs/names, log retention/KMS

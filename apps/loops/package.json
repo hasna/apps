@@ -112,6 +112,7 @@
     "bun": ">=1.0.0"
   },
   "dependencies": {
+    "@aws-sdk/client-secrets-manager": "^3.1083.0",
     "@hasna/contracts": "0.5.2",
     "@hasna/events": "^0.1.9",
     "@modelcontextprotocol/sdk": "^1.29.0",

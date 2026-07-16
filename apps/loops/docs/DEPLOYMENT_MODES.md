@@ -66,6 +66,7 @@ loops cloud status
 loops-api status
 loops-serve version
 HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --dry-run
+loops-serve db-credentials reconcile
 HASNA_LOOPS_DATABASE_URL=... HASNA_LOOPS_AUTH_DATABASE_URL=... loops-serve serve
 loops-runner status
 loops export --file ./loops-export.json --dry-run
@@ -126,6 +127,25 @@ authenticator-only role that can verify keys and append authentication audits.
 `HASNA_LOOPS_MIGRATOR_DATABASE_URL` is an offline schema-administrator login;
 tenant enforcement normalizes cluster role attributes and therefore requires
 the PostgreSQL privilege to alter role security attributes.
+
+The in-cluster credential reconciler is `loops-serve db-credentials reconcile`.
+It is source-only infrastructure glue for self-hosted deployments that use an
+RDS-managed master secret and separate app DSN secrets. The command must run
+with the ECS task role (`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`) and AWS
+Secrets Manager access to exactly four distinct same-region secret ARNs. It
+rejects static AWS credentials, profiles, web-identity inputs, full credential
+URIs, malformed secret ARNs, duplicate app secrets, endpoint mismatches, and
+master-secret JSON that does not exactly match the expected RDS instance id,
+endpoint, port, database, and master username.
+
+The reconciler never prints or stores raw passwords outside Secrets Manager and
+Postgres. For every app secret it writes an `AWSPENDING` DSN, changes that
+login password inside a database transaction, tests a fresh verify-full
+connection, then promotes the pending version to `AWSCURRENT`. If the current
+secret/password pair is already valid, it leaves the secret untouched. Before
+migration `0010_tenant_enforce`, runtime and authenticator logins are kept
+detached from service roles; after `0010`, each is attached only to its exact
+matching NOLOGIN role.
 
 `loops-api` is the embeddable API contract in the same public package. It is not
 a separate service because self-hosted users and the hosted service must share

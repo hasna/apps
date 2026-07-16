@@ -29,6 +29,11 @@ import {
   loadApprovedTenantBackfillBundle,
   logTenantBackfillS3Success,
 } from "../lib/storage/tenant-backfill-s3.js";
+import {
+  logProviderCredentialSuccess,
+  reconcileProviderCredentials,
+  resolveProviderCredentialOptions,
+} from "../lib/storage/provider-credentials.js";
 import { packageVersion } from "../lib/version.js";
 
 function resolveDatabaseUrl(purpose: "runtime" | "auth" | "migrator"): string {
@@ -976,6 +981,20 @@ program
     logTenantBackfillS3Success(result);
   });
 
+const dbCredentials = program
+  .command("db-credentials")
+  .description("reconcile provider-managed database credential secrets");
+
+dbCredentials
+  .command("reconcile")
+  .description("rotate and verify provider-managed RDS app credentials")
+  .action(async () => {
+    const result = await reconcileProviderCredentials(resolveProviderCredentialOptions(), {
+      bootstrapProbe: assertTenantEnforcementBootstrapIfPending,
+    });
+    logProviderCredentialSuccess(result);
+  });
+
 program
   .command("version")
   .description("print { status, version, mode }")
@@ -985,7 +1004,7 @@ if (import.meta.main) {
   // Bare `loops-serve` (no subcommand) defaults to `serve`. Commander cannot
   // combine a root action with subcommand dispatch without swallowing the
   // subcommand name, so we inject the default subcommand here instead.
-  const known = new Set(["serve", "migrate", "tenant-backfill", "tenant-backfill-s3", "version", "help"]);
+  const known = new Set(["serve", "migrate", "tenant-backfill", "tenant-backfill-s3", "db-credentials", "version", "help"]);
   const passthroughFlags = new Set(["-h", "--help", "-V", "--version"]);
   const argv = [...process.argv];
   const firstArg = argv[2];
