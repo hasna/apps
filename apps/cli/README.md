@@ -2,14 +2,29 @@
 
 The Hasna CLI manages Hasna applications through documented APIs. Version 0.2.0 is a restricted, private package prepared for a future public registry and provider ecosystem. It ships one trusted provider, `builtin:cweb`; it never downloads or executes provider JavaScript.
 
-## Installation
+## Private installation
 
-The package is published only with restricted access and the `internal` dist-tag:
+Version 0.2.0 is distributed from the private GitHub Packages npm registry under the `internal`
+dist-tag. Use a classic GitHub personal access token with `read:packages`, or a repository
+`GITHUB_TOKEN` whose repository has been granted package read access. Keep the token in an
+environment variable; the npm configuration below references it without storing its value:
+
+```ini
+@hasna:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
+```
+
+With that configuration active:
 
 ```bash
 npm install --global @hasna/cli@internal
 hasna --json version
 ```
+
+The scope mapping is required. The default npmjs registry contains a separate, public, deprecated
+`@hasna/cli@0.1.0`; it is not this CLI and points users to `@hasna/agency`. An install that does not
+explicitly route `@hasna` to `https://npm.pkg.github.com` can resolve that historical npmjs package
+instead. Never place a GitHub token on a command line or commit a token-bearing `.npmrc` file.
 
 Node.js 20 or newer is required. Bun is used to build and test the repository, but the distributable contains no Bun runtime dependency or Bun globals.
 

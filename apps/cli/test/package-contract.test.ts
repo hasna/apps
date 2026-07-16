@@ -21,7 +21,12 @@ describe('publish and artifact contract', () => {
       license: 'UNLICENSED',
       engines: { node: '>=20' },
       bin: { hasna: './dist/cli.js' },
-      publishConfig: { access: 'restricted', tag: 'internal' },
+      repository: 'https://github.com/hasna/cli',
+      publishConfig: {
+        access: 'restricted',
+        tag: 'internal',
+        registry: 'https://npm.pkg.github.com',
+      },
     })
     expect(packageJson.private).toBeUndefined()
   })
@@ -45,5 +50,38 @@ describe('publish and artifact contract', () => {
     expect(readFileSync(join(root, 'docs/release.md'), 'utf8')).toContain(
       'not a public transparency-log attestation',
     )
+  })
+
+  it('publishes privately only through a guarded manual GitHub Packages workflow', () => {
+    const workflow = readFileSync(join(root, '.github/workflows/private-release.yml'), 'utf8')
+    for (const match of workflow.matchAll(/uses:\s+[^@\s]+@([^\s]+)/g))
+      expect(match[1]).toMatch(/^[0-9a-f]{40}$/)
+
+    expect(workflow).toContain('workflow_dispatch:')
+    expect(workflow).not.toMatch(/^\s+push:/m)
+    expect(workflow).not.toMatch(/^\s+pull_request:/m)
+    expect(workflow).toMatch(/permissions:\s*\n\s+contents:\s+read\s*\n\s+packages:\s+write/)
+    expect(workflow).toContain('https://npm.pkg.github.com')
+    expect(workflow).not.toContain('https://registry.npmjs.org')
+    expect(workflow).toContain('--access restricted')
+    expect(workflow).toContain('--tag internal')
+    expect(workflow).toContain('npm publish "$TARBALL"')
+    expect(workflow).toContain('refs/heads/main')
+    expect(workflow).toContain('existing package version query did not fail with E404')
+    expect(workflow).toContain("metadata.visibility !== 'private'")
+    expect(workflow).toContain("metadata.repository?.full_name !== 'hasna/cli'")
+    expect(workflow).toContain('minimumReleaseAgeExcludes = ["@hasna/cli"]')
+  })
+
+  it('documents GitHub Packages authentication and the separate deprecated npmjs package', () => {
+    const readme = readFileSync(join(root, 'README.md'), 'utf8')
+    const release = readFileSync(join(root, 'docs/release.md'), 'utf8')
+    for (const document of [readme, release]) {
+      expect(document).toContain('https://npm.pkg.github.com')
+      expect(document).toContain('NODE_AUTH_TOKEN')
+      expect(document).toContain('npmjs')
+      expect(document).toContain('0.1.0')
+    }
+    expect(release).toContain('Anonymous denial is not proof of private visibility')
   })
 })
