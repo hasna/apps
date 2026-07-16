@@ -3,11 +3,31 @@ import { describe, expect, test } from "bun:test";
 
 const workflowPath = new URL("../.github/workflows/ecr-candidate.yml", import.meta.url);
 const workflow = readFileSync(workflowPath, "utf8");
+const severities = ["CRITICAL", "HIGH"] as const;
 
 function position(fragment: string): number {
   const index = workflow.indexOf(fragment);
   expect(index).toBeGreaterThanOrEqual(0);
   return index;
+}
+
+function severityCountFilter(severity: (typeof severities)[number]): string {
+  const marker = `if ! ${severity.toLowerCase()}="$(jq -er '`;
+  const start = workflow.indexOf(marker);
+  expect(start).toBeGreaterThanOrEqual(0);
+  const filterStart = start + marker.length;
+  const filterEnd = workflow.indexOf(`' <<<"\${findings}")"`, filterStart);
+  expect(filterEnd).toBeGreaterThan(filterStart);
+  return workflow.slice(filterStart, filterEnd);
+}
+
+function runSeverityCountFilter(severity: (typeof severities)[number], findings: Record<string, unknown>) {
+  return Bun.spawnSync({
+    cmd: ["jq", "-er", severityCountFilter(severity)],
+    stdin: Buffer.from(JSON.stringify(findings)),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
 }
 
 describe("ECR candidate workflow contract", () => {
@@ -40,21 +60,70 @@ describe("ECR candidate workflow contract", () => {
     expect(workflow).toContain("candidate tag already exists; refusing to overwrite");
   });
 
-  test("scans before pushing and gates the completed ECR scan", () => {
+  test("scans before pushing and polls the exact digest to a completed ECR scan", () => {
     const localScan = position("Enforce local vulnerability gate");
     const login = position("Log in to Amazon ECR");
     const push = position("Push scanned immutable candidate");
-    const wait = position("aws ecr wait image-scan-complete");
-    const findings = position("aws ecr describe-image-scan-findings");
+    const scanStepStart = position("- name: Wait for ECR vulnerability scan");
+    const scanStepEnd = position("- name: Generate source provenance statement");
+    const scanStep = workflow.slice(scanStepStart, scanStepEnd);
     expect(localScan).toBeLessThan(login);
     expect(login).toBeLessThan(push);
-    expect(push).toBeLessThan(wait);
-    expect(wait).toBeLessThan(findings);
+    expect(push).toBeLessThan(scanStepStart);
+    expect(scanStep).not.toContain("aws ecr wait image-scan-complete");
+    expect(scanStep).toContain("max_attempts=60");
+    expect(scanStep).toContain("retry_interval_seconds=15");
+    expect(scanStep).toContain("attempt<=max_attempts");
+    expect(scanStep).toContain("aws ecr describe-image-scan-findings");
+    expect(scanStep).toContain('--image-id imageDigest="${REMOTE_DIGEST}"');
+    expect(scanStep).toContain("ScanNotFoundException");
+    expect(scanStep).toContain('"IN_PROGRESS"');
+    expect(scanStep).toContain('"COMPLETE"');
+    expect([...scanStep.matchAll(/^\s+("[A-Z_]+"|\*)\)$/gm)].map((match) => match[1])).toEqual([
+      '"COMPLETE"',
+      '"IN_PROGRESS"',
+      "*",
+    ]);
+    expect([...scanStep.matchAll(/\bcontinue\b/g)]).toHaveLength(1);
+    expect(scanStep.indexOf("ScanNotFoundException")).toBeLessThan(scanStep.indexOf("continue"));
+    expect(scanStep).toContain("nontransient ECR scan query failed");
+    expect(scanStep).toContain("empty or malformed scan status");
+    expect(scanStep).toContain("terminal status");
+    expect(scanStep).toContain("did not complete after");
+    expect(scanStep).toContain('type == "number"');
+    expect(scanStep.indexOf('"COMPLETE"')).toBeLessThan(scanStep.indexOf('if ! findings="'));
     expect(workflow).toContain("severity: CRITICAL,HIGH");
     expect(workflow).toContain("ignore-unfixed: false");
     expect(workflow).not.toContain("ignore-unfixed: true");
     expect(workflow).toContain("critical > 0 || high > 0");
   });
+
+  for (const severity of severities) {
+    test(`${severity} count defaults only when absent and accepts nonnegative integers`, () => {
+      for (const [findings, expected] of [
+        [{}, "0\n"],
+        [{ [severity]: 0 }, "0\n"],
+        [{ [severity]: 7 }, "7\n"],
+      ] as const) {
+        const result = runSeverityCountFilter(severity, findings);
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout.toString()).toBe(expected);
+      }
+    });
+
+    for (const [label, value] of [
+      ["null", null],
+      ["false", false],
+      ["string", "0"],
+      ["negative", -1],
+      ["fractional", 0.5],
+    ] as const) {
+      test(`${severity} count rejects present ${label}`, () => {
+        const result = runSeverityCountFilter(severity, { [severity]: value });
+        expect(result.exitCode).not.toBe(0);
+      });
+    }
+  }
 
   test("uses exact Docker target, immutable SHA tag, and emits evidence", () => {
     expect(workflow).toContain("--platform linux/arm64");
