@@ -25,6 +25,10 @@ import {
   POSTGRES_TENANT_UNSAFE_SERVICE_MEMBERSHIPS_SQL,
 } from "../lib/storage/postgres-schema.js";
 import { loadTenantBackfillBundle, parseTenantBackfillBundle } from "../lib/storage/tenant-backfill.js";
+import {
+  loadApprovedTenantBackfillBundle,
+  logTenantBackfillS3Success,
+} from "../lib/storage/tenant-backfill-s3.js";
 import { packageVersion } from "../lib/version.js";
 
 function resolveDatabaseUrl(purpose: "runtime" | "auth" | "migrator"): string {
@@ -951,6 +955,28 @@ program
   });
 
 program
+  .command("tenant-backfill-s3")
+  .description("load the single approved tenant backfill bundle from S3 using the ECS task role")
+  .action(async () => {
+    const executor = buildExecutor("loops-tenant-backfill-s3", "migrator");
+    let result: Awaited<ReturnType<typeof loadApprovedTenantBackfillBundle>>;
+    try {
+      result = await loadApprovedTenantBackfillBundle(executor.queryClient, {
+        bucket: process.env.HASNA_LOOPS_BACKFILL_BUCKET?.trim() ?? "",
+        region: process.env.AWS_REGION?.trim() ?? "",
+        credentialsRelativeUri: process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI?.trim() ?? "",
+      });
+    } finally {
+      try {
+        await executor.close();
+      } catch {
+        throw new Error("tenant backfill database cleanup failed");
+      }
+    }
+    logTenantBackfillS3Success(result);
+  });
+
+program
   .command("version")
   .description("print { status, version, mode }")
   .action(() => console.log(JSON.stringify({ status: "ok", version: packageVersion(), mode: "self_hosted" })));
@@ -959,7 +985,7 @@ if (import.meta.main) {
   // Bare `loops-serve` (no subcommand) defaults to `serve`. Commander cannot
   // combine a root action with subcommand dispatch without swallowing the
   // subcommand name, so we inject the default subcommand here instead.
-  const known = new Set(["serve", "migrate", "tenant-backfill", "version", "help"]);
+  const known = new Set(["serve", "migrate", "tenant-backfill", "tenant-backfill-s3", "version", "help"]);
   const passthroughFlags = new Set(["-h", "--help", "-V", "--version"]);
   const argv = [...process.argv];
   const firstArg = argv[2];

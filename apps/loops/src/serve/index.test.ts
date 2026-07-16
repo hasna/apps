@@ -8,6 +8,7 @@ import {
   classifyMigrationReadinessError,
   classifyTenantEnforcementGate,
   logServeCommandFailure,
+  program,
 } from "./index.js";
 
 function bootstrapClient(role: {
@@ -199,9 +200,11 @@ describe("loops-serve database bootstrap", () => {
     const originalError = console.error;
     console.error = (...values: unknown[]) => { logged.push(values.map(String).join(" ")); };
     try {
-      logServeCommandFailure(Object.assign(new Error("postgres://user:secret@db.internal/loops"), {
+      logServeCommandFailure(Object.assign(new Error(
+        "postgres://user:secret@db.internal/loops private-bucket approved/sha256-private.json bundle-private-id",
+      ), {
         name: "postgres://name-secret@db.internal/loops",
-        code: "postgres://code-secret@db.internal/loops",
+        code: "temporary-access-key temporary-session-token postgres://code-secret@db.internal/loops",
       }));
       expect(logged).toEqual([JSON.stringify({ evt: "loops_serve_command_failed", errorType: "error" })]);
     } finally {
@@ -231,5 +234,16 @@ describe("loops-serve database bootstrap", () => {
     } finally {
       console.error = originalError;
     }
+  });
+
+  test("exposes fixed S3 backfill delivery while preserving the local-file command", () => {
+    const s3Command = program.commands.find((command) => command.name() === "tenant-backfill-s3");
+    expect(s3Command).toBeDefined();
+    expect(s3Command!.options).toHaveLength(0);
+
+    const localCommand = program.commands.find((command) => command.name() === "tenant-backfill");
+    expect(localCommand).toBeDefined();
+    expect(localCommand!.options.map((option) => ({ flags: option.flags, required: option.required })))
+      .toContainEqual({ flags: "--input <path>", required: true });
   });
 });
