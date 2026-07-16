@@ -404,6 +404,7 @@ describe("CLI integration", () => {
       priority: "medium",
       tags: ["broad-redaction"],
     }, db);
+    db.run("UPDATE tasks SET cost_tokens = ?, cost_usd = ? WHERE id = ?", [42, 0.125, task.id]);
     closeDatabase();
     if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
     else process.env["TODOS_DB_PATH"] = previousDbPath;
@@ -413,6 +414,12 @@ describe("CLI integration", () => {
     expect(listJson.stderr).toBe("");
     expect(listJson.exitCode).toBe(0);
     const listed = JSON.parse(listJson.stdout);
+    expect(listed[0].id).toBe(task.id);
+    expect(listed[0].short_id).toBeNull();
+    expect(listed[0].status).toBe("pending");
+    expect(listed[0].priority).toBe("medium");
+    expect(listed[0].cost_tokens).toBe(42);
+    expect(listed[0].cost_usd).toBe(0.125);
     expect(listed[0].description).toContain("Bearer [REDACTED]");
     expect(listed[0].description).not.toContain("credentiallikevalue123456");
 
@@ -421,6 +428,11 @@ describe("CLI integration", () => {
     expect(searchJson.exitCode).toBe(0);
     const searched = JSON.parse(searchJson.stdout);
     expect(searched[0].id).toBe(task.id);
+    expect(searched[0].short_id).toBeNull();
+    expect(searched[0].status).toBe("pending");
+    expect(searched[0].priority).toBe("medium");
+    expect(searched[0].cost_tokens).toBe(42);
+    expect(searched[0].cost_usd).toBe(0.125);
     expect(searched[0].description).toContain("Bearer [REDACTED]");
     expect(searched[0].description).not.toContain("credentiallikevalue123456");
 
@@ -786,6 +798,12 @@ describe("CLI integration", () => {
     try {
       const credentialLike = ["Bearer", "savedviewcredential123456"].join(" ");
       const task = JSON.parse((await runCli(["add", "saved view cli task", "--description", credentialLike, "--tag", "views", "--json"], dbPath)).stdout);
+      const db = new Database(dbPath);
+      try {
+        db.run("UPDATE tasks SET cost_tokens = ?, cost_usd = ? WHERE id = ?", [84, 0.25, task.id]);
+      } finally {
+        db.close();
+      }
       const saved = await runCli([
         "views",
         "save",
@@ -807,6 +825,11 @@ describe("CLI integration", () => {
       expect(run.count).toBe(1);
       expect(run.results[0].entity_type).toBe("tasks");
       expect(run.results[0].entity.id).toBe(task.id);
+      expect(run.results[0].entity.short_id).toBeNull();
+      expect(run.results[0].entity.status).toBe("pending");
+      expect(run.results[0].entity.priority).toBe("medium");
+      expect(run.results[0].entity.cost_tokens).toBe(84);
+      expect(run.results[0].entity.cost_usd).toBe(0.25);
       expect(run.results[0].entity.description).toBe("Bearer [REDACTED]");
       expect(run.results[0].entity.description).not.toContain("savedviewcredential123456");
 
