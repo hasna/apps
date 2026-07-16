@@ -113,7 +113,7 @@ describe('release remediation regressions', () => {
     expect(f.config.value.pendingPlans).toBeUndefined()
   })
 
-  it('releases plan reservations on transient network failure and consumes them on success', async () => {
+  it('keeps network failures in-flight until explicit not-applied resolution', async () => {
     const f = fixture({ config: profileConfig() })
     f.credentials.values.set('prod', 'bearer')
     const command = ['careers', 'jobs', 'delete', 'ea', '--version', '1']
@@ -126,9 +126,40 @@ describe('release remediation regressions', () => {
       return original(options)
     }
     expect((await runCli(['--json', ...command, '--apply', digest, '--yes'], f.runtime)).exitCode).toBe(EXIT_CODES.NETWORK)
-    expect(f.config.value.pendingPlans?.[digest]?.state).toBe('pending')
+    expect(f.config.value.pendingPlans?.[digest]?.state).toBe('in-flight')
+    expect((await runCli(['--json', ...command, '--apply', digest, '--yes'], f.runtime)).exitCode).toBe(EXIT_CODES.CONFLICT)
+    expect((await runCli(['--json', 'plans', 'resolve', digest, '--outcome', 'not-applied', '--yes'], f.runtime)).exitCode).toBe(EXIT_CODES.SUCCESS)
     expect((await runCli(['--json', ...command, '--apply', digest, '--yes'], f.runtime)).exitCode).toBe(0)
     expect(f.config.value.pendingPlans?.[digest]).toBeUndefined()
+  })
+
+  it('holds ambiguous remote outcomes and consumes only definitive non-application responses', async () => {
+    const command = ['careers', 'jobs', 'delete', 'ea', '--version', '1']
+    for (const [code, exitCode] of [
+      ['TIMEOUT', EXIT_CODES.NETWORK],
+      ['REMOTE_SERVER_ERROR', EXIT_CODES.REMOTE],
+      ['REMOTE_REDIRECT_REJECTED', EXIT_CODES.REMOTE],
+      ['REMOTE_RESPONSE_INVALID', EXIT_CODES.REMOTE],
+      ['REMOTE_RESPONSE_TOO_LARGE', EXIT_CODES.REMOTE],
+    ] as const) {
+      const f = fixture({ config: profileConfig() })
+      f.credentials.values.set('prod', 'bearer')
+      const planned = await runCli(['--json', ...command], f.runtime)
+      const digest = (planned.result as { ok: true; data: { digest: string } }).data.digest
+      f.transport.request = async () => { throw new CliError(code, 'ambiguous', exitCode) }
+      expect((await runCli(['--json', ...command, '--apply', digest, '--yes'], f.runtime)).exitCode).toBe(exitCode)
+      expect(f.config.value.pendingPlans?.[digest]?.state).toBe('in-flight')
+      expect((await runCli(['--json', ...command, '--apply', digest, '--yes'], f.runtime)).exitCode).toBe(EXIT_CODES.CONFLICT)
+    }
+    for (const code of ['REMOTE_VALIDATION_FAILED', 'REMOTE_PRECONDITION_FAILED', 'REMOTE_REQUEST_TOO_LARGE', 'REMOTE_RATE_LIMITED']) {
+      const f = fixture({ config: profileConfig() })
+      f.credentials.values.set('prod', 'bearer')
+      const planned = await runCli(['--json', ...command], f.runtime)
+      const digest = (planned.result as { ok: true; data: { digest: string } }).data.digest
+      f.transport.request = async () => { throw new CliError(code, 'definitive', EXIT_CODES.REMOTE) }
+      expect((await runCli(['--json', ...command, '--apply', digest, '--yes'], f.runtime)).exitCode).toBe(EXIT_CODES.REMOTE)
+      expect(f.config.value.pendingPlans?.[digest]).toBeUndefined()
+    }
   })
 
   it('keeps an in-flight reservation exclusive and consumes definitive remote failures', async () => {
@@ -158,7 +189,7 @@ describe('release remediation regressions', () => {
     definitive.credentials.values.set('prod', 'bearer')
     const nextPlan = await runCli(['--json', ...command], definitive.runtime)
     const nextDigest = (nextPlan.result as { ok: true; data: { digest: string } }).data.digest
-    definitive.transport.request = async () => { throw new CliError('REMOTE_REQUEST_REJECTED', 'Remote rejected', EXIT_CODES.REMOTE) }
+    definitive.transport.request = async () => { throw new CliError('REMOTE_PRECONDITION_FAILED', 'Remote rejected', EXIT_CODES.REMOTE) }
     expect((await runCli(['--json', ...command, '--apply', nextDigest, '--yes'], definitive.runtime)).exitCode).toBe(EXIT_CODES.REMOTE)
     expect((await runCli(['--json', ...command, '--apply', nextDigest, '--yes'], definitive.runtime)).exitCode).toBe(EXIT_CODES.CONFLICT)
   })

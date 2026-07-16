@@ -1,6 +1,8 @@
 import { chmod, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CredentialManager, EncryptedFileStore, OsKeychainStore, type ProcessRunner, type SecretStore } from '../src/credentials.js'
 import { createPlan, requirePlanApproval } from '../src/plan.js'
@@ -8,6 +10,7 @@ import { CliError, EXIT_CODES } from '../src/errors.js'
 import { defaultConfig, FileConfigStore } from '../src/config.js'
 import { runCli } from '../src/runner.js'
 import { fixture, profileConfig } from './helpers.js'
+import { NodeApiTransport } from '../src/http.js'
 
 const temporary: string[] = []
 afterEach(async () => {
@@ -175,5 +178,55 @@ describe('credential and mutation security', () => {
     release()
     expect((await firstApply).exitCode).toBe(EXIT_CODES.SUCCESS)
     expect(first.transport.requests).toHaveLength(1)
+  })
+
+  it('keeps a timed-out accepted mutation in-flight while remote work remains active', async () => {
+    let calls = 0
+    let active = 0
+    let releaseRemote!: () => void
+    const server = createServer(() => {
+      calls += 1
+      active += 1
+      void new Promise<void>((resolve) => {
+        releaseRemote = () => {
+          active -= 1
+          resolve()
+        }
+      })
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    try {
+      const address = server.address() as AddressInfo
+      const directory = await mkdtemp(join(tmpdir(), 'hasna-timeout-plan-'))
+      temporary.push(directory)
+      await chmod(directory, 0o700)
+      const config = profileConfig()
+      config.profiles.prod = {
+        ...config.profiles.prod!,
+        apiUrl: `http://127.0.0.1:${address.port}`,
+        allowInsecureLocalhost: true,
+        connectTimeoutMs: 100,
+        requestTimeoutMs: 100,
+      }
+      const store = new FileConfigStore(join(directory, 'config.json'))
+      await store.save(config)
+      const f = fixture({ config })
+      f.runtime.config = store
+      f.runtime.transport = (profile) => new NodeApiTransport(profile.apiUrl, 100, 100, true)
+      f.credentials.values.set('prod', 'bearer')
+      const command = ['careers', 'jobs', 'delete', 'ea', '--version', '1']
+      const planned = await runCli(['--json', ...command], f.runtime)
+      const digest = (planned.result as { ok: true; data: { digest: string } }).data.digest
+      expect((await runCli(['--json', ...command, '--apply', digest, '--yes'], f.runtime)).exitCode).toBe(EXIT_CODES.NETWORK)
+      expect(calls).toBe(1)
+      expect(active).toBe(1)
+      expect((await store.load()).pendingPlans?.[digest]?.state).toBe('in-flight')
+      expect((await runCli(['--json', ...command, '--apply', digest, '--yes'], f.runtime)).exitCode).toBe(EXIT_CODES.CONFLICT)
+      expect(calls).toBe(1)
+      releaseRemote()
+    } finally {
+      server.closeAllConnections()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
   })
 })

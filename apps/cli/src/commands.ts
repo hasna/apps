@@ -787,15 +787,24 @@ async function settleAfterSuccess(runtime: Runtime, authorization: PlanAuthoriza
 }
 
 async function settleAfterFailure(runtime: Runtime, authorization: PlanAuthorization, error: unknown): Promise<void> {
+  if (isAmbiguousMutationFailure(error)) return
   try {
-    await settleAuthorization(runtime, authorization, shouldReleasePlan(error) ? 'release' : 'consume')
+    await settleAuthorization(runtime, authorization, 'consume')
   } catch {
-    // Preserve the remote/transport failure. The in-flight reservation remains fail-closed until expiry.
+    // Preserve the remote failure. The in-flight reservation remains fail-closed for operator resolution.
   }
 }
 
-function shouldReleasePlan(error: unknown): boolean {
-  return asCliError(error).exitCode === EXIT_CODES.NETWORK
+function isAmbiguousMutationFailure(error: unknown): boolean {
+  const cliError = asCliError(error)
+  if (cliError.exitCode === EXIT_CODES.NETWORK) return true
+  if (cliError.exitCode !== EXIT_CODES.REMOTE) return false
+  return ![
+    'REMOTE_VALIDATION_FAILED',
+    'REMOTE_PRECONDITION_FAILED',
+    'REMOTE_REQUEST_TOO_LARGE',
+    'REMOTE_RATE_LIMITED',
+  ].includes(cliError.code)
 }
 
 async function retryConfigBusy<T>(key: string, operation: () => Promise<T>): Promise<T> {
