@@ -107,7 +107,7 @@ describe("hasna home database", () => {
       delete process.env.HASNA_SECURITY_STORAGE_MODE;
       delete process.env.SECURITY_DB;
       closeDb();
-      expect(() => getDb()).toThrow(/Only local SQLite storage is supported/);
+      expect(() => getDb()).toThrow("Unable to initialize Shield database safely");
     } finally {
       closeDb();
       if (originalShieldMode === undefined) delete process.env.HASNA_SHIELD_STORAGE_MODE;

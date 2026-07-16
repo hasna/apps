@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync } from "fs";
+import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { closeDb, getDb, getTestDb } from "./database.js";
@@ -156,6 +156,92 @@ describe("database", () => {
       closeDb();
       if (originalSecurityDb === undefined) delete process.env.SECURITY_DB;
       else process.env.SECURITY_DB = originalSecurityDb;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("sanitizes storage-mode resolution failures and recovers on retry", () => {
+    const directory = mkdtempSync(join(tmpdir(), "shield-storage-mode-init-"));
+    const path = join(directory, "shield.db");
+    const marker = `invalid-mode-${"synthetic-marker-".repeat(3)}`;
+    const moduleUrl = new URL("./database.ts", import.meta.url).href;
+    const program = `
+      import { closeDb, getDb } from ${JSON.stringify(moduleUrl)};
+      const marker = ${JSON.stringify(marker)};
+      process.env.SECURITY_DB = ${JSON.stringify(path)};
+      process.env.HASNA_SHIELD_STORAGE_MODE = marker;
+
+      const capture = () => {
+        try { getDb(); } catch (error) {
+          return error instanceof Error ? error.message : String(error);
+        }
+        return "did not fail";
+      };
+      for (const message of [capture(), capture()]) {
+        if (message !== ${JSON.stringify(SAFE_INIT_ERROR)} || message.includes(marker)) process.exit(31);
+      }
+
+      process.env.HASNA_SHIELD_STORAGE_MODE = "local";
+      const recovered = getDb();
+      if ((recovered.prepare("SELECT 1 AS value").get()).value !== 1) process.exit(32);
+      closeDb();
+    `;
+
+    try {
+      const child = Bun.spawnSync({
+        cmd: [process.execPath, "-e", program],
+        env: { ...process.env, SECURITY_DB: path },
+        stderr: "pipe",
+        stdout: "pipe",
+      });
+      expect(`${child.stdout.toString()}${child.stderr.toString()}`).not.toContain(marker);
+      expect(child.exitCode).toBe(0);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("sanitizes path preparation failures and recovers after the parent is repaired", () => {
+    const directory = mkdtempSync(join(tmpdir(), "shield-path-preparation-init-"));
+    const blockedParent = join(directory, "blocked-parent");
+    const path = join(blockedParent, "shield.db");
+    writeFileSync(blockedParent, "not a directory", "utf-8");
+    const moduleUrl = new URL("./database.ts", import.meta.url).href;
+    const program = `
+      import { mkdirSync, rmSync } from "fs";
+      import { closeDb, getDb } from ${JSON.stringify(moduleUrl)};
+      const unsafePath = ${JSON.stringify(path)};
+      process.env.SECURITY_DB = unsafePath;
+      process.env.HASNA_SHIELD_STORAGE_MODE = "local";
+
+      const capture = () => {
+        try { getDb(); } catch (error) {
+          return error instanceof Error ? error.message : String(error);
+        }
+        return "did not fail";
+      };
+      for (const message of [capture(), capture()]) {
+        if (message !== ${JSON.stringify(SAFE_INIT_ERROR)} || message.includes(unsafePath)) process.exit(41);
+      }
+
+      rmSync(${JSON.stringify(blockedParent)});
+      mkdirSync(${JSON.stringify(blockedParent)});
+      const recovered = getDb();
+      if ((recovered.prepare("SELECT 1 AS value").get()).value !== 1) process.exit(42);
+      closeDb();
+    `;
+
+    try {
+      const child = Bun.spawnSync({
+        cmd: [process.execPath, "-e", program],
+        env: { ...process.env, SECURITY_DB: path },
+        stderr: "pipe",
+        stdout: "pipe",
+      });
+      const output = `${child.stdout.toString()}${child.stderr.toString()}`;
+      expect(output).not.toContain(path);
+      expect(child.exitCode).toBe(0);
+    } finally {
       rmSync(directory, { recursive: true, force: true });
     }
   });

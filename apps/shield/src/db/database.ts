@@ -99,10 +99,10 @@ export function getDb(): Database {
     }
   }
   if (_db) return _db;
-  const dbPath = getDbPath();
-  mkdirSync(dirname(dbPath), { recursive: true });
   let db: Database | null = null;
   try {
+    const dbPath = getDbPath();
+    mkdirSync(dirname(dbPath), { recursive: true });
     db = new Database(dbPath);
     db.exec("PRAGMA journal_mode = WAL");
     db.exec("PRAGMA foreign_keys = ON");
@@ -121,9 +121,9 @@ export function getDb(): Database {
     }
     return db;
   } catch {
-    // Never publish or retain a connection whose constructor, migrations,
-    // credential scrub, or post-init callbacks did not finish. A later call
-    // must reconnect and retry every boundary before state becomes observable.
+    // Never publish or retain a connection whose path preparation, constructor,
+    // migrations, credential scrub, or post-init callbacks did not finish. A
+    // later call must retry every boundary before state becomes observable.
     failDatabaseInitialization(db);
   }
 }
