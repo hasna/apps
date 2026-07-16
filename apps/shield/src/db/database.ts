@@ -5,6 +5,7 @@ import { homedir } from "os";
 import { scrubLegacyCredentialRows } from "./legacy-credential-scrub.js";
 
 let _db: Database | null = null;
+const DATABASE_INIT_ERROR = "Unable to initialize Shield database safely";
 
 function homeDir(): string {
   return process.env.HOME || process.env.USERPROFILE || homedir();
@@ -49,9 +50,40 @@ function getDbPath(): string {
 let _postInitCallbacks: Array<() => void> = [];
 let _initialized = false;
 
+function failDatabaseInitialization(db: Database | null): never {
+  // A callback may have closed the original candidate and recursively
+  // published a replacement. Detach first, then close every distinct handle
+  // involved in the failed initialization so no live singleton can escape.
+  const published = _db;
+  _db = null;
+  _initialized = false;
+  const failedHandles = new Set<Database>();
+  if (db) failedHandles.add(db);
+  if (published) failedHandles.add(published);
+  for (const handle of failedHandles) {
+    try { handle.close(); } catch {}
+  }
+  // Do not repeat paths, legacy values, callback text, or SQLite diagnostics.
+  throw new Error(DATABASE_INIT_ERROR);
+}
+
 export function onDbInit(cb: () => void): void {
   _postInitCallbacks.push(cb);
-  if (_initialized) cb();
+  if (!_initialized) return;
+  const db = _db;
+  if (!db) {
+    // closeDb() intentionally releases the singleton. Defer the newly
+    // registered callback until the next successful initialization.
+    _initialized = false;
+    return;
+  }
+  try {
+    cb();
+    if (_db !== db) throw new Error("database connection changed during initialization");
+    db.exec("SELECT 1");
+  } catch {
+    failDatabaseInitialization(db);
+  }
 }
 
 export function getDb(): Database {
@@ -69,17 +101,31 @@ export function getDb(): Database {
   if (_db) return _db;
   const dbPath = getDbPath();
   mkdirSync(dirname(dbPath), { recursive: true });
-  _db = new Database(dbPath);
-  _db.exec("PRAGMA journal_mode = WAL");
-  _db.exec("PRAGMA foreign_keys = ON");
-  _db.exec("PRAGMA busy_timeout = 5000");
-  runMigrations(_db);
-  scrubLegacyCredentialRows(_db);
-  if (!_initialized) {
-    _initialized = true;
-    for (const cb of _postInitCallbacks) cb();
+  let db: Database | null = null;
+  try {
+    db = new Database(dbPath);
+    db.exec("PRAGMA journal_mode = WAL");
+    db.exec("PRAGMA foreign_keys = ON");
+    db.exec("PRAGMA busy_timeout = 5000");
+    runMigrations(db);
+    scrubLegacyCredentialRows(db);
+    // Publish before callbacks so a callback can safely call getDb() without
+    // recursively opening another connection. Initialization is not marked
+    // complete until every callback returns and the candidate remains live.
+    _db = db;
+    if (!_initialized) {
+      for (const cb of _postInitCallbacks) cb();
+      if (_db !== db) throw new Error("database connection changed during initialization");
+      db.exec("SELECT 1");
+      _initialized = true;
+    }
+    return db;
+  } catch {
+    // Never publish or retain a connection whose constructor, migrations,
+    // credential scrub, or post-init callbacks did not finish. A later call
+    // must reconnect and retry every boundary before state becomes observable.
+    failDatabaseInitialization(db);
   }
-  return _db;
 }
 
 export function closeDb(): void {
