@@ -157,6 +157,12 @@ export class TenantApiAuthenticator {
     } catch {
       return { ok: false, status: 503, reason: "audit_unavailable", message: "Authentication audit unavailable.", requestId: id };
     }
+    console.warn(JSON.stringify({
+      evt: "api_auth",
+      outcome: "deny",
+      reason,
+      status,
+    }));
     return { ok: false, status, reason, message: status === 401 ? "Authentication required." : "Forbidden.", requestId: id };
   }
 
