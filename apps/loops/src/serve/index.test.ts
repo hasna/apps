@@ -6,6 +6,7 @@ import {
   assertTenantEnforcementBootstrap,
   assertTenantEnforcementBootstrapIfPending,
   classifyMigrationReadinessError,
+  classifyTenantEnforcementGate,
   logServeCommandFailure,
 } from "./index.js";
 
@@ -17,6 +18,7 @@ function bootstrapClient(role: {
   controls_database: boolean;
   controls_public_schema: boolean;
   controls_helper_functions: boolean;
+  controls_existing_objects: boolean;
 } | null, probeFails = false, statements: string[] = []): PoolQueryClient {
   const base: TypedQueryClient = {
     query: async <T extends QueryResultRow>() => ({ rows: [] as T[], rowCount: 0 }),
@@ -28,7 +30,9 @@ function bootstrapClient(role: {
     },
     execute: async (sql) => {
       statements.push(sql);
-      if (probeFails && sql.startsWith("ALTER ROLE")) throw new Error("permission denied to alter role");
+      if (probeFails && (sql.startsWith("ALTER ROLE") || sql.includes("DO $bootstrap_roles$"))) {
+        throw new Error("permission denied to alter role");
+      }
     },
   };
   return {
@@ -48,18 +52,22 @@ describe("loops-serve database bootstrap", () => {
     controls_database: true,
     controls_public_schema: true,
     controls_helper_functions: true,
+    controls_existing_objects: true,
   };
 
   test("requires CREATEROLE or superuser before tenant enforcement", async () => {
     const complete = completeBootstrapRole;
     await expect(assertTenantEnforcementBootstrap(bootstrapClient({ ...complete, rolcreaterole: false })))
       .rejects.toThrow("CREATEROLE");
-    await expect(assertTenantEnforcementBootstrap(bootstrapClient({ ...complete, owner_settable: false })))
-      .rejects.toThrow("SET ROLE capability for owner/migrator");
+    await expect(assertTenantEnforcementBootstrap(bootstrapClient({
+      ...complete,
+      owner_settable: false,
+      migrator_settable: false,
+    }))).resolves.toBeUndefined();
     await expect(assertTenantEnforcementBootstrap(bootstrapClient({ ...complete, controls_database: false })))
       .rejects.toThrow("database-owning");
     await expect(assertTenantEnforcementBootstrap(bootstrapClient({ ...complete, controls_helper_functions: false })))
-      .rejects.toThrow("existing OpenLoops helper functions");
+      .rejects.toThrow("every existing non-system schema, relation, function, and migration ledger owner");
     await expect(assertTenantEnforcementBootstrap(bootstrapClient(complete, true)))
       .rejects.toThrow("provider-level authority");
     await expect(assertTenantEnforcementBootstrap(bootstrapClient(complete)))
@@ -72,6 +80,7 @@ describe("loops-serve database bootstrap", () => {
       controls_database: false,
       controls_public_schema: false,
       controls_helper_functions: false,
+      controls_existing_objects: false,
     })))
       .resolves.toBeUndefined();
   });
@@ -86,11 +95,22 @@ describe("loops-serve database bootstrap", () => {
       controls_database: true,
       controls_public_schema: true,
       controls_helper_functions: true,
+      controls_existing_objects: true,
     }, false, statements))).resolves.toBeUndefined();
-    const roleCreate = statements.findIndex((sql) => sql.includes("DO $probe_roles$"));
-    const roleAlter = statements.findIndex((sql) => sql.startsWith("ALTER ROLE open_loops_owner"));
+    const roleCreate = statements.findIndex((sql) => sql.includes("DO $bootstrap_roles$"));
+    const membershipNormalization = statements.findIndex((sql) => sql.includes("DO $bootstrap_memberships$"));
     expect(roleCreate).toBeGreaterThan(-1);
-    expect(roleAlter).toBeGreaterThan(roleCreate);
+    expect(statements[roleCreate]).toContain("CREATE ROLE %I INHERIT NOLOGIN");
+    expect(statements[roleCreate]).toContain("ALTER ROLE %I INHERIT NOLOGIN");
+    expect(statements[roleCreate]).toContain("reserved OpenLoops database role % is LOGIN");
+    expect(membershipNormalization).toBeGreaterThan(roleCreate);
+    expect(statements.some((sql) => sql.includes("DO $cluster_role_exclusivity$"))).toBe(true);
+    expect(statements.some((sql) => sql.includes("DO $privileged_role_membership_acl$"))).toBe(true);
+    expect(statements).toContain("SET LOCAL ROLE open_loops_owner");
+    expect(statements).toContain("SET LOCAL ROLE open_loops_migrator");
+    expect(statements.some((sql) => sql.includes("ALTER TABLE open_loops_schema_migrations OWNER TO open_loops_migrator")))
+      .toBe(true);
+    expect(statements.some((sql) => sql.includes("__open_loops_bootstrap_session_probe__"))).toBe(true);
     const bootstrapQuery = statements.find((sql) => sql.includes("controls_helper_functions"));
     expect(bootstrapQuery).toContain("helper.proowner, 'USAGE'");
     const databaseGrantProbe = statements.find((sql) => sql.includes("DO $probe_database_acl$"));
@@ -102,8 +122,11 @@ describe("loops-serve database bootstrap", () => {
     expect(serviceAclProbe).toContain("REVOKE ALL PRIVILEGES ON DATABASE");
     expect(serviceAclProbe).toContain("ALL SEQUENCES IN SCHEMA");
     expect(serviceAclProbe).toContain("ALL FUNCTIONS IN SCHEMA");
-    const serviceMembershipProbe = statements.find((sql) => sql.includes("DO $probe_service_role_memberships$"));
+    const serviceMembershipProbe = statements.find((sql) => sql.includes("DO $service_role_memberships$"));
     expect(serviceMembershipProbe).toContain("REVOKE %I FROM %I");
+    const serviceCleanupProbe = statements.find((sql) => sql.includes("DO $service_member_acl$"));
+    expect(serviceCleanupProbe).toContain("provider/bootstrap login % must never be processed as a service login");
+    expect(serviceCleanupProbe).toContain("owns database objects");
   });
 
   test("skips bootstrap probe when tenant enforcement migration is already applied", async () => {
@@ -143,7 +166,25 @@ describe("loops-serve database bootstrap", () => {
       bootstrapClient(completeBootstrapRole, false, statements),
       schema,
     )).resolves.toBeUndefined();
-    expect(statements.some((sql) => sql.includes("DO $probe_roles$"))).toBe(true);
+    expect(statements.some((sql) => sql.includes("DO $bootstrap_roles$"))).toBe(true);
+  });
+
+  test("turns migration-ledger 42501 into a ledger-independent ownership gate", async () => {
+    const statements: string[] = [];
+    const permissionDenied = Object.assign(new Error("permission denied for table open_loops_schema_migrations"), {
+      code: "42501",
+    });
+    const schema = {
+      migrate: async () => { throw permissionDenied; },
+    } as unknown as PostgresStorage;
+    await expect(assertTenantEnforcementBootstrapIfPending(
+      bootstrapClient({ ...completeBootstrapRole, controls_existing_objects: false }, false, statements),
+      schema,
+    )).rejects.toThrow("every existing non-system schema, relation, function, and migration ledger owner");
+    expect(statements).toHaveLength(1);
+    expect(statements[0]).toContain("controls_existing_objects");
+    expect(statements[0]).toContain("pg_class");
+    expect(statements[0]).toContain("pg_proc");
   });
 
   test("classifies migration checksum drift as an explicit readiness failure", () => {
@@ -163,6 +204,30 @@ describe("loops-serve database bootstrap", () => {
         code: "postgres://code-secret@db.internal/loops",
       }));
       expect(logged).toEqual([JSON.stringify({ evt: "loops_serve_command_failed", errorType: "error" })]);
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  test("operator logs expose a stable secret-safe tenant-enforcement gate", () => {
+    const error = new Error(
+      "tenant enforcement requires a database-owning bootstrap login with CREATEROLE and provider authority over every existing non-system schema, relation, function, and migration ledger owner; reassign legacy objects or grant exact owner-role membership before retrying",
+    );
+    expect(classifyTenantEnforcementGate(error)).toEqual({
+      gate: "legacy_object_ownership",
+      action: "reassign every non-system database object to the bootstrap login or an exact SETtable owner role",
+    });
+    const logged: string[] = [];
+    const originalError = console.error;
+    console.error = (...values: unknown[]) => { logged.push(values.map(String).join(" ")); };
+    try {
+      logServeCommandFailure(error);
+      expect(JSON.parse(logged[0]!)).toEqual({
+        evt: "loops_serve_command_failed",
+        errorType: "error",
+        gate: "legacy_object_ownership",
+        action: "reassign every non-system database object to the bootstrap login or an exact SETtable owner role",
+      });
     } finally {
       console.error = originalError;
     }

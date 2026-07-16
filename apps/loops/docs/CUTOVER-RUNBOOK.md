@@ -40,26 +40,74 @@ loopback authentication bypass.
 
 ## AWS Self-Hosted Gates
 
-1. Provision separate database logins. Tenant enforcement must run through a
+Before step 1, satisfy and preserve evidence for these hard gates:
+
+- Use a dedicated OpenLoops PostgreSQL cluster, not only a dedicated database.
+  PostgreSQL roles are cluster-global: inventory every database, role
+  membership, database owner, and `pg_shdepend` row for the four reserved
+  `open_loops_*` roles. The enforcement preflight fails if a reserved role owns
+  another database or has a cross-database dependency. No reserved role may be
+  `LOGIN`; the command fails closed instead of silently detaching a credential.
+- Prove recovery before mutation. Confirm PITR is inside its retention window,
+  identify the exact pre-cutover recovery point, and complete an isolated
+  restore rehearsal from that point. Record the recovery point, restored
+  database identifier, verification command/results, elapsed restore time, and
+  cleanup result. Backup configuration without a successful restore is not
+  sufficient evidence.
+- Enter a maintenance window before the first non-dry-run migration. Stop new
+  API writes, drain in-flight work, stop every service/runner that can write the
+  database, and verify no non-operator sessions or open write transactions
+  remain. Run exactly one migrator. The binary also takes a transaction-scoped
+  advisory lock and recomputes the ledger plan after acquiring it, but the lock
+  does not replace application quiescence.
+
+1. Provision the four NOLOGIN database roles and the separate enforcement
+   login. Tenant enforcement must run through a
    provider-level bootstrap administrator against a dedicated OpenLoops
    database owned by that bootstrap login (or use a true superuser). Do not run enforcement in a database shared with another
    application: migration `0010` normalizes ACLs across every non-system
    schema, table, sequence, and function in the current database. `CREATEROLE`, control of the
    `public` schema, and the ability to `SET ROLE` to `open_loops_owner` and
-   `open_loops_migrator` are minimum requirements; PostgreSQL 16 may require
-   stronger provider authority for exact role normalization and service-login
-   grant cleanup. The command transactionally exercises and rolls back those
-   exact operations before migration `0010`; static role flags are not accepted
-   as proof. The runtime and
-   authenticator service logins must be members only of their matching roles.
+   `open_loops_migrator` are minimum requirements. With PostgreSQL 16's default
+   `createrole_self_grant=''`, a non-superuser must use four pre-provisioned,
+   already-normalized OpenLoops roles and must have only direct owner/migrator
+   memberships with `ADMIN FALSE`, `INHERIT TRUE`, and `SET TRUE`. It must not
+   be a member of the runtime or authenticator roles. No LOGIN role may inherit
+   runtime or authenticator yet; attach service credentials only after `0010`
+   succeeds. Creating the roles as the
+   non-superuser is not sufficient: PostgreSQL adds an implicit `ADMIN TRUE`,
+   `INHERIT FALSE`, `SET FALSE` creator row that only a superuser can revoke.
+   The command transactionally exercises and rolls back the exact membership,
+   `SET ROLE`, migration-ledger ownership/write, ACL, and service-login cleanup
+   operations before migration `0010`; static role flags are not accepted as
+   proof. Provider/bootstrap identities are never passed to `DROP OWNED`, and
+   unsafe LOGIN memberships fail closed instead of being silently detached.
+   After enforcement, the runtime and authenticator service logins must be
+   members only of their matching roles, granted with `ADMIN FALSE`, `INHERIT
+   TRUE`, and `SET TRUE`.
    Never reuse the bootstrap DSN in `loops-serve`.
 2. Prepare the tenant schema with the ECS one-shot task or an operator command:
    `HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --dry-run`, then
    `HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate`.
 3. Load the reviewed explicit ownership bundle with
    `HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve tenant-backfill --input <bundle>`.
+   Before delivery, require named operator approval of tenant, principal,
+   membership, API-key, and row-owner counts; compute and record the bundle's
+   SHA-256; and transfer it only through the approved encrypted artifact path.
+   On the migration host, verify the hash and restrictive file permissions
+   before use. Record only the hash, counts, approver, and bounded command
+   result—never bundle contents or credentials—and remove the staged artifact
+   after the transaction and evidence capture complete.
 4. Enforce tenant keys, composite foreign keys, and forced RLS with
    `HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --enforce-tenancy`.
+   After this succeeds, have provider automation attach the runtime and
+   authenticator logins to their matching roles; do not reuse the enforcement
+   login for either service.
+   Keep the write plane quiesced while validating migration-ledger ownership,
+   exact role memberships, forced RLS, runtime/authenticator connection safety,
+   and `/ready`. If any gate fails, keep the service stopped and use the
+   rehearsed recovery procedure; do not continue from a partially understood
+   state.
 5. Build and deploy an image from this repository's pinned Bun base-image
    digest. The runner image must pass the CI high/critical vulnerability scan
    and must not replace the locked `@hasna/contracts` package with a vendored
@@ -110,10 +158,22 @@ loopback authentication bypass.
 
 ## Rollback
 
-For the self-hosted service, roll back by redeploying the previous image digest
-or shifting the ALB target group back to the previous service revision. After
-rollback, prove `/ready`, authenticated loop CRUD, runner claim/finalize, and
-`loops self-hosted push --dry-run --no-runs` against the redacted API URL.
+Before migration `0010_tenant_enforce` is applied, an image-only rollback may
+redeploy the previous digest or shift the ALB target group to the previous
+service revision, provided its migration checksum contract still matches the
+database. After `0010` succeeds, do not point a previous image at the enforced
+database: the `c506685e` base carries the superseded `0010` checksum and the
+published `0.4.28` image has no `0008`-`0010`, so neither can pass readiness
+against this schema.
+
+Post-`0010`, either roll forward with a schema-compatible image, or restore the
+rehearsed pre-cutover PITR point to a separate database target. For the restore
+path, repoint the previous service revision's runtime/auth credentials and
+endpoint to that separate target, verify the restored migration ledger and
+expected row counts, then prove the previous image's `/ready`, authenticated
+loop CRUD, runner claim/finalize, and
+`loops self-hosted push --dry-run --no-runs`. Never attempt an in-place reverse
+migration or overwrite the enforced database during rollback.
 Local scheduled execution remains on SQLite unless operators explicitly
 configure a runner/control-plane cutover, so removing `HASNA_LOOPS_API_URL` and
 `HASNA_LOOPS_DATABASE_URL` returns the standalone CLI/daemon perspective to

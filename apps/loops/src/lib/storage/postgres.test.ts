@@ -1,13 +1,21 @@
 import { describe, expect, test } from "bun:test";
 import { PostgresStorage } from "./postgres.js";
-import { POSTGRES_MIGRATION_LEDGER_TABLE, POSTGRES_STORAGE_MIGRATIONS, checksumStorageSql } from "./postgres-schema.js";
+import {
+  POSTGRES_MIGRATION_ADVISORY_LOCK_SQL,
+  POSTGRES_MIGRATION_LEDGER_TABLE,
+  POSTGRES_STORAGE_MIGRATIONS,
+  checksumStorageSql,
+} from "./postgres-schema.js";
 import type { PostgresQueryExecutor } from "./postgres.js";
 
 class FakePostgresExecutor implements PostgresQueryExecutor {
   readonly executed: Array<{ sql: string; params?: readonly unknown[] }> = [];
+  readonly queried: string[] = [];
   ledger: Array<{ id: string; checksum: string; applied_at: string }> = [];
 
   async query<T extends Record<string, unknown>>(sql: string): Promise<T[]> {
+    this.queried.push(sql);
+    if (sql === POSTGRES_MIGRATION_ADVISORY_LOCK_SQL) return [];
     if (!sql.includes(POSTGRES_MIGRATION_LEDGER_TABLE)) throw new Error(`unexpected query: ${sql}`);
     return this.ledger as unknown as T[];
   }
@@ -63,8 +71,11 @@ describe("Postgres storage migrations", () => {
     // additive migration) breaks every existing database: migrate() fails
     // closed with "checksum mismatch" because the ledger recorded the original
     // checksum. This pins the released checksums so that defect class fails
-    // here first. When adding schema, append a NEW migration and pin it below —
-    // never touch a released block. (Regression: route_scope was briefly folded
+    // here first. The published npm/loops/v0.4.28 source contains migrations
+    // through 0007; 0008-0010 were finalized after that tag and are pinned here
+    // before their first package release. When adding schema, append a NEW
+    // migration and pin it below — never touch a released block. (Regression:
+    // route_scope was briefly folded
     // into 0002_workflows_goals, which would have bricked upgrades of every
     // existing postgres deployment.)
     const pinned: Record<string, string> = {
@@ -75,8 +86,11 @@ describe("Postgres storage migrations", () => {
       "0005_run_receipts": "sha256:27228e19e0101d31ce9da18d76d918a96dd8afff576fb291cbf8d018e97fe5d6",
       "0006_work_item_machine_id": "sha256:80887626208cbb3659a436e6e26c56f0b0229f0bcb8d292de51738ee99ed11d1",
       "0007_work_item_gate_deaths": "sha256:95ac3c0dfeef6f6e6d4bd8b92473d19aabae0c83ebc3b1f4409d84fc0bbfa11c",
+      "0008_tenant_prepare": "sha256:76924f61f71fa2e7d3fb7773ff372200e26d0b3e48a5d05585adaeeca8f30043",
+      "0009_tenant_backfill": "sha256:7bfd222e503736ec0bc2811f8a31d3e57820a0fa1106795e09fd26a5cf966f2c",
+      "0010_tenant_enforce": "sha256:f923c70c2960e0372b4c01c5f01d9432fa0c76b24921c616dc149fa191409053",
     };
-    for (const migration of POSTGRES_STORAGE_MIGRATIONS.slice(0, 7)) {
+    for (const migration of POSTGRES_STORAGE_MIGRATIONS) {
       expect(`${migration.id} ${migration.checksum}`).toBe(`${migration.id} ${pinned[migration.id]}`);
     }
     // route_scope lives ONLY in the additive 0004 migration, never in a
@@ -112,6 +126,8 @@ describe("Postgres storage migrations", () => {
     expect(result.applied.map((migration) => migration.id)).toEqual(POSTGRES_STORAGE_MIGRATIONS.map((migration) => migration.id));
     expect(executor.executed[0]?.sql).toContain(POSTGRES_MIGRATION_LEDGER_TABLE);
     expect(executor.executed.filter((entry) => entry.sql.startsWith("INSERT INTO"))).toHaveLength(POSTGRES_STORAGE_MIGRATIONS.length);
+    expect(executor.queried[1]).toBe(POSTGRES_MIGRATION_ADVISORY_LOCK_SQL);
+    expect(executor.queried[2]).toContain(POSTGRES_MIGRATION_LEDGER_TABLE);
 
     const second = await storage.migrate();
     expect(second.plan.every((item) => item.state === "already_applied")).toBe(true);

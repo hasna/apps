@@ -37,6 +37,24 @@ const EXTRA_SERVICE_ROLE = `loops_service_extra_${Date.now()}_${Math.floor(Math.
 const ADMIN_LOGIN = `loops_admin_option_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
 const HOSTILE_FUNCTION_OWNER = `loops_hostile_fn_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
 const DRIFT_DATABASE_LOGIN = `loops_db_drift_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+type BootstrapMembershipRegression = {
+  error?: unknown;
+  errorMessage?: string;
+  failureStage?: "preflight" | "migration";
+  createroleSelfGrant?: string;
+  memberships?: Array<{
+    granted_role: string;
+    admin_option: boolean;
+    inherit_option: boolean;
+    set_option: boolean;
+  }>;
+  ownerSettable?: boolean;
+  migratorSettable?: boolean;
+  runtimeMember?: boolean;
+  authenticatorMember?: boolean;
+  ledgerRecorded?: boolean;
+};
+
 function isolatedUrl(credentials?: { username: string; password: string }): string {
   const u = new URL(DATABASE_URL!);
   u.pathname = `/${ISO_DB}`;
@@ -58,6 +76,192 @@ async function admin(sql: string): Promise<void> {
   }
 }
 
+async function adminQuery<T extends Record<string, unknown>>(sql: string): Promise<T[]> {
+  const client = new pg.Client({ connectionString: DATABASE_URL });
+  await client.connect();
+  try {
+    return (await client.query<T>(sql)).rows;
+  } finally {
+    await client.end();
+  }
+}
+
+async function exercisePg16BootstrapMemberships(
+  mode:
+    | "missing"
+    | "preexisting-safe"
+    | "preexisting-unsafe"
+    | "preexisting-service-login"
+    | "preexisting-login-role"
+    | "preexisting-third-party-member"
+    | "preexisting-cross-database",
+): Promise<BootstrapMembershipRegression> {
+  const suffix = `${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+  const database = `loops_bootstrap_membership_${suffix}`;
+  const bootstrap = `loops_bootstrap_${suffix}`;
+  const serviceLogin = `loops_service_login_${suffix}`;
+  const thirdPartyMember = `loops_third_party_${suffix}`;
+  const crossDatabase = `loops_cross_database_${suffix}`;
+  const password = `bootstrap-test-${suffix}`;
+  let probe: PgPoolExecutor | undefined;
+  let failureStage: "preflight" | "migration" = "preflight";
+  try {
+    await admin(`CREATE ROLE ${bootstrap} LOGIN CREATEROLE PASSWORD '${password}'`);
+    await admin(`CREATE DATABASE ${database} OWNER ${bootstrap}`);
+    if (mode !== "missing") {
+      await admin(`
+        CREATE ROLE open_loops_owner INHERIT NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+        CREATE ROLE open_loops_migrator INHERIT NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+        CREATE ROLE open_loops_runtime INHERIT NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+        CREATE ROLE open_loops_authenticator INHERIT NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+        GRANT open_loops_owner, open_loops_migrator
+          TO ${bootstrap} WITH ADMIN FALSE, INHERIT TRUE, SET TRUE;
+      `);
+      if (mode === "preexisting-unsafe") {
+        await admin(`
+          GRANT open_loops_runtime, open_loops_authenticator
+            TO ${bootstrap} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE;
+        `);
+      }
+      if (mode === "preexisting-service-login") {
+        await admin(`
+          CREATE ROLE ${serviceLogin} INHERIT LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+          GRANT open_loops_runtime TO ${serviceLogin} WITH ADMIN FALSE, INHERIT TRUE, SET TRUE;
+        `);
+      }
+      if (mode === "preexisting-login-role") {
+        await admin("ALTER ROLE open_loops_runtime LOGIN");
+      }
+      if (mode === "preexisting-third-party-member") {
+        await admin(`
+          CREATE ROLE ${thirdPartyMember} NOLOGIN;
+          GRANT open_loops_owner TO ${thirdPartyMember};
+        `);
+      }
+      if (mode === "preexisting-cross-database") {
+        await admin(`CREATE DATABASE ${crossDatabase} OWNER open_loops_runtime`);
+      }
+    }
+    const url = new URL(DATABASE_URL!);
+    url.pathname = `/${database}`;
+    url.searchParams.delete("host");
+    url.hostname = "127.0.0.1";
+    url.username = bootstrap;
+    url.password = password;
+    probe = PgPoolExecutor.fromConnectionString({
+      connectionString: url.toString(),
+      applicationName: "loops-pg16-bootstrap-membership-regression",
+    });
+    const schema = new PostgresStorage(probe);
+    await schema.migrate({ through: "0008_tenant_prepare" });
+    await assertTenantEnforcementBootstrap(probe.queryClient);
+    failureStage = "migration";
+    if (mode === "preexisting-safe") {
+      const peer = PgPoolExecutor.fromConnectionString({
+        connectionString: url.toString(),
+        applicationName: "loops-pg16-bootstrap-concurrent-peer",
+      });
+      try {
+        await Promise.all([schema.migrate(), new PostgresStorage(peer).migrate()]);
+      } finally {
+        await peer.close();
+      }
+    } else {
+      await schema.migrate();
+    }
+    const setting = await probe.queryClient.get<{ createrole_self_grant: string }>(
+      "SELECT current_setting('createrole_self_grant') AS createrole_self_grant",
+    );
+    const memberships = await probe.queryClient.many<{
+      granted_role: string;
+      admin_option: boolean;
+      inherit_option: boolean;
+      set_option: boolean;
+    }>(`
+      SELECT granted.rolname AS granted_role,
+             membership.admin_option,
+             membership.inherit_option,
+             membership.set_option
+        FROM pg_auth_members membership
+        JOIN pg_roles granted ON granted.oid=membership.roleid
+        JOIN pg_roles member ON member.oid=membership.member
+       WHERE member.rolname=session_user
+         AND granted.rolname IN (
+           'open_loops_owner', 'open_loops_migrator',
+           'open_loops_runtime', 'open_loops_authenticator'
+         )
+       ORDER BY granted.rolname
+    `);
+    const capabilities = await probe.queryClient.get<{
+      owner_settable: boolean;
+      migrator_settable: boolean;
+      runtime_member: boolean;
+      authenticator_member: boolean;
+      ledger_recorded: boolean;
+    }>(`
+      SELECT pg_has_role(session_user, 'open_loops_owner', 'SET') AS owner_settable,
+             pg_has_role(session_user, 'open_loops_migrator', 'SET') AS migrator_settable,
+             pg_has_role(session_user, 'open_loops_runtime', 'MEMBER') AS runtime_member,
+             pg_has_role(session_user, 'open_loops_authenticator', 'MEMBER') AS authenticator_member,
+             EXISTS (
+               SELECT 1 FROM open_loops_schema_migrations WHERE id='0010_tenant_enforce'
+             ) AS ledger_recorded
+    `);
+    return {
+      createroleSelfGrant: setting?.createrole_self_grant,
+      memberships,
+      ownerSettable: capabilities?.owner_settable,
+      migratorSettable: capabilities?.migrator_settable,
+      runtimeMember: capabilities?.runtime_member,
+      authenticatorMember: capabilities?.authenticator_member,
+      ledgerRecorded: capabilities?.ledger_recorded,
+    };
+  } catch (error) {
+    return {
+      error,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      failureStage,
+    };
+  } finally {
+    if (probe) await probe.close();
+    await admin(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`);
+    await admin(`DROP DATABASE IF EXISTS ${crossDatabase} WITH (FORCE)`);
+    await admin(`
+      DO $cleanup$
+      DECLARE role_name TEXT;
+      BEGIN
+        FOREACH role_name IN ARRAY ARRAY[
+          'open_loops_owner', 'open_loops_migrator',
+          'open_loops_runtime', 'open_loops_authenticator'
+        ] LOOP
+          IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname=role_name) THEN
+            EXECUTE format('REVOKE %I FROM %I', role_name, '${bootstrap}');
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='${serviceLogin}') THEN
+              EXECUTE format('REVOKE %I FROM %I', role_name, '${serviceLogin}');
+            END IF;
+          END IF;
+        END LOOP;
+      END
+      $cleanup$;
+      DO $cleanup_third_party$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='${thirdPartyMember}') AND
+           EXISTS (SELECT 1 FROM pg_roles WHERE rolname='open_loops_owner') THEN
+          EXECUTE format('REVOKE open_loops_owner FROM %I', '${thirdPartyMember}');
+        END IF;
+      END
+      $cleanup_third_party$;
+      DROP ROLE IF EXISTS ${serviceLogin};
+      DROP ROLE IF EXISTS ${thirdPartyMember};
+      DROP ROLE IF EXISTS ${bootstrap};
+      DROP ROLE IF EXISTS open_loops_authenticator;
+      DROP ROLE IF EXISTS open_loops_runtime;
+      DROP ROLE IF EXISTS open_loops_migrator;
+      DROP ROLE IF EXISTS open_loops_owner;
+    `);
+  }
+}
+
 function loopInput(name: string, over: Partial<CreateLoopInput> = {}): CreateLoopInput {
   return {
     name,
@@ -76,10 +280,37 @@ suite("PostgresLoopStorage (live)", () => {
   let unsafeMembershipRemoved = false;
   let unsafeDirectPrivilegesRemoved = false;
   let ownedObjectRejected = false;
+  let unsafeServiceLoginRejected = false;
   let bridgeMembershipRemoved = false;
   let adminMembershipRemoved = false;
+  let missingRoleBootstrap: BootstrapMembershipRegression;
+  let preexistingRoleBootstrap: BootstrapMembershipRegression;
+  let unsafeRoleBootstrap: BootstrapMembershipRegression;
+  let serviceLoginBootstrap: BootstrapMembershipRegression;
+  let loginRoleBootstrap: BootstrapMembershipRegression;
+  let thirdPartyMembershipBootstrap: BootstrapMembershipRegression;
+  let crossDatabaseBootstrap: BootstrapMembershipRegression;
 
   beforeAll(async () => {
+    const [inventory] = await adminQuery<{ database_count: number; open_loops_role_count: number }>(`
+      SELECT (SELECT count(*)::int FROM pg_database WHERE NOT datistemplate) AS database_count,
+             (SELECT count(*)::int FROM pg_roles WHERE rolname IN (
+               'open_loops_owner', 'open_loops_migrator',
+               'open_loops_runtime', 'open_loops_authenticator'
+             )) AS open_loops_role_count
+    `);
+    if (inventory?.database_count !== 1 || inventory.open_loops_role_count !== 0) {
+      throw new Error(
+        "LOOPS_TEST_DATABASE_URL must point at an exclusive disposable PostgreSQL cluster with no OpenLoops roles",
+      );
+    }
+    missingRoleBootstrap = await exercisePg16BootstrapMemberships("missing");
+    preexistingRoleBootstrap = await exercisePg16BootstrapMemberships("preexisting-safe");
+    unsafeRoleBootstrap = await exercisePg16BootstrapMemberships("preexisting-unsafe");
+    serviceLoginBootstrap = await exercisePg16BootstrapMemberships("preexisting-service-login");
+    loginRoleBootstrap = await exercisePg16BootstrapMemberships("preexisting-login-role");
+    thirdPartyMembershipBootstrap = await exercisePg16BootstrapMemberships("preexisting-third-party-member");
+    crossDatabaseBootstrap = await exercisePg16BootstrapMemberships("preexisting-cross-database");
     await admin(`CREATE DATABASE ${ISO_DB}`);
     executor = PgPoolExecutor.fromConnectionString({ connectionString: isolatedUrl(), applicationName: "loops-pgstore-test" });
     schema = new PostgresStorage(executor);
@@ -92,15 +323,15 @@ suite("PostgresLoopStorage (live)", () => {
     );
     await admin(`
       DO $roles$ BEGIN
-        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='open_loops_owner') THEN CREATE ROLE open_loops_owner LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS; END IF;
-        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='open_loops_migrator') THEN CREATE ROLE open_loops_migrator LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS; END IF;
-        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='open_loops_runtime') THEN CREATE ROLE open_loops_runtime LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS; END IF;
-        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='open_loops_authenticator') THEN CREATE ROLE open_loops_authenticator LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS; END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='open_loops_owner') THEN CREATE ROLE open_loops_owner NOLOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS; END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='open_loops_migrator') THEN CREATE ROLE open_loops_migrator NOLOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS; END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='open_loops_runtime') THEN CREATE ROLE open_loops_runtime NOLOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS; END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='open_loops_authenticator') THEN CREATE ROLE open_loops_authenticator NOLOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS; END IF;
       END $roles$;
-      ALTER ROLE open_loops_owner LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS;
-      ALTER ROLE open_loops_migrator LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS;
-      ALTER ROLE open_loops_runtime NOINHERIT LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS;
-      ALTER ROLE open_loops_authenticator NOINHERIT LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS;
+      ALTER ROLE open_loops_owner NOLOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS;
+      ALTER ROLE open_loops_migrator NOLOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS;
+      ALTER ROLE open_loops_runtime NOINHERIT NOLOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS;
+      ALTER ROLE open_loops_authenticator NOINHERIT NOLOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS;
       CREATE ROLE ${UNSAFE_LOGIN} LOGIN BYPASSRLS;
       GRANT open_loops_runtime TO ${UNSAFE_LOGIN};
       CREATE ROLE ${CROSS_ROLE_LOGIN} LOGIN;
@@ -164,12 +395,29 @@ suite("PostgresLoopStorage (live)", () => {
         LANGUAGE sql SECURITY DEFINER RETURN 1;
       RESET ROLE;
     `);
+    await admin(`
+      REVOKE open_loops_runtime FROM ${UNSAFE_LOGIN}, ${CROSS_ROLE_LOGIN}, ${BRIDGE_ROLE}, ${ADMIN_LOGIN};
+      REVOKE open_loops_owner FROM ${CROSS_ROLE_LOGIN};
+    `);
     try {
       await schema.migrate();
     } catch (error) {
       ownedObjectRejected = error instanceof Error && error.message.includes("owns database objects");
     }
     await executor.queryClient.execute(`DROP SCHEMA service_owned_probe CASCADE`);
+    await admin(`
+      GRANT open_loops_runtime TO ${UNSAFE_LOGIN}, ${CROSS_ROLE_LOGIN}, ${BRIDGE_ROLE};
+      GRANT open_loops_runtime TO ${ADMIN_LOGIN} WITH ADMIN OPTION;
+    `);
+    try {
+      await schema.migrate();
+    } catch (error) {
+      unsafeServiceLoginRejected = error instanceof Error && error.message.includes("unsafe service login membership");
+    }
+    await admin(`
+      REVOKE open_loops_runtime FROM ${UNSAFE_LOGIN}, ${CROSS_ROLE_LOGIN}, ${ADMIN_LOGIN};
+      REVOKE open_loops_owner FROM ${CROSS_ROLE_LOGIN};
+    `);
     await schema.migrate();
     const unsafeMembership = await executor.queryClient.get(
       `SELECT 1 FROM pg_auth_members membership
@@ -241,13 +489,34 @@ suite("PostgresLoopStorage (live)", () => {
     await admin(`DROP ROLE IF EXISTS ${EXTRA_SERVICE_ROLE}`);
     await admin(`DROP ROLE IF EXISTS ${HOSTILE_FUNCTION_OWNER}`);
     await admin(`DO $cleanup$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='${DRIFT_DATABASE_LOGIN}') THEN REVOKE open_loops_runtime FROM ${DRIFT_DATABASE_LOGIN}; DROP ROLE ${DRIFT_DATABASE_LOGIN}; END IF; END $cleanup$`);
+    await admin(`
+      DROP ROLE IF EXISTS open_loops_authenticator;
+      DROP ROLE IF EXISTS open_loops_runtime;
+      DROP ROLE IF EXISTS open_loops_migrator;
+      DROP ROLE IF EXISTS open_loops_owner;
+    `);
+    const [leftovers] = await adminQuery<{ database_count: number; role_count: number }>(`
+      SELECT (SELECT count(*)::int FROM pg_database
+               WHERE datname='${ISO_DB}' OR datname LIKE 'loops_bootstrap_membership_%'
+                  OR datname LIKE 'loops_cross_database_%') AS database_count,
+             (SELECT count(*)::int FROM pg_roles
+               WHERE rolname IN (
+                 'open_loops_owner', 'open_loops_migrator',
+                 'open_loops_runtime', 'open_loops_authenticator'
+               ) OR rolname LIKE 'loops_bootstrap_%' OR rolname LIKE 'loops_service_login_%'
+                  OR rolname LIKE 'loops_third_party_%') AS role_count
+    `);
+    if (leftovers?.database_count !== 0 || leftovers.role_count !== 0) {
+      throw new Error("PostgreSQL integration test left database or role artifacts behind");
+    }
   });
 
-  test("tenant enforcement normalizes poisoned roles and removes unsafe service members", async () => {
+  test("tenant enforcement rejects unsafe service logins and removes unsafe role bridges", async () => {
     await expect(assertTenantEnforcementBootstrap(executor.queryClient)).resolves.toBeUndefined();
     expect(unsafeMembershipRemoved).toBe(true);
     expect(unsafeDirectPrivilegesRemoved).toBe(true);
     expect(ownedObjectRejected).toBe(true);
+    expect(unsafeServiceLoginRejected).toBe(true);
     expect(bridgeMembershipRemoved).toBe(true);
     expect(adminMembershipRemoved).toBe(true);
     const roles = await executor.queryClient.many<{
@@ -512,6 +781,43 @@ suite("PostgresLoopStorage (live)", () => {
     expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(false);
     await executor.queryClient.execute(`GRANT EXECUTE ON FUNCTION open_loops_authenticate_key(TEXT, TEXT) TO open_loops_authenticator`);
     expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(true);
+  });
+
+  test("PostgreSQL 16 bootstrap rejects implicit/unsafe memberships and accepts exact provider grants", () => {
+    expect(missingRoleBootstrap.failureStage).toBe("preflight");
+    expect(missingRoleBootstrap.errorMessage).toContain("pre-provisioned owner/migrator memberships");
+    expect(unsafeRoleBootstrap.failureStage).toBe("preflight");
+    expect(unsafeRoleBootstrap.errorMessage).toContain("pre-provisioned owner/migrator memberships");
+    expect(serviceLoginBootstrap.failureStage).toBe("preflight");
+    expect(serviceLoginBootstrap.errorMessage).toContain("must run before runtime/authenticator service login memberships");
+    expect(loginRoleBootstrap.failureStage).toBe("preflight");
+    expect(loginRoleBootstrap.errorMessage).toContain("reserved OpenLoops database role open_loops_runtime is LOGIN");
+    expect(thirdPartyMembershipBootstrap.failureStage).toBe("preflight");
+    expect(thirdPartyMembershipBootstrap.errorMessage).toContain("unsafe privileged role membership open_loops_owner");
+    expect(crossDatabaseBootstrap.failureStage).toBe("preflight");
+    expect(crossDatabaseBootstrap.errorMessage).toContain("owns database loops_cross_database_");
+
+    expect(preexistingRoleBootstrap.error).toBeUndefined();
+    expect(preexistingRoleBootstrap.createroleSelfGrant).toBe("");
+    expect(preexistingRoleBootstrap.memberships).toEqual([
+      {
+        granted_role: "open_loops_migrator",
+        admin_option: false,
+        inherit_option: true,
+        set_option: true,
+      },
+      {
+        granted_role: "open_loops_owner",
+        admin_option: false,
+        inherit_option: true,
+        set_option: true,
+      },
+    ]);
+    expect(preexistingRoleBootstrap.ownerSettable).toBe(true);
+    expect(preexistingRoleBootstrap.migratorSettable).toBe(true);
+    expect(preexistingRoleBootstrap.runtimeMember).toBe(false);
+    expect(preexistingRoleBootstrap.authenticatorMember).toBe(false);
+    expect(preexistingRoleBootstrap.ledgerRecorded).toBe(true);
   });
 
   beforeEach(async () => {

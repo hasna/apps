@@ -31,13 +31,48 @@ explicit grantee across every non-system schema, table, sequence, and function
 in the current database, including default `PUBLIC` function execute privileges,
 before granting the exact runtime/auth ACLs.
 The `--enforce-tenancy` login must be a provider-level bootstrap administrator.
-At minimum it must control the `public` schema, have `CREATEROLE`, and be able
-to `SET ROLE` to `open_loops_owner` and `open_loops_migrator`, but PostgreSQL 16
-can require stronger provider authority to normalize all role attributes and
-clean direct service-login grants. Before applying migration `0010`, every
-supported runner transactionally exercises and rolls back the required `ALTER
-ROLE`, schema/database grant, function/table/sequence/schema revoke, and
-`DROP OWNED` operations. A role-attribute approximation is not accepted as proof.
+The four `open_loops_*` roles are cluster-global reserved names. Before
+enforcement, inventory their memberships, database ownership, and
+`pg_shdepend` records across the whole PostgreSQL cluster. They must be NOLOGIN,
+must not own another database, and must have no cross-database dependencies.
+Use a dedicated OpenLoops cluster; a dedicated database alone is insufficient.
+At minimum it must own the database, control the `public` schema, have
+`CREATEROLE`, and be able to `SET ROLE` to `open_loops_owner` and
+`open_loops_migrator`. PostgreSQL 16's default `createrole_self_grant=''`
+creates an implicit creator membership with `ADMIN TRUE`, `INHERIT FALSE`, and
+`SET FALSE`; only a superuser can revoke that row because its grantor is the
+PostgreSQL bootstrap superuser. Therefore a non-superuser enforcement login
+must receive provider-provisioned, preexisting roles plus exactly these direct
+memberships before migration:
+
+- `open_loops_owner` and `open_loops_migrator`: `ADMIN FALSE`, `INHERIT TRUE`,
+  `SET TRUE`;
+- no direct or inherited membership in `open_loops_runtime` or
+  `open_loops_authenticator`;
+- no LOGIN role may yet inherit `open_loops_runtime` or
+  `open_loops_authenticator`. Run enforcement before the provider attaches
+  runtime/authenticator service credentials.
+
+A true superuser may create and normalize the roles in the migration. Before
+applying migration `0010`, every supported runner transactionally exercises and
+rolls back the exact role/membership checks, `SET ROLE`, migration-ledger
+ownership and writes, schema/database grants, function/table/sequence/schema
+revokes, and service-login cleanup. Provider/bootstrap identities are never
+passed to `DROP OWNED`; intended service logins that own database objects still
+fail closed until those objects are reassigned or removed, and unsafe LOGIN
+memberships fail closed instead of being silently detached. After `0010`
+succeeds, provider automation may attach the runtime and authenticator logins to
+only their matching roles with `ADMIN FALSE`, `INHERIT TRUE`, and `SET TRUE`.
+A role-attribute approximation is not accepted as proof.
+The migrator serializes non-dry-run plans with a transaction-scoped advisory
+lock and rereads the ledger after acquiring it. Operators must still quiesce all
+writers and run one migrator. Before mutation, capture a PITR recovery point and
+prove it with an isolated restore rehearsal as described in
+`docs/CUTOVER-RUNBOOK.md`.
+The tenant backfill bundle is a separately approved cutover artifact. Record
+its SHA-256, expected entity/row counts, approver, encrypted delivery path, and
+post-use deletion evidence. Never place bundle contents, API-key material, or
+database credentials in task comments, command output, or repository files.
 
 Out-of-band (operator, owner role through an SSM tunnel):
 
