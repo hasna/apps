@@ -23,6 +23,7 @@ import { verifyApiKey, ApiKeyStore } from "@hasna/contracts/auth";
 import type { ApiKeyVerifier } from "@hasna/contracts/auth";
 import { version as pkgVersion } from "../../package.json";
 import { openapiSpec } from "./openapi.js";
+import { normalizeChannelName } from "../lib/channel-names.js";
 
 export const APP = "conversations";
 const SCOPE_READ = `${APP}:read`;
@@ -80,6 +81,17 @@ export function buildDeps(): ApiServerDeps {
 
 // ---- helpers ----------------------------------------------------------------
 
+function fieldError(field: string, value: string, reason: string, hint: string, status = 400): Response {
+  return json({
+    error: "Validation failed",
+    code: `invalid_${field}`,
+    field,
+    value,
+    reason,
+    hint,
+  }, status);
+}
+
 async function readJson(req: Request): Promise<Record<string, unknown>> {
   const text = await req.text();
   if (!text.trim()) return {};
@@ -92,6 +104,46 @@ async function readJson(req: Request): Promise<Record<string, unknown>> {
 
 function str(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() ? v.trim() : undefined;
+}
+
+function jsonObject(v: unknown): Record<string, unknown> | null {
+  if (v == null) return null;
+  if (typeof v === "string") {
+    if (!v.trim()) return null;
+    try {
+      const parsed = JSON.parse(v);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+    } catch {
+      return null;
+    }
+  }
+  return typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : null;
+}
+
+function jsonStringArray(v: unknown): string[] {
+  if (v == null) return [];
+  if (typeof v === "string") {
+    if (!v.trim()) return [];
+    try {
+      const parsed = JSON.parse(v);
+      return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+    } catch {
+      return [];
+    }
+  }
+  return Array.isArray(v) ? v.filter((item): item is string => typeof item === "string") : [];
+}
+
+function serializeChannel(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...row,
+    description: row.description ?? null,
+    topic: row.topic ?? null,
+    project_id: row.project_id ?? null,
+    archived_at: row.archived_at ?? null,
+    metadata: jsonObject(row.metadata),
+    tags: jsonStringArray(row.tags),
+  };
 }
 
 function clampLimit(raw: string | null, def = 50, max = 500): number {
@@ -256,11 +308,15 @@ async function handleV1(
   // ---- channels ----
   if (sub === "channels" && method === "GET") {
     const includeArchived = url.searchParams.get("include_archived") === "true";
-    const where = includeArchived ? "" : "WHERE archived_at IS NULL";
+    const where = includeArchived ? "" : "WHERE c.archived_at IS NULL";
     const rows = await client.many(
-      `SELECT name, description, topic, project_id, created_by, created_at, archived_at, tags FROM channels ${where} ORDER BY name ASC`,
+      `SELECT
+        c.name, c.description, c.topic, c.project_id, c.created_by, c.created_at, c.archived_at, c.metadata, c.tags,
+        (SELECT COUNT(*)::int FROM channel_members WHERE channel = c.name) AS member_count,
+        (SELECT COUNT(*)::int FROM messages WHERE channel = c.name) AS message_count
+       FROM channels c ${where} ORDER BY c.name ASC`,
     );
-    return json({ channels: rows });
+    return json({ channels: rows.map((row) => serializeChannel(row as Record<string, unknown>)) });
   }
 
   if (sub === "channels" && method === "POST") {
@@ -268,28 +324,82 @@ async function handleV1(
     const name = str(body.name);
     const createdBy = str(body.created_by) ?? agent ?? undefined;
     if (!name || !createdBy) return json({ error: "name and created_by are required" }, 400);
-    const existing = await client.get(`SELECT name FROM channels WHERE name = $1`, [name]);
+    const channelName = normalizeChannelName(name);
+    if (!channelName) return fieldError("name", name, "Channel name normalizes to an empty value.", "Provide at least one letter or digit in the channel name.");
+    const existing = await client.get(`SELECT name FROM channels WHERE name = $1`, [channelName]);
     if (existing) return json({ error: "Channel already exists" }, 409);
+    const projectId = str(body.project_id) ?? null;
+    if (projectId) {
+      const project = await client.get(`SELECT id FROM projects WHERE id = $1`, [projectId]);
+      if (!project) {
+        return fieldError(
+          "project_id",
+          projectId,
+          "No conversations project exists with that id.",
+          "Create or resolve the conversations project first with POST/GET /v1/projects, then retry with the returned project.id. If you only need the Projects canonical channel, create or send to that channel name without --project.",
+        );
+      }
+    }
+    const metadata = jsonObject(body.metadata);
+    if ("metadata" in body && body.metadata != null && !metadata) {
+      return fieldError("metadata", String(body.metadata), "metadata must be a JSON object.", "Pass an object such as {\"channel_schema\":{\"class\":\"loop-lane\"}}.");
+    }
+    const tags = jsonStringArray(body.tags);
+    if ("tags" in body && body.tags != null && (!Array.isArray(body.tags) || tags.length !== body.tags.length)) {
+      return fieldError("tags", String(body.tags), "tags must be an array of strings.", "Pass tags as a JSON string array, for example [\"team:harness\"].");
+    }
     const row = await client.get(
-      `INSERT INTO channels (name, description, topic, project_id, created_by)
-       VALUES ($1,$2,$3,$4,$5) RETURNING name, description, topic, project_id, created_by, created_at`,
-      [name, str(body.description) ?? null, str(body.topic) ?? null, str(body.project_id) ?? null, createdBy],
+      `INSERT INTO channels (name, description, topic, project_id, created_by, metadata, tags)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       RETURNING name, description, topic, project_id, created_by, created_at, archived_at, metadata, tags`,
+      [
+        channelName,
+        str(body.description) ?? null,
+        str(body.topic) ?? null,
+        projectId,
+        createdBy,
+        metadata ? JSON.stringify(metadata) : null,
+        tags.length ? JSON.stringify(tags) : null,
+      ],
     );
-    return json({ channel: row }, 201);
+    await client.execute(
+      `INSERT INTO channel_members (channel, agent) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+      [channelName, createdBy],
+    );
+    return json({ channel: { ...serializeChannel(row as Record<string, unknown>), member_count: 1 } }, 201);
   }
 
   const chanMatch = sub.match(/^channels\/([^/]+)$/);
   if (chanMatch) {
-    const name = decodeURIComponent(chanMatch[1]);
+    const name = normalizeChannelName(decodeURIComponent(chanMatch[1]));
     if (method === "GET") {
-      const row = await client.get(`SELECT * FROM channels WHERE name = $1`, [name]);
+      const row = await client.get(
+        `SELECT
+          c.*,
+          (SELECT COUNT(*)::int FROM channel_members WHERE channel = c.name) AS member_count,
+          (SELECT COUNT(*)::int FROM messages WHERE channel = c.name) AS message_count
+         FROM channels c WHERE c.name = $1`,
+        [name],
+      );
       if (!row) return json({ error: "Channel not found" }, 404);
-      return json({ channel: row });
+      return json({ channel: serializeChannel(row as Record<string, unknown>) });
     }
     if (method === "PATCH") {
       const body = await readJson(req);
       const sets: string[] = [];
       const params: unknown[] = [];
+      const projectId = str(body.project_id) ?? null;
+      if ("project_id" in body && projectId) {
+        const project = await client.get(`SELECT id FROM projects WHERE id = $1`, [projectId]);
+        if (!project) {
+          return fieldError(
+            "project_id",
+            projectId,
+            "No conversations project exists with that id.",
+            "Use GET /v1/projects/{id-or-name} or POST /v1/projects to resolve the conversations project id before linking a channel.",
+          );
+        }
+      }
       for (const field of ["description", "topic", "project_id"] as const) {
         if (field in body) { params.push(str(body[field]) ?? null); sets.push(`${field} = $${params.length}`); }
       }
@@ -300,13 +410,13 @@ async function handleV1(
         params,
       );
       if (!row) return json({ error: "Channel not found" }, 404);
-      return json({ channel: row });
+      return json({ channel: serializeChannel(row as Record<string, unknown>) });
     }
   }
 
   const chanArchive = sub.match(/^channels\/([^/]+)\/archive$/);
   if (chanArchive && method === "POST") {
-    const name = decodeURIComponent(chanArchive[1]);
+    const name = normalizeChannelName(decodeURIComponent(chanArchive[1]));
     const row = await client.get(
       `UPDATE channels SET archived_at = NOW()::text WHERE name = $1 RETURNING name, archived_at`,
       [name],

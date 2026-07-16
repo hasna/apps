@@ -7,28 +7,59 @@ import { verifyApiKey, ApiKeyStore } from "@hasna/contracts/auth";
 // Exercises the router + auth without a live Postgres.
 function makeFakeClient() {
   const channels: Record<string, any> = {};
+  const channelMembers = new Set<string>();
   const messages: any[] = [];
+  const projects: Record<string, any> = {
+    "proj-valid": { id: "proj-valid", name: "Chief of Harness" },
+  };
   let nextId = 1;
   const client = {
     async many(sql: string, _p: readonly unknown[] = []): Promise<any[]> {
-      if (/FROM channels/i.test(sql)) return Object.values(channels);
+      if (/FROM channels/i.test(sql)) {
+        return Object.values(channels).map((row) => ({
+          ...row,
+          member_count: [...channelMembers].filter((entry) => entry.startsWith(`${row.name}:`)).length,
+          message_count: messages.filter((message) => message.channel === row.name).length,
+        }));
+      }
       if (/FROM messages/i.test(sql)) return messages.slice().reverse();
+      if (/FROM projects/i.test(sql)) return Object.values(projects);
       if (/revoked_at IS NOT NULL/i.test(sql)) return [];
       return [];
     },
     async get(sql: string, p: readonly unknown[] = []): Promise<any> {
       if (/SELECT 1 AS ok/i.test(sql)) return { ok: 1 };
+      if (/SELECT id FROM projects WHERE id/i.test(sql)) {
+        return projects[(p as any[])[0]] ?? null;
+      }
       if (/INSERT INTO channels/i.test(sql)) {
-        const [name, description, topic, project_id, created_by] = p as any[];
-        const row = { name, description, topic, project_id, created_by, created_at: new Date().toISOString() };
+        const [name, description, topic, project_id, created_by, metadata, tags] = p as any[];
+        const row = {
+          name,
+          description,
+          topic,
+          project_id,
+          created_by,
+          metadata,
+          tags,
+          archived_at: null,
+          created_at: new Date().toISOString(),
+        };
         channels[name] = row;
         return row;
       }
       if (/SELECT name FROM channels WHERE name/i.test(sql)) {
         return channels[(p as any[])[0]] ? { name: (p as any[])[0] } : null;
       }
-      if (/SELECT \* FROM channels WHERE name/i.test(sql) || /SELECT name, description/i.test(sql)) {
-        return channels[(p as any[])[0]] ?? null;
+      if (/FROM channels c WHERE c\.name/i.test(sql) || /SELECT \* FROM channels WHERE name/i.test(sql) || /SELECT name, description/i.test(sql)) {
+        const row = channels[(p as any[])[0]];
+        return row
+          ? {
+              ...row,
+              member_count: [...channelMembers].filter((entry) => entry.startsWith(`${row.name}:`)).length,
+              message_count: messages.filter((message) => message.channel === row.name).length,
+            }
+          : null;
       }
       if (/INSERT INTO messages/i.test(sql)) {
         const [session_id, from_agent, to_agent, channel, project_id, content, priority, blocking] = p as any[];
@@ -36,9 +67,20 @@ function makeFakeClient() {
         messages.push(row);
         return row;
       }
+      if (/INSERT INTO projects/i.test(sql)) {
+        const [id, name, description, path, repository, created_by] = p as any[];
+        const row = { id, name, description, path, repository, created_by, status: "active", created_at: new Date().toISOString() };
+        projects[id] = row;
+        return row;
+      }
       return null;
     },
-    async execute(_sql: string, _p: readonly unknown[] = []): Promise<void> {},
+    async execute(sql: string, p: readonly unknown[] = []): Promise<void> {
+      if (/INSERT INTO channel_members/i.test(sql)) {
+        const [channel, agent] = p as any[];
+        channelMembers.add(`${channel}:${agent}`);
+      }
+    },
   };
   return client;
 }
@@ -130,6 +172,75 @@ describe("conversations-serve", () => {
 
     const list = await (await fetch(`${base}/v1/messages?channel=deploys`, { headers: { "x-api-key": rwKey } })).json();
     expect(list.messages.length).toBeGreaterThan(0);
+  });
+
+  test("POST /v1/channels links a valid project id", async () => {
+    const created = await fetch(`${base}/v1/channels`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "internal-chief-of-harness",
+        created_by: "test",
+        project_id: "proj-valid",
+      }),
+    });
+
+    expect(created.status).toBe(201);
+    const body = await created.json();
+    expect(body.channel.project_id).toBe("proj-valid");
+  });
+
+  test("POST /v1/channels preserves metadata/tags, normalizes name, and auto-joins creator", async () => {
+    const created = await fetch(`${base}/v1/channels`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "#Internal Chief Harness Class!",
+        created_by: "creator-agent",
+        project_id: "proj-valid",
+        metadata: { channel_schema: { class: "loop-lane" }, owner: "harness" },
+        tags: ["team:harness", "project"],
+      }),
+    });
+
+    expect(created.status).toBe(201);
+    const body = await created.json();
+    expect(body.channel).toMatchObject({
+      name: "internal-chief-harness-class",
+      project_id: "proj-valid",
+      metadata: { channel_schema: { class: "loop-lane" }, owner: "harness" },
+      tags: ["team:harness", "project"],
+      member_count: 1,
+    });
+
+    const got = await fetch(`${base}/v1/channels/%23Internal%20Chief%20Harness%20Class!`, { headers: { "x-api-key": rwKey } });
+    expect(got.status).toBe(200);
+    const fetched = await got.json();
+    expect(fetched.channel.metadata.channel_schema.class).toBe("loop-lane");
+    expect(fetched.channel.member_count).toBe(1);
+  });
+
+  test("POST /v1/channels reports rejected project_id with field and reason", async () => {
+    const created = await fetch(`${base}/v1/channels`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "internal-chief-of-harness-rejected",
+        created_by: "test",
+        project_id: "wks_xMeijBDhYFBzxXtPlttyw",
+      }),
+    });
+
+    expect(created.status).toBe(400);
+    const body = await created.json();
+    expect(body).toMatchObject({
+      error: "Validation failed",
+      code: "invalid_project_id",
+      field: "project_id",
+      value: "wks_xMeijBDhYFBzxXtPlttyw",
+    });
+    expect(body.reason).toContain("No conversations project exists");
+    expect(body.hint).toContain("/v1/projects");
   });
 
   test("POST /v1/messages validates required fields", async () => {

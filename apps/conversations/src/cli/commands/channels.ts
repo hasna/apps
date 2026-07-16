@@ -1,7 +1,8 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import { recordReadReceiptsBatch, sendMessage, readMessages } from "../../lib/messages.js";
-import { createChannel, updateChannel, renameChannel, archiveChannel, unarchiveChannel, listChannels, getChannel, joinChannel, leaveChannel, getChannelMembers } from "../../lib/channels.js";
+import { updateChannel, renameChannel, archiveChannel, unarchiveChannel, listChannels, getChannel, joinChannel, leaveChannel, getChannelMembers } from "../../lib/channels.js";
+import { createChannel } from "../../lib/cloud-store.js";
 import { listChannelNotificationSubscriptions, markChannelNotificationsRead, subscribeToChannelNotifications, unsubscribeFromChannelNotifications } from "../../lib/channel-notifications.js";
 import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
@@ -61,7 +62,7 @@ export function registerChannelCommands(program: Command): void {
     .option("--class <class>", "Channel class stored at metadata.channel_schema.class (e.g. fleet, package, product, loop-lane, initiative, personal)")
     .option("--from <agent>", "Creator agent ID")
     .option("-j, --json", "Output as JSON")
-    .action((name, opts) => {
+    .action(async (name, opts) => {
       const agent = resolveIdentity(opts.from).trim();
       const channelName = typeof name === "string" ? name.trim() : "";
       if (!agent) {
@@ -82,7 +83,7 @@ export function registerChannelCommands(program: Command): void {
         const channelClass = typeof opts.class === "string" && opts.class.trim()
           ? opts.class.trim()
           : undefined;
-        const sp = createChannel(channelName, agent, {
+        const sp = await createChannel(channelName, agent, {
           description,
           topic,
           project_id: opts.project,

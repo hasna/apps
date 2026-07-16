@@ -20,12 +20,13 @@
  */
 
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
-import type { Message, SendMessageOptions } from "../types.js";
+import type { Channel, Message, SendMessageOptions } from "../types.js";
 import {
   sendMessage as localSendMessage,
   getMessageById as localGetMessageById,
   deleteMessage as localDeleteMessage,
 } from "./messages.js";
+import { createChannel as localCreateChannel } from "./channels.js";
 
 const APP = "conversations";
 const RESOURCE = "messages";
@@ -47,12 +48,65 @@ function isHttpStatus(error: unknown, status: number): boolean {
   );
 }
 
+function errorStatus(error: unknown): number | null {
+  return error && typeof error === "object" && typeof (error as { status?: unknown }).status === "number"
+    ? (error as { status: number }).status
+    : null;
+}
+
+function errorBody(error: unknown): unknown {
+  if (!error || typeof error !== "object") return null;
+  const candidate = error as Record<string, unknown>;
+  return candidate.body ?? candidate.data ?? candidate.responseBody ?? null;
+}
+
+function textField(body: unknown, field: string): string | null {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const value = (body as Record<string, unknown>)[field];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function formatCloudError(action: string, error: unknown): Error {
+  const status = errorStatus(error);
+  const body = errorBody(error);
+  const detail = [
+    textField(body, "error"),
+    textField(body, "field") ? `field=${textField(body, "field")}` : null,
+    textField(body, "reason"),
+    textField(body, "hint") ? `hint: ${textField(body, "hint")}` : null,
+  ].filter(Boolean).join("; ");
+  const message = status
+    ? `${action} failed with HTTP ${status}${detail ? `: ${detail}` : ""}`
+    : `${action} failed${detail ? `: ${detail}` : `: ${(error as Error)?.message ?? String(error)}`}`;
+  return new Error(message);
+}
+
+function normalizeCloudChannel(row: Partial<Channel>): Channel {
+  return {
+    name: row.name ?? "",
+    description: row.description ?? null,
+    topic: row.topic ?? null,
+    project_id: row.project_id ?? null,
+    created_by: row.created_by ?? "",
+    created_at: row.created_at ?? "",
+    archived_at: row.archived_at ?? null,
+    metadata: row.metadata ?? null,
+    tags: row.tags ?? [],
+  };
+}
+
 /**
  * Return an env in which `self_hosted` is implied when the API url + key are
  * present but no explicit storage mode is set. Leaves an explicit mode
- * (including `local`) untouched, so the flip stays reversible.
+ * (including `local`) untouched, so the flip stays reversible. A command-level
+ * SQLite DB path is treated as an explicit local override; otherwise local CLI
+ * test/dev commands can accidentally write to cloud when cloud credentials are
+ * exported globally.
  */
 export function conversationsCloudEnv(env: Env = process.env): Env {
+  if (env.HASNA_CONVERSATIONS_DB_PATH || env.CONVERSATIONS_DB_PATH) {
+    return { ...env, HASNA_CONVERSATIONS_STORAGE_MODE: "local" };
+  }
   const url = env.HASNA_CONVERSATIONS_API_URL ?? env.CONVERSATIONS_API_URL;
   const key = env.HASNA_CONVERSATIONS_API_KEY ?? env.CONVERSATIONS_API_KEY;
   const mode = env.HASNA_CONVERSATIONS_STORAGE_MODE ?? env.HASNA_CONVERSATIONS_MODE;
@@ -89,6 +143,30 @@ export async function sendMessage(opts: SendMessageOptions, env: Env = process.e
     blocking: opts.blocking === true,
   });
   return body.message;
+}
+
+export async function createChannel(
+  name: string,
+  createdBy: string,
+  options?: { description?: string; topic?: string; project_id?: string; metadata?: Record<string, unknown>; tags?: string[] },
+  env: Env = process.env,
+): Promise<Channel> {
+  const client = resolveConversationsCloud(env);
+  if (!client) return localCreateChannel(name, createdBy, options);
+  try {
+    const body = await client.create<{ channel: Partial<Channel> }>("channels", {
+      name,
+      created_by: createdBy,
+      description: options?.description,
+      topic: options?.topic,
+      project_id: options?.project_id,
+      metadata: options?.metadata,
+      tags: options?.tags,
+    });
+    return normalizeCloudChannel(body.channel);
+  } catch (error) {
+    throw formatCloudError("Cloud channel create", error);
+  }
 }
 
 export async function getMessageById(id: number, env: Env = process.env): Promise<Message | null> {

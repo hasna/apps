@@ -7,6 +7,18 @@
 import { version as pkgVersion } from "../../package.json";
 
 const okObject = { type: "object", additionalProperties: true } as const;
+const errorObject = {
+  type: "object",
+  additionalProperties: true,
+  properties: {
+    error: { type: "string" },
+    code: { type: "string" },
+    field: { type: "string" },
+    value: { type: "string" },
+    reason: { type: "string" },
+    hint: { type: "string" },
+  },
+} as const;
 
 export const openapiSpec = {
   openapi: "3.1.0",
@@ -47,6 +59,8 @@ export const openapiSpec = {
           created_by: { type: "string" },
           created_at: { type: "string" },
           archived_at: { type: "string", nullable: true },
+          metadata: { type: "object", nullable: true, additionalProperties: true },
+          tags: { type: "array", items: { type: "string" } },
         },
       },
       Project: {
@@ -159,10 +173,24 @@ export const openapiSpec = {
           required: true,
           content: { "application/json": { schema: {
             type: "object", required: ["name"],
-            properties: { name: { type: "string" }, created_by: { type: "string" }, description: { type: "string" }, topic: { type: "string" }, project_id: { type: "string" } },
+            properties: {
+              name: { type: "string" },
+              created_by: { type: "string" },
+              description: { type: "string" },
+              topic: { type: "string" },
+              project_id: { type: "string" },
+              metadata: { type: "object", additionalProperties: true },
+              tags: { type: "array", items: { type: "string" } },
+            },
           } } },
         },
-        responses: { "201": { description: "created", content: { "application/json": { schema: okObject } } } },
+        responses: {
+          "201": { description: "created", content: { "application/json": { schema: okObject } } },
+          "400": {
+            description: "validation error, including invalid project_id",
+            content: { "application/json": { schema: errorObject } },
+          },
+        },
       },
     },
     "/v1/channels/{name}": {

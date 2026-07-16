@@ -2,11 +2,11 @@
 // Regenerate: bun run sdk:generate
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: ConversationsClient 0.3.3
+// Source: ConversationsClient 0.3.5
 
 export interface Message { "id"?: number; "uuid"?: string; "session_id"?: string; "from_agent"?: string; "to_agent"?: string; "channel"?: string | null; "project_id"?: string | null; "content"?: string; "priority"?: string; "blocking"?: boolean; "created_at"?: string }
 
-export interface Channel { "name"?: string; "description"?: string | null; "topic"?: string | null; "project_id"?: string | null; "created_by"?: string; "created_at"?: string; "archived_at"?: string | null }
+export interface Channel { "name"?: string; "description"?: string | null; "topic"?: string | null; "project_id"?: string | null; "created_by"?: string; "created_at"?: string; "archived_at"?: string | null; "metadata"?: Record<string, unknown> | null; "tags"?: Array<string> }
 
 export interface Project { "id"?: string; "name"?: string; "description"?: string | null; "path"?: string | null; "repository"?: string | null; "created_by"?: string; "status"?: string; "created_at"?: string }
 
@@ -28,6 +28,20 @@ export class ApiError extends Error {
     super(message);
     this.name = "ApiError";
   }
+}
+
+function apiErrorMessage(method: string, path: string, status: number, body: unknown): string {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return `${method} ${path} failed: ${status}`;
+  }
+  const record = body as Record<string, unknown>;
+  const parts = [
+    typeof record.error === "string" ? record.error : null,
+    typeof record.field === "string" ? `field=${record.field}` : null,
+    typeof record.reason === "string" ? record.reason : null,
+    typeof record.hint === "string" ? `hint: ${record.hint}` : null,
+  ].filter(Boolean);
+  return `${method} ${path} failed: ${status}${parts.length ? `: ${parts.join("; ")}` : ""}`;
 }
 
 export class ConversationsClient {
@@ -62,7 +76,7 @@ export class ConversationsClient {
     const text = await response.text();
     const data = text ? (() => { try { return JSON.parse(text); } catch { return text; } })() : undefined;
     if (!response.ok) {
-      throw new ApiError(response.status, `${method} ${path} failed: ${response.status}`, data);
+      throw new ApiError(response.status, apiErrorMessage(method, path, response.status, data), data);
     }
     return data as T;
   }
@@ -109,7 +123,7 @@ export class ConversationsClient {
       });
     }
 
-    async createChannel(body: { "name": string; "created_by"?: string; "description"?: string; "topic"?: string; "project_id"?: string }, init?: RequestInit): Promise<Record<string, unknown>> {
+    async createChannel(body: { "name": string; "created_by"?: string; "description"?: string; "topic"?: string; "project_id"?: string; "metadata"?: Record<string, unknown>; "tags"?: Array<string> }, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("POST", `/v1/channels`, {
         body,
         query: undefined,
