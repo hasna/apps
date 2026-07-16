@@ -42,6 +42,12 @@ loopback authentication bypass.
 
 Before step 1, satisfy and preserve evidence for these hard gates:
 
+- For the shared `apps` to dedicated `loops` database transfer lane, use only
+  the selective logical transfer in `docs/SHARED-DATABASE-TRANSFER.md`. Do not
+  snapshot-restore the shared cluster or shared database into the dedicated
+  OpenLoops target. The protected workflow may start only the fixed
+  `bun dist/serve/index.js shared-to-dedicated-transfer` ECS command, with DSNs
+  supplied by ECS task secrets.
 - Use a dedicated OpenLoops PostgreSQL cluster, not only a dedicated database.
   PostgreSQL roles are cluster-global: inventory every database, role
   membership, database owner, and `pg_shdepend` row for the four reserved

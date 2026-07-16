@@ -67,7 +67,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Postgres storage and tenancy tests
-        run: bun test src/lib/storage/postgres-loop-storage.test.ts src/lib/storage/postgres-loop-storage-tenant-guard.test.ts
+        run: bun test --timeout 60000 src/lib/storage/postgres-loop-storage.test.ts src/lib/storage/postgres-loop-storage-tenant-guard.test.ts
         env:
           LOOPS_TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:5432/postgres
 

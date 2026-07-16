@@ -1,0 +1,170 @@
+name: Shared database transfer
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type "transfer openloops shared source" to run the protected ECS task
+        required: true
+        type: string
+
+concurrency:
+  group: shared-database-transfer
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+  ECS_CLUSTER_ARN: ${{ vars.LOOPS_TRANSFER_ECS_CLUSTER_ARN }}
+  ECS_TASK_DEFINITION_ARN: ${{ vars.LOOPS_TRANSFER_ECS_TASK_DEFINITION_ARN }}
+  ECS_CONTAINER_NAME: ${{ vars.LOOPS_TRANSFER_ECS_CONTAINER_NAME }}
+  ECS_SUBNET_IDS: ${{ vars.LOOPS_TRANSFER_ECS_SUBNET_IDS }}
+  ECS_SECURITY_GROUP_IDS: ${{ vars.LOOPS_TRANSFER_ECS_SECURITY_GROUP_IDS }}
+  CONFIRMATION: ${{ inputs.confirmation }}
+
+jobs:
+  source-side-transfer:
+    name: Run fixed logical transfer task
+    runs-on: ubuntu-24.04-arm
+    environment: shared-database-transfer
+    timeout-minutes: 120
+    steps:
+      - name: Validate protected dispatch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ "${CONFIRMATION}" != "transfer openloops shared source" ]]; then
+            echo "confirmation must exactly match: transfer openloops shared source" >&2
+            exit 1
+          fi
+          for name in AWS_REGION AWS_ROLE_ARN ECS_CLUSTER_ARN ECS_TASK_DEFINITION_ARN ECS_CONTAINER_NAME ECS_SUBNET_IDS ECS_SECURITY_GROUP_IDS; do
+            if [[ -z "${!name}" ]]; then
+              echo "${name} repository or environment variable is required" >&2
+              exit 1
+            fi
+          done
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          aws-region: ${{ vars.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-session-name: openloops-db-transfer-${{ github.run_id }}
+          role-duration-seconds: 3600
+          mask-aws-account-id: true
+          unset-current-credentials: true
+
+      - name: Run transfer task
+        id: run-task
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          IFS=',' read -r -a subnets <<<"${ECS_SUBNET_IDS}"
+          IFS=',' read -r -a security_groups <<<"${ECS_SECURITY_GROUP_IDS}"
+          subnet_json="$(printf '%s\n' "${subnets[@]}" | jq -R . | jq -cs .)"
+          security_group_json="$(printf '%s\n' "${security_groups[@]}" | jq -R . | jq -cs .)"
+          overrides="$(jq -cn \
+            --arg name "${ECS_CONTAINER_NAME}" \
+            '{containerOverrides:[{name:$name,command:["bun","dist/serve/index.js","shared-to-dedicated-transfer"]}]}')"
+          network_configuration="$(jq -cn \
+            --argjson subnets "${subnet_json}" \
+            --argjson securityGroups "${security_group_json}" \
+            '{awsvpcConfiguration:{subnets:$subnets,securityGroups:$securityGroups,assignPublicIp:"DISABLED"}}')"
+          task_arn="$(aws ecs run-task \
+            --cluster "${ECS_CLUSTER_ARN}" \
+            --task-definition "${ECS_TASK_DEFINITION_ARN}" \
+            --launch-type FARGATE \
+            --network-configuration "${network_configuration}" \
+            --overrides "${overrides}" \
+            --started-by "github-${GITHUB_RUN_ID}" \
+            --no-enable-execute-command \
+            --query 'tasks[0].taskArn' \
+            --output text)"
+          if [[ ! "${task_arn}" =~ ^arn: ]]; then
+            echo "ECS did not return a task ARN" >&2
+            exit 1
+          fi
+          printf 'task_arn=%s\n' "${task_arn}" >> "${GITHUB_OUTPUT}"
+
+      - name: Wait for completion
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          task_arn="${{ steps.run-task.outputs.task_arn }}"
+          if [[ ! "${task_arn}" =~ ^arn: ]]; then
+            echo "transfer task ARN is missing" >&2
+            exit 1
+          fi
+
+          wait_for_terminal() {
+            local cleanup_task cleanup_status
+            for attempt in {1..40}; do
+              cleanup_task="$(aws ecs describe-tasks --cluster "${ECS_CLUSTER_ARN}" --tasks "${task_arn}" --output json 2>/dev/null || true)"
+              cleanup_status="$(jq -r '.tasks[0].lastStatus // ""' <<<"${cleanup_task}" 2>/dev/null || true)"
+              if [[ "${cleanup_status}" == "STOPPED" ]]; then
+                return 0
+              fi
+              sleep 15
+            done
+            return 1
+          }
+
+          cleanup_started_task() {
+            local reason="$1"
+            local cleanup_task cleanup_status
+            echo "${reason}" >&2
+            cleanup_task="$(aws ecs describe-tasks --cluster "${ECS_CLUSTER_ARN}" --tasks "${task_arn}" --output json 2>/dev/null || true)"
+            cleanup_status="$(jq -r '.tasks[0].lastStatus // ""' <<<"${cleanup_task}" 2>/dev/null || true)"
+            if [[ "${cleanup_status}" != "STOPPED" ]]; then
+              aws ecs stop-task \
+                --cluster "${ECS_CLUSTER_ARN}" \
+                --task "${task_arn}" \
+                --reason "GitHub workflow post-start failure" \
+                --output json >/dev/null || echo "failed to request transfer task stop" >&2
+            fi
+            if ! wait_for_terminal; then
+              echo "transfer task cleanup did not reach STOPPED" >&2
+              return 1
+            fi
+            return 0
+          }
+
+          if ! aws ecs wait tasks-stopped --cluster "${ECS_CLUSTER_ARN}" --tasks "${task_arn}"; then
+            cleanup_started_task "waiting for transfer task failed; stopping started task" || true
+            exit 1
+          fi
+          if ! task="$(aws ecs describe-tasks --cluster "${ECS_CLUSTER_ARN}" --tasks "${task_arn}" --output json)"; then
+            cleanup_started_task "describing transfer task failed; stopping started task" || true
+            exit 1
+          fi
+          if ! exit_code="$(jq -er --arg name "${ECS_CONTAINER_NAME}" '.tasks[0].containers[] | select(.name == $name) | .exitCode' <<<"${task}")"; then
+            cleanup_started_task "reading transfer task exit code failed; verifying terminal state" || true
+            exit 1
+          fi
+          stop_code="$(jq -r '.tasks[0].stopCode // ""' <<<"${task}")"
+          stopped_reason="$(jq -r '.tasks[0].stoppedReason // ""' <<<"${task}")"
+          if [[ "${exit_code}" != "0" ]]; then
+            echo "transfer task failed: exit=${exit_code} stopCode=${stop_code} reason=${stopped_reason}" >&2
+            if ! wait_for_terminal; then
+              echo "transfer task cleanup did not reach STOPPED" >&2
+            fi
+            exit 1
+          fi
+
+      - name: Publish transfer summary
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          {
+            echo "## OpenLoops shared database transfer"
+            echo
+            echo "- task ARN: \`${{ steps.run-task.outputs.task_arn || 'not-started' }}\`"
+            echo "- command: \`bun dist/serve/index.js shared-to-dedicated-transfer\`"
+            echo "- source DSN inputs: \`none from GitHub; ECS task secrets only\`"
+            echo "- snapshot restore: \`not available\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
