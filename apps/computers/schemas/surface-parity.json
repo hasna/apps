@@ -1,8 +1,8 @@
 {
-  "version": 1,
+  "version": 2,
   "package": "@hasna/computers",
   "binaries": ["computers", "computers-serve", "computers-mcp", "computers-worker", "computers-resident", "computers-migrate"],
-  "exports": [".", "./sdk", "./contracts", "./providers", "./storage"],
+  "exports": [".", "./sdk", "./contracts", "./providers", "./local", "./storage"],
   "mcpTools": ["computers_list", "computers_get", "computers_operations", "computers_exec_request", "computers_install_plan", "computers_provider_readiness"],
   "mcpAnnotations": {
     "computers_list": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
@@ -13,13 +13,111 @@
     "computers_provider_readiness": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false }
   },
   "resources": {
-    "computers": { "rest": true, "sdk": true, "cli": true, "mcpRead": true },
-    "computerCreateGrants": { "rest": true, "sdk": true, "cli": true, "mcp": false },
-    "operations": { "rest": true, "sdk": true, "cli": true, "mcpRead": true },
-    "execRequest": { "rest": true, "sdk": true, "cli": true, "mcp": true },
-    "installPlan": { "rest": true, "sdk": true, "cli": true, "mcp": true },
-    "installApply": { "rest": true, "sdk": true, "cli": true, "mcp": false },
-    "providerReadiness": { "rest": true, "sdk": true, "cli": true, "mcp": true }
+    "controller": {
+      "rest": ["GET /health", "GET /ready", "GET /version", "GET /openapi.json"],
+      "sdk": [],
+      "sdkOmission": "Controller process administration is intentionally outside the remote SDK.",
+      "cli": ["init", "serve", "worker", "doctor", "db migrate", "local config validate", "local config probe", "local config canary"],
+      "mcp": [],
+      "mcpOmission": "Controller administration and local-provider configuration are not agent tools."
+    },
+    "computers": {
+      "rest": ["GET /v1/computers", "POST /v1/computers", "GET /v1/computers/{computerId}"],
+      "sdk": ["listComputers", "createComputer", "getComputer"],
+      "cli": ["computer list", "computer create", "computer get", "computer status"],
+      "mcp": ["computers_list", "computers_get"]
+    },
+    "computerAdoption": {
+      "rest": ["POST /v1/computers/adopt"],
+      "sdk": ["adoptComputer"],
+      "cli": ["computer adopt"],
+      "mcp": [],
+      "mcpOmission": "Physical-machine adoption remains an administrator-controlled operation."
+    },
+    "lifecycle": {
+      "rest": ["POST /v1/computers/{computerId}/start", "POST /v1/computers/{computerId}/stop", "POST /v1/computers/{computerId}/quarantine", "POST /v1/computers/{computerId}/delete"],
+      "sdk": ["requestLifecycle"],
+      "cli": ["computer start", "computer stop", "computer quarantine", "computer delete"],
+      "mcp": [],
+      "mcpOmission": "Destructive and state-changing lifecycle controls remain outside the safe MCP subset."
+    },
+    "profiles": {
+      "rest": ["GET /v1/profiles", "POST /v1/profiles"],
+      "sdk": ["listProfiles", "createProfile"],
+      "cli": ["profiles list", "profiles create"],
+      "mcp": [],
+      "mcpOmission": "Profile administration remains outside the safe MCP subset."
+    },
+    "computerCreateGrants": {
+      "rest": ["GET /v1/computer-create-grants", "POST /v1/computer-create-grants"],
+      "sdk": ["listComputerGrants", "createComputerGrant"],
+      "cli": ["grants list", "grants create"],
+      "mcp": [],
+      "mcpOmission": "Delegation grant administration remains outside the safe MCP subset."
+    },
+    "operations": {
+      "rest": ["GET /v1/operations"],
+      "sdk": ["listOperations"],
+      "cli": ["operations", "install history"],
+      "mcp": ["computers_operations"]
+    },
+    "execRequest": {
+      "rest": ["POST /v1/computers/{computerId}/exec"],
+      "sdk": ["requestExec"],
+      "cli": ["exec request"],
+      "mcp": ["computers_exec_request"]
+    },
+    "installPlan": {
+      "rest": ["POST /v1/computers/{computerId}/install/plan"],
+      "sdk": ["installPlan"],
+      "cli": ["install plan"],
+      "mcp": ["computers_install_plan"]
+    },
+    "installApply": {
+      "rest": ["POST /v1/computers/{computerId}/install/apply"],
+      "sdk": ["installApply"],
+      "cli": ["install apply"],
+      "mcp": [],
+      "mcpOmission": "Install mutation requires an externally approved ticket and is not an MCP tool."
+    },
+    "installPolicy": {
+      "rest": ["GET /v1/computers/{computerId}/install/policy", "POST /v1/computers/{computerId}/install/policy"],
+      "sdk": ["getInstallPolicy", "createInstallPolicy"],
+      "cli": ["policies list", "policies set"],
+      "mcp": [],
+      "mcpOmission": "Policy read and mutation remain outside the reviewed safe MCP subset."
+    },
+    "snapshots": {
+      "rest": ["GET /v1/computers/{computerId}/snapshots", "POST /v1/computers/{computerId}/snapshots"],
+      "sdk": [],
+      "sdkOmission": "Snapshot provider support is not configured in this release slice.",
+      "cli": ["snapshot list", "snapshot create"],
+      "mcp": [],
+      "mcpOmission": "Snapshot mutation remains outside the safe MCP subset."
+    },
+    "assignments": {
+      "rest": ["GET /v1/assignments"],
+      "sdk": [],
+      "sdkOmission": "Assignment APIs are compatibility placeholders pending a durable assignment model.",
+      "cli": ["assignments list"],
+      "mcp": [],
+      "mcpOmission": "Assignment administration remains outside the safe MCP subset."
+    },
+    "providerReadiness": {
+      "rest": ["GET /v1/providers/readiness"],
+      "sdk": ["providerReadiness"],
+      "cli": ["provider readiness"],
+      "mcp": ["computers_provider_readiness"]
+    },
+    "sandboxes": {
+      "rest": ["GET /v1/sandboxes", "POST /v1/sandboxes"],
+      "sdk": [],
+      "sdkOmission": "Sandbox integration is deterministically disabled in this release slice.",
+      "cli": [],
+      "cliOmission": "Sandbox integration is deterministically disabled in this release slice.",
+      "mcp": [],
+      "mcpOmission": "Sandbox discovery and mutation are intentionally absent from MCP."
+    }
   },
   "forbiddenMcp": ["delete", "reassign", "restore", "policy_mutation", "sandbox_mutation"],
   "sandbox": { "discoverable": true, "executableMutation": false, "errorCode": "sandbox_disabled" }

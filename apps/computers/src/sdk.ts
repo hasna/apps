@@ -1,4 +1,4 @@
-import { ComputersError, type ApiErrorBody, type Computer, type ComputerCreateGrant, type CreateComputerGrantInput, type CreateComputerInput, type ErrorCode, type ExecRequest, type InstallPlan, type Operation, type PackageSpec, type ProviderReadiness } from "./contracts";
+import { ComputersError, type AdoptComputerInput, type ApiErrorBody, type Computer, type ComputerCreateGrant, type ComputerProfile, type CreateComputerGrantInput, type CreateComputerInput, type CreateComputerProfileInput, type ErrorCode, type ExecRequest, type InstallPlan, type InstallPolicyRevision, type InstallPolicyRule, type Operation, type PackageSpec, type ProviderReadiness } from "./contracts";
 
 export interface CredentialProvider {
   getBearerToken(): Promise<string>;
@@ -47,15 +47,59 @@ const ERROR_CODES = new Set<ErrorCode>([
   "provider_not_configured", "provider_outcome_unknown", "unsupported_operation", "sandbox_disabled", "replay_detected",
   "stale_fence", "expired", "policy_generation_mismatch", "quota_exceeded", "storage_error",
 ]);
+const MAX_SDK_RESPONSE_BYTES = 1024 * 1024;
+const REQUEST_ID = /^[A-Za-z0-9._:-]{8,128}$/;
+const ERROR_CODES_BY_STATUS = new Map<number, ReadonlySet<ErrorCode>>([
+  [400, new Set(["invalid_request"])],
+  [401, new Set(["authentication_required"])],
+  [403, new Set(["authorization_denied", "policy_generation_mismatch"])],
+  [404, new Set(["not_found"])],
+  [409, new Set(["conflict", "replay_detected", "stale_fence", "expired", "policy_generation_mismatch", "quota_exceeded"])],
+  [413, new Set(["request_too_large"])],
+  [500, new Set(["storage_error"])],
+  [501, new Set(["unsupported_operation", "sandbox_disabled"])],
+  [502, new Set(["storage_error"])],
+  [503, new Set(["provider_not_configured", "provider_outcome_unknown"])],
+]);
 
-function safeApiError(value: unknown): { code: ErrorCode; message: string } | undefined {
+async function boundedResponseText(response: Response): Promise<string> {
+  const declared = response.headers.get("content-length");
+  if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > MAX_SDK_RESPONSE_BYTES)) {
+    await response.body?.cancel(); throw new ComputersError("storage_error", "Response body is too large", 502);
+  }
+  if (response.body === null) return "";
+  const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let size = 0;
+  try {
+    for (;;) {
+      const { value, done } = await reader.read(); if (done) break;
+      size += value.byteLength;
+      if (size > MAX_SDK_RESPONSE_BYTES) { await reader.cancel(); throw new ComputersError("storage_error", "Response body is too large", 502); }
+      chunks.push(value);
+    }
+  } finally { reader.releaseLock(); }
+  const joined = new Uint8Array(size); let offset = 0;
+  for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.byteLength; }
+  return new TextDecoder().decode(joined);
+}
+
+function exactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === expected.length && actual.every((key) => expected.includes(key));
+}
+
+function safeApiError(value: unknown, status: number): { code: ErrorCode; message: string; requestId: string } | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  const error = (value as { error?: unknown }).error;
+  const envelope = value as Record<string, unknown>;
+  if (!exactKeys(envelope, ["error"])) return undefined;
+  const error = envelope.error;
   if (typeof error !== "object" || error === null || Array.isArray(error)) return undefined;
-  const candidate = error as { code?: unknown; message?: unknown };
+  const candidate = error as Record<string, unknown>;
+  if (!exactKeys(candidate, ["code", "message", "requestId"])) return undefined;
   if (typeof candidate.code !== "string" || !ERROR_CODES.has(candidate.code as ErrorCode)
-    || typeof candidate.message !== "string" || candidate.message.length < 1 || candidate.message.length > 512) return undefined;
-  return { code: candidate.code as ErrorCode, message: candidate.message };
+    || !ERROR_CODES_BY_STATUS.get(status)?.has(candidate.code as ErrorCode)
+    || typeof candidate.message !== "string" || candidate.message.length < 1 || candidate.message.length > 512
+    || typeof candidate.requestId !== "string" || !REQUEST_ID.test(candidate.requestId)) return undefined;
+  return { code: candidate.code as ErrorCode, message: candidate.message, requestId: candidate.requestId };
 }
 
 export class ComputersClient {
@@ -75,6 +119,9 @@ export class ComputersClient {
   async listComputers(): Promise<Computer[]> { return (await this.request<{ data: Computer[] }>("GET", "/v1/computers")).data; }
   async getComputer(id: string): Promise<Computer> { return this.request("GET", `/v1/computers/${encodeURIComponent(id)}`); }
   async createComputer(input: CreateComputerInput): Promise<Computer> { return this.request("POST", "/v1/computers", input, input.idempotencyKey); }
+  async adoptComputer(input: AdoptComputerInput): Promise<Computer> { return this.request("POST", "/v1/computers/adopt", input, input.idempotencyKey); }
+  async listProfiles(): Promise<ComputerProfile[]> { return (await this.request<{ data: ComputerProfile[] }>("GET", "/v1/profiles")).data; }
+  async createProfile(input: CreateComputerProfileInput): Promise<ComputerProfile> { return this.request("POST", "/v1/profiles", input); }
   async listComputerGrants(): Promise<ComputerCreateGrant[]> { return (await this.request<{ data: ComputerCreateGrant[] }>("GET", "/v1/computer-create-grants")).data; }
   async createComputerGrant(input: CreateComputerGrantInput): Promise<ComputerCreateGrant> { return this.request("POST", "/v1/computer-create-grants", input); }
   async requestLifecycle(id: string, action: "start" | "stop" | "quarantine" | "delete", idempotencyKey: string): Promise<Operation> {
@@ -83,6 +130,10 @@ export class ComputersClient {
   async requestExec(id: string, input: ExecRequest): Promise<Operation> { return this.request("POST", `/v1/computers/${encodeURIComponent(id)}/exec`, input, input.idempotencyKey); }
   async installPlan(id: string, spec: PackageSpec): Promise<InstallPlan & { ticket?: string }> { return this.request("POST", `/v1/computers/${encodeURIComponent(id)}/install/plan`, { spec }); }
   async installApply(id: string, ticket: string, idempotencyKey: string): Promise<Operation> { return this.request("POST", `/v1/computers/${encodeURIComponent(id)}/install/apply`, { ticket, idempotencyKey }, idempotencyKey); }
+  async getInstallPolicy(id: string): Promise<InstallPolicyRevision> { return this.request("GET", `/v1/computers/${encodeURIComponent(id)}/install/policy`); }
+  async createInstallPolicy(id: string, rules: InstallPolicyRule[]): Promise<InstallPolicyRevision> {
+    return this.request("POST", `/v1/computers/${encodeURIComponent(id)}/install/policy`, { rules });
+  }
   async listOperations(computerId?: string): Promise<Operation[]> {
     const query = computerId === undefined ? "" : `?computerId=${encodeURIComponent(computerId)}`;
     return (await this.request<{ data: Operation[] }>("GET", `/v1/operations${query}`)).data;
@@ -99,15 +150,18 @@ export class ComputersClient {
     const response = await this.#fetch(`${this.#baseUrl}${path}`, init);
     if (response.status >= 300 && response.status < 400) throw new ComputersError("storage_error", "Cross-origin redirect rejected", 502);
     const contentType = response.headers.get("content-type") ?? "";
+    const mediaType = contentType.split(";", 1)[0]!.trim().toLowerCase();
     let parsed: T | ApiErrorBody | undefined;
-    if (contentType.toLowerCase().includes("application/json")) {
-      try { parsed = await response.json() as T | ApiErrorBody; } catch { parsed = undefined; }
+    if (mediaType === "application/json") {
+      const text = await boundedResponseText(response);
+      try { parsed = JSON.parse(text) as T | ApiErrorBody; } catch { parsed = undefined; }
     } else {
       await response.body?.cancel();
     }
     if (!response.ok) {
-      const error = safeApiError(parsed);
-      throw new ComputersError(error?.code ?? "storage_error", error?.message ?? "Request failed", response.status);
+      const error = safeApiError(parsed, response.status);
+      if (error === undefined) throw new ComputersError("storage_error", "Request failed", 502);
+      throw new ComputersError(error.code, error.message, response.status, { requestId: error.requestId });
     }
     if (parsed === undefined) throw new ComputersError("storage_error", "Invalid JSON response", 502);
     return parsed as T;

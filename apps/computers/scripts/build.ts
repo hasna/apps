@@ -6,6 +6,7 @@ const entries: Record<string, string> = {
   "dist/sdk.js": "src/sdk.ts",
   "dist/contracts.js": "src/contracts.ts",
   "dist/providers.js": "src/providers.ts",
+  "dist/local-public.js": "src/local-public.ts",
   "dist/storage.js": "src/storage.ts",
   "dist/bin/computers.js": "src/bin/computers.ts",
   "dist/bin/computers-serve.js": "src/bin/computers-serve.ts",

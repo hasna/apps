@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { StaticInstallTicketSigningKeyProvider } from "../src/install-policy";
@@ -19,6 +20,12 @@ interface WorkerResult {
   foreignKeys?: number;
   version?: number;
   fileModes?: number[];
+  handled?: number;
+  mode?: string;
+  code?: string;
+  status?: number;
+  generation?: number;
+  digest?: string;
 }
 
 async function runWorkers(work: Array<Record<string, string>>): Promise<WorkerResult[]> {
@@ -44,6 +51,7 @@ function observeChild(process: ChildProcessWithoutNullStreams): {
   ready: Promise<void>;
   result: Promise<WorkerResult>;
   exited: Promise<void>;
+  checked: Promise<void>;
 } {
   let stderr = "";
   process.stderr.setEncoding("utf8");
@@ -52,11 +60,14 @@ function observeChild(process: ChildProcessWithoutNullStreams): {
   let readyReject!: (error: Error) => void;
   let resultResolve!: (result: WorkerResult) => void;
   let resultReject!: (error: Error) => void;
+  let checkedResolve!: () => void;
   const ready = new Promise<void>((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
   const result = new Promise<WorkerResult>((resolve, reject) => { resultResolve = resolve; resultReject = reject; });
+  const checked = new Promise<void>((resolve) => { checkedResolve = resolve; });
   const lines = createInterface({ input: process.stdout });
   lines.on("line", (line) => {
     if (line === "READY") readyResolve();
+    else if (line === "CHECKED") checkedResolve();
     else {
       try { resultResolve(JSON.parse(line) as WorkerResult); }
       catch { resultReject(new Error("Worker returned malformed output")); }
@@ -72,10 +83,179 @@ function observeChild(process: ChildProcessWithoutNullStreams): {
       }
     });
   });
-  return { process, ready, result, exited };
+  return { process, ready, result, exited, checked };
+}
+
+async function runBarrierWorkers(work: Array<Record<string, string>>): Promise<WorkerResult[]> {
+  const workerPath = new URL("./concurrency-worker.ts", import.meta.url).pathname;
+  const children = work.map((item) => observeChild(spawn(process.execPath, [workerPath, Buffer.from(JSON.stringify(item)).toString("base64url")], {
+    stdio: ["pipe", "pipe", "pipe"],
+  })));
+  try {
+    await Promise.all(children.map((child) => child.ready));
+    for (const child of children) child.process.stdin.write("GO\n");
+    await Promise.all(children.map((child) => child.checked));
+    for (const child of children) child.process.stdin.end("COMMIT\n");
+    const results = await Promise.all(children.map((child) => child.result));
+    await Promise.all(children.map((child) => child.exited));
+    return results;
+  } finally {
+    for (const child of children) if (child.process.exitCode === null) child.process.kill("SIGTERM");
+  }
 }
 
 describe("real multi-connection quota concurrency", () => {
+  test("concurrent controllers upgrade a shared 0001 database exactly once", async () => {
+    const directory = mkdtempSync(join(process.cwd(), ".test-data-upgrade-v1-")); directories.push(directory);
+    const database = join(directory, "controller.db"); const legacy = new Database(database);
+    legacy.exec(readFileSync("migrations/sqlite/0001_initial.sql", "utf8")); legacy.close();
+    const results = await runWorkers(Array.from({ length: 20 }, () => ({ mode: "initialize", database })));
+    expect(results.filter((result) => !result.ok)).toEqual([]);
+    expect(results.every((result) => result.version === 3 && result.foreignKeys === 1 && result.journalMode === "wal")).toBe(true);
+    const storage = new SQLiteStorage(database); try {
+      expect(storage.ready()).toBe(true);
+      expect((storage.database.query("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 3").get() as { count: number }).count).toBe(1);
+    } finally { storage.close(); }
+  });
+
+  test("two synchronized workers allow only the provider-attempt transaction winner to mutate", async () => {
+    const directory = mkdtempSync(join(process.cwd(), ".test-data-provider-attempt-")); directories.push(directory);
+    const database = join(directory, "controller.db");
+    const markerPath = join(directory, "provider-side-effects.log");
+    const storage = new SQLiteStorage(database); storage.migrate();
+    const service = new ComputersService(storage, { ticketSigningKeyProvider: new StaticInstallTicketSigningKeyProvider(randomBytes(32)) });
+    service.createComputer({ tenantId: "tenant_provider_attempt", principalId: "principal_admin", scopes: ["computers:admin"], authMethod: "bearer" }, {
+      slug: "provider-attempt", provider: "local_machine", ownerPrincipalId: "principal_owner", idempotencyKey: "provider-attempt-create-001",
+    });
+    storage.close();
+
+    const results = await runWorkers(Array.from({ length: 2 }, () => ({
+      mode: "provider-attempt", database, tenantId: "tenant_provider_attempt", markerPath,
+    })));
+
+    expect(results.every((result) => result.ok)).toBe(true);
+    expect(results.reduce((sum, result) => sum + (result.handled ?? 0), 0)).toBe(1);
+    expect(readFileSync(markerPath, "utf8").trim().split("\n")).toHaveLength(1);
+  });
+
+  test("a policy fence committed after worker precheck cannot produce a provider perform claim", async () => {
+    const directory = mkdtempSync(join(process.cwd(), ".test-data-provider-policy-fence-")); directories.push(directory);
+    const database = join(directory, "controller.db");
+    const storage = new SQLiteStorage(database); storage.migrate();
+    const service = new ComputersService(storage, { ticketSigningKeyProvider: new StaticInstallTicketSigningKeyProvider(randomBytes(32)) });
+    const admin = { tenantId: "tenant_provider_policy_fence", principalId: "principal_admin", scopes: ["computers:admin" as const], authMethod: "bearer" as const };
+    const computer = service.createComputer(admin, {
+      slug: "provider-policy-fence", provider: "local_machine", ownerPrincipalId: "principal_policy_owner", idempotencyKey: "provider-policy-fence-create",
+    });
+    const workerPath = new URL("./concurrency-worker.ts", import.meta.url).pathname;
+    const work = { mode: "provider-claim-fence", database, tenantId: admin.tenantId, computerId: computer.id };
+    const child = observeChild(spawn(process.execPath, [workerPath, Buffer.from(JSON.stringify(work)).toString("base64url")], {
+      stdio: ["pipe", "pipe", "pipe"],
+    }));
+    try {
+      await child.ready; child.process.stdin.write("GO\n"); await child.checked;
+      service.createInstallPolicy(admin, computer.id, [{ effect: "allow", managers: ["bun"] }]);
+      child.process.stdin.end("CLAIM\n");
+      expect(await child.result).toMatchObject({ ok: false, code: "policy_generation_mismatch", status: 409 });
+      await child.exited;
+      expect(storage.getProviderAttempt(admin.tenantId, storage.listOperations(admin.tenantId, computer.id)[0]?.id ?? "missing")).toBeUndefined();
+    } finally {
+      if (child.process.exitCode === null) child.process.kill("SIGTERM");
+      storage.close();
+    }
+  });
+
+  test("concurrent policy writers replay an exact revision and reject divergent stale generations with 409", async () => {
+    const directory = mkdtempSync(join(process.cwd(), ".test-data-policy-cas-")); directories.push(directory);
+    const database = join(directory, "controller.db");
+    const storage = new SQLiteStorage(database); storage.migrate();
+    const service = new ComputersService(storage, { ticketSigningKeyProvider: new StaticInstallTicketSigningKeyProvider(randomBytes(32)) });
+    const admin = { tenantId: "tenant_policy_cas", principalId: "principal_admin", scopes: ["computers:admin" as const], authMethod: "bearer" as const };
+    const replayComputer = service.createComputer(admin, {
+      slug: "policy-cas-replay", provider: "local_machine", ownerPrincipalId: "principal_policy_replay", idempotencyKey: "policy-cas-replay-create",
+    });
+    const replay = await runBarrierWorkers(Array.from({ length: 2 }, () => ({
+      mode: "policy-cas", database, tenantId: admin.tenantId, computerId: replayComputer.id, policyEffect: "allow",
+    })));
+    expect(replay.every((result) => result.ok && result.generation === 2)).toBe(true);
+    expect(new Set(replay.map((result) => result.id)).size).toBe(1);
+    expect(new Set(replay.map((result) => result.digest)).size).toBe(1);
+
+    storage.updateComputerStatus(admin.tenantId, replayComputer.id, "deleted");
+    const divergentComputer = service.createComputer(admin, {
+      slug: "policy-cas-divergent", provider: "local_machine", ownerPrincipalId: "principal_policy_divergent", idempotencyKey: "policy-cas-divergent-create",
+    });
+    const divergent = await runBarrierWorkers(["allow", "deny"].map((policyEffect) => ({
+      mode: "policy-cas", database, tenantId: admin.tenantId, computerId: divergentComputer.id, policyEffect,
+    })));
+    expect(divergent.filter((result) => result.ok)).toHaveLength(1);
+    expect(divergent.filter((result) => !result.ok)).toEqual([expect.objectContaining({ code: "conflict", status: 409 })]);
+    expect((storage.database.query("SELECT COUNT(*) AS count FROM install_policy_revisions WHERE tenant_id = ? AND computer_id = ? AND generation = 2")
+      .get(admin.tenantId, divergentComputer.id) as { count: number }).count).toBe(1);
+    storage.close();
+  });
+
+  test("a worker cannot observe a start operation before its home capability is committed", async () => {
+    const directory = mkdtempSync(join(process.cwd(), ".test-data-lifecycle-atomic-")); directories.push(directory);
+    const database = join(directory, "controller.db");
+    const markerPath = join(directory, "binding-paused.log");
+    const storage = new SQLiteStorage(database); storage.migrate();
+    const service = new ComputersService(storage, { ticketSigningKeyProvider: new StaticInstallTicketSigningKeyProvider(randomBytes(32)) });
+    const admin = { tenantId: "tenant_lifecycle_atomic", principalId: "principal_admin", scopes: ["computers:admin" as const], authMethod: "bearer" as const };
+    const computer = service.createComputer(admin, {
+      slug: "lifecycle-atomic", provider: "local_machine", ownerPrincipalId: "principal_lifecycle_owner", idempotencyKey: "lifecycle-atomic-create",
+    });
+    const create = storage.listOperations(admin.tenantId, computer.id)[0];
+    if (create === undefined) throw new Error("Missing create operation");
+    storage.completeProviderOperation(create, storage.beginProviderAttempt(create), {
+      kind: "success", resource: { resourceId: "resource_lifecycle_atomic" }, result: { lifecycle: "stopped" },
+    });
+    storage.acquireHomeLease(admin.tenantId, computer.id, computer.ownerPrincipalId, "controller_lifecycle_atomic", 60, 0);
+    storage.close();
+
+    const work = {
+      mode: "lifecycle-start", database, tenantId: admin.tenantId, computerId: computer.id,
+      markerPath, idempotencyKey: "lifecycle-atomic-start",
+    };
+    const workerPath = new URL("./concurrency-worker.ts", import.meta.url).pathname;
+    const children = Array.from({ length: 20 }, () => observeChild(spawn(process.execPath, [workerPath, Buffer.from(JSON.stringify(work)).toString("base64url")], {
+      stdio: ["pipe", "pipe", "pipe"],
+    })));
+    try {
+      await Promise.all(children.map((child) => child.ready));
+      for (const child of children) child.process.stdin.end("GO\n");
+      const deadline = Date.now() + 10_000;
+      while (!existsSync(markerPath) || readFileSync(markerPath, "utf8").trim().split("\n").length < children.length) {
+        if (Date.now() >= deadline) throw new Error("Lifecycle writers did not reach the synchronized request");
+        await Bun.sleep(10);
+      }
+      const observer = new Database(database, { readonly: true, strict: true });
+      try {
+        for (let probe = 0; probe < 100; probe += 1) {
+          expect((observer.query(`SELECT COUNT(*) AS count FROM operations operation
+            LEFT JOIN operation_home_leases lease ON lease.tenant_id = operation.tenant_id AND lease.operation_id = operation.id
+            WHERE operation.tenant_id = ? AND operation.computer_id = ? AND operation.kind = 'start' AND lease.operation_id IS NULL`)
+            .get(admin.tenantId, computer.id) as { count: number }).count).toBe(0);
+          await Bun.sleep(1);
+        }
+        const results = await Promise.all(children.map((child) => child.result));
+        await Promise.all(children.map((child) => child.exited));
+        expect(results.every((result) => result.ok)).toBe(true);
+        expect(new Set(results.map((result) => result.id)).size).toBe(1);
+        const operationId = results[0]?.id;
+        expect(operationId).toBeString();
+        expect(observer.query("SELECT status FROM operations WHERE tenant_id = ? AND id = ?").get(admin.tenantId, operationId ?? "missing"))
+          .toEqual({ status: "pending" });
+        expect(observer.query("SELECT computer_id, holder_id, fence FROM operation_home_leases WHERE tenant_id = ? AND operation_id = ?")
+          .get(admin.tenantId, operationId ?? "missing")).toEqual({
+          computer_id: computer.id, holder_id: "controller_lifecycle_atomic", fence: 1,
+        });
+      } finally { observer.close(false); }
+    } finally {
+      for (const child of children) if (child.process.exitCode === null) child.process.kill("SIGTERM");
+    }
+  }, 15_000);
+
   test("100 independent processes allow one distinct child and one duplicate result", async () => {
     const directory = mkdtempSync(join(process.cwd(), ".test-data-concurrency-")); directories.push(directory);
     const database = join(directory, "controller.db");
@@ -127,7 +307,7 @@ describe("real multi-connection quota concurrency", () => {
         expect(results.filter((result) => !result.ok), `${state} repetition ${repetition + 1}: ${results.filter((result) => !result.ok).map((result) => result.message).join(", ")}`).toEqual([]);
         expect(results.every((result) => result.journalMode === "wal")).toBe(true);
         expect(results.every((result) => result.foreignKeys === 1)).toBe(true);
-        expect(results.every((result) => result.version === 1)).toBe(true);
+        expect(results.every((result) => result.version === 3)).toBe(true);
         expect(results.every((result) => (result.fileModes?.length ?? 0) >= 1 && result.fileModes?.every((mode) => mode === 0o600))).toBe(true);
       }
     }

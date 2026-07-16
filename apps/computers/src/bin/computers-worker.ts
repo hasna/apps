@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { createProviderPorts } from "../providers";
+import { createLocalProviderPortsFromConfigFile } from "../local";
 import { SQLiteStorage } from "../storage";
 import { OperationWorker } from "../worker";
 import { validateId } from "../validation";
@@ -12,7 +13,7 @@ function option(name: string): string | undefined {
 }
 
 try {
-  const allowed = new Set(["--db", "--tenant"]);
+  const allowed = new Set(["--db", "--tenant", "--local-config"]);
   for (let index = 2; index < Bun.argv.length; index += 2) if (!allowed.has(Bun.argv[index] ?? "") || Bun.argv[index + 1] === undefined) throw new Error("invalid arguments");
   const rawPath = option("db") ?? Bun.env.COMPUTERS_DB ?? "./computers.db";
   if (rawPath.includes("\0")) throw new Error("invalid path");
@@ -20,8 +21,10 @@ try {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const storage = new SQLiteStorage(path);
   storage.migrate();
-  const worker = new OperationWorker(storage, createProviderPorts());
+  const localConfig = option("local-config") ?? Bun.env.COMPUTERS_LOCAL_CONFIG;
+  const providers = localConfig === undefined ? createProviderPorts() : createLocalProviderPortsFromConfigFile(resolve(localConfig));
+  const worker = new OperationWorker(storage, providers);
   const handled = await worker.runTenant(validateId(option("tenant") ?? Bun.env.COMPUTERS_TENANT ?? "tenant_local", "tenant"));
-  process.stdout.write(`${JSON.stringify({ handled, providerAdaptersConfigured: false })}\n`);
+  process.stdout.write(`${JSON.stringify({ handled, providerAdaptersConfigured: localConfig !== undefined })}\n`);
   storage.close();
 } catch { process.stderr.write(`${JSON.stringify({ error: { code: "worker_error", message: "Worker execution failed" } })}\n`); process.exitCode = 1; }

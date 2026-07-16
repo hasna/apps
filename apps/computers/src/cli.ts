@@ -3,6 +3,8 @@ import { dirname, resolve } from "node:path";
 import { ComputersError, VERSION, type AuthorizationContext, type CreateComputerInput, type ExecRequest, type InstallPolicyRule, type PackageSpec } from "./contracts";
 import { ComputersService } from "./service";
 import { SQLiteStorage } from "./storage";
+import { createLocalProviderPortsFromConfigFile } from "./local";
+import { runLocalMacCanary } from "./local-canary";
 
 const LOCAL_CONTEXT: AuthorizationContext = {
   tenantId: "tenant_local", principalId: "principal_local", scopes: ["computers:admin"], authMethod: "loopback_dev",
@@ -37,11 +39,16 @@ function openService(args: string[]): { storage: SQLiteStorage; service: Compute
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const storage = new SQLiteStorage(path);
   storage.migrate();
-  return { storage, service: new ComputersService(storage) };
+  const localConfig = flag(args, "local-config") ?? Bun.env.COMPUTERS_LOCAL_CONFIG;
+  return { storage, service: new ComputersService(storage, localConfig === undefined ? {} : { providers: createLocalProviderPortsFromConfigFile(resolve(localConfig)) }) };
 }
 
 function output(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function schemaVersion(storage: SQLiteStorage): number {
+  return (storage.database.query("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number }).version;
 }
 
 export const CLI_HELP = `Computers ${VERSION}
@@ -54,7 +61,7 @@ Commands:
   worker
   doctor [--db PATH]
   db migrate [--db PATH]
-  computer create|list|get|status|start|stop|quarantine|delete
+  computer create|adopt|list|get|status|start|stop|quarantine|delete
   operations [--computer ID]
   exec request --computer ID --argv JSON --idempotency-key KEY
   install plan|apply|history
@@ -62,8 +69,9 @@ Commands:
   assignments list
   policies list|set
   grants create|list (create requires bounded child owners, regions, profiles, storage, uptime, and budget)
-  profiles list
+  profiles create|list
   provider readiness
+  local config validate|probe|canary
 
 Requests return a truthful pending operation. A worker records provider_not_configured as a definite failed outcome when no adapter is configured; no desired state is claimed early.
 `;
@@ -80,9 +88,18 @@ export async function runCli(args = Bun.argv.slice(2)): Promise<number> {
     const child = Bun.spawn(["computers-worker", ...args.slice(1)], { stdin: "inherit", stdout: "inherit", stderr: "inherit" });
     return child.exited;
   }
+  if (command === "local" && args[1] === "config") {
+    const action = args[2]; const localConfig = resolve(requiredFlag(args, "local-config"));
+    if (action === "validate" || action === "probe") {
+      const providers = createLocalProviderPortsFromConfigFile(localConfig); const readiness = await Promise.all(Object.values(providers).map((provider) => provider.readiness()));
+      output(action === "validate" ? { valid: true, providers: readiness } : { data: readiness, platform: process.platform, arch: process.arch, liveMacCanaryRun: false }); return 0;
+    }
+    if (action === "canary") { output(await runLocalMacCanary(localConfig, requiredFlag(args, "db"), requiredFlag(args, "confirm"))); return 0; }
+    throw new ComputersError("unsupported_operation", "Unsupported command", 400);
+  }
   const { storage, service } = openService(args);
   try {
-    if (command === "init" || (command === "db" && args[1] === "migrate")) { output({ migrated: true, database: databasePath(args), version: 1 }); return 0; }
+    if (command === "init" || (command === "db" && args[1] === "migrate")) { output({ migrated: true, database: databasePath(args), version: schemaVersion(storage) }); return 0; }
     if (command === "doctor") { output({ ready: storage.ready(), database: databasePath(args), providers: await service.providerReadiness(LOCAL_CONTEXT), resident: { protocolOnly: true, mtlsTransport: false, privilegedDaemon: false } }); return storage.ready() ? 0 : 1; }
     if (command === "computer") {
       const action = args[1];
@@ -107,6 +124,11 @@ export async function runCli(args = Bun.argv.slice(2)): Promise<number> {
         const budgetMicros = flag(args, "budget-micros"); if (budgetMicros !== undefined) input.budgetMicros = Number(budgetMicros);
         const computer = service.createComputer(LOCAL_CONTEXT, input);
         output({ computer, operation: service.listOperations(LOCAL_CONTEXT, computer.id).find((item) => item.kind === "create") }); return 0;
+      }
+      if (action === "adopt") {
+        const adoption = { slug: requiredFlag(args, "slug"), ownerPrincipalId: flag(args, "owner") ?? LOCAL_CONTEXT.principalId,
+          adoptionId: requiredFlag(args, "adoption"), idempotencyKey: requiredFlag(args, "idempotency-key") };
+        const profileId = flag(args, "profile"); output(service.adoptComputer(LOCAL_CONTEXT, profileId === undefined ? adoption : { ...adoption, profileId })); return 0;
       }
       if (action === "start" || action === "stop" || action === "quarantine" || action === "delete") {
         output(service.requestLifecycle(LOCAL_CONTEXT, requiredFlag(args, "id"), action, requiredFlag(args, "idempotency-key"))); return 0;
@@ -134,7 +156,8 @@ export async function runCli(args = Bun.argv.slice(2)): Promise<number> {
       if (args[1] === "list") { output(service.storage.getInstallPolicy(LOCAL_CONTEXT.tenantId, computer.id)); return 0; }
       if (args[1] === "set") { output(service.createInstallPolicy(LOCAL_CONTEXT, computer.id, parseJsonFlag<InstallPolicyRule[]>(args, "rules"))); return 0; }
     }
-    if (command === "profiles" && args[1] === "list") { output({ data: [], limitations: ["Profile mutation is not implemented in this slice."] }); return 0; }
+    if (command === "profiles" && args[1] === "list") { output({ data: service.listProfiles(LOCAL_CONTEXT) }); return 0; }
+    if (command === "profiles" && args[1] === "create") { output(service.createProfile(LOCAL_CONTEXT, { id: requiredFlag(args, "id"), name: requiredFlag(args, "name"), document: parseJsonFlag(args, "document") })); return 0; }
     if (command === "grants") {
       if (args[1] === "list") { output({ data: service.listComputerGrants(LOCAL_CONTEXT) }); return 0; }
       if (args[1] === "create") {

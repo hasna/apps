@@ -2,6 +2,7 @@ export * from "./auth";
 export * from "./audit";
 export * from "./contracts";
 export * from "./install-policy";
+export * from "./local-public";
 export * from "./providers";
 export * from "./resident";
 export * from "./sdk";

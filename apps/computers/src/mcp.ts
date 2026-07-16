@@ -1,6 +1,6 @@
 import { ComputersError, VERSION, type PackageSpec } from "./contracts";
 import { ComputersClient, EnvironmentCredentialProvider } from "./sdk";
-import { assertExactKeys, validateArgv, validateId, validateIdempotencyKey, validatePackageSpec, validateRequestObject } from "./validation";
+import { assertExactKeys, MCP_INPUT_SCHEMA_FRAGMENTS, validateArgv, validateId, validateIdempotencyKey, validatePackageSpec, validateRequestObject } from "./validation";
 
 const PROTOCOL_VERSION = "2025-03-26";
 const MAX_MCP_MESSAGE_BYTES = 1024 * 1024;
@@ -13,23 +13,12 @@ const annotations = (readOnlyHint: boolean, destructiveHint: boolean, idempotent
   readOnlyHint, destructiveHint, idempotentHint, openWorldHint,
 });
 
-const PACKAGE_SPEC_SCHEMA = {
-  type: "object", required: ["manager", "name", "version", "digest", "registry", "dependencyClosure", "allowLifecycleScripts"], additionalProperties: false,
-  properties: {
-    manager: { enum: ["apt", "dnf", "apk", "brew", "npm", "bun"] }, name: { type: "string" }, version: { type: "string" },
-    digest: { type: "string", pattern: "^sha256:[a-f0-9]{64}$" }, registry: { type: "string", format: "uri" },
-    dependencyClosure: { type: "array", maxItems: 512, items: { type: "object", required: ["name", "version", "digest"], additionalProperties: false,
-      properties: { name: { type: "string" }, version: { type: "string" }, digest: { type: "string", pattern: "^sha256:[a-f0-9]{64}$" } } } },
-    allowLifecycleScripts: { type: "boolean" },
-  },
-} as const;
-
 const TOOLS = [
   { name: "computers_list", description: "List authorized Computers", inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: annotations(true, false, true, false) },
-  { name: "computers_get", description: "Get one authorized Computer", inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"], additionalProperties: false }, annotations: annotations(true, false, true, false) },
-  { name: "computers_operations", description: "List authorized operations", inputSchema: { type: "object", properties: { computerId: { type: "string" } }, additionalProperties: false }, annotations: annotations(true, false, true, false) },
-  { name: "computers_exec_request", description: "Request typed argv execution; no shell strings", inputSchema: { type: "object", properties: { computerId: { type: "string" }, argv: { type: "array", minItems: 1, maxItems: 128, items: { type: "string" } }, idempotencyKey: { type: "string", minLength: 8, maxLength: 128 } }, required: ["computerId", "argv", "idempotencyKey"], additionalProperties: false }, annotations: annotations(false, true, true, true) },
-  { name: "computers_install_plan", description: "Evaluate a typed package spec against immutable install policy", inputSchema: { type: "object", properties: { computerId: { type: "string" }, spec: PACKAGE_SPEC_SCHEMA }, required: ["computerId", "spec"], additionalProperties: false }, annotations: annotations(false, false, false, false) },
+  { name: "computers_get", description: "Get one authorized Computer", inputSchema: { type: "object", properties: { id: MCP_INPUT_SCHEMA_FRAGMENTS.id }, required: ["id"], additionalProperties: false }, annotations: annotations(true, false, true, false) },
+  { name: "computers_operations", description: "List authorized operations", inputSchema: { type: "object", properties: { computerId: MCP_INPUT_SCHEMA_FRAGMENTS.id }, additionalProperties: false }, annotations: annotations(true, false, true, false) },
+  { name: "computers_exec_request", description: "Request typed argv execution; no shell strings", inputSchema: { type: "object", properties: { computerId: MCP_INPUT_SCHEMA_FRAGMENTS.id, argv: MCP_INPUT_SCHEMA_FRAGMENTS.argv, idempotencyKey: MCP_INPUT_SCHEMA_FRAGMENTS.idempotencyKey }, required: ["computerId", "argv", "idempotencyKey"], additionalProperties: false }, annotations: annotations(false, true, true, true) },
+  { name: "computers_install_plan", description: "Evaluate a typed package spec against immutable install policy", inputSchema: { type: "object", properties: { computerId: MCP_INPUT_SCHEMA_FRAGMENTS.id, spec: MCP_INPUT_SCHEMA_FRAGMENTS.packageSpec }, required: ["computerId", "spec"], additionalProperties: false }, annotations: annotations(false, false, false, false) },
   { name: "computers_provider_readiness", description: "Report truthful provider readiness", inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: annotations(true, false, true, false) },
 ] as const;
 
