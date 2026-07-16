@@ -1,4 +1,4 @@
-# Contributing to open-evals
+# Contributing to evals
 
 Thank you for your interest in contributing! This guide will help you get started.
 
@@ -6,8 +6,8 @@ Thank you for your interest in contributing! This guide will help you get starte
 
 ```bash
 # Clone the repository
-git clone https://github.com/hasna/open-evals.git
-cd open-evals
+git clone https://github.com/hasna/evals.git
+cd evals
 
 # Install dependencies
 bun install
@@ -88,7 +88,7 @@ bun test --watch                        # Watch mode
 
 ## Reporting Issues
 
-Use [GitHub Issues](https://github.com/hasna/open-evals/issues) to report bugs or request features. Please include:
+Use [GitHub Issues](https://github.com/hasna/evals/issues) to report bugs or request features. Please include:
 
 - Steps to reproduce
 - Expected vs actual behavior
