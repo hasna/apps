@@ -24,6 +24,7 @@ const RDS_ENDPOINT = /^(?=.{1,253}$)(?!-)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?
 const IDENTIFIER = /^[a-zA-Z_][a-zA-Z0-9_]{0,62}$/;
 const DATABASE_NAME = /^[a-zA-Z_][a-zA-Z0-9_$-]{0,62}$/;
 const TENANT_ENFORCEMENT_MIGRATION_ID = "0010_tenant_enforce";
+const ECS_CREDENTIALS_ORIGIN = "http://169.254.170.2";
 
 export const PROVIDER_CREDENTIAL_SPECS = Object.freeze({
   migrator: Object.freeze({
@@ -85,6 +86,15 @@ interface SecretValue {
   value: string;
   versionId: string;
 }
+
+type ProviderCredentialFetch = (input: string, init?: RequestInit) => Promise<Response>;
+
+const ecsTaskRoleCredentialSchema = z.object({
+  AccessKeyId: z.string().min(1),
+  SecretAccessKey: z.string().min(1),
+  Token: z.string().min(1),
+  Expiration: z.string().min(1),
+}).passthrough();
 
 export interface ProviderCredentialSecretStore {
   get(secretId: string, stage: SecretStage): Promise<SecretValue | undefined>;
@@ -148,6 +158,7 @@ export function resolveProviderCredentialOptions(env: NodeJS.ProcessEnv = proces
     "AWS_WEB_IDENTITY_TOKEN_FILE",
     "AWS_ROLE_ARN",
     "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+    "AWS_CONTAINER_AUTHORIZATION_TOKEN",
   ];
   if (forbiddenCredentialInputs.some((name) => Boolean(env[name]?.trim()))) {
     throw new Error("database credential task-role configuration is invalid");
@@ -461,11 +472,51 @@ export function logProviderCredentialSuccess(result: ProviderCredentialResult): 
   console.log(JSON.stringify({ evt: "db_credentials_reconciled", ...result }));
 }
 
-function createAwsSecretStore(options: ProviderCredentialOptions): ProviderCredentialSecretStore {
-  const clientConfig: SecretsManagerClientConfig = {
+export function createAwsSecretsManagerClientConfig(
+  options: ProviderCredentialOptions,
+  fetchImpl: ProviderCredentialFetch = fetch,
+): SecretsManagerClientConfig {
+  validateOptions(options);
+  return {
     region: options.region,
+    credentials: createEcsTaskRoleCredentialProvider(options, fetchImpl),
   };
-  const client = new SecretsManagerClient(clientConfig);
+}
+
+function createEcsTaskRoleCredentialProvider(
+  options: ProviderCredentialOptions,
+  fetchImpl: ProviderCredentialFetch,
+) {
+  return async () => {
+    let value: unknown;
+    try {
+      const response = await fetchImpl(`${ECS_CREDENTIALS_ORIGIN}${options.credentialsRelativeUri}`, {
+        method: "GET",
+        redirect: "error",
+      });
+      if (!response.ok) throw new Error("credential response rejected");
+      value = await response.json();
+    } catch {
+      throw new Error("database credential task-role retrieval failed");
+    }
+
+    const parsed = ecsTaskRoleCredentialSchema.safeParse(value);
+    if (!parsed.success) throw new Error("database credential task-role retrieval failed");
+    const expiration = Date.parse(parsed.data.Expiration);
+    if (!Number.isFinite(expiration) || expiration <= Date.now()) {
+      throw new Error("database credential task-role retrieval failed");
+    }
+    return {
+      accessKeyId: parsed.data.AccessKeyId,
+      secretAccessKey: parsed.data.SecretAccessKey,
+      sessionToken: parsed.data.Token,
+      expiration: new Date(expiration),
+    };
+  };
+}
+
+function createAwsSecretStore(options: ProviderCredentialOptions): ProviderCredentialSecretStore {
+  const client = new SecretsManagerClient(createAwsSecretsManagerClientConfig(options));
   return {
     get: async (secretId, stage) => {
       try {

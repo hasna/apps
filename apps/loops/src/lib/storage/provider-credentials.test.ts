@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  createAwsSecretsManagerClientConfig,
   PROVIDER_BOOTSTRAP_INVARIANT_SQL,
   PROVIDER_BOOTSTRAP_MEMBERSHIPS_SQL,
   PROVIDER_CREDENTIAL_SPECS,
@@ -175,6 +176,17 @@ describe("provider database credential reconciliation", () => {
     expect(resolveProviderCredentialOptions(env)).toEqual(options);
     expect(() => resolveProviderCredentialOptions({ ...env, AWS_ACCESS_KEY_ID: "static-key" }))
       .toThrow("database credential task-role configuration is invalid");
+    for (const name of [
+      "AWS_SECRET_ACCESS_KEY",
+      "AWS_SESSION_TOKEN",
+      "AWS_PROFILE",
+      "AWS_WEB_IDENTITY_TOKEN_FILE",
+      "AWS_ROLE_ARN",
+      "AWS_CONTAINER_AUTHORIZATION_TOKEN",
+    ]) {
+      expect(() => resolveProviderCredentialOptions({ ...env, [name]: "ambient-input" }))
+        .toThrow("database credential task-role configuration is invalid");
+    }
     expect(() => resolveProviderCredentialOptions({ ...env, AWS_CONTAINER_CREDENTIALS_FULL_URI: "http://127.0.0.1/creds" }))
       .toThrow("database credential task-role configuration is invalid");
     expect(() => resolveProviderCredentialOptions({ ...env, HASNA_LOOPS_RDS_ENDPOINT: "localhost" }))
@@ -186,6 +198,54 @@ describe("provider database credential reconciliation", () => {
       HASNA_LOOPS_RUNTIME_DATABASE_URL_SECRET_ARN:
         "arn:aws:secretsmanager:us-west-2:123456789012:secret:open-loops/runtime-AbCd12",
     })).toThrow("database credential configuration is invalid");
+  });
+
+  test("pins Secrets Manager credentials to the validated ECS task-role metadata endpoint", async () => {
+    const requests: Array<{ input: string; init?: RequestInit }> = [];
+    const config = createAwsSecretsManagerClientConfig(options, async (input, init) => {
+      requests.push({ input, init });
+      return new Response(JSON.stringify({
+        AccessKeyId: "ecs-access",
+        SecretAccessKey: "opaque",
+        Token: "session",
+        Expiration: "2099-01-01T00:00:00Z",
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    const originalEnv = {
+      AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID,
+      AWS_PROFILE: process.env.AWS_PROFILE,
+      AWS_WEB_IDENTITY_TOKEN_FILE: process.env.AWS_WEB_IDENTITY_TOKEN_FILE,
+      AWS_CONTAINER_CREDENTIALS_FULL_URI: process.env.AWS_CONTAINER_CREDENTIALS_FULL_URI,
+    };
+    process.env.AWS_ACCESS_KEY_ID = "ambient-access";
+    process.env.AWS_PROFILE = "ambient-profile";
+    process.env.AWS_WEB_IDENTITY_TOKEN_FILE = "/tmp/ambient-web-identity";
+    process.env.AWS_CONTAINER_CREDENTIALS_FULL_URI = "http://127.0.0.1/ambient";
+    try {
+      expect(config.region).toBe(options.region);
+      expect(typeof config.credentials).toBe("function");
+      if (typeof config.credentials !== "function") throw new Error("expected credentials provider");
+      const credentials = await config.credentials();
+      expect(credentials).toMatchObject({
+        accessKeyId: "ecs-access",
+        secretAccessKey: "opaque",
+        sessionToken: "session",
+      });
+      expect(credentials.expiration).toEqual(new Date("2099-01-01T00:00:00Z"));
+      expect(requests).toEqual([{
+        input: `http://169.254.170.2${options.credentialsRelativeUri}`,
+        init: { method: "GET", redirect: "error" },
+      }]);
+    } finally {
+      for (const [name, value] of Object.entries(originalEnv)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
   });
 
   test("writes AWSPENDING, changes each password, verifies fresh connections, and promotes AWSCURRENT", async () => {
