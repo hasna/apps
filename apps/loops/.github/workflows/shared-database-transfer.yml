@@ -21,7 +21,6 @@ env:
   AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
   ECS_CLUSTER_ARN: ${{ vars.LOOPS_TRANSFER_ECS_CLUSTER_ARN }}
   ECS_TASK_DEFINITION_ARN: ${{ vars.LOOPS_TRANSFER_ECS_TASK_DEFINITION_ARN }}
-  ECS_CONTAINER_NAME: ${{ vars.LOOPS_TRANSFER_ECS_CONTAINER_NAME }}
   ECS_SUBNET_IDS: ${{ vars.LOOPS_TRANSFER_ECS_SUBNET_IDS }}
   ECS_SECURITY_GROUP_IDS: ${{ vars.LOOPS_TRANSFER_ECS_SECURITY_GROUP_IDS }}
   CONFIRMATION: ${{ inputs.confirmation }}
@@ -41,7 +40,7 @@ jobs:
             echo "confirmation must exactly match: transfer openloops shared source" >&2
             exit 1
           fi
-          for name in AWS_REGION AWS_ROLE_ARN ECS_CLUSTER_ARN ECS_TASK_DEFINITION_ARN ECS_CONTAINER_NAME ECS_SUBNET_IDS ECS_SECURITY_GROUP_IDS; do
+          for name in AWS_REGION AWS_ROLE_ARN ECS_CLUSTER_ARN ECS_TASK_DEFINITION_ARN ECS_SUBNET_IDS ECS_SECURITY_GROUP_IDS; do
             if [[ -z "${!name}" ]]; then
               echo "${name} repository or environment variable is required" >&2
               exit 1
@@ -67,9 +66,6 @@ jobs:
           IFS=',' read -r -a security_groups <<<"${ECS_SECURITY_GROUP_IDS}"
           subnet_json="$(printf '%s\n' "${subnets[@]}" | jq -R . | jq -cs .)"
           security_group_json="$(printf '%s\n' "${security_groups[@]}" | jq -R . | jq -cs .)"
-          overrides="$(jq -cn \
-            --arg name "${ECS_CONTAINER_NAME}" \
-            '{containerOverrides:[{name:$name,command:["bun","dist/serve/index.js","shared-to-dedicated-transfer"]}]}')"
           network_configuration="$(jq -cn \
             --argjson subnets "${subnet_json}" \
             --argjson securityGroups "${security_group_json}" \
@@ -79,7 +75,6 @@ jobs:
             --task-definition "${ECS_TASK_DEFINITION_ARN}" \
             --launch-type FARGATE \
             --network-configuration "${network_configuration}" \
-            --overrides "${overrides}" \
             --started-by "github-${GITHUB_RUN_ID}" \
             --no-enable-execute-command \
             --query 'tasks[0].taskArn' \
@@ -141,14 +136,21 @@ jobs:
             cleanup_started_task "describing transfer task failed; stopping started task" || true
             exit 1
           fi
-          if ! exit_code="$(jq -er --arg name "${ECS_CONTAINER_NAME}" '.tasks[0].containers[] | select(.name == $name) | .exitCode' <<<"${task}")"; then
-            cleanup_started_task "reading transfer task exit code failed; verifying terminal state" || true
+          if ! container_evidence="$(jq -cer '
+            [.tasks[0].containers[] | {name, exitCode, reason}]
+            | if length > 0 and all(.[]; (.exitCode | type) == "number")
+              then .
+              else error("complete container exit evidence is required")
+              end
+          ' <<<"${task}")"; then
+            cleanup_started_task "reading transfer task container exit evidence failed; verifying terminal state" || true
             exit 1
           fi
+          failed_container_count="$(jq '[.[] | select(.exitCode != 0)] | length' <<<"${container_evidence}")"
           stop_code="$(jq -r '.tasks[0].stopCode // ""' <<<"${task}")"
           stopped_reason="$(jq -r '.tasks[0].stoppedReason // ""' <<<"${task}")"
-          if [[ "${exit_code}" != "0" ]]; then
-            echo "transfer task failed: exit=${exit_code} stopCode=${stop_code} reason=${stopped_reason}" >&2
+          if [[ "${failed_container_count}" != "0" ]]; then
+            echo "transfer task failed: containers=${container_evidence} stopCode=${stop_code} reason=${stopped_reason}" >&2
             if ! wait_for_terminal; then
               echo "transfer task cleanup did not reach STOPPED" >&2
             fi
