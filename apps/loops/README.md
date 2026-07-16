@@ -1058,3 +1058,48 @@ The adapters intentionally use provider command surfaces instead of pretending e
 - Daemon and scheduled runs prepend common user executable directories such as `~/.local/bin` and `~/.bun/bin` before resolving provider CLIs.
 
 For production loops that can mutate repos, use disposable worktrees (`--worktree-mode required` / `worktreeMode=required`) and explicit prompts that name allowed write scope. Worktrees are executor-enforced: when a target carries worktree metadata, the executor prepares and enters the git worktree before spawning the child process, records the worktree it entered, and with `mode=required` fails the run closed instead of falling back to the original checkout when preparation fails. Existing managed worktrees are reused only after top-level and git-common-dir checks; a clean detached or stale-branch checkout may be reattached to the expected generated branch, while dirty or unsafe mismatches fail with cleanup evidence. Remote machine runs with a required worktree apply the same checks on the remote side before the target executes.
+
+## Immutable ECR Candidate Images
+
+`.github/workflows/ecr-candidate.yml` is the repository workflow for building
+an AWS ECR release candidate. It is manual and source-only: it does not update
+`latest`, ECS task definitions, services, or deployments. The job checks out
+an exact full commit SHA, proves that commit is reachable from `origin/main`,
+builds the `Dockerfile` `runner` target natively for `linux/arm64`, blocks on
+local Trivy critical/high findings, and only then assumes the ECR push role.
+After the immutable push it waits for ECR scanning and blocks on critical/high
+findings there as well. The retained artifact contains the local scan report,
+a CycloneDX SBOM, an unsigned in-toto/SLSA provenance statement, and bounded
+ECR scan counts. The statement is evidence, not a cryptographic attestation.
+
+Before the first run, repository administrators must create a protected GitHub
+environment named `ecr-candidate` with required reviewers and no deployment
+branches other than `main`. Configure these repository variables (not secrets):
+
+- `AWS_REGION`: AWS region containing the existing candidate repository.
+- `AWS_ROLE_ARN`: OIDC role dedicated to this workflow.
+- `ECR_REPOSITORY`: existing ECR repository name. It must use immutable tags
+  and scan-on-push.
+
+The OIDC role trust must constrain `token.actions.githubusercontent.com:aud`
+to `sts.amazonaws.com` and `token.actions.githubusercontent.com:sub` to exactly
+`repo:hasna/loops:environment:ecr-candidate`. Its permissions should allow
+`ecr:GetAuthorizationToken` on `*`, and only these actions on the configured
+repository ARN: `ecr:DescribeRepositories`, `ecr:BatchCheckLayerAvailability`,
+`ecr:GetDownloadUrlForLayer`, `ecr:BatchGetImage`, `ecr:InitiateLayerUpload`,
+`ecr:UploadLayerPart`, `ecr:CompleteLayerUpload`, `ecr:PutImage`,
+`ecr:DescribeImages`, and `ecr:DescribeImageScanFindings`. No static AWS access
+key is used.
+
+Dispatch only after the source commit is merged to `main`:
+
+```bash
+sha="$(git rev-parse origin/main)"
+gh workflow run ecr-candidate.yml --repo hasna/loops --ref main \
+  -f source_sha="${sha}" -f confirmation="push ${sha}"
+```
+
+Dispatch is an AWS mutation and requires the applicable operator approval and
+fresh release preflight. Do not run it merely because the source workflow has
+merged. Review the workflow summary and retained evidence; promote only by
+the reported immutable digest through the separate deployment process.
