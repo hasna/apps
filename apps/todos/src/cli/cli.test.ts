@@ -388,6 +388,58 @@ describe("CLI integration", () => {
     try { unlinkSync("/tmp/test-cli-list.db"); } catch {}
   });
 
+  it("redacts credential-like task descriptions in broad list/search output but not explicit detail output", async () => {
+    const dbPath = join(testRoot, "broad-redaction.db");
+    const previousDbPath = process.env["TODOS_DB_PATH"];
+    closeDatabase();
+    process.env["TODOS_DB_PATH"] = dbPath;
+    resetDatabase();
+    const db = getDatabase();
+    const credentialLike = ["Bearer", "credentiallikevalue123456"].join(" ");
+    const rawDescription = `Deployment notes ${credentialLike}`;
+    const task = createTask({
+      title: "Broad redaction regression",
+      description: rawDescription,
+      status: "pending",
+      priority: "medium",
+      tags: ["broad-redaction"],
+    }, db);
+    closeDatabase();
+    if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
+    else process.env["TODOS_DB_PATH"] = previousDbPath;
+    resetDatabase();
+
+    const listJson = await runCli(["list", "--json"], dbPath);
+    expect(listJson.stderr).toBe("");
+    expect(listJson.exitCode).toBe(0);
+    const listed = JSON.parse(listJson.stdout);
+    expect(listed[0].description).toContain("Bearer [REDACTED]");
+    expect(listed[0].description).not.toContain("credentiallikevalue123456");
+
+    const searchJson = await runCli(["--json", "search", "Broad redaction"], dbPath);
+    expect(searchJson.stderr).toBe("");
+    expect(searchJson.exitCode).toBe(0);
+    const searched = JSON.parse(searchJson.stdout);
+    expect(searched[0].id).toBe(task.id);
+    expect(searched[0].description).toContain("Bearer [REDACTED]");
+    expect(searched[0].description).not.toContain("credentiallikevalue123456");
+
+    const listText = await runCli(["list"], dbPath);
+    expect(listText.stderr).toBe("");
+    expect(listText.exitCode).toBe(0);
+    expect(listText.stdout).not.toContain("credentiallikevalue123456");
+
+    const showJson = await runCli(["--json", "show", task.id], dbPath);
+    expect(showJson.stderr).toBe("");
+    expect(showJson.exitCode).toBe(0);
+    expect(JSON.parse(showJson.stdout).description).toBe(rawDescription);
+
+    const inspectJson = await runCli(["--json", "inspect", task.id], dbPath);
+    expect(inspectJson.stderr).toBe("");
+    expect(inspectJson.exitCode).toBe(0);
+    expect(JSON.parse(inspectJson.stdout).description).toBe(rawDescription);
+  });
+
   it("should emit complete parseable JSON for large list output", async () => {
     const dbPath = join(testRoot, "large-list.db");
     const previousDbPath = process.env["TODOS_DB_PATH"];

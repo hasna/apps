@@ -44,6 +44,7 @@ import {
   statusColors,
   priorityColors,
 } from "../helpers.js";
+import { redactBroadTasks } from "../output-redaction.js";
 import { TASK_PRIORITIES, TASK_STATUSES } from "../../types/index.js";
 
 /** Render untrusted text without allowing terminal control sequences to execute. */
@@ -659,13 +660,14 @@ export function registerTaskCommands(program: Command) {
       }
 
       const fmt = opts.format || (globalOpts.json ? "json" : "table");
+      const outputTasks = redactBroadTasks(tasks);
 
       if (fmt === "json") {
-        output(tasks, true);
+        output(outputTasks, true);
         return;
       }
 
-      if (tasks.length === 0) {
+      if (outputTasks.length === 0) {
         if (fmt === "compact" || fmt === "csv") process.stdout.write("");
         else console.log(chalk.dim("No tasks found."));
         return;
@@ -673,7 +675,7 @@ export function registerTaskCommands(program: Command) {
 
       if (fmt === "csv") {
         const headers = "id,short_id,title,status,priority,assigned_to,updated_at";
-        const rows = tasks.map((t: any) => [
+        const rows = outputTasks.map((t: any) => [
           t.id, t.short_id || "", t.title.replace(/,/g, ";"), t.status, t.priority, t.assigned_to || "", t.updated_at,
         ].join(","));
         console.log([headers, ...rows].join("\n"));
@@ -681,7 +683,7 @@ export function registerTaskCommands(program: Command) {
       }
 
       if (fmt === "compact") {
-        for (const t of tasks) {
+        for (const t of outputTasks) {
           const id = t.short_id || t.id.slice(0, 8);
           const assigned = t.assigned_to ? ` ${t.assigned_to}` : "";
           process.stdout.write(`${id} ${t.status} ${t.priority} ${t.title}${assigned}\n`);
@@ -689,8 +691,8 @@ export function registerTaskCommands(program: Command) {
         return;
       }
 
-      console.log(chalk.bold(`${tasks.length} task(s):\n`));
-      for (const t of tasks) {
+      console.log(chalk.bold(`${outputTasks.length} task(s):\n`));
+      for (const t of outputTasks) {
         console.log(formatTaskLine(t));
       }
     });

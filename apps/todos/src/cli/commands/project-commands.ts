@@ -25,6 +25,7 @@ import {
 import { defaultSyncAgents, syncWithAgent, syncWithAgents } from "../../lib/sync.js";
 import { getAgentTaskListId } from "../../lib/config.js";
 import { autoProject, autoDetectProject, handleError, output, formatTaskLine, normalizeStatus, resolveExplicitProject, resolveTaskId } from "../helpers.js";
+import { redactBroadOutput, redactBroadTasks } from "../output-redaction.js";
 
 function collectOption(value: string, previous: string[] = []): string[] {
   return [...previous, value];
@@ -287,7 +288,7 @@ export function registerProjectCommands(program: Command) {
         if (scope !== "tasks") {
           const result = runSavedSearch(searchOpts, scope);
           if (globalOpts.json) {
-            output(result, true);
+            output(redactBroadOutput(result), true);
             return;
           }
           if (result.count === 0) {
@@ -296,25 +297,26 @@ export function registerProjectCommands(program: Command) {
           }
           console.log(chalk.bold(`${result.count} ${scope} result(s) for "${query}":\n`));
           for (const item of result.results) {
-            const entity = item.entity as any;
+            const entity = redactBroadOutput(item.entity as any);
             console.log(`${chalk.cyan(item.entity_type)} ${entity.id?.slice?.(0, 8) || ""} ${entity.name || entity.title || entity.content || entity.summary || ""}`);
           }
           return;
         }
         const tasks = runSavedSearch(searchOpts, "tasks").results.map((item) => item.entity as ReturnType<typeof searchTasks>[number]);
+        const outputTasks = redactBroadTasks(tasks);
 
         if (globalOpts.json) {
-          output(tasks, true);
+          output(outputTasks, true);
           return;
         }
 
-        if (tasks.length === 0) {
+        if (outputTasks.length === 0) {
           console.log(chalk.dim(`No tasks matching "${query}".`));
           return;
         }
 
-        console.log(chalk.bold(`${tasks.length} result(s) for "${query}":\n`));
-        for (const t of tasks) {
+        console.log(chalk.bold(`${outputTasks.length} result(s) for "${query}":\n`));
+        for (const t of outputTasks) {
           console.log(formatTaskLine(t));
         }
       } catch (e) {
