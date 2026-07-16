@@ -470,12 +470,16 @@ suite("PostgresLoopStorage (live)", () => {
     if (runtimeExecutor) await runtimeExecutor.close();
     if (executor) await executor.close();
     await admin(`DROP DATABASE IF EXISTS ${ISO_DB} WITH (FORCE)`);
-    await admin(`
-      DROP OWNED BY ${RUNTIME_LOGIN};
-      DROP OWNED BY ${AUTH_LOGIN};
-      DROP ROLE IF EXISTS ${RUNTIME_LOGIN};
-      DROP ROLE IF EXISTS ${AUTH_LOGIN};
-    `);
+    await admin(`DO $cleanup$ BEGIN
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='${RUNTIME_LOGIN}') THEN
+        EXECUTE format('DROP OWNED BY %I', '${RUNTIME_LOGIN}');
+        EXECUTE format('DROP ROLE %I', '${RUNTIME_LOGIN}');
+      END IF;
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='${AUTH_LOGIN}') THEN
+        EXECUTE format('DROP OWNED BY %I', '${AUTH_LOGIN}');
+        EXECUTE format('DROP ROLE %I', '${AUTH_LOGIN}');
+      END IF;
+    END $cleanup$`);
     await admin(`DO $cleanup$ BEGIN
       IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='open_loops_owner') THEN
         EXECUTE format('REVOKE open_loops_owner FROM %I', current_user);
@@ -488,7 +492,14 @@ suite("PostgresLoopStorage (live)", () => {
     await admin(`DROP ROLE IF EXISTS ${EXTRA_AUTH_ROLE}`);
     await admin(`DROP ROLE IF EXISTS ${EXTRA_SERVICE_ROLE}`);
     await admin(`DROP ROLE IF EXISTS ${HOSTILE_FUNCTION_OWNER}`);
-    await admin(`DO $cleanup$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='${DRIFT_DATABASE_LOGIN}') THEN REVOKE open_loops_runtime FROM ${DRIFT_DATABASE_LOGIN}; DROP ROLE ${DRIFT_DATABASE_LOGIN}; END IF; END $cleanup$`);
+    await admin(`DO $cleanup$ BEGIN
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='${DRIFT_DATABASE_LOGIN}') THEN
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='open_loops_runtime') THEN
+          EXECUTE format('REVOKE open_loops_runtime FROM %I', '${DRIFT_DATABASE_LOGIN}');
+        END IF;
+        EXECUTE format('DROP ROLE %I', '${DRIFT_DATABASE_LOGIN}');
+      END IF;
+    END $cleanup$`);
     await admin(`
       DROP ROLE IF EXISTS open_loops_authenticator;
       DROP ROLE IF EXISTS open_loops_runtime;
