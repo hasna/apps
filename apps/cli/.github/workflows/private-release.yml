@@ -30,7 +30,8 @@ env:
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    environment: private-release
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -100,6 +101,28 @@ jobs:
           node scripts/verify-package-artifact.mjs "$TARBALL"
           echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
 
+      - name: Verify scoped registry routing and local tarball install
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARBALL: ${{ steps.artifact.outputs.tarball }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          SCOPED_CONFIG=$(mktemp)
+          chmod 600 "$SCOPED_CONFIG"
+          printf '%s\n' \
+            'registry=https://registry.npmjs.org/' \
+            '@hasna:registry=https://npm.pkg.github.com' \
+            '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}' \
+            > "$SCOPED_CONFIG"
+          test "$(npm --userconfig="$SCOPED_CONFIG" config get registry)" = 'https://registry.npmjs.org/'
+          test "$(npm --userconfig="$SCOPED_CONFIG" config get @hasna:registry)" = "$REGISTRY_URL"
+          LOCAL_INSTALL=$(mktemp -d)
+          npm install --prefix "$LOCAL_INSTALL" --ignore-scripts \
+            --userconfig="$SCOPED_CONFIG" "$TARBALL" >/dev/null
+          RESULT=$("$LOCAL_INSTALL/node_modules/.bin/hasna" --json version)
+          test "$(jq -r .data.version <<<"$RESULT")" = "$VERSION"
+
       - name: Authenticate and require package version absence
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -147,8 +170,17 @@ jobs:
           ! grep -q '^latest:' <<<"$DIST_TAGS"
 
           DOWNLOAD_DIR=$(mktemp -d)
+          SCOPED_CONFIG=$(mktemp)
+          chmod 600 "$SCOPED_CONFIG"
+          printf '%s\n' \
+            'registry=https://registry.npmjs.org/' \
+            '@hasna:registry=https://npm.pkg.github.com' \
+            '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}' \
+            > "$SCOPED_CONFIG"
+          test "$(npm --userconfig="$SCOPED_CONFIG" config get registry)" = 'https://registry.npmjs.org/'
+          test "$(npm --userconfig="$SCOPED_CONFIG" config get @hasna:registry)" = "$REGISTRY_URL"
           npm pack "${PACKAGE_NAME}@${VERSION}" \
-            --registry="$REGISTRY_URL" \
+            --userconfig="$SCOPED_CONFIG" \
             --pack-destination "$DOWNLOAD_DIR" >/dev/null
           DOWNLOADED=$(find "$DOWNLOAD_DIR" -maxdepth 1 -name 'hasna-cli-*.tgz' -type f -print -quit)
           test "$(sha256sum "$DOWNLOADED" | cut -d' ' -f1)" = "$EXPECTED_SHA256"
@@ -156,7 +188,7 @@ jobs:
           INSTALL_DIR=$(mktemp -d)
           npm init --yes --prefix "$INSTALL_DIR" >/dev/null
           npm install --prefix "$INSTALL_DIR" --ignore-scripts \
-            --registry="$REGISTRY_URL" "${PACKAGE_NAME}@${VERSION}" >/dev/null
+            --userconfig="$SCOPED_CONFIG" "${PACKAGE_NAME}@${VERSION}" >/dev/null
           RESULT=$("$INSTALL_DIR/node_modules/.bin/hasna" --json version)
           test "$(jq -r .data.version <<<"$RESULT")" = "$VERSION"
 

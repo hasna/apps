@@ -11,19 +11,26 @@ const entries = execFileSync('tar', ['-tzf', tarball], { encoding: 'utf8' })
   .split('\n')
   .filter(Boolean)
 
-const allowedFiles = new Set([
-  'package/LICENSE',
-  'package/README.md',
-  'package/SECURITY.md',
-  'package/package.json',
-])
-for (const entry of entries) {
-  const allowed =
-    allowedFiles.has(entry) || entry.startsWith('package/dist/') || entry.startsWith('package/docs/')
-  if (!allowed) throw new Error(`unexpected package entry: ${entry}`)
+const expectedEntries = readFileSync(
+  new URL('./package-artifact-manifest.txt', import.meta.url),
+  'utf8',
+)
+  .trim()
+  .split('\n')
+  .filter(Boolean)
+if (JSON.stringify([...entries].sort()) !== JSON.stringify([...expectedEntries].sort()))
+  throw new Error('tarball entries do not match the exact artifact manifest')
+
+const verboseEntries = execFileSync('tar', ['-tvzf', tarball, '--numeric-owner'], {
+  encoding: 'utf8',
+})
+  .trim()
+  .split('\n')
+  .filter(Boolean)
+if (verboseEntries.length !== entries.length) throw new Error('archive listing length mismatch')
+for (const entry of verboseEntries) {
+  if (!entry.startsWith('-')) throw new Error(`non-regular archive entry: ${entry}`)
 }
-if (entries.some((entry) => entry.startsWith('package/src/') || entry.startsWith('package/test/')))
-  throw new Error('source or test files must not be published')
 
 const packageJson = JSON.parse(
   execFileSync('tar', ['-xOzf', tarball, 'package/package.json'], { encoding: 'utf8' }),
@@ -45,7 +52,12 @@ const credentialPatterns = [
   /-----BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----/,
   /\bAKIA[0-9A-Z]{16}\b/,
   /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/,
+  /\bglpat-[A-Za-z0-9_-]{20,}\b/,
   /\bnpm_[A-Za-z0-9]{20,}\b/,
+  /\bxox[baprs]-[A-Za-z0-9-]{20,}\b/,
+  /\bAIza[0-9A-Za-z_-]{30,}\b/,
+  /\bsk_live_[0-9A-Za-z]{16,}\b/,
   /\bsk-[A-Za-z0-9]{20,}\b/,
 ]
 for (const entry of entries.filter((candidate) => !candidate.endsWith('/'))) {
@@ -54,8 +66,10 @@ for (const entry of entries.filter((candidate) => !candidate.endsWith('/'))) {
   for (const pattern of credentialPatterns) {
     if (pattern.test(text)) throw new Error(`credential-like content in ${entry}`)
   }
-  if (/\/(?:home|Users)\/[^/\s]+\//.test(text))
+  if (/(?:^|[\s"'`])\/(?:home|Users|root)\/[^/\s]+\//m.test(text))
     throw new Error(`absolute user path in ${entry}`)
+  if (/\b[A-Za-z]:\\(?:Users|Documents and Settings)\\[^\\\s]+\\/.test(text))
+    throw new Error(`Windows absolute user path in ${entry}`)
   if (entry.endsWith('.map')) {
     const sourceMap = JSON.parse(text)
     if ('sourcesContent' in sourceMap) throw new Error(`embedded source content in ${entry}`)

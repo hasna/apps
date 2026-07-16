@@ -61,8 +61,17 @@ describe('publish and artifact contract', () => {
     expect(workflow).not.toMatch(/^\s+push:/m)
     expect(workflow).not.toMatch(/^\s+pull_request:/m)
     expect(workflow).toMatch(/permissions:\s*\n\s+contents:\s+read\s*\n\s+packages:\s+write/)
+    expect(workflow).toContain('environment: private-release')
+    expect(workflow).toContain('runs-on: ubuntu-24.04')
     expect(workflow).toContain('https://npm.pkg.github.com')
-    expect(workflow).not.toContain('https://registry.npmjs.org')
+    expect(workflow).toContain('registry=https://registry.npmjs.org/')
+    expect(workflow).toContain('@hasna:registry=https://npm.pkg.github.com')
+    expect(workflow).toContain('Verify scoped registry routing and local tarball install')
+    expect(workflow).toContain('--userconfig="$SCOPED_CONFIG" "$TARBALL"')
+    expect(workflow).toContain('--userconfig="$SCOPED_CONFIG" "${PACKAGE_NAME}@${VERSION}"')
+    expect(workflow).not.toContain(
+      '--registry="$REGISTRY_URL" "${PACKAGE_NAME}@${VERSION}"',
+    )
     expect(workflow).toContain('--access restricted')
     expect(workflow).toContain('--tag internal')
     expect(workflow).toContain('npm publish "$TARBALL"')
@@ -71,6 +80,22 @@ describe('publish and artifact contract', () => {
     expect(workflow).toContain("metadata.visibility !== 'private'")
     expect(workflow).toContain("metadata.repository?.full_name !== 'hasna/cli'")
     expect(workflow).toContain('minimumReleaseAgeExcludes = ["@hasna/cli"]')
+  })
+
+  it('pins an exact regular-file artifact manifest and expanded leak checks', () => {
+    const verifier = readFileSync(join(root, 'scripts/verify-package-artifact.mjs'), 'utf8')
+    const manifest = readFileSync(join(root, 'scripts/package-artifact-manifest.txt'), 'utf8')
+      .trim()
+      .split('\n')
+    expect(new Set(manifest).size).toBe(manifest.length)
+    expect(manifest).toContain('package/package.json')
+    expect(manifest).toContain('package/dist/cli.js')
+    expect(manifest).not.toContain('package/src/cli.ts')
+    expect(verifier).toContain("['-tvzf', tarball, '--numeric-owner']")
+    expect(verifier).toContain('non-regular archive entry')
+    expect(verifier).toContain('github_pat_')
+    expect(verifier).toContain('Windows absolute user path')
+    expect(verifier).toContain('package-artifact-manifest.txt')
   })
 
   it('documents GitHub Packages authentication and the separate deprecated npmjs package', () => {
@@ -83,5 +108,7 @@ describe('publish and artifact contract', () => {
       expect(document).toContain('0.1.0')
     }
     expect(release).toContain('Anonymous denial is not proof of private visibility')
+    expect(release).toContain('required human reviewer')
+    expect(release).toContain('restrict deployment branches to `main`')
   })
 })

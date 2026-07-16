@@ -21,6 +21,9 @@ npm install --global @hasna/cli@internal
 hasna --json version
 ```
 
+Keep npmjs as the default registry for unscoped dependencies; map only the `@hasna` scope to
+GitHub Packages as shown above.
+
 The scope mapping is required. The default npmjs registry contains a separate, public, deprecated
 `@hasna/cli@0.1.0`; it is not this CLI and points users to `@hasna/agency`. An install that does not
 explicitly route `@hasna` to `https://npm.pkg.github.com` can resolve that historical npmjs package

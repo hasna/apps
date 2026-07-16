@@ -30,6 +30,11 @@ with the exact version, reviewed 40-character main commit, and reviewed tarball 
 only `contents:read` and `packages:write`; it uses `secrets.GITHUB_TOKEN` as `NODE_AUTH_TOKEN` and
 never persists the token.
 
+Before the first dispatch, repository administrators must configure the `private-release` GitHub
+environment with at least one required human reviewer and restrict deployment branches to `main`
+only. Do not dispatch if either protection is absent. The workflow still verifies the selected ref,
+exact commit, and current remote `main` after environment approval and fails closed on drift.
+
 The workflow fails closed unless the selected ref is current `main`, package metadata targets
 GitHub Packages, the version is absent with an authenticated `E404`, all tests and package checks
 pass, and the rebuilt tarball matches the supplied SHA-256. It publishes that tarball with:
@@ -42,6 +47,11 @@ There is no npmjs fallback. Authentication, authorization, duplicate-version, re
 privacy, repository-link, install, or tag mismatches fail the workflow. A failed post-publication
 verification requires incident handling; it does not authorize a retry with another registry or
 version.
+
+Both the pre-publication local-tarball install and post-publication registry install use an isolated
+npm user configuration. The default registry remains npmjs for unscoped dependencies, while only
+the `@hasna` scope is routed to `https://npm.pkg.github.com`. This prevents an explicit GitHub
+Packages `--registry` flag from incorrectly routing ordinary dependencies away from npmjs.
 
 ## Installation and privacy verification
 
