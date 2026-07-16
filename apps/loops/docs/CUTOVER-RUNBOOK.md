@@ -89,15 +89,24 @@ Before step 1, satisfy and preserve evidence for these hard gates:
 2. Prepare the tenant schema with the ECS one-shot task or an operator command:
    `HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --dry-run`, then
    `HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate`.
-3. Load the reviewed explicit ownership bundle with
-   `HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve tenant-backfill --input <bundle>`.
+3. In ECS, load the reviewed explicit ownership bundle with the fixed,
+   no-argument command
+   `HASNA_LOOPS_MIGRATOR_DATABASE_URL=... HASNA_LOOPS_BACKFILL_BUCKET=... AWS_REGION=... loops-serve tenant-backfill-s3`.
+   The task role must expose only a valid
+   `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`. The bucket must contain exactly one
+   object under `approved/`, named `approved/sha256-<64 lowercase hex>.json`,
+   and no more than 10 MiB. The command verifies the raw-byte digest before
+   parsing, loads transactionally, deletes the selected object on success or
+   failure, and treats deletion failure as fatal. Record its bounded digest and
+   counts log only. For a local operator rehearsal, the compatible file command
+   remains `HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve tenant-backfill --input <bundle>`.
    Before delivery, require named operator approval of tenant, principal,
    membership, API-key, and row-owner counts; compute and record the bundle's
    SHA-256; and transfer it only through the approved encrypted artifact path.
-   On the migration host, verify the hash and restrictive file permissions
-   before use. Record only the hash, counts, approver, and bounded command
-   result—never bundle contents or credentials—and remove the staged artifact
-   after the transaction and evidence capture complete.
+   For local file delivery only, verify the hash and restrictive file
+   permissions before use, then remove the staged artifact after the
+   transaction and evidence capture complete. Record only the hash, counts,
+   approver, and bounded command result—never bundle contents or credentials.
 4. Enforce tenant keys, composite foreign keys, and forced RLS with
    `HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --enforce-tenancy`.
    After this succeeds, have provider automation attach the runtime and
