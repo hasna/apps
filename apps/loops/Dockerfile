@@ -44,6 +44,7 @@ COPY package.json bun.lock ./
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/src/lib/storage/fixtures/empty-tenant-backfill.json ./empty-tenant-backfill.json
+USER bun
 EXPOSE 8787
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD bun -e "const port=process.env.PORT||'8787'; fetch(`http://127.0.0.1:${port}/ready`).then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 # Fail-closed: loops-serve requires separate runtime/auth DSNs and a signing
