@@ -49,6 +49,26 @@ Channels can carry a class for fleet taxonomies at
 `metadata.channel_schema.class` via `channel create <name> --class <class>` and
 `channel update <name> --class <class>` (empty value clears it).
 
+## Project-Linked Channels
+
+`conversations channel create --project <id>` links the channel to an existing
+Conversations project row. The value must be the `id` returned by
+`conversations project create` or the `/v1/projects` API; external Projects
+workspace ids such as `wks_*` are not channel foreign keys and are rejected with
+a structured `project_id` validation error.
+
+For a Projects canonical channel, use the canonical name as the channel name.
+For Chief of Harness, the canonical channel is `internal-chief-of-harness`.
+
+```bash
+conversations project create chief-of-harness --from friday --json
+conversations channel create internal-chief-of-harness --project <returned-project-id> --from friday
+```
+
+If the canonical channel is needed before a Conversations project mirror exists,
+create or send to the canonical channel without `--project`, then link it later
+with `conversations channel update internal-chief-of-harness --project <returned-project-id>`.
+
 ## Compact Output Defaults
 
 Agent-facing commands are compact by default so busy stores do not flood the

@@ -55,6 +55,35 @@ function matchesEvent(webhook: WebhookConfig, msg: Message): boolean {
   return false;
 }
 
+function safeWebhookUrl(urlStr: string): string {
+  try {
+    const url = new URL(urlStr);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return "<invalid-url>";
+  }
+}
+
+function redactUrls(value: string): string {
+  return value.replace(/https?:\/\/[^\s"'<>)]*/g, (candidate) => {
+    try {
+      const url = new URL(candidate);
+      return `${url.origin}${url.pathname}`;
+    } catch {
+      return candidate;
+    }
+  });
+}
+
+function safeWebhookErrorMessage(error: unknown, webhook: WebhookConfig): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return redactUrls(message).split(webhook.url).join(safeWebhookUrl(webhook.url));
+}
+
+function warnWebhookDelivery(kind: string, webhook: WebhookConfig, message: string): void {
+  console.warn(`[conversations:webhook] ${kind} webhook ${safeWebhookUrl(webhook.url)} ${message}`);
+}
+
 /** Check if an IP address is in a private/internal range. */
 function isPrivateIP(ip: string): boolean {
   if (net.isIPv4(ip)) {
@@ -114,7 +143,10 @@ export function fireWebhooks(msg: Message): void {
 
     // Validate URL to prevent SSRF — skip invalid/dangerous URLs silently
     void validateWebhookUrl(webhook.url).then((valid) => {
-      if (!valid) return;
+      if (!valid) {
+        warnWebhookDelivery("message", webhook, "was not delivered: invalid or unsafe URL");
+        return;
+      }
       fetch(webhook.url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -128,9 +160,15 @@ export function fireWebhooks(msg: Message): void {
           blocking: msg.blocking,
           created_at: msg.created_at,
         }),
-      }).catch(() => {
-        // Silently ignore webhook failures
+      }).then((response) => {
+        if (!response.ok) {
+          warnWebhookDelivery("message", webhook, `POST failed with HTTP ${response.status}`);
+        }
+      }).catch((error) => {
+        warnWebhookDelivery("message", webhook, `POST failed: ${safeWebhookErrorMessage(error, webhook)}`);
       });
+    }).catch((error) => {
+      warnWebhookDelivery("message", webhook, `URL validation failed: ${safeWebhookErrorMessage(error, webhook)}`);
     });
   }
 }
@@ -165,14 +203,23 @@ export function fireTaskWebhooks(event: TaskEvent): void {
     if (webhook.agent && event.agent !== webhook.agent) continue;
 
     void validateWebhookUrl(webhook.url).then((valid) => {
-      if (!valid) return;
+      if (!valid) {
+        warnWebhookDelivery("task", webhook, "was not delivered: invalid or unsafe URL");
+        return;
+      }
       fetch(webhook.url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(event),
-      }).catch(() => {
-        // Silently ignore webhook failures
+      }).then((response) => {
+        if (!response.ok) {
+          warnWebhookDelivery("task", webhook, `POST failed with HTTP ${response.status}`);
+        }
+      }).catch((error) => {
+        warnWebhookDelivery("task", webhook, `POST failed: ${safeWebhookErrorMessage(error, webhook)}`);
       });
+    }).catch((error) => {
+      warnWebhookDelivery("task", webhook, `URL validation failed: ${safeWebhookErrorMessage(error, webhook)}`);
     });
   }
 }

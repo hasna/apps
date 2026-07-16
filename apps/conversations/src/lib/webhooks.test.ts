@@ -8,6 +8,7 @@ import type { Message } from "../types";
 const TEST_CONFIG_DIR = join(tmpdir(), `conversations-test-webhooks-${Date.now()}`);
 const TEST_CONFIG_PATH = join(TEST_CONFIG_DIR, "config.json");
 const ORIGINAL_FETCH = globalThis.fetch;
+const ORIGINAL_WARN = console.warn;
 
 function makeMessage(overrides: Partial<Message> = {}): Message {
   return {
@@ -51,6 +52,7 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = ORIGINAL_FETCH;
+  console.warn = ORIGINAL_WARN;
   delete process.env.CONVERSATIONS_CONFIG_PATH;
   _resetConfigCache();
   try { rmSync(TEST_CONFIG_DIR, { recursive: true }); } catch {}
@@ -137,15 +139,22 @@ describe("fireWebhooks", () => {
     fireWebhooks(makeMessage({ content: "no mentions here" }));
   });
 
-  test("handles fetch failure silently", () => {
-    const originalFetch = globalThis.fetch;
-    (globalThis as any).fetch = async () => { throw new Error("network error"); };
+  test("reports fetch failure without throwing or exposing webhook query strings", async () => {
+    const warnings: string[] = [];
+    console.warn = ((message: string) => warnings.push(message)) as typeof console.warn;
+    (globalThis as any).fetch = async () => {
+      throw new Error("network error for https://example.com/hook?debug=query-value&trace=visible-query");
+    };
     writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
-      webhooks: [{ url: "http://localhost:9999/hook", events: ["dm"] }],
+      webhooks: [{ url: "https://example.com/hook?debug=query-value", events: ["dm"] }],
     }));
-    // Should not throw even though fetch fails
-    fireWebhooks(makeMessage());
-    globalThis.fetch = originalFetch;
+    expect(() => fireWebhooks(makeMessage())).not.toThrow();
+
+    await waitFor(() => warnings.length === 1);
+    expect(warnings[0]).toContain("POST failed: network error for https://example.com/hook");
+    expect(warnings[0]).toContain("https://example.com/hook");
+    expect(warnings[0]).not.toContain("debug=query-value");
+    expect(warnings[0]).not.toContain("trace=visible-query");
   });
 });
 
@@ -375,24 +384,29 @@ describe("fireTaskWebhooks", () => {
     globalThis.fetch = originalFetch;
   });
 
-  test("handles fetch failure silently", async () => {
-    const originalFetch = globalThis.fetch;
+  test("reports fetch failure without throwing or exposing webhook query strings", async () => {
     let attempted = false;
+    const warnings: string[] = [];
+    console.warn = ((message: string) => warnings.push(message)) as typeof console.warn;
     (globalThis as any).fetch = async () => {
       attempted = true;
-      throw new Error("network error");
+      throw new Error("network error for https://example.com/task-hook?debug=query-value&trace=visible-query");
     };
 
     try {
       writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
-        webhooks: [{ url: "https://example.com/task-hook", events: ["task"] }],
+        webhooks: [{ url: "https://example.com/task-hook?debug=query-value", events: ["task"] }],
       }));
 
       // Should not throw, and the rejected async fetch must settle before restore.
       expect(() => fireTaskWebhooks(makeTaskEvent())).not.toThrow();
       await waitFor(() => attempted);
+      await waitFor(() => warnings.length === 1);
+      expect(warnings[0]).toContain("task webhook https://example.com/task-hook POST failed: network error for https://example.com/task-hook");
+      expect(warnings[0]).not.toContain("debug=query-value");
+      expect(warnings[0]).not.toContain("trace=visible-query");
     } finally {
-      globalThis.fetch = originalFetch;
+      globalThis.fetch = ORIGINAL_FETCH;
     }
   });
 

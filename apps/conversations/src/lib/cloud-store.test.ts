@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   conversationsCloudEnv,
+  createChannel,
   deleteMessage,
   getMessageById,
   isCloudMode,
@@ -20,6 +21,15 @@ describe("conversationsCloudEnv", () => {
   test("respects explicit local mode", () => {
     const env = conversationsCloudEnv({ ...CLOUD_ENV, HASNA_CONVERSATIONS_STORAGE_MODE: "local" });
     expect(env.HASNA_CONVERSATIONS_STORAGE_MODE).toBe("local");
+  });
+  test("local DB path overrides inherited cloud routing", () => {
+    const env = conversationsCloudEnv({
+      ...CLOUD_ENV,
+      HASNA_CONVERSATIONS_STORAGE_MODE: "cloud",
+      CONVERSATIONS_DB_PATH: "/tmp/conversations-test.db",
+    });
+    expect(env.HASNA_CONVERSATIONS_STORAGE_MODE).toBe("local");
+    expect(resolveConversationsCloud(env)).toBeNull();
   });
   test("no-op without url/key", () => {
     expect(conversationsCloudEnv({}).HASNA_CONVERSATIONS_STORAGE_MODE).toBeUndefined();
@@ -58,6 +68,29 @@ describe("routed message CRUD hits the cloud API when self_hosted", () => {
       if (method === "POST" && url.endsWith("/v1/messages")) {
         return new Response(JSON.stringify({ message: msg }), { status: 201, headers: { "content-type": "application/json" } });
       }
+      if (method === "POST" && url.endsWith("/v1/channels")) {
+        const parsedBody = body ? JSON.parse(body) : {};
+        if (parsedBody.project_id === "missing-project") {
+          return new Response(JSON.stringify({
+            error: "Validation failed",
+            field: "project_id",
+            reason: "No conversations project exists with that id.",
+            hint: "Create or resolve the conversations project first with POST/GET /v1/projects.",
+          }), { status: 400, headers: { "content-type": "application/json" } });
+        }
+        return new Response(JSON.stringify({
+          channel: {
+            name: parsedBody.name,
+            created_by: parsedBody.created_by,
+            project_id: parsedBody.project_id ?? null,
+            description: parsedBody.description ?? null,
+            topic: parsedBody.topic ?? null,
+            metadata: parsedBody.metadata ?? null,
+            tags: parsedBody.tags ?? [],
+            created_at: "2026-07-07T00:00:00Z",
+          },
+        }), { status: 201, headers: { "content-type": "application/json" } });
+      }
       if (method === "GET" && url.endsWith("/v1/messages/42")) {
         return new Response(JSON.stringify({ message: msg }), { status: 200, headers: { "content-type": "application/json" } });
       }
@@ -85,6 +118,30 @@ describe("routed message CRUD hits the cloud API when self_hosted", () => {
     expect(post?.url).toBe("https://conversations.hasna.xyz/v1/messages");
     expect(post?.auth).toBe(`Bearer ${CLOUD_ENV.HASNA_CONVERSATIONS_API_KEY}`);
     expect(JSON.parse(post!.body!)).toMatchObject({ from: "alice", to: "bob", content: "hi" });
+  });
+
+  test("createChannel -> POST /v1/channels and unwraps linked channel metadata", async () => {
+    const metadata = { channel_schema: { class: "loop-lane" }, owner: "harness" };
+    const tags = ["team:harness", "project"];
+    const channel = await createChannel("internal-chief-of-harness", "alice", { project_id: "proj-valid", metadata, tags }, { ...CLOUD_ENV });
+    expect(channel.name).toBe("internal-chief-of-harness");
+    expect(channel.project_id).toBe("proj-valid");
+    expect(channel.metadata).toEqual(metadata);
+    expect(channel.tags).toEqual(tags);
+    const post = calls.find((c) => c.method === "POST" && c.url.endsWith("/v1/channels"));
+    expect(post?.auth).toBe(`Bearer ${CLOUD_ENV.HASNA_CONVERSATIONS_API_KEY}`);
+    expect(JSON.parse(post!.body!)).toMatchObject({
+      name: "internal-chief-of-harness",
+      created_by: "alice",
+      project_id: "proj-valid",
+      metadata,
+      tags,
+    });
+  });
+
+  test("createChannel surfaces cloud project_id rejection details", async () => {
+    await expect(createChannel("internal-chief-of-harness", "alice", { project_id: "missing-project" }, { ...CLOUD_ENV }))
+      .rejects.toThrow(/Cloud channel create failed with HTTP 400: Validation failed; field=project_id; No conversations project exists/);
   });
 
   test("getMessageById -> GET /v1/messages/:id, 404 -> null", async () => {
