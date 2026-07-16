@@ -120,7 +120,7 @@ jobs:
           scanners: vuln
           vuln-type: os,library
           severity: CRITICAL,HIGH
-          ignore-unfixed: true
+          ignore-unfixed: false
           exit-code: "0"
 
       - name: Enforce local vulnerability gate

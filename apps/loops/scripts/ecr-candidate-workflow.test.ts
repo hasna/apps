@@ -51,6 +51,8 @@ describe("ECR candidate workflow contract", () => {
     expect(push).toBeLessThan(wait);
     expect(wait).toBeLessThan(findings);
     expect(workflow).toContain("severity: CRITICAL,HIGH");
+    expect(workflow).toContain("ignore-unfixed: false");
+    expect(workflow).not.toContain("ignore-unfixed: true");
     expect(workflow).toContain("critical > 0 || high > 0");
   });
 
