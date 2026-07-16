@@ -1,40 +1,63 @@
 import crypto from "crypto";
 import { getDb } from "./database.js";
-import { sanitizeTextForBoundary, sanitizeValueForBoundary } from "../lib/finding-safety.js";
+import {
+  sanitizeFingerprintForOutput,
+  sanitizeTextForBoundary,
+  sanitizeValueForBoundary,
+} from "../lib/finding-safety.js";
+import {
+  legacyRowContainsCredential,
+  sanitizeCachedResultText,
+  scrubLegacyCredentialRows,
+} from "./legacy-credential-scrub.js";
+
+interface CacheRow extends Record<string, unknown> {
+  id: string;
+  result: string;
+  finding_fingerprint: string;
+  analysis_type: string;
+}
 
 export function getCachedAnalysis(
   fingerprint: string,
   analysis_type: string
 ): Record<string, unknown> | null {
   const db = getDb();
-  const safeFingerprint = sanitizeTextForBoundary(fingerprint, 256);
+  const safeFingerprint = sanitizeFingerprintForOutput(fingerprint);
   const safeAnalysisType = sanitizeTextForBoundary(analysis_type, 128);
-  const stmt = db.prepare(
-    `SELECT id, result, finding_fingerprint, analysis_type FROM llm_cache
-     WHERE (finding_fingerprint = ? AND analysis_type = ?)
-        OR (finding_fingerprint = ? AND analysis_type = ?)
-     LIMIT 1`
+  const rawStmt = db.prepare(
+    `SELECT * FROM llm_cache WHERE finding_fingerprint = ? AND analysis_type = ? LIMIT 1`,
   );
-  const row = stmt.get(safeFingerprint, safeAnalysisType, fingerprint, analysis_type) as {
-    id: string;
-    result: string;
-    finding_fingerprint: string;
-    analysis_type: string;
-  } | undefined;
+  const safeStmt = db.prepare(
+    `SELECT * FROM llm_cache WHERE finding_fingerprint = ? AND analysis_type = ? LIMIT 1`,
+  );
+  const readRawRow = () => rawStmt.get(fingerprint, analysis_type) as CacheRow | undefined;
+  const readSafeRow = () => safeStmt.get(
+    safeFingerprint,
+    safeAnalysisType,
+  ) as CacheRow | undefined;
+  let row = readRawRow();
+  if (row && legacyRowContainsCredential(row)) {
+    scrubLegacyCredentialRows(db);
+    row = readSafeRow();
+  } else if (!row) {
+    row = readSafeRow();
+  }
+  if (row && legacyRowContainsCredential(row)) {
+    scrubLegacyCredentialRows(db);
+    row = readSafeRow();
+  }
   if (!row) return null;
-  const safeResult = sanitizeValueForBoundary(JSON.parse(row.result) as Record<string, unknown>);
-  const safeResultJson = JSON.stringify(safeResult);
+  const safeResultJson = sanitizeCachedResultText(row.result);
+  const safeResult = JSON.parse(safeResultJson) as Record<string, unknown>;
   if (
-    row.result !== safeResultJson ||
-    row.finding_fingerprint !== safeFingerprint ||
-    row.analysis_type !== safeAnalysisType
+    row.result !== safeResultJson
   ) {
     try {
-      db.prepare(
-        "UPDATE llm_cache SET finding_fingerprint = ?, analysis_type = ?, result = ? WHERE id = ?",
-      ).run(safeFingerprint, safeAnalysisType, safeResultJson, row.id);
+      db.prepare("UPDATE llm_cache SET result = ? WHERE id = ?")
+        .run(safeResultJson, row.id);
     } catch {
-      // Return remains sanitized when legacy/read-only cache rows cannot change.
+      throw new Error("Unable to durably sanitize legacy LLM cache data");
     }
   }
   return safeResult;
@@ -49,7 +72,7 @@ export function cacheAnalysis(
 ): void {
   const db = getDb();
   const now = new Date().toISOString();
-  const safeFingerprint = sanitizeTextForBoundary(fingerprint, 256);
+  const safeFingerprint = sanitizeFingerprintForOutput(fingerprint);
   const safeAnalysisType = sanitizeTextForBoundary(analysis_type, 128);
   const resultJson = JSON.stringify(sanitizeValueForBoundary(result));
   const safeModel = sanitizeTextForBoundary(model, 256);
@@ -69,7 +92,7 @@ export function cacheAnalysis(
 export function invalidateCache(fingerprint?: string): void {
   const db = getDb();
   if (fingerprint) {
-    const safeFingerprint = sanitizeTextForBoundary(fingerprint, 256);
+    const safeFingerprint = sanitizeFingerprintForOutput(fingerprint);
     const stmt = db.prepare(`DELETE FROM llm_cache WHERE finding_fingerprint = ? OR finding_fingerprint = ?`);
     stmt.run(safeFingerprint, fingerprint);
   } else {

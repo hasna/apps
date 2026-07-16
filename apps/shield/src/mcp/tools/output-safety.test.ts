@@ -73,6 +73,29 @@ describe("MCP credential output safety", () => {
     expect(output).toContain("[REDACTED]");
   });
 
+  test("baseline_findings never persists an MCP-provided credential reason", async () => {
+    const syntheticSecret = "ghp_" + "SYNTHETICONLYABCDEFGHIJKLMNOPQRSTUVWXYZ12";
+    const db = getCurrentTestDb();
+    const scanId = (db.prepare("SELECT scan_id FROM findings WHERE id = ?").get(findingId) as {
+      scan_id: string;
+    }).scan_id;
+    const tools = captureTools((server) => {
+      registerFindingTools(server, jsonResult, () => {
+        throw new Error("baseline must not read source context");
+      });
+    });
+
+    const result = await tools.get("baseline_findings")?.({
+      scan_id: scanId,
+      reason: `accept because the synthetic marker is ${syntheticSecret}`,
+    });
+
+    expect(JSON.stringify(result)).not.toContain(syntheticSecret);
+    expect(JSON.stringify(db.prepare("SELECT * FROM baselines").all())).not.toContain(
+      syntheticSecret,
+    );
+  });
+
   test("credential LLM tools short-circuit before source context is read", async () => {
     let contextReads = 0;
     const tools = captureTools((server) => {

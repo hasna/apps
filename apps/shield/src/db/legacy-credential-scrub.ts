@@ -5,6 +5,7 @@ import {
   containsCredentialLikeText,
   opaqueIdentifierForStorage,
   sanitizeFindingForOutput,
+  sanitizeFingerprintForOutput,
   sanitizeLocationForOutput,
   sanitizeScanForOutput,
   sanitizeTextForBoundary,
@@ -12,10 +13,12 @@ import {
 } from "../lib/finding-safety.js";
 
 type RawRow = Record<string, unknown>;
-type IdTable = "findings" | "projects" | "rules" | "scans";
+type IdTable = "baselines" | "findings" | "llm_cache" | "projects" | "rules" | "scans";
 
 export interface LegacyCredentialScrubResult {
+  baselineIds: Map<string, string>;
   findingIds: Map<string, string>;
+  llmCacheIds: Map<string, string>;
   projectIds: Map<string, string>;
   ruleIds: Map<string, string>;
   scanIds: Map<string, string>;
@@ -28,7 +31,9 @@ export function legacyRowContainsCredential(row: RawRow): boolean {
 
 function emptyResult(): LegacyCredentialScrubResult {
   return {
+    baselineIds: new Map(),
     findingIds: new Map(),
+    llmCacheIds: new Map(),
     projectIds: new Map(),
     ruleIds: new Map(),
     scanIds: new Map(),
@@ -50,6 +55,20 @@ function sanitizeJsonText(value: string): string {
     return JSON.stringify(sanitizeValueForBoundary(JSON.parse(value)));
   } catch {
     return JSON.stringify(sanitizeTextForBoundary(value, 12_000));
+  }
+}
+
+export function sanitizeCachedResultText(value: string): string {
+  try {
+    const parsed = sanitizeValueForBoundary(JSON.parse(value));
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return JSON.stringify(parsed);
+    }
+    return JSON.stringify({ legacy_cache_value: parsed });
+  } catch {
+    return JSON.stringify({
+      legacy_cache_value: sanitizeTextForBoundary(value, 12_000),
+    });
   }
 }
 
@@ -81,7 +100,14 @@ function buildIdMap(
 }
 
 function hasAnyUnsafeRows(db: Database): boolean {
-  for (const table of ["projects", "scans", "rules", "findings"] as const) {
+  for (const table of [
+    "projects",
+    "scans",
+    "rules",
+    "findings",
+    "baselines",
+    "llm_cache",
+  ] as const) {
     const rows = db.prepare(`SELECT * FROM ${table}`).all() as RawRow[];
     if (rows.some(legacyRowContainsCredential)) return true;
   }
@@ -101,10 +127,14 @@ export function scrubLegacyCredentialRows(db: Database): LegacyCredentialScrubRe
     const scans = db.prepare("SELECT * FROM scans").all() as RawRow[];
     const rules = db.prepare("SELECT * FROM rules").all() as RawRow[];
     const findings = db.prepare("SELECT * FROM findings").all() as RawRow[];
+    const baselines = db.prepare("SELECT * FROM baselines").all() as RawRow[];
+    const llmCache = db.prepare("SELECT * FROM llm_cache").all() as RawRow[];
     const projectIds = buildIdMap(db, "projects", "PROJECT-ID", projects);
     const scanIds = buildIdMap(db, "scans", "SCAN-ID", scans);
     const ruleIds = buildIdMap(db, "rules", "RULE-ID", rules);
     const findingIds = buildIdMap(db, "findings", "FINDING-ID", findings);
+    const baselineIds = buildIdMap(db, "baselines", "BASELINE-ID", baselines);
+    const llmCacheIds = buildIdMap(db, "llm_cache", "LLM-CACHE-ID", llmCache);
 
     for (const row of projects) {
       const oldId = String(row.id);
@@ -253,12 +283,106 @@ export function scrubLegacyCredentialRows(db: Database): LegacyCredentialScrubRe
       );
     }
 
-    for (const [oldFingerprint, safeFingerprint] of fingerprintChanges) {
-      if (oldFingerprint === safeFingerprint) continue;
-      db.prepare("UPDATE baselines SET finding_fingerprint = ? WHERE finding_fingerprint = ?")
-        .run(safeFingerprint, oldFingerprint);
-      db.prepare("UPDATE llm_cache SET finding_fingerprint = ? WHERE finding_fingerprint = ?")
-        .run(safeFingerprint, oldFingerprint);
+    for (const row of baselines) {
+      const oldId = String(row.id);
+      const id = baselineIds.get(oldId)!;
+      const oldFingerprint = String(row.finding_fingerprint);
+      const safeFingerprint = fingerprintChanges.get(oldFingerprint)
+        ?? sanitizeFingerprintForOutput(oldFingerprint);
+      db.prepare(
+        `UPDATE baselines SET id = ?, finding_fingerprint = ?, reason = ?, created_by = ?, created_at = ?
+         WHERE id = ?`,
+      ).run(
+        id,
+        safeFingerprint,
+        sanitizeTextForBoundary(String(row.reason), 512),
+        sanitizeTextForBoundary(String(row.created_by), 256),
+        sanitizeTextForBoundary(String(row.created_at), 128),
+        oldId,
+      );
+    }
+
+    const cachePlans = llmCache.map((row, index) => {
+      const oldId = String(row.id);
+      const oldFingerprint = String(row.finding_fingerprint);
+      const baseSafeAnalysisType = sanitizeTextForBoundary(String(row.analysis_type), 128);
+      return {
+        index,
+        row,
+        oldId,
+        id: llmCacheIds.get(oldId)!,
+        oldFingerprint,
+        safeFingerprint: fingerprintChanges.get(oldFingerprint)
+          ?? sanitizeFingerprintForOutput(oldFingerprint),
+        oldAnalysisType: String(row.analysis_type),
+        baseSafeAnalysisType,
+        safeAnalysisType: baseSafeAnalysisType,
+      };
+    });
+    const reservedLookupKeys = new Set(
+      cachePlans.map((plan) => JSON.stringify([plan.oldFingerprint, plan.oldAnalysisType])),
+    );
+    const canonicalLookupOwners = new Map<string, number>();
+    for (const [index, plan] of cachePlans.entries()) {
+      const safeKey = JSON.stringify([plan.safeFingerprint, plan.safeAnalysisType]);
+      const currentKey = JSON.stringify([plan.oldFingerprint, plan.oldAnalysisType]);
+      const existing = canonicalLookupOwners.get(safeKey);
+      if (existing === undefined || (currentKey === safeKey && JSON.stringify([
+        cachePlans[existing].oldFingerprint,
+        cachePlans[existing].oldAnalysisType,
+      ]) !== safeKey)) {
+        canonicalLookupOwners.set(safeKey, index);
+      }
+    }
+    for (const safeKey of canonicalLookupOwners.keys()) reservedLookupKeys.add(safeKey);
+    for (const [index, plan] of cachePlans.entries()) {
+      const safeKey = JSON.stringify([plan.safeFingerprint, plan.safeAnalysisType]);
+      if (canonicalLookupOwners.get(safeKey) === index) continue;
+      let attempt = 0;
+      let collisionSafeType = opaqueIdentifierForStorage(
+        `${plan.oldFingerprint}\0${plan.oldAnalysisType}\0${plan.oldId}`,
+        "ANALYSIS-TYPE",
+        attempt,
+      );
+      let collisionKey = JSON.stringify([plan.safeFingerprint, collisionSafeType]);
+      while (reservedLookupKeys.has(collisionKey)) {
+        collisionSafeType = opaqueIdentifierForStorage(
+          `${plan.oldFingerprint}\0${plan.oldAnalysisType}\0${plan.oldId}`,
+          "ANALYSIS-TYPE",
+          ++attempt,
+        );
+        collisionKey = JSON.stringify([plan.safeFingerprint, collisionSafeType]);
+      }
+      plan.safeAnalysisType = collisionSafeType;
+      reservedLookupKeys.add(collisionKey);
+    }
+
+    // Move colliding legacy keys away from every canonical target first. This
+    // preserves every cache row without violating the production unique index.
+    for (const plan of cachePlans) {
+      const canonicalKey = JSON.stringify([
+        plan.safeFingerprint,
+        plan.baseSafeAnalysisType,
+      ]);
+      if (canonicalLookupOwners.get(canonicalKey) === plan.index) continue;
+      db.prepare("UPDATE llm_cache SET analysis_type = ? WHERE id = ?")
+        .run(plan.safeAnalysisType, plan.oldId);
+    }
+
+    for (const plan of cachePlans) {
+      const { row, oldId, id, safeFingerprint, safeAnalysisType } = plan;
+      db.prepare(
+        `UPDATE llm_cache SET id = ?, finding_fingerprint = ?, analysis_type = ?, result = ?,
+         model = ?, created_at = ? WHERE id = ?`,
+      ).run(
+        id,
+        safeFingerprint,
+        safeAnalysisType,
+        sanitizeCachedResultText(String(row.result)),
+        sanitizeTextForBoundary(String(row.model), 256),
+        sanitizeTextForBoundary(String(row.created_at), 128),
+        oldId,
+      );
     }
 
     for (const [oldId, id] of scanIds) {
@@ -274,7 +398,10 @@ export function scrubLegacyCredentialRows(db: Database): LegacyCredentialScrubRe
     if ((db.prepare("PRAGMA foreign_key_check").all() as unknown[]).length > 0) {
       throw new Error("legacy credential scrub violated referential integrity");
     }
-    return { findingIds, projectIds, ruleIds, scanIds };
+    if (hasAnyUnsafeRows(db)) {
+      throw new Error("legacy credential scrub left unsafe rows");
+    }
+    return { baselineIds, findingIds, llmCacheIds, projectIds, ruleIds, scanIds };
   });
 
   try {
