@@ -60,6 +60,62 @@ export interface CreateComputerInput {
   broadInternet?: boolean;
 }
 
+export interface AdoptComputerInput {
+  id?: string;
+  slug: string;
+  ownerPrincipalId: string;
+  adoptionId: string;
+  profileId?: string;
+  idempotencyKey: string;
+}
+
+export interface ComputerProfile {
+  id: string;
+  tenantId: string;
+  name: string;
+  generation: number;
+  digest: string;
+  document: ComputerProfileDocument;
+  createdAt: string;
+}
+
+export interface CreateComputerProfileInput {
+  id: string;
+  name: string;
+  document: ComputerProfileDocument;
+}
+
+export interface ComputerProfileDocument {
+  provider: "local_machine" | "local_vm";
+  cpus: number;
+  memoryGiB: number;
+  rootDiskGiB: number;
+  homeDiskGiB: number;
+  imageLocation?: string;
+  imageDigest?: string;
+}
+
+export const BUILTIN_LOCAL_MACHINE_PROFILE_DOCUMENT: Readonly<ComputerProfileDocument> = Object.freeze({
+  provider: "local_machine", cpus: 4, memoryGiB: 8, rootDiskGiB: 32, homeDiskGiB: 32,
+});
+
+// Built-in profile identifiers the service resolves to synthetic documents. Tenants must not be
+// able to shadow or redefine them via profile creation, so both the service and storage reject
+// these ids at creation time. Keep this list in sync with resolveProfile's short-circuit branch.
+export const RESERVED_PROFILE_IDS = Object.freeze(["profile_default", "profile_adopted"]) as readonly string[];
+
+export interface ComputerVolume {
+  id: string;
+  tenantId: string;
+  computerId: string;
+  kind: "root" | "home";
+  providerRef?: string;
+  fence: number;
+  state: "pending" | "attached" | "detached" | "quarantined" | "deleted" | "error";
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ComputerCreateGrant {
   id: string;
   tenantId: string;
@@ -126,6 +182,29 @@ export type ProviderOutcome =
   | { kind: "definite_failure"; code: string; message: string; resource?: ProviderResourceIdentity }
   | { kind: "unknown"; providerOperationId: string; message: string; resource?: ProviderResourceIdentity };
 
+export interface ProviderAssuranceEvidence {
+  confinementClass: ConfinementClass;
+  providerSpecificControlsPassed: boolean;
+  externalEgressEnforced: boolean;
+  residentIndependentIsolation: boolean;
+  hostMounts: boolean;
+  hostSockets: boolean;
+  portForwards: boolean;
+  containerd: boolean;
+  networkPolicyId?: string;
+}
+
+export interface ProviderAssuranceRecord extends ProviderAssuranceEvidence {
+  tenantId: string;
+  computerId: string;
+  provider: ProviderKind;
+  operationId: string;
+  attemptId: string;
+  bindingFence: number;
+  generation: number;
+  verifiedAt: string;
+}
+
 export interface ProviderAttempt {
   id: string;
   tenantId: string;
@@ -136,6 +215,9 @@ export interface ProviderAttempt {
   resource?: ProviderResourceIdentity;
   status: "running" | "unknown" | "succeeded" | "failed";
   fence: number;
+  executionOwnerToken?: string;
+  executionOwnerGeneration: number;
+  executionOwnerExpiresAt?: string;
   startedAt: string;
   completedAt?: string;
 }

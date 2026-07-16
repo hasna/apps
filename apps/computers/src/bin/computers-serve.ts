@@ -3,6 +3,8 @@ import type { BearerPrincipal } from "../auth";
 import { parseBearerPrincipals, serve } from "../server";
 import { ComputersService } from "../service";
 import { SQLiteStorage } from "../storage";
+import { createLocalProviderPortsFromConfigFile } from "../local";
+import { resolve } from "node:path";
 
 function principalsFromEnvironment(): BearerPrincipal[] {
   const raw = Bun.env.COMPUTERS_AUTH;
@@ -23,7 +25,9 @@ try {
   storage.migrate();
   const development = Bun.env.COMPUTERS_DEV_MODE === "loopback";
   const hostname = Bun.env.COMPUTERS_HOST ?? "127.0.0.1";
-  const server = serve(new ComputersService(storage), {
+  const localConfig = Bun.env.COMPUTERS_LOCAL_CONFIG;
+  const service = new ComputersService(storage, localConfig === undefined ? {} : { providers: createLocalProviderPortsFromConfigFile(resolve(localConfig)) });
+  const server = serve(service, {
     hostname, port, principals, loopbackDevelopmentMode: development, allowedOrigins,
   });
   process.stdout.write(`Computers ${server.url.toString()}\n`);

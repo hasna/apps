@@ -45,6 +45,10 @@
       "types": "./dist/providers.d.ts",
       "import": "./dist/providers.js"
     },
+    "./local": {
+      "types": "./dist/local-public.d.ts",
+      "import": "./dist/local-public.js"
+    },
     "./storage": {
       "types": "./dist/storage.d.ts",
       "import": "./dist/storage.js"
@@ -72,12 +76,14 @@
     "build": "bun run clean && bun run scripts/build.ts && tsc --emitDeclarationOnly",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "test:postgres-migrations": "command -v psql >/dev/null && test \"$(psql -X -qAt -d postgres -v ON_ERROR_STOP=1 -c 'SHOW server_version_num;' 2>/dev/null)\" = 160013 && test \"$(psql -X -qAt -d postgres -v ON_ERROR_STOP=1 -c 'SELECT rolsuper FROM pg_roles WHERE rolname = current_user;' 2>/dev/null)\" = t || { echo 'PostgreSQL 16.13 superuser with local postgres database access is required for migration verification' >&2; exit 1; }; bash scripts/test-postgres-migrations.sh",
     "lint": "bun run scripts/check-source.ts",
     "check:schemas": "bun run scripts/check-schemas.ts",
     "check:surfaces": "bun run scripts/check-surfaces.ts",
     "check": "bun run typecheck && bun test && bun run lint && bun run check:schemas && bun run check:surfaces && bun run build",
     "verify:pack": "bun run scripts/verify-pack.ts",
-    "verify:release": "bun run check && bun run verify:pack && bun audit && bun pm untrusted",
+    "verify:release": "bun run check && bun run test:postgres-migrations && bun run verify:pack && bun audit && bun pm untrusted",
+    "canary:local-mac": "bun run src/bin/computers.ts local config canary",
     "prepack": "bun run check"
   },
   "devDependencies": {

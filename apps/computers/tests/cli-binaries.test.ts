@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
@@ -11,7 +12,31 @@ async function run(entry: string, args: string[] = [], env: Record<string, strin
   return { code, stdout, stderr };
 }
 
+function migratedSchemaVersion(path: string): number {
+  const database = new Database(path, { readonly: true });
+  try {
+    return (database.query("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number }).version;
+  } finally {
+    database.close();
+  }
+}
+
 describe("CLI and binary envelopes", () => {
+  test("migration surfaces report the schema version persisted by their database", async () => {
+    const directory = mkdtempSync(join(process.cwd(), ".test-data-cli-")); directories.push(directory);
+    const cliDatabase = join(directory, "cli-migrate.db");
+    const cli = await run("src/bin/computers.ts", ["db", "migrate", "--db", cliDatabase]);
+    expect(cli.code).toBe(0); expect(cli.stderr).toBe("");
+    expect(JSON.parse(cli.stdout)).toEqual({ migrated: true, database: cliDatabase, version: migratedSchemaVersion(cliDatabase) });
+
+    const binaryDatabase = join(directory, "binary-migrate.db");
+    const binary = await run("src/bin/computers-migrate.ts", ["--db", binaryDatabase]);
+    expect(binary.code).toBe(0); expect(binary.stderr).toBe("");
+    expect(JSON.parse(binary.stdout)).toEqual({ migrated: true, database: binaryDatabase, schemaVersion: migratedSchemaVersion(binaryDatabase) });
+    expect(migratedSchemaVersion(cliDatabase)).toBe(3);
+    expect(migratedSchemaVersion(binaryDatabase)).toBe(3);
+  });
+
   test("help and unsupported commands use stable stdout/stderr/exit contracts", async () => {
     const help = await run("src/bin/computers.ts", ["--help"]);
     expect(help.code).toBe(0); expect(help.stderr).toBe(""); expect(help.stdout).toContain("Requests return a truthful pending operation");

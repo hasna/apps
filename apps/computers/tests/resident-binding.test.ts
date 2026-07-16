@@ -36,9 +36,11 @@ describe("authoritative resident binding", () => {
       if (revoked === undefined || active === undefined) throw new Error("resident replacement state is inconsistent");
       const owner: AuthorizationContext = { tenantId: admin.tenantId, principalId: "principal_owner", scopes: ["computers:exec"], boundComputerId: computer.id, policyGeneration: 1, authMethod: "bearer" };
       const operation = service.requestExec(owner, computer.id, { argv: ["id"], idempotencyKey: "binding-exec-001" });
+      storage.updateComputerStatus(admin.tenantId, computer.id, "running");
+      const attempt = storage.beginProviderAttempt(operation);
       const now = new Date();
       const envelope: ResidentOperationEnvelope = {
-        operationId: operation.id, attemptId: "attempt_binding", tenantId: admin.tenantId, computerId: computer.id,
+        operationId: operation.id, attemptId: attempt.id, tenantId: admin.tenantId, computerId: computer.id,
         certificateId: revoked.certificateId, policyGeneration: 1, fence: 0, sequence: 0, nonce: randomBytes(24).toString("base64url"),
         issuedAt: now.toISOString(), expiresAt: new Date(now.getTime() + 60_000).toISOString(), capability: "exec", payloadDigest: sha256(operation.request),
       };

@@ -32,7 +32,7 @@ describe("Computers core", () => {
     expect(storage.ready()).toBe(true);
     expect((storage.database.query("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys).toBe(1);
     expect((storage.database.query("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode).toBe("memory");
-    expect(storage.database.query("SELECT version FROM schema_migrations").get()).toEqual({ version: 1 });
+    expect(storage.database.query("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({ version: 3 });
   });
 
   test("uses honest confinement classes and deterministic create idempotency", () => {
@@ -40,7 +40,9 @@ describe("Computers core", () => {
     const replay = create();
     expect(replay.id).toBe(first.id);
     expect(first.confinementClass).toBe("dedicated_machine");
-    const virtual = create({ slug: "virtual", provider: "local_vm", ownerPrincipalId: "principal_other", idempotencyKey: "create-virtual-001" });
+    const vmProfile = service.createProfile(admin, { id: "profile_core_vm", name: "Core VM", document: { provider: "local_vm", cpus: 2, memoryGiB: 4,
+      rootDiskGiB: 16, homeDiskGiB: 32, imageLocation: "https://images.example.invalid/core.qcow2", imageDigest: `sha256:${"a".repeat(64)}` } });
+    const virtual = service.createComputer(admin, { slug: "virtual", provider: "local_vm", ownerPrincipalId: "principal_other", profileId: vmProfile.id, idempotencyKey: "create-virtual-001" });
     expect(virtual.confinementClass).toBe("unverified_vm");
     expect(virtual.dataExfiltrationProtection).toBe(false);
     expect(() => service.createComputer(admin, { slug: "changed", provider: "local_machine", ownerPrincipalId: "principal_third", idempotencyKey: "create-primary-001" })).toThrow("different request");
@@ -53,7 +55,11 @@ describe("Computers core", () => {
     const wrongScope = { ...owner, scopes: ["computers:read"] as AuthorizationContext["scopes"] };
     expect(() => service.requestExec(wrongScope, computer.id, { argv: ["id"], idempotencyKey: "exec-scope-001" })).toThrow("Authorization denied");
     const wrongComputer = { ...owner, boundComputerId: "cmp_not_the_owner_computer" };
-    expect(() => service.getComputer(wrongComputer, computer.id)).toThrow("Authorization denied");
+    let wrongComputerError: unknown;
+    try { service.getComputer(wrongComputer, computer.id); } catch (error) { wrongComputerError = error; }
+    expect(wrongComputerError).toBeInstanceOf(ComputersError);
+    const captured = wrongComputerError as ComputersError;
+    expect({ status: captured.status, code: captured.code, message: captured.message }).toEqual({ status: 404, code: "not_found", message: "Computer not found" });
     const stale = { ...owner, policyGeneration: 99 };
     expect(() => service.getComputer(stale, computer.id)).toThrow("Authorization denied");
   });
@@ -144,9 +150,11 @@ describe("Computers core", () => {
     storage.database.query("UPDATE resident_enrollments SET expires_at = ? WHERE id = ?").run(new Date(0).toISOString(), expired.enrollment.id);
     await expect(protocol.enroll({ token: expired.token, provider: "local_machine", instanceId: "instance_primary", bootId: "boot_primary" })).rejects.toThrow("Enrollment denied");
     const operation = service.requestExec(ownerFor(computer), computer.id, { argv: ["id"], idempotencyKey: "exec-resident-001" });
+    storage.updateComputerStatus(admin.tenantId, computer.id, "running");
+    const attempt = storage.beginProviderAttempt(operation);
     const now = new Date();
     const envelope: ResidentOperationEnvelope = {
-      operationId: operation.id, attemptId: "attempt_primary", tenantId: admin.tenantId, computerId: computer.id,
+      operationId: operation.id, attemptId: attempt.id, tenantId: admin.tenantId, computerId: computer.id,
       certificateId: result.identity.certificateId, policyGeneration: computer.policyGeneration, fence: 0, sequence: 0,
       nonce: randomBytes(24).toString("base64url"), issuedAt: now.toISOString(), expiresAt: new Date(now.getTime() + 60_000).toISOString(),
       capability: "exec", payloadDigest: sha256(operation.request),

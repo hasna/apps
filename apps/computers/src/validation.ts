@@ -1,11 +1,64 @@
 import { ComputersError, type ConfinementClass, type InstallPolicyRule, type PackageSpec, type ProviderKind } from "./contracts";
 
-const ID = /^[a-z][a-z0-9_]{2,63}$/;
+const ID_PATTERN = "^[a-z][a-z0-9_]{2,63}$";
+const IDEMPOTENCY_KEY_PATTERN = "^[A-Za-z0-9._:-]+$";
+const PACKAGE_PATTERN = "^(?:@[A-Za-z0-9][A-Za-z0-9._-]*/)?[A-Za-z0-9][A-Za-z0-9._+-]*$";
+const VERSION_PATTERN = "^[A-Za-z0-9][A-Za-z0-9._+~:-]{0,127}$";
+const DIGEST_PATTERN = "^sha256:[a-f0-9]{64}$";
+const REGISTRY_PATTERN = "^https://[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\\.[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?(?::[1-9][0-9]{3})?/(?:[A-Za-z0-9_~!$&()*+,:;=@-](?:[A-Za-z0-9._~!$&()*+,:;=@-]*[A-Za-z0-9_~!$&()*+,:;=@-])?(?:/[A-Za-z0-9_~!$&()*+,:;=@-](?:[A-Za-z0-9._~!$&()*+,:;=@-]*[A-Za-z0-9_~!$&()*+,:;=@-])?)*/?)?$";
+const INSTALL_POLICY_PACKAGE_PATTERN = "^[A-Za-z0-9@/_.+:-]*(?:\\*[A-Za-z0-9@/_.+:-]*){0,8}$";
+const ID = new RegExp(ID_PATTERN);
 const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
-const DIGEST = /^sha256:[a-f0-9]{64}$/;
+const DIGEST = new RegExp(DIGEST_PATTERN);
 const NONCE = /^[A-Za-z0-9_-]{16,128}$/;
-const PACKAGE = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._+-]*$/i;
-const VERSION = /^[A-Za-z0-9][A-Za-z0-9._+~:-]{0,127}$/;
+const PACKAGE = new RegExp(PACKAGE_PATTERN);
+const VERSION = new RegExp(VERSION_PATTERN);
+const REGISTRY = new RegExp(REGISTRY_PATTERN);
+const INSTALL_POLICY_PACKAGE = new RegExp(INSTALL_POLICY_PACKAGE_PATTERN);
+
+const PACKAGE_NAME_SCHEMA = {
+  type: "string", minLength: 1, maxLength: 214, pattern: PACKAGE_PATTERN, not: { pattern: "\\.\\." },
+} as const;
+const PACKAGE_VERSION_SCHEMA = { type: "string", minLength: 1, maxLength: 128, pattern: VERSION_PATTERN } as const;
+const DIGEST_SCHEMA = { type: "string", pattern: DIGEST_PATTERN } as const;
+const MAX_REGISTRY_HOSTNAME_LENGTH = 253;
+const REGISTRY_SCHEMA = {
+  type: "string", format: "uri", pattern: REGISTRY_PATTERN, maxLength: 512,
+  "x-maxHostnameLength": MAX_REGISTRY_HOSTNAME_LENGTH,
+} as const;
+export const INSTALL_POLICY_PACKAGE_PATTERN_SCHEMA = {
+  type: "string", minLength: 1, maxLength: 128, pattern: INSTALL_POLICY_PACKAGE_PATTERN,
+} as const;
+
+export const MCP_INPUT_SCHEMA_FRAGMENTS = {
+  id: { type: "string", minLength: 3, maxLength: 64, pattern: ID_PATTERN },
+  idempotencyKey: { type: "string", minLength: 8, maxLength: 128, pattern: IDEMPOTENCY_KEY_PATTERN },
+  argv: {
+    type: "array", minItems: 1, maxItems: 128, "x-maxEncodedBytes": 65_536,
+    items: { type: "string", minLength: 1, maxLength: 65_536, pattern: "^[^\\u0000]+$" },
+  },
+  registry: REGISTRY_SCHEMA,
+  packageSpec: {
+    type: "object",
+    required: ["manager", "name", "version", "digest", "registry", "dependencyClosure", "allowLifecycleScripts"],
+    additionalProperties: false,
+    properties: {
+      manager: { enum: ["apt", "dnf", "apk", "brew", "npm", "bun"] },
+      name: PACKAGE_NAME_SCHEMA,
+      version: PACKAGE_VERSION_SCHEMA,
+      digest: DIGEST_SCHEMA,
+      registry: REGISTRY_SCHEMA,
+      dependencyClosure: {
+        type: "array", maxItems: 512,
+        items: {
+          type: "object", required: ["name", "version", "digest"], additionalProperties: false,
+          properties: { name: PACKAGE_NAME_SCHEMA, version: PACKAGE_VERSION_SCHEMA, digest: DIGEST_SCHEMA },
+        },
+      },
+      allowLifecycleScripts: { type: "boolean" },
+    },
+  },
+} as const;
 
 function invalid(field: string, reason: string): never {
   throw new ComputersError("invalid_request", `Invalid ${field}`, 400, { field, reason });
@@ -29,12 +82,14 @@ export function validateProvider(value: unknown): ProviderKind {
 export function validateProviderConfinement(provider: ProviderKind, confinementClass: ConfinementClass): void {
   const valid = provider === "local_machine"
     ? confinementClass === "dedicated_machine"
-    : confinementClass === "unverified_vm" || confinementClass === "strict_vm";
+    : provider === "local_vm"
+      ? confinementClass === "unverified_vm"
+      : confinementClass === "unverified_vm" || confinementClass === "strict_vm";
   if (!valid) invalid("confinementClass", "contradicts provider assurance class");
 }
 
 export function validateIdempotencyKey(value: unknown): string {
-  if (typeof value !== "string" || value.length < 8 || value.length > 128 || !/^[A-Za-z0-9._:-]+$/.test(value)) {
+  if (typeof value !== "string" || value.length < 8 || value.length > 128 || !new RegExp(IDEMPOTENCY_KEY_PATTERN).test(value)) {
     invalid("idempotencyKey", "must be 8-128 safe characters");
   }
   return value;
@@ -77,6 +132,15 @@ export function validateDigest(value: unknown, field = "digest"): string {
   return value;
 }
 
+function validateCanonicalRegistry(value: unknown, reject: () => never): string {
+  if (typeof value !== "string" || value.length > 512 || !REGISTRY.test(value)) reject();
+  const withoutScheme = value.slice("https://".length);
+  const hostnameEnd = withoutScheme.search(/[:/]/);
+  const hostname = hostnameEnd === -1 ? withoutScheme : withoutScheme.slice(0, hostnameEnd);
+  if (hostname.length > MAX_REGISTRY_HOSTNAME_LENGTH) reject();
+  return value;
+}
+
 export function validatePackageSpec(value: unknown): PackageSpec {
   if (typeof value !== "object" || value === null || Array.isArray(value)) invalid("spec", "must be an object");
   const item = value as Record<string, unknown>;
@@ -86,14 +150,9 @@ export function validatePackageSpec(value: unknown): PackageSpec {
   if (typeof item.name !== "string" || item.name.length > 214 || !PACKAGE.test(item.name) || item.name.includes("..")) invalid("spec.name", "unsafe package name");
   if (typeof item.version !== "string" || !VERSION.test(item.version)) invalid("spec.version", "unsafe or missing exact version");
   const digest = validateDigest(item.digest, "spec.digest");
-  if (typeof item.registry !== "string" || item.registry.length > 512) invalid("spec.registry", "invalid registry URL");
-  let registry: URL;
-  try {
-    registry = new URL(item.registry);
-  } catch {
-    invalid("spec.registry", "must be an absolute HTTPS URL");
-  }
-  if (registry.protocol !== "https:" || registry.username || registry.password) invalid("spec.registry", "must be credential-free HTTPS");
+  const registry = validateCanonicalRegistry(item.registry, () => invalid(
+    "spec.registry", "must be a canonical, credential-free, query-free, fragment-free lowercase HTTPS URL",
+  ));
   if (!Array.isArray(item.dependencyClosure) || item.dependencyClosure.length > 512) invalid("spec.dependencyClosure", "must be an array with at most 512 items");
   const dependencyClosure = item.dependencyClosure.map((dependency, index) => {
     if (typeof dependency !== "object" || dependency === null || Array.isArray(dependency)) invalid(`spec.dependencyClosure[${index}]`, "must be an object");
@@ -109,7 +168,7 @@ export function validatePackageSpec(value: unknown): PackageSpec {
     name: item.name,
     version: item.version,
     digest,
-    registry: registry.toString(),
+    registry,
     dependencyClosure,
     allowLifecycleScripts: item.allowLifecycleScripts,
   };
@@ -138,19 +197,12 @@ export function validateInstallPolicyRules(value: unknown): InstallPolicyRule[] 
       if (!Array.isArray(rule.packagePatterns) || rule.packagePatterns.length < 1 || rule.packagePatterns.length > 64
         || new Set(rule.packagePatterns).size !== rule.packagePatterns.length
         || rule.packagePatterns.some((item) => typeof item !== "string" || item.length < 1 || item.length > 128
-          || !/^[A-Za-z0-9@/_.+*:-]+$/.test(item) || (item.match(/\*/g)?.length ?? 0) > 8)) invalidPolicy("invalid package patterns");
+          || !INSTALL_POLICY_PACKAGE.test(item))) invalidPolicy("invalid package patterns");
       result.packagePatterns = rule.packagePatterns as string[];
     }
     if (rule.registries !== undefined) {
       if (!Array.isArray(rule.registries) || rule.registries.length < 1 || rule.registries.length > 32 || new Set(rule.registries).size !== rule.registries.length) invalidPolicy("invalid registries");
-      const registries = rule.registries.map((item) => {
-        if (typeof item !== "string" || item.length > 512) invalidPolicy("invalid registry");
-        let url: URL;
-        try { url = new URL(item); } catch { return invalidPolicy("invalid registry"); }
-        if (url.protocol !== "https:" || url.username || url.password) invalidPolicy("invalid registry");
-        return url.toString();
-      });
-      if (new Set(registries).size !== registries.length) invalidPolicy("invalid registries");
+      const registries = rule.registries.map((item) => validateCanonicalRegistry(item, () => invalidPolicy("invalid registry")));
       result.registries = registries;
     }
     if (rule.lifecycleScripts !== undefined) {
