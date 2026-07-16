@@ -67,6 +67,23 @@ const taskCommentSchema = {
   },
 } as const;
 
+const planSchema = {
+  type: "object",
+  required: ["id", "slug", "name", "status", "created_at", "updated_at"],
+  properties: {
+    id: { type: "string" },
+    slug: { type: "string", nullable: true },
+    project_id: { type: "string", nullable: true },
+    task_list_id: { type: "string", nullable: true },
+    agent_id: { type: "string", nullable: true },
+    name: { type: "string" },
+    description: { type: "string", nullable: true },
+    status: { type: "string", enum: ["active", "completed", "archived"] },
+    created_at: { type: "string", format: "date-time" },
+    updated_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
 export function buildV1OpenApiDocument(version = getPackageVersion()) {
   return {
     openapi: "3.1.0",
@@ -86,6 +103,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         Project: projectSchema,
         TaskList: taskListSchema,
         TaskComment: taskCommentSchema,
+        Plan: planSchema,
         CreateTaskInput: {
           type: "object",
           required: ["title"],
@@ -183,6 +201,33 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             session_id: { type: "string" },
             type: { type: "string", enum: ["comment", "progress", "note"] },
             progress_pct: { type: "number" },
+          },
+        },
+        CreatePlanInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["name"],
+          properties: {
+            name: { type: "string", minLength: 1 },
+            slug: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
+            description: { type: "string" },
+            project_id: { type: "string", minLength: 1 },
+            task_list_id: { type: "string", minLength: 1 },
+            agent_id: { type: "string", minLength: 1 },
+            status: { type: "string", enum: ["active", "completed", "archived"] },
+          },
+        },
+        UpdatePlanInput: {
+          type: "object",
+          additionalProperties: false,
+          minProperties: 1,
+          properties: {
+            name: { type: "string", minLength: 1 },
+            slug: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
+            description: { type: "string" },
+            task_list_id: { type: "string", minLength: 1 },
+            agent_id: { type: "string", minLength: 1 },
+            status: { type: "string", enum: ["active", "completed", "archived"] },
           },
         },
       },
@@ -425,6 +470,55 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             "200": { content: { "application/json": { schema: { type: "object", properties: { project: { $ref: "#/components/schemas/Project" }, task_lists_updated: { type: "number" } } } } } },
             "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
           },
+        },
+      },
+      "/v1/plans": {
+        get: {
+          operationId: "listPlans",
+          summary: "List plans",
+          parameters: [{ name: "project_id", in: "query", schema: { type: "string" } }],
+          responses: {
+            "200": { content: { "application/json": { schema: { type: "object", properties: { plans: { type: "array", items: { $ref: "#/components/schemas/Plan" } }, count: { type: "number" } } } } } },
+          },
+        },
+        post: {
+          operationId: "createPlan",
+          summary: "Create a plan",
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/CreatePlanInput" } } },
+          },
+          responses: {
+            "201": { content: { "application/json": { schema: { type: "object", properties: { plan: { $ref: "#/components/schemas/Plan" } } } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/plans/{id}": {
+        get: {
+          operationId: "getPlan",
+          summary: "Get a plan by id",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { plan: { $ref: "#/components/schemas/Plan" } } } } } } },
+        },
+        patch: {
+          operationId: "updatePlan",
+          summary: "Update a plan",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/UpdatePlanInput" } } },
+          },
+          responses: {
+            "200": { content: { "application/json": { schema: { type: "object", properties: { plan: { $ref: "#/components/schemas/Plan" } } } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+        delete: {
+          operationId: "deletePlan",
+          summary: "Delete a plan and detach its tasks",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { deleted: { type: "boolean" }, id: { type: "string" } } } } } } },
         },
       },
       "/v1/task-lists": {

@@ -10,9 +10,18 @@ import {
   deletePlan,
 } from "../../db/plans.js";
 import { createTask } from "../../db/tasks.js";
+import type { Plan } from "../../types/index.js";
 import { inspectPlanArtifact, readPlanArtifact, writePlanArtifact } from "../../lib/plan-artifacts.js";
 import { formatTaskLine, autoProject, handleError, output } from "../helpers.js";
-import { getTodosCloudClient, cloudListPlans, cloudResolvePlan, cloudListTasks } from "../cloud-router.js";
+import {
+  getTodosCloudClient,
+  cloudCreatePlan,
+  cloudDeletePlan,
+  cloudListPlans,
+  cloudListTasks,
+  cloudResolvePlan,
+  cloudUpdatePlan,
+} from "../cloud-router.js";
 
 function resolvePlanCliRef(ref: string, projectId: string | undefined): string {
   const db = getDatabase();
@@ -50,18 +59,19 @@ export function registerPlanTemplateCommands(program: Command) {
       const projectId = cloud ? undefined : autoProject(globalOpts);
 
       if (opts.add) {
-        let plan: ReturnType<typeof createPlan>;
+        let plan: Plan;
         try {
-          plan = createPlan({
+          const input = {
             name: opts.add,
             slug: opts.slug,
             description: opts.description,
             project_id: projectId,
-          });
+          };
+          plan = cloud ? await cloudCreatePlan(cloud, input) : createPlan(input);
         } catch (error) {
           handleError(error);
         }
-        const artifact = writePlanArtifact(plan);
+        const artifact = cloud ? null : writePlanArtifact(plan);
 
         if (globalOpts.json) {
           output(plan, true);
@@ -207,8 +217,13 @@ export function registerPlanTemplateCommands(program: Command) {
       }
 
       if (opts.delete) {
-        const resolvedId = resolvePlanCliRef(opts.delete, projectId);
-        const deleted = deletePlan(resolvedId);
+        const cloudPlan = cloud ? await cloudResolvePlan(cloud, opts.delete, projectId) : null;
+        if (cloud && !cloudPlan) {
+          console.error(chalk.red(`Plan not found: ${opts.delete}`));
+          process.exit(1);
+        }
+        const resolvedId = cloudPlan?.id ?? resolvePlanCliRef(opts.delete, projectId);
+        const deleted = cloud ? await cloudDeletePlan(cloud, resolvedId) : deletePlan(resolvedId);
         if (globalOpts.json) {
           output({ deleted }, true);
         } else if (deleted) {
@@ -221,10 +236,17 @@ export function registerPlanTemplateCommands(program: Command) {
       }
 
       if (opts.complete) {
-        const resolvedId = resolvePlanCliRef(opts.complete, projectId);
+        const cloudPlan = cloud ? await cloudResolvePlan(cloud, opts.complete, projectId) : null;
+        if (cloud && !cloudPlan) {
+          console.error(chalk.red(`Plan not found: ${opts.complete}`));
+          process.exit(1);
+        }
+        const resolvedId = cloudPlan?.id ?? resolvePlanCliRef(opts.complete, projectId);
         try {
-          const plan = updatePlan(resolvedId, { status: "completed" });
-          const artifact = writePlanArtifact(plan);
+          const plan = cloud
+            ? await cloudUpdatePlan(cloud, resolvedId, { status: "completed" })
+            : updatePlan(resolvedId, { status: "completed" });
+          const artifact = cloud ? null : writePlanArtifact(plan);
           if (globalOpts.json) {
             output(plan, true);
           } else {

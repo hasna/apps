@@ -86,3 +86,57 @@ describe("project mutation OpenAPI contract", () => {
     expect(schemas.UpdateTaskListInput).toMatchObject({ additionalProperties: false, minProperties: 1 });
   });
 });
+
+describe("plan mutation OpenAPI contract", () => {
+  test("documents plan create, list, get, update, and delete for SDK generation", () => {
+    const document = buildV1OpenApiDocument();
+    expect(document.paths["/v1/plans"].get.operationId).toBe("listPlans");
+    expect(document.paths["/v1/plans"].post.operationId).toBe("createPlan");
+    expect(document.paths["/v1/plans/{id}"].get.operationId).toBe("getPlan");
+    expect(document.paths["/v1/plans/{id}"].patch.operationId).toBe("updatePlan");
+    expect(document.paths["/v1/plans/{id}"].delete.operationId).toBe("deletePlan");
+    expect(document.components.schemas.UpdatePlanInput).toMatchObject({
+      additionalProperties: false,
+      minProperties: 1,
+      properties: { status: { enum: ["active", "completed", "archived"] } },
+    });
+    expect(document.components.schemas.Plan.properties.slug).toMatchObject({ type: "string", nullable: true });
+  });
+
+  test("generated SDK exposes the complete plan lifecycle", async () => {
+    const calls: Array<{ method: string; url: string; body?: string }> = [];
+    const plan = {
+      id: "plan/one",
+      slug: "plan-one",
+      name: "Plan one",
+      status: "active" as const,
+      created_at: "2026-07-16T00:00:00.000Z",
+      updated_at: "2026-07-16T00:00:00.000Z",
+    };
+    const client = new TodosV1Client({
+      baseUrl: "https://todos.test",
+      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const method = init?.method ?? "GET";
+        calls.push({ method, url: String(input), body: init?.body as string | undefined });
+        if (method === "DELETE") return Response.json({ deleted: true, id: plan.id });
+        if (String(input).endsWith("/v1/plans")) {
+          return Response.json(method === "GET" ? { plans: [plan], count: 1 } : { plan }, { status: method === "POST" ? 201 : 200 });
+        }
+        return Response.json({ plan: method === "PATCH" ? { ...plan, status: "completed" } : plan });
+      }) as typeof fetch,
+    });
+
+    expect((await client.listPlans()).plans).toHaveLength(1);
+    expect((await client.createPlan({ name: plan.name })).plan?.id).toBe(plan.id);
+    expect((await client.getPlan(plan.id)).plan?.id).toBe(plan.id);
+    expect((await client.updatePlan(plan.id, { status: "completed" })).plan?.status).toBe("completed");
+    expect((await client.deletePlan(plan.id)).deleted).toBe(true);
+    expect(calls.map((call) => `${call.method} ${new URL(call.url).pathname}`)).toEqual([
+      "GET /v1/plans",
+      "POST /v1/plans",
+      "GET /v1/plans/plan%2Fone",
+      "PATCH /v1/plans/plan%2Fone",
+      "DELETE /v1/plans/plan%2Fone",
+    ]);
+  });
+});

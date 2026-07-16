@@ -163,7 +163,7 @@ export function createPostgresTodosStorageAdapter(
         .filter((plan) => projectId === undefined || plan.project_id === projectId)
         .sort((a, b) => a.name.localeCompare(b.name)),
       update: (id, input) => updatePlan(id, input, store),
-      delete: (id, context) => store.delete("plans", id, context),
+      delete: (id, context) => store.deletePlan(id, context),
     },
     agents: {
       register: (input, context) => registerAgent(input, store, context),
@@ -655,6 +655,45 @@ class PostgresJsonRecordStore {
       payload: existing,
       version: numberValue(existing["version"]),
     }, context);
+  }
+
+  async deletePlan(id: string, context: TodosStorageContext = {}): Promise<boolean> {
+    await this.ensureSchema();
+    const timestamp = new Date().toISOString();
+    const result = await this.options.client.query<{ found: boolean; tasks_updated: number | string }>(
+      `/* todos:delete-plan-atomic */ WITH target AS (
+        SELECT payload FROM ${this.tableName}
+        WHERE service = $1 AND object_type = 'plans' AND object_id = $2 AND deleted_at IS NULL
+        FOR UPDATE
+      ), updated_tasks AS (
+        UPDATE ${this.tableName} r SET
+          payload = jsonb_set(
+              jsonb_set(r.payload, '{plan_id}', 'null'::jsonb, true),
+              '{version}',
+              to_jsonb(COALESCE((r.payload->>'version')::int, 0) + 1),
+              true
+            ) || jsonb_build_object('updated_at', $3::text),
+          updated_at = $3::timestamptz,
+          source_machine_id = COALESCE($4, r.source_machine_id),
+          version = COALESCE(r.version, 0) + 1
+        WHERE r.service = $1 AND r.object_type = 'tasks' AND r.deleted_at IS NULL
+          AND r.payload->>'plan_id' = $2 AND EXISTS (SELECT 1 FROM target)
+        RETURNING 1
+      ), deleted_plan AS (
+        UPDATE ${this.tableName} r SET
+          deleted_at = $3::timestamptz,
+          updated_at = $3::timestamptz,
+          source_machine_id = COALESCE($4, r.source_machine_id),
+          version = COALESCE(r.version, 0) + 1
+        FROM target
+        WHERE r.service = $1 AND r.object_type = 'plans' AND r.object_id = $2 AND r.deleted_at IS NULL
+        RETURNING 1
+      ) SELECT
+        EXISTS (SELECT 1 FROM target) AS found,
+        (SELECT count(*) FROM updated_tasks) AS tasks_updated`,
+      [this.service, id, timestamp, this.machineId(context)],
+    );
+    return Boolean(result.rows[0]?.found);
   }
 
   async tombstone(
@@ -1582,7 +1621,9 @@ async function resolvePostgresPlanSlug(options: {
 
   if (options.slug !== undefined) {
     const slug = normalizePlanSlug(options.slug);
-    if (used.has(slug)) throw new Error(`Plan slug already exists in this scope: ${slug}`);
+    if (used.has(slug)) {
+      throw new ResourceConflictError("PLAN_SLUG_CONFLICT", `Plan slug already exists in this scope: ${slug}`);
+    }
     return slug;
   }
 

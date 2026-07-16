@@ -22,7 +22,7 @@
  */
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { resolve as resolvePath } from "node:path";
-import type { Agent, CreateTaskListInput, Plan, Project, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, UpdateTaskListInput } from "../types/index.js";
+import type { Agent, CreatePlanInput, CreateTaskListInput, Plan, Project, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, UpdatePlanInput, UpdateTaskListInput } from "../types/index.js";
 import { redactEvidenceText } from "../lib/redaction.js";
 
 type Env = Record<string, string | undefined>;
@@ -229,6 +229,41 @@ export async function cloudListPlans(client: HasnaStorageClient, projectId?: str
   const res = await client.list<Plan>("plans", { query });
   const envelope = res.raw as { plans?: Plan[] } | undefined;
   return Array.isArray(envelope?.plans) ? envelope!.plans : res.items;
+}
+
+function unwrapPlan(raw: unknown): Plan {
+  if (raw && typeof raw === "object" && "plan" in (raw as Record<string, unknown>)) {
+    return (raw as { plan: Plan }).plan;
+  }
+  return raw as Plan;
+}
+
+/** Create one cloud plan (`POST /v1/plans`). */
+export async function cloudCreatePlan(client: HasnaStorageClient, input: CreatePlanInput): Promise<Plan> {
+  return unwrapPlan(await client.create<unknown>("plans", input as unknown as Record<string, unknown>));
+}
+
+/** Update one cloud plan (`PATCH /v1/plans/:id`). */
+export async function cloudUpdatePlan(client: HasnaStorageClient, id: string, patch: UpdatePlanInput): Promise<Plan> {
+  return unwrapPlan(await client.update<unknown>("plans", id, patch as unknown as Record<string, unknown>));
+}
+
+/** Delete one cloud plan (`DELETE /v1/plans/:id`). */
+export async function cloudDeletePlan(client: HasnaStorageClient, id: string): Promise<boolean> {
+  let raw: unknown;
+  try {
+    raw = await client.transport.del<unknown>(`/plans/${encodeURIComponent(id)}`);
+  } catch (error) {
+    if (error && typeof error === "object" && "status" in error && (error as { status?: unknown }).status === 404) {
+      throw new Error("Cloud plan deletion is not supported by this todos server; upgrade the server before retrying");
+    }
+    throw error;
+  }
+  if (raw && typeof raw === "object" && "deleted" in (raw as Record<string, unknown>) &&
+      (raw as { deleted: unknown }).deleted !== true) {
+    throw new Error("Cloud plan deletion was not confirmed by the todos server");
+  }
+  return true;
 }
 
 /**
@@ -556,20 +591,23 @@ export async function cloudFindRefs(client: HasnaStorageClient, ref: string): Pr
  * cloud plans), so it could not open a plan its own cloud `plans` list returned.
  */
 export async function cloudResolvePlan(client: HasnaStorageClient, ref: string, projectId?: string): Promise<Plan | null> {
-  const direct = await client.get<unknown>("plans", ref).catch(() => null);
-  if (direct) {
-    const env = direct as { plan?: Plan };
-    if (env.plan) return env.plan;
-    if ((direct as Plan).id) return direct as Plan;
+  const normalizedRef = ref.toLowerCase();
+  if (UUID_RE.test(ref)) {
+    const direct = await client.get<unknown>("plans", normalizedRef).catch(() => null);
+    if (direct) return unwrapPlan(direct);
   }
   const plans = await cloudListPlans(client, projectId);
-  return (
-    plans.find((p) => p.id === ref) ??
-    plans.find((p) => p.slug === ref) ??
-    plans.find((p) => p.name === ref) ??
-    plans.find((p) => p.id.startsWith(ref)) ??
-    null
-  );
+  const matchGroups = [
+    plans.filter((plan) => plan.id.toLowerCase() === normalizedRef),
+    plans.filter((plan) => plan.slug === ref),
+    plans.filter((plan) => plan.name === ref),
+    plans.filter((plan) => plan.id.toLowerCase().startsWith(normalizedRef)),
+  ];
+  for (const matches of matchGroups) {
+    if (matches.length === 1) return matches[0]!;
+    if (matches.length > 1) throw new Error(`Plan reference is ambiguous: "${ref}"`);
+  }
+  return null;
 }
 
 /** Result of a cloud lock/unlock action (mirrors the local `LockResult` shape). */

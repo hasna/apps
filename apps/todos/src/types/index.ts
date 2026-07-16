@@ -1031,7 +1031,7 @@ export class ProjectNotFoundError extends Error {
 
 export class ResourceConflictError extends Error {
   constructor(
-    public readonly code: "PROJECT_SLUG_CONFLICT" | "TASK_LIST_SLUG_CONFLICT",
+    public readonly code: "PROJECT_SLUG_CONFLICT" | "TASK_LIST_SLUG_CONFLICT" | "PLAN_SLUG_CONFLICT",
     message: string,
   ) {
     super(message);

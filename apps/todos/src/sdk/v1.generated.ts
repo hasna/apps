@@ -2,7 +2,7 @@
 // Regenerate: bun run scripts/generate-sdk.ts
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Todos V1 API 0.11.89
+// Source: Todos V1 API 0.11.91
 
 export interface Task { "id"?: string; "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "project_id"?: string | null; "assigned_to"?: string | null; "agent_id"?: string | null; "tags"?: Array<string>; "version"?: number; "created_at"?: string; "updated_at"?: string }
 
@@ -11,6 +11,8 @@ export interface Project { "id"?: string; "name"?: string; "path"?: string; "des
 export interface TaskList { "id"?: string; "project_id"?: string | null; "slug"?: string; "name"?: string; "description"?: string | null; "metadata"?: Record<string, unknown>; "created_at"?: string; "updated_at"?: string }
 
 export interface TaskComment { "id": string; "task_id": string; "agent_id": string | null; "session_id": string | null; "content": string; "type": "comment" | "progress" | "note"; "progress_pct": number | null; "created_at": string }
+
+export interface Plan { "id": string; "slug": string | null; "project_id"?: string | null; "task_list_id"?: string | null; "agent_id"?: string | null; "name": string; "description"?: string | null; "status": "active" | "completed" | "archived"; "created_at": string; "updated_at": string }
 
 export interface CreateTaskInput { "title": string; "description"?: string; "status"?: string; "priority"?: string; "project_id"?: string; "assigned_to"?: string; "agent_id"?: string; "tags"?: Array<string> }
 
@@ -29,6 +31,10 @@ export interface CreateTaskListInput { "name": string; "slug"?: string; "project
 export interface UpdateTaskListInput { "slug"?: string; "name"?: string; "description"?: string; "metadata"?: Record<string, unknown> }
 
 export interface CreateTaskCommentInput { "content": string; "agent_id"?: string; "session_id"?: string; "type"?: "comment" | "progress" | "note"; "progress_pct"?: number }
+
+export interface CreatePlanInput { "name": string; "slug"?: string; "description"?: string; "project_id"?: string; "task_list_id"?: string; "agent_id"?: string; "status"?: "active" | "completed" | "archived" }
+
+export interface UpdatePlanInput { "name"?: string; "slug"?: string; "description"?: string; "task_list_id"?: string; "agent_id"?: string; "status"?: "active" | "completed" | "archived" }
 
 export interface TodosV1ClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */
@@ -88,6 +94,51 @@ export class TodosV1Client {
     /** Bulk-ingest a full or partial snapshot (idempotent upsert by id) */
     async importSnapshot(body: { "exportedAt"?: string; "source"?: string; "tasks"?: Array<Task>; "projects"?: Array<Project>; "projectMachinePaths"?: Array<Record<string, unknown>>; "plans"?: Array<Record<string, unknown>>; "agents"?: Array<Record<string, unknown>>; "taskLists"?: Array<Record<string, unknown>>; "templates"?: Array<Record<string, unknown>>; "auditHistory"?: Array<Record<string, unknown>>; "tombstones"?: Array<Record<string, unknown>> }, init?: RequestInit): Promise<{ "received"?: number; "result"?: { "inserted"?: number; "updated"?: number; "deleted"?: number; "skipped"?: number; "errors"?: Array<string> } }> {
       return this.request("POST", `/v1/import`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List plans */
+    async listPlans(query?: { "project_id"?: string }, init?: RequestInit): Promise<{ "plans"?: Array<Plan>; "count"?: number }> {
+      return this.request("GET", `/v1/plans`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Create a plan */
+    async createPlan(body: CreatePlanInput, init?: RequestInit): Promise<{ "plan"?: Plan }> {
+      return this.request("POST", `/v1/plans`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Get a plan by id */
+    async getPlan(id: string, init?: RequestInit): Promise<{ "plan"?: Plan }> {
+      return this.request("GET", `/v1/plans/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Delete a plan and detach its tasks */
+    async deletePlan(id: string, init?: RequestInit): Promise<{ "deleted"?: boolean; "id"?: string }> {
+      return this.request("DELETE", `/v1/plans/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Update a plan */
+    async updatePlan(id: string, body: UpdatePlanInput, init?: RequestInit): Promise<{ "plan"?: Plan }> {
+      return this.request("PATCH", `/v1/plans/${encodeURIComponent(String(id))}`, {
         body,
         query: undefined,
         init,

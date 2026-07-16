@@ -107,6 +107,58 @@ describe("/v1 task-list cloud parity", () => {
   });
 });
 
+describe("/v1 plan cloud parity", () => {
+  test("create, list, get, complete, and delete share one canonical id", async () => {
+    const created = await request("/v1/plans", "POST", {
+      name: "Codila CLI control",
+      slug: "codila-cli-control",
+      description: "Private CLI release plan",
+    });
+    expect(created?.status).toBe(201);
+    const createdPlan = (await created!.json() as { plan: { id: string; slug: string } }).plan;
+    expect(createdPlan.slug).toBe("codila-cli-control");
+
+    const titleAlias = await request("/v1/plans", "POST", { title: "Title alias" });
+    expect(titleAlias?.status).toBe(201);
+    expect(await titleAlias!.json()).toMatchObject({ plan: { name: "Title alias" } });
+
+    for (const body of [
+      {},
+      { name: 42 },
+      { title: "Title", name: "Different" },
+      { name: "Bad status", status: "done" },
+      { name: "Bad slug", slug: "---" },
+      { name: "Unknown", extra: true },
+    ]) {
+      expect((await request("/v1/plans", "POST", body))?.status).toBe(400);
+    }
+    const duplicateCreate = await request("/v1/plans", "POST", { name: "Duplicate", slug: "codila cli control" });
+    expect(duplicateCreate?.status).toBe(409);
+    expect(await duplicateCreate!.json()).toMatchObject({ code: "PLAN_SLUG_CONFLICT", conflict: true });
+
+    const listed = await request("/v1/plans");
+    expect(await listed!.json()).toMatchObject({ count: 2 });
+    expect((await request(`/v1/plans/${createdPlan.id}`))?.status).toBe(200);
+
+    const completed = await request(`/v1/plans/${createdPlan.id}`, "PATCH", { status: "completed" });
+    expect(completed?.status).toBe(200);
+    expect(await completed!.json()).toMatchObject({ plan: { id: createdPlan.id, status: "completed" } });
+
+    for (const patch of [{}, { status: "done" }, { name: "" }, { slug: "---" }, { description: 42 }, { project_id: "unsafe" }]) {
+      expect((await request(`/v1/plans/${createdPlan.id}`, "PATCH", patch))?.status).toBe(400);
+    }
+    const other = await request("/v1/plans", "POST", { name: "Other plan", slug: "other-plan" });
+    const otherPlan = (await other!.json() as { plan: { id: string } }).plan;
+    const duplicatePatch = await request(`/v1/plans/${otherPlan.id}`, "PATCH", { slug: "codila cli control" });
+    expect(duplicatePatch?.status).toBe(409);
+    expect(await duplicatePatch!.json()).toMatchObject({ code: "PLAN_SLUG_CONFLICT", conflict: true });
+    expect((await request("/v1/plans/missing", "PATCH", { status: "completed" }))?.status).toBe(404);
+
+    expect((await request(`/v1/plans/${createdPlan.id}`, "DELETE"))?.status).toBe(200);
+    expect((await request(`/v1/plans/${createdPlan.id}`))?.status).toBe(404);
+  });
+});
+
 describe("/v1 project mutation", () => {
   test("create preserves explicit canonical routing fields while patch cannot mutate them", async () => {
     const explicit = await request("/v1/projects", "POST", {

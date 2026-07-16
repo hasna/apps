@@ -1478,6 +1478,25 @@ describe("storage adapter contracts", () => {
     })).rejects.toThrow("Plan slug already exists in this scope: remote-explicit");
   });
 
+  test("atomically detaches linked tasks when deleting a Postgres plan", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({
+      client: postgres.client,
+      sourceMachineId: "spark01",
+    });
+    const plan = await adapter.plans.create({ name: "Delete safely" });
+    const linked = await adapter.tasks.create({ title: "Linked task", plan_id: plan.id });
+    const linkedVersion = linked.version;
+    const unrelated = await adapter.tasks.create({ title: "Unrelated task" });
+
+    expect(await adapter.plans.delete(plan.id)).toBe(true);
+    expect(await adapter.plans.get(plan.id)).toBeNull();
+    expect(await adapter.tasks.get(linked.id)).toMatchObject({ plan_id: null, version: linkedVersion + 1 });
+    expect(await adapter.tasks.get(unrelated.id)).toMatchObject({ plan_id: null });
+    expect(postgres.calls.some((call) => call.sql.includes("todos:delete-plan-atomic"))).toBe(true);
+    expect(await adapter.plans.delete(plan.id)).toBe(false);
+  });
+
   test("preserves direct Postgres tombstone clocks and rejects stale import records", async () => {
     const postgres = createMemoryPostgresClient();
     const adapter = createPostgresTodosStorageAdapter({
@@ -2181,6 +2200,30 @@ function createMemoryPostgresClient(): {
           })
           .sort((a, b) => String(a["created_at"]).localeCompare(String(b["created_at"])));
         return { rows: (matches[0] ? [{ payload: matches[0] }] : []) as T[] };
+      }
+
+      if (sql.includes("todos:delete-plan-atomic")) {
+        const [service, planId, updatedAt] = values;
+        const planRow = rows.get(recordKey(service, "plans", planId));
+        if (!planRow || planRow.deletedAt) {
+          return { rows: [{ found: false, tasks_updated: 0 }] as T[] };
+        }
+        let tasksUpdated = 0;
+        for (const row of rows.values()) {
+          const payload = row.payload as Record<string, unknown>;
+          if (row.service === service && row.objectType === "tasks" && !row.deletedAt && payload["plan_id"] === planId) {
+            payload["plan_id"] = null;
+            payload["updated_at"] = updatedAt;
+            payload["version"] = Number(payload["version"] ?? 0) + 1;
+            row.updatedAt = String(updatedAt);
+            row.version = (row.version ?? 0) + 1;
+            tasksUpdated += 1;
+          }
+        }
+        planRow.deletedAt = String(updatedAt);
+        planRow.updatedAt = String(updatedAt);
+        planRow.version = (planRow.version ?? 0) + 1;
+        return { rows: [{ found: true, tasks_updated: tasksUpdated }] as T[] };
       }
 
       if (sql.includes("todos:list-comments")) {

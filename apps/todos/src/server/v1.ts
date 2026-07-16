@@ -8,7 +8,7 @@
  * over the core storage lib — there are NO stubs; unimplemented routes 404.
  */
 import { LockError, ProjectNotFoundError, ResourceConflictError } from "../types/index.js";
-import type { CreateProjectInput, CreateTaskInput, CreateTaskListInput, RenameProjectInput, TaskComment, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
+import type { CreatePlanInput, CreateProjectInput, CreateTaskInput, CreateTaskListInput, RenameProjectInput, TaskComment, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
 import type { TodosStorageContext, TodosStorageSnapshot } from "../storage/interfaces.js";
 import { getCloudStorageAdapter, getCloudVerifier, ensureCloudSchema } from "./cloud.js";
 import { redactEvidenceText } from "../lib/redaction.js";
@@ -67,6 +67,47 @@ function validateProjectCreate(value: unknown):
     return { ok: false, message: "task_prefix must be a non-empty string" };
   }
   return { ok: true, input: body as never };
+}
+
+function validatePlanCreate(value: unknown):
+  | { ok: true; input: CreatePlanInput }
+  | { ok: false; message: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "plan body must be an object" };
+  const body = value as Record<string, unknown>;
+  const allowed = new Set(["title", "name", "slug", "description", "project_id", "task_list_id", "agent_id", "status"]);
+  const unknown = Object.keys(body).find((key) => !allowed.has(key));
+  if (unknown) return { ok: false, message: `unknown plan field: ${unknown}` };
+  if (body.name !== undefined && (typeof body.name !== "string" || !body.name.trim())) return { ok: false, message: "name must be a non-empty string" };
+  if (body.title !== undefined && (typeof body.title !== "string" || !body.title.trim())) return { ok: false, message: "title must be a non-empty string" };
+  if (typeof body.name === "string" && typeof body.title === "string" && body.name !== body.title) {
+    return { ok: false, message: "name and title must match when both are provided" };
+  }
+  const name = (body.name ?? body.title) as string | undefined;
+  if (!name) return { ok: false, message: "name is required" };
+  for (const field of ["slug", "project_id", "task_list_id", "agent_id"] as const) {
+    if (body[field] !== undefined && (typeof body[field] !== "string" || !body[field].trim())) {
+      return { ok: false, message: `${field} must be a non-empty string` };
+    }
+  }
+  const slug = typeof body.slug === "string" ? normalizeSlug(body.slug) : undefined;
+  if (body.slug !== undefined && !slug) return { ok: false, message: "slug must produce a non-empty canonical slug" };
+  if (body.description !== undefined && typeof body.description !== "string") return { ok: false, message: "description must be a string" };
+  if (body.status !== undefined &&
+      (typeof body.status !== "string" || !["active", "completed", "archived"].includes(body.status))) {
+    return { ok: false, message: "status must be active, completed, or archived" };
+  }
+  return {
+    ok: true,
+    input: {
+      name,
+      ...(slug ? { slug } : {}),
+      ...(typeof body.description === "string" ? { description: body.description } : {}),
+      ...(typeof body.project_id === "string" ? { project_id: body.project_id } : {}),
+      ...(typeof body.task_list_id === "string" ? { task_list_id: body.task_list_id } : {}),
+      ...(typeof body.agent_id === "string" ? { agent_id: body.agent_id } : {}),
+      ...(typeof body.status === "string" ? { status: body.status as CreatePlanInput["status"] } : {}),
+    },
+  };
 }
 
 async function readJson<T>(req: Request): Promise<T | null> {
@@ -694,15 +735,70 @@ export async function handleV1Request(
         return json({ plans, count: plans.length });
       }
       if (!id && method === "POST") {
-        const body = await readJson<{ title?: string; name?: string; project_id?: string }>(req);
-        if (!body || (!body.title && !body.name)) return error(400, "title is required");
-        const plan = await store.plans.create(body as never, contextFromPrincipal(principal));
+        const body = await readJson<unknown>(req);
+        const validated = validatePlanCreate(body);
+        if (!validated.ok) return error(400, validated.message);
+        if (validated.input.slug) {
+          const scope = validated.input.project_id ?? null;
+          const duplicate = (await store.plans.list(validated.input.project_id))
+            .find((plan) => plan.project_id === scope && plan.slug === validated.input.slug);
+          if (duplicate) {
+            return error(409, `Plan slug already exists in this scope: ${validated.input.slug}`, {
+              code: "PLAN_SLUG_CONFLICT",
+              conflict: true,
+            });
+          }
+        }
+        const plan = await store.plans.create(validated.input, contextFromPrincipal(principal, validated.input));
         return json({ plan }, 201);
       }
       if (id && method === "GET") {
         const plan = await store.plans.get(id);
         return plan ? json({ plan }) : error(404, "plan not found");
       }
+      if (id && (method === "PATCH" || method === "PUT")) {
+        const body = await readJson<Record<string, unknown>>(req);
+        if (!body || Object.keys(body).length === 0) return error(400, "plan patch is required");
+        const allowed = new Set(["name", "slug", "description", "status", "task_list_id", "agent_id"]);
+        const unknownField = Object.keys(body).find((key) => !allowed.has(key));
+        if (unknownField) return error(400, `unknown plan field: ${unknownField}`);
+        for (const field of ["name", "slug", "task_list_id", "agent_id"] as const) {
+          if (body[field] !== undefined && (typeof body[field] !== "string" || !body[field].trim())) {
+            return error(400, `${field} must be a non-empty string`);
+          }
+        }
+        if (typeof body.slug === "string") {
+          const slug = normalizeSlug(body.slug);
+          if (!slug) return error(400, "slug must produce a non-empty canonical slug");
+          body.slug = slug;
+        }
+        if (body.description !== undefined && typeof body.description !== "string") {
+          return error(400, "description must be a string");
+        }
+        if (body.status !== undefined &&
+            (typeof body.status !== "string" || !["active", "completed", "archived"].includes(body.status))) {
+          return error(400, "status must be active, completed, or archived");
+        }
+        const existing = await store.plans.get(id);
+        if (!existing) return error(404, "plan not found");
+        if (typeof body.slug === "string") {
+          const duplicate = (await store.plans.list(existing.project_id ?? undefined))
+            .find((plan) => plan.id !== id && plan.project_id === existing.project_id && plan.slug === body.slug);
+          if (duplicate) {
+            return error(409, `Plan slug already exists in this scope: ${body.slug}`, {
+              code: "PLAN_SLUG_CONFLICT",
+              conflict: true,
+            });
+          }
+        }
+        const plan = await store.plans.update(id, body as never);
+        return json({ plan });
+      }
+      if (id && method === "DELETE") {
+        if (!(await store.plans.delete(id, contextFromPrincipal(principal)))) return error(404, "plan not found");
+        return json({ deleted: true, id });
+      }
+      if (id) return error(405, `method ${method} not allowed on /v1/plans/:id`);
     }
 
     // ── /v1/agents ──
