@@ -71,7 +71,15 @@ export class NodeApiTransport implements ApiTransport {
         callback()
       }
       const pinnedLookup: LookupFunction | undefined = resolved
-        ? (_hostname, _options, callback) => callback(null, resolved.address, resolved.family)
+        ? ((_hostname, lookupOptions, callback) => {
+            if (typeof lookupOptions === 'object' && lookupOptions.all === true) {
+              const respond = callback as (error: null, addresses: Array<{ address: string; family: 4 | 6 }>) => void
+              respond(null, [resolved])
+              return
+            }
+            const respond = callback as (error: null, address: string, family: 4 | 6) => void
+            respond(null, resolved.address, resolved.family)
+          }) as LookupFunction
         : undefined
       const request = perform(url, { method: options.method ?? 'GET', headers, ...(pinnedLookup ? { lookup: pinnedLookup } : {}) }, (response) => {
         connected = true
