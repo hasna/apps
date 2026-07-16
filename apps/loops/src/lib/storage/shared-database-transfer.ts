@@ -60,13 +60,14 @@ const FORBIDDEN_LIBPQ_QUERY_PARAMS = new Set([
   "passfile",
   "service",
   "servicefile",
-  "sslmode",
   "sslrootcert",
   "sslcert",
   "sslkey",
   "target_session_attrs",
   "options",
 ] as const);
+
+const REQUIRED_LIBPQ_SSLMODE = "verify-full";
 
 const ALLOWED_LIBPQ_QUERY_PARAMS = new Set([
   "connect_timeout",
@@ -165,10 +166,8 @@ export function tenantEnforcementForeignKeyChecks(): readonly TenantEnforcementF
 
 export async function runSharedToDedicatedTransfer(opts: SharedTransferOptions = {}): Promise<TransferEvidence> {
   const env = opts.env ?? process.env;
-  const sourceDsn = requireEnv(env, SHARED_TRANSFER_SOURCE_DSN_ENV);
-  const targetDsn = requireEnv(env, SHARED_TRANSFER_TARGET_DSN_ENV);
-  assertDsnDatabase(sourceDsn, SHARED_TRANSFER_SOURCE_DATABASE, SHARED_TRANSFER_SOURCE_DSN_ENV);
-  assertDsnDatabase(targetDsn, SHARED_TRANSFER_TARGET_DATABASE, SHARED_TRANSFER_TARGET_DSN_ENV);
+  const sourceDsn = normalizeTransferDsn(requireEnv(env, SHARED_TRANSFER_SOURCE_DSN_ENV), SHARED_TRANSFER_SOURCE_DSN_ENV, SHARED_TRANSFER_SOURCE_DATABASE);
+  const targetDsn = normalizeTransferDsn(requireEnv(env, SHARED_TRANSFER_TARGET_DSN_ENV), SHARED_TRANSFER_TARGET_DSN_ENV, SHARED_TRANSFER_TARGET_DATABASE);
 
   const runner = opts.runner ?? defaultCommandRunner;
   const migrateTargetThrough = opts.migrateTargetThrough ?? defaultMigrateTargetThrough;
@@ -629,7 +628,7 @@ function buildPgEnv(env: NodeJS.ProcessEnv, serviceFile: string): Record<string,
 }
 
 function dsnToServiceLines(dsn: string): string[] {
-  const url = parsePostgresDsn(dsn, "Postgres DSN");
+  const url = parseVerifiedPostgresDsn(dsn, "Postgres DSN");
   const lines = [
     `host=${safeServiceValue(decodeURIComponent(url.hostname))}`,
     `port=${safeServiceValue(url.port || "5432")}`,
@@ -637,7 +636,8 @@ function dsnToServiceLines(dsn: string): string[] {
   ];
   if (url.username) lines.push(`user=${safeServiceValue(decodeURIComponent(url.username))}`);
   if (url.password) lines.push(`password=${safeServiceValue(decodeURIComponent(url.password))}`);
-  for (const [key, value] of validatedLibpqQueryParams(url, "Postgres DSN")) {
+  const queryParams = validatedLibpqQueryParams(url, "Postgres DSN");
+  for (const [key, value] of queryParams) {
     lines.push(`${key}=${safeServiceValue(value)}`);
   }
   return lines;
@@ -648,13 +648,20 @@ function safeServiceValue(value: string): string {
   return value;
 }
 
-function assertDsnDatabase(dsn: string, expected: string, envName: string): void {
-  const url = parsePostgresDsn(dsn, envName);
-  validatedLibpqQueryParams(url, envName);
+function normalizeTransferDsn(dsn: string, envName: string, expected: string): string {
+  const url = parseVerifiedPostgresDsn(dsn, envName);
   const actual = decodeURIComponent(url.pathname.replace(/^\//, ""));
   if (actual !== expected) {
     throw new Error(`${envName} must point at database ${expected}`);
   }
+  return url.toString();
+}
+
+function parseVerifiedPostgresDsn(dsn: string, label: string): URL {
+  const url = parsePostgresDsn(dsn, label);
+  validatedLibpqQueryParams(url, label);
+  url.searchParams.set("sslmode", REQUIRED_LIBPQ_SSLMODE);
+  return url;
 }
 
 function parsePostgresDsn(dsn: string, label: string): URL {
@@ -675,6 +682,13 @@ function validatedLibpqQueryParams(url: URL, label: string): Array<[string, stri
   for (const [key, value] of url.searchParams.entries()) {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error(`${label} contains invalid libpq parameter ${key}`);
     const normalized = key.toLowerCase();
+    if (normalized === "sslmode") {
+      if (value !== REQUIRED_LIBPQ_SSLMODE) {
+        throw new Error(`${label} must not include libpq parameter ${key}`);
+      }
+      entries.push([normalized, value]);
+      continue;
+    }
     if (
       FORBIDDEN_LIBPQ_QUERY_PARAMS.has(normalized as never) ||
       normalized.startsWith("ssl") ||

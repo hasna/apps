@@ -22,6 +22,8 @@ import {
 
 const sourceDsn = "postgresql://source:source-secret@shared-rds.internal:5432/apps";
 const targetDsn = "postgresql://target:target-secret@dedicated-rds.internal:5432/loops";
+const canonicalSourceDsn = `${sourceDsn}?sslmode=verify-full`;
+const canonicalTargetDsn = `${targetDsn}?sslmode=verify-full`;
 
 function ledgerRows(through: string): AppliedStorageMigration[] {
   return expectedLedgerRows(through).map((row) => ({ ...row, appliedAt: "2026-07-16T00:00:00.000Z" }));
@@ -36,7 +38,7 @@ describe("shared database transfer", () => {
     expect(service).toContain("[openloops_transfer_target]");
     expect(service).toContain("dbname=loops");
     expect(service).toContain("password=target-secret");
-    expect(service).not.toContain("sslmode=");
+    expect(service.match(/^sslmode=verify-full$/gm)).toHaveLength(2);
 
     const dump = pgDumpCommand("/tmp/private/openloops-allowlist.dump");
     const restore = pgRestoreCommand("/tmp/private/openloops-allowlist.dump");
@@ -44,6 +46,15 @@ describe("shared database transfer", () => {
     expect(restore).toContain("--dbname=service=openloops_transfer_target");
     expect(dump.join(" ")).not.toContain("source-secret");
     expect(restore.join(" ")).not.toContain("target-secret");
+  });
+
+  test("accepts canonical provider credential URLs with verified TLS", () => {
+    const service = buildPgServiceFile(canonicalSourceDsn, canonicalTargetDsn);
+    expect(service).toContain("[openloops_transfer_source]");
+    expect(service).toContain("[openloops_transfer_target]");
+    expect(service.match(/^sslmode=verify-full$/gm)).toHaveLength(2);
+    expect(service).not.toContain("sslmode=disable");
+    expect(service).not.toContain("sslmode=require");
   });
 
   test("pins the logical dump to the OpenLoops allowlist and never snapshots the shared cluster", () => {
@@ -117,6 +128,7 @@ describe("shared database transfer", () => {
       throw new Error(`unexpected command: ${command.join(" ")}`);
     };
     const migratedThrough: string[] = [];
+    const migrationDsns: string[] = [];
     const evidence = await runSharedToDedicatedTransfer({
       env: {
         PATH: "/usr/bin",
@@ -124,7 +136,8 @@ describe("shared database transfer", () => {
         [SHARED_TRANSFER_TARGET_DSN_ENV]: targetDsn,
       },
       runner,
-      migrateTargetThrough: async (_dsn, through) => {
+      migrateTargetThrough: async (dsn, through) => {
+        migrationDsns.push(dsn);
         migratedThrough.push(through);
         return ledgerRows(through);
       },
@@ -132,6 +145,7 @@ describe("shared database transfer", () => {
     });
 
     expect(migratedThrough).toEqual(["0007_work_item_gate_deaths", "0008_tenant_prepare"]);
+    expect(migrationDsns.map((dsn) => new URL(dsn).searchParams.get("sslmode"))).toEqual(["verify-full", "verify-full"]);
     expect(evidence.command).toEqual(SHARED_TRANSFER_FIXED_COMMAND);
     expect(evidence.source.database).toBe(SHARED_TRANSFER_SOURCE_DATABASE);
     expect(evidence.target.database).toBe(SHARED_TRANSFER_TARGET_DATABASE);
@@ -176,7 +190,12 @@ describe("shared database transfer", () => {
       { label: "target password", source: sourceDsn, target: "postgresql://target@host/loops?password=other", parameter: "password" },
       { label: "target service", source: sourceDsn, target: "postgresql://target@host/loops?service=other", parameter: "service" },
       { label: "target servicefile", source: sourceDsn, target: "postgresql://target@host/loops?servicefile=/tmp/other", parameter: "servicefile" },
-      { label: "target sslmode", source: sourceDsn, target: "postgresql://target@host/loops?sslmode=disable", parameter: "sslmode" },
+      { label: "source sslmode disable", source: "postgresql://source@host/apps?sslmode=disable", target: targetDsn, parameter: "sslmode" },
+      { label: "target sslmode disable", source: sourceDsn, target: "postgresql://target@host/loops?sslmode=disable", parameter: "sslmode" },
+      { label: "target sslmode allow", source: sourceDsn, target: "postgresql://target@host/loops?sslmode=allow", parameter: "sslmode" },
+      { label: "target sslmode prefer", source: sourceDsn, target: "postgresql://target@host/loops?sslmode=prefer", parameter: "sslmode" },
+      { label: "target sslmode require", source: sourceDsn, target: "postgresql://target@host/loops?sslmode=require", parameter: "sslmode" },
+      { label: "target sslmode verify-ca", source: sourceDsn, target: "postgresql://target@host/loops?sslmode=verify-ca", parameter: "sslmode" },
       { label: "target sslrootcert", source: sourceDsn, target: "postgresql://target@host/loops?sslrootcert=/tmp/root.crt", parameter: "sslrootcert" },
       { label: "target sslcert", source: sourceDsn, target: "postgresql://target@host/loops?sslcert=/tmp/client.crt", parameter: "sslcert" },
       { label: "target sslkey", source: sourceDsn, target: "postgresql://target@host/loops?sslkey=/tmp/client.key", parameter: "sslkey" },
