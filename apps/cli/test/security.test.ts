@@ -6,6 +6,8 @@ import { CredentialManager, EncryptedFileStore, OsKeychainStore, type ProcessRun
 import { createPlan, requirePlanApproval } from '../src/plan.js'
 import { CliError, EXIT_CODES } from '../src/errors.js'
 import { defaultConfig, FileConfigStore } from '../src/config.js'
+import { runCli } from '../src/runner.js'
+import { fixture, profileConfig } from './helpers.js'
 
 const temporary: string[] = []
 afterEach(async () => {
@@ -93,5 +95,85 @@ describe('credential and mutation security', () => {
     const live = { ...stale, owner: '00000000-0000-4000-8000-000000000002', pid: process.pid }
     await writeFile(lockPath, `${JSON.stringify(live)}\n`, { mode: 0o600 })
     await expect(new FileConfigStore(configPath).save(defaultConfig())).rejects.toMatchObject({ code: 'CONFIG_BUSY' })
+    await rm(lockPath)
+    const store = new FileConfigStore(configPath)
+    await store.save(profileConfig())
+    const liveContents = `${JSON.stringify(live)}\n`
+    await writeFile(lockPath, liveContents, { mode: 0o600 })
+    const f = fixture({ config: profileConfig() })
+    f.runtime.config = store
+    f.credentials.values.set('prod', 'bearer')
+    const result = await runCli(['--json', 'careers', 'jobs', 'delete', 'ea', '--version', '1'], f.runtime)
+    expect(result.exitCode).toBe(EXIT_CODES.CONFLICT)
+    expect(f.transport.requests).toHaveLength(0)
+    expect(await readFile(lockPath, 'utf8')).toBe(liveContents)
+  })
+
+  it('reuses a pending file-backed plan but never resets an in-flight reservation', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'hasna-plan-record-'))
+    temporary.push(directory)
+    await chmod(directory, 0o700)
+    const store = new FileConfigStore(join(directory, 'config.json'))
+    const digest = `sha256:${'a'.repeat(64)}`
+    const now = Date.now()
+    const first = { operation: 'careers.jobs.delete', target: 'ea', expiresAt: new Date(now + 60_000).toISOString() }
+    expect(await store.recordPendingPlan(digest, first, now)).toBe('created')
+    expect(await store.recordPendingPlan(digest, { ...first, expiresAt: new Date(now + 120_000).toISOString() }, now + 1)).toBe('reused')
+    expect((await store.load()).pendingPlans?.[digest]?.expiresAt).toBe(first.expiresAt)
+    expect(await store.reservePendingPlan(digest, first.operation, first.target, now + 2, 'reservation-1')).toBe(true)
+    const reserved = structuredClone((await store.load()).pendingPlans?.[digest])
+    expect(await store.recordPendingPlan(digest, first, now + 3)).toBe('in-flight')
+    expect((await store.load()).pendingPlans?.[digest]).toEqual(reserved)
+    const expiredDigest = `sha256:${'b'.repeat(64)}`
+    const expired = { ...first, expiresAt: new Date(now - 1_000).toISOString() }
+    expect(await store.recordPendingPlan(expiredDigest, expired, now - 2_000)).toBe('created')
+    const replacement = { ...first, expiresAt: new Date(now + 180_000).toISOString() }
+    expect(await store.recordPendingPlan(expiredDigest, replacement, now)).toBe('created')
+    expect((await store.load()).pendingPlans?.[expiredDigest]?.expiresAt).toBe(replacement.expiresAt)
+    const crashDigest = `sha256:${'c'.repeat(64)}`
+    expect(await store.recordPendingPlan(crashDigest, first, now)).toBe('created')
+    expect(await store.reservePendingPlan(crashDigest, first.operation, first.target, now + 1, 'reservation-crash')).toBe(true)
+    await store.update((config) => {
+      config.pendingPlans![crashDigest]!.expiresAt = new Date(now - 1).toISOString()
+    })
+    const crashReservation = structuredClone((await store.load()).pendingPlans?.[crashDigest])
+    expect(await store.recordPendingPlan(crashDigest, replacement, now)).toBe('in-flight')
+    expect((await store.load()).pendingPlans?.[crashDigest]).toEqual(crashReservation)
+  })
+
+  it('allows exactly one destructive call across independent file-store runtimes', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'hasna-plan-race-'))
+    temporary.push(directory)
+    await chmod(directory, 0o700)
+    const configPath = join(directory, 'config.json')
+    await new FileConfigStore(configPath).save(profileConfig())
+    const first = fixture({ config: profileConfig() })
+    const second = fixture({ config: profileConfig() })
+    first.runtime.config = new FileConfigStore(configPath)
+    second.runtime.config = new FileConfigStore(configPath)
+    first.credentials.values.set('prod', 'bearer')
+    second.credentials.values.set('prod', 'bearer')
+    second.runtime.transport = () => first.transport
+    const command = ['careers', 'jobs', 'delete', 'ea', '--version', '1']
+    const planned = await runCli(['--json', ...command], first.runtime)
+    const digest = (planned.result as { ok: true; data: { digest: string } }).data.digest
+    let release!: () => void
+    first.transport.request = async (options) => {
+      first.transport.requests.push(structuredClone(options))
+      return new Promise((resolve) => {
+        release = () => resolve({ status: 200, headers: {}, body: { ok: true, data: {} }, text: '{}', requestId: 'file-race-request' })
+      })
+    }
+    const firstApply = runCli(['--json', ...command, '--apply', digest, '--yes'], first.runtime)
+    while (!release) await new Promise((resolve) => setImmediate(resolve))
+    second.runtime.now = () => new Date('2026-07-16T12:11:00.000Z')
+    const reserved = structuredClone((await first.runtime.config.load()).pendingPlans?.[digest])
+    expect((await runCli(['--json', ...command], second.runtime)).exitCode).toBe(EXIT_CODES.CONFLICT)
+    expect((await second.runtime.config.load()).pendingPlans?.[digest]).toEqual(reserved)
+    expect((await runCli(['--json', ...command, '--apply', digest, '--yes'], second.runtime)).exitCode).toBe(EXIT_CODES.CONFLICT)
+    expect(first.transport.requests).toHaveLength(1)
+    release()
+    expect((await firstApply).exitCode).toBe(EXIT_CODES.SUCCESS)
+    expect(first.transport.requests).toHaveLength(1)
   })
 })

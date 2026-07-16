@@ -114,7 +114,9 @@ Mutations support command-scoped `--dry-run`, `--file <json>`, and `--input -`. 
 
 Token revoke/rotate/revoke-all, job publish/close/delete, and application status/anonymize use the same short-lived plan plus `--apply <digest> --yes`; `--dry-run` remains side-effect free. Idempotency keys are accepted only for job creation, application submission, and token rotation and must match `[A-Za-z0-9._:-]{8,128}`.
 
-Token rotation requires an explicit idempotency key so plan and apply are identical. Apply atomically reserves a plan: concurrent apply is rejected, success or a definitive remote response consumes it, and a transient network/TLS/timeout failure releases it for an explicit retry.
+Token rotation requires an explicit idempotency key so plan and apply are identical. Apply atomically reserves a plan: concurrent apply and identical replanning while an apply is in flight are rejected, while an identical still-pending plan is safely reused without extending its expiry. Success or a definitive remote response consumes the reservation, and a transient network/TLS/timeout failure releases it for an explicit retry. Local settlement retries are short and bounded; if a successful remote mutation cannot be recorded after those retries, the CLI returns exit 9 with the request ID and must not be automatically rerun.
+
+Private operators can inspect ambiguous state with `plans list` and `plans show <digest>`. After independently checking the remote system, resolve it with `plans resolve <digest> --outcome applied --yes`, or use `--outcome not-applied --yes` only when the mutation is verified not to have taken effect. Resolution changes local plan state only and performs no API request.
 
 CSV export follows `X-Next-Cursor` until `X-Export-Complete:true`, preserves one header even when pages omit trailing newlines, and fails with exit 9 instead of reporting partial data as success when page or byte ceilings are reached. Output files are atomically written with mode `0600`.
 

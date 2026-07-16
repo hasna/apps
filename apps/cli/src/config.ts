@@ -34,12 +34,14 @@ export type Config = {
   pendingPlans?: Record<string, { operation: string; target: string; expiresAt: string; state?: 'pending' | 'in-flight'; reservationId?: string; reservedAt?: string }>
 }
 
+export type PendingPlanRecordStatus = 'created' | 'reused' | 'in-flight'
+
 export interface ConfigStore {
   readonly path: string
   load(): Promise<Config>
   save(config: Config): Promise<void>
   update(change: (config: Config) => void | Promise<void>): Promise<Config>
-  recordPendingPlan(digest: string, entry: NonNullable<Config['pendingPlans']>[string]): Promise<void>
+  recordPendingPlan(digest: string, entry: NonNullable<Config['pendingPlans']>[string], now: number): Promise<PendingPlanRecordStatus>
   reservePendingPlan(digest: string, operation: string, target: string, now: number, reservationId: string): Promise<boolean>
   settlePendingPlan(digest: string, reservationId: string, outcome: 'consume' | 'release'): Promise<boolean>
 }
@@ -88,12 +90,21 @@ export class FileConfigStore implements ConfigStore {
     })
   }
 
-  async recordPendingPlan(digest: string, entry: NonNullable<Config['pendingPlans']>[string]): Promise<void> {
+  async recordPendingPlan(digest: string, entry: NonNullable<Config['pendingPlans']>[string], now: number): Promise<PendingPlanRecordStatus> {
+    let status: PendingPlanRecordStatus = 'created'
     await this.update((config) => {
       config.pendingPlans ??= {}
-      config.pendingPlans = Object.fromEntries(Object.entries(config.pendingPlans).filter(([, item]) => Date.parse(item.expiresAt) > Date.now()))
+      config.pendingPlans = Object.fromEntries(Object.entries(config.pendingPlans).filter(([, item]) => {
+        return item.state === 'in-flight' || Date.parse(item.expiresAt) > now
+      }))
+      const existing = config.pendingPlans[digest]
+      if (existing) {
+        status = existing.state === 'in-flight' ? 'in-flight' : 'reused'
+        return
+      }
       config.pendingPlans[digest] = { ...entry, state: 'pending' }
     })
+    return status
   }
 
   async reservePendingPlan(digest: string, operation: string, target: string, now: number, reservationId: string): Promise<boolean> {

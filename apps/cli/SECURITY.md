@@ -20,4 +20,4 @@ The CLI does not promise that terminal output is non-sensitive. Authentication t
 - remote response bodies are bounded and server-controlled messages/details are never reflected;
 - machine-readable errors preserve only a bounded request ID for correlation, never underlying exception text or credentials.
 - redirects are never followed and all 3xx responses are typed remote failures;
-- plan reservations prevent concurrent apply; only transient transport failures release a reservation for retry.
+- plan reservations prevent concurrent apply and cannot be reset by identical replanning, even past plan expiry or after a CLI crash. Ambiguous in-flight outcomes are never automatically reclaimed; a private operator must verify remote state before using confirmed `plans resolve`, which performs no API request. Only observed transient transport failures release a reservation for retry. Settlement lock retries are bounded, and an unrecorded successful remote result fails closed with exit 9 rather than inviting an automatic replay.

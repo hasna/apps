@@ -34,6 +34,7 @@ Authentication secrets:
 
 Commands:
   doctor | config
+  plans list|show|resolve
   profiles list|show|add|use|remove
   auth login|logout|status|whoami|tokens
   apps list|search|show|status|install|update|uninstall
@@ -54,6 +55,7 @@ export async function dispatch(args: ParsedArgs, runtime: Runtime): Promise<Comm
     return output({ version: '0.2.0' }, '0.2.0\n')
   if (group === 'doctor') return doctor(args, runtime)
   if (group === 'config') return configCommand(args, runtime)
+  if (group === 'plans') return plans(action, args, runtime)
   if (group === 'profiles') return profiles(action, args, runtime)
   if (group === 'apps') return apps(action, args, runtime)
   if (group === 'accounts') return accounts(action, args, runtime)
@@ -109,6 +111,63 @@ function redactedConfig(config: Config): Config {
       ]),
     ),
   } as Config
+}
+
+async function plans(action: string | undefined, args: ParsedArgs, runtime: Runtime): Promise<CommandOutput> {
+  if (action === 'list') {
+    const config = await runtime.config.load()
+    return output(Object.entries(config.pendingPlans ?? {}).sort(([left], [right]) => left.localeCompare(right)).map(([digest, plan]) => ({
+      digest,
+      operation: plan.operation,
+      target: plan.target,
+      expiresAt: plan.expiresAt,
+      state: plan.state ?? 'pending',
+      ...(plan.reservedAt ? { reservedAt: plan.reservedAt } : {}),
+    })))
+  }
+  const digest = requiredPositional(args, 2, 'plan digest')
+  validatePlanDigest(digest)
+  if (action === 'show') {
+    const plan = (await runtime.config.load()).pendingPlans?.[digest]
+    if (!plan) throw new CliError('PLAN_NOT_FOUND', 'The mutation plan was not found', EXIT_CODES.NOT_FOUND)
+    return output({ digest, ...plan, reservationId: plan.reservationId ? '<redacted>' : undefined })
+  }
+  if (action === 'resolve') {
+    const outcome = flag(args, 'outcome')
+    if (outcome !== 'applied' && outcome !== 'not-applied')
+      throw new CliError('USAGE', 'plans resolve requires --outcome applied|not-applied', EXIT_CODES.USAGE)
+    if (!hasFlag(args, 'yes'))
+      throw new CliError('CONFIRMATION_REQUIRED', 'plans resolve requires --yes after remote verification', EXIT_CODES.CANCELLED)
+    const warning = outcome === 'not-applied'
+      ? 'Only resolve as not-applied after independently verifying the remote mutation did not take effect.'
+      : 'Resolve as applied only after independently verifying the remote mutation took effect.'
+    try {
+      await retryConfigBusy(digest, () => runtime.config.update((config) => {
+        const plan = config.pendingPlans?.[digest]
+        if (!plan) throw new CliError('PLAN_NOT_FOUND', 'The mutation plan was not found', EXIT_CODES.NOT_FOUND)
+        if (plan.state !== 'in-flight')
+          throw new CliError('PLAN_NOT_IN_FLIGHT', 'Only an in-flight mutation plan can be resolved', EXIT_CODES.CONFLICT)
+        if (outcome === 'applied') delete config.pendingPlans?.[digest]
+        else config.pendingPlans![digest] = {
+          operation: plan.operation,
+          target: plan.target,
+          expiresAt: new Date(runtime.now().getTime() + 10 * 60_000).toISOString(),
+          state: 'pending',
+        }
+      }))
+    } catch (error) {
+      if (asCliError(error).code === 'CONFIG_BUSY')
+        throw new CliError('PLAN_STATE_BUSY', 'The mutation plan state is busy', EXIT_CODES.CONFLICT, { cause: error })
+      throw error
+    }
+    return output({ digest, resolved: true, outcome, warning })
+  }
+  throw new CliError('USAGE', 'plans requires list, show, or resolve', EXIT_CODES.USAGE)
+}
+
+function validatePlanDigest(digest: string): void {
+  if (!/^sha256:[0-9a-f]{64}$/.test(digest))
+    throw new CliError('VALIDATION_ERROR', 'Invalid plan digest', EXIT_CODES.VALIDATION)
 }
 
 async function profiles(action: string | undefined, args: ParsedArgs, runtime: Runtime) {
@@ -219,8 +278,9 @@ async function apps(action: string | undefined, args: ParsedArgs, runtime: Runti
   if (hasFlag(args, 'dry-run')) return output({ ...plan, dryRun: true })
   const authorization = await authorizePlan(args, runtime, plan)
   if (authorization.waiting) return authorization.waiting
+  let applied: Config
   try {
-    config = await runtime.config.update((current) => {
+    applied = await runtime.config.update((current) => {
       if (action === 'uninstall') delete current.apps[id]
       else {
         const now = runtime.now().toISOString()
@@ -233,12 +293,12 @@ async function apps(action: string | undefined, args: ParsedArgs, runtime: Runti
         }
       }
     })
-    await settleAuthorization(runtime, authorization, 'consume')
   } catch (error) {
-    await settleAuthorization(runtime, authorization, shouldReleasePlan(error) ? 'release' : 'consume')
+    await settleAfterFailure(runtime, authorization, error)
     throw error
   }
-  return output({ applied: true, planDigest: plan.digest, app: config.apps[id] ?? null })
+  await settleAfterSuccess(runtime, authorization)
+  return output({ applied: true, planDigest: plan.digest, app: applied.apps[id] ?? null })
 }
 
 async function appCommand(action: string | undefined, args: ParsedArgs, runtime: Runtime) {
@@ -277,17 +337,17 @@ async function accounts(action: string | undefined, args: ParsedArgs, runtime: R
   if (hasFlag(args, 'dry-run')) return output({ ...plan, dryRun: true })
   const authorization = await authorizePlan(args, runtime, plan)
   if (authorization.waiting) return authorization.waiting
+  let result: unknown
   try {
-    let result: unknown
     if (action === 'provision' && provider.accounts.provision) result = await provider.accounts.provision(context, changes)
     else if (action === 'deprovision' && provider.accounts.deprovision) result = await provider.accounts.deprovision(context, target)
     else throw new CliError('CAPABILITY_UNSUPPORTED', `Provider ${provider.id} cannot ${action}`, EXIT_CODES.UNSUPPORTED)
-    await settleAuthorization(runtime, authorization, 'consume')
-    return output(result)
   } catch (error) {
-    await settleAuthorization(runtime, authorization, shouldReleasePlan(error) ? 'release' : 'consume')
+    await settleAfterFailure(runtime, authorization, error)
     throw error
   }
+  await settleAfterSuccess(runtime, authorization)
+  return output(result)
 }
 
 async function auth(action: string | undefined, args: ParsedArgs, runtime: Runtime) {
@@ -655,14 +715,15 @@ async function guardedMutation(
   const plan = createPlan(context.operation, context.target, { context, request: safeRequest })
   const authorization = await authorizePlan(args, runtime, plan)
   if (authorization.waiting) return authorization.waiting
+  let result: CommandOutput
   try {
-    const result = await mutation(api, args, runtime, options)
-    await settleAuthorization(runtime, authorization, 'consume')
-    return result
+    result = await mutation(api, args, runtime, options)
   } catch (error) {
-    await settleAuthorization(runtime, authorization, shouldReleasePlan(error) ? 'release' : 'consume')
+    await settleAfterFailure(runtime, authorization, error)
     throw error
   }
+  await settleAfterSuccess(runtime, authorization, result.requestId)
+  return result
 }
 
 type PlanAuthorization = { waiting?: CommandOutput; reservation?: { digest: string; id: string } }
@@ -671,28 +732,91 @@ async function authorizePlan(args: ParsedArgs, runtime: Runtime, plan: ReturnTyp
   const now = runtime.now().getTime()
   const apply = flag(args, 'apply')
   if (!apply) {
-    await runtime.config.recordPendingPlan(plan.digest, {
-      operation: plan.operation,
-      target: plan.target,
-      expiresAt: new Date(now + 10 * 60_000).toISOString(),
-    })
+    let status: Awaited<ReturnType<Runtime['config']['recordPendingPlan']>>
+    try {
+      status = await retryConfigBusy(plan.digest, () => runtime.config.recordPendingPlan(plan.digest, {
+        operation: plan.operation,
+        target: plan.target,
+        expiresAt: new Date(now + 10 * 60_000).toISOString(),
+      }, now))
+    } catch (error) {
+      if (asCliError(error).code === 'CONFIG_BUSY')
+        throw new CliError('PLAN_STATE_BUSY', 'The mutation plan state is busy', EXIT_CODES.CONFLICT, { cause: error })
+      throw error
+    }
+    if (status === 'in-flight')
+      throw new CliError('PLAN_IN_FLIGHT', 'An identical mutation plan is already being applied', EXIT_CODES.CONFLICT)
     return { waiting: output(plan) }
   }
   requirePlanApproval(plan, apply, hasFlag(args, 'yes'))
   const reservationId = runtime.randomUUID()
-  if (!(await runtime.config.reservePendingPlan(apply, plan.operation, plan.target, now, reservationId)))
+  let reserved: boolean
+  try {
+    reserved = await retryConfigBusy(reservationId, () => runtime.config.reservePendingPlan(apply, plan.operation, plan.target, now, reservationId))
+  } catch (error) {
+    if (asCliError(error).code === 'CONFIG_BUSY')
+      throw new CliError('PLAN_RESERVATION_BUSY', 'The mutation plan is being reserved by another process', EXIT_CODES.CONFLICT, { cause: error })
+    throw error
+  }
+  if (!reserved)
     throw new CliError('PLAN_EXPIRED_OR_REPLAYED', 'The mutation plan is expired, unknown, or already used', EXIT_CODES.CONFLICT)
   return { reservation: { digest: apply, id: reservationId } }
 }
 
 async function settleAuthorization(runtime: Runtime, authorization: PlanAuthorization, outcome: 'consume' | 'release'): Promise<void> {
   if (!authorization.reservation) return
-  if (!(await runtime.config.settlePendingPlan(authorization.reservation.digest, authorization.reservation.id, outcome)))
+  const settled = await retryConfigBusy(
+    authorization.reservation.id,
+    () => runtime.config.settlePendingPlan(authorization.reservation!.digest, authorization.reservation!.id, outcome),
+  )
+  if (!settled)
     throw new CliError('PLAN_RESERVATION_LOST', 'The mutation plan reservation could not be finalized', EXIT_CODES.CONFLICT)
+}
+
+async function settleAfterSuccess(runtime: Runtime, authorization: PlanAuthorization, requestId?: string): Promise<void> {
+  try {
+    await settleAuthorization(runtime, authorization, 'consume')
+  } catch (error) {
+    throw new CliError(
+      'MUTATION_SETTLEMENT_PARTIAL',
+      'The mutation completed, but its local plan state could not be finalized; do not automatically retry',
+      EXIT_CODES.PARTIAL,
+      { cause: error, requestId, details: authorization.reservation ? { planDigest: authorization.reservation.digest } : undefined },
+    )
+  }
+}
+
+async function settleAfterFailure(runtime: Runtime, authorization: PlanAuthorization, error: unknown): Promise<void> {
+  try {
+    await settleAuthorization(runtime, authorization, shouldReleasePlan(error) ? 'release' : 'consume')
+  } catch {
+    // Preserve the remote/transport failure. The in-flight reservation remains fail-closed until expiry.
+  }
 }
 
 function shouldReleasePlan(error: unknown): boolean {
   return asCliError(error).exitCode === EXIT_CODES.NETWORK
+}
+
+async function retryConfigBusy<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await operation()
+    } catch (error) {
+      if (asCliError(error).code !== 'CONFIG_BUSY' || attempt === 2) throw error
+      await wait(configRetryDelay(key, attempt))
+    }
+  }
+  throw new CliError('CONFIG_BUSY', 'The CLI configuration is busy', EXIT_CODES.CONFIG)
+}
+
+function configRetryDelay(key: string, attempt: number): number {
+  const jitter = [...key].reduce((total, character) => total + character.charCodeAt(0), 0) % 7
+  return 5 + attempt * 10 + jitter
+}
+
+async function wait(milliseconds: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, milliseconds))
 }
 
 async function apiJson(api: ApiTransport, options: HttpRequestOptions): Promise<CommandOutput> {

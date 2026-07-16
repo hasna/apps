@@ -46,6 +46,7 @@ const valueFlags = new Set([
   'cover-letter',
   'app',
   'two-factor-env',
+  'outcome',
 ])
 
 const commonApi = ['json', 'profile', 'api-url', 'connect-timeout', 'request-timeout', 'org', 'org-slug', 'passphrase-stdin']
@@ -57,6 +58,10 @@ const commandFlags: Record<string, string[]> = {
   version: ['json'],
   doctor: [...commonApi],
   config: ['json'],
+  plans: ['json'],
+  'plans list': ['json'],
+  'plans show': ['json'],
+  'plans resolve': ['json', 'outcome', 'yes'],
   profiles: ['json'],
   'profiles list': ['json'],
   'profiles show': ['json', 'profile'],
@@ -106,6 +111,7 @@ const commandFlags: Record<string, string[]> = {
 
 const positionalArity: Record<string, [number, number]> = {
   help: [0, 1], version: [1, 1], doctor: [1, 1], config: [1, 2],
+  'plans list': [2, 2], 'plans show': [3, 3], 'plans resolve': [3, 3],
   'profiles list': [2, 2], 'profiles show': [2, 3], 'profiles add': [3, 3], 'profiles use': [3, 3], 'profiles remove': [3, 3],
   'apps list': [2, 2], 'apps search': [3, 3], 'apps show': [3, 3], 'apps status': [3, 3], 'apps install': [3, 3], 'apps update': [3, 3], 'apps uninstall': [3, 3],
   'app cweb capabilities': [3, 3],
@@ -161,7 +167,7 @@ export function assertAllowedFlags(args: ParsedArgs): void {
   }
   if (args.flags.has('dry-run') && (args.flags.has('apply') || args.flags.has('yes')))
     throw new CliError('USAGE', '--dry-run cannot be combined with --apply or --yes', EXIT_CODES.USAGE)
-  if (args.flags.has('yes') && !args.flags.has('apply'))
+  if (args.flags.has('yes') && !args.flags.has('apply') && route !== 'plans resolve')
     throw new CliError('USAGE', '--yes requires --apply', EXIT_CODES.USAGE)
   const arity = positionalArity[route]
   if (arity && (args.positionals.length < arity[0] || args.positionals.length > arity[1]))
@@ -172,7 +178,7 @@ export function commandName(args: ParsedArgs): string {
   const positionals = args.positionals
   if (positionals.length === 0) return 'help'
   if (positionals[0] === 'help' || positionals[0] === 'version' || positionals[0] === 'doctor') return positionals[0]
-  if (!['config', 'profiles', 'apps', 'accounts', 'app', 'auth', 'careers'].includes(positionals[0] ?? '')) return positionals[0] ?? 'help'
+  if (!['config', 'plans', 'profiles', 'apps', 'accounts', 'app', 'auth', 'careers'].includes(positionals[0] ?? '')) return positionals[0] ?? 'help'
   if (positionals[0] === 'app' && positionals[1] === 'cweb' && positionals[2] === 'capabilities')
     return 'app cweb capabilities'
   if (positionals[0] === 'auth' && positionals[1] === 'tokens') return positionals.slice(0, 3).join(' ')

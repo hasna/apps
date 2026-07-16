@@ -138,12 +138,19 @@ describe('release remediation regressions', () => {
     const planned = await runCli(['--json', ...command], concurrent.runtime)
     const digest = (planned.result as { ok: true; data: { digest: string } }).data.digest
     let release!: () => void
-    concurrent.transport.request = async () => new Promise((resolve) => {
+    concurrent.transport.request = async (options) => new Promise((resolve) => {
+      concurrent.transport.requests.push(structuredClone(options))
       release = () => resolve({ status: 200, headers: {}, body: { ok: true, data: {} }, text: '{}', requestId: 'request-test' })
     })
     const firstApply = runCli(['--json', ...command, '--apply', digest, '--yes'], concurrent.runtime)
     while (!release) await new Promise((resolve) => setImmediate(resolve))
+    concurrent.runtime.now = () => new Date('2026-07-16T12:11:00.000Z')
+    const reservation = structuredClone(concurrent.config.value.pendingPlans?.[digest])
+    expect((await runCli(['--json', ...command], concurrent.runtime)).exitCode).toBe(EXIT_CODES.CONFLICT)
+    expect(concurrent.config.value.pendingPlans?.[digest]).toEqual(reservation)
+    expect(concurrent.transport.requests).toHaveLength(1)
     expect((await runCli(['--json', ...command, '--apply', digest, '--yes'], concurrent.runtime)).exitCode).toBe(EXIT_CODES.CONFLICT)
+    expect(concurrent.transport.requests).toHaveLength(1)
     release()
     expect((await firstApply).exitCode).toBe(0)
 
@@ -154,6 +161,89 @@ describe('release remediation regressions', () => {
     definitive.transport.request = async () => { throw new CliError('REMOTE_REQUEST_REJECTED', 'Remote rejected', EXIT_CODES.REMOTE) }
     expect((await runCli(['--json', ...command, '--apply', nextDigest, '--yes'], definitive.runtime)).exitCode).toBe(EXIT_CODES.REMOTE)
     expect((await runCli(['--json', ...command, '--apply', nextDigest, '--yes'], definitive.runtime)).exitCode).toBe(EXIT_CODES.CONFLICT)
+  })
+
+  it('bounds settlement retries and emits partial after a successful remote mutation cannot be consumed', async () => {
+    const recovered = fixture({ config: profileConfig() })
+    recovered.credentials.values.set('prod', 'bearer')
+    const command = ['careers', 'jobs', 'delete', 'ea', '--version', '1']
+    const plan = await runCli(['--json', ...command], recovered.runtime)
+    const digest = (plan.result as { ok: true; data: { digest: string } }).data.digest
+    const settle = recovered.config.settlePendingPlan.bind(recovered.config)
+    let transientAttempts = 0
+    recovered.config.settlePendingPlan = async (...args) => {
+      transientAttempts += 1
+      if (transientAttempts < 3) throw new CliError('CONFIG_BUSY', 'busy', EXIT_CODES.CONFIG)
+      return settle(...args)
+    }
+    expect((await runCli(['--json', ...command, '--apply', digest, '--yes'], recovered.runtime)).exitCode).toBe(EXIT_CODES.SUCCESS)
+    expect(transientAttempts).toBe(3)
+    expect(recovered.transport.requests).toHaveLength(1)
+
+    const partial = fixture({ config: profileConfig() })
+    partial.credentials.values.set('prod', 'bearer')
+    const partialPlan = await runCli(['--json', ...command], partial.runtime)
+    const partialDigest = (partialPlan.result as { ok: true; data: { digest: string } }).data.digest
+    let failedAttempts = 0
+    partial.config.settlePendingPlan = async () => {
+      failedAttempts += 1
+      throw new CliError('CONFIG_BUSY', 'busy', EXIT_CODES.CONFIG)
+    }
+    const result = await runCli(['--json', ...command, '--apply', partialDigest, '--yes'], partial.runtime)
+    expect(result.exitCode).toBe(EXIT_CODES.PARTIAL)
+    expect(result.result).toMatchObject({ ok: false, error: { code: 'MUTATION_SETTLEMENT_PARTIAL' }, meta: { requestId: 'request-test' } })
+    expect(failedAttempts).toBe(3)
+    expect(partial.transport.requests).toHaveLength(1)
+    expect(partial.config.value.pendingPlans?.[partialDigest]?.state).toBe('in-flight')
+    expect((await runCli(['--json', ...command, '--apply', partialDigest, '--yes'], partial.runtime)).exitCode).toBe(EXIT_CODES.CONFLICT)
+    expect(partial.transport.requests).toHaveLength(1)
+  })
+
+  it('bounds reservation contention and fails closed as conflict before transport', async () => {
+    const f = fixture({ config: profileConfig() })
+    f.credentials.values.set('prod', 'bearer')
+    const command = ['careers', 'jobs', 'delete', 'ea', '--version', '1']
+    const plan = await runCli(['--json', ...command], f.runtime)
+    const digest = (plan.result as { ok: true; data: { digest: string } }).data.digest
+    let attempts = 0
+    f.config.reservePendingPlan = async () => {
+      attempts += 1
+      throw new CliError('CONFIG_BUSY', 'busy', EXIT_CODES.CONFIG)
+    }
+    expect((await runCli(['--json', ...command, '--apply', digest, '--yes'], f.runtime)).exitCode).toBe(EXIT_CODES.CONFLICT)
+    expect(attempts).toBe(3)
+    expect(f.transport.requests).toHaveLength(0)
+  })
+
+  it('provides an explicit no-transport operator path for ambiguous in-flight plans', async () => {
+    const f = fixture({ config: profileConfig() })
+    f.credentials.values.set('prod', 'bearer')
+    const command = ['careers', 'jobs', 'delete', 'ea', '--version', '1']
+    const planned = await runCli(['--json', ...command], f.runtime)
+    const digest = (planned.result as { ok: true; data: { digest: string } }).data.digest
+    expect(await f.config.reservePendingPlan(digest, 'careers.jobs.delete', 'ea', f.runtime.now().getTime(), 'operator-reservation')).toBe(true)
+    expect((await runCli(['--json', 'plans', 'list'], f.runtime)).result).toMatchObject({ ok: true, data: [{ digest, state: 'in-flight' }] })
+    expect((await runCli(['--json', 'plans', 'show', digest], f.runtime)).result).toMatchObject({ ok: true, data: { digest, reservationId: '<redacted>' } })
+    expect((await runCli(['--json', 'plans', 'resolve', digest, '--outcome', 'not-applied'], f.runtime)).exitCode).toBe(EXIT_CODES.CANCELLED)
+    expect(f.config.value.pendingPlans?.[digest]?.state).toBe('in-flight')
+    const resolved = await runCli(['--json', 'plans', 'resolve', digest, '--outcome', 'not-applied', '--yes'], f.runtime)
+    expect(resolved.exitCode).toBe(EXIT_CODES.SUCCESS)
+    expect(resolved.result).toMatchObject({ ok: true, data: { digest, resolved: true, outcome: 'not-applied' } })
+    expect(JSON.stringify(resolved.result)).toContain('independently verifying')
+    expect(f.transport.requests).toHaveLength(0)
+    expect(f.config.value.pendingPlans?.[digest]?.state).toBe('pending')
+    expect((await runCli(['--json', ...command, '--apply', digest, '--yes'], f.runtime)).exitCode).toBe(EXIT_CODES.SUCCESS)
+    expect(f.transport.requests).toHaveLength(1)
+
+    const applied = fixture({ config: profileConfig() })
+    applied.credentials.values.set('prod', 'bearer')
+    const nextPlan = await runCli(['--json', ...command], applied.runtime)
+    const nextDigest = (nextPlan.result as { ok: true; data: { digest: string } }).data.digest
+    expect(await applied.config.reservePendingPlan(nextDigest, 'careers.jobs.delete', 'ea', applied.runtime.now().getTime(), 'applied-reservation')).toBe(true)
+    expect((await runCli(['--json', 'plans', 'resolve', nextDigest, '--outcome', 'applied', '--yes'], applied.runtime)).exitCode).toBe(EXIT_CODES.SUCCESS)
+    expect(applied.config.value.pendingPlans?.[nextDigest]).toBeUndefined()
+    expect(applied.transport.requests).toHaveLength(0)
+    expect((await runCli(['--json', 'plans', 'show', 'sha256:not-a-digest'], applied.runtime)).exitCode).toBe(EXIT_CODES.VALIDATION)
   })
 
   it('enforces secret input limits in UTF-8 bytes', async () => {

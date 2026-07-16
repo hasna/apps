@@ -1,6 +1,6 @@
 import { Readable, Writable } from 'node:stream'
 import { randomUUID } from 'node:crypto'
-import { defaultConfig, type Config, type ConfigStore, type Profile } from '../src/config.js'
+import { defaultConfig, type Config, type ConfigStore, type PendingPlanRecordStatus, type Profile } from '../src/config.js'
 import type { ApiTransport, HttpRequestOptions, HttpResponse } from '../src/http.js'
 import type { Runtime } from '../src/runtime.js'
 
@@ -22,9 +22,15 @@ export class MemoryConfig implements ConfigStore {
     this.value = structuredClone(config)
     return structuredClone(config)
   }
-  async recordPendingPlan(digest: string, entry: NonNullable<Config['pendingPlans']>[string]) {
+  async recordPendingPlan(digest: string, entry: NonNullable<Config['pendingPlans']>[string], now: number): Promise<PendingPlanRecordStatus> {
     this.value.pendingPlans ??= {}
+    this.value.pendingPlans = Object.fromEntries(Object.entries(this.value.pendingPlans).filter(([, item]) => {
+      return item.state === 'in-flight' || Date.parse(item.expiresAt) > now
+    }))
+    const existing = this.value.pendingPlans[digest]
+    if (existing) return existing.state === 'in-flight' ? 'in-flight' : 'reused'
     this.value.pendingPlans[digest] = structuredClone(entry)
+    return 'created'
   }
   async reservePendingPlan(digest: string, operation: string, target: string, now: number, reservationId: string) {
     const pending = this.value.pendingPlans?.[digest]
