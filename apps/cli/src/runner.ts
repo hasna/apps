@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { hasFlag, parseArgs } from './args.js'
+import { commandName, hasFlag, parseArgs } from './args.js'
 import { dispatch } from './commands.js'
 import { FileConfigStore } from './config.js'
 import { CredentialManager, EncryptedFileStore, OsKeychainStore } from './credentials.js'
@@ -13,14 +13,14 @@ export type RunResult = { exitCode: ExitCode; result: ReturnType<typeof success>
 
 export async function runCli(argv: string[], suppliedRuntime?: Runtime): Promise<RunResult> {
   const started = Date.now()
-  let command = argv.filter((item) => !item.startsWith('--')).slice(0, 3).join(' ') || 'help'
+  let command = 'help'
   let json = argv.includes('--json')
   let profile: string | undefined
   try {
     const args = parseArgs(argv)
     json = hasFlag(args, 'json')
     profile = args.flags.get('profile')?.at(-1)
-    command = args.positionals.slice(0, 3).join(' ') || 'help'
+    command = commandName(args)
     if (hasFlag(args, 'password-stdin') && hasFlag(args, 'passphrase-stdin'))
       throw new Error('--password-stdin and --passphrase-stdin cannot share standard input')
     const runtime = suppliedRuntime ?? defaultRuntime(args)
@@ -45,6 +45,7 @@ export async function runCli(argv: string[], suppliedRuntime?: Runtime): Promise
       command,
       durationMs: Date.now() - started,
       ...(profile ? { profile } : {}),
+      ...(error.requestId ? { requestId: error.requestId } : {}),
     })
     const rendered = `${JSON.stringify(result)}\n`
     if (json) runtime.stdout.write(rendered)
@@ -71,6 +72,7 @@ function defaultRuntime(args: ReturnType<typeof parseArgs>): Runtime {
         profile.apiUrl,
         profile.connectTimeoutMs ?? 5_000,
         profile.requestTimeoutMs ?? 30_000,
+        profile.allowInsecureLocalhost === true && ['localhost', '127.0.0.1', '[::1]', '::1'].includes(new URL(profile.apiUrl).hostname),
       ),
     stdin: process.stdin,
     stdout: process.stdout,

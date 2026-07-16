@@ -38,9 +38,15 @@ describe('cweb careers commands', () => {
     const f = fixture({ config: profileConfig() })
     f.credentials.values.set('prod', 'bearer')
     await runCli(['--json', 'careers', 'jobs', 'update', 'ea', '--expected-version', '2', '--title', 'EA II'], f.runtime)
-    await runCli(['--json', 'careers', 'jobs', 'publish', 'ea', '--version', '3'], f.runtime)
-    await runCli(['--json', 'careers', 'jobs', 'close', 'ea', '--version', '4'], f.runtime)
-    await runCli(['--json', 'careers', 'jobs', 'delete', 'ea', '--version', '5'], f.runtime)
+    for (const command of [
+      ['careers', 'jobs', 'publish', 'ea', '--version', '3'],
+      ['careers', 'jobs', 'close', 'ea', '--version', '4'],
+      ['careers', 'jobs', 'delete', 'ea', '--version', '5'],
+    ]) {
+      const planned = await runCli(['--json', ...command], f.runtime)
+      const digest = (planned.result as { ok: true; data: { digest: string } }).data.digest
+      await runCli(['--json', ...command, '--apply', digest, '--yes'], f.runtime)
+    }
     expect(f.transport.requests[0]?.body).toMatchObject({ expectedVersion: 2 })
     expect(f.transport.requests.slice(1).map((request) => request.headers?.['If-Match'])).toEqual(['3', '4', '5'])
   })
@@ -84,8 +90,14 @@ describe('cweb careers commands', () => {
     f.credentials.values.set('prod', 'bearer')
     await runCli(['--json', 'careers', 'applications', 'list', '--job', 'ea'], f.runtime)
     await runCli(['--json', 'careers', 'applications', 'show', 'app_1'], f.runtime)
-    await runCli(['--json', 'careers', 'applications', 'status', 'app_1', '--status', 'REVIEWING'], f.runtime)
-    await runCli(['--json', 'careers', 'applications', 'anonymize', 'app_1'], f.runtime)
+    for (const command of [
+      ['careers', 'applications', 'status', 'app_1', '--status', 'REVIEWING'],
+      ['careers', 'applications', 'anonymize', 'app_1'],
+    ]) {
+      const planned = await runCli(['--json', ...command], f.runtime)
+      const digest = (planned.result as { ok: true; data: { digest: string } }).data.digest
+      await runCli(['--json', ...command, '--apply', digest, '--yes'], f.runtime)
+    }
     expect(f.transport.requests.map((request) => request.path)).toEqual([
       '/api/v1/orgs/hasna/careers/jobs/ea/applications',
       '/api/v1/orgs/hasna/careers/applications/app_1',
@@ -96,8 +108,8 @@ describe('cweb careers commands', () => {
     const exported = fixture({ config: profileConfig() })
     exported.credentials.values.set('prod', 'bearer')
     exported.transport.responses.push(
-      { status: 200, headers: { 'x-next-cursor': 'next', 'x-export-complete': 'false' }, body: '', text: 'id,name\n1,A\n' },
-      { status: 200, headers: { 'x-export-complete': 'true' }, body: '', text: 'id,name\n2,B\n' },
+      { status: 200, headers: { 'x-next-cursor': 'next', 'x-export-complete': 'false' }, body: '', text: 'id,name\n1,A' },
+      { status: 200, headers: { 'x-export-complete': 'true' }, body: '', text: 'id,name\n2,B' },
     )
     await runCli(['--json', 'careers', 'applications', 'export'], exported.runtime)
     expect(JSON.parse(exported.stdout.value).data.csv).toBe('id,name\n1,A\n2,B\n')

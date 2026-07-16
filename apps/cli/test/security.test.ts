@@ -1,10 +1,11 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { EncryptedFileStore, OsKeychainStore, type ProcessRunner } from '../src/credentials.js'
+import { CredentialManager, EncryptedFileStore, OsKeychainStore, type ProcessRunner, type SecretStore } from '../src/credentials.js'
 import { createPlan, requirePlanApproval } from '../src/plan.js'
 import { CliError, EXIT_CODES } from '../src/errors.js'
+import { FileConfigStore } from '../src/config.js'
 
 const temporary: string[] = []
 afterEach(async () => {
@@ -50,9 +51,33 @@ describe('credential and mutation security', () => {
   })
 
   it('keeps public exit code meanings stable', () => {
-    expect(EXIT_CODES.CONFIG).toBe(3)
-    expect(EXIT_CODES.AUTH).toBe(4)
+    expect(EXIT_CODES.CONFIG).toBe(2)
+    expect(EXIT_CODES.AUTH).toBe(3)
+    expect(EXIT_CODES.REMOTE).toBe(8)
     expect(EXIT_CODES.UNSUPPORTED).toBe(11)
     expect(EXIT_CODES.INTERNAL).toBe(70)
+  })
+
+  it('rejects symlinked private config state', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'hasna-config-'))
+    temporary.push(directory)
+    const target = join(directory, 'target.json')
+    const path = join(directory, 'config.json')
+    await writeFile(target, '{}', { mode: 0o600 })
+    await chmod(directory, 0o700)
+    await symlink(target, path)
+    await expect(new FileConfigStore(path).load()).rejects.toMatchObject({ code: 'CONFIG_INVALID', exitCode: EXIT_CODES.CONFIG })
+  })
+
+  it('deletes credentials only from the selected store', async () => {
+    const calls: string[] = []
+    const store = (name: string): SecretStore => ({
+      get: async () => undefined,
+      set: async () => undefined,
+      delete: async () => { calls.push(name) },
+    })
+    const manager = new CredentialManager(store('keychain'), store('encrypted'))
+    await manager.delete({ name: 'prod', apiUrl: 'https://hasna.com', credentialStore: 'keychain', credential: 'keychain:prod' })
+    expect(calls).toEqual(['keychain'])
   })
 })

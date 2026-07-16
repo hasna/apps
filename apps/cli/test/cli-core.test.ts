@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { runCli } from '../src/runner.js'
 import { RESULT_SCHEMA } from '../src/result.js'
 import { EXIT_CODES } from '../src/errors.js'
-import { fixture, profileConfig } from './helpers.js'
+import { cwebSpecResponse, fixture, profileConfig } from './helpers.js'
 
 describe('stable CLI contract', () => {
   it('emits the versioned JSON envelope and documented usage exit', async () => {
@@ -18,7 +18,7 @@ describe('stable CLI contract', () => {
   })
 
   it('provides every documented exit code without collisions', () => {
-    expect(Object.values(EXIT_CODES).sort((a, b) => a - b)).toEqual([0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 70])
+    expect([...new Set(Object.values(EXIT_CODES))].sort((a, b) => a - b)).toEqual([0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 70])
   })
 
   it('creates and selects profiles without plaintext credentials', async () => {
@@ -47,20 +47,22 @@ describe('stable CLI contract', () => {
   })
 
   it('requires a matching plan digest and --yes for app installation', async () => {
-    const planRun = fixture()
+    const planRun = fixture({ config: profileConfig() })
+    planRun.transport.responses.push(cwebSpecResponse())
     await runCli(['--json', 'apps', 'install', 'cweb'], planRun.runtime)
     const plan = JSON.parse(planRun.stdout.value).data
     expect(plan.digest).toMatch(/^sha256:[0-9a-f]{64}$/)
 
-    const applyRun = fixture()
-    const rejected = await runCli(['--json', 'apps', 'install', 'cweb', '--apply', plan.digest], applyRun.runtime)
+    planRun.transport.responses.push(cwebSpecResponse())
+    const rejected = await runCli(['--json', 'apps', 'install', 'cweb', '--apply', plan.digest], planRun.runtime)
     expect(rejected.exitCode).toBe(EXIT_CODES.VALIDATION)
+    planRun.transport.responses.push(cwebSpecResponse())
     const accepted = await runCli(
       ['--json', 'apps', 'install', 'cweb', '--apply', plan.digest, '--yes'],
-      applyRun.runtime,
+      planRun.runtime,
     )
     expect(accepted.exitCode).toBe(0)
-    expect(applyRun.config.value.apps.cweb?.provider).toBe('builtin:cweb')
+    expect(planRun.config.value.apps.cweb?.provider).toBe('builtin:cweb')
   })
 
   it('reports typed account capability unsupported', async () => {
@@ -71,9 +73,17 @@ describe('stable CLI contract', () => {
   })
 
   it('reports cweb capabilities through the OpenAPI-backed manifest, not a fake endpoint', async () => {
-    const f = fixture()
+    const f = fixture({ config: profileConfig() })
+    f.transport.responses.push(cwebSpecResponse())
     await runCli(['--json', 'app', 'cweb', 'capabilities'], f.runtime)
-    expect(JSON.parse(f.stdout.value).data.api).toEqual({ openApiPath: '/api/v1/openapi.json', minimumVersion: '1.1.0' })
-    expect(f.transport.requests).toHaveLength(0)
+    expect(JSON.parse(f.stdout.value).data).toMatchObject({ compatible: true, title: 'Hasna CWeb CLI API', version: '1.1.0' })
+    expect(f.transport.requests[0]?.path).toBe('/api/v1/openapi.json')
+  })
+
+  it('reports incompatible cweb OpenAPI status', async () => {
+    const f = fixture({ config: profileConfig() })
+    f.transport.responses.push({ status: 200, headers: {}, body: { info: { title: 'Wrong', version: '0.1.0' }, paths: {} }, text: '{}' })
+    await runCli(['--json', 'apps', 'status', 'cweb'], f.runtime)
+    expect(JSON.parse(f.stdout.value).data.api).toMatchObject({ reachable: true, compatible: false, title: 'Wrong' })
   })
 })

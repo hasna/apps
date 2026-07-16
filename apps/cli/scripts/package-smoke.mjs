@@ -17,6 +17,8 @@ try {
   const result = JSON.parse(execFileSync(cli, ['--json', 'version'], { encoding: 'utf8' }))
   if (result.schema !== 'hasna.cli_result.v1' || result.data?.version !== '0.2.0')
     throw new Error('installed tarball smoke returned an invalid result')
+  const help = execFileSync(cli, ['help'], { encoding: 'utf8' })
+  if (!help.includes('Usage: hasna')) throw new Error('installed tarball help smoke failed')
   execFileSync(process.execPath, ['scripts/build-evidence.mjs', tarball], { cwd: root, stdio: 'inherit' })
   process.stdout.write(`${tarball}\n`)
 } finally {

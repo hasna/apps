@@ -1,4 +1,5 @@
-import { lstat, readFile } from 'node:fs/promises'
+import { open } from 'node:fs/promises'
+import { constants } from 'node:fs'
 import { CliError, EXIT_CODES } from './errors.js'
 import type { ParsedArgs } from './args.js'
 import { flag } from './args.js'
@@ -25,12 +26,21 @@ export async function readJsonInput(
     throw new CliError('USAGE', 'Use only one of --file or --input', EXIT_CODES.USAGE)
   let raw = '{}'
   if (file) {
-    const stats = await lstat(file)
-    if (!stats.isFile() || stats.isSymbolicLink())
-      throw new CliError('INPUT_INVALID', 'Input must be a regular non-symlink file', EXIT_CODES.VALIDATION)
-    if (stats.size > MAX_INPUT)
-      throw new CliError('INPUT_TOO_LARGE', 'Input exceeds 1 MiB', EXIT_CODES.VALIDATION)
-    raw = await readFile(file, 'utf8')
+    let handle
+    try {
+      handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+      const stats = await handle.stat()
+      if (!stats.isFile() || stats.nlink !== 1)
+        throw new CliError('INPUT_INVALID', 'Input must be a regular non-linked file', EXIT_CODES.VALIDATION)
+      if (stats.size > MAX_INPUT)
+        throw new CliError('INPUT_TOO_LARGE', 'Input exceeds 1 MiB', EXIT_CODES.VALIDATION)
+      raw = await handle.readFile('utf8')
+    } catch (error) {
+      if (error instanceof CliError) throw error
+      throw new CliError('INPUT_INVALID', 'Input must be a regular non-linked file', EXIT_CODES.VALIDATION, { cause: error })
+    } finally {
+      await handle?.close()
+    }
   } else if (stdin !== undefined) {
     if (stdin !== '-')
       throw new CliError('USAGE', '--input currently accepts only - for stdin', EXIT_CODES.USAGE)

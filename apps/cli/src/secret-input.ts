@@ -28,6 +28,7 @@ export async function readHiddenSecret(
   input.resume()
   return new Promise((resolve, reject) => {
     let value = ''
+    let done = false
     const cleanup = () => {
       input.off('data', onData)
       input.setRawMode(false)
@@ -35,16 +36,27 @@ export async function readHiddenSecret(
       output.write('\n')
     }
     const onData = (chunk: Buffer) => {
-      const text = chunk.toString('utf8')
-      if (text === '\u0003') {
-        cleanup()
-        reject(new CliError('CANCELLED', 'Input cancelled', EXIT_CODES.USAGE))
-      } else if (text === '\r' || text === '\n') {
-        cleanup()
-        if (!value) reject(new CliError('SECRET_REQUIRED', 'A secret is required', EXIT_CODES.AUTH))
-        else resolve(value)
-      } else if (text === '\u007f') value = value.slice(0, -1)
-      else value += text
+      for (const character of chunk.toString('utf8')) {
+        if (done) return
+        if (character === '\u0003' || character === '\u0004') {
+          done = true
+          cleanup()
+          reject(new CliError('CANCELLED', 'Input cancelled', EXIT_CODES.CANCELLED))
+        } else if (character === '\r' || character === '\n') {
+          done = true
+          cleanup()
+          if (!value) reject(new CliError('SECRET_REQUIRED', 'A secret is required', EXIT_CODES.AUTH))
+          else resolve(value)
+        } else if (character === '\u007f' || character === '\b') value = value.slice(0, -1)
+        else {
+          value += character
+          if (value.length > 1_048_576) {
+            done = true
+            cleanup()
+            reject(new CliError('INPUT_TOO_LARGE', 'Secret input exceeds 1 MiB', EXIT_CODES.USAGE))
+          }
+        }
+      }
     }
     input.on('data', onData)
   })

@@ -1,11 +1,12 @@
 import { createCipheriv, createDecipheriv, randomBytes, scrypt as scryptCallback } from 'node:crypto'
-import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { lstat } from 'node:fs/promises'
 import { homedir, platform } from 'node:os'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { spawn } from 'node:child_process'
 import type { Profile } from './config.js'
 import { CliError, EXIT_CODES } from './errors.js'
+import { atomicWritePrivateFile, readPrivateFile } from './local-files.js'
 
 const scrypt = promisify(scryptCallback)
 const SERVICE = 'hasna-cli'
@@ -67,10 +68,12 @@ export class OsKeychainStore implements SecretStore {
 
   async delete(profile: string): Promise<void> {
     try {
-      await this.invoke('delete', profile)
-    } catch {
-      // A missing keychain helper or missing item is already the desired deleted state.
+      const result = await this.invoke('delete', profile)
+      if (result.code === 0) return
+    } catch (error) {
+      throw new CliError('KEYCHAIN_DELETE_FAILED', 'The OS keychain could not delete the credential', EXIT_CODES.CONFIG, { cause: error })
     }
+    throw new CliError('KEYCHAIN_DELETE_FAILED', 'The OS keychain could not delete the credential', EXIT_CODES.CONFIG)
   }
 
   private invoke(operation: 'get' | 'set' | 'delete', profile: string, secret?: string) {
@@ -131,7 +134,12 @@ export class EncryptedFileStore implements SecretStore {
   }
 
   async delete(profile: string): Promise<void> {
+    try { await lstat(this.path) } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw error
+    }
     const values = await this.readAll()
+    if (!(profile in values)) return
     delete values[profile]
     await this.writeAll(values)
   }
@@ -139,12 +147,17 @@ export class EncryptedFileStore implements SecretStore {
   private async readAll(): Promise<Record<string, string>> {
     let document: EncryptedDocument
     try {
-      document = JSON.parse(await readFile(this.path, 'utf8')) as EncryptedDocument
+      document = JSON.parse(await readPrivateFile(this.path)) as EncryptedDocument
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}
       throw new CliError('CREDENTIAL_FILE_INVALID', 'Encrypted credential file is invalid', EXIT_CODES.CONFIG)
     }
     if (document.schema !== 'hasna.encrypted_credentials.v1')
+      throw new CliError('CREDENTIAL_FILE_INVALID', 'Encrypted credential file is invalid', EXIT_CODES.CONFIG)
+    const fields = Object.keys(document as unknown as Record<string, unknown>).sort()
+    if (fields.join(',') !== 'ciphertext,iv,salt,schema,tag' ||
+      ![document.salt, document.iv, document.tag, document.ciphertext].every((value) => typeof value === 'string') ||
+      Buffer.from(document.salt, 'base64').length !== 16 || Buffer.from(document.iv, 'base64').length !== 12 || Buffer.from(document.tag, 'base64').length !== 16)
       throw new CliError('CREDENTIAL_FILE_INVALID', 'Encrypted credential file is invalid', EXIT_CODES.CONFIG)
     try {
       const key = (await scrypt(await this.passphrase(), Buffer.from(document.salt, 'base64'), 32)) as Buffer
@@ -181,11 +194,7 @@ export class EncryptedFileStore implements SecretStore {
       tag: cipher.getAuthTag().toString('base64'),
       ciphertext: ciphertext.toString('base64'),
     }
-    await mkdir(dirname(this.path), { recursive: true, mode: 0o700 })
-    const temporary = `${this.path}.${process.pid}.tmp`
-    await writeFile(temporary, `${JSON.stringify(document)}\n`, { mode: 0o600 })
-    await chmod(temporary, 0o600)
-    await rename(temporary, this.path)
+    await atomicWritePrivateFile(this.path, `${JSON.stringify(document)}\n`)
   }
 }
 
@@ -230,7 +239,11 @@ export class CredentialManager {
 
   async delete(profile: Profile): Promise<void> {
     if (profile.credential?.startsWith('env:')) return
+    if (profile.credentialStore === 'encrypted-file' || profile.credential?.startsWith('encrypted-file:')) {
+      if (!this.encrypted) throw new CliError('ENCRYPTED_STORE_UNAVAILABLE', 'Encrypted storage is unavailable', EXIT_CODES.CONFIG)
+      await this.encrypted.delete(profile.name)
+      return
+    }
     await this.keychain.delete(profile.name)
-    if (this.encrypted) await this.encrypted.delete(profile.name)
   }
 }

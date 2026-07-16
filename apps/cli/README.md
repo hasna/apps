@@ -26,9 +26,9 @@ Node.js 20 or newer is required. Bun is used to build and test the repository, b
 }
 ```
 
-Errors use the same schema with `ok:false` and a typed `error`. Exit codes are fixed: `0` success, `2` usage, `3` configuration, `4` authentication, `5` forbidden, `6` not found, `7` conflict, `8` validation/precondition, `9` network, `10` timeout, `11` unsupported capability, and `70` internal error.
+Errors use the same schema with `ok:false` and a typed `error`. Exit codes are fixed: `0` success; `2` usage, local validation, or configuration; `3` authentication; `4` permission; `5` not found/gone; `6` conflict; `7` network, TLS, or timeout; `8` remote/precondition/rate-limit/server/malformed response; `9` partial; `10` cancelled; `11` unsupported; and `70` internal.
 
-Global options are accepted with every command: `--json`, `--profile`, `--api-url`, `--connect-timeout`, and `--request-timeout`.
+Options are command-scoped. Unknown, duplicated, or misplaced options fail before configuration, credentials, or the network are touched. Machine-readable command metadata contains command names only, never option values.
 
 ## Profiles and credentials
 
@@ -39,6 +39,8 @@ hasna profiles list --json
 hasna config path
 hasna doctor --json
 ```
+
+API URLs reject credentials and fragments and use HTTPS by default. Loopback HTTP requires `--allow-insecure-localhost` when adding the profile. Credentialed requests to private, link-local, and metadata destinations are rejected, including after DNS resolution.
 
 Configuration follows XDG (`$XDG_CONFIG_HOME/hasna/config.json`, otherwise `~/.config/hasna/config.json`) and is written with mode `0600`. Configuration stores references, never bearer tokens.
 
@@ -77,7 +79,7 @@ hasna apps status cweb
 hasna app cweb capabilities
 ```
 
-App lifecycle and future account provisioning use deterministic plans. First obtain a plan, then apply exactly that digest:
+App lifecycle and future account provisioning use short-lived, single-use deterministic plans. Install/update plans bind the profile, API origin, organization, provider version, and inspected OpenAPI hash. Apply refetches the OpenAPI description and must reproduce the exact digest:
 
 ```bash
 PLAN=$(hasna --json apps install cweb | jq -r .data.digest)
@@ -105,9 +107,11 @@ hasna careers applications export --output applications.csv
 hasna careers applications anonymize APPLICATION_ID
 ```
 
-Mutations support `--dry-run`, `--idempotency-key`, `--file <json>`, and `--input -`. Input is limited to 1 MiB; files must be regular, non-symlink files. Job lifecycle and deletion require the server's integer version through `--version`. Application submissions require `name`, `email`, and `termsAccepted:true`; the current API intentionally accepts no resume field.
+Mutations support command-scoped `--dry-run`, `--file <json>`, and `--input -`. Input is limited to 1 MiB; files must be regular, single-link files. Job lifecycle and deletion require the server's integer version through `--version`. Application submissions require `name`, `email`, and `termsAccepted:true`; the current API intentionally accepts no resume field.
 
-CSV export follows `X-Next-Cursor` until `X-Export-Complete:true`. Output files are atomically written with mode `0600`.
+Token revoke/rotate/revoke-all, job publish/close/delete, and application status/anonymize use the same short-lived plan plus `--apply <digest> --yes`; `--dry-run` remains side-effect free. Idempotency keys are accepted only for job creation, application submission, and token rotation and must match `[A-Za-z0-9._:-]{8,128}`.
+
+CSV export follows `X-Next-Cursor` until `X-Export-Complete:true`, preserves one header even when pages omit trailing newlines, and fails with exit 9 instead of reporting partial data as success when page or byte ceilings are reached. Output files are atomically written with mode `0600`.
 
 ## Provider boundary
 

@@ -1,4 +1,4 @@
-import { chmod, rename, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import { dirname, resolve } from 'node:path'
 import { mkdir } from 'node:fs/promises'
 import { flag, hasFlag, intFlag, requiredPositional, type ParsedArgs } from './args.js'
@@ -15,12 +15,13 @@ import { readJsonInput } from './input.js'
 import { createPlan, requirePlanApproval } from './plan.js'
 import { builtinProviders, cwebProvider } from './providers/cweb.js'
 import type { CommandOutput, Runtime } from './runtime.js'
+import { atomicWritePrivateFile } from './local-files.js'
 
 const HELP = `Hasna CLI 0.2.0
 
 Usage: hasna [global options] <command> [subcommand] [options]
 
-Global options:
+Common API options (command-scoped):
   --json                       Emit hasna.cli_result.v1 JSON
   --profile <name>             Select a profile
   --api-url <url>              Override the profile API URL
@@ -37,9 +38,9 @@ Commands:
   careers jobs list|show|create|update|publish|close|delete
   careers applications list|show|submit|status|export|anonymize
 
-Exit codes: 0 success; 2 usage; 3 config; 4 auth; 5 forbidden;
-6 not found; 7 conflict; 8 validation; 9 network; 10 timeout;
-11 unsupported; 70 internal.
+Exit codes: 0 success; 2 usage/local validation/config; 3 authentication;
+4 permission; 5 not found; 6 conflict; 7 network/TLS/timeout;
+8 remote failure; 9 partial; 10 cancelled; 11 unsupported; 70 internal.
 `
 
 export async function dispatch(args: ParsedArgs, runtime: Runtime): Promise<CommandOutput> {
@@ -52,7 +53,7 @@ export async function dispatch(args: ParsedArgs, runtime: Runtime): Promise<Comm
   if (group === 'profiles') return profiles(action, args, runtime)
   if (group === 'apps') return apps(action, args, runtime)
   if (group === 'accounts') return accounts(action, args, runtime)
-  if (group === 'app') return appCommand(action, args)
+  if (group === 'app') return appCommand(action, args, runtime)
   if (group === 'auth') return auth(action, args, runtime)
   if (group === 'careers') return careers(action, args, runtime)
   throw new CliError('USAGE', `Unknown command: ${group}`, EXIT_CODES.USAGE)
@@ -137,7 +138,8 @@ async function profiles(action: string | undefined, args: ParsedArgs, runtime: R
       throw new CliError('VALIDATION_ERROR', 'Credential store must be keychain or encrypted-file', EXIT_CODES.VALIDATION)
     const profile: Profile = {
       name,
-      apiUrl: validateApiUrl(apiUrl),
+      apiUrl: validateApiUrl(apiUrl, { allowInsecureLocalhost: hasFlag(args, 'allow-insecure-localhost') }),
+      ...(hasFlag(args, 'allow-insecure-localhost') ? { allowInsecureLocalhost: true } : {}),
       ...(flag(args, 'org') || flag(args, 'org-slug')
         ? { orgSlug: flag(args, 'org') || flag(args, 'org-slug') }
         : {}),
@@ -171,7 +173,7 @@ async function profiles(action: string | undefined, args: ParsedArgs, runtime: R
 }
 
 async function apps(action: string | undefined, args: ParsedArgs, runtime: Runtime) {
-  const config = await runtime.config.load()
+  let config = await runtime.config.load()
   const manifests = [...builtinProviders.values()].map((provider) => provider.manifest)
   if (action === 'list') return output(manifests)
   if (action === 'search') {
@@ -187,8 +189,8 @@ async function apps(action: string | undefined, args: ParsedArgs, runtime: Runti
     let api: unknown = { reachable: false, reason: 'profile not configured' }
     try {
       const profile = profileFor(args, config)
-      const response = await runtime.transport(profile).request({ path: provider.manifest.api.openApiPath })
-      api = { reachable: true, status: response.status, title: (response.body as { info?: { title?: string } }).info?.title }
+      const compatibility = await inspectCwebApi(runtime.transport(profile))
+      api = { reachable: true, ...compatibility }
     } catch (error) {
       api = { reachable: false, reason: error instanceof CliError ? error.code : 'NETWORK_ERROR' }
     }
@@ -196,13 +198,23 @@ async function apps(action: string | undefined, args: ParsedArgs, runtime: Runti
   }
   if (!['install', 'update', 'uninstall'].includes(action ?? ''))
     throw new CliError('USAGE', 'Unknown apps action', EXIT_CODES.USAGE)
+  let context: Record<string, unknown> = { providerVersion: provider.manifest.version }
+  if (action !== 'uninstall') {
+    const profile = profileFor(args, config)
+    const compatibility = await inspectCwebApi(runtime.transport(profile))
+    if (!compatibility.compatible)
+      throw new CliError('API_INCOMPATIBLE', 'The configured cweb API is incompatible with this CLI', EXIT_CODES.REMOTE)
+    context = { ...context, profile: profile.name, apiUrl: profile.apiUrl, org: requireOrg(profile, args), openApiHash: compatibility.hash }
+  }
   const changes =
     action === 'uninstall'
-      ? { from: config.apps[id] ?? null, to: null }
-      : { from: config.apps[id] ?? null, to: provider.manifest }
+      ? { from: config.apps[id] ?? null, to: null, context }
+      : { from: config.apps[id] ?? null, to: provider.manifest, context }
   const plan = createPlan(`apps.${action}`, id, changes)
-  if (!flag(args, 'apply')) return output(plan)
-  requirePlanApproval(plan, flag(args, 'apply'), hasFlag(args, 'yes'))
+  if (hasFlag(args, 'dry-run')) return output({ ...plan, dryRun: true })
+  const awaiting = await authorizePlan(args, runtime, plan)
+  if (awaiting) return awaiting
+  config = await runtime.config.load()
   if (action === 'uninstall') delete config.apps[id]
   else {
     const now = runtime.now().toISOString()
@@ -218,9 +230,13 @@ async function apps(action: string | undefined, args: ParsedArgs, runtime: Runti
   return output({ applied: true, planDigest: plan.digest, app: config.apps[id] ?? null })
 }
 
-function appCommand(action: string | undefined, args: ParsedArgs) {
+async function appCommand(action: string | undefined, args: ParsedArgs, runtime: Runtime) {
   const subcommand = args.positionals[2]
-  if (action === 'cweb' && subcommand === 'capabilities') return output(cwebProvider.manifest)
+  if (action === 'cweb' && subcommand === 'capabilities') {
+    const config = await runtime.config.load()
+    const profile = profileFor(args, config)
+    return output(await inspectCwebApi(runtime.transport(profile)))
+  }
   throw new CliError('USAGE', 'Use app cweb capabilities', EXIT_CODES.USAGE)
 }
 
@@ -241,8 +257,9 @@ async function accounts(action: string | undefined, args: ParsedArgs, runtime: R
   const target = action === 'deprovision' ? requiredPositional(args, 2, 'account id') : provider.id
   const changes = action === 'provision' ? await readJsonInput(args, runtime.stdin) : { id: target }
   const plan = createPlan(`accounts.${action}`, target, changes)
-  if (!flag(args, 'apply')) return output(plan)
-  requirePlanApproval(plan, flag(args, 'apply'), hasFlag(args, 'yes'))
+  if (hasFlag(args, 'dry-run')) return output({ ...plan, dryRun: true })
+  const awaiting = await authorizePlan(args, runtime, plan)
+  if (awaiting) return awaiting
   if (action === 'provision' && provider.accounts.provision)
     return output(await provider.accounts.provision(context, changes))
   if (action === 'deprovision' && provider.accounts.deprovision)
@@ -333,20 +350,20 @@ async function authTokens(args: ParsedArgs, runtime: Runtime, profile: Profile, 
     })
   }
   if (operation === 'revoke')
-    return mutation(api, args, runtime, {
+    return guardedMutation(api, args, runtime, mutationContext('auth.tokens.revoke', requiredPositional(args, 3, 'token id'), profile, org), {
       method: 'DELETE',
       path: `/api/v1/orgs/${encodeURIComponent(org)}/auth/tokens/${encodeURIComponent(requiredPositional(args, 3, 'token id'))}`,
       token,
     })
   if (operation === 'rotate')
-    return mutation(api, args, runtime, {
+    return guardedMutation(api, args, runtime, mutationContext('auth.tokens.rotate', requiredPositional(args, 3, 'token id'), profile, org), {
       method: 'POST',
       path: `/api/v1/orgs/${encodeURIComponent(org)}/auth/tokens/${encodeURIComponent(requiredPositional(args, 3, 'token id'))}/rotate`,
       token,
       headers: { 'Idempotency-Key': idempotency(args, runtime) },
     })
   if (operation === 'revoke-all')
-    return mutation(api, args, runtime, {
+    return guardedMutation(api, args, runtime, mutationContext('auth.tokens.revoke-all', org, profile, org), {
       method: 'POST',
       path: `/api/v1/orgs/${encodeURIComponent(org)}/auth/tokens/revoke-all`,
       token,
@@ -371,6 +388,7 @@ async function careersJobs(args: ParsedArgs, runtime: Runtime) {
       token,
       query: {
         status: flag(args, 'status'),
+        department: flag(args, 'department'),
         limit: intFlag(args, 'limit', { min: 1, max: 100 }),
         offset: intFlag(args, 'offset', { min: 0 }),
       },
@@ -418,7 +436,7 @@ async function careersJobs(args: ParsedArgs, runtime: Runtime) {
   if (['publish', 'close', 'delete'].includes(operation ?? '')) {
     const version = intFlag(args, 'version', { min: 1 }) ?? intFlag(args, 'expected-version', { min: 1 })
     if (!version) throw new CliError('USAGE', '--version is required', EXIT_CODES.USAGE)
-    return mutation(api, args, runtime, {
+    return guardedMutation(api, args, runtime, mutationContext(`careers.jobs.${operation}`, slug ?? '', profile, org), {
       method: operation === 'delete' ? 'DELETE' : 'POST',
       path: `${base}/${encodeURIComponent(slug ?? '')}${operation === 'delete' ? '' : `/${operation}`}`,
       token,
@@ -487,10 +505,10 @@ async function careersApplications(args: ParsedArgs, runtime: Runtime) {
     if (!status) throw new CliError('USAGE', '--status is required', EXIT_CODES.USAGE)
     if (!['NEW', 'REVIEWING', 'INTERVIEWED', 'OFFERED', 'HIRED', 'REJECTED'].includes(status))
       throw new CliError('VALIDATION_ERROR', 'Invalid application status', EXIT_CODES.VALIDATION)
-    return mutation(api, args, runtime, { method: 'PATCH', path: `${base}/${encodeURIComponent(id)}`, token, body: { status } })
+    return guardedMutation(api, args, runtime, mutationContext('careers.applications.status', id, profile, org), { method: 'PATCH', path: `${base}/${encodeURIComponent(id)}`, token, body: { status } })
   }
   if (operation === 'anonymize')
-    return mutation(api, args, runtime, { method: 'POST', path: `${base}/${encodeURIComponent(id)}/anonymize`, token })
+    return guardedMutation(api, args, runtime, mutationContext('careers.applications.anonymize', id, profile, org), { method: 'POST', path: `${base}/${encodeURIComponent(id)}/anonymize`, token })
   throw new CliError('USAGE', 'Unknown careers applications action', EXIT_CODES.USAGE)
 }
 
@@ -503,32 +521,43 @@ async function exportApplications(
 ): Promise<CommandOutput> {
   if (hasFlag(args, 'dry-run'))
     return output({ dryRun: true, method: 'GET', path: `${base}/export`, output: flag(args, 'output') ?? 'stdout' })
-  const pages: string[] = []
+  const rows: string[] = []
   let cursor = flag(args, 'cursor')
-  for (let page = 0; page < 10_000; page += 1) {
+  let pages = 0
+  let bytes = 0
+  let complete = false
+  for (let page = 0; page < 1_000; page += 1) {
     const response = await api.request({
       path: `${base}/export`,
       token,
       accept: 'text/csv',
       query: { limit: intFlag(args, 'limit', { min: 1, max: 1000 }) ?? 1000, cursor },
     })
-    pages.push(response.text)
-    if (response.headers['x-export-complete'] === 'true') break
+    pages += 1
+    bytes += Buffer.byteLength(response.text)
+    if (bytes > 50 * 1024 * 1024)
+      throw new CliError('EXPORT_LIMIT_EXCEEDED', 'The export exceeded the 50 MiB safety limit', EXIT_CODES.PARTIAL, { details: { pages, bytes } })
+    const lines = response.text.replace(/\r\n/g, '\n').split('\n')
+    if (lines.at(-1) === '') lines.pop()
+    rows.push(...(page === 0 ? lines : lines.slice(1)))
+    if (response.headers['x-export-complete'] === 'true') {
+      complete = true
+      break
+    }
     const next = response.headers['x-next-cursor']
     if (!next || next === cursor)
       throw new CliError('EXPORT_CURSOR_INVALID', 'Export cursor did not advance', EXIT_CODES.NETWORK)
     cursor = next
   }
-  const csv = pages.map((page, index) => (index === 0 ? page : page.split('\n').slice(1).join('\n'))).join('')
+  if (!complete)
+    throw new CliError('EXPORT_INCOMPLETE', 'The export did not complete within the 1,000-page safety limit', EXIT_CODES.PARTIAL, { details: { pages, bytes } })
+  const csv = `${rows.join('\n')}\n`
   const destination = flag(args, 'output')
-  if (!destination) return output({ csv, pages: pages.length }, csv)
+  if (!destination) return output({ csv, pages }, csv)
   const path = resolve(destination)
-  await mkdir(dirname(path), { recursive: true })
-  const temporary = `${path}.${process.pid}.tmp`
-  await writeFile(temporary, csv, { mode: 0o600 })
-  await chmod(temporary, 0o600)
-  await rename(temporary, path)
-  return output({ path, pages: pages.length, bytes: Buffer.byteLength(csv) })
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 })
+  await atomicWritePrivateFile(path, csv, { requirePrivateParent: false })
+  return output({ path, pages, bytes: Buffer.byteLength(csv) })
 }
 
 async function mutation(
@@ -560,6 +589,57 @@ async function mutation(
   }
 }
 
+type MutationContext = {
+  operation: string
+  target: string
+  profile: string
+  apiUrl: string
+  org: string
+  provider: 'builtin:cweb'
+  apiRevision: '1.1.0'
+}
+
+function mutationContext(operation: string, target: string, profile: Profile, org: string): MutationContext {
+  return { operation, target, profile: profile.name, apiUrl: profile.apiUrl, org, provider: 'builtin:cweb', apiRevision: '1.1.0' }
+}
+
+async function guardedMutation(
+  api: ApiTransport,
+  args: ParsedArgs,
+  runtime: Runtime,
+  context: MutationContext,
+  options: HttpRequestOptions,
+): Promise<CommandOutput> {
+  if (hasFlag(args, 'dry-run')) return mutation(api, args, runtime, options)
+  const safeRequest = {
+    method: options.method,
+    path: options.path,
+    body: options.body,
+    headers: options.headers,
+  }
+  const plan = createPlan(context.operation, context.target, { context, request: safeRequest })
+  const awaiting = await authorizePlan(args, runtime, plan)
+  if (awaiting) return awaiting
+  return mutation(api, args, runtime, options)
+}
+
+async function authorizePlan(args: ParsedArgs, runtime: Runtime, plan: ReturnType<typeof createPlan>): Promise<CommandOutput | undefined> {
+  const now = runtime.now().getTime()
+  const apply = flag(args, 'apply')
+  if (!apply) {
+    await runtime.config.recordPendingPlan(plan.digest, {
+      operation: plan.operation,
+      target: plan.target,
+      expiresAt: new Date(now + 10 * 60_000).toISOString(),
+    })
+    return output(plan)
+  }
+  requirePlanApproval(plan, apply, hasFlag(args, 'yes'))
+  if (!(await runtime.config.consumePendingPlan(apply, plan.operation, plan.target, now)))
+    throw new CliError('PLAN_EXPIRED_OR_REPLAYED', 'The mutation plan is expired, unknown, or already used', EXIT_CODES.CONFLICT)
+  return undefined
+}
+
 async function apiJson(api: ApiTransport, options: HttpRequestOptions): Promise<CommandOutput> {
   const response = await api.request(options)
   return { data: unwrap(response), requestId: response.requestId }
@@ -572,7 +652,7 @@ function profileFor(args: ParsedArgs, config: Config): Profile {
   const requestTimeoutMs = intFlag(args, 'request-timeout', { min: 100 })
   return {
     ...profile,
-    ...(apiUrl ? { apiUrl: validateApiUrl(apiUrl) } : {}),
+    ...(apiUrl ? { apiUrl: validateApiUrl(apiUrl, { allowInsecureLocalhost: profile.allowInsecureLocalhost }) } : {}),
     ...(connectTimeoutMs ? { connectTimeoutMs } : {}),
     ...(requestTimeoutMs ? { requestTimeoutMs } : {}),
   }
@@ -610,7 +690,51 @@ async function optionalToken(runtime: Runtime, profile: Profile): Promise<string
 
 function idempotency(args: ParsedArgs, runtime: Runtime): string {
   const value = flag(args, 'idempotency-key') || runtime.randomUUID()
-  if (value.length < 8 || value.length > 128)
-    throw new CliError('VALIDATION_ERROR', 'Idempotency key must be 8-128 characters', EXIT_CODES.VALIDATION)
+  if (!/^[A-Za-z0-9._:-]{8,128}$/.test(value))
+    throw new CliError('VALIDATION_ERROR', 'Idempotency key must match [A-Za-z0-9._:-]{8,128}', EXIT_CODES.VALIDATION)
   return value
+}
+
+const requiredCwebOperations: Array<[string, string]> = [
+  ['/api/v1/auth/login', 'post'],
+  ['/api/v1/auth/whoami', 'get'],
+  ['/api/v1/auth/logout', 'post'],
+  ['/api/v1/orgs/{orgSlug}/auth/tokens', 'get'],
+  ['/api/v1/orgs/{orgSlug}/auth/tokens', 'post'],
+  ['/api/v1/orgs/{orgSlug}/auth/tokens/{id}', 'delete'],
+  ['/api/v1/orgs/{orgSlug}/auth/tokens/{id}/rotate', 'post'],
+  ['/api/v1/orgs/{orgSlug}/auth/tokens/revoke-all', 'post'],
+  ['/api/v1/orgs/{orgSlug}/careers/jobs', 'get'],
+  ['/api/v1/orgs/{orgSlug}/careers/jobs', 'post'],
+  ['/api/v1/orgs/{orgSlug}/careers/jobs/{slug}', 'get'],
+  ['/api/v1/orgs/{orgSlug}/careers/jobs/{slug}', 'patch'],
+  ['/api/v1/orgs/{orgSlug}/careers/jobs/{slug}', 'delete'],
+  ['/api/v1/orgs/{orgSlug}/careers/jobs/{slug}/publish', 'post'],
+  ['/api/v1/orgs/{orgSlug}/careers/jobs/{slug}/close', 'post'],
+  ['/api/v1/orgs/{orgSlug}/careers/jobs/{slug}/applications', 'get'],
+  ['/api/v1/orgs/{orgSlug}/careers/jobs/{slug}/applications', 'post'],
+  ['/api/v1/orgs/{orgSlug}/careers/applications', 'get'],
+  ['/api/v1/orgs/{orgSlug}/careers/applications/export', 'get'],
+  ['/api/v1/orgs/{orgSlug}/careers/applications/{id}', 'get'],
+  ['/api/v1/orgs/{orgSlug}/careers/applications/{id}', 'patch'],
+  ['/api/v1/orgs/{orgSlug}/careers/applications/{id}/anonymize', 'post'],
+]
+
+async function inspectCwebApi(api: ApiTransport) {
+  const response = await api.request({ path: cwebProvider.manifest.api.openApiPath })
+  const spec = response.body as { info?: { title?: unknown; version?: unknown }; paths?: Record<string, Record<string, unknown>> }
+  const missing = requiredCwebOperations
+    .filter(([path, method]) => !spec.paths?.[path]?.[method])
+    .map(([path, method]) => `${method.toUpperCase()} ${path}`)
+  const title = spec.info?.title
+  const version = spec.info?.version
+  const compatible = title === 'Hasna CWeb CLI API' && version === '1.1.0' && missing.length === 0
+  const hash = `sha256:${createHash('sha256').update(stableJson(response.body)).digest('hex')}`
+  return { compatible, title, version, missing, hash, requiredVersion: '1.1.0' }
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+  return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(',')}}`
 }

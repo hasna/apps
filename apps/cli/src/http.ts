@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
+import { lookup } from 'node:dns/promises'
+import { isIP, type LookupFunction } from 'node:net'
 import { CliError, EXIT_CODES } from './errors.js'
 
 export type HttpResponse = {
@@ -30,31 +32,70 @@ export class NodeApiTransport implements ApiTransport {
     private readonly apiUrl: string,
     private readonly connectTimeoutMs = 5_000,
     private readonly requestTimeoutMs = 30_000,
+    private readonly allowPrivateDestination = false,
+    private readonly maxResponseBytes = 10 * 1024 * 1024,
   ) {}
 
   async request(options: HttpRequestOptions): Promise<HttpResponse> {
-    const url = new URL(options.path, `${this.apiUrl}/`)
+    const base = new URL(`${this.apiUrl}/`)
+    const url = new URL(options.path, base)
+    if (url.origin !== base.origin)
+      throw new CliError('CROSS_ORIGIN_REQUEST_BLOCKED', 'Cross-origin API requests are blocked', EXIT_CODES.USAGE)
+    if (base.username || base.password || base.hash || url.username || url.password || url.hash)
+      throw new CliError('API_URL_UNSAFE', 'The API URL cannot contain credentials or fragments', EXIT_CODES.USAGE)
+    if (url.protocol !== 'https:' && !(this.allowPrivateDestination && url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]', '::1'].includes(url.hostname)))
+      throw new CliError('API_URL_UNSAFE', 'API requests require HTTPS except explicitly opted-in localhost', EXIT_CODES.USAGE)
     for (const [key, value] of Object.entries(options.query ?? {}))
       if (value !== undefined) url.searchParams.set(key, String(value))
     const encoded = options.body === undefined ? undefined : JSON.stringify(options.body)
+    const resolved = this.allowPrivateDestination ? undefined : await resolvePublicDestination(url.hostname)
     const requestId = randomUUID()
     const headers: Record<string, string> = {
+      ...options.headers,
       Accept: options.accept ?? 'application/json',
       'User-Agent': '@hasna/cli/0.2.0',
       'X-Request-Id': requestId,
       ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
       ...(encoded ? { 'Content-Type': 'application/json', 'Content-Length': String(Buffer.byteLength(encoded)) } : {}),
-      ...options.headers,
     }
     const perform = url.protocol === 'https:' ? httpsRequest : httpRequest
     return new Promise((resolve, reject) => {
       let connected = false
-      const request = perform(url, { method: options.method ?? 'GET', headers }, (response) => {
+      let settled = false
+      let connectTimer: NodeJS.Timeout | undefined
+      const finish = (callback: () => void) => {
+        if (settled) return
+        settled = true
+        clearTimeout(overall)
+        if (connectTimer) clearTimeout(connectTimer)
+        callback()
+      }
+      const pinnedLookup: LookupFunction | undefined = resolved
+        ? (_hostname, _options, callback) => callback(null, resolved.address, resolved.family)
+        : undefined
+      const request = perform(url, { method: options.method ?? 'GET', headers, ...(pinnedLookup ? { lookup: pinnedLookup } : {}) }, (response) => {
         connected = true
         const chunks: Buffer[] = []
-        response.on('data', (chunk) => chunks.push(Buffer.from(chunk)))
+        let bytes = 0
+        response.on('data', (chunk) => {
+          bytes += Buffer.byteLength(chunk)
+          if (bytes > this.maxResponseBytes) {
+            finish(() => reject(new CliError('REMOTE_RESPONSE_TOO_LARGE', 'The API response exceeded the safe size limit', EXIT_CODES.REMOTE)))
+            request.destroy()
+            response.destroy()
+            return
+          }
+          chunks.push(Buffer.from(chunk))
+        })
+        response.once('aborted', () => finish(() => reject(new CliError('REMOTE_RESPONSE_ABORTED', 'The API response was interrupted', EXIT_CODES.REMOTE, { retryable: true }))))
+        response.once('error', (error) => finish(() => reject(new CliError(
+          'REMOTE_RESPONSE_INVALID',
+          'The API response was invalid',
+          EXIT_CODES.REMOTE,
+          { cause: error },
+        ))))
         response.on('end', () => {
-          clearTimeout(overall)
+          if (settled) return
           const text = Buffer.concat(chunks).toString('utf8')
           const responseHeaders = Object.fromEntries(
             Object.entries(response.headers).map(([key, value]) => [
@@ -67,7 +108,9 @@ export class NodeApiTransport implements ApiTransport {
             try {
               body = JSON.parse(text)
             } catch {
-              reject(new CliError('RESPONSE_INVALID', 'The API returned invalid JSON', EXIT_CODES.NETWORK))
+              finish(() => reject(new CliError('REMOTE_RESPONSE_INVALID', 'The API returned malformed JSON', EXIT_CODES.REMOTE, {
+                requestId: safeRequestId(responseHeaders['x-request-id']) || requestId,
+              })))
               return
             }
           }
@@ -76,30 +119,35 @@ export class NodeApiTransport implements ApiTransport {
             headers: responseHeaders,
             body,
             text,
-            requestId: responseHeaders['x-request-id'] || requestId,
+            requestId: safeRequestId(responseHeaders['x-request-id']) || requestId,
           }
-          if ((response.statusCode ?? 0) >= 400) reject(apiError(result))
-          else resolve(result)
+          finish(() => {
+            if ((response.statusCode ?? 0) >= 400) reject(apiError(result))
+            else resolve(result)
+          })
         })
       })
       request.once('socket', (socket) => {
-        const connectTimer = setTimeout(() => {
+        if (!socket.connecting) {
+          connected = true
+          return
+        }
+        connectTimer = setTimeout(() => {
           if (!connected) request.destroy(new Error('connect timeout'))
         }, this.connectTimeoutMs)
-        socket.once('connect', () => clearTimeout(connectTimer))
-        socket.once('secureConnect', () => clearTimeout(connectTimer))
+        socket.once('connect', () => connectTimer && clearTimeout(connectTimer))
+        socket.once('secureConnect', () => connectTimer && clearTimeout(connectTimer))
       })
       request.on('error', (error) => {
-        clearTimeout(overall)
         const timeout = error.message.includes('timeout')
-        reject(
+        finish(() => reject(
           new CliError(
             timeout ? 'TIMEOUT' : 'NETWORK_ERROR',
             timeout ? 'The API request timed out' : 'The API request failed',
-            timeout ? EXIT_CODES.TIMEOUT : EXIT_CODES.NETWORK,
+            EXIT_CODES.NETWORK,
             { cause: error, retryable: true },
           ),
-        )
+        ))
       })
       const overall = setTimeout(() => request.destroy(new Error('request timeout')), this.requestTimeoutMs)
       request.end(encoded)
@@ -109,31 +157,68 @@ export class NodeApiTransport implements ApiTransport {
 
 function apiError(response: HttpResponse): CliError {
   const envelope = response.body as {
-    error?: { code?: string; message?: string; retryable?: boolean; details?: unknown }
+    error?: { requestId?: string; retryable?: boolean }
   }
   const exit =
     response.status === 401
       ? EXIT_CODES.AUTH
       : response.status === 403
         ? EXIT_CODES.FORBIDDEN
-        : response.status === 404
+        : response.status === 404 || response.status === 410
           ? EXIT_CODES.NOT_FOUND
-          : response.status === 409 || response.status === 412
+          : response.status === 409
             ? EXIT_CODES.CONFLICT
-            : response.status === 400 || response.status === 422 || response.status === 428
-              ? EXIT_CODES.VALIDATION
-              : response.status === 429 || response.status >= 500
-                ? EXIT_CODES.NETWORK
-                : EXIT_CODES.INTERNAL
+            : EXIT_CODES.REMOTE
+  const code = response.status === 401 ? 'AUTHENTICATION_FAILED'
+    : response.status === 403 ? 'PERMISSION_DENIED'
+      : response.status === 404 || response.status === 410 ? 'RESOURCE_NOT_FOUND'
+        : response.status === 409 ? 'CONFLICT'
+          : response.status === 429 ? 'REMOTE_RATE_LIMITED'
+            : response.status >= 500 ? 'REMOTE_SERVER_ERROR'
+              : 'REMOTE_REQUEST_REJECTED'
   return new CliError(
-    envelope.error?.code || `HTTP_${response.status}`,
-    envelope.error?.message || `The API returned HTTP ${response.status}`,
+    code,
+    `The API rejected the request (HTTP ${response.status})`,
     exit,
     {
-      details: envelope.error?.details,
-      retryable: envelope.error?.retryable ?? (response.status === 429 || response.status >= 500),
+      retryable: typeof envelope.error?.retryable === 'boolean' ? envelope.error.retryable : (response.status === 429 || response.status >= 500),
+      requestId: safeRequestId(envelope.error?.requestId) || response.requestId,
     },
   )
+}
+
+function safeRequestId(value: unknown): string | undefined {
+  return typeof value === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(value) ? value : undefined
+}
+
+async function resolvePublicDestination(hostname: string): Promise<{ address: string; family: 4 | 6 }> {
+  const normalized = hostname.replace(/^\[|\]$/g, '').toLowerCase()
+  if (normalized === 'localhost' || normalized.endsWith('.localhost'))
+    throw new CliError('PRIVATE_DESTINATION_BLOCKED', 'Credentialed requests to private destinations are blocked', EXIT_CODES.USAGE)
+  let addresses: Array<{ address: string; family: number }>
+  try {
+    const family = isIP(normalized)
+    addresses = family ? [{ address: normalized, family }] : await lookup(normalized, { all: true })
+  } catch (error) {
+    throw new CliError('NETWORK_ERROR', 'The API destination could not be resolved', EXIT_CODES.NETWORK, { cause: error, retryable: true })
+  }
+  if (addresses.some(({ address }) => isPrivateAddress(address)))
+    throw new CliError('PRIVATE_DESTINATION_BLOCKED', 'Credentialed requests to private destinations are blocked', EXIT_CODES.USAGE)
+  const selected = addresses[0]
+  if (!selected || (selected.family !== 4 && selected.family !== 6))
+    throw new CliError('NETWORK_ERROR', 'The API destination could not be resolved', EXIT_CODES.NETWORK, { retryable: true })
+  return { address: selected.address, family: selected.family }
+}
+
+function isPrivateAddress(address: string): boolean {
+  const value = address.toLowerCase()
+  if (value.startsWith('::ffff:')) return true
+  if (value.includes(':'))
+    return value === '::1' || value === '::' || value.startsWith('fc') || value.startsWith('fd') || value.startsWith('fe8') || value.startsWith('fe9') || value.startsWith('fea') || value.startsWith('feb') || value.startsWith('fec') || value.startsWith('fed') || value.startsWith('fee') || value.startsWith('fef') || value.startsWith('ff') || value.startsWith('2001:db8:')
+  const parts = value.split('.').map(Number)
+  const first = parts[0] ?? -1
+  const second = parts[1] ?? -1
+  return first === 10 || first === 127 || (first === 169 && second === 254) || (first === 172 && second >= 16 && second <= 31) || (first === 192 && second === 168) || (first === 100 && second >= 64 && second <= 127) || first === 0
 }
 
 export function unwrap(response: HttpResponse): unknown {

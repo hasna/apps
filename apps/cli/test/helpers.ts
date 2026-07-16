@@ -16,6 +16,16 @@ export class MemoryConfig implements ConfigStore {
   async save(config: Config) {
     this.value = structuredClone(config)
   }
+  async recordPendingPlan(digest: string, entry: NonNullable<Config['pendingPlans']>[string]) {
+    this.value.pendingPlans ??= {}
+    this.value.pendingPlans[digest] = structuredClone(entry)
+  }
+  async consumePendingPlan(digest: string, operation: string, target: string, now: number) {
+    const pending = this.value.pendingPlans?.[digest]
+    if (!pending || Date.parse(pending.expiresAt) <= now || pending.operation !== operation || pending.target !== target) return false
+    delete this.value.pendingPlans?.[digest]
+    return true
+  }
 }
 
 export class MemoryCredentials {
@@ -98,4 +108,25 @@ export function jsonResponse(data: unknown, headers: Record<string, string> = {}
     text: JSON.stringify({ ok: true, data }),
     requestId: randomUUID(),
   }
+}
+
+export function cwebSpecResponse(): HttpResponse {
+  const paths: Record<string, Record<string, object>> = {}
+  for (const [path, method] of ([
+    ['/api/v1/auth/login', 'post'], ['/api/v1/auth/whoami', 'get'],
+    ['/api/v1/auth/logout', 'post'],
+    ['/api/v1/orgs/{orgSlug}/auth/tokens', 'get'], ['/api/v1/orgs/{orgSlug}/auth/tokens', 'post'],
+    ['/api/v1/orgs/{orgSlug}/auth/tokens/{id}', 'delete'], ['/api/v1/orgs/{orgSlug}/auth/tokens/{id}/rotate', 'post'],
+    ['/api/v1/orgs/{orgSlug}/auth/tokens/revoke-all', 'post'],
+    ['/api/v1/orgs/{orgSlug}/careers/jobs', 'get'], ['/api/v1/orgs/{orgSlug}/careers/jobs', 'post'],
+    ['/api/v1/orgs/{orgSlug}/careers/jobs/{slug}', 'get'], ['/api/v1/orgs/{orgSlug}/careers/jobs/{slug}', 'patch'], ['/api/v1/orgs/{orgSlug}/careers/jobs/{slug}', 'delete'],
+    ['/api/v1/orgs/{orgSlug}/careers/jobs/{slug}/publish', 'post'], ['/api/v1/orgs/{orgSlug}/careers/jobs/{slug}/close', 'post'],
+    ['/api/v1/orgs/{orgSlug}/careers/jobs/{slug}/applications', 'get'], ['/api/v1/orgs/{orgSlug}/careers/jobs/{slug}/applications', 'post'],
+    ['/api/v1/orgs/{orgSlug}/careers/applications', 'get'],
+    ['/api/v1/orgs/{orgSlug}/careers/applications/export', 'get'],
+    ['/api/v1/orgs/{orgSlug}/careers/applications/{id}', 'get'], ['/api/v1/orgs/{orgSlug}/careers/applications/{id}', 'patch'],
+    ['/api/v1/orgs/{orgSlug}/careers/applications/{id}/anonymize', 'post'],
+  ] as Array<[string, string]>)) (paths[path] ??= {})[method] = {}
+  const body = { openapi: '3.0.0', info: { title: 'Hasna CWeb CLI API', version: '1.1.0' }, paths }
+  return { status: 200, headers: {}, body, text: JSON.stringify(body), requestId: 'spec-request' }
 }

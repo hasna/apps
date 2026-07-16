@@ -2,6 +2,7 @@ import { createServer, type RequestListener } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import { NodeApiTransport, unwrap } from '../src/http.js'
+import { EXIT_CODES } from '../src/errors.js'
 
 const servers: ReturnType<typeof createServer>[] = []
 afterEach(async () => {
@@ -32,7 +33,7 @@ describe('Node API transport', () => {
         response.end(JSON.stringify({ ok: true, data: { value: 1 } }))
       })
     })
-    const transport = new NodeApiTransport(url)
+    const transport = new NodeApiTransport(url, 5_000, 30_000, true)
     const response = await transport.request({
       method: 'POST',
       path: '/api/v1/test',
@@ -51,21 +52,39 @@ describe('Node API transport', () => {
 
   it('maps stable API error status to the global exit contract', async () => {
     const url = await serverUrl((_request, response) => {
-      response.writeHead(403, { 'Content-Type': 'application/json' })
-      response.end(JSON.stringify({ ok: false, error: { code: 'FORBIDDEN', message: 'No access', retryable: false } }))
+      response.writeHead(403, { 'Content-Type': 'application/json', 'X-Request-Id': 'header-request' })
+      response.end(JSON.stringify({ ok: false, error: { code: 'CANARY_CODE', message: 'secret-canary', details: { token: 'secret-canary' }, requestId: 'body-request', retryable: false } }))
     })
-    await expect(new NodeApiTransport(url).request({ path: '/forbidden' })).rejects.toMatchObject({
-      code: 'FORBIDDEN',
-      exitCode: 5,
+    await expect(new NodeApiTransport(url, 5_000, 30_000, true).request({ path: '/forbidden' })).rejects.toMatchObject({
+      code: 'PERMISSION_DENIED',
+      exitCode: 4,
       retryable: false,
+      requestId: 'body-request',
     })
   })
 
   it('uses the dedicated timeout exit code', async () => {
     const url = await serverUrl((_request, response) => setTimeout(() => response.end('late'), 100))
-    await expect(new NodeApiTransport(url, 100, 10).request({ path: '/slow' })).rejects.toMatchObject({
+    await expect(new NodeApiTransport(url, 100, 10, true).request({ path: '/slow' })).rejects.toMatchObject({
       code: 'TIMEOUT',
-      exitCode: 10,
+      exitCode: 7,
     })
+  })
+
+  it('bounds remote response bodies', async () => {
+    const url = await serverUrl((_request, response) => response.end('x'.repeat(64)))
+    await expect(new NodeApiTransport(url, 100, 100, true, 16).request({ path: '/large' })).rejects.toMatchObject({
+      code: 'REMOTE_RESPONSE_TOO_LARGE',
+      exitCode: EXIT_CODES.REMOTE,
+    })
+  })
+
+  it('maps remote preconditions to exit 8 and blocks metadata destinations', async () => {
+    const url = await serverUrl((_request, response) => {
+      response.writeHead(412, { 'Content-Type': 'application/json' })
+      response.end(JSON.stringify({ ok: false, error: { message: 'do-not-reflect' } }))
+    })
+    await expect(new NodeApiTransport(url, 100, 100, true).request({ path: '/precondition' })).rejects.toMatchObject({ exitCode: EXIT_CODES.REMOTE })
+    await expect(new NodeApiTransport('https://169.254.169.254').request({ path: '/latest/meta-data' })).rejects.toMatchObject({ code: 'PRIVATE_DESTINATION_BLOCKED' })
   })
 })

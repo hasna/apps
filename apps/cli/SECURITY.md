@@ -12,6 +12,9 @@ The CLI does not promise that terminal output is non-sensitive. Authentication t
 - secrets are not accepted in process arguments;
 - child processes are launched without a shell;
 - remote provider JavaScript is disabled;
-- app/account changes require an exact deterministic plan digest and confirmation;
-- HTTPS is mandatory except for loopback development;
-- machine-readable errors never include underlying exception text or credentials.
+- high-impact changes require a short-lived, single-use deterministic plan digest and confirmation;
+- HTTPS is mandatory except for explicitly opted-in loopback development;
+- credentialed private/link-local/metadata destinations are rejected after DNS resolution;
+- unknown or misplaced flags fail before side effects;
+- remote response bodies are bounded and server-controlled messages/details are never reflected;
+- machine-readable errors preserve only a bounded request ID for correlation, never underlying exception text or credentials.

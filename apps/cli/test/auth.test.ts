@@ -30,9 +30,15 @@ describe('cweb auth commands', () => {
     const f = fixture({ config: profileConfig() })
     f.credentials.values.set('prod', 'bearer')
     await runCli(['--json', 'auth', 'tokens', 'list'], f.runtime)
-    await runCli(['--json', 'auth', 'tokens', 'rotate', 'tok_1', '--idempotency-key', 'rotate-123'], f.runtime)
-    await runCli(['--json', 'auth', 'tokens', 'revoke', 'tok_1'], f.runtime)
-    await runCli(['--json', 'auth', 'tokens', 'revoke-all'], f.runtime)
+    for (const command of [
+      ['auth', 'tokens', 'rotate', 'tok_1', '--idempotency-key', 'rotate-123'],
+      ['auth', 'tokens', 'revoke', 'tok_1'],
+      ['auth', 'tokens', 'revoke-all'],
+    ]) {
+      const planned = await runCli(['--json', ...command], f.runtime)
+      const digest = (planned.result as { ok: true; data: { digest: string } }).data.digest
+      await runCli(['--json', ...command, '--apply', digest, '--yes'], f.runtime)
+    }
     expect(f.transport.requests.map((request) => request.path)).toEqual([
       '/api/v1/orgs/hasna/auth/tokens',
       '/api/v1/orgs/hasna/auth/tokens/tok_1/rotate',

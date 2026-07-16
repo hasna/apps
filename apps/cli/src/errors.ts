@@ -1,14 +1,17 @@
 export const EXIT_CODES = {
   SUCCESS: 0,
   USAGE: 2,
-  CONFIG: 3,
-  AUTH: 4,
-  FORBIDDEN: 5,
-  NOT_FOUND: 6,
-  CONFLICT: 7,
-  VALIDATION: 8,
-  NETWORK: 9,
-  TIMEOUT: 10,
+  CONFIG: 2,
+  VALIDATION: 2,
+  AUTH: 3,
+  FORBIDDEN: 4,
+  NOT_FOUND: 5,
+  CONFLICT: 6,
+  NETWORK: 7,
+  TIMEOUT: 7,
+  REMOTE: 8,
+  PARTIAL: 9,
+  CANCELLED: 10,
   UNSUPPORTED: 11,
   INTERNAL: 70,
 } as const
@@ -20,12 +23,13 @@ export class CliError extends Error {
   readonly exitCode: ExitCode
   readonly details?: unknown
   readonly retryable: boolean
+  readonly requestId?: string
 
   constructor(
     code: string,
     message: string,
     exitCode: ExitCode,
-    options: { details?: unknown; retryable?: boolean; cause?: unknown } = {},
+    options: { details?: unknown; retryable?: boolean; requestId?: string; cause?: unknown } = {},
   ) {
     super(message, { cause: options.cause })
     this.name = 'CliError'
@@ -33,6 +37,7 @@ export class CliError extends Error {
     this.exitCode = exitCode
     this.details = options.details
     this.retryable = options.retryable ?? false
+    this.requestId = options.requestId
   }
 }
 
