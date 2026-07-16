@@ -285,11 +285,11 @@ jobs:
             exit 1
           fi
 
-          if ! critical="$(jq -er '(.CRITICAL // 0) | if type == "number" and . >= 0 and floor == . then . else error("malformed CRITICAL count") end' <<<"${findings}")"; then
+          if ! critical="$(jq -er '(if has("CRITICAL") then .CRITICAL else 0 end) | if type == "number" and . >= 0 and floor == . then . else error("malformed CRITICAL count") end' <<<"${findings}")"; then
             echo "ECR returned a malformed CRITICAL finding count" >&2
             exit 1
           fi
-          if ! high="$(jq -er '(.HIGH // 0) | if type == "number" and . >= 0 and floor == . then . else error("malformed HIGH count") end' <<<"${findings}")"; then
+          if ! high="$(jq -er '(if has("HIGH") then .HIGH else 0 end) | if type == "number" and . >= 0 and floor == . then . else error("malformed HIGH count") end' <<<"${findings}")"; then
             echo "ECR returned a malformed HIGH finding count" >&2
             exit 1
           fi

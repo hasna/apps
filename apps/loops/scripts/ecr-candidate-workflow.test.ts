@@ -3,11 +3,31 @@ import { describe, expect, test } from "bun:test";
 
 const workflowPath = new URL("../.github/workflows/ecr-candidate.yml", import.meta.url);
 const workflow = readFileSync(workflowPath, "utf8");
+const severities = ["CRITICAL", "HIGH"] as const;
 
 function position(fragment: string): number {
   const index = workflow.indexOf(fragment);
   expect(index).toBeGreaterThanOrEqual(0);
   return index;
+}
+
+function severityCountFilter(severity: (typeof severities)[number]): string {
+  const marker = `if ! ${severity.toLowerCase()}="$(jq -er '`;
+  const start = workflow.indexOf(marker);
+  expect(start).toBeGreaterThanOrEqual(0);
+  const filterStart = start + marker.length;
+  const filterEnd = workflow.indexOf(`' <<<"\${findings}")"`, filterStart);
+  expect(filterEnd).toBeGreaterThan(filterStart);
+  return workflow.slice(filterStart, filterEnd);
+}
+
+function runSeverityCountFilter(severity: (typeof severities)[number], findings: Record<string, unknown>) {
+  return Bun.spawnSync({
+    cmd: ["jq", "-er", severityCountFilter(severity)],
+    stdin: Buffer.from(JSON.stringify(findings)),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
 }
 
 describe("ECR candidate workflow contract", () => {
@@ -77,6 +97,33 @@ describe("ECR candidate workflow contract", () => {
     expect(workflow).not.toContain("ignore-unfixed: true");
     expect(workflow).toContain("critical > 0 || high > 0");
   });
+
+  for (const severity of severities) {
+    test(`${severity} count defaults only when absent and accepts nonnegative integers`, () => {
+      for (const [findings, expected] of [
+        [{}, "0\n"],
+        [{ [severity]: 0 }, "0\n"],
+        [{ [severity]: 7 }, "7\n"],
+      ] as const) {
+        const result = runSeverityCountFilter(severity, findings);
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout.toString()).toBe(expected);
+      }
+    });
+
+    for (const [label, value] of [
+      ["null", null],
+      ["false", false],
+      ["string", "0"],
+      ["negative", -1],
+      ["fractional", 0.5],
+    ] as const) {
+      test(`${severity} count rejects present ${label}`, () => {
+        const result = runSeverityCountFilter(severity, { [severity]: value });
+        expect(result.exitCode).not.toBe(0);
+      });
+    }
+  }
 
   test("uses exact Docker target, immutable SHA tag, and emits evidence", () => {
     expect(workflow).toContain("--platform linux/arm64");
