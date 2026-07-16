@@ -1,0 +1,48 @@
+{
+  "name": "@hasna/cli",
+  "version": "0.2.0",
+  "description": "Private Hasna application management CLI",
+  "type": "module",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "hasna": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./provider-sdk": {
+      "types": "./dist/providers/types.d.ts",
+      "import": "./dist/providers/types.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "restricted",
+    "tag": "internal"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "prepack": "bun run clean && bun run build",
+    "clean": "rm -rf dist coverage *.tgz",
+    "pack:check": "bun pm pack --dry-run"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.3",
+    "@vitest/coverage-v8": "3.1.2",
+    "typescript": "5.8.3",
+    "vitest": "3.1.2"
+  }
+}
