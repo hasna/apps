@@ -13,6 +13,7 @@ import type { PoolQueryClient, TypedQueryClient } from "../generated/storage-kit
 import { PgPoolExecutor } from "../lib/storage/pg-executor.js";
 import { PostgresStorage } from "../lib/storage/postgres.js";
 import { createPostgresLoopStorage } from "../lib/storage/postgres-loop-storage.js";
+import { runSharedToDedicatedTransfer } from "../lib/storage/shared-database-transfer.js";
 import {
   POSTGRES_MIGRATION_ADVISORY_LOCK_SQL,
   POSTGRES_MIGRATION_LEDGER_TABLE,
@@ -996,6 +997,14 @@ dbCredentials
   });
 
 program
+  .command("shared-to-dedicated-transfer")
+  .description("run the fixed shared apps DB to dedicated loops DB logical transfer inside the protected ECS task")
+  .action(async () => {
+    const result = await runSharedToDedicatedTransfer();
+    console.log(JSON.stringify({ evt: "shared_to_dedicated_transfer", ...result }));
+  });
+
+program
   .command("version")
   .description("print { status, version, mode }")
   .action(() => console.log(JSON.stringify({ status: "ok", version: packageVersion(), mode: "self_hosted" })));
@@ -1004,7 +1013,16 @@ if (import.meta.main) {
   // Bare `loops-serve` (no subcommand) defaults to `serve`. Commander cannot
   // combine a root action with subcommand dispatch without swallowing the
   // subcommand name, so we inject the default subcommand here instead.
-  const known = new Set(["serve", "migrate", "tenant-backfill", "tenant-backfill-s3", "db-credentials", "version", "help"]);
+  const known = new Set([
+    "serve",
+    "migrate",
+    "tenant-backfill",
+    "tenant-backfill-s3",
+    "db-credentials",
+    "shared-to-dedicated-transfer",
+    "version",
+    "help",
+  ]);
   const passthroughFlags = new Set(["-h", "--help", "-V", "--version"]);
   const argv = [...process.argv];
   const firstArg = argv[2];

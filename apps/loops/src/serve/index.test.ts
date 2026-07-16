@@ -255,4 +255,10 @@ describe("loops-serve database bootstrap", () => {
     expect(reconcile).toBeDefined();
     expect(reconcile!.options).toHaveLength(0);
   });
+
+  test("exposes a fixed no-option shared database transfer command", () => {
+    const transferCommand = program.commands.find((command) => command.name() === "shared-to-dedicated-transfer");
+    expect(transferCommand).toBeDefined();
+    expect(transferCommand!.options).toHaveLength(0);
+  });
 });

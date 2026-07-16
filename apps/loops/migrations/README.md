@@ -86,3 +86,19 @@ flag is required after the reviewed tenant backfill bundle has been loaded.
 
 The tenant-bound `api_keys` table is owned by migrations 0008-0010; no second
 schema bootstrap path exists.
+
+## Shared Apps To Dedicated Loops Transfer
+
+The protected shared-to-dedicated transfer initializes the target ledger through
+`0007_work_item_gate_deaths`, verifies those exact checksums, logically restores
+only the OpenLoops table allowlist, then applies `0008_tenant_prepare` so a
+filtered `COPY` can load only `api_keys` rows where `app = 'loops'`. It stops
+before tenant backfill and enforcement. The follow-up sequence remains:
+
+```
+loops-serve tenant-backfill-s3
+loops-serve migrate --enforce-tenancy
+```
+
+See `docs/SHARED-DATABASE-TRANSFER.md` for the fixed command, workflow source,
+allowlist, evidence, and no-snapshot boundary.
