@@ -40,16 +40,38 @@ describe("ECR candidate workflow contract", () => {
     expect(workflow).toContain("candidate tag already exists; refusing to overwrite");
   });
 
-  test("scans before pushing and gates the completed ECR scan", () => {
+  test("scans before pushing and polls the exact digest to a completed ECR scan", () => {
     const localScan = position("Enforce local vulnerability gate");
     const login = position("Log in to Amazon ECR");
     const push = position("Push scanned immutable candidate");
-    const wait = position("aws ecr wait image-scan-complete");
-    const findings = position("aws ecr describe-image-scan-findings");
+    const scanStepStart = position("- name: Wait for ECR vulnerability scan");
+    const scanStepEnd = position("- name: Generate source provenance statement");
+    const scanStep = workflow.slice(scanStepStart, scanStepEnd);
     expect(localScan).toBeLessThan(login);
     expect(login).toBeLessThan(push);
-    expect(push).toBeLessThan(wait);
-    expect(wait).toBeLessThan(findings);
+    expect(push).toBeLessThan(scanStepStart);
+    expect(scanStep).not.toContain("aws ecr wait image-scan-complete");
+    expect(scanStep).toContain("max_attempts=60");
+    expect(scanStep).toContain("retry_interval_seconds=15");
+    expect(scanStep).toContain("attempt<=max_attempts");
+    expect(scanStep).toContain("aws ecr describe-image-scan-findings");
+    expect(scanStep).toContain('--image-id imageDigest="${REMOTE_DIGEST}"');
+    expect(scanStep).toContain("ScanNotFoundException");
+    expect(scanStep).toContain('"IN_PROGRESS"');
+    expect(scanStep).toContain('"COMPLETE"');
+    expect([...scanStep.matchAll(/^\s+("[A-Z_]+"|\*)\)$/gm)].map((match) => match[1])).toEqual([
+      '"COMPLETE"',
+      '"IN_PROGRESS"',
+      "*",
+    ]);
+    expect([...scanStep.matchAll(/\bcontinue\b/g)]).toHaveLength(1);
+    expect(scanStep.indexOf("ScanNotFoundException")).toBeLessThan(scanStep.indexOf("continue"));
+    expect(scanStep).toContain("nontransient ECR scan query failed");
+    expect(scanStep).toContain("empty or malformed scan status");
+    expect(scanStep).toContain("terminal status");
+    expect(scanStep).toContain("did not complete after");
+    expect(scanStep).toContain('type == "number"');
+    expect(scanStep.indexOf('"COMPLETE"')).toBeLessThan(scanStep.indexOf('if ! findings="'));
     expect(workflow).toContain("severity: CRITICAL,HIGH");
     expect(workflow).toContain("ignore-unfixed: false");
     expect(workflow).not.toContain("ignore-unfixed: true");

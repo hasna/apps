@@ -226,17 +226,73 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          timeout 15m aws ecr wait image-scan-complete \
-            --repository-name "${ECR_REPOSITORY}" \
-            --image-id imageDigest="${REMOTE_DIGEST}"
+          max_attempts=60
+          retry_interval_seconds=15
+          scan_complete=false
+          scan_error_file="${RUNNER_TEMP}/ecr-scan-error.txt"
+          findings=""
 
-          findings="$(aws ecr describe-image-scan-findings \
-            --repository-name "${ECR_REPOSITORY}" \
-            --image-id imageDigest="${REMOTE_DIGEST}" \
-            --query 'imageScanFindings.findingSeverityCounts' \
-            --output json)"
-          critical="$(jq -r '.CRITICAL // 0' <<<"${findings}")"
-          high="$(jq -r '.HIGH // 0' <<<"${findings}")"
+          for (( attempt=1; attempt<=max_attempts; attempt++ )); do
+            scan_response=""
+            if ! scan_response="$(aws ecr describe-image-scan-findings \
+              --repository-name "${ECR_REPOSITORY}" \
+              --image-id imageDigest="${REMOTE_DIGEST}" \
+              --query '{status: imageScanStatus.status, counts: imageScanFindings.findingSeverityCounts}' \
+              --output json 2>"${scan_error_file}")"; then
+              scan_error="$(<"${scan_error_file}")"
+              if [[ "${scan_error}" == *"ScanNotFoundException"* ]]; then
+                echo "ECR scan is not registered yet (attempt ${attempt}/${max_attempts})" >&2
+                if (( attempt < max_attempts )); then
+                  sleep "${retry_interval_seconds}"
+                fi
+                continue
+              fi
+              echo "nontransient ECR scan query failed" >&2
+              exit 1
+            fi
+
+            if ! scan_status="$(jq -er '.status | strings | select(length > 0)' <<<"${scan_response}")"; then
+              echo "ECR returned an empty or malformed scan status" >&2
+              exit 1
+            fi
+
+            case "${scan_status}" in
+              "COMPLETE")
+                if ! findings="$(jq -ce '.counts | if type == "object" then . else error("missing or malformed finding counts") end' <<<"${scan_response}")"; then
+                  echo "ECR returned empty or malformed finding counts" >&2
+                  exit 1
+                fi
+                scan_complete=true
+                break
+                ;;
+              "IN_PROGRESS")
+                echo "ECR scan is still in progress (attempt ${attempt}/${max_attempts})" >&2
+                ;;
+              *)
+                echo "ECR scan entered terminal status: ${scan_status}" >&2
+                exit 1
+                ;;
+            esac
+
+            if (( attempt < max_attempts )); then
+              sleep "${retry_interval_seconds}"
+            fi
+          done
+          rm -f "${scan_error_file}"
+
+          if [[ "${scan_complete}" != "true" ]]; then
+            echo "ECR scan did not complete after ${max_attempts} attempts" >&2
+            exit 1
+          fi
+
+          if ! critical="$(jq -er '(.CRITICAL // 0) | if type == "number" and . >= 0 and floor == . then . else error("malformed CRITICAL count") end' <<<"${findings}")"; then
+            echo "ECR returned a malformed CRITICAL finding count" >&2
+            exit 1
+          fi
+          if ! high="$(jq -er '(.HIGH // 0) | if type == "number" and . >= 0 and floor == . then . else error("malformed HIGH count") end' <<<"${findings}")"; then
+            echo "ECR returned a malformed HIGH finding count" >&2
+            exit 1
+          fi
           jq -n \
             --argjson critical "${critical}" \
             --argjson high "${high}" \
