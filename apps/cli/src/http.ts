@@ -133,7 +133,10 @@ export class NodeApiTransport implements ApiTransport {
           return
         }
         connectTimer = setTimeout(() => {
-          if (!connected) request.destroy(new Error('connect timeout'))
+          if (!connected) {
+            finish(() => reject(timeoutError()))
+            request.destroy()
+          }
         }, this.connectTimeoutMs)
         socket.once('connect', () => connectTimer && clearTimeout(connectTimer))
         socket.once('secureConnect', () => connectTimer && clearTimeout(connectTimer))
@@ -149,10 +152,17 @@ export class NodeApiTransport implements ApiTransport {
           ),
         ))
       })
-      const overall = setTimeout(() => request.destroy(new Error('request timeout')), this.requestTimeoutMs)
+      const overall = setTimeout(() => {
+        finish(() => reject(timeoutError()))
+        request.destroy()
+      }, this.requestTimeoutMs)
       request.end(encoded)
     })
   }
+}
+
+function timeoutError(): CliError {
+  return new CliError('TIMEOUT', 'The API request timed out', EXIT_CODES.NETWORK, { retryable: true })
 }
 
 function apiError(response: HttpResponse): CliError {

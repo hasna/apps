@@ -64,11 +64,19 @@ describe('Node API transport', () => {
   })
 
   it('uses the dedicated timeout exit code', async () => {
-    const url = await serverUrl((_request, response) => setTimeout(() => response.end('late'), 100))
+    const url = await serverUrl((request, response) => {
+      const late = setTimeout(() => response.end('late'), 100)
+      request.once('aborted', () => {
+        clearTimeout(late)
+        response.destroy()
+      })
+    })
+    const started = Date.now()
     await expect(new NodeApiTransport(url, 100, 10, true).request({ path: '/slow' })).rejects.toMatchObject({
       code: 'TIMEOUT',
       exitCode: 7,
     })
+    expect(Date.now() - started).toBeLessThan(500)
   })
 
   it('bounds remote response bodies', async () => {
