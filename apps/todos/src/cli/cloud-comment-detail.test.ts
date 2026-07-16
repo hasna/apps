@@ -15,7 +15,7 @@ afterEach(() => {
   }
 });
 
-async function runCli(args: string[], root: string, baseUrl: string) {
+async function runCli(args: string[], root: string, baseUrl: string, extraEnv: Record<string, string> = {}) {
   const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
     cwd: REPO_ROOT,
     env: {
@@ -28,6 +28,7 @@ async function runCli(args: string[], root: string, baseUrl: string) {
       HASNA_TODOS_STORAGE_MODE: "self_hosted",
       HASNA_TODOS_API_URL: baseUrl,
       HASNA_TODOS_API_KEY: TEST_API_KEY,
+      ...extraEnv,
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -37,7 +38,128 @@ async function runCli(args: string[], root: string, baseUrl: string) {
   return { exitCode: await proc.exited, stdout, stderr };
 }
 
+function taskFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    id: TASK_ID,
+    short_id: null,
+    project_id: null,
+    parent_id: null,
+    plan_id: null,
+    task_list_id: "missing-local-list",
+    title: "Cloud short id regression",
+    description: null,
+    status: "pending",
+    priority: "medium",
+    agent_id: null,
+    assigned_to: null,
+    session_id: null,
+    working_dir: null,
+    tags: [],
+    metadata: {},
+    version: 1,
+    locked_by: null,
+    locked_at: null,
+    created_at: "2026-07-10T00:00:00.000Z",
+    updated_at: "2026-07-10T00:00:00.000Z",
+    started_at: null,
+    completed_at: null,
+    due_at: null,
+    estimated_minutes: null,
+    actual_minutes: null,
+    requires_approval: false,
+    approved_by: null,
+    approved_at: null,
+    recurrence_rule: null,
+    recurrence_parent_id: null,
+    spawns_template_id: null,
+    confidence: null,
+    reason: null,
+    spawned_from_session: null,
+    assigned_by: null,
+    assigned_from_project: null,
+    task_type: null,
+    cost_tokens: 0,
+    cost_usd: 0,
+    delegated_from: null,
+    delegation_depth: 0,
+    retry_count: 0,
+    max_retries: 0,
+    retry_after: null,
+    sla_minutes: null,
+    runner_id: null,
+    runner_started_at: null,
+    runner_completed_at: null,
+    current_step: null,
+    total_steps: null,
+    machine_id: null,
+    synced_at: null,
+    archived_at: null,
+    ...overrides,
+  };
+}
+
 describe("cloud task detail comments", () => {
+  test("cloud add seeds the local id index so its printed short prefix starts and comments", async () => {
+    const requests: Array<{ method: string; path: string; body?: Record<string, unknown> }> = [];
+    const comments: Record<string, unknown>[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        const body = request.method === "POST" ? await request.json() as Record<string, unknown> : undefined;
+        requests.push({ method: request.method, path: url.pathname, body });
+        if (url.pathname === "/v1/tasks" && request.method === "POST") {
+          return Response.json({ task: taskFixture({ title: body?.title }) }, { status: 201 });
+        }
+        if (url.pathname === `/v1/tasks/${TASK_ID}/start` && request.method === "POST") {
+          return Response.json({ task: taskFixture({ status: "in_progress", locked_by: body?.agent_id ?? null }) });
+        }
+        if (url.pathname === `/v1/tasks/${TASK_ID}/comments` && request.method === "POST") {
+          const comment = {
+            id: `comment-${comments.length + 1}`,
+            task_id: TASK_ID,
+            agent_id: body?.agent_id ?? null,
+            session_id: body?.session_id ?? null,
+            content: body?.content,
+            type: body?.type ?? "comment",
+            progress_pct: body?.progress_pct ?? null,
+            created_at: "2026-07-10T00:01:00.000Z",
+          };
+          comments.push(comment);
+          return Response.json({ comment }, { status: 201 });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-created-short-id-"));
+    tempRoots.push(root);
+    const shortId = TASK_ID.slice(0, 8);
+    const baseUrl = `http://127.0.0.1:${server.port}`;
+    try {
+      const add = await runCli(["add", "Cloud short id regression"], root, baseUrl);
+      expect(add).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(add.stdout).toContain(shortId);
+
+      const alternateDb = { TODOS_DB_PATH: join(root, "different-local-mirror.db") };
+      const started = await runCli(["start", shortId], root, baseUrl, alternateDb);
+      expect(started).toMatchObject({ exitCode: 0, stderr: "" });
+
+      const commented = await runCli(["comment", shortId, "started from printed prefix"], root, baseUrl, alternateDb);
+      expect(commented).toMatchObject({ exitCode: 0, stderr: "" });
+
+      expect(requests.map((request) => `${request.method} ${request.path}`)).toEqual([
+        "POST /v1/tasks",
+        `POST /v1/tasks/${TASK_ID}/start`,
+        `POST /v1/tasks/${TASK_ID}/comments`,
+      ]);
+      expect(comments).toHaveLength(1);
+      expect(comments[0]).toMatchObject({ task_id: TASK_ID, content: "started from printed prefix" });
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test("add --parent carries the exact parent id through the self-hosted create request", async () => {
     let createBody: Record<string, unknown> | null = null;
     const server = Bun.serve({
