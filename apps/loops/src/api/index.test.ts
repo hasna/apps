@@ -123,6 +123,60 @@ describe("loops-api foundation", () => {
     })).toThrow("request-scoped tenant storage");
   });
 
+  test("all public foundation probes bypass authentication without api_auth denial events", async () => {
+    const mod = await import("./index.js");
+    let authenticateCalls = 0;
+    const logged: string[] = [];
+    const originalWarn = console.warn;
+    const mutableBun = Bun as unknown as { serve: typeof Bun.serve };
+    const originalServe = mutableBun.serve;
+    let fetchHandler: ((request: Request) => Response | Promise<Response>) | undefined;
+    console.warn = (...values: unknown[]) => { logged.push(values.map(String).join(" ")); };
+    mutableBun.serve = ((options: { fetch(request: Request): Response | Promise<Response> }) => {
+      fetchHandler = options.fetch;
+      return { port: 0, stop: () => {} } as unknown as ReturnType<typeof Bun.serve>;
+    }) as typeof Bun.serve;
+    try {
+      mod.createLoopsApiServer({
+        host: "127.0.0.1",
+        port: 0,
+        authenticator: {
+          authenticate: async () => {
+            authenticateCalls += 1;
+            console.warn(JSON.stringify({ evt: "api_auth", outcome: "deny", reason: "missing_token", status: 401 }));
+            return {
+              ok: false as const,
+              status: 401 as const,
+              reason: "missing_token",
+              message: "Authentication required.",
+              requestId: "foundation-auth-called",
+            };
+          },
+        },
+        withTenantStorage: async () => { throw new Error("foundation probe reached tenant storage"); },
+        readyCheck: async () => ({ ready: true }),
+      });
+      if (!fetchHandler) throw new Error("test server did not expose its fetch handler");
+      for (const path of [
+        "/health",
+        "/healthz",
+        "/ready",
+        "/readyz",
+        "/version",
+        "/v1/version",
+        "/openapi.json",
+      ]) {
+        const response = await fetchHandler(new Request(`http://loops.test${path}`));
+        expect(response.status).toBe(200);
+      }
+      expect(authenticateCalls).toBe(0);
+      expect(logged).toEqual([]);
+    } finally {
+      console.warn = originalWarn;
+      mutableBun.serve = originalServe;
+    }
+  });
+
   test("public readiness returns stable codes without backend error details", async () => {
     const mod = await import("./index.js");
     const failingStorage = {

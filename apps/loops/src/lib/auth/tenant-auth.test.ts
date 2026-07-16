@@ -10,6 +10,7 @@ const now = Date.UTC(2026, 0, 1);
 
 function clientFor(token: ReturnType<typeof mintApiKey>, overrides: Record<string, unknown> = {}, auditFails = false) {
   const audits: readonly unknown[][] = [];
+  const effects: string[] = [];
   const row = {
     kid: token.kid,
     app: "loops",
@@ -39,9 +40,10 @@ function clientFor(token: ReturnType<typeof mintApiKey>, overrides: Record<strin
     execute: async (_sql: string, params?: readonly unknown[]) => {
       if (auditFails) throw new Error("audit down");
       mutableAudits.push([...(params ?? [])]);
+      effects.push("audit");
     },
   };
-  return { client, audits: mutableAudits as unknown[][] };
+  return { client, audits: mutableAudits as unknown[][], effects };
 }
 
 function headers(token?: string): Headers {
@@ -103,6 +105,131 @@ describe("tenant API authentication", () => {
     expect(metadata).toMatchObject({ route: "loops.list" });
     expect(JSON.stringify(metadata)).not.toContain("hostile-audit-secret");
     expect(JSON.stringify(metadata)).not.toContain("password=");
+  });
+
+  test("emits one secret-safe api_auth event after a durable 401 denial audit", async () => {
+    const token = mintApiKey({ app: "loops", agent: "principal-a", scopes: ["loops:read"], signingSecret: secret, nowMs: now });
+    const { client, audits, effects } = clientFor(token);
+    const logged: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...values: unknown[]) => {
+      effects.push("warn");
+      logged.push(values.map(String).join(" "));
+    };
+    try {
+      const decision = await new TenantApiAuthenticator(client, secret, () => now).authenticate(
+        headers(),
+        { method: "GET", path: "/v1/loops", policy: readPolicy },
+      );
+
+      expect(decision).toMatchObject({ ok: false, status: 401, reason: "missing_token" });
+      expect(audits).toHaveLength(1);
+      expect(audits[0]?.[5]).toBe("deny");
+      expect(logged).toEqual([
+        JSON.stringify({ evt: "api_auth", outcome: "deny", reason: "missing_token", status: 401 }),
+      ]);
+      expect(effects).toEqual(["audit", "warn"]);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test("emits one exact api_auth event for a real 403 without credential or identity material", async () => {
+    const credentialMarker = "credential-marker-secret-at-least-32-bytes";
+    const tenantMarker = "tenant-leak-marker";
+    const principalMarker = "principal-leak-marker";
+    const kidMarker = "kid-leak-marker";
+    const token = mintApiKey({
+      app: "loops",
+      agent: principalMarker,
+      scopes: ["loops:read"],
+      signingSecret: credentialMarker,
+      kid: kidMarker,
+      nowMs: now,
+    });
+    const { client, audits, effects } = clientFor(token, {
+      agent: principalMarker,
+      principal_id: principalMarker,
+      tenant_id: tenantMarker,
+      roles: ["worker"],
+    });
+    const logged: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...values: unknown[]) => {
+      effects.push("warn");
+      logged.push(values.map(String).join(" "));
+    };
+    try {
+      const decision = await new TenantApiAuthenticator(client, credentialMarker, () => now).authenticate(
+        headers(token.token),
+        { method: "GET", path: "/v1/loops", policy: readPolicy },
+      );
+
+      expect(decision).toMatchObject({ ok: false, status: 403, reason: "insufficient_role" });
+      expect(audits).toHaveLength(1);
+      expect(audits[0]?.[5]).toBe("deny");
+      expect(logged).toEqual([
+        JSON.stringify({ evt: "api_auth", outcome: "deny", reason: "insufficient_role", status: 403 }),
+      ]);
+      expect(effects).toEqual(["audit", "warn"]);
+
+      const serialized = logged[0] ?? "";
+      const event = JSON.parse(serialized) as Record<string, unknown>;
+      expect(Object.keys(event)).toEqual(["evt", "outcome", "reason", "status"]);
+      expect(serialized).not.toContain(token.token);
+      expect(serialized).not.toContain(token.tokenHash);
+      expect(serialized.toLowerCase()).not.toContain("authorization");
+      expect(serialized.toLowerCase()).not.toContain("bearer");
+      expect(serialized).not.toContain(credentialMarker);
+      expect(serialized).not.toContain(tenantMarker);
+      expect(serialized).not.toContain(principalMarker);
+      expect(serialized).not.toContain(kidMarker);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test("does not emit an api_auth denial event for an allowed request", async () => {
+    const token = mintApiKey({ app: "loops", agent: "principal-a", scopes: ["loops:read"], signingSecret: secret, nowMs: now });
+    const { client, audits, effects } = clientFor(token);
+    const logged: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...values: unknown[]) => { logged.push(values.map(String).join(" ")); };
+    try {
+      const decision = await new TenantApiAuthenticator(client, secret, () => now).authenticate(
+        headers(token.token),
+        { method: "GET", path: "/v1/loops", policy: readPolicy },
+      );
+
+      expect(decision).toMatchObject({ ok: true, status: 200 });
+      expect(audits).toHaveLength(1);
+      expect(audits[0]?.[5]).toBe("allow");
+      expect(effects).toEqual(["audit"]);
+      expect(logged).toEqual([]);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test("does not emit an api_auth denial event when the denial audit fails", async () => {
+    const token = mintApiKey({ app: "loops", agent: "principal-a", scopes: ["loops:read"], signingSecret: secret, nowMs: now });
+    const { client, audits, effects } = clientFor(token, {}, true);
+    const logged: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...values: unknown[]) => { logged.push(values.map(String).join(" ")); };
+    try {
+      const decision = await new TenantApiAuthenticator(client, secret, () => now).authenticate(
+        headers(),
+        { method: "GET", path: "/v1/loops", policy: readPolicy },
+      );
+
+      expect(decision).toMatchObject({ ok: false, status: 503, reason: "audit_unavailable" });
+      expect(audits).toEqual([]);
+      expect(effects).toEqual([]);
+      expect(logged).toEqual([]);
+    } finally {
+      console.warn = originalWarn;
+    }
   });
 
   test.each([
