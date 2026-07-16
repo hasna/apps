@@ -78,6 +78,7 @@ loops cloud status
 loops-api status
 loops-serve version
 HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --dry-run
+loops-serve db-credentials reconcile
 HASNA_LOOPS_DATABASE_URL=... HASNA_LOOPS_AUTH_DATABASE_URL=... loops-serve serve
 loops-runner status
 ```
@@ -90,6 +91,37 @@ preserve flags only for an intentional activation.
 
 See [Deployment Modes](docs/DEPLOYMENT_MODES.md) for the full package boundary
 and machine-placement contract.
+
+### Provider database credentials
+
+`loops-serve db-credentials reconcile` is the fixed in-cluster reconciler for
+provider-managed RDS app credentials. It reads the RDS-managed master secret
+with the AWS Secrets Manager SDK, builds `sslmode=verify-full` DSNs only in
+memory, and writes each app DSN to that app's Secrets Manager secret through
+`AWSPENDING` before promoting `AWSCURRENT`. It never accepts database URLs,
+passwords, access keys, profiles, or secret material as command flags.
+
+Required environment is intentionally strict: `AWS_REGION`,
+`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, `HASNA_LOOPS_RDS_MASTER_SECRET_ARN`,
+`HASNA_LOOPS_MIGRATOR_DATABASE_URL_SECRET_ARN`,
+`HASNA_LOOPS_RUNTIME_DATABASE_URL_SECRET_ARN`,
+`HASNA_LOOPS_AUTH_DATABASE_URL_SECRET_ARN`, `HASNA_LOOPS_RDS_INSTANCE_ID`,
+`HASNA_LOOPS_RDS_ENDPOINT`, `HASNA_LOOPS_RDS_PORT`,
+`HASNA_LOOPS_RDS_DATABASE`, and `HASNA_LOOPS_RDS_MASTER_USERNAME`. Static AWS
+credential environment variables, profile/web-identity inputs, full credential
+URIs, non-RDS-style endpoints, duplicate secret ARNs, cross-region secret ARNs,
+and malformed identifiers fail closed before any secret or database operation.
+
+The command normalizes the fixed NOLOGIN database roles
+`open_loops_owner`, `open_loops_migrator`, `open_loops_runtime`, and
+`open_loops_authenticator`; manages exactly three LOGIN users
+`open_loops_migrator_login`, `open_loops_runtime_login`, and
+`open_loops_authenticator_login`; grants only the migrator login exact
+owner/migrator membership plus `CREATEROLE`; and keeps runtime/authenticator
+without memberships until migration `0010_tenant_enforce` has landed. After
+`0010`, runtime and authenticator are attached only to their matching roles.
+If PostgreSQL 16 implicit creator memberships cannot be normalized, the
+reconciler fails before publishing app credentials.
 
 ## Install
 
