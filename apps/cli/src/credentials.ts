@@ -42,14 +42,22 @@ export class OsKeychainStore implements SecretStore {
   ) {}
 
   async get(profile: string): Promise<string | undefined> {
-    const result = await this.invoke('get', profile)
-    if (result.code !== 0) return undefined
-    return result.stdout.trim() || undefined
+    try {
+      const result = await this.invoke('get', profile)
+      if (result.code !== 0) return undefined
+      return result.stdout.trim() || undefined
+    } catch {
+      return undefined
+    }
   }
 
   async set(profile: string, value: string): Promise<void> {
-    const result = await this.invoke('set', profile, value)
-    if (result.code !== 0)
+    try {
+      const result = await this.invoke('set', profile, value)
+      if (result.code === 0) return
+    } catch {
+      // The typed error below is intentionally independent of platform command details.
+    }
       throw new CliError(
         'KEYCHAIN_UNAVAILABLE',
         'The OS keychain could not store the credential; opt in to encrypted-file storage explicitly',
@@ -58,7 +66,11 @@ export class OsKeychainStore implements SecretStore {
   }
 
   async delete(profile: string): Promise<void> {
-    await this.invoke('delete', profile)
+    try {
+      await this.invoke('delete', profile)
+    } catch {
+      // A missing keychain helper or missing item is already the desired deleted state.
+    }
   }
 
   private invoke(operation: 'get' | 'set' | 'delete', profile: string, secret?: string) {

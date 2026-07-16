@@ -3,7 +3,7 @@ import { hasFlag, parseArgs } from './args.js'
 import { dispatch } from './commands.js'
 import { FileConfigStore } from './config.js'
 import { CredentialManager, EncryptedFileStore, OsKeychainStore } from './credentials.js'
-import { asCliError, EXIT_CODES, type ExitCode } from './errors.js'
+import { asCliError, CliError, EXIT_CODES, type ExitCode } from './errors.js'
 import { NodeApiTransport } from './http.js'
 import { failure, success, type ResultMeta } from './result.js'
 import type { Runtime } from './runtime.js'
@@ -38,7 +38,7 @@ export async function runCli(argv: string[], suppliedRuntime?: Runtime): Promise
   } catch (unknownError) {
     const error =
       unknownError instanceof Error && unknownError.message.includes('cannot share standard input')
-        ? new (await import('./errors.js')).CliError('USAGE', unknownError.message, EXIT_CODES.USAGE)
+        ? new CliError('USAGE', unknownError.message, EXIT_CODES.USAGE)
         : asCliError(unknownError)
     const runtime = suppliedRuntime ?? fallbackRuntime()
     const result = failure(error, {

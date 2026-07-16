@@ -41,4 +41,22 @@ describe('cweb auth commands', () => {
     ])
     expect(f.transport.requests[1]?.headers?.['Idempotency-Key']).toBe('rotate-123')
   })
+
+  it('creates scoped tokens at the exact endpoint and validates required fields', async () => {
+    const f = fixture({ config: profileConfig() })
+    f.credentials.values.set('prod', 'bearer')
+    await runCli(
+      ['--json', 'auth', 'tokens', 'create', '--name', 'automation', '--scopes', 'cweb:careers.jobs.read,cweb:careers.jobs.write', '--expires-in-days', '30'],
+      f.runtime,
+    )
+    expect(f.transport.requests[0]).toMatchObject({
+      method: 'POST',
+      path: '/api/v1/orgs/hasna/auth/tokens',
+      body: {
+        name: 'automation',
+        scopes: ['cweb:careers.jobs.read', 'cweb:careers.jobs.write'],
+        expiresInDays: 30,
+      },
+    })
+  })
 })

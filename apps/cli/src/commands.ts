@@ -259,6 +259,9 @@ async function auth(action: string | undefined, args: ParsedArgs, runtime: Runti
     const orgSlug = flag(args, 'org') || flag(args, 'org-slug') || profile.orgSlug
     if (!email || !orgSlug)
       throw new CliError('USAGE', 'auth login requires --email and --org', EXIT_CODES.USAGE)
+    const twoFactorCode = flag(args, 'two-factor-code')
+    if (twoFactorCode && !/^\d{6}$/.test(twoFactorCode))
+      throw new CliError('VALIDATION_ERROR', 'Two-factor code must be six digits', EXIT_CODES.VALIDATION)
     if (flag(args, 'store')) {
       const store = flag(args, 'store')
       if (store !== 'keychain' && store !== 'encrypted-file')
@@ -274,7 +277,7 @@ async function auth(action: string | undefined, args: ParsedArgs, runtime: Runti
         password,
         orgSlug,
         tokenName: flag(args, 'token-name') || `hasna-cli:${profile.name}`,
-        ...(flag(args, 'two-factor-code') ? { twoFactorCode: flag(args, 'two-factor-code') } : {}),
+        ...(twoFactorCode ? { twoFactorCode } : {}),
       },
     })
     const data = unwrap(response) as Record<string, unknown>
@@ -316,6 +319,12 @@ async function authTokens(args: ParsedArgs, runtime: Runtime, profile: Profile, 
     if (flag(args, 'name')) body.name = flag(args, 'name')
     if (flag(args, 'scopes')) body.scopes = flag(args, 'scopes')?.split(',').map((scope) => scope.trim())
     if (intFlag(args, 'expires-in-days', { min: 1, max: 90 })) body.expiresInDays = intFlag(args, 'expires-in-days')
+    if (typeof body.name !== 'string' || !Array.isArray(body.scopes) || body.scopes.length === 0)
+      throw new CliError(
+        'VALIDATION_ERROR',
+        'Token creation requires name and at least one scope',
+        EXIT_CODES.VALIDATION,
+      )
     return mutation(api, args, runtime, {
       method: 'POST',
       path: `/api/v1/orgs/${encodeURIComponent(org)}/auth/tokens`,
@@ -379,6 +388,12 @@ async function careersJobs(args: ParsedArgs, runtime: Runtime) {
     if (operation === 'update') {
       const version = intFlag(args, 'expected-version', { min: 1 }) ?? intFlag(args, 'version', { min: 1 })
       if (version !== undefined) body.expectedVersion = version
+      if (!version || Object.keys(body).every((key) => key === 'expectedVersion'))
+        throw new CliError(
+          'VALIDATION_ERROR',
+          'Job update requires expectedVersion and at least one changed field',
+          EXIT_CODES.VALIDATION,
+        )
     } else {
       const missing = ['title', 'department', 'location', 'type', 'description', 'requirements'].filter(
         (key) => typeof body[key] !== 'string' || String(body[key]).trim() === '',
@@ -389,6 +404,8 @@ async function careersJobs(args: ParsedArgs, runtime: Runtime) {
           `Missing required job fields: ${missing.join(', ')}`,
           EXIT_CODES.VALIDATION,
         )
+      if ('status' in body && body.status !== 'DRAFT')
+        throw new CliError('VALIDATION_ERROR', 'New jobs may only have DRAFT status', EXIT_CODES.VALIDATION)
     }
     return mutation(api, args, runtime, {
       method: operation === 'create' ? 'POST' : 'PATCH',
@@ -437,6 +454,12 @@ async function careersApplications(args: ParsedArgs, runtime: Runtime) {
     const job = flag(args, 'job') || args.positionals[3]
     if (!job) throw new CliError('USAGE', 'submit requires --job <slug>', EXIT_CODES.USAGE)
     const body = await readJsonInput(args, runtime.stdin)
+    if ('resume' in body)
+      throw new CliError(
+        'VALIDATION_ERROR',
+        'The cweb application API does not accept a resume field',
+        EXIT_CODES.VALIDATION,
+      )
     for (const key of ['name', 'email', 'phone', 'cover-letter'] as const) {
       const value = flag(args, key)
       if (value !== undefined) body[key === 'cover-letter' ? 'coverLetter' : key] = value
@@ -459,8 +482,11 @@ async function careersApplications(args: ParsedArgs, runtime: Runtime) {
   if (operation === 'export') return exportApplications(args, runtime, api, token, base)
   const id = requiredPositional(args, 3, 'application id')
   if (operation === 'status') {
-    const status = flag(args, 'status')
+    const body = await readJsonInput(args, runtime.stdin)
+    const status = flag(args, 'status') || (typeof body.status === 'string' ? body.status : undefined)
     if (!status) throw new CliError('USAGE', '--status is required', EXIT_CODES.USAGE)
+    if (!['NEW', 'REVIEWING', 'INTERVIEWED', 'OFFERED', 'HIRED', 'REJECTED'].includes(status))
+      throw new CliError('VALIDATION_ERROR', 'Invalid application status', EXIT_CODES.VALIDATION)
     return mutation(api, args, runtime, { method: 'PATCH', path: `${base}/${encodeURIComponent(id)}`, token, body: { status } })
   }
   if (operation === 'anonymize')

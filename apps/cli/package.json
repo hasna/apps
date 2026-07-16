@@ -22,6 +22,7 @@
   },
   "files": [
     "dist",
+    "docs",
     "README.md",
     "SECURITY.md",
     "LICENSE"
@@ -31,13 +32,14 @@
     "tag": "internal"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node scripts/build.mjs",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "prepack": "bun run clean && bun run build",
     "clean": "rm -rf dist coverage *.tgz",
-    "pack:check": "bun pm pack --dry-run"
+    "pack:check": "npm pack --dry-run",
+    "package:smoke": "node scripts/package-smoke.mjs"
   },
   "devDependencies": {
     "@types/node": "22.15.3",

@@ -63,6 +63,20 @@ describe('cweb careers commands', () => {
       dry.runtime,
     )
     expect(dry.transport.requests).toHaveLength(0)
+
+    const resume = fixture({
+      config: profileConfig(),
+      input: JSON.stringify({
+        name: 'Candidate',
+        email: 'candidate@example.com',
+        termsAccepted: true,
+        resume: 'not-supported',
+      }),
+    })
+    expect(
+      (await runCli(['--json', 'careers', 'applications', 'submit', '--job', 'ea', '--input', '-'], resume.runtime)).exitCode,
+    ).toBe(EXIT_CODES.VALIDATION)
+    expect(resume.transport.requests).toHaveLength(0)
   })
 
   it('maps list/show/status/anonymize and paginated CSV export', async () => {
