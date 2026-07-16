@@ -402,16 +402,16 @@ export function registerProjectCommands(program: Command) {
       try {
         const result = runSearchView(name);
         if (globalOpts.json) {
-          output(result, true);
+          output(redactBroadOutput(result), true);
           return;
         }
         console.log(chalk.bold(`${result.count} result(s) for view "${result.view?.name || name}":\n`));
         for (const item of result.results) {
           if (item.entity_type === "tasks") {
-            console.log(formatTaskLine(item.entity as any));
+            console.log(formatTaskLine(redactBroadOutput(item.entity as any)));
             continue;
           }
-          const entity = item.entity as any;
+          const entity = redactBroadOutput(item.entity as any);
           console.log(`${chalk.cyan(item.entity_type)} ${entity.id?.slice?.(0, 8) || ""} ${entity.name || entity.title || entity.content || entity.summary || ""}`);
         }
       } catch (e) {

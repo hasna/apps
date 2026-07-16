@@ -784,7 +784,8 @@ describe("CLI integration", () => {
     try { unlinkSync(dbPath); } catch {}
 
     try {
-      const task = JSON.parse((await runCli(["add", "saved view cli task", "--tag", "views", "--json"], dbPath)).stdout);
+      const credentialLike = ["Bearer", "savedviewcredential123456"].join(" ");
+      const task = JSON.parse((await runCli(["add", "saved view cli task", "--description", credentialLike, "--tag", "views", "--json"], dbPath)).stdout);
       const saved = await runCli([
         "views",
         "save",
@@ -806,6 +807,8 @@ describe("CLI integration", () => {
       expect(run.count).toBe(1);
       expect(run.results[0].entity_type).toBe("tasks");
       expect(run.results[0].entity.id).toBe(task.id);
+      expect(run.results[0].entity.description).toBe("Bearer [REDACTED]");
+      expect(run.results[0].entity.description).not.toContain("savedviewcredential123456");
 
       const removed = JSON.parse((await runCli(["views", "delete", "cli-views", "--json"], dbPath)).stdout);
       expect(removed.deleted).toBe(true);
