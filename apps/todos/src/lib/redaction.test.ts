@@ -58,6 +58,7 @@ describe("local secret redaction", () => {
         total_tokens: 123,
         input_tokens: 100,
         output_tokens: 23,
+        cost_tokens: 456,
       },
       access_token: "should-not-export",
     })).toEqual({
@@ -65,6 +66,7 @@ describe("local secret redaction", () => {
         total_tokens: 123,
         input_tokens: 100,
         output_tokens: 23,
+        cost_tokens: 456,
       },
       access_token: "[REDACTED]",
     });

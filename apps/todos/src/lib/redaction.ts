@@ -28,6 +28,7 @@ const NON_SECRET_USAGE_KEYS = new Set([
   "output_tokens",
   "prompt_tokens",
   "completion_tokens",
+  "cost_tokens",
 ]);
 
 function unique(values: string[] | undefined): string[] {
