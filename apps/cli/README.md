@@ -40,7 +40,7 @@ hasna config path
 hasna doctor --json
 ```
 
-API URLs reject credentials and fragments and use HTTPS by default. Loopback HTTP requires `--allow-insecure-localhost` when adding the profile. Credentialed requests to private, link-local, and metadata destinations are rejected, including after DNS resolution.
+API URLs reject credentials and fragments and use HTTPS by default. Loopback HTTP requires `--allow-insecure-localhost` when adding the profile. Private, link-local, metadata, benchmark, multicast, reserved, and documentation destinations are rejected after DNS resolution, and the checked address is pinned for the connection.
 
 Configuration follows XDG (`$XDG_CONFIG_HOME/hasna/config.json`, otherwise `~/.config/hasna/config.json`) and is written with mode `0600`. Configuration stores references, never bearer tokens.
 
@@ -57,6 +57,7 @@ Environment references are read-only. Encrypted-file passphrases and login passw
 ```bash
 hasna auth login --email owner@example.com --org hasna
 printf '%s\n' "$PASSWORD" | hasna auth login --email owner@example.com --org hasna --password-stdin
+printf '%s\n' "$PASSWORD" | HASNA_2FA=123456 hasna auth login --email owner@example.com --org hasna --password-stdin --two-factor-env HASNA_2FA
 hasna auth status --json
 hasna auth whoami
 hasna auth tokens list
@@ -69,6 +70,8 @@ hasna auth logout
 
 The login token is immediately moved to the configured credential store and redacted from CLI output. Newly created or rotated token responses are one-time server responses; handle JSON output as sensitive and never save it to repository files.
 
+Two-factor codes are never accepted as command-line values. `--two-factor-env VAR_NAME` opts in without exposing the code in process arguments; omit it for accounts without 2FA. Secret stdin and hidden-terminal inputs are capped by UTF-8 bytes.
+
 ## Apps and accounts
 
 ```bash
@@ -79,7 +82,7 @@ hasna apps status cweb
 hasna app cweb capabilities
 ```
 
-App lifecycle and future account provisioning use short-lived, single-use deterministic plans. Install/update plans bind the profile, API origin, organization, provider version, and inspected OpenAPI hash. Apply refetches the OpenAPI description and must reproduce the exact digest:
+App lifecycle and future account provisioning use short-lived, single-use deterministic plans. Install/update plans bind the profile, API origin, organization, provider version, and inspected OpenAPI hash. Compatible semantic API versions at or above `1.1.0` are accepted when required operations remain present. Apply refetches the OpenAPI description and must reproduce the exact digest:
 
 ```bash
 PLAN=$(hasna --json apps install cweb | jq -r .data.digest)
@@ -110,6 +113,8 @@ hasna careers applications anonymize APPLICATION_ID
 Mutations support command-scoped `--dry-run`, `--file <json>`, and `--input -`. Input is limited to 1 MiB; files must be regular, single-link files. Job lifecycle and deletion require the server's integer version through `--version`. Application submissions require `name`, `email`, and `termsAccepted:true`; the current API intentionally accepts no resume field.
 
 Token revoke/rotate/revoke-all, job publish/close/delete, and application status/anonymize use the same short-lived plan plus `--apply <digest> --yes`; `--dry-run` remains side-effect free. Idempotency keys are accepted only for job creation, application submission, and token rotation and must match `[A-Za-z0-9._:-]{8,128}`.
+
+Token rotation requires an explicit idempotency key so plan and apply are identical. Apply atomically reserves a plan: concurrent apply is rejected, success or a definitive remote response consumes it, and a transient network/TLS/timeout failure releases it for an explicit retry.
 
 CSV export follows `X-Next-Cursor` until `X-Export-Complete:true`, preserves one header even when pages omit trailing newlines, and fails with exit 9 instead of reporting partial data as success when page or byte ceilings are reached. Output files are atomically written with mode `0600`.
 

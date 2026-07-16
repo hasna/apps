@@ -122,7 +122,7 @@ export class NodeApiTransport implements ApiTransport {
             requestId: safeRequestId(responseHeaders['x-request-id']) || requestId,
           }
           finish(() => {
-            if ((response.statusCode ?? 0) >= 400) reject(apiError(result))
+            if ((response.statusCode ?? 0) >= 300) reject(apiError(result))
             else resolve(result)
           })
         })
@@ -156,7 +156,7 @@ export class NodeApiTransport implements ApiTransport {
 }
 
 function apiError(response: HttpResponse): CliError {
-  const envelope = response.body as {
+  const envelope = (response.body && typeof response.body === 'object' ? response.body : {}) as {
     error?: { requestId?: string; retryable?: boolean }
   }
   const exit =
@@ -173,6 +173,7 @@ function apiError(response: HttpResponse): CliError {
     : response.status === 403 ? 'PERMISSION_DENIED'
       : response.status === 404 || response.status === 410 ? 'RESOURCE_NOT_FOUND'
         : response.status === 409 ? 'CONFLICT'
+          : response.status >= 300 && response.status < 400 ? 'REMOTE_REDIRECT_REJECTED'
           : response.status === 429 ? 'REMOTE_RATE_LIMITED'
             : response.status >= 500 ? 'REMOTE_SERVER_ERROR'
               : 'REMOTE_REQUEST_REJECTED'
@@ -218,7 +219,18 @@ function isPrivateAddress(address: string): boolean {
   const parts = value.split('.').map(Number)
   const first = parts[0] ?? -1
   const second = parts[1] ?? -1
-  return first === 10 || first === 127 || (first === 169 && second === 254) || (first === 172 && second >= 16 && second <= 31) || (first === 192 && second === 168) || (first === 100 && second >= 64 && second <= 127) || first === 0
+  const third = parts[2] ?? -1
+  const fourth = parts[3] ?? -1
+  return first === 0 || first === 10 || first === 127 ||
+    (first === 100 && second >= 64 && second <= 127) ||
+    (first === 169 && second === 254) ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168) ||
+    (first === 192 && second === 0 && (third === 0 || third === 2)) ||
+    (first === 198 && (second === 18 || second === 19 || (second === 51 && third === 100))) ||
+    (first === 203 && second === 0 && third === 113) ||
+    first >= 224 ||
+    (first === 255 && second === 255 && third === 255 && fourth === 255)
 }
 
 export function unwrap(response: HttpResponse): unknown {

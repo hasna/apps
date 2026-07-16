@@ -9,7 +9,7 @@ import {
   validateApiUrl,
   validateProfileName,
 } from './config.js'
-import { CliError, EXIT_CODES } from './errors.js'
+import { asCliError, CliError, EXIT_CODES } from './errors.js'
 import { unwrap, type ApiTransport, type HttpRequestOptions } from './http.js'
 import { readJsonInput } from './input.js'
 import { createPlan, requirePlanApproval } from './plan.js'
@@ -27,6 +27,10 @@ Common API options (command-scoped):
   --api-url <url>              Override the profile API URL
   --connect-timeout <ms>       Override connect timeout
   --request-timeout <ms>       Override request timeout
+
+Authentication secrets:
+  --password-stdin             Read the password from standard input
+  --two-factor-env <VAR>       Read optional six-digit 2FA from an environment variable
 
 Commands:
   doctor | config
@@ -126,8 +130,6 @@ async function profiles(action: string | undefined, args: ParsedArgs, runtime: R
   if (action === 'add') {
     const name = requiredPositional(args, 2, 'profile name')
     validateProfileName(name)
-    if (config.profiles[name])
-      throw new CliError('PROFILE_EXISTS', `Profile ${name} already exists`, EXIT_CODES.CONFLICT)
     const apiUrl = flag(args, 'api-url')
     if (!apiUrl) throw new CliError('USAGE', '--api-url is required', EXIT_CODES.USAGE)
     const credentialEnv = flag(args, 'credential-env')
@@ -146,27 +148,30 @@ async function profiles(action: string | undefined, args: ParsedArgs, runtime: R
       ...(credentialEnv ? { credential: `env:${credentialEnv}` as const } : {}),
       ...(store ? { credentialStore: store as 'keychain' | 'encrypted-file' } : {}),
     }
-    config.profiles[name] = profile
-    config.currentProfile ??= name
-    await runtime.config.save(config)
+    await runtime.config.update((current) => {
+      if (current.profiles[name]) throw new CliError('PROFILE_EXISTS', `Profile ${name} already exists`, EXIT_CODES.CONFLICT)
+      current.profiles[name] = profile
+      current.currentProfile ??= name
+    })
     return output({ ...profile, credential: credentialEnv ? 'env:<redacted>' : undefined })
   }
   if (action === 'use') {
     const name = requiredPositional(args, 2, 'profile name')
-    if (!config.profiles[name])
-      throw new CliError('PROFILE_NOT_FOUND', `Profile ${name} was not found`, EXIT_CODES.NOT_FOUND)
-    config.currentProfile = name
-    await runtime.config.save(config)
+    await runtime.config.update((current) => {
+      if (!current.profiles[name]) throw new CliError('PROFILE_NOT_FOUND', `Profile ${name} was not found`, EXIT_CODES.NOT_FOUND)
+      current.currentProfile = name
+    })
     return output({ currentProfile: name })
   }
   if (action === 'remove') {
     const name = requiredPositional(args, 2, 'profile name')
-    const profile = config.profiles[name]
-    if (!profile) throw new CliError('PROFILE_NOT_FOUND', `Profile ${name} was not found`, EXIT_CODES.NOT_FOUND)
-    await runtime.credentials.delete(profile)
-    delete config.profiles[name]
-    if (config.currentProfile === name) config.currentProfile = Object.keys(config.profiles)[0]
-    await runtime.config.save(config)
+    await runtime.config.update(async (current) => {
+      const profile = current.profiles[name]
+      if (!profile) throw new CliError('PROFILE_NOT_FOUND', `Profile ${name} was not found`, EXIT_CODES.NOT_FOUND)
+      await runtime.credentials.delete(profile)
+      delete current.profiles[name]
+      if (current.currentProfile === name) current.currentProfile = Object.keys(current.profiles)[0]
+    })
     return output({ removed: name })
   }
   throw new CliError('USAGE', 'profiles requires list, show, add, use, or remove', EXIT_CODES.USAGE)
@@ -212,21 +217,27 @@ async function apps(action: string | undefined, args: ParsedArgs, runtime: Runti
       : { from: config.apps[id] ?? null, to: provider.manifest, context }
   const plan = createPlan(`apps.${action}`, id, changes)
   if (hasFlag(args, 'dry-run')) return output({ ...plan, dryRun: true })
-  const awaiting = await authorizePlan(args, runtime, plan)
-  if (awaiting) return awaiting
-  config = await runtime.config.load()
-  if (action === 'uninstall') delete config.apps[id]
-  else {
-    const now = runtime.now().toISOString()
-    config.apps[id] = {
-      id,
-      version: provider.manifest.version,
-      provider: provider.manifest.provider,
-      installedAt: config.apps[id]?.installedAt ?? now,
-      updatedAt: now,
-    }
+  const authorization = await authorizePlan(args, runtime, plan)
+  if (authorization.waiting) return authorization.waiting
+  try {
+    config = await runtime.config.update((current) => {
+      if (action === 'uninstall') delete current.apps[id]
+      else {
+        const now = runtime.now().toISOString()
+        current.apps[id] = {
+          id,
+          version: provider.manifest.version,
+          provider: provider.manifest.provider,
+          installedAt: current.apps[id]?.installedAt ?? now,
+          updatedAt: now,
+        }
+      }
+    })
+    await settleAuthorization(runtime, authorization, 'consume')
+  } catch (error) {
+    await settleAuthorization(runtime, authorization, shouldReleasePlan(error) ? 'release' : 'consume')
+    throw error
   }
-  await runtime.config.save(config)
   return output({ applied: true, planDigest: plan.digest, app: config.apps[id] ?? null })
 }
 
@@ -256,15 +267,27 @@ async function accounts(action: string | undefined, args: ParsedArgs, runtime: R
   if (action === 'show') return output(await provider.accounts.show(context, requiredPositional(args, 2, 'account id')))
   const target = action === 'deprovision' ? requiredPositional(args, 2, 'account id') : provider.id
   const changes = action === 'provision' ? await readJsonInput(args, runtime.stdin) : { id: target }
-  const plan = createPlan(`accounts.${action}`, target, changes)
+  const config = await runtime.config.load()
+  const profile = profileFor(args, config)
+  const org = requireOrg(profile, args)
+  const plan = createPlan(`accounts.${action}`, target, {
+    context: { profile: profile.name, apiUrl: profile.apiUrl, org, provider: provider.manifest.provider, providerVersion: provider.manifest.version },
+    changes,
+  })
   if (hasFlag(args, 'dry-run')) return output({ ...plan, dryRun: true })
-  const awaiting = await authorizePlan(args, runtime, plan)
-  if (awaiting) return awaiting
-  if (action === 'provision' && provider.accounts.provision)
-    return output(await provider.accounts.provision(context, changes))
-  if (action === 'deprovision' && provider.accounts.deprovision)
-    return output(await provider.accounts.deprovision(context, target))
-  throw new CliError('CAPABILITY_UNSUPPORTED', `Provider ${provider.id} cannot ${action}`, EXIT_CODES.UNSUPPORTED)
+  const authorization = await authorizePlan(args, runtime, plan)
+  if (authorization.waiting) return authorization.waiting
+  try {
+    let result: unknown
+    if (action === 'provision' && provider.accounts.provision) result = await provider.accounts.provision(context, changes)
+    else if (action === 'deprovision' && provider.accounts.deprovision) result = await provider.accounts.deprovision(context, target)
+    else throw new CliError('CAPABILITY_UNSUPPORTED', `Provider ${provider.id} cannot ${action}`, EXIT_CODES.UNSUPPORTED)
+    await settleAuthorization(runtime, authorization, 'consume')
+    return output(result)
+  } catch (error) {
+    await settleAuthorization(runtime, authorization, shouldReleasePlan(error) ? 'release' : 'consume')
+    throw error
+  }
 }
 
 async function auth(action: string | undefined, args: ParsedArgs, runtime: Runtime) {
@@ -276,7 +299,12 @@ async function auth(action: string | undefined, args: ParsedArgs, runtime: Runti
     const orgSlug = flag(args, 'org') || flag(args, 'org-slug') || profile.orgSlug
     if (!email || !orgSlug)
       throw new CliError('USAGE', 'auth login requires --email and --org', EXIT_CODES.USAGE)
-    const twoFactorCode = flag(args, 'two-factor-code')
+    const twoFactorEnv = flag(args, 'two-factor-env')
+    if (twoFactorEnv && !/^[A-Z_][A-Z0-9_]*$/.test(twoFactorEnv))
+      throw new CliError('VALIDATION_ERROR', 'Invalid two-factor environment variable', EXIT_CODES.VALIDATION)
+    const twoFactorCode = twoFactorEnv ? runtime.env[twoFactorEnv] : undefined
+    if (twoFactorEnv && !twoFactorCode)
+      throw new CliError('TWO_FACTOR_REQUIRED', 'The configured two-factor environment variable is empty', EXIT_CODES.AUTH)
     if (twoFactorCode && !/^\d{6}$/.test(twoFactorCode))
       throw new CliError('VALIDATION_ERROR', 'Two-factor code must be six digits', EXIT_CODES.VALIDATION)
     if (flag(args, 'store')) {
@@ -297,15 +325,19 @@ async function auth(action: string | undefined, args: ParsedArgs, runtime: Runti
         ...(twoFactorCode ? { twoFactorCode } : {}),
       },
     })
-    const data = unwrap(response) as Record<string, unknown>
+    const unwrapped = unwrap(response)
+    const data = unwrapped && typeof unwrapped === 'object' && !Array.isArray(unwrapped) ? unwrapped as Record<string, unknown> : {}
     const token = data.token
     if (typeof token !== 'string')
-      throw new CliError('RESPONSE_INVALID', 'Login response did not contain a token', EXIT_CODES.NETWORK)
-    const updated = await runtime.credentials.store(profile, token)
-    config.profiles[profile.name] = { ...updated, orgSlug }
-    await runtime.config.save(config)
+      throw new CliError('REMOTE_RESPONSE_INVALID', 'The login response did not contain a token', EXIT_CODES.REMOTE, { requestId: response.requestId })
+    let updated: Profile | undefined
+    await runtime.config.update(async (current) => {
+      const latest = { ...(current.profiles[profile.name] ?? profile), credentialStore: profile.credentialStore }
+      updated = await runtime.credentials.store(latest, token)
+      current.profiles[profile.name] = { ...updated, orgSlug }
+    })
     const { token: _redacted, ...safe } = data
-    return { data: { ...safe, stored: updated.credentialStore }, requestId: response.requestId }
+    return { data: { ...safe, stored: updated?.credentialStore }, requestId: response.requestId }
   }
   if (action === 'status') {
     try {
@@ -355,13 +387,16 @@ async function authTokens(args: ParsedArgs, runtime: Runtime, profile: Profile, 
       path: `/api/v1/orgs/${encodeURIComponent(org)}/auth/tokens/${encodeURIComponent(requiredPositional(args, 3, 'token id'))}`,
       token,
     })
-  if (operation === 'rotate')
+  if (operation === 'rotate') {
+    if (!flag(args, 'idempotency-key'))
+      throw new CliError('USAGE', 'Token rotation requires an explicit --idempotency-key', EXIT_CODES.USAGE)
     return guardedMutation(api, args, runtime, mutationContext('auth.tokens.rotate', requiredPositional(args, 3, 'token id'), profile, org), {
       method: 'POST',
       path: `/api/v1/orgs/${encodeURIComponent(org)}/auth/tokens/${encodeURIComponent(requiredPositional(args, 3, 'token id'))}/rotate`,
       token,
       headers: { 'Idempotency-Key': idempotency(args, runtime) },
     })
+  }
   if (operation === 'revoke-all')
     return guardedMutation(api, args, runtime, mutationContext('auth.tokens.revoke-all', org, profile, org), {
       method: 'POST',
@@ -546,7 +581,7 @@ async function exportApplications(
     }
     const next = response.headers['x-next-cursor']
     if (!next || next === cursor)
-      throw new CliError('EXPORT_CURSOR_INVALID', 'Export cursor did not advance', EXIT_CODES.NETWORK)
+      throw new CliError('REMOTE_EXPORT_CURSOR_INVALID', 'The API returned an invalid export cursor', EXIT_CODES.REMOTE, { requestId: response.requestId })
     cursor = next
   }
   if (!complete)
@@ -618,12 +653,21 @@ async function guardedMutation(
     headers: options.headers,
   }
   const plan = createPlan(context.operation, context.target, { context, request: safeRequest })
-  const awaiting = await authorizePlan(args, runtime, plan)
-  if (awaiting) return awaiting
-  return mutation(api, args, runtime, options)
+  const authorization = await authorizePlan(args, runtime, plan)
+  if (authorization.waiting) return authorization.waiting
+  try {
+    const result = await mutation(api, args, runtime, options)
+    await settleAuthorization(runtime, authorization, 'consume')
+    return result
+  } catch (error) {
+    await settleAuthorization(runtime, authorization, shouldReleasePlan(error) ? 'release' : 'consume')
+    throw error
+  }
 }
 
-async function authorizePlan(args: ParsedArgs, runtime: Runtime, plan: ReturnType<typeof createPlan>): Promise<CommandOutput | undefined> {
+type PlanAuthorization = { waiting?: CommandOutput; reservation?: { digest: string; id: string } }
+
+async function authorizePlan(args: ParsedArgs, runtime: Runtime, plan: ReturnType<typeof createPlan>): Promise<PlanAuthorization> {
   const now = runtime.now().getTime()
   const apply = flag(args, 'apply')
   if (!apply) {
@@ -632,12 +676,23 @@ async function authorizePlan(args: ParsedArgs, runtime: Runtime, plan: ReturnTyp
       target: plan.target,
       expiresAt: new Date(now + 10 * 60_000).toISOString(),
     })
-    return output(plan)
+    return { waiting: output(plan) }
   }
   requirePlanApproval(plan, apply, hasFlag(args, 'yes'))
-  if (!(await runtime.config.consumePendingPlan(apply, plan.operation, plan.target, now)))
+  const reservationId = runtime.randomUUID()
+  if (!(await runtime.config.reservePendingPlan(apply, plan.operation, plan.target, now, reservationId)))
     throw new CliError('PLAN_EXPIRED_OR_REPLAYED', 'The mutation plan is expired, unknown, or already used', EXIT_CODES.CONFLICT)
-  return undefined
+  return { reservation: { digest: apply, id: reservationId } }
+}
+
+async function settleAuthorization(runtime: Runtime, authorization: PlanAuthorization, outcome: 'consume' | 'release'): Promise<void> {
+  if (!authorization.reservation) return
+  if (!(await runtime.config.settlePendingPlan(authorization.reservation.digest, authorization.reservation.id, outcome)))
+    throw new CliError('PLAN_RESERVATION_LOST', 'The mutation plan reservation could not be finalized', EXIT_CODES.CONFLICT)
+}
+
+function shouldReleasePlan(error: unknown): boolean {
+  return asCliError(error).exitCode === EXIT_CODES.NETWORK
 }
 
 async function apiJson(api: ApiTransport, options: HttpRequestOptions): Promise<CommandOutput> {
@@ -722,15 +777,30 @@ const requiredCwebOperations: Array<[string, string]> = [
 
 async function inspectCwebApi(api: ApiTransport) {
   const response = await api.request({ path: cwebProvider.manifest.api.openApiPath })
-  const spec = response.body as { info?: { title?: unknown; version?: unknown }; paths?: Record<string, Record<string, unknown>> }
+  const spec = (response.body && typeof response.body === 'object' && !Array.isArray(response.body) ? response.body : {}) as { info?: { title?: unknown; version?: unknown }; paths?: Record<string, Record<string, unknown>> }
   const missing = requiredCwebOperations
     .filter(([path, method]) => !spec.paths?.[path]?.[method])
     .map(([path, method]) => `${method.toUpperCase()} ${path}`)
   const title = spec.info?.title
   const version = spec.info?.version
-  const compatible = title === 'Hasna CWeb CLI API' && version === '1.1.0' && missing.length === 0
+  const compatible = title === 'Hasna CWeb CLI API' && isSemverAtLeast(version, '1.1.0') && missing.length === 0
   const hash = `sha256:${createHash('sha256').update(stableJson(response.body)).digest('hex')}`
   return { compatible, title, version, missing, hash, requiredVersion: '1.1.0' }
+}
+
+function isSemverAtLeast(value: unknown, minimum: string): boolean {
+  if (typeof value !== 'string') return false
+  const parse = (input: string) => {
+    const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(input)
+    return match ? { core: [Number(match[1]), Number(match[2]), Number(match[3])] as const, prerelease: match[4] } : undefined
+  }
+  const actual = parse(value)
+  const required = parse(minimum)
+  if (!actual || !required) return false
+  for (let index = 0; index < 3; index += 1) {
+    if (actual.core[index] !== required.core[index]) return (actual.core[index] ?? 0) > (required.core[index] ?? 0)
+  }
+  return !actual.prerelease || Boolean(required.prerelease)
 }
 
 function stableJson(value: unknown): string {

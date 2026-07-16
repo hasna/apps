@@ -16,14 +16,27 @@ export class MemoryConfig implements ConfigStore {
   async save(config: Config) {
     this.value = structuredClone(config)
   }
+  async update(change: (config: Config) => void | Promise<void>) {
+    const config = structuredClone(this.value)
+    await change(config)
+    this.value = structuredClone(config)
+    return structuredClone(config)
+  }
   async recordPendingPlan(digest: string, entry: NonNullable<Config['pendingPlans']>[string]) {
     this.value.pendingPlans ??= {}
     this.value.pendingPlans[digest] = structuredClone(entry)
   }
-  async consumePendingPlan(digest: string, operation: string, target: string, now: number) {
+  async reservePendingPlan(digest: string, operation: string, target: string, now: number, reservationId: string) {
     const pending = this.value.pendingPlans?.[digest]
-    if (!pending || Date.parse(pending.expiresAt) <= now || pending.operation !== operation || pending.target !== target) return false
-    delete this.value.pendingPlans?.[digest]
+    if (!pending || (pending.state ?? 'pending') !== 'pending' || Date.parse(pending.expiresAt) <= now || pending.operation !== operation || pending.target !== target) return false
+    this.value.pendingPlans![digest] = { ...pending, state: 'in-flight', reservationId, reservedAt: new Date(now).toISOString() }
+    return true
+  }
+  async settlePendingPlan(digest: string, reservationId: string, outcome: 'consume' | 'release') {
+    const pending = this.value.pendingPlans?.[digest]
+    if (!pending || pending.state !== 'in-flight' || pending.reservationId !== reservationId) return false
+    if (outcome === 'consume') delete this.value.pendingPlans?.[digest]
+    else this.value.pendingPlans![digest] = { operation: pending.operation, target: pending.target, expiresAt: pending.expiresAt, state: 'pending' }
     return true
   }
 }
@@ -84,6 +97,7 @@ export function fixture(options: { input?: string; config?: Config } = {}) {
     stderr,
     now: () => new Date('2026-07-16T12:00:00.000Z'),
     randomUUID: () => '00000000-0000-4000-8000-000000000001',
+    env: {},
     readPassword: async () => 'password-from-safe-input',
   }
   return { runtime, config, credentials, transport, stdout, stderr }
@@ -110,7 +124,7 @@ export function jsonResponse(data: unknown, headers: Record<string, string> = {}
   }
 }
 
-export function cwebSpecResponse(): HttpResponse {
+export function cwebSpecResponse(version = '1.1.0'): HttpResponse {
   const paths: Record<string, Record<string, object>> = {}
   for (const [path, method] of ([
     ['/api/v1/auth/login', 'post'], ['/api/v1/auth/whoami', 'get'],
@@ -127,6 +141,6 @@ export function cwebSpecResponse(): HttpResponse {
     ['/api/v1/orgs/{orgSlug}/careers/applications/{id}', 'get'], ['/api/v1/orgs/{orgSlug}/careers/applications/{id}', 'patch'],
     ['/api/v1/orgs/{orgSlug}/careers/applications/{id}/anonymize', 'post'],
   ] as Array<[string, string]>)) (paths[path] ??= {})[method] = {}
-  const body = { openapi: '3.0.0', info: { title: 'Hasna CWeb CLI API', version: '1.1.0' }, paths }
+  const body = { openapi: '3.0.0', info: { title: 'Hasna CWeb CLI API', version }, paths }
   return { status: 200, headers: {}, body, text: JSON.stringify(body), requestId: 'spec-request' }
 }

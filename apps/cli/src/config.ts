@@ -1,7 +1,8 @@
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { constants } from 'node:fs'
-import { mkdir, open, rm } from 'node:fs/promises'
+import { link, lstat, mkdir, open, rm } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import { CliError, EXIT_CODES } from './errors.js'
 import { atomicWritePrivateFile, readPrivateFile } from './local-files.js'
 
@@ -30,15 +31,17 @@ export type Config = {
   currentProfile?: string
   profiles: Record<string, Profile>
   apps: Record<string, InstalledApp>
-  pendingPlans?: Record<string, { operation: string; target: string; expiresAt: string; used?: boolean }>
+  pendingPlans?: Record<string, { operation: string; target: string; expiresAt: string; state?: 'pending' | 'in-flight'; reservationId?: string; reservedAt?: string }>
 }
 
 export interface ConfigStore {
   readonly path: string
   load(): Promise<Config>
   save(config: Config): Promise<void>
+  update(change: (config: Config) => void | Promise<void>): Promise<Config>
   recordPendingPlan(digest: string, entry: NonNullable<Config['pendingPlans']>[string]): Promise<void>
-  consumePendingPlan(digest: string, operation: string, target: string, now: number): Promise<boolean>
+  reservePendingPlan(digest: string, operation: string, target: string, now: number, reservationId: string): Promise<boolean>
+  settlePendingPlan(digest: string, reservationId: string, outcome: 'consume' | 'release'): Promise<boolean>
 }
 
 export function defaultConfig(): Config {
@@ -57,6 +60,10 @@ export class FileConfigStore implements ConfigStore {
   }
 
   async load(): Promise<Config> {
+    return this.loadUnlocked()
+  }
+
+  private async loadUnlocked(): Promise<Config> {
     try {
       const parsed = JSON.parse(await readPrivateFile(this.path)) as unknown
       return validateConfig(parsed)
@@ -69,48 +76,126 @@ export class FileConfigStore implements ConfigStore {
   }
 
   async save(config: Config): Promise<void> {
-    const validated = validateConfig(config)
-    await atomicWritePrivateFile(this.path, `${JSON.stringify(validated, null, 2)}\n`)
+    await this.withLock(async () => this.writeUnlocked(config))
+  }
+
+  async update(change: (config: Config) => void | Promise<void>): Promise<Config> {
+    return this.withLock(async () => {
+      const config = await this.loadUnlocked()
+      await change(config)
+      await this.writeUnlocked(config)
+      return config
+    })
   }
 
   async recordPendingPlan(digest: string, entry: NonNullable<Config['pendingPlans']>[string]): Promise<void> {
-    await this.mutatePlans((config) => {
+    await this.update((config) => {
       config.pendingPlans ??= {}
-      config.pendingPlans = Object.fromEntries(Object.entries(config.pendingPlans).filter(([, item]) => Date.parse(item.expiresAt) > Date.now() && !item.used))
-      config.pendingPlans[digest] = entry
+      config.pendingPlans = Object.fromEntries(Object.entries(config.pendingPlans).filter(([, item]) => Date.parse(item.expiresAt) > Date.now()))
+      config.pendingPlans[digest] = { ...entry, state: 'pending' }
     })
   }
 
-  async consumePendingPlan(digest: string, operation: string, target: string, now: number): Promise<boolean> {
-    let consumed = false
-    await this.mutatePlans((config) => {
+  async reservePendingPlan(digest: string, operation: string, target: string, now: number, reservationId: string): Promise<boolean> {
+    let reserved = false
+    await this.update((config) => {
       config.pendingPlans ??= {}
       const pending = config.pendingPlans[digest]
-      consumed = Boolean(pending && !pending.used && Date.parse(pending.expiresAt) > now && pending.operation === operation && pending.target === target)
-      if (consumed) delete config.pendingPlans[digest]
+      if (pending && (pending.state ?? 'pending') === 'pending' && Date.parse(pending.expiresAt) > now && pending.operation === operation && pending.target === target) {
+        reserved = true
+        config.pendingPlans[digest] = { ...pending, state: 'in-flight', reservationId, reservedAt: new Date(now).toISOString() }
+      }
     })
-    return consumed
+    return reserved
   }
 
-  private async mutatePlans(update: (config: Config) => void): Promise<void> {
+  async settlePendingPlan(digest: string, reservationId: string, outcome: 'consume' | 'release'): Promise<boolean> {
+    let settled = false
+    await this.update((config) => {
+      const pending = config.pendingPlans?.[digest]
+      if (!pending || pending.state !== 'in-flight' || pending.reservationId !== reservationId) return
+      settled = true
+      if (outcome === 'consume') delete config.pendingPlans?.[digest]
+      else config.pendingPlans![digest] = { operation: pending.operation, target: pending.target, expiresAt: pending.expiresAt, state: 'pending' }
+    })
+    return settled
+  }
+
+  private async writeUnlocked(config: Config): Promise<void> {
+    const validated = validateConfig(config)
+    await atomicWritePrivateFile(this.path, `${JSON.stringify(validated, null, 2)}\n`, { skipLock: true })
+  }
+
+  private async withLock<T>(action: () => Promise<T>): Promise<T> {
     const directory = dirname(this.path)
-    const lockPath = join(directory, '.plans.lock')
+    const lockPath = join(directory, `.${basename(this.path)}.lock`)
     await mkdir(directory, { recursive: true, mode: 0o700 })
-    let lock
+    const owner = randomUUID()
+    const lock = await this.acquireLock(lockPath, owner)
     try {
-      lock = await open(lockPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0), 0o600)
-    } catch (error) {
-      throw new CliError('CONFIG_BUSY', 'Another CLI process is updating mutation plans', EXIT_CODES.CONFIG, { cause: error })
-    }
-    try {
-      const config = await this.load()
-      update(config)
-      await this.save(config)
+      return await action()
     } finally {
       await lock.close()
-      await rm(lockPath, { force: true })
+      try {
+        const metadata = JSON.parse(await readPrivateFile(lockPath, 4096)) as { owner?: unknown }
+        if (metadata.owner === owner) await rm(lockPath, { force: true })
+      } catch {
+        // A replaced lock belongs to another process and must not be removed.
+      }
     }
   }
+
+  private async acquireLock(lockPath: string, owner: string): Promise<Awaited<ReturnType<typeof open>>> {
+    const candidate = `${lockPath}.${owner}`
+    const handle = await open(candidate, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0), 0o600)
+    try {
+      await handle.writeFile(`${JSON.stringify({ schema: 'hasna.cli_lock.v1', owner, pid: process.pid, createdAt: new Date().toISOString() })}\n`)
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
+    try {
+      try {
+        await link(candidate, lockPath)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || !(await this.recoverStaleLock(lockPath)))
+          throw new CliError('CONFIG_BUSY', 'Another CLI process is updating local state', EXIT_CODES.CONFIG, { cause: error })
+        try {
+          await link(candidate, lockPath)
+        } catch (retryError) {
+          throw new CliError('CONFIG_BUSY', 'Another CLI process is updating local state', EXIT_CODES.CONFIG, { cause: retryError })
+        }
+      }
+      return await open(lockPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    } finally {
+      await rm(candidate, { force: true })
+    }
+  }
+
+  private async recoverStaleLock(lockPath: string): Promise<boolean> {
+    let handle: Awaited<ReturnType<typeof open>> | undefined
+    try {
+      handle = await open(lockPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+      const original = await handle.stat()
+      if (!original.isFile() || original.nlink < 1 || original.nlink > 2 || original.size > 4096) return false
+      const metadata = JSON.parse(await handle.readFile('utf8')) as { owner?: unknown; pid?: unknown; createdAt?: unknown }
+      const createdAt = typeof metadata.createdAt === 'string' ? Date.parse(metadata.createdAt) : Number.NaN
+      if (typeof metadata.owner !== 'string' || !/^[0-9a-f-]{36}$/.test(metadata.owner) || !Number.isInteger(metadata.pid) || !Number.isFinite(createdAt) || Date.now() - createdAt < 5 * 60_000 || isProcessAlive(metadata.pid as number)) return false
+      const current = await lstat(lockPath)
+      if (current.ino !== original.ino || current.dev !== original.dev) return false
+      await rm(lockPath)
+      await rm(`${lockPath}.${metadata.owner}`, { force: true })
+      return true
+    } catch {
+      return false
+    } finally {
+      await handle?.close()
+    }
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true } catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH' }
 }
 
 export function validateProfileName(name: string): void {
@@ -163,8 +248,9 @@ function validateConfig(value: unknown): Config {
   if (config.pendingPlans !== undefined) {
     if (!isRecord(config.pendingPlans)) throw new Error('invalid pending plans')
     for (const [digest, plan] of Object.entries(config.pendingPlans)) {
-      if (!/^sha256:[0-9a-f]{64}$/.test(digest) || !isRecord(plan) || typeof plan.operation !== 'string' || typeof plan.target !== 'string' || typeof plan.expiresAt !== 'string' || Number.isNaN(Date.parse(plan.expiresAt)) || (plan.used !== undefined && typeof plan.used !== 'boolean')) throw new Error('invalid pending plan')
-      assertOnlyKeys(plan, ['operation', 'target', 'expiresAt', 'used'])
+      if (!/^sha256:[0-9a-f]{64}$/.test(digest) || !isRecord(plan) || typeof plan.operation !== 'string' || typeof plan.target !== 'string' || typeof plan.expiresAt !== 'string' || Number.isNaN(Date.parse(plan.expiresAt)) || (plan.state !== undefined && plan.state !== 'pending' && plan.state !== 'in-flight') || (plan.reservationId !== undefined && typeof plan.reservationId !== 'string') || (plan.reservedAt !== undefined && (typeof plan.reservedAt !== 'string' || Number.isNaN(Date.parse(plan.reservedAt))))) throw new Error('invalid pending plan')
+      assertOnlyKeys(plan, ['operation', 'target', 'expiresAt', 'state', 'reservationId', 'reservedAt'])
+      if (plan.state === 'in-flight' && (typeof plan.reservationId !== 'string' || typeof plan.reservedAt !== 'string')) throw new Error('invalid reservation')
     }
   }
   return config as Config

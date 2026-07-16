@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { CredentialManager, EncryptedFileStore, OsKeychainStore, type ProcessRunner, type SecretStore } from '../src/credentials.js'
 import { createPlan, requirePlanApproval } from '../src/plan.js'
 import { CliError, EXIT_CODES } from '../src/errors.js'
-import { FileConfigStore } from '../src/config.js'
+import { defaultConfig, FileConfigStore } from '../src/config.js'
 
 const temporary: string[] = []
 afterEach(async () => {
@@ -79,5 +79,19 @@ describe('credential and mutation security', () => {
     const manager = new CredentialManager(store('keychain'), store('encrypted'))
     await manager.delete({ name: 'prod', apiUrl: 'https://hasna.com', credentialStore: 'keychain', credential: 'keychain:prod' })
     expect(calls).toEqual(['keychain'])
+  })
+
+  it('recovers only stale dead-owner config locks and preserves live locks', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'hasna-lock-'))
+    temporary.push(directory)
+    await chmod(directory, 0o700)
+    const configPath = join(directory, 'config.json')
+    const lockPath = join(directory, '.config.json.lock')
+    const stale = { schema: 'hasna.cli_lock.v1', owner: '00000000-0000-4000-8000-000000000001', pid: 99999999, createdAt: new Date(Date.now() - 600_000).toISOString() }
+    await writeFile(lockPath, `${JSON.stringify(stale)}\n`, { mode: 0o600 })
+    await new FileConfigStore(configPath).save(defaultConfig())
+    const live = { ...stale, owner: '00000000-0000-4000-8000-000000000002', pid: process.pid }
+    await writeFile(lockPath, `${JSON.stringify(live)}\n`, { mode: 0o600 })
+    await expect(new FileConfigStore(configPath).save(defaultConfig())).rejects.toMatchObject({ code: 'CONFIG_BUSY' })
   })
 })

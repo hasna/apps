@@ -79,6 +79,7 @@ function defaultRuntime(args: ReturnType<typeof parseArgs>): Runtime {
     stderr: process.stderr,
     now: () => new Date(),
     randomUUID,
+    env: process.env,
     readPassword: (stdin) =>
       stdin ? readStdinLine(process.stdin) : readHiddenSecret('Password: '),
   }
@@ -94,6 +95,7 @@ function fallbackRuntime(): Runtime {
     stderr: process.stderr,
     now: () => new Date(),
     randomUUID,
+    env: process.env,
     readPassword: () => readHiddenSecret('Password: '),
   }
 }

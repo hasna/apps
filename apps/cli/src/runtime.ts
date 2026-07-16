@@ -11,6 +11,7 @@ export type Runtime = {
   stderr: NodeJS.WritableStream
   now(): Date
   randomUUID(): string
+  env: NodeJS.ProcessEnv
   readPassword(stdin: boolean): Promise<string>
 }
 

@@ -87,4 +87,17 @@ describe('Node API transport', () => {
     await expect(new NodeApiTransport(url, 100, 100, true).request({ path: '/precondition' })).rejects.toMatchObject({ exitCode: EXIT_CODES.REMOTE })
     await expect(new NodeApiTransport('https://169.254.169.254').request({ path: '/latest/meta-data' })).rejects.toMatchObject({ code: 'PRIVATE_DESTINATION_BLOCKED' })
   })
+
+  it('rejects redirects as remote errors without following them', async () => {
+    let destinationCalls = 0
+    const destination = await serverUrl((_request, response) => { destinationCalls += 1; response.end('followed') })
+    const origin = await serverUrl((_request, response) => { response.writeHead(302, { Location: `${destination}/target` }); response.end() })
+    await expect(new NodeApiTransport(origin, 100, 100, true).request({ path: '/redirect' })).rejects.toMatchObject({ code: 'REMOTE_REDIRECT_REJECTED', exitCode: EXIT_CODES.REMOTE })
+    expect(destinationCalls).toBe(0)
+  })
+
+  it('blocks benchmark, multicast, reserved, and documentation IPv4 ranges', async () => {
+    for (const address of ['198.18.0.1', '224.0.0.1', '240.0.0.1', '192.0.0.1', '192.0.2.1', '198.51.100.1', '203.0.113.1', '255.255.255.255'])
+      await expect(new NodeApiTransport(`https://${address}`).request({ path: '/' })).rejects.toMatchObject({ code: 'PRIVATE_DESTINATION_BLOCKED' })
+  })
 })

@@ -2,10 +2,12 @@ import { CliError, EXIT_CODES } from './errors.js'
 
 export async function readStdinLine(input: NodeJS.ReadableStream = process.stdin): Promise<string> {
   let value = ''
+  let bytes = 0
   for await (const chunk of input) {
-    value += String(chunk)
-    if (value.length > 1_048_576)
+    bytes += Buffer.byteLength(chunk)
+    if (bytes > 1_048_576)
       throw new CliError('INPUT_TOO_LARGE', 'Standard input exceeds 1 MiB', EXIT_CODES.VALIDATION)
+    value += String(chunk)
   }
   const line = value.replace(/\r?\n$/, '')
   if (!line) throw new CliError('SECRET_REQUIRED', 'A secret value is required', EXIT_CODES.AUTH)
@@ -27,7 +29,8 @@ export async function readHiddenSecret(
   input.setRawMode(true)
   input.resume()
   return new Promise((resolve, reject) => {
-    let value = ''
+    const characters: string[] = []
+    let bytes = 0
     let done = false
     const cleanup = () => {
       input.off('data', onData)
@@ -45,12 +48,16 @@ export async function readHiddenSecret(
         } else if (character === '\r' || character === '\n') {
           done = true
           cleanup()
-          if (!value) reject(new CliError('SECRET_REQUIRED', 'A secret is required', EXIT_CODES.AUTH))
-          else resolve(value)
-        } else if (character === '\u007f' || character === '\b') value = value.slice(0, -1)
+          if (!characters.length) reject(new CliError('SECRET_REQUIRED', 'A secret is required', EXIT_CODES.AUTH))
+          else resolve(characters.join(''))
+        } else if (character === '\u007f' || character === '\b') {
+          const removed = characters.pop()
+          if (removed) bytes -= Buffer.byteLength(removed)
+        }
         else {
-          value += character
-          if (value.length > 1_048_576) {
+          characters.push(character)
+          bytes += Buffer.byteLength(character)
+          if (bytes > 1_048_576) {
             done = true
             cleanup()
             reject(new CliError('INPUT_TOO_LARGE', 'Secret input exceeds 1 MiB', EXIT_CODES.USAGE))

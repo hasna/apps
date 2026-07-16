@@ -86,4 +86,11 @@ describe('stable CLI contract', () => {
     await runCli(['--json', 'apps', 'status', 'cweb'], f.runtime)
     expect(JSON.parse(f.stdout.value).data.api).toMatchObject({ reachable: true, compatible: false, title: 'Wrong' })
   })
+
+  it('accepts a newer compatible semantic API version with required operations', async () => {
+    const f = fixture({ config: profileConfig() })
+    f.transport.responses.push(cwebSpecResponse('1.2.3'))
+    await runCli(['--json', 'apps', 'status', 'cweb'], f.runtime)
+    expect(JSON.parse(f.stdout.value).data.api).toMatchObject({ compatible: true, version: '1.2.3' })
+  })
 })

@@ -10,11 +10,14 @@ The CLI does not promise that terminal output is non-sensitive. Authentication t
 
 - no bearer token is stored in plaintext configuration;
 - secrets are not accepted in process arguments;
+- optional two-factor codes are read only from an explicitly named environment variable;
 - child processes are launched without a shell;
 - remote provider JavaScript is disabled;
 - high-impact changes require a short-lived, single-use deterministic plan digest and confirmation;
 - HTTPS is mandatory except for explicitly opted-in loopback development;
-- credentialed private/link-local/metadata destinations are rejected after DNS resolution;
+- non-public and reserved destinations are rejected after DNS resolution and the checked address is pinned;
 - unknown or misplaced flags fail before side effects;
 - remote response bodies are bounded and server-controlled messages/details are never reflected;
 - machine-readable errors preserve only a bounded request ID for correlation, never underlying exception text or credentials.
+- redirects are never followed and all 3xx responses are typed remote failures;
+- plan reservations prevent concurrent apply; only transient transport failures release a reservation for retry.

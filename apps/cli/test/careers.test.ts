@@ -114,4 +114,17 @@ describe('cweb careers commands', () => {
     await runCli(['--json', 'careers', 'applications', 'export'], exported.runtime)
     expect(JSON.parse(exported.stdout.value).data.csv).toBe('id,name\n1,A\n2,B\n')
   })
+
+  it('maps missing and non-advancing export cursors as malformed remote responses', async () => {
+    for (const headers of ([
+      { 'x-export-complete': 'false' },
+      { 'x-export-complete': 'false', 'x-next-cursor': 'same' },
+    ] as Array<Record<string, string>>)) {
+      const f = fixture({ config: profileConfig() })
+      f.credentials.values.set('prod', 'bearer')
+      f.transport.responses.push({ status: 200, headers, body: '', text: 'id,name' })
+      const argv = ['--json', 'careers', 'applications', 'export', ...(headers['x-next-cursor'] ? ['--cursor', 'same'] : [])]
+      expect((await runCli(argv, f.runtime)).exitCode).toBe(EXIT_CODES.REMOTE)
+    }
+  })
 })

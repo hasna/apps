@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { runCli } from '../src/runner.js'
 import { fixture, jsonResponse, profileConfig } from './helpers.js'
+import { EXIT_CODES } from '../src/errors.js'
 
 describe('cweb auth commands', () => {
   it('logs in with the exact cweb body, stores token, and redacts output', async () => {
     const f = fixture({ config: profileConfig() })
+    f.runtime.env.HASNA_2FA = '123456'
     f.transport.responses.push(jsonResponse({ token: 'returned-secret', tokenPrefix: 'cweb_abc', scopes: ['cweb:careers.jobs.read'] }))
-    await runCli(['--json', 'auth', 'login', '--email', 'owner@example.com', '--org', 'hasna', '--two-factor-code', '123456'], f.runtime)
+    await runCli(['--json', 'auth', 'login', '--email', 'owner@example.com', '--org', 'hasna', '--two-factor-env', 'HASNA_2FA'], f.runtime)
     expect(f.transport.requests[0]).toMatchObject({
       method: 'POST',
       path: '/api/v1/auth/login',
@@ -14,6 +16,18 @@ describe('cweb auth commands', () => {
     })
     expect(f.credentials.values.get('prod')).toBe('returned-secret')
     expect(f.stdout.value).not.toContain('returned-secret')
+  })
+
+  it('rejects two-factor codes in argv and does not prompt or add 2FA when absent', async () => {
+    const rejected = fixture({ config: profileConfig() })
+    const result = await runCli(['--json', 'auth', 'login', '--email', 'owner@example.com', '--org', 'hasna', '--two-factor-code', '123456'], rejected.runtime)
+    expect(result.exitCode).toBe(2)
+    expect(rejected.transport.requests).toHaveLength(0)
+
+    const plain = fixture({ config: profileConfig() })
+    plain.transport.responses.push(jsonResponse({ token: 'returned-secret' }))
+    await runCli(['--json', 'auth', 'login', '--email', 'owner@example.com', '--org', 'hasna'], plain.runtime)
+    expect(plain.transport.requests[0]?.body).not.toHaveProperty('twoFactorCode')
   })
 
   it('maps whoami and logout and removes the local token', async () => {
@@ -64,5 +78,13 @@ describe('cweb auth commands', () => {
         expiresInDays: 30,
       },
     })
+  })
+
+  it('maps a successful login response without a token as malformed remote data', async () => {
+    const f = fixture({ config: profileConfig() })
+    f.transport.responses.push(jsonResponse({ userId: 'user' }))
+    const result = await runCli(['--json', 'auth', 'login', '--email', 'owner@example.com', '--org', 'hasna'], f.runtime)
+    expect(result.exitCode).toBe(EXIT_CODES.REMOTE)
+    expect(f.credentials.values.size).toBe(0)
   })
 })

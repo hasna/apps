@@ -30,7 +30,7 @@ export async function readPrivateFile(path: string, maxBytes = 1_048_576): Promi
   }
 }
 
-export async function atomicWritePrivateFile(path: string, contents: string, options: { requirePrivateParent?: boolean } = {}): Promise<void> {
+export async function atomicWritePrivateFile(path: string, contents: string, options: { requirePrivateParent?: boolean; skipLock?: boolean } = {}): Promise<void> {
   const directory = dirname(path)
   await mkdir(directory, { recursive: true, mode: 0o700 })
   const parent = await lstat(directory)
@@ -38,11 +38,13 @@ export async function atomicWritePrivateFile(path: string, contents: string, opt
     throw new CliError('LOCAL_DIRECTORY_UNSAFE', 'The CLI state directory failed ownership or permission checks', EXIT_CODES.CONFIG)
   await assertSafePrivateFile(path)
   const lock = join(directory, `.${path.split('/').at(-1)}.lock`)
-  let lockHandle
-  try {
-    lockHandle = await open(lock, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0), 0o600)
-  } catch (error) {
-    throw new CliError('CONFIG_BUSY', 'Another CLI process is updating local state', EXIT_CODES.CONFIG, { cause: error })
+  let lockHandle: Awaited<ReturnType<typeof open>> | undefined
+  if (!options.skipLock) {
+    try {
+      lockHandle = await open(lock, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0), 0o600)
+    } catch (error) {
+      throw new CliError('CONFIG_BUSY', 'Another CLI process is updating local state', EXIT_CODES.CONFIG, { cause: error })
+    }
   }
   const temporary = join(directory, `.${path.split('/').at(-1)}.${randomUUID()}.tmp`)
   try {
@@ -59,7 +61,7 @@ export async function atomicWritePrivateFile(path: string, contents: string, opt
     try { await directoryHandle.sync() } finally { await directoryHandle.close() }
   } finally {
     await rm(temporary, { force: true })
-    await lockHandle.close()
-    await rm(lock, { force: true })
+    await lockHandle?.close()
+    if (lockHandle) await rm(lock, { force: true })
   }
 }

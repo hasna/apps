@@ -45,7 +45,7 @@ const valueFlags = new Set([
   'resume',
   'cover-letter',
   'app',
-  'two-factor-code',
+  'two-factor-env',
 ])
 
 const commonApi = ['json', 'profile', 'api-url', 'connect-timeout', 'request-timeout', 'org', 'org-slug', 'passphrase-stdin']
@@ -79,7 +79,7 @@ const commandFlags: Record<string, string[]> = {
   'accounts provision': [...commonApi, 'app', ...input, ...approval],
   'accounts deprovision': [...commonApi, 'app', ...approval],
   auth: [...commonApi],
-  'auth login': [...commonApi, 'email', 'store', 'password-stdin', 'two-factor-code', 'token-name'],
+  'auth login': [...commonApi, 'email', 'store', 'password-stdin', 'two-factor-env', 'token-name'],
   'auth status': [...commonApi],
   'auth whoami': [...commonApi],
   'auth logout': [...commonApi],
