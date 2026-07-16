@@ -81,7 +81,7 @@ jobs:
             --network-configuration "${network_configuration}" \
             --overrides "${overrides}" \
             --started-by "github-${GITHUB_RUN_ID}" \
-            --enable-execute-command false \
+            --no-enable-execute-command \
             --query 'tasks[0].taskArn' \
             --output text)"
           if [[ ! "${task_arn}" =~ ^arn: ]]; then
@@ -95,13 +95,63 @@ jobs:
         run: |
           set -Eeuo pipefail
           task_arn="${{ steps.run-task.outputs.task_arn }}"
-          aws ecs wait tasks-stopped --cluster "${ECS_CLUSTER_ARN}" --tasks "${task_arn}"
-          task="$(aws ecs describe-tasks --cluster "${ECS_CLUSTER_ARN}" --tasks "${task_arn}" --output json)"
-          exit_code="$(jq -er --arg name "${ECS_CONTAINER_NAME}" '.tasks[0].containers[] | select(.name == $name) | .exitCode' <<<"${task}")"
-          stop_code="$(jq -er '.tasks[0].stopCode // ""' <<<"${task}")"
-          stopped_reason="$(jq -er '.tasks[0].stoppedReason // ""' <<<"${task}")"
+          if [[ ! "${task_arn}" =~ ^arn: ]]; then
+            echo "transfer task ARN is missing" >&2
+            exit 1
+          fi
+
+          wait_for_terminal() {
+            local cleanup_task cleanup_status
+            for attempt in {1..40}; do
+              cleanup_task="$(aws ecs describe-tasks --cluster "${ECS_CLUSTER_ARN}" --tasks "${task_arn}" --output json 2>/dev/null || true)"
+              cleanup_status="$(jq -r '.tasks[0].lastStatus // ""' <<<"${cleanup_task}" 2>/dev/null || true)"
+              if [[ "${cleanup_status}" == "STOPPED" ]]; then
+                return 0
+              fi
+              sleep 15
+            done
+            return 1
+          }
+
+          cleanup_started_task() {
+            local reason="$1"
+            local cleanup_task cleanup_status
+            echo "${reason}" >&2
+            cleanup_task="$(aws ecs describe-tasks --cluster "${ECS_CLUSTER_ARN}" --tasks "${task_arn}" --output json 2>/dev/null || true)"
+            cleanup_status="$(jq -r '.tasks[0].lastStatus // ""' <<<"${cleanup_task}" 2>/dev/null || true)"
+            if [[ "${cleanup_status}" != "STOPPED" ]]; then
+              aws ecs stop-task \
+                --cluster "${ECS_CLUSTER_ARN}" \
+                --task "${task_arn}" \
+                --reason "GitHub workflow post-start failure" \
+                --output json >/dev/null || echo "failed to request transfer task stop" >&2
+            fi
+            if ! wait_for_terminal; then
+              echo "transfer task cleanup did not reach STOPPED" >&2
+              return 1
+            fi
+            return 0
+          }
+
+          if ! aws ecs wait tasks-stopped --cluster "${ECS_CLUSTER_ARN}" --tasks "${task_arn}"; then
+            cleanup_started_task "waiting for transfer task failed; stopping started task" || true
+            exit 1
+          fi
+          if ! task="$(aws ecs describe-tasks --cluster "${ECS_CLUSTER_ARN}" --tasks "${task_arn}" --output json)"; then
+            cleanup_started_task "describing transfer task failed; stopping started task" || true
+            exit 1
+          fi
+          if ! exit_code="$(jq -er --arg name "${ECS_CONTAINER_NAME}" '.tasks[0].containers[] | select(.name == $name) | .exitCode' <<<"${task}")"; then
+            cleanup_started_task "reading transfer task exit code failed; verifying terminal state" || true
+            exit 1
+          fi
+          stop_code="$(jq -r '.tasks[0].stopCode // ""' <<<"${task}")"
+          stopped_reason="$(jq -r '.tasks[0].stoppedReason // ""' <<<"${task}")"
           if [[ "${exit_code}" != "0" ]]; then
             echo "transfer task failed: exit=${exit_code} stopCode=${stop_code} reason=${stopped_reason}" >&2
+            if ! wait_for_terminal; then
+              echo "transfer task cleanup did not reach STOPPED" >&2
+            fi
             exit 1
           fi
 

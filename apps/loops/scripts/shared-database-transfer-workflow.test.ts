@@ -23,10 +23,20 @@ describe("shared database transfer workflow contract", () => {
 
   test("runs the fixed transfer command through ECS without snapshot restore authority", () => {
     expect(workflow).toContain('command:["bun","dist/serve/index.js","shared-to-dedicated-transfer"]');
-    expect(workflow).toContain("--enable-execute-command false");
+    expect(workflow).toContain("--no-enable-execute-command");
+    expect(workflow).not.toContain("--enable-execute-command false");
     expect(workflow).toContain("assignPublicIp:\"DISABLED\"");
     expect(workflow).not.toMatch(/restore-db-cluster|restore-db-instance|aws\s+rds|rds\s+restore/i);
     expect(workflow).toContain("snapshot restore: \\`not available\\`");
+  });
+
+  test("cleans up a started ECS task on post-start supervision failures", () => {
+    expect(workflow).toContain("cleanup_started_task");
+    expect(workflow).toContain("aws ecs stop-task");
+    expect(workflow).toContain("waiting for transfer task failed");
+    expect(workflow).toContain("describing transfer task failed");
+    expect(workflow).toContain("transfer task cleanup did not reach STOPPED");
+    expect(workflow).toMatch(/for attempt in \{1\.\.40\}/);
   });
 
   test("pins third-party actions to approved commit SHAs", () => {

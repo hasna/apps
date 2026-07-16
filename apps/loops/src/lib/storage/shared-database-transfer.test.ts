@@ -2,6 +2,7 @@ import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import type { AppliedStorageMigration } from "./contract.js";
+import { POSTGRES_STORAGE_MIGRATIONS } from "./postgres-schema.js";
 import {
   assertExactLedger,
   buildPgServiceFile,
@@ -15,11 +16,12 @@ import {
   SHARED_TRANSFER_TABLES,
   SHARED_TRANSFER_TARGET_DSN_ENV,
   SHARED_TRANSFER_TARGET_DATABASE,
+  tenantEnforcementForeignKeyChecks,
   type CommandRunner,
 } from "./shared-database-transfer.js";
 
-const sourceDsn = "postgresql://source:source-secret@shared-rds.internal:5432/apps?sslmode=verify-full";
-const targetDsn = "postgresql://target:target-secret@dedicated-rds.internal:5432/loops?sslmode=verify-full";
+const sourceDsn = "postgresql://source:source-secret@shared-rds.internal:5432/apps";
+const targetDsn = "postgresql://target:target-secret@dedicated-rds.internal:5432/loops";
 
 function ledgerRows(through: string): AppliedStorageMigration[] {
   return expectedLedgerRows(through).map((row) => ({ ...row, appliedAt: "2026-07-16T00:00:00.000Z" }));
@@ -34,6 +36,7 @@ describe("shared database transfer", () => {
     expect(service).toContain("[openloops_transfer_target]");
     expect(service).toContain("dbname=loops");
     expect(service).toContain("password=target-secret");
+    expect(service).not.toContain("sslmode=");
 
     const dump = pgDumpCommand("/tmp/private/openloops-allowlist.dump");
     const restore = pgRestoreCommand("/tmp/private/openloops-allowlist.dump");
@@ -160,5 +163,69 @@ describe("shared database transfer", () => {
       runner: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
       migrateTargetThrough: async () => [],
     })).rejects.toThrow("database loops");
+  });
+
+  test("rejects DSN query parameters that can override identity, TLS, or service config", async () => {
+    const criticalOverrides = [
+      { label: "source dbname", source: "postgresql://source@host/apps?dbname=other", target: targetDsn, parameter: "dbname" },
+      { label: "source database", source: "postgresql://source@host/apps?database=other", target: targetDsn, parameter: "database" },
+      { label: "target host", source: sourceDsn, target: "postgresql://target@host/loops?host=other", parameter: "host" },
+      { label: "target hostaddr", source: sourceDsn, target: "postgresql://target@host/loops?hostaddr=127.0.0.1", parameter: "hostaddr" },
+      { label: "target port", source: sourceDsn, target: "postgresql://target@host/loops?port=15432", parameter: "port" },
+      { label: "target user", source: sourceDsn, target: "postgresql://target@host/loops?user=other", parameter: "user" },
+      { label: "target password", source: sourceDsn, target: "postgresql://target@host/loops?password=other", parameter: "password" },
+      { label: "target service", source: sourceDsn, target: "postgresql://target@host/loops?service=other", parameter: "service" },
+      { label: "target servicefile", source: sourceDsn, target: "postgresql://target@host/loops?servicefile=/tmp/other", parameter: "servicefile" },
+      { label: "target sslmode", source: sourceDsn, target: "postgresql://target@host/loops?sslmode=disable", parameter: "sslmode" },
+      { label: "target sslrootcert", source: sourceDsn, target: "postgresql://target@host/loops?sslrootcert=/tmp/root.crt", parameter: "sslrootcert" },
+      { label: "target sslcert", source: sourceDsn, target: "postgresql://target@host/loops?sslcert=/tmp/client.crt", parameter: "sslcert" },
+      { label: "target sslkey", source: sourceDsn, target: "postgresql://target@host/loops?sslkey=/tmp/client.key", parameter: "sslkey" },
+      {
+        label: "target target_session_attrs",
+        source: sourceDsn,
+        target: "postgresql://target@host/loops?target_session_attrs=read-write",
+        parameter: "target_session_attrs",
+      },
+      { label: "target options", source: sourceDsn, target: "postgresql://target@host/loops?options=-csearch_path=other", parameter: "options" },
+      { label: "target passfile", source: sourceDsn, target: "postgresql://target@host/loops?passfile=/tmp/pgpass", parameter: "passfile" },
+    ];
+
+    for (const override of criticalOverrides) {
+      await expect(runSharedToDedicatedTransfer({
+        env: {
+          [SHARED_TRANSFER_SOURCE_DSN_ENV]: override.source,
+          [SHARED_TRANSFER_TARGET_DSN_ENV]: override.target,
+        },
+        runner: async () => {
+          throw new Error(`runner should not execute for ${override.label}`);
+        },
+        migrateTargetThrough: async () => {
+          throw new Error(`migration should not execute for ${override.label}`);
+        },
+      })).rejects.toThrow(override.parameter);
+    }
+  });
+
+  test("derives orphan checks from every 0010 tenant relationship foreign key", () => {
+    const tenantEnforceSql = POSTGRES_STORAGE_MIGRATIONS.find((migration) => migration.id === "0010_tenant_enforce")!.sql;
+    const expected = [...tenantEnforceSql.matchAll(
+      /ALTER TABLE\s+([a-z_]+)\s+ADD FOREIGN KEY\s+\(\s*tenant_id\s*,\s*([a-z_]+)\s*\)\s+REFERENCES\s+([a-z_]+)\s*\(\s*tenant_id\s*,\s*id\s*\)/g,
+    )].map((match) => `${match[1]}.${match[2]}`);
+    const actual = tenantEnforcementForeignKeyChecks().map((check) => check.checkName);
+
+    expect(actual).toEqual(expected);
+    expect(actual).toContain("loop_runs.goal_run_id");
+    expect(actual).toContain("workflow_runs.invocation_id");
+    expect(actual).toContain("workflow_runs.work_item_id");
+    expect(actual).toContain("workflow_runs.goal_run_id");
+    expect(actual).toContain("workflow_step_runs.goal_run_id");
+    expect(actual).toContain("goals.loop_id");
+    expect(actual).toContain("goals.loop_run_id");
+    expect(actual).toContain("goals.workflow_id");
+    expect(actual).toContain("goals.workflow_run_id");
+    expect(actual).toContain("goal_runs.loop_id");
+    expect(actual).toContain("goal_runs.loop_run_id");
+    expect(actual).toContain("goal_runs.workflow_id");
+    expect(actual).toContain("goal_runs.workflow_run_id");
   });
 });

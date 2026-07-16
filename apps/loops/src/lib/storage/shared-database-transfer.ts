@@ -49,6 +49,34 @@ export const SHARED_TRANSFER_API_KEY_COLUMNS = Object.freeze([
   "created_at",
 ] as const);
 
+const FORBIDDEN_LIBPQ_QUERY_PARAMS = new Set([
+  "dbname",
+  "database",
+  "host",
+  "hostaddr",
+  "port",
+  "user",
+  "password",
+  "passfile",
+  "service",
+  "servicefile",
+  "sslmode",
+  "sslrootcert",
+  "sslcert",
+  "sslkey",
+  "target_session_attrs",
+  "options",
+] as const);
+
+const ALLOWED_LIBPQ_QUERY_PARAMS = new Set([
+  "connect_timeout",
+  "keepalives",
+  "keepalives_idle",
+  "keepalives_interval",
+  "keepalives_count",
+  "tcp_user_timeout",
+] as const);
+
 const EXPECTED_TARGET_TABLES_AFTER_PREPARE = Object.freeze([
   ...SHARED_TRANSFER_TABLES.map((table) => table.name),
   "open_loops_schema_migrations",
@@ -118,6 +146,21 @@ export interface TransferEvidence {
   orphanChecks: Array<{ check_name: string; orphan_count: string | number }>;
   unexpectedTargetObjects: Array<{ object_name: string; object_kind: string }>;
   nextSequence: readonly string[];
+}
+
+export interface TenantEnforcementForeignKeyCheck {
+  checkName: string;
+  childTable: string;
+  childColumn: string;
+  parentTable: string;
+}
+
+const TENANT_ENFORCEMENT_FOREIGN_KEY_CHECKS: readonly TenantEnforcementForeignKeyCheck[] = Object.freeze(
+  parseTenantEnforcementForeignKeyChecks(),
+);
+
+export function tenantEnforcementForeignKeyChecks(): readonly TenantEnforcementForeignKeyCheck[] {
+  return TENANT_ENFORCEMENT_FOREIGN_KEY_CHECKS;
 }
 
 export async function runSharedToDedicatedTransfer(opts: SharedTransferOptions = {}): Promise<TransferEvidence> {
@@ -400,24 +443,13 @@ function nonLoopApiKeysSql(): string {
 }
 
 function orphanSql(): string {
-  return jsonRowsSql([
-    orphan("loop_runs.loop_id", "loop_runs child", "loops parent", "parent.id = child.loop_id", "parent.id IS NULL"),
-    orphan("workflow_runs.workflow_id", "workflow_runs child", "workflow_specs parent", "parent.id = child.workflow_id", "parent.id IS NULL"),
-    orphan("workflow_runs.loop_id", "workflow_runs child", "loops parent", "parent.id = child.loop_id", "child.loop_id IS NOT NULL AND parent.id IS NULL"),
-    orphan("workflow_runs.loop_run_id", "workflow_runs child", "loop_runs parent", "parent.id = child.loop_run_id", "child.loop_run_id IS NOT NULL AND parent.id IS NULL"),
-    orphan("workflow_work_items.invocation_id", "workflow_work_items child", "workflow_invocations parent", "parent.id = child.invocation_id", "parent.id IS NULL"),
-    orphan("workflow_work_items.workflow_id", "workflow_work_items child", "workflow_specs parent", "parent.id = child.workflow_id", "child.workflow_id IS NOT NULL AND parent.id IS NULL"),
-    orphan("workflow_work_items.loop_id", "workflow_work_items child", "loops parent", "parent.id = child.loop_id", "child.loop_id IS NOT NULL AND parent.id IS NULL"),
-    orphan("workflow_work_items.workflow_run_id", "workflow_work_items child", "workflow_runs parent", "parent.id = child.workflow_run_id", "child.workflow_run_id IS NOT NULL AND parent.id IS NULL"),
-    orphan("workflow_step_runs.workflow_run_id", "workflow_step_runs child", "workflow_runs parent", "parent.id = child.workflow_run_id", "parent.id IS NULL"),
-    orphan("workflow_events.workflow_run_id", "workflow_events child", "workflow_runs parent", "parent.id = child.workflow_run_id", "parent.id IS NULL"),
-    orphan("goal_plan_nodes.goal_id", "goal_plan_nodes child", "goals parent", "parent.id = child.goal_id", "parent.id IS NULL"),
-    orphan("goal_runs.goal_id", "goal_runs child", "goals parent", "parent.id = child.goal_id", "parent.id IS NULL"),
-    orphan("runner_leases.runner_id", "runner_leases child", "runner_machines parent", "parent.id = child.runner_id", "parent.id IS NULL"),
-    orphan("runner_leases.loop_run_id", "runner_leases child", "loop_runs parent", "parent.id = child.loop_run_id", "child.loop_run_id IS NOT NULL AND parent.id IS NULL"),
-    orphan("runner_leases.workflow_run_id", "runner_leases child", "workflow_runs parent", "parent.id = child.workflow_run_id", "child.workflow_run_id IS NOT NULL AND parent.id IS NULL"),
-    orphan("run_receipts.loop_id", "run_receipts child", "loops parent", "parent.id = child.loop_id", "parent.id IS NULL"),
-  ].join(" UNION ALL "));
+  return jsonRowsSql(tenantEnforcementForeignKeyChecks().map((check) => orphan(
+    check.checkName,
+    `${quoteIdent(check.childTable)} child`,
+    `${quoteIdent(check.parentTable)} parent`,
+    `parent.tenant_id = child.tenant_id AND parent.id = child.${quoteIdent(check.childColumn)}`,
+    `child.${quoteIdent(check.childColumn)} IS NOT NULL AND parent.id IS NULL`,
+  )).join(" UNION ALL "));
 }
 
 function unexpectedTargetObjectsSql(): string {
@@ -597,10 +629,7 @@ function buildPgEnv(env: NodeJS.ProcessEnv, serviceFile: string): Record<string,
 }
 
 function dsnToServiceLines(dsn: string): string[] {
-  const url = new URL(dsn);
-  if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
-    throw new Error("Postgres DSN must use postgres:// or postgresql://");
-  }
+  const url = parsePostgresDsn(dsn, "Postgres DSN");
   const lines = [
     `host=${safeServiceValue(decodeURIComponent(url.hostname))}`,
     `port=${safeServiceValue(url.port || "5432")}`,
@@ -608,8 +637,7 @@ function dsnToServiceLines(dsn: string): string[] {
   ];
   if (url.username) lines.push(`user=${safeServiceValue(decodeURIComponent(url.username))}`);
   if (url.password) lines.push(`password=${safeServiceValue(decodeURIComponent(url.password))}`);
-  for (const [key, value] of url.searchParams.entries()) {
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error(`invalid libpq parameter ${key}`);
+  for (const [key, value] of validatedLibpqQueryParams(url, "Postgres DSN")) {
     lines.push(`${key}=${safeServiceValue(value)}`);
   }
   return lines;
@@ -621,10 +649,61 @@ function safeServiceValue(value: string): string {
 }
 
 function assertDsnDatabase(dsn: string, expected: string, envName: string): void {
-  const actual = decodeURIComponent(new URL(dsn).pathname.replace(/^\//, ""));
+  const url = parsePostgresDsn(dsn, envName);
+  validatedLibpqQueryParams(url, envName);
+  const actual = decodeURIComponent(url.pathname.replace(/^\//, ""));
   if (actual !== expected) {
     throw new Error(`${envName} must point at database ${expected}`);
   }
+}
+
+function parsePostgresDsn(dsn: string, label: string): URL {
+  let url: URL;
+  try {
+    url = new URL(dsn);
+  } catch {
+    throw new Error(`${label} must be a valid Postgres DSN`);
+  }
+  if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
+    throw new Error(`${label} must use postgres:// or postgresql://`);
+  }
+  return url;
+}
+
+function validatedLibpqQueryParams(url: URL, label: string): Array<[string, string]> {
+  const entries: Array<[string, string]> = [];
+  for (const [key, value] of url.searchParams.entries()) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error(`${label} contains invalid libpq parameter ${key}`);
+    const normalized = key.toLowerCase();
+    if (
+      FORBIDDEN_LIBPQ_QUERY_PARAMS.has(normalized as never) ||
+      normalized.startsWith("ssl") ||
+      normalized === "gssencmode" ||
+      normalized === "channel_binding"
+    ) {
+      throw new Error(`${label} must not include libpq parameter ${key}`);
+    }
+    if (!ALLOWED_LIBPQ_QUERY_PARAMS.has(normalized as never)) {
+      throw new Error(`${label} contains unsupported libpq parameter ${key}`);
+    }
+    entries.push([normalized, value]);
+  }
+  return entries;
+}
+
+function parseTenantEnforcementForeignKeyChecks(): TenantEnforcementForeignKeyCheck[] {
+  const migration = POSTGRES_STORAGE_MIGRATIONS.find((entry) => entry.id === "0010_tenant_enforce");
+  if (!migration) throw new Error("missing 0010_tenant_enforce migration");
+  const checks = [...migration.sql.matchAll(
+    /ALTER TABLE\s+([a-z_]+)\s+ADD FOREIGN KEY\s+\(\s*tenant_id\s*,\s*([a-z_]+)\s*\)\s+REFERENCES\s+([a-z_]+)\s*\(\s*tenant_id\s*,\s*id\s*\)/g,
+  )].map((match) => ({
+    checkName: `${match[1]}.${match[2]}`,
+    childTable: match[1]!,
+    childColumn: match[2]!,
+    parentTable: match[3]!,
+  }));
+  if (checks.length === 0) throw new Error("0010_tenant_enforce contains no tenant foreign keys");
+  return checks;
 }
 
 function requireEnv(env: NodeJS.ProcessEnv, name: string): string {
