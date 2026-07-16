@@ -2,6 +2,7 @@
   "name": "@hasna/cli",
   "version": "0.2.0",
   "description": "Private Hasna application management CLI",
+  "repository": "https://github.com/hasna/cli",
   "type": "module",
   "license": "UNLICENSED",
   "engines": {
@@ -29,7 +30,8 @@
   ],
   "publishConfig": {
     "access": "restricted",
-    "tag": "internal"
+    "tag": "internal",
+    "registry": "https://npm.pkg.github.com"
   },
   "scripts": {
     "build": "node scripts/build.mjs",
