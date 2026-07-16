@@ -5,9 +5,12 @@ import {
   type FindingInput,
   type ScannerRunOptions,
   ScannerType,
-  Severity,
   DEFAULT_CONFIG,
 } from "../types/index.js";
+import { recognizeCredentialText } from "../lib/credential-recognition.js";
+
+export { SECRET_PATTERNS, shannonEntropy } from "../lib/credential-recognition.js";
+export type { CredentialPattern as SecretPattern } from "../lib/credential-recognition.js";
 
 // --- Shared utilities ---
 
@@ -39,7 +42,7 @@ export function walkDirectory(
     try {
       entries = fs.readdirSync(currentDir, { withFileTypes: true });
     } catch {
-      return;
+      throw new Error("Unable to traverse the requested scan target");
     }
 
     for (const entry of entries) {
@@ -61,6 +64,8 @@ export function walkDirectory(
         if (isBinaryFile(fullPath)) continue;
         if (fileFilter && !fileFilter(fullPath)) continue;
         results.push(fullPath);
+      } else if (entry.isSymbolicLink()) {
+        throw new Error("Symbolic links are not included in a verified file-only scan");
       }
     }
   }
@@ -82,6 +87,8 @@ export function getCodeSnippet(content: string, line: number, context: number = 
     })
     .join("\n");
 }
+
+const REDACTED_CODE_SNIPPET = "[REDACTED]";
 
 const SECURITY_IGNORE = "security-ignore";
 const SLASH_COMMENT_EXTENSIONS = new Set([
@@ -233,6 +240,17 @@ function skipRegexLiteral(lineText: string, start: number): number {
 function isEnvLikeFile(filePath: string): boolean {
   const base = path.basename(filePath.replace(/\\/g, "/")).toLowerCase();
   return base === ".env" || base.startsWith(".env.") || base.endsWith(".env");
+}
+
+function isTrustedGitHubWorkflowFile(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, "/").toLowerCase();
+  const marker = "/.github/workflows/";
+  const relative = normalized.startsWith(".github/workflows/")
+    ? normalized.slice(".github/workflows/".length)
+    : normalized.includes(marker)
+      ? normalized.slice(normalized.lastIndexOf(marker) + marker.length)
+      : "";
+  return relative.length > 0 && !relative.includes("/") && /\.ya?ml$/.test(relative);
 }
 
 function getCommentSyntax(filePath?: string): CommentSyntax {
@@ -578,181 +596,13 @@ export function isFindingSuppressedBySecurityIgnore(
 
 // --- Secret patterns ---
 
-export interface SecretPattern {
-  id: string;
-  name: string;
-  pattern: RegExp;
-  severity: Severity;
-}
-
-export const SECRET_PATTERNS: SecretPattern[] = [
-  {
-    id: "aws-access-key",
-    name: "AWS Access Key",
-    pattern: /\bAKIA[0-9A-Z]{16}\b/g,
-    severity: Severity.Critical,
-  },
-  {
-    id: "aws-secret-key",
-    name: "AWS Secret Key",
-    pattern: /(?:aws_secret_access_key|aws_secret_key|secret_access_key)\s*[=:]\s*['"]?([A-Za-z0-9/+=]{40})['"]?/gi,
-    severity: Severity.Critical,
-  },
-  {
-    id: "github-token",
-    name: "GitHub Token",
-    pattern: /\b(ghp_[A-Za-z0-9_]{36,}|gho_[A-Za-z0-9_]{36,}|ghs_[A-Za-z0-9_]{36,}|ghr_[A-Za-z0-9_]{36,}|github_pat_[A-Za-z0-9_]{22,})\b/g,
-    severity: Severity.Critical,
-  },
-  {
-    id: "stripe-secret-key",
-    name: "Stripe Secret Key",
-    pattern: /\b(sk_live_[A-Za-z0-9]{24,})\b/g,
-    severity: Severity.Critical,
-  },
-  {
-    id: "stripe-publishable-key",
-    name: "Stripe Publishable Key",
-    pattern: /\b(pk_live_[A-Za-z0-9]{24,})\b/g,
-    severity: Severity.Medium,
-  },
-  {
-    id: "generic-api-key",
-    name: "Generic API Key",
-    pattern: /(?:api_key|apikey|api[-_]?key)\s*[=:]\s*['"]([A-Za-z0-9_\-]{16,})['"]/gi,
-    severity: Severity.High,
-  },
-  {
-    id: "private-key",
-    name: "Private Key",
-    pattern: /-----BEGIN\s+(?:RSA|DSA|EC|PGP|OPENSSH)?\s*PRIVATE KEY-----/g,
-    severity: Severity.Critical,
-  },
-  {
-    id: "jwt-token",
-    name: "JWT Token",
-    pattern: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
-    severity: Severity.High,
-  },
-  {
-    id: "slack-token",
-    name: "Slack Token",
-    pattern: /\b(xoxb-[A-Za-z0-9\-]{24,}|xoxp-[A-Za-z0-9\-]{24,}|xoxs-[A-Za-z0-9\-]{24,})\b/g,
-    severity: Severity.Critical,
-  },
-  {
-    id: "database-url",
-    name: "Database URL",
-    pattern: /\b(postgres(?:ql)?:\/\/[^\s'"]+|mysql:\/\/[^\s'"]+|mongodb(?:\+srv)?:\/\/[^\s'"]+)/gi,
-    severity: Severity.High,
-  },
-];
-
-// --- Shannon entropy ---
-
-export function shannonEntropy(str: string): number {
-  if (str.length === 0) return 0;
-
-  const freq: Record<string, number> = {};
-  for (const ch of str) {
-    freq[ch] = (freq[ch] || 0) + 1;
-  }
-
-  let entropy = 0;
-  const len = str.length;
-  for (const count of Object.values(freq)) {
-    const p = count / len;
-    if (p > 0) {
-      entropy -= p * Math.log2(p);
-    }
-  }
-  return entropy;
-}
-
-const HEX_RE = /\b[0-9a-fA-F]{16,}\b/g;
-const BASE64_RE = /\b[A-Za-z0-9+/=]{20,}\b/g;
-const UNQUOTED_ENV_API_KEY_RE = /(?:api_key|apikey|api[-_]?key)\s*=\s*([A-Za-z0-9_\-]{16,})(?=\s|$|[;,#])/gi;
-
-function detectUnquotedEnvApiKeys(
-  content: string,
-  filePath: string,
-  line: number,
-  lineText: string,
-  securityIgnore: SecurityIgnoreLineScan,
-): FindingInput[] {
-  if (!isEnvLikeFile(filePath)) return [];
-
-  const findings: FindingInput[] = [];
-  let match: RegExpExecArray | null;
-  UNQUOTED_ENV_API_KEY_RE.lastIndex = 0;
-  while ((match = UNQUOTED_ENV_API_KEY_RE.exec(lineText)) !== null) {
-    if (isFindingSuppressedBySecurityIgnore(securityIgnore, match.index)) continue;
-    findings.push({
-      rule_id: "generic-api-key",
-      scanner_type: ScannerType.Secrets,
-      severity: Severity.High,
-      file: filePath,
-      line,
-      column: match.index + 1,
-      message: "Generic API Key detected",
-      code_snippet: getCodeSnippet(content, line),
-    });
-  }
-
-  return findings;
-}
-
-function detectHighEntropyStrings(
-  content: string,
-  filePath: string,
-  line: number,
-  lineText: string,
-  securityIgnore: SecurityIgnoreLineScan,
-): FindingInput[] {
-  const findings: FindingInput[] = [];
-
-  let hexMatch: RegExpExecArray | null;
-  HEX_RE.lastIndex = 0;
-  while ((hexMatch = HEX_RE.exec(lineText)) !== null) {
-    const token = hexMatch[0];
-    if (isFindingSuppressedBySecurityIgnore(securityIgnore, hexMatch.index)) continue;
-    if (shannonEntropy(token) > 4.5) {
-      findings.push({
-        rule_id: "high-entropy-hex",
-        scanner_type: ScannerType.Secrets,
-        severity: Severity.Medium,
-        file: filePath,
-        line,
-        message: "High-entropy hex string detected (possible secret)",
-        code_snippet: getCodeSnippet(content, line),
-      });
-    }
-  }
-
-  let b64Match: RegExpExecArray | null;
-  BASE64_RE.lastIndex = 0;
-  while ((b64Match = BASE64_RE.exec(lineText)) !== null) {
-    const token = b64Match[0];
-    if (isFindingSuppressedBySecurityIgnore(securityIgnore, b64Match.index)) continue;
-    if (shannonEntropy(token) > 5.0) {
-      findings.push({
-        rule_id: "high-entropy-base64",
-        scanner_type: ScannerType.Secrets,
-        severity: Severity.Medium,
-        file: filePath,
-        line,
-        message: "High-entropy base64 string detected (possible secret)",
-        code_snippet: getCodeSnippet(content, line),
-      });
-    }
-  }
-
-  return findings;
-}
-
 // --- Scanner ---
 
-export function scanFile(filePath: string, content: string): FindingInput[] {
+export function scanFile(
+  filePath: string,
+  content: string,
+  verifiedSourcePath?: string,
+): FindingInput[] {
   const findings: FindingInput[] = [];
   const lines = content.split("\n");
   const securityIgnoreBlockRanges = collectSecurityIgnoreBlockRanges(content, filePath);
@@ -777,26 +627,23 @@ export function scanFile(filePath: string, content: string): FindingInput[] {
     blockComment = securityIgnore.finalBlockComment;
     blockCommentHasSecurityIgnore = securityIgnore.finalBlockCommentHasSecurityIgnore;
 
-    for (const sp of SECRET_PATTERNS) {
-      sp.pattern.lastIndex = 0;
-      let match: RegExpExecArray | null;
-      while ((match = sp.pattern.exec(lineText)) !== null) {
-        if (isFindingSuppressedBySecurityIgnore(securityIgnore, match.index)) continue;
-        findings.push({
-          rule_id: sp.id,
-          scanner_type: ScannerType.Secrets,
-          severity: sp.severity,
-          file: filePath,
-          line: lineNum,
-          column: match.index + 1,
-          message: `${sp.name} detected`,
-          code_snippet: getCodeSnippet(content, lineNum),
-        });
-      }
+    for (const recognition of recognizeCredentialText(lineText, {
+      envLike: isEnvLikeFile(verifiedSourcePath ?? filePath),
+      trustedGitHubWorkflowFile:
+        verifiedSourcePath != null && isTrustedGitHubWorkflowFile(verifiedSourcePath),
+    })) {
+      if (isFindingSuppressedBySecurityIgnore(securityIgnore, recognition.index)) continue;
+      findings.push({
+        rule_id: recognition.rule.id,
+        scanner_type: ScannerType.Secrets,
+        severity: recognition.rule.severity,
+        file: filePath,
+        line: lineNum,
+        column: recognition.index + 1,
+        message: `${recognition.rule.name} detected`,
+        code_snippet: REDACTED_CODE_SNIPPET,
+      });
     }
-
-    findings.push(...detectUnquotedEnvApiKeys(content, filePath, lineNum, lineText, securityIgnore));
-    findings.push(...detectHighEntropyStrings(content, filePath, lineNum, lineText, securityIgnore));
   }
 
   return findings;
@@ -809,16 +656,29 @@ export const secretsScanner: Scanner = {
 
   async scan(scanPath: string, options?: ScannerRunOptions): Promise<FindingInput[]> {
     const ignorePatterns = options?.ignore_patterns ?? DEFAULT_CONFIG.ignore_patterns;
-    const files = walkDirectory(scanPath, ignorePatterns);
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(scanPath);
+    } catch {
+      throw new Error("Unable to stat the requested scan target");
+    }
+    if (stat.isSymbolicLink()) {
+      throw new Error("Symbolic links are not included in a verified file-only scan");
+    }
+    const files = stat.isFile()
+      ? isBinaryFile(scanPath) ? [] : [scanPath]
+      : stat.isDirectory()
+        ? walkDirectory(scanPath, ignorePatterns)
+        : (() => { throw new Error("Requested scan target is not a regular file or directory"); })();
     const findings: FindingInput[] = [];
 
     for (const file of files) {
       try {
         const content = fs.readFileSync(file, "utf-8");
-        const relativePath = path.relative(scanPath, file);
-        findings.push(...scanFile(relativePath, content));
+        const relativePath = stat.isFile() ? path.basename(file) : path.relative(scanPath, file);
+        findings.push(...scanFile(relativePath, content, file));
       } catch {
-        // Skip unreadable files
+        throw new Error("Unable to read every requested scan file");
       }
     }
 

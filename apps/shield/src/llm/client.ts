@@ -1,20 +1,35 @@
 import OpenAI from "openai";
+import { sanitizeTextForBoundary } from "../lib/finding-safety.js";
 
 let _client: OpenAI | null = null;
+let _clientApiKey: string | null = null;
 
 export function getLLMClient(): OpenAI | null {
-  if (_client) return _client;
   const apiKey = process.env.CEREBRAS_API_KEY;
-  if (!apiKey) return null;
+  if (!apiKey) {
+    _client = null;
+    _clientApiKey = null;
+    return null;
+  }
+  if (_client && _clientApiKey === apiKey) return _client;
   _client = new OpenAI({
     baseURL: "https://api.cerebras.ai/v1",
     apiKey,
   });
+  _clientApiKey = apiKey;
   return _client;
 }
 
 export function getModel(): string {
   return process.env.CEREBRAS_MODEL || "llama-4-scout-17b-16e-instruct";
+}
+
+export function sanitizeMessagesForProvider(
+  messages: OpenAI.Chat.ChatCompletionMessageParam[],
+): OpenAI.Chat.ChatCompletionMessageParam[] {
+  return JSON.parse(JSON.stringify(messages), (_key, value) =>
+    typeof value === "string" ? sanitizeTextForBoundary(value, 12_000) : value,
+  ) as OpenAI.Chat.ChatCompletionMessageParam[];
 }
 
 export async function chat(
@@ -29,11 +44,12 @@ export async function chat(
     try {
       const response = await client.chat.completions.create({
         model: getModel(),
-        messages,
+        messages: sanitizeMessagesForProvider(messages),
         temperature: options?.temperature ?? 0.2,
         max_tokens: options?.max_tokens ?? 2048,
       });
-      return response.choices[0]?.message?.content ?? null;
+      const content = response.choices[0]?.message?.content;
+      return content == null ? null : sanitizeTextForBoundary(content, 12_000);
     } catch (error) {
       if (attempt === maxAttempts) return null;
       await new Promise((resolve) =>

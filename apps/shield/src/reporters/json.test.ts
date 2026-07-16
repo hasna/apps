@@ -119,22 +119,93 @@ describe("JSON reporter", () => {
     expect(parsed.summary.score).toBe(100);
   });
 
-  test("preserves all finding fields", () => {
+  test("redacts code snippets and sensitive analysis fields", () => {
+    const syntheticSecret = "ghp_" + "SYNTHETICONLYABCDEFGHIJKLMNOPQRSTUVWXYZ12";
     const finding = makeFinding({
       column: 10,
       end_line: 45,
-      code_snippet: "const key = 'secret';",
-      llm_explanation: "This is a hardcoded key",
-      llm_fix: "Use env vars",
+      code_snippet: `const key = '${syntheticSecret}';`,
+      llm_explanation: `This is a hardcoded key: ${syntheticSecret}`,
+      llm_fix: `Remove ${syntheticSecret}`,
       llm_exploitability: 0.9,
     });
-    const parsed = JSON.parse(reportFindings([finding]));
+    const output = reportFindings([finding]);
+    const parsed = JSON.parse(output);
     const f = parsed.findings[0];
     expect(f.column).toBe(10);
     expect(f.end_line).toBe(45);
-    expect(f.code_snippet).toBe("const key = 'secret';");
-    expect(f.llm_explanation).toBe("This is a hardcoded key");
-    expect(f.llm_fix).toBe("Use env vars");
+    expect(f.code_snippet).toBe("[REDACTED]");
+    expect(f.llm_explanation).toBe("[REDACTED]");
+    expect(f.llm_fix).toBe("[REDACTED]");
     expect(f.llm_exploitability).toBe(0.9);
+    expect(output).not.toContain(syntheticSecret);
+  });
+
+  test("redacts credential-bearing rule and path metadata for non-secret findings", () => {
+    const syntheticSecret = "sk_test_" + "SYNTHETICONLY0123456789";
+    const output = reportFindings([makeFinding({
+      scanner_type: ScannerType.Code,
+      rule_id: `rule-${syntheticSecret}`,
+      file: `src/${syntheticSecret}/app.ts`,
+      message: "Unsafe code path",
+    })]);
+    expect(output).not.toContain(syntheticSecret);
+    expect(output).toContain("REDACTED-RULE");
+    expect(output).toContain("REDACTED-LOCATION");
+  });
+
+  test("sanitizes every string-bearing finding and scan field", () => {
+    const syntheticCredential = `gh${"s"}_${"C_".repeat(18)}`;
+    const finding = makeFinding({
+      id: syntheticCredential,
+      scan_id: syntheticCredential,
+      rule_id: syntheticCredential,
+      scanner_type: syntheticCredential as ScannerType,
+      severity: syntheticCredential as Severity,
+      file: syntheticCredential,
+      message: syntheticCredential,
+      code_snippet: syntheticCredential,
+      fingerprint: syntheticCredential,
+      suppressed_reason: syntheticCredential,
+      llm_explanation: syntheticCredential,
+      llm_fix: syntheticCredential,
+      created_at: syntheticCredential,
+    });
+    const scan: Scan = {
+      ...mockScan,
+      id: syntheticCredential,
+      project_id: syntheticCredential,
+      status: syntheticCredential as ScanStatus,
+      scanner_types: [syntheticCredential as ScannerType],
+      started_at: syntheticCredential,
+      completed_at: syntheticCredential,
+      error: syntheticCredential,
+      created_at: syntheticCredential,
+    };
+
+    const output = reportFindings([finding], scan);
+    expect(output).not.toContain(syntheticCredential);
+    expect(output).toContain("REDACTED");
+  });
+
+  test("uses stable opaque correlations for credential-bearing identifiers", () => {
+    const firstCredential = `gh${"r"}_${"D_".repeat(18)}`;
+    const secondCredential = `gh${"r"}_${"E_".repeat(18)}`;
+    const first = JSON.parse(reportFindings([
+      makeFinding({ id: firstCredential, fingerprint: firstCredential }),
+    ])).findings[0];
+    const repeated = JSON.parse(reportFindings([
+      makeFinding({ id: firstCredential, fingerprint: firstCredential }),
+    ])).findings[0];
+    const distinct = JSON.parse(reportFindings([
+      makeFinding({ id: secondCredential, fingerprint: secondCredential }),
+    ])).findings[0];
+
+    expect(first.id).toBe(repeated.id);
+    expect(first.fingerprint).toBe(repeated.fingerprint);
+    expect(first.id).not.toBe(distinct.id);
+    expect(first.fingerprint).not.toBe(distinct.fingerprint);
+    expect(first.id).toMatch(/^\[REDACTED-ID:[a-f0-9]{12}\]$/);
+    expect(first.fingerprint).toMatch(/^\[REDACTED-FINGERPRINT:[a-f0-9]{12}\]$/);
   });
 });

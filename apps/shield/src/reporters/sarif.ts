@@ -1,5 +1,10 @@
 import type { Finding, Scan } from "../types/index.js";
 import { Severity } from "../types/index.js";
+import {
+  sanitizeFindingForOutput,
+  sanitizeScanForOutput,
+  sanitizeValueForBoundary,
+} from "../lib/finding-safety.js";
 
 const SEVERITY_TO_LEVEL: Record<Severity, string> = {
   [Severity.Critical]: "error",
@@ -33,10 +38,12 @@ interface SarifResult {
 }
 
 export function reportFindings(findings: Finding[], scan?: Scan): string {
+  const safeScan = scan ? sanitizeScanForOutput(scan) : undefined;
   const rulesMap = new Map<string, SarifRule>();
   const results: SarifResult[] = [];
 
-  for (const finding of findings) {
+  for (const rawFinding of findings) {
+    const finding = sanitizeFindingForOutput(rawFinding);
     if (!rulesMap.has(finding.rule_id)) {
       rulesMap.set(finding.rule_id, {
         id: finding.rule_id,
@@ -86,12 +93,12 @@ export function reportFindings(findings: Finding[], scan?: Scan): string {
           },
         },
         results,
-        ...(scan && {
+        ...(safeScan && {
           invocations: [
             {
-              executionSuccessful: scan.status === "completed",
-              startTimeUtc: scan.started_at,
-              endTimeUtc: scan.completed_at ?? undefined,
+              executionSuccessful: safeScan.status === "completed",
+              startTimeUtc: safeScan.started_at,
+              endTimeUtc: safeScan.completed_at ?? undefined,
             },
           ],
         }),
@@ -99,5 +106,5 @@ export function reportFindings(findings: Finding[], scan?: Scan): string {
     ],
   };
 
-  return JSON.stringify(sarif, null, 2);
+  return JSON.stringify(sanitizeValueForBoundary(sarif), null, 2);
 }

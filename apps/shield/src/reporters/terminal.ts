@@ -5,6 +5,7 @@ import {
   Severity,
   SEVERITY_ORDER,
 } from "../types/index.js";
+import { sanitizeFindingForOutput } from "../lib/finding-safety.js";
 
 const SEVERITY_BADGE: Record<Severity, (text: string) => string> = {
   [Severity.Critical]: (t) => chalk.bgRed.white.bold(` ${t} `),
@@ -67,7 +68,8 @@ export function reportFindings(findings: Finding[]): void {
     return;
   }
 
-  const sorted = [...findings].sort(
+  const safeFindings = findings.map(sanitizeFindingForOutput);
+  const sorted = [...safeFindings].sort(
     (a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity],
   );
 
@@ -97,7 +99,7 @@ export function reportFindings(findings: Finding[]): void {
   }
 
   // Summary table
-  const score = computeScore(findings);
+  const score = computeScore(safeFindings);
   console.log(chalk.gray("\n  " + "─".repeat(70)));
   console.log(chalk.bold("\n  Summary"));
   console.log(

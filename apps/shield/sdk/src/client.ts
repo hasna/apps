@@ -36,7 +36,12 @@ export class OpenSecurityClient {
 
   async triggerScan(
     path: string,
-    options?: { scanners?: string[]; llm_analyze?: boolean },
+    options?: {
+      scanners?: string[];
+      include_git_history?: boolean;
+      include_system?: boolean;
+      llm_analyze?: boolean;
+    },
   ): Promise<Scan> {
     return this.request<Scan>("/api/scans", {
       method: "POST",

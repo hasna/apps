@@ -38,6 +38,7 @@ import {
 import {
   runAllScanners,
   runScanner,
+  resolvePublicScannerTypes,
 } from "../scanners/index.js";
 import {
   explainFinding as llmExplain,
@@ -45,6 +46,7 @@ import {
   analyzeFinding as llmAnalyze,
   isLLMAvailable,
 } from "../llm/index.js";
+import { isCredentialFinding, sanitizeValueForBoundary } from "../lib/finding-safety.js";
 import {
   listAdvisories,
   getAdvisory,
@@ -78,6 +80,15 @@ function getCodeContext(filePath: string, line: number, contextLines = 10): stri
 
 export function startServer(port: number) {
   const app = express();
+
+  // REST is a trust boundary. Sanitize every response body, including legacy
+  // rows and exception messages, even when an individual route forgets to do
+  // so. Safe non-credential values are preserved byte-for-byte.
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    const sendJson = res.json.bind(res);
+    res.json = ((body: unknown) => sendJson(sanitizeValueForBoundary(body))) as Response["json"];
+    next();
+  });
   app.use(express.json({ limit: "10mb" }));
 
   // CORS — restrict to configured origins (defaults to localhost)
@@ -129,9 +140,13 @@ export function startServer(port: number) {
   // POST /api/scans — trigger new scan
   app.post("/api/scans", async (req: Request, res: Response) => {
     try {
-      const { path: scanPath, scanners, llm_analyze } = req.body;
+      const { path: scanPath, scanners, include_git_history, include_system, llm_analyze } = req.body;
       if (!scanPath) {
         res.status(400).json({ error: "path is required" });
+        return;
+      }
+      if (scanners !== undefined && !Array.isArray(scanners)) {
+        res.status(400).json({ error: "scanners must be an array" });
         return;
       }
 
@@ -145,9 +160,14 @@ export function startServer(port: number) {
       }
 
       // Determine scanner types
-      const scannerTypes: ScannerType[] = scanners
-        ? (scanners as string[]).filter((s: string) => Object.values(ScannerType).includes(s as ScannerType)) as ScannerType[]
-        : Object.values(ScannerType);
+      const scannerTypes = resolvePublicScannerTypes(
+        Array.isArray(scanners) ? scanners.map(String) : undefined,
+        include_git_history === true,
+      );
+      const runOptions = {
+        include_git_history: include_git_history === true,
+        include_system: include_system === true,
+      };
 
       // Create scan record
       const scan = createScan(project.id, scannerTypes);
@@ -161,14 +181,12 @@ export function startServer(port: number) {
         try {
           let findingInputs: FindingInput[];
           if (scanners && scanners.length > 0) {
-            const results = await Promise.allSettled(
-              scannerTypes.map((t) => runScanner(t, absPath)),
+            const results = await Promise.all(
+              scannerTypes.map((t) => runScanner(t, absPath, runOptions)),
             );
-            findingInputs = results
-              .filter((r) => r.status === "fulfilled")
-              .flatMap((r) => (r as PromiseFulfilledResult<FindingInput[]>).value);
+            findingInputs = results.flat();
           } else {
-            findingInputs = await runAllScanners(absPath);
+            findingInputs = await runAllScanners(absPath, runOptions);
           }
 
           // Store findings
@@ -185,6 +203,7 @@ export function startServer(port: number) {
                 const batch = findings.slice(i, i + BATCH_SIZE);
                 await Promise.allSettled(
                   batch.map(async (finding) => {
+                    if (isCredentialFinding(finding)) return;
                     const context = getCodeContext(finding.file, finding.line);
                     if (context) {
                       const analysis = await llmAnalyze(finding, context);
@@ -199,12 +218,12 @@ export function startServer(port: number) {
               }
             })().catch(() => {});
           }
-        } catch (error) {
-          updateScanStatus(scan.id, ScanStatus.Failed, undefined, String(error));
+        } catch {
+          updateScanStatus(scan.id, ScanStatus.Failed, undefined, "Scanner execution failed; details withheld");
         }
       })();
-    } catch (error) {
-      res.status(500).json({ error: String(error) });
+    } catch {
+      res.status(500).json({ error: "Repository scan failed; details withheld" });
     }
   });
 
@@ -327,6 +346,11 @@ export function startServer(port: number) {
         return;
       }
 
+      if (isCredentialFinding(finding)) {
+        res.status(409).json({ error: "LLM features are disabled for credential findings" });
+        return;
+      }
+
       if (!isLLMAvailable()) {
         res.status(503).json({ error: "LLM not available. Set CEREBRAS_API_KEY." });
         return;
@@ -364,6 +388,11 @@ export function startServer(port: number) {
 
       if (finding.llm_fix) {
         res.json({ finding_id: finding.id, fix: finding.llm_fix });
+        return;
+      }
+
+      if (isCredentialFinding(finding)) {
+        res.status(409).json({ error: "LLM features are disabled for credential findings" });
         return;
       }
 

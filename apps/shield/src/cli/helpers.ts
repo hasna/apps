@@ -52,12 +52,20 @@ export function resolveScannerTypes(
   scannerArg: string | undefined,
   quick: boolean,
   config: ConfigFile,
+  includeGitHistory = false,
 ): ScannerType[] {
+  let scannerTypes: ScannerType[];
   if (scannerArg) {
-    return [parseScannerType(scannerArg)];
+    scannerTypes = [parseScannerType(scannerArg)];
+  } else if (quick) {
+    scannerTypes = [ScannerType.Secrets, ScannerType.Dependencies];
+  } else {
+    scannerTypes = config.enabled_scanners.filter((type) => type !== ScannerType.GitHistory);
   }
-  if (quick) return [ScannerType.Secrets, ScannerType.Dependencies];
-  return config.enabled_scanners;
+  if (includeGitHistory && !scannerTypes.includes(ScannerType.GitHistory)) {
+    scannerTypes.push(ScannerType.GitHistory);
+  }
+  return scannerTypes;
 }
 
 export function parseSeverity(level: string): Severity {

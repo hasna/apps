@@ -19,8 +19,15 @@ bun install -g @hasna/shield
 # Scan your repo for security issues
 shield scan .
 
-# Focused secret-exposure scan (repo files, git history, processes, tmux)
+# Wider sources are separate, per-invocation opt-ins
+shield scan . --git-history
+shield scan . --system
+
+# Focused secret-exposure scan (safe default: repository files only)
 shield secrets .
+
+# Explicit historical scan (still redacted in terminal/JSON/SARIF output)
+shield secrets . --git-history
 
 # Publishable OSS policy check with redacted output
 shield oss-secrets-policy . --strict
@@ -51,8 +58,8 @@ shield init --install-pre-push
 | `git-history` | Secrets committed in git history |
 | `config` | Insecure CORS, debug mode, missing security headers |
 | `ai-safety` | Prompt injection, PII exposure, unsafe tool use |
-| `ioc` | Supply chain attack indicators (C2 domains, RAT artifacts, malicious packages) |
-| `lockfile` | Compromised locked versions, unpinned ranges during attack windows |
+| `ioc` | In-tree C2/malicious-package indicators; host RAT/Python paths require `--system` |
+| `lockfile` | Compromised locked versions and unpinned ranges; history requires `--git-history` |
 | `supply-chain` | Typosquatting, postinstall exploits, GitHub Actions tag hijacking |
 
 ## Supply Chain Attack Detection
@@ -126,11 +133,17 @@ API endpoints:
 - `GET /api/findings` — query scan findings
 - `POST /api/scans` — trigger a new scan
 
+CLI, library, SDK, MCP, REST, and dashboard-triggered aggregate scans inspect
+only the requested filesystem tree by default. REST/SDK/MCP callers must send
+`include_git_history: true` or `include_system: true` for the corresponding
+wider source. Merely listing `git-history` in a REST/MCP scanner array does not
+authorize history access.
+
 ## All CLI Commands
 
 ```
 shield scan [path]              Run shield scan
-shield secrets [options] [path] Focused secret-exposure scan (files + live context)
+shield secrets [options] [path] Focused secret-exposure scan (file-only by default)
 shield oss-secrets-policy [roots...] Evaluate publishable OSS secret-scan policy
 shield findings                 List findings
 shield explain <id>             AI explanation for a finding
@@ -155,20 +168,64 @@ Stored in `~/.hasna/security/` (override with `SECURITY_DB` env var).
 
 ## Secret Exposure Workflow
 
-`shield secrets` combines four sources:
+`shield secrets` scans repository files by default. The following additional
+sources exist, but each requires an explicit opt-in because it crosses a wider
+data boundary:
 
 - repository files such as `.env` files and config files
-- git history across all branches
-- running process environments
-- tmux pane/session metadata plus recent pane history
+- `--git-history` scans git history across all branches
+- `--processes` inspects running process command/environment snapshots
+- `--tmux` inspects tmux pane/session metadata plus recent pane history
+
+Secret and credential findings never emit raw code snippets. Terminal, JSON,
+and SARIF reporters retain the rule, location, severity, and fingerprint while
+replacing sensitive snippets and analysis text with `[REDACTED]`. Credential
+findings are also excluded from LLM explanation, triage, analysis, and fix
+context so source lines cannot cross a model boundary. Secret-scan error output
+also withholds underlying exception text because parser or provider errors can
+contain scanned source context.
 
 Useful flags:
 
 ```bash
-shield secrets . --repo-only
+# Safe file-only modes (the default, plus an explicit fail-closed form)
+shield secrets .
+shield secrets . --files-only --json
+
+# Historical source: explicit opt-in
+shield secrets . --git-history --json
+
+# Live sources: sensitive explicit opt-in; never use in routine CI
+shield secrets . --processes
+shield secrets . --tmux
+
+# --repo-only blocks live sources; history still requires --git-history
+shield secrets . --repo-only --git-history
 shield secrets . --json
 shield secrets . --severity high --fail-on medium
+
+# Package/archive-only validation does not inspect ambient processes or tmux
+shield fleet-package ./package.tgz --json
 ```
+
+### Migration warning for 0.1.25 and earlier
+
+Versions through 0.1.25 allowed aggregate and focused paths to cross historical
+or live-machine boundaries without a consistent per-invocation opt-in.
+Structured output could therefore include credential-bearing source context.
+Upgrade before using Shield in an agent, CI job, log collector, or
+transcript-producing tool. Until the fixed version is installed,
+use `shield secrets . --repo-only --no-git-history --no-processes --no-tmux`
+or use the `secrets scan workspace` and `shield fleet-package` file/archive
+paths. If an older structured scan ran in a credential-bearing environment,
+treat the visible credential identifiers as exposed, preserve values out of
+incident channels, and follow the owning vault/provider rotation runbook.
+Existing finding rows are sanitized on read and the sanitized fields are then
+written back when the local database is writable. Stable non-sensitive hashes
+retain correlation without retaining the credential-bearing location or rule
+identifier. A read-only database still receives sanitized API/MCP/reporter
+output, but cannot be rewritten in place. Credential-finding fingerprints may
+change once newly scanned records use the redacted persistence form.
 
 For publishable OSS packages, see
 [`docs/oss-secret-scan-policy.md`](docs/oss-secret-scan-policy.md). The policy

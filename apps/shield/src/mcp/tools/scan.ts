@@ -12,10 +12,11 @@ import {
   updateFinding,
   getSecurityScore,
 } from "../../db/index.js";
-import { runAllScanners, runScanner } from "../../scanners/index.js";
+import { resolvePublicScannerTypes, runAllScanners, runScanner } from "../../scanners/index.js";
 import { analyzeFinding as llmAnalyze, isLLMAvailable } from "../../llm/index.js";
 import { ScannerType, ScanStatus, Severity } from "../../types/index.js";
 import type { FindingInput } from "../../types/index.js";
+import { sanitizeFindingForOutput, sanitizeLocationForOutput } from "../../lib/finding-safety.js";
 import {
   scanSecretExposure,
   filterSecretExposureBySeverity,
@@ -35,10 +36,12 @@ export function registerScanTools(
     "Run a full security scan on a repository path",
     {
       path: z.string().describe("Path to the repository to scan"),
-      scanners: z.array(z.string()).optional().describe("Scanner types to run (defaults to all)"),
+      scanners: z.array(z.string()).optional().describe("Scanner types to run (defaults to file-only scanners; git-history also requires include_git_history=true)"),
+      include_git_history: z.boolean().optional().describe("Explicitly opt in to git history (default false)"),
+      include_system: z.boolean().optional().describe("Explicitly opt in to host/system IOC locations outside path (default false)"),
       llm_analyze: z.boolean().optional().describe("Whether to run LLM analysis on findings"),
     },
-    async ({ path, scanners, llm_analyze }) => {
+    async ({ path, scanners, include_git_history, include_system, llm_analyze }) => {
       try {
         const scanPath = resolve(path);
 
@@ -48,23 +51,23 @@ export function registerScanTools(
           project = createProject(name, scanPath);
         }
 
-        const scannerTypes: ScannerType[] = scanners
-          ? scanners.filter((s) => Object.values(ScannerType).includes(s as ScannerType)) as ScannerType[]
-          : Object.values(ScannerType);
+        const scannerTypes = resolvePublicScannerTypes(scanners, include_git_history === true);
+        const runOptions = {
+          include_git_history: include_git_history === true,
+          include_system: include_system === true,
+        };
 
         const scan = createScan(project.id, scannerTypes);
         updateScanStatus(scan.id, ScanStatus.Running);
 
         let findingInputs: FindingInput[];
         if (scanners && scanners.length > 0) {
-          const results = await Promise.allSettled(
-            scannerTypes.map((t) => runScanner(t, scanPath)),
+          const results = await Promise.all(
+            scannerTypes.map((t) => runScanner(t, scanPath, runOptions)),
           );
-          findingInputs = results
-            .filter((r) => r.status === "fulfilled")
-            .flatMap((r) => (r as PromiseFulfilledResult<FindingInput[]>).value);
+          findingInputs = results.flat();
         } else {
-          findingInputs = await runAllScanners(scanPath);
+          findingInputs = await runAllScanners(scanPath, runOptions);
         }
 
         const findings = findingInputs.map((input) => createFinding(scan.id, input));
@@ -101,8 +104,8 @@ export function registerScanTools(
           llm_analysis: llm_analyze ? "running in background (5 concurrent)" : "not requested",
           by_severity: { critical: score.critical, high: score.high, medium: score.medium, low: score.low, info: score.info },
         });
-      } catch (error) {
-        return jsonResult({ error: String(error) });
+      } catch {
+        return jsonResult({ error: "Repository scan failed. Details were withheld to protect scanned source context." });
       }
     },
   );
@@ -123,9 +126,13 @@ export function registerScanTools(
         const fileFindings = findings.filter(
           (f) => f.file === absPath || f.file === filePath || f.file.endsWith(filePath),
         );
-        return jsonResult({ file: absPath, findings: fileFindings, count: fileFindings.length });
-      } catch (error) {
-        return jsonResult({ error: String(error) });
+        return jsonResult({
+          file: sanitizeLocationForOutput(absPath),
+          findings: fileFindings.map(sanitizeFindingForOutput),
+          count: fileFindings.length,
+        });
+      } catch {
+        return jsonResult({ error: "File scan failed. Details were withheld to protect scanned source context." });
       }
     },
   );
@@ -133,12 +140,12 @@ export function registerScanTools(
   // 3. scan_secret_exposure
   server.tool(
     "scan_secret_exposure",
-    "Scan repo files, git history, running processes, and tmux panes for exposed secrets",
+    "Scan repository files for exposed secrets; git history, processes, and tmux require explicit opt-in",
     {
       path: z.string().describe("Path to the repository or directory to scan"),
-      include_git_history: z.boolean().optional().describe("Whether to include git history scanning"),
-      include_processes: z.boolean().optional().describe("Whether to include running process environment scanning"),
-      include_tmux: z.boolean().optional().describe("Whether to include tmux metadata/history scanning"),
+      include_git_history: z.boolean().optional().describe("Explicitly opt in to git history scanning (default false)"),
+      include_processes: z.boolean().optional().describe("Explicitly opt in to sensitive running process command/environment inspection (default false)"),
+      include_tmux: z.boolean().optional().describe("Explicitly opt in to sensitive tmux metadata/history inspection (default false)"),
       severity: z.string().optional().describe("Minimum severity threshold (critical/high/medium/low/info)"),
     },
     async ({ path, include_git_history, include_processes, include_tmux, severity }) => {
@@ -156,9 +163,9 @@ export function registerScanTools(
 
         const result = await scanSecretExposure({
           path: resolve(path),
-          include_git_history: include_git_history ?? true,
-          include_processes: include_processes ?? true,
-          include_tmux: include_tmux ?? true,
+          include_git_history: include_git_history === true,
+          include_processes: include_processes === true,
+          include_tmux: include_tmux === true,
         });
 
         const findings = filterSecretExposureBySeverity(result.findings, parsedSeverity);
@@ -169,8 +176,8 @@ export function registerScanTools(
           findings,
           count: findings.length,
         });
-      } catch (error) {
-        return jsonResult({ error: String(error) });
+      } catch {
+        return jsonResult({ error: "Secret exposure scan failed. Details were withheld to protect scanned source context." });
       }
     },
   );

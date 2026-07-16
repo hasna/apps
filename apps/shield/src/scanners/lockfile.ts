@@ -424,7 +424,7 @@ export const lockfileScanner: Scanner = {
     "unpinned ranges on critical packages, lockfile changes during attack windows, " +
     "install/revert patterns, and missing lockfiles",
 
-  async scan(scanPath: string, _options?: ScannerRunOptions): Promise<FindingInput[]> {
+  async scan(scanPath: string, options?: ScannerRunOptions): Promise<FindingInput[]> {
     ensureSeeded();
     const findings: FindingInput[] = [];
 
@@ -459,8 +459,10 @@ export const lockfileScanner: Scanner = {
       } catch {}
     }
 
-    // 4. Git history analysis
-    findings.push(...checkLockfileGitHistory(scanPath));
+    // 4. Git history analysis is a separate sensitive source.
+    if (options?.include_git_history === true) {
+      findings.push(...checkLockfileGitHistory(scanPath));
+    }
 
     return findings;
   },

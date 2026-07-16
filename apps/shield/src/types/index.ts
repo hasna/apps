@@ -150,6 +150,10 @@ export interface Scanner {
 export interface ScannerRunOptions {
   ignore_patterns?: string[];
   rules?: Rule[];
+  /** Explicit per-invocation opt-in to repository history. */
+  include_git_history?: boolean;
+  /** Explicit per-invocation opt-in to host/system locations outside scanPath. */
+  include_system?: boolean;
 }
 
 export interface FindingInput {
@@ -175,8 +179,24 @@ export interface ConfigFile {
   llm_analyze: boolean;
 }
 
+/**
+ * Scanners that only inspect the requested filesystem tree. Historical and
+ * live-machine sources must never be added here: callers must opt in to those
+ * sources explicitly for each invocation.
+ */
+export const DEFAULT_FILE_SCANNERS: ScannerType[] = [
+  ScannerType.Secrets,
+  ScannerType.Dependencies,
+  ScannerType.Code,
+  ScannerType.Config,
+  ScannerType.AiSafety,
+  ScannerType.SupplyChain,
+  ScannerType.IOC,
+  ScannerType.Lockfile,
+];
+
 export const DEFAULT_CONFIG: ConfigFile = {
-  enabled_scanners: Object.values(ScannerType),
+  enabled_scanners: [...DEFAULT_FILE_SCANNERS],
   severity_threshold: Severity.Info,
   output_format: ReportFormat.Terminal,
   ignore_patterns: ["node_modules", ".git", "dist", "build", "vendor", "__pycache__", "*.test.ts", "*.test.js", "*.test.tsx", "*.test.jsx", "*.spec.ts", "*.spec.js", "__tests__", "test/fixtures", "tests/fixtures"],

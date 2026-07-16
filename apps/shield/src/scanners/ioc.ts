@@ -554,11 +554,12 @@ export const iocScanner: Scanner = {
     // 2. Scan source code for C2 domains/IPs
     findings.push(...scanForC2Indicators(scanPath, ignorePatterns));
 
-    // 3. Check for RAT artifacts on disk
-    findings.push(...checkRATArtifacts());
-
-    // 4. Check for malicious .pth files (Python)
-    findings.push(...checkPthFiles());
+    // Host-wide locations and Python site discovery cross the requested tree
+    // boundary, so they require an explicit per-invocation opt-in.
+    if (options?.include_system === true) {
+      findings.push(...checkRATArtifacts());
+      findings.push(...checkPthFiles());
+    }
 
     // 5. Check postinstall scripts in node_modules
     findings.push(...checkPostinstallScripts(scanPath));

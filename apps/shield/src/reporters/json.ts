@@ -1,5 +1,10 @@
 import type { Finding, Scan, SecurityScore } from "../types/index.js";
 import { Severity } from "../types/index.js";
+import {
+  sanitizeFindingForOutput,
+  sanitizeScanForOutput,
+  sanitizeValueForBoundary,
+} from "../lib/finding-safety.js";
 
 function computeScore(findings: Finding[]): SecurityScore {
   const active = findings.filter((f) => !f.suppressed);
@@ -48,11 +53,12 @@ function computeScore(findings: Finding[]): SecurityScore {
 }
 
 export function reportFindings(findings: Finding[], scan?: Scan): string {
-  const summary = computeScore(findings);
+  const safeFindings = findings.map(sanitizeFindingForOutput);
+  const summary = computeScore(safeFindings);
   const report = {
-    scan: scan ?? null,
-    findings,
+    scan: scan ? sanitizeScanForOutput(scan) : null,
+    findings: safeFindings,
     summary,
   };
-  return JSON.stringify(report, null, 2);
+  return JSON.stringify(sanitizeValueForBoundary(report), null, 2);
 }

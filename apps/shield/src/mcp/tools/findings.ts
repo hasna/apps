@@ -13,6 +13,7 @@ import {
   triageFinding as llmTriage,
   isLLMAvailable,
 } from "../../llm/index.js";
+import { isCredentialFinding } from "../../lib/finding-safety.js";
 import { Severity, ScannerType } from "../../types/index.js";
 
 type JsonResult = { content: Array<{ type: "text"; text: string }> };
@@ -74,6 +75,9 @@ export function registerFindingTools(
       try {
         const finding = getFinding(id);
         if (!finding) return jsonResult({ error: "Finding not found" });
+        if (isCredentialFinding(finding)) {
+          return jsonResult({ error: "LLM features are disabled for credential findings" });
+        }
         if (finding.llm_explanation) return jsonResult({ finding_id: id, explanation: finding.llm_explanation });
         if (!isLLMAvailable()) return jsonResult({ error: "LLM not available. Set CEREBRAS_API_KEY." });
 
@@ -96,6 +100,9 @@ export function registerFindingTools(
       try {
         const finding = getFinding(id);
         if (!finding) return jsonResult({ error: "Finding not found" });
+        if (isCredentialFinding(finding)) {
+          return jsonResult({ error: "LLM features are disabled for credential findings" });
+        }
         if (finding.llm_fix) return jsonResult({ finding_id: id, fix: finding.llm_fix });
         if (!isLLMAvailable()) return jsonResult({ error: "LLM not available. Set CEREBRAS_API_KEY." });
 
@@ -122,7 +129,12 @@ export function registerFindingTools(
         const finding = getFinding(id);
         if (!finding) return jsonResult({ error: "Finding not found" });
         suppressFinding(id, reason);
-        return jsonResult({ finding_id: id, suppressed: true, reason });
+        const updated = getFinding(id);
+        return jsonResult({
+          finding_id: id,
+          suppressed: true,
+          reason: updated?.suppressed_reason ?? null,
+        });
       } catch (error) {
         return jsonResult({ error: String(error) });
       }
@@ -164,6 +176,9 @@ export function registerFindingTools(
       try {
         const finding = getFinding(id);
         if (!finding) return jsonResult({ error: "Finding not found" });
+        if (isCredentialFinding(finding)) {
+          return jsonResult({ error: "LLM features are disabled for credential findings" });
+        }
         if (!isLLMAvailable()) return jsonResult({ error: "LLM not available. Set CEREBRAS_API_KEY." });
 
         const context = getCodeContext(finding.file, finding.line);

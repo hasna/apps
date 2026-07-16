@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { ReportFormat, ScannerType, Severity } from "../types/index.js";
-import { parseFormat, parseScannerType, parseSeverity } from "./helpers.js";
+import { DEFAULT_CONFIG, ReportFormat, ScannerType, Severity } from "../types/index.js";
+import { parseFormat, parseScannerType, parseSeverity, resolveScannerTypes } from "./helpers.js";
 
 describe("parseSeverity", () => {
   it("parses valid severities case-insensitively", () => {
@@ -32,5 +32,28 @@ describe("parseScannerType", () => {
 
   it("throws on invalid scanner names", () => {
     expect(() => parseScannerType("foo")).toThrow("Invalid scanner");
+  });
+});
+
+describe("resolveScannerTypes source boundary", () => {
+  it("filters legacy config git history unless the current invocation opts in", () => {
+    const legacyConfig = {
+      ...DEFAULT_CONFIG,
+      enabled_scanners: [...DEFAULT_CONFIG.enabled_scanners, ScannerType.GitHistory],
+    };
+    expect(resolveScannerTypes(undefined, false, legacyConfig)).not.toContain(ScannerType.GitHistory);
+    expect(resolveScannerTypes(undefined, false, legacyConfig, true)).toContain(ScannerType.GitHistory);
+  });
+
+  it("treats naming git-history with --scanner as an explicit opt-in", () => {
+    expect(resolveScannerTypes("git-history", false, DEFAULT_CONFIG)).toEqual([ScannerType.GitHistory]);
+  });
+
+  it("honors an explicit history opt-in alongside quick or named scanners", () => {
+    expect(resolveScannerTypes(undefined, true, DEFAULT_CONFIG, true)).toContain(ScannerType.GitHistory);
+    expect(resolveScannerTypes("code", false, DEFAULT_CONFIG, true)).toEqual([
+      ScannerType.Code,
+      ScannerType.GitHistory,
+    ]);
   });
 });
