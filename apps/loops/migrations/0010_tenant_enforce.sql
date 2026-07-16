@@ -1,19 +1,157 @@
 -- @generated mirror of POSTGRES_STORAGE_MIGRATIONS["0010_tenant_enforce"] — DO NOT EDIT.
 -- Source of truth: src/lib/storage/postgres-schema.ts
--- Runner: loops-serve migrate  (checksum: sha256:ea71f66b865a6ee7dd6f2a821f89871caadabb8ba98b87953a5d5122b77fc1c7)
+-- Runner: loops-serve migrate  (checksum: sha256:f923c70c2960e0372b4c01c5f01d9432fa0c76b24921c616dc149fa191409053)
 
-DO $roles$
+DO $bootstrap_roles$
+DECLARE role_name TEXT;
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'open_loops_owner') THEN CREATE ROLE open_loops_owner NOLOGIN; END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'open_loops_migrator') THEN CREATE ROLE open_loops_migrator NOLOGIN NOBYPASSRLS; END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'open_loops_runtime') THEN CREATE ROLE open_loops_runtime NOLOGIN NOBYPASSRLS; END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'open_loops_authenticator') THEN CREATE ROLE open_loops_authenticator NOLOGIN NOBYPASSRLS; END IF;
+  FOREACH role_name IN ARRAY ARRAY[
+    'open_loops_owner', 'open_loops_migrator',
+    'open_loops_runtime', 'open_loops_authenticator'
+  ] LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname=role_name) THEN
+      EXECUTE format(
+        'CREATE ROLE %I INHERIT NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS',
+        role_name
+      );
+    ELSIF EXISTS (
+      SELECT 1 FROM pg_roles WHERE rolname=role_name AND rolcanlogin
+    ) THEN
+      RAISE EXCEPTION 'reserved OpenLoops database role % is LOGIN; detach or replace that credential with provider authority before tenant enforcement',
+        role_name;
+    ELSIF EXISTS (
+      SELECT 1 FROM pg_roles
+       WHERE rolname=role_name
+         AND (NOT rolinherit OR rolsuper OR rolcreatedb OR
+              rolcreaterole OR rolreplication OR rolbypassrls)
+    ) THEN
+      EXECUTE format(
+        'ALTER ROLE %I INHERIT NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS',
+        role_name
+      );
+    END IF;
+  END LOOP;
 END
-$roles$;
-ALTER ROLE open_loops_owner INHERIT NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
-ALTER ROLE open_loops_migrator INHERIT NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
-ALTER ROLE open_loops_runtime INHERIT NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
-ALTER ROLE open_loops_authenticator INHERIT NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+$bootstrap_roles$;
+
+DO $cluster_role_exclusivity$
+DECLARE cross_database_dependency RECORD;
+BEGIN
+  SELECT role.rolname AS role_name,
+         COALESCE(database.datname, dependency.dbid::text) AS database_name
+    INTO cross_database_dependency
+    FROM pg_shdepend dependency
+    JOIN pg_roles role
+      ON role.oid=dependency.refobjid
+     AND dependency.refclassid='pg_authid'::regclass
+    LEFT JOIN pg_database database ON database.oid=dependency.dbid
+   WHERE role.rolname IN (
+     'open_loops_owner', 'open_loops_migrator',
+     'open_loops_runtime', 'open_loops_authenticator'
+   )
+     AND dependency.dbid NOT IN (
+       0,
+       (SELECT oid FROM pg_database WHERE datname=current_database())
+     )
+   LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION 'reserved OpenLoops role % has a dependency in database %; use a dedicated cluster or remove the cross-database dependency before tenant enforcement',
+      cross_database_dependency.role_name,
+      cross_database_dependency.database_name;
+  END IF;
+
+  SELECT role.rolname AS role_name, database.datname AS database_name
+    INTO cross_database_dependency
+    FROM pg_database database
+    JOIN pg_roles role ON role.oid=database.datdba
+   WHERE role.rolname IN (
+     'open_loops_owner', 'open_loops_migrator',
+     'open_loops_runtime', 'open_loops_authenticator'
+   )
+     AND database.datname<>current_database()
+   LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION 'reserved OpenLoops role % owns database %; role names must be exclusive to the dedicated OpenLoops cluster',
+      cross_database_dependency.role_name,
+      cross_database_dependency.database_name;
+  END IF;
+END
+$cluster_role_exclusivity$;
+
+DO $bootstrap_memberships$
+DECLARE bootstrap_name NAME := session_user;
+DECLARE bootstrap_superuser BOOLEAN;
+DECLARE relevant_membership_count BIGINT;
+DECLARE safe_privileged_role_count BIGINT;
+BEGIN
+  IF bootstrap_name IN (
+    'open_loops_owner', 'open_loops_migrator',
+    'open_loops_runtime', 'open_loops_authenticator'
+  ) THEN
+    RAISE EXCEPTION 'tenant enforcement bootstrap login must be distinct from OpenLoops database roles';
+  END IF;
+  SELECT rolsuper INTO bootstrap_superuser FROM pg_roles WHERE rolname=bootstrap_name;
+
+  -- PostgreSQL 16 grants CREATEROLE creators membership in newly created roles,
+  -- but createrole_self_grant defaults to empty: ADMIN can be true while
+  -- INHERIT and SET are false. Only a superuser can revoke the implicit row,
+  -- whose grantor is PostgreSQL's bootstrap superuser. A non-superuser runner
+  -- must therefore receive exact memberships during provider bootstrap.
+  IF bootstrap_superuser THEN
+    EXECUTE format(
+      'REVOKE open_loops_owner, open_loops_migrator, open_loops_runtime, open_loops_authenticator FROM %I',
+      bootstrap_name
+    );
+    EXECUTE format(
+      'GRANT open_loops_owner, open_loops_migrator TO %I WITH ADMIN FALSE, INHERIT TRUE, SET TRUE',
+      bootstrap_name
+    );
+  END IF;
+
+  SELECT count(*),
+         count(DISTINCT granted.rolname) FILTER (
+           WHERE granted.rolname IN ('open_loops_owner', 'open_loops_migrator')
+             AND NOT membership.admin_option
+             AND membership.inherit_option
+             AND membership.set_option
+         )
+    INTO relevant_membership_count, safe_privileged_role_count
+    FROM pg_auth_members membership
+    JOIN pg_roles granted ON granted.oid=membership.roleid
+    JOIN pg_roles member ON member.oid=membership.member
+   WHERE member.rolname=bootstrap_name
+     AND granted.rolname IN (
+       'open_loops_owner', 'open_loops_migrator',
+       'open_loops_runtime', 'open_loops_authenticator'
+     );
+
+  IF NOT bootstrap_superuser AND (
+    pg_has_role(bootstrap_name, 'open_loops_runtime', 'MEMBER') OR
+    pg_has_role(bootstrap_name, 'open_loops_authenticator', 'MEMBER') OR
+    relevant_membership_count <> 2 OR safe_privileged_role_count <> 2
+  ) THEN
+    RAISE EXCEPTION 'non-superuser tenant enforcement requires pre-provisioned owner/migrator memberships with ADMIN FALSE, INHERIT TRUE, SET TRUE and no runtime/authenticator membership';
+  END IF;
+  IF NOT bootstrap_superuser AND EXISTS (
+    SELECT 1
+     FROM pg_roles service_login
+     WHERE service_login.rolcanlogin
+       AND NOT service_login.rolsuper
+       AND service_login.rolname<>bootstrap_name
+       AND (
+         pg_has_role(service_login.oid, 'open_loops_runtime', 'MEMBER') OR
+         pg_has_role(service_login.oid, 'open_loops_authenticator', 'MEMBER')
+       )
+  ) THEN
+    RAISE EXCEPTION 'non-superuser tenant enforcement must run before runtime/authenticator service login memberships are provisioned';
+  END IF;
+  IF bootstrap_superuser AND (
+    relevant_membership_count <> 2 OR safe_privileged_role_count <> 2
+  ) THEN
+    RAISE EXCEPTION 'tenant enforcement did not normalize bootstrap role memberships';
+  END IF;
+END
+$bootstrap_memberships$;
 
 DO $service_role_memberships$
 DECLARE membership RECORD;
@@ -30,6 +168,75 @@ BEGIN
 END
 $service_role_memberships$;
 
+DO $privileged_role_membership_acl$
+DECLARE unsafe_membership RECORD;
+BEGIN
+  SELECT granted.rolname AS granted_role, member.rolname AS member_role
+    INTO unsafe_membership
+    FROM pg_auth_members membership
+    JOIN pg_roles granted ON granted.oid=membership.roleid
+    JOIN pg_roles member ON member.oid=membership.member
+   WHERE (granted.rolname IN ('open_loops_owner', 'open_loops_migrator')
+      OR member.rolname IN (
+        'open_loops_owner', 'open_loops_migrator',
+        'open_loops_runtime', 'open_loops_authenticator'
+      ))
+     AND NOT (
+       granted.rolname IN ('open_loops_owner', 'open_loops_migrator')
+       AND member.rolname=session_user
+       AND NOT membership.admin_option
+       AND membership.inherit_option
+       AND membership.set_option
+     )
+   LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION 'unsafe privileged role membership % to %; remove it with the original grantor or provider authority before tenant enforcement',
+      unsafe_membership.granted_role,
+      unsafe_membership.member_role;
+  END IF;
+END
+$privileged_role_membership_acl$;
+
+DO $unsafe_service_members$
+DECLARE unsafe_member RECORD;
+BEGIN
+  FOR unsafe_member IN
+  SELECT granted.rolname AS granted_role, member.rolname AS member_role,
+         member.rolcanlogin AS member_can_login
+    FROM pg_auth_members membership
+    JOIN pg_roles granted ON granted.oid = membership.roleid
+    JOIN pg_roles member ON member.oid = membership.member
+   WHERE granted.rolname IN ('open_loops_runtime', 'open_loops_authenticator')
+     AND (membership.admin_option OR NOT membership.inherit_option OR NOT membership.set_option OR
+          NOT member.rolcanlogin OR NOT member.rolinherit OR
+          member.rolsuper OR member.rolbypassrls OR member.rolcreatedb OR
+          member.rolcreaterole OR member.rolreplication OR
+          pg_has_role(member.oid, 'open_loops_owner', 'MEMBER') OR
+          pg_has_role(member.oid, 'open_loops_migrator', 'MEMBER') OR
+          EXISTS (
+            SELECT 1 FROM pg_auth_members other_membership
+             WHERE other_membership.member = member.oid
+               AND other_membership.roleid <> granted.oid
+          ) OR
+          EXISTS (
+            SELECT 1 FROM pg_auth_members downstream_membership
+             WHERE downstream_membership.roleid = member.oid
+          ) OR
+          (granted.rolname = 'open_loops_runtime' AND
+            pg_has_role(member.oid, 'open_loops_authenticator', 'MEMBER')) OR
+          (granted.rolname = 'open_loops_authenticator' AND
+            pg_has_role(member.oid, 'open_loops_runtime', 'MEMBER')))
+  LOOP
+    IF unsafe_member.member_can_login THEN
+      RAISE EXCEPTION 'unsafe service login membership for % in %; normalize it with provider authority before tenant enforcement',
+        unsafe_member.member_role,
+        unsafe_member.granted_role;
+    END IF;
+    EXECUTE format('REVOKE %I FROM %I', unsafe_member.granted_role, unsafe_member.member_role);
+  END LOOP;
+END
+$unsafe_service_members$;
+
 DO $service_member_acl$
 DECLARE service_member RECORD;
 BEGIN
@@ -41,6 +248,14 @@ BEGIN
    WHERE granted.rolname IN ('open_loops_runtime', 'open_loops_authenticator')
      AND member.rolcanlogin
   LOOP
+    IF service_member.member_oid IN (
+      (SELECT oid FROM pg_roles WHERE rolname=session_user),
+      (SELECT datdba FROM pg_database WHERE datname=current_database()),
+      (SELECT nspowner FROM pg_namespace WHERE nspname='public')
+    ) THEN
+      RAISE EXCEPTION 'provider/bootstrap login % must never be processed as a service login',
+        service_member.member_role;
+    END IF;
     IF EXISTS (
       SELECT 1
         FROM pg_shdepend dependency
@@ -138,40 +353,6 @@ BEGIN
 END
 $service_role_acl$;
 
-DO $unsafe_service_members$
-DECLARE unsafe_member RECORD;
-BEGIN
-  FOR unsafe_member IN
-  SELECT granted.rolname AS granted_role, member.rolname AS member_role
-    FROM pg_auth_members membership
-    JOIN pg_roles granted ON granted.oid = membership.roleid
-    JOIN pg_roles member ON member.oid = membership.member
-   WHERE granted.rolname IN ('open_loops_runtime', 'open_loops_authenticator')
-     AND (membership.admin_option OR NOT membership.inherit_option OR NOT membership.set_option OR
-          NOT member.rolcanlogin OR NOT member.rolinherit OR
-          member.rolsuper OR member.rolbypassrls OR member.rolcreatedb OR
-          member.rolcreaterole OR member.rolreplication OR
-          pg_has_role(member.oid, 'open_loops_owner', 'MEMBER') OR
-          pg_has_role(member.oid, 'open_loops_migrator', 'MEMBER') OR
-          EXISTS (
-            SELECT 1 FROM pg_auth_members other_membership
-             WHERE other_membership.member = member.oid
-               AND other_membership.roleid <> granted.oid
-          ) OR
-          EXISTS (
-            SELECT 1 FROM pg_auth_members downstream_membership
-             WHERE downstream_membership.roleid = member.oid
-          ) OR
-          (granted.rolname = 'open_loops_runtime' AND
-            pg_has_role(member.oid, 'open_loops_authenticator', 'MEMBER')) OR
-          (granted.rolname = 'open_loops_authenticator' AND
-            pg_has_role(member.oid, 'open_loops_runtime', 'MEMBER')))
-  LOOP
-    EXECUTE format('REVOKE %I FROM %I', unsafe_member.granted_role, unsafe_member.member_role);
-  END LOOP;
-END
-$unsafe_service_members$;
-
 DO $service_connect$
 DECLARE service_member RECORD;
 BEGIN
@@ -188,8 +369,23 @@ BEGIN
 END
 $service_connect$;
 
-REVOKE open_loops_owner, open_loops_migrator, open_loops_authenticator FROM open_loops_runtime;
-REVOKE open_loops_owner, open_loops_migrator, open_loops_runtime FROM open_loops_authenticator;
+DO $service_role_cross_memberships$
+DECLARE membership RECORD;
+BEGIN
+  FOR membership IN
+    SELECT granted.rolname AS granted_role, member.rolname AS member_role
+      FROM pg_auth_members relation
+      JOIN pg_roles granted ON granted.oid=relation.roleid
+      JOIN pg_roles member ON member.oid=relation.member
+     WHERE (member.rolname='open_loops_runtime' AND
+            granted.rolname IN ('open_loops_owner', 'open_loops_migrator', 'open_loops_authenticator'))
+        OR (member.rolname='open_loops_authenticator' AND
+            granted.rolname IN ('open_loops_owner', 'open_loops_migrator', 'open_loops_runtime'))
+  LOOP
+    EXECUTE format('REVOKE %I FROM %I', membership.granted_role, membership.member_role);
+  END LOOP;
+END
+$service_role_cross_memberships$;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 REVOKE ALL ON SCHEMA public FROM open_loops_runtime, open_loops_authenticator;
 GRANT USAGE ON SCHEMA public TO open_loops_runtime, open_loops_authenticator;
@@ -592,25 +788,31 @@ REVOKE CREATE ON SCHEMA public FROM open_loops_owner, open_loops_migrator;
 GRANT USAGE ON SCHEMA public TO open_loops_owner, open_loops_migrator;
 
 DO $privileged_role_membership_acl$
-DECLARE membership RECORD;
+DECLARE unsafe_membership RECORD;
 BEGIN
-  FOR membership IN
-    SELECT granted.rolname AS granted_role, member.rolname AS member_role
-      FROM pg_auth_members auth_membership
-      JOIN pg_roles granted ON granted.oid = auth_membership.roleid
-      JOIN pg_roles member ON member.oid = auth_membership.member
-     WHERE (granted.rolname IN ('open_loops_owner', 'open_loops_migrator')
-        OR member.rolname IN ('open_loops_owner', 'open_loops_migrator', 'open_loops_runtime', 'open_loops_authenticator'))
-       AND NOT (
-         granted.rolname IN ('open_loops_owner', 'open_loops_migrator')
-         AND member.rolname = session_user
-         AND NOT auth_membership.admin_option
-         AND auth_membership.inherit_option
-         AND auth_membership.set_option
-       )
-  LOOP
-    EXECUTE format('REVOKE %I FROM %I', membership.granted_role, membership.member_role);
-  END LOOP;
+  SELECT granted.rolname AS granted_role, member.rolname AS member_role
+    INTO unsafe_membership
+    FROM pg_auth_members membership
+    JOIN pg_roles granted ON granted.oid=membership.roleid
+    JOIN pg_roles member ON member.oid=membership.member
+   WHERE (granted.rolname IN ('open_loops_owner', 'open_loops_migrator')
+      OR member.rolname IN (
+        'open_loops_owner', 'open_loops_migrator',
+        'open_loops_runtime', 'open_loops_authenticator'
+      ))
+     AND NOT (
+       granted.rolname IN ('open_loops_owner', 'open_loops_migrator')
+       AND member.rolname=session_user
+       AND NOT membership.admin_option
+       AND membership.inherit_option
+       AND membership.set_option
+     )
+   LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION 'unsafe privileged role membership % to %; remove it with the original grantor or provider authority before tenant enforcement',
+      unsafe_membership.granted_role,
+      unsafe_membership.member_role;
+  END IF;
 END
 $privileged_role_membership_acl$;
 

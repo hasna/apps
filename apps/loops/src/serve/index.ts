@@ -13,6 +13,17 @@ import type { PoolQueryClient, TypedQueryClient } from "../generated/storage-kit
 import { PgPoolExecutor } from "../lib/storage/pg-executor.js";
 import { PostgresStorage } from "../lib/storage/postgres.js";
 import { createPostgresLoopStorage } from "../lib/storage/postgres-loop-storage.js";
+import {
+  POSTGRES_MIGRATION_ADVISORY_LOCK_SQL,
+  POSTGRES_MIGRATION_LEDGER_TABLE,
+  POSTGRES_TENANT_BOOTSTRAP_MEMBERSHIPS_SQL,
+  POSTGRES_TENANT_BOOTSTRAP_ROLES_SQL,
+  POSTGRES_TENANT_CLUSTER_ROLE_EXCLUSIVITY_SQL,
+  POSTGRES_TENANT_PRIVILEGED_MEMBERSHIPS_SQL,
+  POSTGRES_TENANT_SERVICE_MEMBER_CLEANUP_SQL,
+  POSTGRES_TENANT_SERVICE_ROLE_MEMBERSHIPS_SQL,
+  POSTGRES_TENANT_UNSAFE_SERVICE_MEMBERSHIPS_SQL,
+} from "../lib/storage/postgres-schema.js";
 import { loadTenantBackfillBundle, parseTenantBackfillBundle } from "../lib/storage/tenant-backfill.js";
 import { packageVersion } from "../lib/version.js";
 
@@ -597,30 +608,16 @@ export async function isTenantRlsInvariantSafe(client: TypedQueryClient): Promis
 }
 
 export async function assertTenantEnforcementBootstrap(client: PoolQueryClient): Promise<void> {
+  let probeStage = "role inventory";
   const role = await client.get<{
     rolcreaterole: boolean;
     rolsuper: boolean;
-    owner_settable: boolean;
-    migrator_settable: boolean;
     controls_database: boolean;
     controls_public_schema: boolean;
     controls_helper_functions: boolean;
+    controls_existing_objects: boolean;
   }>(
     `SELECT login.rolcreaterole, login.rolsuper,
-            EXISTS (
-              SELECT 1 FROM pg_roles target
-               WHERE target.rolname='open_loops_owner'
-                 AND pg_has_role(login.oid, target.oid, 'SET')
-            ) OR NOT EXISTS (
-              SELECT 1 FROM pg_roles target WHERE target.rolname='open_loops_owner'
-            ) AS owner_settable,
-            (EXISTS (
-              SELECT 1 FROM pg_roles target
-               WHERE target.rolname='open_loops_migrator'
-                 AND pg_has_role(login.oid, target.oid, 'SET')
-            ) OR NOT EXISTS (
-              SELECT 1 FROM pg_roles target WHERE target.rolname='open_loops_migrator'
-            )) AS migrator_settable,
             EXISTS (
               SELECT 1
                 FROM pg_database database
@@ -643,61 +640,80 @@ export async function assertTenantEnforcementBootstrap(client: PoolQueryClient):
                  AND helper.proowner<>login.oid
                  AND NOT login.rolsuper
                  AND NOT pg_has_role(login.oid, helper.proowner, 'USAGE')
-            ) AS controls_helper_functions
+            ) AS controls_helper_functions,
+            NOT EXISTS (
+              SELECT 1
+                FROM (
+                  SELECT namespace.nspowner AS owner_oid
+                    FROM pg_namespace namespace
+                   WHERE namespace.nspname NOT IN ('pg_catalog', 'information_schema')
+                     AND namespace.nspname NOT LIKE 'pg_toast%'
+                     AND namespace.nspname NOT LIKE 'pg_temp_%'
+                  UNION
+                  SELECT relation.relowner
+                    FROM pg_class relation
+                    JOIN pg_namespace namespace ON namespace.oid=relation.relnamespace
+                   WHERE namespace.nspname NOT IN ('pg_catalog', 'information_schema')
+                     AND namespace.nspname NOT LIKE 'pg_toast%'
+                     AND namespace.nspname NOT LIKE 'pg_temp_%'
+                     AND relation.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
+                  UNION
+                  SELECT function.proowner
+                    FROM pg_proc function
+                    JOIN pg_namespace namespace ON namespace.oid=function.pronamespace
+                   WHERE namespace.nspname NOT IN ('pg_catalog', 'information_schema')
+                     AND namespace.nspname NOT LIKE 'pg_toast%'
+                     AND namespace.nspname NOT LIKE 'pg_temp_%'
+                ) existing_owner
+               WHERE existing_owner.owner_oid<>login.oid
+                 AND NOT login.rolsuper
+                 AND NOT pg_has_role(login.oid, existing_owner.owner_oid, 'USAGE')
+            ) AS controls_existing_objects
        FROM pg_roles login
       WHERE login.rolname = session_user`,
   );
   if (!role || (!role.rolsuper && (
-    !role.rolcreaterole || !role.owner_settable || !role.migrator_settable ||
-    !role.controls_database || !role.controls_public_schema || !role.controls_helper_functions
+    !role.rolcreaterole ||
+    !role.controls_database || !role.controls_public_schema ||
+    !role.controls_helper_functions || !role.controls_existing_objects
   ))) {
     throw new Error(
-      "tenant enforcement requires a database-owning bootstrap login that controls the public schema and existing OpenLoops helper functions, with CREATEROLE and SET ROLE capability for owner/migrator, or a superuser-equivalent login",
+      "tenant enforcement requires a database-owning bootstrap login with CREATEROLE and provider authority over every existing non-system schema, relation, function, and migration ledger owner; reassign legacy objects or grant exact owner-role membership before retrying",
     );
   }
   try {
     await client.transaction(async (transaction) => {
+      await transaction.execute(POSTGRES_MIGRATION_ADVISORY_LOCK_SQL);
       await transaction.execute("SAVEPOINT open_loops_bootstrap_probe");
       try {
-        await transaction.execute(`
-          DO $probe_roles$
-          BEGIN
-            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='open_loops_owner') THEN
-              CREATE ROLE open_loops_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
-            END IF;
-            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='open_loops_migrator') THEN
-              CREATE ROLE open_loops_migrator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
-            END IF;
-            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='open_loops_runtime') THEN
-              CREATE ROLE open_loops_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
-            END IF;
-            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='open_loops_authenticator') THEN
-              CREATE ROLE open_loops_authenticator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
-            END IF;
-          END
-          $probe_roles$;
-        `);
-        await transaction.execute("ALTER ROLE open_loops_owner INHERIT NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS");
-        await transaction.execute("ALTER ROLE open_loops_migrator INHERIT NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS");
-        await transaction.execute("ALTER ROLE open_loops_runtime INHERIT NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS");
-        await transaction.execute("ALTER ROLE open_loops_authenticator INHERIT NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS");
-        await transaction.execute(`
-          DO $probe_service_role_memberships$
-          DECLARE membership RECORD;
-          BEGIN
-            FOR membership IN
-              SELECT granted.rolname AS granted_role, member.rolname AS member_role
-                FROM pg_auth_members relation
-                JOIN pg_roles granted ON granted.oid=relation.roleid
-                JOIN pg_roles member ON member.oid=relation.member
-               WHERE member.rolname IN ('open_loops_runtime', 'open_loops_authenticator')
-            LOOP
-              EXECUTE format('REVOKE %I FROM %I', membership.granted_role, membership.member_role);
-            END LOOP;
-          END
-          $probe_service_role_memberships$;
-        `);
+        probeStage = "role normalization";
+        await transaction.execute(POSTGRES_TENANT_BOOTSTRAP_ROLES_SQL);
+        probeStage = "cluster role exclusivity";
+        await transaction.execute(POSTGRES_TENANT_CLUSTER_ROLE_EXCLUSIVITY_SQL);
+        await transaction.execute(POSTGRES_TENANT_BOOTSTRAP_MEMBERSHIPS_SQL);
+        probeStage = "service role memberships";
+        await transaction.execute(POSTGRES_TENANT_SERVICE_ROLE_MEMBERSHIPS_SQL);
+        probeStage = "privileged memberships";
+        await transaction.execute(POSTGRES_TENANT_PRIVILEGED_MEMBERSHIPS_SQL);
+        probeStage = "unsafe service memberships";
+        await transaction.execute(POSTGRES_TENANT_UNSAFE_SERVICE_MEMBERSHIPS_SQL);
+        probeStage = "owner schema grants";
         await transaction.execute("GRANT USAGE, CREATE ON SCHEMA public TO open_loops_owner, open_loops_migrator");
+        probeStage = "owner SET ROLE";
+        await transaction.execute("SET LOCAL ROLE open_loops_owner");
+        await transaction.execute("RESET ROLE");
+        probeStage = "migration ledger ownership";
+        await transaction.execute(`ALTER TABLE ${POSTGRES_MIGRATION_LEDGER_TABLE} OWNER TO open_loops_migrator`);
+        await transaction.execute("SET LOCAL ROLE open_loops_migrator");
+        await transaction.execute(
+          `INSERT INTO ${POSTGRES_MIGRATION_LEDGER_TABLE} (id, checksum, applied_at) VALUES ('__open_loops_bootstrap_role_probe__', 'probe', NOW())`,
+        );
+        await transaction.execute("RESET ROLE");
+        probeStage = "migration ledger inherited write";
+        await transaction.execute(
+          `INSERT INTO ${POSTGRES_MIGRATION_LEDGER_TABLE} (id, checksum, applied_at) VALUES ('__open_loops_bootstrap_session_probe__', 'probe', NOW())`,
+        );
+        probeStage = "database ACL";
         await transaction.execute(`
           DO $probe_database_acl$
           DECLARE probe_role TEXT := format('open_loops_bootstrap_probe_%s', pg_backend_pid());
@@ -721,6 +737,7 @@ export async function assertTenantEnforcementBootstrap(client: PoolQueryClient):
           END
           $probe_database_acl$;
         `);
+        probeStage = "service role ACL";
         await transaction.execute(`
           DO $probe_service_role_acl$
           DECLARE namespace RECORD;
@@ -774,30 +791,25 @@ export async function assertTenantEnforcementBootstrap(client: PoolQueryClient):
           END
           $probe_service_role_acl$;
         `);
-        await transaction.execute(`
-          DO $probe_service_acl$
-          DECLARE service_member RECORD;
-          BEGIN
-            FOR service_member IN
-              SELECT DISTINCT member.rolname AS member_role
-                FROM pg_auth_members membership
-                JOIN pg_roles granted ON granted.oid = membership.roleid
-                JOIN pg_roles member ON member.oid = membership.member
-               WHERE granted.rolname IN ('open_loops_runtime', 'open_loops_authenticator')
-                 AND member.rolcanlogin
-            LOOP
-              EXECUTE format('DROP OWNED BY %I', service_member.member_role);
-            END LOOP;
-          END
-          $probe_service_acl$;
-        `);
+        probeStage = "service login cleanup";
+        await transaction.execute(POSTGRES_TENANT_SERVICE_MEMBER_CLEANUP_SQL);
       } finally {
         await transaction.execute("ROLLBACK TO SAVEPOINT open_loops_bootstrap_probe");
       }
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && (
+      error.message.startsWith("non-superuser tenant enforcement requires pre-provisioned owner/migrator memberships") ||
+      error.message.startsWith("non-superuser tenant enforcement must run before runtime/authenticator service login memberships") ||
+      error.message.startsWith("reserved OpenLoops database role") ||
+      error.message.startsWith("reserved OpenLoops role") ||
+      error.message.startsWith("unsafe privileged role membership") ||
+      error.message.startsWith("unsafe service login membership")
+    )) {
+      throw error;
+    }
     throw new Error(
-      "tenant enforcement bootstrap login lacks provider-level authority for exact role creation/normalization, database/schema grants, or service-login privilege cleanup",
+      `tenant enforcement bootstrap login lacks provider-level authority during ${probeStage}`,
     );
   }
 }
@@ -806,11 +818,26 @@ export async function assertTenantEnforcementBootstrapIfPending(
   client: PoolQueryClient,
   schema: PostgresStorage,
 ): Promise<void> {
-  const preview = await schema.migrate({ dryRun: true });
+  let preview;
+  try {
+    preview = await schema.migrate({ dryRun: true });
+  } catch (error) {
+    if (!isPostgresInsufficientPrivilege(error)) throw error;
+    await assertTenantEnforcementBootstrap(client);
+    throw new Error(
+      "tenant enforcement migration ledger remains unreadable after the authority probe; reassign the ledger and all legacy OpenLoops objects to a role the bootstrap login can SET before retrying",
+    );
+  }
   if (preview.plan.some((item) =>
     item.migration.id === TENANT_ENFORCEMENT_MIGRATION_ID && item.state === "pending")) {
     await assertTenantEnforcementBootstrap(client);
   }
+}
+
+function isPostgresInsufficientPrivilege(error: unknown): boolean {
+  return error instanceof Error &&
+    "code" in error &&
+    (error as Error & { code?: unknown }).code === "42501";
 }
 
 async function runServe(opts: { host: string; port: number }): Promise<void> {
@@ -948,10 +975,77 @@ if (import.meta.main) {
 }
 
 export function logServeCommandFailure(error: unknown): void {
+  const gate = classifyTenantEnforcementGate(error);
   console.error(JSON.stringify({
     evt: "loops_serve_command_failed",
     errorType: error instanceof Error ? "error" : typeof error,
+    ...(gate ?? {}),
   }));
+}
+
+export function classifyTenantEnforcementGate(
+  error: unknown,
+): { gate: string; action: string } | undefined {
+  if (!(error instanceof Error)) return undefined;
+  const message = error.message;
+  if (message.startsWith("tenant enforcement requires a database-owning bootstrap login")) {
+    return {
+      gate: "legacy_object_ownership",
+      action: "reassign every non-system database object to the bootstrap login or an exact SETtable owner role",
+    };
+  }
+  if (message.startsWith("reserved OpenLoops database role")) {
+    return {
+      gate: "reserved_role_is_login",
+      action: "detach or replace the credential bound to the reserved NOLOGIN role with provider authority",
+    };
+  }
+  if (message.startsWith("reserved OpenLoops role")) {
+    return {
+      gate: "cross_database_role_dependency",
+      action: "remove the cross-database dependency or use an isolated OpenLoops cluster",
+    };
+  }
+  if (message.startsWith("unsafe privileged role membership")) {
+    return {
+      gate: "privileged_membership_cleanup",
+      action: "remove the membership with its original grantor or provider authority",
+    };
+  }
+  if (message.startsWith("non-superuser tenant enforcement requires pre-provisioned")) {
+    return {
+      gate: "bootstrap_membership_contract",
+      action: "provision only owner and migrator memberships with ADMIN FALSE INHERIT TRUE SET TRUE",
+    };
+  }
+  if (message.startsWith("non-superuser tenant enforcement must run before")) {
+    return {
+      gate: "service_membership_order",
+      action: "detach runtime and authenticator LOGIN memberships until tenant enforcement succeeds",
+    };
+  }
+  if (message.startsWith("unsafe service login membership")) {
+    return {
+      gate: "unsafe_service_membership",
+      action: "normalize the service LOGIN with provider authority before tenant enforcement",
+    };
+  }
+  if (message.startsWith("tenant enforcement migration ledger remains unreadable")) {
+    return {
+      gate: "migration_ledger_ownership",
+      action: "reassign the ledger and legacy OpenLoops objects to a role the bootstrap login can SET",
+    };
+  }
+  const authorityStage = message.match(
+    /^tenant enforcement bootstrap login lacks provider-level authority during ([a-z ]+)$/,
+  )?.[1];
+  if (authorityStage) {
+    return {
+      gate: `bootstrap_authority_${authorityStage.replaceAll(" ", "_")}`,
+      action: "grant the named provider-level authority and rerun the dry-run probe",
+    };
+  }
+  return undefined;
 }
 
 export { program };
