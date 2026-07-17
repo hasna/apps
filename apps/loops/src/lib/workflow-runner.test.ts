@@ -82,6 +82,67 @@ describe("workflow runner", () => {
     }
   });
 
+  test("persists the exact advisory agent session contract before execution", async () => {
+    const store = new Store(":memory:");
+    const binDir = mkdtempSync(join(tmpdir(), "loops-workflow-agent-contract-"));
+    const fakeCodewith = join(binDir, "codewith");
+    writeFileSync(fakeCodewith, "#!/bin/sh\ncat >/dev/null\nprintf agent-ok\n");
+    chmodSync(fakeCodewith, 0o755);
+    try {
+      const workflow = store.createWorkflow({
+        name: "agent-contract",
+        steps: [{
+          id: "agent",
+          target: {
+            type: "agent",
+            provider: "codewith",
+            prompt: "inspect the scoped repository state",
+            cwd: binDir,
+            model: "gpt-test",
+            sandbox: "workspace-write",
+            timeoutMs: 1234,
+            allowlist: {
+              tools: ["functions.exec_command"],
+              commands: ["git", "bun"],
+              enforcement: "metadata_only",
+              safetyReason: "scoped workflow agent test",
+            },
+            routing: { taskId: "task-123", eventId: "event-123", eventType: "task.created" },
+          },
+        }],
+      });
+
+      const result = await executeWorkflow(store, workflow, {
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+      });
+
+      expect(result.status).toBe("succeeded");
+      const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0]!;
+      const event = store.listWorkflowEvents(run.id).find((entry) => entry.eventType === "agent_session_contract");
+      expect(event?.stepId).toBe("agent");
+      expect(event?.payload).toMatchObject({
+        version: 1,
+        provider: "codewith",
+        model: "gpt-test",
+        cwd: binDir,
+        sandbox: "workspace-write",
+        manualBreakGlass: false,
+        routing: { taskId: "task-123", eventId: "event-123", eventType: "task.created" },
+        timeoutMs: 1234,
+        restrictions: {
+          tools: ["functions.exec_command"],
+          commands: ["git", "bun"],
+          enforcement: "metadata_only",
+          providerEnforced: false,
+        },
+        safetyReason: "scoped workflow agent test",
+      });
+    } finally {
+      store.close();
+      rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+
   test("scheduled workflow loops create idempotent workflow runs", async () => {
     const store = new Store(":memory:");
     try {

@@ -215,6 +215,73 @@ describe("executeLoop", () => {
     }
   });
 
+  test("exports the auditable advisory session contract without claiming enforcement", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-agent-session-contract-"));
+    const bin = join(root, "bin");
+    mkdirSync(bin, { recursive: true });
+    const claude = join(bin, "claude");
+    writeFileSync(
+      claude,
+      [
+        "#!/usr/bin/env bash",
+        "printf 'contract=%s\\n' \"$LOOPS_AGENT_SESSION_CONTRACT\"",
+        "printf 'enforcement=%s\\n' \"$LOOPS_AGENT_ALLOWLIST_ENFORCEMENT\"",
+        "printf 'reason=%s\\n' \"$LOOPS_AGENT_ALLOWLIST_SAFETY_REASON\"",
+        "cat >/dev/null",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(claude, 0o755);
+    try {
+      const loop = store.createLoop({
+        name: "auditable-agent-contract",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "claude",
+          prompt: "work",
+          cwd: root,
+          routing: { taskId: "task-123" },
+          allowlist: {
+            tools: ["functions.exec_command"],
+            commands: ["git", "bun"],
+            enforcement: "metadata_only",
+            safetyReason: "isolated repository maintenance",
+          },
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+      });
+      expect(result.status).toBe("succeeded");
+      expect(result.stdout).toContain("enforcement=metadata_only");
+      expect(result.stdout).toContain("reason=isolated repository maintenance");
+      const contractLine = result.stdout.split(/\r?\n/).find((line) => line.startsWith("contract="));
+      expect(contractLine).toBeTruthy();
+      const contract = JSON.parse(contractLine!.slice("contract=".length));
+      expect(contract).toMatchObject({
+        version: 1,
+        provider: "claude",
+        cwd: root,
+        sandbox: "provider-default",
+        manualBreakGlass: false,
+        restrictions: {
+          tools: ["functions.exec_command"],
+          commands: ["git", "bun"],
+          enforcement: "metadata_only",
+          providerEnforced: false,
+        },
+        safetyReason: "isolated repository maintenance",
+      });
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("applies a default idle watchdog to agent targets without explicit timeouts", async () => {
     const store = new Store(":memory:");
     const root = mkdtempSync(join(tmpdir(), "loops-agent-watchdog-"));

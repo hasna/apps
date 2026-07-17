@@ -295,7 +295,7 @@ loops create agent opencode-smoke \
   --prompt "Reply with exactly OK."
 ```
 
-Agent loops can also carry advisory per-session allowlist metadata:
+Agent loops can also carry an auditable advisory session contract:
 
 ```bash
 loops create agent repo-check \
@@ -304,13 +304,21 @@ loops create agent repo-check \
   --cwd /path/to/repo \
   --prompt "Check the repo and report concrete failures." \
   --allow-tool functions.exec_command \
-  --allow-command git,bun
+  --allow-command git,bun \
+  --safety-reason "isolated repository status inspection"
 ```
 
-These fields are stored on the loop target and exposed to the run environment
-as `LOOPS_AGENT_ALLOWED_TOOLS`, `LOOPS_AGENT_ALLOWED_COMMANDS`, and
-`LOOPS_AGENT_ALLOWLIST_ENFORCEMENT=metadata_only`. They are not enforced by
-OpenLoops yet; provider-native enforcement will be added separately.
+These fields are stored on the loop target, appended to provider stdin, and
+exposed as `LOOPS_AGENT_ALLOWED_TOOLS`, `LOOPS_AGENT_ALLOWED_COMMANDS`,
+`LOOPS_AGENT_ALLOWLIST_SAFETY_REASON`,
+`LOOPS_AGENT_ALLOWLIST_ENFORCEMENT=metadata_only`, and
+`LOOPS_AGENT_SESSION_CONTRACT`. Workflow runs also persist an
+`agent_session_contract` event. Tool/command restrictions remain advisory
+metadata: current provider adapters do not claim native enforcement.
+
+Codewith/Codex `danger-full-access` and Cursor `sandbox=disabled` require both a
+non-empty `--safety-reason` and explicit `--manual-break-glass`. A reason alone
+never substitutes for operator break-glass approval.
 
 For `codewith` and `aicopilot` account isolation, register matching OpenAccounts tools first if they are not built in on the machine:
 
@@ -943,9 +951,9 @@ loop input without storing anything, including the worktree path and branch for
 git-backed tasks.
 
 Generated worker/verifier workflows fail closed when `sandbox=danger-full-access`
-is requested without `manualBreakGlass=true`. Use `workspace-write` for
-unattended task/event routes. Full access is an explicit manual emergency path,
-not a default automation mode.
+is requested without both `manualBreakGlass=true` and a non-empty
+`safetyReason`. Use `workspace-write` for unattended task/event routes. Full
+access is an explicit manual emergency path, not a default automation mode.
 
 ## Run Receipts
 
@@ -1170,6 +1178,10 @@ The adapters intentionally use provider command surfaces instead of pretending e
 - When `--account` or a step `account` is set, OpenLoops resolves `accounts env <profile> --tool <tool>` before spawning the target, strips inherited tool home/API-key variables, and applies the selected profile only to that process. Missing account profiles fail before the provider binary receives the prompt.
 - `--auth-profile` and step `authProfile` are provider-native auth selectors. They currently apply to Codewith and are passed to Codewith as `--auth-profile <name>` on the `exec` invocation; they do not call OpenAccounts.
 - `--sandbox` maps to provider-native sandbox flags. Codewith/Codex accept `read-only`, `workspace-write`, or `danger-full-access`; Cursor accepts `enabled` or `disabled`.
+- `--allow-tool` and `--allow-command` declare advisory, metadata-only
+  restrictions and require `--safety-reason`. The exact contract is persisted
+  and emitted for audit, but OpenLoops does not claim provider-side enforcement.
+  Relaxed sandboxes also require explicit `--manual-break-glass`.
 - `--permission-mode` maps `plan`, `auto`, and `bypass` where the provider supports it. Claude uses native permission modes, Cursor maps bypass to `--force`, and OpenCode/AICopilot map bypass to `--dangerously-skip-permissions`.
 - `--variant` is provider-specific reasoning/model effort. Claude maps it to `--effort`, Codewith/Codex map it to `model_reasoning_effort`, and OpenCode/AICopilot pass `--variant`.
 - Daemon and scheduled runs prepend common user executable directories such as `~/.local/bin` and `~/.bun/bin` before resolving provider CLIs.

@@ -18,7 +18,7 @@ import type {
   PersistGuardOptions,
 } from "../types.js";
 import { accountToolForProvider, resolveAccountEnv, resolveAccountEnvSync } from "./accounts.js";
-import { BoundedOutputBuffer, killProcessGroup, providerAdapter, spawnCapture } from "./agent-adapter.js";
+import { agentSessionContract, BoundedOutputBuffer, killProcessGroup, providerAdapter, spawnCapture, type AgentSessionContract } from "./agent-adapter.js";
 import { commandNotFoundMessage, executableExists, normalizeExecutionPath } from "./env.js";
 import { nowIso } from "./ids.js";
 import { refreshLoopMachine, resolveMachineCommand } from "./machines.js";
@@ -112,7 +112,9 @@ interface CommandSpec {
   allowlist?: {
     tools?: string[];
     commands?: string[];
+    safetyReason?: string;
   };
+  sessionContract?: AgentSessionContract;
   agentProvider?: AgentProvider;
   worktree?: AgentWorktreeSpec;
 }
@@ -304,11 +306,13 @@ function metadataEnv(metadata: ExecutionMetadata): Record<string, string> {
   return env;
 }
 
-function allowlistEnv(allowlist: CommandSpec["allowlist"]): Record<string, string> {
+function allowlistEnv(allowlist: CommandSpec["allowlist"], contract?: AgentSessionContract): Record<string, string> {
   const env: Record<string, string> = {};
   if (allowlist?.tools?.length) env.LOOPS_AGENT_ALLOWED_TOOLS = allowlist.tools.join(",");
   if (allowlist?.commands?.length) env.LOOPS_AGENT_ALLOWED_COMMANDS = allowlist.commands.join(",");
-  if (allowlist?.tools?.length || allowlist?.commands?.length) env.LOOPS_AGENT_ALLOWLIST_ENFORCEMENT = "metadata_only";
+  if (allowlist?.tools?.length || allowlist?.commands?.length || allowlist?.safetyReason) env.LOOPS_AGENT_ALLOWLIST_ENFORCEMENT = "metadata_only";
+  if (allowlist?.safetyReason) env.LOOPS_AGENT_ALLOWLIST_SAFETY_REASON = allowlist.safetyReason;
+  if (contract) env.LOOPS_AGENT_SESSION_CONTRACT = JSON.stringify(contract);
   return env;
 }
 
@@ -362,6 +366,7 @@ function commandSpec(target: ExecutableTarget, opts: ExecuteOptions): CommandSpe
     preflightAnyOf: invocation.preflightAnyOf,
     stdin: invocation.stdin,
     allowlist: agentTarget.allowlist,
+    sessionContract: agentSessionContract(agentTarget),
     agentProvider: agentTarget.provider,
     worktree: agentTarget.worktree,
   };
@@ -379,7 +384,7 @@ function composeExecutionEnv(
     Object.assign(env, accountEnv);
   }
   Object.assign(env, spec.env ?? {});
-  Object.assign(env, allowlistEnv(spec.allowlist));
+  Object.assign(env, allowlistEnv(spec.allowlist, spec.sessionContract));
   env.PATH = normalizeExecutionPath(env);
   env.SHLVL ||= "1";
   Object.assign(env, metadataEnv(metadata));
@@ -465,7 +470,7 @@ function remoteBootstrapLines(
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
     lines.push(`export ${key}=${shellQuote(value)}`);
   }
-  for (const [key, value] of Object.entries(allowlistEnv(spec.allowlist))) {
+  for (const [key, value] of Object.entries(allowlistEnv(spec.allowlist, spec.sessionContract))) {
     lines.push(`export ${key}=${shellQuote(value)}`);
   }
   return lines;

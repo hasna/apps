@@ -724,6 +724,21 @@ async function handleRunWorkflowExecutionRequest(ctx: V1RequestContext, runId: s
     const recovered = await storage.recoverWorkflowRun(workflowRunId, optionalText(body.reason));
     return ok({ workflowRun: recovered.run, recoveredSteps: recovered.recoveredSteps });
   }
+  if (segments.length === 2 && segments[1] === "events") {
+    const eventType = requiredString(body.eventType, "eventType");
+    if (eventType !== "agent_session_contract") throw apiError("event_type_not_allowed", 422);
+    const stepId = requiredString(body.stepId, "stepId");
+    const step = await storage.getWorkflowStepRun(workflowRunId, stepId);
+    if (!step) return fail("workflow_step_not_found", 404);
+    return ok({
+      event: await storage.appendWorkflowEvent(
+        workflowRunId,
+        eventType,
+        stepId,
+        objectRecord(body.payload),
+      ),
+    });
+  }
   if (segments.length === 2 && segments[1] === "finalize") {
     const status = optionalEnum<WorkflowRunStatus>(
       optionalString(body.status) ?? null,

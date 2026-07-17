@@ -140,6 +140,7 @@ const AGENT_ROUTING_OPTION_SPECS: RouteOptionSpec[] = [
   },
   { flags: "--permission-mode <mode>", key: "permissionMode", kind: "value", description: "provider permission mode: default, plan, auto, or bypass", defaultValue: "bypass" },
   { flags: "--sandbox <mode>", key: "sandbox", kind: "value", description: "provider sandbox" },
+  { flags: "--safety-reason <reason>", key: "safetyReason", kind: "value", description: "auditable reason required for advisory restrictions or relaxed sandbox access" },
   {
     flags: "--manual-break-glass",
     key: "manualBreakGlass",

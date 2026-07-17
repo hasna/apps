@@ -576,6 +576,15 @@ export class LoopsClient {
       });
     }
 
+    /** runs.workflowRuns.events */
+    async runsWorkflowRunsEvents(id: string, workflowRunId: string, body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/runs/${encodeURIComponent(String(id))}/workflow-runs/${encodeURIComponent(String(workflowRunId))}/events`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** runs.workflowRuns.stepAction */
     async runsWorkflowRunsStepAction(id: string, workflowRunId: string, stepId: string, action: "get" | "start" | "pid" | "progress" | "skip" | "finalize", body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("POST", `/v1/runs/${encodeURIComponent(String(id))}/workflow-runs/${encodeURIComponent(String(workflowRunId))}/steps/${encodeURIComponent(String(stepId))}/${encodeURIComponent(String(action))}`, {

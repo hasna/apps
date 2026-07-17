@@ -121,10 +121,13 @@ export type AgentPermissionMode = "default" | "plan" | "auto" | "bypass";
 
 export type AgentSandbox = "read-only" | "workspace-write" | "danger-full-access" | "enabled" | "disabled";
 
+export type AgentAllowlistEnforcement = "metadata_only";
+
 export interface AgentAllowlistSpec {
   tools?: string[];
   commands?: string[];
-  enforcement?: "metadata_only";
+  enforcement?: AgentAllowlistEnforcement;
+  safetyReason?: string;
 }
 
 export type AgentWorktreeMode = "auto" | "required" | "off" | "main";
@@ -173,6 +176,7 @@ export interface AgentTargetBase {
   configIsolation?: AgentConfigIsolation;
   permissionMode?: AgentPermissionMode;
   sandbox?: AgentSandbox;
+  manualBreakGlass?: boolean;
   allowlist?: AgentAllowlistSpec;
   worktree?: AgentWorktreeSpec;
   routing?: AgentRoutingSpec;

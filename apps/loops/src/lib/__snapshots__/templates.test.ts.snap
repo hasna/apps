@@ -938,6 +938,10 @@ exports[`builtin rendered workflow snapshots builtin template summaries 1`] = `
         "description": "Provider sandbox mode."
       },
       {
+        "name": "safetyReason",
+        "description": "Auditable reason required for advisory restrictions or relaxed sandbox access."
+      },
+      {
         "name": "manualBreakGlass",
         "default": "false",
         "description": "Allow explicit danger-full-access in a generated workflow. Intended for manual emergency use only."
@@ -1057,6 +1061,10 @@ exports[`builtin rendered workflow snapshots builtin template summaries 1`] = `
         "description": "Provider sandbox mode."
       },
       {
+        "name": "safetyReason",
+        "description": "Auditable reason required for advisory restrictions or relaxed sandbox access."
+      },
+      {
         "name": "manualBreakGlass",
         "default": "false",
         "description": "Allow explicit danger-full-access in a generated workflow. Intended for manual emergency use only."
@@ -1159,6 +1167,10 @@ exports[`builtin rendered workflow snapshots builtin template summaries 1`] = `
         "name": "sandbox",
         "default": "workspace-write",
         "description": "Provider sandbox mode."
+      },
+      {
+        "name": "safetyReason",
+        "description": "Auditable reason required for advisory restrictions or relaxed sandbox access."
       },
       {
         "name": "manualBreakGlass",

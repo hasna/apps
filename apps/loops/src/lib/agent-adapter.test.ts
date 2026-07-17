@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
 import type { AgentTarget } from "../types.js";
-import { BoundedOutputBuffer, PROVIDER_ADAPTERS, providerAdapter, spawnCapture } from "./agent-adapter.js";
+import { agentSessionContract, BoundedOutputBuffer, PROVIDER_ADAPTERS, providerAdapter, spawnCapture } from "./agent-adapter.js";
 import { executeLoop } from "./executor.js";
 import { Store } from "./store.js";
 
@@ -333,6 +333,8 @@ describe("agent adapters", () => {
           provider: "codewith",
           prompt: "say ok",
           sandbox: "danger-full-access",
+          manualBreakGlass: true,
+          allowlist: { enforcement: "metadata_only", safetyReason: "isolated adapter test" },
           addDirs: ["/tmp/hasna-todos", "/tmp/hasna-loops"],
           configIsolation: "safe",
         },
@@ -412,6 +414,8 @@ describe("agent adapters", () => {
           prompt: "say ok",
           permissionMode: "bypass",
           sandbox: "disabled",
+          manualBreakGlass: true,
+          allowlist: { enforcement: "metadata_only", safetyReason: "isolated cursor adapter test" },
           configIsolation: "safe",
         },
       });
@@ -648,6 +652,7 @@ describe("provider adapter contracts", () => {
   test("declares provider capabilities including prompt channel", () => {
     expect(providerAdapter("codewith").capabilities).toEqual({
       sandbox: ["read-only", "workspace-write", "danger-full-access"],
+      allowlist: { tools: "metadata_only", commands: "metadata_only" },
       durable: false,
       remote: true,
       promptChannel: "stdin",
@@ -678,6 +683,49 @@ describe("provider adapter contracts", () => {
     expect(invocation.args).not.toContain("exec-prompt");
   });
 
+  test("builds an honest auditable contract without claiming provider enforcement", () => {
+    const target = baseTarget({
+      provider: "codewith",
+      prompt: "do scoped work",
+      cwd: "/tmp/repo",
+      model: "gpt-test",
+      sandbox: "danger-full-access",
+      manualBreakGlass: true,
+      routing: { taskId: "task-123", eventId: "event-123", eventType: "task.created" },
+      allowlist: {
+        tools: ["functions.exec_command"],
+        commands: ["git", "bun"],
+        enforcement: "metadata_only",
+        safetyReason: "operator-approved isolated worktree maintenance",
+      },
+    });
+    expect(agentSessionContract(target)).toEqual({
+      version: 1,
+      provider: "codewith",
+      model: "gpt-test",
+      cwd: "/tmp/repo",
+      permissionMode: "default",
+      sandbox: "danger-full-access",
+      manualBreakGlass: true,
+      routing: { taskId: "task-123", eventId: "event-123", eventType: "task.created" },
+      timeoutMs: null,
+      restrictions: {
+        tools: ["functions.exec_command"],
+        commands: ["git", "bun"],
+        enforcement: "metadata_only",
+        providerEnforced: false,
+      },
+      safetyReason: "operator-approved isolated worktree maintenance",
+    });
+
+    const invocation = providerAdapter("codewith").buildInvocation(target);
+    expect(invocation.stdin).toContain("OpenLoops agent session contract:");
+    expect(invocation.stdin).toContain("Restrictions: advisory metadata only; provider-enforced=false");
+    expect(invocation.stdin).toContain("Safety reason: operator-approved isolated worktree maintenance");
+    expect(invocation.args).not.toContain("operator-approved isolated worktree maintenance");
+    expect(invocation.args).not.toContain("functions.exec_command");
+  });
+
   test("throws aligned creation/execution validation errors", () => {
     expect(() => providerAdapter("claude").validate(baseTarget({ provider: "claude", sandbox: "read-only" }))).toThrow(
       "claude.sandbox is currently supported only for provider codewith, codex, or cursor",
@@ -691,6 +739,16 @@ describe("provider adapter contracts", () => {
     expect(() => providerAdapter("codewith").validate(baseTarget({ provider: "codewith", extraArgs: ["exec"] }))).toThrow(
       "codewith.extraArgs cannot include exec; codewith exec launch flags are managed by the adapter",
     );
+    expect(() => providerAdapter("codewith").validate(baseTarget({
+      provider: "codewith",
+      sandbox: "workspace-write",
+      allowlist: { commands: ["git"] },
+    }))).toThrow("allowlist.safetyReason");
+    expect(() => providerAdapter("codewith").validate(baseTarget({
+      provider: "codewith",
+      sandbox: "danger-full-access",
+      allowlist: { safetyReason: "isolated test" },
+    }))).toThrow("manualBreakGlass=true");
     expect(() => providerAdapter("opencode").validate(baseTarget({ provider: "opencode" }))).toThrow(
       "opencode.model is required for provider opencode",
     );

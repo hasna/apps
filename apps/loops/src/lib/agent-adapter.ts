@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import type { AgentProvider, AgentSandbox, AgentTarget } from "../types.js";
+import type { AgentAllowlistEnforcement, AgentProvider, AgentSandbox, AgentTarget, TimeoutMs } from "../types.js";
 import { scrubSecrets } from "./redact.js";
 
 export type ProviderPromptChannel = "stdin" | "argv";
@@ -7,12 +7,38 @@ export type ProviderPromptChannel = "stdin" | "argv";
 export interface ProviderCapabilities {
   /** Sandbox values the provider CLI accepts; empty when sandboxing is unsupported. */
   sandbox: readonly AgentSandbox[];
+  /** Tool/command restrictions exposed by this adapter. Metadata-only means advisory, not provider-enforced. */
+  allowlist: ProviderAllowlistCapabilities;
   /** Whether the provider runs as a durable background agent instead of a one-shot process. */
   durable: boolean;
   /** Whether the provider can be dispatched to a remote machine transport. */
   remote: boolean;
   /** How the prompt reaches the provider process. */
   promptChannel: ProviderPromptChannel;
+}
+
+export interface ProviderAllowlistCapabilities {
+  tools: AgentAllowlistEnforcement;
+  commands: AgentAllowlistEnforcement;
+}
+
+export interface AgentSessionContract {
+  version: 1;
+  provider: AgentProvider;
+  model?: string;
+  cwd?: string;
+  permissionMode: NonNullable<AgentTarget["permissionMode"]>;
+  sandbox: AgentSandbox | "provider-default";
+  manualBreakGlass: boolean;
+  routing?: AgentTarget["routing"];
+  timeoutMs: TimeoutMs;
+  restrictions: {
+    tools?: string[];
+    commands?: string[];
+    enforcement: AgentAllowlistEnforcement;
+    providerEnforced: false;
+  };
+  safetyReason?: string;
 }
 
 export interface AgentInvocation {
@@ -111,6 +137,27 @@ function validateAgentOptions(target: AgentTarget, label: string, capabilities: 
       throw new Error(`${label}.sandbox must be one of ${capabilities.sandbox.join(", ")}`);
     }
   }
+  if (target.manualBreakGlass !== undefined && typeof target.manualBreakGlass !== "boolean") {
+    throw new Error(`${label}.manualBreakGlass must be a boolean`);
+  }
+  if (target.allowlist?.enforcement !== undefined && target.allowlist.enforcement !== "metadata_only") {
+    throw new Error(`${label}.allowlist.enforcement must be metadata_only`);
+  }
+  const safetyReason = typeof target.allowlist?.safetyReason === "string" ? target.allowlist.safetyReason.trim() : "";
+  if (target.allowlist?.safetyReason !== undefined && !safetyReason) {
+    throw new Error(`${label}.allowlist.safetyReason must be a non-empty string`);
+  }
+  if ((target.allowlist?.tools?.length || target.allowlist?.commands?.length) && !safetyReason) {
+    throw new Error(`${label}.allowlist.safetyReason is required when tool or command restrictions are declared`);
+  }
+  const effectiveSandbox = effectiveAgentSandbox(target);
+  const relaxed = effectiveSandbox === "danger-full-access" || (provider === "cursor" && effectiveSandbox === "disabled");
+  if (relaxed && target.manualBreakGlass !== true) {
+    throw new Error(`${label}.manualBreakGlass=true is required when sandbox=${effectiveSandbox}`);
+  }
+  if (relaxed && !safetyReason) {
+    throw new Error(`${label}.allowlist.safetyReason is required when sandbox=${effectiveSandbox}`);
+  }
 }
 
 function codewithLikeSandbox(target: AgentTarget): AgentSandbox {
@@ -121,9 +168,74 @@ function configStringValue(value: string): string {
   return JSON.stringify(value);
 }
 
+export function effectiveAgentSandbox(target: AgentTarget): AgentSandbox | "provider-default" {
+  if (target.provider === "codewith" || target.provider === "codex") return codewithLikeSandbox(target);
+  if (target.provider === "cursor") return target.sandbox ?? (target.configIsolation === "none" ? "provider-default" : "enabled");
+  return "provider-default";
+}
+
+export function agentSessionContract(target: AgentTarget): AgentSessionContract | undefined {
+  const allowlist = target.allowlist;
+  const hasContract = Boolean(
+    allowlist?.tools?.length ||
+      allowlist?.commands?.length ||
+      allowlist?.safetyReason?.trim() ||
+      target.manualBreakGlass ||
+      effectiveAgentSandbox(target) === "danger-full-access" ||
+      (target.provider === "cursor" && effectiveAgentSandbox(target) === "disabled"),
+  );
+  if (!hasContract) return undefined;
+  return {
+    version: 1,
+    provider: target.provider,
+    model: target.model,
+    cwd: target.cwd,
+    permissionMode: target.permissionMode ?? "default",
+    sandbox: effectiveAgentSandbox(target),
+    manualBreakGlass: target.manualBreakGlass === true,
+    routing: target.routing,
+    timeoutMs: target.timeoutMs ?? null,
+    restrictions: {
+      tools: allowlist?.tools,
+      commands: allowlist?.commands,
+      enforcement: "metadata_only",
+      providerEnforced: false,
+    },
+    safetyReason: allowlist?.safetyReason?.trim() || undefined,
+  };
+}
+
+export function agentSessionContractPrompt(target: AgentTarget): string | undefined {
+  const contract = agentSessionContract(target);
+  if (!contract) return undefined;
+  const lines = [
+    "OpenLoops agent session contract:",
+    `- Provider: ${contract.provider}${contract.model ? ` model=${contract.model}` : ""}`,
+    contract.cwd ? `- Cwd: ${contract.cwd}` : undefined,
+    `- Permission mode: ${contract.permissionMode}`,
+    `- Sandbox: ${contract.sandbox}`,
+    `- Manual break-glass: ${contract.manualBreakGlass}`,
+    contract.routing?.taskId ? `- Todos task id: ${contract.routing.taskId}` : undefined,
+    contract.routing?.eventId ? `- Event: ${contract.routing.eventType ?? "unknown"} ${contract.routing.eventId}` : undefined,
+    contract.restrictions.tools?.length ? `- Allowed tools (advisory): ${contract.restrictions.tools.join(", ")}` : undefined,
+    contract.restrictions.commands?.length ? `- Allowed commands (advisory): ${contract.restrictions.commands.join(", ")}` : undefined,
+    "- Restrictions: advisory metadata only; provider-enforced=false",
+    contract.safetyReason ? `- Safety reason: ${contract.safetyReason}` : undefined,
+    "Stay within the advisory restrictions. Stop and report a blocker before broadening scope.",
+  ].filter((line): line is string => Boolean(line));
+  return lines.join("\n");
+}
+
+function promptWithAgentSessionContract(target: AgentTarget): string {
+  const contract = agentSessionContractPrompt(target);
+  if (!contract || target.prompt.includes("OpenLoops agent session contract:")) return target.prompt;
+  return `${target.prompt}\n\n${contract}`;
+}
+
 function buildAgentInvocation(target: AgentTarget): AgentInvocation {
   const isolation = target.configIsolation ?? "safe";
   const permissionMode = target.permissionMode ?? "default";
+  const prompt = promptWithAgentSessionContract(target);
   const args: string[] = [];
   switch (target.provider) {
     case "claude": {
@@ -137,7 +249,7 @@ function buildAgentInvocation(target: AgentTarget): AgentInvocation {
       if (target.variant) args.push("--effort", target.variant);
       if (target.agent) args.push("--agent", target.agent);
       args.push(...(target.extraArgs ?? []));
-      return { command: "claude", args, stdin: target.prompt };
+      return { command: "claude", args, stdin: prompt };
     }
     case "cursor": {
       args.push(
@@ -161,7 +273,7 @@ function buildAgentInvocation(target: AgentTarget): AgentInvocation {
       if (target.model) args.push("--model", target.model);
       if (target.agent) args.push("--agent", target.agent);
       args.push(...(target.extraArgs ?? []));
-      return { command: "sh", args, stdin: target.prompt, preflightAnyOf: ["agent"] };
+      return { command: "sh", args, stdin: prompt, preflightAnyOf: ["agent"] };
     }
     case "codewith": {
       // Non-interactive `codewith exec` runs a fresh session per invocation, so it
@@ -182,7 +294,7 @@ function buildAgentInvocation(target: AgentTarget): AgentInvocation {
       args.push(...(target.extraArgs ?? []));
       // exec reads instructions from stdin when no positional prompt is given,
       // keeping the (possibly large) prompt off argv.
-      return { command: "codewith", args, stdin: target.prompt };
+      return { command: "codewith", args, stdin: prompt };
     }
     case "codex": {
       if (target.variant) args.push("-c", `model_reasoning_effort=${configStringValue(target.variant)}`);
@@ -192,7 +304,7 @@ function buildAgentInvocation(target: AgentTarget): AgentInvocation {
       for (const dir of target.addDirs ?? []) args.push("--add-dir", dir);
       if (target.model) args.push("--model", target.model);
       args.push(...(target.extraArgs ?? []));
-      return { command: "codex", args, stdin: target.prompt };
+      return { command: "codex", args, stdin: prompt };
     }
     case "aicopilot":
     case "opencode": {
@@ -204,7 +316,7 @@ function buildAgentInvocation(target: AgentTarget): AgentInvocation {
       if (target.variant) args.push("--variant", target.variant);
       if (target.agent) args.push("--agent", target.agent);
       args.push(...(target.extraArgs ?? []));
-      return { command: target.provider, args, stdin: target.prompt };
+      return { command: target.provider, args, stdin: prompt };
     }
   }
 }
@@ -224,12 +336,12 @@ function adapterFor(provider: AgentProvider, capabilities: ProviderCapabilities)
 }
 
 export const PROVIDER_ADAPTERS: Record<AgentProvider, ProviderAdapter> = {
-  claude: adapterFor("claude", { sandbox: [], durable: false, remote: true, promptChannel: "stdin" }),
-  cursor: adapterFor("cursor", { sandbox: CURSOR_SANDBOXES, durable: false, remote: true, promptChannel: "stdin" }),
-  codewith: adapterFor("codewith", { sandbox: CODEX_LIKE_SANDBOXES, durable: false, remote: true, promptChannel: "stdin" }),
-  codex: adapterFor("codex", { sandbox: CODEX_LIKE_SANDBOXES, durable: false, remote: true, promptChannel: "stdin" }),
-  aicopilot: adapterFor("aicopilot", { sandbox: [], durable: false, remote: true, promptChannel: "stdin" }),
-  opencode: adapterFor("opencode", { sandbox: [], durable: false, remote: true, promptChannel: "stdin" }),
+  claude: adapterFor("claude", { sandbox: [], allowlist: { tools: "metadata_only", commands: "metadata_only" }, durable: false, remote: true, promptChannel: "stdin" }),
+  cursor: adapterFor("cursor", { sandbox: CURSOR_SANDBOXES, allowlist: { tools: "metadata_only", commands: "metadata_only" }, durable: false, remote: true, promptChannel: "stdin" }),
+  codewith: adapterFor("codewith", { sandbox: CODEX_LIKE_SANDBOXES, allowlist: { tools: "metadata_only", commands: "metadata_only" }, durable: false, remote: true, promptChannel: "stdin" }),
+  codex: adapterFor("codex", { sandbox: CODEX_LIKE_SANDBOXES, allowlist: { tools: "metadata_only", commands: "metadata_only" }, durable: false, remote: true, promptChannel: "stdin" }),
+  aicopilot: adapterFor("aicopilot", { sandbox: [], allowlist: { tools: "metadata_only", commands: "metadata_only" }, durable: false, remote: true, promptChannel: "stdin" }),
+  opencode: adapterFor("opencode", { sandbox: [], allowlist: { tools: "metadata_only", commands: "metadata_only" }, durable: false, remote: true, promptChannel: "stdin" }),
 };
 
 export const AGENT_PROVIDERS = Object.keys(PROVIDER_ADAPTERS) as AgentProvider[];

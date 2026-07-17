@@ -1272,6 +1272,45 @@ describe("loops-api foundation", () => {
       });
       expect(start.status).toBe(200);
       expect(await start.json()).toMatchObject({ step: { stepId: "step", status: "running" } });
+
+      const contractPayload = {
+        version: 1,
+        provider: "codewith",
+        sandbox: "workspace-write",
+        manualBreakGlass: false,
+        restrictions: { commands: ["git"], enforcement: "metadata_only", providerEnforced: false },
+        safetyReason: "isolated API contract test",
+      };
+      const appendContract = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/events`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claimed.claims[0]!.claimToken,
+          eventType: "agent_session_contract",
+          stepId: "step",
+          payload: contractPayload,
+        }),
+      });
+      expect(appendContract.status).toBe(200);
+      expect(await appendContract.json()).toMatchObject({
+        event: { eventType: "agent_session_contract", stepId: "step", payload: contractPayload },
+      });
+      expect((await storage.listWorkflowEvents(created.workflowRun.id)).some((event) =>
+        event.eventType === "agent_session_contract" && event.stepId === "step"
+      )).toBe(true);
+
+      const arbitraryEvent = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/events`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claimed.claims[0]!.claimToken,
+          eventType: "fabricated_security_verdict",
+          stepId: "step",
+          payload: {},
+        }),
+      });
+      expect(arbitraryEvent.status).toBe(422);
+      expect(await arbitraryEvent.json()).toMatchObject({ ok: false, error: "event_type_not_allowed" });
     } finally {
       server.stop(true);
       await storage.close();

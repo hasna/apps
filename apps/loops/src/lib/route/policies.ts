@@ -179,7 +179,7 @@ function policyDefinitions(): RoutePolicyDefinition[] {
       routeKind: "todos-task",
       safety: "manual-break-glass",
       source: "spark01 paused live loop machine-todos-drain-pilot-breakglass inspected 2026-07-06",
-      requiresExplicitOptions: ["manualBreakGlass"],
+      requiresExplicitOptions: ["manualBreakGlass", "safetyReason"],
       drain: {
         routePolicyEvidence: "pilot",
         todosProject: loopsProject,
@@ -193,6 +193,7 @@ function policyDefinitions(): RoutePolicyDefinition[] {
         provider: "codewith",
         authProfilePool: "account004,account005,account006",
         sandbox: "danger-full-access",
+        safetyReason: "operator-approved pilot break-glass route",
         manualBreakGlass: true,
         permissionMode: "bypass",
         projectPath: loopsProject,
@@ -401,6 +402,7 @@ function expandedDrainOptions(opts: TodosDrainOptions): Partial<TodosDrainOption
     "verifierIdleTimeout",
     "permissionMode",
     "sandbox",
+    "safetyReason",
     "manualBreakGlass",
     "projectPath",
     "projectGroup",
@@ -473,8 +475,9 @@ export function validateRoutePolicy(idOrAlias: string): RoutePolicyRender {
   if (args.includes("--policy") || args.includes("--preset")) {
     throw new ValidationError(`route policy ${policy.id} rendered a non-replayable policy flag`);
   }
-  if (policy.safety === "manual-break-glass" && (drain.sandbox !== "danger-full-access" || drain.manualBreakGlass !== true)) {
-    throw new ValidationError(`route policy ${policy.id} must expose danger-full-access and manual-break-glass evidence`);
+  if (policy.safety === "manual-break-glass" &&
+      (drain.sandbox !== "danger-full-access" || drain.manualBreakGlass !== true || !drain.safetyReason?.trim())) {
+    throw new ValidationError(`route policy ${policy.id} must expose danger-full-access, safety-reason, and manual-break-glass evidence`);
   }
   if (policy.safety === "unattended" && drain.sandbox === "danger-full-access") {
     throw new ValidationError(`route policy ${policy.id} cannot use danger-full-access as unattended automation`);
