@@ -2,15 +2,25 @@
 // Regenerate: bun run sdk:generate
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: ConversationsClient 0.4.0
+// Source: ConversationsClient 0.5.6
 
-export interface Message { "id"?: number; "uuid"?: string; "session_id"?: string; "from_agent"?: string; "to_agent"?: string; "channel"?: string | null; "project_id"?: string | null; "content"?: string; "priority"?: string; "blocking"?: boolean; "created_at"?: string }
+export interface Message { "id"?: number; "uuid"?: string; "session_id"?: string; "from_agent"?: string; "to_agent"?: string; "channel"?: string | null; "project_id"?: string | null; "content"?: string; "priority"?: string; "blocking"?: boolean; "reply_to"?: number | null; "working_dir"?: string | null; "repository"?: string | null; "branch"?: string | null; "metadata"?: Record<string, unknown> | null; "attachments"?: Array<Record<string, unknown>> | null; "created_at"?: string }
 
 export interface Channel { "name"?: string; "description"?: string | null; "topic"?: string | null; "project_id"?: string | null; "created_by"?: string; "created_at"?: string; "archived_at"?: string | null }
 
 export interface Project { "id"?: string; "name"?: string; "description"?: string | null; "path"?: string | null; "repository"?: string | null; "created_by"?: string; "status"?: string; "created_at"?: string }
 
 export interface Agent { "agent"?: string; "session_id"?: string | null; "role"?: string; "project_id"?: string; "status"?: string; "last_seen_at"?: string }
+
+export interface IncidentSnapshotV1 { "id": string; "title": string; "severity": "info" | "low" | "medium" | "high" | "critical"; "status": "open" | "investigating" | "contained" | "monitoring" | "resolved" | "superseded"; "owner": string; "affected_scopes": Array<string>; "blocked_scopes": Array<string>; "containment": string | null; "next_action": string | null; "deadline": string | null; "closure_evidence": Array<string>; "supersedes_id": string | null; "superseded_by_id": string | null; "resolved_at": string | null; "version": number; "created_at": string; "updated_at": string }
+
+export interface IncidentProjectionEventV1 { "schema_version": 1; "source": "todos"; "authority_id": string; "incident_id": string; "transition_id": string; "incident_version": number; "occurred_at": string; "event_id": string; "projection_key": string; "incident": IncidentSnapshotV1 }
+
+export interface IncidentProjectionRecord { "id": number; "event_id": string; "projection_key": string; "message_id": number; "schema_version": 1; "source": "todos"; "tenant_id": string; "authority_id": string; "incident_id": string; "transition_id": string; "incident_version": number; "occurred_at": string; "status": "open" | "investigating" | "contained" | "monitoring" | "resolved" | "superseded"; "severity": "info" | "low" | "medium" | "high" | "critical"; "blocking": boolean; "supersedes_transition_id": string | null; "supersedes_incident_id": string | null; "superseded_by_incident_id": string | null; "canonical_payload": string; "payload_hash": string; "created_at": string; "message": Message; "replayed": boolean }
+
+export interface IncidentProjectionResponse { "projection": IncidentProjectionRecord }
+
+export interface IncidentProjectionError { "error": string; "code"?: string | null }
 
 export interface ConversationsClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */
@@ -117,6 +127,14 @@ export class ConversationsClient {
       });
     }
 
+    async listMemberChannels(query?: { "agent": string }, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("GET", `/v1/channels/mine`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
     async getChannel(name: string, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("GET", `/v1/channels/${encodeURIComponent(String(name))}`, {
         body: undefined,
@@ -133,6 +151,24 @@ export class ConversationsClient {
       });
     }
 
+    /** Append a canonical Todos incident projection */
+    async appendIncidentProjection(body: IncidentProjectionEventV1, init?: RequestInit): Promise<IncidentProjectionResponse> {
+      return this.request("POST", `/v1/incident-projections`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Read one canonical incident projection */
+    async getIncidentProjection(eventId: string, init?: RequestInit): Promise<IncidentProjectionResponse> {
+      return this.request("GET", `/v1/incident-projections/${encodeURIComponent(String(eventId))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
     /** List messages */
     async listMessages(query?: { "to"?: string; "from"?: string; "channel"?: string; "session"?: string; "limit"?: number; "count"?: boolean }, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("GET", `/v1/messages`, {
@@ -143,10 +179,19 @@ export class ConversationsClient {
     }
 
     /** Send a message */
-    async sendMessage(body: { "from"?: string; "to": string; "content": string; "channel"?: string; "project_id"?: string; "session_id"?: string; "priority"?: string; "blocking"?: boolean }, init?: RequestInit): Promise<Record<string, unknown>> {
+    async sendMessage(body: { "from"?: string; "to": string; "content": string; "channel"?: string; "project_id"?: string; "session_id"?: string; "priority"?: string; "blocking"?: boolean; "reply_to"?: number; "metadata"?: Record<string, unknown>; "working_dir"?: string; "repository"?: string; "branch"?: string; "attachments"?: Array<Record<string, unknown>> }, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("POST", `/v1/messages`, {
         body,
         query: undefined,
+        init,
+      });
+    }
+
+    /** List canonical current blockers visible to one agent */
+    async listUnreadBlockers(query?: { "agent": string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("GET", `/v1/messages/blockers`, {
+        body: undefined,
+        query,
         init,
       });
     }

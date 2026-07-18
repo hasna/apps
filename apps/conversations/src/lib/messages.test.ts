@@ -668,6 +668,7 @@ describe("threaded replies", () => {
     const parent = sendMessage({ from: "alice", to: "bob", content: "original" });
     const reply = sendMessage({ from: "bob", to: "alice", content: "reply", reply_to: parent.id });
     expect(reply.reply_to).toBe(parent.id);
+    expect(reply.session_id).toBe(parent.session_id);
   });
 
   test("sendMessage without reply_to defaults to null", () => {

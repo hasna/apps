@@ -6,6 +6,11 @@ import { join, basename, resolve } from "path";
 import { fireWebhooks } from "./webhooks.js";
 import { normalizeChannelName } from "./channel-names.js";
 import { markChannelNotificationsRead } from "./channel-notifications.js";
+import {
+  IncidentProjectorConfigurationError,
+  metadataSpoofsIncidentProjection,
+  validateIncidentProjectorBinding,
+} from "./incident-projection-contract.js";
 
 /** Strip null/undefined fields from a message for compact output. */
 export function compactMessage(msg: Message): Partial<Message> {
@@ -130,6 +135,10 @@ function checkRateLimit(agentId: string): void {
 export function sendMessage(opts: SendMessageOptions): Message {
   assertMessageSize(opts.content);
 
+  if (metadataSpoofsIncidentProjection(opts.metadata)) {
+    throw new Error("Canonical incident projection metadata is reserved for the dedicated projector");
+  }
+
   checkRateLimit(opts.from);
 
   const validatedAttachments = opts.attachments && opts.attachments.length > 0
@@ -137,12 +146,8 @@ export function sendMessage(opts: SendMessageOptions): Message {
     : [];
 
   const db = getDb();
-  const channelName = opts.channel ? normalizeChannelName(opts.channel) : null;
+  const requestedChannel = opts.channel ? normalizeChannelName(opts.channel) : null;
   const explicitSession = opts.session_id && opts.session_id.trim().length > 0 ? opts.session_id : undefined;
-  const sessionId = channelName
-    ? `channel:${channelName}`
-    : explicitSession ?? `${[opts.from, opts.to].sort().join("-")}-${randomUUID().slice(0, 8)}`;
-  const toAgent = channelName ?? opts.to;
   const metadata = opts.metadata ? JSON.stringify(opts.metadata) : null;
   const normalizedPriority = (opts.priority === "low" || opts.priority === "normal" || opts.priority === "high" || opts.priority === "urgent")
     ? opts.priority
@@ -150,34 +155,66 @@ export function sendMessage(opts: SendMessageOptions): Message {
 
   const blocking = opts.blocking ? 1 : 0;
 
-  const replyTo = opts.reply_to || null;
+  const replyTo = opts.reply_to ?? null;
+  if (replyTo != null && (!Number.isSafeInteger(replyTo) || replyTo <= 0)) {
+    throw new Error("reply_to must be a positive integer");
+  }
 
   const msgUuid = randomUUID().replace(/-/g, "");
 
-  const stmt = db.prepare(`
-    INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, working_dir, repository, branch, metadata, blocking, reply_to)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    RETURNING *
-  `);
+  const inserted = db.transaction(() => {
+    let channelName = requestedChannel;
+    let projectId = opts.project_id ?? null;
+    let sessionId: string;
 
-  const row = stmt.get(
-    msgUuid,
-    sessionId,
-    opts.from,
-    toAgent,
-    channelName,
-    opts.project_id || null,
-    opts.content,
-    normalizedPriority,
-    opts.working_dir || null,
-    opts.repository || null,
-    opts.branch || null,
-    metadata,
-    blocking,
-    replyTo
-  ) as Record<string, unknown>;
+    if (replyTo != null) {
+      const parent = db.prepare(
+        "SELECT session_id, channel, project_id FROM messages WHERE id = ?",
+      ).get(replyTo) as { session_id: string; channel: string | null; project_id: string | null } | undefined;
+      if (!parent) throw new Error("reply parent not found");
+      if (requestedChannel != null && requestedChannel !== parent.channel) {
+        throw new Error("reply parent is outside the message scope");
+      }
+      if (opts.project_id != null && opts.project_id !== parent.project_id) {
+        throw new Error("reply parent is outside the message scope");
+      }
+      if (explicitSession != null && explicitSession !== parent.session_id) {
+        throw new Error("reply parent is outside the message scope");
+      }
+      channelName = parent.channel;
+      projectId = parent.project_id;
+      sessionId = parent.session_id;
+    } else {
+      sessionId = channelName
+        ? `channel:${channelName}`
+        : explicitSession ?? `${[opts.from, opts.to].sort().join("-")}-${randomUUID().slice(0, 8)}`;
+    }
 
-  const message = parseMessage(row);
+    const toAgent = channelName ?? opts.to;
+    const row = db.prepare(`
+      INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, working_dir, repository, branch, metadata, blocking, reply_to)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      RETURNING *
+    `).get(
+      msgUuid,
+      sessionId,
+      opts.from,
+      toAgent,
+      channelName,
+      projectId,
+      opts.content,
+      normalizedPriority,
+      opts.working_dir || null,
+      opts.repository || null,
+      opts.branch || null,
+      metadata,
+      blocking,
+      replyTo,
+    ) as Record<string, unknown>;
+    return { message: parseMessage(row), channelName };
+  });
+
+  const { message, channelName } = inserted;
 
   // Handle file attachments
   if (validatedAttachments.length > 0) {
@@ -368,35 +405,91 @@ export function countMessages(opts: CountMessagesOptions = {}): number {
   return row?.n ?? 0;
 }
 
-export function markRead(ids: number[], reader: string): number {
+function visibleProjectionMessageIds(agent: string): Message[] {
   const db = getDb();
-  if (ids.length === 0) return 0;
+  const isProjection = db.prepare("SELECT 1 AS present FROM incident_projections WHERE message_id = ?");
+  return getUnreadBlockers(agent).filter((message) => Boolean(isProjection.get(message.id)));
+}
 
-  const placeholders = ids.map(() => "?").join(", ");
-  const stmt = db.prepare(
-    `UPDATE messages SET read_at = strftime('%Y-%m-%dT%H:%M:%f', 'now') WHERE id IN (${placeholders}) AND to_agent = ? AND read_at IS NULL`
+function insertProjectionReceipts(ids: number[], reader: string): number {
+  if (ids.length === 0) return 0;
+  const db = getDb();
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO message_read_receipts (message_id, agent, read_at)
+     VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%f', 'now'))`,
   );
-  const result = stmt.run(...ids, reader);
-  return result.changes;
+  const normalized = reader.toLowerCase();
+  let inserted = 0;
+  for (const id of new Set(ids)) inserted += insert.run(id, normalized).changes;
+  return inserted;
+}
+
+function markExplicitRead(ids: number[], reader: string, requireRecipient: boolean): number {
+  const db = getDb();
+  const uniqueIds = [...new Set(ids.filter((id) => Number.isSafeInteger(id) && id > 0))];
+  if (uniqueIds.length === 0) return 0;
+  return db.transaction(() => {
+    const visibleProjected = new Set(visibleProjectionMessageIds(reader).map((message) => message.id));
+    const messageLookup = db.prepare(`
+      SELECT m.to_agent,
+             EXISTS (SELECT 1 FROM incident_projections p WHERE p.message_id = m.id) AS projected
+      FROM messages m WHERE m.id = ?
+    `);
+    const receipt = db.prepare(
+      `INSERT OR IGNORE INTO message_read_receipts (message_id, agent, read_at)
+       VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%f', 'now'))`,
+    );
+    const markLegacy = db.prepare(
+      `UPDATE messages SET read_at = strftime('%Y-%m-%dT%H:%M:%f', 'now')
+       WHERE id = ? AND read_at IS NULL`,
+    );
+    const normalized = reader.toLowerCase();
+    let marked = 0;
+    for (const id of uniqueIds) {
+      const row = messageLookup.get(id) as { to_agent: string; projected: number } | undefined;
+      if (!row) continue;
+      const projected = Boolean(row.projected);
+      if (projected && !visibleProjected.has(id)) continue;
+      if (!projected && requireRecipient && row.to_agent.toLowerCase() !== normalized) continue;
+      const receiptChanged = projected ? receipt.run(id, normalized).changes > 0 : false;
+      const globalChanged = projected ? false : markLegacy.run(id).changes > 0;
+      if (receiptChanged || globalChanged) marked += 1;
+    }
+    return marked;
+  });
+}
+
+export function markRead(ids: number[], reader: string): number {
+  return markExplicitRead(ids, reader, true);
 }
 
 export function markSessionRead(sessionId: string, reader: string): number {
   const db = getDb();
-  const stmt = db.prepare(
-    `UPDATE messages SET read_at = strftime('%Y-%m-%dT%H:%M:%f', 'now') WHERE session_id = ? AND to_agent = ? AND read_at IS NULL`
-  );
-  const result = stmt.run(sessionId, reader);
-  return result.changes;
+  return db.transaction(() => {
+    const projected = visibleProjectionMessageIds(reader).filter((message) => message.session_id === sessionId);
+    const acknowledged = insertProjectionReceipts(projected.map((message) => message.id), reader);
+    const result = db.prepare(
+      `UPDATE messages SET read_at = strftime('%Y-%m-%dT%H:%M:%f', 'now')
+       WHERE session_id = ? AND to_agent = ? AND read_at IS NULL
+         AND NOT EXISTS (SELECT 1 FROM incident_projections p WHERE p.message_id = messages.id)`
+    ).run(sessionId, reader);
+    return acknowledged + result.changes;
+  });
 }
 
 export function markChannelRead(channelName: string, reader: string): number {
   const db = getDb();
   const normalized = normalizeChannelName(channelName);
-  const stmt = db.prepare(
-    `UPDATE messages SET read_at = strftime('%Y-%m-%dT%H:%M:%f', 'now') WHERE channel = ? AND from_agent != ? AND read_at IS NULL`
-  );
-  const result = stmt.run(normalized, reader);
-  return result.changes;
+  return db.transaction(() => {
+    const projected = visibleProjectionMessageIds(reader).filter((message) => message.channel === normalized);
+    const acknowledged = insertProjectionReceipts(projected.map((message) => message.id), reader);
+    const result = db.prepare(
+      `UPDATE messages SET read_at = strftime('%Y-%m-%dT%H:%M:%f', 'now')
+       WHERE channel = ? AND from_agent != ? AND read_at IS NULL
+         AND NOT EXISTS (SELECT 1 FROM incident_projections p WHERE p.message_id = messages.id)`
+    ).run(normalized, reader);
+    return acknowledged + result.changes;
+  });
 }
 
 export function getMessageById(id: number): Message | null {
@@ -409,21 +502,7 @@ export function markReadByIds(ids: number[], agent?: string): number {
   const db = getDb();
   if (ids.length === 0) return 0;
 
-  if (agent) {
-    // Use per-agent read receipts so other agents' unread status is preserved
-    const stmt = db.prepare(
-      `INSERT OR REPLACE INTO message_read_receipts (message_id, agent, read_at)
-       VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%f', 'now'))`
-    );
-    const normalized = agent.toLowerCase();
-    for (const id of ids) stmt.run(id, normalized);
-    // Also update global read_at for backward compat
-    const placeholders = ids.map(() => "?").join(", ");
-    const update = db.prepare(
-      `UPDATE messages SET read_at = strftime('%Y-%m-%dT%H:%M:%f', 'now') WHERE id IN (${placeholders}) AND read_at IS NULL`
-    );
-    return update.run(...ids).changes;
-  }
+  if (agent) return markExplicitRead(ids, agent, false);
 
   // Legacy: no agent — update global read_at only
   const placeholders = ids.map(() => "?").join(", ");
@@ -436,11 +515,16 @@ export function markReadByIds(ids: number[], agent?: string): number {
 
 export function markAllRead(agent: string): number {
   const db = getDb();
-  const stmt = db.prepare(
-    `UPDATE messages SET read_at = strftime('%Y-%m-%dT%H:%M:%f', 'now') WHERE to_agent = ? AND read_at IS NULL`
-  );
-  const result = stmt.run(agent);
-  return result.changes;
+  return db.transaction(() => {
+    const projected = visibleProjectionMessageIds(agent);
+    const acknowledged = insertProjectionReceipts(projected.map((message) => message.id), agent);
+    const result = db.prepare(
+      `UPDATE messages SET read_at = strftime('%Y-%m-%dT%H:%M:%f', 'now')
+       WHERE to_agent = ? AND read_at IS NULL
+         AND NOT EXISTS (SELECT 1 FROM incident_projections p WHERE p.message_id = messages.id)`
+    ).run(agent);
+    return acknowledged + result.changes;
+  });
 }
 
 export interface DigestMessage {
@@ -1036,6 +1120,25 @@ export function getPinnedMessages(opts?: { channel?: string; session_id?: string
 
 export function getUnreadBlockers(agent: string, opts?: { limit?: number; offset?: number }): Message[] {
   const db = getDb();
+  const tenantId = process.env.HASNA_CONVERSATIONS_TENANT_ID?.trim();
+  const authorityId = process.env.HASNA_CONVERSATIONS_INCIDENT_AUTHORITY_ID?.trim();
+  const anyProjection = db.prepare("SELECT 1 AS present FROM incident_projections LIMIT 1").get();
+  if ((!tenantId || !authorityId) && (anyProjection || tenantId || authorityId)) {
+    throw new IncidentProjectorConfigurationError(
+      "Canonical blocker reads require HASNA_CONVERSATIONS_TENANT_ID and HASNA_CONVERSATIONS_INCIDENT_AUTHORITY_ID",
+    );
+  }
+  const binding = tenantId && authorityId ? validateIncidentProjectorBinding(tenantId, authorityId) : null;
+  const selectedProjection = binding
+    ? db.prepare(
+        "SELECT 1 AS present FROM incident_projections WHERE tenant_id = ? AND authority_id = ? LIMIT 1",
+      ).get(binding.tenant_id, binding.authority_id)
+    : null;
+  if (anyProjection && binding && !selectedProjection) {
+    throw new IncidentProjectorConfigurationError(
+      "Configured incident projector tenant/authority does not match stored canonical projections",
+    );
+  }
   const safeLimit = Number.isFinite(opts?.limit) && (opts!.limit as number) > 0
     ? Math.floor(opts!.limit as number)
     : 0;
@@ -1045,15 +1148,81 @@ export function getUnreadBlockers(agent: string, opts?: { limit?: number; offset
   const limitClause = safeLimit > 0 ? `LIMIT ${safeLimit}` : safeOffset > 0 ? "LIMIT -1" : "";
   const offsetClause = safeOffset > 0 ? `OFFSET ${safeOffset}` : "";
   const rows = db.prepare(`
-    SELECT * FROM messages
-    WHERE blocking = 1 AND read_at IS NULL
-    AND (
-      to_agent = ?
-      OR channel IN (SELECT channel FROM channel_members WHERE agent = ?)
+    WITH latest AS (
+      SELECT p.*
+      FROM incident_projections p
+      JOIN (
+        SELECT tenant_id, authority_id, incident_id, MAX(incident_version) AS incident_version
+        FROM incident_projections
+        WHERE tenant_id = ? AND authority_id = ?
+        GROUP BY tenant_id, authority_id, incident_id
+      ) current
+        ON current.tenant_id = p.tenant_id
+       AND current.authority_id = p.authority_id
+       AND current.incident_id = p.incident_id
+       AND current.incident_version = p.incident_version
+    ),
+    blocker_candidates AS (
+      SELECT p.*,
+             CASE WHEN p.status = 'superseded'
+                        AND p.superseded_by_incident_id IS NOT NULL
+                        AND NOT EXISTS (
+                          SELECT 1 FROM incident_projections replacement
+                          WHERE replacement.tenant_id = p.tenant_id
+                            AND replacement.authority_id = p.authority_id
+                            AND replacement.incident_id = p.superseded_by_incident_id
+                            AND replacement.supersedes_incident_id = p.incident_id
+                        )
+                  THEN 1 ELSE 0 END AS pending_handoff
+      FROM latest p
+    ),
+    projected_ids AS (
+      SELECT DISTINCT m.id
+      FROM blocker_candidates p
+      JOIN messages m ON m.id = p.message_id
+      JOIN incident_projection_scopes scope
+        ON scope.projection_id = p.id AND scope.scope_type = 'blocked'
+      WHERE (
+          (p.status IN ('open','investigating','contained','monitoring') AND p.blocking = 1)
+          OR p.pending_handoff = 1
+        )
+        AND (
+          p.pending_handoff = 1
+          OR NOT EXISTS (
+            SELECT 1 FROM message_read_receipts receipt
+            WHERE receipt.message_id = m.id AND lower(receipt.agent) = lower(?)
+          )
+        )
+        AND (
+          lower(scope.scope) = 'agent:' || lower(?)
+          OR lower(scope.scope) IN (
+            SELECT 'channel:' || lower(channel) FROM channel_members WHERE lower(agent) = lower(?)
+          )
+          OR scope.scope IN (
+            SELECT 'project:' || project_id FROM agent_presence
+            WHERE lower(agent) = lower(?) AND project_id <> ''
+          )
+        )
+    ),
+    legacy_ids AS (
+      SELECT m.id
+      FROM messages m
+      LEFT JOIN incident_projections p ON p.message_id = m.id
+      WHERE p.id IS NULL AND m.blocking = 1 AND m.read_at IS NULL
+        AND (
+          lower(m.to_agent) = lower(?)
+          OR m.channel IN (SELECT channel FROM channel_members WHERE lower(agent) = lower(?))
+        )
+    ),
+    eligible_ids AS (
+      SELECT id FROM projected_ids
+      UNION
+      SELECT id FROM legacy_ids
     )
-    ORDER BY created_at ASC, id ASC
+    SELECT m.* FROM messages m JOIN eligible_ids eligible ON eligible.id = m.id
+    ORDER BY m.created_at ASC, m.id ASC
     ${limitClause} ${offsetClause}
-  `).all(agent, agent) as Record<string, unknown>[];
+  `).all(binding?.tenant_id ?? null, binding?.authority_id ?? null, agent, agent, agent, agent, agent, agent) as Record<string, unknown>[];
   return rows.map(parseMessage);
 }
 

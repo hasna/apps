@@ -2,10 +2,11 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { startApiServer, type ApiServerDeps } from "./api.js";
 import { mintApiKey } from "@hasna/contracts/auth";
 import { verifyApiKey, ApiKeyStore } from "@hasna/contracts/auth";
+import { readFileSync } from "node:fs";
 
 // In-memory query shim standing in for the vendored kit's TypedQueryClient.
 // Exercises the router + auth without a live Postgres.
-function makeFakeClient() {
+function makeFakeClient(incidentProjectionCount = 0) {
   const channels: Record<string, any> = {};
   const messages: any[] = [];
   let nextId = 1;
@@ -38,6 +39,7 @@ function makeFakeClient() {
     },
     async get(sql: string, p: readonly unknown[] = []): Promise<any> {
       if (/SELECT 1 AS ok/i.test(sql)) return { ok: 1 };
+      if (/count\(\*\).*incident_projections/is.test(sql)) return { n: incidentProjectionCount };
       if (/count\(\*\)/i.test(sql)) return { n: messages.length };
       if (/INSERT INTO channels/i.test(sql)) {
         const [name, description, topic, project_id, created_by] = p as any[];
@@ -51,38 +53,62 @@ function makeFakeClient() {
       if (/SELECT \* FROM channels WHERE name/i.test(sql) || /SELECT name, description/i.test(sql)) {
         return channels[(p as any[])[0]] ?? null;
       }
+      if (/SELECT id, session_id, channel, project_id FROM messages WHERE id/i.test(sql)) {
+        return messages.find((m) => m.id === Number((p as any[])[0])) ?? null;
+      }
       if (/INSERT INTO messages/i.test(sql)) {
-        const [session_id, from_agent, to_agent, channel, project_id, content, priority, blocking] = p as any[];
-        const row = { id: nextId++, uuid: `u${nextId}`, session_id, from_agent, to_agent, channel, project_id, content, priority, blocking, created_at: new Date().toISOString() };
+        const [
+          session_id, from_agent, to_agent, channel, project_id, content, priority, blocking,
+          reply_to, metadata, working_dir, repository, branch, attachments,
+        ] = p as any[];
+        const row = {
+          id: nextId++, uuid: `u${nextId}`, session_id, from_agent, to_agent, channel, project_id,
+          content, priority, blocking, reply_to, metadata, working_dir, repository, branch, attachments,
+          created_at: new Date().toISOString(),
+        };
         messages.push(row);
         return row;
       }
       return null;
     },
     async execute(_sql: string, _p: readonly unknown[] = []): Promise<void> {},
+    async transaction<T>(fn: (tx: any) => Promise<T>): Promise<T> {
+      return fn(client);
+    },
   };
   return client;
 }
 
 const SIGNING = "test-signing-secret-0123456789";
 
-function makeDeps(): ApiServerDeps {
-  const client = makeFakeClient();
+function makeDeps(options: { incidentProjectionCount?: number } = {}): ApiServerDeps {
+  const client = makeFakeClient(options.incidentProjectionCount ?? 0);
   const keys = new ApiKeyStore(client as any);
   const verifier = verifyApiKey({ app: "conversations", signingSecret: SIGNING, isRevoked: async () => false });
-  return { client: client as any, keys, verifier };
+  return {
+    client: client as any,
+    keys,
+    verifier,
+    incidentProjector: {
+      tenant_id: "tenant-a",
+      authority_id: "todos.hasna.xyz:v1",
+      routing: { channel: "incidents", project_id: "engineering" },
+    },
+  };
 }
 
 let server: ReturnType<typeof startApiServer>;
 let base: string;
 let rwKey: string;
 let roKey: string;
+let projectorKey: string;
 
 beforeAll(() => {
   server = startApiServer({ port: 0, host: "127.0.0.1", deps: makeDeps() });
   base = `http://127.0.0.1:${server.port}`;
   rwKey = mintApiKey({ app: "conversations", agent: "test", scopes: ["conversations:read", "conversations:write"], signingSecret: SIGNING }).token;
   roKey = mintApiKey({ app: "conversations", agent: "ro", scopes: ["conversations:read"], signingSecret: SIGNING }).token;
+  projectorKey = mintApiKey({ app: "conversations", agent: "todos-projector", scopes: ["conversations:incident-project"], signingSecret: SIGNING }).token;
 });
 
 afterAll(() => { server.stop(true); });
@@ -129,6 +155,111 @@ describe("conversations-serve", () => {
     expect(post.status).toBe(403);
   });
 
+  test("dedicated incident projector route requires its narrow scope", async () => {
+    const denied = await fetch(`${base}/v1/incident-projections`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(denied.status).toBe(403);
+    const admitted = await fetch(`${base}/v1/incident-projections`, {
+      method: "POST",
+      headers: { "x-api-key": projectorKey, "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(admitted.status).toBe(400);
+    expect((await admitted.json()).code).toBe("INVALID_INCIDENT_PROJECTION");
+  });
+
+  test("incident projector maps unexpected storage failures to a sanitized retryable 503", async () => {
+    const deps = makeDeps();
+    deps.client.transaction = async () => {
+      throw new Error("postgres password=must-not-leak host=internal");
+    };
+    const isolated = startApiServer({ port: 0, host: "127.0.0.1", deps });
+    try {
+      const fixture = JSON.parse(readFileSync(
+        new URL("../../fixtures/todos-incident-projection-v1.json", import.meta.url),
+        "utf8",
+      ));
+      const response = await fetch(`http://127.0.0.1:${isolated.port}/v1/incident-projections`, {
+        method: "POST",
+        headers: { "x-api-key": projectorKey, "content-type": "application/json" },
+        body: JSON.stringify(fixture),
+      });
+      expect(response.status).toBe(503);
+      const body = await response.json();
+      expect(body).toEqual({
+        error: "Incident projection service is temporarily unavailable",
+        code: "INCIDENT_PROJECTION_UNAVAILABLE",
+      });
+      expect(JSON.stringify(body)).not.toContain("password");
+      expect(JSON.stringify(body)).not.toContain("internal");
+    } finally {
+      isolated.stop(true);
+    }
+  });
+
+  test("blocker reads and acknowledgements cannot impersonate another agent", async () => {
+    const blockers = await fetch(`${base}/v1/messages/blockers?agent=other`, {
+      headers: { "x-api-key": rwKey },
+    });
+    expect(blockers.status).toBe(403);
+    const spoofed = await fetch(`${base}/v1/messages/read`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ ids: [999], reader: "other" }),
+    });
+    expect(spoofed.status).toBe(403);
+    const spoofedReceipt = await fetch(`${base}/v1/messages/999/receipts`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ agent: "other" }),
+    });
+    expect(spoofedReceipt.status).toBe(403);
+    const matching = await fetch(`${base}/v1/messages/read`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ ids: [999], reader: "test" }),
+    });
+    expect(matching.status).toBe(200);
+    const omitted = await fetch(`${base}/v1/messages/read`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ ids: [998] }),
+    });
+    expect(omitted.status).toBe(200);
+  });
+
+  test("cloud blocker route preserves legacy-only installs without projector config", async () => {
+    const deps = makeDeps();
+    deps.incidentProjector = null;
+    const isolated = startApiServer({ port: 0, host: "127.0.0.1", deps });
+    try {
+      const response = await fetch(`http://127.0.0.1:${isolated.port}/v1/messages/blockers?agent=test`, {
+        headers: { "x-api-key": rwKey },
+      });
+      expect(response.status).toBe(200);
+    } finally {
+      isolated.stop(true);
+    }
+  });
+
+  test("cloud blocker route fails closed when canonical rows exist but projector binding is absent", async () => {
+    const deps = makeDeps({ incidentProjectionCount: 1 });
+    deps.incidentProjector = null;
+    const isolated = startApiServer({ port: 0, host: "127.0.0.1", deps });
+    try {
+      const response = await fetch(`http://127.0.0.1:${isolated.port}/v1/messages/blockers?agent=test`, {
+        headers: { "x-api-key": rwKey },
+      });
+      expect(response.status).toBe(503);
+      expect((await response.json()).code).toBe("INCIDENT_PROJECTOR_CONFIGURATION_ERROR");
+    } finally {
+      isolated.stop(true);
+    }
+  });
+
   test("read-write key completes a channel + message roundtrip", async () => {
     const created = await fetch(`${base}/v1/channels`, {
       method: "POST",
@@ -160,6 +291,114 @@ describe("conversations-serve", () => {
       body: JSON.stringify({ from: "a" }),
     });
     expect(r.status).toBe(400);
+  });
+
+  test("generic single and bulk ingress reject object or serialized projection metadata", async () => {
+    for (const metadata of [
+      { canonical_incident_projection: { event_id: "iev_fake" } },
+      JSON.stringify({ event_id: "iev_fake" }),
+    ]) {
+      const response = await fetch(`${base}/v1/messages`, {
+        method: "POST",
+        headers: { "x-api-key": rwKey, "content-type": "application/json" },
+        body: JSON.stringify({ from: "attacker", to: "incidents", content: "spoof", metadata }),
+      });
+      expect(response.status).toBe(409);
+    }
+    const bulk = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ messages: [{
+        uuid: "spoof-bulk",
+        from: "attacker",
+        to: "incidents",
+        content: "spoof",
+        metadata: JSON.stringify({ projection_key: "todos:incident:fake" }),
+      }] }),
+    });
+    expect(bulk.status).toBe(409);
+  });
+
+  test("POST /v1/messages preserves ordinary metadata and same-scope reply correlation", async () => {
+    const parent = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        from: "a",
+        to: "incidents",
+        content: "parent",
+        channel: "incidents",
+        project_id: "engineering",
+      }),
+    });
+    expect(parent.status).toBe(201);
+    const parentMessage = (await parent.json()).message;
+
+    const reply = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        from: "b",
+        to: "incidents",
+        content: "reply",
+        channel: "incidents",
+        project_id: "engineering",
+        reply_to: parentMessage.id,
+        metadata: { display: { severity: "sev2" } },
+        working_dir: "/worktree",
+        repository: "hasna/conversations",
+        branch: "fix/reply",
+      }),
+    });
+    expect(reply.status).toBe(201);
+    const message = (await reply.json()).message;
+    expect(message.reply_to).toBe(parentMessage.id);
+    expect(message.metadata).toEqual({ display: { severity: "sev2" } });
+    expect(message.working_dir).toBe("/worktree");
+    expect(message.repository).toBe("hasna/conversations");
+    expect(message.branch).toBe("fix/reply");
+  });
+
+  test("POST /v1/messages rejects reply parents from a different channel or project", async () => {
+    const parent = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ from: "a", to: "ops", content: "ops root", channel: "ops", project_id: "p1" }),
+    });
+    const parentId = (await parent.json()).message.id;
+
+    const crossed = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        from: "b",
+        to: "incidents",
+        content: "must not cross scope",
+        channel: "incidents",
+        project_id: "p2",
+        reply_to: parentId,
+      }),
+    });
+    expect(crossed.status).toBe(409);
+  });
+
+  test("POST /v1/messages atomically inherits a DM reply parent session", async () => {
+    const parent = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ from: "test", to: "alice", content: "dm root" }),
+    });
+    expect(parent.status).toBe(201);
+    const parentMessage = (await parent.json()).message;
+    const reply = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ from: "test", to: "alice", content: "dm reply", reply_to: parentMessage.id }),
+    });
+    expect(reply.status).toBe(201);
+    const replyMessage = (await reply.json()).message;
+    expect(replyMessage.reply_to).toBe(parentMessage.id);
+    expect(replyMessage.session_id).toBe(parentMessage.session_id);
   });
 
   test("POST /v1/messages/bulk is idempotent (ON CONFLICT by uuid)", async () => {

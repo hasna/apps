@@ -1,8 +1,8 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { createChannel, updateChannel, renameChannel, archiveChannel, unarchiveChannel, listChannels, getChannel, joinChannel, leaveChannel, getChannelMembers, isChannelMember } from "./channels";
 import { createProject } from "./projects";
-import { sendMessage, readMessages } from "./messages";
-import { closeDb } from "./db";
+import { sendMessage, readMessages, getThreadReplies } from "./messages";
+import { closeDb, getDb } from "./db";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -273,6 +273,41 @@ describe("renameChannel", () => {
     // Session id and recipient are rewritten to the new channel.
     expect(newMsgs.every((m) => m.session_id === "channel:new-name")).toBe(true);
     expect(newMsgs.every((m) => m.channel === "new-name")).toBe(true);
+  });
+
+  test("preserves a threaded reply scope across the rename", () => {
+    createChannel("old-name", "alice");
+    const parent = sendMessage({ from: "alice", to: "old-name", content: "root", channel: "old-name" });
+    const reply = sendMessage({ from: "bob", to: "old-name", content: "reply", channel: "old-name", reply_to: parent.id });
+
+    renameChannel("old-name", "new-name");
+
+    const replies = getThreadReplies(parent.id);
+    expect(replies.map((message) => message.id)).toEqual([reply.id]);
+    expect(replies[0].channel).toBe("new-name");
+    expect(replies[0].session_id).toBe("channel:new-name");
+    expect(getDb().prepare("SELECT COUNT(*) AS n FROM message_scope_rewrite_guard").get()).toEqual({ n: 0 });
+  });
+
+  test("rolls back the internal rewrite guard and keeps generic parent mutation blocked", () => {
+    createChannel("old-name", "alice");
+    const parent = sendMessage({ from: "alice", to: "old-name", content: "root", channel: "old-name" });
+    sendMessage({ from: "bob", to: "old-name", content: "reply", channel: "old-name", reply_to: parent.id });
+    const db = getDb();
+    db.exec(`
+      CREATE TRIGGER fail_test_channel_rename
+      BEFORE UPDATE OF channel ON messages
+      WHEN NEW.channel = 'failed-rename'
+      BEGIN SELECT RAISE(ABORT, 'injected rename failure'); END
+    `);
+
+    expect(() => renameChannel("old-name", "failed-rename")).toThrow("injected rename failure");
+    expect(getChannel("old-name")?.name).toBe("old-name");
+    expect(getChannel("failed-rename")).toBeNull();
+    expect(db.prepare("SELECT COUNT(*) AS n FROM message_scope_rewrite_guard").get()).toEqual({ n: 0 });
+    expect(() => db.prepare("UPDATE messages SET project_id = 'other' WHERE id = ?").run(parent.id)).toThrow(
+      "reply parent scope is immutable",
+    );
   });
 
   test("preserves members across the rename", () => {

@@ -1,4 +1,5 @@
 import { describe, test, expect } from "bun:test";
+import { readFileSync } from "fs";
 import { ApiStore } from "./api-store.js";
 import type { HasnaStorageClient } from "../contracts-client/storage.js";
 
@@ -19,6 +20,33 @@ function fakeClient(getBody: unknown): HasnaStorageClient {
     baseUrl: "https://conversations.hasna.xyz/v1",
     transport,
   } as unknown as HasnaStorageClient;
+}
+
+function capturingClient(response: unknown): {
+  client: HasnaStorageClient;
+  calls: Array<{ resource: string; body: unknown; options: unknown }>;
+} {
+  const calls: Array<{ resource: string; body: unknown; options: unknown }> = [];
+  const transport = {
+    baseUrl: "https://conversations.hasna.xyz/v1",
+    get: async () => response,
+    post: async (resource: string, body: unknown, options: unknown) => {
+      calls.push({ resource, body, options });
+      return response;
+    },
+    patch: async () => response,
+    del: async () => undefined,
+  } as unknown as HasnaStorageClient["transport"];
+  const client = {
+    name: "conversations",
+    baseUrl: "https://conversations.hasna.xyz/v1",
+    transport,
+    create: async (resource: string, body: unknown, options: unknown) => {
+      calls.push({ resource, body, options });
+      return response;
+    },
+  } as unknown as HasnaStorageClient;
+  return { client, calls };
 }
 
 /** A client whose transport rejects every read with a 404 HasnaHttpError. */
@@ -90,5 +118,84 @@ describe("ApiStore project normalization", () => {
     // store returns null.
     const store = new ApiStore(throwing404Client());
     expect(await store.getChannel("nope")).toBeNull();
+  });
+});
+
+describe("ApiStore message transport", () => {
+  test("forwards reply correlation, metadata, and source context to cloud create", async () => {
+    const { client, calls } = capturingClient({
+      message: {
+        id: 2,
+        uuid: "reply-2",
+        session_id: "channel:incidents",
+        from_agent: "friday",
+        to_agent: "incidents",
+        channel: "incidents",
+        project_id: "engineering",
+        content: "projection display",
+        priority: "high",
+        blocking: true,
+        reply_to: 1,
+        metadata: JSON.stringify({ display: { severity: "sev1" } }),
+      },
+    });
+    const store = new ApiStore(client);
+
+    const message = await store.sendMessage({
+      from: "friday",
+      to: "incidents",
+      channel: "incidents",
+      project_id: "engineering",
+      content: "projection display",
+      priority: "high",
+      blocking: true,
+      reply_to: 1,
+      metadata: { display: { severity: "sev1" } },
+      working_dir: "/worktree",
+      repository: "hasna/conversations",
+      branch: "fix/incident-projection",
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].resource).toBe("messages");
+    expect(calls[0].body).toEqual({
+      from: "friday",
+      to: "incidents",
+      content: "projection display",
+      channel: "incidents",
+      project_id: "engineering",
+      session_id: undefined,
+      priority: "high",
+      blocking: true,
+      reply_to: 1,
+      metadata: { display: { severity: "sev1" } },
+      working_dir: "/worktree",
+      repository: "hasna/conversations",
+      branch: "fix/incident-projection",
+      attachments: undefined,
+    });
+    expect(message.reply_to).toBe(1);
+    expect(message.metadata).toEqual({ display: { severity: "sev1" } });
+  });
+
+  test("posts the exact canonical Todos event only to the dedicated projector route", async () => {
+    const fixture = JSON.parse(
+      readFileSync(new URL("../../../fixtures/todos-incident-projection-v1.json", import.meta.url), "utf8"),
+    );
+    const { client, calls } = capturingClient({ projection: {
+      event_id: fixture.event_id,
+      projection_key: fixture.projection_key,
+      authority_id: fixture.authority_id,
+      incident_id: fixture.incident_id,
+      transition_id: fixture.transition_id,
+      incident_version: fixture.incident_version,
+      message_id: 42,
+      replayed: false,
+    } });
+    const store = new ApiStore(client);
+    const projection = await store.appendIncidentProjection(fixture);
+    expect(calls).toEqual([{ resource: "/incident-projections", body: fixture, options: undefined }]);
+    expect(projection.event_id).toBe(fixture.event_id);
+    expect(projection.message_id).toBe(42);
   });
 });

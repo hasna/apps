@@ -25,10 +25,20 @@ import { version as pkgVersion } from "../../package.json";
 import { openapiSpec } from "./openapi.js";
 import { normalizeChannelName } from "../lib/channel-names.js";
 import { extractTopics } from "../lib/topic-extract.js";
+import {
+  IncidentProjectionConflictError,
+  IncidentProjectionValidationError,
+  IncidentProjectorConfigurationError,
+  metadataSpoofsIncidentProjection,
+  validateIncidentProjectorBinding,
+} from "../lib/incident-projection-contract.js";
+import { appendIncidentProjectionPg, getIncidentProjectionPg } from "./incident-projections.js";
+import type { IncidentProjectionRequestV1, IncidentProjectorContext } from "../types.js";
 
 export const APP = "conversations";
 const SCOPE_READ = `${APP}:read`;
 const SCOPE_WRITE = `${APP}:write`;
+export const SCOPE_INCIDENT_PROJECT = `${APP}:incident-project`;
 
 const SECURITY_HEADERS: Record<string, string> = {
   "X-Content-Type-Options": "nosniff",
@@ -64,6 +74,31 @@ export interface ApiServerDeps {
   client: PoolQueryClient;
   keys: ApiKeyStore;
   verifier: ApiKeyVerifier;
+  /** Stable deployment binding; never derived from an API key or request body. */
+  incidentProjector: IncidentProjectorContext | null;
+}
+
+function incidentProjectorContextFromEnv(): IncidentProjectorContext | null {
+  const tenant_id = process.env.HASNA_CONVERSATIONS_TENANT_ID?.trim();
+  const authority_id = process.env.HASNA_CONVERSATIONS_INCIDENT_AUTHORITY_ID?.trim();
+  if (!tenant_id && !authority_id) return null;
+  if (!tenant_id || !authority_id) {
+    throw new IncidentProjectorConfigurationError(
+      "Incident projector configuration is incomplete: set both HASNA_CONVERSATIONS_TENANT_ID " +
+      "and HASNA_CONVERSATIONS_INCIDENT_AUTHORITY_ID.",
+    );
+  }
+  const binding = validateIncidentProjectorBinding(tenant_id, authority_id);
+  return {
+    ...binding,
+    routing: {
+      from: process.env.HASNA_CONVERSATIONS_INCIDENT_FROM,
+      to: process.env.HASNA_CONVERSATIONS_INCIDENT_TO,
+      channel: process.env.HASNA_CONVERSATIONS_INCIDENT_CHANNEL,
+      project_id: process.env.HASNA_CONVERSATIONS_INCIDENT_PROJECT_ID,
+      session_id: process.env.HASNA_CONVERSATIONS_INCIDENT_SESSION_ID,
+    },
+  };
 }
 
 /** Build the request-handling deps from the environment (cloud Postgres). */
@@ -80,10 +115,144 @@ export function buildDeps(): ApiServerDeps {
       }
     },
   });
-  return { client, keys, verifier };
+  return { client, keys, verifier, incidentProjector: incidentProjectorContextFromEnv() };
 }
 
 // ---- helpers ----------------------------------------------------------------
+
+type IncidentBlockerFilter = { ids?: number[]; channel?: string; session?: string; includeAcknowledged?: boolean };
+
+async function projectedMessageIds(client: TypedQueryClient, ids: number[]): Promise<Set<number>> {
+  if (ids.length === 0) return new Set();
+  const rows = await client.many<{ message_id: string | number }>(
+    "SELECT message_id FROM incident_projections WHERE message_id = ANY($1::bigint[])",
+    [ids],
+  );
+  return new Set(rows.map((row) => Number(row.message_id)));
+}
+
+async function visibleIncidentBlockerIds(
+  client: TypedQueryClient,
+  projector: IncidentProjectorContext | null,
+  agent: string,
+  filter: IncidentBlockerFilter = {},
+): Promise<number[]> {
+  if (!projector) return [];
+  const params: unknown[] = [projector.tenant_id, projector.authority_id, agent];
+  const filters: string[] = [];
+  if (filter.ids?.length) {
+    params.push(filter.ids);
+    filters.push(`m.id = ANY($${params.length}::bigint[])`);
+  }
+  if (filter.channel) {
+    params.push(normalizeChannelName(filter.channel));
+    filters.push(`m.channel = $${params.length}`);
+  }
+  if (filter.session) {
+    params.push(filter.session);
+    filters.push(`m.session_id = $${params.length}`);
+  }
+  const extra = filters.length ? `AND ${filters.join(" AND ")}` : "";
+  const receiptFilter = filter.includeAcknowledged
+    ? ""
+    : `AND (
+         p.pending_handoff
+         OR NOT EXISTS (
+           SELECT 1 FROM message_read_receipts receipt
+           WHERE receipt.message_id = m.id AND lower(receipt.agent) = lower($3)
+         )
+       )`;
+  const rows = await client.many<{ id: string | number }>(
+    `WITH latest AS (
+       SELECT p.*
+       FROM incident_projections p
+       JOIN (
+         SELECT tenant_id, authority_id, incident_id, MAX(incident_version) AS incident_version
+         FROM incident_projections
+         WHERE tenant_id = $1 AND authority_id = $2
+         GROUP BY tenant_id, authority_id, incident_id
+       ) current
+         ON current.tenant_id = p.tenant_id
+        AND current.authority_id = p.authority_id
+        AND current.incident_id = p.incident_id
+        AND current.incident_version = p.incident_version
+     ),
+     blocker_candidates AS (
+       SELECT p.*,
+              CASE WHEN p.status = 'superseded'
+                         AND p.superseded_by_incident_id IS NOT NULL
+                         AND NOT EXISTS (
+                           SELECT 1 FROM incident_projections replacement
+                           WHERE replacement.tenant_id = p.tenant_id
+                             AND replacement.authority_id = p.authority_id
+                             AND replacement.incident_id = p.superseded_by_incident_id
+                             AND replacement.supersedes_incident_id = p.incident_id
+                         )
+                   THEN TRUE ELSE FALSE END AS pending_handoff
+       FROM latest p
+     )
+     SELECT DISTINCT m.id
+     FROM blocker_candidates p
+     JOIN messages m ON m.id = p.message_id
+     JOIN incident_projection_scopes scope
+       ON scope.projection_id = p.id AND scope.scope_type = 'blocked'
+     WHERE (
+         (p.status IN ('open','investigating','contained','monitoring') AND p.blocking = TRUE)
+         OR p.pending_handoff
+       )
+       ${receiptFilter}
+       AND (
+         lower(scope.scope) = 'agent:' || lower($3)
+         OR lower(scope.scope) IN (
+           SELECT 'channel:' || lower(channel) FROM channel_members WHERE lower(agent) = lower($3)
+         )
+         OR scope.scope IN (
+           SELECT 'project:' || project_id FROM agent_presence
+           WHERE lower(agent) = lower($3) AND project_id <> ''
+         )
+       )
+       ${extra}`,
+    params,
+  );
+  return rows.map((row) => Number(row.id));
+}
+
+async function upsertReadReceipts(client: TypedQueryClient, ids: number[], agent: string): Promise<number> {
+  if (ids.length === 0) return 0;
+  const result = await client.query(
+    `INSERT INTO message_read_receipts (message_id, agent, read_at)
+     SELECT message_id, $2, NOW() FROM unnest($1::bigint[]) AS message_id
+     ON CONFLICT (message_id, agent) DO UPDATE SET read_at = EXCLUDED.read_at`,
+    [ids, agent.toLowerCase()],
+  );
+  return result.rowCount;
+}
+
+async function requireIncidentBlockerContext(
+  client: TypedQueryClient,
+  context: IncidentProjectorContext | null,
+): Promise<IncidentProjectorContext | null> {
+  const any = await client.get<{ n: string | number }>("SELECT COUNT(*)::bigint AS n FROM incident_projections");
+  if (!context) {
+    if (Number(any?.n ?? 0) === 0) return null;
+    throw new IncidentProjectorConfigurationError(
+      "Canonical blocker reads require a configured incident projector tenant and authority",
+    );
+  }
+  const binding = validateIncidentProjectorBinding(context.tenant_id, context.authority_id);
+  if (Number(any?.n ?? 0) > 0) {
+    const selected = await client.get<{ n: string | number }>(
+      "SELECT COUNT(*)::bigint AS n FROM incident_projections WHERE tenant_id = $1 AND authority_id = $2",
+      [binding.tenant_id, binding.authority_id],
+    );
+    if (Number(selected?.n ?? 0) === 0) {
+      throw new IncidentProjectorConfigurationError(
+        "Configured incident projector tenant/authority does not match stored canonical projections",
+      );
+    }
+  }
+  return { ...context, ...binding };
+}
 
 async function readJson(req: Request): Promise<Record<string, unknown>> {
   const text = await req.text();
@@ -253,39 +422,67 @@ async function processMentions(
  * channel_members/channel_subscriptions → channels(name) FK, so the new channel
  * row is created first, children are moved, then the old row is dropped.
  */
-async function renameChannelServer(
+export async function renameChannelServer(
   client: PoolQueryClient,
   oldName: string,
   newName: string,
 ): Promise<{ ok: true; name: string } | { ok: false; error: string; status: number }> {
   const from = normalizeChannelName(oldName);
   const to = normalizeChannelName(newName);
-  const existing = await client.get(`SELECT name FROM channels WHERE name = $1`, [from]);
-  if (!existing) return { ok: false, error: `Channel not found: ${from}`, status: 404 };
-  if (from === to) return { ok: true, name: from };
-  const conflict = await client.get(`SELECT name FROM channels WHERE name = $1`, [to]);
-  if (conflict) return { ok: false, error: `Channel #${to} already exists.`, status: 409 };
-  await client.transaction(async (tx) => {
-    await tx.query(
-      `INSERT INTO channels (name, description, topic, project_id, created_by, created_at, archived_at, metadata, tags)
-       SELECT $1, description, topic, project_id, created_by, created_at, archived_at, metadata, tags FROM channels WHERE name = $2`,
-      [to, from],
-    );
-    await tx.query(`UPDATE channel_members SET channel = $1 WHERE channel = $2`, [to, from]);
-    await tx.query(`UPDATE channel_subscriptions SET channel = $1 WHERE channel = $2`, [to, from]);
-    await tx.query(
-      `UPDATE messages SET channel = $1, to_agent = CASE WHEN to_agent = $2 THEN $1 ELSE to_agent END WHERE channel = $2`,
-      [to, from],
-    );
-    await tx.query(`UPDATE messages SET session_id = $1 WHERE session_id = $2`, [`channel:${to}`, `channel:${from}`]);
-    await tx.query(`UPDATE message_mentions SET channel = $1 WHERE channel = $2`, [to, from]);
-    await tx.query(`UPDATE tasks SET channel = $1 WHERE channel = $2`, [to, from]);
-    await tx.query(`UPDATE graph_edges SET from_id = $1 WHERE from_type = 'channel' AND from_id = $2`, [to, from]);
-    await tx.query(`UPDATE graph_edges SET to_id = $1 WHERE to_type = 'channel' AND to_id = $2`, [to, from]);
-    await tx.query(`UPDATE resource_locks SET resource_id = $1 WHERE resource_type = 'channel' AND resource_id = $2`, [to, from]);
-    await tx.query(`DELETE FROM channels WHERE name = $1`, [from]);
-  });
-  return { ok: true, name: to };
+  try {
+    return await client.transaction(async (tx) => {
+      const existing = await tx.get(`SELECT name FROM channels WHERE name = $1 FOR UPDATE`, [from]);
+      if (!existing) return { ok: false as const, error: `Channel not found: ${from}`, status: 404 };
+      if (from === to) return { ok: true as const, name: from };
+      const conflict = await tx.get(`SELECT name FROM channels WHERE name = $1 FOR UPDATE`, [to]);
+      if (conflict) return { ok: false as const, error: `Channel #${to} already exists.`, status: 409 };
+
+      await tx.get(
+        `SELECT set_config('hasna.conversations.channel_scope_rewrite', $1, TRUE) AS configured`,
+        [JSON.stringify({
+          old_session_id: `channel:${from}`,
+          new_session_id: `channel:${to}`,
+          old_channel: from,
+          new_channel: to,
+          old_to_agent: from,
+          new_to_agent: to,
+        })],
+      );
+      await tx.query(
+        `INSERT INTO channels (name, description, topic, project_id, created_by, created_at, archived_at, metadata, tags)
+         SELECT $1, description, topic, project_id, created_by, created_at, archived_at, metadata, tags
+         FROM channels WHERE name = $2`,
+        [to, from],
+      );
+      await tx.query(`UPDATE channel_members SET channel = $1 WHERE channel = $2`, [to, from]);
+      await tx.query(`UPDATE channel_subscriptions SET channel = $1 WHERE channel = $2`, [to, from]);
+      await tx.query(
+        `UPDATE messages
+         SET channel = $1,
+             session_id = CASE WHEN session_id = $3 THEN $4 ELSE session_id END,
+             to_agent = CASE WHEN to_agent = $2 THEN $1 ELSE to_agent END
+         WHERE channel = $2`,
+        [to, from, `channel:${from}`, `channel:${to}`],
+      );
+      await tx.query(
+        `UPDATE messages SET session_id = $1
+         WHERE session_id = $2 AND (channel IS NULL OR channel <> $3)`,
+        [`channel:${to}`, `channel:${from}`, to],
+      );
+      await tx.query(`UPDATE message_mentions SET channel = $1 WHERE channel = $2`, [to, from]);
+      await tx.query(`UPDATE tasks SET channel = $1 WHERE channel = $2`, [to, from]);
+      await tx.query(`UPDATE graph_edges SET from_id = $1 WHERE from_type = 'channel' AND from_id = $2`, [to, from]);
+      await tx.query(`UPDATE graph_edges SET to_id = $1 WHERE to_type = 'channel' AND to_id = $2`, [to, from]);
+      await tx.query(`UPDATE resource_locks SET resource_id = $1 WHERE resource_type = 'channel' AND resource_id = $2`, [to, from]);
+      await tx.query(`DELETE FROM channels WHERE name = $1`, [from]);
+      return { ok: true as const, name: to };
+    });
+  } catch (error) {
+    if ((error as { code?: string }).code === "23505") {
+      return { ok: false, error: `Channel #${to} already exists.`, status: 409 };
+    }
+    throw error;
+  }
 }
 
 // ---- task helpers ------------------------------------------------------------
@@ -489,10 +686,11 @@ export function startApiServer(options: StartApiServerOptions = {}) {
         // ---- versioned API (authenticated) ----
         if (path === "/v1" || path.startsWith("/v1/")) {
           const writing = method !== "GET" && method !== "HEAD";
+          const incidentProjectionWrite = path === "/v1/incident-projections" && method === "POST";
           const decision = await verifier.authenticate(req.headers, {
             method,
             path,
-            requiredScopes: [writing ? SCOPE_WRITE : SCOPE_READ],
+            requiredScopes: [incidentProjectionWrite ? SCOPE_INCIDENT_PROJECT : writing ? SCOPE_WRITE : SCOPE_READ],
           });
           if (!decision.ok) {
             return json({ error: decision.message, reason: decision.reason }, decision.status, {
@@ -530,7 +728,138 @@ async function handleV1(
   const { client } = deps;
   const sub = path.slice("/v1/".length);
 
+  // ---- canonical Todos incident projections ----
+  if (sub === "incident-projections" && method === "POST") {
+    if (!deps.incidentProjector) return json({ error: "Incident projector authority is not configured" }, 503);
+    const body = await readJson(req);
+    try {
+      const projection = await appendIncidentProjectionPg(
+        client,
+        body as unknown as IncidentProjectionRequestV1,
+        deps.incidentProjector,
+      );
+      return json({ projection }, projection.replayed ? 200 : 201);
+    } catch (error) {
+      if (error instanceof IncidentProjectionConflictError) {
+        return json({ error: error.message, code: error.code }, 409);
+      }
+      if (error instanceof IncidentProjectionValidationError) {
+        return json({ error: error.message, code: error.code }, 400);
+      }
+      console.error("[incident-projector] append failed with an unexpected storage/runtime error");
+      return json({
+        error: "Incident projection service is temporarily unavailable",
+        code: "INCIDENT_PROJECTION_UNAVAILABLE",
+      }, 503);
+    }
+  }
+
+  const projectionMatch = sub.match(/^incident-projections\/(iev_[0-9a-f]{32})$/);
+  if (projectionMatch && method === "GET") {
+    if (!deps.incidentProjector) return json({ error: "Incident projector authority is not configured" }, 503);
+    const projection = await getIncidentProjectionPg(client, projectionMatch[1], deps.incidentProjector);
+    if (!projection) return json({ error: "Incident projection not found" }, 404);
+    return json({ projection });
+  }
+
   // ---- messages ----
+  if (sub === "messages/blockers" && method === "GET") {
+    if (!agent) return json({ error: "authenticated agent is required" }, 401);
+    const requestedAgent = str(url.searchParams.get("agent"));
+    if (requestedAgent && requestedAgent.toLowerCase() !== agent.toLowerCase()) {
+      return json({ error: "blocker agent must match the authenticated agent" }, 403);
+    }
+    const who = agent;
+    const limit = clampLimit(url.searchParams.get("limit"), 50, 500);
+    const offsetRaw = Number(url.searchParams.get("offset") ?? 0);
+    const offset = Number.isSafeInteger(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0;
+    let projector: IncidentProjectorContext | null;
+    try {
+      projector = await requireIncidentBlockerContext(client, deps.incidentProjector);
+    } catch (error) {
+      if (error instanceof IncidentProjectorConfigurationError) {
+        return json({ error: error.message, code: error.code }, 503);
+      }
+      throw error;
+    }
+    const rows = await client.many<Record<string, unknown>>(
+      `WITH latest AS (
+         SELECT p.*
+         FROM incident_projections p
+         JOIN (
+           SELECT tenant_id, authority_id, incident_id, MAX(incident_version) AS incident_version
+           FROM incident_projections
+           WHERE $1::text IS NOT NULL AND $2::text IS NOT NULL
+             AND tenant_id = $1 AND authority_id = $2
+           GROUP BY tenant_id, authority_id, incident_id
+         ) current
+           ON current.tenant_id = p.tenant_id
+          AND current.authority_id = p.authority_id
+          AND current.incident_id = p.incident_id
+          AND current.incident_version = p.incident_version
+       ),
+       blocker_candidates AS (
+         SELECT p.*,
+                CASE WHEN p.status = 'superseded'
+                           AND p.superseded_by_incident_id IS NOT NULL
+                           AND NOT EXISTS (
+                             SELECT 1 FROM incident_projections replacement
+                             WHERE replacement.tenant_id = p.tenant_id
+                               AND replacement.authority_id = p.authority_id
+                               AND replacement.incident_id = p.superseded_by_incident_id
+                               AND replacement.supersedes_incident_id = p.incident_id
+                           )
+                     THEN TRUE ELSE FALSE END AS pending_handoff
+         FROM latest p
+       ),
+       projected_ids AS (
+         SELECT DISTINCT m.id
+         FROM blocker_candidates p
+         JOIN messages m ON m.id = p.message_id
+         JOIN incident_projection_scopes scope
+           ON scope.projection_id = p.id AND scope.scope_type = 'blocked'
+         WHERE (
+             (p.status IN ('open','investigating','contained','monitoring') AND p.blocking = TRUE)
+             OR p.pending_handoff
+           )
+           AND (
+             p.pending_handoff
+             OR NOT EXISTS (
+               SELECT 1 FROM message_read_receipts receipt
+               WHERE receipt.message_id = m.id AND lower(receipt.agent) = lower($3)
+             )
+           )
+           AND (
+             lower(scope.scope) = 'agent:' || lower($3)
+             OR lower(scope.scope) IN (
+               SELECT 'channel:' || lower(channel) FROM channel_members WHERE lower(agent) = lower($3)
+             )
+             OR scope.scope IN (
+               SELECT 'project:' || project_id FROM agent_presence
+               WHERE lower(agent) = lower($3) AND project_id <> ''
+             )
+           )
+       ),
+       legacy_ids AS (
+         SELECT m.id
+         FROM messages m
+         LEFT JOIN incident_projections p ON p.message_id = m.id
+         WHERE p.id IS NULL AND m.blocking = TRUE AND m.read_at IS NULL
+           AND (
+             lower(m.to_agent) = lower($3)
+             OR m.channel IN (SELECT channel FROM channel_members WHERE lower(agent) = lower($3))
+           )
+       ),
+       eligible_ids AS (
+         SELECT id FROM projected_ids UNION SELECT id FROM legacy_ids
+       )
+       SELECT m.* FROM messages m JOIN eligible_ids eligible ON eligible.id = m.id
+       ORDER BY m.created_at ASC, m.id ASC LIMIT $4 OFFSET $5`,
+      [projector?.tenant_id ?? null, projector?.authority_id ?? null, who, limit, offset],
+    );
+    return json({ messages: rows.map(parseServerMessage) });
+  }
+
   if (sub === "messages" && method === "GET") {
     const to = str(url.searchParams.get("to"));
     const from = str(url.searchParams.get("from"));
@@ -601,7 +930,12 @@ async function handleV1(
   // semantics so read state routes to the cloud identically.
   if (sub === "messages/read" && method === "POST") {
     const body = await readJson(req);
-    const reader = str(body.reader) ?? str(body.agent) ?? agent ?? undefined;
+    if (!agent) return json({ error: "authenticated agent is required" }, 401);
+    const requestedReader = str(body.reader) ?? str(body.agent);
+    if (requestedReader && requestedReader.toLowerCase() !== agent.toLowerCase()) {
+      return json({ error: "reader must match the authenticated agent" }, 403);
+    }
+    const reader = agent;
     const ids = Array.isArray(body.ids)
       ? (body.ids as unknown[]).map(Number).filter((n) => Number.isFinite(n))
       : [];
@@ -611,7 +945,7 @@ async function handleV1(
     // markMentionsRead: stamp notified_at on the agent's @mentions (optionally
     // scoped to one channel). Routed here because the client posts it to
     // /messages/read with mentions_only=true.
-    if (body.mentions_only && reader) {
+    if (body.mentions_only) {
       const res = channel
         ? await client.query(
             `UPDATE message_mentions SET notified_at = NOW()::text WHERE mentioned_agent = $1 AND channel = $2 AND notified_at IS NULL`,
@@ -625,43 +959,53 @@ async function handleV1(
     }
     let marked = 0;
     if (ids.length) {
-      if (reader) {
-        const rParams: unknown[] = [];
-        const rowsSql: string[] = [];
-        const lower = reader.toLowerCase();
-        for (const id of ids) {
-          rParams.push(id, lower);
-          rowsSql.push(`($${rParams.length - 1}, $${rParams.length}, NOW())`);
-        }
-        await client.query(
-          `INSERT INTO message_read_receipts (message_id, agent, read_at) VALUES ${rowsSql.join(", ")}
-           ON CONFLICT (message_id, agent) DO UPDATE SET read_at = EXCLUDED.read_at`,
-          rParams,
-        );
+      const projected = await projectedMessageIds(client, ids);
+      const visible = new Set(await visibleIncidentBlockerIds(
+        client,
+        deps.incidentProjector,
+        reader,
+        { ids, includeAcknowledged: true },
+      ));
+      if ([...projected].some((id) => !visible.has(id))) {
+        return json({ error: "one or more incident blockers are not visible to the authenticated agent" }, 403);
       }
+      await upsertReadReceipts(client, ids, reader);
+      const ordinary = ids.filter((id) => !projected.has(id));
       const res = await client.query(
-        `UPDATE messages SET read_at = NOW()::text WHERE id = ANY($1::bigint[]) AND read_at IS NULL`,
-        [ids],
+        `UPDATE messages SET read_at = NOW()::text
+         WHERE id = ANY($1::bigint[]) AND read_at IS NULL
+           AND NOT EXISTS (SELECT 1 FROM incident_projections p WHERE p.message_id = messages.id)`,
+        [ordinary],
       );
-      marked = res.rowCount;
-    } else if (all && reader) {
+      marked = projected.size + res.rowCount;
+    } else if (all) {
+      const projected = await visibleIncidentBlockerIds(client, deps.incidentProjector, reader);
+      const acknowledged = await upsertReadReceipts(client, projected, reader);
       const res = await client.query(
-        `UPDATE messages SET read_at = NOW()::text WHERE to_agent = $1 AND read_at IS NULL`,
+        `UPDATE messages SET read_at = NOW()::text WHERE to_agent = $1 AND read_at IS NULL
+           AND NOT EXISTS (SELECT 1 FROM incident_projections p WHERE p.message_id = messages.id)`,
         [reader],
       );
-      marked = res.rowCount;
-    } else if (channel && reader) {
+      marked = acknowledged + res.rowCount;
+    } else if (channel) {
+      const normalizedChannel = normalizeChannelName(channel);
+      const projected = await visibleIncidentBlockerIds(client, deps.incidentProjector, reader, { channel: normalizedChannel });
+      const acknowledged = await upsertReadReceipts(client, projected, reader);
       const res = await client.query(
-        `UPDATE messages SET read_at = NOW()::text WHERE channel = $1 AND from_agent <> $2 AND read_at IS NULL`,
-        [channel, reader],
+        `UPDATE messages SET read_at = NOW()::text WHERE channel = $1 AND from_agent <> $2 AND read_at IS NULL
+           AND NOT EXISTS (SELECT 1 FROM incident_projections p WHERE p.message_id = messages.id)`,
+        [normalizedChannel, reader],
       );
-      marked = res.rowCount;
-    } else if (session && reader) {
+      marked = acknowledged + res.rowCount;
+    } else if (session) {
+      const projected = await visibleIncidentBlockerIds(client, deps.incidentProjector, reader, { session });
+      const acknowledged = await upsertReadReceipts(client, projected, reader);
       const res = await client.query(
-        `UPDATE messages SET read_at = NOW()::text WHERE session_id = $1 AND to_agent = $2 AND read_at IS NULL`,
+        `UPDATE messages SET read_at = NOW()::text WHERE session_id = $1 AND to_agent = $2 AND read_at IS NULL
+           AND NOT EXISTS (SELECT 1 FROM incident_projections p WHERE p.message_id = messages.id)`,
         [session, reader],
       );
-      marked = res.rowCount;
+      marked = acknowledged + res.rowCount;
     } else {
       return json({ error: "provide ids, or all/channel/session with reader" }, 400);
     }
@@ -820,31 +1164,88 @@ async function handleV1(
     const body = await readJson(req);
     const from = str(body.from) ?? agent ?? undefined;
     const content = str(body.content);
-    const channelName = body.channel ? normalizeChannelName(String(body.channel)) : null;
+    const requestedChannel = body.channel ? normalizeChannelName(String(body.channel)) : null;
     // A channel message addresses the channel itself; a DM needs an explicit `to`.
-    const toAgent = channelName ?? str(body.to);
+    const requestedTo = str(body.to);
+    const toAgent = requestedChannel ?? requestedTo;
     if (!from || !toAgent || !content) return json({ error: "from, to (or channel), and content are required" }, 400);
-    const projectId = str(body.project_id);
+    const requestedProject = str(body.project_id);
+    const requestedSession = str(body.session_id);
     // Mirror the local sendMessage session derivation so channel history and
     // notifications group identically on the cloud.
-    const sessionId = channelName
-      ? `channel:${channelName}`
-      : str(body.session_id) ?? `${[from, toAgent].sort().join("-")}-${randomUUID().slice(0, 8)}`;
+    const derivedSession = requestedChannel
+      ? `channel:${requestedChannel}`
+      : requestedSession ?? `${[from, toAgent].sort().join("-")}-${randomUUID().slice(0, 8)}`;
     let priority = str(body.priority)?.toLowerCase() ?? "normal";
     if (!VALID_PRIORITIES.includes(priority)) return json({ error: "Invalid priority" }, 400);
     const blocking = body.blocking === true;
-    const row = await client.get<{ id: number }>(
-      `INSERT INTO messages (session_id, from_agent, to_agent, channel, project_id, content, priority, blocking)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-       RETURNING id, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, blocking, created_at`,
-      [sessionId, from, toAgent, channelName ?? null, projectId ?? null, content, priority, blocking],
-    );
+    if (metadataSpoofsIncidentProjection(body.metadata)) {
+      return json({ error: "Canonical incident projection metadata is reserved for the dedicated projector" }, 409);
+    }
+    const replyToRaw = body.reply_to;
+    const replyTo = replyToRaw == null ? null : Number(replyToRaw);
+    if (replyTo != null && (!Number.isSafeInteger(replyTo) || replyTo <= 0)) {
+      return json({ error: "reply_to must be a positive integer" }, 400);
+    }
+    const metadata = body.metadata == null
+      ? null
+      : typeof body.metadata === "string"
+        ? body.metadata
+        : JSON.stringify(body.metadata);
+    const attachments = body.attachments == null
+      ? null
+      : typeof body.attachments === "string"
+        ? body.attachments
+        : JSON.stringify(body.attachments);
+    const workingDir = str(body.working_dir) ?? null;
+    const repository = str(body.repository) ?? null;
+    const branch = str(body.branch) ?? null;
+    const outcome = await client.transaction(async (tx) => {
+      let channelName = requestedChannel;
+      let projectId = requestedProject ?? null;
+      let sessionId = derivedSession;
+      if (replyTo != null) {
+        const parent = await tx.get<Record<string, unknown>>(
+          `SELECT id, session_id, channel, project_id FROM messages WHERE id = $1 FOR KEY SHARE`,
+          [replyTo],
+        );
+        if (!parent) return { error: "reply parent not found", status: 404 as const, row: null };
+        const parentChannel = str(parent.channel) ?? null;
+        const parentProject = str(parent.project_id) ?? null;
+        if ((requestedSession != null && parent.session_id !== requestedSession)
+          || (requestedChannel != null && parentChannel !== requestedChannel)
+          || (requestedProject != null && parentProject !== requestedProject)) {
+          return { error: "reply parent is outside the message channel/project/session scope", status: 409 as const, row: null };
+        }
+        sessionId = String(parent.session_id);
+        channelName = parentChannel;
+        projectId = parentProject;
+      }
+      const finalToAgent = channelName ?? requestedTo!;
+      const row = await tx.get<Record<string, unknown>>(
+        `INSERT INTO messages (
+           session_id, from_agent, to_agent, channel, project_id, content, priority, blocking,
+           reply_to, metadata, working_dir, repository, branch, attachments
+         )
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+         RETURNING id, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority,
+                   blocking, reply_to, metadata, working_dir, repository, branch, attachments, created_at`,
+        [
+          sessionId, from, finalToAgent, channelName, projectId, content, priority, blocking,
+          replyTo, metadata, workingDir, repository, branch, attachments,
+        ],
+      );
+      return { error: null, status: 201 as const, row };
+    });
+    if (outcome.error) return json({ error: outcome.error }, outcome.status);
+    const row = outcome.row;
     // @mentions in channel messages create mention rows + notification DMs, so
     // mentions_only reads and mention counts work in cloud mode too.
-    if (channelName && row?.id != null) {
-      try { await processMentions(client, Number(row.id), from, channelName, content); } catch { /* best-effort */ }
+    const insertedChannel = row ? str(row.channel) : null;
+    if (insertedChannel && row?.id != null) {
+      try { await processMentions(client, Number(row.id), from, insertedChannel, content); } catch { /* best-effort */ }
     }
-    return json({ message: row }, 201);
+    return json({ message: row ? parseServerMessage(row) : null }, 201);
   }
 
   // ---- bulk message ingest (backfill local -> cloud to parity) ----
@@ -884,6 +1285,9 @@ async function handleV1(
       const content = typeof m.content === "string" ? m.content : undefined;
       if (!uuid || !from || !to || content === undefined) {
         return json({ error: `messages[${i}] requires uuid, from, to, and content` }, 400);
+      }
+      if (metadataSpoofsIncidentProjection(m.metadata)) {
+        return json({ error: `messages[${i}].metadata contains reserved canonical incident projection fields` }, 409);
       }
       let priority = str(m.priority)?.toLowerCase() ?? "normal";
       if (!VALID_PRIORITIES.includes(priority)) priority = "normal";
@@ -939,8 +1343,24 @@ async function handleV1(
     }
     if (method === "POST") {
       const body = await readJson(req);
-      const who = str(body.agent) ?? agent ?? undefined;
-      if (!who) return json({ error: "agent is required" }, 400);
+      if (!agent) return json({ error: "authenticated agent is required" }, 401);
+      const requestedAgent = str(body.agent);
+      if (requestedAgent && requestedAgent.toLowerCase() !== agent.toLowerCase()) {
+        return json({ error: "receipt agent must match the authenticated agent" }, 403);
+      }
+      const who = agent;
+      const projected = await projectedMessageIds(client, [id]);
+      if (projected.has(id)) {
+        const visible = await visibleIncidentBlockerIds(
+          client,
+          deps.incidentProjector,
+          who,
+          { ids: [id], includeAcknowledged: true },
+        );
+        if (!visible.includes(id)) {
+          return json({ error: "incident blocker is not visible to the authenticated agent" }, 403);
+        }
+      }
       const row = await client.get(
         `INSERT INTO message_read_receipts (message_id, agent, read_at) VALUES ($1, $2, NOW())
          ON CONFLICT (message_id, agent) DO UPDATE SET read_at = EXCLUDED.read_at
@@ -1049,6 +1469,10 @@ async function handleV1(
     }
     if (method === "PATCH") {
       // Edit content — only the original sender may edit; stamps edited_at.
+      const projection = await client.get("SELECT 1 AS present FROM incident_projections WHERE message_id = $1", [id]);
+      if (projection) {
+        return json({ error: "incident projection messages are append-only", code: "INCIDENT_PROJECTION_CONFLICT" }, 409);
+      }
       const body = await readJson(req);
       const from = str(body.from) ?? agent ?? undefined;
       const content = typeof body.content === "string" ? body.content : undefined;
@@ -1062,6 +1486,10 @@ async function handleV1(
       return json({ message: row });
     }
     if (method === "DELETE") {
+      const projection = await client.get("SELECT 1 AS present FROM incident_projections WHERE message_id = $1", [id]);
+      if (projection) {
+        return json({ error: "incident projection messages are append-only", code: "INCIDENT_PROJECTION_CONFLICT" }, 409);
+      }
       const from = str(url.searchParams.get("from")) ?? agent ?? undefined;
       if (!from) return json({ error: "'from' is required to delete a message" }, 400);
       const row = await client.get(`DELETE FROM messages WHERE id = $1 AND from_agent = $2 RETURNING id`, [id, from]);

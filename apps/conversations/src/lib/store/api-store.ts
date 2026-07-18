@@ -497,6 +497,12 @@ export class ApiStore implements ConversationsStore {
       from: opts.from, to: opts.to, content: opts.content, channel: opts.channel,
       project_id: opts.project_id, session_id: opts.session_id, priority: opts.priority,
       blocking: opts.blocking === true,
+      reply_to: opts.reply_to,
+      metadata: opts.metadata,
+      working_dir: opts.working_dir,
+      repository: opts.repository,
+      branch: opts.branch,
+      attachments: opts.attachments,
     });
     return parseMessage(body.message) as never;
   };
@@ -602,7 +608,7 @@ export class ApiStore implements ConversationsStore {
     return (body?.messages ?? []).map(parseMessage) as never;
   };
   getUnreadBlockers: ConversationsStore["getUnreadBlockers"] = async (agent, opts) => {
-    const body = await this.get<{ messages?: Record<string, unknown>[] }>("/messages", { to: agent, unread_only: true, blocking_only: true, ...(opts as Q) });
+    const body = await this.get<{ messages?: Record<string, unknown>[] }>("/messages/blockers", { agent, ...(opts as Q) });
     return (body?.messages ?? []).map(parseMessage) as never;
   };
   getMessagesForAgent: ConversationsStore["getMessagesForAgent"] = async (agent, opts) => {
@@ -680,5 +686,18 @@ export class ApiStore implements ConversationsStore {
   getReadReceipts: ConversationsStore["getReadReceipts"] = async (messageId) => {
     const res = await this.get<{ receipts?: unknown[] }>(`/messages/${encodeURIComponent(String(messageId))}/receipts`);
     return (res?.receipts ?? []) as never;
+  };
+  appendIncidentProjection: ConversationsStore["appendIncidentProjection"] = async (request) => {
+    const res = await this.post<{ projection: unknown }>("/incident-projections", request);
+    return res.projection as never;
+  };
+  getIncidentProjection: ConversationsStore["getIncidentProjection"] = async (eventId) => {
+    try {
+      const res = await this.get<{ projection: unknown }>(`/incident-projections/${encodeURIComponent(eventId)}`);
+      return (res?.projection ?? null) as never;
+    } catch (error) {
+      if (isHttpStatus(error, 404)) return null;
+      throw error;
+    }
   };
 }

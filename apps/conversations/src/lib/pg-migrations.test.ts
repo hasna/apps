@@ -23,6 +23,8 @@ describe("PG_MIGRATIONS", () => {
     expect(sql).toContain("create table if not exists resource_locks");
     expect(sql).toContain("create table if not exists feedback");
     expect(sql).toContain("create table if not exists _migrations");
+    expect(sql).toContain("create table if not exists incident_projections");
+    expect(sql).toContain("create table if not exists incident_projection_scopes");
     expect(sql).toContain("metadata text");
     expect(sql).toContain("tags text");
     const channelsDefinition = sql.slice(
@@ -37,6 +39,23 @@ describe("PG_MIGRATIONS", () => {
     expect(sql).toContain("create index");
     expect(sql).toContain("idx_projects_name");
     expect(sql).toContain("idx_messages_search");
+    expect(sql).toContain("idx_incident_projections_active_scope");
+    expect(sql).toContain("idx_incident_projection_scopes_lookup");
+    expect(sql).toContain("incident_projections_no_update");
+    expect(sql).toContain("incident_projections_no_delete");
+    expect(sql).toContain("incident_projection_scopes_no_update");
+    expect(sql).toContain("incident_projection_scopes_no_delete");
+    expect(sql).toContain("incident_projection_messages_no_mutation");
+    expect(sql).toContain("incident_projection_messages_no_delete");
+    expect(sql).toContain("messages_reply_to_fkey");
+    expect(sql).toContain("not valid");
+    expect(sql).toContain("legacy_reply_orphans");
+    expect(sql).not.toContain("update messages child set reply_to = null");
+    expect(sql).not.toContain("validate constraint messages_reply_to_fkey");
+    expect(sql).toContain("enforce_message_reply_scope");
+    expect(sql).toContain("messages_reply_parent_scope_no_update");
+    expect(sql).toContain("'info','low','medium','high','critical'");
+    expect(sql).toContain("'open','investigating','contained','monitoring','resolved','superseded'");
   });
 
   test("first migration sets up full-text search", () => {

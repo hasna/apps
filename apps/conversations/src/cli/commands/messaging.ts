@@ -410,6 +410,11 @@ export function registerMessagingCommands(program: Command): void {
         session_id: original.session_id,
         priority: opts.priority,
         channel,
+        project_id: original.project_id ?? undefined,
+        working_dir: original.working_dir ?? undefined,
+        repository: original.repository ?? undefined,
+        branch: original.branch ?? undefined,
+        reply_to: opts.to,
       });
 
       if (opts.json) {

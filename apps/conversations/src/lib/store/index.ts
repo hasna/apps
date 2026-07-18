@@ -42,6 +42,8 @@ import * as notificationsLib from "../channel-notifications.js";
 import * as summaryLib from "../summary.js";
 import * as hotLib from "../hot.js";
 import * as messagesLib from "../messages.js";
+import * as incidentProjectionsLib from "../incident-projections.js";
+import type { IncidentProjectionRecord, IncidentProjectionRequestV1 } from "../../types.js";
 
 const APP = "conversations";
 
@@ -250,6 +252,10 @@ export interface ConversationsStore {
   recordReadReceipt: Async<typeof messagesLib.recordReadReceipt>;
   recordReadReceiptsBatch: Async<typeof messagesLib.recordReadReceiptsBatch>;
   getReadReceipts: Async<typeof messagesLib.getReadReceipts>;
+
+  // canonical incident projections (authority/tenant are transport-bound)
+  appendIncidentProjection: (request: IncidentProjectionRequestV1) => Promise<IncidentProjectionRecord>;
+  getIncidentProjection: (eventId: string) => Promise<IncidentProjectionRecord | null>;
 }
 
 // ── LocalStore ────────────────────────────────────────────────────────────────
@@ -398,11 +404,20 @@ export class LocalStore implements ConversationsStore {
   recordReadReceipt: ConversationsStore["recordReadReceipt"] = async (...a) => messagesLib.recordReadReceipt(...a);
   recordReadReceiptsBatch: ConversationsStore["recordReadReceiptsBatch"] = async (...a) => messagesLib.recordReadReceiptsBatch(...a);
   getReadReceipts: ConversationsStore["getReadReceipts"] = async (...a) => messagesLib.getReadReceipts(...a);
+  appendIncidentProjection: ConversationsStore["appendIncidentProjection"] = async (request) =>
+    incidentProjectionsLib.appendIncidentProjection(request, incidentProjectionsLib.resolveIncidentProjectorContext());
+  getIncidentProjection: ConversationsStore["getIncidentProjection"] = async (eventId) =>
+    incidentProjectionsLib.getIncidentProjection(eventId, incidentProjectionsLib.resolveIncidentProjectorContext());
 }
 
 // ── Resolver ──────────────────────────────────────────────────────────────────
 
 let localSingleton: LocalStore | null = null;
+
+/** Clear the stateless transport singleton between hermetic route tests. */
+export function resetStoreForTests(): void {
+  localSingleton = null;
+}
 
 /**
  * Resolve the active {@link ConversationsStore} for the current environment.

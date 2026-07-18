@@ -1,6 +1,37 @@
 import { describe, test, expect } from "bun:test";
 import { Command } from "commander";
 import { formatDigestContinuationCommand, registerMessagingCommands } from "./messaging";
+import { sendMessage, getThreadReplies } from "../../lib/messages";
+import { closeDb } from "../../lib/db";
+import { unlinkSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
+import { resetStoreForTests } from "../../lib/store";
+
+const ROUTE_ENV_KEYS = [
+  "HASNA_CONVERSATIONS_STORAGE_MODE",
+  "HASNA_CONVERSATIONS_MODE",
+  "CONVERSATIONS_STORAGE_MODE",
+  "CONVERSATIONS_MODE",
+  "HASNA_CONVERSATIONS_API_URL",
+  "CONVERSATIONS_API_URL",
+  "HASNA_CONVERSATIONS_API_KEY",
+  "CONVERSATIONS_API_KEY",
+  "HASNA_CONVERSATIONS_DB_PATH",
+  "CONVERSATIONS_DB_PATH",
+] as const;
+
+function snapshotRouteEnv(): Map<string, string | undefined> {
+  return new Map(ROUTE_ENV_KEYS.map((key) => [key, process.env[key]]));
+}
+
+function restoreRouteEnv(snapshot: Map<string, string | undefined>): void {
+  for (const key of ROUTE_ENV_KEYS) {
+    const value = snapshot.get(key);
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+}
 
 describe("registerMessagingCommands", () => {
   test("registers send command", () => {
@@ -123,6 +154,70 @@ describe("registerMessagingCommands", () => {
 
     const reply = program.commands.find((c) => c.name() === "reply");
     expect(reply).toBeDefined();
+  });
+
+  test("reply command persists reply_to on the original message", async () => {
+    const dbPath = join(tmpdir(), `conversations-cli-reply-${Date.now()}-${Math.random()}.db`);
+    const routeEnv = snapshotRouteEnv();
+    const originalFetch = globalThis.fetch;
+    let httpRequests = 0;
+    globalThis.fetch = (async () => {
+      httpRequests++;
+      throw new Error("reply regression must not make an HTTP request");
+    }) as unknown as typeof fetch;
+
+    // Deliberately poison every cloud selector except the explicit canonical
+    // local mode. This proves the regression never leaks into a live parent
+    // route even when the invoking shell is configured for remote storage.
+    process.env.HASNA_CONVERSATIONS_API_URL = "https://poisoned.invalid";
+    process.env.CONVERSATIONS_API_URL = "https://poisoned-alias.invalid";
+    process.env.HASNA_CONVERSATIONS_API_KEY = "test-not-a-real-key";
+    process.env.CONVERSATIONS_API_KEY = "test-not-a-real-alias-key";
+    process.env.HASNA_CONVERSATIONS_STORAGE_MODE = "local";
+    process.env.HASNA_CONVERSATIONS_MODE = "local";
+    process.env.CONVERSATIONS_STORAGE_MODE = "local";
+    process.env.CONVERSATIONS_MODE = "local";
+    delete process.env.HASNA_CONVERSATIONS_DB_PATH;
+    process.env.CONVERSATIONS_DB_PATH = dbPath;
+    closeDb();
+    resetStoreForTests();
+    try {
+      const original = sendMessage({
+        from: "alice",
+        to: "incidents",
+        channel: "incidents",
+        project_id: "engineering",
+        content: "incident root",
+      });
+      const program = new Command();
+      program.exitOverride();
+      registerMessagingCommands(program);
+      await program.parseAsync([
+        "node",
+        "conversations",
+        "reply",
+        "threaded follow-up",
+        "--to",
+        String(original.id),
+        "--from",
+        "bob",
+        "--json",
+      ]);
+
+      const replies = getThreadReplies(original.id as number);
+      expect(replies).toHaveLength(1);
+      expect(replies[0].reply_to).toBe(original.id);
+      expect(replies[0].project_id).toBe("engineering");
+      expect(httpRequests).toBe(0);
+    } finally {
+      closeDb();
+      resetStoreForTests();
+      globalThis.fetch = originalFetch;
+      restoreRouteEnv(routeEnv);
+      for (const suffix of ["", "-wal", "-shm"]) {
+        try { unlinkSync(dbPath + suffix); } catch {}
+      }
+    }
   });
 
   test("registers mark-read command", () => {

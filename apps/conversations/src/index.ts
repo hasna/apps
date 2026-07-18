@@ -29,6 +29,11 @@ export * from "./types.js";
 // The Store abstraction: getStore(), ConversationsStore, LocalStore, the mode
 // resolvers (isCloudStore/cloudApiUrl/…) and normalizeChannelName.
 export * from "./lib/store/index.js";
+export {
+  computeIncidentProjectionIds,
+  validateIncidentProjection,
+  type ValidatedIncidentProjection,
+} from "./lib/incident-projection-contract.js";
 
 // Contract-valid project dashboard panel, aggregated through the active Store.
 export {

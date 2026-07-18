@@ -81,7 +81,7 @@ export const PG_MIGRATIONS: string[] = [
     pinned_at TEXT,
     blocking BOOLEAN NOT NULL DEFAULT FALSE,
     attachments TEXT,
-    reply_to BIGINT,
+    reply_to BIGINT REFERENCES messages(id) ON DELETE RESTRICT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     read_at TEXT
   );
@@ -93,6 +93,31 @@ export const PG_MIGRATIONS: string[] = [
   ALTER TABLE messages ADD COLUMN IF NOT EXISTS blocking BOOLEAN NOT NULL DEFAULT FALSE;
   ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachments TEXT;
   ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to BIGINT;
+  DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conrelid = 'messages'::regclass AND conname = 'messages_reply_to_fkey'
+    ) THEN
+      ALTER TABLE messages
+        ADD CONSTRAINT messages_reply_to_fkey FOREIGN KEY (reply_to)
+        REFERENCES messages(id) ON DELETE RESTRICT NOT VALID;
+    END IF;
+  END $$;
+  -- Preserve historical reply values exactly. A NOT VALID FK protects all new
+  -- writes while an operator can audit legacy orphans before a later explicit
+  -- VALIDATE. Migration must never rewrite correlation history silently.
+  DO $$
+  DECLARE legacy_reply_orphans BIGINT;
+  BEGIN
+    SELECT COUNT(*) INTO legacy_reply_orphans
+    FROM messages child
+    WHERE child.reply_to IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM messages parent WHERE parent.id = child.reply_to);
+    IF legacy_reply_orphans > 0 THEN
+      RAISE NOTICE 'messages_reply_to_fkey remains NOT VALID; % legacy orphan reply values require audit', legacy_reply_orphans;
+    END IF;
+  END $$;
   CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
   CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(to_agent);
   CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
@@ -105,6 +130,210 @@ export const PG_MIGRATIONS: string[] = [
   -- The CREATE TABLE above declares uuid UNIQUE, but older tables may have had
   -- uuid added via ALTER without the constraint; this guarantees it either way.
   CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_uuid ON messages(uuid);
+
+  CREATE OR REPLACE FUNCTION message_channel_scope_rewrite_allowed(
+    old_session TEXT, new_session TEXT,
+    old_channel TEXT, new_channel TEXT,
+    old_to_agent TEXT, new_to_agent TEXT,
+    old_project TEXT, new_project TEXT,
+    old_reply_to BIGINT, new_reply_to BIGINT
+  ) RETURNS BOOLEAN AS $$
+  DECLARE
+    guard_text TEXT := current_setting('hasna.conversations.channel_scope_rewrite', TRUE);
+    guard JSONB;
+  BEGIN
+    IF guard_text IS NULL OR guard_text = '' THEN RETURN FALSE; END IF;
+    guard := guard_text::jsonb;
+    RETURN old_session = guard->>'old_session_id'
+       AND new_session = guard->>'new_session_id'
+       AND (
+         (old_channel IS NOT DISTINCT FROM guard->>'old_channel'
+          AND new_channel IS NOT DISTINCT FROM guard->>'new_channel')
+         OR old_channel IS NOT DISTINCT FROM new_channel
+       )
+       AND (
+         (old_to_agent = guard->>'old_to_agent' AND new_to_agent = guard->>'new_to_agent')
+         OR old_to_agent IS NOT DISTINCT FROM new_to_agent
+       )
+       AND old_project IS NOT DISTINCT FROM new_project
+       AND old_reply_to IS NOT DISTINCT FROM new_reply_to;
+  END;
+  $$ LANGUAGE plpgsql STABLE;
+
+  CREATE OR REPLACE FUNCTION enforce_message_reply_scope() RETURNS trigger AS $$
+  BEGIN
+    IF NEW.reply_to IS NOT NULL THEN
+      IF TG_OP = 'UPDATE' AND message_channel_scope_rewrite_allowed(
+        OLD.session_id, NEW.session_id, OLD.channel, NEW.channel,
+        OLD.to_agent, NEW.to_agent, OLD.project_id, NEW.project_id,
+        OLD.reply_to, NEW.reply_to
+      ) THEN
+        RETURN NEW;
+      END IF;
+      PERFORM 1 FROM messages parent
+      WHERE parent.id = NEW.reply_to
+        AND parent.session_id = NEW.session_id
+        AND parent.channel IS NOT DISTINCT FROM NEW.channel
+        AND parent.project_id IS NOT DISTINCT FROM NEW.project_id
+      FOR KEY SHARE;
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'reply parent is missing or outside the message scope';
+      END IF;
+    END IF;
+    RETURN NEW;
+  END;
+  $$ LANGUAGE plpgsql;
+  DROP TRIGGER IF EXISTS messages_reply_scope_insert ON messages;
+  CREATE TRIGGER messages_reply_scope_insert
+    BEFORE INSERT ON messages FOR EACH ROW EXECUTE FUNCTION enforce_message_reply_scope();
+  DROP TRIGGER IF EXISTS messages_reply_scope_update ON messages;
+  CREATE TRIGGER messages_reply_scope_update
+    BEFORE UPDATE OF reply_to, session_id, channel, project_id ON messages
+    FOR EACH ROW EXECUTE FUNCTION enforce_message_reply_scope();
+  CREATE OR REPLACE FUNCTION reject_reply_parent_scope_mutation() RETURNS trigger AS $$
+  BEGIN
+    IF (NEW.session_id IS DISTINCT FROM OLD.session_id
+        OR NEW.channel IS DISTINCT FROM OLD.channel
+        OR NEW.project_id IS DISTINCT FROM OLD.project_id)
+       AND EXISTS (SELECT 1 FROM messages child WHERE child.reply_to = OLD.id)
+       AND NOT message_channel_scope_rewrite_allowed(
+         OLD.session_id, NEW.session_id, OLD.channel, NEW.channel,
+         OLD.to_agent, NEW.to_agent, OLD.project_id, NEW.project_id,
+         OLD.reply_to, NEW.reply_to
+       ) THEN
+      RAISE EXCEPTION 'reply parent scope is immutable while replies exist';
+    END IF;
+    RETURN NEW;
+  END;
+  $$ LANGUAGE plpgsql;
+  DROP TRIGGER IF EXISTS messages_reply_parent_scope_no_update ON messages;
+  CREATE TRIGGER messages_reply_parent_scope_no_update
+    BEFORE UPDATE OF session_id, channel, project_id ON messages
+    FOR EACH ROW EXECUTE FUNCTION reject_reply_parent_scope_mutation();
+
+  -- Append-only canonical incident projection ledger. The message is a display
+  -- projection; current incident state comes from these typed indexed columns.
+  CREATE TABLE IF NOT EXISTS incident_projections (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    event_id TEXT NOT NULL,
+    projection_key TEXT NOT NULL,
+    message_id BIGINT NOT NULL UNIQUE REFERENCES messages(id),
+    schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+    source TEXT NOT NULL CHECK (source = 'todos'),
+    tenant_id TEXT NOT NULL,
+    authority_id TEXT NOT NULL,
+    incident_id TEXT NOT NULL,
+    transition_id TEXT NOT NULL,
+    incident_version INTEGER NOT NULL CHECK (incident_version > 0),
+    occurred_at TIMESTAMPTZ NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('open','investigating','contained','monitoring','resolved','superseded')),
+    severity TEXT NOT NULL CHECK (severity IN ('info','low','medium','high','critical')),
+    blocking BOOLEAN NOT NULL DEFAULT FALSE,
+    affected_scopes TEXT NOT NULL,
+    blocked_scopes TEXT NOT NULL,
+    supersedes_transition_id TEXT,
+    supersedes_incident_id TEXT,
+    superseded_by_incident_id TEXT,
+    canonical_payload TEXT NOT NULL,
+    payload_hash TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (NOT (status IN ('resolved','superseded') AND blocking)),
+    UNIQUE (tenant_id, event_id),
+    UNIQUE (tenant_id, projection_key),
+    UNIQUE (tenant_id, authority_id, incident_id, transition_id),
+    UNIQUE (tenant_id, authority_id, incident_id, incident_version)
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_incident_projections_message ON incident_projections(message_id);
+  CREATE INDEX IF NOT EXISTS idx_incident_projections_active_scope
+    ON incident_projections(tenant_id, authority_id, incident_id, incident_version DESC);
+  CREATE INDEX IF NOT EXISTS idx_incident_projections_blocking_scope
+    ON incident_projections(tenant_id, authority_id, blocking, incident_id, incident_version DESC);
+  CREATE TABLE IF NOT EXISTS incident_projection_scopes (
+    projection_id BIGINT NOT NULL REFERENCES incident_projections(id),
+    scope_type TEXT NOT NULL CHECK (scope_type IN ('affected','blocked')),
+    scope TEXT NOT NULL,
+    PRIMARY KEY (projection_id, scope_type, scope)
+  );
+  CREATE INDEX IF NOT EXISTS idx_incident_projection_scopes_lookup
+    ON incident_projection_scopes(scope_type, scope, projection_id);
+  CREATE OR REPLACE FUNCTION reject_incident_projection_mutation() RETURNS trigger AS $$
+  BEGIN
+    RAISE EXCEPTION 'incident projections are append-only';
+  END;
+  $$ LANGUAGE plpgsql;
+  DROP TRIGGER IF EXISTS incident_projections_no_update ON incident_projections;
+  CREATE TRIGGER incident_projections_no_update
+    BEFORE UPDATE ON incident_projections FOR EACH ROW EXECUTE FUNCTION reject_incident_projection_mutation();
+  DROP TRIGGER IF EXISTS incident_projections_no_delete ON incident_projections;
+  CREATE TRIGGER incident_projections_no_delete
+    BEFORE DELETE ON incident_projections FOR EACH ROW EXECUTE FUNCTION reject_incident_projection_mutation();
+  DROP TRIGGER IF EXISTS incident_projection_scopes_no_update ON incident_projection_scopes;
+  CREATE TRIGGER incident_projection_scopes_no_update
+    BEFORE UPDATE ON incident_projection_scopes FOR EACH ROW EXECUTE FUNCTION reject_incident_projection_mutation();
+  DROP TRIGGER IF EXISTS incident_projection_scopes_no_delete ON incident_projection_scopes;
+  CREATE TRIGGER incident_projection_scopes_no_delete
+    BEFORE DELETE ON incident_projection_scopes FOR EACH ROW EXECUTE FUNCTION reject_incident_projection_mutation();
+  CREATE OR REPLACE FUNCTION reject_incident_projection_message_mutation() RETURNS trigger AS $$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM incident_projections WHERE message_id = OLD.id) THEN
+      IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+      RETURN NEW;
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+      RAISE EXCEPTION 'incident projection messages are append-only';
+    END IF;
+    IF message_channel_scope_rewrite_allowed(
+         OLD.session_id, NEW.session_id, OLD.channel, NEW.channel,
+         OLD.to_agent, NEW.to_agent, OLD.project_id, NEW.project_id,
+         OLD.reply_to, NEW.reply_to
+       )
+       AND NEW.uuid IS NOT DISTINCT FROM OLD.uuid
+       AND NEW.from_agent IS NOT DISTINCT FROM OLD.from_agent
+       AND NEW.content IS NOT DISTINCT FROM OLD.content
+       AND NEW.priority IS NOT DISTINCT FROM OLD.priority
+       AND NEW.working_dir IS NOT DISTINCT FROM OLD.working_dir
+       AND NEW.repository IS NOT DISTINCT FROM OLD.repository
+       AND NEW.branch IS NOT DISTINCT FROM OLD.branch
+       AND NEW.metadata IS NOT DISTINCT FROM OLD.metadata
+       AND NEW.created_at IS NOT DISTINCT FROM OLD.created_at
+       AND NEW.read_at IS NOT DISTINCT FROM OLD.read_at
+       AND NEW.edited_at IS NOT DISTINCT FROM OLD.edited_at
+       AND NEW.pinned_at IS NOT DISTINCT FROM OLD.pinned_at
+       AND NEW.blocking IS NOT DISTINCT FROM OLD.blocking
+       AND NEW.attachments IS NOT DISTINCT FROM OLD.attachments THEN
+      RETURN NEW;
+    END IF;
+    IF NEW.uuid IS DISTINCT FROM OLD.uuid
+       OR NEW.session_id IS DISTINCT FROM OLD.session_id
+       OR NEW.from_agent IS DISTINCT FROM OLD.from_agent
+       OR NEW.to_agent IS DISTINCT FROM OLD.to_agent
+       OR NEW.channel IS DISTINCT FROM OLD.channel
+       OR NEW.project_id IS DISTINCT FROM OLD.project_id
+       OR NEW.content IS DISTINCT FROM OLD.content
+       OR NEW.priority IS DISTINCT FROM OLD.priority
+       OR NEW.working_dir IS DISTINCT FROM OLD.working_dir
+       OR NEW.repository IS DISTINCT FROM OLD.repository
+       OR NEW.branch IS DISTINCT FROM OLD.branch
+       OR NEW.metadata IS DISTINCT FROM OLD.metadata
+       OR NEW.edited_at IS DISTINCT FROM OLD.edited_at
+       OR NEW.blocking IS DISTINCT FROM OLD.blocking
+       OR NEW.attachments IS DISTINCT FROM OLD.attachments
+       OR NEW.reply_to IS DISTINCT FROM OLD.reply_to
+       OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+      RAISE EXCEPTION 'incident projection messages are append-only';
+    END IF;
+    RETURN NEW;
+  END;
+  $$ LANGUAGE plpgsql;
+  DROP TRIGGER IF EXISTS incident_projection_messages_no_mutation ON messages;
+  CREATE TRIGGER incident_projection_messages_no_mutation
+    BEFORE UPDATE ON messages FOR EACH ROW
+    EXECUTE FUNCTION reject_incident_projection_message_mutation();
+  DROP TRIGGER IF EXISTS incident_projection_messages_no_delete ON messages;
+  CREATE TRIGGER incident_projection_messages_no_delete
+    BEFORE DELETE ON messages FOR EACH ROW
+    EXECUTE FUNCTION reject_incident_projection_message_mutation();
+
   UPDATE channel_subscriptions ss
   SET since_message_id = COALESCE(
     (SELECT MAX(m.id) FROM messages m WHERE m.channel = ss.channel),

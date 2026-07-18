@@ -46,6 +46,8 @@ describe("db", () => {
     expect(tableNames).toContain("channel_subscriptions");
     expect(tableNames).toContain("channel_notification_reads");
     expect(tableNames).toContain("projects");
+    expect(tableNames).toContain("incident_projections");
+    expect(tableNames).toContain("incident_projection_scopes");
   });
 
   test("getDb returns singleton", () => {
@@ -73,6 +75,9 @@ describe("db", () => {
     expect(names).toContain("idx_channels_project");
     expect(names).toContain("idx_channel_subscriptions_agent");
     expect(names).toContain("idx_channel_notification_reads_agent");
+    expect(names).toContain("idx_incident_projections_active_scope");
+    expect(names).toContain("idx_incident_projections_message");
+    expect(names).toContain("idx_incident_projection_scopes_lookup");
   });
 
   test("closeDb closes and resets singleton", () => {
@@ -397,5 +402,42 @@ describe("db", () => {
     expect(edge).toEqual({ from_type: "channel", from_id: "platform-mcps" });
     const lock = db.prepare("SELECT resource_type, resource_id FROM resource_locks").get() as { resource_type: string; resource_id: string };
     expect(lock).toEqual({ resource_type: "channel", resource_id: "platform-mcps" });
+  });
+
+  test("preserves legacy orphan reply values while rejecting new orphan writes", () => {
+    closeDb();
+    const legacyDb = new Database(TEST_DB);
+    legacyDb.exec(`
+      CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        from_agent TEXT NOT NULL,
+        to_agent TEXT NOT NULL,
+        channel TEXT,
+        project_id TEXT,
+        content TEXT NOT NULL,
+        priority TEXT NOT NULL DEFAULT 'normal',
+        working_dir TEXT,
+        repository TEXT,
+        branch TEXT,
+        metadata TEXT,
+        blocking INTEGER NOT NULL DEFAULT 0,
+        attachments TEXT,
+        reply_to INTEGER,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+        read_at TEXT
+      );
+      INSERT INTO messages (session_id, from_agent, to_agent, channel, content, reply_to)
+      VALUES ('channel:incidents', 'legacy', 'incidents', 'incidents', 'orphan history', 999);
+    `);
+    legacyDb.close();
+
+    const db = getDb();
+    expect(db.prepare("SELECT reply_to FROM messages WHERE id = 1").get()).toEqual({ reply_to: 999 });
+    expect(() => db.prepare(
+      `INSERT INTO messages (session_id, from_agent, to_agent, channel, content, reply_to)
+       VALUES ('channel:incidents', 'new', 'incidents', 'incidents', 'new orphan', 998)`,
+    ).run()).toThrow("reply parent is missing or outside the message scope");
+    expect(db.prepare("SELECT reply_to FROM messages WHERE id = 1").get()).toEqual({ reply_to: 999 });
   });
 });

@@ -291,6 +291,15 @@ export function renameChannel(oldName: string, newName: string): Channel {
 
   db.exec("BEGIN");
   try {
+    // Foreign-key enforcement is enabled for reply/incident durability. Channel
+    // rename rewrites the parent key and every dependent row in this same
+    // transaction, so defer those checks until all references are consistent.
+    db.exec("PRAGMA defer_foreign_keys = ON");
+    db.prepare(
+      `INSERT INTO message_scope_rewrite_guard (
+         token, old_session_id, new_session_id, old_channel, new_channel, old_to_agent, new_to_agent
+       ) VALUES (1, ?, ?, ?, ?, ?, ?)`,
+    ).run(`channel:${from}`, `channel:${to}`, from, to, from, to);
     // Channel row itself (PK is the name column).
     db.prepare("UPDATE channels SET name = ? WHERE name = ?").run(to, from);
 
@@ -298,10 +307,16 @@ export function renameChannel(oldName: string, newName: string): Channel {
     // field (channel messages address the channel name as recipient).
     if (localHasColumn(db, "messages", "channel")) {
       db.prepare(
-        "UPDATE messages SET channel = ?, to_agent = CASE WHEN to_agent = ? THEN ? ELSE to_agent END WHERE channel = ?",
-      ).run(to, from, to, from);
+        `UPDATE messages
+         SET channel = ?,
+             session_id = CASE WHEN session_id = ? THEN ? ELSE session_id END,
+             to_agent = CASE WHEN to_agent = ? THEN ? ELSE to_agent END
+         WHERE channel = ?`,
+      ).run(to, `channel:${from}`, `channel:${to}`, from, to, from);
     }
-    db.prepare("UPDATE messages SET session_id = ? WHERE session_id = ?").run(`channel:${to}`, `channel:${from}`);
+    db.prepare(
+      "UPDATE messages SET session_id = ? WHERE session_id = ? AND (channel IS NULL OR channel <> ?)",
+    ).run(`channel:${to}`, `channel:${from}`, to);
 
     // Membership and subscriptions.
     if (localTableExists(db, "channel_members")) {
@@ -327,6 +342,8 @@ export function renameChannel(oldName: string, newName: string): Channel {
     if (localTableExists(db, "resource_locks")) {
       db.prepare("UPDATE resource_locks SET resource_id = ? WHERE resource_type = 'channel' AND resource_id = ?").run(to, from);
     }
+
+    db.prepare("DELETE FROM message_scope_rewrite_guard WHERE token = 1").run();
 
     db.exec("COMMIT");
   } catch (error) {

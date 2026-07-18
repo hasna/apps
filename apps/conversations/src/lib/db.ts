@@ -619,6 +619,7 @@ export function getDb(): Database {
   db = new ConversationsDatabase(dbPath);
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA busy_timeout = 5000");
+  db.exec("PRAGMA foreign_keys = ON");
 
   // Messages table (new DBs get 'channel' column; existing DBs migrate below)
   db.exec(`
@@ -832,6 +833,76 @@ export function getDb(): Database {
     db.exec("ALTER TABLE messages ADD COLUMN project_id TEXT");
     db.exec("CREATE INDEX IF NOT EXISTS idx_messages_project ON messages(project_id)");
   }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS message_scope_rewrite_guard (
+      token INTEGER PRIMARY KEY CHECK (token = 1),
+      old_session_id TEXT NOT NULL,
+      new_session_id TEXT NOT NULL,
+      old_channel TEXT,
+      new_channel TEXT,
+      old_to_agent TEXT NOT NULL,
+      new_to_agent TEXT NOT NULL
+    )
+  `);
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS messages_reply_scope_insert
+    BEFORE INSERT ON messages
+    WHEN NEW.reply_to IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM messages parent
+      WHERE parent.id = NEW.reply_to
+        AND parent.session_id = NEW.session_id
+        AND parent.channel IS NEW.channel
+        AND parent.project_id IS NEW.project_id
+    )
+    BEGIN SELECT RAISE(ABORT, 'reply parent is missing or outside the message scope'); END
+  `);
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS messages_reply_scope_update
+    BEFORE UPDATE OF reply_to, session_id, channel, project_id ON messages
+    WHEN NEW.reply_to IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM messages parent
+      WHERE parent.id = NEW.reply_to
+        AND parent.session_id = NEW.session_id
+        AND parent.channel IS NEW.channel
+        AND parent.project_id IS NEW.project_id
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM message_scope_rewrite_guard guard
+      WHERE OLD.session_id = guard.old_session_id
+        AND NEW.session_id = guard.new_session_id
+        AND (
+          (OLD.channel IS guard.old_channel AND NEW.channel IS guard.new_channel)
+          OR OLD.channel IS NEW.channel
+        )
+        AND (
+          (OLD.to_agent = guard.old_to_agent AND NEW.to_agent = guard.new_to_agent)
+          OR OLD.to_agent IS NEW.to_agent
+        )
+        AND OLD.project_id IS NEW.project_id
+    )
+    BEGIN SELECT RAISE(ABORT, 'reply parent is missing or outside the message scope'); END
+  `);
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS messages_reply_parent_scope_no_update
+    BEFORE UPDATE OF session_id, channel, project_id ON messages
+    WHEN EXISTS (SELECT 1 FROM messages child WHERE child.reply_to = OLD.id)
+      AND (NEW.session_id IS NOT OLD.session_id OR NEW.channel IS NOT OLD.channel OR NEW.project_id IS NOT OLD.project_id)
+      AND NOT EXISTS (
+        SELECT 1 FROM message_scope_rewrite_guard guard
+        WHERE OLD.session_id = guard.old_session_id
+          AND NEW.session_id = guard.new_session_id
+          AND (
+            (OLD.channel IS guard.old_channel AND NEW.channel IS guard.new_channel)
+            OR OLD.channel IS NEW.channel
+          )
+          AND (
+            (OLD.to_agent = guard.old_to_agent AND NEW.to_agent = guard.new_to_agent)
+            OR OLD.to_agent IS NEW.to_agent
+          )
+          AND OLD.project_id IS NEW.project_id
+      )
+    BEGIN SELECT RAISE(ABORT, 'reply parent scope is immutable while replies exist'); END
+  `);
   if (!colNames2.includes("uuid")) {
     db.exec("ALTER TABLE messages ADD COLUMN uuid TEXT");
     // Backfill existing rows with unique UUIDs
@@ -888,6 +959,138 @@ export function getDb(): Database {
   `);
   db.exec("CREATE INDEX IF NOT EXISTS idx_read_receipts_message ON message_read_receipts(message_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_read_receipts_agent ON message_read_receipts(agent)");
+
+  // Canonical incident state is an append-only, structurally indexed projection
+  // ledger. Message content and metadata remain display/audit material only.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS incident_projections (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_id TEXT NOT NULL,
+      projection_key TEXT NOT NULL,
+      message_id INTEGER NOT NULL UNIQUE REFERENCES messages(id),
+      schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+      source TEXT NOT NULL CHECK (source = 'todos'),
+      tenant_id TEXT NOT NULL,
+      authority_id TEXT NOT NULL,
+      incident_id TEXT NOT NULL,
+      transition_id TEXT NOT NULL,
+      incident_version INTEGER NOT NULL CHECK (incident_version > 0),
+      occurred_at TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('open','investigating','contained','monitoring','resolved','superseded')),
+      severity TEXT NOT NULL CHECK (severity IN ('info','low','medium','high','critical')),
+      blocking INTEGER NOT NULL DEFAULT 0,
+      affected_scopes TEXT NOT NULL,
+      blocked_scopes TEXT NOT NULL,
+      supersedes_transition_id TEXT,
+      supersedes_incident_id TEXT,
+      superseded_by_incident_id TEXT,
+      canonical_payload TEXT NOT NULL,
+      payload_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+      CHECK (NOT (status IN ('resolved','superseded') AND blocking = 1)),
+      UNIQUE (tenant_id, event_id),
+      UNIQUE (tenant_id, projection_key),
+      UNIQUE (tenant_id, authority_id, incident_id, transition_id),
+      UNIQUE (tenant_id, authority_id, incident_id, incident_version)
+    )
+  `);
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_incident_projections_message ON incident_projections(message_id)");
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_incident_projections_active_scope
+    ON incident_projections(tenant_id, authority_id, incident_id, incident_version DESC)
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_incident_projections_blocking_scope
+    ON incident_projections(tenant_id, authority_id, blocking, incident_id, incident_version DESC)
+  `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS incident_projection_scopes (
+      projection_id INTEGER NOT NULL REFERENCES incident_projections(id),
+      scope_type TEXT NOT NULL CHECK (scope_type IN ('affected','blocked')),
+      scope TEXT NOT NULL,
+      PRIMARY KEY (projection_id, scope_type, scope)
+    )
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_incident_projection_scopes_lookup
+    ON incident_projection_scopes(scope_type, scope, projection_id)
+  `);
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS incident_projections_no_update
+    BEFORE UPDATE ON incident_projections
+    BEGIN SELECT RAISE(ABORT, 'incident projections are append-only'); END
+  `);
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS incident_projections_no_delete
+    BEFORE DELETE ON incident_projections
+    BEGIN SELECT RAISE(ABORT, 'incident projections are append-only'); END
+  `);
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS incident_projection_scopes_no_update
+    BEFORE UPDATE ON incident_projection_scopes
+    BEGIN SELECT RAISE(ABORT, 'incident projection scopes are append-only'); END
+  `);
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS incident_projection_scopes_no_delete
+    BEFORE DELETE ON incident_projection_scopes
+    BEGIN SELECT RAISE(ABORT, 'incident projection scopes are append-only'); END
+  `);
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS incident_projection_messages_no_mutation
+    BEFORE UPDATE ON messages
+    WHEN EXISTS (SELECT 1 FROM incident_projections WHERE message_id = OLD.id)
+      AND (
+        NEW.uuid IS NOT OLD.uuid OR
+        NEW.session_id IS NOT OLD.session_id OR
+        NEW.from_agent IS NOT OLD.from_agent OR
+        NEW.to_agent IS NOT OLD.to_agent OR
+        NEW.channel IS NOT OLD.channel OR
+        NEW.project_id IS NOT OLD.project_id OR
+        NEW.content IS NOT OLD.content OR
+        NEW.priority IS NOT OLD.priority OR
+        NEW.working_dir IS NOT OLD.working_dir OR
+        NEW.repository IS NOT OLD.repository OR
+        NEW.branch IS NOT OLD.branch OR
+        NEW.metadata IS NOT OLD.metadata OR
+        NEW.edited_at IS NOT OLD.edited_at OR
+        NEW.blocking IS NOT OLD.blocking OR
+        NEW.attachments IS NOT OLD.attachments OR
+        NEW.reply_to IS NOT OLD.reply_to OR
+        NEW.created_at IS NOT OLD.created_at
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM message_scope_rewrite_guard guard
+        WHERE OLD.session_id = guard.old_session_id
+          AND NEW.session_id = guard.new_session_id
+          AND OLD.channel IS guard.old_channel
+          AND NEW.channel IS guard.new_channel
+          AND OLD.to_agent = guard.old_to_agent
+          AND NEW.to_agent = guard.new_to_agent
+          AND NEW.uuid IS OLD.uuid
+          AND NEW.from_agent IS OLD.from_agent
+          AND NEW.project_id IS OLD.project_id
+          AND NEW.content IS OLD.content
+          AND NEW.priority IS OLD.priority
+          AND NEW.working_dir IS OLD.working_dir
+          AND NEW.repository IS OLD.repository
+          AND NEW.branch IS OLD.branch
+          AND NEW.metadata IS OLD.metadata
+          AND NEW.created_at IS OLD.created_at
+          AND NEW.read_at IS OLD.read_at
+          AND NEW.edited_at IS OLD.edited_at
+          AND NEW.pinned_at IS OLD.pinned_at
+          AND NEW.blocking IS OLD.blocking
+          AND NEW.attachments IS OLD.attachments
+          AND NEW.reply_to IS OLD.reply_to
+      )
+    BEGIN SELECT RAISE(ABORT, 'incident projection messages are append-only'); END
+  `);
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS incident_projection_messages_no_delete
+    BEFORE DELETE ON messages
+    WHEN EXISTS (SELECT 1 FROM incident_projections WHERE message_id = OLD.id)
+    BEGIN SELECT RAISE(ABORT, 'incident projection messages are append-only'); END
+  `);
 
   // Message mentions table — @agent notifications
   db.exec(`

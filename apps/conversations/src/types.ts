@@ -124,6 +124,103 @@ export interface SendMessageOptions {
   reply_to?: number;
 }
 
+// ── Canonical Todos incident projections ────────────────────────────────────
+
+export type IncidentSeverity = "info" | "low" | "medium" | "high" | "critical";
+export type IncidentStatus = "open" | "investigating" | "contained" | "monitoring" | "resolved" | "superseded";
+
+/** Frozen Todos v1 incident snapshot. Message text is never canonical state. */
+export interface IncidentSnapshotV1 {
+  id: string;
+  title: string;
+  severity: IncidentSeverity;
+  status: IncidentStatus;
+  owner: string;
+  affected_scopes: string[];
+  blocked_scopes: string[];
+  containment: string | null;
+  next_action: string | null;
+  deadline: string | null;
+  closure_evidence: string[];
+  supersedes_id: string | null;
+  superseded_by_id: string | null;
+  resolved_at: string | null;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IncidentProjectionDisplay {
+  from: string;
+  to: string;
+  content: string;
+  channel?: string;
+  project_id?: string;
+  session_id?: string;
+  priority?: Priority;
+  working_dir?: string;
+  repository?: string;
+  branch?: string;
+}
+
+/** Trusted Conversations-side rendering/routing configuration. */
+export interface IncidentProjectionRouting {
+  from?: string;
+  to?: string;
+  channel?: string;
+  project_id?: string;
+  session_id?: string;
+}
+
+/**
+ * Projector input. authority_id is supplied by Todos and must equal the stable
+ * Conversations deployment binding; tenant_id is never accepted from the wire.
+ */
+export interface IncidentProjectionRequestV1 {
+  schema_version: 1;
+  source: "todos";
+  authority_id: string;
+  incident_id: string;
+  transition_id: string;
+  incident_version: number;
+  occurred_at: string;
+  event_id: string;
+  projection_key: string;
+  incident: IncidentSnapshotV1;
+}
+
+export interface IncidentProjectorContext {
+  tenant_id: string;
+  authority_id: string;
+  routing?: IncidentProjectionRouting;
+}
+
+export interface IncidentProjectionRecord {
+  id: number;
+  event_id: string;
+  projection_key: string;
+  message_id: number;
+  schema_version: 1;
+  source: "todos";
+  tenant_id: string;
+  authority_id: string;
+  incident_id: string;
+  transition_id: string;
+  incident_version: number;
+  occurred_at: string;
+  status: IncidentStatus;
+  severity: IncidentSeverity;
+  blocking: boolean;
+  supersedes_transition_id: string | null;
+  supersedes_incident_id: string | null;
+  superseded_by_incident_id: string | null;
+  canonical_payload: string;
+  payload_hash: string;
+  created_at: string;
+  message: Message;
+  replayed: boolean;
+}
+
 export interface ReadMessagesOptions {
   session_id?: string;
   from?: string;
