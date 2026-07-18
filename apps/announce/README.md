@@ -55,8 +55,8 @@ Clearly separated in `@hasna/announce/report`: `aggregateEngagement` consumes `M
 import { composeAnnouncementCampaign, deliverCampaign, DeliveryLedger, MockShortlinkAdapter } from "@hasna/announce";
 
 const campaign = composeAnnouncementCampaign({
-  release: { appId: "open-todos", package: "@hasna/todos", version: "1.2.3", gitSha: "a".repeat(7), publishedAt: new Date().toISOString(), publishPath: "ci" },
-  changelogRef: { kind: "document", id: "open-todos@1.2.3", uri: "https://github.com/hasna/open-todos/releases/tag/v1.2.3" },
+  release: { appId: "open-todos", package: "@hasna/todos", version: "0.11.92", gitSha: "a".repeat(7), publishedAt: new Date().toISOString(), publishPath: "ci", evidenceRefs: [{ id: "release-checks@0.11.92" }] },
+  changelogRef: { kind: "document", id: "open-todos@0.11.92", uri: "https://github.com/hasna/todos/blob/main/CHANGELOG.md" },
   audience: { audienceId: "developers", name: "Developers" },
   channels: ["email", "telegram"],
 });
