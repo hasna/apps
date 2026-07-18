@@ -710,7 +710,7 @@ export interface CloudTaskFailureResult {
 export async function cloudFailTask(
   client: HasnaStorageClient,
   id: string,
-  body: { agent_id?: string; reason?: string; retry?: boolean } = {},
+  body: { agent_id?: string; reason?: string; retry?: boolean; retry_after?: string; error_code?: string } = {},
 ): Promise<CloudTaskFailureResult> {
   const raw = await client.transport.post<unknown>(`/tasks/${encodeURIComponent(id)}/fail`, body);
   if (raw && typeof raw === "object" && "result" in (raw as Record<string, unknown>)) {

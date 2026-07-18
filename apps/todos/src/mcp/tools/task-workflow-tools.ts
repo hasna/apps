@@ -9,7 +9,7 @@ import { z } from "zod";
 import type { Task } from "../../types/index.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 import { compactHandoff, compactJson, compactStatus, compactTask } from "../token-utils.js";
-import { getTodosCloudClient, cloudTaskAction, cloudListTasks, cloudGetStats, cloudCountTasks } from "../../cli/cloud-router.js";
+import { getTodosCloudClient, cloudTaskAction, cloudFailTask, cloudListTasks, cloudGetStats, cloudCountTasks } from "../../cli/cloud-router.js";
 
 interface TaskWorkflowContext {
   shouldRegisterTool: (name: string) => boolean;
@@ -66,29 +66,42 @@ export function registerTaskWorkflowTools(server: McpServer, ctx: TaskWorkflowCo
   if (shouldRegisterTool("fail_task")) {
     server.tool(
       "fail_task",
-      "Mark a task as failed. Increments retry_count. Sets back_on_board=false so agent stays assigned.",
+      "Mark a task as failed and optionally create a retry task when allowance remains.",
       {
         task_id: z.string().describe("Task ID"),
         reason: z.string().optional().describe("Failure reason"),
         agent_id: z.string().optional().describe("Agent marking as failed"),
+        retry: z.boolean().optional().describe("Create a retry task when retry allowance remains"),
+        retry_after: z.string().datetime({ offset: true }).optional().describe("ISO timestamp overriding exponential retry backoff"),
+        error_code: z.string().optional().describe("Structured failure error code"),
         version: z.number().optional().describe("Expected version for optimistic locking"),
       },
-      async ({ task_id, reason, agent_id, version }) => {
+      async ({ task_id, reason, agent_id, retry, retry_after, error_code, version }) => {
         try {
           const cloud = getTodosCloudClient();
           if (cloud) {
             const body: Record<string, unknown> = {};
             if (reason !== undefined) body.reason = reason;
             if (agent_id !== undefined) body.agent_id = agent_id;
-            const task = await cloudTaskAction(cloud, task_id, "fail", body);
-            const rc = (task as any)?.retry_count ?? (task as any)?.task?.retry_count ?? "?";
-            return { content: [{ type: "text" as const, text: `Task ${task_id.slice(0,8)} marked failed. Retry count: ${rc}` }] };
+            if (retry !== undefined) body.retry = retry;
+            if (retry_after !== undefined) body.retry_after = retry_after;
+            if (error_code !== undefined) body.error_code = error_code;
+            const result = await cloudFailTask(cloud, task_id, body);
+            const retryOutcome = result.retryTask
+              ? ` Retry created: ${result.retryTask.short_id || result.retryTask.id.slice(0, 8)}.`
+              : retry ? " Retry not created: allowance exhausted." : "";
+            const retryCount = result.retryTask?.retry_count ?? result.task.retry_count;
+            return { content: [{ type: "text" as const, text: `Task ${task_id.slice(0,8)} marked failed. Retry count: ${retryCount}.${retryOutcome}` }] };
           }
           const { failTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const resolvedId = resolveId(task_id);
           versionFor(resolvedId, version);
-          const result = failTask(resolvedId, agent_id, reason);
-          return { content: [{ type: "text" as const, text: `Task ${task_id.slice(0,8)} marked failed. Retry count: ${result.task.retry_count}` }] };
+          const result = failTask(resolvedId, agent_id, reason, { retry, retry_after, error_code });
+          const retryOutcome = result.retryTask
+            ? ` Retry created: ${result.retryTask.short_id || result.retryTask.id.slice(0, 8)}.`
+            : retry ? " Retry not created: allowance exhausted." : "";
+          const retryCount = result.retryTask?.retry_count ?? result.task.retry_count;
+          return { content: [{ type: "text" as const, text: `Task ${task_id.slice(0,8)} marked failed. Retry count: ${retryCount}.${retryOutcome}` }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }

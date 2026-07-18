@@ -1009,6 +1009,121 @@ describe("storage adapter contracts", () => {
     expect((await adapter.audit.getTaskHistory(task.id)).filter((entry) => entry.action === "fail")).toHaveLength(1);
   });
 
+  test("Postgres retry failure matches SQLite defaults, backoff, and lineage", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+    const task = await adapter.tasks.create({
+      title: "Retry parity",
+      description: "Preserve retryable work",
+      priority: "high",
+      tags: ["retry"],
+      estimated_minutes: 15,
+    });
+    const before = Date.now();
+
+    const result = await adapter.tasks.fail(task.id, "worker", "transient", {
+      retry: true,
+      error_code: "TRANSIENT",
+    }, { agentId: "worker", effectiveAgentId: "worker" });
+    const after = Date.now();
+
+    expect(task.max_retries).toBe(3);
+    expect(result.retryTask).toMatchObject({
+      status: "pending",
+      title: "Retry parity",
+      description: "Preserve retryable work",
+      priority: "high",
+      tags: ["retry"],
+      estimated_minutes: 15,
+      retry_count: 1,
+      max_retries: 3,
+    });
+    expect(result.retryTask?.retry_after).toBe(result.retryTask?.due_at);
+    const retryAt = Date.parse(result.retryTask!.retry_after!);
+    expect(retryAt).toBeGreaterThanOrEqual(before + 60_000);
+    expect(retryAt).toBeLessThanOrEqual(after + 60_000);
+    expect(result.retryTask?.metadata).toMatchObject({
+      _retry: {
+        original_id: task.id,
+        retry_count: 1,
+        max_retries: 3,
+        retry_after: result.retryTask?.retry_after,
+        failure_reason: "transient",
+      },
+    });
+  });
+
+  test("Postgres retry failure stops at SQLite exhaustion and records it on the failed task", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+    const task = await adapter.tasks.create({
+      title: "Retry exhausted",
+      retry_count: 3,
+      max_retries: 3,
+    });
+
+    const result = await adapter.tasks.fail(task.id, "worker", "still failing", { retry: true }, {
+      agentId: "worker",
+      effectiveAgentId: "worker",
+    });
+
+    expect(result.retryTask).toBeUndefined();
+    expect(await adapter.tasks.count({ include_subtasks: true })).toBe(1);
+    expect(await adapter.tasks.get(task.id)).toMatchObject({
+      status: "failed",
+      metadata: { _retry_exhausted: { retry_count: 3, max_retries: 3 } },
+    });
+  });
+
+  test("Postgres retry failure uses SQLite five-times exponential backoff", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+    const task = await adapter.tasks.create({ title: "Second retry", retry_count: 1 });
+    const before = Date.now();
+
+    const result = await adapter.tasks.fail(task.id, "worker", "transient again", { retry: true }, {
+      agentId: "worker",
+      effectiveAgentId: "worker",
+    });
+    const after = Date.now();
+
+    expect(result.retryTask).toMatchObject({ retry_count: 2, max_retries: 3 });
+    const retryAt = Date.parse(result.retryTask!.retry_after!);
+    expect(retryAt).toBeGreaterThanOrEqual(before + 5 * 60_000);
+    expect(retryAt).toBeLessThanOrEqual(after + 5 * 60_000);
+  });
+
+  test("Postgres approval stamps approved_at and writes approval-specific actor provenance", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+    const task = await adapter.tasks.create({ title: "Approval parity", requires_approval: true });
+
+    const approved = await adapter.tasks.update(task.id, {
+      version: task.version,
+      approved_by: "reviewer",
+    }, {
+      agentId: "reviewer",
+      authenticatedAgentId: "admin",
+      effectiveAgentId: "reviewer",
+      actorKeyId: "admin-key",
+      actorActAs: true,
+    });
+
+    expect(approved).toMatchObject({ approved_by: "reviewer" });
+    expect(approved.approved_at).toEqual(expect.any(String));
+    const approval = (await adapter.audit.getTaskHistory(task.id)).find((entry) => entry.action === "approve");
+    expect(approval).toMatchObject({
+      field: "approved_by",
+      old_value: null,
+      new_value: "reviewer",
+      agent_id: "reviewer",
+      authenticated_agent_id: "admin",
+      effective_agent_id: "reviewer",
+      actor_key_id: "admin-key",
+      actor_act_as: true,
+    });
+  });
+
   test("Postgres activity ledger persists authenticated and effective actors for administrative act-as", async () => {
     const postgres = createMemoryPostgresClient();
     const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });

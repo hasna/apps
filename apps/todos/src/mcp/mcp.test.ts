@@ -1258,6 +1258,44 @@ describe("MCP tool wrappers", () => {
     expect((failed.metadata._failure as { reason: string }).reason).toBe("regression test");
   });
 
+  it("fail_task exposes a requested retry result through the remote envelope", async () => {
+    const previousFetch = globalThis.fetch;
+    process.env["HASNA_TODOS_STORAGE_MODE"] = "self_hosted";
+    delete process.env["TODOS_STORAGE_MODE"];
+    process.env["HASNA_TODOS_API_URL"] = "https://todos.example.test";
+    process.env["HASNA_TODOS_API_KEY"] = "hasna_todos_test_key";
+    resetConfig();
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), body: JSON.parse(String(init?.body ?? "{}")) });
+      return Response.json({
+        result: {
+          task: { id: "failed-task", title: "Remote failure", status: "failed", retry_count: 0 },
+          retryTask: { id: "retry-task", title: "Remote failure", status: "pending", retry_count: 1 },
+        },
+      });
+    }) as typeof fetch;
+
+    try {
+      const tools = captureTools(registerTaskWorkflowTools);
+      const result = await callCapturedTool(tools, "fail_task", {
+        task_id: "failed-task",
+        agent_id: "mcp",
+        reason: "transient",
+        retry: true,
+      });
+
+      expect(result.content[0]!.text).toContain("Retry count: 1.");
+      expect(result.content[0]!.text).toContain("Retry created: retry-ta");
+      expect(calls).toEqual([{
+        url: "https://todos.example.test/v1/tasks/failed-task/fail",
+        body: { agent_id: "mcp", reason: "transient", retry: true },
+      }]);
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
+
   it("relationship tools resolve their database imports from the tools directory", async () => {
     const tools = captureTools(registerTaskRelTools);
     const task = createTask({ title: "MCP handoff task", assigned_to: "mcp", agent_id: "mcp", session_id: "mcp-session" }, db);

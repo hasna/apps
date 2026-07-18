@@ -494,7 +494,7 @@ export interface UpdateTaskInput {
   status?: TaskStatus;
   priority?: TaskPriority;
   project_id?: string | null;
-  assigned_to?: string;
+  assigned_to?: string | null;
   working_dir?: string | null;
   plan_id?: string | null;
   task_list_id?: string | null;

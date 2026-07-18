@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { buildV1OpenApiDocument } from "./openapi.js";
 import { TodosV1Client } from "../sdk/v1.generated.js";
 
@@ -63,6 +64,20 @@ describe("task comments OpenAPI contract", () => {
 });
 
 describe("task list and completion OpenAPI contract", () => {
+  test("task update publishes canonical status and priority enums to the generated SDK", () => {
+    const document = buildV1OpenApiDocument("test");
+    expect(document.components.schemas.UpdateTaskInput).toMatchObject({
+      additionalProperties: false,
+      properties: {
+        status: { type: "string", enum: ["pending", "in_progress", "completed", "failed", "cancelled"] },
+        priority: { type: "string", enum: ["low", "medium", "high", "critical"] },
+      },
+    });
+    const generated = readFileSync(new URL("../sdk/v1.generated.ts", import.meta.url), "utf8");
+    expect(generated).toContain('"status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"');
+    expect(generated).not.toContain('export interface UpdateTaskInput { "title"?: string; "description"?: string; "status"?: string;');
+  });
+
   test("documents exhaustive task pagination, total, filters, and completion evidence", () => {
     const document = buildV1OpenApiDocument("test");
     const list = document.paths["/v1/tasks"].get;

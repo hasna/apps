@@ -474,6 +474,84 @@ describe("/v1 mutation actor authority", () => {
     expect(await store.tasks.get(task.id)).toMatchObject({ locked_by: null, locked_at: null, version: task.version });
   });
 
+  test("task update rejects invalid runtime values before storage", async () => {
+    const task = await store.tasks.create({ title: "validated patch" });
+    const invalidBodies = [
+      { status: "blocked" },
+      { priority: "urgent" },
+      { tags: "not-an-array" },
+      { tags: ["valid", 42] },
+      { metadata: [] },
+      { due_at: "not-a-timestamp" },
+      { due_at: "2026-07-19" },
+      { completed_at: false },
+      { retry_after: 42 },
+      { requires_approval: "yes" },
+      { confidence: 2 },
+      { retry_count: -1 },
+      { version: 1.5 },
+      { description: null },
+      { working_dir: 42 },
+    ];
+
+    for (const body of invalidBodies) {
+      const response = await request(`/v1/tasks/${task.id}`, "PATCH", body);
+      expect(response?.status).toBe(400);
+    }
+    expect(await store.tasks.get(task.id)).toMatchObject({ version: task.version, status: "pending", priority: "medium" });
+  });
+
+  test("task update accepts documented nullable fields and records approval time", async () => {
+    const task = await store.tasks.create({
+      title: "valid patch",
+      assigned_to: "test-agent",
+      due_at: "2026-07-19T00:00:00.000Z",
+      requires_approval: true,
+    });
+    const response = await request(`/v1/tasks/${task.id}`, "PATCH", {
+      assigned_to: null,
+      working_dir: null,
+      due_at: null,
+      confidence: null,
+      approved_by: "test-agent",
+      version: task.version,
+    });
+
+    expect(response?.status).toBe(200);
+    expect(await response!.json()).toMatchObject({
+      task: {
+        assigned_to: null,
+        working_dir: null,
+        due_at: null,
+        confidence: null,
+        approved_by: "test-agent",
+        approved_at: expect.any(String),
+      },
+    });
+  });
+
+  test("approval stores the normalized effective actor instead of the body spelling", async () => {
+    const task = await store.tasks.create({ title: "normalized approval", requires_approval: true });
+    const response = await request(`/v1/tasks/${task.id}`, "PATCH", {
+      approved_by: "  test-agent  ",
+      version: task.version,
+    });
+
+    expect(response?.status).toBe(200);
+    expect(await response!.json()).toMatchObject({ task: { approved_by: "test-agent" } });
+  });
+
+  test("fail rejects a malformed retry timestamp before changing task state", async () => {
+    const task = await store.tasks.create({ title: "invalid retry timestamp" });
+    const response = await request(`/v1/tasks/${task.id}/fail`, "POST", {
+      retry: true,
+      retry_after: "tomorrow",
+    });
+
+    expect(response?.status).toBe(400);
+    expect(await store.tasks.get(task.id)).toMatchObject({ status: "pending", version: task.version });
+  });
+
   test("task assignment and approval assertions cannot name a different actor", async () => {
     expect((await request("/v1/tasks", "POST", {
       title: "forged assignment",

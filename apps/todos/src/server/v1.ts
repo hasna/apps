@@ -7,7 +7,7 @@
  * require `todos:write` (a `todos:*` key satisfies both). This is a real wrapper
  * over the core storage lib — there are NO stubs; unimplemented routes 404.
  */
-import { LockError, ProjectNotFoundError, ResourceConflictError, TaskNotFoundError, VersionConflictError } from "../types/index.js";
+import { LockError, ProjectNotFoundError, ResourceConflictError, TASK_PRIORITIES, TASK_STATUSES, TaskNotFoundError, VersionConflictError } from "../types/index.js";
 import type { CreatePlanInput, CreateProjectInput, CreateTaskInput, CreateTaskListInput, RenameProjectInput, TaskComment, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
 import type { TodosStorageContext, TodosStorageSnapshot, TodosTaskCompletionOptions } from "../storage/interfaces.js";
 import { getCloudStorageAdapter, getCloudVerifier, ensureCloudSchema } from "./cloud.js";
@@ -24,6 +24,11 @@ const JSON_HEADERS = { "Content-Type": "application/json" } as const;
 const DEFAULT_COMMENT_PAGE_SIZE = 100;
 const MAX_COMMENT_PAGE_SIZE = 500;
 const LEGACY_COMMENT_RESPONSE_LIMIT = 500;
+const RFC3339_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
+
+function isValidTimestamp(value: string): boolean {
+  return RFC3339_TIMESTAMP.test(value) && Number.isFinite(Date.parse(value));
+}
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
@@ -280,6 +285,84 @@ const TASK_UPDATE_FIELDS = new Set<keyof UpdateTaskInput>([
   "confidence", "retry_count", "max_retries", "retry_after", "requires_approval",
   "approved_by", "recurrence_rule", "version", "task_type",
 ]);
+
+function validateTaskPatch(value: unknown):
+  | { ok: true; patch: UpdateTaskInput }
+  | { ok: false; message: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { ok: false, message: "task patch must be an object" };
+  }
+  const body = value as Record<string, unknown>;
+  const unknownField = Object.keys(body).find((key) => !TASK_UPDATE_FIELDS.has(key as keyof UpdateTaskInput));
+  if (unknownField) return { ok: false, message: `unknown task update field: ${unknownField}` };
+
+  const requireString = (field: string, nullable = false): string | null => {
+    const fieldValue = body[field];
+    if (fieldValue === undefined) return null;
+    if (nullable && fieldValue === null) return null;
+    if (typeof fieldValue !== "string") return `${field} must be a string${nullable ? " or null" : ""}`;
+    if (!fieldValue.trim() && field !== "description") return `${field} must be a non-empty string${nullable ? " or null" : ""}`;
+    return null;
+  };
+  for (const field of ["title", "description", "approved_by"] as const) {
+    const message = requireString(field);
+    if (message) return { ok: false, message };
+  }
+  for (const field of ["project_id", "assigned_to", "working_dir", "plan_id", "task_list_id", "cycle_id", "recurrence_rule", "task_type"] as const) {
+    const message = requireString(field, true);
+    if (message) return { ok: false, message };
+  }
+  if (body.status !== undefined &&
+      (typeof body.status !== "string" || !(TASK_STATUSES as readonly string[]).includes(body.status))) {
+    return { ok: false, message: `status must be one of: ${TASK_STATUSES.join(", ")}` };
+  }
+  if (body.priority !== undefined &&
+      (typeof body.priority !== "string" || !(TASK_PRIORITIES as readonly string[]).includes(body.priority))) {
+    return { ok: false, message: `priority must be one of: ${TASK_PRIORITIES.join(", ")}` };
+  }
+  if (body.tags !== undefined &&
+      (!Array.isArray(body.tags) || body.tags.some((tag) => typeof tag !== "string"))) {
+    return { ok: false, message: "tags must be an array of strings" };
+  }
+  if (body.metadata !== undefined &&
+      (!body.metadata || typeof body.metadata !== "object" || Array.isArray(body.metadata))) {
+    return { ok: false, message: "metadata must be an object" };
+  }
+  for (const field of ["due_at", "completed_at", "retry_after"] as const) {
+    const fieldValue = body[field];
+    if (fieldValue !== undefined && fieldValue !== null &&
+        (typeof fieldValue !== "string" || !isValidTimestamp(fieldValue))) {
+      return { ok: false, message: `${field} must be an ISO timestamp or null` };
+    }
+  }
+  for (const field of ["estimated_minutes", "sla_minutes", "actual_minutes"] as const) {
+    const fieldValue = body[field];
+    const nullable = field === "sla_minutes";
+    if (fieldValue !== undefined && !(nullable && fieldValue === null) &&
+        (typeof fieldValue !== "number" || !Number.isFinite(fieldValue) || fieldValue < 0)) {
+      return { ok: false, message: `${field} must be a non-negative number${nullable ? " or null" : ""}` };
+    }
+  }
+  if (body.confidence !== undefined && body.confidence !== null &&
+      (typeof body.confidence !== "number" || !Number.isFinite(body.confidence) || body.confidence < 0 || body.confidence > 1)) {
+    return { ok: false, message: "confidence must be a number between 0 and 1 or null" };
+  }
+  for (const field of ["retry_count", "max_retries"] as const) {
+    const fieldValue = body[field];
+    if (fieldValue !== undefined &&
+        (typeof fieldValue !== "number" || !Number.isInteger(fieldValue) || fieldValue < 0)) {
+      return { ok: false, message: `${field} must be a non-negative integer` };
+    }
+  }
+  if (body.version !== undefined &&
+      (typeof body.version !== "number" || !Number.isInteger(body.version) || body.version < 1)) {
+    return { ok: false, message: "version must be a positive integer" };
+  }
+  if (body.requires_approval !== undefined && typeof body.requires_approval !== "boolean") {
+    return { ok: false, message: "requires_approval must be a boolean" };
+  }
+  return { ok: true, patch: body as unknown as UpdateTaskInput };
+}
 
 function redactComment(comment: TaskComment): TaskComment {
   return { ...comment, content: redactEvidenceText(comment.content) };
@@ -892,7 +975,10 @@ export async function handleV1Request(
         if (action === "fail" && method === "POST") {
           if (body.reason !== undefined && typeof body.reason !== "string") return error(400, "reason must be a string");
           if (body.retry !== undefined && typeof body.retry !== "boolean") return error(400, "retry must be a boolean");
-          if (body.retry_after !== undefined && typeof body.retry_after !== "string") return error(400, "retry_after must be a string");
+          if (body.retry_after !== undefined &&
+              (typeof body.retry_after !== "string" || !isValidTimestamp(body.retry_after))) {
+            return error(400, "retry_after must be an ISO timestamp");
+          }
           if (body.error_code !== undefined && typeof body.error_code !== "string") return error(400, "error_code must be a string");
           return json({
             result: await store.tasks.fail(
@@ -918,19 +1004,21 @@ export async function handleV1Request(
         return task ? json({ task }) : error(404, "task not found");
       }
       if (method === "PATCH" || method === "PUT") {
-        const body = await readJson<UpdateTaskInput>(req);
-        if (!body || typeof body !== "object" || Array.isArray(body)) return error(400, "invalid JSON body");
-        const unknownField = Object.keys(body).find((key) => !TASK_UPDATE_FIELDS.has(key as keyof UpdateTaskInput));
-        if (unknownField) return error(400, `unknown task update field: ${unknownField}`);
-        const approvedByError = enforceActorField(body.approved_by, mutationAuthority!, "approved_by");
+        const body = await readJson<unknown>(req);
+        const validated = validateTaskPatch(body);
+        if (!validated.ok) return error(400, validated.message);
+        const approvedByError = enforceActorField(validated.patch.approved_by, mutationAuthority!, "approved_by");
         if (approvedByError) return approvedByError;
         const current = await store.tasks.get(id);
         if (!current) return error(404, "task not found");
         // Optimistic concurrency: honor a client-supplied version, else default
         // to the current record's version (convenience last-write-wins).
         const patch: UpdateTaskInput = {
-          ...body,
-          version: typeof body.version === "number" ? body.version : (current.version as number),
+          ...validated.patch,
+          ...(validated.patch.approved_by !== undefined
+            ? { approved_by: mutationAuthority!.effectiveAgentId }
+            : {}),
+          version: typeof validated.patch.version === "number" ? validated.patch.version : (current.version as number),
         };
         try {
           const task = await store.tasks.update(id, patch, storageContext);

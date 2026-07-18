@@ -1128,7 +1128,7 @@ async function createTask(input: CreateTaskInput, store: PostgresJsonRecordStore
     delegated_from: null,
     delegation_depth: 0,
     retry_count: input.retry_count ?? 0,
-    max_retries: input.max_retries ?? 0,
+    max_retries: input.max_retries ?? 3,
     retry_after: input.retry_after ?? null,
     sla_minutes: input.sla_minutes ?? null,
     runner_id: null,
@@ -1160,6 +1160,7 @@ async function updateTask(
   const timestamp = new Date().toISOString();
   const completedNow = input.status === "completed";
   const reopened = input.status !== undefined && input.status !== "completed" && existing.status === "completed";
+  const approvedNow = input.approved_by !== undefined;
   const task: Task = {
     ...existing,
     ...definedPatch(input),
@@ -1178,6 +1179,7 @@ async function updateTask(
           : existing.completed_at,
     locked_by: completedNow ? null : existing.locked_by,
     locked_at: completedNow ? null : existing.locked_at,
+    approved_at: approvedNow ? timestamp : existing.approved_at,
   };
   const actorId = context?.effectiveAgentId ?? context?.agentId;
   const statusChanged = input.status !== undefined && input.status !== existing.status;
@@ -1187,10 +1189,10 @@ async function updateTask(
     actorId,
     audit: taskAudit(
       id,
-      "update",
-      statusChanged ? "status" : "version",
-      statusChanged ? existing.status : String(existing.version),
-      statusChanged ? task.status : String(task.version),
+      approvedNow ? "approve" : "update",
+      approvedNow ? "approved_by" : statusChanged ? "status" : "version",
+      approvedNow ? null : statusChanged ? existing.status : String(existing.version),
+      approvedNow ? task.approved_by : statusChanged ? task.status : String(task.version),
       context,
       undefined,
       task.updated_at,
@@ -1316,6 +1318,9 @@ async function failTask(
     throw new ResourceConflictError("TASK_ASSIGNMENT_CONFLICT", `Task ${id} is assigned to ${task.assigned_to}, not ${agentId}`);
   }
   const timestamp = new Date().toISOString();
+  const retryCount = task.retry_count + 1;
+  const maxRetries = task.max_retries || 3;
+  const retryExhausted = options?.retry === true && retryCount > maxRetries;
   const failureMetadata: Record<string, unknown> = {
     ...task.metadata,
     _failure: {
@@ -1325,6 +1330,9 @@ async function failTask(
       failed_at: timestamp,
       retry_requested: options?.retry ?? false,
     },
+    ...(retryExhausted ? {
+      _retry_exhausted: { retry_count: retryCount - 1, max_retries: maxRetries },
+    } : {}),
   };
   const next: Task = {
     ...task,
@@ -1347,22 +1355,38 @@ async function failTask(
     context,
     marker: "todos:fail-task-cas",
   });
-  if (!options?.retry) return { task: failed };
+  if (!options?.retry || retryExhausted) return { task: failed };
+  const backoffMinutes = Math.pow(5, retryCount - 1);
+  const retryAfter = options.retry_after ?? new Date(Date.parse(timestamp) + backoffMinutes * 60_000).toISOString();
+  let title = task.title;
+  if (task.short_id && title.startsWith(`${task.short_id}: `)) {
+    title = title.slice(task.short_id.length + 2);
+  }
   const retryTask = await createTask({
-    title: task.title,
+    title,
     description: task.description ?? undefined,
     project_id: task.project_id ?? undefined,
-    parent_id: task.parent_id ?? undefined,
     plan_id: task.plan_id ?? undefined,
     task_list_id: task.task_list_id ?? undefined,
     priority: task.priority,
     assigned_to: task.assigned_to ?? undefined,
     tags: task.tags,
-    metadata: task.metadata,
-    retry_count: task.retry_count + 1,
-    max_retries: task.max_retries,
-    reason: reason ?? undefined,
-    task_type: task.task_type ?? undefined,
+    metadata: {
+      ...task.metadata,
+      _retry: {
+        original_id: task.id,
+        retry_count: retryCount,
+        max_retries: maxRetries,
+        retry_after: retryAfter,
+        failure_reason: reason,
+      },
+    },
+    estimated_minutes: task.estimated_minutes ?? undefined,
+    recurrence_rule: task.recurrence_rule ?? undefined,
+    due_at: retryAfter,
+    retry_count: retryCount,
+    max_retries: maxRetries,
+    retry_after: retryAfter,
   }, store, context);
   return { task: failed, retryTask };
 }

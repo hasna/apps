@@ -11,6 +11,7 @@ import {
   cloudUpdateTask,
   cloudDeleteTask,
   cloudTaskAction,
+  cloudFailTask,
   cloudCompleteTask,
   cloudAddComment,
   cloudListComments,
@@ -623,6 +624,22 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     expect(task.status).toBe("in_progress");
     expect(calls[0]!.method).toBe("POST");
     expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t4/start");
+  });
+
+  test("fail action unwraps the server result envelope and preserves retry outcome", async () => {
+    const failed = { id: "t5", title: "failed", status: "failed", retry_count: 0 };
+    const retryTask = { id: "t6", title: "retry", status: "pending", retry_count: 1 };
+    const calls = installFetch(() => ({ body: { result: { task: failed, retryTask } } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    const result = await cloudFailTask(client, "t5", { reason: "transient", retry: true });
+
+    expect(result).toEqual({ task: failed, retryTask });
+    expect(calls[0]).toMatchObject({
+      method: "POST",
+      url: "https://todos.hasna.xyz/v1/tasks/t5/fail",
+      body: { reason: "transient", retry: true },
+    });
   });
 
   test("comments -> validates the envelope, count, method, auth, and encoded task path", async () => {

@@ -4,7 +4,7 @@
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
 // Source: Todos V1 API 0.11.92
 
-export interface Task { "id"?: string; "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "project_id"?: string | null; "assigned_to"?: string | null; "agent_id"?: string | null; "tags"?: Array<string>; "version"?: number; "created_at"?: string; "updated_at"?: string }
+export interface Task { "id"?: string; "title"?: string; "description"?: string; "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; "priority"?: "low" | "medium" | "high" | "critical"; "project_id"?: string | null; "assigned_to"?: string | null; "agent_id"?: string | null; "tags"?: Array<string>; "version"?: number; "created_at"?: string; "updated_at"?: string }
 
 export interface Project { "id"?: string; "name"?: string; "path"?: string; "description"?: string | null; "task_list_id"?: string | null; "task_prefix"?: string | null; "task_counter"?: number; "created_at"?: string; "updated_at"?: string }
 
@@ -14,9 +14,9 @@ export interface TaskComment { "id": string; "task_id": string; "agent_id": stri
 
 export interface Plan { "id": string; "slug": string | null; "project_id"?: string | null; "task_list_id"?: string | null; "agent_id"?: string | null; "name": string; "description"?: string | null; "status": "active" | "completed" | "archived"; "created_at": string; "updated_at": string }
 
-export interface CreateTaskInput { "title": string; "description"?: string; "status"?: string; "priority"?: string; "project_id"?: string; "assigned_to"?: string; "agent_id"?: string; "assigned_by"?: string; "tags"?: Array<string> }
+export interface CreateTaskInput { "title": string; "description"?: string; "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; "priority"?: "low" | "medium" | "high" | "critical"; "project_id"?: string; "assigned_to"?: string; "agent_id"?: string; "assigned_by"?: string; "tags"?: Array<string> }
 
-export interface UpdateTaskInput { "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "assigned_to"?: string; "approved_by"?: string; "version"?: number }
+export interface UpdateTaskInput { "title"?: string; "description"?: string; "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; "priority"?: "low" | "medium" | "high" | "critical"; "project_id"?: string | null; "assigned_to"?: string | null; "working_dir"?: string | null; "plan_id"?: string | null; "task_list_id"?: string | null; "cycle_id"?: string | null; "tags"?: Array<string>; "metadata"?: Record<string, unknown>; "due_at"?: string | null; "estimated_minutes"?: number; "sla_minutes"?: number | null; "actual_minutes"?: number; "completed_at"?: string | null; "confidence"?: number | null; "retry_count"?: number; "max_retries"?: number; "retry_after"?: string | null; "requires_approval"?: boolean; "approved_by"?: string; "recurrence_rule"?: string | null; "version"?: number; "task_type"?: string | null }
 
 export interface CompleteTaskInput { "agent_id"?: string; "attachment_ids"?: Array<string>; "files_changed"?: Array<string>; "test_results"?: string; "commit_hash"?: string; "notes"?: string; "confidence"?: number }
 
