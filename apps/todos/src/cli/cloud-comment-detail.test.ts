@@ -408,6 +408,69 @@ describe("cloud task detail comments", () => {
     }
   });
 
+  test("show and inspect fail closed on malformed or misdirected dependency relations", async () => {
+    const malformedResponses: Array<{ name: string; body: unknown }> = [
+      { name: "missing relation arrays", body: {} },
+      { name: "non-array blocked_by", body: { dependencies: [], blocked_by: {} } },
+      {
+        name: "empty edge id",
+        body: { dependencies: [{ task_id: TASK_ID, depends_on: "" }], blocked_by: [] },
+      },
+      {
+        name: "misdirected dependency",
+        body: { dependencies: [{ task_id: PARENT_ID, depends_on: TASK_ID }], blocked_by: [] },
+      },
+      {
+        name: "misdirected dependent",
+        body: { dependencies: [], blocked_by: [{ task_id: PARENT_ID, depends_on: PARENT_ID }] },
+      },
+    ];
+
+    for (const malformed of malformedResponses) {
+      for (const command of ["show", "inspect"]) {
+        const requests: string[] = [];
+        const server = Bun.serve({
+          hostname: "127.0.0.1",
+          port: 0,
+          fetch(request) {
+            const url = new URL(request.url);
+            requests.push(`${request.method} ${url.pathname}`);
+            if (url.pathname === `/v1/tasks/${TASK_ID}` && request.method === "GET") {
+              return Response.json({ task: taskFixture() });
+            }
+            if (url.pathname === `/v1/tasks/${TASK_ID}/comments` && request.method === "GET") {
+              return Response.json({ comments: [], count: 0 });
+            }
+            if (url.pathname === `/v1/tasks/${TASK_ID}/dependencies` && request.method === "GET") {
+              return Response.json(malformed.body);
+            }
+            return Response.json({ error: "not found" }, { status: 404 });
+          },
+        });
+        const root = mkdtempSync(join(tmpdir(), `todos-cloud-dependency-invalid-${command}-`));
+        tempRoots.push(root);
+        try {
+          const result = await runCli(
+            ["--json", command, TASK_ID],
+            root,
+            `http://127.0.0.1:${server.port}`,
+          );
+          expect(result.exitCode, `${command}: ${malformed.name}`).not.toBe(0);
+          expect(result.stderr, `${command}: ${malformed.name}`).toContain("REMOTE_API_INCOMPATIBLE");
+          expect(result.stderr, `${command}: ${malformed.name}`).toContain("local SQLite fallback is disabled");
+          expect(requests, `${command}: ${malformed.name}`).toEqual(expect.arrayContaining([
+            `GET /v1/tasks/${TASK_ID}`,
+            `GET /v1/tasks/${TASK_ID}/comments`,
+            `GET /v1/tasks/${TASK_ID}/dependencies`,
+          ]));
+          expect(existsSync(join(root, "todos.db")), `${command}: ${malformed.name}`).toBe(false);
+        } finally {
+          server.stop(true);
+        }
+      }
+    }
+  });
+
   test("a missing cloud task does not issue a comments request", async () => {
     const requests: string[] = [];
     const server = Bun.serve({

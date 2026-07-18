@@ -1347,11 +1347,50 @@ export interface CloudTaskDependencies {
   blocked_by: TaskDependency[];
 }
 
+function dependencyResponseError(id: string, reason: string): Error {
+  return new Error(
+    `REMOTE_API_INCOMPATIBLE: /v1/tasks/${id}/dependencies ${reason}; local SQLite fallback is disabled`,
+  );
+}
+
+function isTaskDependency(value: unknown): value is TaskDependency {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const edge = value as Record<string, unknown>;
+  return typeof edge["task_id"] === "string"
+    && edge["task_id"].trim().length > 0
+    && typeof edge["depends_on"] === "string"
+    && edge["depends_on"].trim().length > 0;
+}
+
 /** List a cloud task's dependency edges (`GET /v1/tasks/:id/dependencies`). */
 export async function cloudGetDependencies(client: HasnaStorageClient, id: string): Promise<CloudTaskDependencies> {
   const raw = await client.transport.get<unknown>(`/tasks/${encodeURIComponent(id)}/dependencies`);
-  const env = (raw ?? {}) as Partial<CloudTaskDependencies>;
-  return { dependencies: env.dependencies ?? [], blocked_by: env.blocked_by ?? [] };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw dependencyResponseError(id, "returned a malformed response envelope");
+  }
+  const env = raw as Record<string, unknown>;
+  if (!Array.isArray(env["dependencies"]) || !Array.isArray(env["blocked_by"])) {
+    throw dependencyResponseError(id, "must return both dependencies and blocked_by arrays");
+  }
+  const dependencies = env["dependencies"];
+  const blockedBy = env["blocked_by"];
+  for (const edge of dependencies) {
+    if (!isTaskDependency(edge)) {
+      throw dependencyResponseError(id, "returned a malformed dependencies edge");
+    }
+    if (edge.task_id !== id) {
+      throw dependencyResponseError(id, "returned a misdirected dependencies edge");
+    }
+  }
+  for (const edge of blockedBy) {
+    if (!isTaskDependency(edge)) {
+      throw dependencyResponseError(id, "returned a malformed blocked_by edge");
+    }
+    if (edge.depends_on !== id) {
+      throw dependencyResponseError(id, "returned a misdirected blocked_by edge");
+    }
+  }
+  return { dependencies, blocked_by: blockedBy };
 }
 
 /** Add a dependency edge to a cloud task (`POST /v1/tasks/:id/dependencies`). */
