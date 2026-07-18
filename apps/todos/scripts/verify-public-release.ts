@@ -16,10 +16,8 @@ import {
   validateReleaseArtifactIntegrity,
   validateReleaseGateArguments,
   classifyReleaseGateAuthority,
-  isPackedTextContent,
   resolveReleaseProvenanceTimestamp,
   validateExpectedReleaseCommit,
-  validatePackedBinaryFile,
   validateReleaseIndexFlags,
   validateReproducibleArtifactIntegrity,
   validateTrackedWorktreeProof,
@@ -34,6 +32,7 @@ import {
   type TextFile,
   type TrackedWorktreeProof,
 } from "../src/lib/public-release-gate";
+import { scanExtractedPackedFiles } from "../src/lib/release-packed-scan";
 
 type PackResult = {
   filename: string;
@@ -121,20 +120,22 @@ function main(): void {
     mkdirSync(secondPackDir, { recursive: true });
     const pack = npmPack(firstPackDir);
     const tarball = join(firstPackDir, pack.filename);
-    const firstManifest = createPackedPayloadManifest(pack, tarball, join(tempDir, "first-payload"));
+    const firstPayloadDir = join(tempDir, "first-payload");
+    const firstManifest = createPackedPayloadManifest(pack, tarball, firstPayloadDir);
     tarballIntegrity = `sha512-${createHash("sha512").update(readFileSync(tarball)).digest("base64")}`;
     failures.push(...validateReleaseArtifactIntegrity(pack.integrity, tarballIntegrity));
     const packedPackageJson = readPackedPackageJson(tarball);
     failures.push(...validatePackedPackageFiles(pack.files.map((file) => `package/${file.path}`), packedPackageJson));
     failures.push(...validatePackedProvenanceMetadata(packedPackageJson, packageJson));
     failures.push(...validateReleaseProvenanceMetadata(readPackedReleaseProvenance(tarball), packageJson, sourceIdentity));
-    failures.push(...scanPackedText(tarball, sourceLogo));
+    failures.push(...scanExtractedPackedFiles(pack.files, firstPayloadDir, sourceLogo));
 
     runOrExit("bun", ["run", "build"]);
     writeReleaseProvenance(packageJson, sourceIdentity, provenanceTimestamp);
     const secondPack = npmPack(secondPackDir);
     const secondTarball = join(secondPackDir, secondPack.filename);
-    const secondManifest = createPackedPayloadManifest(secondPack, secondTarball, join(tempDir, "second-payload"));
+    const secondPayloadDir = join(tempDir, "second-payload");
+    const secondManifest = createPackedPayloadManifest(secondPack, secondTarball, secondPayloadDir);
     const secondIntegrity = `sha512-${createHash("sha512").update(readFileSync(secondTarball)).digest("base64")}`;
     failures.push(...validateReleaseArtifactIntegrity(secondPack.integrity, secondIntegrity));
     failures.push(...validateReproducibleArtifactIntegrity(tarballIntegrity, secondIntegrity, firstManifest, secondManifest));
@@ -142,7 +143,7 @@ function main(): void {
     failures.push(...validatePackedPackageFiles(secondPack.files.map((file) => `package/${file.path}`), secondPackedPackageJson));
     failures.push(...validatePackedProvenanceMetadata(secondPackedPackageJson, packageJson));
     failures.push(...validateReleaseProvenanceMetadata(readPackedReleaseProvenance(secondTarball), packageJson, sourceIdentity));
-    failures.push(...scanPackedText(secondTarball, sourceLogo));
+    failures.push(...scanExtractedPackedFiles(secondPack.files, secondPayloadDir, sourceLogo));
 
     if (!args.has("--skip-install-smoke")) {
       installSmoke(tarball);
@@ -368,31 +369,6 @@ function readPackedJson<T>(tarball: string, path: string): T {
     process.exit(result.status || 1);
   }
   return JSON.parse(result.stdout) as T;
-}
-
-function scanPackedText(tarball: string, sourceLogo: Buffer): ReleaseGateFailure[] {
-  const list = runCapture("tar", ["-tf", tarball]);
-  if (list.status !== 0) {
-    return [{ check: "pack-list", message: list.stderr || "Could not list packed tarball" }];
-  }
-
-  const files: TextFile[] = [];
-  const failures: ReleaseGateFailure[] = [];
-  for (const path of list.stdout.split("\n").filter(Boolean)) {
-    if (path.endsWith("/")) continue;
-    const content = runCaptureBuffer("tar", ["-xOf", tarball, path]);
-    if (content.status !== 0) {
-      failures.push({ check: "pack-read", message: content.stderr.toString("utf8") || `Could not read ${path}` });
-      continue;
-    }
-    if (isPackedTextContent(content.stdout)) {
-      files.push({ path, text: content.stdout.toString("utf8") });
-    } else {
-      failures.push(...validatePackedBinaryFile(path, content.stdout, sourceLogo));
-      files.push({ path, text: content.stdout.toString("latin1") });
-    }
-  }
-  return [...failures, ...validatePublicTextSurfaces(files)];
 }
 
 function collectPublicTextSurfaces(dir: string): TextFile[] {

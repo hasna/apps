@@ -130,7 +130,7 @@ const SECRET_PATTERNS: RegExp[] = [
   /AKIA[0-9A-Z]{16}/,
   /ASIA[0-9A-Z]{16}/,
   /-----BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY-----/,
-  /[A-Za-z0-9_]*(API_KEY|SECRET|TOKEN|PASSWORD)[A-Za-z0-9_]*\s*=\s*['"][^'"]{12,}/,
+  /\b[A-Za-z0-9_]*(?:API_KEY|SECRET|TOKEN|PASSWORD)[A-Za-z0-9_]*\s*=\s*['"][^'"\r\n]{12,}/,
 ];
 
 const INSTALL_SMOKE_COMMANDS: InstallSmokeCommand[] = [

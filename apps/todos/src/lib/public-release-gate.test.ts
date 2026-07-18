@@ -1,4 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { scanExtractedPackedFiles } from "./release-packed-scan";
 import {
   classifyReleaseGateAuthority,
   derivePackedPackageTargets,
@@ -303,6 +307,21 @@ describe("public release gate", () => {
       .map((failure) => failure.check)).toContain("pack-binary-source-match");
     expect(validatePackedBinaryFile("package/dashboard/dist/logo.jpg", Buffer.from("not a jpeg"), jpeg)).not.toEqual([]);
     expect(validatePackedBinaryFile("package/dist/native.node", Buffer.from([0x7f, 0x45, 0x4c, 0x46]), jpeg)).not.toEqual([]);
+  });
+
+  test("scans multi-megabyte extracted package entries without subprocess truncation", () => {
+    const root = mkdtempSync(join(tmpdir(), "todos-packed-scan-"));
+    try {
+      const entry = join(root, "package", "dist", "cli", "index.js");
+      mkdirSync(join(root, "package", "dist", "cli"), { recursive: true });
+      writeFileSync(entry, `${"x".repeat(2 * 1024 * 1024)}\nAWS_PRIVATE_MARKER\n`);
+      const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xdb, 0x00, 0xff, 0xd9]);
+      const failures = scanExtractedPackedFiles([{ path: "dist/cli/index.js" }], root, jpeg);
+      expect(failures.map((failure) => failure.check)).toContain("public-text-boundary");
+      expect(failures.map((failure) => failure.check)).not.toContain("pack-read");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("uses deterministic provenance time and requires two identical clean tarballs", () => {
