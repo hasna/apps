@@ -11,6 +11,7 @@ import {
   cloudUpdateTask,
   cloudDeleteTask,
   cloudTaskAction,
+  cloudCompleteTask,
   cloudAddComment,
   cloudListComments,
   cloudRegisterAgent,
@@ -39,6 +40,7 @@ import {
   cloudResolveProjectRef,
   cloudResolvePlan,
   cloudResolveTaskListRef,
+  cloudResolveTaskRef,
 } from "./cloud-router.js";
 
 const CLOUD_ENV = {
@@ -132,11 +134,11 @@ describe("todos client self_hosted resolver", () => {
     );
   });
 
-  test("blank canonical mode does not mask fallback remote mode", () => {
-    expect(resolveTodosCliStorageMode({
+  test("blank canonical mode is invalid instead of masking a fallback selector", () => {
+    expect(() => resolveTodosCliStorageMode({
       HASNA_TODOS_STORAGE_MODE: "   ",
       TODOS_STORAGE_MODE: "remote",
-    })).toEqual({ mode: "remote", selected: true, source: "TODOS_STORAGE_MODE" });
+    })).toThrow("REMOTE_STORAGE_MODE_INVALID");
   });
 
   test("invalid and conflicting selectors fail closed before local routing", () => {
@@ -171,6 +173,41 @@ describe("todos client self_hosted resolver", () => {
       HASNA_TODOS_API_KEY: "fixture-key",
     });
     expect(status).toMatchObject({ ok: true, v1_base_url: "http://127.0.0.1:18881/v1" });
+  });
+
+  test("never reuses a client across authority, mode, or API-key changes", async () => {
+    const calls = installFetch(() => ({ body: { projects: [], count: 0 } }));
+    const authorityA = getTodosCloudClient({
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: "https://authority-a.example",
+      HASNA_TODOS_API_KEY: "fixture-key-a",
+    })!;
+    const authorityB = getTodosCloudClient({
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: "https://authority-b.example",
+      HASNA_TODOS_API_KEY: "fixture-key-b",
+    })!;
+    expect(authorityA.baseUrl).toBe("https://authority-a.example/v1");
+    expect(authorityB.baseUrl).toBe("https://authority-b.example/v1");
+    expect(getTodosCloudClient({ HASNA_TODOS_STORAGE_MODE: "local" })).toBeNull();
+    const authorityAWithNewKey = getTodosCloudClient({
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: "https://authority-a.example",
+      HASNA_TODOS_API_KEY: "fixture-key-a-rotated",
+    })!;
+
+    await cloudListProjects(authorityA);
+    await cloudListProjects(authorityB);
+    await cloudListProjects(authorityAWithNewKey);
+    expect(calls.map((call) => [call.url, call.headers["authorization"]])).toEqual([
+      ["https://authority-a.example/v1/projects", "Bearer fixture-key-a"],
+      ["https://authority-b.example/v1/projects", "Bearer fixture-key-b"],
+      ["https://authority-a.example/v1/projects", "Bearer fixture-key-a-rotated"],
+    ]);
+
+    expect(getTodosCloudClient({})).toBeNull();
+    expect(getTodosCloudClient(CLOUD_ENV)?.baseUrl).toBe("https://todos.hasna.xyz/v1");
+    expect(getTodosCloudClient({ HASNA_TODOS_STORAGE_MODE: "local" })).toBeNull();
   });
 });
 
@@ -224,6 +261,302 @@ describe("remote authority compatibility diagnostics", () => {
 });
 
 describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => {
+  test("full task UUID resolution remains a direct zero-request fast path", async () => {
+    const calls = installFetch(() => ({ status: 500, body: { error: "must not be called" } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const id = "abc00000-0000-4000-8000-000000000001";
+    expect(await cloudResolveTaskRef(client, id.toUpperCase())).toBe(id);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("evidence completion requires an advertised OpenAPI request schema before POST", async () => {
+    const calls = installFetch((call) => {
+      if (call.url.endsWith("/v1/openapi.json")) {
+        return {
+          body: {
+            openapi: "3.1.0",
+            paths: {
+              "/v1/tasks/{id}/complete": { post: { responses: { "200": { description: "ok" } } } },
+            },
+          },
+        };
+      }
+      return { body: { task: { id: "task-1", status: "completed" } } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudCompleteTask(client, "task-1", {
+      agent_id: "agent-one",
+      files_changed: ["src/a.ts"],
+      confidence: 0.9,
+    })).rejects.toThrow("REMOTE_COMPLETION_EVIDENCE_UNSUPPORTED");
+    expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "GET https://todos.hasna.xyz/v1/openapi.json",
+    ]);
+  });
+
+  test("evidence capability is cached per authority while agent-only completion stays compatible", async () => {
+    const calls = installFetch((call) => {
+      if (call.url.endsWith("/v1/openapi.json")) {
+        return {
+          body: {
+            openapi: "3.1.0",
+            paths: {
+              "/v1/tasks/{id}/complete": {
+                post: {
+                  requestBody: {
+                    content: {
+                      "application/json": { schema: { $ref: "#/components/schemas/CompleteTaskInput" } },
+                    },
+                  },
+                },
+              },
+            },
+            components: {
+              schemas: {
+                CompleteTaskInput: {
+                  type: "object",
+                  properties: {
+                    agent_id: { type: "string" },
+                    attachment_ids: { type: "array", items: { type: "string" } },
+                    files_changed: { type: "array", items: { type: "string" } },
+                    test_results: { type: "string" },
+                    commit_hash: { type: "string" },
+                    notes: { type: "string" },
+                    confidence: { type: "number" },
+                  },
+                },
+              },
+            },
+          },
+        };
+      }
+      return { body: { task: { id: "task-1", status: "completed" } } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await cloudCompleteTask(client, "task-1", { files_changed: ["src/a.ts"] });
+    await cloudCompleteTask(client, "task-1", { notes: "verified" });
+    await cloudCompleteTask(client, "task-1", { agent_id: "agent-only" });
+
+    expect(calls.filter((call) => call.url.endsWith("/v1/openapi.json"))).toHaveLength(1);
+    expect(calls.filter((call) => call.url.endsWith("/complete"))).toHaveLength(3);
+  });
+
+  test("completion capability results never cross authority boundaries", async () => {
+    const calls = installFetch((call) => {
+      if (call.url.endsWith("/v1/openapi.json")) {
+        const supported = call.url.startsWith("https://authority-b.example/");
+        return { body: supported ? {
+          paths: {
+            "/v1/tasks/{id}/complete": {
+              post: { requestBody: { content: { "application/json": { schema: { type: "object", properties: { notes: { type: "string" } } } } } } },
+            },
+          },
+        } : { paths: { "/v1/tasks/{id}/complete": { post: {} } } } };
+      }
+      return { body: { task: { id: "task-1", status: "completed" } } };
+    });
+    const clientA = getTodosCloudClient({
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: "https://authority-a.example",
+      HASNA_TODOS_API_KEY: "fixture-a",
+    })!;
+    const clientB = getTodosCloudClient({
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: "https://authority-b.example",
+      HASNA_TODOS_API_KEY: "fixture-b",
+    })!;
+
+    await expect(cloudCompleteTask(clientA, "task-1", { notes: "blocked" })).rejects.toThrow("REMOTE_COMPLETION_EVIDENCE_UNSUPPORTED");
+    await cloudCompleteTask(clientB, "task-1", { notes: "supported" });
+    expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "GET https://authority-a.example/v1/openapi.json",
+      "GET https://authority-b.example/v1/openapi.json",
+      "POST https://authority-b.example/v1/tasks/task-1/complete",
+    ]);
+  });
+
+  test("short task references anchor exhaustive paging to stats and revalidate the chosen task", async () => {
+    const calls = installFetch((call) => {
+      const url = new URL(call.url);
+      if (url.pathname.endsWith("/stats")) return { body: { tasks: 2, tasks_all: 2 } };
+      if (url.pathname.endsWith("/tasks/abc00000-0000-4000-8000-000000000001")) {
+        return { body: { task: { id: "abc00000-0000-4000-8000-000000000001", short_id: "ONE" } } };
+      }
+      const offset = Number(url.searchParams.get("offset") ?? "0");
+      if (offset === 0) {
+        return {
+          body: {
+            tasks: [{ id: "abc00000-0000-4000-8000-000000000001", short_id: "ONE" }],
+            count: 1,
+            total: 2,
+          },
+        };
+      }
+      return {
+        body: {
+          tasks: [{ id: "abc00000-0000-4000-8000-000000000002", short_id: "TWO" }],
+          count: 1,
+          total: 2,
+        },
+      };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudResolveTaskRef(client, "abc")).rejects.toThrow("Task reference is ambiguous");
+    expect(calls.map((call) => new URL(call.url).pathname)).toEqual([
+      "/v1/stats",
+      "/v1/tasks",
+      "/v1/tasks",
+      "/v1/stats",
+    ]);
+    expect(calls[2]!.url).toContain("offset=1");
+  });
+
+  test("short task references recursively enumerate subtasks on a 0.11.91 authority", async () => {
+    const parent = {
+      id: "abc00000-0000-4000-8000-000000000001",
+      short_id: "PARENT",
+      parent_id: null,
+    };
+    const child = {
+      id: "def00000-0000-4000-8000-000000000002",
+      short_id: "CHILD",
+      parent_id: parent.id,
+    };
+    const calls = installFetch((call) => {
+      const url = new URL(call.url);
+      if (url.pathname.endsWith("/stats")) return { body: { tasks: 1, tasks_all: 2 } };
+      if (url.pathname.endsWith(`/tasks/${child.id}`)) return { body: { task: child } };
+      if (url.pathname !== "/v1/tasks") throw new Error(`unexpected request: ${call.url}`);
+      const parentId = url.searchParams.get("parent_id");
+      if (parentId === parent.id) return { body: { tasks: [child], count: 1 } };
+      if (parentId === child.id) return { body: { tasks: [], count: 0 } };
+      // 0.11.91 ignores include_subtasks and omits total, returning only roots.
+      return { body: { tasks: [parent], count: 1 } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudResolveTaskRef(client, "CHILD")).resolves.toBe(child.id);
+    expect(calls.some((call) => new URL(call.url).searchParams.get("include_subtasks") === "true")).toBe(true);
+    expect(calls.some((call) => new URL(call.url).searchParams.get("parent_id") === parent.id)).toBe(true);
+    expect(calls.some((call) => new URL(call.url).searchParams.get("parent_id") === child.id)).toBe(true);
+    expect(calls.filter((call) => new URL(call.url).pathname === "/v1/stats")).toHaveLength(2);
+  });
+
+  test("short task references fail closed when old-server hierarchy cannot account for tasks_all", async () => {
+    const parent = {
+      id: "abc00000-0000-4000-8000-000000000001",
+      short_id: "PARENT",
+      parent_id: null,
+    };
+    const calls = installFetch((call) => {
+      const url = new URL(call.url);
+      if (url.pathname.endsWith("/stats")) return { body: { tasks: 1, tasks_all: 2 } };
+      if (url.pathname === "/v1/tasks" && url.searchParams.has("parent_id")) {
+        return { body: { tasks: [], count: 0 } };
+      }
+      return { body: { tasks: [parent], count: 1 } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudResolveTaskRef(client, "PARENT")).rejects.toThrow("full task UUID");
+    expect(calls.filter((call) => new URL(call.url).pathname === "/v1/stats")).toHaveLength(4);
+  });
+
+  test("short task references fail closed on a cyclic old-server hierarchy", async () => {
+    const parent = {
+      id: "abc00000-0000-4000-8000-000000000001",
+      short_id: "PARENT",
+      parent_id: null,
+    };
+    const child = {
+      id: "def00000-0000-4000-8000-000000000002",
+      short_id: "CHILD",
+      parent_id: parent.id,
+    };
+    installFetch((call) => {
+      const url = new URL(call.url);
+      if (url.pathname.endsWith("/stats")) return { body: { tasks: 1, tasks_all: 2 } };
+      const parentId = url.searchParams.get("parent_id");
+      if (parentId === parent.id) return { body: { tasks: [child], count: 1 } };
+      if (parentId === child.id) {
+        return { body: { tasks: [{ ...parent, parent_id: child.id }], count: 1 } };
+      }
+      return { body: { tasks: [parent], count: 1 } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudResolveTaskRef(client, "CHILD")).rejects.toThrow("full task UUID");
+  });
+
+  test("short task references retry one unstable snapshot then fail closed with full-UUID guidance", async () => {
+    let statsCalls = 0;
+    const calls = installFetch((call) => {
+      const url = new URL(call.url);
+      if (url.pathname.endsWith("/stats")) {
+        statsCalls += 1;
+        return { body: { tasks: 1, tasks_all: statsCalls % 2 === 1 ? 1 : 2 } };
+      }
+      if (url.pathname.endsWith("/tasks/abc00000-0000-4000-8000-000000000001")) {
+        return { body: { task: { id: "abc00000-0000-4000-8000-000000000001", short_id: "ONE" } } };
+      }
+      return {
+        body: {
+          tasks: [{ id: "abc00000-0000-4000-8000-000000000001", short_id: "ONE" }],
+          count: 1,
+          total: 1,
+        },
+      };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudResolveTaskRef(client, "abc")).rejects.toThrow("full task UUID");
+    expect(calls.filter((call) => new URL(call.url).pathname === "/v1/stats")).toHaveLength(4);
+  });
+
+  test.each([
+    ["duplicate ids", (url: URL) => url.pathname.endsWith("/stats")
+      ? { body: { tasks: 2, tasks_all: 2 } }
+      : { body: { tasks: [
+        { id: "abc00000-0000-4000-8000-000000000001", short_id: "ONE" },
+        { id: "abc00000-0000-4000-8000-000000000001", short_id: "ONE" },
+      ], count: 2, total: 2 } }],
+    ["malformed count", (url: URL) => url.pathname.endsWith("/stats")
+      ? { body: { tasks: 1, tasks_all: 1 } }
+      : { body: { tasks: [{ id: "abc00000-0000-4000-8000-000000000001", short_id: "ONE" }], count: 0, total: 1 } }],
+  ] as const)("short task references retry %s snapshots before requiring a full UUID", async (_name, responseFor) => {
+    const calls = installFetch((call) => responseFor(new URL(call.url)));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudResolveTaskRef(client, "abc")).rejects.toThrow("full task UUID");
+    expect(calls.filter((call) => new URL(call.url).pathname === "/v1/tasks")).toHaveLength(2);
+  });
+
+  test("short task references retry when final GET no longer matches the snapshot", async () => {
+    const calls = installFetch((call) => {
+      const url = new URL(call.url);
+      if (url.pathname.endsWith("/stats")) return { body: { tasks: 1, tasks_all: 1 } };
+      if (url.pathname.endsWith("/tasks/abc00000-0000-4000-8000-000000000001")) {
+        return { body: { task: { id: "abc00000-0000-4000-8000-000000000001", short_id: "CHANGED" } } };
+      }
+      return { body: { tasks: [{ id: "abc00000-0000-4000-8000-000000000001", short_id: "ONE" }], count: 1, total: 1 } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudResolveTaskRef(client, "ONE")).rejects.toThrow("full task UUID");
+    expect(calls.filter((call) => new URL(call.url).pathname.endsWith("000000000001"))).toHaveLength(2);
+  });
+
+  test("short task references retry an empty page before total and then fail closed", async () => {
+    const calls = installFetch((call) => {
+      const url = new URL(call.url);
+      if (url.pathname.endsWith("/stats")) return { body: { tasks: 2, tasks_all: 2 } };
+      if (url.searchParams.get("offset") === "1") return { body: { tasks: [], count: 0, total: 2 } };
+      return { body: { tasks: [{ id: "abc00000-0000-4000-8000-000000000001", short_id: "ONE" }], count: 1, total: 2 } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudResolveTaskRef(client, "ONE")).rejects.toThrow("full task UUID");
+    expect(calls.filter((call) => new URL(call.url).pathname === "/v1/tasks")).toHaveLength(4);
+  });
+
   test("list -> GET /v1/tasks, unwraps { tasks }", async () => {
     const calls = installFetch(() => ({ body: { tasks: [{ id: "t1", title: "a" }], count: 1 } }));
     const client = getTodosCloudClient(CLOUD_ENV)!;

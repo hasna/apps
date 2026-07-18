@@ -115,6 +115,12 @@ describe("cloud task detail comments", () => {
         if (url.pathname === "/v1/tasks" && request.method === "GET") {
           return Response.json({ tasks: [taskFixture()], count: 1, total: 1 });
         }
+        if (url.pathname === "/v1/stats" && request.method === "GET") {
+          return Response.json({ tasks_all: 1 });
+        }
+        if (url.pathname === `/v1/tasks/${TASK_ID}` && request.method === "GET") {
+          return Response.json({ task: taskFixture() });
+        }
         if (url.pathname === `/v1/tasks/${TASK_ID}/start` && request.method === "POST") {
           return Response.json({ task: taskFixture({ status: "in_progress", locked_by: body?.agent_id ?? null }) });
         }
@@ -153,9 +159,15 @@ describe("cloud task detail comments", () => {
 
       expect(requests.map((request) => `${request.method} ${request.path}`)).toEqual([
         "POST /v1/tasks",
+        "GET /v1/stats",
         "GET /v1/tasks",
+        `GET /v1/tasks/${TASK_ID}`,
+        "GET /v1/stats",
         `POST /v1/tasks/${TASK_ID}/start`,
+        "GET /v1/stats",
         "GET /v1/tasks",
+        `GET /v1/tasks/${TASK_ID}`,
+        "GET /v1/stats",
         `POST /v1/tasks/${TASK_ID}/comments`,
       ]);
       expect(comments).toHaveLength(1);
@@ -209,7 +221,7 @@ describe("cloud task detail comments", () => {
     }
   });
 
-  test("comment -> persisted GET -> show round-trips comments while inspect fails before local helpers", async () => {
+  test("comment -> persisted GET -> show and inspect round-trip comments without local helpers", async () => {
     const comments: Array<Record<string, unknown>> = [];
     const requests: Array<{ method: string; path: string; authorized: boolean }> = [];
     const server = Bun.serve({
@@ -280,9 +292,13 @@ describe("cloud task detail comments", () => {
 
       const requestsBeforeInspect = requests.length;
       const inspect = await runCli(["--json", "inspect", TASK_ID], root, baseUrl);
-      expect(inspect.exitCode).toBe(1);
-      expect(inspect.stderr).toContain("REMOTE_COMMAND_UNSUPPORTED");
-      expect(requests).toHaveLength(requestsBeforeInspect);
+      expect(inspect.exitCode).toBe(0);
+      expect(inspect.stderr).toBe("");
+      expect(JSON.parse(inspect.stdout).comments).toHaveLength(2);
+      expect(requests.slice(requestsBeforeInspect).map((request) => `${request.method} ${request.path}`)).toEqual([
+        `GET /v1/tasks/${TASK_ID}`,
+        `GET /v1/tasks/${TASK_ID}/comments`,
+      ]);
       expect(existsSync(join(root, "todos.db"))).toBe(false);
 
       comments.push({

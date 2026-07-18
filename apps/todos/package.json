@@ -42,7 +42,6 @@
   "files": [
     "dist",
     "dashboard/dist",
-    "vendor",
     "LICENSE",
     "README.md"
   ],
@@ -59,8 +58,8 @@
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
-    "verify:release": "bun run scripts/verify-public-release.ts",
-    "prepublishOnly": "bun run verify:release",
+    "verify:release": "bun run scripts/verify-public-release.ts --mode=review",
+    "prepublishOnly": "bun run scripts/verify-public-release.ts --mode=publish",
     "postinstall": "mkdir -p $HOME/.hasna/todos $HOME/.hasna/todos/training 2>/dev/null || true"
   },
   "keywords": [
@@ -91,6 +90,7 @@
   "engines": {
     "bun": ">=1.0.0"
   },
+  "packageManager": "bun@1.3.14",
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {

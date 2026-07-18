@@ -1439,8 +1439,13 @@ Release checks enforce that boundary before publishing:
   service coupling
 - public text surfaces and packed files are scanned for secret-like values
 - local runtime tests use a no-network fixture for local-only workflows
-- `bun run verify:release` builds, packs, validates provenance, and runs a clean
-  Bun global install smoke test from the candidate tarball
+- `bun run verify:release` performs a non-authoritative two-build review,
+  validates commit/tree provenance and deterministic tarball bytes, and runs an
+  isolated Bun install smoke test from the candidate tarball without changing
+  the global installation
+- authoritative publication is available only through `prepublishOnly` with an
+  externally supplied `HASNA_TODOS_EXPECTED_COMMIT` matching `HEAD`; skips and
+  final-pack mutation scripts are rejected
 - the install smoke plan itself is covered by tests: it installs only with Bun,
   verifies `todos`, `todos-mcp`, and `todos-serve`, and rejects private or
   hosted endpoint references

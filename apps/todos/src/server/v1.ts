@@ -9,7 +9,7 @@
  */
 import { LockError, ProjectNotFoundError, ResourceConflictError } from "../types/index.js";
 import type { CreatePlanInput, CreateProjectInput, CreateTaskInput, CreateTaskListInput, RenameProjectInput, TaskComment, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
-import type { TodosStorageContext, TodosStorageSnapshot } from "../storage/interfaces.js";
+import type { TodosStorageContext, TodosStorageSnapshot, TodosTaskCompletionOptions } from "../storage/interfaces.js";
 import { getCloudStorageAdapter, getCloudVerifier, ensureCloudSchema } from "./cloud.js";
 import { redactEvidenceText } from "../lib/redaction.js";
 import { isCanonicalSlug, normalizeSlug } from "../lib/slugs.js";
@@ -31,6 +31,46 @@ function json(body: unknown, status = 200): Response {
 
 function error(status: number, message: string, extra?: Record<string, unknown>): Response {
   return json({ error: message, ...(extra ?? {}) }, status);
+}
+
+function validateTaskCompletion(value: unknown):
+  | { ok: true; agentId?: string; options: TodosTaskCompletionOptions }
+  | { ok: false; message: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "completion body must be an object" };
+  const body = value as Record<string, unknown>;
+  const allowed = new Set(["agent_id", "attachment_ids", "files_changed", "test_results", "commit_hash", "notes", "confidence"]);
+  const unknown = Object.keys(body).find((key) => !allowed.has(key));
+  if (unknown) return { ok: false, message: `unknown completion field: ${unknown}` };
+  if (body.agent_id !== undefined && (typeof body.agent_id !== "string" || !body.agent_id.trim())) {
+    return { ok: false, message: "agent_id must be a non-empty string" };
+  }
+  for (const field of ["attachment_ids", "files_changed"] as const) {
+    const value = body[field];
+    if (value !== undefined && (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !item.trim()))) {
+      return { ok: false, message: `${field} must be an array of non-empty strings` };
+    }
+  }
+  for (const field of ["test_results", "commit_hash", "notes"] as const) {
+    if (body[field] !== undefined && typeof body[field] !== "string") {
+      return { ok: false, message: `${field} must be a string` };
+    }
+  }
+  if (body.confidence !== undefined &&
+      (typeof body.confidence !== "number" || !Number.isFinite(body.confidence) || body.confidence < 0 || body.confidence > 1)) {
+    return { ok: false, message: "confidence must be a number between 0 and 1" };
+  }
+  return {
+    ok: true,
+    ...(typeof body.agent_id === "string" ? { agentId: body.agent_id } : {}),
+    options: {
+      ...(Array.isArray(body.attachment_ids) ? { attachment_ids: body.attachment_ids as string[] } : {}),
+      ...(Array.isArray(body.files_changed) ? { files_changed: body.files_changed as string[] } : {}),
+      ...(typeof body.test_results === "string" ? { test_results: body.test_results } : {}),
+      ...(typeof body.commit_hash === "string" ? { commit_hash: body.commit_hash } : {}),
+      ...(typeof body.notes === "string" ? { notes: body.notes } : {}),
+      ...(typeof body.confidence === "number" ? { confidence: body.confidence } : {}),
+    },
+  };
 }
 
 function validateProjectPatch(value: unknown):
@@ -117,6 +157,16 @@ async function readJson<T>(req: Request): Promise<T | null> {
     return JSON.parse(text) as T;
   } catch {
     return null;
+  }
+}
+
+async function readOptionalJson(req: Request): Promise<{ ok: true; value: unknown } | { ok: false }> {
+  try {
+    const text = await req.text();
+    if (!text.trim()) return { ok: true, value: {} };
+    return { ok: true, value: JSON.parse(text) as unknown };
+  } catch {
+    return { ok: false };
   }
 }
 
@@ -315,6 +365,11 @@ export async function handleV1Request(
       }
       if (!id) {
         if (method === "GET") {
+          const includeSubtasks = url.searchParams.get("include_subtasks");
+          if (includeSubtasks !== null && includeSubtasks !== "true" && includeSubtasks !== "false") {
+            return error(400, "include_subtasks must be true or false");
+          }
+          const hasParentFilter = url.searchParams.has("parent_id");
           const filter = {
             ...(url.searchParams.get("status") ? {
               status: (url.searchParams.get("status")!.includes(",")
@@ -327,7 +382,9 @@ export async function handleV1Request(
                 : url.searchParams.get("priority")) as never,
             } : {}),
             ...(url.searchParams.get("project_id") ? { project_id: url.searchParams.get("project_id")! } : {}),
-            ...(url.searchParams.has("parent_id") ? { parent_id: url.searchParams.get("parent_id") || null, include_subtasks: true } : {}),
+            ...(hasParentFilter
+              ? { parent_id: url.searchParams.get("parent_id") || null, include_subtasks: true }
+              : includeSubtasks !== null ? { include_subtasks: includeSubtasks === "true" } : {}),
             ...(url.searchParams.get("plan_id") ? { plan_id: url.searchParams.get("plan_id")! } : {}),
             ...(url.searchParams.get("task_list_id") ? { task_list_id: url.searchParams.get("task_list_id")! } : {}),
             ...(url.searchParams.get("assigned_to") ? { assigned_to: url.searchParams.get("assigned_to")! } : {}),
@@ -631,16 +688,29 @@ export async function handleV1Request(
           }
           return error(405, `method ${method} not allowed on /v1/tasks/:id/refs`);
         }
-        const body = (await readJson<{ agent_id?: string; reason?: string }>(req)) ?? {};
-        const agentId = body.agent_id || principal.agent || "todos-serve";
+        const actionJson = await readOptionalJson(req);
+        if (!actionJson.ok) return error(400, "invalid JSON body");
+        const body = actionJson.value && typeof actionJson.value === "object" && !Array.isArray(actionJson.value)
+          ? actionJson.value as Record<string, unknown>
+          : {};
+        const agentId = typeof body.agent_id === "string" ? body.agent_id : principal.agent || "todos-serve";
         if (action === "start" && method === "POST") {
           return json({ task: await store.tasks.start(id, agentId) });
         }
         if (action === "complete" && method === "POST") {
-          return json({ task: await store.tasks.complete(id, agentId, {}) });
+          const parsed = validateTaskCompletion(actionJson.value);
+          if (!parsed.ok) return error(400, parsed.message);
+          return json({
+            task: await store.tasks.complete(
+              id,
+              parsed.agentId || principal.agent || "todos-serve",
+              parsed.options,
+              contextFromPrincipal(principal, body),
+            ),
+          });
         }
         if (action === "fail" && method === "POST") {
-          return json({ result: await store.tasks.fail(id, agentId, body.reason ?? "failed", {}) });
+          return json({ result: await store.tasks.fail(id, agentId, typeof body.reason === "string" ? body.reason : "failed", {}) });
         }
         if (action === "claim" && method === "POST") {
           return json({ task: await store.tasks.claimNext(agentId, {}) });

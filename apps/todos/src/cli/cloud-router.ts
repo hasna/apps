@@ -16,8 +16,26 @@ type Env = Record<string, string | undefined>;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CLOUD_MODES = new Set(["self_hosted", "cloud", "remote", "hybrid"]);
 const VALID_STORAGE_MODES = new Set(["local", ...CLOUD_MODES]);
+const COMPLETION_EVIDENCE_FIELDS = [
+  "attachment_ids",
+  "files_changed",
+  "test_results",
+  "commit_hash",
+  "notes",
+  "confidence",
+] as const;
 
-let _cache: { client: HasnaStorageClient | null } | undefined;
+export interface CloudTaskCompletionInput {
+  agent_id?: string;
+  attachment_ids?: string[];
+  files_changed?: string[];
+  test_results?: string;
+  commit_hash?: string;
+  notes?: string;
+  confidence?: number;
+}
+
+const completionCapabilityCache = new Map<string, Promise<ReadonlySet<string>>>();
 
 export interface TodosRemoteAuthorityConfigStatus {
   selected: boolean;
@@ -51,6 +69,13 @@ function modeRole(mode: string): "local" | "remote" {
  * legacy fallback; explicit canonical/fallback disagreement is rejected.
  */
 export function resolveTodosCliStorageMode(env: Env = process.env as Env): TodosCliStorageModeResolution {
+  for (const source of ["HASNA_TODOS_STORAGE_MODE", "TODOS_STORAGE_MODE"] as const) {
+    if (env[source] !== undefined && env[source]!.trim() === "") {
+      throw new Error(
+        `REMOTE_STORAGE_MODE_INVALID: ${source} must not be blank; local SQLite fallback is disabled for invalid routing state`,
+      );
+    }
+  }
   const canonical = cleanMode(env.HASNA_TODOS_STORAGE_MODE);
   const fallback = cleanMode(env.TODOS_STORAGE_MODE);
 
@@ -319,19 +344,14 @@ async function requiredRemoteRoute<T>(
  * remote mode with a missing or invalid URL/key always throws.
  */
 export function getTodosCloudClient(env: Env = process.env as Env): HasnaStorageClient | null {
-  if (_cache !== undefined) return _cache.client;
   // Never route over HTTP from URL/key presence alone. The mode is the explicit
   // authority selector; an absent selector preserves the local default.
   const mode = requestedStorageMode(env);
-  if (!CLOUD_MODES.has(mode)) {
-    _cache = { client: null };
-    return _cache.client;
-  }
+  if (!CLOUD_MODES.has(mode)) return null;
   const resolved = resolveStorageClient("todos", requireTodosRemoteAuthorityEnv(env), {
     fetchImpl: (input, init) => globalThis.fetch(input, { ...init, redirect: "manual" }),
   });
-  _cache = { client: resolved.transport === "cloud-http" ? protectRemoteClient(resolved.client) : null };
-  return _cache.client;
+  return resolved.transport === "cloud-http" ? protectRemoteClient(resolved.client) : null;
 }
 
 /** True when the CLI should route task reads/writes to the cloud API. */
@@ -339,9 +359,10 @@ export function isCloudRouting(env: Env = process.env as Env): boolean {
   return getTodosCloudClient(env) !== null;
 }
 
-/** Test hook: clear the memoized client (e.g. after mutating env in a test). */
+/** Backward-compatible test hook; authority clients are never process-cached. */
 export function resetTodosCloudClient(): void {
-  _cache = undefined;
+  // Only protocol capabilities are cached, keyed by authority rather than credentials.
+  completionCapabilityCache.clear();
 }
 
 /** Unwrap the `{ task }` envelope the todos `/v1` API returns for single tasks. */
@@ -359,6 +380,7 @@ function toListQuery(filter: TaskFilter = {}): Record<string, string | number> {
   if (filter.priority) query["priority"] = Array.isArray(filter.priority) ? filter.priority.join(",") : filter.priority;
   if (filter.project_id) query["project_id"] = filter.project_id;
   if (filter.parent_id !== undefined) query["parent_id"] = filter.parent_id ?? "";
+  if (filter.include_subtasks !== undefined) query["include_subtasks"] = filter.include_subtasks ? "true" : "false";
   if (filter.plan_id) query["plan_id"] = filter.plan_id;
   if (filter.task_list_id) query["task_list_id"] = filter.task_list_id;
   if (filter.assigned_to) query["assigned_to"] = filter.assigned_to;
@@ -376,19 +398,269 @@ export async function cloudListTasks(client: HasnaStorageClient, filter: TaskFil
   return Array.isArray(envelope?.tasks) ? envelope!.tasks : res.items;
 }
 
+interface CloudTaskPage {
+  tasks: Task[];
+  count: number;
+  total: number | undefined;
+}
+
+async function cloudListTaskPage(client: HasnaStorageClient, filter: TaskFilter): Promise<CloudTaskPage> {
+  const res = await requiredRemoteRoute(client, "/v1/tasks", () =>
+    client.list<Task>("tasks", { query: toListQuery(filter) }));
+  const envelope = res.raw as { tasks?: Task[]; count?: number; total?: number } | undefined;
+  if (envelope && Object.prototype.hasOwnProperty.call(envelope, "tasks") && !Array.isArray(envelope.tasks)) {
+    throw new Error("REMOTE_API_INCOMPATIBLE: /v1/tasks returned a malformed tasks page; local SQLite fallback is disabled");
+  }
+  const tasks = Array.isArray(envelope?.tasks) ? envelope.tasks : res.items;
+  if (!Array.isArray(tasks) || tasks.some((task) => !task || typeof task !== "object" || typeof task.id !== "string" || !task.id)) {
+    throw new Error("REMOTE_API_INCOMPATIBLE: /v1/tasks returned a malformed tasks page; local SQLite fallback is disabled");
+  }
+  const count = typeof envelope?.count === "number" ? envelope.count : tasks.length;
+  if (!Number.isSafeInteger(count) || count < 0 || count !== tasks.length) {
+    throw new Error("REMOTE_API_INCOMPATIBLE: /v1/tasks returned an invalid count; local SQLite fallback is disabled");
+  }
+  if (envelope?.total !== undefined && (!Number.isSafeInteger(envelope.total) || envelope.total < 0 || envelope.total < count)) {
+    throw new Error("REMOTE_API_INCOMPATIBLE: /v1/tasks returned an invalid total; local SQLite fallback is disabled");
+  }
+  return { tasks, count, total: envelope?.total };
+}
+
+class RemoteTaskReferenceSnapshotError extends Error {}
+
+async function cloudTasksAllCount(client: HasnaStorageClient): Promise<number> {
+  const stats = await cloudGetStats(client);
+  if (!Number.isSafeInteger(stats.tasks_all) || (stats.tasks_all as number) < 0) {
+    throw new RemoteTaskReferenceSnapshotError(
+      "REMOTE_API_INCOMPATIBLE: /v1/stats must return a non-negative integer tasks_all for short task references",
+    );
+  }
+  return stats.tasks_all as number;
+}
+
+interface CloudTaskScope {
+  tasks: Task[];
+  total: number | undefined;
+}
+
+async function cloudPaginateTaskScope(
+  client: HasnaStorageClient,
+  filter: TaskFilter,
+  maximumTotal: number,
+): Promise<CloudTaskScope> {
+  const pageSize = 500;
+  const tasks: Task[] = [];
+  const ids = new Set<string>();
+  let reportedTotal: number | undefined;
+  let totalPresence: boolean | undefined;
+  for (let offset = 0; ;) {
+    let page: CloudTaskPage;
+    try {
+      page = await cloudListTaskPage(client, { ...filter, limit: pageSize, offset });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.startsWith("REMOTE_API_INCOMPATIBLE") && !message.startsWith("REMOTE_API_CHANGED_DURING_PAGINATION")) {
+        throw error;
+      }
+      throw new RemoteTaskReferenceSnapshotError(message, { cause: error });
+    }
+    const pageHasTotal = page.total !== undefined;
+    if (totalPresence !== undefined && totalPresence !== pageHasTotal) {
+      throw new RemoteTaskReferenceSnapshotError(
+        "REMOTE_API_INCOMPATIBLE: /v1/tasks changed total support during pagination",
+      );
+    }
+    totalPresence = pageHasTotal;
+    if (page.total !== undefined && reportedTotal !== undefined && page.total !== reportedTotal) {
+      throw new RemoteTaskReferenceSnapshotError(
+        "REMOTE_API_CHANGED_DURING_PAGINATION: /v1/tasks total changed during pagination",
+      );
+    }
+    if (page.total !== undefined) reportedTotal = page.total;
+    if (tasks.length + page.tasks.length > maximumTotal || (reportedTotal !== undefined && tasks.length + page.tasks.length > reportedTotal)) {
+      throw new RemoteTaskReferenceSnapshotError(
+        "REMOTE_API_INCOMPATIBLE: /v1/tasks pagination exceeded total; local SQLite fallback is disabled",
+      );
+    }
+    for (const task of page.tasks) {
+      if (ids.has(task.id)) {
+        throw new RemoteTaskReferenceSnapshotError(
+          "REMOTE_API_INCOMPATIBLE: /v1/tasks pagination returned a duplicate task id",
+        );
+      }
+      ids.add(task.id);
+      tasks.push(task);
+    }
+    if (reportedTotal !== undefined && tasks.length === reportedTotal) break;
+    if (reportedTotal !== undefined && page.tasks.length === 0) {
+      throw new RemoteTaskReferenceSnapshotError(
+        "REMOTE_API_INCOMPATIBLE: /v1/tasks pagination ended before total; local SQLite fallback is disabled",
+      );
+    }
+    if (reportedTotal === undefined && page.tasks.length < pageSize) break;
+    offset += page.tasks.length;
+  }
+  return { tasks, total: reportedTotal };
+}
+
+function taskParentId(task: Task): string | null {
+  return typeof task.parent_id === "string" && task.parent_id ? task.parent_id : null;
+}
+
+function assertCompleteTaskHierarchy(tasks: readonly Task[]): void {
+  const byId = new Map(tasks.map((task) => [task.id, task]));
+  for (const task of tasks) {
+    const visited = new Set<string>([task.id]);
+    let parentId = taskParentId(task);
+    while (parentId) {
+      if (visited.has(parentId)) {
+        throw new RemoteTaskReferenceSnapshotError(
+          "REMOTE_API_INCOMPATIBLE: /v1/tasks returned a cyclic task hierarchy",
+        );
+      }
+      visited.add(parentId);
+      const parent = byId.get(parentId);
+      if (!parent) {
+        throw new RemoteTaskReferenceSnapshotError(
+          "REMOTE_API_INCOMPATIBLE: /v1/tasks returned an orphaned task hierarchy",
+        );
+      }
+      parentId = taskParentId(parent);
+    }
+  }
+}
+
+async function cloudListTaskHierarchyForResolution(
+  client: HasnaStorageClient,
+  expectedTotal: number,
+): Promise<Task[]> {
+  const roots = await cloudPaginateTaskScope(client, {}, expectedTotal);
+  for (const root of roots.tasks) {
+    if (taskParentId(root) !== null) {
+      throw new RemoteTaskReferenceSnapshotError(
+        "REMOTE_API_INCOMPATIBLE: default /v1/tasks returned a non-root task",
+      );
+    }
+  }
+
+  const tasks = [...roots.tasks];
+  const seen = new Set(tasks.map((task) => task.id));
+  const queue = roots.tasks.map((task) => ({ task, ancestors: new Set<string>([task.id]) }));
+  for (let index = 0; index < queue.length; index += 1) {
+    const current = queue[index]!;
+    const children = await cloudPaginateTaskScope(client, { parent_id: current.task.id }, expectedTotal);
+    for (const child of children.tasks) {
+      if (taskParentId(child) !== current.task.id) {
+        throw new RemoteTaskReferenceSnapshotError(
+          "REMOTE_API_INCOMPATIBLE: /v1/tasks parent filter returned an orphaned task",
+        );
+      }
+      if (current.ancestors.has(child.id)) {
+        throw new RemoteTaskReferenceSnapshotError(
+          "REMOTE_API_INCOMPATIBLE: /v1/tasks returned a cyclic task hierarchy",
+        );
+      }
+      if (seen.has(child.id)) {
+        throw new RemoteTaskReferenceSnapshotError(
+          "REMOTE_API_INCOMPATIBLE: /v1/tasks hierarchy returned a duplicate task id",
+        );
+      }
+      seen.add(child.id);
+      tasks.push(child);
+      if (tasks.length > expectedTotal) {
+        throw new RemoteTaskReferenceSnapshotError(
+          "REMOTE_API_INCOMPATIBLE: /v1/tasks hierarchy exceeded /v1/stats tasks_all",
+        );
+      }
+      queue.push({ task: child, ancestors: new Set([...current.ancestors, child.id]) });
+    }
+  }
+  if (tasks.length !== expectedTotal) {
+    throw new RemoteTaskReferenceSnapshotError(
+      "REMOTE_API_INCOMPATIBLE: /v1/tasks hierarchy did not account for every /v1/stats tasks_all row",
+    );
+  }
+  assertCompleteTaskHierarchy(tasks);
+  return tasks;
+}
+
+async function cloudListAllTasksForResolution(client: HasnaStorageClient, expectedTotal: number): Promise<Task[]> {
+  const inclusive = await cloudPaginateTaskScope(client, { include_subtasks: true }, expectedTotal);
+  if (inclusive.tasks.length === expectedTotal && (inclusive.total === undefined || inclusive.total === expectedTotal)) {
+    assertCompleteTaskHierarchy(inclusive.tasks);
+    return inclusive.tasks;
+  }
+  return cloudListTaskHierarchyForResolution(client, expectedTotal);
+}
+
+async function resolveTaskRefSnapshot(client: HasnaStorageClient, ref: string, input: string): Promise<string> {
+  const beforeTotal = await cloudTasksAllCount(client);
+  let tasks: Task[];
+  try {
+    tasks = await cloudListAllTasksForResolution(client, beforeTotal);
+  } catch (error) {
+    const afterFailureTotal = await cloudTasksAllCount(client);
+    if (afterFailureTotal !== beforeTotal) {
+      throw new RemoteTaskReferenceSnapshotError("REMOTE_API_CHANGED_DURING_PAGINATION: tasks_all changed during task resolution", { cause: error });
+    }
+    throw error;
+  }
+  const exactShort = tasks.filter((task) => task.short_id?.toLowerCase() === input);
+  const prefixes = exactShort.length === 0
+    ? tasks.filter((task) => task.id.toLowerCase().startsWith(input))
+    : [];
+  const matches = exactShort.length > 0 ? exactShort : prefixes;
+  if (matches.length > 1) {
+    const afterTotal = await cloudTasksAllCount(client);
+    if (afterTotal !== beforeTotal) {
+      throw new RemoteTaskReferenceSnapshotError("REMOTE_API_CHANGED_DURING_PAGINATION: tasks_all changed during task resolution");
+    }
+    throw new Error(`Task reference is ambiguous: "${ref}"`);
+  }
+  if (matches.length === 0) {
+    const afterTotal = await cloudTasksAllCount(client);
+    if (afterTotal !== beforeTotal) {
+      throw new RemoteTaskReferenceSnapshotError("REMOTE_API_CHANGED_DURING_PAGINATION: tasks_all changed during task resolution");
+    }
+    throw new Error(`Task not found: ${ref}`);
+  }
+
+  const candidate = matches[0]!;
+  const finalTask = await cloudGetTask(client, candidate.id);
+  const finalMatches = finalTask?.id === candidate.id && (
+    exactShort.length === 1
+      ? finalTask.short_id?.toLowerCase() === input
+      : finalTask.id.toLowerCase().startsWith(input)
+  );
+  if (!finalMatches) {
+    throw new RemoteTaskReferenceSnapshotError("REMOTE_API_CHANGED_DURING_PAGINATION: resolved task no longer matches the short reference");
+  }
+  const afterTotal = await cloudTasksAllCount(client);
+  if (afterTotal !== beforeTotal) {
+    throw new RemoteTaskReferenceSnapshotError("REMOTE_API_CHANGED_DURING_PAGINATION: tasks_all changed during task resolution");
+  }
+  return candidate.id;
+}
+
 /** Resolve an exact UUID, exact short id, or unique UUID prefix using /v1 only. */
 export async function cloudResolveTaskRef(client: HasnaStorageClient, ref: string): Promise<string> {
   const input = ref.trim().toLowerCase();
   if (!input) throw new Error("Task reference must not be empty");
   if (UUID_RE.test(input)) return input;
-  const tasks = await cloudListTasks(client, { limit: 10_000 } as TaskFilter);
-  const exactShort = tasks.filter((task) => task.short_id?.toLowerCase() === input);
-  if (exactShort.length === 1) return exactShort[0]!.id;
-  if (exactShort.length > 1) throw new Error(`Task reference is ambiguous: "${ref}"`);
-  const prefixes = tasks.filter((task) => task.id.toLowerCase().startsWith(input));
-  if (prefixes.length === 1) return prefixes[0]!.id;
-  if (prefixes.length > 1) throw new Error(`Task reference is ambiguous: "${ref}"`);
-  throw new Error(`Task not found: ${ref}`);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await resolveTaskRefSnapshot(client, ref, input);
+    } catch (error) {
+      if (!(error instanceof RemoteTaskReferenceSnapshotError)) throw error;
+      if (attempt === 1) {
+        throw new Error(
+          `REMOTE_TASK_REFERENCE_UNSAFE: could not prove a stable complete task set for "${ref}"; ` +
+            "retry with the full task UUID; no local fallback was attempted",
+          { cause: error },
+        );
+      }
+    }
+  }
+  throw new Error(`REMOTE_TASK_REFERENCE_UNSAFE: use the full task UUID for "${ref}"`);
 }
 
 /** Fetch one task by id (`GET /v1/tasks/:id`); `null` on 404. */
@@ -427,6 +699,85 @@ export async function cloudTaskAction(
 ): Promise<Task> {
   const raw = await client.transport.post<unknown>(`/tasks/${encodeURIComponent(id)}/${action}`, body);
   return unwrapTask(raw);
+}
+
+function resolveOpenApiSchema(document: unknown, schema: unknown): Record<string, unknown> | null {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return null;
+  const value = schema as Record<string, unknown>;
+  if (typeof value["$ref"] !== "string") return value;
+  const reference = value["$ref"] as string;
+  if (!reference.startsWith("#/")) return null;
+  let current: unknown = document;
+  for (const segment of reference.slice(2).split("/")) {
+    const key = segment.replace(/~1/g, "/").replace(/~0/g, "~");
+    if (!current || typeof current !== "object" || Array.isArray(current)) return null;
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current && typeof current === "object" && !Array.isArray(current)
+    ? current as Record<string, unknown>
+    : null;
+}
+
+async function fetchCompletionCapabilities(client: HasnaStorageClient): Promise<ReadonlySet<string>> {
+  const document = await requiredRemoteRoute(client, "/v1/openapi.json", () =>
+    client.transport.get<unknown>("/openapi.json"));
+  if (!document || typeof document !== "object" || Array.isArray(document)) return new Set();
+  const doc = document as Record<string, unknown>;
+  const paths = doc["paths"];
+  const completePath = paths && typeof paths === "object" && !Array.isArray(paths)
+    ? (paths as Record<string, unknown>)["/v1/tasks/{id}/complete"]
+    : undefined;
+  const post = completePath && typeof completePath === "object" && !Array.isArray(completePath)
+    ? (completePath as Record<string, unknown>)["post"]
+    : undefined;
+  const requestBody = post && typeof post === "object" && !Array.isArray(post)
+    ? (post as Record<string, unknown>)["requestBody"]
+    : undefined;
+  const content = requestBody && typeof requestBody === "object" && !Array.isArray(requestBody)
+    ? (requestBody as Record<string, unknown>)["content"]
+    : undefined;
+  const jsonContent = content && typeof content === "object" && !Array.isArray(content)
+    ? (content as Record<string, unknown>)["application/json"]
+    : undefined;
+  const schema = jsonContent && typeof jsonContent === "object" && !Array.isArray(jsonContent)
+    ? (jsonContent as Record<string, unknown>)["schema"]
+    : undefined;
+  const resolved = resolveOpenApiSchema(document, schema);
+  const properties = resolved?.["properties"];
+  if (!properties || typeof properties !== "object" || Array.isArray(properties)) return new Set();
+  return new Set(Object.keys(properties as Record<string, unknown>));
+}
+
+async function requireCompletionCapabilities(
+  client: HasnaStorageClient,
+  body: CloudTaskCompletionInput,
+): Promise<void> {
+  const requested = COMPLETION_EVIDENCE_FIELDS.filter((field) => body[field] !== undefined);
+  if (requested.length === 0) return;
+  const authority = remoteAuthorityBase(client);
+  let capability = completionCapabilityCache.get(authority);
+  if (!capability) {
+    capability = fetchCompletionCapabilities(client);
+    completionCapabilityCache.set(authority, capability);
+  }
+  const supported = await capability;
+  const missing = requested.filter((field) => !supported.has(field));
+  if (missing.length > 0) {
+    throw new Error(
+      `REMOTE_COMPLETION_EVIDENCE_UNSUPPORTED: configured Todos authority ${authority} does not advertise ` +
+        `${missing.join(", ")} in POST /v1/tasks/{id}/complete; no completion mutation was sent`,
+    );
+  }
+}
+
+/** Complete a task, preflighting evidence-bearing bodies against this authority's OpenAPI contract. */
+export async function cloudCompleteTask(
+  client: HasnaStorageClient,
+  id: string,
+  body: CloudTaskCompletionInput = {},
+): Promise<Task> {
+  await requireCompletionCapabilities(client, body);
+  return cloudTaskAction(client, id, "complete", body as Record<string, unknown>);
 }
 
 /** Queue status summary from the cloud (`GET /v1/stats`). */

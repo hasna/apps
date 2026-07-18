@@ -62,6 +62,67 @@ describe("task comments OpenAPI contract", () => {
   });
 });
 
+describe("task list and completion OpenAPI contract", () => {
+  test("documents exhaustive task pagination, total, filters, and completion evidence", () => {
+    const document = buildV1OpenApiDocument("test");
+    const list = document.paths["/v1/tasks"].get;
+    expect(list.parameters.map((parameter) => parameter.name)).toEqual([
+      "status",
+      "priority",
+      "project_id",
+      "parent_id",
+      "include_subtasks",
+      "plan_id",
+      "task_list_id",
+      "assigned_to",
+      "agent_id",
+      "limit",
+      "offset",
+    ]);
+    expect(list.responses["200"].content["application/json"].schema.required).toEqual(["tasks", "count", "total"]);
+    expect(list.responses["200"].content["application/json"].schema.properties.total).toMatchObject({ type: "integer", minimum: 0 });
+
+    const complete = document.paths["/v1/tasks/{id}/complete"].post;
+    expect(complete.requestBody.content["application/json"].schema.$ref).toBe("#/components/schemas/CompleteTaskInput");
+    expect(document.components.schemas.CompleteTaskInput.properties).toMatchObject({
+      attachment_ids: { type: "array" },
+      files_changed: { type: "array" },
+      test_results: { type: "string" },
+      commit_hash: { type: "string" },
+      notes: { type: "string" },
+      confidence: { type: "number", minimum: 0, maximum: 1 },
+    });
+  });
+
+  test("generated SDK listTasks exposes total and all supported query fields", async () => {
+    const calls: string[] = [];
+    const client = new TodosV1Client({
+      baseUrl: "https://todos.test",
+      fetch: (async (input: RequestInfo | URL) => {
+        calls.push(String(input));
+        return Response.json({ tasks: [], count: 0, total: 7 });
+      }) as typeof fetch,
+    });
+    const result = await client.listTasks({
+      status: "pending",
+      priority: "high",
+      project_id: "project",
+      parent_id: "parent",
+      include_subtasks: true,
+      plan_id: "plan",
+      task_list_id: "list",
+      assigned_to: "assignee",
+      agent_id: "agent",
+      limit: 1,
+      offset: 6,
+    });
+    expect(result.total).toBe(7);
+    expect(new URL(calls[0]!).searchParams.toString()).toBe(
+      "status=pending&priority=high&project_id=project&parent_id=parent&include_subtasks=true&plan_id=plan&task_list_id=list&assigned_to=assignee&agent_id=agent&limit=1&offset=6",
+    );
+  });
+});
+
 describe("project mutation OpenAPI contract", () => {
   test("preserves create routing compatibility, closes generic update, and exposes atomic rename", () => {
     const document = buildV1OpenApiDocument("test");

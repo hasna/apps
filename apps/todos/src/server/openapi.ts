@@ -129,6 +129,19 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             version: { type: "number" },
           },
         },
+        CompleteTaskInput: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            agent_id: { type: "string", minLength: 1 },
+            attachment_ids: { type: "array", items: { type: "string", minLength: 1 } },
+            files_changed: { type: "array", items: { type: "string", minLength: 1 } },
+            test_results: { type: "string" },
+            commit_hash: { type: "string" },
+            notes: { type: "string" },
+            confidence: { type: "number", minimum: 0, maximum: 1 },
+          },
+        },
         CreateProjectInput: {
           type: "object",
           additionalProperties: false,
@@ -240,10 +253,16 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           summary: "List tasks",
           parameters: [
             { name: "status", in: "query", schema: { type: "string" } },
+            { name: "priority", in: "query", schema: { type: "string" } },
             { name: "project_id", in: "query", schema: { type: "string" } },
+            { name: "parent_id", in: "query", schema: { type: "string", nullable: true } },
+            { name: "include_subtasks", in: "query", schema: { type: "boolean" } },
+            { name: "plan_id", in: "query", schema: { type: "string" } },
+            { name: "task_list_id", in: "query", schema: { type: "string" } },
             { name: "assigned_to", in: "query", schema: { type: "string" } },
             { name: "agent_id", in: "query", schema: { type: "string" } },
-            { name: "limit", in: "query", schema: { type: "number" } },
+            { name: "limit", in: "query", schema: { type: "integer", minimum: 1 } },
+            { name: "offset", in: "query", schema: { type: "integer", minimum: 0 } },
           ],
           responses: {
             "200": {
@@ -251,9 +270,11 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
                 "application/json": {
                   schema: {
                     type: "object",
+                    required: ["tasks", "count", "total"],
                     properties: {
                       tasks: { type: "array", items: { $ref: "#/components/schemas/Task" } },
-                      count: { type: "number" },
+                      count: { type: "integer", minimum: 0 },
+                      total: { type: "integer", minimum: 0 },
                     },
                   },
                 },
@@ -397,6 +418,10 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           operationId: "completeTask",
           summary: "Complete a task",
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: false,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/CompleteTaskInput" } } },
+          },
           responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { task: { $ref: "#/components/schemas/Task" } } } } } } },
         },
       },

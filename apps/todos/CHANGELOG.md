@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Route supported ordinary CLI coordination commands through the configured authenticated self-hosted `/v1` authority when remote storage mode is selected, before any local database adapter or ID helper can run.
 - Fail closed on missing credentials, invalid or conflicting storage selectors, unsafe or incompatible authority URLs/routes, redirects, authentication errors, timeouts, and server failures; remote commands never fall back to SQLite.
 - Make remote storage/status diagnostics HTTP-aware and harden release verification so a candidate must come from a clean tracked tree with commit/tree provenance and verified tarball integrity.
+- Gate evidence-bearing remote completion on the authority's advertised OpenAPI contract, resolve short task references only from a stats-stable exhaustive snapshot, and preserve existing completion evidence atomically.
+- Split public release verification into non-authoritative review and strict prepublish modes, pin Bun 1.3.14, verify tracked bytes/modes and packed binary provenance, and require two identical npm tarballs and payload manifests.
 
 ## [0.11.76] - 2026-07-06
 

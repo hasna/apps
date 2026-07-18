@@ -4,7 +4,7 @@ import { execSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createTask } from "../../db/tasks.js";
-import { autoProject, output, resolveTaskId, handleError } from "../helpers.js";
+import { autoProject, output, resolveTaskId, resolveTaskIdForCommand, handleError } from "../helpers.js";
 import { getTodosCloudClient, cloudRecordVerification, cloudLinkCommit, cloudFindCommit, cloudLinkRef, cloudFindRefs } from "../cloud-router.js";
 
 const HOME = process.env["HOME"] || process.env["USERPROFILE"] || "~";
@@ -352,13 +352,13 @@ exit 0
     .option("--files <list>", "Comma-separated list of changed files")
     .action(async (taskId: string, sha: string, opts: { message?: string; author?: string; files?: string }) => {
       const globalOpts = program.opts();
-      const resolvedId = resolveTaskId(taskId);
+      const cloud = getTodosCloudClient();
+      const resolvedId = await resolveTaskIdForCommand(taskId, cloud);
       const files = opts.files ? opts.files.split(",").filter(Boolean) : undefined;
       try {
         // self_hosted cloud routing: attach the commit link to the REAL cloud task.
         // The local path wrote to this machine's sqlite where the cloud task does
         // not exist, tripping a FOREIGN KEY constraint failure.
-        const cloud = getTodosCloudClient();
         const commit = cloud
           ? await cloudLinkCommit(cloud, resolvedId, {
               sha,
@@ -425,8 +425,8 @@ exit 0
     .option("--metadata <json>", "Additional JSON metadata")
     .action(async (taskId: string, ref: string, opts: { type?: string; url?: string; provider?: string; metadata?: string }) => {
       const globalOpts = program.opts();
-      const resolvedId = resolveTaskId(taskId);
-      const { linkTaskGitRef } = await import("../../db/task-commits.js");
+      const cloud = getTodosCloudClient();
+      const resolvedId = await resolveTaskIdForCommand(taskId, cloud);
       const refType = opts.type === "pr" ? "pull_request" : opts.type;
       if (refType !== "branch" && refType !== "pull_request") {
         console.error(chalk.red("--type must be branch, pr, or pull_request"));
@@ -445,7 +445,6 @@ exit 0
         // self_hosted cloud routing: attach the ref link to the REAL cloud task.
         // The local path wrote to sqlite where the cloud task does not exist,
         // tripping a FOREIGN KEY constraint failure.
-        const cloud = getTodosCloudClient();
         const gitRef = cloud
           ? await cloudLinkRef(cloud, resolvedId, {
               ref_type: refType,
@@ -454,7 +453,7 @@ exit 0
               ...(opts.provider !== undefined ? { provider: opts.provider } : {}),
               ...(metadata ? { metadata } : {}),
             })
-          : linkTaskGitRef({
+          : (await import("../../db/task-commits.js")).linkTaskGitRef({
               task_id: resolvedId,
               ref_type: refType,
               name: ref,
@@ -568,8 +567,9 @@ exit 0
         // The local path wrote the row to this machine's sqlite where the cloud task
         // does not exist, tripping a FOREIGN KEY constraint.
         const cloud = getTodosCloudClient();
+        const resolvedTaskId = await resolveTaskIdForCommand(taskId, cloud);
         const verification = cloud
-          ? await cloudRecordVerification(cloud, resolveTaskId(taskId), {
+          ? await cloudRecordVerification(cloud, resolvedTaskId, {
               command,
               status: opts.status,
               output_summary: opts.summary,
@@ -577,7 +577,7 @@ exit 0
               agent_id: opts.agent,
             })
           : (await import("../../db/task-commits.js")).addTaskVerification({
-              task_id: resolveTaskId(taskId),
+              task_id: resolvedTaskId,
               command,
               status: opts.status,
               output_summary: opts.summary,

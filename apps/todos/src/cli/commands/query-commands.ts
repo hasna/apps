@@ -608,13 +608,12 @@ export function registerQueryCommands(program: Command) {
     .action(async (opts) => {
       const globalOpts = program.opts();
       const json = opts.json || globalOpts.json;
-      const db = getDatabase();
       const filters: Record<string, string> = {};
       if (opts.project) filters.project_id = opts.project;
       const cloud = getTodosCloudClient();
       const work = cloud
         ? await cloudActiveWork(cloud, Object.keys(filters).length ? (filters as never) : {})
-        : getActiveWork(Object.keys(filters).length ? filters : undefined, db);
+        : getActiveWork(Object.keys(filters).length ? filters : undefined, getDatabase());
       if (json) { console.log(JSON.stringify(work, null, 2)); return; }
       if (work.length === 0) { console.log(chalk.dim("No active work.")); return; }
       console.log(chalk.bold(`Active work (${work.length}):`));
@@ -1241,13 +1240,11 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       const globalOpts = program.opts();
-      const db = getDatabase();
       const cloud = getTodosCloudClient();
-      const { getTasksChangedSince } = await import("../../db/tasks.js");
       const start = new Date(); start.setHours(0, 0, 0, 0);
       const tasks: any[] = cloud
         ? await cloudChangedSince(cloud, start.toISOString())
-        : getTasksChangedSince(start.toISOString(), undefined, db);
+        : (await import("../../db/tasks.js")).getTasksChangedSince(start.toISOString(), undefined, getDatabase());
       const completed = tasks.filter((t: any) => t.status === "completed");
       const started = tasks.filter((t: any) => t.status === "in_progress");
       const other = tasks.filter((t: any) => t.status !== "completed" && t.status !== "in_progress");
@@ -1274,14 +1271,12 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       const globalOpts = program.opts();
-      const db = getDatabase();
       const cloud = getTodosCloudClient();
-      const { getTasksChangedSince } = await import("../../db/tasks.js");
       const start = new Date(); start.setDate(start.getDate() - 1); start.setHours(0, 0, 0, 0);
       const end = new Date(start); end.setHours(23, 59, 59, 999);
       const allChanged: any[] = cloud
         ? await cloudChangedSince(cloud, start.toISOString())
-        : getTasksChangedSince(start.toISOString(), undefined, db);
+        : (await import("../../db/tasks.js")).getTasksChangedSince(start.toISOString(), undefined, getDatabase());
       const tasks = allChanged.filter((t: any) => t.updated_at <= end.toISOString());
       const completed = tasks.filter((t: any) => t.status === "completed");
       const started = tasks.filter((t: any) => t.status === "in_progress");
@@ -1625,7 +1620,6 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       const globalOpts = program.opts();
-      const db = getDatabase();
       const cloud = getTodosCloudClient();
       if (cloud) {
         const cloudOptions = {
@@ -1658,6 +1652,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
         }
         return;
       }
+      const db = getDatabase();
       const { getLocalActivityTimeline } = await import("../../lib/activity-timeline.js");
       const { resolveTaskRunId } = await import("../../db/task-runs.js");
       const options: Parameters<typeof getLocalActivityTimeline>[0] = {

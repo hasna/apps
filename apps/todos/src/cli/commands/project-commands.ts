@@ -451,17 +451,17 @@ export function registerProjectCommands(program: Command) {
       // `--graph` view is a local-only concept; in cloud mode we show the flat
       // dependency/blocked-by edges instead.
       if (cloud) {
-        const cloudId = resolveTaskId(id);
+        const cloudId = await resolveTaskIdForCommand(id, cloud);
         if (opts.needs) {
           try {
-            const dep = await cloudAddDependency(cloud, cloudId, resolveTaskId(opts.needs));
+            const dep = await cloudAddDependency(cloud, cloudId, await resolveTaskIdForCommand(opts.needs, cloud));
             if (globalOpts.json) output(dep, true);
             else console.log(chalk.green("Dependency added."));
           } catch (e) { handleError(e); }
           return;
         }
         if (opts.remove) {
-          const removed = await cloudRemoveDependency(cloud, cloudId, resolveTaskId(opts.remove));
+          const removed = await cloudRemoveDependency(cloud, cloudId, await resolveTaskIdForCommand(opts.remove, cloud));
           if (globalOpts.json) output({ removed }, true);
           else console.log(removed ? chalk.green("Dependency removed.") : chalk.red("Dependency not found."));
           return;

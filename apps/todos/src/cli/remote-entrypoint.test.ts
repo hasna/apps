@@ -1,14 +1,18 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import ts from "typescript";
 import {
+  getTodosCliCommandCapabilityMatrix,
   initializeTodosCliAuthority,
   type TodosCliAuthorityInitialization,
 } from "./stage-a.js";
 import { resetTodosCloudClient } from "./cloud-router.js";
 
 const REPO_ROOT = join(import.meta.dir, "../..");
+const TASK_FIXTURE_ID = "11111111-1111-4111-8111-111111111111";
+const OTHER_TASK_FIXTURE_ID = "22222222-2222-4222-8222-222222222222";
 const tempRoots: string[] = [];
 let buildRoot: string | undefined;
 let executable: string;
@@ -30,9 +34,9 @@ async function buildCli(): Promise<string> {
   return build.outputs[0]!.path;
 }
 
-async function runCli(executable: string, args: string[], env: Record<string, string>): Promise<CliResult> {
+async function runCli(executable: string, args: string[], env: Record<string, string>, cwd = REPO_ROOT): Promise<CliResult> {
   const proc = Bun.spawn(["bun", executable, ...args], {
-    cwd: REPO_ROOT,
+    cwd,
     env: { ...env, NODE_PATH: join(REPO_ROOT, "node_modules") },
     stdout: "pipe",
     stderr: "pipe",
@@ -42,11 +46,70 @@ async function runCli(executable: string, args: string[], env: Record<string, st
   return { exitCode: await proc.exited, stdout, stderr };
 }
 
+function recursiveInventory(root: string, relative = ""): string[] {
+  if (!existsSync(root)) return [];
+  const entries = readdirSync(root).sort();
+  return entries.flatMap((entry) => {
+    const childRelative = relative ? `${relative}/${entry}` : entry;
+    const child = join(root, entry);
+    return lstatSync(child).isDirectory()
+      ? [`${childRelative}/`, ...recursiveInventory(child, childRelative)]
+      : [childRelative];
+  });
+}
+
 function expectNoLocalDatabase(root: string, explicitPath: string): void {
   expect(existsSync(explicitPath)).toBe(false);
   expect(existsSync(join(root, ".todos"))).toBe(false);
   expect(existsSync(join(root, ".hasna", "todos", "todos.db"))).toBe(false);
   expect(existsSync(join(root, ".hasna", "todos"))).toBe(false);
+}
+
+function registeredCliNames(): Set<string> {
+  const files = [
+    join(REPO_ROOT, "src/cli/index.tsx"),
+    ...readdirSync(join(REPO_ROOT, "src/cli/commands"))
+      .filter((name) => /\.tsx?$/.test(name))
+      .map((name) => join(REPO_ROOT, "src/cli/commands", name)),
+  ];
+  const names = new Set<string>(["help"]);
+  const rootCommand = (expression: ts.Expression): string | null => {
+    let current = expression;
+    while (ts.isCallExpression(current) && ts.isPropertyAccessExpression(current.expression)) {
+      const property = current.expression;
+      if (property.name.text === "command" && ts.isIdentifier(property.expression) && property.expression.text === "program") {
+        const argument = current.arguments[0];
+        return argument && ts.isStringLiteral(argument) ? argument.text.split(/[ <[]/)[0]! : null;
+      }
+      current = property.expression;
+    }
+    return null;
+  };
+  for (const file of files) {
+    const source = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+        const property = node.expression;
+        if (property.name.text === "command" && ts.isIdentifier(property.expression) && property.expression.text === "program") {
+          const argument = node.arguments[0];
+          if (argument && ts.isStringLiteral(argument)) names.add(argument.text.split(/[ <[]/)[0]!);
+        }
+        if (property.name.text === "alias" || property.name.text === "aliases") {
+          const canonical = rootCommand(property.expression);
+          if (canonical) {
+            const argument = node.arguments[0];
+            if (argument && ts.isStringLiteral(argument)) names.add(argument.text);
+            if (argument && ts.isArrayLiteralExpression(argument)) {
+              for (const item of argument.elements) if (ts.isStringLiteral(item)) names.add(item.text);
+            }
+          }
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+  }
+  return names;
 }
 
 beforeAll(async () => {
@@ -69,6 +132,14 @@ afterAll(() => {
 });
 
 describe("remote CLI entrypoint authority boundary", () => {
+  test("every registered canonical command and alias has exactly one Stage-A capability owner", () => {
+    const registered = [...registeredCliNames()].sort();
+    const matrix = getTodosCliCommandCapabilityMatrix();
+    expect([...matrix.keys()].sort()).toEqual(registered);
+    expect([...matrix.values()].filter((owner) => owner === "local-only").length).toBeGreaterThanOrEqual(97);
+    expect([...matrix.values()].every((owner) => ["diagnostic", "remote-http", "local-only"].includes(owner))).toBe(true);
+  });
+
   test("selects HTTP before local-capable command modules initialize", () => {
     const result: TodosCliAuthorityInitialization = initializeTodosCliAuthority(
       ["--json", "status"],
@@ -91,7 +162,208 @@ describe("remote CLI entrypoint authority boundary", () => {
         HASNA_TODOS_API_KEY: "fixture-remote-key",
       },
     )).not.toThrow();
+
+    expect(() => initializeTodosCliAuthority(
+      ["storage", "artifacts", "upload", "--run-id", "status"],
+      {
+        HASNA_TODOS_STORAGE_MODE: "remote",
+        HASNA_TODOS_API_URL: "https://authority.invalid",
+        HASNA_TODOS_API_KEY: "fixture-remote-key",
+      },
+    )).toThrow("REMOTE_COMMAND_UNSUPPORTED");
+    expect(() => initializeTodosCliAuthority(
+      ["config", "--set", "danger=true"],
+      {
+        HASNA_TODOS_STORAGE_MODE: "remote",
+        HASNA_TODOS_API_URL: "https://authority.invalid",
+        HASNA_TODOS_API_KEY: "fixture-remote-key",
+      },
+    )).toThrow("REMOTE_COMMAND_UNSUPPORTED");
+    expect(() => initializeTodosCliAuthority(
+      ["projects", "--add", "/workspace/example", "--dry-run"],
+      {
+        HASNA_TODOS_STORAGE_MODE: "remote",
+        HASNA_TODOS_API_URL: "https://authority.invalid",
+        HASNA_TODOS_API_KEY: "fixture-remote-key",
+      },
+    )).toThrow("REMOTE_COMMAND_UNSUPPORTED");
+
+    for (const args of [
+      ["--project", "--help", "storage", "artifacts", "upload", "--run-id", "status"],
+      ["--agent", "--help", "config", "--set", "danger=true"],
+      ["--session", "--help", "projects", "--dry-run", "--add", "/workspace/example"],
+      ["--unknown-leading", "--help"],
+      ["storage", "--project", "fixture", "status", "extra"],
+      ["config", "--get", "--help"],
+      ["list", "--tags", "one"],
+      ["list", "--tag=one"],
+      ["list", "--recurring"],
+      ["claim", "fixture-agent", "--stale-minutes", "30"],
+      ["claim", "fixture-agent", "--steal-stale"],
+      ["status", "--agent", "fixture-agent"],
+      ["deps", TASK_FIXTURE_ID, "--graph"],
+      ["deps", TASK_FIXTURE_ID, "--direction=up"],
+      ["bulk", "plan", TASK_FIXTURE_ID, "--plan", "fixture-plan"],
+      ["bulk", "unknown", TASK_FIXTURE_ID],
+      ["projects", "--path-prefix", "/tmp", "--deregister", "fixture"],
+      ["plans", "--write-artifacts"],
+    ]) {
+      expect(() => initializeTodosCliAuthority(args, {
+        HASNA_TODOS_STORAGE_MODE: "remote",
+        HASNA_TODOS_API_URL: "https://authority.invalid",
+        HASNA_TODOS_API_KEY: "fixture-remote-key",
+      })).toThrow("REMOTE_COMMAND_UNSUPPORTED");
+    }
+
+    for (const args of [
+      ["storage", "status"],
+      ["config"],
+      ["config", "--get", "completion_guard.enabled"],
+      ["init", "fixture-agent"],
+      ["agents"],
+      ["heartbeat", "fixture-agent"],
+      ["release", "fixture-agent"],
+      ["lock", "11111111-1111-4111-8111-111111111111"],
+      ["unlock", "11111111-1111-4111-8111-111111111111"],
+      ["active"],
+      ["timeline"],
+      ["--project=fixture", "lists"],
+      ["lists", "--project", "fixture", "--json"],
+      ["storage", "--project=fixture", "status"],
+      ["--agent=fixture-agent", "comment", TASK_FIXTURE_ID, "note"],
+      ["history", TASK_FIXTURE_ID],
+      ["approve", TASK_FIXTURE_ID],
+      ["bulk", "done", TASK_FIXTURE_ID],
+      ["deps", TASK_FIXTURE_ID, "--needs", OTHER_TASK_FIXTURE_ID],
+      ["link-commit", TASK_FIXTURE_ID, "abc123"],
+      ["find-commit", "abc123"],
+      ["link-ref", TASK_FIXTURE_ID, "branch/name"],
+      ["find-ref", "branch/name"],
+      ["record-verification", TASK_FIXTURE_ID, "bun test"],
+      ["recap"],
+      ["standup"],
+    ]) {
+      expect(() => initializeTodosCliAuthority(args, {
+        HASNA_TODOS_STORAGE_MODE: "remote",
+        HASNA_TODOS_API_URL: "https://authority.invalid",
+        HASNA_TODOS_API_KEY: "fixture-remote-key",
+      })).not.toThrow();
+    }
   });
+
+  test("built Stage-A adversarial invocations leave synthetic cwd and HOME byte-for-byte absent", async () => {
+    const requests: string[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        requests.push(`${request.method} ${new URL(request.url).pathname}`);
+        return Response.json({ error: "Stage A should have rejected before HTTP" }, { status: 500 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-stage-a-adversarial-"));
+    tempRoots.push(root);
+    const cwd = join(root, "cwd");
+    const home = join(root, "home");
+    mkdirSync(cwd);
+    mkdirSync(home);
+    const localDbPath = join(root, "must-not-exist", "todos.db");
+    const env = {
+      PATH: process.env.PATH ?? "",
+      BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
+      HOME: home,
+      TMPDIR: root,
+      LANG: "C.UTF-8",
+      TODOS_DB_PATH: localDbPath,
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
+      HASNA_TODOS_API_KEY: "fixture-remote-key",
+    };
+    const before = recursiveInventory(cwd);
+    try {
+      for (const args of [
+        ["storage", "artifacts", "upload", "--run-id", "status"],
+        ["storage", "artifacts", "upload", "--run-id", "--help"],
+        ["--project", "--help", "storage", "artifacts", "upload", "--run-id", "status"],
+        ["--unknown-leading", "--help"],
+        ["config", "--set", "danger=true"],
+        ["config", "--get", "--help"],
+        ["projects", "--add", "/workspace/example", "--dry-run"],
+        ["projects", "--update", "example", "--name", "changed", "--dry-run"],
+        ["list", "--tags", "fixture"],
+        ["list", "--recurring"],
+        ["claim", "fixture-agent", "--stale-minutes", "30"],
+        ["claim", "fixture-agent", "--steal-stale"],
+        ["--project", "fixture", "claim", "fixture-agent"],
+        ["--agent", "fixture", "status"],
+        ["deps", TASK_FIXTURE_ID, "--graph"],
+        ["deps", TASK_FIXTURE_ID, "--direction", "up"],
+        ["bulk", "plan", TASK_FIXTURE_ID, "--plan", "fixture-plan"],
+        ["bulk", "unknown", TASK_FIXTURE_ID],
+        ["projects", "--deregister", "fixture", "--path-prefix", "/tmp"],
+        ["plans", "--write-artifacts"],
+        ["agents-normalize"],
+      ]) {
+        const requestCount = requests.length;
+        const result = await runCli(executable, args, env, cwd);
+        expect({ args, exitCode: result.exitCode }).toEqual({ args, exitCode: 1 });
+        expect(result.stderr).toContain("REMOTE_COMMAND_UNSUPPORTED");
+        expect(requests).toHaveLength(requestCount);
+        expect(recursiveInventory(cwd)).toEqual(before);
+        expectNoLocalDatabase(home, localDbPath);
+      }
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("every local-only command family rejects in the built entrypoint before HTTP or filesystem access", async () => {
+    const requests: string[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        requests.push(`${request.method} ${new URL(request.url).pathname}`);
+        return Response.json({ error: "local-only command reached HTTP" }, { status: 500 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-stage-a-local-inventory-"));
+    tempRoots.push(root);
+    const cwd = join(root, "cwd");
+    const home = join(root, "home");
+    mkdirSync(cwd);
+    mkdirSync(home);
+    const localDbPath = join(root, "must-not-exist", "todos.db");
+    const env = {
+      PATH: process.env.PATH ?? "",
+      BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
+      HOME: home,
+      TMPDIR: root,
+      LANG: "C.UTF-8",
+      TODOS_DB_PATH: localDbPath,
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
+      HASNA_TODOS_API_KEY: "fixture-remote-key",
+    };
+    const before = recursiveInventory(cwd);
+    try {
+      const localOnly = [...getTodosCliCommandCapabilityMatrix()]
+        .filter(([, owner]) => owner === "local-only")
+        .map(([command]) => command)
+        .sort();
+      expect(localOnly.length).toBeGreaterThanOrEqual(97);
+      for (const command of localOnly) {
+        const result = await runCli(executable, [command], env, cwd);
+        expect({ command, exitCode: result.exitCode }).toEqual({ command, exitCode: 1 });
+        expect(result.stderr).toContain("REMOTE_COMMAND_UNSUPPORTED");
+        expect(requests).toHaveLength(0);
+        expect(recursiveInventory(cwd)).toEqual(before);
+        expectNoLocalDatabase(home, localDbPath);
+      }
+    } finally {
+      server.stop(true);
+    }
+  }, 45_000);
 
   test("built status command uses /v1 and never opens the local or Postgres adapter", async () => {
     const requests: Array<{ method: string; path: string; authorization: string | null }> = [];
@@ -189,6 +461,213 @@ describe("remote CLI entrypoint authority boundary", () => {
       expect(missingKey.exitCode).toBe(1);
       expect(missingKey.stderr).toContain("REMOTE_API_KEY_MISSING");
       expectNoLocalDatabase(root, localDbPath);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("built safe coordination handlers use only V1 and preserve a synthetic filesystem", async () => {
+    const TASK_ID = "11111111-1111-4111-8111-111111111111";
+    const AGENT_ID = "22222222-2222-4222-8222-222222222222";
+    const requests: Array<{ method: string; path: string; body: Record<string, unknown> }> = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        const body = request.method === "GET" ? {} : await request.json().catch(() => ({})) as Record<string, unknown>;
+        requests.push({ method: request.method, path: `${url.pathname}${url.search}`, body });
+        if (request.headers.get("authorization") !== "Bearer fixture-remote-key") {
+          return Response.json({ error: "fixture auth required" }, { status: 401 });
+        }
+        const agent = { id: AGENT_ID, name: "fixture-agent", last_seen_at: "2026-07-18T00:00:00.000Z" };
+        const task = {
+          id: TASK_ID,
+          short_id: "FIX-1",
+          title: "Fixture task",
+          status: "in_progress",
+          priority: "medium",
+          updated_at: "2026-07-18T00:00:00.000Z",
+        };
+        if (url.pathname === "/v1/agents" && request.method === "POST") return Response.json({ agent }, { status: 201 });
+        if (url.pathname === "/v1/agents" && request.method === "GET") return Response.json({ agents: [agent], count: 1 });
+        if (url.pathname === "/v1/agents/fixture-agent/heartbeat") return Response.json({ agent });
+        if (url.pathname === "/v1/agents/fixture-agent/release") return Response.json({ agent, released: true });
+        if (url.pathname === `/v1/tasks/${TASK_ID}/lock`) return Response.json({ result: { success: true, locked_by: "fixture-agent" } });
+        if (url.pathname === `/v1/tasks/${TASK_ID}/unlock`) return Response.json({ success: true });
+        if (url.pathname === "/v1/tasks" && url.searchParams.get("status") === "in_progress") {
+          return Response.json({ tasks: [task], count: 1, total: 1 });
+        }
+        if (url.pathname === "/v1/activity") return Response.json({ activity: [], count: 0 });
+        return Response.json({ error: `fixture route missing: ${request.method} ${url.pathname}` }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-safe-coordination-"));
+    tempRoots.push(root);
+    const cwd = join(root, "cwd");
+    const home = join(root, "home");
+    mkdirSync(cwd);
+    mkdirSync(home);
+    const localDbPath = join(root, "must-not-exist", "todos.db");
+    const env = {
+      PATH: process.env.PATH ?? "",
+      BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
+      HOME: home,
+      TMPDIR: root,
+      LANG: "C.UTF-8",
+      TODOS_AUTO_PROJECT: "false",
+      TODOS_DB_PATH: localDbPath,
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
+      HASNA_TODOS_API_KEY: "fixture-remote-key",
+    };
+    const before = recursiveInventory(cwd);
+    try {
+      for (const args of [
+        ["--json", "init", "fixture-agent"],
+        ["--json", "agents"],
+        ["--json", "heartbeat", "fixture-agent"],
+        ["--json", "release", "fixture-agent"],
+        ["--agent", "fixture-agent", "--json", "lock", TASK_ID],
+        ["--agent", "fixture-agent", "--json", "unlock", TASK_ID],
+        ["--json", "active"],
+        ["--json", "timeline"],
+      ]) {
+        const result = await runCli(executable, args, env, cwd);
+        expect({ args, exitCode: result.exitCode, stderr: result.stderr }).toEqual({ args, exitCode: 0, stderr: "" });
+        expect(() => JSON.parse(result.stdout)).not.toThrow();
+        expect(recursiveInventory(cwd)).toEqual(before);
+        expectNoLocalDatabase(home, localDbPath);
+      }
+      expect(requests.map((request) => `${request.method} ${request.path}`)).toEqual([
+        "POST /v1/agents",
+        "GET /v1/agents",
+        "POST /v1/agents/fixture-agent/heartbeat",
+        "POST /v1/agents/fixture-agent/release",
+        `POST /v1/tasks/${TASK_ID}/lock`,
+        `POST /v1/tasks/${TASK_ID}/unlock`,
+        "GET /v1/tasks?status=in_progress",
+        "GET /v1/activity?limit=5000",
+      ]);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("built remote done persists every evidence field and rejects invalid confidence before requests", async () => {
+    const TASK_ID = "33333333-3333-4333-8333-333333333333";
+    const requests: Array<{ method: string; path: string; body: Record<string, unknown> }> = [];
+    let advertiseEvidence = false;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+        requests.push({ method: request.method, path: url.pathname, body });
+        if (url.pathname === "/v1/openapi.json") {
+          return Response.json(advertiseEvidence ? {
+            openapi: "3.1.0",
+            paths: {
+              "/v1/tasks/{id}/complete": {
+                post: {
+                  requestBody: {
+                    content: {
+                      "application/json": { schema: { $ref: "#/components/schemas/CompleteTaskInput" } },
+                    },
+                  },
+                },
+              },
+            },
+            components: {
+              schemas: {
+                CompleteTaskInput: {
+                  type: "object",
+                  properties: {
+                    agent_id: { type: "string" },
+                    attachment_ids: { type: "array", items: { type: "string" } },
+                    files_changed: { type: "array", items: { type: "string" } },
+                    test_results: { type: "string" },
+                    commit_hash: { type: "string" },
+                    notes: { type: "string" },
+                    confidence: { type: "number" },
+                  },
+                },
+              },
+            },
+          } : {
+            openapi: "3.1.0",
+            paths: { "/v1/tasks/{id}/complete": { post: { responses: {} } } },
+          });
+        }
+        if (url.pathname === `/v1/tasks/${TASK_ID}/complete`) {
+          return Response.json({ task: { id: TASK_ID, title: "Done", status: "completed", confidence: body.confidence, metadata: { _evidence: body } } });
+        }
+        return Response.json({ error: "fixture route missing" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-done-evidence-"));
+    tempRoots.push(root);
+    const cwd = join(root, "cwd");
+    const home = join(root, "home");
+    mkdirSync(cwd);
+    mkdirSync(home);
+    const localDbPath = join(root, "must-not-exist", "todos.db");
+    const env = {
+      PATH: process.env.PATH ?? "",
+      BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
+      HOME: home,
+      TMPDIR: root,
+      LANG: "C.UTF-8",
+      TODOS_DB_PATH: localDbPath,
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
+      HASNA_TODOS_API_KEY: "fixture-remote-key",
+    };
+    const before = recursiveInventory(cwd);
+    try {
+      const unsupported = await runCli(executable, [
+        "--json", "done", TASK_ID, "--notes", "must not be dropped",
+      ], env, cwd);
+      expect(unsupported.exitCode).toBe(1);
+      expect(unsupported.stderr).toContain("REMOTE_COMPLETION_EVIDENCE_UNSUPPORTED");
+      expect(requests.map((request) => `${request.method} ${request.path}`)).toEqual([
+        "GET /v1/openapi.json",
+      ]);
+
+      advertiseEvidence = true;
+      requests.length = 0;
+      const done = await runCli(executable, [
+        "--agent", "fixture-agent", "--json", "done", TASK_ID,
+        "--attach-ids", "attachment-one,attachment-two",
+        "--files-changed", "src/a.ts,src/b.ts",
+        "--test-results", "12 passed",
+        "--commit-hash", "abc123",
+        "--notes", "verified",
+        "--confidence", "0.85",
+      ], env, cwd);
+      expect({ exitCode: done.exitCode, stderr: done.stderr }).toEqual({ exitCode: 0, stderr: "" });
+      expect(requests).toHaveLength(2);
+      expect(requests[0]).toMatchObject({ method: "GET", path: "/v1/openapi.json" });
+      expect(requests[1]).toEqual({
+        method: "POST",
+        path: `/v1/tasks/${TASK_ID}/complete`,
+        body: {
+          agent_id: "fixture-agent",
+          attachment_ids: ["attachment-one", "attachment-two"],
+          files_changed: ["src/a.ts", "src/b.ts"],
+          test_results: "12 passed",
+          commit_hash: "abc123",
+          notes: "verified",
+          confidence: 0.85,
+        },
+      });
+      const invalid = await runCli(executable, ["--json", "done", TASK_ID, "--confidence", "1.5"], env, cwd);
+      expect(invalid.exitCode).toBe(1);
+      expect(invalid.stderr).toContain("--confidence must be a number between 0.0 and 1.0");
+      expect(requests).toHaveLength(2);
+      expect(recursiveInventory(cwd)).toEqual(before);
+      expectNoLocalDatabase(home, localDbPath);
     } finally {
       server.stop(true);
     }
@@ -395,6 +874,8 @@ describe("remote CLI entrypoint authority boundary", () => {
 
     const root = mkdtempSync(join(tmpdir(), "todos-remote-lifecycle-"));
     tempRoots.push(root);
+    const cwd = join(root, "cwd");
+    mkdirSync(cwd);
     const readOnlyParent = join(root, "read-only-db-parent");
     mkdirSync(readOnlyParent);
     chmodSync(readOnlyParent, 0o555);
@@ -411,6 +892,7 @@ describe("remote CLI entrypoint authority boundary", () => {
       HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_TODOS_API_KEY: "fixture-remote-key",
     };
+    const before = recursiveInventory(cwd);
 
     try {
       const invocations: string[][] = [
@@ -433,6 +915,7 @@ describe("remote CLI entrypoint authority boundary", () => {
         ["--json", "task", "upsert", "--fingerprint", "incident-593127", "--title", "Upserted task", "--project", PROJECT_ID, "--list", LIST_ID],
         ["--project", PROJECT_ID, "--json", "list", "--list", LIST_ID],
         ["--json", "show", "REMOTE-1"],
+        ["--json", "inspect", "REMOTE-1"],
         ["--json", "update", "REMOTE-1", "--title", "Moved task", "--list", LIST_ID, "--plan", PLAN_ID],
         ["--json", "comment", "REMOTE-1", "remote comment"],
         ["--json", "start", "REMOTE-1"],
@@ -446,13 +929,14 @@ describe("remote CLI entrypoint authority boundary", () => {
       ];
 
       for (const invocation of invocations) {
-        const result = await runCli(executable, invocation, env);
+        const result = await runCli(executable, invocation, env, cwd);
         expect({ invocation, exitCode: result.exitCode, stderr: result.stderr }).toEqual({
           invocation,
           exitCode: 0,
           stderr: "",
         });
         expect(() => JSON.parse(result.stdout)).not.toThrow();
+        expect(recursiveInventory(cwd)).toEqual(before);
         expectNoLocalDatabase(root, localDbPath);
       }
 
@@ -466,7 +950,7 @@ describe("remote CLI entrypoint authority boundary", () => {
       const invalidMode = await runCli(executable, ["--json", "projects"], {
         ...env,
         HASNA_TODOS_STORAGE_MODE: "remtoe",
-      });
+      }, cwd);
       expect(invalidMode.exitCode).toBe(1);
       expect(invalidMode.stderr).toContain("REMOTE_STORAGE_MODE_INVALID");
       expectNoLocalDatabase(root, localDbPath);
@@ -475,22 +959,21 @@ describe("remote CLI entrypoint authority boundary", () => {
         ...env,
         HASNA_TODOS_STORAGE_MODE: "",
         TODOS_STORAGE_MODE: "remote",
-      });
-      expect({ exitCode: blankCanonical.exitCode, stderr: blankCanonical.stderr }).toEqual({ exitCode: 0, stderr: "" });
-      expect(Array.isArray(JSON.parse(blankCanonical.stdout))).toBe(true);
+      }, cwd);
+      expect(blankCanonical.exitCode).toBe(1);
+      expect(blankCanonical.stderr).toContain("REMOTE_STORAGE_MODE_INVALID");
       expectNoLocalDatabase(root, localDbPath);
 
       const conflictingModes = await runCli(executable, ["--json", "projects"], {
         ...env,
         HASNA_TODOS_STORAGE_MODE: "local",
         TODOS_STORAGE_MODE: "remote",
-      });
+      }, cwd);
       expect(conflictingModes.exitCode).toBe(1);
       expect(conflictingModes.stderr).toContain("REMOTE_STORAGE_MODE_CONFLICT");
       expectNoLocalDatabase(root, localDbPath);
 
       for (const unsupported of [
-        ["--json", "inspect", "REMOTE-1"],
         ["--json", "projects", "--deregister", PROJECT_ID],
         ["--json", "projects", `--deregister=${PROJECT_ID}`],
         ["--json", "doctor", "--apply"],
@@ -500,10 +983,11 @@ describe("remote CLI entrypoint authority boundary", () => {
         [`--project=${PROJECT_ID}`, "--json", "claim", "fixture-worker"],
       ]) {
         const requestCount = requests.length;
-        const result = await runCli(executable, unsupported, env);
+        const result = await runCli(executable, unsupported, env, cwd);
         expect(result.exitCode).toBe(1);
         expect(result.stderr).toContain("REMOTE_COMMAND_UNSUPPORTED");
         expect(requests).toHaveLength(requestCount);
+        expect(recursiveInventory(cwd)).toEqual(before);
         expectNoLocalDatabase(root, localDbPath);
       }
     } finally {
