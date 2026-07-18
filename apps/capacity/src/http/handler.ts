@@ -646,6 +646,10 @@ async function handleInternal(
 ): Promise<Response> {
   requireMethod(request, "POST");
   const definition = {
+    "/internal/v1/native-subscriptions/probe": ["accounts:read", "probeNativeSubscription"],
+    "/internal/v1/capsule-maintenance/grants": ["accounts:credentials:request", "issueCapsuleMaintenanceGrant"],
+    "/internal/v1/capsule-maintenance/consume": ["accounts:credentials:issue", "consumeCapsuleMaintenanceGrant"],
+    "/internal/v1/capability-uses/consume": ["accounts:generation:check", "consumeCapabilityUse"],
     "/internal/v1/slot-eligibility": ["accounts:eligibility:issue", "issueSlotEligibility"],
     "/internal/v1/generation-check": ["accounts:generation:check", "checkGeneration"],
     "/internal/v1/capacity-pool-evidence": ["accounts:capacity-pools:attest", "ingestCapacityPoolEvidence"],

@@ -2,7 +2,14 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
-import { PACKAGE_VERSION, newAccessMethodId, serializeRecordEnvelope } from "../../src/index";
+import {
+  NATIVE_SUBSCRIPTION_PROBE_REQUEST_SCHEMA_VERSION,
+  PACKAGE_VERSION,
+  canonicalJson,
+  newAccessMethodId,
+  parseCounter,
+  serializeRecordEnvelope,
+} from "../../src/index";
 import { makeFixtureGraph } from "../fixtures";
 
 const TEMP_ROOT = join(import.meta.dir, "..", "..", ".tmp", "cli-tests");
@@ -74,6 +81,72 @@ describe("accounts CLI", () => {
     const result = await runCli(["validate", filename, "--json"]);
     expect(result.exitCode).toBe(0);
     expect(JSON.parse(result.stdout).data).toEqual({ valid: true, documentKind: "account" });
+  });
+
+  test("runs credential- and network-free PROBE_NATIVE without database configuration", async () => {
+    const directory = mkdtempSync(join(TEMP_ROOT, "probe-native-"));
+    cleanup.push(directory);
+    const requestFile = join(directory, "request.json");
+    const snapshotFile = join(directory, "snapshot.json");
+    const owner = "principal:human:hasna:owner-a";
+    const ids = [1, 2, 3, 4, 5].map(
+      (value) => `018f0f00-000${value}-7000-8000-00000000000${value}`,
+    );
+    const request = {
+      schema_version: NATIVE_SUBSCRIPTION_PROBE_REQUEST_SCHEMA_VERSION,
+      command: "PROBE_NATIVE",
+      owner_ref: owner,
+      provider_account_id: ids[0],
+      subscription_id: ids[1],
+      account_lane_id: ids[2],
+      auth_capsule_id: ids[3],
+      canonical_node_id: ids[4],
+      node_key_thumbprint: `sha256:${"0".repeat(64)}`,
+      node_generation: parseCounter("1"),
+      placement_generation: parseCounter("1"),
+      auth_generation: parseCounter("2"),
+      auth_state_revision: parseCounter("2"),
+    } as const;
+    const snapshot = {
+      ownerRef: owner,
+      providerAccountId: ids[0],
+      subscriptionId: ids[1],
+      accountLaneId: ids[2],
+      authCapsuleId: ids[3],
+      canonicalNodeId: ids[4],
+      nodeKeyThumbprint: request.node_key_thumbprint,
+      nodeGeneration: request.node_generation,
+      placementGeneration: request.placement_generation,
+      authGeneration: request.auth_generation,
+      authStateRevision: request.auth_state_revision,
+      accountRevision: parseCounter("2"),
+      capsuleRevision: parseCounter("2"),
+      accountStatus: "active",
+      subscriptionStatus: "active",
+      accountLaneStatus: "ready",
+      capsuleStatus: "ready",
+      liveLeaseCount: parseCounter("0"),
+      drainState: "drained",
+      zeroLiveEvidenceDigest: `sha256:${"1".repeat(64)}`,
+      drainEvidenceDigest: `sha256:${"2".repeat(64)}`,
+      evidenceExpiresAt: "2099-01-01T00:00:00.000Z",
+    } as const;
+    await Bun.write(requestFile, canonicalJson(request));
+    await Bun.write(snapshotFile, canonicalJson(snapshot));
+
+    const result = await runCli([
+      "probe-native",
+      requestFile,
+      snapshotFile,
+      "--owner",
+      owner,
+      "--json",
+    ]);
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout).data).toMatchObject({
+      capability_eligible: true,
+      maintenance_ready: true,
+    });
   });
 
   test("invalid validation input is not echoed", async () => {

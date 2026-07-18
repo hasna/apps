@@ -150,6 +150,26 @@ export interface HttpIdempotencyStore {
 }
 
 export interface InternalHttpService {
+  /** Credential- and network-free PROBE_NATIVE. It cannot mint or consume a grant. */
+  probeNativeSubscription?(
+    body: unknown,
+    principal: AccountsAuthenticatedPrincipal,
+  ): Promise<Readonly<Record<string, unknown>>>;
+  /** Accounts-only closed maintenance reservation/grant issuance. */
+  issueCapsuleMaintenanceGrant?(
+    body: unknown,
+    principal: AccountsAuthenticatedPrincipal,
+  ): Promise<Readonly<Record<string, unknown>>>;
+  /** Accounts-only atomic one-use maintenance grant consumption. */
+  consumeCapsuleMaintenanceGrant?(
+    body: unknown,
+    principal: AccountsAuthenticatedPrincipal,
+  ): Promise<Readonly<Record<string, unknown>>>;
+  /** Accounts-owned atomic one-use capability ordinal consumption. */
+  consumeCapabilityUse?(
+    body: unknown,
+    principal: AccountsAuthenticatedPrincipal,
+  ): Promise<Readonly<Record<string, unknown>>>;
   /** Returns a verified, signed snake_case wire object or fails closed. */
   issueSlotEligibility?(
     body: unknown,

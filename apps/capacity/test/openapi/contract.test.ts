@@ -35,6 +35,10 @@ describe("accounts.capacity.v1 OpenAPI", () => {
       "/v1/credential-bindings",
       "/v1/credential-operations",
       "/v1/capacity/query",
+      "/internal/v1/native-subscriptions/probe",
+      "/internal/v1/capsule-maintenance/grants",
+      "/internal/v1/capsule-maintenance/consume",
+      "/internal/v1/capability-uses/consume",
       "/internal/v1/slot-eligibility",
       "/internal/v1/generation-check",
       "/internal/v1/capacity-pool-evidence",
@@ -45,10 +49,38 @@ describe("accounts.capacity.v1 OpenAPI", () => {
       "/version",
       "/openapi.json",
     ]));
+    const exactConsumeRoutes = new Set([
+      "/internal/v1/capsule-maintenance/consume",
+      "/internal/v1/capability-uses/consume",
+    ]);
     for (const path of paths) {
-      expect(path).not.toMatch(/profile|current|tool|launch|apply|switch|device|provider-login|consume|reauthenticate|lease/i);
+      expect(path).not.toMatch(/profile|current|tool|launch|apply|switch|device|provider-login|reauthenticate|lease/i);
+      if (!exactConsumeRoutes.has(path)) expect(path).not.toMatch(/consume/i);
       expect(path).not.toMatch(/tenant|signup|invite|billing/i);
     }
+  });
+
+  test("freezes exact closed native maintenance and capability-use command schemas", () => {
+    const schemas = document.components.schemas;
+    const probe = schemas.NativeSubscriptionProbeRequest!;
+    expect(probe.additionalProperties).toBe(false);
+    expect((probe.properties as Record<string, Record<string, unknown>>).command!.const).toBe("PROBE_NATIVE");
+
+    const maintenance = schemas.CapsuleMaintenanceRequest!;
+    const properties = maintenance.properties as Record<string, Record<string, unknown>>;
+    expect(maintenance.additionalProperties).toBe(false);
+    expect(properties.command!.enum).toEqual(expect.arrayContaining([
+      "BEGIN_REAUTH",
+      "REVOKE_CAPSULE",
+      "REVOKE_ACCOUNT",
+    ]));
+    expect(properties.zero_live_evidence_digest).toBeDefined();
+    expect(properties.drain_evidence_digest).toBeDefined();
+
+    const capability = schemas.CapabilityUseConsumeRequest!;
+    expect(capability.additionalProperties).toBe(false);
+    expect((capability.properties as Record<string, Record<string, unknown>>).expected_use_count!.const).toBe("0");
+    expect((capability.properties as Record<string, Record<string, unknown>>).max_uses!.const).toBe("1");
   });
 
   test("uses closed state-specific unions for every mutable resource", () => {

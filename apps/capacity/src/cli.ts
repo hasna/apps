@@ -18,10 +18,13 @@ import {
   parseClosedJsonBytes,
   parseCredentialBindingId,
   parseEntitlementId,
+  evaluateNativeSubscriptionProbe,
+  StaticNativeSubscriptionSnapshotSource,
   PACKAGE_VERSION,
   toErrorEnvelope,
   validateSlotEligibility,
   type EntityKind,
+  type NativeSubscriptionBindingSnapshot,
 } from "./index";
 
 const CLI_SCHEMA_VERSION = "accounts.cli.v1" as const;
@@ -54,6 +57,9 @@ export async function runAccountsCli(argv: readonly string[]): Promise<number> {
       return 0;
     }
     if (command === "validate") return await validateCommand(positionals, parsed.flags, jsonRequested);
+    if (command === "probe-native") {
+      return await probeNativeCommand(positionals, parsed.flags, jsonRequested);
+    }
 
     const catalog = createLocalCatalog();
     try {
@@ -175,10 +181,31 @@ async function validateCommand(
   return 0;
 }
 
+async function probeNativeCommand(
+  positionals: readonly string[],
+  flags: Readonly<Record<string, string | true>>,
+  jsonRequested: boolean,
+): Promise<number> {
+  requirePositionals(positionals, 2, "probe-native");
+  const ownerRef = requiredFlag(flags, "owner");
+  const request = parseClosedJsonBytes(
+    new Uint8Array(await Bun.file(resolve(positionals[0]!)).arrayBuffer()),
+  );
+  const snapshot = parseClosedJsonBytes(
+    new Uint8Array(await Bun.file(resolve(positionals[1]!)).arrayBuffer()),
+  );
+  const source = new StaticNativeSubscriptionSnapshotSource([
+    snapshot as NativeSubscriptionBindingSnapshot,
+  ]);
+  const result = await evaluateNativeSubscriptionProbe(request, source, ownerRef);
+  output(jsonRequested, "probe-native", result);
+  return result.capability_eligible ? 0 : 7;
+}
+
 function parseArguments(argv: readonly string[]): ParsedArguments {
   const positionals: string[] = [];
   const flags: Record<string, string | true> = Object.create(null) as Record<string, string | true>;
-  const valueFlags = new Set(["operation", "model", "data-classification", "destination-policy-class"]);
+  const valueFlags = new Set(["operation", "model", "data-classification", "destination-policy-class", "owner"]);
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]!;
     if (!argument.startsWith("--")) {
@@ -253,6 +280,7 @@ function output(json: boolean, command: string, data: unknown): void {
 function usageText(): string {
   return [
     "accounts validate <file|-> [--json]",
+    "accounts probe-native <request-file> <snapshot-file> --owner <principal> [--json]",
     "accounts doctor [--json]",
     "accounts list <accounts|entitlements|capacity-pools|access-methods|auth-capsules|credential-bindings> [--json]",
     "accounts get <noun> <uuidv7> [--json]",

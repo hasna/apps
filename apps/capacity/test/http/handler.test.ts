@@ -317,4 +317,50 @@ describe("Accounts capacity HTTP boundary", () => {
     expect(response.status).toBe(422);
     expect(called).toBe(false);
   });
+
+  test("dispatches distinct Accounts-owned native probe, maintenance, and capability-use APIs", async () => {
+    const catalog = new FakeCatalog();
+    const graph = makeFixtureGraph("native_session");
+    catalog.records.get("account")!.push(graph.account);
+    catalog.records.get("entitlement")!.push(graph.entitlement);
+    catalog.records.get("access_method")!.push(graph.method);
+    const calls: string[] = [];
+    const result = async (name: string) => {
+      calls.push(name);
+      return { schema_version: `accounts.${name}-result/v1`, ok: true } as const;
+    };
+    const handler = handlerFor(
+      catalog,
+      principal(ACTOR_REF, [
+        "accounts:read",
+        "accounts:credentials:request",
+        "accounts:credentials:issue",
+        "accounts:generation:check",
+      ], { audience: "dynamic" }),
+      {
+        internal: {
+          probeNativeSubscription: async () => result("probe-native"),
+          issueCapsuleMaintenanceGrant: async () => result("maintenance-grant"),
+          consumeCapsuleMaintenanceGrant: async () => result("maintenance-consume"),
+          consumeCapabilityUse: async () => result("capability-use-consume"),
+        },
+      },
+    );
+    const body = { account_lane_id: graph.method.id };
+    for (const route of [
+      "/internal/v1/native-subscriptions/probe",
+      "/internal/v1/capsule-maintenance/grants",
+      "/internal/v1/capsule-maintenance/consume",
+      "/internal/v1/capability-uses/consume",
+    ]) {
+      const response = await handler(jsonRequest(route, body));
+      expect(response.status).toBe(200);
+    }
+    expect(calls).toEqual([
+      "probe-native",
+      "maintenance-grant",
+      "maintenance-consume",
+      "capability-use-consume",
+    ]);
+  });
 });

@@ -2539,6 +2539,386 @@
         }
       }
     },
+    "/internal/v1/native-subscriptions/probe": {
+      "post": {
+        "operationId": "probeNativeSubscription",
+        "description": "Credential- and network-free PROBE_NATIVE. This route cannot reserve or mutate state.",
+        "security": [
+          {
+            "capacityBearer": [
+              "accounts:read"
+            ]
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NativeSubscriptionProbeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeSubscriptionProbeResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid closed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authentication, scope, or owner denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, including cross-owner identifiers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Revision or idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Policy denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Required authority unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/capsule-maintenance/grants": {
+      "post": {
+        "operationId": "issueCapsuleMaintenanceGrant",
+        "description": "Accounts-only one-use maintenance reservation bound to exact zero-live and drain evidence.",
+        "security": [
+          {
+            "capacityBearer": [
+              "accounts:credentials:request"
+            ]
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CapsuleMaintenanceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapsuleMaintenanceGrant"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid closed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authentication, scope, or owner denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, including cross-owner identifiers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Revision or idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Policy denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Required authority unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/capsule-maintenance/consume": {
+      "post": {
+        "operationId": "consumeCapsuleMaintenanceGrant",
+        "description": "Atomically consumes one Accounts-issued maintenance grant.",
+        "security": [
+          {
+            "capacityBearer": [
+              "accounts:credentials:issue"
+            ]
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CapsuleMaintenanceConsumeCommand"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapsuleMaintenanceConsumeReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid closed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authentication, scope, or owner denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, including cross-owner identifiers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Revision or idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Policy denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Required authority unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/capability-uses/consume": {
+      "post": {
+        "operationId": "consumeCapabilityUse",
+        "description": "Accounts-owned atomic one-use capability ordinal consumption.",
+        "security": [
+          {
+            "capacityBearer": [
+              "accounts:generation:check"
+            ]
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CapabilityUseConsumeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilityUseConsumeResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid closed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authentication, scope, or owner denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, including cross-owner identifiers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Revision or idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Policy denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Required authority unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/v1/slot-eligibility": {
       "post": {
         "operationId": "issueSlotEligibility",
@@ -14252,6 +14632,1139 @@
               "reason_codes"
             ],
             "title": "UnresolvedIneligibleSlotEligibilityWire"
+          }
+        ]
+      },
+      "NativeSubscriptionProbeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "accounts.native-subscription-probe-request/v1"
+          },
+          "command": {
+            "type": "string",
+            "const": "PROBE_NATIVE"
+          },
+          "owner_ref": {
+            "type": "string",
+            "pattern": "^principal:(human|service):hasna:[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            "maxLength": 160
+          },
+          "provider_account_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "subscription_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "account_lane_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "auth_capsule_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "canonical_node_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "node_key_thumbprint": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "node_generation": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "placement_generation": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "auth_generation": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "auth_state_revision": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          }
+        },
+        "required": [
+          "schema_version",
+          "command",
+          "owner_ref",
+          "provider_account_id",
+          "subscription_id",
+          "account_lane_id",
+          "auth_capsule_id",
+          "canonical_node_id",
+          "node_key_thumbprint",
+          "node_generation",
+          "placement_generation",
+          "auth_generation",
+          "auth_state_revision"
+        ]
+      },
+      "NativeSubscriptionProbeResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "accounts.native-subscription-probe-result/v1"
+          },
+          "capability_eligible": {
+            "type": "boolean"
+          },
+          "maintenance_ready": {
+            "type": "boolean"
+          },
+          "reason_codes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+              "maxLength": 64
+            },
+            "uniqueItems": true
+          },
+          "owner_ref": {
+            "type": "string",
+            "pattern": "^principal:(human|service):hasna:[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            "maxLength": 160
+          },
+          "provider_account_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "subscription_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "account_lane_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "auth_capsule_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "canonical_node_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "node_key_thumbprint": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "node_generation": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "placement_generation": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "auth_generation": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "auth_state_revision": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "account_revision": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "capsule_revision": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "account_status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "suspended",
+              "revoked"
+            ]
+          },
+          "subscription_status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "paused",
+              "expired",
+              "revoked"
+            ]
+          },
+          "account_lane_status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "draining",
+              "disabled",
+              "retired"
+            ]
+          },
+          "capsule_status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "degraded",
+              "maintenance",
+              "quiescing",
+              "revoked"
+            ]
+          },
+          "live_lease_count": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "drain_state": {
+            "type": "string",
+            "enum": [
+              "not_started",
+              "draining",
+              "drained"
+            ]
+          },
+          "zero_live_evidence_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "drain_evidence_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "evidence_expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "binding_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "schema_version",
+          "capability_eligible",
+          "maintenance_ready",
+          "reason_codes",
+          "owner_ref",
+          "provider_account_id",
+          "subscription_id",
+          "account_lane_id",
+          "auth_capsule_id",
+          "canonical_node_id",
+          "node_key_thumbprint",
+          "node_generation",
+          "placement_generation",
+          "auth_generation",
+          "auth_state_revision",
+          "account_revision",
+          "capsule_revision",
+          "account_status",
+          "subscription_status",
+          "account_lane_status",
+          "capsule_status",
+          "live_lease_count",
+          "drain_state",
+          "zero_live_evidence_digest",
+          "drain_evidence_digest",
+          "evidence_expires_at",
+          "binding_digest"
+        ]
+      },
+      "CapsuleMaintenanceRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "accounts.capsule-maintenance-request/v1"
+          },
+          "owner_ref": {
+            "type": "string",
+            "pattern": "^principal:(human|service):hasna:[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            "maxLength": 160
+          },
+          "provider_account_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "subscription_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "account_lane_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "auth_capsule_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "canonical_node_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "node_key_thumbprint": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "node_generation": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "placement_generation": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "auth_generation": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "auth_state_revision": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "target_kind": {
+            "type": "string",
+            "enum": [
+              "account_record",
+              "native_capsule"
+            ]
+          },
+          "command": {
+            "type": "string",
+            "enum": [
+              "SUSPEND_ACCOUNT",
+              "RESUME_ACCOUNT",
+              "REVOKE_ACCOUNT",
+              "REFRESH_CAPSULE",
+              "BEGIN_REAUTH",
+              "ROTATE_CAPSULE",
+              "REVOKE_CAPSULE"
+            ]
+          },
+          "expected_target_revision": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "zero_live_evidence_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "drain_evidence_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "idempotency_key_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "schema_version",
+          "owner_ref",
+          "provider_account_id",
+          "subscription_id",
+          "account_lane_id",
+          "auth_capsule_id",
+          "canonical_node_id",
+          "node_key_thumbprint",
+          "node_generation",
+          "placement_generation",
+          "auth_generation",
+          "auth_state_revision",
+          "target_kind",
+          "command",
+          "expected_target_revision",
+          "zero_live_evidence_digest",
+          "drain_evidence_digest",
+          "idempotency_key_digest"
+        ]
+      },
+      "CapsuleMaintenanceGrant": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "accounts.capsule-maintenance/v1"
+          },
+          "owner_ref": {
+            "type": "string",
+            "pattern": "^principal:(human|service):hasna:[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            "maxLength": 160
+          },
+          "provider_account_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "subscription_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "account_lane_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "auth_capsule_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "canonical_node_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "node_key_thumbprint": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "node_generation": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "placement_generation": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "auth_generation": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "auth_state_revision": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "target_kind": {
+            "type": "string",
+            "enum": [
+              "account_record",
+              "native_capsule"
+            ]
+          },
+          "command": {
+            "type": "string",
+            "enum": [
+              "SUSPEND_ACCOUNT",
+              "RESUME_ACCOUNT",
+              "REVOKE_ACCOUNT",
+              "REFRESH_CAPSULE",
+              "BEGIN_REAUTH",
+              "ROTATE_CAPSULE",
+              "REVOKE_CAPSULE"
+            ]
+          },
+          "expected_target_revision": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "zero_live_evidence_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "drain_evidence_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "idempotency_key_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "grant_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "issuer": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$",
+            "maxLength": 255
+          },
+          "issuer_incarnation": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$",
+            "maxLength": 255
+          },
+          "key_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$",
+            "maxLength": 255
+          },
+          "audience": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$",
+            "maxLength": 255
+          },
+          "request_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "issued_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "signature": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "schema_version",
+          "owner_ref",
+          "provider_account_id",
+          "subscription_id",
+          "account_lane_id",
+          "auth_capsule_id",
+          "canonical_node_id",
+          "node_key_thumbprint",
+          "node_generation",
+          "placement_generation",
+          "auth_generation",
+          "auth_state_revision",
+          "target_kind",
+          "command",
+          "expected_target_revision",
+          "zero_live_evidence_digest",
+          "drain_evidence_digest",
+          "idempotency_key_digest",
+          "grant_id",
+          "issuer",
+          "issuer_incarnation",
+          "key_id",
+          "audience",
+          "request_digest",
+          "issued_at",
+          "expires_at",
+          "signature"
+        ]
+      },
+      "CapsuleMaintenanceConsumeCommand": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "account_lane_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "grant": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "schema_version": {
+                "type": "string",
+                "const": "accounts.capsule-maintenance/v1"
+              },
+              "owner_ref": {
+                "type": "string",
+                "pattern": "^principal:(human|service):hasna:[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                "maxLength": 160
+              },
+              "provider_account_id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              },
+              "subscription_id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              },
+              "account_lane_id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              },
+              "auth_capsule_id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              },
+              "canonical_node_id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              },
+              "node_key_thumbprint": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "node_generation": {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]{0,18})$",
+                "maxLength": 19
+              },
+              "placement_generation": {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]{0,18})$",
+                "maxLength": 19
+              },
+              "auth_generation": {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]{0,18})$",
+                "maxLength": 19
+              },
+              "auth_state_revision": {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]{0,18})$",
+                "maxLength": 19
+              },
+              "target_kind": {
+                "type": "string",
+                "enum": [
+                  "account_record",
+                  "native_capsule"
+                ]
+              },
+              "command": {
+                "type": "string",
+                "enum": [
+                  "SUSPEND_ACCOUNT",
+                  "RESUME_ACCOUNT",
+                  "REVOKE_ACCOUNT",
+                  "REFRESH_CAPSULE",
+                  "BEGIN_REAUTH",
+                  "ROTATE_CAPSULE",
+                  "REVOKE_CAPSULE"
+                ]
+              },
+              "expected_target_revision": {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]{0,18})$",
+                "maxLength": 19
+              },
+              "zero_live_evidence_digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "drain_evidence_digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "idempotency_key_digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "grant_id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              },
+              "issuer": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$",
+                "maxLength": 255
+              },
+              "issuer_incarnation": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$",
+                "maxLength": 255
+              },
+              "key_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$",
+                "maxLength": 255
+              },
+              "audience": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$",
+                "maxLength": 255
+              },
+              "request_digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "issued_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "expires_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "signature": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              }
+            },
+            "required": [
+              "schema_version",
+              "owner_ref",
+              "provider_account_id",
+              "subscription_id",
+              "account_lane_id",
+              "auth_capsule_id",
+              "canonical_node_id",
+              "node_key_thumbprint",
+              "node_generation",
+              "placement_generation",
+              "auth_generation",
+              "auth_state_revision",
+              "target_kind",
+              "command",
+              "expected_target_revision",
+              "zero_live_evidence_digest",
+              "drain_evidence_digest",
+              "idempotency_key_digest",
+              "grant_id",
+              "issuer",
+              "issuer_incarnation",
+              "key_id",
+              "audience",
+              "request_digest",
+              "issued_at",
+              "expires_at",
+              "signature"
+            ]
+          },
+          "consume_request": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "schema_version": {
+                "type": "string",
+                "const": "accounts.capsule-maintenance-consume-request/v1"
+              },
+              "grant_id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              },
+              "operation_id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              },
+              "request_digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "idempotency_key_digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              }
+            },
+            "required": [
+              "schema_version",
+              "grant_id",
+              "operation_id",
+              "request_digest",
+              "idempotency_key_digest"
+            ]
+          }
+        },
+        "required": [
+          "account_lane_id",
+          "grant",
+          "consume_request"
+        ]
+      },
+      "CapsuleMaintenanceConsumeReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "accounts.capsule-maintenance-consume-receipt/v1"
+          },
+          "grant_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "operation_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "issuer": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$",
+            "maxLength": 255
+          },
+          "issuer_incarnation": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$",
+            "maxLength": 255
+          },
+          "key_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$",
+            "maxLength": 255
+          },
+          "audience": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$",
+            "maxLength": 255
+          },
+          "target_kind": {
+            "type": "string",
+            "enum": [
+              "account_record",
+              "native_capsule"
+            ]
+          },
+          "command": {
+            "type": "string",
+            "enum": [
+              "SUSPEND_ACCOUNT",
+              "RESUME_ACCOUNT",
+              "REVOKE_ACCOUNT",
+              "REFRESH_CAPSULE",
+              "BEGIN_REAUTH",
+              "ROTATE_CAPSULE",
+              "REVOKE_CAPSULE"
+            ]
+          },
+          "owner_ref": {
+            "type": "string",
+            "pattern": "^principal:(human|service):hasna:[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            "maxLength": 160
+          },
+          "provider_account_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "subscription_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "account_lane_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "auth_capsule_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "canonical_node_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "node_key_thumbprint": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "auth_generation": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "auth_state_revision": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "grant_request_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "consume_request_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "consumed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "signature": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "schema_version",
+          "grant_id",
+          "operation_id",
+          "issuer",
+          "issuer_incarnation",
+          "key_id",
+          "audience",
+          "target_kind",
+          "command",
+          "owner_ref",
+          "provider_account_id",
+          "subscription_id",
+          "account_lane_id",
+          "auth_capsule_id",
+          "canonical_node_id",
+          "node_key_thumbprint",
+          "auth_generation",
+          "auth_state_revision",
+          "grant_request_digest",
+          "consume_request_digest",
+          "consumed_at",
+          "signature"
+        ]
+      },
+      "CapabilityUseConsumeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "accounts.capability-use-consume-request.v1"
+          },
+          "schema_digest": {
+            "type": "string",
+            "const": "sha256:a7cdc1dfbebeaea3bad6a5014cfb5189be40fb010f57161b46437458492cd1bc"
+          },
+          "consume_request_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "capability_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "capability_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "nonce": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$",
+            "maxLength": 255
+          },
+          "subject": {
+            "type": "string",
+            "pattern": "^principal:(human|service):hasna:[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            "maxLength": 160
+          },
+          "actor_principal": {
+            "type": "string",
+            "pattern": "^principal:(human|service):hasna:[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            "maxLength": 160
+          },
+          "account_lane_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "capacity_pool_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "capacity_domain_ref": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$",
+            "maxLength": 255
+          },
+          "credential_family_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$",
+            "maxLength": 255
+          },
+          "resource_lease_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "resource_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$",
+            "maxLength": 255
+          },
+          "resource_lifecycle_generation": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "operation_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "operation_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "operation_execution_epoch": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "sender_key_thumbprint": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "channel_binding_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "canonical_request_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "provider_destination_policy_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "online_receipt_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "online_receipt_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "model_call_anchor_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "expected_use_count": {
+            "type": "string",
+            "const": "0"
+          },
+          "max_uses": {
+            "type": "string",
+            "const": "1"
+          },
+          "not_after": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "idempotency_key_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "schema_version",
+          "schema_digest",
+          "consume_request_id",
+          "capability_id",
+          "capability_digest",
+          "nonce",
+          "subject",
+          "actor_principal",
+          "account_lane_id",
+          "capacity_pool_id",
+          "capacity_domain_ref",
+          "credential_family_id",
+          "resource_lease_id",
+          "resource_id",
+          "resource_lifecycle_generation",
+          "operation_id",
+          "operation_digest",
+          "operation_execution_epoch",
+          "sender_key_thumbprint",
+          "channel_binding_digest",
+          "canonical_request_digest",
+          "provider_destination_policy_digest",
+          "online_receipt_id",
+          "online_receipt_digest",
+          "model_call_anchor_digest",
+          "expected_use_count",
+          "max_uses",
+          "not_after",
+          "idempotency_key_digest"
+        ]
+      },
+      "CapabilityUseConsumeResult": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "consumed",
+                  "replayed"
+                ]
+              },
+              "signed_receipt": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]+$"
+              }
+            },
+            "required": [
+              "status",
+              "signed_receipt"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "idempotency_conflict",
+                  "conflict",
+                  "exhausted"
+                ]
+              }
+            },
+            "required": [
+              "status"
+            ]
           }
         ]
       },

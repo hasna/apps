@@ -174,6 +174,37 @@ export type {
   VerifiedAllowedOnlineGenerationCheckReceipt,
   VerifiedOnlineGenerationCheckReceipt,
 } from "./domain/online-generation-receipt";
+export {
+  CAPSULE_MAINTENANCE_CONSUME_RECEIPT_SCHEMA_VERSION,
+  CAPSULE_MAINTENANCE_CONSUME_REQUEST_SCHEMA_VERSION,
+  CAPSULE_MAINTENANCE_GRANT_SCHEMA_VERSION,
+  CAPSULE_MAINTENANCE_REQUEST_SCHEMA_VERSION,
+  NATIVE_SUBSCRIPTION_PROBE_REQUEST_SCHEMA_VERSION,
+  NATIVE_SUBSCRIPTION_PROBE_RESULT_SCHEMA_VERSION,
+  CapsuleMaintenanceAuthority,
+  InMemoryNativeCapabilityUseStore,
+  StaticNativeSubscriptionSnapshotSource,
+  evaluateNativeSubscriptionProbe,
+  parseNativeSubscriptionProbeRequest,
+  verifyCapsuleMaintenanceGrant,
+} from "./domain/native-subscription";
+export type {
+  CapsuleMaintenanceAuthorityOptions,
+  CapsuleMaintenanceCommand,
+  CapsuleMaintenanceConsumeReceipt,
+  CapsuleMaintenanceConsumeRequest,
+  CapsuleMaintenanceGrant,
+  CapsuleMaintenanceRequest,
+  CapsuleMaintenanceTargetKind,
+  CapsuleMaintenanceTransport,
+  CapsuleMaintenanceTrust,
+  InMemoryNativeCapabilityUseStoreOptions,
+  NativeCapabilityUseCurrentState,
+  NativeSubscriptionBindingSnapshot,
+  NativeSubscriptionProbeRequest,
+  NativeSubscriptionProbeResult,
+  NativeSubscriptionSnapshotSource,
+} from "./domain/native-subscription";
 export { EffectDispatchJournal, effectOutcomeSigningBytes } from "./storage/effect-dispatch";
 export type {
   EffectDispatchAppend,

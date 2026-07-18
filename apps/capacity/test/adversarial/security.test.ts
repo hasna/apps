@@ -12,12 +12,17 @@ import {
 import { makeFixtureGraph } from "../fixtures";
 
 describe("adversarial public-boundary checks", () => {
-  test("exports no run, lease, grant, reservation, scheduling, or SaaS authority", () => {
-    const exported = Object.keys(publicApi).join("\n").toLowerCase();
+  test("exports only the exact Accounts maintenance-grant authority and no other orchestration authority", () => {
+    const names = Object.keys(publicApi);
+    expect(names.filter((name) => name.toLowerCase().includes("grant")).sort()).toEqual([
+      "CAPSULE_MAINTENANCE_GRANT_SCHEMA_VERSION",
+      "verifyCapsuleMaintenanceGrant",
+    ]);
+    expect(publicApi).toHaveProperty("CapsuleMaintenanceAuthority");
+    const exported = names.join("\n").toLowerCase();
     for (const forbidden of [
       "acquire",
       "billing",
-      "grant",
       "holder",
       "invite",
       "lease",
