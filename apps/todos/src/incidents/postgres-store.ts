@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type { TodosPostgresQueryClient } from "../storage/postgres-sync.js";
-import { redactEvidenceText } from "../lib/redaction.js";
 import {
   INCIDENT_SEVERITIES,
   INCIDENT_STATUSES,
@@ -807,7 +806,11 @@ export function createPostgresIncidentStore(
     const eventId = bounded(eventIdValue, "event_id", 128);
     const leaseToken = bounded(leaseTokenValue, "lease_token", 256);
     const failureCode = incidentFailureCode(failureCodeValue);
-    const failure = redactEvidenceText(bounded(failureValue, "failure", 4_000));
+    // Raw projector/runtime errors are attacker-controlled and commonly contain
+    // credentials in URI, header, JSON, or multiline forms. Validate the input
+    // shape, but persist only the strict nonsecret failure class.
+    bounded(failureValue, "failure", 4_000);
+    const failure = summarizeIncidentOutboxFailure(failureCode);
     const failureFingerprint = stableIncidentFingerprint({ failure_code: failureCode });
     const result = await client.query<OutboxRow>(`/* todos:incident-outbox-fail */
       WITH failed AS (
@@ -1214,6 +1217,10 @@ function incidentFailureCode(value: unknown): string {
   const code = bounded(value, "failure code", 64);
   if (!/^[A-Z][A-Z0-9_:-]{1,63}$/.test(code)) throw new Error("Invalid failure code");
   return code;
+}
+
+export function summarizeIncidentOutboxFailure(failureCodeValue: unknown): string {
+  return `Projection delivery failed: ${incidentFailureCode(failureCodeValue)}`;
 }
 
 function integerInRange(value: number, label: string, min: number, max: number): number {

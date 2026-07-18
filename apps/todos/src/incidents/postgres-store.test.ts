@@ -347,7 +347,7 @@ describe("Postgres incident atomic commands", () => {
     })).rejects.toBeInstanceOf(IncidentLeaseConflictError);
   });
 
-  it("dead-letters the third unchanged failure class while ignoring dynamic request details", async () => {
+  it("dead-letters the third unchanged failure class without persisting credential-bearing runtime details", async () => {
     const fingerprint = stableIncidentFingerprint({ failure_code: "CONV_HTTP_503" });
     const first = outboxRecord({
       status: "pending",
@@ -371,18 +371,27 @@ describe("Postgres incident atomic commands", () => {
       first.event_id,
       "lease-1",
       "CONV_HTTP_503",
-      "request req-1 at 20:00 Authorization: Bearer fixture_super_secret_value_12345",
+      [
+        "request req-1 at 20:00",
+        "postgresql://alice:uri-marker@127.0.0.1/db",
+        "Authorization: Bearer auth-marker",
+        "x-api-key: key-marker",
+        '{"password":"pw-marker","token":"tok-marker","api_key":"key-marker"}',
+      ].join("\n"),
       authority,
     )).status).toBe("pending");
     expect((await store.failOutbox(
       first.event_id,
       "lease-3",
       "CONV_HTTP_503",
-      "request req-3 at 20:02 Authorization: Bearer another_fixture_secret_67890",
+      "request req-3 at 20:02\npassword: pw-marker",
       authority,
     )).status).toBe("dead");
-    expect(client.calls[0]!.values[6]).toBe("request req-1 at 20:00 Authorization: Bearer [REDACTED]");
-    expect(client.calls[1]!.values[6]).toBe("request req-3 at 20:02 Authorization: Bearer [REDACTED]");
+    expect(client.calls[0]!.values[6]).toBe("Projection delivery failed: CONV_HTTP_503");
+    expect(client.calls[1]!.values[6]).toBe("Projection delivery failed: CONV_HTTP_503");
+    for (const marker of ["uri-marker", "auth-marker", "key-marker", "pw-marker", "tok-marker"]) {
+      expect(JSON.stringify(client.calls.map((call) => call.values[6]))).not.toContain(marker);
+    }
     expect(client.calls[0]!.values[8]).toBe(fingerprint);
     expect(client.calls[1]!.values[8]).toBe(fingerprint);
     expect(client.calls[0]!.sql).toContain("consecutive_failures + 1");

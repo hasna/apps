@@ -25,6 +25,7 @@ import {
   IncidentNotFoundError,
   IncidentOutboxRecoveryConflictError,
   IncidentVersionConflictError,
+  summarizeIncidentOutboxFailure,
   type IncidentAuthorityContext,
   type IncidentListFilter,
 } from "../incidents/postgres-store.js";
@@ -77,6 +78,13 @@ function json(body: unknown, status = 200): Response {
 
 function error(status: number, message: string, extra?: Record<string, unknown>): Response {
   return json({ error: message, ...(extra ?? {}) }, status);
+}
+
+function incidentUnavailableResponse(): Response {
+  return error(503, "canonical incident service is temporarily unavailable", {
+    code: "INCIDENT_UNAVAILABLE",
+    retryable: true,
+  });
 }
 
 function validateTaskCompletion(value: unknown):
@@ -624,8 +632,8 @@ async function handleIncidentRequest(
   try {
     authorityId = (dependencies.getIncidentAuthorityId ?? getCloudIncidentAuthorityId)();
     incidents = (dependencies.getIncidentStore ?? getCloudIncidentStore)();
-  } catch (cause) {
-    return error(503, cause instanceof Error ? cause.message : "canonical incident authority is unavailable");
+  } catch {
+    return incidentUnavailableResponse();
   }
   const actor = method === "GET" || method === "HEAD" ? null : incidentActor(mutationAuthority, authorityId);
 
@@ -694,7 +702,8 @@ async function handleIncidentRequest(
         const input = strictIncidentObject(body, ["lease_token", "failure_code", "failure"], "incident outbox fail");
         const leaseToken = incidentString(input.lease_token, "lease_token", 256);
         const failureCode = incidentFailureCode(input.failure_code);
-        const failure = redactEvidenceText(incidentString(input.failure, "failure", 4_000));
+        incidentString(input.failure, "failure", 4_000);
+        const failure = summarizeIncidentOutboxFailure(failureCode);
         return json({ outbox: await incidents.failOutbox(eventId, leaseToken, failureCode, failure, actor!) });
       }
       if (subId === "requeue") {
@@ -803,9 +812,12 @@ export async function handleV1Request(
     ? contextFromAuthority(mutationAuthority)
     : contextFromPrincipal(principal);
 
-  // Schema is idempotently ensured on the first authenticated request.
-  await (dependencies.ensureSchema ?? ensureCloudSchema)();
-  const store = (dependencies.getStorageAdapter ?? getCloudStorageAdapter)();
+  try {
+    // Schema is idempotently ensured on the first authenticated request. Keep
+    // this inside the incident-safe boundary: PostgreSQL/schema errors may
+    // contain connection credentials and must never reach a response body.
+    await (dependencies.ensureSchema ?? ensureCloudSchema)();
+    const store = (dependencies.getStorageAdapter ?? getCloudStorageAdapter)();
 
   // Administrative impersonation and snapshot imports are fail-closed on the
   // append-only generic activity ledger. Record the authenticated -> effective
@@ -840,7 +852,6 @@ export async function handleV1Request(
     }
   }
 
-  try {
     // Canonical incident state is a dedicated Postgres aggregate. It never
     // creates tasks or dispatches agents; task creation and agent execution
     // remain separate explicit operations.
@@ -1687,6 +1698,7 @@ export async function handleV1Request(
     if (e instanceof IncidentIdempotencyConflictError) return error(409, e.message, { code: "INCIDENT_IDEMPOTENCY_CONFLICT", conflict: true });
     if (e instanceof IncidentLeaseConflictError) return error(409, e.message, { code: "INCIDENT_LEASE_CONFLICT", conflict: true });
     if (e instanceof IncidentOutboxRecoveryConflictError) return error(409, e.message, { code: "INCIDENT_OUTBOX_RECOVERY_CONFLICT", conflict: true });
+    if (resource === "incidents") return incidentUnavailableResponse();
     if (e instanceof LockError) return error(409, e.message, { code: LockError.code });
     if (e instanceof VersionConflictError) return error(409, e.message, { code: VersionConflictError.code, conflict: true });
     if (e instanceof TaskNotFoundError) return error(404, e.message, { code: TaskNotFoundError.code });

@@ -216,7 +216,43 @@ describe("/v1 canonical incidents", () => {
     dependencies.getIncidentAuthorityId = () => { throw new Error("HASNA_TODOS_AUTHORITY_ID is required"); };
     const response = await request("/v1/incidents");
     expect(response?.status).toBe(503);
-    expect(await response!.json()).toEqual({ error: "HASNA_TODOS_AUTHORITY_ID is required" });
+    expect(await response!.json()).toEqual({
+      error: "canonical incident service is temporarily unavailable",
+      code: "INCIDENT_UNAVAILABLE",
+      retryable: true,
+    });
+  });
+
+  test("sanitizes schema and store failures into one stable retryable incident response", async () => {
+    const schemaMarker = "schema-marker";
+    dependencies.ensureSchema = async () => {
+      throw new Error(`postgresql://alice:${schemaMarker}@127.0.0.1/db`);
+    };
+    const schemaResponse = await request("/v1/incidents");
+    expect(schemaResponse?.status).toBe(503);
+    const schemaBody = await schemaResponse!.text();
+    expect(JSON.parse(schemaBody)).toEqual({
+      error: "canonical incident service is temporarily unavailable",
+      code: "INCIDENT_UNAVAILABLE",
+      retryable: true,
+    });
+    expect(schemaBody).not.toContain(schemaMarker);
+
+    dependencies.ensureSchema = async () => {};
+    const storeMarker = "store-marker";
+    incidentStore.list = async () => {
+      throw new Error(`x-api-key: ${storeMarker}\n{"password":"pw-marker"}`);
+    };
+    const storeResponse = await request("/v1/incidents");
+    expect(storeResponse?.status).toBe(503);
+    const storeBody = await storeResponse!.text();
+    expect(JSON.parse(storeBody)).toEqual({
+      error: "canonical incident service is temporarily unavailable",
+      code: "INCIDENT_UNAVAILABLE",
+      retryable: true,
+    });
+    expect(storeBody).not.toContain(storeMarker);
+    expect(storeBody).not.toContain("pw-marker");
   });
 
   test("rejects caller provenance and never turns incident creation into task or agent dispatch", async () => {
@@ -319,19 +355,26 @@ describe("/v1 canonical incidents", () => {
     expect(incidentStore.failCall).toBeNull();
   });
 
-  test("redacts projector failures before durable storage", async () => {
+  test("persists only the stable failure class from credential-bearing projector errors", async () => {
+    const markers = ["uri-marker", "auth-marker", "key-marker", "pw-marker", "tok-marker"];
     const response = await request("/v1/incidents/outbox/event-1/fail", "POST", {
       lease_token: "lease-1",
       failure_code: "PROJECTOR_HTTP_503",
-      failure: "upstream rejected Authorization: Bearer fixture_super_secret_value_12345",
+      failure: [
+        "upstream rejected postgresql://alice:uri-marker@127.0.0.1/db",
+        "Authorization: Bearer auth-marker",
+        "x-api-key: key-marker",
+        '{"password":"pw-marker","token":"tok-marker","api_key":"key-marker"}',
+      ].join("\n"),
     });
     expect(response?.status).toBe(200);
     expect(incidentStore.failCall).toEqual({
       eventId: "event-1",
       leaseToken: "lease-1",
       failureCode: "PROJECTOR_HTTP_503",
-      failure: "upstream rejected Authorization: Bearer [REDACTED]",
+      failure: "Projection delivery failed: PROJECTOR_HTTP_503",
     });
+    for (const marker of markers) expect(JSON.stringify(incidentStore.failCall)).not.toContain(marker);
   });
 
   test("exposes authority-scoped dead-event inspection without lease credentials", async () => {
