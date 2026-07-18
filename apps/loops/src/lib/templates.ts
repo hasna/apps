@@ -457,7 +457,9 @@ function agentTarget(
     addDirs: addDirs.length ? [...new Set(addDirs)] : undefined,
     authProfile: provider === "codewith" ? authProfileForRole(input, role, seed) : undefined,
     configIsolation: "safe",
-    permissionMode: input.permissionMode ?? "bypass",
+    permissionMode:
+      input.permissionMode ??
+      (provider === "codewith" || provider === "codex" ? "bypass" : "default"),
     sandbox,
     manualBreakGlass: input.manualBreakGlass || undefined,
     worktree: {

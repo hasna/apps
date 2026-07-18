@@ -14,6 +14,7 @@ import pg from "pg";
 import { PgPoolExecutor } from "./pg-executor.js";
 import { PostgresStorage } from "./postgres.js";
 import { PostgresLoopStorage } from "./postgres-loop-storage.js";
+import { DuplicateWorkflowEventError } from "../errors.js";
 import { assertTenantEnforcementBootstrap, assertTenantEnforcementBootstrapIfPending, isSafeServiceConnection } from "../../serve/index.js";
 import type { CreateLoopInput, Loop, LoopRun, WorkflowSpec } from "../../types.js";
 
@@ -1402,6 +1403,51 @@ suite("PostgresLoopStorage (live)", () => {
         ),
       );
       expect(running?.count).toBe(1);
+    } finally {
+      await execB.close();
+    }
+  });
+
+  test("two connections serialize duplicate agent session contract appends", async () => {
+    const workflow = await storage.createWorkflow({
+      name: "pg-agent-contract-race",
+      steps: [{
+        id: "worker",
+        target: { type: "agent", provider: "codewith", prompt: "race contract append" },
+      }],
+    });
+    const workflowRun = await storage.createWorkflowRun({ workflow });
+    const payload = {
+      version: 1,
+      provider: "codewith",
+      permissionMode: "default",
+      sandbox: "workspace-write",
+      manualBreakGlass: false,
+      timeoutMs: null,
+      restrictions: { enforcement: "metadata_only", providerEnforced: false },
+    };
+    const execB = PgPoolExecutor.fromConnectionString({
+      connectionString: isolatedUrl({ username: RUNTIME_LOGIN, password: RUNTIME_PASSWORD }),
+      applicationName: "loops-pgstore-contract-race-b",
+    });
+    const storageB = new PostgresLoopStorage(execB.queryClient, {
+      tenantId: "tenant-test",
+      principalId: "principal-test",
+      requestId: "request-contract-race-b",
+    });
+    try {
+      const results = await Promise.allSettled([
+        storage.appendWorkflowEvent(workflowRun.id, "agent_session_contract", "worker", payload),
+        storageB.appendWorkflowEvent(workflowRun.id, "agent_session_contract", "worker", payload),
+      ]);
+      expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      const rejected = results.find((result) => result.status === "rejected");
+      expect(rejected?.status).toBe("rejected");
+      if (!rejected || rejected.status !== "rejected") throw new Error("duplicate contract append did not reject");
+      expect(rejected.reason).toBeInstanceOf(DuplicateWorkflowEventError);
+      expect((await storage.listWorkflowEvents(workflowRun.id)).filter(
+        (event) => event.eventType === "agent_session_contract" && event.stepId === "worker",
+      )).toHaveLength(1);
     } finally {
       await execB.close();
     }

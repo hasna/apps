@@ -137,6 +137,8 @@ async function postJson(fetchImpl: typeof fetch, config: { apiUrl: string; token
 }
 
 class RunnerWorkflowApiStore implements WorkflowExecutionStore {
+  readonly serverDerivedAgentSessionContracts = true;
+
   constructor(
     private readonly fetchImpl: typeof fetch,
     private readonly config: { apiUrl: string; token?: string },

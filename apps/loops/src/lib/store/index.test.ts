@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { createLoopsApiServer } from "../../api/index.js";
 import { createSqliteLoopStorage } from "../storage/sqlite.js";
-import { createHasnaStorageClient } from "../cloud/storage.js";
+import { createHasnaStorageClient, type HasnaStorageClient } from "../cloud/storage.js";
 import { createHasnaHttpTransport } from "../cloud/transport.js";
 import { ApiStore, CloudUnsupportedError, getStore, isCloudStore, LocalStore } from "./index.js";
+import { Store } from "../store.js";
 import type { CreateLoopInput, CreateWorkflowInput } from "../../types.js";
 
 const LOOP_INPUT: CreateLoopInput = {
@@ -42,6 +43,55 @@ describe("getStore resolver", () => {
     expect(() => getStore({ HASNA_LOOPS_API_KEY: "k" })).toThrow("requires both");
     expect(() => getStore({ HASNA_LOOPS_STORAGE_MODE: "self_hosted" })).toThrow("requires both");
     expect(() => getStore({ HASNA_LOOPS_STORAGE_MODE: "cloud" })).toThrow("requires both");
+  });
+});
+
+describe("LocalStore public workflow events", () => {
+  test("returns the typed contract branch and rejects malformed or unknown persisted events", async () => {
+    const raw = new Store(":memory:");
+    const store = new LocalStore(raw);
+    try {
+      const workflow = raw.createWorkflow({
+        name: "public-workflow-event-contract",
+        steps: [{
+          id: "worker",
+          target: { type: "agent", provider: "codewith", prompt: "verify public event typing" },
+        }],
+      });
+
+      const validRun = raw.createWorkflowRun({ workflow });
+      raw.appendWorkflowEvent(validRun.id, "agent_session_contract", "worker", {
+        version: 1,
+        provider: "codewith",
+        permissionMode: "default",
+        sandbox: "workspace-write",
+        manualBreakGlass: false,
+        timeoutMs: null,
+        restrictions: { enforcement: "metadata_only", providerEnforced: false },
+      });
+      const contract = (await store.listWorkflowEvents(validRun.id)).find(
+        (event) => event.eventType === "agent_session_contract",
+      );
+      expect(contract?.eventType).toBe("agent_session_contract");
+      if (!contract || contract.eventType !== "agent_session_contract") {
+        throw new Error("public store did not return the typed agent session contract branch");
+      }
+      expect(contract.payload.provider).toBe("codewith");
+
+      const malformedRun = raw.createWorkflowRun({ workflow });
+      raw.appendWorkflowEvent(malformedRun.id, "agent_session_contract", "worker", { version: 1 });
+      await expect(store.listWorkflowEvents(malformedRun.id)).rejects.toThrow(
+        "invalid agent_session_contract workflow event",
+      );
+
+      const unknownRun = raw.createWorkflowRun({ workflow });
+      raw.appendWorkflowEvent(unknownRun.id, "fabricated_security_verdict");
+      await expect(store.listWorkflowEvents(unknownRun.id)).rejects.toThrow(
+        "unsupported workflow event type",
+      );
+    } finally {
+      await store.close();
+    }
   });
 });
 
@@ -99,5 +149,23 @@ describe("ApiStore end-to-end against the real /v1 server", () => {
     const store = apiStoreForServer(1);
     await expect(store.cancelWorkflowRun("wr_x")).rejects.toBeInstanceOf(CloudUnsupportedError);
     await expect(store.requeueWorkflowWorkItem("wi_x")).rejects.toBeInstanceOf(CloudUnsupportedError);
+  });
+
+  test("fails closed when a remote workflow event has malformed base fields", async () => {
+    const transport = {
+      get: async () => ({
+        events: [{
+          id: 42,
+          workflowRunId: null,
+          sequence: 0,
+          eventType: "created",
+          stepId: 99,
+          createdAt: "not-a-date",
+        }],
+      }),
+    } as unknown as HasnaStorageClient["transport"];
+    const client = { transport } as HasnaStorageClient;
+    const store = new ApiStore(client, "https://loops.example.test/v1");
+    await expect(store.listWorkflowEvents("run-1")).rejects.toThrow("invalid workflow event id");
   });
 });

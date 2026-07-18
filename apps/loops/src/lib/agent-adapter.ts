@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import type { AgentAllowlistEnforcement, AgentProvider, AgentSandbox, AgentTarget, TimeoutMs } from "../types.js";
+import type { AgentAllowlistEnforcement, AgentProvider, AgentSandbox, AgentSessionContract, AgentTarget, WorkflowStep } from "../types.js";
 import { scrubSecrets } from "./redact.js";
 
 export type ProviderPromptChannel = "stdin" | "argv";
@@ -22,25 +22,6 @@ export interface ProviderAllowlistCapabilities {
   commands: AgentAllowlistEnforcement;
 }
 
-export interface AgentSessionContract {
-  version: 1;
-  provider: AgentProvider;
-  model?: string;
-  cwd?: string;
-  permissionMode: NonNullable<AgentTarget["permissionMode"]>;
-  sandbox: AgentSandbox | "provider-default";
-  manualBreakGlass: boolean;
-  routing?: AgentTarget["routing"];
-  timeoutMs: TimeoutMs;
-  restrictions: {
-    tools?: string[];
-    commands?: string[];
-    enforcement: AgentAllowlistEnforcement;
-    providerEnforced: false;
-  };
-  safetyReason?: string;
-}
-
 export interface AgentInvocation {
   command: string;
   args: string[];
@@ -57,11 +38,27 @@ export interface ProviderAdapter {
   buildInvocation(target: AgentTarget): AgentInvocation;
 }
 
-export const UNSAFE_CODEWITH_EXEC_EXTRA_ARGS = new Set([
+const CODEX_LIKE_PROTECTED_EXTRA_ARGS = [
   "e",
   "exec",
   "agent",
   "start",
+  "-a",
+  "--ask-for-approval",
+  "--approval-policy",
+  "-c",
+  "--config",
+  "-C",
+  "--cd",
+  "--add-dir",
+  "--cwd",
+  "-m",
+  "--model",
+  "-p",
+  "--profile",
+  "-s",
+  "--sandbox",
+  "--json",
   "--ephemeral",
   "--ignore-rules",
   "--skip-git-repo-check",
@@ -69,8 +66,38 @@ export const UNSAFE_CODEWITH_EXEC_EXTRA_ARGS = new Set([
   "--output-last-message",
   "-o",
   "--output-schema",
+  "--full-auto",
+  "--yolo",
   "--dangerously-bypass-approvals-and-sandbox",
-]);
+] as const;
+
+export const PROTECTED_AGENT_EXTRA_ARGS: Readonly<Record<AgentProvider, ReadonlySet<string>>> = {
+  claude: new Set([
+    "-p",
+    "--print",
+    "--output-format",
+    "--permission-mode",
+    "--dangerously-skip-permissions",
+    "--allow-dangerously-skip-permissions",
+    "--safe-mode",
+    "--setting-sources",
+    "--settings",
+    "--no-session-persistence",
+    "--add-dir",
+    "-m",
+    "--model",
+    "--effort",
+    "--agent",
+  ]),
+  cursor: new Set(["-p", "--print", "--mode", "-f", "--force", "--yolo", "--sandbox", "-m", "--model", "--agent"]),
+  codewith: new Set(["--auth-profile", ...CODEX_LIKE_PROTECTED_EXTRA_ARGS]),
+  codex: new Set(CODEX_LIKE_PROTECTED_EXTRA_ARGS),
+  aicopilot: new Set(["run", "-f", "--format", "--pure", "--auto", "--dangerously-skip-permissions", "-d", "--dir", "-m", "--model", "--variant", "-a", "--agent"]),
+  opencode: new Set(["run", "-f", "--format", "--pure", "--auto", "--dangerously-skip-permissions", "-d", "--dir", "-m", "--model", "--variant", "-a", "--agent"]),
+};
+
+/** @deprecated Use PROTECTED_AGENT_EXTRA_ARGS so every provider is validated. */
+export const UNSAFE_CODEWITH_EXEC_EXTRA_ARGS = PROTECTED_AGENT_EXTRA_ARGS.codewith;
 
 const CODEX_LIKE_SANDBOXES: readonly AgentSandbox[] = ["read-only", "workspace-write", "danger-full-access"];
 const CURSOR_SANDBOXES: readonly AgentSandbox[] = ["enabled", "disabled"];
@@ -79,6 +106,29 @@ const PERMISSION_MODES = ["default", "plan", "auto", "bypass"];
 function assertOptionalNonEmptyString(value: unknown, label: string): void {
   if (value === undefined) return;
   if (typeof value !== "string" || value.trim() === "") throw new Error(`${label} must be a non-empty string`);
+}
+
+function protectedExtraArgName(arg: string, protectedArgs: ReadonlySet<string>): string {
+  const equals = arg.indexOf("=");
+  const name = equals > 0 ? arg.slice(0, equals) : arg;
+  if (protectedArgs.has(name)) return name;
+  if (!arg.startsWith("--")) {
+    const attachedShort = [...protectedArgs].find((candidate) =>
+      candidate.length === 2 && candidate.startsWith("-") && arg.length > 2 && arg.startsWith(candidate)
+    );
+    if (attachedShort) return attachedShort;
+  }
+  return name;
+}
+
+function validateExtraArgs(target: AgentTarget, label: string): void {
+  const protectedArgs = PROTECTED_AGENT_EXTRA_ARGS[target.provider];
+  const unsafe = target.extraArgs?.find((arg) => protectedArgs.has(protectedExtraArgName(arg, protectedArgs)));
+  if (unsafe) {
+    throw new Error(
+      `${label}.extraArgs cannot include ${unsafe}; ${target.provider} execution and safety options are managed by the adapter`,
+    );
+  }
 }
 
 function validateAgentOptions(target: AgentTarget, label: string, capabilities: ProviderCapabilities): void {
@@ -109,12 +159,7 @@ function validateAgentOptions(target: AgentTarget, label: string, capabilities: 
   if (provider === "codewith" && target.agent !== undefined) {
     throw new Error(`${label}.agent is not supported for provider codewith`);
   }
-  if (provider === "codewith") {
-    const unsafe = target.extraArgs?.find((arg) => UNSAFE_CODEWITH_EXEC_EXTRA_ARGS.has(arg));
-    if (unsafe) {
-      throw new Error(`${label}.extraArgs cannot include ${unsafe}; codewith exec launch flags are managed by the adapter`);
-    }
-  }
+  validateExtraArgs(target, label);
   if (target.addDirs?.length && !["codewith", "codex"].includes(provider)) {
     throw new Error(`${label}.addDirs is currently supported only for provider codewith or codex`);
   }
@@ -151,12 +196,16 @@ function validateAgentOptions(target: AgentTarget, label: string, capabilities: 
     throw new Error(`${label}.allowlist.safetyReason is required when tool or command restrictions are declared`);
   }
   const effectiveSandbox = effectiveAgentSandbox(target);
-  const relaxed = effectiveSandbox === "danger-full-access" || (provider === "cursor" && effectiveSandbox === "disabled");
+  const providerBypass = target.permissionMode === "bypass" && ["claude", "cursor", "aicopilot", "opencode"].includes(provider);
+  const relaxed = providerBypass ||
+    effectiveSandbox === "danger-full-access" ||
+    (provider === "cursor" && effectiveSandbox === "disabled");
+  const relaxedOption = providerBypass ? "permissionMode=bypass" : `sandbox=${effectiveSandbox}`;
   if (relaxed && target.manualBreakGlass !== true) {
-    throw new Error(`${label}.manualBreakGlass=true is required when sandbox=${effectiveSandbox}`);
+    throw new Error(`${label}.manualBreakGlass=true is required when ${relaxedOption}`);
   }
   if (relaxed && !safetyReason) {
-    throw new Error(`${label}.allowlist.safetyReason is required when sandbox=${effectiveSandbox}`);
+    throw new Error(`${label}.allowlist.safetyReason is required when ${relaxedOption}`);
   }
 }
 
@@ -203,6 +252,15 @@ export function agentSessionContract(target: AgentTarget): AgentSessionContract 
     },
     safetyReason: allowlist?.safetyReason?.trim() || undefined,
   };
+}
+
+export function workflowStepAgentSessionContract(step: WorkflowStep): AgentSessionContract | undefined {
+  if (step.target.type !== "agent") return undefined;
+  const target: AgentTarget = step.timeoutMs === undefined
+    ? step.target
+    : { ...step.target, timeoutMs: step.timeoutMs };
+  providerAdapter(target.provider).validate(target, `workflow step ${step.id} target`);
+  return agentSessionContract(target);
 }
 
 export function agentSessionContractPrompt(target: AgentTarget): string | undefined {

@@ -1,5 +1,7 @@
-import type { ExecutableTarget, ExecutorResult, Loop, LoopRun, WorkflowRun, WorkflowRunStatus, WorkflowSpec, WorkflowStep, WorkflowStepRun } from "../types.js";
-import { agentSessionContract } from "./agent-adapter.js";
+import { isDeepStrictEqual } from "node:util";
+import type { ExecutableTarget, ExecutorResult, Loop, LoopRun, StoredWorkflowEvent, WorkflowRun, WorkflowRunStatus, WorkflowSpec, WorkflowStep, WorkflowStepRun } from "../types.js";
+import { workflowStepAgentSessionContract } from "./agent-adapter.js";
+import { DuplicateWorkflowEventError } from "./errors.js";
 import { executeLoop, executeTarget, preflightTarget, type ExecuteOptions } from "./executor.js";
 import { executionMetadata, goalExecutionContext, withGoalNodeEnv } from "./goal/metadata.js";
 import { iterationPrompt } from "./goal/prompts.js";
@@ -24,6 +26,8 @@ export interface ExecuteWorkflowOptions extends ExecuteOptions {
 type MaybePromise<T> = T | Promise<T>;
 
 export interface WorkflowExecutionStore extends GoalRunnerStore {
+  /** Hosted runners receive server-derived contract events and must not append client-authored copies. */
+  readonly serverDerivedAgentSessionContracts?: boolean;
   requireWorkflow(idOrName: string): MaybePromise<WorkflowSpec>;
   createWorkflowRun(input: CreateWorkflowRunInput): MaybePromise<WorkflowRun>;
   getWorkflowRun(id: string): MaybePromise<WorkflowRun | undefined>;
@@ -57,6 +61,7 @@ export interface WorkflowExecutionStore extends GoalRunnerStore {
     opts?: { daemonLeaseId?: string; now?: Date },
   ): MaybePromise<WorkflowStepRun>;
   appendWorkflowEvent(workflowRunId: string, eventType: string, stepId?: string, payload?: Record<string, unknown>): MaybePromise<unknown>;
+  listWorkflowEvents?(workflowRunId: string, limit?: number): MaybePromise<StoredWorkflowEvent[]>;
   skipWorkflowStepRun(workflowRunId: string, stepId: string, reason: string, opts?: { daemonLeaseId?: string; now?: Date }): MaybePromise<WorkflowStepRun>;
 }
 
@@ -160,10 +165,12 @@ export async function executeWorkflow(
   // any recorded pid is still alive, so a live peer is never disturbed. If we
   // skip (no pid, or a live process), startWorkflowStepRun refuses the double
   // claim and the try/catch below finalizes the run instead of stranding it.
+  const recoveredStepIds = new Set<string>();
   const resumedRunningSteps = (await store.listWorkflowStepRuns(run.id)).filter((step) => step.status === "running");
   if (resumedRunningSteps.length > 0 && resumedRunningSteps.every((step) => step.pid !== undefined)) {
     try {
-      await store.recoverWorkflowRun(run.id, "workflow run resumed after lease takeover");
+      const recovered = await store.recoverWorkflowRun(run.id, "workflow run resumed after lease takeover");
+      for (const step of recovered.recoveredSteps) recoveredStepIds.add(step.stepId);
     } catch {
       // A step process is still alive (live peer): leave the steps as-is.
     }
@@ -247,10 +254,21 @@ export async function executeWorkflow(
       try {
         const executionTarget = targetWithStepAccount(step, step.goal ? undefined : opts.goalNodePrompt);
         if (executionTarget.type === "agent") {
-          const contract = agentSessionContract(executionTarget);
-          if (contract) {
+          const contract = workflowStepAgentSessionContract(step);
+          if (contract && store.serverDerivedAgentSessionContracts !== true) {
             opts.beforePersist?.();
-            await store.appendWorkflowEvent(run.id, "agent_session_contract", step.id, contract as unknown as Record<string, unknown>);
+            const payload = JSON.parse(JSON.stringify(contract)) as Record<string, unknown>;
+            try {
+              await store.appendWorkflowEvent(run.id, "agent_session_contract", step.id, payload);
+            } catch (error) {
+              if (!(error instanceof DuplicateWorkflowEventError) ||
+                  !recoveredStepIds.has(step.id) ||
+                  !store.listWorkflowEvents) throw error;
+              const existing = (await store.listWorkflowEvents(run.id, 2_147_483_647)).filter((event) =>
+                event.eventType === "agent_session_contract" && event.stepId === step.id
+              );
+              if (existing.length !== 1 || !isDeepStrictEqual(existing[0]!.payload, payload)) throw error;
+            }
           }
         }
         if (step.goal) {

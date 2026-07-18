@@ -138,7 +138,7 @@ const AGENT_ROUTING_OPTION_SPECS: RouteOptionSpec[] = [
     description: "verifier idle watchdog; use none/off to disable when an external heartbeat exists",
     defaultValue: "15m",
   },
-  { flags: "--permission-mode <mode>", key: "permissionMode", kind: "value", description: "provider permission mode: default, plan, auto, or bypass", defaultValue: "bypass" },
+  { flags: "--permission-mode <mode>", key: "permissionMode", kind: "value", description: "provider permission mode: default, plan, auto, or bypass; defaults to bypass for sandboxed codewith/codex routes and provider-default otherwise" },
   { flags: "--sandbox <mode>", key: "sandbox", kind: "value", description: "provider sandbox" },
   { flags: "--safety-reason <reason>", key: "safetyReason", kind: "value", description: "auditable reason required for advisory restrictions or relaxed sandbox access" },
   {

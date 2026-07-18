@@ -30,6 +30,7 @@ import type {
   LoopStatus,
   RunReceipt,
   RunStatus,
+  StoredWorkflowEvent,
   WorkflowEvent,
   WorkflowInvocation,
   WorkflowRun,
@@ -41,6 +42,7 @@ import type {
 } from "../../types.js";
 import type { Goal, GoalPlanNode, GoalRun, GoalStatus } from "../goal/types.js";
 import { AmbiguousNameError, LoopNotFoundError } from "../errors.js";
+import { publicWorkflowEvent } from "../workflow-events.js";
 import { resolveCloudStorage } from "../cloud/resolve.js";
 import type { HasnaStorageClient } from "../cloud/storage.js";
 import type { Env } from "../cloud/mode.js";
@@ -253,7 +255,10 @@ export class LocalStore implements LoopStore {
     return this.store.listWorkflowStepRuns(workflowRunId);
   }
   async listWorkflowEvents(workflowRunId: string, limit?: number): Promise<WorkflowEvent[]> {
-    return limit === undefined ? this.store.listWorkflowEvents(workflowRunId) : this.store.listWorkflowEvents(workflowRunId, limit);
+    const events = limit === undefined
+      ? this.store.listWorkflowEvents(workflowRunId)
+      : this.store.listWorkflowEvents(workflowRunId, limit);
+    return events.map(publicWorkflowEvent);
   }
   async recoverWorkflowRun(workflowRunId: string, reason?: string): Promise<{ run: WorkflowRun; recoveredSteps: WorkflowStepRun[] }> {
     return reason === undefined ? this.store.recoverWorkflowRun(workflowRunId) : this.store.recoverWorkflowRun(workflowRunId, reason);
@@ -498,7 +503,7 @@ export class ApiStore implements LoopStore {
   }
   async listWorkflowEvents(workflowRunId: string, limit?: number): Promise<WorkflowEvent[]> {
     const raw = await this.t.get(`/workflow-runs/${encodeURIComponent(workflowRunId)}/events`, { query: clean({ limit }) });
-    return pickArray<WorkflowEvent>(raw, "events");
+    return pickArray<StoredWorkflowEvent>(raw, "events").map(publicWorkflowEvent);
   }
   async recoverWorkflowRun(workflowRunId: string, reason?: string): Promise<{ run: WorkflowRun; recoveredSteps: WorkflowStepRun[] }> {
     const raw = await this.t.post(`/workflow-runs/${encodeURIComponent(workflowRunId)}/recover`, { reason });

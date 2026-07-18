@@ -304,7 +304,6 @@ const DRAIN_DEFAULTS: Partial<Record<keyof TodosDrainOptions, unknown>> = {
   maxDispatch: "1",
   addDir: [],
   verifierIdleTimeout: "15m",
-  permissionMode: "bypass",
   worktreeMode: "auto",
   worktreeBranchPrefix: "openloops",
   namePrefix: "event:todos-task",
@@ -356,10 +355,26 @@ export function applyRoutePolicyToDrainOptions<T extends TodosDrainOptions>(
   }
   if (applyOpts.requireExplicitSafety !== false) {
     for (const key of policy.requiresExplicitOptions ?? []) {
-      if (opts[key] !== true) throw new ValidationError(`route policy ${policy.id} requires explicit --manual-break-glass`);
+      if (key === "manualBreakGlass") {
+        if (opts[key] !== true) throw new ValidationError(`route policy ${policy.id} requires explicit --manual-break-glass`);
+        continue;
+      }
+      if (key === "safetyReason") {
+        if (typeof opts[key] !== "string" || opts[key].trim() === "") {
+          throw new ValidationError(`route policy ${policy.id} requires an explicit non-empty --safety-reason`);
+        }
+        continue;
+      }
+      if (opts[key] === undefined || opts[key] === false || opts[key] === "") {
+        throw new ValidationError(`route policy ${policy.id} requires explicit --${String(key)}`);
+      }
     }
   }
-  const merged = mergePolicyValues(opts as Record<string, unknown>, policy.id, policy.drain as Record<string, unknown>, DRAIN_DEFAULTS);
+  const policyValues = { ...policy.drain } as Record<string, unknown>;
+  if (applyOpts.requireExplicitSafety !== false) {
+    for (const key of policy.requiresExplicitOptions ?? []) delete policyValues[key];
+  }
+  const merged = mergePolicyValues(opts as Record<string, unknown>, policy.id, policyValues, DRAIN_DEFAULTS);
   merged.policy = opts.policy;
   merged.preset = opts.preset;
   merged.routePolicyEvidence = policy.id;

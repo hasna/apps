@@ -36,3 +36,12 @@ export class ValidationError extends CodedError {
     super("VALIDATION_ERROR", message);
   }
 }
+
+export class DuplicateWorkflowEventError extends CodedError {
+  constructor(workflowRunId: string, eventType: string, stepId?: string) {
+    super(
+      "DUPLICATE_WORKFLOW_EVENT",
+      `workflow event already exists: run=${workflowRunId} type=${eventType} step=${stepId ?? "-"}`,
+    );
+  }
+}

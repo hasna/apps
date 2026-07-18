@@ -6,7 +6,7 @@ import { createSqliteLoopStorage } from "../lib/storage/sqlite.js";
 import type { LoopStorageContract } from "../lib/storage/contract.js";
 import type { TenantAuthContext } from "../lib/auth/tenant-auth.js";
 import type { LoopsApiServerOptions } from "./index.js";
-import type { Loop, WorkflowSpec } from "../types.js";
+import type { Loop, LoopRun, WorkflowSpec } from "../types.js";
 
 const apiPath = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
 const jsonHeaders = { "content-type": "application/json" };
@@ -1211,7 +1211,19 @@ describe("loops-api foundation", () => {
     try {
       const workflow = await storage.createWorkflow({
         name: "api-workflow-claim-execute",
-        steps: [{ id: "step", target: { type: "command", command: "printf workflow-ok", shell: true } }],
+        steps: [
+          { id: "command", target: { type: "command", command: "printf workflow-ok", shell: true } },
+          {
+            id: "contract-agent",
+            target: {
+              type: "agent",
+              provider: "codewith",
+              prompt: "perform scoped work",
+              allowlist: { commands: ["git"], safetyReason: "isolated API contract test" },
+            },
+          },
+          { id: "default-agent", target: { type: "agent", provider: "claude", prompt: "perform default work" } },
+        ],
       });
       const loop = await storage.createLoop(
         {
@@ -1232,7 +1244,7 @@ describe("loops-api foundation", () => {
         claims: Array<{
           claimToken: string;
           loop: { id: string; target: { type: string; workflowId?: string } };
-          run: { id: string; status: string };
+          run: LoopRun;
           workflow?: WorkflowSpec;
         }>;
       };
@@ -1240,24 +1252,36 @@ describe("loops-api foundation", () => {
       expect(claimed.claims[0]).toMatchObject({
         loop: { id: loop.id, target: { type: "workflow", workflowId: workflow.id } },
         run: { status: "running" },
-        workflow: { id: workflow.id, steps: [{ id: "step", target: { type: "command", command: "printf workflow-ok" } }] },
+        workflow: { id: workflow.id, steps: [{ id: "command" }, { id: "contract-agent" }, { id: "default-agent" }] },
       });
       expect(claimed.claims[0]!.claimToken).toBeString();
       expect(await storage.listRuns({ loopId: loop.id })).toHaveLength(1);
+
+      const idempotencyKey = `${claimed.claims[0]!.run.id}:workflow:${workflow.id}`;
+      const preChangeWorkflowRun = await storage.createWorkflowRun({
+        workflow,
+        loop,
+        loopRun: claimed.claims[0]!.run,
+        idempotencyKey,
+      });
+      expect((await storage.listWorkflowEvents(preChangeWorkflowRun.id)).filter((event) =>
+        event.eventType === "agent_session_contract"
+      )).toHaveLength(0);
 
       const createWorkflowRun = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs`), {
         method: "POST",
         headers: jsonHeaders,
         body: JSON.stringify({
           claimToken: claimed.claims[0]!.claimToken,
-          idempotencyKey: `${claimed.claims[0]!.run.id}:workflow:${workflow.id}`,
+          idempotencyKey,
         }),
       });
       expect(createWorkflowRun.status).toBe(200);
       const created = (await createWorkflowRun.json()) as { workflowRun: { id: string; loopRunId: string; workflowId: string; status: string } };
       expect(created.workflowRun).toMatchObject({ loopRunId: claimed.claims[0]!.run.id, workflowId: workflow.id, status: "running" });
+      expect(created.workflowRun.id).toBe(preChangeWorkflowRun.id);
 
-      const staleStart = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/steps/step/start`), {
+      const staleStart = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/steps/command/start`), {
         method: "POST",
         headers: jsonHeaders,
         body: JSON.stringify({ claimToken: "wrong-token" }),
@@ -1265,39 +1289,81 @@ describe("loops-api foundation", () => {
       expect(staleStart.status).toBe(409);
       expect(await staleStart.json()).toMatchObject({ ok: false, error: "stale_claim" });
 
-      const start = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/steps/step/start`), {
+      const start = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/steps/command/start`), {
         method: "POST",
         headers: jsonHeaders,
         body: JSON.stringify({ claimToken: claimed.claims[0]!.claimToken }),
       });
       expect(start.status).toBe(200);
-      expect(await start.json()).toMatchObject({ step: { stepId: "step", status: "running" } });
+      expect(await start.json()).toMatchObject({ step: { stepId: "command", status: "running" } });
 
       const contractPayload = {
         version: 1,
         provider: "codewith",
+        permissionMode: "default",
         sandbox: "workspace-write",
         manualBreakGlass: false,
+        timeoutMs: null,
         restrictions: { commands: ["git"], enforcement: "metadata_only", providerEnforced: false },
         safetyReason: "isolated API contract test",
       };
-      const appendContract = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/events`), {
+      const derivedContracts = (await storage.listWorkflowEvents(created.workflowRun.id)).filter((event) =>
+        event.eventType === "agent_session_contract"
+      );
+      expect(derivedContracts).toHaveLength(1);
+      expect(derivedContracts[0]).toMatchObject({ stepId: "contract-agent", payload: contractPayload });
+
+      const mismatchContract = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/events`), {
         method: "POST",
         headers: jsonHeaders,
         body: JSON.stringify({
           claimToken: claimed.claims[0]!.claimToken,
           eventType: "agent_session_contract",
-          stepId: "step",
+          stepId: "contract-agent",
+          payload: { ...contractPayload, sandbox: "danger-full-access" },
+        }),
+      });
+      expect(mismatchContract.status).toBe(409);
+      expect(await mismatchContract.json()).toMatchObject({ ok: false, error: "agent_session_contract_mismatch" });
+
+      const duplicateContract = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/events`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claimed.claims[0]!.claimToken,
+          eventType: "agent_session_contract",
+          stepId: "contract-agent",
           payload: contractPayload,
         }),
       });
-      expect(appendContract.status).toBe(200);
-      expect(await appendContract.json()).toMatchObject({
-        event: { eventType: "agent_session_contract", stepId: "step", payload: contractPayload },
+      expect(duplicateContract.status).toBe(409);
+      expect(await duplicateContract.json()).toMatchObject({ ok: false, error: "agent_session_contract_duplicate" });
+
+      const commandContract = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/events`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claimed.claims[0]!.claimToken,
+          eventType: "agent_session_contract",
+          stepId: "command",
+          payload: contractPayload,
+        }),
       });
-      expect((await storage.listWorkflowEvents(created.workflowRun.id)).some((event) =>
-        event.eventType === "agent_session_contract" && event.stepId === "step"
-      )).toBe(true);
+      expect(commandContract.status).toBe(422);
+      expect(await commandContract.json()).toMatchObject({ ok: false, error: "agent_session_contract_non_agent_step" });
+
+      const fabricatedContract = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/events`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claimed.claims[0]!.claimToken,
+          eventType: "agent_session_contract",
+          stepId: "default-agent",
+          payload: contractPayload,
+        }),
+      });
+      expect(fabricatedContract.status).toBe(422);
+      expect(await fabricatedContract.json()).toMatchObject({ ok: false, error: "agent_session_contract_not_required" });
 
       const arbitraryEvent = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/events`), {
         method: "POST",
@@ -1305,12 +1371,59 @@ describe("loops-api foundation", () => {
         body: JSON.stringify({
           claimToken: claimed.claims[0]!.claimToken,
           eventType: "fabricated_security_verdict",
-          stepId: "step",
+          stepId: "contract-agent",
           payload: {},
         }),
       });
       expect(arbitraryEvent.status).toBe(422);
       expect(await arbitraryEvent.json()).toMatchObject({ ok: false, error: "event_type_not_allowed" });
+
+      for (const [suffix, stepId] of [["unknown", "unknown-step"], ["missing", undefined]] as const) {
+        const corruptKey = `${idempotencyKey}:${suffix}`;
+        const corruptRun = await storage.createWorkflowRun({
+          workflow,
+          loop,
+          loopRun: claimed.claims[0]!.run,
+          idempotencyKey: corruptKey,
+        });
+        await storage.appendWorkflowEvent(
+          corruptRun.id,
+          "agent_session_contract",
+          stepId,
+          contractPayload,
+        );
+        const corruptBackfill = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs`), {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            claimToken: claimed.claims[0]!.claimToken,
+            idempotencyKey: corruptKey,
+          }),
+        });
+        expect(corruptBackfill.status).toBe(409);
+        expect(await corruptBackfill.json()).toMatchObject({ ok: false, error: "agent_session_contract_fabricated" });
+      }
+
+      const concurrentKey = `${idempotencyKey}:concurrent`;
+      const concurrentRun = await storage.createWorkflowRun({
+        workflow,
+        loop,
+        loopRun: claimed.claims[0]!.run,
+        idempotencyKey: concurrentKey,
+      });
+      const concurrentCreate = () => fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claimed.claims[0]!.claimToken,
+          idempotencyKey: concurrentKey,
+        }),
+      });
+      const concurrentResponses = await Promise.all([concurrentCreate(), concurrentCreate()]);
+      expect(concurrentResponses.map((response) => response.status)).toEqual([200, 200]);
+      expect((await storage.listWorkflowEvents(concurrentRun.id)).filter((event) =>
+        event.eventType === "agent_session_contract" && event.stepId === "contract-agent"
+      )).toHaveLength(1);
     } finally {
       server.stop(true);
       await storage.close();

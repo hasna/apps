@@ -5,6 +5,7 @@ import type {
   Loop,
   LoopRun,
   RunReceipt,
+  StoredWorkflowEvent,
   WorkflowEvent,
   WorkflowInvocation,
   WorkflowRun,
@@ -12,6 +13,7 @@ import type {
   WorkflowStepRun,
   WorkflowWorkItem,
 } from "../types.js";
+import { publicWorkflowEvent as validatedWorkflowEvent } from "./workflow-events.js";
 
 const TEXT_OUTPUT_LIMIT = 32 * 1024;
 const SENSITIVE_PAYLOAD_KEYS = new Set(["env", "error", "prompt", "reason", "stderr", "stdout"]);
@@ -132,8 +134,9 @@ export function publicWorkflowStepRun(run: WorkflowStepRun, showOutput = false):
   };
 }
 
-export function publicWorkflowEvent(event: WorkflowEvent): Record<string, unknown> {
-  return { ...event, payload: redactSensitivePayload(event.payload) };
+export function publicWorkflowEvent(event: StoredWorkflowEvent | WorkflowEvent): Record<string, unknown> {
+  const validated = validatedWorkflowEvent(event);
+  return { ...validated, payload: redactSensitivePayload(validated.payload) };
 }
 
 export function publicGoal(goal: Goal): Record<string, unknown> {

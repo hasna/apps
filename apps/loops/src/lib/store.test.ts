@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AmbiguousNameError, LoopArchivedError, LoopNotFoundError } from "./errors.js";
+import { AmbiguousNameError, DuplicateWorkflowEventError, LoopArchivedError, LoopNotFoundError } from "./errors.js";
 import { Store } from "./store.js";
 
 // Credential fixtures assembled at runtime so the literal token shapes never
@@ -2227,6 +2227,29 @@ exit 0
       expect(second.sequence).toBe(2);
       expect(third.sequence).toBe(3);
       expect(store.listWorkflowEvents(run.id).map((event) => event.sequence)).toEqual([1, 2, 3]);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("atomically rejects duplicate agent session contracts for one workflow step", () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "unique-agent-contract-workflow",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const run = store.createWorkflowRun({ workflow });
+      store.appendWorkflowEvent(run.id, "agent_session_contract", "worker", { version: 1 });
+      expect(() => store.appendWorkflowEvent(
+        run.id,
+        "agent_session_contract",
+        "worker",
+        { version: 1 },
+      )).toThrow(DuplicateWorkflowEventError);
+      expect(store.listWorkflowEvents(run.id).filter((event) =>
+        event.eventType === "agent_session_contract" && event.stepId === "worker"
+      )).toHaveLength(1);
     } finally {
       store.close();
     }

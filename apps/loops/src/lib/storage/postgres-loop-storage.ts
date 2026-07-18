@@ -65,7 +65,7 @@ import {
   type WorkflowStepRunRow,
   type WorkflowWorkItemRow,
 } from "../store.js";
-import { LoopArchivedError, LoopNotFoundError, ValidationError } from "../errors.js";
+import { DuplicateWorkflowEventError, LoopArchivedError, LoopNotFoundError, ValidationError } from "../errors.js";
 import { genId, nowIso } from "../ids.js";
 import { initialNextRun } from "../recurrence.js";
 import { normalizeCreateWorkflowInput } from "../workflow-spec.js";
@@ -2418,6 +2418,18 @@ export class PostgresLoopStorage implements LoopStorageContract {
       "SELECT id FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND id = $1 FOR UPDATE",
       [workflowRunId],
     );
+    if (eventType === "agent_session_contract") {
+      const duplicate = await c.get<{ id: string }>(
+        `SELECT id FROM workflow_events
+         WHERE tenant_id = open_loops_current_tenant_id()
+           AND workflow_run_id = $1
+           AND event_type = $2
+           AND step_id IS NOT DISTINCT FROM $3
+         LIMIT 1`,
+        [workflowRunId, eventType, stepId ?? null],
+      );
+      if (duplicate) throw new DuplicateWorkflowEventError(workflowRunId, eventType, stepId);
+    }
     const current = await c.get<{ sequence: number | null }>(
       "SELECT MAX(sequence)::int AS sequence FROM workflow_events WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id = $1",
       [workflowRunId],

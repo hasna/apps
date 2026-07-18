@@ -22,8 +22,8 @@ import type {
   RunReceiptMachine,
   RunStatus,
   TimeoutMs,
+  StoredWorkflowEvent,
   WriteRunReceiptInput,
-  WorkflowEvent,
   WorkflowInvocation,
   WorkflowRun,
   WorkflowRunStatus,
@@ -34,7 +34,7 @@ import type {
   WorkflowWorkItemStatus,
   UpsertWorkflowWorkItemInput,
 } from "../types.js";
-import { AmbiguousNameError, LoopArchivedError, LoopNotFoundError, ValidationError } from "./errors.js";
+import { AmbiguousNameError, DuplicateWorkflowEventError, LoopArchivedError, LoopNotFoundError, ValidationError } from "./errors.js";
 import { genId, nowIso } from "./ids.js";
 import { dbPath } from "./paths.js";
 import { processStartTimeMs, sameProcessStart, START_TIME_TOLERANCE_MS } from "./process-identity.js";
@@ -594,7 +594,7 @@ export function rowToGoalRun(row: GoalRunRow): GoalRun {
   };
 }
 
-export function rowToWorkflowEvent(row: WorkflowEventRow): WorkflowEvent {
+export function rowToWorkflowEvent(row: WorkflowEventRow): StoredWorkflowEvent {
   return {
     id: row.id,
     workflowRunId: row.workflow_run_id,
@@ -3734,11 +3734,21 @@ export class Store {
     eventType: string,
     stepId?: string,
     payload?: Record<string, unknown>,
-  ): WorkflowEvent {
+  ): StoredWorkflowEvent {
     // MAX(sequence)+1 is only race-free while the write lock is held, so take
     // a write transaction when the caller has not already opened one.
     return this.transact(() => {
       const now = nowIso();
+      if (eventType === "agent_session_contract") {
+        const duplicate = stepId === undefined
+          ? this.db.query<{ id: string }, [string, string]>(
+              "SELECT id FROM workflow_events WHERE workflow_run_id = ? AND event_type = ? AND step_id IS NULL LIMIT 1",
+            ).get(workflowRunId, eventType)
+          : this.db.query<{ id: string }, [string, string, string]>(
+              "SELECT id FROM workflow_events WHERE workflow_run_id = ? AND event_type = ? AND step_id = ? LIMIT 1",
+            ).get(workflowRunId, eventType, stepId);
+        if (duplicate) throw new DuplicateWorkflowEventError(workflowRunId, eventType, stepId);
+      }
       const current = this.db
         .query<{ sequence: number | null }, [string]>("SELECT MAX(sequence) AS sequence FROM workflow_events WHERE workflow_run_id = ?")
         .get(workflowRunId);
@@ -3764,7 +3774,7 @@ export class Store {
     });
   }
 
-  listWorkflowEvents(workflowRunId: string, limit = 200): WorkflowEvent[] {
+  listWorkflowEvents(workflowRunId: string, limit = 200): StoredWorkflowEvent[] {
     const rows = this.db
       .query<WorkflowEventRow, [string, number]>(
         "SELECT * FROM workflow_events WHERE workflow_run_id = ? ORDER BY sequence ASC LIMIT ?",

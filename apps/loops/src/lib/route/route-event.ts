@@ -783,7 +783,9 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
   }
   const providerRouting = resolveProviderRouting(data, metadata, opts);
   const provider = providerRouting.provider;
-  const permissionMode = permissionModeFromOpts({ permissionMode: opts.permissionMode ?? "bypass" }, provider);
+  const permissionMode = permissionModeFromOpts({
+    permissionMode: opts.permissionMode ?? (["codewith", "codex"].includes(provider) ? "bypass" : "default"),
+  }, provider);
   const sandbox = sandboxFromOpts({ sandbox: opts.sandbox }, provider);
   const authProfile = providerAuthProfileFromOpts({ authProfile: providerRouting.authProfile }, provider);
   const templateId = todosTaskRouteTemplateId(opts);
@@ -938,7 +940,9 @@ export function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOpti
   const idempotencyKey = `generic-event:${event.source}:${event.type}:${event.id}`;
   const providerRouting = resolveProviderRouting(data, metadata, opts);
   const provider = providerRouting.provider;
-  const permissionMode = permissionModeFromOpts({ permissionMode: opts.permissionMode ?? "bypass" }, provider);
+  const permissionMode = permissionModeFromOpts({
+    permissionMode: opts.permissionMode ?? (["codewith", "codex"].includes(provider) ? "bypass" : "default"),
+  }, provider);
   const sandbox = sandboxFromOpts({ sandbox: opts.sandbox }, provider);
   const authProfile = providerAuthProfileFromOpts({ authProfile: providerRouting.authProfile }, provider);
   const workflowContext = {

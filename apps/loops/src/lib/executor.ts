@@ -7,6 +7,7 @@ import type { LanguageModel } from "ai";
 import type {
   AccountRef,
   AgentProvider,
+  AgentSessionContract,
   AgentTarget,
   AgentWorktreeSpec,
   CommandTarget,
@@ -18,7 +19,7 @@ import type {
   PersistGuardOptions,
 } from "../types.js";
 import { accountToolForProvider, resolveAccountEnv, resolveAccountEnvSync } from "./accounts.js";
-import { agentSessionContract, BoundedOutputBuffer, killProcessGroup, providerAdapter, spawnCapture, type AgentSessionContract } from "./agent-adapter.js";
+import { agentSessionContract, BoundedOutputBuffer, killProcessGroup, providerAdapter, spawnCapture } from "./agent-adapter.js";
 import { commandNotFoundMessage, executableExists, normalizeExecutionPath } from "./env.js";
 import { nowIso } from "./ids.js";
 import { refreshLoopMachine, resolveMachineCommand } from "./machines.js";

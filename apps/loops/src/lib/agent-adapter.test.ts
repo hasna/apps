@@ -623,6 +623,8 @@ describe("agent adapters", () => {
           prompt: "say ok",
           cwd: ".",
           permissionMode: "bypass",
+          manualBreakGlass: true,
+          allowlist: { safetyReason: "operator-approved isolated aicopilot test" },
           variant: "max",
           configIsolation: "safe",
         },
@@ -737,7 +739,7 @@ describe("provider adapter contracts", () => {
       "codex.agent is not supported for provider codex",
     );
     expect(() => providerAdapter("codewith").validate(baseTarget({ provider: "codewith", extraArgs: ["exec"] }))).toThrow(
-      "codewith.extraArgs cannot include exec; codewith exec launch flags are managed by the adapter",
+      "codewith.extraArgs cannot include exec",
     );
     expect(() => providerAdapter("codewith").validate(baseTarget({
       provider: "codewith",
@@ -758,6 +760,55 @@ describe("provider adapter contracts", () => {
     expect(() => providerAdapter("claude").validate(baseTarget({ provider: "claude", authProfile: "work" }), "step.target")).toThrow(
       "step.target.authProfile is currently supported only for provider codewith",
     );
+  });
+
+  test("rejects provider-managed and security-sensitive extra args in split and option=value forms", () => {
+    const cases: Array<{ provider: AgentTarget["provider"]; extraArgs: string[]; model?: string }> = [
+      { provider: "claude", extraArgs: ["--permission-mode", "bypassPermissions"] },
+      { provider: "claude", extraArgs: ["--permission-mode=bypassPermissions"] },
+      { provider: "claude", extraArgs: ["--add-dir=/"] },
+      { provider: "cursor", extraArgs: ["--sandbox", "disabled"] },
+      { provider: "cursor", extraArgs: ["--sandbox=disabled"] },
+      { provider: "cursor", extraArgs: ["-f"] },
+      { provider: "cursor", extraArgs: ["--yolo"] },
+      { provider: "codewith", extraArgs: ["--ask-for-approval", "always"] },
+      { provider: "codewith", extraArgs: ["--sandbox=danger-full-access"] },
+      { provider: "codewith", extraArgs: ["--json"] },
+      { provider: "codex", extraArgs: ["-c", "sandbox_workspace_write.network_access=false"] },
+      { provider: "codex", extraArgs: ["-csandbox_mode=\"danger-full-access\""] },
+      { provider: "codex", extraArgs: ["-s", "danger-full-access"] },
+      { provider: "codex", extraArgs: ["-mother/model"] },
+      { provider: "codex", extraArgs: ["-C/tmp/elsewhere"] },
+      { provider: "codex", extraArgs: ["--output-schema=fabricated.json"] },
+      { provider: "aicopilot", extraArgs: ["--dangerously-skip-permissions"] },
+      { provider: "aicopilot", extraArgs: ["--format=text"] },
+      { provider: "opencode", model: "openrouter/test/model", extraArgs: ["--dir", "/tmp/elsewhere"] },
+      { provider: "opencode", model: "openrouter/test/model", extraArgs: ["--model=other/model"] },
+      { provider: "opencode", model: "openrouter/test/model", extraArgs: ["--auto"] },
+    ];
+
+    for (const entry of cases) {
+      expect(() => providerAdapter(entry.provider).validate(baseTarget({
+        provider: entry.provider,
+        model: entry.model,
+        extraArgs: entry.extraArgs,
+      }))).toThrow(`${entry.provider}.extraArgs cannot include ${entry.extraArgs[0]}`);
+    }
+  });
+
+  test("requires manual break-glass and a non-empty safety reason for every provider bypass mode", () => {
+    const providers: AgentTarget["provider"][] = ["claude", "cursor", "codewith", "codex", "aicopilot", "opencode"];
+    for (const provider of providers) {
+      const required = { provider, model: provider === "opencode" ? "openrouter/test/model" : undefined, permissionMode: "bypass" as const };
+      expect(() => providerAdapter(provider).validate(baseTarget({
+        ...required,
+        allowlist: { safetyReason: "operator-approved isolated bypass test" },
+      }))).toThrow("manualBreakGlass=true");
+      expect(() => providerAdapter(provider).validate(baseTarget({
+        ...required,
+        manualBreakGlass: true,
+      }))).toThrow("allowlist.safetyReason");
+    }
   });
 
   test("spawnCapture enforces explicit timeouts without blocking", async () => {

@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { MockLanguageModelV3 } from "ai/test";
-import type { WorkflowStepInput } from "../types.js";
+import type { AgentTarget, WorkflowStepInput } from "../types.js";
+import { workflowStepAgentSessionContract } from "./agent-adapter.js";
 import { buildHealthReport } from "./health.js";
 import { tick } from "./scheduler.js";
 import { Store } from "./store.js";
@@ -44,6 +45,10 @@ function mockObjects(objects: unknown[], totalTokens = 10) {
   return new MockLanguageModelV3({
     doGenerate: async () => generated(objects[Math.min(index++, objects.length - 1)], totalTokens),
   });
+}
+
+class ServerDerivedContractStore extends Store {
+  readonly serverDerivedAgentSessionContracts = true;
 }
 
 describe("workflow runner", () => {
@@ -137,6 +142,40 @@ describe("workflow runner", () => {
         },
         safetyReason: "scoped workflow agent test",
       });
+    } finally {
+      store.close();
+      rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+
+  test("does not submit a client-authored contract when the server derives workflow contract events", async () => {
+    const store = new ServerDerivedContractStore(":memory:");
+    const binDir = mkdtempSync(join(tmpdir(), "loops-workflow-server-contract-"));
+    const fakeCodewith = join(binDir, "codewith");
+    writeFileSync(fakeCodewith, "#!/bin/sh\ncat >/dev/null\nprintf agent-ok\n");
+    chmodSync(fakeCodewith, 0o755);
+    try {
+      const workflow = store.createWorkflow({
+        name: "server-derived-agent-contract",
+        steps: [{
+          id: "agent",
+          target: {
+            type: "agent",
+            provider: "codewith",
+            prompt: "inspect scoped state",
+            cwd: binDir,
+            allowlist: { commands: ["git"], safetyReason: "server-derived contract test" },
+          },
+        }],
+      });
+
+      const result = await executeWorkflow(store, workflow, {
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+      });
+
+      expect(result.status).toBe("succeeded");
+      const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0]!;
+      expect(store.listWorkflowEvents(run.id).filter((event) => event.eventType === "agent_session_contract")).toHaveLength(0);
     } finally {
       store.close();
       rmSync(binDir, { recursive: true, force: true });
@@ -1039,6 +1078,69 @@ describe("workflow runner", () => {
       expect(store.listWorkflowRuns({ workflowId: workflow.id })).toHaveLength(1);
       expect(store.getWorkflowStepRun(stranded.id, "write")?.status).toBe("succeeded");
       expect(readFileSync(marker, "utf8").trim()).toBe("done");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("resumed agent workflow reuses its matching contract event after interrupted execution", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-agent-resume-contract-"));
+    const marker = join(root, "marker");
+    const fakeCodewith = join(root, "codewith");
+    const DEAD_PID = 0x3fffffff;
+    writeFileSync(fakeCodewith, `#!/bin/sh\ncat >/dev/null\nprintf done > '${marker}'\nprintf agent-ok\n`);
+    chmodSync(fakeCodewith, 0o755);
+    try {
+      const target = {
+        type: "agent",
+        provider: "codewith",
+        prompt: "perform scoped work",
+        cwd: root,
+        allowlist: { commands: ["git"], safetyReason: "interrupted agent recovery test" },
+      } satisfies AgentTarget;
+      const workflow = store.createWorkflow({
+        name: "agent-resume-contract",
+        steps: [{ id: "agent", target }],
+      });
+      const stranded = store.createWorkflowRun({ workflow, idempotencyKey: "agent-resume-key" });
+      store.appendWorkflowEvent(
+        stranded.id,
+        "agent_session_contract",
+        "agent",
+        workflowStepAgentSessionContract(workflow.steps[0]!) as unknown as Record<string, unknown>,
+      );
+      store.startWorkflowStepRun(stranded.id, "agent");
+      store.markWorkflowStepPid(stranded.id, "agent", DEAD_PID);
+
+      const result = await executeWorkflow(store, workflow, {
+        idempotencyKey: "agent-resume-key",
+        env: { ...process.env, PATH: `${root}:${process.env.PATH ?? ""}` },
+      });
+
+      if (result.status !== "succeeded") throw new Error(JSON.stringify(result));
+      expect(result.status).toBe("succeeded");
+      expect(readFileSync(marker, "utf8")).toBe("done");
+      expect(store.listWorkflowEvents(stranded.id).filter((event) =>
+        event.eventType === "agent_session_contract" && event.stepId === "agent"
+      )).toHaveLength(1);
+
+      rmSync(marker, { force: true });
+      const fabricated = store.createWorkflowRun({ workflow, idempotencyKey: "agent-fabricated-contract-key" });
+      store.appendWorkflowEvent(
+        fabricated.id,
+        "agent_session_contract",
+        "agent",
+        workflowStepAgentSessionContract(workflow.steps[0]!) as unknown as Record<string, unknown>,
+      );
+      const rejected = await executeWorkflow(store, workflow, {
+        idempotencyKey: "agent-fabricated-contract-key",
+        env: { ...process.env, PATH: `${root}:${process.env.PATH ?? ""}` },
+      });
+      expect(rejected.status).toBe("failed");
+      expect(rejected.error).toContain("workflow event already exists");
+      expect(existsSync(marker)).toBe(false);
     } finally {
       store.close();
       rmSync(root, { recursive: true, force: true });
