@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 import { scanExtractedPackedFiles } from "./release-packed-scan";
 import {
   classifyReleaseGateAuthority,
@@ -31,6 +32,26 @@ import {
   validateSdkPackageMetadata,
   type PackageJson,
 } from "./public-release-gate";
+
+const releaseArtifactTest = process.env.HASNA_TODOS_RELEASE_ARTIFACT_TEST === "1" ? test : test.skip;
+
+function runReleaseArtifactCommand(
+  command: string,
+  args: string[],
+  cwd: string,
+  env: Record<string, string | undefined> = process.env,
+): string {
+  const result = spawnSync(command, args, {
+    cwd,
+    env,
+    encoding: "utf8",
+    maxBuffer: 20 * 1024 * 1024,
+  });
+  if (result.status !== 0) {
+    throw new Error(`${command} ${args.join(" ")} failed (${result.status ?? "signal"}): ${result.stderr || result.stdout}`);
+  }
+  return result.stdout;
+}
 
 const rootPackage: PackageJson = {
   name: "@hasna/todos",
@@ -323,6 +344,69 @@ describe("public release gate", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  releaseArtifactTest("keeps contracts external in the packed payload and resolves it after isolated install", () => {
+    expect(Bun.version).toBe("1.3.14");
+    const root = resolve(import.meta.dir, "../..");
+    const temp = mkdtempSync(join(tmpdir(), "todos-release-artifact-"));
+    try {
+      runReleaseArtifactCommand(process.execPath, ["run", "build"], root, {
+        ...process.env,
+        NODE_ENV: "production",
+      });
+      const packDir = join(temp, "pack");
+      const payloadDir = join(temp, "payload");
+      const installDir = join(temp, "install");
+      mkdirSync(packDir, { recursive: true });
+      mkdirSync(payloadDir, { recursive: true });
+      mkdirSync(installDir, { recursive: true });
+
+      const packed = JSON.parse(runReleaseArtifactCommand(
+        "npm",
+        ["pack", "--ignore-scripts", "--json", "--pack-destination", packDir],
+        root,
+      )) as Array<{ filename: string; files: Array<{ path: string }> }>;
+      const artifact = packed[0];
+      expect(artifact?.filename).toBeTruthy();
+      const tarball = join(packDir, artifact!.filename);
+      runReleaseArtifactCommand("tar", ["-xf", tarball, "-C", payloadDir], root);
+
+      const packageJson = JSON.parse(readFileSync(join(payloadDir, "package", "package.json"), "utf8")) as {
+        dependencies?: Record<string, string>;
+      };
+      expect(packageJson.dependencies?.["@hasna/contracts"]).toBeTruthy();
+      const scanFailures = scanExtractedPackedFiles(
+        artifact!.files,
+        payloadDir,
+        readFileSync(join(root, "dashboard", "public", "logo.jpg")),
+      );
+      expect(scanFailures).toEqual([]);
+
+      writeFileSync(join(installDir, "package.json"), `${JSON.stringify({ private: true })}\n`);
+      const isolatedEnv = {
+        PATH: process.env.PATH,
+        HOME: installDir,
+        BUN_INSTALL: join(installDir, ".bun"),
+        XDG_CACHE_HOME: join(installDir, ".cache"),
+      };
+      runReleaseArtifactCommand(
+        process.execPath,
+        ["add", "--cwd", installDir, tarball, "--minimum-release-age=0"],
+        root,
+        isolatedEnv,
+      );
+      expect(JSON.parse(readFileSync(join(installDir, "node_modules", "@hasna", "contracts", "package.json"), "utf8")).name)
+        .toBe("@hasna/contracts");
+      expect(runReleaseArtifactCommand(
+        join(installDir, "node_modules", ".bin", "todos"),
+        ["--version"],
+        installDir,
+        isolatedEnv,
+      ).trim()).toBe("0.11.92");
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  }, 120_000);
 
   test("uses deterministic provenance time and requires two identical clean tarballs", () => {
     expect(resolveReleaseProvenanceTimestamp("1784361600", "1")).toBe("2026-07-18T08:00:00.000Z");
