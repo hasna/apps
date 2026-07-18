@@ -45,3 +45,21 @@ export class DuplicateWorkflowEventError extends CodedError {
     );
   }
 }
+
+export class LegacyWorkflowRunProvenanceError extends CodedError {
+  constructor(workflowRunId: string) {
+    super(
+      "WORKFLOW_RUN_PROVENANCE_MISSING",
+      `workflow run idempotency provenance is missing: ${workflowRunId}; legacy runs must be restarted with a new idempotency key`,
+    );
+  }
+}
+
+export class WorkflowRunDefinitionConflictError extends CodedError {
+  constructor(workflowRunId: string) {
+    super(
+      "WORKFLOW_RUN_DEFINITION_CONFLICT",
+      `workflow run idempotency definition conflict: ${workflowRunId}; the creating workflow definition differs`,
+    );
+  }
+}

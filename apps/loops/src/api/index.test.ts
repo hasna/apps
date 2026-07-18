@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { createSqliteLoopStorage } from "../lib/storage/sqlite.js";
 import type { LoopStorageContract } from "../lib/storage/contract.js";
 import type { TenantAuthContext } from "../lib/auth/tenant-auth.js";
@@ -1266,7 +1267,7 @@ describe("loops-api foundation", () => {
       });
       expect((await storage.listWorkflowEvents(preChangeWorkflowRun.id)).filter((event) =>
         event.eventType === "agent_session_contract"
-      )).toHaveLength(0);
+      )).toHaveLength(1);
 
       const createWorkflowRun = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs`), {
         method: "POST",
@@ -1280,6 +1281,52 @@ describe("loops-api foundation", () => {
       const created = (await createWorkflowRun.json()) as { workflowRun: { id: string; loopRunId: string; workflowId: string; status: string } };
       expect(created.workflowRun).toMatchObject({ loopRunId: claimed.claims[0]!.run.id, workflowId: workflow.id, status: "running" });
       expect(created.workflowRun.id).toBe(preChangeWorkflowRun.id);
+
+      const internal = storage.store as unknown as { db: Database };
+      const eventsBeforeProvenanceFailures = await storage.listWorkflowEvents(created.workflowRun.id);
+      const runCountBeforeProvenanceFailures = (await storage.listWorkflowRuns({ workflowId: workflow.id })).length;
+      const changedSteps = workflow.steps.map((step) =>
+        step.id === "contract-agent" && step.target.type === "agent"
+          ? { ...step, target: { ...step.target, prompt: "changed after the idempotent run was created" } }
+          : step
+      );
+      internal.db.query("UPDATE workflow_specs SET steps_json = ? WHERE id = ?")
+        .run(JSON.stringify(changedSteps), workflow.id);
+      const changedDefinition = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claimed.claims[0]!.claimToken,
+          idempotencyKey,
+        }),
+      });
+      expect(changedDefinition.status).toBe(409);
+      expect(await changedDefinition.json()).toMatchObject({ ok: false, error: "workflow_run_definition_conflict" });
+      expect((await storage.listWorkflowRuns({ workflowId: workflow.id })).length).toBe(runCountBeforeProvenanceFailures);
+      expect(await storage.listWorkflowEvents(created.workflowRun.id)).toEqual(eventsBeforeProvenanceFailures);
+
+      internal.db.query("UPDATE workflow_specs SET steps_json = ? WHERE id = ?")
+        .run(JSON.stringify(workflow.steps), workflow.id);
+      const provenance = internal.db.query<{ workflow_definition_hash: string }, [string]>(
+        "SELECT workflow_definition_hash FROM workflow_runs WHERE id = ?",
+      ).get(created.workflowRun.id);
+      expect(provenance?.workflow_definition_hash).toBeString();
+      internal.db.query("UPDATE workflow_runs SET workflow_definition_hash = NULL WHERE id = ?")
+        .run(created.workflowRun.id);
+      const legacyProvenance = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claimed.claims[0]!.claimToken,
+          idempotencyKey,
+        }),
+      });
+      expect(legacyProvenance.status).toBe(409);
+      expect(await legacyProvenance.json()).toMatchObject({ ok: false, error: "workflow_run_provenance_missing" });
+      expect((await storage.listWorkflowRuns({ workflowId: workflow.id })).length).toBe(runCountBeforeProvenanceFailures);
+      expect(await storage.listWorkflowEvents(created.workflowRun.id)).toEqual(eventsBeforeProvenanceFailures);
+      internal.db.query("UPDATE workflow_runs SET workflow_definition_hash = ? WHERE id = ?")
+        .run(provenance!.workflow_definition_hash, created.workflowRun.id);
 
       const staleStart = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/steps/command/start`), {
         method: "POST",
@@ -1424,6 +1471,23 @@ describe("loops-api foundation", () => {
       expect((await storage.listWorkflowEvents(concurrentRun.id)).filter((event) =>
         event.eventType === "agent_session_contract" && event.stepId === "contract-agent"
       )).toHaveLength(1);
+
+      internal.db.query(
+        "DELETE FROM workflow_events WHERE workflow_run_id = ? AND event_type = 'agent_session_contract' AND step_id = ?",
+      ).run(created.workflowRun.id, "contract-agent");
+      const missingContract = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claimed.claims[0]!.claimToken,
+          idempotencyKey,
+        }),
+      });
+      expect(missingContract.status).toBe(409);
+      expect(await missingContract.json()).toMatchObject({ ok: false, error: "agent_session_contract_missing" });
+      expect((await storage.listWorkflowEvents(created.workflowRun.id)).filter((event) =>
+        event.eventType === "agent_session_contract" && event.stepId === "contract-agent"
+      )).toHaveLength(0);
     } finally {
       server.stop(true);
       await storage.close();

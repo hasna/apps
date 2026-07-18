@@ -676,6 +676,12 @@ ALTER TABLE workflow_work_items ADD COLUMN IF NOT EXISTS gate_deaths INTEGER NOT
     `,
   ),
   migration(
+    "0011_workflow_run_provenance",
+    `
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS workflow_definition_hash TEXT;
+    `,
+  ),
+  migration(
     "0008_tenant_prepare",
     `
 CREATE TABLE tenants (

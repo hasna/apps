@@ -69,6 +69,7 @@ const CODEX_LIKE_PROTECTED_EXTRA_ARGS = [
   "--full-auto",
   "--yolo",
   "--dangerously-bypass-approvals-and-sandbox",
+  "--dangerously-bypass-hook-trust",
 ] as const;
 
 export const PROTECTED_AGENT_EXTRA_ARGS: Readonly<Record<AgentProvider, ReadonlySet<string>>> = {
@@ -84,12 +85,17 @@ export const PROTECTED_AGENT_EXTRA_ARGS: Readonly<Record<AgentProvider, Readonly
     "--settings",
     "--no-session-persistence",
     "--add-dir",
+    "--allowed-tools",
+    "--allowedTools",
     "-m",
     "--model",
     "--effort",
     "--agent",
   ]),
-  cursor: new Set(["-p", "--print", "--mode", "-f", "--force", "--yolo", "--sandbox", "-m", "--model", "--agent"]),
+  cursor: new Set([
+    "-p", "--print", "--mode", "-f", "--force", "--yolo", "--sandbox", "-m", "--model", "--agent",
+    "--plan", "--workspace", "--add-dir", "--approve-mcps",
+  ]),
   codewith: new Set(["--auth-profile", ...CODEX_LIKE_PROTECTED_EXTRA_ARGS]),
   codex: new Set(CODEX_LIKE_PROTECTED_EXTRA_ARGS),
   aicopilot: new Set(["run", "-f", "--format", "--pure", "--auto", "--dangerously-skip-permissions", "-d", "--dir", "-m", "--model", "--variant", "-a", "--agent"]),

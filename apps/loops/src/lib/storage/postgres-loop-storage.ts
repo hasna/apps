@@ -65,10 +65,18 @@ import {
   type WorkflowStepRunRow,
   type WorkflowWorkItemRow,
 } from "../store.js";
-import { DuplicateWorkflowEventError, LoopArchivedError, LoopNotFoundError, ValidationError } from "../errors.js";
+import {
+  DuplicateWorkflowEventError,
+  LegacyWorkflowRunProvenanceError,
+  LoopArchivedError,
+  LoopNotFoundError,
+  ValidationError,
+  WorkflowRunDefinitionConflictError,
+} from "../errors.js";
 import { genId, nowIso } from "../ids.js";
 import { initialNextRun } from "../recurrence.js";
 import { normalizeCreateWorkflowInput } from "../workflow-spec.js";
+import { initialAgentSessionContractEvents, workflowDefinitionHash } from "../workflow-provenance.js";
 import { assertGoalTransition, updateReadyFlags } from "../goal/status.js";
 import { GOAL_TERMINAL, type GoalStatus } from "../goal/types.js";
 import type {
@@ -2017,6 +2025,8 @@ export class PostgresLoopStorage implements LoopStorageContract {
   async createWorkflowRun(...args: M<"createWorkflowRun">["args"]): Promise<M<"createWorkflowRun">["result"]> {
     const [input] = args as [CreateWorkflowRunInput];
     const now = nowIso();
+    const definitionHash = workflowDefinitionHash(input.workflow);
+    const initialContractEvents = initialAgentSessionContractEvents(input.workflow);
     const targetInput = input.loop?.target.type === "workflow" ? input.loop.target.input : undefined;
     const invocationId = input.invocationId ?? targetInput?.workflowInvocationId ?? targetInput?.invocationId;
     const workItemId = input.workItemId ?? targetInput?.workflowWorkItemId ?? targetInput?.workItemId;
@@ -2027,38 +2037,58 @@ export class PostgresLoopStorage implements LoopStorageContract {
       );
       if (existing) {
         await this.client.transaction((c) => this.assertDaemonLeaseFence(c, input, now));
+        if (!existing.workflow_definition_hash) throw new LegacyWorkflowRunProvenanceError(existing.id);
+        if (existing.workflow_definition_hash !== definitionHash) throw new WorkflowRunDefinitionConflictError(existing.id);
         return rowToWorkflowRun(existing);
       }
     }
 
     return this.client.transaction(async (c) => {
       await this.assertDaemonLeaseFence(c, input, now);
-      if (input.idempotencyKey) {
-        const existing = await c.get<WorkflowRunRow>(
-          "SELECT * FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND workflow_id = $1 AND idempotency_key = $2 LIMIT 1",
-          [input.workflow.id, input.idempotencyKey],
-        );
-        if (existing) return rowToWorkflowRun(existing);
-      }
       const runId = genId();
-      await c.execute(
+      const insertSql =
         `INSERT INTO workflow_runs (id, workflow_id, workflow_name, loop_id, loop_run_id, invocation_id, work_item_id,
-          scheduled_for, idempotency_key, manifest_path, status, started_at, finished_at, duration_ms, error,
+          scheduled_for, idempotency_key, workflow_definition_hash, manifest_path, status, started_at, finished_at, duration_ms, error,
           created_at, updated_at, tenant_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,'running',$10,NULL,NULL,NULL,$10,$10,open_loops_current_tenant_id())`,
-        [
-          runId,
-          input.workflow.id,
-          input.workflow.name,
-          input.loop?.id ?? null,
-          input.loopRun?.id ?? null,
-          invocationId ?? null,
-          workItemId ?? null,
-          input.scheduledFor ?? input.loopRun?.scheduledFor ?? null,
-          input.idempotencyKey ?? null,
-          now,
-        ],
-      );
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULL,'running',$11,NULL,NULL,NULL,$11,$11,open_loops_current_tenant_id())`;
+      const insertParams = [
+        runId,
+        input.workflow.id,
+        input.workflow.name,
+        input.loop?.id ?? null,
+        input.loopRun?.id ?? null,
+        invocationId ?? null,
+        workItemId ?? null,
+        input.scheduledFor ?? input.loopRun?.scheduledFor ?? null,
+        input.idempotencyKey ?? null,
+        definitionHash,
+        now,
+      ];
+      if (input.idempotencyKey) {
+        const inserted = await c.query(
+          `${insertSql}
+           ON CONFLICT (tenant_id, workflow_id, idempotency_key)
+           WHERE idempotency_key IS NOT NULL
+           DO NOTHING`,
+          insertParams,
+        );
+        if (inserted.rowCount === 0) {
+          // PostgreSQL waits for a concurrent conflicting insert to commit (or
+          // roll back) before resolving DO NOTHING. Load that immutable winner
+          // in this transaction and apply the same provenance checks as a
+          // sequential retry instead of leaking a raw unique violation.
+          const existing = await c.get<WorkflowRunRow>(
+            "SELECT * FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND workflow_id = $1 AND idempotency_key = $2 LIMIT 1",
+            [input.workflow.id, input.idempotencyKey],
+          );
+          if (!existing) throw new Error("idempotent workflow run conflict resolved without a visible winner");
+          if (!existing.workflow_definition_hash) throw new LegacyWorkflowRunProvenanceError(existing.id);
+          if (existing.workflow_definition_hash !== definitionHash) throw new WorkflowRunDefinitionConflictError(existing.id);
+          return rowToWorkflowRun(existing);
+        }
+      } else {
+        await c.execute(insertSql, insertParams);
+      }
       if (workItemId) {
         const leaseExpiresAt = input.loop ? new Date(Date.now() + input.loop.leaseMs).toISOString() : null;
         const workItemRes = await c.query(
@@ -2097,6 +2127,10 @@ export class PostgresLoopStorage implements LoopStorageContract {
         workItemId,
         manifestPath: undefined,
       });
+      for (const event of initialContractEvents) {
+        input.beforeInitialWorkflowEventPersist?.(event);
+        await this.appendWorkflowEventWithClient(c, runId, event.eventType, event.stepId, event.payload);
+      }
       const run = await c.get<WorkflowRunRow>(
         "SELECT * FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND id = $1",
         [runId],

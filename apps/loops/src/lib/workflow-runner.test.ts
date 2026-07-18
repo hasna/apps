@@ -175,7 +175,7 @@ describe("workflow runner", () => {
 
       expect(result.status).toBe("succeeded");
       const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0]!;
-      expect(store.listWorkflowEvents(run.id).filter((event) => event.eventType === "agent_session_contract")).toHaveLength(0);
+      expect(store.listWorkflowEvents(run.id).filter((event) => event.eventType === "agent_session_contract")).toHaveLength(1);
     } finally {
       store.close();
       rmSync(binDir, { recursive: true, force: true });
@@ -1105,12 +1105,6 @@ describe("workflow runner", () => {
         steps: [{ id: "agent", target }],
       });
       const stranded = store.createWorkflowRun({ workflow, idempotencyKey: "agent-resume-key" });
-      store.appendWorkflowEvent(
-        stranded.id,
-        "agent_session_contract",
-        "agent",
-        workflowStepAgentSessionContract(workflow.steps[0]!) as unknown as Record<string, unknown>,
-      );
       store.startWorkflowStepRun(stranded.id, "agent");
       store.markWorkflowStepPid(stranded.id, "agent", DEAD_PID);
 
@@ -1126,21 +1120,6 @@ describe("workflow runner", () => {
         event.eventType === "agent_session_contract" && event.stepId === "agent"
       )).toHaveLength(1);
 
-      rmSync(marker, { force: true });
-      const fabricated = store.createWorkflowRun({ workflow, idempotencyKey: "agent-fabricated-contract-key" });
-      store.appendWorkflowEvent(
-        fabricated.id,
-        "agent_session_contract",
-        "agent",
-        workflowStepAgentSessionContract(workflow.steps[0]!) as unknown as Record<string, unknown>,
-      );
-      const rejected = await executeWorkflow(store, workflow, {
-        idempotencyKey: "agent-fabricated-contract-key",
-        env: { ...process.env, PATH: `${root}:${process.env.PATH ?? ""}` },
-      });
-      expect(rejected.status).toBe("failed");
-      expect(rejected.error).toContain("workflow event already exists");
-      expect(existsSync(marker)).toBe(false);
     } finally {
       store.close();
       rmSync(root, { recursive: true, force: true });

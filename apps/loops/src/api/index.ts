@@ -19,7 +19,14 @@ import type {
   WriteRunReceiptInput,
 } from "../types.js";
 import type { GoalStatus } from "../lib/goal/types.js";
-import { DuplicateWorkflowEventError, LoopArchivedError, LoopNotFoundError, ValidationError } from "../lib/errors.js";
+import {
+  DuplicateWorkflowEventError,
+  LegacyWorkflowRunProvenanceError,
+  LoopArchivedError,
+  LoopNotFoundError,
+  ValidationError,
+  WorkflowRunDefinitionConflictError,
+} from "../lib/errors.js";
 import { workflowStepAgentSessionContract } from "../lib/agent-adapter.js";
 import type { AgentSessionContract } from "../types.js";
 import {
@@ -730,47 +737,13 @@ function validateExistingAgentSessionContractEvents(
       if (existing.length > 0) throw apiError("agent_session_contract_fabricated", 409);
       continue;
     }
+    if (existing.length === 0) throw apiError("agent_session_contract_missing", 409);
     if (existing.length > 1) throw apiError("agent_session_contract_duplicate", 409);
-    if (existing.length === 1 && !isDeepStrictEqual(existing[0]!.payload, contractPayload(expected))) {
+    if (!isDeepStrictEqual(existing[0]!.payload, contractPayload(expected))) {
       throw apiError("agent_session_contract_stored_mismatch", 409);
     }
   }
   return contractEvents;
-}
-
-async function persistServerDerivedAgentSessionContracts(
-  storage: LoopStorageContract,
-  workflow: WorkflowSpec,
-  workflowRunId: string,
-): Promise<void> {
-  const events = await storage.listWorkflowEvents(workflowRunId, WORKFLOW_EVENT_SCAN_LIMIT);
-  const contractEvents = validateExistingAgentSessionContractEvents(workflow, events);
-  for (const step of workflow.steps) {
-    const existing = contractEvents.filter((event) => event.stepId === step.id);
-    if (step.target.type !== "agent") {
-      continue;
-    }
-    const expected = deriveWorkflowStepAgentSessionContract(step);
-    if (!expected) {
-      continue;
-    }
-    const payload = contractPayload(expected);
-    if (existing.length === 1) {
-      continue;
-    }
-    try {
-      await storage.appendWorkflowEvent(workflowRunId, "agent_session_contract", step.id, payload);
-    } catch (error) {
-      if (!(error instanceof DuplicateWorkflowEventError)) throw error;
-      const concurrent = (await storage.listWorkflowEvents(workflowRunId, WORKFLOW_EVENT_SCAN_LIMIT)).filter((event) =>
-        event.eventType === "agent_session_contract" && event.stepId === step.id
-      );
-      if (concurrent.length > 1) throw apiError("agent_session_contract_duplicate", 409);
-      if (concurrent.length !== 1 || !isDeepStrictEqual(concurrent[0]!.payload, payload)) {
-        throw apiError("agent_session_contract_stored_mismatch", 409);
-      }
-    }
-  }
 }
 
 async function handleRunWorkflowExecutionRequest(ctx: V1RequestContext, runId: string, segments: string[]): Promise<Response> {
@@ -793,7 +766,10 @@ async function handleRunWorkflowExecutionRequest(ctx: V1RequestContext, runId: s
       scheduledFor,
       idempotencyKey,
     });
-    await persistServerDerivedAgentSessionContracts(storage, workflow, workflowRun.id);
+    validateExistingAgentSessionContractEvents(
+      workflow,
+      await storage.listWorkflowEvents(workflowRun.id, WORKFLOW_EVENT_SCAN_LIMIT),
+    );
     return ok({ workflowRun });
   }
 
@@ -1479,6 +1455,8 @@ function errorResponse(error: unknown): Response {
   if (error instanceof LoopNotFoundError) return fail("loop_not_found", 404);
   if (error instanceof LoopArchivedError) return fail("loop_archived", 409);
   if (error instanceof ValidationError) return fail("validation_failed", 422);
+  if (error instanceof LegacyWorkflowRunProvenanceError) return fail("workflow_run_provenance_missing", 409);
+  if (error instanceof WorkflowRunDefinitionConflictError) return fail("workflow_run_definition_conflict", 409);
   if (error instanceof PublicApiError) return fail(error.code, error.status);
   return fail("internal_error", 500);
 }

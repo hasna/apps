@@ -455,6 +455,14 @@ export function routePolicyEvidenceFromOptions(opts: TodosDrainOptions): Record<
   const id = opts.routePolicyEvidence ?? selected;
   if (!id) return undefined;
   const policy = getRoutePolicy(id);
+  if (policy?.safety === "manual-break-glass") {
+    if (opts.manualBreakGlass !== true) {
+      throw new ValidationError(`route policy ${policy.id} requires explicit --manual-break-glass`);
+    }
+    if (typeof opts.safetyReason !== "string" || opts.safetyReason.trim() === "") {
+      throw new ValidationError(`route policy ${policy.id} requires an explicit non-empty --safety-reason`);
+    }
+  }
   const applied = selected && policy
     ? applyRoutePolicyToDrainOptions({ ...opts, policy: policy.id }, { requireExplicitSafety: false })
     : opts;

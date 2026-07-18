@@ -14,7 +14,11 @@ import pg from "pg";
 import { PgPoolExecutor } from "./pg-executor.js";
 import { PostgresStorage } from "./postgres.js";
 import { PostgresLoopStorage } from "./postgres-loop-storage.js";
-import { DuplicateWorkflowEventError } from "../errors.js";
+import {
+  DuplicateWorkflowEventError,
+  LegacyWorkflowRunProvenanceError,
+  WorkflowRunDefinitionConflictError,
+} from "../errors.js";
 import { assertTenantEnforcementBootstrap, assertTenantEnforcementBootstrapIfPending, isSafeServiceConnection } from "../../serve/index.js";
 import type { CreateLoopInput, Loop, LoopRun, WorkflowSpec } from "../../types.js";
 
@@ -1336,6 +1340,97 @@ suite("PostgresLoopStorage (live)", () => {
       "step_succeeded",
       "succeeded",
     ]);
+  });
+
+  test("workflow run provenance and initial contracts are atomic on Postgres", async () => {
+    const workflow = await storage.createWorkflow({
+      name: "pg-workflow-provenance",
+      steps: ["worker-one", "worker-two"].map((id) => ({
+        id,
+        target: {
+          type: "agent" as const,
+          provider: "codewith" as const,
+          prompt: `perform scoped work for ${id}`,
+          allowlist: { commands: ["git"], safetyReason: "postgres workflow provenance test" },
+        },
+      })),
+    });
+    const [first, retry] = await (async () => {
+      const peerExecutor = PgPoolExecutor.fromConnectionString({
+        connectionString: isolatedUrl({ username: RUNTIME_LOGIN, password: RUNTIME_PASSWORD }),
+        applicationName: "loops-pgstore-workflow-create-race",
+      });
+      const peerStorage = new PostgresLoopStorage(peerExecutor.queryClient, {
+        tenantId: "tenant-test",
+        principalId: "principal-test",
+        requestId: "workflow-create-race-peer",
+      });
+      try {
+        return await Promise.all([
+          storage.createWorkflowRun({ workflow, idempotencyKey: "same-definition" }),
+          peerStorage.createWorkflowRun({ workflow, idempotencyKey: "same-definition" }),
+        ]);
+      } finally {
+        await peerStorage.close();
+      }
+    })();
+    expect(retry.id).toBe(first.id);
+    expect((await storage.createWorkflowRun({ workflow, idempotencyKey: "same-definition" })).id).toBe(first.id);
+    expect((await storage.listWorkflowEvents(first.id)).filter((event) =>
+      event.eventType === "agent_session_contract"
+    )).toHaveLength(2);
+
+    const originalTarget = workflow.steps[0]!.target;
+    if (originalTarget.type !== "agent") throw new Error("test workflow target must be agent");
+    const changed: WorkflowSpec = {
+      ...workflow,
+      steps: [{
+        ...workflow.steps[0]!,
+        target: { ...originalTarget, prompt: "changed after creation" },
+      }],
+    };
+    await expect(storage.createWorkflowRun({
+      workflow: changed,
+      idempotencyKey: "same-definition",
+    })).rejects.toBeInstanceOf(WorkflowRunDefinitionConflictError);
+
+    const atomicCounts = () => runtimeExecutor.withRequestContext(
+      { tenantId: "tenant-test", principalId: "principal-test", requestId: "workflow-create-rollback-counts" },
+      (client) => client.one<{
+        run_count: number;
+        step_count: number;
+        event_count: number;
+      }>(`
+        SELECT
+          (SELECT COUNT(*)::int FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id()) AS run_count,
+          (SELECT COUNT(*)::int FROM workflow_step_runs WHERE tenant_id = open_loops_current_tenant_id()) AS step_count,
+          (SELECT COUNT(*)::int FROM workflow_events WHERE tenant_id = open_loops_current_tenant_id()) AS event_count
+      `),
+    );
+    const beforeFailedCreate = await atomicCounts();
+    await expect(storage.createWorkflowRun({
+      workflow,
+      idempotencyKey: "rolls-back",
+      beforeInitialWorkflowEventPersist: (event) => {
+        if (event.stepId === "worker-two") throw new Error("injected second contract append failure");
+      },
+    })).rejects.toThrow("injected second contract append failure");
+    expect(await atomicCounts()).toEqual(beforeFailedCreate);
+    expect((await storage.listWorkflowRuns({ workflowId: workflow.id })).some((run) =>
+      run.idempotencyKey === "rolls-back"
+    )).toBe(false);
+
+    await runtimeExecutor.withRequestContext(
+      { tenantId: "tenant-test", principalId: "principal-test", requestId: "legacy-workflow-provenance" },
+      (client) => client.execute(
+        "UPDATE workflow_runs SET workflow_definition_hash = NULL WHERE id = $1",
+        [first.id],
+      ),
+    );
+    await expect(storage.createWorkflowRun({
+      workflow,
+      idempotencyKey: "same-definition",
+    })).rejects.toBeInstanceOf(LegacyWorkflowRunProvenanceError);
   });
 
   test("expired workflow leases append failed workflow events on Postgres", async () => {
