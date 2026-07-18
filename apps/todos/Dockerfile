@@ -30,19 +30,23 @@ RUN ! apk info -e openssl
 
 FROM base AS deps
 WORKDIR /app
-# Root manifest + the dashboard workspace member's manifest (needed for the
-# workspace to resolve; the dashboard itself is not built in the server image).
+# Root manifest + the dashboard workspace member's manifest are installed with
+# the seven-day quarantine before either the API or UI is built.
 COPY package.json bun.lock ./
 COPY dashboard/package.json ./dashboard/package.json
-RUN bun install --frozen-lockfile --ignore-scripts
+RUN bun install --frozen-lockfile --ignore-scripts --minimum-release-age=604800
 
 FROM base AS build
 WORKDIR /app
 COPY package.json bun.lock tsconfig.json ./
 COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/dashboard/node_modules ./dashboard/node_modules
 COPY src ./src
 COPY scripts ./scripts
+COPY dashboard ./dashboard
+RUN cd dashboard && bun --no-install run build
 RUN bun run build:server
+RUN bun --no-install scripts/verify-dist-server-runtime.ts
 
 FROM base AS runner
 ARG BASH_VERSION
@@ -66,6 +70,9 @@ ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=19427
 COPY --from=build /app/dist ./dist
+# The production server advertises and serves the dashboard, so the reviewed UI
+# is part of the image contract rather than an optional missing runtime path.
+COPY --from=build /app/dashboard/dist ./dashboard/dist
 # The server bundle is self-contained. Keep only the standalone, pre-bundled
 # contracts CLI used to mint the ephemeral API key during controlled smoke and
 # operational workflows; do not ship the workspace dependency tree.

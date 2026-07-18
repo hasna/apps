@@ -1,6 +1,7 @@
 node_modules
 dist
-dashboard
+dashboard/node_modules
+dashboard/dist
 **/*.test.ts
 .git
 .github
@@ -11,4 +12,3 @@ sdk
 .claude
 .codewith
 .takumi
-!dashboard/package.json

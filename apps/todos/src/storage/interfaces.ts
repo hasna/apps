@@ -24,6 +24,7 @@ import type {
   UpdateTaskInput,
   UpdateTaskListInput,
 } from "../types/index.js";
+import type { ActivityRecord, LogActivityInput } from "../lib/activity-audit.js";
 
 export type MaybePromise<T> = T | Promise<T>;
 
@@ -34,6 +35,14 @@ export interface TodosStorageContext {
   projectId?: string;
   taskListId?: string;
   agentId?: string;
+  /** Authenticated principal bound to the credential, before any privileged act-as. */
+  authenticatedAgentId?: string;
+  /** Effective actor used for authorization and domain mutation attribution. */
+  effectiveAgentId?: string;
+  /** Credential key id used to distinguish unbound administrative principals. */
+  actorKeyId?: string;
+  /** True only when an administrative principal explicitly requested act-as. */
+  actorActAs?: boolean;
   sessionId?: string;
   requestId?: string;
 }
@@ -296,6 +305,8 @@ export interface UpdateTemplateInput {
 }
 
 export interface TodosAuditStore {
+  /** Append-only generic activity ledger used for non-task security provenance. */
+  logActivity?(input: LogActivityInput, context?: TodosStorageContext): MaybePromise<ActivityRecord>;
   logTaskChange(
     taskId: string,
     action: string,

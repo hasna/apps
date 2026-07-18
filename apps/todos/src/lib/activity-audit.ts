@@ -18,6 +18,7 @@ export const ACTIVITY_ENTITY_TYPES = [
   "run_record",
   "comment",
   "session",
+  "api_mutation",
 ] as const;
 
 export type ActivityEntityType = (typeof ACTIVITY_ENTITY_TYPES)[number];

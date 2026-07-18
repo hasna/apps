@@ -701,6 +701,24 @@ export async function cloudTaskAction(
   return unwrapTask(raw);
 }
 
+export interface CloudTaskFailureResult {
+  task: Task;
+  retryTask?: Task;
+}
+
+/** Mark a task failed through `/v1`; the failure envelope may include a retry copy. */
+export async function cloudFailTask(
+  client: HasnaStorageClient,
+  id: string,
+  body: { agent_id?: string; reason?: string; retry?: boolean } = {},
+): Promise<CloudTaskFailureResult> {
+  const raw = await client.transport.post<unknown>(`/tasks/${encodeURIComponent(id)}/fail`, body);
+  if (raw && typeof raw === "object" && "result" in (raw as Record<string, unknown>)) {
+    return (raw as { result: CloudTaskFailureResult }).result;
+  }
+  return raw as CloudTaskFailureResult;
+}
+
 function resolveOpenApiSchema(document: unknown, schema: unknown): Record<string, unknown> | null {
   if (!schema || typeof schema !== "object" || Array.isArray(schema)) return null;
   const value = schema as Record<string, unknown>;

@@ -7,7 +7,7 @@
  * require `todos:write` (a `todos:*` key satisfies both). This is a real wrapper
  * over the core storage lib — there are NO stubs; unimplemented routes 404.
  */
-import { LockError, ProjectNotFoundError, ResourceConflictError } from "../types/index.js";
+import { LockError, ProjectNotFoundError, ResourceConflictError, TaskNotFoundError, VersionConflictError } from "../types/index.js";
 import type { CreatePlanInput, CreateProjectInput, CreateTaskInput, CreateTaskListInput, RenameProjectInput, TaskComment, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
 import type { TodosStorageContext, TodosStorageSnapshot, TodosTaskCompletionOptions } from "../storage/interfaces.js";
 import { getCloudStorageAdapter, getCloudVerifier, ensureCloudSchema } from "./cloud.js";
@@ -170,10 +170,116 @@ async function readOptionalJson(req: Request): Promise<{ ok: true; value: unknow
   }
 }
 
-function contextFromPrincipal(principal: { agent: string | null }, body?: { agent_id?: string }): TodosStorageContext {
-  const agentId = body?.agent_id || principal.agent || undefined;
-  return agentId ? { agentId } : {};
+interface V1Principal {
+  agent: string | null;
+  scopes: readonly string[];
+  kid?: string;
 }
+
+interface MutationAuthority {
+  authenticatedAgentId?: string;
+  effectiveAgentId: string;
+  actorKeyId?: string;
+  actAs: boolean;
+}
+
+type AuthorityDecision =
+  | { ok: true; authority: MutationAuthority }
+  | { ok: false; response: Response };
+
+function hasScope(principal: V1Principal, required: string): boolean {
+  return principal.scopes.some((scope) =>
+    scope === "*" || scope === required ||
+    (scope.endsWith(":*") && required.startsWith(scope.slice(0, -1))));
+}
+
+function hasAdministrativeScope(principal: V1Principal): boolean {
+  return principal.scopes.includes("todos:*") || principal.scopes.includes("*");
+}
+
+function validActor(value: string | null | undefined): string | undefined {
+  const actor = value?.trim();
+  return actor && actor.length <= 256 ? actor : undefined;
+}
+
+function resolveMutationAuthority(principal: V1Principal, headers: Headers): AuthorityDecision {
+  const authenticatedAgentId = validActor(principal.agent);
+  const actAsHeader = headers.get("x-todos-act-as");
+  if (actAsHeader !== null) {
+    const effectiveAgentId = validActor(actAsHeader);
+    if (!effectiveAgentId) return { ok: false, response: error(400, "x-todos-act-as must be a non-empty actor identifier") };
+    if (!hasAdministrativeScope(principal)) {
+      return { ok: false, response: error(403, "x-todos-act-as requires todos:* or * scope") };
+    }
+    if (!authenticatedAgentId) {
+      return { ok: false, response: error(403, "administrative x-todos-act-as requires an agent-bound credential") };
+    }
+    return {
+      ok: true,
+      authority: {
+        authenticatedAgentId,
+        effectiveAgentId,
+        ...(principal.kid ? { actorKeyId: principal.kid } : {}),
+        actAs: true,
+      },
+    };
+  }
+  if (!authenticatedAgentId) {
+    return { ok: false, response: error(403, "mutation requires an agent-bound credential or explicit administrative x-todos-act-as") };
+  }
+  return {
+    ok: true,
+    authority: {
+      authenticatedAgentId,
+      effectiveAgentId: authenticatedAgentId,
+      ...(principal.kid ? { actorKeyId: principal.kid } : {}),
+      actAs: false,
+    },
+  };
+}
+
+function contextFromAuthority(authority: MutationAuthority): TodosStorageContext {
+  return {
+    agentId: authority.effectiveAgentId,
+    ...(authority.authenticatedAgentId ? { authenticatedAgentId: authority.authenticatedAgentId } : {}),
+    effectiveAgentId: authority.effectiveAgentId,
+    ...(authority.actorKeyId ? { actorKeyId: authority.actorKeyId } : {}),
+    actorActAs: authority.actAs,
+  };
+}
+
+function contextFromPrincipal(principal: V1Principal): TodosStorageContext {
+  const authenticatedAgentId = validActor(principal.agent);
+  return {
+    ...(authenticatedAgentId ? {
+      agentId: authenticatedAgentId,
+      authenticatedAgentId,
+      effectiveAgentId: authenticatedAgentId,
+    } : {}),
+    ...(principal.kid ? { actorKeyId: principal.kid } : {}),
+    actorActAs: false,
+  };
+}
+
+function enforceActorField(value: unknown, authority: MutationAuthority, field: string): Response | null {
+  if (value === undefined) return null;
+  if (typeof value !== "string" || !validActor(value)) return error(400, `${field} must be a non-empty string`);
+  return value.trim() === authority.effectiveAgentId
+    ? null
+    : error(403, `${field} must match the authenticated effective actor`);
+}
+
+function enforceActorHint(value: unknown, authority: MutationAuthority): Response | null {
+  return enforceActorField(value, authority, "agent_id");
+}
+
+const TASK_UPDATE_FIELDS = new Set<keyof UpdateTaskInput>([
+  "title", "description", "status", "priority", "project_id", "assigned_to",
+  "working_dir", "plan_id", "task_list_id", "cycle_id", "tags", "metadata",
+  "due_at", "estimated_minutes", "sla_minutes", "actual_minutes", "completed_at",
+  "confidence", "retry_count", "max_retries", "retry_after", "requires_approval",
+  "approved_by", "recurrence_rule", "version", "task_type",
+]);
 
 function redactComment(comment: TaskComment): TaskComment {
   return { ...comment, content: redactEvidenceText(comment.content) };
@@ -256,8 +362,19 @@ export async function handleV1Request(
   if (path !== "/v1" && !path.startsWith("/v1/")) return null;
 
   const method = req.method.toUpperCase();
-  const isWrite = method !== "GET" && method !== "HEAD";
-  const requiredScopes = [isWrite ? "todos:write" : "todos:read"];
+  const segments = path.split("/").filter(Boolean); // ["v1", resource, id?, action?, subId?]
+  const resource = segments[1];
+  const id = segments[2];
+  const action = segments[3];
+  const subId = segments[4];
+  // `tasks/exists` is a read query transported as POST for a bounded id body.
+  // Every other non-GET/HEAD route mutates durable state.
+  const isMutation = method !== "GET" && method !== "HEAD" && !(resource === "tasks" && id === "exists" && !action);
+  const isImport = resource === "import" && method === "POST";
+  // Import has an OR policy (`todos:import` or administrative scope) which the
+  // contracts verifier cannot express as a flat requiredScopes array, so it is
+  // authenticated here and authorized explicitly below.
+  const requiredScopes = isImport ? [] : [isMutation ? "todos:write" : "todos:read"];
 
   // ── Auth (contracts API-key verifier) ──
   let verifier;
@@ -270,17 +387,70 @@ export async function handleV1Request(
   if (!decision.ok) {
     return error(decision.status, decision.message, { reason: decision.reason });
   }
-  const principal = decision.principal;
+  const principal = decision.principal as V1Principal;
+
+  let mutationAuthority: MutationAuthority | null = null;
+  if (isMutation) {
+    if (isImport) {
+      if (!hasScope(principal, "todos:import") && !hasAdministrativeScope(principal)) {
+        return error(403, "snapshot import requires todos:import or administrative scope");
+      }
+      if (req.headers.has("x-todos-act-as")) {
+        return error(400, "snapshot import uses the immutable todos-importer actor and does not accept x-todos-act-as");
+      }
+      const authenticatedAgentId = validActor(principal.agent);
+      mutationAuthority = {
+        ...(authenticatedAgentId ? { authenticatedAgentId } : {}),
+        effectiveAgentId: "todos-importer",
+        ...(principal.kid ? { actorKeyId: principal.kid } : {}),
+        actAs: false,
+      };
+    } else {
+      const authority = resolveMutationAuthority(principal, req.headers);
+      if (!authority.ok) return authority.response;
+      mutationAuthority = authority.authority;
+    }
+  }
+  const storageContext = mutationAuthority
+    ? contextFromAuthority(mutationAuthority)
+    : contextFromPrincipal(principal);
 
   // Schema is idempotently ensured on the first authenticated request.
   await (dependencies.ensureSchema ?? ensureCloudSchema)();
   const store = (dependencies.getStorageAdapter ?? getCloudStorageAdapter)();
 
-  const segments = path.split("/").filter(Boolean); // ["v1", resource, id?, action?, subId?]
-  const resource = segments[1];
-  const id = segments[2];
-  const action = segments[3];
-  const subId = segments[4];
+  // Administrative impersonation and snapshot imports are fail-closed on the
+  // append-only generic activity ledger. Record the authenticated -> effective
+  // transition before any target mutation; task lifecycle history remains atomic
+  // with its task transition CTEs in Postgres.
+  if (mutationAuthority && (mutationAuthority.actAs || isImport)) {
+    if (!store.audit.logActivity) {
+      return error(503, "mutation activity audit is unavailable; mutation was not attempted");
+    }
+    try {
+      await store.audit.logActivity(
+        {
+          entity_type: "api_mutation",
+          entity_id: path,
+          action: isImport ? "snapshot_import_attempt" : "admin_act_as_attempt",
+          field: method,
+          old_value: mutationAuthority.authenticatedAgentId ?? null,
+          new_value: mutationAuthority.effectiveAgentId,
+          actor_id: mutationAuthority.effectiveAgentId,
+          metadata: {
+            authenticated_agent_id: mutationAuthority.authenticatedAgentId ?? null,
+            effective_agent_id: mutationAuthority.effectiveAgentId,
+            actor_key_id: mutationAuthority.actorKeyId ?? null,
+            actor_act_as: mutationAuthority.actAs,
+            immutable_importer: isImport,
+          },
+        },
+        storageContext,
+      );
+    } catch {
+      return error(503, "mutation activity audit failed; mutation was not attempted");
+    }
+  }
 
   try {
     // ── /v1/tasks ──
@@ -318,14 +488,16 @@ export async function handleV1Request(
       // authoritative for every agent.
       if (id === "upsert" && !action) {
         if (method !== "POST") return error(405, `method ${method} not allowed on /v1/tasks/upsert`);
-        if (typeof store.tasks.getByFingerprint !== "function") {
-          return error(501, "fingerprint upsert is not supported by this storage backend");
-        }
         const body = ((await readJson<CreateTaskInput & { fingerprint?: string; version?: number }>(req)) ??
           {}) as CreateTaskInput & { fingerprint?: string; version?: number };
         const fingerprint = typeof body.fingerprint === "string" ? body.fingerprint.trim() : "";
         if (!fingerprint) return error(400, "fingerprint is required");
         if (typeof body.title !== "string" || !body.title.trim()) return error(400, "title is required");
+        const assignedByError = enforceActorField(body.assigned_by, mutationAuthority!, "assigned_by");
+        if (assignedByError) return assignedByError;
+        if (typeof store.tasks.getByFingerprint !== "function") {
+          return error(501, "fingerprint upsert is not supported by this storage backend");
+        }
         const existing = await store.tasks.getByFingerprint(fingerprint);
         const metadata = {
           ...(existing?.metadata ?? {}),
@@ -346,7 +518,7 @@ export async function handleV1Request(
         if (!existing) {
           const task = await store.tasks.create(
             { ...(fields as unknown as CreateTaskInput), title: body.title },
-            contextFromPrincipal(principal, body),
+            storageContext,
           );
           return json({ task, created: true }, 201);
         }
@@ -354,7 +526,7 @@ export async function handleV1Request(
           const task = await store.tasks.update(
             existing.id,
             { ...(fields as unknown as UpdateTaskInput), version: existing.version as number },
-            contextFromPrincipal(principal, body),
+            storageContext,
           );
           return json({ task, created: false });
         } catch (e) {
@@ -405,7 +577,9 @@ export async function handleV1Request(
           if (!body || typeof body.title !== "string" || !body.title.trim()) {
             return error(400, "title is required");
           }
-          const task = await store.tasks.create(body, contextFromPrincipal(principal, body));
+          const assignedByError = enforceActorField(body.assigned_by, mutationAuthority!, "assigned_by");
+          if (assignedByError) return assignedByError;
+          const task = await store.tasks.create(body, storageContext);
           return json({ task }, 201);
         }
         return error(405, `method ${method} not allowed on /v1/tasks`);
@@ -428,7 +602,6 @@ export async function handleV1Request(
             // fail loudly instead of presenting an incomplete history. Rollout
             // upgrades clients first, then the server (see the operator runbook).
             if (rawLimit === null && cursor === null) {
-              const storageContext = contextFromPrincipal(principal);
               const legacyPage = (await (store.audit.getCommentsPage
                 ? store.audit.getCommentsPage(id, { limit: LEGACY_COMMENT_RESPONSE_LIMIT + 1 }, storageContext)
                 : store.audit.getComments(id, storageContext))).map(redactComment);
@@ -463,7 +636,7 @@ export async function handleV1Request(
             const page = (await store.audit.getCommentsPage(
               id,
               { limit: limit + 1, ...(before ? { before } : {}) },
-              contextFromPrincipal(principal),
+              storageContext,
             )).map(redactComment);
             const hasMore = page.length > limit;
             const comments = hasMore ? page.slice(1) : page;
@@ -485,18 +658,20 @@ export async function handleV1Request(
             if (typeof body.content !== "string" || !body.content.trim()) {
               return error(400, "content is required");
             }
+            const actorError = enforceActorHint(body.agent_id, mutationAuthority!);
+            if (actorError) return actorError;
             const target = await store.tasks.get(id);
             if (!target) return error(404, "task not found");
             const comment = await store.audit.addComment(
               {
                 task_id: id,
                 content: body.content,
-                agent_id: body.agent_id ?? principal.agent ?? undefined,
+                agent_id: mutationAuthority!.effectiveAgentId,
                 session_id: body.session_id,
                 type: body.type,
                 progress_pct: body.progress_pct,
               },
-              contextFromPrincipal(principal, body),
+              storageContext,
             );
             return json({ comment: redactComment(comment) }, 201);
           }
@@ -520,24 +695,20 @@ export async function handleV1Request(
         if (action === "lock" || action === "unlock") {
           if (method !== "POST") return error(405, `method ${method} not allowed on /v1/tasks/:id/${action}`);
           const body = (await readJson<{ agent_id?: string; force?: boolean }>(req)) ?? {};
+          const actorError = enforceActorHint(body.agent_id, mutationAuthority!);
+          if (actorError) return actorError;
           if (!(await store.tasks.get(id))) return error(404, "task not found");
           if (action === "lock") {
             if (typeof store.tasks.lock !== "function") return error(501, "task locking is not supported by this storage backend");
-            const agentId = body.agent_id || principal.agent || "todos-serve";
-            return json({ result: await store.tasks.lock(id, agentId) });
+            return json({ result: await store.tasks.lock(id, mutationAuthority!.effectiveAgentId, storageContext) });
           }
           if (typeof store.tasks.unlock !== "function") return error(501, "task unlocking is not supported by this storage backend");
           if (body.force === true) {
-            if (!principal.scopes.includes("todos:*")) return error(403, "force unlock requires todos:* scope");
-            const released = await store.tasks.unlock(id);
+            if (!hasAdministrativeScope(principal)) return error(403, "force unlock requires administrative scope");
+            const released = await store.tasks.unlock(id, undefined, storageContext);
             return json({ success: released });
           }
-          if (body.agent_id && principal.agent && body.agent_id !== principal.agent && !principal.scopes.includes("todos:*")) {
-            return error(403, "unlock agent_id must match the authenticated agent");
-          }
-          const agentId = principal.agent || body.agent_id;
-          if (!agentId) return error(403, "unlock requires an agent-bound key or force=true");
-          const released = await store.tasks.unlock(id, agentId);
+          const released = await store.tasks.unlock(id, mutationAuthority!.effectiveAgentId, storageContext);
           return json({ success: released });
         }
         // ── /v1/tasks/:id/dependencies[/:dep] — dependency edges ──
@@ -554,7 +725,7 @@ export async function handleV1Request(
               return error(400, "depends_on is required");
             }
             try {
-              const dependency = await store.dependencies.add(id, body.depends_on, contextFromPrincipal(principal));
+              const dependency = await store.dependencies.add(id, body.depends_on, storageContext);
               return json({ dependency }, 201);
             } catch (e) {
               const msg = (e as Error).message || "";
@@ -565,15 +736,15 @@ export async function handleV1Request(
           }
           if (method === "DELETE") {
             if (!subId) return error(400, "dependency target id is required (/v1/tasks/:id/dependencies/:dep)");
-            const removed = await store.dependencies.remove(id, subId);
+            const removed = await store.dependencies.remove(id, subId, storageContext);
             return json({ removed });
           }
           return error(405, `method ${method} not allowed on /v1/tasks/:id/dependencies`);
         }
         // ── /v1/tasks/:id/verifications — verification records ──
         if (action === "verifications") {
-          if (!store.verifications) return error(501, "verifications are not supported by this storage backend");
           if (method === "GET") {
+            if (!store.verifications) return error(501, "verifications are not supported by this storage backend");
             if (!(await store.tasks.get(id))) return error(404, "task not found");
             const verifications = await store.verifications.list(id);
             return json({ verifications, count: verifications.length });
@@ -589,6 +760,9 @@ export async function handleV1Request(
             if (typeof body.command !== "string" || !body.command.trim()) {
               return error(400, "command is required");
             }
+            const actorError = enforceActorHint(body.agent_id, mutationAuthority!);
+            if (actorError) return actorError;
+            if (!store.verifications) return error(501, "verifications are not supported by this storage backend");
             try {
               const verification = await store.verifications.add(
                 {
@@ -597,9 +771,9 @@ export async function handleV1Request(
                   status: body.status,
                   output_summary: body.output_summary,
                   artifact_path: body.artifact_path,
-                  agent_id: body.agent_id,
+                  agent_id: mutationAuthority!.effectiveAgentId,
                 },
-                contextFromPrincipal(principal, body),
+                storageContext,
               );
               return json({ verification }, 201);
             } catch (e) {
@@ -638,7 +812,7 @@ export async function handleV1Request(
                   author: body.author,
                   files_changed: Array.isArray(body.files_changed) ? body.files_changed : undefined,
                 },
-                contextFromPrincipal(principal),
+                storageContext,
               );
               return json({ commit }, 201);
             } catch (e) {
@@ -677,7 +851,7 @@ export async function handleV1Request(
                   provider: body.provider,
                   metadata: body.metadata,
                 },
-                contextFromPrincipal(principal),
+                storageContext,
               );
               return json({ ref }, 201);
             } catch (e) {
@@ -688,14 +862,20 @@ export async function handleV1Request(
           }
           return error(405, `method ${method} not allowed on /v1/tasks/:id/refs`);
         }
+        if (!["start", "complete", "fail", "claim"].includes(action)) {
+          return error(404, `unknown task action: ${action}`);
+        }
+        if (method !== "POST") return error(405, `method ${method} not allowed on /v1/tasks/:id/${action}`);
         const actionJson = await readOptionalJson(req);
         if (!actionJson.ok) return error(400, "invalid JSON body");
         const body = actionJson.value && typeof actionJson.value === "object" && !Array.isArray(actionJson.value)
           ? actionJson.value as Record<string, unknown>
           : {};
-        const agentId = typeof body.agent_id === "string" ? body.agent_id : principal.agent || "todos-serve";
+        const actorError = enforceActorHint(body.agent_id, mutationAuthority!);
+        if (actorError) return actorError;
+        const agentId = mutationAuthority!.effectiveAgentId;
         if (action === "start" && method === "POST") {
-          return json({ task: await store.tasks.start(id, agentId) });
+          return json({ task: await store.tasks.start(id, agentId, storageContext) });
         }
         if (action === "complete" && method === "POST") {
           const parsed = validateTaskCompletion(actionJson.value);
@@ -703,17 +883,33 @@ export async function handleV1Request(
           return json({
             task: await store.tasks.complete(
               id,
-              parsed.agentId || principal.agent || "todos-serve",
+              mutationAuthority!.effectiveAgentId,
               parsed.options,
-              contextFromPrincipal(principal, body),
+              storageContext,
             ),
           });
         }
         if (action === "fail" && method === "POST") {
-          return json({ result: await store.tasks.fail(id, agentId, typeof body.reason === "string" ? body.reason : "failed", {}) });
+          if (body.reason !== undefined && typeof body.reason !== "string") return error(400, "reason must be a string");
+          if (body.retry !== undefined && typeof body.retry !== "boolean") return error(400, "retry must be a boolean");
+          if (body.retry_after !== undefined && typeof body.retry_after !== "string") return error(400, "retry_after must be a string");
+          if (body.error_code !== undefined && typeof body.error_code !== "string") return error(400, "error_code must be a string");
+          return json({
+            result: await store.tasks.fail(
+              id,
+              agentId,
+              typeof body.reason === "string" ? body.reason : "failed",
+              {
+                ...(body.retry === true ? { retry: true } : {}),
+                ...(typeof body.retry_after === "string" ? { retry_after: body.retry_after } : {}),
+                ...(typeof body.error_code === "string" ? { error_code: body.error_code } : {}),
+              },
+              storageContext,
+            ),
+          });
         }
         if (action === "claim" && method === "POST") {
-          return json({ task: await store.tasks.claimNext(agentId, {}) });
+          return json({ task: await store.tasks.claimNext(agentId, {}, storageContext) });
         }
         return error(404, `unknown task action: ${action}`);
       }
@@ -723,7 +919,11 @@ export async function handleV1Request(
       }
       if (method === "PATCH" || method === "PUT") {
         const body = await readJson<UpdateTaskInput>(req);
-        if (!body) return error(400, "invalid JSON body");
+        if (!body || typeof body !== "object" || Array.isArray(body)) return error(400, "invalid JSON body");
+        const unknownField = Object.keys(body).find((key) => !TASK_UPDATE_FIELDS.has(key as keyof UpdateTaskInput));
+        if (unknownField) return error(400, `unknown task update field: ${unknownField}`);
+        const approvedByError = enforceActorField(body.approved_by, mutationAuthority!, "approved_by");
+        if (approvedByError) return approvedByError;
         const current = await store.tasks.get(id);
         if (!current) return error(404, "task not found");
         // Optimistic concurrency: honor a client-supplied version, else default
@@ -733,7 +933,7 @@ export async function handleV1Request(
           version: typeof body.version === "number" ? body.version : (current.version as number),
         };
         try {
-          const task = await store.tasks.update(id, patch);
+          const task = await store.tasks.update(id, patch, storageContext);
           return task ? json({ task }) : error(404, "task not found");
         } catch (e) {
           const msg = (e as Error).message || "";
@@ -742,7 +942,7 @@ export async function handleV1Request(
         }
       }
       if (method === "DELETE") {
-        await store.tasks.delete(id, contextFromPrincipal(principal));
+        await store.tasks.delete(id, storageContext);
         return json({ deleted: true, id });
       }
       return error(405, `method ${method} not allowed on /v1/tasks/:id`);
@@ -760,7 +960,7 @@ export async function handleV1Request(
           if (!body) return error(400, "invalid JSON body");
           const validated = validateProjectCreate(body);
           if (!validated.ok) return error(400, validated.message);
-          const project = await store.projects.create(validated.input, contextFromPrincipal(principal));
+          const project = await store.projects.create(validated.input, storageContext);
           return json({ project }, 201);
         }
         return error(405, `method ${method} not allowed on /v1/projects`);
@@ -776,7 +976,7 @@ export async function handleV1Request(
         }
         const unknownField = Object.keys(body).find((key) => !["new_slug", "name"].includes(key));
         if (unknownField) return error(400, `unknown project rename field: ${unknownField}`);
-        return json(await store.projects.rename(id, body, contextFromPrincipal(principal)));
+        return json(await store.projects.rename(id, body, storageContext));
       }
       if (method === "GET") {
         const project = await store.projects.get(id);
@@ -788,11 +988,11 @@ export async function handleV1Request(
         const validated = validateProjectPatch(body);
         if (!validated.ok) return error(400, validated.message);
         if (!(await store.projects.get(id))) return error(404, "project not found");
-        const project = await store.projects.update(id, validated.patch);
+        const project = await store.projects.update(id, validated.patch, storageContext);
         return json({ project });
       }
       if (method === "DELETE") {
-        await store.projects.delete(id, contextFromPrincipal(principal));
+        await store.projects.delete(id, storageContext);
         return json({ deleted: true, id });
       }
       return error(405, `method ${method} not allowed on /v1/projects/:id`);
@@ -819,7 +1019,7 @@ export async function handleV1Request(
             });
           }
         }
-        const plan = await store.plans.create(validated.input, contextFromPrincipal(principal, validated.input));
+        const plan = await store.plans.create(validated.input, storageContext);
         return json({ plan }, 201);
       }
       if (id && method === "GET") {
@@ -861,11 +1061,11 @@ export async function handleV1Request(
             });
           }
         }
-        const plan = await store.plans.update(id, body as never);
+        const plan = await store.plans.update(id, body as never, storageContext);
         return json({ plan });
       }
       if (id && method === "DELETE") {
-        if (!(await store.plans.delete(id, contextFromPrincipal(principal)))) return error(404, "plan not found");
+        if (!(await store.plans.delete(id, storageContext))) return error(404, "plan not found");
         return json({ deleted: true, id });
       }
       if (id) return error(405, `method ${method} not allowed on /v1/plans/:id`);
@@ -880,7 +1080,10 @@ export async function handleV1Request(
       if (!id && method === "POST") {
         const body = await readJson<{ name?: string }>(req);
         if (!body || typeof body.name !== "string" || !body.name.trim()) return error(400, "name is required");
-        const result = await store.agents.register(body as never, contextFromPrincipal(principal));
+        if (body.name.trim() !== mutationAuthority!.effectiveAgentId) {
+          return error(403, "agent registration name must match the authenticated effective actor");
+        }
+        const result = await store.agents.register(body as never, storageContext);
         // register() returns a conflict envelope when the name is actively held by
         // another session — surface it as 409 so the client sees a real conflict
         // instead of a 201 wrapping a non-agent object.
@@ -896,19 +1099,29 @@ export async function handleV1Request(
       // ("Agent not found").
       if (id && action === "heartbeat") {
         if (method !== "POST") return error(405, `method ${method} not allowed on /v1/agents/:id/heartbeat`);
+        const target = await store.agents.get(id) ?? await store.agents.getByName(id);
+        if (!target) return error(404, "agent not found");
+        if (mutationAuthority!.effectiveAgentId !== target.id && mutationAuthority!.effectiveAgentId !== target.name) {
+          return error(403, "agent lifecycle target must match the authenticated effective actor");
+        }
         if (typeof store.agents.heartbeat !== "function") {
           return error(501, "agent heartbeat is not supported by this storage backend");
         }
-        const agent = await store.agents.heartbeat(id, contextFromPrincipal(principal));
+        const agent = await store.agents.heartbeat(target.id, storageContext);
         return agent ? json({ agent }) : error(404, "agent not found");
       }
       if (id && action === "release") {
         if (method !== "POST") return error(405, `method ${method} not allowed on /v1/agents/:id/release`);
+        const body = (await readJson<{ session_id?: string }>(req)) ?? {};
+        const target = await store.agents.get(id) ?? await store.agents.getByName(id);
+        if (!target) return error(404, "agent not found");
+        if (mutationAuthority!.effectiveAgentId !== target.id && mutationAuthority!.effectiveAgentId !== target.name) {
+          return error(403, "agent lifecycle target must match the authenticated effective actor");
+        }
         if (typeof store.agents.release !== "function") {
           return error(501, "agent release is not supported by this storage backend");
         }
-        const body = (await readJson<{ session_id?: string }>(req)) ?? {};
-        const result = await store.agents.release(id, body.session_id, contextFromPrincipal(principal));
+        const result = await store.agents.release(target.id, body.session_id, storageContext);
         if (!result) return error(404, "agent not found");
         if (!result.released) {
           return error(409, "release denied: session_id does not match agent's current session", { released: false });
@@ -954,7 +1167,7 @@ export async function handleV1Request(
         if (!normalizeSlug(body.slug === undefined ? body.name : body.slug)) {
           return error(400, "task-list slug must be non-empty kebab-case");
         }
-        const taskList = await store.taskLists.create(body, contextFromPrincipal(principal));
+        const taskList = await store.taskLists.create(body, storageContext);
         return json({ task_list: taskList }, 201);
       }
       if (id && method === "GET") {
@@ -974,11 +1187,11 @@ export async function handleV1Request(
           return error(400, "metadata must be an object");
         }
         if (!await store.taskLists.get(id)) return error(404, "task list not found");
-        const taskList = await store.taskLists.update(id, body);
+        const taskList = await store.taskLists.update(id, body, storageContext);
         return json({ task_list: taskList });
       }
       if (id && method === "DELETE") {
-        const deleted = await store.taskLists.delete(id, contextFromPrincipal(principal));
+        const deleted = await store.taskLists.delete(id, storageContext);
         return deleted ? json({ deleted: true, id }) : error(404, "task list not found");
       }
       return error(405, `method ${method} not allowed on /v1/task-lists${id ? "/:id" : ""}`);
@@ -1047,7 +1260,7 @@ export async function handleV1Request(
     // primary key via the storage adapter. Idempotent: re-posting the same rows
     // never duplicates (ON CONFLICT DO UPDATE, guarded by updated_at/version), so
     // large local→cloud backfills can be chunked and safely retried. Requires the
-    // `todos:write` scope (enforced above for non-GET methods).
+    // dedicated `todos:import` or administrative scope (enforced above).
     if (resource === "import") {
       if (method !== "POST") return error(405, `method ${method} not allowed on /v1/import`);
       if (typeof store.sync.importSnapshot !== "function") {
@@ -1060,13 +1273,15 @@ export async function handleV1Request(
       if (received === 0) {
         return error(400, "empty snapshot: provide at least one record array (tasks/projects/plans/...)");
       }
-      const result = await store.sync.importSnapshot(snapshot, contextFromPrincipal(principal));
+      const result = await store.sync.importSnapshot(snapshot, storageContext);
       return json({ result, received });
     }
 
     return error(404, `unknown /v1 resource: ${resource ?? "(root)"}`);
   } catch (e) {
     if (e instanceof LockError) return error(409, e.message, { code: LockError.code });
+    if (e instanceof VersionConflictError) return error(409, e.message, { code: VersionConflictError.code, conflict: true });
+    if (e instanceof TaskNotFoundError) return error(404, e.message, { code: TaskNotFoundError.code });
     if (e instanceof ResourceConflictError) return error(409, e.message, { code: e.code, conflict: true });
     if (e instanceof ProjectNotFoundError) return error(404, e.message, { code: ProjectNotFoundError.code });
     return error(500, (e as Error).message || "internal error");

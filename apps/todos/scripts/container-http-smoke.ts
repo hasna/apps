@@ -31,6 +31,11 @@ const versionPayload = (await versionResponse.json()) as { version?: string };
 if (versionPayload.version !== "0.11.92") {
   throw new Error(`/version: expected 0.11.92, got ${versionPayload.version ?? "missing"}`);
 }
+const dashboardResponse = await expectStatus("/", 200);
+const dashboardHtml = await dashboardResponse.text();
+if (!dashboardHtml.includes('<div id="root">')) {
+  throw new Error("/: production image did not serve the built dashboard entrypoint");
+}
 await expectStatus("/v1/tasks", 401);
 
 const taskResponse = await expectStatus("/v1/tasks", 201, {

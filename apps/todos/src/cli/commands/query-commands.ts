@@ -80,6 +80,8 @@ import {
   cloudListProjects,
   cloudListPlans,
   cloudListTaskLists,
+  cloudResolveTaskRef,
+  cloudFailTask,
 } from "../cloud-router.js";
 import { TASK_STATUSES } from "../../types/index.js";
 
@@ -589,10 +591,25 @@ export function registerQueryCommands(program: Command) {
     .action(async (id, opts) => {
       const globalOpts = program.opts();
       const json = opts.json || globalOpts.json;
+      const agentId = opts.agent || globalOpts.agent;
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        const resolvedId = await cloudResolveTaskRef(cloud, id);
+        const result = await cloudFailTask(cloud, resolvedId, {
+          ...(agentId ? { agent_id: agentId } : {}),
+          ...(opts.reason ? { reason: opts.reason } : {}),
+          ...(opts.retry ? { retry: true } : {}),
+        });
+        if (json) { console.log(JSON.stringify(result, null, 2)); return; }
+        console.log(chalk.red(`Failed: ${result.task.short_id || result.task.id.slice(0, 8)} | ${result.task.title}`));
+        if (opts.reason) console.log(chalk.dim(`Reason: ${opts.reason}`));
+        if (result.retryTask) console.log(chalk.yellow(`Retry created: ${result.retryTask.short_id || result.retryTask.id.slice(0, 8)} | ${result.retryTask.title}`));
+        return;
+      }
       const db = getDatabase();
       const resolvedId = resolvePartialId(db, "tasks", id);
       if (!resolvedId) { console.error(chalk.red(`Task not found: ${id}`)); process.exit(1); }
-      const result = failTask(resolvedId, opts.agent, opts.reason, { retry: opts.retry }, db);
+      const result = failTask(resolvedId, agentId, opts.reason, { retry: opts.retry }, db);
       if (json) { console.log(JSON.stringify(result, null, 2)); return; }
       console.log(chalk.red(`Failed: ${result.task.short_id || result.task.id.slice(0, 8)} | ${result.task.title}`));
       if (opts.reason) console.log(chalk.dim(`Reason: ${opts.reason}`));

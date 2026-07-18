@@ -4,17 +4,18 @@ import { getDatabase, resetDatabase } from "../db/database.js";
 import { createLocalSqliteTodosStorageAdapter } from "../storage/local-sqlite.js";
 import type { TodosStorageAdapter } from "../storage/interfaces.js";
 import { handleV1Request, type V1RequestDependencies } from "./v1.js";
+import { listActivity, type LogActivityInput } from "../lib/activity-audit.js";
 
 let db: Database;
 let store: TodosStorageAdapter;
-let principal: { agent: string | null; scopes: string[] };
+let principal: { agent: string | null; scopes: string[]; kid?: string };
 let dependencies: V1RequestDependencies;
 
-function request(path: string, method = "GET", body?: unknown): Promise<Response | null> {
+function request(path: string, method = "GET", body?: unknown, headers: Record<string, string> = {}): Promise<Response | null> {
   const url = new URL(`https://todos.example.test${path}`);
   return handleV1Request(new Request(url, {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
     body: body === undefined ? undefined : JSON.stringify(body),
   }), url, dependencies);
 }
@@ -23,7 +24,7 @@ beforeEach(() => {
   resetDatabase();
   db = getDatabase(":memory:");
   store = createLocalSqliteTodosStorageAdapter({ db });
-  principal = { agent: null, scopes: ["todos:*"] };
+  principal = { agent: "test-agent", scopes: ["todos:*"] };
   dependencies = {
     ensureSchema: async () => {},
     getStorageAdapter: () => store,
@@ -263,7 +264,20 @@ describe("/v1 project mutation", () => {
 });
 
 describe("/v1 task hierarchy and lock authorization", () => {
+  test("a bound write principal rejects a spoofed lifecycle actor", async () => {
+    principal = { agent: "bound-agent", scopes: ["todos:write"] };
+    const task = await store.tasks.create({ title: "authority regression" });
+
+    const response = await request(`/v1/tasks/${task.id}/complete`, "POST", {
+      agent_id: "spoofed-agent",
+    });
+
+    expect(response?.status).toBe(403);
+    expect(await store.tasks.get(task.id)).toMatchObject({ status: "pending" });
+  });
+
   test("complete persists the full operational evidence body and confidence", async () => {
+    principal = { agent: "reviewer", scopes: ["todos:write"] };
     const task = await store.tasks.create({ title: "evidence" });
     const response = await request(`/v1/tasks/${task.id}/complete`, "POST", {
       agent_id: "reviewer",
@@ -317,9 +331,34 @@ describe("/v1 task hierarchy and lock authorization", () => {
     expect(emptyResponse?.status).toBe(200);
 
     const agentOnly = await store.tasks.create({ title: "agent completion" });
+    principal = { agent: "compat-agent", scopes: ["todos:write"] };
     const agentResponse = await request(`/v1/tasks/${agentOnly.id}/complete`, "POST", { agent_id: "compat-agent" });
     expect(agentResponse?.status).toBe(200);
     expect(await store.tasks.get(agentOnly.id)).toMatchObject({ status: "completed" });
+  });
+
+  test("generic task PATCH keeps local completion and reopen lifecycle compatibility", async () => {
+    const task = await store.tasks.create({ title: "generic lifecycle", assigned_to: "test-agent" });
+    const started = await store.tasks.start(task.id, "test-agent");
+
+    const completedResponse = await request(`/v1/tasks/${task.id}`, "PATCH", {
+      version: started.version,
+      status: "completed",
+    });
+    expect(completedResponse?.status).toBe(200);
+    const completed = (await completedResponse!.json() as { task: typeof started }).task;
+    expect(completed).toMatchObject({ status: "completed", locked_by: null, locked_at: null });
+    expect(completed.completed_at).toBe(completed.updated_at);
+
+    const reopenedResponse = await request(`/v1/tasks/${task.id}`, "PATCH", {
+      version: completed.version,
+      status: "pending",
+    });
+    expect(reopenedResponse?.status).toBe(200);
+    expect((await reopenedResponse!.json() as { task: typeof started }).task).toMatchObject({
+      status: "pending",
+      completed_at: null,
+    });
   });
 
   test("create persists parent_id and parent filtering includes only children", async () => {
@@ -368,8 +407,13 @@ describe("/v1 task hierarchy and lock authorization", () => {
     principal = { agent: null, scopes: ["todos:write"] };
     expect((await request(`/v1/tasks/${task.id}/unlock`, "POST", { force: true }))?.status).toBe(403);
 
-    principal = { agent: null, scopes: ["todos:*"] };
-    const response = await request(`/v1/tasks/${task.id}/unlock`, "POST", { force: true });
+    principal = { agent: "admin-agent", scopes: ["todos:*"] };
+    const response = await request(
+      `/v1/tasks/${task.id}/unlock`,
+      "POST",
+      { force: true },
+      { "x-todos-act-as": "parent-agent" },
+    );
     expect(response?.status).toBe(200);
     expect(await response!.json()).toEqual({ success: true });
     expect((await store.tasks.get(task.id))?.locked_by).toBeNull();
@@ -386,5 +430,223 @@ describe("/v1 task hierarchy and lock authorization", () => {
 
     principal = { agent: null, scopes: ["todos:write"] };
     expect((await request(`/v1/tasks/${task.id}/unlock`, "POST"))?.status).toBe(403);
+  });
+});
+
+describe("/v1 mutation actor authority", () => {
+  test("an unbound write credential cannot mutate and no todos-serve fallback exists", async () => {
+    principal = { agent: null, scopes: ["todos:write"] };
+    const response = await request("/v1/tasks", "POST", { title: "must not exist" });
+    expect(response?.status).toBe(403);
+    expect(await store.tasks.count({ include_subtasks: true })).toBe(0);
+  });
+
+  test("bound principal wins for every actor-bearing task mutation", async () => {
+    principal = { agent: "bound-agent", scopes: ["todos:write"] };
+    const actions = ["start", "complete", "fail", "claim", "lock", "unlock"];
+    for (const action of actions) {
+      const task = await store.tasks.create({ title: `guard ${action}` });
+      const response = await request(`/v1/tasks/${task.id}/${action}`, "POST", { agent_id: "spoofed-agent" });
+      expect(response?.status).toBe(403);
+      expect(await store.tasks.get(task.id)).toMatchObject({ status: "pending", locked_by: null });
+    }
+
+    const evidenceTask = await store.tasks.create({ title: "evidence guard" });
+    expect((await request(`/v1/tasks/${evidenceTask.id}/comments`, "POST", {
+      content: "spoofed",
+      agent_id: "spoofed-agent",
+    }))?.status).toBe(403);
+    expect((await request(`/v1/tasks/${evidenceTask.id}/verifications`, "POST", {
+      command: "bun test",
+      agent_id: "spoofed-agent",
+    }))?.status).toBe(403);
+  });
+
+  test("task update rejects coordination and actor fields outside UpdateTaskInput", async () => {
+    const task = await store.tasks.create({ title: "closed update surface" });
+    const response = await request(`/v1/tasks/${task.id}`, "PATCH", {
+      locked_by: "spoofed-agent",
+      locked_at: "2026-07-18T12:00:00.000Z",
+    });
+
+    expect(response?.status).toBe(400);
+    expect(await response!.json()).toMatchObject({ error: "unknown task update field: locked_by" });
+    expect(await store.tasks.get(task.id)).toMatchObject({ locked_by: null, locked_at: null, version: task.version });
+  });
+
+  test("task assignment and approval assertions cannot name a different actor", async () => {
+    expect((await request("/v1/tasks", "POST", {
+      title: "forged assignment",
+      assigned_by: "spoofed-agent",
+    }))?.status).toBe(403);
+    expect((await request("/v1/tasks/upsert", "POST", {
+      title: "forged upsert assignment",
+      fingerprint: "forged-upsert-assignment",
+      assigned_by: "spoofed-agent",
+    }))?.status).toBe(403);
+
+    const task = await store.tasks.create({ title: "approval guard", requires_approval: true });
+    expect((await request(`/v1/tasks/${task.id}`, "PATCH", {
+      version: task.version,
+      approved_by: "spoofed-agent",
+    }))?.status).toBe(403);
+    expect(await store.tasks.get(task.id)).toMatchObject({ approved_by: null, version: task.version });
+  });
+
+  test("task and plan agent_id remain domain data while storage actor is authenticated principal", async () => {
+    const contexts: Array<Record<string, unknown> | undefined> = [];
+    const originalTaskCreate = store.tasks.create.bind(store.tasks);
+    const originalPlanCreate = store.plans.create.bind(store.plans);
+    store.tasks.create = (input, context) => {
+      contexts.push(context);
+      return originalTaskCreate(input, context);
+    };
+    store.plans.create = (input, context) => {
+      contexts.push(context);
+      return originalPlanCreate(input, context);
+    };
+
+    const taskResponse = await request("/v1/tasks", "POST", { title: "domain owner", agent_id: "domain-agent" });
+    const planResponse = await request("/v1/plans", "POST", { name: "Domain plan", agent_id: "plan-domain-agent" });
+    expect(taskResponse?.status).toBe(201);
+    expect(planResponse?.status).toBe(201);
+    expect(await taskResponse!.json()).toMatchObject({ task: { agent_id: "domain-agent" } });
+    expect(await planResponse!.json()).toMatchObject({ plan: { agent_id: "plan-domain-agent" } });
+    expect(contexts).toEqual([
+      expect.objectContaining({ authenticatedAgentId: "test-agent", effectiveAgentId: "test-agent", agentId: "test-agent", actorActAs: false }),
+      expect.objectContaining({ authenticatedAgentId: "test-agent", effectiveAgentId: "test-agent", agentId: "test-agent", actorActAs: false }),
+    ]);
+  });
+
+  test("administrative act-as is explicit and preserves authenticated plus effective attribution", async () => {
+    principal = { agent: "admin-agent", scopes: ["todos:*"], kid: "test-key-id" };
+    const contexts: Array<Record<string, unknown> | undefined> = [];
+    const auditCalls: Array<{ input: LogActivityInput; context: unknown }> = [];
+    const originalCreate = store.tasks.create.bind(store.tasks);
+    const originalLogActivity = store.audit.logActivity!.bind(store.audit);
+    store.tasks.create = (input, context) => {
+      contexts.push(context);
+      return originalCreate(input, context);
+    };
+    store.audit.logActivity = (input, context) => {
+      auditCalls.push({ input, context });
+      return originalLogActivity(input, context);
+    };
+
+    const allowed = await request(
+      "/v1/tasks",
+      "POST",
+      { title: "denied" },
+      { "x-todos-act-as": "effective-agent" },
+    );
+    expect(allowed?.status).toBe(201);
+    expect(contexts[0]).toEqual(expect.objectContaining({
+      authenticatedAgentId: "admin-agent",
+      effectiveAgentId: "effective-agent",
+      agentId: "effective-agent",
+      actorKeyId: "test-key-id",
+      actorActAs: true,
+    }));
+    expect(auditCalls[0]).toEqual({
+      input: expect.objectContaining({
+        entity_type: "api_mutation",
+        entity_id: "/v1/tasks",
+        action: "admin_act_as_attempt",
+        old_value: "admin-agent",
+        new_value: "effective-agent",
+        actor_id: "effective-agent",
+      }),
+      context: expect.objectContaining({
+        authenticatedAgentId: "admin-agent",
+        effectiveAgentId: "effective-agent",
+        actorKeyId: "test-key-id",
+        actorActAs: true,
+      }),
+    });
+
+    principal = { agent: null, scopes: ["todos:*"], kid: "unbound-admin-key" };
+    expect((await request(
+      "/v1/tasks",
+      "POST",
+      { title: "unattributed act-as" },
+      { "x-todos-act-as": "effective-agent" },
+    ))?.status).toBe(403);
+
+    principal = { agent: "writer", scopes: ["todos:write"] };
+    expect((await request(
+      "/v1/tasks",
+      "POST",
+      { title: "not admin" },
+      { "x-todos-act-as": "effective-agent" },
+    ))?.status).toBe(403);
+  });
+
+  test("administrative act-as fails before mutation when the activity ledger is unavailable", async () => {
+    principal = { agent: "admin-agent", scopes: ["todos:*"], kid: "test-key-id" };
+    store.audit.logActivity = undefined;
+
+    const response = await request(
+      "/v1/tasks",
+      "POST",
+      { title: "must not be created" },
+      { "x-todos-act-as": "effective-agent" },
+    );
+
+    expect(response?.status).toBe(503);
+    expect(await store.tasks.count({ include_subtasks: true })).toBe(0);
+  });
+
+  test("agent registration and lifecycle cannot target another agent", async () => {
+    principal = { agent: "Marcus", scopes: ["todos:write"] };
+    expect((await request("/v1/agents", "POST", { name: "Brutus" }))?.status).toBe(403);
+
+    const target = await store.agents.register({ name: "Brutus" });
+    if ("conflict" in target) throw new Error("unexpected agent fixture conflict");
+    expect((await request(`/v1/agents/${target.id}/heartbeat`, "POST"))?.status).toBe(403);
+    expect((await request(`/v1/agents/${target.id}/release`, "POST"))?.status).toBe(403);
+  });
+
+  test("snapshot import needs dedicated authority and always audits as immutable importer", async () => {
+    let seenContext: Record<string, unknown> | undefined;
+    store.sync.importSnapshot = async (_snapshot, context) => {
+      seenContext = context;
+      return { inserted: 1, updated: 0, skipped: 0 };
+    };
+    const snapshot = { tasks: [{ id: "import-fixture" }] };
+
+    principal = { agent: "writer", scopes: ["todos:write"], kid: "writer-key" };
+    expect((await request("/v1/import", "POST", snapshot))?.status).toBe(403);
+
+    principal = { agent: "import-runner", scopes: ["todos:import"], kid: "import-key" };
+    const imported = await request("/v1/import", "POST", snapshot);
+    expect(imported?.status).toBe(200);
+    expect(seenContext).toEqual(expect.objectContaining({
+      authenticatedAgentId: "import-runner",
+      effectiveAgentId: "todos-importer",
+      agentId: "todos-importer",
+      actorKeyId: "import-key",
+      actorActAs: false,
+    }));
+    expect(listActivity({ action: "snapshot_import_attempt" }, db)).toEqual([
+      expect.objectContaining({
+        entity_type: "api_mutation",
+        entity_id: "/v1/import",
+        actor_id: "todos-importer",
+        old_value: "import-runner",
+        new_value: "todos-importer",
+        metadata: expect.objectContaining({
+          authenticated_agent_id: "import-runner",
+          effective_agent_id: "todos-importer",
+          actor_key_id: "import-key",
+          immutable_importer: true,
+        }),
+      }),
+    ]);
+    expect((await request(
+      "/v1/import",
+      "POST",
+      snapshot,
+      { "x-todos-act-as": "someone-else" },
+    ))?.status).toBe(400);
   });
 });

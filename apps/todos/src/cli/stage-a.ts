@@ -64,7 +64,7 @@ export const TODOS_CLI_COMMAND_ALIASES = {
 const DIAGNOSTIC_COMMANDS = new Set(["help", "manual", "completions", "completion", "config", "storage"]);
 const REMOTE_COMMANDS = new Set([
   "active", "add", "agent", "agents", "approve", "bulk", "claim", "comment", "count", "delete", "deps",
-  "doctor", "done", "find-commit", "find-ref", "health", "heartbeat", "history", "init", "inspect", "link-commit",
+  "doctor", "done", "fail", "find-commit", "find-ref", "health", "heartbeat", "history", "init", "inspect", "link-commit",
   "link-ref", "list", "lists", "lock", "log-progress", "next", "plans", "project-rename", "projects", "recap",
   "record-verification", "release", "remove", "show", "standup", "start", "status", "task", "task-lists", "timeline",
   "tl", "unlock", "update",

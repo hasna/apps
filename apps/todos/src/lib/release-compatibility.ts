@@ -1,8 +1,17 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 import { Database } from "bun:sqlite";
 import { MIGRATIONS } from "../db/migrations.js";
 import { runMigrations } from "../db/schema.js";
+import {
+  getInstallSmokeCommands,
+  validateInstallSmokeCommands,
+  validateReleaseProvenanceMetadata,
+  type PackageJson as ReleasePackageJson,
+  type ReleaseSourceIdentity,
+} from "./public-release-gate.js";
 
 export const LOCAL_RELEASE_COMPATIBILITY_SCHEMA_VERSION = 1;
 
@@ -87,6 +96,7 @@ const EXPECTED_REPOSITORY = "https://github.com/hasna/todos.git";
 const EXPECTED_BINS = ["todos", "todos-mcp", "todos-serve"];
 const EXPECTED_EXPORTS = [".", "./sdk", "./mcp", "./registry", "./contracts", "./storage"];
 const REQUIRED_SCRIPTS = ["build", "test:no-cloud", "verify:release", "prepublishOnly"];
+const STRICT_PREPUBLISH_COMMAND = "bun run scripts/verify-public-release.ts --mode=publish";
 const REQUIRED_TABLES = [
   "_migrations",
   "projects",
@@ -240,12 +250,111 @@ function checkExports(packageJson: PackageJson): ReleaseCompatibilityCheck[] {
   ));
 }
 
-function checkInstallPlan(): ReleaseCompatibilityCheck[] {
-  return [
-    pass("install-manager", "Install and update commands use Bun global installs."),
-    pass("install-smoke", "Install smoke covers todos, todos-mcp, todos-serve, version, help, and local doctor."),
-    pass("rollback-plan", "Rollback guidance pins a previous @hasna/todos version with Bun."),
-  ];
+function checkInstallPlan(packageJson: PackageJson): ReleaseCompatibilityCheck[] {
+  const commands = getInstallSmokeCommands(
+    "<tarball>.tgz",
+    "<port>",
+    "<install-root>",
+    packageJson as ReleasePackageJson,
+  );
+  const failures = validateInstallSmokeCommands(commands, packageJson as ReleasePackageJson);
+  return failures.length === 0
+    ? [pass("install-smoke-plan", "Tarball smoke plan structurally imports every export and runs every public bin with Bun auto-install disabled.")]
+    : [fail("install-smoke-plan", "Tarball smoke plan is incomplete or unsafe.", { failures })];
+}
+
+function readCurrentSourceIdentity(root: string): ReleaseSourceIdentity | null {
+  const commit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" });
+  const tree = spawnSync("git", ["rev-parse", "HEAD^{tree}"], { cwd: root, encoding: "utf8" });
+  const listing = spawnSync("git", ["ls-tree", "-r", "--full-tree", "-z", "HEAD"], { cwd: root });
+  if (commit.status !== 0 || tree.status !== 0 || listing.status !== 0 || !listing.stdout) return null;
+  return {
+    gitCommit: commit.stdout.trim(),
+    gitTree: tree.stdout.trim(),
+    sourceTreeSha256: createHash("sha256").update(listing.stdout).digest("hex"),
+  };
+}
+
+function checkServerRuntime(root: string, packageJson: PackageJson): ReleaseCompatibilityCheck[] {
+  const checks: ReleaseCompatibilityCheck[] = [];
+  const serverBuild = packageJson.scripts?.["build:server"]
+    ?.split("&&")
+    .find((step) => step.includes("src/server/index.ts"));
+  const externalContracts = serverBuild?.includes("--external '@hasna/contracts'") ||
+    serverBuild?.includes("--external '@hasna/contracts/*'");
+  checks.push(serverBuild && !externalContracts && serverBuild.includes("--reject-unresolved")
+    ? pass("server-runtime-build", "Server build bundles @hasna/contracts and rejects unresolved runtime imports.")
+    : fail("server-runtime-build", "Server build must bundle @hasna/contracts and reject unresolved runtime imports."));
+  checks.push(packageJson.scripts?.["smoke:dist-server"] === "bun --no-install scripts/verify-dist-server-runtime.ts"
+    ? pass("server-runtime-smoke", "Dist-only server smoke disables Bun auto-install.")
+    : fail("server-runtime-smoke", "Dist-only server smoke must run with bun --no-install."));
+
+  const serverEntrypoint = join(root, "dist", "server", "index.js");
+  if (!existsSync(serverEntrypoint)) {
+    checks.push(warn("server-runtime-contracts", "Built server runtime is absent; run the release build before claiming compatibility."));
+    return checks;
+  }
+  const serverBundle = readFileSync(serverEntrypoint, "utf8");
+  const unresolvedContractsImport = /(?:from\s*|import\s*|require\(|import\()["']@hasna\/contracts(?:\/[^"']*)?["']/.test(serverBundle);
+  checks.push(unresolvedContractsImport
+    ? fail("server-runtime-contracts", "Built server runtime still imports @hasna/contracts from node_modules.")
+    : pass("server-runtime-contracts", "Built server runtime has no unresolved @hasna/contracts import."));
+
+  const provenancePath = join(root, "dist", "release-provenance.json");
+  if (!existsSync(provenancePath)) {
+    checks.push(warn("server-runtime-provenance", "Built server has no release provenance; compatibility is not established."));
+    return checks;
+  }
+  try {
+    const provenance = JSON.parse(readFileSync(provenancePath, "utf8")) as {
+      packageName?: string;
+      packageVersion?: string;
+      gitCommit?: string;
+      gitTree?: string;
+      sourceTreeSha256?: string;
+      toolchain?: { bunVersion?: string };
+      dependencies?: {
+        lockfile?: string;
+        lockfileSha256?: string;
+        installCommand?: string;
+        isolatedSource?: boolean;
+      };
+      gate?: {
+        mode?: "review" | "publish";
+        authoritative?: boolean;
+        skippedChecks?: string[];
+      };
+    };
+    const lockfilePath = join(root, "bun.lock");
+    const lockfileSha256 = existsSync(lockfilePath)
+      ? createHash("sha256").update(readFileSync(lockfilePath)).digest("hex")
+      : null;
+    const sourceIdentity = readCurrentSourceIdentity(root);
+    const provenanceFailures = sourceIdentity && lockfileSha256
+      ? validateReleaseProvenanceMetadata(
+        provenance,
+        packageJson as ReleasePackageJson,
+        sourceIdentity,
+        {
+          bunVersion: "1.3.14",
+          lockfileSha256,
+          mode: "publish",
+          authoritative: true,
+          skippedChecks: [],
+        },
+      )
+      : [{ check: "provenance-source-identity", message: "current Git source identity or bun.lock is unavailable" }];
+    checks.push(provenanceFailures.length === 0
+      ? pass("server-runtime-provenance", "Built server is bound to the package, source identity, Bun 1.3.14, current frozen lockfile, and an authoritative no-skip publish gate.")
+      : fail("server-runtime-provenance", "Built server release provenance is missing, stale, or incomplete.", {
+        failures: provenanceFailures,
+      }));
+  } catch (error) {
+    checks.push(fail("server-runtime-provenance", "Built server release provenance is not valid JSON.", {
+      error: error instanceof Error ? error.message : String(error),
+    }));
+  }
+  return checks;
 }
 
 function checkChangelog(): ReleaseCompatibilityCheck[] {
@@ -267,15 +376,17 @@ export function createReleaseCompatibilityReport(
     ...checkBins(packageJson),
     ...checkExports(packageJson),
     ...simulatedLevels.map(simulateMigrationLevel),
-    ...checkInstallPlan(),
+    ...checkInstallPlan(packageJson),
+    ...checkServerRuntime(root, packageJson),
     ...checkChangelog(),
   ];
 
-  if (packageJson.scripts?.["prepublishOnly"] !== "bun run verify:release") {
-    checks.push(warn("prepublish-exact-command", "prepublishOnly should continue to delegate directly to verify:release.", {
+  checks.push(packageJson.scripts?.["prepublishOnly"] === STRICT_PREPUBLISH_COMMAND
+    ? pass("prepublish-exact-command", "prepublishOnly invokes the strict publish-mode release gate directly.")
+    : fail("prepublish-exact-command", "prepublishOnly must invoke the strict publish-mode release gate directly.", {
       actual: packageJson.scripts?.["prepublishOnly"] ?? null,
+      expected: STRICT_PREPUBLISH_COMMAND,
     }));
-  }
 
   const warnings = checks.filter((check) => check.status === "warning").map((check) => check.message);
   const issues = checks.filter((check) => check.status === "failed").map((check) => check.message);
@@ -340,7 +451,7 @@ export function createReleaseCompatibilityReport(
     checks,
     warnings,
     issues,
-    ok: issues.length === 0,
+    ok: issues.length === 0 && warnings.length === 0,
   };
 }
 

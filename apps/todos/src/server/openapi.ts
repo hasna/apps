@@ -15,7 +15,7 @@ const taskSchema = {
     priority: { type: "string" },
     project_id: { type: "string", nullable: true },
     assigned_to: { type: "string", nullable: true },
-    agent_id: { type: "string", nullable: true },
+    agent_id: { type: "string", nullable: true, description: "Domain ownership metadata; never used as the authenticated security principal." },
     tags: { type: "array", items: { type: "string" } },
     version: { type: "number" },
     created_at: { type: "string" },
@@ -58,7 +58,7 @@ const taskCommentSchema = {
   properties: {
     id: { type: "string" },
     task_id: { type: "string" },
-    agent_id: { type: "string", nullable: true },
+    agent_id: { type: "string", nullable: true, description: "Effective actor recorded by the server." },
     session_id: { type: "string", nullable: true },
     content: { type: "string" },
     type: { type: "string", enum: ["comment", "progress", "note"] },
@@ -75,7 +75,7 @@ const planSchema = {
     slug: { type: "string", nullable: true },
     project_id: { type: "string", nullable: true },
     task_list_id: { type: "string", nullable: true },
-    agent_id: { type: "string", nullable: true },
+    agent_id: { type: "string", nullable: true, description: "Domain ownership metadata; never used as the authenticated security principal." },
     name: { type: "string" },
     description: { type: "string", nullable: true },
     status: { type: "string", enum: ["active", "completed", "archived"] },
@@ -91,7 +91,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
       title: "Todos V1 API",
       version,
       description:
-        "Versioned cloud API for @hasna/todos (A1 pure-remote). Authenticate with an API key via the `x-api-key` header or `Authorization: Bearer <token>`.",
+        "Versioned cloud API for @hasna/todos (A1 pure-remote). Authenticate with an API key via the `x-api-key` header or `Authorization: Bearer <token>`. Every mutation requires an agent-bound principal. A principal with todos:* or * may explicitly act as another actor with `x-todos-act-as`; the append-only activity ledger preserves authenticated and effective attribution. Body `agent_id` values on task and plan records are domain metadata, not security context.",
     },
     servers: [{ url: "/" }],
     components: {
@@ -114,7 +114,8 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             priority: { type: "string" },
             project_id: { type: "string" },
             assigned_to: { type: "string" },
-            agent_id: { type: "string" },
+            agent_id: { type: "string", description: "Domain ownership metadata; does not select the authenticated actor." },
+            assigned_by: { type: "string", description: "Actor assertion; when present it must match the authenticated effective actor." },
             tags: { type: "array", items: { type: "string" } },
           },
         },
@@ -126,6 +127,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             status: { type: "string" },
             priority: { type: "string" },
             assigned_to: { type: "string" },
+            approved_by: { type: "string", description: "Actor assertion; when present it must match the authenticated effective actor." },
             version: { type: "number" },
           },
         },
@@ -133,13 +135,24 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           type: "object",
           additionalProperties: false,
           properties: {
-            agent_id: { type: "string", minLength: 1 },
+            agent_id: { type: "string", minLength: 1, description: "Optional compatibility hint; when present it must match the authenticated effective actor." },
             attachment_ids: { type: "array", items: { type: "string", minLength: 1 } },
             files_changed: { type: "array", items: { type: "string", minLength: 1 } },
             test_results: { type: "string" },
             commit_hash: { type: "string" },
             notes: { type: "string" },
             confidence: { type: "number", minimum: 0, maximum: 1 },
+          },
+        },
+        FailTaskInput: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            agent_id: { type: "string", minLength: 1, description: "Optional compatibility hint; when present it must match the authenticated effective actor." },
+            reason: { type: "string" },
+            retry: { type: "boolean" },
+            retry_after: { type: "string" },
+            error_code: { type: "string" },
           },
         },
         CreateProjectInput: {
@@ -210,7 +223,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           required: ["content"],
           properties: {
             content: { type: "string", minLength: 1 },
-            agent_id: { type: "string" },
+            agent_id: { type: "string", description: "Optional compatibility hint; when present it must match the authenticated effective actor." },
             session_id: { type: "string" },
             type: { type: "string", enum: ["comment", "progress", "note"] },
             progress_pct: { type: "number" },
@@ -226,7 +239,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             description: { type: "string" },
             project_id: { type: "string", minLength: 1 },
             task_list_id: { type: "string", minLength: 1 },
-            agent_id: { type: "string", minLength: 1 },
+            agent_id: { type: "string", minLength: 1, description: "Domain ownership metadata; does not select the authenticated actor." },
             status: { type: "string", enum: ["active", "completed", "archived"] },
           },
         },
@@ -239,7 +252,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             slug: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
             description: { type: "string" },
             task_list_id: { type: "string", minLength: 1 },
-            agent_id: { type: "string", minLength: 1 },
+            agent_id: { type: "string", minLength: 1, description: "Domain ownership metadata; does not select the authenticated actor." },
             status: { type: "string", enum: ["active", "completed", "archived"] },
           },
         },
@@ -425,6 +438,37 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { task: { $ref: "#/components/schemas/Task" } } } } } } },
         },
       },
+      "/v1/tasks/{id}/fail": {
+        post: {
+          operationId: "failTask",
+          summary: "Mark a task failed and optionally create a retry copy",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: false,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/FailTaskInput" } } },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      result: {
+                        type: "object",
+                        properties: {
+                          task: { $ref: "#/components/schemas/Task" },
+                          retryTask: { $ref: "#/components/schemas/Task" },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
       "/v1/projects": {
         get: {
           operationId: "listProjects",
@@ -607,7 +651,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           operationId: "importSnapshot",
           summary: "Bulk-ingest a full or partial snapshot (idempotent upsert by id)",
           description:
-            "Upserts every record carried in the body by primary key. All record arrays are optional and default to []; a caller may backfill a single object type (e.g. just tasks) or a complete snapshot. Re-posting the same rows never duplicates. Requires the todos:write scope.",
+            "Upserts every record carried in the body by primary key. All record arrays are optional and default to []; a caller may backfill a single object type (e.g. just tasks) or a complete snapshot. Re-posting the same rows never duplicates. Requires dedicated todos:import or administrative scope. Imports always audit as the immutable todos-importer actor and reject x-todos-act-as.",
           requestBody: {
             required: true,
             content: {

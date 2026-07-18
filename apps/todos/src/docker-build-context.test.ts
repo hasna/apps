@@ -2,10 +2,40 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import packageJson from "../package.json";
+import { validateDistServerRuntimeEvidence } from "../scripts/verify-dist-server-runtime";
 
 const root = join(import.meta.dir, "..");
 
 describe("server image build context", () => {
+  test("rejects marker-equivalent route evidence when the server exits nonzero", () => {
+    const evidence = {
+      expectedVersion: "0.11.92",
+      versionExitCode: 0,
+      versionOutput: "0.11.92",
+      startupExitCode: 1,
+      versionRouteStatus: 200,
+      versionRouteVersion: "0.11.92",
+      dashboardRouteStatus: 200,
+      dashboardRootPresent: true,
+    };
+    expect(validateDistServerRuntimeEvidence(evidence)).toContain(
+      "server must exit zero after graceful smoke shutdown",
+    );
+    expect(validateDistServerRuntimeEvidence({ ...evidence, startupExitCode: 0 })).toEqual([]);
+    expect(validateDistServerRuntimeEvidence({
+      ...evidence,
+      startupExitCode: 0,
+      versionRouteStatus: null,
+      versionRouteVersion: null,
+    })).toContain("GET /version must execute the lazy route and report the package version");
+    expect(validateDistServerRuntimeEvidence({
+      ...evidence,
+      startupExitCode: 0,
+      dashboardRouteStatus: 404,
+      dashboardRootPresent: false,
+    })).toContain("GET / must serve the built dashboard contract");
+  });
+
   test("installs the public contracts package without a local vendor tree", () => {
     const dockerfile = readFileSync(join(root, "Dockerfile"), "utf8");
     const lockfile = readFileSync(join(root, "bun.lock"), "utf8");
@@ -57,8 +87,12 @@ describe("server image build context", () => {
 
   test("keeps the default and migration command contracts explicit", () => {
     const dockerfile = readFileSync(join(root, "Dockerfile"), "utf8");
+    const dockerignore = readFileSync(join(root, ".dockerignore"), "utf8");
     const compose = readFileSync(join(root, "docker-compose.yml"), "utf8");
+    const distSmoke = readFileSync(join(root, "scripts", "verify-dist-server-runtime.ts"), "utf8");
     const runner = dockerfile.split("FROM base AS runner")[1]!;
+    const buildServer = packageJson.scripts["build:server"];
+    const serverBuild = buildServer.split("&&").find((step) => step.includes("src/server/index.ts"));
 
     expect(dockerfile).toContain('CMD ["bun", "dist/server/index.js"]');
     expect(compose).toContain('command: ["bun", "dist/server/index.js", "migrate"]');
@@ -67,6 +101,44 @@ describe("server image build context", () => {
     );
     expect(runner).not.toContain("COPY --from=deps /app/node_modules ./node_modules");
     expect(runner).not.toContain("COPY package.json bun.lock ./");
+    expect(serverBuild).toBeTruthy();
+    expect(serverBuild).not.toContain("--external '@hasna/contracts'");
+    expect(serverBuild).not.toContain("--external '@hasna/contracts/*'");
+    expect(serverBuild).toContain("--reject-unresolved");
+    expect(packageJson.scripts.build).not.toContain("cd dashboard && bun install");
+    expect(packageJson.scripts["smoke:dist-server"]).toBe("bun --no-install scripts/verify-dist-server-runtime.ts");
+    expect(dockerfile).toContain("RUN bun --no-install scripts/verify-dist-server-runtime.ts");
+    expect(distSmoke).toContain('"--no-install", "dist/server/index.js", "--version"');
+    expect(distSmoke).toContain("await fetch(`${baseUrl}/version`)");
+    expect(distSmoke).toContain("startupExitCode");
+    expect(distSmoke).not.toContain("startupOutput.includes(\"Todos Dashboard running at\")");
+    expect(distSmoke).toContain('HASNA_TODOS_DB_PATH: ":memory:"');
+    expect(distSmoke).toContain("dashboard/dist");
+    expect(dockerfile).toContain("COPY dashboard ./dashboard");
+    expect(dockerfile).toContain("RUN cd dashboard && bun --no-install run build");
+    expect(dockerfile).toContain("COPY --from=build /app/dashboard/dist ./dashboard/dist");
+    expect(dockerfile).toContain("bun install --frozen-lockfile --ignore-scripts --minimum-release-age=604800");
+    expect(dockerignore).not.toMatch(/^dashboard$/m);
+    expect(dockerignore).toContain("dashboard/node_modules");
+    expect(dockerignore).toContain("dashboard/dist");
+  });
+
+  test("transfers quarantined workspace dependencies without dashboard auto-install", () => {
+    const dockerfile = readFileSync(join(root, "Dockerfile"), "utf8");
+    const dockerignore = readFileSync(join(root, ".dockerignore"), "utf8");
+    const depsStage = dockerfile.split("FROM base AS deps")[1]!.split("FROM base AS build")[0]!;
+    const buildStage = dockerfile.split("FROM base AS build")[1]!.split("FROM base AS runner")[0]!;
+    const workspaceCopy = "COPY --from=deps /app/dashboard/node_modules ./dashboard/node_modules";
+    const dashboardBuild = "RUN cd dashboard && bun --no-install run build";
+
+    expect(depsStage).toContain(
+      "RUN bun install --frozen-lockfile --ignore-scripts --minimum-release-age=604800",
+    );
+    expect(buildStage).toContain(workspaceCopy);
+    expect(buildStage).toContain(dashboardBuild);
+    expect(buildStage.indexOf(workspaceCopy)).toBeLessThan(buildStage.indexOf(dashboardBuild));
+    expect(buildStage).not.toContain("RUN cd dashboard && bun run build");
+    expect(dockerignore).toContain("dashboard/node_modules");
   });
 
   test("ships a candidate build gate for architecture, TLS, API, and inventory", () => {
@@ -123,6 +195,9 @@ describe("server image build context", () => {
     expect(buildspec).toContain("scripts/container-http-smoke.ts");
     expect(readFileSync(join(root, "scripts/container-http-smoke.ts"), "utf8")).toContain(
       'versionPayload.version !== "0.11.92"',
+    );
+    expect(readFileSync(join(root, "scripts/container-http-smoke.ts"), "utf8")).toContain(
+      'dashboardHtml.includes(\'<div id="root">\')',
     );
     expect(buildspec).not.toContain("terraform");
     expect(buildspec).not.toContain("update-service");

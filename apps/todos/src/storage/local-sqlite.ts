@@ -60,6 +60,7 @@ import {
   getRecentActivity,
 } from "../db/audit.js";
 import { addComment, listComments } from "../db/comments.js";
+import { logActivity as logGenericActivity } from "../lib/activity-audit.js";
 import { getDatabase } from "../db/database.js";
 import type { TodosStorageAdapter } from "./interfaces.js";
 import {
@@ -145,6 +146,7 @@ export function createLocalSqliteTodosStorageAdapter(
       getWithTasks: (id) => getTemplateWithTasks(id, database()),
     },
     audit: {
+      logActivity: (input) => logGenericActivity(input, database()),
       logTaskChange: (taskId, action, field, oldValue, newValue, agentId) =>
         logTaskChange(taskId, action, field, oldValue, newValue, agentId, database()),
       addComment: (input) => addComment(input, database()),

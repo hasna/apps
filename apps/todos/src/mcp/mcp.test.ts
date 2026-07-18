@@ -1552,23 +1552,28 @@ describe("MCP tool wrappers", () => {
 
   it("release compatibility tool checks local release readiness", async () => {
     const tools = captureTools(registerTaskProjectTools);
+    const tool = tools.get("check_release_compatibility");
+    expect(tool).toBeDefined();
 
-    const result = await callCapturedTool(tools, "check_release_compatibility", {
+    const result = await tool!.handler({
       root: `${import.meta.dir}/../..`,
       simulated_levels: [0, 1],
-    });
+    }) as { isError?: boolean; content: { text: string }[] };
+    expect(result.isError).toBe(true);
     const report = JSON.parse(result.content[0]!.text);
 
-    expect(report.ok).toBe(true);
+    expect(report.ok).toBe(false);
+    expect(report.warnings).toContain("Built server runtime is absent; run the release build before claiming compatibility.");
     expect(report.package.name).toBe("@hasna/todos");
     expect(report.install_plan.manager).toBe("bun");
     expect(report.checks.map((check: { id: string }) => check.id)).toContain("migration-level-0");
 
-    const markdown = await callCapturedTool(tools, "check_release_compatibility", {
+    const markdown = await tool!.handler({
       root: `${import.meta.dir}/../..`,
       simulated_levels: [0],
       format: "markdown",
-    });
+    }) as { isError?: boolean; content: { text: string }[] };
+    expect(markdown.isError).toBe(true);
     expect(markdown.content[0]!.text).toContain("# Release Compatibility");
   });
 

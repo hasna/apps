@@ -3779,15 +3779,16 @@ END:VCALENDAR`);
         "--levels",
         "0,1",
       ], dbPath, { HOME: home });
-      expect(checked.exitCode).toBe(0);
+      expect(checked.exitCode).toBe(1);
       const report = JSON.parse(checked.stdout);
-      expect(report.ok).toBe(true);
+      expect(report.ok).toBe(false);
+      expect(report.warnings).toContain("Built server runtime is absent; run the release build before claiming compatibility.");
       expect(report.package.name).toBe("@hasna/todos");
       expect(report.install_plan.manager).toBe("bun");
       expect(report.checks.map((check: { id: string }) => check.id)).toContain("migration-level-0");
 
       const markdown = await runCli(["release-compat", "check", "--levels", "0", "--format", "markdown"], dbPath, { HOME: home });
-      expect(markdown.exitCode).toBe(0);
+      expect(markdown.exitCode).toBe(1);
       expect(markdown.stdout).toContain("# Release Compatibility");
       expect(markdown.stdout).toContain("bun install -g @hasna/todos@latest");
       try { unlinkSync(dbPath); } catch {}

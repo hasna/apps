@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { LockError, ProjectNotFoundError, ResourceConflictError } from "../types/index.js";
+import { LockError, ProjectNotFoundError, ResourceConflictError, TaskNotFoundError, VersionConflictError } from "../types/index.js";
 import type {
   Agent,
   CreateCommentInput,
@@ -57,6 +57,7 @@ import {
   type TodosPostgresSyncRecordType,
 } from "./postgres-sync.js";
 import { redactEvidenceText } from "../lib/redaction.js";
+import { ACTIVITY_LOG_SCHEMA, type ActivityRecord, type LogActivityInput } from "../lib/activity-audit.js";
 import {
   isCanonicalSlug,
   isValidTaskListProjectScope,
@@ -65,7 +66,7 @@ import {
   validateSnapshotRoutingRecords,
 } from "../lib/slugs.js";
 
-type RemoteObjectType = TodosPostgresSyncRecordType | "comments" | "dependencies" | "verifications" | "commits" | "refs";
+type RemoteObjectType = TodosPostgresSyncRecordType | "comments" | "dependencies" | "verifications" | "commits" | "refs" | "activity_log";
 
 export interface CreatePostgresTodosStorageAdapterOptions {
   client: TodosPostgresQueryClient;
@@ -96,6 +97,18 @@ interface RemoteRecordClock {
   deletedAt: string | null;
 }
 
+interface TaskCasGuard {
+  expectedVersion: number;
+  allowedStatuses?: readonly Task["status"][];
+  enforceLock?: boolean;
+  enforceAssignment?: boolean;
+  enforceDependencies?: boolean;
+  actorId?: string;
+  audit: TaskHistory;
+  context?: TodosStorageContext;
+  marker?: string;
+}
+
 export function createPostgresTodosStorageAdapter(
   options: CreatePostgresTodosStorageAdapterOptions,
 ): TodosStorageAdapter {
@@ -105,6 +118,9 @@ export function createPostgresTodosStorageAdapter(
     capabilities: {
       localPersistence: false,
       remotePersistence: true,
+      // Task lifecycle writes below are atomic single-statement CTEs, but this
+      // adapter still cannot make an arbitrary `transaction(fn)` callback
+      // atomic across multiple client queries.
       transactions: false,
       auditLog: true,
       sync: true,
@@ -114,22 +130,22 @@ export function createPostgresTodosStorageAdapter(
       get: (id) => store.get<Task>("tasks", id),
       list: (filter = {}) => store.listTasks(filter),
       count: (filter = {}) => store.countTasks(filter),
-      update: (id, input) => updateTask(id, input, store),
+      update: (id, input, context) => updateTask(id, input, store, context),
       delete: (id, context) => store.delete("tasks", id, context),
-      start: (id, agentId) => startTask(id, agentId, store),
-      complete: (id, agentId, options) => completeTask(id, agentId, options, store),
-      fail: (id, agentId, reason, options) => failTask(id, agentId, reason, options, store),
-      claimNext: (agentId, filters) => claimNextTask(agentId, filters, store),
+      start: (id, agentId, context) => startTask(id, agentId, store, context),
+      complete: (id, agentId, options, context) => completeTask(id, agentId, options, store, context),
+      fail: (id, agentId, reason, options, context) => failTask(id, agentId, reason, options, store, context),
+      claimNext: (agentId, filters, context) => claimNextTask(agentId, filters, store, context),
       getNext: (_agentId, filters) => getNextTask(filters, store),
       getActiveWork: (filters) => getActiveWork(filters, store),
       getChangedSince: (since, filters) => getChangedSince(since, filters, store),
-      lock: (id, agentId) => lockTask(id, agentId, store),
-      unlock: (id, agentId) => unlockTask(id, agentId, store),
+      lock: (id, agentId, context) => lockTask(id, agentId, store, context),
+      unlock: (id, agentId, context) => unlockTask(id, agentId, store, context),
       getByFingerprint: (fingerprint) => store.getTaskByFingerprint(fingerprint),
     },
     dependencies: {
       add: (taskId, dependsOn, context) => addDependency(taskId, dependsOn, store, context),
-      remove: (taskId, dependsOn) => removeDependency(taskId, dependsOn, store),
+      remove: (taskId, dependsOn, context) => removeDependency(taskId, dependsOn, store, context),
       list: (taskId) => listDependencies(taskId, store),
       listAll: () => store.list<TaskDependency>("dependencies"),
     },
@@ -152,7 +168,7 @@ export function createPostgresTodosStorageAdapter(
       get: (id) => store.get<Project>("projects", id),
       getByPath: async (path) => (await store.list<Project>("projects")).find((project) => project.path === path) ?? null,
       list: async () => (await store.list<Project>("projects")).sort((a, b) => a.name.localeCompare(b.name)),
-      update: (id, input) => updateProject(id, input, store),
+      update: (id, input, context) => updateProject(id, input, store, context),
       rename: (id, input, context) => store.renameProject(id, input.new_slug, input.name, context),
       delete: (id, context) => store.delete("projects", id, context),
     },
@@ -162,7 +178,7 @@ export function createPostgresTodosStorageAdapter(
       list: async (projectId) => (await store.list<Plan>("plans"))
         .filter((plan) => projectId === undefined || plan.project_id === projectId)
         .sort((a, b) => a.name.localeCompare(b.name)),
-      update: (id, input) => updatePlan(id, input, store),
+      update: (id, input, context) => updatePlan(id, input, store, context),
       delete: (id, context) => store.deletePlan(id, context),
     },
     agents: {
@@ -172,7 +188,7 @@ export function createPostgresTodosStorageAdapter(
       list: async (options) => (await store.list<Agent>("agents"))
         .filter((agent) => options?.include_archived || agent.status !== "archived")
         .sort((a, b) => a.name.localeCompare(b.name)),
-      update: (id, input) => updateAgent(id, input, store),
+      update: (id, input, context) => updateAgent(id, input, store, context),
       heartbeat: (idOrName, context) => heartbeatAgent(idOrName, store, context),
       release: (idOrName, sessionId, context) => releaseAgent(idOrName, sessionId, store, context),
     },
@@ -184,14 +200,14 @@ export function createPostgresTodosStorageAdapter(
       list: async (projectId) => (await store.list<TaskList>("task_lists"))
         .filter((list) => projectId === undefined || list.project_id === projectId)
         .sort((a, b) => a.name.localeCompare(b.name)),
-      update: (id, input) => updateTaskList(id, input, store),
+      update: (id, input, context) => updateTaskList(id, input, store, context),
       delete: (id, context) => store.delete("task_lists", id, context),
     },
     templates: {
       create: (input, context) => createTemplate(input, store, context),
       get: (id) => store.get<TaskTemplate>("templates", id),
       list: async () => (await store.list<TaskTemplate>("templates")).sort((a, b) => a.name.localeCompare(b.name)),
-      update: (id, input) => updateTemplate(id, input, store),
+      update: (id, input, context) => updateTemplate(id, input, store, context),
       delete: (id, context) => store.delete("templates", id, context),
       getWithTasks: async (id) => {
         const template = await store.get<TaskTemplate>("templates", id);
@@ -199,6 +215,7 @@ export function createPostgresTodosStorageAdapter(
       },
     },
     audit: {
+      logActivity: (input, context) => logGenericActivity(input, store, context),
       logTaskChange: (taskId, action, field, oldValue, newValue, agentId, context) =>
         logTaskChange(taskId, action, field, oldValue, newValue, agentId, store, context),
       addComment: (input, context) => addComment(input, store, context),
@@ -224,7 +241,7 @@ export function createPostgresTodosStorageAdapter(
       },
       getTaskHistory: async (taskId) => (await store.list<TaskHistory>("audit_history"))
         .filter((entry) => entry.task_id === taskId)
-        .sort((a, b) => a.created_at.localeCompare(b.created_at)),
+        .sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id)),
       getRecentActivity: async (limit = 20) => (await store.list<TaskHistory>("audit_history"))
         .sort((a, b) => b.created_at.localeCompare(a.created_at))
         .slice(0, limit),
@@ -514,66 +531,200 @@ class PostgresJsonRecordStore {
     return value;
   }
 
-  async completeTask(
-    id: string,
-    agentId: string | undefined,
-    options: TodosTaskCompletionOptions | undefined,
-  ): Promise<Task | null> {
+  async createTaskWithAudit(task: Task, audit: TaskHistory, context: TodosStorageContext = {}): Promise<Task> {
     await this.ensureSchema();
-    const operationTimestamp = new Date().toISOString();
-    const completedAt = options?.completed_at ?? operationTimestamp;
-    const evidence = options ? {
-      ...(options.files_changed !== undefined ? { files_changed: options.files_changed } : {}),
-      ...(options.test_results !== undefined ? { test_results: options.test_results } : {}),
-      ...(options.commit_hash !== undefined ? { commit_hash: options.commit_hash } : {}),
-      ...(options.notes !== undefined ? { notes: options.notes } : {}),
-      ...(options.attachment_ids !== undefined ? { attachment_ids: options.attachment_ids } : {}),
-    } : {};
-    const hasEvidence = Object.keys(evidence).length > 0;
-    const hasConfidence = options?.confidence !== undefined;
     const result = await this.options.client.query<{ payload: unknown }>(
-      `/* todos:complete-task-atomic */ UPDATE ${this.tableName}
-       SET payload = payload || jsonb_build_object(
-         'status', 'completed',
-         'assigned_to', CASE
-           WHEN jsonb_typeof(payload->'assigned_to') = 'string' THEN payload->'assigned_to'
-           ELSE COALESCE(to_jsonb($3::text), 'null'::jsonb)
-         END,
-         'completed_at', $4::text,
-         'updated_at', $9::text,
-         'version', COALESCE((payload->>'version')::integer, 0) + 1,
-         'metadata',
-           (CASE WHEN jsonb_typeof(payload->'metadata') = 'object'
-             THEN payload->'metadata' ELSE '{}'::jsonb END)
-           || CASE WHEN $5::boolean THEN jsonb_build_object(
-             '_evidence',
-             (CASE WHEN jsonb_typeof(payload->'metadata'->'_evidence') = 'object'
-               THEN payload->'metadata'->'_evidence' ELSE '{}'::jsonb END) || $6::jsonb
-           ) ELSE '{}'::jsonb END
-           || CASE WHEN $7::boolean THEN jsonb_build_object(
-             '_completion',
-             (CASE WHEN jsonb_typeof(payload->'metadata'->'_completion') = 'object'
-               THEN payload->'metadata'->'_completion' ELSE '{}'::jsonb END)
-               || jsonb_build_object('confidence', $8::double precision)
-           ) ELSE '{}'::jsonb END
-       ) || CASE WHEN $7::boolean
-         THEN jsonb_build_object('confidence', $8::double precision)
-         ELSE '{}'::jsonb END,
-       updated_at = $9::timestamptz,
-       version = COALESCE(version, 0) + 1
-       WHERE service = $1 AND object_type = 'tasks' AND object_id = $2 AND deleted_at IS NULL
-       RETURNING payload`,
+      `/* todos:create-task-audit-atomic */ WITH inserted_task AS (
+        INSERT INTO ${this.tableName} (
+          service, object_type, object_id, payload, updated_at,
+          deleted_at, source_machine_id, version
+        ) VALUES ($1, 'tasks', $2, $3::jsonb, $4::timestamptz, NULL, $5, $6)
+        ON CONFLICT (service, object_type, object_id) DO NOTHING
+        RETURNING payload
+      ), inserted_audit AS (
+        INSERT INTO ${this.tableName} (
+          service, object_type, object_id, payload, updated_at,
+          deleted_at, source_machine_id, version
+        )
+        SELECT $1, 'audit_history', $7, $8::jsonb, $9::timestamptz, NULL, $5, NULL
+        FROM inserted_task
+        RETURNING object_id
+      )
+      SELECT payload FROM inserted_task WHERE EXISTS (SELECT 1 FROM inserted_audit)`,
       [
         this.service,
-        id,
-        agentId ?? null,
-        completedAt,
-        hasEvidence,
-        jsonbParam(evidence),
-        hasConfidence,
-        options?.confidence ?? null,
-        operationTimestamp,
+        task.id,
+        jsonbParam(task),
+        task.updated_at,
+        this.machineId(context),
+        task.version,
+        audit.id,
+        jsonbParam(audit),
+        audit.created_at,
       ],
+    );
+    const row = result.rows[0];
+    if (!row) throw new ResourceConflictError("TASK_ASSIGNMENT_CONFLICT", `Task id collision while creating ${task.id}`);
+    return payloadRecord<Task>(row.payload);
+  }
+
+  async compareAndSetTaskWithAudit(task: Task, guard: TaskCasGuard): Promise<Task | null> {
+    await this.ensureSchema();
+    const context = guard.context ?? {};
+    const marker = guard.marker ? ` ${guard.marker}` : "";
+    const lockCutoff = new Date(Date.now() - CLOUD_LOCK_EXPIRY_MINUTES * 60 * 1000).toISOString();
+    const result = await this.options.client.query<{ payload: unknown }>(
+      `/* todos:task-cas-audit${marker} */ WITH updated AS (
+        UPDATE ${this.tableName} r SET
+          payload = $9::jsonb,
+          updated_at = $10::timestamptz,
+          source_machine_id = COALESCE($12, r.source_machine_id),
+          version = $11
+        WHERE r.service = $1 AND r.object_type = 'tasks' AND r.object_id = $2 AND r.deleted_at IS NULL
+          AND COALESCE(NULLIF(r.payload->>'version', '')::integer, 0) = $3
+          AND (jsonb_array_length($4::jsonb) = 0 OR r.payload->>'status' IN (SELECT jsonb_array_elements_text($4::jsonb)))
+          AND ($5::boolean = false OR COALESCE(r.payload->>'locked_by', '') = ''
+            OR r.payload->>'locked_by' = $7
+            OR NULLIF(r.payload->>'locked_at', '')::timestamptz < $8::timestamptz)
+          AND ($6::boolean = false OR COALESCE(r.payload->>'assigned_to', '') = '' OR r.payload->>'assigned_to' = $7)
+          AND ($16::boolean = false OR NOT EXISTS ( /* todos:unfinished-dependency-guard */
+            SELECT 1
+            FROM ${this.tableName} edge
+            JOIN ${this.tableName} dependency
+              ON dependency.service = edge.service
+              AND dependency.object_type = 'tasks'
+              AND dependency.object_id = edge.payload->>'depends_on'
+              AND dependency.deleted_at IS NULL
+            WHERE edge.service = r.service
+              AND edge.object_type = 'dependencies'
+              AND edge.deleted_at IS NULL
+              AND edge.payload->>'task_id' = r.object_id
+              AND dependency.payload->>'status' IS DISTINCT FROM 'completed'
+          ))
+        RETURNING r.payload
+      ), inserted_audit AS (
+        INSERT INTO ${this.tableName} (
+          service, object_type, object_id, payload, updated_at,
+          deleted_at, source_machine_id, version
+        )
+        SELECT $1, 'audit_history', $13, $14::jsonb, $15::timestamptz, NULL, $12, NULL
+        FROM updated
+        RETURNING object_id
+      )
+      SELECT payload FROM updated WHERE EXISTS (SELECT 1 FROM inserted_audit)`,
+      [
+        this.service,
+        task.id,
+        guard.expectedVersion,
+        jsonbParam(guard.allowedStatuses ?? []),
+        guard.enforceLock ?? false,
+        guard.enforceAssignment ?? false,
+        guard.actorId ?? null,
+        lockCutoff,
+        jsonbParam(task),
+        task.updated_at,
+        task.version,
+        this.machineId(context),
+        guard.audit.id,
+        jsonbParam(guard.audit),
+        guard.audit.created_at,
+        guard.enforceDependencies ?? false,
+      ],
+    );
+    return result.rows[0] ? payloadRecord<Task>(result.rows[0].payload) : null;
+  }
+
+  async claimNextTaskWithAudit(
+    agentId: string,
+    filters: TodosTaskClaimFilter = {},
+    context: TodosStorageContext = {},
+  ): Promise<Task | null> {
+    await this.ensureSchema();
+    const timestamp = new Date().toISOString();
+    const lockCutoff = new Date(Date.now() - CLOUD_LOCK_EXPIRY_MINUTES * 60 * 1000).toISOString();
+    const audit = taskAudit("", "claim", "status", "pending", "in_progress", context, agentId, timestamp, this.machineId(context));
+    const params: unknown[] = [
+      this.service,
+      agentId,
+      timestamp,
+      lockCutoff,
+      this.machineId(context),
+      audit.id,
+      jsonbParam(audit),
+    ];
+    const condition = (sql: string, value: unknown): string => {
+      params.push(value);
+      return `${sql} $${params.length}`;
+    };
+    const filtersSql = [
+      filters.project_id !== undefined ? condition("AND r.payload->>'project_id' =", filters.project_id) : "",
+      filters.task_list_id !== undefined ? condition("AND r.payload->>'task_list_id' =", filters.task_list_id) : "",
+      filters.plan_id !== undefined ? condition("AND r.payload->>'plan_id' =", filters.plan_id) : "",
+      filters.tags?.length ? condition("AND r.payload->'tags' @>", jsonbParam(filters.tags)) + "::jsonb" : "",
+    ].filter(Boolean).join("\n");
+    const result = await this.options.client.query<{ payload: unknown }>(
+      `/* todos:claim-task-atomic */ WITH candidate AS (
+        SELECT r.object_id
+        FROM ${this.tableName} r
+        WHERE r.service = $1 AND r.object_type = 'tasks' AND r.deleted_at IS NULL
+          AND r.payload->>'status' = 'pending'
+          AND (COALESCE(r.payload->>'assigned_to', '') = '' OR r.payload->>'assigned_to' = $2)
+          AND (COALESCE(r.payload->>'locked_by', '') = '' OR r.payload->>'locked_by' = $2
+            OR NULLIF(r.payload->>'locked_at', '')::timestamptz < $4::timestamptz)
+          AND NOT EXISTS ( /* todos:unfinished-dependency-guard */
+            SELECT 1
+            FROM ${this.tableName} edge
+            JOIN ${this.tableName} dependency
+              ON dependency.service = edge.service
+              AND dependency.object_type = 'tasks'
+              AND dependency.object_id = edge.payload->>'depends_on'
+              AND dependency.deleted_at IS NULL
+            WHERE edge.service = r.service
+              AND edge.object_type = 'dependencies'
+              AND edge.deleted_at IS NULL
+              AND edge.payload->>'task_id' = r.object_id
+              AND dependency.payload->>'status' IS DISTINCT FROM 'completed'
+          )
+          ${filtersSql}
+        ORDER BY CASE r.payload->>'priority' WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
+          r.payload->>'created_at', r.object_id
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+      ), updated AS (
+        UPDATE ${this.tableName} r SET
+          payload = r.payload || jsonb_build_object(
+            'status', 'in_progress', 'assigned_to', $2::text,
+            'agent_id', CASE
+              WHEN jsonb_typeof(r.payload->'agent_id') = 'string' THEN r.payload->'agent_id'
+              ELSE to_jsonb($2::text)
+            END,
+            'locked_by', $2::text, 'locked_at', $3::text,
+            'started_at', CASE
+              WHEN jsonb_typeof(r.payload->'started_at') = 'string' THEN r.payload->'started_at'
+              ELSE to_jsonb($3::text)
+            END,
+            'updated_at', $3::text,
+            'version', COALESCE(NULLIF(r.payload->>'version', '')::integer, 0) + 1
+          ),
+          updated_at = $3::timestamptz,
+          source_machine_id = COALESCE($5, r.source_machine_id),
+          version = COALESCE(r.version, 0) + 1
+        FROM candidate
+        WHERE r.service = $1 AND r.object_type = 'tasks' AND r.object_id = candidate.object_id AND r.deleted_at IS NULL
+        RETURNING r.object_id, r.payload
+      ), inserted_audit AS (
+        INSERT INTO ${this.tableName} (
+          service, object_type, object_id, payload, updated_at,
+          deleted_at, source_machine_id, version
+        )
+        SELECT $1, 'audit_history', $6,
+          ($7::jsonb || jsonb_build_object('task_id', updated.object_id)),
+          $3::timestamptz, NULL, $5, NULL
+        FROM updated
+        RETURNING object_id
+      )
+      SELECT payload FROM updated WHERE EXISTS (SELECT 1 FROM inserted_audit)`,
+      params,
     );
     return result.rows[0] ? payloadRecord<Task>(result.rows[0].payload) : null;
   }
@@ -842,6 +993,94 @@ class PostgresJsonRecordStore {
   }
 }
 
+function taskAudit(
+  taskId: string,
+  action: string,
+  field: string | null,
+  oldValue: string | null,
+  newValue: string | null,
+  context: TodosStorageContext = {},
+  fallbackAgentId?: string | null,
+  createdAt = new Date().toISOString(),
+  machineId: string | null = context.requestId ?? null,
+): TaskHistory {
+  const effectiveAgentId = context.effectiveAgentId ?? context.agentId ?? fallbackAgentId ?? null;
+  return {
+    id: randomUUID(),
+    task_id: taskId,
+    action,
+    field,
+    old_value: oldValue,
+    new_value: newValue,
+    agent_id: effectiveAgentId,
+    authenticated_agent_id: context.authenticatedAgentId ?? null,
+    effective_agent_id: effectiveAgentId,
+    actor_key_id: context.actorKeyId ?? null,
+    actor_act_as: context.actorActAs ?? false,
+    created_at: createdAt,
+    machine_id: machineId,
+  };
+}
+
+function hasLiveOtherLock(task: Task, actorId: string | undefined): boolean {
+  return Boolean(task.locked_by && task.locked_by !== actorId && !cloudLockExpired(task.locked_at));
+}
+
+async function commitTaskTransition(
+  current: Task,
+  next: Task,
+  store: PostgresJsonRecordStore,
+  options: {
+    allowedStatuses?: readonly Task["status"][];
+    enforceLock?: boolean;
+    enforceAssignment?: boolean;
+    enforceDependencies?: boolean;
+    actorId?: string;
+    audit: TaskHistory;
+    context?: TodosStorageContext;
+    marker?: string;
+  },
+): Promise<Task> {
+  const updated = await store.compareAndSetTaskWithAudit(next, {
+    expectedVersion: current.version,
+    ...options,
+  });
+  if (updated) return updated;
+
+  const latest = await store.get<Task>("tasks", current.id);
+  if (!latest) throw new TaskNotFoundError(current.id);
+  if (latest.version !== current.version) {
+    throw new VersionConflictError(current.id, current.version, latest.version);
+  }
+  if (options.allowedStatuses && !options.allowedStatuses.includes(latest.status)) {
+    throw new Error(`Task is ${latest.status} and cannot perform ${options.audit.action}`);
+  }
+  if (options.enforceLock && hasLiveOtherLock(latest, options.actorId)) {
+    throw new LockError(latest.id, latest.locked_by!);
+  }
+  if (options.enforceAssignment && latest.assigned_to && latest.assigned_to !== options.actorId) {
+    throw new ResourceConflictError(
+      "TASK_ASSIGNMENT_CONFLICT",
+      `Task ${latest.id} is assigned to ${latest.assigned_to}, not ${options.actorId ?? "the caller"}`,
+    );
+  }
+  if (options.enforceDependencies) {
+    const blocking = await getUnfinishedDependencies(latest.id, store);
+    if (blocking.length > 0) {
+      const blockerIds = blocking.map((task) => task.id.slice(0, 8)).join(", ");
+      throw new Error(`Task is blocked by ${blocking.length} unfinished dependency(ies): ${blockerIds}`);
+    }
+  }
+  throw new VersionConflictError(current.id, current.version, latest.version);
+}
+
+async function getUnfinishedDependencies(taskId: string, store: PostgresJsonRecordStore): Promise<Task[]> {
+  const edges = (await store.list<TaskDependency>("dependencies"))
+    .filter((edge) => edge.task_id === taskId);
+  const dependencies = await Promise.all(edges.map((edge) => store.get<Task>("tasks", edge.depends_on)));
+  return dependencies.filter((task): task is Task => Boolean(task && task.status !== "completed"));
+}
+
 async function createTask(input: CreateTaskInput, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<Task> {
   const timestamp = new Date().toISOString();
   const shortId = input.project_id ? await nextTaskShortId(input.project_id, store, context) : null;
@@ -901,44 +1140,104 @@ async function createTask(input: CreateTaskInput, store: PostgresJsonRecordStore
     synced_at: null,
     archived_at: null,
   };
-  await store.upsert("tasks", task, context);
-  await logTaskChange(task.id, "created", "status", null, task.status, task.assigned_by ?? task.agent_id, store, context);
-  return task;
+  return store.createTaskWithAudit(
+    task,
+    taskAudit(task.id, "created", "status", null, task.status, context, task.assigned_by ?? task.agent_id, timestamp, store.machineId(context)),
+    context,
+  );
 }
 
-async function updateTask(id: string, input: UpdateTaskInput, store: PostgresJsonRecordStore): Promise<Task> {
+async function updateTask(
+  id: string,
+  input: UpdateTaskInput,
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<Task> {
   const existing = await requireRecord<Task>("tasks", id, store);
   if (existing.version !== input.version) {
-    throw new Error(`Task ${id} version conflict: expected ${existing.version}, got ${input.version}`);
+    throw new VersionConflictError(id, input.version, existing.version);
   }
+  const timestamp = new Date().toISOString();
+  const completedNow = input.status === "completed";
+  const reopened = input.status !== undefined && input.status !== "completed" && existing.status === "completed";
   const task: Task = {
     ...existing,
     ...definedPatch(input),
     version: existing.version + 1,
-    updated_at: new Date().toISOString(),
+    updated_at: timestamp,
     tags: input.tags ?? existing.tags,
     metadata: input.metadata ?? existing.metadata,
     requires_approval: input.requires_approval ?? existing.requires_approval,
     task_list_id: input.task_list_id ?? existing.task_list_id,
+    completed_at: completedNow
+      ? input.completed_at ?? timestamp
+      : reopened && input.completed_at === undefined
+        ? null
+        : input.completed_at !== undefined
+          ? input.completed_at
+          : existing.completed_at,
+    locked_by: completedNow ? null : existing.locked_by,
+    locked_at: completedNow ? null : existing.locked_at,
   };
-  await store.upsert("tasks", task);
-  return task;
+  const actorId = context?.effectiveAgentId ?? context?.agentId;
+  const statusChanged = input.status !== undefined && input.status !== existing.status;
+  return commitTaskTransition(existing, task, store, {
+    enforceLock: Boolean(actorId),
+    enforceAssignment: Boolean(actorId),
+    actorId,
+    audit: taskAudit(
+      id,
+      "update",
+      statusChanged ? "status" : "version",
+      statusChanged ? existing.status : String(existing.version),
+      statusChanged ? task.status : String(task.version),
+      context,
+      undefined,
+      task.updated_at,
+      store.machineId(context),
+    ),
+    context,
+    marker: "todos:update-task-cas",
+  });
 }
 
-async function startTask(id: string, agentId: string, store: PostgresJsonRecordStore): Promise<Task> {
+async function startTask(
+  id: string,
+  agentId: string,
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<Task> {
   const task = await requireRecord<Task>("tasks", id, store);
   // M8: reject starting a task that is not pending/in_progress (mirror sqlite).
   if (task.status !== "pending" && task.status !== "in_progress") {
     throw new Error(`Task is ${task.status} and cannot be started by ${agentId}`);
   }
-  return patchTask(task, {
+  if (hasLiveOtherLock(task, agentId)) throw new LockError(id, task.locked_by!);
+  if (task.assigned_to && task.assigned_to !== agentId) {
+    throw new ResourceConflictError("TASK_ASSIGNMENT_CONFLICT", `Task ${id} is assigned to ${task.assigned_to}, not ${agentId}`);
+  }
+  const timestamp = new Date().toISOString();
+  const next: Task = {
+    ...task,
     status: "in_progress",
     assigned_to: task.assigned_to ?? agentId,
     agent_id: task.agent_id ?? agentId,
     locked_by: agentId,
-    locked_at: new Date().toISOString(),
-    started_at: task.started_at ?? new Date().toISOString(),
-  }, store);
+    locked_at: timestamp,
+    started_at: task.started_at ?? timestamp,
+    updated_at: timestamp,
+    version: task.version + 1,
+  };
+  return commitTaskTransition(task, next, store, {
+    allowedStatuses: ["pending", "in_progress"],
+    enforceLock: true,
+    enforceAssignment: true,
+    enforceDependencies: true,
+    actorId: agentId,
+    audit: taskAudit(id, "start", "status", task.status, "in_progress", context, agentId, timestamp, store.machineId(context)),
+    context,
+    marker: "todos:start-task-cas",
+  });
 }
 
 async function completeTask(
@@ -946,10 +1245,58 @@ async function completeTask(
   agentId: string | undefined,
   options: TodosTaskCompletionOptions | undefined,
   store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
 ): Promise<Task> {
-  const task = await store.completeTask(id, agentId, options);
-  if (!task) throw new Error(`tasks record not found: ${id}`);
-  return task;
+  const task = await requireRecord<Task>("tasks", id, store);
+  if (task.status === "completed") return task;
+  if (task.status === "cancelled") throw new Error(`Task ${id} is cancelled and cannot be completed`);
+  if (hasLiveOtherLock(task, agentId)) throw new LockError(id, task.locked_by!);
+  if (agentId && task.assigned_to && task.assigned_to !== agentId) {
+    throw new ResourceConflictError("TASK_ASSIGNMENT_CONFLICT", `Task ${id} is assigned to ${task.assigned_to}, not ${agentId}`);
+  }
+  const operationTimestamp = new Date().toISOString();
+  const completedAt = options?.completed_at ?? operationTimestamp;
+  const evidence = options ? {
+    ...(options.files_changed !== undefined ? { files_changed: options.files_changed } : {}),
+    ...(options.test_results !== undefined ? { test_results: options.test_results } : {}),
+    ...(options.commit_hash !== undefined ? { commit_hash: options.commit_hash } : {}),
+    ...(options.notes !== undefined ? { notes: options.notes } : {}),
+    ...(options.attachment_ids !== undefined ? { attachment_ids: options.attachment_ids } : {}),
+  } : {};
+  const metadata: Record<string, unknown> = { ...task.metadata };
+  if (Object.keys(evidence).length > 0) {
+    const existing = metadata["_evidence"] && typeof metadata["_evidence"] === "object" && !Array.isArray(metadata["_evidence"])
+      ? metadata["_evidence"] as Record<string, unknown>
+      : {};
+    metadata["_evidence"] = { ...existing, ...evidence };
+  }
+  if (options?.confidence !== undefined) {
+    const existing = metadata["_completion"] && typeof metadata["_completion"] === "object" && !Array.isArray(metadata["_completion"])
+      ? metadata["_completion"] as Record<string, unknown>
+      : {};
+    metadata["_completion"] = { ...existing, confidence: options.confidence };
+  }
+  const next: Task = {
+    ...task,
+    status: "completed",
+    assigned_to: task.assigned_to ?? agentId ?? null,
+    locked_by: null,
+    locked_at: null,
+    completed_at: completedAt,
+    confidence: options?.confidence ?? task.confidence,
+    metadata,
+    version: task.version + 1,
+    updated_at: operationTimestamp,
+  };
+  return commitTaskTransition(task, next, store, {
+    allowedStatuses: ["pending", "in_progress", "failed"],
+    enforceLock: Boolean(agentId),
+    enforceAssignment: Boolean(agentId),
+    actorId: agentId,
+    audit: taskAudit(id, "complete", "status", task.status, "completed", context, agentId, operationTimestamp, store.machineId(context)),
+    context,
+    marker: "todos:complete-task-atomic",
+  });
 }
 
 async function failTask(
@@ -958,14 +1305,48 @@ async function failTask(
   reason: string | undefined,
   options: TodosTaskFailureOptions | undefined,
   store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
 ): Promise<TodosTaskFailureResult> {
   const task = await requireRecord<Task>("tasks", id, store);
-  const failed = await patchTask(task, {
+  if (task.status === "cancelled" || task.status === "completed") {
+    throw new Error(`Task is ${task.status} and cannot be failed`);
+  }
+  if (agentId && hasLiveOtherLock(task, agentId)) throw new LockError(id, task.locked_by!);
+  if (agentId && task.assigned_to && task.assigned_to !== agentId) {
+    throw new ResourceConflictError("TASK_ASSIGNMENT_CONFLICT", `Task ${id} is assigned to ${task.assigned_to}, not ${agentId}`);
+  }
+  const timestamp = new Date().toISOString();
+  const failureMetadata: Record<string, unknown> = {
+    ...task.metadata,
+    _failure: {
+      reason: reason ?? "failed",
+      error_code: options?.error_code ?? null,
+      failed_by: agentId ?? null,
+      failed_at: timestamp,
+      retry_requested: options?.retry ?? false,
+    },
+  };
+  const next: Task = {
+    ...task,
     status: "failed",
     assigned_to: task.assigned_to ?? agentId ?? null,
     reason: reason ?? task.reason,
     retry_after: options?.retry_after ?? task.retry_after,
-  }, store);
+    metadata: failureMetadata,
+    locked_by: null,
+    locked_at: null,
+    version: task.version + 1,
+    updated_at: timestamp,
+  };
+  const failed = await commitTaskTransition(task, next, store, {
+    allowedStatuses: ["pending", "in_progress", "failed"],
+    enforceLock: Boolean(agentId),
+    enforceAssignment: Boolean(agentId),
+    actorId: agentId,
+    audit: taskAudit(id, "fail", "status", task.status, "failed", context, agentId, timestamp, store.machineId(context)),
+    context,
+    marker: "todos:fail-task-cas",
+  });
   if (!options?.retry) return { task: failed };
   const retryTask = await createTask({
     title: task.title,
@@ -982,19 +1363,8 @@ async function failTask(
     max_retries: task.max_retries,
     reason: reason ?? undefined,
     task_type: task.task_type ?? undefined,
-  }, store);
+  }, store, context);
   return { task: failed, retryTask };
-}
-
-async function patchTask(task: Task, patch: Partial<Task>, store: PostgresJsonRecordStore): Promise<Task> {
-  const updated: Task = {
-    ...task,
-    ...patch,
-    version: task.version + 1,
-    updated_at: new Date().toISOString(),
-  };
-  await store.upsert("tasks", updated);
-  return updated;
 }
 
 // Lock lease TTL — keep in lockstep with the local sqlite path (LOCK_EXPIRY_MINUTES).
@@ -1013,10 +1383,15 @@ function cloudLockExpiresAt(lockedAt: string): string {
  * Acquire an exclusive lock on a cloud task by setting `locked_by`/`locked_at` on
  * the shared record. Mirrors the local sqlite semantics: completed/cancelled tasks
  * cannot be locked, a same-agent re-lock renews the lease, and a live lock held by
- * a DIFFERENT agent is reported (not stolen). No transactions on this adapter, so
- * this is best-effort last-writer-wins — the same guarantee `start`/`claim` give.
+ * a DIFFERENT agent is reported (not stolen). The final write is a conditional
+ * task-plus-audit CTE, so a stale reader cannot overwrite a concurrent winner.
  */
-async function lockTask(id: string, agentId: string, store: PostgresJsonRecordStore): Promise<TodosLockResult> {
+async function lockTask(
+  id: string,
+  agentId: string,
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<TodosLockResult> {
   const task = await requireRecord<Task>("tasks", id, store);
   if (task.status === "completed" || task.status === "cancelled") {
     return { success: false, error: `Task is ${task.status} and cannot be locked` };
@@ -1024,18 +1399,55 @@ async function lockTask(id: string, agentId: string, store: PostgresJsonRecordSt
   if (task.locked_by && task.locked_by !== agentId && !cloudLockExpired(task.locked_at)) {
     return { success: false, locked_by: task.locked_by, locked_at: task.locked_at ?? undefined, error: `Task is locked by ${task.locked_by}` };
   }
+  if (task.assigned_to && task.assigned_to !== agentId) {
+    return { success: false, error: `Task is assigned to ${task.assigned_to}` };
+  }
   const timestamp = new Date().toISOString();
-  await patchTask(task, { locked_by: agentId, locked_at: timestamp }, store);
+  const next: Task = { ...task, locked_by: agentId, locked_at: timestamp, updated_at: timestamp, version: task.version + 1 };
+  try {
+    await commitTaskTransition(task, next, store, {
+      allowedStatuses: ["pending", "in_progress", "failed"],
+      enforceLock: true,
+      enforceAssignment: true,
+      actorId: agentId,
+      audit: taskAudit(id, task.locked_by === agentId ? "lock_renew" : "lock", "locked_by", task.locked_by, agentId, context, agentId, timestamp, store.machineId(context)),
+      context,
+      marker: "todos:lock-task-cas",
+    });
+  } catch (error) {
+    if (error instanceof LockError) {
+      const latest = await store.get<Task>("tasks", id);
+      return { success: false, locked_by: latest?.locked_by ?? undefined, locked_at: latest?.locked_at ?? undefined, error: error.message };
+    }
+    throw error;
+  }
   return { success: true, locked_by: agentId, locked_at: timestamp, expires_at: cloudLockExpiresAt(timestamp) };
 }
 
 /** Release a lock on a cloud task. A non-matching agent is rejected (parity with local). */
-async function unlockTask(id: string, agentId: string | undefined, store: PostgresJsonRecordStore): Promise<boolean> {
+async function unlockTask(
+  id: string,
+  agentId: string | undefined,
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<boolean> {
   const task = await requireRecord<Task>("tasks", id, store);
   if (agentId && task.locked_by && task.locked_by !== agentId) {
     throw new LockError(id, task.locked_by);
   }
-  await patchTask(task, { locked_by: null, locked_at: null }, store);
+  const timestamp = new Date().toISOString();
+  await commitTaskTransition(
+    task,
+    { ...task, locked_by: null, locked_at: null, updated_at: timestamp, version: task.version + 1 },
+    store,
+    {
+      enforceLock: Boolean(agentId),
+      actorId: agentId,
+      audit: taskAudit(id, "unlock", "locked_by", task.locked_by, null, context, agentId, timestamp, store.machineId(context)),
+      context,
+      marker: "todos:unlock-task-cas",
+    },
+  );
   return true;
 }
 
@@ -1077,10 +1489,15 @@ async function addDependency(
 }
 
 /** Remove a dependency edge. Returns false when the edge did not exist. */
-async function removeDependency(taskId: string, dependsOn: string, store: PostgresJsonRecordStore): Promise<boolean> {
+async function removeDependency(
+  taskId: string,
+  dependsOn: string,
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<boolean> {
   const existing = await store.get<unknown>("dependencies", dependencyId(taskId, dependsOn));
   if (!existing) return false;
-  await store.delete("dependencies", dependencyId(taskId, dependsOn));
+  await store.delete("dependencies", dependencyId(taskId, dependsOn), context);
   return true;
 }
 
@@ -1230,26 +1647,13 @@ async function getNextTask(filters: TodosTaskClaimFilter | undefined, store: Pos
   return (await listTasks({ ...filters, status: "pending", limit: 1 }, store))[0] ?? null;
 }
 
-async function claimNextTask(agentId: string, filters: TodosTaskClaimFilter | undefined, store: PostgresJsonRecordStore): Promise<Task | null> {
-  // M8: if another worker wins a candidate between getNextTask and startTask,
-  // move on to the next pending task instead of failing the whole claim. NOTE:
-  // the Postgres adapter has no transactions (capabilities.transactions=false),
-  // so this remains best-effort last-writer-wins rather than a hard atomic
-  // claim. Unverified without a live Postgres.
-  const MAX_ATTEMPTS = 25;
-  const tried = new Set<string>();
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    const task = await getNextTask(filters, store);
-    if (!task) return null;
-    if (tried.has(task.id)) return null;
-    tried.add(task.id);
-    try {
-      return await startTask(task.id, agentId, store);
-    } catch {
-      // Candidate no longer startable — try the next pending task.
-    }
-  }
-  return null;
+async function claimNextTask(
+  agentId: string,
+  filters: TodosTaskClaimFilter | undefined,
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<Task | null> {
+  return store.claimNextTaskWithAudit(agentId, filters, context);
 }
 
 async function getActiveWork(filters: TodosActiveWorkFilter | undefined, store: PostgresJsonRecordStore): Promise<ActiveWorkItem[]> {
@@ -1295,13 +1699,14 @@ async function updateProject(
   id: string,
   input: UpdateProjectInput,
   store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
 ): Promise<Project> {
   if ("task_list_id" in input) {
     throw new Error("task_list_id cannot be changed by updateProject; use renameProject for an atomic canonical rename");
   }
   const project = await requireRecord<Project>("projects", id, store);
   const updated = { ...project, ...definedPatch(input), updated_at: new Date().toISOString() };
-  return store.upsert("projects", updated);
+  return store.upsert("projects", updated, context);
 }
 
 async function createPlan(input: CreatePlanInput, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<Plan> {
@@ -1329,7 +1734,12 @@ async function createPlan(input: CreatePlanInput, store: PostgresJsonRecordStore
   }, context);
 }
 
-async function updatePlan(id: string, input: UpdatePlanInput, store: PostgresJsonRecordStore): Promise<Plan> {
+async function updatePlan(
+  id: string,
+  input: UpdatePlanInput,
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<Plan> {
   const plan = await requireRecord<Plan>("plans", id, store);
   const patch = definedPatch(input);
   if (input.slug !== undefined) {
@@ -1341,7 +1751,7 @@ async function updatePlan(id: string, input: UpdatePlanInput, store: PostgresJso
       excludeId: id,
     });
   }
-  return store.upsert("plans", { ...plan, ...patch, updated_at: new Date().toISOString() });
+  return store.upsert("plans", { ...plan, ...patch, updated_at: new Date().toISOString() }, context);
 }
 
 async function registerAgent(
@@ -1378,7 +1788,12 @@ async function registerAgent(
   return store.upsert("agents", agent, context);
 }
 
-async function updateAgent(id: string, input: TodosAgentUpdateInput, store: PostgresJsonRecordStore): Promise<Agent | null> {
+async function updateAgent(
+  id: string,
+  input: TodosAgentUpdateInput,
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<Agent | null> {
   const agent = await store.get<Agent>("agents", id);
   if (!agent) return null;
   return store.upsert("agents", {
@@ -1388,7 +1803,7 @@ async function updateAgent(id: string, input: TodosAgentUpdateInput, store: Post
     capabilities: input.capabilities ?? agent.capabilities,
     metadata: input.metadata ?? agent.metadata,
     last_seen_at: new Date().toISOString(),
-  });
+  }, context);
 }
 
 /** Resolve an agent by id first, then by (active) name. */
@@ -1449,7 +1864,12 @@ async function createTaskList(input: CreateTaskListInput, store: PostgresJsonRec
   }, context);
 }
 
-async function updateTaskList(id: string, input: UpdateTaskListInput, store: PostgresJsonRecordStore): Promise<TaskList> {
+async function updateTaskList(
+  id: string,
+  input: UpdateTaskListInput,
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<TaskList> {
   const list = await requireRecord<TaskList>("task_lists", id, store);
   const patch = definedPatch(input);
   if (input.slug !== undefined) {
@@ -1468,7 +1888,7 @@ async function updateTaskList(id: string, input: UpdateTaskListInput, store: Pos
     ...patch,
     metadata: input.metadata ?? list.metadata,
     updated_at: new Date().toISOString(),
-  });
+  }, context);
 }
 
 async function createTemplate(input: CreateTemplateInput, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<TaskTemplate> {
@@ -1491,7 +1911,12 @@ async function createTemplate(input: CreateTemplateInput, store: PostgresJsonRec
   }, context);
 }
 
-async function updateTemplate(id: string, input: UpdateTemplateInput, store: PostgresJsonRecordStore): Promise<TaskTemplate | null> {
+async function updateTemplate(
+  id: string,
+  input: UpdateTemplateInput,
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<TaskTemplate | null> {
   const template = await store.get<TaskTemplate>("templates", id);
   if (!template) return null;
   return store.upsert("templates", {
@@ -1501,7 +1926,38 @@ async function updateTemplate(id: string, input: UpdateTemplateInput, store: Pos
     variables: input.variables ?? template.variables,
     metadata: input.metadata ?? template.metadata,
     version: template.version + 1,
-  });
+  }, context);
+}
+
+async function logGenericActivity(
+  input: LogActivityInput,
+  store: PostgresJsonRecordStore,
+  context: TodosStorageContext = {},
+): Promise<ActivityRecord> {
+  const createdAt = input.created_at ?? new Date().toISOString();
+  const effectiveAgentId = context.effectiveAgentId ?? context.agentId ?? input.actor_id ?? null;
+  const record: ActivityRecord = {
+    schema_version: ACTIVITY_LOG_SCHEMA,
+    id: randomUUID(),
+    entity_type: input.entity_type,
+    entity_id: input.entity_id,
+    action: input.action,
+    field: input.field ?? null,
+    old_value: input.old_value ?? null,
+    new_value: input.new_value ?? null,
+    actor_id: effectiveAgentId,
+    session_id: input.session_id ?? context.sessionId ?? null,
+    machine_id: input.machine_id ?? store.machineId(context),
+    metadata: {
+      ...(input.metadata ?? {}),
+      authenticated_agent_id: context.authenticatedAgentId ?? null,
+      effective_agent_id: effectiveAgentId,
+      actor_key_id: context.actorKeyId ?? null,
+      actor_act_as: context.actorActAs ?? false,
+    },
+    created_at: createdAt,
+  };
+  return store.upsert("activity_log", record, context);
 }
 
 async function logTaskChange(
@@ -1515,14 +1971,7 @@ async function logTaskChange(
   context?: TodosStorageContext,
 ): Promise<TaskHistory> {
   const entry: TaskHistory = {
-    id: randomUUID(),
-    task_id: taskId,
-    action,
-    field: field ?? null,
-    old_value: oldValue ?? null,
-    new_value: newValue ?? null,
-    agent_id: agentId ?? context?.agentId ?? null,
-    created_at: new Date().toISOString(),
+    ...taskAudit(taskId, action, field ?? null, oldValue ?? null, newValue ?? null, context, agentId),
     machine_id: store.machineId(context),
   };
   return store.upsert("audit_history", entry, context);

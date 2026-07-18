@@ -14,11 +14,13 @@ export interface TaskComment { "id": string; "task_id": string; "agent_id": stri
 
 export interface Plan { "id": string; "slug": string | null; "project_id"?: string | null; "task_list_id"?: string | null; "agent_id"?: string | null; "name": string; "description"?: string | null; "status": "active" | "completed" | "archived"; "created_at": string; "updated_at": string }
 
-export interface CreateTaskInput { "title": string; "description"?: string; "status"?: string; "priority"?: string; "project_id"?: string; "assigned_to"?: string; "agent_id"?: string; "tags"?: Array<string> }
+export interface CreateTaskInput { "title": string; "description"?: string; "status"?: string; "priority"?: string; "project_id"?: string; "assigned_to"?: string; "agent_id"?: string; "assigned_by"?: string; "tags"?: Array<string> }
 
-export interface UpdateTaskInput { "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "assigned_to"?: string; "version"?: number }
+export interface UpdateTaskInput { "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "assigned_to"?: string; "approved_by"?: string; "version"?: number }
 
 export interface CompleteTaskInput { "agent_id"?: string; "attachment_ids"?: Array<string>; "files_changed"?: Array<string>; "test_results"?: string; "commit_hash"?: string; "notes"?: string; "confidence"?: number }
+
+export interface FailTaskInput { "agent_id"?: string; "reason"?: string; "retry"?: boolean; "retry_after"?: string; "error_code"?: string }
 
 export interface CreateProjectInput { "name": string; "path": string; "description"?: string; "task_list_id"?: string; "task_prefix"?: string }
 
@@ -321,6 +323,15 @@ export class TodosV1Client {
     /** Complete a task */
     async completeTask(id: string, body?: CompleteTaskInput, init?: RequestInit): Promise<{ "task"?: Task }> {
       return this.request("POST", `/v1/tasks/${encodeURIComponent(String(id))}/complete`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Mark a task failed and optionally create a retry copy */
+    async failTask(id: string, body?: FailTaskInput, init?: RequestInit): Promise<{ "result"?: { "task"?: Task; "retryTask"?: Task } }> {
+      return this.request("POST", `/v1/tasks/${encodeURIComponent(String(id))}/fail`, {
         body,
         query: undefined,
         init,

@@ -52,7 +52,7 @@ import {
 import { s3CredentialsFromEnv } from "../cli/commands/storage-commands.js";
 import { handleV1Request, type V1RequestDependencies } from "../server/v1.js";
 import type { ApiKeyVerifier } from "@hasna/contracts/auth";
-import type { TaskComment } from "../types/index.js";
+import { VersionConflictError, type TaskComment } from "../types/index.js";
 
 let db: Database;
 
@@ -124,7 +124,7 @@ describe("storage adapter contracts", () => {
     expectStore(adapter, "agents", ["register", "get", "getByName", "list", "update"]);
     expectStore(adapter, "taskLists", ["create", "get", "getBySlug", "list", "update", "delete"]);
     expectStore(adapter, "templates", ["create", "get", "list", "update", "delete", "getWithTasks"]);
-    expectStore(adapter, "audit", ["logTaskChange", "addComment", "getTaskHistory", "getRecentActivity"]);
+    expectStore(adapter, "audit", ["logActivity", "logTaskChange", "addComment", "getTaskHistory", "getRecentActivity"]);
     expectStore(adapter, "sync", ["getTasksChangedSince", "exportSnapshot", "importSnapshot"]);
   });
 
@@ -770,17 +770,282 @@ describe("storage adapter contracts", () => {
     expect(completed.completed_at).toBe(historicalCompletion);
     expect(completed.updated_at).not.toBe(historicalCompletion);
     expect(Date.parse(completed.updated_at)).toBeGreaterThan(Date.parse(historicalCompletion));
-    expect(postgres.calls).toHaveLength(1);
-    expect(postgres.calls[0]?.sql).toContain("todos:complete-task-atomic");
-    expect(postgres.calls[0]?.sql).toContain("payload->'metadata'->'_evidence'");
-    expect(postgres.calls[0]?.sql).toContain("payload->'metadata'->'_completion'");
+    expect(postgres.calls).toHaveLength(2);
+    const completionCas = postgres.calls.find((call) => call.sql.includes("todos:complete-task-atomic"));
+    expect(completionCas?.sql).toContain("todos:task-cas-audit");
+    expect(completionCas?.sql).toContain("inserted_audit");
 
     const defaultTimestampTask = await adapter.tasks.create({ title: "One completion clock" });
     postgres.calls.length = 0;
     const defaultTimestampCompletion = await adapter.tasks.complete(defaultTimestampTask.id, "finisher");
     expect(defaultTimestampCompletion.completed_at).toBe(defaultTimestampCompletion.updated_at);
-    expect(postgres.calls).toHaveLength(1);
+    expect(postgres.calls).toHaveLength(2);
   });
+
+  test("Postgres CAS permits one stale-version winner with exactly one audit row", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+    const task = await adapter.tasks.create({ title: "CAS race" }, {
+      authenticatedAgentId: "writer",
+      effectiveAgentId: "writer",
+      agentId: "writer",
+    });
+    postgres.calls.length = 0;
+
+    const outcomes = await Promise.allSettled([
+      adapter.tasks.update(task.id, { version: task.version, priority: "high" }, { agentId: "writer", effectiveAgentId: "writer" }),
+      adapter.tasks.update(task.id, { version: task.version, priority: "low" }, { agentId: "writer", effectiveAgentId: "writer" }),
+    ]);
+
+    expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+    const rejected = outcomes.find((outcome) => outcome.status === "rejected") as PromiseRejectedResult;
+    expect(rejected.reason).toBeInstanceOf(VersionConflictError);
+    const history = await adapter.audit.getTaskHistory(task.id);
+    expect(history.filter((entry) => entry.action === "update")).toHaveLength(1);
+    expect(postgres.calls.filter((call) => call.sql.includes("todos:update-task-cas"))).toHaveLength(2);
+  });
+
+  test("Postgres generic status updates preserve completion and reopen lifecycle invariants", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+    const actor = {
+      authenticatedAgentId: "worker",
+      effectiveAgentId: "worker",
+      agentId: "worker",
+    };
+    const task = await adapter.tasks.create({ title: "Generic lifecycle patch", assigned_to: "worker" }, actor);
+    const started = await adapter.tasks.start(task.id, "worker", actor);
+
+    const completed = await adapter.tasks.update(task.id, {
+      version: started.version,
+      status: "completed",
+    }, actor);
+
+    expect(completed).toMatchObject({
+      status: "completed",
+      locked_by: null,
+      locked_at: null,
+      version: started.version + 1,
+    });
+    expect(completed.completed_at).toBe(completed.updated_at);
+    expect((await adapter.audit.getTaskHistory(task.id)).filter((entry) => entry.action === "update")).toEqual([
+      expect.objectContaining({
+        field: "status",
+        old_value: "in_progress",
+        new_value: "completed",
+        agent_id: "worker",
+        authenticated_agent_id: "worker",
+        effective_agent_id: "worker",
+      }),
+    ]);
+
+    const reopened = await adapter.tasks.update(task.id, {
+      version: completed.version,
+      status: "pending",
+    }, actor);
+    expect(reopened).toMatchObject({
+      status: "pending",
+      completed_at: null,
+      version: completed.version + 1,
+    });
+    const updateHistory = (await adapter.audit.getTaskHistory(task.id)).filter((entry) => entry.action === "update");
+    expect(updateHistory).toHaveLength(2);
+    expect(updateHistory).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: "status", old_value: "completed", new_value: "pending", agent_id: "worker" }),
+      expect.objectContaining({ field: "status", old_value: "in_progress", new_value: "completed", agent_id: "worker" }),
+    ]));
+  });
+
+  test("Postgres task history matches local newest-first ordering with a deterministic tie-breaker", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+    const taskId = "history-order-task";
+    const records = [
+      { id: "audit-old", created_at: "2026-07-18T10:00:00.000Z" },
+      { id: "audit-new-a", created_at: "2026-07-18T11:00:00.000Z" },
+      { id: "audit-new-b", created_at: "2026-07-18T11:00:00.000Z" },
+    ];
+    for (const record of records) {
+      await postgres.client.query(
+        "INSERT INTO todos_sync_records RETURNING object_id",
+        ["todos", "audit_history", record.id, {
+          ...record,
+          task_id: taskId,
+          action: "update",
+          field: "status",
+          old_value: "pending",
+          new_value: "in_progress",
+          agent_id: "worker",
+        }, record.created_at, null, null],
+      );
+    }
+
+    expect((await adapter.audit.getTaskHistory(taskId)).map((entry) => entry.id)).toEqual([
+      "audit-new-b",
+      "audit-new-a",
+      "audit-old",
+    ]);
+  });
+
+  test("Postgres start CAS rejects a dependency added after the initial task read", async () => {
+    const postgres = createMemoryPostgresClient();
+    let adapter!: TodosStorageAdapter;
+    let injectDependency = false;
+    let blockedTaskId = "";
+    let blockerTaskId = "";
+    const client: TodosPostgresQueryClient = {
+      query: async <T = Record<string, unknown>>(sql: string, values?: readonly unknown[]) => {
+        if (injectDependency && sql.includes("todos:start-task-cas")) {
+          injectDependency = false;
+          await adapter.dependencies!.add(blockedTaskId, blockerTaskId);
+        }
+        return postgres.client.query<T>(sql, values);
+      },
+    };
+    adapter = createPostgresTodosStorageAdapter({ client });
+    const blocker = await adapter.tasks.create({ title: "Unfinished prerequisite", status: "in_progress" });
+    const blocked = await adapter.tasks.create({ title: "Must remain pending" });
+    blockedTaskId = blocked.id;
+    blockerTaskId = blocker.id;
+    injectDependency = true;
+
+    await expect(adapter.tasks.start(blocked.id, "worker", { agentId: "worker", effectiveAgentId: "worker" }))
+      .rejects.toThrow(/blocked by .*unfinished dependenc/i);
+
+    expect(await adapter.tasks.get(blocked.id)).toMatchObject({ status: "pending", locked_by: null, version: blocked.version });
+    expect((await adapter.audit.getTaskHistory(blocked.id)).filter((entry) => entry.action === "start")).toHaveLength(0);
+    const startCas = postgres.calls.find((call) => call.sql.includes("todos:start-task-cas"));
+    expect(startCas?.sql).toContain("todos:unfinished-dependency-guard");
+  });
+
+  test("Postgres atomic claim has one winner and one matching audit row", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+    const task = await adapter.tasks.create({ title: "Single claim" });
+    postgres.calls.length = 0;
+
+    const claimed = await Promise.all([
+      adapter.tasks.claimNext("agent-a", {}, { agentId: "agent-a", effectiveAgentId: "agent-a" }),
+      adapter.tasks.claimNext("agent-b", {}, { agentId: "agent-b", effectiveAgentId: "agent-b" }),
+    ]);
+
+    expect(claimed.filter(Boolean)).toHaveLength(1);
+    expect(claimed.find(Boolean)?.id).toBe(task.id);
+    expect(claimed.find(Boolean)?.started_at).toBeTruthy();
+    const history = await adapter.audit.getTaskHistory(task.id);
+    expect(history.filter((entry) => entry.action === "claim")).toHaveLength(1);
+    const claimCalls = postgres.calls.filter((call) => call.sql.includes("todos:claim-task-atomic"));
+    expect(claimCalls).toHaveLength(2);
+    expect(claimCalls[0]?.sql).toContain("jsonb_typeof(r.payload->'started_at') = 'string'");
+  });
+
+  test("Postgres concurrent claims skip a higher-priority task with an unfinished dependency", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+    const blocker = await adapter.tasks.create({ title: "Active prerequisite", status: "in_progress" });
+    const blocked = await adapter.tasks.create({ title: "Blocked critical", priority: "critical" });
+    const ready = await adapter.tasks.create({ title: "Ready low priority", priority: "low" });
+    await adapter.dependencies!.add(blocked.id, blocker.id);
+    postgres.calls.length = 0;
+
+    const claimed = await Promise.all([
+      adapter.tasks.claimNext("agent-a", {}, { agentId: "agent-a", effectiveAgentId: "agent-a" }),
+      adapter.tasks.claimNext("agent-b", {}, { agentId: "agent-b", effectiveAgentId: "agent-b" }),
+    ]);
+
+    expect(claimed.filter(Boolean)).toHaveLength(1);
+    expect(claimed.find(Boolean)?.id).toBe(ready.id);
+    expect(await adapter.tasks.get(blocked.id)).toMatchObject({ status: "pending", locked_by: null, version: blocked.version });
+    expect((await adapter.audit.getTaskHistory(blocked.id)).filter((entry) => entry.action === "claim")).toHaveLength(0);
+    const claimCalls = postgres.calls.filter((call) => call.sql.includes("todos:claim-task-atomic"));
+    expect(claimCalls).toHaveLength(2);
+    expect(claimCalls.every((call) => call.sql.includes("todos:unfinished-dependency-guard"))).toBe(true);
+  });
+
+  test("Postgres CAS statement failure leaves both task and audit unchanged", async () => {
+    const postgres = createMemoryPostgresClient();
+    const client: TodosPostgresQueryClient = {
+      query: async <T = Record<string, unknown>>(sql: string, values?: readonly unknown[]) => {
+        if (sql.includes("todos:update-task-cas")) throw new Error("synthetic audit insert failure");
+        return postgres.client.query<T>(sql, values);
+      },
+    };
+    const adapter = createPostgresTodosStorageAdapter({ client });
+    const task = await adapter.tasks.create({ title: "Rollback proof" });
+
+    await expect(adapter.tasks.update(task.id, { version: task.version, priority: "critical" }))
+      .rejects.toThrow("synthetic audit insert failure");
+    expect(await adapter.tasks.get(task.id)).toMatchObject({ priority: "medium", version: task.version });
+    expect((await adapter.audit.getTaskHistory(task.id)).filter((entry) => entry.action === "update")).toHaveLength(0);
+  });
+
+  test("Postgres failure CAS clears the lease and preserves structured failure details", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+    const task = await adapter.tasks.create({ title: "Failure detail", assigned_to: "worker" });
+    const started = await adapter.tasks.start(task.id, "worker", { agentId: "worker", effectiveAgentId: "worker" });
+    const retryAfter = "2026-07-19T12:00:00.000Z";
+
+    const result = await adapter.tasks.fail(started.id, "worker", "synthetic failure", {
+      retry_after: retryAfter,
+      error_code: "SYNTHETIC_FAILURE",
+    }, { agentId: "worker", effectiveAgentId: "worker" });
+
+    expect(result.task).toMatchObject({
+      status: "failed",
+      locked_by: null,
+      locked_at: null,
+      reason: "synthetic failure",
+      retry_after: retryAfter,
+      metadata: {
+        _failure: {
+          reason: "synthetic failure",
+          error_code: "SYNTHETIC_FAILURE",
+          failed_by: "worker",
+          retry_requested: false,
+        },
+      },
+    });
+    expect((await adapter.audit.getTaskHistory(task.id)).filter((entry) => entry.action === "fail")).toHaveLength(1);
+  });
+
+  test("Postgres activity ledger persists authenticated and effective actors for administrative act-as", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+
+    const entry = await adapter.audit.logActivity!(
+      {
+        entity_type: "api_mutation",
+        entity_id: "/v1/projects/fixture",
+        action: "admin_act_as_attempt",
+        field: "PATCH",
+        old_value: "admin-agent",
+        new_value: "effective-agent",
+        actor_id: "effective-agent",
+      },
+      {
+        agentId: "effective-agent",
+        authenticatedAgentId: "admin-agent",
+        effectiveAgentId: "effective-agent",
+        actorKeyId: "admin-key-id",
+        actorActAs: true,
+      },
+    );
+
+    expect(entry).toMatchObject({
+      schema_version: "todos.activity_log.v1",
+      actor_id: "effective-agent",
+      metadata: {
+        authenticated_agent_id: "admin-agent",
+        effective_agent_id: "effective-agent",
+        actor_key_id: "admin-key-id",
+        actor_act_as: true,
+      },
+    });
+    expect(postgres.calls.some((call) => call.sql.includes("INSERT INTO todos_sync_records") && call.values[1] === "activity_log")).toBe(true);
+  });
+
+  test.skip("real two-connection Postgres CAS proof requires a repo-owned disposable Postgres fixture", () => {});
 
   test("exposes the direct pure remote Postgres adapter factory", async () => {
     const postgres = createMemoryPostgresClient();
@@ -2134,10 +2399,109 @@ function createMemoryPostgresClient(): {
   const cursors = new Map<string, string>();
   const recordKey = (service: unknown, objectType: unknown, objectId: unknown) =>
     `${String(service)}:${String(objectType)}:${String(objectId)}`;
+  const hasUnfinishedDependency = (service: unknown, taskId: unknown): boolean =>
+    [...rows.values()].some((row) => {
+      if (row.service !== service || row.objectType !== "dependencies" || row.deletedAt) return false;
+      const edge = row.payload as Record<string, unknown>;
+      if (edge["task_id"] !== taskId) return false;
+      const dependency = rows.get(recordKey(service, "tasks", edge["depends_on"]));
+      if (!dependency || dependency.deletedAt) return false;
+      return (dependency.payload as Record<string, unknown>)["status"] !== "completed";
+    });
 
   const client: TodosPostgresQueryClient = {
     async query<T = Record<string, unknown>>(sql: string, values: readonly unknown[] = []) {
       calls.push({ sql, values });
+
+      if (sql.includes("todos:create-task-audit-atomic")) {
+        const [service, taskId, rawTask, taskUpdatedAt, , taskVersion, auditId, rawAudit, auditUpdatedAt] = values;
+        const taskKey = recordKey(service, "tasks", taskId);
+        if (rows.has(taskKey)) return { rows: [] as T[] };
+        const taskPayload = parseJsonb(rawTask);
+        rows.set(taskKey, {
+          service: String(service), objectType: "tasks", objectId: String(taskId), payload: taskPayload,
+          updatedAt: String(taskUpdatedAt), deletedAt: null, version: nullableNumber(taskVersion),
+        });
+        rows.set(recordKey(service, "audit_history", auditId), {
+          service: String(service), objectType: "audit_history", objectId: String(auditId), payload: parseJsonb(rawAudit),
+          updatedAt: String(auditUpdatedAt), deletedAt: null, version: null,
+        });
+        return { rows: [{ payload: taskPayload }] as T[] };
+      }
+
+      if (sql.includes("todos:task-cas-audit")) {
+        const [service, taskId, expectedVersion, rawStatuses, enforceLock, enforceAssignment, actorId, lockCutoff,
+          rawTask, taskUpdatedAt, taskVersion, , auditId, rawAudit, auditUpdatedAt, enforceDependencies] = values;
+        const taskRow = rows.get(recordKey(service, "tasks", taskId));
+        if (!taskRow || taskRow.deletedAt) return { rows: [] as T[] };
+        const current = taskRow.payload as Record<string, unknown>;
+        const statuses = parseJsonb(rawStatuses) as string[];
+        const lockIsLive = Boolean(current["locked_by"]) && current["locked_by"] !== actorId &&
+          String(current["locked_at"] ?? "") >= String(lockCutoff);
+        const assignedElsewhere = Boolean(current["assigned_to"]) && current["assigned_to"] !== actorId;
+        if (Number(current["version"] ?? 0) !== Number(expectedVersion) ||
+            (statuses.length > 0 && !statuses.includes(String(current["status"]))) ||
+            (Boolean(enforceLock) && lockIsLive) ||
+            (Boolean(enforceAssignment) && assignedElsewhere) ||
+            (Boolean(enforceDependencies) && hasUnfinishedDependency(service, taskId))) {
+          return { rows: [] as T[] };
+        }
+        const taskPayload = parseJsonb(rawTask);
+        taskRow.payload = taskPayload;
+        taskRow.updatedAt = String(taskUpdatedAt);
+        taskRow.version = nullableNumber(taskVersion);
+        rows.set(recordKey(service, "audit_history", auditId), {
+          service: String(service), objectType: "audit_history", objectId: String(auditId), payload: parseJsonb(rawAudit),
+          updatedAt: String(auditUpdatedAt), deletedAt: null, version: null,
+        });
+        return { rows: [{ payload: taskPayload }] as T[] };
+      }
+
+      if (sql.includes("todos:claim-task-atomic")) {
+        const [service, agentId, timestamp, lockCutoff, , auditId, rawAudit] = values;
+        let valueIndex = 7;
+        const projectId = sql.includes("payload->>'project_id' = $") ? values[valueIndex++] : undefined;
+        const taskListId = sql.includes("payload->>'task_list_id' = $") ? values[valueIndex++] : undefined;
+        const planId = sql.includes("payload->>'plan_id' = $") ? values[valueIndex++] : undefined;
+        const tags = sql.includes("payload->'tags' @>") ? parseJsonb(values[valueIndex++]) as string[] : undefined;
+        const rank = (priority: unknown) => ({ critical: 0, high: 1, medium: 2, low: 3 } as Record<string, number>)[String(priority)] ?? 4;
+        const candidate = [...rows.values()]
+          .filter((row) => row.service === service && row.objectType === "tasks" && !row.deletedAt)
+          .filter((row) => {
+            const task = row.payload as Record<string, unknown>;
+            const lockAvailable = !task["locked_by"] || task["locked_by"] === agentId || String(task["locked_at"] ?? "") < String(lockCutoff);
+            const assignmentAvailable = !task["assigned_to"] || task["assigned_to"] === agentId;
+            const dependenciesReady = !sql.includes("todos:unfinished-dependency-guard") || !hasUnfinishedDependency(service, row.objectId);
+            return task["status"] === "pending" && lockAvailable && assignmentAvailable && dependenciesReady &&
+              (projectId === undefined || task["project_id"] === projectId) &&
+              (taskListId === undefined || task["task_list_id"] === taskListId) &&
+              (planId === undefined || task["plan_id"] === planId) &&
+              (!tags || (Array.isArray(task["tags"]) && tags.every((tag) => (task["tags"] as string[]).includes(tag))));
+          })
+          .sort((left, right) => {
+            const a = left.payload as Record<string, unknown>;
+            const b = right.payload as Record<string, unknown>;
+            return rank(a["priority"]) - rank(b["priority"]) || String(a["created_at"]).localeCompare(String(b["created_at"]));
+          })[0];
+        if (!candidate) return { rows: [] as T[] };
+        const payload = candidate.payload as Record<string, unknown>;
+        payload["status"] = "in_progress";
+        payload["assigned_to"] = agentId;
+        payload["agent_id"] ??= agentId;
+        payload["locked_by"] = agentId;
+        payload["locked_at"] = timestamp;
+        payload["started_at"] ??= timestamp;
+        payload["updated_at"] = timestamp;
+        payload["version"] = Number(payload["version"] ?? 0) + 1;
+        candidate.updatedAt = String(timestamp);
+        candidate.version = Number(candidate.version ?? 0) + 1;
+        const audit = { ...(parseJsonb(rawAudit) as Record<string, unknown>), task_id: candidate.objectId };
+        rows.set(recordKey(service, "audit_history", auditId), {
+          service: String(service), objectType: "audit_history", objectId: String(auditId), payload: audit,
+          updatedAt: String(timestamp), deletedAt: null, version: null,
+        });
+        return { rows: [{ payload }] as T[] };
+      }
 
       if (sql.includes("todos:complete-task-atomic")) {
         const [service, taskId, agentId, completedAt, hasEvidence, rawEvidence, hasConfidence, confidence, operationTimestamp] = values;

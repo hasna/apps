@@ -886,6 +886,14 @@ export interface TaskHistory {
   old_value: string | null;
   new_value: string | null;
   agent_id: string | null;
+  /** Credential-bound actor before an authorized administrative act-as. */
+  authenticated_agent_id?: string | null;
+  /** Effective actor whose authority was used for the mutation. */
+  effective_agent_id?: string | null;
+  /** API-key identifier for provenance; never contains credential material. */
+  actor_key_id?: string | null;
+  /** Whether the request used the explicit administrative act-as path. */
+  actor_act_as?: boolean;
   created_at: string;
   machine_id?: string | null;
 }
@@ -1031,7 +1039,7 @@ export class ProjectNotFoundError extends Error {
 
 export class ResourceConflictError extends Error {
   constructor(
-    public readonly code: "PROJECT_SLUG_CONFLICT" | "TASK_LIST_SLUG_CONFLICT" | "PLAN_SLUG_CONFLICT",
+    public readonly code: "PROJECT_SLUG_CONFLICT" | "TASK_LIST_SLUG_CONFLICT" | "PLAN_SLUG_CONFLICT" | "TASK_ASSIGNMENT_CONFLICT",
     message: string,
   ) {
     super(message);

@@ -7,6 +7,7 @@ import { scanExtractedPackedFiles } from "./release-packed-scan";
 import {
   classifyReleaseGateAuthority,
   derivePackedPackageTargets,
+  getIsolatedReleaseInstallArgs,
   getNpmPackArgs,
   getInstallSmokeCommands,
   isPackedTextContent,
@@ -14,6 +15,7 @@ import {
   validateNpmView,
   validateBunReleaseToolchain,
   validateInstallSmokeCommands,
+  validateIsolatedReleaseInstall,
   validatePackedPackageFiles,
   validatePackedProvenanceMetadata,
   validatePublicTextSurfaces,
@@ -391,7 +393,7 @@ describe("public release gate", () => {
       };
       runReleaseArtifactCommand(
         process.execPath,
-        ["add", "--cwd", installDir, tarball, "--minimum-release-age=0"],
+        ["add", "--cwd", installDir, tarball, "--minimum-release-age=604800"],
         root,
         isolatedEnv,
       );
@@ -460,11 +462,25 @@ describe("public release gate", () => {
       gitTree: "1".repeat(40),
       sourceTreeSha256: "2".repeat(64),
       generatedAt: "2026-07-18T00:00:00.000Z",
+      toolchain: { bunVersion: "1.3.14" },
+      dependencies: {
+        lockfile: "bun.lock",
+        lockfileSha256: "6".repeat(64),
+        installCommand: "bun install --frozen-lockfile --ignore-scripts --minimum-release-age=604800",
+        isolatedSource: true,
+      },
+      gate: { mode: "publish", authoritative: true, skippedChecks: [] },
     };
     const failures = validateReleaseProvenanceMetadata(provenance, rootPackage, {
       gitCommit: "3".repeat(40),
       gitTree: "4".repeat(40),
       sourceTreeSha256: "5".repeat(64),
+    }, {
+      bunVersion: "1.3.14",
+      lockfileSha256: "6".repeat(64),
+      mode: "publish",
+      authoritative: true,
+      skippedChecks: [],
     });
     expect(failures.map((failure) => failure.check)).toEqual([
       "provenance-commit-match",
@@ -473,19 +489,94 @@ describe("public release gate", () => {
     ]);
   });
 
-  test("keeps the Bun install smoke plan public, local, and stable", () => {
-    const plan = getInstallSmokeCommands("/tmp/hasna-todos.tgz", "19717", "/tmp/isolated-todos");
+  test("requires isolated frozen dependency installation and complete gate provenance", () => {
+    expect(getIsolatedReleaseInstallArgs()).toEqual([
+      "install",
+      "--frozen-lockfile",
+      "--ignore-scripts",
+      "--minimum-release-age=604800",
+    ]);
+    expect(validateIsolatedReleaseInstall("bun", getIsolatedReleaseInstallArgs(), "/tmp/source", "/repo")).toEqual([]);
+    expect(validateIsolatedReleaseInstall("bun", ["install"], "/repo", "/repo")
+      .map((failure) => failure.check)).toEqual([
+        "release-install-frozen",
+        "release-install-scripts",
+        "release-install-minimum-age",
+        "release-install-isolation",
+      ]);
+    expect(validateIsolatedReleaseInstall(
+      "bun",
+      ["install", "--frozen-lockfile", "--ignore-scripts", "--minimum-release-age=0"],
+      "/tmp/source",
+      "/repo",
+    ).map((failure) => failure.check)).toEqual(["release-install-minimum-age"]);
+
+    const failures = validateReleaseProvenanceMetadata({
+      packageName: "@hasna/todos",
+      packageVersion: rootPackage.version,
+      repository: "https://github.com/hasna/todos.git",
+      gitCommit: "0".repeat(40),
+      gitTree: "1".repeat(40),
+      sourceTreeSha256: "2".repeat(64),
+      generatedAt: "2026-07-18T00:00:00.000Z",
+    }, rootPackage, undefined, {
+      bunVersion: "1.3.14",
+      lockfileSha256: "6".repeat(64),
+      mode: "review",
+      authoritative: false,
+      skippedChecks: ["npm-view"],
+    });
+    expect(failures.map((failure) => failure.check)).toEqual(expect.arrayContaining([
+      "provenance-toolchain",
+      "provenance-lockfile",
+      "provenance-install-command",
+      "provenance-install-isolation",
+      "provenance-gate-mode",
+      "provenance-gate-authority",
+      "provenance-gate-skips",
+    ]));
+  });
+
+  test("imports every export and runs every public bin offline after isolated tarball install", () => {
+    const releasePackage: PackageJson = {
+      ...rootPackage,
+      exports: {
+        ".": { import: "./dist/index.js" },
+        "./sdk": { import: "./dist/sdk/index.js" },
+        "./mcp": { import: "./dist/mcp.js" },
+      },
+    };
+    const plan = getInstallSmokeCommands("/tmp/hasna-todos.tgz", "19717", "/tmp/isolated-todos", releasePackage);
     const rendered = plan.map((step) => [step.command, ...step.args].join(" "));
 
-    expect(validateInstallSmokeCommands(plan)).toEqual([]);
-    expect(rendered).toContain("bun add --cwd /tmp/isolated-todos /tmp/hasna-todos.tgz --minimum-release-age=0");
-    expect(rendered).toContain("bash -lc test -x /tmp/isolated-todos/node_modules/.bin/todos && test -x /tmp/isolated-todos/node_modules/.bin/todos-mcp && test -x /tmp/isolated-todos/node_modules/.bin/todos-serve");
-    expect(rendered).toContain("/tmp/isolated-todos/node_modules/.bin/todos --version");
-    expect(rendered).toContain("/tmp/isolated-todos/node_modules/.bin/todos --help");
-    expect(rendered).toContain("/tmp/isolated-todos/node_modules/.bin/todos-mcp --help");
-    expect(rendered).toContain("/tmp/isolated-todos/node_modules/.bin/todos-serve --port=19717 --host 127.0.0.1 --no-open");
+    expect(validateInstallSmokeCommands(plan, releasePackage)).toEqual([]);
+    expect(rendered).toContain("bun add --cwd /tmp/isolated-todos /tmp/hasna-todos.tgz --minimum-release-age=604800");
+    expect(rendered.some((line) => line.startsWith("bun --no-install -e ") && line.includes("@hasna/todos/sdk") && line.includes("@hasna/todos/mcp"))).toBe(true);
+    expect(rendered).toContain("bun --no-install /tmp/isolated-todos/node_modules/.bin/todos --version");
+    expect(rendered).toContain("bun --no-install /tmp/isolated-todos/node_modules/.bin/todos --help");
+    expect(rendered).toContain("bun --no-install /tmp/isolated-todos/node_modules/.bin/todos-mcp --help");
+    expect(rendered).toContain("bun --no-install /tmp/isolated-todos/node_modules/.bin/todos-serve --help");
     expect(rendered.some((line) => line.startsWith("npm "))).toBe(false);
     expect(rendered.some((line) => line.includes("platform-todos"))).toBe(false);
+    const quarantineDisabled = plan.map((step, index) => index === 0
+      ? { ...step, args: step.args.map((arg) => arg === "--minimum-release-age=604800" ? "--minimum-release-age=0" : arg) }
+      : step);
+    expect(validateInstallSmokeCommands(quarantineDisabled, releasePackage).map((failure) => failure.check))
+      .toContain("install-smoke-minimum-age");
+    const weakenedQuarantine = plan.map((step, index) => index === 0
+      ? { ...step, args: step.args.map((arg) => arg === "--minimum-release-age=604800" ? "--minimum-release-age=6048000" : arg) }
+      : step);
+    expect(validateInstallSmokeCommands(weakenedQuarantine, releasePackage).map((failure) => failure.check))
+      .toContain("install-smoke-minimum-age");
+  });
+
+  test("keeps cleanup and artifact rollback reachable through every release failure", () => {
+    const script = readFileSync(resolve(import.meta.dir, "../../scripts/verify-public-release.ts"), "utf8");
+    expect(script).not.toContain("process.exit(");
+    expect(script).toContain("withVerifiedArtifactPromotion");
+    expect(script.indexOf("installSmoke(firstTarball")).toBeLessThan(
+      script.indexOf("withVerifiedArtifactPromotion(root"),
+    );
   });
 
   test("rejects install smoke plans that use non-Bun installers or private endpoints", () => {

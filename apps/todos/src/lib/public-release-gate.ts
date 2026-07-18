@@ -46,12 +46,34 @@ export type ReleaseProvenance = {
   gitTree?: string;
   sourceTreeSha256?: string;
   generatedAt?: string;
+  toolchain?: {
+    bunVersion?: string;
+  };
+  dependencies?: {
+    lockfile?: string;
+    lockfileSha256?: string;
+    installCommand?: string;
+    isolatedSource?: boolean;
+  };
+  gate?: {
+    mode?: "review" | "publish";
+    authoritative?: boolean;
+    skippedChecks?: string[];
+  };
 };
 
 export type ReleaseSourceIdentity = {
   gitCommit: string;
   gitTree: string;
   sourceTreeSha256: string;
+};
+
+export type ReleaseBuildIdentity = {
+  bunVersion: string;
+  lockfileSha256: string;
+  mode: "review" | "publish";
+  authoritative: boolean;
+  skippedChecks: string[];
 };
 
 export type ReleaseGateAuthority = {
@@ -133,14 +155,17 @@ const SECRET_PATTERNS: RegExp[] = [
   /\b[A-Za-z0-9_]*(?:API_KEY|SECRET|TOKEN|PASSWORD)[A-Za-z0-9_]*\s*=\s*['"][^'"\r\n]{12,}/,
 ];
 
-const INSTALL_SMOKE_COMMANDS: InstallSmokeCommand[] = [
-  { command: "bun", args: ["add", "--cwd", "<install-root>", "<tarball>", "--minimum-release-age=0"] },
-  { command: "bash", args: ["-lc", "test -x <install-root>/node_modules/.bin/todos && test -x <install-root>/node_modules/.bin/todos-mcp && test -x <install-root>/node_modules/.bin/todos-serve"] },
-  { command: "<install-root>/node_modules/.bin/todos", args: ["--version"] },
-  { command: "<install-root>/node_modules/.bin/todos", args: ["--help"] },
-  { command: "<install-root>/node_modules/.bin/todos-mcp", args: ["--help"] },
-  { command: "<install-root>/node_modules/.bin/todos-serve", args: ["--port=<port>", "--host", "127.0.0.1", "--no-open"] },
-];
+export const RELEASE_MINIMUM_AGE_SECONDS = 604800;
+export const RELEASE_MINIMUM_AGE_FLAG = `--minimum-release-age=${RELEASE_MINIMUM_AGE_SECONDS}`;
+export const RELEASE_DEPENDENCY_INSTALL_COMMAND =
+  `bun install --frozen-lockfile --ignore-scripts ${RELEASE_MINIMUM_AGE_FLAG}`;
+
+const ISOLATED_RELEASE_INSTALL_ARGS = [
+  "install",
+  "--frozen-lockfile",
+  "--ignore-scripts",
+  RELEASE_MINIMUM_AGE_FLAG,
+] as const;
 
 export function validateRootPackageMetadata(packageJson: PackageJson): ReleaseGateFailure[] {
   const failures: ReleaseGateFailure[] = [];
@@ -329,6 +354,7 @@ export function validateReleaseProvenanceMetadata(
   provenance: ReleaseProvenance,
   packageJson: PackageJson,
   expectedSource?: ReleaseSourceIdentity,
+  expectedBuild?: ReleaseBuildIdentity,
 ): ReleaseGateFailure[] {
   const failures: ReleaseGateFailure[] = [];
   addIf(
@@ -393,6 +419,96 @@ export function validateReleaseProvenanceMetadata(
       "release provenance source hash must match the clean source tree listing",
     );
   }
+  if (expectedBuild) {
+    addIf(
+      failures,
+      provenance.toolchain?.bunVersion !== expectedBuild.bunVersion,
+      "provenance-toolchain",
+      "release provenance must record the exact Bun build toolchain",
+    );
+    addIf(
+      failures,
+      provenance.dependencies?.lockfile !== "bun.lock" ||
+        provenance.dependencies?.lockfileSha256 !== expectedBuild.lockfileSha256,
+      "provenance-lockfile",
+      "release provenance must bind the build to the exact bun.lock digest",
+    );
+    addIf(
+      failures,
+      provenance.dependencies?.installCommand !== RELEASE_DEPENDENCY_INSTALL_COMMAND,
+      "provenance-install-command",
+      "release provenance must record the frozen dependency install command",
+    );
+    addIf(
+      failures,
+      provenance.dependencies?.isolatedSource !== true,
+      "provenance-install-isolation",
+      "release provenance must record that dependencies were installed in an isolated source root",
+    );
+    addIf(
+      failures,
+      provenance.gate?.mode !== expectedBuild.mode,
+      "provenance-gate-mode",
+      "release provenance must record the verification mode",
+    );
+    addIf(
+      failures,
+      provenance.gate?.authoritative !== expectedBuild.authoritative,
+      "provenance-gate-authority",
+      "release provenance must record whether the gate was authoritative",
+    );
+    addIf(
+      failures,
+      JSON.stringify(provenance.gate?.skippedChecks ?? null) !== JSON.stringify(expectedBuild.skippedChecks),
+      "provenance-gate-skips",
+      "release provenance must record the exact skipped checks",
+    );
+  }
+  return failures;
+}
+
+export function getIsolatedReleaseInstallArgs(): string[] {
+  return [...ISOLATED_RELEASE_INSTALL_ARGS];
+}
+
+export function validateIsolatedReleaseInstall(
+  command: string,
+  args: string[],
+  installRoot: string,
+  repositoryRoot: string,
+): ReleaseGateFailure[] {
+  const failures: ReleaseGateFailure[] = [];
+  addIf(
+    failures,
+    command !== "bun" && !command.endsWith("/bun"),
+    "release-install-toolchain",
+    "release dependencies must be installed with the pinned Bun executable",
+  );
+  addIf(
+    failures,
+    !args.includes("--frozen-lockfile"),
+    "release-install-frozen",
+    "release dependency installation must enforce the frozen root lockfile",
+  );
+  addIf(
+    failures,
+    !args.includes("--ignore-scripts"),
+    "release-install-scripts",
+    "release dependency installation must ignore lifecycle scripts",
+  );
+  const minimumAgeArgs = args.filter((arg) => arg.startsWith("--minimum-release-age"));
+  addIf(
+    failures,
+    minimumAgeArgs.length !== 1 || minimumAgeArgs[0] !== RELEASE_MINIMUM_AGE_FLAG,
+    "release-install-minimum-age",
+    `release dependency installation must preserve the ${RELEASE_MINIMUM_AGE_SECONDS}-second quarantine`,
+  );
+  addIf(
+    failures,
+    resolvePathForComparison(installRoot) === resolvePathForComparison(repositoryRoot),
+    "release-install-isolation",
+    "release dependency installation must use an isolated source root",
+  );
   return failures;
 }
 
@@ -665,18 +781,44 @@ export function getInstallSmokeCommands(
   tarball = "<tarball>",
   port = "<port>",
   installRoot = "<install-root>",
+  packageJson: PackageJson = {
+    name: PACKAGE_NAME,
+    bin: {
+      todos: "dist/cli/index.js",
+      "todos-mcp": "dist/mcp/index.js",
+      "todos-serve": "dist/server/index.js",
+    },
+    exports: { ".": "./dist/index.js" },
+  },
 ): InstallSmokeCommand[] {
-  return INSTALL_SMOKE_COMMANDS.map((step) => ({
-    ...step,
-    command: step.command.replace("<install-root>", installRoot),
-    args: step.args.map((arg) => arg
-      .replace("<tarball>", tarball)
-      .replace("<port>", port)
-      .replaceAll("<install-root>", installRoot)),
-  }));
+  void port;
+  const packageName = packageJson.name ?? PACKAGE_NAME;
+  const exportSpecifiers = Object.keys(packageJson.exports ?? {}).sort().map((subpath) => (
+    subpath === "." ? packageName : `${packageName}/${subpath.replace(/^\.\//, "")}`
+  ));
+  const importScript = `for (const specifier of ${JSON.stringify(exportSpecifiers)}) await import(specifier);`;
+  const binRoot = `${installRoot}/node_modules/.bin`;
+  const binNames = Object.keys(packageJson.bin ?? {}).sort();
+  const commands: InstallSmokeCommand[] = [
+    { command: "bun", args: ["add", "--cwd", installRoot, tarball, RELEASE_MINIMUM_AGE_FLAG] },
+    { command: "bun", args: ["--no-install", "-e", importScript] },
+  ];
+  for (const name of binNames) {
+    const binPath = `${binRoot}/${name}`;
+    if (name === "todos") commands.push({ command: "bun", args: ["--no-install", binPath, "--version"] });
+    commands.push({ command: "bun", args: ["--no-install", binPath, "--help"] });
+  }
+  return commands;
 }
 
-export function validateInstallSmokeCommands(commands: InstallSmokeCommand[]): ReleaseGateFailure[] {
+export function validateInstallSmokeCommands(
+  commands: InstallSmokeCommand[],
+  packageJson: PackageJson = {
+    name: PACKAGE_NAME,
+    bin: { todos: "", "todos-mcp": "", "todos-serve": "" },
+    exports: { ".": "" },
+  },
+): ReleaseGateFailure[] {
   const failures: ReleaseGateFailure[] = [];
   const rendered = commands.map((step) => [step.command, ...step.args].join(" "));
 
@@ -685,6 +827,15 @@ export function validateInstallSmokeCommands(commands: InstallSmokeCommand[]): R
     !rendered.some((line) => line.startsWith("bun add --cwd ") && line.includes(".tgz")),
     "install-smoke-bun-install",
     `install smoke must install ${PACKAGE_NAME} into an isolated --cwd with bun add`,
+  );
+  const installStep = commands.find((step) => step.command === "bun" && step.args[0] === "add" &&
+    step.args.includes("--cwd") && step.args.some((arg) => arg.endsWith(".tgz")));
+  const minimumAgeArgs = installStep?.args.filter((arg) => arg.startsWith("--minimum-release-age")) ?? [];
+  addIf(
+    failures,
+    minimumAgeArgs.length !== 1 || minimumAgeArgs[0] !== RELEASE_MINIMUM_AGE_FLAG,
+    "install-smoke-minimum-age",
+    `install smoke must preserve the ${RELEASE_MINIMUM_AGE_SECONDS}-second quarantine for transitive dependencies`,
   );
   addIf(
     failures,
@@ -700,8 +851,27 @@ export function validateInstallSmokeCommands(commands: InstallSmokeCommand[]): R
     "install smoke must never mutate the global Bun installation",
   );
 
-  for (const expected of ["node_modules/.bin/todos --version", "node_modules/.bin/todos --help", "node_modules/.bin/todos-mcp --help"]) {
-    addIf(failures, !rendered.some((line) => line.includes(expected)), "install-smoke-command", `install smoke must run ${expected}`);
+  const packageName = packageJson.name ?? PACKAGE_NAME;
+  const exportSpecifiers = Object.keys(packageJson.exports ?? {}).sort().map((subpath) => (
+    subpath === "." ? packageName : `${packageName}/${subpath.replace(/^\.\//, "")}`
+  ));
+  const importLine = rendered.find((line) => line.startsWith("bun --no-install -e "));
+  for (const specifier of exportSpecifiers) {
+    addIf(
+      failures,
+      !importLine?.includes(specifier),
+      "install-smoke-export",
+      `install smoke must import ${specifier} with Bun auto-install disabled`,
+    );
+  }
+  for (const bin of Object.keys(packageJson.bin ?? {}).sort()) {
+    const marker = `bun --no-install `;
+    addIf(
+      failures,
+      !rendered.some((line) => line.startsWith(marker) && line.includes(`/node_modules/.bin/${bin} --help`)),
+      "install-smoke-command",
+      `install smoke must run public bin ${bin} with Bun auto-install disabled`,
+    );
   }
 
   const joined = rendered.join("\n");
@@ -710,6 +880,10 @@ export function validateInstallSmokeCommands(commands: InstallSmokeCommand[]): R
   }
 
   return failures;
+}
+
+function resolvePathForComparison(path: string): string {
+  return path.replaceAll("\\", "/").replace(/\/$/, "");
 }
 
 function addIf(failures: ReleaseGateFailure[], condition: boolean, check: string, message: string): void {
