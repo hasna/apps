@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -99,7 +99,7 @@ function taskFixture(overrides: Record<string, unknown> = {}) {
 }
 
 describe("cloud task detail comments", () => {
-  test("cloud add seeds the local id index so its printed short prefix starts and comments", async () => {
+  test("cloud add resolves its printed short prefix over HTTP without seeding a local id index", async () => {
     const requests: Array<{ method: string; path: string; body?: Record<string, unknown> }> = [];
     const comments: Record<string, unknown>[] = [];
     const server = Bun.serve({
@@ -111,6 +111,15 @@ describe("cloud task detail comments", () => {
         requests.push({ method: request.method, path: url.pathname, body });
         if (url.pathname === "/v1/tasks" && request.method === "POST") {
           return Response.json({ task: taskFixture({ title: body?.title }) }, { status: 201 });
+        }
+        if (url.pathname === "/v1/tasks" && request.method === "GET") {
+          return Response.json({ tasks: [taskFixture()], count: 1, total: 1 });
+        }
+        if (url.pathname === "/v1/stats" && request.method === "GET") {
+          return Response.json({ tasks_all: 1 });
+        }
+        if (url.pathname === `/v1/tasks/${TASK_ID}` && request.method === "GET") {
+          return Response.json({ task: taskFixture() });
         }
         if (url.pathname === `/v1/tasks/${TASK_ID}/start` && request.method === "POST") {
           return Response.json({ task: taskFixture({ status: "in_progress", locked_by: body?.agent_id ?? null }) });
@@ -150,11 +159,21 @@ describe("cloud task detail comments", () => {
 
       expect(requests.map((request) => `${request.method} ${request.path}`)).toEqual([
         "POST /v1/tasks",
+        "GET /v1/stats",
+        "GET /v1/tasks",
+        `GET /v1/tasks/${TASK_ID}`,
+        "GET /v1/stats",
         `POST /v1/tasks/${TASK_ID}/start`,
+        "GET /v1/stats",
+        "GET /v1/tasks",
+        `GET /v1/tasks/${TASK_ID}`,
+        "GET /v1/stats",
         `POST /v1/tasks/${TASK_ID}/comments`,
       ]);
       expect(comments).toHaveLength(1);
       expect(comments[0]).toMatchObject({ task_id: TASK_ID, content: "started from printed prefix" });
+      expect(existsSync(join(root, "todos.db"))).toBe(false);
+      expect(existsSync(join(root, "different-local-mirror.db"))).toBe(false);
     } finally {
       server.stop(true);
     }
@@ -202,7 +221,7 @@ describe("cloud task detail comments", () => {
     }
   });
 
-  test("comment -> persisted GET -> show/inspect round-trips ordered comments and redacts historical content", async () => {
+  test("comment -> persisted GET -> show and inspect round-trip comments without local helpers", async () => {
     const comments: Array<Record<string, unknown>> = [];
     const requests: Array<{ method: string; path: string; authorized: boolean }> = [];
     const server = Bun.serve({
@@ -261,17 +280,26 @@ describe("cloud task detail comments", () => {
       const second = await runCli(["comment", TASK_ID, "Bearer abcdefghijklmnop should redact"], root, baseUrl);
       expect(second).toMatchObject({ exitCode: 0, stderr: "" });
 
-      for (const command of ["show", "inspect"] as const) {
-        const result = await runCli(["--json", command, TASK_ID], root, baseUrl);
-        expect(result.exitCode).toBe(0);
-        expect(result.stderr).toBe("");
-        const task = JSON.parse(result.stdout);
-        expect(task.comments).toHaveLength(2);
-        expect(task.comments.map((comment: { id: string }) => comment.id)).toEqual(["comment-1", "comment-2"]);
-        expect(task.comments[0]).toMatchObject({ task_id: TASK_ID, content: "first persisted comment" });
-        expect(task.comments[1].content).toContain("[REDACTED]");
-        expect(task.comments[1].content).not.toContain("abcdefghijklmnop");
-      }
+      const shown = await runCli(["--json", "show", TASK_ID], root, baseUrl);
+      expect(shown.exitCode).toBe(0);
+      expect(shown.stderr).toBe("");
+      const task = JSON.parse(shown.stdout);
+      expect(task.comments).toHaveLength(2);
+      expect(task.comments.map((comment: { id: string }) => comment.id)).toEqual(["comment-1", "comment-2"]);
+      expect(task.comments[0]).toMatchObject({ task_id: TASK_ID, content: "first persisted comment" });
+      expect(task.comments[1].content).toContain("[REDACTED]");
+      expect(task.comments[1].content).not.toContain("abcdefghijklmnop");
+
+      const requestsBeforeInspect = requests.length;
+      const inspect = await runCli(["--json", "inspect", TASK_ID], root, baseUrl);
+      expect(inspect.exitCode).toBe(0);
+      expect(inspect.stderr).toBe("");
+      expect(JSON.parse(inspect.stdout).comments).toHaveLength(2);
+      expect(requests.slice(requestsBeforeInspect).map((request) => `${request.method} ${request.path}`)).toEqual([
+        `GET /v1/tasks/${TASK_ID}`,
+        `GET /v1/tasks/${TASK_ID}/comments`,
+      ]);
+      expect(existsSync(join(root, "todos.db"))).toBe(false);
 
       comments.push({
         id: "comment-controls",
@@ -283,15 +311,13 @@ describe("cloud task detail comments", () => {
         progress_pct: null,
         created_at: "2026-07-10T00:03:00.000Z",
       });
-      for (const command of ["show", "inspect"] as const) {
-        const result = await runCli([command, TASK_ID], root, baseUrl);
-        expect(result.exitCode).toBe(0);
-        expect(result.stderr).toBe("");
-        expect(result.stdout).not.toContain("\u001b]52");
-        expect(result.stdout).not.toContain("\u0007");
-        expect(result.stdout).toContain("\\x1b]52");
-        expect(result.stdout).toContain("\\x07next\\nline");
-      }
+      const human = await runCli(["show", TASK_ID], root, baseUrl);
+      expect(human.exitCode).toBe(0);
+      expect(human.stderr).toBe("");
+      expect(human.stdout).not.toContain("\u001b]52");
+      expect(human.stdout).not.toContain("\u0007");
+      expect(human.stdout).toContain("\\x1b]52");
+      expect(human.stdout).toContain("\\x07next\\nline");
 
       while (comments.length < 150) {
         const index = comments.length;

@@ -74,7 +74,7 @@ describe("server image build context", () => {
 
     expect(buildspec).toContain("docker build --platform linux/arm64");
     expect(buildspec).toContain(
-      'docker run --rm --entrypoint bun "${IMAGE}" dist/server/index.js --version)" = 0.11.91',
+      'docker run --rm --entrypoint bun "${IMAGE}" dist/server/index.js --version)" = 0.11.92',
     );
     expect(buildspec).toContain('--build-arg "BUN_IMAGE=${BUN_IMAGE_OVERRIDE}"');
     expect(buildspec).toContain('BASE_IMAGE_ARCHIVE_VERSION');
@@ -122,7 +122,7 @@ describe("server image build context", () => {
     expect(buildspec).toContain("bun dist/server/index.js migrate");
     expect(buildspec).toContain("scripts/container-http-smoke.ts");
     expect(readFileSync(join(root, "scripts/container-http-smoke.ts"), "utf8")).toContain(
-      'versionPayload.version !== "0.11.91"',
+      'versionPayload.version !== "0.11.92"',
     );
     expect(buildspec).not.toContain("terraform");
     expect(buildspec).not.toContain("update-service");

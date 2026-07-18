@@ -10,7 +10,7 @@ let store: TodosStorageAdapter;
 let principal: { agent: string | null; scopes: string[] };
 let dependencies: V1RequestDependencies;
 
-function request(path: string, method = "GET", body?: Record<string, unknown>): Promise<Response | null> {
+function request(path: string, method = "GET", body?: unknown): Promise<Response | null> {
   const url = new URL(`https://todos.example.test${path}`);
   return handleV1Request(new Request(url, {
     method,
@@ -36,6 +36,36 @@ beforeEach(() => {
 afterEach(() => resetDatabase());
 
 describe("/v1 task-list cloud parity", () => {
+  test("list tasks returns total and honors every documented filter plus offset", async () => {
+    const project = await store.projects.create({ name: "Filtered", path: "/tmp/filtered" });
+    const list = await store.taskLists.create({ name: "Queue", slug: "queue", project_id: project.id });
+    const plan = await store.plans.create({ name: "Plan", project_id: project.id });
+    await store.tasks.create({ title: "first", project_id: project.id, task_list_id: list.id, plan_id: plan.id, status: "pending", priority: "high", assigned_to: "agent-a", agent_id: "owner-a" });
+    await store.tasks.create({ title: "second", project_id: project.id, task_list_id: list.id, plan_id: plan.id, status: "pending", priority: "high", assigned_to: "agent-a", agent_id: "owner-a" });
+    await store.tasks.create({ title: "excluded", project_id: project.id, task_list_id: list.id, plan_id: plan.id, status: "pending", priority: "low", assigned_to: "agent-b", agent_id: "owner-b" });
+
+    const params = new URLSearchParams({
+      status: "pending",
+      priority: "high",
+      project_id: project.id,
+      plan_id: plan.id,
+      task_list_id: list.id,
+      assigned_to: "agent-a",
+      agent_id: "owner-a",
+      limit: "1",
+      offset: "1",
+    });
+    const response = await request(`/v1/tasks?${params}`);
+    expect(response?.status).toBe(200);
+    const body = await response!.json() as { tasks: Array<{ title: string }>; count: number; total: number };
+    expect(body).toMatchObject({ count: 1, total: 2 });
+    params.set("offset", "0");
+    const firstPage = await request(`/v1/tasks?${params}`);
+    const firstBody = await firstPage!.json() as { tasks: Array<{ title: string }>; count: number; total: number };
+    expect(firstBody).toMatchObject({ count: 1, total: 2 });
+    expect(new Set([body.tasks[0]!.title, firstBody.tasks[0]!.title])).toEqual(new Set(["first", "second"]));
+  });
+
   test("create, project-scoped enumeration, get, update, and delete share one canonical id", async () => {
     const project = await store.projects.create({ name: "Open Emails", path: "/tmp/open-emails" });
     await store.taskLists.create({ name: "Other", slug: "other" });
@@ -233,6 +263,65 @@ describe("/v1 project mutation", () => {
 });
 
 describe("/v1 task hierarchy and lock authorization", () => {
+  test("complete persists the full operational evidence body and confidence", async () => {
+    const task = await store.tasks.create({ title: "evidence" });
+    const response = await request(`/v1/tasks/${task.id}/complete`, "POST", {
+      agent_id: "reviewer",
+      attachment_ids: ["attachment-one", "attachment-two"],
+      files_changed: ["src/a.ts", "src/b.ts"],
+      test_results: "12 passed",
+      commit_hash: "abc123",
+      notes: "verified",
+      confidence: 0.85,
+    });
+    expect(response?.status).toBe(200);
+    const completed = (await response!.json() as { task: { confidence: number; metadata: Record<string, unknown> } }).task;
+    expect(completed.confidence).toBe(0.85);
+    expect(completed.metadata).toMatchObject({
+      _evidence: {
+        attachment_ids: ["attachment-one", "attachment-two"],
+        files_changed: ["src/a.ts", "src/b.ts"],
+        test_results: "12 passed",
+        commit_hash: "abc123",
+        notes: "verified",
+      },
+      _completion: { confidence: 0.85 },
+    });
+    expect(await store.tasks.get(task.id)).toMatchObject({ confidence: 0.85, metadata: completed.metadata });
+  });
+
+  test("complete rejects malformed evidence and confidence before storage mutation", async () => {
+    for (const body of [
+      null,
+      [],
+      { confidence: -0.1 },
+      { confidence: 1.1 },
+      { confidence: "high" },
+      { attachment_ids: ["ok", 42] },
+      { files_changed: "src/a.ts" },
+      { test_results: 42 },
+      { commit_hash: { sha: "abc" } },
+      { notes: ["bad"] },
+      { unknown: true },
+    ]) {
+      const task = await store.tasks.create({ title: `invalid ${JSON.stringify(body)}` });
+      const response = await request(`/v1/tasks/${task.id}/complete`, "POST", body);
+      expect(response?.status).toBe(400);
+      expect(await store.tasks.get(task.id)).toMatchObject({ status: "pending", confidence: null });
+    }
+  });
+
+  test("complete preserves empty-body and agent-only predecessor compatibility", async () => {
+    const empty = await store.tasks.create({ title: "empty completion" });
+    const emptyResponse = await request(`/v1/tasks/${empty.id}/complete`, "POST");
+    expect(emptyResponse?.status).toBe(200);
+
+    const agentOnly = await store.tasks.create({ title: "agent completion" });
+    const agentResponse = await request(`/v1/tasks/${agentOnly.id}/complete`, "POST", { agent_id: "compat-agent" });
+    expect(agentResponse?.status).toBe(200);
+    expect(await store.tasks.get(agentOnly.id)).toMatchObject({ status: "completed" });
+  });
+
   test("create persists parent_id and parent filtering includes only children", async () => {
     const parent = await store.tasks.create({ title: "parent" });
     const created = await request("/v1/tasks", "POST", { title: "child", parent_id: parent.id });
@@ -242,6 +331,34 @@ describe("/v1 task hierarchy and lock authorization", () => {
     const response = await request(`/v1/tasks?parent_id=${parent.id}`);
     const body = await response!.json() as { tasks: Array<{ id: string }> };
     expect(body.tasks.map((task) => task.id)).toEqual([createdBody.task.id]);
+  });
+
+  test("include_subtasks=true returns roots and descendants with an inclusive total", async () => {
+    const parent = await store.tasks.create({ title: "parent" });
+    const child = await store.tasks.create({ title: "child", parent_id: parent.id });
+    const seenFilters: Array<Record<string, unknown>> = [];
+    const originalList = store.tasks.list.bind(store.tasks);
+    const originalCount = store.tasks.count.bind(store.tasks);
+    store.tasks.list = (filter = {}) => {
+      seenFilters.push({ ...filter });
+      return originalList(filter);
+    };
+    store.tasks.count = (filter = {}) => {
+      seenFilters.push({ ...filter });
+      return originalCount(filter);
+    };
+
+    const response = await request("/v1/tasks?include_subtasks=true&limit=10&offset=0");
+    expect(response?.status).toBe(200);
+    const body = await response!.json() as { tasks: Array<{ id: string }>; count: number; total: number };
+    expect(new Set(body.tasks.map((task) => task.id))).toEqual(new Set([parent.id, child.id]));
+    expect(body.count).toBe(2);
+    expect(body.total).toBe(2);
+    expect(seenFilters).toEqual([
+      { include_subtasks: true, limit: 10, offset: 0 },
+      { include_subtasks: true },
+    ]);
+    expect((await request("/v1/tasks?include_subtasks=1"))?.status).toBe(400);
   });
 
   test("force unlock is restricted to todos:* and clears a parent-owned lock", async () => {

@@ -249,7 +249,7 @@ describe("cloud CLI task-list filtering", () => {
         `http://127.0.0.1:${server.port}`,
       );
       expect(result.exitCode).not.toBe(0);
-      expect(result.stderr).toContain("-> 503");
+      expect(result.stderr).toContain("REMOTE_API_UNAVAILABLE");
       expect(methods).toEqual(["GET /v1/projects", `POST /v1/projects/${PROJECT_ID}/rename`]);
     } finally {
       server.stop(true);

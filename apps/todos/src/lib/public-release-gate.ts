@@ -8,6 +8,8 @@ export type PackageJson = {
   exports?: Record<string, unknown>;
   files?: string[];
   workspaces?: string[];
+  packageManager?: string;
+  scripts?: Record<string, string>;
   publishConfig?: {
     registry?: string;
     access?: string;
@@ -41,7 +43,32 @@ export type ReleaseProvenance = {
   packageVersion?: string;
   repository?: string;
   gitCommit?: string;
+  gitTree?: string;
+  sourceTreeSha256?: string;
   generatedAt?: string;
+};
+
+export type ReleaseSourceIdentity = {
+  gitCommit: string;
+  gitTree: string;
+  sourceTreeSha256: string;
+};
+
+export type ReleaseGateAuthority = {
+  mode: "review" | "publish" | null;
+  authoritative: boolean;
+  expectedCommit: string | undefined;
+  skipped: string[];
+};
+
+export type TrackedWorktreeProof = {
+  path: string;
+  headType: string;
+  headMode: string;
+  headObject: string;
+  actualType: "blob" | "symlink" | "missing" | "other";
+  actualMode: string | null;
+  actualObject: string | null;
 };
 
 export type InstallSmokeCommand = {
@@ -103,17 +130,16 @@ const SECRET_PATTERNS: RegExp[] = [
   /AKIA[0-9A-Z]{16}/,
   /ASIA[0-9A-Z]{16}/,
   /-----BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY-----/,
-  /[A-Za-z0-9_]*(API_KEY|SECRET|TOKEN|PASSWORD)[A-Za-z0-9_]*\s*=\s*['"][^'"]{12,}/,
+  /\b[A-Za-z0-9_]*(?:API_KEY|SECRET|TOKEN|PASSWORD)[A-Za-z0-9_]*\s*=\s*['"][^'"\r\n]{12,}/,
 ];
 
 const INSTALL_SMOKE_COMMANDS: InstallSmokeCommand[] = [
-  { command: "bun", args: ["remove", "-g", PACKAGE_NAME], required: false },
-  { command: "bun", args: ["install", "-g", "<tarball>"] },
-  { command: "bash", args: ["-lc", "command -v todos && command -v todos-mcp && command -v todos-serve"] },
-  { command: "todos", args: ["--version"] },
-  { command: "todos", args: ["--help"] },
-  { command: "todos-mcp", args: ["--help"] },
-  { command: "todos-serve", args: ["--port=<port>", "--host", "127.0.0.1", "--no-open"] },
+  { command: "bun", args: ["add", "--cwd", "<install-root>", "<tarball>", "--minimum-release-age=0"] },
+  { command: "bash", args: ["-lc", "test -x <install-root>/node_modules/.bin/todos && test -x <install-root>/node_modules/.bin/todos-mcp && test -x <install-root>/node_modules/.bin/todos-serve"] },
+  { command: "<install-root>/node_modules/.bin/todos", args: ["--version"] },
+  { command: "<install-root>/node_modules/.bin/todos", args: ["--help"] },
+  { command: "<install-root>/node_modules/.bin/todos-mcp", args: ["--help"] },
+  { command: "<install-root>/node_modules/.bin/todos-serve", args: ["--port=<port>", "--host", "127.0.0.1", "--no-open"] },
 ];
 
 export function validateRootPackageMetadata(packageJson: PackageJson): ReleaseGateFailure[] {
@@ -155,6 +181,12 @@ export function validateRootPackageMetadata(packageJson: PackageJson): ReleaseGa
   for (const required of ["dist", "dashboard/dist", "LICENSE", "README.md"]) {
     addIf(failures, !files.includes(required), "package-files", `files must include ${required}`);
   }
+  const allowedFiles = ["dist", "dashboard/dist", "LICENSE", "README.md"];
+  for (const file of files) {
+    addIf(failures, !allowedFiles.includes(file), "package-files-extra", `files must not include unbuilt or unreviewed path ${file}`);
+  }
+  addIf(failures, packageJson.packageManager !== "bun@1.3.14", "package-manager", "packageManager must pin bun@1.3.14");
+  failures.push(...validatePackLifecycleScripts(packageJson));
   addIf(failures, !packageJson.workspaces?.includes("dashboard"), "workspace-dashboard", "workspaces must include dashboard");
 
   for (const name of Object.keys(packageJson.dependencies ?? {})) {
@@ -164,6 +196,13 @@ export function validateRootPackageMetadata(packageJson: PackageJson): ReleaseGa
   }
 
   return failures;
+}
+
+export function validateBunReleaseToolchain(actualVersion: string | undefined): ReleaseGateFailure[] {
+  return actualVersion === "1.3.14" ? [] : [{
+    check: "release-bun-version",
+    message: `release verification requires Bun 1.3.14, received ${actualVersion ?? "unknown"}`,
+  }];
 }
 
 export function validateSdkPackageMetadata(packageJson: PackageJson): ReleaseGateFailure[] {
@@ -198,9 +237,47 @@ export function validatePublicTextSurfaces(files: TextFile[]): ReleaseGateFailur
   return failures;
 }
 
-export function validatePackedPackageFiles(paths: string[]): ReleaseGateFailure[] {
+export function isPublicReleaseTextSurface(path: string): boolean {
+  const normalized = path.replaceAll("\\", "/");
+  if (normalized.startsWith("docs/")) return true;
+  return new Set([
+    "README.md",
+    "CHANGELOG.md",
+    "CODE_OF_CONDUCT.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "package.json",
+    "sdk/README.md",
+    "sdk/package.json",
+  ]).has(normalized);
+}
+
+function collectPackageTargets(value: unknown, targets: Set<string>): void {
+  if (typeof value === "string") {
+    if (!value.startsWith("#") && !value.includes("*")) targets.add(value.replace(/^\.\//, ""));
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectPackageTargets(item, targets);
+    return;
+  }
+  if (value && typeof value === "object") {
+    for (const nested of Object.values(value as Record<string, unknown>)) collectPackageTargets(nested, targets);
+  }
+}
+
+export function derivePackedPackageTargets(packageJson: PackageJson): string[] {
+  const targets = new Set<string>();
+  collectPackageTargets(packageJson.main, targets);
+  collectPackageTargets(packageJson.types, targets);
+  collectPackageTargets(packageJson.bin, targets);
+  collectPackageTargets(packageJson.exports, targets);
+  return [...targets].filter(Boolean).sort().map((target) => `package/${target}`);
+}
+
+export function validatePackedPackageFiles(paths: string[], packageJson?: PackageJson): ReleaseGateFailure[] {
   const failures: ReleaseGateFailure[] = [];
-  for (const required of [
+  const requiredPaths = new Set([
     "package/package.json",
     "package/README.md",
     "package/LICENSE",
@@ -211,7 +288,16 @@ export function validatePackedPackageFiles(paths: string[]): ReleaseGateFailure[
     "package/dist/server/index.js",
     "package/dist/release-provenance.json",
     "package/dashboard/dist/index.html",
-  ]) {
+  ]);
+  if (packageJson) {
+    for (const target of derivePackedPackageTargets(packageJson)) requiredPaths.add(target);
+    for (const entry of packageJson.files ?? []) {
+      const packedEntry = `package/${entry.replace(/^\.\//, "").replace(/\/$/, "")}`;
+      const contributes = paths.some((path) => path === packedEntry || path.startsWith(`${packedEntry}/`));
+      addIf(failures, !contributes, "package-files-empty", `package files entry ${entry} contributes no packed path`);
+    }
+  }
+  for (const required of [...requiredPaths].sort()) {
     addIf(failures, !paths.includes(required), "pack-contents", `packed package must include ${required}`);
   }
 
@@ -225,13 +311,24 @@ export function validatePackedPackageFiles(paths: string[]): ReleaseGateFailure[
   return failures;
 }
 
-export function validatePackedProvenanceMetadata(packageJson: PackageJson): ReleaseGateFailure[] {
-  return validateRootPackageMetadata(packageJson);
+export function validatePackedProvenanceMetadata(
+  packageJson: PackageJson,
+  sourcePackageJson?: PackageJson,
+): ReleaseGateFailure[] {
+  const failures = validateRootPackageMetadata(packageJson);
+  addIf(
+    failures,
+    sourcePackageJson !== undefined && packageJson.version !== sourcePackageJson.version,
+    "packed-version",
+    "packed package version must match the clean source package version",
+  );
+  return failures;
 }
 
 export function validateReleaseProvenanceMetadata(
   provenance: ReleaseProvenance,
   packageJson: PackageJson,
+  expectedSource?: ReleaseSourceIdentity,
 ): ReleaseGateFailure[] {
   const failures: ReleaseGateFailure[] = [];
   addIf(
@@ -260,11 +357,289 @@ export function validateReleaseProvenanceMetadata(
   );
   addIf(
     failures,
+    !provenance.gitTree || !/^[0-9a-f]{40}$/i.test(provenance.gitTree),
+    "provenance-git-tree",
+    "release provenance gitTree must be a 40-character tree SHA",
+  );
+  addIf(
+    failures,
+    !provenance.sourceTreeSha256 || !/^[0-9a-f]{64}$/i.test(provenance.sourceTreeSha256),
+    "provenance-source-hash",
+    "release provenance sourceTreeSha256 must be a 64-character SHA-256 digest",
+  );
+  addIf(
+    failures,
     !provenance.generatedAt || Number.isNaN(Date.parse(provenance.generatedAt)),
     "provenance-generated-at",
     "release provenance generatedAt must be an ISO timestamp",
   );
+  if (expectedSource) {
+    addIf(
+      failures,
+      provenance.gitCommit !== expectedSource.gitCommit,
+      "provenance-commit-match",
+      "release provenance commit must match the clean source commit",
+    );
+    addIf(
+      failures,
+      provenance.gitTree !== expectedSource.gitTree,
+      "provenance-tree-match",
+      "release provenance tree must match the clean source tree",
+    );
+    addIf(
+      failures,
+      provenance.sourceTreeSha256 !== expectedSource.sourceTreeSha256,
+      "provenance-source-hash-match",
+      "release provenance source hash must match the clean source tree listing",
+    );
+  }
   return failures;
+}
+
+export function validateReleaseRepositoryState(porcelainStatus: string): ReleaseGateFailure[] {
+  if (!porcelainStatus.trim()) return [];
+  const entries = porcelainStatus.split(/\r?\n/).filter(Boolean).length;
+  return [{
+    check: "release-worktree-dirty",
+    message: `release input must be a clean tracked tree with no untracked files (${entries} change${entries === 1 ? "" : "s"} found)`,
+  }];
+}
+
+export function classifyReleaseGateAuthority(
+  args: string[],
+  expectedCommitFromEnvironment?: string,
+  lifecycleEvent?: string,
+): ReleaseGateAuthority {
+  const skipped: string[] = [];
+  let hasCliExpectedCommit = false;
+  let mode: ReleaseGateAuthority["mode"] = null;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (arg === "--skip-npm-view") skipped.push("npm-view");
+    else if (arg === "--skip-install-smoke") skipped.push("install-smoke");
+    else if (arg === "--expected-commit" || arg.startsWith("--expected-commit=")) {
+      hasCliExpectedCommit = true;
+      if (arg === "--expected-commit") index += 1;
+    }
+    else if (arg === "--mode") {
+      const candidate = args[index + 1];
+      if (candidate === "review" || candidate === "publish") mode = candidate;
+      index += 1;
+    } else if (arg.startsWith("--mode=")) {
+      const candidate = arg.slice("--mode=".length);
+      if (candidate === "review" || candidate === "publish") mode = candidate;
+    }
+  }
+  const expectedCommit = mode === "publish" ? expectedCommitFromEnvironment?.trim() || undefined : undefined;
+  return {
+    mode,
+    authoritative: mode === "publish" && lifecycleEvent === "prepublishOnly" && skipped.length === 0 && !hasCliExpectedCommit &&
+      Boolean(expectedCommit && /^[0-9a-f]{40}$/i.test(expectedCommit)),
+    expectedCommit,
+    skipped,
+  };
+}
+
+export function validateReleaseGateArguments(
+  args: string[],
+  options: { expectedCommit?: string; lifecycleEvent?: string } = {},
+): ReleaseGateFailure[] {
+  const failures: ReleaseGateFailure[] = [];
+  const allowedFlags = new Set(["--skip-npm-view", "--skip-install-smoke"]);
+  const authority = classifyReleaseGateAuthority(args, options.expectedCommit, options.lifecycleEvent);
+  if (args.includes("--skip-build")) {
+    failures.push({
+      check: "release-build-required",
+      message: "release verification must rebuild the artifact from the clean source commit",
+    });
+  }
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (arg === "--mode") {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--mode=")) continue;
+    if (arg === "--expected-commit" || arg.startsWith("--expected-commit=")) {
+      failures.push({
+        check: "release-expected-commit-argument",
+        message: "expected commit must come only from HASNA_TODOS_EXPECTED_COMMIT in publish mode",
+      });
+      if (arg === "--expected-commit") index += 1;
+      continue;
+    }
+    if (arg !== "--skip-build" && !allowedFlags.has(arg)) {
+      failures.push({ check: "release-argument", message: `unsupported release verification argument: ${arg}` });
+    }
+  }
+  if (!authority.mode) {
+    failures.push({ check: "release-mode", message: "release verification requires --mode=review or --mode=publish" });
+  }
+  if (authority.mode === "publish" && (!authority.expectedCommit || !/^[0-9a-f]{40}$/i.test(authority.expectedCommit))) {
+    failures.push({ check: "release-expected-commit", message: "publish mode requires HASNA_TODOS_EXPECTED_COMMIT with a 40-character commit" });
+  }
+  if (authority.mode === "publish" && options.lifecycleEvent !== "prepublishOnly") {
+    failures.push({ check: "release-publish-lifecycle", message: "publish mode is valid only during npm_lifecycle_event=prepublishOnly" });
+  }
+  if (authority.mode === "publish" && authority.skipped.length > 0) {
+    failures.push({ check: "release-prepublish-skip", message: "prepublishOnly must not use skip flags" });
+  }
+  return failures;
+}
+
+export function validateExpectedReleaseCommit(expected: string, actual: string): ReleaseGateFailure[] {
+  return expected === actual ? [] : [{
+    check: "release-expected-commit-match",
+    message: `release commit ${actual} does not match externally supplied expected commit ${expected}`,
+  }];
+}
+
+export function validateReleaseIndexFlags(output: string): ReleaseGateFailure[] {
+  const failures: ReleaseGateFailure[] = [];
+  for (const line of output.split(/\r?\n/).filter(Boolean)) {
+    const tag = line[0] ?? "";
+    const path = line.slice(2);
+    if (tag.toUpperCase() === "S") {
+      failures.push({ check: "release-index-skip-worktree", message: `tracked release input uses skip-worktree: ${path}` });
+    }
+    if (/^[a-z]$/.test(tag)) {
+      failures.push({ check: "release-index-assume-unchanged", message: `tracked release input uses assume-unchanged: ${path}` });
+    }
+  }
+  return failures;
+}
+
+export function validateTrackedWorktreeProof(entries: TrackedWorktreeProof[]): ReleaseGateFailure[] {
+  const failures: ReleaseGateFailure[] = [];
+  for (const entry of entries) {
+    if (entry.actualType === "missing" || entry.actualType === "other") {
+      failures.push({ check: "release-tracked-type", message: `tracked path type differs from HEAD: ${entry.path}` });
+      continue;
+    }
+    const expectedType = entry.headMode === "120000" ? "symlink" : "blob";
+    if (entry.headType !== "blob" || entry.actualType !== expectedType) {
+      failures.push({ check: "release-tracked-type", message: `tracked path type differs from HEAD: ${entry.path}` });
+      continue;
+    }
+    if (entry.actualMode !== entry.headMode) {
+      failures.push({ check: "release-tracked-mode", message: `tracked path mode differs from HEAD: ${entry.path}` });
+    }
+    if (entry.actualObject !== entry.headObject) {
+      failures.push({
+        check: expectedType === "symlink" ? "release-tracked-symlink" : "release-tracked-blob",
+        message: `tracked ${expectedType} bytes differ from HEAD: ${entry.path}`,
+      });
+    }
+  }
+  return failures;
+}
+
+export function isPackedTextContent(content: Uint8Array): boolean {
+  if (content.includes(0)) return false;
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(content);
+    let disallowedControls = 0;
+    for (const character of text) {
+      const code = character.charCodeAt(0);
+      if (code < 32 && code !== 9 && code !== 10 && code !== 13) disallowedControls += 1;
+    }
+    return disallowedControls === 0;
+  } catch {
+    return false;
+  }
+}
+
+export function validatePackedBinaryFile(
+  path: string,
+  content: Uint8Array,
+  expectedLogoContent?: Uint8Array,
+): ReleaseGateFailure[] {
+  if (path !== "package/dashboard/dist/logo.jpg") {
+    return [{ check: "pack-binary-allowlist", message: `packed binary file is not allowlisted: ${path}` }];
+  }
+  const jpeg = content.length >= 4 && content[0] === 0xff && content[1] === 0xd8 &&
+    content[content.length - 2] === 0xff && content[content.length - 1] === 0xd9;
+  const failures: ReleaseGateFailure[] = [];
+  addIf(failures, !jpeg, "pack-binary-signature", `${path} does not have a complete JPEG signature`);
+  const sourceMatches = expectedLogoContent !== undefined && content.length === expectedLogoContent.length &&
+    content.every((byte, index) => byte === expectedLogoContent[index]);
+  addIf(failures, !sourceMatches, "pack-binary-source-match", `${path} must byte-match tracked dashboard/public/logo.jpg`);
+  return failures;
+}
+
+export function resolveReleaseProvenanceTimestamp(
+  sourceDateEpoch: string | undefined,
+  commitEpoch: string,
+): string {
+  const selected = sourceDateEpoch ?? commitEpoch;
+  if (!/^\d+$/.test(selected)) {
+    throw new Error(sourceDateEpoch !== undefined ? "SOURCE_DATE_EPOCH must be whole epoch seconds" : "commit timestamp must be whole epoch seconds");
+  }
+  const milliseconds = Number(selected) * 1000;
+  if (!Number.isSafeInteger(milliseconds) || milliseconds < 0) throw new Error("release provenance epoch is out of range");
+  return new Date(milliseconds).toISOString();
+}
+
+export function validateReproducibleArtifactIntegrity(
+  first: string,
+  second: string,
+  firstManifest?: string,
+  secondManifest?: string,
+): ReleaseGateFailure[] {
+  const failures: ReleaseGateFailure[] = [];
+  addIf(failures, first !== second, "tarball-reproducibility", "two clean builds produced different tarball bytes");
+  addIf(
+    failures,
+    firstManifest !== undefined && secondManifest !== undefined && firstManifest !== secondManifest,
+    "payload-reproducibility",
+    "two clean builds produced different sorted payload manifests",
+  );
+  return failures;
+}
+
+export function validatePackLifecycleScripts(packageJson: PackageJson): ReleaseGateFailure[] {
+  const failures: ReleaseGateFailure[] = [];
+  for (const name of ["prepack", "prepare", "postpack", "prepublish", "publish", "postpublish"]) {
+    addIf(
+      failures,
+      Boolean(packageJson.scripts?.[name]),
+      "pack-lifecycle-mutation",
+      `package script ${name} is forbidden because the final npm publish pack must equal the verified pack`,
+    );
+  }
+  addIf(
+    failures,
+    packageJson.scripts?.["verify:release"] !== "bun run scripts/verify-public-release.ts --mode=review",
+    "release-review-script",
+    "verify:release must invoke explicit non-authoritative review mode",
+  );
+  addIf(
+    failures,
+    packageJson.scripts?.prepublishOnly !== "bun run scripts/verify-public-release.ts --mode=publish",
+    "release-publish-script",
+    "prepublishOnly must invoke strict publish mode",
+  );
+  return failures;
+}
+
+export function getNpmPackArgs(destination: string): string[] {
+  return ["pack", "--ignore-scripts", "--json", "--pack-destination", destination];
+}
+
+export function validateReleaseArtifactIntegrity(
+  reportedIntegrity: string | undefined,
+  computedIntegrity: string,
+): ReleaseGateFailure[] {
+  if (!/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(computedIntegrity)) {
+    return [{ check: "tarball-integrity", message: "computed tarball integrity must be a valid sha512 SRI value" }];
+  }
+  if (reportedIntegrity === undefined) {
+    return [{ check: "tarball-integrity-reported", message: "npm pack must report integrity for verification" }];
+  }
+  if (reportedIntegrity !== undefined && reportedIntegrity !== computedIntegrity) {
+    return [{ check: "tarball-integrity", message: "packed tarball bytes do not match the packer's reported integrity" }];
+  }
+  return [];
 }
 
 export function validateNpmView(packageName: string, rawJson: string): ReleaseGateFailure[] {
@@ -286,10 +661,18 @@ export function validateNpmView(packageName: string, rawJson: string): ReleaseGa
   return failures;
 }
 
-export function getInstallSmokeCommands(tarball = "<tarball>", port = "<port>"): InstallSmokeCommand[] {
+export function getInstallSmokeCommands(
+  tarball = "<tarball>",
+  port = "<port>",
+  installRoot = "<install-root>",
+): InstallSmokeCommand[] {
   return INSTALL_SMOKE_COMMANDS.map((step) => ({
     ...step,
-    args: step.args.map((arg) => arg.replace("<tarball>", tarball).replace("<port>", port)),
+    command: step.command.replace("<install-root>", installRoot),
+    args: step.args.map((arg) => arg
+      .replace("<tarball>", tarball)
+      .replace("<port>", port)
+      .replaceAll("<install-root>", installRoot)),
   }));
 }
 
@@ -299,9 +682,9 @@ export function validateInstallSmokeCommands(commands: InstallSmokeCommand[]): R
 
   addIf(
     failures,
-    !rendered.some((line) => line.startsWith(`bun install -g ${PACKAGE_NAME}`) || line.startsWith("bun install -g /")),
+    !rendered.some((line) => line.startsWith("bun add --cwd ") && line.includes(".tgz")),
     "install-smoke-bun-install",
-    `install smoke must install ${PACKAGE_NAME} with bun install -g`,
+    `install smoke must install ${PACKAGE_NAME} into an isolated --cwd with bun add`,
   );
   addIf(
     failures,
@@ -310,7 +693,14 @@ export function validateInstallSmokeCommands(commands: InstallSmokeCommand[]): R
     "install smoke must not use npm or npx for installation/execution",
   );
 
-  for (const expected of ["command -v todos", "command -v todos-mcp", "command -v todos-serve", "todos --version", "todos --help", "todos-mcp --help"]) {
+  addIf(
+    failures,
+    rendered.some((line) => /\bbun\s+(install|add|remove)\s+-g\b/.test(line)),
+    "install-smoke-global-install",
+    "install smoke must never mutate the global Bun installation",
+  );
+
+  for (const expected of ["node_modules/.bin/todos --version", "node_modules/.bin/todos --help", "node_modules/.bin/todos-mcp --help"]) {
     addIf(failures, !rendered.some((line) => line.includes(expected)), "install-smoke-command", `install smoke must run ${expected}`);
   }
 

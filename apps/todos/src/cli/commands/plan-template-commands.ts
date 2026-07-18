@@ -20,6 +20,7 @@ import {
   cloudListPlans,
   cloudListTasks,
   cloudResolvePlan,
+  cloudResolveProjectRef,
   cloudUpdatePlan,
 } from "../cloud-router.js";
 
@@ -54,9 +55,9 @@ export function registerPlanTemplateCommands(program: Command) {
     .action(async (opts) => {
       const globalOpts = program.opts();
       const cloud = getTodosCloudClient();
-      // In cloud mode the auto-detected project id is a LOCAL id that does not map
-      // to the shared cloud dataset, so it must not silently scope the cloud list.
-      const projectId = cloud ? undefined : autoProject(globalOpts);
+      const projectId = cloud
+        ? (globalOpts.project ? await cloudResolveProjectRef(cloud, globalOpts.project) : undefined)
+        : autoProject(globalOpts);
 
       if (opts.add) {
         let plan: Plan;
@@ -226,6 +227,7 @@ export function registerPlanTemplateCommands(program: Command) {
         const deleted = cloud ? await cloudDeletePlan(cloud, resolvedId) : deletePlan(resolvedId);
         if (globalOpts.json) {
           output({ deleted }, true);
+          if (!deleted) process.exitCode = 1;
         } else if (deleted) {
           console.log(chalk.green("Plan deleted."));
         } else {

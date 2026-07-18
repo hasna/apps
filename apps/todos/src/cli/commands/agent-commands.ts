@@ -3,13 +3,15 @@ import chalk from "chalk";
 import { execSync } from "node:child_process";
 import { getDatabase, resolvePartialId } from "../../db/database.js";
 import { releaseAgent, listAgents, normalizeGeneratedAgentNames, suggestAgentNames } from "../../db/agents.js";
-import { createTaskList, listTaskLists, deleteTaskList } from "../../db/task-lists.js";
+import { createTaskList, getTaskList, listTaskLists, updateTaskList, deleteTaskList } from "../../db/task-lists.js";
 import { listTasks } from "../../db/tasks.js";
 import { getPackageVersion, handleError, autoProject, output } from "../helpers.js";
 import {
   getTodosCloudClient,
   cloudCreateTaskList,
   cloudDeleteTaskList,
+  cloudGetTaskList,
+  cloudUpdateTaskList,
   cloudHeartbeatAgent,
   cloudListAgents,
   cloudListTaskLists,
@@ -380,8 +382,11 @@ export function registerAgentCommands(program: Command) {
     .aliases(["task-lists", "tl"])
     .description("List and manage task lists")
     .option("--add <name>", "Create a task list")
-    .option("--slug <slug>", "Custom slug (with --add)")
-    .option("-d, --description <text>", "Description (with --add)")
+    .option("--show <id>", "Resolve and show a task list")
+    .option("--update <id>", "Update a task list")
+    .option("--name <name>", "Name (with --update)")
+    .option("--slug <slug>", "Custom slug (with --add or --update)")
+    .option("-d, --description <text>", "Description (with --add or --update)")
     .option("--delete <id>", "Delete a task list")
     .action(async (opts) => {
       try {
@@ -405,12 +410,45 @@ export function registerAgentCommands(program: Command) {
           return;
         }
 
+        if (opts.show || opts.update) {
+          const ref = opts.show || opts.update;
+          const resolved = cloud
+            ? await cloudResolveTaskListRef(cloud, ref, projectId ?? undefined)
+            : resolvePartialId(getDatabase(), "task_lists", ref);
+          if (!resolved) throw new Error(`Task list not found or ambiguous: ${ref}`);
+          if (opts.show) {
+            const list = cloud ? await cloudGetTaskList(cloud, resolved) : getTaskList(resolved);
+            if (!list) throw new Error(`Task list not found: ${ref}`);
+            output(list, Boolean(globalOpts.json));
+            return;
+          }
+          const patch = {
+            ...(opts.name !== undefined ? { name: opts.name } : {}),
+            ...(opts.slug !== undefined ? { slug: opts.slug } : {}),
+            ...(opts.description !== undefined ? { description: opts.description } : {}),
+          };
+          if (Object.keys(patch).length === 0) throw new Error("lists --update requires --name, --slug, or --description");
+          const list = cloud
+            ? await cloudUpdateTaskList(cloud, resolved, patch)
+            : updateTaskList(resolved, patch);
+          output(list, Boolean(globalOpts.json));
+          return;
+        }
+
         if (opts.delete) {
           if (cloud) {
             const resolved = await cloudResolveTaskListRef(cloud, opts.delete, projectId ?? undefined);
             if (!resolved) throw new Error(`Task list not found or ambiguous: ${opts.delete}`);
-            await cloudDeleteTaskList(cloud, resolved);
-            console.log(chalk.green("Task list deleted."));
+            const deleted = await cloudDeleteTaskList(cloud, resolved);
+            if (globalOpts.json) {
+              output({ deleted }, true);
+              if (!deleted) process.exitCode = 1;
+            } else if (deleted) {
+              console.log(chalk.green("Task list deleted."));
+            } else {
+              console.error(chalk.red("Task list not found"));
+              process.exit(1);
+            }
             return;
           }
           const db = getDatabase();

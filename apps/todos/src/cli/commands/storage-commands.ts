@@ -4,6 +4,7 @@ import { handleError, output } from "../helpers.js";
 import type { NativeStorageStatus, NativeStorageSyncPlan } from "../../lib/native-storage-status.js";
 import type { ShadowStatusReport } from "../../lib/shadow-status.js";
 import type { TodosRunArtifactSyncPlan, TodosRunArtifactSyncResult } from "../../storage/index.js";
+import { getTodosRemoteAuthorityConfigStatus } from "../cloud-router.js";
 
 function globalOptions(program: Command): Record<string, any> {
   const command = program as Command & { optsWithGlobals?: () => Record<string, any> };
@@ -159,9 +160,52 @@ export function registerStorageCommands(program: Command) {
       try {
         const globalOpts = globalOptions(program);
         const { getNativeStorageStatus } = await import("../../lib/native-storage-status.js");
-        const status = getNativeStorageStatus();
+        const nativeStatus = getNativeStorageStatus();
+        const remoteAuthority = getTodosRemoteAuthorityConfigStatus();
+        const status = remoteAuthority.selected
+          ? {
+              ...nativeStatus,
+              ok: remoteAuthority.ok,
+              mode: "remote" as const,
+              local_default: false,
+              remote_enabled: true,
+              transport: "http-v1" as const,
+              remote_authority: remoteAuthority,
+              database: {
+                configured: false,
+                provider: null,
+                redacted_url: null,
+                ssl: null,
+                schema: null,
+              },
+              object_storage: {
+                configured: false,
+                provider: null,
+                bucket: null,
+                prefix: null,
+                region: null,
+                endpoint_configured: false,
+                force_path_style: false,
+              },
+              issues: remoteAuthority.issues,
+              warnings: [],
+            }
+          : { ...nativeStatus, transport: "sqlite" as const, remote_authority: remoteAuthority };
         if (opts.json || globalOpts.json) {
           output(status, true);
+          if (!status.ok) process.exitCode = 1;
+          return;
+        }
+        if (remoteAuthority.selected) {
+          console.log(chalk.bold("todos storage"));
+          console.log("Mode: remote");
+          console.log("Transport: authenticated HTTP /v1");
+          console.log(`Authority: ${remoteAuthority.v1_base_url ?? "not configured"}`);
+          console.log(`API key: ${remoteAuthority.api_key_configured ? "configured" : "not configured"}`);
+          console.log("Local fallback: disabled");
+          console.log("Network: not used (configuration diagnostic only)");
+          for (const issue of remoteAuthority.issues) console.error(chalk.red(`  ${issue}`));
+          if (!status.ok) process.exitCode = 1;
           return;
         }
         printStatus(status);

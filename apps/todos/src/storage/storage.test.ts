@@ -738,6 +738,50 @@ describe("storage adapter contracts", () => {
     expect(postgres.calls.some((call) => call.values?.includes("apple06"))).toBe(true);
   });
 
+  test("Postgres completion atomically merges evidence and completion metadata without dropping omitted keys", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+    const task = await adapter.tasks.create({
+      title: "Preserve completion metadata",
+      metadata: {
+        source: "fixture",
+        _evidence: { attachment_ids: ["existing-attachment"], notes: "existing notes" },
+        _completion: { reviewer: "first-reviewer", confidence: 0.4 },
+      },
+    });
+
+    postgres.calls.length = 0;
+    const historicalCompletion = "2020-01-02T03:04:05.000Z";
+    const completed = await adapter.tasks.complete(task.id, "finisher", {
+      files_changed: ["src/changed.ts"],
+      confidence: 0.9,
+      completed_at: historicalCompletion,
+    });
+
+    expect(completed.metadata).toEqual({
+      source: "fixture",
+      _evidence: {
+        attachment_ids: ["existing-attachment"],
+        notes: "existing notes",
+        files_changed: ["src/changed.ts"],
+      },
+      _completion: { reviewer: "first-reviewer", confidence: 0.9 },
+    });
+    expect(completed.completed_at).toBe(historicalCompletion);
+    expect(completed.updated_at).not.toBe(historicalCompletion);
+    expect(Date.parse(completed.updated_at)).toBeGreaterThan(Date.parse(historicalCompletion));
+    expect(postgres.calls).toHaveLength(1);
+    expect(postgres.calls[0]?.sql).toContain("todos:complete-task-atomic");
+    expect(postgres.calls[0]?.sql).toContain("payload->'metadata'->'_evidence'");
+    expect(postgres.calls[0]?.sql).toContain("payload->'metadata'->'_completion'");
+
+    const defaultTimestampTask = await adapter.tasks.create({ title: "One completion clock" });
+    postgres.calls.length = 0;
+    const defaultTimestampCompletion = await adapter.tasks.complete(defaultTimestampTask.id, "finisher");
+    expect(defaultTimestampCompletion.completed_at).toBe(defaultTimestampCompletion.updated_at);
+    expect(postgres.calls).toHaveLength(1);
+  });
+
   test("exposes the direct pure remote Postgres adapter factory", async () => {
     const postgres = createMemoryPostgresClient();
     const adapter = createPostgresTodosStorageAdapter({
@@ -2094,6 +2138,38 @@ function createMemoryPostgresClient(): {
   const client: TodosPostgresQueryClient = {
     async query<T = Record<string, unknown>>(sql: string, values: readonly unknown[] = []) {
       calls.push({ sql, values });
+
+      if (sql.includes("todos:complete-task-atomic")) {
+        const [service, taskId, agentId, completedAt, hasEvidence, rawEvidence, hasConfidence, confidence, operationTimestamp] = values;
+        const row = rows.get(recordKey(service, "tasks", taskId));
+        if (!row || row.deletedAt) return { rows: [] as T[] };
+        const payload = structuredClone(row.payload) as Record<string, unknown>;
+        const metadata = payload["metadata"] && typeof payload["metadata"] === "object" && !Array.isArray(payload["metadata"])
+          ? payload["metadata"] as Record<string, unknown>
+          : {};
+        const existingEvidence = metadata["_evidence"] && typeof metadata["_evidence"] === "object" && !Array.isArray(metadata["_evidence"])
+          ? metadata["_evidence"] as Record<string, unknown>
+          : {};
+        const existingCompletion = metadata["_completion"] && typeof metadata["_completion"] === "object" && !Array.isArray(metadata["_completion"])
+          ? metadata["_completion"] as Record<string, unknown>
+          : {};
+        const nextMetadata = {
+          ...metadata,
+          ...(hasEvidence ? { _evidence: { ...existingEvidence, ...parseJsonb(rawEvidence) as Record<string, unknown> } } : {}),
+          ...(hasConfidence ? { _completion: { ...existingCompletion, confidence } } : {}),
+        };
+        payload["status"] = "completed";
+        payload["assigned_to"] ??= agentId ?? null;
+        payload["completed_at"] = completedAt;
+        payload["updated_at"] = operationTimestamp;
+        payload["version"] = Number(payload["version"] ?? 0) + 1;
+        payload["metadata"] = nextMetadata;
+        if (hasConfidence) payload["confidence"] = confidence;
+        row.payload = payload;
+        row.updatedAt = String(operationTimestamp);
+        row.version = (row.version ?? 0) + 1;
+        return { rows: [{ payload }] as T[] };
+      }
 
       // SQL-side task list/count (buildTaskFilterSql). Resolve each predicate's
       // bound value(s) by the explicit `$N` placeholder index found in the SQL,

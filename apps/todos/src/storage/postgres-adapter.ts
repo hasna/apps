@@ -514,6 +514,70 @@ class PostgresJsonRecordStore {
     return value;
   }
 
+  async completeTask(
+    id: string,
+    agentId: string | undefined,
+    options: TodosTaskCompletionOptions | undefined,
+  ): Promise<Task | null> {
+    await this.ensureSchema();
+    const operationTimestamp = new Date().toISOString();
+    const completedAt = options?.completed_at ?? operationTimestamp;
+    const evidence = options ? {
+      ...(options.files_changed !== undefined ? { files_changed: options.files_changed } : {}),
+      ...(options.test_results !== undefined ? { test_results: options.test_results } : {}),
+      ...(options.commit_hash !== undefined ? { commit_hash: options.commit_hash } : {}),
+      ...(options.notes !== undefined ? { notes: options.notes } : {}),
+      ...(options.attachment_ids !== undefined ? { attachment_ids: options.attachment_ids } : {}),
+    } : {};
+    const hasEvidence = Object.keys(evidence).length > 0;
+    const hasConfidence = options?.confidence !== undefined;
+    const result = await this.options.client.query<{ payload: unknown }>(
+      `/* todos:complete-task-atomic */ UPDATE ${this.tableName}
+       SET payload = payload || jsonb_build_object(
+         'status', 'completed',
+         'assigned_to', CASE
+           WHEN jsonb_typeof(payload->'assigned_to') = 'string' THEN payload->'assigned_to'
+           ELSE COALESCE(to_jsonb($3::text), 'null'::jsonb)
+         END,
+         'completed_at', $4::text,
+         'updated_at', $9::text,
+         'version', COALESCE((payload->>'version')::integer, 0) + 1,
+         'metadata',
+           (CASE WHEN jsonb_typeof(payload->'metadata') = 'object'
+             THEN payload->'metadata' ELSE '{}'::jsonb END)
+           || CASE WHEN $5::boolean THEN jsonb_build_object(
+             '_evidence',
+             (CASE WHEN jsonb_typeof(payload->'metadata'->'_evidence') = 'object'
+               THEN payload->'metadata'->'_evidence' ELSE '{}'::jsonb END) || $6::jsonb
+           ) ELSE '{}'::jsonb END
+           || CASE WHEN $7::boolean THEN jsonb_build_object(
+             '_completion',
+             (CASE WHEN jsonb_typeof(payload->'metadata'->'_completion') = 'object'
+               THEN payload->'metadata'->'_completion' ELSE '{}'::jsonb END)
+               || jsonb_build_object('confidence', $8::double precision)
+           ) ELSE '{}'::jsonb END
+       ) || CASE WHEN $7::boolean
+         THEN jsonb_build_object('confidence', $8::double precision)
+         ELSE '{}'::jsonb END,
+       updated_at = $9::timestamptz,
+       version = COALESCE(version, 0) + 1
+       WHERE service = $1 AND object_type = 'tasks' AND object_id = $2 AND deleted_at IS NULL
+       RETURNING payload`,
+      [
+        this.service,
+        id,
+        agentId ?? null,
+        completedAt,
+        hasEvidence,
+        jsonbParam(evidence),
+        hasConfidence,
+        options?.confidence ?? null,
+        operationTimestamp,
+      ],
+    );
+    return result.rows[0] ? payloadRecord<Task>(result.rows[0].payload) : null;
+  }
+
   async renameProject(
     id: string,
     newSlug: string,
@@ -883,14 +947,9 @@ async function completeTask(
   options: TodosTaskCompletionOptions | undefined,
   store: PostgresJsonRecordStore,
 ): Promise<Task> {
-  const task = await requireRecord<Task>("tasks", id, store);
-  return patchTask(task, {
-    status: "completed",
-    assigned_to: task.assigned_to ?? agentId ?? null,
-    completed_at: options?.completed_at ?? new Date().toISOString(),
-    actual_minutes: task.actual_minutes,
-    confidence: options?.confidence ?? task.confidence,
-  }, store);
+  const task = await store.completeTask(id, agentId, options);
+  if (!task) throw new Error(`tasks record not found: ${id}`);
+  return task;
 }
 
 async function failTask(

@@ -26,18 +26,20 @@ import {
   cloudUpdateTask,
   cloudDeleteTask,
   cloudTaskAction,
+  cloudCompleteTask,
   cloudLockTask,
   cloudUnlockTask,
   cloudTaskHistory,
   cloudUpsertTaskByFingerprint,
   cloudResolveProjectRef,
   cloudResolveTaskListRef,
+  cloudResolvePlan,
 } from "../cloud-router.js";
 import type { TaskPriority, TaskStatus } from "../../types/index.js";
 import {
   formatTaskLine,
   resolveTaskId,
-  cacheCloudTaskForIdResolution,
+  resolveTaskIdForCommand,
   normalizeStatus,
   autoProject,
   handleError,
@@ -268,13 +270,19 @@ export function registerTaskCommands(program: Command) {
           if (opts.list && !cloudTaskListId) {
             throw new Error(`Could not resolve task list ID or slug: ${opts.list}`);
           }
+          const cloudPlan = opts.plan
+            ? await cloudResolvePlan(cloud, opts.plan, cloudProjectId)
+            : null;
+          if (opts.plan && !cloudPlan) {
+            throw new Error(`Could not resolve plan ID or slug: ${opts.plan}`);
+          }
           task = await cloudCreateTask(cloud, {
             title,
             description: opts.description,
             priority: parsePriority(opts.priority),
-            parent_id: opts.parent,
+            parent_id: opts.parent ? await resolveTaskIdForCommand(opts.parent, cloud) : undefined,
             tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
-            plan_id: opts.plan,
+            plan_id: cloudPlan?.id,
             assigned_to: opts.assign,
             status: parseStatus(opts.status),
             task_list_id: cloudTaskListId,
@@ -288,7 +296,6 @@ export function registerTaskCommands(program: Command) {
             due_at: opts.due ? (opts.due.length === 10 ? opts.due + "T00:00:00.000Z" : opts.due) : undefined,
             reason: opts.reason,
           });
-          cacheCloudTaskForIdResolution(task);
         } catch (e) {
           handleError(e);
         }
@@ -388,18 +395,6 @@ export function registerTaskCommands(program: Command) {
       opts.tags = opts.tags || opts.tag;
       opts.list = opts.list || opts.taskList;
       const explicitProject = opts.project || globalOpts.project;
-      const projectId = explicitProject
-        ? resolveProjectIdOrSlug(explicitProject)
-        : autoProject(globalOpts);
-      const taskListId = opts.list ? (() => {
-        const db = getDatabase();
-        const id = resolvePartialId(db, "task_lists", opts.list);
-        if (!id) {
-          console.error(chalk.red(`Could not resolve task list ID: ${opts.list}`));
-          process.exit(1);
-        }
-        return id;
-      })() : undefined;
       // self_hosted cloud routing: dedupe-and-upsert on the SHARED dataset. The
       // local path wrote the task to this machine's sqlite by fingerprint, so on a
       // flipped machine the row never reached the cloud /v1 API (a split-brain write).
@@ -407,6 +402,12 @@ export function registerTaskCommands(program: Command) {
       if (cloud) {
         let cloudResult;
         try {
+          const projectId = explicitProject
+            ? await cloudResolveProjectRef(cloud, explicitProject)
+            : undefined;
+          const taskListId = opts.list
+            ? await cloudResolveTaskListRef(cloud, opts.list, projectId)
+            : undefined;
           cloudResult = await cloudUpsertTaskByFingerprint(cloud, {
             fingerprint: opts.fingerprint,
             title: opts.title,
@@ -431,6 +432,18 @@ export function registerTaskCommands(program: Command) {
         }
         return;
       }
+      const projectId = explicitProject
+        ? resolveProjectIdOrSlug(explicitProject)
+        : autoProject(globalOpts);
+      const taskListId = opts.list ? (() => {
+        const db = getDatabase();
+        const id = resolvePartialId(db, "task_lists", opts.list);
+        if (!id) {
+          console.error(chalk.red(`Could not resolve task list ID: ${opts.list}`));
+          process.exit(1);
+        }
+        return id;
+      })() : undefined;
       let result;
       try {
         result = upsertTaskByFingerprint({
@@ -706,8 +719,12 @@ export function registerTaskCommands(program: Command) {
     .action(async () => {
       const globalOpts = program.opts();
       const cloud = getTodosCloudClient();
-      const projectId = cloud ? undefined : autoProject(globalOpts);
-      const all = cloud ? await cloudListTasks(cloud, {}) : listTasks({ project_id: projectId });
+      const projectId = cloud
+        ? (globalOpts.project ? await cloudResolveProjectRef(cloud, globalOpts.project) : undefined)
+        : autoProject(globalOpts);
+      const all = cloud
+        ? await cloudListTasks(cloud, projectId ? { project_id: projectId } : {})
+        : listTasks({ project_id: projectId });
       const counts: Record<string, number> = { total: all.length };
       for (const t of all) counts[t.status] = (counts[t.status] || 0) + 1;
 
@@ -735,7 +752,7 @@ export function registerTaskCommands(program: Command) {
       const cloud = getTodosCloudClient();
       let task: any;
       if (cloud) {
-        const remote = await cloudGetTask(cloud, resolveTaskId(id));
+        const remote = await cloudGetTask(cloud, await resolveTaskIdForCommand(id, cloud));
         const commentPage = remote ? await cloudListComments(cloud, remote.id) : null;
         // The /v1 API returns the task row without relation graphs; default the
         // relation arrays so the detail renderer below never touches undefined.
@@ -841,14 +858,14 @@ export function registerTaskCommands(program: Command) {
     .description("Full orientation for a task — details, description, dependencies, blocker, files, commits, comments. If no ID given, shows current in-progress task for --agent.")
     .action(async (id?: string) => {
       const globalOpts = program.opts();
-      let resolvedId = id ? resolveTaskId(id) : null;
+      const cloud = getTodosCloudClient();
+      let resolvedId = id ? await resolveTaskIdForCommand(id, cloud) : null;
 
-      if (!resolvedId && globalOpts.agent) {
+      if (!resolvedId && globalOpts.agent && !cloud) {
         const { listTasks: lt } = await import("../../db/tasks.js");
         const active = lt({ status: "in_progress", assigned_to: globalOpts.agent! });
         if (active.length > 0) resolvedId = active[0]!.id;
       }
-      const cloud = getTodosCloudClient();
 
       if (!resolvedId && cloud && globalOpts.agent) {
         // Cloud mode: find the agent's current in-progress task from the shared store.
@@ -881,11 +898,15 @@ export function registerTaskCommands(program: Command) {
       }
       if (!task) { console.error(chalk.red(`Task not found: ${id || resolvedId}`)); process.exit(1); }
 
-      if (globalOpts.json) {
+      if (globalOpts.json && !cloud) {
         const { listTaskFiles } = await import("../../db/task-files.js");
         const { getTaskCommits } = await import("../../db/task-commits.js");
         try { (task as any).files = listTaskFiles(task.id); } catch (e) { console.error(chalk.dim(`Warning: could not load task files: ${e instanceof Error ? e.message : String(e)}`)); }
         try { (task as any).commits = getTaskCommits(task.id); } catch (e) { console.error(chalk.dim(`Warning: could not load task commits: ${e instanceof Error ? e.message : String(e)}`)); }
+        output(task, true);
+        return;
+      }
+      if (globalOpts.json) {
         output(task, true);
         return;
       }
@@ -939,27 +960,31 @@ export function registerTaskCommands(program: Command) {
       }
 
       // Files
-      try {
-        const { listTaskFiles } = await import("../../db/task-files.js");
-        const files = listTaskFiles(task.id);
-        if (files.length > 0) {
-          console.log(chalk.bold(`\n  Files (${files.length}):`));
-          for (const f of files) console.log(`    ${chalk.dim(f.status || "file")} ${f.path}`);
+      if (!cloud) {
+        try {
+          const { listTaskFiles } = await import("../../db/task-files.js");
+          const files = listTaskFiles(task.id);
+          if (files.length > 0) {
+            console.log(chalk.bold(`\n  Files (${files.length}):`));
+            for (const f of files) console.log(`    ${chalk.dim(f.status || "file")} ${f.path}`);
+          }
+        } catch (e) {
+          console.error(chalk.dim(`Warning: could not load task files: ${e instanceof Error ? e.message : String(e)}`));
         }
-      } catch (e) {
-        console.error(chalk.dim(`Warning: could not load task files: ${e instanceof Error ? e.message : String(e)}`));
       }
 
       // Commits
-      try {
-        const { getTaskCommits } = await import("../../db/task-commits.js");
-        const commits = getTaskCommits(task.id);
-        if (commits.length > 0) {
-          console.log(chalk.bold(`\n  Commits (${commits.length}):`));
-          for (const c of commits) console.log(`    ${chalk.yellow(c.sha.slice(0, 7))} ${c.message || ""}`);
+      if (!cloud) {
+        try {
+          const { getTaskCommits } = await import("../../db/task-commits.js");
+          const commits = getTaskCommits(task.id);
+          if (commits.length > 0) {
+            console.log(chalk.bold(`\n  Commits (${commits.length}):`));
+            for (const c of commits) console.log(`    ${chalk.yellow(c.sha.slice(0, 7))} ${c.message || ""}`);
+          }
+        } catch (e) {
+          console.error(chalk.dim(`Warning: could not load task commits: ${e instanceof Error ? e.message : String(e)}`));
         }
-      } catch (e) {
-        console.error(chalk.dim(`Warning: could not load task commits: ${e instanceof Error ? e.message : String(e)}`));
       }
 
       if (task.comments.length > 0) {
@@ -992,10 +1017,10 @@ export function registerTaskCommands(program: Command) {
     .description("Show change history for a task (audit log)")
     .action(async (id: string) => {
       const globalOpts = program.opts();
-      const resolvedId = resolveTaskId(id);
       // self_hosted cloud routing: read the SHARED audit trail. The local path read
       // this machine's sqlite and reported "No history" for a cloud task.
       const cloud = getTodosCloudClient();
+      const resolvedId = await resolveTaskIdForCommand(id, cloud);
       let history;
       if (cloud) {
         try {
@@ -1057,20 +1082,43 @@ export function registerTaskCommands(program: Command) {
       opts.tags = opts.tags || opts.tag;
       opts.list = opts.list || opts.taskList;
 
+      if (opts.plan && opts.clearPlan) {
+        handleError(new Error("Use either --plan or --clear-plan, not both."));
+      }
+      if (opts.approval && opts.clearApproval) {
+        handleError(new Error("Use either --approval or --clear-approval, not both."));
+      }
+      if (opts.list && opts.clearList) {
+        handleError(new Error("Use either --list or --clear-list, not both."));
+      }
+      if (opts.workingDir !== undefined && opts.clearWorkingDir) {
+        handleError(new Error("Use either --working-dir or --clear-working-dir, not both."));
+      }
+
       // self_hosted cloud routing: PATCH straight against <app>.hasna.xyz/v1.
       const cloud = getTodosCloudClient();
       if (cloud) {
         let task;
         try {
-          task = await cloudUpdateTask(cloud, resolveTaskId(id), {
+          const currentId = await resolveTaskIdForCommand(id, cloud);
+          const current = await cloudGetTask(cloud, currentId);
+          if (!current) throw new Error(`Task not found: ${id}`);
+          const plan = opts.plan ? await cloudResolvePlan(cloud, opts.plan, current.project_id ?? undefined) : null;
+          if (opts.plan && !plan) throw new Error(`Plan not found: ${opts.plan}`);
+          const taskListId = opts.list
+            ? await cloudResolveTaskListRef(cloud, opts.list, current.project_id ?? undefined)
+            : opts.clearList
+              ? null
+              : undefined;
+          task = await cloudUpdateTask(cloud, currentId, {
             title: opts.title,
             description: opts.description,
             status: parseStatus(opts.status),
             priority: parsePriority(opts.priority),
             assigned_to: opts.assign,
             tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
-            plan_id: opts.plan ? opts.plan : opts.clearPlan ? null : undefined,
-            task_list_id: opts.list ? opts.list : opts.clearList ? null : undefined,
+            plan_id: plan?.id ?? (opts.clearPlan ? null : undefined),
+            task_list_id: taskListId,
             working_dir: opts.workingDir ? resolve(opts.workingDir) : opts.clearWorkingDir ? null : undefined,
             estimated_minutes: opts.estimated !== undefined ? parseIntOption(opts.estimated, "--estimated") : undefined,
             sla_minutes: opts.slaMinutes !== undefined || opts.sla !== undefined ? parseIntOption(opts.slaMinutes ?? opts.sla, "--sla-minutes") : undefined,
@@ -1096,23 +1144,6 @@ export function registerTaskCommands(program: Command) {
         console.error(chalk.red(`Task not found: ${id}`));
         process.exit(1);
       }
-      if (opts.plan && opts.clearPlan) {
-        console.error(chalk.red("Use either --plan or --clear-plan, not both."));
-        process.exit(1);
-      }
-      if (opts.approval && opts.clearApproval) {
-        console.error(chalk.red("Use either --approval or --clear-approval, not both."));
-        process.exit(1);
-      }
-      if (opts.list && opts.clearList) {
-        console.error(chalk.red("Use either --list or --clear-list, not both."));
-        process.exit(1);
-      }
-      if (opts.workingDir !== undefined && opts.clearWorkingDir) {
-        console.error(chalk.red("Use either --working-dir or --clear-working-dir, not both."));
-        process.exit(1);
-      }
-
       const taskListId = opts.list ? (() => {
         const resolved = resolveTaskListRef(opts.list, current.project_id);
         if ("error" in resolved) {
@@ -1166,11 +1197,32 @@ export function registerTaskCommands(program: Command) {
     .option("--confidence <0-1>", "Agent's confidence 0.0-1.0 that the task is fully complete (default: 1.0, <0.7 flagged for review)")
     .action(async (id: string, opts: { attachIds?: string; filesChanged?: string; testResults?: string; commitHash?: string; notes?: string; confidence?: string }) => {
       const globalOpts = program.opts();
+      const attachmentIds = opts.attachIds ? opts.attachIds.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
+      const filesChanged = opts.filesChanged ? opts.filesChanged.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
+      let confidence: number | undefined;
+      if (opts.confidence !== undefined) {
+        confidence = Number(opts.confidence);
+        if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+          console.error(chalk.red("--confidence must be a number between 0.0 and 1.0"));
+          process.exit(1);
+        }
+      }
+      const completionOptions = {
+        ...(attachmentIds?.length ? { attachment_ids: attachmentIds } : {}),
+        ...(filesChanged?.length ? { files_changed: filesChanged } : {}),
+        ...(opts.testResults !== undefined ? { test_results: opts.testResults } : {}),
+        ...(opts.commitHash !== undefined ? { commit_hash: opts.commitHash } : {}),
+        ...(opts.notes !== undefined ? { notes: opts.notes } : {}),
+        ...(confidence !== undefined ? { confidence } : {}),
+      };
       const cloud = getTodosCloudClient();
       if (cloud) {
         let task;
         try {
-          task = await cloudTaskAction(cloud, resolveTaskId(id), "complete", { agent_id: globalOpts.agent });
+          task = await cloudCompleteTask(cloud, await resolveTaskIdForCommand(id, cloud), {
+            ...(globalOpts.agent ? { agent_id: globalOpts.agent } : {}),
+            ...completionOptions,
+          });
         } catch (e) {
           handleError(e);
         }
@@ -1183,22 +1235,9 @@ export function registerTaskCommands(program: Command) {
         return;
       }
       const resolvedId = resolveTaskId(id);
-      const attachmentIds = opts.attachIds ? opts.attachIds.split(",").map((s) => s.trim()) : undefined;
-      const filesChanged = opts.filesChanged ? opts.filesChanged.split(",").map((s) => s.trim()) : undefined;
-      let confidence: number | undefined;
-      if (opts.confidence !== undefined) {
-        confidence = parseFloat(opts.confidence);
-        if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
-          console.error(chalk.red("--confidence must be a number between 0.0 and 1.0"));
-          process.exit(1);
-        }
-      }
-      const evidence = (attachmentIds || filesChanged || opts.testResults || opts.commitHash || opts.notes)
-        ? { attachment_ids: attachmentIds, files_changed: filesChanged, test_results: opts.testResults, commit_hash: opts.commitHash, notes: opts.notes }
-        : undefined;
       let task;
       try {
-        task = completeTask(resolvedId, globalOpts.agent, undefined, { ...evidence, confidence });
+        task = completeTask(resolvedId, globalOpts.agent, undefined, completionOptions);
       } catch (e) {
         handleError(e);
       }
@@ -1224,7 +1263,7 @@ export function registerTaskCommands(program: Command) {
         // ("Task not found") a task that lives only in the cloud.
         const cloud = getTodosCloudClient();
         if (cloud) {
-          const cloudId = resolveTaskId(id);
+          const cloudId = await resolveTaskIdForCommand(id, cloud);
           const task = await cloudGetTask(cloud, cloudId);
           if (!task) { console.error(chalk.red(`Task not found: ${id}`)); process.exit(1); }
           if (!task.requires_approval) { console.log(chalk.yellow("This task does not require approval.")); return; }
@@ -1274,7 +1313,7 @@ export function registerTaskCommands(program: Command) {
       let task;
       if (cloud) {
         try {
-          task = await cloudTaskAction(cloud, resolveTaskId(id), "start", { agent_id: agentId });
+          task = await cloudTaskAction(cloud, await resolveTaskIdForCommand(id, cloud), "start", { agent_id: agentId });
         } catch (e) {
           handleError(e);
         }
@@ -1309,7 +1348,7 @@ export function registerTaskCommands(program: Command) {
       const globalOpts = program.opts();
       const agentId = globalOpts.agent || "cli";
       const cloud = getTodosCloudClient();
-      const resolvedId = resolveTaskId(id);
+      const resolvedId = cloud ? await resolveTaskIdForCommand(id, cloud) : resolveTaskId(id);
       let result;
       try {
         // self_hosted cloud routing: lock on the SHARED dataset so every agent
@@ -1336,7 +1375,7 @@ export function registerTaskCommands(program: Command) {
     .action(async (id: string) => {
       const globalOpts = program.opts();
       const cloud = getTodosCloudClient();
-      const resolvedId = resolveTaskId(id);
+      const resolvedId = cloud ? await resolveTaskIdForCommand(id, cloud) : resolveTaskId(id);
       try {
         if (cloud) await cloudUnlockTask(cloud, resolvedId, globalOpts.agent, !globalOpts.agent);
         else unlockTask(resolvedId, globalOpts.agent);
@@ -1358,10 +1397,11 @@ export function registerTaskCommands(program: Command) {
     .action(async (id: string) => {
       const globalOpts = program.opts();
       const cloud = getTodosCloudClient();
-      const deleted = cloud ? await cloudDeleteTask(cloud, resolveTaskId(id)) : deleteTask(resolveTaskId(id));
+      const deleted = cloud ? await cloudDeleteTask(cloud, await resolveTaskIdForCommand(id, cloud)) : deleteTask(resolveTaskId(id));
 
       if (globalOpts.json) {
         output({ deleted }, true);
+        if (!deleted) process.exitCode = 1;
       } else if (deleted) {
         console.log(chalk.green("Task deleted."));
       } else {
@@ -1374,8 +1414,22 @@ export function registerTaskCommands(program: Command) {
   program
     .command("remove <id>")
     .description("Remove/delete a task (alias for delete)")
-    .action((id: string) => {
+    .action(async (id: string) => {
       const globalOpts = program.opts();
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        const deleted = await cloudDeleteTask(cloud, await resolveTaskIdForCommand(id, cloud));
+        if (globalOpts.json) {
+          output({ deleted }, true);
+          if (!deleted) process.exitCode = 1;
+        } else if (deleted) {
+          console.log(chalk.green("Task removed."));
+        } else {
+          console.error(chalk.red("Task not found."));
+          process.exit(1);
+        }
+        return;
+      }
       const resolvedId = resolveTaskId(id);
       const deleted = deleteTask(resolvedId);
       if (globalOpts.json) {
@@ -1397,6 +1451,7 @@ export function registerTaskCommands(program: Command) {
     .action(async (action: string, ids: string[], opts: { plan?: string; clearPlan?: boolean }) => {
       const globalOpts = program.opts();
       const results: { id: string; success: boolean; error?: string }[] = [];
+      const cloud = getTodosCloudClient();
       const isPlanAction = action === "plan" || action === "move-plan";
       if (isPlanAction && Boolean(opts.plan) === Boolean(opts.clearPlan)) {
         console.error(chalk.red("Use exactly one of --plan or --clear-plan with bulk plan."));
@@ -1415,13 +1470,12 @@ export function registerTaskCommands(program: Command) {
       // path resolved ids against this machine's sqlite — `bulk done` threw
       // "Task not found" for valid cloud task ids (while `bulk delete` silently
       // no-op'd), a split-brain read.
-      const cloud = getTodosCloudClient();
       if (cloud) {
         for (const rawId of ids) {
           try {
-            const resolvedId = resolveTaskId(rawId);
+            const resolvedId = await resolveTaskIdForCommand(rawId, cloud);
             if (action === "done" || action === "complete") {
-              await cloudTaskAction(cloud, resolvedId, "complete", { agent_id: globalOpts.agent });
+              await cloudCompleteTask(cloud, resolvedId, { ...(globalOpts.agent ? { agent_id: globalOpts.agent } : {}) });
             } else if (action === "start") {
               await cloudTaskAction(cloud, resolvedId, "start", { agent_id: globalOpts.agent || "cli" });
             } else if (action === "delete") {

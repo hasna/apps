@@ -8,9 +8,10 @@ import {
   listProjects,
   getProjectByPath,
   renameProject,
+  updateProject,
 } from "../../db/projects.js";
 import { addComment } from "../../db/comments.js";
-import { getTodosCloudClient, cloudAddComment, cloudListProjects, cloudAddDependency, cloudRemoveDependency, cloudGetDependencies, cloudRenameProject } from "../cloud-router.js";
+import { getTodosCloudClient, cloudAddComment, cloudCreateProject, cloudListProjects, cloudResolveProject, cloudUpdateProject, cloudAddDependency, cloudRemoveDependency, cloudGetDependencies, cloudRenameProject } from "../cloud-router.js";
 import { searchTasks } from "../../lib/search.js";
 import {
   deleteSearchView,
@@ -24,7 +25,7 @@ import {
 } from "../../lib/saved-search-views.js";
 import { defaultSyncAgents, syncWithAgent, syncWithAgents } from "../../lib/sync.js";
 import { getAgentTaskListId } from "../../lib/config.js";
-import { autoProject, autoDetectProject, handleError, output, formatTaskLine, normalizeStatus, resolveExplicitProject, resolveTaskId } from "../helpers.js";
+import { autoProject, autoDetectProject, handleError, output, formatTaskLine, normalizeStatus, resolveExplicitProject, resolveTaskId, resolveTaskIdForCommand } from "../helpers.js";
 import { redactBroadOutput, redactBroadTasks } from "../output-redaction.js";
 
 function collectOption(value: string, previous: string[] = []): string[] {
@@ -201,7 +202,8 @@ export function registerProjectCommands(program: Command) {
     .option("--pct <percent>", "Progress percentage (0-100) to record alongside the note")
     .action(async (id: string, text: string, opts: { pct?: string }) => {
       const globalOpts = program.opts();
-      const resolvedId = resolveTaskId(id);
+      const cloud = getTodosCloudClient();
+      const resolvedId = await resolveTaskIdForCommand(id, cloud);
       let content = text;
       let progressPct: number | undefined;
       if (opts.pct !== undefined) {
@@ -214,7 +216,6 @@ export function registerProjectCommands(program: Command) {
         progressPct = pct;
       }
       try {
-        const cloud = getTodosCloudClient();
         const comment = cloud
           ? await cloudAddComment(cloud, resolvedId, {
               content,
@@ -450,17 +451,17 @@ export function registerProjectCommands(program: Command) {
       // `--graph` view is a local-only concept; in cloud mode we show the flat
       // dependency/blocked-by edges instead.
       if (cloud) {
-        const cloudId = resolveTaskId(id);
+        const cloudId = await resolveTaskIdForCommand(id, cloud);
         if (opts.needs) {
           try {
-            const dep = await cloudAddDependency(cloud, cloudId, resolveTaskId(opts.needs));
+            const dep = await cloudAddDependency(cloud, cloudId, await resolveTaskIdForCommand(opts.needs, cloud));
             if (globalOpts.json) output(dep, true);
             else console.log(chalk.green("Dependency added."));
           } catch (e) { handleError(e); }
           return;
         }
         if (opts.remove) {
-          const removed = await cloudRemoveDependency(cloud, cloudId, resolveTaskId(opts.remove));
+          const removed = await cloudRemoveDependency(cloud, cloudId, await resolveTaskIdForCommand(opts.remove, cloud));
           if (globalOpts.json) output({ removed }, true);
           else console.log(removed ? chalk.green("Dependency removed.") : chalk.red("Dependency not found."));
           return;
@@ -561,15 +562,46 @@ export function registerProjectCommands(program: Command) {
     .command("projects")
     .description("List and manage projects")
     .option("--add <path>", "Register a project by path")
+    .option("--show <project>", "Resolve and show a project")
+    .option("--update <project>", "Update a project's name, path, or description")
     .option("--deregister <project>", "Deregister a project without deleting its tasks; refuses projects with incomplete tasks")
     .option("--path-prefix <prefix>", "Require deregistered project path to start with this prefix")
     .option("--dry-run", "Show what would change without modifying local state")
     .option("--name <name>", "Project name (with --add)")
+    .option("--path <path>", "Project path (with --update)")
+    .option("--description <text>", "Project description (with --add or --update)")
     .option("--task-list-id <id>", "Custom task list ID (with --add)")
     .action(async (opts) => {
       const globalOpts = program.opts();
+      const cloud = getTodosCloudClient();
+
+      if (opts.show) {
+        const project = cloud ? await cloudResolveProject(cloud, opts.show) : resolveExplicitProject(opts.show);
+        output(project, Boolean(globalOpts.json));
+        return;
+      }
+
+      if (opts.update) {
+        const patch = {
+          ...(opts.name !== undefined ? { name: opts.name } : {}),
+          ...(opts.path !== undefined ? { path: resolve(opts.path) } : {}),
+          ...(opts.description !== undefined ? { description: opts.description } : {}),
+        };
+        if (Object.keys(patch).length === 0) {
+          handleError(new Error("projects --update requires --name, --path, or --description"));
+        }
+        const current = cloud ? await cloudResolveProject(cloud, opts.update) : resolveExplicitProject(opts.update);
+        const project = cloud
+          ? await cloudUpdateProject(cloud, current.id, patch)
+          : updateProject(current.id, patch);
+        output(project, Boolean(globalOpts.json));
+        return;
+      }
 
       if (opts.deregister) {
+        if (cloud) {
+          handleError(new Error("REMOTE_COMMAND_UNSUPPORTED: projects --deregister has no safe /v1 equivalent; local SQLite fallback is disabled"));
+        }
         const project = resolveExplicitProject(opts.deregister);
         const counts = countProjectTasks(project.id);
 
@@ -607,22 +639,30 @@ export function registerProjectCommands(program: Command) {
       if (opts.add) {
         const projectPath = resolve(opts.add);
         const name = opts.name || basename(projectPath);
-        const existing = getProjectByPath(projectPath);
+        const existing = cloud
+          ? (await cloudListProjects(cloud)).find((project) => project.path === projectPath)
+          : getProjectByPath(projectPath);
         let project;
         if (existing) {
           project = existing;
           if (opts.taskListId) {
-            project = renameProject(existing.id, { new_slug: opts.taskListId }).project;
+            if (cloud && existing.task_list_id !== opts.taskListId) {
+              handleError(new Error("Remote project task-list slug changes require project-rename"));
+            }
+            if (!cloud) project = renameProject(existing.id, { new_slug: opts.taskListId }).project;
           }
         } else {
-          project = createProject({ name, path: projectPath, task_list_id: opts.taskListId });
+          const input = { name, path: projectPath, description: opts.description, task_list_id: opts.taskListId };
+          project = cloud ? await cloudCreateProject(cloud, input) : createProject(input);
         }
         // Auto-register machine-local path
-        try {
-          const { setMachineLocalPath } = await import("../../db/projects.js");
-          setMachineLocalPath(project.id, projectPath);
-        } catch (e) {
-          console.log(chalk.dim("  (machine path auto-register skipped)"));
+        if (!cloud) {
+          try {
+            const { setMachineLocalPath } = await import("../../db/projects.js");
+            setMachineLocalPath(project.id, projectPath);
+          } catch {
+            console.log(chalk.dim("  (machine path auto-register skipped)"));
+          }
         }
 
         if (globalOpts.json) {
@@ -634,7 +674,6 @@ export function registerProjectCommands(program: Command) {
         return;
       }
 
-      const cloud = getTodosCloudClient();
       const projects = cloud ? await cloudListProjects(cloud) : listProjects();
       if (globalOpts.json) {
         output(projects, true);

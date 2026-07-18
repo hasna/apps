@@ -28,8 +28,8 @@ for (const path of ["/health", "/ready"]) {
 }
 const versionResponse = await expectStatus("/version", 200);
 const versionPayload = (await versionResponse.json()) as { version?: string };
-if (versionPayload.version !== "0.11.91") {
-  throw new Error(`/version: expected 0.11.91, got ${versionPayload.version ?? "missing"}`);
+if (versionPayload.version !== "0.11.92") {
+  throw new Error(`/version: expected 0.11.92, got ${versionPayload.version ?? "missing"}`);
 }
 await expectStatus("/v1/tasks", 401);
 

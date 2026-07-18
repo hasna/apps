@@ -18,11 +18,10 @@ let dbPath: string;
 
 async function runCli(
   args: string[],
-  env: Record<string, string>,
+  env: Record<string, string | undefined>,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
-    cwd: CWD,
-    env: {
+  const childEnv = Object.fromEntries(
+    Object.entries({
       ...process.env,
       HOME: fakeHome,
       TODOS_DB_PATH: dbPath,
@@ -34,7 +33,11 @@ async function runCli(
       TODOS_API_URL: "",
       TODOS_API_KEY: "",
       ...env,
-    },
+    }).filter((entry): entry is [string, string] => entry[1] !== undefined),
+  );
+  const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
+    cwd: CWD,
+    env: childEnv,
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -130,8 +133,8 @@ describe("OSS local-first runtime defaults", () => {
     try {
       // Both HASNA_TODOS_* and bare TODOS_* forms of URL+KEY, but no mode var.
       const noModeEnv = {
-        HASNA_TODOS_STORAGE_MODE: "",
-        TODOS_STORAGE_MODE: "",
+        HASNA_TODOS_STORAGE_MODE: undefined,
+        TODOS_STORAGE_MODE: undefined,
         HASNA_TODOS_API_URL: String(server.url).replace(/\/$/, ""),
         HASNA_TODOS_API_KEY: "remote-token",
         TODOS_API_URL: String(server.url).replace(/\/$/, ""),

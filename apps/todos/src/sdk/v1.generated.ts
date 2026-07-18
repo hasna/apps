@@ -2,7 +2,7 @@
 // Regenerate: bun run scripts/generate-sdk.ts
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Todos V1 API 0.11.91
+// Source: Todos V1 API 0.11.92
 
 export interface Task { "id"?: string; "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "project_id"?: string | null; "assigned_to"?: string | null; "agent_id"?: string | null; "tags"?: Array<string>; "version"?: number; "created_at"?: string; "updated_at"?: string }
 
@@ -17,6 +17,8 @@ export interface Plan { "id": string; "slug": string | null; "project_id"?: stri
 export interface CreateTaskInput { "title": string; "description"?: string; "status"?: string; "priority"?: string; "project_id"?: string; "assigned_to"?: string; "agent_id"?: string; "tags"?: Array<string> }
 
 export interface UpdateTaskInput { "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "assigned_to"?: string; "version"?: number }
+
+export interface CompleteTaskInput { "agent_id"?: string; "attachment_ids"?: Array<string>; "files_changed"?: Array<string>; "test_results"?: string; "commit_hash"?: string; "notes"?: string; "confidence"?: number }
 
 export interface CreateProjectInput { "name": string; "path": string; "description"?: string; "task_list_id"?: string; "task_prefix"?: string }
 
@@ -254,7 +256,7 @@ export class TodosV1Client {
     }
 
     /** List tasks */
-    async listTasks(query?: { "status"?: string; "project_id"?: string; "assigned_to"?: string; "agent_id"?: string; "limit"?: number }, init?: RequestInit): Promise<{ "tasks"?: Array<Task>; "count"?: number }> {
+    async listTasks(query?: { "status"?: string; "priority"?: string; "project_id"?: string; "parent_id"?: string | null; "include_subtasks"?: boolean; "plan_id"?: string; "task_list_id"?: string; "assigned_to"?: string; "agent_id"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<{ "tasks": Array<Task>; "count": number; "total": number }> {
       return this.request("GET", `/v1/tasks`, {
         body: undefined,
         query,
@@ -317,9 +319,9 @@ export class TodosV1Client {
     }
 
     /** Complete a task */
-    async completeTask(id: string, init?: RequestInit): Promise<{ "task"?: Task }> {
+    async completeTask(id: string, body?: CompleteTaskInput, init?: RequestInit): Promise<{ "task"?: Task }> {
       return this.request("POST", `/v1/tasks/${encodeURIComponent(String(id))}/complete`, {
-        body: undefined,
+        body,
         query: undefined,
         init,
       });
