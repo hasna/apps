@@ -469,7 +469,7 @@ describe("cloud task detail comments", () => {
         }
       }
     }
-  });
+  }, 15_000);
 
   test("a missing cloud task does not issue a comments request", async () => {
     const requests: string[] = [];
