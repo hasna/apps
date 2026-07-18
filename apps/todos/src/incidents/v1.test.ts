@@ -223,6 +223,53 @@ describe("/v1 canonical incidents", () => {
     });
   });
 
+  test("sanitizes verifier construction and revocation-check failures without changing auth denials", async () => {
+    const verifierMarker = "verifier-marker";
+    dependencies.getVerifier = () => {
+      throw new Error(`x-api-key: ${verifierMarker}`);
+    };
+    const constructorResponse = await request("/v1/incidents");
+    expect(constructorResponse?.status).toBe(503);
+    const constructorBody = await constructorResponse!.text();
+    expect(JSON.parse(constructorBody)).toEqual({
+      error: "canonical incident service is temporarily unavailable",
+      code: "INCIDENT_UNAVAILABLE",
+      retryable: true,
+    });
+    expect(constructorBody).not.toContain(verifierMarker);
+
+    const revocationMarker = "revocation-marker";
+    dependencies.getVerifier = () => ({
+      authenticate: async () => {
+        throw new Error(`postgresql://alice:${revocationMarker}@127.0.0.1/revocations`);
+      },
+    }) as unknown as ReturnType<NonNullable<V1RequestDependencies["getVerifier"]>>;
+    const revocationResponse = await request("/v1/incidents");
+    expect(revocationResponse?.status).toBe(503);
+    const revocationBody = await revocationResponse!.text();
+    expect(JSON.parse(revocationBody)).toEqual({
+      error: "canonical incident service is temporarily unavailable",
+      code: "INCIDENT_UNAVAILABLE",
+      retryable: true,
+    });
+    expect(revocationBody).not.toContain(revocationMarker);
+
+    dependencies.getVerifier = () => ({
+      authenticate: async () => ({
+        ok: false,
+        status: 401,
+        message: "invalid API key",
+        reason: "invalid_key",
+      }),
+    }) as unknown as ReturnType<NonNullable<V1RequestDependencies["getVerifier"]>>;
+    const denied = await request("/v1/incidents");
+    expect(denied?.status).toBe(401);
+    expect(await denied!.json()).toEqual({
+      error: "invalid API key",
+      reason: "invalid_key",
+    });
+  });
+
   test("sanitizes schema and store failures into one stable retryable incident response", async () => {
     const schemaMarker = "schema-marker";
     dependencies.ensureSchema = async () => {

@@ -778,9 +778,16 @@ export async function handleV1Request(
   try {
     verifier = (dependencies.getVerifier ?? getCloudVerifier)();
   } catch (e) {
+    if (resource === "incidents") return incidentUnavailableResponse();
     return error(503, (e as Error).message);
   }
-  const decision = await verifier.authenticate(req.headers, { method, path, requiredScopes });
+  let decision;
+  try {
+    decision = await verifier.authenticate(req.headers, { method, path, requiredScopes });
+  } catch (e) {
+    if (resource === "incidents") return incidentUnavailableResponse();
+    return error(503, (e as Error).message || "authentication service is unavailable");
+  }
   if (!decision.ok) {
     return error(decision.status, decision.message, { reason: decision.reason });
   }

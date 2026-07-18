@@ -40,7 +40,18 @@ cleanup_task_db() {
   fi
   return "$cleanup_status"
 }
-trap cleanup_task_db EXIT
+
+finish_task_db_verification() {
+  local main_status=$?
+  local cleanup_status=0
+  trap - EXIT
+  cleanup_task_db || cleanup_status=$?
+  if [[ "$main_status" != "0" ]]; then
+    exit "$main_status"
+  fi
+  exit "$cleanup_status"
+}
+trap finish_task_db_verification EXIT
 
 # Do not let ambient libpq state redirect any wrapper or Bun child connection.
 # A task-owned empty password file prevents implicit fallback to ~/.pgpass.
@@ -62,4 +73,9 @@ if [[ "$residual_tables" != "0" ]]; then
   echo "incident PostgreSQL rollback left ${residual_tables} task tables" >&2
   exit 1
 fi
+# Cleanup is part of the success contract. Disarm the emergency EXIT handler
+# and run it explicitly so a failed owned drop or pgpass removal cannot be
+# converted into a successful wrapper exit.
+trap - EXIT
+cleanup_task_db
 echo "incident PostgreSQL verification passed; rollback residual tables=0"

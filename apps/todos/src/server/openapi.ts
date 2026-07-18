@@ -210,13 +210,13 @@ const incidentOutboxSchema = {
 } as const;
 
 export function buildV1OpenApiDocument(version = getPackageVersion()) {
-  return {
+  const document = {
     openapi: "3.1.0",
     info: {
       title: "Todos V1 API",
       version,
       description:
-        "Versioned cloud API for @hasna/todos (A1 pure-remote). Authenticate with an API key via the `x-api-key` header or `Authorization: Bearer <token>`. Every mutation requires an agent-bound principal. A principal with todos:* or * may explicitly act as another actor with `x-todos-act-as`; the append-only activity ledger preserves authenticated and effective attribution. Body `agent_id` values on task and plan records are domain metadata, not security context.",
+        "Versioned cloud API for @hasna/todos (A1 pure-remote). Authenticate with an API key via the `x-api-key` header or `Authorization: Bearer <token>`. Every mutation requires an agent-bound principal. A principal with todos:* or * may explicitly act as another actor with `x-todos-act-as`; the append-only activity ledger preserves authenticated and effective attribution. Body `agent_id` values on task and plan records are domain metadata, not security context. Canonical incident operations return the declared retryable INCIDENT_UNAVAILABLE 503 without raw infrastructure details. Generated clients preserve non-2xx JSON as an intentionally untyped ApiError.body because error variants differ by operation.",
     },
     servers: [{ url: "/" }],
     components: {
@@ -394,6 +394,17 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             error: { type: "string" },
             code: { type: "string" },
             conflict: { type: "boolean" },
+            retryable: { type: "boolean" },
+          },
+        },
+        IncidentUnavailableResponse: {
+          type: "object",
+          additionalProperties: false,
+          required: ["error", "code", "retryable"],
+          properties: {
+            error: { type: "string", enum: ["canonical incident service is temporarily unavailable"] },
+            code: { type: "string", enum: ["INCIDENT_UNAVAILABLE"] },
+            retryable: { type: "boolean", enum: [true] },
           },
         },
         CreateTaskListInput: {
@@ -1077,4 +1088,20 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
       },
     },
   };
+
+  const incidentUnavailable = {
+    description: "Canonical incident authentication, schema, authority, or store is temporarily unavailable; retry with bounded backoff.",
+    content: {
+      "application/json": {
+        schema: { $ref: "#/components/schemas/IncidentUnavailableResponse" },
+      },
+    },
+  } as const;
+  for (const [path, pathItem] of Object.entries(document.paths)) {
+    if (!path.startsWith("/v1/incidents")) continue;
+    for (const operation of Object.values(pathItem as Record<string, { responses?: Record<string, unknown> }>)) {
+      if (operation.responses) operation.responses["503"] = incidentUnavailable;
+    }
+  }
+  return document;
 }

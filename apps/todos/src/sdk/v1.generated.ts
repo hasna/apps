@@ -42,7 +42,9 @@ export interface UpdateProjectInput { "name"?: string; "path"?: string; "descrip
 
 export interface RenameProjectInput { "new_slug": string; "name"?: string }
 
-export interface ErrorResponse { "error": string; "code"?: string; "conflict"?: boolean }
+export interface ErrorResponse { "error": string; "code"?: string; "conflict"?: boolean; "retryable"?: boolean }
+
+export interface IncidentUnavailableResponse { "error": "canonical incident service is temporarily unavailable"; "code": "INCIDENT_UNAVAILABLE"; "retryable": true }
 
 export interface CreateTaskListInput { "name": string; "slug"?: string; "project_id"?: string; "description"?: string; "metadata"?: Record<string, unknown> }
 

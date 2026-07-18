@@ -188,3 +188,47 @@ test("PostgreSQL wrapper never drops a collision database that this run did not 
     await rm(binDir, { recursive: true, force: true });
   }
 });
+
+test("PostgreSQL wrapper fails and suppresses success when owned database cleanup fails", async () => {
+  const binDir = await mkdtemp(join(tmpdir(), "todos-incident-pg-drop-failure-"));
+  const logPath = join(binDir, "calls.log");
+  try {
+    await writeExecutable(join(binDir, "createdb"), [
+      "#!/usr/bin/env bash",
+      `set -- createdb "$*"`,
+      spyEnvironment,
+    ]);
+    await writeExecutable(join(binDir, "dropdb"), [
+      "#!/usr/bin/env bash",
+      `set -- dropdb "$*"`,
+      spyEnvironment,
+      "exit 23",
+    ]);
+    await writeExecutable(join(binDir, "psql"), [
+      "#!/usr/bin/env bash",
+      `set -- psql "$*"`,
+      spyEnvironment,
+      'printf "0\\n"',
+    ]);
+    await writeExecutable(join(binDir, "bun"), [
+      "#!/usr/bin/env bash",
+      `set -- bun "$* URL=\${TODOS_INCIDENT_TEST_DATABASE_URL-}"`,
+      spyEnvironment,
+    ]);
+
+    const result = await runWrapper(binDir, logPath);
+    expect(result.exitCode).toBe(23);
+    expect(`${result.stdout}\n${result.stderr}`).not.toContain(
+      "incident PostgreSQL verification passed",
+    );
+    const calls = (await readFile(logPath, "utf8")).trim().split("\n");
+    expect(calls.map((call) => call.split("|", 1)[0])).toEqual([
+      "createdb",
+      "bun",
+      "psql",
+      "dropdb",
+    ]);
+  } finally {
+    await rm(binDir, { recursive: true, force: true });
+  }
+});

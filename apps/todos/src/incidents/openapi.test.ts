@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { TodosV1Client } from "../sdk/v1.generated.js";
+import { ApiError, TodosV1Client } from "../sdk/v1.generated.js";
 import { buildV1OpenApiDocument } from "../server/openapi.js";
 
 describe("canonical incident OpenAPI contract", () => {
@@ -33,10 +33,19 @@ describe("canonical incident OpenAPI contract", () => {
     expect(schemas.CreateIncidentInput).toMatchObject({ additionalProperties: false });
     expect(schemas.CreateIncidentInput.properties).not.toHaveProperty("actor_id");
     expect(schemas.CreateIncidentInput.properties).not.toHaveProperty("agent_id");
+    expect(schemas.ErrorResponse.properties.retryable).toEqual({ type: "boolean" });
+    expect(schemas.IncidentUnavailableResponse).toMatchObject({
+      additionalProperties: false,
+      required: ["error", "code", "retryable"],
+      properties: {
+        code: { enum: ["INCIDENT_UNAVAILABLE"] },
+        retryable: { enum: [true] },
+      },
+    });
 
     const incidents = document.paths["/v1/incidents"];
     expect(incidents.post.description).toMatch(/does not create a task or dispatch an agent/i);
-    expect(Object.keys(incidents.post.responses).sort()).toEqual(["200", "201", "409"]);
+    expect(Object.keys(incidents.post.responses).sort()).toEqual(["200", "201", "409", "503"]);
     expect(document.paths["/v1/incidents/{id}"]).not.toHaveProperty("delete");
     expect(document.paths["/v1/incidents/blockers"].get.description).toMatch(/blocked_scopes only/i);
     expect(document.paths["/v1/incidents/outbox/claim"].post.description).toContain("todos:incidents:project");
@@ -47,6 +56,17 @@ describe("canonical incident OpenAPI contract", () => {
     expect(document.paths["/v1/incidents/outbox/status"].get.operationId).toBe("getIncidentOutboxStatus");
     expect(document.paths["/v1/incidents/outbox/{event_id}/fail"].post.requestBody.content["application/json"].schema.required)
       .toEqual(["lease_token", "failure_code", "failure"]);
+    for (const [path, pathItem] of Object.entries(document.paths)) {
+      if (!path.startsWith("/v1/incidents")) continue;
+      for (const method of ["get", "post"] as const) {
+        const operation = (pathItem as Record<string, unknown>)[method] as
+          | { responses: Record<string, { content?: { "application/json"?: { schema?: { $ref?: string } } } }> }
+          | undefined;
+        if (!operation) continue;
+        expect(operation.responses["503"]?.content?.["application/json"]?.schema?.$ref)
+          .toBe("#/components/schemas/IncidentUnavailableResponse");
+      }
+    }
     const generated = readFileSync(new URL("../sdk/v1.generated.ts", import.meta.url), "utf8");
     expect(generated).toContain("async listDeadIncidentOutbox(");
     expect(generated).toContain("async getDeadIncidentOutbox(");
@@ -55,6 +75,8 @@ describe("canonical incident OpenAPI contract", () => {
     expect(generated).toContain('"failure_fingerprint": string | null; "consecutive_failures": number');
     expect(generated).toContain('"blocked_scopes": Array<string>');
     expect(generated).not.toContain('"blocked_scopes": Array<unknown');
+    expect(generated).toContain('interface ErrorResponse { "error": string; "code"?: string; "conflict"?: boolean; "retryable"?: boolean }');
+    expect(generated).toContain('interface IncidentUnavailableResponse { "error": "canonical incident service is temporarily unavailable"; "code": "INCIDENT_UNAVAILABLE"; "retryable": true }');
   });
 
   test("generated SDK encodes identifiers and sends the flattened transition wire body", async () => {
@@ -107,5 +129,30 @@ describe("canonical incident OpenAPI contract", () => {
         }),
       },
     ]);
+  });
+
+  test("generated SDK preserves retryable incident 503 details in its intentionally untyped ApiError body", async () => {
+    const client = new TodosV1Client({
+      baseUrl: "https://todos.test",
+      fetch: (async () => Response.json({
+        error: "canonical incident service is temporarily unavailable",
+        code: "INCIDENT_UNAVAILABLE",
+        retryable: true,
+      }, { status: 503 })) as typeof fetch,
+    });
+
+    let failure: unknown;
+    try {
+      await client.listIncidents();
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(ApiError);
+    expect((failure as ApiError).status).toBe(503);
+    expect((failure as ApiError).body).toEqual({
+      error: "canonical incident service is temporarily unavailable",
+      code: "INCIDENT_UNAVAILABLE",
+      retryable: true,
+    });
   });
 });
