@@ -7,15 +7,15 @@
   "root_id": null,
   "recipe_id": null,
   "primary_path": "/home/hasna/workspace/hasna/opensource/open-automations",
-  "git_remote": "https://github.com/hasna/open-automations.git",
+  "git_remote": "https://github.com/hasna/automations.git",
   "tags": [
     "open-source",
     "automation",
     "control-plane"
   ],
   "integrations": {
-    "github_repo": "hasna/open-automations",
-    "github_url": "https://github.com/hasna/open-automations",
+    "github_repo": "hasna/automations",
+    "github_url": "https://github.com/hasna/automations",
     "todos_project_id": "0e1efde4-51c7-4734-a0d7-e88a4dc505bd"
   },
   "generated_at": "2026-06-28T12:07:33.377Z"
