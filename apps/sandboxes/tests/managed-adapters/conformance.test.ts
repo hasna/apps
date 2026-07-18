@@ -76,6 +76,25 @@ const SPEC = {
   input_bundle_refs: [{ sha256: digest("74"), size_bytes: 128 }],
 }
 
+test("ambient Hasna/provider configuration is absent and cannot route tests to a live service", () => {
+  for (const name of Object.keys(process.env)) {
+    expect(name).not.toMatch(
+      /^(?:E2B_|DAYTONA_|SANDBOXES_|HASNA_.*(?:API|SANDBOX|ENDPOINT|BASE_URL|URL))/i,
+    )
+  }
+})
+
+test("hermetic preload blocks Node network and host-process transports", () => {
+  const require = createRequire(import.meta.url)
+  const http = require("node:http") as { request: { name: string } }
+  const net = require("node:net") as { connect: { name: string } }
+  const childProcess = require("node:child_process") as { spawn: { name: string } }
+
+  expect(http.request.name).toBe("forbidHermeticIO")
+  expect(net.connect.name).toBe("forbidHermeticIO")
+  expect(childProcess.spawn.name).toBe("forbidHermeticIO")
+})
+
 const EXEC_SPEC = {
   schema_version: "sandboxes.exec-spec/v1" as const,
   executable: "/usr/bin/git",
@@ -1462,20 +1481,3 @@ for (const provider of ["e2b", "daytona_cloud"] as const) {
     })
   })
 }
-
-test("ambient Hasna/provider configuration is absent and cannot route tests to a live service", () => {
-  for (const name of Object.keys(process.env)) {
-    expect(name).not.toMatch(/^(?:E2B_|DAYTONA_|SANDBOXES_|HASNA_.*(?:API|SANDBOX|ENDPOINT|BASE_URL|URL))/i)
-  }
-})
-
-test("hermetic preload blocks Node network and host-process transports", () => {
-  const require = createRequire(import.meta.url)
-  const http = require("node:http") as { request: { name: string } }
-  const net = require("node:net") as { connect: { name: string } }
-  const childProcess = require("node:child_process") as { spawn: { name: string } }
-
-  expect(http.request.name).toBe("forbidHermeticIO")
-  expect(net.connect.name).toBe("forbidHermeticIO")
-  expect(childProcess.spawn.name).toBe("forbidHermeticIO")
-})

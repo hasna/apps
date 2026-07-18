@@ -14,6 +14,7 @@
   },
   "files": [
     "dist/index.js",
+    "dist/adapters/managed/e2b-guest-broker-v1.py",
     "dist/types"
   ],
   "scripts": {
@@ -22,7 +23,7 @@
     "test:node": "bun run build && node tests/node/managed-promise-boundary.mjs",
     "test:types": "bun run build && tsc -p tests/types/tsconfig.json",
     "typecheck": "tsc --noEmit",
-    "build": "bun build src/adapters/managed/index.ts --outdir dist --target node --format esm --external e2b --external @daytona/sdk && tsc -p tsconfig.build.json && bun scripts/fix-declaration-imports.ts",
+    "build": "bun build src/adapters/managed/index.ts --outdir dist --target node --format esm --external e2b --external @daytona/sdk && tsc -p tsconfig.build.json && bun scripts/fix-declaration-imports.ts && mkdir -p dist/adapters/managed && cp scripts/e2b-guest-broker-v1.py dist/adapters/managed/e2b-guest-broker-v1.py",
     "audit": "bun audit",
     "prepack": "bun run build"
   },

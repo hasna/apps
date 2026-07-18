@@ -85,7 +85,10 @@ export type SafeE2bCreateOptionsV1 = Omit<
 export function buildE2bCreateOptions(input: E2bCreateMappingInputV1): SafeE2bCreateOptionsV1 {
   const options = {
     template: input.template,
-    metadata: creationLabels(input.metadata, input.network_policy_sha256),
+    metadata: {
+      ...creationLabels(input.metadata, input.network_policy_sha256),
+      "hasna.e2b_max_runtime_ms": String(input.max_runtime_ms),
+    },
     envs: {},
     timeoutMs: input.max_runtime_ms,
     secure: true,
@@ -112,6 +115,7 @@ export interface DaytonaCreateMappingInputV1 {
 export function buildDaytonaCreateParams(input: DaytonaCreateMappingInputV1): CreateSandboxFromImageParams {
   return {
     image: input.image,
+    user: "daytona",
     resources: input.resources,
     labels: creationLabels(input.labels, input.network_policy_sha256),
     envVars: {},

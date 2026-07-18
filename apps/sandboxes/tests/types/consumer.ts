@@ -3,8 +3,8 @@ import {
   createDaytonaDenyAllCandidate,
   createE2bAdapter,
   createE2bDenyAllCandidate,
+  withAuthenticatedE2bGuestBrokerDuplexSdkSession,
   withDaytonaGuestBrokerSdkSession,
-  withE2bGuestBrokerSdkSession,
   type DaytonaCredentialBoundCreateV1,
   type DaytonaOfficialBrokerProcessV1,
   type E2bCredentialBoundCreateV1,
@@ -21,8 +21,8 @@ void factory
 void DAYTONA_GUEST_BROKER_PTY_ID
 void createDaytonaDenyAllCandidate
 void createE2bDenyAllCandidate
+void withAuthenticatedE2bGuestBrokerDuplexSdkSession
 void withDaytonaGuestBrokerSdkSession
-void withE2bGuestBrokerSdkSession
 void (undefined as unknown as DaytonaCredentialBoundCreateV1)
 void (undefined as unknown as DaytonaOfficialBrokerProcessV1)
 void (undefined as unknown as E2bCredentialBoundCreateV1)

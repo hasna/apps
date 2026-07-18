@@ -14,6 +14,7 @@ import {
   DAYTONA_GUEST_BROKER_MAX_IN_FLIGHT_BYTES,
   DAYTONA_GUEST_BROKER_MAX_IN_FLIGHT_DELIVERIES,
   DAYTONA_SDK_PIN,
+  daytonaImageMappingSha256,
   DaytonaOfficialSdkControlBridgeV1,
   decodeGuestBrokerRequestFrame,
   E2B_SDK_PIN,
@@ -28,6 +29,7 @@ import {
   validateWorkspacePath,
   type FailedNoEffectAuthorizationV1,
   type DaytonaOfficialReadSdkV1,
+  type DaytonaOfficialLifecycleSdkV1,
   type E2bOfficialReadSdkV1,
   type ManagedResourceAttestationPortV1,
 } from "../../src/adapters/managed/index"
@@ -69,6 +71,8 @@ describe("managed package boundary", () => {
       dependencies?: Record<string, unknown>
     }
     expect(manifest.types).toBe("./dist/types/index.d.ts")
+    // Canonical hasna/sandboxes publishes only the reviewed managed-adapter root.
+    // The authenticated broker artifact is shipped as an exact pinned package file.
     expect(manifest.exports).toEqual({
       ".": {
         types: "./dist/types/index.d.ts",
@@ -76,7 +80,11 @@ describe("managed package boundary", () => {
         default: "./dist/index.js",
       },
     })
-    expect(manifest.files).toEqual(["dist/index.js", "dist/types"])
+    expect(manifest.files).toEqual([
+      "dist/index.js",
+      "dist/adapters/managed/e2b-guest-broker-v1.py",
+      "dist/types",
+    ])
     expect(manifest.dependencies?.["@types/ws"]).toBe("8.18.1")
     expect(manifest.scripts?.prepack).toBe("bun run build")
     expect(managedPublicApi.DAYTONA_GUEST_BROKER_PTY_ID).toBe("hasna-sandboxes-broker-v1")
@@ -90,7 +98,12 @@ describe("managed package boundary", () => {
     expect(managedPublicApi.withDaytonaGuestBrokerSdkSession).toBe(
       withDaytonaGuestBrokerSdkSession,
     )
-    expect(managedPublicApi.withE2bGuestBrokerSdkSession).toBe(withE2bGuestBrokerSdkSession)
+    expect(
+      (managedPublicApi as Record<string, unknown>).withE2bGuestBrokerSdkSession,
+    ).toBeUndefined()
+    expect(
+      (managedPublicApi as Record<string, unknown>).withE2bGuestBrokerDuplexSdkSession,
+    ).toBeUndefined()
 
     const build = await Bun.build({
       entrypoints: [new URL("../../src/adapters/managed/index.ts", import.meta.url).pathname],
@@ -2814,6 +2827,7 @@ describe("official SDK pin mappings", () => {
     })
 
     expect(params.envVars).toEqual({})
+    expect(params.user).toBe("daytona")
     expect(params.public).toBe(false)
     expect(params.ephemeral).toBe(false)
     expect(params.autoDeleteInterval).toBe(-1)
@@ -3053,6 +3067,7 @@ describe("official SDK read-only control bridges", () => {
       organizationId: "organization-1",
       labels: labels(),
       state: "stopped",
+      user: "daytona",
       public: false,
       networkBlockAll: true,
       autoDeleteInterval: -1,
@@ -3113,6 +3128,108 @@ describe("official SDK read-only control bridges", () => {
     await expect(bridge.destroyResource("opaque-daytona-1", "version-1", {} as never)).rejects.toMatchObject({
       code: "unsupported_runtime_feature",
     })
+  })
+
+  test("Daytona creates one exact deny-all candidate, activates it, and proves get/list absence", async () => {
+    const installationId = "installation-v1"
+    const providerScopeRef = "scope-v1"
+    const ownershipBinding = "ownership-binding-v1"
+    const install = canonicalSha256(installationId)
+    const scope = canonicalSha256(providerScopeRef)
+    const ownershipNonce = canonicalSha256(ownershipBinding)
+    const creation = digest("dc1")
+    const immutable = digest("dc2")
+    const policy = digest("dc3")
+    const imageDigest = digest("dc4")
+    const mappingBase = {
+      schema_version: "sandboxes.daytona-image-mapping/v1" as const,
+      image_or_snapshot_sha256: imageDigest,
+      image: "daytonaio/sandbox:0.5.0",
+      mapping_version: "v1",
+    }
+    let alive = false
+    let sandbox: Record<string, unknown>
+    const lifecycle: DaytonaOfficialLifecycleSdkV1 = {
+      async create(params) {
+        alive = true
+        sandbox = {
+          id: "daytona-disposable-1",
+          organizationId: "organization-1",
+          labels: params.labels,
+          state: "started",
+          user: "daytona",
+          public: params.public,
+          networkBlockAll: params.networkBlockAll,
+          autoDeleteInterval: params.autoDeleteInterval,
+          volumes: [],
+          env: params.envVars,
+          createdAt: "2026-07-12T09:00:00.000Z",
+          async refreshData() {},
+        }
+        return sandbox as never
+      },
+      async start(value) { (value as unknown as Record<string, unknown>).state = "started" },
+      async stop(value) { (value as unknown as Record<string, unknown>).state = "stopped" },
+      async delete(value) { (value as unknown as Record<string, unknown>).state = "destroyed" },
+      async get() { return alive ? sandbox as never : "absent" },
+      list() {
+        return (async function* () { if (alive) yield sandbox as never })()
+      },
+    }
+    const bridge = new DaytonaOfficialSdkControlBridgeV1(
+      lifecycle,
+      attestation(),
+      install,
+      scope,
+      () => observedAt,
+      {
+        resolve(value) {
+          if (value !== imageDigest) return "absent"
+          return { ...mappingBase, mapping_sha256: daytonaImageMappingSha256(mappingBase) }
+        },
+      },
+    )
+    const target = {
+      operation_id: "operation-1",
+      operation_digest: digest("dc5"),
+      operation_step_id: "create",
+      resource_id: "resource-1",
+      resource_lifecycle_generation: 1n,
+      provider_idempotency_token_sha256: digest("dc6"),
+      provider_creation_token_sha256: creation,
+      immutable_fingerprint_sha256: immutable,
+      authorization_consumption_receipt_sha256: digest("dc7"),
+    }
+    const resource = await bridge.createInert({
+      target,
+      spec: {
+        schema_version: "sandboxes.runtime/v1",
+        run_id: "run-1",
+        attempt_id: "attempt-1",
+        source: { repository_ref: "source", commit_sha: "commit", source_bundle_sha256: digest("dc8") },
+        environment: { image_or_snapshot_sha256: imageDigest, toolchain_manifest_sha256: digest("dc9") },
+        runtime_class: "strong_vm",
+        architecture: "amd64",
+        workspace_root: "/workspace",
+        network_policy: { mode: "deny_all", policy_sha256: policy },
+        resources: { cpu_millis: 1_000, memory_bytes: 1024 ** 3, disk_bytes: 10 * 1024 ** 3, pids: 64, open_files: 256, output_bytes: 1024 },
+        exec_concurrency: 1,
+        max_runtime_ms: 120_000,
+        expires_at: "2099-01-01T00:00:00.000Z",
+        data_class: "internal_non_sensitive",
+        input_bundle_refs: [],
+      },
+      allocation_key_sha256: digest("dca"),
+      ownership: { installation_id: installationId, provider_scope_ref: providerScopeRef, ownership_nonce: ownershipBinding },
+      initial_network_policy: { mode: "deny_all", policy_sha256: policy },
+    })
+    expect(resource).toMatchObject({ state: "inert", owned: true, credential_attached: false, source_attached: false })
+    expect(resource.ownership.ownership_nonce_sha256).toBe(ownershipNonce)
+    const active = await bridge.activateResource(resource.opaque_resource_id, target, ownershipNonce)
+    expect(active.state).toBe("active")
+    await bridge.destroyResource(resource.opaque_resource_id, active.provider_resource_version, target, ownershipNonce)
+    expect(await bridge.inspectResource(resource.opaque_resource_id)).toBe("absent")
+    expect((await bridge.findByCreationToken(creation)).items).toHaveLength(0)
   })
 
   test("E2B attests and returns one immutable DTO snapshot", async () => {
@@ -3612,6 +3729,7 @@ describe("official SDK read-only control bridges", () => {
       organizationId: "organization-a",
       labels: labels(),
       state: "stopped",
+      user: "daytona",
       public: false,
       networkBlockAll: true,
       autoDeleteInterval: -1,
@@ -3665,6 +3783,7 @@ describe("official SDK read-only control bridges", () => {
       organizationId: "organization-a",
       labels: originalLabels,
       state: "stopped" as string,
+      user: "daytona",
       public: false,
       networkBlockAll: true,
       autoDeleteInterval: -1,
@@ -3687,6 +3806,7 @@ describe("official SDK read-only control bridges", () => {
           "hasna.immutable_fingerprint_sha256": digest("e4"),
         }
         sandbox.state = "started"
+        sandbox.user = "root"
         sandbox.public = true
         sandbox.networkBlockAll = false
         sandbox.autoDeleteInterval = 0
@@ -3793,6 +3913,7 @@ describe("official SDK read-only control bridges", () => {
             organizationId: "organization-a",
             labels: labels(),
             state: "stopped",
+            user: "daytona",
             public: false,
             networkBlockAll: true,
             autoDeleteInterval: -1,
@@ -3829,6 +3950,7 @@ describe("official SDK read-only control bridges", () => {
       organizationId: "organization-a",
       labels: sandboxLabels,
       state: "stopped",
+      user: "daytona",
       public: false,
       networkBlockAll: true,
       autoDeleteInterval: -1,
@@ -3889,6 +4011,7 @@ describe("official SDK read-only control bridges", () => {
       organizationId: "organization-a",
       labels: labels(),
       state: "stopped",
+      user: "daytona",
       public: false,
       networkBlockAll: true,
       autoDeleteInterval: -1,
@@ -3981,6 +4104,7 @@ describe("official SDK read-only control bridges", () => {
         Object.assign(sparse, {
           organizationId: "organization-a",
           state: "stopped",
+          user: "daytona",
           public: false,
           networkBlockAll: true,
           autoDeleteInterval: -1,
@@ -4039,6 +4163,7 @@ describe("official SDK read-only control bridges", () => {
         organizationId: "organization-a",
         labels: labels(),
         state: "stopped",
+        user: "daytona",
         public: false,
         networkBlockAll: true,
         autoDeleteInterval: -1,
@@ -4241,6 +4366,7 @@ describe("official SDK read-only control bridges", () => {
       organizationId: "organization-a",
       labels: labels(),
       state: "stopped",
+      user: "daytona",
       public: false,
       networkBlockAll: true,
       autoDeleteInterval: -1,
@@ -4375,6 +4501,7 @@ describe("official SDK read-only control bridges", () => {
             organizationId: "organization-a",
             labels: labels(),
             state: "stopped",
+            user: "daytona",
             public: false,
             networkBlockAll: true,
             autoDeleteInterval: -1,

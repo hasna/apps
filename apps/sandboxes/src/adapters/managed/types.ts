@@ -649,9 +649,18 @@ export interface ManagedProviderControlPortV1 {
   createInert(request: ProviderCreateInertRequestV1): Promise<AdapterProviderResourceV1>
   inspectResource(opaqueResourceId: string): Promise<AdapterProviderResourceV1 | "absent">
   applyNetworkPolicy(opaqueResourceId: string, policy: NetworkPolicyV1, target: ProviderEffectTargetV1): Promise<NetworkPolicyObservationV1>
-  activateResource(opaqueResourceId: string, target: ProviderEffectTargetV1): Promise<AdapterProviderResourceV1>
+  activateResource(
+    opaqueResourceId: string,
+    target: ProviderEffectTargetV1,
+    expectedOwnershipNonceSha256?: Digest,
+  ): Promise<AdapterProviderResourceV1>
   pauseOrStopResource(opaqueResourceId: string, target: ProviderEffectTargetV1): Promise<AdapterProviderResourceV1>
-  destroyResource(opaqueResourceId: string, expectedVersion: string, target: ProviderEffectTargetV1): Promise<void>
+  destroyResource(
+    opaqueResourceId: string,
+    expectedVersion: string,
+    target: ProviderEffectTargetV1,
+    expectedOwnershipNonceSha256?: Digest,
+  ): Promise<void>
   bootstrapGuestBroker(
     opaqueResourceId: string,
     command: ManagedGuestBrokerBootstrapCommandV1,
