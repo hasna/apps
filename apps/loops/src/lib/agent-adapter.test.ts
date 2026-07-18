@@ -834,8 +834,94 @@ describe("provider adapter contracts", () => {
   test("accepts omitted or empty extra args for every provider", () => {
     for (const provider of Object.keys(PROVIDER_ADAPTERS) as AgentTarget["provider"][]) {
       const model = provider === "opencode" ? "openrouter/test/model" : undefined;
-      expect(() => providerAdapter(provider).validate(baseTarget({ provider, model }))).not.toThrow();
-      expect(() => providerAdapter(provider).validate(baseTarget({ provider, model, extraArgs: [] }))).not.toThrow();
+      const omitted = baseTarget({ provider, model });
+      const empty = baseTarget({ provider, model, extraArgs: [] });
+      expect(() => providerAdapter(provider).validate(omitted)).not.toThrow();
+      expect(() => providerAdapter(provider).validate(empty)).not.toThrow();
+      expect(providerAdapter(provider).buildInvocation(empty)).toEqual(providerAdapter(provider).buildInvocation(omitted));
+    }
+  });
+
+  test("never iterates caller extra args after indexed validation for any provider", async () => {
+    const binDir = mkdtempSync(join(tmpdir(), "loops-extra-args-iterator-"));
+    for (const executable of ["claude", "agent", "codewith", "codex", "aicopilot", "opencode"]) {
+      const path = join(binDir, executable);
+      await Bun.write(path, "#!/usr/bin/env bash\ncat >/dev/null\nprintf '{\"type\":\"task_complete\"}\\n'\n");
+      chmodSync(path, 0o755);
+    }
+
+    const iteratorBypass = (): string[] => {
+      const extraArgs: string[] = [];
+      Object.defineProperty(extraArgs, Symbol.iterator, {
+        configurable: true,
+        value: function* unsafeIterator() {
+          yield "--dangerously-bypass-hook-trust";
+        },
+      });
+      return extraArgs;
+    };
+
+    for (const provider of Object.keys(PROVIDER_ADAPTERS) as AgentTarget["provider"][]) {
+      const model = provider === "opencode" ? "openrouter/test/model" : undefined;
+      expect(() => providerAdapter(provider).buildInvocation(baseTarget({
+        provider,
+        model,
+        extraArgs: iteratorBypass(),
+      }))).toThrow(ValidationError);
+
+      let spawned = 0;
+      let thrown: unknown;
+      try {
+        await executeTarget(baseTarget({ provider, model, extraArgs: iteratorBypass() }), {}, {
+          env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+          onSpawn: () => { spawned += 1; },
+        });
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(ValidationError);
+      expect(spawned).toBe(0);
+    }
+  });
+
+  test("reads each caller extra-args index exactly once before build or execution", async () => {
+    const mutatingAccessor = (): { extraArgs: string[]; reads: () => number } => {
+      let reads = 0;
+      const extraArgs: string[] = [];
+      Object.defineProperty(extraArgs, 0, {
+        configurable: true,
+        enumerable: true,
+        get() {
+          reads += 1;
+          if (reads > 1) throw new Error("extraArgs accessor was read more than once");
+          return "--future-unsafe-option";
+        },
+      });
+      extraArgs.length = 1;
+      return { extraArgs, reads: () => reads };
+    };
+
+    for (const provider of Object.keys(PROVIDER_ADAPTERS) as AgentTarget["provider"][]) {
+      const model = provider === "opencode" ? "openrouter/test/model" : undefined;
+      const direct = mutatingAccessor();
+      expect(() => providerAdapter(provider).buildInvocation(baseTarget({
+        provider,
+        model,
+        extraArgs: direct.extraArgs,
+      }))).toThrow(ValidationError);
+      expect(direct.reads()).toBe(1);
+
+      const executing = mutatingAccessor();
+      let spawned = 0;
+      await expect(executeTarget(baseTarget({
+        provider,
+        model,
+        extraArgs: executing.extraArgs,
+      }), {}, {
+        onSpawn: () => { spawned += 1; },
+      })).rejects.toThrow(ValidationError);
+      expect(executing.reads()).toBe(1);
+      expect(spawned).toBe(0);
     }
   });
 
@@ -856,7 +942,9 @@ describe("provider adapter contracts", () => {
       });
       expect(() => providerAdapter("codewith").validate(target)).toThrow(ValidationError);
       expect(() => providerAdapter("codewith").buildInvocation(target)).toThrow(ValidationError);
-      await expect(executeTarget(target)).rejects.toThrow(ValidationError);
+      let spawned = 0;
+      await expect(executeTarget(target, {}, { onSpawn: () => { spawned += 1; } })).rejects.toThrow(ValidationError);
+      expect(spawned).toBe(0);
     }
   });
 

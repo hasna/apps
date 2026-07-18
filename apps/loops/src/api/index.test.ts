@@ -6,6 +6,7 @@ import { Database } from "bun:sqlite";
 import { createSqliteLoopStorage } from "../lib/storage/sqlite.js";
 import type { LoopStorageContract } from "../lib/storage/contract.js";
 import type { TenantAuthContext } from "../lib/auth/tenant-auth.js";
+import { ValidationError, type PublicValidationDetails } from "../lib/errors.js";
 import type { LoopsApiServerOptions } from "./index.js";
 import type { Loop, LoopRun, WorkflowSpec } from "../types.js";
 
@@ -65,6 +66,40 @@ describe("loops-api foundation", () => {
     expect(status.status.deploymentMode).toBe("self_hosted");
     expect(JSON.stringify(status)).not.toContain("dataDir");
     expect(JSON.stringify(status)).not.toContain("dbPath");
+  });
+
+  test("OpenAPI documents actionable but bounded validation failures for create and import", async () => {
+    const mod = await import("./index.js");
+    const document = mod.openApiDocument() as {
+      paths: Record<string, { post?: { responses?: Record<string, { content?: { "application/json"?: { schema?: { $ref?: string } } } }> } }>;
+      components: { schemas: Record<string, unknown> };
+    };
+    for (const path of ["/v1/loops", "/v1/import"]) {
+      expect(document.paths[path]?.post?.responses?.["422"]?.content?.["application/json"]?.schema?.$ref)
+        .toBe("#/components/schemas/ValidationFailureResponse");
+    }
+    expect(document.components.schemas.ValidationFailureResponse).toMatchObject({
+      type: "object",
+      required: ["ok", "error"],
+      properties: {
+        details: { $ref: "#/components/schemas/PublicValidationDetails" },
+      },
+    });
+    expect(document.components.schemas.PublicValidationDetails).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      required: ["code", "reason", "path"],
+      properties: {
+        code: { const: "agent_extra_args_invalid" },
+        reason: { enum: ["not_array", "invalid_array", "invalid_item", "option_not_allowed"] },
+        path: { type: "string" },
+        index: { type: "integer", minimum: 0 },
+        option: {
+          type: "string",
+          pattern: "^(?:--[A-Za-z0-9][A-Za-z0-9-]{0,63}|-[A-Za-z0-9])$",
+        },
+      },
+    });
   });
 
   test("status command JSON uses the service envelope", () => {
@@ -272,6 +307,58 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("generic validation errors without public details remain non-leaky", async () => {
+    const mod = await import("./index.js");
+    const storage = {
+      listLoops: async () => { throw new ValidationError("private validation context: bearer super-secret"); },
+    } as unknown as LoopStorageContract;
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+
+    try {
+      const response = await fetch(apiUrl(server, "/v1/loops"));
+      expect(response.status).toBe(422);
+      expect(await response.json()).toEqual({ ok: false, error: "validation_failed" });
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("public validation details are an exact bounded projection", async () => {
+    const mod = await import("./index.js");
+    const details = {
+      code: "agent_extra_args_invalid",
+      reason: "option_not_allowed",
+      path: "target.extraArgs[0]",
+      index: 0,
+      option: "--durable",
+      privateValue: "bearer super-secret",
+    } as PublicValidationDetails & { privateValue: string };
+    const storage = {
+      listLoops: async () => { throw new ValidationError("private validation context", details); },
+    } as unknown as LoopStorageContract;
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+
+    try {
+      const response = await fetch(apiUrl(server, "/v1/loops"));
+      expect(response.status).toBe(422);
+      const body = await response.json();
+      expect(body).toEqual({
+        ok: false,
+        error: "validation_failed",
+        details: {
+          code: "agent_extra_args_invalid",
+          reason: "option_not_allowed",
+          path: "target.extraArgs[0]",
+          index: 0,
+          option: "--durable",
+        },
+      });
+      expect(JSON.stringify(body)).not.toContain("super-secret");
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test("api command failures use stable logs without provider details", async () => {
     const mod = await import("./index.js");
     const logged: string[] = [];
@@ -370,9 +457,25 @@ describe("loops-api foundation", () => {
     const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
 
     try {
-      for (const [name, extraArgs] of [
-        ["unknown-option", ["--durable", "true"]],
-        ["malformed-entry", [null, "--dangerously-bypass-hook-trust"]],
+      for (const [name, extraArgs, details] of [
+        ["not-array", "private-value", {
+          code: "agent_extra_args_invalid",
+          reason: "not_array",
+          path: "target.extraArgs",
+        }],
+        ["unknown-option", ["--durable=private-value", "true"], {
+          code: "agent_extra_args_invalid",
+          reason: "option_not_allowed",
+          path: "target.extraArgs[0]",
+          index: 0,
+          option: "--durable",
+        }],
+        ["malformed-entry", [null, "--dangerously-bypass-hook-trust"], {
+          code: "agent_extra_args_invalid",
+          reason: "invalid_item",
+          path: "target.extraArgs[0]",
+          index: 0,
+        }],
       ] as const) {
         const response = await fetch(apiUrl(server, "/v1/loops"), {
           method: "POST",
@@ -389,7 +492,9 @@ describe("loops-api foundation", () => {
           }),
         });
         expect(response.status).toBe(422);
-        expect(await response.json()).toEqual({ ok: false, error: "validation_failed" });
+        const body = await response.json();
+        expect(body).toEqual({ ok: false, error: "validation_failed", details });
+        expect(JSON.stringify(body)).not.toContain("private-value");
       }
       expect(await storage.countLoops()).toBe(0);
     } finally {
@@ -430,7 +535,17 @@ describe("loops-api foundation", () => {
         body: JSON.stringify({ loops: [legacyLoop] }),
       });
       expect(response.status).toBe(422);
-      expect(await response.json()).toEqual({ ok: false, error: "validation_failed" });
+      expect(await response.json()).toEqual({
+        ok: false,
+        error: "validation_failed",
+        details: {
+          code: "agent_extra_args_invalid",
+          reason: "option_not_allowed",
+          path: "loops[0].target.extraArgs[0]",
+          index: 0,
+          option: "--durable",
+        },
+      });
       expect(await storage.getLoop(legacyLoop.id)).toBeUndefined();
     } finally {
       server.stop(true);

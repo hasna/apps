@@ -31,9 +31,70 @@ export class AmbiguousNameError extends CodedError {
   }
 }
 
+export type AgentExtraArgsValidationReason =
+  | "not_array"
+  | "invalid_array"
+  | "invalid_item"
+  | "option_not_allowed";
+
+/**
+ * Deliberately public, bounded validation metadata. API boundaries may expose
+ * this object, but must never expose the accompanying Error.message.
+ */
+export interface PublicValidationDetails {
+  code: "agent_extra_args_invalid";
+  reason: AgentExtraArgsValidationReason;
+  path: string;
+  index?: number;
+  option?: string;
+}
+
+const AGENT_EXTRA_ARGS_VALIDATION_REASONS: ReadonlySet<string> = new Set([
+  "not_array",
+  "invalid_array",
+  "invalid_item",
+  "option_not_allowed",
+]);
+const PUBLIC_VALIDATION_PATH = /^[A-Za-z][A-Za-z0-9_-]*(?:(?:\[\d+\])|(?:\.[A-Za-z][A-Za-z0-9_-]*))*$/;
+const PUBLIC_VALIDATION_OPTION = /^(?:--[A-Za-z0-9][A-Za-z0-9-]{0,63}|-[A-Za-z0-9])$/;
+
+function boundedPublicValidationDetails(value: PublicValidationDetails): Readonly<PublicValidationDetails> | undefined {
+  if (
+    value.code !== "agent_extra_args_invalid" ||
+    !AGENT_EXTRA_ARGS_VALIDATION_REASONS.has(value.reason) ||
+    typeof value.path !== "string" ||
+    value.path.length > 512 ||
+    !PUBLIC_VALIDATION_PATH.test(value.path) ||
+    (value.index !== undefined && (!Number.isSafeInteger(value.index) || value.index < 0)) ||
+    (value.option !== undefined && (typeof value.option !== "string" || !PUBLIC_VALIDATION_OPTION.test(value.option)))
+  ) {
+    return undefined;
+  }
+  if (
+    (["invalid_item", "option_not_allowed"] as AgentExtraArgsValidationReason[]).includes(value.reason) !==
+      (value.index !== undefined)
+  ) {
+    return undefined;
+  }
+  if (["not_array", "invalid_array"].includes(value.reason) && value.option !== undefined) return undefined;
+  return Object.freeze({
+    code: value.code,
+    reason: value.reason,
+    path: value.path,
+    ...(value.index === undefined ? {} : { index: value.index }),
+    ...(value.option === undefined ? {} : { option: value.option }),
+  });
+}
+
 export class ValidationError extends CodedError {
-  constructor(message: string) {
+  readonly publicDetails?: Readonly<PublicValidationDetails>;
+
+  constructor(message: string, publicDetails?: PublicValidationDetails) {
     super("VALIDATION_ERROR", message);
+    // Treat even internal callers as untrusted at the public API boundary:
+    // project only the closed, validated field set and silently hide anything
+    // malformed instead of ever echoing Error.message or arbitrary metadata.
+    this.publicDetails = publicDetails ? boundedPublicValidationDetails(publicDetails) : undefined;
   }
 }
 

@@ -63,31 +63,107 @@ function assertOptionalNonEmptyString(value: unknown, label: string): void {
   if (typeof value !== "string" || value.trim() === "") throw new ValidationError(`${label} must be a non-empty string`);
 }
 
+function publicExtraArgOption(arg: string): string | undefined {
+  const longOption = /^--[A-Za-z0-9][A-Za-z0-9-]{0,63}(?==|$)/.exec(arg)?.[0];
+  if (longOption) return longOption;
+  return /^-[A-Za-z0-9]/.exec(arg)?.[0];
+}
+
 function extraArgNameForError(arg: string): string {
-  if (arg.startsWith("--")) return arg.split("=", 1)[0] || "<option>";
-  if (arg.startsWith("-") && arg.length > 1) return arg.slice(0, 2);
+  const option = publicExtraArgOption(arg);
+  if (option) return option;
+  if (arg.startsWith("-")) return "<option>";
   return "<positional argument>";
 }
 
-function validateExtraArgs(target: AgentTarget, label: string): void {
-  const allowedArgs = ALLOWED_AGENT_EXTRA_ARGS[target.provider];
-  const extraArgs: unknown = target.extraArgs;
-  if (extraArgs === undefined) return;
-  if (!Array.isArray(extraArgs)) throw new ValidationError(`${label}.extraArgs must be an array of strings`);
-  for (let index = 0; index < extraArgs.length; index += 1) {
-    if (!Object.prototype.hasOwnProperty.call(extraArgs, index) || typeof extraArgs[index] !== "string") {
-      throw new ValidationError(`${label}.extraArgs[${index}] must be a string`);
-    }
-    const arg = extraArgs[index];
-    if (!allowedArgs.includes(arg)) {
-      throw new ValidationError(
-        `${label}.extraArgs does not allow ${extraArgNameForError(arg)}; ${target.provider} provider arguments are fail-closed and supported options must use modeled target fields`,
-      );
-    }
-  }
+function publicExtraArgsPath(label: string, index?: number): string {
+  const base = `${label}.extraArgs`;
+  const safeBase = /^[A-Za-z][A-Za-z0-9_-]*(?:(?:\[\d+\])|(?:\.[A-Za-z][A-Za-z0-9_-]*))*$/.test(base)
+    ? base
+    : "agentTarget.extraArgs";
+  return index === undefined ? safeBase : `${safeBase}[${index}]`;
 }
 
-function validateAgentOptions(target: AgentTarget, label: string, capabilities: ProviderCapabilities): void {
+function extraArgsValidationError(
+  label: string,
+  reason: "not_array" | "invalid_array" | "invalid_item" | "option_not_allowed",
+  message: string,
+  index?: number,
+  arg?: string,
+): ValidationError {
+  const option = arg === undefined ? undefined : publicExtraArgOption(arg);
+  return new ValidationError(message, {
+    code: "agent_extra_args_invalid",
+    reason,
+    path: publicExtraArgsPath(label, index),
+    ...(index === undefined ? {} : { index }),
+    ...(option === undefined ? {} : { option }),
+  });
+}
+
+/**
+ * Capture one plain indexed snapshot of untrusted caller input. Never iterate,
+ * spread, or re-read the source Array after this function returns.
+ */
+function validatedExtraArgsSnapshot(target: AgentTarget, label: string): string[] {
+  const allowedArgs = ALLOWED_AGENT_EXTRA_ARGS[target.provider];
+  const extraArgs: unknown = target.extraArgs;
+  if (extraArgs === undefined) return [];
+  let isArray = false;
+  try {
+    isArray = Array.isArray(extraArgs);
+  } catch {
+    // Revoked or otherwise hostile proxies are invalid arrays.
+  }
+  if (!isArray) {
+    throw extraArgsValidationError(label, "not_array", `${label}.extraArgs must be an array of strings`);
+  }
+  const source = extraArgs as unknown[];
+
+  let length: number;
+  let hasCustomIterator: boolean;
+  try {
+    // Capture length exactly once and reject the reported bypass shape rather
+    // than consulting a caller-controlled iterator at any later point.
+    length = source.length;
+    hasCustomIterator = Object.prototype.hasOwnProperty.call(source, Symbol.iterator);
+  } catch {
+    throw extraArgsValidationError(label, "invalid_array", `${label}.extraArgs must be a plain indexed array of strings`);
+  }
+  if (!Number.isSafeInteger(length) || length < 0 || hasCustomIterator) {
+    throw extraArgsValidationError(label, "invalid_array", `${label}.extraArgs must be a plain indexed array of strings`);
+  }
+
+  const snapshot: string[] = [];
+  for (let index = 0; index < length; index += 1) {
+    let value: unknown;
+    try {
+      if (!Object.prototype.hasOwnProperty.call(source, index)) {
+        throw extraArgsValidationError(label, "invalid_item", `${label}.extraArgs[${index}] must be a string`, index);
+      }
+      value = source[index];
+    } catch (error) {
+      if (error instanceof ValidationError) throw error;
+      throw extraArgsValidationError(label, "invalid_item", `${label}.extraArgs[${index}] must be a string`, index);
+    }
+    if (typeof value !== "string") {
+      throw extraArgsValidationError(label, "invalid_item", `${label}.extraArgs[${index}] must be a string`, index);
+    }
+    if (!allowedArgs.includes(value)) {
+      throw extraArgsValidationError(
+        label,
+        "option_not_allowed",
+        `${label}.extraArgs does not allow ${extraArgNameForError(value)}; ${target.provider} provider arguments are fail-closed and supported options must use modeled target fields`,
+        index,
+        value,
+      );
+    }
+    snapshot.push(value);
+  }
+  return snapshot;
+}
+
+function validateAgentOptions(target: AgentTarget, label: string, capabilities: ProviderCapabilities): string[] {
   const provider = target.provider;
   if (typeof target.prompt !== "string" || target.prompt.trim() === "") {
     throw new ValidationError(`${label}.prompt must be a non-empty string`);
@@ -115,7 +191,7 @@ function validateAgentOptions(target: AgentTarget, label: string, capabilities: 
   if (provider === "codewith" && target.agent !== undefined) {
     throw new ValidationError(`${label}.agent is not supported for provider codewith`);
   }
-  validateExtraArgs(target, label);
+  const extraArgs = validatedExtraArgsSnapshot(target, label);
   if (target.addDirs?.length && !["codewith", "codex"].includes(provider)) {
     throw new ValidationError(`${label}.addDirs is currently supported only for provider codewith or codex`);
   }
@@ -163,6 +239,7 @@ function validateAgentOptions(target: AgentTarget, label: string, capabilities: 
   if (relaxed && !safetyReason) {
     throw new ValidationError(`${label}.allowlist.safetyReason is required when ${relaxedOption}`);
   }
+  return extraArgs;
 }
 
 function codewithLikeSandbox(target: AgentTarget): AgentSandbox {
@@ -246,7 +323,7 @@ function promptWithAgentSessionContract(target: AgentTarget): string {
   return `${target.prompt}\n\n${contract}`;
 }
 
-function buildAgentInvocation(target: AgentTarget): AgentInvocation {
+function buildAgentInvocation(target: AgentTarget, extraArgs: readonly string[]): AgentInvocation {
   const isolation = target.configIsolation ?? "safe";
   const permissionMode = target.permissionMode ?? "default";
   const prompt = promptWithAgentSessionContract(target);
@@ -262,7 +339,7 @@ function buildAgentInvocation(target: AgentTarget): AgentInvocation {
       if (target.model) args.push("--model", target.model);
       if (target.variant) args.push("--effort", target.variant);
       if (target.agent) args.push("--agent", target.agent);
-      args.push(...(target.extraArgs ?? []));
+      args.push(...extraArgs);
       return { command: "claude", args, stdin: prompt };
     }
     case "cursor": {
@@ -286,7 +363,7 @@ function buildAgentInvocation(target: AgentTarget): AgentInvocation {
       if (cursorSandbox) args.push("--sandbox", cursorSandbox);
       if (target.model) args.push("--model", target.model);
       if (target.agent) args.push("--agent", target.agent);
-      args.push(...(target.extraArgs ?? []));
+      args.push(...extraArgs);
       return { command: "sh", args, stdin: prompt, preflightAnyOf: ["agent"] };
     }
     case "codewith": {
@@ -305,7 +382,7 @@ function buildAgentInvocation(target: AgentTarget): AgentInvocation {
       if (target.cwd) args.push("--cd", target.cwd);
       for (const dir of target.addDirs ?? []) args.push("--add-dir", dir);
       if (target.model) args.push("--model", target.model);
-      args.push(...(target.extraArgs ?? []));
+      args.push(...extraArgs);
       // exec reads instructions from stdin when no positional prompt is given,
       // keeping the (possibly large) prompt off argv.
       return { command: "codewith", args, stdin: prompt };
@@ -317,7 +394,7 @@ function buildAgentInvocation(target: AgentTarget): AgentInvocation {
       if (target.cwd) args.push("--cd", target.cwd);
       for (const dir of target.addDirs ?? []) args.push("--add-dir", dir);
       if (target.model) args.push("--model", target.model);
-      args.push(...(target.extraArgs ?? []));
+      args.push(...extraArgs);
       return { command: "codex", args, stdin: prompt };
     }
     case "aicopilot":
@@ -329,7 +406,7 @@ function buildAgentInvocation(target: AgentTarget): AgentInvocation {
       if (target.model) args.push("--model", target.model);
       if (target.variant) args.push("--variant", target.variant);
       if (target.agent) args.push("--agent", target.agent);
-      args.push(...(target.extraArgs ?? []));
+      args.push(...extraArgs);
       return { command: target.provider, args, stdin: prompt };
     }
   }
@@ -343,8 +420,8 @@ function adapterFor(provider: AgentProvider, capabilities: ProviderCapabilities)
       validateAgentOptions(target, label, capabilities);
     },
     buildInvocation(target: AgentTarget): AgentInvocation {
-      validateAgentOptions(target, provider, capabilities);
-      return buildAgentInvocation(target);
+      const extraArgs = validateAgentOptions(target, provider, capabilities);
+      return buildAgentInvocation(target, extraArgs);
     },
   };
 }

@@ -397,6 +397,10 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
   }
   if (segments.length === 0 && ctx.request.method === "POST") {
     const body = await readJsonBody<CreateLoopInput>(ctx.request, ctx.bodyLimitBytes);
+    const target: unknown = body && typeof body === "object" ? (body as { target?: unknown }).target : undefined;
+    if (target && typeof target === "object" && !Array.isArray(target) && (target as { type?: unknown }).type === "agent") {
+      validateAgentTarget(target, "target");
+    }
     const loop = await storage.createLoop(body);
     return ok({ loop: publicLoop(loop) }, { status: 201 });
   }
@@ -1468,7 +1472,9 @@ function apiError(code: string, status: number): PublicApiError {
 function errorResponse(error: unknown): Response {
   if (error instanceof LoopNotFoundError) return fail("loop_not_found", 404);
   if (error instanceof LoopArchivedError) return fail("loop_archived", 409);
-  if (error instanceof ValidationError) return fail("validation_failed", 422);
+  if (error instanceof ValidationError) {
+    return fail("validation_failed", 422, error.publicDetails ? { details: error.publicDetails } : undefined);
+  }
   if (error instanceof LegacyWorkflowRunProvenanceError) return fail("workflow_run_provenance_missing", 409);
   if (error instanceof WorkflowRunDefinitionConflictError) return fail("workflow_run_definition_conflict", 409);
   if (error instanceof PublicApiError) return fail(error.code, error.status);

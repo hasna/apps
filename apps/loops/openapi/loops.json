@@ -182,6 +182,16 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Validation failed. Invalid agent extraArgs include bounded public details; other validation failures omit details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationFailureResponse"
+                }
+              }
+            }
           }
         },
         "x-authorization-operation": "loops.create",
@@ -676,6 +686,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ImportResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed. Invalid imported agent extraArgs include bounded public details; other validation failures omit details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationFailureResponse"
                 }
               }
             }
@@ -3233,6 +3253,65 @@
   },
   "components": {
     "schemas": {
+      "PublicValidationDetails": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Bounded public metadata emitted only for invalid agent extraArgs. Error messages and argument values are never exposed.",
+        "properties": {
+          "code": {
+            "type": "string",
+            "const": "agent_extra_args_invalid"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "not_array",
+              "invalid_array",
+              "invalid_item",
+              "option_not_allowed"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "description": "Sanitized structural path to extraArgs or the invalid indexed entry."
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "option": {
+            "type": "string",
+            "description": "Sanitized option name only; attached or following values are never included.",
+            "pattern": "^(?:--[A-Za-z0-9][A-Za-z0-9-]{0,63}|-[A-Za-z0-9])$"
+          }
+        },
+        "required": [
+          "code",
+          "reason",
+          "path"
+        ]
+      },
+      "ValidationFailureResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "string",
+            "const": "validation_failed"
+          },
+          "details": {
+            "$ref": "#/components/schemas/PublicValidationDetails"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ]
+      },
       "Foundation": {
         "type": "object",
         "properties": {
