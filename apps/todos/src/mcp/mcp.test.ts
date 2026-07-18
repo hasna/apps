@@ -1589,30 +1589,42 @@ describe("MCP tool wrappers", () => {
   });
 
   it("release compatibility tool checks local release readiness", async () => {
-    const tools = captureTools(registerTaskProjectTools);
-    const tool = tools.get("check_release_compatibility");
-    expect(tool).toBeDefined();
+    const { mkdtempSync, readFileSync, rmSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const repositoryRoot = join(import.meta.dir, "../..");
+    const fixture = mkdtempSync(join(tmpdir(), "todos-mcp-release-compatibility-"));
+    writeFileSync(join(fixture, "package.json"), readFileSync(join(repositoryRoot, "package.json")));
+    writeFileSync(join(fixture, "bun.lock"), readFileSync(join(repositoryRoot, "bun.lock")));
 
-    const result = await tool!.handler({
-      root: `${import.meta.dir}/../..`,
-      simulated_levels: [0, 1],
-    }) as { isError?: boolean; content: { text: string }[] };
-    expect(result.isError).toBe(true);
-    const report = JSON.parse(result.content[0]!.text);
+    try {
+      const tools = captureTools(registerTaskProjectTools);
+      const tool = tools.get("check_release_compatibility");
+      expect(tool).toBeDefined();
 
-    expect(report.ok).toBe(false);
-    expect(report.warnings).toContain("Built server runtime is absent; run the release build before claiming compatibility.");
-    expect(report.package.name).toBe("@hasna/todos");
-    expect(report.install_plan.manager).toBe("bun");
-    expect(report.checks.map((check: { id: string }) => check.id)).toContain("migration-level-0");
+      const result = await tool!.handler({
+        root: fixture,
+        simulated_levels: [0, 1],
+      }) as { isError?: boolean; content: { text: string }[] };
+      expect(result.isError).toBe(true);
+      const report = JSON.parse(result.content[0]!.text);
 
-    const markdown = await tool!.handler({
-      root: `${import.meta.dir}/../..`,
-      simulated_levels: [0],
-      format: "markdown",
-    }) as { isError?: boolean; content: { text: string }[] };
-    expect(markdown.isError).toBe(true);
-    expect(markdown.content[0]!.text).toContain("# Release Compatibility");
+      expect(report.ok).toBe(false);
+      expect(report.warnings).toContain("Built server runtime is absent; run the release build before claiming compatibility.");
+      expect(report.package.name).toBe("@hasna/todos");
+      expect(report.install_plan.manager).toBe("bun");
+      expect(report.checks.map((check: { id: string }) => check.id)).toContain("migration-level-0");
+
+      const markdown = await tool!.handler({
+        root: fixture,
+        simulated_levels: [0],
+        format: "markdown",
+      }) as { isError?: boolean; content: { text: string }[] };
+      expect(markdown.isError).toBe(true);
+      expect(markdown.content[0]!.text).toContain("# Release Compatibility");
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
   });
 
   it("usage ledger tool reports aggregate local usage and quotas", async () => {
